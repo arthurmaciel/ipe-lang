@@ -18174,11 +18174,10 @@ impl<'a> Lowerer<'a> {
                 // solver leaves the argument type as a free `Ty::Var` — the
                 // common case for callbacks like `\_ -> Task.succeed x` after
                 // `Task.fail` (which never produces a value) or `\_ -> NoOp`
-                // after `System.exit` (which diverges) — map the free variable
-                // to `IrType::Json` (`JsonVal` / `any`) instead of raising
-                // `IPE-L0102`.  A wildcard parameter is never inspected, so
-                // the opaque JSON carrier is a sound concrete stand-in for any
-                // unconstrained type.
+                // after `System.exit` (which diverges) — the phantom takes its
+                // `PhantomPosition` default instead of raising `IPE-L0102`. A
+                // wildcard parameter is never inspected, so any inhabited type
+                // is sound there.
                 let ir_ty = if matches!(&pat.value, canon::Pattern_::PAnything) {
                     self.ir_type_from_ty_json(arg, pat.span)?
                 } else {
@@ -18240,13 +18239,12 @@ impl<'a> Lowerer<'a> {
         // free `Ty::Var` (e.g. `Task a` inside a polymorphic function like
         // `wrap : String -> Task Error a -> Task Error a`), the strict
         // `ir_type_from_ty` fails with IPE-L0102 (Polymorphism).
-        // `ir_type_from_ty_json` maps the free `Ty::Var` to `IrType::Json`
-        // instead — a sound stand-in since the Rust type is unified by the
-        // surrounding kernel call site.
+        // `ir_type_from_ty_json` lowers a phantom to its `PhantomPosition`
+        // default, the same type every other site pins that phantom to.
         //
         // Note: lambdas whose PARAMETER types contain free `Ty::Var` still
         // fail at the parameter step (line 4132 above) before reaching here;
-        // the json fallback only affects the return-type slot.
+        // the phantom default only affects the return-type slot.
         let ret = self.ir_type_from_ty_json(cur, span)?;
         // Save/set/restore fn_is_async so `lower_let`'s PAnything arm uses
         // THIS lambda's return type (not the enclosing def's) to determine
@@ -18346,9 +18344,9 @@ impl<'a> Lowerer<'a> {
         })?;
         match ty {
             Ty::Con { name, args, .. } if self.resolve(*name)? == "List" && args.len() == 1 => {
-                // Use the JSON-aware path: a `Value = any = Ty::Var` element
-                // type (e.g. `List (String, Value)` passed to `JsonEnc.object`)
-                // maps to `IrType::Json` rather than failing with Polymorphism.
+                // Use the phantom-aware path: a phantom element type (an empty
+                // literal nothing ever fills) takes its `PhantomPosition`
+                // default rather than failing with Polymorphism.
                 // A `List` element is a storage position, so a bare function
                 // element is carried on the `Arc` `SharedFun` carrier — matching
                 // the annotated/strict `List` arms so the literal's element type
@@ -19140,12 +19138,8 @@ impl<'a> Lowerer<'a> {
                     args: Vec::new(),
                 }),
                 // The opaque JSON value type (`Value = any` in Ipê). A concrete
-                // `Con { name: "Value" }` reaches here only from the schemed
-                // `JsonEnc.*` encoders (constrain's `json_value` builtin); it
-                // maps to the same `IrType::Json` (`JsonVal`) that the free-var
-                // JSON path (`ir_type_from_ty_json`) produces, so scheming
-                // JsonEnc leaves the emitted Rust byte-identical while closing the
-                // former `Ty::Var(u32::MAX)` exit-0 hole.
+                // `Con { name: "Value" }` is the only form a JSON value takes in
+                // a solved type, so a free type variable is never JSON.
                 //
                 // Placed AFTER the `enum_variants` guard (like the nullary
                 // `Length` / `Color` / … opaque arms, which sit below the
@@ -19382,49 +19376,32 @@ impl<'a> Lowerer<'a> {
         }
     }
 
-    /// Like [`ir_type_from_ty`] but treats an unresolved `Ty::Var` as
-    /// [`IrType::Json`] instead of failing with `Feature::Polymorphism`.
+    /// Like [`ir_type_from_ty`] but lowers a phantom `Ty::Var` leaf to its
+    /// phantom default instead of failing with `Feature::Polymorphism`.
     ///
-    /// Used for JSON-kernel argument / return / list-element positions where
-    /// `Value = any` legitimately leaves a bare type variable after HM solving.
-    /// Also used for wildcard `_` (`PAnything`) lambda parameters: the
-    /// parameter is never read, so any type that compiles is sound.  When the
-    /// solver leaves the argument type as a free `Ty::Var` — or a compound
-    /// type containing a free `Ty::Var` (e.g. `Result Error a` in a
-    /// `Cmd.perform` callback) — this helper recurses into every compound
-    /// type arm and maps each `Ty::Var` leaf to [`IrType::Json`] rather than
-    /// failing with [`Feature::Polymorphism`] (IPE-L0102).
+    /// Used where the solver may legitimately leave a type variable free: a
+    /// wildcard `_` lambda parameter, an unconstrained kernel argument or
+    /// return, a list element no value ever fills. An untyped JSON `Value` is
+    /// a concrete builtin constructor, never a free variable, so it lowers to
+    /// [`IrType::Json`] through the strict arm and never reaches the leaf rule.
     ///
-    /// SEAL fix: a `Ty::Var` leaf must first be checked against
-    /// `current_poly_tvars` — the SAME check `ir_type_from_ty` (line ~6176)
-    /// and `ir_type_from_ty_ui_msg` (line ~6224) already perform — before
-    /// falling back to `IrType::Json`. A lambda nested in a polymorphic
-    /// `Def::Typed` body (e.g. `withErrorReporting : String -> Task Error a
-    /// -> Task Error a`'s internal `report`/`logAndFail` closures) has its
-    /// return type solved as the SAME free var as the enclosing function's
-    /// `a`. Mapping it to `IrType::Json` unconditionally emits a closure
-    /// typed `Fn(..) -> IpeTask<JsonVal>` where the call site expects
-    /// `IpeTask<T1>` — an E0308 exit-0-then-cargo-fail. Checking
-    /// `current_poly_tvars` first routes the enclosing-generic case to
-    /// `IrType::Generic(sym)` (`T1`, matching the function's own
-    /// quantification), and only a var with NO enclosing binder — the
-    /// genuinely free `Value = any` case this helper exists for — falls
-    /// through to `IrType::Json`.
+    /// A `Ty::Var` leaf that is the enclosing polymorphic binding's own
+    /// quantified variable lowers to that binding's [`IrType::Generic`] — a
+    /// closure nested in a generic body shares the body's variable, and any
+    /// other type there would disagree with the call site. Only a genuine
+    /// phantom takes the [`PhantomPosition`] default: [`PhantomPosition::Value`]
+    /// everywhere except the error slot of `Result e a`, which takes
+    /// [`PhantomPosition::ResultError`] (the type the `ok_res` wrapper fixes).
     // The match has one arm per compound builtin — each arm adds ~4 lines;
     // pushing past clippy's 100-line ceiling is unavoidable without splitting
     // on an arbitrary boundary.  The allow is narrow: only this function.
     #[allow(clippy::too_many_lines)]
     fn ir_type_from_ty_json(&self, t: &Ty, span: Span) -> DResult<IrType> {
         match t {
-            // The key difference: an unresolved `Ty::Var` in a JSON context
-            // is `JsonVal` — UNLESS it's the enclosing polymorphic binding's
-            // own generic (see the SEAL-fix doc comment above), in which case
-            // it must render as that binding's Rust generic instead.
-            Ty::Var(v) => self
-                .poly_tvar_symbol(*v)
-                .map_or(Ok(IrType::Json), |sym| Ok(IrType::Generic(sym))),
-            // Recursively handle compound types so embedded `Ty::Var`s also
-            // map to `IrType::Json`.
+            Ty::Var(v) => {
+                let phantom = PhantomPosition::Value.ir_type();
+                Ok(self.poly_tvar_symbol(*v).map_or(phantom, IrType::Generic))
+            }
             Ty::Tuple(elems) => {
                 // Element/component storage positions carry a function on `Arc`,
                 // mirroring the strict [`ir_type_from_ty`] Tuple arm so the JSON
@@ -19449,9 +19426,8 @@ impl<'a> Lowerer<'a> {
                 let ret = self.ir_type_from_ty_json(cur, span)?;
                 Ok(IrType::Fun(params, Box::new(ret)))
             }
-            // Compound constructor types — recurse so that an embedded
-            // `Ty::Var` in e.g. `Result Error a` maps to `IrType::Json`
-            // rather than falling through to the strict `ir_type_from_ty`.
+            // Compound constructor types recurse so an embedded phantom takes
+            // its default rather than failing in the strict `ir_type_from_ty`.
             // Scalar constructors (Int, Float, Bool, …) have no type args and
             // fall through to `ir_type_from_ty` unchanged.
             Ty::Con { name, args, .. } if !args.is_empty() => {
@@ -19462,22 +19438,9 @@ impl<'a> Lowerer<'a> {
                         Ok(IrType::Maybe(Box::new(elem)))
                     }
                     "Result" if args.len() == 2 => {
-                        // A free `Ty::Var` in the ERROR slot must pin to
-                        // `IrType::Error` (`IpeError`), NOT the Json fallback:
-                        // the emitted `ok_res` wrapper (`ResultOkDefault`, see
-                        // the ctor-lowering arm) pins an unresolved error type
-                        // to the project's `IpeError` — "the canonical
-                        // default" — so a type ANNOTATION derived from the
-                        // same free var (e.g. an eta-param binder for a piped
-                        // `Ok f |> Result.andMap …`) must agree, or the
-                        // emitted `let eta_0: IpeResult<JsonVal, _> = ok_res(…)`
-                        // is an E0308 exit-0-then-cargo-fail (found while
-                        // gating the 5th attempt: the
-                        // `result_and_map_fn_payload` positive-path
-                        // fixture). One defaulting policy, both sides.
                         let err_ty = args.first().ok_or_else(result_arg_bug)?;
-                        let err = if matches!(err_ty, Ty::Var(_)) {
-                            IrType::Error
+                        let err = if self.ty_is_unbound_free(err_ty) {
+                            PhantomPosition::ResultError.ir_type()
                         } else {
                             self.ir_type_from_ty_json(err_ty, span)?
                         };
@@ -20529,11 +20492,10 @@ impl<'a> Lowerer<'a> {
                 // whose argument the literal gate sees. See
                 // [`reject_unapplied_secret_from_string`].
                 reject_unapplied_secret_from_string(&callee, e.span)?;
-                // For kernel callees use the JSON-aware type resolver so that
-                // a `Value = any = Ty::Var` in the argument / return position
-                // of a JSON kernel (e.g. `JsonEnc.string : String -> Value`)
-                // maps to `IrType::Json` rather than failing with Polymorphism.
-                // User top-level bindings keep the strict resolver.
+                // For kernel callees use the phantom-aware type resolver so an
+                // unconstrained kernel type variable takes its phantom default
+                // rather than failing with Polymorphism. User top-level
+                // bindings keep the strict resolver.
                 let ty_ir = if matches!(&callee, Callee::Kernel(_)) {
                     self.ir_type_from_ty_json(ty, e.span)?
                 } else {
@@ -20566,9 +20528,8 @@ impl<'a> Lowerer<'a> {
                 if let fun @ IrType::Fun(_, _) = ty_ir {
                     Ok(Expr::FuncValue { callee, ty: fun })
                 } else {
-                    // When a kernel with arity > 0 has an unresolved region
-                    // type (e.g. `Value = any = Ty::Var` → `IrType::Json`),
-                    // the kernel is being used as a first-class function
+                    // When a kernel with arity > 0 has a non-function region
+                    // type, the kernel is being used as a first-class function
                     // value.  Fall back to the kernel's known native
                     // signature so the backend emits a properly typed
                     // `FuncValue` (`Box::new(name)`) instead of a spurious
@@ -20922,12 +20883,12 @@ impl<'a> Lowerer<'a> {
     /// `arg` is the port kernel's first argument — the `Js.send` payload (whose
     /// own type IS the seal type) or the `Js.subscribe` `Decoder a` (whose INNER
     /// `a` is the seal type). The concrete type is read from the solved region
-    /// types and converted json-aware so an untyped `Value` surfaces as
-    /// [`IrType::Json`] rather than a polymorphism error. A `Decoder inner` is
-    /// unwrapped to `inner` before the check; anything else is checked directly.
+    /// types. A `Decoder inner` is unwrapped to `inner` before the check;
+    /// anything else is checked directly.
     ///
-    /// Rejects (IPE-L0148) when the seal type is not [`ir_type_is_port_seal_legal`]
-    /// — a `Secret`/reserved-sink type, an untyped `Value`, a function, an effect
+    /// Rejects (IPE-L0148) when the crossing type holds a phantom type variable
+    /// anywhere, or when the seal type is not [`ir_type_is_port_seal_legal`] —
+    /// a `Secret`/reserved-sink type, an untyped `Value`, a function, an effect
     /// carrier, or another non-plain value. Fail-closed by construction: an
     /// unresolved region type (which should never happen for a type-checked call)
     /// is treated as a rejection, never silently accepted.
@@ -20938,6 +20899,11 @@ impl<'a> Lowerer<'a> {
             // unproven value reach the seam.
             return Err(unsupported(arg.span, Feature::JsPortBoundarySeal));
         };
+        if self.ty_has_phantom(ty) {
+            // A phantom crossing type has no proven wire shape; its phantom
+            // default is a lowering choice, not a type the port contract names.
+            return Err(unsupported(arg.span, Feature::JsPortBoundarySeal));
+        }
         let ir = self.ir_type_from_ty_json(ty, arg.span)?;
         // `Js.subscribe`'s arg is a `Decoder a`; the seal type is the inner `a`.
         // `Js.send`'s arg IS the payload. An `IrType::Decoder(inner)` is the only
@@ -21679,6 +21645,18 @@ impl<'a> Lowerer<'a> {
         matches!(ty, Ty::Var(raw) if self.poly_tvar_symbol(*raw).is_none())
     }
 
+    /// Whether any leaf of `ty` is a phantom type variable.
+    fn ty_has_phantom(&self, ty: &Ty) -> bool {
+        match ty {
+            Ty::Var(_) => self.ty_is_unbound_free(ty),
+            Ty::Con { args, .. } => args.iter().any(|a| self.ty_has_phantom(a)),
+            Ty::Tuple(elems) => elems.iter().any(|e| self.ty_has_phantom(e)),
+            Ty::Fun(arg, ret) => self.ty_has_phantom(arg) || self.ty_has_phantom(ret),
+            Ty::Record(fields, _) => fields.values().any(|f| self.ty_has_phantom(f)),
+            Ty::Unit => false,
+        }
+    }
+
     /// The turbofish pin for a polymorphic kernel whose free result type
     /// parameter the HM solver left unconstrained at THIS call site. Returns
     /// [`CallPin::None`] for every non-affected kernel and for every affected
@@ -21893,36 +21871,38 @@ impl<'a> Lowerer<'a> {
         }
     }
 
-    /// Re-align a `Result.mapError` error-HANDLER wildcard-lambda param
-    /// that defaulted to `IrType::Json` onto the value side's `IrType::Error`
-    /// (`IpeError`) default.
+    /// Re-type a `Result.mapError` handler's phantom error parameter to the
+    /// `Result` error-slot default.
     ///
-    /// `Result.mapError : (e -> f) -> Result e a -> Result f a` keeps `e`
-    /// polymorphic. A wildcard `\_ -> …` handler over a genuinely-free `e`
-    /// lowers its `PAnything` binder via `ir_type_from_ty_json` (`lower_lambda`),
-    /// and a bare free `Ty::Var` there defaults to `IrType::Json`. But the
-    /// `Ok "concrete"` value side pins the SAME free `e` to `IrType::Error`
-    /// (`ok_res` / `ResultOkDefault`). One var, two defaults → emitted
-    /// `FnOnce(JsonVal)` closure vs `IpeResult<IpeError, _>` value → E0277
-    /// (exit-0-then-cargo-fail SEAL breach).
-    ///
-    /// Fix — "one defaulting policy, both sides": when the handler is the
-    /// wildcard lambda whose single binder defaulted to `IrType::Json`, retype
-    /// that binder to `IrType::Error`. The `PAnything` binder is never read, so
-    /// the binder-only rewrite is sound with no body change. Fires ONLY when the
-    /// param is exactly `IrType::Json`: a resolved/annotated `e`
-    /// (`Result String a` handler → `IrType::Str`, or a named-function handler
-    /// like `tag : String -> String`) is left untouched. Canon arg order is
-    /// `[fn, r]`, so the handler is `args[0]`.
-    fn retype_result_map_error_handler(resolved: &Callee, lowered_args: &mut [Expr]) {
+    /// `Result.mapError : (e -> f) -> Result e a -> Result f a`. When `e` is a
+    /// phantom, the handler lambda's parameter lowers in isolation and takes
+    /// the [`PhantomPosition::Value`] default, while the `Result` it maps pins
+    /// the same variable at [`PhantomPosition::ResultError`]. The parameter is
+    /// moved to the error-slot default so both sides agree. It fires only when
+    /// the handler's solved parameter type is itself a phantom; a concrete or
+    /// enclosing-generic `e` is left untouched. Canon arg order is `[fn, r]`,
+    /// so the handler is `args[0]`.
+    fn retype_result_map_error_handler(
+        &self,
+        resolved: &Callee,
+        args: &[canon::Expr],
+        lowered_args: &mut [Expr],
+    ) {
         if !matches!(resolved, Callee::Kernel(KernelFn::ResultMapError)) {
+            return;
+        }
+        let handler_param_is_phantom = args
+            .first()
+            .and_then(|h| self.region_ty(h.span))
+            .is_some_and(|t| matches!(t, Ty::Fun(e, _) if self.ty_is_unbound_free(e)));
+        if !handler_param_is_phantom {
             return;
         }
         if let Some(Expr::Lambda { params, .. }) = lowered_args.first_mut()
             && let [(_, ty)] = params.as_mut_slice()
-            && *ty == IrType::Json
+            && *ty == PhantomPosition::Value.ir_type()
         {
-            *ty = IrType::Error;
+            *ty = PhantomPosition::ResultError.ir_type();
         }
     }
 
@@ -22125,15 +22105,14 @@ impl<'a> Lowerer<'a> {
                 let ctor_home = ModPath(home.clone());
                 let arity = self.ctor_arity_of(&ctor_home, *name)?;
                 if args.len() == arity {
-                    // `Ok x` whose `Result e a` error type `e` is still
-                    // unconstrained after solving would emit an ambiguous
-                    // `IpeResult<_, _>` that rustc rejects (E0282). Route it to
-                    // the runtime's `ok_res`, which pins the error type to the
-                    // project's `IpeError`. Sound: the `Err` arm is unreachable
-                    // for an `Ok`, so any error type yields identical behaviour;
-                    // `IpeError` is the canonical default. A constrained `e`
-                    // (e.g. an annotated `Result String Int`) keeps the direct
-                    // `IpeResult::Ok` form, byte-identical to before.
+                    // `Ok x` whose `Result e a` error type `e` is a phantom
+                    // would emit an ambiguous `IpeResult<_, _>` that rustc
+                    // rejects (E0282). Route it to the main crate's `ok_res`,
+                    // which pins the error slot to the
+                    // `PhantomPosition::ResultError` default. Sound: the `Err`
+                    // arm is unreachable for an `Ok`. A constrained or
+                    // enclosing-generic `e` keeps the direct `IpeResult::Ok`
+                    // form, which rustc infers.
                     if arity == 1
                         && self.resolve(*name)? == "Ok"
                         && self.result_error_unresolved(call_span)
@@ -22227,14 +22206,10 @@ impl<'a> Lowerer<'a> {
                         // free parameter is not an enclosing generic (which would
                         // already pin it — see `kernel_turbofish_pin`).
                         let pin = self.kernel_turbofish_pin(&resolved, args, call_span);
-                        // re-align a `Result.mapError` wildcard-handler
-                        // binder that defaulted to `IrType::Json` onto the
-                        // value side's `IrType::Error` (`IpeError`) default,
-                        // so the emitted closure's `FnOnce(IpeError)` unifies
-                        // with the `IpeResult<IpeError, _>` value (else E0277,
-                        // an exit-0-then-cargo-fail SEAL breach).
+                        // A phantom `Result.mapError` handler parameter takes
+                        // the error-slot default the mapped `Result` carries.
                         let mut lowered_args = lowered_args;
-                        Self::retype_result_map_error_handler(&resolved, &mut lowered_args);
+                        self.retype_result_map_error_handler(&resolved, args, &mut lowered_args);
                         Self::retype_decoder_payload_mapper(&resolved, &mut lowered_args);
                         // Close the `Arc`-vs-`Box` frontier at a `List` HOF
                         // mapper over a stored list of functions (see method doc).
@@ -22982,14 +22957,12 @@ impl<'a> Lowerer<'a> {
             // eta cursor; `advance_eta` below reserves the whole block so a
             // subsequently-lowered nested eta-lambda never reuses these names.
             let sym = self.eta_sym(offset)?;
-            // Use the JSON-friendly variant so that a free `Ty::Var` in the
+            // Use the phantom-aware variant so that a phantom in the
             // missing-arg slot — the common case for diverging / always-failing
             // tasks passed to `Task.andThen` or `Cmd.perform` where the result
-            // type `a` is never constrained — maps to `IrType::Json` (`JsonVal`)
-            // instead of raising IPE-L0102.  The eta-param is only a closure
-            // binder forwarded verbatim to the full kernel call; its concrete
-            // Rust type is unified by the compiler from the call site, so
-            // `JsonVal` is a sound stand-in for any unconstrained `Ty::Var`.
+            // type `a` is never constrained — takes its `PhantomPosition`
+            // default instead of raising IPE-L0102, agreeing with every other
+            // site that pins the same phantom.
             //
             // (`f7_succeed_curried`): EXCEPT the `next_decoder` slot
             // (the kernel's LAST argument) of the five JsonDec.Pipeline /
@@ -23014,9 +22987,8 @@ impl<'a> Lowerer<'a> {
         // (the common case for polymorphic helpers like
         // `wrap : String -> Task Error a -> Task Error a`), the strict
         // `ir_type_from_ty` would fail with IPE-L0102 (Polymorphism).
-        // `ir_type_from_ty_json` maps the free `Ty::Var` to `IrType::Json`
-        // instead — a sound stand-in since the eta-lambda's return slot is
-        // type-unified by the kernel signature at the call site.
+        // `ir_type_from_ty_json` lowers the phantom to its `PhantomPosition`
+        // default instead.
         //
         // the SAME five pipeline kernels also need this treatment on
         // the wrapper's OWN return type (`Decoder b`) whenever the pipeline
@@ -23185,10 +23157,9 @@ impl<'a> Lowerer<'a> {
         }
 
         // Build the missing parameter list from argument positions
-        // `supplied..arity`. Use the JSON-friendly variant so a free `Ty::Var` in
-        // an unconstrained slot maps to `IrType::Json` rather than raising
-        // IPE-L0102 — sound because the residual closure's slot is type-unified
-        // by the surrounding application context.
+        // `supplied..arity`. Use the phantom-aware variant so a phantom in an
+        // unconstrained slot takes its `PhantomPosition` default rather than
+        // raising IPE-L0102.
         for (offset, arg_ty) in arg_tys.get(supplied..).unwrap_or(&[]).iter().enumerate() {
             let sym = self.eta_sym(offset)?;
             let ir = self.ir_type_from_ty_json(arg_ty, call_span)?;
@@ -23320,8 +23291,8 @@ impl<'a> Lowerer<'a> {
             }
         }
         // Build the missing parameter list from argument positions `supplied..arity`.
-        // Use the JSON-friendly variant so a free `Ty::Var` in an unconstrained
-        // slot maps to `IrType::Json` rather than raising IPE-L0102.
+        // Use the phantom-aware variant so a phantom in an unconstrained slot
+        // takes its `PhantomPosition` default rather than raising IPE-L0102.
         for (offset, arg_ty) in arg_tys.get(supplied..).unwrap_or(&[]).iter().enumerate() {
             let sym = self.eta_sym(offset)?;
             let ir = self.ir_type_from_ty_json(arg_ty, call_span)?;
@@ -25480,17 +25451,19 @@ impl<'a> Lowerer<'a> {
         }
     }
 
-    /// Whether the `Result e a` value produced at `span` still has an
-    /// unconstrained error type `e` after solving. True only when the solved
-    /// region type is a `Result` constructor whose first argument (the error
-    /// type) is an unresolved [`Ty::Var`] — the case the backend cannot emit as a
-    /// bare `IpeResult::Ok` without tripping rustc's E0282 ambiguity. A missing
-    /// region type or a concrete error type yields `false`.
+    /// Whether the `Result e a` value produced at `span` has a phantom error type.
+    ///
+    /// True only when the solved region type is a `Result` whose error slot is
+    /// a free variable no enclosing generic binds — the case the backend cannot
+    /// emit as a bare `IpeResult::Ok` without tripping rustc's E0282 ambiguity.
+    /// An enclosing generic `e` is bound by the function's own signature, so
+    /// pinning it would contradict that signature. A missing region type or a
+    /// concrete error type yields `false`.
     fn result_error_unresolved(&self, span: Span) -> bool {
         match self.region_ty(span) {
             Some(Ty::Con { name, args, .. }) => {
                 self.resolve(*name).is_ok_and(|n| n == "Result")
-                    && matches!(args.first(), Some(Ty::Var(_)))
+                    && args.first().is_some_and(|e| self.ty_is_unbound_free(e))
             }
             _ => false,
         }
@@ -29041,7 +29014,7 @@ impl<'a> Lowerer<'a> {
         // sound here: `list_elem_ir` returns `IrType::Generic(sym)` ONLY when
         // `sym` is one of the enclosing function's declared type parameters
         // (`poly_tvar_symbol` matched `current_poly_tvars` — a free var NOT in
-        // that map maps to `IrType::Json`, never `Generic`), and every emitted
+        // that map takes its phantom default, never `Generic`), and every emitted
         // function type parameter carries a `Clone` bound
         // (`render_fn_generics`'s `bounds.with_clone()`). So the emitted
         // `fn f<T1: Clone>(xs: Vec<T1>) -> …` supports `rest.to_vec()` /
@@ -29906,6 +29879,68 @@ mod tests {
                 matches!(&got, Ok(Some(super::BinderType::Phantom(t))) if *t == want),
                 "a phantom Result must pin to `Result Error String`, got {got:?}"
             );
+        });
+    }
+
+    /// A phantom lowered from a solved type takes the same default the classifier pins.
+    #[test]
+    fn ir_type_from_ty_json_lowers_phantoms_to_their_defaults() {
+        with_binder_type_lowerer(|lowerer, _| {
+            let lower_at = |span| {
+                lowerer
+                    .region_ty(span)
+                    .map(|t| lowerer.ir_type_from_ty_json(t, span))
+            };
+            assert!(
+                matches!(lower_at(FREE_VAR_SPAN), Some(Ok(t)) if t == super::PhantomPosition::Value.ir_type())
+            );
+            let want = super::IrType::Result(
+                Box::new(super::PhantomPosition::ResultError.ir_type()),
+                Box::new(super::PhantomPosition::Value.ir_type()),
+            );
+            assert!(matches!(lower_at(RESULT_PHANTOM_SPAN), Some(Ok(t)) if t == want));
+            let classified = lowerer.binder_ir_type(Some(RESULT_PHANTOM_SPAN));
+            assert!(
+                matches!(&classified, Ok(Some(super::BinderType::Phantom(t))) if *t == want),
+                "the classifier and the annotation path must agree, got {classified:?}"
+            );
+        });
+    }
+
+    /// An enclosing generic is never a phantom: it keeps its generic at every site.
+    #[test]
+    fn enclosing_generic_is_not_defaulted() {
+        with_binder_type_lowerer(|lowerer, sym| {
+            lowerer.current_poly_tvars.borrow_mut().insert(7, sym);
+            let var = super::Ty::Var(7);
+            assert!(matches!(
+                lowerer.ir_type_from_ty_json(&var, FREE_VAR_SPAN),
+                Ok(super::IrType::Generic(g)) if g == sym
+            ));
+            assert!(
+                matches!(
+                    lowerer.region_ty(RESULT_PHANTOM_SPAN).map(|t| lowerer.ir_type_from_ty_json(t, RESULT_PHANTOM_SPAN)),
+                    Some(Ok(super::IrType::Result(e, a)))
+                        if *e == super::IrType::Generic(sym) && *a == super::IrType::Generic(sym)
+                ),
+                "a generic `e` must not take the error-slot default"
+            );
+            assert!(!lowerer.result_error_unresolved(RESULT_PHANTOM_SPAN));
+            assert!(!lowerer.ty_has_phantom(&var));
+        });
+    }
+
+    /// A phantom anywhere in a solved type is found; a closed type has none.
+    #[test]
+    fn ty_has_phantom_finds_nested_phantoms() {
+        with_binder_type_lowerer(|lowerer, _| {
+            let has = |span| lowerer.region_ty(span).map(|t| lowerer.ty_has_phantom(t));
+            assert_eq!(has(FREE_VAR_SPAN), Some(true));
+            assert_eq!(has(FUN_FREE_VAR_SPAN), Some(true));
+            assert_eq!(has(RESULT_PHANTOM_SPAN), Some(true));
+            assert_eq!(has(UNIT_SPAN), Some(false));
+            assert!(lowerer.result_error_unresolved(RESULT_PHANTOM_SPAN));
+            assert!(!lowerer.result_error_unresolved(UNIT_SPAN));
         });
     }
 

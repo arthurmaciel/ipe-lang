@@ -120,6 +120,35 @@ mod tests {
     /// so the assertions don't merely echo the implementation's anchor logic.
     const GOLDEN: &str = include_str!("../templates/main.rs");
 
+    /// The main crate's `ok_res` and `task_fail` wrappers fix a phantom error slot.
+    ///
+    /// They must spell the same type as the error-slot turbofish pin, which
+    /// the lowerer's phantom-default SSOT asserts at build time.
+    #[test]
+    fn phantom_error_wrappers_spell_the_error_slot_default() {
+        let pin = ipe_ir::CallPin::ErrIpeError.turbofish();
+        let err = pin
+            .strip_prefix("::<")
+            .and_then(|rest| rest.strip_suffix('>'))
+            .unwrap_or(pin);
+        assert!(
+            GOLDEN.contains(&format!("pub fn ok_res<A>(a: A) -> IpeResult<{err}, A> {{")),
+            "`ok_res` must pin its error slot to `{err}`"
+        );
+        assert!(
+            GOLDEN.contains(&format!(
+                "pub fn task_fail<A: Send + 'static>(e: {err}) -> IpeTask<A> {{"
+            )),
+            "`task_fail` must take the `{err}` error-slot default"
+        );
+        assert!(
+            GOLDEN.contains(&format!(
+                "pub type IpeTask<A> = ipe_runtime::IpeTask<{err}, A>;"
+            )),
+            "the main crate's task alias must carry `{err}`"
+        );
+    }
+
     #[test]
     fn preamble_matches_golden_lines_1_to_34() -> DResult<()> {
         // Lines 1..=34: header (incl. the cfg-gated allocator arms) through the
