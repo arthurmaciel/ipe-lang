@@ -70,6 +70,10 @@ concurrency:
 env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: "0"
+  # The dated nightly the sanitizer jobs (`asan`, `tsan`) build with — the one
+  # pin for `-Zsanitizer` + `-Zbuild-std`, so a sanitizer verdict is the same
+  # every run. Advance it deliberately, never float it.
+  SANITIZER_NIGHTLY: nightly-2026-09-27
 
 jobs:
   # Path filters. On a PR each filter's output gates whether its dependent jobs
@@ -84,6 +88,11 @@ jobs:
   #     bytes, so a change to it MUST re-run the gates. (The explain/*.md
   #     diagnostic pages live under src/** already, so they need no special case.)
   changes:
+    # Required context: every path-gated job below `needs` it, so a failed or
+    # cancelled filter would otherwise skip them all — and a skipped required
+    # check passes. Uniquely named so the required context is unambiguous
+    # across workflows.
+    name: changes-ci
     runs-on: ubuntu-latest
     outputs:
       wasm: ${{ steps.filter.outputs.wasm }}
@@ -345,6 +354,7 @@ jobs:
   # `#[cfg(feature = "live")]`.
   runtime-feature-combos:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     # + quick-check so a compile error fails fast before this heavy build. quick-check
     # is unconditional (no `if`) and required, so what gates a merge is unchanged.
     needs: [changes, quick-check]
@@ -478,30 +488,17 @@ jobs:
     runs-on: ubuntu-latest
     needs: [changes, test-prep, test-run]
     if: always()
+    timeout-minutes: 5
     steps:
-      - name: Gate on shard + doctest results
-        run: |
-          # A skipped `test-prep`/`test-run` is legitimate ONLY when the change
-          # gate deliberately skipped them (docs-only PR); in that case `test`
-          # passes vacuously. Any failure/cancellation is a hard stop.
-          prep='${{ needs.test-prep.result }}'
-          run='${{ needs.test-run.result }}'
-          code='${{ needs.changes.outputs.code }}'
-          event='${{ github.event_name }}'
-          if [ "$prep" = failure ] || [ "$prep" = cancelled ] \
-             || [ "$run" = failure ] || [ "$run" = cancelled ]; then
-            echo "test gate FAILED (test-prep=$prep test-run=$run)" >&2
-            exit 1
-          fi
-          if [ "$prep" = skipped ] && [ "$code" != true ] && [ "$event" = pull_request ]; then
-            echo "docs-only PR: no code paths changed, test suite skipped vacuously."
-            exit 0
-          fi
-          if [ "$prep" != success ] || [ "$run" != success ]; then
-            echo "test gate FAILED: expected all shards to succeed (test-prep=$prep test-run=$run)" >&2
-            exit 1
-          fi
-          echo "test gate PASSED (all shards + doctests green)."
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: .github/ci
+      - name: Gate on every upstream and member result
+        run: >-
+          .github/ci/gate-aggregate.sh test
+          must-pass:changes=${{ needs.changes.result }}
+          may-skip:test-prep=${{ needs.test-prep.result }}
+          may-skip:test-run=${{ needs.test-run.result }}
 
   # SEAL smoke — the fast required proxy for THE SEAL. Build the compiler, then
   # take ONE small `cli` example end to end: `ipe build` → `cargo build` the
@@ -750,6 +747,7 @@ jobs:
   asan:
     name: asan (${{ matrix.shard }}/6)
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     needs: [changes, quick-check]
     if: (needs.changes.outputs.emit == 'true' || github.event_name != 'pull_request') && needs.changes.outputs.release_only != 'true'
     strategy:
@@ -762,14 +760,15 @@ jobs:
       ASAN_OPTIONS: detect_leaks=1:abort_on_error=1
     steps:
       - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@nightly
+      - uses: dtolnay/rust-toolchain@master
         with:
+          toolchain: ${{ env.SANITIZER_NIGHTLY }}
           components: rust-src
       - uses: Swatinem/rust-cache@v2
       - uses: taiki-e/install-action@nextest
       - name: ASAN shard ${{ matrix.shard }}/6 (build-std, instrumented std)
         run: |
-          cargo +nightly nextest run \
+          cargo "+$SANITIZER_NIGHTLY" nextest run \
             -p ipe_intern -p ipe_ir -p ipe_types -p ipe_lower -p ipe_diagnostics \
             -p ipe_sandbox -p ipe_ffi -p ipe-runtime-rust \
             -Zbuild-std --target x86_64-unknown-linux-gnu \
@@ -783,17 +782,19 @@ jobs:
   asan-all:
     name: asan-all
     runs-on: ubuntu-latest
-    needs: asan
+    needs: [changes, quick-check, asan]
     if: always()
+    timeout-minutes: 5
     steps:
-      - name: Gate on every asan shard result
-        run: |
-          result='${{ needs.asan.result }}'
-          case "$result" in
-            success) echo "asan-all: every shard passed — no memory UB detected." ;;
-            skipped) echo "asan-all: asan shards skipped for this event — vacuously green." ;;
-            *) echo "asan-all FAILED: asan shards result=$result (a sanitizer report or infra failure)" >&2; exit 1 ;;
-          esac
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: .github/ci
+      - name: Gate on every upstream and member result
+        run: >-
+          .github/ci/gate-aggregate.sh asan-all
+          must-pass:changes=${{ needs.changes.result }}
+          must-pass:quick-check=${{ needs.quick-check.result }}
+          may-skip:asan=${{ needs.asan.result }}
 
   # TSAN (ThreadSanitizer): data races / concurrency UB. Focused on the
   # concurrency-bearing crates — `ipe-runtime-rust` (the async task runtime,
@@ -808,6 +809,7 @@ jobs:
   tsan:
     name: tsan
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     needs: [changes, quick-check]
     if: (needs.changes.outputs.emit == 'true' || github.event_name != 'pull_request') && needs.changes.outputs.release_only != 'true'
     env:
@@ -817,14 +819,15 @@ jobs:
       TSAN_OPTIONS: halt_on_error=1
     steps:
       - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@nightly
+      - uses: dtolnay/rust-toolchain@master
         with:
+          toolchain: ${{ env.SANITIZER_NIGHTLY }}
           components: rust-src
       - uses: Swatinem/rust-cache@v2
       - uses: taiki-e/install-action@nextest
       - name: TSAN (build-std, concurrency-bearing crates)
         run: |
-          cargo +nightly nextest run \
+          cargo "+$SANITIZER_NIGHTLY" nextest run \
             -p ipe-runtime-rust -p ipe_sandbox \
             -Zbuild-std --target x86_64-unknown-linux-gnu \
             --profile ci --no-fail-fast \
@@ -1005,34 +1008,20 @@ jobs:
   e2e-all:
     name: e2e-all
     runs-on: ubuntu-latest
-    needs: [e2e, test-prep]
+    needs: [changes, quick-check, test-prep, e2e]
     if: always()
+    timeout-minutes: 5
     steps:
-      - name: Gate on every e2e shard result
-        run: |
-          # A failed `test-prep` skips every e2e shard (they `needs` it); catch
-          # that here so the archive-build failure can't slip through as a
-          # vacuous skip below.
-          prep='${{ needs.test-prep.result }}'
-          if [ "$prep" = failure ] || [ "$prep" = cancelled ]; then
-            echo "e2e-all FAILED: test-prep result=$prep (the shared nextest archive never built)" >&2
-            exit 1
-          fi
-          result='${{ needs.e2e.result }}'
-          case "$result" in
-            success)
-              echo "e2e-all: every shard passed — THE SEAL holds."
-              ;;
-            skipped)
-              # The e2e matrix skips on a no-code PR (docs/CI/yaml only);
-              # nothing to aggregate, so this passes vacuously.
-              echo "e2e-all: e2e shards skipped for this event — vacuously green."
-              ;;
-            *)
-              echo "e2e-all FAILED: e2e shards result=$result (a SEAL regression or an infra failure)" >&2
-              exit 1
-              ;;
-          esac
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: .github/ci
+      - name: Gate on every upstream and member result
+        run: >-
+          .github/ci/gate-aggregate.sh e2e-all
+          must-pass:changes=${{ needs.changes.result }}
+          must-pass:quick-check=${{ needs.quick-check.result }}
+          may-skip:test-prep=${{ needs.test-prep.result }}
+          may-skip:e2e=${{ needs.e2e.result }}
 
   # ── SEAL slice ────────────────────────────────────────────────────────────
   # A representative slice of THE SEAL: the `seal_modset` binary (the compact
@@ -1138,31 +1127,20 @@ jobs:
   seal-slice:
     name: seal-slice
     runs-on: ubuntu-latest
-    needs: [changes, seal-slice-shard, test-prep]
+    needs: [changes, quick-check, test-prep, seal-slice-shard]
     if: always()
+    timeout-minutes: 5
     steps:
-      - name: Gate on every seal-slice sub-shard
-        run: |
-          # A failed `test-prep` skips every sub-shard (they `needs` it); catch it
-          # here so the archive-build failure can't slip through as a vacuous skip.
-          prep='${{ needs.test-prep.result }}'
-          if [ "$prep" = failure ] || [ "$prep" = cancelled ]; then
-            echo "seal-slice FAILED: test-prep result=$prep (the shared nextest archive never built)" >&2
-            exit 1
-          fi
-          result='${{ needs.seal-slice-shard.result }}'
-          case "$result" in
-            success)
-              echo "seal-slice: every sub-shard passed — the PR SEAL slice holds."
-              ;;
-            skipped)
-              echo "seal-slice: sub-shards skipped for this event — vacuously green."
-              ;;
-            *)
-              echo "seal-slice FAILED: sub-shard result=$result (a SEAL regression or an infra failure)" >&2
-              exit 1
-              ;;
-          esac
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: .github/ci
+      - name: Gate on every upstream and member result
+        run: >-
+          .github/ci/gate-aggregate.sh seal-slice
+          must-pass:changes=${{ needs.changes.result }}
+          must-pass:quick-check=${{ needs.quick-check.result }}
+          may-skip:test-prep=${{ needs.test-prep.result }}
+          may-skip:seal-slice-shard=${{ needs.seal-slice-shard.result }}
 
   # Vendored-emit SEAL gate: runs the `seal_modset` suite under the vendored
   # runtime-source emit model (`IPE_RUNTIME_VENDORED=1`). The normal e2e shards
