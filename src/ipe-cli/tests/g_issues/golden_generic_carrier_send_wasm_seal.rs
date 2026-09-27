@@ -71,7 +71,7 @@ fn emit(target: ipe_ir::Target, out: &Path) -> Option<String> {
 /// Emit gate, wasm-client: a `Cmd` / `Sub` / `Task` payload is `'static` without `Send`.
 #[test]
 fn wasm_effect_carrier_generic_is_static_not_send() {
-    let out = std::env::temp_dir().join(format!("ipec_{GOLDEN}_wasm_emit"));
+    let out = crate::support::scratch_root().join(format!("ipec_{GOLDEN}_wasm_emit"));
     let Some(emitted) = emit(ipe_ir::Target::WasmClient, &out) else {
         return;
     };
@@ -88,7 +88,7 @@ fn wasm_effect_carrier_generic_is_static_not_send() {
 /// Emit gate, native: every helper's `a` carries `Send + 'static`.
 #[test]
 fn native_carrier_generic_requires_send() {
-    let out = std::env::temp_dir().join(format!("ipec_{GOLDEN}_native_emit"));
+    let out = crate::support::scratch_root().join(format!("ipec_{GOLDEN}_native_emit"));
     let Some(emitted) = emit(ipe_ir::Target::Native, &out) else {
         return;
     };
