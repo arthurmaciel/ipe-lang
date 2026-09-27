@@ -582,7 +582,7 @@ mod tests {
         let mut inputs: Vec<String> = Vec::new();
         for kw in ipe_intern::RUST_KEYWORDS {
             // The keyword, plus its 0..=3-underscore shadows.
-            inputs.push(kw.to_owned());
+            inputs.push((*kw).to_owned());
             inputs.push(format!("{kw}_"));
             inputs.push(format!("{kw}__"));
             inputs.push(format!("{kw}___"));
