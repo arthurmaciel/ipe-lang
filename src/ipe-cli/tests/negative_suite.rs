@@ -2883,6 +2883,84 @@ fn concrete_msg_web_embed_compiles() {
     assert_compiles("concrete_msg_web_embed", &src);
 }
 
+/// A mounted `Web.embed` whose only open generic is the row variable of its
+/// model: `embedRow` quantifies `r`, the open tail of `{ r | count : Int }`,
+/// and the entry's solved cfg type reaches it only through that tail.
+const WEB_EMBED_ROW_GENERIC: &str = r#"module Main exposing (main)
+import Ipe.Server.Http as Server
+import Ipe.Task as Task exposing (Task)
+import Ipe.Tea.Web as Web
+import Ipe.Tea.Web.Cmd as Cmd
+import Ipe.Tea.Web.Sub as Sub
+import Ipe.Ui as Ui
+type alias Model = { count : Int }
+type Msg = Noop
+initialModel : Model
+initialModel = { count = 0 }
+embedRow : { r | count : Int } -> Web.WebApp
+embedRow start =
+    Web.embed
+        { init = \_ -> ( start, Cmd.none )
+        , update = \_ m -> ( m, Cmd.none )
+        , view = \_ -> Ui.text "hi"
+        , subscriptions = \_ -> Sub.none
+        , routes = []
+        , notFound = Noop
+        }
+main : Task Error ()
+main =
+    Server.listen 8000 [ Server.mountApp "/" (embedRow initialModel) ]
+"#;
+
+/// A mounted `Web.embed` whose model is generic only through an open row tail is refused.
+#[test]
+fn generic_row_model_web_embed_rejected() {
+    assert_rejected(
+        "generic_row_model_web_embed",
+        WEB_EMBED_ROW_GENERIC,
+        "IPE-N0051",
+    );
+}
+
+/// A point-free `let` alias of `Web.embed` inside a msg-generic helper is refused.
+///
+/// The alias is monomorphic (no let-generalization), so its `Web.embed`
+/// reference is instantiated at the helper's `msg` and refused at that
+/// reference, not only at a direct call.
+#[test]
+fn generic_msg_web_embed_let_alias_rejected() {
+    let src = WEB_EMBED_GENERIC.replace(
+        "embedOf step render fallback =\n    Web.embed\n",
+        "embedOf step render fallback =\n    let\n        mk = Web.embed\n    in\n    mk\n",
+    );
+    assert!(
+        src != WEB_EMBED_GENERIC,
+        "the fixture must carry the direct `Web.embed` call this test aliases"
+    );
+    assert_rejected("generic_msg_web_embed_let_alias", &src, "IPE-N0051");
+}
+
+/// A `Web.appRouted` built by a msg-generic helper is refused before lowering.
+///
+/// `Web.appRouted` carries no type scheme, so every reference to it is refused
+/// by the type checker (IPE-L0108) and never reaches the generic-entry check.
+#[test]
+fn generic_msg_web_app_routed_rejected() {
+    let src = format!(
+        "{WEB_ENTRY_PREAMBLE}\
+         appOf step render =\n\
+         \x20   Web.appRouted\n\
+         \x20       {{ init = \\_ -> ( initialModel, Cmd.none )\n\
+         \x20       , update = step\n\
+         \x20       , view = render\n\
+         \x20       , subscriptions = \\_ -> Sub.none\n\
+         \x20       , routes = []\n\
+         \x20       , notFound = HomePage\n\
+         \x20       }}\n"
+    );
+    assert_rejected("generic_msg_web_app_routed", &src, "IPE-L0108");
+}
+
 /// A `Tui.tea` built by a helper generic over its message type is refused.
 #[test]
 fn generic_msg_tui_tea_rejected() {

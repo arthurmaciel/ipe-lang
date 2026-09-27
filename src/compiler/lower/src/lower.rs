@@ -5031,6 +5031,26 @@ enum SiteSlot {
     Unlowered(Vec<Symbol>),
 }
 
+/// A lowered definition before its generics' body-derived bounds are folded in.
+///
+/// Produced by `Lowerer::lower_def_parts` for every definition shape and
+/// consumed only by `Lowerer::lower_def`, the single place a [`Func`] is
+/// assembled.
+struct DefParts {
+    /// The definition's generics with their signature-derived bounds.
+    type_params: Vec<(Symbol, BoundSet)>,
+    /// The generics minted for wildcard `any` positions.
+    wildcard_any_syms: BTreeSet<Symbol>,
+    /// Erased record-row parameters.
+    row_params: Vec<RowParam>,
+    /// Parameter binders and their lowered types.
+    params: Vec<(Symbol, IrType)>,
+    /// The lowered return type.
+    ret: IrType,
+    /// The lowered body.
+    body: Expr,
+}
+
 /// A user-function reference in a def body, paired with the solved type it instantiates the callee at.
 ///
 /// Recorded for every call and every point-free value reference alike, so a
@@ -15155,7 +15175,14 @@ impl<'a> Lowerer<'a> {
         Ok(())
     }
 
-    #[allow(clippy::too_many_lines)] // the T5 multi-use-clone pre-pass pushes it past 100
+    /// Lower one top-level definition to its [`Func`].
+    ///
+    /// Every definition shape (annotated, unannotated with parameters,
+    /// unannotated zero-parameter value binding) yields a [`DefParts`] from
+    /// [`Self::lower_def_parts`]; the `Func` is assembled only here, after
+    /// [`Self::finalize_type_params`] folds every body-derived bound obligation
+    /// into the generics, so no shape can emit a generic missing an obligation
+    /// its body recorded.
     fn lower_def(&self, def: &canon::Def, id: FuncId) -> DResult<Func> {
         // Track the current def's home so every `region_ty(span)` lookup uses the
         // correct `(home, span)` key, matching what the constraint builder wrote.
@@ -15171,7 +15198,50 @@ impl<'a> Lowerer<'a> {
         // advances (never reuses), so no two live eta binders collide even when a
         // composed higher-order combinator nests them.
         self.eta_base.set(0);
+        let DefParts {
+            mut type_params,
+            wildcard_any_syms,
+            row_params,
+            params,
+            ret,
+            body,
+        } = self.lower_def_parts(def, id)?;
+        self.finalize_type_params(&mut type_params, &wildcard_any_syms, &params, &ret, &body);
+        Ok(Func {
+            id,
+            name: def.name().value,
+            home: ModPath(def.home().to_vec()),
+            type_params,
+            row_params,
+            params,
+            ret,
+            body,
+        })
+    }
 
+    /// Fold every body-derived bound obligation into a definition's generics.
+    ///
+    /// Two independent sources oblige a generic: a kernel the body applies to a
+    /// parameter binder of that generic ([`apply_kernel_type_param_bounds`]:
+    /// `IpeRow` for wildcard `any` only, `IpeStringify`, `Send + 'static`,
+    /// `Sync`), and a sync-capturing kernel reference whose solved
+    /// instantiation reaches the generic ([`Self::apply_sync_capture_bounds`],
+    /// recorded while the body lowered).
+    fn finalize_type_params(
+        &self,
+        type_params: &mut [(Symbol, BoundSet)],
+        wildcard_any_syms: &BTreeSet<Symbol>,
+        params: &[(Symbol, IrType)],
+        ret: &IrType,
+        body: &Expr,
+    ) {
+        apply_kernel_type_param_bounds(type_params, wildcard_any_syms, params, ret, body);
+        self.apply_sync_capture_bounds(type_params);
+    }
+
+    /// Lower one definition's signature and body, before its bounds are folded in.
+    #[allow(clippy::too_many_lines)] // the T5 multi-use-clone pre-pass pushes it past 100
+    fn lower_def_parts(&self, def: &canon::Def, id: FuncId) -> DResult<DefParts> {
         // `id` is the def's position in `m.defs` — identical to the
         // `func_ids` entry `new()` recorded for `(home, name)` (the map is
         // populated from the same enumeration), passed in to avoid a
@@ -15683,7 +15753,7 @@ impl<'a> Lowerer<'a> {
                 // Rust generic, worse than the bug this fix closes. Each is
                 // trivially unbounded (`bounds_for` returns `UNBOUNDED` on a
                 // missing `var_bounds` entry, which every fresh symbol has).
-                let mut type_params: Vec<(Symbol, BoundSet)> = free_vars
+                let type_params: Vec<(Symbol, BoundSet)> = free_vars
                     .iter()
                     .copied()
                     .filter(|v| used_generics.contains(v))
@@ -15714,24 +15784,11 @@ impl<'a> Lowerer<'a> {
                 {
                     lowered_body = rewrite_tail_calls(id, arity, params.clone(), lowered_body);
                 }
-                // General kernel→type-param-bound propagation: a param that flows
-                // into a bound-obliging kernel gains that kernel's Rust bound —
-                // IpeRow (`Db.get*`→`IpeRow`, wildcard-only) + Display
-                // (`toString`→`Display`, any tvar). See
-                // `apply_kernel_type_param_bounds`.
-                // The wildcard-only obligations (IpeRow) key on the minted
+                // The wildcard-only bound obligations (IpeRow) key on the minted
                 // per-occurrence `any` symbols — the single source of truth for
                 // which tvars are compiler-minted wildcards, so a legal user
                 // tvar can never be misclassified by a name-shape guess.
                 let wildcard_any_syms: BTreeSet<Symbol> = any_syms_minted.iter().copied().collect();
-                apply_kernel_type_param_bounds(
-                    &mut type_params,
-                    &wildcard_any_syms,
-                    &params,
-                    &ret,
-                    &lowered_body,
-                );
-                self.apply_sync_capture_bounds(&mut type_params);
                 // Register this def's erased row params, paired with their
                 // parameter positions, so call sites can verify that the
                 // caller's actual field types match the required field types
@@ -15753,11 +15810,9 @@ impl<'a> Lowerer<'a> {
                             .insert((def.home().to_vec(), name), positioned);
                     }
                 }
-                Ok(Func {
-                    id,
-                    name,
-                    home: ModPath(def.home().to_vec()),
+                Ok(DefParts {
                     type_params,
+                    wildcard_any_syms,
                     row_params,
                     params,
                     ret,
@@ -15887,26 +15942,13 @@ impl<'a> Lowerer<'a> {
                     {
                         lowered_body = rewrite_tail_calls(id, arity, params.clone(), lowered_body);
                     }
-                    let mut type_params =
+                    let type_params =
                         compute_type_params(quantified_syms, var_bounds, &params, &ret);
-                    // General kernel→type-param-bound propagation (IpeRow +
-                    // Display) — see `apply_kernel_type_param_bounds`. An
-                    // unannotated def's tvars are all genuine HM-quantified
-                    // vars; none are minted wildcard-`any`, so the wildcard set
-                    // is empty and the wildcard-only obligations never fire.
-                    apply_kernel_type_param_bounds(
-                        &mut type_params,
-                        &BTreeSet::new(),
-                        &params,
-                        &ret,
-                        &lowered_body,
-                    );
-                    self.apply_sync_capture_bounds(&mut type_params);
-                    return Ok(Func {
-                        id,
-                        name,
-                        home: ModPath(def.home().to_vec()),
+                    return Ok(DefParts {
                         type_params,
+                        // An unannotated def's tvars are all genuine
+                        // HM-quantified vars; none is a minted wildcard `any`.
+                        wildcard_any_syms: BTreeSet::new(),
                         // An unannotated binding never generalises over a record
                         // row (D3): pinned on first concrete use, so no row params.
                         row_params: Vec::new(),
@@ -15940,11 +15982,9 @@ impl<'a> Lowerer<'a> {
                 // emits for zero-arg fn calls — no shared mutable cell, no
                 // memoization to break.
                 let type_params = compute_type_params(quantified_syms, var_bounds, &[], &ret);
-                Ok(Func {
-                    id,
-                    name,
-                    home: ModPath(def.home().to_vec()),
+                Ok(DefParts {
                     type_params,
+                    wildcard_any_syms: BTreeSet::new(),
                     // Zero-param value binding: no arguments, so no row params.
                     row_params: Vec::new(),
                     params: Vec::new(),
@@ -25027,8 +25067,23 @@ impl<'a> Lowerer<'a> {
             Ty::Con { args, .. } | Ty::Tuple(args) => {
                 args.iter().find_map(|a| self.first_poly_tvar(a))
             }
-            Ty::Record(fields, _) => fields.values().find_map(|f| self.first_poly_tvar(f)),
+            Ty::Record(fields, tail) => fields
+                .values()
+                .find_map(|f| self.first_poly_tvar(f))
+                .or_else(|| self.row_tail_poly_tvar(tail)),
             Ty::Unit => None,
+        }
+    }
+
+    /// The generic of the enclosing definition an open record's row variable is, if any.
+    ///
+    /// A row variable shares [`Ty::Var`]'s id space, so an open tail over one of
+    /// the def's quantified variables is as much a mention of that generic as a
+    /// field typed by it.
+    fn row_tail_poly_tvar(&self, tail: &RowTail) -> Option<Symbol> {
+        match tail {
+            RowTail::Open(raw) => self.poly_tvar_symbol(*raw),
+            RowTail::Closed => None,
         }
     }
 
@@ -25102,7 +25157,10 @@ impl<'a> Lowerer<'a> {
             Ty::Con { args, .. } | Ty::Tuple(args) => {
                 args.iter().any(|a| self.ty_mentions_poly_tvar(a, tv))
             }
-            Ty::Record(fields, _) => fields.values().any(|f| self.ty_mentions_poly_tvar(f, tv)),
+            Ty::Record(fields, tail) => {
+                self.row_tail_poly_tvar(tail) == Some(tv)
+                    || fields.values().any(|f| self.ty_mentions_poly_tvar(f, tv))
+            }
             Ty::Unit => false,
         }
     }
