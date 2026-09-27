@@ -17,7 +17,9 @@
 //!   symlinks (a cloned repository may force-add `out/`), so every product write,
 //!   copy, prune and removal takes an [`OwnedPath`] and re-checks each level as it
 //!   creates it; the final file is always replaced by a rename, never written
-//!   through.
+//!   through. On Unix each level is held open and the next opened relative to it
+//!   without following a link, so a level swapped for a link between the check
+//!   and the act cannot redirect it.
 //! - [`OutputRoot`] — the CLI's output root (`<project>/out`, or `--out <dir>`),
 //!   additionally proven disjoint from the project's sources and from every
 //!   [`ReservedName`] directory (version-control metadata, any ipe cache
