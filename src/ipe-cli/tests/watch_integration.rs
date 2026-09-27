@@ -23,6 +23,8 @@ use std::time::{Duration, Instant};
 
 use ipe::watch::{WatchEvent, WatchHandle, WatchOptions};
 
+use e2e_support::wait_for;
+
 type BoxError = Box<dyn std::error::Error + Send + Sync + 'static>;
 
 /// A minimal `Ipe.Http.Server` fixture, parameterised on the response body
@@ -92,14 +94,9 @@ fn fresh_dirs(tag: &str) -> Result<(PathBuf, PathBuf), BoxError> {
 /// for CPU with every other test nextest runs in parallel. A tight deadline
 /// here fails on scheduler contention, not on a real regression.
 fn wait_for_body(port: u16, want: &str, timeout: Duration) -> bool {
-    let deadline = Instant::now() + timeout;
-    while Instant::now() < deadline {
-        if http_get_body(port).is_some_and(|body| body.contains(want)) {
-            return true;
-        }
-        std::thread::sleep(Duration::from_millis(100));
-    }
-    false
+    wait_for(timeout, || {
+        http_get_body(port).is_some_and(|body| body.contains(want))
+    })
 }
 
 fn http_get_body(port: u16) -> Option<String> {
@@ -411,11 +408,17 @@ fn watch_coalesces_a_rapid_double_save_into_one_rebuild() -> Result<(), BoxError
 
     let rebuilds_before = sink.count_rebuild_started();
 
-    // Two writes ~20ms apart — well inside the 120ms quiescence window
-    // configured in `start_watch` — must coalesce into exactly ONE
-    // rebuild cycle, and the LAST write (v3) must be what ships.
+    // Back-to-back writes, deliberately with NO intervening sleep: a
+    // `thread::sleep` only guarantees a MINIMUM wait — under CPU contention
+    // the scheduler can wake a parked thread arbitrarily late, so a fixed
+    // sleep meant to land "well inside" the 120ms quiescence window
+    // configured in `start_watch` can instead overshoot it, splitting this
+    // burst into two rebuild cycles instead of one. Never voluntarily
+    // yielding between the two writes keeps the real gap between them down
+    // to the two syscalls' own cost, which stays inside the window
+    // regardless of scheduler load. Both writes must still coalesce into
+    // exactly ONE rebuild cycle, and the LAST write (v3) must be what ships.
     write_main(&ipe_dir, &server_fixture("v2"))?;
-    std::thread::sleep(Duration::from_millis(20));
     write_main(&ipe_dir, &server_fixture("v3"))?;
 
     assert!(
@@ -592,16 +595,4 @@ fn watch_proxies_a_hardcoded_port_server_on_an_internal_port() -> Result<(), Box
     );
 
     stop_and_join(&handle, join)
-}
-
-/// Poll `cond` until it is true or `timeout` elapses.
-fn wait_for(timeout: Duration, mut cond: impl FnMut() -> bool) -> bool {
-    let deadline = Instant::now() + timeout;
-    while Instant::now() < deadline {
-        if cond() {
-            return true;
-        }
-        std::thread::sleep(Duration::from_millis(100));
-    }
-    false
 }

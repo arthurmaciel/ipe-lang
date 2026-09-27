@@ -89,6 +89,18 @@ host : Dsn -> String
 
 `host dsn` — the host component (`""` for a file-backed sqlite descriptor).
 
+## `port`
+
+```ipe
+port : Dsn -> Maybe Port
+```
+
+`port dsn` — the network port as a validated `Ipe.Net.Port`, or `Nothing`
+for a file-backed sqlite descriptor (which has no port; the kernel returns the
+`0` sentinel, which `Net.fromInt` rejects, yielding `Nothing`).  A network
+descriptor always carries a `1..65535` port, so `Net.fromInt` re-proves the
+range the kernel already enforced at construction.
+
 ## `database`
 
 ```ipe

@@ -53,6 +53,15 @@ host : Url -> Maybe String
 `host url` — the host component, or `Nothing` for a hostless scheme
 (e.g. `mailto:`).
 
+## `port`
+
+```ipe
+port : Url -> Maybe Int
+```
+
+`port url` — the port with the scheme's known default applied
+(`https://x` → `443`), or `Nothing`.
+
 ## `path`
 
 ```ipe

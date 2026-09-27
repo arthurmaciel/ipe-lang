@@ -265,7 +265,7 @@ struct ParsedFlags {
 /// here rather than carried into an unrepresentable [`DocMode`].
 ///
 /// # Errors
-/// [`CliError::Usage`] / [`CliError::UsageOwned`] naming the exact problem.
+/// [`CliError::Usage`] naming the exact problem.
 pub fn parse_doc(rest: &[String]) -> Result<DocMode, CliError> {
     parse_doc_with(rest, &mut |msg| {
         crate::screen::chatter(crate::screen::Stream::Stderr, crate::screen::Tone::Aux, msg);
@@ -311,7 +311,7 @@ fn parse_doc_with(rest: &[String], notice: &mut dyn FnMut(&str)) -> Result<DocMo
     // `--type` is mutually exclusive with all other subcommands.
     if let Some(query) = type_query {
         if has_check_examples || has_list_flag {
-            return Err(CliError::Usage(text::doc_type_exclusive()));
+            return Err(CliError::Usage(text::msg::doc_type_exclusive()));
         }
         // Consume remaining flags for TypeSearch (only --plain/--json allowed).
         let mut output_format: Option<OutputFormat> = None;
@@ -321,13 +321,13 @@ fn parse_doc_with(rest: &[String], notice: &mut dyn FnMut(&str)) -> Result<DocMo
                 t if t.starts_with("--type=") => {}
                 "--plain" => {
                     if output_format.is_some() {
-                        return Err(CliError::UsageOwned(text::plain_json_exclusive(&"doc")));
+                        return Err(CliError::Usage(text::msg::plain_json_exclusive(&"doc")));
                     }
                     output_format = Some(OutputFormat::Plain);
                 }
                 "--json" => {
                     if output_format.is_some() {
-                        return Err(CliError::UsageOwned(text::plain_json_exclusive(&"doc")));
+                        return Err(CliError::Usage(text::msg::plain_json_exclusive(&"doc")));
                     }
                     output_format = Some(OutputFormat::Json);
                 }
@@ -336,13 +336,13 @@ fn parse_doc_with(rest: &[String], notice: &mut dyn FnMut(&str)) -> Result<DocMo
                     .windows(2)
                     .any(|p| matches!(p, [f, v] if f == "--type" && v == tok)) => {}
                 flag if flag.starts_with('-') => {
-                    return Err(CliError::UsageOwned(text::unknown_flag(
+                    return Err(CliError::Usage(text::msg::unknown_flag(
                         &"doc --type",
                         &flag,
                     )));
                 }
                 _ => {
-                    return Err(CliError::Usage(text::doc_type_unexpected_positional()));
+                    return Err(CliError::Usage(text::msg::doc_type_unexpected_positional()));
                 }
             }
         }
@@ -440,7 +440,7 @@ fn parse_doc_with(rest: &[String], notice: &mut dyn FnMut(&str)) -> Result<DocMo
 /// consumed. Rejects any flag that does not belong to `sub`.
 ///
 /// # Errors
-/// [`CliError::Usage`] / [`CliError::UsageOwned`] for an unknown or misplaced flag.
+/// [`CliError::Usage`] for an unknown or misplaced flag.
 fn parse_doc_flags(
     it: &mut std::iter::Peekable<std::slice::Iter<'_, String>>,
     sub: &Sub,
@@ -451,37 +451,37 @@ fn parse_doc_flags(
             // Skip flags already handled by the caller.
             "--list" | "--check-examples" => {}
             "--out" | "--write-format" if !matches!(sub, Sub::Generate) => {
-                return Err(CliError::UsageOwned(text::doc_generate_only_flag(
+                return Err(CliError::Usage(text::msg::doc_generate_only_flag(
                     &sub_name(sub),
                     &arg,
                 )));
             }
             "--port" if !matches!(sub, Sub::Serve) => {
-                return Err(CliError::UsageOwned(text::doc_port_serve_only(&sub_name(
+                return Err(CliError::Usage(text::msg::doc_port_serve_only(&sub_name(
                     sub,
                 ))));
             }
             "--plain" | "--json" if !matches!(sub, Sub::List | Sub::Query(_) | Sub::Lookup(_)) => {
-                return Err(CliError::UsageOwned(text::doc_lookup_only_flag(
+                return Err(CliError::Usage(text::msg::doc_lookup_only_flag(
                     &sub_name(sub),
                     &arg,
                 )));
             }
             "--out" => {
                 let value = it.next().cloned().ok_or_else(|| {
-                    CliError::UsageOwned(text::flag_needs_value(&"doc", &"--out"))
+                    CliError::Usage(text::msg::flag_needs_value(&"doc", &"--out"))
                 })?;
                 if flags.out.is_some() {
-                    return Err(CliError::UsageOwned(text::flag_repeated(&"doc", &"--out")));
+                    return Err(CliError::Usage(text::msg::flag_repeated(&"doc", &"--out")));
                 }
                 flags.out = Some(value);
             }
             "--write-format" => {
                 let value = it.next().ok_or_else(|| {
-                    CliError::UsageOwned(text::flag_needs_value(&"doc", &"--write-format"))
+                    CliError::Usage(text::msg::flag_needs_value(&"doc", &"--write-format"))
                 })?;
                 if flags.write_format.is_some() {
-                    return Err(CliError::UsageOwned(text::flag_repeated(
+                    return Err(CliError::Usage(text::msg::flag_repeated(
                         &"doc",
                         &"--write-format",
                     )));
@@ -491,9 +491,9 @@ fn parse_doc_flags(
             "--port" => {
                 let value = it
                     .next()
-                    .ok_or(CliError::Usage(text::doc_serve_port_needs_number()))?;
+                    .ok_or(CliError::Usage(text::msg::doc_serve_port_needs_number()))?;
                 if flags.port.is_some() {
-                    return Err(CliError::UsageOwned(text::flag_repeated(
+                    return Err(CliError::Usage(text::msg::flag_repeated(
                         &"doc serve",
                         &"--port",
                     )));
@@ -502,25 +502,25 @@ fn parse_doc_flags(
             }
             "--plain" => {
                 if flags.output_format.is_some() {
-                    return Err(CliError::UsageOwned(text::plain_json_exclusive(&"doc")));
+                    return Err(CliError::Usage(text::msg::plain_json_exclusive(&"doc")));
                 }
                 flags.output_format = Some(OutputFormat::Plain);
             }
             "--json" => {
                 if flags.output_format.is_some() {
-                    return Err(CliError::UsageOwned(text::plain_json_exclusive(&"doc")));
+                    return Err(CliError::Usage(text::msg::plain_json_exclusive(&"doc")));
                 }
                 flags.output_format = Some(OutputFormat::Json);
             }
             flag if flag.starts_with('-') => {
-                return Err(CliError::UsageOwned(text::unknown_flag(&"doc", &flag)));
+                return Err(CliError::Usage(text::msg::unknown_flag(&"doc", &flag)));
             }
             positional => {
                 if matches!(sub, Sub::Query(_) | Sub::Lookup(_)) {
-                    return Err(CliError::Usage(text::doc_single_key()));
+                    return Err(CliError::Usage(text::msg::doc_single_key()));
                 }
                 if flags.path.is_some() {
-                    return Err(CliError::Usage(text::doc_single_path()));
+                    return Err(CliError::Usage(text::msg::doc_single_path()));
                 }
                 flags.path = Some(positional.to_owned());
             }
@@ -549,7 +549,7 @@ fn parse_write_format(value: &str) -> Result<WriteFormat, CliError> {
         "markdown" => Ok(WriteFormat::Markdown),
         "html" => Ok(WriteFormat::Html),
         "all" => Ok(WriteFormat::All),
-        other => Err(CliError::UsageOwned(text::doc_unknown_write_format(&other))),
+        other => Err(CliError::Usage(text::msg::doc_unknown_write_format(&other))),
     }
 }
 
@@ -557,9 +557,9 @@ fn parse_write_format(value: &str) -> Result<WriteFormat, CliError> {
 /// value (and `0`, which would silently auto-select — omit `--port` for that).
 fn parse_port(value: &str) -> Result<u16, CliError> {
     match value.parse::<u16>() {
-        Ok(0) => Err(CliError::UsageOwned(text::port_zero(&"doc serve"))),
+        Ok(0) => Err(CliError::Usage(text::msg::port_zero(&"doc serve"))),
         Ok(p) => Ok(p),
-        Err(_) => Err(CliError::UsageOwned(text::port_invalid(
+        Err(_) => Err(CliError::Usage(text::msg::port_invalid(
             &"doc serve",
             &value,
         ))),
@@ -597,12 +597,12 @@ fn build_index() -> Result<Index, CliError> {
 
     builder
         .add_stdlib()
-        .map_err(|e| CliError::UsageOwned(text::doc_stdlib_index_failed(&e)))?;
+        .map_err(|e| CliError::Usage(text::msg::doc_stdlib_index_failed(&e)))?;
     // The compiled-source stdlib modules (`Ipe.Time`, …) carry members too, so
     // `ipe doc Ipe.Time.unixMillis` resolves like `ipe doc List.map`.
     builder
         .add_compiled_stdlib()
-        .map_err(|e| CliError::UsageOwned(text::doc_stdlib_index_failed(&e)))?;
+        .map_err(|e| CliError::Usage(text::msg::doc_stdlib_index_failed(&e)))?;
 
     // Diagnostics: indexed from the compile-time embedded explain pages.
     for code in ipe_diagnostics::ALL_CODES {
@@ -748,7 +748,7 @@ fn build_doc_bundle(docs_root: &std::path::Path) -> Result<DocBundle, CliError> 
         &diagnostic_sources,
         &cli_sources,
     )
-    .map_err(|e| CliError::UsageOwned(text::doc_bundle_build_error(&e)))
+    .map_err(|e| CliError::Usage(text::msg::doc_bundle_build_error(&e)))
 }
 
 /// `ipe doc kind:key` -- exact scoped bundle lookup.
@@ -768,7 +768,7 @@ fn run_bundle_lookup(key: &str, format: OutputFormat) -> Result<(), CliError> {
             Ok(())
         }
         Err(crate::doc_bundle::BundleError::UnknownKind(prefix)) => {
-            Err(CliError::UsageOwned(text::doc_unknown_kind(&prefix)))
+            Err(CliError::Usage(text::msg::doc_unknown_kind(&prefix)))
         }
         Err(crate::doc_bundle::BundleError::UnknownKey { kind, key: k }) => {
             let near: Vec<String> = bundle
@@ -781,11 +781,11 @@ fn run_bundle_lookup(key: &str, format: OutputFormat) -> Result<(), CliError> {
             } else {
                 near.join("\n")
             };
-            Err(CliError::UsageOwned(text::doc_no_entry_for_key(
+            Err(CliError::Usage(text::msg::doc_no_entry_for_key(
                 &kind, &k, &hint,
             )))
         }
-        Err(e) => Err(CliError::UsageOwned(text::command_refusal(&"doc", &e))),
+        Err(e) => Err(CliError::Usage(text::msg::command_refusal(&"doc", &e))),
     }
 }
 
@@ -938,7 +938,7 @@ fn run_type_search(query: &str, format: OutputFormat) -> Result<(), CliError> {
         OutputFormat::Plain | OutputFormat::Human => {
             let text = render_type_matches_human(&hits);
             if text.is_empty() {
-                return Err(CliError::UsageOwned(text::doc_type_no_match(&query)));
+                return Err(CliError::Usage(text::msg::doc_type_no_match(&query)));
             }
             if matches!(format, OutputFormat::Human) {
                 let p = crate::style::Palette::for_stream(&stdout);
@@ -1559,7 +1559,7 @@ fn build_kernel_module_docs() -> Result<BTreeMap<String, ModuleDoc>, CliError> {
     // Get the full type table for all kernel functions.
     let mut interner = Interner::new();
     let type_table = kernel_type_table(&mut interner)
-        .map_err(|d| CliError::UsageOwned(text::doc_kernel_table_error(&format!("{d:?}"))))?;
+        .map_err(|d| CliError::Usage(text::msg::doc_kernel_table_error(&format!("{d:?}"))))?;
 
     // Group by module path and build ValueDoc for each kernel.
     let mut by_module: BTreeMap<String, Vec<ValueDoc>> = BTreeMap::new();
@@ -5163,7 +5163,7 @@ mod tests {
     fn parse_rejects_unknown_write_format() {
         assert!(matches!(
             parse_doc(&s(&["--write-format", "pdf"])),
-            Err(CliError::UsageOwned(_))
+            Err(CliError::Usage(_))
         ));
     }
 
@@ -5370,7 +5370,7 @@ mod tests {
         // so it is rejected at the boundary, not silently ignored.
         assert!(matches!(
             parse_doc(&s(&["check", "--out", "x"])),
-            Err(CliError::UsageOwned(_))
+            Err(CliError::Usage(_))
         ));
     }
 
@@ -5388,7 +5388,7 @@ mod tests {
     fn rejects_unknown_flag() {
         assert!(matches!(
             parse_doc(&s(&["--bogus"])),
-            Err(CliError::UsageOwned(_))
+            Err(CliError::Usage(_))
         ));
     }
 

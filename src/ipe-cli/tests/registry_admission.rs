@@ -32,6 +32,7 @@ use std::process::Command;
 
 use ipe::index::{self, EntryVersion, IndexEntry, PinnedRev, Sha256Hex, SourceUrl};
 use ipe::lockfile::Lockfile;
+use ipe::package_name::PackageName;
 use ipe::published_version::{PublishedVersion, VersionRefusal};
 use ipe::publisher::{AttestedActor, SelfDeclaredPublisher};
 use ipe::resolve::{self, hash_source_tree};
@@ -129,12 +130,17 @@ fn write_entry(tag: &str, name: &str, body: &str) -> PathBuf {
 fn version(v: &str, source: &str, rev: &str) -> EntryVersion {
     EntryVersion {
         version: PublishedVersion::parse(v).expect("valid version"),
-        source: SourceUrl::parse("pkg", source).expect("valid source"),
-        rev: PinnedRev::from_full_sha("pkg", rev).expect("valid rev"),
-        sha256: Sha256Hex::parse("pkg", VALID_SHA).expect("valid digest"),
+        source: SourceUrl::parse(&fixture_name("pkg"), source).expect("valid source"),
+        rev: PinnedRev::from_full_sha(&fixture_name("pkg"), rev).expect("valid rev"),
+        sha256: Sha256Hex::parse(&fixture_name("pkg"), VALID_SHA).expect("valid digest"),
         capabilities: BTreeSet::new(),
         signature: None,
     }
+}
+
+/// A fixture package name.
+fn fixture_name(raw: &str) -> PackageName {
+    PackageName::parse(raw).expect("fixture package name parses")
 }
 
 fn entry(name: &str, versions: Vec<EntryVersion>) -> IndexEntry {
@@ -143,7 +149,7 @@ fn entry(name: &str, versions: Vec<EntryVersion>) -> IndexEntry {
 
 fn entry_with_publisher(name: &str, publisher: &str, versions: Vec<EntryVersion>) -> IndexEntry {
     IndexEntry {
-        name: name.to_owned(),
+        name: fixture_name(name),
         publisher: SelfDeclaredPublisher::parse(publisher).expect("login-shaped publisher"),
         versions,
     }
