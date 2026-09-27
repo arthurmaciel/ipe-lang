@@ -2297,6 +2297,79 @@ mod tests {
         let _ = std::fs::remove_dir_all(&base);
     }
 
+    /// A held directory is removed only when empty; a non-empty one is kept, untouched, without error.
+    #[test]
+    fn remove_empty_dir_keeps_a_non_empty_held_entry_and_removes_an_empty_one() {
+        let base = scratch("remove_empty_held");
+        let full = std::ffi::OsStr::new("full");
+        let empty = std::ffi::OsStr::new("empty");
+        std::fs::create_dir(base.join(full)).expect("make full");
+        std::fs::write(base.join(full).join("keep.txt"), "keep").expect("user file");
+        std::fs::create_dir(base.join(empty)).expect("make empty");
+        let parent = super::held::HeldDir::open(&base)
+            .expect("open base")
+            .expect("base exists");
+
+        let held_full = parent.child(full).expect("open full").expect("full exists");
+        let kept = parent.remove_empty_dir(full, held_full);
+        assert!(
+            matches!(kept, Ok(false)),
+            "a non-empty directory is kept, got {kept:?}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(base.join(full).join("keep.txt"))
+                .ok()
+                .as_deref(),
+            Some("keep"),
+            "its contents survive"
+        );
+
+        let held_empty = parent
+            .child(empty)
+            .expect("open empty")
+            .expect("empty exists");
+        let removed = parent.remove_empty_dir(empty, held_empty);
+        assert!(
+            matches!(removed, Ok(true)),
+            "an empty directory is removed, got {removed:?}"
+        );
+        assert!(!base.join(empty).exists(), "the empty directory is gone");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// An empty-directory removal whose entry now names another directory is refused, the impostor untouched.
+    #[cfg(unix)]
+    #[test]
+    fn remove_empty_dir_refuses_an_entry_replaced_after_it_was_held() {
+        let base = scratch("remove_empty_swap");
+        let name = std::ffi::OsStr::new("doomed");
+        let doomed = base.join(name);
+        std::fs::create_dir(&doomed).expect("make doomed");
+        let parent = super::held::HeldDir::open(&base)
+            .expect("open base")
+            .expect("base exists");
+        let child = parent
+            .child(name)
+            .expect("open doomed")
+            .expect("doomed exists");
+        // Kept alive so the impostor cannot reuse the held inode.
+        let aside = base.join("doomed.aside");
+        std::fs::rename(&doomed, &aside).expect("move doomed aside");
+        std::fs::create_dir(&doomed).expect("plant empty impostor");
+
+        let removed = parent.remove_empty_dir(name, child);
+        assert!(
+            matches!(
+                removed,
+                Err(CliError::OutputRefused(OutputRefusal::Replaced(_)))
+            ),
+            "the replaced entry is refused, got {removed:?}"
+        );
+        assert!(doomed.is_dir(), "the impostor survives");
+        assert!(aside.is_dir(), "the held directory is not removed by name");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
     /// A held level whose path now names another directory is refused, the impostor untouched.
     #[cfg(unix)]
     #[test]
