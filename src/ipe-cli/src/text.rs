@@ -15,6 +15,15 @@ use std::fmt::{self, Write as _};
 /// The message catalog.
 pub const CATALOG: &str = include_str!("../text/messages.md");
 
+/// One catalog section: its key and its body.
+type Section = (&'static str, &'static str);
+
+/// How many `## <key>` sections the catalog defines.
+const SECTION_COUNT: usize = count_sections(CATALOG);
+
+/// Every catalog section in catalog order, parsed once at build time.
+const SECTIONS: [Section; SECTION_COUNT] = index_sections(CATALOG);
+
 /// The text of the catalog's `## <key>` section, checked against its declaration.
 ///
 /// The text is the section's body without its blank edge lines, running to the
@@ -26,35 +35,88 @@ pub const CATALOG: &str = include_str!("../text/messages.md");
 /// section, a duplicated one, or a renamed placeholder.
 #[must_use]
 pub const fn checked_section(key: &str, params: &[&str]) -> &'static str {
-    checked_section_in(CATALOG, key, params)
+    checked_section_in(&SECTIONS, key, params)
 }
 
-/// [`checked_section`] over the catalog text `catalog`.
-const fn checked_section_in<'a>(catalog: &'a str, key: &str, params: &[&str]) -> &'a str {
-    let mut found: Option<&'a [u8]> = None;
-    let mut rest = catalog.as_bytes();
-    while let [byte, tail @ ..] = rest {
-        if *byte == b'\n'
-            && let Some(after_marker) = strip_prefix(tail, b"## ")
-            && let Some(after_key) = strip_prefix(after_marker, key.as_bytes())
-            && let Some(body) = strip_prefix(after_key, b"\n")
-        {
+/// [`checked_section`] over the parsed sections `sections`.
+const fn checked_section_in(sections: &[Section], key: &str, params: &[&str]) -> &'static str {
+    let mut found: Option<&'static str> = None;
+    let mut rest = sections;
+    while let [(section_key, body), tail @ ..] = rest {
+        if bytes_eq(section_key.as_bytes(), key.as_bytes()) {
             if found.is_some() {
                 return "";
             }
-            found = Some(trim_newlines(until_heading(body)));
+            found = Some(*body);
         }
         rest = tail;
     }
     if let Some(body) = found
         && !body.is_empty()
-        && every_placeholder_is_a_param(body, params)
-        && every_param_is_a_placeholder(body, params)
-        && let Ok(text) = core::str::from_utf8(body)
+        && every_placeholder_is_a_param(body.as_bytes(), params)
+        && every_param_is_a_placeholder(body.as_bytes(), params)
     {
-        return text;
+        return body;
     }
     ""
+}
+
+/// How many `## <key>` headings the catalog text `catalog` carries.
+const fn count_sections(catalog: &str) -> usize {
+    let mut count: usize = 0;
+    let mut rest = catalog.as_bytes();
+    while let [byte, tail @ ..] = rest {
+        if *byte == b'\n' && strip_prefix(tail, b"## ").is_some() {
+            count = count.saturating_add(1);
+        }
+        rest = tail;
+    }
+    count
+}
+
+/// The `N` sections of the catalog text `catalog`, in order.
+///
+/// `N` is [`count_sections`] of the same text; evaluated only in a `const`, so a
+/// disagreement is a build error, never a runtime one.
+#[allow(clippy::indexing_slicing)] // const-evaluated only: an index past `N` fails the build
+const fn index_sections<const N: usize>(catalog: &'static str) -> [Section; N] {
+    let mut sections: [Section; N] = [("", ""); N];
+    let mut filled: usize = 0;
+    let mut rest = catalog.as_bytes();
+    while let [byte, tail @ ..] = rest {
+        if *byte == b'\n'
+            && let Some(heading) = strip_prefix(tail, b"## ")
+        {
+            sections[filled] = section_at(heading);
+            filled = filled.saturating_add(1);
+        }
+        rest = tail;
+    }
+    sections
+}
+
+/// The key and body of the section whose heading text (past `## `) opens `heading`.
+///
+/// The key is the rest of the heading line; the body runs from the next line to
+/// the next `#` or `##` heading, without its blank edge lines.
+const fn section_at(heading: &'static [u8]) -> Section {
+    let mut key_len: usize = 0;
+    let mut rest = heading;
+    while let [byte, tail @ ..] = rest {
+        if *byte == b'\n' {
+            break;
+        }
+        key_len = key_len.saturating_add(1);
+        rest = tail;
+    }
+    let Some((key, after_key)) = heading.split_at_checked(key_len) else {
+        return ("", "");
+    };
+    let body = trim_newlines(until_heading(after_key));
+    match (core::str::from_utf8(key), core::str::from_utf8(body)) {
+        (Ok(key), Ok(body)) => (key, body),
+        _ => ("", ""),
+    }
 }
 
 /// `hay` past `prefix`, or `None` when `hay` does not start with `prefix`.
@@ -1023,11 +1085,17 @@ mod tests {
     /// A small catalog for driving the agreement check's refusals.
     const FIXTURE: &str = "# fixture\n\n## plain\n\nNo values here.\n\n## one\n\nHello {name}, {name}.\n\n## twice\n\nA\n\n## twice\n\nB\n\n## blank\n\n\n# end\n";
 
+    /// The sections of [`FIXTURE`].
+    const FIXTURE_SECTIONS: [Section; count_sections(FIXTURE)] = index_sections(FIXTURE);
+
     #[test]
     fn the_agreement_check_resolves_a_matching_declaration() {
-        assert_eq!(checked_section_in(FIXTURE, "plain", &[]), "No values here.");
         assert_eq!(
-            checked_section_in(FIXTURE, "one", &["name"]),
+            checked_section_in(&FIXTURE_SECTIONS, "plain", &[]),
+            "No values here."
+        );
+        assert_eq!(
+            checked_section_in(&FIXTURE_SECTIONS, "one", &["name"]),
             "Hello {name}, {name}."
         );
     }
@@ -1035,21 +1103,27 @@ mod tests {
     #[test]
     fn the_agreement_check_refuses_every_drift() {
         // A missing section.
-        assert_eq!(checked_section_in(FIXTURE, "absent", &[]), "");
+        assert_eq!(checked_section_in(&FIXTURE_SECTIONS, "absent", &[]), "");
         assert_eq!(checked_section("no-such-message", &[]), "");
         // A key that is only a prefix of a section's key.
-        assert_eq!(checked_section_in(FIXTURE, "on", &["name"]), "");
+        assert_eq!(checked_section_in(&FIXTURE_SECTIONS, "on", &["name"]), "");
         // A section defined twice.
-        assert_eq!(checked_section_in(FIXTURE, "twice", &[]), "");
+        assert_eq!(checked_section_in(&FIXTURE_SECTIONS, "twice", &[]), "");
         // A section with no text.
-        assert_eq!(checked_section_in(FIXTURE, "blank", &[]), "");
+        assert_eq!(checked_section_in(&FIXTURE_SECTIONS, "blank", &[]), "");
         // A placeholder the declaration does not take.
-        assert_eq!(checked_section_in(FIXTURE, "one", &[]), "");
+        assert_eq!(checked_section_in(&FIXTURE_SECTIONS, "one", &[]), "");
         // A declared parameter the text never shows.
-        assert_eq!(checked_section_in(FIXTURE, "one", &["name", "extra"]), "");
-        assert_eq!(checked_section_in(FIXTURE, "plain", &["name"]), "");
+        assert_eq!(
+            checked_section_in(&FIXTURE_SECTIONS, "one", &["name", "extra"]),
+            ""
+        );
+        assert_eq!(
+            checked_section_in(&FIXTURE_SECTIONS, "plain", &["name"]),
+            ""
+        );
         // A renamed placeholder.
-        assert_eq!(checked_section_in(FIXTURE, "one", &["nom"]), "");
+        assert_eq!(checked_section_in(&FIXTURE_SECTIONS, "one", &["nom"]), "");
     }
 
     #[test]
