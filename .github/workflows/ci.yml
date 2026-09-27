@@ -88,11 +88,6 @@ jobs:
   #     bytes, so a change to it MUST re-run the gates. (The explain/*.md
   #     diagnostic pages live under src/** already, so they need no special case.)
   changes:
-    # Required context: every path-gated job below `needs` it, so a failed or
-    # cancelled filter would otherwise skip them all — and a skipped required
-    # check passes. Uniquely named so the required context is unambiguous
-    # across workflows.
-    name: changes-ci
     runs-on: ubuntu-latest
     outputs:
       wasm: ${{ steps.filter.outputs.wasm }}

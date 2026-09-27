@@ -7,7 +7,7 @@ without a declared disposition and no required check can silently stop gating.
 Checks performed
   1. Every status context produced by .github/workflows/*.yml (matrix legs
      expanded) is present in the manifest, and is produced by exactly one
-     workflow (a context two workflows post is ambiguous as a required check).
+     job (a context two jobs post is ambiguous as a required check).
   2. Manifest self-consistency:
        - a known disposition (gate | gate-external | nightly-gate |
          informational | delete);
@@ -26,7 +26,10 @@ Checks performed
        - an aggregator (`if: always()` roll-up) lists its whole upstream
          closure in `needs`, hands every one to `gate-aggregate.sh`, and marks
          every unconditional root `must-pass`;
-       - any other gate job's upstreams are themselves required contexts.
+       - any other gate job's upstreams are themselves required contexts;
+       - every job a `gate` transitively `needs` surfaces in a gate (its own
+         context is a gate, or a gate `aggregates` it), and every job a
+         `nightly-gate` transitively `needs` surfaces in a gate or nightly-gate.
   5. `ci/required-set.json` equals the derived required set (every `gate` and
      `gate-external` context). `--emit-required-set` prints the derivation.
      `--ruleset FILE` additionally reconciles a JSON dump of the live ruleset.
@@ -149,10 +152,11 @@ def produced_contexts(workflows: Workflows) -> tuple[Produced, list[str]]:
             name = job.get("name", job_id)
             for ctx in expand_matrix_names(str(name), job.get("strategy") or {}):
                 prior = contexts.get(ctx)
-                if prior and prior[0] != fname:
+                if prior and prior != (fname, job_id):
                     errors.append(
-                        f"context {ctx!r} is produced by both {prior[0]} and {fname} "
-                        "— a required context must have exactly one producer"
+                        f"context {ctx!r} is produced by both {prior[0]}:{prior[1]} and "
+                        f"{fname}:{job_id} — a required context must have exactly one "
+                        "producer; give each job a unique `name:`"
                     )
                     continue
                 contexts.setdefault(ctx, (fname, job_id))
@@ -338,6 +342,43 @@ def check_skip_closure(by_context: dict, workflows: Workflows, produced: Produce
     return errors
 
 
+def check_surfacing(by_context: dict, workflows: Workflows, produced: Produced) -> list[str]:
+    """Every ancestor of a gate / nightly-gate job surfaces in a gating context."""
+    errors: list[str] = []
+    job_contexts: dict[tuple[str, str], list[str]] = {}
+    for ctx, key in produced.items():
+        job_contexts.setdefault(key, []).append(ctx)
+    aggregated_by: dict[str, set[str]] = {}
+    for e in by_context.values():
+        for member in e.get("aggregates") or []:
+            aggregated_by.setdefault(member, set()).add(e["disposition"])
+
+    def surfaced(fname: str, job_id: str) -> set[str]:
+        ctxs = job_contexts.get((fname, job_id), [])
+        disps = {by_context[c]["disposition"] for c in ctxs if c in by_context}
+        for member, member_disps in aggregated_by.items():
+            if member == job_id or any(c == member or c.startswith(member + " (") for c in ctxs):
+                disps |= member_disps
+        return disps
+
+    allowed_for = {"gate": {"gate"}, "nightly-gate": {"gate", "nightly-gate"}}
+    for (fname, job_id), ctxs in sorted(job_contexts.items()):
+        jobs = jobs_of(workflows[fname])
+        own = {by_context[c]["disposition"] for c in ctxs if c in by_context}
+        for disp in sorted(own.intersection(allowed_for)):
+            allowed = allowed_for[disp]
+            for dep in sorted(upstream_closure(jobs, job_id)):
+                if dep not in jobs:
+                    errors.append(f"{fname}: job {job_id!r} needs unknown job {dep!r}")
+                elif surfaced(fname, dep).isdisjoint(allowed):
+                    errors.append(
+                        f"{fname}: {disp} {sorted(ctxs)[0]!r} needs {dep!r}, which surfaces in no "
+                        f"{'/'.join(sorted(allowed))} context — its failure would skip the "
+                        "check, and a skipped required check passes (fail-open)"
+                    )
+    return errors
+
+
 def check_required_set(expected: list[str], actual: list[str], what: str) -> list[str]:
     errors: list[str] = []
     for c in sorted(set(expected) - set(actual)):
@@ -354,6 +395,7 @@ def collect_errors(manifest: dict, workflows: Workflows, required_set: list[str]
     errors += check_classified(by_context, produced)
     errors += check_gate_triggers(by_context, workflows)
     errors += check_skip_closure(by_context, workflows, produced)
+    errors += check_surfacing(by_context, workflows, produced)
     errors += check_required_set(
         required_contexts(manifest), required_set, "ci/required-set.json is stale (regenerate: --emit-required-set)"
     )
@@ -372,7 +414,7 @@ def self_test() -> int:
     def arg(role, j):
         return f"{role}:{j}=${{{{ needs.{j}.result }}}}"
 
-    nightly = {"nightly.yml": wf({"schedule": []}, {"late": {}})}
+    nightly = {"nightly.yml": wf({"schedule": []}, {"late": {}, "prep": {}, "late-roll": {"needs": ["prep"]}})}
     good_roll = [arg("must-pass", "changes"), arg("must-pass", "quick"), arg("may-skip", "shard")]
     good_ci = {
         "changes": {"name": "changes-ci"},
@@ -388,6 +430,7 @@ def self_test() -> int:
         {"context": "solo", "disposition": "gate", "producer": "ci.yml"},
         {"context": "ext", "disposition": "gate-external"},
         {"context": "late", "disposition": "nightly-gate", "producer": "nightly.yml"},
+        {"context": "late-roll", "disposition": "nightly-gate", "producer": "nightly.yml", "aggregates": ["prep"]},
         {"context": "info", "disposition": "informational", "producer": "ci.yml", "owner": "infra"},
     ]
     good_required = ["changes-ci", "ext", "quick", "roll", "solo"]
@@ -411,6 +454,21 @@ def self_test() -> int:
             "context from two workflows",
             run(workflows={**ci(), "nightly.yml": wf({"schedule": []}, {"late": {}, "quick": {}})}),
             "produced by both",
+        ),
+        (
+            "context from two jobs of one workflow",
+            run(workflows=ci(twin={"name": "quick"})),
+            "produced by both ci.yml:quick and ci.yml:twin",
+        ),
+        (
+            "nightly-gate needs an unsurfaced job",
+            run(manifest=[dict(e, aggregates=[]) if e["context"] == "late-roll" else e for e in good_manifest]),
+            "nightly-gate 'late-roll' needs 'prep', which surfaces in no gate/nightly-gate context",
+        ),
+        (
+            "gate needs an unknown job",
+            run(workflows=ci(solo={"needs": ["changes", "ghost"], "if": "x"})),
+            "needs unknown job 'ghost'",
         ),
         (
             "manifest names the wrong producer",

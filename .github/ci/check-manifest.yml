@@ -35,21 +35,6 @@ checks:
   - context: fmt
     disposition: gate
     producer: ci.yml
-  # Each workflow's path filter. A path-gated job skips when its filter fails
-  # or is cancelled, and a skipped required check passes — so the filter is
-  # itself required: a red or cancelled filter blocks the merge.
-  - context: changes-ci
-    disposition: gate
-    producer: ci.yml
-    guards: fail-closed path gating of every ci.yml job that needs it.
-  - context: changes-sandbox
-    disposition: gate
-    producer: admission-sandbox.yml
-    guards: fail-closed path gating of the admission jail proofs (Security).
-  - context: changes-playground
-    disposition: gate
-    producer: playground.yml
-    guards: fail-closed path gating of playground-jail (Security).
   # The disposition SSOT's own drift gate.
   - context: manifest-guard
     disposition: gate
@@ -302,3 +287,25 @@ checks:
     owner: docs
     note: playground.yml build leg; playground-jail is the Security gate.
 
+  # ── Path classifiers (gate) ──────────────────────────────────────────────
+  # Each workflow's paths-filter job. A failed or cancelled classifier SKIPS
+  # every job that `needs` it, and GitHub counts a skipped required check as
+  # passing — so the classifier is itself required: absent proof it ran, the
+  # merge is blocked (fail closed). Each carries a workflow-unique name so the
+  # required context resolves to exactly one producer.
+  - context: changes
+    disposition: gate
+    producer: ci.yml
+    guards: >-
+      Security — fail-closed path classification: a failed classifier cannot
+      skip every ci.yml tier into a passing required set.
+  - context: admission-changes
+    disposition: gate
+    producer: admission-sandbox.yml
+    guards: >-
+      Security — fail-closed path classification for the admission jail proofs.
+  - context: playground-changes
+    disposition: gate
+    producer: playground.yml
+    guards: >-
+      Security — fail-closed path classification for playground-jail.

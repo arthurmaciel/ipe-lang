@@ -24,10 +24,12 @@ Measured against the ruleset's current `required_status_checks`.
 **Add to the required set** (manifest `gate`, produced per-change, absent from
 the ruleset):
 
-- `changes-ci`, `changes-sandbox`, `changes-playground` — each workflow's path
-  filter. Every path-gated required job `needs` one of them, so a failed or
-  cancelled filter would skip those jobs, and a skipped required check passes;
-  requiring the filter itself makes that failure block the merge.
+- `changes`, `admission-changes`, `playground-changes` — the path classifiers of
+  `ci.yml`, `admission-sandbox.yml`, `playground.yml`. Every path-gated required
+  job `needs` one of them, so a failed or cancelled classifier would skip those
+  jobs, and a skipped required check passes; requiring the classifier makes that
+  state block the merge (fail closed). Each has a workflow-unique name so the
+  context has one producer.
 - `manifest-guard` — this SSOT's own drift gate (runs on every PR).
 - `cli-docs-drift`, `cli-transcripts-drift`, `markdown-parity` — deterministic
   generated-docs / parse-SSOT snapshot diffs (parity with `stdlib-docs-drift`).
@@ -58,7 +60,7 @@ Reconcile the live ruleset to `.github/ci/required-set.json`. Example (review be
 ```bash
 # Fetch, edit required_status_checks to match ci/required-set.json, then PATCH.
 gh api repos/arthurmaciel/ipe-lang/rulesets/22326541 > /tmp/rs.json
-# ... edit /tmp/rs.json required_status_checks to the contexts in required-set.json ...
+# ... edit /tmp/rs.json required_status_checks to the contexts in ci/required-set.json ...
 gh api -X PUT repos/arthurmaciel/ipe-lang/rulesets/22326541 --input /tmp/rs.json
 ```
 
