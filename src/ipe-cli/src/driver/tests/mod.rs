@@ -1,4 +1,5 @@
 use super::*;
+use crate::io_bounded::SourceRefusal;
 use crate::{
     ALL_CODES, Applicability, BTreeMap, Diagnostic, Path, PathBuf, Suggestion, cli_args, fs,
     project, style,
@@ -2520,7 +2521,7 @@ fn unsafe_scan_test_dir(tag: &str) -> PathBuf {
     dir
 }
 
-/// A manifest project with an unreadable module must return `Err(CliError::Io)`
+/// A manifest project with an unreadable module must return an access-denied `Err(CliError::SourceRefused)`
 /// naming the unreadable path — not `Ok` with a partial source list.
 #[cfg(unix)]
 #[test]
@@ -2552,11 +2553,11 @@ fn unsafe_scan_manifest_project_fails_closed_on_unreadable_module() {
     let _ = fs::set_permissions(&unreadable, fs::Permissions::from_mode(0o644));
     let _ = fs::remove_dir_all(&dir);
 
-    // Must be `Err(CliError::Io)` naming the unreadable path — never an
+    // Must be an access-denied `Err(CliError::SourceRefused)` naming the unreadable path — never an
     // `Ok` partial scan and never a different error variant.
     assert!(
-        matches!(&result, Err(CliError::Io { path, .. }) if path == &unreadable),
-        "expected Err(CliError::Io) naming {unreadable:?}, got: {result:?}"
+        matches!(&result, Err(CliError::SourceRefused { path, reason: SourceRefusal::AccessDenied }) if path == &unreadable),
+        "expected an access-denied SourceRefused naming {unreadable:?}, got: {result:?}"
     );
 }
 
@@ -2593,7 +2594,7 @@ fn unsafe_scan_manifest_project_ok_when_all_readable() {
 }
 
 /// Single-file fallback: when `collect_entry_and_siblings` fails and the
-/// entry itself is unreadable, the result must be `Err(CliError::Io)`
+/// entry itself is unreadable, the result must be an access-denied `Err(CliError::SourceRefused)`
 /// naming the entry path — not `Ok` with an empty list.
 #[cfg(unix)]
 #[test]
@@ -2612,11 +2613,11 @@ fn unsafe_scan_single_file_fallback_fails_closed_on_unreadable_entry() {
     let _ = fs::set_permissions(&entry, fs::Permissions::from_mode(0o644));
     let _ = fs::remove_dir_all(&dir);
 
-    // Must be `Err(CliError::Io)` naming the unreadable entry — never an
+    // Must be an access-denied `Err(CliError::SourceRefused)` naming the unreadable entry — never an
     // `Ok` empty scan and never a different error variant.
     assert!(
-        matches!(&result, Err(CliError::Io { path, .. }) if path == &entry),
-        "expected Err(CliError::Io) naming {entry:?}, got: {result:?}"
+        matches!(&result, Err(CliError::SourceRefused { path, reason: SourceRefusal::AccessDenied }) if path == &entry),
+        "expected an access-denied SourceRefused naming {entry:?}, got: {result:?}"
     );
 }
 
@@ -2648,11 +2649,11 @@ fn consent_scans_fail_closed_on_unreadable_imported_module() {
     let _ = fs::remove_dir_all(&dir);
 
     assert!(
-        matches!(&unsafe_scan, Err(CliError::Io { path, .. }) if path.ends_with("Helper.ipe")),
+        matches!(&unsafe_scan, Err(CliError::SourceRefused { path, reason: SourceRefusal::AccessDenied }) if path.ends_with("Helper.ipe")),
         "unsafe scan must name the unreadable module, got: {unsafe_scan:?}"
     );
     assert!(
-        matches!(&web_scan, Err(CliError::Io { path, .. }) if path.ends_with("Helper.ipe")),
+        matches!(&web_scan, Err(CliError::SourceRefused { path, reason: SourceRefusal::AccessDenied }) if path.ends_with("Helper.ipe")),
         "web scan must name the unreadable module, got: {web_scan:?}"
     );
 }
