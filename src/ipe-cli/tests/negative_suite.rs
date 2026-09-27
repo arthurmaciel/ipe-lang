@@ -3197,8 +3197,9 @@ fn generic_msg_web_embed_let_alias_rejected() {
 
 /// A `Web.appRouted` built by a msg-generic helper is refused before lowering.
 ///
-/// `Web.appRouted` carries no type scheme, so every reference to it is refused
-/// by the type checker (IPE-L0108) and never reaches the generic-entry check.
+/// `Web.appRouted` is not yet supported, so the type checker refuses every
+/// reference to it with its dedicated diagnostic (IPE-L0118), before the
+/// generic-entry check.
 #[test]
 fn generic_msg_web_app_routed_rejected() {
     let src = format!(
@@ -3213,7 +3214,7 @@ fn generic_msg_web_app_routed_rejected() {
          \x20       , notFound = HomePage\n\
          \x20       }}\n"
     );
-    assert_rejected("generic_msg_web_app_routed", &src, "IPE-L0108");
+    assert_rejected("generic_msg_web_app_routed", &src, "IPE-L0118");
 }
 
 /// A `Tui.tea` built by a helper generic over its message type is refused.
