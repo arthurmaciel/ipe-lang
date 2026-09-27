@@ -312,10 +312,10 @@ pub fn build_with_options(
 
     let mut sources: BTreeMap<Vec<String>, (PathBuf, String)> = BTreeMap::new();
     sources.insert(entry_path.clone(), (entry.to_path_buf(), source.clone()));
-    let discovered = vec![project::DiscoveredModule {
-        path: entry.to_path_buf(),
-        module_path: entry_path.clone(),
-    }];
+    let discovered = vec![project::DiscoveredModule::user(
+        entry.to_path_buf(),
+        entry_path.clone(),
+    )];
 
     // No manifest on the single-file path — default to sqlite, matching the
     // documented `package.ipe` default for a project that has no database
@@ -513,10 +513,12 @@ pub fn collect_test_sources(
     // module of the same path (code under test wins), and the test entry is
     // always added last so it is never masked.
     let mut discovered = project::discover_modules(project_src_root)?;
-    let src_paths: std::collections::BTreeSet<Vec<String>> =
-        discovered.iter().map(|m| m.module_path.clone()).collect();
+    let src_paths: std::collections::BTreeSet<Vec<String>> = discovered
+        .iter()
+        .map(|m| m.module_path().to_vec())
+        .collect();
     for m in project::discover_modules(tests_root)? {
-        if !src_paths.contains(&m.module_path) {
+        if !src_paths.contains(m.module_path()) {
             discovered.push(m);
         }
     }
@@ -563,12 +565,12 @@ pub fn ensure_entry_present(
 ) {
     if !discovered
         .iter()
-        .any(|m| m.module_path == entry_module_path)
+        .any(|m| m.module_path() == entry_module_path)
     {
-        discovered.push(project::DiscoveredModule {
-            path: entry.to_path_buf(),
-            module_path: entry_module_path.to_vec(),
-        });
+        discovered.push(project::DiscoveredModule::user(
+            entry.to_path_buf(),
+            entry_module_path.to_vec(),
+        ));
     }
 }
 
@@ -586,17 +588,17 @@ pub fn read_discovered_sources(
 ) -> Result<BTreeMap<Vec<String>, (PathBuf, String)>, CliError> {
     let mut sources: BTreeMap<Vec<String>, (PathBuf, String)> = BTreeMap::new();
     for m in discovered {
-        if m.module_path == entry_module_path {
+        if m.module_path() == entry_module_path {
             sources.insert(
                 entry_module_path.to_vec(),
                 (entry.to_path_buf(), entry_source.to_owned()),
             );
         } else {
             let src = crate::io_bounded::read_to_string_capped(
-                &m.path,
+                m.path(),
                 crate::io_bounded::SOURCE_READ_CAP,
             )?;
-            sources.insert(m.module_path.clone(), (m.path.clone(), src));
+            sources.insert(m.module_path().to_vec(), (m.path().to_path_buf(), src));
         }
     }
     Ok(sources)
@@ -2244,8 +2246,8 @@ pub fn build_project_with_options(
     let mut sources: BTreeMap<Vec<String>, (PathBuf, String)> = BTreeMap::new();
     for m in &discovered {
         let src =
-            crate::io_bounded::read_to_string_capped(&m.path, crate::io_bounded::SOURCE_READ_CAP)?;
-        sources.insert(m.module_path.clone(), (m.path.clone(), src));
+            crate::io_bounded::read_to_string_capped(m.path(), crate::io_bounded::SOURCE_READ_CAP)?;
+        sources.insert(m.module_path().to_vec(), (m.path().to_path_buf(), src));
     }
 
     // A library package (declares `exposedModules`, has no runnable entry —
