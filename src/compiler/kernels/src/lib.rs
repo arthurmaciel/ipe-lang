@@ -1137,26 +1137,39 @@ pub const fn applied_result(shape: &TyShape, arity: u8) -> Option<&TyShape> {
     Some(cur)
 }
 
-/// Whether no kernel of `kernels` has a callback result past [`CallbackResults::CAPACITY`].
+/// Whether every kernel of `kernels` keeps each callback result representable and aligned.
+///
+/// No callback result may lie past [`CallbackResults::CAPACITY`], and every
+/// [`StdlibKernel::hof_result_vars`] entry must occur where
+/// [`shape_aligns_var`] finds it, so the lowering backstop can always read the
+/// variable's instantiation from a reference's solved type.
 #[must_use]
 pub const fn hof_result_vars_fit(kernels: &[StdlibKernel]) -> bool {
     let mut rest = kernels;
     while let Some((kernel, tail)) = rest.split_first() {
-        if let Some(shape) = kernel.scheme_shape()
-            && callback_result_vars(shape, kernel.identity().arity).overflowed()
-        {
-            return false;
+        if let Some(shape) = kernel.scheme_shape() {
+            if callback_result_vars(shape, kernel.identity().arity).overflowed() {
+                return false;
+            }
+            let results = kernel.hof_result_vars();
+            let mut var = 0;
+            while var < CallbackResults::CAPACITY {
+                if results.contains(var) && !shape_aligns_var(shape, var) {
+                    return false;
+                }
+                var += 1;
+            }
         }
         rest = tail;
     }
     true
 }
 
-// IPE-RUST-AUDIT:ACCEPTED (Arthur Maciel) — compile-time `const` assertion (not a runtime panic); fails the BUILD if a kernel callback returns a scheme variable the callback-result set cannot hold, which would drop that callback's HOF_KERNEL_RESULT obligation [ledger #boundary]
+// IPE-RUST-AUDIT:ACCEPTED (Arthur Maciel) — compile-time `const` assertion (not a runtime panic); fails the BUILD if a kernel callback returns a scheme variable the callback-result set cannot hold or the lowering backstop cannot align, which would drop that callback's HOF_KERNEL_RESULT obligation [ledger #boundary]
 #[allow(clippy::assertions_on_constants)] // the constant IS the tripwire
 const _: () = assert!(
     hof_result_vars_fit(StdlibKernel::ALL),
-    "a kernel callback returns a scheme variable at or past CallbackResults::CAPACITY",
+    "a kernel callback returns a scheme variable past CallbackResults::CAPACITY or at no aligned position",
 );
 
 /// Whether every [`StdlibKernel::sync_obliged_scheme_vars`] entry of `kernels` aligns in its scheme.

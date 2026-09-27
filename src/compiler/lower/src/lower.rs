@@ -21187,9 +21187,10 @@ impl<'a> Lowerer<'a> {
     /// use, since solving completes before lowering, so no argument or use
     /// site needs inspecting: every syntactic spelling and aliasing hop is
     /// covered. The type checker's `hof_kernel_result` obligation (IPE-T0014)
-    /// is the primary gate; this is its independent backstop. A reference with
-    /// no recorded solved type carries no evidence here and is left to that
-    /// primary gate.
+    /// is the primary gate; this is its independent backstop. A reference
+    /// with no recorded solved type, or whose solved type does not align with
+    /// the scheme at a classified variable, carries no proof of safety and is
+    /// refused too.
     fn reject_hof_callback_function_result(
         &self,
         resolved: &Callee,
@@ -21204,12 +21205,14 @@ impl<'a> Lowerer<'a> {
         }
         let (Some(shape), Some(solved)) = (kernel.scheme_shape(), self.region_ty(callee.span))
         else {
-            return Ok(());
+            return Err(unsupported(callee.span, Feature::HofCallbackFunctionResult));
         };
-        if results
-            .vars()
-            .any(|var| matches!(scheme_var_instance(shape, solved, var), Some(Ty::Fun(..))))
-        {
+        if results.vars().any(|var| {
+            matches!(
+                scheme_var_instance(shape, solved, var),
+                None | Some(Ty::Fun(..))
+            )
+        }) {
             return Err(unsupported(callee.span, Feature::HofCallbackFunctionResult));
         }
         Ok(())
@@ -31277,16 +31280,29 @@ mod tests {
             // failure modes without `panic!`/`unwrap`:
             //   * Err (missing legacy arm / transposed decl) → `None` != `Some(..)`
             //   * wrong variant returned                     → `Some(other)` != `Some(sk)`
-            let got = lowerer.lower_callee(&node).ok();
+            let got = lowerer.lower_callee_resolve(&node).ok();
             assert_eq!(
                 got,
                 Some(Callee::Kernel(sk)),
-                "lower_callee(id=None, qualifier={:?}, name={:?}) returned {got:?}; \
+                "lower_callee_resolve(id=None, qualifier={:?}, name={:?}) returned {got:?}; \
                  expected Some(Callee::Kernel(KernelFn::{sk:?})). Either the legacy \
                  arm is missing / maps to the wrong variant, or decl() returned the \
                  wrong canonical (qualifier, name) for this variant.",
                 decl.qualifier,
                 decl.name,
+            );
+
+            // No region is recorded here, so the gated funnel must refuse every
+            // higher-order kernel (no solved type proves its callback results
+            // non-functional) and pass every other kernel through unchanged.
+            let gated = lowerer.lower_callee(&node).ok();
+            let expected = sk
+                .hof_result_vars()
+                .is_empty()
+                .then_some(Callee::Kernel(sk));
+            assert_eq!(
+                gated, expected,
+                "lower_callee on KernelFn::{sk:?} with no solved type returned {gated:?}",
             );
 
             covered += 1;
