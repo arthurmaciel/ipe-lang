@@ -721,8 +721,10 @@ edition = "2021"
 
     // WALL-B (#75): resolve the identifier→(canonical name, exact version) map for
     // every crate in this probe (direct + transitive) from the now-resolved
-    // Cargo.lock. Done once per crate inspect; fail-soft (empty on any error).
-    let transitive_deps = collect_transitive_deps(&manifest_str);
+    // Cargo.lock. Done once per crate inspect; a metadata error refuses.
+    let transitive_deps = collect_transitive_deps(&manifest_str).map_err(|e| {
+        format!("refusing to inspect: cannot resolve transitive dependencies ({e})")
+    })?;
 
     // [#51/#89] Maximise API visibility. An explicit `--features` wins verbatim;
     // otherwise enumerate the crate's OWN features (via `cargo metadata`) and
@@ -731,9 +733,14 @@ edition = "2021"
     // ("cannot specify features for packages outside of workspace"), which is why
     // the pre-#89 default path silently degraded every external-crate audit to
     // DEFAULT features and hid every feature-gated API (the firebase #81 + stripe
-    // #89 root cause). Fail-soft: empty enumeration → plain default build.
+    // #89 root cause). No features to offer → plain default build; a metadata
+    // error refuses.
     let injected: Vec<String> = if features.is_empty() {
-        choose_visibility_features(&enumerate_crate_features(&manifest_str, crate_name))
+        choose_visibility_features(
+            &enumerate_crate_features(&manifest_str, crate_name).map_err(|e| {
+                format!("refusing to inspect: cannot enumerate crate features ({e})")
+            })?,
+        )
     } else {
         features.to_vec()
     };
@@ -1063,44 +1070,130 @@ fn find_rustdoc_json(doc_dir: &PathBuf, safe_name: &str) -> Option<PathBuf> {
 /// audit's own named interim mitigation: naming every offender so a caller
 /// must explicitly opt in via `--allow-build-scripts` rather than firing
 /// silently.
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 struct BuildConsentOffender {
     package: String,
     reason: &'static str,
+}
+
+/// Why a `cargo metadata` run yielded no trustworthy package graph.
+///
+/// Every metadata consumer treats this as a refusal: an unreadable graph is
+/// never mistaken for an empty one.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum MetadataError {
+    /// `cargo` could not be spawned.
+    Spawn(String),
+    /// `cargo metadata` exited unsuccessfully.
+    Failed { status: String, stderr: String },
+    /// Its stdout was not JSON.
+    Parse(String),
+    /// The JSON lacks a field the graph walk depends on.
+    Malformed(&'static str),
+}
+
+impl std::fmt::Display for MetadataError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Spawn(e) => write!(f, "could not run `cargo metadata`: {e}"),
+            Self::Failed { status, stderr } => {
+                write!(f, "`cargo metadata` failed ({status}): {stderr}")
+            }
+            Self::Parse(e) => write!(f, "`cargo metadata` output is not JSON: {e}"),
+            Self::Malformed(what) => write!(f, "`cargo metadata` output is malformed: {what}"),
+        }
+    }
+}
+
+/// Upper bound on the `cargo metadata` stderr carried into a refusal message.
+const METADATA_STDERR_MAX_CHARS: usize = 2000;
+
+/// Run `cargo metadata --format-version 1 --quiet [extra] --manifest-path <manifest>`.
+fn run_cargo_metadata(
+    manifest_str: &str,
+    extra: &[&str],
+) -> Result<serde_json::Value, MetadataError> {
+    let output = Command::new("cargo")
+        .args(["metadata", "--format-version", "1", "--quiet"])
+        .args(extra)
+        .args(["--manifest-path", manifest_str])
+        .output();
+    metadata_from_output(output)
+}
+
+/// Parse a finished `cargo metadata` process into its JSON document.
+///
+/// The injection seam for the refusal tests: a spawn error, a non-zero exit,
+/// or non-JSON stdout each become a typed [`MetadataError`].
+fn metadata_from_output(
+    output: std::io::Result<std::process::Output>,
+) -> Result<serde_json::Value, MetadataError> {
+    let output = output.map_err(|e| MetadataError::Spawn(e.to_string()))?;
+    if !output.status.success() {
+        return Err(MetadataError::Failed {
+            status: output.status.to_string(),
+            stderr: String::from_utf8_lossy(&output.stderr)
+                .trim()
+                .chars()
+                .take(METADATA_STDERR_MAX_CHARS)
+                .collect(),
+        });
+    }
+    serde_json::from_slice(&output.stdout).map_err(|e| MetadataError::Parse(e.to_string()))
+}
+
+/// The `packages` array of a `cargo metadata` document.
+fn metadata_packages(meta: &serde_json::Value) -> Result<&[serde_json::Value], MetadataError> {
+    meta.get("packages")
+        .and_then(serde_json::Value::as_array)
+        .map(Vec::as_slice)
+        .ok_or(MetadataError::Malformed("missing `packages` array"))
+}
+
+/// A package's `name`.
+fn metadata_package_name(pkg: &serde_json::Value) -> Result<&str, MetadataError> {
+    pkg.get("name")
+        .and_then(serde_json::Value::as_str)
+        .ok_or(MetadataError::Malformed("package without a string `name`"))
+}
+
+/// A package's `targets` array.
+fn metadata_package_targets(
+    pkg: &serde_json::Value,
+) -> Result<&[serde_json::Value], MetadataError> {
+    pkg.get("targets")
+        .and_then(serde_json::Value::as_array)
+        .map(Vec::as_slice)
+        .ok_or(MetadataError::Malformed(
+            "package without a `targets` array",
+        ))
+}
+
+/// A target's `kind` array.
+fn metadata_target_kinds(
+    target: &serde_json::Value,
+) -> Result<&[serde_json::Value], MetadataError> {
+    target
+        .get("kind")
+        .and_then(serde_json::Value::as_array)
+        .map(Vec::as_slice)
+        .ok_or(MetadataError::Malformed("target without a `kind` array"))
 }
 
 /// Walk `cargo metadata`'s package graph (transitive — the default scope of
 /// `packages`) for every package with a `custom-build` target (a `build.rs`)
 /// or a `proc-macro` target. Both compile-time-execute arbitrary code from
 /// the crate name this tool was handed — the exact untrusted input
-/// `inspect_crate` consumes (`main.rs:832`, `AUD-10`).
+/// `inspect_crate` consumes (`AUD-10`).
 ///
 /// Runs `--offline` — `fetch_dep` has already populated the cache by the
-/// time this is called, so no extra network round-trip. Fail-soft: any
-/// `cargo metadata` error returns an empty list (never blocks on a transient
-/// metadata failure; `run_rustdoc`'s own later steps will surface a real
-/// problem with a clearer message).
-fn find_build_consent_offenders(manifest_str: &str) -> Vec<BuildConsentOffender> {
-    let output = match Command::new("cargo")
-        .args([
-            "metadata",
-            "--offline",
-            "--format-version",
-            "1",
-            "--quiet",
-            "--manifest-path",
-            manifest_str,
-        ])
-        .output()
-    {
-        Ok(o) if o.status.success() => o.stdout,
-        _ => return Vec::new(),
-    };
-    let meta: serde_json::Value = match serde_json::from_slice(&output) {
-        Ok(v) => v,
-        Err(_) => return Vec::new(),
-    };
-    offenders_from_metadata(&meta)
+/// time this is called, so no extra network round-trip. Fail-closed: a
+/// metadata error is returned, never an empty offender list, so an
+/// unreadable graph can never pass the consent gate.
+fn find_build_consent_offenders(
+    manifest_str: &str,
+) -> Result<Vec<BuildConsentOffender>, MetadataError> {
+    offenders_from_metadata(&run_cargo_metadata(manifest_str, &["--offline"])?)
 }
 
 /// The PURE extraction half of [`find_build_consent_offenders`] — given a
@@ -1108,32 +1201,26 @@ fn find_build_consent_offenders(manifest_str: &str) -> Vec<BuildConsentOffender>
 /// `custom-build` target (a `build.rs`) or a `proc-macro` target. Split out
 /// so it is unit-testable without shelling out to cargo, mirroring
 /// `transitive_deps_from_metadata`'s split for the same reason.
-fn offenders_from_metadata(meta: &serde_json::Value) -> Vec<BuildConsentOffender> {
-    let Some(packages) = meta["packages"].as_array() else {
-        return Vec::new();
-    };
-
+fn offenders_from_metadata(
+    meta: &serde_json::Value,
+) -> Result<Vec<BuildConsentOffender>, MetadataError> {
     let mut offenders = Vec::new();
-    for pkg in packages {
-        let Some(pkg_name) = pkg["name"].as_str() else {
-            continue;
-        };
-        let Some(targets) = pkg["targets"].as_array() else {
-            continue;
-        };
-        let has_kind = |wanted: &str| {
-            targets.iter().any(|t| {
-                t["kind"]
-                    .as_array()
-                    .is_some_and(|ks| ks.iter().any(|k| k.as_str() == Some(wanted)))
-            })
-        };
-        if has_kind("custom-build") {
+    for pkg in metadata_packages(meta)? {
+        let pkg_name = metadata_package_name(pkg)?;
+        let mut kinds = Vec::new();
+        for target in metadata_package_targets(pkg)? {
+            kinds.extend(
+                metadata_target_kinds(target)?
+                    .iter()
+                    .filter_map(serde_json::Value::as_str),
+            );
+        }
+        if kinds.contains(&"custom-build") {
             offenders.push(BuildConsentOffender {
                 package: pkg_name.to_string(),
                 reason: "build script (build.rs)",
             });
-        } else if has_kind("proc-macro") {
+        } else if kinds.contains(&"proc-macro") {
             offenders.push(BuildConsentOffender {
                 package: pkg_name.to_string(),
                 reason: "proc-macro crate",
@@ -1141,7 +1228,7 @@ fn offenders_from_metadata(meta: &serde_json::Value) -> Vec<BuildConsentOffender
         }
     }
     offenders.sort_by(|a, b| a.package.cmp(&b.package));
-    offenders
+    Ok(offenders)
 }
 
 /// AUD-10 gate: called right after `fetch_dep` succeeds and before the first
@@ -1158,7 +1245,7 @@ fn offenders_from_metadata(meta: &serde_json::Value) -> Vec<BuildConsentOffender
 /// (the operator must actually see what they're consenting to).
 fn check_build_consent(manifest_str: &str, allow_build_scripts: bool) -> Result<(), String> {
     let offenders = find_build_consent_offenders(manifest_str);
-    match build_consent_decision(&offenders, allow_build_scripts) {
+    match consent_decision_from_graph(offenders, allow_build_scripts) {
         Ok(None) => Ok(()),
         Ok(Some(warning)) => {
             eprintln!("{warning}");
@@ -1166,6 +1253,24 @@ fn check_build_consent(manifest_str: &str, allow_build_scripts: bool) -> Result<
         }
         Err(e) => Err(e),
     }
+}
+
+/// Decide consent from the offender scan's outcome.
+///
+/// An unreadable graph refuses even under `--allow-build-scripts`: the flag
+/// consents to a NAMED offender list, and without the graph there is none to
+/// show the operator.
+fn consent_decision_from_graph(
+    offenders: Result<Vec<BuildConsentOffender>, MetadataError>,
+    allow_build_scripts: bool,
+) -> Result<Option<String>, String> {
+    let offenders = offenders.map_err(|e| {
+        format!(
+            "refusing to inspect: cannot verify build-script consent because the \
+             dependency graph is unreadable ({e})"
+        )
+    })?;
+    build_consent_decision(&offenders, allow_build_scripts)
 }
 
 /// The PURE decision half of [`check_build_consent`] — given the offender
@@ -1237,10 +1342,9 @@ fn fetch_dep(manifest_str: &str) -> Result<(), String> {
 /// crates.io name and `package.version` the exact locked version. The generator
 /// codegen's wrapper scanner produces underscored identifiers, so keying on the
 /// lib-target name lets it resolve each to the real `[dependencies]` key + a
-/// pinned version. FAIL-SOFT: any error (cargo missing, parse failure) returns an
-/// empty map — the codegen then DROPS any wrapper whose transitive crate it can't
-/// resolve (coverage-drop), never emits an unresolvable / `"*"` dep.
-fn collect_transitive_deps(manifest_str: &str) -> Vec<TransitiveDep> {
+/// pinned version. Fail-closed: any metadata error is returned, never an empty
+/// map that would silently drop every wrapper's transitive pin.
+fn collect_transitive_deps(manifest_str: &str) -> Result<Vec<TransitiveDep>, MetadataError> {
     // Filter the graph to the HOST platform: unfiltered `cargo metadata`
     // lists EVERY platform's conditional deps (`system-configuration` — a
     // macOS-only reqwest dep), and each listed dep becomes an UNCONDITIONAL
@@ -1249,28 +1353,11 @@ fn collect_transitive_deps(manifest_str: &str) -> Vec<TransitiveDep> {
     // same host, so the host-filtered graph is the right pin set; a dep only
     // reachable on another platform stays unpinned there (cargo resolves it
     // through the direct pins), never force-built here.
-    let mut cmd = Command::new("cargo");
-    cmd.args([
-        "metadata",
-        "--format-version",
-        "1",
-        "--quiet",
-        "--manifest-path",
-        manifest_str,
-    ]);
-    if let Some(host) = host_target_triple() {
-        cmd.args(["--filter-platform", &host]);
-    }
-    let output = match cmd.output() {
-        Ok(o) if o.status.success() => o.stdout,
-        _ => return Vec::new(),
-    };
-
-    let meta: serde_json::Value = match serde_json::from_slice(&output) {
-        Ok(v) => v,
-        Err(_) => return Vec::new(),
-    };
-    transitive_deps_from_metadata(&meta)
+    let host = host_target_triple();
+    let filter: Vec<&str> = host
+        .as_deref()
+        .map_or_else(Vec::new, |h| vec!["--filter-platform", h]);
+    transitive_deps_from_metadata(&run_cargo_metadata(manifest_str, &filter)?)
 }
 
 /// The host target triple (`rustc -vV` `host:` line), for platform-filtering
@@ -1291,59 +1378,52 @@ fn host_target_triple() -> Option<String> {
 /// WALL-B (#75): the PURE extraction half of `collect_transitive_deps` — given a
 /// parsed `cargo metadata` JSON value, build the ident→(name, version) list.
 /// Split out so it is unit-testable without shelling out to cargo.
-fn transitive_deps_from_metadata(meta: &serde_json::Value) -> Vec<TransitiveDep> {
-    let Some(packages) = meta["packages"].as_array() else {
-        return Vec::new();
-    };
-
+fn transitive_deps_from_metadata(
+    meta: &serde_json::Value,
+) -> Result<Vec<TransitiveDep>, MetadataError> {
     let mut deps: Vec<TransitiveDep> = Vec::new();
     let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
-    for pkg in packages {
-        let Some(pkg_name) = pkg["name"].as_str() else {
-            continue;
-        };
-        let pkg_version = pkg["version"].as_str().unwrap_or("");
-        if pkg_version.is_empty() {
-            continue;
-        }
+    for pkg in metadata_packages(meta)? {
+        let pkg_name = metadata_package_name(pkg)?;
+        let pkg_version = pkg
+            .get("version")
+            .and_then(serde_json::Value::as_str)
+            .filter(|v| !v.is_empty())
+            .ok_or(MetadataError::Malformed("package without a `version`"))?;
         // The lib-style target's `name` is the Rust IDENTIFIER (underscored).
         // `cargo metadata`'s `targets[].name` is already the underscored crate
         // identifier for a lib/proc-macro/cdylib target; bin/test/example targets
         // are skipped (they are never `::<crate>::`-referenced from a wrapper).
-        let Some(targets) = pkg["targets"].as_array() else {
-            continue;
-        };
-        for tgt in targets {
-            let kinds = tgt["kind"].as_array();
-            let is_lib_like = kinds.is_some_and(|ks| {
-                ks.iter().any(|k| {
-                    matches!(
-                        k.as_str(),
-                        Some("lib" | "rlib" | "dylib" | "cdylib" | "staticlib" | "proc-macro")
-                    )
-                })
+        for tgt in metadata_package_targets(pkg)? {
+            let is_lib_like = metadata_target_kinds(tgt)?.iter().any(|k| {
+                matches!(
+                    k.as_str(),
+                    Some("lib" | "rlib" | "dylib" | "cdylib" | "staticlib" | "proc-macro")
+                )
             });
             if !is_lib_like {
                 continue;
             }
-            if let Some(ident) = tgt["name"].as_str() {
-                // `cargo metadata` already gives the underscored lib-target name,
-                // but normalise belt-and-braces so a `-` in a target name can't
-                // leak through and never match a wrapper's underscored segment.
-                let ident_norm = ident.replace('-', "_");
-                if seen.insert(ident_norm.clone()) {
-                    deps.push(TransitiveDep {
-                        ident: ident_norm,
-                        name: pkg_name.to_string(),
-                        version: pkg_version.to_string(),
-                    });
-                }
-                break; // one lib-like target per package is enough
+            let ident = tgt
+                .get("name")
+                .and_then(serde_json::Value::as_str)
+                .ok_or(MetadataError::Malformed("lib target without a `name`"))?;
+            // `cargo metadata` already gives the underscored lib-target name,
+            // but normalise belt-and-braces so a `-` in a target name can't
+            // leak through and never match a wrapper's underscored segment.
+            let ident_norm = ident.replace('-', "_");
+            if seen.insert(ident_norm.clone()) {
+                deps.push(TransitiveDep {
+                    ident: ident_norm,
+                    name: pkg_name.to_string(),
+                    version: pkg_version.to_string(),
+                });
             }
+            break; // one lib-like target per package is enough
         }
     }
     deps.sort_by(|a, b| a.ident.cmp(&b.ident));
-    deps
+    Ok(deps)
 }
 
 /// Escape a value for embedding inside a TOML basic string (`"..."`).
@@ -1371,39 +1451,35 @@ fn toml_escape(s: &str) -> String {
 
 /// [#89] Enumerate an audited crate's OWN Cargo features via `cargo metadata`
 /// (resolved from the local cache after `fetch_dep`). Returns every feature key
-/// EXCEPT `default`. Empty on any failure (fail-soft — caller then builds with
-/// default features, the pre-#89 behaviour). `cargo metadata` lists a package's
+/// EXCEPT `default`; a package absent from the graph has none to offer. A
+/// metadata error is returned, never an empty list that would silently
+/// degrade the audit to default features. `cargo metadata` lists a package's
 /// AVAILABLE features regardless of which are enabled, so the no-feature probe
 /// manifest is sufficient to read them.
-fn enumerate_crate_features(manifest_str: &str, crate_name: &str) -> Vec<String> {
-    let out = Command::new("cargo")
-        .args([
-            "metadata",
-            "--format-version",
-            "1",
-            "--quiet",
-            "--manifest-path",
-            manifest_str,
-        ])
-        .output();
-    let Ok(out) = out else { return Vec::new() };
-    if !out.status.success() {
-        return Vec::new();
-    }
-    let Ok(doc) = serde_json::from_slice::<serde_json::Value>(&out.stdout) else {
-        return Vec::new();
-    };
-    let Some(pkgs) = doc.get("packages").and_then(|p| p.as_array()) else {
-        return Vec::new();
-    };
-    for p in pkgs {
-        if p.get("name").and_then(|n| n.as_str()) == Some(crate_name)
-            && let Some(feats) = p.get("features").and_then(|f| f.as_object())
-        {
-            return feats.keys().filter(|k| *k != "default").cloned().collect();
+fn enumerate_crate_features(
+    manifest_str: &str,
+    crate_name: &str,
+) -> Result<Vec<String>, MetadataError> {
+    features_from_metadata(&run_cargo_metadata(manifest_str, &[])?, crate_name)
+}
+
+/// The PURE extraction half of [`enumerate_crate_features`].
+fn features_from_metadata(
+    meta: &serde_json::Value,
+    crate_name: &str,
+) -> Result<Vec<String>, MetadataError> {
+    for p in metadata_packages(meta)? {
+        if metadata_package_name(p)? == crate_name {
+            let feats = p
+                .get("features")
+                .and_then(serde_json::Value::as_object)
+                .ok_or(MetadataError::Malformed(
+                    "package without a `features` object",
+                ))?;
+            return Ok(feats.keys().filter(|k| *k != "default").cloned().collect());
         }
     }
-    Vec::new()
+    Ok(Vec::new())
 }
 
 /// [#89] Choose the feature set to inject for MAXIMUM API visibility on an
@@ -13332,7 +13408,7 @@ mod tests {
                   "targets": [ { "name": "equivalent", "kind": ["lib"] } ] }
             ]
         });
-        let deps = transitive_deps_from_metadata(&meta);
+        let deps = transitive_deps_from_metadata(&meta).expect("well-formed metadata");
         assert_eq!(deps.len(), 2);
         // Sorted by ident.
         assert_eq!(deps[0].ident, "equivalent");
@@ -13356,16 +13432,37 @@ mod tests {
                   "targets": [ { "name": "derive_thing", "kind": ["proc-macro"] } ] }
             ]
         });
-        let deps = transitive_deps_from_metadata(&meta);
+        let deps = transitive_deps_from_metadata(&meta).expect("well-formed metadata");
         assert_eq!(deps.len(), 1);
         assert_eq!(deps[0].ident, "derive_thing");
         assert_eq!(deps[0].name, "derive-thing");
     }
 
     #[test]
-    fn transitive_deps_empty_on_missing_packages_key() {
-        let deps = transitive_deps_from_metadata(&serde_json::json!({}));
-        assert!(deps.is_empty());
+    fn transitive_deps_refuses_missing_packages_key() {
+        assert_eq!(
+            transitive_deps_from_metadata(&serde_json::json!({})),
+            Err(MetadataError::Malformed("missing `packages` array"))
+        );
+    }
+
+    #[test]
+    fn transitive_deps_refuses_package_without_version_or_lib_target_name() {
+        let no_version = serde_json::json!({
+            "packages": [ { "name": "x", "targets": [ { "name": "x", "kind": ["lib"] } ] } ]
+        });
+        assert!(matches!(
+            transitive_deps_from_metadata(&no_version),
+            Err(MetadataError::Malformed(_))
+        ));
+        let no_target_name = serde_json::json!({
+            "packages": [ { "name": "x", "version": "1.0.0",
+                            "targets": [ { "kind": ["lib"] } ] } ]
+        });
+        assert!(matches!(
+            transitive_deps_from_metadata(&no_target_name),
+            Err(MetadataError::Malformed(_))
+        ));
     }
 
     // ── AUD-10: build-script / proc-macro consent gate ──────────────────────
@@ -13388,7 +13485,7 @@ mod tests {
 
     #[test]
     fn offenders_from_metadata_finds_build_script_and_proc_macro_not_plain_lib() {
-        let offenders = offenders_from_metadata(&aud10_fixture_meta());
+        let offenders = offenders_from_metadata(&aud10_fixture_meta()).expect("fixture");
         assert_eq!(offenders.len(), 2, "offenders: {offenders:?}");
         // Sorted by package name.
         assert_eq!(offenders[0].package, "openssl-sys");
@@ -13405,12 +13502,12 @@ mod tests {
                   "targets": [ { "name": "equivalent", "kind": ["lib"] } ] }
             ]
         });
-        assert!(offenders_from_metadata(&meta).is_empty());
+        assert_eq!(offenders_from_metadata(&meta), Ok(Vec::new()));
     }
 
     #[test]
     fn build_consent_decision_refuses_without_flag_naming_every_offender() {
-        let offenders = offenders_from_metadata(&aud10_fixture_meta());
+        let offenders = offenders_from_metadata(&aud10_fixture_meta()).expect("fixture");
         let result = build_consent_decision(&offenders, false);
         let Err(msg) = result else {
             panic!("expected refusal without --allow-build-scripts, got: {result:?}");
@@ -13428,7 +13525,7 @@ mod tests {
 
     #[test]
     fn build_consent_decision_proceeds_with_warning_when_flag_set() {
-        let offenders = offenders_from_metadata(&aud10_fixture_meta());
+        let offenders = offenders_from_metadata(&aud10_fixture_meta()).expect("fixture");
         let result = build_consent_decision(&offenders, true);
         let Ok(Some(warning)) = result else {
             panic!("expected Ok(Some(warning)) with --allow-build-scripts, got: {result:?}");
@@ -13436,6 +13533,131 @@ mod tests {
         assert!(warning.contains("openssl-sys"));
         assert!(warning.contains("serde_derive"));
         assert!(warning.contains("WARNING"));
+    }
+
+    fn metadata_output(status: std::process::ExitStatus, stdout: &[u8]) -> std::process::Output {
+        std::process::Output {
+            status,
+            stdout: stdout.to_vec(),
+            stderr: b"error: failed to parse manifest".to_vec(),
+        }
+    }
+
+    /// Assert the consent gate refuses `graph` with and without the opt-in flag.
+    fn assert_consent_refuses(graph: &Result<serde_json::Value, MetadataError>) {
+        for allow in [false, true] {
+            let offenders = graph.clone().and_then(|m| offenders_from_metadata(&m));
+            let result = consent_decision_from_graph(offenders, allow);
+            assert!(
+                matches!(&result, Err(msg) if msg.starts_with("refusing to inspect")),
+                "allow={allow}: an unreadable graph must refuse, got {result:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn consent_refuses_when_cargo_metadata_cannot_spawn() {
+        let graph = metadata_from_output(Err(std::io::Error::other("no cargo")));
+        assert!(matches!(graph, Err(MetadataError::Spawn(_))));
+        assert_consent_refuses(&graph);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn consent_refuses_when_cargo_metadata_exits_nonzero() {
+        use std::os::unix::process::ExitStatusExt as _;
+        let graph = metadata_from_output(Ok(metadata_output(
+            std::process::ExitStatus::from_raw(101 << 8),
+            b"{\"packages\":[]}",
+        )));
+        assert!(matches!(
+            &graph,
+            Err(MetadataError::Failed { stderr, .. }) if stderr.contains("failed to parse manifest")
+        ));
+        assert_consent_refuses(&graph);
+    }
+
+    #[test]
+    fn consent_refuses_when_cargo_metadata_prints_non_json() {
+        let graph = metadata_from_output(Ok(metadata_output(
+            std::process::ExitStatus::default(),
+            b"not json",
+        )));
+        assert!(matches!(graph, Err(MetadataError::Parse(_))));
+        assert_consent_refuses(&graph);
+    }
+
+    #[test]
+    fn consent_refuses_malformed_metadata_documents() {
+        let malformed = [
+            serde_json::json!({}),
+            serde_json::json!({ "packages": {} }),
+            serde_json::json!({ "packages": [ { "targets": [] } ] }),
+            serde_json::json!({ "packages": [ { "name": "build-sys" } ] }),
+            serde_json::json!({ "packages": [ { "name": "build-sys",
+                                                "targets": [ { "name": "build-script-build" } ] } ] }),
+        ];
+        for meta in malformed {
+            assert!(
+                matches!(
+                    offenders_from_metadata(&meta),
+                    Err(MetadataError::Malformed(_))
+                ),
+                "must refuse {meta}"
+            );
+            assert_consent_refuses(&Ok(meta));
+        }
+    }
+
+    #[test]
+    fn consent_well_formed_graph_still_reaches_the_offender_decision() {
+        let offenders = offenders_from_metadata(&aud10_fixture_meta());
+        assert!(matches!(
+            consent_decision_from_graph(offenders, false),
+            Err(msg) if msg.contains("openssl-sys")
+        ));
+        let clean = serde_json::json!({ "packages": [] });
+        assert_eq!(
+            consent_decision_from_graph(offenders_from_metadata(&clean), false),
+            Ok(None)
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn metadata_stderr_in_refusal_is_bounded() {
+        use std::os::unix::process::ExitStatusExt as _;
+        let mut output = metadata_output(std::process::ExitStatus::from_raw(1 << 8), b"");
+        output.stderr = vec![b'e'; METADATA_STDERR_MAX_CHARS * 4];
+        assert!(matches!(
+            metadata_from_output(Ok(output)),
+            Err(MetadataError::Failed { stderr, .. })
+                if stderr.chars().count() == METADATA_STDERR_MAX_CHARS
+        ));
+    }
+
+    #[test]
+    fn features_refuse_malformed_metadata_but_absent_package_has_none() {
+        assert!(matches!(
+            features_from_metadata(&serde_json::json!({}), "x"),
+            Err(MetadataError::Malformed(_))
+        ));
+        let meta = serde_json::json!({
+            "packages": [ { "name": "x", "features": { "default": [], "full": [] } },
+                          { "name": "y" } ]
+        });
+        assert!(matches!(
+            features_from_metadata(&meta, "y"),
+            Err(MetadataError::Malformed(_))
+        ));
+        assert_eq!(
+            features_from_metadata(&meta, "x"),
+            Ok(vec!["full".to_owned()])
+        );
+        assert_eq!(
+            features_from_metadata(&serde_json::json!({ "packages": [] }), "x"),
+            Ok(Vec::new())
+        );
     }
 
     #[test]
