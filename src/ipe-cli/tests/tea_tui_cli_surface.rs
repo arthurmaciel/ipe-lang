@@ -656,26 +656,6 @@ fn seal_stored_fn_element_into_impl_fn_kernel_builds() -> Result<(), BoxError> {
     assert_builds("seal_stored_fn_impl_fn_kernel", &src)
 }
 
-/// Concatenate every emitted `.rs` file under `dir` (depth-first, sorted).
-fn emitted_rust(dir: &std::path::Path) -> Result<String, BoxError> {
-    let mut entries = std::fs::read_dir(dir)?
-        .map(|e| e.map(|e| e.path()))
-        .collect::<Result<Vec<_>, _>>()?;
-    entries.sort();
-    let mut out = String::new();
-    for path in entries {
-        if path.is_dir() {
-            if path.file_name().is_some_and(|n| n == "target") {
-                continue;
-            }
-            out.push_str(&emitted_rust(&path)?);
-        } else if path.extension().is_some_and(|e| e == "rs") {
-            out.push_str(&std::fs::read_to_string(&path)?);
-        }
-    }
-    Ok(out)
-}
-
 /// The emitted adaptation for a point-free `onLine` over a stored handler list
 /// is pinned without `IPE_E2E`: the handler reaches `cli_sub_on_line` through
 /// the line-handler bridge, and the bridge never binds the mapper's raw
@@ -688,9 +668,7 @@ fn cli_on_line_point_free_in_list_map_emits_adapted_handler() -> Result<(), BoxE
     if let Err(e) = compile(name, &src)? {
         return Err(format!("{name}: expected ipe success, got {e:?}").into());
     }
-    let out_dir = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
-        .join(format!("tea_surface_{name}_out"));
-    let rust = emitted_rust(&out_dir)?;
+    let rust = emitted_rust(name);
     const BRIDGE: &str = "cli_sub_on_line({ let __ipe_on_line = ";
     if !rust.contains(BRIDGE) {
         return Err(format!("{name}: `onLine` handler not bridged:\n{rust}").into());
@@ -709,6 +687,130 @@ fn cli_on_line_point_free_in_list_map_emits_adapted_handler() -> Result<(), BoxE
         }
     }
     Ok(())
+}
+
+// ── Mapper parameters bound to stored function elements ─────────────────────
+//
+// Each program feeds a collection of functions (stored on the `Arc` carrier) to
+// a higher-order kernel whose mapper closure reads the element parameter as a
+// VALUE (a non-callee read), so the parameter must ride the `Arc` carrier and
+// the read must be re-dispatched into the `Fn`-bound position it reaches.
+
+/// The stored predicates the fixtures below map over.
+const STORED_PREDICATES: &str = r#"[ \t -> t /= "", \t -> t /= "x" ]"#;
+
+/// `CLI_APP` with `imports` added and its `Line s` branch appending `appended`
+/// (a `List String`) instead of `[ s ]`.
+fn cli_appending(imports: &str, appended: &str) -> Result<String, BoxError> {
+    let src = variant(
+        CLI_APP,
+        "( { model | lines = model.lines ++ [ s ] }, Cmd.none )",
+        &format!("( {{ model | lines = model.lines ++ {appended} }}, Cmd.none )"),
+    )?;
+    variant(
+        &src,
+        "import Ipe.Tea.Cli as Cli\n",
+        &format!("import Ipe.Tea.Cli as Cli\n{imports}"),
+    )
+}
+
+/// `List.map2` over a stored handler list: each list binds its own mapper
+/// parameter, and the handler list's parameter is read as a value.
+fn map2_handlers() -> Result<String, BoxError> {
+    cli_subscribing("Sub.batch (List.map2 (\\f _n -> Sub.onLine f) [ onLine, Line ] [ 1, 2 ])")
+}
+
+/// `List.sortBy` over stored predicates, its key reading the predicate as a
+/// value into the `impl Fn` parameter of `List.filter`.
+fn sort_by_predicates() -> Result<String, BoxError> {
+    cli_appending(
+        "import Ipe.List as List\n",
+        &format!(
+            "List.concat (List.map (\\keep -> List.filter keep [ s ]) (List.sortBy (\\p -> List.length (List.filter p [ s ])) {STORED_PREDICATES}))"
+        ),
+    )
+}
+
+/// `Dict.map` over a `Dict` of stored predicates, its value parameter read as
+/// a value into the `impl Fn` parameter of `List.filter`.
+fn dict_map_predicates() -> Result<String, BoxError> {
+    cli_appending(
+        "import Ipe.Dict as Dict\nimport Ipe.List as List\n",
+        "List.concat (Dict.values (Dict.map (\\_k p -> List.filter p [ s ]) (Dict.fromList [ ( \"a\", \\t -> t /= \"\" ), ( \"b\", \\t -> t /= \"x\" ) ])))",
+    )
+}
+
+/// Whether some emitted closure binds a parameter on the `Arc` function carrier.
+fn closure_binds_shared_fn(rust: &str) -> bool {
+    rust.match_indices("move |").any(|(at, opener)| {
+        rust.get(at + opener.len()..)
+            .and_then(|rest| rest.split_once('|'))
+            .is_some_and(|(params, _)| params.contains("::std::sync::Arc<dyn Fn("))
+    })
+}
+
+/// Compile `source` and require its mapper closure to bind the `Arc` carrier.
+fn assert_emits_shared_fn_param(name: &str, source: &str) -> Result<(), BoxError> {
+    if let Err(e) = compile(name, source)? {
+        return Err(format!("{name}: expected ipe success, got {e:?}").into());
+    }
+    let rust = emitted_rust(name);
+    if closure_binds_shared_fn(&rust) {
+        Ok(())
+    } else {
+        Err(format!("{name}: no mapper closure binds the `Arc` element carrier:\n{rust}").into())
+    }
+}
+
+/// The control: a program with no stored function binds no closure parameter
+/// on the `Arc` carrier, so the pins below cannot pass vacuously.
+#[test]
+fn no_stored_fn_binds_no_shared_fn_param() -> Result<(), BoxError> {
+    let name = "emit_no_stored_fn";
+    if let Err(e) = compile(name, CLI_APP)? {
+        return Err(format!("{name}: expected ipe success, got {e:?}").into());
+    }
+    if closure_binds_shared_fn(&emitted_rust(name)) {
+        return Err(format!("{name}: a closure binds the `Arc` carrier with no stored fn").into());
+    }
+    Ok(())
+}
+
+/// `List.map2`'s handler parameter binds the stored element's `Arc` carrier.
+#[test]
+fn map2_stored_fn_param_emits_shared_carrier() -> Result<(), BoxError> {
+    assert_emits_shared_fn_param("emit_map2_stored_fn", &map2_handlers()?)
+}
+
+/// `List.sortBy`'s key parameter binds the stored element's `Arc` carrier.
+#[test]
+fn sort_by_stored_fn_param_emits_shared_carrier() -> Result<(), BoxError> {
+    assert_emits_shared_fn_param("emit_sort_by_stored_fn", &sort_by_predicates()?)
+}
+
+/// `Dict.map`'s value parameter binds the stored value's `Arc` carrier.
+#[test]
+fn dict_map_stored_fn_param_emits_shared_carrier() -> Result<(), BoxError> {
+    assert_emits_shared_fn_param("emit_dict_map_stored_fn", &dict_map_predicates()?)
+}
+
+/// `List.map2` over a stored handler list, feeding each handler to
+/// `Cli.Sub.onLine`, builds.
+#[test]
+fn seal_map2_stored_fn_into_on_line_builds() -> Result<(), BoxError> {
+    assert_builds("seal_map2_stored_fn", &map2_handlers()?)
+}
+
+/// `List.sortBy` keyed on a stored predicate fed to `List.filter` builds.
+#[test]
+fn seal_sort_by_stored_fn_into_impl_fn_kernel_builds() -> Result<(), BoxError> {
+    assert_builds("seal_sort_by_stored_fn", &sort_by_predicates()?)
+}
+
+/// `Dict.map` over stored predicates fed to `List.filter` builds.
+#[test]
+fn seal_dict_map_stored_fn_into_impl_fn_kernel_builds() -> Result<(), BoxError> {
+    assert_builds("seal_dict_map_stored_fn", &dict_map_predicates()?)
 }
 
 /// A let-bound `Cli.Sub.onLine` applied later builds.

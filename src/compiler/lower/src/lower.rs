@@ -7444,7 +7444,6 @@ fn eta_shared_rebind(
 /// [`fn_value_read_flags`], so trigger and rewrite cover the same read set).
 /// Shadow discipline mirrors [`count_fn_value_uses`]; enumerated exhaustively
 /// (no `_` catch-all).
-#[allow(clippy::too_many_lines)]
 fn shim_fn_value_reads(
     sym: Symbol,
     param_tys: &[IrType],
@@ -7453,7 +7452,47 @@ fn shim_fn_value_reads(
     builtin_ctors: &[Symbol],
     expr: Expr,
 ) -> DResult<Expr> {
-    shim_fn_value_reads_at(sym, param_tys, ret, eta_pool, builtin_ctors, expr, false)
+    shim_fn_value_reads_tracked(sym, param_tys, ret, eta_pool, builtin_ctors, expr)
+        .map(|(expr, _)| expr)
+}
+
+/// [`shim_fn_value_reads`], also reporting whether any read was rewritten.
+///
+/// `false` means `expr` came back unchanged, so the caller draws no eta block.
+fn shim_fn_value_reads_tracked(
+    sym: Symbol,
+    param_tys: &[IrType],
+    ret: &IrType,
+    eta_pool: &[Symbol],
+    builtin_ctors: &[Symbol],
+    expr: Expr,
+) -> DResult<(Expr, bool)> {
+    let site = ShimSite {
+        sym,
+        param_tys,
+        ret,
+        eta_pool,
+        builtin_ctors,
+        rewrote: Cell::new(false),
+    };
+    let expr = shim_fn_value_reads_at(&site, expr, false)?;
+    Ok((expr, site.rewrote.get()))
+}
+
+/// The fixed inputs of one [`shim_fn_value_reads`] walk, plus whether it rewrote a read.
+struct ShimSite<'a> {
+    /// The re-carriered function binder whose value reads are shimmed.
+    sym: Symbol,
+    /// The binder's parameter types.
+    param_tys: &'a [IrType],
+    /// The binder's return type.
+    ret: &'a IrType,
+    /// The eta names a shim closure binds its parameters to.
+    eta_pool: &'a [Symbol],
+    /// The built-in runtime constructors whose payload keeps the `Box` carrier.
+    builtin_ctors: &'a [Symbol],
+    /// Set once any read of `sym` is rewritten.
+    rewrote: Cell<bool>,
 }
 
 /// Worker for [`shim_fn_value_reads`], threading `in_storage`: `true` while the
@@ -7465,39 +7504,31 @@ fn shim_fn_value_reads(
 /// empty-tail turbofish; every other position (a direct call arg, a return, a
 /// binding value) keeps the `Box` carrier ([`fn_read_shim`]) and resets the flag.
 #[allow(clippy::too_many_lines)]
-fn shim_fn_value_reads_at(
-    sym: Symbol,
-    param_tys: &[IrType],
-    ret: &IrType,
-    eta_pool: &[Symbol],
-    builtin_ctors: &[Symbol],
-    expr: Expr,
-    in_storage: bool,
-) -> DResult<Expr> {
+fn shim_fn_value_reads_at(site: &ShimSite<'_>, expr: Expr, in_storage: bool) -> DResult<Expr> {
+    let sym = site.sym;
     // Most positions are NOT storage-element positions: recursing through them
     // resets the flag. Only the storable-element arms below re-enter with it set.
-    let recurse =
-        |e: Expr| shim_fn_value_reads_at(sym, param_tys, ret, eta_pool, builtin_ctors, e, false);
+    let recurse = |e: Expr| shim_fn_value_reads_at(site, e, false);
     let recurse_all = |items: Vec<Expr>| {
         items
             .into_iter()
-            .map(|e| shim_fn_value_reads_at(sym, param_tys, ret, eta_pool, builtin_ctors, e, false))
+            .map(|e| shim_fn_value_reads_at(site, e, false))
             .collect::<DResult<Vec<Expr>>>()
     };
-    let recurse_storage =
-        |e: Expr| shim_fn_value_reads_at(sym, param_tys, ret, eta_pool, builtin_ctors, e, true);
+    let recurse_storage = |e: Expr| shim_fn_value_reads_at(site, e, true);
     let recurse_all_storage = |items: Vec<Expr>| {
         items
             .into_iter()
-            .map(|e| shim_fn_value_reads_at(sym, param_tys, ret, eta_pool, builtin_ctors, e, true))
+            .map(|e| shim_fn_value_reads_at(site, e, true))
             .collect::<DResult<Vec<Expr>>>()
     };
     match expr {
         Expr::Var(s) | Expr::CloneVar(s) if s == sym => {
+            site.rewrote.set(true);
             if in_storage {
-                fn_read_shim_shared(sym, param_tys, ret, eta_pool)
+                fn_read_shim_shared(sym, site.param_tys, site.ret, site.eta_pool)
             } else {
-                fn_read_shim(sym, param_tys, ret, eta_pool)
+                fn_read_shim(sym, site.param_tys, site.ret, site.eta_pool)
             }
         }
         Expr::Var(_)
@@ -7611,14 +7642,12 @@ fn shim_fn_value_reads_at(
             })
         }
         Expr::Match(m) => Ok(Expr::Match(m.try_map_bodies(
-            |scrutinee| {
-                shim_fn_value_reads(sym, param_tys, ret, eta_pool, builtin_ctors, scrutinee)
-            },
+            |scrutinee| shim_fn_value_reads_at(site, scrutinee, false),
             |pat, body, guard| {
                 let body = if pat_binds_symbol(pat, sym) {
                     body
                 } else {
-                    shim_fn_value_reads(sym, param_tys, ret, eta_pool, builtin_ctors, body)?
+                    shim_fn_value_reads_at(site, body, false)?
                 };
                 Ok((body, guard))
             },
@@ -7653,7 +7682,7 @@ fn shim_fn_value_reads_at(
             variant,
             args,
         } => {
-            let args = if builtin_ctors.contains(&variant) {
+            let args = if site.builtin_ctors.contains(&variant) {
                 recurse_all(args)?
             } else {
                 recurse_all_storage(args)?
@@ -22300,29 +22329,27 @@ impl<'a> Lowerer<'a> {
         }
     }
 
-    /// Re-type a `List` higher-order kernel's mapper closure ELEMENT parameter
-    /// from the direct `Fun` carrier ([`IrType::Fun`], `Box`) to the storage
-    /// `SharedFun` carrier ([`IrType::SharedFun`], `Arc`) when the collection it
-    /// operates over is a stored `List` of functions.
+    /// Re-type every mapper-closure parameter of a higher-order kernel that
+    /// binds a STORED element from the direct `Fun` carrier ([`IrType::Fun`],
+    /// `Box`) to the storage `SharedFun` carrier ([`IrType::SharedFun`], `Arc`).
     ///
-    /// A `List (Int -> Int)` element is carried on `Arc<dyn Fn>` (the
-    /// element-carrier flip). When such a list flows into `List.map`/`foldl`/… the
-    /// runtime kernel monomorphises its element type `T0` to `Arc<dyn Fn>`, so the
-    /// mapper closure's element parameter must be `Arc<dyn Fn>` too — but
+    /// A function stored in a `List` element, a `Dict` key or value, a tuple
+    /// component, or a record field is carried on `Arc<dyn Fn>`. When such a
+    /// collection flows into `List.map`/`Dict.foldl`/`List.map2`/… the runtime
+    /// kernel monomorphises its element type to `Arc<dyn Fn>`, so the mapper
+    /// closure's parameter fed that element must be `Arc<dyn Fn>` too — but
     /// [`Self::lower_lambda`] stamps a function-typed parameter as the direct
-    /// `Fun` (`Box`) carrier, which is the `Arc`-vs-`Box` frontier
-    /// (design §8 risk 1). Aligning the closure's element parameter carrier with
-    /// the list's element carrier here closes the frontier at the producer's own
-    /// mapper, so no read-out adapter is needed.
+    /// `Fun` (`Box`) carrier, which is the `Arc`-vs-`Box` frontier.
     ///
-    /// The mapper is the FIRST argument and the list is the LAST; the element
-    /// parameter is closure-param index 0 for the whole family except
-    /// `indexedMap`, whose element is param index 1 (the leading `Int` index is
-    /// the first). Only fires when the list arg's solved element is a function;
-    /// otherwise a no-op, so a non-function-element list is byte-identical.
+    /// Which parameter binds which element is derived from the kernel's scheme
+    /// alone ([`ipe_kernels::mapper_param_binds_stored_element`]), so every
+    /// schemed higher-order kernel is covered with no list to drift. A
+    /// parameter whose solved type is not a bare function keeps its lowered
+    /// carrier: a composite (`Maybe (a -> b)`, a tuple, a record) is already
+    /// normalized by its own type, and a non-function element never flips.
     ///
-    /// The mapper body was lowered while the element parameter was still on the
-    /// `Box` carrier, so the flip also reconciles the body's reads with the new
+    /// The mapper body was lowered while the parameter was still on the `Box`
+    /// carrier, so the flip also reconciles the body's reads with the new
     /// `Arc` carrier — the same discipline [`Self::apply_param_move_ownership`]
     /// applies to an `Arc`-rebound param: a direct callee read stays (an `Arc`
     /// is callable by auto-deref), every other read re-dispatches through a fresh
@@ -22335,58 +22362,48 @@ impl<'a> Lowerer<'a> {
     fn retype_collection_element_param(
         &self,
         resolved: &Callee,
-        canon_args: &[canon::Expr],
         lowered_args: &mut [Expr],
     ) -> DResult<()> {
-        let elem_param_index = match resolved {
-            Callee::Kernel(
-                KernelFn::ListMap
-                | KernelFn::ListFilter
-                | KernelFn::ListFoldl
-                | KernelFn::ListFoldr
-                | KernelFn::ListConcatMap
-                | KernelFn::ListFilterMap
-                | KernelFn::ListAny
-                | KernelFn::ListAll
-                | KernelFn::ListFind,
-            ) => 0,
-            Callee::Kernel(KernelFn::ListIndexedMap) => 1,
-            _ => return Ok(()),
-        };
-        // The list is the last argument; consult its solved element carrier.
-        let Some(list_arg) = canon_args.last() else {
+        let Callee::Kernel(kernel) = resolved else {
             return Ok(());
         };
-        let list_stores_fn = self
-            .region_ty(list_arg.span)
-            .is_some_and(|ty| collection_storable_element_carries_function(self.interner, ty));
-        if !list_stores_fn {
+        let Some(shape) = kernel.scheme_shape() else {
             return Ok(());
-        }
-        if let Some(Expr::Lambda { params, body, .. } | Expr::SharedLambda { params, body, .. }) =
-            lowered_args.first_mut()
-            && let Some((sym, ty)) = params.get_mut(elem_param_index)
-            && let IrType::Fun(fn_params, ret) = ty
-        {
-            let (sym, fn_params, ret) = (*sym, fn_params.clone(), (**ret).clone());
-            *ty = IrType::SharedFun(fn_params.clone(), Box::new(ret.clone()));
-            let original = std::mem::replace(body.as_mut(), Expr::Unit);
-            let shimmed = shim_fn_value_reads(
-                sym,
-                &fn_params,
-                &ret,
-                self.eta_slice(),
-                &self.builtin_runtime_ctors(),
-                original.clone(),
-            )?;
-            if shimmed == original {
-                *body.as_mut() = original;
-            } else {
-                let mut remaining = count_var_uses(sym, &shimmed);
-                let disciplined = rewrite_multiuse_clones(sym, &mut remaining, shimmed);
-                *body.as_mut() = force_shared_capture_clones(sym, disciplined);
-                // Reserve the shim's eta block so a sibling site does not reuse it.
-                self.advance_eta(fn_params.len());
+        };
+        let arity = kernel.def().arity;
+        for (arg, lowered) in lowered_args.iter_mut().enumerate() {
+            let (Expr::Lambda { params, body, .. } | Expr::SharedLambda { params, body, .. }) =
+                lowered
+            else {
+                continue;
+            };
+            for (param, (sym, ty)) in params.iter_mut().enumerate() {
+                let IrType::Fun(fn_params, ret) = ty else {
+                    continue;
+                };
+                if !ipe_kernels::mapper_param_binds_stored_element(shape, arity, arg, param) {
+                    continue;
+                }
+                let (sym, fn_params, ret) = (*sym, fn_params.clone(), (**ret).clone());
+                *ty = IrType::SharedFun(fn_params.clone(), Box::new(ret.clone()));
+                let original = std::mem::replace(body.as_mut(), Expr::Unit);
+                let (shimmed, rewrote) = shim_fn_value_reads_tracked(
+                    sym,
+                    &fn_params,
+                    &ret,
+                    self.eta_slice(),
+                    &self.builtin_runtime_ctors(),
+                    original,
+                )?;
+                *body.as_mut() = if rewrote {
+                    let mut remaining = count_var_uses(sym, &shimmed);
+                    let disciplined = rewrite_multiuse_clones(sym, &mut remaining, shimmed);
+                    // Reserve the shim's eta block so a sibling site does not reuse it.
+                    self.advance_eta(fn_params.len());
+                    force_shared_capture_clones(sym, disciplined)
+                } else {
+                    shimmed
+                };
             }
         }
         Ok(())
@@ -22574,9 +22591,9 @@ impl<'a> Lowerer<'a> {
                         let mut lowered_args = lowered_args;
                         Self::retype_result_map_error_handler(&resolved, &mut lowered_args);
                         Self::retype_decoder_payload_mapper(&resolved, &mut lowered_args);
-                        // Close the `Arc`-vs-`Box` frontier at a `List` HOF
-                        // mapper over a stored list of functions (see method doc).
-                        self.retype_collection_element_param(&resolved, args, &mut lowered_args)?;
+                        // Close the `Arc`-vs-`Box` frontier at a higher-order
+                        // kernel's mapper over stored functions (see method doc).
+                        self.retype_collection_element_param(&resolved, &mut lowered_args)?;
                         // Close the same frontier at a `Dict.singleton`/`insert`
                         // whose function VALUE argument is stored on the `Arc`
                         // carrier (see method doc).

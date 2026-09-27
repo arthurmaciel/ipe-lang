@@ -744,6 +744,123 @@ pub const fn shape_aligns_var(shape: &TyShape, var: u8) -> bool {
     }
 }
 
+/// Whether `shape` is exactly the scheme variable `var`.
+const fn is_var(shape: &TyShape, var: u8) -> bool {
+    matches!(shape, TyShape::Var(v) if *v == var)
+}
+
+/// Whether some shape of `items` is exactly the scheme variable `var`.
+const fn items_hold_var(items: &[TyShape], var: u8) -> bool {
+    let mut rest = items;
+    while let Some((item, tail)) = rest.split_first() {
+        if is_var(item, var) {
+            return true;
+        }
+        rest = tail;
+    }
+    false
+}
+
+/// Whether some shape of `items` stores `var` ([`shape_stores_var`]).
+const fn items_store_var(items: &[TyShape], var: u8) -> bool {
+    let mut rest = items;
+    while let Some((item, tail)) = rest.split_first() {
+        if shape_stores_var(item, var) {
+            return true;
+        }
+        rest = tail;
+    }
+    false
+}
+
+/// Whether scheme variable `var` sits directly in a STORAGE slot of `shape`, at any depth outside an arrow.
+///
+/// A storage slot is a `List`/`Set` element, a `Dict` key or value, a tuple
+/// component, or a record field: the positions the lowerer carries a function
+/// on the `Arc` storage carrier (its `flip_fun_in_storage_element` and
+/// record-field flips). A `Maybe`/`Result` payload or any other constructor
+/// argument keeps the direct carrier, and an arrow's sides are direct
+/// positions, so neither counts — though a storage slot nested under them does.
+#[must_use]
+pub const fn shape_stores_var(shape: &TyShape, var: u8) -> bool {
+    match shape {
+        TyShape::Con(tag, items) => {
+            let storage = matches!(tag, BuiltinTag::List | BuiltinTag::Set | BuiltinTag::Dict);
+            (storage && items_hold_var(items, var)) || items_store_var(items, var)
+        }
+        TyShape::Tuple(items) => items_hold_var(items, var) || items_store_var(items, var),
+        TyShape::Record { fields, .. } => {
+            let mut rest = *fields;
+            while let Some(((_, field), tail)) = rest.split_first() {
+                if is_var(field, var) || shape_stores_var(field, var) {
+                    return true;
+                }
+                rest = tail;
+            }
+            false
+        }
+        TyShape::Fun(..) | TyShape::Var(_) | TyShape::Unit => false,
+    }
+}
+
+/// The `index`-th argument of the curried arrow `shape`, or `None` past its spine.
+#[must_use]
+pub const fn spine_arg(shape: &TyShape, index: usize) -> Option<&TyShape> {
+    let mut cur = shape;
+    let mut left = index;
+    while let TyShape::Fun(arg, rest) = cur {
+        if left == 0 {
+            return Some(arg);
+        }
+        left -= 1;
+        cur = rest;
+    }
+    None
+}
+
+/// Whether parameter `param` of the function argument `arg` of a kernel with scheme `shape` and `arity` binds a stored element.
+///
+/// Holds when that parameter is a bare scheme variable which another of the
+/// kernel's `arity` arguments stores ([`shape_stores_var`]): the kernel feeds
+/// the parameter an element read out of that argument, so the parameter's
+/// carrier is the element's storage carrier. `List.map`'s `a`, each list of
+/// `List.map2`, and both the key and the value of `Dict.map` qualify; the
+/// `Maybe v` parameter of `Dict.update` is not bare and does not. The
+/// derivation reads only the scheme, so every schemed higher-order kernel is
+/// covered without a list to keep in sync.
+#[must_use]
+pub const fn mapper_param_binds_stored_element(
+    shape: &TyShape,
+    arity: u8,
+    arg: usize,
+    param: usize,
+) -> bool {
+    let arity = arity as usize;
+    if arg >= arity {
+        return false;
+    }
+    let Some(mapper) = spine_arg(shape, arg) else {
+        return false;
+    };
+    if !matches!(mapper, TyShape::Fun(..)) {
+        return false;
+    }
+    let Some(TyShape::Var(var)) = spine_arg(mapper, param) else {
+        return false;
+    };
+    let mut other = 0;
+    while other < arity {
+        if other != arg
+            && let Some(collection) = spine_arg(shape, other)
+            && shape_stores_var(collection, *var)
+        {
+            return true;
+        }
+        other += 1;
+    }
+    false
+}
+
 /// Whether every [`StdlibKernel::sync_obliged_scheme_vars`] entry of `kernels` aligns in its scheme.
 ///
 /// A kernel listing a variable must carry a [`StdlibKernel::scheme_shape`] in
@@ -15772,6 +15889,82 @@ mod tests {
     /// compiler-maintained [`StdlibKernel::COUNT`] — so a newly added variant
     /// forgotten in both `ALL` and this list cannot slip through.
     const UNWIRED_VARIANTS: &[StdlibKernel] = &[StdlibKernel::TaskRun, StdlibKernel::TaskPerform];
+
+    /// Whether `kernel`'s mapper argument `arg` binds a stored element at parameter `param`.
+    fn binds(kernel: StdlibKernel, arg: usize, param: usize) -> bool {
+        kernel.scheme_shape().is_some_and(|shape| {
+            super::mapper_param_binds_stored_element(shape, kernel.def().arity, arg, param)
+        })
+    }
+
+    /// Every element-feeding higher-order kernel binds its element parameters,
+    /// derived from the scheme alone: the `List` family (each list of
+    /// `map2`..`map5` binding its own parameter), and both the key and the value
+    /// of the `Dict` family.
+    #[test]
+    fn mapper_params_bind_stored_elements() {
+        use StdlibKernel as K;
+        let bound: &[(K, usize, usize)] = &[
+            (K::ListMap, 0, 0),
+            (K::ListFilter, 0, 0),
+            (K::ListFilterMap, 0, 0),
+            (K::ListConcatMap, 0, 0),
+            (K::ListAny, 0, 0),
+            (K::ListAll, 0, 0),
+            (K::ListFind, 0, 0),
+            (K::ListFoldl, 0, 0),
+            (K::ListFoldr, 0, 0),
+            (K::ListIndexedMap, 0, 1),
+            (K::ListPartition, 0, 0),
+            (K::ListSortBy, 0, 0),
+            (K::ListSortWith, 0, 0),
+            (K::ListSortWith, 0, 1),
+            (K::ListMap2, 0, 0),
+            (K::ListMap2, 0, 1),
+            (K::ListMap3, 0, 2),
+            (K::ListMap4, 0, 3),
+            (K::ListMap5, 0, 0),
+            (K::ListMap5, 0, 4),
+            (K::DictMap, 0, 0),
+            (K::DictMap, 0, 1),
+            (K::DictFilter, 0, 0),
+            (K::DictFilter, 0, 1),
+            (K::DictPartition, 0, 1),
+            (K::DictFoldl, 0, 0),
+            (K::DictFoldl, 0, 1),
+            (K::DictFoldr, 0, 1),
+        ];
+        for &(kernel, arg, param) in bound {
+            assert!(
+                binds(kernel, arg, param),
+                "{kernel:?} arg {arg} param {param}"
+            );
+        }
+    }
+
+    /// A parameter that is not a bare stored element binds nothing: an index,
+    /// an accumulator, a `Maybe`-wrapped value, a non-function argument, and a
+    /// position past the mapper's own parameters.
+    #[test]
+    fn non_element_mapper_params_do_not_bind() {
+        use StdlibKernel as K;
+        let unbound: &[(K, usize, usize)] = &[
+            (K::ListIndexedMap, 0, 0),
+            (K::ListFoldl, 0, 1),
+            (K::DictFoldl, 0, 2),
+            (K::DictUpdate, 1, 0),
+            (K::ListMap, 1, 0),
+            (K::ListMap, 0, 1),
+            (K::ListMap, 2, 0),
+            (K::ListMap2, 0, 2),
+        ];
+        for &(kernel, arg, param) in unbound {
+            assert!(
+                !binds(kernel, arg, param),
+                "{kernel:?} arg {arg} param {param}"
+            );
+        }
+    }
 
     /// `ALL` must cover every `StdlibKernel` variant except the documented
     /// [`UNWIRED_VARIANTS`]. Both Kernel Row invariant suites iterate `ALL`, so
