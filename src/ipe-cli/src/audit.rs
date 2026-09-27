@@ -796,13 +796,8 @@ fn regenerate_ffi_bindings(manifest_path: &Path) -> Result<(), CliError> {
 /// canonical project root. The check uses [`std::fs::symlink_metadata`] so it
 /// never follows symlinks.
 fn ffi_cache_path_or_reject(project_root: &Path) -> Result<PathBuf, CliError> {
-    // The relative components we walk: the cache namespace, `cache`, `ffi`, `rust`.
-    const CACHE_COMPONENTS: &[&str] = &[
-        crate::output_dir::CACHE_NAMESPACE_DIR,
-        "cache",
-        "ffi",
-        "rust",
-    ];
+    // The relative components we walk: exactly the ones `FfiCache` joins.
+    const CACHE_COMPONENTS: &[&str] = &ipe_ffi::driver::FFI_CACHE_COMPONENTS;
 
     let mut current = project_root.to_path_buf();
     for component in CACHE_COMPONENTS {
@@ -955,16 +950,13 @@ struct LocatedHit {
 /// # Errors
 /// [`CliError::Io`] on a read failure.
 fn scan_author_ffi_rust(prepared: &Prepared) -> Result<Option<LocatedHit>, CliError> {
-    let cache_root = prepared
-        .manifest
-        .root
-        .join(crate::output_dir::CACHE_NAMESPACE_DIR)
-        .join("cache/ffi/rust");
+    let cache = ipe_ffi::driver::FfiCache::at_project_root(&prepared.manifest.root);
+    let cache_root = cache.root();
     if !cache_root.is_dir() {
         return Ok(None);
     }
     let mut files: Vec<PathBuf> = Vec::new();
-    collect_rust_files(&cache_root, &mut files)?;
+    collect_rust_files(cache_root, &mut files)?;
     files.sort();
     for file in files {
         // Only the `_bindings.rs` wrapper is author-authored Rust that compiles

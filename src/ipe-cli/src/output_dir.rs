@@ -37,8 +37,10 @@ use crate::{CliError, io_err};
 /// The file whose presence marks a directory as ipe-owned.
 pub const OWNERSHIP_MARKER: &str = ".ipe-output";
 
-/// The per-project namespace directory ipe keeps its caches in.
-pub const CACHE_NAMESPACE_DIR: &str = ".ipe";
+/// The per-project namespace directory ipe keeps its caches in, owned by the
+/// FFI cache so the FFI cache root can never move out from under the
+/// reserved-name refusal.
+pub use ipe_ffi::driver::CACHE_NAMESPACE_DIR;
 
 /// Declares an enum of reserved directory names, each with the display name it
 /// matches, from a single list — so a variant can never go missing from
@@ -1600,6 +1602,29 @@ mod tests {
             "a look-alike name is user data"
         );
         let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// The FFI cache the driver writes and deletes sits under a reserved name,
+    /// and `ipe watch` never observes it: its first project-relative component
+    /// is the cache namespace both checks match.
+    #[test]
+    fn ffi_cache_root_sits_under_the_reserved_cache_namespace() {
+        let project = Path::new("/project");
+        let cache = ipe_ffi::driver::FfiCache::at_project_root(project);
+        let first = cache
+            .root()
+            .strip_prefix(project)
+            .ok()
+            .and_then(|rel| rel.components().next());
+        assert!(
+            matches!(
+                first,
+                Some(Component::Normal(name))
+                    if ReservedName::of(name) == Some(ReservedName::CacheNamespace)
+            ),
+            "the FFI cache root must begin with the reserved cache namespace, got {first:?}"
+        );
+        assert!(ipe_watch::scope::is_excluded_dir_name(CACHE_NAMESPACE_DIR));
     }
 
     /// Every [`ReservedName`] variant is refused as an output root — proven
