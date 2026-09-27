@@ -1062,9 +1062,10 @@ fn check_outside_default_output(
     checked: &Disjoint,
     project: &ProjectPaths,
 ) -> Result<(), CliError> {
-    let default_out = absolutize(&project.default_base.join(DEFAULT_OUTPUT_DIR))?;
-    let owner = resolve_through_existing(&default_out)
-        .ok_or_else(|| OutputRefusal::ParentTraversal(default_out.clone()))?;
+    let default_raw = project.default_base.join(DEFAULT_OUTPUT_DIR);
+    let default_out = prove_parent_steps(&default_raw)?;
+    let owner = resolve_through_existing(default_out.as_path())
+        .ok_or_else(|| OutputRefusal::ParentTraversal(default_raw.clone()))?;
     if starts_with(&checked.resolved, &owner) {
         return Err(OutputRefusal::InsideIpeOwned {
             out: raw.to_path_buf(),
@@ -1170,11 +1171,14 @@ struct Anchor {
 
 /// An absolute output path with no `..` or `.` component.
 ///
-/// Built only by [`prove_parent_steps`]: each `..` of the requested path is
-/// resolved there, lexically, once the level it climbs out of is proven an
-/// existing directory that is not a link. No later walk meets a `..` for a
-/// platform to interpret its own way (Windows collapses `..` lexically, POSIX
-/// follows the real parent).
+/// Built only by [`prove_parent_steps_from`], the one place a requested path is
+/// made absolute: a relative request is walked on from the working directory,
+/// component by component, and each `..` is resolved there, lexically, once
+/// the level it climbs out of is proven an existing directory that is not a
+/// link. No `Path::join`/`push` ever sees a requested `..` or `.` (onto a
+/// Windows verbatim `\\?\` base it collapses them unproven), and no later walk
+/// meets a `..` for a platform to interpret its own way (Windows collapses
+/// `..` lexically, POSIX follows the real parent).
 #[derive(Debug, Clone)]
 struct ProvenOutPath(PathBuf);
 
@@ -1184,33 +1188,61 @@ impl ProvenOutPath {
     }
 }
 
-/// Resolve every `..` of `absolute`, each only out of a proven plain directory.
+/// Make `raw` absolute against the working directory, resolving every `..`.
 ///
-/// A `..` is honoured only when the level it climbs out of exists as a
-/// directory that is not a link, reached through the already resolved levels
-/// above it; the level is then popped. Out of such a level the lexical and the
-/// real parent are the same directory, so the result names on every platform
-/// what POSIX would. A `..` over a missing level, a file, a link, or the root
-/// is refused. Bounded by the component count.
+/// As [`prove_parent_steps_from`] with the working directory, read only for a
+/// relative `raw`.
+///
+/// # Errors
+/// As [`prove_parent_steps_from`]; [`CliError::Io`] when the working
+/// directory cannot be read.
+fn prove_parent_steps(raw: &Path) -> Result<ProvenOutPath, CliError> {
+    if raw.is_absolute() {
+        return prove_parent_steps_from(raw, Path::new(""));
+    }
+    let cwd = std::env::current_dir().map_err(|e| io_err(Path::new("."), e))?;
+    prove_parent_steps_from(raw, &cwd)
+}
+
+/// Make `raw` absolute against `cwd`, resolving every `..` out of a proven plain directory.
+///
+/// The components of `cwd` (all of it for a relative `raw`, only its drive
+/// for a Windows rooted `\x`, none for an absolute `raw`) and of `raw` are
+/// walked as one sequence; nothing is joined before the walk, so every `..`
+/// the user wrote reaches the proof whatever form `cwd` takes. A `..` is
+/// honoured only when the level it climbs out of exists as a directory that
+/// is not a link, reached through the already resolved levels above it; the
+/// level is then popped. Out of such a level the lexical and the real parent
+/// are the same directory, so the result names on every platform what POSIX
+/// would. A `..` over a missing level, a file, a link, or the root is
+/// refused. Bounded by the component count.
 ///
 /// # Errors
 /// [`OutputRefusal::ParentTraversal`] for an unproven `..`;
-/// [`OutputRefusal::Unplaceable`] for a path that is not absolute (a Windows
-/// drive-relative `C:x`) or whose component holds a `/` (a verbatim `\\?\`
-/// path); [`CliError::Io`] when a level cannot be inspected.
-fn prove_parent_steps(raw: &Path, absolute: &Path) -> Result<ProvenOutPath, CliError> {
+/// [`OutputRefusal::Unplaceable`] for a path that does not name one absolute
+/// place: a Windows drive-relative `C:x`, a rooted `\x` against a working
+/// directory with no drive, or a component that is not one plain name where
+/// it lands (a `/` inside a verbatim `\\?\` component, an `a:b` that Windows
+/// reads as a drive); [`CliError::Io`] when a level cannot be inspected.
+fn prove_parent_steps_from(raw: &Path, cwd: &Path) -> Result<ProvenOutPath, CliError> {
     let traversal = || -> CliError { OutputRefusal::ParentTraversal(raw.to_path_buf()).into() };
     let unplaceable = || -> CliError { OutputRefusal::Unplaceable(raw.to_path_buf()).into() };
-    if !absolute.is_absolute() {
-        return Err(unplaceable());
-    }
+    let base = if raw.is_absolute() {
+        Path::new("")
+    } else {
+        match raw.components().next() {
+            Some(Component::Prefix(_)) => return Err(unplaceable()),
+            Some(Component::RootDir) => drive_of(cwd).ok_or_else(unplaceable)?,
+            Some(Component::CurDir | Component::ParentDir | Component::Normal(_)) | None => cwd,
+        }
+    };
     let mut proven = PathBuf::new();
-    for component in absolute.components() {
+    for component in base.components().chain(raw.components()) {
         match component {
             Component::Prefix(_) | Component::RootDir => proven.push(component),
             Component::CurDir => {}
             Component::Normal(name) => {
-                if name.as_encoded_bytes().contains(&b'/') {
+                if !is_one_name(name) {
                     return Err(unplaceable());
                 }
                 proven.push(name);
@@ -1230,7 +1262,34 @@ fn prove_parent_steps(raw: &Path, absolute: &Path) -> Result<ProvenOutPath, CliE
             }
         }
     }
+    if !proven.is_absolute() {
+        return Err(unplaceable());
+    }
     Ok(ProvenOutPath(proven))
+}
+
+/// The drive prefix of `cwd`, the base of a Windows rooted `\x`.
+fn drive_of(cwd: &Path) -> Option<&Path> {
+    match cwd.components().next() {
+        Some(prefix @ Component::Prefix(_)) => Some(Path::new(prefix.as_os_str())),
+        Some(
+            Component::RootDir | Component::CurDir | Component::ParentDir | Component::Normal(_),
+        )
+        | None => None,
+    }
+}
+
+/// Whether `name` reads back as exactly itself, one plain component.
+///
+/// A name that reads as more — a `/` split by a non-verbatim parse, an `a:b`
+/// Windows takes for a drive prefix that would replace the path it is pushed
+/// onto — does not extend that path by one level.
+fn is_one_name(name: &std::ffi::OsStr) -> bool {
+    let mut parts = Path::new(name).components();
+    match (parts.next(), parts.next()) {
+        (Some(Component::Normal(only)), None) => only == name,
+        _ => false,
+    }
 }
 
 /// Hold the deepest existing level of `proven`, whose final component is never a link.
@@ -1299,7 +1358,7 @@ fn resolve_anchored(raw: &Path, proven: &ProvenOutPath) -> Result<(PathBuf, Anch
 /// case-folded, so a case-insensitive filesystem cannot slip a differently
 /// cased spelling of the project past them (fail closed).
 fn check_disjoint(raw: &Path, project: &ProjectPaths) -> Result<Disjoint, CliError> {
-    let absolute = prove_parent_steps(raw, &absolutize(raw)?)?;
+    let absolute = prove_parent_steps(raw)?;
     if std::fs::symlink_metadata(absolute.as_path()).is_ok_and(|m| m.file_type().is_symlink()) {
         return Err(OutputRefusal::Symlink(raw.to_path_buf()).into());
     }
@@ -1350,14 +1409,6 @@ fn starts_with(path: &Path, base: &Path) -> bool {
     path.starts_with(base) || folded(path).starts_with(folded(base))
 }
 
-fn absolutize(path: &Path) -> Result<PathBuf, CliError> {
-    if path.is_absolute() {
-        return Ok(path.to_path_buf());
-    }
-    let cwd = std::env::current_dir().map_err(|e| io_err(Path::new("."), e))?;
-    Ok(cwd.join(path))
-}
-
 /// Canonicalise the deepest existing ancestor of `path` and append the rest.
 ///
 /// `None` when that rest contains `..` (its landing point cannot be proven
@@ -1397,6 +1448,26 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).expect("make scratch");
         std::fs::canonicalize(&dir).expect("canonicalize scratch")
+    }
+
+    /// `base` followed by `segments` as the user spells them (a relative
+    /// request for an empty `base`): each segment is appended as text after
+    /// [`std::path::MAIN_SEPARATOR`], never through
+    /// `Path::join`, which on Windows collapses a `..` or `.` joined onto a
+    /// verbatim `\\?\` base before the proof under test ever sees it.
+    fn spelled(base: &Path, segments: &[&str]) -> PathBuf {
+        let mut raw = base.as_os_str().to_os_string();
+        for segment in segments {
+            let ends_in_separator = raw
+                .as_encoded_bytes()
+                .last()
+                .is_some_and(|byte| std::path::is_separator(char::from(*byte)));
+            if !raw.is_empty() && !ends_in_separator {
+                raw.push(std::path::MAIN_SEPARATOR_STR);
+            }
+            raw.push(segment);
+        }
+        PathBuf::from(raw)
     }
 
     /// A manifest-shaped project: `<base>/proj/{package.ipe,src/Main.ipe}`.
@@ -1452,7 +1523,7 @@ mod tests {
     fn project_root_is_refused() {
         let base = scratch("root");
         let proj = project(&base);
-        for raw in [proj.root.clone(), proj.root.join(".")] {
+        for raw in [proj.root.clone(), spelled(&proj.root, &["."])] {
             let result = OutputRoot::resolve(Some(&raw.to_string_lossy()), &proj);
             assert!(
                 matches!(refused(&result), Some(OutputRefusal::ProjectRoot(_))),
@@ -1492,7 +1563,7 @@ mod tests {
     fn ancestor_of_the_project_is_refused() {
         let base = scratch("ancestor");
         let proj = project(&base);
-        for raw in [base.clone(), proj.root.join("src").join("..").join("..")] {
+        for raw in [base.clone(), spelled(&proj.root, &["src", "..", ".."])] {
             let result = OutputRoot::resolve(Some(&raw.to_string_lossy()), &proj);
             assert!(
                 matches!(
@@ -1511,7 +1582,7 @@ mod tests {
     fn dot_dot_through_a_missing_tail_is_refused() {
         let base = scratch("dotdot");
         let proj = project(&base);
-        let raw = base.join("missing").join("..").join("elsewhere");
+        let raw = spelled(&base, &["missing", "..", "elsewhere"]);
         let result = OutputRoot::resolve(Some(&raw.to_string_lossy()), &proj);
         assert!(
             matches!(refused(&result), Some(OutputRefusal::ParentTraversal(_))),
@@ -1527,10 +1598,10 @@ mod tests {
         let existing = base.join("existing");
         std::fs::create_dir_all(&existing).expect("make existing");
         for raw in [
-            existing.join("missing").join("..").join("elsewhere"),
-            existing.join("missing").join("..").join("..").join("x"),
-            existing.join("missing").join(".."),
-            existing.join("..").join("missing").join("..").join("x"),
+            spelled(&existing, &["missing", "..", "elsewhere"]),
+            spelled(&existing, &["missing", "..", "..", "x"]),
+            spelled(&existing, &["missing", ".."]),
+            spelled(&existing, &["..", "missing", "..", "x"]),
         ] {
             let result = OutputRoot::resolve(Some(&raw.to_string_lossy()), &proj);
             assert!(
@@ -1549,7 +1620,7 @@ mod tests {
         let base = scratch("dotdot-file");
         let proj = project(&base);
         std::fs::write(base.join("file"), "keep").expect("write file");
-        let raw = base.join("file").join("..").join("elsewhere");
+        let raw = spelled(&base, &["file", "..", "elsewhere"]);
         let result = OutputRoot::resolve(Some(&raw.to_string_lossy()), &proj);
         assert!(
             matches!(refused(&result), Some(OutputRefusal::ParentTraversal(_))),
@@ -1567,7 +1638,7 @@ mod tests {
         std::fs::create_dir_all(&victim).expect("make victim");
         let link = base.join("link");
         plant_link(&victim, &link);
-        let raw = link.join("..").join("elsewhere");
+        let raw = spelled(&link, &["..", "elsewhere"]);
         let result = OutputRoot::resolve(Some(&raw.to_string_lossy()), &proj);
         assert!(
             matches!(refused(&result), Some(OutputRefusal::ParentTraversal(_))),
@@ -1589,7 +1660,7 @@ mod tests {
         let base = scratch("dotdot-plain");
         let proj = project(&base);
         std::fs::create_dir_all(base.join("existing")).expect("make existing");
-        let raw = base.join("existing").join("..").join("elsewhere");
+        let raw = spelled(&base, &["existing", "..", "elsewhere"]);
         let out = OutputRoot::resolve(Some(&raw.to_string_lossy()), &proj)
             .expect("a `..` out of a plain directory is honoured");
         assert_eq!(out.path(), base.join("elsewhere"), "the `..` is resolved");
@@ -1611,7 +1682,7 @@ mod tests {
         std::fs::create_dir_all(victim.join("x")).expect("make victim");
         let link = base.join("link");
         plant_link(&victim, &link);
-        let raw = link.join("x").join("..").join("..").join("elsewhere");
+        let raw = spelled(&link, &["x", "..", "..", "elsewhere"]);
         let result = OutputRoot::resolve(Some(&raw.to_string_lossy()), &proj);
         assert!(
             matches!(refused(&result), Some(OutputRefusal::ParentTraversal(_))),
@@ -1638,7 +1709,7 @@ mod tests {
             .and_then(|root| root.claim())
             .expect("claim the output root");
         std::fs::create_dir_all(existing.join("sub")).expect("make sub");
-        let raw = existing.join("sub").join("..");
+        let raw = spelled(&existing, &["sub", ".."]);
         let out = OutputRoot::resolve(Some(&raw.to_string_lossy()), &proj)
             .expect("a trailing `..` out of a plain directory is honoured");
         assert_eq!(out.path(), existing, "the trailing `..` is resolved");
@@ -1647,7 +1718,10 @@ mod tests {
         std::fs::create_dir_all(&victim).expect("make victim");
         let link = base.join("link");
         plant_link(&victim, &link);
-        for raw in [link.join(".."), existing.join("missing").join("..")] {
+        for raw in [
+            spelled(&link, &[".."]),
+            spelled(&existing, &["missing", ".."]),
+        ] {
             let result = OutputRoot::resolve(Some(&raw.to_string_lossy()), &proj);
             assert!(
                 matches!(refused(&result), Some(OutputRefusal::ParentTraversal(_))),
@@ -1664,16 +1738,12 @@ mod tests {
         let proj = project(&base);
         let existing = base.join("existing");
         std::fs::create_dir_all(existing.join("sub")).expect("make sub");
-        let raw = [".", "sub", ".", "..", ".", "elsewhere"]
-            .iter()
-            .fold(existing.clone(), |p, c| p.join(c));
+        let raw = spelled(&existing, &[".", "sub", ".", "..", ".", "elsewhere"]);
         let out = OutputRoot::resolve(Some(&raw.to_string_lossy()), &proj)
             .expect("`.` beside a proven `..` is honoured");
         assert_eq!(out.path(), existing.join("elsewhere"));
 
-        let raw = [".", "missing", ".", "..", "x"]
-            .iter()
-            .fold(existing.clone(), |p, c| p.join(c));
+        let raw = spelled(&existing, &[".", "missing", ".", "..", "x"]);
         let result = OutputRoot::resolve(Some(&raw.to_string_lossy()), &proj);
         assert!(
             matches!(refused(&result), Some(OutputRefusal::ParentTraversal(_))),
@@ -1689,7 +1759,7 @@ mod tests {
         let base = scratch("dotdot-root");
         let proj = project(&base);
         let root = base.ancestors().last().expect("a root").to_path_buf();
-        for raw in [root.join(".."), root.join("..").join("x")] {
+        for raw in [spelled(&root, &[".."]), spelled(&root, &["..", "x"])] {
             let result = OutputRoot::resolve(Some(&raw.to_string_lossy()), &proj);
             assert!(
                 matches!(refused(&result), Some(OutputRefusal::ParentTraversal(_))),
@@ -1697,6 +1767,92 @@ mod tests {
                 raw.display()
             );
         }
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// A relative request is walked on from the working directory component
+    /// by component: its `..` reaches the proof whatever form the working
+    /// directory takes, never collapsed by a join first.
+    #[test]
+    fn a_relative_dot_dot_is_proven_against_the_working_directory() {
+        let base = scratch("dotdot-relative");
+        let victim = base.join("victim").join("inner");
+        std::fs::create_dir_all(&victim).expect("make victim");
+        plant_link(&victim, &base.join("link"));
+        std::fs::create_dir_all(base.join("existing")).expect("make existing");
+        for segments in [
+            &["link", "..", "x"][..],
+            &["link", ".."][..],
+            &["missing", "..", "x"][..],
+            &[".", "link", ".", "..", "x"][..],
+        ] {
+            let raw = spelled(Path::new(""), segments);
+            let result = prove_parent_steps_from(&raw, &base);
+            assert!(
+                matches!(refused(&result), Some(OutputRefusal::ParentTraversal(_))),
+                "--out {} against {} must be refused, got {result:?}",
+                raw.display(),
+                base.display()
+            );
+        }
+        let raw = spelled(Path::new(""), &["existing", "..", "x"]);
+        let proven = prove_parent_steps_from(&raw, &base).expect("a plain `..` is honoured");
+        assert_eq!(proven.as_path(), base.join("x"), "the `..` is resolved");
+        assert!(!base.join("x").exists(), "the proof creates nothing");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// A relative request against a verbatim `\\?\` working directory:
+    /// `Path::join` there would collapse `link\..` to the working directory
+    /// unproven; the walk refuses it.
+    #[cfg(windows)]
+    #[test]
+    fn a_relative_dot_dot_against_a_verbatim_working_directory_is_proven() {
+        let base = scratch("dotdot-verbatim-cwd");
+        let verbatim = if base.to_string_lossy().starts_with(r"\\?\") {
+            base.clone()
+        } else {
+            PathBuf::from(format!(r"\\?\{}", base.display()))
+        };
+        let victim = base.join("victim").join("inner");
+        std::fs::create_dir_all(&victim).expect("make victim");
+        plant_link(&victim, &base.join("link"));
+        std::fs::create_dir_all(base.join("existing")).expect("make existing");
+        for raw in [PathBuf::from(r"link\..\x"), PathBuf::from(r"missing\..\x")] {
+            assert_eq!(
+                verbatim.join(&raw),
+                verbatim.join("x"),
+                "a join onto the verbatim base collapses {} unproven",
+                raw.display()
+            );
+            let result = prove_parent_steps_from(&raw, &verbatim);
+            assert!(
+                matches!(refused(&result), Some(OutputRefusal::ParentTraversal(_))),
+                "--out {} against {} must be refused, got {result:?}",
+                raw.display(),
+                verbatim.display()
+            );
+        }
+        let raw = PathBuf::from(r"existing\..\x");
+        let proven = prove_parent_steps_from(&raw, &verbatim).expect("a plain `..` is honoured");
+        assert_eq!(proven.as_path(), verbatim.join("x"), "the `..` is resolved");
+        for raw in [PathBuf::from(r"existing\a:b"), PathBuf::from(r"C:x")] {
+            let result = prove_parent_steps_from(&raw, &verbatim);
+            assert!(
+                matches!(refused(&result), Some(OutputRefusal::Unplaceable(_))),
+                "--out {} against {} must be refused, got {result:?}",
+                raw.display(),
+                verbatim.display()
+            );
+        }
+        let drive = drive_of(&verbatim).expect("the working directory has a drive");
+        let rooted = prove_parent_steps_from(Path::new(r"\x"), &verbatim)
+            .expect("a rooted request lands on the working directory's drive");
+        assert_eq!(
+            rooted.as_path(),
+            PathBuf::from(format!(r"{}\x", drive.display())),
+            "a rooted request keeps only the working directory's drive"
+        );
         let _ = std::fs::remove_dir_all(&base);
     }
 
