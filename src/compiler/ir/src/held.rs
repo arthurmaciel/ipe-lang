@@ -57,15 +57,48 @@ pub fn enum_payload_table<'a>(defs: impl IntoIterator<Item = &'a EnumDef>) -> En
 /// are opaque values: `leaf` sees them, but their type parameters are not held
 /// components. Each named enum is expanded at most once per walk, so recursive
 /// types terminate; nesting beyond [`MAX_HELD_WALK_DEPTH`] answers `true`.
+///
+/// `leaf` must be a flat test: a leaf that starts another walk escapes both the
+/// expanded-enum set and the depth ceiling of this one. A predicate that needs
+/// more reach picks a wider [`Reach`] through [`ir_type_reaches`] instead.
 #[must_use]
 pub fn ir_type_holds(
     ty: &IrType,
     payloads: &EnumPayloadTable,
     leaf: &impl Fn(&IrType) -> bool,
 ) -> bool {
+    ir_type_reaches(ty, payloads, Reach::Held, leaf)
+}
+
+/// Which components of a value one walk visits.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Reach {
+    /// The components a value holds; effect and widget-handle parameters stay opaque.
+    Held,
+    /// The held components plus what effects yield and widget handles seal.
+    ///
+    /// An effect is a `Task` / `Cmd` / `Sub`. The same single walk descends those parameters, so a type recursive
+    /// through an effect (`type Stream = Next Int (Task Error Stream) | End`)
+    /// still expands each enum once and stays under the depth ceiling.
+    HeldOrYielded,
+}
+
+/// Does a value of type `ty` reach a component satisfying `leaf` under `reach`?
+///
+/// [`ir_type_holds`] is this walk at [`Reach::Held`]; every other rule of that
+/// walk (transparent carriers, enum arguments and payloads, one expansion per
+/// enum, the fail-closed depth ceiling, the flat-leaf contract) is shared.
+#[must_use]
+pub fn ir_type_reaches(
+    ty: &IrType,
+    payloads: &EnumPayloadTable,
+    reach: Reach,
+    leaf: &impl Fn(&IrType) -> bool,
+) -> bool {
     HeldWalk {
         payloads,
         leaf,
+        reach,
         expanded: BTreeSet::new(),
     }
     .holds(ty, 0)
@@ -86,15 +119,17 @@ pub fn enum_payload_holds(
     HeldWalk {
         payloads,
         leaf,
+        reach: Reach::Held,
         expanded: BTreeSet::new(),
     }
     .payload_holds(home, name, 0)
 }
 
-/// One walk's state: the payload table, the leaf test, and the enums already expanded.
+/// One walk's state: the payload table, the leaf test, the reach, and the enums already expanded.
 struct HeldWalk<'a, F> {
     payloads: &'a EnumPayloadTable,
     leaf: &'a F,
+    reach: Reach,
     expanded: BTreeSet<(ModPath, Symbol)>,
 }
 
@@ -136,16 +171,22 @@ impl<F: Fn(&IrType) -> bool> HeldWalk<'_, F> {
             IrType::Enum { home, name, args } => {
                 self.any(args, next) || self.payload_holds(home, *name, next)
             }
+            // Effects and widget handles: their parameters describe what they
+            // yield or seal, reached only when the walk asks for it.
+            IrType::Task(e) | IrType::Cmd(e) | IrType::Sub(e) => match self.reach {
+                Reach::Held => false,
+                Reach::HeldOrYielded => self.holds(e, next),
+            },
+            IrType::CustomElement { down, up } => match self.reach {
+                Reach::Held => false,
+                Reach::HeldOrYielded => self.holds(down, next) || self.holds(up, next),
+            },
             // Opaque values: their type parameters describe what they produce
             // or consume, not a component the value holds.
-            IrType::Task(_)
-            | IrType::Cmd(_)
-            | IrType::Sub(_)
-            | IrType::Fun(_, _)
+            IrType::Fun(_, _)
             | IrType::SharedFun(_, _)
             | IrType::FnOnceChain(_, _)
             | IrType::Decoder(_)
-            | IrType::CustomElement { .. }
             // Leaves.
             | IrType::Int
             | IrType::Float
@@ -352,5 +393,161 @@ mod tests {
             ty = IrType::List(Box::new(ty));
         }
         assert!(ir_type_holds(&ty, &table, &is_task));
+    }
+
+    fn is_fun(t: &IrType) -> bool {
+        matches!(t, IrType::Fun(_, _))
+    }
+
+    fn fun() -> IrType {
+        IrType::Fun(vec![IrType::Int], Box::new(IrType::Int))
+    }
+
+    #[test]
+    fn yielded_reach_descends_effects_and_widget_handles() {
+        let table = EnumPayloadTable::new();
+        let task_fun = IrType::Task(Box::new(fun()));
+        let cmd_fun = IrType::Cmd(Box::new(IrType::Maybe(Box::new(fun()))));
+        let widget = IrType::CustomElement {
+            down: Box::new(IrType::Int),
+            up: Box::new(fun()),
+        };
+        for ty in [&task_fun, &cmd_fun, &widget] {
+            assert!(!ir_type_holds(ty, &table, &is_fun));
+            assert!(ir_type_reaches(ty, &table, Reach::HeldOrYielded, &is_fun));
+        }
+        // A decoder stays opaque at every reach.
+        let hof = IrType::Decoder(Box::new(fun()));
+        assert!(!ir_type_reaches(
+            &hof,
+            &table,
+            Reach::HeldOrYielded,
+            &is_fun
+        ));
+    }
+
+    #[test]
+    fn type_recursive_through_an_effect_terminates() -> DResult<()> {
+        let mut interner = Interner::new();
+        let home = ModPath(vec![interner.intern("Main")?]);
+        let stream = interner.intern("Stream")?;
+        let next = interner.intern("Next")?;
+        let end = interner.intern("End")?;
+        let emit = interner.intern("Emit")?;
+        let stream_ty = named(&home, stream, Vec::new());
+        // type Stream = Next Int (Task Error Stream) | End
+        let data_only = enum_payload_table(&[EnumDef {
+            name: stream,
+            home: home.clone(),
+            type_params: Vec::new(),
+            variants: vec![
+                Variant {
+                    name: next,
+                    fields: vec![
+                        IrType::Int,
+                        IrType::Task(Box::new(IrType::Result(
+                            Box::new(IrType::Error),
+                            Box::new(stream_ty.clone()),
+                        ))),
+                    ],
+                },
+                Variant {
+                    name: end,
+                    fields: Vec::new(),
+                },
+            ],
+        }]);
+        assert!(!ir_type_reaches(
+            &stream_ty,
+            &data_only,
+            Reach::HeldOrYielded,
+            &is_fun
+        ));
+        assert!(!enum_payload_holds(&home, stream, &data_only, &is_fun));
+        // type Stream = Next Int (Task Error Stream) | Emit (Int -> Int)
+        let with_fun = enum_payload_table(&[EnumDef {
+            name: stream,
+            home: home.clone(),
+            type_params: Vec::new(),
+            variants: vec![
+                Variant {
+                    name: next,
+                    fields: vec![IrType::Int, IrType::Task(Box::new(stream_ty.clone()))],
+                },
+                Variant {
+                    name: emit,
+                    fields: vec![fun()],
+                },
+            ],
+        }]);
+        assert!(ir_type_reaches(
+            &IrType::Task(Box::new(stream_ty)),
+            &with_fun,
+            Reach::HeldOrYielded,
+            &is_fun
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn types_mutually_recursive_through_effects_terminate() -> DResult<()> {
+        let mut interner = Interner::new();
+        let home = ModPath(vec![interner.intern("Main")?]);
+        let ping = interner.intern("Ping")?;
+        let pong = interner.intern("Pong")?;
+        let go = interner.intern("Go")?;
+        let back = interner.intern("Back")?;
+        let ping_ty = named(&home, ping, Vec::new());
+        let pong_ty = named(&home, pong, Vec::new());
+        // type Ping = Go (Task Error Pong)
+        // type Pong = Back (Cmd Ping) (Sub Pong)
+        let table = enum_payload_table(&[
+            EnumDef {
+                name: ping,
+                home: home.clone(),
+                type_params: Vec::new(),
+                variants: vec![Variant {
+                    name: go,
+                    fields: vec![IrType::Task(Box::new(pong_ty.clone()))],
+                }],
+            },
+            EnumDef {
+                name: pong,
+                home: home.clone(),
+                type_params: Vec::new(),
+                variants: vec![Variant {
+                    name: back,
+                    fields: vec![
+                        IrType::Cmd(Box::new(ping_ty.clone())),
+                        IrType::Sub(Box::new(pong_ty.clone())),
+                    ],
+                }],
+            },
+        ]);
+        assert!(!ir_type_reaches(
+            &ping_ty,
+            &table,
+            Reach::HeldOrYielded,
+            &is_fun
+        ));
+        assert!(!ir_type_reaches(
+            &pong_ty,
+            &table,
+            Reach::HeldOrYielded,
+            &is_fun
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn yielded_nesting_past_the_ceiling_fails_closed() {
+        let table = EnumPayloadTable::new();
+        let mut ty = IrType::Int;
+        for _ in 0..=MAX_HELD_WALK_DEPTH {
+            ty = IrType::Task(Box::new(ty));
+        }
+        assert!(ir_type_reaches(&ty, &table, Reach::HeldOrYielded, &is_fun));
+        // At `Held` reach the outer effect is opaque, so nothing is nested.
+        assert!(!ir_type_holds(&ty, &table, &is_fun));
     }
 }

@@ -22,7 +22,8 @@ pub mod seq_clone;
 
 pub use enum_facts::{EnumTraits, RuntimeBridgedEnum, payload_leaf_is_clone};
 pub use held::{
-    EnumPayloadTable, MAX_HELD_WALK_DEPTH, enum_payload_holds, enum_payload_table, ir_type_holds,
+    EnumPayloadTable, MAX_HELD_WALK_DEPTH, Reach, enum_payload_holds, enum_payload_table,
+    ir_type_holds, ir_type_reaches,
 };
 pub use ir::{
     Arm, BinOp, BoundSet, CallPin, Callee, EnumDef, EvalOrder, Expr, Func, FuncId, HtmlEventShape,

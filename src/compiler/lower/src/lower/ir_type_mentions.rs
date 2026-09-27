@@ -4,7 +4,7 @@
 //! email, locale, json, url, …) or embeds a function.
 
 use ipe_intern::{Interner, Symbol};
-use ipe_ir::{EnumPayloadTable, Expr, Func, IrType, TypeDef, ir_type_holds};
+use ipe_ir::{EnumPayloadTable, Expr, Func, IrType, Reach, TypeDef, ir_type_reaches};
 
 /// Total structural walk over an [`IrType`], returning `true` when `leaf`
 /// matches the type itself or any type it transitively carries.
@@ -708,33 +708,28 @@ pub(super) fn collect_body_record_shapes(
 
 /// Does a value of type `ty` hold a function value?
 ///
-/// One leaf over the shared held-value walk ([`ir_type_holds`]), so every
-/// carrier it descends — including each named enum's variant payloads looked up
-/// in `payloads` — is the same set every other held-value predicate descends. A
-/// caller with no payload table in reach passes an empty one and sees only enum
-/// type arguments.
+/// One flat leaf over the shared held-value walk at [`Reach::HeldOrYielded`],
+/// so every carrier it descends — including each named enum's variant payloads
+/// looked up in `payloads` — is the same set every other held-value predicate
+/// descends, plus what an effect (`Task` / `Cmd` / `Sub`) yields and a widget
+/// handle's seal types: an effect whose result embeds a function stays
+/// fn-bearing. That one walk carries its expanded-enum set and depth ceiling
+/// through the effect parameters, so a type recursive through an effect
+/// terminates. A caller with no payload table in reach passes an empty one and
+/// sees only enum type arguments.
 pub(super) fn ir_contains_fun(ty: &IrType, payloads: &EnumPayloadTable) -> bool {
-    ir_type_holds(ty, payloads, &|t: &IrType| fun_leaf(t, payloads))
+    ir_type_reaches(ty, payloads, Reach::HeldOrYielded, &is_fun_value)
 }
 
-/// The function-value leaf of [`ir_contains_fun`].
+/// Is `ty` itself a function value?
 ///
 /// A curried `FnOnce` chain is the same boxed-closure family as `Fun`, and the
-/// promoted `Arc<dyn Fn>` (`SharedFun`) is still a function value. The opaque
-/// effect carriers (`Task` / `Cmd` / `Sub`) and the widget handle's seal types
-/// are searched too: an effect whose result embeds a function stays fn-bearing
-/// for the reuse gate.
-fn fun_leaf(ty: &IrType, payloads: &EnumPayloadTable) -> bool {
-    match ty {
-        IrType::Fun(_, _) | IrType::SharedFun(_, _) | IrType::FnOnceChain(_, _) => true,
-        IrType::Task(inner) | IrType::Cmd(inner) | IrType::Sub(inner) => {
-            ir_contains_fun(inner, payloads)
-        }
-        IrType::CustomElement { down, up } => {
-            ir_contains_fun(down, payloads) || ir_contains_fun(up, payloads)
-        }
-        _ => false,
-    }
+/// promoted `Arc<dyn Fn>` (`SharedFun`) is still a function value.
+const fn is_fun_value(ty: &IrType) -> bool {
+    matches!(
+        ty,
+        IrType::Fun(_, _) | IrType::SharedFun(_, _) | IrType::FnOnceChain(_, _)
+    )
 }
 
 #[cfg(test)]
@@ -795,5 +790,152 @@ mod tests {
             &IrType::Task(Box::new(int_to_int())),
             &table
         ));
+    }
+
+    fn stream_table(
+        stream: Symbol,
+        next: Symbol,
+        tail: Variant,
+        home: &ModPath,
+    ) -> EnumPayloadTable {
+        let stream_ty = IrType::Enum {
+            home: home.clone(),
+            name: stream,
+            args: Vec::new(),
+        };
+        enum_payload_table(&[EnumDef {
+            name: stream,
+            home: home.clone(),
+            type_params: Vec::new(),
+            variants: vec![
+                Variant {
+                    name: next,
+                    fields: vec![
+                        IrType::Int,
+                        IrType::Task(Box::new(IrType::Result(
+                            Box::new(IrType::Error),
+                            Box::new(stream_ty),
+                        ))),
+                    ],
+                },
+                tail,
+            ],
+        }])
+    }
+
+    #[test]
+    fn type_recursive_through_a_task_terminates() -> DResult<()> {
+        let mut interner = Interner::new();
+        let home = ModPath(vec![interner.intern("Main")?]);
+        let stream = interner.intern("Stream")?;
+        let next = interner.intern("Next")?;
+        let end = interner.intern("End")?;
+        let emit = interner.intern("Emit")?;
+        let stream_ty = IrType::Enum {
+            home: home.clone(),
+            name: stream,
+            args: Vec::new(),
+        };
+        // type Stream = Next Int (Task Error Stream) | End
+        let data_only = stream_table(
+            stream,
+            next,
+            Variant {
+                name: end,
+                fields: Vec::new(),
+            },
+            &home,
+        );
+        assert!(!ir_contains_fun(&stream_ty, &data_only));
+        assert!(!ir_contains_fun(
+            &IrType::Task(Box::new(stream_ty.clone())),
+            &data_only
+        ));
+        // type Stream = Next Int (Task Error Stream) | Emit (Int -> Int)
+        let with_fun = stream_table(
+            stream,
+            next,
+            Variant {
+                name: emit,
+                fields: vec![int_to_int()],
+            },
+            &home,
+        );
+        assert!(ir_contains_fun(&stream_ty, &with_fun));
+        assert!(ir_contains_fun(
+            &IrType::Cmd(Box::new(stream_ty)),
+            &with_fun
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn types_mutually_recursive_through_effects_terminate() -> DResult<()> {
+        let mut interner = Interner::new();
+        let home = ModPath(vec![interner.intern("Main")?]);
+        let ping = interner.intern("Ping")?;
+        let pong = interner.intern("Pong")?;
+        let go = interner.intern("Go")?;
+        let back = interner.intern("Back")?;
+        let named = |name| IrType::Enum {
+            home: home.clone(),
+            name,
+            args: Vec::new(),
+        };
+        // type Ping = Go (Task Error Pong)
+        // type Pong = Back (Cmd Ping) (Sub Pong) (Maybe (Int -> Int))
+        let table = enum_payload_table(&[
+            EnumDef {
+                name: ping,
+                home: home.clone(),
+                type_params: Vec::new(),
+                variants: vec![Variant {
+                    name: go,
+                    fields: vec![IrType::Task(Box::new(named(pong)))],
+                }],
+            },
+            EnumDef {
+                name: pong,
+                home: home.clone(),
+                type_params: Vec::new(),
+                variants: vec![Variant {
+                    name: back,
+                    fields: vec![
+                        IrType::Cmd(Box::new(named(ping))),
+                        IrType::Sub(Box::new(named(pong))),
+                        IrType::Maybe(Box::new(int_to_int())),
+                    ],
+                }],
+            },
+        ]);
+        assert!(ir_contains_fun(&named(ping), &table));
+        assert!(ir_contains_fun(&named(pong), &table));
+        // The same cycle with no function anywhere answers `false` and stops.
+        let data_only = enum_payload_table(&[
+            EnumDef {
+                name: ping,
+                home: home.clone(),
+                type_params: Vec::new(),
+                variants: vec![Variant {
+                    name: go,
+                    fields: vec![IrType::Task(Box::new(named(pong)))],
+                }],
+            },
+            EnumDef {
+                name: pong,
+                home: home.clone(),
+                type_params: Vec::new(),
+                variants: vec![Variant {
+                    name: back,
+                    fields: vec![
+                        IrType::Cmd(Box::new(named(ping))),
+                        IrType::Sub(Box::new(named(pong))),
+                    ],
+                }],
+            },
+        ]);
+        assert!(!ir_contains_fun(&named(ping), &data_only));
+        assert!(!ir_contains_fun(&named(pong), &data_only));
+        Ok(())
     }
 }
