@@ -17,9 +17,11 @@
 use proc_macro2::{Delimiter, TokenStream, TokenTree};
 use std::str::FromStr;
 
+mod includes;
 mod manifest;
 mod test_path;
 
+pub use includes::{IncludeForm, IncludeTarget, TestPathInclude};
 pub use manifest::{ManifestError, ManifestTargets, parse_manifest};
 pub use test_path::{
     TestPathError, UngatedBy, check_manifest, check_test_path, is_template_path, is_test_path,
@@ -87,13 +89,43 @@ pub struct Hit {
 /// [`attr_gates_test_only`]). (A `--tests` mode with the inverted rule — allow
 /// the assert family, forbid the rest — is a separate entry point.)
 pub fn scan_str(src: &str) -> Result<Vec<Hit>, String> {
-    let ts = TokenStream::from_str(src).map_err(|e| e.to_string())?;
+    scan_source(src)
+        .map(|scan| scan.hits)
+        .map_err(|e| e.to_string())
+}
+
+/// Everything a production scan of one source file finds.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Scan {
+    /// Unsanctioned abrupt-failure constructs, in line order.
+    pub hits: Vec<Hit>,
+    /// Production `#[path]` and `include!` sources that name test code.
+    pub test_path_includes: Vec<TestPathInclude>,
+}
+
+/// Scan Rust source for abrupt-failure hits and test-code includes in one lex.
+///
+/// Hits follow [`scan_str`]. A test-code include is a production
+/// `#[path = "…"]` or `include!("…")` whose literal names test code, or whose
+/// value is not a plain string literal; it would compile a file every
+/// path-based check skips, so the file cannot be audited.
+///
+/// # Errors
+///
+/// [`proc_macro2::LexError`] when `src` does not lex as Rust tokens.
+pub fn scan_source(src: &str) -> Result<Scan, proc_macro2::LexError> {
+    let ts = TokenStream::from_str(src)?;
+    let mut test_path_includes = Vec::new();
+    includes::test_path_includes(ts.clone(), &mut test_path_includes);
     let mut hits = Vec::new();
     scan_stream(ts, &mut hits);
     let lines: Vec<&str> = src.lines().collect();
     hits.retain(|h| !is_sanctioned(&lines, h.line));
     hits.sort_by_key(|h| h.line);
-    Ok(hits)
+    Ok(Scan {
+        hits,
+        test_path_includes,
+    })
 }
 
 /// True when the [`AUDIT_MARKER`] annotates the construct on the 1-based `line`.

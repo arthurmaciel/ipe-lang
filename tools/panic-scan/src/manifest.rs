@@ -48,7 +48,7 @@ impl ManifestTargets {
 }
 
 /// Whether manifest path `path` has a `tests` component or ends in `tests.rs`.
-fn names_test_code(path: &Path) -> bool {
+pub fn names_test_code(path: &Path) -> bool {
     path.components().any(|c| c.as_os_str() == "tests")
         || path.file_name().is_some_and(|name| name == "tests.rs")
 }
