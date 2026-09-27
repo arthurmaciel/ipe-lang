@@ -12,12 +12,15 @@
 //!
 //! A CLI error carries its text as a [`Message`], which only this module builds
 //! (through the functions under [`msg`]), so an error spelled as a Rust literal
-//! is a type error. Every placeholder value is sanitised on its own and written
-//! inline, so a line break inside it is indented as a continuation and cannot
-//! open a line the message never wrote; only a [`TerminalBlock`] places lines
-//! at column 0. A placeholder whose value is untrusted — raw user input,
-//! fetched content, a child process's output — is also declared
-//! `&TerminalSafe`, so the value is sanitised where it is parsed.
+//! is a type error. A message with placeholders is returned only as a
+//! [`Message`], never as a bare `String`, so every filled text a caller holds
+//! has passed both the per-value and the whole-text sanitising. Every
+//! placeholder value is sanitised on its own and written inline, so a line
+//! break inside it is indented as a continuation and cannot open a line the
+//! message never wrote; only a [`TerminalBlock`] places lines at column 0. A
+//! placeholder whose value is untrusted — raw user input, fetched content, a
+//! child process's output — is also declared `&TerminalSafe`, so the value is
+//! sanitised where it is parsed.
 
 use std::borrow::Cow;
 use std::fmt::{self, Write as _};
@@ -529,7 +532,8 @@ macro_rules! param_ty {
 /// Declare one catalog message as a function.
 ///
 /// A message without placeholders is its `&'static str` text; one with
-/// placeholders takes one value per placeholder and returns the filled text.
+/// placeholders takes one value per placeholder and returns the filled text as
+/// a [`Message`], so a filled text exists only in its sanitised form.
 /// Either way the text is a `const` resolved by [`checked_section`] at build
 /// time, and a `const` assertion that it is non-empty pins the declaration to
 /// its section: the build fails when the section is missing, repeated, or
@@ -552,14 +556,14 @@ macro_rules! message_fn {
     ($(#[$meta:meta])* $name:ident($($param:ident $(: $pty:ty)?),+) = $key:literal) => {
         $(#[$meta])*
         #[must_use]
-        pub fn $name($($param: param_ty!($($pty)?)),+) -> String {
+        pub fn $name($($param: param_ty!($($pty)?)),+) -> Message {
             const TEXT: &str = checked_section($key, &[$(stringify!($param)),+]);
             // IPE-RUST-AUDIT:ACCEPTED (Arthur Maciel) — compile-time `const` assertion (not a runtime panic); fails the BUILD if this declaration drifts from its `text/messages.md` section, the catalog SEAL [ledger #boundary]
             const _: () = assert!(
                 !TEXT.is_empty(),
                 concat!("message `", $key, "` disagrees with text/messages.md")
             );
-            fill(TEXT, &[$((stringify!($param), shown(&$param))),+])
+            Message::filled(&fill(TEXT, &[$((stringify!($param), shown(&$param))),+]))
         }
     };
 }
@@ -577,7 +581,7 @@ macro_rules! message_value_fn {
         $(#[$meta])*
         #[must_use]
         pub fn $name($($param: param_ty!($($pty)?)),+) -> Message {
-            Message::filled(&super::$name($($param),+))
+            super::$name($($param),+)
         }
     };
 }
@@ -1506,7 +1510,7 @@ mod tests {
         let pkg = crate::package_name::PackageName::parse("pkg").expect("fixture name parses");
         let hostile =
             crate::style::TerminalSafe::sanitize("x\u{1b}[31my\u{7}z\u{9b}\u{1b}]0;t\u{7}");
-        let table: [(String, &str); 8] = [
+        let table: [(Message, &str); 8] = [
             (
                 index_rev_not_immutable(&pkg, &hostile),
                 "package `pkg`: recorded `rev` is not an immutable commit SHA (expected 40 lowercase hex chars), got: xyz — re-run `ipe add` to record an immutable pin",
@@ -1756,6 +1760,21 @@ mod tests {
             filled.ends_with("Nearby keys:\n  fn:map\n  fn:xerror: forged"),
             "{filled:?}"
         );
+    }
+
+    /// A text function with placeholders hands back a sanitised [`Message`], never a raw string.
+    #[test]
+    fn a_filled_text_function_returns_a_terminal_safe_message() {
+        let hostile = "out\u{1b}]0;title\u{7}\n\u{1b}[2Kerror: forged\u{9b}31m";
+        let message: Message = output_symlink(&hostile);
+        assert!(!message.contains('\u{1b}'), "{message:?}");
+        assert!(!message.contains('\u{7}'), "{message:?}");
+        assert!(!message.contains('\u{9b}'), "{message:?}");
+        assert!(
+            !message.lines().any(|l| l.starts_with("error:")),
+            "{message:?}"
+        );
+        assert_eq!(message, msg::output_symlink(&hostile));
     }
 
     #[test]
