@@ -21,6 +21,10 @@ name: Build & test
 #     the warm `test-prep` archive keep build depth cheap on a non-emit PR. A
 #     docs/CI/yaml-only PR (no matching path) skips them all; a developer runs
 #     the same set locally to match CI.
+#   • RELEASE-ONLY PR — a same-repo PR whose diff is only release-please version
+#     metadata (`changes.release_only`, .github/ci/release-only.sh) skips the
+#     heavy emitted-build/SEAL/sanitizer tiers: its tree is the already-gated
+#     `main` plus a version bump. The version-sensitive gates still run.
 #   • NIGHTLY SCHEDULE — the checks that a typical code change cannot break, or
 #     that depend on a flaky external environment: registry-admission (publish/
 #     registry INFRASTRUCTURE), browser-e2e (headless Playwright/Chromium — the
@@ -81,6 +85,9 @@ jobs:
   #     diagnostic pages live under src/** already, so they need no special case.)
   changes:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
     outputs:
       wasm: ${{ steps.filter.outputs.wasm }}
       code: ${{ steps.filter.outputs.code }}
@@ -92,8 +99,23 @@ jobs:
       # skipped on a PR when this is false.  On push/nightly the heavy shards
       # always run (full SEAL); the filter is only a PR-path optimisation.
       emit: ${{ steps.filter.outputs.emit }}
+      release_only: ${{ steps.release.outputs.release_only }}
     steps:
       - uses: actions/checkout@v7
+      # `release_only` — true only for a same-repo PR whose changed files are all
+      # release-please version metadata (see .github/ci/release-only.sh). Keyed on
+      # the diff, never the branch name, so no PR can opt itself out of a tier.
+      - name: Classify release-only PR
+        id: release
+        # A classifier crash leaves the output unset, so every tier runs.
+        continue-on-error: true
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
+        run: .github/ci/release-only.sh
       - uses: dorny/paths-filter@v3
         id: filter
         with:
@@ -330,7 +352,7 @@ jobs:
     # Code-build correctness gate on the PR boundary: runs on any PR that touches
     # an emit-relevant path (backend/runtime/stdlib), and always on push/nightly.
     # Path-scoping means a docs/CI-only PR skips it.
-    if: (needs.changes.outputs.emit == 'true' || github.event_name != 'pull_request') && !startsWith(github.head_ref, 'release-please--')
+    if: (needs.changes.outputs.emit == 'true' || github.event_name != 'pull_request') && needs.changes.outputs.release_only != 'true'
     steps:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/rust-toolchain-pinned
@@ -359,7 +381,7 @@ jobs:
     # Code-build correctness gate on the PR boundary: runs on any PR that touches
     # a wasm-relevant path, and always on push/schedule. Path-scoping keeps it off
     # a non-wasm PR.
-    if: (needs.changes.outputs.wasm == 'true' || github.event_name != 'pull_request') && !startsWith(github.head_ref, 'release-please--')
+    if: (needs.changes.outputs.wasm == 'true' || github.event_name != 'pull_request') && needs.changes.outputs.release_only != 'true'
     steps:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/rust-toolchain-pinned
@@ -672,7 +694,7 @@ jobs:
     # regressions (e.g. a workspace-wide serde_json flag flip changing signed-token
     # bytes) are caught. Runs on any emit-relevant PR and always on push/nightly;
     # path-scoping keeps it off a docs/CI-only PR.
-    if: (needs.changes.outputs.emit == 'true' || github.event_name != 'pull_request') && !startsWith(github.head_ref, 'release-please--')
+    if: (needs.changes.outputs.emit == 'true' || github.event_name != 'pull_request') && needs.changes.outputs.release_only != 'true'
     steps:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/rust-toolchain-pinned
@@ -731,7 +753,7 @@ jobs:
     name: asan (${{ matrix.shard }}/6)
     runs-on: ubuntu-latest
     needs: [changes, quick-check]
-    if: (needs.changes.outputs.emit == 'true' || github.event_name != 'pull_request') && !startsWith(github.head_ref, 'release-please--')
+    if: (needs.changes.outputs.emit == 'true' || github.event_name != 'pull_request') && needs.changes.outputs.release_only != 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -789,7 +811,7 @@ jobs:
     name: tsan
     runs-on: ubuntu-latest
     needs: [changes, quick-check]
-    if: (needs.changes.outputs.emit == 'true' || github.event_name != 'pull_request') && !startsWith(github.head_ref, 'release-please--')
+    if: (needs.changes.outputs.emit == 'true' || github.event_name != 'pull_request') && needs.changes.outputs.release_only != 'true'
     env:
       RUSTFLAGS: -Zsanitizer=thread
       RUSTDOCFLAGS: -Zsanitizer=thread
@@ -851,7 +873,7 @@ jobs:
     # `code` superset (not `emit`) closes that blind spot. Build depth stays
     # cheap on non-emit PRs via the internal `emit` early-exit below (the heavy
     # cold-build shards self-skip; the light shards cover the non-emit surface).
-    if: (needs.changes.outputs.code == 'true' || github.event_name != 'pull_request') && !startsWith(github.head_ref, 'release-please--')
+    if: (needs.changes.outputs.code == 'true' || github.event_name != 'pull_request') && needs.changes.outputs.release_only != 'true'
     # Wall-clock cap on the shard. Each per-test `cargo build` is already bounded
     # (nextest ci `slow-timeout` + `e2e_support`'s per-build 240s ceiling), but
     # nothing capped the SHARD as a whole, so it inherited GitHub's 360-min
@@ -1035,7 +1057,7 @@ jobs:
     # ipe-accept-then-cargo-fail — so keying on the `code` superset (not `emit`)
     # closes that blind spot. This slice runs golden-e2e partitions from the warm
     # `test-prep` archive (no from-scratch compile), so a code PR stays cheap.
-    if: (needs.changes.outputs.code == 'true' || github.event_name != 'pull_request') && !startsWith(github.head_ref, 'release-please--')
+    if: (needs.changes.outputs.code == 'true' || github.event_name != 'pull_request') && needs.changes.outputs.release_only != 'true'
     # Wall-clock cap on the sub-shard (same rationale as the `e2e` job). This
     # slice is a golden-e2e partition against the warm shared target — lighter
     # than a heavy `e2e` shard — so 30 min (≈2× the warm-cache max) fails a hung
@@ -1163,7 +1185,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: [changes, quick-check]
     # On the PR gate for ANY code change (all authors).
-    if: (needs.changes.outputs.code == 'true' || github.event_name != 'pull_request') && !startsWith(github.head_ref, 'release-please--')
+    if: (needs.changes.outputs.code == 'true' || github.event_name != 'pull_request') && needs.changes.outputs.release_only != 'true'
     env:
       RUSTFLAGS: -C link-arg=-fuse-ld=mold
       IPE_RUNTIME_DIR: ${{ github.workspace }}/src/runtime/rust/src
@@ -1302,7 +1324,7 @@ jobs:
     # codegen change to it must redden a PR here, not only post-merge — keyed on
     # the `code` superset. Pure aarch64 unit + audit_native tests (no jail),
     # so it is stable code-correctness, not flaky-env.
-    if: (needs.changes.outputs.code == 'true' || github.event_name != 'pull_request') && !startsWith(github.head_ref, 'release-please--')
+    if: (needs.changes.outputs.code == 'true' || github.event_name != 'pull_request') && needs.changes.outputs.release_only != 'true'
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
