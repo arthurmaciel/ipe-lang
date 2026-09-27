@@ -2,9 +2,11 @@
 //! (parse-don't-validate).
 //!
 //! The ONLY way to obtain a `Dsn` is through [`dsn_parse`] (from a URL string) or
-//! [`dsn_build`] (from typed parts); both run the SAME validators, so a `Dsn`
-//! value is a proof that the connection descriptor passed every fail-closed
-//! check. There is no un-parsed way to construct one.
+//! [`dsn_build`] (from typed parts). Both enforce the same invariants on what
+//! they admit — known driver, bounded control-free parts, in-range port, no
+//! cleartext transport, no password without a user name — so a `Dsn` value is
+//! a proof that the connection descriptor passed every fail-closed check.
+//! There is no un-parsed way to construct one.
 //!
 //! A `Dsn` deliberately stores its password as a [`Secret`], never a plain
 //! `String`: the descriptor's most sensitive field cannot be `Debug`-printed,
@@ -225,6 +227,35 @@ impl SqliteDb {
     }
 }
 
+/// A connection's credentials: a user name and, optionally, its password.
+///
+/// A password is held only beside the user name it belongs to, so a password
+/// with no user name has no representation.
+#[derive(Clone, Debug)]
+struct Credentials {
+    user: DsnPart,
+    /// `None` when the password is empty.
+    password: Option<Secret>,
+}
+
+impl Credentials {
+    /// The credentials of an optional user name and a literal password.
+    ///
+    /// `None` when both are empty. A password longer than
+    /// [`MAX_COMPONENT_LEN`] bytes, or one with no user name, is refused.
+    fn of_parts(user: Option<DsnPart>, password: Secret) -> Result<Option<Self>, DsnReject> {
+        if password.byte_len() > MAX_COMPONENT_LEN {
+            return Err(DsnReject::InvalidComponent);
+        }
+        let password = (password.byte_len() > 0).then_some(password);
+        match (user, password) {
+            (Some(user), password) => Ok(Some(Self { user, password })),
+            (None, None) => Ok(None),
+            (None, Some(_)) => Err(DsnReject::PasswordWithoutUser),
+        }
+    }
+}
+
 /// What a DSN connects to, per driver.
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum DsnTarget {
@@ -246,8 +277,7 @@ pub struct Dsn {
     target: DsnTarget,
     host: DsnHost,
     port: u16,
-    user: Option<DsnPart>,
-    password: Secret,
+    credentials: Option<Credentials>,
     tls: TlsMode,
 }
 
@@ -261,8 +291,7 @@ impl std::fmt::Debug for Dsn {
             .field("target", &self.target)
             .field("host", &self.host)
             .field("port", &self.port)
-            .field("user", &self.user)
-            .field("password", &self.password)
+            .field("credentials", &self.credentials)
             .field("tls", &self.tls)
             .finish()
     }
@@ -282,6 +311,8 @@ enum DsnReject {
     ConflictingParameter,
     InvalidComponent,
     AmbiguousUserinfo,
+    PasswordWithoutUser,
+    TooLong,
 }
 
 impl DsnReject {
@@ -297,6 +328,8 @@ impl DsnReject {
             Self::UnknownSslMode => "Ipe.Db.Dsn: unknown sslmode",
             Self::ConflictingParameter => "Ipe.Db.Dsn: conflicting or misplaced parameter",
             Self::InvalidComponent => "Ipe.Db.Dsn: invalid DSN component",
+            Self::PasswordWithoutUser => "Ipe.Db.Dsn: a password needs a user name",
+            Self::TooLong => "Ipe.Db.Dsn: DSN exceeds the length limit",
             Self::AmbiguousUserinfo => {
                 "Ipe.Db.Dsn: the user name or password may run past the URL's authority: \
                  percent-encode `/`, `?`, `#`, `@` and `\\` in them, and write `@` \
@@ -311,9 +344,12 @@ fn reject<E: From<String>>(r: DsnReject) -> IpeResult<E, Dsn> {
 }
 
 /// A generous-but-bounded length cap for any single DSN component (host, user,
-/// database). Guards the oversize-allocation vector without rejecting any real
-/// identifier.
+/// password, database). Guards the oversize-allocation vector without
+/// rejecting any real identifier.
 const MAX_COMPONENT_LEN: usize = 512;
+
+/// The length cap, in bytes, of a whole DSN string given to [`dsn_parse`].
+const MAX_DSN_LEN: usize = 4096;
 
 /// True when `s` is safe to carry as a DSN component: no control characters, no
 /// embedded null, no leading/trailing/interior whitespace, and within the length
@@ -403,9 +439,14 @@ fn tls_from_query(url: &::url::Url) -> Result<TlsMode, DsnReject> {
 ///
 /// A SQLite DSN is read as the driver reads it ([`SqliteDb::of_dsn_rest`]);
 /// credentials, any query but `mode=rwc`, and a file name starting `file:` are
+/// refused. A password with no user name, a password over
+/// [`MAX_COMPONENT_LEN`] bytes, and a DSN over [`MAX_DSN_LEN`] bytes are
 /// refused.
 #[must_use]
 pub fn dsn_parse<E: From<String>>(s: String) -> IpeResult<E, Dsn> {
+    if s.len() > MAX_DSN_LEN {
+        return reject(DsnReject::TooLong);
+    }
     let parsed = match ::url::Url::parse(&s) {
         Ok(u) => u,
         Err(_) => return reject(DsnReject::Unparseable),
@@ -481,20 +522,27 @@ pub fn dsn_parse<E: From<String>>(s: String) -> IpeResult<E, Dsn> {
         return reject(DsnReject::InvalidComponent);
     };
     let password = secret_from_string(password.into_owned());
+    let credentials = match Credentials::of_parts(user, password) {
+        Ok(credentials) => credentials,
+        Err(r) => return reject(r),
+    };
 
     IpeResult::Ok(Dsn {
         target,
         host,
         port,
-        user,
-        password,
+        credentials,
         tls,
     })
 }
 
-/// `Ipe.Db.Dsn.build` — THE seal from typed parts. Runs the SAME component,
-/// port, and TLS validators as [`dsn_parse`], so structured input cannot bypass
-/// the parser. `driver`/`tls` arrive already as closed tags; `port` is validated
+/// `Ipe.Db.Dsn.build` — THE seal from typed parts.
+///
+/// Enforces the invariants [`dsn_parse`] does, on literal parts rather than
+/// URL text: the host is parsed as a host name or IP literal, the other parts
+/// must be bounded and control-free, a password needs a user name, and a
+/// SQLite descriptor takes no host or credentials. `driver`/`tls` arrive
+/// already as closed tags; `port` is validated
 /// into `1..=65535` (no narrowing cast); `password` is a `Secret` on the way in.
 /// The database name, user name, and password are taken literally: the
 /// connection URL percent-encodes them, so none of them can add URL syntax. A
@@ -575,13 +623,21 @@ pub fn dsn_build<E: From<String>>(
         };
         Some(user)
     };
+    let credentials = match Credentials::of_parts(user, password) {
+        Ok(credentials) => credentials,
+        Err(r) => return reject(r),
+    };
+    if driver == DsnDriver::Sqlite && credentials.is_some() {
+        // A SQLite file is opened with no credentials; a user name or password
+        // for one is a misuse.
+        return reject(DsnReject::InvalidComponent);
+    }
 
     IpeResult::Ok(Dsn {
         target,
         host,
         port: port_u16,
-        user,
-        password,
+        credentials,
         tls,
     })
 }
@@ -631,7 +687,6 @@ impl Dsn {
         match &self.target {
             DsnTarget::Sqlite(db) => db.connection_url(),
             DsnTarget::Postgres(database) => {
-                let password = crate::secret::secret_reveal(self.password.clone());
                 let sslmode = match self.tls {
                     TlsMode::Require => "require",
                     TlsMode::Prefer => "prefer",
@@ -640,11 +695,13 @@ impl Dsn {
                     TlsMode::Disable => "require",
                 };
                 let mut url = String::from("postgres://");
-                if let Some(user) = &self.user {
-                    url.push_str(&user.encoded());
-                    if !password.is_empty() {
+                if let Some(credentials) = &self.credentials {
+                    url.push_str(&credentials.user.encoded());
+                    if let Some(password) = &credentials.password {
                         url.push(':');
-                        url.push_str(&percent_encode(&password));
+                        url.push_str(&percent_encode(&crate::secret::secret_reveal(
+                            password.clone(),
+                        )));
                     }
                     url.push('@');
                 }
@@ -700,7 +757,8 @@ pub fn dsn_database(d: Dsn) -> String {
 /// Non-secret.
 #[must_use]
 pub fn dsn_user(d: Dsn) -> String {
-    d.user.map_or_else(String::new, |user| user.0)
+    d.credentials
+        .map_or_else(String::new, |credentials| credentials.user.0)
 }
 
 /// `Ipe.Db.Dsn.tls : Dsn -> TlsMode` — the transport posture as its discriminant
@@ -733,8 +791,11 @@ pub fn dsn_redacted(d: Dsn) -> String {
     // The `Secret`'s own `IpeStringify` yields the redacted placeholder; use it so
     // there is exactly one redaction convention.
     let user_part = d
-        .user
-        .map_or_else(String::new, |user| format!("{}@", user.as_str()));
+        .credentials
+        .as_ref()
+        .map_or_else(String::new, |credentials| {
+            format!("{}@", credentials.user.as_str())
+        });
     match d.driver() {
         DsnDriver::Sqlite => format!("{driver}://{}", d.database()),
         DsnDriver::Postgres => format!(
@@ -908,6 +969,88 @@ mod tests {
         }
     }
 
+    /// The password `d` holds, revealed.
+    fn revealed_password(d: Dsn) -> Option<String> {
+        d.credentials
+            .and_then(|credentials| credentials.password)
+            .map(crate::secret::secret_reveal)
+    }
+
+    /// A password with no user name is refused, built or parsed; an empty
+    /// password beside a user name is none.
+    #[test]
+    fn password_without_user_is_refused() {
+        let built = dsn_build::<String>(
+            0,
+            "db.example".into(),
+            5432,
+            "app".into(),
+            String::new(),
+            secret_from_string("pw".into()),
+            0,
+        );
+        assert!(
+            matches!(built, IpeResult::Err(ref e) if e.contains("a password needs a user name"))
+        );
+        assert!(
+            parse_err("postgres://:pw@db.example/app").contains("a password needs a user name")
+        );
+        let d = parse_ok("postgres://reader:@db.example/app");
+        assert_eq!(dsn_user(d.clone()), "reader");
+        assert_eq!(revealed_password(d.clone()), None);
+        assert!(
+            d.connection_url()
+                .starts_with("postgres://reader@db.example:5432/")
+        );
+        let sqlite = dsn_build::<String>(
+            1,
+            String::new(),
+            0,
+            "app.db".into(),
+            "reader".into(),
+            secret_from_string(String::new()),
+            0,
+        );
+        assert!(matches!(sqlite, IpeResult::Err(ref e) if e.contains("invalid DSN component")));
+    }
+
+    /// A built password and a parsed DSN are bounded; one byte past each cap
+    /// is refused.
+    #[test]
+    fn password_and_dsn_lengths_are_capped() {
+        let build_with = |password: String| {
+            dsn_build::<String>(
+                0,
+                "db.example".into(),
+                5432,
+                "app".into(),
+                "reader".into(),
+                secret_from_string(password),
+                0,
+            )
+        };
+        assert!(matches!(
+            build_with("p".repeat(MAX_COMPONENT_LEN)),
+            IpeResult::Ok(_)
+        ));
+        assert!(matches!(
+            build_with("p".repeat(MAX_COMPONENT_LEN + 1)),
+            IpeResult::Err(ref e) if e.contains("invalid DSN component")
+        ));
+        let prefix = "postgres://reader@db.example/app?application_name=";
+        let at_cap = format!("{prefix}{}", "a".repeat(MAX_DSN_LEN - prefix.len()));
+        assert!(matches!(
+            dsn_parse::<String>(at_cap.clone()),
+            IpeResult::Ok(_)
+        ));
+        assert!(parse_err(&format!("{at_cap}a")).contains("exceeds the length limit"));
+        let long_password = format!(
+            "postgres://reader:{}@db.example/app",
+            "p".repeat(MAX_COMPONENT_LEN + 1)
+        );
+        assert!(parse_err(&long_password).contains("invalid DSN component"));
+    }
+
     /// The connection URL `d` dials, read back by the `Dsn` parser and by the
     /// driver.
     fn reread(d: &Dsn) -> (Option<Dsn>, Option<sqlx::postgres::PgConnectOptions>) {
@@ -973,10 +1116,7 @@ mod tests {
                 assert_eq!(reparsed.host().as_str(), "db.example");
                 assert_eq!(dsn_database(reparsed.clone()), pick(0, "app"));
                 assert_eq!(dsn_user(reparsed.clone()), pick(1, "reader"));
-                assert_eq!(
-                    crate::secret::secret_reveal(reparsed.password),
-                    pick(2, "pw")
-                );
+                assert_eq!(revealed_password(reparsed).as_deref(), Some(pick(2, "pw")));
             }
         }
     }
@@ -1034,7 +1174,7 @@ mod tests {
             options.get_ssl_mode(),
             sqlx::postgres::PgSslMode::Require
         ));
-        assert_eq!(crate::secret::secret_reveal(d.password), "s3cr@t");
+        assert_eq!(revealed_password(d).as_deref(), Some("s3cr@t"));
     }
 
     /// A parsed part that decodes to invalid UTF-8 or a control character is

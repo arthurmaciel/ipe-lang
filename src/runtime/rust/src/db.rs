@@ -8680,6 +8680,23 @@ mod tests {
         }
     }
 
+    /// Options dialling a host the vetted URL does not name are refused as an
+    /// unproven target, before any lookup.
+    #[tokio::test]
+    async fn pin_refuses_options_for_a_host_the_url_does_not_name() {
+        let url = UnambiguousUrl::parse("postgres://8.8.8.8/x");
+        let options = "postgres://1.1.1.1/x".parse::<sqlx::postgres::PgConnectOptions>();
+        assert!(url.is_ok() && options.is_ok());
+        let (Ok(url), Ok(options)) = (url, options) else {
+            return;
+        };
+        let pinned = pin_postgres_options(&url, options, &[], &NoDns).await;
+        assert!(matches!(
+            pinned,
+            Err(DbConnectError::HostRefused(SsrfRefusal::UnprovenTarget))
+        ));
+    }
+
     /// A Unix socket reaches the local server as loopback TCP does, so under
     /// deny-private every socket spelling is refused.
     #[tokio::test]

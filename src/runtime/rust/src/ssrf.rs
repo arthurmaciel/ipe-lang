@@ -1164,6 +1164,36 @@ mod tests {
         assert_eq!(host, Some(configured("db.example")));
     }
 
+    /// `query_host` names only the value of a `host` or `hostaddr` parameter;
+    /// `named_host` also names the authority host.
+    #[test]
+    fn named_host_reads_the_authority_and_host_parameters_only() {
+        let url = UnambiguousUrl::parse(
+            "postgres://db.example/app?host=other.example&hostaddr=10.0.0.5&evil=evil&x=db.example",
+        );
+        assert!(url.is_ok());
+        let Ok(url) = url else {
+            return;
+        };
+        assert_eq!(url.query_host("evil"), None);
+        assert_eq!(url.query_host("db.example"), None);
+        assert_eq!(
+            url.query_host("other.example"),
+            Some(configured("other.example"))
+        );
+        assert_eq!(url.query_host("10.0.0.5"), Some(configured("10.0.0.5")));
+        assert_eq!(url.named_host("db.example"), Some(configured("db.example")));
+        assert_eq!(
+            url.named_host("other.example"),
+            Some(configured("other.example"))
+        );
+        assert_eq!(url.named_host("10.0.0.5"), Some(configured("10.0.0.5")));
+        assert_eq!(url.named_host("evil"), None);
+        assert_eq!(url.named_host("app"), None);
+        let bare = UnambiguousUrl::parse("postgres://db.example/app");
+        assert!(bare.is_ok_and(|bare| bare.query_host("evil").is_none()));
+    }
+
     const DEADLINE: Duration = Duration::from_secs(5);
 
     /// The URL gate's deny-private verdict, rendered as the `http:` surface shows it.
