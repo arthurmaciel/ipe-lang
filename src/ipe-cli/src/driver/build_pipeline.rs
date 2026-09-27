@@ -850,20 +850,20 @@ pub fn compile_modules_observed(
                     .emit(&program)
             };
             if let Ok(emitted) = emit_result {
-                // Warm the (cheaper-to-hit) EmittedProject tier for the
-                // next build too — advisory, best-effort, same as every
-                // other cache-write in this module.
-                cache::store(root, epoch, &cache_key, &emitted);
-                return (
-                    write_emitted_project(
-                        &emitted,
-                        out_dir,
-                        runtime_dir,
-                        options.static_plan.as_ref(),
-                        options.tree_shake_vendored,
-                    ),
-                    CacheOutcome::IrHit,
+                let written = write_emitted_project(
+                    &emitted,
+                    out_dir,
+                    runtime_dir,
+                    options.static_plan.as_ref(),
+                    options.tree_shake_vendored,
                 );
+                // Warm the (cheaper-to-hit) EmittedProject tier for the
+                // next build too — advisory, best-effort, and only once the
+                // write has claimed `out_dir`, which may hold the cache.
+                if written.is_ok() {
+                    cache::store(root, epoch, &cache_key, &emitted);
+                }
+                return (written, CacheOutcome::IrHit);
             }
             // A relocated Program that fails to emit is never a build
             // failure from this fast path — fall through to the full
@@ -910,7 +910,20 @@ pub fn compile_modules_observed(
         Err(e) => return (Err(e), CacheOutcome::Miss),
     };
 
-    if let (Some(root), Some(epoch)) = (cache_dir, epoch.as_deref()) {
+    let written = write_emitted_project(
+        &emitted,
+        out_dir,
+        runtime_dir,
+        options.static_plan.as_ref(),
+        options.tree_shake_vendored,
+    );
+
+    // The default cache root lives inside `out_dir`, so both tiers are stored
+    // only after the write above has claimed it: a store into a fresh output
+    // dir would otherwise create it unmarked and the claim would refuse it.
+    if written.is_ok()
+        && let (Some(root), Some(epoch)) = (cache_dir, epoch.as_deref())
+    {
         cache::store(root, epoch, &cache_key, &emitted);
         // Also store the lowered `Program` at the IR tier.
         // `ipe_db::lower_program` is a PURE MEMO HIT here — it already ran
@@ -934,16 +947,7 @@ pub fn compile_modules_observed(
         }
     }
 
-    (
-        write_emitted_project(
-            &emitted,
-            out_dir,
-            runtime_dir,
-            options.static_plan.as_ref(),
-            options.tree_shake_vendored,
-        ),
-        CacheOutcome::Miss,
-    )
+    (written, CacheOutcome::Miss)
 }
 
 /// Create the salsa inputs for one build: a [`ipe_db::SourceFile`] per module

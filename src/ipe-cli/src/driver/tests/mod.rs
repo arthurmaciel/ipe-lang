@@ -1358,6 +1358,74 @@ fn on_disk_cache_hit_serves_a_tampered_entry_verbatim() {
     let _ = fs::remove_dir_all(&tmp);
 }
 
+/// A cold build into a fresh output dir whose cache sits inside it — the
+/// default `<out>/.ipe-cache/<salt>` layout — succeeds and leaves the dir
+/// ipe-owned: the cache is stored only after the emit has claimed the dir,
+/// never creating it unmarked first. A rebuild into the same dir then hits.
+#[test]
+fn cold_build_with_the_cache_inside_a_fresh_output_dir_claims_it() {
+    let Ok(runtime) = resolve_runtime() else {
+        return;
+    };
+
+    let tmp = std::env::temp_dir().join(format!("ipe-cache-in-out-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&tmp);
+    let out = tmp.join("out");
+    let cache_dir = out.join(".ipe-cache").join("salt");
+
+    let entry_path = vec!["Main".to_owned()];
+    let mut sources: BTreeMap<Vec<String>, (PathBuf, String)> = BTreeMap::new();
+    sources.insert(
+        entry_path.clone(),
+        (
+            PathBuf::from("<cache-in-out>/Main.ipe"),
+            "module Main exposing (main)\n\nimport Ipe.Io as Io\n\nmain : Task Error ()\nmain =\n    Io.println \"hi\"\n".to_owned(),
+        ),
+    );
+    let discovered = vec![project::DiscoveredModule {
+        path: PathBuf::from("<cache-in-out>/Main.ipe"),
+        module_path: entry_path.clone(),
+    }];
+
+    let build = || {
+        compile_modules_observed(
+            sources.clone(),
+            discovered.clone(),
+            &entry_path,
+            &out,
+            &runtime,
+            Path::new("<cache-in-out>"),
+            ipe_backend_rust::DbDriver::Sqlite,
+            Some(&cache_dir),
+            BuildOptions::default(),
+        )
+    };
+
+    let (cold, cold_outcome) = build();
+    assert!(
+        cold.is_ok(),
+        "a cold build into a fresh dir must succeed: {cold:?}"
+    );
+    assert_eq!(cold_outcome, CacheOutcome::Miss);
+    assert!(
+        crate::output_dir::has_marker(&out).unwrap_or(false),
+        "the fresh output dir must be claimed (marked) by the build"
+    );
+    assert!(
+        find_single_cache_entry(&cache_dir).is_some(),
+        "the cold build must still store its cache entry inside the claimed dir"
+    );
+
+    let (warm, warm_outcome) = build();
+    assert!(
+        warm.is_ok(),
+        "a rebuild into the same dir must succeed: {warm:?}"
+    );
+    assert_eq!(warm_outcome, CacheOutcome::Hit);
+
+    let _ = fs::remove_dir_all(&tmp);
+}
+
 /// Walk `cache_root/<epoch>/*.ir.json` and return the single
 /// lowered-IR entry file a build just wrote. Mirrors
 /// [`find_single_cache_entry`], but matches on the `.ir.json` suffix
