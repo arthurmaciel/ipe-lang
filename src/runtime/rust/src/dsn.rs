@@ -102,8 +102,9 @@ impl DsnHost {
 ///
 /// Holds its decoded text and reaches a connection URL only percent-encoded
 /// ([`DsnPart::encoded`]), so no character in it can end the component it sits
-/// in and add URL syntax such as a `sslmode` parameter.
-#[derive(Clone, Debug, PartialEq, Eq)]
+/// in and add URL syntax such as a `sslmode` parameter. A user name is
+/// credential-adjacent, so it has no derived (early-exit) equality.
+#[derive(Clone, Debug)]
 struct DsnPart(String);
 
 impl DsnPart {
@@ -182,9 +183,9 @@ impl SqliteDb {
 
     /// The database named by the text of a SQLite DSN after its scheme.
     ///
-    /// Read as the driver reads it: one leading `//` is dropped, and the path
-    /// runs to the first `?` and is percent-decoded. The only query admitted
-    /// is `mode=rwc`, the mode the connection pins.
+    /// Read as a single scheme, one optional `//`, and the path up to the
+    /// first `?`, percent-decoded. The only query admitted is `mode=rwc`, the
+    /// mode the connection pins.
     fn of_dsn_rest(rest: &str) -> Result<Self, DsnReject> {
         let rest = rest.strip_prefix("//").unwrap_or(rest);
         let (path, query) = rest.split_once('?').unwrap_or((rest, ""));
@@ -257,7 +258,7 @@ impl Credentials {
 }
 
 /// What a DSN connects to, per driver.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug)]
 enum DsnTarget {
     /// A PostgreSQL database name.
     Postgres(DsnPart),
@@ -437,7 +438,7 @@ fn tls_from_query(url: &::url::Url) -> Result<TlsMode, DsnReject> {
 /// and a control-character/oversized component. The password is captured as a
 /// `Secret`, never a plain `String`.
 ///
-/// A SQLite DSN is read as the driver reads it ([`SqliteDb::of_dsn_rest`]);
+/// A SQLite DSN names its file as [`SqliteDb::of_dsn_rest`] reads it;
 /// credentials, any query but `mode=rwc`, and a file name starting `file:` are
 /// refused. A password with no user name, a password over
 /// [`MAX_COMPONENT_LEN`] bytes, and a DSN over [`MAX_DSN_LEN`] bytes are
@@ -490,8 +491,7 @@ pub fn dsn_parse<E: From<String>>(s: String) -> IpeResult<E, Dsn> {
         }
         DsnDriver::Sqlite => {
             // A file-backed sqlite DSN has no network host, port, or
-            // credentials; everything after the scheme names the database, as
-            // the driver reads it.
+            // credentials; everything after the scheme names the database.
             if !parsed.username().is_empty() || parsed.password().is_some() {
                 return reject(DsnReject::ConflictingParameter);
             }
@@ -1214,14 +1214,18 @@ mod tests {
         d.connection_url().parse().ok()
     }
 
-    /// The `mode` the driver opens with (`memory` for an in-memory database).
-    fn sqlite_mode(options: &sqlx::sqlite::SqliteConnectOptions) -> Option<String> {
-        use sqlx::ConnectOptions as _;
+    /// Whether the driver opens `options` as its private in-memory database,
+    /// which it names `file:sqlx-in-memory-<n>`.
+    fn sqlite_in_memory(options: &sqlx::sqlite::SqliteConnectOptions) -> bool {
         options
-            .to_url_lossy()
-            .query_pairs()
-            .find(|(key, _)| key == "mode")
-            .map(|(_, value)| value.into_owned())
+            .get_filename()
+            .to_str()
+            .is_some_and(|name| name.starts_with("file:sqlx-in-memory-"))
+    }
+
+    /// Whether `url` opens a file `mode=rwc` with no other parameter.
+    fn pins_rwc_only(url: &str) -> bool {
+        url.matches('?').count() == 1 && url.ends_with("?mode=rwc")
     }
 
     /// File names that would carry URL syntax or a SQLite special name if
@@ -1254,15 +1258,14 @@ mod tests {
                 continue;
             };
             let url = d.connection_url();
-            assert_eq!(url.matches('?').count(), 1, "{name:?}: {url}");
-            assert!(url.ends_with("?mode=rwc"), "{name:?}: {url}");
+            assert!(pins_rwc_only(&url), "{name:?}: {url}");
             let options = sqlite_options(&d);
             assert!(options.is_some(), "{name:?}: driver parse of {url}");
             let Some(options) = options else {
                 continue;
             };
             assert_eq!(options.get_filename(), std::path::Path::new(name));
-            assert_eq!(sqlite_mode(&options).as_deref(), Some("rwc"), "{name:?}");
+            assert!(!sqlite_in_memory(&options), "{name:?}");
             assert!(
                 crate::db::DbUrl::parse(&url).is_ok_and(|db| db.is_shared_sqlite_file()),
                 "{name:?}: pooled opener of {url}"
@@ -1286,11 +1289,9 @@ mod tests {
                 continue;
             };
             assert_eq!(dsn_database(d.clone()), ":memory:");
+            assert_eq!(d.connection_url(), "sqlite::memory:");
             let options = sqlite_options(&d);
-            assert_eq!(
-                options.as_ref().and_then(sqlite_mode).as_deref(),
-                Some("memory")
-            );
+            assert!(options.as_ref().is_some_and(sqlite_in_memory));
             assert!(
                 crate::db::DbUrl::parse(&d.connection_url())
                     .is_ok_and(|db| !db.is_shared_sqlite_file())
@@ -1298,10 +1299,10 @@ mod tests {
         }
     }
 
-    /// A SQLite DSN is read as the driver reads it: the whole text after the
+    /// A SQLite DSN names the file the driver opens: the text after the
     /// scheme and an optional `//`, percent-decoded.
     #[test]
-    fn parse_reads_sqlite_names_as_the_driver_does() {
+    fn parse_reads_sqlite_names_as_the_driver_opens_them() {
         for (dsn, name) in [
             ("sqlite://data/app.db", "data/app.db"),
             ("sqlite:///abs/app.db", "/abs/app.db"),
@@ -1319,10 +1320,7 @@ mod tests {
                 Some(std::path::PathBuf::from(name)),
                 "{dsn:?}"
             );
-            assert_eq!(
-                options.as_ref().and_then(sqlite_mode).as_deref(),
-                Some("rwc")
-            );
+            assert!(pins_rwc_only(&parsed.connection_url()), "{dsn:?}");
         }
     }
 
@@ -1337,6 +1335,7 @@ mod tests {
             "sqlite://x.db#y?vfs=memdb",
             "sqlite://x.db?sslmode=require",
             "sqlite://u:p@x.db",
+            "sqlite::memory:?cache=shared",
         ] {
             assert!(
                 matches!(dsn_parse::<String>(dsn.to_owned()), IpeResult::Err(ref e) if e.contains("conflicting or misplaced parameter")),
