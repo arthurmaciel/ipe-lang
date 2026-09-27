@@ -115,7 +115,7 @@ impl ProjectLoader for DriverLoader {
 /// failure; never for a compile diagnostic (those flow to the editor).
 pub fn run_lsp(rest: &[String]) -> Result<(), CliError> {
     if !rest.is_empty() {
-        return Err(CliError::Usage(text::lsp_takes_no_arguments()));
+        return Err(CliError::Usage(text::msg::lsp_takes_no_arguments()));
     }
-    ipe_lsp_server::run_stdio(&DriverLoader).map_err(|e| CliError::UsageOwned(text::lsp_failed(&e)))
+    ipe_lsp_server::run_stdio(&DriverLoader).map_err(|e| CliError::Usage(text::msg::lsp_failed(&e)))
 }

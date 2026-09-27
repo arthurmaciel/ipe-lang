@@ -8,7 +8,7 @@
 //! is rejected loudly on a second occurrence rather than silently last-writing.
 //!
 //! The parse returns `Ok(TypedArgs)` or a precise [`CliError::Usage`] /
-//! [`CliError::UsageOwned`] naming exactly what is wrong — never a panic, never a
+//! [`CliError::Usage`] naming exactly what is wrong — never a panic, never a
 //! silently-ignored flag. `run_build` / `run_run` / `run_watch` / `run_fix` /
 //! `run_fmt` consume the typed value; the scattered ad-hoc checks they used to
 //! carry are folded into these parses.
@@ -46,7 +46,7 @@ pub struct DeliveryPositionals {
 /// by [`DeliveryTokens::parse`].
 ///
 /// # Errors
-/// [`DeliveryError`] surfaced as a [`CliError::UsageOwned`] when a tail token is
+/// [`DeliveryError`] surfaced as a [`CliError::Usage`] when a tail token is
 /// neither `solo`, a host, nor a plausible target (e.g. the `served` word).
 fn take_delivery_positionals(
     positionals: &[String],
@@ -67,7 +67,7 @@ fn take_delivery_positionals(
 /// refusals are pedagogical lessons, carried verbatim behind the command prefix.
 #[must_use]
 fn delivery_usage(command: &str, err: &DeliveryError) -> CliError {
-    CliError::UsageOwned(text::command_refusal(&command, err))
+    CliError::Usage(text::msg::command_refusal(&command, err))
 }
 
 /// The one phrasing for "a command was given a flag it does not recognise".
@@ -78,21 +78,21 @@ fn delivery_usage(command: &str, err: &DeliveryError) -> CliError {
 /// Always backticks (never `Debug`/`{:?}` straight quotes), always the prefix.
 #[must_use]
 pub fn usage_unknown_flag(command: &str, flag: &str) -> CliError {
-    CliError::UsageOwned(text::unknown_flag(&command, &flag))
+    CliError::Usage(text::msg::unknown_flag(&command, &flag))
 }
 
 /// The one phrasing for "a parent command was given a subcommand it does not
 /// recognise", naming the accepted set so the fix is obvious.
 #[must_use]
 pub fn usage_unknown_subcommand(command: &str, sub: &str, expected: &str) -> CliError {
-    CliError::UsageOwned(text::unknown_subcommand(&command, &sub, &expected))
+    CliError::Usage(text::msg::unknown_subcommand(&command, &sub, &expected))
 }
 
 /// The one phrasing for "a command that takes no positional was given one, or a
 /// single-positional command was given a second".
 #[must_use]
 pub fn usage_unexpected_argument(command: &str, arg: &str) -> CliError {
-    CliError::UsageOwned(text::unexpected_argument(&command, &arg))
+    CliError::Usage(text::msg::unexpected_argument(&command, &arg))
 }
 
 /// How a data-producing command renders its result.
@@ -228,7 +228,7 @@ pub fn peek_output_format(rest: &[String]) -> OutputFormat {
 /// without duplicating the mutual-exclusion logic.
 ///
 /// # Errors
-/// [`CliError::UsageOwned`] when a format flag is given after a different one,
+/// [`CliError::Usage`] when a format flag is given after a different one,
 /// naming `command` so the message points at the misused command.
 pub(crate) fn consume_format_flag(
     slot: &mut Option<OutputFormat>,
@@ -246,9 +246,9 @@ pub(crate) fn consume_format_flag(
             Ok(true)
         }
         Some(existing) if *existing == requested => {
-            Err(CliError::UsageOwned(text::flag_repeated(&command, &flag)))
+            Err(CliError::Usage(text::msg::flag_repeated(&command, &flag)))
         }
-        Some(_) => Err(CliError::UsageOwned(text::plain_json_exclusive(&command))),
+        Some(_) => Err(CliError::Usage(text::msg::plain_json_exclusive(&command))),
     }
 }
 
@@ -263,7 +263,7 @@ pub(crate) fn consume_format_flag(
 /// [`single_positional`]'s rejection of `-`-leading tokens.
 ///
 /// # Errors
-/// [`CliError::UsageOwned`] on `--plain --json` together, a repeated format flag,
+/// [`CliError::Usage`] on `--plain --json` together, a repeated format flag,
 /// or an unrecognised `-`-leading flag.
 pub fn split_format<'a>(
     rest: &'a [String],
@@ -289,7 +289,7 @@ pub fn split_format<'a>(
 /// `None` when the tail is empty (the caller supplies its own default).
 ///
 /// # Errors
-/// [`CliError::UsageOwned`] on any flag (this command takes none) or a second
+/// [`CliError::Usage`] on any flag (this command takes none) or a second
 /// positional — never a silently-ignored token.
 pub fn single_positional<'a>(
     rest: &'a [String],
@@ -314,7 +314,7 @@ pub fn single_positional<'a>(
 /// Returns the positional (or `None`) and the chosen [`OutputFormat`].
 ///
 /// # Errors
-/// [`CliError::UsageOwned`] on an unknown flag, a second positional, or
+/// [`CliError::Usage`] on an unknown flag, a second positional, or
 /// `--plain --json` together.
 pub fn single_positional_with_format<'a>(
     rest: &'a [String],
@@ -332,10 +332,10 @@ pub fn single_positional_with_format<'a>(
 /// specific message rather than silently overwriting the earlier value.
 ///
 /// # Errors
-/// [`CliError::UsageOwned`] when `slot` already holds a value.
+/// [`CliError::Usage`] when `slot` already holds a value.
 fn set_once<T>(slot: &mut Option<T>, value: T, flag: &str, command: &str) -> Result<(), CliError> {
     if slot.is_some() {
-        return Err(CliError::UsageOwned(text::flag_repeated(&command, &flag)));
+        return Err(CliError::Usage(text::msg::flag_repeated(&command, &flag)));
     }
     *slot = Some(value);
     Ok(())
@@ -345,10 +345,10 @@ fn set_once<T>(slot: &mut Option<T>, value: T, flag: &str, command: &str) -> Res
 fn set_session(slot: &mut SessionMode, mode: SessionMode) -> Result<(), CliError> {
     if let Some(first) = slot.flag() {
         let second = mode.flag().unwrap_or(first);
-        return Err(CliError::UsageOwned(if first == second {
-            text::flag_repeated(&"run", &first)
+        return Err(CliError::Usage(if first == second {
+            text::msg::flag_repeated(&"run", &first)
         } else {
-            text::session_flags_exclusive(&first, &second)
+            text::msg::session_flags_exclusive(&first, &second)
         }));
     }
     *slot = mode;
@@ -359,7 +359,7 @@ fn set_session(slot: &mut SessionMode, mode: SessionMode) -> Result<(), CliError
 /// naming the flag whose argument is missing (rather than the generic synopsis).
 ///
 /// # Errors
-/// [`CliError::UsageOwned`] when the iterator is exhausted.
+/// [`CliError::Usage`] when the iterator is exhausted.
 fn take_value(
     it: &mut std::iter::Peekable<std::slice::Iter<'_, String>>,
     flag: &str,
@@ -367,7 +367,7 @@ fn take_value(
 ) -> Result<String, CliError> {
     it.next()
         .cloned()
-        .ok_or_else(|| CliError::UsageOwned(text::flag_needs_value(&command, &flag)))
+        .ok_or_else(|| CliError::Usage(text::msg::flag_needs_value(&command, &flag)))
 }
 
 /// Take the leading positional entry, if any: the first token, but ONLY when it
@@ -478,11 +478,11 @@ struct StaticFlags {
 /// module) is that command's own typed refusal.
 ///
 /// # Errors
-/// [`CliError::UsageOwned`] naming every supported value when `raw` is outside
+/// [`CliError::Usage`] naming every supported value when `raw` is outside
 /// the vocabulary.
 pub fn parse_target(raw: &str) -> Result<TargetTriple, CliError> {
     TargetTriple::from_flag(raw).ok_or_else(|| {
-        CliError::UsageOwned(text::unsupported_target(
+        CliError::Usage(text::msg::unsupported_target(
             &raw,
             &StaticTriple::SUPPORTED.join(", "),
         ))
@@ -506,7 +506,7 @@ impl StaticFlags {
     /// (so the caller can try its own flags next).
     ///
     /// # Errors
-    /// [`CliError::UsageOwned`] on a missing value, a duplicate value flag, or an
+    /// [`CliError::Usage`] on a missing value, a duplicate value flag, or an
     /// allocator name outside the closed set.
     fn consume(
         &mut self,
@@ -523,7 +523,7 @@ impl StaticFlags {
             "--allocator" => {
                 let raw = take_value(it, "--allocator", command)?;
                 let choice = AllocatorChoice::parse(&raw)
-                    .map_err(|refusal| CliError::UsageOwned(refusal.to_string()))?;
+                    .map_err(|refusal| CliError::Usage(crate::text::Message::relay(&refusal)))?;
                 set_once(&mut self.allocator, choice, "--allocator", command)?;
             }
             "--cfree" => self.c_free = true,
@@ -664,7 +664,7 @@ pub struct BuildArgs {
 /// outside its closed set; and an unknown flag.
 ///
 /// # Errors
-/// [`CliError::Usage`] / [`CliError::UsageOwned`] naming the exact problem.
+/// [`CliError::Usage`] / [`CliError::Usage`] naming the exact problem.
 #[allow(clippy::too_many_lines)] // one linear flag loop + the emit-compose rejection gate
 pub fn parse_build(rest: &[String]) -> Result<BuildArgs, CliError> {
     let mut it = rest.iter().peekable();
@@ -723,12 +723,12 @@ pub fn parse_build(rest: &[String]) -> Result<BuildArgs, CliError> {
     // compose with the native static flags.
     let wasm = wasm_kind_of(static_flags.target);
     if wasm.is_wasm() && (static_flags.static_flag || static_flags.allocator.is_some()) {
-        return Err(CliError::UsageOwned(text::static_flags_with_wasm(
+        return Err(CliError::Usage(text::msg::static_flags_with_wasm(
             &wasm.word(),
         )));
     }
     if wasm.is_wasm() && static_flags.c_free {
-        return Err(CliError::UsageOwned(text::cfree_with_wasm(&wasm.word())));
+        return Err(CliError::Usage(text::msg::cfree_with_wasm(&wasm.word())));
     }
 
     let mode = if emit_ir {
@@ -736,19 +736,19 @@ pub fn parse_build(rest: &[String]) -> Result<BuildArgs, CliError> {
         // meaningless with it. Reject rather than silently ignore (the old early
         // return dropped them without a word).
         if out.is_some() {
-            return Err(CliError::Usage(text::emit_ir_with_out()));
+            return Err(CliError::Usage(text::msg::emit_ir_with_out()));
         }
         if static_flags.static_flag {
-            return Err(CliError::Usage(text::emit_ir_with_static()));
+            return Err(CliError::Usage(text::msg::emit_ir_with_static()));
         }
         if static_flags.target.is_some() {
-            return Err(CliError::Usage(text::emit_ir_with_target()));
+            return Err(CliError::Usage(text::msg::emit_ir_with_target()));
         }
         if static_flags.allocator.is_some() {
-            return Err(CliError::Usage(text::emit_ir_with_allocator()));
+            return Err(CliError::Usage(text::msg::emit_ir_with_allocator()));
         }
         if static_flags.c_free {
-            return Err(CliError::Usage(text::emit_ir_with_cfree()));
+            return Err(CliError::Usage(text::msg::emit_ir_with_cfree()));
         }
         BuildMode::EmitIr
     } else if wasm.is_wasm() {
@@ -871,7 +871,7 @@ pub struct RunArgs {
 /// --static" refusal.
 ///
 /// # Errors
-/// [`CliError::Usage`] / [`CliError::UsageOwned`] naming the exact problem.
+/// [`CliError::Usage`] / [`CliError::Usage`] naming the exact problem.
 pub fn parse_run(rest: &[String]) -> Result<RunArgs, CliError> {
     let dash_dash = rest.iter().position(|a| a == "--");
     // `pos` is a valid index; `pos + 1 <= rest.len()` (a trailing `--` gives an
@@ -941,11 +941,11 @@ pub fn parse_run(rest: &[String]) -> Result<RunArgs, CliError> {
     let wasm = wasm_kind_of(static_flags.target);
     match wasm {
         WasmKind::Client => {
-            return Err(CliError::Usage(text::run_wasm_target()));
+            return Err(CliError::Usage(text::msg::run_wasm_target()));
         }
         WasmKind::Wasi => {
             if static_flags.static_flag || static_flags.allocator.is_some() || static_flags.c_free {
-                return Err(CliError::Usage(text::run_wasi_native_flags()));
+                return Err(CliError::Usage(text::msg::run_wasi_native_flags()));
             }
         }
         WasmKind::None => {}
@@ -997,7 +997,7 @@ pub struct EjectArgs {
 /// occurrence.
 ///
 /// # Errors
-/// [`CliError::Usage`] / [`CliError::UsageOwned`] naming the exact problem,
+/// [`CliError::Usage`] / [`CliError::Usage`] naming the exact problem,
 /// including a missing `--out`.
 pub fn parse_eject(rest: &[String]) -> Result<EjectArgs, CliError> {
     let mut it = rest.iter().peekable();
@@ -1025,7 +1025,7 @@ pub fn parse_eject(rest: &[String]) -> Result<EjectArgs, CliError> {
         }
     }
 
-    let out = out.ok_or_else(|| CliError::Usage(text::eject_out_required()))?;
+    let out = out.ok_or_else(|| CliError::Usage(text::msg::eject_out_required()))?;
 
     Ok(EjectArgs {
         entry,
@@ -1057,16 +1057,14 @@ impl ReleaseTarget {
     ///
     /// # Errors
     ///
-    /// [`CliError::UsageOwned`] for [`TargetTriple::Wasm32Wasip1`]: a release
+    /// [`CliError::Usage`] for [`TargetTriple::Wasm32Wasip1`]: a release
     /// produces a browser bundle or a native binary, never a WASI module.
     pub fn from_target(target: Option<TargetTriple>) -> Result<Self, CliError> {
         match target {
             None => Ok(Self::Native(StaticTriple::default())),
             Some(TargetTriple::BrowserWasm) => Ok(Self::Wasm),
             Some(TargetTriple::Native(triple)) => Ok(Self::Native(triple)),
-            Some(TargetTriple::Wasm32Wasip1) => {
-                Err(CliError::UsageOwned(text::release_no_wasi().to_owned()))
-            }
+            Some(TargetTriple::Wasm32Wasip1) => Err(CliError::Usage(text::msg::release_no_wasi())),
         }
     }
 }
@@ -1123,7 +1121,7 @@ pub struct ReleaseArgs {
 ///
 /// # Errors
 ///
-/// [`CliError::Usage`] / [`CliError::UsageOwned`] naming the exact problem.
+/// [`CliError::Usage`] / [`CliError::Usage`] naming the exact problem.
 pub fn parse_release(rest: &[String]) -> Result<ReleaseArgs, CliError> {
     let mut it = rest.iter().peekable();
     let entry = take_leading_entry_path(&mut it);
@@ -1175,9 +1173,7 @@ pub fn parse_release(rest: &[String]) -> Result<ReleaseArgs, CliError> {
     }
 
     if saw_embed && saw_bundle {
-        return Err(CliError::UsageOwned(
-            text::release_embed_bundle_exclusive().to_owned(),
-        ));
+        return Err(CliError::Usage(text::msg::release_embed_bundle_exclusive()));
     }
 
     let mode = if saw_bundle {
@@ -1231,7 +1227,7 @@ pub struct WatchArgs {
 /// boundary, and each value flag is rejected on a second occurrence.
 ///
 /// # Errors
-/// [`CliError::Usage`] / [`CliError::UsageOwned`] naming the exact problem.
+/// [`CliError::Usage`] / [`CliError::Usage`] naming the exact problem.
 pub fn parse_watch(rest: &[String]) -> Result<WatchArgs, CliError> {
     let mut it = rest.iter().peekable();
     let entry = take_leading_entry_path(&mut it);
@@ -1290,12 +1286,12 @@ pub fn parse_watch(rest: &[String]) -> Result<WatchArgs, CliError> {
 /// message names the command and points at the fix.
 ///
 /// # Errors
-/// [`CliError::UsageOwned`] on a non-numeric value or on `0`.
+/// [`CliError::Usage`] on a non-numeric value or on `0`.
 pub fn parse_port(value: &str, command: &str) -> Result<u16, CliError> {
     match value.parse::<u16>() {
-        Ok(0) => Err(CliError::UsageOwned(text::port_zero(&command))),
+        Ok(0) => Err(CliError::Usage(text::msg::port_zero(&command))),
         Ok(port) => Ok(port),
-        Err(_) => Err(CliError::UsageOwned(text::port_invalid(&command, &value))),
+        Err(_) => Err(CliError::Usage(text::msg::port_invalid(&command, &value))),
     }
 }
 
@@ -1314,7 +1310,7 @@ pub struct FixArgs {
 /// matching the sibling parsers.
 ///
 /// # Errors
-/// [`CliError::Usage`] / [`CliError::UsageOwned`] naming the exact problem.
+/// [`CliError::Usage`] / [`CliError::Usage`] naming the exact problem.
 pub fn parse_fix(rest: &[String]) -> Result<FixArgs, CliError> {
     let mut entry: Option<String> = None;
     let mut auto = false;
@@ -1327,7 +1323,7 @@ pub fn parse_fix(rest: &[String]) -> Result<FixArgs, CliError> {
             positional => set_once(&mut entry, positional.to_owned(), "<path>", "fix")?,
         }
     }
-    let entry = entry.ok_or_else(|| CliError::Usage(text::fix_usage()))?;
+    let entry = entry.ok_or_else(|| CliError::Usage(text::msg::fix_usage()))?;
     Ok(FixArgs { entry, auto })
 }
 
@@ -1343,7 +1339,7 @@ pub struct TypeCheckArgs {
 /// plus the shared `--plain` / `--json` format flags.
 ///
 /// # Errors
-/// [`CliError::UsageOwned`] on an unknown flag or a second positional argument.
+/// [`CliError::Usage`] on an unknown flag or a second positional argument.
 pub fn parse_type_check(rest: &[String]) -> Result<TypeCheckArgs, CliError> {
     let mut entry: Option<String> = None;
     let mut format: Option<OutputFormat> = None;
@@ -1380,7 +1376,7 @@ pub struct HealthArgs {
 /// plus `--yes`/`-y`. Takes no positional argument.
 ///
 /// # Errors
-/// [`CliError::UsageOwned`] on an unknown flag, a positional argument, or
+/// [`CliError::Usage`] on an unknown flag, a positional argument, or
 /// `--yes` combined with `--plain` / `--json` (a data form never mutates).
 pub fn parse_health(rest: &[String]) -> Result<HealthArgs, CliError> {
     let mut format: Option<OutputFormat> = None;
@@ -1401,7 +1397,7 @@ pub fn parse_health(rest: &[String]) -> Result<HealthArgs, CliError> {
     }
     let format = format.unwrap_or_default();
     if assume_yes && format != OutputFormat::Human {
-        return Err(CliError::Usage(text::health_yes_with_format()));
+        return Err(CliError::Usage(text::msg::health_yes_with_format()));
     }
     Ok(HealthArgs { format, assume_yes })
 }
@@ -1442,7 +1438,7 @@ pub enum FmtMode {
 /// both misuses are rejected here.
 ///
 /// # Errors
-/// [`CliError::Usage`] / [`CliError::UsageOwned`] naming the exact problem.
+/// [`CliError::Usage`] / [`CliError::Usage`] naming the exact problem.
 pub fn parse_fmt(rest: &[String]) -> Result<FmtMode, CliError> {
     let mut path: Option<String> = None;
     let mut check = false;
@@ -1460,21 +1456,21 @@ pub fn parse_fmt(rest: &[String]) -> Result<FmtMode, CliError> {
             }
             positional => {
                 if path.is_some() {
-                    return Err(CliError::Usage(text::fmt_single_path()));
+                    return Err(CliError::Usage(text::msg::fmt_single_path()));
                 }
                 path = Some(positional.to_owned());
             }
         }
     }
     if stdin && path.is_some() {
-        return Err(CliError::Usage(text::fmt_stdin_and_path()));
+        return Err(CliError::Usage(text::msg::fmt_stdin_and_path()));
     }
     let format = format.unwrap_or_default();
     if format != OutputFormat::Human && stdin {
-        return Err(CliError::Usage(text::fmt_format_with_stdin()));
+        return Err(CliError::Usage(text::msg::fmt_format_with_stdin()));
     }
     if format != OutputFormat::Human && !check {
-        return Err(CliError::Usage(text::fmt_format_needs_check()));
+        return Err(CliError::Usage(text::msg::fmt_format_needs_check()));
     }
     if stdin {
         if check {
@@ -1554,7 +1550,7 @@ mod tests {
     fn build_served_word_is_a_pedagogical_refusal() {
         let refused = parse_build(&s(&["web", "served"]));
         assert!(
-            matches!(&refused, Err(CliError::UsageOwned(m)) if m.contains("served")),
+            matches!(&refused, Err(CliError::Usage(m)) if m.contains("served")),
             "`served` must be refused as a word: {refused:?}"
         );
     }
@@ -1689,7 +1685,7 @@ mod tests {
     fn build_duplicate_out_rejected() {
         assert!(matches!(
             parse_build(&s(&["--out", "a", "--out", "b"])),
-            Err(CliError::UsageOwned(_))
+            Err(CliError::Usage(_))
         ));
     }
 
@@ -1702,7 +1698,7 @@ mod tests {
     fn build_unknown_allocator_rejected() {
         assert!(matches!(
             parse_build(&s(&["--static", "--allocator", "jemalloc"])),
-            Err(CliError::UsageOwned(_))
+            Err(CliError::Usage(_))
         ));
     }
 
@@ -1716,7 +1712,7 @@ mod tests {
     fn build_unknown_flag_rejected() {
         assert!(matches!(
             parse_build(&s(&["--bogus"])),
-            Err(CliError::UsageOwned(_))
+            Err(CliError::Usage(_))
         ));
     }
 
@@ -1936,10 +1932,7 @@ mod tests {
         // A single-dash token is a flag, not the entry path: `-z` is rejected as
         // an unknown flag rather than silently opened as a file named `-z`.
         assert!(parse_fix(&s(&["-z", "Main.ipe"])).is_err());
-        assert!(matches!(
-            parse_fix(&s(&["-z"])),
-            Err(CliError::UsageOwned(_))
-        ));
+        assert!(matches!(parse_fix(&s(&["-z"])), Err(CliError::Usage(_))));
     }
 
     #[test]
@@ -2065,7 +2058,7 @@ mod tests {
         // swallowed into the positional list.
         let err = split_format(&s(&["--nope"]), "capabilities").expect_err("must reject");
         assert!(
-            matches!(err, CliError::UsageOwned(m) if m == "ipe capabilities: unknown flag `--nope`")
+            matches!(err, CliError::Usage(m) if m == "ipe capabilities: unknown flag `--nope`")
         );
     }
 
@@ -2177,7 +2170,7 @@ mod tests {
     fn format_rejects_both_flags_together() {
         assert!(matches!(
             split_format(&s(&["--plain", "--json"]), "version"),
-            Err(CliError::UsageOwned(_))
+            Err(CliError::Usage(_))
         ));
         assert!(split_format(&s(&["--json", "--plain"]), "version").is_err());
     }
@@ -2213,7 +2206,7 @@ mod tests {
     fn release_embed_and_bundle_together_rejected() {
         assert!(matches!(
             parse_release(&s(&["--embed", "--bundle"])),
-            Err(CliError::UsageOwned(_))
+            Err(CliError::Usage(_))
         ));
         assert!(parse_release(&s(&["--bundle", "--embed"])).is_err());
     }

@@ -24,6 +24,7 @@ use semver::Version;
 
 use crate::CliError;
 use crate::api_surface::{DiffError, ModuleApi, PublicApi, extract_tree};
+use crate::published_version::PublishedVersion;
 use crate::text;
 
 /// Whether a public-API delta breaks existing users.
@@ -609,7 +610,7 @@ fn print_report(report: &SemverReport, format: crate::cli_args::OutputFormat) {
 /// invocations; it prints a notice pointing at the bare word.
 ///
 /// # Errors
-/// [`CliError::Usage`] on argument misuse, [`CliError::UsageOwned`] on a
+/// [`CliError::Usage`] on argument misuse, [`CliError::Usage`] on a
 /// malformed version, [`CliError::Diff`] when a tree cannot be read/typechecked,
 /// or [`CliError::SemverRejected`] when the verify mode finds an under-bump.
 pub fn run_diff(rest: &[String]) -> Result<(), CliError> {
@@ -625,7 +626,7 @@ const CHECK_DEPRECATION_NOTICE: &str =
 /// [`run_diff`] with the deprecation-notice sink injected, so a test can observe
 /// the alias notice without inspecting a process's stderr.
 fn run_diff_with(rest: &[String], notice: &mut dyn FnMut(&str)) -> Result<(), CliError> {
-    let usage = || CliError::Usage(text::diff_usage());
+    let usage = || CliError::Usage(text::msg::diff_usage());
 
     // Peel the deprecated `--check <old-version> <new-version>` alias FIRST, so
     // the shared format parse (which rejects any other unknown `-`-leading flag)
@@ -755,7 +756,12 @@ impl ReportBaseline {
     }
 }
 
-/// Parse a semver version argument, mapping a malformed value to a usage error.
+/// Parse a `check` version argument as a publishable version.
+///
+/// A malformed value or one carrying build metadata is a usage error: the index
+/// would refuse that version at publish, so no bump verdict is issued for it.
 fn parse_version(raw: &str) -> Result<Version, CliError> {
-    Version::parse(raw).map_err(|_| CliError::UsageOwned(text::diff_invalid_version(&raw)))
+    PublishedVersion::parse(raw)
+        .map(|version| version.as_semver().clone())
+        .map_err(|refusal| CliError::Usage(text::msg::diff_invalid_version(&refusal)))
 }

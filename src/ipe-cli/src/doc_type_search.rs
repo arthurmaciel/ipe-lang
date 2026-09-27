@@ -51,10 +51,10 @@ impl TypeSearchError {
     pub fn into_cli_error(self) -> CliError {
         match self {
             Self::UnparseableQuery { query, detail } => {
-                CliError::UsageOwned(crate::text::doc_type_invalid_query(&query, &detail))
+                CliError::Usage(crate::text::msg::doc_type_invalid_query(&query, &detail))
             }
             Self::NoMatches { query } => {
-                CliError::UsageOwned(crate::text::doc_type_no_match_hint(&query))
+                CliError::Usage(crate::text::msg::doc_type_no_match_hint(&query))
             }
         }
     }

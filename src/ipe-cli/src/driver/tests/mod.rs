@@ -1289,10 +1289,10 @@ fn on_disk_cache_hit_serves_a_tampered_entry_verbatim() {
             "module Main exposing (main)\n\nimport Ipe.Io as Io\nimport Ipe.String as String\n\nmain : Task Error ()\nmain =\n    Io.println (String.fromInt 1)\n".to_owned(),
         ),
     );
-    let discovered = vec![project::DiscoveredModule {
-        path: PathBuf::from("<cache-e2e>/Main.ipe"),
-        module_path: entry_path.clone(),
-    }];
+    let discovered = vec![project::DiscoveredModule::user(
+        PathBuf::from("<cache-e2e>/Main.ipe"),
+        entry_path.clone(),
+    )];
 
     let (result_a, outcome_a) = compile_modules_observed(
         sources.clone(),
@@ -1390,10 +1390,10 @@ fn cold_build_with_the_cache_inside_a_fresh_output_dir_claims_it() {
             "module Main exposing (main)\n\nimport Ipe.Io as Io\n\nmain : Task Error ()\nmain =\n    Io.println \"hi\"\n".to_owned(),
         ),
     );
-    let discovered = vec![project::DiscoveredModule {
-        path: PathBuf::from("<cache-in-out>/Main.ipe"),
-        module_path: entry_path.clone(),
-    }];
+    let discovered = vec![project::DiscoveredModule::user(
+        PathBuf::from("<cache-in-out>/Main.ipe"),
+        entry_path.clone(),
+    )];
 
     let build = || {
         compile_modules_observed(
@@ -1487,10 +1487,10 @@ fn build_through_planted_cache_link(tag: &str, planted: PlantedCacheLink) {
             "module Main exposing (main)\n\nimport Ipe.Io as Io\n\nmain : Task Error ()\nmain =\n    Io.println \"hi\"\n".to_owned(),
         ),
     );
-    let discovered = vec![project::DiscoveredModule {
-        path: PathBuf::from("<cache-link>/Main.ipe"),
-        module_path: entry_path.clone(),
-    }];
+    let discovered = vec![project::DiscoveredModule::user(
+        PathBuf::from("<cache-link>/Main.ipe"),
+        entry_path.clone(),
+    )];
     let build = || {
         compile_modules_observed(
             sources.clone(),
@@ -1598,10 +1598,10 @@ fn ir_cache_hit_reuses_lowered_program_across_a_db_driver_only_edit() {
             "module Main exposing (main)\n\nimport Ipe.Io as Io\nimport Ipe.String as String\n\nmain : Task Error ()\nmain =\n    Io.println (String.fromInt 1)\n".to_owned(),
         ),
     );
-    let discovered = vec![project::DiscoveredModule {
-        path: PathBuf::from("<p>/Main.ipe"),
-        module_path: entry_path.clone(),
-    }];
+    let discovered = vec![project::DiscoveredModule::user(
+        PathBuf::from("<p>/Main.ipe"),
+        entry_path.clone(),
+    )];
 
     let (result_a, outcome_a) = compile_modules_observed(
         sources.clone(),
@@ -1690,10 +1690,10 @@ fn on_disk_ir_cache_hit_serves_a_tampered_entry_verbatim() {
             "module Main exposing (main)\n\nimport Ipe.Io as Io\nimport Ipe.String as String\n\nmain : Task Error ()\nmain =\n    Io.println (String.fromInt 1)\n".to_owned(),
         ),
     );
-    let discovered = vec![project::DiscoveredModule {
-        path: PathBuf::from("<p>/Main.ipe"),
-        module_path: entry_path.clone(),
-    }];
+    let discovered = vec![project::DiscoveredModule::user(
+        PathBuf::from("<p>/Main.ipe"),
+        entry_path.clone(),
+    )];
 
     let (result_a, outcome_a) = compile_modules_observed(
         sources.clone(),
@@ -1780,10 +1780,10 @@ fn cache_dir_none_disables_caching_entirely() {
             "module Main exposing (main)\n\nimport Ipe.Io as Io\nimport Ipe.String as String\n\nmain : Task Error ()\nmain =\n    Io.println (String.fromInt 1)\n".to_owned(),
         ),
     );
-    let discovered = vec![project::DiscoveredModule {
-        path: PathBuf::from("<cache-e2e>/Main.ipe"),
-        module_path: entry_path.clone(),
-    }];
+    let discovered = vec![project::DiscoveredModule::user(
+        PathBuf::from("<cache-e2e>/Main.ipe"),
+        entry_path.clone(),
+    )];
 
     let (result, outcome) = compile_modules_observed(
         sources,
@@ -2217,7 +2217,7 @@ fn parse_audit_entry_args_requires_entry_file() {
     );
 }
 
-/// `parse_audit_entry_args` — unknown flag yields `UsageOwned`.
+/// `parse_audit_entry_args` — unknown flag yields `Usage`.
 #[test]
 fn parse_audit_entry_args_rejects_unknown_flag() {
     let args: Vec<String> = ["packages/foo.toml", "--unknown"]
@@ -2226,8 +2226,8 @@ fn parse_audit_entry_args_rejects_unknown_flag() {
         .collect();
     let err = parse_audit_entry_args(&args).unwrap_err();
     assert!(
-        matches!(err, CliError::UsageOwned(_)),
-        "unknown flag must be a UsageOwned error: {err:?}"
+        matches!(err, CliError::Usage(_)),
+        "unknown flag must be a Usage error: {err:?}"
     );
 }
 
@@ -2243,7 +2243,7 @@ fn parse_audit_entry_args_rejects_a_flag_without_its_value() {
         let err = parse_audit_entry_args(&args).unwrap_err();
         let expected = crate::text::flag_needs_value(&"package audit-entry", &flag);
         assert!(
-            matches!(&err, CliError::UsageOwned(message) if *message == expected),
+            matches!(&err, CliError::Usage(message) if *message == expected),
             "{flag} without value must be the flag-needs-value refusal: {err:?}"
         );
     }
@@ -2373,8 +2373,8 @@ fn audit_entry_rejects_when_all_versions_are_already_in_baseline() {
     .collect();
     let err = run_audit_entry(&args).unwrap_err();
     assert!(
-        matches!(err, CliError::UsageOwned(_)),
-        "no new versions must be a UsageOwned error: {err:?}"
+        matches!(err, CliError::Usage(_)),
+        "no new versions must be a Usage error: {err:?}"
     );
     let _ = std::fs::remove_dir_all(&submitted_root);
     let _ = std::fs::remove_dir_all(&baseline_root);
@@ -2425,8 +2425,8 @@ fn audit_entry_rejects_rewriting_a_published_version() {
     .collect();
     let err = run_audit_entry(&args).unwrap_err();
     assert!(
-        matches!(&err, CliError::UsageOwned(msg) if msg.contains("immutable")),
-        "rewriting a published version must be a UsageOwned reject naming immutability: {err:?}"
+        matches!(&err, CliError::Usage(msg) if msg.contains("immutable")),
+        "rewriting a published version must be a Usage reject naming immutability: {err:?}"
     );
     let _ = std::fs::remove_dir_all(&submitted_root);
     let _ = std::fs::remove_dir_all(&baseline_root);
@@ -2998,7 +2998,7 @@ fn session_is_refused_for_shapes_without_a_session() {
         ] {
             let result = gate_session(flag, shape, CompileTarget::Native);
             assert!(
-                matches!(&result, Err(CliError::UsageOwned(msg)) if msg.contains(flag)),
+                matches!(&result, Err(CliError::Usage(msg)) if msg.contains(flag)),
                 "{flag} on {shape:?} must be refused, got: {result:?}"
             );
         }
@@ -3012,7 +3012,7 @@ fn session_is_refused_for_a_wasi_run() {
     for flag in ["--record", "--replay"] {
         let result = gate_session(flag, crate::delivery::Shape::Cli, CompileTarget::WasmWasi);
         assert!(
-            matches!(&result, Err(CliError::UsageOwned(msg)) if msg.contains("wasi")),
+            matches!(&result, Err(CliError::Usage(msg)) if msg.contains("wasi")),
             "{flag} with --target wasi must be refused, got: {result:?}"
         );
     }
@@ -3057,7 +3057,7 @@ fn session_is_refused_for_a_native_bearing_program() {
         for resolved in &bearing {
             let result = gate_session_capabilities(flag, resolved);
             assert!(
-                matches!(&result, Err(CliError::UsageOwned(msg)) if msg.contains("native-bearing")),
+                matches!(&result, Err(CliError::Usage(msg)) if msg.contains("native-bearing")),
                 "{flag} on a native-bearing program must be refused, got: {result:?}"
             );
         }
@@ -3082,7 +3082,7 @@ fn replay_of_a_missing_log_is_refused_before_building() {
     for absent in ["absent.ipemsgs", "absent.ipelog"] {
         let result = replay_plan(dir.join(absent));
         assert!(
-            matches!(&result, Err(CliError::UsageOwned(msg)) if msg.contains("--record")),
+            matches!(&result, Err(CliError::Usage(msg)) if msg.contains("--record")),
             "a missing replay log must be refused: {result:?}"
         );
     }
@@ -3146,7 +3146,7 @@ fn default_replay_prefers_the_typed_log_then_the_trace() {
 
     let none = resolve_session_plan(&replay, &output);
     assert!(
-        matches!(&none, Err(CliError::UsageOwned(msg)) if msg.contains("--record")),
+        matches!(&none, Err(CliError::Usage(msg)) if msg.contains("--record")),
         "no recorded session must be refused: {none:?}"
     );
 

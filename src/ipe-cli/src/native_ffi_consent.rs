@@ -169,17 +169,17 @@ pub fn gate(
 /// The typed, fail-closed refusal naming each ungranted native crossing, its
 /// disclosing crate/module(s), and the remedy.
 fn refusal(disclosures: &[String]) -> CliError {
-    let lines: Vec<String> = std::iter::once(crate::text::native_ffi_consent_header().to_owned())
-        .chain(
-            disclosures
-                .iter()
-                .map(|item| crate::text::consent_item(item)),
-        )
-        .chain(std::iter::once(
-            crate::text::native_ffi_consent_remedy().to_owned(),
-        ))
-        .collect();
-    CliError::UsageOwned(lines.join("\n"))
+    CliError::Usage(crate::text::Message::lines(
+        std::iter::once(crate::text::msg::native_ffi_consent_header())
+            .chain(
+                disclosures
+                    .iter()
+                    .map(|item| crate::text::msg::consent_item(item)),
+            )
+            .chain(std::iter::once(
+                crate::text::msg::native_ffi_consent_remedy(),
+            )),
+    ))
 }
 
 #[cfg(test)]

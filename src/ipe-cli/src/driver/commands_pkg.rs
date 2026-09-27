@@ -90,13 +90,13 @@ impl BundleHost {
     /// — a refusal is surfaced, never panicked.
     ///
     /// # Errors
-    /// [`CliError::UsageOwned`] if the mobile OS resolution refuses (unreachable
+    /// [`CliError::Usage`] if the mobile OS resolution refuses (unreachable
     /// through the typed [`delivery::Host`]).
     pub fn from_delivery_host(host: delivery::Host) -> Result<Option<Self>, CliError> {
         let mobile = |word| {
             pack::mobile::resolve_os(Some(word))
                 .map(Self::Mobile)
-                .map_err(|r| CliError::UsageOwned(r.to_string()))
+                .map_err(|r| CliError::Usage(crate::text::Message::relay(&r)))
         };
         Ok(match host {
             delivery::Host::Default => None,
@@ -119,7 +119,7 @@ impl BundleHost {
 ///
 /// # Errors
 /// A [`pack::desktop::DesktopRefusal`] / [`pack::mobile::MobileRefusal`] wrapped
-/// as [`CliError::UsageOwned`] when the app's shape/target does not fit the host;
+/// as [`CliError::Usage`] when the app's shape/target does not fit the host;
 /// the underlying build's errors; [`CliError::Io`] on any filesystem failure.
 pub fn bundle_delivery(
     host: BundleHost,
@@ -180,14 +180,15 @@ pub fn classify_desktop_shape(
 /// source of truth for the webview requirement.
 ///
 /// # Errors
-/// [`CliError::UsageOwned`] wrapping [`pack::desktop::DesktopRefusal`] when the
+/// [`CliError::Usage`] wrapping [`pack::desktop::DesktopRefusal`] when the
 /// shape is not webview-capable.
 pub fn validate_desktop_shape(
     declared: Option<project::EntryShape>,
     root: &Path,
 ) -> Result<(), CliError> {
     let shape = classify_desktop_shape(declared, root)?;
-    pack::desktop::require_webview(shape).map_err(|r| CliError::UsageOwned(r.to_string()))
+    pack::desktop::require_webview(shape)
+        .map_err(|r| CliError::Usage(crate::text::Message::relay(&r)))
 }
 
 /// Build the [`pack::mobile::WebSpaCapability`] from the manifest's declared
@@ -219,7 +220,7 @@ pub fn classify_mobile_spa_cap(
 /// truth for the web-SPA requirement.
 ///
 /// # Errors
-/// [`CliError::UsageOwned`] wrapping [`pack::mobile::MobileRefusal`] when the
+/// [`CliError::Usage`] wrapping [`pack::mobile::MobileRefusal`] when the
 /// shape is not a wasm-enabled `Web` app.
 pub fn validate_mobile_shape(
     declared: Option<project::EntryShape>,
@@ -227,7 +228,7 @@ pub fn validate_mobile_shape(
     wasm: &project::WasmConfig,
 ) -> Result<(), CliError> {
     let cap = classify_mobile_spa_cap(declared, root, wasm)?;
-    pack::mobile::require_web_spa(cap).map_err(|r| CliError::UsageOwned(r.to_string()))
+    pack::mobile::require_web_spa(cap).map_err(|r| CliError::Usage(crate::text::Message::relay(&r)))
 }
 
 // ── Assembly seam ─────────────────────────────────────────────────────────────
@@ -306,7 +307,7 @@ impl<'a> BundleAssembler<'a> {
     /// assembly is unrepresentable.
     ///
     /// # Errors
-    /// [`CliError::UsageOwned`] wrapping a [`pack::desktop::DesktopRefusal`] when
+    /// [`CliError::Usage`] wrapping a [`pack::desktop::DesktopRefusal`] when
     /// the shape is not webview-capable; classification errors from the entry
     /// source when no shape is declared.
     pub fn gate_desktop(
@@ -325,7 +326,7 @@ impl<'a> BundleAssembler<'a> {
     /// assembly is unrepresentable.
     ///
     /// # Errors
-    /// [`CliError::UsageOwned`] wrapping a [`pack::mobile::MobileRefusal`] when
+    /// [`CliError::Usage`] wrapping a [`pack::mobile::MobileRefusal`] when
     /// the shape is not a wasm-enabled `Web` app; classification errors from the
     /// entry source when no shape is declared.
     pub fn gate_mobile(
@@ -396,7 +397,7 @@ impl<'a> BundleAssembler<'a> {
             .join(self.profile.target_subdir())
             .join(&bin_name);
         if !binary.is_file() {
-            return Err(CliError::UsageOwned(text::app_binary_missing(
+            return Err(CliError::Usage(text::msg::app_binary_missing(
                 &binary.display(),
             )));
         }
@@ -461,7 +462,7 @@ impl<'a> BundleAssembler<'a> {
             .path_to("www")?
             .path();
         let bundle = pack::mobile::SpaBundle::from_www_dir(&www_dir)
-            .map_err(|e| CliError::UsageOwned(e.to_string()))?;
+            .map_err(|e| CliError::Usage(crate::text::Message::relay(&e)))?;
 
         let layout = pack::mobile::layout(os, &identity, accepts, &bundle, icon)?;
 
@@ -505,18 +506,19 @@ impl<'a> BundleAssembler<'a> {
 /// the author can inspect it, and directs the actual build to that OS's runner.
 ///
 /// # Errors
-/// [`CliError::UsageOwned`] wrapping a [`pack::desktop::DesktopRefusal`];
+/// [`CliError::Usage`] wrapping a [`pack::desktop::DesktopRefusal`];
 /// build/emit errors from the underlying compile; [`CliError::Io`] on any
 /// filesystem failure while materialising the bundle.
 pub fn pack_desktop(profile: BundleProfile, path: Option<&str>) -> Result<(), CliError> {
     // The desktop bundle is the host OS's webview-native app; the delivery
     // grammar carries no per-OS override (a cross-OS artifact is finished on that
     // OS's own runner), so the packager always targets this host's OS.
-    let os = pack::desktop::resolve_os(None).map_err(|r| CliError::UsageOwned(r.to_string()))?;
+    let os = pack::desktop::resolve_os(None)
+        .map_err(|r| CliError::Usage(crate::text::Message::relay(&r)))?;
 
     let root = path.map_or_else(|| PathBuf::from("."), PathBuf::from);
     let manifest_path =
-        discover_manifest(&root)?.ok_or(CliError::Usage(text::pkg_not_found_in_dir()))?;
+        discover_manifest(&root)?.ok_or(CliError::Usage(text::msg::pkg_not_found_in_dir()))?;
     let manifest = project::parse_manifest(&manifest_path)?;
 
     // Gate the app shape BEFORE any build. The desktop packager is the
@@ -547,7 +549,7 @@ pub fn pack_desktop(profile: BundleProfile, path: Option<&str>) -> Result<(), Cl
 /// the actual build is directed to that OS's runner.
 ///
 /// # Errors
-/// [`CliError::UsageOwned`] wrapping a [`pack::mobile::MobileRefusal`]; the wasm
+/// [`CliError::Usage`] wrapping a [`pack::mobile::MobileRefusal`]; the wasm
 /// build's own errors; [`CliError::Io`] on any filesystem failure while
 /// collecting the bundle or materialising the shell.
 pub fn pack_mobile(
@@ -557,7 +559,7 @@ pub fn pack_mobile(
 ) -> Result<(), CliError> {
     let root = path.map_or_else(|| PathBuf::from("."), PathBuf::from);
     let manifest_path =
-        discover_manifest(&root)?.ok_or(CliError::Usage(text::pkg_not_found_in_dir()))?;
+        discover_manifest(&root)?.ok_or(CliError::Usage(text::msg::pkg_not_found_in_dir()))?;
     let manifest = project::parse_manifest(&manifest_path)?;
 
     // Gate the app's web-delivery capability BEFORE any build: it must be a
@@ -584,7 +586,7 @@ pub fn pack_mobile(
 /// carries through so a `release web solo <os>` shell hosts the production SPA.
 ///
 /// # Errors
-/// [`CliError::UsageOwned`] when this binary's path cannot be resolved or the
+/// [`CliError::Usage`] when this binary's path cannot be resolved or the
 /// wasm build exits non-zero; [`CliError::Io`] when the build cannot be spawned.
 pub fn build_wasm_for_mobile(
     manifest_path: &Path,
@@ -592,7 +594,7 @@ pub fn build_wasm_for_mobile(
     profile: BundleProfile,
 ) -> Result<(), CliError> {
     let exe = std::env::current_exe()
-        .map_err(|e| CliError::UsageOwned(text::wasm_ipe_binary_unknown(&e)))?;
+        .map_err(|e| CliError::Usage(text::msg::wasm_ipe_binary_unknown(&e)))?;
     let project_dir = manifest_path.parent().unwrap_or_else(|| Path::new("."));
     // A dev shell hosts a `build --target wasm` bundle; a release shell hosts a
     // production `release --target wasm` bundle (Debug.* gated, optimised).
@@ -611,7 +613,7 @@ pub fn build_wasm_for_mobile(
             source,
         })?;
     if !status.success() {
-        return Err(CliError::UsageOwned(text::mobile_wasm_build_failed(
+        return Err(CliError::Usage(text::msg::mobile_wasm_build_failed(
             &status.code().unwrap_or(1),
         )));
     }
@@ -629,7 +631,7 @@ pub fn build_wasm_for_mobile(
 /// word errors in that command's voice.
 ///
 /// # Errors
-/// [`CliError::UsageOwned`] on a platform word outside the closed
+/// [`CliError::Usage`] on a platform word outside the closed
 /// `ios|macos|android` set; [`CliError::Usage`] when no `package.ipe` governs the
 /// path; the manifest's own parse errors when it is malformed.
 pub fn emit_permissions(
@@ -641,11 +643,11 @@ pub fn emit_permissions(
 
     let platform = raw_platform
         .parse::<pack::permissions::Platform>()
-        .map_err(|e| CliError::UsageOwned(text::emit_permissions_failed(&verb, &e)))?;
+        .map_err(|e| CliError::Usage(text::msg::emit_permissions_failed(&verb, &e)))?;
 
     let root = path.map_or_else(|| PathBuf::from("."), PathBuf::from);
     let manifest_path =
-        discover_manifest(&root)?.ok_or(CliError::Usage(text::pkg_not_found_in_dir()))?;
+        discover_manifest(&root)?.ok_or(CliError::Usage(text::msg::pkg_not_found_in_dir()))?;
 
     let manifest = project::parse_manifest(&manifest_path)?;
     let accepts = &manifest.capabilities_accept;
@@ -717,7 +719,7 @@ pub fn emit_permissions(
 /// `audit-entry` (the index CI's authoritative receiving gate).
 ///
 /// # Errors
-/// [`CliError::UsageOwned`] on a missing or unknown subcommand; the subcommand's
+/// [`CliError::Usage`] on a missing or unknown subcommand; the subcommand's
 /// own errors (a build failure, a [`CliError::PackageAudit`] reject, or a
 /// [`CliError::Publish`] refusal) otherwise.
 pub fn run_package(rest: &[String]) -> Result<(), CliError> {
@@ -731,7 +733,7 @@ pub fn run_package(rest: &[String]) -> Result<(), CliError> {
             sub,
             "`audit`, `audit-entry`, `publish`, or `validate-entry`",
         )),
-        None => Err(CliError::Usage(text::package_usage())),
+        None => Err(CliError::Usage(text::msg::package_usage())),
     }
 }
 
@@ -746,18 +748,18 @@ pub fn run_package(rest: &[String]) -> Result<(), CliError> {
 /// it exits non-zero with the parser's diagnostic.
 ///
 /// # Errors
-/// [`CliError::Usage`] when no entry file is given; [`CliError::UsageOwned`] on a
+/// [`CliError::Usage`] when no entry file is given; [`CliError::Usage`] on a
 /// bad path or an extra argument; the parser's [`CliError::Resolve`] /
 /// [`CliError::Io`] when the entry is malformed or unreadable.
 pub fn run_validate_entry(rest: &[String]) -> Result<(), CliError> {
     let path = match rest {
         [one] => PathBuf::from(one),
         [] => {
-            return Err(CliError::Usage(text::package_validate_entry_usage()));
+            return Err(CliError::Usage(text::msg::package_validate_entry_usage()));
         }
         _ => {
-            return Err(CliError::UsageOwned(
-                text::package_validate_entry_single_path().to_owned(),
+            return Err(CliError::Usage(
+                text::msg::package_validate_entry_single_path(),
             ));
         }
     };
@@ -814,7 +816,7 @@ pub fn run_validate_entry(rest: &[String]) -> Result<(), CliError> {
 /// warn-and-pass.
 ///
 /// # Errors
-/// [`CliError::Usage`] when no entry file is given; [`CliError::UsageOwned`] on
+/// [`CliError::Usage`] when no entry file is given; [`CliError::Usage`] on
 /// argument misuse; [`CliError::Resolve`] / [`CliError::Io`] on a schema or read
 /// failure; [`CliError::HashMismatch`] on an integrity mismatch; and
 /// [`CliError::PackageAudit`] when a Tier-1 check rejects a version.
@@ -836,9 +838,11 @@ pub fn run_audit_entry(rest: &[String]) -> Result<(), CliError> {
     // Fail closed: a present-but-unreadable baseline propagates as an error
     // so the structural prechecks below never run against an empty baseline and
     // silently classify every submitted version as "new".
-    let index_root = index_root_opt.clone().unwrap_or_else(resolve::index_root);
+    let index_root = index_root_opt
+        .clone()
+        .map_or_else(resolve::index_root, Ok)?;
     let baseline: Option<index::IndexEntry> =
-        index::read_entry_lookup(&index_root, &submitted.name).require_present()?;
+        index::read_entry_lookup(&index_root, submitted.name.as_str()).require_present()?;
 
     // Structural prechecks (no fetch): version-count ceiling, per-version
     // immutability against the baseline, and source continuity (anti-squat). This
@@ -847,11 +851,13 @@ pub fn run_audit_entry(rest: &[String]) -> Result<(), CliError> {
     // the index PR directly would bypass.
     index::admission_precheck(&submitted, baseline.as_ref(), attested_actor.as_ref())?;
 
-    let baseline_by_version: std::collections::BTreeMap<&semver::Version, &index::EntryVersion> =
-        baseline
-            .as_ref()
-            .map(|e| e.versions.iter().map(|v| (&v.version, v)).collect())
-            .unwrap_or_default();
+    let baseline_by_version: std::collections::BTreeMap<
+        &crate::published_version::PublishedVersion,
+        &index::EntryVersion,
+    > = baseline
+        .as_ref()
+        .map(|e| e.versions.iter().map(|v| (&v.version, v)).collect())
+        .unwrap_or_default();
 
     // The new versions are those present in the submitted entry but absent from
     // the baseline. A PR normally adds exactly one. Each is fetched, hash-verified,
@@ -863,7 +869,7 @@ pub fn run_audit_entry(rest: &[String]) -> Result<(), CliError> {
         .collect();
 
     if new_versions.is_empty() {
-        return Err(CliError::UsageOwned(text::audit_entry_nothing_new(
+        return Err(CliError::Usage(text::msg::audit_entry_nothing_new(
             &submitted.name,
         )));
     }
@@ -871,11 +877,7 @@ pub fn run_audit_entry(rest: &[String]) -> Result<(), CliError> {
     // A scratch root for fetch caches under the standard per-user cache root
     // (the write-boundary from PRINCIPLES.md), isolated per process so concurrent
     // audit-entry runs never share a cache directory.
-    let cache_base = std::env::var_os("XDG_CACHE_HOME")
-        .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".cache")))
-        .unwrap_or_else(|| PathBuf::from(".ipe"));
-    let scratch_root = cache_base
+    let scratch_root = resolve::default_cache_base()?
         .join("ipe")
         .join(format!("audit-entry-{}", std::process::id()));
     std::fs::create_dir_all(&scratch_root).map_err(|e| CliError::Io {
@@ -892,8 +894,11 @@ pub fn run_audit_entry(rest: &[String]) -> Result<(), CliError> {
         // assert the fetched tree's sha256 equals the index pin. A mismatch is a
         // CliError::HashMismatch — the fetched bytes are not the source the
         // publisher registered, so nothing derived from them is trusted.
-        let checkout =
-            resolve::fetch_and_verify_index_version(&scratch_root, &submitted.name, version)?;
+        let checkout = resolve::fetch_and_verify_index_version(
+            &scratch_root,
+            submitted.name.as_str(),
+            version,
+        )?;
 
         // Step 4 — audit: run the full Tier-1 (+ Tier-2 where applicable) gate on
         // the verified source tree. Pass --index so the enforced-semver check reads
@@ -963,7 +968,7 @@ pub struct AuditEntryArgs {
 /// an optional `--index <dir>`, and an optional `--attested-actor <login>`.
 ///
 /// # Errors
-/// [`CliError::Usage`] when the entry file is missing; [`CliError::UsageOwned`] on
+/// [`CliError::Usage`] when the entry file is missing; [`CliError::Usage`] on
 /// an unknown flag, a missing flag value, a duplicate flag/positional, or an
 /// `--attested-actor` that is not a GitHub login.
 pub fn parse_audit_entry_args(rest: &[String]) -> Result<AuditEntryArgs, CliError> {
@@ -975,13 +980,13 @@ pub fn parse_audit_entry_args(rest: &[String]) -> Result<AuditEntryArgs, CliErro
         match arg.as_str() {
             "--attested-actor" => {
                 let value = it.next().ok_or_else(|| {
-                    CliError::UsageOwned(text::flag_needs_value(
+                    CliError::Usage(text::msg::flag_needs_value(
                         &"package audit-entry",
                         &"--attested-actor",
                     ))
                 })?;
                 if attested_actor.is_some() {
-                    return Err(CliError::UsageOwned(text::flag_repeated(
+                    return Err(CliError::Usage(text::msg::flag_repeated(
                         &"package audit-entry",
                         &"--attested-actor",
                     )));
@@ -990,10 +995,13 @@ pub fn parse_audit_entry_args(rest: &[String]) -> Result<AuditEntryArgs, CliErro
             }
             "--index" => {
                 let value = it.next().ok_or_else(|| {
-                    CliError::UsageOwned(text::flag_needs_value(&"package audit-entry", &"--index"))
+                    CliError::Usage(text::msg::flag_needs_value(
+                        &"package audit-entry",
+                        &"--index",
+                    ))
                 })?;
                 if index_root.is_some() {
-                    return Err(CliError::UsageOwned(text::flag_repeated(
+                    return Err(CliError::Usage(text::msg::flag_repeated(
                         &"package audit-entry",
                         &"--index",
                     )));
@@ -1005,13 +1013,13 @@ pub fn parse_audit_entry_args(rest: &[String]) -> Result<AuditEntryArgs, CliErro
             }
             positional => {
                 if entry_path.is_some() {
-                    return Err(CliError::Usage(text::package_audit_entry_single_path()));
+                    return Err(CliError::Usage(text::msg::package_audit_entry_single_path()));
                 }
                 entry_path = Some(PathBuf::from(positional));
             }
         }
     }
-    let entry_path = entry_path.ok_or(CliError::Usage(text::package_audit_entry_usage()))?;
+    let entry_path = entry_path.ok_or(CliError::Usage(text::msg::package_audit_entry_usage()))?;
     Ok(AuditEntryArgs {
         entry_path,
         index_root,
@@ -1435,7 +1443,7 @@ pub fn verify_test(path: Option<&str>) -> Result<(), CliError> {
 /// error: the command reports there is nothing to run and exits zero.
 ///
 /// # Errors
-/// [`CliError::UsageOwned`] on an unexpected option or extra argument.
+/// [`CliError::Usage`] on an unexpected option or extra argument.
 /// [`CliError::TestFailed`] when a test case fails (the non-zero exit contract).
 /// Otherwise any build or toolchain error from compiling the runner.
 pub fn run_test(rest: &[String]) -> Result<(), CliError> {
@@ -1511,7 +1519,7 @@ pub fn run_test_json(path: Option<&str>) -> Result<(), CliError> {
 /// immediately — no test entry means no tests to run.
 ///
 /// # Errors
-/// [`CliError::UsageOwned`] on an unexpected option or extra argument. Otherwise
+/// [`CliError::Usage`] on an unexpected option or extra argument. Otherwise
 /// the first failing stage's own error, which carries its diagnostic and drives
 /// the non-zero exit; a clean run exits 0.
 pub fn run_verify(rest: &[String]) -> Result<(), CliError> {
@@ -1742,7 +1750,7 @@ pub const INSTALL_SH_URL: &str =
 /// binary; that distinct code surfaces as [`CliError::UpgradeNoPrebuilt`].
 ///
 /// # Errors
-/// [`CliError::UsageOwned`] on an unknown flag or a non-POSIX host.
+/// [`CliError::Usage`] on an unknown flag or a non-POSIX host.
 /// [`CliError::UpgradeNoPrebuilt`] when the installer exits 2.
 /// [`CliError::UpgradeFeedUnreachable`] when the release feed is offline and
 /// `--check`/`--exit-code` are not in use.
@@ -1765,13 +1773,13 @@ pub fn run_upgrade(rest: &[String]) -> Result<(), CliError> {
             "--exit-code" => exit_code_flag = true,
             "--plain" => {
                 if format.is_some() {
-                    return Err(CliError::UsageOwned(text::plain_json_exclusive(&"upgrade")));
+                    return Err(CliError::Usage(text::msg::plain_json_exclusive(&"upgrade")));
                 }
                 format = Some(cli_args::OutputFormat::Plain);
             }
             "--json" => {
                 if format.is_some() {
-                    return Err(CliError::UsageOwned(text::plain_json_exclusive(&"upgrade")));
+                    return Err(CliError::Usage(text::msg::plain_json_exclusive(&"upgrade")));
                 }
                 format = Some(cli_args::OutputFormat::Json);
             }
@@ -1905,12 +1913,12 @@ pub fn run_upgrade(rest: &[String]) -> Result<(), CliError> {
 /// platform; any other non-zero exit is a generic failure.
 ///
 /// # Errors
-/// [`CliError::UsageOwned`] when the host is not POSIX, the installer cannot
+/// [`CliError::Usage`] when the host is not POSIX, the installer cannot
 /// be launched, or it exits with a non-zero code that is not 2.
 /// [`CliError::UpgradeNoPrebuilt`] when the installer exits 2.
 pub fn run_installer(command: &str) -> Result<(), CliError> {
     if cfg!(not(unix)) {
-        return Err(CliError::UsageOwned(text::upgrade_unsupported_platform(
+        return Err(CliError::Usage(text::msg::upgrade_unsupported_platform(
             &command,
         )));
     }
@@ -1933,14 +1941,14 @@ pub fn run_installer(command: &str) -> Result<(), CliError> {
             stage.failure(format!(
                 "Could not launch the installer (needs `sh` and `curl`): {e}"
             ));
-            return Err(CliError::UsageOwned(text::upgrade_installer_launch_failed(
+            return Err(CliError::Usage(text::msg::upgrade_installer_launch_failed(
                 &e,
             )));
         }
     };
     let status = child
         .wait()
-        .map_err(|e| CliError::UsageOwned(text::upgrade_installer_wait_failed(&e)))?;
+        .map_err(|e| CliError::Usage(text::msg::upgrade_installer_wait_failed(&e)))?;
     if status.success() {
         return Ok(());
     }
@@ -1973,9 +1981,7 @@ pub fn run_installer(command: &str) -> Result<(), CliError> {
             platform: crate::style::TerminalSafe::sanitize(&platform),
         });
     }
-    Err(CliError::UsageOwned(
-        text::upgrade_installer_failed().to_owned(),
-    ))
+    Err(CliError::Usage(text::msg::upgrade_installer_failed()))
 }
 
 /// The process exit code for `ipe upgrade --check --exit-code`, mirroring
@@ -2128,17 +2134,17 @@ pub fn verify_capabilities(
 ///
 /// Each discovered module is lowered as its own entry (with every sibling source
 /// present, so cross-module imports resolve) and their inferred capabilities are
-/// unioned. A module that fails to lower on its own — e.g. one that is only
-/// meaningful as a dependency of another — is skipped for the union rather than
-/// failing the whole inference, so a helper module never masks a sibling's real
-/// effect. Every entry links the WHOLE package source tree, exactly as
-/// `ipe build` does, so a module that does not compile at all (a name or type
-/// error, imported or not) fails every entry: the package is refused, never
-/// disclosed with that module's capabilities silently missing.
+/// unioned. Inference fails closed: when ANY entry fails to lower, the package
+/// is refused and nothing is disclosed, because a union over only the entries
+/// that lowered would silently drop the failing entry's capabilities from the
+/// consumer's consent surface. Every entry links the WHOLE package source tree,
+/// exactly as `ipe build` does, so a module that does not compile at all (a
+/// name or type error, imported or not) fails every entry and is refused the
+/// same way.
 ///
 /// # Errors
 /// [`CliError::Pipeline`] / [`CliError::Io`] when the package cannot be read or
-/// no module lowers at all; the diagnostic is framed against the module that
+/// any entry fails to lower; the diagnostic is framed against the module that
 /// owns it.
 pub fn infer_package_capabilities(
     manifest_path: &Path,
@@ -2172,8 +2178,8 @@ impl PackageSourceSet {
 
         let mut sources: BTreeMap<Vec<String>, (PathBuf, String)> = BTreeMap::new();
         for m in &entries {
-            let src = crate::io_bounded::read_walked_source(&m.path)?;
-            sources.insert(m.module_path.clone(), (m.path.clone(), src));
+            let src = crate::io_bounded::read_walked_source(m.path())?;
+            sources.insert(m.module_path().to_vec(), (m.path().to_path_buf(), src));
         }
 
         // Inject the compiled-source stdlib closure (e.g. `Ipe.Css`) just like
@@ -2185,7 +2191,7 @@ impl PackageSourceSet {
         // Inject the FFI interface modules (installed crates + the asserted-call
         // `Rust.Ffi` module) exactly as the build does, so an FFI-using module
         // lowers here and its `native-ffi`/`ffi-raw` capabilities are inferred
-        // rather than the whole module being skipped on a resolve failure.
+        // instead of the package being refused on a resolve failure.
         let ffi_injected = ffi::prepare_ffi(&mut sources, manifest_path)?.injected;
         Ok(Self {
             sources,
@@ -2197,7 +2203,9 @@ impl PackageSourceSet {
 
     /// The module path of every module lowered as an inference entry.
     pub fn entry_module_paths(&self) -> impl Iterator<Item = &[String]> {
-        self.entries.iter().map(|m| m.module_path.as_slice())
+        self.entries
+            .iter()
+            .map(crate::project::DiscoveredModule::module_path)
     }
 
     /// Number of modules in the source graph (entries plus injected modules).
@@ -2216,7 +2224,7 @@ impl PackageSourceSet {
             entries: self
                 .entries
                 .iter()
-                .filter(|m| m.module_path == module_path)
+                .filter(|m| m.module_path() == module_path)
                 .cloned()
                 .collect(),
             injected: self.injected.clone(),
@@ -2240,10 +2248,10 @@ impl PackageSourceSet {
 /// union is order-independent.
 ///
 /// # Errors
-/// [`CliError::Pipeline`] when no module lowers (the entry `Main`'s diagnostic
-/// when it fails, else the first failure), framed against the module that owns
-/// it; [`CliError::Usage`] when the package
-/// has no module at all.
+/// [`CliError::Pipeline`] when any entry fails to lower (the entry `Main`'s
+/// diagnostic when it fails, else the first failure), framed against the
+/// module that owns it; [`CliError::Usage`] when the package has no module at
+/// all.
 pub fn infer_package_capabilities_in(
     db: &ipe_db::IpeDatabase,
     package: &PackageSourceSet,
@@ -2266,54 +2274,115 @@ pub fn infer_package_capabilities_in(
     }
     ipe_db::Db::interner(db).lock().set_fresh_avoid(fresh_avoid);
 
-    let mut inferred: std::collections::BTreeSet<ipe_ir::Capability> =
-        std::collections::BTreeSet::new();
-    let mut any_lowered = false;
-    // When nothing lowers, the entry module's real diagnostic is far more useful
-    // than a generic "nothing lowered". Keep the best candidate to surface: the
-    // entry module `Main` if it fails, otherwise the first failure seen.
-    let mut lowering_error: Option<CliError> = None;
+    // The fold consumes every entry (never short-circuits), so each entry is
+    // lowered exactly once and the surfaced refusal is the most actionable one.
+    aggregate_entry_inferences(
+        package
+            .entries
+            .iter()
+            .map(|m| (m.provenance(), infer_entry(db, source_root, package, m))),
+    )
+}
 
-    // Lower each module as its own entry. A module that does not lower
-    // standalone is skipped, never fatal — its capabilities, if any, surface
-    // through whichever sibling does reach it.
-    for m in &package.entries {
-        let Some(entry_file) = source_root.files(db).get(&m.module_path).copied() else {
-            continue;
-        };
-        match ipe_db::lower_program(db, source_root, entry_file) {
-            Ok(program) => {
-                inferred.extend(capabilities_including_served_widgets(
-                    db,
-                    source_root,
-                    entry_file,
-                    program,
-                ));
-                any_lowered = true;
-            }
-            Err((diag, home)) => {
-                let is_entry = m.module_path.last().map(String::as_str) == Some("Main");
-                if lowering_error.is_none() || is_entry {
-                    lowering_error = Some(attribute_entry_lowering_error(
-                        db,
-                        source_root,
-                        package,
-                        m,
-                        entry_file,
-                        diag.clone(),
-                        home,
-                    ));
+/// One entry's capability-inference outcome: its capability set, or the
+/// refusal that blocks the whole package.
+type EntryInference = Result<std::collections::BTreeSet<ipe_ir::Capability>, CliError>;
+
+/// How early an entry's refusal is surfaced when several entries fail.
+///
+/// The user's `Main` first, then other user modules, then an injected stdlib
+/// module. A stdlib module failing to lower on its own is a compiler defect the
+/// author cannot act on, so a user diagnostic outranks it; it still refuses the
+/// package, because the stdlib is trusted to lower, not exempt from disclosure.
+const fn refusal_rank(provenance: project::ModuleProvenance) -> u8 {
+    match provenance {
+        project::ModuleProvenance::User(project::EntryRole::Main) => 0,
+        project::ModuleProvenance::User(project::EntryRole::Library) => 1,
+        project::ModuleProvenance::EmbeddedStdlib => 2,
+    }
+}
+
+/// Lower one package module as its own entry and infer its capabilities.
+///
+/// A lowering failure is a refusal framed against the module that owns it; an
+/// entry with no source file in the root is a refusal too, never a skip.
+fn infer_entry(
+    db: &ipe_db::IpeDatabase,
+    source_root: ipe_db::SourceRoot,
+    package: &PackageSourceSet,
+    module: &project::DiscoveredModule,
+) -> EntryInference {
+    let Some(entry_file) = source_root.files(db).get(module.module_path()).copied() else {
+        return Err(CliError::Pipeline {
+            file: module.path().to_path_buf(),
+            src: package
+                .sources
+                .get(module.module_path())
+                .map(|(_, s)| s.clone())
+                .unwrap_or_default(),
+            diag: Box::new(Diagnostic::CompilerBug {
+                where_: "ipe.infer_package_capabilities",
+                detail: format!(
+                    "entry module {} has no source file in the package root",
+                    module.module_path().join(".")
+                ),
+            }),
+        });
+    };
+    match ipe_db::lower_program(db, source_root, entry_file) {
+        Ok(program) => Ok(capabilities_including_served_widgets(
+            db,
+            source_root,
+            entry_file,
+            program,
+        )),
+        Err((diag, home)) => Err(attribute_entry_lowering_error(
+            db,
+            source_root,
+            package,
+            module,
+            entry_file,
+            diag.clone(),
+            home,
+        )),
+    }
+}
+
+/// Fold every entry's outcome into the package's disclosed capability set.
+///
+/// Fails closed: any refused entry refuses the whole package, since a union
+/// over only the entries that lowered would under-disclose the consumer's
+/// consent surface. An injected stdlib entry is folded under the same rule as
+/// a user entry; its provenance only lowers the precedence of its refusal (see
+/// [`refusal_rank`]), ties going to the first in entry order.
+///
+/// # Errors
+/// The selected entry refusal; [`CliError::Usage`] when there is no entry.
+fn aggregate_entry_inferences(
+    outcomes: impl IntoIterator<Item = (project::ModuleProvenance, EntryInference)>,
+) -> Result<std::collections::BTreeSet<ipe_ir::Capability>, CliError> {
+    let mut union: std::collections::BTreeSet<ipe_ir::Capability> =
+        std::collections::BTreeSet::new();
+    let mut refusal: Option<(u8, CliError)> = None;
+    let mut any_entry = false;
+    for (provenance, outcome) in outcomes {
+        any_entry = true;
+        match outcome {
+            Ok(capabilities) => union.extend(capabilities),
+            Err(err) => {
+                let rank = refusal_rank(provenance);
+                if refusal.as_ref().is_none_or(|(held, _)| rank < *held) {
+                    refusal = Some((rank, err));
                 }
             }
         }
     }
-
-    if any_lowered {
-        Ok(inferred)
-    } else {
-        // Surface the real reason the entry could not be lowered, not a generic
-        // "nothing lowered" that hides the actual compiler diagnostic.
-        Err(lowering_error.unwrap_or(CliError::Usage(text::package_capability_inference_failed())))
+    match (refusal, any_entry) {
+        (Some((_, err)), _) => Err(err),
+        (None, true) => Ok(union),
+        (None, false) => Err(CliError::Usage(
+            text::msg::package_capability_inference_no_module(),
+        )),
     }
 }
 
@@ -2335,15 +2404,15 @@ fn attribute_entry_lowering_error(
     home: &[ipe_intern::Symbol],
 ) -> CliError {
     if let Err(canon_err) =
-        attribute_canon_errors(db, source_root, &package.sources, entry_file, &entry.path)
+        attribute_canon_errors(db, source_root, &package.sources, entry_file, entry.path())
     {
         return canon_err;
     }
     let entry_source = (
-        entry.path.clone(),
+        entry.path().to_path_buf(),
         package
             .sources
-            .get(&entry.module_path)
+            .get(entry.module_path())
             .map(|(_, s)| s.clone())
             .unwrap_or_default(),
     );
@@ -2853,10 +2922,10 @@ mod pack_gate_tests {
         let err = validate_desktop_shape(Some(project::EntryShape::Terminal), Path::new("."))
             .expect_err("Terminal shape must be refused");
         assert!(
-            matches!(&err, CliError::UsageOwned(_)),
-            "expected UsageOwned, got {err:?}"
+            matches!(&err, CliError::Usage(_)),
+            "expected Usage, got {err:?}"
         );
-        let CliError::UsageOwned(msg) = err else {
+        let CliError::Usage(msg) = err else {
             return;
         };
         assert!(
@@ -2872,10 +2941,10 @@ mod pack_gate_tests {
         let err = validate_desktop_shape(Some(project::EntryShape::Program), Path::new("."))
             .expect_err("Program shape must be refused");
         assert!(
-            matches!(&err, CliError::UsageOwned(_)),
-            "expected UsageOwned, got {err:?}"
+            matches!(&err, CliError::Usage(_)),
+            "expected Usage, got {err:?}"
         );
-        let CliError::UsageOwned(msg) = err else {
+        let CliError::Usage(msg) = err else {
             return;
         };
         assert!(
@@ -2900,10 +2969,10 @@ mod pack_gate_tests {
         let err = validate_desktop_shape(Some(project::EntryShape::Web), Path::new("."))
             .expect_err("Web shape must be refused for desktop");
         assert!(
-            matches!(&err, CliError::UsageOwned(_)),
-            "expected UsageOwned, got {err:?}"
+            matches!(&err, CliError::Usage(_)),
+            "expected Usage, got {err:?}"
         );
-        let CliError::UsageOwned(msg) = err else {
+        let CliError::Usage(msg) = err else {
             return;
         };
         assert!(
@@ -2963,10 +3032,10 @@ mod pack_gate_tests {
         )
         .expect_err("Terminal shape must be refused for mobile");
         assert!(
-            matches!(&err, CliError::UsageOwned(_)),
-            "expected UsageOwned, got {err:?}"
+            matches!(&err, CliError::Usage(_)),
+            "expected Usage, got {err:?}"
         );
-        let CliError::UsageOwned(msg) = err else {
+        let CliError::Usage(msg) = err else {
             return;
         };
         assert!(
@@ -2986,10 +3055,10 @@ mod pack_gate_tests {
             validate_mobile_shape(Some(project::EntryShape::Program), Path::new("."), &wasm_on)
                 .expect_err("Program shape must be refused for mobile");
         assert!(
-            matches!(&err, CliError::UsageOwned(_)),
-            "expected UsageOwned, got {err:?}"
+            matches!(&err, CliError::Usage(_)),
+            "expected Usage, got {err:?}"
         );
-        let CliError::UsageOwned(msg) = err else {
+        let CliError::Usage(msg) = err else {
             return;
         };
         assert!(
@@ -3006,10 +3075,10 @@ mod pack_gate_tests {
         let err = validate_mobile_shape(Some(project::EntryShape::Web), Path::new("."), &wasm_off)
             .expect_err("Web shape without wasm must be refused for mobile");
         assert!(
-            matches!(&err, CliError::UsageOwned(_)),
-            "expected UsageOwned, got {err:?}"
+            matches!(&err, CliError::Usage(_)),
+            "expected Usage, got {err:?}"
         );
-        let CliError::UsageOwned(msg) = err else {
+        let CliError::Usage(msg) = err else {
             return;
         };
         assert!(
@@ -3083,5 +3152,134 @@ mod pack_gate_tests {
                 .expect("classification must succeed");
         assert!(cap.shape_is_web, "Web shape must set shape_is_web");
         assert!(!cap.wasm_enabled, "mode=None must set wasm_enabled=false");
+    }
+}
+
+// ── Capability-inference fold refusals ───────────────────────────────────────
+//
+// The fold over per-entry outcomes is the package's disclosure verdict: a
+// failed entry must refuse the package, never shrink the disclosed set.
+
+#[cfg(test)]
+mod capability_fold_tests {
+    use super::*;
+    use ipe_ir::Capability;
+    use std::collections::BTreeSet;
+
+    const MAIN: project::ModuleProvenance =
+        project::ModuleProvenance::User(project::EntryRole::Main);
+    const SIBLING: project::ModuleProvenance =
+        project::ModuleProvenance::User(project::EntryRole::Library);
+    const STDLIB: project::ModuleProvenance = project::ModuleProvenance::EmbeddedStdlib;
+
+    fn set(capabilities: &[Capability]) -> BTreeSet<Capability> {
+        capabilities.iter().copied().collect()
+    }
+
+    /// A catalog refusal that names `entry`, so each fixture refusal is distinct.
+    fn reason(entry: &str) -> crate::text::Message {
+        crate::text::msg::publish_no_version(&entry)
+    }
+
+    fn refused(entry: &str) -> EntryInference {
+        Err(CliError::Usage(reason(entry)))
+    }
+
+    /// One entry lowers with network access while its sibling fails to lower.
+    ///
+    /// The package is refused, and the lowered entry's set is not disclosed.
+    #[test]
+    fn a_failed_sibling_refuses_the_package_instead_of_under_disclosing() {
+        let verdict = aggregate_entry_inferences([
+            (MAIN, Ok(set(&[Capability::Network]))),
+            (SIBLING, refused("sibling failed to lower")),
+        ]);
+        assert!(
+            matches!(&verdict, Err(CliError::Usage(got)) if *got == reason("sibling failed to lower")),
+            "expected the sibling's refusal, got {verdict:?}"
+        );
+    }
+
+    /// A failed entry refuses the package whatever its position in entry order.
+    #[test]
+    fn a_failed_entry_refuses_regardless_of_order() {
+        let verdict = aggregate_entry_inferences([
+            (SIBLING, refused("first entry failed")),
+            (MAIN, Ok(set(&[Capability::Network]))),
+            (SIBLING, Ok(set(&[Capability::Unsafe]))),
+        ]);
+        assert!(
+            matches!(&verdict, Err(CliError::Usage(got)) if *got == reason("first entry failed")),
+            "expected the failed entry's refusal, got {verdict:?}"
+        );
+    }
+
+    /// When several entries fail, the `Main` entry's refusal is surfaced.
+    #[test]
+    fn the_main_entry_refusal_is_preferred() {
+        let verdict = aggregate_entry_inferences([
+            (SIBLING, refused("sibling failed")),
+            (MAIN, refused("main failed")),
+            (SIBLING, refused("later sibling failed")),
+        ]);
+        assert!(
+            matches!(&verdict, Err(CliError::Usage(got)) if *got == reason("main failed")),
+            "expected the Main entry's refusal, got {verdict:?}"
+        );
+    }
+
+    /// A failed injected stdlib entry refuses the package even when every user
+    /// entry lowers: trusted stdlib is never exempt from the fail-closed fold.
+    #[test]
+    fn a_failed_stdlib_entry_refuses_the_package() {
+        let verdict = aggregate_entry_inferences([
+            (MAIN, Ok(set(&[Capability::Network]))),
+            (STDLIB, refused("stdlib entry failed")),
+            (SIBLING, Ok(set(&[]))),
+        ]);
+        assert!(
+            matches!(&verdict, Err(CliError::Usage(got)) if *got == reason("stdlib entry failed")),
+            "expected the stdlib entry's refusal, got {verdict:?}"
+        );
+    }
+
+    /// A user entry's refusal outranks a stdlib entry's, whatever the order.
+    #[test]
+    fn a_user_refusal_is_preferred_over_a_stdlib_refusal() {
+        let verdict = aggregate_entry_inferences([
+            (STDLIB, refused("stdlib entry failed")),
+            (SIBLING, refused("sibling failed")),
+        ]);
+        assert!(
+            matches!(&verdict, Err(CliError::Usage(got)) if *got == reason("sibling failed")),
+            "expected the user entry's refusal, got {verdict:?}"
+        );
+    }
+
+    /// A package with no entry is refused, never disclosed as capability-free.
+    #[test]
+    fn a_package_without_entries_is_refused() {
+        let verdict = aggregate_entry_inferences(std::iter::empty());
+        assert!(
+            matches!(verdict, Err(CliError::Usage(_))),
+            "expected a refusal, got {verdict:?}"
+        );
+    }
+
+    /// When every entry lowers, the disclosed set is the union of all entries.
+    #[test]
+    fn every_entry_lowered_discloses_the_union() {
+        let verdict = aggregate_entry_inferences([
+            (MAIN, Ok(set(&[Capability::Network]))),
+            (SIBLING, Ok(set(&[Capability::Unsafe]))),
+            (SIBLING, Ok(set(&[]))),
+        ]);
+        let expected: BTreeSet<Capability> = [Capability::Network, Capability::Unsafe]
+            .into_iter()
+            .collect();
+        assert!(
+            matches!(&verdict, Ok(set) if *set == expected),
+            "expected the union {expected:?}, got {verdict:?}"
+        );
     }
 }

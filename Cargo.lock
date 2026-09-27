@@ -2977,6 +2977,7 @@ name = "ipe"
 version = "0.3.0"
 dependencies = [
  "base64 0.22.1",
+ "cap-primitives",
  "e2e-support",
  "getrandom 0.3.4",
  "hex",
@@ -3017,6 +3018,7 @@ dependencies = [
  "ureq",
  "wasmtime",
  "wasmtime-wasi",
+ "winapi-util",
 ]
 
 [[package]]
@@ -3219,6 +3221,7 @@ dependencies = [
  "ipe_diagnostics",
  "ipe_intern",
  "ipe_kernels",
+ "ipe_parse",
  "ipe_syntax",
  "proc-macro2",
  "serde",
@@ -4573,6 +4576,7 @@ name = "panic-scan"
 version = "0.0.0"
 dependencies = [
  "proc-macro2",
+ "syn 2.0.118",
 ]
 
 [[package]]

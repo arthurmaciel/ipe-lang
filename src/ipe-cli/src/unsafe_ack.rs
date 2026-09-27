@@ -150,7 +150,7 @@ pub fn pre_accepted(accept_risks_flag: bool, manifest_accept: &BTreeSet<Capabili
 /// passes the real handles.
 ///
 /// # Errors
-/// [`CliError::UsageOwned`] carrying `IPE-S0001` when consent is required but
+/// [`CliError::Usage`] carrying `IPE-S0001` when consent is required but
 /// absent (a non-interactive build, or an interactive "no").
 pub fn gate<R: std::io::BufRead, W: Write>(
     inferred: &BTreeSet<Capability>,

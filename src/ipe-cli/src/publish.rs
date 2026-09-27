@@ -39,6 +39,7 @@ use crate::scratch::{ScratchDir, ScratchFile};
 use crate::CliError;
 use crate::index::{self, CommitId, EntryVersion, IndexEntry, PinnedRev, SourceUrl};
 use crate::project::{self, ProjectManifest};
+use crate::published_version::{PublishedVersion, require_successor};
 use crate::publisher::{
     AuthenticatedPublisher, BlessedPublisher, BlessingRefusal, SelfDeclaredPublisher,
 };
@@ -131,7 +132,7 @@ const DEFAULT_INDEX_REPO: &str = "arthurmaciel/ipe-registry";
 /// print) the index PR.
 ///
 /// # Errors
-/// [`CliError::UsageOwned`] on argument misuse; [`CliError::PackageAudit`] when
+/// [`CliError::Usage`] on argument misuse; [`CliError::PackageAudit`] when
 /// the local gate rejects the package; [`CliError::Publish`] on a publish
 /// precondition (dirty tree, unpushed HEAD, duplicate version, no signing key,
 /// or an unresolvable committer identity); resolution / IO errors otherwise.
@@ -146,7 +147,7 @@ pub fn run_publish(rest: &[String]) -> Result<(), CliError> {
         compute_entry_version(&manifest, args.source.as_deref(), args.rev.as_deref())?;
 
     let claimed = SelfDeclaredPublisher::parse(&infer_publisher(entry_version.source.as_str()))
-        .map_err(|refusal| CliError::UsageOwned(text::publish_source_owner_not_login(&refusal)))?;
+        .map_err(|refusal| CliError::Usage(text::msg::publish_source_owner_not_login(&refusal)))?;
 
     // 2. Prove the publishing identity. A real publish resolves the signing key
     //    and then the authenticated account (`GET /user`) before the gate, so the
@@ -178,7 +179,7 @@ pub fn run_publish(rest: &[String]) -> Result<(), CliError> {
     //    existing entry (refusing a duplicate); `--fresh` writes a single-version
     //    entry (the new version only), used to reset the disposable reserved smoke
     //    probe so its index entry never accumulates.
-    let index_root = crate::resolve::index_root();
+    let index_root = crate::resolve::index_root()?;
     let entry_toml = if args.fresh {
         build_fresh_entry(&manifest.name, &claimed, blessing.as_ref(), &entry_version)?
     } else {
@@ -215,9 +216,7 @@ pub fn run_publish(rest: &[String]) -> Result<(), CliError> {
         .fork
         .unwrap_or_else(|| infer_publisher(entry_version.source.as_str()));
     if fork_owner == "unknown" {
-        return Err(CliError::UsageOwned(
-            text::publish_fork_owner_unknown().to_owned(),
-        ));
+        return Err(CliError::Usage(text::msg::publish_fork_owner_unknown()));
     }
 
     open_pr(&entry_toml, &plan, &fork_owner, &credentials)
@@ -226,7 +225,7 @@ pub fn run_publish(rest: &[String]) -> Result<(), CliError> {
 /// Parse `publish`'s tail into typed [`Args`].
 ///
 /// # Errors
-/// [`CliError::UsageOwned`] on an unknown flag, a missing flag value, or a second
+/// [`CliError::Usage`] on an unknown flag, a missing flag value, or a second
 /// positional.
 fn parse_args(rest: &[String]) -> Result<Args, CliError> {
     let mut path: Option<PathBuf> = None;
@@ -247,14 +246,14 @@ fn parse_args(rest: &[String]) -> Result<Args, CliError> {
             "--fork" => fork = Some(take_value(&mut it, "--fork")?),
             "--fresh" => fresh = true,
             flag if flag.starts_with('-') => {
-                return Err(CliError::UsageOwned(text::unknown_flag(
+                return Err(CliError::Usage(text::msg::unknown_flag(
                     &"package publish",
                     &flag,
                 )));
             }
             positional => {
                 if path.is_some() {
-                    return Err(CliError::Usage(text::publish_single_path()));
+                    return Err(CliError::Usage(text::msg::publish_single_path()));
                 }
                 path = Some(PathBuf::from(positional));
             }
@@ -279,7 +278,7 @@ fn take_value<'a>(
 ) -> Result<String, CliError> {
     it.next()
         .cloned()
-        .ok_or_else(|| CliError::UsageOwned(text::flag_needs_value(&"package publish", &flag)))
+        .ok_or_else(|| CliError::Usage(text::msg::flag_needs_value(&"package publish", &flag)))
 }
 
 /// Resolve `path` (a directory or a `package.ipe`) to its manifest file.
@@ -289,9 +288,9 @@ fn locate_manifest(path: &Path) -> Result<PathBuf, CliError> {
             return Ok(manifest);
         }
         if crate::project::has_only_legacy_toml(path) {
-            return Err(CliError::Usage(text::legacy_toml_hint()));
+            return Err(CliError::Usage(text::msg::legacy_toml_hint()));
         }
-        return Err(CliError::UsageOwned(text::publish_no_manifest(
+        return Err(CliError::Usage(text::msg::publish_no_manifest(
             &path.display(),
         )));
     }
@@ -300,7 +299,7 @@ fn locate_manifest(path: &Path) -> Result<PathBuf, CliError> {
     {
         return Ok(path.to_path_buf());
     }
-    Err(CliError::UsageOwned(text::publish_not_a_package(
+    Err(CliError::Usage(text::msg::publish_not_a_package(
         &path.display(),
     )))
 }
@@ -314,17 +313,15 @@ fn locate_manifest(path: &Path) -> Result<PathBuf, CliError> {
 /// reproducible revision.
 ///
 /// # Errors
-/// [`CliError::Publish`] on a publish precondition; [`CliError::UsageOwned`] when
-/// the manifest declares no version; resolution / IO errors otherwise.
+/// [`CliError::Publish`] on a publish precondition; [`CliError::Usage`] when
+/// the manifest declares no version; [`CliError::VersionRefused`] when it carries
+/// build metadata; resolution / IO errors otherwise.
 fn compute_entry_version(
     manifest: &ProjectManifest,
     source_override: Option<&str>,
     rev_override: Option<&str>,
 ) -> Result<EntryVersion, CliError> {
-    let version = manifest
-        .version
-        .clone()
-        .ok_or_else(|| CliError::UsageOwned(text::publish_no_version(&manifest.name)))?;
+    let version = manifest_published_version(manifest)?;
 
     let source_root = &manifest.root;
     let raw_source = match source_override {
@@ -334,8 +331,9 @@ fn compute_entry_version(
     // Parse-don't-validate: the typed constructor rejects any value outside the
     // transport allow-list. Publish uses the same gate as the resolver so an
     // entry written by `publish` round-trips through `read_entry` without error.
-    let source = SourceUrl::parse(&manifest.name, &raw_source)
-        .map_err(|e| CliError::UsageOwned(text::publish_source_refused(&e)))?;
+    let package_name = crate::package_name::PackageName::parse(&manifest.name)?;
+    let source = SourceUrl::parse(&package_name, &raw_source)
+        .map_err(|e| CliError::Usage(text::msg::publish_source_refused(&e)))?;
 
     // The revision is pinned as an immutable commit SHA. The default path runs
     // `committed_pushed_head` which already calls `git rev-parse HEAD` and
@@ -344,15 +342,15 @@ fn compute_entry_version(
     // as moving refs.
     let rev = if let Some(r) = rev_override {
         // Injection-gate the requested ref before passing it to git.
-        let requested = CommitId::parse(&manifest.name, r)
-            .map_err(|e| CliError::UsageOwned(text::publish_rev_refused(&e)))?;
+        let requested = CommitId::parse(&package_name, r)
+            .map_err(|e| CliError::Usage(text::msg::publish_rev_refused(&e)))?;
         let raw_sha = resolve_rev_to_sha(source_root, requested.as_str())?;
-        PinnedRev::from_full_sha(&manifest.name, &raw_sha)
-            .map_err(|e| CliError::UsageOwned(text::publish_rev_not_sha(&e)))?
+        PinnedRev::from_full_sha(&package_name, &raw_sha)
+            .map_err(|e| CliError::Usage(text::msg::publish_rev_not_sha(&e)))?
     } else {
         let raw_sha = committed_pushed_head(source_root)?;
-        PinnedRev::from_full_sha(&manifest.name, &raw_sha)
-            .map_err(|e| CliError::UsageOwned(text::publish_head_not_sha(&e)))?
+        PinnedRev::from_full_sha(&package_name, &raw_sha)
+            .map_err(|e| CliError::Usage(text::msg::publish_head_not_sha(&e)))?
     };
 
     let sha256 = crate::resolve::hash_source_tree(source_root)?;
@@ -405,9 +403,9 @@ fn resolve_rev_to_sha(root: &Path, rev: &str) -> Result<String, CliError> {
     let refspec = format!("{rev}^{{commit}}");
     let out = run_git_capture(root, &["rev-parse", "--verify", "--quiet", &refspec])?.ok_or_else(
         || {
-            CliError::Resolve(format!(
-                "ipe package publish: `git rev-parse --verify {refspec}` failed — \
-                     ref {rev:?} does not resolve to a commit"
+            CliError::Resolve(crate::text::msg::publish_rev_unresolved(
+                &crate::style::TerminalSafe::sanitize(&refspec),
+                &crate::style::TerminalSafe::sanitize(&format!("{rev:?}")),
             ))
         },
     )?;
@@ -459,16 +457,31 @@ pub fn render_entry(name: &str, publisher: &str, versions: &[EntryVersion]) -> S
     out
 }
 
+/// The manifest's version as the index will record it.
+///
+/// # Errors
+/// [`CliError::Usage`] when the manifest declares no version;
+/// [`CliError::VersionRefused`] when it carries build metadata.
+fn manifest_published_version(manifest: &ProjectManifest) -> Result<PublishedVersion, CliError> {
+    let version = manifest
+        .version
+        .clone()
+        .ok_or_else(|| CliError::Usage(text::msg::publish_no_version(&manifest.name)))?;
+    PublishedVersion::from_semver(version).map_err(|refusal| refusal.for_package(&manifest.name))
+}
+
 /// Merge `new_version` into the package's existing index entry (or create a first
 /// entry), returning the rendered entry-file TOML.
 ///
 /// Reads the current `packages/<name>.toml` from `index_root` if present, appends
 /// the new version, and re-renders. Refuses a version already published — a
-/// published version is immutable.
+/// published version is immutable — and a version that does not exceed every
+/// published one, mirroring the admission gate's monotonicity rule.
 ///
 /// # Errors
-/// [`CliError::Publish`] on a duplicate version; the reader's errors when an
-/// existing entry file is present but malformed.
+/// [`CliError::Publish`] on a duplicate version; [`CliError::VersionRefused`]
+/// when the new version is not above the greatest published one; the reader's
+/// errors when an existing entry file is present but malformed.
 fn merge_into_entry(
     index_root: &Path,
     name: &str,
@@ -490,6 +503,8 @@ fn merge_into_entry(
             version: new_version.version.to_string(),
         }));
     }
+    require_successor(versions.iter().map(|v| &v.version), &new_version.version)
+        .map_err(|refusal| refusal.for_package(name))?;
     versions.push(new_version.clone());
 
     Ok(render_entry(name, publisher, &versions))
@@ -508,7 +523,7 @@ fn merge_into_entry(
 /// caller must use the appending path.
 ///
 /// # Errors
-/// [`CliError::UsageOwned`] when the name is not reserved or the claim is not a
+/// [`CliError::Usage`] when the name is not reserved or the claim is not a
 /// proven blessed publisher (including every `--dry-run`, which carries no
 /// authenticated identity).
 fn build_fresh_entry(
@@ -518,7 +533,7 @@ fn build_fresh_entry(
     new_version: &EntryVersion,
 ) -> Result<String, CliError> {
     if ipe_kernels::reserved_package_prefix_of(name).is_none() {
-        return Err(CliError::UsageOwned(text::publish_fresh_refused(&name)));
+        return Err(CliError::Usage(text::msg::publish_fresh_refused(&name)));
     }
     match blessing {
         Ok(blessed) if blessed.vouches_for(claimed) => Ok(render_entry(
@@ -537,7 +552,7 @@ fn build_fresh_entry(
 /// The `--fresh` refusal for a reserved package whose claimed publisher is not a
 /// proven blessed identity; `reason` says why.
 fn fresh_needs_blessing(name: &str, reason: &dyn std::fmt::Display) -> CliError {
-    CliError::UsageOwned(text::publish_fresh_needs_blessing(&name, reason))
+    CliError::Usage(text::msg::publish_fresh_needs_blessing(&name, reason))
 }
 
 /// The intended pull request — everything publish would push, so `--dry-run` can
@@ -1179,17 +1194,14 @@ fn print_pr_api_fallback(plan: &PrPlan, url: &str, err: &str) {
 
 /// A scratch-filesystem failure during publish.
 fn scratch_io(e: &std::io::Error) -> CliError {
-    CliError::Resolve(format!(
-        "ipe package publish: scratch filesystem error: {e}"
-    ))
+    CliError::Resolve(crate::text::msg::publish_scratch_io(e))
 }
 
 /// Clone of the author's fork failed — most often the fork does not exist yet.
 fn clone_failed(fork_url: &str, git: &str) -> CliError {
-    CliError::Resolve(format!(
-        "ipe package publish: could not clone your index fork `{fork_url}` — publish pushes the \
-         entry to your fork, so fork the index on GitHub first (a one-time step) and make sure \
-         git can reach it.\n  git: {git}"
+    CliError::Resolve(crate::text::msg::publish_clone_failed(
+        &fork_url,
+        &crate::style::TerminalSafe::sanitize(git),
     ))
 }
 
@@ -1203,10 +1215,11 @@ fn push_failed(fork_url: &str, plan: &PrPlan, fork_owner: &str, git: &str) -> Cl
         &plan.branch,
         &plan.title,
     );
-    CliError::Resolve(format!(
-        "ipe package publish: could not push `{}` to `{fork_url}` — nothing was published. Fix \
-         the push (git credentials / fork access), then open the PR here:\n  {url}\n  git: {git}",
-        plan.branch
+    CliError::Resolve(crate::text::msg::publish_push_failed(
+        &plan.branch,
+        &fork_url,
+        &url,
+        &crate::style::TerminalSafe::sanitize(git),
     ))
 }
 
@@ -1282,11 +1295,7 @@ fn git_rev_is_pushed(root: &Path, rev: &str) -> Result<bool, CliError> {
 /// A "not a git repository" resolve error, the shared fallback when a git
 /// introspection command cannot run at `root`.
 fn not_a_repo(root: &Path) -> CliError {
-    CliError::Resolve(format!(
-        "ipe package publish: `{}` is not a git repository — publish pins a committed, pushed \
-         revision, so the package must live in a git repo (or pass `--source`/`--rev`).",
-        root.display()
-    ))
+    CliError::Resolve(crate::text::msg::publish_not_git_repo(&root.display()))
 }
 
 /// Run `git <args>` in `root`, returning its stdout on success, `None` when git
@@ -1297,7 +1306,7 @@ fn run_git_capture(root: &Path, args: &[&str]) -> Result<Option<String>, CliErro
         .args(args)
         .current_dir(root)
         .output()
-        .map_err(|e| CliError::Resolve(format!("ipe package publish: could not run `git`: {e}")))?;
+        .map_err(|e| CliError::Resolve(crate::text::msg::publish_git_unavailable(&e)))?;
     if output.status.success() {
         Ok(Some(String::from_utf8_lossy(&output.stdout).into_owned()))
     } else {
@@ -1308,8 +1317,15 @@ fn run_git_capture(root: &Path, args: &[&str]) -> Result<Option<String>, CliErro
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::published_version::VersionRefusal;
     use ipe_ir::Capability;
     use std::collections::BTreeSet;
+
+    /// A fixture package name.
+    #[allow(clippy::expect_used)] // fixture names are literal registry names
+    fn pn(raw: &str) -> crate::package_name::PackageName {
+        crate::package_name::PackageName::parse(raw).expect("fixture package name parses")
+    }
 
     fn caps(names: &[Capability]) -> BTreeSet<Capability> {
         names.iter().copied().collect()
@@ -1317,15 +1333,22 @@ mod tests {
 
     fn sample_version(v: &str, caps_set: BTreeSet<Capability>) -> EntryVersion {
         EntryVersion {
-            version: semver::Version::parse(v).expect("valid version"),
-            source: SourceUrl::parse("http-extras", "https://github.com/arthurmaciel/http-extras")
-                .expect("valid source url"),
+            version: PublishedVersion::parse(v).expect("valid version"),
+            source: SourceUrl::parse(
+                &pn("http-extras"),
+                "https://github.com/arthurmaciel/http-extras",
+            )
+            .expect("valid source url"),
             rev: PinnedRev::from_full_sha(
-                "http-extras",
+                &pn("http-extras"),
                 "9f2c7b1e0a4d5c6f8b2a1e3d4c5b6a7f8e9d0c1b",
             )
             .expect("valid pinned rev"),
-            sha256: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855".to_owned(),
+            sha256: crate::index::Sha256Hex::parse(
+                &pn("http-extras"),
+                "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            )
+            .expect("valid digest"),
             capabilities: caps_set,
             signature: None,
         }
@@ -1406,9 +1429,9 @@ mod tests {
     #[test]
     fn publish_dsse_statement_binds_the_pinned_sha256() {
         let version = sample_version("1.2.0", caps(&[Capability::Network]));
-        let stmt = crate::signing::dsse_statement("http-extras", "1.2.0", &version.sha256);
+        let stmt = crate::signing::dsse_statement("http-extras", "1.2.0", version.sha256.as_str());
         assert!(stmt.contains("http-extras@1.2.0"), "{stmt}");
-        assert!(stmt.contains(&version.sha256), "{stmt}");
+        assert!(stmt.contains(version.sha256.as_str()), "{stmt}");
     }
 
     /// Every capability wire name survives the render → read round-trip.
@@ -1530,6 +1553,88 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
+    /// A version below the greatest published one is refused at publish, before
+    /// any PR is opened, so the index never gains a release that goes backwards.
+    #[test]
+    fn a_non_greatest_version_is_a_typed_refusal() {
+        let root = temp_dir("non-greatest");
+        let packages = root.join("packages");
+        std::fs::create_dir_all(&packages).expect("packages dir");
+        let published = [
+            sample_version("1.0.0", caps(&[])),
+            sample_version("2.0.0", caps(&[])),
+        ];
+        std::fs::write(
+            packages.join("http-extras.toml"),
+            render_entry("http-extras", "arthurmaciel", &published),
+        )
+        .expect("write entry");
+
+        for below in ["1.5.0", "2.0.0-rc.1"] {
+            let candidate = sample_version(below, caps(&[]));
+            let err =
+                merge_into_entry(&root, "http-extras", "arthurmaciel", &candidate).unwrap_err();
+            assert!(
+                matches!(
+                    &err,
+                    CliError::VersionRefused { refusal, .. }
+                        if matches!(**refusal, VersionRefusal::NotAboveGreatest { .. })
+                ),
+                "{below} is below 2.0.0: {err:?}"
+            );
+        }
+
+        let above = sample_version("2.0.1-rc.1", caps(&[]));
+        merge_into_entry(&root, "http-extras", "arthurmaciel", &above)
+            .expect("a prerelease above the greatest version is a successor");
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A manifest version carrying build metadata is refused when publish parses
+    /// it, before the audit or any index read.
+    #[test]
+    fn a_build_metadata_version_is_refused_at_publish() {
+        let root = temp_dir("build-metadata");
+        let mut manifest = crate::project::ProjectManifest {
+            name: "http-extras".to_owned(),
+            version: Some("1.2.0+build.5".parse().expect("valid semver with build")),
+            root: root.clone(),
+            src_root: root.join("src"),
+            icon: None,
+            driver: ipe_backend_rust::DbDriver::default(),
+            static_request: crate::build_plan::StaticRequestLayer::default(),
+            wasm: crate::project::WasmConfig::default(),
+            dependencies: std::collections::BTreeMap::new(),
+            rust_dependencies: std::collections::BTreeMap::new(),
+            capabilities: BTreeSet::new(),
+            capabilities_accept: BTreeSet::new(),
+            control_models_accept: BTreeSet::new(),
+            has_rust_wrapper: false,
+            programs: Vec::new(),
+            exposed_modules: Vec::new(),
+            delivery: crate::project::DeliveryConfig::default(),
+        };
+        let err = manifest_published_version(&manifest).unwrap_err();
+        assert!(
+            matches!(
+                &err,
+                CliError::VersionRefused { refusal, .. }
+                    if matches!(**refusal, VersionRefusal::BuildMetadata { .. })
+            ),
+            "{err:?}"
+        );
+
+        manifest.version = Some("1.2.0".parse().expect("valid release"));
+        assert_eq!(
+            manifest_published_version(&manifest)
+                .expect("a release without build metadata is publishable")
+                .to_string(),
+            "1.2.0"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
     /// `--fresh` on a reserved-namespace package published by the blessed
     /// identity yields a single-version entry (the reset): only the new version,
     /// no accumulated history.
@@ -1591,7 +1696,7 @@ mod tests {
         let v = sample_version("0.0.0-smoke.1", caps(&[]));
         let err = build_fresh_entry("ipe-registry-smoke-probe", claimed, blessing.as_ref(), &v)
             .expect_err("an unproven blessed claim must reject --fresh");
-        assert!(matches!(err, CliError::UsageOwned(_)));
+        assert!(matches!(err, CliError::Usage(_)));
         assert!(format!("{err}").contains("--fresh"), "{err}");
     }
 
@@ -1605,7 +1710,7 @@ mod tests {
         let blessing = authenticated_blessing(ipe_kernels::BLESSED_PUBLISHER, &claimed);
         let err = build_fresh_entry("http-extras", &claimed, blessing.as_ref(), &v)
             .expect_err("a non-reserved name must reject --fresh");
-        assert!(matches!(err, CliError::UsageOwned(_)));
+        assert!(matches!(err, CliError::Usage(_)));
         assert!(format!("{err}").contains("--fresh"), "{err}");
     }
 
@@ -1774,13 +1879,13 @@ mod tests {
     #[test]
     fn unknown_flag_is_a_usage_error() {
         let err = parse_args(&["--nope".to_owned()]).unwrap_err();
-        assert!(matches!(err, CliError::UsageOwned(_)));
+        assert!(matches!(err, CliError::Usage(_)));
     }
 
     #[test]
     fn a_missing_flag_value_is_a_usage_error() {
         let err = parse_args(&["--index".to_owned()]).unwrap_err();
-        assert!(matches!(err, CliError::UsageOwned(_)));
+        assert!(matches!(err, CliError::Usage(_)));
     }
 
     /// `github_api_post` must never put the token in curl's argv — no
@@ -1955,7 +2060,7 @@ mod tests {
         );
         // PinnedRev::from_full_sha must accept it.
         assert!(
-            PinnedRev::from_full_sha("lib", &sha).is_ok(),
+            PinnedRev::from_full_sha(&pn("lib"), &sha).is_ok(),
             "HEAD SHA must be accepted by PinnedRev"
         );
         let _ = std::fs::remove_dir_all(&repo);
