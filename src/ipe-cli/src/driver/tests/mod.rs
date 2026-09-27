@@ -124,7 +124,7 @@ fn io_other_kind_stays_readable_without_errno() {
 #[test]
 fn unknown_command_screen_is_fully_guttered() {
     let err = CliError::UnknownCommand {
-        attempted: "frobnicate".to_owned(),
+        attempted: style::TerminalSafe::sanitize("frobnicate"),
     };
     let rendered = err.to_string();
     // The advice line and the help header both carry the shared gutter — no
@@ -216,12 +216,13 @@ fn emitted_build_failure_reports_missing_feature() {
     let err = CliError::EmittedBuildFailed {
         what: "the emitted program",
         code: 101,
-        stderr: "package `ipe-app` depends on `ipe-runtime-rust` with feature `regex` \
-             but `ipe-runtime-rust` does not have that feature."
-            .to_owned(),
+        stderr: style::TerminalSafe::sanitize(
+            "package `ipe-app` depends on `ipe-runtime-rust` with feature `regex` \
+             but `ipe-runtime-rust` does not have that feature.",
+        ),
         runtime: Some(RuntimeContext {
-            root: PathBuf::from("/tmp/rt"),
-            version: "0.1.34".to_owned(),
+            root: style::TerminalSafe::sanitize("/tmp/rt"),
+            version: style::TerminalSafe::sanitize("0.1.34"),
         }),
     };
     let rendered = err.to_string();
@@ -245,7 +246,7 @@ fn emitted_build_failure_reports_unattributed_as_compiler_bug() {
     let err = CliError::EmittedBuildFailed {
         what: "the emitted program",
         code: 101,
-        stderr: "error[E0425]: cannot find value `x` in this scope".to_owned(),
+        stderr: style::TerminalSafe::sanitize("error[E0425]: cannot find value `x` in this scope"),
         runtime: None,
     };
     let rendered = err.to_string();
@@ -349,7 +350,7 @@ fn explain_unknown_code_display_is_deterministic() {
 
 #[test]
 fn explain_output_ends_with_trailing_newline() {
-    // `ipe explain <CODE>` does `print!("{page}")`, so the page itself must
+    // `ipe explain <CODE>` writes the page as is, so the page itself must
     // end with a newline to avoid a missing newline at the shell prompt.
     let page = explain_lookup("IPE-T0001").expect("known code must resolve");
     assert!(
@@ -2230,18 +2231,22 @@ fn parse_audit_entry_args_rejects_unknown_flag() {
     );
 }
 
-/// `parse_audit_entry_args` — `--index` without a value yields `Usage`.
+/// `parse_audit_entry_args` — a value-taking flag without its value yields the
+/// catalog's `flag-needs-value` refusal, the one shape every such flag shares.
 #[test]
-fn parse_audit_entry_args_rejects_index_without_value() {
-    let args: Vec<String> = ["packages/foo.toml", "--index"]
-        .iter()
-        .map(ToString::to_string)
-        .collect();
-    let err = parse_audit_entry_args(&args).unwrap_err();
-    assert!(
-        matches!(err, CliError::Usage(_)),
-        "--index without value must be a Usage error: {err:?}"
-    );
+fn parse_audit_entry_args_rejects_a_flag_without_its_value() {
+    for flag in ["--index", "--attested-actor"] {
+        let args: Vec<String> = ["packages/foo.toml", flag]
+            .iter()
+            .map(ToString::to_string)
+            .collect();
+        let err = parse_audit_entry_args(&args).unwrap_err();
+        let expected = crate::text::flag_needs_value(&"package audit-entry", &flag);
+        assert!(
+            matches!(&err, CliError::UsageOwned(message) if *message == expected),
+            "{flag} without value must be the flag-needs-value refusal: {err:?}"
+        );
+    }
 }
 
 /// `parse_audit_entry_args` — two positionals yields `Usage`.

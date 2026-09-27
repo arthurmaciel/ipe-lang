@@ -15,7 +15,9 @@ use std::path::{Path, PathBuf};
 
 use crate::CliError;
 use crate::cli_args::{self, OutputFormat};
+use crate::screen::{self, Screen, Stream, Tone};
 use crate::style;
+use crate::text;
 
 /// A directory `clean` may remove.
 ///
@@ -133,11 +135,9 @@ fn project_root() -> Result<PathBuf, CliError> {
     let cwd = PathBuf::from(".");
     if crate::project::manifest_in_dir(&cwd).is_none() {
         if crate::project::has_only_legacy_toml(&cwd) {
-            return Err(CliError::Usage(crate::project::LEGACY_TOML_HINT));
+            return Err(CliError::Usage(text::legacy_toml_hint()));
         }
-        return Err(CliError::UsageOwned(
-            "clean: no package.ipe here — run it from an Ipê project root".to_owned(),
-        ));
+        return Err(CliError::UsageOwned(text::clean_no_manifest().to_owned()));
     }
     std::fs::canonicalize(&cwd).map_err(|e| CliError::Io {
         path: cwd,
@@ -238,24 +238,24 @@ fn print_summary(removed: &[String], format: OutputFormat) {
         Json => {
             use crate::cli_args::json;
             let items: Vec<String> = removed.iter().map(|s| json::string(s)).collect();
-            println!(
-                "{}",
-                json::object(&[
-                    ("schema", json::string("ipe.cli.clean/1")),
-                    ("removed", json::array(&items)),
-                ])
-            );
+            let payload = json::object(&[
+                ("schema", json::string("ipe.cli.clean/1")),
+                ("removed", json::array(&items)),
+            ]);
+            screen::emit_machine(Stream::Stdout, &format!("{payload}\n"));
         }
         Plain => {
+            let mut lines = String::new();
             for dir in removed {
-                println!("{dir}");
+                lines.push_str(dir);
+                lines.push('\n');
             }
+            screen::emit_machine(Stream::Stdout, &lines);
         }
         Human => {
-            let p = style::Palette::for_stream(&std::io::stdout());
-            // A completed clean is a success: its glyph and green tint come from
-            // the style SSOT, not a per-site glyph/colour pairing.
-            let (glyph, tint) = style::Outcome::Success.glyph_and_tint(p);
+            // A completed clean is a success: its glyph and tone come from the
+            // style SSOT, not a per-site glyph/colour pairing.
+            let glyph = style::outcome_glyph(style::Outcome::Success);
             let mut body = String::new();
             if removed.is_empty() {
                 body.push_str("Nothing to clean — no generated output found.\n");
@@ -267,10 +267,9 @@ fn print_summary(removed: &[String], format: OutputFormat) {
                 let noun = if n == 1 { "directory" } else { "directories" };
                 let _ = writeln!(body, "\nCleaned {n} generated {noun}.");
             }
-            print!(
-                "{}",
-                style::frame(&style::gutter(&format!("{tint}{body}{}", p.reset)))
-            );
+            Screen::new(Stream::Stdout)
+                .line(Tone::Success, &body)
+                .emit();
         }
     }
 }

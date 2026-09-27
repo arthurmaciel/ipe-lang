@@ -62,6 +62,7 @@ use crate::cli_args::OutputFormat;
 use crate::project::{self, ProjectManifest};
 use crate::publisher::{BlessedPublisher, BlessingRefusal, SelfDeclaredPublisher};
 use crate::scratch::ScratchDir;
+use crate::text;
 
 /// The package-gate checks, in the fixed order [`run_audit`] runs them. Naming
 /// the check that rejected lets the diagnostic say exactly which gate failed.
@@ -343,15 +344,12 @@ pub fn run_audit_as(
         // (the format parse already rejected `--plain --json` together).
         OutputFormat::Human | OutputFormat::Plain => match outcome {
             Ok((tier2, disclosure)) => {
-                print!(
-                    "{}",
-                    crate::style::frame(&crate::style::gutter(&passing_summary(
-                        &name,
-                        &version,
-                        &tier2,
-                        &disclosure
-                    )))
-                );
+                crate::screen::Screen::new(crate::screen::Stream::Stdout)
+                    .line(
+                        crate::screen::Tone::Text,
+                        &passing_summary(&name, &version, &tier2, &disclosure),
+                    )
+                    .emit();
                 Ok(())
             }
             Err(err) => Err(err),
@@ -434,7 +432,10 @@ fn emit_audit_json(
     version: &str,
     outcome: &Result<(crate::audit_native::Tier2Outcome, Disclosure), CliError>,
 ) -> Result<(), CliError> {
-    println!("{}", audit_verdict_json(name, version, outcome));
+    crate::screen::emit_machine(
+        crate::screen::Stream::Stdout,
+        &format!("{}\n", audit_verdict_json(name, version, outcome)),
+    );
 
     match outcome {
         Ok(_) => Ok(()),
@@ -565,57 +566,58 @@ fn parse_audit_args(rest: &[String]) -> Result<AuditArgs, CliError> {
     while let Some(arg) = it.next() {
         match arg.as_str() {
             "--index" => {
-                let value = it
-                    .next()
-                    .ok_or(CliError::Usage("ipe package audit: --index needs a value"))?;
+                let value = it.next().ok_or_else(|| {
+                    CliError::UsageOwned(text::flag_needs_value(&"package audit", &"--index"))
+                })?;
                 if index.is_some() {
-                    return Err(CliError::Usage(
-                        "ipe package audit: --index given more than once",
-                    ));
+                    return Err(CliError::UsageOwned(text::flag_repeated(
+                        &"package audit",
+                        &"--index",
+                    )));
                 }
                 index = Some(PathBuf::from(value));
             }
             "--advisory-db" => {
-                let value = it.next().ok_or(CliError::Usage(
-                    "ipe package audit: --advisory-db needs a value",
-                ))?;
+                let value = it.next().ok_or_else(|| {
+                    CliError::UsageOwned(text::flag_needs_value(&"package audit", &"--advisory-db"))
+                })?;
                 if advisory_db.is_some() {
-                    return Err(CliError::Usage(
-                        "ipe package audit: --advisory-db given more than once",
-                    ));
+                    return Err(CliError::UsageOwned(text::flag_repeated(
+                        &"package audit",
+                        &"--advisory-db",
+                    )));
                 }
                 if no_advisory_db {
-                    return Err(CliError::Usage(
-                        "ipe package audit: --advisory-db and --no-advisory-db are mutually exclusive",
-                    ));
+                    return Err(CliError::Usage(text::audit_advisory_db_exclusive()));
                 }
                 advisory_db = Some(PathBuf::from(value));
             }
             "--no-advisory-db" => {
                 if no_advisory_db {
-                    return Err(CliError::Usage(
-                        "ipe package audit: --no-advisory-db given more than once",
-                    ));
+                    return Err(CliError::UsageOwned(text::flag_repeated(
+                        &"package audit",
+                        &"--no-advisory-db",
+                    )));
                 }
                 if advisory_db.is_some() {
-                    return Err(CliError::Usage(
-                        "ipe package audit: --advisory-db and --no-advisory-db are mutually exclusive",
-                    ));
+                    return Err(CliError::Usage(text::audit_advisory_db_exclusive()));
                 }
                 no_advisory_db = true;
             }
             "--publisher" => {
-                let value = it.next().ok_or(CliError::Usage(
-                    "ipe package audit: --publisher needs a value",
-                ))?;
+                let value = it.next().ok_or_else(|| {
+                    CliError::UsageOwned(text::flag_needs_value(&"package audit", &"--publisher"))
+                })?;
                 if publisher.is_some() {
-                    return Err(CliError::Usage(
-                        "ipe package audit: --publisher given more than once",
-                    ));
+                    return Err(CliError::UsageOwned(text::flag_repeated(
+                        &"package audit",
+                        &"--publisher",
+                    )));
                 }
                 publisher = Some(SelfDeclaredPublisher::parse(value).map_err(|refusal| {
-                    CliError::UsageOwned(format!(
-                        "ipe package audit: --publisher {value:?} is not a GitHub login: {refusal}"
+                    CliError::UsageOwned(text::audit_publisher_not_login(
+                        &format!("{value:?}"),
+                        &refusal,
                     ))
                 })?);
             }
@@ -626,9 +628,7 @@ fn parse_audit_args(rest: &[String]) -> Result<AuditArgs, CliError> {
             }
             positional => {
                 if path.is_some() {
-                    return Err(CliError::Usage(
-                        "ipe package audit: expected a single <path> argument",
-                    ));
+                    return Err(CliError::Usage(text::audit_single_path()));
                 }
                 path = Some(PathBuf::from(positional));
             }
@@ -653,12 +653,12 @@ fn set_format(slot: &mut Option<OutputFormat>, requested: OutputFormat) -> Resul
             *slot = Some(requested);
             Ok(())
         }
-        Some(existing) if *existing == requested => Err(CliError::Usage(
-            "ipe package audit: an output-format flag was given more than once",
-        )),
-        Some(_) => Err(CliError::Usage(
-            "ipe package audit: --plain and --json are mutually exclusive",
-        )),
+        Some(existing) if *existing == requested => {
+            Err(CliError::Usage(text::audit_format_repeated()))
+        }
+        Some(_) => Err(CliError::UsageOwned(text::plain_json_exclusive(
+            &"package audit",
+        ))),
     }
 }
 
@@ -842,12 +842,10 @@ fn locate_manifest(path: &Path) -> Result<PathBuf, CliError> {
             return Ok(manifest);
         }
         if crate::project::has_only_legacy_toml(path) {
-            return Err(CliError::Usage(crate::project::LEGACY_TOML_HINT));
+            return Err(CliError::Usage(text::legacy_toml_hint()));
         }
-        return Err(CliError::UsageOwned(format!(
-            "ipe package audit: no `package.ipe` in `{}` — the gate audits a publishable Ipê \
-             package, which needs a manifest",
-            path.display()
+        return Err(CliError::UsageOwned(text::audit_no_manifest(
+            &path.display(),
         )));
     }
     if path.file_name().and_then(|n| n.to_str()) == Some(crate::package_manifest::PACKAGE_IPE)
@@ -855,9 +853,8 @@ fn locate_manifest(path: &Path) -> Result<PathBuf, CliError> {
     {
         return Ok(path.to_path_buf());
     }
-    Err(CliError::UsageOwned(format!(
-        "ipe package audit: `{}` is neither an Ipê project directory nor a package.ipe",
-        path.display()
+    Err(CliError::UsageOwned(text::audit_not_a_package(
+        &path.display(),
     )))
 }
 
@@ -1069,14 +1066,16 @@ fn capability_consistency(
             // Surfaced loudly per §1b: a package the user consents to as crossing
             // into opaque native code, whose true effect set cannot be inferred
             // from Ipê alone beyond the `native-ffi` marker itself.
-            print!(
-                "{}",
-                crate::style::frame(&crate::style::gutter(&format!(
-                    "package audit: note — `{}` exercises the `native-ffi` capability; its \
+            crate::screen::Screen::new(crate::screen::Stream::Stdout)
+                .line(
+                    crate::screen::Tone::Text,
+                    &format!(
+                        "package audit: note — `{}` exercises the `native-ffi` capability; its \
                      native effects cannot be inferred from Ipê alone.",
-                    prepared.manifest.name
-                )))
-            );
+                        prepared.manifest.name
+                    ),
+                )
+                .emit();
         }
         return Ok(());
     }
@@ -1294,15 +1293,17 @@ fn enforced_semver(prepared: &Prepared, index_root: Option<&Path>) -> Result<(),
     // must exceed every published one. So a prerelease clears this check by being
     // a prerelease, never by an API delta.
     if !new_version.pre.is_empty() {
-        print!(
-            "{}",
-            crate::style::frame(&crate::style::gutter(&format!(
-                "package audit: `{}` {new_version} is a prerelease — exempt from the \
+        crate::screen::Screen::new(crate::screen::Stream::Stdout)
+            .line(
+                crate::screen::Tone::Text,
+                &format!(
+                    "package audit: `{}` {new_version} is a prerelease — exempt from the \
                  enforced-semver API-compatibility bump (semver §9: a prerelease is unstable \
                  and is not resolved by a stable version requirement).",
-                prepared.manifest.name
-            )))
-        );
+                    prepared.manifest.name
+                ),
+            )
+            .emit();
         return Ok(());
     }
 
@@ -1313,27 +1314,31 @@ fn enforced_semver(prepared: &Prepared, index_root: Option<&Path>) -> Result<(),
     let Some(entry) =
         crate::index::read_entry_lookup(&index_root, &prepared.manifest.name).absent_or_err()?
     else {
-        print!(
-            "{}",
-            crate::style::frame(&crate::style::gutter(&format!(
-                "package audit: `{}` has no previously published version in the index — \
+        crate::screen::Screen::new(crate::screen::Stream::Stdout)
+            .line(
+                crate::screen::Tone::Text,
+                &format!(
+                    "package audit: `{}` has no previously published version in the index — \
                  skipping the enforced-semver check (first version).",
-                prepared.manifest.name
-            )))
-        );
+                    prepared.manifest.name
+                ),
+            )
+            .emit();
         return Ok(());
     };
 
     let Some(previous) = stable_baseline(&entry.versions, &new_version) else {
-        print!(
-            "{}",
-            crate::style::frame(&crate::style::gutter(&format!(
-                "package audit: `{}` has no published stable version below {new_version} — \
+        crate::screen::Screen::new(crate::screen::Stream::Stdout)
+            .line(
+                crate::screen::Tone::Text,
+                &format!(
+                    "package audit: `{}` has no published stable version below {new_version} — \
                  skipping the enforced-semver check (first stable version; a prerelease \
                  carries no compatibility promise to diff against).",
-                prepared.manifest.name
-            )))
-        );
+                    prepared.manifest.name
+                ),
+            )
+            .emit();
         return Ok(());
     };
 
@@ -1505,13 +1510,12 @@ fn supply_chain(prepared: &Prepared) -> Result<(), CliError> {
             // index CI — always installs it, so advisory/bans enforcement is
             // never actually skipped there. Locally, skip that scan with a loud
             // warning; the lockfile hash-integrity half still runs.
-            eprintln!(
-                "{}",
-                crate::style::gutter(
-                    "warning: supply-chain advisory scan skipped — cargo-deny is not installed \
+            crate::screen::chatter(
+                crate::screen::Stream::Stderr,
+                crate::screen::Tone::UserError,
+                "warning: supply-chain advisory scan skipped — cargo-deny is not installed \
                      (`cargo install cargo-deny`). The package index enforces it; lockfile hash \
-                     integrity is still verified."
-                )
+                     integrity is still verified.",
             );
             verify_locked_dependency_hashes(prepared)
         }
@@ -1575,13 +1579,12 @@ fn advisory_check(prepared: &Prepared, advisory_db: Option<&Path>) -> Result<(),
     let Some(db_root) = advisory_db else {
         // Explicit opt-out via --no-advisory-db.  Warn loudly; the check is
         // on by default and omitting --no-advisory-db is the safe path.
-        eprintln!(
-            "{}",
-            crate::style::gutter(
-                "warning: advisory-database check explicitly skipped via --no-advisory-db. \
+        crate::screen::chatter(
+            crate::screen::Stream::Stderr,
+            crate::screen::Tone::UserError,
+            "warning: advisory-database check explicitly skipped via --no-advisory-db. \
                  Remove --no-advisory-db to re-enable the default check against the registry \
-                 advisory database."
-            )
+                 advisory database.",
         );
         return Ok(());
     };
@@ -1648,13 +1651,14 @@ fn check_one_dep_advisories(
             crate::advisory::evaluate_advisories(name, version, &advisories)
         }
         crate::registry::PagesAdvisoryOutcome::Unreachable => {
-            eprintln!(
-                "{}",
-                crate::style::gutter(&format!(
+            crate::screen::chatter(
+                crate::screen::Stream::Stderr,
+                crate::screen::Tone::UserError,
+                &format!(
                     "warning: the registry advisory database was unreachable over HTTP for \
                      `{name}` — falling back to the local advisory checkout. Advisory coverage \
                      is only as fresh as that checkout."
-                ))
+                ),
             );
             crate::advisory::check_dep_advisories(db_root, name, version)
         }

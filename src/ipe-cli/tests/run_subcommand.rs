@@ -54,7 +54,7 @@ fn run_unknown_flag_returns_usage_error() {
         matches!(
             &result,
             Err(ipe::CliError::CommandUsage { command, reason })
-                if *command == "run" && reason.contains("--bogus-flag")
+                if *command == "run" && reason.as_str().contains("--bogus-flag")
         ),
         "expected a `run` command-usage error naming the offending flag, got: {result:?}"
     );

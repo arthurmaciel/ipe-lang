@@ -42,6 +42,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use crate::cli_args::OutputFormat;
+use crate::style::TerminalSafe;
 use crate::{CliError, runtime_embed, scratch::ScratchDir, style, toolchain};
 
 /// Whether a check passed, warns, is a hard miss, or cannot be known.
@@ -175,12 +176,8 @@ fn cargo_config_path() -> Result<PathBuf, CliError> {
     if let Some(cargo_home) = std::env::var_os("CARGO_HOME") {
         return Ok(PathBuf::from(cargo_home).join("config.toml"));
     }
-    let home = home_dir().ok_or_else(|| {
-        CliError::UsageOwned(
-            "health: cannot locate your home directory (neither CARGO_HOME nor HOME is set)"
-                .to_owned(),
-        )
-    })?;
+    let home = home_dir()
+        .ok_or_else(|| CliError::UsageOwned(crate::text::health_home_unknown().to_owned()))?;
     Ok(home.join(".cargo").join("config.toml"))
 }
 
@@ -368,15 +365,17 @@ pub fn run_health(rest: &[String]) -> Result<(), CliError> {
     let stdout = std::io::stdout();
     match args.format {
         OutputFormat::Plain => {
-            print!("{}", render_plain(&report));
+            crate::screen::emit_machine(crate::screen::Stream::Stdout, &render_plain(&report));
             return finish(&report);
         }
         OutputFormat::Json => {
-            print!("{}", render_json(&report));
+            crate::screen::emit_machine(crate::screen::Stream::Stdout, &render_json(&report));
             return finish(&report);
         }
         OutputFormat::Human => {
-            print!("{}", render_human(&report, &stdout));
+            crate::screen::Screen::new(crate::screen::Stream::Stdout)
+                .guttered(&render_human(&report, &stdout))
+                .emit();
         }
     }
 
@@ -392,12 +391,11 @@ pub fn run_health(rest: &[String]) -> Result<(), CliError> {
         // Reported already; a non-interactive run without `--yes` mutates
         // nothing. Point the user at the two ways to apply.
         if report.fixable().next().is_some() {
-            print!(
-                "{}",
-                style::gutter(
-                    "Run `ipe health` in a terminal to apply these interactively, or \
-                     `ipe health --yes` to apply them all.\n"
-                )
+            crate::screen::chatter(
+                crate::screen::Stream::Stdout,
+                crate::screen::Tone::Text,
+                "Run `ipe health` in a terminal to apply these interactively, or \
+                     `ipe health --yes` to apply them all.\n",
             );
         }
         return finish(&report);
@@ -423,7 +421,9 @@ pub fn run_health(rest: &[String]) -> Result<(), CliError> {
 pub(crate) fn run_health_inline() -> Result<(), CliError> {
     let report = detect();
     let stdout = std::io::stdout();
-    print!("{}", render_human(&report, &stdout));
+    crate::screen::Screen::new(crate::screen::Stream::Stdout)
+        .guttered(&render_human(&report, &stdout))
+        .emit();
     apply_fixes(&report, Consent::Interactive, &stdout);
     finish(&report)
 }
@@ -542,13 +542,9 @@ fn check_rust_toolchain() -> Vec<Check> {
             id: "cargo",
             status: Status::Missing,
             detail: format!(
-                "cargo is installed at {} but that directory is not on your PATH",
-                found_in.display()
+                "cargo is installed at {found_in} but that directory is not on your PATH"
             ),
-            suggestion: Some(format!(
-                "add it to PATH: export PATH=\"{}:$PATH\"",
-                found_in.display()
-            )),
+            suggestion: Some(format!("add it to PATH: export PATH=\"{found_in}:$PATH\"")),
             fix: None,
         },
     };
@@ -1284,10 +1280,16 @@ fn render_human(report: &Report, stream: &impl IsTerminal) -> String {
                 "  {color}{}{} {}",
                 check.status.glyph(),
                 p.reset,
-                check.detail
+                TerminalSafe::sanitize(&check.detail)
             );
             if let Some(s) = &check.suggestion {
-                let _ = writeln!(body, "    {}→ {}{}", p.dim, s, p.reset);
+                let _ = writeln!(
+                    body,
+                    "    {}→ {}{}",
+                    p.dim,
+                    TerminalSafe::sanitize(s),
+                    p.reset
+                );
             }
         }
         body.push('\n');
@@ -1305,7 +1307,7 @@ fn render_plain(report: &Report) -> String {
             "{}\t{}\t{}",
             check.id,
             check.status.tag(),
-            check.detail
+            TerminalSafe::sanitize(&check.detail)
         );
     }
     out
@@ -1351,7 +1353,7 @@ enum Answer {
 /// command could not read.
 fn ask(prompt: &str) -> Answer {
     use std::io::Write as _;
-    print!("{}", style::gutter(&format!("{prompt} [Y/n] ")));
+    crate::screen::prompt(&format!("{prompt} [Y/n] "));
     let _ = std::io::stdout().flush();
     let mut line = String::new();
     match std::io::stdin().read_line(&mut line) {
@@ -1378,13 +1380,16 @@ fn apply_fixes(report: &Report, consent: Consent, stream: &impl IsTerminal) {
     let p = style::Palette::for_stream(stream);
     // The header sits at the report's base indent; the fix bullets below it are
     // indented one level deeper so the actionable list reads as nested under it.
-    print!(
-        "{}",
-        style::gutter(&format!("\n{}Suggested fixes{}\n", p.bold, p.reset))
+    crate::screen::chatter_styled(
+        crate::screen::Stream::Stdout,
+        &crate::style::gutter(&format!("\n{}Suggested fixes{}\n", p.bold, p.reset)),
     );
     for check in fixable {
         let Some(fix) = &check.fix else { continue };
-        print!("{}", style::gutter(&fix_bullet(check, fix, p)));
+        crate::screen::chatter_styled(
+            crate::screen::Stream::Stdout,
+            &style::gutter(&fix_bullet(check, fix, p)),
+        );
         // The question hangs a blank line below the preview and sits at the
         // body column (one level deeper than the bullet) so it reads as the last
         // line of the fix, not a new item.
@@ -1393,7 +1398,11 @@ fn apply_fixes(report: &Report, consent: Consent, stream: &impl IsTerminal) {
             Consent::Interactive => ask(&format!("\n{FIX_BODY_INDENT}Apply?")) == Answer::Yes,
         };
         if !apply {
-            print!("{}", style::gutter(&format!("{FIX_BODY_INDENT}skipped.\n")));
+            crate::screen::chatter(
+                crate::screen::Stream::Stdout,
+                crate::screen::Tone::Text,
+                &format!("{FIX_BODY_INDENT}skipped.\n"),
+            );
             continue;
         }
         // The outcome leads with the status glyph — green ✓ on success, red ✗ on
@@ -1401,12 +1410,13 @@ fn apply_fixes(report: &Report, consent: Consent, stream: &impl IsTerminal) {
         match apply_one(fix) {
             Ok(outcome) => {
                 let (glyph, tint) = style::Outcome::Success.glyph_and_tint(p);
-                print!(
-                    "{}",
-                    style::gutter(&format!(
-                        "{FIX_BODY_INDENT}{tint}{glyph}{} {outcome}\n",
-                        p.reset
-                    ))
+                crate::screen::chatter_styled(
+                    crate::screen::Stream::Stdout,
+                    &crate::style::gutter(&format!(
+                        "{FIX_BODY_INDENT}{tint}{glyph}{} {}\n",
+                        p.reset,
+                        TerminalSafe::sanitize(&outcome)
+                    )),
                 );
             }
             Err(e) => {
@@ -1415,12 +1425,13 @@ fn apply_fixes(report: &Report, consent: Consent, stream: &impl IsTerminal) {
                 // command non-zero (the exit code is the diagnostic verdict, not
                 // the apply outcome).
                 let (glyph, tint) = style::Outcome::Failure.glyph_and_tint(p);
-                print!(
-                    "{}",
-                    style::gutter(&format!(
-                        "{FIX_BODY_INDENT}{tint}{glyph}{} could not apply: {e}\n",
-                        p.reset
-                    ))
+                crate::screen::chatter_styled(
+                    crate::screen::Stream::Stdout,
+                    &crate::style::gutter(&format!(
+                        "{FIX_BODY_INDENT}{tint}{glyph}{} could not apply: {}\n",
+                        p.reset,
+                        TerminalSafe::sanitize(&e.to_string())
+                    )),
                 );
             }
         }
@@ -1445,11 +1456,17 @@ fn fix_bullet(check: &Check, fix: &Fix, p: &style::Palette) -> String {
     let FixChange { change, file } = fix_change(fix);
     let mut out = format!(
         "\n{FIX_INDENT}{}• {}{}\n",
-        p.bright_yellow, check.detail, p.reset
+        p.bright_yellow,
+        TerminalSafe::sanitize(&check.detail),
+        p.reset
     );
-    let _ = writeln!(out, "{FIX_BODY_INDENT}+ {change}");
+    let _ = writeln!(
+        out,
+        "{FIX_BODY_INDENT}+ {}",
+        TerminalSafe::sanitize(&change)
+    );
     if let Some(file) = file {
-        let _ = writeln!(out, "{FIX_BODY_INDENT}{file}");
+        let _ = writeln!(out, "{FIX_BODY_INDENT}{}", TerminalSafe::sanitize(&file));
     }
     out
 }
@@ -1550,18 +1567,17 @@ fn apply_one(fix: &Fix) -> Result<String, CliError> {
 /// [`CliError::UsageOwned`] when `argv` is empty, the program cannot be
 /// launched, or it exits non-zero.
 fn run_install(argv: &[String]) -> Result<(), CliError> {
-    let (program, rest) = argv
-        .split_first()
-        .ok_or_else(|| CliError::UsageOwned("health: an install command was empty".to_owned()))?;
-    let status = Command::new(program)
-        .args(rest)
-        .status()
-        .map_err(|e| CliError::UsageOwned(format!("health: could not launch `{program}`: {e}")))?;
+    let (program, rest) = argv.split_first().ok_or_else(|| {
+        CliError::UsageOwned(crate::text::health_install_command_empty().to_owned())
+    })?;
+    let status = Command::new(program).args(rest).status().map_err(|e| {
+        CliError::UsageOwned(crate::text::health_install_launch_failed(&program, &e))
+    })?;
     if status.success() {
         Ok(())
     } else {
-        Err(CliError::UsageOwned(format!(
-            "health: `{program}` exited non-zero — nothing was changed"
+        Err(CliError::UsageOwned(crate::text::health_install_failed(
+            &program,
         )))
     }
 }
@@ -1595,10 +1611,7 @@ fn apply_config_edit(path: &Path, key: &[&str], value: &ConfigValue) -> Result<(
     };
 
     let mut doc = existing.parse::<toml_edit::DocumentMut>().map_err(|e| {
-        CliError::UsageOwned(format!(
-            "health: {} is not valid TOML ({e}); refusing to overwrite it",
-            path.display()
-        ))
+        CliError::UsageOwned(crate::text::health_config_not_toml(&path.display(), &e))
     })?;
 
     // Idempotent: if the key already holds exactly this value, no write, no
@@ -1621,10 +1634,9 @@ fn apply_config_edit(path: &Path, key: &[&str], value: &ConfigValue) -> Result<(
     // Parse-verify BEFORE the write becomes live: a render that does not
     // round-trip is a bug, and we roll back rather than write it.
     if rendered.parse::<toml_edit::DocumentMut>().is_err() {
-        return Err(CliError::UsageOwned(format!(
-            "health: the edited config for {} did not re-parse; no change was made",
-            path.display()
-        )));
+        return Err(CliError::UsageOwned(
+            crate::text::health_config_edit_unparsable(&path.display()),
+        ));
     }
 
     if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {

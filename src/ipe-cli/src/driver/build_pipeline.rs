@@ -2,7 +2,7 @@ use super::{CliError, diag_span, io_err};
 use crate::output_dir::{OwnedDir, OwnedPath};
 use crate::{
     BTreeMap, BTreeSet, Diagnostic, Interner, Path, PathBuf, build_plan, cache, contained_path,
-    ffi, fs, project, render, runtime_embed,
+    ffi, fs, project, render, runtime_embed, text,
 };
 
 /// Options modifying a build beyond plain source compilation — some (the
@@ -1157,14 +1157,10 @@ pub fn attribute_canon_errors(
         })?;
     for mod_path in topo.iter() {
         let Some((path, src)) = sources.get(mod_path) else {
-            return Err(CliError::Usage(
-                "internal: module in topo order not in source map",
-            ));
+            return Err(CliError::Usage(text::internal_module_not_in_source_map()));
         };
         let Some(file_handle) = source_root.files(db).get(mod_path).copied() else {
-            return Err(CliError::Usage(
-                "internal: module in topo order not in source map",
-            ));
+            return Err(CliError::Usage(text::internal_module_not_in_source_map()));
         };
         ipe_db::canonicalize(db, source_root, file_handle)
             .clone()
@@ -1260,7 +1256,7 @@ pub fn compile_prepared(
     let shared_interner = ipe_db::Db::interner(db).clone();
 
     let Some(entry_file) = source_root.files(db).get(entry_path).copied() else {
-        return Err(CliError::Usage("internal: entry module not in source map"));
+        return Err(CliError::Usage(text::internal_entry_not_in_source_map()));
     };
 
     // Canonicalise each module in dep-first order, attributing a canon error
@@ -1509,7 +1505,10 @@ pub fn compile_prepared(
     for w in &types.warnings {
         let span = diag_span(w);
         let (w_file, w_src) = source_for_span(span);
-        eprintln!("{}", render(w, &w_file.to_string_lossy(), &w_src));
+        crate::screen::chatter_styled(
+            crate::screen::Stream::Stderr,
+            &render(w, &w_file.to_string_lossy(), &w_src),
+        );
     }
     // Attribute lower / backend diagnostics to the source file that OWNS the
     // failing span, not blindly to the entry file. After link, every module's
@@ -2259,11 +2258,7 @@ pub fn build_project_with_options(
         && !manifest.exposed_modules.is_empty()
         && !sources.contains_key(&entry_path)
     {
-        return Err(CliError::Usage(
-            "this is a library package (it declares `exposedModules` and no runnable program) — \
-             there is no entry to build. Use `ipe type-check` to verify its public surface, or \
-             add a `Package.programs [ … ]` stage to declare a runnable entry",
-        ));
+        return Err(CliError::Usage(text::library_package_no_entry()));
     }
     // The emit epilogue's fixed `fn main` calls `ipe_main`, which the backend
     // names only for a `main` in module `Main`. A `programs`-declared entry in a
@@ -2272,12 +2267,8 @@ pub fn build_project_with_options(
     // so emitting a non-`Main` program entry would miscompile. Refuse cleanly and
     // point at the working analysis path rather than emit a broken crate.
     if entry_path != ["Main".to_owned()] {
-        return Err(CliError::UsageOwned(format!(
-            "program entry module `{}` is not yet buildable — a declared `programs` entry outside \
-             module `Main` type-checks (`ipe type-check`) but native emission still assumes a \
-             `Main` entry. Name the entry file `Main.ipe`, or track the multi-program emit \
-             follow-up",
-            entry_path.join(".")
+        return Err(CliError::UsageOwned(text::build_entry_not_main(
+            &entry_path.join("."),
         )));
     }
 
