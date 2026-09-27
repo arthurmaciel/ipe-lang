@@ -13,6 +13,8 @@
 //! | `boxed_fn_payload_enum_reuse_fails_closed` | `H (Maybe (Int -> Int))` param reused | IPE-L0127 |
 //! | `boxed_fn_payload_enum_linear_builds` | same enum used once | builds + prints `42` |
 //! | `shared_fn_payload_enum_reuse_builds` | `G (Int -> Int)` param reused | builds + prints `30` |
+//! | `enum_recursive_through_a_task_builds` | `Next Int (Task Error Stream)` param | builds + prints `7` |
+//! | `enums_mutually_recursive_through_tasks_build` | `Ping` / `Pong` through `Task` | builds + prints `3` |
 //!
 //! ```text
 //! cargo test -p ipe --test g_misc golden_enum_fn_payload_reuse_seal
@@ -87,11 +89,18 @@ fn assert_rejected(name: &str, entry: &Path, expected: ipe_diagnostics::Code) {
     }
 }
 
-/// Build `entry`; `None` when the runtime is unavailable or `ipe` refused it
-/// (the refusal is reported as a test failure).
+/// Build `entry`; `None` when the runtime is unavailable or `ipe` refused it.
+///
+/// Both `None` cases are reported as test failures, so a caller that returns
+/// on `None` never passes without driving the pipeline.
 #[track_caller]
 fn accepted_out(name: &str, entry: &Path) -> Option<PathBuf> {
-    let runtime = ipe::resolve_runtime().ok()?;
+    let runtime = ipe::resolve_runtime();
+    assert!(
+        runtime.is_ok(),
+        "{name}: runtime must resolve to prove the program is accepted: {runtime:?}"
+    );
+    let runtime = runtime.ok()?;
     let out = out_dir(name);
     match ipe::build_with_sibling_discovery(entry, &out, &runtime) {
         Ok(()) => Some(out),
@@ -196,6 +205,63 @@ main =
     Io.println (String.fromInt (both (G (\n -> n * 10))))
 "#;
 
+/// A type recursive through the value a `Task` yields; classifying the `Stream`
+/// parameter walks that cycle and must terminate.
+const ENUM_RECURSIVE_THROUGH_A_TASK: &str = r#"module Main exposing (main)
+
+import Ipe.Io as Io
+import Ipe.String as String
+
+
+type Stream
+    = Next Int (Task Error Stream)
+    | End
+
+
+headOr : Int -> Stream -> Int
+headOr fallback s =
+    case s of
+        Next n _ ->
+            n
+
+        End ->
+            fallback
+
+
+main =
+    Io.println (String.fromInt (headOr 7 End))
+"#;
+
+/// Two types recursive through each other's `Task` results.
+const ENUMS_MUTUALLY_RECURSIVE_THROUGH_TASKS: &str = r#"module Main exposing (main)
+
+import Ipe.Io as Io
+import Ipe.String as String
+
+
+type Ping
+    = Go (Task Error Pong)
+    | Stop Int
+
+
+type Pong
+    = Back Int (Task Error Ping)
+
+
+pingOr : Int -> Ping -> Int
+pingOr fallback p =
+    case p of
+        Go _ ->
+            fallback
+
+        Stop n ->
+            n
+
+
+main =
+    Io.println (String.fromInt (pingOr 0 (Stop 3)))
+"#;
+
 #[test]
 fn boxed_fn_payload_enum_reuse_fails_closed() {
     let name = "boxed_fn_payload_enum_reuse";
@@ -227,4 +293,28 @@ fn shared_fn_payload_enum_reuse_builds() {
         return;
     };
     assert_runs(name, &out, "30");
+}
+
+#[test]
+fn enum_recursive_through_a_task_builds() {
+    let name = "enum_recursive_through_a_task";
+    let Some(entry) = write_single(name, ENUM_RECURSIVE_THROUGH_A_TASK) else {
+        return;
+    };
+    let Some(out) = accepted_out(name, &entry) else {
+        return;
+    };
+    assert_runs(name, &out, "7");
+}
+
+#[test]
+fn enums_mutually_recursive_through_tasks_build() {
+    let name = "enums_mutually_recursive_through_tasks";
+    let Some(entry) = write_single(name, ENUMS_MUTUALLY_RECURSIVE_THROUGH_TASKS) else {
+        return;
+    };
+    let Some(out) = accepted_out(name, &entry) else {
+        return;
+    };
+    assert_runs(name, &out, "3");
 }
