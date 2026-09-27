@@ -240,10 +240,113 @@ fn kernel_ref_binds_fn_element(kernel: KernelFn, ty: &Ty) -> bool {
                 .take(scheme_mapper_arity(shape, arg))
                 .enumerate()
                 .any(|(param, param_ty)| {
-                    matches!(param_ty, Ty::Fun(..))
-                        && ipe_kernels::mapper_param_binds_stored_element(shape, arity, arg, param)
+                    mapper_param_binds_fn_element(shape, arity, arg, param, param_ty)
                 })
         })
+}
+
+/// Whether parameter `param` (solved type `ty`) of the mapper at kernel
+/// position `arg` receives a stored FUNCTION element — the parameter the
+/// carrier choke point re-carries to `Arc`.
+const fn mapper_param_binds_fn_element(
+    shape: &ipe_kernels::TyShape,
+    arity: u8,
+    arg: usize,
+    param: usize,
+    ty: &Ty,
+) -> bool {
+    matches!(ty, Ty::Fun(..))
+        && ipe_kernels::mapper_param_binds_stored_element(shape, arity, arg, param)
+}
+
+/// A mapper's solved type split along its scheme spine: exactly the
+/// parameters the kernel scheme applies it to, and the type that remains.
+struct MapperSpine<'t> {
+    params: Vec<&'t Ty>,
+    ret: &'t Ty,
+}
+
+impl<'t> MapperSpine<'t> {
+    /// Split `mapper_ty` after the scheme's mapper arity at kernel position
+    /// `arg`; `None` when the solved type has fewer arrows than the scheme
+    /// applies.
+    fn peel(shape: &ipe_kernels::TyShape, arg: usize, mapper_ty: &'t Ty) -> Option<Self> {
+        let spine = scheme_mapper_arity(shape, arg);
+        let mut params = Vec::with_capacity(spine);
+        let mut ret = mapper_ty;
+        for _ in 0..spine {
+            let Ty::Fun(param, rest) = ret else {
+                return None;
+            };
+            params.push(param.as_ref());
+            ret = rest.as_ref();
+        }
+        Some(Self { params, ret })
+    }
+}
+
+/// The eta-parameter symbols mapper wraps ([`Lowerer::wrap_mapper_value`])
+/// draw — the one count the eta pool budget
+/// ([`max_mapper_wrap_eta_demand`]) reserves and the wrapper is checked
+/// against.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+struct EtaDemand(usize);
+
+impl EtaDemand {
+    /// The draw of one mapper wrap at kernel position `arg`: nothing when no
+    /// spine parameter binds a stored function element (the mapper is left
+    /// untouched); otherwise the holder, one wrapper parameter per spine slot,
+    /// and one demote-adapter parameter per arrow parameter of each bound
+    /// function.
+    fn mapper_wrap(
+        shape: &ipe_kernels::TyShape,
+        arity: u8,
+        arg: usize,
+        spine: &MapperSpine<'_>,
+    ) -> Self {
+        let mut bound = spine
+            .params
+            .iter()
+            .enumerate()
+            .filter(|(param, ty)| mapper_param_binds_fn_element(shape, arity, arg, *param, ty))
+            .peekable();
+        if bound.peek().is_none() {
+            return Self(0);
+        }
+        let demote = bound.fold(0_usize, |acc, (_, ty)| {
+            acc.saturating_add(arrow_params(ty).len())
+        });
+        Self(spine.params.len().saturating_add(1).saturating_add(demote))
+    }
+
+    /// The draw of wrapping every mapper argument of `kernel`, given the solved
+    /// type of the argument at each kernel position (`None` when unknown, which
+    /// the wrapper refuses before drawing).
+    fn kernel_mappers<'t>(
+        kernel: KernelFn,
+        arg_tys: impl IntoIterator<Item = Option<&'t Ty>>,
+    ) -> Self {
+        let Some(shape) = kernel.scheme_shape() else {
+            return Self(0);
+        };
+        let arity = kernel.def().arity;
+        arg_tys
+            .into_iter()
+            .enumerate()
+            .filter_map(|(arg, ty)| {
+                let spine = MapperSpine::peel(shape, arg, ty?)?;
+                Some(Self::mapper_wrap(shape, arity, arg, &spine))
+            })
+            .fold(Self(0), Self::saturating_add)
+    }
+
+    const fn saturating_add(self, other: Self) -> Self {
+        Self(self.0.saturating_add(other.0))
+    }
+
+    const fn count(self) -> usize {
+        self.0
+    }
 }
 
 /// Whether `t` still holds a type variable anywhere, an open record row tail included.
@@ -11968,6 +12071,101 @@ pub fn module_symbol_pool_counts(m: &canon::Module, interner: &Interner) -> Pool
     counts
 }
 
+/// The widest per-def total of eta symbols mapper wraps can draw
+/// ([`EtaDemand`]), for the eta pool to reserve on top of
+/// [`module_symbol_pool_counts`]' per-site charges.
+#[must_use]
+pub fn max_mapper_wrap_eta_demand(m: &canon::Module, types: &SolvedTypes) -> usize {
+    m.defs
+        .iter()
+        .map(|d| {
+            let body = match d {
+                canon::Def::Typed { body, .. } | canon::Def::Untyped { body, .. } => body,
+            };
+            mapper_wrap_eta_demand(body, d.home(), types).count()
+        })
+        .max()
+        .unwrap_or(0)
+}
+
+/// The eta symbols every mapper wrap in `body` can draw, summed.
+///
+/// A wrap reads its mapper's type from the kernel reference's solved arrow
+/// (a partial or bare reference) or from the argument's own region (a
+/// saturated call); both are charged, so the sum covers whichever the
+/// lowering reads. The walk is an explicit work stack over the canonical
+/// tree, whose size the parser's limits already bound.
+fn mapper_wrap_eta_demand(body: &canon::Expr, home: &[Symbol], types: &SolvedTypes) -> EtaDemand {
+    let region = |span: Span| types.regions.get(&(home.to_vec(), span));
+    let mut total = EtaDemand::default();
+    let mut work: Vec<&canon::Expr> = vec![body];
+    while let Some(e) = work.pop() {
+        match &e.value {
+            canon::Expr_::VarKernel {
+                id: Some(kernel), ..
+            } => {
+                if let Some(ty) = region(e.span) {
+                    let at_ref =
+                        EtaDemand::kernel_mappers(*kernel, arrow_params(ty).into_iter().map(Some));
+                    total = total.saturating_add(at_ref);
+                }
+            }
+            canon::Expr_::Lambda(_, inner) | canon::Expr_::Access(inner, _) => work.push(inner),
+            canon::Expr_::Call(callee, args) => {
+                if let canon::Expr_::VarKernel {
+                    id: Some(kernel), ..
+                } = &callee.value
+                {
+                    let at_args =
+                        EtaDemand::kernel_mappers(*kernel, args.iter().map(|a| region(a.span)));
+                    total = total.saturating_add(at_args);
+                }
+                work.extend(args.iter().rev());
+                work.push(callee);
+            }
+            canon::Expr_::ForeignCall { args, .. }
+            | canon::Expr_::Tuple(args)
+            | canon::Expr_::List(args) => work.extend(args.iter().rev()),
+            canon::Expr_::Binop { lhs, rhs, .. } | canon::Expr_::Cons(lhs, rhs) => {
+                work.push(rhs);
+                work.push(lhs);
+            }
+            canon::Expr_::Case(scrutinee, branches) => {
+                work.extend(branches.iter().rev().map(|b| &b.body));
+                work.push(scrutinee);
+            }
+            canon::Expr_::Let(bindings, inner) => {
+                work.push(inner);
+                work.extend(bindings.iter().rev().map(|b| &b.body));
+            }
+            canon::Expr_::If(branches, else_expr) => {
+                work.push(else_expr);
+                for (cond, then) in branches.iter().rev() {
+                    work.push(then);
+                    work.push(cond);
+                }
+            }
+            canon::Expr_::Record(fields) => work.extend(fields.iter().rev().map(|(_, v)| v)),
+            canon::Expr_::Update(base, fields) => {
+                work.extend(fields.iter().rev().map(|(_, v)| v));
+                work.push(base);
+            }
+            canon::Expr_::VarKernel { id: None, .. }
+            | canon::Expr_::VarLocal(_)
+            | canon::Expr_::VarTopLevel { .. }
+            | canon::Expr_::VarCtor { .. }
+            | canon::Expr_::Int(_)
+            | canon::Expr_::Float(_)
+            | canon::Expr_::Str(_)
+            | canon::Expr_::PathLit(_)
+            | canon::Expr_::CustomElementCtor(_)
+            | canon::Expr_::Char(_)
+            | canon::Expr_::Unit => {}
+        }
+    }
+    total
+}
+
 /// Every pre-minted, collision-free synthetic-symbol pool [`Lowerer::new`]
 /// needs — bundled into one argument so the constructor stays under
 /// clippy's arg-count ceiling. Each field is documented at its matching
@@ -22568,27 +22766,21 @@ impl<'a> Lowerer<'a> {
         span: Span,
     ) -> DResult<()> {
         let refuse = || unsupported(span, Feature::FunctionElementEquality);
-        let spine = scheme_mapper_arity(shape, arg);
-        let mut param_tys: Vec<&Ty> = Vec::with_capacity(spine);
-        let mut ret_ty = mapper_ty;
-        for _ in 0..spine {
-            let Ty::Fun(param, rest) = ret_ty else {
-                return Err(refuse());
-            };
-            param_tys.push(&**param);
-            ret_ty = &**rest;
-        }
-        let bound = |param: usize, ty: &Ty| {
-            matches!(ty, Ty::Fun(..))
-                && ipe_kernels::mapper_param_binds_stored_element(shape, arity, arg, param)
+        let Some(peeled) = MapperSpine::peel(shape, arg, mapper_ty) else {
+            return Err(refuse());
         };
-        if !param_tys
-            .iter()
-            .enumerate()
-            .any(|(param, ty)| bound(param, ty))
-        {
+        let demand = EtaDemand::mapper_wrap(shape, arity, arg, &peeled);
+        if demand == EtaDemand::default() {
             return Ok(());
         }
+        let drawn_from = self.eta_base.get();
+        let MapperSpine {
+            params: param_tys,
+            ret: ret_ty,
+        } = peeled;
+        let spine = param_tys.len();
+        let bound =
+            |param: usize, ty: &Ty| mapper_param_binds_fn_element(shape, arity, arg, param, ty);
         let ret = self.ir_type_from_ty(ret_ty, span).map_err(|_| refuse())?;
         let holder = self.eta_sym(0)?;
         let mut wrapper_params: Vec<(Symbol, IrType)> = Vec::with_capacity(spine);
@@ -22618,6 +22810,12 @@ impl<'a> Lowerer<'a> {
                 }
                 None => Expr::Var(*sym),
             });
+        }
+        if self.eta_base.get().saturating_sub(drawn_from) != demand.count() {
+            return Err(bug(
+                "ipe_lower::wrap_mapper_value",
+                "mapper wrap drew a different eta count than its budgeted EtaDemand",
+            ));
         }
         let original = std::mem::replace(lowered, Expr::Unit);
         let (callee, held) = match original {
@@ -30506,6 +30704,93 @@ mod tests {
             untyped_type_params: BTreeMap::new(),
             msg_defaulted_vars: BTreeMap::new(),
         }
+    }
+
+    /// `Unit -> Unit -> Unit -> Unit`: a stored function element with three
+    /// arrow parameters.
+    fn three_arg_fn() -> Ty {
+        let arrow = |param: Ty, ret: Ty| Ty::Fun(Box::new(param), Box::new(ret));
+        arrow(Ty::Unit, arrow(Ty::Unit, arrow(Ty::Unit, Ty::Unit)))
+    }
+
+    /// A `List.map5` mapper over five function elements: `three_arg_fn()`
+    /// five times, returning `Unit`.
+    fn map5_fn_element_mapper() -> Ty {
+        (0..5).fold(Ty::Unit, |ret, _| {
+            Ty::Fun(Box::new(three_arg_fn()), Box::new(ret))
+        })
+    }
+
+    #[test]
+    fn eta_demand_map5_over_fn_elements_counts_holder_spine_and_demotes() {
+        let kernel = KernelFn::ListMap5;
+        let shape = kernel.scheme_shape();
+        assert!(shape.is_some(), "List.map5 carries a scheme shape");
+        let Some(shape) = shape else { return };
+        let mapper = map5_fn_element_mapper();
+        let spine = super::MapperSpine::peel(shape, 0, &mapper);
+        assert!(
+            spine.is_some(),
+            "a five-arrow mapper peels along map5's spine"
+        );
+        let Some(spine) = spine else { return };
+        let demand = super::EtaDemand::mapper_wrap(shape, kernel.def().arity, 0, &spine);
+        // holder + 5 wrapper params + 5 x 3 demote params
+        assert_eq!(demand.count(), 21);
+        assert!(demand.count() > super::MAX_ETA_PER_SITE);
+    }
+
+    #[test]
+    fn eta_demand_mapper_over_plain_elements_is_zero() {
+        let kernel = KernelFn::ListMap5;
+        let shape = kernel.scheme_shape();
+        assert!(shape.is_some(), "List.map5 carries a scheme shape");
+        let Some(shape) = shape else { return };
+        let mapper = (0..5).fold(Ty::Unit, |ret, _| {
+            Ty::Fun(Box::new(Ty::Unit), Box::new(ret))
+        });
+        let spine = super::MapperSpine::peel(shape, 0, &mapper);
+        assert!(
+            spine.is_some(),
+            "a five-arrow mapper peels along map5's spine"
+        );
+        let Some(spine) = spine else { return };
+        let demand = super::EtaDemand::mapper_wrap(shape, kernel.def().arity, 0, &spine);
+        assert_eq!(demand, super::EtaDemand::default());
+    }
+
+    #[test]
+    fn mapper_spine_shorter_than_scheme_does_not_peel() {
+        let shape = KernelFn::ListMap5.scheme_shape();
+        assert!(shape.is_some(), "List.map5 carries a scheme shape");
+        let Some(shape) = shape else { return };
+        assert!(super::MapperSpine::peel(shape, 0, &Ty::Unit).is_none());
+        assert!(super::MapperSpine::peel(shape, 0, &three_arg_fn()).is_none());
+    }
+
+    #[test]
+    fn eta_budget_charges_a_map5_reference_its_wrap_demand() {
+        let mut interner = Interner::new();
+        let module = interner.intern("List").unwrap();
+        let name = interner.intern("map5").unwrap();
+        let span = Span::new(40, 49);
+        let body = Located::new(
+            span,
+            canon::Expr_::VarKernel {
+                id: Some(KernelFn::ListMap5),
+                module,
+                name,
+            },
+        );
+        let mut types = empty_solved_types();
+        let reference = Ty::Fun(Box::new(map5_fn_element_mapper()), Box::new(Ty::Unit));
+        types.regions.insert((Vec::new(), span), reference);
+        let demand = super::mapper_wrap_eta_demand(&body, &[], &types);
+        assert!(
+            demand.count() >= 21,
+            "budget {} under the wrap's draw",
+            demand.count()
+        );
     }
 
     /// A span the binder-type tests record a free, non-polymorphic `Ty::Var` at.

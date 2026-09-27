@@ -2147,6 +2147,33 @@ fn lower_list_sort_by_over_function_element_compiles() {
     assert_compiles("lower_list_sort_by_fn_elem", &src);
 }
 
+/// `List.map5` with a named mapper over five `List (Int -> Int -> Int -> Int)`:
+/// the mapper wrap draws 21 eta symbols (holder, five parameters, five
+/// three-parameter demote adapters), past one call's flat charge. Every def
+/// holds at most one call, so the flat charges alone leave the pool short;
+/// it is sized from the wrap's own demand, so the module compiles.
+#[test]
+fn lower_list_map5_named_mapper_over_function_elements_compiles() {
+    let src = format!(
+        "{HEAD}import Ipe.Io as Io\n\
+         import Ipe.List\n\
+         import Ipe.String as String\n\
+         steps : List (Int -> Int -> Int -> Int)\n\
+         steps =\n    [ \\a b c -> a + b + c ]\n\
+         pick : (Int -> Int -> Int -> Int) -> (Int -> Int -> Int -> Int) -> (Int -> Int -> Int -> Int) -> (Int -> Int -> Int -> Int) -> (Int -> Int -> Int -> Int) -> Int\n\
+         pick _ _ _ _ _ =\n    0\n\
+         results : List Int\n\
+         results =\n    List.map5 pick steps steps steps steps steps\n\
+         count : Int\n\
+         count =\n    List.length results\n\
+         label : String\n\
+         label =\n    String.fromInt count\n\
+         main : Task Error ()\n\
+         main =\n    Io.println label\n"
+    );
+    assert_compiles("lower_list_map5_named_fn_elem", &src);
+}
+
 /// `Dict.update` over a function-valued dict: its updater reads the stored
 /// value wrapped in `Maybe`, a parameter the lowerer does not re-carrier —
 /// the frontier stays open, so it must fail closed with IPE-L0134.
