@@ -13427,6 +13427,22 @@ impl StdlibKernel {
         )
     }
 
+    /// The argument index of the handler the backend re-wraps with a capture-clone prologue.
+    ///
+    /// The backend rebuilds this handler inside a fresh `move` closure per call
+    /// and shadows every free local the handler captures with `.clone()`, so
+    /// each such capture must be `Clone`. The lowerer reads this index to refuse
+    /// a non-`Clone` capture (IPE-L0126) and a point-free or partial use
+    /// (IPE-L0152) at `ipe` time; the backend asserts the index at build time
+    /// against the argument it re-wraps.
+    #[must_use]
+    pub const fn capture_cloned_handler_arg(self) -> Option<usize> {
+        match self {
+            Self::StreamStream => Some(1),
+            _ => None,
+        }
+    }
+
     /// `true` when this variant belongs to the `Ipe.Web` subsystem — the
     /// `Ipe.Web` app-entry kernels plus the Task-shaped `PubSub.publish` /
     /// `publishNoEcho`, all of which are `class = Web` and whose symbols live in
