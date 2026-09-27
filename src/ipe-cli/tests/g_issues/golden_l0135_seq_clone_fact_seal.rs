@@ -10,6 +10,11 @@
 //!   so its `move` capture never takes the binding the rest still reads (E0382);
 //! - a cloned-receiver field read clones the field, never the whole record.
 //!
+//! A row-polymorphic parameter clones under its signature's `R: Clone` bound,
+//! so the same reuse of one is accepted; a row nested under a container in the
+//! signature is refused by the nested-row gate (IPE-L0131) before any clone
+//! decision is reached.
+//!
 //! A function decoded by a `Json.Decode` mapper is consume-once: calling it
 //! twice, or capturing it in a closure, is refused with IPE-L0127 at ipe time
 //! rather than emitting a second move of a `Box<dyn FnOnce>` (E0382 / E0507).
@@ -21,6 +26,8 @@
 //! | `decoded_fn_captured` | mapper payload captured by an inner lambda | fail-closed IPE-L0127 |
 //! | `decoded_fn_called_once` | mapper payload called once per branch | builds + prints `11` |
 //! | `seq_closure_and_field_read` | statement closure + field reads, reused in rest | builds + prints three lines |
+//! | `row_param_seq_reuse` | row param read by a statement kernel, reused in rest | builds + prints `ADA`, `Ada!` |
+//! | `row_list_signature_seq_reuse` | `List { r \| name : String }` param, same reuse | fail-closed IPE-L0131 |
 //!
 //! ```text
 //! # gate check only (fast):
@@ -288,6 +295,54 @@ main =
     run (profile 3)
 "#;
 
+/// A row-polymorphic record read by a statement kernel call, then reused.
+///
+/// The statement reads `p.name` through its witness getter and the rest reads
+/// `p` again, so the sequencing rewrite clones `p` on the `R: Clone` bound.
+/// Prints `ADA`, `Ada!`.
+const ROW_PARAM_SEQ_REUSE: &str = r#"module Main exposing (main)
+
+import Ipe.Io as Io
+import Ipe.String as String
+import Ipe.Task as Task exposing (Task)
+
+
+greet : { r | name : String } -> Task Error ()
+greet p =
+    do
+        Io.println (String.toUpper p.name)
+        Io.println (String.append p.name "!")
+
+
+main : Task Error ()
+main =
+    greet { name = "Ada", age = 3 }
+"#;
+
+/// A `List` of an open row reused across a `do` block after a kernel read.
+///
+/// An open row nested under a container has no emission, so the signature is
+/// refused before the body's clone decisions run.
+const ROW_LIST_SIGNATURE_SEQ_REUSE: &str = r#"module Main exposing (main)
+
+import Ipe.Io as Io
+import Ipe.List as List
+import Ipe.String as String
+import Ipe.Task as Task exposing (Task)
+
+
+names : List { r | name : String } -> Task Error ()
+names xs =
+    do
+        Io.println (String.fromInt (List.length xs))
+        Io.println (String.concat (List.map (\p -> p.name) xs))
+
+
+main : Task Error ()
+main =
+    names [ { name = "Ada", age = 3 }, { name = "Bob", age = 4 } ]
+"#;
+
 #[test]
 fn app_handle_record_seq_reuse_fails_closed() {
     assert_rejected(
@@ -336,5 +391,19 @@ fn seq_closure_and_field_read_round_trips() {
     assert!(
         !emitted.contains("(p.clone())."),
         "a field read must clone the field, never the whole record; emitted:\n{emitted}"
+    );
+}
+
+#[test]
+fn row_param_seq_reuse_round_trips() {
+    let _ = assert_accepted("row_param_seq_reuse", ROW_PARAM_SEQ_REUSE, "ADA\nAda!");
+}
+
+#[test]
+fn row_list_signature_seq_reuse_fails_closed() {
+    assert_rejected(
+        "row_list_signature_seq_reuse",
+        ROW_LIST_SIGNATURE_SEQ_REUSE,
+        ipe_diagnostics::IPE_L0131,
     );
 }
