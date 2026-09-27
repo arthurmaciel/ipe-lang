@@ -1,12 +1,14 @@
-//! Generic tuple-pattern parameter gate: unannotated `fst (a, b) = a` and
-//! `pick (a, b) flag`, each instantiated at two types, so every tuple
-//! component binder resolves against its own definition's generalized
-//! variables. `ipe` must emit `main.rs` byte-identical to the checked-in
+//! Generic tuple-pattern parameter gate: `fst (a, b) = a` and
+//! `pick (a, b) flag` under polymorphic signatures, each instantiated at two
+//! types, so every tuple component binder resolves against its own
+//! definition's type variables. `ipe` must emit `main.rs` byte-identical to the checked-in
 //! golden, and (behind `IPE_E2E=1`) the emitted project must build and print
 //! `40 ok r 1`.
 //!
 //! ```text
+//! fst : ( a, b ) -> a
 //! fst (a, b) = a
+//! pick : ( a, a ) -> Bool -> a
 //! pick (a, b) flag = if flag then a else b
 //! main = Io.println (String.fromInt (fst (40, "x")) ++ " " ++ fst ("ok", 2)
 //!     ++ " " ++ pick ("l", "r") False ++ " " ++ String.fromInt (pick (1, 2) True))

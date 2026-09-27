@@ -3,11 +3,15 @@ module Main exposing (main)
 import Ipe.Io as Io
 import Ipe.String
 
--- Tuple-pattern parameters under generics. `fst` and `pick` are unannotated,
--- so each tuple component's type is the definition's own generalized
--- variable, and each is instantiated at two different types below.
+-- Tuple-pattern parameters under generics. `fst` and `pick` declare
+-- polymorphic signatures, so each tuple component's type is one of the
+-- definition's own type variables, and each is instantiated at two different
+-- types below. (An unannotated top-level binding stays monomorphic inside its
+-- own module, so the signatures are what make these generic.)
+fst : ( a, b ) -> a
 fst (a, b) = a
 
+pick : ( a, a ) -> Bool -> a
 pick (a, b) flag =
     if flag then
         a
