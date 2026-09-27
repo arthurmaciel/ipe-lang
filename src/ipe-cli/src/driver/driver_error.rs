@@ -99,7 +99,7 @@ pub enum CliError {
     /// nowhere to write the runtime the emitted project links against.
     RuntimeHomeUnknown,
     /// No per-user cache directory could be resolved: neither `XDG_CACHE_HOME`
-    /// nor `HOME` names an absolute path. Refused rather than falling back to a
+    /// nor the home (`HOME`, or `USERPROFILE` on Windows) names an absolute path. Refused rather than falling back to a
     /// directory relative to the current working directory.
     CacheHomeUnknown,
     /// An explicit directory override (`IPE_INDEX_DIR`, `IPE_HOME`) is set but is

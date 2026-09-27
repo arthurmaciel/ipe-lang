@@ -467,7 +467,7 @@ could not locate the Ipe runtime; set IPE_RUNTIME_DIR to an explicit path or pas
 
 ## cli-cache-home-unknown
 
-could not determine the per-user cache directory: neither XDG_CACHE_HOME nor HOME is set to an absolute path; set XDG_CACHE_HOME to an absolute, writable directory
+could not determine the per-user cache directory: neither XDG_CACHE_HOME nor the home directory (HOME, or USERPROFILE on Windows) is set to an absolute path; set XDG_CACHE_HOME to an absolute, writable directory
 
 ## cli-env-dir-not-absolute
 

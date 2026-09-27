@@ -245,25 +245,25 @@ pub fn resolve_and_remove(project_root: &Path, name: &str) -> Result<(), CliErro
     Ok(())
 }
 
-/// The per-user cache base: `XDG_CACHE_HOME`, else `$HOME/.cache`.
+/// The per-user cache base: `XDG_CACHE_HOME`, else `<home>/.cache`.
 ///
-/// Only an absolute path is accepted (a relative `XDG_CACHE_HOME` is ignored, as
-/// the XDG spec requires), so nothing is ever written relative to the current
-/// working directory.
+/// The home is the platform home variable (`HOME`, or `USERPROFILE` on
+/// Windows). Only an absolute path is accepted (a relative `XDG_CACHE_HOME` is
+/// ignored, as the XDG spec requires), so nothing is ever written relative to
+/// the current working directory.
 ///
 /// # Errors
-/// [`CliError::CacheHomeUnknown`] when neither variable names an absolute path.
+/// [`CliError::CacheHomeUnknown`] when neither names an absolute path.
 pub fn default_cache_base() -> Result<PathBuf, CliError> {
-    cache_base_from(std::env::var_os("XDG_CACHE_HOME"), std::env::var_os("HOME"))
+    cache_base_from(std::env::var_os("XDG_CACHE_HOME"), crate::env_dir::home())
 }
 
-/// Resolve the cache base from the raw `XDG_CACHE_HOME` and `HOME` values.
+/// Resolve the cache base from the raw `XDG_CACHE_HOME` value and the home.
 fn cache_base_from(
     xdg_cache_home: Option<std::ffi::OsString>,
-    home: Option<std::ffi::OsString>,
+    home: Option<PathBuf>,
 ) -> Result<PathBuf, CliError> {
-    crate::env_dir::absolute(xdg_cache_home)
-        .or_else(|| crate::env_dir::absolute(home).map(|h| h.join(".cache")))
+    crate::env_dir::ambient_home_from(xdg_cache_home, home, ".cache")
         .ok_or(CliError::CacheHomeUnknown)
 }
 
@@ -1145,7 +1145,7 @@ mod tests {
     fn cache_base_prefers_an_absolute_xdg_cache_home() {
         let base = cache_base_from(
             Some(OsString::from("/xdg/cache")),
-            Some(OsString::from("/home/u")),
+            Some(PathBuf::from("/home/u")),
         )
         .expect("absolute XDG_CACHE_HOME");
         assert_eq!(base, PathBuf::from("/xdg/cache"));
@@ -1153,9 +1153,9 @@ mod tests {
 
     #[test]
     fn cache_base_falls_back_to_home_dot_cache() {
-        let base = cache_base_from(None, Some(OsString::from("/home/u"))).expect("absolute HOME");
+        let base = cache_base_from(None, Some(PathBuf::from("/home/u"))).expect("absolute home");
         assert_eq!(base, PathBuf::from("/home/u/.cache"));
-        let base = cache_base_from(Some(OsString::from("rel")), Some(OsString::from("/home/u")))
+        let base = cache_base_from(Some(OsString::from("rel")), Some(PathBuf::from("/home/u")))
             .expect("relative XDG_CACHE_HOME is ignored");
         assert_eq!(base, PathBuf::from("/home/u/.cache"));
     }
@@ -1169,7 +1169,7 @@ mod tests {
             (Some(""), None),
             (Some("relative/xdg"), Some("")),
         ] {
-            let err = cache_base_from(xdg.map(OsString::from), home.map(OsString::from))
+            let err = cache_base_from(xdg.map(OsString::from), home.map(PathBuf::from))
                 .expect_err("no absolute cache base must be refused");
             assert!(
                 matches!(err, CliError::CacheHomeUnknown),
