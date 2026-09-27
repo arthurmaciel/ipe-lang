@@ -605,7 +605,7 @@ lint: findings remain at or above the gate severity (see above)
 
 ## cli-source-not-regular-file
 
-{path}: not a regular file — refusing to read a FIFO, device or socket as source; point ipe at a regular `.ipe` file
+{path}: not a regular file — ipe reads source only from regular files, never a FIFO, device, socket, directory or a symlink met while walking modules; point ipe at a regular `.ipe` file
 
 ## cli-source-access-denied
 

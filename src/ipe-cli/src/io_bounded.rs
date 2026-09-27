@@ -110,7 +110,7 @@ pub fn regular_file(file: File, path: &Path) -> Result<File, CliError> {
     if meta.is_file() {
         Ok(file)
     } else {
-        Err(refused(path, SourceRefusal::NotRegularFile))
+        Err(source_refused(path, SourceRefusal::NotRegularFile))
     }
 }
 
@@ -131,9 +131,9 @@ pub fn open_error(path: &Path, source: std::io::Error) -> CliError {
     #[cfg(not(unix))]
     let names_non_regular = false;
     if names_non_regular {
-        refused(path, SourceRefusal::NotRegularFile)
+        source_refused(path, SourceRefusal::NotRegularFile)
     } else if source.kind() == std::io::ErrorKind::PermissionDenied {
-        refused(path, SourceRefusal::AccessDenied)
+        source_refused(path, SourceRefusal::AccessDenied)
     } else {
         CliError::Io {
             path: path.to_path_buf(),
@@ -143,7 +143,8 @@ pub fn open_error(path: &Path, source: std::io::Error) -> CliError {
 }
 
 /// The [`CliError::SourceRefused`] for `path`.
-fn refused(path: &Path, reason: SourceRefusal) -> CliError {
+#[must_use]
+pub fn source_refused(path: &Path, reason: SourceRefusal) -> CliError {
     CliError::SourceRefused {
         path: path.to_path_buf(),
         reason,
@@ -170,7 +171,7 @@ fn open_nonblocking(path: &Path, final_link: FinalLink) -> Result<File, CliError
 fn open_nonblocking(path: &Path, final_link: FinalLink) -> Result<File, CliError> {
     let is_link = std::fs::symlink_metadata(path).is_ok_and(|meta| meta.file_type().is_symlink());
     if final_link == FinalLink::Refuse && is_link {
-        return Err(refused(path, SourceRefusal::NotRegularFile));
+        return Err(source_refused(path, SourceRefusal::NotRegularFile));
     }
     File::open(path).map_err(|source| open_error(path, source))
 }
