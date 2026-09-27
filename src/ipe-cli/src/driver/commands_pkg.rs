@@ -3,8 +3,8 @@ use super::{
     build_project, build_source_graph, build_test_with_project_sources,
     build_with_sibling_discovery, capabilities_including_served_widgets, cargo_target_directory,
     classify_entry_shape, create_source_root, default_entry, discover_manifest, emit_machine_error,
-    emitted_bin_filename, force_cargo_terminal_ui, home_to_source_map, resolve_runtime,
-    resolve_vendored_runtime_dir, run_build, runtime_context_for_message,
+    emitted_bin_filename, force_cargo_terminal_ui, home_to_source_map, program_constructs_a_widget,
+    resolve_runtime, resolve_vendored_runtime_dir, run_build, runtime_context_for_message,
     typecheck_entry_via_graph,
 };
 use crate::output_dir::{OutputArea, OutputRoot, OwnedDir, ProjectPaths};
@@ -2133,6 +2133,16 @@ pub fn verify_capabilities(
 /// — the same whole-tree posture the enforced-semver check already takes over the
 /// package's public API.
 ///
+/// What is disclosed is what the package's OWN code reaches. Every package
+/// module (and every FFI interface module) is a root: its functions are the
+/// consumer-callable surface, called locally or not. An injected compiled-source
+/// stdlib module is not: it contributes only the functions a root reaches over
+/// the call graph, so an imported stdlib module whose effectful exports the
+/// package never calls discloses nothing. Import-derived capabilities (`unsafe`,
+/// `js-port:<axis>`) are attributed to the importing module and disclosed when
+/// that module is a package module or a reached stdlib module (see
+/// [`package_reached_capabilities`]).
+///
 /// Each discovered module is lowered as its own entry (with every sibling source
 /// present, so cross-module imports resolve) and their inferred capabilities are
 /// unioned. Inference fails closed: when ANY entry fails to lower, the package
@@ -2334,10 +2344,11 @@ fn infer_entry(
         });
     };
     match ipe_db::lower_program(db, source_root, entry_file) {
-        Ok(program) => Ok(capabilities_including_served_widgets(
+        Ok(program) => Ok(package_reached_capabilities(
             db,
             source_root,
             entry_file,
+            package,
             program,
         )),
         Err((diag, home)) => Err(attribute_entry_lowering_error(
@@ -2350,6 +2361,86 @@ fn infer_entry(
             home,
         )),
     }
+}
+
+/// The capabilities one lowered entry discloses for the package: what the
+/// package's own modules reach, never an unreached injected stdlib module's.
+///
+/// Kernel-derived capabilities come from [`ipe_lower::capabilities_reached_from`]
+/// seeded at every function whose home is not an injected stdlib module. An
+/// import-derived capability belongs to the module whose source imports it and
+/// is disclosed when that module is a package module or a stdlib module the
+/// roots reach; a module whose canonical form cannot be read falls back to the
+/// whole-program import facts (fail closed). A constructed `customElement`
+/// handle anywhere in the linked program still discloses `custom-element`,
+/// exactly as [`capabilities_including_served_widgets`] does, since its asset
+/// is served regardless of reachability.
+fn package_reached_capabilities(
+    db: &ipe_db::IpeDatabase,
+    source_root: ipe_db::SourceRoot,
+    entry_file: ipe_db::SourceFile,
+    package: &PackageSourceSet,
+    program: &ipe_ir::Program,
+) -> std::collections::BTreeSet<ipe_ir::Capability> {
+    let (mut caps, reached_homes) = {
+        let interner = ipe_db::Db::interner(db).lock();
+        // An injected path with a never-interned segment is the home of no
+        // function, so dropping it cannot turn a stdlib function into a root.
+        let stdlib_homes: std::collections::BTreeSet<ipe_ir::ModPath> = package
+            .injected
+            .iter()
+            .filter_map(|path| {
+                path.iter()
+                    .map(|segment| interner.lookup(segment))
+                    .collect::<Option<Vec<_>>>()
+                    .map(ipe_ir::ModPath)
+            })
+            .collect();
+        let reached = ipe_lower::capabilities_reached_from(program, &interner, |home| {
+            !stdlib_homes.contains(home)
+        });
+        let reached_homes: std::collections::BTreeSet<Vec<String>> = reached
+            .reached_homes
+            .iter()
+            .filter_map(|home| {
+                home.0
+                    .iter()
+                    .map(|segment| interner.resolve(*segment).map(str::to_owned))
+                    .collect::<Option<Vec<_>>>()
+            })
+            .collect();
+        (reached.capabilities, reached_homes)
+    };
+
+    for (path, file) in source_root.files(db) {
+        if package.injected.contains(path) && !reached_homes.contains(path) {
+            continue;
+        }
+        let canonical = ipe_db::canonicalize(db, source_root, *file).clone();
+        let (imports_unsafe, web) = canonical.as_ref().map_or_else(
+            |_| {
+                (
+                    program.imports_unsafe_submodule,
+                    &program.imported_web_capabilities,
+                )
+            },
+            |c| {
+                (
+                    c.module.imports_unsafe_submodule,
+                    &c.module.imported_web_capabilities,
+                )
+            },
+        );
+        if imports_unsafe {
+            caps.insert(ipe_ir::Capability::Unsafe);
+        }
+        caps.extend(web.iter().map(|w| ipe_ir::Capability::JsPort(*w)));
+    }
+
+    if program_constructs_a_widget(db, source_root, entry_file) {
+        caps.insert(ipe_ir::Capability::CustomElement);
+    }
+    caps
 }
 
 /// Fold every entry's outcome into the package's disclosed capability set.

@@ -28,6 +28,11 @@ mod lower;
 /// by manifest generation (SP2) and sandbox configuration (SP4).
 pub use capabilities::program_capabilities;
 
+/// Root-seeded capability reachability: the kernel-derived capabilities a set of
+/// root modules reaches, with the home of every reached function. Consumed by
+/// the package capability audit.
+pub use capabilities::{ReachedCapabilities, capabilities_reached_from};
+
 /// The generated `ipe-ce-<hex16>` custom-element tag for a widget hook at a
 /// cleaned, in-project path. The SINGLE definition the lowerer uses to render the
 /// `CustomElement.node` view node — re-exported so the build stage that serves the widget
