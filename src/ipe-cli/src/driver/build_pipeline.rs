@@ -1,5 +1,7 @@
 use super::{CliError, diag_span, io_err};
-use crate::output_dir::{OutputRefusal, OwnedDir, OwnedPath};
+#[cfg(not(unix))]
+use crate::output_dir::OutputRefusal;
+use crate::output_dir::{OwnedDir, OwnedPath};
 use crate::{
     BTreeMap, BTreeSet, Diagnostic, Interner, Path, PathBuf, build_plan, cache, contained_path,
     ffi, fs, project, render, runtime_embed,
@@ -2430,6 +2432,7 @@ pub fn resolve_vendored_runtime_dir(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::output_dir::OutputRefusal;
 
     /// A `src/` tree nested past [`MAX_PRUNE_DEPTH`] is refused with a typed
     /// refusal, while one exactly at the ceiling is pruned.

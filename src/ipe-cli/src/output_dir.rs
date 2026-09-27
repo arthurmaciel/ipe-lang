@@ -841,6 +841,7 @@ fn temp_suffix() -> String {
 }
 
 /// Refuse a symlink at `path`, and a non-directory when `wants_dir`.
+#[cfg(not(unix))]
 fn reject_link_or_file(path: &Path, wants_dir: bool) -> Result<(), CliError> {
     let meta = std::fs::symlink_metadata(path).map_err(|e| io_err(path, e))?;
     if meta.file_type().is_symlink() {
@@ -2839,8 +2840,9 @@ mod tests {
             "unswapped content matches"
         );
         let level = out.path().join("a");
-        let (from, to) = (level.clone(), victim.clone());
-        swap_when_held(out.path().to_path_buf(), move || swap_for_link(&from, &to));
+        swap_when_held(out.path().to_path_buf(), move || {
+            swap_for_link(&level, &victim)
+        });
         let result = target.holds(b"same");
         super::held::set_level_hook(None);
         assert!(
