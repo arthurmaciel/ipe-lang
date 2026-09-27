@@ -197,3 +197,188 @@ fn every_kernel_name_resolves_to_runtime_fn() {
          Unresolved: {unresolved:?}"
     );
 }
+
+/// Reads every `.rs` file under `dir`, recursively.
+fn read_sources(dir: &std::path::Path, out: &mut Vec<String>) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            read_sources(&path, out);
+        } else if path.extension().and_then(|e| e.to_str()) == Some("rs")
+            && let Ok(content) = std::fs::read_to_string(&path)
+        {
+            out.push(content);
+        }
+    }
+}
+
+/// The nesting-depth change `c` makes after `prev`; the `>` of `->` closes nothing.
+const fn depth_step(prev: char, c: char) -> i32 {
+    match c {
+        '(' | '<' | '[' => 1,
+        ')' | ']' => -1,
+        '>' if prev != '-' => -1,
+        _ => 0,
+    }
+}
+
+/// Splits `s` at its top-level commas, trimming each part and dropping empty ones.
+fn split_top_level(s: &str) -> Vec<String> {
+    let mut parts = Vec::new();
+    let mut current = String::new();
+    let mut depth = 0;
+    let mut prev = ' ';
+    for c in s.chars() {
+        depth += depth_step(prev, c);
+        if c == ',' && depth == 0 {
+            parts.push(std::mem::take(&mut current));
+        } else {
+            current.push(c);
+        }
+        prev = c;
+    }
+    parts.push(current);
+    parts
+        .into_iter()
+        .map(|p| p.trim().to_string())
+        .filter(|p| !p.is_empty())
+        .collect()
+}
+
+/// Splits `s`, which opens with `open`, into the text inside that balanced group and the text after it.
+fn balanced_group(s: &str, open: char) -> Option<(String, String)> {
+    let body = s.strip_prefix(open)?;
+    let mut depth = 1;
+    let mut prev = open;
+    for (at, c) in body.char_indices() {
+        depth += depth_step(prev, c);
+        if depth == 0 {
+            let inside = body.get(..at)?;
+            let after = body.get(at + c.len_utf8()..)?;
+            return Some((inside.to_string(), after.to_string()));
+        }
+        prev = c;
+    }
+    None
+}
+
+/// The whitespace-normalised header of the unique `pub fn symbol` in `sources`.
+///
+/// The header spans the generics, parameters, return type, and where clause;
+/// `None` when the symbol is defined zero or several times.
+fn runtime_fn_header(sources: &[String], symbol: &str) -> Option<String> {
+    let pattern = format!(r"pub (?:const )?fn {}\b", regex::escape(symbol));
+    let def_re = regex::Regex::new(&pattern).ok()?;
+    let mut headers = sources.iter().flat_map(|content| {
+        def_re.find_iter(content).filter_map(|m| {
+            let mut header = String::new();
+            let mut depth = 0;
+            let mut prev = ' ';
+            for c in content.get(m.end()..)?.chars() {
+                if depth == 0 && (c == '{' || c == ';') {
+                    return Some(header.split_whitespace().collect::<Vec<_>>().join(" "));
+                }
+                depth += depth_step(prev, c);
+                header.push(c);
+                prev = c;
+            }
+            None
+        })
+    });
+    let header = headers.next()?;
+    headers.next().is_none().then_some(header)
+}
+
+/// Whether each parameter of the runtime fn `header` is callable.
+///
+/// A parameter is callable when its type is `impl Fn…` / `dyn Fn…` (any of
+/// `Fn` / `FnMut` / `FnOnce`), or a generic whose bound is one.
+fn callable_params(header: &str) -> Option<Vec<bool>> {
+    let (generics, rest) = if header.starts_with('<') {
+        balanced_group(header, '<')?
+    } else {
+        (String::new(), header.to_string())
+    };
+    let (params, tail) = balanced_group(rest.trim_start(), '(')?;
+    let where_clause = tail.split_once("where").map_or("", |(_, w)| w);
+    let fn_trait = regex::Regex::new(r"\b(?:Fn|FnMut|FnOnce)\(").ok()?;
+    let erased_fn = regex::Regex::new(r"\b(?:dyn|impl) (?:Fn|FnMut|FnOnce)\(").ok()?;
+    let fn_bounded: HashSet<String> = split_top_level(&generics)
+        .into_iter()
+        .chain(split_top_level(where_clause))
+        .filter_map(|g| {
+            let (name, bound) = g.split_once(':')?;
+            fn_trait.is_match(bound).then(|| name.trim().to_string())
+        })
+        .collect();
+    Some(
+        split_top_level(&params)
+            .iter()
+            .filter_map(|p| p.split_once(':').map(|(_, ty)| ty.trim()))
+            .map(|ty| {
+                erased_fn.is_match(ty) || fn_bounded.contains(ty.trim_start_matches('&').trim())
+            })
+            .collect(),
+    )
+}
+
+#[test]
+fn declared_arg_order_matches_runtime_signature() {
+    use ipe_kernels::{ArgOrder, StdlibKernel, TyShape};
+
+    let mut sources = Vec::new();
+    read_sources(
+        &PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src"),
+        &mut sources,
+    );
+    assert!(!sources.is_empty(), "runtime source walk found no files");
+
+    let mut confirmed = 0_usize;
+    let mut mismatches = Vec::new();
+    for kernel in StdlibKernel::ALL {
+        let def = kernel.def();
+        let takes_fn_then_container = def.arity == 2
+            && matches!(
+                def.shape,
+                Some(TyShape::Fun(TyShape::Fun(..), TyShape::Fun(second, _)))
+                    if !matches!(second, TyShape::Fun(..))
+            );
+        if !takes_fn_then_container {
+            continue;
+        }
+        let runtime_order = runtime_fn_header(&sources, def.runtime_fn)
+            .and_then(|header| callable_params(&header))
+            .and_then(|callable| match callable.as_slice() {
+                [true, false] => Some(ArgOrder::IpeOrder),
+                [false, true] => Some(ArgOrder::ContainerFirst),
+                _ => None,
+            });
+        match runtime_order {
+            Some(order) if order == def.arg_order => confirmed += 1,
+            Some(order) => mismatches.push(format!(
+                "{kernel:?}: declared {:?}, `{}` takes {order:?}",
+                def.arg_order, def.runtime_fn
+            )),
+            None if def.arg_order == ArgOrder::ContainerFirst => mismatches.push(format!(
+                "{kernel:?}: declared ContainerFirst, but `{}` has no single signature taking \
+                 a container then a function",
+                def.runtime_fn
+            )),
+            None => {}
+        }
+    }
+    assert!(
+        confirmed > 0,
+        "no kernel's argument order was confirmed against the runtime"
+    );
+    assert!(
+        mismatches.is_empty(),
+        "a kernel's `ArgOrder` disagrees with its runtime function's parameter order; fix the \
+         row's `ArgOrder` in `StdlibKernel::identity` (the backend swaps and the lowering walks \
+         reverse exactly the `ContainerFirst` rows):\n{}",
+        mismatches.join("\n")
+    );
+}

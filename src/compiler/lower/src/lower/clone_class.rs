@@ -1285,3 +1285,66 @@ pub(super) fn rewrite_multiuse_clones(sym: Symbol, remaining: &mut usize, expr: 
         },
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use ipe_intern::Symbol;
+    use ipe_ir::{CallPin, Callee, Expr, IrType, KernelFn, OnFormKind};
+
+    use super::rewrite_multiuse_clones;
+
+    const SYM: Symbol = Symbol::from_raw(1);
+    const PARAM: Symbol = Symbol::from_raw(2);
+
+    /// `kernel (\param -> sym) sym`: the function captures `sym` and the container reads it.
+    fn capture_then_read(kernel: KernelFn) -> Expr {
+        Expr::Call {
+            callee: Callee::Kernel(kernel),
+            args: vec![
+                Expr::Lambda {
+                    params: vec![(PARAM, IrType::Int)],
+                    ret: IrType::Str,
+                    body: Box::new(Expr::Var(SYM)),
+                },
+                Expr::Var(SYM),
+            ],
+            pin: CallPin::None,
+            on_form: OnFormKind::NotForm,
+        }
+    }
+
+    fn rewrite(expr: Expr) -> Vec<Expr> {
+        let mut remaining = super::super::count_var_uses(SYM, &expr);
+        assert_eq!(remaining, 2, "fixture must use `sym` twice");
+        let Expr::Call { args, .. } = rewrite_multiuse_clones(SYM, &mut remaining, expr) else {
+            return Vec::new();
+        };
+        assert_eq!(remaining, 0, "every use must be consumed");
+        args
+    }
+
+    #[test]
+    fn container_first_kernel_clones_the_container_read_and_moves_the_capture() {
+        let args = rewrite(capture_then_read(KernelFn::MaybeMap));
+        assert!(
+            matches!(
+                args.as_slice(),
+                [Expr::Lambda { .. }, Expr::CloneVar(s)] if *s == SYM
+            ),
+            "the runtime evaluates the container first, so its read is the non-last use: {args:?}"
+        );
+    }
+
+    #[test]
+    fn ipe_order_kernel_pre_clones_the_capture_and_moves_the_container() {
+        let args = rewrite(capture_then_read(KernelFn::ListMap));
+        assert!(
+            matches!(
+                args.as_slice(),
+                [Expr::Let { name, value, .. }, Expr::Var(s)]
+                    if *name == SYM && matches!(**value, Expr::CloneVar(v) if v == SYM) && *s == SYM
+            ),
+            "the capture is the non-last use in Ipê order: {args:?}"
+        );
+    }
+}
