@@ -1216,7 +1216,11 @@ mod tests {
         }
         let width = src.get(after..)?.chars().next()?.len_utf8();
         let close = after.saturating_add(width);
-        (bytes.get(close) == Some(&b'\'')).then(|| close.saturating_add(1))
+        if bytes.get(close) == Some(&b'\'') {
+            Some(close.saturating_add(1))
+        } else {
+            None
+        }
     }
 
     /// `src` with comments blanked and literal contents blanked (delimiters
