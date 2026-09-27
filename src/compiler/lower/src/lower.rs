@@ -5688,12 +5688,12 @@ fn fn_value_move_walk(sym: Symbol, expr: &Expr, state: &mut FnValueMoveState) {
         }
         // A kernel whose runtime takes its arguments reversed evaluates them
         // last-to-first.
-        Expr::Call { callee, args, .. } if callee.evaluates_args_reversed() => {
-            for a in args.iter().rev() {
+        Expr::Call { callee, args, .. } => {
+            for a in callee.args_in_eval_order(args) {
                 fn_value_move_walk(sym, a, state);
             }
         }
-        Expr::Call { args, .. } | Expr::Ctor { args, .. } | Expr::TailRecur { args } => {
+        Expr::Ctor { args, .. } | Expr::TailRecur { args } => {
             for a in args {
                 fn_value_move_walk(sym, a, state);
             }
@@ -6351,7 +6351,9 @@ impl<'a> NonCloneMoveState<'a> {
 /// A binder of a record field whose type in `ir_ty` proves `Copy` copies the
 /// field instead of moving it, so a later read of that field stays accepted.
 ///
-/// A kernel or FFI call has no single evaluation order: its bespoke emitters
+/// A user-function call and an argument-reversed kernel call evaluate their
+/// arguments in place, in [`ipe_ir::Callee::args_in_eval_order`]. Any other
+/// kernel or FFI call has no single evaluation order: its bespoke emitters
 /// may reorder or hoist arguments. Its arguments are therefore order-unknown —
 /// a move of `sym` in one argument combined with any mention of `sym` in a
 /// sibling argument is a hazard, whichever order the emitter picks.
@@ -6409,13 +6411,14 @@ fn nonclone_move_walk(sym: Symbol, expr: &Expr, state: &mut NonCloneMoveState<'_
             }
             nonclone_move_walk(sym, record, state);
         }
-        Expr::Call {
-            callee: Callee::Func(_),
-            args,
-            ..
+        // A user function evaluates its arguments in place left to right; an
+        // argument-reversed kernel evaluates its container before its function.
+        Expr::Call { callee, args, .. } if callee.has_known_eval_order() => {
+            for a in callee.args_in_eval_order(args) {
+                nonclone_move_walk(sym, a, state);
+            }
         }
-        | Expr::Ctor { args, .. }
-        | Expr::TailRecur { args } => {
+        Expr::Ctor { args, .. } | Expr::TailRecur { args } => {
             for a in args {
                 nonclone_move_walk(sym, a, state);
             }
@@ -30986,6 +30989,101 @@ mod tests {
         };
         assert!(!nonclone_read_after_move(env, w, &wrap_task, &bound_once));
         assert!(reject(&bound_once).is_ok());
+    }
+
+    /// An argument-reversed kernel evaluates its container before its function
+    /// (`Maybe.map f m` emits `ipe_maybe_map(m, f)`), so the non-`Clone` move
+    /// walk orders its arguments that way instead of treating them as unordered.
+    #[test]
+    fn nonclone_reversed_kernel_walks_container_first() {
+        use ipe_diagnostics::Feature;
+        use ipe_ir::{CallPin, Callee, Expr, FuncId, IrType, KernelFn, ModPath, OnFormKind};
+
+        use super::{CloneEnv, nonclone_read_after_move, reject_nonclone_value_reuse, unsupported};
+
+        let mut interner = Interner::new();
+        let main = interner.intern("Main").expect("intern");
+        let wrap = interner.intern("Wrap").expect("intern");
+        let w = interner.intern("w").expect("intern");
+        let tag = interner.intern("tag").expect("intern");
+        let span = Span::DUMMY;
+        let transparent = BTreeSet::new();
+        let env = CloneEnv {
+            interner: &interner,
+            transparent_ffi: &transparent,
+        };
+        let wrap_task = IrType::Enum {
+            home: ModPath(vec![main]),
+            name: wrap,
+            args: vec![IrType::Task(Box::new(IrType::Int))],
+        };
+        let read_tag = || Expr::Access {
+            record: Box::new(Expr::Var(w)),
+            field: tag,
+            field_ty: IrType::Int,
+        };
+        let call = |callee: Callee, args: Vec<Expr>| Expr::Call {
+            callee,
+            args,
+            pin: CallPin::None,
+            on_form: OnFormKind::NotForm,
+        };
+        let user_call = |args: Vec<Expr>| call(Callee::Func(FuncId::from_raw(0)), args);
+        let reversed = |kernel: KernelFn, func: Expr, container: Expr| {
+            call(Callee::Kernel(kernel), vec![func, container])
+        };
+        let reject = |body: &Expr| reject_nonclone_value_reuse(env, w, &wrap_task, body, span);
+
+        for kernel in [
+            KernelFn::MaybeMap,
+            KernelFn::MaybeAndThen,
+            KernelFn::ResultMap,
+            KernelFn::ResultAndThen,
+            KernelFn::ResultMapError,
+            KernelFn::TaskAndThen,
+        ] {
+            assert!(Callee::Kernel(kernel).has_known_eval_order());
+
+            // `Maybe.map (mkF w) (wrap w.tag)`: the container's field borrow
+            // runs before the function's move — accepted.
+            let borrow_then_move = reversed(
+                kernel,
+                user_call(vec![Expr::Var(w)]),
+                user_call(vec![read_tag()]),
+            );
+            assert!(!nonclone_read_after_move(
+                env,
+                w,
+                &wrap_task,
+                &borrow_then_move
+            ));
+            assert!(reject(&borrow_then_move).is_ok());
+
+            // `Maybe.map (mkF w.tag) (wrap w)`: the container moves `w` before
+            // the function's field read — rejected.
+            let move_then_borrow = reversed(
+                kernel,
+                user_call(vec![read_tag()]),
+                user_call(vec![Expr::Var(w)]),
+            );
+            assert!(nonclone_read_after_move(
+                env,
+                w,
+                &wrap_task,
+                &move_then_borrow
+            ));
+            let err = reject(&move_then_borrow).expect_err("container move then read");
+            assert_eq!(err, unsupported(span, Feature::NonCloneValueReuse));
+        }
+
+        // A kernel that does not reverse keeps its order unknown: a move and a
+        // read in sibling arguments stay rejected in either written order.
+        assert!(!Callee::Kernel(KernelFn::StringAppend).has_known_eval_order());
+        let unordered = call(
+            Callee::Kernel(KernelFn::StringAppend),
+            vec![user_call(vec![Expr::Var(w)]), user_call(vec![read_tag()])],
+        );
+        assert!(nonclone_read_after_move(env, w, &wrap_task, &unordered));
     }
 
     /// A sequenced task whose capture-clone rewrite would clone a non-Clone

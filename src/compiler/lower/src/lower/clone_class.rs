@@ -1178,21 +1178,12 @@ pub(super) fn rewrite_multiuse_clones(sym: Symbol, remaining: &mut usize, expr: 
         // one cloned.
         Expr::Call {
             callee,
-            mut args,
+            args,
             pin,
             on_form,
         } => {
-            let reversed = callee.evaluates_args_reversed();
-            if reversed {
-                args.reverse();
-            }
-            let mut args: Vec<Expr> = args
-                .into_iter()
-                .map(|a| rewrite_multiuse_clones(sym, remaining, a))
-                .collect();
-            if reversed {
-                args.reverse();
-            }
+            let args =
+                callee.map_args_in_eval_order(args, |a| rewrite_multiuse_clones(sym, remaining, a));
             Expr::Call {
                 callee,
                 args,

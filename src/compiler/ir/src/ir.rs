@@ -3057,6 +3057,74 @@ impl Callee {
     pub const fn evaluates_args_reversed(&self) -> bool {
         matches!(self, Self::Kernel(k) if k.swaps_first_two())
     }
+
+    /// Whether the emitter renders every argument of a call to this callee in
+    /// place, in the order [`Self::args_in_eval_order`] yields.
+    ///
+    /// A user function's arguments are rendered left to right; an
+    /// argument-reversed kernel renders through the generic call tail, which
+    /// reverses them. Any other kernel or FFI emitter may reorder, hoist, or
+    /// defer an argument, so its order is unknown to an analysis.
+    #[must_use]
+    pub const fn has_known_eval_order(&self) -> bool {
+        matches!(self, Self::Func(_)) || self.evaluates_args_reversed()
+    }
+
+    /// A call's arguments in the order the emitted Rust evaluates them.
+    ///
+    /// The single ordering every evaluation-order analysis walks, so the
+    /// argument reversal is decided once ([`Self::evaluates_args_reversed`]).
+    #[must_use]
+    pub fn args_in_eval_order<'a>(&self, args: &'a [Expr]) -> EvalOrder<'a> {
+        EvalOrder {
+            args: args.iter(),
+            reversed: self.evaluates_args_reversed(),
+        }
+    }
+
+    /// Map `f` over owned call arguments in evaluation order, keeping IR order.
+    ///
+    /// The owned counterpart of [`Self::args_in_eval_order`] for a rewrite
+    /// whose state threads through the arguments in the order they run.
+    #[must_use]
+    pub fn map_args_in_eval_order(
+        &self,
+        mut args: Vec<Expr>,
+        f: impl FnMut(Expr) -> Expr,
+    ) -> Vec<Expr> {
+        let reversed = self.evaluates_args_reversed();
+        if reversed {
+            args.reverse();
+        }
+        let mut mapped: Vec<Expr> = args.into_iter().map(f).collect();
+        if reversed {
+            mapped.reverse();
+        }
+        mapped
+    }
+}
+
+/// A call's arguments in emitted evaluation order ([`Callee::args_in_eval_order`]).
+#[derive(Debug, Clone)]
+pub struct EvalOrder<'a> {
+    args: std::slice::Iter<'a, Expr>,
+    reversed: bool,
+}
+
+impl<'a> Iterator for EvalOrder<'a> {
+    type Item = &'a Expr;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.reversed {
+            self.args.next_back()
+        } else {
+            self.args.next()
+        }
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.args.size_hint()
+    }
 }
 
 /// A per-call-site turbofish pin for a polymorphic kernel.
