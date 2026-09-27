@@ -59,7 +59,7 @@ use crate::emit_expr::{
     call_has_kernel_special_case, callee_name, clone_targets_in_expr, combine_guards,
     emit_arm_head, emit_binding_stmts, emit_expr_at, emit_match_scrutinee, expr_value_is_non_clone,
     free_vars, kernel_swaps_first_two, record_struct_name, scan_free_target, substitute_var,
-    wants_arc_ctor,
+    swapped_container_clone_rewrite, wants_arc_ctor,
 };
 use crate::emit_types::{GenericScope, render_type};
 
@@ -1039,42 +1039,21 @@ fn build_generic_call(
     } else {
         pin_turbofish
     };
-    // `Task.andThen cont effect` renders (after the swap-reverse below) as
-    // `task_and_then(effect, cont)`. Rust evaluates the args left-to-right, so
-    // `effect` runs BEFORE `cont`'s closure is built; a non-Copy handle that
-    // `effect` MOVES (an `IpeCacheHandle` passed by value into `Cache.put cache …`)
-    // is gone by the time `cont` captures the same binding, and the `let h =
-    // h.clone()` the lowerer inserts for `cont`'s capture then borrows a moved
-    // value (E0382). Clone every var `cont` captures at its `effect` use site so
-    // the original survives into the closure — the same rewrite `build_task_seq`
-    // applies to its auto-forced continuation. A no-op when `cont` captures none
-    // of `effect`'s vars, so non-reusing chains stay byte-identical.
-    let swapped_effect: Option<Expr> = if matches!(callee, Callee::Kernel(KernelFn::TaskAndThen))
-        && let [cont, effect] = args
-    {
-        let cont_captures = free_vars(cont);
-        let row_binders: std::collections::BTreeSet<Symbol> =
-            generics.row_binders().iter().copied().collect();
-        Some(clone_targets_in_expr(
-            effect.clone(),
-            &cont_captures,
-            &row_binders,
-        ))
-    } else {
-        None
-    };
-    let mut docs = match &swapped_effect {
-        Some(effect_rw) => {
-            let [cont, _] = args else {
+    // A container-first kernel renders its container before the function
+    // closure; clone the function's captures at their container use sites so the
+    // closure's capture never reads a moved value (the string emitter's rewrite).
+    let mut docs = match swapped_container_clone_rewrite(callee, args, generics) {
+        Some(container_rw) => {
+            let [func, _] = args else {
                 return Err(Diagnostic::CompilerBug {
                     where_: "ipe_backend_rust::build_generic_call",
-                    detail: "Task.andThen effect-clone rewrite lost its two args".to_owned(),
+                    detail: "container clone rewrite lost its two args".to_owned(),
                 });
             };
             build_call_args_task_and_then(
                 ctx,
                 callee,
-                &[cont.clone(), effect_rw.clone()],
+                &[func.clone(), container_rw],
                 indent,
                 child,
                 generics,

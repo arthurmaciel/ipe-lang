@@ -1,9 +1,9 @@
 use super::{
     ArgPlan, Callee, DResult, Diagnostic, Expr, GenericScope, Guard, IrType, KernelClass, KernelFn,
     LitKind, LowerError, NativeUiEmit, Span, Symbol, UiDelegate, UiEmitPlan,
-    appearance_literal_record_fields, callee_name, emit_expr_at, emit_lambda_unboxed,
-    emit_shared_lambda, emit_sub_arm, float_literal, free_vars, kernel_name, render_type,
-    shape_appearance_literal_args, ui_call_shape,
+    appearance_literal_record_fields, callee_name, clone_targets_in_expr, emit_expr_at,
+    emit_lambda_unboxed, emit_shared_lambda, emit_sub_arm, float_literal, free_vars, kernel_name,
+    render_type, shape_appearance_literal_args, ui_call_shape,
 };
 use crate::EmitCtx;
 use core::fmt::Write as _;
@@ -12,7 +12,9 @@ use core::fmt::Write as _;
 /// order to the Ipê call. The `Maybe` / `Result` mapping combinators are
 /// container-first in the runtime (`ipe_maybe_map(m, f)`) but function-first in
 /// Ipê (`Maybe.map f m`); every other wired kernel matches the Ipê order. Used by
-/// the [`Expr::Call`] emitter to reverse the rendered argument list.
+/// the [`Expr::Call`] emitter to reverse the rendered argument list; the same
+/// predicate drives [`swapped_container_clone_rewrite`], so a kernel added here
+/// gets its container evaluated without moving the function's captures.
 pub const fn kernel_swaps_first_two(k: ipe_ir::KernelFn) -> bool {
     matches!(
         k,
@@ -38,6 +40,59 @@ pub const fn kernel_swaps_first_two(k: ipe_ir::KernelFn) -> bool {
             // sites (see `Expr::TaskSeq` below for the auto-force counterpart).
             | KernelFn::TaskAndThen
     )
+}
+
+/// The clone-rewritten container argument of a container-first kernel call —
+/// the partner of [`kernel_swaps_first_two`]'s argument reversal, keyed on the
+/// same predicate so every swapped kernel carries it by construction.
+///
+/// The reversal renders `k f container` as `k(container, f)`. Rust evaluates
+/// arguments left-to-right, so `container` runs BEFORE `f`'s closure is built:
+/// a non-Copy binding `container` MOVES (a handle passed by value into
+/// `Cache.put cache …`, an alias `String` passed into a Db call) is gone by the
+/// time `f` captures the same binding, and the `let v = v.clone()` the lowerer
+/// inserts for `f`'s capture borrows a moved value (E0382). Every variable `f`
+/// captures is cloned at its `container` use site so the original survives into
+/// the closure.
+///
+/// `None` when the callee does not swap, the call is not the two-argument
+/// `f container` shape, or `f` captures none of `container`'s free variables —
+/// the caller then emits `container` unchanged, so non-sharing calls stay
+/// byte-identical.
+pub fn swapped_container_clone_rewrite(
+    callee: &Callee,
+    args: &[Expr],
+    generics: GenericScope,
+) -> Option<Expr> {
+    let Callee::Kernel(k) = callee else {
+        return None;
+    };
+    if !kernel_swaps_first_two(*k) {
+        return None;
+    }
+    let [func, container] = args else {
+        return None;
+    };
+    // `container` is typically the small head; collect its vars first so the
+    // whole-`func` walk is skipped when it has none.
+    let container_vars = free_vars(container);
+    if container_vars.is_empty() {
+        return None;
+    }
+    let targets: std::collections::BTreeSet<Symbol> = free_vars(func)
+        .intersection(&container_vars)
+        .copied()
+        .collect();
+    if targets.is_empty() {
+        return None;
+    }
+    let row_binders: std::collections::BTreeSet<Symbol> =
+        generics.row_binders().iter().copied().collect();
+    Some(clone_targets_in_expr(
+        container.clone(),
+        &targets,
+        &row_binders,
+    ))
 }
 
 /// Whether a `Call` node hits one of the bespoke kernel special cases the
