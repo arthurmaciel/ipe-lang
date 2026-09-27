@@ -329,13 +329,13 @@ impl HeldDir {
         fill: impl FnOnce(&mut std::fs::File) -> std::io::Result<()>,
     ) -> Result<(), CliError> {
         let tmp_path = self.path.join(tmp);
-        let mut file = rustix::fs::openat(&self.dir, tmp, new_file_flags(), file_mode())
+        let mut staged = rustix::fs::openat(&self.dir, tmp, new_file_flags(), file_mode())
             .map(std::fs::File::from)
             .map_err(|e| errno_err(&tmp_path, e))?;
-        let filled = fill(&mut file).and_then(|()| {
-            permissions.map_or(Ok(()), |permissions| file.set_permissions(permissions))
+        let filled = fill(&mut staged).and_then(|()| {
+            permissions.map_or(Ok(()), |permissions| staged.set_permissions(permissions))
         });
-        drop(file);
+        drop(staged);
         let result = filled.map_err(|e| io_err(&tmp_path, e)).and_then(|()| {
             rustix::fs::renameat(&self.dir, tmp, &self.dir, name)
                 .map_err(|e| errno_err(&self.path.join(name), e))
