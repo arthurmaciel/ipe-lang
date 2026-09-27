@@ -1031,16 +1031,15 @@ fn unused_imports_quick_fix_removes_a_multiline_as_import() {
 }
 
 // ── lint/unused-imports quick-fix: cursor away from the `import` keyword ───
-// Issue #2862: the diagnostic's span used to cover only the `import` keyword,
-// so a code action requested with the cursor elsewhere in the declaration
-// found no overlapping diagnostic. `Import::full_span` widens the span to the
-// whole declaration; these tests run the REAL `collect_lint` pipeline (not
-// the synthetic `lint_diag_on_line` helper above) so they pin the actual
-// widened range rather than a hand-picked stand-in.
+// The diagnostic spans the whole declaration, so a code action requested with
+// the cursor anywhere in it finds the overlapping diagnostic. These tests run
+// the REAL `collect_lint` pipeline (not the synthetic `lint_diag_on_line`
+// helper above) so they pin the actual range rather than a hand-picked
+// stand-in.
 
 /// The real `lint/unused-imports` diagnostic `collect_lint` produces for
-/// `src`'s `Main` module — its range is [`ipe_syntax::Import::full_span`],
-/// not just the `import` keyword.
+/// `src`'s `Main` module — its range is [`ipe_syntax::Import::span`], not
+/// just the `import` keyword.
 #[allow(clippy::expect_used)] // test helper: a missing fixture finding is the failure
 fn unused_import_diagnostic(src: &str) -> lsp_types::Diagnostic {
     let mut user_texts = BTreeMap::new();
@@ -1198,6 +1197,85 @@ fn unused_imports_quick_fix_refuses_the_following_unrelated_line() {
     assert!(
         actions.is_empty(),
         "the unrelated following line must yield no remove action: {actions:?}"
+    );
+}
+
+/// Applies the "Remove unused import" quick fix the real `collect_lint`
+/// diagnostic offers for `src`, returning the fixed text.
+#[allow(clippy::expect_used)] // test helper: a missing action is the failure
+fn apply_unused_import_fix(src: &str) -> String {
+    let db = IpeDatabase::new();
+    let entry = file(&db, &["Main"], src);
+    let root = root_of(&db, &[(&["Main"], entry)]);
+    let diag = unused_import_diagnostic(src);
+    let uri = Url::from_file_path("/fake/Main.ipe").expect("uri");
+    let actions = code_actions(
+        DbView {
+            db: &db,
+            root,
+            entry,
+        },
+        &["Main".to_owned()],
+        &uri,
+        diag.range,
+        std::slice::from_ref(&diag),
+        src,
+        PositionEncoding::Utf16,
+    );
+    let edit = actions
+        .iter()
+        .find_map(|a| match a {
+            CodeActionOrCommand::CodeAction(ca) if ca.title == "Remove unused import" => ca
+                .edit
+                .as_ref()
+                .and_then(|e| e.changes.as_ref())
+                .and_then(|c| c.values().next())
+                .and_then(|v| v.first()),
+            CodeActionOrCommand::CodeAction(_) | CodeActionOrCommand::Command(_) => None,
+        })
+        .expect("an unused import must offer a remove action");
+    let fixed = apply_edit(src, edit);
+    let mut interner = db.interner().lock();
+    assert!(
+        ipe_parse::parse_module(&fixed, &mut interner).is_ok(),
+        "the fixed module must still parse: {fixed:?}"
+    );
+    fixed
+}
+
+/// The refusal: a `)` inside a `--` comment in the list must not end the
+/// removal early and strand the remaining `, baz )` lines.
+#[test]
+fn unused_import_fix_ignores_close_paren_in_line_comment() {
+    let src = "module Main exposing (main)\n\nimport Foo exposing\n    ( bar -- keeps ) the old name\n    , baz\n    )\n\nmain : Int\nmain = 1\n";
+    let fixed = apply_unused_import_fix(src);
+    assert_eq!(
+        fixed,
+        "module Main exposing (main)\n\n\nmain : Int\nmain = 1\n"
+    );
+}
+
+/// The refusal: a `(` inside a comment plus a stray `)` in a later comment
+/// must not stretch the removal over the unrelated `main` declaration.
+#[test]
+fn unused_import_fix_leaves_later_declarations_untouched() {
+    let src = "module Main exposing (main)\n\nimport Foo exposing (bar -- (\n    )\n\nmain : Int\nmain = 1 -- )\n";
+    let fixed = apply_unused_import_fix(src);
+    assert_eq!(
+        fixed,
+        "module Main exposing (main)\n\n\nmain : Int\nmain = 1 -- )\n"
+    );
+}
+
+/// The refusal: a `{- -}` block comment between the alias and the `exposing`
+/// clause must not stop the removal short and strand `exposing (bar)`.
+#[test]
+fn unused_import_fix_spans_block_comment_between_clauses() {
+    let src = "module Main exposing (main)\n\nimport Foo\n    as Bar\n    {- ) -}\n    exposing (bar)\n\nmain : Int\nmain = 1\n";
+    let fixed = apply_unused_import_fix(src);
+    assert_eq!(
+        fixed,
+        "module Main exposing (main)\n\n\nmain : Int\nmain = 1\n"
     );
 }
 

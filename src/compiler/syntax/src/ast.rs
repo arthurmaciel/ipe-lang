@@ -130,7 +130,8 @@ pub struct Module {
     pub module_kw: Span,
     /// Dotted module-name segments, e.g. `Main` → `[Main]`.
     pub name: Located<Vec<Symbol>>,
-    /// The `exposing (...)` clause of the `module` header.
+    /// The `exposing (...)` clause of the `module` header, spanning the
+    /// `exposing` keyword through its closing `)`.
     pub exposing: Located<Exposing>,
     pub imports: Vec<Import>,
     pub values: Vec<Located<Value>>,
@@ -178,97 +179,25 @@ pub enum Privacy {
 /// An `import` declaration.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Import {
+    /// Span of the whole declaration.
+    ///
+    /// Runs from the `import` keyword through the last token the parser
+    /// consumed for it (module name, `as` alias, or the `exposing` list's
+    /// closing `)`), however the declaration wraps across lines. Comments
+    /// inside or after the declaration never move its end.
+    pub span: Span,
     /// Span of the `import` keyword token.
     pub import_kw: Span,
     /// Dotted module-name segments, e.g. `Ipe.String`.
     pub name: Located<Vec<Symbol>>,
     /// Optional `as Alias`.
     pub alias: Option<Symbol>,
-    pub exposing: Located<Exposing>,
-}
-
-impl Import {
-    /// The byte span covering the whole declaration — from the `import`
-    /// keyword through the end of its last clause (`as Alias` /
-    /// `exposing (…)`), however the declaration wraps across lines.
+    /// The `exposing (…)` clause, spanning the `exposing` keyword through its
+    /// closing `)`.
     ///
-    /// The parser records spans for the `import` keyword and the dotted
-    /// module name, but neither the `as Alias` identifier nor the
-    /// `exposing (…)` clause carries a span of its own, and either may sit on
-    /// a continuation line below the keyword. This walks `text` from just
-    /// past the module name, following the import grammar tail, so every
-    /// consumer of the span (lint findings, LSP diagnostics, code actions)
-    /// anchors on the whole declaration rather than only the keyword.
-    /// Every read goes through `get`, so a malformed tail yields the best
-    /// offset reached rather than panicking.
-    #[must_use]
-    pub fn full_span(&self, text: &str) -> Span {
-        let mut pos = self.import_kw.hi.max(self.name.span.hi) as usize;
-
-        // Advance past `count` UTF-8 characters satisfying `pred`, stopping at
-        // the first that does not (or at end of input). Char-boundary safe.
-        let skip_while = |from: usize, pred: &dyn Fn(char) -> bool| -> usize {
-            let rest = text.get(from..).unwrap_or("");
-            let mut consumed = 0usize;
-            for ch in rest.chars() {
-                if pred(ch) {
-                    consumed += ch.len_utf8();
-                } else {
-                    break;
-                }
-            }
-            from + consumed
-        };
-        // True when `text` from `at` begins with `kw` followed by a
-        // non-identifier boundary (so `as` does not match inside `assets`).
-        let starts_kw = |at: usize, kw: &str| -> bool {
-            let rest = text.get(at..).unwrap_or("");
-            rest.strip_prefix(kw).is_some_and(|after| {
-                after
-                    .chars()
-                    .next()
-                    .is_none_or(|c| !c.is_alphanumeric() && c != '_')
-            })
-        };
-        let is_ident = |c: char| c.is_alphanumeric() || c == '_';
-
-        // Optional `as Alias` (a single, dot-free identifier).
-        let after_ws = skip_while(pos, &char::is_whitespace);
-        if starts_kw(after_ws, "as") {
-            let alias_start = skip_while(after_ws + "as".len(), &char::is_whitespace);
-            let alias_end = skip_while(alias_start, &is_ident);
-            pos = pos.max(alias_end);
-        }
-
-        // Optional `exposing ( … )` — consume through the balanced closing
-        // paren so a list wrapped across several lines is covered in full.
-        let after_ws = skip_while(pos, &char::is_whitespace);
-        if starts_kw(after_ws, "exposing") {
-            let after_kw = skip_while(after_ws + "exposing".len(), &char::is_whitespace);
-            if text.get(after_kw..).unwrap_or("").starts_with('(') {
-                let mut depth = 0i32;
-                let mut cursor = after_kw;
-                for ch in text.get(after_kw..).unwrap_or("").chars() {
-                    cursor += ch.len_utf8();
-                    match ch {
-                        '(' => depth += 1,
-                        ')' => {
-                            depth -= 1;
-                            if depth == 0 {
-                                pos = pos.max(cursor);
-                                break;
-                            }
-                        }
-                        _ => {}
-                    }
-                }
-            }
-        }
-
-        let hi = pos.min(text.len());
-        let hi = u32::try_from(hi).unwrap_or(u32::MAX);
-        Span::new(self.import_kw.lo, hi)
-    }
+    /// An import without a clause holds an empty list at a zero-width span
+    /// just past the declaration's last token.
+    pub exposing: Located<Exposing>,
 }
 
 /// A top-level value / function declaration.

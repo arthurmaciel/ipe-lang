@@ -663,13 +663,10 @@ fn remove_unused_import_action(
         .find(|imp| imp.import_kw.lo <= diag_byte && diag_byte < imp.import_kw.hi)?;
 
     // Whole-line span covering the import's full extent: from the start of the
-    // line the keyword sits on through the end of the line its last clause ends
-    // on. The clause end is scanned from the source with `import_clause_end`,
-    // which handles `as Alias` / `exposing (…)` continuation lines the AST spans
-    // alone do not reach.
-    let clause_end = import_clause_end(text, import);
-    let start_line = offset_to_position(text, import.import_kw.lo as usize, encoding).line as usize;
-    let end_line = offset_to_position(text, clause_end, encoding).line as usize;
+    // line the keyword sits on through the end of the line its last token ends
+    // on, as the parser recorded it in `Import::span`.
+    let start_line = offset_to_position(text, import.span.lo as usize, encoding).line as usize;
+    let end_line = offset_to_position(text, import.span.hi as usize, encoding).line as usize;
     let (start_byte, _) = line_byte_range(text, start_line);
     let (_, end_byte) = line_byte_range(text, end_line);
 
@@ -695,15 +692,6 @@ fn remove_unused_import_action(
         disabled: None,
         data: None,
     })
-}
-
-/// The byte offset just past the end of an `import` declaration's last clause.
-///
-/// Delegates to [`ipe_syntax::Import::full_span`] — the single producer of this
-/// walk, shared with the `unused-imports` lint finding's own span so both land
-/// on the same declaration boundary.
-fn import_clause_end(text: &str, import: &ipe_syntax::Import) -> usize {
-    import.full_span(text).hi as usize
 }
 
 /// Extract the expected module name from an IPE-N0023 `plain_message`.
