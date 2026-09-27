@@ -1,0 +1,48 @@
+module Main exposing (main)
+
+-- Refusal: a `compositePrimaryKey2` accessor naming a field the row type does not
+-- have must be an ipe-time type error (IPE-T0012), never a key over a column the
+-- table lacks. `Membership` has no `tenantId` field.
+
+import Ipe.Codec as Codec exposing (Codec)
+import Ipe.Db.Store as Store exposing (Draft, Store)
+import Ipe.Error exposing (Error)
+import Ipe.Io as Io
+import Ipe.Result as Result exposing (Result(..))
+import Ipe.Task as Task exposing (Task)
+
+
+type alias Membership =
+    { userId : String
+    , groupId : String
+    }
+
+
+blankMembership : Membership
+blankMembership =
+    { userId = "", groupId = "" }
+
+
+membershipCodec : Codec Membership
+membershipCodec =
+    Codec.auto blankMembership
+
+
+keyed : Draft Membership -> Draft Membership
+keyed draft =
+    Store.compositePrimaryKey2 .userId .tenantId draft
+
+
+main : Task Error ()
+main =
+    case Store.fromCodec "memberships" membershipCodec of
+        Err e ->
+            Task.fail e
+
+        Ok draft ->
+            case Store.createSql (Store.public (keyed draft)) of
+                Err e ->
+                    Task.fail e
+
+                Ok sql ->
+                    Io.println sql

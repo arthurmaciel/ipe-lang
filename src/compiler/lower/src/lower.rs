@@ -12971,6 +12971,41 @@ impl<'a> Lowerer<'a> {
         })
     }
 
+    /// Dispatch a `Store.compositePrimaryKey2` / `Store.compositePrimaryKey3`
+    /// call intercepted at lowering.
+    ///
+    /// Every argument but the last is a key-column accessor (`.field`); each
+    /// names a validated column. The names go, in declaration order, as one
+    /// `List String` to the `compositePrimaryKeyNamed` stdlib helper, which
+    /// refuses a duplicate or conflicting key.
+    fn lower_store_composite_pk(&self, args: &[canon::Expr]) -> DResult<Expr> {
+        let Some((store, accessors)) = args.split_last() else {
+            return Err(bug(
+                "ipe_lower::lower_store_composite_pk",
+                "Store composite-key kernel with no arguments",
+            ));
+        };
+        let items = accessors
+            .iter()
+            .map(|acc| {
+                self.accessor_column(acc)
+                    .map(|(column, _)| Expr::Str(column))
+            })
+            .collect::<DResult<Vec<_>>>()?;
+        let lowered_store = self.lower_expr(store)?;
+        let columns = Expr::List {
+            elem: IrType::Str,
+            items,
+        };
+        let id = self.store_named_func_id("compositePrimaryKeyNamed")?;
+        Ok(Expr::Call {
+            callee: Callee::Func(id),
+            args: vec![columns, lowered_store],
+            pin: CallPin::None,
+            on_form: OnFormKind::NotForm,
+        })
+    }
+
     /// Dispatch a `Store.defaultText` / `Store.defaultInt` call intercepted at
     /// lowering (arity 3: accessor + value + store). The accessor argument
     /// (`.field`) names the validated column; the value and store are passed on
@@ -20327,6 +20362,13 @@ impl<'a> Lowerer<'a> {
                 ) if args.len() == 2 => {
                     return Ok(Intercepted::Done(self.lower_store_spec(&peek, args)?));
                 }
+                // Composite primary keys — one accessor per key column + store.
+                Callee::Kernel(KernelFn::StoreCompositePrimaryKey2) if args.len() == 3 => {
+                    return Ok(Intercepted::Done(self.lower_store_composite_pk(args)?));
+                }
+                Callee::Kernel(KernelFn::StoreCompositePrimaryKey3) if args.len() == 4 => {
+                    return Ok(Intercepted::Done(self.lower_store_composite_pk(args)?));
+                }
                 // `defaultText` / `defaultInt` — arity 3 (accessor + value + store).
                 Callee::Kernel(KernelFn::StoreDefaultText | KernelFn::StoreDefaultInt)
                     if args.len() == 3 =>
@@ -23358,6 +23400,9 @@ impl<'a> Lowerer<'a> {
                 // `defaultText` / `defaultInt` — arity 3 (accessor + value + store).
                 | KernelFn::StoreDefaultText
                 | KernelFn::StoreDefaultInt
+                // `compositePrimaryKey2` — arity 3 (two accessors + store).
+                // Intercepted at lowering; this is only the defensive fallback count.
+                | KernelFn::StoreCompositePrimaryKey2
                 // `Store.mask` — arity 3 (accessor + Pred + Policy). Intercepted at
                 // lowering; this is only the defensive fallback count.
                 | KernelFn::StoreMask
@@ -23371,6 +23416,9 @@ impl<'a> Lowerer<'a> {
                 // `Store.join` — arity 4 (storeA, accA, storeB, accB), intercepted
                 // at lowering; this is only the defensive fallback count.
                 KernelFn::StoreJoin
+                // `compositePrimaryKey3` — arity 4 (three accessors + store),
+                // intercepted at lowering; this is only the defensive fallback count.
+                | KernelFn::StoreCompositePrimaryKey3
                 | KernelFn::JsonDecMap3
                 // ── Result/Maybe map3 — arity 4 ────────────────────────
                 | KernelFn::ResultMap3
@@ -25092,6 +25140,12 @@ impl<'a> Lowerer<'a> {
                     ("Store", "touchOnUpdate") => Ok(Callee::Kernel(KernelFn::StoreTouchOnUpdate)),
                     ("Store", "defaultText") => Ok(Callee::Kernel(KernelFn::StoreDefaultText)),
                     ("Store", "defaultInt") => Ok(Callee::Kernel(KernelFn::StoreDefaultInt)),
+                    ("Store", "compositePrimaryKey2") => {
+                        Ok(Callee::Kernel(KernelFn::StoreCompositePrimaryKey2))
+                    }
+                    ("Store", "compositePrimaryKey3") => {
+                        Ok(Callee::Kernel(KernelFn::StoreCompositePrimaryKey3))
+                    }
                     // Row-security policy builders — intercepted at lowering.
                     ("Store", "ownerColumn") => Ok(Callee::Kernel(KernelFn::StoreOwnerColumn)),
                     ("Store", "immutable") => Ok(Callee::Kernel(KernelFn::StoreImmutable)),
