@@ -435,6 +435,10 @@ pub fn is_denylisted_public_env_name(name: &str) -> bool {
 }
 
 /// A discovered Ipê source file with its resolved module path.
+///
+/// Built only through [`DiscoveredModule::user`] or, inside
+/// [`inject_compiled_std_closure`], the stdlib constructor, so the
+/// [`EntryProvenance`] cannot be set freely.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct DiscoveredModule {
     /// Absolute path to the `.ipe` source file.
@@ -442,7 +446,7 @@ pub struct DiscoveredModule {
     /// Module path segments, e.g. `Lib/Utils.ipe` → `["Lib", "Utils"]`.
     pub module_path: Vec<String>,
     /// Where the module's source comes from, fixed when it enters the graph.
-    pub origin: ModuleOrigin,
+    provenance: EntryProvenance,
 }
 
 impl DiscoveredModule {
@@ -453,34 +457,41 @@ impl DiscoveredModule {
         Self {
             path,
             module_path,
-            origin: ModuleOrigin::User(role),
+            provenance: EntryProvenance::User(role),
         }
     }
 
-    /// A compiled-source stdlib module injected from the embed table.
-    #[must_use]
-    pub const fn embedded_stdlib(path: PathBuf, module_path: Vec<String>) -> Self {
+    /// A compiled-source stdlib module the injection closure inserted.
+    const fn embedded_stdlib(path: PathBuf, module_path: Vec<String>) -> Self {
         Self {
             path,
             module_path,
-            origin: ModuleOrigin::EmbeddedStdlib,
+            provenance: EntryProvenance::EmbeddedStdlib,
         }
+    }
+
+    /// Where the module's source comes from.
+    #[must_use]
+    pub const fn provenance(&self) -> EntryProvenance {
+        self.provenance
     }
 }
 
 /// The provenance of a [`DiscoveredModule`] in the source graph.
 ///
+/// Only ranks which capability-inference refusal is surfaced; it never gates
+/// trust — the trust tag the resolver checks is [`ipe_canon::ModuleOrigin`].
 /// Only a user module carries an [`EntryRole`]: an injected stdlib module is
 /// never a package's `Main`, so that combination has no representation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum ModuleOrigin {
+pub enum EntryProvenance {
     /// A module the package author wrote, discovered under the source root.
     User(EntryRole),
     /// A compiled-source stdlib module injected from `ipe`'s embed table.
     ///
-    /// Only [`inject_compiled_std_closure`] mints this origin, and only for a
-    /// module it actually inserted, so a user file squatting on a stdlib path
-    /// stays [`ModuleOrigin::User`].
+    /// Only [`inject_compiled_std_closure`] mints this provenance, and only for
+    /// a module it actually inserted, so a user file squatting on a stdlib path
+    /// stays [`EntryProvenance::User`].
     EmbeddedStdlib,
 }
 
@@ -800,7 +811,7 @@ where
 /// entry is inserted; if `sources` already holds the key (a user file squatting
 /// on `Ipe.Palette`, or an earlier injection), injection is skipped and the path
 /// is NOT tagged trusted. So a hostile `src/Std/Palette.ipe` is canonicalised as
-/// `ModuleOrigin::User` and stays IPE-N0025-rejected.
+/// `ipe_canon::ModuleOrigin::User` and stays IPE-N0025-rejected.
 ///
 /// Efficiency (design §7): the worklist is seeded only from imports that match a
 /// compiled-source module, so a build that imports none does zero work.

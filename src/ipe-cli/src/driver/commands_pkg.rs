@@ -2276,7 +2276,7 @@ pub fn infer_package_capabilities_in(
         package
             .entries
             .iter()
-            .map(|m| (m.origin, infer_entry(db, source_root, package, m))),
+            .map(|m| (m.provenance(), infer_entry(db, source_root, package, m))),
     )
 }
 
@@ -2290,11 +2290,11 @@ type EntryInference = Result<std::collections::BTreeSet<ipe_ir::Capability>, Cli
 /// module. A stdlib module failing to lower on its own is a compiler defect the
 /// author cannot act on, so a user diagnostic outranks it; it still refuses the
 /// package, because the stdlib is trusted to lower, not exempt from disclosure.
-const fn refusal_rank(origin: project::ModuleOrigin) -> u8 {
-    match origin {
-        project::ModuleOrigin::User(project::EntryRole::Main) => 0,
-        project::ModuleOrigin::User(project::EntryRole::Library) => 1,
-        project::ModuleOrigin::EmbeddedStdlib => 2,
+const fn refusal_rank(provenance: project::EntryProvenance) -> u8 {
+    match provenance {
+        project::EntryProvenance::User(project::EntryRole::Main) => 0,
+        project::EntryProvenance::User(project::EntryRole::Library) => 1,
+        project::EntryProvenance::EmbeddedStdlib => 2,
     }
 }
 
@@ -2349,24 +2349,24 @@ fn infer_entry(
 /// Fails closed: any refused entry refuses the whole package, since a union
 /// over only the entries that lowered would under-disclose the consumer's
 /// consent surface. An injected stdlib entry is folded under the same rule as
-/// a user entry; its origin only lowers the precedence of its refusal (see
+/// a user entry; its provenance only lowers the precedence of its refusal (see
 /// [`refusal_rank`]), ties going to the first in entry order.
 ///
 /// # Errors
 /// The selected entry refusal; [`CliError::Usage`] when there is no entry.
 fn aggregate_entry_inferences(
-    outcomes: impl IntoIterator<Item = (project::ModuleOrigin, EntryInference)>,
+    outcomes: impl IntoIterator<Item = (project::EntryProvenance, EntryInference)>,
 ) -> Result<std::collections::BTreeSet<ipe_ir::Capability>, CliError> {
     let mut union: std::collections::BTreeSet<ipe_ir::Capability> =
         std::collections::BTreeSet::new();
     let mut refusal: Option<(u8, CliError)> = None;
     let mut any_entry = false;
-    for (origin, outcome) in outcomes {
+    for (provenance, outcome) in outcomes {
         any_entry = true;
         match outcome {
             Ok(capabilities) => union.extend(capabilities),
             Err(err) => {
-                let rank = refusal_rank(origin);
+                let rank = refusal_rank(provenance);
                 if refusal.as_ref().is_none_or(|(held, _)| rank < *held) {
                     refusal = Some((rank, err));
                 }
@@ -3162,9 +3162,10 @@ mod capability_fold_tests {
     use ipe_ir::Capability;
     use std::collections::BTreeSet;
 
-    const MAIN: project::ModuleOrigin = project::ModuleOrigin::User(project::EntryRole::Main);
-    const SIBLING: project::ModuleOrigin = project::ModuleOrigin::User(project::EntryRole::Library);
-    const STDLIB: project::ModuleOrigin = project::ModuleOrigin::EmbeddedStdlib;
+    const MAIN: project::EntryProvenance = project::EntryProvenance::User(project::EntryRole::Main);
+    const SIBLING: project::EntryProvenance =
+        project::EntryProvenance::User(project::EntryRole::Library);
+    const STDLIB: project::EntryProvenance = project::EntryProvenance::EmbeddedStdlib;
 
     fn set(capabilities: &[Capability]) -> BTreeSet<Capability> {
         capabilities.iter().copied().collect()
