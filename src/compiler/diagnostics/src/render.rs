@@ -2305,6 +2305,15 @@ const fn feature_label(f: Feature) -> &'static str {
              the kernel whose callback takes every argument (`List.map2`) \
              [feature: hof-callback-function-result]"
         }
+        Feature::EtaSiteLimit => {
+            "passing stored functions to a named mapper (`List.map5 applyAll fs …`) \
+             wraps the mapper in an adapter with one parameter per mapper \
+             argument and per argument of each stored function, and one call \
+             site bounds how many it may draw; pass the mapper as a lambda that \
+             calls the stored functions directly, or store functions that take \
+             fewer arguments (a record or tuple of arguments) \
+             [feature: eta-site-limit]"
+        }
         Feature::NonCloneValueReuse => {
             "a value holding a `Task`/`Cmd`/`Sub` effect (bare, or inside a \
              union/tuple/record payload) is used more than once, or one of its \

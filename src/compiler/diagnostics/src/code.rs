@@ -652,6 +652,11 @@ code! {
     /// The kernel applies its callback at one exact arity, so a callback whose
     /// final result is another arrow has no sound lowering.
     IPE_L0154 = "IPE-L0154", "a higher-order kernel callback returns a function", "IPE-L0154";
+    /// a collection mapper needs more adapter parameters than one call site allows.
+    ///
+    /// Re-carrying the stored functions a mapper receives needs one fresh
+    /// parameter per wrapper and adapter position, bounded per call site.
+    IPE_L0155 = "IPE-L0155", "a collection mapper needs more adapter parameters than one call site allows", "IPE-L0155";
     /// expression nests too deeply for the backend
     IPE_L0200 = "IPE-L0200", "expression nests too deeply for the backend", "IPE-L0200";
 

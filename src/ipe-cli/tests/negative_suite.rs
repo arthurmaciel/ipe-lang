@@ -1682,6 +1682,113 @@ fn type_list_map2_full_arity_callback_compiles() {
     assert_compiles("type_list_map2_full_arity_callback", &src);
 }
 
+/// A `List.map5` program over stored functions: four of arity `first`, the last of arity `last`.
+///
+/// `applyAll` calls every stored function; `mapper` is the mapper expression
+/// passed to `List.map5` (`applyAll` itself, or a lambda).
+fn eta_site_program(first: usize, last: usize, mapper: &str) -> String {
+    let arrow = |arity: usize| vec!["Int"; arity + 1].join(" -> ");
+    let def = |name: &str, arity: usize| {
+        let params: Vec<String> = (0..arity).map(|i| format!("a{i}")).collect();
+        format!(
+            "{name} : {}\n{name} {} =\n    a0\n",
+            arrow(arity),
+            params.join(" ")
+        )
+    };
+    let call = |f: &str, arity: usize| format!("{f} {}", vec!["1"; arity].join(" "));
+    let body = ["p", "q", "r", "s"]
+        .into_iter()
+        .map(|f| call(f, first))
+        .chain(std::iter::once(call("t", last)))
+        .collect::<Vec<_>>()
+        .join(" + ");
+    let (a, b) = (arrow(first), arrow(last));
+    format!(
+        "{HEAD}import Ipe.Io as Io\n\
+         import Ipe.List\n\
+         import Ipe.String as String\n\
+         {}{}\
+         applyAll : ({a}) -> ({a}) -> ({a}) -> ({a}) -> ({b}) -> Int\n\
+         applyAll p q r s t =\n    {body}\n\
+         useFirst : ({a}) -> Int\n\
+         useFirst g =\n    {}\n\
+         useLast : ({b}) -> Int\n\
+         useLast g =\n    {}\n\
+         main : Task Error ()\n\
+         main =\n    Io.println (String.fromInt (List.length \
+         (List.map5 ({mapper}) [ fa ] [ fa ] [ fa ] [ fa ] [ fb ])))\n",
+        def("fa", first),
+        def("fb", last),
+        call("g", first),
+        call("g", last),
+    )
+}
+
+/// At the per-site eta ceiling: the named-mapper adapter draws 1 + 5 + 5 * 2 = 16 names.
+#[test]
+fn lower_named_mapper_at_eta_site_limit_compiles() {
+    let src = eta_site_program(2, 2, "applyAll");
+    assert_compiles("lower_named_mapper_at_eta_site_limit", &src);
+}
+
+/// One past the ceiling: 1 + 5 + 4 * 2 + 3 = 17 names is refused, never drawn.
+#[test]
+fn lower_named_mapper_past_eta_site_limit_refused() {
+    let src = eta_site_program(2, 3, "applyAll");
+    assert_rejected("lower_named_mapper_past_eta_site_limit", &src, "IPE-L0155");
+}
+
+/// Far past the ceiling (1 + 5 + 5 * 16 = 86 names) is the same typed refusal, not an internal error.
+#[test]
+fn lower_named_mapper_far_past_eta_site_limit_refused() {
+    let src = eta_site_program(16, 16, "applyAll");
+    assert_rejected(
+        "lower_named_mapper_far_past_eta_site_limit",
+        &src,
+        "IPE-L0155",
+    );
+}
+
+/// A lambda mapper passing its stored functions on at the ceiling: 4 * 3 + 4 = 16 names.
+#[test]
+fn lower_lambda_mapper_at_eta_site_limit_compiles() {
+    let src = eta_site_program(3, 4, "\\p q r s t -> applyAll p q r s t");
+    assert_compiles("lower_lambda_mapper_at_eta_site_limit", &src);
+}
+
+/// One past the ceiling for a lambda mapper: 4 * 3 + 5 = 17 names is refused.
+#[test]
+fn lower_lambda_mapper_past_eta_site_limit_refused() {
+    let src = eta_site_program(3, 5, "\\p q r s t -> applyAll p q r s t");
+    assert_rejected("lower_lambda_mapper_past_eta_site_limit", &src, "IPE-L0155");
+}
+
+/// Past the ceiling, a lambda mapper that only calls a stored function draws no names for it.
+///
+/// `p` is passed on (3 names), so the 16-argument `t` would reach 19; `t` is
+/// only called, so it needs no adapter and the site stays at 3.
+#[test]
+fn lower_lambda_mapper_calling_wide_stored_function_compiles() {
+    let src = eta_site_program(
+        3,
+        16,
+        "\\p q r s t -> useFirst p + t 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1",
+    );
+    assert_compiles("lower_lambda_mapper_calling_wide_stored_function", &src);
+}
+
+/// The same lambda passing the wide stored function on needs 3 + 16 = 19 names and is refused.
+#[test]
+fn lower_lambda_mapper_passing_wide_stored_function_refused() {
+    let src = eta_site_program(3, 16, "\\p q r s t -> useFirst p + useLast t");
+    assert_rejected(
+        "lower_lambda_mapper_passing_wide_stored_function",
+        &src,
+        "IPE-L0155",
+    );
+}
+
 /// A `case` that does not cover every constructor is non-exhaustive.
 #[test]
 fn type_non_exhaustive_case() {

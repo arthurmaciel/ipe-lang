@@ -221,6 +221,45 @@ const fn scheme_mapper_arity(shape: &ipe_kernels::TyShape, arg: usize) -> usize 
     count
 }
 
+/// A mapper's solved type split along its scheme spine: one type per mapper parameter, then the result.
+///
+/// Built only by [`MapperSpine::peel`], so a mapper whose solved type is
+/// shorter than its scheme spine has no representation past the choke point.
+#[derive(Debug, PartialEq, Eq)]
+pub struct MapperSpine<'t> {
+    params: Vec<&'t Ty>,
+    ret: &'t Ty,
+}
+
+impl<'t> MapperSpine<'t> {
+    /// Split `spine` parameter types off `mapper_ty`; `None` when it has fewer arrows.
+    #[must_use]
+    pub fn peel(mapper_ty: &'t Ty, spine: usize) -> Option<Self> {
+        let mut params = Vec::with_capacity(spine);
+        let mut ret = mapper_ty;
+        for _ in 0..spine {
+            let Ty::Fun(param, rest) = ret else {
+                return None;
+            };
+            params.push(&**param);
+            ret = &**rest;
+        }
+        Some(Self { params, ret })
+    }
+
+    /// The mapper parameter types, in order.
+    #[must_use]
+    pub fn params(&self) -> &[&'t Ty] {
+        &self.params
+    }
+
+    /// The mapper result type after every spine parameter.
+    #[must_use]
+    pub const fn ret(&self) -> &'t Ty {
+        self.ret
+    }
+}
+
 /// Whether a reference to `kernel` at solved type `ty` hands some mapper a
 /// FUNCTION-typed parameter that binds a stored element — the instance whose
 /// mapper must pass the carrier choke point
@@ -10967,10 +11006,6 @@ pub fn max_ctor_arity_per_module(m: &canon::Module) -> usize {
 #[cfg(test)]
 #[must_use]
 pub fn max_live_eta_params(m: &canon::Module) -> usize {
-    /// The widest eta block any single call / fn-typed-let site can draw:
-    /// a residual arrow up to the widest callable arity, matching the eta / cap
-    /// pool floor in [`crate::lower`].
-    const MAX_ETA_PER_SITE: usize = 16;
     // A first-class / partial constructor eta-expands over its remaining payload
     // positions, whose count is uncapped at the language surface — so its per-site
     // charge is the widest ctor arity, not the `MAX_ETA_PER_SITE` floor a
@@ -11803,7 +11838,37 @@ const fn top_col_needs_slice(pat: &canon::Pattern) -> bool {
 
 /// The widest eta block any single call / fn-typed-`let` site can draw — the
 /// residual-arrow floor shared with the eta / cap pool sizing.
-const MAX_ETA_PER_SITE: usize = 16;
+pub const MAX_ETA_PER_SITE: usize = 16;
+
+/// The eta names one call site has drawn, proven within [`MAX_ETA_PER_SITE`].
+///
+/// The pool sizing ([`count_body_pool_sites`]) charges every call site exactly
+/// `MAX_ETA_PER_SITE` names, so a site that drew more would overrun a pool
+/// sized to that charge. [`EtaDemand::charge`] is the only way to grow a
+/// demand and refuses past the ceiling, so every held demand fits its
+/// site's charge and the refusal is a typed IPE-L0155, never a pool overrun.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct EtaDemand(usize);
+
+impl EtaDemand {
+    /// A call site that has drawn no eta names yet.
+    pub const EMPTY: Self = Self(0);
+
+    /// This demand grown by `names`; `None` past [`MAX_ETA_PER_SITE`].
+    #[must_use]
+    pub const fn charge(self, names: usize) -> Option<Self> {
+        match self.0.checked_add(names) {
+            Some(total) if total <= MAX_ETA_PER_SITE => Some(Self(total)),
+            _ => None,
+        }
+    }
+
+    /// The eta names drawn so far.
+    #[must_use]
+    pub const fn names(self) -> usize {
+        self.0
+    }
+}
 
 /// One exhaustive per-expression walk accumulating every body-derived pool
 /// counter at once. Each arm charges its own counters, then folds the
@@ -22403,12 +22468,18 @@ impl<'a> Lowerer<'a> {
     /// A mapper whose solved type is unavailable where a bound parameter needs
     /// it fails closed with IPE-L0134. A mapper with no function-typed bound
     /// parameter is left untouched (byte-identical).
+    ///
+    /// `site` is the eta demand the enclosing call site has already drawn (a
+    /// partial application's residual); every block drawn here is charged on
+    /// top of it ([`EtaDemand`]), and a site past [`MAX_ETA_PER_SITE`] fails
+    /// closed with IPE-L0155.
     fn retype_collection_element_param<'t>(
         &self,
         resolved: &Callee,
         first: usize,
         lowered_args: &mut [Expr],
         arg_ty: impl Fn(usize) -> Option<&'t Ty>,
+        site: EtaDemand,
         span: Span,
     ) -> DResult<()> {
         let Callee::Kernel(kernel) = resolved else {
@@ -22418,12 +22489,14 @@ impl<'a> Lowerer<'a> {
             return Ok(());
         };
         let arity = kernel.def().arity;
+        let mut site = site;
         for (offset, lowered) in lowered_args.iter_mut().enumerate() {
             let arg = first.saturating_add(offset);
             if let Expr::Lambda { params, body, .. } | Expr::SharedLambda { params, body, .. } =
                 lowered
             {
-                self.flip_mapper_lambda_params(shape, arity, arg, params, body)?;
+                site =
+                    self.flip_mapper_lambda_params(shape, arity, arg, params, body, site, span)?;
                 continue;
             }
             let binding = scheme_mapper_arity(shape, arg);
@@ -22432,10 +22505,10 @@ impl<'a> Lowerer<'a> {
             }) {
                 continue;
             }
-            let Some(mapper_ty) = arg_ty(arg) else {
+            let Some(spine) = arg_ty(arg).and_then(|ty| MapperSpine::peel(ty, binding)) else {
                 return Err(unsupported(span, Feature::FunctionElementEquality));
             };
-            self.wrap_mapper_value(shape, arity, arg, mapper_ty, lowered, span)?;
+            site = self.wrap_mapper_value(shape, arity, arg, &spine, lowered, site, span)?;
         }
         Ok(())
     }
@@ -22459,6 +22532,11 @@ impl<'a> Lowerer<'a> {
     /// `List.map Sub.onLine [..]`, a `\p -> List.filter p xs`) is
     /// `ipe`-accept-then-`cargo`-fail (`E0277`). A body with no non-callee read
     /// is left untouched (byte-identical, no eta draw).
+    ///
+    /// Each shim block is charged to `site` only when the body needs it, and
+    /// the grown demand is returned; a needed block past [`MAX_ETA_PER_SITE`]
+    /// fails closed with IPE-L0155.
+    #[allow(clippy::too_many_arguments)] // the site demand and span thread through the one choke point
     fn flip_mapper_lambda_params(
         &self,
         shape: &ipe_kernels::TyShape,
@@ -22466,7 +22544,10 @@ impl<'a> Lowerer<'a> {
         arg: usize,
         params: &mut [(Symbol, IrType)],
         body: &mut Expr,
-    ) -> DResult<()> {
+        site: EtaDemand,
+        span: Span,
+    ) -> DResult<EtaDemand> {
+        let mut site = site;
         for (param, (sym, ty)) in params.iter_mut().enumerate() {
             let IrType::Fun(fn_params, ret) = ty else {
                 continue;
@@ -22477,6 +22558,25 @@ impl<'a> Lowerer<'a> {
             let (sym, fn_params, ret) = (*sym, fn_params.clone(), (**ret).clone());
             *ty = IrType::SharedFun(fn_params.clone(), Box::new(ret.clone()));
             let original = std::mem::replace(body, Expr::Unit);
+            let Some(charged) = site.charge(fn_params.len()) else {
+                // Past the ceiling the walk gets no eta names: its only failure
+                // is a shim drawing one, so any rewrite (or failure) means the
+                // block is needed and refused; an unrewritten body draws none.
+                let (unchanged, rewrote) = shim_fn_value_reads_tracked(
+                    sym,
+                    &fn_params,
+                    &ret,
+                    &[],
+                    &self.builtin_runtime_ctors(),
+                    original,
+                )
+                .map_err(|_| unsupported(span, Feature::EtaSiteLimit))?;
+                if rewrote {
+                    return Err(unsupported(span, Feature::EtaSiteLimit));
+                }
+                *body = unchanged;
+                continue;
+            };
             let (shimmed, rewrote) = shim_fn_value_reads_tracked(
                 sym,
                 &fn_params,
@@ -22490,15 +22590,16 @@ impl<'a> Lowerer<'a> {
                 let disciplined = rewrite_multiuse_clones(sym, &mut remaining, shimmed);
                 // Reserve the shim's eta block so a sibling site does not reuse it.
                 self.advance_eta(fn_params.len());
+                site = charged;
                 force_shared_capture_clones(sym, disciplined)
             } else {
                 shimmed
             };
         }
-        Ok(())
+        Ok(site)
     }
 
-    /// Eta-wrap the non-lambda mapper `lowered` (solved type `mapper_ty`) at
+    /// Eta-wrap the non-lambda mapper `lowered` (solved type split as `spine`) at
     /// kernel position `arg` so each function-typed parameter that binds a
     /// stored element receives it on the `Arc` carrier.
     ///
@@ -22511,68 +22612,82 @@ impl<'a> Lowerer<'a> {
     /// ```
     ///
     /// The wrapper's parameters follow the scheme mapper's spine, typed from
-    /// the solved `mapper_ty`: a bound function-typed parameter is re-carried to
+    /// the solved spine: a bound function-typed parameter is re-carried to
     /// [`IrType::SharedFun`] and demoted back to `Box` at the call
     /// ([`Self::demote_shared_fn_read`]); every other parameter is forwarded
     /// as-is. A top-level function reference is called in place; any other
     /// mapper (a local, an eta parameter, a computed function) is bound once by
     /// a `let` outside the wrapper and moved in, so its ownership (a move or a
     /// clone) is decided where it stood and the wrapper stays re-callable
-    /// (`Fn`). A spine or
+    /// (`Fn`).
+    ///
+    /// The wrapper draws one holder name, one name per spine parameter, and
+    /// one per argument of each demoted parameter. That whole demand is
+    /// charged to `site` before the first draw and the grown demand returned;
+    /// a demand past [`MAX_ETA_PER_SITE`] fails closed with IPE-L0155. A
     /// parameter type that cannot be lowered fails closed with IPE-L0134.
+    #[allow(clippy::too_many_arguments)] // the site demand and span thread through the one choke point
     fn wrap_mapper_value(
         &self,
         shape: &ipe_kernels::TyShape,
         arity: u8,
         arg: usize,
-        mapper_ty: &Ty,
+        spine: &MapperSpine<'_>,
         lowered: &mut Expr,
+        site: EtaDemand,
         span: Span,
-    ) -> DResult<()> {
+    ) -> DResult<EtaDemand> {
         let refuse = || unsupported(span, Feature::FunctionElementEquality);
-        let spine = scheme_mapper_arity(shape, arg);
-        let mut param_tys: Vec<&Ty> = Vec::with_capacity(spine);
-        let mut ret_ty = mapper_ty;
-        for _ in 0..spine {
-            let Ty::Fun(param, rest) = ret_ty else {
-                return Err(refuse());
-            };
-            param_tys.push(&**param);
-            ret_ty = &**rest;
-        }
         let bound = |param: usize, ty: &Ty| {
             matches!(ty, Ty::Fun(..))
                 && ipe_kernels::mapper_param_binds_stored_element(shape, arity, arg, param)
         };
-        if !param_tys
+        if !spine
+            .params()
             .iter()
             .enumerate()
             .any(|(param, ty)| bound(param, ty))
         {
-            return Ok(());
+            return Ok(site);
         }
-        let ret = self.ir_type_from_ty(ret_ty, span).map_err(|_| refuse())?;
-        let holder = self.eta_sym(0)?;
-        let mut wrapper_params: Vec<(Symbol, IrType)> = Vec::with_capacity(spine);
-        let mut demote: Vec<Option<(Vec<IrType>, IrType)>> = Vec::with_capacity(spine);
-        for (param, ty) in param_tys.iter().enumerate() {
-            let sym = self.eta_sym(param.saturating_add(1))?;
+        let ret = self
+            .ir_type_from_ty(spine.ret(), span)
+            .map_err(|_| refuse())?;
+        // Every parameter's carrier, decided before any eta name is drawn so the
+        // whole demand is charged up front.
+        let mut carriers: Vec<(IrType, Option<(Vec<IrType>, IrType)>)> =
+            Vec::with_capacity(spine.params().len());
+        let mut demote_names: usize = 0;
+        for (param, ty) in spine.params().iter().enumerate() {
             let ir = self.ir_type_from_ty(ty, span).map_err(|_| refuse())?;
             if bound(param, ty) {
                 let IrType::Fun(fn_params, fn_ret) = ir else {
                     return Err(refuse());
                 };
-                wrapper_params.push((sym, IrType::SharedFun(fn_params.clone(), fn_ret.clone())));
-                demote.push(Some((fn_params, *fn_ret)));
+                demote_names = demote_names.saturating_add(fn_params.len());
+                carriers.push((
+                    IrType::SharedFun(fn_params.clone(), fn_ret.clone()),
+                    Some((fn_params, *fn_ret)),
+                ));
             } else {
-                wrapper_params.push((sym, ir));
-                demote.push(None);
+                carriers.push((ir, None));
             }
+        }
+        let block = spine.params().len().saturating_add(1);
+        let site = site
+            .charge(block.saturating_add(demote_names))
+            .ok_or_else(|| unsupported(span, Feature::EtaSiteLimit))?;
+        let holder = self.eta_sym(0)?;
+        let mut wrapper_params: Vec<(Symbol, IrType)> = Vec::with_capacity(carriers.len());
+        let mut demote: Vec<Option<(Vec<IrType>, IrType)>> = Vec::with_capacity(carriers.len());
+        for (param, (carrier, adapter)) in carriers.into_iter().enumerate() {
+            wrapper_params.push((self.eta_sym(param.saturating_add(1))?, carrier));
+            demote.push(adapter);
         }
         // Reserve the holder and the wrapper's params before the demote
         // adapters below draw their own eta blocks.
-        self.advance_eta(spine.saturating_add(1));
-        let mut call_args: Vec<Expr> = Vec::with_capacity(spine);
+        self.advance_eta(block);
+        let mut call_args: Vec<Expr> = Vec::with_capacity(wrapper_params.len());
         for ((sym, _), carrier) in wrapper_params.iter().zip(demote) {
             call_args.push(match carrier {
                 Some((fn_params, fn_ret)) => {
@@ -22602,7 +22717,7 @@ impl<'a> Lowerer<'a> {
             },
             None => wrapper,
         };
-        Ok(())
+        Ok(site)
     }
 
     /// Re-carrier the function-typed VALUE argument of a `Dict` constructor
@@ -22778,6 +22893,7 @@ impl<'a> Lowerer<'a> {
                     0,
                     &mut lowered_args,
                     |arg| args.get(arg).and_then(|a| self.region_ty(a.span)),
+                    EtaDemand::EMPTY,
                     call_span,
                 )?;
                 match args.len().cmp(&arity) {
@@ -23597,15 +23713,24 @@ impl<'a> Lowerer<'a> {
         // forwards to the kernel: it binds the same stored element a supplied
         // mapper does, so it passes the same choke point (a point-free
         // `let m = List.map2 in m f fs xs`). Supplied positions already passed it
-        // in [`Self::lower_call_uniform`].
+        // in [`Self::lower_call_uniform`]. The residual block just drawn is this
+        // site's opening demand; only a mapping kernel draws on top of it.
         if let Some(missing) = call_args.get_mut(supplied..) {
-            self.retype_collection_element_param(
-                &resolved,
-                supplied,
-                missing,
-                |arg| arg_tys.get(arg).copied(),
-                call_span,
-            )?;
+            match EtaDemand::EMPTY.charge(arity.saturating_sub(supplied)) {
+                Some(site) => self.retype_collection_element_param(
+                    &resolved,
+                    supplied,
+                    missing,
+                    |arg| arg_tys.get(arg).copied(),
+                    site,
+                    call_span,
+                )?,
+                None if matches!(&resolved, Callee::Kernel(kernel) if kernel.scheme_shape().is_some()) =>
+                {
+                    return Err(unsupported(call_span, Feature::EtaSiteLimit));
+                }
+                None => {}
+            }
         }
         // T8: use the JSON-friendly variant for the lambda return
         // type for the same reason the eta-params (above) use it: when
@@ -30230,7 +30355,74 @@ mod tests {
     use ipe_ir::{Callee, KernelFn};
     use ipe_types::{SolvedTypes, Ty};
 
-    use super::{BuiltinCtors, Lowerer, SymbolPools};
+    use super::{BuiltinCtors, EtaDemand, Lowerer, MAX_ETA_PER_SITE, MapperSpine, SymbolPools};
+
+    /// A demand of exactly [`MAX_ETA_PER_SITE`] names is held; one more is refused.
+    #[test]
+    fn eta_demand_holds_the_ceiling_and_refuses_one_past() {
+        let at_limit = EtaDemand::EMPTY.charge(MAX_ETA_PER_SITE);
+        assert_eq!(at_limit.map(EtaDemand::names), Some(MAX_ETA_PER_SITE));
+        assert_eq!(at_limit.and_then(|d| d.charge(0)), at_limit);
+        assert_eq!(at_limit.and_then(|d| d.charge(1)), None);
+        assert_eq!(EtaDemand::EMPTY.charge(MAX_ETA_PER_SITE + 1), None);
+        // Charging in pieces reaches the same ceiling as one charge.
+        let pieces = EtaDemand::EMPTY
+            .charge(1)
+            .and_then(|d| d.charge(MAX_ETA_PER_SITE - 1));
+        assert_eq!(pieces, at_limit);
+        assert_eq!(pieces.and_then(|d| d.charge(1)), None);
+        // An overflowing charge is refused, never wrapped.
+        assert_eq!(
+            EtaDemand::EMPTY
+                .charge(1)
+                .and_then(|d| d.charge(usize::MAX)),
+            None
+        );
+    }
+
+    /// The IPE-L0155 explain page states the ceiling [`MAX_ETA_PER_SITE`] enforces.
+    #[test]
+    fn eta_site_limit_explain_page_states_the_ceiling() {
+        let page = include_str!("../../diagnostics/explain/IPE-L0155.md");
+        assert!(page.contains(&format!("allows at most {MAX_ETA_PER_SITE} of these")));
+    }
+
+    /// A mapper type with fewer arrows than its scheme spine has no [`MapperSpine`].
+    #[test]
+    fn mapper_spine_refuses_a_short_solved_type() {
+        let mut i = Interner::new();
+        let int = Ty::Con {
+            module: Vec::new(),
+            name: i.intern("Int").unwrap(),
+            args: Vec::new(),
+        };
+        let unary = Ty::Fun(Box::new(int.clone()), Box::new(int.clone()));
+        let binary = Ty::Fun(Box::new(int.clone()), Box::new(unary.clone()));
+        assert_eq!(MapperSpine::peel(&int, 1), None);
+        assert_eq!(MapperSpine::peel(&unary, 2), None);
+        assert_eq!(
+            MapperSpine::peel(&binary, 2),
+            Some(MapperSpine {
+                params: vec![&int, &int],
+                ret: &int,
+            })
+        );
+        // A spine shorter than the solved arrow leaves the rest as the result.
+        assert_eq!(
+            MapperSpine::peel(&binary, 1),
+            Some(MapperSpine {
+                params: vec![&int],
+                ret: &unary,
+            })
+        );
+        assert_eq!(
+            MapperSpine::peel(&int, 0),
+            Some(MapperSpine {
+                params: Vec::new(),
+                ret: &int,
+            })
+        );
+    }
 
     /// Wrap a value in a dummy-span [`Located`] — the span is irrelevant to the
     /// counting/pinning tests that build canonical AST fragments by hand.
