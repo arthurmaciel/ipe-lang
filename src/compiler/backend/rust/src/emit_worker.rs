@@ -92,14 +92,32 @@ fn emit_worker_inner(
     let init_s = emit_worker_fn(ctx, init_e, indent, child, generics)?;
     let update_s = emit_worker_fn(ctx, update_e, indent, child, generics)?;
     let subs_s = emit_worker_fn(ctx, subs_e, indent, child, generics)?;
+    let codec_s = session_codec_suffix(ctx, update_e, subs_e)?;
 
     Ok(Some(format!(
         "ipe_runtime::tea::WorkerApp(ipe_runtime::worker_app(\
          {init_s}, \
          {update_s}, \
-         {subs_s}\
+         {subs_s}{codec_s}\
          ))"
     )))
+}
+
+/// The trailing session-codec argument of a `--debugger` build, else nothing.
+///
+/// The runtime's `worker_app` takes the codec only under its `debugger`
+/// feature, which `ctx.debugger` selects, so the arity always matches. The
+/// `Model` is read from `update`'s second parameter, falling back to
+/// `subscriptions`' first.
+fn session_codec_suffix(ctx: &EmitCtx, update_e: &Expr, subs_e: &Expr) -> DResult<String> {
+    if !ctx.debugger {
+        return Ok(String::new());
+    }
+    let msg_ty = crate::emit_model_gate::msg_ty_of_update(update_e);
+    let model_ty = crate::emit_model_gate::fn_param_ty(update_e, 1)
+        .or_else(|| crate::emit_model_gate::fn_param_ty(subs_e, 0));
+    let codec = crate::emit_model_schema::session_codec_arg(ctx, msg_ty, model_ty)?;
+    Ok(format!(", {codec}"))
 }
 
 /// Emit a cfg-field expression for the worker app-entry kernel.

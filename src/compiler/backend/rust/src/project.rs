@@ -2042,10 +2042,12 @@ fn dep_model_cargo_toml(ctx: &EmitCtx) -> DResult<String> {
     // seal types (its Model bound is only `Clone + Send`, but the widget seam
     // still routes through `ui_widget_`'s serde bounds). Gating solely on
     // `uses_web` leaves a WebView-widget manifest serde-free while its `main.rs`
-    // names `serde::` by path — an ipe-accept-then-cargo-fail (E0433). A non-browser
-    // program emits no serde derive, so its manifest stays serde-free. Inserted
-    // right after the runtime dependency line, inside `[dependencies]`.
-    if ctx.uses_web || ctx.uses_webview {
+    // names `serde::` by path — an ipe-accept-then-cargo-fail (E0433). A
+    // `--debugger` build derives serde for the typed session log too. Every other
+    // program emits no serde derive, so its manifest stays serde-free. The gate is
+    // the derive sites' own `derives_serde`. Inserted right after the runtime
+    // dependency line, inside `[dependencies]`.
+    if ctx.derives_serde() {
         manifest = insert_app_serde_dependency(&manifest)?;
     }
     Ok(manifest)

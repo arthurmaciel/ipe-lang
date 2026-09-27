@@ -1,4 +1,5 @@
-use super::{CliError, diag_span, io_err, write_atomic};
+use super::{CliError, diag_span, io_err};
+use crate::output_dir::{OwnedDir, OwnedPath};
 use crate::{
     BTreeMap, BTreeSet, Diagnostic, Interner, Path, PathBuf, build_plan, cache, contained_path,
     ffi, fs, project, render, runtime_embed,
@@ -774,6 +775,7 @@ pub fn compile_modules_observed(
         options.target,
         &options.wasm_public_env,
         options.production,
+        options.debugger,
         options.hot_appearance,
         options.webview_host,
         options.webview_window.as_ref(),
@@ -848,20 +850,20 @@ pub fn compile_modules_observed(
                     .emit(&program)
             };
             if let Ok(emitted) = emit_result {
-                // Warm the (cheaper-to-hit) EmittedProject tier for the
-                // next build too — advisory, best-effort, same as every
-                // other cache-write in this module.
-                cache::store(root, epoch, &cache_key, &emitted);
-                return (
-                    write_emitted_project(
-                        &emitted,
-                        out_dir,
-                        runtime_dir,
-                        options.static_plan.as_ref(),
-                        options.tree_shake_vendored,
-                    ),
-                    CacheOutcome::IrHit,
+                let written = write_emitted_project(
+                    &emitted,
+                    out_dir,
+                    runtime_dir,
+                    options.static_plan.as_ref(),
+                    options.tree_shake_vendored,
                 );
+                // Warm the (cheaper-to-hit) EmittedProject tier for the
+                // next build too — advisory, best-effort, and only once the
+                // write has claimed `out_dir`, which may hold the cache.
+                if written.is_ok() {
+                    cache::store(root, epoch, &cache_key, &emitted);
+                }
+                return (written, CacheOutcome::IrHit);
             }
             // A relocated Program that fails to emit is never a build
             // failure from this fast path — fall through to the full
@@ -908,7 +910,20 @@ pub fn compile_modules_observed(
         Err(e) => return (Err(e), CacheOutcome::Miss),
     };
 
-    if let (Some(root), Some(epoch)) = (cache_dir, epoch.as_deref()) {
+    let written = write_emitted_project(
+        &emitted,
+        out_dir,
+        runtime_dir,
+        options.static_plan.as_ref(),
+        options.tree_shake_vendored,
+    );
+
+    // The default cache root lives inside `out_dir`, so both tiers are stored
+    // only after the write above has claimed it: a store into a fresh output
+    // dir would otherwise create it unmarked and the claim would refuse it.
+    if written.is_ok()
+        && let (Some(root), Some(epoch)) = (cache_dir, epoch.as_deref())
+    {
         cache::store(root, epoch, &cache_key, &emitted);
         // Also store the lowered `Program` at the IR tier.
         // `ipe_db::lower_program` is a PURE MEMO HIT here — it already ran
@@ -932,16 +947,7 @@ pub fn compile_modules_observed(
         }
     }
 
-    (
-        write_emitted_project(
-            &emitted,
-            out_dir,
-            runtime_dir,
-            options.static_plan.as_ref(),
-            options.tree_shake_vendored,
-        ),
-        CacheOutcome::Miss,
-    )
+    (written, CacheOutcome::Miss)
 }
 
 /// Create the salsa inputs for one build: a [`ipe_db::SourceFile`] per module
@@ -1849,9 +1855,12 @@ pub fn write_emitted_project(
             static_build::cargo_config(plan),
         );
     }
-    reconcile_emitted_project(&manifest, out_dir)?;
+    // The reconcile below prunes and overwrites, so it runs only in a directory
+    // proven ipe-owned — a user tree passed as `out_dir` is refused untouched.
+    let crate_dir = crate::output_dir::OwnedDir::claim(out_dir)?;
+    reconcile_emitted_project(&manifest, &crate_dir)?;
     if static_plan.is_none() {
-        remove_stale_static_config(out_dir)?;
+        remove_stale_static_config(&crate_dir)?;
     }
     Ok(())
 }
@@ -1867,34 +1876,33 @@ pub fn backend_invariant_err(diag: Diagnostic) -> CliError {
     }
 }
 
-/// Remove a stale GENERATED `.cargo/config.toml` from the project root — and
-/// only a generated one: the file is deleted solely when it starts with
-/// [`ipe_backend_rust::static_build::CARGO_CONFIG_MARKER`], so a config a
-/// user placed there by hand is never touched. Needed because the
-/// reconciler's prune pass is scoped to `out_dir/src` and cannot own
-/// root-level files.
-pub fn remove_stale_static_config(out_dir: &Path) -> Result<(), CliError> {
-    let path = out_dir.join(".cargo").join("config.toml");
+/// Remove a stale generated `.cargo/config.toml` from the emitted crate.
+///
+/// Only a generated one goes: the file is deleted solely when it starts with
+/// [`ipe_backend_rust::static_build::CARGO_CONFIG_MARKER`]. Needed because the
+/// reconciler's prune pass is scoped to `src/` and cannot own root-level files.
+///
+/// # Errors
+/// [`CliError::OutputRefused`] for a symlink on the way; [`CliError::Io`] on a
+/// filesystem failure.
+pub fn remove_stale_static_config(crate_dir: &OwnedDir) -> Result<(), CliError> {
+    let config = crate_dir.path_to(Path::new(".cargo").join("config.toml"))?;
+    let path = config.path();
     match fs::read_to_string(&path) {
         Ok(text) if text.starts_with(ipe_backend_rust::static_build::CARGO_CONFIG_MARKER) => {
-            match fs::remove_file(&path) {
-                Ok(()) => Ok(()),
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-                Err(e) => Err(io_err(&path, e)),
-            }
+            config.remove()
         }
         _ => Ok(()),
     }
 }
 
-/// Assemble the complete intended on-disk project, relative to `out_dir`:
-/// every path this build produces, mapped to its exact text.
+/// Assemble the complete intended on-disk project, relative to `out_dir`.
+///
+/// Every path this build produces, mapped to its exact text.
 ///
 /// Every file this driver ever writes is UTF-8 Rust/TOML source, so `String`
-/// (not raw bytes) is the honest content type — it lets this function reuse
-/// the existing [`write_atomic`] helper unchanged (see
-/// [`reconcile_emitted_project`]) instead of a parallel byte-oriented atomic
-/// writer.
+/// (not raw bytes) is the honest content type (see
+/// [`reconcile_emitted_project`]).
 ///
 /// Three sources, in the same precedence `write_emitted_project` has always
 /// used ("vendor first, emit second" — the backend's trimmed
@@ -2056,71 +2064,76 @@ pub fn collect_dir_text(
     Ok(())
 }
 
-/// Reconcile `out_dir` against `manifest`: write only files whose content
-/// differs from what is already on disk (content-gated — H8, avoids spurious
-/// `cargo` rebuilds from an identical-byte rewrite bumping mtime) via
-/// [`write_atomic`]'s existing tmp-then-rename, then DELETE every file under
-/// `out_dir/src` that is NOT a manifest key (manifest-driven prune — H7,
-/// makes an orphaned/stale `.rs` left over from a deleted module or a
-/// runtime-tree removal structurally impossible: `manifest` is authoritative).
+/// Reconcile the owned crate directory against `manifest`.
 ///
-/// Scope discipline: the prune walk is confined to `out_dir/src` and never
-/// touches the project root — `Cargo.lock`, a `target/` build-cache
-/// directory, or any other file `cargo` itself manages there must never be
-/// touched by this pass.
+/// Only files whose content differs from what is on disk are written
+/// (content-gated, so an unchanged rebuild bumps no mtime and `cargo` keeps its
+/// cache), each through [`OwnedPath::write`]'s temp-then-rename. Then every
+/// file under `src/` that is NOT a manifest key is deleted (manifest-driven
+/// prune: a stale `.rs` from a deleted module cannot survive).
+///
+/// Scope discipline: the prune walk is confined to `src/` and never touches the
+/// crate root — `Cargo.lock`, a `target/` build-cache directory, or any other
+/// file `cargo` itself manages there. Every path is an [`OwnedPath`], so a
+/// symlink planted anywhere in the owned tree is refused, never followed.
 ///
 /// # Errors
-/// [`CliError::Io`] on any filesystem failure.
+/// [`CliError::OutputRefused`] for a symlink on the way; [`CliError::Io`] on
+/// any filesystem failure.
 pub fn reconcile_emitted_project(
     manifest: &BTreeMap<PathBuf, String>,
-    out_dir: &Path,
+    crate_dir: &OwnedDir,
 ) -> Result<(), CliError> {
     for (rel, contents) in manifest {
-        let path = out_dir.join(rel);
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent).map_err(|e| io_err(parent, e))?;
-        }
-        write_if_changed(&path, contents)?;
+        write_if_changed(&crate_dir.path_to(rel)?, contents)?;
     }
-    prune_orphaned_files(&out_dir.join("src"), manifest, out_dir)
+    prune_orphaned_files(crate_dir, manifest)
 }
 
-/// Write `contents` to `path` only when the existing content differs (or the
-/// file is absent) — the content-gate `write_atomic` alone does not provide
-/// (it always writes). Delegating the actual write to [`write_atomic`] reuses
-/// its established tmp-then-rename + cleanup-on-failure behaviour rather than
-/// a second, parallel atomic-write implementation.
-pub fn write_if_changed(path: &Path, contents: &str) -> Result<(), CliError> {
-    // A differing byte length is sufficient proof of differing content, so skip
-    // the whole-file read on the common size-changed case; equal-length files
-    // fall through to the exact byte compare that preserves the no-op mtime
-    // guarantee (avoids spurious cargo rebuilds from identical rewrites).
-    if fs::metadata(path).is_ok_and(|meta| meta.len() == contents.len() as u64)
-        && fs::read_to_string(path).is_ok_and(|existing| existing == contents)
+/// Write `contents` to `target` only when the existing content differs.
+///
+/// A differing byte length proves a difference without reading; an equal length
+/// falls through to the exact compare, which keeps an identical rewrite a no-op.
+///
+/// # Errors
+/// As [`OwnedPath::write`].
+pub fn write_if_changed(target: &OwnedPath, contents: &str) -> Result<(), CliError> {
+    let path = target.path();
+    if fs::symlink_metadata(&path)
+        .is_ok_and(|meta| meta.is_file() && meta.len() == contents.len() as u64)
+        && fs::read_to_string(&path).is_ok_and(|existing| existing == contents)
     {
         return Ok(());
     }
-    write_atomic(path, contents)
+    target.write(contents.as_bytes())
 }
 
-/// Delete every FILE under `dir` whose path relative to `out_dir` is not a
-/// key of `manifest`. Recurses into subdirectories but never removes a
-/// directory itself (leaving empty directories behind is harmless — `cargo`
-/// does not care — and staying file-only keeps this pass's blast radius
-/// minimal).
+/// Delete every file under the crate's `src/` that is not a key of `manifest`.
+///
+/// The walk starts at an [`OwnedPath`] (a symlinked `src/` is refused) and
+/// classifies entries without following links, so a symlink inside the tree is
+/// removed as the link it is, never traversed. Directories are kept (empty ones
+/// are harmless to `cargo`), which keeps the pass's blast radius minimal.
+///
+/// # Errors
+/// [`CliError::OutputRefused`] when `src/` is a symlink; [`CliError::Io`] on a
+/// filesystem failure.
 pub fn prune_orphaned_files(
+    crate_dir: &OwnedDir,
+    manifest: &BTreeMap<PathBuf, String>,
+) -> Result<(), CliError> {
+    let src = crate_dir.path_to("src")?;
+    prune_dir(&src.path(), manifest, crate_dir.path())
+}
+
+/// One level of [`prune_orphaned_files`]; `dir` was reached without following a link.
+fn prune_dir(
     dir: &Path,
     manifest: &BTreeMap<PathBuf, String>,
     out_dir: &Path,
 ) -> Result<(), CliError> {
-    if !dir.is_dir() {
-        return Ok(());
-    }
-    // A directory that vanishes between the `is_dir()` check above and this
-    // read (a concurrent external cleanup — see `write_atomic`'s doc for the
-    // shared-scratch-directory scenario this guards) trivially has nothing
-    // left to prune; treat `NotFound` as success rather than failing the
-    // whole build over a race that already resolved itself.
+    // A directory that is absent, or vanishes before this read (a concurrent
+    // external cleanup), trivially has nothing left to prune.
     let entries = match fs::read_dir(dir) {
         Ok(entries) => entries,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
@@ -2143,7 +2156,7 @@ pub fn prune_orphaned_files(
             Err(e) => return Err(io_err(&path, e)),
         };
         if file_type.is_dir() {
-            prune_orphaned_files(&path, manifest, out_dir)?;
+            prune_dir(&path, manifest, out_dir)?;
         } else {
             // `path` was built from `dir`, itself built from `out_dir` by
             // construction (the initial call passes `out_dir.join("src")`,
@@ -2398,16 +2411,16 @@ mod tests {
                 .duration_since(std::time::UNIX_EPOCH)
                 .map_or(0, |d| d.as_nanos())
         ));
-        std::fs::create_dir_all(&dir).expect("create temp dir");
+        let owned = OwnedDir::claim(&dir).expect("claim temp dir");
 
         // Same content: the write is skipped, so mtime does not advance.
-        let same = dir.join("same.txt");
+        let same = owned.path_to("same.txt").expect("owned path");
         write_if_changed(&same, "hello").expect("initial write");
-        let mtime_before = fs::metadata(&same)
+        let mtime_before = fs::metadata(same.path())
             .and_then(|m| m.modified())
             .expect("mtime");
         write_if_changed(&same, "hello").expect("no-op write");
-        let mtime_after = fs::metadata(&same)
+        let mtime_after = fs::metadata(same.path())
             .and_then(|m| m.modified())
             .expect("mtime");
         assert_eq!(
@@ -2416,22 +2429,22 @@ mod tests {
         );
 
         // Differing length: content is overwritten.
-        let changed = dir.join("changed.txt");
+        let changed = owned.path_to("changed.txt").expect("owned path");
         write_if_changed(&changed, "abc").expect("initial write");
         write_if_changed(&changed, "abcdef").expect("length-changed write");
         assert_eq!(
-            fs::read_to_string(&changed).expect("read back"),
+            fs::read_to_string(changed.path()).expect("read back"),
             "abcdef",
             "a differing-length write must land"
         );
 
         // Same length, different bytes: still rewritten (falls through to the
         // exact compare, which reports a difference).
-        let flip = dir.join("flip.txt");
+        let flip = owned.path_to("flip.txt").expect("owned path");
         write_if_changed(&flip, "aaa").expect("initial write");
         write_if_changed(&flip, "bbb").expect("same-length differing write");
         assert_eq!(
-            fs::read_to_string(&flip).expect("read back"),
+            fs::read_to_string(flip.path()).expect("read back"),
             "bbb",
             "a same-length differing-byte write must land"
         );

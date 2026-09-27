@@ -45,7 +45,7 @@ example sweep.
 ## Running an example
 
 Each example is a self-contained Ipê project. Build it with
-`ipe build package.ipe --out out/rust` (requires a built `ipe` binary from
+`ipe build package.ipe` (requires a built `ipe` binary from
 `cargo build --release -p ipe`), then run the emitted crate with
 `cargo run --manifest-path out/rust/Cargo.toml`.
 

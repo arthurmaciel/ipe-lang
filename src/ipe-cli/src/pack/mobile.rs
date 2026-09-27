@@ -28,6 +28,9 @@ use std::path::{Path, PathBuf};
 
 use ipe_ir::Capability;
 
+use crate::CliError;
+use crate::output_dir::OwnedDir;
+
 use super::permissions::{self, Platform};
 
 /// A mobile operating system this packager targets.
@@ -883,70 +886,41 @@ fn gradle_string_escape(text: &str) -> String {
     out
 }
 
-/// Materialise `layout` under `dist_dir/<root_name>`.
+/// Materialise `layout` as the shell `dist/<root_name>` inside the owned `dist`.
 ///
 /// Generated files are written verbatim, bundled SPA assets and the source icon
 /// are copied into place. A fresh, deterministic tree: an existing shell directory
 /// of the same name is removed first so a re-pack never leaves stale files behind.
+/// Every path is a [`crate::output_dir::OwnedPath`], so a symlink planted in the
+/// owned `dist` is refused — never removed through, written through, or copied
+/// onto.
 ///
 /// # Errors
-/// [`super::desktop::MaterialiseError`] naming the exact path on any filesystem
-/// failure.
+/// [`CliError::OutputRefused`] for a symlink or non-plain name on the way;
+/// [`CliError::Io`] naming the exact path on any filesystem failure.
 pub fn materialise(
     layout: &ShellLayout,
     icon: Option<&Path>,
-    dist_dir: &Path,
-) -> Result<PathBuf, super::desktop::MaterialiseError> {
-    let root = dist_dir.join(&layout.root_name);
-    if root.exists() {
-        std::fs::remove_dir_all(&root).map_err(|source| super::desktop::MaterialiseError {
-            path: root.clone(),
-            source,
-        })?;
-    }
-    std::fs::create_dir_all(&root).map_err(|source| super::desktop::MaterialiseError {
-        path: root.clone(),
-        source,
-    })?;
+    dist: &OwnedDir,
+) -> Result<PathBuf, CliError> {
+    let root = dist.path_to(&layout.root_name)?;
+    root.remove()?;
+    root.ensure_dir()?;
 
     for file in &layout.files {
-        let dest = root.join(rel_to_native(&file.rel_path));
-        if let Some(parent) = dest.parent() {
-            std::fs::create_dir_all(parent).map_err(|source| super::desktop::MaterialiseError {
-                path: parent.to_path_buf(),
-                source,
-            })?;
-        }
+        let entry =
+            dist.path_to(Path::new(&layout.root_name).join(rel_to_native(&file.rel_path)))?;
         match &file.content {
-            ShellContent::Generated(text) => {
-                std::fs::write(&dest, text.as_bytes()).map_err(|source| {
-                    super::desktop::MaterialiseError {
-                        path: dest.clone(),
-                        source,
-                    }
-                })?;
-            }
-            ShellContent::Asset(src) => {
-                std::fs::copy(src, &dest).map(|_n| ()).map_err(|source| {
-                    super::desktop::MaterialiseError {
-                        path: src.clone(),
-                        source,
-                    }
-                })?;
-            }
+            ShellContent::Generated(text) => entry.write(text.as_bytes())?,
+            ShellContent::Asset(src) => entry.copy_from(src)?,
             ShellContent::Icon => {
                 if let Some(src) = icon {
-                    std::fs::copy(src, &dest).map(|_n| ()).map_err(|source| {
-                        super::desktop::MaterialiseError {
-                            path: src.to_path_buf(),
-                            source,
-                        }
-                    })?;
+                    entry.copy_from(src)?;
                 }
             }
         }
     }
-    Ok(root)
+    Ok(root.path())
 }
 
 /// Translate a shell-relative `/`-separated path into a native `PathBuf`.

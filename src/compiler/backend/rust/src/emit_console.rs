@@ -120,6 +120,7 @@ fn emit_console_inner(
     let view_s = emit_console_fn(ctx, view_e, indent, child, generics)?;
     let subs_s = emit_console_fn(ctx, subs_e, indent, child, generics)?;
     let on_line_s = emit_console_fn(ctx, on_line_e, indent, child, generics)?;
+    let codec_s = session_codec_suffix(ctx, update_e, view_e)?;
 
     Ok(Some(format!(
         "ipe_runtime::tea::CliApp(ipe_runtime::console_app(\
@@ -127,9 +128,25 @@ fn emit_console_inner(
          {update_s}, \
          {view_s}, \
          {subs_s}, \
-         {on_line_s}\
+         {on_line_s}{codec_s}\
          ))"
     )))
+}
+
+/// The trailing session-codec argument of a `--debugger` build, else nothing.
+///
+/// The runtime's `console_app` takes the codec only under its `debugger`
+/// feature, which `ctx.debugger` selects, so the arity always matches. The
+/// `Model` is read from `view`'s parameter, falling back to `update`'s second.
+fn session_codec_suffix(ctx: &EmitCtx, update_e: &Expr, view_e: &Expr) -> DResult<String> {
+    if !ctx.debugger {
+        return Ok(String::new());
+    }
+    let msg_ty = crate::emit_model_gate::msg_ty_of_update(update_e);
+    let model_ty = crate::emit_model_gate::model_ty_of_view(view_e)
+        .or_else(|| crate::emit_model_gate::fn_param_ty(update_e, 1));
+    let codec = crate::emit_model_schema::session_codec_arg(ctx, msg_ty, model_ty)?;
+    Ok(format!(", {codec}"))
 }
 
 /// Emit a cfg-field expression for the Cli app-entry kernel.

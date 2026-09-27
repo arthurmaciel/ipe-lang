@@ -99,6 +99,45 @@ fn init_reconciles_existing_project_without_clobbering() {
         restored.contains("Increment") && restored.contains("Decrement"),
         "init --force must overwrite the managed file with the scaffold"
     );
+    // ...but never destroys the user's version: it is backed up first.
+    let backups: Vec<String> = fs::read_dir(target.join("src").join(".ipe-backup"))
+        .map(|entries| {
+            entries
+                .flatten()
+                .filter_map(|e| fs::read_to_string(e.path()).ok())
+                .collect()
+        })
+        .unwrap_or_default();
+    assert!(
+        backups.iter().any(|b| b == edited),
+        "init --force must back up the edited Main.ipe before overwriting it"
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// A fresh `ipe init` keeps the user's own files already in the target.
+///
+/// A fresh `ipe init` scaffolds around them and never overwrites one.
+#[test]
+fn init_keeps_existing_user_files_in_a_fresh_target() {
+    let dir = fresh_dir("keep_user_files");
+    let target = dir.join("app");
+    fs::create_dir_all(&target).expect("make target");
+    let readme = target.join("README.md");
+    fs::write(&readme, "my notes\n").expect("write user README");
+
+    let result = ipe::run_cli(&["init".to_owned(), target.to_string_lossy().into_owned()]);
+    assert!(result.is_ok(), "init must succeed: {result:?}");
+    assert_eq!(
+        fs::read_to_string(&readme).unwrap_or_default(),
+        "my notes\n",
+        "a pre-existing README must be kept byte-for-byte"
+    );
+    assert!(
+        target.join("src").join("Main.ipe").is_file(),
+        "the scaffold is still written around the kept file"
+    );
 
     let _ = fs::remove_dir_all(&dir);
 }

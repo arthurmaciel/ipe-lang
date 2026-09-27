@@ -83,6 +83,15 @@ pub mod core;
 /// the `debugger` feature and injects this var on the executed child — and the
 /// gated recorder that reads it share ONE wire name (single source of truth).
 pub const RECORD_ENV: &str = "IPE_DEBUGGER_RECORD";
+/// Env var naming the typed session log an `ipe run --replay` child re-folds
+/// instead of running live.
+///
+/// Ungated for the same single-wire-name reason as [`RECORD_ENV`].
+pub const REPLAY_ENV: &str = "IPE_DEBUGGER_REPLAY";
+/// File extension of the typed session log written beside the [`RECORD_ENV`] trace.
+///
+/// `session.ipelog` gets the sibling `session.ipemsgs`.
+pub const TYPED_LOG_EXTENSION: &str = "ipemsgs";
 // Development-only TEA time-travelling debugger core. Only present when the
 // `debugger` feature is active (`ipe build/run --debugger`). Zero code emitted
 // for a non-`--debugger` build. NOT part of the emitted `mod.rs` template —

@@ -310,8 +310,12 @@ impl<Model, Msg> FileStore<Model, Msg> {
     #[must_use]
     pub fn new(path: &str, ttl: Duration, schema_tag: [u8; 32]) -> Self {
         let path = std::path::PathBuf::from(path);
-        let disk = std::fs::read_to_string(&path)
-            .ok()
+        // A symlink at the map path is never read through: the store starts
+        // empty, and `persist`'s rename later replaces the link itself.
+        let is_link = std::fs::symlink_metadata(&path).is_ok_and(|m| m.file_type().is_symlink());
+        let disk = (!is_link)
+            .then(|| std::fs::read_to_string(&path).ok())
+            .flatten()
             .and_then(|s| serde_json::from_str::<HashMap<String, (String, i64)>>(&s).ok())
             .unwrap_or_default();
         FileStore {
@@ -340,8 +344,12 @@ impl<Model, Msg> FileStore<Model, Msg> {
             return;
         };
         let tmp = self.path.with_extension("tmp");
+        // The temp file is created exclusively: a leftover temp (or a symlink
+        // planted at its name) is removed as the entry it is, never opened, so
+        // the map can never be written through a link.
+        let _ = std::fs::remove_file(&tmp);
         let mut opts = std::fs::OpenOptions::new();
-        opts.write(true).create(true).truncate(true);
+        opts.write(true).create_new(true);
         #[cfg(unix)]
         {
             use std::os::unix::fs::OpenOptionsExt as _;
@@ -350,9 +358,8 @@ impl<Model, Msg> FileStore<Model, Msg> {
         let Ok(mut file) = opts.open(&tmp) else {
             return;
         };
-        // `OpenOptions::mode` applies only when the file is freshly created; a
-        // pre-existing temp (a prior crashed write) keeps its old mode. Set it
-        // explicitly so the map is ALWAYS 0600 before it holds any secret.
+        // Belt and braces: pin the mode on the open handle before any secret
+        // is written.
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt as _;
@@ -1830,6 +1837,39 @@ mod tests {
         assert_eq!(s.web_sessions().await.len(), 1);
         s.delete(&cold_sid).await;
         s.delete(&web_sid).await;
+    }
+
+    /// Symlinks planted at the map path and its temp name are never followed.
+    ///
+    /// The persisted map replaces the links, and their targets survive.
+    #[cfg(all(feature = "web", unix))]
+    #[tokio::test]
+    async fn file_store_never_writes_through_planted_symlinks() {
+        let dir = std::env::temp_dir().join(format!("ipetest_file_links_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(std::fs::create_dir_all(&dir).is_ok(), "make scratch dir");
+        let victim = dir.join("victim.txt");
+        assert!(std::fs::write(&victim, "keep").is_ok(), "write victim");
+        let map = dir.join("sessions.json");
+        assert!(
+            std::os::unix::fs::symlink(&victim, &map).is_ok(),
+            "map link"
+        );
+        assert!(
+            std::os::unix::fs::symlink(&victim, dir.join("sessions.tmp")).is_ok(),
+            "temp link"
+        );
+        let Some(p) = map.to_str() else {
+            assert!(map.to_str().is_some(), "utf-8 temp path");
+            return;
+        };
+        let s: FileStore<i32, ()> = FileStore::new(p, Duration::from_secs(60), TEST_TAG);
+        s.set("s1", handle_i32(7)).await;
+        assert_eq!(
+            std::fs::read_to_string(&victim).ok().as_deref(),
+            Some("keep")
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// File-store restart survival: a store writes a checkpoint, a FRESH store

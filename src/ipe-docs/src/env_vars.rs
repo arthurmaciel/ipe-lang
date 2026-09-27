@@ -152,14 +152,14 @@ pub static ENV_VARS: &[EnvVar] = &[
         name: "IPE_BUILD_CACHE",
         default: "on",
         purpose: "Set to `0`, `off`, or `false` to disable the incremental build cache. \
-                  Default is on; the cache directory is `<out>/.ipe-cache` unless \
+                  Default is on; the cache directory is `<out>/.ipe-cache/<per-user salt>` unless \
                   `IPE_BUILD_CACHE_DIR` is set.",
         subsystem: Subsystem::Build,
         class: Class::Tunable,
     },
     EnvVar {
         name: "IPE_BUILD_CACHE_DIR",
-        default: "unset (<out>/.ipe-cache)",
+        default: "unset (<out>/.ipe-cache/<per-user salt>)",
         purpose: "Explicit path for the incremental build cache directory. Takes effect \
                   only when the cache is enabled (`IPE_BUILD_CACHE` not `off`).",
         subsystem: Subsystem::Build,
@@ -1262,11 +1262,16 @@ pub static EXCLUDED_NAMES: &[&str] = &[
     // `ipe watch` into the spawned child (never operator-set), like the port
     // vars above. Present only in a dev-loop (web/debugger) build.
     "IPE_CONTROL_PORT",
-    // Dev-loop-internal record-log destination — set by `ipe debugger record`
-    // on the spawned child (the operator names the log with `--out`, never this
-    // var directly). Read by the recorder dump; present only in a `debugger`
-    // build.
+    // Dev-loop-internal record-log destination — set by `ipe run --record` on
+    // the executed child (the log always lands in the ipe-owned output root; the
+    // operator never sets this var directly). Read by the recorder dump; present
+    // only in a `debugger` build.
     "IPE_DEBUGGER_RECORD",
+    // Dev-loop-internal replay-log path — set by `ipe run --replay` on the
+    // executed child (never operator-set). Read by the cli/worker loop, which
+    // replays the named typed log instead of running; present only in a
+    // `debugger` build.
+    "IPE_DEBUGGER_REPLAY",
 ];
 
 #[cfg(test)]

@@ -104,7 +104,7 @@ jobs:
       - name: ipe build --static (example, ${{ matrix.allocator }})
         run: |
           cd examples/shapes/non-tea/hello-world
-          "$CARGO_TARGET_DIR/release/ipe" build package.ipe --out out/rust \
+          "$CARGO_TARGET_DIR/release/ipe" build package.ipe --out out \
             --static --allocator ${{ matrix.allocator }}
           cd out/rust
           cargo build --release --target "$STATIC_TRIPLE"
@@ -206,7 +206,7 @@ jobs:
       - name: ipe build --static --target aarch64-unknown-linux-musl
         run: |
           cd examples/shapes/non-tea/hello-world
-          "$CARGO_TARGET_DIR/release/ipe" build package.ipe --out out/rust \
+          "$CARGO_TARGET_DIR/release/ipe" build package.ipe --out out \
             --static --target aarch64-unknown-linux-musl --allocator dlmalloc
           cd out/rust
           cargo build --release --target "$STATIC_TRIPLE"
@@ -293,7 +293,7 @@ jobs:
             echo "::error::--cfree must be refused until the pure-Rust dep swaps land"
             exit 1
           fi
-          test ! -e out/cfree/Cargo.toml || {
+          test ! -e out/cfree || {
             echo "::error::--cfree refusal must be artifact-free (no emitted crate)"; exit 1; }
 
   # ─── Windows static gate ───────────────────────────────────────────────────
@@ -352,7 +352,7 @@ jobs:
       - name: ipe build (emit Rust for 01-hello-world)
         run: |
           cd "$REPO/examples/shapes/non-tea/hello-world"
-          "$CARGO_TARGET_DIR/release/ipe.exe" build package.ipe --out out/rust
+          "$CARGO_TARGET_DIR/release/ipe.exe" build package.ipe --out out
 
       - name: cargo build --release (MSVC +crt-static, dlmalloc)
         run: |
@@ -439,7 +439,7 @@ jobs:
       - name: ipe build (emit Rust for 01-hello-world)
         run: |
           cd examples/shapes/non-tea/hello-world
-          "$CARGO_TARGET_DIR/release/ipe" build package.ipe --out out/rust
+          "$CARGO_TARGET_DIR/release/ipe" build package.ipe --out out
 
       # Build-only: cross compiles the emitted crate for FreeBSD. Running
       # the resulting ELF on an ubuntu host is not possible (wrong ABI).
