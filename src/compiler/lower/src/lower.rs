@@ -6181,7 +6181,7 @@ struct NonCloneMoveState {
     consumed: bool,
     /// A read observed a moved (or partially moved) value.
     hazard: bool,
-    /// Parts moved out by a by-value pattern match.
+    /// Parts moved out by a by-value pattern match or a move-only field read.
     partial: PartialMove,
 }
 
