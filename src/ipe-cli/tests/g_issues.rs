@@ -104,5 +104,7 @@ mod golden_i99_alias_match_arm;
 mod golden_l0135_access_base_move_seal;
 #[path = "g_issues/golden_l0135_consume_then_borrow_seal.rs"]
 mod golden_l0135_consume_then_borrow_seal;
+#[path = "g_issues/golden_l0135_effect_field_move_seal.rs"]
+mod golden_l0135_effect_field_move_seal;
 #[path = "g_issues/golden_l0135_union_task_reuse_seal.rs"]
 mod golden_l0135_union_task_reuse_seal;

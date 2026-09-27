@@ -698,6 +698,13 @@ pub fn emit_expr_at(
             // (e.g. `view` and `update` both read `model.someField`).  The
             // audit's second half — last-use analysis to elide the clone on a
             // heap field's FINAL read — is explicitly deferred (spec §3.5).
+            //
+            // A field embedding a `Task` / `Cmd` / `Sub` effect carrier has no
+            // `Clone` impl, so its read is a MOVE out of the base. The lowerer's
+            // `IPE-L0135` gate admits it only where the move is linear (no later
+            // read of that field or of the whole base) and refuses it on a
+            // row-generic base, whose witness getter only borrows.
+            let moves = ipe_ir::ir_type_has_effect_carrier(field_ty);
             let base = emit_expr_at(ctx, record, indent, child, generics)?;
             // A field read on a row-generic parameter cannot name a struct field
             // (the concrete struct is unknown at emit time): it routes through the
@@ -707,6 +714,14 @@ pub fn emit_expr_at(
             if let Expr::Var(sym) = record.as_ref()
                 && generics.is_row(*sym)
             {
+                if moves {
+                    return Err(Diagnostic::CompilerBug {
+                        where_: "ipe_backend_rust::emit_expr_at",
+                        detail: "a move-only effect-carrier field read reached a borrowing \
+                                 row-generic witness getter"
+                            .to_string(),
+                    });
+                }
                 let getter = crate::naming::field_witness_getter_name(ctx.resolve_ident(*field)?);
                 if ir_type_is_definitely_copy(field_ty) {
                     // The getter borrows; a `Copy` field is copied out by deref.
@@ -715,7 +730,7 @@ pub fn emit_expr_at(
                 return Ok(format!("({base}).{getter}().clone()"));
             }
             let field = ctx.emit_ident(*field)?;
-            if ir_type_is_definitely_copy(field_ty) {
+            if moves || ir_type_is_definitely_copy(field_ty) {
                 Ok(format!("({base}).{field}"))
             } else {
                 Ok(format!("({base}).{field}.clone()"))
