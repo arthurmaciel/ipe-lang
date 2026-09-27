@@ -4,31 +4,184 @@
 //! the message; `{name}` marks a value filled in when it is shown. Rust never
 //! spells a message: it calls the function declared for the key below, whose
 //! parameters are exactly the message's placeholders, so a call site supplies
-//! the values the text interpolates and nothing else. The catalog tests pin every
-//! declaration to a section with exactly its placeholders, and every section to a
-//! declaration, so the text and its callers cannot drift. Edit the `.md`, never a
-//! Rust string.
+//! the values the text interpolates and nothing else. Each declaration resolves
+//! its text at build time and asserts, in a `const`, that its section exists
+//! once with exactly its placeholders, so a drifted catalog fails the build; the
+//! catalog tests add that every section has a declaration. Edit the `.md`, never
+//! a Rust string.
 
 use std::fmt::{self, Write as _};
 
 /// The message catalog.
 pub const CATALOG: &str = include_str!("../text/messages.md");
 
-/// The body of the catalog's `## <key>` section, without its blank edge lines.
+/// The text of the catalog's `## <key>` section, checked against its declaration.
 ///
-/// The body runs to the next `#` or `##` heading. `None` when the catalog has no
-/// such section.
+/// The text is the section's body without its blank edge lines, running to the
+/// next `#` or `##` heading. It is empty unless the declaration of `key` with
+/// parameters `params` agrees with the catalog: the catalog defines `key`
+/// exactly once, with a non-empty body whose placeholders are exactly `params`.
+/// Every declared message resolves its text through this in a `const` and
+/// asserts the text is non-empty, so the build refuses a renamed or deleted
+/// section, a duplicated one, or a renamed placeholder.
 #[must_use]
-pub fn template(key: &str) -> Option<&'static str> {
-    let heading = format!("\n## {key}\n");
-    let start = CATALOG.find(&heading)?.saturating_add(heading.len());
-    let body = CATALOG.get(start..)?;
-    let end = [body.find("\n# "), body.find("\n## ")]
-        .into_iter()
-        .flatten()
-        .min()
-        .unwrap_or(body.len());
-    body.get(..end).map(|body| body.trim_matches('\n'))
+pub const fn checked_section(key: &str, params: &[&str]) -> &'static str {
+    checked_section_in(CATALOG, key, params)
+}
+
+/// [`checked_section`] over the catalog text `catalog`.
+const fn checked_section_in<'a>(catalog: &'a str, key: &str, params: &[&str]) -> &'a str {
+    let mut found: Option<&'a [u8]> = None;
+    let mut rest = catalog.as_bytes();
+    while let [byte, tail @ ..] = rest {
+        if *byte == b'\n'
+            && let Some(after_marker) = strip_prefix(tail, b"## ")
+            && let Some(after_key) = strip_prefix(after_marker, key.as_bytes())
+            && let Some(body) = strip_prefix(after_key, b"\n")
+        {
+            if found.is_some() {
+                return "";
+            }
+            found = Some(trim_newlines(until_heading(body)));
+        }
+        rest = tail;
+    }
+    if let Some(body) = found
+        && !body.is_empty()
+        && every_placeholder_is_a_param(body, params)
+        && every_param_is_a_placeholder(body, params)
+        && let Ok(text) = core::str::from_utf8(body)
+    {
+        return text;
+    }
+    ""
+}
+
+/// `hay` past `prefix`, or `None` when `hay` does not start with `prefix`.
+const fn strip_prefix<'a>(mut hay: &'a [u8], mut prefix: &[u8]) -> Option<&'a [u8]> {
+    loop {
+        match (hay, prefix) {
+            (_, []) => return Some(hay),
+            ([h, hay_tail @ ..], [p, prefix_tail @ ..]) if *h == *p => {
+                hay = hay_tail;
+                prefix = prefix_tail;
+            }
+            _ => return None,
+        }
+    }
+}
+
+/// Whether `a` and `b` hold the same bytes.
+const fn bytes_eq(a: &[u8], b: &[u8]) -> bool {
+    a.len() == b.len() && strip_prefix(a, b).is_some()
+}
+
+/// `body` up to (not including) its first `\n# ` or `\n## ` heading line.
+const fn until_heading(body: &[u8]) -> &[u8] {
+    let mut len: usize = 0;
+    let mut rest = body;
+    while let [byte, tail @ ..] = rest {
+        if *byte == b'\n'
+            && (strip_prefix(tail, b"# ").is_some() || strip_prefix(tail, b"## ").is_some())
+        {
+            break;
+        }
+        len = len.saturating_add(1);
+        rest = tail;
+    }
+    let Some((head, _)) = body.split_at_checked(len) else {
+        return body;
+    };
+    head
+}
+
+/// `bytes` without its leading and trailing newlines.
+const fn trim_newlines(mut bytes: &[u8]) -> &[u8] {
+    while let [b'\n', tail @ ..] = bytes {
+        bytes = tail;
+    }
+    while let [init @ .., b'\n'] = bytes {
+        bytes = init;
+    }
+    bytes
+}
+
+/// The placeholder name opening `after_brace` (the bytes after a `{`).
+///
+/// A placeholder name is lowercase letters, digits, and `_`, starting with a
+/// letter; empty when the text up to the next `}` is not one.
+const fn placeholder_name(after_brace: &[u8]) -> &[u8] {
+    let mut len: usize = 0;
+    let mut rest = after_brace;
+    while let [c, tail @ ..] = rest {
+        if *c == b'}' {
+            let Some((name, _)) = after_brace.split_at_checked(len) else {
+                return b"";
+            };
+            return name;
+        }
+        let allowed = c.is_ascii_lowercase() || (len > 0 && (c.is_ascii_digit() || *c == b'_'));
+        if !allowed {
+            return b"";
+        }
+        len = len.saturating_add(1);
+        rest = tail;
+    }
+    b""
+}
+
+/// Whether every placeholder `body` interpolates is one of `params`.
+const fn every_placeholder_is_a_param(body: &[u8], params: &[&str]) -> bool {
+    let mut rest = body;
+    while let [c, tail @ ..] = rest {
+        if *c == b'{' {
+            let name = placeholder_name(tail);
+            if !name.is_empty() && !names_contain(params, name) {
+                return false;
+            }
+        }
+        rest = tail;
+    }
+    true
+}
+
+/// Whether every one of `params` appears in `body` as a `{param}` placeholder.
+const fn every_param_is_a_placeholder(body: &[u8], params: &[&str]) -> bool {
+    let mut rest = params;
+    while let [param, tail @ ..] = rest {
+        if !has_placeholder(body, param.as_bytes()) {
+            return false;
+        }
+        rest = tail;
+    }
+    true
+}
+
+/// Whether `names` holds `name`.
+const fn names_contain(names: &[&str], name: &[u8]) -> bool {
+    let mut rest = names;
+    while let [candidate, tail @ ..] = rest {
+        if bytes_eq(candidate.as_bytes(), name) {
+            return true;
+        }
+        rest = tail;
+    }
+    false
+}
+
+/// Whether `body` contains `{name}`.
+const fn has_placeholder(body: &[u8], name: &[u8]) -> bool {
+    let mut rest = body;
+    while let [_, tail @ ..] = rest {
+        if let Some(after_open) = strip_prefix(rest, b"{")
+            && let Some(after_name) = strip_prefix(after_open, name)
+            && strip_prefix(after_name, b"}").is_some()
+        {
+            return true;
+        }
+        rest = tail;
+    }
+    false
 }
 
 /// Fill `template`'s `{name}` placeholders from `args`.
@@ -59,54 +212,40 @@ pub fn fill(template: &str, args: &[(&str, &dyn fmt::Display)]) -> String {
     out
 }
 
-/// The placeholder names `template` interpolates, in order of first use.
-///
-/// A placeholder is `{name}` where `name` is lowercase letters, digits, and `_`,
-/// starting with a letter.
-#[must_use]
-pub fn placeholders(template: &str) -> Vec<&str> {
-    let mut names: Vec<&str> = Vec::new();
-    let mut rest = template;
-    while let Some(open) = rest.find('{') {
-        let after = rest.get(open.saturating_add(1)..).unwrap_or("");
-        let name = after.find('}').and_then(|close| after.get(..close));
-        if let Some(name) = name.filter(|name| is_placeholder_name(name))
-            && !names.contains(&name)
-        {
-            names.push(name);
-        }
-        rest = after;
-    }
-    names
-}
-
-/// Whether `name` is a well-formed placeholder name.
-fn is_placeholder_name(name: &str) -> bool {
-    name.chars()
-        .next()
-        .is_some_and(|first| first.is_ascii_lowercase())
-        && name
-            .chars()
-            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
-}
-
 /// Declare one catalog message as a function.
 ///
 /// A message without placeholders is its `&'static str` text; one with
 /// placeholders takes one value per placeholder and returns the filled text.
+/// Either way the text is a `const` resolved by [`checked_section`] at build
+/// time, and a `const` assertion that it is non-empty pins the declaration to
+/// its section: the build fails when the section is missing, repeated, or
+/// empty, or when its placeholders differ from the declared parameters. No
+/// lookup runs when the message is shown.
 macro_rules! message_fn {
     ($(#[$meta:meta])* $name:ident = $key:literal) => {
         $(#[$meta])*
         #[must_use]
-        pub fn $name() -> &'static str {
-            template($key).unwrap_or($key)
+        pub const fn $name() -> &'static str {
+            const TEXT: &str = checked_section($key, &[]);
+            // IPE-RUST-AUDIT:ACCEPTED (Arthur Maciel) — compile-time `const` assertion (not a runtime panic); fails the BUILD if this declaration drifts from its `text/messages.md` section, the catalog SEAL [ledger #boundary]
+            const _: () = assert!(
+                !TEXT.is_empty(),
+                concat!("message `", $key, "` disagrees with text/messages.md")
+            );
+            TEXT
         }
     };
     ($(#[$meta:meta])* $name:ident($($param:ident),+) = $key:literal) => {
         $(#[$meta])*
         #[must_use]
         pub fn $name($($param: &dyn fmt::Display),+) -> String {
-            fill(template($key).unwrap_or($key), &[$((stringify!($param), $param)),+])
+            const TEXT: &str = checked_section($key, &[$(stringify!($param)),+]);
+            // IPE-RUST-AUDIT:ACCEPTED (Arthur Maciel) — compile-time `const` assertion (not a runtime panic); fails the BUILD if this declaration drifts from its `text/messages.md` section, the catalog SEAL [ledger #boundary]
+            const _: () = assert!(
+                !TEXT.is_empty(),
+                concat!("message `", $key, "` disagrees with text/messages.md")
+            );
+            fill(TEXT, &[$((stringify!($param), $param)),+])
         }
     };
 }
@@ -520,26 +659,17 @@ mod tests {
     }
 
     #[test]
-    fn every_declared_message_has_its_section_with_exactly_its_placeholders() {
+    fn every_declared_message_agrees_with_its_section() {
         for (key, params) in DECLARED {
-            let body = template(key);
-            assert!(body.is_some_and(|b| !b.is_empty()), "no text for `{key}`");
-            let mut found = placeholders(body.unwrap_or(""));
-            found.sort_unstable();
-            let mut declared = params.to_vec();
-            declared.sort_unstable();
-            assert_eq!(found, declared, "`{key}` placeholders drifted");
+            assert!(!checked_section(key, params).is_empty(), "`{key}` drifted");
         }
     }
 
     #[test]
     fn every_section_is_declared_exactly_once() {
         let keys = catalog_keys();
-        for (i, key) in keys.iter().enumerate() {
-            assert!(
-                !keys.iter().skip(i.saturating_add(1)).any(|k| k == key),
-                "`{key}` is defined twice"
-            );
+        assert!(!keys.is_empty(), "the catalog defines no section");
+        for key in &keys {
             assert!(
                 DECLARED.iter().any(|(declared, _)| declared == key),
                 "`{key}` has no declaration"
@@ -559,11 +689,54 @@ mod tests {
     #[test]
     fn a_section_body_stops_at_the_next_heading() {
         assert_eq!(
-            template("emit-ir-with-out"),
-            Some("--emit-ir does not compose with --out")
+            checked_section("emit-ir-with-out", &[]),
+            "--emit-ir does not compose with --out"
         );
-        assert_eq!(template("verbs-label"), Some("Verbs:"));
-        assert_eq!(template("no-such-message"), None);
+        assert_eq!(checked_section("verbs-label", &[]), "Verbs:");
+        assert_eq!(emit_ir_with_out(), "--emit-ir does not compose with --out");
+    }
+
+    /// A small catalog for driving the agreement check's refusals.
+    const FIXTURE: &str = "# fixture\n\n## plain\n\nNo values here.\n\n## one\n\nHello {name}, {name}.\n\n## twice\n\nA\n\n## twice\n\nB\n\n## blank\n\n\n# end\n";
+
+    #[test]
+    fn the_agreement_check_resolves_a_matching_declaration() {
+        assert_eq!(checked_section_in(FIXTURE, "plain", &[]), "No values here.");
+        assert_eq!(
+            checked_section_in(FIXTURE, "one", &["name"]),
+            "Hello {name}, {name}."
+        );
+    }
+
+    #[test]
+    fn the_agreement_check_refuses_every_drift() {
+        // A missing section.
+        assert_eq!(checked_section_in(FIXTURE, "absent", &[]), "");
+        assert_eq!(checked_section("no-such-message", &[]), "");
+        // A key that is only a prefix of a section's key.
+        assert_eq!(checked_section_in(FIXTURE, "on", &["name"]), "");
+        // A section defined twice.
+        assert_eq!(checked_section_in(FIXTURE, "twice", &[]), "");
+        // A section with no text.
+        assert_eq!(checked_section_in(FIXTURE, "blank", &[]), "");
+        // A placeholder the declaration does not take.
+        assert_eq!(checked_section_in(FIXTURE, "one", &[]), "");
+        // A declared parameter the text never shows.
+        assert_eq!(checked_section_in(FIXTURE, "one", &["name", "extra"]), "");
+        assert_eq!(checked_section_in(FIXTURE, "plain", &["name"]), "");
+        // A renamed placeholder.
+        assert_eq!(checked_section_in(FIXTURE, "one", &["nom"]), "");
+    }
+
+    #[test]
+    fn only_well_formed_names_are_placeholders() {
+        assert_eq!(placeholder_name(b"a_2} rest"), b"a_2");
+        assert_eq!(placeholder_name(b"Nope}"), b"");
+        assert_eq!(placeholder_name(b"2a}"), b"");
+        assert_eq!(placeholder_name(b"}"), b"");
+        assert_eq!(placeholder_name(b"a b}"), b"");
+        assert_eq!(placeholder_name(b"unclosed"), b"");
+        assert!(every_placeholder_is_a_param(b"{Nope} {} {", &[]));
     }
 
     #[test]
@@ -574,7 +747,259 @@ mod tests {
             unknown_flag(&"build", &"--nope"),
             "ipe build: unknown flag `--nope`"
         );
-        assert_eq!(placeholders("{a} {b_2} {a} {Nope} {}"), vec!["a", "b_2"]);
+    }
+
+    /// Calls whose message argument must come from the catalog.
+    const MESSAGE_SINKS: &[&str] = &[
+        "CliError::Usage(",
+        "CliError::UsageOwned(",
+        "Self::Usage(",
+        "Self::UsageOwned(",
+        "usage(",
+        "usage_owned(",
+        "login_error(",
+    ];
+
+    /// Whether `byte` can continue a Rust identifier.
+    const fn is_ident_byte(byte: u8) -> bool {
+        byte.is_ascii_alphanumeric() || byte == b'_'
+    }
+
+    /// The end (exclusive) of the string literal whose opening `"` is at `open`.
+    fn string_end(bytes: &[u8], open: usize) -> usize {
+        let mut i = open.saturating_add(1);
+        while let Some(&c) = bytes.get(i) {
+            match c {
+                b'\\' => i = i.saturating_add(2),
+                b'"' => return i.saturating_add(1),
+                _ => i = i.saturating_add(1),
+            }
+        }
+        bytes.len()
+    }
+
+    /// The end (exclusive) of the raw string literal starting with the `r` at
+    /// `at`, or `None` when no raw string starts there.
+    fn raw_string_end(bytes: &[u8], at: usize) -> Option<usize> {
+        let hashes = bytes
+            .get(at.saturating_add(1)..)?
+            .iter()
+            .take_while(|&&c| c == b'#')
+            .count();
+        let open = at.saturating_add(1).saturating_add(hashes);
+        if bytes.get(open) != Some(&b'"') {
+            return None;
+        }
+        let mut closing = vec![b'"'];
+        closing.extend(std::iter::repeat_n(b'#', hashes));
+        let body = bytes.get(open.saturating_add(1)..)?;
+        let end = body
+            .windows(closing.len())
+            .position(|w| w == closing.as_slice())
+            .map_or(bytes.len(), |pos| {
+                open.saturating_add(1)
+                    .saturating_add(pos)
+                    .saturating_add(closing.len())
+            });
+        Some(end)
+    }
+
+    /// The end (exclusive) of the character literal whose `'` is at `open`, or
+    /// `None` when the `'` starts a lifetime.
+    fn char_end(src: &str, open: usize) -> Option<usize> {
+        let bytes = src.as_bytes();
+        let after = open.saturating_add(1);
+        if bytes.get(after) == Some(&b'\\') {
+            let close = bytes
+                .get(after.saturating_add(2)..)?
+                .iter()
+                .position(|&c| c == b'\'')?;
+            return Some(after.saturating_add(3).saturating_add(close));
+        }
+        let width = src.get(after..)?.chars().next()?.len_utf8();
+        let close = after.saturating_add(width);
+        (bytes.get(close) == Some(&b'\'')).then(|| close.saturating_add(1))
+    }
+
+    /// `src` with comments blanked and literal contents blanked (delimiters
+    /// kept), byte for byte, so offsets line up with `src`.
+    fn mask(src: &str) -> Vec<u8> {
+        let bytes = src.as_bytes();
+        let mut out = bytes.to_vec();
+        let mut blank = |from: usize, to: usize| {
+            for byte in out.iter_mut().take(to).skip(from) {
+                if *byte != b'\n' {
+                    *byte = b' ';
+                }
+            }
+        };
+        let mut i = 0;
+        while let Some(&c) = bytes.get(i) {
+            let next = bytes.get(i.saturating_add(1)).copied();
+            let prev_is_ident = i
+                .checked_sub(1)
+                .and_then(|p| bytes.get(p))
+                .is_some_and(|&p| is_ident_byte(p));
+            if c == b'/' && next == Some(b'/') {
+                let end = bytes
+                    .get(i..)
+                    .and_then(|rest| rest.iter().position(|&b| b == b'\n'))
+                    .map_or(bytes.len(), |pos| i.saturating_add(pos));
+                blank(i, end);
+                i = end;
+            } else if c == b'/' && next == Some(b'*') {
+                let end = bytes
+                    .get(i.saturating_add(2)..)
+                    .and_then(|rest| rest.windows(2).position(|w| w == b"*/"))
+                    .map_or(bytes.len(), |pos| i.saturating_add(pos).saturating_add(4));
+                blank(i, end);
+                i = end;
+            } else if c == b'"' {
+                let end = string_end(bytes, i);
+                blank(i.saturating_add(1), end.saturating_sub(1));
+                i = end;
+            } else if c == b'r'
+                && !prev_is_ident
+                && let Some(end) = raw_string_end(bytes, i)
+            {
+                blank(i.saturating_add(1), end);
+                i = end;
+            } else if c == b'\''
+                && let Some(end) = char_end(src, i)
+            {
+                blank(i.saturating_add(1), end.saturating_sub(1));
+                i = end;
+            } else {
+                i = i.saturating_add(1);
+            }
+        }
+        out
+    }
+
+    /// The end (exclusive) of the item that starts at `from` in the masked
+    /// source: the `;` or the closing `}` that ends it at bracket depth zero.
+    fn item_end(masked: &[u8], from: usize) -> usize {
+        let mut depth: usize = 0;
+        let mut i = from;
+        while let Some(&c) = masked.get(i) {
+            i = i.saturating_add(1);
+            match c {
+                b'{' | b'(' | b'[' => depth = depth.saturating_add(1),
+                b')' | b']' => depth = depth.saturating_sub(1),
+                b'}' => {
+                    depth = depth.saturating_sub(1);
+                    if depth == 0 {
+                        return i;
+                    }
+                }
+                b';' if depth == 0 => return i,
+                _ => {}
+            }
+        }
+        masked.len()
+    }
+
+    /// `src` with every `#[cfg(test)]` item blanked: the production source.
+    ///
+    /// Only the attributed item goes; production code after it stays.
+    fn production_source(src: &str) -> String {
+        const TEST_ONLY: &[u8] = b"#[cfg(test)]";
+        let masked = mask(src);
+        let mut out = src.as_bytes().to_vec();
+        let mut from = 0;
+        while let Some(at) = masked
+            .get(from..)
+            .and_then(|rest| rest.windows(TEST_ONLY.len()).position(|w| w == TEST_ONLY))
+            .map(|pos| from.saturating_add(pos))
+        {
+            let end = item_end(&masked, at.saturating_add(TEST_ONLY.len()));
+            for byte in out.iter_mut().take(end).skip(at) {
+                if *byte != b'\n' {
+                    *byte = b' ';
+                }
+            }
+            from = end.max(at.saturating_add(1));
+        }
+        String::from_utf8_lossy(&out).into_owned()
+    }
+
+    /// Whether the format string `content` (a literal's text) spells anything
+    /// beyond `{…}` placeholders and whitespace.
+    fn has_fixed_text(content: &str) -> bool {
+        let mut chars = content.chars();
+        while let Some(c) = chars.next() {
+            match c {
+                '{' => {
+                    if chars.clone().next() == Some('{') {
+                        return true;
+                    }
+                    for inner in chars.by_ref() {
+                        if inner == '}' {
+                            break;
+                        }
+                    }
+                }
+                '\\' => {
+                    chars.next();
+                }
+                c if c.is_whitespace() => {}
+                _ => return true,
+            }
+        }
+        false
+    }
+
+    /// Whether the argument starting at `at` in `src` spells its message as a
+    /// literal: a string literal (however converted), `String::from("…")`, or a
+    /// `format!` whose format string carries fixed text.
+    fn is_literal_message(src: &str, at: usize) -> bool {
+        let rest = src.get(at..).unwrap_or("").trim_start();
+        let rest = rest.strip_prefix('&').unwrap_or(rest).trim_start();
+        if rest.starts_with('"') || rest.starts_with("r\"") || rest.starts_with("r#") {
+            return true;
+        }
+        if let Some(inner) = rest.strip_prefix("String::from(") {
+            return inner.trim_start().starts_with('"');
+        }
+        let Some(inner) = rest.strip_prefix("format!(") else {
+            return false;
+        };
+        let inner = inner.trim_start();
+        if inner.starts_with("r\"") || inner.starts_with("r#") {
+            return true;
+        }
+        let Some(body) = inner.strip_prefix('"') else {
+            return false;
+        };
+        let content_end = string_end(inner.as_bytes(), 0).saturating_sub(2);
+        has_fixed_text(body.get(..content_end).unwrap_or(body))
+    }
+
+    /// Every sink call in `src` whose message is a literal, as byte offsets.
+    fn literal_message_calls(src: &str) -> Vec<usize> {
+        let production = production_source(src);
+        let masked = mask(&production);
+        let mut found = Vec::new();
+        for sink in MESSAGE_SINKS {
+            let mut from = 0;
+            while let Some(at) = masked
+                .get(from..)
+                .and_then(|rest| rest.windows(sink.len()).position(|w| w == sink.as_bytes()))
+                .map(|pos| from.saturating_add(pos))
+            {
+                let after = at.saturating_add(sink.len());
+                let standalone = at
+                    .checked_sub(1)
+                    .and_then(|p| masked.get(p))
+                    .is_none_or(|&p| !is_ident_byte(p));
+                if standalone && is_literal_message(&production, after) {
+                    found.push(at);
+                }
+                from = after;
+            }
+        }
+        found.sort_unstable();
+        found
     }
 
     /// Every `.rs` file under this crate's `src/`, skipping hidden directories
@@ -601,54 +1026,81 @@ mod tests {
         out
     }
 
-    /// Whether `src` calls `CliError::Usage` with a literal string — the exact
-    /// defect class this catalog exists to close (a message spelled at the call
-    /// site instead of declared here). A `CliError::UsageOwned`/variable/function
-    /// argument is untouched: only a literal `"` immediately after `Usage(`
-    /// (across any whitespace) counts.
-    fn has_literal_usage_call(src: &str) -> bool {
-        let mut rest = src;
-        while let Some(at) = rest.find("CliError::Usage(") {
-            let after = rest[at.saturating_add("CliError::Usage(".len())..].trim_start();
-            if after.starts_with('"') {
-                return true;
-            }
-            rest = &rest[at.saturating_add("CliError::Usage(".len())..];
-        }
-        false
-    }
-
-    /// No call site outside this catalog spells a `CliError::Usage` message as a
-    /// Rust string literal — every message is declared once above and reached
-    /// through its `text::` function, so the rendered text and its catalog entry
-    /// cannot drift. Test modules (`#[cfg(test)]`, and anything under a `tests/`
-    /// directory) are exempt: a test fixture is not user-facing text.
+    /// No production code spells a user-facing message as a Rust literal.
+    ///
+    /// Every message sink (`CliError::Usage`/`UsageOwned` and the helpers that
+    /// wrap them) takes its text from a `text::` function, so the rendered text
+    /// and its catalog entry cannot drift. `#[cfg(test)]` items and `tests/`
+    /// directories are exempt: a test fixture is not user-facing text.
     #[test]
     fn no_literal_cli_error_usage_outside_the_catalog() {
         let src_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let files = rs_files_under(&src_root);
+        assert!(!files.is_empty(), "no sources under {}", src_root.display());
         let mut offenders = Vec::new();
-        for path in rs_files_under(&src_root) {
-            if path.file_name().and_then(|n| n.to_str()) == Some("text.rs") {
-                continue;
-            }
+        for path in files {
             if path.components().any(|c| c.as_os_str() == "tests") {
                 continue;
             }
-            let Ok(src) = std::fs::read_to_string(&path) else {
-                continue;
-            };
-            // Only the production prefix counts — an inline `#[cfg(test)] mod
-            // tests { ... }` block at the end of an otherwise-production file is
-            // exempt, same as a dedicated `tests/` file.
-            let production = src.split("#[cfg(test)]").next().unwrap_or(&src);
-            if has_literal_usage_call(production) {
-                offenders.push(path.display().to_string());
+            let src = std::fs::read_to_string(&path).expect("source is readable");
+            for at in literal_message_calls(&src) {
+                let line = src
+                    .get(..at)
+                    .map_or(0, |before| before.matches('\n').count())
+                    .saturating_add(1);
+                offenders.push(format!("{}:{line}", path.display()));
             }
         }
         assert!(
             offenders.is_empty(),
-            "CliError::Usage(\"...\") outside text.rs — declare the message in \
-             text/messages.md and call its text::fn instead: {offenders:?}"
+            "a message spelled as a literal — declare it in text/messages.md and \
+             call its text:: fn instead: {offenders:#?}"
         );
+    }
+
+    #[test]
+    fn the_detector_finds_every_literal_message_shape() {
+        let offenders = [
+            r#"Err(CliError::Usage("x"))"#,
+            r#"Err(CliError::Usage(
+                "split across lines"))"#,
+            r#"CliError::UsageOwned(format!("bad {x}"))"#,
+            r#"CliError::UsageOwned(format!("{}: {}", a, b))"#,
+            r#"CliError::UsageOwned(format!("{{literal braces}}"))"#,
+            r#"CliError::UsageOwned("x".to_owned())"#,
+            r#"CliError::UsageOwned(String::from("x"))"#,
+            r#"CliError::UsageOwned(format!(r"raw {x}"))"#,
+            r#"Self::UsageOwned("x".into())"#,
+            r#"package_manifest::usage("x")"#,
+            r#"usage_owned(format!("no {x} here"))"#,
+            r#"login_error(&format!("failed: {e}"))"#,
+            "fn f() {}\n#[cfg(test)]\nfn t() {}\nfn g() { CliError::Usage(\"late\") }",
+            "#[cfg(test)]\nuse x;\nfn g() { CliError::Usage(\"after a test-only use\") }",
+        ];
+        for src in offenders {
+            assert_eq!(literal_message_calls(src).len(), 1, "missed: {src}");
+        }
+    }
+
+    #[test]
+    fn the_detector_passes_catalog_calls_comments_strings_and_tests() {
+        let clean = [
+            "CliError::Usage(text::fix_usage())",
+            r#"CliError::UsageOwned(format!("{e}"))"#,
+            r#"CliError::UsageOwned(format!("{}\n{}", a, b))"#,
+            "CliError::UsageOwned(text::command_refusal(&a, &b))",
+            "CliError::UsageOwned(err.to_string())",
+            "// CliError::Usage(\"in a comment\")",
+            "/* CliError::Usage(\"in a block comment\") */",
+            r#"let s = "CliError::Usage(\"in a string\")";"#,
+            r##"let s = r#"CliError::Usage("in a raw string")"#;"##,
+            "let c = '{'; let d = '\\''; fn f<'a>(x: &'a str) {}",
+            "#[cfg(test)]\nmod tests { fn t() { CliError::Usage(\"fixture\"); } }",
+            "fn cli_usage(x: &str) {} fn f() { cli_usage(\"x\") }",
+            "fn usage(message: &'static str) -> CliError { CliError::Usage(message) }",
+        ];
+        for src in clean {
+            assert!(literal_message_calls(src).is_empty(), "flagged: {src}");
+        }
     }
 }
