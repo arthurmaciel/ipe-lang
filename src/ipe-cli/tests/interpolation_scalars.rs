@@ -16,9 +16,10 @@ const HEAD: &str = "module Main exposing (main)\n\nimport Ipe.Io as Io\n";
 
 /// Run the `ipe` pipeline (no `cargo`) on `src` written as a fresh `Main.ipe`.
 ///
-/// `None` when the runtime is unavailable; otherwise `Ok(())` on acceptance, or
-/// `Err` carrying the pipeline diagnostic's code (`None` for any other failure).
-fn build_source(name: &str, src: &str) -> Option<Result<(), Option<ipe_diagnostics::Code>>> {
+/// `Ok(())` on acceptance, or `Err` carrying the pipeline diagnostic's code
+/// (`None` for any other failure). The runtime must resolve: a missing runtime
+/// fails the test rather than passing it vacuously.
+fn build_source(name: &str, src: &str) -> Result<(), Option<ipe_diagnostics::Code>> {
     let scratch = PathBuf::from(env!("CARGO_TARGET_TMPDIR"));
     let dir = scratch.join(format!("interp_scalars_{name}"));
     let out = scratch.join(format!("interp_scalars_{name}_out"));
@@ -33,21 +34,22 @@ fn build_source(name: &str, src: &str) -> Option<Result<(), Option<ipe_diagnosti
         std::fs::write(&entry, src).is_ok(),
         "{name}: fixture must be writable"
     );
-    let runtime = ipe::resolve_runtime().ok()?;
-    Some(match ipe::build(&entry, &out, &runtime) {
+    let runtime = ipe::resolve_runtime();
+    assert!(runtime.is_ok(), "{name}: the in-repo runtime must resolve");
+    let Ok(runtime) = runtime else {
+        return Err(None);
+    };
+    match ipe::build(&entry, &out, &runtime) {
         Ok(_) => Ok(()),
         Err(ipe::CliError::Pipeline { diag, .. }) => Err(Some(diag.code())),
         Err(_) => Err(None),
-    })
+    }
 }
 
 /// Assert `src` is refused as not interpolable (IPE-T0014).
 fn assert_refused(name: &str, src: &str) {
-    let Some(got) = build_source(name, src) else {
-        return;
-    };
     assert_eq!(
-        got,
+        build_source(name, src),
         Err(Some(ipe_diagnostics::IPE_T0014)),
         "{name}: interpolating a non-scalar must be refused with IPE-T0014"
     );
@@ -144,6 +146,102 @@ fn interpolating_generic_used_at_a_record_is_refused() {
     assert_refused("generic_record", &src);
 }
 
+#[test]
+fn interpolating_unit_is_refused() {
+    let src = format!(
+        "{HEAD}\nu =\n    ()\n\n\
+         main =\n    Io.println \"\"\"u={{{{u}}}}\"\"\"\n"
+    );
+    assert_refused("unit", &src);
+}
+
+#[test]
+fn interpolating_a_tuple_is_refused() {
+    let src = format!(
+        "{HEAD}\npair =\n    ( 1, \"a\" )\n\n\
+         main =\n    Io.println \"\"\"pair={{{{pair}}}}\"\"\"\n"
+    );
+    assert_refused("tuple", &src);
+}
+
+#[test]
+fn interpolating_a_dict_is_refused() {
+    let src = format!(
+        "{HEAD}import Ipe.Dict as Dict\n\n\
+         d =\n    Dict.singleton \"k\" 1\n\n\
+         main =\n    Io.println \"\"\"d={{{{d}}}}\"\"\"\n"
+    );
+    assert_refused("dict", &src);
+}
+
+#[test]
+fn interpolating_a_secret_is_refused() {
+    let src = format!(
+        "{HEAD}import Ipe.Secret as Secret\n\n\
+         key =\n    Secret.fromString \"sk_live_x\"\n\n\
+         main =\n    Io.println \"\"\"key={{{{key}}}}\"\"\"\n"
+    );
+    assert_refused("secret", &src);
+}
+
+#[test]
+fn interpolating_a_function_is_refused() {
+    let src = format!(
+        "{HEAD}\ninc : Int -> Int\ninc n =\n    n + 1\n\n\
+         main =\n    Io.println \"\"\"f={{{{inc}}}}\"\"\"\n"
+    );
+    assert_refused("function", &src);
+}
+
+/// A wildcard-`any` parameter carries the obligation like a named variable:
+/// calling the function at a record is refused, never emitted as an
+/// `IpeInterpolate`-bounded generic that `cargo` then rejects.
+#[test]
+fn interpolating_an_any_parameter_used_at_a_record_is_refused() {
+    let src = format!(
+        "{HEAD}\nrender : any -> String\nrender x =\n    \"\"\"<{{{{x}}}}>\"\"\"\n\n\
+         main =\n    Io.println (render {{ x = 1 }})\n"
+    );
+    assert_refused("any_record", &src);
+}
+
+/// An interpolating generic called from another generic leaves the obligation
+/// on a variable no concrete type pins: refused (fail-closed), even though the
+/// outer caller passes an `Int`.
+#[test]
+fn interpolation_obligation_escaping_into_an_enclosing_generic_is_refused() {
+    let src = format!(
+        "{HEAD}\ninner : a -> String\ninner x =\n    \"\"\"<{{{{x}}}}>\"\"\"\n\n\
+         outer : b -> String\nouter y =\n    inner y\n\n\
+         main =\n    Io.println (outer 1)\n"
+    );
+    assert_refused("escaping_generic", &src);
+}
+
+/// A generic `Log.*With` attribute element carries the obligation to the
+/// caller: logging a record through it is refused.
+#[test]
+fn logging_a_generic_attribute_used_at_a_record_is_refused() {
+    let src = format!(
+        "{HEAD}import Ipe.Log as Log\n\n\
+         logIt : a -> Task Error ()\nlogIt v =\n    Log.infoWith \"boot\" [ v ]\n\n\
+         main : Task Error ()\n\
+         main =\n    logIt {{ x = 1 }}\n"
+    );
+    assert_refused("log_generic_record", &src);
+}
+
+/// An unannotated binding whose parameter is only pinned by a later use (here
+/// to a `List`) is checked against that final type.
+#[test]
+fn interpolating_a_late_pinned_list_is_refused() {
+    let src = format!(
+        "{HEAD}\nshow xs =\n    \"\"\"<{{{{xs}}}}>\"\"\"\n\n\
+         main =\n    Io.println (show [ 1, 2 ])\n"
+    );
+    assert_refused("late_list", &src);
+}
+
 /// All five scalars interpolate, directly and as `Log.*With` attributes.
 #[test]
 fn interpolating_each_scalar_is_accepted() {
@@ -155,11 +253,8 @@ fn interpolating_each_scalar_is_accepted() {
          \x20       |> Task.andThen (\\_ -> Log.infoWith \"ints\" [ n, 2 ])\n\
          \x20       |> Task.andThen (\\_ -> Log.infoWith \"chars\" [ c ])\n"
     );
-    let Some(got) = build_source("scalars", &src) else {
-        return;
-    };
     assert_eq!(
-        got,
+        build_source("scalars", &src),
         Ok(()),
         "String, Int, Float, Bool and Char must all interpolate and log"
     );

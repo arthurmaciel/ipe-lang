@@ -99,59 +99,49 @@ impl<T: core::fmt::Debug> ViaDebug for &Wrap<T> {
 
 // ─── Interpolation: the closed scalar set ───────────────────────────────────
 
-/// The Ipê types [`IpeInterpolate`] is implemented for, by Ipê name — the
-/// runtime side of the compiler's interpolable set, asserted equal to it by a
-/// workspace test so the type checker and this impl set cannot drift.
-pub const INTERPOLABLE_IPE_TYPES: [&str; 5] = ["String", "Int", "Float", "Bool", "Char"];
-
-mod sealed {
-    /// Seals [`super::IpeInterpolate`]: only this module can implement it.
-    pub trait Sealed {}
-    impl Sealed for String {}
-    impl Sealed for i64 {}
-    impl Sealed for f64 {}
-    impl Sealed for bool {}
-    impl Sealed for char {}
-}
-
 /// Renders an interpolable scalar for `{{expr}}` and `Log.*With` attributes.
 ///
-/// Sealed and implemented for exactly `String` / `Int` / `Float` / `Bool` /
-/// `Char`, each through the same function its `String.from*` conversion uses,
-/// so an interpolation and the explicit conversion never disagree.
+/// Sealed and implemented for exactly the rows of the `interpolable_scalars!`
+/// table below, each through the same function its `String.from*` conversion
+/// uses, so an interpolation and the explicit conversion never disagree.
 pub trait IpeInterpolate: sealed::Sealed {
     /// The rendered text of `self`.
     fn ipe_interpolate(&self) -> String;
 }
 
-impl IpeInterpolate for String {
-    fn ipe_interpolate(&self) -> String {
-        self.clone()
-    }
+/// One table — `Rust type => Ipê name, render` — generates the sealing impls,
+/// the `IpeInterpolate` impls and [`INTERPOLABLE_IPE_TYPES`], so the name list
+/// the compiler is checked against and the impl set cannot drift apart.
+macro_rules! interpolable_scalars {
+    ($($rust:ty => $ipe:literal, |$v:ident| $render:expr;)*) => {
+        /// The Ipê types [`IpeInterpolate`] is implemented for, by Ipê name —
+        /// the runtime side of the compiler's interpolable set, asserted equal
+        /// to it at build time (`ipe-cli`) so the two cannot drift.
+        pub const INTERPOLABLE_IPE_TYPES: [&str; [$($ipe),*].len()] = [$($ipe),*];
+
+        mod sealed {
+            /// Seals [`super::IpeInterpolate`]: only this module can implement it.
+            pub trait Sealed {}
+            $(impl Sealed for $rust {})*
+        }
+
+        $(
+            impl IpeInterpolate for $rust {
+                fn ipe_interpolate(&self) -> String {
+                    let $v = self;
+                    $render
+                }
+            }
+        )*
+    };
 }
 
-impl IpeInterpolate for i64 {
-    fn ipe_interpolate(&self) -> String {
-        crate::string::string_from_int(*self)
-    }
-}
-
-impl IpeInterpolate for f64 {
-    fn ipe_interpolate(&self) -> String {
-        crate::string::string_from_float(*self)
-    }
-}
-
-impl IpeInterpolate for bool {
-    fn ipe_interpolate(&self) -> String {
-        crate::string::string_from_bool(*self)
-    }
-}
-
-impl IpeInterpolate for char {
-    fn ipe_interpolate(&self) -> String {
-        crate::string::string_from_char(*self)
-    }
+interpolable_scalars! {
+    String => "String", |s| s.clone();
+    i64 => "Int", |n| crate::string::string_from_int(*n);
+    f64 => "Float", |x| crate::string::string_from_float(*x);
+    bool => "Bool", |b| crate::string::string_from_bool(*b);
+    char => "Char", |c| crate::string::string_from_char(*c);
 }
 
 // ─── Scalars ────────────────────────────────────────────────────────────────
