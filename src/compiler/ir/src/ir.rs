@@ -2617,6 +2617,30 @@ pub fn carrier_is_clone(ty: &IrType) -> bool {
     }
 }
 
+/// Does `ty` embed a `Task` / `Cmd` / `Sub` effect carrier anywhere?
+///
+/// Every effect carrier renders to a runtime value with no `Clone` impl, so a
+/// value of such a type is move-only: the lowerer's non-`Clone` reuse gate and
+/// the emitter's field-read move share this one predicate. The walk follows the
+/// structural carriers (`Maybe`, `List`, `Set`, `Result`, `Dict`, tuple, record,
+/// enum type arguments, `Ui`, `WebRoute`).
+#[must_use]
+pub fn ir_type_has_effect_carrier(ty: &IrType) -> bool {
+    match ty {
+        IrType::Task(_) | IrType::Cmd(_) | IrType::Sub(_) => true,
+        IrType::Maybe(e) | IrType::List(e) | IrType::Set(e) => ir_type_has_effect_carrier(e),
+        IrType::Result(a, b) | IrType::Dict(a, b) => {
+            ir_type_has_effect_carrier(a) || ir_type_has_effect_carrier(b)
+        }
+        IrType::Tuple(es) => es.iter().any(ir_type_has_effect_carrier),
+        IrType::Record(fields) => fields.values().any(ir_type_has_effect_carrier),
+        IrType::Enum { args, .. } => args.iter().any(ir_type_has_effect_carrier),
+        IrType::Ui { msg, .. } => ir_type_has_effect_carrier(msg),
+        IrType::WebRoute(page) => ir_type_has_effect_carrier(page),
+        _ => false,
+    }
+}
+
 /// Is a BINDING of this type eligible for the `Arc<dyn Fn>` carrier promotion
 /// ([`Expr::SharedLambda`]) when it is captured at closure depth ≥ 1 or reused
 /// as a function value?

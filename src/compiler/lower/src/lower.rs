@@ -28,8 +28,8 @@ use ipe_ir::let_inline::{inlined_let_body, let_value_is_inlined};
 use ipe_ir::{
     Arm, BinOp, BoundSet, CallPin, Callee, Capability, EnumDef, Expr, Func, FuncId, IrType,
     KernelFn, Match, ModPath, Module, OnFormKind, Pat, Program, RowParam, RuntimeModule, TypeDef,
-    UiCtor, UiPlain, Variant, fun_value_arc_promotable, ir_type_is_serde, is_dispatch_free,
-    is_irrefutable,
+    UiCtor, UiPlain, Variant, fun_value_arc_promotable, ir_type_has_effect_carrier,
+    ir_type_is_serde, is_dispatch_free, is_irrefutable,
 };
 use ipe_types::{RowTail, SolvedTypes, Ty, TyBounds};
 
@@ -6201,6 +6201,16 @@ impl NonCloneMoveState {
         }
     }
 
+    /// A moving read of the top-level record field `field`.
+    ///
+    /// A move-only field leaves the binding partially moved: a later read of
+    /// that field, or of the whole binding, observes the moved part.
+    fn move_field(&mut self, field: Symbol) {
+        self.read_field(field);
+        self.partial =
+            std::mem::take(&mut self.partial).union(PartialMove::Fields(BTreeSet::from([field])));
+    }
+
     /// A by-value pattern match of the binding against `pat`.
     fn match_pattern(&mut self, pat: &Pat) {
         self.partial = std::mem::take(&mut self.partial).union(PartialMove::of_pattern(pat));
@@ -6242,7 +6252,8 @@ fn nonclone_read_after_move(sym: Symbol, expr: &Expr) -> bool {
 
 /// Walk `expr` in emitted evaluation order for [`nonclone_read_after_move`].
 ///
-/// A bare `sym` as an `Access` base is a field borrow; as a list length probe
+/// A bare `sym` as an `Access` base is a field borrow — a move of that field
+/// when its type embeds an effect carrier; as a list length probe
 /// or index clone base it is a whole borrow; as a `Match` scrutinee or a
 /// `Destructure` value it is a whole borrow followed by the pattern's partial
 /// move. Every other occurrence of `sym` moves it. `Update` field values run
@@ -6262,9 +6273,17 @@ fn nonclone_move_walk(sym: Symbol, expr: &Expr, state: &mut NonCloneMoveState) {
                 state.read_whole(true);
             }
         }
-        Expr::Access { record, field, .. } => {
+        Expr::Access {
+            record,
+            field,
+            field_ty,
+        } => {
             if is_bare_sym(sym, record) {
-                state.read_field(*field);
+                if ir_type_has_effect_carrier(field_ty) {
+                    state.move_field(*field);
+                } else {
+                    state.read_field(*field);
+                }
             } else {
                 nonclone_move_walk(sym, record, state);
             }
@@ -6645,53 +6664,6 @@ fn count_var_uses_update_aware(sym: Symbol, expr: &Expr) -> usize {
         | Expr::Char(_)
         | Expr::Unit
         | Expr::FuncValue { .. } => 0,
-    }
-}
-
-/// Fail-closed gate for a non-linear use of a non-`Clone` effect-carrier value.
-///
-/// A `Task`/`Cmd`/`Sub` renders to an opaque boxed future that is never `Clone`,
-/// so a binding embedding one — bare, or inside a `Maybe`/`Result`/tuple/record/
-/// user-union payload — has no sound duplicating rewrite. A generic user union
-/// derives `Clone where T: Clone` and instantiating `T` to such a payload makes
-/// that bound unsatisfiable, so a second value-consuming use double-moves in the
-/// emitted Rust (cargo E0382/E0277) AFTER `ipe` reported exit 0 — a SEAL break.
-/// Reject it with a typed diagnostic instead. A single (linear) use needs no
-/// clone and is left as a bare move.
-///
-/// Sibling to [`reject_foreign_handle_reuse`] (an FFI foreign handle) and
-/// [`reject_fn_value_reuse`] (an embedded function value): the same
-/// non-`Clone`-reuse gate for the effect-carrier payload those two do not cover.
-/// A bare/composite `Generic`/`RowGeneric` is out of scope — its emitted
-/// `T: Clone` / `R: … + Clone` witness bound makes an inserted `.clone()` sound,
-/// so it routes through the multi-use clone rewrite, never here.
-///
-/// Two rejection conditions:
-/// - Two or more genuine moves (`count_value_consumes > 1`): double-move in emitted Rust.
-/// - One genuine move via a bare `Var` record-update base AND any other use of `sym`
-///   (even a borrow-only `Access` read): the update emits `let mut __ipe_rec = sym;`
-///   which moves `sym`; any subsequent read is a use-after-move (E0382).
-///
-/// PARAM-scoped: invoked only from [`apply_param_move_ownership`], never for a
-/// `let`/`Destructure` binding. A `let`-bound effect value IS rescued — the
-/// backend's `Expr::Let` multi-use pass inlines the value expression at each use
-/// site ([`ipe_ir::let_inline::inlined_let_body`]), reconstructing an independent
-/// value per use (issue approach (a)). A PARAM's value arrives from the caller,
-/// is not a reconstructible expression, and so cannot be inlined — its
-/// non-linear reuse has no sound rewrite and is the case this gate rejects.
-fn ir_type_has_effect_carrier(ty: &IrType) -> bool {
-    match ty {
-        IrType::Task(_) | IrType::Cmd(_) | IrType::Sub(_) => true,
-        IrType::Maybe(e) | IrType::List(e) | IrType::Set(e) => ir_type_has_effect_carrier(e),
-        IrType::Result(a, b) | IrType::Dict(a, b) => {
-            ir_type_has_effect_carrier(a) || ir_type_has_effect_carrier(b)
-        }
-        IrType::Tuple(es) => es.iter().any(ir_type_has_effect_carrier),
-        IrType::Record(fields) => fields.values().any(ir_type_has_effect_carrier),
-        IrType::Enum { args, .. } => args.iter().any(ir_type_has_effect_carrier),
-        IrType::Ui { msg, .. } => ir_type_has_effect_carrier(msg),
-        IrType::WebRoute(page) => ir_type_has_effect_carrier(page),
-        _ => false,
     }
 }
 
@@ -16055,6 +16027,16 @@ impl<'a> Lowerer<'a> {
                 // closes both the annotation path and the wildcard-erasure path
                 // with a single check.
                 if !row_params.is_empty() {
+                    // A row field is read only through its witness getter, which
+                    // borrows; a move-only effect-carrier field (`Task` / `Cmd` /
+                    // `Sub`, or a type embedding one) has no `Clone` to turn that
+                    // borrow into a value, so the signature fails closed here.
+                    if row_params
+                        .iter()
+                        .any(|rp| rp.fields.values().any(ir_type_has_effect_carrier))
+                    {
+                        return Err(unsupported(sig_span, Feature::NonCloneValueReuse));
+                    }
                     let row_syms: BTreeSet<Symbol> = params
                         .iter()
                         .filter(|(_, ty)| matches!(ty, IrType::RowGeneric(_)))
@@ -30687,6 +30669,21 @@ mod tests {
             match_then(Expr::Var(w)),
             Ok(ref e) if nonclone_read_after_move(w, e)
         ));
+
+        // `w.job` of a `Task` field MOVES that field: a second read of it, or
+        // a whole read of `w`, observes the moved part; `w.tag` stays owned.
+        let move_job = || Expr::Access {
+            record: Box::new(Expr::Var(w)),
+            field: job,
+            field_ty: IrType::Task(Box::new(IrType::Int)),
+        };
+        let pair_after_job = |after: Expr| Expr::Tuple(vec![move_job(), after]);
+        assert!(!nonclone_read_after_move(w, &pair_after_job(read(tag))));
+        assert!(reject(&pair_after_job(read(tag))).is_ok());
+        assert!(nonclone_read_after_move(w, &pair_after_job(move_job())));
+        assert!(matches!(reject(&pair_after_job(move_job())), Err(ref e) if *e == l0135));
+        assert!(nonclone_read_after_move(w, &pair_after_job(Expr::Var(w))));
+        assert!(matches!(reject(&pair_after_job(Expr::Var(w))), Err(ref e) if *e == l0135));
     }
 
     /// A reuse HIDDEN inside an `Access`/`Update` record base must not slip past
