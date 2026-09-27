@@ -2620,6 +2620,105 @@ fn unsafe_scan_single_file_fallback_fails_closed_on_unreadable_entry() {
     );
 }
 
+/// An unreadable imported module fails both consent scans closed.
+///
+/// Neither scan may judge the entry alone when a module it imports cannot be
+/// read — that module's `.Unsafe`/native imports would go unseen.
+#[cfg(unix)]
+#[test]
+fn consent_scans_fail_closed_on_unreadable_imported_module() {
+    use std::fs;
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = unsafe_scan_test_dir("sibling-fail");
+    let entry = dir.join("Main.ipe");
+    fs::write(
+        &entry,
+        "module Main exposing (main)\n\nimport Helper\n\nmain = Helper.h\n",
+    )
+    .expect("write entry");
+    let helper = dir.join("Helper.ipe");
+    fs::write(&helper, "module Helper exposing (h)\n\nh = 1\n").expect("write Helper");
+    fs::set_permissions(&helper, fs::Permissions::from_mode(0o000)).expect("chmod 000");
+
+    let unsafe_scan = user_sources_for_unsafe_scan(None, &entry);
+    let web_scan = named_sources_for_web_scan(None, &entry);
+
+    let _ = fs::set_permissions(&helper, fs::Permissions::from_mode(0o644));
+    let _ = fs::remove_dir_all(&dir);
+
+    assert!(
+        matches!(&unsafe_scan, Err(CliError::Io { path, .. }) if path.ends_with("Helper.ipe")),
+        "unsafe scan must name the unreadable module, got: {unsafe_scan:?}"
+    );
+    assert!(
+        matches!(&web_scan, Err(CliError::Io { path, .. }) if path.ends_with("Helper.ipe")),
+        "web scan must name the unreadable module, got: {web_scan:?}"
+    );
+}
+
+/// A closure one module past the loose-file limit fails both consent scans closed.
+#[test]
+fn consent_scans_fail_closed_on_closure_past_the_module_limit() {
+    use std::fmt::Write as _;
+    use std::fs;
+
+    let dir = unsafe_scan_test_dir("closure-limit");
+    let count = crate::loose_file::MAX_LOOSE_FILE_MODULES + 1;
+    let mut entry_text = String::from("module Main exposing (main)\n\n");
+    for i in 0..count {
+        let _ = writeln!(entry_text, "import M{i}");
+        fs::write(
+            dir.join(format!("M{i}.ipe")),
+            format!("module M{i} exposing ()\n"),
+        )
+        .expect("write module");
+    }
+    entry_text.push_str("\nmain = 1\n");
+    let entry = dir.join("Main.ipe");
+    fs::write(&entry, &entry_text).expect("write entry");
+
+    let unsafe_scan = user_sources_for_unsafe_scan(None, &entry);
+    let web_scan = named_sources_for_web_scan(None, &entry);
+    let _ = fs::remove_dir_all(&dir);
+
+    assert!(
+        matches!(&unsafe_scan, Err(CliError::DiscoveryLimitReached { .. })),
+        "unsafe scan must refuse the over-limit closure, got: {unsafe_scan:?}"
+    );
+    assert!(
+        matches!(&web_scan, Err(CliError::DiscoveryLimitReached { .. })),
+        "web scan must refuse the over-limit closure, got: {web_scan:?}"
+    );
+}
+
+/// An entry that does not parse is scanned alone, keyed by its own path.
+///
+/// It has no import closure to follow; the build reports the parse error.
+#[test]
+fn consent_scans_read_an_unparseable_entry_alone() {
+    use std::fs;
+
+    let dir = unsafe_scan_test_dir("unparseable");
+    let entry = dir.join("Main.ipe");
+    let text = "module Main exposing (\nimport Ipe.Unsafe\n";
+    fs::write(&entry, text).expect("write entry");
+
+    let unsafe_scan = user_sources_for_unsafe_scan(None, &entry);
+    let web_scan = named_sources_for_web_scan(None, &entry);
+    let _ = fs::remove_dir_all(&dir);
+
+    assert!(
+        matches!(&unsafe_scan, Ok(sources) if sources.as_slice() == [text]),
+        "unsafe scan must see the entry text, got: {unsafe_scan:?}"
+    );
+    let expected = vec![(entry.display().to_string(), text.to_owned())];
+    assert!(
+        matches!(&web_scan, Ok(named) if named == &expected),
+        "web scan must see the entry text keyed by its path, got: {web_scan:?}"
+    );
+}
+
 #[test]
 fn check_exit_code_is_git_style() {
     use crate::version_check::UpgradeAction::*;
