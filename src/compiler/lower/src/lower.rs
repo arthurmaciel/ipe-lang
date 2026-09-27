@@ -84,6 +84,9 @@ type IrParam = (Symbol, IrType);
 /// at the top of the function body (`let <Pat> = <synthetic>`).
 type ParamPrologue = (Symbol, Pat);
 
+/// An unannotated function's lowered parameters, return type, and body.
+type UnannotatedFnParts = (Vec<IrParam>, IrType, Expr);
+
 /// A top-level binding's fully-qualified key: its `(module, name)`.
 type TopLevelKey = (Vec<Symbol>, Symbol);
 
@@ -15745,28 +15748,22 @@ impl<'a> Lowerer<'a> {
                 // msg UV → any_sym mapping so the subsequent `ir_type_from_ty`
                 // call produces `IrType::Generic(any_sym)` instead of Unit.
                 let poly_key = (def.home().to_vec(), name);
-                let saved_poly_tvars = {
-                    let mut poly = self
-                        .types
-                        .poly_var_map
-                        .get(&poly_key)
-                        .cloned()
-                        .unwrap_or_default();
-                    if let Some((uv_rep, any_sym)) = any_ui_msg_injection {
-                        poly.insert(uv_rep, any_sym);
-                    }
-                    // Withhold every UI-msg-defaulted variable so the body's msg
-                    // slots for it lower to `Unit` (via `ir_type_from_ty_ui_msg`'s
-                    // free-var arm), agreeing with the `Unit`-defaulted return
-                    // above at every occurrence.
-                    if !default_to_unit.is_empty() {
-                        poly.retain(|_, sym| !default_to_unit.contains(sym));
-                    }
-                    let mut slot = self.current_poly_tvars.borrow_mut();
-                    let saved = slot.clone();
-                    *slot = poly;
-                    saved
-                };
+                let mut poly = self
+                    .types
+                    .poly_var_map
+                    .get(&poly_key)
+                    .cloned()
+                    .unwrap_or_default();
+                if let Some((uv_rep, any_sym)) = any_ui_msg_injection {
+                    poly.insert(uv_rep, any_sym);
+                }
+                // Withhold every UI-msg-defaulted variable so the body's msg
+                // slots for it lower to `Unit` (via `ir_type_from_ty_ui_msg`'s
+                // free-var arm), agreeing with the `Unit`-defaulted return
+                // above at every occurrence.
+                if !default_to_unit.is_empty() {
+                    poly.retain(|_, sym| !default_to_unit.contains(sym));
+                }
                 // Wildcard-`any` return-type fix: `view : Model -> any` makes
                 // `any` appear in `free_vars` (the canon free-var collector treats
                 // it uniformly alongside genuine type parameters).  But `any` is NOT
@@ -15779,7 +15776,7 @@ impl<'a> Lowerer<'a> {
                 // parameter and a `-> T1` return type that the body cannot satisfy
                 // (E0308).
                 //
-                // This block runs AFTER the poly_tvars installation above so that
+                // The resolution runs INSIDE the poly_tvars scope below so that
                 // `ir_type_from_ty(body_ty)` — specifically its
                 // `ir_type_from_ty_ui_msg` sub-call for UI msg slots — already
                 // sees the Bug-29-injected mapping and produces
@@ -15813,71 +15810,77 @@ impl<'a> Lowerer<'a> {
                     }
                     _ => false,
                 };
-                let mut ret = if ret_is_any_wildcard {
-                    // The body's region type is the concrete return type.
-                    let body_ty = self
-                        .types
-                        .regions
-                        .get(&(def.home().to_vec(), body.span))
-                        .ok_or_else(|| {
-                            bug(
-                                "ipe_lower::lower_def",
-                                "no region type for body of `any`-annotated binding",
-                            )
-                        })?;
-                    self.ir_type_from_ty(body_ty, sig_span)?
-                } else {
-                    // A nested `any` in return position (e.g. `foo : X -> List any`)
-                    // is not covered by the bare-wildcard region substitution above.
-                    // Freshen every `Generic("any")` node in the return type so each
-                    // occurrence becomes a distinct fresh symbol — the same treatment
-                    // `split_typed_sig` applies to param-position `any`s.
-                    //
-                    // A wildcard `any` promises one concrete type per position. Each
-                    // `any` freshens to its own distinct symbol, so a return `any` and a
-                    // param `any` never denote the same type — the only thing that can
-                    // determine a return `any` is the body pinning it to a concrete
-                    // value, handled by the region substitution above. Reaching here with
-                    // a freshened return `any` means the body did not pin it: it would
-                    // surface as a type parameter appearing only in the result, which no
-                    // call site can fix. Reject it rather than emit Rust no caller can
-                    // satisfy.
-                    let mut ret_any_mints: Vec<Symbol> = Vec::new();
-                    let freshened_ret = self.freshen_any_generics(ret, &mut ret_any_mints)?;
-                    if !ret_any_mints.is_empty() {
-                        return Err(Diagnostic::Lower {
-                            span: sig_span,
-                            msg: LowerError::UndeterminableReturnAny,
+                // Everything that resolves a `Ty` against the def's generics —
+                // the return, the body, the parameter prologues — runs inside
+                // one scope, so an early exit cannot leak the map.
+                let scoped = self.with_poly_tvars(Some(poly), || -> DResult<(IrType, Expr)> {
+                    let ret = if ret_is_any_wildcard {
+                        // The body's region type is the concrete return type.
+                        let body_ty = self
+                            .types
+                            .regions
+                            .get(&(def.home().to_vec(), body.span))
+                            .ok_or_else(|| {
+                                bug(
+                                    "ipe_lower::lower_def",
+                                    "no region type for body of `any`-annotated binding",
+                                )
+                            })?;
+                        self.ir_type_from_ty(body_ty, sig_span)?
+                    } else {
+                        // A nested `any` in return position (e.g. `foo : X -> List any`)
+                        // is not covered by the bare-wildcard region substitution above.
+                        // Freshen every `Generic("any")` node in the return type so each
+                        // occurrence becomes a distinct fresh symbol — the same treatment
+                        // `split_typed_sig` applies to param-position `any`s.
+                        //
+                        // A wildcard `any` promises one concrete type per position. Each
+                        // `any` freshens to its own distinct symbol, so a return `any` and a
+                        // param `any` never denote the same type — the only thing that can
+                        // determine a return `any` is the body pinning it to a concrete
+                        // value, handled by the region substitution above. Reaching here with
+                        // a freshened return `any` means the body did not pin it: it would
+                        // surface as a type parameter appearing only in the result, which no
+                        // call site can fix. Reject it rather than emit Rust no caller can
+                        // satisfy.
+                        let mut ret_any_mints: Vec<Symbol> = Vec::new();
+                        let freshened_ret = self.freshen_any_generics(ret, &mut ret_any_mints)?;
+                        if !ret_any_mints.is_empty() {
+                            return Err(Diagnostic::Lower {
+                                span: sig_span,
+                                msg: LowerError::UndeterminableReturnAny,
+                            });
+                        }
+                        any_syms_minted.extend(ret_any_mints);
+                        freshened_ret
+                    };
+                    // A tuple-destructuring parameter binds its synthetic name to the
+                    // tuple, then the body opens it with a `Destructure`. Fold the
+                    // prologue OUTERMOST-first (reverse) so the first parameter's
+                    // destructure is the outermost binding, matching source order.
+                    // Save/set/restore fn_is_async so nested lambdas/defs see the
+                    // correct async context for their own scope.
+                    let prev_async = self.fn_is_async.get();
+                    self.fn_is_async.set(matches!(ret, IrType::Task(_)));
+                    // Params are promotable fn binders for the body's capture
+                    // classifier (an inner lambda capturing a pure-`Fun` param
+                    // defers to the param loop below instead of IPE-L0126).
+                    let param_syms: Vec<Symbol> = params.iter().map(|(s, _)| *s).collect();
+                    let mut row_vars = BTreeSet::new();
+                    canon_sig_collect_arg_row_vars(ty, &mut row_vars);
+                    let body_result = self
+                        .reject_generic_app_entries_in(body, &row_vars)
+                        .and_then(|()| {
+                            self.with_promotable_fn_binders(param_syms, || self.lower_expr(body))
                         });
-                    }
-                    any_syms_minted.extend(ret_any_mints);
-                    freshened_ret
-                };
-                // A tuple-destructuring parameter binds its synthetic name to the
-                // tuple, then the body opens it with a `Destructure`. Fold the
-                // prologue OUTERMOST-first (reverse) so the first parameter's
-                // destructure is the outermost binding, matching source order.
-                // Save/set/restore fn_is_async so nested lambdas/defs see the
-                // correct async context for their own scope.
-                let prev_async = self.fn_is_async.get();
-                self.fn_is_async.set(matches!(ret, IrType::Task(_)));
-                // Params are promotable fn binders for the body's capture
-                // classifier (an inner lambda capturing a pure-`Fun` param
-                // defers to the param loop below instead of IPE-L0126).
-                let param_syms: Vec<Symbol> = params.iter().map(|(s, _)| *s).collect();
-                let mut row_vars = BTreeSet::new();
-                canon_sig_collect_arg_row_vars(ty, &mut row_vars);
-                let body_result = self
-                    .reject_generic_app_entries_in(body, &row_vars)
-                    .and_then(|()| {
-                        self.with_promotable_fn_binders(param_syms, || self.lower_expr(body))
-                    });
-                self.fn_is_async.set(prev_async);
-                // The prologue binders' types mention the def's own generics, so
-                // they resolve before those generics go out of scope.
-                let folded = body_result.and_then(|b| self.fold_param_prologues(prologue, b, body));
-                *self.current_poly_tvars.borrow_mut() = saved_poly_tvars;
-                let mut lowered_body = folded?;
+                    self.fn_is_async.set(prev_async);
+                    // The prologue binders' types mention the def's own generics, so
+                    // they resolve before those generics go out of scope.
+                    let folded =
+                        body_result.and_then(|b| self.fold_param_prologues(prologue, b, body))?;
+                    Ok((ret, folded))
+                });
+                let (mut ret, mut lowered_body) = scoped?;
                 // Param-position wildcard-`any` region substitution — the SEAL
                 // dual of the return substitution above. A bare-`any` parameter
                 // freshens to `IrType::Generic(any_sym)` in `split_typed_sig`.
@@ -16213,20 +16216,13 @@ impl<'a> Lowerer<'a> {
                 let poly_key = (def.home().to_vec(), name);
                 let quantified_syms = self.types.untyped_type_params.get(&poly_key);
                 let is_generalized = quantified_syms.is_some_and(|v| !v.is_empty());
-                let saved_poly_tvars = if is_generalized {
-                    let poly = self
-                        .types
+                let scope_poly = is_generalized.then(|| {
+                    self.types
                         .poly_var_map
                         .get(&poly_key)
                         .cloned()
-                        .unwrap_or_default();
-                    let mut slot = self.current_poly_tvars.borrow_mut();
-                    let saved = slot.clone();
-                    *slot = poly;
-                    Some(saved)
-                } else {
-                    None
-                };
+                        .unwrap_or_default()
+                });
                 let var_bounds = self.types.bounds.get(&poly_key);
                 // `used_generics` structural-appearance filter, ported from the
                 // Typed arm (Bug-28/Bug-29 invariant): a var only belongs in
@@ -16274,35 +16270,30 @@ impl<'a> Lowerer<'a> {
                     // unsound `any`-shaped parameters — fail-closed by design
                     // (Divergence D1: an ambiguous instantiation the reference
                     // erasure-accepts is rejected here, strictly safer).
-                    let split_result = self.split_unannotated_sig(solved_ty, patterns, sig_span);
-                    let (params, prologue, ret) = match split_result {
-                        Ok(v) => v,
-                        Err(e) => {
-                            if let Some(saved) = saved_poly_tvars {
-                                *self.current_poly_tvars.borrow_mut() = saved;
-                            }
-                            return Err(e);
-                        }
-                    };
-                    // Save/set/restore fn_is_async (same rationale as Typed path).
-                    let prev_async = self.fn_is_async.get();
-                    self.fn_is_async.set(matches!(ret, IrType::Task(_)));
-                    // Same promotable-fn-binder registration as the Typed path.
-                    let param_syms: Vec<Symbol> = params.iter().map(|(s, _)| *s).collect();
-                    let body_result = self
-                        .reject_generic_app_entries_in(body, &BTreeSet::new())
-                        .and_then(|()| {
-                            self.with_promotable_fn_binders(param_syms, || self.lower_expr(body))
+                    let scoped =
+                        self.with_poly_tvars(scope_poly, || -> DResult<UnannotatedFnParts> {
+                            let (params, prologue, ret) =
+                                self.split_unannotated_sig(solved_ty, patterns, sig_span)?;
+                            // Save/set/restore fn_is_async (same rationale as Typed path).
+                            let prev_async = self.fn_is_async.get();
+                            self.fn_is_async.set(matches!(ret, IrType::Task(_)));
+                            // Same promotable-fn-binder registration as the Typed path.
+                            let param_syms: Vec<Symbol> = params.iter().map(|(s, _)| *s).collect();
+                            let body_result = self
+                                .reject_generic_app_entries_in(body, &BTreeSet::new())
+                                .and_then(|()| {
+                                    self.with_promotable_fn_binders(param_syms, || {
+                                        self.lower_expr(body)
+                                    })
+                                });
+                            self.fn_is_async.set(prev_async);
+                            // Prologue binders resolve under the def's generics, as in
+                            // the Typed path.
+                            let folded = body_result
+                                .and_then(|b| self.fold_param_prologues(prologue, b, body))?;
+                            Ok((params, ret, folded))
                         });
-                    self.fn_is_async.set(prev_async);
-                    // Prologue binders resolve under the def's generics, as in
-                    // the Typed path.
-                    let folded =
-                        body_result.and_then(|b| self.fold_param_prologues(prologue, b, body));
-                    if let Some(saved) = saved_poly_tvars {
-                        *self.current_poly_tvars.borrow_mut() = saved;
-                    }
-                    let mut lowered_body = folded?;
+                    let (params, ret, mut lowered_body) = scoped?;
                     // Same move-ownership discipline as the Typed path above —
                     // one `apply_param_move_ownership` per param (see that call
                     // site and the fn doc for the collapsed-branch rationale).
@@ -16331,27 +16322,18 @@ impl<'a> Lowerer<'a> {
                         body: lowered_body,
                     });
                 }
-                let ret_result = self.ir_type_from_ty(solved_ty, sig_span);
-                let ret = match ret_result {
-                    Ok(v) => v,
-                    Err(e) => {
-                        if let Some(saved) = saved_poly_tvars {
-                            *self.current_poly_tvars.borrow_mut() = saved;
-                        }
-                        return Err(e);
-                    }
-                };
-                // Save/set/restore fn_is_async for the 0-param (value-binding) path.
-                let prev_async = self.fn_is_async.get();
-                self.fn_is_async.set(matches!(ret, IrType::Task(_)));
-                let lowered_body = self
-                    .reject_generic_app_entries_in(body, &BTreeSet::new())
-                    .and_then(|()| self.lower_expr(body));
-                self.fn_is_async.set(prev_async);
-                if let Some(saved) = saved_poly_tvars {
-                    *self.current_poly_tvars.borrow_mut() = saved;
-                }
-                let lowered_body = lowered_body?;
+                let (ret, lowered_body) =
+                    self.with_poly_tvars(scope_poly, || -> DResult<(IrType, Expr)> {
+                        let ret = self.ir_type_from_ty(solved_ty, sig_span)?;
+                        // Save/set/restore fn_is_async for the 0-param (value-binding) path.
+                        let prev_async = self.fn_is_async.get();
+                        self.fn_is_async.set(matches!(ret, IrType::Task(_)));
+                        let lowered_body = self
+                            .reject_generic_app_entries_in(body, &BTreeSet::new())
+                            .and_then(|()| self.lower_expr(body));
+                        self.fn_is_async.set(prev_async);
+                        Ok((ret, lowered_body?))
+                    })?;
                 // Zero-param generalized value bindings (no value restriction,
                 // e.g. `empty = []` used at two element types cross-module)
                 // take the identical `params: []` path the backend already
@@ -17819,6 +17801,21 @@ impl<'a> Lowerer<'a> {
             }
         }
         rewrite_captured_clones(&clone_set, &noncl_set, span, body, 0)
+    }
+
+    /// Run `f` with `poly` installed as the enclosing def's generic type-variable map.
+    ///
+    /// The previous map is restored once `f` returns, whatever path `f` exits
+    /// by, so a definition's generics can never stay in scope for the next
+    /// definition. `None` leaves the current map untouched.
+    fn with_poly_tvars<T>(&self, poly: Option<BTreeMap<u32, Symbol>>, f: impl FnOnce() -> T) -> T {
+        let Some(poly) = poly else {
+            return f();
+        };
+        let saved = self.current_poly_tvars.replace(poly);
+        let out = f();
+        self.current_poly_tvars.replace(saved);
+        out
     }
 
     /// Run `f` with `syms` registered as promotable fn binders (see the
