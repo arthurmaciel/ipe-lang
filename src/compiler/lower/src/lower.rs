@@ -5785,7 +5785,9 @@ fn branch_merge(sym: Symbol, pre: FnValueMoveState, branches: &[&Expr]) -> FnVal
 /// scope it is visible over. Every binder kind — def param, lambda param, `let`
 /// name, match-arm pattern var, destructure component — routes through this
 /// single entry point rather than open-coding its own count/clone/relay
-/// dispatch, so a binder kind cannot silently ship without the discipline.
+/// dispatch, so a binder kind cannot silently ship without the discipline. The
+/// `ir_ty` a non-def binder passes comes from `Lowerer::binder_ir_type`, which
+/// refuses a used binder whose type does not resolve rather than skipping it.
 ///
 /// **Invariant established here — every move-closure boundary owns what it
 /// captures.** A Rust `move` closure takes each free variable by value at
@@ -15870,9 +15872,12 @@ impl<'a> Lowerer<'a> {
                     .and_then(|()| {
                         self.with_promotable_fn_binders(param_syms, || self.lower_expr(body))
                     });
-                *self.current_poly_tvars.borrow_mut() = saved_poly_tvars;
                 self.fn_is_async.set(prev_async);
-                let mut lowered_body = self.fold_param_prologues(prologue, body_result?, body)?;
+                // The prologue binders' types mention the def's own generics, so
+                // they resolve before those generics go out of scope.
+                let folded = body_result.and_then(|b| self.fold_param_prologues(prologue, b, body));
+                *self.current_poly_tvars.borrow_mut() = saved_poly_tvars;
+                let mut lowered_body = folded?;
                 // Param-position wildcard-`any` region substitution — the SEAL
                 // dual of the return substitution above. A bare-`any` parameter
                 // freshens to `IrType::Generic(any_sym)` in `split_typed_sig`.
@@ -16290,11 +16295,14 @@ impl<'a> Lowerer<'a> {
                             self.with_promotable_fn_binders(param_syms, || self.lower_expr(body))
                         });
                     self.fn_is_async.set(prev_async);
+                    // Prologue binders resolve under the def's generics, as in
+                    // the Typed path.
+                    let folded =
+                        body_result.and_then(|b| self.fold_param_prologues(prologue, b, body));
                     if let Some(saved) = saved_poly_tvars {
                         *self.current_poly_tvars.borrow_mut() = saved;
                     }
-                    let mut lowered_body =
-                        self.fold_param_prologues(prologue, body_result?, body)?;
+                    let mut lowered_body = folded?;
                     // Same move-ownership discipline as the Typed path above —
                     // one `apply_param_move_ownership` per param (see that call
                     // site and the fn doc for the collapsed-branch rationale).
@@ -17639,20 +17647,125 @@ impl<'a> Lowerer<'a> {
         }
     }
 
+    /// Resolve the IR type the ownership disciplines check a binder at.
+    ///
+    /// `type_span` is the span whose solved type is the binder's type (its
+    /// first use site, or a `let`'s bound value); `None` means the binder has
+    /// no use in the scope the discipline governs, the one case with nothing
+    /// to check. Every other outcome is fail-closed: a span the solver
+    /// recorded no type for is a compiler bug, and a type that does not lower
+    /// refuses with its own typed diagnostic. No discipline (non-`Clone`
+    /// reuse, `CloneOk` multi-use, fn-value, foreign-handle, capture-clone)
+    /// is skipped for a used binder whose type is unknown.
+    ///
+    /// A phantom type variable (free, and not a generic of the enclosing
+    /// definition) is classified as `String`, a `CloneOk` leaf: the solver
+    /// left it unconstrained, so the emitted type there is a defaulted `Clone`
+    /// type the disciplines may clone but never move twice. A phantom under a
+    /// function arrow still refuses (IPE-L0102), since a function-typed
+    /// binder's carrier spells its signature out.
+    fn binder_ir_type(&self, type_span: Option<Span>) -> DResult<Option<IrType>> {
+        let Some(span) = type_span else {
+            return Ok(None);
+        };
+        let ty = self.region_ty(span).ok_or_else(|| {
+            bug(
+                "ipe_lower::binder_ir_type",
+                "a used binder has no solved region type at its type span",
+            )
+        })?;
+        let carrier = self.interner.lookup("String").map(|name| Ty::Con {
+            module: Vec::new(),
+            name,
+            args: Vec::new(),
+        });
+        let mut pinned = false;
+        let pinned_ty = carrier
+            .as_ref()
+            .and_then(|c| self.pin_phantom_vars(ty, c, false, &mut pinned));
+        match pinned_ty {
+            Some(p) if pinned => self.ir_type_from_ty(&p, span).map(Some),
+            _ => self.ir_type_from_ty(ty, span).map(Some),
+        }
+    }
+
+    /// Copy `ty` with each phantom type variable replaced by `carrier`.
+    ///
+    /// Sets `pinned` when a phantom was replaced. Returns `None` when a
+    /// phantom sits under a function arrow, which stays unpinned so type
+    /// lowering refuses it.
+    fn pin_phantom_vars(
+        &self,
+        ty: &Ty,
+        carrier: &Ty,
+        under_fun: bool,
+        pinned: &mut bool,
+    ) -> Option<Ty> {
+        match ty {
+            Ty::Var(v) if self.poly_tvar_symbol(*v).is_none() => {
+                if under_fun {
+                    return None;
+                }
+                *pinned = true;
+                Some(carrier.clone())
+            }
+            Ty::Var(_) | Ty::Unit => Some(ty.clone()),
+            Ty::Fun(arg, res) => Some(Ty::Fun(
+                Box::new(self.pin_phantom_vars(arg, carrier, true, pinned)?),
+                Box::new(self.pin_phantom_vars(res, carrier, true, pinned)?),
+            )),
+            Ty::Con { module, name, args } => Some(Ty::Con {
+                module: module.clone(),
+                name: *name,
+                args: args
+                    .iter()
+                    .map(|a| self.pin_phantom_vars(a, carrier, under_fun, pinned))
+                    .collect::<Option<Vec<_>>>()?,
+            }),
+            Ty::Tuple(elems) => Some(Ty::Tuple(
+                elems
+                    .iter()
+                    .map(|e| self.pin_phantom_vars(e, carrier, under_fun, pinned))
+                    .collect::<Option<Vec<_>>>()?,
+            )),
+            Ty::Record(fields, tail) => Some(Ty::Record(
+                fields
+                    .iter()
+                    .map(|(k, f)| {
+                        self.pin_phantom_vars(f, carrier, under_fun, pinned)
+                            .map(|f| (*k, f))
+                    })
+                    .collect::<Option<BTreeMap<_, _>>>()?,
+                tail.clone(),
+            )),
+        }
+    }
+
+    /// Resolve the IR type of a binder known to be used at `use_span`.
+    ///
+    /// Same fail-closed contract as [`Self::binder_ir_type`], for the sites
+    /// (captures, first-use lookups) where the use is already established.
+    fn used_binder_ir_type(&self, use_span: Span) -> DResult<IrType> {
+        self.binder_ir_type(Some(use_span))?.ok_or_else(|| {
+            bug(
+                "ipe_lower::used_binder_ir_type",
+                "a used binder resolved as unused",
+            )
+        })
+    }
+
     /// Collect the captured local variables for a closure body (T3).
     ///
     /// Walks `canon_body` collecting every `VarLocal` free relative to
     /// `lambda_param_pats` (all flattened param patterns of the enclosing
-    /// closure). For each captured symbol, looks up its use-site region type
-    /// via [`Self::ir_type_from_ty`] to classify it by [`clone_class`].
-    /// Returns `(symbol, ir_type_option)` pairs; `None` means the region type
-    /// was unavailable (treated as bare / copy by the caller — safe default,
-    /// no `CloneVar` inserted, no IPE-L0125).
+    /// closure), paired with its IR type resolved at its first use site through
+    /// [`Self::binder_ir_type`]. A capture is a use, so a capture whose type
+    /// does not resolve refuses rather than going unclassified.
     fn captured_locals(
         &self,
         lambda_param_pats: &[&canon::Pattern],
         canon_body: &canon::Expr,
-    ) -> Vec<(Symbol, Option<IrType>)> {
+    ) -> DResult<Vec<(Symbol, IrType)>> {
         let mut outer_bound = BTreeSet::new();
         for &p in lambda_param_pats {
             canon_collect_pat_binds(p, &mut outer_bound);
@@ -17660,12 +17773,7 @@ impl<'a> Lowerer<'a> {
         let mut free: BTreeMap<Symbol, Span> = BTreeMap::new();
         canon_collect_free_locals(&mut free, &outer_bound, canon_body);
         free.into_iter()
-            .map(|(sym, span)| {
-                let ty = self
-                    .region_ty(span)
-                    .and_then(|ty| self.ir_type_from_ty(ty, span).ok());
-                (sym, ty)
-            })
+            .map(|(sym, span)| Ok((sym, self.used_binder_ir_type(span)?)))
             .collect()
     }
 
@@ -17690,17 +17798,17 @@ impl<'a> Lowerer<'a> {
         span: Span,
         body: Expr,
     ) -> DResult<Expr> {
-        let captures = self.captured_locals(all_param_pats, cur_body);
+        let captures = self.captured_locals(all_param_pats, cur_body)?;
         let mut clone_set: BTreeSet<Symbol> = BTreeSet::new();
         let mut noncl_set: BTreeSet<Symbol> = BTreeSet::new();
         for (sym, ir_ty) in captures {
-            if ir_ty.as_ref().is_some_and(fun_value_arc_promotable)
+            if fun_value_arc_promotable(&ir_ty)
                 && self.promotable_fn_binders.borrow().contains(&sym)
             {
                 self.deferred_fun_captures.borrow_mut().insert(sym, span);
                 continue;
             }
-            match classify_capture_clone(self.clone_env(), ir_ty.as_ref()) {
+            match classify_capture_clone(self.clone_env(), &ir_ty) {
                 Some(true) => {
                     clone_set.insert(sym);
                 }
@@ -17832,8 +17940,9 @@ impl<'a> Lowerer<'a> {
     /// discipline cannot see. Route each component through the ONE shared
     /// [`apply_move_ownership`] entry point, resolving each component's IR type
     /// from its first use-site span in the (canon) `body` — the identical rule
-    /// `build_destructure_or_decoder_thunk` uses for a body-level destructure. An
-    /// unused component has no use-site span and is left bare.
+    /// `build_destructure_or_decoder_thunk` uses for a body-level destructure,
+    /// through the fail-closed [`Self::binder_ir_type`] resolver. Only an unused
+    /// component (no use-site span) is left bare.
     fn fold_param_prologues(
         &self,
         prologue: Vec<ParamPrologue>,
@@ -17846,10 +17955,8 @@ impl<'a> Lowerer<'a> {
             let mut bound: BTreeSet<Symbol> = BTreeSet::new();
             pat_bound_symbols(&binder_pat, &mut bound);
             for sym in &bound {
-                if let Some(span) = find_first_varlocal_span(*sym, body)
-                    && let Some(ty) = self.region_ty(span)
-                    && let Ok(comp_ir_ty) = self.ir_type_from_ty(ty, span)
-                {
+                let use_span = find_first_varlocal_span(*sym, body);
+                if let (Some(span), Some(comp_ir_ty)) = (use_span, self.binder_ir_type(use_span)?) {
                     lowered_body = apply_move_ownership(
                         self.clone_env(),
                         BindingSite::Materialized,
@@ -18029,18 +18136,11 @@ impl<'a> Lowerer<'a> {
         // by this closure and replace CloneOk reads with `.clone()`, emitting
         // IPE-L0125 for NonClone captures outside callee position.
         body = self.rewrite_lambda_captures(&all_param_pats, cur_body, span, body)?;
-        // Fold each destructuring param's `Destructure` around the body,
-        // OUTERMOST-first (reverse of source order) so the first parameter's
-        // destructure is the outermost binding — identical to the def-head
-        // prologue folding in `lower_def`. (Lambdas are not TCO'd, so there is no
-        // TailLoop interaction here.)
-        for (binder_sym, binder_pat) in prologue.into_iter().rev() {
-            body = Expr::Destructure {
-                binder: binder_pat,
-                value: Box::new(Expr::Var(binder_sym)),
-                body: Box::new(body),
-            };
-        }
+        // Fold each destructuring param's `Destructure` around the body through
+        // the same shared fold as the def-head params, so every bound component
+        // runs the move-ownership discipline. (Lambdas are not TCO'd, so there is
+        // no TailLoop interaction here.)
+        body = self.fold_param_prologues(prologue, body, cur_body)?;
         // Move-ownership discipline for LAMBDA params — the exact analogue of
         // the def-head param rewrite in `lower_def`, through the ONE shared
         // entry point: `apply_param_move_ownership` promotes a pure-`Fun` param
@@ -27806,19 +27906,18 @@ impl<'a> Lowerer<'a> {
             // scope the binder is visible over (`canon_scope` = the let/case
             // body plus, for a `let`, the values of subsequent siblings), then
             // apply the lean multi-use/relay rewrite (or the fail-closed T4 gate
-            // for fn-value reuse). Unused components have no use-site span →
-            // skipped (byte-identical); a Decoder-containing value still takes
-            // the thunk path below.
+            // for fn-value reuse). The component type resolves through the
+            // fail-closed `binder_ir_type`: only an unused component (no use-site
+            // span) is left bare; a Decoder-containing value still takes the
+            // thunk path below.
             let mut bound: BTreeSet<Symbol> = BTreeSet::new();
             pat_bound_symbols(&binder, &mut bound);
             let mut disciplined_body = body;
             for sym in &bound {
-                if let Some(span) = canon_scope
+                let use_span = canon_scope
                     .iter()
-                    .find_map(|e| find_first_varlocal_span(*sym, e))
-                    && let Some(ty) = self.region_ty(span)
-                    && let Ok(comp_ir_ty) = self.ir_type_from_ty(ty, span)
-                {
+                    .find_map(|e| find_first_varlocal_span(*sym, e));
+                if let (Some(span), Some(comp_ir_ty)) = (use_span, self.binder_ir_type(use_span)?) {
                     disciplined_body = apply_move_ownership(
                         self.clone_env(),
                         BindingSite::Materialized,
@@ -27840,11 +27939,11 @@ impl<'a> Lowerer<'a> {
         // params, so every free VarLocal in `canon_value` is an outer capture,
         // classified by the shared `classify_capture_clone` rule.
         let thunk_body = {
-            let captures = self.captured_locals(&[], canon_value);
+            let captures = self.captured_locals(&[], canon_value)?;
             let mut clone_set: BTreeSet<Symbol> = BTreeSet::new();
             let mut noncl_set: BTreeSet<Symbol> = BTreeSet::new();
             for (sym, ir_ty) in captures {
-                match classify_capture_clone(self.clone_env(), ir_ty.as_ref()) {
+                match classify_capture_clone(self.clone_env(), &ir_ty) {
                     Some(true) => {
                         clone_set.insert(sym);
                     }
@@ -27907,11 +28006,12 @@ impl<'a> Lowerer<'a> {
         // E0382 (use of moved value) in emitted Rust where each
         // `Var(name)` lowers to a bare identifier that moves the value.
         //
-        // `types.regions` is keyed by `(home, span)`;
-        // `region_ty` builds the composite key from current_home.
-        let ty_opt = self
-            .region_ty(b.body.span)
-            .and_then(|ty| self.ir_type_from_ty(ty, b.body.span).ok());
+        // The binder's type is its bound value's solved type, resolved through
+        // the fail-closed `binder_ir_type`: `None` only when `name` has no read
+        // in the scope `acc`, so a used binding never skips the discipline.
+        let name_is_used =
+            precomputed.map_or_else(|| count_var_uses(name, &acc), |a| a.var_uses) > 0;
+        let ty_opt = self.binder_ir_type(name_is_used.then_some(b.body.span))?;
         // Pure-`Fun` bindings may take the `Arc<dyn Fn>` carrier promotion
         // (`fun_value_arc_promotable` — the single ipe_ir authority). The
         // NEW promotion triggers are computed on the LOWERED scope `acc`, so
@@ -28610,9 +28710,9 @@ impl<'a> Lowerer<'a> {
                                 })?;
                             *self.shared_fn_reads.borrow_mut() = shared_before;
                             for sym in arm_syms {
-                                if let Some(span) = find_first_varlocal_span(sym, &br.body)
-                                    && let Some(ty) = self.region_ty(span)
-                                    && let Ok(ir_ty) = self.ir_type_from_ty(ty, span)
+                                let use_span = find_first_varlocal_span(sym, &br.body);
+                                if let (Some(span), Some(ir_ty)) =
+                                    (use_span, self.binder_ir_type(use_span)?)
                                 {
                                     arm_body = self
                                         .apply_param_move_ownership(sym, &ir_ty, arm_body, span)?;
@@ -28731,18 +28831,13 @@ impl<'a> Lowerer<'a> {
                 // would otherwise move it out of the enclosing `Fn` env →
                 // E0507). `apply_move_ownership`'s `rewrite_multiuse_clones`
                 // (`remaining = n`) installs that relay via its Lambda arm at
-                // `n == 1` and stays lean (bare last-use at depth 0). Unused
-                // pattern vars have no use-site span → `find_first_varlocal_span`
-                // returns `None` → skipped, byte-identical to before.
-                // `ir_type_from_ty` can legitimately fail for
-                // unsupported / not-yet-modelled types — treat any error as
-                // "skip the discipline for this symbol" (documented `Unknown`
-                // residual, same as before).
+                // `n == 1` and stays lean (bare last-use at depth 0). Only an
+                // unused pattern var (no use-site span) is left bare; a used one
+                // resolves through the fail-closed `binder_ir_type`, so a type
+                // that does not lower refuses instead of skipping the discipline.
                 for sym in arm_syms {
-                    if let Some(span) = find_first_varlocal_span(sym, &br.body)
-                        && let Some(ty) = self.region_ty(span)
-                        && let Ok(ir_ty) = self.ir_type_from_ty(ty, span)
-                    {
+                    let use_span = find_first_varlocal_span(sym, &br.body);
+                    if let (Some(span), Some(ir_ty)) = (use_span, self.binder_ir_type(use_span)?) {
                         // The param-side entry point: a pure-`Fun` arm binder
                         // whose reads exceed a bare `Box` carrier (a capture the
                         // classifier deferred, or a forward at closure depth ≥ 1)
@@ -29523,6 +29618,165 @@ mod tests {
             untyped_type_params: BTreeMap::new(),
             msg_defaulted_vars: BTreeMap::new(),
         }
+    }
+
+    /// A span the binder-type tests record a free, non-polymorphic `Ty::Var` at.
+    const FREE_VAR_SPAN: Span = Span::new(10, 11);
+    /// A span the binder-type tests record `Ty::Unit` at.
+    const UNIT_SPAN: Span = Span::new(20, 21);
+    /// A span the binder-type tests record no region type at.
+    const UNTYPED_SPAN: Span = Span::new(30, 31);
+    /// A span the binder-type tests record a function over a free `Ty::Var` at.
+    const FUN_FREE_VAR_SPAN: Span = Span::new(40, 41);
+
+    /// Run `check` against a lowerer whose solved regions are the spans above.
+    fn with_binder_type_lowerer(check: impl FnOnce(&Lowerer<'_>, ipe_intern::Symbol)) {
+        let mut interner = Interner::new();
+        let builtins = build_test_builtin_ctors(&mut interner);
+        let sym = interner.intern("captured").unwrap();
+        interner.intern("String").unwrap();
+        let module = canon::Module {
+            imports_unsafe_submodule: false,
+            imported_web_capabilities: BTreeSet::new(),
+            name: vec![],
+            unions: vec![],
+            defs: vec![],
+        };
+        let mut types = empty_solved_types();
+        types
+            .regions
+            .insert((Vec::new(), FREE_VAR_SPAN), Ty::Var(7));
+        types.regions.insert((Vec::new(), UNIT_SPAN), Ty::Unit);
+        types.regions.insert(
+            (Vec::new(), FUN_FREE_VAR_SPAN),
+            Ty::Fun(Box::new(Ty::Var(7)), Box::new(Ty::Unit)),
+        );
+        let lowerer = Lowerer::new(
+            &module,
+            &types,
+            &interner,
+            SymbolPools {
+                eta_params: vec![],
+                cap_params: vec![],
+                param_binders: vec![],
+                any_param_binders: vec![],
+                projection_decode_binders: vec![],
+                destructure_thunk_binders: vec![],
+                nested_cons_binders: vec![],
+                nested_strlit_binders: vec![],
+                tuple_elem_binders: vec![],
+            },
+            &builtins,
+            "",
+            "",
+        );
+        check(&lowerer, sym);
+    }
+
+    /// An unused binder is the only binder the resolver reports as typeless.
+    #[test]
+    fn binder_ir_type_unused_binder_is_none() {
+        with_binder_type_lowerer(|lowerer, _| {
+            assert!(matches!(lowerer.binder_ir_type(None), Ok(None)));
+        });
+    }
+
+    /// A used binder whose type lowers resolves to that type.
+    #[test]
+    fn binder_ir_type_resolves_lowerable_type() {
+        with_binder_type_lowerer(|lowerer, _| {
+            assert!(matches!(
+                lowerer.binder_ir_type(Some(UNIT_SPAN)),
+                Ok(Some(super::IrType::Unit))
+            ));
+        });
+    }
+
+    /// A phantom type variable classifies as the `CloneOk` `String` leaf.
+    #[test]
+    fn binder_ir_type_pins_phantom_var() {
+        with_binder_type_lowerer(|lowerer, _| {
+            let got = lowerer.binder_ir_type(Some(FREE_VAR_SPAN));
+            assert!(
+                matches!(got, Ok(Some(super::IrType::Str))),
+                "a phantom binder type must pin to `String`, got {got:?}"
+            );
+        });
+    }
+
+    /// A phantom under a function arrow does not lower and refuses with that typed error.
+    #[test]
+    fn binder_ir_type_refuses_unlowerable_type() {
+        with_binder_type_lowerer(|lowerer, _| {
+            let got = lowerer.binder_ir_type(Some(FUN_FREE_VAR_SPAN));
+            assert!(
+                matches!(
+                    got,
+                    Err(super::Diagnostic::Lower {
+                        msg: super::LowerError::Unsupported(super::Feature::Polymorphism),
+                        ..
+                    })
+                ),
+                "an unlowerable used binder must refuse, got {got:?}"
+            );
+        });
+    }
+
+    /// A used binder with no solved region type is a compiler bug, never skipped.
+    #[test]
+    fn binder_ir_type_refuses_missing_region() {
+        with_binder_type_lowerer(|lowerer, _| {
+            let got = lowerer.binder_ir_type(Some(UNTYPED_SPAN));
+            assert!(
+                matches!(got, Err(super::Diagnostic::CompilerBug { .. })),
+                "a used binder without a region type must refuse, got {got:?}"
+            );
+        });
+    }
+
+    /// A closure capture whose type does not lower refuses instead of going unclassified.
+    #[test]
+    fn captured_locals_refuses_unlowerable_capture() {
+        with_binder_type_lowerer(|lowerer, sym| {
+            let body = Located::new(FUN_FREE_VAR_SPAN, canon::Expr_::VarLocal(sym));
+            let got = lowerer.captured_locals(&[], &body);
+            assert!(
+                matches!(
+                    got,
+                    Err(super::Diagnostic::Lower {
+                        msg: super::LowerError::Unsupported(super::Feature::Polymorphism),
+                        ..
+                    })
+                ),
+                "an unlowerable capture must refuse, got {got:?}"
+            );
+        });
+    }
+
+    /// A closure capture with no solved region type is a compiler bug.
+    #[test]
+    fn captured_locals_refuses_untyped_capture() {
+        with_binder_type_lowerer(|lowerer, sym| {
+            let body = Located::new(UNTYPED_SPAN, canon::Expr_::VarLocal(sym));
+            let got = lowerer.captured_locals(&[], &body);
+            assert!(
+                matches!(got, Err(super::Diagnostic::CompilerBug { .. })),
+                "an untyped capture must refuse, got {got:?}"
+            );
+        });
+    }
+
+    /// A closure capture whose type lowers is returned with that type.
+    #[test]
+    fn captured_locals_types_lowerable_capture() {
+        with_binder_type_lowerer(|lowerer, sym| {
+            let body = Located::new(UNIT_SPAN, canon::Expr_::VarLocal(sym));
+            let got = lowerer.captured_locals(&[], &body);
+            assert!(
+                matches!(got.as_deref(), Ok([(s, super::IrType::Unit)]) if *s == sym),
+                "a lowerable capture must carry its type, got {got:?}"
+            );
+        });
     }
 
     /// The lowerer's built-in `enum_variants` / `ctor_arity` seeding MUST agree
