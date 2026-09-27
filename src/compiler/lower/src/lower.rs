@@ -87,6 +87,35 @@ type ParamPrologue = (Symbol, Pat);
 /// An unannotated function's lowered parameters, return type, and body.
 type UnannotatedFnParts = (Vec<IrParam>, IrType, Expr);
 
+/// A used binder's type as the ownership disciplines see it.
+///
+/// Only `Resolved` is the type the binder is emitted at. `Phantom` holds the
+/// defaulted stand-in for a variable the solver left unconstrained: it is fit
+/// to classify clone/move behaviour, never to spell a type or carrier into
+/// emitted code, so [`Self::emittable`] withholds it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum BinderType {
+    Resolved(IrType),
+    Phantom(IrType),
+}
+
+impl BinderType {
+    /// The type the ownership classification reads.
+    const fn classified(&self) -> &IrType {
+        match self {
+            Self::Resolved(ty) | Self::Phantom(ty) => ty,
+        }
+    }
+
+    /// The type fit for emission; `None` for a phantom stand-in.
+    const fn emittable(&self) -> Option<&IrType> {
+        match self {
+            Self::Resolved(ty) => Some(ty),
+            Self::Phantom(_) => None,
+        }
+    }
+}
+
 /// A top-level binding's fully-qualified key: its `(module, name)`.
 type TopLevelKey = (Vec<Symbol>, Symbol);
 
@@ -17218,6 +17247,11 @@ impl<'a> Lowerer<'a> {
                             format!("Program carrier with unknown shape tag `{other}`"),
                         )),
                     },
+                    // A shape-generic annotation (`Program shape msg`) names no
+                    // single app leaf to emit; this arm carries no span.
+                    Some(canon::Type::Var(_)) => {
+                        Err(unsupported(Span::DUMMY, Feature::Polymorphism))
+                    }
                     _ => Err(bug(
                         "ipe_lower::ir_type_from_annotation",
                         "Program carrier annotation without a shape tag",
@@ -17643,10 +17677,12 @@ impl<'a> Lowerer<'a> {
     /// A phantom type variable (free, and not a generic of the enclosing
     /// definition) is classified as `String`, a `CloneOk` leaf: the solver
     /// left it unconstrained, so the emitted type there is a defaulted `Clone`
-    /// type the disciplines may clone but never move twice. A phantom under a
-    /// function arrow still refuses (IPE-L0102), since a function-typed
-    /// binder's carrier spells its signature out.
-    fn binder_ir_type(&self, type_span: Option<Span>) -> DResult<Option<IrType>> {
+    /// type the disciplines may clone but never move twice. Such a type is a
+    /// [`BinderType::Phantom`], fit for classification only — never for
+    /// emission. A phantom whose position fixes the emitted carrier (under a
+    /// function arrow, or a `Program` shape tag) is not defaulted and refuses
+    /// (IPE-L0102).
+    fn binder_ir_type(&self, type_span: Option<Span>) -> DResult<Option<BinderType>> {
         let Some(span) = type_span else {
             return Ok(None);
         };
@@ -17666,26 +17702,31 @@ impl<'a> Lowerer<'a> {
             .as_ref()
             .and_then(|c| self.pin_phantom_vars(ty, c, false, &mut pinned));
         match pinned_ty {
-            Some(p) if pinned => self.ir_type_from_ty(&p, span).map(Some),
-            _ => self.ir_type_from_ty(ty, span).map(Some),
+            Some(p) if pinned => self
+                .ir_type_from_ty(&p, span)
+                .map(|t| Some(BinderType::Phantom(t))),
+            _ => self
+                .ir_type_from_ty(ty, span)
+                .map(|t| Some(BinderType::Resolved(t))),
         }
     }
 
     /// Copy `ty` with each phantom type variable replaced by `carrier`.
     ///
-    /// Sets `pinned` when a phantom was replaced. Returns `None` when a
-    /// phantom sits under a function arrow, which stays unpinned so type
-    /// lowering refuses it.
+    /// Sets `pinned` when a phantom was replaced. `no_default` marks a
+    /// position whose type fixes the emitted carrier: a function arrow's
+    /// operands, and a `Program` shape tag. A phantom there makes the whole
+    /// copy `None`, so type lowering sees it unpinned and refuses it.
     fn pin_phantom_vars(
         &self,
         ty: &Ty,
         carrier: &Ty,
-        under_fun: bool,
+        no_default: bool,
         pinned: &mut bool,
     ) -> Option<Ty> {
         match ty {
             Ty::Var(v) if self.poly_tvar_symbol(*v).is_none() => {
-                if under_fun {
+                if no_default {
                     return None;
                 }
                 *pinned = true;
@@ -17696,25 +17737,33 @@ impl<'a> Lowerer<'a> {
                 Box::new(self.pin_phantom_vars(arg, carrier, true, pinned)?),
                 Box::new(self.pin_phantom_vars(res, carrier, true, pinned)?),
             )),
-            Ty::Con { module, name, args } => Some(Ty::Con {
-                module: module.clone(),
-                name: *name,
-                args: args
-                    .iter()
-                    .map(|a| self.pin_phantom_vars(a, carrier, under_fun, pinned))
-                    .collect::<Option<Vec<_>>>()?,
-            }),
+            Ty::Con { module, name, args } => {
+                let shape_tagged =
+                    module.is_empty() && self.interner.resolve(*name) == Some("Program");
+                Some(Ty::Con {
+                    module: module.clone(),
+                    name: *name,
+                    args: args
+                        .iter()
+                        .enumerate()
+                        .map(|(i, a)| {
+                            let tag_slot = shape_tagged && i == 0;
+                            self.pin_phantom_vars(a, carrier, no_default || tag_slot, pinned)
+                        })
+                        .collect::<Option<Vec<_>>>()?,
+                })
+            }
             Ty::Tuple(elems) => Some(Ty::Tuple(
                 elems
                     .iter()
-                    .map(|e| self.pin_phantom_vars(e, carrier, under_fun, pinned))
+                    .map(|e| self.pin_phantom_vars(e, carrier, no_default, pinned))
                     .collect::<Option<Vec<_>>>()?,
             )),
             Ty::Record(fields, tail) => Some(Ty::Record(
                 fields
                     .iter()
                     .map(|(k, f)| {
-                        self.pin_phantom_vars(f, carrier, under_fun, pinned)
+                        self.pin_phantom_vars(f, carrier, no_default, pinned)
                             .map(|f| (*k, f))
                     })
                     .collect::<Option<BTreeMap<_, _>>>()?,
@@ -17727,7 +17776,7 @@ impl<'a> Lowerer<'a> {
     ///
     /// Same fail-closed contract as [`Self::binder_ir_type`], for the sites
     /// (captures, first-use lookups) where the use is already established.
-    fn used_binder_ir_type(&self, use_span: Span) -> DResult<IrType> {
+    fn used_binder_ir_type(&self, use_span: Span) -> DResult<BinderType> {
         self.binder_ir_type(Some(use_span))?.ok_or_else(|| {
             bug(
                 "ipe_lower::used_binder_ir_type",
@@ -17747,7 +17796,7 @@ impl<'a> Lowerer<'a> {
         &self,
         lambda_param_pats: &[&canon::Pattern],
         canon_body: &canon::Expr,
-    ) -> DResult<Vec<(Symbol, IrType)>> {
+    ) -> DResult<Vec<(Symbol, BinderType)>> {
         let mut outer_bound = BTreeSet::new();
         for &p in lambda_param_pats {
             canon_collect_pat_binds(p, &mut outer_bound);
@@ -17783,14 +17832,14 @@ impl<'a> Lowerer<'a> {
         let captures = self.captured_locals(all_param_pats, cur_body)?;
         let mut clone_set: BTreeSet<Symbol> = BTreeSet::new();
         let mut noncl_set: BTreeSet<Symbol> = BTreeSet::new();
-        for (sym, ir_ty) in captures {
-            if fun_value_arc_promotable(&ir_ty)
-                && self.promotable_fn_binders.borrow().contains(&sym)
+        for (sym, binder_ty) in captures {
+            let ir_ty = binder_ty.classified();
+            if fun_value_arc_promotable(ir_ty) && self.promotable_fn_binders.borrow().contains(&sym)
             {
                 self.deferred_fun_captures.borrow_mut().insert(sym, span);
                 continue;
             }
-            match classify_capture_clone(self.clone_env(), &ir_ty) {
+            match classify_capture_clone(self.clone_env(), ir_ty) {
                 Some(true) => {
                     clone_set.insert(sym);
                 }
@@ -17908,10 +17957,24 @@ impl<'a> Lowerer<'a> {
                 span,
             );
         }
+        self.apply_non_fun_param_move_ownership(sym, ir_ty, deferred_capture, body, span)
+    }
+
+    /// Move-ownership for a param-like binder that takes no fn-value carrier.
+    ///
+    /// `deferred_capture` is the binder's consumed deferred fn-capture signal:
+    /// a capture site that saw `sym` as a pure `Fun` while the binder cannot
+    /// take the `Arc` carrier re-raises the fail-close rather than leak an
+    /// unsound bare `Box` capture.
+    fn apply_non_fun_param_move_ownership(
+        &self,
+        sym: Symbol,
+        ir_ty: &IrType,
+        deferred_capture: Option<Span>,
+        body: Expr,
+        span: Span,
+    ) -> DResult<Expr> {
         if let Some(capture_span) = deferred_capture {
-            // A capture site saw `sym` as a pure `Fun`, the param's own type
-            // disagrees — re-raise the fail-close rather than leak an unsound
-            // bare `Box` capture.
             return Err(unsupported(capture_span, Feature::NonCloneCapture));
         }
         apply_move_ownership(
@@ -17922,6 +17985,27 @@ impl<'a> Lowerer<'a> {
             body,
             span,
         )
+    }
+
+    /// Move-ownership for a pattern binder whose type [`Self::binder_ir_type`] resolved.
+    ///
+    /// A resolved type takes the param entry point, fn-value carrier
+    /// included. A phantom type is classification-only, so it never feeds
+    /// the carrier rewrite that spells a type into emitted code.
+    fn apply_binder_move_ownership(
+        &self,
+        sym: Symbol,
+        binder_ty: &BinderType,
+        body: Expr,
+        span: Span,
+    ) -> DResult<Expr> {
+        match binder_ty {
+            BinderType::Resolved(ir_ty) => self.apply_param_move_ownership(sym, ir_ty, body, span),
+            BinderType::Phantom(ir_ty) => {
+                let deferred_capture = self.deferred_fun_captures.borrow_mut().remove(&sym);
+                self.apply_non_fun_param_move_ownership(sym, ir_ty, deferred_capture, body, span)
+            }
+        }
     }
 
     /// Fold the tuple/record destructuring `prologue` of a function's parameters
@@ -17958,7 +18042,7 @@ impl<'a> Lowerer<'a> {
                         self.clone_env(),
                         BindingSite::Materialized,
                         *sym,
-                        &comp_ir_ty,
+                        comp_ir_ty.classified(),
                         lowered_body,
                         span,
                     )?;
@@ -18918,24 +19002,25 @@ impl<'a> Lowerer<'a> {
                 // shape's existing opaque app leaf as the IR erase target; the
                 // `msg` arg is dropped. Home-guarded so a user `type Program = …`
                 // keyed under its own home falls through to its own enum.
-                "Program" if module.is_empty() && matches!(args.first(), Some(Ty::Con { .. })) => {
-                    match args.first() {
-                        Some(Ty::Con { name: tag, .. }) => match self.resolve(*tag)? {
-                            "Web" => Ok(IrType::WebApp),
-                            "Tui" => Ok(IrType::TuiApp),
-                            "Cli" => Ok(IrType::CliApp),
-                            "Worker" => Ok(IrType::WorkerApp),
-                            other => Err(bug(
-                                "ipe_lower::ir_type_from_ty",
-                                format!("Program carrier with unknown shape tag `{other}`"),
-                            )),
-                        },
-                        _ => Err(bug(
+                // A shape tag the solver left a variable names no single app
+                // leaf to emit: refused as IPE-L0102, like any unresolved type.
+                "Program" if module.is_empty() => match args.first() {
+                    Some(Ty::Con { name: tag, .. }) => match self.resolve(*tag)? {
+                        "Web" => Ok(IrType::WebApp),
+                        "Tui" => Ok(IrType::TuiApp),
+                        "Cli" => Ok(IrType::CliApp),
+                        "Worker" => Ok(IrType::WorkerApp),
+                        other => Err(bug(
                             "ipe_lower::ir_type_from_ty",
-                            "Program carrier without a settled shape tag",
+                            format!("Program carrier with unknown shape tag `{other}`"),
                         )),
-                    }
-                }
+                    },
+                    Some(Ty::Var(_)) => Err(unsupported(span, Feature::Polymorphism)),
+                    _ => Err(bug(
+                        "ipe_lower::ir_type_from_ty",
+                        "Program carrier without a settled shape tag",
+                    )),
+                },
                 // `WebRoute page` — the route descriptor produced by
                 // `Web.route`, parametric on the page type it builds.
                 // The solver's `WebRoute` Con always carries exactly one
@@ -27919,7 +28004,7 @@ impl<'a> Lowerer<'a> {
                         self.clone_env(),
                         BindingSite::Materialized,
                         *sym,
-                        &comp_ir_ty,
+                        comp_ir_ty.classified(),
                         disciplined_body,
                         span,
                     )?;
@@ -27939,8 +28024,8 @@ impl<'a> Lowerer<'a> {
             let captures = self.captured_locals(&[], canon_value)?;
             let mut clone_set: BTreeSet<Symbol> = BTreeSet::new();
             let mut noncl_set: BTreeSet<Symbol> = BTreeSet::new();
-            for (sym, ir_ty) in captures {
-                match classify_capture_clone(self.clone_env(), &ir_ty) {
+            for (sym, binder_ty) in captures {
+                match classify_capture_clone(self.clone_env(), binder_ty.classified()) {
                     Some(true) => {
                         clone_set.insert(sym);
                     }
@@ -28029,13 +28114,16 @@ impl<'a> Lowerer<'a> {
         // `needs_shared_capture` / `flows_into_sync_kernel_call` triggers
         // keep their exact existing treatment (no shim / no multi-use pass)
         // so their byte-pinned output is unchanged.
-        let fun_shape: Option<(Vec<IrType>, IrType)> = match &ty_opt {
-            Some(ir_ty) if fun_value_arc_promotable(ir_ty) => match ir_ty {
-                IrType::Fun(ps, r) => Some((ps.clone(), (**r).clone())),
+        // Only a resolved type spells a carrier into emitted code; a phantom
+        // type is classification-only.
+        let fun_shape: Option<(Vec<IrType>, IrType)> =
+            match ty_opt.as_ref().and_then(BinderType::emittable) {
+                Some(ir_ty) if fun_value_arc_promotable(ir_ty) => match ir_ty {
+                    IrType::Fun(ps, r) => Some((ps.clone(), (**r).clone())),
+                    _ => None,
+                },
                 _ => None,
-            },
-            _ => None,
-        };
+            };
         // The eta block width this binder's shim / sibling-promote / rebind paths
         // draw (one arrow's worth); reserved on the monotonic cursor at the end so
         // a sibling binding in the same def never reuses these names.
@@ -28095,7 +28183,7 @@ impl<'a> Lowerer<'a> {
                 rewrite_multiuse_clones(name, &mut remaining, shimmed)
             }
             _ => {
-                if let Some(ref ir_ty) = ty_opt {
+                if let Some(ir_ty) = ty_opt.as_ref().map(BinderType::classified) {
                     // The ONE shared move-ownership entry point (see
                     // `apply_move_ownership`): the lean
                     // `rewrite_multiuse_clones` (`remaining = n`, correct for
@@ -28712,7 +28800,7 @@ impl<'a> Lowerer<'a> {
                                     (use_span, self.binder_ir_type(use_span)?)
                                 {
                                     arm_body = self
-                                        .apply_param_move_ownership(sym, &ir_ty, arm_body, span)?;
+                                        .apply_binder_move_ownership(sym, &ir_ty, arm_body, span)?;
                                 }
                             }
                             Ok(Arm {
@@ -28842,7 +28930,7 @@ impl<'a> Lowerer<'a> {
                         // consuming its `deferred_fun_captures` signal; every
                         // other shape falls through to `apply_move_ownership`
                         // unchanged (byte-identical to before for non-fn binders).
-                        arm_body = self.apply_param_move_ownership(sym, &ir_ty, arm_body, span)?;
+                        arm_body = self.apply_binder_move_ownership(sym, &ir_ty, arm_body, span)?;
                     }
                 }
 
@@ -29625,6 +29713,10 @@ mod tests {
     const UNTYPED_SPAN: Span = Span::new(30, 31);
     /// A span the binder-type tests record a function over a free `Ty::Var` at.
     const FUN_FREE_VAR_SPAN: Span = Span::new(40, 41);
+    /// A span the binder-type tests record `Program <free var> ()` at.
+    const PROGRAM_PHANTOM_TAG_SPAN: Span = Span::new(50, 51);
+    /// A span the binder-type tests record `Program Web <free var>` at.
+    const PROGRAM_PHANTOM_MSG_SPAN: Span = Span::new(60, 61);
 
     /// Run `check` against a lowerer whose solved regions are the spans above.
     fn with_binder_type_lowerer(check: impl FnOnce(&Lowerer<'_>, ipe_intern::Symbol)) {
@@ -29632,6 +29724,8 @@ mod tests {
         let builtins = build_test_builtin_ctors(&mut interner);
         let sym = interner.intern("captured").unwrap();
         interner.intern("String").unwrap();
+        let program = interner.intern("Program").unwrap();
+        let web = interner.intern("Web").unwrap();
         let module = canon::Module {
             imports_unsafe_submodule: false,
             imported_web_capabilities: BTreeSet::new(),
@@ -29647,6 +29741,29 @@ mod tests {
         types.regions.insert(
             (Vec::new(), FUN_FREE_VAR_SPAN),
             Ty::Fun(Box::new(Ty::Var(7)), Box::new(Ty::Unit)),
+        );
+        types.regions.insert(
+            (Vec::new(), PROGRAM_PHANTOM_TAG_SPAN),
+            Ty::Con {
+                module: vec![],
+                name: program,
+                args: vec![Ty::Var(7), Ty::Unit],
+            },
+        );
+        types.regions.insert(
+            (Vec::new(), PROGRAM_PHANTOM_MSG_SPAN),
+            Ty::Con {
+                module: vec![],
+                name: program,
+                args: vec![
+                    Ty::Con {
+                        module: vec![],
+                        name: web,
+                        args: vec![],
+                    },
+                    Ty::Var(7),
+                ],
+            },
         );
         let lowerer = Lowerer::new(
             &module,
@@ -29684,19 +29801,58 @@ mod tests {
         with_binder_type_lowerer(|lowerer, _| {
             assert!(matches!(
                 lowerer.binder_ir_type(Some(UNIT_SPAN)),
-                Ok(Some(super::IrType::Unit))
+                Ok(Some(super::BinderType::Resolved(super::IrType::Unit)))
             ));
         });
     }
 
-    /// A phantom type variable classifies as the `CloneOk` `String` leaf.
+    /// A phantom type variable classifies as the `CloneOk` `String` leaf, never emittable.
     #[test]
     fn binder_ir_type_pins_phantom_var() {
         with_binder_type_lowerer(|lowerer, _| {
             let got = lowerer.binder_ir_type(Some(FREE_VAR_SPAN));
             assert!(
-                matches!(got, Ok(Some(super::IrType::Str))),
+                matches!(
+                    got,
+                    Ok(Some(super::BinderType::Phantom(super::IrType::Str)))
+                ),
                 "a phantom binder type must pin to `String`, got {got:?}"
+            );
+            let Ok(Some(binder_ty)) = got else { return };
+            assert_eq!(binder_ty.emittable(), None);
+            assert_eq!(binder_ty.classified(), &super::IrType::Str);
+        });
+    }
+
+    /// A phantom `Program` shape tag is refused as IPE-L0102, never a compiler bug.
+    #[test]
+    fn binder_ir_type_refuses_phantom_program_shape() {
+        with_binder_type_lowerer(|lowerer, _| {
+            let got = lowerer.binder_ir_type(Some(PROGRAM_PHANTOM_TAG_SPAN));
+            assert!(
+                matches!(
+                    got,
+                    Err(super::Diagnostic::Lower {
+                        msg: super::LowerError::Unsupported(super::Feature::Polymorphism),
+                        ..
+                    })
+                ),
+                "a phantom Program shape tag must refuse as L0102, got {got:?}"
+            );
+        });
+    }
+
+    /// A phantom `Program` message parameter classifies at the shape's app leaf.
+    #[test]
+    fn binder_ir_type_pins_phantom_program_msg() {
+        with_binder_type_lowerer(|lowerer, _| {
+            let got = lowerer.binder_ir_type(Some(PROGRAM_PHANTOM_MSG_SPAN));
+            assert!(
+                matches!(
+                    got,
+                    Ok(Some(super::BinderType::Phantom(super::IrType::WebApp)))
+                ),
+                "a phantom Program msg must classify at the Web leaf, got {got:?}"
             );
         });
     }
@@ -29770,7 +29926,10 @@ mod tests {
             let body = Located::new(UNIT_SPAN, canon::Expr_::VarLocal(sym));
             let got = lowerer.captured_locals(&[], &body);
             assert!(
-                matches!(got.as_deref(), Ok([(s, super::IrType::Unit)]) if *s == sym),
+                matches!(
+                    got.as_deref(),
+                    Ok([(s, super::BinderType::Resolved(super::IrType::Unit))]) if *s == sym
+                ),
                 "a lowerable capture must carry its type, got {got:?}"
             );
         });
