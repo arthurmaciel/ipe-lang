@@ -332,26 +332,24 @@ pub fn build_with_options(
     )
 }
 
-/// Build a `.ipe` entry file and all sibling modules discovered in the same
-/// source directory.
+/// Build a loose `.ipe` entry file plus the sibling modules it imports.
 ///
-/// When no manifest is present, the entry file's parent directory is used
-/// as the source root. Every `*.ipe` file found there is loaded and compiled
-/// together — fixing IPE-N0020 for multi-file projects built via the
+/// When no manifest is present, an import `A.B` resolves to `A/B.ipe` under
+/// the entry file's directory, so a multi-file program builds via the
 /// file-path shorthand (`ipe build src/Main.ipe`).
 ///
-/// This is the faithful port of Haskell's `Graph.discoverModulesMulti
-/// (sourceRoot : ...) entryPath` call in `Ipe.Build.Compile.hs`: it probes
-/// the source root recursively and follows imports across sibling files before
-/// running the shared `compile_modules` core.
+/// The module set is the entry plus the sibling modules its imports reach,
+/// resolved by [`crate::loose_file::resolve_loose_file`] (see
+/// [`collect_entry_and_siblings`]); the entry's directory is never listed.
 ///
-/// When the source directory contains only the entry file this function is
-/// byte-identical to `build` (single-module pipeline is the identity over
-/// `link`).
+/// When the entry imports no sibling this function is byte-identical to
+/// `build` (single-module pipeline is the identity over `link`).
 ///
 /// # Errors
 /// [`CliError::Pipeline`] when the compiler rejects the program.
 /// [`CliError::Io`] on any filesystem failure.
+/// [`CliError::DiscoveryLimitReached`] when the import closure exceeds
+/// [`crate::loose_file::LooseFileLimits::DEFAULT`].
 pub fn build_with_sibling_discovery(
     entry: &Path,
     out_dir: &Path,
@@ -390,8 +388,8 @@ pub fn build_with_sibling_discovery_with_options(
 
 /// Build `ipe verify`'s test entry against the project's `src/` sources.
 ///
-/// Unlike [`build_with_sibling_discovery`], which roots discovery at the
-/// entry's own directory, this roots the code under test at `project_src_root`
+/// Unlike [`build_with_sibling_discovery`], which follows the entry's
+/// imports within its own directory, this roots the code under test at `project_src_root`
 /// (the `src/` tree) and additionally discovers the test entry's own directory
 /// (the `tests/` tree) — so a `tests/Main.ipe` that imports `Lib.Foo` from
 /// `src/Lib/Foo.ipe` resolves. See [`collect_test_sources`] for the source-set
@@ -424,51 +422,42 @@ pub fn build_test_with_project_sources(
     )
 }
 
-/// The entry file and every sibling `.ipe` module discovered in its source
-/// directory, ready to feed the shared compile core.
+/// A loose entry plus the sibling modules its imports reach, ready to feed the shared compile core.
 pub struct CollectedSources {
     pub(crate) sources: BTreeMap<Vec<String>, (PathBuf, String)>,
     pub(crate) discovered: Vec<project::DiscoveredModule>,
     pub(crate) entry_module_path: Vec<String>,
 }
 
-/// Collect the entry module plus every sibling `.ipe` file in its source
-/// directory, reading each source once.
+/// Collect a loose entry plus the transitive closure of sibling modules it imports.
 ///
 /// This is the file-path shorthand's source-collection step, shared by the
 /// build path ([`build_with_sibling_discovery_with_options`]) and the
 /// single-entry analysis paths ([`lower_entry_via_graph`], [`emit_ir_text`]) so all
-/// three see the SAME module set — a program that imports a compiled-source
-/// stdlib module resolves identically whether it is built or merely analysed.
-/// It is the equivalent of `Graph.discoverModulesMulti [srcRoot] entryPath` in
-/// `Ipe.Build.Compile.hs`; the compiled-source stdlib closure is injected
-/// downstream (in [`compile_modules_observed`] / [`lower_entry_via_graph`]),
-/// not here, so the injection routine stays single-sourced.
+/// three see the SAME module set. It delegates to
+/// [`crate::loose_file::resolve_loose_file`] — the one loose-file resolver
+/// `ipe watch` and `ipe lsp` also use — so every surface compiles the same
+/// bounded closure: one probed path per import, regular files contained in
+/// the entry's directory only, within
+/// [`crate::loose_file::LooseFileLimits::DEFAULT`], and no directory
+/// listing. The compiled-source stdlib closure is injected downstream (in
+/// [`compile_modules_observed`] / [`lower_entry_via_graph`]), not here, so
+/// the injection routine stays single-sourced.
 ///
 /// # Errors
-/// [`CliError::Pipeline`] when the entry does not parse; [`CliError::Io`] on
-/// any filesystem failure reading a discovered module.
+/// [`CliError::Pipeline`] when the entry does not parse; [`CliError::Io`] when
+/// the entry or an imported sibling cannot be read;
+/// [`CliError::DiscoveryLimitReached`] when the import closure is too large.
 pub fn collect_entry_and_siblings(entry: &Path) -> Result<CollectedSources, CliError> {
-    let source =
-        crate::io_bounded::read_to_string_capped(entry, crate::io_bounded::SOURCE_READ_CAP)?;
-    let entry_module_path = parse_entry_module_path(entry, &source)?;
-
-    // Source root: the directory containing the entry file.
-    let src_root = entry
-        .parent()
-        .filter(|p| p.is_dir())
-        .unwrap_or_else(|| Path::new("."));
-
-    // Discover ALL .ipe files in the source root (recursively).
-    let mut discovered = project::discover_modules(src_root)?;
-    ensure_entry_present(&mut discovered, entry, &entry_module_path);
-
-    let sources = read_discovered_sources(&discovered, entry, &entry_module_path, &source)?;
-
+    let loaded = crate::loose_file::resolve_loose_file(
+        entry,
+        None,
+        crate::loose_file::LooseFileLimits::DEFAULT,
+    )?;
     Ok(CollectedSources {
-        sources,
-        discovered,
-        entry_module_path,
+        sources: loaded.sources,
+        discovered: loaded.discovered,
+        entry_module_path: loaded.entry_module,
     })
 }
 
@@ -2478,5 +2467,127 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A fresh scratch directory unique to this test run.
+    fn loose_scratch(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "ipe_loose_build_{tag}_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |d| d.as_nanos())
+        ));
+        fs::create_dir_all(&dir).expect("create scratch dir");
+        dir
+    }
+
+    fn collected_modules(collected: &CollectedSources) -> Vec<Vec<String>> {
+        collected.sources.keys().cloned().collect()
+    }
+
+    /// A loose build compiles the import closure only, beside an unreadable directory.
+    ///
+    /// An unimported sibling and a `chmod 000` directory next to the entry are
+    /// never touched.
+    #[cfg(unix)]
+    #[test]
+    fn loose_build_loads_the_import_closure_beside_an_unreadable_dir() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = loose_scratch("closure");
+        let entry = dir.join("Main.ipe");
+        fs::write(
+            &entry,
+            "module Main exposing (main)\n\nimport Helper\n\nmain = Helper.h\n",
+        )
+        .expect("write entry");
+        fs::write(
+            dir.join("Helper.ipe"),
+            "module Helper exposing (h)\n\nh = 1\n",
+        )
+        .expect("write helper");
+        fs::write(
+            dir.join("Stray.ipe"),
+            "module Stray exposing (s)\n\ns = ???\n",
+        )
+        .expect("write stray");
+        let locked = dir.join("locked");
+        fs::create_dir_all(&locked).expect("create locked dir");
+        fs::write(
+            locked.join("Hidden.ipe"),
+            "module Hidden exposing (x)\n\nx = 1\n",
+        )
+        .expect("write hidden");
+        fs::set_permissions(&locked, fs::Permissions::from_mode(0o000)).expect("chmod 000");
+
+        let collected = collect_entry_and_siblings(&entry);
+        let _ = fs::set_permissions(&locked, fs::Permissions::from_mode(0o755));
+        let _ = fs::remove_dir_all(&dir);
+        let collected = collected.expect("closure loads beside an unreadable dir");
+        assert_eq!(
+            collected_modules(&collected),
+            vec![vec!["Helper".to_owned()], vec!["Main".to_owned()]],
+            "only Main and the Helper it imports are compiled"
+        );
+        assert_eq!(collected.entry_module_path, vec!["Main".to_owned()]);
+    }
+
+    /// A loose build whose import closure passes the module ceiling is refused.
+    #[test]
+    fn loose_build_past_the_module_limit_is_refused() {
+        let dir = loose_scratch("limit");
+        let count = crate::loose_file::MAX_LOOSE_FILE_MODULES;
+        let imports: String = (0..count).map(|i| format!("import M{i}\n")).collect();
+        let entry = dir.join("Main.ipe");
+        fs::write(
+            &entry,
+            format!("module Main exposing (main)\n\n{imports}\nmain = 1\n"),
+        )
+        .expect("write entry");
+        for i in 0..count {
+            fs::write(
+                dir.join(format!("M{i}.ipe")),
+                format!("module M{i} exposing (v)\n\nv = 1\n"),
+            )
+            .expect("write sibling");
+        }
+
+        let collected = collect_entry_and_siblings(&entry);
+        let _ = fs::remove_dir_all(&dir);
+        assert!(
+            matches!(collected, Err(CliError::DiscoveryLimitReached { .. })),
+            "the entry plus {count} imported siblings exceeds the ceiling"
+        );
+    }
+
+    /// A loose build never follows a sibling symlink that points outside the entry's directory.
+    #[cfg(unix)]
+    #[test]
+    fn loose_build_does_not_follow_an_escaping_symlink() {
+        let outside = loose_scratch("escape-outside");
+        fs::write(
+            outside.join("Out.ipe"),
+            "module Out exposing (o)\n\no = 1\n",
+        )
+        .expect("write outside module");
+        let dir = loose_scratch("escape");
+        let entry = dir.join("Main.ipe");
+        fs::write(
+            &entry,
+            "module Main exposing (main)\n\nimport Out\n\nmain = Out.o\n",
+        )
+        .expect("write entry");
+        std::os::unix::fs::symlink(outside.join("Out.ipe"), dir.join("Out.ipe"))
+            .expect("plant symlink");
+
+        let collected = collect_entry_and_siblings(&entry);
+        let _ = fs::remove_dir_all(&dir);
+        let _ = fs::remove_dir_all(&outside);
+        let collected = collected.expect("entry still loads");
+        assert_eq!(
+            collected_modules(&collected),
+            vec![vec!["Main".to_owned()]],
+            "the escaping symlink is left for the compiler to report as unresolved"
+        );
     }
 }

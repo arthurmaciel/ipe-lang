@@ -70,6 +70,21 @@ pub fn read_to_string_capped(path: &Path, max: u64) -> Result<String, CliError> 
         path: path.to_path_buf(),
         source: e,
     })?;
+    read_open_file_capped(f, path, max)
+}
+
+/// Read an already-open file to a `String` under the same ceiling as [`read_to_string_capped`].
+///
+/// For callers that vetted the handle itself (an `fstat` after an
+/// `O_NOFOLLOW` open) and must read from THAT handle, not reopen the path.
+/// `path` only names the file in errors.
+///
+/// # Errors
+///
+/// - [`CliError::Io`] if the file cannot be read.
+/// - [`CliError::FileTooLarge`] if the file exceeds `max` bytes.
+/// - [`CliError::Io`] (kind `InvalidData`) if the content is not valid UTF-8.
+pub fn read_open_file_capped(f: std::fs::File, path: &Path, max: u64) -> Result<String, CliError> {
     let mut buf = Vec::new();
     f.take(max.saturating_add(1))
         .read_to_end(&mut buf)

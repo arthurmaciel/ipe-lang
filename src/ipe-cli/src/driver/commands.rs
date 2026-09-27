@@ -3481,7 +3481,8 @@ pub fn build_source_graph(entry: &Path) -> Result<SourceGraph, CliError> {
 /// acknowledgment gate never operates on a partial source set.
 ///
 /// # Errors
-/// [`CliError::Io`] when any discovered module cannot be read.
+/// [`CliError::Io`] when any discovered module cannot be read; for a single
+/// file, every [`loose_file_scan_sources`] error.
 pub fn user_sources_for_unsafe_scan(
     manifest: Option<&Path>,
     entry: &Path,
@@ -3502,16 +3503,30 @@ pub fn user_sources_for_unsafe_scan(
     }
     // Single file (or a manifest that failed to parse — the build will surface
     // that error itself): the entry and its siblings.
+    loose_file_scan_sources(entry).map(|named| named.into_iter().map(|(_, src)| src).collect())
+}
+
+/// The loose-file closure's `(dotted-module-name, source)` pairs for a consent scan.
+///
+/// An entry that does not parse has no import closure to follow, so the scan
+/// sees the entry's own text, keyed by its path; the build reports the parse
+/// error itself. Every other failure — an unreadable entry or module, a file
+/// or closure past its limit — propagates, so no gate judges a partial
+/// source set.
+///
+/// # Errors
+/// Every [`collect_entry_and_siblings`] error except the entry's own parse failure.
+fn loose_file_scan_sources(entry: &Path) -> Result<Vec<(String, String)>, CliError> {
     match collect_entry_and_siblings(entry) {
         Ok(collected) => Ok(collected
             .sources
-            .into_values()
-            .map(|(_, src)| src)
+            .into_iter()
+            .map(|(path, (_, src))| (path.join("."), src))
             .collect()),
-        Err(_) => {
-            crate::io_bounded::read_to_string_capped(entry, crate::io_bounded::SOURCE_READ_CAP)
-                .map(|src| vec![src])
+        Err(CliError::Pipeline { file, src, .. }) if file.as_path() == entry => {
+            Ok(vec![(entry.display().to_string(), src)])
         }
+        Err(other) => Err(other),
     }
 }
 
@@ -3697,8 +3712,8 @@ fn gate_native_ffi_consent(
 
 /// Collect `(dotted-module-name, source)` pairs spanning the app entry and its
 /// siblings (and, when a manifest is present, every discovered package module),
-/// for the web-axis provenance scan. Falls back to the bare entry when sibling
-/// discovery fails, exactly as the `.Unsafe` scan does.
+/// for the web-axis provenance scan. Discovery failures propagate, exactly as
+/// in the `.Unsafe` scan; see [`loose_file_scan_sources`].
 pub fn named_sources_for_web_scan(
     manifest_path: Option<&Path>,
     entry: &Path,
@@ -3717,17 +3732,7 @@ pub fn named_sources_for_web_scan(
         }
         return Ok(out);
     }
-    match collect_entry_and_siblings(entry) {
-        Ok(collected) => Ok(collected
-            .sources
-            .into_iter()
-            .map(|(path, (_, src))| (path.join("."), src))
-            .collect()),
-        Err(_) => {
-            crate::io_bounded::read_to_string_capped(entry, crate::io_bounded::SOURCE_READ_CAP)
-                .map(|src| vec![(entry.display().to_string(), src)])
-        }
-    }
+    loose_file_scan_sources(entry)
 }
 
 /// Type-check a single `.ipe` entry through the SAME injection-aware
