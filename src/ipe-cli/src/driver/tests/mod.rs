@@ -2700,14 +2700,13 @@ fn artifact_size_bytes_surfaces_a_missing_artifact_as_a_typed_error() {
 // replay that silently runs the app live.
 #[test]
 fn session_is_refused_for_shapes_without_a_session() {
-    let entry = Path::new("Main.ipe");
     for flag in ["--record", "--replay"] {
         for shape in [
             crate::delivery::Shape::Script,
             crate::delivery::Shape::Tui,
             crate::delivery::Shape::Web,
         ] {
-            let result = gate_session(flag, shape, CompileTarget::Native, None, None, entry);
+            let result = gate_session(flag, shape, CompileTarget::Native);
             assert!(
                 matches!(&result, Err(CliError::UsageOwned(msg)) if msg.contains(flag)),
                 "{flag} on {shape:?} must be refused, got: {result:?}"
@@ -2721,17 +2720,65 @@ fn session_is_refused_for_shapes_without_a_session() {
 #[test]
 fn session_is_refused_for_a_wasi_run() {
     for flag in ["--record", "--replay"] {
-        let result = gate_session(
-            flag,
-            crate::delivery::Shape::Cli,
-            CompileTarget::WasmWasi,
-            None,
-            None,
-            Path::new("Main.ipe"),
-        );
+        let result = gate_session(flag, crate::delivery::Shape::Cli, CompileTarget::WasmWasi);
         assert!(
             matches!(&result, Err(CliError::UsageOwned(msg)) if msg.contains("wasi")),
             "{flag} with --target wasi must be refused, got: {result:?}"
+        );
+    }
+}
+
+// A native cli or worker app has a recordable session: the shape gate admits it.
+#[test]
+fn session_is_admitted_for_a_native_cli_or_worker_app() {
+    for shape in [crate::delivery::Shape::Cli, crate::delivery::Shape::Worker] {
+        let result = gate_session("--record", shape, CompileTarget::Native);
+        assert!(
+            result.is_ok(),
+            "{shape:?} must be admitted, got: {result:?}"
+        );
+    }
+}
+
+// A native-bearing program runs jailed, where the log is unreachable: refused
+// whether the crossing is inferred or only declared, and a pure program passes.
+#[test]
+fn session_is_refused_for_a_native_bearing_program() {
+    use crate::run_sandbox::ResolvedCapabilities;
+    use ipe_ir::Capability;
+    use std::collections::BTreeSet;
+    let native: BTreeSet<Capability> = [Capability::NativeFfi].into_iter().collect();
+    let raw: BTreeSet<Capability> = [Capability::FfiRaw].into_iter().collect();
+    let bearing = [
+        ResolvedCapabilities {
+            inferred: native.clone(),
+            declared: BTreeSet::new(),
+        },
+        ResolvedCapabilities {
+            inferred: BTreeSet::new(),
+            declared: native,
+        },
+        ResolvedCapabilities {
+            inferred: raw,
+            declared: BTreeSet::new(),
+        },
+    ];
+    for flag in ["--record", "--replay"] {
+        for resolved in &bearing {
+            let result = gate_session_capabilities(flag, resolved);
+            assert!(
+                matches!(&result, Err(CliError::UsageOwned(msg)) if msg.contains("native-bearing")),
+                "{flag} on a native-bearing program must be refused, got: {result:?}"
+            );
+        }
+        let pure = ResolvedCapabilities {
+            inferred: BTreeSet::new(),
+            declared: BTreeSet::new(),
+        };
+        let result = gate_session_capabilities(flag, &pure);
+        assert!(
+            result.is_ok(),
+            "{flag} on a pure program must pass: {result:?}"
         );
     }
 }

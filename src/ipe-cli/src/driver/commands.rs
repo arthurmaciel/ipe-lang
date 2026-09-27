@@ -2287,29 +2287,25 @@ pub fn typed_log_file() -> PathBuf {
     Path::new(RECORD_LOG_FILE).with_extension(ipe_runtime_rust::TYPED_LOG_EXTENSION)
 }
 
-/// Refuse `ipe run --record` / `--replay` for a program whose session cannot
-/// be recorded or replayed.
+/// Refuse `ipe run --record` / `--replay` for a program whose shape or target
+/// has no recordable session.
 ///
 /// A record request never silently yields no log, and a replay request never
 /// silently runs the app live.
 ///
 /// The recorder lives in the cli (`Cli.tea`) and worker (`Worker.tea`) update
 /// loops and dumps (or replays) its log from the directly executed native
-/// binary; a script or TUI/web app has no such loop, a `--target wasi` run
-/// executes in wasmtime, and a native-bearing program runs inside the jail,
-/// where the log is not reachable.
+/// binary; a script or TUI/web app has no such loop, and a `--target wasi` run
+/// executes in wasmtime. Pure over the delivery shape and compile target, so it
+/// runs before any capability resolution or consent prompt.
 ///
 /// # Errors
 /// [`CliError::UsageOwned`] naming why the session cannot be recorded or
-/// replayed; the capability-resolution errors of
-/// [`run_sandbox::resolve_for_run`].
+/// replayed.
 pub fn gate_session(
     flag: &str,
     shape: delivery::Shape,
     compile_target: CompileTarget,
-    manifest: Option<&project::ProjectManifest>,
-    manifest_path: Option<&Path>,
-    entry_path: &Path,
 ) -> Result<(), CliError> {
     let shape_name = match shape {
         delivery::Shape::Cli | delivery::Shape::Worker => None,
@@ -2328,7 +2324,22 @@ pub fn gate_session(
             "ipe run {flag}: works on a native run only — drop `--target wasi`"
         )));
     }
-    let resolved = run_sandbox::resolve_for_run(manifest, manifest_path, entry_path)?;
+    Ok(())
+}
+
+/// Refuse `ipe run --record` / `--replay` for a native-bearing program.
+///
+/// A native-bearing program runs inside the jail, where the session log is not
+/// reachable. Judges the capabilities the run's consent gates already resolved,
+/// so the session gate never re-infers them.
+///
+/// # Errors
+/// [`CliError::UsageOwned`] when the resolved capability union is
+/// native-bearing.
+pub fn gate_session_capabilities(
+    flag: &str,
+    resolved: &run_sandbox::ResolvedCapabilities,
+) -> Result<(), CliError> {
     if run_sandbox::is_native_bearing(&resolved.union()) {
         return Err(CliError::UsageOwned(format!(
             "ipe run {flag}: a native-bearing program runs jailed, where the session log \
@@ -2592,6 +2603,21 @@ pub fn run_run_with_args(args: cli_args::RunArgs) -> Result<(), CliError> {
         );
     }
 
+    // When the project declares [wasm].mode != "off", or IPE_TARGET=wasm is
+    // set, treat `ipe run` as a browser wasm build-and-bundle (no native binary
+    // to exec). `--target wasi` selects the co-located WASI module, which `ipe
+    // run` EXECUTES under embedded wasmtime. A plain `ipe run` in a non-wasm
+    // project stays native. (`--target wasm` was refused at parse: the browser
+    // bundle has no executable form.)
+    let compile_target = resolve_compile_target(cli_wasm, manifest_wasm.as_ref());
+    let wasm_target = compile_target.is_wasm();
+
+    // A session over a shape or target with no recordable update loop is
+    // refused before capability resolution and any consent prompt.
+    if let Some(flag) = session.flag() {
+        gate_session(flag, delivery.shape(), compile_target)?;
+    }
+
     // The same trust-boundary consent gates as `ipe build`, over ONE capability
     // resolution, BEFORE the (costly) emit + cargo build: a disclosed `.Unsafe`
     // import needs consent (a non-interactive run without it fails closed rather
@@ -2604,15 +2630,6 @@ pub fn run_run_with_args(args: cli_args::RunArgs) -> Result<(), CliError> {
         &entry_path,
         args.accept_risks,
     )?;
-
-    // When the project declares [wasm].mode != "off", or IPE_TARGET=wasm is
-    // set, treat `ipe run` as a browser wasm build-and-bundle (no native binary
-    // to exec). `--target wasi` selects the co-located WASI module, which `ipe
-    // run` EXECUTES under embedded wasmtime. A plain `ipe run` in a non-wasm
-    // project stays native. (`--target wasm` was refused at parse: the browser
-    // bundle has no executable form.)
-    let compile_target = resolve_compile_target(cli_wasm, manifest_wasm.as_ref());
-    let wasm_target = compile_target.is_wasm();
 
     // Fail closed unless the delivery runtime and the compile target agree — the
     // `(engine, triple)` validity matrix is the single live gate — so the
@@ -2635,14 +2652,7 @@ pub fn run_run_with_args(args: cli_args::RunArgs) -> Result<(), CliError> {
     }
 
     if let Some(flag) = session.flag() {
-        gate_session(
-            flag,
-            delivery.shape(),
-            compile_target,
-            manifest_parsed.as_ref(),
-            manifest.as_deref(),
-            &entry_path,
-        )?;
+        gate_session_capabilities(flag, consented.resolved())?;
     }
 
     // Resolved after every program refusal above. The session log lands in the
