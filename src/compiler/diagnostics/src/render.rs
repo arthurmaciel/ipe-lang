@@ -2274,10 +2274,12 @@ const fn feature_label(f: Feature) -> &'static str {
         }
         Feature::NonCloneValueReuse => {
             "a value holding a `Task`/`Cmd`/`Sub` effect (bare, or inside a \
-             union/tuple/record payload) is used more than once — an effect \
-             value is not `Clone`, so the second consuming use has no sound copy \
-             to make; thread the value linearly (bind and use it once) or \
-             restructure so the effect flows through a single continuation \
+             union/tuple/record payload) is used more than once, or one of its \
+             fields is read after the value was consumed — an effect value is \
+             not `Clone`, so the second use has no sound copy to make; thread \
+             the value linearly (bind and use it once), read the fields you \
+             need into `let` bindings before the consuming use, or restructure \
+             so the effect flows through a single continuation \
              [feature: non-clone-value-reuse]"
         }
     }

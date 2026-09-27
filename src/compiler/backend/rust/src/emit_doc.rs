@@ -57,9 +57,8 @@ use crate::EmitCtx;
 use crate::doc::{ChainOperand, Doc};
 use crate::emit_expr::{
     call_has_kernel_special_case, callee_name, clone_targets_in_expr, combine_guards,
-    emit_arm_head, emit_binding_stmts, emit_expr_at, emit_match_scrutinee, expr_value_is_non_clone,
-    free_vars, record_struct_name, scan_free_target, substitute_var,
-    swapped_container_clone_rewrite, wants_arc_ctor,
+    emit_arm_head, emit_binding_stmts, emit_expr_at, emit_match_scrutinee, free_vars,
+    inlined_let_body, record_struct_name, swapped_container_clone_rewrite, wants_arc_ctor,
 };
 use crate::emit_types::{GenericScope, render_type};
 
@@ -1241,12 +1240,9 @@ fn build_let(
     child: u16,
     generics: GenericScope,
 ) -> DResult<Doc> {
-    let (occurrences, has_clonevar) = scan_free_target(body, name);
-    let needs_inline = occurrences > 1 && expr_value_is_non_clone(value) && !has_clonevar;
-    if needs_inline {
+    if let Some(inlined_body) = inlined_let_body(name, value, body) {
         // Zero-statement block `({ inlined_body })`: the body with `name`
         // substituted by `value`, laid out as a soft group.
-        let inlined_body = substitute_var(body.clone(), name, value);
         let body_doc = build_doc(ctx, &inlined_body, indent, child, generics)?;
         return Ok(Doc::group(Doc::concat(vec![
             Doc::text("({"),
