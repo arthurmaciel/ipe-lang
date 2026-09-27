@@ -21107,83 +21107,45 @@ impl<'a> Lowerer<'a> {
         )
     }
 
-    /// T3 (Tier 1 backstop — see [`Self::lower_callee`]'s doc comment):
-    /// `Maybe.andMap` / `Result.andMap` resolved to a CURRIED (arity ≥ 2)
-    /// payload function.
+    /// Refuse a higher-order kernel reference whose solved callback final result is a function.
     ///
-    /// `andMap : Maybe (a -> b) -> Maybe a -> Maybe b` (`Result e (a -> b) ->
-    /// Result e a -> Result e b`) is arity-1 per application: it fully
-    /// applies the wrapped function to exactly one argument. When the
-    /// wrapped function is itself curried (`\a b -> …`, IR-flattened to one
-    /// multi-parameter `Fun`), `a` instantiates to the first parameter and
-    /// `b` to the REMAINING curried tail — itself a `Ty::Fun`. This
-    /// reference's own solved type then has `Maybe b` / `Result e b` as its
-    /// tail with `b` a function: the applicative chain has not reached a
-    /// fully-applied value, and finishing it needs a nested-closure
-    /// (`curryN`-style) lowering this Stage does not implement (Stage 2,
-    /// tracked separately — see
-    /// `docs/adr/0002-codegen-soundness-and-the-seal.md` §3). Fail closed
-    /// here rather than let an unfinished chain reach a use site with no
-    /// sound lowering.
+    /// Every runtime higher-order kernel takes an exact-arity closure, while
+    /// the IR flattens a curried callback into one multi-parameter `Fun`, so a
+    /// callback whose final result is another arrow (`List.map add`, a
+    /// curried `andMap` payload, a function-valued fold accumulator) has no
+    /// sound lowering. [`KernelFn::hof_result_vars`] names the scheme
+    /// variables each callback returns; each is aligned with the reference's
+    /// own solved type ([`scheme_var_instance`]) and a `Ty::Fun` there fails
+    /// closed with IPE-L0154.
     ///
-    /// `andMap`'s OWN solved type at `callee`'s span
-    /// (`self.region_ty(callee.span)`) is already the FULLY unified
-    /// signature for every use, because HM solving is global across the
-    /// whole binding: a `let`-bound partial application's LATER use still
-    /// constrains the same type variables through the let-binding's own
-    /// type, so `Result.andMap`'s reference type already reflects
-    /// `b = Int -> Int -> Int` by the time lowering runs (solving completes
-    /// before lowering starts). So this check does not need to look at any
-    /// ARGUMENT EXPRESSIONS, nor at how this reference is being used — it
-    /// peels `andMap`'s fixed arity (2) off ITS OWN reference type and
-    /// inspects the trailing payload position of the result (`b` in
-    /// `Maybe b` / `Result e b`) for a residual `Ty::Fun`, catching the
-    /// curried-payload hazard under every syntactic spelling and every
-    /// aliasing hop between the kernel reference and its eventual use.
-    ///
-    /// Only fires for the two `andMap` kernels; every other resolved callee
-    /// is untouched (`Ok(())` fast path). Kept as defense-in-depth behind the
-    /// primary Tier-2 type-checker obligation (see [`Self::lower_callee`]'s
-    /// doc comment) — a bug in the Tier-2 wiring should not silently reopen
-    /// this hazard.
-    fn reject_curried_andmap_payload(
+    /// The reference's solved type is the fully unified signature for every
+    /// use, since solving completes before lowering, so no argument or use
+    /// site needs inspecting: every syntactic spelling and aliasing hop is
+    /// covered. The type checker's `hof_kernel_result` obligation (IPE-T0014)
+    /// is the primary gate; this is its independent backstop. A reference with
+    /// no recorded solved type carries no evidence here and is left to that
+    /// primary gate.
+    fn reject_hof_callback_function_result(
         &self,
         resolved: &Callee,
         callee: &canon::Expr,
     ) -> DResult<()> {
-        if !matches!(
-            resolved,
-            Callee::Kernel(KernelFn::MaybeAndMap | KernelFn::ResultAndMap)
-        ) {
+        let Callee::Kernel(kernel) = resolved else {
+            return Ok(());
+        };
+        let results = kernel.hof_result_vars();
+        if results.is_empty() {
             return Ok(());
         }
-        // `andMap`'s own reference type: `Con a -> Con (a -> b) -> Con b`
-        // (Maybe/Result-headed). Peel exactly its fixed arity (2 arrows) to
-        // reach the final `Con b` return — independent of how many arguments
-        // any particular AST node happens to supply at this reference.
-        let Some(ty) = self.region_ty(callee.span) else {
+        let (Some(shape), Some(solved)) = (kernel.scheme_shape(), self.region_ty(callee.span))
+        else {
             return Ok(());
         };
-        let Ty::Fun(_, after_first_arrow) = ty else {
-            return Ok(());
-        };
-        let Ty::Fun(_, call_ret) = after_first_arrow.as_ref() else {
-            return Ok(());
-        };
-        // `call_ret` is `Maybe b` / `Result e b` — the payload position is
-        // the LAST type argument of that `Con`. The curried signal is
-        // whether `b` is ITSELF an arrow (arity ≥ 2 flattened into one
-        // `IrType::Fun`, which `maybe_and_map`/`result_and_map`'s
-        // `F: FnOnce(A) -> B` cannot represent when `B` is a function — no
-        // `Box<dyn Fn(A0,A1)->R>` implements `FnOnce(A0) -> (A1 -> R)`).
-        let Ty::Con { args: ret_args, .. } = call_ret.as_ref() else {
-            return Ok(());
-        };
-        let Some(b) = ret_args.last() else {
-            return Ok(());
-        };
-        if matches!(b, Ty::Fun(_, _)) {
-            return Err(unsupported(callee.span, Feature::CtorPayloadFunction));
+        if results
+            .vars()
+            .any(|var| matches!(scheme_var_instance(shape, solved, var), Some(Ty::Fun(..))))
+        {
+            return Err(unsupported(callee.span, Feature::HofCallbackFunctionResult));
         }
         Ok(())
     }
@@ -26184,47 +26146,24 @@ impl<'a> Lowerer<'a> {
             .ok_or_else(|| bug("ipe_lower::ctor_arity_of", "unknown constructor"))
     }
 
-    /// Resolve a named callee (`Maybe.andMap`, `String.length`, a user
-    /// top-level function, …) to its [`Callee`], then run the T3
-    /// curried-`andMap`-payload backstop over the RESULT.
+    /// Resolve a named callee (`List.map`, `String.length`, a user top-level function, …) and gate it.
     ///
-    /// Running the curried-payload check only from INSIDE
-    /// [`Self::lower_call_uniform`]'s `VarKernel | VarTopLevel`
-    /// arm is not enough — that arm only sees a callee that is the DIRECT
-    /// callee of a `Call` AST node. A bare-value reference to `Result.andMap` /
-    /// `Maybe.andMap` — passed as a higher-order argument, `let`-bound as a
-    /// point-free alias (`myAndMap = Result.andMap`), extracted from a
-    /// record field, or re-exported through an `import … as …` alias — never
-    /// passes through a `Call` node at all; it lowers through
-    /// [`Self::lower_expr`]'s bare-value arm instead, which calls
-    /// [`Self::lower_callee_resolve`] (below) directly. That second call site
-    /// never ran the check, so `myAndMap (Ok 1) (Ok add3curried)` reached
-    /// `cargo build` as E0277 despite the previous fix.
+    /// This is the single funnel every kernel resolution passes through: the
+    /// direct-call arm of [`Self::lower_call_uniform`] and the bare-value arm
+    /// of [`Self::lower_expr`] (a kernel passed as an argument, `let`-bound
+    /// point-free, stored in a record, or re-exported through an alias) both
+    /// call it, never [`Self::lower_callee_resolve`] directly. So each literal
+    /// kernel occurrence is checked exactly once, in any syntactic position.
     ///
-    /// The fix: this wrapper is now the SINGLE funnel both callers go
-    /// through — [`Self::lower_call_uniform`]'s direct-call arm and
-    /// [`Self::lower_expr`]'s bare-value arm both call `lower_callee`
-    /// (never `lower_callee_resolve` directly) — so every literal AST
-    /// occurrence of `Result.andMap` / `Maybe.andMap`, in ANY syntactic
-    /// position, is checked exactly once, by construction, regardless of how
-    /// many more lowering arms are added later. This is a lowering-time
-    /// BACKSTOP (Tier 1) behind the primary type-checker obligation
-    /// (`ipe_types::constrain::constrain_var_kernel`'s `hof_kernel_result`
-    /// `TyBounds` tie, Tier 2 — see
-    /// `docs/adr/0001-language-semantics-and-types.md` §3.2):
-    /// Tier 2 already rejects the hazard as a type error (`IPE-T0014`)
-    /// before lowering ever runs; this backstop gives a second, independent
-    /// line of defense keyed on the ACTUAL kernel-call resolution boundary
-    /// rather than any particular AST shape. Scope note: this Tier-1
-    /// backstop covers the `andMap` kernels ONLY (its peeling logic reads
-    /// the `Con (a -> b)` payload position specific to `andMap`'s scheme);
-    /// the `map`/`map2..5`/`mapError` members of the hazard family are
-    /// covered by Tier 2 alone, whose fail-closed predicate
-    /// (`ipe_types::emitted_bound_satisfied`, rejecting both `Ty::Fun` and
-    /// bare `Ty::Var`) is the load-bearing gate for every member.
+    /// [`Self::reject_hof_callback_function_result`] runs here as the lowering
+    /// backstop behind the type checker's `hof_kernel_result` obligation
+    /// (IPE-T0014, see `docs/adr/0001-language-semantics-and-types.md` §3.2):
+    /// both derive their positions from [`KernelFn::hof_result_vars`], but the
+    /// backstop reads the solved type independently, so a fault in the
+    /// obligation's wiring cannot reopen the hazard.
     fn lower_callee(&self, callee: &canon::Expr) -> DResult<Callee> {
         let resolved = self.lower_callee_resolve(callee)?;
-        self.reject_curried_andmap_payload(&resolved, callee)?;
+        self.reject_hof_callback_function_result(&resolved, callee)?;
         self.reject_input_sub_outside_its_surface(&resolved, callee.span)?;
         match &resolved {
             Callee::Kernel(kernel) => {

@@ -1630,6 +1630,58 @@ fn type_signature_body_mismatch() {
     assert_rejected("type_sig_mismatch", &src, "IPE-T0001");
 }
 
+/// A higher-order kernel program: `Main` printing the length of `expr`.
+fn hof_program(expr: &str) -> String {
+    format!(
+        "{HEAD}import Ipe.Io as Io\n\
+         import Ipe.List\n\
+         import Ipe.String as String\n\
+         add : Int -> Int -> Int\n\
+         add a b =\n    a + b\n\
+         main : Task Error ()\n\
+         main =\n    Io.println (String.fromInt (List.length ({expr})))\n"
+    )
+}
+
+/// `List.map add xs`: each element would be the partial application `Int -> Int`,
+/// which the exact-arity runtime kernel cannot build — the callback-result
+/// obligation (`hof_kernel_result`) refuses it at type time.
+#[test]
+fn type_list_map_curried_callback_refused() {
+    let src = hof_program("List.map add [ 1, 2, 3 ]");
+    assert_rejected("type_list_map_curried_callback", &src, "IPE-T0001");
+}
+
+/// A curried lambda callback (`\n -> \x -> x + n`) is the same hazard spelled inline.
+#[test]
+fn type_list_map_curried_lambda_refused() {
+    let src = hof_program("List.map (\\n -> \\x -> x + n) [ 1, 2, 3 ]");
+    assert_rejected("type_list_map_curried_lambda", &src, "IPE-T0001");
+}
+
+/// A fold whose accumulator is a function returns an arrow from its step callback.
+#[test]
+fn type_list_foldl_function_accumulator_refused() {
+    let src = hof_program(
+        "List.map (List.foldl (\\x f -> \\y -> f y + x) (\\y -> y) [ 1, 2 ]) [ 1, 2, 3 ]",
+    );
+    assert_rejected("type_list_foldl_function_accumulator", &src, "IPE-T0001");
+}
+
+/// Contrapositive: a plain-result callback (`\x -> x + 1`) still compiles.
+#[test]
+fn type_list_map_plain_callback_compiles() {
+    let src = hof_program("List.map (\\x -> x + 1) [ 1, 2, 3 ]");
+    assert_compiles("type_list_map_plain_callback", &src);
+}
+
+/// Contrapositive: `List.map2 add` passes both arguments at once and compiles.
+#[test]
+fn type_list_map2_full_arity_callback_compiles() {
+    let src = hof_program("List.map2 add [ 1, 2, 3 ] [ 10, 20, 30 ]");
+    assert_compiles("type_list_map2_full_arity_callback", &src);
+}
+
 /// A `case` that does not cover every constructor is non-exhaustive.
 #[test]
 fn type_non_exhaustive_case() {

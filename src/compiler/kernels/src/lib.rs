@@ -647,6 +647,21 @@ pub enum BuiltinTag {
     Codec,
 }
 
+impl BuiltinTag {
+    /// Whether the constructor is an opaque boxed wrapper that defers its callbacks.
+    ///
+    /// A `Task`, `Cmd`, `Sub`, or `Decoder` value boxes the callback it is
+    /// built from rather than applying it at a fixed arity on the spot, and the
+    /// decoder runtime curries its applicative pipeline (`curry1..curry10`), so
+    /// an arrow-valued callback result is that pipeline's normal shape. A
+    /// kernel yielding one of these carriers therefore takes no
+    /// callback-result obligation ([`StdlibKernel::hof_result_vars`]).
+    #[must_use]
+    pub const fn is_opaque_boxed_wrapper(self) -> bool {
+        matches!(self, Self::Task | Self::Cmd | Self::Sub | Self::Decoder)
+    }
+}
+
 /// A `'static`, `const`-embeddable representation of a kernel's HM type scheme.
 ///
 /// A [`KernelDef`] carries this beside the row so a kernel's scheme lives with
@@ -976,6 +991,173 @@ pub const fn mapper_frontier_open(shape: &TyShape, arity: u8) -> bool {
     }
     false
 }
+
+/// A set of scheme variables that callbacks of a kernel return.
+///
+/// Holds variable indices below [`Self::CAPACITY`]; adding a larger one marks
+/// the set overflowed, which the build rejects for every kernel
+/// ([`hof_result_vars_fit`]), so no callback result is silently dropped.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct CallbackResults {
+    mask: u64,
+    overflowed: bool,
+}
+
+impl CallbackResults {
+    /// The exclusive upper bound on a representable variable index.
+    pub const CAPACITY: u8 = 64;
+
+    /// The empty set.
+    pub const EMPTY: Self = Self {
+        mask: 0,
+        overflowed: false,
+    };
+
+    /// The set with scheme variable `var` added.
+    #[must_use]
+    pub const fn with(self, var: u8) -> Self {
+        match 1_u64.checked_shl(var as u32) {
+            Some(bit) if var < Self::CAPACITY => Self {
+                mask: self.mask | bit,
+                overflowed: self.overflowed,
+            },
+            _ => Self {
+                mask: self.mask,
+                overflowed: true,
+            },
+        }
+    }
+
+    /// Whether scheme variable `var` is in the set.
+    #[must_use]
+    pub const fn contains(self, var: u8) -> bool {
+        match 1_u64.checked_shl(var as u32) {
+            Some(bit) if var < Self::CAPACITY => self.mask & bit != 0,
+            _ => false,
+        }
+    }
+
+    /// Whether the set holds no variable.
+    #[must_use]
+    pub const fn is_empty(self) -> bool {
+        self.mask == 0
+    }
+
+    /// Whether a variable at or past [`Self::CAPACITY`] was added and lost.
+    #[must_use]
+    pub const fn overflowed(self) -> bool {
+        self.overflowed
+    }
+
+    /// The variables of the set, in ascending order.
+    pub fn vars(self) -> impl Iterator<Item = u8> {
+        (0..Self::CAPACITY).filter(move |var| self.contains(*var))
+    }
+}
+
+/// The final result of `shape` past every arrow.
+const fn final_result(shape: &TyShape) -> &TyShape {
+    let mut cur = shape;
+    while let TyShape::Fun(_, rest) = cur {
+        cur = rest;
+    }
+    cur
+}
+
+/// `found` extended with the variable final result of every callback in `shape`.
+///
+/// A function is a callback: its final result, when a bare variable, is
+/// recorded, and neither its parameters nor a structured result are entered.
+/// A constructor argument, a tuple element, and a record field are searched
+/// for callbacks they carry (`andMap`'s `Maybe (a -> b)`).
+const fn collect_callback_results(shape: &TyShape, found: CallbackResults) -> CallbackResults {
+    match shape {
+        TyShape::Fun(..) => match final_result(shape) {
+            TyShape::Var(var) => found.with(*var),
+            TyShape::Fun(..)
+            | TyShape::Con(..)
+            | TyShape::Tuple(_)
+            | TyShape::Record { .. }
+            | TyShape::Unit => found,
+        },
+        TyShape::Con(_, items) | TyShape::Tuple(items) => {
+            let mut acc = found;
+            let mut rest: &[TyShape] = items;
+            while let Some((item, tail)) = rest.split_first() {
+                acc = collect_callback_results(item, acc);
+                rest = tail;
+            }
+            acc
+        }
+        TyShape::Record { fields, .. } => {
+            let mut acc = found;
+            let mut rest = *fields;
+            while let Some(((_, field), tail)) = rest.split_first() {
+                acc = collect_callback_results(field, acc);
+                rest = tail;
+            }
+            acc
+        }
+        TyShape::Var(_) | TyShape::Unit => found,
+    }
+}
+
+/// The scheme variables returned by the callbacks among the first `arity` arguments of scheme `shape`.
+///
+/// Each variable is the final result of a callback the kernel receives, at
+/// any depth inside an argument's constructors, tuples, and records. A
+/// callback whose final result is structured (`a -> Maybe b`) contributes
+/// nothing: a curried callback there is already a plain type mismatch.
+#[must_use]
+pub const fn callback_result_vars(shape: &TyShape, arity: u8) -> CallbackResults {
+    let wide = arity as usize;
+    let mut found = CallbackResults::EMPTY;
+    let mut arg = 0;
+    while arg < wide {
+        if let Some(param) = spine_arg(shape, arg) {
+            found = collect_callback_results(param, found);
+        }
+        arg += 1;
+    }
+    found
+}
+
+/// The result of scheme `shape` once `arity` arguments are applied, or `None` past its spine.
+#[must_use]
+pub const fn applied_result(shape: &TyShape, arity: u8) -> Option<&TyShape> {
+    let mut cur = shape;
+    let mut left = arity;
+    while left > 0 {
+        let TyShape::Fun(_, rest) = cur else {
+            return None;
+        };
+        cur = rest;
+        left -= 1;
+    }
+    Some(cur)
+}
+
+/// Whether no kernel of `kernels` has a callback result past [`CallbackResults::CAPACITY`].
+#[must_use]
+pub const fn hof_result_vars_fit(kernels: &[StdlibKernel]) -> bool {
+    let mut rest = kernels;
+    while let Some((kernel, tail)) = rest.split_first() {
+        if let Some(shape) = kernel.scheme_shape()
+            && callback_result_vars(shape, kernel.identity().arity).overflowed()
+        {
+            return false;
+        }
+        rest = tail;
+    }
+    true
+}
+
+// IPE-RUST-AUDIT:ACCEPTED (Arthur Maciel) — compile-time `const` assertion (not a runtime panic); fails the BUILD if a kernel callback returns a scheme variable the callback-result set cannot hold, which would drop that callback's HOF_KERNEL_RESULT obligation [ledger #boundary]
+#[allow(clippy::assertions_on_constants)] // the constant IS the tripwire
+const _: () = assert!(
+    hof_result_vars_fit(StdlibKernel::ALL),
+    "a kernel callback returns a scheme variable at or past CallbackResults::CAPACITY",
+);
 
 /// Whether every [`StdlibKernel::sync_obliged_scheme_vars`] entry of `kernels` aligns in its scheme.
 ///
@@ -12866,6 +13048,40 @@ impl StdlibKernel {
         }
     }
 
+    /// The scheme variables returned by callbacks this kernel applies at a fixed arity.
+    ///
+    /// Each carries the higher-order-kernel callback-result obligation: the
+    /// runtime kernel takes an exact-arity closure while the IR flattens a
+    /// curried Ipê function into one multi-parameter function, so a callback
+    /// whose final result is itself an arrow has no sound lowering. Derived
+    /// from the scheme by [`callback_result_vars`], so every schemed
+    /// higher-order kernel is covered without a list to keep in sync.
+    ///
+    /// Empty, by scope, for:
+    /// * an unschemed kernel — no shape to classify;
+    /// * a kernel outside [`KernelClass::Pure`] — its callbacks are message
+    ///   handlers and column getters whose result is a caller-generic `msg` or
+    ///   row variable, which the fail-closed obligation would refuse in every
+    ///   generic view or schema helper;
+    /// * a kernel yielding an opaque boxed wrapper
+    ///   ([`BuiltinTag::is_opaque_boxed_wrapper`]) — it defers its callback, and
+    ///   the decoder pipeline curries by design.
+    #[must_use]
+    pub const fn hof_result_vars(self) -> CallbackResults {
+        let def = self.identity();
+        let Some(shape) = self.scheme_shape() else {
+            return CallbackResults::EMPTY;
+        };
+        let defers = matches!(
+            applied_result(shape, def.arity),
+            Some(TyShape::Con(tag, _)) if tag.is_opaque_boxed_wrapper()
+        );
+        if defers || !matches!(def.class, KernelClass::Pure) {
+            return CallbackResults::EMPTY;
+        }
+        callback_result_vars(shape, def.arity)
+    }
+
     /// The conditionally-vendored runtime module this kernel's emitted symbol
     /// needs, when that module is NOT already pulled in by the kernel's emit
     /// [`KernelClass`]. `None` for the common case (symbol lives in the module
@@ -17734,5 +17950,58 @@ mod tests {
                 expected,
             );
         }
+    }
+
+    /// The HOF classifier obliges exactly the variable final result of each callback.
+    ///
+    /// Map, fold, a two-argument mapper, and a callback carried inside a
+    /// constructor are obliged; a boxed wrapper, a non-pure class, and a
+    /// structured callback result are not.
+    #[test]
+    fn hof_result_vars_classify_callback_final_results() {
+        let only = |var: u8| super::CallbackResults::EMPTY.with(var);
+        assert_eq!(StdlibKernel::ListMap.hof_result_vars(), only(1));
+        assert_eq!(StdlibKernel::ListFoldl.hof_result_vars(), only(1));
+        assert_eq!(StdlibKernel::MaybeMap2.hof_result_vars(), only(2));
+        assert_eq!(StdlibKernel::MaybeAndMap.hof_result_vars(), only(1));
+        assert!(StdlibKernel::TaskMap.hof_result_vars().is_empty());
+        assert!(StdlibKernel::JsonDecMap.hof_result_vars().is_empty());
+        assert!(StdlibKernel::UiOnInput.hof_result_vars().is_empty());
+        assert!(StdlibKernel::MaybeAndThen.hof_result_vars().is_empty());
+        for k in StdlibKernel::ALL {
+            assert!(!k.hof_result_vars().overflowed(), "{k:?}");
+        }
+    }
+
+    /// A callback's own function-typed parameter is not searched for results.
+    #[test]
+    fn callback_result_vars_skip_callback_parameters() {
+        use super::{TyShape, callback_result_vars};
+        const A: TyShape = TyShape::Var(0);
+        const B: TyShape = TyShape::Var(1);
+        const C: TyShape = TyShape::Var(2);
+        const A_TO_B: TyShape = TyShape::Fun(&A, &B);
+        const HIGHER: TyShape = TyShape::Fun(&A_TO_B, &C);
+        const SHAPE: TyShape = TyShape::Fun(&HIGHER, &A);
+        let found = callback_result_vars(&SHAPE, 1);
+        assert!(found.contains(2));
+        assert!(!found.contains(1));
+        assert!(callback_result_vars(&SHAPE, 0).is_empty());
+    }
+
+    /// A variable past the capacity is flagged, never silently dropped.
+    #[test]
+    fn callback_results_flag_overflow() {
+        use super::CallbackResults;
+        let last = CallbackResults::CAPACITY - 1;
+        let set = CallbackResults::EMPTY.with(0).with(last);
+        assert!(set.contains(0));
+        assert!(set.contains(last));
+        assert!(!set.overflowed());
+        assert_eq!(set.vars().collect::<Vec<_>>(), vec![0, last]);
+        let over = set.with(CallbackResults::CAPACITY);
+        assert!(over.overflowed());
+        assert!(!over.contains(CallbackResults::CAPACITY));
+        assert_eq!(over.vars().count(), 2);
     }
 }

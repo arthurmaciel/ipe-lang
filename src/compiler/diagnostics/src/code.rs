@@ -647,6 +647,11 @@ code! {
     /// so a character grid has no denotation there. Use `Tui.tea` for
     /// a full-screen cell-grid app.
     IPE_L0153 = "IPE-L0153", "Ui.cells is terminal-screen-only and not available in the Cli shape", "IPE-L0153";
+    /// a higher-order kernel's callback returns a function.
+    ///
+    /// The kernel applies its callback at one exact arity, so a callback whose
+    /// final result is another arrow has no sound lowering.
+    IPE_L0154 = "IPE-L0154", "a higher-order kernel callback returns a function", "IPE-L0154";
     /// expression nests too deeply for the backend
     IPE_L0200 = "IPE-L0200", "expression nests too deeply for the backend", "IPE-L0200";
 
