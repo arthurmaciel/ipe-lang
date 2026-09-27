@@ -19,8 +19,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use ipe_canon::ast as canon;
 use ipe_diagnostics::{
-    DResult, Diagnostic, Feature, Located, LowerError, MainRetName, NameError, Span,
-    StoreEqAccessorDefect, StoreSelectProjectionDefect,
+    DResult, Diagnostic, Feature, GenericAppEntryReach, Located, LowerError, MainRetName,
+    NameError, Span, StoreEqAccessorDefect, StoreSelectProjectionDefect,
 };
 use ipe_intern::{Interner, Symbol};
 use ipe_ir::{
@@ -25073,21 +25073,32 @@ impl<'a> Lowerer<'a> {
             return Ok(());
         }
         let offending = self.region_ty(span).map_or_else(
-            || self.current_poly_tvars.borrow().values().next().copied(),
-            |solved| self.first_poly_tvar(solved),
+            || {
+                self.current_poly_tvars
+                    .borrow()
+                    .values()
+                    .next()
+                    .map(|&tv| (tv, GenericAppEntryReach::Undetermined))
+            },
+            |solved| {
+                self.first_poly_tvar(solved)
+                    .map(|tv| (tv, GenericAppEntryReach::Mentioned))
+            },
         );
-        let Some(type_var) = offending else {
+        let Some((type_var, reach)) = offending else {
             return Ok(());
         };
-        Err(self.generic_app_entry_error(kernel, span, type_var))
+        Err(self.generic_app_entry_error(kernel, span, type_var, reach))
     }
 
-    /// The IPE-N0051 refusal of app entry `kernel` at `span`, naming the generic `type_var` it is built over.
+    /// The IPE-N0051 refusal of app entry `kernel` at `span`, naming the generic
+    /// `type_var` and how the entry relates to it (`reach`).
     fn generic_app_entry_error(
         &self,
         kernel: KernelFn,
         span: Span,
         type_var: Symbol,
+        reach: GenericAppEntryReach,
     ) -> Diagnostic {
         let def = kernel.def();
         Diagnostic::Name {
@@ -25095,6 +25106,7 @@ impl<'a> Lowerer<'a> {
             msg: NameError::GenericAppEntry {
                 entry: format!("{}.{}", def.qualifier, def.name).into_boxed_str(),
                 type_var: self.resolve(type_var).unwrap_or("a").into(),
+                reach,
             },
         }
     }
@@ -25128,7 +25140,12 @@ impl<'a> Lowerer<'a> {
                     if kernel.is_app_entry() {
                         self.reject_generic_app_entry(*kernel, e.span)?;
                         if let Some(row_var) = row_vars.first() {
-                            return Err(self.generic_app_entry_error(*kernel, e.span, *row_var));
+                            return Err(self.generic_app_entry_error(
+                                *kernel,
+                                e.span,
+                                *row_var,
+                                GenericAppEntryReach::Undetermined,
+                            ));
                         }
                     }
                 }

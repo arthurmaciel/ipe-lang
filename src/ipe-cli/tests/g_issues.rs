@@ -118,3 +118,5 @@ mod golden_l0135_union_task_reuse_seal;
 mod golden_swapped_container_capture_seal;
 #[path = "g_issues/golden_unannotated_value_sync_seal.rs"]
 mod golden_unannotated_value_sync_seal;
+#[path = "g_issues/golden_untyped_app_entry_row_seal.rs"]
+mod golden_untyped_app_entry_row_seal;

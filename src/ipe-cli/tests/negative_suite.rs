@@ -2922,6 +2922,83 @@ fn generic_row_model_web_embed_rejected() {
     );
 }
 
+/// A mounted `Web.embed` built inside a definition whose annotation carries a
+/// row generic the entry's model does not visibly use: the model is the
+/// concrete `Model`, and `r` is only the open tail of the `cfg` parameter the
+/// view reads a label from. Region types carry no record row tails, so whether
+/// the entry reaches `r` cannot be determined, and the entry is refused
+/// fail-closed.
+const WEB_EMBED_ROW_IN_SCOPE: &str = r#"module Main exposing (main)
+import Ipe.Server.Http as Server
+import Ipe.Task as Task exposing (Task)
+import Ipe.Tea.Web as Web
+import Ipe.Tea.Web.Cmd as Cmd
+import Ipe.Tea.Web.Sub as Sub
+import Ipe.Ui as Ui
+type alias Model = { count : Int }
+type Msg = Noop
+initialModel : Model
+initialModel = { count = 0 }
+embedLabelled : { r | label : String } -> Web.WebApp
+embedLabelled cfg =
+    Web.embed
+        { init = \_ -> ( initialModel, Cmd.none )
+        , update = \_ m -> ( m, Cmd.none )
+        , view = \_ -> Ui.text cfg.label
+        , subscriptions = \_ -> Sub.none
+        , routes = []
+        , notFound = Noop
+        }
+main : Task Error ()
+main =
+    Server.listen 8000 [ Server.mountApp "/" (embedLabelled { label = "hi" }) ]
+"#;
+
+/// An app entry under an annotation row generic is refused with IPE-N0051,
+/// reported as an undetermined reach of `r` rather than an entry built over it.
+#[test]
+fn row_generic_in_scope_web_embed_refused_undetermined() {
+    let name = "row_generic_in_scope_web_embed";
+    let Some(entry) = write_entry(name, WEB_EMBED_ROW_IN_SCOPE) else {
+        return;
+    };
+    let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
+        .join("negsuite-out")
+        .join(name);
+    let _ = std::fs::remove_dir_all(&out);
+    let Ok(runtime) = ipe::resolve_runtime() else {
+        return;
+    };
+    match ipe::build_with_options(&entry, &out, &runtime, BuildOptions::default()) {
+        Err(CliError::Pipeline { diag, .. }) => match *diag {
+            ipe_diagnostics::Diagnostic::Name {
+                msg:
+                    ipe_diagnostics::NameError::GenericAppEntry {
+                        type_var, reach, ..
+                    },
+                ..
+            } => {
+                assert_eq!(
+                    &*type_var, "r",
+                    "{name}: the refusal must name the row generic"
+                );
+                assert_eq!(
+                    reach,
+                    ipe_diagnostics::GenericAppEntryReach::Undetermined,
+                    "{name}: a row generic in scope is an undetermined reach, not a proven mention"
+                );
+            }
+            other => assert!(
+                false_marker(),
+                "{name}: expected IPE-N0051 for the row generic in scope, got {}",
+                other.code().as_str()
+            ),
+        },
+        Ok(()) => fail_accepted(name, "IPE-N0051", "compiled successfully (exit 0)"),
+        Err(other) => fail_accepted(name, "IPE-N0051", &format!("non-pipeline error: {other:?}")),
+    }
+}
+
 /// A point-free `let` alias of `Web.embed` inside a msg-generic helper is refused.
 ///
 /// The alias is monomorphic (no let-generalization), so its `Web.embed`

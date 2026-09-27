@@ -778,8 +778,25 @@ pub enum NameError {
     /// prints its model and messages, which needs one concrete `Model` / `Msg`;
     /// an unfixed type variable there is refused rather than deferred to a
     /// failing Rust build (THE SEAL). `entry` is the entry's qualified name,
-    /// `type_var` the offending variable. [IPE-N0051]
-    GenericAppEntry { entry: Box<str>, type_var: Box<str> },
+    /// `type_var` the offending variable, `reach` whether the entry is proven
+    /// to mention it or only cannot be proven free of it. [IPE-N0051]
+    GenericAppEntry {
+        entry: Box<str>,
+        type_var: Box<str>,
+        reach: GenericAppEntryReach,
+    },
+}
+
+/// How a [`NameError::GenericAppEntry`] refusal relates the entry to its
+/// generic — selects the rendered message.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum GenericAppEntryReach {
+    /// The entry's solved instantiation mentions the generic.
+    Mentioned,
+    /// The generic is in scope and no type information shows whether the
+    /// entry's model or message reaches it (a row generic of the annotation,
+    /// or an entry reference with no solved type); refused fail-closed.
+    Undetermined,
 }
 
 /// Which namespace a [`NameError::RustNameFold`] collision falls in — selects
