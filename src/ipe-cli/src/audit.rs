@@ -796,8 +796,13 @@ fn regenerate_ffi_bindings(manifest_path: &Path) -> Result<(), CliError> {
 /// canonical project root. The check uses [`std::fs::symlink_metadata`] so it
 /// never follows symlinks.
 fn ffi_cache_path_or_reject(project_root: &Path) -> Result<PathBuf, CliError> {
-    // The relative components we walk: `.ipe`, `cache`, `ffi`, `rust`.
-    const CACHE_COMPONENTS: &[&str] = &[".ipe", "cache", "ffi", "rust"];
+    // The relative components we walk: the cache namespace, `cache`, `ffi`, `rust`.
+    const CACHE_COMPONENTS: &[&str] = &[
+        crate::output_dir::CACHE_NAMESPACE_DIR,
+        "cache",
+        "ffi",
+        "rust",
+    ];
 
     let mut current = project_root.to_path_buf();
     for component in CACHE_COMPONENTS {
@@ -811,7 +816,9 @@ fn ffi_cache_path_or_reject(project_root: &Path) -> Result<PathBuf, CliError> {
                         "the package's cache path `{}` contains a symlink at `{}`; \
                          the audit rejects this to prevent out-of-tree writes through \
                          a symlinked intermediate path component",
-                        project_root.join(".ipe/cache/ffi/rust").display(),
+                        project_root
+                            .join(CACHE_COMPONENTS.iter().collect::<PathBuf>())
+                            .display(),
                         current.display(),
                     ),
                 ));
@@ -948,7 +955,11 @@ struct LocatedHit {
 /// # Errors
 /// [`CliError::Io`] on a read failure.
 fn scan_author_ffi_rust(prepared: &Prepared) -> Result<Option<LocatedHit>, CliError> {
-    let cache_root = prepared.manifest.root.join(".ipe/cache/ffi/rust");
+    let cache_root = prepared
+        .manifest
+        .root
+        .join(crate::output_dir::CACHE_NAMESPACE_DIR)
+        .join("cache/ffi/rust");
     if !cache_root.is_dir() {
         return Ok(None);
     }

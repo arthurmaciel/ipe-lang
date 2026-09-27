@@ -40,41 +40,62 @@ pub const OWNERSHIP_MARKER: &str = ".ipe-output";
 /// The per-project namespace directory ipe keeps its caches in.
 pub const CACHE_NAMESPACE_DIR: &str = ".ipe";
 
-/// A directory name no output may sit under, whichever project it belongs to.
-///
-/// Matched per path component, ASCII case-insensitively (fail closed on a
-/// case-insensitive filesystem).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ReservedName {
-    /// Version-control metadata (`.git`).
-    Vcs,
-    /// An ipe cache namespace ([`CACHE_NAMESPACE_DIR`]).
-    ///
-    /// `ipe clean` and the FFI binding regeneration delete its contents by name
-    /// alone, in whichever project holds it, so nothing ipe writes elsewhere may
-    /// live there.
-    CacheNamespace,
+/// Declares an enum of reserved directory names, each with the display name it
+/// matches, from a single list — so a variant can never go missing from
+/// [`ReservedName::ALL`] or from `dir_name`'s match: both are generated from
+/// the same list the enum's variants come from, instead of a hand-kept array
+/// that a new variant could silently miss.
+macro_rules! reserved_names {
+    (
+        $(#[$enum_meta:meta])*
+        enum $name:ident {
+            $($(#[$variant_meta:meta])* $variant:ident => $dir:expr),+ $(,)?
+        }
+    ) => {
+        $(#[$enum_meta])*
+        #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+        pub enum $name {
+            $($(#[$variant_meta])* $variant),+
+        }
+
+        impl $name {
+            /// Every reserved name.
+            const ALL: &'static [Self] = &[$(Self::$variant),+];
+
+            /// The reserved directory name.
+            #[must_use]
+            pub const fn dir_name(self) -> &'static str {
+                match self {
+                    $(Self::$variant => $dir),+
+                }
+            }
+
+            /// The reserved name `component` spells, in any ASCII case.
+            fn of(component: &std::ffi::OsStr) -> Option<Self> {
+                let name = component.to_string_lossy();
+                Self::ALL
+                    .iter()
+                    .copied()
+                    .find(|reserved| name.eq_ignore_ascii_case(reserved.dir_name()))
+            }
+        }
+    };
 }
 
-impl ReservedName {
-    /// Every reserved name.
-    const ALL: [Self; 2] = [Self::Vcs, Self::CacheNamespace];
-
-    /// The reserved directory name.
-    #[must_use]
-    pub const fn dir_name(self) -> &'static str {
-        match self {
-            Self::Vcs => ".git",
-            Self::CacheNamespace => CACHE_NAMESPACE_DIR,
-        }
-    }
-
-    /// The reserved name `component` spells, in any ASCII case.
-    fn of(component: &std::ffi::OsStr) -> Option<Self> {
-        let name = component.to_string_lossy();
-        Self::ALL
-            .into_iter()
-            .find(|reserved| name.eq_ignore_ascii_case(reserved.dir_name()))
+reserved_names! {
+    /// A directory name no output may sit under, whichever project it belongs to.
+    ///
+    /// Matched per path component, ASCII case-insensitively (fail closed on a
+    /// case-insensitive filesystem).
+    enum ReservedName {
+        /// Version-control metadata (`.git`).
+        Vcs => ".git",
+        /// An ipe cache namespace ([`CACHE_NAMESPACE_DIR`]).
+        ///
+        /// `ipe clean` and the FFI binding regeneration delete its contents by name
+        /// alone, in whichever project holds it, so nothing ipe writes elsewhere may
+        /// live there.
+        CacheNamespace => CACHE_NAMESPACE_DIR,
     }
 }
 
@@ -1579,6 +1600,34 @@ mod tests {
             "a look-alike name is user data"
         );
         let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// Every [`ReservedName`] variant is refused as an output root — proven
+    /// generically over [`ReservedName::ALL`] so a variant added to the enum
+    /// stays covered without a new test.
+    #[test]
+    fn every_reserved_name_is_refused_as_output_root() {
+        for &reserved in ReservedName::ALL {
+            let base = scratch(&format!("reserved_all_{}", reserved.dir_name()));
+            let proj = project(&base);
+            let target = proj.root.join(reserved.dir_name()).join("out");
+            let result = OutputRoot::resolve(Some(&target.to_string_lossy()), &proj);
+            assert!(
+                matches!(
+                    refused(&result),
+                    Some(OutputRefusal::InsideReservedDir { reserved: got, .. })
+                        if *got == reserved
+                ),
+                "output under {} must be refused as reserved, got {result:?}",
+                reserved.dir_name()
+            );
+            assert!(!target.exists(), "a refused output writes nothing");
+            let _ = std::fs::remove_dir_all(&base);
+        }
+        assert!(
+            ReservedName::ALL.contains(&ReservedName::CacheNamespace),
+            "the cache namespace must be among the reserved names"
+        );
     }
 
     #[test]

@@ -638,7 +638,9 @@ impl WrapperScan {
     /// # Errors
     /// [`CliError::Io`] on a failure to read the FFI wrapper cache.
     pub fn over_package(root: &Path) -> Result<Self, CliError> {
-        let cache_root = root.join(".ipe/cache/ffi/rust");
+        let cache_root = root
+            .join(crate::output_dir::CACHE_NAMESPACE_DIR)
+            .join("cache/ffi/rust");
         if !cache_root.is_dir() {
             // No author wrapper Rust: the static scan sees no reachable axis, so
             // it cannot veto a declared-but-unused reject. That is the correct
