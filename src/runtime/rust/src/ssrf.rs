@@ -1300,7 +1300,9 @@ mod tests {
         );
         let shown = format!(
             "{refused:?} {}",
-            refused.map_or_else(|r| r.to_string(), |_| String::new())
+            refused
+                .as_ref()
+                .map_or_else(ToString::to_string, |_| String::new())
         );
         assert!(!shown.contains("s3cr3t-pw"), "password leaked: {shown}");
         assert!(!shown.contains("admin"), "user leaked: {shown}");
@@ -2238,8 +2240,8 @@ mod tests {
     /// `0.18.214.135`, so showing the blocked address would show the secret.
     #[tokio::test]
     async fn ip_literal_credential_never_shows_its_address() {
-        let decimal = ["1234567", "0.18.214.135", "pin", "api.example"];
-        let dotted = ["10.0.0.1", "s3cr3t", "public.example"];
+        let decimal: &[&str] = &["1234567", "0.18.214.135", "pin", "api.example"];
+        let dotted: &[&str] = &["10.0.0.1", "s3cr3t", "public.example"];
         for (url, secrets) in [
             ("http://1234567\\pin@api.example/", decimal),
             ("http://10.0.0.1\\s3cr3t@public.example/", dotted),
@@ -2247,18 +2249,18 @@ mod tests {
             ("http://10.0.0.1?s3cr3t@public.example/", dotted),
             (
                 "ws://1234567890\\pw@x.example/",
-                ["1234567890", "73.150.2.210", "pw@", "x.example"],
+                &["1234567890", "73.150.2.210", "pw@", "x.example"],
             ),
         ] {
             for policy in [DialPolicy::DenyPrivate, DialPolicy::AllowAll] {
                 if let Err(refused) = vet_url_with(policy, &NoDns, url, DEADLINE).await {
-                    assert_shows_none_of(&refused, &secrets);
+                    assert_shows_none_of(&refused, secrets);
                 }
             }
             if let Err(refused) = ssrf_check_url_nonblocking(url) {
-                assert_shows_none_of(&refused, &secrets);
+                assert_shows_none_of(&refused, secrets);
             }
-            assert_shows_none_of(&DisplayableUrl::of(url), &secrets);
+            assert_shows_none_of(&DisplayableUrl::of(url), secrets);
         }
         let blocked = vet_url_with(
             DialPolicy::DenyPrivate,
