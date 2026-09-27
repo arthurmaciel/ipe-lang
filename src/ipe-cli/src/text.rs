@@ -1523,8 +1523,9 @@ mod tests {
     ///
     /// Every message sink (`CliError::Usage`/`UsageOwned` and the helpers that
     /// wrap them) takes its text from a `text::` function, so the rendered text
-    /// and its catalog entry cannot drift. `#[cfg(test)]` items and `tests/`
-    /// directories are exempt: a test fixture is not user-facing text.
+    /// and its catalog entry cannot drift. `#[cfg(test)]` items and confirmed
+    /// out-of-line test modules ([`panic_scan::is_verified_test_path`]) are
+    /// exempt: a test fixture is not user-facing text.
     #[test]
     fn no_literal_cli_error_usage_outside_the_catalog() {
         let src_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
@@ -1532,7 +1533,10 @@ mod tests {
         assert!(!files.is_empty(), "no sources under {}", src_root.display());
         let mut offenders = Vec::new();
         for path in files {
-            if path.components().any(|c| c.as_os_str() == "tests") {
+            let is_test_module = path
+                .strip_prefix(&src_root)
+                .is_ok_and(|rel| panic_scan::is_verified_test_path(&src_root, rel));
+            if is_test_module {
                 continue;
             }
             let src = std::fs::read_to_string(&path).expect("source is readable");
