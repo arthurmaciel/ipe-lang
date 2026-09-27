@@ -9280,19 +9280,6 @@ fn bound_is_higher_ranked(bound: &serde_json::Value) -> bool {
         .is_some_and(|a| !a.is_empty())
 }
 
-/// The super-trait closure of a modellable-5 trait is statically known and
-/// entirely marker/modellable (`Eq: PartialEq`, `Ord: PartialOrd + Eq`, the
-/// rest have no constraining super). So once a trait NAME is in the modellable-5
-/// its closure introduces no hole (C3 holds by construction). A trait NOT in the
-/// modellable-5 is rejected before we'd need its closure. This returns whether
-/// `name`'s super-closure stays inside the modellable-5 ∪ markers.
-fn modellable_5_superclosure_ok(name: &str) -> bool {
-    // All five have only marker/modellable supers — verified against std:
-    //   Hash: (none constraining)   Eq: PartialEq   Ord: PartialOrd+Eq
-    //   Clone: Sized                Default: Sized
-    is_modellable_5(name)
-}
-
 /// Classify ONE trait bound on a USED param for the modellable check (C3):
 ///   * marker/auto trait or lifetime bound → contributes no `<T: …>` bound (Ok None)
 ///   * higher-ranked (`for<'a>`) → drop (C2 sibling)
@@ -9320,8 +9307,9 @@ fn classify_param_bound(bound: &serde_json::Value) -> Result<Option<String>, Gen
             .unwrap_or(&serde_json::Value::Null),
     ) && is_modellable_5(std_tag)
     {
-        // super-closure of every modellable-5 trait is marker/modellable.
-        debug_assert!(modellable_5_superclosure_ok(std_tag));
+        // Every modellable-5 trait's super-closure is marker/modellable
+        // (`Eq: PartialEq`, `Ord: PartialOrd + Eq`, `Clone`/`Default`: `Sized`,
+        // `Hash`: none), so admitting the name introduces no unmodelled bound.
         return Ok(Some(std_tag.to_string()));
     }
     // A confirmed std trait that is NOT modellable-5 (Display / FromStr /
