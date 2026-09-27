@@ -56,7 +56,9 @@ fn resolve_user_sources(
 /// Type a driver failure as the server's load error, keeping its rendered text.
 ///
 /// A ceiling, an untrusted FFI cache, or a refused FFI catalog is refused;
-/// every other failure is one the server degrades around. The match names
+/// every other failure is one the server degrades around. A refused source
+/// file (a FIFO, device or unsearchable directory an import names) types as
+/// an I/O failure, since editing the import away clears it. The match names
 /// every variant, so a new [`CliError`] fails the build here until it is
 /// classified rather than defaulting to a degradable failure.
 fn load_error(err: &CliError) -> LoadError {
@@ -213,6 +215,49 @@ mod tests {
             );
             assert_eq!(err.disposition(), LoadDisposition::Refuse);
         }
+    }
+
+    #[test]
+    fn every_source_refusal_degrades_as_io() {
+        for reason in [
+            crate::io_bounded::SourceRefusal::NotRegularFile,
+            crate::io_bounded::SourceRefusal::AccessDenied,
+        ] {
+            let err = load_error(&CliError::SourceRefused {
+                path: PathBuf::from("Pipe.ipe"),
+                reason,
+            });
+            assert!(
+                matches!(err, LoadError::Io(_)),
+                "a refused source must type as Io: {err:?}"
+            );
+            assert_eq!(err.disposition(), LoadDisposition::Degrade);
+        }
+    }
+
+    /// An import naming a FIFO degrades the load instead of blocking or refusing it.
+    #[cfg(unix)]
+    #[test]
+    fn an_imported_fifo_degrades_the_load() {
+        let tmp = tmp_dir("imported-fifo");
+        let main = tmp.join("Main.ipe");
+        let text = "module Main exposing (main)\n\nimport Pipe\n\nmain = Pipe.x\n";
+        std::fs::write(&main, text).expect("write Main.ipe");
+        let made = std::process::Command::new("mkfifo")
+            .arg(tmp.join("Pipe.ipe"))
+            .status()
+            .expect("run mkfifo");
+        assert!(made.success(), "mkfifo creates the fixture");
+        let err = DriverLoader.load(None, &main, Some(text)).err();
+        let _ = std::fs::remove_dir_all(&tmp);
+        assert!(
+            matches!(err, Some(LoadError::Io(_))),
+            "an imported FIFO must type as Io: {err:?}"
+        );
+        assert_eq!(
+            err.as_ref().map(LoadError::disposition),
+            Some(LoadDisposition::Degrade)
+        );
     }
 
     #[test]
