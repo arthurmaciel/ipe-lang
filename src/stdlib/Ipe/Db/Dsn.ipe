@@ -74,7 +74,9 @@ type TlsMode
 -- authority. An `@` anywhere after the host (in the path or a query value) is
 -- refused the same way; write it as `%40`. The user name, password, and database
 -- are percent-decoded, so `user` and `database` return the decoded text. The
--- password is captured as a `Secret`.
+-- password is captured as a `Secret`. A sqlite DSN names its file by everything
+-- after `sqlite:`, `sqlite://`, or `file:`, percent-decoded; credentials, any
+-- query but `mode=rwc`, and a file name starting `file:` are rejected.
 parse : String -> Result Error Dsn
 parse =
     Kernel.kernel "Db.Dsn_parse"
@@ -86,6 +88,9 @@ parse =
 -- TLS and an out-of-range port are rejected. The `database`, `user`, and
 -- `password` are taken literally and percent-encoded into the connection URL, so a
 -- `?`, `&`, `#`, `@`, `/`, or `%` in them cannot add a parameter such as `sslmode`.
+-- A sqlite `database` is a literal file name, opened create-if-missing, and no
+-- character in it can change how the file is opened; `:memory:` is the
+-- in-memory database, and a name starting `file:` is rejected.
 -- The `host` must be a host name or IP literal (IPv6 in brackets); one holding a
 -- URL delimiter is rejected.
 build :
