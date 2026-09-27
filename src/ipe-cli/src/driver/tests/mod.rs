@@ -1263,6 +1263,7 @@ fn find_single_cache_entry(cache_root: &Path) -> Option<PathBuf> {
 /// the SAME cache dir; if the driver reads and trusts the cache, the
 /// second build's `Cargo.toml` carries the sentinel verbatim. If it
 /// silently recompiled instead, the sentinel is gone.
+#[cfg(unix)] // a cache hit needs a file identity check
 #[test]
 fn on_disk_cache_hit_serves_a_tampered_entry_verbatim() {
     const SENTINEL: &str = "# CACHE-HIT-SENTINEL\n";
@@ -1363,6 +1364,7 @@ fn on_disk_cache_hit_serves_a_tampered_entry_verbatim() {
 /// default `<out>/.ipe-cache/<salt>` layout — succeeds and leaves the dir
 /// ipe-owned: the cache is stored only after the emit has claimed the dir,
 /// never creating it unmarked first. A rebuild into the same dir then hits.
+#[cfg(unix)] // a cache hit needs a file identity check
 #[test]
 fn cold_build_with_the_cache_inside_a_fresh_output_dir_claims_it() {
     let Ok(runtime) = resolve_runtime() else {
@@ -1449,9 +1451,10 @@ enum PlantedCacheLink {
 /// link either way). The link target stays empty.
 #[cfg(unix)]
 fn build_through_planted_cache_link(tag: &str, planted: PlantedCacheLink) {
-    let Ok(runtime) = resolve_runtime() else {
-        return;
-    };
+    // A refusal test that skips proves nothing, so a missing runtime fails it.
+    let runtime = resolve_runtime();
+    assert!(runtime.is_ok(), "runtime must resolve: {runtime:?}");
+    let Ok(runtime) = runtime else { return };
 
     let tmp = std::env::temp_dir().join(format!("ipe-cache-link-{tag}-{}", std::process::id()));
     let _ = fs::remove_dir_all(&tmp);
@@ -1572,6 +1575,7 @@ fn find_single_ir_cache_entry(cache_root: &Path) -> Option<PathBuf> {
 /// at all, so the SAME lowered `Program` is still exactly reusable. This
 /// is the concrete case the IR tier exists to cover that the
 /// `EmittedProject` tier structurally cannot.
+#[cfg(unix)] // a cache hit needs a file identity check
 #[test]
 fn ir_cache_hit_reuses_lowered_program_across_a_db_driver_only_edit() {
     let Ok(runtime) = resolve_runtime() else {
@@ -1663,6 +1667,7 @@ fn ir_cache_hit_reuses_lowered_program_across_a_db_driver_only_edit() {
 /// the SENTINEL VALUE reaches the materialised `main.rs` — proof the
 /// driver actually reads, relocates, and RE-EMITS the on-disk IR entry
 /// rather than silently recompiling or ignoring the tamper.
+#[cfg(unix)] // a cache hit needs a file identity check
 #[test]
 fn on_disk_ir_cache_hit_serves_a_tampered_entry_verbatim() {
     let Ok(runtime) = resolve_runtime() else {

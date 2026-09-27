@@ -708,7 +708,7 @@ fn read_without_links(base: &Path, parts: &[&str]) -> Option<Vec<u8>> {
         seen = Some(meta);
     }
     let seen = seen.filter(fs::Metadata::is_file)?;
-    let mut file = fs::File::open(&path).ok()?;
+    let mut file = open_entry(&path)?;
     let opened = file.metadata().ok()?;
     if !same_file(&seen, &opened) {
         return None;
@@ -718,6 +718,22 @@ fn read_without_links(base: &Path, parts: &[&str]) -> Option<Vec<u8>> {
     Some(bytes)
 }
 
+/// Open `path` read-only, refusing a final symlink and never blocking on a FIFO.
+#[cfg(unix)]
+fn open_entry(path: &Path) -> Option<fs::File> {
+    use rustix::fs::{Mode, OFlags};
+    let flags = OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::CLOEXEC;
+    rustix::fs::open(path, flags, Mode::empty())
+        .ok()
+        .map(fs::File::from)
+}
+
+/// Open `path` read-only.
+#[cfg(not(unix))]
+fn open_entry(path: &Path) -> Option<fs::File> {
+    fs::File::open(path).ok()
+}
+
 /// Whether two metadata records name the same file.
 #[cfg(unix)]
 fn same_file(a: &fs::Metadata, b: &fs::Metadata) -> bool {
@@ -725,10 +741,10 @@ fn same_file(a: &fs::Metadata, b: &fs::Metadata) -> bool {
     a.dev() == b.dev() && a.ino() == b.ino()
 }
 
-/// Whether two metadata records name the same file.
+/// No portable file identity here, so never the same file: the cache runs cold.
 #[cfg(not(unix))]
-fn same_file(a: &fs::Metadata, b: &fs::Metadata) -> bool {
-    b.is_file() && a.len() == b.len()
+const fn same_file(_: &fs::Metadata, _: &fs::Metadata) -> bool {
+    false
 }
 
 /// The cache site for a build writing to `out_dir`.
@@ -1496,6 +1512,7 @@ mod tests {
         assert_ne!(a, b, "differently-segmented module paths must not collide");
     }
 
+    #[cfg(unix)] // a cache hit needs a file identity check
     #[test]
     fn store_and_load_round_trip() {
         let dir = std::env::temp_dir().join(format!("ipe-cache-test-{}", std::process::id()));
@@ -1720,6 +1737,7 @@ mod tests {
         let _ = fs::remove_dir_all(&base);
     }
 
+    #[cfg(unix)] // a cache hit needs a file identity check
     #[test]
     fn in_output_round_trip_stays_inside_the_claimed_dir() {
         let (base, owned, elsewhere) = claimed_out_and_elsewhere("round-trip");
@@ -1927,6 +1945,7 @@ mod tests {
         assert_ne!(base, edited, "a body edit must change the IR key");
     }
 
+    #[cfg(unix)] // a cache hit needs a file identity check
     #[test]
     fn ir_store_and_load_round_trip_within_one_interner() -> ipe_diagnostics::DResult<()> {
         let mut plain = Interner::new();
@@ -1969,6 +1988,7 @@ mod tests {
     /// resolved-name comparison — not raw `Symbol` equality, which is not
     /// expected to survive the boundary) matches a Program built fresh in
     /// the reader's own, unrelated interner.
+    #[cfg(unix)] // a cache hit needs a file identity check
     #[test]
     fn ir_cache_hit_survives_cross_process_symbol_id_drift() -> ipe_diagnostics::DResult<()> {
         let dir = std::env::temp_dir().join(format!("ipec-ir-cache-drift-{}", std::process::id()));
