@@ -586,9 +586,12 @@ pub fn emit_expr_at(
                 // value that itself implements `Fn`, so it fills the generic
                 // slot with no change and no risk.
                 //
-                // `Task.andThen cont effect` — the continuation lambda (Ipê arg
-                // index 0) must still be boxed because the preamble wrapper takes
-                // `Box<dyn FnOnce(A) -> IpeTask<B> + Send + 'static>`. Emitting
+                // An at-most-once callback slot (`KernelFn::once_callback_arg`,
+                // e.g. `Task.andThen cont effect`'s continuation at Ipê arg index
+                // 0) must still be boxed because the preamble wrapper takes
+                // `Box<dyn FnOnce(A) -> IpeTask<B> + Send + 'static>`; the
+                // unannotated `Box::new(move ..)` lets rustc infer `FnOnce`, so a
+                // capture the lowerer moved into the closure body compiles. Emitting
                 // `Box::new(move |x| -> R { body })` directly (without the
                 // `let __ipe_fn: Box<dyn Fn...> = Box::new(...)` type-annotation
                 // wrapper that `emit_lambda` produces) is sufficient: rustc infers
@@ -596,8 +599,7 @@ pub fn emit_expr_at(
                 // absence of the explicit annotation is what keeps rustc's
                 // type-checking linear in the number of chained `Task.andThen`
                 // calls (the annotation form causes super-linear work at depth).
-                let rendered = if matches!(callee, Callee::Kernel(KernelFn::TaskAndThen))
-                    && i == 0
+                let rendered = if matches!(callee, Callee::Kernel(k) if k.once_callback_arg() == Some(i))
                     && let Expr::Lambda { params, ret, body }
                     | Expr::SharedLambda { params, ret, body } = arg
                 {

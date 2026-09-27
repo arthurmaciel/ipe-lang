@@ -1112,7 +1112,7 @@ fn build_call_args_task_and_then(
     child: u16,
     generics: GenericScope,
 ) -> DResult<Vec<Doc>> {
-    if matches!(callee, Callee::Kernel(KernelFn::TaskAndThen))
+    if matches!(callee, Callee::Kernel(k) if k.once_callback_arg() == Some(0))
         && let [cont, effect] = args
         && let Expr::Lambda { params, ret, body } | Expr::SharedLambda { params, ret, body } = cont
     {

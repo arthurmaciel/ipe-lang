@@ -13277,6 +13277,21 @@ impl StdlibKernel {
         )
     }
 
+    /// The argument slot whose closure the runtime invokes at most once.
+    ///
+    /// The runtime takes that slot as an owned `Box<dyn FnOnce(..)>` and runs it
+    /// once, after every other argument has been evaluated, so an inline lambda
+    /// there may MOVE its non-`Clone` captures instead of cloning them. The
+    /// backend asserts the runtime signature and the evaluation order against
+    /// this predicate.
+    #[must_use]
+    pub const fn once_callback_arg(self) -> Option<usize> {
+        match self {
+            Self::TaskAndThen => Some(0),
+            _ => None,
+        }
+    }
+
     /// `true` when this variant belongs to the `Ipe.Web` subsystem — the
     /// `Ipe.Web` app-entry kernels plus the Task-shaped `PubSub.publish` /
     /// `publishNoEcho`, all of which are `class = Web` and whose symbols live in
