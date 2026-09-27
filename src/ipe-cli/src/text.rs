@@ -1478,7 +1478,7 @@ mod tests {
             message,
             "ipe package publish: `abcde` declares no `version = \"…\"` — publish records the version being published, so the manifest must name one."
         );
-        let joined = Message::lines([message.clone(), msg::publish_no_version(&"x\ny")]);
+        let joined = Message::lines([message, msg::publish_no_version(&"x\ny")]);
         assert!(
             !joined
                 .chars()
