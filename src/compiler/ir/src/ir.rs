@@ -2456,7 +2456,11 @@ pub const fn ir_type_feature_requirement(ty: &IrType) -> Option<RuntimeFeatureId
     }
 }
 
-/// Does this type's DEFAULT emitted Rust carrier implement `Clone`?
+/// Classify a type's DEFAULT emitted Rust carrier as `Clone`, non-`Clone`, or transparent.
+///
+/// A flat, non-recursive step: it never looks inside a carried element, so a
+/// held-walk leaf built on it cannot start another walk. [`carrier_is_clone`]
+/// recurses over the carried elements.
 ///
 /// The SINGLE authority both the lowerer's capture classifier and the backend's
 /// carrier choice consult, so a shape that renders a `Clone` carrier can never be
@@ -2488,15 +2492,15 @@ pub const fn ir_type_feature_requirement(ty: &IrType) -> Option<RuntimeFeatureId
 ///   sound multi-use clone under that bound).
 ///
 /// A transparent carrier (list / set / tuple / dict / result / maybe / record /
-/// enum) is `Clone` iff every element it carries is — one non-`Clone` member
-/// poisons the whole composite, matching the emitted Rust (`IpeMaybe<T>: Clone`
-/// requires `T: Clone`, etc.).
+/// enum) is [`CarrierLeaf::Carrier`]: `Clone` iff every element it carries is —
+/// one non-`Clone` member poisons the whole composite, matching the emitted Rust
+/// (`IpeMaybe<T>: Clone` requires `T: Clone`, etc.).
 ///
 /// The match is exhaustive with no wildcard: a new [`IrType`] variant must make
 /// an explicit carrier-`Clone` decision here (walker-arm rule / SEAL
 /// make-invalid-states-unrepresentable).
 #[must_use]
-pub fn carrier_is_clone(ty: &IrType) -> bool {
+pub fn carrier_leaf(ty: &IrType) -> CarrierLeaf<'_> {
     match ty {
         // Copy / Clone scalar and opaque leaves — every one implements `Clone`.
         IrType::Int
@@ -2584,7 +2588,7 @@ pub fn carrier_is_clone(ty: &IrType) -> bool {
         // and a hand-written `Clone` that bounds neither `E` nor `T`, so a
         // `Decoder` slot clones by refcount bump and never poisons its enclosing
         // composite.
-        | IrType::Decoder(_) => true,
+        | IrType::Decoder(_) => CarrierLeaf::Clone,
         // Non-`Clone` default carriers. `Fun`'s default carrier is `Box<dyn Fn>`
         // (position-typed model — the `Clone` `Arc` carrier exists only at
         // promoted binding sites, see [`fun_value_arc_promotable`]).
@@ -2603,17 +2607,88 @@ pub fn carrier_is_clone(ty: &IrType) -> bool {
         | IrType::WebApp
         | IrType::TuiApp
         | IrType::CliApp
-        | IrType::WorkerApp => false,
+        | IrType::WorkerApp => CarrierLeaf::NonClone,
         // Transparent carriers: `Clone` iff every carried element is.
-        IrType::Maybe(e) | IrType::List(e) | IrType::Set(e) => carrier_is_clone(e),
-        IrType::Result(a, b) | IrType::Dict(a, b) => carrier_is_clone(a) && carrier_is_clone(b),
-        IrType::Tuple(es) => es.iter().all(carrier_is_clone),
-        IrType::Record(fields) => fields.values().all(carrier_is_clone),
-        IrType::Enum { args, .. } => args.iter().all(carrier_is_clone),
-        // `Element<M>` / `Html<M>` and `Route<Page>` recurse on their type
+        // `Element<M>` / `Html<M>` and `Route<Page>` carry their type
         // parameter — the runtime carriers derive `Clone` over a `Clone` param.
-        IrType::Ui { msg, .. } => carrier_is_clone(msg),
-        IrType::WebRoute(page) => carrier_is_clone(page),
+        IrType::Maybe(e)
+        | IrType::List(e)
+        | IrType::Set(e)
+        | IrType::Ui { msg: e, .. }
+        | IrType::WebRoute(e) => CarrierLeaf::Carrier(Carried::One(e)),
+        IrType::Result(a, b) | IrType::Dict(a, b) => CarrierLeaf::Carrier(Carried::Pair(a, b)),
+        IrType::Tuple(es) => CarrierLeaf::Carrier(Carried::Tuple(es)),
+        IrType::Record(fields) => CarrierLeaf::Carrier(Carried::Record(fields)),
+        IrType::Enum { home, name, args } => CarrierLeaf::Carrier(Carried::Enum {
+            home,
+            name: *name,
+            args,
+        }),
+    }
+}
+
+/// A type's own `Clone` verdict under [`carrier_leaf`], before any carried element is consulted.
+#[derive(Clone, Copy, Debug)]
+pub enum CarrierLeaf<'a> {
+    /// The default carrier implements `Clone` whatever it holds.
+    Clone,
+    /// The default carrier never implements `Clone`.
+    NonClone,
+    /// A transparent carrier: `Clone` iff every carried element is.
+    Carrier(Carried<'a>),
+}
+
+/// The elements a transparent carrier holds.
+#[derive(Clone, Copy, Debug)]
+pub enum Carried<'a> {
+    /// One element (`Maybe`, `List`, `Set`, `Ui` message, `WebRoute` page).
+    One(&'a IrType),
+    /// Two elements (`Result`, `Dict`).
+    Pair(&'a IrType, &'a IrType),
+    /// The elements of a tuple.
+    Tuple(&'a [IrType]),
+    /// The fields of a record.
+    Record(&'a BTreeMap<Symbol, IrType>),
+    /// A named enum: its type arguments and, through the payload table, its variant payloads.
+    Enum {
+        /// The enum's defining module.
+        home: &'a ModPath,
+        /// The enum's name.
+        name: Symbol,
+        /// The enum's type arguments.
+        args: &'a [IrType],
+    },
+}
+
+/// Does this type's DEFAULT emitted Rust carrier implement `Clone`?
+///
+/// [`carrier_leaf`] decides every non-carrier; a transparent carrier is `Clone`
+/// iff every carried element is. A named enum is `Clone` iff its type arguments
+/// are and none of its variant payloads (looked up in `payloads`, through the
+/// shared held walk) holds a leaf [`crate::payload_leaf_is_clone`] rejects — the
+/// backend's enum-`Clone` fixpoint derives no `Clone` impl for such an enum. An
+/// enum absent from `payloads` is judged by its type arguments alone.
+#[must_use]
+pub fn carrier_is_clone(ty: &IrType, payloads: &crate::EnumPayloadTable) -> bool {
+    match carrier_leaf(ty) {
+        CarrierLeaf::Clone => true,
+        CarrierLeaf::NonClone => false,
+        CarrierLeaf::Carrier(Carried::One(e)) => carrier_is_clone(e, payloads),
+        CarrierLeaf::Carrier(Carried::Pair(a, b)) => {
+            carrier_is_clone(a, payloads) && carrier_is_clone(b, payloads)
+        }
+        CarrierLeaf::Carrier(Carried::Tuple(es)) => {
+            es.iter().all(|e| carrier_is_clone(e, payloads))
+        }
+        CarrierLeaf::Carrier(Carried::Record(fields)) => {
+            fields.values().all(|f| carrier_is_clone(f, payloads))
+        }
+        CarrierLeaf::Carrier(Carried::Enum { home, name, args }) => {
+            args.iter().all(|a| carrier_is_clone(a, payloads))
+                && !crate::enum_payload_holds(home, name, payloads, &|p| {
+                    !crate::payload_leaf_is_clone(p)
+                })
+        }
     }
 }
 

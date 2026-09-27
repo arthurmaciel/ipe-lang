@@ -30725,7 +30725,8 @@ mod tests {
     /// ipe exit 0).
     #[test]
     fn carrier_clone_authority_agrees_with_clone_class() {
-        use ipe_ir::{IrType, carrier_is_clone};
+        use ipe_intern::Symbol;
+        use ipe_ir::{EnumPayloadTable, IrType, ModPath, carrier_is_clone};
 
         use super::{CloneClass, CloneEnv, clone_class};
 
@@ -30736,13 +30737,47 @@ mod tests {
         // interner suffices: no sample carries a `Rust.*` home.
         let interner = Interner::new();
         let transparent = BTreeSet::new();
+        let fun = IrType::Fun(vec![IrType::Int], Box::new(IrType::Int));
+        let home = ModPath(vec![Symbol::from_raw(1)]);
+        let (plain, boxed_fn, shared_fn, wrap) = (
+            Symbol::from_raw(2),
+            Symbol::from_raw(3),
+            Symbol::from_raw(4),
+            Symbol::from_raw(5),
+        );
+        let ctor = Symbol::from_raw(6);
+        let param = IrType::Generic(Symbol::from_raw(7));
+        let payloads: EnumPayloadTable = [
+            (plain, vec![IrType::Int, IrType::Str]),
+            (boxed_fn, vec![IrType::Maybe(Box::new(fun.clone()))]),
+            (
+                shared_fn,
+                vec![IrType::SharedFun(vec![IrType::Int], Box::new(IrType::Int))],
+            ),
+            (wrap, vec![param]),
+        ]
+        .into_iter()
+        .map(|(name, fields)| ((home.clone(), name), vec![(ctor, fields)]))
+        .collect();
+        let named = |name: Symbol, args: Vec<IrType>| IrType::Enum {
+            home: home.clone(),
+            name,
+            args,
+        };
         let env = CloneEnv {
             interner: &interner,
             transparent_ffi: &transparent,
-            payloads: &ipe_ir::EnumPayloadTable::new(),
+            payloads: &payloads,
         };
-        let fun = IrType::Fun(vec![IrType::Int], Box::new(IrType::Int));
         let samples: Vec<IrType> = vec![
+            named(plain, Vec::new()),
+            named(boxed_fn, Vec::new()),
+            named(shared_fn, Vec::new()),
+            named(wrap, vec![IrType::Int]),
+            named(wrap, vec![fun.clone()]),
+            named(wrap, vec![named(boxed_fn, Vec::new())]),
+            IrType::Maybe(Box::new(named(boxed_fn, Vec::new()))),
+            IrType::List(Box::new(named(plain, Vec::new()))),
             IrType::Int,
             IrType::Str,
             IrType::Bytes,
@@ -30753,18 +30788,24 @@ mod tests {
             IrType::Decoder(Box::new(IrType::Int)),
             IrType::Maybe(Box::new(fun.clone())),
             IrType::Maybe(Box::new(IrType::Int)),
-            IrType::Tuple(vec![IrType::Str, fun]),
+            IrType::Tuple(vec![IrType::Str, fun.clone()]),
             IrType::Tuple(vec![IrType::Str, IrType::Int]),
             IrType::List(Box::new(IrType::Str)),
             IrType::Result(Box::new(IrType::Error), Box::new(IrType::Int)),
         ];
         for ty in &samples {
             assert_eq!(
-                carrier_is_clone(ty),
+                carrier_is_clone(ty, &payloads),
                 clone_class(env, ty) != CloneClass::NonClone,
                 "carrier_is_clone / clone_class drift on {ty:?}"
             );
         }
+        // Both sides agreeing is vacuous if both are wrong: pin the enum verdicts.
+        assert!(carrier_is_clone(&named(plain, Vec::new()), &payloads));
+        assert!(carrier_is_clone(&named(shared_fn, Vec::new()), &payloads));
+        assert!(carrier_is_clone(&named(wrap, vec![IrType::Int]), &payloads));
+        assert!(!carrier_is_clone(&named(boxed_fn, Vec::new()), &payloads));
+        assert!(!carrier_is_clone(&named(wrap, vec![fun]), &payloads));
     }
 
     /// SEAL: an FFI foreign opaque handle (`Rust.*`-homed `Enum`) is a real

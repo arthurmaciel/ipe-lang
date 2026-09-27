@@ -10,7 +10,7 @@
 //! unions lowered without an `EnumDef` and the set the backend knows the facts
 //! of cannot drift.
 
-use crate::ir::{IrType, carrier_is_clone};
+use crate::ir::{CarrierLeaf, IrType, carrier_leaf};
 
 /// Which trait families a named enum's rendered Rust type implements.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -144,12 +144,15 @@ impl RuntimeBridgedEnum {
 /// The one leaf rule the frontend's clone classifier and the backend's
 /// enum/record `Clone` fixpoint share. A bare type variable is `Clone`: every
 /// emitted enum and record bounds its type parameters `T: Clone`. Every other
-/// leaf, a row variable included, defers to [`carrier_is_clone`].
+/// leaf, a row variable included, takes its [`carrier_leaf`] verdict. A
+/// transparent carrier or named enum answers `true`: the caller walks its
+/// members itself. The rule is flat — it never inspects a carried element — so
+/// it is a sound held-walk leaf.
 #[must_use]
 pub fn payload_leaf_is_clone(ty: &IrType) -> bool {
-    match ty {
-        IrType::Generic(_) => true,
-        other => carrier_is_clone(other),
+    match carrier_leaf(ty) {
+        CarrierLeaf::Clone | CarrierLeaf::Carrier(_) => true,
+        CarrierLeaf::NonClone => matches!(ty, IrType::Generic(_)),
     }
 }
 
@@ -206,5 +209,12 @@ mod tests {
         assert!(!payload_leaf_is_clone(&IrType::Task(Box::new(
             IrType::Unit
         ))));
+    }
+
+    #[test]
+    fn payload_leaf_clone_is_flat_over_carriers() {
+        let fun = IrType::Fun(vec![IrType::Int], Box::new(IrType::Int));
+        assert!(!payload_leaf_is_clone(&fun));
+        assert!(payload_leaf_is_clone(&IrType::Maybe(Box::new(fun))));
     }
 }
