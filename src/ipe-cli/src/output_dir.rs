@@ -19,8 +19,9 @@
 //!   creates it; the final file is always replaced by a rename, never written
 //!   through.
 //! - [`OutputRoot`] — the CLI's output root (`<project>/out`, or `--out <dir>`),
-//!   additionally proven disjoint from the project's sources and version-control
-//!   metadata. Products go in fixed subdirectories ([`OutputArea`]) of it, so no
+//!   additionally proven disjoint from the project's sources and from every
+//!   [`ReservedName`] directory (version-control metadata, any ipe cache
+//!   namespace). Products go in fixed subdirectories ([`OutputArea`]) of it, so no
 //!   product name can clash with a user file.
 //!
 //! A tree ipe hands over to the user (`ipe eject`) goes through [`HandoverRoot`]
@@ -38,6 +39,44 @@ pub const OWNERSHIP_MARKER: &str = ".ipe-output";
 
 /// The per-project namespace directory ipe keeps its caches in.
 pub const CACHE_NAMESPACE_DIR: &str = ".ipe";
+
+/// A directory name no output may sit under, whichever project it belongs to.
+///
+/// Matched per path component, ASCII case-insensitively (fail closed on a
+/// case-insensitive filesystem).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReservedName {
+    /// Version-control metadata (`.git`).
+    Vcs,
+    /// An ipe cache namespace ([`CACHE_NAMESPACE_DIR`]).
+    ///
+    /// `ipe clean` and the FFI binding regeneration delete its contents by name
+    /// alone, in whichever project holds it, so nothing ipe writes elsewhere may
+    /// live there.
+    CacheNamespace,
+}
+
+impl ReservedName {
+    /// Every reserved name.
+    const ALL: [Self; 2] = [Self::Vcs, Self::CacheNamespace];
+
+    /// The reserved directory name.
+    #[must_use]
+    pub const fn dir_name(self) -> &'static str {
+        match self {
+            Self::Vcs => ".git",
+            Self::CacheNamespace => CACHE_NAMESPACE_DIR,
+        }
+    }
+
+    /// The reserved name `component` spells, in any ASCII case.
+    fn of(component: &std::ffi::OsStr) -> Option<Self> {
+        let name = component.to_string_lossy();
+        Self::ALL
+            .into_iter()
+            .find(|reserved| name.eq_ignore_ascii_case(reserved.dir_name()))
+    }
+}
 
 /// The first line of every [`OWNERSHIP_MARKER`].
 ///
@@ -83,8 +122,13 @@ pub enum OutputRefusal {
     ///
     /// Without it, the output cannot be proven to stay out of the sources.
     UnresolvedSources(PathBuf),
-    /// The output lies inside a `.git` directory.
-    VcsDir(PathBuf),
+    /// The output lies inside a directory with a [`ReservedName`].
+    InsideReservedDir {
+        /// The refused output path.
+        out: PathBuf,
+        /// The reserved name on its resolved path.
+        reserved: ReservedName,
+    },
     /// A directory handed over to the user would sit inside a tree ipe owns.
     ///
     /// ipe may delete that tree (`ipe clean`), taking the user's files with it.
@@ -160,11 +204,24 @@ impl std::fmt::Display for OutputRefusal {
                 out.display(),
                 owner.display()
             ),
-            Self::VcsDir(p) => write!(
+            Self::InsideReservedDir {
+                out,
+                reserved: ReservedName::Vcs,
+            } => write!(
                 f,
                 "{} is inside a `.git` directory — build output must stay out of version-control \
-                 metadata",
-                p.display()
+                 metadata; choose another --out",
+                out.display()
+            ),
+            Self::InsideReservedDir {
+                out,
+                reserved: ReservedName::CacheNamespace,
+            } => write!(
+                f,
+                "{} is inside a `{CACHE_NAMESPACE_DIR}` directory, whose contents ipe deletes \
+                 by name (`ipe clean`) in whichever project holds it — output must stay out \
+                 of every ipe cache namespace; choose another --out",
+                out.display()
             ),
             Self::ParentTraversal(p) => write!(
                 f,
@@ -743,8 +800,9 @@ impl OutputRoot {
     ///
     /// # Errors
     /// [`CliError::OutputRefused`] when the path is a symlink, overlaps the
-    /// project (its root, an ancestor of it, or inside its source root), lies in
-    /// `.git`, or is a non-empty directory ipe does not own; [`CliError::Io`] on a
+    /// project (its root, an ancestor of it, or inside its source root), lies
+    /// under a [`ReservedName`] (`.git`, any project's [`CACHE_NAMESPACE_DIR`]),
+    /// or is a non-empty directory ipe does not own; [`CliError::Io`] on a
     /// filesystem failure.
     pub fn resolve(requested: Option<&str>, project: &ProjectPaths) -> Result<Self, CliError> {
         let raw = requested.map_or_else(
@@ -760,10 +818,11 @@ impl OutputRoot {
 
     /// Resolve a fresh directory for a project handed to the user (`ipe eject`).
     ///
-    /// The overlap checks are those of [`OutputRoot::resolve`]. The directory
-    /// must be absent or empty — even an ipe-owned populated one is not reused —
-    /// and must lie outside every tree ipe owns or may delete: the project's
-    /// default output root, its [`CACHE_NAMESPACE_DIR`], and any directory
+    /// The overlap checks are those of [`OutputRoot::resolve`], which already
+    /// refuse every [`ReservedName`] — any project's [`CACHE_NAMESPACE_DIR`]
+    /// included. The directory must be absent or empty — even an ipe-owned
+    /// populated one is not reused — and must lie outside every other tree ipe
+    /// owns or may delete: the project's default output root and any directory
     /// carrying the ownership marker.
     ///
     /// # Errors
@@ -772,7 +831,7 @@ impl OutputRoot {
     pub fn fresh(requested: &str, project: &ProjectPaths) -> Result<HandoverRoot, CliError> {
         let raw = PathBuf::from(requested);
         let checked = check_disjoint(&raw, project)?;
-        check_outside_reserved(&raw, &checked, project)?;
+        check_outside_default_output(&raw, &checked, project)?;
         check_no_marked_ancestor(&raw, &checked.resolved)?;
         check_fresh(&raw, &checked.absolute)?;
         Ok(HandoverRoot {
@@ -843,8 +902,9 @@ impl HandoverRoot {
     ///
     /// Missing ancestors are created as plain user directories, so releasing the
     /// destination later leaves no ipe marker above it. The on-disk conditions
-    /// [`OutputRoot::fresh`] proved — no marked ancestor, an absent or empty
-    /// destination — are proven again here, at the moment of creation.
+    /// [`OutputRoot::fresh`] proved — no reserved name on the resolved path, no
+    /// marked ancestor, an absent or empty destination — are proven again here,
+    /// at the moment of creation.
     ///
     /// # Errors
     /// [`CliError::OutputRefused`] on a refusal; [`CliError::Io`] on a
@@ -852,6 +912,7 @@ impl HandoverRoot {
     pub fn claim(&self) -> Result<HandoverDir, CliError> {
         let resolved = resolve_through_existing(&self.path)
             .ok_or_else(|| OutputRefusal::ParentTraversal(self.raw.clone()))?;
+        check_no_reserved_component(&self.raw, &resolved)?;
         check_no_marked_ancestor(&self.raw, &resolved)?;
         check_fresh(&self.raw, &self.path)?;
         if let Some(parent) = self.path.parent() {
@@ -901,28 +962,46 @@ fn check_fresh(raw: &Path, path: &Path) -> Result<(), CliError> {
     Ok(())
 }
 
-/// Refuse a handover destination inside a tree ipe reserves for itself.
+/// Refuse a handover destination inside the project's default output root.
 ///
-/// The project's default output root and cache namespace are ipe's whether or
-/// not they exist yet: `ipe clean` removes them, and a later build claims the
-/// output root.
-fn check_outside_reserved(
+/// The root is ipe's whether or not it exists yet: `ipe clean` removes it, and a
+/// later build claims it. Every cache namespace is already refused by name
+/// ([`check_no_reserved_component`]).
+fn check_outside_default_output(
     raw: &Path,
     checked: &Disjoint,
     project: &ProjectPaths,
 ) -> Result<(), CliError> {
     let default_out = absolutize(&project.default_base.join(DEFAULT_OUTPUT_DIR))?;
-    let default_out = resolve_through_existing(&default_out)
+    let owner = resolve_through_existing(&default_out)
         .ok_or_else(|| OutputRefusal::ParentTraversal(default_out.clone()))?;
-    let cache = checked.project_root.join(CACHE_NAMESPACE_DIR);
-    for owner in [cache, default_out] {
-        if starts_with(&checked.resolved, &owner) {
-            return Err(OutputRefusal::InsideIpeOwned {
-                out: raw.to_path_buf(),
-                owner,
-            }
-            .into());
+    if starts_with(&checked.resolved, &owner) {
+        return Err(OutputRefusal::InsideIpeOwned {
+            out: raw.to_path_buf(),
+            owner,
         }
+        .into());
+    }
+    Ok(())
+}
+
+/// Refuse an output whose resolved path passes through a [`ReservedName`].
+///
+/// `resolved` is the path with its existing part canonicalised, so a symlink
+/// into a reserved directory is caught too.
+fn check_no_reserved_component(raw: &Path, resolved: &Path) -> Result<(), CliError> {
+    let reserved = resolved.components().find_map(|c| match c {
+        Component::Normal(name) => ReservedName::of(name),
+        Component::Prefix(_) | Component::RootDir | Component::CurDir | Component::ParentDir => {
+            None
+        }
+    });
+    if let Some(reserved) = reserved {
+        return Err(OutputRefusal::InsideReservedDir {
+            out: raw.to_path_buf(),
+            reserved,
+        }
+        .into());
     }
     Ok(())
 }
@@ -982,13 +1061,12 @@ struct Disjoint {
     absolute: PathBuf,
     /// The path with its existing part canonicalised.
     resolved: PathBuf,
-    /// The canonical project root.
-    project_root: PathBuf,
 }
 
 /// Prove `raw` does not overlap `project`, returning the absolute path to claim.
 ///
-/// The final component must not be a symlink. Overlap is decided on resolved
+/// The final component must not be a symlink, and no component of the resolved
+/// path may be a [`ReservedName`]. Overlap is decided on resolved
 /// paths: the deepest existing ancestor is canonicalised and the not-yet-
 /// existing tail appended, which must hold no `..`. Comparisons are made both
 /// exactly and case-folded, so a case-insensitive filesystem cannot slip a
@@ -1000,12 +1078,7 @@ fn check_disjoint(raw: &Path, project: &ProjectPaths) -> Result<Disjoint, CliErr
     }
     let resolved = resolve_through_existing(&absolute)
         .ok_or_else(|| OutputRefusal::ParentTraversal(raw.to_path_buf()))?;
-    if resolved
-        .components()
-        .any(|c| matches!(c, Component::Normal(name) if name.to_string_lossy().eq_ignore_ascii_case(".git")))
-    {
-        return Err(OutputRefusal::VcsDir(raw.to_path_buf()).into());
-    }
+    check_no_reserved_component(raw, &resolved)?;
     let project_root =
         std::fs::canonicalize(&project.root).map_err(|e| io_err(&project.root, e))?;
     if same_path(&resolved, &project_root) {
@@ -1029,11 +1102,7 @@ fn check_disjoint(raw: &Path, project: &ProjectPaths) -> Result<Disjoint, CliErr
             .into());
         }
     }
-    Ok(Disjoint {
-        absolute,
-        resolved,
-        project_root,
-    })
+    Ok(Disjoint { absolute, resolved })
 }
 
 /// Case-fold a path for the case-insensitive half of an overlap comparison.
@@ -1520,7 +1589,13 @@ mod tests {
         let raw = proj.root.join(".git").join("out");
         let result = OutputRoot::resolve(Some(&raw.to_string_lossy()), &proj);
         assert!(
-            matches!(refused(&result), Some(OutputRefusal::VcsDir(_))),
+            matches!(
+                refused(&result),
+                Some(OutputRefusal::InsideReservedDir {
+                    reserved: ReservedName::Vcs,
+                    ..
+                })
+            ),
             "--out under .git must be refused, got {result:?}"
         );
         assert!(!raw.exists());
@@ -1612,7 +1687,7 @@ mod tests {
     fn eject_into_reserved_trees_is_refused() {
         let base = scratch("eject_reserved");
         let proj = project(&base);
-        for rel in ["out", "out/standalone", ".ipe", ".ipe/x", ".IPE/x"] {
+        for rel in ["out", "out/standalone"] {
             let target = proj.root.join(rel);
             let result = OutputRoot::fresh(&target.to_string_lossy(), &proj);
             assert!(
@@ -1621,6 +1696,103 @@ mod tests {
             );
             assert!(!target.exists(), "a refused eject writes nothing");
         }
+        for rel in [".ipe", ".ipe/x", ".IPE/x"] {
+            let target = proj.root.join(rel);
+            let result = OutputRoot::fresh(&target.to_string_lossy(), &proj);
+            assert!(
+                matches!(
+                    refused(&result),
+                    Some(OutputRefusal::InsideReservedDir {
+                        reserved: ReservedName::CacheNamespace,
+                        ..
+                    })
+                ),
+                "an eject into {rel} must be refused, got {result:?}"
+            );
+            assert!(!target.exists(), "a refused eject writes nothing");
+        }
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// Any project's cache namespace is refused by name, not only this project's.
+    ///
+    /// `ipe clean` in the project holding it deletes its contents by name, so an
+    /// eject or build output there would be lost.
+    #[test]
+    fn output_in_any_cache_namespace_is_refused() {
+        let base = scratch("foreign_cache");
+        let proj = project(&base);
+        let sibling_cache = base.join("sibling").join(".ipe").join("cache");
+        std::fs::create_dir_all(&sibling_cache).expect("make sibling cache");
+        let targets = [
+            sibling_cache.join("app"),
+            base.join("sibling").join(".IPE").join("cache").join("app"),
+            proj.root
+                .join("sub")
+                .join(".ipe")
+                .join("packages")
+                .join("x"),
+            base.join("other").join(".Ipe").join("packages").join("x"),
+        ];
+        for target in targets {
+            let raw = target.to_string_lossy();
+            for result in [
+                OutputRoot::fresh(&raw, &proj).map(|_| ()),
+                OutputRoot::resolve(Some(&raw), &proj).map(|_| ()),
+            ] {
+                assert!(
+                    matches!(
+                        refused(&result),
+                        Some(OutputRefusal::InsideReservedDir {
+                            reserved: ReservedName::CacheNamespace,
+                            ..
+                        })
+                    ),
+                    "output into {raw} must be refused, got {result:?}"
+                );
+            }
+            assert!(!target.exists(), "a refused output writes nothing");
+        }
+        assert!(
+            is_empty_dir(&sibling_cache).expect("read sibling cache"),
+            "the sibling's cache is untouched"
+        );
+        assert!(
+            !proj.root.join("sub").exists(),
+            "no nested directory is created"
+        );
+        assert!(!base.join("other").exists(), "no ancestor is created");
+        assert!(user_files_survive(&proj.root), "the sources are untouched");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// A handover claim re-checks reserved names through a symlink planted after `fresh`.
+    #[cfg(unix)]
+    #[test]
+    fn handover_claim_rechecks_a_reserved_name_planted_after_fresh() {
+        let base = scratch("handover_reserved_race");
+        let proj = project(&base);
+        let sibling_cache = base.join("sibling").join(".ipe").join("cache");
+        std::fs::create_dir_all(&sibling_cache).expect("make sibling cache");
+        let link = base.join("later");
+        let fresh =
+            OutputRoot::fresh(&link.join("app").to_string_lossy(), &proj).expect("fresh target");
+        std::os::unix::fs::symlink(&sibling_cache, &link).expect("plant symlink");
+        let result = fresh.claim();
+        assert!(
+            matches!(
+                refused(&result),
+                Some(OutputRefusal::InsideReservedDir {
+                    reserved: ReservedName::CacheNamespace,
+                    ..
+                })
+            ),
+            "a reserved name reached through a later symlink must refuse, got {result:?}"
+        );
+        assert!(
+            is_empty_dir(&sibling_cache).expect("read sibling cache"),
+            "a refused claim writes nothing"
+        );
         let _ = std::fs::remove_dir_all(&base);
     }
 
