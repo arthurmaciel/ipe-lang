@@ -3221,6 +3221,7 @@ dependencies = [
  "ipe_diagnostics",
  "ipe_intern",
  "ipe_kernels",
+ "ipe_parse",
  "ipe_syntax",
  "proc-macro2",
  "serde",
@@ -4576,6 +4577,7 @@ name = "panic-scan"
 version = "0.0.0"
 dependencies = [
  "proc-macro2",
+ "syn 2.0.118",
 ]
 
 [[package]]

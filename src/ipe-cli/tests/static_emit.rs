@@ -400,7 +400,7 @@ fn package_ipe_rust_stages_parse_and_reject_typos() {
     .expect("write package.ipe");
     let err = ipe::project::parse_manifest(&manifest_path).expect_err("typo must refuse");
     assert!(
-        matches!(err, CliError::UsageOwned(_)),
+        matches!(err, CliError::Usage(_)),
         "an unknown allocator constructor is a manifest-parse refusal: {err:?}"
     );
     assert!(

@@ -179,6 +179,62 @@ impl InitShape {
             Self::Script => PACKAGE_SCRIPT_IPE,
         }
     }
+
+    /// The post-init "how to try it" hint for this shape.
+    ///
+    /// The single source of truth for the text, so a new shape cannot silently
+    /// inherit another shape's instructions. `web` is the one shape with a
+    /// runtime choice (spec § 0.1): `runtime` picks between its served and solo
+    /// wording; every other arm ignores it.
+    const fn open_hint(self, runtime: InitRuntime) -> &'static str {
+        match self {
+            Self::Web => match runtime {
+                InitRuntime::Served => {
+                    "Then open http://localhost:8000 and click the counter buttons."
+                }
+                InitRuntime::Solo => {
+                    "This is a `solo` app: `ipe run` serves the wasm bundle at \
+                     http://localhost:8000; open it and click the counter buttons."
+                }
+            },
+            Self::Tui => "Then press the Up/Down arrow keys to change the count; press q to quit.",
+            Self::Cli => {
+                "Then type a line to echo it back (each line bumps the count); type q to quit."
+            }
+            Self::Worker => "It logs three ticks and exits on its own — no interaction needed.",
+            Self::Server => "Then open http://localhost:8000 (or curl it) to see the response.",
+            Self::Script => "It prints its greeting and exits — no interaction needed.",
+        }
+    }
+
+    /// The `README.md`'s one-sentence description of what `src/Main.ipe` is.
+    ///
+    /// The single source of truth for that sentence, exhaustively matched like
+    /// [`InitShape::open_hint`], so a new shape can't ship a README describing
+    /// another shape's app.
+    const fn readme_description(self) -> &'static str {
+        match self {
+            Self::Web => {
+                "a small `Ipe.Web` counter — a Model holding a count, `Increment` and \
+                 `Decrement` messages, and a two-button view — that serves its UI over HTTP."
+            }
+            Self::Tui => {
+                "a small `Ipe.Tea.Tui` counter — a Model holding a count, updated by the \
+                 Up/Down arrow keys and rendered to the terminal screen."
+            }
+            Self::Cli => {
+                "a small `Ipe.Tea.Cli` line-echo app — each line you type bumps a counter \
+                 and is echoed back; `q` quits."
+            }
+            Self::Worker => {
+                "a small `Ipe.Tea.Worker` — it logs three ticks on a timer, then exits."
+            }
+            Self::Server => {
+                "a small `Ipe.Server.Http` server — it replies `Hello, world!` on `GET /`."
+            }
+            Self::Script => "a one-shot `Ipe.Task` script — it prints a greeting and exits.",
+        }
+    }
 }
 
 // ── runtime model ──────────────────────────────────────────────────────────────
@@ -355,7 +411,7 @@ fn fill_package(template: &str, project_name: &str, runtime: InitRuntime) -> Str
 /// supplied shape (or the default, `web`) is used directly.
 ///
 /// # Errors
-/// [`CliError::UsageOwned`] on an unrecognised flag or an unexpected argument;
+/// [`CliError::Usage`] on an unrecognised flag or an unexpected argument;
 /// [`CliError::Io`] on any filesystem failure.
 pub fn run_init(rest: &[String]) -> Result<(), CliError> {
     let args = parse_init_args(rest)?;
@@ -377,8 +433,7 @@ pub fn run_init(rest: &[String]) -> Result<(), CliError> {
             &project_name,
             &files,
             args.force,
-            true,
-            InitRuntime::default(),
+            ScaffoldKind::Library,
         );
     }
 
@@ -417,8 +472,7 @@ pub fn run_init(rest: &[String]) -> Result<(), CliError> {
         &project_name,
         &files,
         args.force,
-        false,
-        runtime,
+        ScaffoldKind::App { shape, runtime },
     )
 }
 
@@ -444,7 +498,7 @@ fn guard_rerun_conflict(
         return Ok(());
     };
     if stated != existing {
-        return Err(CliError::UsageOwned(text::init_shape_fixed(
+        return Err(CliError::Usage(text::msg::init_shape_fixed(
             &existing.label(),
             &stated.label(),
         )));
@@ -538,7 +592,7 @@ fn parse_init_args(rest: &[String]) -> Result<InitArgs, CliError> {
             "--shape" => {
                 let val = iter
                     .next()
-                    .ok_or(CliError::Usage(text::init_shape_needs_value()))?;
+                    .ok_or(CliError::Usage(text::msg::init_shape_needs_value()))?;
                 shape_flag = Some(parse_shape_word(val)?);
             }
             flag if flag.starts_with('-') => {
@@ -561,7 +615,7 @@ fn parse_init_args(rest: &[String]) -> Result<InitArgs, CliError> {
     // if both are present they must name the same shape.
     let shape = match (shape_positional, shape_flag) {
         (Some(p), Some(f)) if p != f => {
-            return Err(CliError::UsageOwned(text::init_shape_disagrees(
+            return Err(CliError::Usage(text::msg::init_shape_disagrees(
                 &p.label(),
                 &f.label(),
             )));
@@ -575,7 +629,7 @@ fn parse_init_args(rest: &[String]) -> Result<InitArgs, CliError> {
     if let (Some(rt), Some(sh)) = (runtime_positional, shape)
         && !sh.has_runtime_choice()
     {
-        return Err(CliError::UsageOwned(text::init_runtime_needs_web(
+        return Err(CliError::Usage(text::msg::init_runtime_needs_web(
             &rt.label(),
             &sh.label(),
         )));
@@ -593,7 +647,7 @@ fn parse_init_args(rest: &[String]) -> Result<InitArgs, CliError> {
 /// Parse a shape word positional or flag value into an [`InitShape`], with the
 /// one pedagogical "unknown shape" message.
 fn parse_shape_word(word: &str) -> Result<InitShape, CliError> {
-    InitShape::parse(word).ok_or_else(|| CliError::UsageOwned(text::init_unknown_shape(&word)))
+    InitShape::parse(word).ok_or_else(|| CliError::Usage(text::msg::init_unknown_shape(&word)))
 }
 
 /// Parse a runtime word positional into an [`InitRuntime`], with the one
@@ -602,7 +656,7 @@ fn parse_shape_word(word: &str) -> Result<InitShape, CliError> {
 /// acceptance.
 fn parse_runtime_word(word: &str) -> Result<InitRuntime, CliError> {
     let (runtime, deprecated) = InitRuntime::parse(word)
-        .ok_or_else(|| CliError::UsageOwned(text::init_unknown_runtime(&word)))?;
+        .ok_or_else(|| CliError::Usage(text::msg::init_unknown_runtime(&word)))?;
     if let Some(alias) = deprecated {
         print_runtime_rename_hint(alias, runtime);
     }
@@ -649,7 +703,7 @@ fn wizard_shape() -> Result<InitShape, CliError> {
         "5" | "server" => InitShape::Server,
         "6" | "script" => InitShape::Script,
         other => {
-            return Err(CliError::UsageOwned(text::init_unknown_shape_choice(
+            return Err(CliError::Usage(text::msg::init_unknown_shape_choice(
                 &other,
             )));
         }
@@ -683,7 +737,7 @@ fn wizard_runtime() -> Result<InitRuntime, CliError> {
             InitRuntime::Solo
         }
         other => {
-            return Err(CliError::UsageOwned(text::init_unknown_runtime_choice(
+            return Err(CliError::Usage(text::msg::init_unknown_runtime_choice(
                 &other,
             )));
         }
@@ -702,6 +756,16 @@ fn read_line_trimmed() -> Option<String> {
 
 // ── scaffold helpers ─────────────────────────────────────────────────────────
 
+/// What is being scaffolded: a library has no app shape or runtime to report.
+#[derive(Clone, Copy)]
+enum ScaffoldKind {
+    Library,
+    App {
+        shape: InitShape,
+        runtime: InitRuntime,
+    },
+}
+
 /// Run the scaffold: fresh → write all; existing → reconcile.
 fn run_scaffold(
     target_arg: &str,
@@ -709,18 +773,18 @@ fn run_scaffold(
     project_name: &str,
     files: &[ManagedFile],
     force: bool,
-    lib: bool,
-    runtime: InitRuntime,
+    kind: ScaffoldKind,
 ) -> Result<(), CliError> {
     let fresh = is_fresh_target(target_dir)?;
     if fresh || force {
         scaffold(target_dir, files, force)?;
         let is_tty = std::io::stdin().is_terminal() && std::io::stdout().is_terminal();
         let interactive = should_offer_health_check(is_tty, force);
-        if lib {
-            print_next_steps_lib(target_arg, project_name);
-        } else {
-            print_next_steps(target_arg, project_name, interactive, runtime);
+        match kind {
+            ScaffoldKind::Library => print_next_steps_lib(target_arg, project_name),
+            ScaffoldKind::App { shape, runtime } => {
+                print_next_steps(target_arg, project_name, interactive, shape, runtime);
+            }
         }
         if interactive && prompt_yes_no("Verify your toolchain now?", true) {
             let _ = health::run_health_inline();
@@ -733,10 +797,11 @@ fn run_scaffold(
 
 /// The complete set of files `init` writes for an application project.
 ///
-/// `shape` selects which `Main.ipe` and `package.ipe` are scaffolded; `runtime`
-/// fills the web `package.ipe`'s delivery set (`solo` declares an explicit
-/// `ships`, `served` stays the implicit default). All other files are
-/// shape-independent.
+/// `shape` selects which `Main.ipe`, `package.ipe`, and `README.md` wording are
+/// scaffolded; `runtime` fills the web `package.ipe`'s delivery set (`solo`
+/// declares an explicit `ships`, `served` stays the implicit default) and picks
+/// `README.md`'s open-hint wording. `.gitignore` and `AGENTS.md` are the only
+/// shape-independent files.
 fn managed_files(project_name: &str, shape: InitShape, runtime: InitRuntime) -> Vec<ManagedFile> {
     vec![
         ManagedFile {
@@ -749,7 +814,10 @@ fn managed_files(project_name: &str, shape: InitShape, runtime: InitRuntime) -> 
         },
         ManagedFile {
             rel: PathBuf::from("README.md"),
-            content: README_MD.replace("{name}", project_name),
+            content: README_MD
+                .replace("{name}", project_name)
+                .replace("{description}", shape.readme_description())
+                .replace("{run_hint}", shape.open_hint(runtime)),
         },
         ManagedFile {
             rel: PathBuf::from(".gitignore"),
@@ -930,7 +998,7 @@ fn project_name_for(target_dir: &Path) -> Result<String, CliError> {
         .file_name()
         .and_then(|n| n.to_str())
         .map(str::to_owned)
-        .ok_or_else(|| CliError::UsageOwned(text::init_no_project_name(&target_dir.display())))?;
+        .ok_or_else(|| CliError::Usage(text::msg::init_no_project_name(&target_dir.display())))?;
     Ok(name)
 }
 
@@ -1008,9 +1076,16 @@ const fn should_offer_health_check(is_tty: bool, force: bool) -> bool {
     is_tty && !force
 }
 
-/// Print the friendly next-steps message, tuned to the resolved runtime so the
-/// hint matches how the scaffolded app actually runs (spec § 0.1).
-fn print_next_steps(target_arg: &str, project_name: &str, interactive: bool, runtime: InitRuntime) {
+/// Print the friendly next-steps message, tuned to the resolved shape (and, for
+/// `web`, its runtime) so the hint matches how the scaffolded app actually runs
+/// (spec § 0.1).
+fn print_next_steps(
+    target_arg: &str,
+    project_name: &str,
+    interactive: bool,
+    shape: InitShape,
+    runtime: InitRuntime,
+) {
     let run_cmd = if target_arg == "." {
         "    ipe run".to_owned()
     } else {
@@ -1021,14 +1096,7 @@ fn print_next_steps(target_arg: &str, project_name: &str, interactive: bool, run
     } else {
         "\nTip: run  ipe health  to tune your toolchain for faster builds.\n".to_owned()
     };
-    // A `solo` app ships a self-contained client bundle; a `served` app serves itself.
-    let open_hint = match runtime {
-        InitRuntime::Served => "Then open http://localhost:8000 and click the counter buttons.",
-        InitRuntime::Solo => {
-            "This is a `solo` app: `ipe run` serves the wasm bundle at \
-             http://localhost:8000; open it and click the counter buttons."
-        }
-    };
+    let open_hint = shape.open_hint(runtime);
     let body = format!(
         "Created Ipê project `{project_name}`.\n\
          \n\

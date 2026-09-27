@@ -43,7 +43,7 @@ const GRANT_TYPE: &str = "urn:ietf:params:oauth:grant-type:device_code";
 /// whether a token is stored; `--logout` removes it.
 ///
 /// # Errors
-/// [`CliError::UsageOwned`] on an unknown flag; [`CliError::Resolve`] when the
+/// [`CliError::Usage`] on an unknown flag; [`CliError::Resolve`] when the
 /// OAuth request fails, the user does not authorize in time, or the token cannot
 /// be stored.
 pub fn run_login(rest: &[String]) -> Result<(), CliError> {
@@ -232,7 +232,7 @@ fn request_device_code() -> Result<DeviceGrant, CliError> {
     let user_code = str_field(&json, "user_code")?;
     let verification_uri_raw = str_field(&json, "verification_uri")?;
     let verification_uri = VerificationUri::parse(&verification_uri_raw)
-        .ok_or_else(|| login_error(crate::text::login_verification_url_refused()))?;
+        .ok_or_else(|| login_error(&crate::text::msg::login_verification_url_refused()))?;
     // GitHub returns these as JSON numbers; default to safe values if absent.
     let interval = json
         .get("interval")
@@ -266,7 +266,7 @@ fn poll_for_token(device: &DeviceGrant) -> Result<PublishToken, CliError> {
         let now = Instant::now();
         if now >= deadline {
             return Err(login_error(
-                crate::text::login_code_expired_before_approval(),
+                &crate::text::msg::login_code_expired_before_approval(),
             ));
         }
         let remaining = deadline.saturating_duration_since(now);
@@ -281,7 +281,7 @@ fn poll_for_token(device: &DeviceGrant) -> Result<PublishToken, CliError> {
         )?;
         if let Some(token) = json.get("access_token").and_then(serde_json::Value::as_str) {
             return PublishToken::parse(token)
-                .ok_or_else(|| login_error(crate::text::login_token_malformed()));
+                .ok_or_else(|| login_error(&crate::text::msg::login_token_malformed()));
         }
         match json.get("error").and_then(serde_json::Value::as_str) {
             // Not authorized yet — keep waiting at the current cadence.
@@ -298,14 +298,18 @@ fn poll_for_token(device: &DeviceGrant) -> Result<PublishToken, CliError> {
                     .min(MAX_POLL_INTERVAL_SECS);
             }
             Some("access_denied") => {
-                return Err(login_error(crate::text::login_denied()));
+                return Err(login_error(&crate::text::msg::login_denied()));
             }
             Some("expired_token") => {
-                return Err(login_error(crate::text::login_code_expired()));
+                return Err(login_error(&crate::text::msg::login_code_expired()));
             }
-            Some(other) => return Err(login_error(&crate::text::login_github_reported(&other))),
+            Some(other) => {
+                return Err(login_error(&crate::text::msg::login_github_reported(
+                    &crate::style::TerminalSafe::sanitize(other),
+                )));
+            }
             None => {
-                return Err(login_error(crate::text::login_response_unrecognised()));
+                return Err(login_error(&crate::text::msg::login_response_unrecognised()));
             }
         }
     }
@@ -365,7 +369,7 @@ fn post_form(url: &str, fields: &[(&str, &str)]) -> Result<serde_json::Value, Cl
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .map_err(|e| login_error(&crate::text::login_curl_unavailable(&e)))?;
+        .map_err(|e| login_error(&crate::text::msg::login_curl_unavailable(&e)))?;
     // Write the body to curl's stdin, then close it so curl proceeds. A write
     // failure means curl never receives the body; the wait below surfaces the
     // resulting error.
@@ -374,14 +378,14 @@ fn post_form(url: &str, fields: &[(&str, &str)]) -> Result<serde_json::Value, Cl
     }
     let output = child
         .wait_with_output()
-        .map_err(|e| login_error(&crate::text::login_curl_wait_failed(&e)))?;
+        .map_err(|e| login_error(&crate::text::msg::login_curl_wait_failed(&e)))?;
     if !output.status.success() {
-        return Err(login_error(&crate::text::login_request_failed(
-            &String::from_utf8_lossy(&output.stderr).trim(),
+        return Err(login_error(&crate::text::msg::login_request_failed(
+            &crate::style::TerminalSafe::sanitize(String::from_utf8_lossy(&output.stderr).trim()),
         )));
     }
     serde_json::from_slice(&output.stdout)
-        .map_err(|e| login_error(&crate::text::login_response_not_json(&e)))
+        .map_err(|e| login_error(&crate::text::msg::login_response_not_json(&e)))
 }
 
 /// The full curl argument vector for a `post_form` call. The body is NOT among
@@ -408,7 +412,7 @@ fn str_field(json: &serde_json::Value, key: &str) -> Result<String, CliError> {
     json.get(key)
         .and_then(serde_json::Value::as_str)
         .map(str::to_owned)
-        .ok_or_else(|| login_error(&crate::text::login_response_missing(&key)))
+        .ok_or_else(|| login_error(&crate::text::msg::login_response_missing(&key)))
 }
 
 /// The token file path (`$XDG_CONFIG_HOME/ipe/token`, else `~/.config/ipe/token`).
@@ -445,10 +449,15 @@ fn token_status() -> TokenStatus {
 /// written, so there is no window where the token is readable by other users.
 /// Off Unix the token is never stored (see [`write_token_atomic`]).
 fn store_token(token: &PublishToken) -> Result<PathBuf, CliError> {
-    let path = token_path().ok_or_else(|| login_error(crate::text::login_config_dir_unknown()))?;
+    let path =
+        token_path().ok_or_else(|| login_error(&crate::text::msg::login_config_dir_unknown()))?;
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|e| login_error(&crate::text::login_create_failed(&parent.display(), &e)))?;
+        std::fs::create_dir_all(parent).map_err(|e| {
+            login_error(&crate::text::msg::login_create_failed(
+                &parent.display(),
+                &e,
+            ))
+        })?;
     }
     write_token_atomic(&path, token.as_str())?;
     Ok(path)
@@ -486,13 +495,18 @@ fn write_token_atomic(path: &std::path::Path, token: &str) -> Result<(), CliErro
         .create_new(true)
         .mode(0o600)
         .open(&tmp_path)
-        .map_err(|e| login_error(&crate::text::login_create_failed(&tmp_path.display(), &e)))?;
+        .map_err(|e| {
+            login_error(&crate::text::msg::login_create_failed(
+                &tmp_path.display(),
+                &e,
+            ))
+        })?;
     let write_result = writeln!(file, "{token}")
         .and_then(|()| file.flush())
         .and_then(|()| file.sync_all());
     if let Err(e) = write_result {
         let _ = std::fs::remove_file(&tmp_path);
-        return Err(login_error(&crate::text::login_write_failed(
+        return Err(login_error(&crate::text::msg::login_write_failed(
             &tmp_path.display(),
             &e,
         )));
@@ -500,37 +514,15 @@ fn write_token_atomic(path: &std::path::Path, token: &str) -> Result<(), CliErro
     drop(file);
     std::fs::rename(&tmp_path, path).map_err(|e| {
         let _ = std::fs::remove_file(&tmp_path);
-        login_error(&crate::text::login_move_failed(&path.display(), &e))
+        login_error(&crate::text::msg::login_move_failed(&path.display(), &e))
     })
 }
 
 #[cfg(not(unix))]
 fn write_token_atomic(_path: &std::path::Path, _token: &str) -> Result<(), CliError> {
-    require_token_store(HOST_TOKEN_STORE)
-}
-
-/// Where the host can keep the publish token.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum TokenStore {
-    /// A file created mode 0600, readable by its owner only.
-    OwnerOnlyFile,
-    /// No owner-only file mode exists, so the token is never stored.
-    Unsupported,
-}
-
-/// The token store this build's target provides.
-const HOST_TOKEN_STORE: TokenStore = if cfg!(unix) {
-    TokenStore::OwnerOnlyFile
-} else {
-    TokenStore::Unsupported
-};
-
-/// Refuse a login whose token `store` cannot keep it owner-only.
-fn require_token_store(store: TokenStore) -> Result<(), CliError> {
-    match store {
-        TokenStore::OwnerOnlyFile => Ok(()),
-        TokenStore::Unsupported => Err(login_error(crate::text::login_token_store_unsupported())),
-    }
+    Err(login_error(
+        &crate::text::msg::login_token_store_unsupported(),
+    ))
 }
 
 /// Remove the stored token.
@@ -545,7 +537,7 @@ fn logout() -> Result<(), CliError> {
         return Ok(());
     };
     std::fs::remove_file(&path)
-        .map_err(|e| login_error(&crate::text::login_remove_failed(&path.display(), &e)))?;
+        .map_err(|e| login_error(&crate::text::msg::login_remove_failed(&path.display(), &e)))?;
     crate::screen::Screen::new(crate::screen::Stream::Stdout)
         .line(
             crate::screen::Tone::Text,
@@ -574,8 +566,8 @@ fn open_in_browser(url: &str) -> bool {
 }
 
 /// Build a login error.
-fn login_error(message: &str) -> CliError {
-    CliError::Resolve(format!("ipe login: {message}"))
+fn login_error(message: &crate::text::Message) -> CliError {
+    CliError::Resolve(crate::text::msg::login_error(message))
 }
 
 #[cfg(test)]
@@ -594,7 +586,7 @@ mod tests {
             matches!(
                 &refusal,
                 Err(CliError::Resolve(message))
-                    if message.contains(crate::text::login_token_store_unsupported())
+                    if message.contains(crate::text::msg::login_token_store_unsupported().as_str())
             ),
             "an unsupported token store must refuse the login: {refusal:?}"
         );
@@ -718,7 +710,7 @@ mod tests {
     #[test]
     fn unexpected_login_argument_is_a_usage_error() {
         let result = run_login(&["--bogus".to_owned()]);
-        assert!(matches!(result, Err(CliError::UsageOwned(_))));
+        assert!(matches!(result, Err(CliError::Usage(_))));
     }
 
     /// The token file must be created with mode 0600 — never group- or

@@ -456,10 +456,10 @@ pub(crate) fn resolve_project_sources(
         match project::manifest_in_dir(entry) {
             Some(manifest) => Some(manifest),
             None if project::has_only_legacy_toml(entry) => {
-                return Err(CliError::Usage(text::legacy_toml_hint()));
+                return Err(CliError::Usage(text::msg::legacy_toml_hint()));
             }
             None => {
-                return Err(CliError::Usage(text::watch_dir_no_manifest()));
+                return Err(CliError::Usage(text::msg::watch_dir_no_manifest()));
             }
         }
     } else {
@@ -822,7 +822,7 @@ fn run_inner(
     let (root_dir, entry_dir) = scope_roots(&initial, &opts.entry);
 
     let scope = ipe_watch::WatchScope::build(&root_dir, &entry_dir)
-        .map_err(|e| CliError::UsageOwned(e.to_string()))?;
+        .map_err(|e| CliError::Usage(crate::text::Message::relay(&e)))?;
     if !opts.quiet {
         emit_watch_line(
             &crate::style::TerminalSafe::sanitize(&format!(
@@ -904,12 +904,12 @@ fn run_inner(
                 }
             }
         })
-        .map_err(|e| CliError::UsageOwned(text::watch_start_failed(&e)))?
+        .map_err(|e| CliError::Usage(text::msg::watch_start_failed(&e)))?
     };
     for w in scope.roots_to_watch() {
         notify::Watcher::watch(&mut watcher, w.as_path(), notify::RecursiveMode::Recursive)
             .map_err(|e| {
-                CliError::UsageOwned(text::watch_path_failed(&w.as_path().display(), &e))
+                CliError::Usage(text::msg::watch_path_failed(&w.as_path().display(), &e))
             })?;
     }
 
@@ -1628,7 +1628,7 @@ fn run_inner(
                         // asked for that port and it is unavailable.
                         if proxy.is_none() && opts.bluegreen && current_binds_http {
                             let bound = ipe_watch::DevProxy::bind(opts.port).map_err(|e| {
-                                CliError::UsageOwned(text::watch_proxy_bind_failed(&opts.port, &e))
+                                CliError::Usage(text::msg::watch_proxy_bind_failed(&opts.port, &e))
                             })?;
                             if !opts.quiet {
                                 emit_watch_line(
