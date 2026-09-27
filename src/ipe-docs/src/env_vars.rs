@@ -359,8 +359,9 @@ pub static ENV_VARS: &[EnvVar] = &[
         default: "unset (token in production, open in dev)",
         purpose: "Console authentication mode: `token` (admin-token gate, enforced in \
                   every posture), `off` (console disabled), `app` (app callback; \
-                  refused on the Rust runtime). Only an unset value falls back to the \
-                  production/dev default; any other value disables the console.",
+                  refused on the Rust runtime). Only an unset or blank value falls back \
+                  to the production/dev default; any other value (including a \
+                  non-UTF-8 one) disables the console.",
         subsystem: Subsystem::Console,
         class: Class::SecurityTunable,
     },

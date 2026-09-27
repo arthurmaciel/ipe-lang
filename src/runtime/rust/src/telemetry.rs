@@ -182,11 +182,11 @@ pub fn production_from_env() -> bool {
 /// The resolved `IPE_CONSOLE_AUTH` setting for the console + metrics surface.
 ///
 /// An explicit value is enforced whatever the posture; the posture only picks
-/// the default when the variable is unset or empty. An unrecognised value
-/// resolves to `Off` — the surface is refused, never widened.
+/// the default when the variable is unset or blank. An unrecognised or
+/// non-UTF-8 value resolves to `Off` — the surface is refused, never widened.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum ConsoleAuthMode {
-    /// Surface declared absent (`off`, or any unrecognised value).
+    /// Surface declared absent (`off`, an unrecognised value, or non-UTF-8).
     Off,
     /// Explicit `token`: an admin token is required in every posture.
     Token,
@@ -198,13 +198,44 @@ pub enum ConsoleAuthMode {
     DevOpen,
 }
 
+/// The raw `IPE_CONSOLE_AUTH` read, before interpretation.
+///
+/// Keeps a present-but-non-UTF-8 value distinct from an absent one, so a
+/// garbled explicit setting can never fall through to the unset default.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum RawConsoleAuth<'a> {
+    /// The variable is not set.
+    Absent,
+    /// The variable is set to valid UTF-8.
+    Value(&'a str),
+    /// The variable is set but is not valid UTF-8.
+    NotUnicode,
+}
+
+impl<'a> RawConsoleAuth<'a> {
+    /// Classify an environment read result.
+    #[must_use]
+    pub fn from_read(read: &'a Result<String, std::env::VarError>) -> Self {
+        match read {
+            Ok(value) => Self::Value(value),
+            Err(std::env::VarError::NotPresent) => Self::Absent,
+            Err(std::env::VarError::NotUnicode(_)) => Self::NotUnicode,
+        }
+    }
+}
+
 impl ConsoleAuthMode {
     /// Parse a raw `IPE_CONSOLE_AUTH` value (trimmed, case-insensitive).
     ///
-    /// `production` is consulted only when `raw` is absent or blank.
+    /// `production` is consulted only when `raw` is absent or blank; a
+    /// non-UTF-8 value resolves to `Off` in every posture.
     #[must_use]
-    pub fn parse(raw: Option<&str>, production: bool) -> Self {
-        let value = raw.map(str::trim).unwrap_or_default();
+    pub fn parse(raw: RawConsoleAuth<'_>, production: bool) -> Self {
+        let value = match raw {
+            RawConsoleAuth::NotUnicode => return Self::Off,
+            RawConsoleAuth::Absent => "",
+            RawConsoleAuth::Value(value) => value.trim(),
+        };
         if value.is_empty() {
             return if production {
                 Self::UnsetProd
@@ -224,8 +255,8 @@ impl ConsoleAuthMode {
     /// Resolve the setting from the process environment.
     #[must_use]
     pub fn from_env() -> Self {
-        let raw = crate::system::read_env_var("IPE_CONSOLE_AUTH").ok();
-        Self::parse(raw.as_deref(), production_from_env())
+        let read = crate::system::read_env_var("IPE_CONSOLE_AUTH");
+        Self::parse(RawConsoleAuth::from_read(&read), production_from_env())
     }
 
     /// The label logged at console mount (`mode=<label>`).

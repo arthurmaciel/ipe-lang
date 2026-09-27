@@ -87,7 +87,7 @@ the full entry on any of them.
 | Variable | Default | Effect |
 |----------|---------|--------|
 | `IPE_ADMIN_TOKEN` | unset | Bearer token for console access in production or under `IPE_CONSOLE_AUTH=token`. |
-| `IPE_CONSOLE_AUTH` | auto (token in production, open in dev) | `token` requires the admin token in every posture; `off` disables the console. Any other value disables it too. |
+| `IPE_CONSOLE_AUTH` | auto (token in production, open in dev) | `token` requires the admin token in every posture; `off` disables the console. Only an unset or blank value falls back to the posture default; any other value (including a non-UTF-8 one) disables it too. |
 | `IPE_CONSOLE_EMBED` | auto (on in dev) | Set to `off` to disable the embedded console. |
 | `IPE_CONSOLE_HUB` | unset | Base URL of a remote Ipê Hub OTLP collector. |
 | `IPE_DEV_BANNER` | auto (on in dev) | Set to `off` to suppress the dev-mode banner. |

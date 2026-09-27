@@ -45,14 +45,7 @@ pub fn gate_allows() -> bool {
     if ConsoleAuthMode::from_env() == ConsoleAuthMode::Off {
         return false;
     }
-    if super::super::telemetry::production_from_env()
-        && crate::system::read_env_var("IPE_ADMIN_TOKEN")
-            .map(|v| v.is_empty())
-            .unwrap_or(true)
-        && crate::system::read_env_var("IPE_CONSOLE_TOKEN")
-            .map(|v| v.is_empty())
-            .unwrap_or(true)
-    {
+    if telemetry::production_from_env() && configured_admin_token().is_none() {
         return false;
     }
     true
@@ -447,6 +440,7 @@ fn ingest_token_blocked(headers: &axum::http::HeaderMap) -> Option<axum::respons
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::telemetry::RawConsoleAuth;
 
     #[test]
     fn gate_skips_in_subapp_context() {
@@ -489,32 +483,32 @@ mod tests {
     fn auth_mode_explicit_value_wins_over_posture() {
         for production in [false, true] {
             assert_eq!(
-                ConsoleAuthMode::parse(Some("token"), production),
+                ConsoleAuthMode::parse(RawConsoleAuth::Value("token"), production),
                 ConsoleAuthMode::Token
             );
             assert_eq!(
-                ConsoleAuthMode::parse(Some("  ToKeN "), production),
+                ConsoleAuthMode::parse(RawConsoleAuth::Value("  ToKeN "), production),
                 ConsoleAuthMode::Token
             );
             assert_eq!(
-                ConsoleAuthMode::parse(Some("off"), production),
+                ConsoleAuthMode::parse(RawConsoleAuth::Value("off"), production),
                 ConsoleAuthMode::Off
             );
             assert_eq!(
-                ConsoleAuthMode::parse(Some("APP"), production),
+                ConsoleAuthMode::parse(RawConsoleAuth::Value("APP"), production),
                 ConsoleAuthMode::App
             );
         }
         assert_eq!(
-            ConsoleAuthMode::parse(None, false),
+            ConsoleAuthMode::parse(RawConsoleAuth::Absent, false),
             ConsoleAuthMode::DevOpen
         );
         assert_eq!(
-            ConsoleAuthMode::parse(Some("  "), false),
+            ConsoleAuthMode::parse(RawConsoleAuth::Value("  "), false),
             ConsoleAuthMode::DevOpen
         );
         assert_eq!(
-            ConsoleAuthMode::parse(None, true),
+            ConsoleAuthMode::parse(RawConsoleAuth::Absent, true),
             ConsoleAuthMode::UnsetProd
         );
     }
@@ -524,13 +518,13 @@ mod tests {
         for raw in ["tokne", "open", "dev-open", "none", "true", "1"] {
             for production in [false, true] {
                 assert_eq!(
-                    ConsoleAuthMode::parse(Some(raw), production),
+                    ConsoleAuthMode::parse(RawConsoleAuth::Value(raw), production),
                     ConsoleAuthMode::Off,
                     "unknown IPE_CONSOLE_AUTH={raw:?} must resolve to off"
                 );
             }
             // Even a request carrying the right token is refused.
-            let mode = ConsoleAuthMode::parse(Some(raw), false);
+            let mode = ConsoleAuthMode::parse(RawConsoleAuth::Value(raw), false);
             assert_eq!(
                 status_of(gate_decision(
                     mode,
@@ -543,8 +537,42 @@ mod tests {
     }
 
     #[test]
+    fn auth_mode_non_unicode_value_fails_closed() {
+        let read = Err(std::env::VarError::NotUnicode(std::ffi::OsString::new()));
+        let raw = RawConsoleAuth::from_read(&read);
+        assert_eq!(raw, RawConsoleAuth::NotUnicode);
+        for production in [false, true] {
+            let mode = ConsoleAuthMode::parse(raw, production);
+            assert_eq!(
+                mode,
+                ConsoleAuthMode::Off,
+                "non-UTF-8 IPE_CONSOLE_AUTH must resolve to off (production={production})"
+            );
+            assert_eq!(
+                status_of(gate_decision(
+                    mode,
+                    &auth_headers(Some("Bearer s3cret")),
+                    configured
+                )),
+                Some(StatusCode::NOT_FOUND)
+            );
+        }
+    }
+
+    #[test]
+    fn raw_auth_read_classification() {
+        let absent = Err(std::env::VarError::NotPresent);
+        assert_eq!(RawConsoleAuth::from_read(&absent), RawConsoleAuth::Absent);
+        let set = Ok("token".to_string());
+        assert_eq!(
+            RawConsoleAuth::from_read(&set),
+            RawConsoleAuth::Value("token")
+        );
+    }
+
+    #[test]
     fn explicit_token_enforced_in_dev_posture() {
-        let mode = ConsoleAuthMode::parse(Some("token"), false);
+        let mode = ConsoleAuthMode::parse(RawConsoleAuth::Value("token"), false);
         for refused in [
             None,
             Some("Bearer wrong"),
@@ -573,7 +601,7 @@ mod tests {
 
     #[test]
     fn explicit_token_without_configured_token_refuses_all() {
-        let mode = ConsoleAuthMode::parse(Some("token"), false);
+        let mode = ConsoleAuthMode::parse(RawConsoleAuth::Value("token"), false);
         assert_eq!(
             status_of(gate_decision(mode, &auth_headers(Some("Bearer ")), || None)),
             Some(StatusCode::UNAUTHORIZED)
@@ -586,9 +614,9 @@ mod tests {
 
     #[test]
     fn posture_default_applies_only_when_unset() {
-        let open = ConsoleAuthMode::parse(None, false);
+        let open = ConsoleAuthMode::parse(RawConsoleAuth::Absent, false);
         assert!(gate_decision(open, &auth_headers(None), configured).is_none());
-        let prod = ConsoleAuthMode::parse(None, true);
+        let prod = ConsoleAuthMode::parse(RawConsoleAuth::Absent, true);
         assert_eq!(
             status_of(gate_decision(prod, &auth_headers(None), configured)),
             Some(StatusCode::UNAUTHORIZED)
