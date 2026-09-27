@@ -3,8 +3,10 @@
 //! Every constructor generates a name that contains 128 bits of OS entropy (not
 //! just a PID), opens with `O_EXCL` / `DirBuilder` + exclusive-create semantics
 //! so a pre-seeded symlink or a pre-existing entry causes a retry rather than
-//! being followed, and mode-restricts the result to the owner.  The RAII wrappers
-//! remove the resource on drop, so callers do not need manual cleanup.
+//! being followed, and keeps the result private to the owner through
+//! [`ipe_sandbox::private_scratch`], which refuses a location it cannot prove
+//! private.  The RAII wrappers remove the resource on drop, so callers do not
+//! need manual cleanup.
 //!
 //! The [`ScratchFile::file`] field exposes the *owned* [`std::fs::File`] handle
 //! so callers can read back what they wrote without re-opening by name.  Reading
@@ -14,6 +16,8 @@
 use std::fs::File;
 use std::io::{self, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
+
+use ipe_sandbox::private_scratch::{create_dir_exclusive, create_file_exclusive};
 
 /// Maximum retry attempts when an exclusive-create collision occurs.
 const MAX_RETRIES: usize = 8;
@@ -56,7 +60,7 @@ fn candidate_name(prefix: &str) -> io::Result<String> {
 
 // ── ScratchDir ───────────────────────────────────────────────────────────────
 
-/// An exclusively-created, mode-0700, unpredictably-named temporary directory.
+/// An exclusively-created, owner-private, unpredictably-named temporary directory.
 ///
 /// Constructed via [`ScratchDir::new`] (base = `temp_dir()`) or
 /// [`ScratchDir::new_under`] (caller-supplied base), both of which loop on
@@ -101,7 +105,7 @@ impl ScratchDir {
         for _ in 0..MAX_RETRIES {
             let name = candidate_name(prefix)?;
             let path = base.join(&name);
-            match exclusive_mkdir(&path) {
+            match create_dir_exclusive(&path) {
                 Ok(()) => return Ok(Self(path)),
                 Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {}
                 Err(e) => return Err(e),
@@ -122,8 +126,9 @@ impl ScratchDir {
     /// Build a path for a child entry *inside* this directory.
     ///
     /// The child is not created by this call; use the returned path to create
-    /// it.  Because the directory itself is mode 0700, a child created inside
-    /// it is not reachable by other users even when its own mode is broader.
+    /// it.  Because the directory itself is owner-private, a child created
+    /// inside it is not reachable by other users even when its own mode is
+    /// broader.
     #[must_use]
     pub fn child(&self, name: &str) -> PathBuf {
         self.0.join(name)
@@ -148,32 +153,9 @@ impl Drop for ScratchDir {
     }
 }
 
-/// Create a directory exclusively — fail with `AlreadyExists` rather than
-/// following a pre-existing entry or a symlink.
-///
-/// Uses a plain `create_dir` (not `create_dir_all`) so that only the final
-/// component is created and any pre-existing entry — including a dangling
-/// symlink — produces `AlreadyExists` rather than silently succeeding.
-#[cfg(unix)]
-fn exclusive_mkdir(path: &Path) -> io::Result<()> {
-    use std::os::unix::fs::DirBuilderExt as _;
-    std::fs::DirBuilder::new()
-        .mode(0o700)
-        .recursive(false)
-        .create(path)
-}
-
-#[cfg(not(unix))]
-fn exclusive_mkdir(path: &Path) -> io::Result<()> {
-    // On non-Unix there is no portable mode bit; the directory is created with
-    // default permissions.  Exclusive creation (fail on AlreadyExists) still
-    // holds because `create_dir` (not `create_dir_all`) is used.
-    std::fs::create_dir(path)
-}
-
 // ── ScratchFile ──────────────────────────────────────────────────────────────
 
-/// An exclusively-created, mode-0600, unpredictably-named temporary file.
+/// An exclusively-created, owner-private, unpredictably-named temporary file.
 ///
 /// Constructed only via [`ScratchFile::create`], which opens with
 /// `O_CREAT|O_EXCL` (via `create_new`) so a pre-existing file or symlink
@@ -208,7 +190,7 @@ impl ScratchFile {
         for _ in 0..MAX_RETRIES {
             let name = candidate_name(prefix)?;
             let path = base.join(&name);
-            match exclusive_open(&path) {
+            match create_file_exclusive(&path) {
                 Ok(file) => return Ok(Self { path, file }),
                 Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {}
                 Err(e) => return Err(e),
@@ -261,27 +243,6 @@ impl Drop for ScratchFile {
     fn drop(&mut self) {
         let _ = std::fs::remove_file(&self.path);
     }
-}
-
-/// Open a file exclusively at `path` with mode 0600 (owner read/write only).
-#[cfg(unix)]
-fn exclusive_open(path: &Path) -> io::Result<File> {
-    use std::os::unix::fs::OpenOptionsExt as _;
-    std::fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create_new(true)
-        .mode(0o600)
-        .open(path)
-}
-
-#[cfg(not(unix))]
-fn exclusive_open(path: &Path) -> io::Result<File> {
-    std::fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create_new(true)
-        .open(path)
 }
 
 // ── Tests ────────────────────────────────────────────────────────────────────

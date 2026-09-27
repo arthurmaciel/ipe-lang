@@ -3,11 +3,15 @@
 //!
 //! The name carries 128 bits of OS entropy (not just a PID), creation uses
 //! exclusive `create_dir` (fail on a pre-existing entry or symlink rather than
-//! follow it), and the directory is mode 0700.  The RAII guard removes it on
-//! drop, so callers need no manual cleanup.
+//! follow it), and the directory is kept private to the owner through
+//! [`ipe_sandbox::private_scratch`], which refuses a location it cannot prove
+//! private.  The RAII guard removes it on drop, so callers need no manual
+//! cleanup.
 
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
+
+use ipe_sandbox::private_scratch::create_dir_exclusive;
 
 /// Maximum retry attempts when an exclusive-create collision occurs.
 const MAX_RETRIES: usize = 8;
@@ -42,7 +46,7 @@ fn hex32(bytes: [u8; 16]) -> String {
     s
 }
 
-/// An exclusively-created, mode-0700, unpredictably-named temporary directory.
+/// An exclusively-created, owner-private, unpredictably-named temporary directory.
 ///
 /// Removed on drop (best-effort).
 pub struct ScratchDir(PathBuf);
@@ -60,7 +64,7 @@ impl ScratchDir {
         for _ in 0..MAX_RETRIES {
             let name = format!("{prefix}-{}-{}", std::process::id(), hex32(read_entropy()?));
             let path = base.join(&name);
-            match exclusive_mkdir(&path) {
+            match create_dir_exclusive(&path) {
                 Ok(()) => return Ok(Self(path)),
                 Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {}
                 Err(e) => return Err(e),
@@ -83,20 +87,4 @@ impl Drop for ScratchDir {
     fn drop(&mut self) {
         let _ = std::fs::remove_dir_all(&self.0);
     }
-}
-
-/// Create a directory exclusively — fail with `AlreadyExists` rather than
-/// following a pre-existing entry or a symlink.
-#[cfg(unix)]
-fn exclusive_mkdir(path: &Path) -> io::Result<()> {
-    use std::os::unix::fs::DirBuilderExt as _;
-    std::fs::DirBuilder::new()
-        .mode(0o700)
-        .recursive(false)
-        .create(path)
-}
-
-#[cfg(not(unix))]
-fn exclusive_mkdir(path: &Path) -> io::Result<()> {
-    std::fs::create_dir(path)
 }
