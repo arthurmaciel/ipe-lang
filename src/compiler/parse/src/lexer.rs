@@ -316,11 +316,13 @@ fn char_width(c: char) -> u32 {
 }
 
 /// Whether `c` may begin an identifier (ASCII letter or `_`).
+#[must_use]
 pub const fn is_ident_start(c: char) -> bool {
     c.is_ascii_alphabetic() || c == '_'
 }
 
 /// Whether `c` may continue an identifier (ASCII alphanumeric or `_`).
+#[must_use]
 pub const fn is_ident_continue(c: char) -> bool {
     c.is_ascii_alphanumeric() || c == '_'
 }
