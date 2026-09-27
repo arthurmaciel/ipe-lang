@@ -40,9 +40,9 @@ mod ty_templates;
 
 use capture_rewrite::force_shared_capture_clones;
 use clone_class::{
-    CloneClass, CloneEnv, classify_capture_clone, clone_class, enum_is_opaque_ffi_handle,
-    param_is_multiuse_clonable, reject_nonclone_value_reuse, rewrite_captured_clones,
-    rewrite_multiuse_clones,
+    CloneClass, CloneEnv, HandlerCapture, classify_capture_clone, classify_handler_capture,
+    clone_class, enum_is_opaque_ffi_handle, param_is_multiuse_clonable,
+    reject_nonclone_value_reuse, rewrite_captured_clones, rewrite_multiuse_clones,
 };
 use generic_syms::{collect_ir_generic_syms, default_generics_to_unit};
 #[cfg(test)]
@@ -16835,6 +16835,48 @@ impl<'a> Lowerer<'a> {
         rewrite_captured_clones(&clone_set, &noncl_set, span, body, 0)
     }
 
+    /// Refuse a non-`Clone` capture of a kernel handler the backend re-wraps with capture clones.
+    ///
+    /// The backend rebuilds the handler at `KernelFn::capture_cloned_handler_arg`
+    /// inside a fresh `move` closure and shadows each free local with
+    /// `.clone()`. Every capture is classified by [`classify_handler_capture`]:
+    /// a `Copy` leaf, a `Clone` carrier, or a promotable pure-`Fun` binder (its
+    /// binder site promotes it to the `Arc` carrier; recorded as a deferred
+    /// capture, so a binder that cannot promote re-raises IPE-L0126) pass. A
+    /// non-`Clone` capture (a destructure-bound `Box<dyn Fn>`, a task, a
+    /// decoder) fails closed with IPE-L0126 instead of a cargo-time E0599.
+    fn reject_nonclone_handler_capture(
+        &self,
+        callee: &Callee,
+        args: &[canon::Expr],
+    ) -> DResult<()> {
+        let Callee::Kernel(kernel) = callee else {
+            return Ok(());
+        };
+        let Some(handler) = kernel
+            .capture_cloned_handler_arg()
+            .and_then(|i| args.get(i))
+        else {
+            return Ok(());
+        };
+        for (sym, ir_ty) in self.captured_locals(&[], handler) {
+            let promotable = self.promotable_fn_binders.borrow().contains(&sym);
+            match classify_handler_capture(self.clone_env(), ir_ty.as_ref(), promotable) {
+                HandlerCapture::CopyLeaf | HandlerCapture::CloneOk => {}
+                HandlerCapture::ArcCarrier => {
+                    self.deferred_fun_captures
+                        .borrow_mut()
+                        .entry(sym)
+                        .or_insert(handler.span);
+                }
+                HandlerCapture::NonClone => {
+                    return Err(unsupported(handler.span, Feature::NonCloneCapture));
+                }
+            }
+        }
+        Ok(())
+    }
+
     /// Run `f` with `syms` registered as promotable fn binders (see the
     /// `promotable_fn_binders` field doc), restoring the previous registration
     /// afterwards so nested scopes compose and shadowing resolves to the
@@ -21086,6 +21128,7 @@ impl<'a> Lowerer<'a> {
                 // open mapper frontier (fail-closed IPE-L0134 at `ipe` time; see
                 // the method doc).
                 self.reject_fn_element_for_capability_kernel(&resolved, args)?;
+                self.reject_nonclone_handler_capture(&resolved, args)?;
                 let arity = self.callee_arity(&resolved)?;
                 match args.len().cmp(&arity) {
                     std::cmp::Ordering::Equal => {

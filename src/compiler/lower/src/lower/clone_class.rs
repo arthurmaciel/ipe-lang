@@ -285,6 +285,45 @@ pub(super) fn classify_capture_clone(env: CloneEnv<'_>, ir_ty: Option<&IrType>) 
     }
 }
 
+/// How a free local of a capture-cloned kernel handler survives the emitted `.clone()`.
+///
+/// The backend shadows every such capture with `let v = v.clone();` inside a
+/// fresh wrapper closure (`KernelFn::capture_cloned_handler_arg`), so only a
+/// `Clone` carrier is sound there. `NonClone` is the one refused class.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(super) enum HandlerCapture {
+    /// A `Copy` leaf, or an untyped capture (the capture classifier's bare default).
+    CopyLeaf,
+    /// A `Clone` value carrier.
+    CloneOk,
+    /// A pure-`Fun` binder its binder site promotes to the `Clone` `Arc` carrier.
+    ArcCarrier,
+    /// A non-`Clone` value (`Box<dyn Fn>`, task, decoder): refused.
+    NonClone,
+}
+
+/// Classify one handler capture of type `ir_ty` for the capture-clone prologue.
+///
+/// `promotable_binder` is whether the capture's binder runs the `Arc<dyn Fn>`
+/// carrier promotion (a `let` name, a def/lambda param, a match-arm binder):
+/// such a pure-`Fun` binder flowing into a `requires_sync_capture` kernel is
+/// promoted there, so its capture is an `Arc` clone. Every other `Fun` (a
+/// destructure-bound one) stays a non-`Clone` `Box`.
+pub(super) fn classify_handler_capture(
+    env: CloneEnv<'_>,
+    ir_ty: Option<&IrType>,
+    promotable_binder: bool,
+) -> HandlerCapture {
+    if promotable_binder && ir_ty.is_some_and(ipe_ir::fun_value_arc_promotable) {
+        return HandlerCapture::ArcCarrier;
+    }
+    match classify_capture_clone(env, ir_ty) {
+        Some(true) => HandlerCapture::CloneOk,
+        Some(false) => HandlerCapture::NonClone,
+        None => HandlerCapture::CopyLeaf,
+    }
+}
+
 /// The clone class of one COMPOSITE PART.
 ///
 /// A bare [`IrType::Generic`] part is `CloneOk`, not `NonClone`: every emitted
