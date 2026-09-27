@@ -1630,6 +1630,165 @@ fn type_signature_body_mismatch() {
     assert_rejected("type_sig_mismatch", &src, "IPE-T0001");
 }
 
+/// A higher-order kernel program: `Main` printing the length of `expr`.
+fn hof_program(expr: &str) -> String {
+    format!(
+        "{HEAD}import Ipe.Io as Io\n\
+         import Ipe.List\n\
+         import Ipe.String as String\n\
+         add : Int -> Int -> Int\n\
+         add a b =\n    a + b\n\
+         main : Task Error ()\n\
+         main =\n    Io.println (String.fromInt (List.length ({expr})))\n"
+    )
+}
+
+/// `List.map add xs`: each element would be the partial application `Int -> Int`,
+/// which the exact-arity runtime kernel cannot build — the callback-result
+/// obligation (`hof_kernel_result`) refuses it at type time.
+#[test]
+fn type_list_map_curried_callback_refused() {
+    let src = hof_program("List.map add [ 1, 2, 3 ]");
+    assert_rejected("type_list_map_curried_callback", &src, "IPE-T0001");
+}
+
+/// A curried lambda callback (`\n -> \x -> x + n`) is the same hazard spelled inline.
+#[test]
+fn type_list_map_curried_lambda_refused() {
+    let src = hof_program("List.map (\\n -> \\x -> x + n) [ 1, 2, 3 ]");
+    assert_rejected("type_list_map_curried_lambda", &src, "IPE-T0001");
+}
+
+/// A fold whose accumulator is a function returns an arrow from its step callback.
+#[test]
+fn type_list_foldl_function_accumulator_refused() {
+    let src = hof_program(
+        "List.map (List.foldl (\\x f -> \\y -> f y + x) (\\y -> y) [ 1, 2 ]) [ 1, 2, 3 ]",
+    );
+    assert_rejected("type_list_foldl_function_accumulator", &src, "IPE-T0001");
+}
+
+/// Contrapositive: a plain-result callback (`\x -> x + 1`) still compiles.
+#[test]
+fn type_list_map_plain_callback_compiles() {
+    let src = hof_program("List.map (\\x -> x + 1) [ 1, 2, 3 ]");
+    assert_compiles("type_list_map_plain_callback", &src);
+}
+
+/// Contrapositive: `List.map2 add` passes both arguments at once and compiles.
+#[test]
+fn type_list_map2_full_arity_callback_compiles() {
+    let src = hof_program("List.map2 add [ 1, 2, 3 ] [ 10, 20, 30 ]");
+    assert_compiles("type_list_map2_full_arity_callback", &src);
+}
+
+/// A `List.map5` program over stored functions: four of arity `first`, the last of arity `last`.
+///
+/// `applyAll` calls every stored function; `mapper` is the mapper expression
+/// passed to `List.map5` (`applyAll` itself, or a lambda).
+fn eta_site_program(first: usize, last: usize, mapper: &str) -> String {
+    let arrow = |arity: usize| vec!["Int"; arity + 1].join(" -> ");
+    let def = |name: &str, arity: usize| {
+        let params: Vec<String> = (0..arity).map(|i| format!("a{i}")).collect();
+        format!(
+            "{name} : {}\n{name} {} =\n    a0\n",
+            arrow(arity),
+            params.join(" ")
+        )
+    };
+    let call = |f: &str, arity: usize| format!("{f} {}", vec!["1"; arity].join(" "));
+    let body = ["p", "q", "r", "s"]
+        .into_iter()
+        .map(|f| call(f, first))
+        .chain(std::iter::once(call("t", last)))
+        .collect::<Vec<_>>()
+        .join(" + ");
+    let (a, b) = (arrow(first), arrow(last));
+    format!(
+        "{HEAD}import Ipe.Io as Io\n\
+         import Ipe.List\n\
+         import Ipe.String as String\n\
+         {}{}\
+         applyAll : ({a}) -> ({a}) -> ({a}) -> ({a}) -> ({b}) -> Int\n\
+         applyAll p q r s t =\n    {body}\n\
+         useFirst : ({a}) -> Int\n\
+         useFirst g =\n    {}\n\
+         useLast : ({b}) -> Int\n\
+         useLast g =\n    {}\n\
+         main : Task Error ()\n\
+         main =\n    Io.println (String.fromInt (List.length \
+         (List.map5 ({mapper}) [ fa ] [ fa ] [ fa ] [ fa ] [ fb ])))\n",
+        def("fa", first),
+        def("fb", last),
+        call("g", first),
+        call("g", last),
+    )
+}
+
+/// At the per-site eta ceiling: the named-mapper adapter draws 1 + 5 + 5 * 2 = 16 names.
+#[test]
+fn lower_named_mapper_at_eta_site_limit_compiles() {
+    let src = eta_site_program(2, 2, "applyAll");
+    assert_compiles("lower_named_mapper_at_eta_site_limit", &src);
+}
+
+/// One past the ceiling: 1 + 5 + 4 * 2 + 3 = 17 names is refused, never drawn.
+#[test]
+fn lower_named_mapper_past_eta_site_limit_refused() {
+    let src = eta_site_program(2, 3, "applyAll");
+    assert_rejected("lower_named_mapper_past_eta_site_limit", &src, "IPE-L0155");
+}
+
+/// Far past the ceiling (1 + 5 + 5 * 16 = 86 names) is the same typed refusal, not an internal error.
+#[test]
+fn lower_named_mapper_far_past_eta_site_limit_refused() {
+    let src = eta_site_program(16, 16, "applyAll");
+    assert_rejected(
+        "lower_named_mapper_far_past_eta_site_limit",
+        &src,
+        "IPE-L0155",
+    );
+}
+
+/// A lambda mapper passing its stored functions on at the ceiling: 4 * 3 + 4 = 16 names.
+#[test]
+fn lower_lambda_mapper_at_eta_site_limit_compiles() {
+    let src = eta_site_program(3, 4, "\\p q r s t -> applyAll p q r s t");
+    assert_compiles("lower_lambda_mapper_at_eta_site_limit", &src);
+}
+
+/// One past the ceiling for a lambda mapper: 4 * 3 + 5 = 17 names is refused.
+#[test]
+fn lower_lambda_mapper_past_eta_site_limit_refused() {
+    let src = eta_site_program(3, 5, "\\p q r s t -> applyAll p q r s t");
+    assert_rejected("lower_lambda_mapper_past_eta_site_limit", &src, "IPE-L0155");
+}
+
+/// Past the ceiling, a lambda mapper that only calls a stored function draws no names for it.
+///
+/// `p` is passed on (3 names), so the 16-argument `t` would reach 19; `t` is
+/// only called, so it needs no adapter and the site stays at 3.
+#[test]
+fn lower_lambda_mapper_calling_wide_stored_function_compiles() {
+    let src = eta_site_program(
+        3,
+        16,
+        "\\p q r s t -> useFirst p + t 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1",
+    );
+    assert_compiles("lower_lambda_mapper_calling_wide_stored_function", &src);
+}
+
+/// The same lambda passing the wide stored function on needs 3 + 16 = 19 names and is refused.
+#[test]
+fn lower_lambda_mapper_passing_wide_stored_function_refused() {
+    let src = eta_site_program(3, 16, "\\p q r s t -> useFirst p + useLast t");
+    assert_rejected(
+        "lower_lambda_mapper_passing_wide_stored_function",
+        &src,
+        "IPE-L0155",
+    );
+}
+
 /// A `case` that does not cover every constructor is non-exhaustive.
 #[test]
 fn type_non_exhaustive_case() {
@@ -2149,12 +2308,11 @@ fn lower_list_sort_by_over_function_element_compiles() {
 }
 
 /// `List.map5` with a named mapper over five `List (Int -> Int -> Int -> Int)`:
-/// the mapper wrap draws 21 eta symbols (holder, five parameters, five
-/// three-parameter demote adapters), past one call's flat charge. Every def
-/// holds at most one call, so the flat charges alone leave the pool short;
-/// it is sized from the wrap's own demand, so the module compiles.
+/// the mapper wrap would draw 21 eta symbols (holder, five parameters, five
+/// three-parameter demote adapters), past the per-site ceiling, so it is
+/// refused with IPE-L0155 before any symbol is drawn.
 #[test]
-fn lower_list_map5_named_mapper_over_function_elements_compiles() {
+fn lower_list_map5_named_mapper_over_function_elements_refused() {
     let src = format!(
         "{HEAD}import Ipe.Io as Io\n\
          import Ipe.List\n\
@@ -2172,7 +2330,46 @@ fn lower_list_map5_named_mapper_over_function_elements_compiles() {
          main : Task Error ()\n\
          main =\n    Io.println label\n"
     );
-    assert_compiles("lower_list_map5_named_fn_elem", &src);
+    assert_rejected("lower_list_map5_named_fn_elem", &src, "IPE-L0155");
+}
+
+/// A point-free `List.map2 pick fs` over stored functions of `arity`
+/// arguments: the supplied named mapper's wrap (1 + 2 + `arity` names) and the
+/// residual `ys` parameter (1 name) are charged to the one call site.
+fn partial_map2_program(arity: usize) -> String {
+    let arrow = vec!["Int"; arity + 1].join(" -> ");
+    let params: Vec<String> = (0..arity).map(|i| format!("a{i}")).collect();
+    format!(
+        "{HEAD}import Ipe.Io as Io\n\
+         import Ipe.List\n\
+         import Ipe.String as String\n\
+         wide : {arrow}\n\
+         wide {} =\n    a0\n\
+         fs : List ({arrow})\n\
+         fs =\n    [ wide ]\n\
+         pick : ({arrow}) -> Int -> Int\n\
+         pick _ n =\n    n\n\
+         partial : List Int -> List Int\n\
+         partial =\n    List.map2 pick fs\n\
+         main : Task Error ()\n\
+         main =\n    Io.println (String.fromInt (List.length (partial [ 1 ])))\n",
+        params.join(" ")
+    )
+}
+
+/// At the per-site eta ceiling: 1 + 2 + 12 wrap names plus 1 residual = 16.
+#[test]
+fn lower_partial_map2_wrap_and_residual_at_eta_site_limit_compiles() {
+    let src = partial_map2_program(12);
+    assert_compiles("lower_partial_map2_at_eta_site_limit", &src);
+}
+
+/// One past the ceiling: the wrap alone (1 + 2 + 13 = 16) fits, but the
+/// residual parameter drawn at the same site makes 17, refused.
+#[test]
+fn lower_partial_map2_wrap_and_residual_past_eta_site_limit_refused() {
+    let src = partial_map2_program(13);
+    assert_rejected("lower_partial_map2_past_eta_site_limit", &src, "IPE-L0155");
 }
 
 /// `Dict.update` over a function-valued dict: its updater reads the stored

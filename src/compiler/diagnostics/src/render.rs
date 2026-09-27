@@ -1727,8 +1727,8 @@ fn type_label(msg: &TypeError) -> Option<String> {
                 // ("`a` is not a non-function callback result … type").
                 Some(format!(
                     "the callback's result type {} may itself be a function — \
-                     Maybe/Result higher-order kernels (map / map2..5 / mapError / \
-                     andMap) apply their callback at one exact arity, so the \
+                     higher-order kernels (List.map / List.foldl / Maybe.map2 / \
+                     andMap / …) apply their callback at one exact arity, so the \
                      callback must return a plain (non-function) value",
                     ty_to_string(found)
                 ))
@@ -2296,6 +2296,23 @@ const fn feature_label(f: Feature) -> &'static str {
              function to its closure. Compare on a non-function key, or move the \
              function out of the collection, instead [feature: \
              function-element-equality]"
+        }
+        Feature::HofCallbackFunctionResult => {
+            "a higher-order kernel (`List.map`, `List.foldl`, `Maybe.map2`, \
+             `andMap`, …) applies its callback at one exact arity, so the \
+             callback must return a plain (non-function) value; apply the \
+             missing argument inside the callback (`\\x -> add x 1`) or use \
+             the kernel whose callback takes every argument (`List.map2`) \
+             [feature: hof-callback-function-result]"
+        }
+        Feature::EtaSiteLimit => {
+            "passing stored functions to a named mapper (`List.map5 applyAll fs …`) \
+             wraps the mapper in an adapter with one parameter per mapper \
+             argument and per argument of each stored function, and one call \
+             site bounds how many it may draw; pass the mapper as a lambda that \
+             calls the stored functions directly, or store functions that take \
+             fewer arguments (a record or tuple of arguments) \
+             [feature: eta-site-limit]"
         }
         Feature::NonCloneValueReuse => {
             "a value holding a `Task`/`Cmd`/`Sub` effect (bare, or inside a \
