@@ -1,15 +1,15 @@
-//! SEAL: a generic carried under a `Cmd` / `Sub` is bounded `Send` per target.
+//! SEAL: a generic carried under a `Cmd` / `Sub` / `Task` is bounded `Send` per target.
 //!
-//! On wasm32 the runtime's `Cmd` / `Sub` carriers drop `Send` and keep
-//! `'static`, while its `Task` combinators bound their element `Send` on every
-//! target. The fixture's helpers carry their generic `a` under a `Sub`, a
-//! `Cmd`, and a `Task` inside the body; built for the wasm-client target, the
-//! `Sub` / `Cmd` helpers' `a` (their first generic, `T1`) must be `'static`
-//! without `Send`, and the `Task` helper's `a` must stay `Send + 'static`.
-//! Built for the native target, every helper's `a` carries `Send`.
+//! On wasm32 the runtime's `Cmd`, `Sub` and `Task` carriers drop `Send` and
+//! keep `'static`. The fixture's helpers carry their generic `a` under a `Sub`,
+//! a `Cmd`, and a `Task` inside the body and are each used at `a = Cmd Msg`;
+//! built for the wasm-client target, every helper's `a` (its first generic,
+//! `T1`) must be `'static` without `Send`. Built for the native target, every
+//! helper's `a` carries `Send`.
 //!
-//! Under `IPE_E2E=1` with the `wasm32-unknown-unknown` target installed, the
-//! emitted wasm crate must `cargo check` for that target.
+//! Under `IPE_E2E=1` the emitted wasm crate must `cargo check` for
+//! `wasm32-unknown-unknown`; a `Send` bound anywhere on those instantiations
+//! fails that check, so the leg discriminates.
 
 use std::path::{Path, PathBuf};
 
@@ -17,11 +17,8 @@ use ipe::BuildOptions;
 
 const GOLDEN: &str = "generic_carrier_send_wasm_seal";
 
-/// The helpers carrying their generic `a` under a `Cmd` / `Sub` only.
-const EFFECT_HELPERS: [&str; 2] = ["subDiscarded", "cmdBatched"];
-
-/// The helper carrying its generic `a` under a `Task`.
-const TASK_HELPER: &str = "taskDiscarded";
+/// The helpers carrying their generic `a` under a `Sub`, a `Cmd` and a `Task`.
+const EFFECT_HELPERS: [&str; 3] = ["subDiscarded", "cmdBatched", "taskDiscarded"];
 
 fn fixture_entry(root: &Path) -> PathBuf {
     root.join("tests")
@@ -71,7 +68,7 @@ fn emit(target: ipe_ir::Target, out: &Path) -> Option<String> {
     Some(crate::support::read_all_emitted_src(out))
 }
 
-/// Emit gate, wasm-client: a `Cmd` / `Sub` payload is `'static` without `Send`; a `Task` payload keeps `Send`.
+/// Emit gate, wasm-client: a `Cmd` / `Sub` / `Task` payload is `'static` without `Send`.
 #[test]
 fn wasm_effect_carrier_generic_is_static_not_send() {
     let out = std::env::temp_dir().join(format!("ipec_{GOLDEN}_wasm_emit"));
@@ -83,15 +80,9 @@ fn wasm_effect_carrier_generic_is_static_not_send() {
         assert!(
             bounds.is_some_and(|b| b.contains("'static") && !b.contains("Send")),
             "{GOLDEN}: on wasm32 `{name}`'s `a` must be `'static` without `Send` (the \
-             target's `Cmd` / `Sub` carriers are not `Send`), got bounds: {bounds:?}"
+             target's effect carriers are not `Send`), got bounds: {bounds:?}"
         );
     }
-    let task_bounds = first_generic_of(&emitted, TASK_HELPER);
-    assert!(
-        task_bounds.is_some_and(|b| b.contains("Send") && b.contains("'static")),
-        "{GOLDEN}: `{TASK_HELPER}`'s `a` must carry `Send + 'static` on every target \
-         (the `Task` combinators bound their element `Send`), got bounds: {task_bounds:?}"
-    );
 }
 
 /// Emit gate, native: every helper's `a` carries `Send + 'static`.
@@ -101,7 +92,7 @@ fn native_carrier_generic_requires_send() {
     let Some(emitted) = emit(ipe_ir::Target::Native, &out) else {
         return;
     };
-    for name in EFFECT_HELPERS.into_iter().chain([TASK_HELPER]) {
+    for name in EFFECT_HELPERS {
         let bounds = first_generic_of(&emitted, name);
         assert!(
             bounds.is_some_and(|b| b.contains("Send") && b.contains("'static")),
@@ -113,8 +104,8 @@ fn native_carrier_generic_requires_send() {
 
 /// THE SEAL: under `IPE_E2E=1` the emitted wasm crate must `cargo check` for `wasm32-unknown-unknown`.
 ///
-/// A missing `wasm32-unknown-unknown` target degrades to a clean skip — an
-/// environment gap, not a codegen defect.
+/// Outside CI a missing `wasm32-unknown-unknown` target degrades to a clean
+/// skip — an environment gap, not a codegen defect.
 #[test]
 #[allow(clippy::expect_used)] // test setup: a failed cargo spawn IS the failure
 fn generic_carrier_send_wasm_seal_checks() {
@@ -122,9 +113,18 @@ fn generic_carrier_send_wasm_seal_checks() {
         return;
     }
     let target_installed = std::process::Command::new("rustc")
-        .args(["--print", "target-list"])
+        .args(["--print", "sysroot"])
         .output()
-        .is_ok_and(|o| String::from_utf8_lossy(&o.stdout).contains("wasm32-unknown-unknown"));
+        .is_ok_and(|o| {
+            Path::new(String::from_utf8_lossy(&o.stdout).trim())
+                .join("lib/rustlib/wasm32-unknown-unknown")
+                .is_dir()
+        });
+    // CI installs the target for this leg, so a missing target there is a failure.
+    assert!(
+        target_installed || std::env::var_os("CI").is_none(),
+        "{GOLDEN}: the wasm32-unknown-unknown target is not installed under CI"
+    );
     if !target_installed {
         return;
     }

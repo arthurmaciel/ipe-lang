@@ -3133,11 +3133,12 @@ fn ir_type_mentions_generic(ty: &IrType, tv: Symbol) -> bool {
 /// The `Send` obligation a runtime carrier places on the types it carries.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum CarrierSend {
-    /// `Send + 'static` on every target: a `Decoder` or `Task`, whose
-    /// combinators bound their element `Send` unconditionally.
+    /// `Send + 'static` on every target: a `Decoder`, whose combinators
+    /// bound their element `Send` unconditionally.
     Always,
     /// `Send` only where the target's effect carriers are `Send`, `'static`
-    /// everywhere: a `Cmd` or `Sub` (see `Target::effect_carriers_are_send`).
+    /// everywhere: a `Cmd`, `Sub` or `Task` (see
+    /// `Target::effect_carriers_are_send`).
     Effect,
 }
 
@@ -3151,14 +3152,16 @@ impl CarrierSend {
     }
 }
 
-/// The payload of a `Send`-obligating carrier — a `Cmd`, `Sub`, `Decoder` or `Task` — with its obligation.
+/// The payload of a `Send`-obligating carrier — a `Cmd`, `Sub`, `Task` or `Decoder` — with its obligation.
 ///
 /// The runtime boxes each of these as a `'static` value whose payload must be
 /// `Send` per [`CarrierSend`]. `None` for every other type.
 const fn ir_type_send_carrier_payload(ty: &IrType) -> Option<(CarrierSend, &IrType)> {
     match ty {
-        IrType::Cmd(inner) | IrType::Sub(inner) => Some((CarrierSend::Effect, inner)),
-        IrType::Decoder(inner) | IrType::Task(inner) => Some((CarrierSend::Always, inner)),
+        IrType::Cmd(inner) | IrType::Sub(inner) | IrType::Task(inner) => {
+            Some((CarrierSend::Effect, inner))
+        }
+        IrType::Decoder(inner) => Some((CarrierSend::Always, inner)),
         _ => None,
     }
 }
@@ -25401,8 +25404,9 @@ impl<'a> Lowerer<'a> {
     /// The runtime boxes every `Cmd` / `Sub` / `Decoder` / `Task` as a
     /// `'static` value and bounds the types they carry to match (`cmd_map`'s
     /// and `sub_map`'s `A`, the decoder and task combinators' element). A
-    /// `Decoder` or `Task` element is `Send` on every target; a `Cmd` / `Sub` payload is `Send` only where the target's
-    /// effect carriers are, so it records the target-relative effect `Send`
+    /// `Decoder` element is `Send` on every target; a `Cmd` / `Sub` / `Task`
+    /// payload is `Send` only where the target's effect carriers are, so it
+    /// records the target-relative effect `Send`
     /// ([`CarrierSend`]) that emit resolves per target. A generic can ride
     /// such a carrier only inside the body — `Sub.map k (Sub.every 1000 x)` with
     /// `x : a` — while the signature shows it bare or under a function type
@@ -25418,7 +25422,10 @@ impl<'a> Lowerer<'a> {
     /// the unconditional `Send`, since the carrier kind is unknown. Over-bounding
     /// stays buildable on a native host, where every emitted concrete type is
     /// `Send + 'static`, and a generic caller receives the bound through
-    /// call-site propagation.
+    /// call-site propagation. The unconditional bound is the weaker failure on
+    /// a wasm target too: an effect-only bound under a `Decoder` element fails
+    /// cargo at every instantiation, the unconditional one only at an effect
+    /// carrier.
     fn note_carrier_sends(&self, span: Span) {
         let poly: BTreeSet<Symbol> = self.current_poly_tvars.borrow().values().copied().collect();
         if poly.is_empty() {
@@ -30499,7 +30506,7 @@ mod tests {
         assert_eq!(super::body_tail_threaded_param(&shadow, &params), None);
     }
 
-    /// A `Cmd` / `Sub` payload obliges the target-relative effect `Send`; a `Decoder` / `Task` payload the unconditional one.
+    /// A `Cmd` / `Sub` / `Task` payload obliges the target-relative effect `Send`; a `Decoder` payload the unconditional one.
     #[test]
     fn carrier_payload_send_kind_is_per_carrier() {
         use super::{BoundSet, CarrierSend, ir_type_generic_in_send_carrier};
@@ -30508,7 +30515,11 @@ mod tests {
         let mut interner = Interner::new();
         let a = interner.intern("a").unwrap();
         let generic = || Box::new(IrType::Generic(a));
-        for effect in [IrType::Cmd(generic()), IrType::Sub(generic())] {
+        for effect in [
+            IrType::Cmd(generic()),
+            IrType::Sub(generic()),
+            IrType::Task(generic()),
+        ] {
             assert!(ir_type_generic_in_send_carrier(
                 &effect,
                 a,
@@ -30520,7 +30531,7 @@ mod tests {
                 CarrierSend::Always
             ));
         }
-        for always in [IrType::Decoder(generic()), IrType::Task(generic())] {
+        for always in [IrType::Decoder(generic())] {
             assert!(ir_type_generic_in_send_carrier(
                 &always,
                 a,

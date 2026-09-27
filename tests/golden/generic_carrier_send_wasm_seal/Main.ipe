@@ -1,18 +1,17 @@
 module Main exposing (main)
 
 -- SEAL repro, wasm-client target: helpers generic over `a` that carry it under a
--- `Cmd`, `Sub` or `Task` only inside their body. On wasm32 the runtime's `Cmd` /
--- `Sub` carriers drop `Send` and keep `'static`, while its `Task` combinators
--- bound their element `Send` on every target:
+-- `Cmd`, `Sub` or `Task` only inside their body, each instantiated at an effect
+-- carrier. On wasm32 the runtime's `Cmd`, `Sub` and `Task` carriers drop `Send`
+-- and keep `'static`:
 --
---   * `subDiscarded`  — a `Sub a` bound by `let` and never used: `a : 'static`;
---   * `cmdBatched`    — a `Cmd.batch` over a `Cmd a` argument: `a : 'static`;
---   * `taskDiscarded` — a `Task e a` bound by `let` and never used:
---     `a : Send + 'static`.
+--   * `subDiscarded`  — a `Sub a` bound by `let`, used at `a = Cmd Msg`;
+--   * `cmdBatched`    — a `Cmd.batch` over a `Cmd a`, used at `a = Cmd Msg`;
+--   * `taskDiscarded` — a `Task e a` bound by `let`, used at `a = Cmd Msg`;
+--   * `pendingCmd`    — a `Task` whose element is a `Cmd`, with no generic.
 --
--- A native-style `Send` on the `Cmd` / `Sub` helpers over-bounds them (a `Cmd`
--- or `Sub` instance is not `Send` on wasm32); a missing `Send` on the `Task`
--- helper fails `cargo build` with E0277 after ipe accepts it.
+-- A `Send` bound on any of these fails `cargo build` for wasm32 with E0277,
+-- because a `Cmd` is not `Send` there.
 
 import Ipe.String as String
 import Ipe.Task as Task
@@ -61,9 +60,28 @@ taskDiscarded x =
     0
 
 
+noCmd : Cmd Msg
+noCmd =
+    Cmd.none
+
+
+noCmdOfCmd : Cmd (Cmd Msg)
+noCmdOfCmd =
+    Cmd.none
+
+
+pendingCmd : Task Never (Cmd Msg)
+pendingCmd =
+    Task.succeed noCmd
+
+
 init : WebReq -> ( Model, Cmd Msg )
 init _req =
-    ( { count = subDiscarded Increment + cmdBatched Cmd.none + taskDiscarded "x" }, Cmd.none )
+    let
+        _pending =
+            pendingCmd
+    in
+    ( { count = subDiscarded noCmd + cmdBatched noCmdOfCmd + taskDiscarded noCmd }, Cmd.none )
 
 
 update : Msg -> Model -> ( Model, Cmd Msg )

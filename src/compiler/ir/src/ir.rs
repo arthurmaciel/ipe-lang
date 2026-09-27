@@ -580,19 +580,20 @@ impl BoundSet {
     /// wildcard `any` variable and ONLY when the body actually calls a `db_get_*`
     /// — no blast radius on genuine named type variables (`a`, `msg`).
     const IPE_ROW: u16 = 1 << 11;
-    /// The target-relative `Send` bound of a `Cmd` / `Sub` payload generic.
+    /// The target-relative `Send` bound of a `Cmd` / `Sub` / `Task` payload generic.
     ///
-    /// Renders `Send` exactly where the target's `Cmd` / `Sub` carriers are
-    /// `Send`, plus `'static` on every target.
-    /// A generic riding a `Cmd` / `Sub` payload (`cmd_map` / `sub_map`'s `A`,
-    /// `sub_subscribe_ws_open`'s `M`) needs `Send` only on a target whose
+    /// Renders `Send` exactly where the target's effect carriers are `Send`,
+    /// plus `'static` on every target.
+    /// A generic riding a `Cmd` / `Sub` / `Task` payload (`cmd_map` /
+    /// `sub_map`'s `A`, the task combinators' element, `sub_subscribe_ws_open`'s
+    /// `M`) needs `Send` only on a target whose
     /// runtime carriers are `Send` ([`ipe_kernels::Target::effect_carriers_are_send`]);
     /// on wasm32 the carriers themselves are not `Send`, so demanding it would
     /// refuse an instantiation at a `Cmd` / `Sub` / `Task` type and break the
     /// SEAL. The target is an emit-time fact, so the lowerer records this
     /// target-relative flag and [`Self::requires_send_on`] resolves it. Distinct
-    /// from [`Self::SEND`], which is unconditional (`Decoder` / `Task` elements, boxed
-    /// `Send` callbacks). Always paired with `STATIC`.
+    /// from [`Self::SEND`], which is unconditional (`Decoder` elements, boxed `Send`
+    /// callbacks). Always paired with `STATIC`.
     const EFFECT_SEND: u16 = 1 << 12;
     /// The `'static` lifetime bound: a generic type-param that flows,
     /// INSIDE the function body, into a value boxed as a boxed `dyn Fn` trait
@@ -621,8 +622,7 @@ impl BoundSet {
     const STATIC: u16 = 1 << 13;
     /// The unconditional `Send` auto-trait bound: a generic type-param whose
     /// VALUE is moved into a runtime consumer that requires `Send` on EVERY
-    /// target — a `Decoder` or `Task` element (`decode_list<T: 'static + Send>`,
-    /// `task_succeed<A: Send + 'static>`), or a
+    /// target — a `Decoder` element (`decode_list<T: 'static + Send>`), or a
     /// value captured by a boxed `+ Send` callback. A consumer that requires
     /// `Send` only where the target's effect carriers are `Send` uses
     /// [`Self::EFFECT_SEND`] instead. Always paired with `STATIC` (a moved value
