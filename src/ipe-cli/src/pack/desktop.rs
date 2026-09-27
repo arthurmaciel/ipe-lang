@@ -661,19 +661,19 @@ pub fn materialise(
     bundle_root.ensure_dir()?;
 
     for file in &layout.files {
-        let dest =
+        let out_file =
             dist.path_to(Path::new(&layout.root_name).join(rel_to_native(&file.rel_path)))?;
         match &file.content {
-            BundleContent::Generated(text) => dest.write(text.as_bytes())?,
+            BundleContent::Generated(text) => out_file.write(text.as_bytes())?,
             BundleContent::AppBinary => {
-                dest.copy_from(binary)?;
-                make_executable(&dest.path())?;
+                out_file.copy_from(binary)?;
+                make_executable(&out_file.path())?;
             }
             BundleContent::Icon => {
                 // Present only when the layout carries an icon, which the layout
                 // builder emits only when a source icon was given.
                 if let Some(src) = icon {
-                    dest.copy_from(src)?;
+                    out_file.copy_from(src)?;
                 }
             }
         }

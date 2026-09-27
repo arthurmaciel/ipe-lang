@@ -5665,8 +5665,12 @@ mod tests {
             "stdlib label: {idx}"
         );
         // The project section precedes the standard-library section.
-        let p = idx.find(LABEL_PROJECT).expect("project label present");
-        let s = idx.find(LABEL_STDLIB).expect("stdlib label present");
+        let p = idx
+            .find(crate::text::site_project_modules())
+            .expect("project label present");
+        let s = idx
+            .find(crate::text::site_standard_library())
+            .expect("stdlib label present");
         assert!(p < s, "project section comes first: {idx}");
         // The reference index lists the module with a link to its page.
         assert!(idx.contains("App.html"), "App module linked: {idx}");
