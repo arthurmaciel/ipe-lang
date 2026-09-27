@@ -12,9 +12,12 @@
 //!
 //! A CLI error carries its text as a [`Message`], which only this module builds
 //! (through the functions under [`msg`]), so an error spelled as a Rust literal
-//! is a type error. A placeholder whose value is untrusted — raw user input,
-//! fetched content, a child process's output — is declared `&TerminalSafe`, so
-//! the value is sanitised before it can reach the message, whatever prints it.
+//! is a type error. Every placeholder value is sanitised on its own and written
+//! inline, so a line break inside it is indented as a continuation and cannot
+//! open a line the message never wrote; only a [`TerminalBlock`] places lines
+//! at column 0. A placeholder whose value is untrusted — raw user input,
+//! fetched content, a child process's output — is also declared
+//! `&TerminalSafe`, so the value is sanitised where it is parsed.
 
 use std::borrow::Cow;
 use std::fmt::{self, Write as _};
@@ -399,14 +402,96 @@ const fn has_placeholder(body: &[u8], name: &[u8]) -> bool {
     false
 }
 
+/// A value a catalog placeholder takes, and the role that fixes how it is written.
+///
+/// Every value is inline except a [`TerminalBlock`]: it is sanitised on its
+/// own and each line after its first is indented by the continuation indent,
+/// so a line break inside it cannot open a line the message never wrote. Only
+/// a [`TerminalBlock`] places lines at column 0, and only its constructor
+/// decides where they break.
+pub trait Placeholder {
+    /// Append the value to `out` in its role's terminal-safe form.
+    fn place(&self, out: &mut String);
+}
+
+/// Append `value` inline: sanitised, with continuation lines indented.
+fn place_inline(value: &(impl fmt::Display + ?Sized), out: &mut String) {
+    let mut shown = String::new();
+    // A `Display` that errs leaves what it wrote so far; the message is
+    // still filled rather than aborted.
+    let _ = write!(shown, "{value}");
+    let _ = write!(out, "{}", crate::style::TerminalSafe::sanitize(&shown));
+}
+
+impl Placeholder for &(dyn fmt::Display + '_) {
+    fn place(&self, out: &mut String) {
+        place_inline(*self, out);
+    }
+}
+
+impl Placeholder for &crate::style::TerminalSafe {
+    fn place(&self, out: &mut String) {
+        place_inline(*self, out);
+    }
+}
+
+impl Placeholder for &crate::package_name::PackageName {
+    fn place(&self, out: &mut String) {
+        place_inline(*self, out);
+    }
+}
+
+impl Placeholder for &Message {
+    fn place(&self, out: &mut String) {
+        place_inline(*self, out);
+    }
+}
+
+impl Placeholder for &TerminalBlock {
+    fn place(&self, out: &mut String) {
+        out.push_str(&self.0);
+    }
+}
+
+/// Lines a message shows at column 0, such as a list of files.
+///
+/// Only [`TerminalBlock::lines`] builds one, and it alone puts a line break
+/// between the lines it is given. Each line is sanitised and written inline,
+/// so a line break carried inside a line's own value is indented as a
+/// continuation and cannot start a line of its own.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TerminalBlock(String);
+
+impl TerminalBlock {
+    /// One block line per item, each sanitised and kept to its own line.
+    #[must_use]
+    pub fn lines<I>(lines: I) -> Self
+    where
+        I: IntoIterator,
+        I::Item: fmt::Display,
+    {
+        let mut out = String::new();
+        let mut first = true;
+        for line in lines {
+            if !first {
+                out.push('\n');
+            }
+            first = false;
+            place_inline(&line, &mut out);
+        }
+        Self(out)
+    }
+}
+
 /// Fill `template`'s `{name}` placeholders from `args`.
 ///
-/// Each value is sanitised on its own before it is inserted, so an escape
-/// sequence a value opens (an unterminated OSC, say) ends at the value's
-/// boundary and cannot swallow the catalog text after it. Brace text that
-/// names no argument is kept as written.
+/// Each value is written by its [`Placeholder`] role: sanitised on its own,
+/// so an escape sequence a value opens (an unterminated OSC, say) ends at the
+/// value's boundary and cannot swallow the catalog text after it, and inline
+/// unless it is a [`TerminalBlock`]. Brace text that names no argument is kept
+/// as written.
 #[must_use]
-pub fn fill(template: &str, args: &[(&str, &dyn fmt::Display)]) -> String {
+pub fn fill(template: &str, args: &[(&str, &dyn Placeholder)]) -> String {
     let mut out = String::with_capacity(template.len());
     let mut rest = template;
     while let Some(open) = rest.find('{') {
@@ -423,19 +508,15 @@ pub fn fill(template: &str, args: &[(&str, &dyn fmt::Display)]) -> String {
             rest = after;
             continue;
         };
-        let mut shown = String::new();
-        // A `Display` that errs leaves what it wrote so far; the message is
-        // still filled rather than aborted.
-        let _ = write!(shown, "{value}");
-        out.push_str(crate::style::TerminalSafe::sanitize(&shown).as_str());
+        value.place(&mut out);
         rest = after.get(close.saturating_add(1)..).unwrap_or("");
     }
     out.push_str(rest);
     out
 }
 
-/// A message parameter as the `&dyn Display` that [`fill`] takes.
-const fn shown(value: &dyn fmt::Display) -> &dyn fmt::Display {
+/// A message parameter as the `&dyn Placeholder` that [`fill`] takes.
+const fn shown<'a>(value: &'a dyn Placeholder) -> &'a dyn Placeholder {
     value
 }
 
@@ -478,7 +559,7 @@ macro_rules! message_fn {
                 !TEXT.is_empty(),
                 concat!("message `", $key, "` disagrees with text/messages.md")
             );
-            fill(TEXT, &[$((stringify!($param), shown($param))),+])
+            fill(TEXT, &[$((stringify!($param), shown(&$param))),+])
         }
     };
 }
@@ -989,7 +1070,7 @@ messages! {
     /// `ipe fmt` found no `.ipe` files.
     fmt_no_files(root) = "fmt-no-files";
     /// `ipe fmt --check` found unformatted files.
-    fmt_unformatted_files(list) = "fmt-unformatted-files";
+    fmt_unformatted_files(list: &crate::text::TerminalBlock) = "fmt-unformatted-files";
     /// `ipe fmt --stdin --check` found the input unformatted.
     fmt_stdin_unformatted = "fmt-stdin-unformatted";
     /// `ipe fmt` was given a missing path.
@@ -1047,7 +1128,7 @@ messages! {
     /// An `ipe doc <kind>:<key>` query named an unknown kind.
     doc_unknown_kind(prefix) = "doc-unknown-kind";
     /// An `ipe doc <kind>:<key>` query named no entry of that kind.
-    doc_no_entry_for_key(kind, key, nearby) = "doc-no-entry-for-key";
+    doc_no_entry_for_key(kind, key, nearby: &crate::text::TerminalBlock) = "doc-no-entry-for-key";
     /// `ipe doc --type` matched no symbol.
     doc_type_no_match(query) = "doc-type-no-match";
     /// The kernel type table could not be read for `ipe doc`.
@@ -1631,9 +1712,57 @@ mod tests {
         assert!(every_placeholder_is_a_param(b"{Nope} {} {", &[]));
     }
 
+    /// A line break inside an inline value is indented, never a line of its own.
+    #[test]
+    fn an_inline_value_cannot_open_an_output_line() {
+        let forged = "x\nerror: forged\u{1b}[2K";
+        let filled = command_refusal(&"build", &forged);
+        assert_eq!(filled, "ipe build: x\n    error: forged");
+        assert!(
+            !filled.lines().any(|l| l.starts_with("error:")),
+            "{filled:?}"
+        );
+        let safe = crate::style::TerminalSafe::sanitize(forged);
+        let filled = trust_config_malformed(&safe);
+        assert!(
+            !filled.lines().any(|l| l.starts_with("error:")),
+            "{filled:?}"
+        );
+        let message = msg::command_refusal(&"build", &forged);
+        let relayed = command_refusal(&"run", &message);
+        assert!(
+            !relayed.lines().any(|l| l.starts_with("error:")),
+            "{relayed:?}"
+        );
+    }
+
+    /// A block places its own lines at column 0 and indents a break inside one.
+    #[test]
+    fn a_block_line_cannot_open_an_output_line() {
+        let block = TerminalBlock::lines(["  a.ipe", "  b.ipe\nerror: forged\u{1b}]0;t\u{7}"]);
+        let filled = fmt_unformatted_files(&block);
+        assert!(
+            filled.ends_with(":\n  a.ipe\n  b.ipe\n    error: forged"),
+            "{filled:?}"
+        );
+        assert!(
+            !filled.lines().any(|l| l.starts_with("error:")),
+            "{filled:?}"
+        );
+        assert!(!filled.contains('\u{1b}'), "{filled:?}");
+        let near = TerminalBlock::lines(["  fn:map", "  fn:x\rerror: forged"]);
+        let filled = doc_no_entry_for_key(&"fn", &"mapp", &near);
+        assert!(
+            filled.ends_with("Nearby keys:\n  fn:map\n  fn:xerror: forged"),
+            "{filled:?}"
+        );
+    }
+
     #[test]
     fn fill_replaces_named_placeholders_and_keeps_other_braces() {
-        let args: [(&str, &dyn fmt::Display); 2] = [("x", &1), ("y", &"two")];
+        let one: &dyn fmt::Display = &1;
+        let two: &dyn fmt::Display = &"two";
+        let args: [(&str, &dyn Placeholder); 2] = [("x", &one), ("y", &two)];
         assert_eq!(fill("a {x} b {y} {z} {", &args), "a 1 b two {z} {");
         assert_eq!(
             unknown_flag(&"build", &"--nope"),
