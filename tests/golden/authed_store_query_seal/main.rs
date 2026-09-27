@@ -130,7 +130,7 @@ pub struct RecCodecCurrentColumnsFrozenColumnsFrozenTableIndexesOpsPkSpecsTable<
     frozenTable: String,
     indexes: Vec<IpeDbStoreIndexSpec>,
     ops: Vec<IpeDbStoreSchemaOp>,
-    pk: IpeMaybe<String>,
+    pk: IpeResult<ipe_runtime::error::IpeError, IpeDbStorePrimaryKeyDecl>,
     specs: Vec<IpeDbStoreColumnSpec>,
     table: String,
 }
