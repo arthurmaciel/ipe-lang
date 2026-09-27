@@ -36,9 +36,9 @@ use std::collections::HashMap;
 // coupled `ssrf_apply` + the request executor below import what they use.
 #[cfg(not(target_arch = "wasm32"))]
 use super::ssrf::{
-    DialPolicy, HostResolver, SsrfRefusal, SystemResolver, UrlRefusal, VettedAddrs, dns_timeout,
-    parse_gated_url, redact_userinfo, ssrf_check_url_nonblocking, strip_ipv6_brackets,
-    vet_host_addrs_with,
+    DialPolicy, GatedSchemes, HostResolver, SsrfRefusal, SystemResolver, UrlRefusal, VettedAddrs,
+    dns_timeout, parse_gated_url, parse_gated_url_within, ssrf_check_url_nonblocking,
+    strip_ipv6_brackets, vet_host_addrs_with,
 };
 
 /// Ipe.Http.HttpResponse — field names/types match the Ipê record alias.
@@ -180,9 +180,9 @@ fn narrow_http_scheme(url: &crate::url::Url) -> Result<String, String> {
     if scheme == "http" || scheme == "https" {
         Ok(crate::url::url_to_string(url.clone()))
     } else {
-        Err(format!(
-            "Http: blocked: scheme {scheme:?} is not http/https"
-        ))
+        // The scheme is not echoed: `user:password@host` parses with the user
+        // name as its scheme.
+        Err("Http: blocked: the URL's scheme is not http/https".to_owned())
     }
 }
 
@@ -408,31 +408,10 @@ async fn do_request<E: From<String> + Send + 'static>(
     // pin + per-redirect re-check to the SHARED `ssrf_apply_with` under the
     // same policy reading.
     let policy = DialPolicy::from_env();
-    if policy == DialPolicy::DenyPrivate {
-        match reqwest::Url::parse(&req.url) {
-            Ok(u) => {
-                let scheme = u.scheme();
-                if scheme != "http" && scheme != "https" {
-                    return IpeResult::Err(
-                        format!(
-                            "http: blocked: scheme {:?} is not http/https (IPE_HTTP_DENY_PRIVATE)",
-                            scheme
-                        )
-                        .into(),
-                    );
-                }
-            }
-            Err(e) => {
-                return IpeResult::Err(
-                    format!(
-                        "http: blocked: invalid URL {:?}: {} (IPE_HTTP_DENY_PRIVATE)",
-                        redact_userinfo(&req.url),
-                        e
-                    )
-                    .into(),
-                );
-            }
-        }
+    if policy == DialPolicy::DenyPrivate
+        && let Err(refusal) = parse_gated_url_within(&req.url, GatedSchemes::Http)
+    {
+        return IpeResult::Err(format!("http: {refusal}").into());
     }
 
     let builder = reqwest::Client::builder();
@@ -1066,7 +1045,10 @@ mod tests {
     mod ssrf_gate {
         use super::super::{RedirectPolicy, VettingResolver, ssrf_apply_with};
         use crate::ssrf::test_resolvers::{Answers, NoDns, PublicThenPrivate, Stalls};
-        use crate::ssrf::{BlockedRange, DialPolicy, HostResolver, SsrfRefusal, UrlRefusal};
+        use crate::ssrf::{
+            BlockedRange, DialPolicy, GatedSchemes, HostResolver, SchemeShown, SsrfRefusal,
+            UrlRefusal,
+        };
         use reqwest::dns::Resolve as _;
         use std::net::{IpAddr, Ipv4Addr, SocketAddr};
         use std::sync::Arc;
@@ -1223,7 +1205,8 @@ mod tests {
             assert_eq!(
                 apply("ftp://files.example/", DialPolicy::DenyPrivate, gate(NoDns)).await,
                 Some(UrlRefusal::Scheme {
-                    scheme: "ftp".to_owned()
+                    scheme: SchemeShown::Known("ftp"),
+                    admitted: GatedSchemes::HttpAndWebSocket,
                 })
             );
             assert!(

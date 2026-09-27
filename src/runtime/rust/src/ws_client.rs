@@ -149,9 +149,9 @@ async fn do_connect<E: From<String> + Send + 'static>(
 ) -> IpeResult<E, i64> {
     use tokio_tungstenite::tungstenite::client::IntoClientRequest;
     use tokio_tungstenite::tungstenite::http::{HeaderName, HeaderValue};
-    // Build the credential-stripped form ONCE; every error message below echoes
+    // Build the credential-free form ONCE; every error message below echoes
     // this, never the raw `url`.
-    let safe_url = super::ssrf::redact_userinfo(&url);
+    let safe_url = super::ssrf::DisplayableUrl::of(&url);
     // SSRF gate, before the handshake: under deny-private the host is resolved
     // ONCE through the shared gate (bounded deadline, a host with any blocked
     // answer refused whole) and the dial below is pinned to the vetted address,

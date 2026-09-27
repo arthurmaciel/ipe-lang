@@ -1239,12 +1239,13 @@ impl std::fmt::Display for DbFailure {
 pub enum DbConnectError {
     /// The URL did not parse, so what it opens cannot be vetted.
     InvalidUrl,
-    /// A PostgreSQL URL has an `@` after its authority.
+    /// A PostgreSQL URL's credentials may run past what the parser read as
+    /// its userinfo.
     ///
-    /// Only the authority's last `@` separates the credentials from the host,
-    /// so a later one means a credential held a `/`, `?`, or `#` and the
-    /// parser read part of it as the host. The URL is refused, and the text
-    /// that would have been taken for a host is never echoed.
+    /// An `@` outside the parsed authority, or any `\`, means a credential
+    /// may have held a `/`, `?`, `#`, or `\` and the parser read part of it
+    /// as the host (see `ssrf::userinfo_is_ambiguous`). The URL is refused,
+    /// and the text that would have been taken for a host is never echoed.
     MisplacedUserinfo,
     /// A PostgreSQL URL names more dial targets than the gate vets.
     TooManyDialTargets {
@@ -1278,8 +1279,9 @@ impl std::fmt::Display for DbConnectError {
         match self {
             Self::InvalidUrl => f.write_str("db: invalid connection URL"),
             Self::MisplacedUserinfo => f.write_str(
-                "db: the connection URL has an `@` after its host; percent-encode `@`, `/`, `?` \
-                 and `#` in the user name and password (as %40, %2F, %3F, %23)",
+                "db: the connection URL has an `@` or `\\` outside its user name and password; \
+                 percent-encode `@`, `/`, `?`, `#` and `\\` in the user name, password and \
+                 query values (as %40, %2F, %3F, %23, %5C)",
             ),
             Self::TooManyDialTargets { limit } => write!(
                 f,
@@ -1359,10 +1361,11 @@ enum DialTarget {
 /// driver's precedence. A URL naming no host yields exactly
 /// [`DialTarget::DriverDefault`].
 fn postgres_dial_targets(url: &str) -> Result<Vec<DialTarget>, DbConnectError> {
-    if crate::ssrf::has_at_after_authority(url) {
+    let parsed = ::url::Url::parse(url);
+    if crate::ssrf::userinfo_is_ambiguous(url, parsed.as_ref().ok()) {
         return Err(DbConnectError::MisplacedUserinfo);
     }
-    let parsed = ::url::Url::parse(url).map_err(|_| DbConnectError::InvalidUrl)?;
+    let parsed = parsed.map_err(|_| DbConnectError::InvalidUrl)?;
     let mut port = parsed.port().unwrap_or(POSTGRES_DEFAULT_PORT);
     let mut hosts: Vec<Option<String>> = Vec::new();
     let mut push_host = |host: Option<String>| {
@@ -5377,6 +5380,8 @@ mod tests {
             "postgres://admin:s3cr3t?pw@db.example",
             "postgres://admin#s3cr3t-pw@db.example",
             "postgres://db.example/app?user=admin@s3cr3t-pw",
+            "postgres://admin\\s3cr3t-pw@db.example/app",
+            "postgres://db.example/app#admin@s3cr3t-pw",
         ] {
             for policy in [DialPolicy::DenyPrivate, DialPolicy::AllowAll] {
                 let refused = pg_gate_with(url, policy, &NoDns).await.err();
