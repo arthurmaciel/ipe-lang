@@ -442,6 +442,10 @@ code! {
     IPE_N0049 = "IPE-N0049", "a pattern binds the same name twice", "IPE-N0049";
     /// a Script imports a shape's view module but renders nothing
     IPE_N0050 = "IPE-N0050", "a Script imports a shape's UI, which it cannot render", "IPE-N0050";
+    /// an app entry (`Web.tea`, `Tui.tea`, `Cli.tea`, `Worker.tea`, …) is built
+    /// inside a definition whose `Model` / `Msg` is still a type variable; the
+    /// running app needs one concrete model and message type
+    IPE_N0051 = "IPE-N0051", "an app entry is built with a Model or Msg that is still a type variable", "IPE-N0051";
 
     // -----------------------------------------------------------------------
     // Type (IPE-T####)
@@ -632,6 +636,10 @@ code! {
     /// let-bound, or passed as a value); it is legal only as a saturated one-argument
     /// call so every argument passes the committed-literal seal gate
     IPE_L0151 = "IPE-L0151", "`Secret.fromString` must be applied directly to its argument", "IPE-L0151";
+    /// a kernel whose handler the backend re-wraps per call (`Stream.stream`) was
+    /// referenced point-free or partially applied; the re-wrap needs the handler
+    /// in hand, so the kernel is legal only as a saturated call
+    IPE_L0152 = "IPE-L0152", "a handler-wrapping kernel must be applied to all its arguments", "IPE-L0152";
     /// `Ui.cells` (a terminal character-grid builder) was used in a Cli
     /// (`Cli.tea`) program. A Cli view returns `String` (line output),
     /// so a character grid has no denotation there. Use `Tui.tea` for

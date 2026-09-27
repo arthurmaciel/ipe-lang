@@ -285,6 +285,63 @@ pub(super) fn classify_capture_clone(env: CloneEnv<'_>, ir_ty: Option<&IrType>) 
     }
 }
 
+/// How a free local of a capture-cloned kernel handler survives the emitted `.clone()`.
+///
+/// The backend shadows every such capture with `let v = v.clone();` inside a
+/// fresh wrapper closure (`KernelFn::capture_cloned_handler_arg`), so only a
+/// capture proven `Clone` (or `Copy`) is sound there. `NonClone` and
+/// `Unresolved` are the refused classes: absent a resolved type there is no
+/// proof the emitted clone type-checks, so the gate fails closed.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(super) enum HandlerCapture {
+    /// A `Copy` leaf.
+    CopyLeaf,
+    /// A `Clone` value carrier.
+    CloneOk,
+    /// A pure-`Fun` binder its binder site promotes to the `Clone` `Arc` carrier.
+    ArcCarrier,
+    /// A non-`Clone` value (`Box<dyn Fn>`, task, decoder): refused.
+    NonClone,
+    /// A capture whose type did not resolve to an `IrType`: refused.
+    Unresolved,
+}
+
+impl HandlerCapture {
+    /// Whether the emitted per-call `.clone()` of this capture is proven to type-check.
+    pub(super) const fn admitted(self) -> bool {
+        match self {
+            Self::CopyLeaf | Self::CloneOk | Self::ArcCarrier => true,
+            Self::NonClone | Self::Unresolved => false,
+        }
+    }
+}
+
+/// Classify one handler capture of type `ir_ty` for the capture-clone prologue.
+///
+/// `promotable_binder` is whether the capture's binder runs the `Arc<dyn Fn>`
+/// carrier promotion (a `let` name, a def/lambda param, a match-arm binder):
+/// such a pure-`Fun` binder flowing into a `requires_sync_capture` kernel is
+/// promoted there, so its capture is an `Arc` clone. Every other `Fun` (a
+/// destructure-bound one) stays a non-`Clone` `Box`. A `None` type is
+/// `Unresolved`, never defaulted to a bare `Copy` read.
+pub(super) fn classify_handler_capture(
+    env: CloneEnv<'_>,
+    ir_ty: Option<&IrType>,
+    promotable_binder: bool,
+) -> HandlerCapture {
+    let Some(ty) = ir_ty else {
+        return HandlerCapture::Unresolved;
+    };
+    if promotable_binder && ipe_ir::fun_value_arc_promotable(ty) {
+        return HandlerCapture::ArcCarrier;
+    }
+    match classify_capture_clone(env, Some(ty)) {
+        Some(true) => HandlerCapture::CloneOk,
+        Some(false) => HandlerCapture::NonClone,
+        None => HandlerCapture::CopyLeaf,
+    }
+}
+
 /// The clone class of one COMPOSITE PART.
 ///
 /// A bare [`IrType::Generic`] part is `CloneOk`, not `NonClone`: every emitted
@@ -932,8 +989,11 @@ fn match_arm_peak_uses(sym: Symbol, m: &ipe_ir::Match) -> usize {
         .unwrap_or(0)
 }
 
-/// Rewrite `Var(sym)` / `Lambda`-captures of `sym` in DFS left-to-right order
-/// so that all but the syntactically last occurrence are `.clone()`d.
+/// Rewrite `Var(sym)` / `Lambda`-captures of `sym` in evaluation order so that
+/// all but the last-evaluated occurrence are `.clone()`d. Evaluation order is
+/// DFS left-to-right, except that a call whose callee evaluates its arguments
+/// reversed ([`ipe_ir::Callee::evaluates_args_reversed`]) is visited
+/// last-argument-first.
 ///
 /// `remaining` starts at `count_var_uses(sym, expr)`.  Each consuming
 /// occurrence decrements it; when `remaining > 1` the occurrence is non-last
@@ -1141,20 +1201,35 @@ pub(super) fn rewrite_multiuse_clones(sym: Symbol, remaining: &mut usize, expr: 
             *remaining = after_scrut.saturating_sub(peak);
             Expr::Match(m)
         }
+        // Arguments are visited in EVALUATION order, so the last-evaluated
+        // occurrence is the one left bare. A kernel whose runtime takes its
+        // arguments reversed evaluates the container before the function, so a
+        // capture by the function is the later use and the container's read the
+        // one cloned.
         Expr::Call {
             callee,
-            args,
+            mut args,
             pin,
             on_form,
-        } => Expr::Call {
-            callee,
-            args: args
+        } => {
+            let reversed = callee.evaluates_args_reversed();
+            if reversed {
+                args.reverse();
+            }
+            let mut args: Vec<Expr> = args
                 .into_iter()
                 .map(|a| rewrite_multiuse_clones(sym, remaining, a))
-                .collect(),
-            pin,
-            on_form,
-        },
+                .collect();
+            if reversed {
+                args.reverse();
+            }
+            Expr::Call {
+                callee,
+                args,
+                pin,
+                on_form,
+            }
+        }
         Expr::Apply { func, args } => {
             let new_func = Box::new(rewrite_multiuse_clones(sym, remaining, *func));
             let new_args = args
@@ -1265,5 +1340,67 @@ pub(super) fn rewrite_multiuse_clones(sym: Symbol, remaining: &mut usize, expr: 
                 .map(|a| rewrite_multiuse_clones(sym, remaining, a))
                 .collect(),
         },
+    }
+}
+
+#[cfg(test)]
+mod handler_capture_tests {
+    use std::collections::BTreeSet;
+
+    use ipe_intern::Interner;
+    use ipe_ir::IrType;
+
+    use super::{CloneEnv, HandlerCapture, classify_handler_capture};
+
+    fn fun_ty() -> IrType {
+        IrType::Fun(vec![IrType::Str], Box::new(IrType::Str))
+    }
+
+    /// An unresolved capture type is refused even on a promotable binder.
+    #[test]
+    fn unresolved_capture_is_refused() {
+        let interner = Interner::new();
+        let ffi = BTreeSet::new();
+        let env = CloneEnv {
+            interner: &interner,
+            transparent_ffi: &ffi,
+        };
+        for promotable in [false, true] {
+            let class = classify_handler_capture(env, None, promotable);
+            assert_eq!(class, HandlerCapture::Unresolved);
+            assert!(!class.admitted());
+        }
+    }
+
+    /// A pure-`Fun` capture is admitted only through a promotable binder.
+    #[test]
+    fn fun_capture_needs_promotable_binder() {
+        let interner = Interner::new();
+        let ffi = BTreeSet::new();
+        let env = CloneEnv {
+            interner: &interner,
+            transparent_ffi: &ffi,
+        };
+        let ty = fun_ty();
+        assert_eq!(
+            classify_handler_capture(env, Some(&ty), true),
+            HandlerCapture::ArcCarrier
+        );
+        let bare = classify_handler_capture(env, Some(&ty), false);
+        assert_eq!(bare, HandlerCapture::NonClone);
+        assert!(!bare.admitted());
+    }
+
+    /// `Copy` and `Clone` captures are admitted.
+    #[test]
+    fn copy_and_clone_captures_are_admitted() {
+        let interner = Interner::new();
+        let ffi = BTreeSet::new();
+        let env = CloneEnv {
+            interner: &interner,
+            transparent_ffi: &ffi,
+        };
+        assert!(classify_handler_capture(env, Some(&IrType::Int), false).admitted());
+        assert!(classify_handler_capture(env, Some(&IrType::Str), false).admitted());
     }
 }

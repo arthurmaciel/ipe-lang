@@ -413,12 +413,10 @@ fn str_field(json: &serde_json::Value, key: &str) -> Result<String, CliError> {
 }
 
 /// The token file path (`$XDG_CONFIG_HOME/ipe/token`, else `~/.config/ipe/token`).
-/// `None` only when neither `XDG_CONFIG_HOME` nor `HOME` is set.
+/// `None` only when neither `XDG_CONFIG_HOME` nor the home names an absolute path.
 fn token_path() -> Option<PathBuf> {
-    let base = std::env::var_os("XDG_CONFIG_HOME")
-        .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))?;
-    Some(base.join("ipe").join("token"))
+    crate::env_dir::ambient_home("XDG_CONFIG_HOME", ".config")
+        .map(|base| base.join("ipe").join("token"))
 }
 
 /// The three distinguishable login states `--status` reports. A token file that

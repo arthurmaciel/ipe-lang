@@ -161,7 +161,8 @@ impl ConfigTarget {
     ///
     /// # Errors
     /// [`CliError::RuntimeHomeUnknown`] when no home can be resolved for the Ipê
-    /// target; [`CliError::Usage`] when no home can be resolved for Cargo.
+    /// target; for Cargo, [`CliError::EnvDirNotAbsolute`] when `CARGO_HOME` is
+    /// relative and [`CliError::Usage`] when no home can be resolved.
     fn path(self) -> Result<PathBuf, CliError> {
         match self {
             Self::IpeHome => Ok(runtime_embed::ipe_home()?.join("config.toml")),
@@ -170,26 +171,28 @@ impl ConfigTarget {
     }
 }
 
-/// The `~/.cargo/config.toml` path (`$CARGO_HOME/config.toml`, else
-/// `~/.cargo/config.toml`).
+/// The Cargo config path cargo itself reads: `$CARGO_HOME/config.toml`, else `~/.cargo/config.toml`.
+///
+/// # Errors
+/// See [`cargo_config_path_from`].
 fn cargo_config_path() -> Result<PathBuf, CliError> {
-    if let Some(cargo_home) = std::env::var_os("CARGO_HOME") {
-        return Ok(PathBuf::from(cargo_home).join("config.toml"));
-    }
-    let home =
-        home_dir().ok_or_else(|| CliError::Usage(crate::text::msg::health_home_unknown()))?;
-    Ok(home.join(".cargo").join("config.toml"))
+    cargo_config_path_from(std::env::var_os("CARGO_HOME"), crate::env_dir::home())
 }
 
-/// The current user's home directory.
-fn home_dir() -> Option<PathBuf> {
-    #[cfg(windows)]
-    let var = "USERPROFILE";
-    #[cfg(not(windows))]
-    let var = "HOME";
-    std::env::var_os(var)
-        .map(PathBuf::from)
-        .filter(|p| !p.as_os_str().is_empty())
+/// Resolve the Cargo config path from the raw `CARGO_HOME` value and the home.
+///
+/// # Errors
+/// [`CliError::EnvDirNotAbsolute`] when `CARGO_HOME` is set, non-empty, and
+/// relative — cargo resolves it against its working directory, so writing the
+/// home default instead would edit a file cargo never reads;
+/// [`CliError::Usage`] when `CARGO_HOME` is unset and no home resolves.
+fn cargo_config_path_from(
+    cargo_home: Option<std::ffi::OsString>,
+    home: Option<PathBuf>,
+) -> Result<PathBuf, CliError> {
+    let cargo_home = crate::env_dir::tool_home_from("CARGO_HOME", cargo_home, home, ".cargo")?
+        .ok_or_else(|| CliError::Usage(crate::text::msg::health_home_unknown()))?;
+    Ok(cargo_home.join("config.toml"))
 }
 
 /// The value a [`ConfigEdit`] sets — a string or a string array.
@@ -1808,6 +1811,53 @@ mod tests {
         fn drop(&mut self) {
             let _ = std::fs::remove_dir_all(&self.0);
         }
+    }
+
+    #[test]
+    fn a_relative_cargo_home_is_refused_and_the_home_config_is_untouched() {
+        let home = TempDir::new("rel_cargo_home");
+        let home_config = home.path().join(".cargo").join("config.toml");
+        std::fs::create_dir_all(home.path().join(".cargo")).expect("create ~/.cargo");
+        let sentinel = "# user's own cargo config\n";
+        std::fs::write(&home_config, sentinel).expect("write sentinel");
+        let value =
+            ConfigValue::StrList(vec!["-C".to_owned(), "link-arg=-fuse-ld=mold".to_owned()]);
+
+        for raw in ["rel/cargo", "./cargo", "../cargo"] {
+            let got = cargo_config_path_from(Some(raw.into()), Some(home.path().to_path_buf()))
+                .and_then(|path| {
+                    apply_config_edit(
+                        &path,
+                        &["target", "x86_64-unknown-linux-gnu", "rustflags"],
+                        &value,
+                    )
+                });
+            assert!(
+                matches!(got, Err(CliError::EnvDirNotAbsolute { var: "CARGO_HOME" })),
+                "relative CARGO_HOME `{raw}` must be refused"
+            );
+        }
+        assert_eq!(
+            std::fs::read_to_string(&home_config).expect("read sentinel"),
+            sentinel,
+            "a refused CARGO_HOME must never fall back to editing ~/.cargo/config.toml"
+        );
+    }
+
+    #[test]
+    fn cargo_config_path_honours_an_absolute_cargo_home_and_defaults_when_unset_or_empty() {
+        let home = PathBuf::from("/home/u");
+        let got = cargo_config_path_from(Some("/opt/cargo".into()), Some(home.clone()));
+        assert!(matches!(got, Ok(p) if p == std::path::Path::new("/opt/cargo/config.toml")));
+        for raw in [None, Some("")] {
+            let got = cargo_config_path_from(raw.map(std::ffi::OsString::from), Some(home.clone()));
+            assert!(
+                matches!(&got, Ok(p) if p == &PathBuf::from("/home/u/.cargo/config.toml")),
+                "{raw:?}"
+            );
+        }
+        let got = cargo_config_path_from(None, None);
+        assert!(matches!(got, Err(CliError::Usage(_))));
     }
 
     fn sample_report() -> Report {

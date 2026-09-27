@@ -32,9 +32,9 @@ use core::fmt::Write as _;
 use crate::code::{ISSUE_TRACKER_URL, Severity, title};
 use crate::diagnostic::{
     AppShape, Applicability, CaseDefect, CodecAutoRejection, ConsentError, Diagnostic, Expected,
-    ExpectedSet, ExposingDefect, Feature, FfiError, HeaderDefect, HelpLine, Hint, IfDefect,
-    LetDefect, LowerError, NameError, ParseError, SandboxError, SealRejection, SpanRole,
-    StoreEqAccessorDefect, StoreSelectProjectionDefect, Suggestion, TokenKind, TyDoc,
+    ExpectedSet, ExposingDefect, Feature, FfiError, GenericAppEntryReach, HeaderDefect, HelpLine,
+    Hint, IfDefect, LetDefect, LowerError, NameError, ParseError, SandboxError, SealRejection,
+    SpanRole, StoreEqAccessorDefect, StoreSelectProjectionDefect, Suggestion, TokenKind, TyDoc,
     TypeDeclDefect, TypeError,
 };
 use crate::span::Span;
@@ -575,6 +575,28 @@ fn name_prose(msg: &NameError) -> String {
              imports `{shape_ui_module}`, the {shape} view. A script has no `view`, so that UI \
              never reaches the screen."
         ),
+        NameError::GenericAppEntry {
+            entry,
+            type_var,
+            reach: GenericAppEntryReach::Mentioned,
+        } => format!(
+            "`{entry}` is built here with `{type_var}` still a type variable, but a running app \
+             needs one concrete model and message type."
+        ),
+        NameError::GenericAppEntry {
+            entry,
+            type_var,
+            reach: GenericAppEntryReach::Undetermined,
+        } => format!(
+            "`{entry}` is refused here: the generic `{type_var}` is in scope and whether the \
+             app's model or message reaches it cannot be determined, but a running app needs \
+             one concrete model and message type."
+        ),
+        NameError::UnpinnedAppEntry { entry } => format!(
+            "`{entry}` is built here, but nothing in the program fixes its model or message to \
+             a concrete type — e.g. `update` ignores its message and no view emits one — and a \
+             running app needs one concrete model and message type."
+        ),
         NameError::Unknown => "Something is off with a name in this code.".to_string(),
     }
 }
@@ -764,6 +786,12 @@ fn lower_prose(msg: &LowerError) -> String {
                 "`{kernel}` reads its column from a `.field` accessor, so it must \
                  be applied directly with its accessor and value — not passed \
                  around point-free or partially applied."
+            )
+        }
+        LowerError::UnsaturatedHandlerKernel { kernel } => {
+            format!(
+                "`{kernel}` has to be called with all its arguments — you can't \
+                 store it under a name or pass it around before its handler is given."
             )
         }
         LowerError::StoreSelectProjectionInvalid(defect) => match defect {
@@ -1622,6 +1650,15 @@ fn name_label(msg: &NameError) -> Option<String> {
         NameError::ScriptImportsShapeView { shape, entry, .. } => Some(format!(
             "this script has no `view`; did you mean `main = {entry} {{ … }}` to run a {shape} app?"
         )),
+        NameError::GenericAppEntry { type_var, .. } => Some(format!(
+            "fix `{type_var}` to your concrete type (e.g. `Msg`) in this definition's annotation, \
+             or build the app where the model and message types are known"
+        )),
+        NameError::UnpinnedAppEntry { .. } => Some(
+            "annotate the app's functions with your concrete types, e.g. \
+             `update : Msg -> Model -> ( Model, Cmd Msg )`"
+                .to_string(),
+        ),
         NameError::RustNameFold { .. } | NameError::Unknown => None,
     }
 }
@@ -1867,6 +1904,15 @@ fn lower_label(msg: &LowerError) -> String {
                  accessor and value (e.g. `{kernel} .field value`) instead of \
                  passing it point-free (say `\\x -> {kernel} .field x` if you need a \
                  function value)"
+            )
+        }
+        LowerError::UnsaturatedHandlerKernel { kernel } => {
+            format!(
+                "`{kernel}` must be applied to all its arguments here — it rebuilds its \
+                 handler for every request, so the handler must be given at the call: \
+                 write `{kernel} contentType handler` (piping the handler in with \
+                 `<|` / `|>` is fine) instead of binding `{kernel}` or a partial \
+                 application of it to a name or passing it as a value"
             )
         }
         LowerError::StoreSelectProjectionInvalid(defect) => store_select_projection_label(defect),
@@ -2248,6 +2294,15 @@ const fn feature_label(f: Feature) -> &'static str {
              to make; thread the value linearly (bind and use it once) or \
              restructure so the effect flows through a single continuation \
              [feature: non-clone-value-reuse]"
+        }
+        Feature::StreamHandlerCapture => {
+            "a `Stream.stream` handler is rebuilt for every request, so each value \
+             it captures is copied into it — this capture cannot be copied (a \
+             function bound through a tuple/record destructure, a `Task`/`Cmd`/\
+             `Sub`, or a value whose type could not be determined); bind a \
+             captured function with a plain `let f = …` or take it as a parameter, \
+             and build a captured task inside the handler \
+             [feature: stream-handler-capture]"
         }
     }
 }

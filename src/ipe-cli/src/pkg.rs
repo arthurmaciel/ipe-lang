@@ -26,7 +26,7 @@ use crate::text;
 pub fn run_add(rest: &[String]) -> Result<(), CliError> {
     let (name, req) = parse_add_arg(rest)?;
     let project_root = project_root()?;
-    crate::resolve::resolve_and_add(&project_root, name, &req, &crate::resolve::index_root())
+    crate::resolve::resolve_and_add(&project_root, name, &req, &crate::resolve::index_root()?)
 }
 
 /// `ipe remove <package>` — remove an Ipê package dependency from both

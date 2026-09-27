@@ -369,7 +369,7 @@ fn a_repeated_format_flag_is_rejected() {
 /// Write two tiny package trees — the second adds an exposed value, a compatible
 /// change — and return their paths for a `diff` in report mode.
 fn compatible_pkg_pair(tag: &str) -> (PathBuf, PathBuf) {
-    let base = std::env::temp_dir().join(format!(
+    let base = crate::support::scratch_root().join(format!(
         "ipe-fmt-diff-{}-{tag}-{}",
         std::process::id(),
         std::time::SystemTime::now()
@@ -451,7 +451,7 @@ fn diff_json_is_a_stable_object() {
 /// blank line (the frame).
 #[test]
 fn init_human_output_is_guttered_and_framed() {
-    let dir = std::env::temp_dir().join(format!(
+    let dir = crate::support::scratch_root().join(format!(
         "ipe-148-init-{}-{}",
         std::process::id(),
         std::time::SystemTime::now()
@@ -570,7 +570,7 @@ fn check_success_output_is_guttered_and_framed() {
 #[test]
 fn login_status_not_logged_in_is_guttered() {
     // Run with a temp HOME so no stored token is found.
-    let tmp = std::env::temp_dir().join(format!(
+    let tmp = crate::support::scratch_root().join(format!(
         "ipe-login-status-{}-{}",
         std::process::id(),
         std::time::SystemTime::now()
@@ -762,7 +762,7 @@ fn doc_list_json_is_compact() {
 /// is listed (exit non-zero). Both are byte-compact.
 #[test]
 fn fmt_check_json_emits_compact_verdict() {
-    let dir = std::env::temp_dir().join(format!("ipe-fmt-json-{}", std::process::id()));
+    let dir = crate::support::scratch_root().join(format!("ipe-fmt-json-{}", std::process::id()));
     std::fs::create_dir_all(&dir).expect("scratch dir");
     let file = dir.join("Main.ipe");
 

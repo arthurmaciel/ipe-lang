@@ -20,7 +20,8 @@ static NEXT: AtomicU32 = AtomicU32::new(0);
 /// A fresh, empty scratch directory unique to this process and call.
 fn scratch(tag: &str) -> Result<PathBuf, Box<dyn Error>> {
     let n = NEXT.fetch_add(1, Ordering::Relaxed);
-    let dir = std::env::temp_dir().join(format!("ipe_lint_{tag}_{}_{n}", std::process::id()));
+    let dir =
+        crate::support::scratch_root().join(format!("ipe_lint_{tag}_{}_{n}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir)?;
     Ok(dir)

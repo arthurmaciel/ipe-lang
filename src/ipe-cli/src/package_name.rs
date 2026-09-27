@@ -236,6 +236,14 @@ mod tests {
     }
 
     #[test]
+    fn rejection_escapes_the_raw_name() {
+        let err = PackageName::parse("a\u{1b}[2Jb\n").expect_err("control bytes are rejected");
+        let msg = err.to_string();
+        assert!(!msg.contains('\u{1b}') && !msg.contains('\n'), "{msg:?}");
+        assert!(msg.contains("a\\u{1b}[2Jb\\n"), "{msg:?}");
+    }
+
+    #[test]
     fn rejects_non_ascii() {
         PackageName::parse("café").expect_err("non-ASCII must be rejected");
         // A homoglyph that could visually impersonate an ASCII name.
