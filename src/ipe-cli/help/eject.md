@@ -10,5 +10,5 @@ A source file, a project directory, or a package.ipe. Defaults to the current pr
 
 ## Options
 
-- `--out <dir>` — write the standalone project to <dir>, which must be absent or empty (required)
+- `--out <dir>` — write the standalone project to <dir>, which must be absent or empty and outside out/, .ipe/ and any other ipe-owned tree (required)
 - `[--runtime <dir>]` — vendor the Ipê runtime source from <dir>

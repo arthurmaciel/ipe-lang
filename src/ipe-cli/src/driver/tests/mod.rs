@@ -1359,6 +1359,74 @@ fn on_disk_cache_hit_serves_a_tampered_entry_verbatim() {
     let _ = fs::remove_dir_all(&tmp);
 }
 
+/// A cold build into a fresh output dir whose cache sits inside it — the
+/// default `<out>/.ipe-cache/<salt>` layout — succeeds and leaves the dir
+/// ipe-owned: the cache is stored only after the emit has claimed the dir,
+/// never creating it unmarked first. A rebuild into the same dir then hits.
+#[test]
+fn cold_build_with_the_cache_inside_a_fresh_output_dir_claims_it() {
+    let Ok(runtime) = resolve_runtime() else {
+        return;
+    };
+
+    let tmp = std::env::temp_dir().join(format!("ipe-cache-in-out-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&tmp);
+    let out = tmp.join("out");
+    let cache_dir = out.join(".ipe-cache").join("salt");
+
+    let entry_path = vec!["Main".to_owned()];
+    let mut sources: BTreeMap<Vec<String>, (PathBuf, String)> = BTreeMap::new();
+    sources.insert(
+        entry_path.clone(),
+        (
+            PathBuf::from("<cache-in-out>/Main.ipe"),
+            "module Main exposing (main)\n\nimport Ipe.Io as Io\n\nmain : Task Error ()\nmain =\n    Io.println \"hi\"\n".to_owned(),
+        ),
+    );
+    let discovered = vec![project::DiscoveredModule {
+        path: PathBuf::from("<cache-in-out>/Main.ipe"),
+        module_path: entry_path.clone(),
+    }];
+
+    let build = || {
+        compile_modules_observed(
+            sources.clone(),
+            discovered.clone(),
+            &entry_path,
+            &out,
+            &runtime,
+            Path::new("<cache-in-out>"),
+            ipe_backend_rust::DbDriver::Sqlite,
+            Some(&cache_dir),
+            BuildOptions::default(),
+        )
+    };
+
+    let (cold, cold_outcome) = build();
+    assert!(
+        cold.is_ok(),
+        "a cold build into a fresh dir must succeed: {cold:?}"
+    );
+    assert_eq!(cold_outcome, CacheOutcome::Miss);
+    assert!(
+        crate::output_dir::has_marker(&out).unwrap_or(false),
+        "the fresh output dir must be claimed (marked) by the build"
+    );
+    assert!(
+        find_single_cache_entry(&cache_dir).is_some(),
+        "the cold build must still store its cache entry inside the claimed dir"
+    );
+
+    let (warm, warm_outcome) = build();
+    assert!(
+        warm.is_ok(),
+        "a rebuild into the same dir must succeed: {warm:?}"
+    );
+    assert_eq!(warm_outcome, CacheOutcome::Hit);
+
+    let _ = fs::remove_dir_all(&tmp);
+}
+
 /// Walk `cache_root/<epoch>/*.ir.json` and return the single
 /// lowered-IR entry file a build just wrote. Mirrors
 /// [`find_single_cache_entry`], but matches on the `.ir.json` suffix
@@ -2080,9 +2148,41 @@ fn parse_audit_entry_args_parses_path_and_index() {
         .iter()
         .map(ToString::to_string)
         .collect();
-    let (path, index) = parse_audit_entry_args(&args).expect("parses");
-    assert_eq!(path, PathBuf::from("packages/foo.toml"));
-    assert_eq!(index, Some(PathBuf::from("/some/index")));
+    let parsed = parse_audit_entry_args(&args).expect("parses");
+    assert_eq!(parsed.entry_path, PathBuf::from("packages/foo.toml"));
+    assert_eq!(parsed.index_root, Some(PathBuf::from("/some/index")));
+    assert_eq!(parsed.attested_actor, None);
+}
+
+/// `parse_audit_entry_args` — `--attested-actor` parses into a typed attestation;
+/// a missing value, a repeat, or a non-login value is refused.
+#[test]
+fn parse_audit_entry_args_parses_and_refuses_attested_actor() {
+    let argv = |v: &[&str]| -> Vec<String> { v.iter().map(ToString::to_string).collect() };
+    let parsed =
+        parse_audit_entry_args(&argv(&["packages/foo.toml", "--attested-actor", "octocat"]))
+            .expect("parses");
+    assert_eq!(
+        parsed
+            .attested_actor
+            .as_ref()
+            .map(crate::publisher::AttestedActor::as_str),
+        Some("octocat")
+    );
+    for bad in [
+        argv(&["packages/foo.toml", "--attested-actor"]),
+        argv(&[
+            "packages/foo.toml",
+            "--attested-actor",
+            "a",
+            "--attested-actor",
+            "b",
+        ]),
+        argv(&["packages/foo.toml", "--attested-actor", "not a login"]),
+        argv(&["packages/foo.toml", "--attested-actor", "-lead"]),
+    ] {
+        assert!(parse_audit_entry_args(&bad).is_err(), "{bad:?}");
+    }
 }
 
 /// `run_audit_entry` — a malformed entry file (missing `sha256`) is a hard
@@ -2662,41 +2762,264 @@ fn artifact_size_bytes_surfaces_a_missing_artifact_as_a_typed_error() {
     );
 }
 
-// ── `ipe run --record` — refusals ──────────────────────────────────────────
+// ── `ipe run --record` / `--replay` — refusals ─────────────────────────────
 
-// Recording is refused, before any build, for every shape without a recordable
-// cli/worker update loop — never a run that silently writes no log.
+// Recording and replay are refused, before any build, for every shape without
+// a cli/worker update loop — never a run that silently writes no log, nor a
+// replay that silently runs the app live.
 #[test]
-fn record_is_refused_for_shapes_without_a_session() {
-    let entry = Path::new("Main.ipe");
-    for shape in [
-        crate::delivery::Shape::Script,
-        crate::delivery::Shape::Tui,
-        crate::delivery::Shape::Web,
-    ] {
-        let result = gate_record(shape, CompileTarget::Native, None, None, entry);
-        assert!(
-            matches!(&result, Err(CliError::UsageOwned(msg)) if msg.contains("--record")),
-            "--record on {shape:?} must be refused, got: {result:?}"
-        );
+fn session_is_refused_for_shapes_without_a_session() {
+    for flag in ["--record", "--replay"] {
+        for shape in [
+            crate::delivery::Shape::Script,
+            crate::delivery::Shape::Tui,
+            crate::delivery::Shape::Web,
+        ] {
+            let result = gate_session(flag, shape, CompileTarget::Native);
+            assert!(
+                matches!(&result, Err(CliError::UsageOwned(msg)) if msg.contains(flag)),
+                "{flag} on {shape:?} must be refused, got: {result:?}"
+            );
+        }
     }
 }
 
 // A cli app run under `--target wasi` executes in wasmtime, where the recorder
-// dump is not wired: refused rather than recording nothing.
+// is not wired: refused rather than recording nothing or replaying live.
 #[test]
-fn record_is_refused_for_a_wasi_run() {
-    let result = gate_record(
-        crate::delivery::Shape::Cli,
-        CompileTarget::WasmWasi,
-        None,
-        None,
-        Path::new("Main.ipe"),
+fn session_is_refused_for_a_wasi_run() {
+    for flag in ["--record", "--replay"] {
+        let result = gate_session(flag, crate::delivery::Shape::Cli, CompileTarget::WasmWasi);
+        assert!(
+            matches!(&result, Err(CliError::UsageOwned(msg)) if msg.contains("wasi")),
+            "{flag} with --target wasi must be refused, got: {result:?}"
+        );
+    }
+}
+
+// A native cli or worker app has a recordable session: the shape gate admits it.
+#[test]
+fn session_is_admitted_for_a_native_cli_or_worker_app() {
+    for shape in [crate::delivery::Shape::Cli, crate::delivery::Shape::Worker] {
+        let result = gate_session("--record", shape, CompileTarget::Native);
+        assert!(
+            result.is_ok(),
+            "{shape:?} must be admitted, got: {result:?}"
+        );
+    }
+}
+
+// A native-bearing program runs jailed, where the log is unreachable: refused
+// whether the crossing is inferred or only declared, and a pure program passes.
+#[test]
+fn session_is_refused_for_a_native_bearing_program() {
+    use crate::run_sandbox::ResolvedCapabilities;
+    use ipe_ir::Capability;
+    use std::collections::BTreeSet;
+    let native: BTreeSet<Capability> = std::iter::once(Capability::NativeFfi).collect();
+    let raw: BTreeSet<Capability> = std::iter::once(Capability::FfiRaw).collect();
+    let bearing = [
+        ResolvedCapabilities {
+            inferred: native.clone(),
+            declared: BTreeSet::new(),
+        },
+        ResolvedCapabilities {
+            inferred: BTreeSet::new(),
+            declared: native,
+        },
+        ResolvedCapabilities {
+            inferred: raw,
+            declared: BTreeSet::new(),
+        },
+    ];
+    for flag in ["--record", "--replay"] {
+        for resolved in &bearing {
+            let result = gate_session_capabilities(flag, resolved);
+            assert!(
+                matches!(&result, Err(CliError::UsageOwned(msg)) if msg.contains("native-bearing")),
+                "{flag} on a native-bearing program must be refused, got: {result:?}"
+            );
+        }
+        let pure = ResolvedCapabilities {
+            inferred: BTreeSet::new(),
+            declared: BTreeSet::new(),
+        };
+        let result = gate_session_capabilities(flag, &pure);
+        assert!(
+            result.is_ok(),
+            "{flag} on a pure program must pass: {result:?}"
+        );
+    }
+}
+
+// A replay whose log does not exist is refused before any build, naming the
+// path and the way to record one.
+#[test]
+fn replay_of_a_missing_log_is_refused_before_building() {
+    let dir = std::env::temp_dir().join(format!("ipe_replay_missing_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    for absent in ["absent.ipemsgs", "absent.ipelog"] {
+        let result = replay_plan(dir.join(absent));
+        assert!(
+            matches!(&result, Err(CliError::UsageOwned(msg)) if msg.contains("--record")),
+            "a missing replay log must be refused: {result:?}"
+        );
+    }
+}
+
+// The default replay log is the typed sibling of the trace `--record` writes.
+#[test]
+fn default_replay_log_is_the_typed_sibling_of_the_trace() {
+    assert_eq!(typed_log_file(), Path::new("session.ipemsgs"));
+}
+
+/// A fresh scratch directory for a session-log test.
+fn session_scratch(tag: &str) -> PathBuf {
+    let dir = std::env::temp_dir().join(format!("ipe_session_{tag}_{}", std::process::id()));
+    let _ = fs::remove_dir_all(&dir);
+    assert!(fs::create_dir_all(&dir).is_ok(), "make scratch dir");
+    dir
+}
+
+// A named `.ipelog` is shown as a trace; any other named log is folded.
+#[test]
+fn named_replay_log_is_shown_when_it_is_a_trace() {
+    let dir = session_scratch("named");
+    let trace = dir.join("bug.ipelog");
+    let typed = dir.join("bug.ipemsgs");
+    assert!(fs::write(&trace, "Add(1) => 1\n").is_ok(), "write trace");
+    assert!(fs::write(&typed, "{}").is_ok(), "write typed log");
+    let shown = replay_plan(trace.clone());
+    assert!(
+        matches!(&shown, Ok(SessionPlan::ShowTrace(p)) if *p == trace),
+        "a named trace must be shown: {shown:?}"
+    );
+    let folded = replay_plan(typed.clone());
+    assert!(
+        matches!(&folded, Ok(SessionPlan::Run(SessionEnv::Replay(p))) if *p == typed),
+        "a named typed log must be folded: {folded:?}"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+// With no path, `--replay` folds the typed log, falls back to showing the
+// trace when only the trace exists (a trace-only session), and refuses when
+// neither was recorded.
+#[test]
+fn default_replay_prefers_the_typed_log_then_the_trace() {
+    let dir = session_scratch("default");
+    let entry = dir.join("proj").join("Main.ipe");
+    assert!(
+        fs::create_dir_all(dir.join("proj")).is_ok(),
+        "make project dir"
     );
     assert!(
-        matches!(&result, Err(CliError::UsageOwned(msg)) if msg.contains("wasi")),
-        "--record with --target wasi must be refused, got: {result:?}"
+        fs::write(&entry, "module Main exposing (main)\n").is_ok(),
+        "write entry"
     );
+    let out = dir.join("out");
+    let output_result = resolve_output_root(Some(&out.to_string_lossy()), &entry, None);
+    assert!(output_result.is_ok(), "out must resolve: {output_result:?}");
+    let Ok(output) = output_result else { return };
+    let replay = cli_args::SessionMode::Replay(None);
+
+    let none = resolve_session_plan(&replay, &output);
+    assert!(
+        matches!(&none, Err(CliError::UsageOwned(msg)) if msg.contains("--record")),
+        "no recorded session must be refused: {none:?}"
+    );
+
+    let trace = out.join(RECORD_LOG_FILE);
+    assert!(fs::write(&trace, "Add(1) => 1\n").is_ok(), "write trace");
+    let shown = resolve_session_plan(&replay, &output);
+    assert!(
+        matches!(&shown, Ok(SessionPlan::ShowTrace(p)) if p.ends_with(RECORD_LOG_FILE)),
+        "a lone trace must be shown: {shown:?}"
+    );
+
+    assert!(
+        fs::write(out.join(typed_log_file()), "{}").is_ok(),
+        "write typed log"
+    );
+    let folded = resolve_session_plan(&replay, &output);
+    assert!(
+        matches!(&folded, Ok(SessionPlan::Run(SessionEnv::Replay(p))) if p.ends_with(typed_log_file())),
+        "the typed log must win over the trace: {folded:?}"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+// A planted trace carrying terminal escapes (a screen clear, an OSC 8
+// hyperlink, C1 controls, DEL, tabs) is shown with every control character
+// removed, one step per line under a label that says it is not a replay.
+#[test]
+fn shown_trace_strips_every_control_character() {
+    let dir = session_scratch("laced");
+    let trace = dir.join("planted\x1b[31m.ipelog");
+    let laced = "\x1b[2JAdd(1) => 1\n\
+                 Say(\x1b]8;;https://evil.example\x07link\x1b]8;;\x1b\\) => 2\r\n\
+                 \u{9b}2J\u{9d}0;title\u{9c}Add(\u{85}3\t\u{7f}) => 5\n\
+                 \x1b[H\x1b[2J\n";
+    assert!(fs::write(&trace, laced).is_ok(), "write planted trace");
+    let shown = load_session_trace(&trace);
+    assert!(
+        shown.is_ok(),
+        "a UTF-8 trace under the cap must show: {shown:?}"
+    );
+    let Ok(out) = shown else { return };
+    assert!(
+        !out.chars().any(|c| c.is_control() && c != '\n'),
+        "the shown trace must carry no control character: {out:?}"
+    );
+    let lines: Vec<&str> = out.lines().collect();
+    assert_eq!(lines.len(), 4, "label + one line per step: {out:?}");
+    assert!(
+        lines.first().is_some_and(|l| l.contains("not a replay")),
+        "the trace must be labelled as not a replay: {out:?}"
+    );
+    assert_eq!(lines.get(1).copied(), Some("Add(1) => 1"));
+    assert_eq!(lines.get(2).copied(), Some("Say(link) => 2"));
+    assert!(
+        lines.get(3).is_some_and(|l| l.ends_with("Add(3) => 5")),
+        "{out:?}"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+// A trace over the cap is refused typed, before anything is rendered.
+#[test]
+fn shown_trace_over_the_cap_is_refused() {
+    let dir = session_scratch("oversized");
+    let trace = dir.join("big.ipelog");
+    let over = usize::try_from(crate::io_bounded::SESSION_TRACE_READ_CAP + 1).unwrap_or(usize::MAX);
+    assert!(
+        fs::write(&trace, vec![b'a'; over]).is_ok(),
+        "write big trace"
+    );
+    let shown = load_session_trace(&trace);
+    assert!(
+        matches!(shown, Err(CliError::FileTooLarge { .. })),
+        "an oversized trace must be refused: {shown:?}"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+// A non-UTF-8 trace is refused typed, never a panic and never lossy output.
+#[test]
+fn shown_trace_not_utf8_is_refused() {
+    let dir = session_scratch("not_utf8");
+    let trace = dir.join("bin.ipelog");
+    assert!(
+        fs::write(&trace, [b'A', 0xff, 0xfe, b'\n']).is_ok(),
+        "write binary trace"
+    );
+    let shown = load_session_trace(&trace);
+    assert!(
+        matches!(&shown, Err(CliError::Io { source, .. })
+            if source.kind() == std::io::ErrorKind::InvalidData),
+        "a non-UTF-8 trace must be refused: {shown:?}"
+    );
+    let _ = fs::remove_dir_all(&dir);
 }
 
 // -----------------------------------------------------------------------
@@ -2909,9 +3232,7 @@ fn backup_preserves_a_private_files_mode() {
         assert!(false_marker(), "a lossy rewrite must report its backup");
         return;
     };
-    let mode = fs::metadata(&backup)
-        .map(|m| m.permissions().mode() & 0o777)
-        .unwrap_or(0);
+    let mode = fs::metadata(&backup).map_or(0, |m| m.permissions().mode() & 0o777);
     assert_eq!(mode, 0o600, "the backup must stay owner-only");
     let _ = fs::remove_dir_all(&dir);
 }

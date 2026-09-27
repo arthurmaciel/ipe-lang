@@ -51,6 +51,11 @@ pub mod tui;
 // Gated on `feature = "debugger"` via the inner `#![cfg(...)]`.
 pub mod record_sink;
 
+// Typed session log: the replayable form of a recorded cli/worker session
+// (`ipe run --record` writes it, `ipe run --replay` re-folds it).
+// Gated on `feature = "debugger"` via the inner `#![cfg(...)]`.
+pub mod session_log;
+
 /// The default message-log capacity when none is configured.
 pub const DEFAULT_HISTORY_CAP: usize = 512;
 
@@ -83,6 +88,8 @@ pub struct RecordBuffer<Msg, Model> {
     log: VecDeque<Step<Msg, Model>>,
     /// Maximum retained messages. At least 1.
     cap: usize,
+    /// `true` once a step has been evicted, so `base` is no longer the initial model.
+    overflowed: bool,
 }
 
 impl<Msg: Clone, Model: Clone> RecordBuffer<Msg, Model> {
@@ -95,6 +102,7 @@ impl<Msg: Clone, Model: Clone> RecordBuffer<Msg, Model> {
             base: initial_model,
             log: VecDeque::new(),
             cap: cap.max(1),
+            overflowed: false,
         }
     }
 
@@ -112,6 +120,7 @@ impl<Msg: Clone, Model: Clone> RecordBuffer<Msg, Model> {
         {
             let (advanced, _cmd) = update(oldest.msg, self.base.clone());
             self.base = advanced;
+            self.overflowed = true;
         }
         self.log.push_back(Step { msg, model_after });
     }
@@ -162,6 +171,15 @@ impl<Msg: Clone, Model: Clone> RecordBuffer<Msg, Model> {
         &self.base
     }
 
+    /// `true` once the ring has evicted a step.
+    ///
+    /// The base then holds the model after the evicted steps, not the initial
+    /// model, so a re-fold of the retained messages from `init` would be wrong.
+    #[must_use]
+    pub fn overflowed(&self) -> bool {
+        self.overflowed
+    }
+
     /// Clear the step log and reset the base to `init`.
     ///
     /// After this call the buffer is empty and `base()` returns a clone of
@@ -171,6 +189,7 @@ impl<Msg: Clone, Model: Clone> RecordBuffer<Msg, Model> {
     pub fn reset_to_init(&mut self, init: Model) {
         self.log.clear();
         self.base = init;
+        self.overflowed = false;
     }
 
     /// Commit time-travel to step `n` (0-indexed): truncate the log to the

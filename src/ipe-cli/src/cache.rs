@@ -57,7 +57,9 @@
 //! - every in-scope module's path, trust origin (injected stdlib vs. user
 //!   source — the module-IDENTITY axis the design doc's cache-key-
 //!   completeness note calls out: an add/delete/rename of a module MUST
-//!   yield a different key, never a stale hit), and full source text.
+//!   yield a different key, never a stale hit), and full source text,
+//! - every emit-shape build flag (target, production, `--debugger`,
+//!   hot-appearance, the webview host and window).
 //!
 //! `blame_path` (diagnostic-only) and the vendored runtime tree are
 //! deliberately NOT part of the key: neither affects [`EmittedProject`]'s
@@ -366,7 +368,7 @@ fn collect_files(
 /// deliberately unhashed, matching [`ipe_db::SourceFile`]'s own input shape
 /// (module path + text + origin; never the on-disk path).
 #[must_use]
-#[allow(clippy::too_many_arguments)] // a content-address key over every emit-affecting input
+#[allow(clippy::too_many_arguments, clippy::fn_params_excessive_bools)] // a content-address key over every independent emit-affecting input
 pub fn compute_project_key(
     sources: &BTreeMap<Vec<String>, (PathBuf, String)>,
     injected: &BTreeSet<Vec<String>>,
@@ -375,6 +377,7 @@ pub fn compute_project_key(
     target: ipe_ir::Target,
     wasm_public_env: &[String],
     production: bool,
+    debugger: bool,
     hot_appearance: bool,
     webview_host: bool,
     webview_window: Option<&ipe_backend_rust::WebViewWindow>,
@@ -419,6 +422,12 @@ pub fn compute_project_key(
     // vice versa. (For a Debug-free program the emitted bytes are identical
     // either way; the extra key bit only costs a one-time cold entry.)
     hasher.update([u8::from(production)]);
+
+    // `--debugger` changes the emitted crate: the runtime `debugger` feature,
+    // the cli/worker entry's session-codec argument and the serde derives the
+    // typed session log needs. A debugger build must never be served a plain
+    // cached project (it would fail cargo on the entry's arity), or vice versa.
+    hasher.update([u8::from(debugger)]);
 
     let entry_len = u64::try_from(entry_path.len()).unwrap_or(u64::MAX);
     hasher.update(entry_len.to_le_bytes());
@@ -884,6 +893,7 @@ mod tests {
             false,
             false,
             false,
+            false,
             None,
         );
         let b = compute_project_key(
@@ -893,6 +903,7 @@ mod tests {
             DbDriver::Sqlite,
             ipe_ir::Target::Native,
             &[],
+            false,
             false,
             false,
             false,
@@ -914,6 +925,7 @@ mod tests {
             false,
             false,
             false,
+            false,
             None,
         );
         if let Some(main) = sources.get_mut(&vec!["Main".to_owned()]) {
@@ -926,6 +938,7 @@ mod tests {
             DbDriver::Sqlite,
             ipe_ir::Target::Native,
             &[],
+            false,
             false,
             false,
             false,
@@ -947,6 +960,7 @@ mod tests {
             false,
             false,
             false,
+            false,
             None,
         );
         let postgres = compute_project_key(
@@ -956,6 +970,7 @@ mod tests {
             DbDriver::Postgres,
             ipe_ir::Target::Native,
             &[],
+            false,
             false,
             false,
             false,
@@ -982,6 +997,7 @@ mod tests {
             false,
             false,
             false,
+            false,
             None,
         );
         let prod = compute_project_key(
@@ -994,9 +1010,37 @@ mod tests {
             true,
             false,
             false,
+            false,
             None,
         );
         assert_ne!(dev, prod, "the production flag is part of the key");
+    }
+
+    /// A `--debugger` emit differs from a plain one (runtime feature, session
+    /// codec argument, serde derives), so the key must separate the two.
+    #[test]
+    fn key_changes_with_debugger() {
+        let (sources, injected) = sample_sources();
+        let key = |debugger| {
+            compute_project_key(
+                &sources,
+                &injected,
+                &entry(),
+                DbDriver::Sqlite,
+                ipe_ir::Target::Native,
+                &[],
+                false,
+                debugger,
+                false,
+                false,
+                None,
+            )
+        };
+        assert_ne!(
+            key(false),
+            key(true),
+            "the debugger flag is part of the key"
+        );
     }
 
     /// The dev appearance hot-swap flag routes style literals through a
@@ -1015,6 +1059,7 @@ mod tests {
             false,
             false,
             false,
+            false,
             None,
         );
         let on = compute_project_key(
@@ -1024,6 +1069,7 @@ mod tests {
             DbDriver::Sqlite,
             ipe_ir::Target::Native,
             &[],
+            false,
             false,
             true,
             false,
@@ -1052,6 +1098,7 @@ mod tests {
                 DbDriver::Sqlite,
                 ipe_ir::Target::Native,
                 &[],
+                false,
                 false,
                 false,
                 true,
@@ -1088,6 +1135,7 @@ mod tests {
             false,
             false,
             false,
+            false,
             None,
         );
         let with_allowlist = compute_project_key(
@@ -1097,6 +1145,7 @@ mod tests {
             DbDriver::Sqlite,
             ipe_ir::Target::Native,
             &["API_BASE_URL".to_owned()],
+            false,
             false,
             false,
             false,
@@ -1121,6 +1170,7 @@ mod tests {
             false,
             false,
             false,
+            false,
             None,
         );
         let b = compute_project_key(
@@ -1130,6 +1180,7 @@ mod tests {
             DbDriver::Sqlite,
             ipe_ir::Target::Native,
             &[],
+            false,
             false,
             false,
             false,
@@ -1148,6 +1199,7 @@ mod tests {
             DbDriver::Sqlite,
             ipe_ir::Target::Native,
             &[],
+            false,
             false,
             false,
             false,
@@ -1172,6 +1224,7 @@ mod tests {
             false,
             false,
             false,
+            false,
             None,
         );
         assert_ne!(base, with_extra, "adding a module must change the key");
@@ -1187,6 +1240,7 @@ mod tests {
             DbDriver::Sqlite,
             ipe_ir::Target::Native,
             &[],
+            false,
             false,
             false,
             false,
@@ -1219,6 +1273,7 @@ mod tests {
             false,
             false,
             false,
+            false,
             None,
         );
         let b = compute_project_key(
@@ -1228,6 +1283,7 @@ mod tests {
             DbDriver::Sqlite,
             ipe_ir::Target::Native,
             &[],
+            false,
             false,
             false,
             false,
@@ -1261,6 +1317,7 @@ mod tests {
             false,
             false,
             false,
+            false,
             None,
         );
         let b = compute_project_key(
@@ -1270,6 +1327,7 @@ mod tests {
             DbDriver::Sqlite,
             ipe_ir::Target::Native,
             &[],
+            false,
             false,
             false,
             false,

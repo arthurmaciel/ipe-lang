@@ -242,7 +242,7 @@ ipe package audit-entry: expected a single entry-file path
 
 ## package-audit-entry-usage
 
-usage: ipe package audit-entry <packages/<name>.toml> [--index <root>]
+usage: ipe package audit-entry <packages/<name>.toml> [--index <root>] [--attested-actor <login>]
 
 ## package-capability-inference-failed
 
@@ -828,6 +828,10 @@ ipe package audit-entry: `{name}` version {version} is already published and imm
 
 ipe package audit-entry: `{name}` drops the published version {version}, but the index is append-only: a published version must never be removed. Publish a new version instead.
 
+## index-entry-version-dropped-reset-refused
+
+ipe package audit-entry: `{name}` drops the published version {version}, but the index is append-only: a published version must never be removed. Publish a new version instead. The reserved smoke-namespace reset is refused: {refusal}.
+
 ## index-entry-source-moved
 
 ipe package audit-entry: `{name}` version {version} declares source `{source}`, but this package's established source is `{expected}`. A package name is bound to one source repository; a version pointing elsewhere is a name-squat and is refused.
@@ -1273,7 +1277,7 @@ ipe package publish: HEAD did not resolve to a full SHA: {detail}
 
 ## publish-fresh-refused
 
-ipe package publish: `--fresh` is only permitted for the blessed publisher on a reserved-namespace package (the disposable smoke probe); it would otherwise erase `{name}`'s published history. Publish a new version without `--fresh` instead.
+ipe package publish: `--fresh` is only permitted on a reserved-namespace package (the disposable smoke probe); it would otherwise erase `{name}`'s published history. Publish a new version without `--fresh` instead.
 
 # Build and run
 
@@ -1321,17 +1325,25 @@ wasm-bindgen failed (exit {code}); ensure wasm-bindgen-cli {version} is installe
 
 the wasm32-wasip1 build reported no `.wasm` artifact for {dir} — cargo's JSON message stream carried no `compiler-artifact` naming the module
 
-## record-no-session
+## session-no-recordable
 
-ipe run --record: {name} has no recordable session — recording captures the update loop of a `Cli.tea` or `Worker.tea` app
+ipe run {flag}: {name} has no recordable session — recording and replay capture the update loop of a `Cli.tea` or `Worker.tea` app
 
-## record-native-only
+## session-native-only
 
-ipe run --record: records a native run only — drop `--target wasi`
+ipe run {flag}: works on a native run only — drop `--target wasi`
 
-## record-jailed
+## session-jailed
 
-ipe run --record: a native-bearing program runs jailed, where the session log cannot be written — record a pure Ipê build of the app
+ipe run {flag}: a native-bearing program runs jailed, where the session log cannot be reached — record and replay a pure Ipê build of the app
+
+## replay-no-default-log
+
+ipe run --replay: no session log at {typed} or trace at {trace} — record one with `ipe run --record`
+
+## replay-log-missing
+
+ipe run --replay: no session log at {path} — record one with `ipe run --record`
 
 ## program-exited
 

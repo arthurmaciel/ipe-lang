@@ -108,11 +108,13 @@ served counter with the released binary:
 - `ipe doc` — reference documentation from source (json / markdown / html; runs with or without a project).
 - `ipe lint` / `ipe lint --fix` — advisory static analysis, configured by a `lint.ipe`. → [lint guide](docs/guide/lint.md)
 - `ipe lsp` — completion, go-to-definition, find-references, rename, code actions, semantic tokens over stdio. → [editor setup](docs/topics/editor-integration.md)
-- `ipe run --record` records a cli/worker app's TEA session (each `(msg, model)` step, bounded ring) to `out/session.ipelog` as plain text — every control byte is stripped at write, so the log is safe to `cat`, pipe or grep. A record surface, not a live scrubber (the interactive form can't be the cli default: it fails closed to plain streaming off-TTY).
+- `ipe run --record` records a cli/worker app's TEA session (each `(msg, model)` step, bounded ring) to `out/session.ipelog` as plain text, plus a typed `out/session.ipemsgs` when the app's `Msg` is encodable. `ipe run --replay [<log>]` rebuilds the app and re-folds `update` over that log from `init` (or from the recorded base, if the ring overflowed) with no `Cmd` fired — no I/O, network or DB effect runs again — printing each step, control bytes stripped, and the final model. The same program and log give byte-identical output, so a hand-typed bug reproduction becomes a shareable regression. A log from a changed program, or a truncated or oversized one, is refused whole. A `Msg` carrying a `Secret` is recorded as a trace only; `--replay` then shows that trace (the default when no typed log exists, or any `.ipelog` you name) — labelled as a trace, nothing re-run, capped, and with every control character stripped, so a handed-over or planted log cannot drive your terminal. Read logs with `--replay`, not `cat`.
 
   ```sh
-  ipe run --record              # runs the app, writes out/session.ipelog on exit
-  cat out/session.ipelog        # one "<msg> => <model>" line per step
+  printf 'add 2\nadd 5\n' | ipe run --record  # runs the app, writes out/session.ipelog + out/session.ipemsgs
+  ipe run --replay                               # start + one "<msg> => <model>" line per step + final model
+  ipe run --replay bug.ipemsgs                   # replay a log someone sent you
+  ipe run --replay bug.ipelog                    # show a trace someone sent you, sanitised
   ```
 - `ipe add <pkg>[@<req>]` / `ipe remove <pkg>` — add or remove an Ipê package dependency. `add` resolves the requirement through the index (fetch, hash-verify), records the exact pin in `ipe.lock`, and writes the requirement into `package.ipe`'s `dependencies` block so a fresh clone re-resolves the same dependency; `remove` drops it from both. Author-written `depGit`/`depPath` escapes are left untouched — `add` never overwrites one.
 

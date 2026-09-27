@@ -1267,6 +1267,11 @@ pub static EXCLUDED_NAMES: &[&str] = &[
     // operator never sets this var directly). Read by the recorder dump; present
     // only in a `debugger` build.
     "IPE_DEBUGGER_RECORD",
+    // Dev-loop-internal replay-log path — set by `ipe run --replay` on the
+    // executed child (never operator-set). Read by the cli/worker loop, which
+    // replays the named typed log instead of running; present only in a
+    // `debugger` build.
+    "IPE_DEBUGGER_REPLAY",
 ];
 
 #[cfg(test)]

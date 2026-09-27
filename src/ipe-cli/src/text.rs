@@ -756,6 +756,9 @@ messages! {
     index_entry_version_rewritten(name, version) = "index-entry-version-rewritten";
     /// An index entry drops a published version.
     index_entry_version_dropped(name, version) = "index-entry-version-dropped";
+    /// A reserved package's audit-entry drops a published version without a blessed reset.
+    index_entry_version_dropped_reset_refused(name, version, refusal) =
+        "index-entry-version-dropped-reset-refused";
     /// An index entry moves a package's source repository.
     index_entry_source_moved(name, version, source, expected) = "index-entry-source-moved";
     /// `ipe clean` ran outside a project root.
@@ -988,12 +991,16 @@ messages! {
     wasm_bindgen_failed(code, version) = "wasm-bindgen-failed";
     /// The `wasm32-wasip1` build reported no `.wasm` artifact.
     wasi_artifact_missing(dir) = "wasi-artifact-missing";
-    /// `ipe run --record` on a program with no recordable session.
-    record_no_session(name) = "record-no-session";
-    /// `ipe run --record` with `--target wasi`.
-    record_native_only = "record-native-only";
-    /// `ipe run --record` on a native-bearing program.
-    record_jailed = "record-jailed";
+    /// `ipe run --record`/`--replay` on a program with no recordable session.
+    session_no_recordable(flag, name) = "session-no-recordable";
+    /// `ipe run --record`/`--replay` with `--target wasi`.
+    session_native_only(flag) = "session-native-only";
+    /// `ipe run --record`/`--replay` on a native-bearing program.
+    session_jailed(flag) = "session-jailed";
+    /// `ipe run --replay` with no recorded log or trace in the output root.
+    replay_no_default_log(typed, trace) = "replay-no-default-log";
+    /// `ipe run --replay <log>` naming no regular file.
+    replay_log_missing(path) = "replay-log-missing";
     /// A run program exited non-zero.
     program_exited(program, code) = "program-exited";
     /// `ipe exec` found no artifact directory.

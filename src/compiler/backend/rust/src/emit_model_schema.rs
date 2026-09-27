@@ -8,6 +8,10 @@
 //! shape. A rejected tag falls through the store's existing fail-soft path
 //! (drop the session, fresh `init`), never a panic.
 //!
+//! The same fingerprint keys a `--debugger` cli/worker session log
+//! ([`session_codec_arg`]): `ipe run --replay` refuses a log whose `Msg` tag
+//! differs from the running program's, never decoding it into the wrong shape.
+//!
 //! Canonicalisation rules (each with a regression test below):
 //!
 //! * Record fields hash sorted by RESOLVED NAME, never by raw [`Symbol`] —
@@ -37,7 +41,7 @@
 
 use ipe_diagnostics::{DResult, Diagnostic};
 use ipe_intern::Symbol;
-use ipe_ir::{IrType, ModPath};
+use ipe_ir::{IrType, ModPath, ir_type_is_serde};
 use sha2::{Digest, Sha256};
 
 use crate::EmitCtx;
@@ -73,6 +77,59 @@ pub fn model_schema_tag(ctx: &EmitCtx, model_ty: &IrType) -> DResult<[u8; 32]> {
     update_str(&mut h, WIRE_EPOCH);
     hash_ty(ctx, model_ty, &mut h, FUEL)?;
     Ok(h.finalize().into())
+}
+
+/// The runtime module holding the cli/worker session codecs.
+const SESSION_LOG_PATH: &str = "ipe_runtime::debugger::session_log";
+
+/// The session codec a `--debugger` cli/worker app entry passes the runtime.
+///
+/// Picked from what the app's types can encode, so the runtime's codec bounds
+/// hold by construction (the serde derive lands on exactly the types
+/// [`ir_type_is_serde`] accepts, see `EmitCtx::derives_serde`):
+///
+/// * `Msg` and `Model` both serde → `Full` (an overflowed session carries its
+///   base and replays from it);
+/// * only `Msg` serde → `MsgsOnly` (an overflowed session is refused at replay);
+/// * `Msg` not serde (a `Secret`, a handle, …) → `TraceOnly`, recorded as a
+///   trace and refused at replay with the reason;
+/// * either type unrecoverable from the cfg → `TraceOnly` as well — without a
+///   fingerprint no log can be proved to match the program, so none is written.
+///
+/// # Errors
+/// Propagates [`model_schema_tag`]'s resolution failures.
+pub fn session_codec_arg(
+    ctx: &EmitCtx,
+    msg_ty: Option<&IrType>,
+    model_ty: Option<&IrType>,
+) -> DResult<String> {
+    let (Some(msg_ty), Some(model_ty)) = (msg_ty, model_ty) else {
+        return Ok(format!(
+            "{SESSION_LOG_PATH}::TraceOnly({SESSION_LOG_PATH}::Unreplayable::TypeUnknown)"
+        ));
+    };
+    let is_serde = |ty: &IrType| ir_type_is_serde(ty, &|home, name| ctx.enum_is_serde(home, name));
+    if !is_serde(msg_ty) {
+        return Ok(format!(
+            "{SESSION_LOG_PATH}::TraceOnly({SESSION_LOG_PATH}::Unreplayable::MsgNotEncodable)"
+        ));
+    }
+    let codec = if is_serde(model_ty) {
+        "Full"
+    } else {
+        "MsgsOnly"
+    };
+    let msg_tag = tag_literal(&model_schema_tag(ctx, msg_ty)?);
+    let model_tag = tag_literal(&model_schema_tag(ctx, model_ty)?);
+    Ok(format!(
+        "{SESSION_LOG_PATH}::{codec}::new({msg_tag}, {model_tag})"
+    ))
+}
+
+/// A schema tag as a Rust `[u8; 32]` array literal.
+fn tag_literal(tag: &[u8; 32]) -> String {
+    let bytes: Vec<String> = tag.iter().map(|b| format!("0x{b:02x}")).collect();
+    format!("[{}]", bytes.join(", "))
 }
 
 /// Recursion budget — the same belt-and-braces bound
@@ -975,5 +1032,83 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// An `EmitCtx` over an empty program, for the session-codec choice.
+    fn session_ctx<'a>(interner: &'a Interner, program: &'a Program) -> DResult<EmitCtx<'a>> {
+        EmitCtx::build(
+            interner,
+            program,
+            DbDriver::Sqlite,
+            None,
+            ipe_ir::Target::Native,
+            Vec::new(),
+            false,
+            None,
+            false,
+            String::new(),
+            false,
+            false,
+            None,
+        )
+    }
+
+    /// Serde `Msg` and `Model` get the `Full` codec, keyed by both tags.
+    #[test]
+    fn session_codec_full_when_both_types_encode() -> DResult<()> {
+        let interner = Interner::new();
+        let program = empty_program();
+        let ctx = session_ctx(&interner, &program)?;
+        let codec = super::session_codec_arg(&ctx, Some(&IrType::Str), Some(&IrType::Int))?;
+        assert!(
+            codec.starts_with("ipe_runtime::debugger::session_log::Full::new([0x"),
+            "{codec}"
+        );
+        Ok(())
+    }
+
+    /// A non-serde `Model` gets `MsgsOnly`: an overflowed session is refused.
+    #[test]
+    fn session_codec_msgs_only_when_model_does_not_encode() -> DResult<()> {
+        let interner = Interner::new();
+        let program = empty_program();
+        let ctx = session_ctx(&interner, &program)?;
+        let codec = super::session_codec_arg(&ctx, Some(&IrType::Int), Some(&IrType::Secret))?;
+        assert!(
+            codec.starts_with("ipe_runtime::debugger::session_log::MsgsOnly::new("),
+            "{codec}"
+        );
+        Ok(())
+    }
+
+    /// A `Secret`-bearing `Msg` is trace-only; replay refuses with the reason.
+    #[test]
+    fn session_codec_trace_only_for_secret_msg() -> DResult<()> {
+        let interner = Interner::new();
+        let program = empty_program();
+        let ctx = session_ctx(&interner, &program)?;
+        let secret_msg = IrType::Maybe(Box::new(IrType::Secret));
+        let codec = super::session_codec_arg(&ctx, Some(&secret_msg), Some(&IrType::Int))?;
+        assert_eq!(
+            codec,
+            "ipe_runtime::debugger::session_log::TraceOnly(\
+             ipe_runtime::debugger::session_log::Unreplayable::MsgNotEncodable)"
+        );
+        Ok(())
+    }
+
+    /// An unrecoverable type writes no typed log: nothing proves a log matches.
+    #[test]
+    fn session_codec_trace_only_for_unknown_type() -> DResult<()> {
+        let interner = Interner::new();
+        let program = empty_program();
+        let ctx = session_ctx(&interner, &program)?;
+        let codec = super::session_codec_arg(&ctx, None, Some(&IrType::Int))?;
+        assert_eq!(
+            codec,
+            "ipe_runtime::debugger::session_log::TraceOnly(\
+             ipe_runtime::debugger::session_log::Unreplayable::TypeUnknown)"
+        );
+        Ok(())
     }
 }
