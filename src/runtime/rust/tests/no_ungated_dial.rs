@@ -1,15 +1,19 @@
-//! Dial-gate scan: every raw network dial in the runtime's dial-site files
-//! must route through its typed SSRF gate.
+//! Dial-gate scan: every raw network dial in the runtime must route through
+//! its typed SSRF gate.
 //!
-//! The rule is structural, never proximity-based. A sqlx dial (`connect`,
-//! `connect_with`, `connect_lazy`, `connect_lazy_with`, in any method, path, or
-//! reference form) or `*PoolOptions` opener is admitted only as `VettedPool`'s
-//! own associated `connect`, and `db.rs` holds exactly one raw dial, inside the
-//! body of `VettedPool::connect`, whose argument is the one binding that body
-//! takes from the driver-typed `DB::gated_connect_options`. An SMTP transport
-//! is admitted only when its host argument is `<binding>.dial_host(…)`, a
-//! method only `VettedDial` has. Renaming or redefining a gate or dial name is
-//! itself a violation, since it would let a raw dial wear the gate's name.
+//! Every `.rs` file under `src/` is scanned under every rule. The rule is
+//! structural, never proximity-based. A sqlx dial (`connect`, `connect_with`,
+//! `connect_lazy`, `connect_lazy_with`, in any method, path, or reference form)
+//! or `*PoolOptions` opener is admitted only as `VettedPool`'s own associated
+//! `connect`, reached as `VettedPool`, `crate::db::VettedPool`, or
+//! `super::db::VettedPool`; `db.rs` holds exactly one raw dial, inside the body
+//! of `VettedPool::connect`, whose argument is the one binding that body takes
+//! from the driver-typed `DB::gated_connect_options`. The only other raw dials
+//! are the named entries of [`ALLOWED_DIALS`], each matching exactly one dial.
+//! An SMTP transport is admitted only when its host argument is
+//! `<binding>.dial_host(…)`, a method only `VettedDial` in `ssrf.rs` may
+//! define. Renaming or redefining a gate or dial name is itself a violation,
+//! since it would let a raw dial wear the gate's name.
 //!
 //! Every source is parsed with `syn`, so the scan reads the same syntax tree
 //! rustc does: comments and string literals are never code, and a
@@ -19,16 +23,21 @@
 //! unrecognised shape can only turn the scan red, never vacuously green. A
 //! macro body is scanned as the expressions or statements it parses as, or,
 //! when it parses as neither, token by token, where every dial-named
-//! identifier counts as an ungated dial.
+//! identifier counts as an ungated dial; inside a macro body no `#[cfg(test)]`
+//! is honoured, since the macro decides what its attributes mean. Syntax `syn`
+//! keeps only as tokens (a verbatim item or expression) is scanned token by
+//! token too.
 
 use proc_macro2::{TokenStream, TokenTree};
+use std::path::{Path, PathBuf};
 use syn::ext::IdentExt;
 use syn::punctuated::Punctuated;
 use syn::visit::{self, Visit};
 use syn::{
     Arm, Attribute, Block, Expr, ExprAssign, ExprCall, ExprMethodCall, ExprPath, Field, FieldValue,
-    Ident, ImplItem, ImplItemFn, Item, ItemFn, ItemImpl, ItemUse, Local, Macro, Meta, Pat,
-    PatIdent, Stmt, Token, TraitItem, TraitItemFn, Type, TypeParam, UseTree, Variant,
+    ForeignItem, ForeignItemFn, Ident, ImplItem, ImplItemFn, Item, ItemFn, ItemImpl, ItemUse,
+    Local, Macro, Meta, Pat, PatIdent, Stmt, Token, TraitItem, TraitItemFn, Type, TypeParam,
+    UseTree, Variant,
 };
 
 // ---------------------------------------------------------------------------
@@ -49,6 +58,13 @@ const GATED_OWNER: &str = "VettedPool";
 /// The module that defines [`GATED_OWNER`].
 const GATED_OWNER_MODULE: &str = "db";
 
+/// The file that defines [`GATED_OWNER`].
+const GATED_OWNER_FILE: &str = "db.rs";
+
+/// The module paths [`GATED_OWNER`] may be reached through, besides its bare name.
+const GATED_OWNER_PATHS: [[&str; 2]; 2] =
+    [["crate", GATED_OWNER_MODULE], ["super", GATED_OWNER_MODULE]];
+
 /// The gate function `VettedPool::connect` takes its options from.
 const GATE_OPTIONS_FN: &str = "gated_connect_options";
 
@@ -60,6 +76,67 @@ const SMTP_TRANSPORT_FNS: &[&str] = &["builder_dangerous", "relay", "starttls_re
 
 /// The `VettedDial` method that yields the vetted dial host.
 const VETTED_HOST_FN: &str = "dial_host";
+
+/// The type whose method [`VETTED_HOST_FN`] is.
+const VETTED_HOST_OWNER: &str = "VettedDial";
+
+/// The file that defines [`VETTED_HOST_OWNER`].
+const VETTED_HOST_FILE: &str = "ssrf.rs";
+
+/// Keywords after which an identifier is the name being defined.
+const DEFINING_KEYWORDS: [&str; 9] = [
+    "fn", "struct", "enum", "union", "type", "trait", "mod", "static", "const",
+];
+
+/// A raw dial outside `db.rs` admitted by name, because it opens no
+/// caller-supplied network target.
+struct AllowedDial {
+    /// The source file, relative to `src/`.
+    file: &'static str,
+    /// The free function whose body holds the dial.
+    func: &'static str,
+    /// The dial's path, as written.
+    dial: &'static str,
+    /// Why the dial needs no gate.
+    why: &'static str,
+}
+
+impl AllowedDial {
+    /// Whether `dial` is this entry's.
+    fn admits(&self, dial: &Dial) -> bool {
+        dial.path == self.dial
+            && dial.within.impl_of.is_none()
+            && dial.within.func.as_deref() == Some(self.func)
+    }
+}
+
+/// Every raw dial admitted outside `db.rs`; each must match exactly one dial.
+const ALLOWED_DIALS: [AllowedDial; 4] = [
+    AllowedDial {
+        file: "web/hub.rs",
+        func: "open_spill",
+        dial: "SqlitePool::connect_with",
+        why: "opens the console's local SQLite spill file from a filesystem path, not a URL",
+    },
+    AllowedDial {
+        file: "telemetry_spill.rs",
+        func: "enable_from_env",
+        dial: "SqlitePool::connect",
+        why: "opens the local SQLite spill file the runtime's own environment names",
+    },
+    AllowedDial {
+        file: "ws_client.rs",
+        func: "do_connect",
+        dial: "tokio::net::TcpStream::connect",
+        why: "a TCP dial of the address `VettedDial::Pinned` proved, not a sqlx dial",
+    },
+    AllowedDial {
+        file: "web/console_proxy.rs",
+        func: "wait_ready",
+        dial: "tokio::net::TcpStream::connect",
+        why: "a loopback readiness probe of the child this process spawned, not a sqlx dial",
+    },
+];
 
 /// Whether `name` is a sqlx pool-options builder.
 fn is_pool_options(name: &str) -> bool {
@@ -265,6 +342,8 @@ enum DialKind {
 #[derive(Clone, Debug)]
 struct Dial {
     name: String,
+    /// The path the dial is reached through, as written (`.name` for a method).
+    path: String,
     kind: DialKind,
     /// A `VettedPool::connect` call, which routes through the gate.
     gated: bool,
@@ -286,6 +365,8 @@ struct Transport {
 #[derive(Default)]
 struct Scan {
     scope: Scope,
+    /// How many macro bodies enclose the node being walked.
+    macro_depth: usize,
     /// Every function body walked.
     fns: Vec<Scope>,
     dials: Vec<Dial>,
@@ -294,6 +375,8 @@ struct Scan {
     gate_structs: usize,
     /// Renames or definitions that could make a raw dial wear a gate's name.
     forgeries: Vec<String>,
+    /// Every `fn dial_host` definition, with its scope.
+    vetted_host_defs: Vec<Scope>,
     /// Every name a pattern binds, with its scope.
     bindings: Vec<(Scope, String)>,
     /// `let <name> = DB::gated_connect_options(…)…;` bindings, with their scope.
@@ -336,6 +419,19 @@ fn is_gate_options_call(expr: &Expr) -> bool {
     }
 }
 
+/// Whether `module` is a path [`GATED_OWNER`] may be reached through: none,
+/// or one of [`GATED_OWNER_PATHS`].
+fn is_gated_owner_module(module: &[String]) -> bool {
+    module.is_empty() || is_gated_owner_path(module)
+}
+
+/// Whether `module` is exactly one of [`GATED_OWNER_PATHS`].
+fn is_gated_owner_path(module: &[String]) -> bool {
+    GATED_OWNER_PATHS
+        .iter()
+        .any(|path| module.len() == path.len() && module.iter().zip(path).all(|(m, p)| m == p))
+}
+
 /// Whether `expr` is `<binding>.dial_host(…)`.
 fn is_vetted_host(expr: &Expr) -> bool {
     match expr {
@@ -347,6 +443,21 @@ fn is_vetted_host(expr: &Expr) -> bool {
 }
 
 impl Scan {
+    /// Whether `attrs` remove their node from the build.
+    ///
+    /// Inside a macro body no attribute is honoured: the macro, not rustc,
+    /// decides what it means.
+    fn prunes(&self, attrs: &[Attribute]) -> bool {
+        self.macro_depth == 0 && cfg_test_only(attrs)
+    }
+
+    /// Records `name` when it defines [`VETTED_HOST_FN`].
+    fn record_fn_def(&mut self, name: &str) {
+        if name == VETTED_HOST_FN {
+            self.vetted_host_defs.push(self.scope.clone());
+        }
+    }
+
     /// Walks `body` with `scope` as the enclosing scope, then restores the outer one.
     fn within(&mut self, scope: Scope, body: impl FnOnce(&mut Self)) {
         let outer = std::mem::replace(&mut self.scope, scope);
@@ -354,9 +465,17 @@ impl Scan {
         self.scope = outer;
     }
 
-    fn record_dial(&mut self, name: String, kind: DialKind, gated: bool, arg: Option<String>) {
+    fn record_dial(
+        &mut self,
+        name: String,
+        path: String,
+        kind: DialKind,
+        gated: bool,
+        arg: Option<String>,
+    ) {
         self.dials.push(Dial {
             name,
+            path,
             kind,
             gated,
             arg,
@@ -375,8 +494,8 @@ impl Scan {
     /// Records the dial `path` names, if any, and whether it is gated.
     ///
     /// A `VettedPool::connect` path is gated only without a qualified self
-    /// type and, when longer than `VettedPool::connect`, only through the `db`
-    /// module that defines `VettedPool`.
+    /// type or a leading `::`, and only as `VettedPool::connect` or through
+    /// one of [`GATED_OWNER_PATHS`].
     fn record_path_dial(&mut self, path: &ExprPath, arg: Option<String>) -> bool {
         let names: Vec<String> = path
             .path
@@ -387,56 +506,79 @@ impl Scan {
         let Some(last) = names.last() else {
             return false;
         };
+        let written = names.join("::");
         if DIAL_FNS.contains(&last.as_str()) {
             let owner_at = names.len().checked_sub(2);
             let owner = owner_at.and_then(|i| names.get(i));
-            let module = owner_at
-                .and_then(|i| i.checked_sub(1))
-                .and_then(|i| names.get(i));
+            let module = owner_at.and_then(|i| names.get(..i));
             let gated = path.qself.is_none()
+                && path.path.leading_colon.is_none()
                 && owner.is_some_and(|o| o == GATED_OWNER)
-                && module.is_none_or(|m| m == GATED_OWNER_MODULE);
-            self.record_dial(last.clone(), DialKind::Sqlx, gated, arg);
+                && module.is_some_and(is_gated_owner_module);
+            self.record_dial(last.clone(), written, DialKind::Sqlx, gated, arg);
             return true;
         }
         if let Some(opener) = names.iter().find(|n| is_pool_options(n)) {
-            self.record_dial(opener.clone(), DialKind::PoolOptions, false, None);
+            self.record_dial(opener.clone(), written, DialKind::PoolOptions, false, None);
             return true;
         }
         false
     }
 
-    /// Records every dial- or transport-named identifier in `tokens` as ungated.
+    /// Records every dial- or transport-named identifier in `tokens` as
+    /// ungated, and every gate name a keyword defines as a forgery or a
+    /// [`VETTED_HOST_FN`] definition.
     fn scan_tokens(&mut self, tokens: TokenStream) {
+        let mut defining: Option<String> = None;
         for tree in tokens {
+            let mut keyword = None;
             match tree {
                 TokenTree::Group(group) => self.scan_tokens(group.stream()),
                 TokenTree::Ident(id) => {
                     let name = name_of(&id);
+                    if let Some(kw) = defining.as_deref() {
+                        if kw == "fn" {
+                            self.record_fn_def(&name);
+                        }
+                        if name == GATED_OWNER {
+                            self.forgeries.push(format!(
+                                "{}: a macro body defines `{kw} {GATED_OWNER}`",
+                                self.scope
+                            ));
+                        }
+                    }
                     if DIAL_FNS.contains(&name.as_str()) {
-                        self.record_dial(name, DialKind::Sqlx, false, None);
+                        self.record_dial(name.clone(), name, DialKind::Sqlx, false, None);
                     } else if is_pool_options(&name) {
-                        self.record_dial(name, DialKind::PoolOptions, false, None);
+                        self.record_dial(name.clone(), name, DialKind::PoolOptions, false, None);
                     } else if SMTP_TRANSPORT_FNS.contains(&name.as_str()) {
                         self.record_transport(name, false);
+                    } else if DEFINING_KEYWORDS.contains(&name.as_str()) {
+                        keyword = Some(name);
                     }
                 }
                 TokenTree::Punct(_) | TokenTree::Literal(_) => {}
             }
+            defining = keyword;
         }
     }
 
     /// Records a forgery when `tree` renames a guarded name or imports
-    /// `VettedPool` from anywhere but its own module.
-    fn scan_use(&mut self, tree: &UseTree, parent: Option<&str>) {
+    /// `VettedPool` through any path but [`GATED_OWNER_PATHS`].
+    fn scan_use(&mut self, tree: &UseTree, prefix: &mut Vec<String>) {
         match tree {
-            UseTree::Path(p) => self.scan_use(&p.tree, Some(name_of(&p.ident).as_str())),
+            UseTree::Path(p) => {
+                prefix.push(name_of(&p.ident));
+                self.scan_use(&p.tree, prefix);
+                prefix.pop();
+            }
             UseTree::Name(n) => {
-                if name_of(&n.ident) == GATED_OWNER && parent != Some(GATED_OWNER_MODULE) {
+                if name_of(&n.ident) == GATED_OWNER && !is_gated_owner_path(prefix) {
                     self.forgeries.push(format!(
-                        "{}: imports `{GATED_OWNER}` from `{}`, not `{GATED_OWNER_MODULE}`",
+                        "{}: imports `{GATED_OWNER}` from `{}`, not `crate::{GATED_OWNER_MODULE}` \
+                         or `super::{GATED_OWNER_MODULE}`",
                         self.scope,
-                        parent.unwrap_or("<root>")
+                        prefix.join("::")
                     ));
                 }
             }
@@ -449,7 +591,7 @@ impl Scan {
             }
             UseTree::Group(g) => {
                 for item in &g.items {
-                    self.scan_use(item, parent);
+                    self.scan_use(item, prefix);
                 }
             }
             UseTree::Glob(_) => {}
@@ -459,8 +601,11 @@ impl Scan {
 
 impl<'ast> Visit<'ast> for Scan {
     fn visit_item(&mut self, item: &'ast Item) {
-        if cfg_test_only(item_attrs(item)) {
+        if self.prunes(item_attrs(item)) {
             return;
+        }
+        if let Item::Verbatim(tokens) = item {
+            self.scan_tokens(tokens.clone());
         }
         if item_name(item).is_some_and(|n| n == GATED_OWNER) {
             if matches!(item, Item::Struct(_)) {
@@ -476,7 +621,11 @@ impl<'ast> Visit<'ast> for Scan {
     }
 
     fn visit_item_use(&mut self, item: &'ast ItemUse) {
-        self.scan_use(&item.tree, None);
+        // A leading `::` names an external crate, never this one's `db`.
+        let mut prefix = item
+            .leading_colon
+            .map_or_else(Vec::new, |_| vec![String::new()]);
+        self.scan_use(&item.tree, &mut prefix);
     }
 
     fn visit_item_fn(&mut self, item: &'ast ItemFn) {
@@ -485,6 +634,7 @@ impl<'ast> Visit<'ast> for Scan {
             ..Scope::default()
         };
         self.fns.push(scope.clone());
+        self.record_fn_def(&name_of(&item.sig.ident));
         self.within(scope, |s| visit::visit_item_fn(s, item));
     }
 
@@ -502,12 +652,17 @@ impl<'ast> Visit<'ast> for Scan {
     }
 
     fn visit_impl_item(&mut self, item: &'ast ImplItem) {
-        if !cfg_test_only(impl_item_attrs(item)) {
-            visit::visit_impl_item(self, item);
+        if self.prunes(impl_item_attrs(item)) {
+            return;
         }
+        if let ImplItem::Verbatim(tokens) = item {
+            self.scan_tokens(tokens.clone());
+        }
+        visit::visit_impl_item(self, item);
     }
 
     fn visit_impl_item_fn(&mut self, item: &'ast ImplItemFn) {
+        self.record_fn_def(&name_of(&item.sig.ident));
         let scope = Scope {
             func: Some(name_of(&item.sig.ident)),
             ..self.scope.clone()
@@ -517,12 +672,29 @@ impl<'ast> Visit<'ast> for Scan {
     }
 
     fn visit_trait_item(&mut self, item: &'ast TraitItem) {
-        if !cfg_test_only(trait_item_attrs(item)) {
-            visit::visit_trait_item(self, item);
+        if self.prunes(trait_item_attrs(item)) {
+            return;
         }
+        if let TraitItem::Verbatim(tokens) = item {
+            self.scan_tokens(tokens.clone());
+        }
+        visit::visit_trait_item(self, item);
+    }
+
+    fn visit_foreign_item(&mut self, item: &'ast ForeignItem) {
+        if let ForeignItem::Verbatim(tokens) = item {
+            self.scan_tokens(tokens.clone());
+        }
+        visit::visit_foreign_item(self, item);
+    }
+
+    fn visit_foreign_item_fn(&mut self, item: &'ast ForeignItemFn) {
+        self.record_fn_def(&name_of(&item.sig.ident));
+        visit::visit_foreign_item_fn(self, item);
     }
 
     fn visit_trait_item_fn(&mut self, item: &'ast TraitItemFn) {
+        self.record_fn_def(&name_of(&item.sig.ident));
         let scope = Scope {
             func: Some(name_of(&item.sig.ident)),
             ..self.scope.clone()
@@ -542,25 +714,25 @@ impl<'ast> Visit<'ast> for Scan {
     }
 
     fn visit_field(&mut self, field: &'ast Field) {
-        if !cfg_test_only(&field.attrs) {
+        if !self.prunes(&field.attrs) {
             visit::visit_field(self, field);
         }
     }
 
     fn visit_variant(&mut self, variant: &'ast Variant) {
-        if !cfg_test_only(&variant.attrs) {
+        if !self.prunes(&variant.attrs) {
             visit::visit_variant(self, variant);
         }
     }
 
     fn visit_arm(&mut self, arm: &'ast Arm) {
-        if !cfg_test_only(&arm.attrs) {
+        if !self.prunes(&arm.attrs) {
             visit::visit_arm(self, arm);
         }
     }
 
     fn visit_field_value(&mut self, field: &'ast FieldValue) {
-        if !cfg_test_only(&field.attrs) {
+        if !self.prunes(&field.attrs) {
             visit::visit_field_value(self, field);
         }
     }
@@ -571,7 +743,7 @@ impl<'ast> Visit<'ast> for Scan {
             Stmt::Macro(mac) => &mac.attrs,
             _ => &[],
         };
-        if !cfg_test_only(attrs) {
+        if !self.prunes(attrs) {
             visit::visit_stmt(self, stmt);
         }
     }
@@ -599,9 +771,27 @@ impl<'ast> Visit<'ast> for Scan {
     }
 
     fn visit_expr(&mut self, expr: &'ast Expr) {
-        if !cfg_test_only(expr_attrs(expr)) {
-            visit::visit_expr(self, expr);
+        if self.prunes(expr_attrs(expr)) {
+            return;
         }
+        if let Expr::Verbatim(tokens) = expr {
+            self.scan_tokens(tokens.clone());
+        }
+        visit::visit_expr(self, expr);
+    }
+
+    fn visit_pat(&mut self, pat: &'ast Pat) {
+        if let Pat::Verbatim(tokens) = pat {
+            self.scan_tokens(tokens.clone());
+        }
+        visit::visit_pat(self, pat);
+    }
+
+    fn visit_type(&mut self, ty: &'ast Type) {
+        if let Type::Verbatim(tokens) = ty {
+            self.scan_tokens(tokens.clone());
+        }
+        visit::visit_type(self, ty);
     }
 
     fn visit_expr_assign(&mut self, assign: &'ast ExprAssign) {
@@ -634,7 +824,13 @@ impl<'ast> Visit<'ast> for Scan {
         let method = name_of(&call.method);
         if DIAL_FNS.contains(&method.as_str()) {
             let arg = call.args.first().and_then(local_name);
-            self.record_dial(method, DialKind::Sqlx, false, arg);
+            self.record_dial(
+                method.clone(),
+                format!(".{method}"),
+                DialKind::Sqlx,
+                false,
+                arg,
+            );
         } else if SMTP_TRANSPORT_FNS.contains(&method.as_str()) {
             let vetted = call.args.first().is_some_and(is_vetted_host);
             self.record_transport(method, vetted);
@@ -648,6 +844,7 @@ impl<'ast> Visit<'ast> for Scan {
     }
 
     fn visit_macro(&mut self, mac: &'ast Macro) {
+        self.macro_depth = self.macro_depth.saturating_add(1);
         if let Ok(exprs) = mac.parse_body_with(Punctuated::<Expr, Token![,]>::parse_terminated) {
             for expr in &exprs {
                 self.visit_expr(expr);
@@ -659,6 +856,7 @@ impl<'ast> Visit<'ast> for Scan {
         } else {
             self.scan_tokens(mac.tokens.clone());
         }
+        self.macro_depth = self.macro_depth.saturating_sub(1);
     }
 }
 
@@ -681,24 +879,79 @@ fn scan(name: &str, src: &str) -> Scan {
 // The rules.
 // ---------------------------------------------------------------------------
 
+/// Every raw sqlx dial or pool opener in `scan` that is neither gated nor an
+/// entry of `allowed`, and every entry of `allowed` for `name` that does not
+/// match exactly one dial.
+fn raw_dial_violations(name: &str, scan: &Scan, allowed: &[AllowedDial]) -> Vec<String> {
+    let entries: Vec<&AllowedDial> = allowed.iter().filter(|a| a.file == name).collect();
+    let mut violations: Vec<String> = scan
+        .dials
+        .iter()
+        .filter(|d| !d.gated && !entries.iter().any(|a| a.admits(d)))
+        .map(|d| format!("{name}: {}: raw dial `{}`", d.within, d.name))
+        .collect();
+    for entry in entries {
+        let matched = scan
+            .dials
+            .iter()
+            .filter(|d| !d.gated && entry.admits(d))
+            .count();
+        if matched != 1 {
+            violations.push(format!(
+                "{name}: allowed dial `{}` in fn {} ({}) matches {matched} dials; exactly one \
+                 is admitted",
+                entry.dial, entry.func, entry.why
+            ));
+        }
+    }
+    if scan.gate_structs > 0 {
+        violations.push(format!(
+            "{name}: defines `struct {GATED_OWNER}`, which only `{GATED_OWNER_FILE}` may"
+        ));
+    }
+    violations
+}
+
+/// Every gate forgery in `scan`.
+///
+/// Besides renames and redefinitions of a gate name, a `dial_host` defined
+/// anywhere but inherently on `VettedDial` in `ssrf.rs` is a forgery, and
+/// `ssrf.rs` defines exactly one.
+fn forgery_violations(name: &str, scan: &Scan) -> Vec<String> {
+    let mut violations: Vec<String> = scan
+        .forgeries
+        .iter()
+        .map(|f| format!("{name}: {f}"))
+        .collect();
+    let home = |def: &Scope| {
+        name == VETTED_HOST_FILE
+            && def.impl_of.as_deref() == Some(VETTED_HOST_OWNER)
+            && def.of_trait.is_none()
+    };
+    for def in scan.vetted_host_defs.iter().filter(|d| !home(d)) {
+        violations.push(format!(
+            "{name}: {def}: defines `{VETTED_HOST_FN}`, which only `{VETTED_HOST_OWNER}` in \
+             `{VETTED_HOST_FILE}` may"
+        ));
+    }
+    let at_home = scan.vetted_host_defs.iter().filter(|d| home(d)).count();
+    if name == VETTED_HOST_FILE && at_home != 1 {
+        violations.push(format!(
+            "{name}: {at_home} `{VETTED_HOST_OWNER}::{VETTED_HOST_FN}` definitions; exactly one \
+             is the gate"
+        ));
+    }
+    violations
+}
+
 /// Every raw sqlx dial or pool opener and every gate forgery in `src`.
 ///
 /// Only a gated `VettedPool::connect` call is admitted; every other dial, in
 /// any syntactic form, is a violation naming its enclosing scope.
 fn caller_url_violations(name: &str, src: &str) -> Vec<String> {
     let scan = scan(name, src);
-    let mut violations: Vec<String> = scan
-        .dials
-        .iter()
-        .filter(|d| !d.gated)
-        .map(|d| format!("{name}: {}: raw dial `{}`", d.within, d.name))
-        .collect();
-    if scan.gate_structs > 0 {
-        violations.push(format!(
-            "{name}: defines `struct {GATED_OWNER}`, which only `{GATED_OWNER_MODULE}.rs` may"
-        ));
-    }
-    violations.extend(scan.forgeries.iter().map(|f| format!("{name}: {f}")));
+    let mut violations = raw_dial_violations(name, &scan, &[]);
+    violations.extend(forgery_violations(name, &scan));
     violations
 }
 
@@ -729,14 +982,13 @@ fn gate_argument_violation(scan: &Scan, dial: &Dial) -> Option<String> {
     })
 }
 
-/// Every raw dial in `src`'s production code that bypasses the typed gate.
+/// Every raw dial in `scan` that bypasses the typed gate of `db.rs`.
 ///
 /// Exactly one raw dial is admitted, inside the inherent `VettedPool::connect`,
 /// and only when its argument is that body's binding of
 /// `DB::gated_connect_options(…)`: the driver type, not any text near the
 /// call, decides which gate runs.
-fn db_dials_bypassing_the_gate(name: &str, src: &str) -> Vec<String> {
-    let scan = scan(name, src);
+fn db_gate_violations(name: &str, scan: &Scan) -> Vec<String> {
     let gate = Scope::gate();
     let mut violations = Vec::new();
     let bodies = scan.fns.iter().filter(|f| **f == gate).count();
@@ -752,7 +1004,7 @@ fn db_dials_bypassing_the_gate(name: &str, src: &str) -> Vec<String> {
         .collect();
     match admitted.as_slice() {
         [dial] => {
-            violations.extend(gate_argument_violation(&scan, dial).map(|v| format!("{name}: {v}")))
+            violations.extend(gate_argument_violation(scan, dial).map(|v| format!("{name}: {v}")))
         }
         _ if bodies == 1 => violations.push(format!(
             "{name}: VettedPool::connect holds {} raw dials; exactly one is admitted",
@@ -772,24 +1024,52 @@ fn db_dials_bypassing_the_gate(name: &str, src: &str) -> Vec<String> {
             scan.gate_structs
         ));
     }
-    violations.extend(scan.forgeries.iter().map(|f| format!("{name}: {f}")));
     violations
 }
 
-/// Every SMTP transport built from a host that did not pass the gate.
+/// Every raw dial in `src`'s production code that bypasses the typed gate,
+/// and every gate forgery.
+fn db_dials_bypassing_the_gate(name: &str, src: &str) -> Vec<String> {
+    let scan = scan(name, src);
+    let mut violations = db_gate_violations(name, &scan);
+    violations.extend(forgery_violations(name, &scan));
+    violations
+}
+
+/// Every SMTP transport in `scan` built from a host that did not pass the gate.
 ///
 /// A transport is gated only when its first argument is `<binding>.dial_host(…)`:
 /// `dial_host` exists only on `VettedDial`, whose sole constructor runs the SSRF
 /// gate, so the argument's type proves the host was vetted.
-fn ungated_smtp_transports(name: &str, src: &str) -> Vec<String> {
-    let scan = scan(name, src);
-    let mut violations: Vec<String> = scan
-        .transports
+fn transport_violations(name: &str, scan: &Scan) -> Vec<String> {
+    scan.transports
         .iter()
         .filter(|t| !t.vetted)
         .map(|t| format!("{name}: {}: `{}` dials an unvetted host", t.within, t.name))
-        .collect();
-    violations.extend(scan.forgeries.iter().map(|f| format!("{name}: {f}")));
+        .collect()
+}
+
+/// Every SMTP transport in `src` built from an unvetted host, and every gate forgery.
+fn ungated_smtp_transports(name: &str, src: &str) -> Vec<String> {
+    let scan = scan(name, src);
+    let mut violations = transport_violations(name, &scan);
+    violations.extend(forgery_violations(name, &scan));
+    violations
+}
+
+/// Every violation of every rule in the source file `name`, relative to `src/`.
+///
+/// `db.rs` holds the gate, so its raw dials are held to the gate rule; every
+/// other file admits only gated dials and [`ALLOWED_DIALS`].
+fn tree_violations(name: &str, src: &str) -> Vec<String> {
+    let scan = scan(name, src);
+    let mut violations = if name == GATED_OWNER_FILE {
+        db_gate_violations(name, &scan)
+    } else {
+        raw_dial_violations(name, &scan, &ALLOWED_DIALS)
+    };
+    violations.extend(transport_violations(name, &scan));
+    violations.extend(forgery_violations(name, &scan));
     violations
 }
 
@@ -1326,6 +1606,245 @@ fn smtp_scan_refuses_a_guard_in_a_comment_or_string() {
 }
 
 // ---------------------------------------------------------------------------
+// Refusal tests for gate paths, forged hosts, macro bodies, and verbatim syntax.
+// ---------------------------------------------------------------------------
+
+/// `VettedPool` is the gate only as itself or through `crate::db` or
+/// `super::db`; any other module path, or a leading `::`, may name a forgery.
+#[test]
+fn raw_dial_scan_admits_vetted_pool_only_through_its_own_module() {
+    let admitted = "use super::db::VettedPool;
+use crate::{db::{DbUrl, VettedPool}};
+fn open(url: &str) {
+    super::db::VettedPool::connect(url);
+    crate::db::VettedPool::<sqlx::Sqlite>::connect(url);
+    VettedPool::connect(url);
+}
+";
+    assert_eq!(
+        caller_url_violations("fixture.rs", admitted),
+        Vec::<String>::new()
+    );
+    for fixture in [
+        "fn f() { evil::db::VettedPool::connect(url); }\n",
+        "fn f() { self::db::VettedPool::connect(url); }\n",
+        "fn f() { ::db::VettedPool::connect(url); }\n",
+        "fn f() { crate::db::inner::VettedPool::connect(url); }\n",
+        "fn f() { crate::evil::db::VettedPool::connect(url); }\n",
+        "use evil::db::VettedPool;\n",
+        "use self::db::VettedPool;\n",
+        "use super::super::db::VettedPool;\n",
+        "use ::db::VettedPool;\n",
+        "use crate::evil::{db::VettedPool};\n",
+        "use VettedPool;\n",
+    ] {
+        let violations = caller_url_violations("fixture.rs", fixture);
+        assert_eq!(violations.len(), 1, "{fixture}\n{violations:#?}");
+    }
+}
+
+/// `dial_host` defined anywhere but inherently on `VettedDial` in `ssrf.rs`
+/// would let an unvetted host pass as a vetted one, so every such definition
+/// is refused, and `ssrf.rs` defines exactly one.
+#[test]
+fn smtp_scan_refuses_a_forged_vetted_host() {
+    let home = "impl VettedDial {
+    pub(crate) fn dial_host(self, host: &str) -> String { host.to_owned() }
+}
+";
+    assert_eq!(
+        ungated_smtp_transports("ssrf.rs", home),
+        Vec::<String>::new()
+    );
+    for (name, fixture) in [
+        (
+            "email.rs",
+            "impl Forged { fn dial_host(&self, h: &str) -> String { h.to_owned() } }\n",
+        ),
+        (
+            "email.rs",
+            "impl VettedDial { fn dial_host(self, h: &str) -> String { h.to_owned() } }\n",
+        ),
+        (
+            "email.rs",
+            "fn dial_host(h: &str) -> String { h.to_owned() }\n",
+        ),
+        (
+            "email.rs",
+            "trait Host { fn dial_host(&self) -> String; }\n",
+        ),
+        ("email.rs", "extern \"C\" { fn dial_host(); }\n"),
+        (
+            "email.rs",
+            "macro_rules! forge { () => { fn dial_host() {} }; }\n",
+        ),
+        (
+            "email.rs",
+            "fn send() { run! { fn dial_host() -> String { String::new() } } }\n",
+        ),
+        (
+            "ssrf.rs",
+            "impl VettedDial { fn dial_host(self) -> String { String::new() } }
+impl Other { fn dial_host(self) -> String { String::new() } }
+",
+        ),
+        (
+            "ssrf.rs",
+            "impl VettedDial { fn dial_host(self) -> String { String::new() } }
+impl Host for VettedDial { fn dial_host(self) -> String { String::new() } }
+",
+        ),
+    ] {
+        assert_violations(
+            &ungated_smtp_transports(name, fixture),
+            1,
+            "defines `dial_host`",
+        );
+    }
+    for fixture in [
+        "",
+        "impl VettedDial { fn dial_host(self) -> String { String::new() } }
+impl VettedDial { fn dial_host(self) -> String { String::new() } }
+",
+    ] {
+        assert_violations(
+            &ungated_smtp_transports("ssrf.rs", fixture),
+            1,
+            "exactly one is the gate",
+        );
+    }
+}
+
+/// A macro decides what the attributes in its body mean, so a
+/// `#[cfg(test)]` there removes nothing from the scan.
+#[test]
+fn cfg_test_inside_a_macro_body_is_not_honoured() {
+    for fixture in [
+        "fn production() {
+    run! {
+        #[cfg(test)]
+        let _ = PgPool::connect(url);
+    }
+}
+",
+        "fn production() {
+    run! {
+        #[cfg(test)]
+        fn helper() { PgPool::connect(url); }
+    }
+}
+",
+        "fn production() {
+    let _ = vec![#[cfg(test)] PgPool::connect(url)];
+}
+",
+    ] {
+        assert_violations(
+            &caller_url_violations("fixture.rs", fixture),
+            1,
+            "raw dial `connect`",
+        );
+    }
+}
+
+/// Syntax `syn` keeps only as tokens is scanned token by token, so a dial
+/// inside a verbatim item or expression is still a dial.
+#[test]
+fn raw_dial_scan_reads_verbatim_syntax() {
+    for fixture in [
+        "static OPEN = PgPool::connect(url);\n",
+        "impl Pool { const OPEN<T>: u8 = PgPool::connect(url); }\n",
+        "trait Open { const OPEN<T>: u8 = PgPool::connect(url); }\n",
+        "extern \"C\" { fn open() { PgPool::connect(url); } }\n",
+        "fn production() { become PgPool::connect(url) }\n",
+        "fn production() { let _ = builtin # offset_of(PgPool::connect(url)); }\n",
+    ] {
+        assert_violations(
+            &caller_url_violations("fixture.rs", fixture),
+            1,
+            "raw dial `connect`",
+        );
+    }
+}
+
+/// A macro body that defines `VettedPool` is a forgery, even as bare tokens.
+#[test]
+fn raw_dial_scan_refuses_a_gate_defined_in_a_macro_body() {
+    let fixture = "macro_rules! forge { () => { struct VettedPool; }; }\n";
+    assert_violations(
+        &caller_url_violations("fixture.rs", fixture),
+        1,
+        "defines `struct VettedPool`",
+    );
+}
+
+/// An allowed dial admits exactly its own path in its own function, once.
+#[test]
+fn allowed_dials_admit_only_their_own_dial_once() {
+    let admitted = "async fn wait_ready(port: u16) {
+    let _ = tokio::net::TcpStream::connect((\"127.0.0.1\", port)).await;
+}
+";
+    assert_eq!(
+        tree_violations("web/console_proxy.rs", admitted),
+        Vec::<String>::new()
+    );
+    for (fixture, needle) in [
+        (
+            "async fn wait_ready(port: u16) {
+    let _ = tokio::net::TcpStream::connect(a).await;
+    let _ = tokio::net::TcpStream::connect(b).await;
+}
+",
+            "matches 2 dials",
+        ),
+        (
+            "async fn wait_ready(port: u16) {
+    let _ = tokio::net::TcpStream::connect(a).await;
+    let _ = PgPool::connect(url).await;
+}
+",
+            "raw dial `connect`",
+        ),
+        (
+            "async fn wait_ready(port: u16) {
+    let _ = TcpStream::connect(a).await;
+}
+",
+            "",
+        ),
+    ] {
+        let violations = tree_violations("web/console_proxy.rs", fixture);
+        assert!(!violations.is_empty(), "{fixture}");
+        assert!(
+            violations.iter().any(|v| v.contains(needle)),
+            "{fixture}\n{violations:#?}"
+        );
+    }
+    let elsewhere = "async fn elsewhere(port: u16) {
+    let _ = tokio::net::TcpStream::connect(a).await;
+}
+";
+    let violations = tree_violations("web/console_proxy.rs", elsewhere);
+    assert_eq!(violations.len(), 2, "{violations:#?}");
+    assert!(
+        violations
+            .iter()
+            .any(|v| v.contains("fn elsewhere: raw dial `connect`")),
+        "{violations:#?}"
+    );
+    assert!(
+        violations.iter().any(|v| v.contains("matches 0 dials")),
+        "{violations:#?}"
+    );
+    assert_violations(
+        &tree_violations("other.rs", admitted),
+        1,
+        "fn wait_ready: raw dial `connect`",
+    );
+}
+
+// ---------------------------------------------------------------------------
 // The dial scans over the runtime's dial sites.
 // ---------------------------------------------------------------------------
 
@@ -1420,4 +1939,94 @@ fn email_smtp_transport_is_guarded() {
         Vec::<String>::new(),
         "SMTP transport in email.rs built from an unvetted host: pass VettedDial::dial_host"
     );
+}
+
+// ---------------------------------------------------------------------------
+// The dial scans over the whole runtime source tree.
+// ---------------------------------------------------------------------------
+
+/// The most directory entries the source walk reads before it fails.
+const MAX_SOURCE_ENTRIES: usize = 8192;
+
+/// Every `.rs` file under `root`, as its `/`-separated path relative to `root`
+/// and its contents, sorted by path.
+///
+/// A symbolic link is refused rather than followed or skipped, so every file
+/// the build can read is one the walk read.
+#[allow(clippy::expect_used)] // an unreadable source must fail the scan, never be skipped
+fn rust_sources(root: &Path) -> Vec<(String, String)> {
+    let mut dirs: Vec<PathBuf> = vec![root.to_path_buf()];
+    let mut files: Vec<PathBuf> = Vec::new();
+    let mut entries = 0usize;
+    while let Some(dir) = dirs.pop() {
+        for entry in std::fs::read_dir(&dir).expect("read a source directory") {
+            let entry = entry.expect("read a source directory entry");
+            entries = entries.saturating_add(1);
+            assert!(
+                entries <= MAX_SOURCE_ENTRIES,
+                "more than {MAX_SOURCE_ENTRIES} entries under {}",
+                root.display()
+            );
+            let kind = entry.file_type().expect("read a source entry's type");
+            let path = entry.path();
+            assert!(
+                !kind.is_symlink(),
+                "{}: a symbolic link in the source tree is not scanned",
+                path.display()
+            );
+            if kind.is_dir() {
+                dirs.push(path);
+            } else if path.extension().is_some_and(|ext| ext == "rs") {
+                files.push(path);
+            }
+        }
+    }
+    let mut sources: Vec<(String, String)> = files
+        .iter()
+        .map(|path| {
+            let name = path
+                .strip_prefix(root)
+                .expect("a walked file lies under the root")
+                .components()
+                .map(|c| c.as_os_str().to_string_lossy().into_owned())
+                .collect::<Vec<_>>()
+                .join("/");
+            (
+                name,
+                std::fs::read_to_string(path).expect("read a source file"),
+            )
+        })
+        .collect();
+    sources.sort();
+    sources
+}
+
+/// Every source file under `src/` passes every dial rule, and every allowed
+/// dial names a file the walk read.
+#[test]
+fn every_runtime_source_passes_every_dial_rule() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let sources = rust_sources(&root);
+    let read = |file: &str| sources.iter().any(|(name, _)| name == file);
+    for required in [
+        GATED_OWNER_FILE,
+        VETTED_HOST_FILE,
+        "email.rs",
+        "external_conn.rs",
+        "web/store.rs",
+    ] {
+        assert!(read(required), "the source walk did not read {required}");
+    }
+    for entry in &ALLOWED_DIALS {
+        assert!(
+            read(entry.file),
+            "an allowed dial names {}, which the source walk did not read",
+            entry.file
+        );
+    }
+    let violations: Vec<String> = sources
+        .iter()
+        .flat_map(|(name, src)| tree_violations(name, src))
+        .collect();
+    assert_eq!(violations, Vec::<String>::new());
 }

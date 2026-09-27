@@ -237,8 +237,10 @@ async fn do_connect<E: From<String> + Send + 'static>(
                 // context, so a `wss://` URL cannot be serviced here — TLS
                 // requires the full resolver path (`connect_async_with_config`,
                 // the `None` arm below). Refuse rather than dial plaintext to
-                // what the caller believes is a secure endpoint.
-                if url.starts_with("wss://") {
+                // what the caller believes is a secure endpoint. The scheme is
+                // read from the parse the gate vetted, never from the raw text,
+                // which may differ in case or leading whitespace.
+                if !::url::Url::parse(&url).is_ok_and(|parsed| parsed.scheme() == "ws") {
                     return IpeResult::Err(
                         format!(
                             "WebSocket.connect {}: wss:// with IPE_HTTP_DENY_PRIVATE is \
