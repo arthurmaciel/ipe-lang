@@ -69,26 +69,62 @@ pub struct HeldDir {
     path: PathBuf,
 }
 
-/// Proof that an entry named a held subdirectory the instant its last handle was released.
+/// The [`Released`] proof, with fields no code outside this submodule can set.
 ///
-/// Only [`HeldDir::release_proven`] makes one, and [`HeldDir::rmdir_released`]
-/// is the only removal of a subdirectory, so no subdirectory is ever removed by
-/// a name that was not re-proven first.
-#[derive(Debug)]
-struct Released<'n> {
-    name: &'n OsStr,
-    path: PathBuf,
+/// A struct literal cannot name a private field from outside its module, so
+/// the only way to produce a `Released` is `Released::new`, called solely
+/// from [`HeldDir::release_proven`].
+mod released {
+    use std::ffi::OsStr;
+    use std::path::{Path, PathBuf};
+
+    /// Proof that an entry named a held subdirectory the instant its last handle was released.
+    ///
+    /// Only [`HeldDir::release_proven`](super::HeldDir::release_proven) makes
+    /// one, and [`HeldDir::rmdir_released`](super::HeldDir::rmdir_released) is
+    /// the only removal of a subdirectory, so no subdirectory is ever removed
+    /// by a name that was not re-proven first.
+    #[derive(Debug)]
+    pub(super) struct Released<'n> {
+        name: &'n OsStr,
+        path: PathBuf,
+    }
+
+    impl<'n> Released<'n> {
+        /// Construct the proof that `name` still names the held subdirectory at `path`.
+        ///
+        /// Called only by [`HeldDir::release_proven`](super::HeldDir::release_proven).
+        pub(super) fn new(name: &'n OsStr, path: PathBuf) -> Self {
+            Self { name, path }
+        }
+
+        /// The re-proven name.
+        pub(super) fn name(&self) -> &'n OsStr {
+            self.name
+        }
+
+        /// The re-proven path.
+        pub(super) fn path(&self) -> &Path {
+            &self.path
+        }
+
+        /// Consume the proof, returning the path it names.
+        pub(super) fn into_path(self) -> PathBuf {
+            self.path
+        }
+    }
 }
+use released::Released;
 
 /// What removing a re-proven, released subdirectory found at its name.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum Rmdir {
     /// The empty directory was removed.
     Removed,
     /// Nothing is there any more.
     Vanished,
-    /// A directory holding entries is there; it is kept.
-    Refilled,
+    /// A directory holding entries is there, at this path; it is kept.
+    Refilled(PathBuf),
 }
 
 /// Whether a failed directory removal met something other than a directory at the name.
@@ -416,10 +452,9 @@ impl HeldDir {
     fn remove_held(&self, name: &OsStr, child: Self, depth: usize) -> Result<(), CliError> {
         child.remove_contents(depth)?;
         let released = self.release_proven(name, child)?;
-        let path = released.path.clone();
         match self.rmdir_released(released)? {
             Rmdir::Removed | Rmdir::Vanished => Ok(()),
-            Rmdir::Refilled => Err(act_err(&path, io::ErrorKind::DirectoryNotEmpty.into())),
+            Rmdir::Refilled(path) => Err(act_err(&path, io::ErrorKind::DirectoryNotEmpty.into())),
         }
     }
 
@@ -497,7 +532,7 @@ impl HeldDir {
             return Ok(false);
         }
         let released = self.release_proven(name, child)?;
-        Ok(self.rmdir_released(released)? == Rmdir::Removed)
+        Ok(matches!(self.rmdir_released(released)?, Rmdir::Removed))
     }
 
     /// Re-prove that `name` still names the held subdirectory `child`, then release it.
@@ -518,7 +553,7 @@ impl HeldDir {
         drop(child);
         let path = self.path.join(name);
         if same {
-            Ok(Released { name, path })
+            Ok(Released::new(name, path))
         } else {
             Err(OutputRefusal::Replaced(path).into())
         }
@@ -527,17 +562,21 @@ impl HeldDir {
     /// Remove the subdirectory `released` proved, through the empty-directory-only primitive.
     ///
     /// Whatever was swapped in at the name after the proof is never removed
-    /// unless it is itself an empty directory: a non-directory or a link is
-    /// refused as a replacement, and a directory holding entries is reported
-    /// refilled and kept.
+    /// unless it is itself an empty directory: a non-directory or a Unix
+    /// symbolic link is refused as a replacement, and a directory holding
+    /// entries is reported refilled and kept. On Windows a directory junction
+    /// swapped in between the attribute check and the removal call is removed
+    /// as the junction it is — the link only, its target untouched, no data
+    /// loss — rather than refused.
     ///
     /// # Errors
-    /// [`OutputRefusal::Replaced`] for a non-directory or a link at the name;
-    /// [`OutputRefusal::InUse`] for an entry another program holds open
-    /// (Windows); [`CliError::Io`] on another filesystem failure.
+    /// [`OutputRefusal::Replaced`] for a non-directory or a Unix symbolic link
+    /// at the name; [`OutputRefusal::InUse`] for an entry another program
+    /// holds open (Windows); [`CliError::Io`] on another filesystem failure.
     fn rmdir_released(&self, released: Released<'_>) -> Result<Rmdir, CliError> {
-        let Released { name, path } = released;
-        subdir_released(&path);
+        let name = released.name();
+        subdir_released(released.path());
+        let path = released.into_path();
         match self.dir.rmdir(name) {
             Ok(()) => Ok(Rmdir::Removed),
             Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(Rmdir::Vanished),
@@ -547,7 +586,7 @@ impl HeldDir {
                     io::ErrorKind::DirectoryNotEmpty | io::ErrorKind::AlreadyExists
                 ) =>
             {
-                Ok(Rmdir::Refilled)
+                Ok(Rmdir::Refilled(path))
             }
             Err(e) if is_replacement(&e) => Err(OutputRefusal::Replaced(path).into()),
             Err(e) => Err(act_err(&path, e)),
@@ -816,6 +855,37 @@ mod tests {
         let _ = std::fs::remove_dir_all(&base);
     }
 
+    /// A symlink swapped in for an empty directory after its release is refused, never removed.
+    #[cfg(unix)]
+    #[test]
+    fn remove_empty_dir_refuses_a_symlink_swapped_in_after_its_release() {
+        let base = scratch("empty_symlink_swap");
+        let name = OsStr::new("doomed");
+        let doomed = base.join(name);
+        std::fs::create_dir(&doomed).expect("make doomed");
+        let (parent, child) = hold(&base, name);
+        let (from, aside) = (doomed.clone(), base.join("doomed.aside"));
+        on_release(doomed.clone(), move || {
+            std::fs::rename(&from, &aside).expect("move doomed aside");
+            std::os::unix::fs::symlink(&aside, &from).expect("plant symlink");
+        });
+
+        let removed = parent.remove_empty_dir(name, child);
+        set_release_hook(None);
+        assert!(
+            matches!(
+                removed,
+                Err(CliError::OutputRefused(OutputRefusal::Replaced(_)))
+            ),
+            "the swapped-in symlink is refused, got {removed:?}"
+        );
+        assert!(
+            std::fs::symlink_metadata(&doomed).is_ok_and(|meta| meta.file_type().is_symlink()),
+            "the swapped-in symlink survives"
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
     /// A file swapped in for an emptied tree after its release is refused, never removed.
     #[test]
     fn remove_proven_refuses_a_file_swapped_in_after_its_release() {
@@ -897,6 +967,49 @@ mod tests {
             );
             assert!(!inner.exists(), "the tree is gone");
         }
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// A held subdirectory another handle keeps open without delete sharing is refused, in use.
+    #[cfg(windows)]
+    #[test]
+    fn remove_entry_of_a_held_subdirectory_in_use_elsewhere_is_refused() {
+        use std::os::windows::fs::OpenOptionsExt as _;
+
+        /// `FILE_FLAG_BACKUP_SEMANTICS`: allows opening a directory handle.
+        const BACKUP_SEMANTICS: u32 = 0x0200_0000;
+        /// `FILE_SHARE_READ | FILE_SHARE_WRITE`, without `FILE_SHARE_DELETE`.
+        const SHARE_NO_DELETE: u32 = 0x1 | 0x2;
+
+        let base = scratch("win_in_use");
+        let name = OsStr::new("busy");
+        let busy = base.join(name);
+        std::fs::create_dir(&busy).expect("make busy");
+        let other = std::fs::OpenOptions::new()
+            .read(true)
+            .share_mode(SHARE_NO_DELETE)
+            .custom_flags(BACKUP_SEMANTICS)
+            .open(&busy)
+            .expect("hold busy open elsewhere");
+
+        let parent = HeldDir::open(&base)
+            .expect("open base")
+            .expect("base exists");
+        let removed = parent.remove_entry(name);
+        assert!(
+            matches!(
+                removed,
+                Err(CliError::OutputRefused(OutputRefusal::InUse(_)))
+            ),
+            "the in-use directory is refused, got {removed:?}"
+        );
+        assert!(busy.is_dir(), "the busy directory survives");
+
+        drop(other);
+        parent
+            .remove_entry(name)
+            .expect("removable once the other handle releases it");
+        assert!(!busy.exists(), "the directory is gone once free");
         let _ = std::fs::remove_dir_all(&base);
     }
 }
