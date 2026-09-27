@@ -784,12 +784,31 @@ pub enum WireDefect {
         detail: String,
     },
     /// A wrapper-crate path whose canonical form (symlinks resolved) leaves the
-    /// project root, or is not a legal `path` dependency value once resolved.
+    /// project root.
     WrapperPathOutsideRoot {
         /// The offending path.
         got: String,
         /// The canonical project root it had to stay inside.
         root: String,
+    },
+    /// A wrapper crate inside the project whose canonical directory has no
+    /// renderable `path` dependency value.
+    ///
+    /// The canonical form is not UTF-8, or carries a character outside the
+    /// wrapper-path charset (a `+` in a parent directory, a Windows verbatim
+    /// `\\?\` prefix). Refused rather than rendered, so no path value outside
+    /// the TOML-safe charset reaches the emitted manifest.
+    WrapperPathUnrenderable {
+        /// The offending path.
+        got: String,
+        /// The canonical directory it resolved to, rendered lossily.
+        canonical: String,
+    },
+    /// A legacy consumer manifest's dependency line outside the exact grammar
+    /// the manifest emitter renders for a registry pin.
+    LegacyDependencyLine {
+        /// The offending line.
+        got: String,
     },
     /// An FFI cache directory that is not `<project>/.ipe/cache/ffi/rust`.
     ///
@@ -917,6 +936,18 @@ impl fmt::Display for WireDefect {
                 "wrapper crate path {got:?} resolves outside the project root {root:?} — \
                  a wrapper crate must live inside the project; re-run `ipe add` from the \
                  project that owns it"
+            ),
+            Self::WrapperPathUnrenderable { got, canonical } => write!(
+                f,
+                "wrapper crate path {got:?} resolves to {canonical:?}, which is not a \
+                 renderable `path` dependency (it must be UTF-8 and match the charset \
+                 [A-Za-z0-9._/ -]); move the project or the wrapper crate to such a \
+                 directory"
+            ),
+            Self::LegacyDependencyLine { got } => write!(
+                f,
+                "dependency line {got:?} is not a registry pin this compiler renders; \
+                 re-run `ipe add` for this crate"
             ),
             Self::CacheRootUnanchored { got } => write!(
                 f,

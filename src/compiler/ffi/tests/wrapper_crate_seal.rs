@@ -191,8 +191,14 @@ fn the_emitted_crate_and_wrapper_path_dep_build_and_run() {
 
     // 2. The emitted app crate: its bindings call into the wrapper by its
     //    crate-absolute path, and it depends on the wrapper by the driver's
-    //    `path` dep line (rewritten to point at the crate we just wrote).
+    //    rendered `path` dep line, jailed to this scratch project root.
     let pkg = engine_wrapper_pkg("wrappers/engine");
+    let dep_lines = cargo_dep_lines(&pkg, &FfiCache::at_project_root(&root))
+        .expect("the wrapper jails inside the scratch root");
+    assert!(
+        dep_lines.iter().all(|line| line.contains("{ path = \"")),
+        "the wrapper renders as a path dependency: {dep_lines:?}"
+    );
     let bindings = emit_bindings(&pkg);
     let make = wrapper_region(&bindings, "make");
     let describe = wrapper_region(&bindings, "describe");
@@ -210,9 +216,12 @@ fn the_emitted_crate_and_wrapper_path_dep_build_and_run() {
     std::fs::create_dir_all(root.join("src")).expect("mkdir app");
     std::fs::write(
         root.join("Cargo.toml"),
-        "[package]\nname = \"wrapper_seal\"\nversion = \"0.0.0\"\nedition = \"2021\"\n\
-         [[bin]]\nname = \"wrapper_seal\"\npath = \"src/main.rs\"\n\
-         [dependencies]\nengine_wrap = { path = \"wrappers/engine\" }\n",
+        format!(
+            "[package]\nname = \"wrapper_seal\"\nversion = \"0.0.0\"\nedition = \"2021\"\n\
+             [[bin]]\nname = \"wrapper_seal\"\npath = \"src/main.rs\"\n\
+             [dependencies]\n{}\n",
+            dep_lines.join("\n")
+        ),
     )
     .expect("app Cargo.toml");
 

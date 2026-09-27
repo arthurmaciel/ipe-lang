@@ -377,7 +377,14 @@ pub struct TransitiveDep {
 pub struct PackageName(String);
 
 impl PackageName {
-    fn parse(s: &str) -> Result<Self, crate::diag::WireDefect> {
+    /// Validate and wrap a cargo package name.
+    ///
+    /// # Errors
+    ///
+    /// [`crate::diag::WireDefect::InvalidIdent`] when the name is empty, does
+    /// not start with an ASCII letter, or carries a character outside
+    /// `[A-Za-z0-9_-]`.
+    pub fn parse(s: &str) -> Result<Self, crate::diag::WireDefect> {
         let legal = !s.is_empty()
             && s.chars()
                 .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
@@ -436,7 +443,13 @@ pub(crate) const fn version_char_is_legal(c: char) -> bool {
 }
 
 impl CrateVersion {
-    fn parse(s: &str) -> Result<Self, crate::diag::WireDefect> {
+    /// Validate and wrap a crate version (possibly empty).
+    ///
+    /// # Errors
+    ///
+    /// [`crate::diag::WireDefect::InvalidVersion`] when the text carries a
+    /// character outside the semver-value charset.
+    pub fn parse(s: &str) -> Result<Self, crate::diag::WireDefect> {
         let legal = s.chars().all(version_char_is_legal);
         if legal {
             Ok(Self(s.to_owned()))
@@ -506,7 +519,14 @@ impl PkgPath {
 pub struct WrapperCratePath(String);
 
 impl WrapperCratePath {
-    fn parse(s: &str) -> Result<Self, WireDefect> {
+    /// Validate and wrap a wrapper-crate path.
+    ///
+    /// # Errors
+    ///
+    /// [`WireDefect::InvalidPkgPath`] when the path is empty or carries a
+    /// character outside the charset; [`WireDefect::WrapperPathTraversal`]
+    /// when a component is `..`.
+    pub fn parse(s: &str) -> Result<Self, WireDefect> {
         let legal = !s.is_empty()
             && s.chars()
                 .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '/' | '-' | ' '));
@@ -527,41 +547,49 @@ impl WrapperCratePath {
 
     /// Prove the wrapper crate sits inside `project_root`.
     ///
-    /// Both sides are canonicalized, so a symlink (at any component) that
-    /// leads out of the project, an absolute path elsewhere, and a stale
-    /// absolute path left by a moved or copied project are all refused. A
-    /// relative path resolves against the project root. The canonical form is
-    /// re-checked against the charset gate, since resolving a symlink can
-    /// surface characters the stored path never carried.
+    /// The proof is taken at load time, when the installed crate is read back
+    /// for a build: both sides are canonicalized, so a symlink (at any
+    /// component) that leads out of the project, an absolute path elsewhere,
+    /// and a stale absolute path left by a moved or copied project are all
+    /// refused. A relative path resolves against the project root. The
+    /// canonical form is re-checked against the charset gate, since resolving
+    /// the root or a symlink can surface characters the stored path never
+    /// carried; such a directory has no renderable `path` dependency value.
+    /// On Windows the canonical form carries a verbatim `\\?\` prefix and
+    /// backslash separators, so a wrapper crate is refused there (fail closed)
+    /// with [`WireDefect::WrapperPathUnrenderable`].
     ///
     /// # Errors
     ///
     /// [`WireDefect::WrapperPathUnresolvable`] when the root or the wrapper
     /// directory does not resolve to an existing directory;
     /// [`WireDefect::WrapperPathOutsideRoot`] when the resolved directory
-    /// leaves the root or is not a legal `path` dependency value.
+    /// leaves the root; [`WireDefect::WrapperPathUnrenderable`] when the
+    /// canonical directory is not UTF-8 or falls outside the path charset.
     pub fn jail(&self, project_root: &std::path::Path) -> Result<JailedWrapperDir, WireDefect> {
-        let unresolvable = |e: &std::io::Error| WireDefect::WrapperPathUnresolvable {
+        let unresolvable = |detail: String| WireDefect::WrapperPathUnresolvable {
             got: self.0.clone(),
-            detail: e.to_string(),
+            detail,
         };
-        let root = std::fs::canonicalize(project_root).map_err(|e| unresolvable(&e))?;
-        let resolved = std::fs::canonicalize(root.join(&self.0)).map_err(|e| unresolvable(&e))?;
-        let outside = || WireDefect::WrapperPathOutsideRoot {
-            got: self.0.clone(),
-            root: root.to_string_lossy().into_owned(),
-        };
+        let root = std::fs::canonicalize(project_root).map_err(|e| unresolvable(e.to_string()))?;
+        let resolved =
+            std::fs::canonicalize(root.join(&self.0)).map_err(|e| unresolvable(e.to_string()))?;
         if !resolved.starts_with(&root) {
-            return Err(outside());
-        }
-        if !resolved.is_dir() {
-            return Err(WireDefect::WrapperPathUnresolvable {
+            return Err(WireDefect::WrapperPathOutsideRoot {
                 got: self.0.clone(),
-                detail: "not a directory".to_owned(),
+                root: root.to_string_lossy().into_owned(),
             });
         }
-        let text = resolved.to_str().ok_or_else(outside)?;
-        let canonical = Self::parse(text).map_err(|_| outside())?;
+        let metadata = std::fs::metadata(&resolved).map_err(|e| unresolvable(e.to_string()))?;
+        if !metadata.is_dir() {
+            return Err(unresolvable("not a directory".to_owned()));
+        }
+        let unrenderable = || WireDefect::WrapperPathUnrenderable {
+            got: self.0.clone(),
+            canonical: resolved.to_string_lossy().into_owned(),
+        };
+        let text = resolved.to_str().ok_or_else(unrenderable)?;
+        let canonical = Self::parse(text).map_err(|_| unrenderable())?;
         Ok(JailedWrapperDir(canonical.0))
     }
 }
@@ -608,7 +636,7 @@ pub enum PkgSource {
 /// Cargo's dependency-feature syntax (`dep:foo`, `foo/bar`, `dep?/feat`) while
 /// excluding every TOML-breaking character (quote, bracket, brace, backslash,
 /// control), so a name can never escape its string.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct FeatureName(String);
 
 impl FeatureName {
@@ -2243,7 +2271,7 @@ mod tests {
     }
 
     // The same gate guards a TRANSITIVE dependency's version — the transitive
-    // path is the one `render_dep_line` reaches for every non-primary crate.
+    // path is the one `CargoDep::render` reaches for every non-primary crate.
     #[test]
     fn an_injection_bearing_transitive_version_fails_the_whole_package() {
         let v = json!({
