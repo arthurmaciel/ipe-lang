@@ -27,6 +27,7 @@
   "quick-check",
   "registry-admission",
   "requirements-docs-drift",
+  "runtime-feature-combos",
   "runtime-full-features",
   "seal-slice",
   "seal-smoke",
