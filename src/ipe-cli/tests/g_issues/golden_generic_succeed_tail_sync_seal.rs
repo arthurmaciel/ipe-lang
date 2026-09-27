@@ -29,9 +29,9 @@ fn fixture_dir(root: &Path) -> PathBuf {
 /// Matches the emitted `main_<snake_case>` name with its underscores removed
 /// against the lower-cased Ipê name, so the check does not re-derive the
 /// backend's snake-casing.
-fn signature_of<'a>(main_rs: &'a str, ipe_name: &str) -> Option<&'a str> {
+fn signature_of<'a>(emitted: &'a str, ipe_name: &str) -> Option<&'a str> {
     let wanted = format!("main{}", ipe_name.to_lowercase());
-    main_rs.lines().find(|line| {
+    emitted.lines().find(|line| {
         line.split_once("fn ").is_some_and(|(_, rest)| {
             let name: String = rest
                 .chars()
@@ -60,11 +60,12 @@ fn generic_succeed_capture_sync_bounds_emitted() {
         "{GOLDEN}: ipe build must accept the program, got: {built:?}"
     );
 
-    let main_rs = std::fs::read_to_string(out.join("src").join("main.rs"));
-    assert!(main_rs.is_ok(), "{GOLDEN}: emitted src/main.rs must exist");
-    let Ok(main_rs) = main_rs else { return };
+    // `Main`'s functions land in `src/main.rs` for a single-home program and in
+    // `src/ipe_mods/ipe_mod_main.rs` once the program spans several module
+    // homes, so the lookup reads the whole emitted source.
+    let emitted = crate::support::read_all_emitted_src(&out);
     for name in COMBINATORS {
-        let signature = signature_of(&main_rs, name);
+        let signature = signature_of(&emitted, name);
         assert!(
             signature.is_some_and(|line| line.contains("T1: 'static + Send + Sync")),
             "{GOLDEN}: `{name}`'s T1 must carry `Send + Sync` (its value is captured \
