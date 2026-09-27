@@ -1222,6 +1222,8 @@ pub static EXCLUDED_NAMES: &[&str] = &[
     "IPE_E2E_STATIC",          // CI gate for static-binary e2e tests
     "IPE_HTTP_FIXTURE_ACCEPT_MS", // http_e2e harness: fixture-server accept fail-fast deadline
     "IPE_HTTP_TEST_URL",
+    "IPE_JUNCTION_AT", // Windows junction test helper: PowerShell script input
+    "IPE_JUNCTION_TO", // Windows junction test helper: PowerShell script input
     "IPE_LOAD_ENV_PROBE_VAR",
     "IPE_ORACLE_SHARED_TARGET",
     "IPE_RUN_WITH_TEST_VAR",
