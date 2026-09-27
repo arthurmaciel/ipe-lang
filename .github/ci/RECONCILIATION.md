@@ -88,7 +88,7 @@ fail-closed `promotion-ready` job on the next promotion, not by branch protectio
 
 Heavy checks run nightly. A red does not block a PR and is
 surfaced by `ci-health`. See the `nightly-gate` entries in the manifest (the
-Linux jail proofs, sanitizers, seal-modset, browser-e2e, runtime-feature-combos).
+Linux jail proofs, sanitizers, seal-modset, browser-e2e).
 
 ## Flagged: required-but-flaky and informational-but-noisy
 
