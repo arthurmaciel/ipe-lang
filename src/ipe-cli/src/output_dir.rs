@@ -17,9 +17,9 @@
 //!   symlinks (a cloned repository may force-add `out/`), so every product write,
 //!   copy, prune and removal takes an [`OwnedPath`] and re-checks each level as it
 //!   creates it; the final file is always replaced by a rename, never written
-//!   through. On Unix each level is held open and the next opened relative to it
-//!   without following a link, so a level swapped for a link between the check
-//!   and the act cannot redirect it.
+//!   through. Each level is held open and the next opened through it without
+//!   following a link, so a level swapped for a link between the check and the
+//!   act cannot redirect it.
 //! - [`OutputRoot`] — the CLI's output root (`<project>/out`, or `--out <dir>`),
 //!   additionally proven disjoint from the project's sources and from every
 //!   [`ReservedName`] directory (version-control metadata, any ipe cache
@@ -36,7 +36,6 @@ use std::path::{Component, Path, PathBuf};
 
 use crate::{CliError, io_err};
 
-#[cfg(unix)]
 pub(crate) mod held;
 
 /// The file whose presence marks a directory as ipe-owned.
@@ -283,13 +282,12 @@ impl From<OutputRefusal> for CliError {
 
 /// A directory proven ipe-owned: not a symlink, and carrying the marker.
 ///
-/// The only constructor is [`OwnedDir::claim`]. On Unix it also records the
-/// directory's identity (device and inode): every [`OwnedPath`] operation
+/// The only constructor is [`OwnedDir::claim`]. It also records the
+/// directory's identity (device and inode, or volume and file index): every [`OwnedPath`] operation
 /// refuses to act once the path names a different directory.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OwnedDir {
     path: PathBuf,
-    #[cfg(unix)]
     id: held::DirId,
 }
 
@@ -360,7 +358,6 @@ impl OwnedDir {
     }
 
     /// Claim the plain-named subdirectory `name` through this directory's held handle.
-    #[cfg(unix)]
     fn claim_child(&self, name: &str) -> Result<Self, CliError> {
         let parent = held::HeldDir::open(&self.path)?.ok_or_else(|| {
             io_err(
@@ -376,12 +373,6 @@ impl OwnedDir {
             path: self.path.join(name),
             id: dir.id()?,
         })
-    }
-
-    /// Claim the plain-named subdirectory `name` by path.
-    #[cfg(not(unix))]
-    fn claim_child(&self, name: &str) -> Result<Self, CliError> {
-        Self::claim(&self.path.join(name))
     }
 
     /// The [`OwnedPath`] for `rel`, refused unless it is one or more plain names.
@@ -403,7 +394,6 @@ impl OwnedDir {
         }
         Ok(OwnedPath {
             root: self.path.clone(),
-            #[cfg(unix)]
             root_id: self.id,
             parts,
         })
@@ -411,25 +401,11 @@ impl OwnedDir {
 }
 
 /// Claim `path` through held directory handles.
-#[cfg(unix)]
 fn claim_owned(path: &Path) -> Result<OwnedDir, CliError> {
     let dir = claim_held(path)?;
     Ok(OwnedDir {
         path: path.to_path_buf(),
         id: dir.id()?,
-    })
-}
-
-/// Claim `path` level by level.
-#[cfg(not(unix))]
-fn claim_owned(path: &Path) -> Result<OwnedDir, CliError> {
-    if check_claimable(path)? {
-        adopt(path)?;
-    } else {
-        create_marked(path)?;
-    }
-    Ok(OwnedDir {
-        path: path.to_path_buf(),
     })
 }
 
@@ -439,7 +415,6 @@ fn claim_owned(path: &Path) -> Result<OwnedDir, CliError> {
 /// without following a link, and is marked or adopted through that handle. An
 /// existing ancestor is left as it is. The recursion is bounded by the path's
 /// component count.
-#[cfg(unix)]
 fn claim_held(path: &Path) -> Result<held::HeldDir, CliError> {
     if let Some(dir) = held::HeldDir::open(path)? {
         dir.adopt()?;
@@ -457,7 +432,6 @@ fn claim_held(path: &Path) -> Result<held::HeldDir, CliError> {
 }
 
 /// Claim the entry `name` of the held `parent`: created and marked when absent, else adopted.
-#[cfg(unix)]
 fn claim_in(parent: &held::HeldDir, name: &std::ffi::OsStr) -> Result<held::HeldDir, CliError> {
     let (dir, created) = parent.create_child(name)?;
     if created {
@@ -468,23 +442,11 @@ fn claim_in(parent: &held::HeldDir, name: &std::ffi::OsStr) -> Result<held::Held
     Ok(dir)
 }
 
-/// Mark `path` when it is an existing directory, refusing a link or user territory.
-///
-/// Absent is left absent.
-#[cfg(not(unix))]
-fn adopt_existing(path: &Path) -> Result<(), CliError> {
-    if check_claimable(path)? {
-        adopt(path)
-    } else {
-        Ok(())
-    }
-}
-
 /// A path under an [`OwnedDir`] with no symlink at any level.
 ///
 /// Built only by [`OwnedDir::path_to`]. Every operation re-walks the levels
-/// before it touches the filesystem, never following a link. On Unix the walk
-/// holds each level open and opens the next relative to it, the root is proven
+/// before it touches the filesystem, never following a link. The walk
+/// holds each level open and opens the next through it, the root is proven
 /// to be the directory that was claimed, and every create, rename, and unlink
 /// names one entry of a held directory — a level swapped for a link after the
 /// check cannot redirect the act. A final file is always replaced through an
@@ -492,7 +454,6 @@ fn adopt_existing(path: &Path) -> Result<(), CliError> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OwnedPath {
     root: PathBuf,
-    #[cfg(unix)]
     root_id: held::DirId,
     parts: Vec<std::ffi::OsString>,
 }
@@ -532,10 +493,8 @@ impl OwnedPath {
 }
 
 /// The directory holding an [`OwnedPath`]'s final entry, with that entry's name.
-#[cfg(unix)]
 type HeldParent<'a> = (held::HeldDir, &'a std::ffi::OsStr);
 
-#[cfg(unix)]
 impl OwnedPath {
     /// Hold the root, proven to be the directory that was claimed.
     ///
@@ -680,155 +639,6 @@ impl OwnedPath {
     }
 }
 
-/// How far an [`OwnedPath`] walk goes and whether it creates missing levels.
-#[cfg(not(unix))]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Walk {
-    /// Check every existing level, final entry included; create nothing.
-    Check,
-    /// Check every existing level above the final entry; create nothing.
-    Parents,
-    /// Create the missing directories above the final entry.
-    CreateParents,
-    /// Create the missing directories, the final entry included.
-    CreateAll,
-}
-
-#[cfg(not(unix))]
-impl OwnedPath {
-    /// Lstat each level below the root, creating missing directories as `mode` asks.
-    fn walk(&self, mode: Walk) -> Result<(), CliError> {
-        let mut current = self.root.clone();
-        let last = self.parts.len().saturating_sub(1);
-        for (index, part) in self.parts.iter().enumerate() {
-            let is_last = index == last;
-            if is_last && mode == Walk::Parents {
-                break;
-            }
-            current.push(part);
-            let wants_dir = !is_last || mode == Walk::CreateAll;
-            let creates = match mode {
-                Walk::Check | Walk::Parents => false,
-                Walk::CreateParents => !is_last,
-                Walk::CreateAll => true,
-            };
-            match std::fs::symlink_metadata(&current) {
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                    if !creates {
-                        return Ok(());
-                    }
-                    match std::fs::create_dir(&current) {
-                        Ok(()) => {}
-                        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
-                            reject_link_or_file(&current, true)?;
-                        }
-                        Err(e) => return Err(io_err(&current, e)),
-                    }
-                }
-                Err(e) => return Err(io_err(&current, e)),
-                Ok(_) => reject_link_or_file(&current, wants_dir)?,
-            }
-        }
-        Ok(())
-    }
-
-    /// Check every existing level, final entry included; create nothing.
-    fn check(&self) -> Result<(), CliError> {
-        self.walk(Walk::Check)
-    }
-
-    /// Create the directory itself (and every missing level above it).
-    ///
-    /// # Errors
-    /// [`CliError::OutputRefused`] for a symlink or file on the way;
-    /// [`CliError::Io`] on a filesystem failure.
-    pub fn ensure_dir(&self) -> Result<(), CliError> {
-        self.walk(Walk::CreateAll)
-    }
-
-    /// Remove the entry — a whole directory tree or a single file.
-    ///
-    /// An absent entry is already removed. A symlink is refused, never followed.
-    ///
-    /// # Errors
-    /// [`CliError::OutputRefused`] for a symlink on the way; [`CliError::Io`] on a
-    /// filesystem failure.
-    pub fn remove(&self) -> Result<(), CliError> {
-        self.walk(Walk::Check)?;
-        let full = self.path();
-        match std::fs::symlink_metadata(&full) {
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-            Err(e) => Err(io_err(&full, e)),
-            Ok(meta) if meta.file_type().is_symlink() => Err(OutputRefusal::Symlink(full).into()),
-            // `remove_dir_all` never follows a symlink met inside the tree.
-            Ok(meta) if meta.is_dir() => {
-                std::fs::remove_dir_all(&full).map_err(|e| io_err(&full, e))
-            }
-            Ok(_) => std::fs::remove_file(&full).map_err(|e| io_err(&full, e)),
-        }
-    }
-
-    /// Unlink the non-directory final entry; a symlink is removed, never followed.
-    fn unlink(&self) -> Result<(), CliError> {
-        self.walk(Walk::Parents)?;
-        let full = self.path();
-        match std::fs::remove_file(&full) {
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-            other => other.map_err(|e| io_err(&full, e)),
-        }
-    }
-
-    /// Fill an exclusively created sibling temp file, then rename it over the target.
-    fn replace_with(
-        &self,
-        permissions: Option<std::fs::Permissions>,
-        fill: impl FnOnce(&mut std::fs::File) -> std::io::Result<()>,
-    ) -> Result<(), CliError> {
-        self.walk(Walk::CreateParents)?;
-        let target = self.path();
-        let parent = target.parent().unwrap_or(&self.root).to_path_buf();
-        let name = target
-            .file_name()
-            .map_or_else(String::new, |n| n.to_string_lossy().into_owned());
-        let tmp = parent.join(format!(".{name}.ipe-tmp.{}", temp_suffix()));
-        let written = std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&tmp)
-            .and_then(|mut file| {
-                fill(&mut file)?;
-                if let Some(permissions) = permissions {
-                    file.set_permissions(permissions)?;
-                }
-                Ok(())
-            });
-        if let Err(e) = written {
-            if e.kind() != std::io::ErrorKind::AlreadyExists {
-                let _ = std::fs::remove_file(&tmp);
-            }
-            return Err(io_err(&tmp, e));
-        }
-        if let Err(e) = std::fs::rename(&tmp, &target) {
-            let _ = std::fs::remove_file(&tmp);
-            return Err(io_err(&target, e));
-        }
-        Ok(())
-    }
-
-    /// Whether the entry is a regular file holding exactly `contents`.
-    ///
-    /// # Errors
-    /// [`CliError::OutputRefused`] for a symlink on the way; [`CliError::Io`] on
-    /// a filesystem failure.
-    pub fn holds(&self, contents: &[u8]) -> Result<bool, CliError> {
-        self.walk(Walk::Check)?;
-        let full = self.path();
-        Ok(std::fs::symlink_metadata(&full)
-            .is_ok_and(|meta| meta.is_file() && meta.len() == contents.len() as u64)
-            && std::fs::read(&full).is_ok_and(|existing| existing == contents))
-    }
-}
-
 /// A process-unique suffix (`<pid>.<n>`) for a temp file name.
 fn temp_suffix() -> String {
     use std::sync::atomic::{AtomicU64, Ordering};
@@ -838,19 +648,6 @@ fn temp_suffix() -> String {
         std::process::id(),
         SEQ.fetch_add(1, Ordering::Relaxed)
     )
-}
-
-/// Refuse a symlink at `path`, and a non-directory when `wants_dir`.
-#[cfg(not(unix))]
-fn reject_link_or_file(path: &Path, wants_dir: bool) -> Result<(), CliError> {
-    let meta = std::fs::symlink_metadata(path).map_err(|e| io_err(path, e))?;
-    if meta.file_type().is_symlink() {
-        return Err(OutputRefusal::Symlink(path.to_path_buf()).into());
-    }
-    if wants_dir && !meta.is_dir() {
-        return Err(OutputRefusal::NotADirectory(path.to_path_buf()).into());
-    }
-    Ok(())
 }
 
 /// The canonical `path`, proven to lie under the canonical `root`.
@@ -902,42 +699,6 @@ fn check_claimable(path: &Path) -> Result<bool, CliError> {
     }
 }
 
-/// Mark an existing claimable directory (see [`check_claimable`]).
-#[cfg(not(unix))]
-fn adopt(path: &Path) -> Result<(), CliError> {
-    if has_marker(path)? {
-        Ok(())
-    } else {
-        write_marker(path)
-    }
-}
-
-/// Create `path` and each missing ancestor, marking every directory created here.
-///
-/// An existing ancestor is left as it is; a level that appears concurrently is
-/// re-checked as an existing one. The recursion is bounded by the path's
-/// component count.
-#[cfg(not(unix))]
-fn create_marked(path: &Path) -> Result<(), CliError> {
-    if let Some(parent) = path.parent()
-        && !parent.as_os_str().is_empty()
-        && !check_exists(parent)?
-    {
-        create_marked(parent)?;
-    }
-    match std::fs::create_dir(path) {
-        Ok(()) => write_marker(path),
-        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
-            if check_claimable(path)? {
-                adopt(path)
-            } else {
-                Err(io_err(path, e))
-            }
-        }
-        Err(e) => Err(io_err(path, e)),
-    }
-}
-
 fn check_exists(path: &Path) -> Result<bool, CliError> {
     match std::fs::symlink_metadata(path) {
         Ok(_) => Ok(true),
@@ -967,37 +728,6 @@ pub fn has_marker(dir: &Path) -> Result<bool, CliError> {
         .read_to_end(&mut head)
         .map_err(|e| io_err(&marker, e))?;
     Ok(head.starts_with(MARKER_HEADER.as_bytes()))
-}
-
-/// Write the marker atomically through a uniquely named temp file and a rename.
-///
-/// A concurrent claimer never reads a half-written marker. The temp name
-/// (`.ipe-output.<pid>.<n>.tmp`) is the one other name [`is_empty_dir`]
-/// tolerates, so a claim in flight never makes the directory look user-owned.
-#[cfg(not(unix))]
-fn write_marker(dir: &Path) -> Result<(), CliError> {
-    use std::sync::atomic::{AtomicU64, Ordering};
-    static SEQ: AtomicU64 = AtomicU64::new(0);
-    let marker = dir.join(OWNERSHIP_MARKER);
-    let tmp = dir.join(format!(
-        "{OWNERSHIP_MARKER}.{}.{}.tmp",
-        std::process::id(),
-        SEQ.fetch_add(1, Ordering::Relaxed)
-    ));
-    let written = std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&tmp)
-        .and_then(|mut file| file.write_all(MARKER_TEXT.as_bytes()));
-    if let Err(e) = written {
-        let _ = std::fs::remove_file(&tmp);
-        return Err(io_err(&tmp, e));
-    }
-    if let Err(e) = std::fs::rename(&tmp, &marker) {
-        let _ = std::fs::remove_file(&tmp);
-        return Err(io_err(&marker, e));
-    }
-    Ok(())
 }
 
 /// Whether `name` is the marker or an in-flight marker temp file.
@@ -1228,14 +958,13 @@ impl OutputRoot {
 
     /// Claim the root itself for writing now.
     ///
-    /// On Unix the disjointness proof is taken again on the held handle of the
+    /// The disjointness proof is taken again on the held handle of the
     /// deepest existing level, and every missing level is created and marked
     /// through the handle above it — a level swapped after the proof cannot
     /// redirect the claim into the project.
     ///
     /// # Errors
     /// As [`OutputRoot::resolve`] and [`OwnedDir::claim`].
-    #[cfg(unix)]
     pub fn claim(&self) -> Result<OwnedDir, CliError> {
         let checked = check_disjoint(&self.path, &self.project)?;
         let anchor = checked.anchor;
@@ -1253,34 +982,16 @@ impl OutputRoot {
             id: dir.id()?,
         })
     }
-
-    /// Claim the root itself for writing now.
-    ///
-    /// # Errors
-    /// As [`OwnedDir::claim`].
-    #[cfg(not(unix))]
-    pub fn claim(&self) -> Result<OwnedDir, CliError> {
-        OwnedDir::claim(&self.path)
-    }
 }
 
 /// Mark the proven output when it already exists, refusing a link or user territory.
 ///
 /// Absent is left absent.
-#[cfg(unix)]
 fn adopt_checked(checked: &Disjoint) -> Result<(), CliError> {
     if checked.anchor.tail.is_empty() {
         checked.anchor.dir.adopt()?;
     }
     Ok(())
-}
-
-/// Mark the proven output when it already exists, refusing a link or user territory.
-///
-/// Absent is left absent.
-#[cfg(not(unix))]
-fn adopt_checked(checked: &Disjoint) -> Result<(), CliError> {
-    adopt_existing(&checked.absolute)
 }
 
 /// A fresh destination for a tree handed over to the user, proven outside ipe's trees.
@@ -1311,7 +1022,7 @@ impl HandoverRoot {
     /// marked ancestor, an absent or empty destination — are proven again here,
     /// at the moment of creation.
     ///
-    /// On Unix every proof is taken on held handles: the disjointness proof on
+    /// Every proof is taken on held handles: the disjointness proof on
     /// the deepest existing level, the marker search on the directories above it
     /// reached through `..` of that handle, and each missing level is created
     /// through the handle above it — a level swapped mid-walk cannot redirect
@@ -1320,7 +1031,6 @@ impl HandoverRoot {
     /// # Errors
     /// [`CliError::OutputRefused`] on a refusal; [`CliError::Io`] on a
     /// filesystem failure.
-    #[cfg(unix)]
     pub fn claim(&self) -> Result<HandoverDir, CliError> {
         let checked = check_disjoint(&self.path, &self.project)?;
         check_outside_default_output(&self.raw, &checked, &self.project)?;
@@ -1355,29 +1065,6 @@ impl HandoverRoot {
             path: self.path.clone(),
             id: dir.id()?,
         }))
-    }
-
-    /// Claim the destination for writing, marking it and no ancestor.
-    ///
-    /// Missing ancestors are created as plain user directories, so releasing the
-    /// destination later leaves no ipe marker above it. The on-disk conditions
-    /// [`OutputRoot::fresh`] proved are proven again here, at the moment of
-    /// creation.
-    ///
-    /// # Errors
-    /// [`CliError::OutputRefused`] on a refusal; [`CliError::Io`] on a
-    /// filesystem failure.
-    #[cfg(not(unix))]
-    pub fn claim(&self) -> Result<HandoverDir, CliError> {
-        let resolved = resolve_through_existing(&self.path)
-            .ok_or_else(|| OutputRefusal::ParentTraversal(self.raw.clone()))?;
-        check_no_reserved_component(&self.raw, &resolved)?;
-        check_no_marked_ancestor(&self.raw, &resolved)?;
-        check_fresh(&self.raw, &self.path)?;
-        if let Some(parent) = self.path.parent() {
-            create_unmarked_dirs(parent)?;
-        }
-        OwnedDir::claim(&self.path).map(HandoverDir)
     }
 }
 
@@ -1477,45 +1164,12 @@ fn check_no_marked_ancestor(raw: &Path, resolved: &Path) -> Result<(), CliError>
     Ok(())
 }
 
-/// Create `dir` and each missing ancestor as plain directories, marking none.
-///
-/// The deepest existing level must be a directory; a level that appears
-/// concurrently must be a real directory, never a symlink. The walk is bounded
-/// by the path's component count.
-#[cfg(not(unix))]
-fn create_unmarked_dirs(dir: &Path) -> Result<(), CliError> {
-    let mut missing: Vec<&Path> = Vec::new();
-    for level in dir.ancestors() {
-        if level.as_os_str().is_empty() {
-            break;
-        }
-        if check_exists(level)? {
-            if !level.is_dir() {
-                return Err(OutputRefusal::NotADirectory(level.to_path_buf()).into());
-            }
-            break;
-        }
-        missing.push(level);
-    }
-    for level in missing.into_iter().rev() {
-        match std::fs::create_dir(level) {
-            Ok(()) => {}
-            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
-                reject_link_or_file(level, true)?;
-            }
-            Err(e) => return Err(io_err(level, e)),
-        }
-    }
-    Ok(())
-}
-
 /// Refuse a handover destination with an ipe-marked directory above its held anchor.
 ///
 /// The directories above are reached through `..` of the held handles, and each
 /// must still be the one its canonical path names — a level swapped mid-walk is
 /// refused with [`OutputRefusal::Replaced`]. Bounded by the anchor's component
 /// count.
-#[cfg(unix)]
 fn check_no_marked_ancestor_held(raw: &Path, anchor: &Anchor) -> Result<(), CliError> {
     let marked = |owner: &Path| -> CliError {
         OutputRefusal::InsideIpeOwned {
@@ -1551,12 +1205,10 @@ struct Disjoint {
     /// The path with its existing part canonicalised.
     resolved: PathBuf,
     /// The held deepest existing level the proof was taken on.
-    #[cfg(unix)]
     anchor: Anchor,
 }
 
 /// The deepest existing level of an output path, held open.
-#[cfg(unix)]
 #[derive(Debug)]
 struct Anchor {
     /// The held level.
@@ -1573,7 +1225,6 @@ struct Anchor {
 /// proven before it exists. The canonical path of the held level is proven to
 /// name that very directory, so a swap between the lookup and the hold is
 /// refused.
-#[cfg(unix)]
 fn hold_deepest_existing(raw: &Path, absolute: &Path) -> Result<Anchor, CliError> {
     let traversal = || OutputRefusal::ParentTraversal(raw.to_path_buf());
     let mut tail = Vec::new();
@@ -1603,7 +1254,6 @@ fn hold_deepest_existing(raw: &Path, absolute: &Path) -> Result<Anchor, CliError
 /// # Errors
 /// [`OutputRefusal::Replaced`] when the path now names another directory;
 /// [`CliError::Io`] when it cannot be resolved.
-#[cfg(unix)]
 fn canonical_of_held(raw: &Path, dir: &held::HeldDir) -> Result<PathBuf, CliError> {
     let real = std::fs::canonicalize(dir.path()).map_err(|e| io_err(dir.path(), e))?;
     if dir.is_at(&real)? {
@@ -1614,7 +1264,6 @@ fn canonical_of_held(raw: &Path, dir: &held::HeldDir) -> Result<PathBuf, CliErro
 }
 
 /// The resolved form of `absolute`: its deepest existing level canonicalised, the rest appended.
-#[cfg(unix)]
 fn resolve_anchored(raw: &Path, absolute: &Path) -> Result<(PathBuf, Anchor), CliError> {
     let anchor = hold_deepest_existing(raw, absolute)?;
     let mut resolved = anchor.real.clone();
@@ -1635,11 +1284,7 @@ fn check_disjoint(raw: &Path, project: &ProjectPaths) -> Result<Disjoint, CliErr
     if std::fs::symlink_metadata(&absolute).is_ok_and(|m| m.file_type().is_symlink()) {
         return Err(OutputRefusal::Symlink(raw.to_path_buf()).into());
     }
-    #[cfg(unix)]
     let (resolved, anchor) = resolve_anchored(raw, &absolute)?;
-    #[cfg(not(unix))]
-    let resolved = resolve_through_existing(&absolute)
-        .ok_or_else(|| OutputRefusal::ParentTraversal(raw.to_path_buf()))?;
     check_no_reserved_component(raw, &resolved)?;
     let project_root =
         std::fs::canonicalize(&project.root).map_err(|e| io_err(&project.root, e))?;
@@ -1667,7 +1312,6 @@ fn check_disjoint(raw: &Path, project: &ProjectPaths) -> Result<Disjoint, CliErr
     Ok(Disjoint {
         absolute,
         resolved,
-        #[cfg(unix)]
         anchor,
     })
 }
@@ -2459,7 +2103,6 @@ mod tests {
     }
 
     /// Arm the level hook to run `swap` once, when the walk holds `at`.
-    #[cfg(unix)]
     fn swap_when_held(at: PathBuf, swap: impl FnOnce() + 'static) {
         let mut swap = Some(swap);
         super::held::set_level_hook(Some(Box::new(move |held: &Path| {
@@ -2472,10 +2115,25 @@ mod tests {
     }
 
     /// Move the entry `level` aside and plant a link to `target` in its place.
-    #[cfg(unix)]
     fn swap_for_link(level: &Path, target: &Path) {
         std::fs::rename(level, level.with_extension("aside")).expect("move level aside");
-        std::os::unix::fs::symlink(target, level).expect("plant link");
+        plant_link(target, level);
+    }
+
+    /// Plant a symbolic link at `link` pointing to `target`.
+    #[cfg(unix)]
+    fn plant_link(target: &Path, link: &Path) {
+        std::os::unix::fs::symlink(target, link).expect("plant link");
+    }
+
+    /// Plant a symbolic link at `link` pointing to `target`, a directory or file link to match it.
+    #[cfg(windows)]
+    fn plant_link(target: &Path, link: &Path) {
+        if target.is_dir() {
+            std::os::windows::fs::symlink_dir(target, link).expect("plant dir link");
+        } else {
+            std::os::windows::fs::symlink_file(target, link).expect("plant file link");
+        }
     }
 
     /// A level swapped for a link after the walk held its parent is refused.
@@ -2483,7 +2141,6 @@ mod tests {
     /// Every level below the owned root is swapped in turn — each intermediate
     /// directory and the final file — for writes, copies and removals alike, and
     /// the link's target is never touched.
-    #[cfg(unix)]
     #[test]
     fn a_level_swapped_for_a_link_mid_walk_is_refused() {
         let base = scratch("swap_ahead");
@@ -2565,6 +2222,44 @@ mod tests {
             std::fs::read_dir(&victim).expect("read victim").count(),
             0,
             "nothing reaches the link target"
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// A held level cannot be renamed away while the walk holds it, so the act stays in it.
+    #[cfg(windows)]
+    #[test]
+    fn a_held_level_cannot_be_swapped_behind_the_walk() {
+        let base = scratch("swap_behind_held");
+        let out = OwnedDir::claim(&base.join("out")).expect("claim out");
+        let target = out.path_to("a/b/f.txt").expect("target path");
+        target.write(b"old").expect("first write");
+        let level = out.path().join("a");
+        let renamed = std::rc::Rc::new(std::cell::Cell::new(None));
+        let seen = std::rc::Rc::clone(&renamed);
+        let from = level.clone();
+        swap_when_held(level.clone(), move || {
+            seen.set(Some(
+                std::fs::rename(&from, from.with_extension("aside")).is_ok(),
+            ));
+        });
+        let wrote = target.write(b"new");
+        super::held::set_level_hook(None);
+        assert_eq!(
+            renamed.get(),
+            Some(false),
+            "a held level refuses the rename"
+        );
+        assert!(
+            wrote.is_ok(),
+            "the write lands in the held directory, got {wrote:?}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(level.join("b").join("f.txt"))
+                .ok()
+                .as_deref(),
+            Some("new"),
+            "the write went through the held level"
         );
         let _ = std::fs::remove_dir_all(&base);
     }
@@ -2652,7 +2347,7 @@ mod tests {
         std::fs::create_dir(&doomed).expect("plant impostor");
         std::fs::write(doomed.join("keep.txt"), "keep").expect("impostor file");
 
-        let removed = parent.remove_proven(name, &child);
+        let removed = parent.remove_proven(name, child);
         assert!(
             matches!(
                 removed,

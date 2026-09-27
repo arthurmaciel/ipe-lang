@@ -1,33 +1,41 @@
 //! Directory handles held open, so every act names one entry of a proven directory.
 //!
 //! A path-based check followed by a path-based act leaves a window in which a
-//! level can be swapped for a symbolic link. Here every level is opened relative
-//! to the handle of the level above it with `O_NOFOLLOW`, and every create,
-//! rename, and unlink names a single entry of a held handle — a link planted at
-//! any level is refused, never traversed, and a level swapped after it was
-//! opened no longer matters because the held handle still names the real one.
+//! level can be swapped for a symbolic link. Here every level is opened through
+//! the held level above it without following a link, and every create, rename,
+//! and unlink names a single entry of a held handle — a link planted at any
+//! level is refused, never traversed, and a level swapped after it was opened
+//! no longer matters because the held handle still names the real one. The
+//! per-platform primitives live in `unix` (descriptor-relative `*at` calls) and
+//! `windows` (acts under a pinned, reparse-free directory path).
 
 use std::ffi::OsStr;
-use std::io::{Read as _, Write as _};
-use std::os::unix::ffi::OsStrExt as _;
-use std::os::unix::fs::MetadataExt as _;
+use std::io::{self, Read as _, Write as _};
 use std::path::{Path, PathBuf};
-
-use rustix::fs::{AtFlags, CWD, Dir, FileType, Mode, OFlags};
-use rustix::io::Errno;
 
 use super::{
     MARKER_HEADER, MARKER_READ_CAP, MARKER_TEXT, OWNERSHIP_MARKER, OutputRefusal, temp_suffix,
 };
 use crate::{CliError, io_err};
 
+#[cfg(unix)]
+mod unix;
+#[cfg(unix)]
+use unix as sys;
+#[cfg(windows)]
+mod windows;
+#[cfg(windows)]
+use windows as sys;
+#[cfg(not(any(unix, windows)))]
+compile_error!("held output-directory handles are implemented for Unix and Windows only");
+
 /// Deepest directory nesting [`HeldDir::remove_entry`] descends.
 ///
-/// Each level keeps two descriptors open (the handle and its listing), so the
-/// ceiling also bounds descriptor use.
+/// Each level keeps two handles open (the directory and its listing), so the
+/// ceiling also bounds handle use.
 pub const MAX_REMOVE_DEPTH: usize = 128;
 
-/// The device and inode of a directory, its identity across path lookups.
+/// The volume and file number of a directory, its identity across path lookups.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DirId {
     dev: u64,
@@ -41,7 +49,7 @@ pub enum EntryKind {
     Absent,
     /// A directory.
     Directory,
-    /// A symbolic link.
+    /// A symbolic link (on Windows, any reparse point).
     Symlink,
     /// Anything else: a regular file, a FIFO, a socket, a device.
     Other,
@@ -52,33 +60,8 @@ pub enum EntryKind {
 /// The path serves diagnostics only; every act goes through the handle.
 #[derive(Debug)]
 pub struct HeldDir {
-    dir: std::fs::File,
+    dir: sys::Dir,
     path: PathBuf,
-}
-
-/// Flags for opening a directory handle.
-fn dir_flags() -> OFlags {
-    OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC
-}
-
-/// Flags for exclusively creating a new file that is never a link.
-fn new_file_flags() -> OFlags {
-    OFlags::WRONLY | OFlags::CREATE | OFlags::EXCL | OFlags::NOFOLLOW | OFlags::CLOEXEC
-}
-
-/// Permission bits a new file is created with, before the umask.
-fn file_mode() -> Mode {
-    Mode::RUSR | Mode::WUSR | Mode::RGRP | Mode::WGRP | Mode::ROTH | Mode::WOTH
-}
-
-/// Permission bits a new directory is created with, before the umask.
-fn dir_mode() -> Mode {
-    Mode::RWXU | Mode::RWXG | Mode::RWXO
-}
-
-/// The `CliError` for `errno` met at `path`.
-fn errno_err(path: &Path, errno: Errno) -> CliError {
-    io_err(path, std::io::Error::from(errno))
 }
 
 impl HeldDir {
@@ -97,24 +80,24 @@ impl HeldDir {
         } else {
             path
         };
-        match rustix::fs::openat(CWD, target, dir_flags(), Mode::empty()) {
-            Ok(fd) => Ok(Some(Self {
-                dir: std::fs::File::from(fd),
+        match sys::open_following(target) {
+            Ok(dir) => Ok(Some(Self {
+                dir,
                 path: path.to_path_buf(),
             })),
-            Err(e) if e == Errno::NOENT => Ok(None),
-            Err(e) if e == Errno::NOTDIR => {
+            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
+            Err(e) if e.kind() == io::ErrorKind::NotADirectory => {
                 Err(OutputRefusal::NotADirectory(path.to_path_buf()).into())
             }
-            Err(e) => Err(errno_err(path, e)),
+            Err(e) => Err(io_err(path, e)),
         }
     }
 
     /// Open `path` as a directory whose final component is never a link.
     ///
     /// The parent is reached following links (it is not ipe's); the final
-    /// component is opened relative to it with `O_NOFOLLOW`. `Ok(None)` when
-    /// `path` or its parent is absent.
+    /// component is opened through it without following a link. `Ok(None)`
+    /// when `path` or its parent is absent.
     ///
     /// # Errors
     /// [`OutputRefusal::Symlink`] or [`OutputRefusal::NotADirectory`] for a
@@ -138,11 +121,7 @@ impl HeldDir {
     /// # Errors
     /// [`CliError::Io`] when the handle cannot be stat'd.
     pub fn id(&self) -> Result<DirId, CliError> {
-        let meta = self.dir.metadata().map_err(|e| io_err(&self.path, e))?;
-        Ok(DirId {
-            dev: meta.dev(),
-            ino: meta.ino(),
-        })
+        self.dir.id().map_err(|e| io_err(&self.path, e))
     }
 
     /// Classify the entry `name` without following a link.
@@ -150,20 +129,9 @@ impl HeldDir {
     /// # Errors
     /// [`CliError::Io`] on a failure other than absence.
     pub fn kind_of(&self, name: &OsStr) -> Result<EntryKind, CliError> {
-        match rustix::fs::statat(&self.dir, name, AtFlags::SYMLINK_NOFOLLOW) {
-            Ok(stat) => Ok(match FileType::from_raw_mode(stat.st_mode) {
-                FileType::Directory => EntryKind::Directory,
-                FileType::Symlink => EntryKind::Symlink,
-                FileType::RegularFile
-                | FileType::Fifo
-                | FileType::Socket
-                | FileType::CharacterDevice
-                | FileType::BlockDevice
-                | FileType::Unknown => EntryKind::Other,
-            }),
-            Err(e) if e == Errno::NOENT => Ok(EntryKind::Absent),
-            Err(e) => Err(errno_err(&self.path.join(name), e)),
-        }
+        self.dir
+            .kind(name)
+            .map_err(|e| io_err(&self.path.join(name), e))
     }
 
     /// Open the subdirectory `name`, refusing a link or a non-directory.
@@ -175,21 +143,13 @@ impl HeldDir {
     /// on another failure.
     pub fn child(&self, name: &OsStr) -> Result<Option<Self>, CliError> {
         let path = self.path.join(name);
-        match rustix::fs::openat(
-            &self.dir,
-            name,
-            dir_flags() | OFlags::NOFOLLOW,
-            Mode::empty(),
-        ) {
-            Ok(fd) => Ok(Some(Self {
-                dir: std::fs::File::from(fd),
-                path,
-            })),
-            Err(e) if e == Errno::NOENT => Ok(None),
+        match self.dir.open_dir(name) {
+            Ok(dir) => Ok(Some(Self { dir, path })),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
             Err(e) => match self.kind_of(name)? {
                 EntryKind::Symlink => Err(OutputRefusal::Symlink(path).into()),
                 EntryKind::Other => Err(OutputRefusal::NotADirectory(path).into()),
-                EntryKind::Absent | EntryKind::Directory => Err(errno_err(&path, e)),
+                EntryKind::Absent | EntryKind::Directory => Err(io_err(&path, e)),
             },
         }
     }
@@ -202,13 +162,13 @@ impl HeldDir {
     /// As [`HeldDir::child`].
     pub fn create_child(&self, name: &OsStr) -> Result<(Self, bool), CliError> {
         let path = self.path.join(name);
-        let created = match rustix::fs::mkdirat(&self.dir, name, dir_mode()) {
+        let created = match self.dir.mkdir(name) {
             Ok(()) => true,
-            Err(e) if e == Errno::EXIST => false,
-            Err(e) => return Err(errno_err(&path, e)),
+            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => false,
+            Err(e) => return Err(io_err(&path, e)),
         };
         self.child(name)?.map_or_else(
-            || Err(errno_err(&path, Errno::NOENT)),
+            || Err(io_err(&path, io::ErrorKind::NotFound.into())),
             |child| Ok((child, created)),
         )
     }
@@ -223,14 +183,13 @@ impl HeldDir {
     pub fn has_marker(&self) -> Result<bool, CliError> {
         let name = OsStr::new(OWNERSHIP_MARKER);
         let path = self.path.join(name);
-        let flags = OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::CLOEXEC;
-        let file = match rustix::fs::openat(&self.dir, name, flags, Mode::empty()) {
-            Ok(fd) => std::fs::File::from(fd),
-            Err(e) if e == Errno::NOENT => return Ok(false),
+        let file = match self.dir.open_file(name) {
+            Ok(file) => file,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(false),
             Err(e) => {
                 return match self.kind_of(name)? {
                     EntryKind::Symlink | EntryKind::Absent => Ok(false),
-                    EntryKind::Directory | EntryKind::Other => Err(errno_err(&path, e)),
+                    EntryKind::Directory | EntryKind::Other => Err(io_err(&path, e)),
                 };
             }
         };
@@ -250,13 +209,9 @@ impl HeldDir {
     /// # Errors
     /// [`CliError::Io`] when the directory cannot be listed.
     pub fn is_empty(&self) -> Result<bool, CliError> {
-        let entries = Dir::read_from(&self.dir).map_err(|e| errno_err(&self.path, e))?;
-        for entry in entries {
-            let entry = entry.map_err(|e| errno_err(&self.path, e))?;
-            let name = OsStr::from_bytes(entry.file_name().to_bytes());
-            if is_dot(name) {
-                continue;
-            }
+        let names = self.dir.names().map_err(|e| io_err(&self.path, e))?;
+        for name in names {
+            let name = name.map_err(|e| io_err(&self.path, e))?;
             if !super::is_marker_name(&name.to_string_lossy()) {
                 return Ok(false);
             }
@@ -311,7 +266,7 @@ impl HeldDir {
         &self,
         name: &OsStr,
         permissions: Option<std::fs::Permissions>,
-        fill: impl FnOnce(&mut std::fs::File) -> std::io::Result<()>,
+        fill: impl FnOnce(&mut std::fs::File) -> io::Result<()>,
     ) -> Result<(), CliError> {
         if self.kind_of(name)? == EntryKind::Symlink {
             return Err(OutputRefusal::Symlink(self.path.join(name)).into());
@@ -326,22 +281,21 @@ impl HeldDir {
         name: &OsStr,
         tmp: &OsStr,
         permissions: Option<std::fs::Permissions>,
-        fill: impl FnOnce(&mut std::fs::File) -> std::io::Result<()>,
+        fill: impl FnOnce(&mut std::fs::File) -> io::Result<()>,
     ) -> Result<(), CliError> {
         let tmp_path = self.path.join(tmp);
-        let mut staged = rustix::fs::openat(&self.dir, tmp, new_file_flags(), file_mode())
-            .map(std::fs::File::from)
-            .map_err(|e| errno_err(&tmp_path, e))?;
+        let mut staged = self.dir.create_new(tmp).map_err(|e| io_err(&tmp_path, e))?;
         let filled = fill(&mut staged).and_then(|()| {
             permissions.map_or(Ok(()), |permissions| staged.set_permissions(permissions))
         });
         drop(staged);
         let result = filled.map_err(|e| io_err(&tmp_path, e)).and_then(|()| {
-            rustix::fs::renameat(&self.dir, tmp, &self.dir, name)
-                .map_err(|e| errno_err(&self.path.join(name), e))
+            self.dir
+                .rename(tmp, name)
+                .map_err(|e| io_err(&self.path.join(name), e))
         });
         if result.is_err() {
-            let _ = rustix::fs::unlinkat(&self.dir, tmp, AtFlags::empty());
+            let _ = self.dir.unlink(tmp);
         }
         result
     }
@@ -370,14 +324,17 @@ impl HeldDir {
     /// # Errors
     /// [`CliError::Io`] on a filesystem failure, a directory at `name` included.
     pub fn unlink(&self, name: &OsStr) -> Result<(), CliError> {
-        match rustix::fs::unlinkat(&self.dir, name, AtFlags::empty()) {
+        match self.dir.unlink(name) {
             Ok(()) => Ok(()),
-            Err(e) if e == Errno::NOENT => Ok(()),
-            Err(e) => Err(errno_err(&self.path.join(name), e)),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(()),
+            Err(e) => Err(io_err(&self.path.join(name), e)),
         }
     }
 
     /// Empty the subdirectory `name` at nesting `depth`, then remove it.
+    ///
+    /// The subdirectory's handle is released before the removal, since a held
+    /// directory cannot be removed on every platform.
     fn remove_dir(&self, name: &OsStr, depth: usize) -> Result<(), CliError> {
         let path = self.path.join(name);
         if depth >= MAX_REMOVE_DEPTH {
@@ -390,50 +347,43 @@ impl HeldDir {
         if let Some(child) = self.child(name)? {
             child.remove_contents(depth)?;
         }
-        match rustix::fs::unlinkat(&self.dir, name, AtFlags::REMOVEDIR) {
+        match self.dir.rmdir(name) {
             Ok(()) => Ok(()),
-            Err(e) if e == Errno::NOENT => Ok(()),
-            Err(e) => Err(errno_err(&path, e)),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(()),
+            Err(e) => Err(io_err(&path, e)),
         }
     }
 
     /// Remove every entry of this directory, which sits at nesting `depth`.
     fn remove_contents(&self, depth: usize) -> Result<(), CliError> {
-        let entries = Dir::read_from(&self.dir).map_err(|e| errno_err(&self.path, e))?;
-        for entry in entries {
-            let entry = match entry {
-                Ok(entry) => entry,
-                Err(e) if e == Errno::NOENT => continue,
-                Err(e) => return Err(errno_err(&self.path, e)),
+        let names = self.dir.names().map_err(|e| io_err(&self.path, e))?;
+        for name in names {
+            let name = match name {
+                Ok(name) => name,
+                Err(e) if e.kind() == io::ErrorKind::NotFound => continue,
+                Err(e) => return Err(io_err(&self.path, e)),
             };
-            let name = OsStr::from_bytes(entry.file_name().to_bytes());
-            if is_dot(name) {
-                continue;
-            }
-            match self.kind_of(name)? {
+            match self.kind_of(&name)? {
                 EntryKind::Absent => {}
-                EntryKind::Directory => self.remove_dir(name, depth.saturating_add(1))?,
-                EntryKind::Symlink | EntryKind::Other => self.unlink(name)?,
+                EntryKind::Directory => self.remove_dir(&name, depth.saturating_add(1))?,
+                EntryKind::Symlink | EntryKind::Other => self.unlink(&name)?,
             }
         }
         Ok(())
     }
 
-    /// Open the directory above this one through the handle, not the path.
+    /// Open the directory above this one through the handle, not the logical path.
     ///
-    /// `Ok(None)` at the filesystem root, whose parent is itself.
+    /// `Ok(None)` at the filesystem root.
     ///
     /// # Errors
     /// [`CliError::Io`] when the parent cannot be opened or stat'd.
     pub fn parent(&self) -> Result<Option<Self>, CliError> {
         let path = self.path.parent().unwrap_or(&self.path).to_path_buf();
-        let fd = rustix::fs::openat(&self.dir, "..", dir_flags(), Mode::empty())
-            .map_err(|e| errno_err(&path, e))?;
-        let parent = Self {
-            dir: std::fs::File::from(fd),
-            path,
-        };
-        Ok((parent.id()? != self.id()?).then_some(parent))
+        match self.dir.parent() {
+            Ok(dir) => Ok(dir.map(|dir| Self { dir, path })),
+            Err(e) => Err(io_err(&path, e)),
+        }
     }
 
     /// Whether looking `path` up now reaches this very directory.
@@ -441,30 +391,30 @@ impl HeldDir {
     /// # Errors
     /// [`CliError::Io`] when `path` cannot be stat'd or the handle cannot be.
     pub fn is_at(&self, path: &Path) -> Result<bool, CliError> {
-        let meta = std::fs::metadata(path).map_err(|e| io_err(path, e))?;
-        Ok(DirId {
-            dev: meta.dev(),
-            ino: meta.ino(),
-        } == self.id()?)
+        let found = sys::id_of_path(path).map_err(|e| io_err(path, e))?;
+        Ok(found == self.id()?)
     }
 
     /// Empty the held subdirectory `child`, then remove the entry `name` it was opened as.
     ///
     /// The contents are removed through `child`'s own handle, so a swap of
     /// `name` after it was opened cannot redirect them; the final removal
-    /// re-proves that `name` still names `child` before unlinking it.
+    /// re-proves that `name` still names `child` before unlinking it. Both
+    /// handles are released first, since a held directory cannot be removed on
+    /// every platform.
     ///
     /// # Errors
     /// [`OutputRefusal::Replaced`] when `name` no longer names `child`;
     /// [`OutputRefusal::Symlink`] for a link there; [`OutputRefusal::TooDeep`];
     /// [`CliError::Io`] on a filesystem failure.
-    pub fn remove_proven(&self, name: &OsStr, child: &Self) -> Result<(), CliError> {
+    pub fn remove_proven(&self, name: &OsStr, child: Self) -> Result<(), CliError> {
         child.remove_contents(0)?;
         let path = self.path.join(name);
         let still = self.child(name)?;
-        if still.map_or(Ok(false), |now| Ok::<_, CliError>(now.id()? == child.id()?))? {
-            rustix::fs::unlinkat(&self.dir, name, AtFlags::REMOVEDIR)
-                .map_err(|e| errno_err(&path, e))
+        let same = still.map_or(Ok(false), |now| Ok::<_, CliError>(now.id()? == child.id()?))?;
+        drop(child);
+        if same {
+            self.dir.rmdir(name).map_err(|e| io_err(&path, e))
         } else {
             Err(OutputRefusal::Replaced(path).into())
         }
@@ -475,10 +425,17 @@ impl HeldDir {
     /// # Errors
     /// [`CliError::Io`] on a failure other than a non-empty directory.
     pub fn remove_empty_dir(&self, name: &OsStr) -> Result<bool, CliError> {
-        match rustix::fs::unlinkat(&self.dir, name, AtFlags::REMOVEDIR) {
+        match self.dir.rmdir(name) {
             Ok(()) => Ok(true),
-            Err(e) if e == Errno::NOTEMPTY || e == Errno::EXIST => Ok(false),
-            Err(e) => Err(errno_err(&self.path.join(name), e)),
+            Err(e)
+                if matches!(
+                    e.kind(),
+                    io::ErrorKind::DirectoryNotEmpty | io::ErrorKind::AlreadyExists
+                ) =>
+            {
+                Ok(false)
+            }
+            Err(e) => Err(io_err(&self.path.join(name), e)),
         }
     }
 
@@ -506,21 +463,17 @@ impl HeldDir {
             }
             .into());
         }
-        let entries = Dir::read_from(&self.dir).map_err(|e| errno_err(&self.path, e))?;
-        for entry in entries {
-            let entry = match entry {
-                Ok(entry) => entry,
-                Err(e) if e == Errno::NOENT => continue,
-                Err(e) => return Err(errno_err(&self.path, e)),
+        let names = self.dir.names().map_err(|e| io_err(&self.path, e))?;
+        for name in names {
+            let name = match name {
+                Ok(name) => name,
+                Err(e) if e.kind() == io::ErrorKind::NotFound => continue,
+                Err(e) => return Err(io_err(&self.path, e)),
             };
-            let name = OsStr::from_bytes(entry.file_name().to_bytes());
-            if is_dot(name) {
-                continue;
-            }
-            rel.push(name);
-            let result = match self.kind_of(name) {
+            rel.push(&name);
+            let result = match self.kind_of(&name) {
                 Ok(EntryKind::Absent) => Ok(()),
-                Ok(EntryKind::Directory) => self.child(name).and_then(|child| {
+                Ok(EntryKind::Directory) => self.child(&name).and_then(|child| {
                     child.map_or(Ok(()), |child| {
                         level_held(child.path());
                         child.prune(rel, keep, depth.saturating_add(1), max_depth)
@@ -530,7 +483,7 @@ impl HeldDir {
                     if keep(rel) {
                         Ok(())
                     } else {
-                        self.unlink(name)
+                        self.unlink(&name)
                     }
                 }
                 Err(e) => Err(e),
@@ -547,11 +500,9 @@ impl HeldDir {
     /// holding them, so the caller rewrites.
     #[must_use]
     pub fn holds_contents(&self, name: &OsStr, contents: &[u8]) -> bool {
-        let flags = OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::CLOEXEC;
-        let Ok(fd) = rustix::fs::openat(&self.dir, name, flags, Mode::empty()) else {
+        let Ok(file) = self.dir.open_file(name) else {
             return false;
         };
-        let file = std::fs::File::from(fd);
         let Ok(len) = u64::try_from(contents.len()) else {
             return false;
         };
@@ -566,11 +517,6 @@ impl HeldDir {
             .read_to_end(&mut existing)
             .is_ok_and(|_| existing == contents)
     }
-}
-
-/// Whether `name` is the `.` or `..` entry of a listing.
-fn is_dot(name: &OsStr) -> bool {
-    name == "." || name == ".."
 }
 
 /// Test-only hook run after each level of an owned-path walk is held.

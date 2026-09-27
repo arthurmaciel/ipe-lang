@@ -728,10 +728,21 @@ fn open_entry(path: &Path) -> Option<fs::File> {
         .map(fs::File::from)
 }
 
-/// Open `path` read-only.
-#[cfg(not(unix))]
+/// Open `path` read-only, refusing a reparse point at its final component.
+#[cfg(windows)]
 fn open_entry(path: &Path) -> Option<fs::File> {
-    fs::File::open(path).ok()
+    use std::os::windows::fs::{MetadataExt as _, OpenOptionsExt as _};
+    /// `FILE_FLAG_OPEN_REPARSE_POINT`: opens a reparse point itself, never its target.
+    const OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+    /// `FILE_ATTRIBUTE_REPARSE_POINT`.
+    const ATTR_REPARSE_POINT: u32 = 0x400;
+    let file = fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(OPEN_REPARSE_POINT)
+        .open(path)
+        .ok()?;
+    let attributes = file.metadata().ok()?.file_attributes();
+    (attributes & ATTR_REPARSE_POINT == 0).then_some(file)
 }
 
 /// Whether two metadata records name the same file.
@@ -741,8 +752,8 @@ fn same_file(a: &fs::Metadata, b: &fs::Metadata) -> bool {
     a.dev() == b.dev() && a.ino() == b.ino()
 }
 
-/// No portable file identity here, so never the same file: the cache runs cold.
-#[cfg(not(unix))]
+/// No stable file identity in a metadata record here, so never the same file: the cache runs cold.
+#[cfg(windows)]
 const fn same_file(_: &fs::Metadata, _: &fs::Metadata) -> bool {
     false
 }
@@ -836,7 +847,6 @@ fn user_cache_salt() -> Option<String> {
 }
 
 /// Whether `part` is one plain path component, never a separator, `..` or `.`.
-#[cfg(unix)]
 fn is_plain_name(part: &str) -> bool {
     let mut components = Path::new(part).components();
     matches!(
@@ -852,7 +862,6 @@ fn is_plain_name(part: &str) -> bool {
 /// so a level swapped for a symlink between the check and the write refuses
 /// the write rather than landing it through the link. The entry is staged in
 /// an exclusively created, process-unique temp file renamed over the name.
-#[cfg(unix)]
 fn write_entry(cache_root: &Path, epoch: &str, file_name: &str, bytes: &[u8]) {
     use crate::output_dir::held::{HeldDir, level_held};
     use std::io::Write as _;
@@ -871,58 +880,6 @@ fn write_entry(cache_root: &Path, epoch: &str, file_name: &str, bytes: &[u8]) {
     let _ = dir.write_file(std::ffi::OsStr::new(file_name), None, |file| {
         file.write_all(bytes)
     });
-}
-
-/// Whether any existing level from `cache_root` down to `path` is a symlink.
-///
-/// A cache write is skipped rather than made through a link.
-#[cfg(not(unix))]
-fn crosses_symlink(cache_root: &Path, path: &Path) -> bool {
-    let Ok(rel) = path.strip_prefix(cache_root) else {
-        return true;
-    };
-    let mut current = cache_root.to_path_buf();
-    let is_link = |p: &Path| fs::symlink_metadata(p).is_ok_and(|m| m.file_type().is_symlink());
-    if is_link(&current) {
-        return true;
-    }
-    for part in rel.components() {
-        current.push(part);
-        if is_link(&current) {
-            return true;
-        }
-    }
-    false
-}
-
-/// Write `bytes` to `<cache_root>/<epoch>/<file_name>` via an exclusive temp file and a rename.
-///
-/// Best-effort: every failure is swallowed. A symlink anywhere below
-/// `cache_root` skips the write. The temp name carries this process's PID, so
-/// two concurrent builds storing the same key never share a temp file.
-#[cfg(not(unix))]
-fn write_entry(cache_root: &Path, epoch: &str, file_name: &str, bytes: &[u8]) {
-    use std::io::Write as _;
-    let dir = cache_root.join(epoch);
-    let path = dir.join(file_name);
-    let tmp = dir.join(format!("{file_name}.{}.tmp", std::process::id()));
-    if crosses_symlink(cache_root, &dir) || fs::create_dir_all(&dir).is_err() {
-        return;
-    }
-    if crosses_symlink(cache_root, &path) {
-        return;
-    }
-    let written = fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&tmp)
-        .and_then(|mut file| file.write_all(bytes));
-    if written.is_err() {
-        return;
-    }
-    if fs::rename(&tmp, &path).is_err() {
-        let _ = fs::remove_file(&tmp);
-    }
 }
 
 /// The file name of the `EmittedProject`-tier entry for `key`.

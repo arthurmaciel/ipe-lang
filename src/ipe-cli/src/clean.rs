@@ -152,7 +152,7 @@ fn project_root() -> Result<PathBuf, CliError> {
 /// refused, its target untouched; an `out/` without ipe's ownership marker is
 /// refused untouched; and a removal never follows a symlink met inside the tree.
 ///
-/// On Unix every act goes through held directory handles: the candidate is
+/// Every act goes through held directory handles: the candidate is
 /// opened relative to the held root without following a link, the marker is
 /// read and the tree emptied through that handle, and the final removal
 /// re-proves the name still names it — a level swapped for a link mid-walk is
@@ -161,7 +161,6 @@ fn project_root() -> Result<PathBuf, CliError> {
 /// # Errors
 /// [`CliError::OutputRefused`] for a symlink or an unmarked `out/`;
 /// [`CliError::Io`] on a stat or remove failure.
-#[cfg(unix)]
 fn remove_generated_dir(root: &Path, generated: &Generated) -> Result<Vec<String>, CliError> {
     use crate::output_dir::OutputRefusal;
     use crate::output_dir::held::{EntryKind, HeldDir, level_held};
@@ -185,7 +184,7 @@ fn remove_generated_dir(root: &Path, generated: &Generated) -> Result<Vec<String
             if !dir.has_marker()? {
                 return Err(OutputRefusal::NotIpeOwned(candidate).into());
             }
-            root_dir.remove_proven(os_name, &dir)?;
+            root_dir.remove_proven(os_name, dir)?;
             Ok(vec![format!("{name}/")])
         }
         Proof::Namespace(entries) => {
@@ -209,92 +208,6 @@ fn remove_generated_dir(root: &Path, generated: &Generated) -> Result<Vec<String
             Ok(removed)
         }
     }
-}
-
-/// Remove one generated directory under `root`, returning what went for the summary.
-///
-/// Nothing when it is absent or not a directory. Every entry is lstat'd, never
-/// followed: a symlinked `out/`/`.ipe/` (or a symlinked entry in `.ipe/`) is
-/// refused, its target untouched; an `out/` without ipe's ownership marker is
-/// refused untouched; and a removal never follows a symlink met inside the tree.
-///
-/// # Errors
-/// [`CliError::OutputRefused`] for a symlink or an unmarked `out/`;
-/// [`CliError::Io`] on a stat or remove failure.
-#[cfg(not(unix))]
-fn remove_generated_dir(root: &Path, generated: &Generated) -> Result<Vec<String>, CliError> {
-    let name = generated.name;
-    let candidate = root.join(name);
-    if !is_real_dir(&candidate)? {
-        return Ok(Vec::new());
-    }
-    match generated.proof {
-        Proof::Marker => {
-            if !crate::output_dir::has_marker(&candidate)? {
-                return Err(crate::output_dir::OutputRefusal::NotIpeOwned(candidate).into());
-            }
-            remove_tree(&candidate)?;
-            Ok(vec![format!("{name}/")])
-        }
-        Proof::Namespace(entries) => {
-            let mut removed = Vec::new();
-            for entry in entries {
-                let path = candidate.join(entry);
-                if is_real_dir(&path)? {
-                    remove_tree(&path)?;
-                    removed.push(format!("{name}/{entry}/"));
-                }
-            }
-            if is_empty(&candidate)? {
-                std::fs::remove_dir(&candidate).map_err(|e| CliError::Io {
-                    path: candidate,
-                    source: e,
-                })?;
-                return Ok(vec![format!("{name}/")]);
-            }
-            Ok(removed)
-        }
-    }
-}
-
-/// Whether `path` is a directory, never following a link.
-///
-/// `false` when absent or a plain file (ipe never removes one it does not own).
-///
-/// # Errors
-/// [`CliError::OutputRefused`] for a symlink; [`CliError::Io`] on a stat failure.
-#[cfg(not(unix))]
-fn is_real_dir(path: &Path) -> Result<bool, CliError> {
-    match std::fs::symlink_metadata(path) {
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(false),
-        Err(e) => Err(CliError::Io {
-            path: path.to_path_buf(),
-            source: e,
-        }),
-        Ok(meta) if meta.file_type().is_symlink() => {
-            Err(crate::output_dir::OutputRefusal::Symlink(path.to_path_buf()).into())
-        }
-        Ok(meta) => Ok(meta.is_dir()),
-    }
-}
-
-/// Whether the directory `dir` has no entries.
-#[cfg(not(unix))]
-fn is_empty(dir: &Path) -> Result<bool, CliError> {
-    let mut entries = std::fs::read_dir(dir).map_err(|e| CliError::Io {
-        path: dir.to_path_buf(),
-        source: e,
-    })?;
-    Ok(entries.next().is_none())
-}
-
-/// Remove the directory tree `dir`; `remove_dir_all` never follows a symlink in it.
-#[cfg(not(unix))]
-fn remove_tree(dir: &Path) -> Result<(), CliError> {
-    std::fs::remove_dir_all(dir).map_err(|e| CliError::Io {
-        path: dir.to_path_buf(),
-        source: e,
-    })
 }
 
 /// Print the removal result in the requested format.
