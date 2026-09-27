@@ -6037,7 +6037,7 @@ fn reject_fn_value_reuse_for_count(
     fn_count: usize,
     span: Span,
 ) -> DResult<()> {
-    if ir_contains_fun(ir_ty)
+    if ir_contains_fun(ir_ty, env.payloads)
         && matches!(clone_class(env, ir_ty), CloneClass::NonClone)
         && fn_count > 1
     {
@@ -10044,24 +10044,15 @@ fn rewrite_var_free_occurrences(
     }
 }
 
-/// Does `ty` structurally contain [`IrType::Decoder`] anywhere (itself, or
-/// nested inside a `Tuple`/`Record`/`Maybe`/`Result`/`List`)? Gates the
-/// destructure-thunk rewrite: a `Tuple`/`Record` binder whose aggregate
-/// type contains a Decoder anywhere needs the WHOLE destructure thunked
-/// (spec §2.2) — a Decoder nested inside e.g. `Maybe (Decoder a)` is out of
-/// today's realistic reach (Decoders aren't optional in practice) but the
-/// predicate stays structurally total rather than special-cased to Tuple/
-/// Record only, matching `ipe_ir::let_inline::ir_type_contains_task`'s
-/// existing shape (AUD-04).
-fn ir_type_contains_decoder(ty: &IrType) -> bool {
-    match ty {
-        IrType::Decoder(_) => true,
-        IrType::Tuple(elems) => elems.iter().any(ir_type_contains_decoder),
-        IrType::Record(fields) => fields.values().any(ir_type_contains_decoder),
-        IrType::Maybe(inner) | IrType::List(inner) => ir_type_contains_decoder(inner),
-        IrType::Result(e, a) => ir_type_contains_decoder(e) || ir_type_contains_decoder(a),
-        _ => false,
-    }
+/// Does a value of type `ty` hold an [`IrType::Decoder`] anywhere?
+///
+/// Gates the destructure-thunk rewrite: a binder whose aggregate type holds a
+/// Decoder anywhere needs the WHOLE destructure thunked (spec §2.2). One leaf
+/// over the shared held-value walk ([`ir_type_holds`]), so every carrier —
+/// named-enum variant payloads from `payloads` included — is descended exactly
+/// as every other held-value predicate descends it.
+fn ir_type_contains_decoder(ty: &IrType, payloads: &EnumPayloadTable) -> bool {
+    ir_type_holds(ty, payloads, &|t: &IrType| matches!(t, IrType::Decoder(_)))
 }
 
 /// Rebuild `pat` with every bound name EXCEPT `keep` erased to
@@ -15685,8 +15676,10 @@ impl<'a> Lowerer<'a> {
                     // derive `Clone`/`Debug`/`PartialEq`.  The cfg record is
                     // consumed structurally by `emit_web_app_inner` (never
                     // materialised as a runtime value), so its IR struct is
-                    // not needed.
-                    if !ir_contains_fun(&ir) && seen.insert(ir.clone()) {
+                    // not needed. Only the record's own field types count: a
+                    // function inside a named enum's payload belongs to that
+                    // enum's definition, so no payload table is consulted.
+                    if !ir_contains_fun(&ir, &EnumPayloadTable::new()) && seen.insert(ir.clone()) {
                         out.push(ir);
                     }
                 }
@@ -28216,7 +28209,8 @@ impl<'a> Lowerer<'a> {
         let value_ir_ty = self
             .region_ty(value_span)
             .and_then(|ty| self.ir_type_from_ty(ty, value_span).ok());
-        let Some(ir_ty) = value_ir_ty.filter(ir_type_contains_decoder) else {
+        let Some(ir_ty) = value_ir_ty.filter(|t| ir_type_contains_decoder(t, &self.enum_payloads))
+        else {
             // a destructure binder (`let (a, b) = pair in …`, single-arm
             // `case p of (a, b) -> …`) whose value type contains NO Decoder used
             // to emit a bare `Destructure` with NO move-ownership discipline on

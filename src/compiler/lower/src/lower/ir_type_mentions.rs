@@ -4,7 +4,7 @@
 //! email, locale, json, url, …) or embeds a function.
 
 use ipe_intern::{Interner, Symbol};
-use ipe_ir::{Expr, Func, IrType, TypeDef};
+use ipe_ir::{EnumPayloadTable, Expr, Func, IrType, TypeDef, ir_type_holds};
 
 /// Total structural walk over an [`IrType`], returning `true` when `leaf`
 /// matches the type itself or any type it transitively carries.
@@ -563,8 +563,15 @@ pub(super) fn collect_body_record_shapes(
     out: &mut Vec<IrType>,
     seen: &mut std::collections::HashSet<IrType>,
 ) {
+    // The G-b gate reads the record's own field types: a function reached only
+    // through a named enum's payload lives in that enum's definition, not in
+    // this record's struct, so no payload table is consulted.
+    let no_payloads = EnumPayloadTable::new();
     let mut consider = |ty: &IrType| {
-        if matches!(ty, IrType::Record(_)) && !ir_contains_fun(ty) && seen.insert(ty.clone()) {
+        if matches!(ty, IrType::Record(_))
+            && !ir_contains_fun(ty, &no_payloads)
+            && seen.insert(ty.clone())
+        {
             out.push(ty.clone());
         }
     };
@@ -699,128 +706,94 @@ pub(super) fn collect_body_record_shapes(
     }
 }
 
-pub(super) fn ir_contains_fun(ty: &IrType) -> bool {
+/// Does a value of type `ty` hold a function value?
+///
+/// One leaf over the shared held-value walk ([`ir_type_holds`]), so every
+/// carrier it descends — including each named enum's variant payloads looked up
+/// in `payloads` — is the same set every other held-value predicate descends. A
+/// caller with no payload table in reach passes an empty one and sees only enum
+/// type arguments.
+pub(super) fn ir_contains_fun(ty: &IrType, payloads: &EnumPayloadTable) -> bool {
+    ir_type_holds(ty, payloads, &|t: &IrType| fun_leaf(t, payloads))
+}
+
+/// The function-value leaf of [`ir_contains_fun`].
+///
+/// A curried `FnOnce` chain is the same boxed-closure family as `Fun`, and the
+/// promoted `Arc<dyn Fn>` (`SharedFun`) is still a function value. The opaque
+/// effect carriers (`Task` / `Cmd` / `Sub`) and the widget handle's seal types
+/// are searched too: an effect whose result embeds a function stays fn-bearing
+/// for the reuse gate.
+fn fun_leaf(ty: &IrType, payloads: &EnumPayloadTable) -> bool {
     match ty {
-        // A curried `FnOnce` chain is the same boxed-closure family as `Fun`; the
-        // promoted `Arc<dyn Fn>` (`SharedFun`) is still a function value, so the
-        // reuse gate must keep seeing it as fn-bearing.
         IrType::Fun(_, _) | IrType::SharedFun(_, _) | IrType::FnOnceChain(_, _) => true,
-        // `IpeTask<E,A>`, `IpeCmd<M>`, `IpeSub<M>` are opaque runtime types; the
-        // inner type parameter might itself embed a function, so recurse.
-        IrType::Task(inner) | IrType::Cmd(inner) | IrType::Sub(inner) => ir_contains_fun(inner),
-        IrType::Int
-        | IrType::Float
-        | IrType::Bool
-        | IrType::Str
-        | IrType::Char
-        | IrType::Unit
-        | IrType::Bytes
-        | IrType::Json
-        // `Decoder<T>` is an opaque struct, not a function type.
-        | IrType::Decoder(_)
-        // `Db` is an opaque connection pool handle, not a function type.
-        | IrType::Db
-        // Opaque server types are opaque handles, not function types.
-        | IrType::ServerRequest
-        | IrType::ServerResponse
-        | IrType::ServerRoute
-        | IrType::ServerCookie
-        // `StreamWriter` is an opaque stream handle — not a function type.
-        | IrType::StreamWriter
-        // `HttpRequest` is an opaque handle — not a function type.
-        | IrType::HttpRequest
-        // `Regex` is an opaque compiled-pattern handle — not a function type.
-        | IrType::Regex
-        // `WsHandle` / `WsServerCfg` are opaque handles — not function types.
-        | IrType::WebSocketServer
-        | IrType::WebSocketServerCfg
-        | IrType::Generic(_)
-        // A row variable erases to a witness-bounded generic; it embeds no
-        // function type of its own.
-        | IrType::RowGeneric(_)
-        // nullary plain types (`Length`, `Color`, etc.) trivially contain no
-        // functions.  `WebReq` is an opaque handle with no `Fn` fields.
-        | IrType::UiPlain(_)
-        | IrType::WebReq
-        | IrType::SessionHandle
-        // `Order` (LT/EQ/GT) is a primitive leaf — no embedded function.
-        // `HttpMethod` is a closed 7-variant unit ADT — no embedded function.
-        // `Decimal` is a Copy newtype — no embedded function.
-        // `ErrorKind`/`Error`/`ErrorDetails` and the nominal error-payload
-        // leaves (`ErrorInfo`/`PanicInfo`/`TypeInfo`, SEAL fix)
-        // are leaves — no embedded function.
-        // `BackoffStrategy` is a Copy leaf — no embedded function.
-        | IrType::BackoffStrategy
-        | IrType::Order
-        | IrType::HttpMethod
-        | IrType::Decimal
-        | IrType::ErrorKind
-        | IrType::Error
-        | IrType::ErrorDetails
-        | IrType::ErrorInfo
-        | IrType::PanicInfo
-        | IrType::TypeInfo
-        // `SqlFragment` is an opaque query-building value — no embedded function.
-        // `Secret` is an opaque sealed string wrapper — no embedded function.
-        // `Path` is an opaque validated string wrapper — no embedded function.
-        // `Url` is an opaque validated URL wrapper — no embedded function.
-        | IrType::SqlFragment
-        | IrType::Secret
-        | IrType::Path
-        | IrType::Url
-        | IrType::UrlRelative
-        | IrType::Dsn
-        | IrType::Connection
-        | IrType::ConnReadOnly
-        | IrType::ConnReadWrite
-        | IrType::Setting
-        | IrType::ShapeWeb
-        | IrType::ShapeWebView
-        | IrType::ShapeTerminal
-        // Process-run-with cfg + Cache config / stats + Csv document are plain
-        // data records — no function.
-        | IrType::ProcessRunWithCfg
-        | IrType::ProcessRunInPtyCfg
-        | IrType::CacheCfg
-        | IrType::WebSocketClientCfg
-        | IrType::CacheStats
-        | IrType::CsvDoc
-        // Ipe.Email records + provider ADT — plain data, no function.
-        | IrType::EmailMessage
-        | IrType::EmailAttachment
-        | IrType::EmailSesConfig
-        | IrType::EmailSmtpConfig
-        | IrType::EmailProvider
-        // Typed-key newtypes — opaque scalar wrappers, no embedded function.
-        | IrType::CryptoKey
-        | IrType::CryptoMac
-        | IrType::EmailAddress
-        | IrType::Locale
-        | IrType::Principal
-        // `AuthConfig` / `TokenSource` are opaque descriptors — no embedded
-        // function.
-        | IrType::AuthConfig
-        | IrType::TokenSource
-        // Shape app leaves — opaque handles wrapping runtime event loops,
-        // no embedded Ipê function.
-        | IrType::WebApp
-        | IrType::TuiApp
-        | IrType::CliApp
-        | IrType::WorkerApp => false,
-        // `WebRoute page` carries the page type it builds — recurse (the
-        // route's own builder closure is runtime-internal, not a Ipê `Fn`).
-        IrType::WebRoute(page) => ir_contains_fun(page),
-        // The widget handle carries no function; its seal types are canon-proven
-        // function-free, but recurse for structural faithfulness.
-        IrType::CustomElement { down, up } => ir_contains_fun(down) || ir_contains_fun(up),
-        IrType::Enum { args, .. } => args.iter().any(ir_contains_fun),
-        IrType::Maybe(elem) | IrType::List(elem) => ir_contains_fun(elem),
-        IrType::Result(err, ok) => ir_contains_fun(err) || ir_contains_fun(ok),
-        IrType::Dict(k, v) => ir_contains_fun(k) || ir_contains_fun(v),
-        IrType::Set(a) => ir_contains_fun(a),
-        IrType::Tuple(elems) => elems.iter().any(ir_contains_fun),
-        IrType::Record(fields) => fields.values().any(ir_contains_fun),
-        // `Element<M>` / `Html<M>` carry a msg type parameter — recurse.
-        IrType::Ui { msg, .. } => ir_contains_fun(msg),
+        IrType::Task(inner) | IrType::Cmd(inner) | IrType::Sub(inner) => {
+            ir_contains_fun(inner, payloads)
+        }
+        IrType::CustomElement { down, up } => {
+            ir_contains_fun(down, payloads) || ir_contains_fun(up, payloads)
+        }
+        _ => false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use ipe_diagnostics::DResult;
+    use ipe_intern::Interner;
+    use ipe_ir::{EnumDef, ModPath, Variant, enum_payload_table};
+
+    use super::*;
+
+    fn int_to_int() -> IrType {
+        IrType::Fun(vec![IrType::Int], Box::new(IrType::Int))
+    }
+
+    #[test]
+    fn enum_fn_payload_is_seen_through_the_payload_table() -> DResult<()> {
+        let mut interner = Interner::new();
+        let home = ModPath(vec![interner.intern("Main")?]);
+        let h = interner.intern("H")?;
+        // type H = H (Int -> Int)
+        let table = enum_payload_table(&[EnumDef {
+            name: h,
+            home: home.clone(),
+            type_params: Vec::new(),
+            variants: vec![Variant {
+                name: h,
+                fields: vec![int_to_int()],
+            }],
+        }]);
+        let ty = IrType::Enum {
+            home,
+            name: h,
+            args: Vec::new(),
+        };
+        assert!(ir_contains_fun(&ty, &table));
+        assert!(ir_contains_fun(
+            &IrType::Maybe(Box::new(ty.clone())),
+            &table
+        ));
+        // Without the table only the (empty) type arguments are walked.
+        assert!(!ir_contains_fun(&ty, &EnumPayloadTable::new()));
+        Ok(())
+    }
+
+    #[test]
+    fn data_only_types_hold_no_function() {
+        let table = EnumPayloadTable::new();
+        assert!(!ir_contains_fun(&IrType::Int, &table));
+        assert!(!ir_contains_fun(
+            &IrType::Tuple(vec![IrType::Str, IrType::List(Box::new(IrType::Int))]),
+            &table
+        ));
+        assert!(ir_contains_fun(
+            &IrType::Tuple(vec![IrType::Str, int_to_int()]),
+            &table
+        ));
+        assert!(ir_contains_fun(
+            &IrType::Task(Box::new(int_to_int())),
+            &table
+        ));
     }
 }
