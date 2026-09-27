@@ -3061,11 +3061,12 @@ impl Callee {
 
 /// A per-call-site turbofish pin for a polymorphic kernel.
 ///
-/// Set when the HM solver left the kernel's free result type parameter
-/// genuinely unconstrained. Each variant names the SEMANTIC default the emitter
-/// renders; the mapping to a concrete `::<…>` suffix lives in the backend
-/// (`emit_expr`), so this enum stays a small, typed decision — never a raw
-/// string in the IR.
+/// Set when the HM solver left the kernel's free type parameter genuinely
+/// unconstrained. Each variant names the SEMANTIC default the emitter renders,
+/// so this enum stays a small, typed decision — never a raw string in the IR.
+/// The defaults are the lowerer's phantom-default SSOT (`String` for a value,
+/// `IpeError` for a `Result` error slot); `ipe_lower` asserts at build time
+/// that [`Self::turbofish`] spells exactly those types.
 ///
 /// The lowerer only ever emits a non-[`Self::None`] variant when the free
 /// parameter is a bare type variable NOT bound by an enclosing generic
@@ -3076,43 +3077,46 @@ pub enum CallPin {
     /// No turbofish — the common case (rustc infers every type parameter).
     #[default]
     None,
-    /// A single free element/value type defaulted to `i64` — `::<i64>`.
-    /// Used by `list_head` / `list_tail` / `set_empty` and the `task_fail`
-    /// main-crate wrapper (`fn task_fail<A>(…) -> IpeTask<A>`, error already
-    /// pinned to `IpeError`).
-    DefaultI64,
-    /// A free key AND value defaulted to a String-keyed i64-valued map —
-    /// `::<String, i64>`. Used by `dict_empty` (`fn dict_empty<K, V>()`).
+    /// A single free element/value type pinned to the value default.
+    ///
+    /// Renders `::<String>`. Used by `list_head` / `list_tail` / `set_empty`
+    /// and the `task_fail` main-crate wrapper (`fn task_fail<A>(…) ->
+    /// IpeTask<A>`, error already pinned to `IpeError`).
+    DefaultValue,
+    /// A free key AND value, both pinned to the value default.
+    ///
+    /// Renders `::<String, String>`. Used by `dict_empty`
+    /// (`fn dict_empty<K, V>()`).
     DefaultDict,
-    /// Two inferred leading parameters and a trailing free type defaulted to
-    /// `i64` — `::<_, _, i64>`. Used by `ipe_result_map_error<E, F, A>` where
-    /// the `Ok` type `A` is discarded (the value comes only from an `Err`).
+    /// A trailing free type pinned to the value default, after two inferred ones.
+    ///
+    /// Renders `::<_, _, String>`. Used by `ipe_result_map_error<E, F, A>`
+    /// where the `Ok` type `A` is discarded (the value comes only from an
+    /// `Err`).
     DefaultResultMapErr,
-    /// A single free error/phantom parameter pinned to the project's canonical
-    /// error type — `::<IpeError>`. Used by `decimal_from_string<E: From<String>>`
-    /// when the `Err` channel is discarded.
+    /// A single free error parameter pinned to the error-slot default.
+    ///
+    /// Renders `::<IpeError>`. Used by `decimal_from_string<E: From<String>>`
+    /// and its kin when the `Err` channel is discarded.
     ErrIpeError,
 }
 
 impl CallPin {
-    /// The turbofish suffix this pin renders immediately after a kernel's name
-    /// (before its `(` argument list): `dict_empty::<String, i64>(…)`, etc.
-    /// [`Self::None`] renders the empty string, so an unpinned call emits no
-    /// turbofish.
+    /// The turbofish suffix this pin renders right after a kernel's name.
     ///
-    /// The concrete default types (`i64` / `String` / `IpeError`) mirror the
-    /// polymorphic-kernel defaults: a genuinely
-    /// unconstrained parameter has no observable effect on behaviour (the value
-    /// is discarded / the collection is empty / the task never yields), so any
-    /// inhabited default is sound — `i64` and `String` are the reference's
-    /// canonical choices, `IpeError` the project's canonical error type.
+    /// It precedes the `(` argument list: `dict_empty::<String, String>(…)`.
+    /// [`Self::None`] renders the empty string, so an unpinned call emits no
+    /// turbofish. A genuinely unconstrained parameter has no observable
+    /// effect on behaviour (the value is discarded, the collection is empty,
+    /// the task never yields), so any inhabited default is sound; the one
+    /// chosen is the phantom default every other site uses.
     #[must_use]
     pub const fn turbofish(self) -> &'static str {
         match self {
             Self::None => "",
-            Self::DefaultI64 => "::<i64>",
-            Self::DefaultDict => "::<String, i64>",
-            Self::DefaultResultMapErr => "::<_, _, i64>",
+            Self::DefaultValue => "::<String>",
+            Self::DefaultDict => "::<String, String>",
+            Self::DefaultResultMapErr => "::<_, _, String>",
             Self::ErrIpeError => "::<IpeError>",
         }
     }

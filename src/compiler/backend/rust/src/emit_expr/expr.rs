@@ -492,7 +492,7 @@ pub fn emit_expr_at(
             // every other call — `CallPin::None::turbofish()` is `""` — so an
             // unpinned call emits no turbofish suffix. The
             // suffix goes between the kernel name and its `(` argument list:
-            // `dict_empty::<String, i64>(…)`.
+            // `dict_empty::<String, String>(…)`.
             let pin_turbofish = pin.turbofish();
             // `Ipe.Csv` parse kernels are generic over the error channel
             // (`csv_parse<E: From<String>>(...) -> IpeResult<E, CsvDoc>`); a

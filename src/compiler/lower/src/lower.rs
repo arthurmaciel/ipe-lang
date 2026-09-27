@@ -37,6 +37,7 @@ mod capture_rewrite;
 mod clone_class;
 mod generic_syms;
 mod ir_type_mentions;
+mod phantom_default;
 mod record_shapes;
 mod ty_templates;
 
@@ -57,6 +58,7 @@ use ir_type_mentions::{
     ir_type_mentions_server, ir_type_mentions_sqlvalue, ir_type_mentions_url,
     program_type_mentions,
 };
+use phantom_default::PhantomPosition;
 #[cfg(test)]
 use record_shapes::OPAQUE_NAMES_ABOVE_GUARD;
 use record_shapes::{
@@ -318,7 +320,7 @@ fn task_arg_bug() -> Diagnostic {
 }
 
 /// context suppression (let-bound shape). Recursively clear a
-/// [`CallPin::DefaultI64`] from any `task_fail(…)` call that is the VALUE of a
+/// [`CallPin::DefaultValue`] from any `task_fail(…)` call that is the VALUE of a
 /// `let` / `Destructure` binding: the binding slot's type (emitted as an
 /// explicit `let eta_N: IpeTask<T> = …` annotation) already fixes the phantom
 /// success, so an `::<i64>` turbofish there would be an E0308 conflict (the
@@ -336,7 +338,7 @@ fn clear_let_bound_task_fail_pins(expr: Expr) -> Expr {
             Expr::Call {
                 callee: Callee::Kernel(KernelFn::TaskFail),
                 args,
-                pin: CallPin::DefaultI64,
+                pin: CallPin::DefaultValue,
                 on_form,
             } => Expr::Call {
                 callee: Callee::Kernel(KernelFn::TaskFail),
@@ -17718,13 +17720,13 @@ impl<'a> Lowerer<'a> {
     /// is skipped for a used binder whose type is unknown.
     ///
     /// A phantom type variable (free, and not a generic of the enclosing
-    /// definition) is classified as `String`, a `CloneOk` leaf: the solver
-    /// left it unconstrained, so the emitted type there is a defaulted `Clone`
-    /// type the disciplines may clone but never move twice. Such a type is a
-    /// [`BinderType::Phantom`], fit for classification only — never for
-    /// emission. A phantom whose position fixes the emitted carrier (under a
-    /// function arrow, or a `Program` shape tag) is not defaulted and refuses
-    /// (IPE-L0102).
+    /// definition) is classified at its [`PhantomPosition`] default — the
+    /// type every emitting site pins it to — a `CloneOk` leaf: the solver left
+    /// it unconstrained, so the disciplines may clone it but never move it
+    /// twice. Such a type is a [`BinderType::Phantom`], fit for classification
+    /// only — never for emission. A phantom whose position fixes the emitted
+    /// carrier (under a function arrow, or a `Program` shape tag) is not
+    /// defaulted and refuses (IPE-L0102).
     fn binder_ir_type(&self, type_span: Option<Span>) -> DResult<Option<BinderType>> {
         let Some(span) = type_span else {
             return Ok(None);
@@ -17735,16 +17737,8 @@ impl<'a> Lowerer<'a> {
                 "a used binder has no solved region type at its type span",
             )
         })?;
-        let carrier = self.interner.lookup("String").map(|name| Ty::Con {
-            module: Vec::new(),
-            name,
-            args: Vec::new(),
-        });
         let mut pinned = false;
-        let pinned_ty = carrier
-            .as_ref()
-            .and_then(|c| self.pin_phantom_vars(ty, c, false, &mut pinned));
-        match pinned_ty {
+        match self.pin_phantom_vars(ty, Some(PhantomPosition::Value), &mut pinned) {
             Some(p) if pinned => self
                 .ir_type_from_ty(&p, span)
                 .map(|t| Some(BinderType::Phantom(t))),
@@ -17754,35 +17748,51 @@ impl<'a> Lowerer<'a> {
         }
     }
 
-    /// Copy `ty` with each phantom type variable replaced by `carrier`.
+    /// The solver-side type a phantom in `position` is pinned to.
     ///
-    /// Sets `pinned` when a phantom was replaced. `no_default` marks a
-    /// position whose type fixes the emitted carrier: a function arrow's
-    /// operands, and a `Program` shape tag. A phantom there makes the whole
-    /// copy `None`, so type lowering sees it unpinned and refuses it.
+    /// `None` only when the builtin's name was never interned: no program
+    /// then mentions it, and nothing is pinned.
+    fn phantom_carrier(&self, position: PhantomPosition) -> Option<Ty> {
+        self.interner
+            .lookup(position.builtin_name())
+            .map(|name| Ty::Con {
+                module: Vec::new(),
+                name,
+                args: Vec::new(),
+            })
+    }
+
+    /// Copy `ty` with each phantom type variable replaced by its default.
+    ///
+    /// Sets `pinned` when a phantom was replaced. `position` is the
+    /// [`PhantomPosition`] of `ty` itself; `None` marks a position whose type
+    /// fixes the emitted carrier: a function arrow's operands, and a
+    /// `Program` shape tag. A phantom there makes the whole copy `None`, so
+    /// type lowering sees it unpinned and refuses it. The error slot of a
+    /// `Result` takes [`PhantomPosition::ResultError`]; every other slot
+    /// under a defaultable position takes [`PhantomPosition::Value`].
     fn pin_phantom_vars(
         &self,
         ty: &Ty,
-        carrier: &Ty,
-        no_default: bool,
+        position: Option<PhantomPosition>,
         pinned: &mut bool,
     ) -> Option<Ty> {
+        let value = position.map(|_| PhantomPosition::Value);
         match ty {
             Ty::Var(v) if self.poly_tvar_symbol(*v).is_none() => {
-                if no_default {
-                    return None;
-                }
+                let carrier = self.phantom_carrier(position?)?;
                 *pinned = true;
-                Some(carrier.clone())
+                Some(carrier)
             }
             Ty::Var(_) | Ty::Unit => Some(ty.clone()),
             Ty::Fun(arg, res) => Some(Ty::Fun(
-                Box::new(self.pin_phantom_vars(arg, carrier, true, pinned)?),
-                Box::new(self.pin_phantom_vars(res, carrier, true, pinned)?),
+                Box::new(self.pin_phantom_vars(arg, None, pinned)?),
+                Box::new(self.pin_phantom_vars(res, None, pinned)?),
             )),
             Ty::Con { module, name, args } => {
-                let shape_tagged =
-                    module.is_empty() && self.interner.resolve(*name) == Some("Program");
+                let head = self.interner.resolve(*name);
+                let shape_tagged = module.is_empty() && head == Some("Program");
+                let result_shaped = head == Some("Result") && args.len() == 2;
                 Some(Ty::Con {
                     module: module.clone(),
                     name: *name,
@@ -17790,8 +17800,16 @@ impl<'a> Lowerer<'a> {
                         .iter()
                         .enumerate()
                         .map(|(i, a)| {
-                            let tag_slot = shape_tagged && i == 0;
-                            self.pin_phantom_vars(a, carrier, no_default || tag_slot, pinned)
+                            let slot = if i != 0 {
+                                value
+                            } else if shape_tagged {
+                                None
+                            } else if result_shaped {
+                                position.map(|_| PhantomPosition::ResultError)
+                            } else {
+                                value
+                            };
+                            self.pin_phantom_vars(a, slot, pinned)
                         })
                         .collect::<Option<Vec<_>>>()?,
                 })
@@ -17799,16 +17817,13 @@ impl<'a> Lowerer<'a> {
             Ty::Tuple(elems) => Some(Ty::Tuple(
                 elems
                     .iter()
-                    .map(|e| self.pin_phantom_vars(e, carrier, no_default, pinned))
+                    .map(|e| self.pin_phantom_vars(e, value, pinned))
                     .collect::<Option<Vec<_>>>()?,
             )),
             Ty::Record(fields, tail) => Some(Ty::Record(
                 fields
                     .iter()
-                    .map(|(k, f)| {
-                        self.pin_phantom_vars(f, carrier, no_default, pinned)
-                            .map(|f| (*k, f))
-                    })
+                    .map(|(k, f)| self.pin_phantom_vars(f, value, pinned).map(|f| (*k, f)))
                     .collect::<Option<BTreeMap<_, _>>>()?,
                 tail.clone(),
             )),
@@ -21674,14 +21689,14 @@ impl<'a> Lowerer<'a> {
     /// type at `call_span`:
     ///
     /// * `List.head` / `List.tail` — `Maybe elem` / `Maybe (List elem)`; the
-    ///   element `elem` (`list_head<T>` / `list_tail<T>`). Default `::<i64>`.
-    /// * `Set.empty` — `Set elem`; the element (`set_empty<A>`). `::<i64>`.
+    ///   element `elem` (`list_head<T>` / `list_tail<T>`). Default `::<String>`.
+    /// * `Set.empty` — `Set elem`; the element (`set_empty<A>`). `::<String>`.
     /// * `Dict.empty` — `Dict k v`; either key OR value free
-    ///   (`dict_empty<K, V>`). Default `::<String, i64>`.
+    ///   (`dict_empty<K, V>`). Default `::<String, String>`.
     /// * `Task.fail` — `Task a`; the phantom success `a` (the main-crate wrapper
-    ///   `task_fail<A>` already pins the error to `IpeError`). `::<i64>`.
+    ///   `task_fail<A>` already pins the error to `IpeError`). `::<String>`.
     /// * `Result.mapError` — `Result f a`; the `Ok` type `a` when the input was
-    ///   an `Err` (`ipe_result_map_error<E, F, A>`). `::<_, _, i64>`.
+    ///   an `Err` (`ipe_result_map_error<E, F, A>`). `::<_, _, String>`.
     /// * `Decimal.fromString` / `Decimal.div` / `Decimal.mod` — `Result e
     ///   Decimal`; the discarded error `e`
     ///   (`decimal_from_string`/`decimal_div`/`decimal_mod<E: From<String>>`).
@@ -21692,11 +21707,11 @@ impl<'a> Lowerer<'a> {
     /// result, so rustc cannot infer it when that argument is an empty list of a
     /// still-free element type (`List.isEmpty []` → `list_is_empty(Vec::new())`):
     ///
-    /// * `List.isEmpty` / `List.length` — pin `::<i64>` ONLY when the single
+    /// * `List.isEmpty` / `List.length` — pin `::<String>` ONLY when the single
     ///   list argument's solved element type is a genuinely-free variable (an
     ///   empty literal in an unconstrained position). A concrete-element list
     ///   (`[1, 2, 3]`, or any non-empty literal) is left unpinned so the real
-    ///   element type flows through — pinning it would be a wrong `i64` cast.
+    ///   element type flows through — pinning it would be a wrong element type.
     #[allow(clippy::too_many_lines)] // one match arm per covered kernel; splitting hurts locality
     fn kernel_turbofish_pin(
         &self,
@@ -21714,10 +21729,9 @@ impl<'a> Lowerer<'a> {
         // DERIVED list whose element the solver leaves free at THIS site but
         // another kernel's own pin later fixes — e.g. `List.length (Dict.keys
         // Dict.empty)`, where `dict_empty`'s pin makes the keys `String` — must
-        // NOT be pinned to `i64` here, or the two defaults disagree and rustc
-        // reports a `HashMap<i64, _>` vs `HashMap<String, i64>` mismatch. A
-        // literal `[]` has no such downstream anchor, so its `i64` default is
-        // the only one and is always consistent.
+        // NOT be pinned here: that kernel anchors the list, so the pin belongs
+        // to it alone. A literal `[]` has no such downstream anchor, so its
+        // phantom default is the only one and is always consistent.
         if matches!(k, KernelFn::ListIsEmpty | KernelFn::ListLength) {
             let arg_is_empty_list_literal = matches!(
                 args.first().map(|a| &a.value),
@@ -21736,7 +21750,7 @@ impl<'a> Lowerer<'a> {
                         .first()
                         .is_some_and(|e| self.ty_is_unbound_free(e)) =>
                 {
-                    CallPin::DefaultI64
+                    CallPin::DefaultValue
                 }
                 _ => CallPin::None,
             };
@@ -21775,7 +21789,7 @@ impl<'a> Lowerer<'a> {
                     if self.interner.resolve(*name) == Some("Maybe")
                         && args.first().is_some_and(|e| self.ty_is_unbound_free(e)) =>
                 {
-                    CallPin::DefaultI64
+                    CallPin::DefaultValue
                 }
                 _ => CallPin::None,
             },
@@ -21792,7 +21806,7 @@ impl<'a> Lowerer<'a> {
                                 .first()
                                 .is_some_and(|e| self.ty_is_unbound_free(e)) =>
                         {
-                            CallPin::DefaultI64
+                            CallPin::DefaultValue
                         }
                         _ => CallPin::None,
                     }
@@ -21805,7 +21819,7 @@ impl<'a> Lowerer<'a> {
                     if self.interner.resolve(*name) == Some("Set")
                         && args.first().is_some_and(|e| self.ty_is_unbound_free(e)) =>
                 {
-                    CallPin::DefaultI64
+                    CallPin::DefaultValue
                 }
                 _ => CallPin::None,
             },
@@ -21827,7 +21841,7 @@ impl<'a> Lowerer<'a> {
                     if self.interner.resolve(*name) == Some("Task")
                         && args.first().is_some_and(|a| self.ty_is_unbound_free(a)) =>
                 {
-                    CallPin::DefaultI64
+                    CallPin::DefaultValue
                 }
                 _ => CallPin::None,
             },
@@ -29760,6 +29774,8 @@ mod tests {
     const PROGRAM_PHANTOM_TAG_SPAN: Span = Span::new(50, 51);
     /// A span the binder-type tests record `Program Web <free var>` at.
     const PROGRAM_PHANTOM_MSG_SPAN: Span = Span::new(60, 61);
+    /// A span the binder-type tests record `Result <free var> <free var>` at.
+    const RESULT_PHANTOM_SPAN: Span = Span::new(70, 71);
 
     /// Run `check` against a lowerer whose solved regions are the spans above.
     fn with_binder_type_lowerer(check: impl FnOnce(&Lowerer<'_>, ipe_intern::Symbol)) {
@@ -29769,6 +29785,8 @@ mod tests {
         interner.intern("String").unwrap();
         let program = interner.intern("Program").unwrap();
         let web = interner.intern("Web").unwrap();
+        let result = interner.intern("Result").unwrap();
+        interner.intern("Error").unwrap();
         let module = canon::Module {
             imports_unsafe_submodule: false,
             imported_web_capabilities: BTreeSet::new(),
@@ -29806,6 +29824,14 @@ mod tests {
                     },
                     Ty::Var(7),
                 ],
+            },
+        );
+        types.regions.insert(
+            (Vec::new(), RESULT_PHANTOM_SPAN),
+            Ty::Con {
+                module: vec![],
+                name: result,
+                args: vec![Ty::Var(7), Ty::Var(7)],
             },
         );
         let lowerer = Lowerer::new(
@@ -29864,6 +29890,22 @@ mod tests {
             let Ok(Some(binder_ty)) = got else { return };
             assert_eq!(binder_ty.emittable(), None);
             assert_eq!(binder_ty.classified(), &super::IrType::Str);
+        });
+    }
+
+    /// A phantom `Result` classifies its error slot and `Ok` at their own defaults.
+    #[test]
+    fn binder_ir_type_pins_phantom_result_error_slot() {
+        with_binder_type_lowerer(|lowerer, _| {
+            let got = lowerer.binder_ir_type(Some(RESULT_PHANTOM_SPAN));
+            let want = super::IrType::Result(
+                Box::new(super::PhantomPosition::ResultError.ir_type()),
+                Box::new(super::PhantomPosition::Value.ir_type()),
+            );
+            assert!(
+                matches!(&got, Ok(Some(super::BinderType::Phantom(t))) if *t == want),
+                "a phantom Result must pin to `Result Error String`, got {got:?}"
+            );
         });
     }
 
