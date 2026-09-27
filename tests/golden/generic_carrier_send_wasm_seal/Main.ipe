@@ -1,0 +1,94 @@
+module Main exposing (main)
+
+-- SEAL repro, wasm-client target: helpers generic over `a` that carry it under a
+-- `Cmd`, `Sub` or `Task` only inside their body. On wasm32 the runtime's `Cmd` /
+-- `Sub` carriers drop `Send` and keep `'static`, while its `Task` combinators
+-- bound their element `Send` on every target:
+--
+--   * `subDiscarded`  — a `Sub a` bound by `let` and never used: `a : 'static`;
+--   * `cmdBatched`    — a `Cmd.batch` over a `Cmd a` argument: `a : 'static`;
+--   * `taskDiscarded` — a `Task e a` bound by `let` and never used:
+--     `a : Send + 'static`.
+--
+-- A native-style `Send` on the `Cmd` / `Sub` helpers over-bounds them (a `Cmd`
+-- or `Sub` instance is not `Send` on wasm32); a missing `Send` on the `Task`
+-- helper fails `cargo build` with E0277 after ipe accepts it.
+
+import Ipe.String as String
+import Ipe.Task as Task
+import Ipe.Tea.Web exposing (tea)
+import Ipe.Tea.Web.Cmd as Cmd
+import Ipe.Tea.Web.Sub as Sub
+import Ipe.Ui as Ui
+
+
+type Page
+    = CounterPage
+
+
+type Msg
+    = Increment
+
+
+type alias Model =
+    { count : Int }
+
+
+subDiscarded : a -> Int
+subDiscarded x =
+    let
+        _sub =
+            Sub.every 1000 x
+    in
+    0
+
+
+cmdBatched : Cmd a -> Int
+cmdBatched cmd =
+    let
+        _cmd =
+            Cmd.batch [ cmd, Cmd.none ]
+    in
+    0
+
+
+taskDiscarded : a -> Int
+taskDiscarded x =
+    let
+        _task =
+            Task.succeed x
+    in
+    0
+
+
+init : WebReq -> ( Model, Cmd Msg )
+init _req =
+    ( { count = subDiscarded Increment + cmdBatched Cmd.none + taskDiscarded "x" }, Cmd.none )
+
+
+update : Msg -> Model -> ( Model, Cmd Msg )
+update msg model =
+    case msg of
+        Increment ->
+            ( { model | count = model.count + 1 }, Cmd.none )
+
+
+subscriptions : Model -> Sub Msg
+subscriptions _model =
+    Sub.none
+
+
+view : Model -> Element Msg
+view model =
+    Ui.button [] { onPress = Just Increment, label = Ui.text (String.fromInt model.count) }
+
+
+main =
+    tea
+        { init = init
+        , update = update
+        , view = view
+        , subscriptions = subscriptions
+        , routes = []
+        , notFound = CounterPage
+        }
