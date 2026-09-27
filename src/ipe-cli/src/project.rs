@@ -671,12 +671,32 @@ fn file_to_module(src_root: &Path, path: &Path) -> Option<DiscoveredModule> {
     })
 }
 
-/// A Ipê module path segment must start with an ASCII uppercase letter and
-/// contain only ASCII alphanumerics and `_`.
+/// Whether `s` is a legal Ipê module path segment.
+///
+/// It must start with an ASCII uppercase letter, contain only ASCII
+/// alphanumerics and `_`, and not be a Windows reserved device name: a
+/// segment names a file or directory, and the same source tree must map to
+/// the same module set on every platform.
 pub(crate) fn is_module_segment(s: &str) -> bool {
     let mut chars = s.chars();
-    match chars.next() {
+    let well_formed = match chars.next() {
         Some(c) if c.is_ascii_uppercase() => chars.all(|c| c.is_ascii_alphanumeric() || c == '_'),
+        _ => false,
+    };
+    well_formed && !is_windows_device_name(s)
+}
+
+/// Whether `name` is a Windows reserved device name, with or without extension.
+///
+/// Windows resolves `CON`, `PRN`, `AUX`, `NUL`, `COM1`–`COM9` and
+/// `LPT1`–`LPT9` to devices case-insensitively and regardless of any
+/// extension, so `con.ipe` opens the console rather than a file.
+fn is_windows_device_name(name: &str) -> bool {
+    let stem = name.split_once('.').map_or(name, |(stem, _)| stem);
+    let upper = stem.to_ascii_uppercase();
+    match upper.as_bytes() {
+        b"CON" | b"PRN" | b"AUX" | b"NUL" => true,
+        [b'C', b'O', b'M', digit] | [b'L', b'P', b'T', digit] => (b'1'..=b'9').contains(digit),
         _ => false,
     }
 }
@@ -813,6 +833,56 @@ mod tests {
         assert!(!is_module_segment("123"));
         assert!(!is_module_segment(""));
         assert!(!is_module_segment("_Foo"));
+    }
+
+    #[test]
+    fn windows_device_names_are_not_module_segments() {
+        for name in ["CON", "Con", "PRN", "Prn", "AUX", "Aux", "NUL", "Nul"] {
+            assert!(!is_module_segment(name), "{name} names a device");
+        }
+        for n in 1..=9 {
+            for prefix in ["COM", "Com", "LPT", "Lpt"] {
+                let name = format!("{prefix}{n}");
+                assert!(!is_module_segment(&name), "{name} names a device");
+            }
+        }
+    }
+
+    #[test]
+    fn windows_device_names_match_any_case_and_extension() {
+        for name in [
+            "con",
+            "CON.ipe",
+            "nul.txt",
+            "Aux.tar.gz",
+            "prn",
+            "com1.ipe",
+            "LPT9.x",
+            "lpt5",
+        ] {
+            assert!(is_windows_device_name(name), "{name} names a device");
+        }
+    }
+
+    #[test]
+    fn device_name_near_misses_are_module_segments() {
+        for name in [
+            "CONSOLE",
+            "Console",
+            "Conn",
+            "Nulls",
+            "Auxiliary",
+            "Printer",
+            "COM",
+            "COM0",
+            "COM10",
+            "LPT",
+            "LPT0",
+            "LPT10",
+            "Com1x",
+        ] {
+            assert!(is_module_segment(name), "{name} is an ordinary segment");
+        }
     }
 
     #[test]
