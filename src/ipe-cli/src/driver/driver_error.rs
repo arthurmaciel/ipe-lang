@@ -579,6 +579,7 @@ impl CliError {
             | Self::DiagnosticJsonEmitted
             | Self::FileTooLarge { .. }
             | Self::PathEscape { .. }
+            | Self::OutputRefused(_)
             | Self::DiscoveryLimitReached { .. }
             | Self::UpgradeFeedUnreachable
             | Self::UpgradeCheckExit { .. }
