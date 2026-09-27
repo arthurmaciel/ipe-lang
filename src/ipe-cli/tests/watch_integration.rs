@@ -23,6 +23,8 @@ use std::time::{Duration, Instant};
 
 use ipe::watch::{WatchEvent, WatchHandle, WatchOptions};
 
+use e2e_support::wait_for;
+
 type BoxError = Box<dyn std::error::Error + Send + Sync + 'static>;
 
 /// A minimal `Ipe.Http.Server` fixture, parameterised on the response body
@@ -92,14 +94,9 @@ fn fresh_dirs(tag: &str) -> Result<(PathBuf, PathBuf), BoxError> {
 /// for CPU with every other test nextest runs in parallel. A tight deadline
 /// here fails on scheduler contention, not on a real regression.
 fn wait_for_body(port: u16, want: &str, timeout: Duration) -> bool {
-    let deadline = Instant::now() + timeout;
-    while Instant::now() < deadline {
-        if http_get_body(port).is_some_and(|body| body.contains(want)) {
-            return true;
-        }
-        std::thread::sleep(Duration::from_millis(100));
-    }
-    false
+    wait_for(timeout, || {
+        http_get_body(port).is_some_and(|body| body.contains(want))
+    })
 }
 
 fn http_get_body(port: u16) -> Option<String> {
@@ -598,16 +595,4 @@ fn watch_proxies_a_hardcoded_port_server_on_an_internal_port() -> Result<(), Box
     );
 
     stop_and_join(&handle, join)
-}
-
-/// Poll `cond` until it is true or `timeout` elapses.
-fn wait_for(timeout: Duration, mut cond: impl FnMut() -> bool) -> bool {
-    let deadline = Instant::now() + timeout;
-    while Instant::now() < deadline {
-        if cond() {
-            return true;
-        }
-        std::thread::sleep(Duration::from_millis(100));
-    }
-    false
 }

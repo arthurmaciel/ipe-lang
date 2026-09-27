@@ -28,6 +28,8 @@ use std::time::{Duration, Instant};
 
 use ipe::watch::{WatchEvent, WatchHandle, WatchOptions};
 
+use e2e_support::wait_for;
+
 type BoxError = Box<dyn std::error::Error + Send + Sync + 'static>;
 
 /// A minimal `Web.tea` whose view carries a hoistable `Ui.padding` style value
@@ -446,28 +448,9 @@ fn http_get_body(port: u16) -> Option<String> {
 }
 
 fn wait_for_serving(port: u16, timeout: Duration) -> bool {
-    let deadline = Instant::now() + timeout;
-    while Instant::now() < deadline {
-        if http_get_body(port).is_some_and(|b| b.contains("marker")) {
-            return true;
-        }
-        std::thread::sleep(Duration::from_millis(100));
-    }
-    false
-}
-
-/// Poll `cond` until it holds or `timeout` elapses; `true` if it held.
-fn wait_for(timeout: Duration, mut cond: impl FnMut() -> bool) -> bool {
-    let deadline = Instant::now() + timeout;
-    loop {
-        if cond() {
-            return true;
-        }
-        if Instant::now() >= deadline {
-            return false;
-        }
-        std::thread::sleep(Duration::from_millis(50));
-    }
+    wait_for(timeout, || {
+        http_get_body(port).is_some_and(|b| b.contains("marker"))
+    })
 }
 
 #[derive(Clone, Default)]

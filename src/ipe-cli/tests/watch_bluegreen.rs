@@ -359,26 +359,21 @@ fn rendered_count(body: &str) -> Option<i64> {
 /// `want`, or `timeout` elapses. Used to wait for a cold build / a cutover to
 /// land before exercising the kept-alive socket.
 fn wait_for_marker(port: u16, want: &str, timeout: Duration) -> bool {
-    let deadline = Instant::now() + timeout;
     let Ok(addr) = format!("127.0.0.1:{port}").parse() else {
         return false;
     };
-    while Instant::now() < deadline {
-        if let Ok(mut s) = TcpStream::connect_timeout(&addr, Duration::from_millis(200)) {
-            // A short per-sample read timeout: this is a polling probe; a
-            // timeout just means the server is not ready yet, so continue.
-            let _ = s.set_read_timeout(Some(Duration::from_secs(3)));
-            if get_body_keepalive(&mut s)
-                .ok()
-                .flatten()
-                .is_some_and(|b| b.contains(want))
-            {
-                return true;
-            }
-        }
-        std::thread::sleep(Duration::from_millis(100));
-    }
-    false
+    e2e_support::wait_for(timeout, || {
+        let Ok(mut s) = TcpStream::connect_timeout(&addr, Duration::from_millis(200)) else {
+            return false;
+        };
+        // A short per-sample read timeout: this is a polling probe; a
+        // timeout just means the server is not ready yet, so continue.
+        let _ = s.set_read_timeout(Some(Duration::from_secs(3)));
+        get_body_keepalive(&mut s)
+            .ok()
+            .flatten()
+            .is_some_and(|b| b.contains(want))
+    })
 }
 
 fn stop_and_join(

@@ -169,14 +169,9 @@ fn http_get_body(port: u16) -> Option<String> {
 }
 
 fn wait_for_body(port: u16, want: &str, timeout: Duration) -> bool {
-    let deadline = Instant::now() + timeout;
-    while Instant::now() < deadline {
-        if http_get_body(port).is_some_and(|body| body.contains(want)) {
-            return true;
-        }
-        std::thread::sleep(Duration::from_millis(100));
-    }
-    false
+    e2e_support::wait_for(timeout, || {
+        http_get_body(port).is_some_and(|body| body.contains(want))
+    })
 }
 
 /// PID-only SIGTERM via `kill(1)` — never a process-group signal.

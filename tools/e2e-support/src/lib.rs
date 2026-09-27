@@ -516,21 +516,20 @@ fn run_bounded_build(
                     let _ = child.kill();
                     let _ = child.wait();
                     return Err(format!(
-                        "{golden_name}: emitted `cargo build` produced no output for {}s and was \
-                         killed (inactivity watchdog: a wedged build, not a slow one — a \
+                        "{golden_name}: emitted `cargo build` produced no output for {idle_window:?} \
+                         and was killed (inactivity watchdog: a wedged build, not a slow one — a \
                          progressing build resets the window on every compile message; \
                          raise IPE_E2E_BUILD_IDLE_SECS if a single unit legitimately compiles \
-                         longer in silence)",
-                        idle_window.as_secs()
+                         longer in silence)"
                     ));
                 }
                 if elapsed >= max_total {
                     let _ = child.kill();
                     let _ = child.wait();
                     return Err(format!(
-                        "{golden_name}: emitted `cargo build` exceeded the {}s absolute ceiling \
-                         and was killed (liveness backstop; raise IPE_E2E_BUILD_TIMEOUT_SECS)",
-                        max_total.as_secs()
+                        "{golden_name}: emitted `cargo build` exceeded the {max_total:?} absolute \
+                         ceiling and was killed (liveness backstop; raise \
+                         IPE_E2E_BUILD_TIMEOUT_SECS)"
                     ));
                 }
                 std::thread::sleep(Duration::from_millis(50));
@@ -635,13 +634,37 @@ pub fn read_expected(golden_dir: &Path) -> Result<String, String> {
         .map_err(|e| format!("missing or unreadable {}: {e}", path.display()))
 }
 
+/// Poll `pred` on a fixed tick until it returns `true`, or `false` once
+/// `deadline` has elapsed since the call started.
+///
+/// The one shared bounded event-poll for tests that must wait on an observed
+/// condition (a process event, an HTTP response, a file's contents): a fixed
+/// `thread::sleep` used as a synchronisation point races the same scheduler
+/// contention a loaded CI runner introduces, splitting or missing events a
+/// deterministic poll-until-true always catches. Never panics — a timeout is
+/// reported as `false`, leaving it to the caller (usually an `assert!` naming
+/// what never became true) to fail; `deadline` is held as a whole `Duration`
+/// throughout; no site truncates it to seconds.
+pub fn wait_for(deadline: Duration, mut pred: impl FnMut() -> bool) -> bool {
+    let start = Instant::now();
+    loop {
+        if pred() {
+            return true;
+        }
+        if start.elapsed() >= deadline {
+            return false;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
         CRATE_IDENTITY_HASH_PLACEHOLDER, DEFAULT_EMITTED_BUILD_IDLE_SECS,
         DEFAULT_EMITTED_BUILD_TIMEOUT_SECS, emitted_build_idle, emitted_build_timeout,
         normalize_crate_identity_hash, replace_package_name, resolve_emitted_target,
-        run_bounded_build,
+        run_bounded_build, wait_for,
     };
     use std::process::Command;
     use std::time::{Duration, Instant};
@@ -679,29 +702,33 @@ mod tests {
         // THE load-independence property: a build that runs FAR longer than the
         // idle window is NOT killed as long as it keeps emitting output. This is
         // exactly the slow-cold-runner case the old total-wall-clock cap
-        // false-killed. Ten ticks 200ms apart run ~2s total — 4× the 500ms idle
-        // window — yet each tick resets the window, so the process completes.
+        // false-killed. Forty ticks 100ms apart run ~4s total against a 3s idle
+        // window — a 30x margin between tick and window, generous enough that a
+        // loaded runner's scheduler stall (shell startup, a delayed `sleep`
+        // fork) cannot exceed it — yet each tick resets the window, so the
+        // process completes rather than being false-killed as wedged.
         let mut cmd = Command::new("sh");
         cmd.arg("-c")
-            .arg("i=0; while [ $i -lt 10 ]; do echo tick; sleep 0.2; i=$((i+1)); done");
+            .arg("i=0; while [ $i -lt 40 ]; do echo tick; sleep 0.1; i=$((i+1)); done");
         let started = Instant::now();
+        let idle_window = Duration::from_secs(3);
         let capture = run_bounded_build(
             cmd,
             "slow_progress_probe",
-            Duration::from_secs(3600),  // absolute backstop — far away
-            Duration::from_millis(500), // idle window — SMALLER than total runtime
+            Duration::from_secs(3600), // absolute backstop — far away
+            idle_window,
         )
         .expect("a progressing process must never be killed by the idle window");
         assert!(capture.status.success());
         assert!(
-            started.elapsed() >= Duration::from_millis(500),
+            started.elapsed() >= idle_window,
             "the probe must have outlived the idle window to prove the point"
         );
         // Counting newlines across a few bytes of captured probe output; a SIMD
         // `bytecount` dependency is unwarranted for a test probe.
         #[allow(clippy::naive_bytecount)]
         let newline_count = capture.stdout.iter().filter(|&&b| b == b'\n').count();
-        assert_eq!(newline_count, 10);
+        assert_eq!(newline_count, 40);
     }
 
     #[test]
@@ -967,5 +994,32 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn wait_for_returns_true_as_soon_as_the_predicate_holds() {
+        let mut calls = 0;
+        assert!(wait_for(Duration::from_secs(2), || {
+            calls += 1;
+            calls >= 3
+        }));
+        assert_eq!(
+            calls, 3,
+            "must stop polling the instant the predicate holds"
+        );
+    }
+
+    #[test]
+    fn wait_for_times_out_instead_of_blocking_forever_on_a_predicate_that_never_holds() {
+        let started = Instant::now();
+        let deadline = Duration::from_millis(200);
+        assert!(
+            !wait_for(deadline, || false),
+            "a predicate that never holds must yield false, never panic or hang"
+        );
+        assert!(
+            started.elapsed() >= deadline,
+            "must have actually waited out the deadline, not returned early"
+        );
     }
 }
