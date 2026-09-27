@@ -2438,4 +2438,126 @@ mod tests {
 
         let _ = std::fs::remove_dir_all(&dir);
     }
+
+    /// A fresh scratch directory unique to this test run.
+    fn loose_scratch(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "ipe_loose_build_{tag}_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |d| d.as_nanos())
+        ));
+        fs::create_dir_all(&dir).expect("create scratch dir");
+        dir
+    }
+
+    fn collected_modules(collected: &CollectedSources) -> Vec<Vec<String>> {
+        collected.sources.keys().cloned().collect()
+    }
+
+    /// A loose build compiles the import closure only, beside an unreadable directory.
+    ///
+    /// An unimported sibling and a `chmod 000` directory next to the entry are
+    /// never touched.
+    #[cfg(unix)]
+    #[test]
+    fn loose_build_loads_the_import_closure_beside_an_unreadable_dir() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = loose_scratch("closure");
+        let entry = dir.join("Main.ipe");
+        fs::write(
+            &entry,
+            "module Main exposing (main)\n\nimport Helper\n\nmain = Helper.h\n",
+        )
+        .expect("write entry");
+        fs::write(
+            dir.join("Helper.ipe"),
+            "module Helper exposing (h)\n\nh = 1\n",
+        )
+        .expect("write helper");
+        fs::write(
+            dir.join("Stray.ipe"),
+            "module Stray exposing (s)\n\ns = ???\n",
+        )
+        .expect("write stray");
+        let locked = dir.join("locked");
+        fs::create_dir_all(&locked).expect("create locked dir");
+        fs::write(
+            locked.join("Hidden.ipe"),
+            "module Hidden exposing (x)\n\nx = 1\n",
+        )
+        .expect("write hidden");
+        fs::set_permissions(&locked, fs::Permissions::from_mode(0o000)).expect("chmod 000");
+
+        let collected = collect_entry_and_siblings(&entry);
+        let _ = fs::set_permissions(&locked, fs::Permissions::from_mode(0o755));
+        let _ = fs::remove_dir_all(&dir);
+        let collected = collected.expect("closure loads beside an unreadable dir");
+        assert_eq!(
+            collected_modules(&collected),
+            vec![vec!["Helper".to_owned()], vec!["Main".to_owned()]],
+            "only Main and the Helper it imports are compiled"
+        );
+        assert_eq!(collected.entry_module_path, vec!["Main".to_owned()]);
+    }
+
+    /// A loose build whose import closure passes the module ceiling is refused.
+    #[test]
+    fn loose_build_past_the_module_limit_is_refused() {
+        let dir = loose_scratch("limit");
+        let count = crate::loose_file::MAX_LOOSE_FILE_MODULES;
+        let imports: String = (0..count).map(|i| format!("import M{i}\n")).collect();
+        let entry = dir.join("Main.ipe");
+        fs::write(
+            &entry,
+            format!("module Main exposing (main)\n\n{imports}\nmain = 1\n"),
+        )
+        .expect("write entry");
+        for i in 0..count {
+            fs::write(
+                dir.join(format!("M{i}.ipe")),
+                format!("module M{i} exposing (v)\n\nv = 1\n"),
+            )
+            .expect("write sibling");
+        }
+
+        let collected = collect_entry_and_siblings(&entry);
+        let _ = fs::remove_dir_all(&dir);
+        assert!(
+            matches!(collected, Err(CliError::DiscoveryLimitReached { .. })),
+            "the entry plus {count} imported siblings exceeds the ceiling"
+        );
+    }
+
+    /// A loose build never follows a sibling symlink that points outside the entry's directory.
+    #[cfg(unix)]
+    #[test]
+    fn loose_build_does_not_follow_an_escaping_symlink() {
+        let outside = loose_scratch("escape-outside");
+        fs::write(
+            outside.join("Out.ipe"),
+            "module Out exposing (o)\n\no = 1\n",
+        )
+        .expect("write outside module");
+        let dir = loose_scratch("escape");
+        let entry = dir.join("Main.ipe");
+        fs::write(
+            &entry,
+            "module Main exposing (main)\n\nimport Out\n\nmain = Out.o\n",
+        )
+        .expect("write entry");
+        std::os::unix::fs::symlink(outside.join("Out.ipe"), dir.join("Out.ipe"))
+            .expect("plant symlink");
+
+        let collected = collect_entry_and_siblings(&entry);
+        let _ = fs::remove_dir_all(&dir);
+        let _ = fs::remove_dir_all(&outside);
+        let collected = collected.expect("entry still loads");
+        assert_eq!(
+            collected_modules(&collected),
+            vec![vec!["Main".to_owned()]],
+            "the escaping symlink is left for the compiler to report as unresolved"
+        );
+    }
 }
