@@ -362,7 +362,7 @@ impl OwnedDir {
     /// Claim the plain-named subdirectory `name` through this directory's held handle.
     #[cfg(unix)]
     fn claim_child(&self, name: &str) -> Result<Self, CliError> {
-        let parent = super::held::HeldDir::open(&self.path)?.ok_or_else(|| {
+        let parent = held::HeldDir::open(&self.path)?.ok_or_else(|| {
             io_err(
                 &self.path,
                 std::io::Error::from(std::io::ErrorKind::NotFound),
@@ -541,7 +541,7 @@ impl OwnedPath {
     ///
     /// `Ok(None)` when absent.
     fn held_root(&self) -> Result<Option<held::HeldDir>, CliError> {
-        let Some(root) = super::held::HeldDir::open(&self.root)? else {
+        let Some(root) = held::HeldDir::open(&self.root)? else {
             return Ok(None);
         };
         if root.id()? != self.root_id {
@@ -2732,9 +2732,9 @@ mod tests {
             let anchor_path = root.join("a").join("b").join("c");
             std::fs::create_dir_all(&anchor_path).expect("make anchor");
             let anchor = hold_deepest_existing(&anchor_path, &anchor_path).expect("hold anchor");
-            let moved = to.iter().fold(root.clone(), |p, n| p.join(n));
-            std::fs::create_dir_all(moved.parent().expect("moved parent")).expect("make above");
-            std::fs::rename(root.join("a").join("b"), &moved).expect("move anchor parent");
+            let relocated = to.iter().fold(root.clone(), |p, n| p.join(n));
+            std::fs::create_dir_all(relocated.parent().expect("moved parent")).expect("make above");
+            std::fs::rename(root.join("a").join("b"), &relocated).expect("move anchor parent");
 
             let checked = check_no_marked_ancestor_held(&anchor_path, &anchor);
             assert!(
@@ -2745,14 +2745,14 @@ mod tests {
                 "an anchor moved {label} is refused, got {checked:?}"
             );
             assert_eq!(
-                std::fs::read_dir(moved.join("c"))
+                std::fs::read_dir(relocated.join("c"))
                     .expect("read anchor")
                     .count(),
                 0,
                 "the anchor moved {label} gains nothing"
             );
             assert!(
-                !moved.join(OWNERSHIP_MARKER).exists(),
+                !relocated.join(OWNERSHIP_MARKER).exists(),
                 "the parent moved {label} is never marked"
             );
         }
