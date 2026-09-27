@@ -66,9 +66,7 @@ fn assert_runs_and_matches_oracle(name: &str) {
     let out = std::env::temp_dir().join(format!("ipec_{name}_e2e"));
     let _ = std::fs::remove_dir_all(&out);
 
-    let runtime = ipe::resolve_runtime();
-    assert!(runtime.is_ok(), "runtime must resolve for E2E");
-    let Ok(runtime) = runtime else { return };
+    let runtime = crate::support::expect_runtime(name, ipe::resolve_runtime());
     let built = ipe::build(&entry, &out, &runtime);
     assert!(built.is_ok(), "build failed for {name}: {:?}", built.err());
 
@@ -168,9 +166,7 @@ fn assert_rejected(name: &str) {
     let entry = golden_dir(&root, name).join("Main.ipe");
     let out = std::env::temp_dir().join(format!("ipec_{name}"));
     let _ = std::fs::remove_dir_all(&out);
-    let Ok(runtime) = ipe::resolve_runtime() else {
-        return; // runtime unresolvable — skip.
-    };
+    let runtime = crate::support::expect_runtime(name, ipe::resolve_runtime());
     let built = ipe::build(&entry, &out, &runtime);
     assert!(
         built.is_err(),
