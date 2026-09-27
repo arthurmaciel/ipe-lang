@@ -1502,9 +1502,6 @@ mod tests {
         }
     }
 
-    /// A load failure on an already-well-formed project (CO-INCR-007) must
-    /// not clear `Lib`'s real diagnostics: the prior layout is kept and
-    /// retried later, not replaced by the single-file fallback.
     #[test]
     fn load_error_disposition_splits_degrade_from_refuse() {
         let detail = || "detail".to_owned();
@@ -1574,6 +1571,9 @@ mod tests {
         );
     }
 
+    /// A load failure on an already-well-formed project (CO-INCR-007) must
+    /// not clear `Lib`'s real diagnostics: the prior layout is kept and
+    /// retried later, not replaced by the single-file fallback.
     #[test]
     fn transient_load_failure_keeps_prior_layout_diagnostics() {
         let main_path = normalize(Path::new("/lsp-278-test/Main.ipe"));
