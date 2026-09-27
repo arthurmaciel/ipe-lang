@@ -8,9 +8,10 @@
 //! [`semver::VersionReq`].
 //!
 //! Parse, don't validate: an entry file is read into a typed [`IndexEntry`] whose
-//! versions are [`semver::Version`] and whose capabilities are [`Capability`], so
-//! a malformed version or an unknown capability name is a hard error at read
-//! time, never a resolution-time surprise.
+//! versions are [`PublishedVersion`]s and whose capabilities are [`Capability`],
+//! so a malformed version, a version carrying build metadata, or an unknown
+//! capability name is a hard error at read time, never a resolution-time
+//! surprise.
 //!
 //! [`SourceUrl`] and [`CommitId`] are typed newtypes that gate the two
 //! publisher-controlled fields. An unvalidated string can never reach the `git`
@@ -24,6 +25,7 @@ use ipe_ir::Capability;
 
 use crate::CliError;
 use crate::package_name::PackageName;
+use crate::published_version::{PublishedVersion, require_successor};
 use crate::publisher::{AttestedActor, BlessedPublisher, SelfDeclaredPublisher};
 use crate::signing::SignatureBundle;
 
@@ -299,8 +301,8 @@ pub struct IndexEntry {
 /// or being written to the lockfile.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct EntryVersion {
-    /// The exact published version.
-    pub version: semver::Version,
+    /// The exact published version (never carrying build metadata).
+    pub version: PublishedVersion,
     /// The source repository URL, validated at parse time.
     pub source: SourceUrl,
     /// The immutable commit SHA pinned at publish time.
@@ -533,13 +535,21 @@ pub const MAX_ENTRY_VERSIONS: usize = 1024;
 ///   version — granted only when `attested` (the admission workflow's
 ///   authenticated PR author) proves the claimed publisher is blessed, never on
 ///   the entry's self-declared `publisher` alone.
+/// - **Monotonicity** — every version new to the submission (absent from the
+///   baseline) must exceed every baseline version, prereleases included, so a
+///   release never goes backwards and the enforced-semver predecessor is always
+///   the greatest published release below it.
 /// - **Source continuity** — a package name is bound to one source repository.
 ///   The established source is the baseline's first published version's source
 ///   (on first publish, the submitted entry's own first version fixes it); a
 ///   version pointing elsewhere is a name-squat and is refused.
 ///
+/// Build metadata never reaches this check: an entry's versions are
+/// [`PublishedVersion`]s, refused at read time when they carry a `+…` suffix.
+///
 /// # Errors
-/// [`CliError::UsageOwned`] naming the exact rule that refused the entry.
+/// [`CliError::VersionRefused`] when a new version does not exceed every
+/// baseline version; [`CliError::UsageOwned`] naming the exact rule otherwise.
 pub fn admission_precheck(
     submitted: &IndexEntry,
     baseline: Option<&IndexEntry>,
@@ -554,9 +564,10 @@ pub fn admission_precheck(
         )));
     }
 
-    let baseline_by_version: std::collections::BTreeMap<&semver::Version, &EntryVersion> = baseline
-        .map(|e| e.versions.iter().map(|v| (&v.version, v)).collect())
-        .unwrap_or_default();
+    let baseline_by_version: std::collections::BTreeMap<&PublishedVersion, &EntryVersion> =
+        baseline
+            .map(|e| e.versions.iter().map(|v| (&v.version, v)).collect())
+            .unwrap_or_default();
 
     // Immutability: an existing version NUMBER must match the published row exactly.
     for version in &submitted.versions {
@@ -599,7 +610,7 @@ pub fn admission_precheck(
         } else {
             String::new()
         };
-        let submitted_versions: std::collections::BTreeSet<&semver::Version> =
+        let submitted_versions: std::collections::BTreeSet<&PublishedVersion> =
             submitted.versions.iter().map(|v| &v.version).collect();
         for baseline_version in baseline_by_version.keys() {
             if !submitted_versions.contains(*baseline_version) {
@@ -610,6 +621,17 @@ pub fn admission_precheck(
                     submitted.name
                 )));
             }
+        }
+    }
+
+    // Monotonicity: a version new to this submission must exceed every version
+    // already published, so the index never gains a release below its greatest.
+    // The map is ordered, so its last key is the greatest published version.
+    let greatest_published = baseline_by_version.keys().next_back().copied();
+    for version in &submitted.versions {
+        if !baseline_by_version.contains_key(&version.version) {
+            require_successor(greatest_published, &version.version)
+                .map_err(|refusal| refusal.for_package(&submitted.name))?;
         }
     }
 
@@ -650,7 +672,7 @@ pub fn resolve_version<'a>(
     entry
         .versions
         .iter()
-        .filter(|v| req.matches(&v.version))
+        .filter(|v| req.matches(v.version.as_semver()))
         .max_by(|a, b| a.version.cmp(&b.version))
         .ok_or_else(|| {
             let available: Vec<String> = entry
@@ -847,8 +869,8 @@ fn parse_entry_version_json(name: &str, raw: &serde_json::Value) -> Result<Entry
     };
 
     let version_str = field("version")?;
-    let version = semver::Version::parse(version_str)
-        .map_err(|e| malformed(format!("`{version_str}` is not a valid version: {e}")))?;
+    let version =
+        PublishedVersion::parse(version_str).map_err(|refusal| refusal.for_package(name))?;
     // Parse-don't-validate: the same typed boundaries the TOML path uses. A
     // moving or injection-shaped value can never reach `git` from the JSON path
     // either.
@@ -920,11 +942,8 @@ impl RawVersion {
             ))
         };
         let version_str = self.version.ok_or_else(|| missing("version"))?;
-        let version = semver::Version::parse(&version_str).map_err(|e| {
-            CliError::Resolve(format!(
-                "package `{name}`: `{version_str}` is not a valid version: {e}"
-            ))
-        })?;
+        let version =
+            PublishedVersion::parse(&version_str).map_err(|refusal| refusal.for_package(name))?;
         let raw_source = self.source.ok_or_else(|| missing("source"))?;
         let raw_rev = self.rev.ok_or_else(|| missing("rev"))?;
         let raw_sha256 = self.sha256.ok_or_else(|| missing("sha256"))?;

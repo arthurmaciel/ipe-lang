@@ -32,6 +32,7 @@ use std::process::Command;
 
 use ipe::index::{self, EntryVersion, IndexEntry, PinnedRev, SourceUrl};
 use ipe::lockfile::Lockfile;
+use ipe::published_version::{PublishedVersion, VersionRefusal};
 use ipe::publisher::{AttestedActor, SelfDeclaredPublisher};
 use ipe::resolve::{self, hash_source_tree};
 
@@ -127,7 +128,7 @@ fn write_entry(tag: &str, name: &str, body: &str) -> PathBuf {
 /// parsing — the structural checks operate on already-typed entries).
 fn version(v: &str, source: &str, rev: &str) -> EntryVersion {
     EntryVersion {
-        version: semver::Version::parse(v).expect("valid version"),
+        version: PublishedVersion::parse(v).expect("valid version"),
         source: SourceUrl::parse("pkg", source).expect("valid source"),
         rev: PinnedRev::from_full_sha("pkg", rev).expect("valid rev"),
         sha256: VALID_SHA.to_owned(),
@@ -295,6 +296,81 @@ fn precheck_accepts_a_faithful_new_version() {
     );
     index::admission_precheck(&submitted, Some(&baseline), None)
         .expect("a faithful new version passes");
+}
+
+/// Whether `err` is a typed version refusal for package `pkg` that `expected`
+/// accepts.
+fn is_version_refusal(err: &ipe::CliError, expected: fn(&VersionRefusal) -> bool) -> bool {
+    matches!(err, ipe::CliError::VersionRefused { package, refusal }
+        if package == "pkg" && expected(refusal))
+}
+
+const fn not_above_greatest(refusal: &VersionRefusal) -> bool {
+    matches!(refusal, VersionRefusal::NotAboveGreatest { .. })
+}
+
+const fn build_metadata(refusal: &VersionRefusal) -> bool {
+    matches!(refusal, VersionRefusal::BuildMetadata { .. })
+}
+
+#[test]
+fn schema_denies_build_metadata() {
+    // `1.0.0+b` and `1.0.0` share one semver precedence: the suffix would let an
+    // entry name a release twice, so the schema gate refuses it at read time.
+    for raw in ["1.0.0+b", "1.0.0-rc.1+sha.abc"] {
+        let body = format!(
+            "publisher = \"tester\"\n\n[[version]]\nversion = \"{raw}\"\n\
+             source = \"https://example.invalid/pkg\"\nrev = \"{VALID_REV}\"\n\
+             sha256 = \"{VALID_SHA}\"\ncapabilities = []\n"
+        );
+        let path = write_entry("build-metadata", "pkg", &body);
+        let err = index::validate_entry_file(&path).expect_err("build metadata must be denied");
+        assert!(
+            is_version_refusal(&err, build_metadata),
+            "{raw} must be refused for build metadata: {err:?}"
+        );
+    }
+}
+
+#[test]
+fn precheck_denies_a_successor_below_the_greatest_published_version() {
+    // Monotonicity: a new version must exceed EVERY published one, not merely be
+    // absent from the baseline.
+    let src = "https://example.invalid/pkg";
+    let published = vec![
+        version("1.0.0", src, VALID_REV),
+        version("2.0.0", src, VALID_REV),
+    ];
+    let baseline = entry("pkg", published.clone());
+    for below in ["1.5.0", "0.9.0", "2.0.0-rc.1"] {
+        let mut versions = published.clone();
+        versions.push(version(below, src, VALID_REV));
+        let err = index::admission_precheck(&entry("pkg", versions), Some(&baseline), None)
+            .expect_err("a successor below the greatest must be denied");
+        assert!(
+            is_version_refusal(&err, not_above_greatest),
+            "{below} is below 2.0.0: {err:?}"
+        );
+        assert!(format!("{err}").contains("2.0.0"), "{err}");
+    }
+}
+
+#[test]
+fn precheck_accepts_the_greatest_successor_release_or_prerelease() {
+    // A release or a prerelease above every published version is a successor;
+    // the prerelease's exemption from the API bump lives in the audit, not here.
+    let src = "https://example.invalid/pkg";
+    let published = vec![
+        version("1.0.0", src, VALID_REV),
+        version("2.0.0", src, VALID_REV),
+    ];
+    let baseline = entry("pkg", published.clone());
+    for above in ["2.0.1", "3.0.0-rc.1"] {
+        let mut versions = published.clone();
+        versions.push(version(above, src, VALID_REV));
+        index::admission_precheck(&entry("pkg", versions), Some(&baseline), None)
+            .expect("a successor above the greatest passes");
+    }
 }
 
 #[test]

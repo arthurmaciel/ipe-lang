@@ -194,6 +194,15 @@ pub enum CliError {
     /// A publish precondition is a hard, typed refusal — never a warning — because
     /// a merged index entry must pin an immutable, reproducible revision.
     Publish(publish::Refusal),
+    /// A package version cannot enter the index — malformed, carrying build
+    /// metadata, or not above every version already published. Raised at
+    /// publish, at admission, and when an index entry is read, so no ambiguous
+    /// or regressing version reaches resolution or the enforced-semver check.
+    /// The refusal is boxed to keep `CliError` within its size ceiling.
+    VersionRefused {
+        package: String,
+        refusal: Box<crate::published_version::VersionRefusal>,
+    },
     /// `ipe doc check` found one or more exposed bindings without a doc-comment.
     /// Carries the ready-to-print coverage report. This is a legitimate gate
     /// result — the check ran correctly and the package is under-documented — not
@@ -497,6 +506,7 @@ impl CliError {
             Self::SemverRejected { .. } => "semver-rejected",
             Self::PackageAudit(_) => "package-audit",
             Self::Publish(_) => "publish",
+            Self::VersionRefused { .. } => "version-refused",
             Self::DocCoverage(_) => "doc-coverage",
             Self::DocExamplesFailed(_) => "doc-examples-failed",
             Self::CommandUsage { .. } => "command-usage",
@@ -606,6 +616,9 @@ impl std::fmt::Display for CliError {
             Self::DocCoverage(report) | Self::DocExamplesFailed(report) => f.write_str(report),
             Self::PackageAudit(rejection) => write!(f, "{rejection}"),
             Self::Publish(refusal) => write!(f, "ipe package publish refused: {refusal}"),
+            Self::VersionRefused { package, refusal } => {
+                write!(f, "package `{package}`: {refusal}")
+            }
             // The reason, then the command's full `--help` page (indented,
             // coloured for a terminal). Rendered against stderr because misuse
             // output goes there. A known command always has a help page; the

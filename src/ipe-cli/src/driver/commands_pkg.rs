@@ -848,11 +848,13 @@ pub fn run_audit_entry(rest: &[String]) -> Result<(), CliError> {
     // the index PR directly would bypass.
     index::admission_precheck(&submitted, baseline.as_ref(), attested_actor.as_ref())?;
 
-    let baseline_by_version: std::collections::BTreeMap<&semver::Version, &index::EntryVersion> =
-        baseline
-            .as_ref()
-            .map(|e| e.versions.iter().map(|v| (&v.version, v)).collect())
-            .unwrap_or_default();
+    let baseline_by_version: std::collections::BTreeMap<
+        &crate::published_version::PublishedVersion,
+        &index::EntryVersion,
+    > = baseline
+        .as_ref()
+        .map(|e| e.versions.iter().map(|v| (&v.version, v)).collect())
+        .unwrap_or_default();
 
     // The new versions are those present in the submitted entry but absent from
     // the baseline. A PR normally adds exactly one. Each is fetched, hash-verified,

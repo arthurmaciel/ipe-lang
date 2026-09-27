@@ -112,7 +112,7 @@ pub fn resolve_and_add(
 
     let locked = LockedDep {
         name: name.to_owned(),
-        version: version.version.clone(),
+        version: version.version.as_semver().clone(),
         source: version.source.to_string(),
         rev: LockedRev::Pinned(version.rev.clone()),
         sha256: version.sha256.clone(),

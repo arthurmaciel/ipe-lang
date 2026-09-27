@@ -39,6 +39,7 @@ use crate::scratch::{ScratchDir, ScratchFile};
 use crate::CliError;
 use crate::index::{self, CommitId, EntryVersion, IndexEntry, PinnedRev, SourceUrl};
 use crate::project::{self, ProjectManifest};
+use crate::published_version::{PublishedVersion, require_successor};
 use crate::publisher::{
     AuthenticatedPublisher, BlessedPublisher, BlessingRefusal, SelfDeclaredPublisher,
 };
@@ -353,19 +354,14 @@ fn locate_manifest(path: &Path) -> Result<PathBuf, CliError> {
 ///
 /// # Errors
 /// [`CliError::Publish`] on a publish precondition; [`CliError::UsageOwned`] when
-/// the manifest declares no version; resolution / IO errors otherwise.
+/// the manifest declares no version; [`CliError::VersionRefused`] when it carries
+/// build metadata; resolution / IO errors otherwise.
 fn compute_entry_version(
     manifest: &ProjectManifest,
     source_override: Option<&str>,
     rev_override: Option<&str>,
 ) -> Result<EntryVersion, CliError> {
-    let version = manifest.version.clone().ok_or_else(|| {
-        CliError::UsageOwned(format!(
-            "ipe package publish: `{}` declares no `version = \"…\"` — publish records the \
-             version being published, so the manifest must name one.",
-            manifest.name
-        ))
-    })?;
+    let version = manifest_published_version(manifest)?;
 
     let source_root = &manifest.root;
     let raw_source = match source_override {
@@ -512,16 +508,34 @@ pub fn render_entry(name: &str, publisher: &str, versions: &[EntryVersion]) -> S
     out
 }
 
+/// The manifest's version as the index will record it.
+///
+/// # Errors
+/// [`CliError::UsageOwned`] when the manifest declares no version;
+/// [`CliError::VersionRefused`] when it carries build metadata.
+fn manifest_published_version(manifest: &ProjectManifest) -> Result<PublishedVersion, CliError> {
+    let version = manifest.version.clone().ok_or_else(|| {
+        CliError::UsageOwned(format!(
+            "ipe package publish: `{}` declares no `version = \"…\"` — publish records the \
+             version being published, so the manifest must name one.",
+            manifest.name
+        ))
+    })?;
+    PublishedVersion::from_semver(version).map_err(|refusal| refusal.for_package(&manifest.name))
+}
+
 /// Merge `new_version` into the package's existing index entry (or create a first
 /// entry), returning the rendered entry-file TOML.
 ///
 /// Reads the current `packages/<name>.toml` from `index_root` if present, appends
 /// the new version, and re-renders. Refuses a version already published — a
-/// published version is immutable.
+/// published version is immutable — and a version that does not exceed every
+/// published one, mirroring the admission gate's monotonicity rule.
 ///
 /// # Errors
-/// [`CliError::Publish`] on a duplicate version; the reader's errors when an
-/// existing entry file is present but malformed.
+/// [`CliError::Publish`] on a duplicate version; [`CliError::VersionRefused`]
+/// when the new version is not above the greatest published one; the reader's
+/// errors when an existing entry file is present but malformed.
 fn merge_into_entry(
     index_root: &Path,
     name: &str,
@@ -543,6 +557,8 @@ fn merge_into_entry(
             version: new_version.version.to_string(),
         }));
     }
+    require_successor(versions.iter().map(|v| &v.version), &new_version.version)
+        .map_err(|refusal| refusal.for_package(name))?;
     versions.push(new_version.clone());
 
     Ok(render_entry(name, publisher, &versions))
@@ -1362,6 +1378,7 @@ fn run_git_capture(root: &Path, args: &[&str]) -> Result<Option<String>, CliErro
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::published_version::VersionRefusal;
     use ipe_ir::Capability;
     use std::collections::BTreeSet;
 
@@ -1371,7 +1388,7 @@ mod tests {
 
     fn sample_version(v: &str, caps_set: BTreeSet<Capability>) -> EntryVersion {
         EntryVersion {
-            version: semver::Version::parse(v).expect("valid version"),
+            version: PublishedVersion::parse(v).expect("valid version"),
             source: SourceUrl::parse("http-extras", "https://github.com/arthurmaciel/http-extras")
                 .expect("valid source url"),
             rev: PinnedRev::from_full_sha(
@@ -1581,6 +1598,88 @@ mod tests {
         ));
         assert!(format!("{err}").contains("already published"));
 
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A version below the greatest published one is refused at publish, before
+    /// any PR is opened, so the index never gains a release that goes backwards.
+    #[test]
+    fn a_non_greatest_version_is_a_typed_refusal() {
+        let root = temp_dir("non-greatest");
+        let packages = root.join("packages");
+        std::fs::create_dir_all(&packages).expect("packages dir");
+        let published = [
+            sample_version("1.0.0", caps(&[])),
+            sample_version("2.0.0", caps(&[])),
+        ];
+        std::fs::write(
+            packages.join("http-extras.toml"),
+            render_entry("http-extras", "arthurmaciel", &published),
+        )
+        .expect("write entry");
+
+        for below in ["1.5.0", "2.0.0-rc.1"] {
+            let candidate = sample_version(below, caps(&[]));
+            let err =
+                merge_into_entry(&root, "http-extras", "arthurmaciel", &candidate).unwrap_err();
+            assert!(
+                matches!(
+                    &err,
+                    CliError::VersionRefused { refusal, .. }
+                        if matches!(**refusal, VersionRefusal::NotAboveGreatest { .. })
+                ),
+                "{below} is below 2.0.0: {err:?}"
+            );
+        }
+
+        let above = sample_version("2.0.1-rc.1", caps(&[]));
+        merge_into_entry(&root, "http-extras", "arthurmaciel", &above)
+            .expect("a prerelease above the greatest version is a successor");
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A manifest version carrying build metadata is refused when publish parses
+    /// it, before the audit or any index read.
+    #[test]
+    fn a_build_metadata_version_is_refused_at_publish() {
+        let root = temp_dir("build-metadata");
+        let mut manifest = crate::project::ProjectManifest {
+            name: "http-extras".to_owned(),
+            version: Some("1.2.0+build.5".parse().expect("valid semver with build")),
+            root: root.clone(),
+            src_root: root.join("src"),
+            icon: None,
+            driver: ipe_backend_rust::DbDriver::default(),
+            static_request: crate::build_plan::StaticRequestLayer::default(),
+            wasm: crate::project::WasmConfig::default(),
+            dependencies: std::collections::BTreeMap::new(),
+            rust_dependencies: std::collections::BTreeMap::new(),
+            capabilities: BTreeSet::new(),
+            capabilities_accept: BTreeSet::new(),
+            control_models_accept: BTreeSet::new(),
+            has_rust_wrapper: false,
+            programs: Vec::new(),
+            exposed_modules: Vec::new(),
+            delivery: crate::project::DeliveryConfig::default(),
+        };
+        let err = manifest_published_version(&manifest).unwrap_err();
+        assert!(
+            matches!(
+                &err,
+                CliError::VersionRefused { refusal, .. }
+                    if matches!(**refusal, VersionRefusal::BuildMetadata { .. })
+            ),
+            "{err:?}"
+        );
+
+        manifest.version = Some("1.2.0".parse().expect("valid release"));
+        assert_eq!(
+            manifest_published_version(&manifest)
+                .expect("a release without build metadata is publishable")
+                .to_string(),
+            "1.2.0"
+        );
         let _ = std::fs::remove_dir_all(&root);
     }
 
