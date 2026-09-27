@@ -603,8 +603,10 @@ primaryKey =
 -- A composite key has no single key column, so the by-key operations (`get` /
 -- `update` / `delete`) return a typed `Err` on such a store — reach its rows
 -- with `findWhere` / `updateWhere` / `deleteWhere` over a `Cond` naming every
--- key column. Declaring a second primary key, or a key column listed twice,
--- makes `createSql` / `migrations` return a typed `Err`.
+-- key column. `createSql` / `migrations` render the key as one table-level
+-- `PRIMARY KEY (user_id, group_id)` term; declaring a second primary key, a key
+-- column listed twice, or a `serial` column beside the composite key makes them
+-- return a typed `Err` instead.
 --
 -- Example:
 --
@@ -768,7 +770,12 @@ primaryKeyNamed name draft =
 -- * a name that is not a valid SQL identifier;
 -- * a name that is not a column of the draft;
 -- * a column listed twice;
--- * a draft that already declares a primary key (single or composite).
+-- * a draft that already declares a primary key (single or composite);
+-- * a `serial` column in the same draft (refused when the DDL is built —
+--   `AUTOINCREMENT` exists only on a single-column key).
+--
+-- A legal list renders as one table-level `PRIMARY KEY (a, b, …)` term after
+-- the column definitions, columns in the declared order.
 --
 -- Example:
 --
@@ -3937,27 +3944,89 @@ createSql store =
 
 
 -- The primary-key declaration is checked first: an illegal declaration (a
--- second key, a malformed composite list) surfaces its recorded `Err`, and a
--- composite key fails closed because the table-level `PRIMARY KEY (…)` clause
--- is not rendered — never a table silently created without its declared key.
+-- second key, a malformed composite list) surfaces its recorded `Err`. A single
+-- key renders inline on its column (`col … PRIMARY KEY`); a composite key puts
+-- no key on any column and appends ONE table-level `PRIMARY KEY (a, b, …)` term,
+-- columns in declared order. The composite list is re-parsed against the
+-- columns here (defence in depth over the declaration-time parse), and a
+-- composite key beside a `Serial` column fails closed — `AUTOINCREMENT` exists
+-- only on a single-column INTEGER key — all before any DDL text is built.
 createSqlFromColumns : String -> List Column -> List ColumnSpec -> Result Error PrimaryKeyDecl -> Result Error String
 createSqlFromColumns table cols specs pk =
     case pk of
         Err e ->
             Err e
 
-        Ok (CompositePk _ _ _) ->
-            Err compositePkDdlUnsupportedError
+        Ok (CompositePk first second rest) ->
+            case compositePkClause cols specs (first :: second :: rest) of
+                Err e ->
+                    Err e
+
+                Ok clause ->
+                    createSqlFromColumnDefs table cols specs [ clause ]
 
         Ok NoPk ->
-            createSqlFromColumnDefs table cols specs
+            createSqlFromColumnDefs table cols specs []
 
         Ok (SinglePk _) ->
-            createSqlFromColumnDefs table cols specs
+            createSqlFromColumnDefs table cols specs []
 
 
-createSqlFromColumnDefs : String -> List Column -> List ColumnSpec -> Result Error String
-createSqlFromColumnDefs table cols specs =
+-- The table-level `PRIMARY KEY (…)` term for a composite key over `names`, or
+-- the typed `Err` refusing it: the list re-parsed as at declaration (at least
+-- two valid, known, distinct columns), no `Serial` column, and no inline
+-- single-column key spec alongside it.
+compositePkClause : List Column -> List ColumnSpec -> List String -> Result Error String
+compositePkClause cols specs names =
+    case parseCompositePk cols names of
+        Err e ->
+            Err e
+
+        Ok decl ->
+            case firstCompositeSpecConflict names decl specs of
+                Just e ->
+                    Err e
+
+                Nothing ->
+                    Ok (String.concat [ "PRIMARY KEY (", String.join ", " names, ")" ])
+
+
+-- The first spec a composite primary key cannot coexist with — a serial column
+-- or an inline single-column key — as its typed `Err`.
+firstCompositeSpecConflict : List String -> PrimaryKeyDecl -> List ColumnSpec -> Maybe Error
+firstCompositeSpecConflict names decl specs =
+    case specs of
+        [] ->
+            Nothing
+
+        spec :: rest ->
+            case spec of
+                Serial col ->
+                    Just (compositePkSerialError names col)
+
+                PrimaryKey _ ->
+                    Just (secondPrimaryKeyError decl)
+
+                Unique _ ->
+                    firstCompositeSpecConflict names decl rest
+
+                DefaultNow _ ->
+                    firstCompositeSpecConflict names decl rest
+
+                DefaultText _ _ ->
+                    firstCompositeSpecConflict names decl rest
+
+                DefaultInt _ _ ->
+                    firstCompositeSpecConflict names decl rest
+
+                TouchOnUpdate _ ->
+                    firstCompositeSpecConflict names decl rest
+
+
+-- `tableConstraints` are table-level terms appended after the column
+-- definitions, each built only from validated identifiers.
+createSqlFromColumnDefs : String -> List Column -> List ColumnSpec -> List String -> Result Error String
+createSqlFromColumnDefs table cols specs tableConstraints =
     if Basics.not (validSqlIdentPlain table) then
         Err (invalidIdentError "table" table)
 
@@ -3977,7 +4046,7 @@ createSqlFromColumnDefs table cols specs =
                                 [ "CREATE TABLE IF NOT EXISTS "
                                 , table
                                 , " ("
-                                , String.join ", " defs
+                                , String.join ", " (defs ++ tableConstraints)
                                 , ")"
                                 ]
                             )
@@ -6203,10 +6272,17 @@ duplicateCompositePkColumnError name =
         )
 
 
-compositePkDdlUnsupportedError : Error
-compositePkDdlUnsupportedError =
+compositePkSerialError : List String -> String -> Error
+compositePkSerialError names col =
     Error.invalidInput
-        "Ipe.Db.Store: the CREATE TABLE DDL for a composite primary key is not supported yet — refusing to create the table without its declared key"
+        (String.concat
+            [ "Ipe.Db.Store: column \""
+            , col
+            , "\" is marked serial, but the store's primary key is composite ("
+            , String.join ", " names
+            , ") — AUTOINCREMENT exists only on a single-column INTEGER primary key; drop Store.serial and supply the key values, or key the table on the serial column alone with Store.primaryKey"
+            ]
+        )
 
 
 unknownColumnError : String -> Error

@@ -163,8 +163,10 @@ primaryKey col draft =
 
 -- | `compositePrimaryKey cols draft` — make the string-named `cols`, in order,
 -- one table-level primary key. Needs two or more distinct columns of the draft;
--- an empty or one-column list, a repeated or unknown column, or a draft that
--- already has a primary key is refused, fail-closed, when the schema is built.
+-- an empty or one-column list, a repeated or unknown column, a draft that
+-- already has a primary key, or a `serial` column beside the key is refused,
+-- fail-closed, when the schema is built. A legal list renders as one
+-- table-level `PRIMARY KEY (…)` term.
 --
 -- Example:
 --

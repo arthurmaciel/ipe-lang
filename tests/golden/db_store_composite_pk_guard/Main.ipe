@@ -8,9 +8,12 @@ module Main exposing (main)
 --   * the refusals: an empty list, a one-column list, an invalid identifier, an
 --     unknown column, a repeated column, and every second-key conflict
 --     (single then composite, composite then single, single then single);
---   * the accessor forms `compositePrimaryKey2` / `compositePrimaryKey3` lower
---     through the intercept and record the key (the table-level DDL is not
---     rendered yet, so `createSql` fails closed rather than drop the key);
+--   * a `serial` column beside a composite key (AUTOINCREMENT exists only on a
+--     single-column key), whether or not the serial column is a key column;
+--   * the raw form and the accessor forms `compositePrimaryKey2` /
+--     `compositePrimaryKey3` render ONE table-level `PRIMARY KEY (…)` term, key
+--     columns in declared order, with no inline key on any column — through
+--     both `createSql` and the `migrations` create entry;
 --   * a single-column key is unaffected.
 
 import Ipe.Codec as Codec exposing (Codec)
@@ -83,6 +86,45 @@ refusedLine label needle ddl =
             String.concat [ label, ":FAIL-accepted:", sql ]
 
 
+-- The create entry `migrations` yields for a raw-column `memberships` draft
+-- shaped by `shape`.
+rawCreateMigration : (Draft Store.Row -> Draft Store.Row) -> Result Error String
+rawCreateMigration shape =
+    case
+        Store.fromColumns "memberships"
+            [ Store.textColumn "user_id"
+            , Store.textColumn "group_id"
+            , Store.textColumn "role"
+            ]
+    of
+        Err e ->
+            Err e
+
+        Ok draft ->
+            case Store.migrations (Store.public (shape draft)) of
+                Err e ->
+                    Err e
+
+                Ok entries ->
+                    case entries of
+                        first :: _ ->
+                            Ok (String.concat [ first.name, ": ", first.sql ])
+
+                        [] ->
+                            Err (Error.invalidInput "migrations yielded no create entry")
+
+
+-- `label:<ddl>` when the DDL is built, so the oracle pins the exact text.
+ddlLine : String -> Result Error String -> String
+ddlLine label ddl =
+    case ddl of
+        Err e ->
+            String.concat [ label, ":FAIL-rejected:", Error.message e ]
+
+        Ok sql ->
+            String.concat [ label, ":", sql ]
+
+
 singlePkLine : String
 singlePkLine =
     case typedDdl (\d -> Store.primaryKey .userId d) of
@@ -126,15 +168,22 @@ main =
             , refusedLine "typed-single-then-composite"
                 "second one was declared after primary key (user_id)"
                 (typedDdl (\d -> Store.compositePrimaryKey2 .userId .groupId (Store.primaryKey .userId d)))
-            , refusedLine "raw-composite-ddl"
-                "composite primary key is not supported yet"
-                (rawDdl (StoreU.compositePrimaryKey [ "user_id", "group_id" ]))
-            , refusedLine "typed-composite2-ddl"
-                "composite primary key is not supported yet"
-                (typedDdl (\d -> Store.compositePrimaryKey2 .userId .groupId d))
-            , refusedLine "typed-composite3-ddl"
-                "composite primary key is not supported yet"
-                (typedDdl (\d -> Store.compositePrimaryKey3 .userId .groupId .role d))
+            , refusedLine "serial-key-column"
+                "column \"user_id\" is marked serial, but the store's primary key is composite (user_id, group_id)"
+                (rawDdl (\d -> StoreU.serial "user_id" (StoreU.compositePrimaryKey [ "user_id", "group_id" ] d)))
+            , refusedLine "serial-other-column"
+                "column \"role\" is marked serial, but the store's primary key is composite (user_id, group_id)"
+                (rawDdl (\d -> StoreU.compositePrimaryKey [ "user_id", "group_id" ] (StoreU.serial "role" d)))
+            , refusedLine "serial-migrations"
+                "is marked serial, but the store's primary key is composite"
+                (rawCreateMigration (\d -> StoreU.serial "role" (StoreU.compositePrimaryKey [ "user_id", "group_id" ] d)))
+            , ddlLine "raw-composite-ddl" (rawDdl (StoreU.compositePrimaryKey [ "user_id", "group_id" ]))
+            , ddlLine "raw-composite-reordered-ddl" (rawDdl (StoreU.compositePrimaryKey [ "group_id", "user_id" ]))
+            , ddlLine "typed-composite2-ddl" (typedDdl (\d -> Store.compositePrimaryKey2 .userId .groupId d))
+            , ddlLine "typed-composite3-ddl" (typedDdl (\d -> Store.compositePrimaryKey3 .userId .groupId .role d))
+            , ddlLine "composite-unique-ddl"
+                (typedDdl (\d -> Store.unique .role (Store.compositePrimaryKey2 .userId .groupId d)))
+            , ddlLine "composite-migration" (rawCreateMigration (StoreU.compositePrimaryKey [ "user_id", "group_id" ]))
             , singlePkLine
             ]
         )
