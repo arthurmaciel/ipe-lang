@@ -1098,15 +1098,15 @@ mod tests {
 
     const TARGET: Symbol = Symbol::from_raw(1);
 
-    fn var() -> Box<Expr> {
-        Box::new(Expr::Var(TARGET))
+    fn var() -> Expr {
+        Expr::Var(TARGET)
     }
 
     #[test]
     fn clone_free_target_leaves_an_index_read_list_bare() {
         let rewritten = clone_free_target(
             Expr::ListIndexClone {
-                list: var(),
+                list: Box::new(var()),
                 index: 0,
             },
             TARGET,
@@ -1121,7 +1121,7 @@ mod tests {
     fn clone_free_target_leaves_a_length_check_list_bare() {
         let rewritten = clone_free_target(
             Expr::ListLenCheck {
-                list: var(),
+                list: Box::new(var()),
                 len: 2,
                 exact: true,
             },
@@ -1137,7 +1137,7 @@ mod tests {
     fn clone_free_target_clones_a_consuming_read() {
         let rewritten = clone_free_target(
             Expr::Cons {
-                head: var(),
+                head: Box::new(var()),
                 tail: Box::new(Expr::List {
                     elem: IrType::Int,
                     items: Vec::new(),
