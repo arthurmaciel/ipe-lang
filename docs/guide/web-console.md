@@ -84,13 +84,19 @@ check the rest of the app already runs — one identity surface, not two.
 Several env vars control the embedded developer console. Use `ipe doc <VAR>` for
 the full entry on any of them.
 
+Two credential roles guard the surface. The **admin** token opens
+`/_ipe/console*` and `/_ipe/metrics`; the **metrics** token opens `/_ipe/metrics`
+only, so a Prometheus scrape credential can never read logs or spans. Either is
+presented as `Authorization: Bearer <token>` or as the password of HTTP Basic auth.
+
 | Variable | Default | Effect |
 |----------|---------|--------|
-| `IPE_ADMIN_TOKEN` | unset | Bearer token for console access in production or under `IPE_CONSOLE_AUTH=token`. |
-| `IPE_CONSOLE_AUTH` | auto (token in production, open in dev) | `token` requires the admin token in every posture; `off` disables the console. Only an unset or blank value falls back to the posture default; any other value (including a non-UTF-8 one) disables it too. |
+| `IPE_ADMIN_TOKEN` | unset | Admin token: opens the console and `/_ipe/metrics` in production or under `IPE_CONSOLE_AUTH=token`. Without it (or with a non-UTF-8 value) a production console is not mounted. |
+| `IPE_CONSOLE_AUTH` | auto (token in production, open in dev) | `token` requires a credential in every posture; `off` disables the console; `app` mounts it but answers 501 on the Rust runtime (the `consoleAuth` callback is not supported there). Only an unset or blank value falls back to the posture default; any other value (including a non-UTF-8 one) disables it too. |
 | `IPE_CONSOLE_EMBED` | auto (on in dev) | Set to `off` to disable the embedded console. |
 | `IPE_CONSOLE_HUB` | unset | Base URL of a remote Ipê Hub OTLP collector. |
 | `IPE_DEV_BANNER` | auto (on in dev) | Set to `off` to suppress the dev-mode banner. |
+| `IPE_METRICS_TOKEN` | unset | Metrics token: authorizes the `/_ipe/metrics` scrape only, never the console. The admin token is accepted on `/_ipe/metrics` too. |
 
 See the [**Console** subsystem](../reference/env.md#console) in the
 environment variable reference.

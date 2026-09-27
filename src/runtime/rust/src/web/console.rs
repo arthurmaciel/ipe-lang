@@ -25,7 +25,8 @@ const fn json_ct() -> (header::HeaderName, &'static str) {
 /// - explicit opt-out via `IPE_CONSOLE_EMBED=off|0|false`;
 /// - `IPE_CONSOLE_AUTH` resolving to `off` (operator declared the surface
 ///   absent, or set an unrecognised value — fail closed);
-/// - production without an admin token (fail-closed — no silent open-to-world mount).
+/// - production without a usable admin credential (fail-closed — no silent
+///   open-to-world mount; a metrics credential never mounts the console).
 ///
 /// This function is reqwest-free; it lives here so the mount decision is
 /// available regardless of whether `http_client` is compiled in.
@@ -45,7 +46,7 @@ pub fn gate_allows() -> bool {
     if ConsoleAuthMode::from_env() == ConsoleAuthMode::Off {
         return false;
     }
-    if telemetry::production_from_env() && configured_admin_token().is_none() {
+    if telemetry::production_from_env() && !admin_credential().is_configured() {
         return false;
     }
     true
@@ -133,28 +134,196 @@ pub async fn api_metrics_summary() -> impl IntoResponse {
     (StatusCode::OK, [json_ct()], body)
 }
 
-/// Does an `Authorization` header value authorize the admin surface?
+/// The credential an `Authorization` header presents.
 ///
-/// Accepts `Bearer <tok>` or `Basic base64(user:tok)` (the Prometheus
-/// `basic_auth` scrape path — any username, the password is the admin token).
-/// Both comparisons go through the runtime's one constant-time predicate,
-/// `ct_eq::ct_bytes_eq` (length is non-secret metadata).
-fn header_authorizes(auth: &str, tok: &str) -> bool {
-    if let Some(bearer) = auth.strip_prefix("Bearer ")
-        && crate::ct_eq::ct_bytes_eq(bearer.as_bytes(), tok.as_bytes())
-    {
-        return true;
-    }
-    if let Some(b64) = auth.strip_prefix("Basic ") {
+/// `Bearer <tok>` or `Basic base64(user:tok)` (the Prometheus `basic_auth`
+/// scrape path — any username, the password is the token). Anything else
+/// presents nothing.
+struct Presented(String);
+
+impl Presented {
+    fn from_header(auth: &str) -> Option<Self> {
         use base64::{Engine, engine::general_purpose::STANDARD as B64};
-        if let Ok(raw) = B64.decode(b64.trim())
-            && let Ok(creds) = std::str::from_utf8(&raw)
-            && let Some((_user, pw)) = creds.split_once(':')
-        {
-            return crate::ct_eq::ct_bytes_eq(pw.as_bytes(), tok.as_bytes());
+        if let Some(bearer) = auth.strip_prefix("Bearer ") {
+            return Some(Self(bearer.to_owned()));
+        }
+        let b64 = auth.strip_prefix("Basic ")?;
+        let raw = B64.decode(b64.trim()).ok()?;
+        let creds = String::from_utf8(raw).ok()?;
+        let (_user, pw) = creds.split_once(':')?;
+        Some(Self(pw.to_owned()))
+    }
+}
+
+/// A role-bearing console credential, compared only in constant time.
+trait RoleToken {
+    fn token_bytes(&self) -> &[u8];
+}
+
+/// The admin credential: authorizes `/_ipe/console*` and `/_ipe/metrics`.
+struct AdminToken(String);
+
+/// The metrics credential: authorizes `/_ipe/metrics` only.
+struct MetricsToken(String);
+
+impl RoleToken for AdminToken {
+    fn token_bytes(&self) -> &[u8] {
+        self.0.as_bytes()
+    }
+}
+
+impl RoleToken for MetricsToken {
+    fn token_bytes(&self) -> &[u8] {
+        self.0.as_bytes()
+    }
+}
+
+/// One source in a credential's precedence chain.
+enum TokenSource {
+    /// Absent or empty: defer to the next source.
+    Unset,
+    /// A non-empty token.
+    Set(String),
+    /// Present but not valid UTF-8: the role is refused, never deferred.
+    NotUnicode,
+}
+
+impl TokenSource {
+    fn env(name: &str) -> Self {
+        match crate::system::read_env_var(name) {
+            Ok(token) if token.is_empty() => Self::Unset,
+            Ok(token) => Self::Set(token),
+            Err(std::env::VarError::NotPresent) => Self::Unset,
+            Err(std::env::VarError::NotUnicode(_)) => Self::NotUnicode,
         }
     }
-    false
+
+    /// The in-code `Console.*Token` sealed `Secret`, revealed only here.
+    fn in_code(kind: crate::app_config::ConsoleTokenKind) -> Self {
+        match crate::app_config::resolve_console_token(kind) {
+            Some(token) if !token.is_empty() => Self::Set(token),
+            Some(_) | None => Self::Unset,
+        }
+    }
+}
+
+/// A role's resolved credential.
+enum Credential<T> {
+    /// No source configures the role: no token of this role is accepted.
+    Unset,
+    /// The highest-precedence source is garbled: no token of this role is
+    /// accepted.
+    Unusable,
+    /// The configured token.
+    Configured(T),
+}
+
+impl<T: RoleToken> Credential<T> {
+    /// Walk `chain` in precedence order. The first `Set` source wins; a
+    /// `NotUnicode` source ahead of it makes the role `Unusable`.
+    fn resolve(chain: impl IntoIterator<Item = TokenSource>, wrap: fn(String) -> T) -> Self {
+        for source in chain {
+            match source {
+                TokenSource::Unset => {}
+                TokenSource::Set(token) => return Self::Configured(wrap(token)),
+                TokenSource::NotUnicode => return Self::Unusable,
+            }
+        }
+        Self::Unset
+    }
+
+    const fn is_configured(&self) -> bool {
+        matches!(self, Self::Configured(_))
+    }
+
+    /// Constant-time match against the presented credential (length is
+    /// non-secret metadata).
+    fn admits(&self, presented: &Presented) -> bool {
+        match self {
+            Self::Configured(token) => {
+                crate::ct_eq::ct_bytes_eq(presented.0.as_bytes(), token.token_bytes())
+            }
+            Self::Unset | Self::Unusable => false,
+        }
+    }
+}
+
+/// Admin chain: `IPE_ADMIN_TOKEN` › in-code `Console.adminToken` › legacy
+/// `IPE_CONSOLE_TOKEN`. Env wins over the in-code sealed `Secret`.
+fn admin_credential() -> Credential<AdminToken> {
+    use crate::app_config::ConsoleTokenKind;
+    Credential::resolve(
+        std::iter::once_with(|| TokenSource::env("IPE_ADMIN_TOKEN"))
+            .chain(std::iter::once_with(|| {
+                TokenSource::in_code(ConsoleTokenKind::Admin)
+            }))
+            .chain(std::iter::once_with(|| {
+                TokenSource::env("IPE_CONSOLE_TOKEN")
+            })),
+        AdminToken,
+    )
+}
+
+/// Metrics chain: `IPE_METRICS_TOKEN` › in-code `Console.metricsToken`.
+fn metrics_credential() -> Credential<MetricsToken> {
+    use crate::app_config::ConsoleTokenKind;
+    Credential::resolve(
+        std::iter::once_with(|| TokenSource::env("IPE_METRICS_TOKEN")).chain(std::iter::once_with(
+            || TokenSource::in_code(ConsoleTokenKind::Metrics),
+        )),
+        MetricsToken,
+    )
+}
+
+/// The credentials each gated surface may accept.
+struct Credentials {
+    admin: Credential<AdminToken>,
+    metrics: Credential<MetricsToken>,
+}
+
+impl Credentials {
+    fn from_env(surface: Surface) -> Self {
+        Self {
+            admin: admin_credential(),
+            metrics: match surface {
+                Surface::Console => Credential::Unset,
+                Surface::Metrics => metrics_credential(),
+            },
+        }
+    }
+
+    /// `/_ipe/console*` accepts the admin credential only; `/_ipe/metrics`
+    /// accepts admin or metrics. Both comparisons always run.
+    fn admit(&self, surface: Surface, presented: &Presented) -> bool {
+        let admin = self.admin.admits(presented);
+        match surface {
+            Surface::Console => admin,
+            Surface::Metrics => admin | self.metrics.admits(presented),
+        }
+    }
+}
+
+/// The credential-gated observability surface a request targets.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Surface {
+    /// `/_ipe/console*`: logs, errors, spans. Admin credential only.
+    Console,
+    /// `/_ipe/metrics`: the Prometheus scrape. Admin or metrics credential.
+    Metrics,
+}
+
+impl Surface {
+    /// The gated surface `path` targets; `None` for every other path.
+    #[must_use]
+    pub fn of_path(path: &str) -> Option<Self> {
+        if path == "/_ipe/metrics" {
+            Some(Self::Metrics)
+        } else if path.starts_with("/_ipe/console") {
+            Some(Self::Console)
+        } else {
+            None
+        }
+    }
 }
 
 /// The console-auth mode label for the `[ipe.console] … mode=<m>` startup log.
@@ -167,21 +336,27 @@ pub fn console_auth_mode_label() -> &'static str {
 /// Per-request auth gate for the console + metrics surface.
 ///
 /// Returns `Some(response)` when the request must be REFUSED.
-pub fn gate_blocked(headers: &axum::http::HeaderMap) -> Option<axum::response::Response> {
-    gate_decision(ConsoleAuthMode::from_env(), headers, configured_admin_token)
+pub fn gate_blocked(
+    surface: Surface,
+    headers: &axum::http::HeaderMap,
+) -> Option<axum::response::Response> {
+    gate_decision(ConsoleAuthMode::from_env(), surface, headers, || {
+        Credentials::from_env(surface)
+    })
 }
 
 /// The gate as a pure function of the resolved mode and the request.
 ///
 /// `Off` → 404 (surface absent). `App` → 501 (not supported on this runtime;
-/// fail closed). `DevOpen` → open. `Token` and `UnsetProd` → a matching admin
-/// token is required, else 401 — an explicit `token` is enforced in every
-/// posture, dev included. With no token configured every such request is
-/// refused. `configured_token` is read only when a token is required.
+/// fail closed). `DevOpen` → open. `Token` and `UnsetProd` → a credential of a
+/// role `surface` accepts is required, else 401 — an explicit `token` is
+/// enforced in every posture, dev included. With no usable credential every
+/// such request is refused. `credentials` is read only when one is required.
 fn gate_decision(
     mode: ConsoleAuthMode,
+    surface: Surface,
     headers: &axum::http::HeaderMap,
-    configured_token: impl FnOnce() -> Option<String>,
+    credentials: impl FnOnce() -> Credentials,
 ) -> Option<axum::response::Response> {
     match mode {
         ConsoleAuthMode::Off => Some((StatusCode::NOT_FOUND, "console disabled").into_response()),
@@ -197,49 +372,23 @@ fn gate_decision(
         ),
         ConsoleAuthMode::DevOpen => None,
         ConsoleAuthMode::Token | ConsoleAuthMode::UnsetProd => {
-            token_blocked(headers, configured_token)
+            token_blocked(surface, headers, credentials)
         }
     }
 }
 
-/// The configured admin token, highest-precedence non-empty source first.
-///
-/// `IPE_ADMIN_TOKEN` › in-code `Console.adminToken` › `IPE_CONSOLE_TOKEN` ›
-/// `IPE_METRICS_TOKEN` › in-code `Console.metricsToken`. Env wins over its
-/// in-code sealed `Secret`, which is revealed only here, never logged.
-fn configured_admin_token() -> Option<String> {
-    crate::system::read_env_var("IPE_ADMIN_TOKEN")
-        .ok()
-        .filter(|t| !t.is_empty())
-        .or_else(|| {
-            crate::app_config::resolve_console_token(crate::app_config::ConsoleTokenKind::Admin)
-                .filter(|t| !t.is_empty())
-        })
-        .or_else(|| {
-            crate::system::read_env_var("IPE_CONSOLE_TOKEN")
-                .ok()
-                .filter(|t| !t.is_empty())
-        })
-        .or_else(|| {
-            crate::system::read_env_var("IPE_METRICS_TOKEN")
-                .ok()
-                .filter(|t| !t.is_empty())
-        })
-        .or_else(|| {
-            crate::app_config::resolve_console_token(crate::app_config::ConsoleTokenKind::Metrics)
-                .filter(|t| !t.is_empty())
-        })
-}
-
-/// `Some(401)` unless the `Authorization` header carries the configured token.
+/// `Some(401)` unless the `Authorization` header carries a credential of a
+/// role `surface` accepts.
 fn token_blocked(
+    surface: Surface,
     headers: &axum::http::HeaderMap,
-    configured_token: impl FnOnce() -> Option<String>,
+    credentials: impl FnOnce() -> Credentials,
 ) -> Option<axum::response::Response> {
-    let authed = match (configured_token(), headers.get(header::AUTHORIZATION)) {
-        (Some(tok), Some(h)) => h.to_str().is_ok_and(|h| header_authorizes(h, &tok)),
-        _ => false,
-    };
+    let presented = headers
+        .get(header::AUTHORIZATION)
+        .and_then(|h| h.to_str().ok())
+        .and_then(Presented::from_header);
+    let authed = presented.is_some_and(|p| credentials().admit(surface, &p));
     if authed {
         return None;
     }
@@ -254,7 +403,7 @@ fn token_blocked(
         (
             StatusCode::UNAUTHORIZED,
             [(header::WWW_AUTHENTICATE, "Basic realm=\"ipe-metrics\"")],
-            "console requires a Bearer or Basic admin token",
+            "console requires a Bearer or Basic token of an accepted role",
         )
             .into_response(),
     )
@@ -440,7 +589,7 @@ fn ingest_token_blocked(headers: &axum::http::HeaderMap) -> Option<axum::respons
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::telemetry::RawConsoleAuth;
+    use crate::telemetry::{Posture, RawEnv};
 
     #[test]
     fn gate_skips_in_subapp_context() {
@@ -475,40 +624,80 @@ mod tests {
         blocked.map(|r| r.status())
     }
 
-    fn configured() -> Option<String> {
-        Some("s3cret".to_string())
+    /// Admin token `s3cret`, no metrics token.
+    fn configured() -> Credentials {
+        Credentials {
+            admin: Credential::Configured(AdminToken("s3cret".to_owned())),
+            metrics: Credential::Unset,
+        }
     }
+
+    /// Metrics token `m3trics` only, no admin credential.
+    fn metrics_only() -> Credentials {
+        Credentials {
+            admin: Credential::Unset,
+            metrics: Credential::Configured(MetricsToken("m3trics".to_owned())),
+        }
+    }
+
+    /// Admin `s3cret` and metrics `m3trics`, each in its own role.
+    fn both() -> Credentials {
+        Credentials {
+            admin: Credential::Configured(AdminToken("s3cret".to_owned())),
+            metrics: Credential::Configured(MetricsToken("m3trics".to_owned())),
+        }
+    }
+
+    fn none() -> Credentials {
+        Credentials {
+            admin: Credential::Unset,
+            metrics: Credential::Unset,
+        }
+    }
+
+    const ADMIN_BEARER: &str = "Bearer s3cret";
+    const METRICS_BEARER: &str = "Bearer m3trics";
+    const SURFACES: [Surface; 2] = [Surface::Console, Surface::Metrics];
+    const POSTURES: [Posture; 2] = [Posture::Dev, Posture::Production];
 
     #[test]
     fn auth_mode_explicit_value_wins_over_posture() {
-        for production in [false, true] {
+        for posture in POSTURES {
             assert_eq!(
-                ConsoleAuthMode::parse(RawConsoleAuth::Value("token"), production),
+                ConsoleAuthMode::parse(RawEnv::Value("token"), posture),
                 ConsoleAuthMode::Token
             );
             assert_eq!(
-                ConsoleAuthMode::parse(RawConsoleAuth::Value("  ToKeN "), production),
+                ConsoleAuthMode::parse(RawEnv::Value("  ToKeN "), posture),
                 ConsoleAuthMode::Token
             );
             assert_eq!(
-                ConsoleAuthMode::parse(RawConsoleAuth::Value("off"), production),
+                ConsoleAuthMode::parse(RawEnv::Value("off"), posture),
                 ConsoleAuthMode::Off
             );
             assert_eq!(
-                ConsoleAuthMode::parse(RawConsoleAuth::Value("APP"), production),
+                ConsoleAuthMode::parse(RawEnv::Value("APP"), posture),
                 ConsoleAuthMode::App
             );
         }
         assert_eq!(
-            ConsoleAuthMode::parse(RawConsoleAuth::Absent, false),
+            ConsoleAuthMode::parse(RawEnv::Absent, Posture::Dev),
             ConsoleAuthMode::DevOpen
         );
         assert_eq!(
-            ConsoleAuthMode::parse(RawConsoleAuth::Value("  "), false),
+            ConsoleAuthMode::parse(RawEnv::Value("  "), Posture::Dev),
             ConsoleAuthMode::DevOpen
         );
         assert_eq!(
-            ConsoleAuthMode::parse(RawConsoleAuth::Absent, true),
+            ConsoleAuthMode::parse(RawEnv::Value(""), Posture::Dev),
+            ConsoleAuthMode::DevOpen
+        );
+        assert_eq!(
+            ConsoleAuthMode::parse(RawEnv::Absent, Posture::Production),
+            ConsoleAuthMode::UnsetProd
+        );
+        assert_eq!(
+            ConsoleAuthMode::parse(RawEnv::Value(""), Posture::Production),
             ConsoleAuthMode::UnsetProd
         );
     }
@@ -516,42 +705,46 @@ mod tests {
     #[test]
     fn auth_mode_unknown_value_fails_closed() {
         for raw in ["tokne", "open", "dev-open", "none", "true", "1"] {
-            for production in [false, true] {
+            for posture in POSTURES {
                 assert_eq!(
-                    ConsoleAuthMode::parse(RawConsoleAuth::Value(raw), production),
+                    ConsoleAuthMode::parse(RawEnv::Value(raw), posture),
                     ConsoleAuthMode::Off,
                     "unknown IPE_CONSOLE_AUTH={raw:?} must resolve to off"
                 );
             }
             // Even a request carrying the right token is refused.
-            let mode = ConsoleAuthMode::parse(RawConsoleAuth::Value(raw), false);
-            assert_eq!(
-                status_of(gate_decision(
-                    mode,
-                    &auth_headers(Some("Bearer s3cret")),
-                    configured
-                )),
-                Some(StatusCode::NOT_FOUND)
-            );
+            let mode = ConsoleAuthMode::parse(RawEnv::Value(raw), Posture::Dev);
+            for surface in SURFACES {
+                assert_eq!(
+                    status_of(gate_decision(
+                        mode,
+                        surface,
+                        &auth_headers(Some(ADMIN_BEARER)),
+                        configured
+                    )),
+                    Some(StatusCode::NOT_FOUND)
+                );
+            }
         }
     }
 
     #[test]
     fn auth_mode_non_unicode_value_fails_closed() {
         let read = Err(std::env::VarError::NotUnicode(std::ffi::OsString::new()));
-        let raw = RawConsoleAuth::from_read(&read);
-        assert_eq!(raw, RawConsoleAuth::NotUnicode);
-        for production in [false, true] {
-            let mode = ConsoleAuthMode::parse(raw, production);
+        let raw = RawEnv::from_read(&read);
+        assert_eq!(raw, RawEnv::NotUnicode);
+        for posture in POSTURES {
+            let mode = ConsoleAuthMode::parse(raw, posture);
             assert_eq!(
                 mode,
                 ConsoleAuthMode::Off,
-                "non-UTF-8 IPE_CONSOLE_AUTH must resolve to off (production={production})"
+                "non-UTF-8 IPE_CONSOLE_AUTH must resolve to off ({posture:?})"
             );
             assert_eq!(
                 status_of(gate_decision(
                     mode,
-                    &auth_headers(Some("Bearer s3cret")),
+                    Surface::Console,
+                    &auth_headers(Some(ADMIN_BEARER)),
                     configured
                 )),
                 Some(StatusCode::NOT_FOUND)
@@ -560,19 +753,8 @@ mod tests {
     }
 
     #[test]
-    fn raw_auth_read_classification() {
-        let absent = Err(std::env::VarError::NotPresent);
-        assert_eq!(RawConsoleAuth::from_read(&absent), RawConsoleAuth::Absent);
-        let set = Ok("token".to_string());
-        assert_eq!(
-            RawConsoleAuth::from_read(&set),
-            RawConsoleAuth::Value("token")
-        );
-    }
-
-    #[test]
     fn explicit_token_enforced_in_dev_posture() {
-        let mode = ConsoleAuthMode::parse(RawConsoleAuth::Value("token"), false);
+        let mode = ConsoleAuthMode::parse(RawEnv::Value("token"), Posture::Dev);
         for refused in [
             None,
             Some("Bearer wrong"),
@@ -582,54 +764,221 @@ mod tests {
             Some("Basic dXNlcjp3cm9uZw=="),
             Some("Basic !!not-base64!!"),
         ] {
-            assert_eq!(
-                status_of(gate_decision(mode, &auth_headers(refused), configured)),
-                Some(StatusCode::UNAUTHORIZED),
-                "dev posture + IPE_CONSOLE_AUTH=token must refuse {refused:?}"
+            for surface in SURFACES {
+                assert_eq!(
+                    status_of(gate_decision(
+                        mode,
+                        surface,
+                        &auth_headers(refused),
+                        configured
+                    )),
+                    Some(StatusCode::UNAUTHORIZED),
+                    "dev posture + IPE_CONSOLE_AUTH=token must refuse {refused:?} on {surface:?}"
+                );
+            }
+        }
+        for surface in SURFACES {
+            assert!(
+                gate_decision(mode, surface, &auth_headers(Some(ADMIN_BEARER)), configured)
+                    .is_none()
+            );
+            assert!(
+                gate_decision(
+                    mode,
+                    surface,
+                    &auth_headers(Some("Basic dXNlcjpzM2NyZXQ=")),
+                    configured
+                )
+                .is_none()
             );
         }
-        assert!(gate_decision(mode, &auth_headers(Some("Bearer s3cret")), configured).is_none());
-        assert!(
-            gate_decision(
-                mode,
-                &auth_headers(Some("Basic dXNlcjpzM2NyZXQ=")),
-                configured
-            )
-            .is_none()
-        );
     }
 
     #[test]
     fn explicit_token_without_configured_token_refuses_all() {
-        let mode = ConsoleAuthMode::parse(RawConsoleAuth::Value("token"), false);
-        assert_eq!(
-            status_of(gate_decision(mode, &auth_headers(Some("Bearer ")), || None)),
-            Some(StatusCode::UNAUTHORIZED)
-        );
-        assert_eq!(
-            status_of(gate_decision(mode, &auth_headers(None), || None)),
-            Some(StatusCode::UNAUTHORIZED)
-        );
+        let mode = ConsoleAuthMode::parse(RawEnv::Value("token"), Posture::Dev);
+        for surface in SURFACES {
+            for header in [Some("Bearer "), Some(ADMIN_BEARER), None] {
+                assert_eq!(
+                    status_of(gate_decision(mode, surface, &auth_headers(header), none)),
+                    Some(StatusCode::UNAUTHORIZED)
+                );
+            }
+        }
     }
 
     #[test]
     fn posture_default_applies_only_when_unset() {
-        let open = ConsoleAuthMode::parse(RawConsoleAuth::Absent, false);
-        assert!(gate_decision(open, &auth_headers(None), configured).is_none());
-        let prod = ConsoleAuthMode::parse(RawConsoleAuth::Absent, true);
+        let open = ConsoleAuthMode::parse(RawEnv::Absent, Posture::Dev);
+        assert!(gate_decision(open, Surface::Console, &auth_headers(None), configured).is_none());
+        let prod = ConsoleAuthMode::parse(RawEnv::Absent, Posture::Production);
         assert_eq!(
-            status_of(gate_decision(prod, &auth_headers(None), configured)),
+            status_of(gate_decision(
+                prod,
+                Surface::Console,
+                &auth_headers(None),
+                configured
+            )),
             Some(StatusCode::UNAUTHORIZED)
         );
-        assert!(gate_decision(prod, &auth_headers(Some("Bearer s3cret")), configured).is_none());
+        assert!(
+            gate_decision(
+                prod,
+                Surface::Console,
+                &auth_headers(Some(ADMIN_BEARER)),
+                configured
+            )
+            .is_none()
+        );
         assert_eq!(
             status_of(gate_decision(
                 ConsoleAuthMode::App,
-                &auth_headers(Some("Bearer s3cret")),
+                Surface::Console,
+                &auth_headers(Some(ADMIN_BEARER)),
                 configured
             )),
             Some(StatusCode::NOT_IMPLEMENTED)
         );
+    }
+
+    #[test]
+    fn metrics_token_never_opens_the_console() {
+        for mode in [ConsoleAuthMode::Token, ConsoleAuthMode::UnsetProd] {
+            for creds in [metrics_only, both] {
+                assert_eq!(
+                    status_of(gate_decision(
+                        mode,
+                        Surface::Console,
+                        &auth_headers(Some(METRICS_BEARER)),
+                        creds
+                    )),
+                    Some(StatusCode::UNAUTHORIZED),
+                    "a metrics credential must be refused on the console"
+                );
+                assert!(
+                    gate_decision(
+                        mode,
+                        Surface::Metrics,
+                        &auth_headers(Some(METRICS_BEARER)),
+                        creds
+                    )
+                    .is_none(),
+                    "a metrics credential must be accepted on /_ipe/metrics"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn both_tokens_each_accepted_in_its_role() {
+        for mode in [ConsoleAuthMode::Token, ConsoleAuthMode::UnsetProd] {
+            for surface in SURFACES {
+                assert!(
+                    gate_decision(mode, surface, &auth_headers(Some(ADMIN_BEARER)), both).is_none(),
+                    "the admin credential must be accepted on {surface:?}"
+                );
+            }
+            assert!(
+                gate_decision(
+                    mode,
+                    Surface::Metrics,
+                    &auth_headers(Some("Basic cHJvbTptM3RyaWNz")),
+                    both
+                )
+                .is_none(),
+                "a Basic metrics credential must be accepted on /_ipe/metrics"
+            );
+            assert_eq!(
+                status_of(gate_decision(
+                    mode,
+                    Surface::Console,
+                    &auth_headers(Some("Basic cHJvbTptM3RyaWNz")),
+                    both
+                )),
+                Some(StatusCode::UNAUTHORIZED)
+            );
+        }
+    }
+
+    #[test]
+    fn metrics_only_production_does_not_mount_console() {
+        // The mount check keys off the admin chain alone.
+        let metrics = Credential::resolve([TokenSource::Set("m3trics".to_owned())], MetricsToken);
+        assert!(metrics.is_configured());
+        let admin = Credential::resolve([TokenSource::Unset, TokenSource::Unset], AdminToken);
+        assert!(!admin.is_configured());
+    }
+
+    #[test]
+    fn credential_chain_precedence() {
+        let first = Credential::resolve(
+            [
+                TokenSource::Set("high".to_owned()),
+                TokenSource::Set("low".to_owned()),
+            ],
+            AdminToken,
+        );
+        assert!(first.admits(&Presented("high".to_owned())));
+        assert!(!first.admits(&Presented("low".to_owned())));
+        let deferred = Credential::resolve(
+            [TokenSource::Unset, TokenSource::Set("low".to_owned())],
+            AdminToken,
+        );
+        assert!(deferred.admits(&Presented("low".to_owned())));
+        let empty: [TokenSource; 0] = [];
+        assert!(matches!(
+            Credential::resolve(empty, AdminToken),
+            Credential::Unset
+        ));
+    }
+
+    #[test]
+    fn non_unicode_token_source_refuses_the_role() {
+        // A garbled higher-precedence token never falls through to a
+        // lower-precedence one.
+        let admin = Credential::resolve(
+            [
+                TokenSource::NotUnicode,
+                TokenSource::Set("s3cret".to_owned()),
+            ],
+            AdminToken,
+        );
+        assert!(matches!(admin, Credential::Unusable));
+        assert!(!admin.is_configured());
+        assert!(!admin.admits(&Presented("s3cret".to_owned())));
+        let creds = || Credentials {
+            admin: Credential::resolve(
+                [
+                    TokenSource::NotUnicode,
+                    TokenSource::Set("s3cret".to_owned()),
+                ],
+                AdminToken,
+            ),
+            metrics: Credential::Unset,
+        };
+        for surface in SURFACES {
+            assert_eq!(
+                status_of(gate_decision(
+                    ConsoleAuthMode::Token,
+                    surface,
+                    &auth_headers(Some(ADMIN_BEARER)),
+                    creds
+                )),
+                Some(StatusCode::UNAUTHORIZED)
+            );
+        }
+    }
+
+    #[test]
+    fn surface_of_path() {
+        assert_eq!(Surface::of_path("/_ipe/metrics"), Some(Surface::Metrics));
+        assert_eq!(Surface::of_path("/_ipe/console"), Some(Surface::Console));
+        assert_eq!(
+            Surface::of_path("/_ipe/console/api/logs"),
+            Some(Surface::Console)
+        );
+        assert_eq!(Surface::of_path("/_ipe/metrics/x"), None);
+        assert_eq!(Surface::of_path("/"), None);
     }
 
     // Pure (no env dependency) — safe as its own test, no race with
