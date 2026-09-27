@@ -229,8 +229,12 @@ pub(super) fn clone_class(env: CloneEnv<'_>, t: &IrType) -> CloneClass {
         }
         IrType::Enum { args, .. } => clone_class_named_composite(env, args.iter()),
         // Ui{msg} / WebRoute(page) — recurse on the message/page type-param.
-        IrType::Ui { msg, .. } => clone_class_composite(env, std::iter::once(msg.as_ref())),
-        IrType::WebRoute(page) => clone_class_composite(env, std::iter::once(page.as_ref())),
+        // Both emit named runtime structs (`Html<M>`, `Route<P>`, …) that derive
+        // `Clone` but never `Copy`, so a `Copy` parameter floors to `CloneOk`.
+        IrType::Ui { msg, .. } => clone_class_named_composite(env, std::iter::once(msg.as_ref())),
+        IrType::WebRoute(page) => {
+            clone_class_named_composite(env, std::iter::once(page.as_ref()))
+        }
     }
 }
 
@@ -264,7 +268,7 @@ pub(super) fn param_is_multiuse_clonable(env: CloneEnv<'_>, ir_ty: &IrType) -> b
 /// The `Clone`-treatment a captured symbol of type `ir_ty` receives inside a
 /// closure body: `Some(true)` clones at the boundary (`.clone()` / `CloneVar`),
 /// `Some(false)` is a genuinely non-`Clone` capture (bare only in depth-0 callee
-/// position, else IPE-L0126), `None` is a `CopyLeaf`/untyped capture left bare.
+/// position, else IPE-L0126), `None` is a `CopyLeaf` capture left bare.
 ///
 /// A bare [`IrType::Generic`] capture clones, exactly as a bare `Generic` PARAM
 /// does under [`param_is_multiuse_clonable`]: `render_fn_generics` stamps
@@ -273,15 +277,14 @@ pub(super) fn param_is_multiuse_clonable(env: CloneEnv<'_>, ir_ty: &IrType) -> b
 /// at the CALLER by that bound before the clone is reached. SINGLE SOURCE OF
 /// TRUTH with `param_is_multiuse_clonable` — both admit a bare `Generic` on the
 /// same emitted `with_clone` bound; if one changes the other must.
-pub(super) fn classify_capture_clone(env: CloneEnv<'_>, ir_ty: Option<&IrType>) -> Option<bool> {
-    match ir_ty {
-        Some(IrType::Generic(_)) => Some(true),
-        Some(t) => match clone_class(env, t) {
-            CloneClass::CloneOk => Some(true),
-            CloneClass::NonClone => Some(false),
-            CloneClass::CopyLeaf => None,
-        },
-        None => None,
+pub(super) fn classify_capture_clone(env: CloneEnv<'_>, ir_ty: &IrType) -> Option<bool> {
+    if matches!(ir_ty, IrType::Generic(_)) {
+        return Some(true);
+    }
+    match clone_class(env, ir_ty) {
+        CloneClass::CloneOk => Some(true),
+        CloneClass::NonClone => Some(false),
+        CloneClass::CopyLeaf => None,
     }
 }
 
@@ -335,7 +338,7 @@ pub(super) fn classify_handler_capture(
     if promotable_binder && ipe_ir::fun_value_arc_promotable(ty) {
         return HandlerCapture::ArcCarrier;
     }
-    match classify_capture_clone(env, Some(ty)) {
+    match classify_capture_clone(env, ty) {
         Some(true) => HandlerCapture::CloneOk,
         Some(false) => HandlerCapture::NonClone,
         None => HandlerCapture::CopyLeaf,
@@ -936,6 +939,13 @@ pub(super) fn rewrite_captured_clones(
     }
 }
 
+/// Refuse (IPE-L0135) a reuse of a non-`Clone` effect-carrier binding `sym`.
+///
+/// Reached only through the lowerer's single move-ownership entry point, so
+/// every used binder of every form (parameter, arm binder, `let`, destructured
+/// component) runs it. The binder's type comes from the lowerer's fail-closed
+/// binder-type resolver: a used binder whose type does not resolve is refused
+/// there, never skipped past this check.
 pub(super) fn reject_nonclone_value_reuse(
     env: CloneEnv<'_>,
     sym: Symbol,
@@ -948,8 +958,25 @@ pub(super) fn reject_nonclone_value_reuse(
     {
         return Ok(());
     }
-    let consumes = super::count_value_consumes(sym, body);
+    // A sequenced task or argument-reversed kernel whose first-evaluated operand
+    // the emitter must rewrite to `sym.clone()` (so the continuation can still
+    // capture `sym`) has no `Clone` impl to call.
+    if ipe_ir::seq_clone::seq_rewrite_clones_symbol(sym, body) {
+        return Err(super::unsupported(span, Feature::NonCloneValueReuse));
+    }
+    // A by-value pattern binder of a `Copy` record field copies it, so a
+    // pattern that moves no part does not consume `sym`.
+    let copy_fields = super::copy_record_fields(env, ir_ty);
+    let consumes = super::count_value_consumes(sym, &copy_fields, body);
     if consumes > 1 {
+        return Err(super::unsupported(span, Feature::NonCloneValueReuse));
+    }
+    // A borrowing read (`sym.field`, a length probe) that the emitted order
+    // evaluates AFTER a move of `sym` observes a moved value (E0382), even
+    // though the borrow itself is not a consume. A by-value pattern match
+    // (`match sym`, `let <pat> = sym`) moves the parts its binders bind, so a
+    // later read of a moved part is the same hazard.
+    if super::nonclone_read_after_move(env, sym, ir_ty, body) {
         return Err(super::unsupported(span, Feature::NonCloneValueReuse));
     }
     // A single consume that is a bare `Var` update base, combined with any use
@@ -1208,21 +1235,12 @@ pub(super) fn rewrite_multiuse_clones(sym: Symbol, remaining: &mut usize, expr: 
         // one cloned.
         Expr::Call {
             callee,
-            mut args,
+            args,
             pin,
             on_form,
         } => {
-            let reversed = callee.evaluates_args_reversed();
-            if reversed {
-                args.reverse();
-            }
-            let mut args: Vec<Expr> = args
-                .into_iter()
-                .map(|a| rewrite_multiuse_clones(sym, remaining, a))
-                .collect();
-            if reversed {
-                args.reverse();
-            }
+            let args =
+                callee.map_args_in_eval_order(args, |a| rewrite_multiuse_clones(sym, remaining, a));
             Expr::Call {
                 callee,
                 args,
