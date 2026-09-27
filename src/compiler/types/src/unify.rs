@@ -345,6 +345,7 @@ fn unify_nonstructure(
 /// side is the empty builtin home and the other passes [`empty_home_compat`].
 /// Arity is the caller's concern; the head alone decides identity, so two
 /// distinct constructors of equal arity are never conflated.
+#[must_use]
 pub fn con_heads_compatible(
     m1: &[ipe_intern::Symbol],
     n1: ipe_intern::Symbol,

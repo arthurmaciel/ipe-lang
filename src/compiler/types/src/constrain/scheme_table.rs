@@ -95,6 +95,7 @@ impl Builtins {
     /// Resolve a structural [`BuiltinTag`] to the interned type-constructor
     /// [`Symbol`] the interpreter puts in the `Ty::Con` for that built-in.
     #[allow(clippy::too_many_lines)] // one arm per BuiltinTag variant, deliberately exhaustive
+    #[must_use]
     pub const fn builtin_symbol(&self, tag: BuiltinTag) -> Symbol {
         match tag {
             BuiltinTag::Int => self.int,
@@ -217,6 +218,7 @@ impl Builtins {
 
     /// Resolve a structural [`FieldTag`] to the interned field-name [`Symbol`]
     /// the interpreter uses as the `Ty::Record` `BTreeMap` key for that field.
+    #[must_use]
     pub const fn field_symbol(&self, tag: FieldTag) -> Symbol {
         match tag {
             FieldTag::MigrationName => self.migration_f_name,
@@ -318,6 +320,7 @@ impl Builtins {
     /// distinct from the unqualified [`BuiltinTag::UiAttribute`]),
     /// [`BuiltinTag::EmailProvider`], [`BuiltinTag::Duration`], the
     /// `Ipe.Db.Store` query-algebra ADTs, and [`BuiltinTag::Codec`].
+    #[must_use]
     pub fn builtin_con_module(&self, tag: BuiltinTag) -> &[Symbol] {
         match tag {
             BuiltinTag::HtmlAttribute => std::slice::from_ref(&self.html_con),
@@ -354,6 +357,7 @@ impl Builtins {
     /// ([`con_heads_compatible`]): the names agree and the homes agree, or one
     /// side is the empty builtin home and the other a stdlib / reserved spelling
     /// of that builtin. Two distinct constructors of equal arity never match.
+    #[must_use]
     pub fn con_head_is(
         &self,
         tag: BuiltinTag,
