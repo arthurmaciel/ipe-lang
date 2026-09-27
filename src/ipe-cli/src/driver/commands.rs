@@ -3493,12 +3493,7 @@ pub fn user_sources_for_unsafe_scan(
     {
         return discovered
             .iter()
-            .map(|d| {
-                crate::io_bounded::read_to_string_capped(
-                    &d.path,
-                    crate::io_bounded::SOURCE_READ_CAP,
-                )
-            })
+            .map(|d| crate::io_bounded::read_walked_source(&d.path))
             .collect::<Result<Vec<_>, _>>();
     }
     // Single file (or a manifest that failed to parse — the build will surface
@@ -3724,10 +3719,7 @@ pub fn named_sources_for_web_scan(
         let discovered = project::discover_modules(&manifest.src_root)?;
         let mut out = Vec::with_capacity(discovered.len());
         for m in &discovered {
-            let src = crate::io_bounded::read_to_string_capped(
-                &m.path,
-                crate::io_bounded::SOURCE_READ_CAP,
-            )?;
+            let src = crate::io_bounded::read_walked_source(&m.path)?;
             out.push((m.module_path.join("."), src));
         }
         return Ok(out);

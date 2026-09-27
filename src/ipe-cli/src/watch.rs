@@ -502,10 +502,7 @@ pub(crate) fn resolve_project_sources(
         let discovered = project::discover_modules(&manifest.src_root)?;
         let mut sources: BTreeMap<Vec<String>, (PathBuf, String)> = BTreeMap::new();
         for m in &discovered {
-            let src = crate::io_bounded::read_to_string_capped(
-                &m.path,
-                crate::io_bounded::SOURCE_READ_CAP,
-            )?;
+            let src = crate::io_bounded::read_walked_source(&m.path)?;
             sources.insert(m.module_path.clone(), (m.path.clone(), src));
         }
         let cargo_name = ipe_backend_rust::sanitize_cargo_name(&manifest.name);

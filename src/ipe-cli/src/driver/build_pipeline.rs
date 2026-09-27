@@ -581,10 +581,7 @@ pub fn read_discovered_sources(
                 (entry.to_path_buf(), entry_source.to_owned()),
             );
         } else {
-            let src = crate::io_bounded::read_to_string_capped(
-                &m.path,
-                crate::io_bounded::SOURCE_READ_CAP,
-            )?;
+            let src = crate::io_bounded::read_walked_source(&m.path)?;
             sources.insert(m.module_path.clone(), (m.path.clone(), src));
         }
     }
@@ -2232,8 +2229,7 @@ pub fn build_project_with_options(
     // For each module, read its source and extract imports.
     let mut sources: BTreeMap<Vec<String>, (PathBuf, String)> = BTreeMap::new();
     for m in &discovered {
-        let src =
-            crate::io_bounded::read_to_string_capped(&m.path, crate::io_bounded::SOURCE_READ_CAP)?;
+        let src = crate::io_bounded::read_walked_source(&m.path)?;
         sources.insert(m.module_path.clone(), (m.path.clone(), src));
     }
 

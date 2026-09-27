@@ -132,7 +132,18 @@ pub fn open_error(path: &Path, source: std::io::Error) -> CliError {
     let names_non_regular = false;
     if names_non_regular {
         source_refused(path, SourceRefusal::NotRegularFile)
-    } else if source.kind() == std::io::ErrorKind::PermissionDenied {
+    } else {
+        access_error(path, source)
+    }
+}
+
+/// The typed error for a read or listing of `path` that failed with `source`.
+///
+/// A permission failure is [`SourceRefusal::AccessDenied`]; anything else
+/// stays [`CliError::Io`].
+#[must_use]
+pub fn access_error(path: &Path, source: std::io::Error) -> CliError {
+    if source.kind() == std::io::ErrorKind::PermissionDenied {
         source_refused(path, SourceRefusal::AccessDenied)
     } else {
         CliError::Io {

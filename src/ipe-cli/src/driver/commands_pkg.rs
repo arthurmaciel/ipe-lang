@@ -2173,10 +2173,7 @@ impl PackageSourceSet {
 
         let mut sources: BTreeMap<Vec<String>, (PathBuf, String)> = BTreeMap::new();
         for m in &entries {
-            let src = crate::io_bounded::read_to_string_capped(
-                &m.path,
-                crate::io_bounded::SOURCE_READ_CAP,
-            )?;
+            let src = crate::io_bounded::read_walked_source(&m.path)?;
             sources.insert(m.module_path.clone(), (m.path.clone(), src));
         }
 

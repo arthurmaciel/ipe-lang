@@ -143,7 +143,8 @@ impl From<crate::diff::FloorOverflow> for DiffError {
 /// [`DiffError::Io`] on a read failure and [`DiffError::Empty`] when the tree
 /// carries no `.ipe` modules.
 pub fn read_tree(root: &Path) -> Result<BTreeMap<ModulePath, (PathBuf, String)>, DiffError> {
-    let discovered = if root.is_dir() {
+    let walked = root.is_dir();
+    let discovered = if walked {
         // A conventional package keeps modules under `src/`; fall back to the
         // root itself when there is no `src/` (a flat fixture tree).
         let src_root = {
@@ -172,15 +173,18 @@ pub fn read_tree(root: &Path) -> Result<BTreeMap<ModulePath, (PathBuf, String)>,
 
     let mut sources = BTreeMap::new();
     for m in discovered {
-        let src =
+        let read = if walked {
+            crate::io_bounded::read_walked_source(&m.path)
+        } else {
             crate::io_bounded::read_to_string_capped(&m.path, crate::io_bounded::SOURCE_READ_CAP)
-                .map_err(|e| match e {
-                crate::CliError::Io { path, source } => DiffError::Io { path, source },
-                other => DiffError::Io {
-                    path: m.path.clone(),
-                    source: std::io::Error::other(other.to_string()),
-                },
-            })?;
+        };
+        let src = read.map_err(|e| match e {
+            crate::CliError::Io { path, source } => DiffError::Io { path, source },
+            other => DiffError::Io {
+                path: m.path.clone(),
+                source: std::io::Error::other(other.to_string()),
+            },
+        })?;
         sources.insert(m.module_path, (m.path, src));
     }
     if sources.is_empty() {
