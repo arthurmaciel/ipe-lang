@@ -26,6 +26,8 @@
 //! | `consume_beside_continuation` | `Task.andThen (\x -> both (consume w) x) (consume w)` | fail-closed IPE-L0135 |
 //! | `continuation_in_reentrant_lambda` | `Task.map (\n -> Task.andThen (\x -> both (consume w) x) (tagTask n)) ..` | fail-closed IPE-L0126 |
 //! | `continuation_in_partial_application` | `let step = both (Task.andThen (\_ -> consume w) (tagTask 1)) in step 1` | fail-closed IPE-L0126 |
+//! | `continuation_move_beside_shared_clone` | `let w = {..} in Task.andThen (\n -> Task.map (\m -> m + n + String.length s) (consume w)) (Task.succeed (String.length s))` | builds + prints `13` |
+//! | `bind_move_beside_shared_clone` | `do { n <- Task.succeed (String.length s) ; Task.map (\m -> ..) (consume w) }` | builds + prints `13` |
 //!
 //! A kernel call's argument order is chosen by its emitter, so a move and a
 //! read of the same record in sibling kernel arguments are rejected in either
@@ -51,6 +53,10 @@
 //! continuation is IPE-L0135. A continuation nested in a closure that may run
 //! again (a re-entrant lambda or a partial application's residual) would move
 //! `w` twice, so it is refused with IPE-L0126.
+//!
+//! A continuation that moves `w` and also captures a `Clone` binding the effect
+//! reads (`s`) gets a `let s = s.clone();` prelude around its lambda; the
+//! prelude keeps the closure an owned `FnOnce`, so the move still builds.
 //!
 //! ```text
 //! # gate check only (fast):
@@ -494,6 +500,46 @@ main =
     run { job = Task.succeed 7, tag = 3 }
 ";
 
+/// A continuation moves the `let`-bound `w` and captures `s`, which the effect
+/// also reads, so the continuation carries a clone prelude for `s`. Prints `13`.
+const CONTINUATION_MOVE_BESIDE_SHARED_CLONE: &str = r#"
+
+total : String -> Task Error Int
+total s =
+    let
+        w =
+            { job = Task.succeed 7, tag = 3 }
+    in
+    Task.andThen
+        (\n -> Task.map (\m -> m + n + String.length s) (consume w))
+        (Task.succeed (String.length s))
+
+
+main : Task Error ()
+main =
+    Task.andThen (\t -> Io.println (String.fromInt t)) (total "abc")
+"#;
+
+/// The same shape through a `<-` bind, which desugars to the continuation.
+/// Prints `13`.
+const BIND_MOVE_BESIDE_SHARED_CLONE: &str = r#"
+
+total : String -> Task Error Int
+total s =
+    let
+        w =
+            { job = Task.succeed 7, tag = 3 }
+    in
+    do
+        n <- Task.succeed (String.length s)
+        Task.map (\m -> m + n + String.length s) (consume w)
+
+
+main : Task Error ()
+main =
+    Task.andThen (\t -> Io.println (String.fromInt t)) (total "abc")
+"#;
+
 fn seq_program(body: &str) -> String {
     format!("{PRELUDE}{SEQ_HELPERS}{body}")
 }
@@ -643,5 +689,23 @@ fn continuation_in_partial_application_fails_closed() {
         "continuation_in_partial_application",
         &seq_program(CONTINUATION_IN_PARTIAL_APPLICATION),
         ipe_diagnostics::IPE_L0126,
+    );
+}
+
+#[test]
+fn continuation_move_beside_shared_clone_round_trips() {
+    assert_accepted(
+        "continuation_move_beside_shared_clone",
+        &program(CONTINUATION_MOVE_BESIDE_SHARED_CLONE),
+        "13",
+    );
+}
+
+#[test]
+fn bind_move_beside_shared_clone_round_trips() {
+    assert_accepted(
+        "bind_move_beside_shared_clone",
+        &program(BIND_MOVE_BESIDE_SHARED_CLONE),
+        "13",
     );
 }

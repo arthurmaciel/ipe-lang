@@ -13,6 +13,7 @@
 
 mod ir;
 pub mod let_inline;
+pub mod once_callback;
 mod pretty;
 pub mod record_shapes;
 pub mod seq_clone;

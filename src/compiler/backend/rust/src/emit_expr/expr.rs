@@ -4,11 +4,12 @@ use super::{
     combine_guards, emit_apply, emit_arm_head, emit_binding_stmts, emit_config_ctor_call,
     emit_css_value_call, emit_db_call, emit_ffi_glued_call, emit_func_value, emit_html_template,
     emit_http_builder_call, emit_http_call, emit_json_decoder_call, emit_lambda,
-    emit_lambda_unboxed, emit_match_scrutinee, emit_process_run_in_pty_call,
+    emit_lambda_unboxed, emit_match_scrutinee, emit_once_closure, emit_process_run_in_pty_call,
     emit_process_run_with_call, emit_record, emit_server_call, emit_shared_lambda,
     emit_task_retry_call, emit_tea_call, emit_ui_call, emit_ui_template, emit_update,
     float_literal, free_vars, indent_of, inlined_let_body, ir_type_is_definitely_copy,
-    kernel_swaps_first_two, op_str, render_type, rust_string_literal,
+    kernel_swaps_first_two, once_callback_split, once_slot_sibling_clones, op_str,
+    peel_once_closure, render_type, rust_string_literal,
 };
 use crate::EmitCtx;
 
@@ -521,62 +522,16 @@ pub fn emit_expr_at(
             } else {
                 pin_turbofish
             };
-            // `Task.andThen cont effect` renders (after the `swaps_first_two`
-            // reverse below) as `task_and_then(effect, cont)`. Rust evaluates the
-            // args left-to-right, so `effect` runs BEFORE `cont`'s closure is
-            // built. A non-Copy handle that `effect` MOVES (e.g. an
-            // `IpeCacheHandle` passed by value into `Cache.put cache …`) is gone
-            // by the time `cont` tries to capture the same binding — the
-            // `let h = h.clone()` the lowerer inserts for `cont`'s capture then
-            // borrows a moved value (E0382). Clone every var `cont` captures at
-            // its `effect` use site so the original survives into the closure —
-            // the same IR-level `clone_targets_in_expr` rewrite the `TaskSeq` arm
-            // applies to its auto-forced continuation. `effect` (args[1] in Ipê
-            // order) is the only arg rewritten; a no-op when `cont` captures none
-            // of `effect`'s vars, so non-reusing chains stay byte-identical.
-            let rewritten_effect: Option<Expr> =
-                if matches!(callee, Callee::Kernel(KernelFn::TaskAndThen))
-                    && let [cont, effect] = args.as_slice()
-                {
-                    // Only `effect`'s own free vars can be rewritten, and only if
-                    // `cont` also captures them. Collect `effect`'s vars first (it
-                    // is the small head task); when it has none there is nothing to
-                    // clone, so the whole-continuation `free_vars(cont)` walk is
-                    // skipped. Otherwise the rewrite targets are exactly the shared
-                    // vars — folding over that subset instead of all of `cont`'s
-                    // captures is a proven no-op difference (a target absent from
-                    // `effect` never matches), so the emitted bytes are identical.
-                    let effect_vars = free_vars(effect);
-                    let targets: std::collections::BTreeSet<Symbol> = if effect_vars.is_empty() {
-                        std::collections::BTreeSet::new()
-                    } else {
-                        free_vars(cont)
-                            .intersection(&effect_vars)
-                            .copied()
-                            .collect()
-                    };
-                    if targets.is_empty() {
-                        None
-                    } else {
-                        let row_binders: std::collections::BTreeSet<Symbol> =
-                            generics.row_binders().iter().copied().collect();
-                        Some(clone_targets_in_expr(
-                            effect.clone(),
-                            &targets,
-                            &row_binders,
-                        ))
-                    }
-                } else {
-                    None
-                };
+            // An at-most-once call (`Task.andThen cont effect`) builds its slot
+            // closure after the siblings; see [`once_slot_sibling_clones`].
+            let sibling_clones = once_slot_sibling_clones(callee, args, generics);
+            let once_slot = once_callback_split(callee, args).map(|(slot, _)| slot);
             let mut parts = Vec::with_capacity(args.len());
             for (i, arg) in args.iter().enumerate() {
-                // For a `Task.andThen`, substitute the clone-rewritten effect (the
-                // second Ipê arg) so its shared-handle reads clone rather than move.
-                let arg: &Expr = match (&rewritten_effect, i) {
-                    (Some(rw), 1) => rw,
-                    _ => arg,
-                };
+                let arg: &Expr = sibling_clones
+                    .iter()
+                    .find(|(j, _)| *j == i)
+                    .map_or(arg, |(_, rewritten)| rewritten);
                 // A `Fun` param this callee monomorphized to an `impl Fn`
                 // generic accepts the closure UNBOXED, so a lambda-literal
                 // argument skips the `Box::new(..)` wrapper and rustc inlines it
@@ -586,32 +541,14 @@ pub fn emit_expr_at(
                 // value that itself implements `Fn`, so it fills the generic
                 // slot with no change and no risk.
                 //
-                // An at-most-once callback slot (`KernelFn::once_callback_arg`,
-                // e.g. `Task.andThen cont effect`'s continuation at Ipê arg index
-                // 0) must still be boxed because the preamble wrapper takes
-                // `Box<dyn FnOnce(A) -> IpeTask<B> + Send + 'static>`; the
-                // unannotated `Box::new(move ..)` lets rustc infer `FnOnce`, so a
-                // capture the lowerer moved into the closure body compiles. Emitting
-                // `Box::new(move |x| -> R { body })` directly (without the
-                // `let __ipe_fn: Box<dyn Fn...> = Box::new(...)` type-annotation
-                // wrapper that `emit_lambda` produces) is sufficient: rustc infers
-                // the trait-object coercion from the parameter position, and the
-                // absence of the explicit annotation is what keeps rustc's
-                // type-checking linear in the number of chained `Task.andThen`
-                // calls (the annotation form causes super-linear work at depth).
-                let rendered = if matches!(callee, Callee::Kernel(k) if k.once_callback_arg() == Some(i))
-                    && let Expr::Lambda { params, ret, body }
-                    | Expr::SharedLambda { params, ret, body } = arg
+                // An at-most-once callback slot is rendered by
+                // [`emit_once_closure`]: its clone prelude, then an unannotated
+                // `Box::new(move ..)` whose `FnOnce` rustc infers from the
+                // runtime wrapper's `Box<dyn FnOnce(..)>` parameter.
+                let rendered = if once_slot == Some(i)
+                    && let Some(closure) = peel_once_closure(arg)
                 {
-                    let inner =
-                        emit_lambda_unboxed(ctx, params, ret, body, indent, child, generics)?;
-                    // Splice the already-built child into a pre-sized buffer rather
-                    // than re-copying it through `format!` — same bytes, one alloc.
-                    let mut rendered = String::with_capacity(inner.len() + "Box::new()".len());
-                    rendered.push_str("Box::new(");
-                    rendered.push_str(&inner);
-                    rendered.push(')');
-                    rendered
+                    emit_once_closure(ctx, &closure, indent, child, generics)?
                 } else {
                     let unboxed = if let Callee::Func(id) = callee
                         && ctx.call_arg_is_impl_fn(*id, i)

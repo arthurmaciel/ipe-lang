@@ -14,6 +14,7 @@ pub use crate::naming::kernel_name;
 pub use crate::render::{RenderConfig, render_seeded};
 pub use ipe_diagnostics::{DResult, Diagnostic, LowerError, Span};
 pub use ipe_intern::Symbol;
+pub use ipe_ir::once_callback::{OnceClosure, once_callback_split, peel_once_closure};
 pub use ipe_ir::{
     Arm, BinOp, BoundSet, Callee, Expr, Func, IrType, KernelClass, KernelFn, MAX_IR_RENDER_DEPTH,
     Match, ModPath, Pat,

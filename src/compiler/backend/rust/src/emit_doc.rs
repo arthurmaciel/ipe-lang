@@ -56,9 +56,10 @@ use ipe_ir::{BinOp, Callee, Expr, IrType, KernelFn, MAX_IR_RENDER_DEPTH, ModPath
 use crate::EmitCtx;
 use crate::doc::{ChainOperand, Doc};
 use crate::emit_expr::{
-    call_has_kernel_special_case, callee_name, clone_targets_in_expr, combine_guards,
+    OnceClosure, call_has_kernel_special_case, callee_name, clone_targets_in_expr, combine_guards,
     emit_arm_head, emit_binding_stmts, emit_expr_at, emit_match_scrutinee, free_vars,
-    inlined_let_body, kernel_swaps_first_two, record_struct_name, wants_arc_ctor,
+    inlined_let_body, kernel_swaps_first_two, once_callback_split, once_slot_sibling_clones,
+    peel_once_closure, record_struct_name, wants_arc_ctor,
 };
 use crate::emit_types::{GenericScope, render_type};
 
@@ -1038,49 +1039,12 @@ fn build_generic_call(
     } else {
         pin_turbofish
     };
-    // `Task.andThen cont effect` renders (after the swap-reverse below) as
-    // `task_and_then(effect, cont)`. Rust evaluates the args left-to-right, so
-    // `effect` runs BEFORE `cont`'s closure is built; a non-Copy handle that
-    // `effect` MOVES (an `IpeCacheHandle` passed by value into `Cache.put cache …`)
-    // is gone by the time `cont` captures the same binding, and the `let h =
-    // h.clone()` the lowerer inserts for `cont`'s capture then borrows a moved
-    // value (E0382). Clone every var `cont` captures at its `effect` use site so
-    // the original survives into the closure — the same rewrite `build_task_seq`
-    // applies to its auto-forced continuation. A no-op when `cont` captures none
-    // of `effect`'s vars, so non-reusing chains stay byte-identical.
-    let swapped_effect: Option<Expr> = if matches!(callee, Callee::Kernel(KernelFn::TaskAndThen))
-        && let [cont, effect] = args
-    {
-        let cont_captures = free_vars(cont);
-        let row_binders: std::collections::BTreeSet<Symbol> =
-            generics.row_binders().iter().copied().collect();
-        Some(clone_targets_in_expr(
-            effect.clone(),
-            &cont_captures,
-            &row_binders,
-        ))
-    } else {
-        None
-    };
-    let mut docs = match &swapped_effect {
-        Some(effect_rw) => {
-            let [cont, _] = args else {
-                return Err(Diagnostic::CompilerBug {
-                    where_: "ipe_backend_rust::build_generic_call",
-                    detail: "Task.andThen effect-clone rewrite lost its two args".to_owned(),
-                });
-            };
-            build_call_args_task_and_then(
-                ctx,
-                callee,
-                &[cont.clone(), effect_rw.clone()],
-                indent,
-                child,
-                generics,
-            )?
-        }
-        None => build_call_args_task_and_then(ctx, callee, args, indent, child, generics)?,
-    };
+    // An at-most-once call (`Task.andThen cont effect`) builds its slot closure
+    // after the siblings; each sibling clones what the slot captures, see
+    // [`once_slot_sibling_clones`].
+    let sibling_clones = once_slot_sibling_clones(callee, args, generics);
+    let mut docs =
+        build_call_args_once_slot(ctx, callee, args, &sibling_clones, indent, child, generics)?;
     // Container-first kernels take their two arguments in the opposite order to
     // the Ipê call; the string emitter reverses the rendered `parts`, so the Doc
     // builder reverses the built arg docs to carry the identical token sequence.
@@ -1094,34 +1058,76 @@ fn build_generic_call(
     ))
 }
 
-/// Build a positional argument list for a `Task.andThen` call, handling the
-/// continuation lambda (Ipê arg index 0) specially: instead of the full
-/// `{ let __ipe_fn: Box<dyn Fn...> = Box::new(...); __ipe_fn }` block that
-/// [`build_lambda`] produces, emit `Box::new(move |x: T| -> R { body })` directly.
-/// The preamble wrapper takes `Box<dyn FnOnce(A) -> IpeTask<B> + Send + 'static>`,
-/// so the `Box::new` is still required; dropping the `let __ipe_fn` type-annotation
-/// is sufficient because rustc infers the coercion from the parameter position.
-/// Removing the explicit annotation is what keeps rustc type-checking linear in the
-/// number of chained `Task.andThen` calls (the annotation form causes super-linear
-/// work at depth). All other args fall through to [`build_call_args_with_impl_fn`].
-fn build_call_args_task_and_then(
+/// Build a positional argument list whose at-most-once slot takes an unannotated closure.
+///
+/// Mirrors the string emitter's `Expr::Call` tail: each argument named in
+/// `sibling_clones` is replaced by its capture-cloning rewrite, and a slot
+/// argument [`peel_once_closure`] accepts renders through
+/// [`build_once_closure`] rather than the `Fn`-annotated [`build_lambda`] block.
+/// A call with no once slot routes to [`build_call_args_with_impl_fn`].
+fn build_call_args_once_slot(
     ctx: &EmitCtx,
     callee: &Callee,
     args: &[Expr],
+    sibling_clones: &[(usize, Expr)],
     indent: usize,
     child: u16,
     generics: GenericScope,
 ) -> DResult<Vec<Doc>> {
-    if matches!(callee, Callee::Kernel(k) if k.once_callback_arg() == Some(0))
-        && let [cont, effect] = args
-        && let Expr::Lambda { params, ret, body } | Expr::SharedLambda { params, ret, body } = cont
-    {
-        let closure = build_closure(ctx, params, ret, body, indent, child, generics)?;
-        let cont_doc = Doc::concat(vec![Doc::text("Box::new("), closure, Doc::text(")")]);
-        let effect_doc = build_doc(ctx, effect, indent, child, generics)?;
-        return Ok(vec![cont_doc, effect_doc]);
+    let Some((slot, _)) = once_callback_split(callee, args) else {
+        return build_call_args_with_impl_fn(ctx, callee, args, indent, child, generics);
+    };
+    let mut docs = Vec::with_capacity(args.len());
+    for (i, arg) in args.iter().enumerate() {
+        let arg: &Expr = sibling_clones
+            .iter()
+            .find(|(j, _)| *j == i)
+            .map_or(arg, |(_, rewritten)| rewritten);
+        let doc = if i == slot
+            && let Some(closure) = peel_once_closure(arg)
+        {
+            build_once_closure(ctx, &closure, indent, child, generics)?
+        } else {
+            build_doc(ctx, arg, indent, child, generics)?
+        };
+        docs.push(doc);
     }
-    build_call_args_with_impl_fn(ctx, callee, args, indent, child, generics)
+    Ok(docs)
+}
+
+/// Build an at-most-once slot closure: its clone prelude around an unannotated `Box::new(move ..)`.
+///
+/// Mirrors [`crate::emit_expr::emit_once_closure`] token-for-token: each prelude
+/// binding wraps the rest in the one-statement [`let_block`] shape of
+/// [`build_let`], outermost first. Dropping the `let __ipe_fn: Box<dyn Fn..>`
+/// annotation lets rustc infer `FnOnce` from the runtime wrapper's parameter (so
+/// a moved capture compiles) and keeps its type-checking linear in the depth of
+/// chained `Task.andThen` calls.
+fn build_once_closure(
+    ctx: &EmitCtx,
+    closure: &OnceClosure<'_>,
+    indent: usize,
+    child: u16,
+    generics: GenericScope,
+) -> DResult<Doc> {
+    let lambda = build_closure(
+        ctx,
+        closure.params,
+        closure.ret,
+        closure.body,
+        indent,
+        child,
+        generics,
+    )?;
+    let boxed = Doc::concat(vec![Doc::text("Box::new("), lambda, Doc::text(")")]);
+    closure
+        .clones
+        .iter()
+        .rev()
+        .try_fold(boxed, |body, (binder, source)| {
+            let value = Doc::owned(format!("{}.clone()", ctx.emit_ident(*source)?));
+            Ok(let_block(&ctx.emit_ident(*binder)?, value, body))
+        })
 }
 
 /// Build a positional argument list, passing a lambda-literal argument UNBOXED
@@ -1275,23 +1281,27 @@ fn build_let(
     let name_s = ctx.emit_ident(name)?;
     let value_doc = build_doc(ctx, value, indent, child, generics)?;
     let body_doc = build_doc(ctx, body, indent, child, generics)?;
-    // One-statement block: `let name = value;` then `body`, each on its own line.
-    Ok(Doc::concat(vec![
+    Ok(let_block(&name_s, value_doc, body_doc))
+}
+
+/// The one-statement block `({ let name = value; body })`, statement and body each on its own line.
+fn let_block(name: &str, value: Doc, body: Doc) -> Doc {
+    Doc::concat(vec![
         Doc::text("({"),
         Doc::nest(
             4,
             Doc::concat(vec![
                 Doc::HardLine,
-                Doc::owned(format!("let {name_s} = ")),
-                value_doc,
+                Doc::owned(format!("let {name} = ")),
+                value,
                 Doc::text(";"),
                 Doc::HardLine,
-                body_doc,
+                body,
             ]),
         ),
         Doc::HardLine,
         Doc::text("})"),
-    ]))
+    ])
 }
 
 /// Build the `Doc` for a `Destructure` block, mirroring

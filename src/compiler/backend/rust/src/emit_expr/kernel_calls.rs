@@ -1,9 +1,9 @@
 use super::{
     ArgPlan, Callee, DResult, Diagnostic, Expr, GenericScope, Guard, IrType, KernelClass, KernelFn,
     LitKind, LowerError, NativeUiEmit, Span, Symbol, UiDelegate, UiEmitPlan,
-    appearance_literal_record_fields, callee_name, emit_expr_at, emit_lambda_unboxed,
-    emit_shared_lambda, emit_sub_arm, float_literal, free_vars, kernel_name, render_type,
-    shape_appearance_literal_args, ui_call_shape,
+    appearance_literal_record_fields, callee_name, clone_targets_in_expr, emit_expr_at,
+    emit_lambda_unboxed, emit_shared_lambda, emit_sub_arm, float_literal, free_vars, kernel_name,
+    render_type, shape_appearance_literal_args, ui_call_shape,
 };
 use crate::EmitCtx;
 use core::fmt::Write as _;
@@ -38,6 +38,85 @@ pub const fn kernel_swaps_first_two(k: ipe_ir::KernelFn) -> bool {
             // sites (see `Expr::TaskSeq` below for the auto-force counterpart).
             | KernelFn::TaskAndThen
     )
+}
+
+/// Every at-most-once callback slot is built after its sibling argument.
+///
+/// The lowerer lets an inline lambda in a [`KernelFn::once_callback_arg`] slot
+/// move its non-`Clone` captures; that is sound only while the emitter renders
+/// the slot's closure after every other argument has been evaluated. For the
+/// two-argument once-slot kernels that order is slot 0 with the swapped,
+/// closure-last rendering of [`kernel_swaps_first_two`].
+const fn once_callback_slots_are_built_last() -> bool {
+    let mut rest = KernelFn::ALL;
+    while let [kernel, tail @ ..] = rest {
+        if let Some(slot) = kernel.once_callback_arg()
+            && (slot != 0 || !kernel_swaps_first_two(*kernel))
+        {
+            return false;
+        }
+        rest = tail;
+    }
+    true
+}
+
+// IPE-RUST-AUDIT:ACCEPTED — build-time drift tripwire, not a runtime panic. The
+// predicate is evaluated in a `const` context, so a once-callback slot that the
+// emitter would build before its sibling argument breaks the BUILD (a moved
+// capture would otherwise be gone before the sibling reads it).
+#[allow(clippy::assertions_on_constants)] // the constant IS the tripwire
+const _: () = assert!(
+    once_callback_slots_are_built_last(),
+    "every KernelFn::once_callback_arg slot must be 0 on a kernel_swaps_first_two kernel"
+);
+
+/// Sibling arguments of an at-most-once call rewritten to clone what the slot captures.
+///
+/// The slot's closure is built after its siblings, so a sibling that MOVES a
+/// binding the closure also captures (an `IpeCacheHandle` passed by value into
+/// `Cache.put cache ..`) would leave the closure's capture reading a moved value
+/// (E0382). Each sibling's free vars shared with the slot argument become
+/// `CloneVar`s (the IR-level [`clone_targets_in_expr`] rewrite the `TaskSeq` arm
+/// applies to its auto-forced continuation). Only siblings that change are
+/// returned, keyed by argument index; a call with no once slot or no shared var
+/// yields none, so non-reusing chains stay byte-identical.
+#[must_use]
+pub fn once_slot_sibling_clones(
+    callee: &Callee,
+    args: &[Expr],
+    generics: GenericScope,
+) -> Vec<(usize, Expr)> {
+    let Some((slot, slot_arg)) = ipe_ir::once_callback::once_callback_split(callee, args) else {
+        return Vec::new();
+    };
+    let mut slot_vars: Option<std::collections::BTreeSet<Symbol>> = None;
+    let mut rewrites = Vec::new();
+    for (i, sibling) in args.iter().enumerate() {
+        if i == slot {
+            continue;
+        }
+        // The sibling is the small head task: with no vars of its own there is
+        // nothing to clone and the whole-closure walk is skipped.
+        let sibling_vars = free_vars(sibling);
+        if sibling_vars.is_empty() {
+            continue;
+        }
+        let targets: std::collections::BTreeSet<Symbol> = slot_vars
+            .get_or_insert_with(|| free_vars(slot_arg))
+            .intersection(&sibling_vars)
+            .copied()
+            .collect();
+        if targets.is_empty() {
+            continue;
+        }
+        let row_binders: std::collections::BTreeSet<Symbol> =
+            generics.row_binders().iter().copied().collect();
+        rewrites.push((
+            i,
+            clone_targets_in_expr(sibling.clone(), &targets, &row_binders),
+        ));
+    }
+    rewrites
 }
 
 /// Whether a `Call` node hits one of the bespoke kernel special cases the

@@ -204,18 +204,18 @@ mod tests {
         Ok(())
     }
 
-    /// Every at-most-once callback slot is an owned `FnOnce` emitted last.
+    /// Every at-most-once callback slot is an owned `FnOnce` in the runtime wrapper.
     ///
     /// The lowerer lets an inline lambda in that slot move its non-`Clone`
     /// captures; that is sound only while the runtime wrapper takes the slot as
-    /// `Box<dyn FnOnce(..)>` and the emitter builds the closure after every other
-    /// argument has been evaluated (the swapped, closure-last order).
+    /// `Box<dyn FnOnce(..)>`. The closure-last emit order is the build-time
+    /// `const` check beside `kernel_swaps_first_two`.
     #[test]
-    fn once_callback_slots_are_fn_once_and_built_last() {
+    fn once_callback_slots_are_fn_once() {
         for &k in ipe_ir::KernelFn::ALL {
-            let Some(slot) = k.once_callback_arg() else {
+            if k.once_callback_arg().is_none() {
                 continue;
-            };
+            }
             let name = crate::naming::kernel_name(k);
             let header = format!("pub fn {name}<");
             let signature = GOLDEN.find(&header).and_then(|start| {
@@ -226,10 +226,6 @@ mod tests {
             assert!(
                 signature.is_some_and(|sig| sig.contains("Box<dyn FnOnce(")),
                 "{name}: once-callback slot must be `Box<dyn FnOnce(..)>` in the runtime wrapper"
-            );
-            assert!(
-                slot == 0 && crate::emit_expr::kernel_swaps_first_two(k),
-                "{name}: once-callback closure must be emitted after the other argument"
             );
         }
     }

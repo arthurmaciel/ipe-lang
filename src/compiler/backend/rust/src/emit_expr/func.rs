@@ -1,8 +1,8 @@
 use super::{
     BoundSet, Callee, DResult, Diagnostic, Doc, Expr, Func, GenericScope, IrType, KernelFn,
-    RenderConfig, Symbol, callee_name, combine_guards, emit_arm_head, emit_binding_stmts,
-    emit_expr_at, emit_init_datum, emit_match_scrutinee, impl_fn_param_indices, indent_of,
-    render_seeded, render_type, tail_arm_prelude_lines,
+    OnceClosure, RenderConfig, Symbol, callee_name, combine_guards, emit_arm_head,
+    emit_binding_stmts, emit_expr_at, emit_init_datum, emit_match_scrutinee, impl_fn_param_indices,
+    indent_of, render_seeded, render_type, tail_arm_prelude_lines,
 };
 use crate::EmitCtx;
 use core::fmt::Write as _;
@@ -302,6 +302,51 @@ pub fn emit_func_value(
     Ok(format!(
         "{{ let __ipe_fn: {typed} = {ctor}::new({name}); __ipe_fn }}"
     ))
+}
+
+/// Emit an at-most-once slot closure: its clone prelude around an unannotated `Box::new(move ..)`.
+///
+/// Each prelude binding wraps the rest exactly as the `Let` arm renders it,
+/// `({ let s = s.clone(); .. })`, outermost first; with no prelude the result is
+/// the bare `Box::new(move |..| ..)`. No `Fn` annotation is written, so rustc
+/// infers `FnOnce` from the runtime wrapper's `Box<dyn FnOnce(..)>` parameter
+/// and a capture the lowerer moved into the body compiles (the annotated
+/// `emit_lambda` form would demand `Fn`, E0507). Omitting the annotation also
+/// keeps rustc's type-checking linear in the depth of chained `Task.andThen`s.
+/// `depth` is the slot argument's own IR-nesting level.
+pub fn emit_once_closure(
+    ctx: &EmitCtx,
+    closure: &OnceClosure<'_>,
+    indent: usize,
+    depth: u16,
+    generics: GenericScope,
+) -> DResult<String> {
+    let inner = emit_lambda_unboxed(
+        ctx,
+        closure.params,
+        closure.ret,
+        closure.body,
+        indent,
+        depth,
+        generics,
+    )?;
+    // Splice the already-built child into a pre-sized buffer rather than
+    // re-copying it through `format!` — same bytes, one alloc.
+    let mut boxed = String::with_capacity(inner.len() + "Box::new()".len());
+    boxed.push_str("Box::new(");
+    boxed.push_str(&inner);
+    boxed.push(')');
+    closure
+        .clones
+        .iter()
+        .rev()
+        .try_fold(boxed, |body, (binder, source)| {
+            Ok(format!(
+                "({{ let {} = {}.clone(); {body} }})",
+                ctx.emit_ident(*binder)?,
+                ctx.emit_ident(*source)?
+            ))
+        })
 }
 
 /// Emit the unboxed inner `move |p0: T0, …| -> R { <body> }` closure expression.

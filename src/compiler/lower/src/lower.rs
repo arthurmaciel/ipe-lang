@@ -13825,6 +13825,8 @@ impl<'a> Lowerer<'a> {
             // its needed default pin. Centralised here so no `lower_def` branch
             // can silently miss it.
             func.body = clear_let_bound_task_fail_pins(func.body);
+            self.reject_unrenderable_once_args(&func.body)
+                .map_err(|d| (d, def.home().to_vec()))?;
             if self.interner.resolve(func.name) == Some("main") {
                 entry = Some(func.id);
                 entry_span = Some(def.name().span);
@@ -17327,6 +17329,31 @@ impl<'a> Lowerer<'a> {
             .map_or(Ok(()), |(_, span)| {
                 Err(unsupported(*span, Feature::NonCloneCapture))
             })
+    }
+
+    /// Refuse an at-most-once slot argument that moves a capture yet is no renderable closure.
+    ///
+    /// The emitters build a slot closure as an unannotated `FnOnce` only for the
+    /// shape [`ipe_ir::once_callback::peel_once_closure`] accepts (an inline
+    /// lambda under a clone prelude); any other slot argument renders through the
+    /// `Fn`-annotated boxed lambda, which cannot move a capture out (E0507). A
+    /// slot argument of that other shape that references a local this def's
+    /// continuations moved (`one_shot_moved`) is refused with IPE-L0126 at the
+    /// move, so the SEAL holds for every shape rather than the ones peeled.
+    fn reject_unrenderable_once_args(&self, body: &Expr) -> DResult<()> {
+        let moved = self.one_shot_moved.borrow();
+        if moved.is_empty() {
+            return Ok(());
+        }
+        ipe_ir::once_callback::find_map_unpeelable_once_arg(body, |arg| {
+            moved
+                .iter()
+                .find(|(sym, _)| lambda_body_refs_sym(*sym, arg))
+                .map(|(_, span)| *span)
+        })
+        .map_or(Ok(()), |span| {
+            Err(unsupported(span, Feature::NonCloneCapture))
+        })
     }
 
     /// Run `f` with `syms` registered as promotable fn binders (see the

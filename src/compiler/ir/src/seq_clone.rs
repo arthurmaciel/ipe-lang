@@ -16,7 +16,8 @@ use ipe_intern::Symbol;
 use crate::let_inline::{
     inlined_let_body, let_value_is_inlined, pat_binds_target, scan_free_target,
 };
-use crate::{Callee, Expr, KernelFn};
+use crate::once_callback::once_callback_split;
+use crate::{Callee, Expr};
 
 /// Shadow-aware IR rewrite: replace every free `Var(target)` with `CloneVar(target)`.
 ///
@@ -313,8 +314,9 @@ pub fn clone_targets_in_expr(
 /// Does the sequenced-task capture-clone rewrite clone `sym` anywhere in `expr`?
 ///
 /// Mirrors the emitter exactly: at every `TaskSeq { effect, rest }` and every
-/// `Task.andThen cont effect` where `sym` is free in the continuation, the
-/// emitter rewrites `effect` with [`clone_free_target`]; a `CloneVar(sym)` in
+/// at-most-once callback call (`Task.andThen cont effect`, located by
+/// [`once_callback_split`]) where `sym` is free in the continuation, the
+/// emitter rewrites each sibling argument with [`clone_free_target`]; a `CloneVar(sym)` in
 /// that result renders `sym.clone()`. For a value with no `Clone` impl that is
 /// an exit-0-then-cargo-fail, so the lowerer refuses it. A `let` the emitter
 /// inlines is walked in its inlined form. The walk skips every subtree where a
@@ -344,9 +346,12 @@ pub fn seq_rewrite_clones_symbol(sym: Symbol, expr: &Expr) -> bool {
             clones_in_effect(effect, rest) || walk(effect) || walk(rest)
         }
         Expr::Call { callee, args, .. } => {
-            let and_then_hazard = matches!(callee, Callee::Kernel(KernelFn::TaskAndThen))
-                && matches!(args.as_slice(), [cont, effect] if clones_in_effect(effect, cont));
-            and_then_hazard || args.iter().any(walk)
+            let once_slot_hazard = once_callback_split(callee, args).is_some_and(|(slot, cont)| {
+                args.iter()
+                    .enumerate()
+                    .any(|(i, sibling)| i != slot && clones_in_effect(sibling, cont))
+            });
+            once_slot_hazard || args.iter().any(walk)
         }
         Expr::Ctor { args, .. } | Expr::TailRecur { args } => args.iter().any(walk),
         Expr::BinOp { lhs, rhs, .. } => walk(lhs) || walk(rhs),
