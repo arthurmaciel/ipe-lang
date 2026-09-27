@@ -11,13 +11,9 @@
 # change goes through a PR. This script is intentionally NOT executed by CI or
 # by setup — a human/orchestrator runs it deliberately.
 #
-# Required status checks below are the FAST gate job names, exactly as they
-# appear in the workflows:
-#   fmt, clippy, test   — .github/workflows/ci.yml
-#   seal-smoke          — .github/workflows/ci.yml (build+run one emitted example)
-#   cargo-deny          — .github/workflows/security.yml (supply-chain)
-# The slow jobs (e2e, miri, runtime-*, wasm-floor)
-# are deliberately NOT listed — they self-skip on pull_request or run advisory.
+# Required status checks are read from .github/ci/required-set.json — the set
+# derived from the disposition SSOT (.github/ci/check-manifest.yml), never a
+# second hand-kept list.
 #
 # `strict: false`: PRs do NOT have to be up to date with `main` before merging.
 # `strict: true` would require it, but GitHub only auto-updates a behind branch
@@ -30,6 +26,7 @@ set -euo pipefail
 
 REPO="arthurmaciel/ipe-lang"
 BRANCH="main"
+REQUIRED_CONTEXTS="$(jq -c 'if type == "array" and length > 0 and all(type == "string") then . else error("required-set.json must be a non-empty list of strings") end' "$(dirname "$0")/required-set.json")"
 
 echo "Enabling branch protection on ${REPO}@${BRANCH} …"
 
@@ -38,11 +35,11 @@ echo "Enabling branch protection on ${REPO}@${BRANCH} …"
 #    protection endpoint with the full desired state.
 gh api -X PUT "repos/${REPO}/branches/${BRANCH}/protection" \
   -H "Accept: application/vnd.github+json" \
-  --input - <<'JSON'
+  --input - <<JSON
 {
   "required_status_checks": {
     "strict": false,
-    "contexts": ["fmt", "clippy", "test", "seal-smoke", "cargo-deny"]
+    "contexts": ${REQUIRED_CONTEXTS}
   },
   "enforce_admins": false,
   "required_pull_request_reviews": {

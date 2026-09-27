@@ -2,11 +2,14 @@
 #
 # Single source of truth mapping every produced status context to exactly one
 # disposition. The branch-protection required set is DERIVED from this file
-# (every `gate` entry), never hand-synced; `ci/verify-manifest.py` fails CI if a
-# produced context is missing here, or if a `gate` entry lacks a producer.
+# (every `gate` and `gate-external` entry — `verify-manifest.py
+# --emit-required-set`), never hand-synced; `ci/verify-manifest.py` fails CI if a
+# produced context is missing here, if a `gate` entry lacks a producer that
+# reports on every PR, or if `ci/required-set.json` differs from the derivation.
 #
 # Dispositions
 #   gate          Blocks (a required status context) and runs per relevant change.
+#   gate-external Required, but posted out-of-band (no CI workflow produces it).
 #   nightly-gate  Heavy; runs nightly, not on every PR. A
 #                 red blocks the NEXT promotion via the fail-closed
 #                 `promotion-ready` job (absence != pass). Never silently advisory.
@@ -32,6 +35,28 @@ checks:
   - context: fmt
     disposition: gate
     producer: ci.yml
+  # Each workflow's path filter. A path-gated job skips when its filter fails
+  # or is cancelled, and a skipped required check passes — so the filter is
+  # itself required: a red or cancelled filter blocks the merge.
+  - context: changes-ci
+    disposition: gate
+    producer: ci.yml
+    guards: fail-closed path gating of every ci.yml job that needs it.
+  - context: changes-sandbox
+    disposition: gate
+    producer: admission-sandbox.yml
+    guards: fail-closed path gating of the admission jail proofs (Security).
+  - context: changes-playground
+    disposition: gate
+    producer: playground.yml
+    guards: fail-closed path gating of playground-jail (Security).
+  # The disposition SSOT's own drift gate.
+  - context: manifest-guard
+    disposition: gate
+    producer: manifest-guard.yml
+    guards: >-
+      every produced check is classified, every required check reports on every
+      PR, and ci/required-set.json equals the manifest's required contexts.
   - context: clippy
     disposition: gate
     producer: ci.yml
@@ -277,13 +302,3 @@ checks:
     owner: docs
     note: playground.yml build leg; playground-jail is the Security gate.
 
-  # ── Utility / non-status jobs (not gates; declared so drift stays quiet) ───
-  # `changes` (paths-filter fan-out), release automation, and the rerun helper
-  # are plumbing, not guarantees. Marked internal so the drift gate does not
-  # demand a gate/informational disposition for them.
-  - context: changes
-    disposition: informational
-    producer: ci.yml
-    owner: infra
-    internal: true
-    note: paths-filter fan-out; not a guarantee.

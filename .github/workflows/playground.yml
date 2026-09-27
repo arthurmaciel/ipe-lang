@@ -39,6 +39,11 @@ env:
 jobs:
   # Path filter: skip on PRs that touch nothing playground-relevant.
   changes:
+    # Required context: the required jobs below `needs` it, so a failed or
+    # cancelled filter would otherwise skip them — and a skipped required check
+    # passes. Uniquely named so the required context is unambiguous across
+    # workflows.
+    name: changes-playground
     runs-on: ubuntu-latest
     outputs:
       playground: ${{ steps.filter.outputs.playground }}

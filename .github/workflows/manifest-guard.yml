@@ -1,9 +1,10 @@
 # Drift gate for the CI check-disposition SSOT (.github/ci/check-manifest.yml).
 #
 # Fails a PR when the manifest and the produced workflow contexts disagree — the
-# exact "a check exists with no declared disposition" state issue #2138 forbids.
+# exact "a check exists with no declared disposition" state.
 # The manifest is the single source of truth; the branch-protection required set
-# is derived from it (.github/ci/required-set.json). This gate keeps the two honest.
+# is derived from it (.github/ci/required-set.json, via
+# `verify-manifest.py --emit-required-set`). This gate keeps the two honest.
 #
 # Runs on every PR (no paths: filter on the trigger) so a check-run named
 # "manifest-guard" is always produced and can be listed as a required check.
@@ -25,6 +26,7 @@ jobs:
   manifest-guard:
     name: manifest-guard
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@v7
 
@@ -35,22 +37,8 @@ jobs:
       - name: Install PyYAML
         run: python3 -m pip install --quiet pyyaml
 
-      - name: Every produced check has exactly one declared disposition
-        run: python3 .github/ci/verify-manifest.py
+      - name: Every refusal of the drift gate still fires
+        run: python3 .github/ci/verify-manifest.py --self-test
 
-      - name: The derived required-set is in sync with the manifest
-        run: |
-          python3 - <<'PY'
-          import json, sys, yaml
-          man = yaml.safe_load(open(".github/ci/check-manifest.yml"))
-          # The required set is every externally-required gate: in-CI `gate` plus
-          # required-set.json must equal both, matching .github/ci/verify-manifest.py.
-          required = sorted(e["context"] for e in man["checks"] if e["disposition"] in ("gate"))
-          on_disk = json.load(open(".github/ci/required-set.json"))
-          if required != sorted(on_disk):
-              print(".github/ci/required-set.json is stale — regenerate it (see .github/ci/RECONCILIATION.md):", file=sys.stderr)
-              print("  missing:", sorted(set(required) - set(on_disk)), file=sys.stderr)
-              print("  extra:  ", sorted(set(on_disk) - set(required)), file=sys.stderr)
-              sys.exit(1)
-          print(f"ci/required-set.json matches the manifest ({len(required)} required contexts).")
-          PY
+      - name: Every check is classified, every required check gates, required-set.json is derived
+        run: python3 .github/ci/verify-manifest.py

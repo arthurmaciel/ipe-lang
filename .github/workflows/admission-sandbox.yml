@@ -60,6 +60,11 @@ jobs:
   # the required-check context. On any code PR (or push/schedule/merge_group) the
   # gate is `code == 'true'` and all proofs run at full strictness.
   changes:
+    # Required context: the required jobs below `needs` it, so a failed or
+    # cancelled filter would otherwise skip them — and a skipped required check
+    # passes. Uniquely named so the required context is unambiguous across
+    # workflows.
+    name: changes-sandbox
     runs-on: ubuntu-latest
     outputs:
       code: ${{ steps.filter.outputs.code }}

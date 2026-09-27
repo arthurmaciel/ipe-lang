@@ -1,10 +1,11 @@
 # CI required-set reconciliation
 
 The branch-protection required status checks are **derived from**
-`ci/check-manifest.yml` — every `gate` entry, and only those. `ci/required-set.json`
-is that derived list (regenerate with the snippet at the bottom). `manifest-guard`
-(`.github/workflows/manifest-guard.yml`) fails a PR whenever the manifest and the
-produced workflow contexts drift apart.
+`ci/check-manifest.yml` — every `gate` and `gate-external` entry, and only those.
+`ci/required-set.json` is that derived list (regenerate with the command at the
+bottom). `manifest-guard` (`.github/workflows/manifest-guard.yml`) fails a PR
+whenever the manifest, the produced workflow contexts, and `ci/required-set.json`
+drift apart.
 
 This file records the **intended** `main-protection` required set and the delta
 against the live ruleset. Applying the delta to the live ruleset is a manual,
@@ -23,6 +24,11 @@ Measured against the ruleset's current `required_status_checks`.
 **Add to the required set** (manifest `gate`, produced per-change, absent from
 the ruleset):
 
+- `changes-ci`, `changes-sandbox`, `changes-playground` — each workflow's path
+  filter. Every path-gated required job `needs` one of them, so a failed or
+  cancelled filter would skip those jobs, and a skipped required check passes;
+  requiring the filter itself makes that failure block the merge.
+- `manifest-guard` — this SSOT's own drift gate (runs on every PR).
 - `cli-docs-drift`, `cli-transcripts-drift`, `markdown-parity` — deterministic
   generated-docs / parse-SSOT snapshot diffs (parity with `stdlib-docs-drift`).
 - `grammar` — tree-sitter grammar drift guard.
@@ -39,6 +45,9 @@ the ruleset):
 
 Each is path-gated by a job-level `if:` on the `changes` outputs, so on a PR
 outside its paths the job reports `skipped`, which satisfies a required context.
+That skip is sound only because the filter job is itself required and every
+aggregator requires its unfiltered upstreams to succeed (`gate-aggregate.sh`);
+`verify-manifest.py` refuses a required job whose upstream is not required.
 
 No removals: every live required context is a manifest `gate`.
 
@@ -91,7 +100,5 @@ No check is left unclassified or guarantee-but-un-gated after this change.
 ## Regenerate `ci/required-set.json`
 
 ```bash
-python3 -c "import yaml,json; d=yaml.safe_load(open('.github/ci/check-manifest.yml')); \
-print(json.dumps(sorted(e['context'] for e in d['checks'] if e['disposition'] in ('gate')), indent=2))" \
-  > .github/ci/required-set.json
+python3 .github/ci/verify-manifest.py --emit-required-set > .github/ci/required-set.json
 ```
