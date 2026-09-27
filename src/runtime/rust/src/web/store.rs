@@ -552,7 +552,8 @@ impl StoreOpenError {
     /// degrade to memory. That includes a host the SSRF gate could not
     /// resolve or resolved too slowly: such a failure may be transient DNS,
     /// but a host the gate never vetted is not dialled, and falling back would
-    /// silently run without the configured store, so it fails closed. A
+    /// silently run without the configured store, so it fails closed. So is a
+    /// relay the pinned TLS dial needs that could not be opened. A
     /// driver failure after the gate admitted the target (unreachable server,
     /// failed version query, table setup) is not a policy refusal.
     ///
@@ -583,9 +584,10 @@ impl StoreOpenError {
                     | EngineVersionError::Unparseable { .. }
                     | EngineVersionError::BelowFloor { .. } => true,
                 },
-                DbConnectError::Unreachable(_)
-                | DbConnectError::VersionUnreadable(_)
-                | DbConnectError::RelayUnavailable => false,
+                // Without the relay the deny-private policy refuses the dial,
+                // and its cause (no private socket directory) is environmental.
+                DbConnectError::RelayUnavailable => true,
+                DbConnectError::Unreachable(_) | DbConnectError::VersionUnreadable(_) => false,
             },
             Self::Schema(_) => false,
             #[cfg(feature = "redis_store")]
@@ -1572,13 +1574,13 @@ mod tests {
         let transient = [
             StoreOpenError::Connect(DbConnectError::Unreachable(DbFailure::Io)),
             StoreOpenError::Connect(DbConnectError::VersionUnreadable(DbFailure::PoolTimedOut)),
-            StoreOpenError::Connect(DbConnectError::RelayUnavailable),
             StoreOpenError::Schema(DbFailure::Other),
         ];
         for e in &transient {
             assert!(!e.is_policy_refusal(), "{e} must fall back, not refuse");
         }
         let policy = [
+            StoreOpenError::Connect(DbConnectError::RelayUnavailable),
             StoreOpenError::Connect(DbConnectError::HostRefused(SsrfRefusal::LocalSocket)),
             StoreOpenError::Connect(DbConnectError::InvalidUrl),
             StoreOpenError::Connect(DbConnectError::MisplacedUserinfo),

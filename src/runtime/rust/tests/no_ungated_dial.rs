@@ -134,7 +134,7 @@ const ALLOWED_DIALS: [AllowedDial; 5] = [
         file: "ssrf.rs",
         func: "dial_relay_target",
         dial: "tokio::net::TcpStream::connect",
-        why: "the pinned relay's TCP dial of the address `VettedDial::Pinned` proved, not a sqlx dial",
+        why: "the pinned relay's TCP dial of a `VettedAddr`, which only `VettedDial::Pinned` can mint, not a sqlx dial",
     },
     AllowedDial {
         file: "web/console_proxy.rs",

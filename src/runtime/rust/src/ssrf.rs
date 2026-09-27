@@ -647,6 +647,34 @@ impl UnambiguousUrl {
     }
 }
 
+/// An address the SSRF gate vetted, carried by [`VettedDial::Pinned`].
+///
+/// Its field is private to this module, so only the gate's constructors mint
+/// one: a dialler that takes a `VettedAddr` cannot be handed a raw address.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(
+    not(any(feature = "db", feature = "email", feature = "websocket_client")),
+    allow(dead_code)
+)]
+pub(crate) struct VettedAddr(SocketAddr);
+
+#[cfg_attr(
+    not(any(feature = "db", feature = "email", feature = "websocket_client")),
+    allow(dead_code)
+)]
+impl VettedAddr {
+    /// The vetted socket address to dial.
+    pub(crate) const fn socket_addr(self) -> SocketAddr {
+        self.0
+    }
+
+    /// Treat `addr` as vetted, for tests that stand up a local server.
+    #[cfg(test)]
+    pub(crate) const fn assume_vetted_for_test(addr: SocketAddr) -> Self {
+        Self(addr)
+    }
+}
+
 /// Proof that `host:port` passed the SSRF gate under the policy in effect.
 ///
 /// The only constructors are [`VettedDial::for_configured_host`],
@@ -662,7 +690,7 @@ impl UnambiguousUrl {
 )]
 pub(crate) enum VettedDial {
     /// Deny-private is on: dial exactly this address.
-    Pinned(SocketAddr),
+    Pinned(VettedAddr),
     /// Deny-private is off: the host may be dialled by name.
     Unrestricted,
 }
@@ -696,7 +724,7 @@ impl VettedDial {
                 dns_timeout(),
             )
             .await
-            .map(Self::Pinned),
+            .map(|addr| Self::Pinned(VettedAddr(addr))),
             DialPolicy::AllowAll => Ok(Self::Unrestricted),
         }
     }
@@ -714,7 +742,7 @@ impl VettedDial {
     /// The host string to hand a dialler: the vetted IP when pinned, else `host`.
     pub(crate) fn dial_host(self, host: &str) -> String {
         match self {
-            Self::Pinned(addr) => addr.ip().to_string(),
+            Self::Pinned(addr) => addr.socket_addr().ip().to_string(),
             Self::Unrestricted => host.to_owned(),
         }
     }
@@ -1024,7 +1052,7 @@ pub(crate) async fn vet_url_with<R: HostResolver>(
             let disclosure = url_host_disclosure(url, &parsed);
             vet_host_with(resolver, host, disclosure, port, deadline)
                 .await
-                .map(VettedDial::Pinned)
+                .map(|addr| VettedDial::Pinned(VettedAddr(addr)))
                 .map_err(UrlRefusal::Host)
         }
     }
@@ -1070,9 +1098,9 @@ pub(crate) use pinned_relay::{PinnedRelay, RelayUnavailable};
 /// name is resolved after the gate.
 #[cfg(all(feature = "db", unix))]
 mod pinned_relay {
+    use super::VettedAddr;
     use std::future::Future;
     use std::io;
-    use std::net::SocketAddr;
     use std::os::unix::fs::{DirBuilderExt, MetadataExt};
     use std::path::{Path, PathBuf};
     use std::sync::Arc;
@@ -1080,9 +1108,6 @@ mod pinned_relay {
     use std::time::Duration;
     use tokio::net::{TcpStream, UnixListener, UnixStream};
     use tokio::sync::{OwnedSemaphorePermit, Semaphore, oneshot};
-
-    /// The most relayed connections open at once.
-    const RELAY_CONNECTION_CEILING: usize = 256;
 
     /// How long one dial of the pinned address may take.
     const RELAY_DIAL_TIMEOUT: Duration = Duration::from_secs(10);
@@ -1114,7 +1139,7 @@ mod pinned_relay {
         /// The owner-only directory holding the socket.
         socket_dir: PathBuf,
         /// The vetted address every accepted connection is carried to.
-        target: SocketAddr,
+        target: VettedAddr,
         /// Dropping this sender stops the accept loop.
         _stop: oneshot::Sender<()>,
     }
@@ -1122,26 +1147,35 @@ mod pinned_relay {
     impl PinnedRelay {
         /// Open a relay to `target` whose socket answers for `socket_port`.
         ///
+        /// At most `max_connections` relayed connections are open at once, the
+        /// ceiling of the pool dialling through the relay, so the relay never
+        /// stalls a connection the pool may open.
+        ///
         /// # Errors
         ///
         /// [`RelayUnavailable`] when no owner-only directory or socket can be
         /// created.
-        pub fn open(target: SocketAddr, socket_port: u16) -> Result<Self, RelayUnavailable> {
+        pub fn open(
+            target: VettedAddr,
+            socket_port: u16,
+            max_connections: u32,
+        ) -> Result<Self, RelayUnavailable> {
             let socket_name = format!(".s.PGSQL.{socket_port}");
             let (socket_dir, owner) = create_private_dir(&socket_name)?;
-            let socket_path = socket_dir.join(&socket_name);
-            let Ok(listener) = UnixListener::bind(&socket_path) else {
-                remove_quietly(&socket_path, &socket_dir);
-                return Err(RelayUnavailable);
+            let socket = RelaySocket {
+                path: socket_dir.join(&socket_name),
+                dir: socket_dir.clone(),
             };
+            // A failed bind drops `socket`, which removes the directory.
+            let listener = UnixListener::bind(&socket.path).map_err(|_| RelayUnavailable)?;
             let (stop, stopped) = oneshot::channel();
             tokio::spawn(serve(
                 listener,
+                socket,
                 target,
                 owner,
+                relay_ceiling(max_connections),
                 stopped,
-                socket_path,
-                socket_dir.clone(),
             ));
             Ok(Self {
                 socket_dir,
@@ -1157,7 +1191,7 @@ mod pinned_relay {
 
         /// The vetted address the relay carries connections to.
         #[cfg_attr(not(test), allow(dead_code))]
-        pub const fn target(&self) -> SocketAddr {
+        pub const fn target(&self) -> VettedAddr {
             self.target
         }
 
@@ -1179,10 +1213,28 @@ mod pinned_relay {
     /// serves.
     fn create_private_dir(socket_name: &str) -> Result<(PathBuf, u32), RelayUnavailable> {
         static NEXT: AtomicU64 = AtomicU64::new(0);
+        create_private_dir_in(
+            &[std::env::temp_dir(), PathBuf::from("/tmp")],
+            socket_name,
+            || NEXT.fetch_add(1, Ordering::Relaxed),
+        )
+    }
+
+    /// Create an owner-only directory under the first of `bases` that admits one.
+    ///
+    /// Each base is tried with up to [`RELAY_DIR_ATTEMPTS`] names numbered by
+    /// `next`: a name already taken moves on to the next number, and a base
+    /// whose socket path would not fit a `sockaddr_un`, or that refuses the
+    /// directory, moves on to the next base.
+    fn create_private_dir_in(
+        bases: &[PathBuf],
+        socket_name: &str,
+        mut next: impl FnMut() -> u64,
+    ) -> Result<(PathBuf, u32), RelayUnavailable> {
         let pid = std::process::id();
-        for base in [std::env::temp_dir(), PathBuf::from("/tmp")] {
+        for base in bases {
             for _ in 0..RELAY_DIR_ATTEMPTS {
-                let n = NEXT.fetch_add(1, Ordering::Relaxed);
+                let n = next();
                 let dir = base.join(format!("ipe-pg-relay-{pid}-{n}"));
                 if dir.join(socket_name).as_os_str().len() > SOCKET_PATH_MAX_BYTES {
                     break;
@@ -1208,6 +1260,30 @@ mod pinned_relay {
         }
     }
 
+    /// The relayed-connection ceiling for a pool of `max_connections`.
+    fn relay_ceiling(max_connections: u32) -> usize {
+        usize::try_from(max_connections)
+            .unwrap_or(usize::MAX)
+            .clamp(1, Semaphore::MAX_PERMITS)
+    }
+
+    /// The socket and directory a relay owns, removed when dropped.
+    ///
+    /// The accept loop owns it, so both are removed when the loop stops and
+    /// also when the runtime drops the loop before it runs to its end.
+    struct RelaySocket {
+        /// The socket the driver dials.
+        path: PathBuf,
+        /// The owner-only directory holding it.
+        dir: PathBuf,
+    }
+
+    impl Drop for RelaySocket {
+        fn drop(&mut self) {
+            remove_quietly(&self.path, &self.dir);
+        }
+    }
+
     /// Remove the socket and its directory, ignoring what is already gone.
     fn remove_quietly(socket_path: &Path, socket_dir: &Path) {
         let _socket_removed = std::fs::remove_file(socket_path);
@@ -1215,15 +1291,18 @@ mod pinned_relay {
     }
 
     /// Accept connections from `owner` and relay each to `target` until stopped.
+    ///
+    /// At most `ceiling` relayed connections are open at once; `socket` is
+    /// removed once the loop ends or is dropped.
     async fn serve(
         listener: UnixListener,
-        target: SocketAddr,
+        socket: RelaySocket,
+        target: VettedAddr,
         owner: u32,
+        ceiling: usize,
         mut stopped: oneshot::Receiver<()>,
-        socket_path: PathBuf,
-        socket_dir: PathBuf,
     ) {
-        let permits = Arc::new(Semaphore::new(RELAY_CONNECTION_CEILING));
+        let permits = Arc::new(Semaphore::new(ceiling));
         loop {
             let permit = tokio::select! {
                 _ = &mut stopped => break,
@@ -1245,13 +1324,13 @@ mod pinned_relay {
             }
         }
         drop(listener);
-        remove_quietly(&socket_path, &socket_dir);
+        drop(socket);
     }
 
     /// Carry one accepted connection to `target` in both directions.
     async fn relay_connection(
         client: UnixStream,
-        target: SocketAddr,
+        target: VettedAddr,
         _permit: OwnedSemaphorePermit,
     ) {
         let dialed = tokio::time::timeout(RELAY_DIAL_TIMEOUT, dial_relay_target(target)).await;
@@ -1266,8 +1345,8 @@ mod pinned_relay {
     }
 
     /// Dial the pinned address the gate vetted.
-    async fn dial_relay_target(target: SocketAddr) -> io::Result<TcpStream> {
-        tokio::net::TcpStream::connect(target).await
+    async fn dial_relay_target(target: VettedAddr) -> io::Result<TcpStream> {
+        tokio::net::TcpStream::connect(target.socket_addr()).await
     }
 
     /// One end of a relayed connection, driven by readiness and non-blocking calls.
@@ -1350,8 +1429,13 @@ mod pinned_relay {
 
     #[cfg(test)]
     mod tests {
-        use super::{PinnedRelay, SOCKET_PATH_MAX_BYTES};
+        use super::{
+            PinnedRelay, RELAY_DIR_ATTEMPTS, RelayUnavailable, SOCKET_PATH_MAX_BYTES, Semaphore,
+            VettedAddr, create_private_dir_in, owner_only, relay_ceiling,
+        };
+        use std::fs::Permissions;
         use std::os::unix::fs::PermissionsExt;
+        use std::path::{Path, PathBuf};
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
         /// Bytes written to the relay socket reach the pinned address and its
@@ -1373,7 +1457,7 @@ mod pinned_relay {
                     let _echoed = conn.write_all(&got).await;
                 }
             });
-            let relay = PinnedRelay::open(target, 5432);
+            let relay = PinnedRelay::open(VettedAddr::assume_vetted_for_test(target), 5432, 4);
             assert!(relay.is_ok(), "{:?}", relay.as_ref().err());
             let Ok(relay) = relay else { return };
             let socket = relay.socket_dir().join(".s.PGSQL.5432");
@@ -1391,8 +1475,8 @@ mod pinned_relay {
         /// path every `sockaddr_un` holds, and both are gone once it drops.
         #[tokio::test]
         async fn relay_socket_is_private_and_removed_on_drop() {
-            let target = std::net::SocketAddr::from(([127, 0, 0, 1], 9));
-            let relay = PinnedRelay::open(target, 5432);
+            let target = unroutable();
+            let relay = PinnedRelay::open(target, 5432, 4);
             assert!(relay.is_ok(), "{:?}", relay.as_ref().err());
             let Ok(relay) = relay else { return };
             let dir = relay.socket_dir().to_path_buf();
@@ -1410,6 +1494,162 @@ mod pinned_relay {
                 tokio::time::sleep(std::time::Duration::from_millis(10)).await;
             }
             assert!(!dir.exists(), "{dir:?} must be removed");
+        }
+
+        /// A runtime that shuts down under a live relay drops its accept loop,
+        /// and the socket directory goes with it.
+        #[test]
+        fn relay_socket_is_removed_when_the_runtime_shuts_down() {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build();
+            assert!(runtime.is_ok(), "{:?}", runtime.as_ref().err());
+            let Ok(runtime) = runtime else { return };
+            let relay = runtime.block_on(async { PinnedRelay::open(unroutable(), 5432, 4) });
+            assert!(relay.is_ok(), "{:?}", relay.as_ref().err());
+            let Ok(relay) = relay else { return };
+            let dir = relay.socket_dir().to_path_buf();
+            assert!(dir.exists());
+            drop(runtime);
+            assert!(!dir.exists(), "{dir:?} must be removed with the runtime");
+            drop(relay);
+        }
+
+        /// The relay admits exactly as many connections as the pool may open,
+        /// and at least one.
+        #[test]
+        fn relay_ceiling_follows_the_pool_ceiling() {
+            assert_eq!(relay_ceiling(0), 1);
+            assert_eq!(relay_ceiling(1), 1);
+            assert_eq!(relay_ceiling(16), 16);
+            assert_eq!(relay_ceiling(300), 300);
+            let widest = usize::try_from(u32::MAX).map_or(Semaphore::MAX_PERMITS, |max| {
+                max.min(Semaphore::MAX_PERMITS)
+            });
+            assert_eq!(relay_ceiling(u32::MAX), widest);
+        }
+
+        /// A directory another user may enter is refused and removed.
+        #[test]
+        fn owner_only_refuses_group_or_other_access() {
+            let base = Scratch::new("owner-only");
+            for mode in [0o750, 0o705, 0o770, 0o777] {
+                let dir = base.path().join(format!("m{mode:o}"));
+                assert!(std::fs::create_dir(&dir).is_ok());
+                let set = std::fs::set_permissions(&dir, Permissions::from_mode(mode));
+                assert!(set.is_ok(), "{set:?}");
+                assert_eq!(owner_only(&dir), Err(RelayUnavailable), "{mode:o}");
+                assert!(
+                    !dir.exists(),
+                    "{mode:o}: the refused directory must be removed"
+                );
+            }
+            let private = base.path().join("private");
+            assert!(std::fs::create_dir(&private).is_ok());
+            let set = std::fs::set_permissions(&private, Permissions::from_mode(0o700));
+            assert!(set.is_ok(), "{set:?}");
+            assert!(owner_only(&private).is_ok());
+        }
+
+        /// A symlink in place of the directory is refused, never followed.
+        #[test]
+        fn owner_only_refuses_a_symlink() {
+            let base = Scratch::new("symlink");
+            let real = base.path().join("real");
+            assert!(std::fs::create_dir(&real).is_ok());
+            let set = std::fs::set_permissions(&real, Permissions::from_mode(0o700));
+            assert!(set.is_ok(), "{set:?}");
+            let link = base.path().join("link");
+            assert!(std::os::unix::fs::symlink(&real, &link).is_ok());
+            assert_eq!(owner_only(&link), Err(RelayUnavailable));
+            assert!(real.exists(), "the link target must be left alone");
+        }
+
+        /// A name already taken is skipped for the next number.
+        #[test]
+        fn a_taken_name_moves_on_to_the_next_number() {
+            let base = Scratch::new("taken");
+            let taken = base.path().join(relay_dir_name(0));
+            assert!(std::fs::create_dir(&taken).is_ok());
+            let mut numbers = 0_u64..;
+            let made = create_private_dir_in(&[base.path().to_path_buf()], ".s.PGSQL.5432", || {
+                numbers.next().unwrap_or(u64::MAX)
+            });
+            let Ok((dir, _owner)) = made else {
+                assert!(made.is_ok(), "{made:?}");
+                return;
+            };
+            assert_eq!(dir, base.path().join(relay_dir_name(1)));
+        }
+
+        /// A base whose socket path would overflow a `sockaddr_un` is passed
+        /// over for the next base, and alone it is refused, creating nothing.
+        #[test]
+        fn a_base_too_long_for_the_socket_path_is_passed_over() {
+            let base = Scratch::new("long");
+            let long = base.path().join("d".repeat(SOCKET_PATH_MAX_BYTES));
+            let short = base.path().to_path_buf();
+            let alone = create_private_dir_in(std::slice::from_ref(&long), ".s.PGSQL.5432", || 0);
+            assert_eq!(alone, Err(RelayUnavailable));
+            assert!(!long.exists());
+            let made = create_private_dir_in(&[long.clone(), short.clone()], ".s.PGSQL.5432", || 0);
+            let Ok((dir, _owner)) = made else {
+                assert!(made.is_ok(), "{made:?}");
+                return;
+            };
+            assert_eq!(dir, short.join(relay_dir_name(0)));
+            assert!(!long.exists());
+        }
+
+        /// Every name taken in every base, or a base that cannot hold the
+        /// directory, leaves the relay unavailable.
+        #[test]
+        fn exhausted_names_leave_the_relay_unavailable() {
+            let base = Scratch::new("exhausted");
+            for n in 0..u64::from(RELAY_DIR_ATTEMPTS) {
+                assert!(std::fs::create_dir(base.path().join(relay_dir_name(n))).is_ok());
+            }
+            let mut numbers = 0_u64..;
+            let made = create_private_dir_in(&[base.path().to_path_buf()], ".s.PGSQL.5432", || {
+                numbers.next().unwrap_or(u64::MAX)
+            });
+            assert_eq!(made, Err(RelayUnavailable));
+            let missing = base.path().join("missing");
+            let made = create_private_dir_in(&[missing], ".s.PGSQL.5432", || 0);
+            assert_eq!(made, Err(RelayUnavailable));
+        }
+
+        /// An address no test server answers on.
+        fn unroutable() -> VettedAddr {
+            VettedAddr::assume_vetted_for_test(std::net::SocketAddr::from(([127, 0, 0, 1], 9)))
+        }
+
+        /// The relay directory name numbered `n` for this process.
+        fn relay_dir_name(n: u64) -> String {
+            format!("ipe-pg-relay-{}-{n}", std::process::id())
+        }
+
+        /// A test's own directory under `/tmp`, removed when dropped.
+        struct Scratch(PathBuf);
+
+        impl Scratch {
+            fn new(label: &str) -> Self {
+                let dir = PathBuf::from("/tmp")
+                    .join(format!("ipe-relay-test-{}-{label}", std::process::id()));
+                let _stale = std::fs::remove_dir_all(&dir);
+                assert!(std::fs::create_dir(&dir).is_ok(), "{dir:?}");
+                Self(dir)
+            }
+
+            fn path(&self) -> &Path {
+                &self.0
+            }
+        }
+
+        impl Drop for Scratch {
+            fn drop(&mut self) {
+                let _removed = std::fs::remove_dir_all(&self.0);
+            }
         }
     }
 }
@@ -1598,10 +1838,10 @@ mod tests {
         let first = vet_url_with(DialPolicy::DenyPrivate, &resolver, url, DEADLINE).await;
         assert_eq!(
             first,
-            Ok(VettedDial::Pinned(SocketAddr::new(
+            Ok(VettedDial::Pinned(VettedAddr(SocketAddr::new(
                 PublicThenPrivate::PUBLIC,
                 9000
-            )))
+            ))))
         );
         assert_eq!(resolver.calls(), 1, "the name must be resolved once");
         let second = vet_url_with(DialPolicy::DenyPrivate, &resolver, url, DEADLINE).await;
@@ -1777,10 +2017,10 @@ mod tests {
         .await;
         assert_eq!(
             vetted,
-            Ok(VettedDial::Pinned(SocketAddr::new(
+            Ok(VettedDial::Pinned(VettedAddr(SocketAddr::new(
                 PublicThenPrivate::PUBLIC,
                 5432
-            )))
+            ))))
         );
     }
 
@@ -1814,10 +2054,10 @@ mod tests {
         .await;
         assert_eq!(
             first,
-            Ok(VettedDial::Pinned(SocketAddr::new(
+            Ok(VettedDial::Pinned(VettedAddr(SocketAddr::new(
                 PublicThenPrivate::PUBLIC,
                 5432
-            )))
+            ))))
         );
         assert_eq!(
             first.map(|dial| dial.dial_host("rebind.example")),

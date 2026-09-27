@@ -1317,6 +1317,13 @@ impl std::fmt::Display for DbConnectError {
 
 impl std::error::Error for DbConnectError {}
 
+#[cfg(unix)]
+impl From<crate::ssrf::RelayUnavailable> for DbConnectError {
+    fn from(crate::ssrf::RelayUnavailable: crate::ssrf::RelayUnavailable) -> Self {
+        Self::RelayUnavailable
+    }
+}
+
 /// Admit a pool only when its server's version is at or above its engine's floor.
 ///
 /// Reads the version once. [`VettedPool::connect`] runs it on every pool it
@@ -1566,6 +1573,7 @@ async fn postgres_connect_options<R: HostResolver>(
     url: &PostgresUrl,
     policy: DialPolicy,
     resolver: &R,
+    max_connections: u32,
 ) -> Result<PinnedPgOptions, DbConnectError> {
     let mut vetted = Vec::with_capacity(url.targets.len());
     for target in &url.targets {
@@ -1579,7 +1587,9 @@ async fn postgres_connect_options<R: HostResolver>(
         .map_err(|_| DbConnectError::InvalidUrl)?;
     match policy {
         DialPolicy::AllowAll => Ok((options, None)),
-        DialPolicy::DenyPrivate => pin_postgres_options(&url.url, options, &vetted, resolver).await,
+        DialPolicy::DenyPrivate => {
+            pin_postgres_options(&url.url, options, &vetted, resolver, max_connections).await
+        }
     }
 }
 
@@ -1601,6 +1611,7 @@ async fn pin_postgres_options<R: HostResolver>(
     options: sqlx::postgres::PgConnectOptions,
     vetted: &[(DialTarget, VettedDial)],
     resolver: &R,
+    max_connections: u32,
 ) -> Result<PinnedPgOptions, DbConnectError> {
     if options.get_socket().is_some() || options.get_host().starts_with('/') {
         return Err(DbConnectError::HostRefused(SsrfRefusal::LocalSocket));
@@ -1613,6 +1624,8 @@ async fn pin_postgres_options<R: HostResolver>(
     let literal = crate::ssrf::strip_ipv6_brackets(&host)
         .parse::<std::net::IpAddr>()
         .is_ok();
+    #[cfg(not(unix))]
+    let _no_relay_to_cap = max_connections;
     #[cfg(not(unix))]
     if !literal
         && matches!(
@@ -1650,8 +1663,7 @@ async fn pin_postgres_options<R: HostResolver>(
             sqlx::postgres::PgSslMode::Disable | sqlx::postgres::PgSslMode::Allow
         )
     {
-        let relay = crate::ssrf::PinnedRelay::open(target, port)
-            .map_err(|crate::ssrf::RelayUnavailable| DbConnectError::RelayUnavailable)?;
+        let relay = crate::ssrf::PinnedRelay::open(target, port, max_connections)?;
         let relayed = options.socket(relay.socket_dir());
         return Ok((relayed, Some(relay)));
     }
@@ -1677,6 +1689,7 @@ pub trait GatedDial: sqlx::Database {
     /// [`DbConnectError::EngineMismatch`].
     fn gated_connect_options(
         url: &DbUrl,
+        max_connections: u32,
         relay: &mut Option<crate::ssrf::PinnedRelay>,
     ) -> impl std::future::Future<
         Output = Result<<Self::Connection as sqlx::Connection>::Options, DbConnectError>,
@@ -1687,6 +1700,7 @@ impl GatedDial for sqlx::Sqlite {
     /// SQLite opens a local file and dials no host.
     async fn gated_connect_options(
         url: &DbUrl,
+        _max_connections: u32,
         _relay: &mut Option<crate::ssrf::PinnedRelay>,
     ) -> Result<sqlx::sqlite::SqliteConnectOptions, DbConnectError> {
         match url {
@@ -1700,13 +1714,18 @@ impl GatedDial for sqlx::Postgres {
     /// Every target is vetted under the environment's policy and pinned.
     async fn gated_connect_options(
         url: &DbUrl,
+        max_connections: u32,
         relay: &mut Option<crate::ssrf::PinnedRelay>,
     ) -> Result<sqlx::postgres::PgConnectOptions, DbConnectError> {
         match url {
             DbUrl::Postgres(postgres) => {
-                let (options, pinned) =
-                    postgres_connect_options(postgres, DialPolicy::from_env(), &SystemResolver)
-                        .await?;
+                let (options, pinned) = postgres_connect_options(
+                    postgres,
+                    DialPolicy::from_env(),
+                    &SystemResolver,
+                    max_connections,
+                )
+                .await?;
                 *relay = pinned;
                 Ok(options)
             }
@@ -1745,7 +1764,7 @@ where
     /// [`DbConnectError`] when a gate refuses or the driver cannot connect.
     pub async fn connect(url: &DbUrl, max_connections: u32) -> Result<Self, DbConnectError> {
         let mut relay = None;
-        let options = DB::gated_connect_options(url, &mut relay).await?;
+        let options = DB::gated_connect_options(url, max_connections, &mut relay).await?;
         let pool = sqlx::pool::PoolOptions::<DB>::new()
             .max_connections(max_connections)
             .connect_with(options)
@@ -9310,7 +9329,7 @@ mod tests {
         policy: DialPolicy,
         resolver: &R,
     ) -> Result<PinnedPgOptions, DbConnectError> {
-        postgres_connect_options(&PostgresUrl::parse(url)?, policy, resolver).await
+        postgres_connect_options(&PostgresUrl::parse(url)?, policy, resolver, 4).await
     }
 
     /// The gate's verdict on `url` under `policy`, with no DNS available.
@@ -9383,7 +9402,7 @@ mod tests {
         let (Ok(url), Ok(options)) = (url, options) else {
             return;
         };
-        let pinned = pin_postgres_options(&url, options, &[], &NoDns).await;
+        let pinned = pin_postgres_options(&url, options, &[], &NoDns, 4).await;
         assert!(matches!(
             pinned,
             Err(DbConnectError::HostRefused(SsrfRefusal::UnprovenTarget))
@@ -9533,7 +9552,7 @@ mod tests {
                 "{url:?}"
             );
             assert_eq!(
-                relay.target(),
+                relay.target().socket_addr(),
                 std::net::SocketAddr::new(REBIND_PUBLIC, 5432),
                 "{url:?}"
             );
@@ -9543,6 +9562,16 @@ mod tests {
                 "{url:?}: the name must be resolved exactly once"
             );
         }
+    }
+
+    /// A relay that could not be opened refuses the dial as `RelayUnavailable`.
+    #[cfg(unix)]
+    #[test]
+    fn an_unavailable_relay_is_a_relay_unavailable_connect_error() {
+        assert!(matches!(
+            DbConnectError::from(crate::ssrf::RelayUnavailable),
+            DbConnectError::RelayUnavailable
+        ));
     }
 
     /// An IP-literal host under `sslmode=verify-full` is pinned as itself,
@@ -9693,7 +9722,11 @@ mod tests {
         std::thread::spawn(move || {
             let _sent = seen_tx.send(serve_one_pg_tls_client(&listener));
         });
-        let relay = crate::ssrf::PinnedRelay::open(server, 5432);
+        let relay = crate::ssrf::PinnedRelay::open(
+            crate::ssrf::VettedAddr::assume_vetted_for_test(server),
+            5432,
+            4,
+        );
         assert!(relay.is_ok(), "{:?}", relay.as_ref().err());
         let Ok(relay) = relay else {
             return (Err(DbFailure::Io), None);
@@ -9774,7 +9807,7 @@ mod tests {
             assert!(parsed.is_ok(), "{url:?}: {:?}", parsed.err());
             let Ok(parsed) = parsed else { return };
             let gated =
-                <sqlx::Sqlite as GatedDial>::gated_connect_options(&parsed, &mut None).await;
+                <sqlx::Sqlite as GatedDial>::gated_connect_options(&parsed, 4, &mut None).await;
             assert!(gated.is_ok(), "{url:?}: {:?}", gated.err());
         }
     }
@@ -9906,7 +9939,7 @@ mod tests {
         assert!(postgres.is_ok(), "{:?}", postgres.as_ref().err());
         let Ok(postgres) = postgres else { return };
         assert_eq!(
-            <sqlx::Sqlite as GatedDial>::gated_connect_options(&postgres, &mut None)
+            <sqlx::Sqlite as GatedDial>::gated_connect_options(&postgres, 4, &mut None)
                 .await
                 .err(),
             Some(DbConnectError::EngineMismatch {
@@ -9918,7 +9951,7 @@ mod tests {
         assert!(sqlite.is_ok(), "{:?}", sqlite.as_ref().err());
         let Ok(sqlite) = sqlite else { return };
         assert_eq!(
-            <sqlx::Postgres as GatedDial>::gated_connect_options(&sqlite, &mut None)
+            <sqlx::Postgres as GatedDial>::gated_connect_options(&sqlite, 4, &mut None)
                 .await
                 .err(),
             Some(DbConnectError::EngineMismatch {
