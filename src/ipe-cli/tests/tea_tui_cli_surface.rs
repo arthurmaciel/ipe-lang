@@ -622,6 +622,95 @@ fn seal_cli_on_line_point_free_in_list_map_builds() -> Result<(), BoxError> {
     assert_builds("seal_cli_list_map", &src)
 }
 
+/// `Cli.Sub.onLine` mapped through an explicit lambda over a handler list builds:
+/// the lambda's element binder rides the list's `Arc<dyn Fn>` carrier, and its
+/// value read into `onLine` is re-dispatched rather than passed raw.
+#[test]
+fn seal_cli_on_line_lambda_in_list_map_builds() -> Result<(), BoxError> {
+    let src = cli_subscribing("Sub.batch (List.map (\\h -> Sub.onLine h) [ onLine, Line ])")?;
+    assert_builds("seal_cli_lambda_list_map", &src)
+}
+
+/// `Tui.Sub.onKey` mapped through an explicit lambda over a handler list builds.
+#[test]
+fn seal_tui_on_key_lambda_in_list_map_builds() -> Result<(), BoxError> {
+    let src = tui_subscribing("Sub.batch (List.map (\\h -> Sub.onKey h) [ onKey, onKey ])")?;
+    assert_builds("seal_tui_lambda_list_map", &src)
+}
+
+/// A stored predicate read out of a `List` of functions and passed to the
+/// `impl Fn` parameter of `List.filter` builds — the same `Arc<dyn Fn>`-into-
+/// `Fn`-bound class as `onLine`, on a non-subscription kernel.
+#[test]
+fn seal_stored_fn_element_into_impl_fn_kernel_builds() -> Result<(), BoxError> {
+    let src = variant(
+        CLI_APP,
+        "( { model | lines = model.lines ++ [ s ] }, Cmd.none )",
+        "( { model | lines = model.lines ++ List.concat (List.map (\\keep -> List.filter keep [ s ]) [ \\t -> t /= \"\", \\t -> t /= \"x\" ]) }, Cmd.none )",
+    )?;
+    let src = variant(
+        &src,
+        "import Ipe.Tea.Cli as Cli\n",
+        "import Ipe.Tea.Cli as Cli\nimport Ipe.List as List\n",
+    )?;
+    assert_builds("seal_stored_fn_impl_fn_kernel", &src)
+}
+
+/// Concatenate every emitted `.rs` file under `dir` (depth-first, sorted).
+fn emitted_rust(dir: &std::path::Path) -> Result<String, BoxError> {
+    let mut entries = std::fs::read_dir(dir)?
+        .map(|e| e.map(|e| e.path()))
+        .collect::<Result<Vec<_>, _>>()?;
+    entries.sort();
+    let mut out = String::new();
+    for path in entries {
+        if path.is_dir() {
+            if path.file_name().is_some_and(|n| n == "target") {
+                continue;
+            }
+            out.push_str(&emitted_rust(&path)?);
+        } else if path.extension().is_some_and(|e| e == "rs") {
+            out.push_str(&std::fs::read_to_string(&path)?);
+        }
+    }
+    Ok(out)
+}
+
+/// The emitted adaptation for a point-free `onLine` over a stored handler list
+/// is pinned without `IPE_E2E`: the handler reaches `cli_sub_on_line` through
+/// the line-handler bridge, and the bridge never binds the mapper's raw
+/// `Arc<dyn Fn>` element parameter (`eta_N`) — the lowerer re-dispatches that
+/// value read through a fresh closure first.
+#[test]
+fn cli_on_line_point_free_in_list_map_emits_adapted_handler() -> Result<(), BoxError> {
+    let name = "emit_cli_list_map";
+    let src = cli_subscribing("Sub.batch (List.map Sub.onLine [ onLine, Line ])")?;
+    if let Err(e) = compile(name, &src)? {
+        return Err(format!("{name}: expected ipe success, got {e:?}").into());
+    }
+    let out_dir = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
+        .join(format!("tea_surface_{name}_out"));
+    let rust = emitted_rust(&out_dir)?;
+    const BRIDGE: &str = "cli_sub_on_line({ let __ipe_on_line = ";
+    if !rust.contains(BRIDGE) {
+        return Err(format!("{name}: `onLine` handler not bridged:\n{rust}").into());
+    }
+    for (at, _) in rust.match_indices(BRIDGE) {
+        let bound = rust.get(at + BRIDGE.len()..).unwrap_or_default();
+        let raw_eta = bound.strip_prefix("eta_").is_some_and(|rest| {
+            let digits = rest.chars().take_while(char::is_ascii_digit).count();
+            digits > 0 && rest.get(digits..).is_some_and(|tail| tail.starts_with(';'))
+        });
+        if raw_eta {
+            return Err(format!(
+                "{name}: the raw `Arc<dyn Fn>` element param reaches `cli_sub_on_line`:\n{rust}"
+            )
+            .into());
+        }
+    }
+    Ok(())
+}
+
 /// A let-bound `Cli.Sub.onLine` applied later builds.
 #[test]
 fn seal_cli_on_line_let_bound_builds() -> Result<(), BoxError> {

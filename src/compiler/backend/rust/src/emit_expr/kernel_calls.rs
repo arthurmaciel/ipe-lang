@@ -1770,7 +1770,8 @@ pub fn emit_tea_call(
             require_input_sub_shape(ctx, *k)?;
             let handler_expr = arg!(0, "to_msg")?;
             let handler_src = emit_expr_at(ctx, handler_expr, indent, child, generics)?;
-            Ok(Some(format!("cli_sub_on_line({handler_src})")))
+            let bridge = crate::emit_console::line_handler_bridge(&handler_src);
+            Ok(Some(format!("cli_sub_on_line({bridge})")))
         }
         // ── Arity-2: pub/sub subscription — standard path ────────────────────────
         // `Sub.subscribeTopic : String -> (any -> msg) -> Sub msg`

@@ -22320,12 +22320,24 @@ impl<'a> Lowerer<'a> {
     /// `indexedMap`, whose element is param index 1 (the leading `Int` index is
     /// the first). Only fires when the list arg's solved element is a function;
     /// otherwise a no-op, so a non-function-element list is byte-identical.
+    ///
+    /// The mapper body was lowered while the element parameter was still on the
+    /// `Box` carrier, so the flip also reconciles the body's reads with the new
+    /// `Arc` carrier — the same discipline [`Self::apply_param_move_ownership`]
+    /// applies to an `Arc`-rebound param: a direct callee read stays (an `Arc`
+    /// is callable by auto-deref), every other read re-dispatches through a fresh
+    /// closure on the carrier its position expects ([`shim_fn_value_reads`]). An
+    /// `Arc<dyn Fn>` does not itself implement `Fn`, so without the shim a value
+    /// read flowing into a generic `F: Fn` / `impl Fn` parameter (a point-free
+    /// `List.map Sub.onLine [..]`, a `\p -> List.filter p xs`) is
+    /// `ipe`-accept-then-`cargo`-fail (`E0277`). A body with no non-callee read
+    /// is left untouched (byte-identical, no eta draw).
     fn retype_collection_element_param(
         &self,
         resolved: &Callee,
         canon_args: &[canon::Expr],
         lowered_args: &mut [Expr],
-    ) {
+    ) -> DResult<()> {
         let elem_param_index = match resolved {
             Callee::Kernel(
                 KernelFn::ListMap
@@ -22339,25 +22351,45 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::ListFind,
             ) => 0,
             Callee::Kernel(KernelFn::ListIndexedMap) => 1,
-            _ => return,
+            _ => return Ok(()),
         };
         // The list is the last argument; consult its solved element carrier.
         let Some(list_arg) = canon_args.last() else {
-            return;
+            return Ok(());
         };
         let list_stores_fn = self
             .region_ty(list_arg.span)
             .is_some_and(|ty| collection_storable_element_carries_function(self.interner, ty));
         if !list_stores_fn {
-            return;
+            return Ok(());
         }
-        if let Some(Expr::Lambda { params, .. } | Expr::SharedLambda { params, .. }) =
+        if let Some(Expr::Lambda { params, body, .. } | Expr::SharedLambda { params, body, .. }) =
             lowered_args.first_mut()
-            && let Some((_, ty)) = params.get_mut(elem_param_index)
+            && let Some((sym, ty)) = params.get_mut(elem_param_index)
             && let IrType::Fun(fn_params, ret) = ty
         {
-            *ty = IrType::SharedFun(fn_params.clone(), ret.clone());
+            let (sym, fn_params, ret) = (*sym, fn_params.clone(), (**ret).clone());
+            *ty = IrType::SharedFun(fn_params.clone(), Box::new(ret.clone()));
+            let original = std::mem::replace(body.as_mut(), Expr::Unit);
+            let shimmed = shim_fn_value_reads(
+                sym,
+                &fn_params,
+                &ret,
+                self.eta_slice(),
+                &self.builtin_runtime_ctors(),
+                original.clone(),
+            )?;
+            if shimmed == original {
+                *body.as_mut() = original;
+            } else {
+                let mut remaining = count_var_uses(sym, &shimmed);
+                let disciplined = rewrite_multiuse_clones(sym, &mut remaining, shimmed);
+                *body.as_mut() = force_shared_capture_clones(sym, disciplined);
+                // Reserve the shim's eta block so a sibling site does not reuse it.
+                self.advance_eta(fn_params.len());
+            }
         }
+        Ok(())
     }
 
     /// Re-carrier the function-typed VALUE argument of a `Dict` constructor
@@ -22544,7 +22576,7 @@ impl<'a> Lowerer<'a> {
                         Self::retype_decoder_payload_mapper(&resolved, &mut lowered_args);
                         // Close the `Arc`-vs-`Box` frontier at a `List` HOF
                         // mapper over a stored list of functions (see method doc).
-                        self.retype_collection_element_param(&resolved, args, &mut lowered_args);
+                        self.retype_collection_element_param(&resolved, args, &mut lowered_args)?;
                         // Close the same frontier at a `Dict.singleton`/`insert`
                         // whose function VALUE argument is stored on the `Arc`
                         // carrier (see method doc).

@@ -7,6 +7,26 @@
 //!   Canonical 4-field closed cfg: init / update / view / subscriptions. Line
 //!   input is a subscription (`Cli.Sub.onLine`), dispatched by the runtime to
 //!   every line handler the current `subscriptions` declares.
+//! * [`line_handler_bridge`] — the `Cli.Sub.onLine` handler bridge, used by the
+//!   TEA kernel emitter for [`KernelFn::CliSubOnLine`].
+//!
+//! # Line-handler bridge
+//!
+//! `ipe_runtime::cli_sub_on_line` takes a generic `F: Fn(String) -> Msg`. A
+//! handler read out of a storage carrier is an `Arc<dyn Fn>`, which is callable
+//! but does not itself implement `Fn`, so the emitter binds the handler once and
+//! passes a fresh closure that calls it:
+//!
+//! ```text
+//! // Ipê source:  Sub.onLine Line
+//! // Emitted:
+//! cli_sub_on_line({ let __ipe_on_line = <handler>;
+//!     move |line: String| __ipe_on_line(line) })
+//! ```
+//!
+//! The wrapper applies to EVERY handler expression — a named function, a
+//! lambda, a constructor, a partial application, a local, a stored `Arc` — so
+//! no handler carrier reaches the runtime's `Fn` bound unwrapped.
 //!
 //! # Correctness constraints (MAKE INVALID STATES UNREPRESENTABLE)
 //!
@@ -26,6 +46,20 @@ use ipe_ir::{Callee, Expr, KernelFn};
 use crate::EmitCtx;
 use crate::emit_expr::{callee_name, emit_expr_at};
 use crate::emit_types::GenericScope;
+
+/// Wrap an emitted `Cli.Sub.onLine` handler as the runtime's line handler.
+///
+/// `handler_src` is the handler expression as already emitted. It is bound
+/// once (evaluated once, not per line) and called from a fresh `move` closure,
+/// which implements `Fn(String) -> Msg` whatever the handler's own carrier
+/// (`fn` item, `Box<dyn Fn>`, `Arc<dyn Fn>`, closure).
+#[must_use]
+pub fn line_handler_bridge(handler_src: &str) -> String {
+    format!(
+        "{{ let __ipe_on_line = {handler_src}; \
+         move |line: String| __ipe_on_line(line) }}"
+    )
+}
 
 /// Dispatch an `Ipe.Terminal` line-oriented kernel call.
 ///
@@ -194,4 +228,20 @@ fn lookup_field<'f>(
                 .join(", ")
         ),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::line_handler_bridge;
+
+    /// The `onLine` handler never reaches `cli_sub_on_line`'s `F: Fn(String)`
+    /// bound unwrapped: a stored `Arc<dyn Fn>` handler (`eta_0` here) is bound
+    /// once and called from a fresh closure, which does implement `Fn`.
+    #[test]
+    fn line_handler_bridge_wraps_every_handler_in_a_fresh_closure() {
+        assert_eq!(
+            line_handler_bridge("eta_0"),
+            "{ let __ipe_on_line = eta_0; move |line: String| __ipe_on_line(line) }"
+        );
+    }
 }
