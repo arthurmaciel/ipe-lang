@@ -1452,7 +1452,7 @@ Ipe.Db.Dsn — a typed, opaque database connection descriptor
 | `Driver` | The closed set of drivers the runtime can describe — exactly the two the |
 | `TlsMode` | The transport-security posture. `Require` is the secure default when a DSN |
 | `parse` | `parse raw` — THE seal from a full DSN URL string. Returns `Err` on any |
-| `build` | `build parts` — THE seal from typed parts, running the SAME validators as |
+| `build` | `build parts` — THE seal from typed parts, enforcing the invariants `parse` |
 | `driver` | `driver dsn` — the descriptor's driver. |
 | `host` | `host dsn` — the host component (`""` for a file-backed sqlite descriptor). |
 | `database` | `database dsn` — the database name (or file path, for sqlite). |
