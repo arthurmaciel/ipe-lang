@@ -210,7 +210,7 @@ fn arrow_params(fn_ty: &Ty) -> Vec<&Ty> {
 
 /// The parameter count of the mapper at kernel position `arg` of scheme
 /// `shape`: the length of that argument's own arrow spine (0 for a non-arrow).
-fn scheme_mapper_arity(shape: &ipe_kernels::TyShape, arg: usize) -> usize {
+const fn scheme_mapper_arity(shape: &ipe_kernels::TyShape, arg: usize) -> usize {
     let Some(mapper) = ipe_kernels::spine_arg(shape, arg) else {
         return 0;
     };
@@ -22585,18 +22585,18 @@ impl<'a> Lowerer<'a> {
         if !param_tys
             .iter()
             .enumerate()
-            .any(|(param, ty)| bound(param, *ty))
+            .any(|(param, ty)| bound(param, ty))
         {
             return Ok(());
         }
         let ret = self.ir_type_from_ty(ret_ty, span).map_err(|_| refuse())?;
-        let hold = self.eta_sym(0)?;
+        let holder = self.eta_sym(0)?;
         let mut wrapper_params: Vec<(Symbol, IrType)> = Vec::with_capacity(spine);
         let mut demote: Vec<Option<(Vec<IrType>, IrType)>> = Vec::with_capacity(spine);
         for (param, ty) in param_tys.iter().enumerate() {
             let sym = self.eta_sym(param.saturating_add(1))?;
             let ir = self.ir_type_from_ty(ty, span).map_err(|_| refuse())?;
-            if bound(param, *ty) {
+            if bound(param, ty) {
                 let IrType::Fun(fn_params, fn_ret) = ir else {
                     return Err(refuse());
                 };
@@ -22622,7 +22622,7 @@ impl<'a> Lowerer<'a> {
         let original = std::mem::replace(lowered, Expr::Unit);
         let (callee, held) = match original {
             leaf @ Expr::FuncValue { .. } => (leaf, None),
-            other => (Expr::Var(hold), Some(other)),
+            other => (Expr::Var(holder), Some(other)),
         };
         let wrapper = Expr::Lambda {
             params: wrapper_params,
@@ -22634,7 +22634,7 @@ impl<'a> Lowerer<'a> {
         };
         *lowered = match held {
             Some(value) => Expr::Let {
-                name: hold,
+                name: holder,
                 value: Box::new(value),
                 body: Box::new(wrapper),
             },
@@ -23423,6 +23423,23 @@ impl<'a> Lowerer<'a> {
         })
     }
 
+    /// The parameter types and return type of the `arity`-arrow callee at `span`.
+    ///
+    /// Reads the solved region type and peels exactly `arity` arrows. A missing
+    /// region type or a short arrow is unreachable for well-typed input and
+    /// surfaces as a [`Diagnostic::CompilerBug`] naming `site` with the matching
+    /// `(no_type, short_arrow)` detail.
+    fn callee_arrow(
+        &self,
+        span: Span,
+        arity: usize,
+        site: &'static str,
+        (no_type, short_arrow): (&'static str, &'static str),
+    ) -> DResult<(Vec<&Ty>, &Ty)> {
+        let fn_ty = self.region_ty(span).ok_or_else(|| bug(site, no_type))?;
+        peel_arrow_arity(fn_ty, arity, site, short_arrow)
+    }
+
     /// Eta-expand a partial application `f a0 … a_{k-1}` (with `k < arity`) into a
     /// boxed closure `\eta_k … eta_{arity-1} -> f(a0, …, a_{k-1}, eta_k, …)` — a
     /// first-class function value of the residual arrow type. The supplied
@@ -23448,17 +23465,14 @@ impl<'a> Lowerer<'a> {
         // [`reject_point_free_store_kernel`].
         reject_point_free_store_kernel(&resolved, call_span)?;
         reject_unsaturated_handler_kernel(&resolved, call_span)?;
-        let fn_ty = self.region_ty(callee.span).ok_or_else(|| {
-            bug(
-                "ipe_lower::eta_expand_partial",
-                "no inferred type for a partially-applied callee",
-            )
-        })?;
-        let (arg_tys, ret_ty) = peel_arrow_arity(
-            fn_ty,
+        let (arg_tys, ret_ty) = self.callee_arrow(
+            callee.span,
             arity,
             "ipe_lower::eta_expand_partial",
-            "callee type has fewer arrows than its arity",
+            (
+                "no inferred type for a partially-applied callee",
+                "callee type has fewer arrows than its arity",
+            ),
         )?;
 
         let supplied = lowered_args.len();
@@ -23718,17 +23732,14 @@ impl<'a> Lowerer<'a> {
         arity: usize,
         call_span: Span,
     ) -> DResult<Expr> {
-        let fn_ty = self.region_ty(callee.span).ok_or_else(|| {
-            bug(
-                "ipe_lower::eta_expand_value_partial",
-                "no inferred type for a partially-applied function value",
-            )
-        })?;
-        let (arg_tys, ret_ty) = peel_arrow_arity(
-            fn_ty,
+        let (arg_tys, ret_ty) = self.callee_arrow(
+            callee.span,
             arity,
             "ipe_lower::eta_expand_value_partial",
-            "value callee type has fewer arrows than its arrow-arity",
+            (
+                "no inferred type for a partially-applied function value",
+                "value callee type has fewer arrows than its arrow-arity",
+            ),
         )?;
 
         let supplied = lowered_args.len();
@@ -23870,17 +23881,14 @@ impl<'a> Lowerer<'a> {
         arity: usize,
         call_span: Span,
     ) -> DResult<Expr> {
-        let fn_ty = self.region_ty(callee.span).ok_or_else(|| {
-            bug(
-                "ipe_lower::eta_expand_partial_ctor",
-                "no inferred type for a partially-applied constructor",
-            )
-        })?;
-        let (arg_tys, ret_ty) = peel_arrow_arity(
-            fn_ty,
+        let (arg_tys, ret_ty) = self.callee_arrow(
+            callee.span,
             arity,
             "ipe_lower::eta_expand_partial_ctor",
-            "constructor type has fewer arrows than its arity",
+            (
+                "no inferred type for a partially-applied constructor",
+                "constructor type has fewer arrows than its arity",
+            ),
         )?;
 
         let supplied = lowered_args.len();
