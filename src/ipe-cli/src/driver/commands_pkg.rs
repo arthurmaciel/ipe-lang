@@ -841,7 +841,7 @@ pub fn run_audit_entry(rest: &[String]) -> Result<(), CliError> {
     // silently classify every submitted version as "new".
     let index_root = index_root_opt.clone().unwrap_or_else(resolve::index_root);
     let baseline: Option<index::IndexEntry> =
-        index::read_entry_lookup(&index_root, &submitted.name).require_present()?;
+        index::read_entry_lookup(&index_root, submitted.name.as_str()).require_present()?;
 
     // Structural prechecks (no fetch): version-count ceiling, per-version
     // immutability against the baseline, and source continuity (anti-squat). This
@@ -895,8 +895,11 @@ pub fn run_audit_entry(rest: &[String]) -> Result<(), CliError> {
         // assert the fetched tree's sha256 equals the index pin. A mismatch is a
         // CliError::HashMismatch — the fetched bytes are not the source the
         // publisher registered, so nothing derived from them is trusted.
-        let checkout =
-            resolve::fetch_and_verify_index_version(&scratch_root, &submitted.name, version)?;
+        let checkout = resolve::fetch_and_verify_index_version(
+            &scratch_root,
+            submitted.name.as_str(),
+            version,
+        )?;
 
         // Step 4 — audit: run the full Tier-1 (+ Tier-2 where applicable) gate on
         // the verified source tree. Pass --index so the enforced-semver check reads

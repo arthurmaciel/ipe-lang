@@ -332,7 +332,8 @@ fn compute_entry_version(
     // Parse-don't-validate: the typed constructor rejects any value outside the
     // transport allow-list. Publish uses the same gate as the resolver so an
     // entry written by `publish` round-trips through `read_entry` without error.
-    let source = SourceUrl::parse(&manifest.name, &raw_source)
+    let package_name = crate::package_name::PackageName::parse(&manifest.name)?;
+    let source = SourceUrl::parse(&package_name, &raw_source)
         .map_err(|e| CliError::Usage(text::msg::publish_source_refused(&e)))?;
 
     // The revision is pinned as an immutable commit SHA. The default path runs
@@ -342,14 +343,14 @@ fn compute_entry_version(
     // as moving refs.
     let rev = if let Some(r) = rev_override {
         // Injection-gate the requested ref before passing it to git.
-        let requested = CommitId::parse(&manifest.name, r)
+        let requested = CommitId::parse(&package_name, r)
             .map_err(|e| CliError::Usage(text::msg::publish_rev_refused(&e)))?;
         let raw_sha = resolve_rev_to_sha(source_root, requested.as_str())?;
-        PinnedRev::from_full_sha(&manifest.name, &raw_sha)
+        PinnedRev::from_full_sha(&package_name, &raw_sha)
             .map_err(|e| CliError::Usage(text::msg::publish_rev_not_sha(&e)))?
     } else {
         let raw_sha = committed_pushed_head(source_root)?;
-        PinnedRev::from_full_sha(&manifest.name, &raw_sha)
+        PinnedRev::from_full_sha(&package_name, &raw_sha)
             .map_err(|e| CliError::Usage(text::msg::publish_head_not_sha(&e)))?
     };
 
@@ -1303,6 +1304,12 @@ mod tests {
     use ipe_ir::Capability;
     use std::collections::BTreeSet;
 
+    /// A fixture package name.
+    #[allow(clippy::expect_used)] // fixture names are literal registry names
+    fn pn(raw: &str) -> crate::package_name::PackageName {
+        crate::package_name::PackageName::parse(raw).expect("fixture package name parses")
+    }
+
     fn caps(names: &[Capability]) -> BTreeSet<Capability> {
         names.iter().copied().collect()
     }
@@ -1310,10 +1317,13 @@ mod tests {
     fn sample_version(v: &str, caps_set: BTreeSet<Capability>) -> EntryVersion {
         EntryVersion {
             version: semver::Version::parse(v).expect("valid version"),
-            source: SourceUrl::parse("http-extras", "https://github.com/arthurmaciel/http-extras")
-                .expect("valid source url"),
+            source: SourceUrl::parse(
+                &pn("http-extras"),
+                "https://github.com/arthurmaciel/http-extras",
+            )
+            .expect("valid source url"),
             rev: PinnedRev::from_full_sha(
-                "http-extras",
+                &pn("http-extras"),
                 "9f2c7b1e0a4d5c6f8b2a1e3d4c5b6a7f8e9d0c1b",
             )
             .expect("valid pinned rev"),
@@ -1947,7 +1957,7 @@ mod tests {
         );
         // PinnedRev::from_full_sha must accept it.
         assert!(
-            PinnedRev::from_full_sha("lib", &sha).is_ok(),
+            PinnedRev::from_full_sha(&pn("lib"), &sha).is_ok(),
             "HEAD SHA must be accepted by PinnedRev"
         );
         let _ = std::fs::remove_dir_all(&repo);

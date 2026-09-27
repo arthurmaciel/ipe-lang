@@ -548,7 +548,10 @@ mod tests {
 
     #[test]
     fn a_user_error_is_orange_and_an_internal_error_light_red() {
-        let usage = CliError::Usage(crate::text::Message::relay(&"nothing to build here"));
+        let usage = CliError::Usage(crate::text::msg::command_refusal(
+            &"build",
+            &"nothing to build here",
+        ));
         let out = error_screen(&usage, true)
             .map(|s| s.render(Header::Omitted))
             .unwrap_or_default();
@@ -584,7 +587,8 @@ mod tests {
         let out = screen_of(&offline);
         assert!(!out.contains(REPORT_BUGS_PHRASE), "{out:?}");
 
-        let out = screen_of(&CliError::Usage(crate::text::Message::relay(
+        let out = screen_of(&CliError::Usage(crate::text::msg::command_refusal(
+            &"build",
             &"nothing to build here",
         )));
         assert!(!out.contains(REPORT_BUGS_PHRASE), "{out:?}");
@@ -710,9 +714,10 @@ mod tests {
     fn a_manifest_value_cannot_inject_escapes_into_the_help_screen() {
         let err = crate::driver::with_help_on_misuse(
             "build",
-            Err(CliError::Usage(crate::text::Message::relay(&format!(
-                "unknown manifest value `{HOSTILE}`"
-            )))),
+            Err(CliError::Usage(crate::text::msg::command_refusal(
+                &"build",
+                &format!("unknown manifest value `{HOSTILE}`"),
+            ))),
         )
         .err();
         assert!(
@@ -761,9 +766,10 @@ mod tests {
 
     #[test]
     fn machine_json_escapes_the_sanitised_message_exactly_once() {
-        let err = CliError::Usage(crate::text::Message::relay(&format!(
-            "bad value `a\"b\\c` {HOSTILE}"
-        )));
+        let err = CliError::Usage(crate::text::msg::command_refusal(
+            &"build",
+            &format!("bad value `a\"b\\c` {HOSTILE}"),
+        ));
         let line = crate::machine_output::machine_error(
             crate::cli_args::OutputFormat::Json,
             "build",
@@ -778,6 +784,9 @@ mod tests {
                     .and_then(serde_json::Value::as_str)
                     .map(str::to_owned)
             });
-        assert_eq!(message.as_deref(), Some("bad value `a\"b\\c` foo"));
+        assert_eq!(
+            message.as_deref(),
+            Some("ipe build: bad value `a\"b\\c` foo")
+        );
     }
 }

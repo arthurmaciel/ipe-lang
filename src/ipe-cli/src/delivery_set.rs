@@ -476,7 +476,8 @@ mod tests {
         let outcome = set.release_each(|plan| {
             if matches!(plan.delivery().runtime(), Some(Runtime::Solo)) && plan.slug() == "web-solo"
             {
-                Err(CliError::Usage(crate::text::Message::relay(
+                Err(CliError::Usage(crate::text::msg::command_refusal(
+                    &"release",
                     &"solo bundle failed",
                 )))
             } else {

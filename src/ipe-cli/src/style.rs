@@ -373,16 +373,38 @@ impl TerminalSafe {
         Self(out)
     }
 
-    /// The sanitised text.
+    /// The sanitised block text, newlines kept for a renderer that gutters each line.
     #[must_use]
     pub fn as_str(&self) -> &str {
         &self.0
     }
 }
 
+/// Indent that opens every continuation line of a [`TerminalSafe`] rendered inline.
+///
+/// Wider than the output gutter, so a continuation line never starts where a
+/// real output line does.
+pub const CONTINUATION_INDENT: &str = "    ";
+
+/// The inline form: every line after the first is indented by [`CONTINUATION_INDENT`].
+///
+/// An inline placeholder (a catalog message field, a status or watch line)
+/// renders untrusted text inside a line the CLI owns. A newline in that text
+/// cannot open a fresh, forged output line: it only continues the owning line,
+/// visibly indented. Block renderers that gutter each line themselves take
+/// [`TerminalSafe::as_str`] instead.
 impl std::fmt::Display for TerminalSafe {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.0)
+        let mut lines = self.0.split('\n');
+        if let Some(first) = lines.next() {
+            f.write_str(first)?;
+        }
+        for line in lines {
+            f.write_str("\n")?;
+            f.write_str(CONTINUATION_INDENT)?;
+            f.write_str(line)?;
+        }
+        Ok(())
     }
 }
 
@@ -541,6 +563,20 @@ mod tests {
         // The CSI colour codes are removed whole, leaving only the visible text;
         // layout whitespace (tab, newline) is preserved.
         assert_eq!(s, "redmoveddone\ttab\nline");
+    }
+
+    /// Rendered inline, untrusted text cannot open a forged output line.
+    ///
+    /// Every line after the first is indented past the gutter, so an injected
+    /// newline only continues the owning line.
+    #[test]
+    fn terminal_safe_inline_form_indents_continuation_lines() {
+        let forged = TerminalSafe::sanitize("oops\n\u{2713} published\n\u{1b}[2Kdone");
+        assert_eq!(
+            forged.to_string(),
+            format!("oops\n{CONTINUATION_INDENT}\u{2713} published\n{CONTINUATION_INDENT}done")
+        );
+        assert_eq!(TerminalSafe::sanitize("one line").to_string(), "one line");
     }
 
     #[test]

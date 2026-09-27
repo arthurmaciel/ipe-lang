@@ -717,7 +717,12 @@ fn run_phase(
     rustup_home: Option<PathBuf>,
     payload: &[OsString],
 ) -> Result<ipe_sandbox::JailedOutput, CliError> {
-    let io_err = |detail: String| CliError::Usage(text::msg::command_refusal(&"add", &detail));
+    let io_err = |detail: String| {
+        CliError::Usage(text::msg::command_refusal(
+            &"add",
+            &crate::style::TerminalSafe::sanitize(&detail),
+        ))
+    };
     let spec = ipe_sandbox::JailSpec {
         network,
         scoped_tmp: scoped_tmp.to_path_buf(),
@@ -905,7 +910,12 @@ fn run_inspector_job(job: &InspectorJob, allow_build_scripts: bool) -> Result<St
     let caps = ipe_sandbox::probe();
     let mechanism = ipe_sandbox::select_mechanism(&caps);
     let unsandboxed_ok = ipe_sandbox::unsandboxed_override_set();
-    let io_err = |detail: String| CliError::Usage(text::msg::command_refusal(&"add", &detail));
+    let io_err = |detail: String| {
+        CliError::Usage(text::msg::command_refusal(
+            &"add",
+            &crate::style::TerminalSafe::sanitize(&detail),
+        ))
+    };
 
     match choose_sandbox_route(&mechanism, ipe_sandbox::missing_caps(&caps), unsandboxed_ok) {
         SandboxRoute::RefuseNoBwrap => {
@@ -977,7 +987,12 @@ fn run_single_bwrap(
     binds: &ToolchainBinds,
     allow_build_scripts: bool,
 ) -> Result<String, CliError> {
-    let io_err = |detail: String| CliError::Usage(text::msg::command_refusal(&"add", &detail));
+    let io_err = |detail: String| {
+        CliError::Usage(text::msg::command_refusal(
+            &"add",
+            &crate::style::TerminalSafe::sanitize(&detail),
+        ))
+    };
     let (toolchain_ro_binds, path_prepend, rustup_home) = binds;
     let with_payload =
         |fetch_only: bool| inspector_payload(inspector, job, None, allow_build_scripts, fetch_only);
@@ -1050,7 +1065,12 @@ fn run_introspect_chunk(
     binds: &ToolchainBinds,
     payload: &[OsString],
 ) -> Result<String, CliError> {
-    let io_err = |detail: String| CliError::Usage(text::msg::command_refusal(&"add", &detail));
+    let io_err = |detail: String| {
+        CliError::Usage(text::msg::command_refusal(
+            &"add",
+            &crate::style::TerminalSafe::sanitize(&detail),
+        ))
+    };
     let (toolchain_ro_binds, path_prepend, rustup_home) = binds;
     let out = run_phase(
         caps,
@@ -1098,7 +1118,12 @@ fn run_manifest_bwrap_chunked(
     binds: &ToolchainBinds,
     allow_build_scripts: bool,
 ) -> Result<String, CliError> {
-    let io_err = |detail: String| CliError::Usage(text::msg::command_refusal(&"add", &detail));
+    let io_err = |detail: String| {
+        CliError::Usage(text::msg::command_refusal(
+            &"add",
+            &crate::style::TerminalSafe::sanitize(&detail),
+        ))
+    };
     let (toolchain_ro_binds, path_prepend, rustup_home) = binds;
 
     // Stage 1 — fetch every crate in one network-on run (no foreign code).
@@ -1200,7 +1225,12 @@ fn run_inspector_job_unsandboxed(
     scratch_hint: &str,
     allow_build_scripts: bool,
 ) -> Result<String, CliError> {
-    let io_err = |detail: String| CliError::Usage(text::msg::command_refusal(&"add", &detail));
+    let io_err = |detail: String| {
+        CliError::Usage(text::msg::command_refusal(
+            &"add",
+            &crate::style::TerminalSafe::sanitize(&detail),
+        ))
+    };
     crate::screen::chatter(
         crate::screen::Stream::Stderr,
         crate::screen::Tone::UserError,
@@ -1383,6 +1413,42 @@ fn jail_for_host() -> ipe_ffi::capability_scan::JailForTarget {
     ipe_ffi::capability_scan::JailForTarget::Holds(confined)
 }
 
+/// The refusal for a wrapper crate whose capabilities cannot be enforced.
+pub(crate) struct WrapperRefusal {
+    /// Every reason the wrapper is refused.
+    reasons: Vec<ipe_ffi::capability_scan::RefuseReason>,
+    /// The capability set the scan inferred from the wrapper's source.
+    proposed: BTreeSet<ipe_ffi::capability_scan::Capability>,
+}
+
+impl std::fmt::Display for WrapperRefusal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        writeln!(
+            f,
+            "ipe install: the wrapper crate cannot be admitted — its capabilities cannot be \
+             enforced in this release."
+        )?;
+        for reason in &self.reasons {
+            writeln!(f, "  - {reason}")?;
+        }
+        if self.proposed.is_empty() {
+            writeln!(
+                f,
+                "  inferred from its source: (none — but see the reasons above)"
+            )?;
+        } else {
+            let names: Vec<&str> = self.proposed.iter().map(|c| c.as_str()).collect();
+            writeln!(f, "  inferred from its source: {}", names.join(", "))?;
+        }
+        f.write_str(
+            "  Ipê has no runtime sandbox around the emitted app yet, so a wrapper that \
+             touches the network, filesystem, environment, a subprocess, native FFI, or a \
+             non-std dependency would run uncontained. Narrow the wrapper to pure compute \
+             (Tier 1 `[rust.define.*]` covers the safe shapes), or wait for the runtime jail.",
+        )
+    }
+}
+
 fn enforce_wrapper_capabilities(
     wrapper_dir: &Path,
     declared: &BTreeSet<ipe_ffi::capability_scan::Capability>,
@@ -1466,32 +1532,9 @@ fn enforce_wrapper_capabilities(
                 .emit();
             Ok(())
         }
-        ipe_ffi::capability_scan::Verdict::Refuse { reasons, proposed } => {
-            use std::fmt::Write as _;
-            let mut message = String::from(
-                "ipe install: the wrapper crate cannot be admitted — its capabilities cannot be \
-                 enforced in this release.\n",
-            );
-            for reason in &reasons {
-                let _ = writeln!(message, "  - {reason}");
-            }
-            if proposed.is_empty() {
-                let _ = writeln!(
-                    message,
-                    "  inferred from its source: (none — but see the reasons above)"
-                );
-            } else {
-                let names: Vec<&str> = proposed.iter().map(|c| c.as_str()).collect();
-                let _ = writeln!(message, "  inferred from its source: {}", names.join(", "));
-            }
-            message.push_str(
-                "  Ipê has no runtime sandbox around the emitted app yet, so a wrapper that \
-                 touches the network, filesystem, environment, a subprocess, native FFI, or a \
-                 non-std dependency would run uncontained. Narrow the wrapper to pure compute \
-                 (Tier 1 `[rust.define.*]` covers the safe shapes), or wait for the runtime jail.",
-            );
-            Err(CliError::Usage(crate::text::Message::relay(&message)))
-        }
+        ipe_ffi::capability_scan::Verdict::Refuse { reasons, proposed } => Err(CliError::Usage(
+            crate::text::Message::relay(&WrapperRefusal { reasons, proposed }),
+        )),
     }
 }
 
@@ -1688,24 +1731,43 @@ fn detect_build_scripts_hint(raw: &str) -> Option<&str> {
 /// the user can see the actionable flag clearly.
 fn map_inspector_error(msg: crate::text::Message) -> CliError {
     // Detect the hint before consuming `msg`, then branch.
-    let hint_line: Option<String> = detect_build_scripts_hint(&msg).map(|l| l.trim().to_owned());
+    let hint_line =
+        detect_build_scripts_hint(&msg).map(|l| crate::style::TerminalSafe::sanitize(l.trim()));
     hint_line.map_or(CliError::Resolve(msg), |hint| {
         // The build-scripts refusal: render the hint as a banner so the
         // `--allow-build-scripts` flag stands out as the actionable next step.
-        let p = crate::style::Palette::for_stream(&std::io::stderr());
-        let banner = format!(
+        CliError::Resolve(crate::text::Message::relay(&BuildScriptsBanner {
+            hint,
+            palette: crate::style::Palette::for_stream(&std::io::stderr()),
+        }))
+    })
+}
+
+/// The warning banner for an inspector refusal that `--allow-build-scripts`
+/// would lift.
+pub(crate) struct BuildScriptsBanner {
+    /// The inspector's hint line.
+    hint: crate::style::TerminalSafe,
+    /// The stderr palette the banner is styled with.
+    palette: crate::style::Palette,
+}
+
+impl std::fmt::Display for BuildScriptsBanner {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
             "{y}warning:{r} some crates in the dependency graph have build scripts.\n\
              Pass {bold}--allow-build-scripts{r} to proceed (you will see a warning naming\n\
              those packages first, and they will run inside the isolation jail).\n\
              \n\
              {dim}hint: {hint}{r}",
-            y = p.bright_yellow,
-            bold = p.bold,
-            dim = p.dim,
-            r = p.reset,
-        );
-        CliError::Resolve(crate::text::Message::relay(&banner))
-    })
+            y = self.palette.bright_yellow,
+            bold = self.palette.bold,
+            dim = self.palette.dim,
+            r = self.palette.reset,
+            hint = self.hint,
+        )
+    }
 }
 
 /// Shared tail of `add` / `install`: inspect one crate + write its artifacts.
@@ -4452,7 +4514,7 @@ version = \"1\"
         let raw = "inspector exited with Some(1)\n\
             crates with build scripts found\n\
             pass --allow-build-scripts to proceed";
-        let err = map_inspector_error(crate::text::Message::relay(&raw));
+        let err = map_inspector_error(crate::text::msg::command_refusal(&"add", &raw));
         match err {
             CliError::Resolve(msg) => {
                 assert!(

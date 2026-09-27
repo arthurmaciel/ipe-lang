@@ -116,6 +116,18 @@ impl std::fmt::Display for PackageName {
     }
 }
 
+impl PartialEq<str> for PackageName {
+    fn eq(&self, other: &str) -> bool {
+        self.0 == other
+    }
+}
+
+impl PartialEq<&str> for PackageName {
+    fn eq(&self, other: &&str) -> bool {
+        self.0 == *other
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

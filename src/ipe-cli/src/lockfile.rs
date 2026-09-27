@@ -78,7 +78,8 @@ impl LockedRev {
         if raw == "local" {
             return Ok(Self::Local);
         }
-        PinnedRev::from_full_sha(pkg, raw).map(LockedRev::Pinned)
+        let pkg = crate::package_name::PackageName::parse(pkg)?;
+        PinnedRev::from_full_sha(&pkg, raw).map(LockedRev::Pinned)
     }
 
     /// Return the inner [`PinnedRev`] if this is a `Pinned` rev.
@@ -357,7 +358,13 @@ mod tests {
             name: name.to_owned(),
             version: semver::Version::parse(version).expect("valid version"),
             source: format!("https://example.invalid/{name}"),
-            rev: LockedRev::Pinned(PinnedRev::from_full_sha(name, FIXTURE_SHA).expect("valid sha")),
+            rev: LockedRev::Pinned(
+                PinnedRev::from_full_sha(
+                    &crate::package_name::PackageName::parse(name).expect("valid name"),
+                    FIXTURE_SHA,
+                )
+                .expect("valid sha"),
+            ),
             sha256: format!("hash-of-{name}"),
             kind: DepKind::Index,
         }
@@ -368,7 +375,13 @@ mod tests {
             name: name.to_owned(),
             version: semver::Version::new(0, 0, 0),
             source: format!("https://example.invalid/{name}"),
-            rev: LockedRev::Pinned(PinnedRev::from_full_sha(name, FIXTURE_SHA).expect("valid sha")),
+            rev: LockedRev::Pinned(
+                PinnedRev::from_full_sha(
+                    &crate::package_name::PackageName::parse(name).expect("valid name"),
+                    FIXTURE_SHA,
+                )
+                .expect("valid sha"),
+            ),
             sha256: format!("hash-of-{name}"),
             kind: DepKind::Escape,
         }

@@ -47,7 +47,7 @@ impl SourceUrl {
     ///
     /// # Errors
     /// [`CliError::Resolve`] when the value is not an accepted source form.
-    pub fn parse(pkg: &str, raw: &str) -> Result<Self, CliError> {
+    pub fn parse(pkg: &PackageName, raw: &str) -> Result<Self, CliError> {
         let allowed = raw.starts_with("https://")
             || raw.starts_with("git://")
             || raw.starts_with("ssh://")
@@ -59,7 +59,7 @@ impl SourceUrl {
         if !allowed || raw.starts_with('-') || raw.contains("::") {
             return Err(CliError::Resolve(
                 crate::text::msg::index_source_url_invalid(
-                    &pkg,
+                    pkg,
                     &crate::style::TerminalSafe::sanitize(&format!("{raw:?}")),
                 ),
             ));
@@ -105,7 +105,7 @@ impl CommitId {
     ///
     /// # Errors
     /// [`CliError::Resolve`] when the value is injection-shaped.
-    pub fn parse(pkg: &str, raw: &str) -> Result<Self, CliError> {
+    pub fn parse(pkg: &PackageName, raw: &str) -> Result<Self, CliError> {
         let injection = raw.is_empty()
             || raw.starts_with('-')
             || raw.contains("::")
@@ -127,7 +127,7 @@ impl CommitId {
                 .is_some_and(|ext| ext.eq_ignore_ascii_case("lock"));
         if injection {
             return Err(CliError::Resolve(crate::text::msg::index_rev_injection(
-                &pkg,
+                pkg,
                 &crate::style::TerminalSafe::sanitize(&format!("{raw:?}")),
             )));
         }
@@ -174,13 +174,13 @@ impl PinnedRev {
     ///
     /// # Errors
     /// [`CliError::Resolve`] when `raw` is not a 40-char lowercase-hex string.
-    pub fn from_full_sha(pkg: &str, raw: &str) -> Result<Self, CliError> {
+    pub fn from_full_sha(pkg: &PackageName, raw: &str) -> Result<Self, CliError> {
         // Require exactly 40 lowercase hex chars — no uppercase, no short hashes.
         let is_sha = raw.len() == 40 && raw.chars().all(|c| matches!(c, '0'..='9' | 'a'..='f'));
         if !is_sha {
             return Err(CliError::Resolve(
                 crate::text::msg::index_rev_not_immutable(
-                    &pkg,
+                    pkg,
                     &crate::style::TerminalSafe::sanitize(&format!("{raw:?}")),
                 ),
             ));
@@ -198,7 +198,7 @@ impl PinnedRev {
     /// [`CliError::Resolve`] when git cannot be run, when the ref does not
     /// resolve to a commit, or when the output is not a 40-hex SHA.
     pub fn resolve_in_checkout(
-        pkg: &str,
+        pkg: &PackageName,
         checkout: &std::path::Path,
         requested: &CommitId,
     ) -> Result<Self, CliError> {
@@ -208,11 +208,11 @@ impl PinnedRev {
             .current_dir(checkout)
             .output()
             .map_err(|e| {
-                CliError::Resolve(crate::text::msg::index_rev_parse_unavailable(&pkg, &e))
+                CliError::Resolve(crate::text::msg::index_rev_parse_unavailable(pkg, &e))
             })?;
         if !output.status.success() {
             return Err(CliError::Resolve(crate::text::msg::index_rev_unresolved(
-                &pkg,
+                pkg,
                 &crate::style::TerminalSafe::sanitize(&refspec),
                 &crate::style::TerminalSafe::sanitize(&format!("{:?}", requested.as_str())),
             )));
@@ -253,11 +253,11 @@ impl Sha256Hex {
     ///
     /// # Errors
     /// [`CliError::Resolve`] when `raw` is not exactly 64 lowercase hex chars.
-    pub fn parse(pkg: &str, raw: &str) -> Result<Self, CliError> {
+    pub fn parse(pkg: &PackageName, raw: &str) -> Result<Self, CliError> {
         let is_digest = raw.len() == 64 && raw.chars().all(|c| matches!(c, '0'..='9' | 'a'..='f'));
         if !is_digest {
             return Err(CliError::Resolve(crate::text::msg::index_sha256_invalid(
-                &pkg,
+                pkg,
                 &crate::style::TerminalSafe::sanitize(&format!("{raw:?}")),
             )));
         }
@@ -282,7 +282,7 @@ impl std::fmt::Display for Sha256Hex {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct IndexEntry {
     /// The package name, matching the entry file stem (`packages/<name>.toml`).
-    pub name: String,
+    pub name: PackageName,
     /// The publisher the entry claims — self-declared and untrusted; provenance
     /// only. A privilege rests on a [`crate::publisher::BlessedPublisher`], never
     /// on this field.
@@ -426,7 +426,7 @@ pub fn read_entry_lookup(index_root: &Path, name: &str) -> EntryLookup {
             ));
         }
     };
-    match parse_entry(name.as_str(), &text) {
+    match parse_entry(&name, &text) {
         Ok(entry) => EntryLookup::Present(entry),
         Err(err) => EntryLookup::Unreadable(err),
     }
@@ -448,10 +448,10 @@ pub fn read_entry(index_root: &Path, name: &str) -> Result<IndexEntry, CliError>
     let text =
         crate::io_bounded::read_to_string_capped(&path, crate::io_bounded::SMALL_FILE_READ_CAP)
             .map_err(|e| match e {
-                crate::CliError::Io { ref source, .. } => read_entry_error(name, source),
+                crate::CliError::Io { ref source, .. } => read_entry_error(&package_name, source),
                 other => other,
             })?;
-    parse_entry(name, &text)
+    parse_entry(&package_name, &text)
 }
 
 /// The typed diagnostic when an index entry cannot be read. A missing entry is
@@ -459,12 +459,12 @@ pub fn read_entry(index_root: &Path, name: &str) -> Result<IndexEntry, CliError>
 /// the user at the index, WITHOUT leaking the internal cache path or the errno
 /// tail. Any other read failure (a permission or corruption problem the user can
 /// act on) keeps a readable kind description, still errno-free.
-fn read_entry_error(name: &str, e: &std::io::Error) -> CliError {
+fn read_entry_error(name: &PackageName, e: &std::io::Error) -> CliError {
     if e.kind() == std::io::ErrorKind::NotFound {
-        CliError::Resolve(crate::text::msg::add_package_not_in_index(&name))
+        CliError::Resolve(crate::text::msg::add_package_not_in_index(name))
     } else {
         CliError::Resolve(crate::text::msg::add_index_entry_unreadable(
-            &name,
+            name,
             &e.kind(),
         ))
     }
@@ -497,9 +497,10 @@ pub fn validate_entry_file(path: &Path) -> Result<IndexEntry, CliError> {
         .ok_or_else(|| {
             CliError::Usage(crate::text::msg::index_entry_path_invalid(&path.display()))
         })?;
+    let name = PackageName::parse(name)?;
     let text =
         crate::io_bounded::read_to_string_capped(path, crate::io_bounded::SMALL_FILE_READ_CAP)?;
-    parse_entry(name, &text)
+    parse_entry(&name, &text)
 }
 
 /// The per-entry version ceiling enforced at admission.
@@ -579,7 +580,7 @@ pub fn admission_precheck(
     // rejection — absent proof the drop is the sanctioned reset, the permissive
     // branch is unreachable. Rewriting a version stays forbidden everywhere
     // (enforced above); only dropping is carved out.
-    let reserved_name = ipe_kernels::reserved_package_prefix_of(&submitted.name).is_some();
+    let reserved_name = ipe_kernels::reserved_package_prefix_of(submitted.name.as_str()).is_some();
     let blessing = BlessedPublisher::from_attested(attested, &submitted.publisher);
     let reset_allowed = reserved_name
         && blessing
@@ -668,9 +669,9 @@ pub fn resolve_version<'a>(
 ///
 /// The refusal names only why the value is not a login, never the value itself,
 /// so a hostile entry cannot put control bytes or escapes into the error text.
-fn parse_publisher(name: &str, claimed: &str) -> Result<SelfDeclaredPublisher, CliError> {
+fn parse_publisher(name: &PackageName, claimed: &str) -> Result<SelfDeclaredPublisher, CliError> {
     SelfDeclaredPublisher::parse(claimed).map_err(|refusal| {
-        CliError::Resolve(crate::text::msg::index_publisher_not_login(&name, &refusal))
+        CliError::Resolve(crate::text::msg::index_publisher_not_login(name, &refusal))
     })
 }
 
@@ -679,7 +680,7 @@ fn parse_publisher(name: &str, claimed: &str) -> Result<SelfDeclaredPublisher, C
 /// published version. Comments (`#`) and blank lines are ignored; unrecognised
 /// keys are ignored (forward-compatible), but a malformed known value is a hard
 /// error.
-fn parse_entry(name: &str, text: &str) -> Result<IndexEntry, CliError> {
+fn parse_entry(name: &PackageName, text: &str) -> Result<IndexEntry, CliError> {
     let mut publisher: Option<String> = None;
     let mut versions: Vec<RawVersion> = Vec::new();
     // `None` while reading the top-level table, `Some(idx)` while inside a
@@ -731,11 +732,11 @@ fn parse_entry(name: &str, text: &str) -> Result<IndexEntry, CliError> {
     }
 
     let publisher = publisher
-        .ok_or_else(|| CliError::Resolve(crate::text::msg::index_entry_missing_publisher(&name)))
+        .ok_or_else(|| CliError::Resolve(crate::text::msg::index_entry_missing_publisher(name)))
         .and_then(|claimed| parse_publisher(name, &claimed))?;
     if versions.is_empty() {
         return Err(CliError::Resolve(
-            crate::text::msg::index_entry_no_versions(&name),
+            crate::text::msg::index_entry_no_versions(name),
         ));
     }
     let versions = versions
@@ -744,7 +745,7 @@ fn parse_entry(name: &str, text: &str) -> Result<IndexEntry, CliError> {
         .collect::<Result<Vec<_>, _>>()?;
 
     Ok(IndexEntry {
-        name: name.to_owned(),
+        name: name.clone(),
         publisher,
         versions,
     })
@@ -777,9 +778,10 @@ fn parse_entry(name: &str, text: &str) -> Result<IndexEntry, CliError> {
 /// constructor (an unknown capability, a non-immutable `rev`, an injection-shaped
 /// `source`).
 pub fn parse_entry_json(name: &str, text: &str) -> Result<IndexEntry, CliError> {
+    let name = &PackageName::parse(name)?;
     let malformed = |detail: &str| {
         CliError::Resolve(crate::text::msg::registry_json_malformed(
-            &name,
+            name,
             &crate::style::TerminalSafe::sanitize(detail),
         ))
     };
@@ -810,7 +812,7 @@ pub fn parse_entry_json(name: &str, text: &str) -> Result<IndexEntry, CliError> 
     }
 
     Ok(IndexEntry {
-        name: name.to_owned(),
+        name: name.clone(),
         publisher,
         versions,
     })
@@ -819,10 +821,13 @@ pub fn parse_entry_json(name: &str, text: &str) -> Result<IndexEntry, CliError> 
 /// Parse one element of the JSON mirror's `versions` array into a typed
 /// [`EntryVersion`], routing every publisher-controlled field through the same
 /// constructors the TOML reader uses (parse, don't validate).
-fn parse_entry_version_json(name: &str, raw: &serde_json::Value) -> Result<EntryVersion, CliError> {
+fn parse_entry_version_json(
+    name: &PackageName,
+    raw: &serde_json::Value,
+) -> Result<EntryVersion, CliError> {
     let malformed = |detail: String| {
         CliError::Resolve(crate::text::msg::registry_json_malformed(
-            &name,
+            name,
             &crate::style::TerminalSafe::sanitize(&detail),
         ))
     };
@@ -861,7 +866,7 @@ fn parse_entry_version_json(name: &str, raw: &serde_json::Value) -> Result<Entry
                 .ok_or_else(|| malformed("a `capabilities` element is not a string".to_owned()))?;
             let parsed = Capability::from_str(token).map_err(|e| {
                 CliError::Resolve(crate::text::msg::index_capability_unknown(
-                    &name,
+                    name,
                     &crate::style::TerminalSafe::sanitize(&e.to_string()),
                 ))
             })?;
@@ -878,7 +883,7 @@ fn parse_entry_version_json(name: &str, raw: &serde_json::Value) -> Result<Entry
         Some(value) => {
             let raw = serde_json::to_string(value)
                 .map_err(|e| malformed(format!("`signature` could not be serialized: {e}")))?;
-            Some(SignatureBundle::parse(name, &raw)?)
+            Some(SignatureBundle::parse(name.as_str(), &raw)?)
         }
     };
 
@@ -907,14 +912,14 @@ struct RawVersion {
 impl RawVersion {
     /// Turn the collected raw fields into a typed [`EntryVersion`], erroring on a
     /// missing required field, a malformed version, or an unknown capability.
-    fn into_version(self, name: &str) -> Result<EntryVersion, CliError> {
+    fn into_version(self, name: &PackageName) -> Result<EntryVersion, CliError> {
         let missing = |field: &str| {
-            CliError::Resolve(crate::text::msg::index_version_missing_field(&name, &field))
+            CliError::Resolve(crate::text::msg::index_version_missing_field(name, &field))
         };
         let version_str = self.version.ok_or_else(|| missing("version"))?;
         let version = semver::Version::parse(&version_str).map_err(|e| {
             CliError::Resolve(crate::text::msg::index_version_invalid(
-                &name,
+                name,
                 &crate::style::TerminalSafe::sanitize(&version_str),
                 &crate::style::TerminalSafe::sanitize(&e.to_string()),
             ))
@@ -935,7 +940,7 @@ impl RawVersion {
         let signature = self
             .signature
             .as_deref()
-            .map(|raw| crate::signing::SignatureBundle::parse(name, raw))
+            .map(|raw| crate::signing::SignatureBundle::parse(name.as_str(), raw))
             .transpose()?;
         Ok(EntryVersion {
             version,
@@ -952,7 +957,10 @@ impl RawVersion {
 /// [`Capability::from_str`]. Absent (or empty) means no capabilities; an unknown
 /// name is a hard error — a typo can never become a silently-dropped capability
 /// the user is then not warned about.
-fn parse_capabilities(name: &str, raw: Option<&str>) -> Result<BTreeSet<Capability>, CliError> {
+fn parse_capabilities(
+    name: &PackageName,
+    raw: Option<&str>,
+) -> Result<BTreeSet<Capability>, CliError> {
     let Some(raw) = raw else {
         return Ok(BTreeSet::new());
     };
@@ -962,7 +970,7 @@ fn parse_capabilities(name: &str, raw: Option<&str>) -> Result<BTreeSet<Capabili
         .and_then(|r| r.strip_suffix(']'))
         .ok_or_else(|| {
             CliError::Resolve(crate::text::msg::index_capabilities_not_array(
-                &name,
+                name,
                 &crate::style::TerminalSafe::sanitize(raw),
             ))
         })?;
@@ -974,7 +982,7 @@ fn parse_capabilities(name: &str, raw: Option<&str>) -> Result<BTreeSet<Capabili
         }
         let cap = Capability::from_str(token).map_err(|e| {
             CliError::Resolve(crate::text::msg::index_capability_unknown(
-                &name,
+                name,
                 &crate::style::TerminalSafe::sanitize(&e.to_string()),
             ))
         })?;
@@ -993,9 +1001,17 @@ fn unquote(value: &str) -> &str {
 
 #[cfg(test)]
 mod tests {
-    use super::{CommitId, IndexEntry, PinnedRev, SourceUrl, read_entry, resolve_version};
+    use super::{
+        CommitId, IndexEntry, PackageName, PinnedRev, SourceUrl, read_entry, resolve_version,
+    };
     use ipe_ir::Capability;
     use std::path::{Path, PathBuf};
+
+    /// A fixture package name.
+    #[allow(clippy::expect_used)] // fixture names are literal registry names
+    fn pn(raw: &str) -> PackageName {
+        PackageName::parse(raw).expect("fixture package name parses")
+    }
 
     /// A 40-char lowercase hex placeholder rev used across fixtures.
     const FIXTURE_REV: &str = "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2";
@@ -1180,43 +1196,43 @@ mod tests {
 
     #[test]
     fn source_url_accepts_https() {
-        assert!(SourceUrl::parse("p", "https://github.com/user/repo").is_ok());
+        assert!(SourceUrl::parse(&pn("p"), "https://github.com/user/repo").is_ok());
     }
 
     #[test]
     fn source_url_accepts_git_and_ssh() {
-        assert!(SourceUrl::parse("p", "git://github.com/user/repo").is_ok());
-        assert!(SourceUrl::parse("p", "ssh://git@github.com/user/repo").is_ok());
+        assert!(SourceUrl::parse(&pn("p"), "git://github.com/user/repo").is_ok());
+        assert!(SourceUrl::parse(&pn("p"), "ssh://git@github.com/user/repo").is_ok());
     }
 
     #[test]
     fn source_url_rejects_ext_transport_helper() {
         // `ext::` spawns an arbitrary shell command at clone time — RCE vector.
-        let err = SourceUrl::parse("p", "ext::sh -c 'id > /tmp/pwned'").unwrap_err();
+        let err = SourceUrl::parse(&pn("p"), "ext::sh -c 'id > /tmp/pwned'").unwrap_err();
         assert!(format!("{err}").contains("https://"), "{err}");
     }
 
     #[test]
     fn source_url_rejects_dash_leading_value() {
         // A value starting with `-` would be parsed by git as a flag.
-        let err = SourceUrl::parse("p", "--upload-pack=evil").unwrap_err();
+        let err = SourceUrl::parse(&pn("p"), "--upload-pack=evil").unwrap_err();
         assert!(format!("{err}").contains("https://"), "{err}");
     }
 
     #[test]
     fn source_url_accepts_file_scheme() {
         // `file://` is on the allow-list so local and test-fixture repos work.
-        assert!(SourceUrl::parse("p", "file:///home/user/repo").is_ok());
+        assert!(SourceUrl::parse(&pn("p"), "file:///home/user/repo").is_ok());
     }
 
     #[test]
     fn source_url_accepts_bare_absolute_path() {
-        assert!(SourceUrl::parse("p", "/home/user/repo").is_ok());
+        assert!(SourceUrl::parse(&pn("p"), "/home/user/repo").is_ok());
     }
 
     #[test]
     fn source_url_rejects_fd_transport() {
-        let err = SourceUrl::parse("p", "fd::4").unwrap_err();
+        let err = SourceUrl::parse(&pn("p"), "fd::4").unwrap_err();
         assert!(format!("{err}").contains("https://"), "{err}");
     }
 
@@ -1224,61 +1240,61 @@ mod tests {
 
     #[test]
     fn commit_id_accepts_40_char_lowercase_hex() {
-        assert!(CommitId::parse("p", FIXTURE_REV).is_ok());
+        assert!(CommitId::parse(&pn("p"), FIXTURE_REV).is_ok());
     }
 
     #[test]
     fn commit_id_accepts_64_char_sha256() {
         let sha256_rev = "a".repeat(64);
-        assert!(CommitId::parse("p", &sha256_rev).is_ok());
+        assert!(CommitId::parse(&pn("p"), &sha256_rev).is_ok());
     }
 
     #[test]
     fn commit_id_accepts_short_hex() {
         // Abbreviated hashes are valid ref names with no injection shape.
-        assert!(CommitId::parse("p", "deadbeef").is_ok());
-        assert!(CommitId::parse("p", "abc").is_ok());
-        assert!(CommitId::parse("p", "00").is_ok());
+        assert!(CommitId::parse(&pn("p"), "deadbeef").is_ok());
+        assert!(CommitId::parse(&pn("p"), "abc").is_ok());
+        assert!(CommitId::parse(&pn("p"), "00").is_ok());
     }
 
     #[test]
     fn commit_id_accepts_branch_name() {
         // Branch names are valid ref names with no injection shape.
-        assert!(CommitId::parse("p", "main").is_ok());
-        assert!(CommitId::parse("p", "HEAD").is_ok());
+        assert!(CommitId::parse(&pn("p"), "main").is_ok());
+        assert!(CommitId::parse(&pn("p"), "HEAD").is_ok());
     }
 
     #[test]
     fn commit_id_accepts_uppercase_hex() {
         // Mixed-case is not injection-shaped.
-        assert!(CommitId::parse("p", "A1B2C3D4E5F6A1B2C3D4E5F6A1B2C3D4E5F6A1B2").is_ok());
+        assert!(CommitId::parse(&pn("p"), "A1B2C3D4E5F6A1B2C3D4E5F6A1B2C3D4E5F6A1B2").is_ok());
     }
 
     #[test]
     fn commit_id_rejects_dash_leading_value() {
         // A `-`-leading rev would be parsed by git as a flag — injection shape.
-        let err = CommitId::parse("p", "-S injected").unwrap_err();
+        let err = CommitId::parse(&pn("p"), "-S injected").unwrap_err();
         assert!(format!("{err}").contains("rev"), "{err}");
     }
 
     #[test]
     fn commit_id_rejects_double_dot() {
         // `..` is a refspec metacharacter — injection shape.
-        let err = CommitId::parse("p", "HEAD..main").unwrap_err();
+        let err = CommitId::parse(&pn("p"), "HEAD..main").unwrap_err();
         assert!(format!("{err}").contains("rev"), "{err}");
     }
 
     #[test]
     fn commit_id_rejects_transport_helper_colons() {
         // `::` is the transport-helper separator — RCE vector.
-        let err = CommitId::parse("p", "ext::evil").unwrap_err();
+        let err = CommitId::parse(&pn("p"), "ext::evil").unwrap_err();
         assert!(format!("{err}").contains("rev"), "{err}");
     }
 
     #[test]
     fn commit_id_rejects_at_brace() {
         // `@{` is a git reflog selector — injection shape.
-        let err = CommitId::parse("p", "HEAD@{0}").unwrap_err();
+        let err = CommitId::parse(&pn("p"), "HEAD@{0}").unwrap_err();
         assert!(format!("{err}").contains("rev"), "{err}");
     }
 
@@ -1480,51 +1496,51 @@ mod tests {
         // Moving refs cannot inhabit PinnedRev; CommitId still accepts them
         // (the request role is deliberately distinct from the pin role).
         assert!(
-            CommitId::parse("p", "HEAD").is_ok(),
+            CommitId::parse(&pn("p"), "HEAD").is_ok(),
             "CommitId must accept HEAD as a request ref"
         );
         assert!(
-            CommitId::parse("p", "main").is_ok(),
+            CommitId::parse(&pn("p"), "main").is_ok(),
             "CommitId must accept branch names as request refs"
         );
         assert!(
-            PinnedRev::from_full_sha("p", "HEAD").is_err(),
+            PinnedRev::from_full_sha(&pn("p"), "HEAD").is_err(),
             "PinnedRev must reject HEAD"
         );
         assert!(
-            PinnedRev::from_full_sha("p", "main").is_err(),
+            PinnedRev::from_full_sha(&pn("p"), "main").is_err(),
             "PinnedRev must reject branch names"
         );
         assert!(
-            PinnedRev::from_full_sha("p", "v1.0").is_err(),
+            PinnedRev::from_full_sha(&pn("p"), "v1.0").is_err(),
             "PinnedRev must reject tag names"
         );
         // Length boundary: 39 and 41 chars must be rejected.
         let short = "a".repeat(39);
         let long = "a".repeat(41);
         assert!(
-            PinnedRev::from_full_sha("p", &short).is_err(),
+            PinnedRev::from_full_sha(&pn("p"), &short).is_err(),
             "39-char hex must be rejected"
         );
         assert!(
-            PinnedRev::from_full_sha("p", &long).is_err(),
+            PinnedRev::from_full_sha(&pn("p"), &long).is_err(),
             "41-char hex must be rejected"
         );
         // Non-hex characters must be rejected even at length 40.
         let nonhex = format!("{}g", "a".repeat(39));
         assert!(
-            PinnedRev::from_full_sha("p", &nonhex).is_err(),
+            PinnedRev::from_full_sha(&pn("p"), &nonhex).is_err(),
             "non-hex char must be rejected"
         );
         // Uppercase is rejected — the stored form must be lowercase hex.
         let upper = "A".repeat(40);
         assert!(
-            PinnedRev::from_full_sha("p", &upper).is_err(),
+            PinnedRev::from_full_sha(&pn("p"), &upper).is_err(),
             "uppercase hex must be rejected"
         );
         // A valid 40-char lowercase hex string must be accepted.
         assert!(
-            PinnedRev::from_full_sha("p", FIXTURE_REV).is_ok(),
+            PinnedRev::from_full_sha(&pn("p"), FIXTURE_REV).is_ok(),
             "40-char lowercase hex must be accepted"
         );
     }
@@ -1679,7 +1695,7 @@ mod tests {
             "dou--ble",
         ] {
             let toml = format!("name = \"x\"\npublisher = \"{hostile}\"\n{version}");
-            let refused = super::parse_entry("x", &toml);
+            let refused = super::parse_entry(&pn("x"), &toml);
             assert!(
                 matches!(refused, Err(CliError::Resolve(_))),
                 "TOML publisher {hostile:?} must be refused"

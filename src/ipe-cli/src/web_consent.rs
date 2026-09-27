@@ -142,13 +142,15 @@ pub fn gate(
 /// The typed, fail-closed refusal naming each ungranted web axis, its disclosing
 /// module(s), and the remedy.
 fn refusal(ungranted: &[String]) -> CliError {
-    let lines: Vec<String> = std::iter::once(crate::text::web_consent_header().to_owned())
-        .chain(ungranted.iter().map(|item| crate::text::consent_item(item)))
-        .chain(std::iter::once(
-            crate::text::web_consent_remedy().to_owned(),
-        ))
-        .collect();
-    CliError::Usage(crate::text::Message::relay(&lines.join("\n")))
+    CliError::Usage(crate::text::Message::lines(
+        std::iter::once(crate::text::msg::web_consent_header())
+            .chain(
+                ungranted
+                    .iter()
+                    .map(|item| crate::text::msg::consent_item(item)),
+            )
+            .chain(std::iter::once(crate::text::msg::web_consent_remedy())),
+    ))
 }
 
 #[cfg(test)]

@@ -39,13 +39,27 @@ impl Message {
         Self(Cow::Owned(text))
     }
 
-    /// Relay an error value whose own `Display` is its user-facing text.
+    /// Relay a typed refusal whose own `Display` is its user-facing text.
     ///
-    /// For a compiler diagnostic, a typed refusal, or lines already built from
-    /// catalog texts.
+    /// Only a [`Relayable`] type qualifies: a closed set of typed refusals and
+    /// diagnostics whose text is built from trusted parts, so an arbitrary
+    /// string (and the untrusted bytes it may carry) cannot become a message.
     #[must_use]
-    pub fn relay(rendered: &dyn fmt::Display) -> Self {
+    pub fn relay(rendered: &impl Relayable) -> Self {
         Self(Cow::Owned(rendered.to_string()))
+    }
+
+    /// Join catalog messages into one, one message per line.
+    #[must_use]
+    pub fn lines(lines: impl IntoIterator<Item = Self>) -> Self {
+        let mut joined = String::new();
+        for (index, line) in lines.into_iter().enumerate() {
+            if index > 0 {
+                joined.push('\n');
+            }
+            joined.push_str(&line.0);
+        }
+        Self(Cow::Owned(joined))
     }
 
     /// The message text.
@@ -54,6 +68,43 @@ impl Message {
         &self.0
     }
 }
+
+/// Seals [`Relayable`] so only this module can extend its allowlist.
+mod sealed {
+    /// The sealing supertrait of [`super::Relayable`].
+    pub trait Sealed {}
+}
+
+/// A typed refusal or diagnostic that [`Message::relay`] may carry verbatim.
+///
+/// Sealed: the allowlist below is closed, so relaying a raw string (and any
+/// untrusted bytes in it) is a type error.
+pub trait Relayable: fmt::Display + sealed::Sealed {}
+
+/// Admit each listed type to [`Relayable`].
+macro_rules! relayable {
+    ($($ty:ty),+ $(,)?) => {
+        $(
+            impl sealed::Sealed for $ty {}
+            impl Relayable for $ty {}
+        )+
+    };
+}
+
+relayable!(
+    crate::build_plan::Refusal,
+    crate::delivery::DeliveryError,
+    crate::pack::mobile::MobileRefusal,
+    crate::pack::mobile::BundleError,
+    crate::pack::desktop::DesktopRefusal,
+    crate::ffi::WrapperRefusal,
+    crate::ffi::BuildScriptsBanner,
+    ipe_watch::ScopeError,
+    ipe_lint::ConfigError,
+    ipe_sandbox::run_jail::RunJailDefect,
+    ipe_ffi::diag::Diagnostic,
+    ipe_ffi::diag::WireDefect,
+);
 
 impl fmt::Display for Message {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -871,16 +922,16 @@ messages! {
     /// An index entry file is not named `packages/<name>.toml`.
     index_entry_path_invalid(path) = "index-entry-path-invalid";
     /// An index entry exceeds the per-entry version ceiling.
-    index_entry_too_many_versions(name, count, max) = "index-entry-too-many-versions";
+    index_entry_too_many_versions(name: &crate::package_name::PackageName, count, max) = "index-entry-too-many-versions";
     /// An index entry rewrites a published version.
-    index_entry_version_rewritten(name, version) = "index-entry-version-rewritten";
+    index_entry_version_rewritten(name: &crate::package_name::PackageName, version) = "index-entry-version-rewritten";
     /// An index entry drops a published version.
-    index_entry_version_dropped(name, version) = "index-entry-version-dropped";
+    index_entry_version_dropped(name: &crate::package_name::PackageName, version) = "index-entry-version-dropped";
     /// A reserved package's audit-entry drops a published version without a blessed reset.
-    index_entry_version_dropped_reset_refused(name, version, refusal) =
+    index_entry_version_dropped_reset_refused(name: &crate::package_name::PackageName, version, refusal) =
         "index-entry-version-dropped-reset-refused";
     /// An index entry moves a package's source repository.
-    index_entry_source_moved(name, version, source, expected) = "index-entry-source-moved";
+    index_entry_source_moved(name: &crate::package_name::PackageName, version, source, expected) = "index-entry-source-moved";
     /// `ipe clean` ran outside a project root.
     clean_no_manifest = "clean-no-manifest";
     /// `ipe diff` was given a malformed version.
@@ -1044,7 +1095,7 @@ messages! {
     /// The device code expired.
     login_code_expired = "login-code-expired";
     /// GitHub reported an unrecognised status.
-    login_github_reported(status) = "login-github-reported";
+    login_github_reported(status: &crate::style::TerminalSafe) = "login-github-reported";
     /// GitHub's response carried neither a token nor a status.
     login_response_unrecognised = "login-response-unrecognised";
     /// `curl` could not be launched for the OAuth request.
@@ -1052,7 +1103,7 @@ messages! {
     /// The OAuth request failed while waiting for `curl`.
     login_curl_wait_failed(detail) = "login-curl-wait-failed";
     /// The OAuth request failed.
-    login_request_failed(detail) = "login-request-failed";
+    login_request_failed(detail: &crate::style::TerminalSafe) = "login-request-failed";
     /// GitHub's response is not JSON.
     login_response_not_json(detail) = "login-response-not-json";
     /// GitHub's response lacks a field.
@@ -1214,46 +1265,46 @@ messages! {
     /// A blessing proof that does not cover the claimed publisher.
     publish_fresh_claim_not_covered(claimed) = "publish-fresh-claim-not-covered";
     /// An index `source` that is not an accepted URL.
-    index_source_url_invalid(pkg, raw: &crate::style::TerminalSafe) = "index-source-url-invalid";
+    index_source_url_invalid(pkg: &crate::package_name::PackageName, raw: &crate::style::TerminalSafe) = "index-source-url-invalid";
     /// An index `rev` shaped like an injection.
-    index_rev_injection(pkg, raw: &crate::style::TerminalSafe) = "index-rev-injection";
+    index_rev_injection(pkg: &crate::package_name::PackageName, raw: &crate::style::TerminalSafe) = "index-rev-injection";
     /// A recorded `rev` that is not a full commit SHA.
-    index_rev_not_immutable(pkg, raw: &crate::style::TerminalSafe) = "index-rev-not-immutable";
+    index_rev_not_immutable(pkg: &crate::package_name::PackageName, raw: &crate::style::TerminalSafe) = "index-rev-not-immutable";
     /// `git rev-parse` could not be run.
-    index_rev_parse_unavailable(pkg, detail) = "index-rev-parse-unavailable";
+    index_rev_parse_unavailable(pkg: &crate::package_name::PackageName, detail) = "index-rev-parse-unavailable";
     /// A pinned ref that is not a commit in the fetched checkout.
-    index_rev_unresolved(pkg, refspec: &crate::style::TerminalSafe, rev: &crate::style::TerminalSafe) =
+    index_rev_unresolved(pkg: &crate::package_name::PackageName, refspec: &crate::style::TerminalSafe, rev: &crate::style::TerminalSafe) =
         "index-rev-unresolved";
     /// An index `sha256` that is not a content hash.
-    index_sha256_invalid(pkg, raw: &crate::style::TerminalSafe) = "index-sha256-invalid";
+    index_sha256_invalid(pkg: &crate::package_name::PackageName, raw: &crate::style::TerminalSafe) = "index-sha256-invalid";
     /// An index entry that exists but cannot be read.
-    index_entry_unreadable(name, detail) = "index-entry-unreadable";
+    index_entry_unreadable(name: &crate::package_name::PackageName, detail) = "index-entry-unreadable";
     /// `ipe add` of a package the index does not list.
-    add_package_not_in_index(name) = "add-package-not-in-index";
+    add_package_not_in_index(name: &crate::package_name::PackageName) = "add-package-not-in-index";
     /// `ipe add` could not read an index entry.
-    add_index_entry_unreadable(name, kind) = "add-index-entry-unreadable";
+    add_index_entry_unreadable(name: &crate::package_name::PackageName, kind) = "add-index-entry-unreadable";
     /// No published version satisfies the requirement.
-    index_no_version_satisfies(name, req, available) = "index-no-version-satisfies";
+    index_no_version_satisfies(name: &crate::package_name::PackageName, req, available) = "index-no-version-satisfies";
     /// The available-versions list of an entry with none.
     index_no_version_available = "index-no-version-available";
     /// An index entry `publisher` that is not a login.
-    index_publisher_not_login(name, refusal) = "index-publisher-not-login";
+    index_publisher_not_login(name: &crate::package_name::PackageName, refusal) = "index-publisher-not-login";
     /// An index entry without `publisher`.
-    index_entry_missing_publisher(name) = "index-entry-missing-publisher";
+    index_entry_missing_publisher(name: &crate::package_name::PackageName) = "index-entry-missing-publisher";
     /// An index entry without `[[version]]`.
-    index_entry_no_versions(name) = "index-entry-no-versions";
+    index_entry_no_versions(name: &crate::package_name::PackageName) = "index-entry-no-versions";
     /// A malformed registry JSON mirror.
-    registry_json_malformed(name, detail: &crate::style::TerminalSafe) = "registry-json-malformed";
+    registry_json_malformed(name: &crate::package_name::PackageName, detail: &crate::style::TerminalSafe) = "registry-json-malformed";
     /// An index entry capability that is not known.
-    index_capability_unknown(name, detail: &crate::style::TerminalSafe) =
+    index_capability_unknown(name: &crate::package_name::PackageName, detail: &crate::style::TerminalSafe) =
         "index-capability-unknown";
     /// A `[[version]]` entry missing a field.
-    index_version_missing_field(name, field) = "index-version-missing-field";
+    index_version_missing_field(name: &crate::package_name::PackageName, field) = "index-version-missing-field";
     /// An index entry version that is not semver.
-    index_version_invalid(name, version: &crate::style::TerminalSafe, detail: &crate::style::TerminalSafe) =
+    index_version_invalid(name: &crate::package_name::PackageName, version: &crate::style::TerminalSafe, detail: &crate::style::TerminalSafe) =
         "index-version-invalid";
     /// An index entry `capabilities` that is not an array.
-    index_capabilities_not_array(name, raw: &crate::style::TerminalSafe) =
+    index_capabilities_not_array(name: &crate::package_name::PackageName, raw: &crate::style::TerminalSafe) =
         "index-capabilities-not-array";
     /// `ipe package publish --rev` naming no commit.
     publish_rev_unresolved(refspec: &crate::style::TerminalSafe, rev: &crate::style::TerminalSafe) =
@@ -1297,7 +1348,7 @@ messages! {
     resolve_git_failed(name, args: &crate::style::TerminalSafe, stderr: &crate::style::TerminalSafe) =
         "resolve-git-failed";
     /// An `ipe login` failure.
-    login_error(message) = "login-error";
+    login_error(message: &crate::text::Message) = "login-error";
     /// A package name that is not a safe path component.
     package_name_invalid(raw: &crate::style::TerminalSafe, why) = "package-name-invalid";
     /// Why a package name is invalid: it is empty.
@@ -1317,6 +1368,59 @@ messages! {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Untrusted placeholders reach the rendered refusal with every escape
+    /// sequence and control byte stripped, and the surrounding text pinned.
+    #[test]
+    #[allow(clippy::expect_used)] // the fixture name is a literal registry name
+    fn untrusted_placeholders_render_terminal_safe() {
+        let pkg = crate::package_name::PackageName::parse("pkg").expect("fixture name parses");
+        let hostile =
+            crate::style::TerminalSafe::sanitize("x\u{1b}[31my\u{7}z\u{9b}\u{1b}]0;t\u{7}");
+        let table: [(String, &str); 8] = [
+            (
+                index_rev_not_immutable(&pkg, &hostile),
+                "package `pkg`: recorded `rev` is not an immutable commit SHA (expected 40 lowercase hex chars), got: xyz — re-run `ipe add` to record an immutable pin",
+            ),
+            (
+                signature_bundle_malformed(&pkg, &hostile),
+                "package `pkg`: signature bundle is malformed (xyz)",
+            ),
+            (
+                trust_config_malformed(&hostile),
+                "registry trust config is malformed (xyz)",
+            ),
+            (
+                trust_token_invalid(&"publisher", &hostile),
+                "registry trust: `publisher` must be a non-empty token with no whitespace or control characters, got: xyz",
+            ),
+            (
+                add_package_not_in_index(&pkg),
+                "add: package `pkg` is not in the index — check the name, or run `ipe rust add` for a Rust crate",
+            ),
+            (
+                index_no_version_satisfies(&pkg, &"^1", &hostile),
+                "package `pkg`: no published version satisfies `^1` (available: xyz)",
+            ),
+            (
+                index_source_url_invalid(&pkg, &hostile),
+                "package `pkg`: `source` must be an https://, git://, ssh://, or file:// URL (or a bare absolute path), got: xyz",
+            ),
+            (
+                registry_json_malformed(&pkg, &hostile),
+                "package `pkg`: registry JSON is malformed (xyz)",
+            ),
+        ];
+        for (rendered, expected) in &table {
+            assert_eq!(rendered, expected);
+            assert!(
+                !rendered
+                    .chars()
+                    .any(|c| c.is_control() && c != '\n' && c != '\t'),
+                "control byte survived in {rendered:?}"
+            );
+        }
+    }
 
     /// Every `## <key>` the catalog defines.
     fn catalog_keys() -> Vec<&'static str> {
