@@ -1286,10 +1286,10 @@ fn on_disk_cache_hit_serves_a_tampered_entry_verbatim() {
             "module Main exposing (main)\n\nimport Ipe.Io as Io\nimport Ipe.String as String\n\nmain : Task Error ()\nmain =\n    Io.println (String.fromInt 1)\n".to_owned(),
         ),
     );
-    let discovered = vec![project::DiscoveredModule {
-        path: PathBuf::from("<cache-e2e>/Main.ipe"),
-        module_path: entry_path.clone(),
-    }];
+    let discovered = vec![project::DiscoveredModule::user(
+        PathBuf::from("<cache-e2e>/Main.ipe"),
+        entry_path.clone(),
+    )];
 
     let (result_a, outcome_a) = compile_modules_observed(
         sources.clone(),
@@ -1382,10 +1382,10 @@ fn cold_build_with_the_cache_inside_a_fresh_output_dir_claims_it() {
             "module Main exposing (main)\n\nimport Ipe.Io as Io\n\nmain : Task Error ()\nmain =\n    Io.println \"hi\"\n".to_owned(),
         ),
     );
-    let discovered = vec![project::DiscoveredModule {
-        path: PathBuf::from("<cache-in-out>/Main.ipe"),
-        module_path: entry_path.clone(),
-    }];
+    let discovered = vec![project::DiscoveredModule::user(
+        PathBuf::from("<cache-in-out>/Main.ipe"),
+        entry_path.clone(),
+    )];
 
     let build = || {
         compile_modules_observed(
@@ -1481,10 +1481,10 @@ fn ir_cache_hit_reuses_lowered_program_across_a_db_driver_only_edit() {
             "module Main exposing (main)\n\nimport Ipe.Io as Io\nimport Ipe.String as String\n\nmain : Task Error ()\nmain =\n    Io.println (String.fromInt 1)\n".to_owned(),
         ),
     );
-    let discovered = vec![project::DiscoveredModule {
-        path: PathBuf::from("<p>/Main.ipe"),
-        module_path: entry_path.clone(),
-    }];
+    let discovered = vec![project::DiscoveredModule::user(
+        PathBuf::from("<p>/Main.ipe"),
+        entry_path.clone(),
+    )];
 
     let (result_a, outcome_a) = compile_modules_observed(
         sources.clone(),
@@ -1571,10 +1571,10 @@ fn on_disk_ir_cache_hit_serves_a_tampered_entry_verbatim() {
             "module Main exposing (main)\n\nimport Ipe.Io as Io\nimport Ipe.String as String\n\nmain : Task Error ()\nmain =\n    Io.println (String.fromInt 1)\n".to_owned(),
         ),
     );
-    let discovered = vec![project::DiscoveredModule {
-        path: PathBuf::from("<p>/Main.ipe"),
-        module_path: entry_path.clone(),
-    }];
+    let discovered = vec![project::DiscoveredModule::user(
+        PathBuf::from("<p>/Main.ipe"),
+        entry_path.clone(),
+    )];
 
     let (result_a, outcome_a) = compile_modules_observed(
         sources.clone(),
@@ -1661,10 +1661,10 @@ fn cache_dir_none_disables_caching_entirely() {
             "module Main exposing (main)\n\nimport Ipe.Io as Io\nimport Ipe.String as String\n\nmain : Task Error ()\nmain =\n    Io.println (String.fromInt 1)\n".to_owned(),
         ),
     );
-    let discovered = vec![project::DiscoveredModule {
-        path: PathBuf::from("<cache-e2e>/Main.ipe"),
-        module_path: entry_path.clone(),
-    }];
+    let discovered = vec![project::DiscoveredModule::user(
+        PathBuf::from("<cache-e2e>/Main.ipe"),
+        entry_path.clone(),
+    )];
 
     let (result, outcome) = compile_modules_observed(
         sources,

@@ -2274,13 +2274,12 @@ pub fn infer_package_capabilities_in(
     ipe_db::Db::interner(db).lock().set_fresh_avoid(fresh_avoid);
 
     // The fold consumes every entry (never short-circuits), so each entry is
-    // lowered exactly once and the surfaced refusal is the `Main` entry's when
-    // it failed.
+    // lowered exactly once and the surfaced refusal is the most actionable one.
     aggregate_entry_inferences(
         package
             .entries
             .iter()
-            .map(|m| (EntryRole::of(m), infer_entry(db, source_root, package, m))),
+            .map(|m| (m.origin, infer_entry(db, source_root, package, m))),
     )
 }
 
@@ -2288,23 +2287,17 @@ pub fn infer_package_capabilities_in(
 /// refusal that blocks the whole package.
 type EntryInference = Result<std::collections::BTreeSet<ipe_ir::Capability>, CliError>;
 
-/// Whether an inference entry is the package's `Main` module.
+/// How early an entry's refusal is surfaced when several entries fail.
 ///
-/// Selects which refusal is surfaced when several entries fail: the `Main`
-/// entry's diagnostic is the one a developer expects to see.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum EntryRole {
-    Main,
-    Sibling,
-}
-
-impl EntryRole {
-    fn of(module: &project::DiscoveredModule) -> Self {
-        if module.module_path.last().map(String::as_str) == Some("Main") {
-            Self::Main
-        } else {
-            Self::Sibling
-        }
+/// The user's `Main` first, then other user modules, then an injected stdlib
+/// module. A stdlib module failing to lower on its own is a compiler defect the
+/// author cannot act on, so a user diagnostic outranks it; it still refuses the
+/// package, because the stdlib is trusted to lower, not exempt from disclosure.
+const fn refusal_rank(origin: project::ModuleOrigin) -> u8 {
+    match origin {
+        project::ModuleOrigin::User(project::EntryRole::Main) => 0,
+        project::ModuleOrigin::User(project::EntryRole::Library) => 1,
+        project::ModuleOrigin::EmbeddedStdlib => 2,
     }
 }
 
@@ -2358,31 +2351,33 @@ fn infer_entry(
 ///
 /// Fails closed: any refused entry refuses the whole package, since a union
 /// over only the entries that lowered would under-disclose the consumer's
-/// consent surface. The surfaced refusal is the `Main` entry's when it failed,
-/// else the first in entry order.
+/// consent surface. An injected stdlib entry is folded under the same rule as
+/// a user entry; its origin only lowers the precedence of its refusal (see
+/// [`refusal_rank`]), ties going to the first in entry order.
 ///
 /// # Errors
 /// The selected entry refusal; [`CliError::Usage`] when there is no entry.
 fn aggregate_entry_inferences(
-    outcomes: impl IntoIterator<Item = (EntryRole, EntryInference)>,
+    outcomes: impl IntoIterator<Item = (project::ModuleOrigin, EntryInference)>,
 ) -> Result<std::collections::BTreeSet<ipe_ir::Capability>, CliError> {
     let mut union: std::collections::BTreeSet<ipe_ir::Capability> =
         std::collections::BTreeSet::new();
-    let mut refusal: Option<CliError> = None;
+    let mut refusal: Option<(u8, CliError)> = None;
     let mut any_entry = false;
-    for (role, outcome) in outcomes {
+    for (origin, outcome) in outcomes {
         any_entry = true;
         match outcome {
             Ok(capabilities) => union.extend(capabilities),
             Err(err) => {
-                if refusal.is_none() || role == EntryRole::Main {
-                    refusal = Some(err);
+                let rank = refusal_rank(origin);
+                if refusal.as_ref().is_none_or(|(held, _)| rank < *held) {
+                    refusal = Some((rank, err));
                 }
             }
         }
     }
     match (refusal, any_entry) {
-        (Some(err), _) => Err(err),
+        (Some((_, err)), _) => Err(err),
         (None, true) => Ok(union),
         (None, false) => Err(CliError::Usage(
             "package capability inference: the package has no module to analyse",
@@ -3170,6 +3165,10 @@ mod capability_fold_tests {
     use ipe_ir::Capability;
     use std::collections::BTreeSet;
 
+    const MAIN: project::ModuleOrigin = project::ModuleOrigin::User(project::EntryRole::Main);
+    const SIBLING: project::ModuleOrigin = project::ModuleOrigin::User(project::EntryRole::Library);
+    const STDLIB: project::ModuleOrigin = project::ModuleOrigin::EmbeddedStdlib;
+
     fn lowered(capabilities: &[Capability]) -> EntryInference {
         Ok(capabilities.iter().copied().collect())
     }
@@ -3184,8 +3183,8 @@ mod capability_fold_tests {
     #[test]
     fn a_failed_sibling_refuses_the_package_instead_of_under_disclosing() {
         let verdict = aggregate_entry_inferences([
-            (EntryRole::Main, lowered(&[Capability::Network])),
-            (EntryRole::Sibling, refused("sibling failed to lower")),
+            (MAIN, lowered(&[Capability::Network])),
+            (SIBLING, refused("sibling failed to lower")),
         ]);
         assert!(
             matches!(verdict, Err(CliError::Usage("sibling failed to lower"))),
@@ -3197,9 +3196,9 @@ mod capability_fold_tests {
     #[test]
     fn a_failed_entry_refuses_regardless_of_order() {
         let verdict = aggregate_entry_inferences([
-            (EntryRole::Sibling, refused("first entry failed")),
-            (EntryRole::Main, lowered(&[Capability::Network])),
-            (EntryRole::Sibling, lowered(&[Capability::Unsafe])),
+            (SIBLING, refused("first entry failed")),
+            (MAIN, lowered(&[Capability::Network])),
+            (SIBLING, lowered(&[Capability::Unsafe])),
         ]);
         assert!(
             matches!(verdict, Err(CliError::Usage("first entry failed"))),
@@ -3211,13 +3210,41 @@ mod capability_fold_tests {
     #[test]
     fn the_main_entry_refusal_is_preferred() {
         let verdict = aggregate_entry_inferences([
-            (EntryRole::Sibling, refused("sibling failed")),
-            (EntryRole::Main, refused("main failed")),
-            (EntryRole::Sibling, refused("later sibling failed")),
+            (SIBLING, refused("sibling failed")),
+            (MAIN, refused("main failed")),
+            (SIBLING, refused("later sibling failed")),
         ]);
         assert!(
             matches!(verdict, Err(CliError::Usage("main failed"))),
             "expected the Main entry's refusal, got {verdict:?}"
+        );
+    }
+
+    /// A failed injected stdlib entry refuses the package even when every user
+    /// entry lowers: trusted stdlib is never exempt from the fail-closed fold.
+    #[test]
+    fn a_failed_stdlib_entry_refuses_the_package() {
+        let verdict = aggregate_entry_inferences([
+            (MAIN, lowered(&[Capability::Network])),
+            (STDLIB, refused("stdlib entry failed")),
+            (SIBLING, lowered(&[])),
+        ]);
+        assert!(
+            matches!(verdict, Err(CliError::Usage("stdlib entry failed"))),
+            "expected the stdlib entry's refusal, got {verdict:?}"
+        );
+    }
+
+    /// A user entry's refusal outranks a stdlib entry's, whatever the order.
+    #[test]
+    fn a_user_refusal_is_preferred_over_a_stdlib_refusal() {
+        let verdict = aggregate_entry_inferences([
+            (STDLIB, refused("stdlib entry failed")),
+            (SIBLING, refused("sibling failed")),
+        ]);
+        assert!(
+            matches!(verdict, Err(CliError::Usage("sibling failed"))),
+            "expected the user entry's refusal, got {verdict:?}"
         );
     }
 
@@ -3235,9 +3262,9 @@ mod capability_fold_tests {
     #[test]
     fn every_entry_lowered_discloses_the_union() {
         let verdict = aggregate_entry_inferences([
-            (EntryRole::Main, lowered(&[Capability::Network])),
-            (EntryRole::Sibling, lowered(&[Capability::Unsafe])),
-            (EntryRole::Sibling, lowered(&[])),
+            (MAIN, lowered(&[Capability::Network])),
+            (SIBLING, lowered(&[Capability::Unsafe])),
+            (SIBLING, lowered(&[])),
         ]);
         let expected: BTreeSet<Capability> = [Capability::Network, Capability::Unsafe]
             .into_iter()
