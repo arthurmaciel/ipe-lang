@@ -245,11 +245,11 @@ allChecks db =
             )
         , Task.succeed
             ( "boundsFor: page size clamps to 1..maxPageSize"
-            , boundsIs 0 0 0 1 && boundsIs 0 -7 0 1 && boundsIs 0 10000 0 Page.maxPageSize
+            , boundsIs 0 0 0 1 && boundsIs 0 (-7) 0 1 && boundsIs 0 10000 0 Page.maxPageSize
             )
         , Task.succeed
             ( "boundsFor: negative page index rejected"
-            , isNegativeIndex (Page.boundsFor -1 50)
+            , isNegativeIndex (Page.boundsFor (-1) 50)
             )
         , Task.succeed
             ( "boundsFor: page index past ceiling rejected"
@@ -265,7 +265,7 @@ allChecks db =
                 == 2
                 && Page.pageCount 101 50
                 == 3
-                && Page.pageCount -3 50
+                && Page.pageCount (-3) 50
                 == 1
             )
         ]
