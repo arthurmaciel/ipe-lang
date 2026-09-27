@@ -14,7 +14,9 @@ use std::collections::BTreeSet;
 use ipe_intern::Symbol;
 
 use crate::free_vars::free_vars;
-use crate::let_inline::{inlined_let_body, let_value_is_inlined, pat_binds_target};
+use crate::let_inline::{
+    inlined_let_body, let_value_is_inlined, pat_binds_target, scan_free_target,
+};
 use crate::{Callee, Expr};
 
 /// Shadow-aware IR rewrite: replace every free `Var(target)` with `CloneVar(target)`.
@@ -39,6 +41,10 @@ use crate::{Callee, Expr};
 /// row-generic receiver becomes a `CloneVar` too; the Access emitter routes it
 /// through the borrowing witness getter `ipe_<field>()` all the same, and every
 /// row generic is bounded `Clone`.
+///
+/// A closure literal whose body ends up cloning `target` is wrapped in
+/// `let target = target.clone()`, so its `move` capture takes the clone rather
+/// than the binding the continuation still reads.
 ///
 /// A bare `Var` in an [`Expr::Apply`] callee is never rewritten: a call through
 /// `Fn` borrows, and an unpromoted `Box<dyn Fn>` has no `clone` (E0599).
@@ -200,28 +206,20 @@ fn rewrite(expr: Expr, target: Symbol, eager: bool) -> Expr {
                 .collect(),
         },
         Expr::Lambda { params, ret, body } => {
-            let new_body = if params.iter().any(|(s, _)| *s == target) {
-                body
-            } else {
-                Box::new(rewrite(*body, target, false))
-            };
-            Expr::Lambda {
-                params,
-                ret,
-                body: new_body,
+            if params.iter().any(|(s, _)| *s == target) {
+                return Expr::Lambda { params, ret, body };
             }
+            rewrite_closure(target, *body, |body| Expr::Lambda { params, ret, body })
         }
         Expr::SharedLambda { params, ret, body } => {
-            let new_body = if params.iter().any(|(s, _)| *s == target) {
-                body
-            } else {
-                Box::new(rewrite(*body, target, false))
-            };
-            Expr::SharedLambda {
+            if params.iter().any(|(s, _)| *s == target) {
+                return Expr::SharedLambda { params, ret, body };
+            }
+            rewrite_closure(target, *body, |body| Expr::SharedLambda {
                 params,
                 ret,
-                body: new_body,
-            }
+                body,
+            })
         }
         Expr::Apply { func, args } => Expr::Apply {
             func: Box::new(match *func {
@@ -269,6 +267,29 @@ fn rewrite(expr: Expr, target: Symbol, eager: bool) -> Expr {
                 .map(|a| rewrite(a, target, eager))
                 .collect(),
         },
+    }
+}
+
+/// Rewrite a closure literal's `body`, hoisting a clone of `target` when the body clones it.
+///
+/// A `move` closure captures every variable its body names, so a body reading
+/// `target.clone()` still moves `target` itself into the closure and the
+/// continuation's later read is a use after move. The hoisted
+/// `let target = target.clone()` shadows it: the closure captures the clone and
+/// the outer binding stays live. A body naming `target` only as a bare callee
+/// is left unwrapped (see [`clone_free_target`]).
+fn rewrite_closure(target: Symbol, body: Expr, build: impl FnOnce(Box<Expr>) -> Expr) -> Expr {
+    let body = rewrite(body, target, false);
+    let (_, clones_target) = scan_free_target(&body, target);
+    let closure = build(Box::new(body));
+    if clones_target {
+        Expr::Let {
+            name: target,
+            value: Box::new(Expr::CloneVar(target)),
+            body: Box::new(closure),
+        }
+    } else {
+        closure
     }
 }
 
@@ -395,6 +416,14 @@ mod tests {
         }
     }
 
+    fn hoisted(target: Symbol, closure: Expr) -> Expr {
+        Expr::Let {
+            name: target,
+            value: Box::new(Expr::CloneVar(target)),
+            body: Box::new(closure),
+        }
+    }
+
     fn symbols() -> (Symbol, Symbol) {
         let mut interner = Interner::new();
         let w = interner.intern("w").expect("intern");
@@ -412,7 +441,7 @@ mod tests {
 
         assert_eq!(rewrite(user(vec![borrowed()])), user(vec![borrowed()]));
         assert_eq!(rewrite(kernel(vec![borrowed()])), kernel(vec![cloned()]));
-        assert_eq!(rewrite(thunk(borrowed())), thunk(cloned()));
+        assert_eq!(rewrite(thunk(borrowed())), hoisted(w, thunk(cloned())));
         assert_eq!(
             rewrite(user(vec![Expr::Var(w)])),
             user(vec![Expr::CloneVar(w)])
@@ -480,6 +509,29 @@ mod tests {
         };
         assert_eq!(clone_free_target(apply(), w), apply());
         assert_eq!(clone_free_target(thunk(apply()), w), thunk(apply()));
+    }
+
+    /// A closure whose body clones the target captures a hoisted clone, never the binding.
+    #[test]
+    fn closure_capture_clone_is_hoisted() {
+        let (w, tag) = symbols();
+        let borrowed = || read(Expr::Var(w), tag);
+        let cloned = || read(Expr::CloneVar(w), tag);
+
+        assert_eq!(
+            clone_free_target(thunk(thunk(borrowed())), w),
+            hoisted(w, thunk(hoisted(w, thunk(cloned()))))
+        );
+        let shadowing = || Expr::Lambda {
+            params: vec![(w, IrType::Int)],
+            ret: IrType::Int,
+            body: Box::new(borrowed()),
+        };
+        assert_eq!(clone_free_target(shadowing(), w), shadowing());
+        assert_eq!(
+            clone_free_target(thunk(Expr::Int(1)), w),
+            thunk(Expr::Int(1))
+        );
     }
 
     /// Every argument-reversed kernel is checked, not only `Task.andThen`.
