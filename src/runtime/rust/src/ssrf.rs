@@ -27,6 +27,11 @@
 //! itself ([`VettedDial::Pinned`]). A dial that resolves the name a second
 //! time would reopen the DNS-rebinding window: the first answer passes the
 //! check, the second points at an internal host.
+//!
+//! A TLS dial that must carry the name (SNI and certificate hostname
+//! verification) runs through a private local relay on Unix
+//! (`pinned_relay`): the driver keeps the name for TLS and dials the relay's
+//! socket, and the relay carries the bytes to the vetted address.
 
 use std::future::Future;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
@@ -298,8 +303,8 @@ pub enum SsrfRefusal {
     /// The connection URL names no host, so the driver picks a target the gate
     /// cannot prove safe.
     UnprovenTarget,
-    /// Certificate verification needs the host name, which a pinned dial of
-    /// the vetted address cannot carry.
+    /// Certificate verification needs the host name, and this platform has no
+    /// relay that pins the dial while TLS keeps the name.
     UnpinnableTlsName {
         /// The host the certificate would be verified against.
         host: ConfiguredHost,
@@ -1050,6 +1055,377 @@ pub(crate) fn ssrf_check_url_nonblocking(url: &str) -> Result<(), UrlRefusal> {
         .map_or(Ok(()), |ip| {
             refuse_blocked(host, url_host_disclosure(url, &parsed), ip).map_err(UrlRefusal::Host)
         })
+}
+
+#[cfg(all(feature = "db", unix))]
+pub(crate) use pinned_relay::{PinnedRelay, RelayUnavailable};
+
+/// A private local relay that carries a driver's socket dial to a pinned address.
+///
+/// A TLS driver that verifies the certificate against a host name dials that
+/// name, resolving it a second time. The relay lets the driver keep the name
+/// for SNI and hostname verification while every byte travels to the address
+/// the gate vetted: the driver dials a Unix socket in an owner-only directory,
+/// and the relay copies each accepted connection to the pinned address. No
+/// name is resolved after the gate.
+#[cfg(all(feature = "db", unix))]
+mod pinned_relay {
+    use std::future::Future;
+    use std::io;
+    use std::net::SocketAddr;
+    use std::os::unix::fs::{DirBuilderExt, MetadataExt};
+    use std::path::{Path, PathBuf};
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::time::Duration;
+    use tokio::net::{TcpStream, UnixListener, UnixStream};
+    use tokio::sync::{OwnedSemaphorePermit, Semaphore, oneshot};
+
+    /// The most relayed connections open at once.
+    const RELAY_CONNECTION_CEILING: usize = 256;
+
+    /// How long one dial of the pinned address may take.
+    const RELAY_DIAL_TIMEOUT: Duration = Duration::from_secs(10);
+
+    /// The pause after a failed accept, so a persistent error cannot spin.
+    const RELAY_ACCEPT_BACKOFF: Duration = Duration::from_millis(50);
+
+    /// The bytes one direction of a relayed connection buffers.
+    const RELAY_BUFFER_BYTES: usize = 16 * 1024;
+
+    /// How many fresh directory names the relay tries per base directory.
+    const RELAY_DIR_ATTEMPTS: u32 = 8;
+
+    /// The longest socket path every Unix `sockaddr_un` holds, terminator excluded.
+    const SOCKET_PATH_MAX_BYTES: usize = 103;
+
+    /// The relay could not be opened; the dial is refused rather than unpinned.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub struct RelayUnavailable;
+
+    /// A running relay from a private Unix socket to one pinned address.
+    ///
+    /// The driver dials the socket at `.s.PGSQL.{port}` inside
+    /// [`PinnedRelay::socket_dir`]. Dropping the relay stops accepting and
+    /// removes the socket and its directory; connections already relayed run
+    /// on until either end closes.
+    #[derive(Debug)]
+    pub struct PinnedRelay {
+        /// The owner-only directory holding the socket.
+        socket_dir: PathBuf,
+        /// The vetted address every accepted connection is carried to.
+        target: SocketAddr,
+        /// Dropping this sender stops the accept loop.
+        _stop: oneshot::Sender<()>,
+    }
+
+    impl PinnedRelay {
+        /// Open a relay to `target` whose socket answers for `socket_port`.
+        ///
+        /// # Errors
+        ///
+        /// [`RelayUnavailable`] when no owner-only directory or socket can be
+        /// created.
+        pub fn open(target: SocketAddr, socket_port: u16) -> Result<Self, RelayUnavailable> {
+            let socket_name = format!(".s.PGSQL.{socket_port}");
+            let (socket_dir, owner) = create_private_dir(&socket_name)?;
+            let socket_path = socket_dir.join(&socket_name);
+            let Ok(listener) = UnixListener::bind(&socket_path) else {
+                remove_quietly(&socket_path, &socket_dir);
+                return Err(RelayUnavailable);
+            };
+            let (stop, stopped) = oneshot::channel();
+            tokio::spawn(serve(
+                listener,
+                target,
+                owner,
+                stopped,
+                socket_path,
+                socket_dir.clone(),
+            ));
+            Ok(Self {
+                socket_dir,
+                target,
+                _stop: stop,
+            })
+        }
+
+        /// The directory the driver's socket option names.
+        pub fn socket_dir(&self) -> &Path {
+            &self.socket_dir
+        }
+
+        /// The vetted address the relay carries connections to.
+        #[cfg_attr(not(test), allow(dead_code))]
+        pub const fn target(&self) -> SocketAddr {
+            self.target
+        }
+
+        /// Keep the relay running until `closed` completes.
+        pub fn hold_until<F>(self, closed: F)
+        where
+            F: Future<Output = ()> + Send + 'static,
+        {
+            tokio::spawn(async move {
+                closed.await;
+                drop(self);
+            });
+        }
+    }
+
+    /// Create an owner-only directory whose socket path fits a `sockaddr_un`.
+    ///
+    /// Returns the directory and its owner's uid, the only uid the relay
+    /// serves.
+    fn create_private_dir(socket_name: &str) -> Result<(PathBuf, u32), RelayUnavailable> {
+        static NEXT: AtomicU64 = AtomicU64::new(0);
+        let pid = std::process::id();
+        for base in [std::env::temp_dir(), PathBuf::from("/tmp")] {
+            for _ in 0..RELAY_DIR_ATTEMPTS {
+                let n = NEXT.fetch_add(1, Ordering::Relaxed);
+                let dir = base.join(format!("ipe-pg-relay-{pid}-{n}"));
+                if dir.join(socket_name).as_os_str().len() > SOCKET_PATH_MAX_BYTES {
+                    break;
+                }
+                match std::fs::DirBuilder::new().mode(0o700).create(&dir) {
+                    Ok(()) => return owner_only(&dir).map(|owner| (dir, owner)),
+                    Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {}
+                    Err(_) => break,
+                }
+            }
+        }
+        Err(RelayUnavailable)
+    }
+
+    /// The owner of `dir`, once it is proven a real directory no other user can enter.
+    fn owner_only(dir: &Path) -> Result<u32, RelayUnavailable> {
+        match std::fs::symlink_metadata(dir) {
+            Ok(meta) if meta.is_dir() && meta.mode() & 0o077 == 0 => Ok(meta.uid()),
+            _ => {
+                let _removed = std::fs::remove_dir(dir);
+                Err(RelayUnavailable)
+            }
+        }
+    }
+
+    /// Remove the socket and its directory, ignoring what is already gone.
+    fn remove_quietly(socket_path: &Path, socket_dir: &Path) {
+        let _socket_removed = std::fs::remove_file(socket_path);
+        let _dir_removed = std::fs::remove_dir(socket_dir);
+    }
+
+    /// Accept connections from `owner` and relay each to `target` until stopped.
+    async fn serve(
+        listener: UnixListener,
+        target: SocketAddr,
+        owner: u32,
+        mut stopped: oneshot::Receiver<()>,
+        socket_path: PathBuf,
+        socket_dir: PathBuf,
+    ) {
+        let permits = Arc::new(Semaphore::new(RELAY_CONNECTION_CEILING));
+        loop {
+            let permit = tokio::select! {
+                _ = &mut stopped => break,
+                permit = Arc::clone(&permits).acquire_owned() => match permit {
+                    Ok(permit) => permit,
+                    Err(_) => break,
+                },
+            };
+            let accepted = tokio::select! {
+                _ = &mut stopped => break,
+                accepted = listener.accept() => accepted,
+            };
+            let Ok((client, _)) = accepted else {
+                tokio::time::sleep(RELAY_ACCEPT_BACKOFF).await;
+                continue;
+            };
+            if client.peer_cred().is_ok_and(|cred| cred.uid() == owner) {
+                tokio::spawn(relay_connection(client, target, permit));
+            }
+        }
+        drop(listener);
+        remove_quietly(&socket_path, &socket_dir);
+    }
+
+    /// Carry one accepted connection to `target` in both directions.
+    async fn relay_connection(
+        client: UnixStream,
+        target: SocketAddr,
+        _permit: OwnedSemaphorePermit,
+    ) {
+        let dialed = tokio::time::timeout(RELAY_DIAL_TIMEOUT, dial_relay_target(target)).await;
+        let Ok(Ok(server)) = dialed else {
+            return;
+        };
+        let _nodelay = server.set_nodelay(true);
+        tokio::select! {
+            () = pump(&client, &server) => {},
+            () = pump(&server, &client) => {},
+        }
+    }
+
+    /// Dial the pinned address the gate vetted.
+    async fn dial_relay_target(target: SocketAddr) -> io::Result<TcpStream> {
+        tokio::net::TcpStream::connect(target).await
+    }
+
+    /// One end of a relayed connection, driven by readiness and non-blocking calls.
+    trait RelayEnd: Sync {
+        /// Wait until the end may be readable.
+        fn ready_to_read(&self) -> impl Future<Output = io::Result<()>> + Send;
+        /// Read what is available without waiting.
+        fn read_now(&self, buf: &mut [u8]) -> io::Result<usize>;
+        /// Wait until the end may be writable.
+        fn ready_to_write(&self) -> impl Future<Output = io::Result<()>> + Send;
+        /// Write what fits without waiting.
+        fn write_now(&self, buf: &[u8]) -> io::Result<usize>;
+    }
+
+    impl RelayEnd for UnixStream {
+        fn ready_to_read(&self) -> impl Future<Output = io::Result<()>> + Send {
+            self.readable()
+        }
+        fn read_now(&self, buf: &mut [u8]) -> io::Result<usize> {
+            self.try_read(buf)
+        }
+        fn ready_to_write(&self) -> impl Future<Output = io::Result<()>> + Send {
+            self.writable()
+        }
+        fn write_now(&self, buf: &[u8]) -> io::Result<usize> {
+            self.try_write(buf)
+        }
+    }
+
+    impl RelayEnd for TcpStream {
+        fn ready_to_read(&self) -> impl Future<Output = io::Result<()>> + Send {
+            self.readable()
+        }
+        fn read_now(&self, buf: &mut [u8]) -> io::Result<usize> {
+            self.try_read(buf)
+        }
+        fn ready_to_write(&self) -> impl Future<Output = io::Result<()>> + Send {
+            self.writable()
+        }
+        fn write_now(&self, buf: &[u8]) -> io::Result<usize> {
+            self.try_write(buf)
+        }
+    }
+
+    /// Whether a non-blocking call found nothing to do yet.
+    fn not_ready(e: &io::Error) -> bool {
+        matches!(
+            e.kind(),
+            io::ErrorKind::WouldBlock | io::ErrorKind::Interrupted
+        )
+    }
+
+    /// Copy bytes from `from` to `to` until either end closes or fails.
+    async fn pump<A: RelayEnd, B: RelayEnd>(from: &A, to: &B) {
+        let mut buf = vec![0_u8; RELAY_BUFFER_BYTES];
+        loop {
+            if from.ready_to_read().await.is_err() {
+                return;
+            }
+            let filled = match from.read_now(&mut buf) {
+                Ok(0) => return,
+                Ok(n) => n,
+                Err(e) if not_ready(&e) => continue,
+                Err(_) => return,
+            };
+            let mut pending = buf.get(..filled).unwrap_or_default();
+            while !pending.is_empty() {
+                if to.ready_to_write().await.is_err() {
+                    return;
+                }
+                match to.write_now(pending) {
+                    Ok(0) => return,
+                    Ok(n) => pending = pending.get(n..).unwrap_or_default(),
+                    Err(e) if not_ready(&e) => {}
+                    Err(_) => return,
+                }
+            }
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::{PinnedRelay, SOCKET_PATH_MAX_BYTES};
+        use std::os::unix::fs::PermissionsExt;
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        /// Bytes written to the relay socket reach the pinned address and its
+        /// answer comes back.
+        #[tokio::test]
+        async fn relay_carries_bytes_both_ways_to_the_pinned_address() {
+            let server = tokio::net::TcpListener::bind("127.0.0.1:0").await;
+            assert!(server.is_ok(), "{:?}", server.as_ref().err());
+            let Ok(server) = server else { return };
+            let Ok(target) = server.local_addr() else {
+                return;
+            };
+            let echo = tokio::spawn(async move {
+                let Ok((mut conn, _)) = server.accept().await else {
+                    return;
+                };
+                let mut got = [0_u8; 5];
+                if conn.read_exact(&mut got).await.is_ok() {
+                    let _echoed = conn.write_all(&got).await;
+                }
+            });
+            let relay = PinnedRelay::open(target, 5432);
+            assert!(relay.is_ok(), "{:?}", relay.as_ref().err());
+            let Ok(relay) = relay else { return };
+            let socket = relay.socket_dir().join(".s.PGSQL.5432");
+            let client = tokio::net::UnixStream::connect(&socket).await;
+            assert!(client.is_ok(), "{:?}", client.as_ref().err());
+            let Ok(mut client) = client else { return };
+            assert!(client.write_all(b"hello").await.is_ok());
+            let mut back = [0_u8; 5];
+            assert!(client.read_exact(&mut back).await.is_ok());
+            assert_eq!(&back, b"hello");
+            let _served = echo.await;
+        }
+
+        /// The relay socket lives in a directory only its owner can enter, on a
+        /// path every `sockaddr_un` holds, and both are gone once it drops.
+        #[tokio::test]
+        async fn relay_socket_is_private_and_removed_on_drop() {
+            let target = std::net::SocketAddr::from(([127, 0, 0, 1], 9));
+            let relay = PinnedRelay::open(target, 5432);
+            assert!(relay.is_ok(), "{:?}", relay.as_ref().err());
+            let Ok(relay) = relay else { return };
+            let dir = relay.socket_dir().to_path_buf();
+            let mode = std::fs::metadata(&dir).map(|m| m.permissions().mode() & 0o777);
+            assert!(matches!(mode, Ok(0o700)), "{mode:?}");
+            let socket = dir.join(".s.PGSQL.5432");
+            assert!(socket.as_os_str().len() <= SOCKET_PATH_MAX_BYTES);
+            assert!(socket.exists());
+            assert_eq!(relay.target(), target);
+            drop(relay);
+            for _ in 0..100 {
+                if !dir.exists() {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+            assert!(!dir.exists(), "{dir:?} must be removed");
+        }
+    }
+}
+
+/// A relay stands in for no platform without Unix sockets; a TLS dial there
+/// that needs one is refused instead.
+#[cfg(all(feature = "db", not(unix)))]
+#[derive(Debug)]
+pub(crate) enum PinnedRelay {}
+
+#[cfg(all(feature = "db", not(unix)))]
+impl PinnedRelay {
+    /// Keep the relay running until `closed` completes.
+    pub(crate) fn hold_until<F>(self, _closed: F) {
+        match self {}
+    }
 }
 
 /// Stub resolvers for tests of every SSRF-gated surface — no network.

@@ -583,7 +583,9 @@ impl StoreOpenError {
                     | EngineVersionError::Unparseable { .. }
                     | EngineVersionError::BelowFloor { .. } => true,
                 },
-                DbConnectError::Unreachable(_) | DbConnectError::VersionUnreadable(_) => false,
+                DbConnectError::Unreachable(_)
+                | DbConnectError::VersionUnreadable(_)
+                | DbConnectError::RelayUnavailable => false,
             },
             Self::Schema(_) => false,
             #[cfg(feature = "redis_store")]
@@ -1570,6 +1572,7 @@ mod tests {
         let transient = [
             StoreOpenError::Connect(DbConnectError::Unreachable(DbFailure::Io)),
             StoreOpenError::Connect(DbConnectError::VersionUnreadable(DbFailure::PoolTimedOut)),
+            StoreOpenError::Connect(DbConnectError::RelayUnavailable),
             StoreOpenError::Schema(DbFailure::Other),
         ];
         for e in &transient {
