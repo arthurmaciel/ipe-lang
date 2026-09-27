@@ -307,38 +307,15 @@ fn each_module_is_analyzed_once_per_package() -> Result<(), Box<dyn Error>> {
 // Every injected compiled-source stdlib module lowers as its own entry
 // ---------------------------------------------------------------------------
 
-/// A plain-`main` program importing `dotted`, plus a `main`-less `Probe` helper
-/// for an `Ipe.Tea.*` shape module (a plain-`main` importer of a shape is an
-/// IPE-N0033 contradiction; a `main`-less helper is exempt).
+/// A plain-`main` program importing `dotted`.
 fn importer_of(dotted: &str) -> Vec<(&'static str, String)> {
-    let is_tea_shape = dotted
-        .strip_prefix("Ipe.Tea.")
-        .is_some_and(|rest| rest.contains('.'));
-    if is_tea_shape {
-        vec![
-            (
-                "Main.ipe",
-                "module Main exposing (main)\nimport Ipe.Io as Io\nimport Probe\n\n\
-                 main : Task Error ()\nmain =\n    Io.println \"ok\"\n"
-                    .to_owned(),
-            ),
-            (
-                "Probe.ipe",
-                format!(
-                    "module Probe exposing (probe)\nimport {dotted} as M\n\n\
-                     probe : Int\nprobe =\n    0\n"
-                ),
-            ),
-        ]
-    } else {
-        vec![(
-            "Main.ipe",
-            format!(
-                "module Main exposing (main)\nimport Ipe.Io as Io\nimport {dotted} as M\n\n\
-                 main : Task Error ()\nmain =\n    Io.println \"ok\"\n"
-            ),
-        )]
-    }
+    vec![(
+        "Main.ipe",
+        format!(
+            "module Main exposing (main)\nimport Ipe.Io as Io\nimport {dotted} as M\n\n\
+             main : Task Error ()\nmain =\n    Io.println \"ok\"\n"
+        ),
+    )]
 }
 
 /// Every module in `COMPILED_STD_MODULES` a package imports becomes its own
