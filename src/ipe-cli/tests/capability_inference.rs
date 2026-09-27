@@ -18,7 +18,7 @@ use ipe_ir::Capability;
 /// generic `CliError::Usage` "no module could be lowered".
 #[test]
 fn a_package_that_cannot_lower_surfaces_the_real_diagnostic() -> Result<(), Box<dyn Error>> {
-    let dir = std::env::temp_dir().join("ipe_capinfer_bad_entry");
+    let dir = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("ipe_capinfer_bad_entry");
     let _ = fs::remove_dir_all(&dir);
     fs::create_dir_all(dir.join("src"))?;
     fs::write(
@@ -103,8 +103,8 @@ const NETWORK_CLOCK_WITH_BROKEN_SIBLING: &[(&str, &str)] = &[
 
 /// Materialise a package (`package.ipe` + `src/<files>`) under a unique temp dir.
 fn scratch_package(tag: &str, files: &[(&str, &str)]) -> Result<PathBuf, Box<dyn Error>> {
-    let dir =
-        std::env::temp_dir().join(format!("ipe_capinfer_shared_{tag}_{}", std::process::id()));
+    let dir = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
+        .join(format!("ipe_capinfer_shared_{tag}_{}", std::process::id()));
     let _ = fs::remove_dir_all(&dir);
     fs::create_dir_all(dir.join("src"))?;
     fs::write(dir.join("package.ipe"), MANIFEST)?;

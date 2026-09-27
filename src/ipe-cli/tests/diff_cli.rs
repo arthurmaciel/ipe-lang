@@ -17,7 +17,7 @@ mod support;
 
 /// A fresh temp package directory, unique per test.
 fn temp_pkg(tag: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!(
+    let dir = crate::support::scratch_root().join(format!(
         "ipe-diffcli-{}-{}-{}",
         std::process::id(),
         tag,

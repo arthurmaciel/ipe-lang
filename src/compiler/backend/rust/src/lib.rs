@@ -2491,6 +2491,18 @@ impl<'a> EmitCtx<'a> {
         self.uses_http || self.uses_email
     }
 
+    /// `true` when the emitted crate reaches the `ssrf` runtime module — so
+    /// `project::assemble_project_files` declares it and adds tokio's `"net"`
+    /// feature, which its resolver (`tokio::net::lookup_host`) needs.
+    ///
+    /// Reached by every surface that dials a network host: the HTTP client
+    /// ([`Self::reaches_http_client`]), the WebSocket client, and the database.
+    /// This is the single source of truth shared by the `mod.rs` append and the
+    /// manifest augmenter, so the module is never declared without the feature.
+    pub(crate) const fn reaches_ssrf(&self) -> bool {
+        self.reaches_http_client() || self.uses_websocket || self.uses_db
+    }
+
     /// `true` when the emitted crate reaches the `jwt` runtime module — so
     /// `project::assemble_project_files` declares it and adds the `jsonwebtoken`
     /// dependency.
@@ -2738,7 +2750,7 @@ impl<'a> EmitCtx<'a> {
     /// `http_client.rs` targets a typed `crate::url::Url`), the WebSocket
     /// client ([`Self::uses_websocket`], whose `ws_client.rs` calls
     /// `::url::Url::parse`), or the Db surface ([`Self::uses_db`], whose
-    /// `db.rs::build_pool` applies the SSRF host gate via `::url::Url::parse`
+    /// `db.rs::VettedPool::connect` applies the SSRF host gate via `::url::Url::parse`
     /// and `ssrf.rs` parses URLs with `url::Url`). The shared `ssrf` validators
     /// (`use url::Url`) are declared exactly when any of these is, so this union
     /// covers them too. This is the single source of truth shared by the manifest

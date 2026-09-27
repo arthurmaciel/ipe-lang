@@ -32,7 +32,7 @@
 use std::io::{Read as _, Write as _};
 use std::path::{Component, Path, PathBuf};
 
-use crate::{CliError, io_err};
+use crate::{CliError, io_err, text};
 
 /// The file whose presence marks a directory as ipe-owned.
 pub const OWNERSHIP_MARKER: &str = ".ipe-output";
@@ -159,93 +159,37 @@ pub enum OutputRefusal {
 
 impl std::fmt::Display for OutputRefusal {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Symlink(p) => write!(
-                f,
-                "{} is a symbolic link — ipe never writes or deletes through one; \
-                 remove it or point --out at a real directory",
-                p.display()
-            ),
-            Self::NotADirectory(p) => write!(f, "{} exists and is not a directory", p.display()),
-            Self::NotIpeOwned(p) => write!(
-                f,
-                "{} already holds files ipe did not create (no `{OWNERSHIP_MARKER}` marker); \
-                 ipe never overwrites them — remove the directory yourself or choose another --out",
-                p.display()
-            ),
-            Self::ProjectRoot(p) => write!(
-                f,
-                "{} is the project root — build output goes in a separate directory \
-                 (the default is `out/`)",
-                p.display()
-            ),
-            Self::ContainsProject { out, project } => write!(
-                f,
-                "{} contains the project at {} — build output must not enclose your sources",
-                out.display(),
-                project.display()
-            ),
-            Self::InsideSources { out, sources } => write!(
-                f,
-                "{} is inside the source root {} — build output must stay out of your sources",
-                out.display(),
-                sources.display()
-            ),
-            Self::UnresolvedSources(p) => write!(
-                f,
-                "the source root {} cannot be resolved — ipe cannot prove the output stays \
-                 out of your sources; create it or fix `package.ipe`",
-                p.display()
-            ),
-            Self::InsideIpeOwned { out, owner } => write!(
-                f,
-                "{} is inside {}, which ipe owns and may delete (`ipe clean`) — an ejected \
-                 project must live outside ipe's output and cache; choose another --out",
-                out.display(),
-                owner.display()
-            ),
+        let message = match self {
+            Self::Symlink(p) => text::output_symlink(&p.display()),
+            Self::NotADirectory(p) => text::output_not_a_directory(&p.display()),
+            Self::NotIpeOwned(p) => text::output_not_ipe_owned(&p.display(), &OWNERSHIP_MARKER),
+            Self::ProjectRoot(p) => text::output_project_root(&p.display()),
+            Self::ContainsProject { out, project } => {
+                text::output_contains_project(&out.display(), &project.display())
+            }
+            Self::InsideSources { out, sources } => {
+                text::output_inside_sources(&out.display(), &sources.display())
+            }
+            Self::UnresolvedSources(p) => text::output_unresolved_sources(&p.display()),
+            Self::InsideIpeOwned { out, owner } => {
+                text::output_inside_ipe_owned(&out.display(), &owner.display())
+            }
             Self::InsideReservedDir {
                 out,
                 reserved: ReservedName::Vcs,
-            } => write!(
-                f,
-                "{} is inside a `.git` directory — build output must stay out of version-control \
-                 metadata; choose another --out",
-                out.display()
-            ),
+            } => text::output_inside_vcs(&out.display()),
             Self::InsideReservedDir {
                 out,
                 reserved: ReservedName::CacheNamespace,
-            } => write!(
-                f,
-                "{} is inside a `{CACHE_NAMESPACE_DIR}` directory, whose contents ipe deletes \
-                 by name (`ipe clean`) in whichever project holds it — output must stay out \
-                 of every ipe cache namespace; choose another --out",
-                out.display()
-            ),
-            Self::ParentTraversal(p) => write!(
-                f,
-                "{} has a `..` in a part that does not exist yet — name the directory directly",
-                p.display()
-            ),
-            Self::NotFresh(p) => write!(
-                f,
-                "{} is not empty — eject writes a new project, so point --out at an absent \
-                 or empty directory",
-                p.display()
-            ),
-            Self::UnsafeComponent(p) => write!(
-                f,
-                "{} is not a plain relative path — refusing to write it",
-                p.display()
-            ),
-            Self::OutsideProject { path, root } => write!(
-                f,
-                "{} resolves outside the project at {} — a directory walk never rewrites it",
-                path.display(),
-                root.display()
-            ),
-        }
+            } => text::output_inside_cache_namespace(&out.display(), &CACHE_NAMESPACE_DIR),
+            Self::ParentTraversal(p) => text::output_parent_traversal(&p.display()),
+            Self::NotFresh(p) => text::output_not_fresh(&p.display()),
+            Self::UnsafeComponent(p) => text::output_unsafe_component(&p.display()),
+            Self::OutsideProject { path, root } => {
+                text::output_outside_project(&path.display(), &root.display())
+            }
+        };
+        f.write_str(&message)
     }
 }
 
@@ -466,9 +410,9 @@ impl OwnedPath {
         use std::sync::atomic::{AtomicU64, Ordering};
         static SEQ: AtomicU64 = AtomicU64::new(0);
         self.walk(Walk::CreateParents)?;
-        let target = self.path();
-        let parent = target.parent().unwrap_or(&self.root).to_path_buf();
-        let name = target
+        let final_path = self.path();
+        let parent = final_path.parent().unwrap_or(&self.root).to_path_buf();
+        let name = final_path
             .file_name()
             .map_or_else(String::new, |n| n.to_string_lossy().into_owned());
         let tmp = parent.join(format!(
@@ -493,9 +437,9 @@ impl OwnedPath {
             }
             return Err(io_err(&tmp, e));
         }
-        if let Err(e) = std::fs::rename(&tmp, &target) {
+        if let Err(e) = std::fs::rename(&tmp, &final_path) {
             let _ = std::fs::remove_file(&tmp);
-            return Err(io_err(&target, e));
+            return Err(io_err(&final_path, e));
         }
         Ok(())
     }

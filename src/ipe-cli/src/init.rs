@@ -30,7 +30,7 @@ use std::fmt::Write as _;
 use std::io::{IsTerminal as _, Write as _};
 use std::path::{Path, PathBuf};
 
-use crate::{CliError, health, style};
+use crate::{CliError, health, style, text};
 
 // ── per-shape Main.ipe templates ─────────────────────────────────────────────
 
@@ -444,13 +444,9 @@ fn guard_rerun_conflict(
         return Ok(());
     };
     if stated != existing {
-        return Err(CliError::UsageOwned(format!(
-            "ipe init: this directory already holds a `{}` project (its `src/Main.ipe` pins the \
-             shape), but you asked for `{}`. A program's shape is fixed by the head of `main`, so \
-             `init` will not reshape it. Edit `src/Main.ipe` to change shape, or scaffold the new \
-             shape in a fresh directory.",
-            existing.label(),
-            stated.label()
+        return Err(CliError::UsageOwned(text::init_shape_fixed(
+            &existing.label(),
+            &stated.label(),
         )));
     }
     // `resolved_shape` equals `stated` here (a stated shape is used verbatim); the
@@ -540,9 +536,9 @@ fn parse_init_args(rest: &[String]) -> Result<InitArgs, CliError> {
             "--force" => force = true,
             "--lib" => lib = true,
             "--shape" => {
-                let val = iter.next().ok_or(CliError::Usage(
-                    "ipe init: `--shape` requires a value: script, tui, cli, worker, server, web",
-                ))?;
+                let val = iter
+                    .next()
+                    .ok_or(CliError::Usage(text::init_shape_needs_value()))?;
                 shape_flag = Some(parse_shape_word(val)?);
             }
             flag if flag.starts_with('-') => {
@@ -565,10 +561,9 @@ fn parse_init_args(rest: &[String]) -> Result<InitArgs, CliError> {
     // if both are present they must name the same shape.
     let shape = match (shape_positional, shape_flag) {
         (Some(p), Some(f)) if p != f => {
-            return Err(CliError::UsageOwned(format!(
-                "ipe init: shape positional `{}` and `--shape {}` disagree — write the shape once",
-                p.label(),
-                f.label()
+            return Err(CliError::UsageOwned(text::init_shape_disagrees(
+                &p.label(),
+                &f.label(),
             )));
         }
         (Some(s), _) | (_, Some(s)) => Some(s),
@@ -580,12 +575,9 @@ fn parse_init_args(rest: &[String]) -> Result<InitArgs, CliError> {
     if let (Some(rt), Some(sh)) = (runtime_positional, shape)
         && !sh.has_runtime_choice()
     {
-        return Err(CliError::UsageOwned(format!(
-            "ipe init: `{}` is a web runtime, but you asked for a `{}` project. Only the `web` \
-             shape has a runtime choice (served vs solo) — every other shape runs one way. Drop \
-             the runtime word.",
-            rt.label(),
-            sh.label()
+        return Err(CliError::UsageOwned(text::init_runtime_needs_web(
+            &rt.label(),
+            &sh.label(),
         )));
     }
 
@@ -601,11 +593,7 @@ fn parse_init_args(rest: &[String]) -> Result<InitArgs, CliError> {
 /// Parse a shape word positional or flag value into an [`InitShape`], with the
 /// one pedagogical "unknown shape" message.
 fn parse_shape_word(word: &str) -> Result<InitShape, CliError> {
-    InitShape::parse(word).ok_or_else(|| {
-        CliError::UsageOwned(format!(
-            "ipe init: unknown shape `{word}` — expected: script, tui, cli, worker, server, web"
-        ))
-    })
+    InitShape::parse(word).ok_or_else(|| CliError::UsageOwned(text::init_unknown_shape(&word)))
 }
 
 /// Parse a runtime word positional into an [`InitRuntime`], with the one
@@ -613,11 +601,8 @@ fn parse_shape_word(word: &str) -> Result<InitShape, CliError> {
 /// accepted for one release and prints a rename hint to stderr — never a silent
 /// acceptance.
 fn parse_runtime_word(word: &str) -> Result<InitRuntime, CliError> {
-    let (runtime, deprecated) = InitRuntime::parse(word).ok_or_else(|| {
-        CliError::UsageOwned(format!(
-            "ipe init: unknown runtime `{word}` — the web runtimes are: served (the default), solo"
-        ))
-    })?;
+    let (runtime, deprecated) = InitRuntime::parse(word)
+        .ok_or_else(|| CliError::UsageOwned(text::init_unknown_runtime(&word)))?;
     if let Some(alias) = deprecated {
         print_runtime_rename_hint(alias, runtime);
     }
@@ -642,10 +627,8 @@ fn print_runtime_rename_hint(alias: &str, runtime: InitRuntime) {
 /// Returns the selected [`InitShape`]. The wizard is only called when stdin
 /// and stdout are both TTYs and `--shape` was not passed.
 fn wizard_shape() -> Result<InitShape, CliError> {
-    print!(
-        "{}",
-        style::gutter(
-            "What kind of program is this?\n\
+    crate::screen::prompt(
+        "What kind of program is this?\n\
              \n\
              [1] web    — browser / desktop / mobile app  (default)\n\
              [2] tui    — terminal UI with cells\n\
@@ -654,8 +637,7 @@ fn wizard_shape() -> Result<InitShape, CliError> {
              [5] server — HTTP server\n\
              [6] script — plain task, no rendering\n\
              \n\
-             Shape [1]: "
-        )
+             Shape [1]: ",
     );
     let _ = std::io::stdout().flush();
     let line = read_line_trimmed();
@@ -667,9 +649,8 @@ fn wizard_shape() -> Result<InitShape, CliError> {
         "5" | "server" => InitShape::Server,
         "6" | "script" => InitShape::Script,
         other => {
-            return Err(CliError::UsageOwned(format!(
-                "ipe init: unknown shape `{other}` — expected 1-6 or one of: \
-                 web, tui, cli, worker, server, script"
+            return Err(CliError::UsageOwned(text::init_unknown_shape_choice(
+                &other,
             )));
         }
     };
@@ -679,16 +660,13 @@ fn wizard_shape() -> Result<InitShape, CliError> {
 /// TTY wizard: prompt for the `web` runtime (served vs solo). Only called for the
 /// web shape when the runtime positional was omitted on a TTY.
 fn wizard_runtime() -> Result<InitRuntime, CliError> {
-    print!(
-        "{}",
-        style::gutter(
-            "How does this web app run?\n\
+    crate::screen::prompt(
+        "How does this web app run?\n\
              \n\
              [1] served — a co-located server loop, streamed to the browser  (default)\n\
              [2] solo   — a self-contained client, wasm in the browser\n\
              \n\
-             Runtime [1]: "
-        )
+             Runtime [1]: ",
     );
     let _ = std::io::stdout().flush();
     let line = read_line_trimmed();
@@ -705,8 +683,8 @@ fn wizard_runtime() -> Result<InitRuntime, CliError> {
             InitRuntime::Solo
         }
         other => {
-            return Err(CliError::UsageOwned(format!(
-                "ipe init: unknown runtime `{other}` — expected 1-2 or one of: served, solo"
+            return Err(CliError::UsageOwned(text::init_unknown_runtime_choice(
+                &other,
             )));
         }
     };
@@ -911,7 +889,7 @@ fn decide_action(rel: &Path, exists: bool, interactive: bool) -> FileAction {
 /// Ask a `[Y/n]` / `[y/N]` question and read the answer.
 fn prompt_yes_no(question: &str, default: bool) -> bool {
     let hint = if default { "[Y/n]" } else { "[y/N]" };
-    print!("{}", style::gutter(&format!("{question} {hint} ")));
+    crate::screen::prompt(&format!("{question} {hint} "));
     let _ = std::io::stdout().flush();
     crate::read_yes_no_default(default)
 }
@@ -932,7 +910,9 @@ fn print_reconcile_summary(interactive: bool, restored: &[PathBuf], skipped: &[P
     if body.is_empty() {
         body.push_str("nothing to do.\n");
     }
-    print!("{}", style::frame(&style::gutter(&body)));
+    crate::screen::Screen::new(crate::screen::Stream::Stdout)
+        .line(crate::screen::Tone::Text, &body)
+        .emit();
 }
 
 /// Derive the project name from the last path component of the resolved target.
@@ -950,12 +930,7 @@ fn project_name_for(target_dir: &Path) -> Result<String, CliError> {
         .file_name()
         .and_then(|n| n.to_str())
         .map(str::to_owned)
-        .ok_or_else(|| {
-            CliError::UsageOwned(format!(
-                "init: cannot derive a project name from target {}",
-                target_dir.display()
-            ))
-        })?;
+        .ok_or_else(|| CliError::UsageOwned(text::init_no_project_name(&target_dir.display())))?;
     Ok(name)
 }
 
@@ -984,7 +959,9 @@ fn scaffold(target_dir: &Path, files: &[ManagedFile], force: bool) -> Result<(),
         for rel in kept {
             let _ = writeln!(body, "kept {} (unchanged)", rel.display());
         }
-        print!("{}", style::frame(&style::gutter(&body)));
+        crate::screen::Screen::new(crate::screen::Stream::Stdout)
+            .line(crate::screen::Tone::Text, &body)
+            .emit();
     }
     Ok(())
 }
@@ -1017,13 +994,10 @@ fn write_new_file(path: &Path, contents: &str) -> Result<(), CliError> {
 /// Its original is backed up first, and the replacement is atomic.
 fn replace_file(path: &Path, contents: &str) -> Result<(), CliError> {
     if let Some(backup) = crate::rewrite_user_file(path, contents, crate::RewriteKind::Lossy)? {
-        println!(
-            "{}",
-            style::gutter(&format!(
-                "backed up {} to {}",
-                path.display(),
-                backup.display()
-            ))
+        crate::screen::chatter(
+            crate::screen::Stream::Stdout,
+            crate::screen::Tone::Text,
+            &format!("backed up {} to {}", path.display(), backup.display()),
         );
     }
     Ok(())
@@ -1064,7 +1038,9 @@ fn print_next_steps(target_arg: &str, project_name: &str, interactive: bool, run
          {open_hint}\
          {health_tip}"
     );
-    print!("{}", style::frame(&style::gutter(&body)));
+    crate::screen::Screen::new(crate::screen::Stream::Stdout)
+        .line(crate::screen::Tone::Text, &body)
+        .emit();
 }
 
 /// Print the next-steps message for a freshly scaffolded library.
@@ -1082,7 +1058,9 @@ fn print_next_steps_lib(target_arg: &str, project_name: &str) {
          \n\
          Add public modules under src/ and list each in package.ipe's exposedModules.\n"
     );
-    print!("{}", style::frame(&style::gutter(&body)));
+    crate::screen::Screen::new(crate::screen::Stream::Stdout)
+        .line(crate::screen::Tone::Text, &body)
+        .emit();
 }
 
 // ── tests ─────────────────────────────────────────────────────────────────────

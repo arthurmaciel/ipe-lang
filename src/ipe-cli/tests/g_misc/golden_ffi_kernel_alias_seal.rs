@@ -40,7 +40,7 @@ fn assert_rejected_as_user_kernel_alias(sub_dir: &str, out_dir: &str, main: &str
         return; // runtime unavailable in this environment — skip silently
     };
 
-    let tmp = std::env::temp_dir().join(sub_dir);
+    let tmp = crate::support::scratch_root().join(sub_dir);
     assert!(
         write_project(&tmp, main),
         "must write the fixture project to a temp dir"
