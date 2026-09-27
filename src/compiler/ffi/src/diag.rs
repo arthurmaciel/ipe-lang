@@ -919,7 +919,7 @@ impl fmt::Display for WireDefect {
 }
 
 /// Render a `TypeRef` that carries zero or several discriminators.
-fn fmt_type_ref_discriminator(f: &mut fmt::Formatter<'_>, present: &[String]) -> fmt::Result {
+fn fmt_type_ref_discriminator(f: &mut fmt::Formatter<'_>, present: &[&str]) -> fmt::Result {
     if present.is_empty() {
         write!(
             f,

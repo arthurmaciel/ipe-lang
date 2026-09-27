@@ -1067,7 +1067,7 @@ const UNUSED_IMPORT_WIDE: &str =
 
 /// A `(line, start..end)` character range, built the same way the LSP wire
 /// protocol addresses a cursor selection.
-fn point_range(line: u32, start: u32, end: u32) -> Range {
+const fn point_range(line: u32, start: u32, end: u32) -> Range {
     Range {
         start: lsp_types::Position {
             line,
