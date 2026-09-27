@@ -22,7 +22,7 @@ name: Build & test
 #     docs/CI/yaml-only PR (no matching path) skips them all; a developer runs
 #     the same set locally to match CI.
 #   • RELEASE-ONLY PR — a same-repo PR whose diff is only release-please version
-#     metadata (`changes.release_only`, .github/ci/release-only.sh) skips the
+#     metadata (`changes.release_only`, .github/ci/release_only.py) skips the
 #     heavy emitted-build/SEAL/sanitizer tiers: its tree is the already-gated
 #     `main` plus a version bump. The version-sensitive gates still run.
 #   • NIGHTLY SCHEDULE — the checks that a typical code change cannot break, or
@@ -85,9 +85,6 @@ jobs:
   #     diagnostic pages live under src/** already, so they need no special case.)
   changes:
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      pull-requests: read
     outputs:
       wasm: ${{ steps.filter.outputs.wasm }}
       code: ${{ steps.filter.outputs.code }}
@@ -102,8 +99,11 @@ jobs:
       release_only: ${{ steps.release.outputs.release_only }}
     steps:
       - uses: actions/checkout@v7
+        with:
+          # The tested merge commit and its base parent, for the release-only diff.
+          fetch-depth: 2
       # `release_only` — true only for a same-repo PR whose changed files are all
-      # release-please version metadata (see .github/ci/release-only.sh). Keyed on
+      # release-please version metadata (see .github/ci/release_only.py). Keyed on
       # the diff, never the branch name, so no PR can opt itself out of a tier.
       - name: Classify release-only PR
         id: release
@@ -111,11 +111,9 @@ jobs:
         continue-on-error: true
         env:
           EVENT_NAME: ${{ github.event_name }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
           HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
           REPO: ${{ github.repository }}
-          GH_TOKEN: ${{ github.token }}
-        run: .github/ci/release-only.sh
+        run: python3 .github/ci/release_only.py
       - uses: dorny/paths-filter@v3
         id: filter
         with:
