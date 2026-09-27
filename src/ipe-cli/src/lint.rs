@@ -21,7 +21,7 @@ use std::path::{Path, PathBuf};
 use ipe_lint::{LintConfig, SourceModule};
 
 use crate::screen::{self, Screen, Stream, Tone};
-use crate::{CliError, cli_args, watch};
+use crate::{CliError, cli_args, text, watch};
 
 /// The `lint.ipe` file name, resolved next to a project's `package.ipe` (or in
 /// the current directory for a single-file lint).
@@ -63,7 +63,7 @@ pub(crate) fn parse_lint_args(rest: &[String]) -> Result<LintArgs, CliError> {
             }
             positional => {
                 if entry.is_some() {
-                    return Err(CliError::Usage("ipe lint takes at most one path"));
+                    return Err(CliError::Usage(text::lint_single_path()));
                 }
                 entry = Some(positional.to_owned());
             }

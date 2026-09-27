@@ -40,11 +40,17 @@
 //! reports are pinned empty by the page tests, so a malformed page cannot ship.
 
 /// The heading of a page's argument description.
-pub const ARGUMENTS: &str = "Arguments";
+pub fn arguments_heading() -> &'static str {
+    crate::text::help_arguments_label()
+}
 /// The heading of a page's option list.
-pub const OPTIONS: &str = "Options";
+pub fn options_heading() -> &'static str {
+    crate::text::help_options_label()
+}
 /// The heading of a page's output-location note.
-pub const OUTPUT: &str = "Output";
+pub fn output_heading() -> &'static str {
+    crate::text::help_output_label()
+}
 
 /// The shared-flags page.
 pub const FLAGS_PAGE: &str = include_str!("../help/flags.md");
@@ -193,7 +199,7 @@ pub fn parse_command_page(name: &str, page: &'static str) -> (CommandText, Vec<P
         }
         if let Some(heading) = trimmed.strip_prefix("## ") {
             let heading = heading.trim();
-            if ![ARGUMENTS, OPTIONS, OUTPUT].contains(&heading) {
+            if ![arguments_heading(), options_heading(), output_heading()].contains(&heading) {
                 defects.push(PageDefect::UnknownSection(heading));
             }
             at = At::Section(Some(heading));
@@ -201,13 +207,13 @@ pub fn parse_command_page(name: &str, page: &'static str) -> (CommandText, Vec<P
         }
         match at {
             At::Lead => set_once(&mut text.summary, line, &mut defects),
-            At::Section(Some(heading)) if heading == ARGUMENTS => {
+            At::Section(Some(heading)) if heading == arguments_heading() => {
                 set_once(&mut text.args_desc, line, &mut defects);
             }
-            At::Section(Some(heading)) if heading == OUTPUT => {
+            At::Section(Some(heading)) if heading == output_heading() => {
                 set_once(&mut text.output_desc, line, &mut defects);
             }
-            At::Section(Some(heading)) if heading == OPTIONS => {
+            At::Section(Some(heading)) if heading == options_heading() => {
                 if let Some(key) = trimmed.strip_prefix("- @") {
                     match shared
                         .iter()

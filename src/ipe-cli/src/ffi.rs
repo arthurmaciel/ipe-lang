@@ -18,6 +18,7 @@ use ipe_ffi::driver::{CrateName, CrateSpec, FfiCache, InstalledCrate, VersionPin
 use ipe_ffi::pkginfo::FeatureName;
 
 use crate::CliError;
+use crate::text;
 
 /// The project-relative FFI cache directory.
 const CACHE_REL: &str = ".ipe/cache/ffi/rust";
@@ -638,9 +639,7 @@ fn inspector_binary() -> Result<PathBuf, CliError> {
             }
         }
     }
-    Err(CliError::Usage(
-        "ipe add: `ipe-ffi-inspector` not found beside the `ipe` binary or on PATH",
-    ))
+    Err(CliError::Usage(text::ffi_inspector_not_found()))
 }
 
 /// A per-invocation scratch directory under the sanctioned write-boundary
@@ -652,9 +651,7 @@ fn inspector_binary() -> Result<PathBuf, CliError> {
 fn make_scratch_dir(krate: &str) -> Result<PathBuf, CliError> {
     let home = std::env::var_os("HOME")
         .map(PathBuf::from)
-        .ok_or(CliError::Usage(
-            "ipe add: HOME is not set; cannot create a safe scratch directory",
-        ))?;
+        .ok_or(CliError::Usage(text::ffi_add_home_unset()))?;
     let base = home.join(".cache/ipe/ffi-scratch");
     crate::scratch::ScratchDir::new_under(&base, &format!("add-{krate}"))
         .map(crate::scratch::ScratchDir::into_path)
@@ -929,11 +926,7 @@ fn run_inspector_job(job: &InspectorJob, allow_build_scripts: bool) -> Result<St
 
     match choose_sandbox_route(&mechanism, ipe_sandbox::missing_caps(&caps), unsandboxed_ok) {
         SandboxRoute::RefuseNoBwrap => {
-            return Err(CliError::Usage(
-                "ipe add: no bubblewrap isolation available — install `bwrap`, or set \
-                 IPE_FFI_ALLOW_UNSANDBOXED=1 to accept running the crate's build scripts \
-                 UNSANDBOXED (dangerous)",
-            ));
+            return Err(CliError::Usage(text::ffi_no_bubblewrap()));
         }
         SandboxRoute::RefuseMissingCaps { missing } => {
             return Err(io_err(format!(
@@ -1243,7 +1236,9 @@ fn run_inspector_job_unsandboxed(
         allow_build_scripts,
         false,
     );
-    let (program, rest) = payload.split_first().ok_or(CliError::Usage("ipe add"))?;
+    let (program, rest) = payload
+        .split_first()
+        .ok_or(CliError::Usage(text::ffi_add_no_payload()))?;
     let out = std::process::Command::new(program)
         .args(rest)
         .output()
@@ -1334,7 +1329,7 @@ fn install_wrapper(
         crate::screen::prompt("Continue? [y/N] ");
         let _ = std::io::stdout().flush();
         if !crate::read_yes_no() {
-            return Err(CliError::Usage("ipe install: aborted"));
+            return Err(CliError::Usage(text::install_aborted()));
         }
     }
     let expose = manifest.expose_names();
@@ -1859,10 +1854,7 @@ fn ffi_vocabulary_source(manifest_path: &Path) -> PathBuf {
 /// in `src/Ffi/<Crate>.ipe` instead.
 fn reject_legacy_define_tables(text: &str) -> Result<(), CliError> {
     if text.contains("[[rust.define.") {
-        return Err(CliError::Usage(
-            "[[rust.define.*]] is no longer supported — \
-             declare FFI types via `foreign` in `src/Ffi/<Crate>.ipe`",
-        ));
+        return Err(CliError::Usage(crate::text::ffi_legacy_define_removed()));
     }
     Ok(())
 }
@@ -1989,9 +1981,7 @@ pub fn run_rust(rest: &[String]) -> Result<(), CliError> {
         // usage hint so the dispatcher shows the `--help` page and exits
         // non-zero — matching bare `ipe package`. An explicit `ipe rust --help`
         // is still honoured as a help request upstream.
-        None => Err(CliError::Usage(
-            "usage: ipe rust <add|remove|install> <crate>[@<version>] [flags]",
-        )),
+        None => Err(CliError::Usage(text::rust_usage())),
         Some((sub, args)) if sub == "add" => run_add(args),
         Some((sub, args)) if sub == "remove" => run_remove(args),
         Some((sub, args)) if sub == "install" => run_install(args),
@@ -2017,9 +2007,9 @@ pub fn run_add(rest: &[String]) -> Result<(), CliError> {
     while let Some(arg) = it.next() {
         match arg.as_str() {
             "--features" => {
-                let raw = it
-                    .next()
-                    .ok_or(CliError::Usage("ipe rust add: --features needs a value"))?;
+                let raw = it.next().ok_or_else(|| {
+                    CliError::UsageOwned(text::flag_needs_value(&"rust add", &"--features"))
+                })?;
                 // Parse, don't validate: gate each feature name at the boundary
                 // before it can reach the emitted manifest's `features` array.
                 for feat in raw.split(',') {
@@ -2033,15 +2023,11 @@ pub fn run_add(rest: &[String]) -> Result<(), CliError> {
             "--verbose" => verbose = true,
             other if krate.is_none() => krate = Some(other.to_owned()),
             _ => {
-                return Err(CliError::Usage(
-                    "usage: ipe rust add <crate>[@<version>] [--features a,b] [--yes] [--verbose]",
-                ));
+                return Err(CliError::Usage(text::rust_add_usage()));
             }
         }
     }
-    let raw = krate.ok_or(CliError::Usage(
-        "usage: ipe rust add <crate>[@<version>] [--features a,b] [--yes] [--verbose]",
-    ))?;
+    let raw = krate.ok_or(CliError::Usage(text::rust_add_usage()))?;
     let spec = CrateSpec::parse(&raw).map_err(|diag| CliError::UsageOwned(diag.to_string()))?;
 
     if !assume_yes {
@@ -2054,7 +2040,7 @@ pub fn run_add(rest: &[String]) -> Result<(), CliError> {
         crate::screen::prompt("[y/N] ");
         let _ = std::io::stdout().flush();
         if !crate::read_yes_no() {
-            return Err(CliError::Usage("ipe rust add: aborted"));
+            return Err(CliError::Usage(text::rust_add_aborted()));
         }
     }
 
@@ -2068,7 +2054,7 @@ pub fn run_add(rest: &[String]) -> Result<(), CliError> {
 /// [`CliError`] on misuse or a cache-delete failure.
 pub fn run_remove(rest: &[String]) -> Result<(), CliError> {
     let [raw] = rest else {
-        return Err(CliError::Usage("usage: ipe rust remove <crate>"));
+        return Err(CliError::Usage(text::rust_remove_usage()));
     };
     let cache = FfiCache::at_project_root(Path::new("."));
     let slug = ipe_ffi::driver::slugify(raw);
@@ -2105,24 +2091,16 @@ pub fn run_install(rest: &[String]) -> Result<(), CliError> {
             "--allow-build-scripts" => allow_build_scripts = true,
             "--verbose" => verbose = true,
             _ => {
-                return Err(CliError::Usage(
-                    "usage: ipe rust install [--yes] [--allow-build-scripts] [--verbose]",
-                ));
+                return Err(CliError::Usage(text::rust_install_usage()));
             }
         }
     }
     if crate::project::manifest_in_dir(Path::new(".")).is_some() {
-        return Err(CliError::Usage(
-            "ipe rust install: reading `[rust.dependencies]` / `[rust.wrapper]` bindings out of a \
-             package.ipe is not yet wired (part of the outstanding ergonomic Rust-FFI work) — the \
-             text inspector reads only a legacy ipe.toml",
-        ));
+        return Err(CliError::Usage(text::rust_install_package_ipe_unsupported()));
     }
     let manifest = Path::new(PROJECT_MANIFEST_TOML);
     if !manifest.is_file() {
-        return Err(CliError::Usage(
-            "ipe rust install: no manifest with `[rust.dependencies]` in the current directory",
-        ));
+        return Err(CliError::Usage(text::rust_install_no_manifest()));
     }
     let text =
         crate::io_bounded::read_to_string_capped(manifest, crate::io_bounded::MANIFEST_READ_CAP)
@@ -2167,7 +2145,7 @@ pub fn run_install(rest: &[String]) -> Result<(), CliError> {
         crate::screen::prompt("Continue? [y/N] ");
         let _ = std::io::stdout().flush();
         if !crate::read_yes_no() {
-            return Err(CliError::Usage("ipe install: aborted"));
+            return Err(CliError::Usage(text::install_aborted()));
         }
     }
     let mut entries: Vec<(CrateSpec, Vec<String>)> = Vec::with_capacity(deps.len());

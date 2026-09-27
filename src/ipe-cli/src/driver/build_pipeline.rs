@@ -2,7 +2,7 @@ use super::{CliError, diag_span, io_err};
 use crate::output_dir::{OwnedDir, OwnedPath};
 use crate::{
     BTreeMap, BTreeSet, Diagnostic, Interner, Path, PathBuf, build_plan, cache, contained_path,
-    ffi, fs, project, render, runtime_embed,
+    ffi, fs, project, render, runtime_embed, text,
 };
 
 /// Options modifying a build beyond plain source compilation — some (the
@@ -1148,14 +1148,10 @@ pub fn attribute_canon_errors(
         })?;
     for mod_path in topo.iter() {
         let Some((path, src)) = sources.get(mod_path) else {
-            return Err(CliError::Usage(
-                "internal: module in topo order not in source map",
-            ));
+            return Err(CliError::Usage(text::internal_module_not_in_source_map()));
         };
         let Some(file_handle) = source_root.files(db).get(mod_path).copied() else {
-            return Err(CliError::Usage(
-                "internal: module in topo order not in source map",
-            ));
+            return Err(CliError::Usage(text::internal_module_not_in_source_map()));
         };
         ipe_db::canonicalize(db, source_root, file_handle)
             .clone()
@@ -1251,7 +1247,7 @@ pub fn compile_prepared(
     let shared_interner = ipe_db::Db::interner(db).clone();
 
     let Some(entry_file) = source_root.files(db).get(entry_path).copied() else {
-        return Err(CliError::Usage("internal: entry module not in source map"));
+        return Err(CliError::Usage(text::internal_entry_not_in_source_map()));
     };
 
     // Canonicalise each module in dep-first order, attributing a canon error
@@ -2250,11 +2246,7 @@ pub fn build_project_with_options(
         && !manifest.exposed_modules.is_empty()
         && !sources.contains_key(&entry_path)
     {
-        return Err(CliError::Usage(
-            "this is a library package (it declares `exposedModules` and no runnable program) — \
-             there is no entry to build. Use `ipe type-check` to verify its public surface, or \
-             add a `Package.programs [ … ]` stage to declare a runnable entry",
-        ));
+        return Err(CliError::Usage(text::library_package_no_entry()));
     }
     // The emit epilogue's fixed `fn main` calls `ipe_main`, which the backend
     // names only for a `main` in module `Main`. A `programs`-declared entry in a

@@ -16,6 +16,7 @@ use crate::CliError;
 use crate::cli_args::{self, OutputFormat};
 use crate::screen::{self, Screen, Stream, Tone};
 use crate::style;
+use crate::text;
 
 /// A directory `clean` may remove.
 ///
@@ -111,7 +112,7 @@ fn project_root() -> Result<PathBuf, CliError> {
     let cwd = PathBuf::from(".");
     if crate::project::manifest_in_dir(&cwd).is_none() {
         if crate::project::has_only_legacy_toml(&cwd) {
-            return Err(CliError::Usage(crate::project::LEGACY_TOML_HINT));
+            return Err(CliError::Usage(text::legacy_toml_hint()));
         }
         return Err(CliError::UsageOwned(
             "clean: no package.ipe here — run it from an Ipê project root".to_owned(),

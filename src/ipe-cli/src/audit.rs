@@ -60,6 +60,7 @@ use crate::CliError;
 use crate::cli_args::OutputFormat;
 use crate::project::{self, ProjectManifest};
 use crate::scratch::ScratchDir;
+use crate::text;
 
 /// The package-gate checks, in the fixed order [`run_audit`] runs them. Naming
 /// the check that rejected lets the diagnostic say exactly which gate failed.
@@ -542,53 +543,53 @@ fn parse_audit_args(rest: &[String]) -> Result<AuditArgs, CliError> {
     while let Some(arg) = it.next() {
         match arg.as_str() {
             "--index" => {
-                let value = it
-                    .next()
-                    .ok_or(CliError::Usage("ipe package audit: --index needs a value"))?;
+                let value = it.next().ok_or_else(|| {
+                    CliError::UsageOwned(text::flag_needs_value(&"package audit", &"--index"))
+                })?;
                 if index.is_some() {
-                    return Err(CliError::Usage(
-                        "ipe package audit: --index given more than once",
-                    ));
+                    return Err(CliError::UsageOwned(text::flag_repeated(
+                        &"package audit",
+                        &"--index",
+                    )));
                 }
                 index = Some(PathBuf::from(value));
             }
             "--advisory-db" => {
-                let value = it.next().ok_or(CliError::Usage(
-                    "ipe package audit: --advisory-db needs a value",
-                ))?;
+                let value = it.next().ok_or_else(|| {
+                    CliError::UsageOwned(text::flag_needs_value(&"package audit", &"--advisory-db"))
+                })?;
                 if advisory_db.is_some() {
-                    return Err(CliError::Usage(
-                        "ipe package audit: --advisory-db given more than once",
-                    ));
+                    return Err(CliError::UsageOwned(text::flag_repeated(
+                        &"package audit",
+                        &"--advisory-db",
+                    )));
                 }
                 if no_advisory_db {
-                    return Err(CliError::Usage(
-                        "ipe package audit: --advisory-db and --no-advisory-db are mutually exclusive",
-                    ));
+                    return Err(CliError::Usage(text::audit_advisory_db_exclusive()));
                 }
                 advisory_db = Some(PathBuf::from(value));
             }
             "--no-advisory-db" => {
                 if no_advisory_db {
-                    return Err(CliError::Usage(
-                        "ipe package audit: --no-advisory-db given more than once",
-                    ));
+                    return Err(CliError::UsageOwned(text::flag_repeated(
+                        &"package audit",
+                        &"--no-advisory-db",
+                    )));
                 }
                 if advisory_db.is_some() {
-                    return Err(CliError::Usage(
-                        "ipe package audit: --advisory-db and --no-advisory-db are mutually exclusive",
-                    ));
+                    return Err(CliError::Usage(text::audit_advisory_db_exclusive()));
                 }
                 no_advisory_db = true;
             }
             "--publisher" => {
-                let value = it.next().ok_or(CliError::Usage(
-                    "ipe package audit: --publisher needs a value",
-                ))?;
+                let value = it.next().ok_or_else(|| {
+                    CliError::UsageOwned(text::flag_needs_value(&"package audit", &"--publisher"))
+                })?;
                 if publisher.is_some() {
-                    return Err(CliError::Usage(
-                        "ipe package audit: --publisher given more than once",
-                    ));
+                    return Err(CliError::UsageOwned(text::flag_repeated(
+                        &"package audit",
+                        &"--publisher",
+                    )));
                 }
                 publisher = Some(value.clone());
             }
@@ -599,9 +600,7 @@ fn parse_audit_args(rest: &[String]) -> Result<AuditArgs, CliError> {
             }
             positional => {
                 if path.is_some() {
-                    return Err(CliError::Usage(
-                        "ipe package audit: expected a single <path> argument",
-                    ));
+                    return Err(CliError::Usage(text::audit_single_path()));
                 }
                 path = Some(PathBuf::from(positional));
             }
@@ -626,12 +625,12 @@ fn set_format(slot: &mut Option<OutputFormat>, requested: OutputFormat) -> Resul
             *slot = Some(requested);
             Ok(())
         }
-        Some(existing) if *existing == requested => Err(CliError::Usage(
-            "ipe package audit: an output-format flag was given more than once",
-        )),
-        Some(_) => Err(CliError::Usage(
-            "ipe package audit: --plain and --json are mutually exclusive",
-        )),
+        Some(existing) if *existing == requested => {
+            Err(CliError::Usage(text::audit_format_repeated()))
+        }
+        Some(_) => Err(CliError::UsageOwned(text::plain_json_exclusive(
+            &"package audit",
+        ))),
     }
 }
 
@@ -815,7 +814,7 @@ fn locate_manifest(path: &Path) -> Result<PathBuf, CliError> {
             return Ok(manifest);
         }
         if crate::project::has_only_legacy_toml(path) {
-            return Err(CliError::Usage(crate::project::LEGACY_TOML_HINT));
+            return Err(CliError::Usage(text::legacy_toml_hint()));
         }
         return Err(CliError::UsageOwned(format!(
             "ipe package audit: no `package.ipe` in `{}` — the gate audits a publishable Ipê \

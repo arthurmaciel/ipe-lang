@@ -39,6 +39,7 @@ use crate::scratch::{ScratchDir, ScratchFile};
 use crate::CliError;
 use crate::index::{self, CommitId, EntryVersion, IndexEntry, PinnedRev, SourceUrl};
 use crate::project::{self, ProjectManifest};
+use crate::text;
 
 /// A publish refusal: a typed reason publish declined to proceed.
 ///
@@ -234,9 +235,7 @@ fn parse_args(rest: &[String]) -> Result<Args, CliError> {
             }
             positional => {
                 if path.is_some() {
-                    return Err(CliError::Usage(
-                        "ipe package publish: expected a single <path> argument",
-                    ));
+                    return Err(CliError::Usage(text::publish_single_path()));
                 }
                 path = Some(PathBuf::from(positional));
             }
@@ -271,7 +270,7 @@ fn locate_manifest(path: &Path) -> Result<PathBuf, CliError> {
             return Ok(manifest);
         }
         if crate::project::has_only_legacy_toml(path) {
-            return Err(CliError::Usage(crate::project::LEGACY_TOML_HINT));
+            return Err(CliError::Usage(text::legacy_toml_hint()));
         }
         return Err(CliError::UsageOwned(format!(
             "ipe package publish: no `package.ipe` in `{}` — publish operates on a publishable \

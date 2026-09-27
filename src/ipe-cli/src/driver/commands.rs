@@ -12,16 +12,9 @@ use crate::style::TerminalSafe;
 use crate::{
     ALL_CODES, BTreeMap, Diagnostic, Interner, Path, PathBuf, build_plan, cli_args, delivery,
     explain_page, ffi, fs, help, io_bounded, native_ffi_consent, package_manifest, project,
-    run_sandbox, runtime_embed, screen, style, title, toolchain, unsafe_ack, wasi_run, watch,
+    run_sandbox, runtime_embed, screen, style, text, title, toolchain, unsafe_ack, wasi_run, watch,
     web_consent,
 };
-
-/// The misuse reason shown when `build` / `run` / `watch` are invoked with no
-/// entry and none can be discovered. Just the reason — the command's own
-/// `--help` page (appended by [`CliError::CommandUsage`]) carries the synopsis
-/// and options, so this never re-lists them.
-pub const NO_ENTRY: &str = "nothing to build here — pass a source file or run inside a project (a \
-     package.ipe, or a src/Main.ipe)";
 
 /// A request for help asks for output, not an error: it prints to stdout and
 /// exits successfully. Returned by [`intercept_help`] so [`run_cli`] can honour
@@ -277,9 +270,9 @@ pub fn default_entry() -> Result<String, CliError> {
         return Ok("src/Main.ipe".to_owned());
     }
     if project::has_only_legacy_toml(std::path::Path::new(".")) {
-        return Err(CliError::Usage(project::LEGACY_TOML_HINT));
+        return Err(CliError::Usage(text::legacy_toml_hint()));
     }
-    Err(CliError::Usage(NO_ENTRY))
+    Err(CliError::Usage(text::no_entry()))
 }
 
 /// `ipe watch [<path>]` — rebuild and re-run on every source change
@@ -421,11 +414,9 @@ pub fn discover_manifest(entry_path: &Path) -> Result<Option<PathBuf>, CliError>
             return Ok(Some(manifest));
         }
         if project::has_only_legacy_toml(entry_path) {
-            return Err(CliError::Usage(project::LEGACY_TOML_HINT));
+            return Err(CliError::Usage(text::legacy_toml_hint()));
         }
-        Err(CliError::Usage(
-            "directory supplied but no package.ipe found inside it",
-        ))
+        Err(CliError::Usage(text::watch_dir_no_manifest()))
     } else {
         Ok(find_manifest_for_ipe_file(entry_path))
     }
@@ -3349,7 +3340,7 @@ pub fn build_source_graph(entry: &Path) -> Result<SourceGraph, CliError> {
         .get(&collected.entry_module_path)
         .copied()
     else {
-        return Err(CliError::Usage("internal: entry module not in source map"));
+        return Err(CliError::Usage(text::internal_entry_not_in_source_map()));
     };
 
     Ok(SourceGraph {

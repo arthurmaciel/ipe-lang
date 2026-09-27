@@ -62,6 +62,7 @@ use crate::project::{
     MobileDelivery, Program, ProjectManifest, RustDep, ScreenOrientation, WasmConfig,
     is_denylisted_public_env_name,
 };
+use crate::text;
 
 /// The manifest filename read by this reader.
 pub const PACKAGE_IPE: &str = "package.ipe";
@@ -170,9 +171,9 @@ impl ManifestFields {
     /// two remaining whole-manifest validations: `name` is required, and the
     /// source-root directory must exist.
     fn into_manifest(self, root: &Path) -> Result<ProjectManifest, CliError> {
-        let name = self.name.ok_or(CliError::Usage(
-            "package.ipe: missing a `name = \"…\"` field — a package must be named",
-        ))?;
+        let name = self
+            .name
+            .ok_or(CliError::Usage(text::package_manifest_name_required()))?;
         let src_rel_raw = self.src_rel.as_deref().unwrap_or("src");
         let src_root_contained = crate::contained_path::ContainedRelPath::parse(root, src_rel_raw)
             .map_err(|reason| CliError::PathEscape {
@@ -181,9 +182,7 @@ impl ManifestFields {
             })?;
         let src_root = src_root_contained.resolved().to_path_buf();
         if !src_root.is_dir() {
-            return Err(CliError::Usage(
-                "package.ipe: the source root directory does not exist",
-            ));
+            return Err(CliError::Usage(text::package_manifest_src_root_missing()));
         }
         // The icon is an optional project-relative path resolved (and contained)
         // at parse time, so a packager consumes a validated path and can never be
@@ -301,9 +300,8 @@ impl Reader<'_> {
             }
         }
 
-        let package = package_value.ok_or(CliError::Usage(
-            "package.ipe: no top-level `package = …` binding found",
-        ))?;
+        let package =
+            package_value.ok_or(CliError::Usage(text::package_manifest_no_package_binding()))?;
         if !package.value.patterns.is_empty() {
             return Err(self.reject(
                 package.value.name.span,
@@ -1816,9 +1814,7 @@ fn edit_dependencies_list(
     };
 
     let Expr_::List(items) = &deps_expr.value else {
-        return Err(usage(
-            "package.ipe: `dependencies` must be a list literal `[ … ]` for `ipe add` to edit it",
-        ));
+        return Err(usage(text::package_manifest_deps_not_list()));
     };
 
     let existing = locate_dep_entry(items, &interner, name);
@@ -1857,13 +1853,10 @@ fn locate_package_record<'m>(
         .values
         .iter()
         .find(|v| interner.resolve(v.value.name.value) == Some("package"))
-        .ok_or_else(|| usage("package.ipe: no top-level `package = …` binding to edit"))?;
+        .ok_or_else(|| usage(text::package_manifest_no_package_binding_edit()))?;
     match &package.value.body.value {
         Expr_::Record(fields) => Ok(fields.as_slice()),
-        _ => Err(usage(
-            "package.ipe: the `package` value must be a record literal `{ … }` for `ipe add` to \
-             edit it",
-        )),
+        _ => Err(usage(text::package_manifest_package_not_record())),
     }
 }
 
@@ -2021,15 +2014,11 @@ fn insert_new_dependencies_field(
         .map_or(0, |(_, v)| v.span.hi as usize)
         .min(text.len());
     let Some(rel_close) = text.get(after_last..).and_then(|s| s.find('}')) else {
-        return Err(usage(
-            "package.ipe: could not locate the `package` record's closing `}` to add a dependency",
-        ));
+        return Err(usage(text::package_manifest_deps_brace_not_found()));
     };
     let close_idx = after_last + rel_close;
     let (Some(before), Some(after)) = (text.get(..close_idx), text.get(close_idx..)) else {
-        return Err(usage(
-            "package.ipe: the `package` record's closing `}` is out of range",
-        ));
+        return Err(usage(text::package_manifest_deps_brace_out_of_range()));
     };
     // Align the new field to the last field's indentation. Elm-style manifests
     // indent record fields and the closing brace to a common column; reuse the

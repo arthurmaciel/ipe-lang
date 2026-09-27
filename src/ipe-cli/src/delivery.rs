@@ -22,6 +22,7 @@
 
 use core::fmt;
 
+use crate::text;
 use ipe_backend_rust::static_build::StaticTriple;
 
 /// A rendering class, pinned by the head of `main` (spec § 1). The leading CLI
@@ -749,153 +750,56 @@ impl DeliveryTokens {
 }
 
 impl fmt::Display for DeliveryError {
-    #[allow(clippy::too_many_lines)] // one arm per pedagogical message; each is a whole lesson.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::ShapeMismatch { stated, pinned } => write!(
-                f,
-                "you asked for `{}`, but `main` is a `{}` app. A program's shape is \
-                 fixed by the head of `main` (what `view` renders) — the CLI word only \
-                 double-checks it. Drop the `{}` word, or change `main` to a `{}` entry.",
-                stated.word(),
-                pinned.word(),
-                stated.word(),
-                stated.word(),
-            ),
-            Self::ServedNotAWord => write!(
-                f,
-                "`served` is the default runtime, so it is never written. The web shape \
-                 runs served (a co-located server loop) unless you opt into `solo` (a \
-                 self-contained client). Write `web` for served, or `web desktop` for \
-                 served on the desktop.",
-            ),
-            Self::RuntimeOnNonWeb { shape } => write!(
-                f,
-                "`solo` is a web runtime, but this is a `{}` app. Only the `web` shape \
-                 has a runtime choice (served vs solo) — every other shape runs one way. \
-                 Drop the runtime word.",
-                shape.word(),
-            ),
-            Self::HostOnNonWeb { shape, host } => write!(
-                f,
-                "`{}` is a web host, but this is a `{}` app. Hosts (desktop/ios/android) \
-                 belong to the `web` shape's delivery axis; a `{}` app has one host. \
-                 Drop the host word.",
-                host.word().unwrap_or("default"),
-                shape.word(),
-                shape.word(),
-            ),
-            Self::ServedHostNotMobile { host } => write!(
-                f,
-                "`{host}` is a `solo` host, not a served host. Mobile ships a \
-                 self-contained client (`web solo {host}`); served is the co-located \
-                 server loop (served or `web desktop`). Write `web solo {host}` for \
-                 mobile.",
-                host = host.word().unwrap_or("default"),
+            Self::ShapeMismatch { stated, pinned } => f.write_str(&text::delivery_shape_mismatch(
+                &stated.word(),
+                &pinned.word(),
+            )),
+            Self::ServedNotAWord => f.write_str(text::delivery_served_not_a_word()),
+            Self::RuntimeOnNonWeb { shape } => {
+                f.write_str(&text::delivery_runtime_on_non_web(&shape.word()))
+            }
+            Self::HostOnNonWeb { shape, host } => f.write_str(&text::delivery_host_on_non_web(
+                &shape.word(),
+                &host.word().unwrap_or("default"),
+            )),
+            Self::ServedHostNotMobile { host } => f.write_str(
+                &text::delivery_served_host_not_mobile(&host.word().unwrap_or("default")),
             ),
             Self::StaticNotAllowed { delivery } => match delivery.host() {
-                Host::Desktop if delivery.runtime() == Some(Runtime::Served) => write!(
-                    f,
-                    "`web desktop` links the system webview at runtime, so it has no \
-                     static binary. Use `web` (served), `tui`, `cli`, or `script` \
-                     for a static musl binary, or ship the desktop app bundle.",
-                ),
-                _ => write!(
-                    f,
-                    "`{delivery}` targets wasm or a native bundle, so `--static` (a musl \
-                     binary) does not apply. `--static` is for the co-located, \
-                     no-webview shapes: `script`, `tui`, `cli`, or served `web`.",
-                ),
+                Host::Desktop if delivery.runtime() == Some(Runtime::Served) => {
+                    f.write_str(text::delivery_static_not_allowed_webview())
+                }
+                _ => f.write_str(&text::delivery_static_not_allowed(delivery)),
             },
-            Self::UnknownToken { got } => write!(
-                f,
-                "`{got}` is not a runtime or host word. The web runtime word is \
-                 `solo` (served is the default). Hosts are `desktop`, `ios`, `android`. \
-                 Use `--static` for a musl binary or `--target` for a cross-compile triple.",
+            Self::UnknownToken { got } => f.write_str(&text::delivery_unknown_token(got)),
+            Self::DuplicateToken { kind, got } => {
+                f.write_str(&text::delivery_duplicate_token(kind, got))
+            }
+            Self::SoloRequiresWasmTarget => f.write_str(text::delivery_solo_requires_wasm_target()),
+            Self::WasmTargetRequiresSolo => f.write_str(text::delivery_wasm_target_requires_solo()),
+            Self::NativeEngineRefusesWasmTriple { triple } => f.write_str(
+                &text::delivery_native_engine_refuses_wasm_triple(&triple.as_str()),
             ),
-            Self::DuplicateToken { kind, got } => write!(
-                f,
-                "`{got}` repeats the {kind} — each axis takes exactly one value. \
-                 Write the {kind} once: e.g. `web solo` (not `web solo solo`) or \
-                 `web desktop` (not `web desktop ios`). Drop the duplicate `{got}`.",
-            ),
-            Self::SoloRequiresWasmTarget => write!(
-                f,
-                "a `solo` delivery is a self-contained client that must compile to wasm, \
-                 but the target resolved to native. The sandbox's native-deny guards are \
-                 keyed to the wasm target, so a native `solo` build would ship native \
-                 effects into the sandbox. Build for wasm — pass `--target wasm`, set \
-                 `IPE_TARGET=wasm`, or set `[wasm] mode` in `package.ipe` — or drop \
-                 `solo` for a co-located served delivery.",
-            ),
-            Self::WasmTargetRequiresSolo => write!(
-                f,
-                "a wasm compile target was requested, but the delivery is not `solo`. \
-                 The wasm client target exists only to carry a self-contained `solo` app; \
-                 every other shape has no wasm form. Deliver `web solo` to build for \
-                 wasm, or drop the wasm target (`--target`/`IPE_TARGET`/`[wasm] mode`) \
-                 for a native build.",
-            ),
-            Self::NativeEngineRefusesWasmTriple { triple } => write!(
-                f,
-                "`{}` is a WebAssembly triple, but this build targets the native \
-                 binary, which has no WASM form. The browser client compiles to \
-                 `wasm32-unknown-unknown` (deliver `web solo`); the co-located WASI \
-                 target compiles to `wasm32-wasip1`. Drop the WASM triple for a \
-                 native build, or pick the delivery that carries it.",
-                triple.as_str(),
-            ),
-            Self::SoloRequiresBrowserTriple { triple } => write!(
-                f,
-                "a `web solo` client compiles only to `wasm32-unknown-unknown`, but \
-                 `{}` was requested. The sandboxed browser client has exactly one \
-                 triple — its wasm sandbox. Drop the triple (it is implied by \
-                 `solo`), or drop `solo` for the delivery that carries `{}`.",
-                TargetTriple::name_of(*triple),
-                TargetTriple::name_of(*triple),
-            ),
-            Self::SoloRefusesWasiTriple => write!(
-                f,
-                "a `web solo` client cannot target `wasm32-wasip1`. The browser \
-                 sandbox denies native effects and reaches the world only through \
-                 Web-API capabilities; WASI is the co-located, native-ish target \
-                 for a `tui`/`cli`/`script`/served-`web` program, never the browser \
-                 sandbox. Deliver `web solo` to `wasm32-unknown-unknown`, or use a \
-                 co-located shape for a WASI build.",
-            ),
-            Self::WebviewHasNoStaticTriple { delivery } => write!(
-                f,
-                "`{delivery}` links the system webview at runtime, so it has no \
-                 static (musl) triple. Use `web` (served-live), `tui`, `cli`, or \
-                 `script` for a static musl binary, or ship the desktop app bundle.",
-            ),
-            Self::WasiRefusesSoloDelivery => write!(
-                f,
-                "a co-located `wasm32-wasip1` build cannot carry a `solo` delivery. \
-                 `solo` is the browser sandbox (`wasm32-unknown-unknown`), which \
-                 denies native effects; WASI is the co-located, native-ish target \
-                 that runs a script's own effect floor. Drop `solo` for a WASI \
-                 build, or deliver `web solo` to the browser triple.",
-            ),
-            Self::WasiRequiresDirectShape { shape } => write!(
-                f,
-                "a co-located `wasm32-wasip1` build carries only a `Direct` script \
-                 (a plain `Task Error ()` `main`), but this is a `{}` app. A \
-                 `tui`/`cli`/`web` TEA loop needs the reactor spine, which does not \
-                 build on WASI. Build the `{}` app natively, or ship a `Direct` \
-                 script to `wasm32-wasip1`.",
-                shape.word(),
-                shape.word(),
-            ),
-            Self::WasiRequiresWasiTriple { triple } => write!(
-                f,
-                "a co-located WASI build compiles only to `wasm32-wasip1`, but `{}` \
-                 was requested. The WASI engine has exactly one triple — its \
-                 portable target. Drop the triple (it is implied by the WASI \
-                 build), or pick the delivery that carries `{}`.",
-                TargetTriple::name_of(*triple),
-                TargetTriple::name_of(*triple),
-            ),
+            Self::SoloRequiresBrowserTriple { triple } => {
+                let name = TargetTriple::name_of(*triple);
+                f.write_str(&text::delivery_solo_requires_browser_triple(&name))
+            }
+            Self::SoloRefusesWasiTriple => f.write_str(text::delivery_solo_refuses_wasi_triple()),
+            Self::WebviewHasNoStaticTriple { delivery } => {
+                f.write_str(&text::delivery_webview_has_no_static_triple(delivery))
+            }
+            Self::WasiRefusesSoloDelivery => {
+                f.write_str(text::delivery_wasi_refuses_solo_delivery())
+            }
+            Self::WasiRequiresDirectShape { shape } => {
+                f.write_str(&text::delivery_wasi_requires_direct_shape(&shape.word()))
+            }
+            Self::WasiRequiresWasiTriple { triple } => {
+                let name = TargetTriple::name_of(*triple);
+                f.write_str(&text::delivery_wasi_requires_wasi_triple(&name))
+            }
         }
     }
 }

@@ -10,7 +10,7 @@ use crate::output_dir::{OutputArea, OutputRoot, OwnedDir, ProjectPaths};
 use crate::{
     Applicability, BTreeMap, Diagnostic, HelpLine, Interner, Path, PathBuf, Suggestion, Write,
     audit, cli_args, contained_path, delivery, ffi, fmt, fs, index, pack, progress, project,
-    publish, resolve, scratch, style, toolchain, version_check,
+    publish, resolve, scratch, style, text, toolchain, version_check,
 };
 
 /// Whether a delivery-routed bundle is a fast development build or a production
@@ -515,9 +515,8 @@ pub fn pack_desktop(profile: BundleProfile, path: Option<&str>) -> Result<(), Cl
     let os = pack::desktop::resolve_os(None).map_err(|r| CliError::UsageOwned(r.to_string()))?;
 
     let root = path.map_or_else(|| PathBuf::from("."), PathBuf::from);
-    let manifest_path = discover_manifest(&root)?.ok_or(CliError::Usage(
-        "no package.ipe found — run inside a project or pass its path",
-    ))?;
+    let manifest_path =
+        discover_manifest(&root)?.ok_or(CliError::Usage(text::pkg_not_found_in_dir()))?;
     let manifest = project::parse_manifest(&manifest_path)?;
 
     // Gate the app shape BEFORE any build. The desktop packager is the
@@ -557,9 +556,8 @@ pub fn pack_mobile(
     path: Option<&str>,
 ) -> Result<(), CliError> {
     let root = path.map_or_else(|| PathBuf::from("."), PathBuf::from);
-    let manifest_path = discover_manifest(&root)?.ok_or(CliError::Usage(
-        "no package.ipe found — run inside a project or pass its path",
-    ))?;
+    let manifest_path =
+        discover_manifest(&root)?.ok_or(CliError::Usage(text::pkg_not_found_in_dir()))?;
     let manifest = project::parse_manifest(&manifest_path)?;
 
     // Gate the app's web-delivery capability BEFORE any build: it must be a
@@ -649,9 +647,8 @@ pub fn emit_permissions(
         .map_err(|e| CliError::UsageOwned(format!("ipe {verb} --emit-permissions: {e}")))?;
 
     let root = path.map_or_else(|| PathBuf::from("."), PathBuf::from);
-    let manifest_path = discover_manifest(&root)?.ok_or(CliError::Usage(
-        "no package.ipe found — run inside a project or pass its path",
-    ))?;
+    let manifest_path =
+        discover_manifest(&root)?.ok_or(CliError::Usage(text::pkg_not_found_in_dir()))?;
 
     let manifest = project::parse_manifest(&manifest_path)?;
     let accepts = &manifest.capabilities_accept;
@@ -737,9 +734,7 @@ pub fn run_package(rest: &[String]) -> Result<(), CliError> {
             sub,
             "`audit`, `audit-entry`, `publish`, or `validate-entry`",
         )),
-        None => Err(CliError::Usage(
-            "usage: ipe package <audit|audit-entry|publish|validate-entry> [<path>]",
-        )),
+        None => Err(CliError::Usage(text::package_usage())),
     }
 }
 
@@ -761,9 +756,7 @@ pub fn run_validate_entry(rest: &[String]) -> Result<(), CliError> {
     let path = match rest {
         [one] => PathBuf::from(one),
         [] => {
-            return Err(CliError::Usage(
-                "usage: ipe package validate-entry <packages/<name>.toml>",
-            ));
+            return Err(CliError::Usage(text::package_validate_entry_usage()));
         }
         _ => {
             return Err(CliError::UsageOwned(
@@ -956,13 +949,14 @@ pub fn parse_audit_entry_args(rest: &[String]) -> Result<(PathBuf, Option<PathBu
     while let Some(arg) = it.next() {
         match arg.as_str() {
             "--index" => {
-                let value = it.next().ok_or(CliError::Usage(
-                    "ipe package audit-entry: --index needs a value",
-                ))?;
+                let value = it.next().ok_or_else(|| {
+                    CliError::UsageOwned(text::flag_needs_value(&"package audit-entry", &"--index"))
+                })?;
                 if index_root.is_some() {
-                    return Err(CliError::Usage(
-                        "ipe package audit-entry: --index given more than once",
-                    ));
+                    return Err(CliError::UsageOwned(text::flag_repeated(
+                        &"package audit-entry",
+                        &"--index",
+                    )));
                 }
                 index_root = Some(PathBuf::from(value));
             }
@@ -971,17 +965,13 @@ pub fn parse_audit_entry_args(rest: &[String]) -> Result<(PathBuf, Option<PathBu
             }
             positional => {
                 if entry_path.is_some() {
-                    return Err(CliError::Usage(
-                        "ipe package audit-entry: expected a single entry-file path",
-                    ));
+                    return Err(CliError::Usage(text::package_audit_entry_single_path()));
                 }
                 entry_path = Some(PathBuf::from(positional));
             }
         }
     }
-    let path = entry_path.ok_or(CliError::Usage(
-        "usage: ipe package audit-entry <packages/<name>.toml> [--index <root>]",
-    ))?;
+    let path = entry_path.ok_or(CliError::Usage(text::package_audit_entry_usage()))?;
     Ok((path, index_root))
 }
 
@@ -2177,9 +2167,7 @@ pub fn infer_package_capabilities(
     } else {
         // Surface the real reason the entry could not be lowered, not a generic
         // "nothing lowered" that hides the actual compiler diagnostic.
-        Err(lowering_error.unwrap_or(CliError::Usage(
-            "package capability inference: no module in the package could be lowered",
-        )))
+        Err(lowering_error.unwrap_or(CliError::Usage(text::package_capability_inference_failed())))
     }
 }
 

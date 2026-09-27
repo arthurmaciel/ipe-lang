@@ -89,6 +89,7 @@ use std::time::{Duration, Instant};
 use ipe_intern::Interner;
 
 use crate::project;
+use crate::text;
 use crate::{CliError, write_emitted_project};
 
 /// A lifecycle notification from a running watch session.
@@ -455,12 +456,10 @@ pub(crate) fn resolve_project_sources(
         match project::manifest_in_dir(entry) {
             Some(manifest) => Some(manifest),
             None if project::has_only_legacy_toml(entry) => {
-                return Err(CliError::Usage(project::LEGACY_TOML_HINT));
+                return Err(CliError::Usage(text::legacy_toml_hint()));
             }
             None => {
-                return Err(CliError::Usage(
-                    "directory supplied but no package.ipe found inside it",
-                ));
+                return Err(CliError::Usage(text::watch_dir_no_manifest()));
             }
         }
     } else {

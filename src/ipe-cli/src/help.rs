@@ -493,10 +493,15 @@ fn render_command_markdown(cmd: &Command) -> String {
     }
     out.push_str("\n```\n");
     if !text.args_desc.is_empty() {
-        let _ = writeln!(out, "\n## {}\n\n{}", help_page::ARGUMENTS, text.args_desc);
+        let _ = writeln!(
+            out,
+            "\n## {}\n\n{}",
+            help_page::arguments_heading(),
+            text.args_desc
+        );
     }
     if !text.options.is_empty() {
-        let _ = writeln!(out, "\n## {}\n", help_page::OPTIONS);
+        let _ = writeln!(out, "\n## {}\n", help_page::options_heading());
         for opt in &text.options {
             let _ = writeln!(out, "- `{}` — {}", opt.flag, opt.desc);
         }
@@ -776,12 +781,12 @@ fn render_command(cmd: &Command, p: &Palette) -> String {
     out.push('\n');
     if !text.args_desc.is_empty() {
         out.push('\n');
-        let _ = writeln!(out, "{}:", help_page::ARGUMENTS);
+        let _ = writeln!(out, "{}:", help_page::arguments_heading());
         let _ = writeln!(out, "  {}{}{}", p.dim, text.args_desc, p.reset);
     }
     if !text.options.is_empty() {
         out.push('\n');
-        let _ = writeln!(out, "{}:", help_page::OPTIONS);
+        let _ = writeln!(out, "{}:", help_page::options_heading());
         let width = text.options.iter().map(|o| o.flag.len()).max().unwrap_or(0);
         for opt in &text.options {
             let _ = writeln!(

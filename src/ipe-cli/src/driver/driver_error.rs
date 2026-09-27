@@ -2,7 +2,7 @@ use super::{nearest_command, nearest_group_member};
 use crate::style::TerminalSafe;
 use crate::{
     Diagnostic, Path, PathBuf, Write, api_surface, audit, build_plan, contained_path, delivery,
-    help, machine_output, output_dir, publish, render, render_json, style, toolchain,
+    help, machine_output, output_dir, publish, render, render_json, style, text, toolchain,
 };
 
 /// The runtime crate an emitted project linked against: its root and declared
@@ -636,9 +636,10 @@ impl CliError {
 /// non-zero exit with a short, human-readable reason.
 pub fn test_failed_message(code: i32) -> String {
     format!(
-        "{}{} one or more tests failed (runner exited {code})",
+        "{}{} {}",
         style::GUTTER,
         style::outcome_glyph(style::Outcome::Failure),
+        text::cli_test_failed_suffix(&code),
     )
 }
 
@@ -653,24 +654,28 @@ impl std::fmt::Display for CliError {
             Self::Pipeline { file, src, diag } => {
                 f.write_str(&render(diag, &file.to_string_lossy(), src))
             }
-            Self::RuntimeNotFound => write!(
-                f,
-                "could not locate the Ipe runtime; \
-                 set IPE_RUNTIME_DIR to an explicit path or pass --runtime <dir>"
-            ),
+            Self::RuntimeNotFound => f.write_str(text::cli_runtime_not_found()),
             Self::RuntimeDirInvalid { .. }
             | Self::RuntimeHomeUnknown
             | Self::RuntimeMaterializeFailed { .. }
             | Self::RuntimeVersionMismatch { .. } => fmt_runtime_install_error(self, f),
             Self::EmittedBuildFailed { .. } => fmt_emitted_build_failed(self, f),
-            Self::StaticRefusal(refusal) => write!(f, "static build refused: {refusal}"),
+            Self::StaticRefusal(refusal) => f.write_str(&text::cli_static_refusal(refusal)),
             Self::CapabilityMismatch { missing, extra } => {
-                f.write_str("declared capabilities do not match the program's inferred set")?;
+                f.write_str(text::cli_capability_mismatch_header())?;
                 if !missing.is_empty() {
-                    write!(f, "\n  used but not declared: {}", missing.join(", "))?;
+                    write!(
+                        f,
+                        "\n{}",
+                        text::cli_capability_mismatch_missing(&missing.join(", "))
+                    )?;
                 }
                 if !extra.is_empty() {
-                    write!(f, "\n  declared but not used: {}", extra.join(", "))?;
+                    write!(
+                        f,
+                        "\n{}",
+                        text::cli_capability_mismatch_extra(&extra.join(", "))
+                    )?;
                 }
                 Ok(())
             }
@@ -679,28 +684,27 @@ impl std::fmt::Display for CliError {
                 package,
                 expected,
                 actual,
-            } => write!(
-                f,
-                "package `{package}`: content hash mismatch — the fetched source does not \
-                 match the hash the index pinned.\n  expected: {expected}\n  actual:   {actual}\n\
-                 the source was NOT trusted; nothing was written."
-            ),
+            } => f.write_str(&text::cli_hash_mismatch(package, expected, actual)),
             Self::DocNotFound { query, suggestions } => {
-                write!(f, "no documentation entry is named `{query}`")?;
+                f.write_str(&text::cli_doc_not_found(query))?;
                 if !suggestions.is_empty() {
-                    f.write_str("\nclosest matches:")?;
+                    write!(f, "\n{}", text::cli_doc_suggestions_header())?;
                     for s in suggestions {
-                        write!(f, "\n  ipe doc {}  — {} ({})", s.key, s.title, s.kind)?;
+                        write!(
+                            f,
+                            "\n{}",
+                            text::cli_doc_suggestion_line(&s.key, &s.title, &s.kind)
+                        )?;
                     }
                 }
                 Ok(())
             }
             Self::UnknownCode { input, suggestions } => {
-                write!(f, "unknown error code `{input}`")?;
+                f.write_str(&text::cli_unknown_code(input))?;
                 match suggestions.split_first() {
                     None => Ok(()),
                     Some((first, rest)) => {
-                        write!(f, "\n  did you mean: {first}")?;
+                        write!(f, "\n{}", text::cli_unknown_code_did_you_mean(first))?;
                         for s in rest {
                             write!(f, ", {s}")?;
                         }
@@ -713,16 +717,12 @@ impl std::fmt::Display for CliError {
                 required,
                 floor,
                 proposed,
-            } => write!(
-                f,
-                "version {proposed} does not clear the required {required} bump — the new \
-                 version must be at least {floor}."
-            ),
+            } => f.write_str(&text::cli_semver_rejected(required, floor, proposed)),
             Self::DocCoverage(report) | Self::DocExamplesFailed(report) => {
                 f.write_str(report.as_str())
             }
             Self::PackageAudit(rejection) => write!(f, "{rejection}"),
-            Self::Publish(refusal) => write!(f, "ipe package publish refused: {refusal}"),
+            Self::Publish(refusal) => f.write_str(&text::cli_publish_refused(refusal)),
             // The reason, then the command's full `--help` page (indented,
             // coloured for a terminal). Rendered against stderr because misuse
             // output goes there. A known command always has a help page; the
@@ -742,13 +742,13 @@ impl std::fmt::Display for CliError {
                 writeln!(
                     f,
                     "{}",
-                    crate::style::gutter(&format!("unknown `ipe {group}` verb `{attempted}`"))
+                    crate::style::gutter(&text::cli_unknown_group_verb(group, attempted))
                 )?;
                 if let Some(sugg) = nearest_group_member(group, attempted.as_str()) {
                     writeln!(
                         f,
                         "{}",
-                        crate::style::gutter(&format!("= help: maybe `ipe {group} {sugg}`?"))
+                        crate::style::gutter(&text::cli_unknown_group_suggestion(group, &sugg))
                     )?;
                 }
                 let page = help::group(group, &std::io::stderr())
@@ -756,7 +756,7 @@ impl std::fmt::Display for CliError {
                 f.write_str(page.trim_end_matches('\n'))
             }
             Self::VerifyFailed { stage, report } => {
-                writeln!(f, "verify: the {stage} stage failed")?;
+                writeln!(f, "{}", text::cli_verify_failed(stage))?;
                 f.write_str(report.as_str().trim_end_matches('\n'))
             }
             // The test binary already printed its own per-case failures and the
@@ -765,15 +765,10 @@ impl std::fmt::Display for CliError {
             // caller prints it as-is.
             Self::TestFailed { code } => f.write_str(&test_failed_message(*code)),
             Self::UpgradeNoPrebuilt { version, platform } => {
-                use crate::style::{self, GUTTER};
-                write!(
-                    f,
-                    "{GUTTER}{} No prebuilt binary for {version} on {platform}.\n\
-                     {GUTTER}    Possibly the binaries for that version are still being generated.\n\
-                     {GUTTER}    If you prefer, build from source:\n\
-                     {GUTTER}        cargo install --git https://github.com/arthurmaciel/ipe-lang ipe",
-                    style::outcome_glyph(style::Outcome::Failure)
-                )
+                let glyph = style::outcome_glyph(style::Outcome::Failure);
+                f.write_str(&style::gutter(&text::cli_upgrade_no_prebuilt(
+                    &glyph, version, platform,
+                )))
             }
             // The toolchain-missing message gutters and frames itself; it owns
             // its rendering (see `toolchain::ToolchainMissing`'s `Display`).
@@ -781,19 +776,20 @@ impl std::fmt::Display for CliError {
             // The full diagnostic report already went to stdout; this stderr
             // line is only the one-line verdict that pairs with the non-zero
             // exit, self-guttered so the caller prints it as-is.
-            Self::HealthCritical => write!(
+            Self::HealthCritical => {
+                write!(f, "{}{}", style::GUTTER, text::cli_health_critical())
+            }
+            Self::EjectUnsupported { reason } => write!(
                 f,
-                "{}health: a required prerequisite is missing (see the report above)",
-                style::GUTTER
+                "{}{}",
+                style::GUTTER,
+                text::cli_eject_unsupported(reason)
             ),
-            Self::EjectUnsupported { reason } => write!(f, "{}eject: {reason}", style::GUTTER),
             // The findings already went to stdout; this stderr line is the
             // one-line verdict paired with the non-zero gate exit.
-            Self::LintGateFailed => write!(
-                f,
-                "{}lint: findings remain at or above the gate severity (see above)",
-                style::GUTTER
-            ),
+            Self::LintGateFailed => {
+                write!(f, "{}{}", style::GUTTER, text::cli_lint_gate_failed())
+            }
             // These already wrote their final output; nothing more to display.
             // `run_upgrade` prints the framed "feed unreachable" line (human) or
             // the machine payload (`--json`/`--plain`) before returning, so the
@@ -802,71 +798,55 @@ impl std::fmt::Display for CliError {
             Self::DiagnosticJsonEmitted
             | Self::UpgradeCheckExit { .. }
             | Self::UpgradeFeedUnreachable => Ok(()),
-            Self::FileTooLarge { path, max } => write!(
-                f,
-                "{}: file exceeds the {max}-byte read ceiling — \
-                 refusing to allocate an unbounded buffer",
-                path.display()
-            ),
-            Self::PathEscape { raw, reason } => {
-                write!(f, "manifest path {raw:?} was rejected: {reason}")
+            Self::FileTooLarge { path, max } => {
+                let path = path.display();
+                f.write_str(&text::cli_file_too_large(&path, max))
             }
-            Self::OutputRefused(refusal) => write!(f, "output directory refused: {refusal}"),
+            Self::PathEscape { raw, reason } => {
+                let raw = format!("{raw:?}");
+                f.write_str(&text::cli_path_escape(&raw, reason))
+            }
+            Self::OutputRefused(refusal) => f.write_str(&text::cli_output_refused(refusal)),
             Self::DiscoveryLimitReached { detail } => {
-                write!(f, "module-discovery walk aborted: {detail}")
+                f.write_str(&text::cli_discovery_limit_reached(detail))
             }
             Self::AdvisoryVulnerable(p) => {
-                write!(
-                    f,
-                    "dependency `{}` v{} is affected by {}-severity advisory {}:\n  {}{}",
-                    p.package,
-                    p.version,
-                    p.severity,
-                    p.id,
-                    p.description,
-                    p.fixed_in
-                        .as_ref()
-                        .map(|v| format!("\n  Fixed in: {v}"))
-                        .unwrap_or_default()
-                )
+                let fixed_in = p
+                    .fixed_in
+                    .as_ref()
+                    .map(|v| text::cli_advisory_fixed_in(v))
+                    .unwrap_or_default();
+                f.write_str(&text::cli_advisory_vulnerable(
+                    &p.package,
+                    &p.version,
+                    &p.severity,
+                    &p.id,
+                    &p.description,
+                    &fixed_in,
+                ))
             }
             Self::AdvisoryDbUnreachable { detail } => {
-                write!(
-                    f,
-                    "advisory database is unreachable — refusing to treat the dep as safe:\n  \
-                     {detail}"
-                )
+                f.write_str(&text::cli_advisory_db_unreachable(detail))
             }
             Self::AdvisoryDbMalformed { path, detail } => {
-                write!(
-                    f,
-                    "advisory file {} is malformed — refusing to treat the dep as safe:\n  \
-                     {detail}",
-                    path.display()
-                )
+                let path = path.display();
+                f.write_str(&text::cli_advisory_db_malformed(&path, detail))
             }
             Self::WasiRunFeatureDisabled => write!(
                 f,
-                "{}ipe run --target wasi needs the embedded wasmtime engine, but this `ipe` \
-                 binary was built without the `wasi_run` feature.\n  = help: build the module \
-                 with `ipe build --target wasi` and run it under a WASI runtime, or reinstall an \
-                 `ipe` compiled with `--features wasi_run` (the default in release packaging).",
-                style::GUTTER
+                "{}{}",
+                style::GUTTER,
+                text::cli_wasi_run_feature_disabled()
             ),
-            Self::WasiRunFailed { detail } => write!(
-                f,
-                "{}ipe run --target wasi: the emitted wasm32-wasip1 module could not be run under \
-                 the embedded wasmtime engine — {detail}",
-                style::GUTTER
-            ),
+            Self::WasiRunFailed { detail } => {
+                write!(f, "{}{}", style::GUTTER, text::cli_wasi_run_failed(detail))
+            }
             // The guest ran to completion and returned a non-zero WASI exit; this
             // one-line verdict pairs with `ipe run`'s own non-zero exit, mirroring
             // the native run's child-exit surfacing.
-            Self::WasiRunExited { code } => write!(
-                f,
-                "{}the wasm32-wasip1 module exited with code {code}",
-                style::GUTTER
-            ),
+            Self::WasiRunExited { code } => {
+                write!(f, "{}{}", style::GUTTER, text::cli_wasi_run_exited(code))
+            }
         }
     }
 }
@@ -888,10 +868,14 @@ pub fn fmt_unknown_command(
         writeln!(
             f,
             "{}",
-            style::gutter(&format!("unknown command `{attempted}`"))
+            style::gutter(&text::cli_unknown_command_line(attempted))
         )?;
         if let Some(sugg) = nearest_command(attempted.as_str()) {
-            writeln!(f, "{}", style::gutter(&format!("= help: maybe `{sugg}`?")))?;
+            writeln!(
+                f,
+                "{}",
+                style::gutter(&text::cli_unknown_command_suggestion(&sugg))
+            )?;
         }
     }
     f.write_str(&help::top_level(&std::io::stderr()))
@@ -910,21 +894,13 @@ pub fn fmt_io_error(
     // The generic error path in the binary already frames and gutters this
     // (`ipe: <message>`); render only the message body, styled and errno-free.
     if source.kind() == std::io::ErrorKind::NotFound {
-        write!(
-            f,
-            "no such file `{}` — pass a source file, or run inside an Ipê project \
-             (a directory with a package.ipe, or a src/Main.ipe)",
-            path.display()
-        )
+        let path = path.display();
+        f.write_str(&text::cli_io_not_found(&path))
     } else {
         // A readable kind description, never the `(os error N)` tail. `ErrorKind`
         // renders as a short human phrase (e.g. "permission denied").
-        write!(
-            f,
-            "could not access `{}` — {}",
-            path.display(),
-            source.kind()
-        )
+        let path = path.display();
+        f.write_str(&text::cli_io_other(&path, &source.kind()))
     }
 }
 
@@ -940,45 +916,25 @@ pub fn fmt_runtime_install_error(
             path,
             points_at_inner,
         } => {
-            write!(
-                f,
-                "IPE_RUNTIME_DIR points at {}, which is not an Ipe runtime crate root \
-                 (its Cargo.toml must declare `name = \"ipe-runtime-rust\"`)",
-                path.display()
-            )?;
+            let path = path.display();
+            f.write_str(&text::cli_runtime_dir_invalid(&path))?;
             if *points_at_inner {
-                write!(
-                    f,
-                    "\n  = help: this looks like the inner runtime module directory; \
-                     point IPE_RUNTIME_DIR at the crate root that holds Cargo.toml \
-                     (e.g. `src/runtime/rust`), not the `src/ipe_runtime` inside it"
-                )?;
+                write!(f, "\n{}", text::cli_runtime_dir_invalid_inner_hint())?;
             }
             Ok(())
         }
-        CliError::RuntimeHomeUnknown => write!(
-            f,
-            "could not determine where to install the Ipe runtime: none of IPE_HOME, \
-             XDG_DATA_HOME, or HOME is set; set IPE_HOME to a writable directory"
-        ),
-        CliError::RuntimeMaterializeFailed { detail } => write!(
-            f,
-            "could not install the Ipe runtime: {detail}\n  \
-             the build was stopped rather than link an incomplete runtime"
-        ),
+        CliError::RuntimeHomeUnknown => f.write_str(text::cli_runtime_home_unknown()),
+        CliError::RuntimeMaterializeFailed { detail } => {
+            f.write_str(&text::cli_runtime_materialize_failed(detail))
+        }
         CliError::RuntimeVersionMismatch {
             path,
             found,
             expected,
-        } => write!(
-            f,
-            "the Ipe runtime at {} is version {found}, but this compiler is {expected}; \
-             a program emitted by this compiler cannot link a different runtime.\n  \
-             = help: this runtime is out of date. Remove the stale copy (the project's \
-             `out/` directory, or whatever `IPE_RUNTIME_DIR` points at) and rebuild — the \
-             matching runtime re-materializes automatically.",
-            path.display()
-        ),
+        } => {
+            let path = path.display();
+            f.write_str(&text::cli_runtime_version_mismatch(&path, found, expected))
+        }
         // The caller only dispatches the runtime-install variants here.
         _ => Ok(()),
     }
@@ -1015,23 +971,15 @@ pub fn fmt_emitted_build_failed(
     let runtime = runtime.as_ref();
     let trimmed = stderr.as_str().trim();
     if let Some(feature) = missing_runtime_feature(trimmed) {
-        write!(
-            f,
-            "building {what} failed: it needs the runtime feature `{feature}`",
-        )?;
+        f.write_str(&text::cli_emitted_build_feature_missing(what, &feature))?;
         if let Some(rt) = runtime {
             write!(
                 f,
-                ", but the runtime at {} (version {}) does not provide it",
-                rt.root, rt.version
+                "{}",
+                text::cli_emitted_build_feature_context(&rt.root, &rt.version)
             )?;
         }
-        return write!(
-            f,
-            ".\n  = help: the runtime is out of date. Remove the stale copy (the project's \
-             `out/` directory, or whatever `IPE_RUNTIME_DIR` points at) and rebuild — the \
-             matching runtime re-materializes automatically."
-        );
+        return write!(f, ".\n{}", text::cli_emitted_build_stale_runtime_hint());
     }
     // Registry/network unreachable: cargo could not reach crates.io. This is an
     // environment failure (DNS, offline, proxy), not a compiler bug and not the
@@ -1039,9 +987,9 @@ pub fn fmt_emitted_build_failed(
     // report.
     if is_registry_unreachable(trimmed) {
         let detail = if trimmed.is_empty() {
-            format!("cargo exited {code} while fetching crates for {what}")
+            text::cli_cargo_fetch_failed(code, what)
         } else {
-            format!("cargo exited {code} while fetching crates for {what}:\n{trimmed}")
+            text::cli_cargo_fetch_failed_detail(code, what, &trimmed)
         };
         let d = Diagnostic::RegistryUnreachable { detail };
         return f.write_str(&render(&d, "", ""));
@@ -1053,9 +1001,9 @@ pub fn fmt_emitted_build_failed(
     // stderr is embedded as the reportable detail so a bug report contains
     // everything needed to reproduce the miscompile.
     let detail = if trimmed.is_empty() {
-        format!("cargo exited {code} with no output while compiling {what}")
+        text::cli_cargo_compile_failed(code, what)
     } else {
-        format!("cargo exited {code} while compiling {what}:\n{trimmed}")
+        text::cli_cargo_compile_failed_detail(code, what, &trimmed)
     };
     let ice = Diagnostic::CompilerBug {
         where_: "emit.cargo_build",

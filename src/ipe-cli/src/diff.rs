@@ -17,6 +17,7 @@ use semver::Version;
 
 use crate::CliError;
 use crate::api_surface::{DiffError, ModuleApi, PublicApi, extract_tree};
+use crate::text;
 
 /// Whether a public-API delta breaks existing users.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -475,8 +476,7 @@ const CHECK_DEPRECATION_NOTICE: &str =
 /// [`run_diff`] with the deprecation-notice sink injected, so a test can observe
 /// the alias notice without inspecting a process's stderr.
 fn run_diff_with(rest: &[String], notice: &mut dyn FnMut(&str)) -> Result<(), CliError> {
-    const USAGE: &str = "usage: ipe diff <old-path> <new-path>\n   \
-         or: ipe diff check <old-path> <new-path> <old-version> <new-version>";
+    let usage = || CliError::Usage(text::diff_usage());
 
     // Peel the deprecated `--check <old-version> <new-version>` alias FIRST, so
     // the shared format parse (which rejects any other unknown `-`-leading flag)
@@ -484,8 +484,8 @@ fn run_diff_with(rest: &[String], notice: &mut dyn FnMut(&str)) -> Result<(), Cl
     let mut check: Option<(String, String)> = None;
     let deflagged: Vec<String> = if let Some(pos) = rest.iter().position(|a| a == "--check") {
         notice(CHECK_DEPRECATION_NOTICE);
-        let old_v = rest.get(pos + 1).ok_or(CliError::Usage(USAGE))?.clone();
-        let new_v = rest.get(pos + 2).ok_or(CliError::Usage(USAGE))?.clone();
+        let old_v = rest.get(pos + 1).ok_or_else(usage)?.clone();
+        let new_v = rest.get(pos + 2).ok_or_else(usage)?.clone();
         check = Some((old_v, new_v));
         rest.iter()
             .enumerate()
@@ -518,16 +518,16 @@ fn run_diff_with(rest: &[String], notice: &mut dyn FnMut(&str)) -> Result<(), Cl
     // the two package paths.
     if verify_mode {
         if check.is_some() {
-            return Err(CliError::Usage(USAGE));
+            return Err(usage());
         }
         let [old_path, new_path, old_v, new_v] = positional.as_slice() else {
-            return Err(CliError::Usage(USAGE));
+            return Err(usage());
         };
         check = Some(((*old_v).to_owned(), (*new_v).to_owned()));
         positional = vec![old_path, new_path];
     }
     let [old_path, new_path] = positional.as_slice() else {
-        return Err(CliError::Usage(USAGE));
+        return Err(usage());
     };
     let old_tree = PathBuf::from(old_path);
     let new_tree = PathBuf::from(new_path);

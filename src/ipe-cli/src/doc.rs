@@ -117,6 +117,7 @@ use crate::CliError;
 use crate::api_surface::{ModuleApi, ModulePath, PublicApi, UnionApi, extract_tree, read_tree};
 use crate::cli_args::OutputFormat;
 use crate::doc_bundle::{BundleSource, DocBundle, fuzzy_rank, is_qualified};
+use crate::text;
 
 /// The `docs.json` schema version. Bumped only on an incompatible shape change,
 /// so a consumer can refuse a document it does not understand rather than
@@ -310,9 +311,7 @@ fn parse_doc_with(rest: &[String], notice: &mut dyn FnMut(&str)) -> Result<DocMo
     // `--type` is mutually exclusive with all other subcommands.
     if let Some(query) = type_query {
         if has_check_examples || has_list_flag {
-            return Err(CliError::Usage(
-                "ipe doc: --type is mutually exclusive with --check-examples and --list",
-            ));
+            return Err(CliError::Usage(text::doc_type_exclusive()));
         }
         // Consume remaining flags for TypeSearch (only --plain/--json allowed).
         let mut output_format: Option<OutputFormat> = None;
@@ -322,17 +321,13 @@ fn parse_doc_with(rest: &[String], notice: &mut dyn FnMut(&str)) -> Result<DocMo
                 t if t.starts_with("--type=") => {}
                 "--plain" => {
                     if output_format.is_some() {
-                        return Err(CliError::Usage(
-                            "ipe doc: --plain and --json are mutually exclusive",
-                        ));
+                        return Err(CliError::UsageOwned(text::plain_json_exclusive(&"doc")));
                     }
                     output_format = Some(OutputFormat::Plain);
                 }
                 "--json" => {
                     if output_format.is_some() {
-                        return Err(CliError::Usage(
-                            "ipe doc: --plain and --json are mutually exclusive",
-                        ));
+                        return Err(CliError::UsageOwned(text::plain_json_exclusive(&"doc")));
                     }
                     output_format = Some(OutputFormat::Json);
                 }
@@ -346,10 +341,7 @@ fn parse_doc_with(rest: &[String], notice: &mut dyn FnMut(&str)) -> Result<DocMo
                     )));
                 }
                 _ => {
-                    return Err(CliError::Usage(
-                        "ipe doc --type: unexpected positional argument; \
-                         use `ipe doc --type \"<type expr>\"`",
-                    ));
+                    return Err(CliError::Usage(text::doc_type_unexpected_positional()));
                 }
             }
         }
@@ -476,50 +468,47 @@ fn parse_doc_flags(
                 )));
             }
             "--out" => {
-                let value = it
-                    .next()
-                    .cloned()
-                    .ok_or(CliError::Usage("ipe doc: --out needs a directory"))?;
+                let value = it.next().cloned().ok_or_else(|| {
+                    CliError::UsageOwned(text::flag_needs_value(&"doc", &"--out"))
+                })?;
                 if flags.out.is_some() {
-                    return Err(CliError::Usage("ipe doc: --out given more than once"));
+                    return Err(CliError::UsageOwned(text::flag_repeated(&"doc", &"--out")));
                 }
                 flags.out = Some(value);
             }
             "--write-format" => {
-                let value = it
-                    .next()
-                    .ok_or(CliError::Usage("ipe doc: --write-format needs a value"))?;
+                let value = it.next().ok_or_else(|| {
+                    CliError::UsageOwned(text::flag_needs_value(&"doc", &"--write-format"))
+                })?;
                 if flags.write_format.is_some() {
-                    return Err(CliError::Usage(
-                        "ipe doc: --write-format given more than once",
-                    ));
+                    return Err(CliError::UsageOwned(text::flag_repeated(
+                        &"doc",
+                        &"--write-format",
+                    )));
                 }
                 flags.write_format = Some(parse_write_format(value)?);
             }
             "--port" => {
                 let value = it
                     .next()
-                    .ok_or(CliError::Usage("ipe doc serve: --port needs a number"))?;
+                    .ok_or(CliError::Usage(text::doc_serve_port_needs_number()))?;
                 if flags.port.is_some() {
-                    return Err(CliError::Usage(
-                        "ipe doc serve: --port given more than once",
-                    ));
+                    return Err(CliError::UsageOwned(text::flag_repeated(
+                        &"doc serve",
+                        &"--port",
+                    )));
                 }
                 flags.port = Some(parse_port(value)?);
             }
             "--plain" => {
                 if flags.output_format.is_some() {
-                    return Err(CliError::Usage(
-                        "ipe doc: --plain and --json are mutually exclusive",
-                    ));
+                    return Err(CliError::UsageOwned(text::plain_json_exclusive(&"doc")));
                 }
                 flags.output_format = Some(OutputFormat::Plain);
             }
             "--json" => {
                 if flags.output_format.is_some() {
-                    return Err(CliError::Usage(
-                        "ipe doc: --plain and --json are mutually exclusive",
-                    ));
+                    return Err(CliError::UsageOwned(text::plain_json_exclusive(&"doc")));
                 }
                 flags.output_format = Some(OutputFormat::Json);
             }
@@ -530,12 +519,10 @@ fn parse_doc_flags(
             }
             positional => {
                 if matches!(sub, Sub::Query(_) | Sub::Lookup(_)) {
-                    return Err(CliError::Usage("ipe doc: expected a single <key> argument"));
+                    return Err(CliError::Usage(text::doc_single_key()));
                 }
                 if flags.path.is_some() {
-                    return Err(CliError::Usage(
-                        "ipe doc: expected a single <path> argument",
-                    ));
+                    return Err(CliError::Usage(text::doc_single_path()));
                 }
                 flags.path = Some(positional.to_owned());
             }
@@ -574,12 +561,11 @@ fn parse_write_format(value: &str) -> Result<WriteFormat, CliError> {
 /// value (and `0`, which would silently auto-select — omit `--port` for that).
 fn parse_port(value: &str) -> Result<u16, CliError> {
     match value.parse::<u16>() {
-        Ok(0) => Err(CliError::Usage(
-            "ipe doc serve: --port 0 is not a real port; omit --port to auto-select a free one",
-        )),
+        Ok(0) => Err(CliError::UsageOwned(text::port_zero(&"doc serve"))),
         Ok(p) => Ok(p),
-        Err(_) => Err(CliError::UsageOwned(format!(
-            "ipe doc serve: --port `{value}` is not a port number (1-65535)"
+        Err(_) => Err(CliError::UsageOwned(text::port_invalid(
+            &"doc serve",
+            &value,
         ))),
     }
 }

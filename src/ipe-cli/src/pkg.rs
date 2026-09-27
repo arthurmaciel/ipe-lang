@@ -10,6 +10,7 @@
 use std::path::PathBuf;
 
 use crate::CliError;
+use crate::text;
 
 /// `ipe add <package>[@<req>]` — add an Ipê package dependency.
 ///
@@ -57,11 +58,9 @@ fn project_root() -> Result<PathBuf, CliError> {
         return Ok(cwd);
     }
     if crate::project::has_only_legacy_toml(&cwd) {
-        return Err(CliError::Usage(crate::project::LEGACY_TOML_HINT));
+        return Err(CliError::Usage(text::legacy_toml_hint()));
     }
-    Err(CliError::Usage(
-        "ipe add/remove: no `package.ipe` in the current directory (run inside an Ipê project)",
-    ))
+    Err(CliError::Usage(text::pkg_no_manifest()))
 }
 
 /// Parse `ipe add`'s single argument into a package name and a version

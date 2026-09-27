@@ -3,7 +3,7 @@
 //! `package.ipe` is the sole project manifest the toolchain discovers and
 //! builds. A legacy `ipe.toml` is not accepted as a project manifest;
 //! [`has_only_legacy_toml`] detects that case so callers can surface
-//! [`LEGACY_TOML_HINT`] instead of a silent fallback.
+//! [`text::legacy_toml_hint`] instead of a silent fallback.
 //!
 //! # Discovery
 //!
@@ -30,6 +30,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::CliError;
+use crate::text;
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -507,15 +508,11 @@ pub(crate) fn is_rust_wrapper_header(line: &str) -> bool {
 /// The filename of the legacy TOML manifest (`ipe.toml`).
 pub const IPE_TOML: &str = "ipe.toml";
 
-/// The diagnostic for a directory that carries a legacy `ipe.toml` but no `package.ipe`.
-pub const LEGACY_TOML_HINT: &str = "no package.ipe in this directory (found a legacy ipe.toml — package.ipe is the project \
-     manifest the toolchain reads)";
-
 /// Locate a project's `package.ipe` manifest inside `dir`.
 ///
 /// `package.ipe` is the sole project manifest the toolchain discovers. A bare
 /// `ipe.toml` is not a manifest — [`has_only_legacy_toml`] detects that case so a
-/// caller can surface [`LEGACY_TOML_HINT`] instead of a silent fallback.
+/// caller can surface [`text::legacy_toml_hint`] instead of a silent fallback.
 ///
 /// Returns the `package.ipe` path when the directory carries one, else `None`.
 #[must_use]
@@ -529,8 +526,8 @@ pub fn manifest_in_dir(dir: &Path) -> Option<PathBuf> {
 
 /// Whether `dir` carries a legacy `ipe.toml` but no `package.ipe`.
 ///
-/// The case where a caller should report [`LEGACY_TOML_HINT`] rather than treat
-/// the directory as manifest-free.
+/// The case where a caller should report [`text::legacy_toml_hint`] rather than
+/// treat the directory as manifest-free.
 #[must_use]
 pub fn has_only_legacy_toml(dir: &Path) -> bool {
     !dir.join(crate::package_manifest::PACKAGE_IPE).is_file() && dir.join(IPE_TOML).is_file()
@@ -539,7 +536,7 @@ pub fn has_only_legacy_toml(dir: &Path) -> bool {
 /// Parse a project `package.ipe` manifest into a [`ProjectManifest`].
 ///
 /// `package.ipe` is read syntactically (never evaluated) by the Ipê-native
-/// reader. A path to a legacy `ipe.toml` is rejected with [`LEGACY_TOML_HINT`].
+/// reader. A path to a legacy `ipe.toml` is rejected with [`text::legacy_toml_hint`].
 ///
 /// # Errors
 /// [`CliError::Io`] if the file cannot be read; [`CliError::Usage`] /
@@ -555,8 +552,9 @@ pub fn parse_manifest(manifest_path: &Path) -> Result<ProjectManifest, CliError>
         return crate::package_manifest::parse_package_manifest(manifest_path);
     }
     Err(CliError::UsageOwned(format!(
-        "{}: not a package.ipe manifest. {LEGACY_TOML_HINT}",
-        manifest_path.display()
+        "{}: not a package.ipe manifest. {}",
+        manifest_path.display(),
+        text::legacy_toml_hint()
     )))
 }
 

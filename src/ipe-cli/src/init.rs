@@ -30,7 +30,7 @@ use std::fmt::Write as _;
 use std::io::{IsTerminal as _, Write as _};
 use std::path::{Path, PathBuf};
 
-use crate::{CliError, health, style};
+use crate::{CliError, health, style, text};
 
 // ── per-shape Main.ipe templates ─────────────────────────────────────────────
 
@@ -540,9 +540,9 @@ fn parse_init_args(rest: &[String]) -> Result<InitArgs, CliError> {
             "--force" => force = true,
             "--lib" => lib = true,
             "--shape" => {
-                let val = iter.next().ok_or(CliError::Usage(
-                    "ipe init: `--shape` requires a value: script, tui, cli, worker, server, web",
-                ))?;
+                let val = iter
+                    .next()
+                    .ok_or(CliError::Usage(text::init_shape_needs_value()))?;
                 shape_flag = Some(parse_shape_word(val)?);
             }
             flag if flag.starts_with('-') => {
