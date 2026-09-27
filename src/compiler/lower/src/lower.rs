@@ -10595,28 +10595,37 @@ fn normalize_record_fun_carriers(ty: IrType) -> IrType {
                 .collect();
             IrType::Record(flipped)
         }
-        // A COLLECTION element position (`List`/`Set` element, `Dict` value) and a
-        // `Tuple` component: a function stored there is carried on `Arc` too, so
-        // flip a bare `Fun` element after recursing. `flip_fun_in_storage_element`
-        // is the O(1) element analogue of the record-field flip above; `recur`
-        // first descends so a nested composite's own fields/elements are flipped
-        // identically. A `Dict` KEY is not a storage-carrier position a function
-        // can legitimately occupy (a function is neither `Ord` nor `Hash`), so its
-        // recursion never surfaces a storable `Fun` — leaving the flip on the
-        // VALUE alone.
-        //
-        // A `Maybe`/`Result` payload is NOT flipped: its runtime enum
-        // (`IpeMaybe`/`IpeResult`) has a fn payload consumed by the `andMap`/`map`
-        // kernels as an owned `FnOnce` (`Box`), so it stays on the `Box` carrier —
-        // recurse into a nested composite under the payload without flipping the
-        // payload arrow itself.
-        IrType::Maybe(e) => IrType::Maybe(Box::new(recur(*e))),
-        IrType::List(e) => IrType::List(Box::new(flip_fun_in_storage_element(recur(*e)))),
-        IrType::Set(e) => IrType::Set(Box::new(flip_fun_in_storage_element(recur(*e)))),
-        IrType::Result(a, b) => IrType::Result(Box::new(recur(*a)), Box::new(recur(*b))),
+        // A builtin constructor slot flips a bare `Fun` to `Arc` exactly when the
+        // kernel registry names it a storage slot ([`ipe_kernels::storage_slot`]:
+        // a `List`/`Set` element, a `Dict` value) — the one fact the scheme-side
+        // mapper derivation also reads, so the emitted carrier and the binding
+        // derivation cannot drift. `recur` first descends so a nested composite's
+        // own fields/elements are flipped identically. A `Dict` key and a
+        // `Maybe`/`Result` payload are not storage slots: the runtime enum
+        // (`IpeMaybe`/`IpeResult`) consumes a fn payload as an owned `FnOnce`
+        // (`Box`), and a function is never a key (neither `Ord` nor `Hash`).
+        IrType::Maybe(e) => IrType::Maybe(Box::new(flip_in_slot(
+            ipe_kernels::BuiltinTag::Maybe,
+            0,
+            recur(*e),
+        ))),
+        IrType::List(e) => IrType::List(Box::new(flip_in_slot(
+            ipe_kernels::BuiltinTag::List,
+            0,
+            recur(*e),
+        ))),
+        IrType::Set(e) => IrType::Set(Box::new(flip_in_slot(
+            ipe_kernels::BuiltinTag::Set,
+            0,
+            recur(*e),
+        ))),
+        IrType::Result(a, b) => IrType::Result(
+            Box::new(flip_in_slot(ipe_kernels::BuiltinTag::Result, 0, recur(*a))),
+            Box::new(flip_in_slot(ipe_kernels::BuiltinTag::Result, 1, recur(*b))),
+        ),
         IrType::Dict(a, b) => IrType::Dict(
-            Box::new(recur(*a)),
-            Box::new(flip_fun_in_storage_element(recur(*b))),
+            Box::new(flip_in_slot(ipe_kernels::BuiltinTag::Dict, 0, recur(*a))),
+            Box::new(flip_in_slot(ipe_kernels::BuiltinTag::Dict, 1, recur(*b))),
         ),
         IrType::Tuple(es) => IrType::Tuple(
             es.into_iter()
@@ -10638,6 +10647,17 @@ fn normalize_record_fun_carriers(ty: IrType) -> IrType {
             IrType::SharedFun(ps.into_iter().map(recur).collect(), Box::new(recur(*r)))
         }
         other => other,
+    }
+}
+
+/// Flip `elem` to the storage carrier ([`flip_fun_in_storage_element`]) iff
+/// argument `slot` of the builtin constructor `tag` is a storage slot
+/// ([`ipe_kernels::storage_slot`]); any other slot keeps its carrier.
+fn flip_in_slot(tag: ipe_kernels::BuiltinTag, slot: usize, elem: IrType) -> IrType {
+    if ipe_kernels::storage_slot(tag, slot) {
+        flip_fun_in_storage_element(elem)
+    } else {
+        elem
     }
 }
 
@@ -20004,7 +20024,7 @@ impl<'a> Lowerer<'a> {
 
     /// Element-capability soundness gate: reject a `List`/`Dict`/`Set` kernel
     /// that cannot represent a function-carrying element when any of its
-    /// collection arguments carries one.
+    /// collection parameters carries one.
     ///
     /// A `List` element / `Dict`-value function is a storable value on the
     /// `Clone` `Arc<dyn Fn>` carrier, so the region gate admits it — but that
@@ -20013,15 +20033,22 @@ impl<'a> Lowerer<'a> {
     /// So a kernel that compares/orders its element, OR a higher-order kernel
     /// whose mapper frontier is still open, would emit Rust `cargo` rejects. The
     /// registry's [`StdlibKernel::element_capability`] records which kernels
-    /// forbid a function element and why (equality, ordering, or open frontier) —
-    /// an explicit exhaustive SSOT fact, coherence-tested; this gate consults it
-    /// and fails closed with IPE-L0134 at `ipe` time. A kernel whose element
-    /// capability is `CloneOk` (pure structural, or a frontier-closed
-    /// map/fold/filter) is sound over a function element and left through. A
-    /// non-collection kernel carries no element capability and is a no-op here.
+    /// forbid a function element and why (equality and ordering stated, the
+    /// open mapper frontier derived from the scheme and build-time checked);
+    /// this gate consults it and fails closed with IPE-L0134 at `ipe` time. A
+    /// kernel whose element capability is `CloneOk` (pure structural, or a
+    /// frontier-closed map/fold/filter) is sound over a function element and
+    /// left through. A non-collection kernel carries no element capability and
+    /// is a no-op here.
+    ///
+    /// Every parameter of the callee's solved arrow (`callee_span`) is
+    /// inspected, not only the supplied `args`: a partial application
+    /// (`Dict.update k g`) or a point-free reference supplies the collection
+    /// later, so reading the arguments alone would let it through open.
     fn reject_fn_element_for_capability_kernel(
         &self,
         resolved: &Callee,
+        callee_span: Span,
         args: &[canon::Expr],
     ) -> DResult<()> {
         let Callee::Kernel(k) = resolved else {
@@ -20043,6 +20070,13 @@ impl<'a> Lowerer<'a> {
             {
                 return Err(unsupported(arg.span, Feature::FunctionElementEquality));
             }
+        }
+        if let Some(fn_ty) = self.region_ty(callee_span)
+            && arrow_params(fn_ty)
+                .into_iter()
+                .any(|param| collection_storable_element_carries_function(self.interner, param))
+        {
+            return Err(unsupported(callee_span, Feature::FunctionElementEquality));
         }
         Ok(())
     }
@@ -20830,6 +20864,9 @@ impl<'a> Lowerer<'a> {
                 // [`reject_point_free_store_kernel`].
                 reject_point_free_store_kernel(&callee, e.span)?;
                 reject_unsaturated_handler_kernel(&callee, e.span)?;
+                // A point-free collection kernel receives its collection later,
+                // so the element-capability gate reads the reference's arrow.
+                self.reject_fn_element_for_capability_kernel(&callee, e.span, &[])?;
                 // Fail-closed SECURITY gate: an un-applied `Secret.fromString`
                 // reference (point-free, let-bound, passed as a value) routes
                 // around the committed-literal seal gate (IPE-L0150), which reads
@@ -22333,7 +22370,7 @@ impl<'a> Lowerer<'a> {
     /// binds a STORED element from the direct `Fun` carrier ([`IrType::Fun`],
     /// `Box`) to the storage `SharedFun` carrier ([`IrType::SharedFun`], `Arc`).
     ///
-    /// A function stored in a `List` element, a `Dict` key or value, a tuple
+    /// A function stored in a `List` element, a `Dict` value, a tuple
     /// component, or a record field is carried on `Arc<dyn Fn>`. When such a
     /// collection flows into `List.map`/`Dict.foldl`/`List.map2`/… the runtime
     /// kernel monomorphises its element type to `Arc<dyn Fn>`, so the mapper
@@ -22569,7 +22606,7 @@ impl<'a> Lowerer<'a> {
                 // function-carrying element — an equality/ordering compare or an
                 // open mapper frontier (fail-closed IPE-L0134 at `ipe` time; see
                 // the method doc).
-                self.reject_fn_element_for_capability_kernel(&resolved, args)?;
+                self.reject_fn_element_for_capability_kernel(&resolved, callee.span, args)?;
                 self.reject_nonclone_handler_capture(&resolved, args)?;
                 let arity = self.callee_arity(&resolved)?;
                 match args.len().cmp(&arity) {
@@ -23222,6 +23259,10 @@ impl<'a> Lowerer<'a> {
         // The missing parameters are argument positions `supplied..arity`.
         let mut params: Vec<(Symbol, IrType)> = Vec::with_capacity(arity - supplied);
         let mut call_args = lowered_args;
+        // A supplied mapper of a partially-applied higher-order kernel binds the
+        // same stored element the saturated call does: re-carrier it before the
+        // capture pass below can hoist it out of view.
+        self.retype_collection_element_param(&resolved, &mut call_args)?;
         // T4: the supplied args are captured inside the emitted closure.
         // A non-Copy CloneOk arg (e.g. a String-typed var) must be cloned on
         // each call so the closure is `Fn` (re-callable), not `FnOnce`.

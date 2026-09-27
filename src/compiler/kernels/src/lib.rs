@@ -762,10 +762,10 @@ const fn items_hold_var(items: &[TyShape], var: u8) -> bool {
 }
 
 /// Whether some shape of `items` stores `var` ([`shape_stores_var`]).
-const fn items_store_var(items: &[TyShape], var: u8) -> bool {
+const fn items_store_var(items: &[TyShape], var: u8, reach: SlotReach) -> bool {
     let mut rest = items;
     while let Some((item, tail)) = rest.split_first() {
-        if shape_stores_var(item, var) {
+        if shape_stores_var(item, var, reach) {
             return true;
         }
         rest = tail;
@@ -773,26 +773,78 @@ const fn items_store_var(items: &[TyShape], var: u8) -> bool {
     false
 }
 
-/// Whether scheme variable `var` sits directly in a STORAGE slot of `shape`, at any depth outside an arrow.
+/// Whether argument `slot` of the builtin constructor `tag` is a STORAGE slot.
 ///
-/// A storage slot is a `List`/`Set` element, a `Dict` key or value, a tuple
-/// component, or a record field: the positions the lowerer carries a function
-/// on the `Arc` storage carrier (its `flip_fun_in_storage_element` and
-/// record-field flips). A `Maybe`/`Result` payload or any other constructor
-/// argument keeps the direct carrier, and an arrow's sides are direct
-/// positions, so neither counts — though a storage slot nested under them does.
+/// A storage slot carries a function on the `Arc` storage carrier: a `List` or
+/// `Set` element and a `Dict` value. The lowerer's collection flips
+/// (`normalize_record_fun_carriers`) consult this predicate, so the scheme-side
+/// binding derivation and the emitted carrier read one fact. A `Dict` key, a
+/// `Maybe`/`Result` payload, and every other constructor argument keep the
+/// direct carrier.
 #[must_use]
-pub const fn shape_stores_var(shape: &TyShape, var: u8) -> bool {
+pub const fn storage_slot(tag: BuiltinTag, slot: usize) -> bool {
+    matches!(
+        (tag, slot),
+        (BuiltinTag::List | BuiltinTag::Set, 0) | (BuiltinTag::Dict, 1)
+    )
+}
+
+/// Whether storage slot `slot` of `tag` can hold a function at all.
+///
+/// A `Set` element is `Ord`-bound, which the `Arc<dyn Fn>` carrier is not, so
+/// no function ever reaches a mapper through it; every other storage slot
+/// ([`storage_slot`]) admits one.
+#[must_use]
+pub const fn slot_admits_function(tag: BuiltinTag, slot: usize) -> bool {
+    storage_slot(tag, slot) && !matches!(tag, BuiltinTag::Set)
+}
+
+/// Which constructor slots [`shape_stores_var`] counts as storage.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum SlotReach {
+    /// Every [`storage_slot`].
+    Stored,
+    /// Only the storage slots that can hold a function ([`slot_admits_function`]).
+    FunctionAdmitting,
+}
+
+/// Whether `slot` of `tag` counts as storage under `reach`.
+const fn slot_counts(tag: BuiltinTag, slot: usize, reach: SlotReach) -> bool {
+    match reach {
+        SlotReach::Stored => storage_slot(tag, slot),
+        SlotReach::FunctionAdmitting => slot_admits_function(tag, slot),
+    }
+}
+
+/// Whether scheme variable `var` sits directly in a storage slot of `shape`, at any depth outside an arrow.
+///
+/// A storage slot is a constructor slot [`slot_counts`] under `reach`, a tuple
+/// component, or a record field: the positions the lowerer carries a function
+/// on the `Arc` storage carrier. Any other constructor argument keeps the
+/// direct carrier, and an arrow's sides are direct positions, so neither
+/// counts — though a storage slot nested under them does.
+#[must_use]
+pub const fn shape_stores_var(shape: &TyShape, var: u8, reach: SlotReach) -> bool {
     match shape {
         TyShape::Con(tag, items) => {
-            let storage = matches!(tag, BuiltinTag::List | BuiltinTag::Set | BuiltinTag::Dict);
-            (storage && items_hold_var(items, var)) || items_store_var(items, var)
+            let mut rest: &[TyShape] = items;
+            let mut slot = 0;
+            while let Some((item, tail)) = rest.split_first() {
+                if (is_var(item, var) && slot_counts(*tag, slot, reach))
+                    || shape_stores_var(item, var, reach)
+                {
+                    return true;
+                }
+                rest = tail;
+                slot += 1;
+            }
+            false
         }
-        TyShape::Tuple(items) => items_hold_var(items, var) || items_store_var(items, var),
+        TyShape::Tuple(items) => items_hold_var(items, var) || items_store_var(items, var, reach),
         TyShape::Record { fields, .. } => {
             let mut rest = *fields;
             while let Some(((_, field), tail)) = rest.split_first() {
-                if is_var(field, var) || shape_stores_var(field, var) {
+                if is_var(field, var) || shape_stores_var(field, var, reach) {
                     return true;
                 }
                 rest = tail;
@@ -818,16 +870,39 @@ pub const fn spine_arg(shape: &TyShape, index: usize) -> Option<&TyShape> {
     None
 }
 
+/// Whether an argument of a kernel with scheme `shape` other than `arg`, among its first `arity`, stores `var` under `reach`.
+const fn var_stored_elsewhere(
+    shape: &TyShape,
+    arity: usize,
+    arg: usize,
+    var: u8,
+    reach: SlotReach,
+) -> bool {
+    let mut other = 0;
+    while other < arity {
+        if other != arg
+            && let Some(collection) = spine_arg(shape, other)
+            && shape_stores_var(collection, var, reach)
+        {
+            return true;
+        }
+        other += 1;
+    }
+    false
+}
+
 /// Whether parameter `param` of the function argument `arg` of a kernel with scheme `shape` and `arity` binds a stored element.
 ///
 /// Holds when that parameter is a bare scheme variable which another of the
-/// kernel's `arity` arguments stores ([`shape_stores_var`]): the kernel feeds
-/// the parameter an element read out of that argument, so the parameter's
-/// carrier is the element's storage carrier. `List.map`'s `a`, each list of
-/// `List.map2`, and both the key and the value of `Dict.map` qualify; the
-/// `Maybe v` parameter of `Dict.update` is not bare and does not. The
-/// derivation reads only the scheme, so every schemed higher-order kernel is
-/// covered without a list to keep in sync.
+/// kernel's `arity` arguments stores in a function-admitting slot
+/// ([`shape_stores_var`] under [`SlotReach::FunctionAdmitting`]): the kernel
+/// feeds the parameter an element read out of that argument, so the
+/// parameter's carrier is the element's storage carrier. `List.map`'s `a`,
+/// each list of `List.map2`, and the value of `Dict.map` qualify; the
+/// `Maybe v` parameter of `Dict.update` is not bare, and a `Dict` key or `Set`
+/// element never holds a function, so none of them does. The derivation reads
+/// only the scheme, so every schemed higher-order kernel is covered without a
+/// list to keep in sync.
 #[must_use]
 pub const fn mapper_param_binds_stored_element(
     shape: &TyShape,
@@ -848,15 +923,76 @@ pub const fn mapper_param_binds_stored_element(
     let Some(TyShape::Var(var)) = spine_arg(mapper, param) else {
         return false;
     };
-    let mut other = 0;
-    while other < arity {
-        if other != arg
-            && let Some(collection) = spine_arg(shape, other)
-            && shape_stores_var(collection, *var)
-        {
-            return true;
+    var_stored_elsewhere(shape, arity, arg, *var, SlotReach::FunctionAdmitting)
+}
+
+/// Whether some scheme variable of the mapper parameter `param` is stored by an argument of the kernel other than `arg`.
+///
+/// Walks every variable of `param` — under an arrow, a constructor, a tuple,
+/// or a record (row variable included) — against every storage slot
+/// ([`SlotReach::Stored`]).
+const fn param_reads_stored(param: &TyShape, shape: &TyShape, arity: usize, arg: usize) -> bool {
+    match param {
+        TyShape::Var(var) => var_stored_elsewhere(shape, arity, arg, *var, SlotReach::Stored),
+        TyShape::Fun(from, to) => {
+            param_reads_stored(from, shape, arity, arg) || param_reads_stored(to, shape, arity, arg)
         }
-        other += 1;
+        TyShape::Con(_, items) | TyShape::Tuple(items) => {
+            let mut rest: &[TyShape] = items;
+            while let Some((item, tail)) = rest.split_first() {
+                if param_reads_stored(item, shape, arity, arg) {
+                    return true;
+                }
+                rest = tail;
+            }
+            false
+        }
+        TyShape::Record { fields, tail } => {
+            if let RowTailShape::Open(var) = tail
+                && var_stored_elsewhere(shape, arity, arg, *var, SlotReach::Stored)
+            {
+                return true;
+            }
+            let mut rest = *fields;
+            while let Some(((_, field), more)) = rest.split_first() {
+                if param_reads_stored(field, shape, arity, arg) {
+                    return true;
+                }
+                rest = more;
+            }
+            false
+        }
+        TyShape::Unit => false,
+    }
+}
+
+/// Whether a kernel with scheme `shape` and `arity` feeds a stored element into a mapper parameter the lowerer cannot re-carrier.
+///
+/// The lowerer's `retype_collection_element_param` aligns exactly the
+/// parameters [`mapper_param_binds_stored_element`] names. Any other mapper
+/// parameter reading a stored variable — a wrapped one (`Dict.update`'s
+/// `Maybe v`) or one fed from a slot that admits no function (a `Set`
+/// element) — leaves the frontier open, so the kernel must refuse a function
+/// element ([`ElementCapability::MapperFrontierOpen`]). Derived from the scheme
+/// and the same binding predicate the lowerer consults, so graduation to
+/// `CloneOk` needs no hand-maintained list.
+#[must_use]
+pub const fn mapper_frontier_open(shape: &TyShape, arity: u8) -> bool {
+    let wide = arity as usize;
+    let mut arg = 0;
+    while arg < wide {
+        if let Some(mapper @ TyShape::Fun(..)) = spine_arg(shape, arg) {
+            let mut param = 0;
+            while let Some(read) = spine_arg(mapper, param) {
+                if param_reads_stored(read, shape, wide, arg)
+                    && !mapper_param_binds_stored_element(shape, arity, arg, param)
+                {
+                    return true;
+                }
+                param += 1;
+            }
+        }
+        arg += 1;
     }
     false
 }
@@ -961,6 +1097,37 @@ pub const fn container_first_kernels_take_a_function_first(kernels: &[StdlibKern
 const _: () = assert!(
     container_first_kernels_take_a_function_first(StdlibKernel::ALL),
     "an ArgOrder::ContainerFirst kernel must have arity 2 and an Ipê scheme `(a -> b) -> container -> r`",
+);
+
+/// Whether every `CloneOk` / `MapperFrontierOpen` tag in `kernels` agrees with [`mapper_frontier_open`].
+///
+/// A `CloneOk` kernel must carry a scheme whose every stored-element-reading
+/// mapper parameter the lowerer re-carriers, and a `MapperFrontierOpen` kernel
+/// must have no scheme or an open frontier — so neither tag can be
+/// hand-assigned against the derivation.
+#[must_use]
+pub const fn mapper_capabilities_match_their_schemes(kernels: &[StdlibKernel]) -> bool {
+    let mut rest = kernels;
+    while let Some((kernel, tail)) = rest.split_first() {
+        let open = match kernel.scheme_shape() {
+            Some(shape) => mapper_frontier_open(shape, kernel.def().arity),
+            None => true,
+        };
+        match kernel.element_capability() {
+            Some(ElementCapability::CloneOk) if open => return false,
+            Some(ElementCapability::MapperFrontierOpen) if !open => return false,
+            Some(_) | None => {}
+        }
+        rest = tail;
+    }
+    true
+}
+
+// IPE-RUST-AUDIT:ACCEPTED (Arthur Maciel) — compile-time `const` assertion (not a runtime panic); fails the BUILD if a collection kernel is tagged CloneOk while its scheme feeds a stored element to a mapper parameter the lowerer cannot re-carrier (or MapperFrontierOpen while it can), the stored-function SEAL invariant [ledger #boundary]
+#[allow(clippy::assertions_on_constants)] // the constant IS the tripwire
+const _: () = assert!(
+    mapper_capabilities_match_their_schemes(StdlibKernel::ALL),
+    "a collection kernel's CloneOk/MapperFrontierOpen tag disagrees with mapper_frontier_open over its scheme",
 );
 
 /// A record field name, named structurally by tag rather than by an interned
@@ -14076,8 +14243,12 @@ impl StdlibKernel {
     /// function-embedding element for the latter with the equality/ordering
     /// diagnostic (fail-closed at `ipe` time).
     ///
-    /// The three forbidding families are enumerated explicitly; every other
-    /// `List`/`Dict`/`Set` kernel defaults to `CloneOk`. A `Dict` KEY /`Set`
+    /// The equality and ordering families are enumerated explicitly. Every
+    /// other `List`/`Dict`/`Set` kernel is derived from its scheme: it is
+    /// [`ElementCapability::MapperFrontierOpen`] exactly when
+    /// [`mapper_frontier_open`] holds (or it has no scheme to derive from —
+    /// fail-closed), and `CloneOk` otherwise, so the gate and the lowerer's
+    /// mapper re-carrier read one binding predicate. A `Dict` KEY /`Set`
     /// element function is separately rejected by the region gate
     /// (`embeds_nonderivable_function`) before a kernel is even resolved, since
     /// those positions are non-storable; this tag governs the storable-element
@@ -14098,43 +14269,13 @@ impl StdlibKernel {
             Self::ListSort | Self::ListMaximum | Self::ListMinimum => {
                 return Some(ElementCapability::RequiresOrd);
             }
-            // Higher-order kernels that pass the element into a mapper /
-            // comparator closure whose parameter carrier the lowerer does NOT
-            // align to the stored `Arc<dyn Fn>` — the frontier is open, so a
-            // function element is rejected fail-closed rather than mis-emitted.
-            // Aligned counterparts (`List.map`/`filter`/`foldl`/`foldr`/
-            // `concatMap`/`filterMap`/`any`/`all`/`find`/`indexedMap`, whose
-            // `retype_collection_element_param` closes the frontier) stay
-            // `CloneOk`; a kernel graduates here only when its frontier is
-            // actually closed in the lowerer.
-            Self::ListPartition
-            | Self::ListMap2
-            | Self::ListMap3
-            | Self::ListMap4
-            | Self::ListMap5
-            | Self::ListSortBy
-            | Self::ListSortWith
-            | Self::DictMap
-            | Self::DictFoldl
-            | Self::DictFoldr
-            | Self::DictFilter
-            | Self::DictPartition
-            | Self::DictUpdate
-            | Self::SetMap
-            | Self::SetFilter
-            | Self::SetFoldl
-            | Self::SetFoldr
-            | Self::SetPartition => {
-                return Some(ElementCapability::MapperFrontierOpen);
-            }
-            // Collection kernels that only move/clone the element: sound over an
-            // `Arc<dyn Fn>` carrier. A newly added List/Dict/Set kernel that fits
-            // none of the three capability buckets above falls to the `_ => {}`
-            // tail and returns `None`; the design invariant — collection kernel ⇒
-            // explicit capability, non-collection kernel ⇒ `None` — is enforced by
-            // the `every_collection_kernel_carries_an_element_capability_tag` test,
-            // not by the match arms (the tail wildcard swallows an unlisted variant
-            // at compile time, so the coherence test is what catches the omission).
+            // Collection kernels that move/clone the element, or feed it to a
+            // mapper: `CloneOk` unless the scheme leaves a mapper parameter the
+            // lowerer's `retype_collection_element_param` cannot align to the
+            // stored `Arc<dyn Fn>` carrier. A newly added List/Dict/Set kernel
+            // listed in none of the arms falls to the `_ => {}` tail and returns
+            // `None`; the `collection_kernel_capability_is_never_implicitly_permissive`
+            // test catches that omission.
             Self::ListMap
             | Self::ListFilter
             | Self::ListFoldl
@@ -14189,8 +14330,31 @@ impl StdlibKernel {
             | Self::SetIntersect
             | Self::SetDiff
             | Self::SetIsEmpty
-            | Self::SetSingleton => {
-                return Some(ElementCapability::CloneOk);
+            | Self::SetSingleton
+            | Self::ListPartition
+            | Self::ListMap2
+            | Self::ListMap3
+            | Self::ListMap4
+            | Self::ListMap5
+            | Self::ListSortBy
+            | Self::ListSortWith
+            | Self::DictMap
+            | Self::DictFoldl
+            | Self::DictFoldr
+            | Self::DictFilter
+            | Self::DictPartition
+            | Self::DictUpdate
+            | Self::SetMap
+            | Self::SetFilter
+            | Self::SetFoldl
+            | Self::SetFoldr
+            | Self::SetPartition => {
+                return Some(match self.scheme_shape() {
+                    Some(shape) if !mapper_frontier_open(shape, self.def().arity) => {
+                        ElementCapability::CloneOk
+                    }
+                    _ => ElementCapability::MapperFrontierOpen,
+                });
             }
             _ => {}
         }
@@ -15899,8 +16063,8 @@ mod tests {
 
     /// Every element-feeding higher-order kernel binds its element parameters,
     /// derived from the scheme alone: the `List` family (each list of
-    /// `map2`..`map5` binding its own parameter), and both the key and the value
-    /// of the `Dict` family.
+    /// `map2`..`map5` binding its own parameter) and the value of the `Dict`
+    /// family.
     #[test]
     fn mapper_params_bind_stored_elements() {
         use StdlibKernel as K;
@@ -15925,12 +16089,9 @@ mod tests {
             (K::ListMap4, 0, 3),
             (K::ListMap5, 0, 0),
             (K::ListMap5, 0, 4),
-            (K::DictMap, 0, 0),
             (K::DictMap, 0, 1),
-            (K::DictFilter, 0, 0),
             (K::DictFilter, 0, 1),
             (K::DictPartition, 0, 1),
-            (K::DictFoldl, 0, 0),
             (K::DictFoldl, 0, 1),
             (K::DictFoldr, 0, 1),
         ];
@@ -15942,9 +16103,10 @@ mod tests {
         }
     }
 
-    /// A parameter that is not a bare stored element binds nothing: an index,
-    /// an accumulator, a `Maybe`-wrapped value, a non-function argument, and a
-    /// position past the mapper's own parameters.
+    /// A parameter that is not a bare function-admitting stored element binds
+    /// nothing: an index, an accumulator, a `Maybe`-wrapped value, a `Dict` key
+    /// and a `Set` element (neither ever holds a function), a non-function
+    /// argument, and a position past the mapper's own parameters.
     #[test]
     fn non_element_mapper_params_do_not_bind() {
         use StdlibKernel as K;
@@ -15953,6 +16115,13 @@ mod tests {
             (K::ListFoldl, 0, 1),
             (K::DictFoldl, 0, 2),
             (K::DictUpdate, 1, 0),
+            (K::DictMap, 0, 0),
+            (K::DictFilter, 0, 0),
+            (K::DictFoldl, 0, 0),
+            (K::DictFoldr, 0, 0),
+            (K::SetMap, 0, 0),
+            (K::SetFilter, 0, 0),
+            (K::SetFoldl, 0, 0),
             (K::ListMap, 1, 0),
             (K::ListMap, 0, 1),
             (K::ListMap, 2, 0),
@@ -16116,44 +16285,74 @@ mod tests {
         );
     }
 
-    /// The higher-order kernels whose mapper/comparator frontier the lowerer does
-    /// NOT close over a stored function element carry `MapperFrontierOpen`, which
-    /// forbids a function element (fail-closed IPE-L0134) — so each one rejects at
-    /// `ipe` time rather than mis-emitting an `Arc`-vs-`Box` mismatch. Pins the
-    /// set the shipped frontier fix does not cover; a kernel leaves this set only
-    /// by having its frontier actually closed in the lowerer (moving it to
-    /// `CloneOk` there and here together).
+    /// The mapper frontier is derived from each scheme: over every wired kernel,
+    /// exactly the kernels feeding a stored element into a parameter the
+    /// lowerer cannot re-carrier stay `MapperFrontierOpen` (fail-closed
+    /// IPE-L0134) — `Dict.update`'s `Maybe v` and every `Set` higher-order
+    /// kernel, whose `Ord`-bound element admits no function — and every
+    /// graduated mapper kernel is `CloneOk`.
     #[test]
     fn open_frontier_mapper_kernels_forbid_a_function_element() {
         use super::ElementCapability;
-        let open = [
-            StdlibKernel::ListPartition,
-            StdlibKernel::ListMap2,
-            StdlibKernel::ListMap3,
-            StdlibKernel::ListMap4,
-            StdlibKernel::ListMap5,
-            StdlibKernel::ListSortBy,
-            StdlibKernel::ListSortWith,
-            StdlibKernel::DictMap,
-            StdlibKernel::DictFoldl,
-            StdlibKernel::DictFoldr,
-            StdlibKernel::DictFilter,
-            StdlibKernel::DictPartition,
-            StdlibKernel::DictUpdate,
-            StdlibKernel::SetMap,
-            StdlibKernel::SetFilter,
-            StdlibKernel::SetFoldl,
-            StdlibKernel::SetFoldr,
-            StdlibKernel::SetPartition,
+        use StdlibKernel as K;
+        let open: Vec<K> = K::ALL
+            .iter()
+            .copied()
+            .filter(|k| k.element_capability() == Some(ElementCapability::MapperFrontierOpen))
+            .collect();
+        let mut expected_open = [
+            K::DictUpdate,
+            K::SetMap,
+            K::SetFilter,
+            K::SetFoldl,
+            K::SetFoldr,
+            K::SetPartition,
         ];
-        for k in open {
+        let mut got_open = open.clone();
+        expected_open.sort_by_key(|k| format!("{k:?}"));
+        got_open.sort_by_key(|k| format!("{k:?}"));
+        assert_eq!(
+            got_open,
+            expected_open.to_vec(),
+            "open-frontier set drifted"
+        );
+        for k in [
+            K::ListPartition,
+            K::ListMap2,
+            K::ListMap3,
+            K::ListMap4,
+            K::ListMap5,
+            K::ListSortBy,
+            K::ListSortWith,
+            K::DictMap,
+            K::DictFoldl,
+            K::DictFoldr,
+            K::DictFilter,
+            K::DictPartition,
+        ] {
             assert_eq!(
                 k.element_capability(),
-                Some(ElementCapability::MapperFrontierOpen),
-                "{k:?} must be tagged MapperFrontierOpen (open mapper frontier)"
+                Some(ElementCapability::CloneOk),
+                "{k:?} feeds only re-carriered mapper parameters and must be CloneOk"
             );
         }
         assert!(ElementCapability::MapperFrontierOpen.forbids_function_element());
+        assert!(super::mapper_capabilities_match_their_schemes(K::ALL));
+    }
+
+    /// The storage slots are exactly the positions the lowerer flips to the
+    /// `Arc` carrier: a `List`/`Set` element and a `Dict` value, never a `Dict`
+    /// key or a `Maybe`/`Result` payload; a `Set` element admits no function.
+    #[test]
+    fn storage_slots_match_the_lowerer_flips() {
+        use super::{BuiltinTag as T, slot_admits_function, storage_slot};
+        assert!(storage_slot(T::List, 0) && storage_slot(T::Set, 0) && storage_slot(T::Dict, 1));
+        assert!(
+            !storage_slot(T::Dict, 0) && !storage_slot(T::Maybe, 0) && !storage_slot(T::List, 1)
+        );
+        assert!(!storage_slot(T::Result, 0) && !storage_slot(T::Result, 1));
+        assert!(slot_admits_function(T::List, 0) && slot_admits_function(T::Dict, 1));
+        assert!(!slot_admits_function(T::Set, 0) && !slot_admits_function(T::Dict, 0));
     }
 
     /// One representative kernel per effect family maps to the right capability,
@@ -17143,18 +17342,6 @@ mod tests {
             StdlibKernel::ListSort,
             StdlibKernel::ListMaximum,
             StdlibKernel::ListMinimum,
-            StdlibKernel::ListPartition,
-            StdlibKernel::ListSortBy,
-            StdlibKernel::ListSortWith,
-            StdlibKernel::ListMap2,
-            StdlibKernel::ListMap3,
-            StdlibKernel::ListMap4,
-            StdlibKernel::ListMap5,
-            StdlibKernel::DictMap,
-            StdlibKernel::DictFoldl,
-            StdlibKernel::DictFoldr,
-            StdlibKernel::DictFilter,
-            StdlibKernel::DictPartition,
             StdlibKernel::DictUpdate,
             StdlibKernel::SetMap,
             StdlibKernel::SetFilter,

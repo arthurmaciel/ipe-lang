@@ -720,6 +720,15 @@ fn map2_handlers() -> Result<String, BoxError> {
     cli_subscribing("Sub.batch (List.map2 (\\f _n -> Sub.onLine f) [ onLine, Line ] [ 1, 2 ])")
 }
 
+/// `List.map2` PARTIALLY applied to its mapper, the stored handler list
+/// supplied later through the residual closure: the eta-expanded partial must
+/// re-carrier the mapper exactly as the saturated call does.
+fn partial_map2_handlers() -> Result<String, BoxError> {
+    cli_subscribing(
+        "let\n        pair =\n            List.map2 (\\f _n -> Sub.onLine f)\n    in\n    Sub.batch (pair [ onLine, Line ] [ 1, 2 ])",
+    )
+}
+
 /// `List.sortBy` over stored predicates, its key reading the predicate as a
 /// value into the `impl Fn` parameter of `List.filter`.
 fn sort_by_predicates() -> Result<String, BoxError> {
@@ -782,6 +791,13 @@ fn map2_stored_fn_param_emits_shared_carrier() -> Result<(), BoxError> {
     assert_emits_shared_fn_param("emit_map2_stored_fn", &map2_handlers()?)
 }
 
+/// A partially-applied `List.map2`'s handler parameter binds the stored
+/// element's `Arc` carrier too.
+#[test]
+fn partial_map2_stored_fn_param_emits_shared_carrier() -> Result<(), BoxError> {
+    assert_emits_shared_fn_param("emit_partial_map2_stored_fn", &partial_map2_handlers()?)
+}
+
 /// `List.sortBy`'s key parameter binds the stored element's `Arc` carrier.
 #[test]
 fn sort_by_stored_fn_param_emits_shared_carrier() -> Result<(), BoxError> {
@@ -799,6 +815,13 @@ fn dict_map_stored_fn_param_emits_shared_carrier() -> Result<(), BoxError> {
 #[test]
 fn seal_map2_stored_fn_into_on_line_builds() -> Result<(), BoxError> {
     assert_builds("seal_map2_stored_fn", &map2_handlers()?)
+}
+
+/// A partially-applied `List.map2` over a stored handler list, feeding each
+/// handler to `Cli.Sub.onLine`, builds.
+#[test]
+fn seal_partial_map2_stored_fn_into_on_line_builds() -> Result<(), BoxError> {
+    assert_builds("seal_partial_map2_stored_fn", &partial_map2_handlers()?)
 }
 
 /// `List.sortBy` keyed on a stored predicate fed to `List.filter` builds.

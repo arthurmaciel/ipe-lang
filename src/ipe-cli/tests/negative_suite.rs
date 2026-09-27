@@ -2037,12 +2037,13 @@ fn lower_float_set_element() {
     assert_rejected("lower_float_set_elem", &src, "IPE-L0117");
 }
 
-// A `List`/`Dict` value CAN store a function on the `Arc<dyn Fn>` carrier, but a
-// higher-order kernel whose mapper/comparator carrier the lowerer does NOT align
-// to that stored `Arc` cannot pass the function to its closure — it would emit an
-// `Arc`-vs-`Box` mismatch. Each such open-frontier kernel over a
-// function-carrying collection must fail closed at `ipe` time with IPE-L0134,
-// never `ipe`-accept then `cargo`-fail (THE SEAL).
+// A `List` element / `Dict` value CAN store a function on the `Arc<dyn Fn>`
+// carrier. A higher-order kernel whose every stored-element mapper parameter the
+// lowerer re-carriers to that `Arc` (derived from the kernel scheme) is sound
+// over it and must compile; a kernel that compares/orders its element, or feeds
+// a stored element into a parameter the lowerer cannot re-carrier (`Dict.update`'s
+// `Maybe v`, every `Set` higher-order kernel), must fail closed at `ipe` time
+// with IPE-L0134 — never `ipe`-accept then `cargo`-fail (THE SEAL).
 
 /// `List.member` over a `List (Int -> Int)`: the element is a stored function,
 /// which is `Clone` but not `PartialEq` — membership needs `==` on the element,
@@ -2061,85 +2062,143 @@ fn lower_list_member_over_function_element_gated() {
     assert_rejected("lower_list_member_fn_elem", &src, "IPE-L0134");
 }
 
-/// `Dict.map` over a `Dict String (Int -> Int)`: the value is a stored function,
-/// and `dict_map`'s runtime `V: Clone` bound plus the un-aligned mapper closure
-/// carrier make it unsound — fail closed with IPE-L0134.
+/// `Dict.map` over a `Dict String (Int -> Int)`: the mapper's value parameter
+/// binds the stored function and is re-carriered to `Arc` — accepted.
 #[test]
-fn lower_dict_map_over_function_value_gated() {
+fn lower_dict_map_over_function_value_compiles() {
     let src = format!(
         "{HEAD}import Ipe.Dict as Dict\n\
+         import Ipe.Io as Io\n\
+         import Ipe.List\n\
+         import Ipe.String as String\n\
          table : Dict String (Int -> Int)\n\
          table =\n    Dict.fromList [ ( \"inc\", \\n -> n + 1 ) ]\n\
-         main =\n\
-         \x20   let mapped = Dict.map (\\_ f -> f) table\n\
-         \x20   in\n\
-         \x20   mapped\n"
+         main : Task Error ()\n\
+         main =\n    Io.println (String.fromInt (List.foldl (+) 0 (Dict.values (Dict.map (\\_ f -> f 1) table))))\n"
     );
-    assert_rejected("lower_dict_map_fn_value", &src, "IPE-L0134");
+    assert_compiles("lower_dict_map_fn_value", &src);
 }
 
-/// `Dict.foldl` over a function-valued dict: the fold closure receives the
-/// stored function on the un-aligned `Box` carrier — fail closed with IPE-L0134.
+/// `Dict.foldl` over a function-valued dict: the fold closure's value
+/// parameter binds the stored function on `Arc` — accepted.
 #[test]
-fn lower_dict_foldl_over_function_value_gated() {
+fn lower_dict_foldl_over_function_value_compiles() {
     let src = format!(
         "{HEAD}import Ipe.Dict as Dict\n\
+         import Ipe.Io as Io\n\
+         import Ipe.List\n\
+         import Ipe.String as String\n\
          table : Dict String (Int -> Int)\n\
          table =\n    Dict.fromList [ ( \"inc\", \\n -> n + 1 ) ]\n\
-         main =\n\
-         \x20   let result = Dict.foldl (\\_ f acc -> f acc) 0 table\n\
-         \x20   in\n\
-         \x20   result\n"
+         main : Task Error ()\n\
+         main =\n    Io.println (String.fromInt (Dict.foldl (\\_ f acc -> f acc) 0 table))\n"
     );
-    assert_rejected("lower_dict_foldl_fn_value", &src, "IPE-L0134");
+    assert_compiles("lower_dict_foldl_fn_value", &src);
 }
 
-/// `Dict.filter` over a function-valued dict: `dict_filter`'s `V: Clone` bound
-/// plus the un-aligned predicate carrier make it unsound — fail closed.
+/// `Dict.filter` over a function-valued dict: the predicate's value parameter
+/// binds the stored function on `Arc` — accepted.
 #[test]
-fn lower_dict_filter_over_function_value_gated() {
+fn lower_dict_filter_over_function_value_compiles() {
     let src = format!(
         "{HEAD}import Ipe.Dict as Dict\n\
+         import Ipe.Io as Io\n\
+         import Ipe.List\n\
+         import Ipe.String as String\n\
          table : Dict String (Int -> Int)\n\
          table =\n    Dict.fromList [ ( \"inc\", \\n -> n + 1 ) ]\n\
-         main =\n\
-         \x20   let filtered = Dict.filter (\\_ _ -> True) table\n\
-         \x20   in\n\
-         \x20   filtered\n"
+         main : Task Error ()\n\
+         main =\n    Io.println (String.fromInt (Dict.size (Dict.filter (\\_ f -> f 0 > 0) table)))\n"
     );
-    assert_rejected("lower_dict_filter_fn_value", &src, "IPE-L0134");
+    assert_compiles("lower_dict_filter_fn_value", &src);
 }
 
-/// `Dict.partition` over a function-valued dict: same open-frontier class —
-/// fail closed with IPE-L0134.
+/// `Dict.partition` over a function-valued dict: same re-carriered value
+/// parameter — accepted.
 #[test]
-fn lower_dict_partition_over_function_value_gated() {
+fn lower_dict_partition_over_function_value_compiles() {
     let src = format!(
         "{HEAD}import Ipe.Dict as Dict\n\
+         import Ipe.Io as Io\n\
+         import Ipe.List\n\
+         import Ipe.String as String\n\
+         import Ipe.Tuple as Tuple\n\
          table : Dict String (Int -> Int)\n\
          table =\n    Dict.fromList [ ( \"inc\", \\n -> n + 1 ) ]\n\
-         main =\n\
-         \x20   let (trueTable, falseTable) = Dict.partition (\\_ _ -> True) table\n\
-         \x20   in\n\
-         \x20   trueTable\n"
+         main : Task Error ()\n\
+         main =\n    Io.println (String.fromInt (Dict.size (Tuple.first (Dict.partition (\\_ f -> f 0 > 0) table))))\n"
     );
-    assert_rejected("lower_dict_partition_fn_value", &src, "IPE-L0134");
+    assert_compiles("lower_dict_partition_fn_value", &src);
 }
 
-/// `List.sortBy` over a `List (Int -> Int)`: the key extractor receives the
-/// stored function on the un-aligned carrier — fail closed with IPE-L0134.
+/// `List.sortBy` over a `List (Int -> Int)`: the key extractor's parameter
+/// binds the stored function on `Arc` — accepted.
 #[test]
-fn lower_list_sort_by_over_function_element_gated() {
+fn lower_list_sort_by_over_function_element_compiles() {
     let src = format!(
-        "{HEAD}import Ipe.List\n\
+        "{HEAD}import Ipe.Io as Io\n\
+         import Ipe.List\n\
+         import Ipe.String as String\n\
          steps : List (Int -> Int)\n\
          steps =\n    [ \\n -> n + 1, \\n -> n * 2 ]\n\
-         main =\n\
-         \x20   let sorted = List.sortBy (\\f -> f 0) steps\n\
-         \x20   in\n\
-         \x20   sorted\n"
+         main : Task Error ()\n\
+         main =\n    Io.println (String.fromInt (List.foldl (\\f acc -> f acc) 0 (List.sortBy (\\f -> f 0) steps)))\n"
     );
-    assert_rejected("lower_list_sort_by_fn_elem", &src, "IPE-L0134");
+    assert_compiles("lower_list_sort_by_fn_elem", &src);
+}
+
+/// `Dict.update` over a function-valued dict: its updater reads the stored
+/// value wrapped in `Maybe`, a parameter the lowerer does not re-carrier —
+/// the frontier stays open, so it must fail closed with IPE-L0134.
+#[test]
+fn lower_dict_update_over_function_value_gated() {
+    let src = format!(
+        "{HEAD}import Ipe.Dict as Dict\n\
+         import Ipe.Io as Io\n\
+         import Ipe.List\n\
+         import Ipe.String as String\n\
+         table : Dict String (Int -> Int)\n\
+         table =\n    Dict.fromList [ ( \"inc\", \\n -> n + 1 ) ]\n\
+         main : Task Error ()\n\
+         main =\n    Io.println (String.fromInt (Dict.size (Dict.update \"inc\" (\\m -> m) table)))\n"
+    );
+    assert_rejected("lower_dict_update_fn_value", &src, "IPE-L0134");
+}
+
+/// A PARTIAL `Dict.update` over a function-valued dict supplies the
+/// collection only through the residual closure: the gate reads the callee's
+/// solved arrow, so the open frontier still fails closed with IPE-L0134.
+#[test]
+fn lower_dict_update_partial_over_function_value_gated() {
+    let src = format!(
+        "{HEAD}import Ipe.Dict as Dict\n\
+         import Ipe.Io as Io\n\
+         import Ipe.List\n\
+         import Ipe.String as String\n\
+         table : Dict String (Int -> Int)\n\
+         table =\n    Dict.fromList [ ( \"inc\", \\n -> n + 1 ) ]\n\
+         main : Task Error ()\n\
+         main =\n    Io.println (String.fromInt (let upd = Dict.update \"inc\" (\\m -> m) in Dict.size (upd table)))\n"
+    );
+    assert_rejected("lower_dict_update_partial_fn_value", &src, "IPE-L0134");
+}
+
+/// A `Set` higher-order kernel stays open (its `Ord`-bound element admits no
+/// function, so the lowerer never re-carriers it): `Set.foldl` threading a
+/// `List (Int -> Int)` accumulator must fail closed with IPE-L0134.
+#[test]
+fn lower_set_foldl_with_function_accumulator_gated() {
+    let src = format!(
+        "{HEAD}import Ipe.Io as Io\n\
+         import Ipe.List\n\
+         import Ipe.Set as Set\n\
+         import Ipe.String as String\n\
+         steps : List (Int -> Int)\n\
+         steps =\n    [ \\n -> n + 1, \\n -> n * 2 ]\n\
+         main : Task Error ()\n\
+         main =\n    Io.println (String.fromInt (List.length (Set.foldl (\\_ acc -> acc) steps (Set.fromList [ 1, 2 ]))))\n"
+    );
+    assert_rejected("lower_set_foldl_fn_acc", &src, "IPE-L0134");
 }
 
 /// A generic union `Wrap a` at a non-`Clone` concrete payload (`Task Error Int`)
