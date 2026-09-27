@@ -2841,7 +2841,7 @@ mod tests {
         );
         let level = out.path().join("a");
         swap_when_held(out.path().to_path_buf(), move || {
-            swap_for_link(&level, &victim)
+            swap_for_link(&level, &victim);
         });
         let result = target.holds(b"same");
         super::held::set_level_hook(None);
