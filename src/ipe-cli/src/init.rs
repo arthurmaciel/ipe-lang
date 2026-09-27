@@ -433,9 +433,7 @@ pub fn run_init(rest: &[String]) -> Result<(), CliError> {
             &project_name,
             &files,
             args.force,
-            true,
-            InitShape::default(),
-            InitRuntime::default(),
+            ScaffoldKind::Library,
         );
     }
 
@@ -474,9 +472,7 @@ pub fn run_init(rest: &[String]) -> Result<(), CliError> {
         &project_name,
         &files,
         args.force,
-        false,
-        shape,
-        runtime,
+        ScaffoldKind::App { shape, runtime },
     )
 }
 
@@ -760,6 +756,16 @@ fn read_line_trimmed() -> Option<String> {
 
 // ── scaffold helpers ─────────────────────────────────────────────────────────
 
+/// What is being scaffolded: a library has no app shape or runtime to report.
+#[derive(Clone, Copy)]
+enum ScaffoldKind {
+    Library,
+    App {
+        shape: InitShape,
+        runtime: InitRuntime,
+    },
+}
+
 /// Run the scaffold: fresh → write all; existing → reconcile.
 fn run_scaffold(
     target_arg: &str,
@@ -767,19 +773,18 @@ fn run_scaffold(
     project_name: &str,
     files: &[ManagedFile],
     force: bool,
-    lib: bool,
-    shape: InitShape,
-    runtime: InitRuntime,
+    kind: ScaffoldKind,
 ) -> Result<(), CliError> {
     let fresh = is_fresh_target(target_dir)?;
     if fresh || force {
         scaffold(target_dir, files, force)?;
         let is_tty = std::io::stdin().is_terminal() && std::io::stdout().is_terminal();
         let interactive = should_offer_health_check(is_tty, force);
-        if lib {
-            print_next_steps_lib(target_arg, project_name);
-        } else {
-            print_next_steps(target_arg, project_name, interactive, shape, runtime);
+        match kind {
+            ScaffoldKind::Library => print_next_steps_lib(target_arg, project_name),
+            ScaffoldKind::App { shape, runtime } => {
+                print_next_steps(target_arg, project_name, interactive, shape, runtime);
+            }
         }
         if interactive && prompt_yes_no("Verify your toolchain now?", true) {
             let _ = health::run_health_inline();

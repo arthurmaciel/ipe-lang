@@ -31209,15 +31209,15 @@ mod tests {
         let mut interner = Interner::new();
         let main = interner.intern("Main").expect("intern");
         let wrap = interner.intern("Wrap").expect("intern");
-        let w = interner.intern("w").expect("intern");
-        let n = interner.intern("n").expect("intern");
+        let w_sym = interner.intern("w").expect("intern");
+        let n_sym = interner.intern("n").expect("intern");
         let job = interner.intern("job").expect("intern");
         let view = interner.intern("view").expect("intern");
         let ghost = interner.intern("ghost").expect("intern");
-        let a = interner.intern("a").expect("intern");
-        let j = interner.intern("j").expect("intern");
-        let v = interner.intern("v").expect("intern");
-        let g = interner.intern("g").expect("intern");
+        let a_sym = interner.intern("a").expect("intern");
+        let j_sym = interner.intern("j").expect("intern");
+        let v_sym = interner.intern("v").expect("intern");
+        let g_sym = interner.intern("g").expect("intern");
         let span = Span::DUMMY;
         let transparent = BTreeSet::new();
         let env = CloneEnv {
@@ -31232,32 +31232,33 @@ mod tests {
         // A named runtime UI struct is never `Copy`, even over a `Copy` message.
         assert_eq!(clone_class(env, &ui_int), CloneClass::CloneOk);
         let worker = IrType::Record(BTreeMap::from([
-            (n, IrType::Int),
+            (n_sym, IrType::Int),
             (job, task.clone()),
             (view, ui_int.clone()),
         ]));
         let l0135 = unsupported(span, Feature::NonCloneValueReuse);
         let read = |field, field_ty: IrType| Expr::Access {
-            record: Box::new(Expr::Var(w)),
+            record: Box::new(Expr::Var(w_sym)),
             field,
             field_ty,
         };
         let binds = |fields: Vec<(ipe_intern::Symbol, Pat)>| {
-            let mut all = vec![(job, Pat::Var(j))];
+            let mut all = vec![(job, Pat::Var(j_sym))];
             all.extend(fields);
             Pat::Record(all)
         };
         let destructure_then = |binder: Pat, after: Expr| Expr::Destructure {
             binder,
-            value: Box::new(Expr::Var(w)),
-            body: Box::new(Expr::Tuple(vec![Expr::Var(j), after])),
+            value: Box::new(Expr::Var(w_sym)),
+            body: Box::new(Expr::Tuple(vec![Expr::Var(j_sym), after])),
         };
-        let hazard = |ty: &IrType, body: &Expr| nonclone_read_after_move(env, w, ty, body);
-        let reject = |ty: &IrType, body: &Expr| reject_nonclone_value_reuse(env, w, ty, body, span);
+        let hazard = |ty: &IrType, body: &Expr| nonclone_read_after_move(env, w_sym, ty, body);
+        let reject =
+            |ty: &IrType, body: &Expr| reject_nonclone_value_reuse(env, w_sym, ty, body, span);
 
         // `let { n = a, job = j } = w in (j, w.n)`: `n` is `Int`, copied — accepted.
-        let n_pat = || binds(vec![(n, Pat::Var(a)), (view, Pat::Wildcard)]);
-        let read_n = destructure_then(n_pat(), read(n, IrType::Int));
+        let n_pat = || binds(vec![(n_sym, Pat::Var(a_sym)), (view, Pat::Wildcard)]);
+        let read_n = destructure_then(n_pat(), read(n_sym, IrType::Int));
         assert!(!hazard(&worker, &read_n));
         assert!(reject(&worker, &read_n).is_ok());
 
@@ -31265,12 +31266,12 @@ mod tests {
         // stays owned.
         let copy_only = Expr::Destructure {
             binder: Pat::Record(vec![
-                (n, Pat::Var(a)),
+                (n_sym, Pat::Var(a_sym)),
                 (job, Pat::Wildcard),
                 (view, Pat::Wildcard),
             ]),
-            value: Box::new(Expr::Var(w)),
-            body: Box::new(Expr::Tuple(vec![Expr::Var(a), Expr::Var(w)])),
+            value: Box::new(Expr::Var(w_sym)),
+            body: Box::new(Expr::Tuple(vec![Expr::Var(a_sym), Expr::Var(w_sym)])),
         };
         assert!(!hazard(&worker, &copy_only));
         assert!(reject(&worker, &copy_only).is_ok());
@@ -31281,20 +31282,20 @@ mod tests {
         assert!(matches!(reject(&worker, &read_job), Err(ref e) if *e == l0135));
 
         // `... in (j, w)`: the whole binding after a partial move — refused.
-        let read_whole = destructure_then(n_pat(), Expr::Var(w));
+        let read_whole = destructure_then(n_pat(), Expr::Var(w_sym));
         assert!(hazard(&worker, &read_whole));
         assert!(matches!(reject(&worker, &read_whole), Err(ref e) if *e == l0135));
 
         // `let { view = v, job = j } = w in (j, w.view)`: a `Ui Int` field is
         // `Clone` but not `Copy`, so the binder moves it — refused.
-        let view_pat = binds(vec![(view, Pat::Var(v)), (n, Pat::Wildcard)]);
+        let view_pat = binds(vec![(view, Pat::Var(v_sym)), (n_sym, Pat::Wildcard)]);
         let read_view = destructure_then(view_pat, read(view, ui_int));
         assert!(hazard(&worker, &read_view));
         assert!(matches!(reject(&worker, &read_view), Err(ref e) if *e == l0135));
 
         // A binder over a field the binding's type does not resolve is treated
         // as a move — refused.
-        let ghost_pat = || binds(vec![(ghost, Pat::Var(g))]);
+        let ghost_pat = || binds(vec![(ghost, Pat::Var(g_sym))]);
         let read_ghost = destructure_then(ghost_pat(), read(ghost, IrType::Int));
         assert!(hazard(&worker, &read_ghost));
         assert!(matches!(reject(&worker, &read_ghost), Err(ref e) if *e == l0135));
@@ -31306,7 +31307,7 @@ mod tests {
             name: wrap,
             args: vec![task],
         };
-        let opaque_n = destructure_then(n_pat(), read(n, IrType::Int));
+        let opaque_n = destructure_then(n_pat(), read(n_sym, IrType::Int));
         assert!(hazard(&wrap_task, &opaque_n));
         assert!(matches!(reject(&wrap_task, &opaque_n), Err(ref e) if *e == l0135));
 
@@ -31325,10 +31326,11 @@ mod tests {
                     guard: None,
                 },
             ];
-            Match::new_flat(Expr::Var(w), arms).map(|m| Expr::Tuple(vec![Expr::Match(m), after]))
+            Match::new_flat(Expr::Var(w_sym), arms)
+                .map(|m| Expr::Tuple(vec![Expr::Match(m), after]))
         };
         assert!(matches!(
-            match_then(read(n, IrType::Int)),
+            match_then(read(n_sym, IrType::Int)),
             Ok(ref e) if !hazard(&worker, e)
         ));
         assert!(matches!(
