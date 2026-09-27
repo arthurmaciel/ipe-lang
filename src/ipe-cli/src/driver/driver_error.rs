@@ -2,7 +2,7 @@ use super::{nearest_command, nearest_group_member};
 use crate::style::TerminalSafe;
 use crate::{
     Diagnostic, Path, PathBuf, Write, api_surface, audit, build_plan, contained_path, delivery,
-    help, machine_output, output_dir, publish, render, render_json, style, text, toolchain,
+    ffi, help, machine_output, output_dir, publish, render, render_json, style, text, toolchain,
 };
 
 /// The runtime crate an emitted project linked against: its root and declared
@@ -342,6 +342,12 @@ pub enum CliError {
         /// The refused cache directory.
         path: PathBuf,
     },
+    /// An installed FFI catalog was refused before anything was injected.
+    ///
+    /// A tampered or half-written cache artifact, or a crate claiming an
+    /// asserted-call reserved name: a trust refusal, never a degradable
+    /// build failure.
+    FfiCatalogRefused(ffi::FfiCatalogRefusal),
     /// The module-discovery walk hit its depth ceiling or detected a symlink
     /// cycle. Carries the maximum depth that was configured and, for a cycle,
     /// the directory path where the cycle was detected.
@@ -535,6 +541,7 @@ impl CliError {
             Self::OutputRefused(_) => "output-refused",
             Self::DiscoveryLimitReached { .. } => "discovery-limit-reached",
             Self::FfiCacheUntrusted { .. } => "ffi-cache-untrusted",
+            Self::FfiCatalogRefused(_) => "ffi-catalog-refused",
             Self::UpgradeFeedUnreachable => "upgrade-feed-unreachable",
             Self::UpgradeCheckExit { .. } => "upgrade-check-exit",
             Self::AdvisoryVulnerable(_) => "advisory-vulnerable",
@@ -605,6 +612,7 @@ impl CliError {
             | Self::OutputRefused(_)
             | Self::DiscoveryLimitReached { .. }
             | Self::FfiCacheUntrusted { .. }
+            | Self::FfiCatalogRefused(_)
             | Self::UpgradeFeedUnreachable
             | Self::UpgradeCheckExit { .. }
             | Self::AdvisoryVulnerable(_)
@@ -830,6 +838,7 @@ impl std::fmt::Display for CliError {
             Self::FfiCacheUntrusted { path } => {
                 f.write_str(&text::ffi_cache_untrusted(&path.display()))
             }
+            Self::FfiCatalogRefused(refusal) => write!(f, "{refusal}"),
             Self::AdvisoryVulnerable(p) => {
                 let fixed_in = p
                     .fixed_in

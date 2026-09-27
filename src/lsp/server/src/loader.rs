@@ -48,7 +48,7 @@ pub enum LoadError {
     Io(String),
     /// A bounded read or walk hit its ceiling.
     Limit(String),
-    /// The FFI artifact cache failed its trust check.
+    /// The FFI artifact cache or its installed catalog failed a trust check.
     FfiUntrusted(String),
 }
 

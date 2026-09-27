@@ -82,20 +82,58 @@ pub fn find_cache_root(scope: &ProjectRoot) -> Result<Option<PathBuf>, CliError>
     Err(CliError::FfiCacheUntrusted { path: candidate })
 }
 
-/// The FFI cache for a build rooted at (or blamed on) `blame_path`, scoped by its [`ProjectRoot`].
-fn cache_root_for(blame_path: &Path) -> Result<Option<PathBuf>, CliError> {
-    find_cache_root(&ProjectRoot::of(None, blame_path))
+/// Why an installed FFI catalog was refused before anything was injected.
+///
+/// Every variant is a trust refusal: the catalog feeds `_bindings.rs`, which
+/// compiles unsandboxed into the crate, so a caller must never degrade around
+/// it as an ordinary build failure.
+#[derive(Debug)]
+pub enum FfiCatalogRefusal {
+    /// The catalog loader rejected a cache artifact (tampered or half-written).
+    Artifact(Box<ipe_ffi::diag::Diagnostic>),
+    /// An installed crate claims the reserved asserted-call module.
+    ReservedModule {
+        /// The claiming crate's slug.
+        slug: String,
+    },
+    /// An installed crate forwards to a wrapper under the reserved asserted-shim prefix.
+    ReservedWrapperPrefix {
+        /// The claiming crate's slug.
+        slug: String,
+        /// The offending wrapper identifier.
+        ident: String,
+    },
 }
 
-/// Load the installed-crate catalog for a build rooted at (or blamed on)
-/// `blame_path`. Absent cache ⇒ empty catalog.
+impl std::fmt::Display for FfiCatalogRefusal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Artifact(diag) => write!(f, "{diag}"),
+            Self::ReservedModule { slug } => f.write_str(&text::ffi_reserved_module_claimed(
+                slug,
+                &ipe_canon::asserted::ASSERTED_MODULE,
+            )),
+            Self::ReservedWrapperPrefix { slug, ident } => {
+                f.write_str(&text::ffi_reserved_wrapper_prefix(
+                    slug,
+                    ident,
+                    &ipe_canon::asserted::ASSERTED_WRAPPER_PREFIX,
+                ))
+            }
+        }
+    }
+}
+
+/// Load the installed-crate catalog for a build rooted at (or blamed on) `blame_path`.
+///
+/// Absent cache ⇒ empty catalog.
 ///
 /// # Errors
 /// [`CliError::FfiCacheUntrusted`] when the cache is untrusted;
-/// [`CliError::UsageOwned`] when its catalog loader refuses it (a tampered or half-written cache is refused, never
-/// silently skipped).
+/// [`CliError::FfiCatalogRefused`] when its catalog loader refuses it (a
+/// tampered or half-written cache is refused, never silently skipped).
 pub fn load_catalog_for(blame_path: &Path) -> Result<Vec<InstalledCrate>, CliError> {
-    load_catalog_at(cache_root_for(blame_path)?.as_deref())
+    load_catalog_at(find_cache_root(&ProjectRoot::of(None, blame_path))?.as_deref())
 }
 
 /// Load the installed-crate catalog from `cache_root`; no cache ⇒ empty catalog.
@@ -103,7 +141,40 @@ fn load_catalog_at(cache_root: Option<&Path>) -> Result<Vec<InstalledCrate>, Cli
     let Some(cache_root) = cache_root else {
         return Ok(Vec::new());
     };
-    ipe_ffi::driver::load_catalog(cache_root).map_err(|diag| CliError::UsageOwned(diag.to_string()))
+    ipe_ffi::driver::load_catalog(cache_root)
+        .map_err(|diag| CliError::FfiCatalogRefused(FfiCatalogRefusal::Artifact(Box::new(diag))))
+}
+
+/// Refuse a catalog in which any crate claims an asserted-call reserved name.
+///
+/// The asserted-call classifications lean on two unforgeable names: the
+/// `Rust.Ffi` module and the `ipe_asserted_` wrapper prefix.
+///
+/// # Errors
+/// [`CliError::FfiCatalogRefused`] naming the first claiming crate.
+fn refuse_reserved_claims(catalog: &[InstalledCrate]) -> Result<(), CliError> {
+    for c in catalog {
+        if c.module_name == ipe_canon::asserted::ASSERTED_MODULE {
+            return Err(CliError::FfiCatalogRefused(
+                FfiCatalogRefusal::ReservedModule {
+                    slug: c.slug.clone(),
+                },
+            ));
+        }
+        if let Some(ident) = c
+            .wrapper_idents
+            .iter()
+            .find(|w| w.starts_with(ipe_canon::asserted::ASSERTED_WRAPPER_PREFIX))
+        {
+            return Err(CliError::FfiCatalogRefused(
+                FfiCatalogRefusal::ReservedWrapperPrefix {
+                    slug: c.slug.clone(),
+                    ident: ident.clone(),
+                },
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// Inject each installed crate's interface module into the build's source
@@ -453,36 +524,34 @@ pub struct FfiPrep {
 /// inserted per installed crate.
 ///
 /// # Errors
-/// [`CliError`] when the catalog is tampered/unreadable, or two installed
-/// crates pin the same dependency to conflicting version lines.
+/// See [`prepare_ffi_in`].
 pub fn prepare_ffi(
     sources: &mut BTreeMap<Vec<String>, (PathBuf, String)>,
     blame_path: &Path,
 ) -> Result<FfiPrep, CliError> {
-    let cache_root = cache_root_for(blame_path)?;
+    prepare_ffi_in(sources, &ProjectRoot::of(None, blame_path))
+}
+
+/// [`prepare_ffi`] for an already-classified `scope`.
+///
+/// The catalog is read from `.ipe/cache/ffi/rust` in [`ProjectRoot::dir`]
+/// only; a caller that classified its root once (the LSP, which honours the
+/// editor's workspace root) passes it here rather than re-deriving it.
+///
+/// # Errors
+/// [`CliError::FfiCacheUntrusted`] or [`CliError::FfiCatalogRefused`] when
+/// the catalog is untrusted, tampered, or claims a reserved name; another
+/// [`CliError`] when two installed crates pin the same dependency to
+/// conflicting version lines.
+pub fn prepare_ffi_in(
+    sources: &mut BTreeMap<Vec<String>, (PathBuf, String)>,
+    scope: &ProjectRoot,
+) -> Result<FfiPrep, CliError> {
+    let cache_root = find_cache_root(scope)?;
     let mut catalog = load_catalog_at(cache_root.as_deref())?;
-    // The asserted-call classifications lean on two unforgeable names: the
-    // `Rust.Ffi` module and the `ipe_asserted_` wrapper prefix. No installed
-    // crate may claim either — refused at load, before anything is injected.
-    for c in &catalog {
-        if c.module_name == ipe_canon::asserted::ASSERTED_MODULE {
-            return Err(CliError::UsageOwned(text::ffi_reserved_module_claimed(
-                &c.slug,
-                &ipe_canon::asserted::ASSERTED_MODULE,
-            )));
-        }
-        if let Some(ident) = c
-            .wrapper_idents
-            .iter()
-            .find(|w| w.starts_with(ipe_canon::asserted::ASSERTED_WRAPPER_PREFIX))
-        {
-            return Err(CliError::UsageOwned(text::ffi_reserved_wrapper_prefix(
-                &c.slug,
-                &ident,
-                &ipe_canon::asserted::ASSERTED_WRAPPER_PREFIX,
-            )));
-        }
-    }
+    // No installed crate may claim a reserved name — refused at load, before
+    // anything is injected.
+    refuse_reserved_claims(&catalog)?;
     // One Ipê home per foreign type: collapse same-defining-path nominals
     // across the catalog BEFORE injection, so every injected signature and
     // the assembled `foreign_types` map agree on one nominal per type.
@@ -3834,6 +3903,26 @@ version = \"1\"
     }
 
     #[test]
+    fn a_half_written_catalog_is_a_typed_refusal() {
+        let tmp = cache_scope_tmp("half-written");
+        let cache = tmp.join(CACHE_REL);
+        std::fs::create_dir_all(&cache).expect("mk cache");
+        std::fs::write(cache.join("x.consumer.json"), "{ not json").expect("write consumer");
+        let entry = tmp.join("Main.ipe");
+        let mut sources = BTreeMap::new();
+        let refused = prepare_ffi(&mut sources, &entry);
+        assert!(
+            matches!(
+                &refused,
+                Err(CliError::FfiCatalogRefused(FfiCatalogRefusal::Artifact(_)))
+            ),
+            "a half-written cache must be refused, never skipped: {:?}",
+            refused.err()
+        );
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
     fn package_scope_never_consults_a_cache_above_the_manifest() {
         let tmp = cache_scope_tmp("pkg-ancestor");
         std::fs::create_dir_all(tmp.join(CACHE_REL)).expect("mk ancestor cache");
@@ -4399,6 +4488,69 @@ version = \"1\"
             cargo_deps: Vec::new(),
             wrapper_idents: BTreeSet::new(),
         }
+    }
+
+    #[test]
+    fn a_crate_claiming_the_reserved_module_is_a_typed_refusal() {
+        let mut krate = crate_with_types("evil", &[], &[]);
+        krate.module_name = ipe_canon::asserted::ASSERTED_MODULE.to_owned();
+        let refused = refuse_reserved_claims(&[krate]);
+        assert!(
+            matches!(
+                &refused,
+                Err(CliError::FfiCatalogRefused(FfiCatalogRefusal::ReservedModule { slug }))
+                    if slug == "evil"
+            ),
+            "reserved-module claim must be refused: {refused:?}"
+        );
+    }
+
+    #[test]
+    fn a_crate_claiming_the_reserved_wrapper_prefix_is_a_typed_refusal() {
+        let mut krate = crate_with_types("evil", &[], &[]);
+        let ident = format!("{}shim", ipe_canon::asserted::ASSERTED_WRAPPER_PREFIX);
+        krate.wrapper_idents.insert(ident.clone());
+        let refused = refuse_reserved_claims(&[krate]);
+        assert!(
+            matches!(
+                &refused,
+                Err(CliError::FfiCatalogRefused(FfiCatalogRefusal::ReservedWrapperPrefix {
+                    slug,
+                    ident: claimed,
+                })) if slug == "evil" && *claimed == ident
+            ),
+            "reserved-prefix claim must be refused: {refused:?}"
+        );
+    }
+
+    #[test]
+    fn a_crate_off_the_reserved_names_passes_the_claim_check() {
+        let mut krate = crate_with_types("fine", &[], &[]);
+        krate.wrapper_idents.insert("ipe_wrap_fine".to_owned());
+        assert!(refuse_reserved_claims(&[krate]).is_ok());
+    }
+
+    #[test]
+    fn reserved_claim_refusals_render_their_catalog_text() {
+        let module = FfiCatalogRefusal::ReservedModule {
+            slug: "evil".to_owned(),
+        };
+        assert_eq!(
+            module.to_string(),
+            text::ffi_reserved_module_claimed(&"evil", &ipe_canon::asserted::ASSERTED_MODULE)
+        );
+        let prefix = FfiCatalogRefusal::ReservedWrapperPrefix {
+            slug: "evil".to_owned(),
+            ident: "ipe_asserted_x".to_owned(),
+        };
+        assert_eq!(
+            prefix.to_string(),
+            text::ffi_reserved_wrapper_prefix(
+                &"evil",
+                &"ipe_asserted_x",
+                &ipe_canon::asserted::ASSERTED_WRAPPER_PREFIX,
+            )
+        );
     }
 
     #[test]

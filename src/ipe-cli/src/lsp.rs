@@ -23,7 +23,6 @@ struct UserSources {
     sources: BTreeMap<Vec<String>, (PathBuf, String)>,
     discovered: Vec<project::DiscoveredModule>,
     entry_module: Vec<String>,
-    blame_path: PathBuf,
 }
 
 /// Resolve the user modules of `root`.
@@ -41,7 +40,6 @@ fn resolve_user_sources(
                 sources: resolved.sources,
                 discovered: resolved.discovered,
                 entry_module: resolved.entry_path,
-                blame_path: resolved.blame_path,
             })
         }
         ProjectRoot::LooseFile(file) => {
@@ -50,7 +48,6 @@ fn resolve_user_sources(
                 sources: loaded.sources,
                 discovered: loaded.discovered,
                 entry_module: loaded.entry_module,
-                blame_path: file.clone(),
             })
         }
     }
@@ -58,8 +55,10 @@ fn resolve_user_sources(
 
 /// Type a driver failure as the server's load error, keeping its rendered text.
 ///
-/// A ceiling or an untrusted FFI cache is refused; every other failure is one
-/// the server degrades around.
+/// A ceiling, an untrusted FFI cache, or a refused FFI catalog is refused;
+/// every other failure is one the server degrades around. The match names
+/// every variant, so a new [`CliError`] fails the build here until it is
+/// classified rather than defaulting to a degradable failure.
 fn load_error(err: &CliError) -> LoadError {
     let detail = err.to_string();
     match err {
@@ -67,8 +66,51 @@ fn load_error(err: &CliError) -> LoadError {
         CliError::FileTooLarge { .. } | CliError::DiscoveryLimitReached { .. } => {
             LoadError::Limit(detail)
         }
-        CliError::FfiCacheUntrusted { .. } => LoadError::FfiUntrusted(detail),
-        _ => LoadError::Pipeline(detail),
+        CliError::FfiCacheUntrusted { .. } | CliError::FfiCatalogRefused(_) => {
+            LoadError::FfiUntrusted(detail)
+        }
+        CliError::Usage(_)
+        | CliError::UsageOwned(_)
+        | CliError::UnknownCommand { .. }
+        | CliError::Pipeline { .. }
+        | CliError::RuntimeNotFound
+        | CliError::RuntimeDirInvalid { .. }
+        | CliError::RuntimeHomeUnknown
+        | CliError::RuntimeMaterializeFailed { .. }
+        | CliError::RuntimeVersionMismatch { .. }
+        | CliError::EmittedBuildFailed { .. }
+        | CliError::UnknownCode { .. }
+        | CliError::DocNotFound { .. }
+        | CliError::StaticRefusal(_)
+        | CliError::CapabilityMismatch { .. }
+        | CliError::Resolve(_)
+        | CliError::HashMismatch { .. }
+        | CliError::Diff(_)
+        | CliError::SemverRejected { .. }
+        | CliError::PackageAudit(_)
+        | CliError::Publish(_)
+        | CliError::DocCoverage(_)
+        | CliError::DocExamplesFailed(_)
+        | CliError::CommandUsage { .. }
+        | CliError::UnknownGroupSub { .. }
+        | CliError::VerifyFailed { .. }
+        | CliError::TestFailed { .. }
+        | CliError::UpgradeNoPrebuilt { .. }
+        | CliError::ToolchainMissing(_)
+        | CliError::HealthCritical
+        | CliError::LintGateFailed
+        | CliError::EjectUnsupported { .. }
+        | CliError::DiagnosticJsonEmitted
+        | CliError::PathEscape { .. }
+        | CliError::OutputRefused(_)
+        | CliError::UpgradeFeedUnreachable
+        | CliError::UpgradeCheckExit { .. }
+        | CliError::AdvisoryVulnerable(_)
+        | CliError::AdvisoryDbUnreachable { .. }
+        | CliError::AdvisoryDbMalformed { .. }
+        | CliError::WasiRunFeatureDisabled
+        | CliError::WasiRunFailed { .. }
+        | CliError::WasiRunExited { .. } => LoadError::Pipeline(detail),
     }
 }
 
@@ -86,14 +128,14 @@ impl ProjectLoader for DriverLoader {
             mut sources,
             mut discovered,
             entry_module,
-            blame_path,
         } = resolve_user_sources(&root, open_text).map_err(|e| load_error(&e))?;
         let injected = project::inject_compiled_std_closure(&mut sources, &mut discovered);
         // Load the FFI catalog and inject installed-crate interface modules so
         // the LSP sees `Rust.<Crate>` bindings exactly as `ipe build` does. A
         // missing/empty catalog is fine (no crates installed); a tampered
-        // cache is surfaced as a `LoadError`.
-        let ffi_injected = crate::ffi::prepare_ffi(&mut sources, &blame_path)
+        // cache is surfaced as a `LoadError`. The catalog is scoped by the
+        // same `root` the sources were resolved from.
+        let ffi_injected = crate::ffi::prepare_ffi_in(&mut sources, &root)
             .map_err(|e| load_error(&e))?
             .injected;
         let files = sources
@@ -127,4 +169,66 @@ pub fn run_lsp(rest: &[String]) -> Result<(), CliError> {
         return Err(CliError::Usage(text::lsp_takes_no_arguments()));
     }
     ipe_lsp_server::run_stdio(&DriverLoader).map_err(|e| CliError::UsageOwned(text::lsp_failed(&e)))
+}
+
+#[cfg(test)]
+mod tests {
+    use ipe_lsp_server::LoadDisposition;
+
+    use super::*;
+    use crate::ffi::FfiCatalogRefusal;
+
+    fn tmp_dir(name: &str) -> PathBuf {
+        let tmp = std::env::temp_dir().join(format!("ipe-lsp-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).expect("mk tmp");
+        tmp
+    }
+
+    #[test]
+    fn every_catalog_refusal_is_refused_not_degraded() {
+        let refusals = [
+            FfiCatalogRefusal::ReservedModule {
+                slug: "evil".to_owned(),
+            },
+            FfiCatalogRefusal::ReservedWrapperPrefix {
+                slug: "evil".to_owned(),
+                ident: "ipe_asserted_x".to_owned(),
+            },
+            FfiCatalogRefusal::Artifact(Box::new(ipe_ffi::diag::Diagnostic::ArtifactIo {
+                path: "x.consumer.json".to_owned(),
+                detail: "truncated".to_owned(),
+            })),
+        ];
+        for refusal in refusals {
+            let err = load_error(&CliError::FfiCatalogRefused(refusal));
+            assert!(
+                matches!(err, LoadError::FfiUntrusted(_)),
+                "catalog refusal must type as FfiUntrusted: {err:?}"
+            );
+            assert_eq!(err.disposition(), LoadDisposition::Refuse);
+        }
+    }
+
+    #[test]
+    fn a_tampered_catalog_refuses_the_load() {
+        let tmp = tmp_dir("tampered-catalog");
+        let cache = tmp.join(".ipe/cache/ffi/rust");
+        std::fs::create_dir_all(&cache).expect("mk cache");
+        std::fs::write(cache.join("x.consumer.json"), "{ not json").expect("write consumer");
+        let main = tmp.join("Main.ipe");
+        let text = "module Main exposing (main)\n\nmain = 1\n";
+        std::fs::write(&main, text).expect("write Main.ipe");
+        let loaded = DriverLoader.load(None, &main, Some(text));
+        let err = loaded.err();
+        assert!(
+            matches!(err, Some(LoadError::FfiUntrusted(_))),
+            "a tampered catalog must be refused: {err:?}"
+        );
+        assert_eq!(
+            err.as_ref().map(LoadError::disposition),
+            Some(LoadDisposition::Refuse)
+        );
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
 }
