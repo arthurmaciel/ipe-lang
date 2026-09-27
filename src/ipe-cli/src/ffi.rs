@@ -49,16 +49,48 @@ fn current_uid() -> u32 {
 /// the load-time re-derivation gate is the primary barrier, this narrows the
 /// discovery surface.
 #[cfg(unix)]
-fn is_trusted_cache_dir(dir: &Path) -> bool {
+fn owner_checks_pass(dir: &Path) -> bool {
     use std::os::unix::fs::MetadataExt as _;
     std::fs::metadata(dir).is_ok_and(|md| md.uid() == current_uid() && md.mode() & 0o002 == 0)
 }
 
 /// Off Unix the owner and world-write checks have no portable equivalent, so
-/// no cache can be proven trusted and every one is refused.
+/// they never pass.
 #[cfg(not(unix))]
-const fn is_trusted_cache_dir(_dir: &Path) -> bool {
+const fn owner_checks_pass(_dir: &Path) -> bool {
     false
+}
+
+/// Whether the host can prove who owns an FFI cache directory.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CacheOwnership {
+    /// Owner uid and mode bits are readable, so a cache can be checked.
+    Verifiable,
+    /// No portable owner check exists, so every cache is refused.
+    Unverifiable,
+}
+
+/// The cache-ownership proof this build's target provides.
+const HOST_CACHE_OWNERSHIP: CacheOwnership = if cfg!(unix) {
+    CacheOwnership::Verifiable
+} else {
+    CacheOwnership::Unverifiable
+};
+
+/// Whether `dir` is a cache the invoking user may load under `ownership`.
+fn is_trusted_cache_dir(ownership: CacheOwnership, dir: &Path) -> bool {
+    match ownership {
+        CacheOwnership::Verifiable => owner_checks_pass(dir),
+        CacheOwnership::Unverifiable => false,
+    }
+}
+
+/// The refusal for an untrusted cache at `dir` under `ownership`.
+fn untrusted_cache_refusal(ownership: CacheOwnership, dir: &Path) -> String {
+    match ownership {
+        CacheOwnership::Verifiable => text::ffi_cache_untrusted(&dir.display()),
+        CacheOwnership::Unverifiable => text::ffi_cache_unverifiable(&dir.display()),
+    }
 }
 
 /// Walk up from `start` looking for an FFI artifact cache, bounded at the
@@ -81,15 +113,13 @@ pub fn find_cache_root(start: &Path) -> Result<Option<PathBuf>, CliError> {
     while let Some(d) = dir {
         let candidate = d.join(CACHE_REL);
         if candidate.is_dir() {
-            if is_trusted_cache_dir(&candidate) {
+            if is_trusted_cache_dir(HOST_CACHE_OWNERSHIP, &candidate) {
                 return Ok(Some(candidate));
             }
-            let refusal = if cfg!(unix) {
-                text::ffi_cache_untrusted(&candidate.display())
-            } else {
-                text::ffi_cache_unverifiable(&candidate.display())
-            };
-            return Err(CliError::UsageOwned(refusal));
+            return Err(CliError::UsageOwned(untrusted_cache_refusal(
+                HOST_CACHE_OWNERSHIP,
+                &candidate,
+            )));
         }
         // Stop at the project root: do not walk above the nearest package.ipe.
         if d.join(PROJECT_MANIFEST).is_file() {
@@ -3455,6 +3485,55 @@ pub(crate) fn rust_wrapper_header_accepted_by_ffi_reader(line: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unverifiable_ownership_refuses_every_cache() {
+        // A fresh directory the invoking user owns passes the owner checks, so
+        // only the ownership arm can refuse it.
+        let dir =
+            std::env::temp_dir().join(format!("ipe_ffi_unverifiable_cache_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("create cache dir");
+        let trusted = is_trusted_cache_dir(CacheOwnership::Unverifiable, &dir);
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(!trusted, "an unverifiable host must refuse an owned cache");
+        assert_eq!(
+            untrusted_cache_refusal(CacheOwnership::Unverifiable, &dir),
+            text::ffi_cache_unverifiable(&dir.display())
+        );
+    }
+
+    #[test]
+    fn verifiable_ownership_names_the_untrusted_cache() {
+        let dir = Path::new("/nonexistent/ipe-ffi-cache");
+        assert!(!is_trusted_cache_dir(CacheOwnership::Verifiable, dir));
+        assert_eq!(
+            untrusted_cache_refusal(CacheOwnership::Verifiable, dir),
+            text::ffi_cache_untrusted(&dir.display())
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn verifiable_ownership_admits_an_owned_private_cache() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let dir = std::env::temp_dir().join(format!("ipe_ffi_owned_cache_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("create cache dir");
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700))
+            .expect("restrict cache dir");
+        let trusted = is_trusted_cache_dir(CacheOwnership::Verifiable, &dir);
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(trusted, "an owned mode-0700 cache must be trusted");
+    }
+
+    #[test]
+    fn host_cache_ownership_tracks_target_family() {
+        let expected = if cfg!(unix) {
+            CacheOwnership::Verifiable
+        } else {
+            CacheOwnership::Unverifiable
+        };
+        assert_eq!(HOST_CACHE_OWNERSHIP, expected);
+    }
 
     #[test]
     fn jail_for_host_tracks_the_compiled_in_run_jail() {

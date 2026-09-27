@@ -88,7 +88,7 @@ hex = "0.4"
 # `getrandom` is a thin cross-platform wrapper over each target's real CSPRNG
 # (`getrandom(2)`/`/dev/urandom` on Unix, `BCryptGenRandom` on Windows), so the
 # security control has no silent non-CSPRNG fallback on any released target.
-getrandom = "0.3"
+getrandom = { version = "0.3", features = ["std"] }
 serde_json = "1"
 # `[dependencies]` version requirements in `ipe.toml` are parsed into typed
 # `semver::VersionReq` at manifest-parse time (parse, don't validate).

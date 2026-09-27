@@ -3915,4 +3915,70 @@ mod tests {
         );
         assert_ne!(a, b, "two mints must not collide");
     }
+
+    /// Write an executable fake `cargo` running `body` into a fresh directory
+    /// named after `name`, returning the script path.
+    #[cfg(unix)]
+    fn fake_cargo(name: &str, body: &str) -> PathBuf {
+        use std::os::unix::fs::PermissionsExt as _;
+        let dir = std::env::temp_dir().join(format!(
+            "ipe_watch_fake_cargo_{name}_{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).expect("create fake cargo dir");
+        let path = dir.join("cargo");
+        std::fs::write(&path, format!("#!/bin/sh\n{body}\n")).expect("write fake cargo");
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755))
+            .expect("make fake cargo executable");
+        path
+    }
+
+    /// Spawn `cargo` through the watch build path and return the outcome its
+    /// waiter reports, after `before_exit` has run against the live child.
+    #[cfg(unix)]
+    fn cargo_outcome(
+        cargo: &Path,
+        before_exit: impl FnOnce(&std::sync::Mutex<super::CargoChild>),
+    ) -> Option<super::CargoOutcome> {
+        let out_dir = cargo.parent().expect("fake cargo has a parent dir");
+        let (tx, rx) = mpsc::channel();
+        let child =
+            super::spawn_cargo_build(cargo, out_dir, Some(&out_dir.join("target")), 1, tx, true)
+                .expect("spawn fake cargo");
+        before_exit(child.as_ref());
+        let event = rx.recv_timeout(Duration::from_secs(30));
+        let _ = std::fs::remove_dir_all(out_dir);
+        match event {
+            Ok(OrchestratorEvent::CargoDone { outcome, .. }) => Some(outcome),
+            _ => None,
+        }
+    }
+
+    /// A build that dies by a signal nobody in the orchestrator sent (a crash,
+    /// an out-of-memory kill) is a real failure, never a silent supersede.
+    #[cfg(unix)]
+    #[test]
+    fn unrequested_signal_death_is_a_failure() {
+        let cargo = fake_cargo("signal", "kill -9 $$");
+        let outcome = cargo_outcome(&cargo, |_| {});
+        assert!(
+            matches!(outcome, Some(super::CargoOutcome::Red(_))),
+            "a signal death the orchestrator did not request must report Red"
+        );
+    }
+
+    /// A build the orchestrator supersedes reports `Killed`, so the stale
+    /// cycle is dropped rather than shown as a failure.
+    #[cfg(unix)]
+    #[test]
+    fn superseded_build_reports_killed() {
+        let cargo = fake_cargo("supersede", "exec sleep 30");
+        let outcome = cargo_outcome(&cargo, |child| {
+            child.lock().expect("cargo child lock").supersede();
+        });
+        assert!(
+            matches!(outcome, Some(super::CargoOutcome::Killed)),
+            "a superseded build must report Killed"
+        );
+    }
 }

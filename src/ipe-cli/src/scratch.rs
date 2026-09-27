@@ -25,7 +25,7 @@ const MAX_RETRIES: usize = 8;
 /// fails the construction rather than silently weakening the name.
 fn read_entropy() -> io::Result<[u8; 16]> {
     let mut buf = [0u8; 16];
-    getrandom::fill(&mut buf).map_err(io::Error::other)?;
+    getrandom::fill(&mut buf)?;
     Ok(buf)
 }
 

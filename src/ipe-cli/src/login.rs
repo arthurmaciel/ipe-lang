@@ -137,9 +137,7 @@ pub fn stored_token() -> Option<PublishToken> {
 fn run_device_flow() -> Result<(), CliError> {
     // Refuse up front where the token could not be stored owner-only, before
     // the user approves a grant that would then be discarded.
-    if !cfg!(unix) {
-        return Err(login_error(crate::text::login_token_store_unsupported()));
-    }
+    require_token_store(HOST_TOKEN_STORE)?;
     let device = request_device_code()?;
 
     crate::screen::Screen::new(crate::screen::Stream::Stdout)
@@ -508,7 +506,31 @@ fn write_token_atomic(path: &std::path::Path, token: &str) -> Result<(), CliErro
 
 #[cfg(not(unix))]
 fn write_token_atomic(_path: &std::path::Path, _token: &str) -> Result<(), CliError> {
-    Err(login_error(crate::text::login_token_store_unsupported()))
+    require_token_store(HOST_TOKEN_STORE)
+}
+
+/// Where the host can keep the publish token.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TokenStore {
+    /// A file created mode 0600, readable by its owner only.
+    OwnerOnlyFile,
+    /// No owner-only file mode exists, so the token is never stored.
+    Unsupported,
+}
+
+/// The token store this build's target provides.
+const HOST_TOKEN_STORE: TokenStore = if cfg!(unix) {
+    TokenStore::OwnerOnlyFile
+} else {
+    TokenStore::Unsupported
+};
+
+/// Refuse a login whose token `store` cannot keep it owner-only.
+fn require_token_store(store: TokenStore) -> Result<(), CliError> {
+    match store {
+        TokenStore::OwnerOnlyFile => Ok(()),
+        TokenStore::Unsupported => Err(login_error(crate::text::login_token_store_unsupported())),
+    }
 }
 
 /// Remove the stored token.
@@ -559,6 +581,34 @@ fn login_error(message: &str) -> CliError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn owner_only_token_store_admits_login() {
+        assert!(require_token_store(TokenStore::OwnerOnlyFile).is_ok());
+    }
+
+    #[test]
+    fn unsupported_token_store_refuses_login() {
+        let refusal = require_token_store(TokenStore::Unsupported);
+        assert!(
+            matches!(
+                &refusal,
+                Err(CliError::Resolve(message))
+                    if message.contains(crate::text::login_token_store_unsupported())
+            ),
+            "an unsupported token store must refuse the login: {refusal:?}"
+        );
+    }
+
+    #[test]
+    fn host_token_store_tracks_target_family() {
+        let expected = if cfg!(unix) {
+            TokenStore::OwnerOnlyFile
+        } else {
+            TokenStore::Unsupported
+        };
+        assert_eq!(HOST_TOKEN_STORE, expected);
+    }
 
     #[test]
     fn url_encode_passes_unreserved_chars_through() {
