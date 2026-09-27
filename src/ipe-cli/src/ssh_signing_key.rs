@@ -10,7 +10,8 @@
 //! Setup is interactive and opt-in only. It generates a dedicated ed25519 key in
 //! process (no `ssh-keygen` subprocess), stages both halves in the config dir
 //! under fresh names (the private half created `0600`, exclusively, never through
-//! a symlink), registers the public half through `POST /user/ssh_signing_keys`
+//! a symlink) and proves the dir supports the hard links the final step makes,
+//! registers the public half through `POST /user/ssh_signing_keys`
 //! with a separate one-shot `write:ssh_signing_key` authorization, and only then
 //! links the staged files into their final names. Any failure before that commit
 //! point removes the staged files, so a key the account does not know is never
@@ -49,6 +50,8 @@ const KEY_TITLE: &str = "ipe package publish";
 const SIGNING_KEYS_API: &str = "https://api.github.com/user/ssh_signing_keys";
 /// Where the user reviews or deletes registered keys.
 const SIGNING_KEYS_SETTINGS: &str = "https://github.com/settings/keys";
+/// Where the user reviews or revokes the OAuth grants `ipe login` obtained.
+const AUTHORIZED_APPS_SETTINGS: &str = "https://github.com/settings/applications";
 
 /// Upper bound on the length of a GitHub error message echoed to the terminal.
 const MAX_ECHOED_MESSAGE_CHARS: usize = 200;
@@ -348,6 +351,11 @@ enum SetupError {
     NoConfigDir,
     /// Something already occupies a key file name.
     Occupied(PathBuf),
+    /// The config dir cannot hold hard links, which storing the key relies on.
+    LinkUnsupported {
+        dir: PathBuf,
+        source: std::io::Error,
+    },
     /// The OS CSPRNG failed.
     KeyGeneration,
     /// A filesystem step before registration failed.
@@ -376,6 +384,13 @@ impl fmt::Display for SetupError {
                 "{} already exists but is not a usable signing key — move it aside and run \
                  `ipe login --signing-key` again",
                 path.display()
+            ),
+            Self::LinkUnsupported { dir, source } => write!(
+                f,
+                "{} does not support hard links ({source}), which ipe needs to store the key \
+                 without overwriting anything — no signing key was registered; set \
+                 {SIGNING_KEY_ENV} to a signing key you registered yourself instead",
+                dir.display()
             ),
             Self::KeyGeneration => f.write_str(
                 "the OS random-number generator failed, so no signing key was generated",
@@ -440,6 +455,10 @@ struct StagedKeyPair {
 impl StagedKeyPair {
     /// Write `pair` beside `files` under unique temporary names: the private
     /// half exclusively created with mode `0600`, the public half `0644`.
+    ///
+    /// Also proves the directory supports the hard links [`Self::commit`] makes,
+    /// so a filesystem without them fails here — before anything is registered
+    /// on GitHub — rather than after, which would orphan a registered key.
     fn write(files: &KeyFiles, pair: &GeneratedKeyPair) -> Result<Self, SetupError> {
         let mut suffix = [0u8; 8];
         getrandom::fill(&mut suffix).map_err(|_| SetupError::KeyGeneration)?;
@@ -453,6 +472,10 @@ impl StagedKeyPair {
             &staged.public_tmp,
             0o644,
             format!("{}\n", pair.public.as_str()).as_bytes(),
+        )?;
+        probe_hard_link(
+            &staged.public_tmp,
+            &staged.public_tmp.with_extension("probe"),
         )?;
         Ok(staged)
     }
@@ -484,6 +507,18 @@ impl Drop for StagedKeyPair {
         let _ = std::fs::remove_file(&self.private_tmp);
         let _ = std::fs::remove_file(&self.public_tmp);
     }
+}
+
+/// Hard-link `source` to the unused name `probe`, then remove `probe`.
+fn probe_hard_link(source: &Path, probe: &Path) -> Result<(), SetupError> {
+    std::fs::hard_link(source, probe).map_err(|source| SetupError::LinkUnsupported {
+        dir: probe.parent().unwrap_or(probe).to_path_buf(),
+        source,
+    })?;
+    std::fs::remove_file(probe).map_err(|source| SetupError::Io {
+        path: probe.to_path_buf(),
+        source,
+    })
 }
 
 /// `.<name>.<suffix>.tmp` beside `path`.
@@ -522,6 +557,8 @@ fn exclusive_create(path: &Path, mode: u32) -> std::io::Result<File> {
         .open(path)
 }
 
+/// Create `path` exclusively; `mode` is ignored, since this platform has no Unix
+/// permission bits — the file inherits the directory's default access control.
 #[cfg(not(unix))]
 fn exclusive_create(path: &Path, _mode: u32) -> std::io::Result<File> {
     OpenOptions::new().write(true).create_new(true).open(path)
@@ -553,7 +590,10 @@ fn consent_question(files: &KeyFiles) -> String {
          \x20 {}\n\
          and register its public half as a signing key on your account. That needs a\n\
          second, one-time GitHub authorization with the `write:ssh_signing_key` scope;\n\
-         its token is used for this single request and never stored.\n\
+         its token is used for this single request and never stored. Revoke it any\n\
+         time under Authorized OAuth Apps at\n\
+         \x20 {AUTHORIZED_APPS_SETTINGS}\n\
+         (revoking ipe there also revokes the stored `ipe login` token).\n\
          \n\
          Generate and register a signing key now?",
         files.private.display()
@@ -786,6 +826,8 @@ mod tests {
 
     struct FakeRegistrar {
         refuse: bool,
+        /// A final key-file name another writer claims while registration runs.
+        plant_on_register: Option<&'static str>,
         calls: usize,
         seen_key: Option<String>,
         staged_private_mode: Option<u32>,
@@ -796,6 +838,7 @@ mod tests {
         fn new(dir: &Path, refuse: bool) -> Self {
             Self {
                 refuse,
+                plant_on_register: None,
                 calls: 0,
                 seen_key: None,
                 staged_private_mode: None,
@@ -812,6 +855,9 @@ mod tests {
         ) -> Result<(), RegistrationError> {
             self.calls += 1;
             self.seen_key = Some(public_key.as_str().to_owned());
+            if let Some(name) = self.plant_on_register {
+                std::fs::write(self.dir.join(name), b"planted").expect("plant");
+            }
             // Observe the staged private key's mode at the moment of registration.
             #[cfg(unix)]
             {
@@ -1017,6 +1063,119 @@ mod tests {
         );
         assert_eq!(std::fs::read(&target).expect("read"), b"not ours");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A final name claimed between staging and commit fails the commit without
+    /// overwriting the claimant and without leaving any half of our key behind.
+    fn assert_commit_refused_when_planted(tag: &str, planted: &'static str) {
+        let dir = test_dir(tag);
+        let mut consent = Answer {
+            yes: true,
+            asked: 0,
+        };
+        let mut registrar = FakeRegistrar::new(&dir, false);
+        registrar.plant_on_register = Some(planted);
+        let result = set_up(None, Some(dir.as_path()), &mut consent, &mut registrar);
+        assert_eq!(registrar.calls, 1);
+        assert!(
+            matches!(&result, Err(SetupError::Commit { path, .. }) if *path == dir.join(planted)),
+            "expected a commit refusal naming {planted}, got {result:?}"
+        );
+        assert_eq!(
+            dir_entries(&dir),
+            vec![planted.to_owned()],
+            "only the planted file remains: no staged, probe, or final file of ours"
+        );
+        assert_eq!(
+            std::fs::read(dir.join(planted)).expect("read planted"),
+            b"planted",
+            "the planted file is never overwritten"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_private_key_name_claimed_before_commit_leaves_none_of_our_files() {
+        assert_commit_refused_when_planted("commit-private", PRIVATE_KEY_FILE);
+    }
+
+    #[test]
+    fn a_public_key_name_claimed_before_commit_leaves_none_of_our_files() {
+        assert_commit_refused_when_planted("commit-public", PUBLIC_KEY_FILE);
+    }
+
+    #[test]
+    fn a_lone_public_key_file_is_refused_before_registering() {
+        let dir = test_dir("lone-pub");
+        std::fs::write(dir.join(PUBLIC_KEY_FILE), b"someone else's").expect("plant pub");
+        let mut consent = Answer {
+            yes: true,
+            asked: 0,
+        };
+        let mut registrar = FakeRegistrar::new(&dir, false);
+        let result = set_up(None, Some(dir.as_path()), &mut consent, &mut registrar);
+        assert!(
+            matches!(&result, Err(SetupError::Occupied(path)) if *path == dir.join(PUBLIC_KEY_FILE)),
+            "expected Occupied(signing_key.pub), got {result:?}"
+        );
+        assert_eq!(consent.asked, 0);
+        assert_eq!(registrar.calls, 0);
+        assert_eq!(dir_entries(&dir), vec![PUBLIC_KEY_FILE.to_owned()]);
+        assert_eq!(
+            std::fs::read(dir.join(PUBLIC_KEY_FILE)).expect("read"),
+            b"someone else's"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn no_config_dir_is_refused_before_asking() {
+        let dir = test_dir("no-config-dir");
+        let mut consent = Answer {
+            yes: true,
+            asked: 0,
+        };
+        let mut registrar = FakeRegistrar::new(&dir, false);
+        let result = set_up(None, None, &mut consent, &mut registrar);
+        assert!(
+            matches!(result, Err(SetupError::NoConfigDir)),
+            "expected NoConfigDir, got {result:?}"
+        );
+        assert_eq!(consent.asked, 0);
+        assert_eq!(registrar.calls, 0);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_failed_hard_link_probe_is_link_unsupported_and_touches_nothing() {
+        let dir = test_dir("probe");
+        let source = dir.join("source");
+        std::fs::write(&source, b"source").expect("plant source");
+        let occupied = dir.join("occupied");
+        std::fs::write(&occupied, b"occupied").expect("plant occupied");
+        let result = probe_hard_link(&source, &occupied);
+        assert!(
+            matches!(&result, Err(SetupError::LinkUnsupported { dir: d, .. }) if *d == dir),
+            "expected LinkUnsupported, got {result:?}"
+        );
+        assert_eq!(std::fs::read(&occupied).expect("read"), b"occupied");
+
+        let probe = dir.join("probe");
+        probe_hard_link(&source, &probe).expect("links on a hard-link filesystem");
+        assert_eq!(
+            dir_entries(&dir),
+            vec!["occupied".to_owned(), "source".to_owned()],
+            "a successful probe leaves no probe file"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_consent_question_names_where_to_revoke_the_grant() {
+        let files = KeyFiles::in_dir(Path::new("/cfg/ipe"));
+        let question = consent_question(&files);
+        assert!(question.contains("write:ssh_signing_key"));
+        assert!(question.contains(AUTHORIZED_APPS_SETTINGS));
     }
 
     #[test]

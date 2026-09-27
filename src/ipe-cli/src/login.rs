@@ -151,13 +151,14 @@ impl PublishToken {
 ///
 /// A distinct type from [`PublishToken`]: it has no `Clone`, and nothing that
 /// persists or reuses a publish token accepts it, so the wider-scoped grant can
-/// never be written to disk or reach the publish path.
-pub(crate) struct KeyRegistrationToken(String);
+/// never be written to disk or reach the publish path. Its bytes are wiped from
+/// memory on drop.
+pub(crate) struct KeyRegistrationToken(zeroize::Zeroizing<String>);
 
 impl KeyRegistrationToken {
     /// Parse a raw token under the same alphabet rule as [`PublishToken`].
     pub(crate) fn parse(raw: &str) -> Option<Self> {
-        token_alphabet(raw).map(|t| Self(t.to_owned()))
+        token_alphabet(raw).map(|t| Self(zeroize::Zeroizing::new(t.to_owned())))
     }
 
     /// The token bytes, for the `Authorization` header only.
@@ -646,6 +647,15 @@ fn login_error(message: &str) -> CliError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn each_grant_requests_exactly_its_one_scope() {
+        assert_eq!(GrantScope::Publish.as_str(), "public_repo");
+        assert_eq!(
+            GrantScope::RegisterSigningKey.as_str(),
+            "write:ssh_signing_key"
+        );
+    }
 
     #[test]
     fn url_encode_passes_unreserved_chars_through() {

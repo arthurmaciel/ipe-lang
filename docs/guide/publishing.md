@@ -58,7 +58,9 @@ a real, verified GitHub identity. Two one-time steps, none repeated per release:
    - it registers the public half as a signing key through a **second, one-time**
      device-flow authorization with the `write:ssh_signing_key` scope. That token
      is used for this single request and never stored (the login token `ipe`
-     stores is always requested with `public_repo` alone);
+     stores is always requested with `public_repo` alone). Revoke the grant
+     under *Authorized OAuth Apps* at <https://github.com/settings/applications>
+     — that revokes the stored login token too;
    - if registration fails, the local key is removed — nothing half-configured
      is left behind.
 
