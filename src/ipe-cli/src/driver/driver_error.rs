@@ -334,6 +334,14 @@ pub enum CliError {
     /// A symlink, a directory holding user files, or a path overlapping the
     /// project's sources. Nothing was written, cleaned, or overwritten.
     OutputRefused(output_dir::OutputRefusal),
+    /// An FFI artifact cache failed its ownership check and was not loaded.
+    ///
+    /// Its `_bindings.rs` would compile unsandboxed into the crate, so a
+    /// cache not owned by the invoking uid (or other-writable) is refused.
+    FfiCacheUntrusted {
+        /// The refused cache directory.
+        path: PathBuf,
+    },
     /// The module-discovery walk hit its depth ceiling or detected a symlink
     /// cycle. Carries the maximum depth that was configured and, for a cycle,
     /// the directory path where the cycle was detected.
@@ -526,6 +534,7 @@ impl CliError {
             Self::PathEscape { .. } => "path-escape",
             Self::OutputRefused(_) => "output-refused",
             Self::DiscoveryLimitReached { .. } => "discovery-limit-reached",
+            Self::FfiCacheUntrusted { .. } => "ffi-cache-untrusted",
             Self::UpgradeFeedUnreachable => "upgrade-feed-unreachable",
             Self::UpgradeCheckExit { .. } => "upgrade-check-exit",
             Self::AdvisoryVulnerable(_) => "advisory-vulnerable",
@@ -595,6 +604,7 @@ impl CliError {
             | Self::PathEscape { .. }
             | Self::OutputRefused(_)
             | Self::DiscoveryLimitReached { .. }
+            | Self::FfiCacheUntrusted { .. }
             | Self::UpgradeFeedUnreachable
             | Self::UpgradeCheckExit { .. }
             | Self::AdvisoryVulnerable(_)
@@ -816,6 +826,9 @@ impl std::fmt::Display for CliError {
             Self::OutputRefused(refusal) => f.write_str(&text::cli_output_refused(refusal)),
             Self::DiscoveryLimitReached { detail } => {
                 f.write_str(&text::cli_discovery_limit_reached(detail))
+            }
+            Self::FfiCacheUntrusted { path } => {
+                f.write_str(&text::ffi_cache_untrusted(&path.display()))
             }
             Self::AdvisoryVulnerable(p) => {
                 let fixed_in = p

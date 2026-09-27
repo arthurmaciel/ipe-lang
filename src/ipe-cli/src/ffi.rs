@@ -70,7 +70,7 @@ fn is_trusted_cache_dir(_dir: &Path) -> bool {
 ///
 /// # Errors
 ///
-/// [`CliError::UsageOwned`] when the cache fails the ownership check.
+/// [`CliError::FfiCacheUntrusted`] when the cache fails the ownership check.
 pub fn find_cache_root(scope: &ProjectRoot) -> Result<Option<PathBuf>, CliError> {
     let candidate = scope.dir().join(CACHE_REL);
     if !candidate.is_dir() {
@@ -79,9 +79,7 @@ pub fn find_cache_root(scope: &ProjectRoot) -> Result<Option<PathBuf>, CliError>
     if is_trusted_cache_dir(&candidate) {
         return Ok(Some(candidate));
     }
-    Err(CliError::UsageOwned(text::ffi_cache_untrusted(
-        &candidate.display(),
-    )))
+    Err(CliError::FfiCacheUntrusted { path: candidate })
 }
 
 /// The FFI cache for a build rooted at (or blamed on) `blame_path`, scoped by its [`ProjectRoot`].
@@ -93,8 +91,8 @@ fn cache_root_for(blame_path: &Path) -> Result<Option<PathBuf>, CliError> {
 /// `blame_path`. Absent cache ⇒ empty catalog.
 ///
 /// # Errors
-/// [`CliError::UsageOwned`] when the cache is untrusted or its catalog
-/// loader refuses it (a tampered or half-written cache is refused, never
+/// [`CliError::FfiCacheUntrusted`] when the cache is untrusted;
+/// [`CliError::UsageOwned`] when its catalog loader refuses it (a tampered or half-written cache is refused, never
 /// silently skipped).
 pub fn load_catalog_for(blame_path: &Path) -> Result<Vec<InstalledCrate>, CliError> {
     load_catalog_at(cache_root_for(blame_path)?.as_deref())
@@ -3939,7 +3937,10 @@ version = \"1\"
         // `_bindings.rs`: discovery refuses it.
         std::fs::set_permissions(&cache, std::fs::Permissions::from_mode(0o777)).expect("chmod");
         let r = find_cache_root(&ProjectRoot::Package(tmp.clone()));
-        assert!(matches!(r, Err(CliError::UsageOwned(_))), "{r:?}");
+        assert!(
+            matches!(&r, Err(CliError::FfiCacheUntrusted { path }) if *path == cache),
+            "{r:?}"
+        );
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
@@ -3952,7 +3953,10 @@ version = \"1\"
         std::fs::create_dir_all(&cache).expect("mk cache");
         std::fs::set_permissions(&cache, std::fs::Permissions::from_mode(0o777)).expect("chmod");
         let r = find_cache_root(&ProjectRoot::LooseFile(tmp.join("Main.ipe")));
-        assert!(matches!(r, Err(CliError::UsageOwned(_))), "{r:?}");
+        assert!(
+            matches!(&r, Err(CliError::FfiCacheUntrusted { path }) if *path == cache),
+            "{r:?}"
+        );
         let _ = std::fs::remove_dir_all(&tmp);
     }
 

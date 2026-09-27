@@ -20,7 +20,7 @@ use lsp_types::{InitializeParams, PublishDiagnosticsParams, TextDocumentContentC
 use ipe_lsp_features::{PositionEncoding, diagnostics, offset};
 
 use crate::ServerError;
-use crate::loader::{LoadedFile, LoadedProject, ModuleOrigin, ProjectLoader};
+use crate::loader::{LoadDisposition, LoadedFile, LoadedProject, ModuleOrigin, ProjectLoader};
 
 /// The typed outcome of an LSP feature request. `null` is reserved for
 /// `NoResult`; a params-decode failure and an internal encoding bug are
@@ -809,8 +809,16 @@ fn ensure_project_fresh(state: &mut State, loader: &dyn ProjectLoader, path: &Pa
             adopt(state, project);
             state.fallback = false;
         }
+        Err(err) if err.disposition() == LoadDisposition::Refuse => {
+            // Refused, not degraded: no fallback layout is served and edits
+            // do not retry (they cannot lift a ceiling or restore trust).
+            // A previously-good layout stays; save and watched-file events
+            // still retry.
+            eprintln!("[ipe lsp] project load refused: {err}");
+            state.fallback = false;
+        }
         Err(err) => {
-            eprintln!("[ipe lsp] project load failed: {}", err.detail);
+            eprintln!("[ipe lsp] project load failed: {err}");
             if state.disk.is_empty() {
                 // Never successfully loaded: degrade to a single-file layout
                 // so parse diagnostics still flow for the open buffer;
@@ -1431,7 +1439,7 @@ mod tests {
         PublishDiagnosticsParams, State, Url, adopt, ensure_project_fresh, normalize, publish,
         recompute, sync_inputs,
     };
-    use crate::loader::LoadError;
+    use crate::loader::{LoadDisposition, LoadError};
     use lsp_types::notification::Notification as _;
 
     const MAIN_TEXT: &str = "module Main exposing (main)\n\nimport Ipe.Io as Io\n\nmain : Task Error ()\nmain =\n    Io.println \"ok\"\n";
@@ -1454,9 +1462,7 @@ mod tests {
             open_text: Option<&str>,
         ) -> Result<LoadedProject, LoadError> {
             if self.fail_next.swap(false, Ordering::SeqCst) {
-                return Err(LoadError {
-                    detail: "simulated transient failure".to_owned(),
-                });
+                return Err(LoadError::Io("simulated transient failure".to_owned()));
             }
             let mut files = BTreeMap::new();
             files.insert(
@@ -1499,6 +1505,75 @@ mod tests {
     /// A load failure on an already-well-formed project (CO-INCR-007) must
     /// not clear `Lib`'s real diagnostics: the prior layout is kept and
     /// retried later, not replaced by the single-file fallback.
+    #[test]
+    fn load_error_disposition_splits_degrade_from_refuse() {
+        let detail = || "detail".to_owned();
+        assert_eq!(
+            LoadError::Pipeline(detail()).disposition(),
+            LoadDisposition::Degrade
+        );
+        assert_eq!(
+            LoadError::Io(detail()).disposition(),
+            LoadDisposition::Degrade
+        );
+        assert_eq!(
+            LoadError::Limit(detail()).disposition(),
+            LoadDisposition::Refuse
+        );
+        assert_eq!(
+            LoadError::FfiUntrusted(detail()).disposition(),
+            LoadDisposition::Refuse
+        );
+        assert_eq!(LoadError::FfiUntrusted(detail()).to_string(), "detail");
+    }
+
+    /// A loader whose every `load` fails with one fixed error.
+    struct FailingLoader(LoadError);
+
+    impl ProjectLoader for FailingLoader {
+        fn load(
+            &self,
+            _workspace_root: Option<&Path>,
+            _open_file: &Path,
+            _open_text: Option<&str>,
+        ) -> Result<LoadedProject, LoadError> {
+            Err(self.0.clone())
+        }
+    }
+
+    #[test]
+    fn a_refused_load_serves_no_fallback_and_arms_no_keystroke_retry() {
+        let main_path = normalize(Path::new("/lsp-refuse-test/Main.ipe"));
+        for refusal in [
+            LoadError::Limit("ceiling".to_owned()),
+            LoadError::FfiUntrusted("untrusted".to_owned()),
+        ] {
+            let mut state = State::new(None, PositionEncoding::Utf16);
+            state
+                .overlays
+                .insert(main_path.clone(), MAIN_TEXT.to_owned());
+            ensure_project_fresh(&mut state, &FailingLoader(refusal), &main_path);
+            assert!(!state.fallback, "a refusal must not arm the per-edit retry");
+            assert!(state.disk.is_empty(), "a refusal must adopt no layout");
+        }
+    }
+
+    #[test]
+    fn a_degraded_load_serves_the_single_file_fallback() {
+        let main_path = normalize(Path::new("/lsp-degrade-test/Main.ipe"));
+        let mut state = State::new(None, PositionEncoding::Utf16);
+        state
+            .overlays
+            .insert(main_path.clone(), MAIN_TEXT.to_owned());
+        let loader = FailingLoader(LoadError::Pipeline("bad header".to_owned()));
+        ensure_project_fresh(&mut state, &loader, &main_path);
+        assert!(state.fallback, "a degrade must arm the per-edit retry");
+        assert!(
+            !state.disk.is_empty(),
+            "a degrade must adopt the open buffer"
+        );
+    }
+
     #[test]
     fn transient_load_failure_keeps_prior_layout_diagnostics() {
         let main_path = normalize(Path::new("/lsp-278-test/Main.ipe"));

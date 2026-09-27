@@ -56,10 +56,19 @@ fn resolve_user_sources(
     }
 }
 
-/// Render a driver failure as the server's load error.
+/// Type a driver failure as the server's load error, keeping its rendered text.
+///
+/// A ceiling or an untrusted FFI cache is refused; every other failure is one
+/// the server degrades around.
 fn load_error(err: &CliError) -> LoadError {
-    LoadError {
-        detail: err.to_string(),
+    let detail = err.to_string();
+    match err {
+        CliError::Io { .. } => LoadError::Io(detail),
+        CliError::FileTooLarge { .. } | CliError::DiscoveryLimitReached { .. } => {
+            LoadError::Limit(detail)
+        }
+        CliError::FfiCacheUntrusted { .. } => LoadError::FfiUntrusted(detail),
+        _ => LoadError::Pipeline(detail),
     }
 }
 
