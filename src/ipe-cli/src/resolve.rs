@@ -22,12 +22,12 @@ use std::process::Command;
 
 use ipe_ir::Capability;
 
-use crate::index::{self, CommitId, EntryVersion, PinnedRev, SourceUrl};
-use crate::lockfile::{DepKind, LockedDep, LockedRev, Lockfile};
+use crate::CliError;
+use crate::index::{self, CommitId, EntryVersion, PinnedRev, Sha256Hex, SourceUrl};
+use crate::lockfile::{LocalSource, LockedDep, LockedOrigin, Lockfile};
 use crate::package_name::PackageName;
 use crate::project::IpeDep;
 use crate::published_version::PublishedVersion;
-use crate::{CliError, cache};
 
 /// The environment variable overriding the index checkout root; tests point it
 /// at a fixture index. Absent, the standard location ([`default_index_root`]) is
@@ -90,7 +90,7 @@ pub fn resolve_and_add(
         name,
         &policy,
         version.signature.as_ref(),
-        &version.sha256,
+        version.sha256.as_str(),
         &checkout,
         verifier.as_ref(),
     )? {
@@ -112,12 +112,13 @@ pub fn resolve_and_add(
     verify_hash(name, &checkout, &version.sha256)?;
 
     let locked = LockedDep {
-        name: name.to_owned(),
+        name: package_name,
         version: version.version.clone(),
-        source: version.source.to_string(),
-        rev: LockedRev::Pinned(version.rev.clone()),
+        origin: LockedOrigin::Index {
+            source: version.source.clone(),
+            rev: version.rev.clone(),
+        },
         sha256: version.sha256.clone(),
-        kind: DepKind::Index,
     };
     write_records(project_root, name, &locked, req)?;
 
@@ -141,7 +142,7 @@ pub fn resolve_escape(project_root: &Path, name: &str, dep: &IpeDep) -> Result<(
     // Parse-don't-validate: gate the name into a safe path component here, at the
     // boundary, before it reaches any cache-directory join.
     let package_name = PackageName::parse(name)?;
-    let (source, locked_rev, checkout) = match dep {
+    let (origin, checkout) = match dep {
         IpeDep::Git { url, rev } => {
             // Parse-don't-validate: convert the raw manifest strings to typed
             // newtypes at this escape-path boundary before they reach the git
@@ -171,7 +172,13 @@ pub fn resolve_escape(project_root: &Path, name: &str, dep: &IpeDep) -> Result<(
                     source: e,
                 })?;
             }
-            (url.clone(), LockedRev::Pinned(pinned), final_dest)
+            (
+                LockedOrigin::Git {
+                    source: typed_url,
+                    rev: pinned,
+                },
+                final_dest,
+            )
         }
         IpeDep::Path(path) => {
             let resolved = if path.is_absolute() {
@@ -185,7 +192,8 @@ pub fn resolve_escape(project_root: &Path, name: &str, dep: &IpeDep) -> Result<(
                     resolved.display()
                 )));
             }
-            (path.display().to_string(), LockedRev::Local, resolved)
+            let source = LocalSource::from_path(&package_name, path)?;
+            (LockedOrigin::Path { source }, resolved)
         }
         IpeDep::Index(_) => {
             return Err(CliError::Resolve(format!(
@@ -200,12 +208,10 @@ pub fn resolve_escape(project_root: &Path, name: &str, dep: &IpeDep) -> Result<(
     // not the index" without inventing a version the source does not claim.
     let version = PublishedVersion::new(0, 0, 0);
     let locked = LockedDep {
-        name: name.to_owned(),
+        name: package_name,
         version,
-        source,
-        rev: locked_rev,
+        origin,
         sha256,
-        kind: DepKind::Escape,
     };
     let mut lock = Lockfile::read(project_root)?;
     lock.upsert(locked);
@@ -297,7 +303,7 @@ fn index_root_from(index_dir: Option<std::ffi::OsString>) -> Result<PathBuf, Cli
 ///
 /// # Errors
 /// [`CliError::Io`] if the tree cannot be walked or a file cannot be read.
-pub fn hash_source_tree(root: &Path) -> Result<String, CliError> {
+pub fn hash_source_tree(root: &Path) -> Result<Sha256Hex, CliError> {
     hash_checkout(root)
 }
 
@@ -343,13 +349,13 @@ pub fn fetch_and_verify_index_version(
 pub fn verify_lockfile_hashes(project_root: &Path) -> Result<(), CliError> {
     let lockfile = Lockfile::read(project_root)?;
     for dep in lockfile.packages() {
-        let cache_dir = dep_cache_dir(project_root, dep)?;
+        let cache_dir = dep_cache_dir(project_root, dep);
         if !cache_dir.is_dir() {
             // Not cached locally — nothing to re-verify here; a build re-fetches
             // and re-verifies against this same pin.
             continue;
         }
-        verify_hash(&dep.name, &cache_dir, &dep.sha256)?;
+        verify_hash(dep.name.as_str(), &cache_dir, &dep.sha256)?;
     }
     Ok(())
 }
@@ -403,26 +409,20 @@ fn escape_cache_dir(project_root: &Path, name: &PackageName, pinned: &PinnedRev)
     package_cache_dir(project_root, name, pinned.as_str())
 }
 
-/// The cache directory for a locked dep: git-escape deps key by their pinned
-/// SHA, path-escape deps key by their sha256 (no git rev), and index deps key
-/// by their version.
+/// The cache directory for a locked dep.
 ///
-/// Both [`resolve_escape`]'s fetch path and [`verify_lockfile_hashes`]'s
-/// verify path route through this function so the two dirs are provably equal.
-/// The [`DepKind`] tag is the sole authority — field shapes are never re-derived.
-///
-/// # Errors
-/// [`CliError::Resolve`] when the locked dep's name is not a valid package name
-/// (a lockfile carrying a traversing name is refused rather than joined).
-fn dep_cache_dir(project_root: &Path, dep: &LockedDep) -> Result<PathBuf, CliError> {
-    let name = PackageName::parse(&dep.name)?;
-    Ok(match dep.kind {
-        DepKind::Escape => match &dep.rev {
-            LockedRev::Pinned(sha) => package_cache_dir(project_root, &name, sha.as_str()),
-            LockedRev::Local => package_cache_dir(project_root, &name, &dep.version.to_string()),
-        },
-        DepKind::Index => package_cache_dir(project_root, &name, &dep.version.to_string()),
-    })
+/// A git escape keys by its pinned SHA ([`escape_cache_dir`], the key its fetch
+/// used); a path escape and an index dep key by their version. The
+/// [`LockedOrigin`] is the sole authority — field shapes are never re-derived —
+/// and the name is a [`PackageName`] parsed at [`Lockfile::read`], so a
+/// traversing name never reaches this join.
+fn dep_cache_dir(project_root: &Path, dep: &LockedDep) -> PathBuf {
+    match &dep.origin {
+        LockedOrigin::Git { rev, .. } => escape_cache_dir(project_root, &dep.name, rev),
+        LockedOrigin::Index { .. } | LockedOrigin::Path { .. } => {
+            package_cache_dir(project_root, &dep.name, &dep.version.to_string())
+        }
+    }
 }
 
 /// Fetch an index version's source at its pinned revision into the package
@@ -573,22 +573,22 @@ fn run_git(name: &str, args: &[&str], dest: &Path, cwd: Option<&Path>) -> Result
 }
 
 /// Hash the fetched source tree, mapping a walk/read failure to an IO error.
-fn hash_checkout(checkout: &Path) -> Result<String, CliError> {
-    cache::hash_tree(checkout).map_err(|(path, source)| CliError::Io { path, source })
+fn hash_checkout(checkout: &Path) -> Result<Sha256Hex, CliError> {
+    Sha256Hex::of_tree(checkout).map_err(|(path, source)| CliError::Io { path, source })
 }
 
 /// Verify the fetched tree's content hash equals the index-pinned hash. This is
 /// the verify-before-trust boundary: a mismatch is a hard error, so nothing
 /// derived from an unverified fetch is ever written.
-fn verify_hash(name: &str, checkout: &Path, expected: &str) -> Result<(), CliError> {
+fn verify_hash(name: &str, checkout: &Path, expected: &Sha256Hex) -> Result<(), CliError> {
     let actual = hash_checkout(checkout)?;
-    if actual == expected {
+    if actual == *expected {
         Ok(())
     } else {
         Err(CliError::HashMismatch {
             package: name.to_owned(),
-            expected: expected.to_owned(),
-            actual,
+            expected: expected.to_string(),
+            actual: actual.to_string(),
         })
     }
 }
@@ -661,12 +661,12 @@ mod tests {
         added_report, cache_base_from, dep_cache_dir, escape_cache_dir, fetch_git_into,
         package_cache_dir, resolve_and_remove, resolve_escape, verify_hash, verify_lockfile_hashes,
     };
-    use crate::index::{CommitId, PinnedRev, SourceUrl};
-    use crate::lockfile::{DepKind, LockedDep, LockedRev, Lockfile};
+    use crate::CliError;
+    use crate::index::{CommitId, PinnedRev, Sha256Hex, SourceUrl};
+    use crate::lockfile::{LockedDep, LockedOrigin, Lockfile};
     use crate::package_name::PackageName;
     use crate::project::IpeDep;
     use crate::published_version::PublishedVersion;
-    use crate::{CliError, cache};
     use ipe_ir::Capability;
     use std::collections::BTreeSet;
     use std::ffi::OsString;
@@ -721,9 +721,10 @@ mod tests {
         // HashMismatch, never accepted.
         let dir = temp_dir("verify");
         std::fs::write(dir.join("a.txt"), "hello").expect("write");
-        let real = cache::hash_tree(&dir).expect("hash");
+        let real = Sha256Hex::of_tree(&dir).expect("hash");
         verify_hash("p", &dir, &real).expect("matching hash passes");
-        let err = verify_hash("p", &dir, "not-the-hash").unwrap_err();
+        let wrong = Sha256Hex::parse("p", &"0".repeat(64)).expect("valid digest");
+        let err = verify_hash("p", &dir, &wrong).unwrap_err();
         assert!(matches!(err, crate::CliError::HashMismatch { .. }));
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -739,9 +740,17 @@ mod tests {
         let entry = lock
             .packages()
             .iter()
-            .find(|p| p.name == "locallib")
+            .find(|p| p.name.as_str() == "locallib")
             .expect("locked");
-        assert!(!entry.sha256.is_empty(), "an escape still locks a hash");
+        assert!(
+            matches!(entry.origin, LockedOrigin::Path { .. }),
+            "a path escape locks a path origin"
+        );
+        assert_eq!(
+            entry.sha256,
+            Sha256Hex::of_tree(&src).expect("hash"),
+            "an escape still locks its tree hash"
+        );
         let _ = std::fs::remove_dir_all(&proj);
         let _ = std::fs::remove_dir_all(&src);
     }
@@ -760,10 +769,14 @@ mod tests {
         let entry = lock
             .packages()
             .iter()
-            .find(|p| p.name == "remotelib")
+            .find(|p| p.name.as_str() == "remotelib")
             .expect("remotelib must be locked");
         // The locked rev must be an immutable 40-hex SHA, not the string "HEAD".
-        let rev_str = entry.rev.as_str();
+        let rev_str = entry
+            .origin
+            .pinned_rev()
+            .map(PinnedRev::as_str)
+            .expect("a git escape pins a rev");
         assert_eq!(rev_str.len(), 40, "locked rev must be 40 chars");
         assert!(
             rev_str.chars().all(|c| c.is_ascii_hexdigit()),
@@ -816,10 +829,15 @@ mod tests {
         let entry1 = lock1
             .packages()
             .iter()
-            .find(|p| p.name == "pinned")
+            .find(|p| p.name.as_str() == "pinned")
             .expect("pinned locked")
             .clone();
-        let sha1 = entry1.rev.as_str().to_owned();
+        let sha1 = entry1
+            .origin
+            .pinned_rev()
+            .map(PinnedRev::as_str)
+            .expect("a git escape pins a rev")
+            .to_owned();
 
         // Add C2 on the same branch — moves HEAD forward.
         let git = |args: &[&str]| {
@@ -845,11 +863,15 @@ mod tests {
         let entry2 = lock2
             .packages()
             .iter()
-            .find(|p| p.name == "pinned")
+            .find(|p| p.name.as_str() == "pinned")
             .expect("pinned locked");
         // The second resolve also records the current HEAD (C2), so the SHA
         // changes — what matters is that it IS a concrete SHA both times.
-        let rev2_str = entry2.rev.as_str();
+        let rev2_str = entry2
+            .origin
+            .pinned_rev()
+            .map(PinnedRev::as_str)
+            .expect("a git escape pins a rev");
         assert_eq!(rev2_str.len(), 40, "second locked rev must be 40 hex chars");
         assert!(
             rev2_str.chars().all(|c| c.is_ascii_hexdigit()),
@@ -883,13 +905,21 @@ mod tests {
         let entry = lock
             .packages()
             .iter()
-            .find(|p| p.name == "escapedep")
+            .find(|p| p.name.as_str() == "escapedep")
             .expect("escapedep locked")
             .clone();
 
         // Tamper a file inside the cache dir.
         let escapedep = PackageName::parse("escapedep").expect("valid name");
-        let cache = package_cache_dir(&proj, &escapedep, entry.rev.as_str());
+        let cache = package_cache_dir(
+            &proj,
+            &escapedep,
+            entry
+                .origin
+                .pinned_rev()
+                .map(PinnedRev::as_str)
+                .expect("a git escape pins a rev"),
+        );
         assert!(cache.is_dir(), "cache dir must exist at the SHA key");
         std::fs::write(cache.join("TAMPERED"), "evil").expect("tamper");
 
@@ -913,29 +943,34 @@ mod tests {
         // An escape dep: version 0.0.0 + 40-hex rev.
         let sha = "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2";
         let pinned_sha = PinnedRev::from_full_sha("myescape", sha).expect("valid sha");
+        let digest = Sha256Hex::parse("p", &"0".repeat(64)).expect("valid digest");
         let escape_dep = LockedDep {
-            name: "myescape".to_owned(),
+            name: PackageName::parse("myescape").expect("valid name"),
             version: PublishedVersion::new(0, 0, 0),
-            source: "https://example.invalid/myescape".to_owned(),
-            rev: LockedRev::Pinned(pinned_sha.clone()),
-            sha256: "00".to_owned(),
-            kind: DepKind::Escape,
+            origin: LockedOrigin::Git {
+                source: SourceUrl::parse("myescape", "https://example.invalid/myescape")
+                    .expect("valid url"),
+                rev: pinned_sha.clone(),
+            },
+            sha256: digest.clone(),
         };
 
         // An index dep: real version + any rev.
         let index_dep = LockedDep {
-            name: "mypkg".to_owned(),
+            name: PackageName::parse("mypkg").expect("valid name"),
             version: PublishedVersion::parse("1.2.0").expect("valid"),
-            source: "https://example.invalid/mypkg".to_owned(),
-            rev: LockedRev::Pinned(PinnedRev::from_full_sha("mypkg", sha).expect("valid sha")),
-            sha256: "00".to_owned(),
-            kind: DepKind::Index,
+            origin: LockedOrigin::Index {
+                source: SourceUrl::parse("mypkg", "https://example.invalid/mypkg")
+                    .expect("valid url"),
+                rev: PinnedRev::from_full_sha("mypkg", sha).expect("valid sha"),
+            },
+            sha256: digest,
         };
 
         // Escape: dep_cache_dir must equal escape_cache_dir (keyed by SHA).
         let myescape = PackageName::parse("myescape").expect("valid name");
         let via_escape = escape_cache_dir(&proj, &myescape, &pinned_sha);
-        let via_dep = dep_cache_dir(&proj, &escape_dep).expect("valid dep name");
+        let via_dep = dep_cache_dir(&proj, &escape_dep);
         assert_eq!(
             via_escape, via_dep,
             "fetch and verify must key escape by the same path"
@@ -944,35 +979,13 @@ mod tests {
         // Index dep: dep_cache_dir must key by version, not rev.
         let mypkg = PackageName::parse("mypkg").expect("valid name");
         let via_version = package_cache_dir(&proj, &mypkg, "1.2.0");
-        let via_index = dep_cache_dir(&proj, &index_dep).expect("valid dep name");
+        let via_index = dep_cache_dir(&proj, &index_dep);
         assert_eq!(via_version, via_index, "index dep must be keyed by version");
         assert_ne!(
             via_escape, via_index,
             "escape and index deps must not share a cache dir"
         );
 
-        let _ = std::fs::remove_dir_all(&proj);
-    }
-
-    /// A lockfile carrying a traversing dep name must be refused by
-    /// `dep_cache_dir` — the name is never joined into a cache path that could
-    /// reroot outside the project. The refusal is a typed error, not a path.
-    #[test]
-    fn dep_cache_dir_rejects_traversal_name() {
-        let proj = temp_dir("dep-cache-traversal");
-        let sha = "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2";
-        for hostile in ["..", "../../evil", "/abs", "a/b"] {
-            let dep = LockedDep {
-                name: hostile.to_owned(),
-                version: PublishedVersion::new(0, 0, 0),
-                source: "https://example.invalid/x".to_owned(),
-                rev: LockedRev::Pinned(PinnedRev::from_full_sha("x", sha).expect("valid sha")),
-                sha256: "00".to_owned(),
-                kind: DepKind::Escape,
-            };
-            dep_cache_dir(&proj, &dep)
-                .expect_err(&format!("hostile dep name {hostile:?} must be refused"));
-        }
         let _ = std::fs::remove_dir_all(&proj);
     }
 

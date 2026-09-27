@@ -1396,7 +1396,11 @@ mod tests {
                 "9f2c7b1e0a4d5c6f8b2a1e3d4c5b6a7f8e9d0c1b",
             )
             .expect("valid pinned rev"),
-            sha256: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855".to_owned(),
+            sha256: crate::index::Sha256Hex::parse(
+                "http-extras",
+                "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            )
+            .expect("valid digest"),
             capabilities: caps_set,
             signature: None,
         }
@@ -1477,9 +1481,9 @@ mod tests {
     #[test]
     fn publish_dsse_statement_binds_the_pinned_sha256() {
         let version = sample_version("1.2.0", caps(&[Capability::Network]));
-        let stmt = crate::signing::dsse_statement("http-extras", "1.2.0", &version.sha256);
+        let stmt = crate::signing::dsse_statement("http-extras", "1.2.0", version.sha256.as_str());
         assert!(stmt.contains("http-extras@1.2.0"), "{stmt}");
-        assert!(stmt.contains(&version.sha256), "{stmt}");
+        assert!(stmt.contains(version.sha256.as_str()), "{stmt}");
     }
 
     /// Every capability wire name survives the render → read round-trip.

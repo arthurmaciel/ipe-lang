@@ -35,7 +35,9 @@ use crate::signing::SignatureBundle;
 /// `file://`) and bare absolute paths (a leading `/`). Any value that begins
 /// with `-` (option injection) or contains `::` (git transport helpers such as
 /// `ext::` or `fd::`, the real RCE vector) is rejected at parse time so a
-/// malicious index entry can never reach the `git` subprocess.
+/// malicious index entry can never reach the `git` subprocess. A control
+/// character or `"` is rejected too, so a URL can never break out of the quoted,
+/// line-oriented files (`ipe.lock`, index entries) it is recorded in.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SourceUrl(String);
 
@@ -44,8 +46,9 @@ impl SourceUrl {
     /// injection-shaped values.
     ///
     /// Accepted: `https://`, `git://`, `ssh://`, `file://`, and bare absolute
-    /// paths (starting with `/`). Rejected: a leading `-` (git flag injection)
-    /// or `::` anywhere (transport-helper execution, the RCE vector).
+    /// paths (starting with `/`). Rejected: a leading `-` (git flag injection),
+    /// `::` anywhere (transport-helper execution, the RCE vector), and any
+    /// control character or `"` (a field break-out where the URL is recorded).
     ///
     /// # Errors
     /// [`CliError::Resolve`] when the value is not an accepted source form.
@@ -58,7 +61,8 @@ impl SourceUrl {
         // Fail closed: absent proof the transport is safe, reject.
         // `-`-leading values would be parsed as git flags; `::` introduces
         // transport helpers (e.g. `ext::`) that execute arbitrary commands.
-        if !allowed || raw.starts_with('-') || raw.contains("::") {
+        let breaks_out = raw.chars().any(|c| c.is_control() || c == '"');
+        if !allowed || raw.starts_with('-') || raw.contains("::") || breaks_out {
             return Err(CliError::Resolve(format!(
                 "package `{pkg}`: `source` must be an https://, git://, ssh://, or file:// URL \
                  (or a bare absolute path), got: {raw:?}"
@@ -264,6 +268,14 @@ impl Sha256Hex {
         Ok(Self(raw.to_owned()))
     }
 
+    /// Hash the source tree at `root`, as the resolver verifies it.
+    ///
+    /// # Errors
+    /// The path and I/O error of the first entry that cannot be read.
+    pub fn of_tree(root: &Path) -> Result<Self, (PathBuf, std::io::Error)> {
+        crate::cache::hash_tree(root).map(Self)
+    }
+
     /// The validated 64-hex digest string, compared against a freshly-computed
     /// tree hash at verify-before-trust time.
     #[must_use]
@@ -309,7 +321,7 @@ pub struct EntryVersion {
     pub rev: PinnedRev,
     /// The sha256 of the source tree at `rev`. A fetched tree is trusted only
     /// when its hash equals this (verify-before-trust, in `crate::resolve`).
-    pub sha256: String,
+    pub sha256: Sha256Hex,
     /// The capability set the publisher declared for this version, surfaced for
     /// consent at `ipe add`.
     pub capabilities: BTreeSet<Capability>,
@@ -879,9 +891,7 @@ fn parse_entry_version_json(name: &str, raw: &serde_json::Value) -> Result<Entry
     // either.
     let source = SourceUrl::parse(name, field("source")?)?;
     let rev = PinnedRev::from_full_sha(name, field("rev")?)?;
-    let sha256 = Sha256Hex::parse(name, field("sha256")?)?
-        .as_str()
-        .to_owned();
+    let sha256 = Sha256Hex::parse(name, field("sha256")?)?;
 
     // `capabilities` is an optional array of strings; absent means none. An
     // unknown capability name is a hard error, never a silently-dropped effect.
@@ -956,7 +966,7 @@ impl RawVersion {
         let rev = PinnedRev::from_full_sha(name, &raw_rev)?;
         // A malformed content hash is refused here, at the cheap structural gate,
         // not deferred to a fetch-time mismatch.
-        let sha256 = Sha256Hex::parse(name, &raw_sha256)?.as_str().to_owned();
+        let sha256 = Sha256Hex::parse(name, &raw_sha256)?;
         let capabilities = parse_capabilities(name, self.capabilities.as_deref())?;
         // A present `signature` is parsed into a typed bundle; a malformed one is
         // a hard error, never a silently-dropped field. Absent = unsigned.
@@ -1241,6 +1251,19 @@ mod tests {
     fn source_url_rejects_fd_transport() {
         let err = SourceUrl::parse("p", "fd::4").unwrap_err();
         assert!(format!("{err}").contains("https://"), "{err}");
+    }
+
+    #[test]
+    fn source_url_rejects_a_field_break_out() {
+        for raw in [
+            "https://h/r\"\nsha256 = \"0",
+            "https://h/r\nrev = \"x\"",
+            "https://h/r\u{1b}[2J",
+            "/abs/r\"",
+        ] {
+            let err = SourceUrl::parse("p", raw).unwrap_err();
+            assert!(!err.to_string().contains('\n'), "{err:?}");
+        }
     }
 
     // --- CommitId parse-boundary tests ---

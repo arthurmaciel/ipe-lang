@@ -1614,14 +1614,11 @@ fn advisory_check_with_base(
 ) -> Result<(), CliError> {
     let lockfile = crate::lockfile::Lockfile::read(&prepared.manifest.root)?;
     for dep in lockfile.packages() {
-        // The lockfile is re-read from disk here, an independent trust boundary
-        // from the resolver that wrote it: a hand-edited `ipe.lock` can carry a
-        // `name` the resolver would never emit (e.g. `../../x`), and that name
-        // flows into a registry URL segment and an advisory-DB path join. Parse
-        // it once, here, into the typed `PackageName` — a single non-traversing
-        // path component by construction — so no raw name reaches either sink.
-        let name = crate::package_name::PackageName::parse(&dep.name)?;
-        check_one_dep_advisories(db_root, &name, dep.version.as_semver(), base_url)?;
+        // `Lockfile::read` parses each `name` into a `PackageName` — a single
+        // non-traversing path component by construction — so a hand-edited
+        // `ipe.lock` name never reaches the registry URL segment or the
+        // advisory-DB path join raw.
+        check_one_dep_advisories(db_root, &dep.name, dep.version.as_semver(), base_url)?;
     }
     Ok(())
 }
@@ -2953,7 +2950,7 @@ mod tests {
              version = \"{version}\"\n\
              source = \"https://github.com/example/{pkg_name}\"\n\
              rev = \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"\n\
-             sha256 = \"deadbeef\"\n\
+             sha256 = \"deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef\"\n\
              kind = \"index\"\n"
         );
         std::fs::write(project_root.join("ipe.lock"), content).expect("write ipe.lock");

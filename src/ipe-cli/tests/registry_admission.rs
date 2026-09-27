@@ -30,7 +30,7 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use ipe::index::{self, EntryVersion, IndexEntry, PinnedRev, SourceUrl};
+use ipe::index::{self, EntryVersion, IndexEntry, PinnedRev, Sha256Hex, SourceUrl};
 use ipe::lockfile::Lockfile;
 use ipe::published_version::{PublishedVersion, VersionRefusal};
 use ipe::publisher::{AttestedActor, SelfDeclaredPublisher};
@@ -131,7 +131,7 @@ fn version(v: &str, source: &str, rev: &str) -> EntryVersion {
         version: PublishedVersion::parse(v).expect("valid version"),
         source: SourceUrl::parse("pkg", source).expect("valid source"),
         rev: PinnedRev::from_full_sha("pkg", rev).expect("valid rev"),
-        sha256: VALID_SHA.to_owned(),
+        sha256: Sha256Hex::parse("pkg", VALID_SHA).expect("valid digest"),
         capabilities: BTreeSet::new(),
         signature: None,
     }
@@ -170,7 +170,7 @@ fn schema_accepts_a_well_formed_entry() {
     let v = parsed.versions.first().expect("one version");
     assert_eq!(v.version.to_string(), "1.0.0");
     assert_eq!(v.rev.as_str().len(), 40);
-    assert_eq!(v.sha256.len(), 64);
+    assert_eq!(v.sha256.as_str().len(), 64);
 }
 
 #[test]
@@ -618,7 +618,7 @@ fn precheck_denies_a_reserved_blessed_rewrite() {
 fn ephemeral_index_resolves_and_verifies_a_faithful_entry() {
     let source = fixture_source("e2e-ok");
     let sha = hash_source_tree(&source).expect("hash source");
-    let index = fixture_index("e2e-ok", "http-extras", "1.2.0", &source, &sha);
+    let index = fixture_index("e2e-ok", "http-extras", "1.2.0", &source, sha.as_str());
     let proj = scaffold_project("e2e-ok");
 
     let req = "^1".parse().expect("valid req");
@@ -628,7 +628,7 @@ fn ephemeral_index_resolves_and_verifies_a_faithful_entry() {
     let locked = lock
         .packages()
         .iter()
-        .find(|p| p.name == "http-extras")
+        .find(|p| p.name.as_str() == "http-extras")
         .expect("locked");
     assert_eq!(locked.version.to_string(), "1.2.0");
     assert_eq!(locked.sha256, sha, "the verified tree hash is locked");
@@ -672,7 +672,7 @@ fn ephemeral_index_rejects_a_tampered_tree() {
 /// the sha256 is the real content hash of the committed tree, so the
 /// fetch+integrity leg of `audit-entry` passes and the REJECT lands on the
 /// audit, not on schema or a hash mismatch.
-fn fixture_undeclared_network_package(tag: &str) -> (PathBuf, String) {
+fn fixture_undeclared_network_package(tag: &str) -> (PathBuf, Sha256Hex) {
     let repo = temp_dir(&format!("audit-src-{tag}"));
     std::fs::create_dir_all(repo.join("src")).expect("src dir");
     std::fs::write(
@@ -719,7 +719,13 @@ fn audit_entry_rejects_a_package_that_fails_the_tier1_audit() {
     // A well-formed entry whose sha256 is the source tree's real hash and whose
     // rev is the committed HEAD: schema + fetch + integrity all pass, so the ONLY
     // reachable rejection is the Tier-1 audit.
-    let index = fixture_index("audit-tier1", "leaky-entry-pkg", "1.0.0", &source, &sha);
+    let index = fixture_index(
+        "audit-tier1",
+        "leaky-entry-pkg",
+        "1.0.0",
+        &source,
+        sha.as_str(),
+    );
     let entry_path = index.join("packages").join("leaky-entry-pkg.toml");
 
     let out = Command::new(ipe_bin())
@@ -848,7 +854,7 @@ fn publish_dry_run_computes_a_correct_entry_offline() {
         "the pinned HEAD rev:\n{stdout}"
     );
     assert!(
-        stdout.contains(&expected_sha),
+        stdout.contains(expected_sha.as_str()),
         "the source tree sha256:\n{stdout}"
     );
     assert!(
