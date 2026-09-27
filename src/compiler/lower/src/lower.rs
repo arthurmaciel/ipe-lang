@@ -24,10 +24,10 @@ use ipe_diagnostics::{
 };
 use ipe_intern::{Interner, Symbol};
 use ipe_ir::{
-    Arm, BinOp, BoundSet, CallPin, Callee, Capability, EnumDef, Expr, Func, FuncId, IrType,
-    KernelFn, Match, ModPath, Module, OnFormKind, Pat, Program, RowParam, RuntimeModule, TypeDef,
-    UiCtor, UiPlain, Variant, fun_value_arc_promotable, ir_type_is_serde, is_dispatch_free,
-    is_irrefutable,
+    Arm, BinOp, BoundSet, CallPin, Callee, Capability, EnumDef, EnumPayloadTable, Expr, Func,
+    FuncId, IrType, KernelFn, Match, ModPath, Module, OnFormKind, Pat, Program, RowParam,
+    RuntimeModule, TypeDef, UiCtor, UiPlain, Variant, fun_value_arc_promotable, ir_type_holds,
+    ir_type_is_serde, is_dispatch_free, is_irrefutable,
 };
 use ipe_types::{RowTail, SolvedTypes, Ty, TyBounds};
 
@@ -6360,20 +6360,13 @@ fn count_var_uses_update_aware(sym: Symbol, expr: &Expr) -> usize {
 /// value per use (issue approach (a)). A PARAM's value arrives from the caller,
 /// is not a reconstructible expression, and so cannot be inlined — its
 /// non-linear reuse has no sound rewrite and is the case this gate rejects.
-fn ir_type_has_effect_carrier(ty: &IrType) -> bool {
-    match ty {
-        IrType::Task(_) | IrType::Cmd(_) | IrType::Sub(_) => true,
-        IrType::Maybe(e) | IrType::List(e) | IrType::Set(e) => ir_type_has_effect_carrier(e),
-        IrType::Result(a, b) | IrType::Dict(a, b) => {
-            ir_type_has_effect_carrier(a) || ir_type_has_effect_carrier(b)
-        }
-        IrType::Tuple(es) => es.iter().any(ir_type_has_effect_carrier),
-        IrType::Record(fields) => fields.values().any(ir_type_has_effect_carrier),
-        IrType::Enum { args, .. } => args.iter().any(ir_type_has_effect_carrier),
-        IrType::Ui { msg, .. } => ir_type_has_effect_carrier(msg),
-        IrType::WebRoute(page) => ir_type_has_effect_carrier(page),
-        _ => false,
-    }
+///
+/// The walk is [`ipe_ir::ir_type_holds`]: it descends value components and
+/// user-enum variant payloads, so `type Job = Run (Task ())` is a carrier too.
+fn ir_type_has_effect_carrier(payloads: &EnumPayloadTable, ty: &IrType) -> bool {
+    ir_type_holds(ty, payloads, &|t| {
+        matches!(t, IrType::Task(_) | IrType::Cmd(_) | IrType::Sub(_))
+    })
 }
 
 /// Fail-closed gate for a non-linear use of an FFI foreign opaque handle.
@@ -6401,25 +6394,13 @@ fn reject_foreign_handle_reuse(
 /// user-enum payload? Such a handle is non-`Clone` by the foreign crate's
 /// decision, so a duplicating rewrite on it is unsound.
 fn ir_type_has_ffi_foreign_handle(env: CloneEnv<'_>, ty: &IrType) -> bool {
-    match ty {
-        IrType::Enum { home, name, args } => {
-            enum_is_opaque_ffi_handle(env, home, *name)
-                || args.iter().any(|a| ir_type_has_ffi_foreign_handle(env, a))
-        }
-        IrType::Maybe(e) | IrType::List(e) | IrType::Set(e) => {
-            ir_type_has_ffi_foreign_handle(env, e)
-        }
-        IrType::Result(a, b) | IrType::Dict(a, b) => {
-            ir_type_has_ffi_foreign_handle(env, a) || ir_type_has_ffi_foreign_handle(env, b)
-        }
-        IrType::Tuple(es) => es.iter().any(|e| ir_type_has_ffi_foreign_handle(env, e)),
-        IrType::Record(fields) => fields
-            .values()
-            .any(|e| ir_type_has_ffi_foreign_handle(env, e)),
-        IrType::Ui { msg, .. } => ir_type_has_ffi_foreign_handle(env, msg),
-        IrType::WebRoute(page) => ir_type_has_ffi_foreign_handle(env, page),
-        _ => false,
-    }
+    let is_handle = |t: &IrType| {
+        let IrType::Enum { home, name, .. } = t else {
+            return false;
+        };
+        enum_is_opaque_ffi_handle(env, home, *name)
+    };
+    ir_type_holds(ty, env.payloads, &is_handle)
 }
 
 // ── Fn-value Arc-carrier promotion (position-typed carrier model) ────────────
@@ -9771,6 +9752,13 @@ pub struct Lowerer<'a> {
     /// to ordinary app enums; only the REMAINING `Rust.*`-home enums are
     /// opaque handles for the clone/ctor gates.
     transparent_ffi_unions: BTreeSet<(ModPath, Symbol)>,
+    /// The lowered program's enum variant payloads, keyed `(home, name)`.
+    ///
+    /// Filled once every union is lowered, before any def body: the clone,
+    /// effect-carrier, and FFI-handle predicates read it to see what a user
+    /// enum holds — the same table shape the backend's enum-`Clone` fixpoint
+    /// reads, so both stages agree on which enums are `Clone`.
+    enum_payloads: EnumPayloadTable,
     /// The constructors of those transparent unions, keyed `(home, ctor)` —
     /// the one `Rust.*` constructor set a user program may legitimately
     /// construct and match.
@@ -11669,6 +11657,7 @@ impl<'a> Lowerer<'a> {
             enum_variants,
             ctor_arity,
             transparent_ffi_unions,
+            enum_payloads: EnumPayloadTable::new(),
             transparent_ffi_ctors,
             eta_params,
             eta_base: Cell::new(0),
@@ -13908,7 +13897,7 @@ impl<'a> Lowerer<'a> {
     /// the one site that attaches a non-empty home.
     #[allow(clippy::similar_names)] // `uses_ui` / `uses_tui_shape` are intentionally similar
     #[allow(clippy::too_many_lines)] // the module-assembly tail is one linear pass
-    pub fn run(self) -> Result<Program, (Diagnostic, Vec<Symbol>)> {
+    pub fn run(mut self) -> Result<Program, (Diagnostic, Vec<Symbol>)> {
         let mut types_ir: Vec<TypeDef> = Vec::with_capacity(self.m.unions.len());
         for u in &self.m.unions {
             // `Ipe.Cache`'s opaque `type Cache k v = Cache Int` is backed
@@ -13961,6 +13950,13 @@ impl<'a> Lowerer<'a> {
             }
             types_ir.push(TypeDef::Enum(def));
         }
+        let prelude_enums = self.synthetic_prelude_enums();
+        self.enum_payloads = ipe_ir::enum_payload_table(
+            types_ir
+                .iter()
+                .map(|TypeDef::Enum(def)| def)
+                .chain(prelude_enums.iter()),
+        );
 
         let mut funcs = Vec::with_capacity(self.m.defs.len());
         let mut entry = None;
@@ -14903,6 +14899,7 @@ impl<'a> Lowerer<'a> {
         CloneEnv {
             interner: self.interner,
             transparent_ffi: &self.transparent_ffi_unions,
+            payloads: &self.enum_payloads,
         }
     }
 
@@ -29938,6 +29935,7 @@ mod tests {
         let env = CloneEnv {
             interner: &interner,
             transparent_ffi: &transparent,
+            payloads: &ipe_ir::EnumPayloadTable::new(),
         };
         let fun = IrType::Fun(vec![IrType::Int], Box::new(IrType::Int));
         let samples: Vec<IrType> = vec![
@@ -29991,6 +29989,7 @@ mod tests {
         let env = CloneEnv {
             interner: &interner,
             transparent_ffi: &transparent,
+            payloads: &ipe_ir::EnumPayloadTable::new(),
         };
 
         let ffi_home = ModPath(vec![rust, bevy]);
@@ -30050,6 +30049,7 @@ mod tests {
         let env_t = CloneEnv {
             interner: &interner,
             transparent_ffi: &transparent_world,
+            payloads: &ipe_ir::EnumPayloadTable::new(),
         };
         assert_eq!(clone_class(env_t, &world_ty), CloneClass::CloneOk);
         assert!(param_is_multiuse_clonable(env_t, &world_ty));
@@ -30078,6 +30078,7 @@ mod tests {
         let env = CloneEnv {
             interner: &interner,
             transparent_ffi: &transparent,
+            payloads: &ipe_ir::EnumPayloadTable::new(),
         };
 
         let world_ty = IrType::Enum {
@@ -30122,6 +30123,7 @@ mod tests {
         let env = CloneEnv {
             interner: &interner,
             transparent_ffi: &transparent,
+            payloads: &ipe_ir::EnumPayloadTable::new(),
         };
 
         // `Wrap (Task Error Int)` — a user union carrying a Task effect carrier.
@@ -30133,18 +30135,19 @@ mod tests {
         };
 
         // The predicate finds the carrier bare, in a union, and in a `Maybe`.
-        assert!(ir_type_has_effect_carrier(&task_ty));
-        assert!(ir_type_has_effect_carrier(&wrap_task));
-        assert!(ir_type_has_effect_carrier(&IrType::Maybe(Box::new(
-            task_ty
-        ))));
+        assert!(ir_type_has_effect_carrier(env.payloads, &task_ty));
+        assert!(ir_type_has_effect_carrier(env.payloads, &wrap_task));
+        assert!(ir_type_has_effect_carrier(
+            env.payloads,
+            &IrType::Maybe(Box::new(task_ty))
+        ));
         // A `Clone` payload carries no effect and is out of scope.
         let wrap_int = IrType::Enum {
             home: ModPath(vec![main]),
             name: wrap,
             args: vec![IrType::Int],
         };
-        assert!(!ir_type_has_effect_carrier(&wrap_int));
+        assert!(!ir_type_has_effect_carrier(env.payloads, &wrap_int));
 
         // Reuse: `sym` appears twice → fail closed with IPE-L0135.
         let reused = Expr::Tuple(vec![Expr::Var(sym), Expr::Var(sym)]);
@@ -30196,6 +30199,85 @@ mod tests {
             reject_nonclone_value_reuse(env, sym, &wrap_task, &update_linear, span).is_ok(),
             "update-base linear use must be accepted"
         );
+    }
+
+    /// A user enum whose variant PAYLOAD (not a type argument) holds a `Task` or
+    /// an opaque FFI handle is seen by every held-value predicate, and is
+    /// `NonClone` — matching the backend's enum-`Clone` fixpoint, which gives
+    /// such an enum no `Clone` impl.
+    #[test]
+    fn enum_payload_effect_and_ffi_handle_are_seen() -> ipe_diagnostics::DResult<()> {
+        use ipe_ir::{EnumDef, IrType, ModPath, Variant, enum_payload_table};
+
+        use super::{
+            CloneClass, CloneEnv, clone_class, ir_type_has_effect_carrier,
+            ir_type_has_ffi_foreign_handle, param_is_multiuse_clonable,
+        };
+
+        let mut interner = Interner::new();
+        let main = ModPath(vec![interner.intern("Main")?]);
+        let ffi_home = ModPath(vec![interner.intern("Rust")?, interner.intern("Bevy_ecs")?]);
+        let world = interner.intern("World")?;
+        let job = interner.intern("Job")?;
+        let run = interner.intern("Run")?;
+        let holder = interner.intern("Holder")?;
+        let hold = interner.intern("Hold")?;
+        let plain = interner.intern("Plain")?;
+        let text = interner.intern("Text")?;
+        let world_ty = IrType::Enum {
+            home: ffi_home,
+            name: world,
+            args: vec![],
+        };
+        let def = |name, ctor, fields| EnumDef {
+            name,
+            home: main.clone(),
+            type_params: Vec::new(),
+            variants: vec![Variant { name: ctor, fields }],
+        };
+        let defs = [
+            def(job, run, vec![IrType::Task(Box::new(IrType::Unit))]),
+            def(holder, hold, vec![IrType::Maybe(Box::new(world_ty))]),
+            def(plain, text, vec![IrType::Str]),
+        ];
+        let payloads = enum_payload_table(&defs);
+        let transparent = BTreeSet::new();
+        let env = CloneEnv {
+            interner: &interner,
+            transparent_ffi: &transparent,
+            payloads: &payloads,
+        };
+        let named = |name| IrType::Enum {
+            home: main.clone(),
+            name,
+            args: vec![],
+        };
+
+        // `type Job = Run (Task ())`: an effect carrier, NonClone.
+        let job_ty = named(job);
+        assert!(ir_type_has_effect_carrier(env.payloads, &job_ty));
+        assert!(ir_type_has_effect_carrier(
+            env.payloads,
+            &IrType::Tuple(vec![IrType::Int, job_ty.clone()])
+        ));
+        assert_eq!(clone_class(env, &job_ty), CloneClass::NonClone);
+        assert_eq!(
+            clone_class(env, &IrType::List(Box::new(job_ty))),
+            CloneClass::NonClone
+        );
+
+        // `type Holder = Hold (Maybe World)`: the payload FFI handle is found.
+        let holder_ty = named(holder);
+        assert!(ir_type_has_ffi_foreign_handle(env, &holder_ty));
+        assert_eq!(clone_class(env, &holder_ty), CloneClass::NonClone);
+        assert!(!param_is_multiuse_clonable(env, &holder_ty));
+
+        // A `Clone` payload stays CloneOk and carries neither.
+        let plain_ty = named(plain);
+        assert!(!ir_type_has_effect_carrier(env.payloads, &plain_ty));
+        assert!(!ir_type_has_ffi_foreign_handle(env, &plain_ty));
+        assert_eq!(clone_class(env, &plain_ty), CloneClass::CloneOk);
+        Ok(())
     }
 
     /// A reuse HIDDEN inside an `Access`/`Update` record base must not slip past

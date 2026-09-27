@@ -780,7 +780,8 @@ impl Backend for RustBackend<'_> {
 }
 
 /// One enum's variants as `(variant name, payload field types)`, in
-/// declaration order — the value shape of [`EmitCtx::enum_variants`].
+/// declaration order — the value shape of [`EmitCtx::enum_variants`] (an
+/// [`ipe_ir::EnumPayloadTable`]).
 type VariantList = Vec<(Symbol, Vec<IrType>)>;
 
 /// A canonical record field list: `(Ipê field name, field type)` pairs sorted by
@@ -1422,7 +1423,7 @@ pub(crate) struct EmitCtx<'a> {
     /// tag ([`emit_model_schema`]) folds variant NAMES from at their declared
     /// positions (the serialized discriminant is assigned by declaration
     /// index, so a variant rename AND a reorder are both wire-format-relevant).
-    enum_variants: BTreeMap<(ModPath, Symbol), VariantList>,
+    enum_variants: ipe_ir::EnumPayloadTable,
     /// Enum type symbol → whether that user enum's rendered Rust type supports
     /// the full `#[derive(Clone, Debug, PartialEq)]` set. Computed by a monotone
     /// whole-program fixpoint at [`EmitCtx::build`]: an enum is non-derivable iff

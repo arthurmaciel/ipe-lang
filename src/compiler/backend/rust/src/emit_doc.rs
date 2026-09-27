@@ -1242,7 +1242,8 @@ fn build_let(
     generics: GenericScope,
 ) -> DResult<Doc> {
     let (occurrences, has_clonevar) = scan_free_target(body, name);
-    let needs_inline = occurrences > 1 && expr_value_is_non_clone(value) && !has_clonevar;
+    let needs_inline =
+        occurrences > 1 && expr_value_is_non_clone(value, &ctx.enum_variants) && !has_clonevar;
     if needs_inline {
         // Zero-statement block `({ inlined_body })`: the body with `name`
         // substituted by `value`, laid out as a soft group.

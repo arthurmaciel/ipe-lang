@@ -169,7 +169,9 @@ pub fn emit_expr_at(
             // the old text-level passes could corrupt a string literal or a
             // record field name that happened to spell the same identifier.
             let (occurrences, has_clonevar) = scan_free_target(body, *name);
-            let needs_inline = occurrences > 1 && expr_value_is_non_clone(value) && !has_clonevar;
+            let needs_inline = occurrences > 1
+                && expr_value_is_non_clone(value, &ctx.enum_variants)
+                && !has_clonevar;
             if needs_inline {
                 let inlined_body = substitute_var((**body).clone(), *name, value);
                 let inlined_s = emit_expr_at(ctx, &inlined_body, indent, child, generics)?;

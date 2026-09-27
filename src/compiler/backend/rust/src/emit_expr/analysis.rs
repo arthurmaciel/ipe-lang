@@ -1,3 +1,5 @@
+use ipe_ir::{EnumPayloadTable, ir_type_holds};
+
 use super::{Expr, Func, IrType, MAX_IR_RENDER_DEPTH, Pat, Symbol, wants_arc_ctor};
 
 /// The deepest expression nesting the backend will descend before failing fast.
@@ -32,6 +34,10 @@ pub fn indent_of(level: usize) -> String {
 /// pure semantics guarantee re-evaluation is always correct, so the emitter
 /// can safely inline the value expression at every use site.
 ///
+/// The element type is walked through every held component, including tuple,
+/// record, and named-enum variant payloads (`payloads`), so a list of
+/// `(Task a, Int)` or of an enum wrapping a task is caught too.
+///
 /// Plain `Clone`/`Copy` values (integers, booleans, strings, records, enums)
 /// do NOT trigger this path — their `let` bindings are preserved so the
 /// compiler can share the computation.
@@ -45,13 +51,15 @@ pub fn indent_of(level: usize) -> String {
 /// binding) is NOT detected here — that needs a real type-of-expression
 /// recovery pass this backend does not have; filed as a residual gap rather
 /// than guessed at (see AUD-04 follow-up in backlog.md).
-pub fn expr_value_is_non_clone(expr: &Expr) -> bool {
+pub fn expr_value_is_non_clone(expr: &Expr, payloads: &EnumPayloadTable) -> bool {
     match expr {
-        // A list whose element is a task (or contains one) — Vec<IpeTask<A>>
+        // A list whose element is a task (or holds one) — Vec<IpeTask<A>>
         // is move-only.
-        Expr::List { elem, .. } => ir_type_contains_task(elem),
-        Expr::Tuple(items) => items.iter().any(expr_value_is_non_clone),
-        Expr::Record { fields, .. } => fields.iter().any(|(_, e)| expr_value_is_non_clone(e)),
+        Expr::List { elem, .. } => ir_type_contains_task(elem, payloads),
+        Expr::Tuple(items) => items.iter().any(|e| expr_value_is_non_clone(e, payloads)),
+        Expr::Record { fields, .. } => fields
+            .iter()
+            .any(|(_, e)| expr_value_is_non_clone(e, payloads)),
         _ => false,
     }
 }
@@ -1082,12 +1090,11 @@ pub fn substitute_var(expr: Expr, target: Symbol, replacement: &Expr) -> Expr {
     }
 }
 
-/// Returns `true` if `ty` is or structurally contains `IrType::Task`.
-pub fn ir_type_contains_task(ty: &IrType) -> bool {
-    match ty {
-        IrType::Task(_) => true,
-        IrType::Maybe(inner) | IrType::List(inner) => ir_type_contains_task(inner),
-        IrType::Result(e, a) => ir_type_contains_task(e) || ir_type_contains_task(a),
-        _ => false,
-    }
+/// Does a value of type `ty` hold an `IrType::Task`?
+///
+/// Walks every held component ([`ir_type_holds`]): transparent carriers,
+/// tuples, records, and named-enum type arguments and variant payloads from
+/// `payloads`.
+pub fn ir_type_contains_task(ty: &IrType, payloads: &EnumPayloadTable) -> bool {
+    ir_type_holds(ty, payloads, &|t| matches!(t, IrType::Task(_)))
 }

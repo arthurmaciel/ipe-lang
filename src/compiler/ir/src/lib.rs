@@ -11,10 +11,14 @@
 //! otherwise. A backend that receives a [`Program`] never has to re-check
 //! exhaustiveness.
 
+mod held;
 mod ir;
 mod pretty;
 pub mod record_shapes;
 
+pub use held::{
+    EnumPayloadTable, MAX_HELD_WALK_DEPTH, enum_payload_holds, enum_payload_table, ir_type_holds,
+};
 pub use ir::{
     Arm, BinOp, BoundSet, CallPin, Callee, EnumDef, Expr, Func, FuncId, HtmlEventShape, IrType,
     KernelClass, KernelFn, Match, ModPath, Module, OnFormKind, Pat, Program, RowParam,
