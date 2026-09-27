@@ -195,39 +195,52 @@ fn app_entry_name(kernel: KernelFn) -> Box<str> {
     format!("{}.{}", def.qualifier, def.name).into_boxed_str()
 }
 
+/// The built-in constructor table and interner a kernel scheme shape is read against.
+#[derive(Clone, Copy)]
+struct SchemeHeads<'h> {
+    builtins: &'h ipe_types::Builtins,
+    interner: &'h Interner,
+}
+
 /// The solved type scheme variable `var` is instantiated to, found by walking `shape` alongside `solved`.
 ///
 /// Aligns exactly the positions [`ipe_kernels::shape_aligns_var`] counts — an
 /// arrow side, a constructor argument, a tuple element; a record field is keyed
-/// by an interned symbol the shape cannot name, so it is skipped. `None` when
-/// no aligned occurrence exists or the two trees disagree in structure. The
-/// walk is bounded by the `'static` shape's depth.
+/// by an interned symbol the shape cannot name, so it is skipped. A constructor
+/// aligns only when its full head (tag and home) is the solved one, by the rule
+/// unification applies, and its arity agrees. `None` when no aligned occurrence
+/// exists or the two trees disagree in structure. The walk is bounded by the
+/// `'static` shape's depth.
 fn scheme_var_instance<'t>(
     shape: &ipe_kernels::TyShape,
     solved: &'t Ty,
     var: u8,
+    heads: SchemeHeads<'_>,
 ) -> Option<&'t Ty> {
     use ipe_kernels::TyShape;
+    let align = |items: &[TyShape], solved_items: &'t [Ty]| {
+        if items.len() != solved_items.len() {
+            return None;
+        }
+        items
+            .iter()
+            .zip(solved_items)
+            .find_map(|(item, solved_item)| scheme_var_instance(item, solved_item, var, heads))
+    };
     match (shape, solved) {
         (TyShape::Var(v), _) => (*v == var).then_some(solved),
         (TyShape::Fun(arg, res), Ty::Fun(solved_arg, solved_res)) => {
-            scheme_var_instance(arg, solved_arg, var)
-                .or_else(|| scheme_var_instance(res, solved_res, var))
+            scheme_var_instance(arg, solved_arg, var, heads)
+                .or_else(|| scheme_var_instance(res, solved_res, var, heads))
         }
-        (
-            TyShape::Con(_, items),
-            Ty::Con {
-                args: solved_items, ..
-            },
-        )
-        | (TyShape::Tuple(items), Ty::Tuple(solved_items))
-            if items.len() == solved_items.len() =>
+        (TyShape::Con(tag, items), Ty::Con { module, name, args })
+            if heads
+                .builtins
+                .con_head_is(*tag, module, *name, heads.interner) =>
         {
-            items
-                .iter()
-                .zip(solved_items)
-                .find_map(|(item, solved_item)| scheme_var_instance(item, solved_item, var))
+            align(items, args)
         }
+        (TyShape::Tuple(items), Ty::Tuple(solved_items)) => align(items, solved_items),
         _ => None,
     }
 }
@@ -10226,6 +10239,10 @@ pub struct BuiltinCtors {
     pub redirect_policy: Symbol,
     pub no_redirects: Symbol,
     pub follow_redirects: Symbol,
+    /// The type checker's built-in symbol table, so a kernel scheme's
+    /// [`ipe_kernels::BuiltinTag`] resolves to the same constructor head
+    /// inference minted.
+    pub kernel_types: ipe_types::Builtins,
 }
 
 /// The parameter-pattern count of a single top-level binding — the number of
@@ -25321,6 +25338,10 @@ impl<'a> Lowerer<'a> {
         // A missing region type yields no parameters and no instantiations, so
         // every listed entry falls to the fail-closed arm below.
         let arg_tys: Vec<&Ty> = solved.map(arrow_params).unwrap_or_default();
+        let heads = SchemeHeads {
+            builtins: &self.builtins.kernel_types,
+            interner: self.interner,
+        };
         let obliged_tys =
             captured
                 .iter()
@@ -25328,7 +25349,7 @@ impl<'a> Lowerer<'a> {
                 .chain(scheme_vars.iter().map(|&var| {
                     solved
                         .zip(kernel.scheme_shape())
-                        .and_then(|(ty, shape)| scheme_var_instance(shape, ty, var))
+                        .and_then(|(ty, shape)| scheme_var_instance(shape, ty, var, heads))
                 }));
         let mut obliged: BTreeSet<Symbol> = BTreeSet::new();
         for obliged_ty in obliged_tys {
@@ -29171,6 +29192,7 @@ mod tests {
             redirect_policy,
             no_redirects,
             follow_redirects,
+            kernel_types: ipe_types::Builtins::new(interner).unwrap(),
         }
     }
 
@@ -32287,37 +32309,70 @@ mod tests {
         assert!(fused.tuple_elem_rebind_sites >= 1, "tuple rebind seen");
     }
 
-    /// `scheme_var_instance` reads a scheme variable's instantiation off the solved kernel type.
+    /// Solved `Input.checkbox` types over built-in heads, keyed by the checker's own table.
     ///
-    /// `Input.checkbox`'s `msg` (var 0) is found through the attribute list and
-    /// the `Element msg` result; the cfg record is skipped. A solved type whose
-    /// structure disagrees with the scheme yields `None`, the fail-closed arm.
-    #[test]
-    fn scheme_var_instance_aligns_input_msg() {
-        const fn con(name: ipe_intern::Symbol, args: Vec<Ty>) -> Ty {
+    /// `checkbox_ty(attrs, result, result_arg)` builds
+    /// `attrs -> {} -> result Web result_arg`, and `attr_list(list, arg)` builds
+    /// `list (Attribute arg)`, so a test can swap either constructor head for
+    /// another of equal arity.
+    struct CheckboxFixture {
+        interner: Interner,
+        builtins: ipe_types::Builtins,
+        ipe_root: ipe_intern::Symbol,
+    }
+
+    impl CheckboxFixture {
+        fn new() -> Self {
+            let mut interner = Interner::new();
+            #[allow(clippy::expect_used)] // a fresh interner holds every built-in name
+            let builtins = ipe_types::Builtins::new(&mut interner).expect("intern built-ins");
+            #[allow(clippy::expect_used)] // a fresh interner accepts the stdlib root
+            let ipe_root = interner.intern("Ipe").expect("intern stdlib root");
+            Self {
+                interner,
+                builtins,
+                ipe_root,
+            }
+        }
+
+        fn heads(&self) -> super::SchemeHeads<'_> {
+            super::SchemeHeads {
+                builtins: &self.builtins,
+                interner: &self.interner,
+            }
+        }
+
+        fn con(&self, tag: ipe_kernels::BuiltinTag, args: Vec<Ty>) -> Ty {
             Ty::Con {
-                module: vec![],
-                name,
+                module: self.builtins.builtin_con_module(tag).to_vec(),
+                name: self.builtins.builtin_symbol(tag),
                 args,
             }
         }
-        let mut interner = Interner::new();
-        let mut intern = |name: &str| interner.intern(name).expect("intern constructor name");
-        let (msg_sym, list, attribute, view, web) = (
-            intern("Msg"),
-            intern("List"),
-            intern("Attribute"),
-            intern("View"),
-            intern("Web"),
-        );
-        let msg = con(msg_sym, vec![]);
-        let attrs = con(list, vec![con(attribute, vec![msg.clone()])]);
-        let element = con(view, vec![con(web, vec![]), msg.clone()]);
-        let cfg = Ty::Record(BTreeMap::new(), ipe_types::RowTail::Closed);
-        let solved = Ty::Fun(
-            Box::new(attrs),
-            Box::new(Ty::Fun(Box::new(cfg), Box::new(element))),
-        );
+
+        fn checkbox_ty(
+            &self,
+            attr_list: Ty,
+            result: ipe_kernels::BuiltinTag,
+            result_arg: Ty,
+        ) -> Ty {
+            let web = self.con(ipe_kernels::BuiltinTag::ProgramShapeWeb, vec![]);
+            let element = self.con(result, vec![web, result_arg]);
+            let cfg = Ty::Record(BTreeMap::new(), ipe_types::RowTail::Closed);
+            Ty::Fun(
+                Box::new(attr_list),
+                Box::new(Ty::Fun(Box::new(cfg), Box::new(element))),
+            )
+        }
+
+        fn attr_list(&self, list: ipe_kernels::BuiltinTag, attr_arg: Ty) -> Ty {
+            let attr = self.con(ipe_kernels::BuiltinTag::UiAttribute, vec![attr_arg]);
+            self.con(list, vec![attr])
+        }
+    }
+
+    /// `Input.checkbox`'s scheme shape, whose `msg` (var 0) the lowerer obliges `Sync`.
+    fn checkbox_shape() -> Option<&'static ipe_kernels::TyShape> {
         assert_eq!(
             KernelFn::InputCheckbox.sync_obliged_scheme_vars(),
             &[0],
@@ -32325,9 +32380,85 @@ mod tests {
         );
         let shape = KernelFn::InputCheckbox.scheme_shape();
         assert!(shape.is_some(), "Input.checkbox must carry a scheme shape");
-        let Some(shape) = shape else { return };
-        assert_eq!(super::scheme_var_instance(shape, &solved, 0), Some(&msg));
-        assert_eq!(super::scheme_var_instance(shape, &msg, 0), None);
+        shape
+    }
+
+    /// `scheme_var_instance` reads a scheme variable's instantiation off the solved kernel type.
+    ///
+    /// `Input.checkbox`'s `msg` (var 0) is found through the attribute list and
+    /// the `View Web msg` result; the cfg record is skipped. An `Ipe`-rooted home
+    /// on a builtin head is the stdlib spelling unification accepts, so it still
+    /// aligns. A solved type whose structure disagrees with the scheme yields
+    /// `None`, the fail-closed arm.
+    #[test]
+    fn scheme_var_instance_aligns_input_msg() {
+        use ipe_kernels::BuiltinTag;
+        let fx = CheckboxFixture::new();
+        let Some(shape) = checkbox_shape() else {
+            return;
+        };
+        let msg = fx.con(BuiltinTag::Int, vec![]);
+        let solved = fx.checkbox_ty(
+            fx.attr_list(BuiltinTag::List, msg.clone()),
+            BuiltinTag::View,
+            msg.clone(),
+        );
+        assert_eq!(
+            super::scheme_var_instance(shape, &solved, 0, fx.heads()),
+            Some(&msg)
+        );
+        assert_eq!(super::scheme_var_instance(shape, &msg, 0, fx.heads()), None);
+
+        let ipe_rooted_list = Ty::Con {
+            module: vec![fx.ipe_root, fx.builtins.builtin_symbol(BuiltinTag::List)],
+            name: fx.builtins.builtin_symbol(BuiltinTag::List),
+            args: vec![fx.con(BuiltinTag::UiAttribute, vec![msg.clone()])],
+        };
+        let solved = fx.checkbox_ty(ipe_rooted_list, BuiltinTag::View, msg.clone());
+        assert_eq!(
+            super::scheme_var_instance(shape, &solved, 0, fx.heads()),
+            Some(&msg)
+        );
+    }
+
+    /// A constructor of the scheme's arity but a different tag never aligns a scheme variable.
+    ///
+    /// `Set` stands where the scheme says `List`, and `Element` where it says
+    /// `View` — each of equal arity. An arity-only walk would read `other` off
+    /// the swapped head; the head comparison skips it, reading `msg` off the
+    /// true `View` result, or refusing outright (`None`, which obliges every
+    /// generic) when no correctly-headed occurrence remains.
+    #[test]
+    fn scheme_var_instance_refuses_distinct_constructor_of_equal_arity() {
+        use ipe_kernels::BuiltinTag;
+        let fx = CheckboxFixture::new();
+        let Some(shape) = checkbox_shape() else {
+            return;
+        };
+        let msg = fx.con(BuiltinTag::Int, vec![]);
+        let other = fx.con(BuiltinTag::String, vec![]);
+
+        let swapped_list = fx.checkbox_ty(
+            fx.attr_list(BuiltinTag::Set, other.clone()),
+            BuiltinTag::View,
+            msg.clone(),
+        );
+        assert_eq!(
+            super::scheme_var_instance(shape, &swapped_list, 0, fx.heads()),
+            Some(&msg),
+            "a Set in the List position must not bind msg"
+        );
+
+        let swapped_both = fx.checkbox_ty(
+            fx.attr_list(BuiltinTag::Set, other.clone()),
+            BuiltinTag::UiElement,
+            other,
+        );
+        assert_eq!(
+            super::scheme_var_instance(shape, &swapped_both, 0, fx.heads()),
+            None,
+            "no correctly-headed occurrence remains"
+        );
     }
 
     /// `aligned_param_tvars` reads a callee generic's instantiation behind a function arrow.

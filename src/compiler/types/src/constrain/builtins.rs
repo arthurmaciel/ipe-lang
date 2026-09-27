@@ -1,5 +1,6 @@
 use super::{CtorScheme, DResult, Interner, Symbol, Ty, TyBounds};
 
+/// Interned symbols of every built-in type, constructor, and field name.
 pub struct Builtins {
     pub int: Symbol,
     pub float: Symbol,
@@ -764,6 +765,11 @@ pub struct Builtins {
 }
 
 impl Builtins {
+    /// Interns every built-in name into `interner`; re-interning is idempotent.
+    ///
+    /// # Errors
+    ///
+    /// Fails when the interner refuses a name (its symbol space is exhausted).
     #[allow(clippy::too_many_lines)] // declarative intern table — each field listed explicitly for exhaustiveness
     pub fn new(interner: &mut Interner) -> DResult<Self> {
         Ok(Self {
@@ -1076,6 +1082,7 @@ impl Builtins {
     /// an empty module path, matching how `from_canon` renders the builtin type
     /// names (`Int` / `Bool` / …) and how the lowerer recognises them by name.
     #[allow(clippy::too_many_lines)]
+    #[must_use]
     pub fn ctor_schemes(&self) -> Vec<(Symbol, CtorScheme)> {
         let bool_ty = Ty::Con {
             module: Vec::new(),
