@@ -2119,8 +2119,10 @@ pub fn write_if_changed(target: &OwnedPath, contents: &str) -> Result<(), CliErr
 ///
 /// The walk starts at an [`OwnedPath`] (a symlinked `src/` is refused) and
 /// classifies entries without following links, so a symlink inside the tree is
-/// removed as the link it is, never traversed. Directories are kept (empty ones
-/// are harmless to `cargo`), which keeps the pass's blast radius minimal.
+/// removed as the link it is, never traversed. Each unlink goes through
+/// [`OwnedDir::unlink`], so a level swapped for a link after the listing cannot
+/// redirect it. Directories are kept (empty ones are harmless to `cargo`), which
+/// keeps the pass's blast radius minimal.
 ///
 /// # Errors
 /// [`CliError::OutputRefused`] when `src/` is a symlink; [`CliError::Io`] on a
@@ -2130,14 +2132,14 @@ pub fn prune_orphaned_files(
     manifest: &BTreeMap<PathBuf, String>,
 ) -> Result<(), CliError> {
     let src = crate_dir.path_to("src")?;
-    prune_dir(&src.path(), manifest, crate_dir.path())
+    prune_dir(&src.path(), manifest, crate_dir)
 }
 
 /// One level of [`prune_orphaned_files`]; `dir` was reached without following a link.
 fn prune_dir(
     dir: &Path,
     manifest: &BTreeMap<PathBuf, String>,
-    out_dir: &Path,
+    crate_dir: &OwnedDir,
 ) -> Result<(), CliError> {
     // A directory that is absent, or vanishes before this read (a concurrent
     // external cleanup), trivially has nothing left to prune.
@@ -2163,25 +2165,17 @@ fn prune_dir(
             Err(e) => return Err(io_err(&path, e)),
         };
         if file_type.is_dir() {
-            prune_dir(&path, manifest, out_dir)?;
+            prune_dir(&path, manifest, crate_dir)?;
         } else {
-            // `path` was built from `dir`, itself built from `out_dir` by
-            // construction (the initial call passes `out_dir.join("src")`,
-            // and every recursive call passes a child of that) — the
-            // `strip_prefix` can only fail if `out_dir` itself is relative
-            // and the working directory changed mid-walk; skip rather than
-            // fail the whole build over a diagnostic-only path label.
-            let Ok(rel) = path.strip_prefix(out_dir) else {
+            // `path` was built from `dir`, itself a child of the crate
+            // directory by construction, so `strip_prefix` fails only when that
+            // path is relative and the working directory changed mid-walk.
+            let Ok(rel) = path.strip_prefix(crate_dir.path()) else {
                 continue;
             };
-            if !manifest.contains_key(rel)
-                && let Err(e) = fs::remove_file(&path)
-                && e.kind() != std::io::ErrorKind::NotFound
-            {
-                // A concurrent deleter reaching `path` first (see above) is
-                // NOT a failure to prune it — the goal ("this orphan is gone")
-                // is already satisfied.
-                return Err(io_err(&path, e));
+            // An orphan a concurrent deleter already removed counts as pruned.
+            if !manifest.contains_key(rel) {
+                crate_dir.unlink(rel)?;
             }
         }
     }
