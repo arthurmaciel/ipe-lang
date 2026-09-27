@@ -554,7 +554,7 @@ struct Spelling<'e, L> {
 
 impl<'e, L: DirListing> Spelling<'e, L> {
     /// The checks for the load of `entry`, listing at most `limit` entry names in all.
-    fn new(listing: L, entry: &'e Path, limit: usize) -> Self {
+    const fn new(listing: L, entry: &'e Path, limit: usize) -> Self {
         Self {
             listing,
             entry,
