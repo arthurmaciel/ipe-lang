@@ -229,8 +229,12 @@ pub(super) fn clone_class(env: CloneEnv<'_>, t: &IrType) -> CloneClass {
         }
         IrType::Enum { args, .. } => clone_class_named_composite(env, args.iter()),
         // Ui{msg} / WebRoute(page) — recurse on the message/page type-param.
-        IrType::Ui { msg, .. } => clone_class_composite(env, std::iter::once(msg.as_ref())),
-        IrType::WebRoute(page) => clone_class_composite(env, std::iter::once(page.as_ref())),
+        // Both emit named runtime structs (`Html<M>`, `Route<P>`, …) that derive
+        // `Clone` but never `Copy`, so a `Copy` parameter floors to `CloneOk`.
+        IrType::Ui { msg, .. } => clone_class_named_composite(env, std::iter::once(msg.as_ref())),
+        IrType::WebRoute(page) => {
+            clone_class_named_composite(env, std::iter::once(page.as_ref()))
+        }
     }
 }
 
@@ -912,7 +916,7 @@ pub(super) fn reject_nonclone_value_reuse(
     // though the borrow itself is not a consume. A by-value pattern match
     // (`match sym`, `let <pat> = sym`) moves the parts its binders bind with
     // no consume counted, so a later read of a moved part is the same hazard.
-    if super::nonclone_read_after_move(sym, body) {
+    if super::nonclone_read_after_move(env, sym, ir_ty, body) {
         return Err(super::unsupported(span, Feature::NonCloneValueReuse));
     }
     // A single consume that is a bare `Var` update base, combined with any use
