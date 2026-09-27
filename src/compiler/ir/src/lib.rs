@@ -12,6 +12,7 @@
 //! exhaustiveness.
 
 mod ir;
+pub mod let_inline;
 mod pretty;
 pub mod record_shapes;
 

@@ -7,9 +7,8 @@ use super::{
     emit_lambda_unboxed, emit_match_scrutinee, emit_process_run_in_pty_call,
     emit_process_run_with_call, emit_record, emit_server_call, emit_shared_lambda,
     emit_task_retry_call, emit_tea_call, emit_ui_call, emit_ui_template, emit_update,
-    expr_value_is_non_clone, float_literal, free_vars, indent_of, ir_type_is_definitely_copy,
-    kernel_swaps_first_two, op_str, render_type, rust_string_literal, scan_free_target,
-    substitute_var,
+    float_literal, free_vars, indent_of, inlined_let_body, ir_type_is_definitely_copy,
+    kernel_swaps_first_two, op_str, render_type, rust_string_literal,
 };
 use crate::EmitCtx;
 
@@ -164,14 +163,11 @@ pub fn emit_expr_at(
             // keep the let form so the compiler can share the computation.
             //
             // AUD-04: the multi-use count and the inline substitution both
-            // operate on the IR (`scan_free_target` / `substitute_var`), not on
+            // operate on the IR (`ipe_ir::let_inline::inlined_let_body`), not on
             // rendered Rust text — see those functions' doc comments for why
             // the old text-level passes could corrupt a string literal or a
             // record field name that happened to spell the same identifier.
-            let (occurrences, has_clonevar) = scan_free_target(body, *name);
-            let needs_inline = occurrences > 1 && expr_value_is_non_clone(value) && !has_clonevar;
-            if needs_inline {
-                let inlined_body = substitute_var((**body).clone(), *name, value);
+            if let Some(inlined_body) = inlined_let_body(*name, value, body) {
                 let inlined_s = emit_expr_at(ctx, &inlined_body, indent, child, generics)?;
                 Ok(format!("({{ {inlined_s} }})"))
             } else {

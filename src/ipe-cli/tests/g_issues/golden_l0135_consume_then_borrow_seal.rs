@@ -12,13 +12,16 @@
 //! |---|---|---|
 //! | `consume_then_borrow_call` | `both (consume w) w.tag` | fail-closed IPE-L0135 |
 //! | `consume_then_borrow_kernel` | `String.append (label w) (String.fromInt w.tag)` | fail-closed IPE-L0135 |
+//! | `consume_then_inlined_let_borrow` | `let xs = [Task.succeed w.tag] in withLists (consume w) (Task.sequence xs) (Task.sequence xs)` | fail-closed IPE-L0135 |
 //! | `borrow_then_consume_call` | `tagFirst w.tag (consume w)` | builds + prints `10` |
 //! | `let_bound_borrow_then_consume` | `let t = w.tag in both (consume w) t` | builds + prints `10` |
 //!
 //! A kernel call's argument order is chosen by its emitter, so a move and a
 //! read of the same record in sibling kernel arguments are rejected in either
 //! written order; binding the field with `let` first is the fix the diagnostic
-//! names, proven by the last fixture.
+//! names, proven by the last fixture. A multi-use `let` of a task list is
+//! inlined by the emitter at each use site, so its value's reads of `w` happen
+//! where the binding is used — after the move — and are rejected too.
 //!
 //! ```text
 //! # gate check only (fast):
@@ -172,6 +175,11 @@ both task n =
 tagFirst : Int -> Task Error Int -> Task Error ()
 tagFirst n task =
     both task n
+
+
+withLists : Task Error Int -> Task Error (List Int) -> Task Error (List Int) -> Task Error ()
+withLists task first second =
+    both task 0
 ";
 
 /// Consume-then-borrow in a user call: `consume w` moves `w`, then `w.tag`
@@ -200,6 +208,25 @@ describe w =
 main : Task Error ()
 main =
     Io.println (describe { job = Task.succeed 7, tag = 3 })
+";
+
+/// Consume-then-borrow through an inlined `let`: `xs` is a task list used
+/// twice, so the emitter substitutes `[Task.succeed w.tag]` at both use sites,
+/// after `consume w` has moved `w`.
+const CONSUME_THEN_INLINED_LET_BORROW: &str = r"
+
+run : { job : Task Error Int, tag : Int } -> Task Error ()
+run w =
+    let
+        xs =
+            [ Task.succeed w.tag ]
+    in
+    withLists (consume w) (Task.sequence xs) (Task.sequence xs)
+
+
+main : Task Error ()
+main =
+    run { job = Task.succeed 7, tag = 3 }
 ";
 
 /// Borrow-then-consume in a user call: `w.tag` is read while `w` is still
@@ -252,6 +279,15 @@ fn consume_then_borrow_kernel_fails_closed() {
     assert_rejected(
         "consume_then_borrow_kernel",
         &program(CONSUME_THEN_BORROW_KERNEL),
+        ipe_diagnostics::IPE_L0135,
+    );
+}
+
+#[test]
+fn consume_then_inlined_let_borrow_fails_closed() {
+    assert_rejected(
+        "consume_then_inlined_let_borrow",
+        &program(CONSUME_THEN_INLINED_LET_BORROW),
         ipe_diagnostics::IPE_L0135,
     );
 }

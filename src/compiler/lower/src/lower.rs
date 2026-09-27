@@ -23,6 +23,7 @@ use ipe_diagnostics::{
     StoreEqAccessorDefect, StoreSelectProjectionDefect,
 };
 use ipe_intern::{Interner, Symbol};
+use ipe_ir::let_inline::inlined_let_body;
 use ipe_ir::{
     Arm, BinOp, BoundSet, CallPin, Callee, Capability, EnumDef, Expr, Func, FuncId, IrType,
     KernelFn, Match, ModPath, Module, OnFormKind, Pat, Program, RowParam, RuntimeModule, TypeDef,
@@ -5145,10 +5146,16 @@ fn fn_value_move_walk(sym: Symbol, expr: &Expr, state: &mut FnValueMoveState) {
                 fn_value_move_walk(sym, a, state);
             }
         }
+        // An inlined `let` evaluates its value at each use site of `name`, not
+        // at the binding (see [`ipe_ir::let_inline::inlined_let_body`]).
         Expr::Let { name, value, body } => {
-            fn_value_move_walk(sym, value, state);
-            if *name != sym {
-                fn_value_move_walk(sym, body, state);
+            if let Some(inlined) = inlined_let_body(*name, value, body) {
+                fn_value_move_walk(sym, &inlined, state);
+            } else {
+                fn_value_move_walk(sym, value, state);
+                if *name != sym {
+                    fn_value_move_walk(sym, body, state);
+                }
             }
         }
         Expr::Destructure {
@@ -5597,10 +5604,17 @@ fn nonclone_move_walk(sym: Symbol, expr: &Expr, state: &mut FnValueMoveState) {
                 nonclone_move_walk(sym, a, state);
             }
         }
+        // An inlined `let` evaluates its value at each use site of `name`, not
+        // at the binding: `let xs = [f w.tag] in g (consume w) xs xs` emits
+        // `g(consume(w), vec![f(w.tag)], ..)`, a read of `w` after its move.
         Expr::Let { name, value, body } => {
-            nonclone_move_walk(sym, value, state);
-            if *name != sym {
-                nonclone_move_walk(sym, body, state);
+            if let Some(inlined) = inlined_let_body(*name, value, body) {
+                nonclone_move_walk(sym, &inlined, state);
+            } else {
+                nonclone_move_walk(sym, value, state);
+                if *name != sym {
+                    nonclone_move_walk(sym, body, state);
+                }
             }
         }
         Expr::Destructure {
@@ -5967,7 +5981,7 @@ fn count_var_uses_update_aware(sym: Symbol, expr: &Expr) -> usize {
 /// PARAM-scoped: invoked only from [`apply_param_move_ownership`], never for a
 /// `let`/`Destructure` binding. A `let`-bound effect value IS rescued — the
 /// backend's `Expr::Let` multi-use pass inlines the value expression at each use
-/// site (`scan_free_target` / `substitute_var`), reconstructing an independent
+/// site ([`ipe_ir::let_inline::inlined_let_body`]), reconstructing an independent
 /// value per use (issue approach (a)). A PARAM's value arrives from the caller,
 /// is not a reconstructible expression, and so cannot be inlined — its
 /// non-linear reuse has no sound rewrite and is the case this gate rejects.
@@ -9186,8 +9200,8 @@ fn rewrite_var_free_occurrences(
 /// (spec §2.2) — a Decoder nested inside e.g. `Maybe (Decoder a)` is out of
 /// today's realistic reach (Decoders aren't optional in practice) but the
 /// predicate stays structurally total rather than special-cased to Tuple/
-/// Record only, matching `ir_type_contains_task`'s existing shape in the
-/// Rust backend (AUD-04).
+/// Record only, matching `ipe_ir::let_inline::ir_type_contains_task`'s
+/// existing shape (AUD-04).
 fn ir_type_contains_decoder(ty: &IrType) -> bool {
     match ty {
         IrType::Decoder(_) => true,
@@ -29258,6 +29272,7 @@ mod tests {
         let w = interner.intern("w").expect("intern");
         let tag = interner.intern("tag").expect("intern");
         let t = interner.intern("t").expect("intern");
+        let xs = interner.intern("xs").expect("intern");
         let span = Span::DUMMY;
         let transparent = BTreeSet::new();
         let env = CloneEnv {
@@ -29338,6 +29353,42 @@ mod tests {
             read_tag(),
         ]);
         assert!(reject(&branch_move).is_err());
+
+        // A multi-use `let` of a task list is inlined at each use site by the
+        // emitter, so its value is evaluated where `xs` is read, not at the
+        // binding: `let xs = [g w.tag] in f w (xs, xs)` emits
+        // `f(w, (vec![g(w.tag)], vec![g(w.tag)]))` — a read after the move.
+        let task_list = || Expr::List {
+            elem: IrType::Task(Box::new(IrType::Int)),
+            items: vec![user_call(vec![read_tag()])],
+        };
+        let pair_xs = || Expr::Tuple(vec![Expr::Var(xs), Expr::Var(xs)]);
+        let inlined_read_after_move = Expr::Let {
+            name: xs,
+            value: Box::new(task_list()),
+            body: Box::new(user_call(vec![Expr::Var(w), pair_xs()])),
+        };
+        assert!(nonclone_read_after_move(w, &inlined_read_after_move));
+        assert!(reject(&inlined_read_after_move).is_err());
+
+        // The same inlined `let` read before the move — accepted.
+        let inlined_read_before_move = Expr::Let {
+            name: xs,
+            value: Box::new(task_list()),
+            body: Box::new(user_call(vec![pair_xs(), Expr::Var(w)])),
+        };
+        assert!(!nonclone_read_after_move(w, &inlined_read_before_move));
+        assert!(reject(&inlined_read_before_move).is_ok());
+
+        // A single-use `let` is NOT inlined: its value runs at the binding,
+        // before the body's move — accepted.
+        let bound_once = Expr::Let {
+            name: xs,
+            value: Box::new(task_list()),
+            body: Box::new(user_call(vec![Expr::Var(w), Expr::Var(xs)])),
+        };
+        assert!(!nonclone_read_after_move(w, &bound_once));
+        assert!(reject(&bound_once).is_ok());
     }
 
     /// A reuse HIDDEN inside an `Access`/`Update` record base must not slip past
