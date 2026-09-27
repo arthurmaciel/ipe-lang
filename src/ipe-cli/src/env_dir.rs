@@ -5,9 +5,10 @@
 //! resolved here. A value that is unset, empty, or relative names no directory:
 //! a relative path would silently resolve against whatever the current working
 //! directory happens to be, so it is never used. Ambient variables (`HOME`,
-//! `XDG_*`) fall through to the next candidate, as the XDG spec requires; an
-//! explicit override that is set but not absolute is refused outright
-//! ([`explicit_override`]), never silently replaced by the default.
+//! `XDG_*`) fall through to the next candidate, as the XDG spec requires
+//! ([`ambient_home`]); an explicit override or tool home that is set but not
+//! absolute is refused outright ([`explicit_override`], [`tool_home`]), never
+//! silently replaced by the default.
 
 use std::ffi::OsString;
 use std::path::PathBuf;
@@ -39,22 +40,57 @@ pub fn home() -> Option<PathBuf> {
     absolute_var(HOME_VAR)
 }
 
-/// A tool home: the variable `var` when absolute, else `<home>/<fallback>`.
+/// An ambient base directory: `var` when absolute, else `<home>/<fallback>`.
 ///
-/// Mirrors how `CARGO_HOME`/`RUSTUP_HOME` default to `~/.cargo`/`~/.rustup`.
+/// For XDG-style variables, whose spec says a relative value is ignored; a
+/// tool override is resolved by [`tool_home`] instead.
 #[must_use]
-pub fn tool_home(var: &str, fallback: &str) -> Option<PathBuf> {
-    tool_home_from(std::env::var_os(var), home(), fallback)
+pub fn ambient_home(var: &str, fallback: &str) -> Option<PathBuf> {
+    ambient_home_from(std::env::var_os(var), home(), fallback)
 }
 
-/// Resolve a tool home from the raw variable value and the resolved home.
+/// Resolve an ambient base directory from the raw variable value and the home.
 #[must_use]
-pub fn tool_home_from(
+pub fn ambient_home_from(
     raw: Option<OsString>,
     home: Option<PathBuf>,
     fallback: &str,
 ) -> Option<PathBuf> {
-    absolute(raw).or_else(|| home.map(|h| h.join(fallback)))
+    absolute(raw).or_else(|| home_default(home, fallback))
+}
+
+/// A tool home (`CARGO_HOME`, `RUSTUP_HOME`): `var` when set, else `<home>/<fallback>`.
+///
+/// The tool itself honours a relative value against its working directory, so
+/// substituting the default would make ipe and the tool disagree on the
+/// directory; a set, non-empty, relative value is refused instead. An empty
+/// value counts as unset, as the tool treats it.
+///
+/// # Errors
+/// [`CliError::EnvDirNotAbsolute`] when `var` is set, non-empty, and relative.
+pub fn tool_home(var: &'static str, fallback: &str) -> Result<Option<PathBuf>, CliError> {
+    tool_home_from(var, std::env::var_os(var), home(), fallback)
+}
+
+/// Resolve a tool home from the raw variable value and the resolved home.
+///
+/// # Errors
+/// [`CliError::EnvDirNotAbsolute`] when `raw` is non-empty and relative.
+pub fn tool_home_from(
+    var: &'static str,
+    raw: Option<OsString>,
+    home: Option<PathBuf>,
+    fallback: &str,
+) -> Result<Option<PathBuf>, CliError> {
+    raw.filter(|raw| !raw.is_empty()).map_or_else(
+        || Ok(home_default(home, fallback)),
+        |raw| explicit_override(var, Some(raw)),
+    )
+}
+
+/// `<home>/<fallback>`, when the home is absolute.
+fn home_default(home: Option<PathBuf>, fallback: &str) -> Option<PathBuf> {
+    home.filter(|h| h.is_absolute()).map(|h| h.join(fallback))
 }
 
 /// An explicit directory override: `None` when unset, the path when absolute.
@@ -90,22 +126,83 @@ mod tests {
     }
 
     #[test]
-    fn tool_home_prefers_an_absolute_variable() {
-        let got = tool_home_from(Some("/opt/cargo".into()), Some("/home/u".into()), ".cargo");
-        assert_eq!(got, Some(PathBuf::from("/opt/cargo")));
+    fn ambient_home_prefers_an_absolute_variable() {
+        let got = ambient_home_from(
+            Some("/xdg/config".into()),
+            Some("/home/u".into()),
+            ".config",
+        );
+        assert_eq!(got, Some(PathBuf::from("/xdg/config")));
     }
 
     #[test]
-    fn tool_home_ignores_a_relative_variable() {
-        for raw in ["", "cargo", "./cargo"] {
-            let got = tool_home_from(Some(raw.into()), Some("/home/u".into()), ".cargo");
-            assert_eq!(got, Some(PathBuf::from("/home/u/.cargo")), "{raw:?}");
+    fn ambient_home_ignores_a_relative_variable() {
+        for raw in ["", "config", "./config"] {
+            let got = ambient_home_from(Some(raw.into()), Some("/home/u".into()), ".config");
+            assert_eq!(got, Some(PathBuf::from("/home/u/.config")), "{raw:?}");
             assert_eq!(
-                tool_home_from(Some(raw.into()), None, ".cargo"),
+                ambient_home_from(Some(raw.into()), None, ".config"),
                 None,
                 "{raw:?}"
             );
         }
+    }
+
+    #[test]
+    fn ambient_home_refuses_a_relative_home() {
+        let got = ambient_home_from(None, Some("rel/home".into()), ".config");
+        assert_eq!(got, None);
+    }
+
+    #[test]
+    fn tool_home_uses_an_absolute_variable() {
+        let got = tool_home_from(
+            "CARGO_HOME",
+            Some("/opt/cargo".into()),
+            Some("/home/u".into()),
+            ".cargo",
+        );
+        assert!(matches!(got, Ok(Some(p)) if p == PathBuf::from("/opt/cargo")));
+    }
+
+    #[test]
+    fn tool_home_unset_or_empty_defaults_under_the_home() {
+        for raw in [None, Some("")] {
+            let got = tool_home_from(
+                "CARGO_HOME",
+                raw.map(OsString::from),
+                Some("/home/u".into()),
+                ".cargo",
+            );
+            assert!(
+                matches!(&got, Ok(Some(p)) if p == &PathBuf::from("/home/u/.cargo")),
+                "{raw:?}"
+            );
+            let got = tool_home_from("CARGO_HOME", raw.map(OsString::from), None, ".cargo");
+            assert!(matches!(got, Ok(None)), "{raw:?}");
+        }
+    }
+
+    #[test]
+    fn tool_home_refuses_a_relative_variable() {
+        for raw in ["cargo", "./cargo", "../cargo"] {
+            let got = tool_home_from(
+                "CARGO_HOME",
+                Some(raw.into()),
+                Some("/home/u".into()),
+                ".cargo",
+            );
+            assert!(
+                matches!(got, Err(CliError::EnvDirNotAbsolute { var: "CARGO_HOME" })),
+                "`{raw}` must be refused, never replaced by the home default"
+            );
+        }
+    }
+
+    #[test]
+    fn tool_home_ignores_a_relative_home() {
+        let got = tool_home_from("RUSTUP_HOME", None, Some("rel/home".into()), ".rustup");
+        assert!(matches!(got, Ok(None)));
     }
 
     #[test]

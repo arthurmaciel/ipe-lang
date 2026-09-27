@@ -411,7 +411,7 @@ fn str_field(json: &serde_json::Value, key: &str) -> Result<String, CliError> {
 /// The token file path (`$XDG_CONFIG_HOME/ipe/token`, else `~/.config/ipe/token`).
 /// `None` only when neither `XDG_CONFIG_HOME` nor the home names an absolute path.
 fn token_path() -> Option<PathBuf> {
-    crate::env_dir::tool_home("XDG_CONFIG_HOME", ".config")
+    crate::env_dir::ambient_home("XDG_CONFIG_HOME", ".config")
         .map(|base| base.join("ipe").join("token"))
 }
 
