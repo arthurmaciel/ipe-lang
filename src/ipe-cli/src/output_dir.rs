@@ -1159,14 +1159,47 @@ struct Anchor {
     tail: Vec<std::ffi::OsString>,
 }
 
+/// Refuse a `..` in `absolute` that does not climb out of a proven, plain directory.
+///
+/// Every level a `..` climbs out of must exist as a directory that is not a
+/// link. Windows collapses `..` lexically before the filesystem sees the path,
+/// so a `..` over a missing level, or over a link whose real parent is not its
+/// lexical one, would otherwise be honoured there alone; with each climbed
+/// level proven plain, the lexical and the real parent are the same directory
+/// on every platform. Levels are proven outermost first, so the `..` steps
+/// inside each proven level are themselves already proven. Bounded by the
+/// component count.
+///
+/// # Errors
+/// [`OutputRefusal::ParentTraversal`] for an unproven `..`; [`CliError::Io`]
+/// when a level cannot be inspected.
+fn prove_parent_steps(raw: &Path, absolute: &Path) -> Result<(), CliError> {
+    let mut climbed = PathBuf::new();
+    for component in absolute.components() {
+        if component == Component::ParentDir {
+            match held::HeldDir::open(&climbed) {
+                Ok(Some(_)) => {}
+                Ok(None) | Err(CliError::OutputRefused(_)) => {
+                    return Err(OutputRefusal::ParentTraversal(raw.to_path_buf()).into());
+                }
+                Err(e) => return Err(e),
+            }
+        }
+        climbed.push(component);
+    }
+    Ok(())
+}
+
 /// Hold the deepest existing level of `absolute`, whose final component is never a link.
 ///
-/// The missing tail must hold plain names only; its landing point cannot be
-/// proven before it exists. The canonical path of the held level is proven to
-/// name that very directory, so a swap between the lookup and the hold is
-/// refused.
+/// Every `..` must climb out of a proven plain directory
+/// ([`prove_parent_steps`]), and the missing tail must hold plain names only;
+/// its landing point cannot be proven before it exists. The canonical path of
+/// the held level is proven to name that very directory, so a swap between the
+/// lookup and the hold is refused.
 fn hold_deepest_existing(raw: &Path, absolute: &Path) -> Result<Anchor, CliError> {
     let traversal = || OutputRefusal::ParentTraversal(raw.to_path_buf());
+    prove_parent_steps(raw, absolute)?;
     let mut tail = Vec::new();
     let mut current = absolute;
     let mut found = held::HeldDir::open(absolute)?;
@@ -1437,6 +1470,86 @@ mod tests {
         assert!(
             matches!(refused(&result), Some(OutputRefusal::ParentTraversal(_))),
             "an unprovable `..` must be refused, got {result:?}"
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn dot_dot_over_a_missing_level_is_refused_at_any_depth() {
+        let base = scratch("dotdot-deep");
+        let proj = project(&base);
+        let existing = base.join("existing");
+        std::fs::create_dir_all(&existing).expect("make existing");
+        for raw in [
+            existing.join("missing").join("..").join("elsewhere"),
+            existing.join("missing").join("..").join("..").join("x"),
+            existing.join("missing").join(".."),
+            existing.join("..").join("missing").join("..").join("x"),
+        ] {
+            let result = OutputRoot::resolve(Some(&raw.to_string_lossy()), &proj);
+            assert!(
+                matches!(refused(&result), Some(OutputRefusal::ParentTraversal(_))),
+                "--out {} must be refused, got {result:?}",
+                raw.display()
+            );
+        }
+        assert!(!existing.join("elsewhere").exists(), "nothing created");
+        assert!(!base.join("x").exists(), "nothing created");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn dot_dot_out_of_a_file_is_refused() {
+        let base = scratch("dotdot-file");
+        let proj = project(&base);
+        std::fs::write(base.join("file"), "keep").expect("write file");
+        let raw = base.join("file").join("..").join("elsewhere");
+        let result = OutputRoot::resolve(Some(&raw.to_string_lossy()), &proj);
+        assert!(
+            matches!(refused(&result), Some(OutputRefusal::ParentTraversal(_))),
+            "a `..` out of a file must be refused, got {result:?}"
+        );
+        assert!(!base.join("elsewhere").exists(), "nothing created");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn dot_dot_out_of_a_link_is_refused() {
+        let base = scratch("dotdot-link");
+        let proj = project(&base);
+        let victim = base.join("victim").join("inner");
+        std::fs::create_dir_all(&victim).expect("make victim");
+        let link = base.join("link");
+        plant_link(&victim, &link);
+        let raw = link.join("..").join("elsewhere");
+        let result = OutputRoot::resolve(Some(&raw.to_string_lossy()), &proj);
+        assert!(
+            matches!(refused(&result), Some(OutputRefusal::ParentTraversal(_))),
+            "a `..` out of a link must be refused, got {result:?}"
+        );
+        assert!(
+            !base.join("elsewhere").exists(),
+            "nothing created beside the link"
+        );
+        assert!(
+            !base.join("victim").join("elsewhere").exists(),
+            "nothing created beside the link target"
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn dot_dot_out_of_a_plain_existing_level_is_honoured() {
+        let base = scratch("dotdot-plain");
+        let proj = project(&base);
+        std::fs::create_dir_all(base.join("existing")).expect("make existing");
+        let raw = base.join("existing").join("..").join("elsewhere");
+        let out = OutputRoot::resolve(Some(&raw.to_string_lossy()), &proj)
+            .expect("a `..` out of a plain directory is honoured");
+        out.claim().expect("claim root");
+        assert!(
+            base.join("elsewhere").is_dir(),
+            "claimed at the real parent"
         );
         let _ = std::fs::remove_dir_all(&base);
     }
