@@ -615,6 +615,10 @@ output directory refused: {refusal}
 
 module-discovery walk aborted: {detail}
 
+## cli-device-named-module
+
+{path}: module segment `{segment}` is a reserved Windows device name, so this file cannot be the same module on every platform — rename it
+
 ## cli-advisory-vulnerable
 
 dependency `{package}` v{version} is affected by {severity}-severity advisory {id}:

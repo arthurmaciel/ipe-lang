@@ -101,6 +101,7 @@ fn load_error(err: &CliError) -> LoadError {
         | CliError::LintGateFailed
         | CliError::EjectUnsupported { .. }
         | CliError::DiagnosticJsonEmitted
+        | CliError::DeviceNamedModule { .. }
         | CliError::PathEscape { .. }
         | CliError::OutputRefused(_)
         | CliError::UpgradeFeedUnreachable
