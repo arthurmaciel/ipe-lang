@@ -9150,6 +9150,21 @@ const fn unsupported(span: Span, feature: Feature) -> Diagnostic {
     }
 }
 
+/// Rewrite a [`Diagnostic::Lower`] carrying [`Span::DUMMY`] to carry `span`
+/// instead. Some leaf annotation arms (e.g. an unresolved `Program` shape
+/// tag) have no node-local span of their own; the caller that DOES have one
+/// (a function/lambda signature) attaches it here via `map_err`, so the user
+/// always gets a real source location rather than none at all.
+fn with_span_if_dummy(diag: Diagnostic, span: Span) -> Diagnostic {
+    match diag {
+        Diagnostic::Lower {
+            span: Span::DUMMY,
+            msg,
+        } => Diagnostic::Lower { span, msg },
+        other => other,
+    }
+}
+
 /// Whether `ty` is a legal seal for the Ipê↔JS port boundary — a plain, closed,
 /// concrete value type that may cross to/from JavaScript.
 ///
@@ -16629,13 +16644,20 @@ impl<'a> Lowerer<'a> {
                     var: *row_var,
                     fields: fields
                         .iter()
-                        .map(|(fname, fty)| Ok((*fname, self.ir_type_from_canon(fty, generics)?)))
+                        .map(|(fname, fty)| {
+                            Ok((
+                                *fname,
+                                self.ir_type_from_canon(fty, generics)
+                                    .map_err(|e| with_span_if_dummy(e, sig_span))?,
+                            ))
+                        })
                         .collect::<DResult<_>>()?,
                     updated_fields: BTreeSet::new(),
                 });
                 IrType::RowGeneric(*row_var)
             } else {
-                self.ir_type_from_canon(arg, generics)?
+                self.ir_type_from_canon(arg, generics)
+                    .map_err(|e| with_span_if_dummy(e, sig_span))?
             };
             // Per-occurrence `any` seal fix (AUD-01 — structural fix): every
             // `any` occurrence — bare (`any`) OR nested inside a container
@@ -16690,7 +16712,8 @@ impl<'a> Lowerer<'a> {
             // Any other return-position open-row form is still unsupported.
             return Err(unsupported(sig_span, Feature::RowPolyRecordAnnotation));
         } else {
-            self.ir_type_from_canon(cur, generics)?
+            self.ir_type_from_canon(cur, generics)
+                .map_err(|e| with_span_if_dummy(e, sig_span))?
         };
         // The trailing type is the return type.
         Ok((params, prologue, ret_ir, any_syms_minted, row_params))
@@ -29760,6 +29783,12 @@ mod tests {
     const PROGRAM_PHANTOM_TAG_SPAN: Span = Span::new(50, 51);
     /// A span the binder-type tests record `Program Web <free var>` at.
     const PROGRAM_PHANTOM_MSG_SPAN: Span = Span::new(60, 61);
+    /// A span the binder-type tests record `Program Tui <free var>` at.
+    const PROGRAM_PHANTOM_MSG_TUI_SPAN: Span = Span::new(70, 71);
+    /// A span the binder-type tests record `Program Cli <free var>` at.
+    const PROGRAM_PHANTOM_MSG_CLI_SPAN: Span = Span::new(80, 81);
+    /// A span the binder-type tests record `Program Worker <free var>` at.
+    const PROGRAM_PHANTOM_MSG_WORKER_SPAN: Span = Span::new(90, 91);
 
     /// Run `check` against a lowerer whose solved regions are the spans above.
     fn with_binder_type_lowerer(check: impl FnOnce(&Lowerer<'_>, ipe_intern::Symbol)) {
@@ -29769,6 +29798,9 @@ mod tests {
         interner.intern("String").unwrap();
         let program = interner.intern("Program").unwrap();
         let web = interner.intern("Web").unwrap();
+        let tui = interner.intern("Tui").unwrap();
+        let cli = interner.intern("Cli").unwrap();
+        let worker = interner.intern("Worker").unwrap();
         let module = canon::Module {
             imports_unsafe_submodule: false,
             imported_web_capabilities: BTreeSet::new(),
@@ -29802,6 +29834,51 @@ mod tests {
                     Ty::Con {
                         module: vec![],
                         name: web,
+                        args: vec![],
+                    },
+                    Ty::Var(7),
+                ],
+            },
+        );
+        types.regions.insert(
+            (Vec::new(), PROGRAM_PHANTOM_MSG_TUI_SPAN),
+            Ty::Con {
+                module: vec![],
+                name: program,
+                args: vec![
+                    Ty::Con {
+                        module: vec![],
+                        name: tui,
+                        args: vec![],
+                    },
+                    Ty::Var(7),
+                ],
+            },
+        );
+        types.regions.insert(
+            (Vec::new(), PROGRAM_PHANTOM_MSG_CLI_SPAN),
+            Ty::Con {
+                module: vec![],
+                name: program,
+                args: vec![
+                    Ty::Con {
+                        module: vec![],
+                        name: cli,
+                        args: vec![],
+                    },
+                    Ty::Var(7),
+                ],
+            },
+        );
+        types.regions.insert(
+            (Vec::new(), PROGRAM_PHANTOM_MSG_WORKER_SPAN),
+            Ty::Con {
+                module: vec![],
+                name: program,
+                args: vec![
+                    Ty::Con {
+                        module: vec![],
+                        name: worker,
                         args: vec![],
                     },
                     Ty::Var(7),
@@ -29900,6 +29977,40 @@ mod tests {
         });
     }
 
+    /// Pins the widened `Program` guard's exact accepted set: a phantom `msg`
+    /// is defaultable (accepted) under EVERY settled shape tag, not just `Web`
+    /// — the guard only refuses a phantom in the TAG slot (index 0), never
+    /// the msg slot (index 1), regardless of which concrete shape tags it.
+    #[test]
+    fn binder_ir_type_pins_phantom_program_msg_every_shape() {
+        with_binder_type_lowerer(|lowerer, _| {
+            let tui = lowerer.binder_ir_type(Some(PROGRAM_PHANTOM_MSG_TUI_SPAN));
+            assert!(
+                matches!(
+                    tui,
+                    Ok(Some(super::BinderType::Phantom(super::IrType::TuiApp)))
+                ),
+                "a phantom Program msg must classify at the Tui leaf, got {tui:?}"
+            );
+            let cli = lowerer.binder_ir_type(Some(PROGRAM_PHANTOM_MSG_CLI_SPAN));
+            assert!(
+                matches!(
+                    cli,
+                    Ok(Some(super::BinderType::Phantom(super::IrType::CliApp)))
+                ),
+                "a phantom Program msg must classify at the Cli leaf, got {cli:?}"
+            );
+            let worker = lowerer.binder_ir_type(Some(PROGRAM_PHANTOM_MSG_WORKER_SPAN));
+            assert!(
+                matches!(
+                    worker,
+                    Ok(Some(super::BinderType::Phantom(super::IrType::WorkerApp)))
+                ),
+                "a phantom Program msg must classify at the Worker leaf, got {worker:?}"
+            );
+        });
+    }
+
     /// A phantom under a function arrow does not lower and refuses with that typed error.
     #[test]
     fn binder_ir_type_refuses_unlowerable_type() {
@@ -29976,6 +30087,99 @@ mod tests {
                 "a lowerable capture must carry its type, got {got:?}"
             );
         });
+    }
+
+    /// A phantom binder (classification-only, never fed the fn-value carrier
+    /// rewrite) that also has a deferred `Fun`-value capture recorded against
+    /// it refuses as `NonCloneCapture` (IPE-L0126) at the capture site, rather
+    /// than silently dropping the capture or emitting an unsound bare `Box`.
+    #[test]
+    fn apply_binder_move_ownership_refuses_phantom_non_clone_capture() {
+        with_binder_type_lowerer(|lowerer, sym| {
+            let capture_span = Span::new(120, 121);
+            lowerer
+                .deferred_fun_captures
+                .borrow_mut()
+                .insert(sym, capture_span);
+            let binder_ty = super::BinderType::Phantom(super::IrType::Str);
+            let got = lowerer.apply_binder_move_ownership(
+                sym,
+                &binder_ty,
+                super::Expr::Int(0),
+                UNIT_SPAN,
+            );
+            assert!(
+                matches!(
+                    got,
+                    Err(super::Diagnostic::Lower {
+                        span,
+                        msg: super::LowerError::Unsupported(super::Feature::NonCloneCapture),
+                    }) if span == capture_span
+                ),
+                "a phantom binder with a deferred fn capture must refuse as L0126 \
+                 at the capture site, got {got:?}"
+            );
+        });
+    }
+
+    /// The annotation-path twin of [`binder_ir_type_refuses_phantom_program_shape`]:
+    /// a `Program a msg` RETURN annotation (a shape-generic type-checker
+    /// hasn't pinned) reaches `ir_type_from_canon`'s `Var` arm through
+    /// `split_typed_sig`, which must rewrite the resulting `Span::DUMMY`
+    /// `IPE-L0102` to the signature's own span rather than reporting no
+    /// location at all.
+    #[test]
+    fn split_typed_sig_program_shape_var_reports_signature_span() {
+        let mut interner = Interner::new();
+        let builtins = build_test_builtin_ctors(&mut interner);
+        let program = interner.intern("Program").unwrap();
+        let shape_var = interner.intern("shape").unwrap();
+        interner.intern("String").unwrap();
+        let module = canon::Module {
+            imports_unsafe_submodule: false,
+            imported_web_capabilities: BTreeSet::new(),
+            name: vec![],
+            unions: vec![],
+            defs: vec![],
+        };
+        let types = empty_solved_types();
+        let lowerer = Lowerer::new(
+            &module,
+            &types,
+            &interner,
+            SymbolPools {
+                eta_params: vec![],
+                cap_params: vec![],
+                param_binders: vec![],
+                any_param_binders: vec![],
+                projection_decode_binders: vec![],
+                destructure_thunk_binders: vec![],
+                nested_cons_binders: vec![],
+                nested_strlit_binders: vec![],
+                tuple_elem_binders: vec![],
+            },
+            &builtins,
+            "",
+            "",
+        );
+        let ret_ty = canon::Type::Con {
+            home: vec![],
+            name: program,
+            args: vec![canon::Type::Var(shape_var)],
+        };
+        let sig_span = Span::new(100, 110);
+        let got = lowerer.split_typed_sig(&ret_ty, &[], &[], sig_span);
+        assert!(
+            matches!(
+                got,
+                Err(super::Diagnostic::Lower {
+                    span,
+                    msg: super::LowerError::Unsupported(super::Feature::Polymorphism),
+                }) if span == sig_span && span != Span::DUMMY
+            ),
+            "the annotation-path Program-shape refusal must carry the real \
+             signature span, not Span::DUMMY, got {got:?}"
+        );
     }
 
     /// The lowerer's built-in `enum_variants` / `ctor_arity` seeding MUST agree
