@@ -2099,11 +2099,17 @@ const EXPOSED_DECODER: &str = "wrap : a -> Decode.Decoder a\n\
                                wrap x =\n\
                                \x20   Decode.succeed x\n";
 
+/// A `Cmd` pinned to the app's `Msg`, so a decoder over it is `Decoder (Cmd Msg)`
+/// rather than a decoder over a still-polymorphic `Cmd msg`.
+const MSG_CMD: &str = "noCmd : Cmd.Cmd Msg\n\
+                       noCmd =\n\
+                       \x20   Cmd.none\n";
+
 /// A `Decoder (Cmd Msg)` has no wasm build (the decoding kernels require a
 /// `Send` element; a wasm `Cmd` is not `Send`) — IPE-N0052 at `ipe` time.
 #[test]
 fn wasm_decoder_of_cmd_rejected() {
-    let src = decoder_probe_app("", "Decode.succeed Cmd.none");
+    let src = decoder_probe_app(MSG_CMD, "Decode.succeed noCmd");
     assert_rejected_wasm("wasm_decoder_of_cmd", &src, "IPE-N0052");
 }
 
@@ -2138,7 +2144,7 @@ fn wasm_decoder_exposed_generic_at_data_ok() {
 /// A `Decoder (Cmd Msg)` builds natively, where the effect carriers are `Send`.
 #[test]
 fn wasm_decoder_of_cmd_native_ok() {
-    let src = decoder_probe_app("", "Decode.succeed Cmd.none");
+    let src = decoder_probe_app(MSG_CMD, "Decode.succeed noCmd");
     if let Outcome::Rejected(got) = compile("wasm_decoder_native_ok", &src, Target::Native) {
         assert!(
             false_marker(),
