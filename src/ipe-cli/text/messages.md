@@ -1178,6 +1178,10 @@ Try a broader query or `ipe doc list` to browse modules.
 
 refusing to load the FFI cache at `{path}`: it is not owned by the current user or is world-writable — its `_bindings.rs` compiles unsandboxed into your crate. Fix its ownership/permissions or remove it
 
+## ffi-cache-unverifiable
+
+refusing to load the FFI cache at `{path}`: its ownership cannot be verified on this platform — its `_bindings.rs` compiles unsandboxed into your crate. Remove it
+
 ## ffi-module-clash
 
 module `{module}` clashes with the installed FFI crate `{krate}` — the `Rust.*` namespace is reserved for FFI interface modules
@@ -1404,6 +1408,10 @@ could not move the token into place at {path}: {detail}
 ## login-remove-failed
 
 could not remove {path}: {detail}
+
+## login-token-store-unsupported
+
+cannot store the token on this platform: its file cannot be made readable by you alone — set `GITHUB_TOKEN` instead
 
 # Packages
 

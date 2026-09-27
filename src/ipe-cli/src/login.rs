@@ -135,6 +135,11 @@ pub fn stored_token() -> Option<PublishToken> {
 /// Run the full device flow: request a code, prompt the user, poll for the token,
 /// store it.
 fn run_device_flow() -> Result<(), CliError> {
+    // Refuse up front where the token could not be stored owner-only, before
+    // the user approves a grant that would then be discarded.
+    if !cfg!(unix) {
+        return Err(login_error(crate::text::login_token_store_unsupported()));
+    }
     let device = request_device_code()?;
 
     crate::screen::Screen::new(crate::screen::Stream::Stdout)
@@ -440,7 +445,7 @@ fn token_status() -> TokenStatus {
 ///
 /// On Unix the file is created with mode 0600 atomically before any bytes are
 /// written, so there is no window where the token is readable by other users.
-/// On non-Unix the containing profile directory is the protection layer.
+/// Off Unix the token is never stored (see [`write_token_atomic`]).
 fn store_token(token: &PublishToken) -> Result<PathBuf, CliError> {
     let path = token_path().ok_or_else(|| login_error(crate::text::login_config_dir_unknown()))?;
     if let Some(parent) = path.parent() {
@@ -461,8 +466,9 @@ fn store_token(token: &PublishToken) -> Result<PathBuf, CliError> {
 /// bytes only ever land in a 0600 inode, so there is no window in which the
 /// secret is group- or world-readable.
 ///
-/// On non-Unix: falls back to [`std::fs::write`] and relies on the containing
-/// directory for protection (same as before).
+/// Off Unix: refused. No portable owner-only file mode exists there, so the
+/// token is never written to a file other users might read; `GITHUB_TOKEN`
+/// supplies it instead.
 #[cfg(unix)]
 fn write_token_atomic(path: &std::path::Path, token: &str) -> Result<(), CliError> {
     use std::fs::OpenOptions;
@@ -501,9 +507,8 @@ fn write_token_atomic(path: &std::path::Path, token: &str) -> Result<(), CliErro
 }
 
 #[cfg(not(unix))]
-fn write_token_atomic(path: &std::path::Path, token: &str) -> Result<(), CliError> {
-    std::fs::write(path, format!("{token}\n"))
-        .map_err(|e| login_error(&crate::text::login_write_failed(&path.display(), &e)))
+fn write_token_atomic(_path: &std::path::Path, _token: &str) -> Result<(), CliError> {
+    Err(login_error(crate::text::login_token_store_unsupported()))
 }
 
 /// Remove the stored token.

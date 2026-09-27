@@ -18,14 +18,14 @@ use std::path::{Path, PathBuf};
 /// Maximum retry attempts when an exclusive-create collision occurs.
 const MAX_RETRIES: usize = 8;
 
-/// Read 16 bytes (128 bits) of OS entropy from `/dev/urandom`.
+/// Read 16 bytes (128 bits) from the OS CSPRNG.
 ///
-/// Returns an error when the device cannot be read or yields fewer than 16
-/// bytes, which makes the caller fall back to failing the construction rather
-/// than silently weakening the name.
+/// `getrandom` reaches each target's real CSPRNG (`getrandom(2)` on Linux,
+/// `BCryptGenRandom` on Windows) with no weaker fallback; an unavailable source
+/// fails the construction rather than silently weakening the name.
 fn read_entropy() -> io::Result<[u8; 16]> {
     let mut buf = [0u8; 16];
-    File::open("/dev/urandom")?.read_exact(&mut buf)?;
+    getrandom::fill(&mut buf).map_err(io::Error::other)?;
     Ok(buf)
 }
 

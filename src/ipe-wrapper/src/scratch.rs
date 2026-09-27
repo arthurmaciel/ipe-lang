@@ -1,35 +1,26 @@
 //! Unpredictable, exclusively-created scratch directory for the jail's writable
 //! mount.
 //!
-//! The name carries 128 bits of OS entropy (not just a PID), creation uses
+//! The name carries 128 bits of OS CSPRNG entropy (not just a PID), creation uses
 //! exclusive `create_dir` (fail on a pre-existing entry or symlink rather than
 //! follow it), and the directory is mode 0700.  The RAII guard removes it on
 //! drop, so callers need no manual cleanup.
 
-use std::io::{self, Read};
+use std::io;
 use std::path::{Path, PathBuf};
 
 /// Maximum retry attempts when an exclusive-create collision occurs.
 const MAX_RETRIES: usize = 8;
 
-/// Read 16 bytes (128 bits) of OS entropy from `/dev/urandom`.
-#[cfg(unix)]
+/// Read 16 bytes (128 bits) from the OS CSPRNG.
+///
+/// `getrandom` reaches each target's real CSPRNG (`getrandom(2)` on Linux,
+/// `BCryptGenRandom` on Windows) with no weaker fallback, so an unavailable
+/// source is an error and the scratch name is never predictable.
 fn read_entropy() -> io::Result<[u8; 16]> {
     let mut buf = [0u8; 16];
-    std::fs::File::open("/dev/urandom")?.read_exact(&mut buf)?;
+    getrandom::fill(&mut buf).map_err(io::Error::other)?;
     Ok(buf)
-}
-
-#[cfg(not(unix))]
-fn read_entropy() -> io::Result<[u8; 16]> {
-    // Non-Unix has no `/dev/urandom`; combine wall time and PID as a weaker
-    // fallback (embed mode is a Unix deploy feature — this only keeps the
-    // wrapper compiling everywhere).
-    let nanos = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0u128, |d| d.as_nanos());
-    let mixed = nanos ^ (u128::from(std::process::id()) << 64);
-    Ok(mixed.to_le_bytes())
 }
 
 /// Format 16 entropy bytes as a 32-character lowercase hex string.

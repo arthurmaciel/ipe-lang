@@ -3396,6 +3396,7 @@ dependencies = [
 name = "ipe_wrapper"
 version = "0.3.0"
 dependencies = [
+ "getrandom 0.3.4",
  "ipe_kernels",
  "ipe_sandbox",
 ]

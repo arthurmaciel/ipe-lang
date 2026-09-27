@@ -54,9 +54,11 @@ fn is_trusted_cache_dir(dir: &Path) -> bool {
     std::fs::metadata(dir).is_ok_and(|md| md.uid() == current_uid() && md.mode() & 0o002 == 0)
 }
 
+/// Off Unix the owner and world-write checks have no portable equivalent, so
+/// no cache can be proven trusted and every one is refused.
 #[cfg(not(unix))]
-fn is_trusted_cache_dir(_dir: &Path) -> bool {
-    true
+const fn is_trusted_cache_dir(_dir: &Path) -> bool {
+    false
 }
 
 /// Walk up from `start` looking for an FFI artifact cache, bounded at the
@@ -82,9 +84,12 @@ pub fn find_cache_root(start: &Path) -> Result<Option<PathBuf>, CliError> {
             if is_trusted_cache_dir(&candidate) {
                 return Ok(Some(candidate));
             }
-            return Err(CliError::UsageOwned(text::ffi_cache_untrusted(
-                &candidate.display(),
-            )));
+            let refusal = if cfg!(unix) {
+                text::ffi_cache_untrusted(&candidate.display())
+            } else {
+                text::ffi_cache_unverifiable(&candidate.display())
+            };
+            return Err(CliError::UsageOwned(refusal));
         }
         // Stop at the project root: do not walk above the nearest package.ipe.
         if d.join(PROJECT_MANIFEST).is_file() {

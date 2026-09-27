@@ -859,6 +859,8 @@ messages! {
     doc_type_no_match_hint(query) = "doc-type-no-match-hint";
     /// The FFI cache is not owned by the user or is world-writable.
     ffi_cache_untrusted(path) = "ffi-cache-untrusted";
+    /// The FFI cache's ownership cannot be verified on this platform.
+    ffi_cache_unverifiable(path) = "ffi-cache-unverifiable";
     /// A project module clashes with an installed FFI crate.
     ffi_module_clash(module, krate) = "ffi-module-clash";
     /// An FFI define type collides with an inspected opaque type.
@@ -969,6 +971,8 @@ messages! {
     login_move_failed(path, detail) = "login-move-failed";
     /// The token file could not be removed.
     login_remove_failed(path, detail) = "login-remove-failed";
+    /// The token cannot be stored owner-only on this platform.
+    login_token_store_unsupported = "login-token-store-unsupported";
     /// `ipe add` was given a malformed version requirement.
     pkg_invalid_requirement(requirement, detail) = "pkg-invalid-requirement";
     /// The usage line of `ipe add` / `ipe remove`.
