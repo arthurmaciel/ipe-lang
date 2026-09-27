@@ -32,19 +32,82 @@ const MAX_LOGIN_LEN: usize = 39;
 /// The suffix GitHub appends to an App (bot) account's login.
 const BOT_SUFFIX: &str = "[bot]";
 
+/// Why a string is not a GitHub login.
+///
+/// The one definition of a login's shape, shared by every identity parse, so a
+/// value that reaches a log line or a refusal message can never carry control
+/// bytes, ANSI escapes, whitespace, or any other non-login text.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LoginRefusal {
+    /// Nothing precedes the optional `[bot]` suffix.
+    Empty,
+    /// The handle exceeds GitHub's 39-character ceiling.
+    TooLong,
+    /// A byte other than an ASCII letter, digit, or hyphen.
+    ForbiddenByte,
+    /// The handle starts or ends with a hyphen.
+    EdgeHyphen,
+    /// The handle holds two consecutive hyphens.
+    DoubleHyphen,
+}
+
+impl fmt::Display for LoginRefusal {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Empty => f.write_str("it is empty"),
+            Self::TooLong => write!(f, "it is longer than {MAX_LOGIN_LEN} characters"),
+            Self::ForbiddenByte => {
+                f.write_str("it holds a character other than an ASCII letter, digit, or hyphen")
+            }
+            Self::EdgeHyphen => f.write_str("it starts or ends with a hyphen"),
+            Self::DoubleHyphen => f.write_str("it holds consecutive hyphens"),
+        }
+    }
+}
+
+impl std::error::Error for LoginRefusal {}
+
+/// Check `raw` against GitHub's login shape.
+///
+/// A login is 1–39 ASCII alphanumerics or single interior hyphens, optionally
+/// followed by the `[bot]` App suffix.
+fn check_login_shape(raw: &str) -> Result<(), LoginRefusal> {
+    let handle = raw.strip_suffix(BOT_SUFFIX).unwrap_or(raw);
+    if handle.is_empty() {
+        Err(LoginRefusal::Empty)
+    } else if handle.len() > MAX_LOGIN_LEN {
+        Err(LoginRefusal::TooLong)
+    } else if !handle
+        .bytes()
+        .all(|b| b.is_ascii_alphanumeric() || b == b'-')
+    {
+        Err(LoginRefusal::ForbiddenByte)
+    } else if handle.starts_with('-') || handle.ends_with('-') {
+        Err(LoginRefusal::EdgeHyphen)
+    } else if handle.contains("--") {
+        Err(LoginRefusal::DoubleHyphen)
+    } else {
+        Ok(())
+    }
+}
+
 /// The `publisher` an index entry declares about itself — untrusted.
 ///
 /// Parsed once at the entry boundary so the rest of the CLI never handles the
-/// raw field as if it were an identity. It renders and compares for display and
-/// provenance only; it grants nothing.
+/// raw field as if it were an identity. The parse admits only a login-shaped
+/// value, so the claim is safe to render in logs and refusals; it still grants
+/// nothing — it renders and compares for display and provenance only.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SelfDeclaredPublisher(String);
 
 impl SelfDeclaredPublisher {
-    /// Wrap a claimed publisher string (from an entry file or a source URL).
-    #[must_use]
-    pub const fn new(claimed: String) -> Self {
-        Self(claimed)
+    /// Parse a claimed publisher (from an entry file, a flag, or a source URL).
+    ///
+    /// # Errors
+    /// The [`LoginRefusal`] naming why `claimed` is not a GitHub login.
+    pub fn parse(claimed: &str) -> Result<Self, LoginRefusal> {
+        check_login_shape(claimed)?;
+        Ok(Self(claimed.to_owned()))
     }
 
     /// The claimed publisher, verbatim.
@@ -129,28 +192,18 @@ impl AuthenticatedPublisher {
 pub struct AttestedActor(String);
 
 impl AttestedActor {
-    /// Parse an attested GitHub login: 1–39 ASCII alphanumerics or single
-    /// interior hyphens, optionally followed by the `[bot]` App suffix.
+    /// Parse an attested GitHub login.
     ///
     /// # Errors
-    /// [`CliError::UsageOwned`] when the value is not a GitHub login.
+    /// [`CliError::UsageOwned`] when the value is not a GitHub login; the value is
+    /// echoed Debug-escaped, so no control byte reaches the terminal.
     pub fn parse(raw: &str) -> Result<Self, CliError> {
-        let handle = raw.strip_suffix(BOT_SUFFIX).unwrap_or(raw);
-        let shaped = !handle.is_empty()
-            && handle.len() <= MAX_LOGIN_LEN
-            && handle
-                .bytes()
-                .all(|b| b.is_ascii_alphanumeric() || b == b'-')
-            && !handle.starts_with('-')
-            && !handle.ends_with('-')
-            && !handle.contains("--");
-        if shaped {
-            Ok(Self(raw.to_owned()))
-        } else {
-            Err(CliError::UsageOwned(format!(
-                "ipe package audit-entry: --attested-actor `{raw}` is not a GitHub login"
-            )))
-        }
+        check_login_shape(raw).map_err(|refusal| {
+            CliError::UsageOwned(format!(
+                "ipe package audit-entry: --attested-actor {raw:?} is not a GitHub login: {refusal}"
+            ))
+        })?;
+        Ok(Self(raw.to_owned()))
     }
 
     /// The attested login, verbatim.
@@ -265,7 +318,7 @@ mod tests {
     const BLESSED: &str = ipe_kernels::BLESSED_PUBLISHER;
 
     fn claim(s: &str) -> SelfDeclaredPublisher {
-        SelfDeclaredPublisher::new(s.to_owned())
+        SelfDeclaredPublisher::parse(s).expect("login-shaped claim")
     }
 
     fn authenticated(login: &str) -> AuthenticatedPublisher {
@@ -363,6 +416,55 @@ mod tests {
         ] {
             assert!(AttestedActor::parse(bad).is_err(), "{bad:?}");
         }
+    }
+
+    #[test]
+    fn self_declared_publisher_refuses_every_non_login_shape() {
+        let too_long = "x".repeat(40);
+        let too_long_bot = format!("{too_long}[bot]");
+        let cases: [(&str, LoginRefusal); 16] = [
+            ("", LoginRefusal::Empty),
+            ("[bot]", LoginRefusal::Empty),
+            (too_long.as_str(), LoginRefusal::TooLong),
+            (too_long_bot.as_str(), LoginRefusal::TooLong),
+            ("sp ace", LoginRefusal::ForbiddenByte),
+            ("semi;colon", LoginRefusal::ForbiddenByte),
+            ("under_score", LoginRefusal::ForbiddenByte),
+            ("new\nline", LoginRefusal::ForbiddenByte),
+            ("nul\0byte", LoginRefusal::ForbiddenByte),
+            ("\x1b[31mred\x1b[0m", LoginRefusal::ForbiddenByte),
+            ("bell\x07", LoginRefusal::ForbiddenByte),
+            ("caf\u{e9}", LoginRefusal::ForbiddenByte),
+            ("x[bot][bot]", LoginRefusal::ForbiddenByte),
+            ("-lead", LoginRefusal::EdgeHyphen),
+            ("trail-", LoginRefusal::EdgeHyphen),
+            ("dou--ble", LoginRefusal::DoubleHyphen),
+        ];
+        for (raw, refusal) in cases {
+            assert_eq!(SelfDeclaredPublisher::parse(raw), Err(refusal), "{raw:?}");
+        }
+        let longest = "x".repeat(39);
+        for ok in ["a", "octo-cat", "A1", "dependabot[bot]", longest.as_str()] {
+            assert_eq!(
+                SelfDeclaredPublisher::parse(ok).map(|p| p.as_str().to_owned()),
+                Ok(ok.to_owned())
+            );
+        }
+    }
+
+    #[test]
+    fn attested_actor_refusal_debug_escapes_the_raw_value() {
+        let hostile = "\x1b[2Jevil\nforged line";
+        let refused = AttestedActor::parse(hostile);
+        assert!(
+            matches!(refused, Err(CliError::UsageOwned(_))),
+            "a control-byte login must be refused"
+        );
+        let Err(CliError::UsageOwned(msg)) = refused else {
+            return;
+        };
+        assert!(!msg.contains('\x1b') && !msg.contains('\n'), "{msg:?}");
+        assert!(msg.contains(r"\u{1b}[2Jevil\nforged line"), "{msg:?}");
     }
 
     #[test]

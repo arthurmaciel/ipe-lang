@@ -143,7 +143,7 @@ fn entry(name: &str, versions: Vec<EntryVersion>) -> IndexEntry {
 fn entry_with_publisher(name: &str, publisher: &str, versions: Vec<EntryVersion>) -> IndexEntry {
     IndexEntry {
         name: name.to_owned(),
-        publisher: SelfDeclaredPublisher::new(publisher.to_owned()),
+        publisher: SelfDeclaredPublisher::parse(publisher).expect("login-shaped publisher"),
         versions,
     }
 }
