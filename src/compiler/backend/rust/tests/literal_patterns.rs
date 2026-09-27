@@ -42,7 +42,7 @@ use ipe_backend_rust::RustBackend;
 use ipe_diagnostics::{DResult, Diagnostic};
 use ipe_intern::{Interner, Symbol};
 use ipe_ir::{
-    Arm, CallPin, Callee, EnumDef, Expr, Func, FuncId, IrType, KernelFn, ModPath, Module,
+    Arm, CallPin, Callee, CtorPin, EnumDef, Expr, Func, FuncId, IrType, KernelFn, ModPath, Module,
     OnFormKind, Pat, Program, TypeDef, Variant,
 };
 
@@ -148,6 +148,7 @@ fn tag_program(interner: &mut Interner, payload: Pat) -> DResult<Program> {
                         ty: tag,
                         variant: a,
                         args: vec![Expr::Int(0)],
+                        pin: CtorPin::None,
                     }],
                     pin: CallPin::None,
                     on_form: OnFormKind::NotForm,
@@ -349,6 +350,7 @@ fn alias_program(interner: &mut Interner) -> DResult<(Program, Symbol, Symbol)> 
                         ty: wrap,
                         variant: mk_wrap,
                         args: vec![Expr::Int(7)],
+                        pin: CtorPin::None,
                     }],
                     pin: CallPin::None,
                     on_form: OnFormKind::NotForm,

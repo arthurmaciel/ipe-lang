@@ -33,7 +33,7 @@ use ipe_backend_rust::RustBackend;
 use ipe_diagnostics::{DResult, Diagnostic};
 use ipe_intern::Interner;
 use ipe_ir::{
-    Arm, CallPin, Callee, EnumDef, Expr, Func, FuncId, IrType, KernelFn, ModPath, Module,
+    Arm, CallPin, Callee, CtorPin, EnumDef, Expr, Func, FuncId, IrType, KernelFn, ModPath, Module,
     OnFormKind, Pat, Program, TypeDef, Variant,
 };
 
@@ -122,6 +122,7 @@ fn wrap_program(i: &mut Interner) -> DResult<Program> {
                         ty: wrap,
                         variant: mk_wrap,
                         args: vec![Expr::Tuple(vec![Expr::Int(3), Expr::Int(4)])],
+                        pin: CtorPin::None,
                     }],
                     pin: CallPin::None,
                     on_form: OnFormKind::NotForm,

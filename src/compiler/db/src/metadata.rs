@@ -181,6 +181,7 @@ fn walk_expr(
             ty,
             variant: _,
             args,
+            pin: _,
         } => {
             types.insert((home.clone(), *ty));
             for arg in args {

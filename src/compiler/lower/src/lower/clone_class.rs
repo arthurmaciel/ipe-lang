@@ -837,6 +837,7 @@ pub(super) fn rewrite_captured_clones(
             ty,
             variant,
             args,
+            pin,
         } => Ok(Expr::Ctor {
             home,
             ty,
@@ -845,6 +846,7 @@ pub(super) fn rewrite_captured_clones(
                 .into_iter()
                 .map(|a| rewrite_captured_clones(clone_set, noncl_set, lambda_span, a, depth))
                 .collect::<DResult<Vec<_>>>()?,
+            pin,
         }),
         // TailLoop/TailRecur are produced by a post-lower TCO pass that runs
         // AFTER lower_lambda — they cannot appear inside a lambda body at this
@@ -1278,6 +1280,7 @@ pub(super) fn rewrite_multiuse_clones(sym: Symbol, remaining: &mut usize, expr: 
             ty,
             variant,
             args,
+            pin,
         } => Expr::Ctor {
             home,
             ty,
@@ -1286,6 +1289,7 @@ pub(super) fn rewrite_multiuse_clones(sym: Symbol, remaining: &mut usize, expr: 
                 .into_iter()
                 .map(|a| rewrite_multiuse_clones(sym, remaining, a))
                 .collect(),
+            pin,
         },
         Expr::TaskSeq { effect, rest } => Expr::TaskSeq {
             effect: Box::new(rewrite_multiuse_clones(sym, remaining, *effect)),

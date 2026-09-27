@@ -240,6 +240,7 @@ fn emit_web_route(
         ty,
         variant,
         args: ctor_args,
+        pin: _,
     } = builder_e
     {
         // The full field-type slice (not just the count) so each slot can

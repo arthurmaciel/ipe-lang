@@ -2748,12 +2748,14 @@ pub enum Expr {
     /// declared field, in source order. The backend resolves the variant's
     /// declared field types from the enum declaration (keyed by `(home, ty)`) to
     /// wrap any direct-self-recursive field in `Box::new` at construction
-    /// (matching the boxed enum field).
+    /// (matching the boxed enum field). `pin` fixes the enum's phantom type
+    /// arguments at the construction site (see [`CtorPin`]).
     Ctor {
         home: ModPath,
         ty: Symbol,
         variant: Symbol,
         args: Vec<Self>,
+        pin: CtorPin,
     },
     BinOp {
         op: BinOp,
@@ -3099,6 +3101,44 @@ pub enum CallPin {
     /// Renders `::<IpeError>`. Used by `decimal_from_string<E: From<String>>`
     /// and its kin when the `Err` channel is discarded.
     ErrIpeError,
+}
+
+/// The type arguments a constructor application fixes at its construction site.
+///
+/// A phantom-born value (`Nothing`, an `Err` whose `Ok` type is free, a
+/// nullary constructor of a phantom-parameterised user enum) gives rustc
+/// nothing to infer its enum's type arguments from. The producer pins each
+/// phantom argument once, so every consumer (a binder, a direct argument, a
+/// `case` scrutinee) receives a value of one concrete type.
+#[derive(Clone, PartialEq, Eq, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub enum CtorPin {
+    /// No turbofish: rustc infers every type argument.
+    #[default]
+    None,
+    /// One entry per type parameter of the constructor's enum, in declaration
+    /// order, at least one of them [`TypeArgPin::Pinned`].
+    TypeArgs(Vec<TypeArgPin>),
+}
+
+/// One type argument of a pinned constructor application.
+#[derive(Clone, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize)]
+pub enum TypeArgPin {
+    /// Left to rustc; renders `_`.
+    Inferred,
+    /// Fixed to this type.
+    Pinned(IrType),
+}
+
+impl CtorPin {
+    /// The pin over `args`, or [`Self::None`] when none of them is pinned.
+    #[must_use]
+    pub fn from_type_args(args: Vec<TypeArgPin>) -> Self {
+        if args.iter().any(|a| matches!(a, TypeArgPin::Pinned(_))) {
+            Self::TypeArgs(args)
+        } else {
+            Self::None
+        }
+    }
 }
 
 impl CallPin {
@@ -4976,6 +5016,7 @@ mod tests {
             ty: maybe,
             variant: just,
             args: vec![Expr::Int(5)],
+            pin: CtorPin::None,
         };
         assert_eq!(ctor, ctor.clone());
         assert!(format!("{ctor:?}").contains("Ctor"));

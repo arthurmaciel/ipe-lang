@@ -40,8 +40,8 @@ use ipe_backend_rust::RustBackend;
 use ipe_diagnostics::{DResult, Diagnostic};
 use ipe_intern::{Interner, Symbol};
 use ipe_ir::{
-    Arm, BinOp, CallPin, Callee, EnumDef, Expr, Func, FuncId, IrType, KernelFn, Match, ModPath,
-    Module, OnFormKind, Pat, Program, TypeDef, Variant,
+    Arm, BinOp, CallPin, Callee, CtorPin, EnumDef, Expr, Func, FuncId, IrType, KernelFn, Match,
+    ModPath, Module, OnFormKind, Pat, Program, TypeDef, Variant,
 };
 
 fn emit(interner: &Interner, prog: &Program) -> DResult<String> {
@@ -150,6 +150,7 @@ fn maybe_program(i: &mut Interner) -> DResult<Program> {
                         ty: maybe,
                         variant: just,
                         args: vec![Expr::Int(5)],
+                        pin: CtorPin::None,
                     }],
                     pin: CallPin::None,
                     on_form: OnFormKind::NotForm,
@@ -322,12 +323,14 @@ fn tree_main_fn(interner: &mut Interner, syms: &TreeSyms) -> DResult<Func> {
         ty: syms.tree,
         variant: syms.leaf,
         args: vec![],
+        pin: CtorPin::None,
     };
     let node_lit = |left: Expr, value: i64, right: Expr| Expr::Ctor {
         home: ModPath(vec![]),
         ty: syms.tree,
         variant: syms.node,
         args: vec![left, Expr::Int(value), right],
+        pin: CtorPin::None,
     };
     // Node (Node Leaf 3 Leaf) 4 (Node Leaf 5 Leaf)  → 3 + 4 + 5 = 12
     let the_tree = node_lit(

@@ -236,11 +236,13 @@ fn fold_expr(expr: Expr, funcs: &BTreeMap<FuncId, &Func>, interner: &Interner) -
             ty,
             variant,
             args,
+            pin,
         } => Expr::Ctor {
             home,
             ty,
             variant,
             args: go_vec(args),
+            pin,
         },
         Expr::BinOp { op, lhs, rhs } => Expr::BinOp {
             op,
@@ -583,11 +585,13 @@ fn substitute(expr: Expr, subst: &BTreeMap<Symbol, Expr>) -> Expr {
             ty,
             variant,
             args,
+            pin,
         } => Expr::Ctor {
             home,
             ty,
             variant,
             args: go_vec(args),
+            pin,
         },
         Expr::BinOp { op, lhs, rhs } => Expr::BinOp {
             op,

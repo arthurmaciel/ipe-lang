@@ -416,6 +416,7 @@ pub fn substitute_var(expr: Expr, target: Symbol, replacement: &Expr) -> Expr {
             ty,
             variant,
             args,
+            pin,
         } => Expr::Ctor {
             home,
             ty,
@@ -424,6 +425,7 @@ pub fn substitute_var(expr: Expr, target: Symbol, replacement: &Expr) -> Expr {
                 .into_iter()
                 .map(|a| substitute_var(a, target, replacement))
                 .collect(),
+            pin,
         },
         Expr::TailLoop { params, body } => {
             let new_body = if params.iter().any(|(s, _)| *s == target) {

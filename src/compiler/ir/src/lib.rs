@@ -19,11 +19,12 @@ pub mod record_shapes;
 pub mod seq_clone;
 
 pub use ir::{
-    Arm, BinOp, BoundSet, CallPin, Callee, EnumDef, Expr, Func, FuncId, HtmlEventShape, IrType,
-    KernelClass, KernelFn, Match, ModPath, Module, OnFormKind, Pat, Program, RowParam,
-    RuntimeFeatureId, RuntimeModule, TypeDef, UiCtor, UiPlain, Variant, carrier_is_clone,
-    fun_value_arc_promotable, ir_type_feature_requirement, ir_type_has_effect_carrier,
-    ir_type_is_derivable, ir_type_is_serde, is_dispatch_free, is_irrefutable,
+    Arm, BinOp, BoundSet, CallPin, Callee, CtorPin, EnumDef, Expr, Func, FuncId, HtmlEventShape,
+    IrType, KernelClass, KernelFn, Match, ModPath, Module, OnFormKind, Pat, Program, RowParam,
+    RuntimeFeatureId, RuntimeModule, TypeArgPin, TypeDef, UiCtor, UiPlain, Variant,
+    carrier_is_clone, fun_value_arc_promotable, ir_type_feature_requirement,
+    ir_type_has_effect_carrier, ir_type_is_derivable, ir_type_is_serde, is_dispatch_free,
+    is_irrefutable,
 };
 pub use pretty::{MAX_IR_RENDER_DEPTH, pretty};
 

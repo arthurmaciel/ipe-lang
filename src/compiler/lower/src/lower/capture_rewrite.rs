@@ -233,11 +233,13 @@ pub(super) fn force_shared_capture_clones(sym: Symbol, expr: Expr) -> Expr {
             ty,
             variant,
             args,
+            pin,
         } => Expr::Ctor {
             home,
             ty,
             variant,
             args: force_shared_capture_clones_all(sym, args),
+            pin,
         },
         // `TaskSeq` (auto-forced `let _ = <task>` continuation) emits as
         // `task_and_then(effect, Box::new(move |_| { rest }))` — the emitter

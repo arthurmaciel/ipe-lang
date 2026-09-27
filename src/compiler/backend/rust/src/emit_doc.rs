@@ -51,14 +51,15 @@ use std::borrow::Cow;
 
 use ipe_diagnostics::{DResult, Diagnostic, LowerError, Span};
 use ipe_intern::{Interner, Symbol};
-use ipe_ir::{BinOp, Callee, Expr, IrType, KernelFn, MAX_IR_RENDER_DEPTH, ModPath};
+use ipe_ir::{BinOp, Callee, CtorPin, Expr, IrType, KernelFn, MAX_IR_RENDER_DEPTH, ModPath};
 
 use crate::EmitCtx;
 use crate::doc::{ChainOperand, Doc};
 use crate::emit_expr::{
     call_has_kernel_special_case, callee_name, clone_targets_in_expr, combine_guards,
-    emit_arm_head, emit_binding_stmts, emit_expr_at, emit_match_scrutinee, free_vars,
-    inlined_let_body, record_struct_name, swapped_container_clone_rewrite, wants_arc_ctor,
+    ctor_turbofish, emit_arm_head, emit_binding_stmts, emit_expr_at, emit_match_scrutinee,
+    free_vars, inlined_let_body, record_struct_name, swapped_container_clone_rewrite,
+    wants_arc_ctor,
 };
 use crate::emit_types::{GenericScope, render_type};
 
@@ -184,8 +185,9 @@ pub fn build_doc(
             ty,
             variant,
             args,
+            pin,
         } if !args.is_empty() => {
-            build_ctor(ctx, home, *ty, *variant, args, indent, child, generics)
+            build_ctor(ctx, home, *ty, *variant, args, pin, indent, child, generics)
         }
 
         // `Db.withTransaction conn body`: the transaction wrapper. Its emitted
@@ -1156,15 +1158,17 @@ fn build_ctor(
     ty: Symbol,
     variant: Symbol,
     args: &[Expr],
+    pin: &CtorPin,
     indent: usize,
     child: u16,
     generics: GenericScope,
 ) -> DResult<Doc> {
+    let turbofish = ctor_turbofish(ctx, pin, generics)?;
     // A built-in `Maybe` / `Result` / `Order` / `ChunkEvent` constructor routes to
     // the runtime enum; its payload is never a self-recursive user field, so no
     // field-boxing lookup applies (matching the string emitter).
     if let Some(runtime) = ctx.builtin_runtime_enum(home, ty) {
-        let path = format!("{runtime}::{}", ctx.emit_ident(variant)?);
+        let path = format!("{runtime}{turbofish}::{}", ctx.emit_ident(variant)?);
         let docs = build_args(ctx, args, indent, child, generics)?;
         return Ok(delimited(
             Doc::owned(format!("{path}(")),
@@ -1173,7 +1177,11 @@ fn build_ctor(
         ));
     }
 
-    let path = format!("{}::{}", ctx.enum_name(home, ty)?, ctx.emit_ident(variant)?);
+    let path = format!(
+        "{}{turbofish}::{}",
+        ctx.enum_name(home, ty)?,
+        ctx.emit_ident(variant)?
+    );
     let fields = ctx.variant_fields(home, ty, variant)?;
     if fields.len() != args.len() {
         return Err(Diagnostic::CompilerBug {
@@ -2049,8 +2057,8 @@ mod tests {
 
     use ipe_intern::Interner;
     use ipe_ir::{
-        Arm, BinOp, CallPin, Callee, EnumDef, Expr, Func, FuncId, IrType, KernelFn, Match, ModPath,
-        Module, OnFormKind, Pat, Program, TypeDef, Variant,
+        Arm, BinOp, CallPin, Callee, CtorPin, EnumDef, Expr, Func, FuncId, IrType, KernelFn, Match,
+        ModPath, Module, OnFormKind, Pat, Program, TypeArgPin, TypeDef, Variant,
     };
 
     use super::build_doc;
@@ -2388,6 +2396,7 @@ mod tests {
                 ty: fx.msg_ty,
                 variant: fx.unit_ctor,
                 args: vec![],
+                pin: CtorPin::None,
             },
             // Saturated payload user constructor (structured): `Msg::Wrap(a)`.
             Expr::Ctor {
@@ -2395,6 +2404,7 @@ mod tests {
                 ty: fx.msg_ty,
                 variant: fx.wrap_ctor,
                 args: vec![var(fx, 0)],
+                pin: CtorPin::None,
             },
             // Built-in runtime-enum constructor (structured): `IpeMaybe::Just(a)`.
             Expr::Ctor {
@@ -2402,6 +2412,7 @@ mod tests {
                 ty: fx.maybe_ty,
                 variant: fx.just_ctor,
                 args: vec![var(fx, 0)],
+                pin: CtorPin::None,
             },
             // Plain user-function call (structured, inline).
             Expr::Call {
@@ -3274,6 +3285,7 @@ mod tests {
                 ty: fx.msg_ty,
                 variant: fx.wrap_ctor,
                 args: vec![var(&fx, 0)],
+                pin: CtorPin::None,
             };
             // The exact Rust enum name the emitter chooses for `Main.Msg`.
             let string = emit_expr_at(ctx, &payload, 0, 0, scope).expect("emit_expr_at");
@@ -3286,6 +3298,7 @@ mod tests {
                 ty: fx.msg_ty,
                 variant: fx.unit_ctor,
                 args: vec![],
+                pin: CtorPin::None,
             };
             let ns = emit_expr_at(ctx, &nullary, 0, 0, scope).expect("emit_expr_at");
             let nd = build_doc(ctx, &nullary, 0, 0, scope).expect("build_doc");
@@ -3310,6 +3323,7 @@ mod tests {
                 ty: fx.msg_ty,
                 variant: fx.triple_ctor,
                 args: vec![var(&fx, 7), var(&fx, 8), var(&fx, 9)],
+                pin: CtorPin::None,
             };
             // Recover the emitter's chosen prefix from the flat string form
             // (`<EnumName>::Triple(` up to the first `(`).
@@ -4222,9 +4236,59 @@ mod tests {
                 ty: fx.maybe_ty,
                 variant: fx.just_ctor,
                 args: vec![var(&fx, 0)],
+                pin: CtorPin::None,
             };
             let doc = build_doc(ctx, &expr, 0, 0, scope).expect("build_doc");
             assert_eq!(render(&doc, RenderConfig::default()), "IpeMaybe::Just(a)");
+        });
+    }
+
+    /// A producer pin renders as a turbofish on the enum half of the path.
+    ///
+    /// The Doc and string emitters agree on it, and an inferred type argument
+    /// stays `_` for rustc.
+    #[test]
+    fn ctor_pin_renders_turbofish_on_enum_path() {
+        let fx = fixture();
+        with_ctx(&fx, |ctx| {
+            let scope = GenericScope::new(&[]);
+            let pin = CtorPin::TypeArgs(vec![TypeArgPin::Pinned(IrType::Str)]);
+            let just = Expr::Ctor {
+                home: ModPath(vec![]),
+                ty: fx.maybe_ty,
+                variant: fx.just_ctor,
+                args: vec![var(&fx, 0)],
+                pin: pin.clone(),
+            };
+            let doc = build_doc(ctx, &just, 0, 0, scope).expect("build_doc");
+            assert_eq!(
+                render(&doc, RenderConfig::default()),
+                "IpeMaybe::<String>::Just(a)"
+            );
+            let flat = emit_expr_at(ctx, &just, 0, 0, scope).expect("emit_expr_at");
+            assert_eq!(flat, "IpeMaybe::<String>::Just(a)");
+
+            let nullary = |pin| Expr::Ctor {
+                home: ModPath(vec![fx.main_mod]),
+                ty: fx.msg_ty,
+                variant: fx.unit_ctor,
+                args: vec![],
+                pin,
+            };
+            let bare = emit_expr_at(ctx, &nullary(CtorPin::None), 0, 0, scope).expect("bare");
+            let pinned = emit_expr_at(ctx, &nullary(pin), 0, 0, scope).expect("pinned");
+            assert_eq!(pinned, bare.replacen("::", "::<String>::", 1));
+
+            let mixed =
+                CtorPin::TypeArgs(vec![TypeArgPin::Inferred, TypeArgPin::Pinned(IrType::Str)]);
+            assert_eq!(
+                crate::emit_expr::ctor_turbofish(ctx, &mixed, scope).expect("turbofish"),
+                "::<_, String>"
+            );
+            assert_eq!(
+                crate::emit_expr::ctor_turbofish(ctx, &CtorPin::None, scope).expect("none"),
+                ""
+            );
         });
     }
 

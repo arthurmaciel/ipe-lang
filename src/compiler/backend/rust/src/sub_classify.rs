@@ -188,7 +188,7 @@ fn scalar_json(expr: &Expr) -> Option<String> {
 mod tests {
     use super::{CompileSubDescription, sub_of_entry, write_json_string};
     use ipe_intern::Symbol;
-    use ipe_ir::{CallPin, Callee, Expr, KernelFn, ModPath, OnFormKind};
+    use ipe_ir::{CallPin, Callee, CtorPin, Expr, KernelFn, ModPath, OnFormKind};
 
     fn tick_sym() -> Symbol {
         Symbol::from_raw(10)
@@ -214,6 +214,7 @@ mod tests {
             ty: msg_ty(),
             variant,
             args,
+            pin: CtorPin::None,
         }
     }
 

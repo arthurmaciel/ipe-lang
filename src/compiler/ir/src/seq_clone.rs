@@ -243,6 +243,7 @@ fn rewrite(expr: Expr, target: Symbol, eager: bool) -> Expr {
             ty,
             variant,
             args,
+            pin,
         } => Expr::Ctor {
             home,
             ty,
@@ -251,6 +252,7 @@ fn rewrite(expr: Expr, target: Symbol, eager: bool) -> Expr {
                 .into_iter()
                 .map(|a| rewrite(a, target, eager))
                 .collect(),
+            pin,
         },
         Expr::TailLoop { params, body } => {
             let new_body = if params.iter().any(|(s, _)| *s == target) {

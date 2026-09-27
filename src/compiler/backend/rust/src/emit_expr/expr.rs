@@ -1,10 +1,10 @@
 use super::{
-    BinOp, Callee, DResult, Diagnostic, Expr, GenericScope, IrType, KernelClass, KernelFn,
-    LowerError, MAX_EMIT_DEPTH, Match, ModPath, Span, Symbol, callee_name, clone_targets_in_expr,
-    combine_guards, emit_apply, emit_arm_head, emit_binding_stmts, emit_config_ctor_call,
-    emit_css_value_call, emit_db_call, emit_ffi_glued_call, emit_func_value, emit_html_template,
-    emit_http_builder_call, emit_http_call, emit_json_decoder_call, emit_lambda,
-    emit_lambda_unboxed, emit_match_scrutinee, emit_process_run_in_pty_call,
+    BinOp, Callee, CtorPin, DResult, Diagnostic, Expr, GenericScope, IrType, KernelClass, KernelFn,
+    LowerError, MAX_EMIT_DEPTH, Match, ModPath, Span, Symbol, TypeArgPin, callee_name,
+    clone_targets_in_expr, combine_guards, emit_apply, emit_arm_head, emit_binding_stmts,
+    emit_config_ctor_call, emit_css_value_call, emit_db_call, emit_ffi_glued_call, emit_func_value,
+    emit_html_template, emit_http_builder_call, emit_http_call, emit_json_decoder_call,
+    emit_lambda, emit_lambda_unboxed, emit_match_scrutinee, emit_process_run_in_pty_call,
     emit_process_run_with_call, emit_record, emit_server_call, emit_shared_lambda,
     emit_task_retry_call, emit_tea_call, emit_ui_call, emit_ui_template, emit_update,
     float_literal, free_vars, indent_of, inlined_let_body, ir_type_is_definitely_copy, op_str,
@@ -96,7 +96,8 @@ pub fn emit_expr_at(
             ty,
             variant,
             args,
-        } => emit_ctor(ctx, home, *ty, *variant, args, indent, depth, generics),
+            pin,
+        } => emit_ctor(ctx, home, *ty, *variant, args, pin, indent, depth, generics),
         Expr::BinOp { op, lhs, rhs } => {
             let l = emit_expr_at(ctx, lhs, indent, child, generics)?;
             let r = emit_expr_at(ctx, rhs, indent, child, generics)?;
@@ -852,9 +853,28 @@ pub fn emit_list(
     Ok(format!("vec![{}]", parts.join(", ")))
 }
 
+/// The turbofish a constructor path carries for its producer pin.
+///
+/// Empty for [`CtorPin::None`]; otherwise `::<A, _, B>` with each pinned type
+/// argument rendered and each inferred one left as `_` for rustc.
+pub fn ctor_turbofish(ctx: &EmitCtx, pin: &CtorPin, generics: GenericScope) -> DResult<String> {
+    let CtorPin::TypeArgs(args) = pin else {
+        return Ok(String::new());
+    };
+    let mut parts = Vec::with_capacity(args.len());
+    for arg in args {
+        parts.push(match arg {
+            TypeArgPin::Inferred => "_".to_owned(),
+            TypeArgPin::Pinned(ty) => render_type(ctx, ty, generics)?,
+        });
+    }
+    Ok(format!("::<{}>", parts.join(", ")))
+}
+
 /// Emit a constructor application. A nullary constructor renders as the bare
 /// path `EnumName::Variant`; a payload constructor renders
-/// `EnumName::Variant(arg0, arg1, …)`. A payload position on a type-size cycle
+/// `EnumName::Variant(arg0, arg1, …)`. A producer pin adds its turbofish to
+/// the enum half of the path (`IpeMaybe::<String>::Nothing`). A payload position on a type-size cycle
 /// back to its own enum is wrapped in `Box::new(…)` to balance the boxed enum
 /// field (see [`crate::EmitCtx::is_cyclic_self_field`]). Kept out of the
 /// `emit_expr_at` match (`#[inline(never)]`) so its locals don't inflate the
@@ -869,16 +889,18 @@ pub fn emit_ctor(
     ty: Symbol,
     variant: Symbol,
     args: &[Expr],
+    pin: &CtorPin,
     indent: usize,
     depth: u16,
     generics: GenericScope,
 ) -> DResult<String> {
     let child = depth + 1;
+    let turbofish = ctor_turbofish(ctx, pin, generics)?;
     // A built-in `Maybe` / `Result` constructor routes to the runtime enum
     // (`IpeMaybe::Just(..)`, `IpeResult::Err(..)`); its payload is never a
     // self-recursive user field, so no field-boxing lookup applies.
     if let Some(runtime) = ctx.builtin_runtime_enum(home, ty) {
-        let path = format!("{runtime}::{}", ctx.emit_ident(variant)?);
+        let path = format!("{runtime}{turbofish}::{}", ctx.emit_ident(variant)?);
         if args.is_empty() {
             return Ok(path);
         }
@@ -888,7 +910,11 @@ pub fn emit_ctor(
         }
         return Ok(format!("{path}({})", parts.join(", ")));
     }
-    let path = format!("{}::{}", ctx.enum_name(home, ty)?, ctx.emit_ident(variant)?);
+    let path = format!(
+        "{}{turbofish}::{}",
+        ctx.enum_name(home, ty)?,
+        ctx.emit_ident(variant)?
+    );
     if args.is_empty() {
         return Ok(path);
     }

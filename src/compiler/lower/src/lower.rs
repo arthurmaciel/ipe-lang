@@ -26,10 +26,10 @@ use ipe_intern::{Interner, Symbol};
 use ipe_ir::free_vars::pat_bound_symbols;
 use ipe_ir::let_inline::{inlined_let_body, let_value_is_inlined};
 use ipe_ir::{
-    Arm, BinOp, BoundSet, CallPin, Callee, Capability, EnumDef, Expr, Func, FuncId, IrType,
-    KernelFn, Match, ModPath, Module, OnFormKind, Pat, Program, RowParam, RuntimeModule, TypeDef,
-    UiCtor, UiPlain, Variant, fun_value_arc_promotable, ir_type_has_effect_carrier,
-    ir_type_is_serde, is_dispatch_free, is_irrefutable,
+    Arm, BinOp, BoundSet, CallPin, Callee, Capability, CtorPin, EnumDef, Expr, Func, FuncId,
+    IrType, KernelFn, Match, ModPath, Module, OnFormKind, Pat, Program, RowParam, RuntimeModule,
+    TypeArgPin, TypeDef, UiCtor, UiPlain, Variant, fun_value_arc_promotable,
+    ir_type_has_effect_carrier, ir_type_is_serde, is_dispatch_free, is_irrefutable,
 };
 use ipe_types::{RowTail, SolvedTypes, Ty, TyBounds};
 
@@ -392,11 +392,13 @@ fn clear_let_bound_task_fail_pins(expr: Expr) -> Expr {
             ty,
             variant,
             args,
+            pin,
         } => Expr::Ctor {
             home,
             ty,
             variant,
             args: args.into_iter().map(recur).collect(),
+            pin,
         },
         Expr::TailRecur { args } => Expr::TailRecur {
             args: args.into_iter().map(recur).collect(),
@@ -2334,11 +2336,13 @@ fn promote_unification_sibling_lambdas(
             ty,
             variant,
             args,
+            pin,
         } => Ok(Expr::Ctor {
             home,
             ty,
             variant,
             args: args.into_iter().map(recur).collect::<DResult<Vec<_>>>()?,
+            pin,
         }),
         Expr::TaskSeq { effect, rest } => Ok(Expr::TaskSeq {
             effect: Box::new(recur(*effect)?),
@@ -7508,6 +7512,7 @@ fn shim_fn_value_reads_at(
             ty,
             variant,
             args,
+            pin,
         } => {
             let args = if builtin_ctors.contains(&variant) {
                 recurse_all(args)?
@@ -7519,6 +7524,7 @@ fn shim_fn_value_reads_at(
                 ty,
                 variant,
                 args,
+                pin,
             })
         }
         // A `Tuple` component, a `List` element, and a `Cons` head/tail are all
@@ -9422,6 +9428,7 @@ fn emit_projection_operand_expr(
                 ty: builtins.sqlvalue,
                 variant: sql_variant,
                 args: vec![lowered],
+                pin: CtorPin::None,
             });
             (builtins.operand_literal, Vec::new())
         }
@@ -9885,6 +9892,7 @@ fn rewrite_var_free_occurrences(
             ty,
             variant,
             args,
+            pin,
         } => Expr::Ctor {
             home,
             ty,
@@ -9893,6 +9901,7 @@ fn rewrite_var_free_occurrences(
                 .into_iter()
                 .map(|a| rewrite_var_free_occurrences(target, a, on_hit))
                 .collect(),
+            pin,
         },
         // TailLoop/TailRecur are produced by a separate TCO pass that runs
         // AFTER lower_let, so they never appear in the IR at the point this
@@ -12601,6 +12610,7 @@ impl<'a> Lowerer<'a> {
             ty: self.builtins.sqlvalue,
             variant,
             args: vec![value],
+            pin: CtorPin::None,
         })
     }
 
@@ -12669,12 +12679,14 @@ impl<'a> Lowerer<'a> {
             ty: ids.compareop_ty,
             variant: ids.opeq_variant,
             args: vec![],
+            pin: CtorPin::None,
         };
         Ok(Expr::Ctor {
             home: ids.home,
             ty: ids.cond_ty,
             variant: ids.compare_variant,
             args: vec![op_eq, Expr::Str(column), sql_value],
+            pin: CtorPin::None,
         })
     }
 
@@ -12807,12 +12819,14 @@ impl<'a> Lowerer<'a> {
             ty: compareop_ty,
             variant: op_variant,
             args: vec![],
+            pin: CtorPin::None,
         };
         Ok(Expr::Ctor {
             home: ids.home,
             ty: ids.cond_ty,
             variant: ids.compare_variant,
             args: vec![op, Expr::Str(column), sql_value],
+            pin: CtorPin::None,
         })
     }
 
@@ -12837,6 +12851,7 @@ impl<'a> Lowerer<'a> {
             ty: ids.cond_ty,
             variant: like_variant,
             args: vec![Expr::Str(column), lowered_pattern],
+            pin: CtorPin::None,
         })
     }
 
@@ -12862,6 +12877,7 @@ impl<'a> Lowerer<'a> {
             ty: ids.cond_ty,
             variant: is_null_variant,
             args: vec![Expr::Str(column)],
+            pin: CtorPin::None,
         })
     }
 
@@ -12886,6 +12902,7 @@ impl<'a> Lowerer<'a> {
             ty: ids.cond_ty,
             variant: not_null_variant,
             args: vec![Expr::Str(column)],
+            pin: CtorPin::None,
         })
     }
 
@@ -13082,6 +13099,7 @@ impl<'a> Lowerer<'a> {
                         ty: pt_ty,
                         variant: b.column_term,
                         args: vec![Expr::Str(alias), Expr::Str(column)],
+                        pin: CtorPin::None,
                     });
                 }
                 ProjectionSource::Literal { lowered } => {
@@ -13090,6 +13108,7 @@ impl<'a> Lowerer<'a> {
                         ty: pt_ty,
                         variant: b.literal_term,
                         args: Vec::new(),
+                        pin: CtorPin::None,
                     });
                     // Wrap in the `SqlValue` constructor the field's type selects,
                     // so `project_params` in the emitter converts it to `SqlParam`.
@@ -13104,6 +13123,7 @@ impl<'a> Lowerer<'a> {
                         ty: b.sqlvalue,
                         variant,
                         args: vec![lowered],
+                        pin: CtorPin::None,
                     });
                 }
                 ProjectionSource::UpperOf { alias, column } => {
@@ -13113,6 +13133,7 @@ impl<'a> Lowerer<'a> {
                         ty: pt_ty,
                         variant: b.upper_term,
                         args: vec![Expr::Str(dotted)],
+                        pin: CtorPin::None,
                     });
                 }
                 ProjectionSource::LowerOf { alias, column } => {
@@ -13122,6 +13143,7 @@ impl<'a> Lowerer<'a> {
                         ty: pt_ty,
                         variant: b.lower_term,
                         args: vec![Expr::Str(dotted)],
+                        pin: CtorPin::None,
                     });
                 }
                 ProjectionSource::Coalesce { left, right } => {
@@ -13142,14 +13164,17 @@ impl<'a> Lowerer<'a> {
                                 ty: co_ty,
                                 variant: a_expr.0,
                                 args: a_expr.1,
+                                pin: CtorPin::None,
                             },
                             Expr::Ctor {
                                 home: ModPath(Vec::new()),
                                 ty: co_ty,
                                 variant: b_expr.0,
                                 args: b_expr.1,
+                                pin: CtorPin::None,
                             },
                         ],
+                        pin: CtorPin::None,
                     });
                 }
                 ProjectionSource::Arith { op, left, right } => {
@@ -13175,20 +13200,24 @@ impl<'a> Lowerer<'a> {
                                 ty: b.arith_op,
                                 variant: op_variant,
                                 args: Vec::new(),
+                                pin: CtorPin::None,
                             },
                             Expr::Ctor {
                                 home: ModPath(Vec::new()),
                                 ty: co_ty,
                                 variant: a_expr.0,
                                 args: a_expr.1,
+                                pin: CtorPin::None,
                             },
                             Expr::Ctor {
                                 home: ModPath(Vec::new()),
                                 ty: co_ty,
                                 variant: b_expr.0,
                                 args: b_expr.1,
+                                pin: CtorPin::None,
                             },
                         ],
+                        pin: CtorPin::None,
                     });
                 }
             }
@@ -14152,6 +14181,7 @@ impl<'a> Lowerer<'a> {
                 ty: self.builtins.sqlvalue,
                 variant,
                 args: vec![Expr::Var(param_sym)],
+                pin: CtorPin::None,
             }),
         })
     }
@@ -17830,6 +17860,54 @@ impl<'a> Lowerer<'a> {
         }
     }
 
+    /// The producer pin for a constructor application built at `span`.
+    ///
+    /// Each phantom type argument of the constructed type is pinned to the
+    /// same [`PhantomPosition`] default [`Self::binder_ir_type`] classifies a
+    /// binder of that type at, so a phantom-born value is emitted at the type
+    /// every consumer of it is checked and annotated at. Arguments without a
+    /// phantom stay inferred. [`CtorPin::None`] when no argument is a phantom,
+    /// when a phantom sits where no default applies (under a function arrow),
+    /// or when the type's Rust form does not carry the type's own arguments.
+    fn ctor_pin(&self, span: Span, home: &ModPath, type_name: Symbol) -> DResult<CtorPin> {
+        let Some(ty @ Ty::Con { args, .. }) = self.region_ty(span) else {
+            return Ok(CtorPin::None);
+        };
+        let mut pinned = false;
+        let Some(defaulted) = self.pin_phantom_vars(ty, Some(PhantomPosition::Value), &mut pinned)
+        else {
+            return Ok(CtorPin::None);
+        };
+        if !pinned {
+            return Ok(CtorPin::None);
+        }
+        let ir_args = match self.ir_type_from_ty(&defaulted, span)? {
+            IrType::Maybe(t) => vec![*t],
+            IrType::Result(e, a) => vec![*e, *a],
+            IrType::Enum {
+                home: h,
+                name,
+                args: ir_args,
+            } if h == *home && name == type_name => ir_args,
+            _ => return Ok(CtorPin::None),
+        };
+        if ir_args.len() != args.len() {
+            return Ok(CtorPin::None);
+        }
+        Ok(CtorPin::from_type_args(
+            args.iter()
+                .zip(ir_args)
+                .map(|(arg, ir)| {
+                    if self.ty_has_phantom(arg) {
+                        TypeArgPin::Pinned(ir)
+                    } else {
+                        TypeArgPin::Inferred
+                    }
+                })
+                .collect(),
+        ))
+    }
+
     /// Resolve the IR type of a binder known to be used at `use_span`.
     ///
     /// Same fail-closed contract as [`Self::binder_ir_type`], for the sites
@@ -20157,11 +20235,13 @@ impl<'a> Lowerer<'a> {
                 let ctor_home = ModPath(home.clone());
                 let arity = self.ctor_arity_of(&ctor_home, *name)?;
                 if arity == 0 {
+                    let pin = self.ctor_pin(e.span, &ctor_home, *type_name)?;
                     Ok(Expr::Ctor {
                         home: ctor_home,
                         ty: *type_name,
                         variant: *name,
                         args: vec![],
+                        pin,
                     })
                 } else {
                     // Bare payload constructor used as a first-class function value
@@ -20207,6 +20287,7 @@ impl<'a> Lowerer<'a> {
                         ty: *type_name,
                         variant: *name,
                         args: ctor_args,
+                        pin: CtorPin::None,
                     };
                     Ok(Expr::Lambda {
                         params,
@@ -20871,6 +20952,7 @@ impl<'a> Lowerer<'a> {
                     ty: *type_name,
                     variant: *name,
                     args: vec![],
+                    pin: CtorPin::None,
                 });
             }
         }
@@ -22145,11 +22227,13 @@ impl<'a> Lowerer<'a> {
                             })
                             .collect::<DResult<Vec<_>>>()?
                     };
+                    let pin = self.ctor_pin(call_span, &ctor_home, *type_name)?;
                     Ok(Expr::Ctor {
                         home: ctor_home,
                         ty: *type_name,
                         variant: *name,
                         args,
+                        pin,
                     })
                 } else {
                     // Partial ctor application: eta-expand into a closure that
@@ -23306,6 +23390,7 @@ impl<'a> Lowerer<'a> {
             ty: type_name,
             variant: name,
             args: call_args,
+            pin: CtorPin::None,
         };
         let lambda = Expr::Lambda {
             params,
@@ -29749,17 +29834,29 @@ mod tests {
     const PROGRAM_PHANTOM_MSG_SPAN: Span = Span::new(60, 61);
     /// A span the binder-type tests record `Result <free var> <free var>` at.
     const RESULT_PHANTOM_SPAN: Span = Span::new(70, 71);
+    /// A span the binder-type tests record `Maybe <free var>` at.
+    const MAYBE_PHANTOM_SPAN: Span = Span::new(80, 81);
+    /// A span the binder-type tests record `Result String <free var>` at.
+    const RESULT_FREE_OK_SPAN: Span = Span::new(90, 91);
+    /// A span the binder-type tests record `Maybe String` at.
+    const MAYBE_CLOSED_SPAN: Span = Span::new(100, 101);
 
     /// Run `check` against a lowerer whose solved regions are the spans above.
     fn with_binder_type_lowerer(check: impl FnOnce(&Lowerer<'_>, ipe_intern::Symbol)) {
         let mut interner = Interner::new();
         let builtins = build_test_builtin_ctors(&mut interner);
         let sym = interner.intern("captured").unwrap();
-        interner.intern("String").unwrap();
         let program = interner.intern("Program").unwrap();
         let web = interner.intern("Web").unwrap();
         let result = interner.intern("Result").unwrap();
         interner.intern("Error").unwrap();
+        let string = interner.intern("String").unwrap();
+        let maybe = interner.intern("Maybe").unwrap();
+        let con = |name, args| Ty::Con {
+            module: vec![],
+            name,
+            args,
+        };
         let module = canon::Module {
             imports_unsafe_submodule: false,
             imported_web_capabilities: BTreeSet::new(),
@@ -29806,6 +29903,18 @@ mod tests {
                 name: result,
                 args: vec![Ty::Var(7), Ty::Var(7)],
             },
+        );
+        types.regions.insert(
+            (Vec::new(), MAYBE_PHANTOM_SPAN),
+            con(maybe, vec![Ty::Var(7)]),
+        );
+        types.regions.insert(
+            (Vec::new(), RESULT_FREE_OK_SPAN),
+            con(result, vec![con(string, vec![]), Ty::Var(7)]),
+        );
+        types.regions.insert(
+            (Vec::new(), MAYBE_CLOSED_SPAN),
+            con(maybe, vec![con(string, vec![])]),
         );
         let lowerer = Lowerer::new(
             &module,
@@ -29927,6 +30036,67 @@ mod tests {
             );
             assert!(!lowerer.result_error_unresolved(RESULT_PHANTOM_SPAN));
             assert!(!lowerer.ty_has_phantom(&var));
+        });
+    }
+
+    /// A constructor's phantom type arguments are pinned; the rest stay inferred.
+    #[test]
+    fn ctor_pin_pins_only_phantom_type_args() {
+        with_binder_type_lowerer(|lowerer, _| {
+            let (Some(maybe), Some(result)) = (
+                lowerer.interner.lookup("Maybe"),
+                lowerer.interner.lookup("Result"),
+            ) else {
+                return;
+            };
+            let prelude = super::ModPath(vec![]);
+            let value = super::TypeArgPin::Pinned(super::PhantomPosition::Value.ir_type());
+            let error = super::TypeArgPin::Pinned(super::PhantomPosition::ResultError.ir_type());
+            let pin_at = |span, ty| lowerer.ctor_pin(span, &prelude, ty);
+            assert!(matches!(
+                pin_at(MAYBE_PHANTOM_SPAN, maybe),
+                Ok(super::CtorPin::TypeArgs(a)) if a == vec![value.clone()]
+            ));
+            assert!(matches!(
+                pin_at(RESULT_FREE_OK_SPAN, result),
+                Ok(super::CtorPin::TypeArgs(a))
+                    if a == vec![super::TypeArgPin::Inferred, value.clone()]
+            ));
+            assert!(
+                matches!(
+                    pin_at(RESULT_PHANTOM_SPAN, result),
+                    Ok(super::CtorPin::TypeArgs(a)) if a == vec![error, value]
+                ),
+                "a phantom error slot takes the error-slot default"
+            );
+        });
+    }
+
+    /// A constructor with no defaultable phantom carries no pin.
+    #[test]
+    fn ctor_pin_leaves_closed_and_arrow_types_unpinned() {
+        with_binder_type_lowerer(|lowerer, sym| {
+            let Some(maybe) = lowerer.interner.lookup("Maybe") else {
+                return;
+            };
+            let prelude = super::ModPath(vec![]);
+            let none = |span| {
+                matches!(
+                    lowerer.ctor_pin(span, &prelude, maybe),
+                    Ok(super::CtorPin::None)
+                )
+            };
+            assert!(none(MAYBE_CLOSED_SPAN), "a closed type is inferred");
+            assert!(
+                none(FUN_FREE_VAR_SPAN),
+                "a phantom under an arrow is not defaulted"
+            );
+            assert!(none(UNTYPED_SPAN), "no solved type, nothing to pin");
+            lowerer.current_poly_tvars.borrow_mut().insert(7, sym);
+            assert!(
+                none(MAYBE_PHANTOM_SPAN),
+                "an enclosing generic keeps its generic"
+            );
         });
     }
 
