@@ -9,8 +9,10 @@
 //! refusals below pin that a stale `onKey` / `onLine` config field and a
 //! wrong-surface input subscription are both rejected at `ipe` time.
 //!
-//! These tests are COMPILE-ONLY (the `ipe` pipeline writes the emitted project
-//! but `cargo` is never invoked), so they run in CI without `IPE_E2E`.
+//! The `ipe` half of every test runs in CI without `IPE_E2E`. The `seal_*`
+//! tests additionally `cargo build` the emitted project under `IPE_E2E=1`, so
+//! every accepted input-subscription shape (point-free, let-bound, lambda,
+//! constructor, helper module) is proven to build, not just to be accepted.
 
 type BoxError = Box<dyn std::error::Error + Send + Sync + 'static>;
 
@@ -539,4 +541,328 @@ fn assert_rejected_files_code(
         Err(ipe::CliError::Pipeline { diag, .. }) if diag.code().as_str() == expected => Ok(()),
         Err(other) => Err(format!("{test_name}: expected {expected}, got {other:?}").into()),
     }
+}
+
+// ── SEAL: every accepted input-subscription shape cargo-builds ──────────────
+
+/// Compile `files` with `ipe`, then under `IPE_E2E` `cargo build` the emitted project.
+///
+/// The build is the SEAL: an input-subscription shape `ipe` accepts must also
+/// build, so a point-free, let-bound, or helper-module reference can never
+/// exit 0 and then fail `cargo` on the bridge closure's `Send + 'static` bound.
+/// Without `IPE_E2E` only the `ipe` half runs.
+fn assert_builds_files(test_name: &str, files: &[(&str, &str)]) -> Result<(), BoxError> {
+    if let Err(e) = compile_files(test_name, files)? {
+        return Err(format!("{test_name}: expected ipe success, got {e:?}").into());
+    }
+    if std::env::var("IPE_E2E").is_err() {
+        return Ok(());
+    }
+    let out_dir = std::env::temp_dir().join(format!("tea_surface_{test_name}_out"));
+    e2e_support::build_rust_binary(test_name, &out_dir)
+        .map(|_| ())
+        .map_err(|e| -> BoxError {
+            format!("{test_name}: ipe accepted but cargo build failed: {e}").into()
+        })
+}
+
+/// [`assert_builds_files`] for a single-module program.
+fn assert_builds(test_name: &str, source: &str) -> Result<(), BoxError> {
+    assert_builds_files(test_name, &[("Main.ipe", source)])
+}
+
+/// `TUI_APP` with `Ipe.List` imported and its subscription body replaced by `subs`.
+fn tui_subscribing(subs: &str) -> Result<String, BoxError> {
+    let src = variant(
+        TUI_APP,
+        "import Ipe.Tea.Tui as Tui\n",
+        "import Ipe.Tea.Tui as Tui\nimport Ipe.List as List\n",
+    )?;
+    variant(&src, "Sub.onKey onKey", subs)
+}
+
+/// `CLI_APP` with `Ipe.List` imported and its subscription body replaced by `subs`.
+fn cli_subscribing(subs: &str) -> Result<String, BoxError> {
+    let src = variant(
+        CLI_APP,
+        "import Ipe.Tea.Cli as Cli\n",
+        "import Ipe.Tea.Cli as Cli\nimport Ipe.List as List\n",
+    )?;
+    variant(&src, "Sub.onLine onLine", subs)
+}
+
+/// `Sub.onKey` mapped point-free over a handler list builds.
+#[test]
+fn seal_tui_on_key_point_free_in_list_map_builds() -> Result<(), BoxError> {
+    let src = tui_subscribing("Sub.batch (List.map Sub.onKey [ onKey, onKey ])")?;
+    assert_builds("seal_tui_list_map", &src)
+}
+
+/// A let-bound `Sub.onKey` applied later builds.
+#[test]
+fn seal_tui_on_key_let_bound_builds() -> Result<(), BoxError> {
+    let src = tui_subscribing("let\n        on =\n            Sub.onKey\n    in\n    on onKey")?;
+    assert_builds("seal_tui_let_bound", &src)
+}
+
+/// `Sub.onKey` with a lambda handler builds.
+#[test]
+fn seal_tui_on_key_lambda_handler_builds() -> Result<(), BoxError> {
+    let src = tui_subscribing("Sub.onKey (\\_ -> NoOp)")?;
+    assert_builds("seal_tui_lambda", &src)
+}
+
+/// `Cli.Sub.onLine` mapped point-free over a handler list builds.
+#[test]
+fn seal_cli_on_line_point_free_in_list_map_builds() -> Result<(), BoxError> {
+    let src = cli_subscribing("Sub.batch (List.map Sub.onLine [ onLine, Line ])")?;
+    assert_builds("seal_cli_list_map", &src)
+}
+
+/// A let-bound `Cli.Sub.onLine` applied later builds.
+#[test]
+fn seal_cli_on_line_let_bound_builds() -> Result<(), BoxError> {
+    let src = cli_subscribing("let\n        on =\n            Sub.onLine\n    in\n    on onLine")?;
+    assert_builds("seal_cli_let_bound", &src)
+}
+
+/// `Cli.Sub.onLine` with a lambda handler builds.
+#[test]
+fn seal_cli_on_line_lambda_handler_builds() -> Result<(), BoxError> {
+    let src = cli_subscribing("Sub.onLine (\\s -> Line s)")?;
+    assert_builds("seal_cli_lambda", &src)
+}
+
+/// `Cli.Sub.onLine` with a constructor handler builds.
+#[test]
+fn seal_cli_on_line_constructor_handler_builds() -> Result<(), BoxError> {
+    let src = cli_subscribing("Sub.onLine Line")?;
+    assert_builds("seal_cli_ctor", &src)
+}
+
+// ── Helper modules exposing an input subscription ───────────────────────────
+
+/// A `Keys` helper exposing point-free `keys` over a polymorphic message.
+const KEYS_POLYMORPHIC: &str = r"module Keys exposing (keys)
+
+import Ipe.Tea.Tui.Sub
+
+type alias KeyEvent = { kind : String, value : String }
+
+keys : (KeyEvent -> msg) -> Sub msg
+keys =
+    Sub.onKey
+";
+
+/// A `Keys` helper exposing point-free `keys` over its own concrete `Msg`.
+const KEYS_CONCRETE: &str = r"module Keys exposing (Msg(..), keys)
+
+import Ipe.Tea.Tui.Sub
+
+type Msg = NoOp
+
+type alias KeyEvent = { kind : String, value : String }
+
+keys : (KeyEvent -> Msg) -> Sub Msg
+keys =
+    Sub.onKey
+";
+
+/// A `Keys` helper exposing an unannotated point-free `keys`.
+const KEYS_UNANNOTATED: &str = r"module Keys exposing (keys)
+
+import Ipe.Tea.Tui.Sub
+
+keys =
+    Sub.onKey
+";
+
+/// A `Keys` helper whose polymorphic `msg` is captured bare into the handler.
+const KEYS_CAPTURED_MSG: &str = r"module Keys exposing (keys)
+
+import Ipe.Tea.Tui.Sub
+
+keys msg =
+    Sub.onKey (\_ -> msg)
+";
+
+/// A `Lines` helper exposing point-free `lines` over a polymorphic message.
+const LINES_POLYMORPHIC: &str = r"module Lines exposing (lines)
+
+import Ipe.Tea.Cli.Sub
+
+lines : (String -> msg) -> Sub msg
+lines =
+    Sub.onLine
+";
+
+/// A `Lines` helper exposing point-free `lines` over its own concrete `Msg`.
+const LINES_CONCRETE: &str = r"module Lines exposing (Msg(..), lines)
+
+import Ipe.Tea.Cli.Sub
+
+type Msg = Line String | NoOp
+
+lines : (String -> Msg) -> Sub Msg
+lines =
+    Sub.onLine
+";
+
+/// A `Lines` helper exposing an unannotated point-free `lines`.
+const LINES_UNANNOTATED: &str = r"module Lines exposing (lines)
+
+import Ipe.Tea.Cli.Sub
+
+lines =
+    Sub.onLine
+";
+
+/// A `Lines` helper whose polymorphic `msg` is captured bare into the handler.
+const LINES_CAPTURED_MSG: &str = r"module Lines exposing (lines)
+
+import Ipe.Tea.Cli.Sub
+
+lines msg =
+    Sub.onLine (\_ -> msg)
+";
+
+/// An entry fixture a helper-module test rewrites to subscribe through the helper.
+struct HelperMain<'a> {
+    /// The entry program.
+    source: &'a str,
+    /// The entry's app import, which the helper import follows.
+    entry_import: &'a str,
+    /// The entry's own `Msg` declaration, dropped when the helper owns `Msg`.
+    own_msg: &'a str,
+    /// The entry's subscription body, replaced by the helper call.
+    own_subs: &'a str,
+}
+
+const TUI_MAIN: HelperMain<'static> = HelperMain {
+    source: TUI_APP,
+    entry_import: "import Ipe.Tea.Tui as Tui\n",
+    own_msg: "type Msg = NoOp\n",
+    own_subs: "Sub.onKey onKey",
+};
+
+const CLI_MAIN: HelperMain<'static> = HelperMain {
+    source: CLI_APP,
+    entry_import: "import Ipe.Tea.Cli as Cli\n",
+    own_msg: "type Msg = Line String | NoOp\n",
+    own_subs: "Sub.onLine onLine",
+};
+
+impl HelperMain<'_> {
+    /// The entry importing `helper` and subscribing through `subs`.
+    ///
+    /// With `exposing`, the helper owns `Msg`, so the entry's own is dropped.
+    fn with(&self, helper: &str, exposing: Option<&str>, subs: &str) -> Result<String, BoxError> {
+        let import = exposing.map_or_else(
+            || format!("import {helper}\n"),
+            |names| format!("import {helper} exposing ({names})\n"),
+        );
+        let src = variant(
+            self.source,
+            self.entry_import,
+            &format!("{}{import}", self.entry_import),
+        )?;
+        let src = if exposing.is_some() {
+            variant(&src, self.own_msg, "")?
+        } else {
+            src
+        };
+        variant(&src, self.own_subs, subs)
+    }
+}
+
+/// A polymorphic point-free helper `keys : (KeyEvent -> msg) -> Sub msg` builds.
+///
+/// The helper's generic `msg` flows into the bridge closure, so it must carry
+/// `Send + 'static` — the shape that exits 0 and then fails `cargo` without it.
+#[test]
+fn seal_tui_polymorphic_point_free_helper_builds() -> Result<(), BoxError> {
+    let main = TUI_MAIN.with("Keys", None, "Keys.keys onKey")?;
+    assert_builds_files(
+        "seal_tui_helper_poly",
+        &[("Main.ipe", main.as_str()), ("Keys.ipe", KEYS_POLYMORPHIC)],
+    )
+}
+
+/// A concrete-`Msg` point-free helper `keys : (KeyEvent -> Msg) -> Sub Msg` builds.
+#[test]
+fn seal_tui_concrete_point_free_helper_builds() -> Result<(), BoxError> {
+    let main = TUI_MAIN.with("Keys", Some("Msg(..)"), "Keys.keys onKey")?;
+    assert_builds_files(
+        "seal_tui_helper_concrete",
+        &[("Main.ipe", main.as_str()), ("Keys.ipe", KEYS_CONCRETE)],
+    )
+}
+
+/// An unannotated point-free helper `keys = Sub.onKey` builds.
+#[test]
+fn seal_tui_unannotated_point_free_helper_builds() -> Result<(), BoxError> {
+    let main = TUI_MAIN.with("Keys", None, "Keys.keys onKey")?;
+    assert_builds_files(
+        "seal_tui_helper_unannotated",
+        &[("Main.ipe", main.as_str()), ("Keys.ipe", KEYS_UNANNOTATED)],
+    )
+}
+
+/// A helper capturing its polymorphic `msg` bare into the key handler builds.
+#[test]
+fn seal_tui_helper_capturing_msg_builds() -> Result<(), BoxError> {
+    let main = TUI_MAIN.with("Keys", None, "Keys.keys NoOp")?;
+    assert_builds_files(
+        "seal_tui_helper_captured",
+        &[("Main.ipe", main.as_str()), ("Keys.ipe", KEYS_CAPTURED_MSG)],
+    )
+}
+
+/// A polymorphic point-free helper `lines : (String -> msg) -> Sub msg` builds.
+#[test]
+fn seal_cli_polymorphic_point_free_helper_builds() -> Result<(), BoxError> {
+    let main = CLI_MAIN.with("Lines", None, "Lines.lines Line")?;
+    assert_builds_files(
+        "seal_cli_helper_poly",
+        &[
+            ("Main.ipe", main.as_str()),
+            ("Lines.ipe", LINES_POLYMORPHIC),
+        ],
+    )
+}
+
+/// A concrete-`Msg` point-free helper `lines : (String -> Msg) -> Sub Msg` builds.
+#[test]
+fn seal_cli_concrete_point_free_helper_builds() -> Result<(), BoxError> {
+    let main = CLI_MAIN.with("Lines", Some("Msg(..)"), "Lines.lines onLine")?;
+    assert_builds_files(
+        "seal_cli_helper_concrete",
+        &[("Main.ipe", main.as_str()), ("Lines.ipe", LINES_CONCRETE)],
+    )
+}
+
+/// An unannotated point-free helper `lines = Sub.onLine` builds.
+#[test]
+fn seal_cli_unannotated_point_free_helper_builds() -> Result<(), BoxError> {
+    let main = CLI_MAIN.with("Lines", None, "Lines.lines onLine")?;
+    assert_builds_files(
+        "seal_cli_helper_unannotated",
+        &[
+            ("Main.ipe", main.as_str()),
+            ("Lines.ipe", LINES_UNANNOTATED),
+        ],
+    )
+}
+
+/// A helper capturing its polymorphic `msg` bare into the line handler builds.
+#[test]
+fn seal_cli_helper_capturing_msg_builds() -> Result<(), BoxError> {
+    let main = CLI_MAIN.with("Lines", None, "Lines.lines NoOp")?;
+    assert_builds_files(
+        "seal_cli_helper_captured",
+        &[
+            ("Main.ipe", main.as_str()),
+            ("Lines.ipe", LINES_CAPTURED_MSG),
+        ],
+    )
 }
