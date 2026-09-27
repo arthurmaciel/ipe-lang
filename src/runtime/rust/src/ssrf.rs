@@ -33,6 +33,8 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::time::Duration;
 use url::Url;
 
+pub use crate::url::SchemeShown;
+
 /// Returns `true` when the SSRF deny-private guard is active.
 ///
 /// Default-ON in production (PRINCIPLES #1: the safe outcome must be the default
@@ -202,6 +204,62 @@ pub fn is_private_ip(ip: IpAddr) -> bool {
     blocked_range(ip).is_some()
 }
 
+/// Whether a refusal may name the host it vetted.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HostDisclosure {
+    /// The host cannot be part of a credential, so a refusal names it.
+    Named,
+    /// The host may be part of a URL's credentials, so a refusal names neither
+    /// it nor any address it resolved to.
+    Withheld,
+}
+
+/// A refused host as the refusal shows it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum HostShown {
+    /// The host as the caller named it.
+    Named(String),
+    /// A host that may be part of a URL's credentials.
+    Withheld,
+}
+
+impl HostShown {
+    /// `host` as a refusal under `disclosure` shows it.
+    fn of(host: &str, disclosure: HostDisclosure) -> Self {
+        match disclosure {
+            HostDisclosure::Named => Self::Named(host.to_owned()),
+            HostDisclosure::Withheld => Self::Withheld,
+        }
+    }
+}
+
+impl std::fmt::Display for HostShown {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Named(host) => write!(f, "host {host:?}"),
+            Self::Withheld => write!(f, "host {WITHHELD_HOST}"),
+        }
+    }
+}
+
+/// A blocked host as the refusal shows it.
+///
+/// The blocked address exists only beside a named host: an IP-literal host's
+/// address re-encodes the host's own text (`1234567` is `0.18.214.135`), so a
+/// withheld host carries no address to show.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum BlockedHost {
+    /// A host the refusal may name, with the blocked address.
+    Named {
+        /// The host as the caller named it.
+        host: String,
+        /// The blocked address.
+        ip: IpAddr,
+    },
+    /// A host that may be part of a URL's credentials.
+    Withheld,
+}
+
 /// Why the SSRF gate refused a dial target.
 ///
 /// `Display` carries no caller prefix; each surface adds its own (`http:`,
@@ -210,29 +268,27 @@ pub fn is_private_ip(ip: IpAddr) -> bool {
 pub enum SsrfRefusal {
     /// The host is, or resolved to, an address in a blocked range.
     Blocked {
-        /// The host as the caller named it.
-        host: String,
-        /// The blocked address.
-        ip: IpAddr,
-        /// The class `ip` belongs to.
+        /// The host, and the blocked address when the host may be named.
+        host: BlockedHost,
+        /// The class of the blocked address.
         range: BlockedRange,
     },
     /// The resolver failed for the host.
     Unresolvable {
-        /// The host as the caller named it.
-        host: String,
+        /// The host as the refusal shows it.
+        host: HostShown,
         /// The resolver's failure class.
         kind: std::io::ErrorKind,
     },
     /// The host resolved to no addresses.
     NoAddresses {
-        /// The host as the caller named it.
-        host: String,
+        /// The host as the refusal shows it.
+        host: HostShown,
     },
     /// Resolution did not finish before the deadline.
     Timeout {
-        /// The host as the caller named it.
-        host: String,
+        /// The host as the refusal shows it.
+        host: HostShown,
         /// The deadline that expired.
         after: Duration,
     },
@@ -253,22 +309,29 @@ pub enum SsrfRefusal {
 impl std::fmt::Display for SsrfRefusal {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Blocked { host, ip, range } => {
+            Self::Blocked {
+                host: BlockedHost::Named { host, ip },
+                range,
+            } => {
                 if strip_ipv6_brackets(host).parse::<IpAddr>().is_ok() {
                     write!(f, "blocked: {range} host {ip}")?;
                 } else {
                     write!(f, "blocked: host {host:?} resolved to {range} address {ip}")?;
                 }
             }
+            Self::Blocked {
+                host: BlockedHost::Withheld,
+                range,
+            } => write!(f, "blocked: {range} host {WITHHELD_HOST}")?,
             Self::Unresolvable { host, kind } => {
-                write!(f, "blocked: could not resolve host {host:?}: {kind}")?;
+                write!(f, "blocked: could not resolve {host}: {kind}")?;
             }
             Self::NoAddresses { host } => {
-                write!(f, "blocked: host {host:?} resolved to no addresses")?;
+                write!(f, "blocked: {host} resolved to no addresses")?;
             }
             Self::Timeout { host, after } => write!(
                 f,
-                "blocked: resolving host {host:?} timed out after {} ms",
+                "blocked: resolving {host} timed out after {} ms",
                 after.as_millis()
             )?,
             Self::LocalSocket => f.write_str("blocked: local socket dial target")?,
@@ -287,35 +350,6 @@ impl std::fmt::Display for SsrfRefusal {
 }
 
 impl std::error::Error for SsrfRefusal {}
-
-impl SsrfRefusal {
-    /// This refusal with the host it names replaced by a placeholder.
-    ///
-    /// For a host read from a URL whose credentials may have spilled into it,
-    /// so the refusal cannot echo part of a credential.
-    fn withholding_host(self) -> Self {
-        let withheld = || WITHHELD_HOST.to_owned();
-        match self {
-            Self::Blocked { ip, range, .. } => Self::Blocked {
-                host: withheld(),
-                ip,
-                range,
-            },
-            Self::Unresolvable { kind, .. } => Self::Unresolvable {
-                host: withheld(),
-                kind,
-            },
-            Self::NoAddresses { .. } => Self::NoAddresses { host: withheld() },
-            Self::Timeout { after, .. } => Self::Timeout {
-                host: withheld(),
-                after,
-            },
-            Self::UnpinnableTlsName { .. } => Self::UnpinnableTlsName { host: withheld() },
-            Self::LocalSocket => Self::LocalSocket,
-            Self::UnprovenTarget => Self::UnprovenTarget,
-        }
-    }
-}
 
 /// Name resolution the SSRF gate vets.
 pub trait HostResolver: Sync {
@@ -371,13 +405,17 @@ pub(crate) fn strip_ipv6_brackets(host: &str) -> &str {
         .unwrap_or(host)
 }
 
-fn refuse_blocked(host: &str, ip: IpAddr) -> Result<(), SsrfRefusal> {
+/// Refuse `ip` when it is blocked, showing `host` as `disclosure` allows.
+fn refuse_blocked(host: &str, disclosure: HostDisclosure, ip: IpAddr) -> Result<(), SsrfRefusal> {
     blocked_range(ip).map_or(Ok(()), |range| {
-        Err(SsrfRefusal::Blocked {
-            host: host.to_owned(),
-            ip,
-            range,
-        })
+        let host = match disclosure {
+            HostDisclosure::Named => BlockedHost::Named {
+                host: host.to_owned(),
+                ip,
+            },
+            HostDisclosure::Withheld => BlockedHost::Withheld,
+        };
+        Err(SsrfRefusal::Blocked { host, range })
     })
 }
 
@@ -414,7 +452,8 @@ impl VettedAddrs {
 /// resolved through `resolver` within `deadline`; if ANY answer is blocked the
 /// whole host is refused (a multi-record answer mixing public and private
 /// addresses is ambiguous), otherwise every answer, carrying `port`, is
-/// returned for the caller to dial directly.
+/// returned for the caller to dial directly. A refusal shows `host` only as
+/// `disclosure` allows.
 ///
 /// # Errors
 ///
@@ -422,6 +461,7 @@ impl VettedAddrs {
 pub async fn vet_host_addrs_with<R: HostResolver>(
     resolver: &R,
     host: &str,
+    disclosure: HostDisclosure,
     port: u16,
     deadline: Duration,
 ) -> Result<VettedAddrs, SsrfRefusal> {
@@ -430,7 +470,7 @@ pub async fn vet_host_addrs_with<R: HostResolver>(
     // single bracket pair and parse the IP literal FIRST, so every v6 literal
     // is decided by `blocked_range` instead of reaching the resolver.
     if let Ok(ip) = strip_ipv6_brackets(host).parse::<IpAddr>() {
-        return refuse_blocked(host, ip).map(|()| VettedAddrs {
+        return refuse_blocked(host, disclosure, ip).map(|()| VettedAddrs {
             first: SocketAddr::new(ip, port),
             rest: Vec::new(),
         });
@@ -439,19 +479,19 @@ pub async fn vet_host_addrs_with<R: HostResolver>(
         Ok(Ok(addrs)) => addrs,
         Ok(Err(e)) => {
             return Err(SsrfRefusal::Unresolvable {
-                host: host.to_owned(),
+                host: HostShown::of(host, disclosure),
                 kind: e.kind(),
             });
         }
         Err(_elapsed) => {
             return Err(SsrfRefusal::Timeout {
-                host: host.to_owned(),
+                host: HostShown::of(host, disclosure),
                 after: deadline,
             });
         }
     };
     for addr in &addrs {
-        refuse_blocked(host, addr.ip())?;
+        refuse_blocked(host, disclosure, addr.ip())?;
     }
     let mut vetted = addrs
         .into_iter()
@@ -459,7 +499,7 @@ pub async fn vet_host_addrs_with<R: HostResolver>(
     vetted.next().map_or_else(
         || {
             Err(SsrfRefusal::NoAddresses {
-                host: host.to_owned(),
+                host: HostShown::of(host, disclosure),
             })
         },
         |first| {
@@ -482,21 +522,32 @@ pub async fn vet_host_addrs_with<R: HostResolver>(
 pub async fn vet_host_with<R: HostResolver>(
     resolver: &R,
     host: &str,
+    disclosure: HostDisclosure,
     port: u16,
     deadline: Duration,
 ) -> Result<SocketAddr, SsrfRefusal> {
-    vet_host_addrs_with(resolver, host, port, deadline)
+    vet_host_addrs_with(resolver, host, disclosure, port, deadline)
         .await
         .map(|vetted| vetted.first())
 }
 
-/// Resolve `host` once through the system resolver under [`dns_timeout`].
+/// Resolve a configured `host` once through the system resolver under [`dns_timeout`].
+///
+/// The host is named by configuration, not read from a URL's authority, so a
+/// refusal names it.
 ///
 /// # Errors
 ///
 /// [`SsrfRefusal`] naming why the host was refused.
 pub async fn vet_host(host: &str, port: u16) -> Result<SocketAddr, SsrfRefusal> {
-    vet_host_with(&SystemResolver, host, port, dns_timeout()).await
+    vet_host_with(
+        &SystemResolver,
+        host,
+        HostDisclosure::Named,
+        port,
+        dns_timeout(),
+    )
+    .await
 }
 
 /// Proof that `host:port` passed the SSRF gate under the policy in effect.
@@ -526,6 +577,9 @@ impl VettedDial {
     }
 
     /// Vet `host:port` under `policy`, resolving through `resolver`.
+    ///
+    /// `host` is a configured host or one read from a URL whose userinfo the
+    /// caller already refused as ambiguous, so a refusal names it.
     pub(crate) async fn for_host_with<R: HostResolver>(
         policy: DialPolicy,
         resolver: &R,
@@ -533,9 +587,11 @@ impl VettedDial {
         port: u16,
     ) -> Result<Self, SsrfRefusal> {
         match policy {
-            DialPolicy::DenyPrivate => vet_host_with(resolver, host, port, dns_timeout())
-                .await
-                .map(Self::Pinned),
+            DialPolicy::DenyPrivate => {
+                vet_host_with(resolver, host, HostDisclosure::Named, port, dns_timeout())
+                    .await
+                    .map(Self::Pinned)
+            }
             DialPolicy::AllowAll => Ok(Self::Unrestricted),
         }
     }
@@ -589,68 +645,6 @@ impl std::fmt::Display for GatedSchemes {
     }
 }
 
-/// The schemes a refusal may name.
-///
-/// `user:password@host` parses with the user name as its scheme, so a scheme
-/// outside this well-known set is withheld rather than echoed.
-const NAMEABLE_SCHEMES: [&str; 22] = [
-    "http",
-    "https",
-    "ws",
-    "wss",
-    "ftp",
-    "ftps",
-    "sftp",
-    "file",
-    "data",
-    "blob",
-    "about",
-    "javascript",
-    "mailto",
-    "tel",
-    "gopher",
-    "dict",
-    "ldap",
-    "ldaps",
-    "ssh",
-    "telnet",
-    "postgres",
-    "postgresql",
-];
-
-/// Stands in for a scheme that may be a user name or token.
-const WITHHELD_SCHEME: &str = "<withheld: may be a user name>";
-
-/// A URL's scheme as an error message may show it.
-///
-/// Holds no text read from the URL: only one of [`NAMEABLE_SCHEMES`] is named.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum SchemeShown {
-    /// A well-known scheme.
-    Known(&'static str),
-    /// A scheme that may be part of the URL's credentials.
-    Withheld,
-}
-
-impl SchemeShown {
-    /// `scheme`, when it is well known; else withheld.
-    pub(crate) fn of(scheme: &str) -> Self {
-        NAMEABLE_SCHEMES
-            .into_iter()
-            .find(|known| known.eq_ignore_ascii_case(scheme))
-            .map_or(Self::Withheld, Self::Known)
-    }
-}
-
-impl std::fmt::Display for SchemeShown {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Known(scheme) => write!(f, "{scheme:?}"),
-            Self::Withheld => f.write_str(WITHHELD_SCHEME),
-        }
-    }
-}
-
 /// Why the SSRF gate refused a URL.
 ///
 /// `Display` carries no caller prefix; each surface adds its own (`http:`,
@@ -659,6 +653,9 @@ impl std::fmt::Display for SchemeShown {
 /// [`SchemeShown`], and a host only when [`DisplayableUrl`] would show it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum UrlRefusal {
+    /// The URL's user name and password may run past its parsed userinfo
+    /// ([`userinfo_may_spill_past_the_query`]).
+    MisplacedUserinfo,
     /// The URL did not parse.
     Invalid {
         /// The parser's reason.
@@ -680,6 +677,12 @@ pub enum UrlRefusal {
 impl std::fmt::Display for UrlRefusal {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::MisplacedUserinfo => f.write_str(
+                "blocked: the URL has a `\\`, or an `@` in its path or fragment, so its user \
+                 name and password may run into the host or path; percent-encode `@`, `/`, \
+                 `?`, `#` and `\\` in the user name and password (as %40, %2F, %3F, %23, \
+                 %5C), and `@` in the path (as %40)",
+            ),
             Self::Invalid { reason } => {
                 write!(f, "blocked: invalid URL: {reason} (IPE_HTTP_DENY_PRIVATE)")
             }
@@ -702,23 +705,23 @@ const WITHHELD_URL_TAIL: &str = "<withheld: may hold credentials>";
 const WITHHELD_HOST: &str = "<withheld: may be part of the URL's credentials>";
 
 /// Whether `raw`'s user name and password may run past what the parser read
-/// as its userinfo.
+/// as its userinfo into its host, path, or fragment.
 ///
 /// Only the authority's last `@` separates the userinfo from the host, and the
 /// authority ends at the first `/`, `?`, or `#` — and, for `http`, `https`,
 /// `ws`, `wss`, `ftp`, and `file`, at `\`. A credential holding one of those
 /// ends the authority early, and the parser reads the rest of it as host,
 /// path, query, or fragment. The parser keeps `@` literal outside the
-/// authority, so the userinfo is ambiguous when `parsed` holds an `@` there,
-/// when `raw` holds a `\` under any scheme, or when `raw` does not parse and
-/// holds an `@`.
-pub(crate) fn userinfo_is_ambiguous(raw: &str, parsed: Option<&Url>) -> bool {
+/// authority, so the userinfo may have spilled when `parsed` holds an `@` in
+/// its path or fragment, when `raw` holds a `\` under any scheme, or when
+/// `raw` does not parse and holds an `@`. An `@` in the query is left to
+/// [`userinfo_is_ambiguous`].
+pub(crate) fn userinfo_may_spill_past_the_query(raw: &str, parsed: Option<&Url>) -> bool {
     raw.contains('\\')
         || parsed.map_or_else(
             || raw.contains('@'),
             |url| {
                 url.path().contains('@')
-                    || url.query().is_some_and(|query| query.contains('@'))
                     || url
                         .fragment()
                         .is_some_and(|fragment| fragment.contains('@'))
@@ -726,20 +729,63 @@ pub(crate) fn userinfo_is_ambiguous(raw: &str, parsed: Option<&Url>) -> bool {
         )
 }
 
-/// A URL as an error message or log line may show it.
+/// Whether `raw`'s user name and password may run past what the parser read
+/// as its userinfo anywhere in the URL.
+///
+/// [`userinfo_may_spill_past_the_query`], or an `@` in the query: a user name
+/// holding a `?` ends the authority there.
+pub(crate) fn userinfo_is_ambiguous(raw: &str, parsed: Option<&Url>) -> bool {
+    userinfo_may_spill_past_the_query(raw, parsed)
+        || parsed.is_some_and(|url| url.query().is_some_and(|query| query.contains('@')))
+}
+
+/// Refuse a URL to dial whose user name and password may run into its host
+/// or path ([`userinfo_may_spill_past_the_query`]).
+///
+/// The dial would reach a host read from the credential and send the rest of
+/// it in the request path, so the URL is refused under every policy. An `@`
+/// in the query is admitted: e-mail addresses and account names routinely
+/// travel there, and a refusal that shows the host withholds it
+/// ([`DisplayableUrl`]). A URL that does not parse is left to the dialler's
+/// own parse, which refuses it.
+///
+/// # Errors
+///
+/// [`UrlRefusal::MisplacedUserinfo`].
+pub(crate) fn refuse_misplaced_userinfo(raw: &str) -> Result<(), UrlRefusal> {
+    let spills = Url::parse(raw).map_or_else(
+        |_| raw.contains('\\'),
+        |url| userinfo_may_spill_past_the_query(raw, Some(&url)),
+    );
+    if spills {
+        Err(UrlRefusal::MisplacedUserinfo)
+    } else {
+        Ok(())
+    }
+}
+
+/// A URL as an error message or log line may show it: scheme, host, and port.
 ///
 /// Derived from the parse the gate dials, never from a second reading of the
-/// text: the userinfo is removed, and everything after the scheme is withheld
-/// when the URL does not parse, its scheme is not nameable, or its userinfo
-/// is ambiguous ([`userinfo_is_ambiguous`]).
+/// text. The userinfo, path, query, and fragment are never shown: a token
+/// travels in any of them (`?access_token=`, `/ws/<session>`). The host is
+/// withheld too when the URL does not parse, its scheme is not nameable, or
+/// its userinfo is ambiguous ([`userinfo_is_ambiguous`]).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DisplayableUrl(Shown);
 
 /// How much of a URL [`DisplayableUrl`] shows.
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum Shown {
-    /// The parsed URL with its userinfo removed.
-    Whole(Url),
+    /// A well-known scheme with the host the parser read and any explicit port.
+    Origin {
+        /// The URL's scheme.
+        scheme: &'static str,
+        /// The host as the URL serializes it (an IPv6 literal bracketed).
+        host: String,
+        /// The port, when the URL names one other than its scheme's default.
+        port: Option<u16>,
+    },
     /// Only the scheme, as [`SchemeShown`] allows.
     SchemeOnly(SchemeShown),
 }
@@ -758,27 +804,52 @@ impl DisplayableUrl {
             return Self(Shown::SchemeOnly(SchemeShown::Withheld));
         };
         let scheme = SchemeShown::of(parsed.scheme());
-        if scheme == SchemeShown::Withheld || userinfo_is_ambiguous(raw, Some(parsed)) {
+        let SchemeShown::Known(known) = scheme else {
+            return Self(Shown::SchemeOnly(scheme));
+        };
+        if userinfo_is_ambiguous(raw, Some(parsed)) {
             return Self(Shown::SchemeOnly(scheme));
         }
-        let mut whole = parsed.clone();
-        if whole.set_password(None).is_err() || whole.set_username("").is_err() {
-            return Self(Shown::SchemeOnly(scheme));
-        }
-        Self(Shown::Whole(whole))
+        parsed
+            .host_str()
+            .map_or(Self(Shown::SchemeOnly(scheme)), |host| {
+                Self(Shown::Origin {
+                    scheme: known,
+                    host: host.to_owned(),
+                    port: parsed.port(),
+                })
+            })
     }
 
     /// Whether the host the parser read is shown, so it cannot be part of the
     /// URL's credentials.
     pub(crate) const fn shows_host(&self) -> bool {
-        matches!(self.0, Shown::Whole(_))
+        matches!(self.0, Shown::Origin { .. })
+    }
+
+    /// How a host refusal for this URL may show the host.
+    const fn host_disclosure(&self) -> HostDisclosure {
+        if self.shows_host() {
+            HostDisclosure::Named
+        } else {
+            HostDisclosure::Withheld
+        }
     }
 }
 
 impl std::fmt::Display for DisplayableUrl {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match &self.0 {
-            Shown::Whole(url) => write!(f, "{url}"),
+            Shown::Origin {
+                scheme,
+                host,
+                port: Some(port),
+            } => write!(f, "{scheme}://{host}:{port}"),
+            Shown::Origin {
+                scheme,
+                host,
+                port: None,
+            } => write!(f, "{scheme}://{host}"),
             Shown::SchemeOnly(SchemeShown::Known(scheme)) => {
                 write!(f, "{scheme}:{WITHHELD_URL_TAIL}")
             }
@@ -787,15 +858,9 @@ impl std::fmt::Display for DisplayableUrl {
     }
 }
 
-/// `refusal` for `raw`, naming its host only when [`DisplayableUrl`] shows it.
-fn url_host_refusal(raw: &str, parsed: &Url, refusal: SsrfRefusal) -> UrlRefusal {
-    UrlRefusal::Host(
-        if DisplayableUrl::of_parsed(raw, Some(parsed)).shows_host() {
-            refusal
-        } else {
-            refusal.withholding_host()
-        },
-    )
+/// How a host refusal for `raw` may show the host `parsed` read from it.
+pub(crate) fn url_host_disclosure(raw: &str, parsed: &Url) -> HostDisclosure {
+    DisplayableUrl::of_parsed(raw, Some(parsed)).host_disclosure()
 }
 
 /// Parse `url` and admit only a scheme in `admitted`.
@@ -826,10 +891,11 @@ pub(crate) fn parse_gated_url(url: &str) -> Result<Url, UrlRefusal> {
 
 /// Vet `url` under `policy`, resolving its host through `resolver` within `deadline`.
 ///
-/// Under [`DialPolicy::DenyPrivate`] the URL must parse, carry a gated scheme
-/// and a host, and the host must pass [`vet_host_with`]; the proof pins the
-/// vetted address with the URL's port. Under [`DialPolicy::AllowAll`] the URL
-/// is dialled as given.
+/// A URL whose userinfo may run into its host or path is refused under every
+/// policy ([`refuse_misplaced_userinfo`]). Under [`DialPolicy::DenyPrivate`]
+/// the URL must parse, carry a gated scheme and a host, and the host must
+/// pass [`vet_host_with`]; the proof pins the vetted address with the URL's
+/// port. Under [`DialPolicy::AllowAll`] the URL is otherwise dialled as given.
 ///
 /// # Errors
 ///
@@ -841,6 +907,7 @@ pub(crate) async fn vet_url_with<R: HostResolver>(
     url: &str,
     deadline: Duration,
 ) -> Result<VettedDial, UrlRefusal> {
+    refuse_misplaced_userinfo(url)?;
     match policy {
         DialPolicy::AllowAll => Ok(VettedDial::Unrestricted),
         DialPolicy::DenyPrivate => {
@@ -849,10 +916,11 @@ pub(crate) async fn vet_url_with<R: HostResolver>(
             // Every gated scheme has a known default port, so the fallback is
             // unreachable; port 0 would fail the dial, never reach a service.
             let port = parsed.port_or_known_default().unwrap_or(0);
-            vet_host_with(resolver, host, port, deadline)
+            let disclosure = url_host_disclosure(url, &parsed);
+            vet_host_with(resolver, host, disclosure, port, deadline)
                 .await
                 .map(VettedDial::Pinned)
-                .map_err(|refusal| url_host_refusal(url, &parsed, refusal))
+                .map_err(UrlRefusal::Host)
         }
     }
 }
@@ -880,7 +948,7 @@ pub(crate) fn ssrf_check_url_nonblocking(url: &str) -> Result<(), UrlRefusal> {
     strip_ipv6_brackets(host)
         .parse::<IpAddr>()
         .map_or(Ok(()), |ip| {
-            refuse_blocked(host, ip).map_err(|refusal| url_host_refusal(url, &parsed, refusal))
+            refuse_blocked(host, url_host_disclosure(url, &parsed), ip).map_err(UrlRefusal::Host)
         })
 }
 
@@ -1000,8 +1068,10 @@ mod tests {
         assert_eq!(
             second,
             Err(UrlRefusal::Host(SsrfRefusal::Blocked {
-                host: "rebind.example".to_owned(),
-                ip: PublicThenPrivate::PRIVATE,
+                host: BlockedHost::Named {
+                    host: "rebind.example".to_owned(),
+                    ip: PublicThenPrivate::PRIVATE,
+                },
                 range: BlockedRange::Private,
             }))
         );
@@ -1047,7 +1117,7 @@ mod tests {
         assert_eq!(
             refused,
             Err(UrlRefusal::Host(SsrfRefusal::Timeout {
-                host: "slow.example".to_owned(),
+                host: HostShown::Named("slow.example".to_owned()),
                 after: deadline,
             }))
         );
@@ -1112,6 +1182,7 @@ mod tests {
         let vetted = vet_host_addrs_with(
             &Answers(vec![PublicThenPrivate::PUBLIC, second]),
             "multi.example",
+            HostDisclosure::Named,
             443,
             DEADLINE,
         )
@@ -1199,8 +1270,10 @@ mod tests {
         assert_eq!(
             second,
             Err(SsrfRefusal::Blocked {
-                host: "rebind.example".to_string(),
-                ip: PublicThenPrivate::PRIVATE,
+                host: BlockedHost::Named {
+                    host: "rebind.example".to_owned(),
+                    ip: PublicThenPrivate::PRIVATE,
+                },
                 range: BlockedRange::Private,
             })
         );
@@ -1214,7 +1287,14 @@ mod tests {
             PublicThenPrivate::PUBLIC,
             IpAddr::V4(Ipv4Addr::new(169, 254, 169, 254)),
         ]);
-        let refused = vet_host_with(&mixed, "mixed.example", 443, DEADLINE).await;
+        let refused = vet_host_with(
+            &mixed,
+            "mixed.example",
+            HostDisclosure::Named,
+            443,
+            DEADLINE,
+        )
+        .await;
         assert!(
             matches!(
                 refused,
@@ -1229,22 +1309,36 @@ mod tests {
 
     #[tokio::test]
     async fn vet_host_refuses_an_empty_answer() {
-        let refused = vet_host_with(&Answers(Vec::new()), "empty.example", 443, DEADLINE).await;
+        let refused = vet_host_with(
+            &Answers(Vec::new()),
+            "empty.example",
+            HostDisclosure::Named,
+            443,
+            DEADLINE,
+        )
+        .await;
         assert_eq!(
             refused,
             Err(SsrfRefusal::NoAddresses {
-                host: "empty.example".to_string()
+                host: HostShown::Named("empty.example".to_owned())
             })
         );
     }
 
     #[tokio::test]
     async fn vet_host_refuses_an_unresolvable_name() {
-        let refused = vet_host_with(&NoDns, "nowhere.example", 443, DEADLINE).await;
+        let refused = vet_host_with(
+            &NoDns,
+            "nowhere.example",
+            HostDisclosure::Named,
+            443,
+            DEADLINE,
+        )
+        .await;
         assert_eq!(
             refused,
             Err(SsrfRefusal::Unresolvable {
-                host: "nowhere.example".to_string(),
+                host: HostShown::Named("nowhere.example".to_owned()),
                 kind: std::io::ErrorKind::NotFound,
             })
         );
@@ -1255,11 +1349,18 @@ mod tests {
     #[tokio::test]
     async fn vet_host_times_out_a_stalled_resolver() {
         let deadline = Duration::from_millis(20);
-        let refused = vet_host_with(&Stalls, "slow.example", 443, deadline).await;
+        let refused = vet_host_with(
+            &Stalls,
+            "slow.example",
+            HostDisclosure::Named,
+            443,
+            deadline,
+        )
+        .await;
         assert_eq!(
             refused,
             Err(SsrfRefusal::Timeout {
-                host: "slow.example".to_string(),
+                host: HostShown::Named("slow.example".to_owned()),
                 after: deadline,
             })
         );
@@ -1270,6 +1371,7 @@ mod tests {
         let resolved = vet_host_with(
             &Answers(vec![PublicThenPrivate::PUBLIC]),
             "public.example",
+            HostDisclosure::Named,
             8443,
             DEADLINE,
         )
@@ -1287,36 +1389,40 @@ mod tests {
         let cases = [
             (
                 SsrfRefusal::Blocked {
-                    host: "127.0.0.1".to_string(),
-                    ip: IpAddr::V4(Ipv4Addr::LOCALHOST),
+                    host: BlockedHost::Named {
+                        host: "127.0.0.1".to_owned(),
+                        ip: IpAddr::V4(Ipv4Addr::LOCALHOST),
+                    },
                     range: BlockedRange::Loopback,
                 },
                 "loopback host 127.0.0.1",
             ),
             (
                 SsrfRefusal::Blocked {
-                    host: "meta.example".to_string(),
-                    ip: IpAddr::V4(Ipv4Addr::new(169, 254, 169, 254)),
+                    host: BlockedHost::Named {
+                        host: "meta.example".to_owned(),
+                        ip: IpAddr::V4(Ipv4Addr::new(169, 254, 169, 254)),
+                    },
                     range: BlockedRange::LinkLocal,
                 },
                 "resolved to link-local address 169.254.169.254",
             ),
             (
                 SsrfRefusal::Unresolvable {
-                    host: "nowhere.example".to_string(),
+                    host: HostShown::Named("nowhere.example".to_owned()),
                     kind: std::io::ErrorKind::NotFound,
                 },
                 "could not resolve host \"nowhere.example\"",
             ),
             (
                 SsrfRefusal::NoAddresses {
-                    host: "empty.example".to_string(),
+                    host: HostShown::Named("empty.example".to_owned()),
                 },
                 "resolved to no addresses",
             ),
             (
                 SsrfRefusal::Timeout {
-                    host: "slow.example".to_string(),
+                    host: HostShown::Named("slow.example".to_owned()),
                     after: Duration::from_millis(250),
                 },
                 "timed out after 250 ms",
@@ -1553,14 +1659,16 @@ mod tests {
 
     #[tokio::test]
     async fn vet_host_returns_socket_addr_for_public_ip_literal() {
-        let sa = vet_host_with(&NoDns, "1.1.1.1", 0, DEADLINE).await.unwrap();
+        let sa = vet_host_with(&NoDns, "1.1.1.1", HostDisclosure::Named, 0, DEADLINE)
+            .await
+            .unwrap();
         assert_eq!(sa, SocketAddr::new(PublicThenPrivate::PUBLIC, 0));
     }
 
     #[tokio::test]
     async fn vet_host_rejects_blocked_ip_literals() {
         for host in ["192.168.1.1", "127.0.0.1", "::ffff:127.0.0.1"] {
-            let refused = vet_host_with(&NoDns, host, 0, DEADLINE).await;
+            let refused = vet_host_with(&NoDns, host, HostDisclosure::Named, 0, DEADLINE).await;
             assert!(
                 matches!(refused, Err(SsrfRefusal::Blocked { .. })),
                 "{host:?}: {refused:?}"
@@ -1575,7 +1683,7 @@ mod tests {
     // -----------------------------------------------------------------------
 
     async fn assert_blocked_by_range(host: &str) {
-        let refused = vet_host_with(&NoDns, host, 0, DEADLINE).await;
+        let refused = vet_host_with(&NoDns, host, HostDisclosure::Named, 0, DEADLINE).await;
         assert!(
             matches!(refused, Err(SsrfRefusal::Blocked { .. })),
             "host {host:?} must be blocked by blocked_range (literal path), got: {refused:?}"
@@ -1612,9 +1720,15 @@ mod tests {
     #[tokio::test]
     async fn vet_host_allows_bracketed_public_v6() {
         // Cloudflare public v6, bracketed as a URL host would present it.
-        let sa = vet_host_with(&NoDns, "[2606:4700:4700::1111]", 0, DEADLINE)
-            .await
-            .expect("public bracketed v6 literal must be allowed");
+        let sa = vet_host_with(
+            &NoDns,
+            "[2606:4700:4700::1111]",
+            HostDisclosure::Named,
+            0,
+            DEADLINE,
+        )
+        .await
+        .expect("public bracketed v6 literal must be allowed");
         assert_eq!(
             sa.ip(),
             "2606:4700:4700::1111".parse::<IpAddr>().unwrap(),
@@ -1759,22 +1873,40 @@ mod tests {
         }
     }
 
-    /// A URL whose userinfo the parser reads unambiguously keeps its host,
-    /// port, path, and query, with the userinfo removed.
+    /// A URL whose userinfo the parser reads unambiguously shows only its
+    /// scheme, host, and explicit port: the userinfo, path, query, and
+    /// fragment, where tokens travel, are never shown.
     #[test]
-    fn displayable_url_strips_the_parsed_userinfo() {
-        for (url, shown) in [
+    fn displayable_url_shows_only_scheme_host_and_port() {
+        for (url, shown, secrets) in [
             (
                 "ws://alice:s3cr3t@example.com:9000/feed?token=abc",
-                "ws://example.com:9000/feed?token=abc",
+                "ws://example.com:9000",
+                &["alice", "s3cr3t", "feed", "token", "abc"][..],
             ),
-            ("wss://admin@host/x", "wss://host/x"),
-            ("ws://example.com/feed", "ws://example.com/feed"),
-            ("http://u:p@@@host", "http://host/"),
+            ("wss://admin@host/x", "wss://host", &["admin", "/x"][..]),
+            ("ws://example.com/feed", "ws://example.com", &["feed"][..]),
+            ("http://u:p@@@host", "http://host", &["u:p", "@"][..]),
+            (
+                "wss://api.example/ws/s3ss10n#fr4gment",
+                "wss://api.example",
+                &["s3ss10n", "fr4gment"][..],
+            ),
+            (
+                "http://[::1]:8080/a?access_token=t0k3n",
+                "http://[::1]:8080",
+                &["access_token", "t0k3n"][..],
+            ),
+            (
+                "https://api.example:443/v1?key=k3y",
+                "https://api.example",
+                &["v1", "key", "k3y"][..],
+            ),
         ] {
             let displayable = DisplayableUrl::of(url);
             assert_eq!(displayable.to_string(), shown, "{url:?}");
             assert!(displayable.shows_host(), "{url:?}");
+            assert_shows_none_of(&displayable, secrets);
         }
     }
 
@@ -1885,39 +2017,172 @@ mod tests {
     }
 
     /// When the URL's userinfo is ambiguous, the host the parser read may be
-    /// part of a credential, so a host refusal withholds it.
+    /// part of a credential, so a host refusal withholds it and every address
+    /// it resolved to.
     #[tokio::test]
     async fn host_refusal_withholds_a_host_that_may_be_a_credential() {
         for url in [
-            "http://admin:80/s3cr3t@public.example/",
-            "http://admin\\s3cr3t@public.example/",
-            "wss://admin\\s3cr3t@public.example/",
+            "http://admin?s3cr3t@public.example/",
+            "wss://admin?s3cr3t@public.example/",
         ] {
             let refused = vet_url_with(DialPolicy::DenyPrivate, &NoDns, url, DEADLINE).await;
-            assert!(
-                refused
-                    .as_ref()
-                    .is_err_and(|e| e.to_string().contains(WITHHELD_HOST)),
-                "{url:?}: {refused:?}"
+            assert_eq!(
+                refused,
+                Err(UrlRefusal::Host(SsrfRefusal::Unresolvable {
+                    host: HostShown::Withheld,
+                    kind: std::io::ErrorKind::NotFound,
+                })),
+                "{url:?}"
             );
             if let Err(refused) = refused {
+                assert!(refused.to_string().contains(WITHHELD_HOST), "{refused}");
                 assert_shows_none_of(&refused, &["admin", "s3cr3t"]);
             }
         }
-        for hop in [
-            "http://127.0.0.1/admin@s3cr3t",
-            "http://10.0.0.1\\s3cr3t@public.example/",
+        for (hop, secrets) in [
+            (
+                "http://127.0.0.1/admin@s3cr3t",
+                ["127.0.0.1", "admin", "s3cr3t"],
+            ),
+            (
+                "http://10.0.0.1\\s3cr3t@public.example/",
+                ["10.0.0.1", "s3cr3t", "public.example"],
+            ),
         ] {
             let refused = ssrf_check_url_nonblocking(hop);
             assert!(
-                refused
-                    .as_ref()
-                    .is_err_and(|e| e.to_string().contains(WITHHELD_HOST)),
+                matches!(
+                    refused,
+                    Err(UrlRefusal::Host(SsrfRefusal::Blocked {
+                        host: BlockedHost::Withheld,
+                        ..
+                    }))
+                ),
                 "{hop:?}: {refused:?}"
             );
             if let Err(refused) = refused {
-                assert_shows_none_of(&refused, &["admin", "s3cr3t"]);
+                assert!(refused.to_string().contains(WITHHELD_HOST), "{refused}");
+                assert_shows_none_of(&refused, &secrets);
             }
+        }
+    }
+
+    /// An IP-literal host read from a credential is never shown, neither as
+    /// written nor as the address it re-encodes to: `1234567` parses as
+    /// `0.18.214.135`, so showing the blocked address would show the secret.
+    #[tokio::test]
+    async fn ip_literal_credential_never_shows_its_address() {
+        let decimal = ["1234567", "0.18.214.135", "pin", "api.example"];
+        let dotted = ["10.0.0.1", "s3cr3t", "public.example"];
+        for (url, secrets) in [
+            ("http://1234567\\pin@api.example/", decimal),
+            ("http://10.0.0.1\\s3cr3t@public.example/", dotted),
+            ("http://1234567?pin@api.example/", decimal),
+            ("http://10.0.0.1?s3cr3t@public.example/", dotted),
+            (
+                "ws://1234567890\\pw@x.example/",
+                ["1234567890", "73.150.2.210", "pw@", "x.example"],
+            ),
+        ] {
+            for policy in [DialPolicy::DenyPrivate, DialPolicy::AllowAll] {
+                if let Err(refused) = vet_url_with(policy, &NoDns, url, DEADLINE).await {
+                    assert_shows_none_of(&refused, &secrets);
+                }
+            }
+            if let Err(refused) = ssrf_check_url_nonblocking(url) {
+                assert_shows_none_of(&refused, &secrets);
+            }
+            assert_shows_none_of(&DisplayableUrl::of(url), &secrets);
+        }
+        let blocked = vet_url_with(
+            DialPolicy::DenyPrivate,
+            &NoDns,
+            "http://1234567?pin@api.example/",
+            DEADLINE,
+        )
+        .await;
+        assert_eq!(
+            blocked,
+            Err(UrlRefusal::Host(SsrfRefusal::Blocked {
+                host: BlockedHost::Withheld,
+                range: BlockedRange::Reserved,
+            }))
+        );
+        let hop = ssrf_check_url_nonblocking("http://1234567\\pin@api.example/");
+        assert_eq!(
+            hop,
+            Err(UrlRefusal::Host(SsrfRefusal::Blocked {
+                host: BlockedHost::Withheld,
+                range: BlockedRange::Reserved,
+            }))
+        );
+    }
+
+    /// A dial URL whose credential may run into its host or path is refused
+    /// under every policy, before any lookup; one whose `@` sits only in the
+    /// query, or is percent-encoded, is dialled.
+    #[tokio::test]
+    async fn dial_url_with_misplaced_userinfo_is_refused_under_every_policy() {
+        for url in [
+            "http://admin\\s3cr3t@public.example/",
+            "http://admin:80/s3cr3t@public.example/",
+            "ws://admin:5432/s3cr3t@db.example",
+            "http://admin@s3cr3t/-pw@host/x",
+            "wss://admin#s3cr3t@host",
+            "ws://bob:s3cr3t@@@host/a@b",
+            "https://public.example/a\\b",
+            "http://public.example/@user",
+            "http://adm in\\s3cr3t@public.example/",
+        ] {
+            for policy in [DialPolicy::DenyPrivate, DialPolicy::AllowAll] {
+                let resolver = PublicThenPrivate::new();
+                let refused = vet_url_with(policy, &resolver, url, DEADLINE).await;
+                assert_eq!(refused, Err(UrlRefusal::MisplacedUserinfo), "{url:?}");
+                assert_eq!(
+                    resolver.calls(),
+                    0,
+                    "{url:?} must be refused before a lookup"
+                );
+                if let Err(refused) = refused {
+                    assert_shows_none_of(&refused, &["admin", "s3cr3t", "bob"]);
+                }
+            }
+        }
+        for url in [
+            "https://public.example/?user=admin@example.com",
+            "https://registry.example/%40scope%2Fpkg",
+            "wss://public.example/feed?acct=alice@example.com",
+        ] {
+            assert_eq!(refuse_misplaced_userinfo(url), Ok(()), "{url:?}");
+            let dialled = vet_url_with(DialPolicy::AllowAll, &NoDns, url, DEADLINE).await;
+            assert_eq!(dialled, Ok(VettedDial::Unrestricted), "{url:?}");
+        }
+    }
+
+    /// A refused host is named only when the URL's userinfo is unambiguous,
+    /// and a blocked address only beside a named host.
+    #[test]
+    fn withheld_host_refusals_show_neither_host_nor_address() {
+        for refusal in [
+            SsrfRefusal::Blocked {
+                host: BlockedHost::Withheld,
+                range: BlockedRange::Private,
+            },
+            SsrfRefusal::Unresolvable {
+                host: HostShown::Withheld,
+                kind: std::io::ErrorKind::NotFound,
+            },
+            SsrfRefusal::NoAddresses {
+                host: HostShown::Withheld,
+            },
+            SsrfRefusal::Timeout {
+                host: HostShown::Withheld,
+                after: Duration::from_millis(250),
+            },
+        ] {
+            let shown = refusal.to_string();
+            assert!(shown.contains(WITHHELD_HOST), "{shown}");
+            assert!(!shown.contains('"'), "{shown} quotes a host");
         }
     }
 

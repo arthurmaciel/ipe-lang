@@ -3078,6 +3078,10 @@ pub enum StdlibKernel {
     UrlQuery,
     /// `Url.fragment : Url -> Maybe String` — the fragment (no `#`), or `Nothing`.
     UrlFragment,
+    /// `Url.schemeShown : Url -> String` — the scheme as an error message may
+    /// show it: a well-known scheme quoted, any other withheld (a user name
+    /// can parse as the scheme). Private to `Ipe.Url`; backs `checkScheme`.
+    UrlSchemeShown,
     /// `Url.buildQuery : List (String, String) -> String` — the injection-safe
     /// query-string builder; every key/value is percent-encoded.
     UrlBuildQuery,
@@ -5160,6 +5164,7 @@ impl StdlibKernel {
             Self::UrlPath => d("Url", "path", 1, Pure, "url_path"),
             Self::UrlQuery => d("Url", "query", 1, Pure, "url_query"),
             Self::UrlFragment => d("Url", "fragment", 1, Pure, "url_fragment"),
+            Self::UrlSchemeShown => d("Url", "schemeShown", 1, Pure, "url_scheme_shown"),
             Self::UrlBuildQuery => d("Url", "buildQuery", 1, Pure, "url_build_query"),
             Self::UrlRelativeParse => d("Url", "relative", 1, Pure, "url_relative"),
             Self::UrlRelativePath => d("Url", "relativePath", 1, Pure, "url_relative_path"),
@@ -6436,6 +6441,7 @@ impl StdlibKernel {
         Self::UrlPath,
         Self::UrlQuery,
         Self::UrlFragment,
+        Self::UrlSchemeShown,
         Self::UrlBuildQuery,
         Self::UrlRelativeParse,
         Self::UrlRelativePath,
@@ -9836,7 +9842,9 @@ impl StdlibKernel {
 
             // ── Url. ──
             Self::UrlFromString => Some(&STRING_TO_RESULT_ERR_URL),
-            Self::UrlToString | Self::UrlScheme | Self::UrlPath => Some(&URL_TO_STRING),
+            Self::UrlToString | Self::UrlScheme | Self::UrlSchemeShown | Self::UrlPath => {
+                Some(&URL_TO_STRING)
+            }
             Self::UrlHost | Self::UrlQuery | Self::UrlFragment => Some(&URL_TO_MAYBE_STRING),
             Self::UrlPort => Some(&URL_TO_MAYBE_INT),
             Self::UrlBuildQuery => Some(&URL_BUILD_QUERY),
@@ -11982,6 +11990,7 @@ impl StdlibKernel {
             | Self::UrlPath
             | Self::UrlQuery
             | Self::UrlFragment
+            | Self::UrlSchemeShown
             | Self::UrlBuildQuery
             | Self::UrlRelativeParse
             | Self::UrlRelativePath
@@ -12958,6 +12967,7 @@ impl StdlibKernel {
                 | Self::UrlPath
                 | Self::UrlQuery
                 | Self::UrlFragment
+                | Self::UrlSchemeShown
                 | Self::UrlBuildQuery
                 | Self::UrlRelativeParse
                 | Self::UrlRelativePath
@@ -14683,6 +14693,8 @@ mod tests {
             StdlibKernel::UrlFromString,
             StdlibKernel::UrlToString,
             StdlibKernel::UrlScheme,
+            // `Url.checkScheme` names a refused scheme through this, client-side too.
+            StdlibKernel::UrlSchemeShown,
             // `Attributes.linkTarget` / `href` parse a relative reference client-side
             // (the same `url` crate wasm build) to render a Web-shape `href`.
             StdlibKernel::UrlRelativeParse,

@@ -36,9 +36,10 @@ use std::collections::HashMap;
 // coupled `ssrf_apply` + the request executor below import what they use.
 #[cfg(not(target_arch = "wasm32"))]
 use super::ssrf::{
-    DialPolicy, GatedSchemes, HostResolver, SsrfRefusal, SystemResolver, UrlRefusal, VettedAddrs,
-    dns_timeout, parse_gated_url, parse_gated_url_within, ssrf_check_url_nonblocking,
-    strip_ipv6_brackets, vet_host_addrs_with,
+    DialPolicy, GatedSchemes, HostDisclosure, HostResolver, SsrfRefusal, SystemResolver,
+    UrlRefusal, VettedAddrs, dns_timeout, parse_gated_url, parse_gated_url_within,
+    refuse_misplaced_userinfo, ssrf_check_url_nonblocking, strip_ipv6_brackets,
+    url_host_disclosure, vet_host_addrs_with,
 };
 
 /// Ipe.Http.HttpResponse — field names/types match the Ipê record alias.
@@ -280,8 +281,14 @@ impl<R: HostResolver + Send + 'static> VettingResolver<R> {
     }
 
     /// Every address `host` may be dialled at (port 0: reqwest substitutes the real one).
-    async fn vet(&self, host: &str) -> Result<VettedAddrs, SsrfRefusal> {
-        vet_host_addrs_with(self.resolver.as_ref(), host, 0, self.deadline).await
+    ///
+    /// A refusal shows `host` only as `disclosure` allows.
+    async fn vet(
+        &self,
+        host: &str,
+        disclosure: HostDisclosure,
+    ) -> Result<VettedAddrs, SsrfRefusal> {
+        vet_host_addrs_with(self.resolver.as_ref(), host, disclosure, 0, self.deadline).await
     }
 }
 
@@ -293,8 +300,13 @@ impl<R: HostResolver + Send + 'static> reqwest::dns::Resolve for VettingResolver
             deadline: self.deadline,
         };
         let host = name.as_str().to_owned();
+        // Every name reaching this resolver is a redirect hop's host: the
+        // request host is pinned by `resolve_to_addrs`. Its refusal is
+        // redacted into a correlation id before Ipê sees it, and the logged
+        // detail must not carry a host that may be part of a credential, so
+        // the host is withheld.
         Box::pin(async move {
-            match gate.vet(&host).await {
+            match gate.vet(&host, HostDisclosure::Withheld).await {
                 Ok(vetted) => {
                     let addrs: reqwest::dns::Addrs = Box::new(vetted.into_vec().into_iter());
                     Ok(addrs)
@@ -333,7 +345,9 @@ pub(crate) async fn ssrf_apply(
 ///
 /// SHARED by every outbound request surface — the regular Http client,
 /// `Http.Stream.open`, the Email HTTP providers — so the guard can never be
-/// missing from a request path. Under [`DialPolicy::DenyPrivate`] it admits
+/// missing from a request path. Under every policy it refuses a URL whose
+/// userinfo may run into its host or path ([`refuse_misplaced_userinfo`]).
+/// Under [`DialPolicy::DenyPrivate`] it admits
 /// only a gated scheme with a host, vets that host once through `gate`, pins
 /// reqwest's lookup of it to the vetted addresses (defeats DNS rebinding),
 /// installs `gate` as the resolver for every other name (redirect hops), and
@@ -351,11 +365,15 @@ pub(crate) async fn ssrf_apply_with<R: HostResolver + Send + 'static>(
     policy: DialPolicy,
     gate: VettingResolver<R>,
 ) -> Result<reqwest::ClientBuilder, UrlRefusal> {
+    refuse_misplaced_userinfo(url)?;
     match policy {
         DialPolicy::DenyPrivate => {
             let parsed = parse_gated_url(url)?;
             let host = parsed.host_str().ok_or(UrlRefusal::NoHost)?;
-            let vetted = gate.vet(host).await.map_err(UrlRefusal::Host)?;
+            let vetted = gate
+                .vet(host, url_host_disclosure(url, &parsed))
+                .await
+                .map_err(UrlRefusal::Host)?;
             // reqwest/hyper key the override by the UNBRACKETED host
             // (`Uri::host`), so a `"[::1]"` key would never match and the pin
             // would silently not apply.
@@ -392,6 +410,15 @@ pub(crate) async fn ssrf_apply_with<R: HostResolver + Send + 'static>(
         }
     };
     Ok(builder)
+}
+
+/// A reqwest transport error as the Ipê program sees it, its raw detail logged.
+///
+/// The error's URL is dropped before the log line is written: it may carry a
+/// password or a query-string token. Ipê sees only the correlation id.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn redacted_transport_error<E: From<String>>(e: reqwest::Error) -> E {
+    ipe_error_from_foreign(e.without_url())
 }
 
 // ---------------------------------------------------------------------------
@@ -445,13 +472,10 @@ async fn do_request<E: From<String> + Send + 'static>(
     }
     let resp = match rb.send().await {
         Ok(r) => r,
-        // [B8] Route the transport error through the redacting constructor: a
-        // reqwest/hyper error Display can echo `req.url` (which may carry userinfo
-        // / a query-string API key) and the resolved address. The raw detail is
-        // logged server-side under a correlation id; Ipê sees only the generic
-        // `external operation failed (ref <id>)`. Mirrors http_stream.rs.
+        // A reqwest/hyper error can echo `req.url` (userinfo, a query-string
+        // API key) and the resolved address.
         Err(e) => {
-            return IpeResult::Err(ipe_error_from_foreign(e));
+            return IpeResult::Err(redacted_transport_error(e));
         }
     };
     let status = resp.status().as_u16() as i64;
@@ -530,10 +554,8 @@ async fn read_body_capped<E: From<String> + Send + 'static>(
     while let Some(chunk) = stream.next().await {
         let bytes = match chunk {
             Ok(b) => b,
-            // [B8] Redact: a body-read transport error can also echo the URL /
-            // resolved address. Log server-side under a correlation id, return
-            // only the generic ref to Ipê.
-            Err(e) => return IpeResult::Err(ipe_error_from_foreign(e)),
+            // A body-read transport error can also echo the URL.
+            Err(e) => return IpeResult::Err(redacted_transport_error(e)),
         };
         if buf.len().saturating_add(bytes.len()) > cap {
             return IpeResult::Err(
@@ -1046,8 +1068,8 @@ mod tests {
         use super::super::{RedirectPolicy, VettingResolver, ssrf_apply_with};
         use crate::ssrf::test_resolvers::{Answers, NoDns, PublicThenPrivate, Stalls};
         use crate::ssrf::{
-            BlockedRange, DialPolicy, GatedSchemes, HostResolver, SchemeShown, SsrfRefusal,
-            UrlRefusal,
+            BlockedHost, BlockedRange, DialPolicy, GatedSchemes, HostResolver, HostShown,
+            SchemeShown, SsrfRefusal, UrlRefusal,
         };
         use reqwest::dns::Resolve as _;
         use std::net::{IpAddr, Ipv4Addr, SocketAddr};
@@ -1097,8 +1119,18 @@ mod tests {
 
         fn blocked(host: &str, ip: IpAddr, range: BlockedRange) -> SsrfRefusal {
             SsrfRefusal::Blocked {
-                host: host.to_owned(),
-                ip,
+                host: BlockedHost::Named {
+                    host: host.to_owned(),
+                    ip,
+                },
+                range,
+            }
+        }
+
+        /// A refusal that withholds the host and its address.
+        const fn withheld_blocked(range: BlockedRange) -> SsrfRefusal {
+            SsrfRefusal::Blocked {
+                host: BlockedHost::Withheld,
                 range,
             }
         }
@@ -1110,7 +1142,7 @@ mod tests {
             let resolver = gate(Answers(vec![PublicThenPrivate::PUBLIC, PRIVATE]));
             assert_eq!(
                 resolve(&resolver, "mixed.example").await,
-                Err(blocked("mixed.example", PRIVATE, BlockedRange::Private).to_string())
+                Err(withheld_blocked(BlockedRange::Private).to_string())
             );
         }
 
@@ -1120,7 +1152,7 @@ mod tests {
             let after = Duration::from_millis(20);
             let resolver = VettingResolver::new(Arc::new(Stalls), after);
             let expected = SsrfRefusal::Timeout {
-                host: "slow.example".to_owned(),
+                host: HostShown::Withheld,
                 after,
             };
             assert_eq!(
@@ -1142,12 +1174,7 @@ mod tests {
             let second = resolve(&resolver, "rebind.example").await;
             assert_eq!(
                 second,
-                Err(blocked(
-                    "rebind.example",
-                    PublicThenPrivate::PRIVATE,
-                    BlockedRange::Private
-                )
-                .to_string())
+                Err(withheld_blocked(BlockedRange::Private).to_string())
             );
         }
 
@@ -1173,7 +1200,7 @@ mod tests {
             assert_eq!(
                 apply("https://slow.example/", DialPolicy::DenyPrivate, resolver).await,
                 Some(UrlRefusal::Host(SsrfRefusal::Timeout {
-                    host: "slow.example".to_owned(),
+                    host: HostShown::Named("slow.example".to_owned()),
                     after,
                 }))
             );
@@ -1224,6 +1251,59 @@ mod tests {
                     BlockedRange::Loopback
                 )))
             );
+        }
+
+        /// A request URL whose userinfo may run into its host or path is refused
+        /// under every policy before any lookup; an `@` only in the query is not.
+        #[tokio::test]
+        async fn apply_refuses_misplaced_userinfo_under_every_policy() {
+            for policy in [DialPolicy::DenyPrivate, DialPolicy::AllowAll] {
+                for url in [
+                    "http://10.0.0.1\\s3cr3t@public.example/",
+                    "https://admin:80/s3cr3t@public.example/",
+                    "https://admin#s3cr3t@public.example/",
+                ] {
+                    let shared = Arc::new(PublicThenPrivate::new());
+                    let resolver = VettingResolver::new(Arc::clone(&shared), DEADLINE);
+                    let refused = apply(url, policy, resolver).await;
+                    assert_eq!(refused, Some(UrlRefusal::MisplacedUserinfo), "{url:?}");
+                    assert_eq!(shared.calls(), 0, "{url:?}");
+                }
+            }
+            assert_eq!(
+                apply(
+                    "https://public.example/?email=a@example.com",
+                    DialPolicy::AllowAll,
+                    gate(NoDns)
+                )
+                .await,
+                None
+            );
+        }
+
+        /// A request host read from ambiguous userinfo is refused without being
+        /// shown, and without the address an IP literal re-encodes it to.
+        #[tokio::test]
+        async fn apply_withholds_a_host_that_may_be_a_credential() {
+            let refused = apply(
+                "http://1234567?pin@api.example/",
+                DialPolicy::DenyPrivate,
+                gate(NoDns),
+            )
+            .await;
+            assert_eq!(
+                refused,
+                Some(UrlRefusal::Host(withheld_blocked(BlockedRange::Reserved)))
+            );
+            let shown = format!(
+                "{refused:?} {}",
+                refused
+                    .as_ref()
+                    .map_or_else(String::new, ToString::to_string)
+            );
+            for secret in ["1234567", "0.18.214.135", "pin", "api.example"] {
+                assert!(!shown.contains(secret), "{secret:?} leaked into {shown}");
+            }
         }
 
         /// With the policy off, nothing is vetted and no lookup runs.

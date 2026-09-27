@@ -24170,7 +24170,7 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::PathExt
                 | KernelFn::PathIsAbsolute,
             ) => Ok(1),
-            // ── Ipe.Url — all unary (arity 1): `fromString`/`toString` + the six
+            // ── Ipe.Url — all unary (arity 1): `fromString`/`toString` + the seven
             // `Url -> _` accessors + `buildQuery : List _ -> String`, plus the
             // `relative` seal and the four `Relative -> _` accessors.
             Callee::Kernel(
@@ -24182,6 +24182,7 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::UrlPath
                 | KernelFn::UrlQuery
                 | KernelFn::UrlFragment
+                | KernelFn::UrlSchemeShown
                 | KernelFn::UrlBuildQuery
                 | KernelFn::UrlRelativeParse
                 | KernelFn::UrlRelativePath
@@ -28368,6 +28369,7 @@ mod tests {
         KernelFn::UrlPath,
         KernelFn::UrlQuery,
         KernelFn::UrlFragment,
+        KernelFn::UrlSchemeShown,
         KernelFn::UrlBuildQuery,
         KernelFn::UrlRelativeParse,
         KernelFn::UrlRelativePath,

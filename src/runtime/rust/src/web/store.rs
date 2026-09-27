@@ -1558,7 +1558,7 @@ mod tests {
     #[test]
     fn transient_store_failures_are_not_policy_refusals() {
         use crate::db::{DbConnectError, DbEngine, DbFailure, EngineVersion, EngineVersionError};
-        use crate::ssrf::{BlockedRange, SsrfRefusal};
+        use crate::ssrf::{BlockedHost, BlockedRange, HostShown, SsrfRefusal};
         use std::net::{IpAddr, Ipv4Addr};
         let transient = [
             StoreOpenError::Connect(DbConnectError::Unreachable(DbFailure::Io)),
@@ -1579,19 +1579,21 @@ mod tests {
                 driver: DbEngine::Postgres,
             }),
             StoreOpenError::Connect(DbConnectError::HostRefused(SsrfRefusal::Blocked {
-                host: "10.0.0.1".to_owned(),
-                ip: IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)),
+                host: BlockedHost::Named {
+                    host: "10.0.0.1".to_owned(),
+                    ip: IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)),
+                },
                 range: BlockedRange::Private,
             })),
             StoreOpenError::Connect(DbConnectError::HostRefused(SsrfRefusal::Unresolvable {
-                host: "db.invalid".to_owned(),
+                host: HostShown::Named("db.invalid".to_owned()),
                 kind: std::io::ErrorKind::NotFound,
             })),
             StoreOpenError::Connect(DbConnectError::HostRefused(SsrfRefusal::NoAddresses {
-                host: "db.invalid".to_owned(),
+                host: HostShown::Named("db.invalid".to_owned()),
             })),
             StoreOpenError::Connect(DbConnectError::HostRefused(SsrfRefusal::Timeout {
-                host: "db.invalid".to_owned(),
+                host: HostShown::Named("db.invalid".to_owned()),
                 after: Duration::from_secs(1),
             })),
             StoreOpenError::Connect(DbConnectError::HostRefused(SsrfRefusal::UnprovenTarget)),

@@ -1510,6 +1510,7 @@ pub const fn appearance_literal_args(k: KernelFn) -> &'static [(usize, LitKind)]
         | KernelFn::UrlPath
         | KernelFn::UrlQuery
         | KernelFn::UrlFragment
+        | KernelFn::UrlSchemeShown
         | KernelFn::UrlBuildQuery
         | KernelFn::UrlRelativeParse
         | KernelFn::UrlRelativePath

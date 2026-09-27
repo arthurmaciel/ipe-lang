@@ -8778,7 +8778,7 @@ mod tests {
         assert_eq!(
             pg_refusal("postgres://nowhere.example/x").await,
             Some(SsrfRefusal::Unresolvable {
-                host: "nowhere.example".to_owned(),
+                host: crate::ssrf::HostShown::Named("nowhere.example".to_owned()),
                 kind: std::io::ErrorKind::NotFound,
             })
         );

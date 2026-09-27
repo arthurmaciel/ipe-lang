@@ -1286,7 +1286,7 @@ mod registry_phase_c_tests {
             // ── Ipe.Email.EmailAddress (2) ──────────────────────────────
             K::EmailAddressParse,
             K::EmailAddressToString,
-            // ── Ipe.Url (14) ────────────────────────────────────────
+            // ── Ipe.Url (15) ────────────────────────────────────────
             K::UrlFromString,
             K::UrlToString,
             K::UrlScheme,
@@ -1295,6 +1295,7 @@ mod registry_phase_c_tests {
             K::UrlPath,
             K::UrlQuery,
             K::UrlFragment,
+            K::UrlSchemeShown,
             K::UrlBuildQuery,
             K::UrlRelativeParse,
             K::UrlRelativePath,
