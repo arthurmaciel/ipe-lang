@@ -287,7 +287,10 @@ isNegativeIndex result =
         Err (NegativePageIndex _) ->
             True
 
-        _ ->
+        Err (PageIndexPastCeiling _) ->
+            False
+
+        Ok _ ->
             False
 
 
@@ -297,7 +300,10 @@ isPastCeiling result =
         Err (PageIndexPastCeiling _) ->
             True
 
-        _ ->
+        Err (NegativePageIndex _) ->
+            False
+
+        Ok _ ->
             False
 
 
