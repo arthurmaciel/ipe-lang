@@ -1201,6 +1201,11 @@ installed FFI crates pin dependency `{name}` to conflicting versions:
   ={second}
 re-add one of the crates so the version pins agree
 
+## ffi-dropped-transitive
+
+installed FFI crates need incompatible versions of dependency `{name}`, so the app does not declare it, but `{site}` names its crate `{ident}` directly
+re-add the crates so their `{name}` versions agree
+
 ## ffi-transparent-without-shape
 
 installed FFI crate `{krate}` marks `{name}` transparent in binding `{binding}` but carries no shape for it — re-run `ipe add`

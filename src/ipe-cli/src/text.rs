@@ -1066,6 +1066,8 @@ messages! {
     ffi_dependency_line_unparsable(krate, line) = "ffi-dependency-line-unparsable";
     /// Installed FFI crates pin one dependency to two versions.
     ffi_dependency_pin_conflict(name, first, second) = "ffi-dependency-pin-conflict";
+    /// Emitted FFI code names a dependency left out of the manifest.
+    ffi_dropped_transitive(name, ident, site) = "ffi-dropped-transitive";
     /// An FFI binding marks a type transparent without its shape.
     ffi_transparent_without_shape(krate, name, binding) = "ffi-transparent-without-shape";
     /// An FFI crate claims the reserved asserted-call module.

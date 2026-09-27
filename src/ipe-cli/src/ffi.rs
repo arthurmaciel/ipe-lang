@@ -143,8 +143,9 @@ pub fn inject_interfaces(
 ///
 /// # Errors
 /// [`CliError::Usage`] when two installed crates pin the SAME
-/// dependency name to different lines — an unbuildable `Cargo.toml` refused
-/// here rather than discovered by `cargo`.
+/// dependency name to versions that cannot share one line, or when emitted
+/// code names the path root of a dependency left out of `[dependencies]` —
+/// an unbuildable crate refused here rather than discovered by `cargo`.
 pub fn assemble_emit(
     catalog: &[InstalledCrate],
 ) -> Result<Option<ipe_backend_rust::FfiEmit>, CliError> {
@@ -154,22 +155,20 @@ pub fn assemble_emit(
     }
     let mut foreign_types: BTreeMap<String, String> = BTreeMap::new();
     let mut wrapper_glue: BTreeMap<String, ipe_backend_rust::FfiWrapperGlue> = BTreeMap::new();
-    // The DIRECT FFI crates (registry names, `_`→`-` as the dep line renders them):
-    // these are the crates the app links against and MUST be pinned exactly; a
-    // version conflict on one of these is a genuine, unbuildable error.
-    let direct_crate_names: BTreeSet<String> =
-        catalog.iter().map(|c| c.slug.replace('_', "-")).collect();
+    let deferrable = DeferrableDeps::of(catalog);
     // name → (version, unioned feature set). Cargo unifies features additively for
     // one crate+version across the graph, so a multi-crate manifest whose members
     // pin the SAME dependency (`async-stripe-shared`) at the SAME version but with
     // DIFFERENT feature requests (bare from one, `serialize`/`deserialize` from
     // another) is not a conflict — it is a union. A VERSION disagreement on a DIRECT
-    // FFI crate is a genuine conflict (refused); a version disagreement on a
-    // TRANSITIVE dep (e.g. `syn` 2.x from one member, 3.x from another — each member
-    // was inspected in its own jail with its own lockfile) is NOT ours to pin: Cargo
-    // resolves the transitive graph of the direct pins itself and legitimately links
-    // both majors of a build-dep. Such a dep is dropped from the emitted `[dependencies]`
-    // (recorded as unpinned) rather than exact-pinned to one arbitrary version.
+    // FFI crate is a genuine conflict (refused). A version disagreement on a
+    // TRANSITIVE dep (each member was inspected in its own jail with its own
+    // lockfile) is not a direct pin: within one caret-compatible range it pins the
+    // highest version, the one Cargo itself would link for both; across ranges
+    // (`syn` 2.x from one member, 3.x from another) it is dropped from the emitted
+    // `[dependencies]` and left to Cargo's resolution of the direct pins, which
+    // legitimately links both majors. A dropped dep is then undeclared, so
+    // `seal_dependency_references` refuses any emitted path still rooted at it.
     let mut dep_by_name: BTreeMap<String, (String, BTreeSet<String>)> = BTreeMap::new();
     let mut unpinned_transitives: BTreeSet<String> = BTreeSet::new();
     let mut bindings_source = String::from(
@@ -211,18 +210,30 @@ pub fn assemble_emit(
                 continue;
             }
             match dep_by_name.get_mut(&name) {
-                Some((prev_version, _)) if *prev_version != version => {
-                    if direct_crate_names.contains(&name) {
-                        return Err(CliError::Usage(text::msg::ffi_dependency_pin_conflict(
-                            &name,
-                            &prev_version,
-                            &version,
-                        )));
+                Some((prev_version, prev_features)) if *prev_version != version => {
+                    if !deferrable.admits(&name) {
+                        return Err(DependencyRefusal::PinConflict {
+                            name,
+                            first: prev_version.clone(),
+                            second: version,
+                        }
+                        .into());
                     }
-                    // Transitive dep resolved to different versions in different member
-                    // jails — defer to Cargo's own transitive resolution.
-                    dep_by_name.remove(&name);
-                    unpinned_transitives.insert(name);
+                    let raises = ReleaseVersion::parse(prev_version)
+                        .zip(ReleaseVersion::parse(&version))
+                        .filter(|(prev, next)| prev.caret_compatible(*next))
+                        .map(|(prev, next)| next > prev);
+                    match raises {
+                        Some(true) => {
+                            *prev_version = version;
+                            prev_features.extend(features);
+                        }
+                        Some(false) => prev_features.extend(features),
+                        None => {
+                            dep_by_name.remove(&name);
+                            unpinned_transitives.insert(name);
+                        }
+                    }
                 }
                 Some((_, prev_features)) => {
                     prev_features.extend(features);
@@ -244,13 +255,304 @@ pub fn assemble_emit(
         .into_iter()
         .map(|(name, (version, features))| render_merged_dep_line(&name, &version, &features))
         .collect();
-    Ok(Some(ipe_backend_rust::FfiEmit {
+    let emit = ipe_backend_rust::FfiEmit {
         foreign_types,
         dep_lines,
         bindings_source,
         interface_modules: catalog.iter().map(|c| c.module_name.clone()).collect(),
         wrapper_glue,
-    }))
+    };
+    seal_dependency_references(catalog, &emit)?;
+    Ok(Some(emit))
+}
+
+/// Why the catalog's dependency table cannot back the emitted crate.
+#[derive(Debug, PartialEq, Eq)]
+enum DependencyRefusal {
+    /// Two members pin one package to versions no single line satisfies, and
+    /// the package is not provably a transitive dependency Cargo may resolve.
+    PinConflict {
+        name: String,
+        first: String,
+        second: String,
+    },
+    /// Emitted code names the path root of a package left out of
+    /// `[dependencies]`, so `cargo` could not resolve it.
+    DroppedTransitive {
+        package: String,
+        ident: String,
+        site: String,
+    },
+}
+
+impl From<DependencyRefusal> for CliError {
+    fn from(refusal: DependencyRefusal) -> Self {
+        Self::Usage(match refusal {
+            DependencyRefusal::PinConflict {
+                name,
+                first,
+                second,
+            } => text::msg::ffi_dependency_pin_conflict(&name, &first, &second),
+            DependencyRefusal::DroppedTransitive {
+                package,
+                ident,
+                site,
+            } => text::msg::ffi_dropped_transitive(&package, &ident, &site),
+        })
+    }
+}
+
+/// The dependencies a version disagreement may defer to Cargo instead of refusing.
+///
+/// Built from typed inspection facts only: a dependency qualifies when every
+/// member's own package name is known, none of them is that dependency (a
+/// direct crate is pinned exactly or refused), and the dependency's Rust lib
+/// identifier is known (so a later drop can be checked against emitted paths).
+/// A legacy cache lacks those facts, so any disagreement it takes part in is
+/// refused.
+struct DeferrableDeps<'a> {
+    typed: bool,
+    direct: BTreeSet<&'a str>,
+    identified: BTreeSet<&'a str>,
+}
+
+impl<'a> DeferrableDeps<'a> {
+    fn of(catalog: &'a [InstalledCrate]) -> Self {
+        Self {
+            typed: catalog.iter().all(|c| c.package_name.is_some()),
+            direct: catalog
+                .iter()
+                .filter_map(|c| c.package_name.as_ref())
+                .map(ipe_ffi::pkginfo::PackageName::as_str)
+                .collect(),
+            identified: catalog
+                .iter()
+                .flat_map(|c| c.dep_idents.keys())
+                .map(String::as_str)
+                .collect(),
+        }
+    }
+
+    fn admits(&self, name: &str) -> bool {
+        self.typed && !self.direct.contains(name) && self.identified.contains(name)
+    }
+}
+
+/// A plain `major.minor.patch` release version.
+///
+/// The one shape whose Cargo caret compatibility is decided here; a
+/// pre-release or build-metadata version does not parse and so never shares
+/// a line with a different version.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+struct ReleaseVersion {
+    major: u64,
+    minor: u64,
+    patch: u64,
+}
+
+impl ReleaseVersion {
+    fn parse(s: &str) -> Option<Self> {
+        let mut parts = s.split('.');
+        let major = parts.next()?.parse().ok()?;
+        let minor = parts.next()?.parse().ok()?;
+        let patch = parts.next()?.parse().ok()?;
+        if parts.next().is_some() {
+            return None;
+        }
+        Some(Self {
+            major,
+            minor,
+            patch,
+        })
+    }
+
+    /// Whether Cargo's caret rule links both versions as one crate.
+    const fn caret_compatible(self, other: Self) -> bool {
+        match (self.major, self.minor) {
+            (0, 0) => other.major == 0 && other.minor == 0 && other.patch == self.patch,
+            (0, minor) => other.major == 0 && other.minor == minor,
+            (major, _) => other.major == major,
+        }
+    }
+}
+
+/// Refuse an emit whose code names a dependency the `[dependencies]` table
+/// leaves out.
+///
+/// The two tables that must agree are the path roots emitted code names and the
+/// lib identifiers of the declared packages. A package some member lists but
+/// the merged table dropped (a transitive whose versions span caret ranges) has
+/// no line; any `::<ident>::` still rooted at it would be `ipe`-accepted and
+/// then fail `cargo` with an unresolved crate. Every emitted text is scanned:
+/// the wrapper module (including shims appended after assembly), the opaque
+/// and define type paths, and the transparent conversion paths. An ident a
+/// declared package also answers to stays resolvable and is not refused.
+///
+/// # Errors
+///
+/// [`DependencyRefusal::DroppedTransitive`] naming the first offending site.
+fn seal_dependency_references(
+    catalog: &[InstalledCrate],
+    emit: &ipe_backend_rust::FfiEmit,
+) -> Result<(), DependencyRefusal> {
+    let declared: BTreeSet<String> = emit
+        .dep_lines
+        .iter()
+        .filter_map(|line| parse_dep_line(line))
+        .map(|(name, _, _)| name)
+        .collect();
+    let listed: BTreeSet<String> = catalog
+        .iter()
+        .flat_map(|c| &c.cargo_deps)
+        .filter_map(|line| parse_dep_line(line))
+        .map(|(name, _, _)| name)
+        .collect();
+    let all_idents = || catalog.iter().flat_map(|c| &c.dep_idents);
+    let declared_idents: BTreeSet<&str> = all_idents()
+        .filter(|(name, _)| declared.contains(*name))
+        .map(|(_, ident)| ident.as_str())
+        .collect();
+    // ident → package, for every listed package the table dropped.
+    let dropped: BTreeMap<&str, &str> = all_idents()
+        .filter(|(name, ident)| {
+            listed.contains(*name)
+                && !declared.contains(*name)
+                && !declared_idents.contains(ident.as_str())
+        })
+        .map(|(name, ident)| (ident.as_str(), name.as_str()))
+        .collect();
+    if dropped.is_empty() {
+        return Ok(());
+    }
+    let glue_sites = emit.wrapper_glue.iter().flat_map(|(wrapper, glue)| {
+        glue.params
+            .iter()
+            .flatten()
+            .chain(glue.result.iter().map(|r| &r.ty))
+            .map(move |ty| (wrapper.as_str(), glue_rust_path(ty)))
+    });
+    let sites = std::iter::once(("src/ffi.rs", emit.bindings_source.as_str()))
+        .chain(
+            emit.foreign_types
+                .iter()
+                .map(|(key, path)| (key.as_str(), path.as_str())),
+        )
+        .chain(glue_sites);
+    for (site, text) in sites {
+        for root in path_roots(text) {
+            if let Some(package) = dropped.get(root) {
+                return Err(DependencyRefusal::DroppedTransitive {
+                    package: (*package).to_owned(),
+                    ident: root.to_owned(),
+                    site: site.to_owned(),
+                });
+            }
+        }
+    }
+    Ok(())
+}
+
+/// The foreign path one transparent conversion names.
+fn glue_rust_path(ty: &ipe_backend_rust::FfiGlueType) -> &str {
+    match ty {
+        ipe_backend_rust::FfiGlueType::Record { rust_path, .. }
+        | ipe_backend_rust::FfiGlueType::Union { rust_path, .. } => rust_path,
+    }
+}
+
+/// One lexical unit of emitted Rust, as far as path roots are concerned.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum PathToken<'a> {
+    Ident(&'a str),
+    /// `::`.
+    Sep,
+    /// A `>` closing generics, after which `::` continues a path.
+    Close,
+    /// `.`, after which an identifier is a field or method, never a root.
+    Dot,
+    Other,
+}
+
+/// Split Rust text into [`PathToken`]s.
+fn path_tokens(text: &str) -> Vec<PathToken<'_>> {
+    let mut out = Vec::new();
+    let mut chars = text.char_indices().peekable();
+    let mut prev_char = ' ';
+    while let Some((start, c)) = chars.next() {
+        if c.is_ascii_alphabetic() || c == '_' {
+            let mut end = start + c.len_utf8();
+            while let Some(&(i, d)) = chars.peek() {
+                if !(d.is_ascii_alphanumeric() || d == '_') {
+                    break;
+                }
+                end = i + d.len_utf8();
+                chars.next();
+            }
+            out.push(PathToken::Ident(text.get(start..end).unwrap_or_default()));
+        } else if c == ':' && chars.peek().is_some_and(|&(_, d)| d == ':') {
+            chars.next();
+            out.push(PathToken::Sep);
+        } else if c == '>' && prev_char != '-' && prev_char != '=' {
+            out.push(PathToken::Close);
+        } else if c == '.' {
+            out.push(PathToken::Dot);
+        } else {
+            out.push(PathToken::Other);
+        }
+        prev_char = c;
+    }
+    out
+}
+
+/// Every identifier emitted Rust text uses as the first segment of a path.
+///
+/// `x` in `x::y` or `::x::y`; never `y`, a segment continuing a path (after
+/// `a::`, or after `<T>::`), nor a method after `.`. Identifiers in string
+/// literals and comments are counted too, which can only err toward refusal.
+fn path_roots(text: &str) -> BTreeSet<&str> {
+    /// What the previous token makes of the next one.
+    #[derive(Clone, Copy)]
+    enum After {
+        /// A path segment or closing `>`: a following `::` continues the path.
+        PathEnd,
+        /// A `::` that continues a path: the next identifier is not a root.
+        ContinuingSep,
+        /// A `::` that opens a path: the next identifier is a root.
+        OpeningSep,
+        /// A `.`: the next identifier is a field or method.
+        Dot,
+        Other,
+    }
+    let tokens = path_tokens(text);
+    let mut roots = BTreeSet::new();
+    let mut after = After::Other;
+    let mut iter = tokens.iter().peekable();
+    while let Some(token) = iter.next() {
+        after = match *token {
+            PathToken::Ident(ident) => {
+                let opens_path = matches!(iter.peek(), Some(PathToken::Sep));
+                let is_root = match after {
+                    After::OpeningSep => true,
+                    After::PathEnd | After::Other => opens_path,
+                    After::ContinuingSep | After::Dot => false,
+                };
+                if is_root {
+                    roots.insert(ident);
+                }
+                After::PathEnd
+            }
+            PathToken::Sep => match after {
+                After::PathEnd => After::ContinuingSep,
+                After::ContinuingSep | After::OpeningSep | After::Dot | After::Other => {
+                    After::OpeningSep
+                }
+            },
+            PathToken::Close => After::PathEnd,
+            PathToken::Dot => After::Dot,
+            PathToken::Other => After::Other,
+        };
+    }
+    roots
 }
 
 /// Assemble one crate's per-wrapper transparent conversion glue from the
@@ -456,8 +758,9 @@ pub struct FfiPrep {
 /// inserted per installed crate.
 ///
 /// # Errors
-/// [`CliError`] when the catalog is tampered/unreadable, or two installed
-/// crates pin the same dependency to conflicting version lines.
+/// [`CliError`] when the catalog is tampered/unreadable, two installed
+/// crates pin the same dependency to conflicting version lines, or emitted
+/// code names a dependency the manifest leaves out.
 pub fn prepare_ffi(
     sources: &mut BTreeMap<Vec<String>, (PathBuf, String)>,
     blame_path: &Path,
@@ -525,6 +828,8 @@ pub fn prepare_ffi(
         }
         e.interface_modules
             .push(ipe_canon::asserted::ASSERTED_MODULE.to_owned());
+        // The shims name crates too: re-check them against the dependency table.
+        seal_dependency_references(&catalog, e)?;
     }
     Ok(FfiPrep {
         catalog,
@@ -4012,13 +4317,16 @@ version = \"1\"
             inspected_consts: BTreeMap::new(),
             cargo_deps: vec![line.to_owned()],
             wrapper_idents: BTreeSet::new(),
+            package_name: None,
+            dep_idents: BTreeMap::new(),
         };
         // Two crates agreeing on a shared dep line dedupe to one.
         let ok = assemble_emit(&[mk("a", "serde = \"=1.0.1\""), mk("b", "serde = \"=1.0.1\"")]);
         assert!(ok.is_ok_and(|e| e.is_some_and(|e| e.dep_lines == vec!["serde = \"=1.0.1\""])));
-        // A VERSION disagreement on a DIRECT FFI crate (the dep name IS a catalog slug)
-        // is a real, unbuildable conflict → refused. (A transitive-dep version conflict
-        // instead defers to Cargo — see `transitive_version_conflict_defers_to_cargo`.)
+        // A VERSION disagreement between legacy members (no typed package name, so
+        // no proof the dep is transitive) is refused fail-closed. (A typed
+        // transitive-dep conflict instead defers to Cargo — see
+        // `transitive_version_conflict_defers_to_cargo`.)
         let clash = assemble_emit(&[
             mk("serde", "serde = \"=1.0.1\""),
             mk("other", "serde = \"=1.0.2\""),
@@ -4047,6 +4355,8 @@ version = \"1\"
             inspected_consts: BTreeMap::new(),
             cargo_deps: vec![line.to_owned()],
             wrapper_idents: BTreeSet::new(),
+            package_name: None,
+            dep_idents: BTreeMap::new(),
         };
         let e = assemble_emit(&[
             mk("a", "async-stripe-shared = \"=1.0.0-rc.6\""),
@@ -4073,23 +4383,7 @@ version = \"1\"
         // members — each inspected in its own jail — must NOT refuse the build and must
         // NOT be exact-pinned to one arbitrary version. It is dropped so Cargo resolves
         // the transitive graph of the direct pins itself.
-        let mk = |slug: &str, lines: Vec<&str>| InstalledCrate {
-            slug: slug.to_owned(),
-            module_name: format!("Rust.{slug}"),
-            kernel_name: format!("Rust_{slug}"),
-            interface_source: String::new(),
-            bindings_source: String::new(),
-            opaque_types: BTreeMap::new(),
-            opaque_type_ids: BTreeMap::new(),
-            define_types: BTreeSet::new(),
-            transparent_types: BTreeMap::new(),
-            bindings: Vec::new(),
-            dep_versions: BTreeMap::new(),
-            inspected_free_fns: BTreeMap::new(),
-            inspected_consts: BTreeMap::new(),
-            cargo_deps: lines.into_iter().map(str::to_owned).collect(),
-            wrapper_idents: BTreeSet::new(),
-        };
+        let mk = |slug: &str, lines: Vec<&str>| typed_crate(slug, slug, &lines);
         let e = assemble_emit(&[
             mk("a", vec!["a = \"=1.0.0\"", "syn = \"=2.0.119\""]),
             mk("b", vec!["b = \"=1.0.0\"", "syn = \"=3.0.0\""]),
@@ -4115,6 +4409,203 @@ version = \"1\"
         assert!(
             clash.is_err(),
             "a direct-crate version conflict still refuses"
+        );
+    }
+
+    /// A typed (inspection-built) member: package `package`, lib slug `slug`,
+    /// and one `dep_idents` entry per dependency line (`-` → `_`).
+    fn typed_crate(slug: &str, package: &str, lines: &[&str]) -> InstalledCrate {
+        let mut c = crate_with_types(slug, &[], &[]);
+        c.cargo_deps = lines.iter().map(|l| (*l).to_owned()).collect();
+        c.package_name = ipe_ffi::pkginfo::PackageName::parse(package).ok();
+        c.dep_idents = lines
+            .iter()
+            .filter_map(|l| parse_dep_line(l))
+            .filter_map(|(name, _, _)| {
+                ipe_ffi::naming::RustIdent::parse(&name.replace('-', "_"))
+                    .ok()
+                    .map(|ident| (name, ident))
+            })
+            .collect();
+        c
+    }
+
+    /// Two typed members whose `syn` pins span majors, so `syn` is dropped.
+    fn syn_split() -> [InstalledCrate; 2] {
+        [
+            typed_crate("a", "a", &["a = \"=1.0.0\"", "syn = \"=2.0.119\""]),
+            typed_crate("b", "b", &["b = \"=1.0.0\"", "syn = \"=3.0.0\""]),
+        ]
+    }
+
+    #[test]
+    fn a_dropped_transitive_named_by_the_bindings_is_refused() {
+        let [a, mut b] = syn_split();
+        b.bindings_source = "pub fn span() -> ::syn::Ident { ::syn::parse_str(\"x\") }".to_owned();
+        let refused = assemble_emit(&[a, b]);
+        assert!(
+            matches!(
+                &refused,
+                Err(CliError::Usage(m)) if m.contains("`syn`") && m.contains("src/ffi.rs")
+            ),
+            "a `::syn::` path with `syn` undeclared must refuse: {refused:?}"
+        );
+    }
+
+    #[test]
+    fn a_dropped_transitive_named_by_an_opaque_path_is_refused() {
+        let [mut a, b] = syn_split();
+        a.opaque_types
+            .insert("Ident".to_owned(), "::syn::Ident".to_owned());
+        let refused = assemble_emit(&[a, b]);
+        assert!(
+            matches!(
+                &refused,
+                Err(CliError::Usage(m)) if m.contains("`syn`") && m.contains("Rust.a.Ident")
+            ),
+            "an opaque path rooted at undeclared `syn` must refuse: {refused:?}"
+        );
+    }
+
+    #[test]
+    fn the_seal_refuses_a_dropped_root_and_spares_a_declared_one() {
+        let [a, b] = syn_split();
+        let catalog = [a, b];
+        let mut emit =
+            assemble_emit(&catalog)
+                .ok()
+                .flatten()
+                .unwrap_or_else(|| ipe_backend_rust::FfiEmit {
+                    foreign_types: BTreeMap::new(),
+                    dep_lines: Vec::new(),
+                    bindings_source: String::new(),
+                    interface_modules: Vec::new(),
+                    wrapper_glue: BTreeMap::new(),
+                });
+        assert!(seal_dependency_references(&catalog, &emit).is_ok());
+        // A shim appended after assembly naming a declared root stays sound.
+        emit.bindings_source
+            .push_str("\npub fn f() -> ::a::T { ::b::g() }");
+        assert!(seal_dependency_references(&catalog, &emit).is_ok());
+        // One naming the dropped root is refused with the typed reason.
+        emit.bindings_source
+            .push_str("\npub fn h() -> syn::Ident { todo() }");
+        assert_eq!(
+            seal_dependency_references(&catalog, &emit),
+            Err(DependencyRefusal::DroppedTransitive {
+                package: "syn".to_owned(),
+                ident: "syn".to_owned(),
+                site: "src/ffi.rs".to_owned(),
+            })
+        );
+    }
+
+    #[test]
+    fn a_renamed_lib_direct_crate_conflict_is_refused() {
+        // Package `async-stripe` exposes lib `stripe`: the direct set is built from
+        // the typed package name, so the `async-stripe` clash is caught as direct.
+        let refused = assemble_emit(&[
+            typed_crate("stripe", "async-stripe", &["async-stripe = \"=1.0.0\""]),
+            typed_crate(
+                "other",
+                "other",
+                &["other = \"=1.0.0\"", "async-stripe = \"=2.0.0\""],
+            ),
+        ]);
+        assert!(
+            matches!(&refused, Err(CliError::Usage(m)) if m.contains("async-stripe")),
+            "a direct-crate conflict must refuse even when its lib ident differs: {refused:?}"
+        );
+    }
+
+    #[test]
+    fn a_legacy_member_transitive_conflict_is_refused() {
+        // Without a typed package name no member can prove `syn` is transitive.
+        let [a, mut b] = syn_split();
+        b.package_name = None;
+        b.dep_idents = BTreeMap::new();
+        assert!(
+            assemble_emit(&[a, b]).is_err(),
+            "a conflict involving a legacy member must fail closed"
+        );
+    }
+
+    #[test]
+    fn a_transitive_conflict_without_a_known_ident_is_refused() {
+        // A dropped dep whose lib ident is unknown cannot be checked against
+        // emitted paths, so it is refused rather than dropped.
+        let [mut a, mut b] = syn_split();
+        a.dep_idents.remove("syn");
+        b.dep_idents.remove("syn");
+        assert!(
+            assemble_emit(&[a, b]).is_err(),
+            "an unidentifiable dropped dep must fail closed"
+        );
+    }
+
+    #[test]
+    fn a_same_major_transitive_conflict_pins_the_highest_version() {
+        let e = assemble_emit(&[
+            typed_crate("a", "a", &["a = \"=1.0.0\"", "syn = \"=2.0.1\""]),
+            typed_crate(
+                "b",
+                "b",
+                &[
+                    "b = \"=1.0.0\"",
+                    "syn = { version = \"=2.0.119\", features = [\"full\"] }",
+                ],
+            ),
+        ]);
+        assert!(
+            e.as_ref().is_ok_and(|e| e.as_ref().is_some_and(|e| e
+                .dep_lines
+                .contains(&"syn = { version = \"=2.0.119\", features = [\"full\"] }".to_owned()))),
+            "caret-compatible transitive pins unify to the max with features unioned: {e:?}"
+        );
+        // Across a 0.x minor the caret range differs, so the dep is dropped.
+        let split = assemble_emit(&[
+            typed_crate("a", "a", &["a = \"=1.0.0\"", "toml = \"=0.8.0\""]),
+            typed_crate("b", "b", &["b = \"=1.0.0\"", "toml = \"=0.9.0\""]),
+        ]);
+        assert!(
+            split.is_ok_and(
+                |e| e.is_some_and(|e| e.dep_lines.iter().all(|l| !l.starts_with("toml")))
+            ),
+            "a 0.x minor split is dropped, not pinned"
+        );
+    }
+
+    #[test]
+    fn release_versions_follow_the_caret_rule() {
+        let v = |s: &str| ReleaseVersion::parse(s);
+        let compatible =
+            |a: &str, b: &str| v(a).zip(v(b)).is_some_and(|(a, b)| a.caret_compatible(b));
+        assert!(compatible("2.0.1", "2.9.0"));
+        assert!(!compatible("2.0.1", "3.0.0"));
+        assert!(compatible("0.8.1", "0.8.9"));
+        assert!(!compatible("0.8.1", "0.9.0"));
+        assert!(compatible("0.0.3", "0.0.3"));
+        assert!(!compatible("0.0.3", "0.0.4"));
+        // A pre-release or malformed version never parses, so never unifies.
+        assert!(v("1.0.0-rc.6").is_none());
+        assert!(v("1.0").is_none());
+        assert!(v("1.0.0.0").is_none());
+    }
+
+    #[test]
+    fn path_roots_are_first_segments_only() {
+        let roots = path_roots(
+            "use ::syn::parse::Parser; fn f(x: serde_json::Value) -> Vec<a::B>::Output \
+             { x.get::<c::D>(); <T as e::F>::g(); crate::h::i(); x.len() }",
+        );
+        let want: BTreeSet<&str> = ["syn", "serde_json", "a", "c", "e", "crate"]
+            .into_iter()
+            .collect();
+        assert_eq!(roots, want);
+        // `->` and `=>` are not generic closers: the next path starts fresh.
+        assert_eq!(
+            path_roots("fn f() -> k::L { m => n::O }"),
+            ["k", "n"].into_iter().collect::<BTreeSet<_>>()
         );
     }
 
@@ -4390,6 +4881,8 @@ version = \"1\"
             inspected_consts: BTreeMap::new(),
             cargo_deps: Vec::new(),
             wrapper_idents: BTreeSet::new(),
+            package_name: None,
+            dep_idents: BTreeMap::new(),
         }
     }
 
