@@ -837,7 +837,9 @@ pub fn run_audit_entry(rest: &[String]) -> Result<(), CliError> {
     // Fail closed: a present-but-unreadable baseline propagates as an error
     // so the structural prechecks below never run against an empty baseline and
     // silently classify every submitted version as "new".
-    let index_root = index_root_opt.clone().unwrap_or_else(resolve::index_root);
+    let index_root = index_root_opt
+        .clone()
+        .map_or_else(resolve::index_root, Ok)?;
     let baseline: Option<index::IndexEntry> =
         index::read_entry_lookup(&index_root, &submitted.name).require_present()?;
 

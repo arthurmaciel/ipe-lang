@@ -324,7 +324,7 @@ pub fn run_audit_as(
     let effective_advisory_db: Option<PathBuf> = if no_advisory_db {
         None
     } else {
-        Some(advisory_db_override.unwrap_or_else(crate::resolve::index_root))
+        Some(advisory_db_override.map_or_else(crate::resolve::index_root, Ok)?)
     };
 
     let outcome = audit_gate(
@@ -1310,7 +1310,8 @@ fn enforced_semver(prepared: &Prepared, index_root: Option<&Path>) -> Result<(),
         return Ok(());
     }
 
-    let index_root = index_root.map_or_else(crate::resolve::index_root, Path::to_path_buf);
+    let index_root =
+        index_root.map_or_else(crate::resolve::index_root, |root| Ok(root.to_path_buf()))?;
     // Absent ⇒ a first submission; no predecessor to enforce.
     // Unreadable ⇒ fail closed: a corrupt predecessor must not silently pass
     // as "first version" — propagate the error so the gate refuses.

@@ -351,7 +351,6 @@ mod tests {
     use super::{DepKind, LockedDep, LockedRev, Lockfile};
     use crate::CliError;
     use crate::index::PinnedRev;
-    use crate::published_version::PublishedVersion;
     use crate::published_version::{PublishedVersion, VersionRefusal};
     use std::path::PathBuf;
 
