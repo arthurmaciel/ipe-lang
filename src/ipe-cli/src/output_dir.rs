@@ -1634,6 +1634,9 @@ mod tests {
         let base = scratch("dotdot-trailing");
         let proj = project(&base);
         let existing = base.join("existing");
+        OutputRoot::resolve(Some(&existing.to_string_lossy()), &proj)
+            .and_then(|root| root.claim())
+            .expect("claim the output root");
         std::fs::create_dir_all(existing.join("sub")).expect("make sub");
         let raw = existing.join("sub").join("..");
         let out = OutputRoot::resolve(Some(&raw.to_string_lossy()), &proj)
