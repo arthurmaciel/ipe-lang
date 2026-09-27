@@ -1487,10 +1487,10 @@ fn build_through_planted_cache_link(tag: &str, planted: PlantedCacheLink) {
             "module Main exposing (main)\n\nimport Ipe.Io as Io\n\nmain : Task Error ()\nmain =\n    Io.println \"hi\"\n".to_owned(),
         ),
     );
-    let discovered = vec![project::DiscoveredModule {
-        path: PathBuf::from("<cache-link>/Main.ipe"),
-        module_path: entry_path.clone(),
-    }];
+    let discovered = vec![project::DiscoveredModule::user(
+        PathBuf::from("<cache-link>/Main.ipe"),
+        entry_path.clone(),
+    )];
     let build = || {
         compile_modules_observed(
             sources.clone(),
