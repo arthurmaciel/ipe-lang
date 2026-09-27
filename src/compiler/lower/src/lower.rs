@@ -12029,21 +12029,34 @@ impl<'a> Lowerer<'a> {
         self.types.regions.get(&(home, span))
     }
 
-    /// Locate a user-declared constructor by its spelling, returning its enum's
-    /// nominal identity `(home, type name)` and the constructor's own symbol.
-    /// Used by the `Store.eq` / `Store.eqBy` intercept to synthesise the
-    /// `Ipe.Db.Store` `Cond` / `CompareOp` constructions the query leaf lowers
-    /// to. Scans `enum_variants` (the true per-union variant sets), so a match
-    /// carries the exact `(home, ty, variant)` triple `Expr::Ctor` needs; `None`
-    /// when no union declares a constructor of that name.
-    fn find_user_ctor(&self, ctor_name: &str) -> Option<(ModPath, Symbol, Symbol)> {
+    /// The `Ipe.Db.Store` module home, or `None` when the program does not link
+    /// that module (one of its segments was never interned).
+    ///
+    /// `Ipe.*` is a reserved namespace, so no user module can claim this home.
+    fn store_home(&self) -> Option<Vec<Symbol>> {
+        ["Ipe", "Db", "Store"]
+            .iter()
+            .map(|segment| self.interner.lookup(segment))
+            .collect()
+    }
+
+    /// Locate an `Ipe.Db.Store` constructor by its spelling.
+    ///
+    /// Returns its enum's nominal identity `(home, type name)` and the
+    /// constructor's own symbol, used by the `Store.eq` / `Store.eqBy`
+    /// intercept to synthesise the `Cond` / `CompareOp` constructions the query
+    /// leaf lowers to. Only unions declared in the `Ipe.Db.Store` home are
+    /// scanned, so a same-named user constructor is never mistaken for the
+    /// Store one; `None` when that module declares no constructor of that name.
+    fn find_store_ctor(&self, ctor_name: &str) -> Option<(ModPath, Symbol, Symbol)> {
+        let home = self.store_home()?;
         let want = self.interner.lookup(ctor_name)?;
-        for ((home, ty), variants) in &self.enum_variants {
-            if variants.contains(&want) {
-                return Some((home.clone(), *ty, want));
-            }
-        }
-        None
+        self.enum_variants
+            .iter()
+            .find_map(|((variant_home, ty), variants)| {
+                (variant_home.0 == home && variants.contains(&want)).then_some(*ty)
+            })
+            .map(|ty| (ModPath(home), ty, want))
     }
 
     /// The `(home, Cond, Compare, CompareOp, OpEq)` identities the `Store.eq` /
@@ -12053,14 +12066,14 @@ impl<'a> Lowerer<'a> {
     /// invariant (the kernel could not have resolved without it).
     fn store_cond_ids(&self) -> DResult<StoreCondIds> {
         let (cond_home, cond_ty, compare_variant) =
-            self.find_user_ctor("Compare").ok_or_else(|| {
+            self.find_store_ctor("Compare").ok_or_else(|| {
                 bug(
                     "ipe_lower::store_cond_ids",
                     "Ipe.Db.Store `Compare` constructor not found",
                 )
             })?;
         let (_op_home, compareop_ty, opeq_variant) =
-            self.find_user_ctor("OpEq").ok_or_else(|| {
+            self.find_store_ctor("OpEq").ok_or_else(|| {
                 bug(
                     "ipe_lower::store_cond_ids",
                     "Ipe.Db.Store `OpEq` constructor not found",
@@ -12248,7 +12261,7 @@ impl<'a> Lowerer<'a> {
         let (column, _field_ty) = self.accessor_column(acc)?;
         let lowered_codec = self.lower_expr(codec)?;
         let lowered_value = self.lower_expr(value)?;
-        let id = self.eq_by_named_func_id()?;
+        let id = self.store_named_func_id("eqByNamed")?;
         Ok(Expr::Call {
             callee: Callee::Func(id),
             args: vec![Expr::Str(column), lowered_codec, lowered_value],
@@ -12275,54 +12288,32 @@ impl<'a> Lowerer<'a> {
         })
     }
 
-    /// The `FuncId` of the `Ipe.Db.Store` `eqByNamed` helper. Found by its
-    /// spelling among the linked module's top-level bindings (the same
-    /// `func_ids` a `VarTopLevel` resolves through); a miss means the program
-    /// called `Store.eqBy` without linking `Ipe.Db.Store`, a violated invariant.
-    fn eq_by_named_func_id(&self) -> DResult<FuncId> {
-        let want = self.interner.lookup("eqByNamed").ok_or_else(|| {
-            bug(
-                "ipe_lower::eq_by_named_func_id",
-                "`eqByNamed` is not interned — Ipe.Db.Store not linked",
-            )
-        })?;
-        self.func_ids
-            .iter()
-            .find_map(|((_home, name), id)| (*name == want).then_some(*id))
-            .ok_or_else(|| {
-                bug(
-                    "ipe_lower::eq_by_named_func_id",
-                    "Ipe.Db.Store `eqByNamed` helper not found",
-                )
-            })
-    }
-
-    /// Look up the `FuncId` of a named `Ipe.Db.Store` helper by its spelling
-    /// (e.g. `"neqByNamed"`, `"inListNamed"`). A miss is a violated invariant —
-    /// the program used a Store kernel without linking `Ipe.Db.Store`.
+    /// Look up the `FuncId` of a named `Ipe.Db.Store` helper by its exact identity.
+    ///
+    /// Keyed on `(Ipe.Db.Store, helper)` (e.g. `"neqByNamed"`), so a same-named
+    /// top-level function in any other module can never stand in for the Store
+    /// helper. A miss is a violated invariant — the program used a Store kernel
+    /// without linking `Ipe.Db.Store`.
     fn store_named_func_id(&self, helper: &str) -> DResult<FuncId> {
-        let want = self.interner.lookup(helper).ok_or_else(|| {
-            bug(
+        let (Some(home), Some(want)) = (self.store_home(), self.interner.lookup(helper)) else {
+            return Err(bug(
                 "ipe_lower::store_named_func_id",
                 "Store helper name not interned — Ipe.Db.Store not linked",
+            ));
+        };
+        self.func_ids.get(&(home, want)).copied().ok_or_else(|| {
+            bug(
+                "ipe_lower::store_named_func_id",
+                "Ipe.Db.Store named helper not found",
             )
-        })?;
-        self.func_ids
-            .iter()
-            .find_map(|((_home, name), id)| (*name == want).then_some(*id))
-            .ok_or_else(|| {
-                bug(
-                    "ipe_lower::store_named_func_id",
-                    "Ipe.Db.Store named helper not found",
-                )
-            })
+        })
     }
 
     /// Look up a `CompareOp` variant symbol by its constructor name. The variant
     /// must be declared in `Ipe.Db.Store` (it is — the `CompareOp` union lives
     /// there). A miss is a violated invariant.
     fn compare_op_ctor(&self, ctor_name: &str) -> DResult<(ModPath, Symbol, Symbol)> {
-        self.find_user_ctor(ctor_name).ok_or_else(|| {
+        self.find_store_ctor(ctor_name).ok_or_else(|| {
             bug(
                 "ipe_lower::compare_op_ctor",
                 "Ipe.Db.Store CompareOp constructor not found",
@@ -13282,8 +13273,8 @@ impl<'a> Lowerer<'a> {
 
     /// Does `id` resolve to the `Ipe.Db.Store` top-level binding named `helper`?
     /// Used to recognise a `Store.selectToList` / `Store.selectToMaybe` call in
-    /// the intercept dispatch. Both names are unique to `Ipe.Db.Store`, so the
-    /// bare-name lookup cannot alias another module's binding.
+    /// the intercept dispatch; the lookup is keyed on the module home, so a
+    /// same-named binding in another module never matches.
     fn is_store_func(&self, id: FuncId, helper: &str) -> bool {
         self.store_named_func_id(helper) == Ok(id)
     }
