@@ -279,7 +279,7 @@ pub enum Expr_ {
     /// `raw` is the RAW content — the lexer does NOT resolve escape sequences or
     /// `{{expr}}` interpolation markers. The canonicaliser strips the anchor
     /// margin (see `anchor`), then desugars the result into a `++` chain of
-    /// string literals and `Basics.toString`-wrapped expressions.
+    /// string literals and `Interpolate`-wrapped expressions (the internal renderer kernel).
     ///
     /// `anchor` is the 1-based source column of the first non-whitespace content
     /// character (the anchor column A). The margin strip removes up to `A - 1`

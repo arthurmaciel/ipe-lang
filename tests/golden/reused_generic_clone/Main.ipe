@@ -4,13 +4,13 @@ import Ipe.Task as Task
 import Ipe.Io as Io
 
 
--- BACKLOG #189 regression — a reused-by-value generic param clone gap (SEAL).
+-- Regression — a reused-by-value generic param clone gap (SEAL).
 --
--- Pre-fix: `ipec build` exits 0, but the emitted Rust fails `cargo build` with
--- E0382 (`use of moved value: x`) in the body of a function whose only generic
--- is used MORE THAN ONCE in a by-value consuming position. `dup x =
--- toString x ++ toString x` emits `basics_to_string(x)` TWICE with no
--- intervening `.clone()`, moving `x` on the first call.
+-- Without the clone pass `ipe build` exits 0, but the emitted Rust fails
+-- `cargo build` with E0382 (`use of moved value: x`) in the body of a function
+-- whose only generic is used MORE THAN ONCE in a by-value consuming position.
+-- `dup x = """{{x}}{{x}}"""` emits `interpolate_to_string(x)` TWICE; without an
+-- intervening `.clone()` the first call moves `x`.
 --
 -- Root cause: `clone_class(IrType::Generic(_))` returned `NonClone`, so the T5
 -- multi-use-clone param pass (fires only for `CloneOk`) skipped generic params,
@@ -30,7 +30,7 @@ import Ipe.Io as Io
 -- generic at two distinct types, exercising the `Clone` bound at both.
 dup : a -> String
 dup x =
-    toString x ++ toString x
+    """{{x}}{{x}}"""
 
 
 main : Task Error ()

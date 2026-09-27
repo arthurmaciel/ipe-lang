@@ -75,6 +75,15 @@ pub fn string_to_float(s: String) -> IpeMaybe<f64> {
         Err(_) => IpeMaybe::Nothing,
     }
 }
+/// `String.fromBool : Bool -> String` — the one canonical `Bool` rendering.
+///
+/// Lowercase `"true"` / `"false"`; `{{flag}}` interpolation renders through
+/// this same function, so the two cannot disagree.
+#[must_use]
+pub fn string_from_bool(b: bool) -> String {
+    if b { "true" } else { "false" }.to_owned()
+}
+
 /// `String.fromChar : Char -> String`.
 #[must_use]
 pub fn string_from_char(c: char) -> String {
@@ -683,6 +692,11 @@ fn unicode_is_space(c: char) -> bool {
 mod tests {
     use super::*;
 
+    #[test]
+    fn test_from_bool_lowercase() {
+        assert_eq!(string_from_bool(true), "true");
+        assert_eq!(string_from_bool(false), "false");
+    }
     #[test]
     fn test_replace_simple() {
         assert_eq!(

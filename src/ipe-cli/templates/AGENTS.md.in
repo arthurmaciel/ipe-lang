@@ -355,8 +355,8 @@ app code.
 
 | Module | Path | Key functions |
 |---|---|---|
-| `Basics` | `Ipe.Basics` (Tier A — ambient, no import; see Auto-import) | identity, always, not, toString, modBy, clamp, fst, snd, compare, negate, abs, sqrt, min, max |
-| `String` | `Ipe.String` | length, reverse, append, split, join, contains/containsIn, startsWith/startsWithIn, endsWith/endsWithIn (haystack-first In-suffixed), toInt, fromInt, toFloat, fromFloat, toUpper, toLower, trim/trimStart/trimEnd, replace, slice, dropLeft, dropRight (Elm-shaped rune-based), isEmpty, fromChar, toList, fromList, repeat, padLeft, padRight, casefold, equalFold, isEmail, isUrl, words, lines, concat |
+| `Basics` | `Ipe.Basics` (Tier A — ambient, no import; see Auto-import) | identity, always, not, modBy, clamp, fst, snd, compare, negate, abs, sqrt, min, max |
+| `String` | `Ipe.String` | length, reverse, append, split, join, contains/containsIn, startsWith/startsWithIn, endsWith/endsWithIn (haystack-first In-suffixed), toInt, fromInt, toFloat, fromFloat, toUpper, toLower, trim/trimStart/trimEnd, replace, slice, dropLeft, dropRight (Elm-shaped rune-based), isEmpty, fromBool, fromChar, toList, fromList, repeat, padLeft, padRight, casefold, equalFold, isEmail, isUrl, words, lines, concat |
 | `List` | `Ipe.List` | map, filter, foldl, foldr, length, head, tail, take, drop, append, concat, concatMap, reverse, member, any, all, range, zip, find, isEmpty, indexedMap, cons + reverseHelp/indexedMapHelp |
 | `Dict` | `Ipe.Dict` (kernel) | empty, insert, get, remove, member, keys, values, toList, fromList, map, foldl, union |
 | `Set` | `Ipe.Set` (kernel) | empty, insert, remove, member, union, diff, intersect, fromList, toList, size |

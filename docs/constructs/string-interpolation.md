@@ -14,7 +14,7 @@ stringifies its value, so you build readable text without a chain of `++`.
 
 The opening-line margin is stripped: the block's indentation lays out the source
 but does not enter the value. Each `{{…}}` body is trimmed, wrapped in
-`Basics.toString`, and the whole literal is joined with `++`.
+the internal interpolation renderer, and the whole literal is joined with `++`.
 
 An interpolation body may be one of exactly **four simple shapes**:
 
@@ -40,7 +40,7 @@ report count tag =
     """
 ```
 
-`{{count}}` where `count : Int` renders through `Basics.toString` — no manual
+`{{count}}` where `count : Int` renders as its decimal digits — no manual
 `String.fromInt`. The three content lines carry no leading indentation into the
 value even though the block is indented in the source.
 
@@ -60,4 +60,5 @@ value even though the block is indented in the source.
 
 - [String interpolation over `++`](../idioms/string-interpolation.md) — the idiom.
 - [Strings](../guide/string.md) — the `String` toolkit and text boundary.
-- `ipe doc Basics.toString` — how a value becomes its string form.
+- `ipe doc String.fromInt`, `ipe doc String.fromBool` — the explicit conversions
+  that render the same forms outside a `"""…"""` string.

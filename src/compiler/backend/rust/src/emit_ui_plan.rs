@@ -476,6 +476,7 @@ pub const fn appearance_literal_args(k: KernelFn) -> &'static [(usize, LitKind)]
         | KernelFn::StringToInt
         | KernelFn::StringToFloat
         | KernelFn::StringFromChar
+        | KernelFn::StringFromBool
         | KernelFn::StringFromList
         | KernelFn::StringConcat
         | KernelFn::StringWords
@@ -569,7 +570,7 @@ pub const fn appearance_literal_args(k: KernelFn) -> &'static [(usize, LitKind)]
         | KernelFn::BasicsFst
         | KernelFn::BasicsSnd
         | KernelFn::BasicsModBy
-        | KernelFn::BasicsToString
+        | KernelFn::Interpolate
         | KernelFn::BasicsClamp
         | KernelFn::BasicsNegate
         | KernelFn::BasicsAbs

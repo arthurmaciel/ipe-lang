@@ -286,7 +286,7 @@ impl TyBounds {
     pub const fn dict_key() -> Self {
         Self(Self::DICT_KEY)
     }
-    /// The stringify obligation (`toString` / `Log.*With` attrs / `Debug.toString`
+    /// The stringify obligation (`{{…}}` interpolation / `Log.*With` attrs / `Debug.log`
     /// → Rust `IpeStringify`). Satisfied by every NON-FUNCTION type — every scalar
     /// primitive plus every codegen-emitted record/ADT gets a `IpeStringify` impl;
     /// a bare function does not. Same head/deep discipline as [`Self::eq`]: a

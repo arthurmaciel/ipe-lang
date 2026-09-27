@@ -12,7 +12,7 @@ import Ipe.Io as Io
 --     out-of-bounds reading without an `if lo <= x && x <= hi` ladder.
 --   • `compare a b : Order` is the ONE ordering primitive; `List.sortWith` and the
 --     `min`/`max` helpers are all phrased in terms of it.
---   • `toString` renders any value for a human, without a per-type printer import.
+--   • `min` / `max` / `negate` cover everyday arithmetic, with no import.
 
 
 type alias Reading =
@@ -35,7 +35,7 @@ byTemp a b =
 
 render : Reading -> String
 render reading =
-    String.padRight 8 ' ' reading.sensor ++ toString reading.celsius ++ " C"
+    String.padRight 8 ' ' reading.sensor ++ String.fromInt reading.celsius ++ " C"
 
 
 main =
@@ -62,4 +62,4 @@ main =
             |> List.map (\line -> Io.println ("  " ++ line))
             |> Task.sequence
             |> Task.map (always ())
-        Io.println ("Range: " ++ toString coldest ++ " C .. " ++ toString warmest ++ " C")
+        Io.println ("Range: " ++ String.fromInt coldest ++ " C .. " ++ String.fromInt warmest ++ " C")

@@ -1,19 +1,19 @@
 # Rendering values to String
 
 Every primitive has a total "render this value to a `String`" path: the typed
-`String.fromInt` / `String.fromFloat` for their own type, the generic
-`toString` for any `Stringify` value, and `{{expr}}` interpolation inside a
-`"""…"""` string for stitching several rendered values into one line.
+`String.fromInt` / `String.fromFloat` / `String.fromBool` for their own type,
+and `{{expr}}` interpolation inside a `"""…"""` string for stitching several
+rendered values into one line. There is no generic stringifier: a standalone
+conversion always names the type it renders.
 
 ## The mental model
 
 Two ideas.
 
-- **A typed renderer per type, plus a generic fallback.** `String.fromInt` and
-  `String.fromFloat` are the precise renderers for their own type. `toString`
-  (auto-imported from `Ipe.Basics`) works over any `Stringify` value —
-  `Int`, `Float`, `Bool`, `String` included — so it is the one to reach for
-  when a value's exact type does not matter, or when it varies.
+- **One typed renderer per type.** `String.fromInt`, `String.fromFloat`, and
+  `String.fromBool` each render exactly their own type, so the call site says
+  what becomes text. `Bool` renders lowercase (`"true"` / `"false"`), the same
+  form `{{flag}}` interpolation produces.
 - **Rendering is total.** Every `Int`, `Float`, and `Bool` has a String form,
   so these functions never fail — no `Maybe` to unwrap, no `Result` to
   handle. The direction that *can* fail is the other one, *parsing* a String
@@ -40,14 +40,20 @@ alpha: count=3 ratio=0.75 enabled=true
 beta: count=128 ratio=1.5 enabled=false
 ```
 
-Each `{{expr}}` body is auto-stringified through `toString`, so `count` (an
-`Int`) and `enabled` (a `Bool`) need no explicit `String.fromInt` or manual
-conversion — only `label`, already a `String`, passes through unchanged.
+Each `{{expr}}` body is rendered by the compiler's interpolation renderer, so
+`count` (an `Int`) and `enabled` (a `Bool`) need no explicit `String.fromInt`
+or `String.fromBool` — only `label`, already a `String`, passes through
+unchanged. Outside a `"""…"""` string, the same row is built with the explicit
+conversions:
+
+```ipe ipe:skip
+label ++ ": count=" ++ String.fromInt count ++ " enabled=" ++ String.fromBool enabled
+```
 
 ## The why
 
 Rendering a primitive to text is total by nature — a number is always some
-sequence of digits — so both `toString` and `String.fromInt`/`fromFloat`
+sequence of digits — so `String.fromInt`, `fromFloat`, and `fromBool`
 return a bare `String`, not a `Maybe`. This is the asymmetry
 [parse-don't-validate][parse] names: going *to* a String throws away structure
 and cannot fail, while going *from* one recovers structure and can, so only
@@ -59,12 +65,12 @@ asymmetry visible in the types.
 
 ## References
 
-- **Per-symbol reference:** `ipe doc Basics.toString`, `ipe doc String.fromInt`,
-  `ipe doc String.fromFloat`.
+- **Per-symbol reference:** `ipe doc String.fromInt`, `ipe doc String.fromFloat`,
+  `ipe doc String.fromBool`.
 - **Sibling guides:** [Strings](string.md) — the home of the parse direction
   (`String.toInt` / `String.toFloat`), richer text building, and the full
   `{{expr}}` interpolation syntax. [Basics](basics.md) — the auto-imported
-  `toString`. [Characters](char.md) — code points and classification.
+  prelude. [Characters](char.md) — code points and classification.
 - **Concepts:** [The parse-don't-validate idiom](../idioms/parse-dont-validate.md)
   — why rendering is total but parsing is fallible.
   [String interpolation](../constructs/string-interpolation.md) — the full

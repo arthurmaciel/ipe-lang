@@ -34,8 +34,7 @@
 //!   `Secret.redacted` first.
 //! * NO `Display`, NO `Hash`, NO `Ord`, NO `serde::Serialize` /
 //!   `serde::Deserialize`. Never implementing these is itself part of the
-//!   security property: `Basics.toString` / `Debug.toString` (the two kernels
-//!   that route through `std::fmt::Display`, `basics.rs`) and any
+//!   security property: any `std::fmt::Display`-based formatting and any
 //!   `HashMap`/`BTreeMap` key use, and any serde round-trip, are Rust type
 //!   errors at codegen time — a fail-CLOSED outcome, never a silent leak.
 //!   NOT serde ALSO means `Secret` is unconditionally Model-inadmissible for

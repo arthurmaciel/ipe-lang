@@ -99,8 +99,8 @@ Program. The compiler infers the shape from the function `main` is bound to.
 ## string interpolation
 
 Substituting a value into text with `{{expr}}` inside a
-[triple-quoted string](#triple-quoted-string). The value is stringified through
-`Basics.toString` and joined with `++`; only a simple reference interpolates.
+[triple-quoted string](#triple-quoted-string). The value is stringified by the
+compiler's internal renderer and joined with `++`; only a simple reference interpolates.
 Prefer it over a long `++` chain. See
 [`string-interpolation`](../constructs/string-interpolation.md).
 

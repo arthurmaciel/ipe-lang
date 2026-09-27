@@ -395,7 +395,7 @@ fn infer_core(
             .collect()
     });
     // The user enums whose definition embeds a function payload — consulted by
-    // every concrete equality / stringify obligation so a `==` / `toString` on a
+    // every concrete equality / stringify obligation so a `==` / `{{…}}` on a
     // function-carrying enum fails closed (the payload arrow is invisible in a
     // `Ty::Con`'s applied type arguments; see [`fn_embedding_enums`]).
     let fn_enums = fn_embedding_enums(&m.unions, &dep_unions);
@@ -1375,7 +1375,7 @@ fn super_bounds_satisfied(
         && (!bounds.has_ord() || ord_ok)
         && (!bounds.has_eq() || ty_is_equatable(ty, enum_embeds_fn))
         && (!bounds.has_comparable_key() || key_ok)
-        // Stringify (`toString` / `Log.*With`): showable iff it contains no
+        // Stringify (`{{…}}` interpolation / `Log.*With`): showable iff it contains no
         // function anywhere — the SAME "no function nested" rule as equatable,
         // since every non-function type derives `IpeStringify`.
         && (!bounds.has_show() || ty_is_equatable(ty, enum_embeds_fn))
@@ -1434,7 +1434,7 @@ fn canon_type_embeds_lambda(t: &canon::Type) -> bool {
 /// arrow is invisible in a `Ty::Con`'s type arguments (which carry only applied
 /// type parameters), so the structural [`ty_is_equatable`] walk cannot see it
 /// without this out-of-band definition lookup. Consulted at every concrete
-/// equality / stringify obligation so a `==` / `toString` on a function-carrying
+/// equality / stringify obligation so a `==` / `{{…}}` on a function-carrying
 /// enum fails closed (IPE-T0014) instead of emitting Rust that does not build.
 fn fn_embedding_enums(
     module_unions: &[canon::Union],
@@ -5756,7 +5756,7 @@ mod tests {
 
     /// A `Show`-bounded generic instantiated to a FUNCTION must be REJECTED by
     /// the shared use-site gate. The obligation models `describe : a -> String`
-    /// with `describe x = Basics.toString x` — a `Stringify` obligation on `a` —
+    /// with `describe x = """{{x}}"""` — a `Stringify` obligation on `a` —
     /// instantiated to `someFn : Int -> Int`. Before the gate carried the `Show`
     /// clause, `ipe` accepted this and the backend emitted
     /// `fn describe<T0: IpeStringify>(..)` fed a closure — an E0277 at `cargo`.
@@ -5764,7 +5764,7 @@ mod tests {
     /// Driven directly against `super_bounds_satisfied` (like
     /// [`every_bound_bit_rejects_a_function_at_both_sites`]) rather than through
     /// a stdlib call: the single-module inference harness canonicalises `Main`
-    /// with no stdlib in scope, so a qualified `Basics.toString` dies at
+    /// with no stdlib in scope, so a qualified stdlib call dies at
     /// `UnknownModule` before any Show obligation is recorded — a refusal that
     /// never reaches this gate and holds green even with the `Show` clause
     /// deleted (vacuous). This construction exercises the `has_show()` conjunct

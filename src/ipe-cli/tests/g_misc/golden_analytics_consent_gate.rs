@@ -11,12 +11,12 @@
 //!      (`encodePropValue`) — the raw plaintext is never reachable through the
 //!      module's public API.
 //!   4. `PMoney` serialises losslessly as `{"amount":"…","currency":"…"}`.
-//!   5. `Basics.toString (Analytics.pii "…")` does NOT contain the plaintext —
-//!      the ambient `toString` / string-interpolation side channel is closed.
+//!   5. `"""{{p}}"""` over `Analytics.pii "…"` does NOT contain the plaintext —
+//!      the ambient string-interpolation side channel is closed.
 //!      `Pii` wraps a `Secret`; the `Secret` field's `IpeStringify` impl always
 //!      returns the redacted placeholder, making plaintext leakage structurally
 //!      impossible in the emitted Rust.
-//!   6. `Basics.toString (PPii (Analytics.pii "…"))` likewise does NOT expose
+//!   6. Interpolating `PPii (Analytics.pii "…")` likewise does NOT expose
 //!      the plaintext — the `PPii` constructor's `IpeStringify` auto-derive
 //!      recurses into the `Secret` field's redacting impl.
 //!

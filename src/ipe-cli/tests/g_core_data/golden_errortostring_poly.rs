@@ -1,10 +1,10 @@
 //! errorToString polymorphic-Stringify regression suite.
 //!
 //! Root cause: hard-typing `K::ErrorToString` as monomorphic `Error -> String`
-//! in `stdlib_scheme` (without the direct-build arm that `BasicsToString` has)
+//! in `stdlib_scheme` (without the direct-build arm that `Interpolate` has)
 //! forces the solver to unify a rigid annotation var `a` with the `Error` type →
 //! IPE-T0001.  Instead `errorToString : Stringify a => a -> String` (same
-//! chokepoint as `Basics.toString`).
+//! chokepoint as `{{…}}` interpolation).
 //!
 //! The unify.rs super-super arm is extended to allow cross-rigidity merging for
 //! non-dispatch obligations (Eq, Ord, Stringify), letting `equal : a -> a ->

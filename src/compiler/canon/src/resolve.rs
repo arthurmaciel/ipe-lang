@@ -7680,8 +7680,8 @@ const fn name_zero() -> Symbol {
 // `canonicalise_expr` when it sees `src::Expr_::MultilineStr`.
 //
 // The raw string is split into alternating `Lit` / `Interp` chunks, each
-// expression chunk is wrapped in `Basics.toString`, and the whole list is
-// folded left into a `++` (String.append) binop chain.
+// expression chunk is wrapped in the internal `Interpolate` renderer, and the
+// whole list is folded left into a `++` (String.append) binop chain.
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// A parsed chunk from a triple-quoted string.
@@ -7762,7 +7762,8 @@ fn split_interpolation(raw: &str) -> Vec<Chunk> {
 /// Port of `Ipe.Canonicalise.Expression.chunkToExpr`.
 ///
 /// `Lit` → `Expr_::Str`.
-/// `Interp` → resolve the body as a simple ref, then wrap in `Basics.toString`.
+/// `Interp` → resolve the body as a simple ref, then wrap in the internal
+/// `Interpolate` renderer (no surface binding — only `{{…}}` reaches it).
 fn chunk_to_expr(
     chunk: Chunk,
     span: Span,
@@ -7776,13 +7777,12 @@ fn chunk_to_expr(
             // `dropWhile (== ' ') (reverse (dropWhile …))`.
             let trimmed = body.trim();
             let resolved = resolve_interp_ref(trimmed, span, env, interner)?;
-            // Wrap in Basics.toString.
-            let mod_sym = interner.intern("Basics")?;
-            let fn_sym = interner.intern("toString")?;
+            let mod_sym = interner.intern("_internal_")?;
+            let fn_sym = interner.intern("interpolate")?;
             let stringify = Located::new(
                 span,
                 canon::Expr_::VarKernel {
-                    id: Some(StdlibKernel::BasicsToString),
+                    id: Some(StdlibKernel::Interpolate),
                     module: mod_sym,
                     name: fn_sym,
                 },

@@ -20,15 +20,15 @@ point =
 main =
     let
         scalar =
-            toString 42
+            """{{42}}"""
 
         record =
-            toString point
+            """{{point}}"""
 
         adtPayload =
-            toString (Circle 5)
+            """{{Circle 5}}"""
 
         adtNullary =
-            toString Empty
+            """{{Empty}}"""
     in
     Io.println (scalar ++ " | " ++ record ++ " | " ++ adtPayload ++ " | " ++ adtNullary)

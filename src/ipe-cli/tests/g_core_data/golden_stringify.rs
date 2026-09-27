@@ -1,8 +1,10 @@
-//! The STRINGIFY obligation (`Basics.toString : a -> String`, the shared
-//! lever for the whole Stringify-bounded family). The argument carries a bounded
-//! super-var → Rust `IpeStringify`. A scalar / record / ADT satisfies it; a bare
-//! function is rejected AT TYPE-CHECK (fail-closed), never emitting an unbounded
-//! `basics_to_string::<T>` that `cargo` would reject — the seal is preserved.
+//! The STRINGIFY obligation of `{{expr}}` interpolation (the internal
+//! `Interpolate : a -> String` renderer, the shared lever for the whole
+//! Stringify-bounded family). The argument carries a bounded super-var → Rust
+//! `IpeStringify`. A scalar / record / ADT satisfies it; a bare function is
+//! rejected AT TYPE-CHECK (fail-closed), never emitting an unbounded
+//! `interpolate_to_string::<T>` that `cargo` would reject — the seal is
+//! preserved.
 //!
 //! Positive case is `IPE_E2E`-gated (build + run). The negative case is a pure
 //! ipe compile (no cargo), so it always runs.
@@ -37,7 +39,8 @@ fn e2e_enabled() -> bool {
     std::env::var("IPE_E2E").is_ok()
 }
 
-/// `toString` on scalars compiles + runs (debug format: bool lowercases).
+/// Interpolating scalars compiles + runs (`Bool` renders lowercase, the
+/// `String.fromBool` form).
 #[test]
 fn tostring_scalars_run() {
     if !e2e_enabled() {
@@ -49,19 +52,19 @@ fn tostring_scalars_run() {
     assert_eq!(out.stdout.trim(), "42 true 3");
 }
 
-/// SEAL regression: `toString` on a concrete RECORD and ADT (alongside a scalar)
-/// must ipe-accept AND the emitted crate must `cargo build`. Before the fix,
-/// `basics_to_string<T: std::fmt::Display>` had no `Display` impl for a
-/// record/ADT, so `ipe build` exited 0 but the emitted crate failed `cargo
-/// build` with E0277 — an exit-0-then-cargo-fail SEAL breach. Routing the whole
-/// stringify family through `IpeStringify` (which every scalar AND every emitted
-/// composite implements) closes the class.
+/// SEAL regression: interpolating a concrete RECORD and ADT (alongside a
+/// scalar) must ipe-accept AND the emitted crate must `cargo build`. A renderer
+/// bound on `std::fmt::Display` would have no impl for a record/ADT, so `ipe
+/// build` would exit 0 but the emitted crate fail `cargo build` with E0277 — an
+/// exit-0-then-cargo-fail SEAL breach. Routing the whole stringify family
+/// through `IpeStringify` (which every scalar AND every emitted composite
+/// implements) closes the class.
 ///
 /// ipe-0 half runs unconditionally (cheap, no cargo); cargo-0 ∧ run-0 half is
 /// `IPE_E2E`-gated — the only check that would have caught the original breach.
 #[test]
 fn tostring_record_and_adt_run() {
-    // ipe-0: the compiler must accept `toString` on a record + ADT + scalar.
+    // ipe-0: the compiler must accept interpolating a record + ADT + scalar.
     let dir = compile_golden("m_tostring_composite");
     if !e2e_enabled() {
         return;
@@ -71,7 +74,7 @@ fn tostring_record_and_adt_run() {
     assert_eq!(
         out.exit_code,
         Some(0),
-        "composite-toString crate must cargo-build AND exit 0 (no E0277); got {:?} \
+        "composite-interpolation crate must cargo-build AND exit 0 (no E0277); got {:?} \
          (stdout: {:?})",
         out.exit_code,
         out.stdout
@@ -102,7 +105,7 @@ fn log_info_with_stringify_attrs_compiles() {
     );
 }
 
-/// SEAL-PRESERVING negative gate: `toString` on a FUNCTION is rejected at ipe
+/// SEAL-PRESERVING negative gate: interpolating a FUNCTION is rejected at ipe
 /// type-check (the Stringify obligation's `Fun` head-rejection), NOT deferred to
 /// a cargo failure. A pure compile — no `IPE_E2E` needed.
 #[test]
@@ -119,7 +122,7 @@ fn tostring_on_function_is_rejected_at_typecheck() {
     let built = ipe::build(&entry, &out, &runtime);
     assert!(
         built.is_err(),
-        "toString on a function MUST fail at ipec type-check (Stringify obligation), \
+        "interpolating a function MUST fail at ipec type-check (Stringify obligation), \
          not exit 0 and defer to cargo",
     );
 }

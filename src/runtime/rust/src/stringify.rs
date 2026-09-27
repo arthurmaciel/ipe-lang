@@ -158,7 +158,7 @@ impl IpeStringify for f64 {
 
 impl IpeStringify for bool {
     fn ipe_show(&self) -> String {
-        self.to_string()
+        crate::string::string_from_bool(*self)
     }
 }
 

@@ -9,8 +9,8 @@ as plumbing.
 
 A `"""…"""` string spans multiple lines and its source indentation is stripped,
 so you lay the text out where it is written without that layout leaking into the
-value. Inside it, `{{expr}}` substitutes a value — auto-stringified through
-`Basics.toString`, so an `Int` needs no `String.fromInt`.
+value. Inside it, `{{expr}}` substitutes a value — rendered by the compiler's
+internal interpolation renderer, so an `Int` needs no `String.fromInt`.
 
 A gnarly concatenation like this:
 
@@ -62,4 +62,5 @@ stitching text and values together.
 - [`string-interpolation`](../constructs/string-interpolation.md) — the construct
   reference: the full `{{…}}` grammar, escaping, and margin rules.
 - [Strings](../guide/string.md) — the `String` toolkit.
-- `ipe doc Basics.toString` — the stringifier interpolation wraps each value in.
+- `ipe doc String.fromInt`, `ipe doc String.fromFloat`, `ipe doc String.fromBool` —
+  the explicit conversions for a value built outside a `"""…"""` string.

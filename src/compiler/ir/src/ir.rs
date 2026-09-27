@@ -580,8 +580,8 @@ impl BoundSet {
     /// wildcard `any` variable and ONLY when the body actually calls a `db_get_*`
     /// — no blast radius on genuine named type variables (`a`, `msg`).
     const IPE_ROW: u16 = 1 << 11;
-    // 1 << 12 is free — the former `DISPLAY` (`Basics.toString`) bound folded
-    // into `SHOW` (`IpeStringify`), which covers scalar AND composite arguments.
+    // 1 << 12 is free — the stringify bound is `SHOW` (`IpeStringify`),
+    // which covers scalar AND composite arguments.
     /// The `'static` lifetime bound: a generic type-param that flows,
     /// INSIDE the function body, into a value boxed as a boxed `dyn Fn` trait
     /// object (`Box<dyn Fn(..) -> .. + Send + 'static>`, or the `Arc` +Sync
@@ -698,7 +698,7 @@ impl BoundSet {
         Self(self.0 | Self::EQ)
     }
 
-    /// This set with the `IpeStringify` (Ipê `toString` / `Log.*With`) bound.
+    /// This set with the `IpeStringify` (Ipê `{{…}}` interpolation / `Log.*With`) bound.
     #[must_use]
     pub const fn with_show(self) -> Self {
         Self(self.0 | Self::SHOW)
@@ -1414,7 +1414,7 @@ pub enum IrType {
     /// future `HydrationState` field-type gate consults, per
     /// `docs/adr/0005-delivery-shapes-runtimes-hosts-targets.md` §Q6 — nothing to build yet, the
     /// target does not exist). `Debug` and the Ipê-facing `IpeStringify` (the
-    /// trait backing `toString` / interpolation / `Log.*With`) are BOTH
+    /// trait backing `{{…}}` interpolation / `Log.*With`) are BOTH
     /// hand-written on the runtime type to ALWAYS render a fixed
     /// `"<redacted>"` placeholder, never the wrapped value — see
     /// `ipe_runtime::secret`'s module doc for the full design.
@@ -1442,7 +1442,7 @@ pub enum IrType {
     /// and the other opaque handles — a `Regex` is non-derivable-for-equality
     /// and not serde (a `Ipe.Web` Model field of type `Regex` is a compile-time
     /// rejection, never a silent wrong behaviour). `Debug` prints the source
-    /// pattern, backing `toString` via the runtime's `Debug`-based fallback.
+    /// pattern, backing `{{…}}` interpolation via the runtime's `Debug`-based fallback.
     Regex,
 
     /// `Ipe.Process.runWith`'s input record `{ args : List String, command :

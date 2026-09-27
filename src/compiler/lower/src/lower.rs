@@ -2666,10 +2666,10 @@ fn count_var_uses(sym: Symbol, expr: &Expr) -> usize {
 //
 // Some runtime kernels are generic over a type parameter with a Rust trait bound
 // — `db_get_*<R: IpeRow>(field: String, row: &R)`,
-// `basics_to_string<T: std::fmt::Display>(v: T)`. When such a kernel is
+// `interpolate_to_string<T: IpeStringify>(v: T)`. When such a kernel is
 // applied to a value whose Ipê type is a generic/wildcard type-param, the
 // enclosing emitted function must carry the kernel's Rust bound on THAT generic
-// — otherwise the body's `db_get_string(_, &payload)` / `basics_to_string(x)`
+// — otherwise the body's `db_get_string(_, &payload)` / `interpolate_to_string(x)`
 // call cannot prove the bound and the program, well-typed to `ipe`, fails
 // `cargo build` with E0277 (a SEAL violation).
 //
@@ -2679,7 +2679,7 @@ fn count_var_uses(sym: Symbol, expr: &Expr) -> usize {
 // symbol like `dbGetLabel` that lowers to `main_db_get_label`). It fires iff the
 // body contains an actual bound-obliging KERNEL application whose OBLIGING
 // argument (the exact position the kernel bounds — arg 1 for `Db.get*`, arg 0
-// for `toString`) is a `Var`/`CloneVar` referencing the tracked param. This
+// for `{{…}}` interpolation) is a `Var`/`CloneVar` referencing the tracked param. This
 // forbids the false classes: a string literal is not a kernel `Call`; a
 // `db_get_`-named USER symbol is a `Call` to a `Callee::Local`/`FuncValue`, not
 // a `Callee::Kernel(..)`; and a call on a CONCRETE value does not reference the
@@ -2708,7 +2708,7 @@ const fn is_db_row_accessor(k: KernelFn) -> bool {
 /// `matcher(tracked, k, args)` answers, for the currently-tracked symbol
 /// `tracked`, whether the call `Callee::Kernel(k)` applied to `args` obligates
 /// it — e.g. `IpeRow`'s `is_db_row_accessor(k) && args[1] is Var(tracked)` (`IpeRow`),
-/// or stringify's `k == BasicsToString && args[0] is Var(tracked)` (`IpeStringify`). Every
+/// or stringify's `k == Interpolate && args[0] is Var(tracked)` (`IpeStringify`). Every
 /// distinct kernel→bound obligation is expressed as one such matcher; the
 /// STRUCTURAL walk (shadow discipline + alias-transparency) is shared, so a new
 /// bound reuses this whole traversal by supplying only its own matcher.
@@ -4173,7 +4173,7 @@ fn body_move_closure_captures_generic(tv: Symbol, expr: &Expr) -> bool {
 /// ([`ir_type_generic_in_decoder`]).
 ///
 /// A kernel whose Rust signature bounds a type parameter — `db_get_*<R: IpeRow>`,
-/// `basics_to_string<T: std::fmt::Display>` — obliges that Rust bound on the Ipê
+/// `interpolate_to_string<T: IpeStringify>` — obliges that Rust bound on the Ipê
 /// generic its argument resolves to. When such a kernel is applied,
 /// alias-transparently, to a value whose type is `Generic(tv)`, we add the
 /// required bound to `tv`'s emitted generic so the body type-checks and
@@ -4214,13 +4214,13 @@ fn apply_kernel_type_param_bounds(
     // golden). `DbGetById` (arity 3) takes a `Db` handle, not a row, so it is
     // excluded by `is_db_row_accessor`.
     let ipe_row_matcher = obliges_ipe_row_bound;
-    // Stringify: a `Basics.toString(x)` application whose sole arg (index 0)
-    // is the tracked param. Applies to wildcard `any` AND named tvars — `toString`
+    // Stringify: an `Interpolate(x)` application whose sole arg (index 0) is
+    // the tracked param. Applies to wildcard `any` AND named tvars — interpolation
     // is legitimate on a polymorphic value, and `IpeStringify` is satisfiable by
     // every scalar AND every composite caller (record/ADT/list/map), so no
     // composite call site can exit-0-then-cargo-fail (see `BoundSet::SHOW`).
     let stringify_matcher = |tracked: Symbol, k: KernelFn, args: &[Expr]| -> bool {
-        matches!(k, KernelFn::BasicsToString) && arg_is_tracked_var(args, 0, tracked)
+        matches!(k, KernelFn::Interpolate) && arg_is_tracked_var(args, 0, tracked)
     };
     // `Sub.subscribeWebSocket raw kind msg` — the bare `msg` (arg index 2) is
     // MOVED into the `sub_subscribe_ws_open<M: Send + 'static>` runtime fn (the
@@ -8680,7 +8680,7 @@ fn prune_dead_type_decls(funcs: &[Func], types_ir: &mut Vec<TypeDef>, records: &
 /// * a **constructor / pattern head** (`Expr::Ctor` / `Pat::Ctor`) — a value
 ///   built or matched by naming a variant, which carries no `IrType` slot yet
 ///   forces the enum's declaration to be emitted. Missing this arm is an
-///   UNDER-prune: `toString (Circle 5)` names no `Shape` type in a signature,
+///   UNDER-prune: `"""{{Circle 5}}"""` names no `Shape` type in a signature,
 ///   so the enum would be dropped and the emitter would `enum_name`-ICE.
 ///
 /// The match is exhaustive over `Expr` (mirroring [`scan_kernel_usage`]) so a
@@ -16599,7 +16599,7 @@ impl<'a> Lowerer<'a> {
         if b.has_eq() {
             set = set.with_eq();
         }
-        // Stringify (`toString` / `Log.*With`) → Rust `IpeStringify`. Like `eq`,
+        // Stringify (`{{…}}` / `Log.*With`) → Rust `IpeStringify`. Like `eq`,
         // it adds no `Copy` (a single stringify moves/borrows the value); the
         // multi-use case is the general Clone concern, not Stringify-specific.
         if b.has_show() {
@@ -23953,6 +23953,7 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::StringToInt
                 | KernelFn::StringToFloat
                 | KernelFn::StringFromChar
+                | KernelFn::StringFromBool
                 | KernelFn::StringFromList
                 | KernelFn::StringConcat
                 | KernelFn::StringWords
@@ -23990,7 +23991,7 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::ListUnique
                 | KernelFn::ListUnzip
                 | KernelFn::BasicsNot
-                | KernelFn::BasicsToString
+                | KernelFn::Interpolate
                 | KernelFn::BasicsIdentity
                 | KernelFn::BasicsFst
                 | KernelFn::BasicsSnd
@@ -26234,6 +26235,7 @@ impl<'a> Lowerer<'a> {
                     ("String", "toInt") => Ok(Callee::Kernel(KernelFn::StringToInt)),
                     ("String", "toFloat") => Ok(Callee::Kernel(KernelFn::StringToFloat)),
                     ("String", "fromChar") => Ok(Callee::Kernel(KernelFn::StringFromChar)),
+                    ("String", "fromBool") => Ok(Callee::Kernel(KernelFn::StringFromBool)),
                     ("String", "fromList") => Ok(Callee::Kernel(KernelFn::StringFromList)),
                     ("String", "concat") => Ok(Callee::Kernel(KernelFn::StringConcat)),
                     ("String", "words") => Ok(Callee::Kernel(KernelFn::StringWords)),
@@ -26334,7 +26336,6 @@ impl<'a> Lowerer<'a> {
                     ("Basics", "snd") => Ok(Callee::Kernel(KernelFn::BasicsSnd)),
                     ("Basics", "modBy") => Ok(Callee::Kernel(KernelFn::BasicsModBy)),
                     ("Basics", "clamp") => Ok(Callee::Kernel(KernelFn::BasicsClamp)),
-                    ("Basics", "toString") => Ok(Callee::Kernel(KernelFn::BasicsToString)),
                     // ── Basics numerics ────────────────────────────────
                     ("Basics", "negate") => Ok(Callee::Kernel(KernelFn::BasicsNegate)),
                     ("Basics", "abs") => Ok(Callee::Kernel(KernelFn::BasicsAbs)),

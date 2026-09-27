@@ -39,27 +39,27 @@ piiIsRedacted =
     encodedProp (PPii (Analytics.pii "alice@example.com")) == "\"[redacted]\""
 
 
--- `Basics.toString` on a `Pii` value must NOT expose the plaintext.
+-- Interpolating a `Pii` value must NOT expose the plaintext.
 -- The `Pii` constructor wraps a `Secret`; the `Secret` field's `IpeStringify`
 -- impl always returns the redacted placeholder regardless of the wrapped value,
--- so the ambient `toString` / string-interpolation side channel is closed.
+-- so the ambient string-interpolation side channel is closed.
 piiToStringIsRedacted : Bool
 piiToStringIsRedacted =
     let
         p =
             Analytics.pii "alice@example.com"
     in
-    not (String.contains "alice@example.com" (Basics.toString p))
+    not (String.contains "alice@example.com" """{{p}}""")
 
 
--- `Basics.toString` on the `PPii` constructor must also NOT expose the plaintext.
+-- Interpolating the `PPii` constructor must also NOT expose the plaintext.
 ppiiToStringIsRedacted : Bool
 ppiiToStringIsRedacted =
     let
         p =
             PPii (Analytics.pii "alice@example.com")
     in
-    not (String.contains "alice@example.com" (Basics.toString p))
+    not (String.contains "alice@example.com" """{{p}}""")
 
 
 

@@ -608,6 +608,44 @@ mod tests {
         ));
     }
 
+    /// The prelude has no generic stringifier: a bare `toString` is unbound,
+    /// while the typed conversion that replaces it resolves.
+    #[test]
+    fn bare_to_string_is_not_in_the_prelude() {
+        let err = canon_err("module Main exposing (main)\n\nmain = toString 42\n");
+        assert!(
+            matches!(
+                &err,
+                Some(Diagnostic::Name {
+                    msg: NameError::ValueNotFound { name, .. },
+                    ..
+                }) if &**name == "toString"
+            ),
+            "`toString` must be unbound, got {err:?}"
+        );
+        let ok = canon_err(
+            "module Main exposing (main)\nimport Ipe.String as String\n\nmain = String.fromBool True\n",
+        );
+        assert!(ok.is_none(), "`String.fromBool` must resolve, got {ok:?}");
+    }
+
+    /// The interpolation renderer is internal: its kernel name has no surface
+    /// binding, so `{{…}}` is the only way to reach it.
+    #[test]
+    fn interpolate_kernel_has_no_surface_binding() {
+        let err = canon_err("module Main exposing (main)\n\nmain = interpolate 42\n");
+        assert!(
+            matches!(
+                &err,
+                Some(Diagnostic::Name {
+                    msg: NameError::ValueNotFound { .. },
+                    ..
+                })
+            ),
+            "`interpolate` must be unbound, got {err:?}"
+        );
+    }
+
     #[test]
     fn unknown_value_suggests_close_name() {
         // `readFil` is one edit from the `Ipe.File` member `readFile`.
@@ -4508,13 +4546,14 @@ mod tests {
             "main",
         );
         // A triple-quoted interpolation `{{Nothing}}` desugars to
-        // `Basics.toString Nothing`, so the canonical body is a `Call` whose one
-        // argument is the resolved reference. The fix must make that argument the
-        // `Nothing` `VarCtor` value, never an unbound `VarLocal`.
+        // `Interpolate Nothing` (the internal renderer kernel), so the canonical
+        // body is a `Call` whose one argument is the resolved reference. The fix
+        // must make that argument the `Nothing` `VarCtor` value, never an unbound
+        // `VarLocal`.
         let Some(Expr_::Call(_, args)) = body else {
             assert!(
                 false_marker(),
-                "`{{{{Nothing}}}}` must desugar to a `Basics.toString` Call, got {body:?}"
+                "`{{{{Nothing}}}}` must desugar to an `Interpolate` Call, got {body:?}"
             );
             return;
         };

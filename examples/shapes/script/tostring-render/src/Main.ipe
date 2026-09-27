@@ -2,13 +2,12 @@ module Main exposing (main)
 
 import Ipe.Io as Io
 
--- `toString` (the `Ipe.Basics` prelude default) renders any `Stringify`
--- value to `String` without a per-type function to memorise, and a
--- `"""..."""` triple-quoted string additionally supports `{{expr}}`
--- interpolation, auto-stringified through `toString`. Two ideas:
---   • `toString` is total over `Int`, `Float`, and `Bool` — no `Maybe`,
---     no `Result` to unwrap.
---   • `{{expr}}` interpolation reads closer to the rendered output than a
+-- Turning a value into text is always explicit in Ipê. Two ideas:
+--   • A standalone conversion names its type: `String.fromInt`,
+--     `String.fromFloat`, `String.fromBool` — each total, no `Maybe`, no
+--     `Result` to unwrap.
+--   • Inside a `"""..."""` triple-quoted string, `{{expr}}` interpolation
+--     renders each chunk the same way, and reads closer to the output than a
 --     `++`/`String.concat` chain of the same pieces.
 
 

@@ -416,6 +416,7 @@ mod registry_phase_c_tests {
             K::StringToInt,
             K::StringToFloat,
             K::StringFromChar,
+            K::StringFromBool,
             K::StringFromList,
             K::StringConcat,
             K::StringWords,
@@ -665,7 +666,8 @@ mod registry_phase_c_tests {
             // `Basics.clamp` — first-schemed hole; carries the `Comparable a`
             // (Ord) obligation, base scheme in `stdlib_scheme`.
             K::BasicsClamp,
-            K::BasicsToString,
+            // `{{expr}}` interpolation renderer — `Stringify` obligation on `a`.
+            K::Interpolate,
             // ── Basics numerics — negate/abs/sqrt/min/max ────────────
             K::BasicsNegate,
             K::BasicsAbs,
