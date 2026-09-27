@@ -24,6 +24,7 @@ use semver::Version;
 
 use crate::CliError;
 use crate::api_surface::{DiffError, ModuleApi, PublicApi, extract_tree};
+use crate::published_version::PublishedVersion;
 
 /// Whether a public-API delta breaks existing users.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -744,7 +745,12 @@ impl ReportBaseline {
     }
 }
 
-/// Parse a semver version argument, mapping a malformed value to a usage error.
-fn parse_version(raw: &str) -> Result<Version, CliError> {
-    Version::parse(raw).map_err(|_| CliError::UsageOwned(format!("diff: invalid version `{raw}`")))
+/// Parse a `check` version argument as a publishable version.
+///
+/// A malformed value or one carrying build metadata is refused: the index would
+/// refuse that version at publish, so no bump verdict is issued for it.
+fn parse_version(raw: &str) -> Result<Version, DiffError> {
+    PublishedVersion::parse(raw)
+        .map(|version| version.as_semver().clone())
+        .map_err(DiffError::InvalidVersion)
 }

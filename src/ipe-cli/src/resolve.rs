@@ -26,6 +26,7 @@ use crate::index::{self, CommitId, EntryVersion, PinnedRev, SourceUrl};
 use crate::lockfile::{DepKind, LockedDep, LockedRev, Lockfile};
 use crate::package_name::PackageName;
 use crate::project::IpeDep;
+use crate::published_version::PublishedVersion;
 use crate::{CliError, cache};
 
 /// The environment variable overriding the index checkout root; tests point it
@@ -112,7 +113,7 @@ pub fn resolve_and_add(
 
     let locked = LockedDep {
         name: name.to_owned(),
-        version: version.version.as_semver().clone(),
+        version: version.version.clone(),
         source: version.source.to_string(),
         rev: LockedRev::Pinned(version.rev.clone()),
         sha256: version.sha256.clone(),
@@ -197,7 +198,7 @@ pub fn resolve_escape(project_root: &Path, name: &str, dep: &IpeDep) -> Result<(
     let sha256 = hash_checkout(&checkout)?;
     // An escape has no published version; `0.0.0` marks "locked from an escape,
     // not the index" without inventing a version the source does not claim.
-    let version = semver::Version::new(0, 0, 0);
+    let version = PublishedVersion::new(0, 0, 0);
     let locked = LockedDep {
         name: name.to_owned(),
         version,
@@ -238,24 +239,49 @@ pub fn resolve_and_remove(project_root: &Path, name: &str) -> Result<(), CliErro
     Ok(())
 }
 
+/// The per-user cache base: `XDG_CACHE_HOME`, else `$HOME/.cache`.
+///
+/// Only an absolute path is accepted (a relative `XDG_CACHE_HOME` is ignored, as
+/// the XDG spec requires), so nothing is ever written relative to the current
+/// working directory.
+///
+/// # Errors
+/// [`CliError::CacheHomeUnknown`] when neither variable names an absolute path.
+pub fn default_cache_base() -> Result<PathBuf, CliError> {
+    cache_base_from(std::env::var_os("XDG_CACHE_HOME"), std::env::var_os("HOME"))
+}
+
+/// Resolve the cache base from the raw `XDG_CACHE_HOME` and `HOME` values.
+fn cache_base_from(
+    xdg_cache_home: Option<std::ffi::OsString>,
+    home: Option<std::ffi::OsString>,
+) -> Result<PathBuf, CliError> {
+    let absolute = |raw: std::ffi::OsString| Some(PathBuf::from(raw)).filter(|p| p.is_absolute());
+    xdg_cache_home
+        .and_then(absolute)
+        .or_else(|| home.and_then(absolute).map(|h| h.join(".cache")))
+        .ok_or(CliError::CacheHomeUnknown)
+}
+
 /// The default index checkout root when `IPE_INDEX_DIR` is unset.
 ///
-/// The standard per-user location. Provisioning and populating this checkout is
-/// a separate, deliberate outward-facing step; the resolver only reads it.
-#[must_use]
-pub fn default_index_root() -> PathBuf {
-    // Mirror the build cache's home discovery so the index lives beside it.
-    let base = std::env::var_os("XDG_CACHE_HOME")
-        .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".cache")))
-        .unwrap_or_else(|| PathBuf::from(".ipe"));
-    base.join("ipe").join("index")
+/// The standard per-user location under [`default_cache_base`]. Provisioning and
+/// populating this checkout is a separate, deliberate outward-facing step; the
+/// resolver only reads it.
+///
+/// # Errors
+/// [`CliError::CacheHomeUnknown`] when no per-user cache base can be resolved.
+pub fn default_index_root() -> Result<PathBuf, CliError> {
+    Ok(default_cache_base()?.join("ipe").join("index"))
 }
 
 /// The index checkout root: `IPE_INDEX_DIR` when set, else [`default_index_root`].
-#[must_use]
-pub fn index_root() -> PathBuf {
-    std::env::var_os(INDEX_DIR_ENV).map_or_else(default_index_root, PathBuf::from)
+///
+/// # Errors
+/// [`CliError::CacheHomeUnknown`] when `IPE_INDEX_DIR` is unset and no per-user
+/// cache base can be resolved.
+pub fn index_root() -> Result<PathBuf, CliError> {
+    std::env::var_os(INDEX_DIR_ENV).map_or_else(default_index_root, |dir| Ok(PathBuf::from(dir)))
 }
 
 /// The content hash of a source tree.
@@ -628,16 +654,18 @@ fn added_report(
 #[cfg(test)]
 mod tests {
     use super::{
-        added_report, dep_cache_dir, escape_cache_dir, fetch_git_into, package_cache_dir,
-        resolve_and_remove, resolve_escape, verify_hash, verify_lockfile_hashes,
+        added_report, cache_base_from, dep_cache_dir, escape_cache_dir, fetch_git_into,
+        package_cache_dir, resolve_and_remove, resolve_escape, verify_hash, verify_lockfile_hashes,
     };
-    use crate::cache;
     use crate::index::{CommitId, PinnedRev, SourceUrl};
     use crate::lockfile::{DepKind, LockedDep, LockedRev, Lockfile};
     use crate::package_name::PackageName;
     use crate::project::IpeDep;
+    use crate::published_version::PublishedVersion;
+    use crate::{CliError, cache};
     use ipe_ir::Capability;
     use std::collections::BTreeSet;
+    use std::ffi::OsString;
     use std::path::{Path, PathBuf};
     use std::process::Command;
 
@@ -883,7 +911,7 @@ mod tests {
         let pinned_sha = PinnedRev::from_full_sha("myescape", sha).expect("valid sha");
         let escape_dep = LockedDep {
             name: "myescape".to_owned(),
-            version: semver::Version::new(0, 0, 0),
+            version: PublishedVersion::new(0, 0, 0),
             source: "https://example.invalid/myescape".to_owned(),
             rev: LockedRev::Pinned(pinned_sha.clone()),
             sha256: "00".to_owned(),
@@ -893,7 +921,7 @@ mod tests {
         // An index dep: real version + any rev.
         let index_dep = LockedDep {
             name: "mypkg".to_owned(),
-            version: semver::Version::parse("1.2.0").expect("valid"),
+            version: PublishedVersion::parse("1.2.0").expect("valid"),
             source: "https://example.invalid/mypkg".to_owned(),
             rev: LockedRev::Pinned(PinnedRev::from_full_sha("mypkg", sha).expect("valid sha")),
             sha256: "00".to_owned(),
@@ -932,7 +960,7 @@ mod tests {
         for hostile in ["..", "../../evil", "/abs", "a/b"] {
             let dep = LockedDep {
                 name: hostile.to_owned(),
-                version: semver::Version::new(0, 0, 0),
+                version: PublishedVersion::new(0, 0, 0),
                 source: "https://example.invalid/x".to_owned(),
                 rev: LockedRev::Pinned(PinnedRev::from_full_sha("x", sha).expect("valid sha")),
                 sha256: "00".to_owned(),
@@ -1095,5 +1123,42 @@ mod tests {
         assert!(msg.contains("rev"), "bad rev rejected: {msg}");
         let _ = std::fs::remove_dir_all(&proj);
         let _ = std::fs::remove_dir_all(&src);
+    }
+
+    #[test]
+    fn cache_base_prefers_an_absolute_xdg_cache_home() {
+        let base = cache_base_from(
+            Some(OsString::from("/xdg/cache")),
+            Some(OsString::from("/home/u")),
+        )
+        .expect("absolute XDG_CACHE_HOME");
+        assert_eq!(base, PathBuf::from("/xdg/cache"));
+    }
+
+    #[test]
+    fn cache_base_falls_back_to_home_dot_cache() {
+        let base = cache_base_from(None, Some(OsString::from("/home/u"))).expect("absolute HOME");
+        assert_eq!(base, PathBuf::from("/home/u/.cache"));
+        let base = cache_base_from(Some(OsString::from("rel")), Some(OsString::from("/home/u")))
+            .expect("relative XDG_CACHE_HOME is ignored");
+        assert_eq!(base, PathBuf::from("/home/u/.cache"));
+    }
+
+    #[test]
+    fn cache_base_refuses_without_an_absolute_home() {
+        for (xdg, home) in [
+            (None, None),
+            (None, Some("")),
+            (None, Some("relative/home")),
+            (Some(""), None),
+            (Some("relative/xdg"), Some("")),
+        ] {
+            let err = cache_base_from(xdg.map(OsString::from), home.map(OsString::from))
+                .expect_err("no absolute cache base must be refused");
+            assert!(
+                matches!(err, CliError::CacheHomeUnknown),
+                "xdg={xdg:?} home={home:?}: {err:?}"
+            );
+        }
     }
 }

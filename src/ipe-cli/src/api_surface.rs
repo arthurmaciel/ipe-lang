@@ -94,6 +94,9 @@ pub enum DiffError {
     Empty { path: PathBuf },
     /// The required bump overflows a version component of the predecessor.
     FloorOverflow(crate::diff::FloorOverflow),
+    /// A `check` version argument is not a publishable version: malformed, or
+    /// carrying build metadata the package index refuses.
+    InvalidVersion(crate::published_version::VersionRefusal),
 }
 
 impl std::fmt::Display for DiffError {
@@ -117,6 +120,7 @@ impl std::fmt::Display for DiffError {
                 write!(f, "no Ipê modules found under {}", path.display())
             }
             Self::FloorOverflow(overflow) => write!(f, "{overflow}"),
+            Self::InvalidVersion(refusal) => write!(f, "diff: {refusal}"),
         }
     }
 }

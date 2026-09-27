@@ -15,6 +15,7 @@ use std::path::{Path, PathBuf};
 
 use crate::CliError;
 use crate::index::PinnedRev;
+use crate::published_version::PublishedVersion;
 
 /// The lockfile's filename at a project root.
 const LOCKFILE_NAME: &str = "ipe.lock";
@@ -103,8 +104,8 @@ impl std::fmt::Display for LockedRev {
 pub struct LockedDep {
     /// The package name (the lockfile's sort key).
     pub name: String,
-    /// The exact resolved version.
-    pub version: semver::Version,
+    /// The exact resolved version, as the index records it (no build metadata).
+    pub version: PublishedVersion,
     /// The source repository the package was fetched from.
     pub source: String,
     /// The exact revision fetched: an immutable SHA for git-sourced deps, or
@@ -129,8 +130,9 @@ impl Lockfile {
     /// empty lockfile (a project with no locked dependencies yet), not an error.
     ///
     /// # Errors
-    /// [`CliError::Io`] if the file exists but cannot be read; [`CliError::Resolve`]
-    /// if its content is malformed (a bad version, a missing field, or a non-SHA rev).
+    /// [`CliError::Io`] if the file exists but cannot be read;
+    /// [`CliError::VersionRefused`] if a `version` is malformed or carries build
+    /// metadata; [`CliError::Resolve`] if a field is missing or a rev is not a SHA.
     pub fn read(project_root: &Path) -> Result<Self, CliError> {
         let path = Self::path(project_root);
         let text = match crate::io_bounded::read_to_string_capped(
@@ -287,6 +289,10 @@ impl RawLocked {
     /// Turn the collected fields into a typed [`LockedDep`], erroring on a
     /// missing field or a malformed value.
     ///
+    /// The `version` field is parsed as a [`PublishedVersion`]: a hand-edited
+    /// `1.0.0+b` is refused here, since no index entry can carry build metadata
+    /// and the pin would never match the release it claims to lock.
+    ///
     /// The `rev` field is parsed through [`LockedRev::from_stored`]: `"local"`
     /// (path deps) is accepted as-is; any other value must be a 40-hex SHA or
     /// the parse fails closed — a legacy `"HEAD"` or branch name in the lockfile
@@ -303,11 +309,8 @@ impl RawLocked {
         };
         let name = self.name.ok_or_else(|| missing("name"))?;
         let version_str = self.version.ok_or_else(|| missing("version"))?;
-        let version = semver::Version::parse(&version_str).map_err(|e| {
-            CliError::Resolve(format!(
-                "ipe.lock: `{version_str}` is not a valid version: {e}"
-            ))
-        })?;
+        let version =
+            PublishedVersion::parse(&version_str).map_err(|refusal| refusal.for_package(&name))?;
         let raw_rev = self.rev.ok_or_else(|| missing("rev"))?;
         // Fail closed: a non-SHA rev (e.g. "HEAD" from a legacy lockfile) is
         // rejected here — only "local" (path deps) or a 40-hex SHA are accepted.
@@ -317,7 +320,7 @@ impl RawLocked {
             // Backward-compat: infer from version for lockfiles written before
             // the `kind` field existed. Escape deps always use version 0.0.0.
             None => {
-                if version == semver::Version::new(0, 0, 0) {
+                if version == PublishedVersion::new(0, 0, 0) {
                     DepKind::Escape
                 } else {
                     DepKind::Index
@@ -346,7 +349,10 @@ fn unquote(value: &str) -> &str {
 #[cfg(test)]
 mod tests {
     use super::{DepKind, LockedDep, LockedRev, Lockfile};
+    use crate::CliError;
     use crate::index::PinnedRev;
+    use crate::published_version::PublishedVersion;
+    use crate::published_version::{PublishedVersion, VersionRefusal};
     use std::path::PathBuf;
 
     /// A valid 40-hex SHA used in fixtures.
@@ -355,7 +361,7 @@ mod tests {
     fn dep(name: &str, version: &str) -> LockedDep {
         LockedDep {
             name: name.to_owned(),
-            version: semver::Version::parse(version).expect("valid version"),
+            version: PublishedVersion::parse(version).expect("valid version"),
             source: format!("https://example.invalid/{name}"),
             rev: LockedRev::Pinned(PinnedRev::from_full_sha(name, FIXTURE_SHA).expect("valid sha")),
             sha256: format!("hash-of-{name}"),
@@ -366,7 +372,7 @@ mod tests {
     fn escape_dep(name: &str) -> LockedDep {
         LockedDep {
             name: name.to_owned(),
-            version: semver::Version::new(0, 0, 0),
+            version: PublishedVersion::new(0, 0, 0),
             source: format!("https://example.invalid/{name}"),
             rev: LockedRev::Pinned(PinnedRev::from_full_sha(name, FIXTURE_SHA).expect("valid sha")),
             sha256: format!("hash-of-{name}"),
@@ -377,7 +383,7 @@ mod tests {
     fn path_dep(name: &str) -> LockedDep {
         LockedDep {
             name: name.to_owned(),
-            version: semver::Version::new(0, 0, 0),
+            version: PublishedVersion::new(0, 0, 0),
             source: format!("/local/path/{name}"),
             rev: LockedRev::Local,
             sha256: format!("hash-of-{name}"),
@@ -444,7 +450,7 @@ mod tests {
         let only = lock.packages().first().expect("one package");
         assert_eq!(
             only.version,
-            semver::Version::parse("1.2.0").expect("valid")
+            PublishedVersion::parse("1.2.0").expect("valid")
         );
     }
 
@@ -485,6 +491,56 @@ mod tests {
         assert_eq!(entry.rev, LockedRev::Local);
         assert_eq!(entry.kind, DepKind::Escape);
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// Read a one-package lockfile whose `version` is `version`.
+    fn read_with_version(tag: &str, version: &str) -> Result<Lockfile, CliError> {
+        let root = temp_dir(tag);
+        let lockfile_text = format!(
+            "# ipe.lock\n\n[[package]]\nname = \"mylib\"\nversion = \"{version}\"\n\
+             source = \"https://example.invalid/mylib\"\nrev = \"{FIXTURE_SHA}\"\n\
+             sha256 = \"abc\"\nkind = \"index\"\n"
+        );
+        std::fs::write(root.join("ipe.lock"), lockfile_text).expect("write");
+        let read = Lockfile::read(&root);
+        let _ = std::fs::remove_dir_all(&root);
+        read
+    }
+
+    #[test]
+    fn build_metadata_version_fails_closed_on_read() {
+        // No index entry carries build metadata, so a hand-edited `1.0.0+b`
+        // would pin a release the index can never serve.
+        let err = read_with_version("build-meta", "1.0.0+b").unwrap_err();
+        assert!(
+            matches!(
+                &err,
+                CliError::VersionRefused { package, refusal }
+                    if package == "mylib"
+                        && matches!(**refusal, VersionRefusal::BuildMetadata { .. })
+            ),
+            "{err:?}"
+        );
+    }
+
+    #[test]
+    fn malformed_version_fails_closed_on_read() {
+        let err = read_with_version("malformed", "1.0").unwrap_err();
+        assert!(
+            matches!(
+                &err,
+                CliError::VersionRefused { refusal, .. }
+                    if matches!(**refusal, VersionRefusal::Malformed { .. })
+            ),
+            "{err:?}"
+        );
+    }
+
+    #[test]
+    fn prerelease_version_is_read() {
+        let read = read_with_version("prerelease", "1.0.0-rc.1").expect("prerelease is valid");
+        let only = read.packages().first().expect("one package");
+        assert_eq!(only.version.to_string(), "1.0.0-rc.1");
     }
 
     // --- New tests for PinnedRev typing and DepKind tag ---

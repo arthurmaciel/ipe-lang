@@ -876,11 +876,7 @@ pub fn run_audit_entry(rest: &[String]) -> Result<(), CliError> {
     // A scratch root for fetch caches under the standard per-user cache root
     // (the write-boundary from PRINCIPLES.md), isolated per process so concurrent
     // audit-entry runs never share a cache directory.
-    let cache_base = std::env::var_os("XDG_CACHE_HOME")
-        .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".cache")))
-        .unwrap_or_else(|| PathBuf::from(".ipe"));
-    let scratch_root = cache_base
+    let scratch_root = resolve::default_cache_base()?
         .join("ipe")
         .join(format!("audit-entry-{}", std::process::id()));
     std::fs::create_dir_all(&scratch_root).map_err(|e| CliError::Io {

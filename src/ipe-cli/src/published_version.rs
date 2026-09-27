@@ -32,6 +32,12 @@ impl PublishedVersion {
         Self::from_semver(version)
     }
 
+    /// The release `major.minor.patch`, with no prerelease and no build metadata.
+    #[must_use]
+    pub const fn new(major: u64, minor: u64, patch: u64) -> Self {
+        Self(semver::Version::new(major, minor, patch))
+    }
+
     /// Admit an already-parsed [`semver::Version`], refusing build metadata.
     ///
     /// # Errors

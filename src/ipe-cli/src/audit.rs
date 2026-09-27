@@ -1620,7 +1620,7 @@ fn advisory_check_with_base(
         // it once, here, into the typed `PackageName` — a single non-traversing
         // path component by construction — so no raw name reaches either sink.
         let name = crate::package_name::PackageName::parse(&dep.name)?;
-        check_one_dep_advisories(db_root, &name, &dep.version, base_url)?;
+        check_one_dep_advisories(db_root, &name, dep.version.as_semver(), base_url)?;
     }
     Ok(())
 }

@@ -94,6 +94,10 @@ pub enum CliError {
     /// (no `IPE_HOME`, `XDG_DATA_HOME`, or `HOME`). Without a home there is
     /// nowhere to write the runtime the emitted project links against.
     RuntimeHomeUnknown,
+    /// No per-user cache directory could be resolved: neither `XDG_CACHE_HOME`
+    /// nor `HOME` names an absolute path. Refused rather than falling back to a
+    /// directory relative to the current working directory.
+    CacheHomeUnknown,
     /// Writing the embedded runtime source to `<IPE_HOME>/runtime/<version>/rust`
     /// failed (disk full, permission denied, or a drifted embed). This is a
     /// fail-closed refusal — the build stops rather than link a wrong or empty
@@ -494,6 +498,7 @@ impl CliError {
             Self::RuntimeNotFound => "runtime-not-found",
             Self::RuntimeDirInvalid { .. } => "runtime-dir-invalid",
             Self::RuntimeHomeUnknown => "runtime-home-unknown",
+            Self::CacheHomeUnknown => "cache-home-unknown",
             Self::RuntimeMaterializeFailed { .. } => "runtime-materialize-failed",
             Self::RuntimeVersionMismatch { .. } => "runtime-version-mismatch",
             Self::EmittedBuildFailed { .. } => "emitted-build-failed",
@@ -562,6 +567,12 @@ impl std::fmt::Display for CliError {
                 f,
                 "could not locate the Ipe runtime; \
                  set IPE_RUNTIME_DIR to an explicit path or pass --runtime <dir>"
+            ),
+            Self::CacheHomeUnknown => write!(
+                f,
+                "could not determine the per-user cache directory: neither XDG_CACHE_HOME \
+                 nor HOME is set to an absolute path; set XDG_CACHE_HOME to an absolute, \
+                 writable directory"
             ),
             Self::RuntimeDirInvalid { .. }
             | Self::RuntimeHomeUnknown

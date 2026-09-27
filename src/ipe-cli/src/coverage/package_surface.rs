@@ -287,7 +287,7 @@ impl AspectCheck<PackageItem> for SemverSatisfiedColumn {
             );
         };
 
-        if req.matches(&locked.version) {
+        if req.matches(locked.version.as_semver()) {
             Cell::Ok
         } else {
             Cell::Hole(format!(
