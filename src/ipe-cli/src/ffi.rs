@@ -1347,7 +1347,11 @@ fn install_wrapper(
             expose: &expose,
         },
         allow_build_scripts,
-    )?;
+    )
+    .map_err(|e| match e {
+        CliError::Usage(msg) => map_inspector_error(msg),
+        other => other,
+    })?;
     // A single-crate inspector run may emit a singleton array; unwrap it.
     let doc_text = match serde_json::from_str::<serde_json::Value>(&json) {
         Ok(serde_json::Value::Array(items)) if items.len() == 1 => items
