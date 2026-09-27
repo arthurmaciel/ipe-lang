@@ -24,7 +24,12 @@ use std::ops::Deref;
 /// verbatim.
 ///
 /// Only this module constructs one, so a message cannot be spelled as a Rust
-/// literal at a use site.
+/// literal at a use site. Its text is terminal-safe by construction: a filled
+/// or relayed text passes [`TerminalSafe::sanitize`], so no placeholder value
+/// (trusted by declaration or not) can carry an escape sequence or a control
+/// byte other than `\n` and `\t` into it.
+///
+/// [`TerminalSafe::sanitize`]: crate::style::TerminalSafe::sanitize
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Message(Cow<'static, str>);
 
@@ -34,9 +39,13 @@ impl Message {
         Self(Cow::Borrowed(text))
     }
 
-    /// A filled catalog text.
-    const fn filled(text: String) -> Self {
-        Self(Cow::Owned(text))
+    /// A filled or relayed text, with escapes and stray control bytes stripped.
+    fn filled(text: &str) -> Self {
+        Self(Cow::Owned(
+            crate::style::TerminalSafe::sanitize(text)
+                .as_str()
+                .to_owned(),
+        ))
     }
 
     /// Relay a typed refusal whose own `Display` is its user-facing text.
@@ -46,7 +55,7 @@ impl Message {
     /// string (and the untrusted bytes it may carry) cannot become a message.
     #[must_use]
     pub fn relay(rendered: &impl Relayable) -> Self {
-        Self(Cow::Owned(rendered.to_string()))
+        Self::filled(&rendered.to_string())
     }
 
     /// Join catalog messages into one, one message per line.
@@ -468,7 +477,7 @@ macro_rules! message_value_fn {
         $(#[$meta])*
         #[must_use]
         pub fn $name($($param: param_ty!($($pty)?)),+) -> Message {
-            Message::filled(super::$name($($param),+))
+            Message::filled(&super::$name($($param),+))
         }
     };
 }
@@ -1438,6 +1447,47 @@ mod tests {
                 "control byte survived in {rendered:?}"
             );
         }
+    }
+
+    /// A default-typed placeholder is sanitised too: a `Message` never carries
+    /// an escape sequence or a stray control byte, whatever filled it.
+    #[test]
+    fn every_filled_message_is_terminal_safe() {
+        let hostile = "a\u{1b}[2Jb\rc\u{7f}d\u{9b}e";
+        let message = msg::publish_no_version(&hostile);
+        assert_eq!(
+            message,
+            "ipe package publish: `abcde` declares no `version = \"…\"` — publish records the version being published, so the manifest must name one."
+        );
+        let joined = Message::lines([message.clone(), msg::publish_no_version(&"x\ny")]);
+        assert!(
+            !joined
+                .chars()
+                .any(|c| c.is_control() && c != '\n' && c != '\t'),
+            "control byte survived in {joined:?}"
+        );
+    }
+
+    /// A relayed refusal is sanitised: its own `Display` cannot smuggle an
+    /// escape sequence into the message.
+    #[test]
+    fn a_relayed_refusal_is_terminal_safe() {
+        let relayed = Message::relay(&ipe_lint::ConfigError::Rejected(
+            "bad\u{1b}]0;title\u{7}key\u{1b}[31m".to_owned(),
+        ));
+        assert!(
+            !relayed
+                .chars()
+                .any(|c| c.is_control() && c != '\n' && c != '\t'),
+            "control byte survived in {relayed:?}"
+        );
+        assert!(relayed.contains("badkey"), "{relayed:?}");
+    }
+
+    /// The catalog itself holds no control byte besides the line break.
+    #[test]
+    fn the_catalog_is_free_of_control_bytes() {
+        assert!(!CATALOG.chars().any(|c| c.is_control() && c != '\n'));
     }
 
     /// Every `## <key>` the catalog defines.
