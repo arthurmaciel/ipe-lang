@@ -118,6 +118,8 @@ mod golden_l0135_consume_then_borrow_seal;
 mod golden_l0135_effect_field_move_seal;
 #[path = "g_issues/golden_l0135_union_task_reuse_seal.rs"]
 mod golden_l0135_union_task_reuse_seal;
+#[path = "g_issues/golden_stream_handler_capture_seal.rs"]
+mod golden_stream_handler_capture_seal;
 #[path = "g_issues/golden_swapped_container_capture_seal.rs"]
 mod golden_swapped_container_capture_seal;
 #[path = "g_issues/golden_unannotated_value_sync_seal.rs"]

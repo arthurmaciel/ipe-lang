@@ -3499,7 +3499,7 @@ pub fn user_sources_for_unsafe_scan(
             .iter()
             .map(|d| {
                 crate::io_bounded::read_to_string_capped(
-                    &d.path,
+                    d.path(),
                     crate::io_bounded::SOURCE_READ_CAP,
                 )
             })
@@ -3715,10 +3715,10 @@ pub fn named_sources_for_web_scan(
         let mut out = Vec::with_capacity(discovered.len());
         for m in &discovered {
             let src = crate::io_bounded::read_to_string_capped(
-                &m.path,
+                m.path(),
                 crate::io_bounded::SOURCE_READ_CAP,
             )?;
-            out.push((m.module_path.join("."), src));
+            out.push((m.module_path().join("."), src));
         }
         return Ok(out);
     }

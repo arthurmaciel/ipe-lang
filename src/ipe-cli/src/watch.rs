@@ -472,10 +472,10 @@ pub(crate) fn resolve_project_sources(
         let mut sources: BTreeMap<Vec<String>, (PathBuf, String)> = BTreeMap::new();
         for m in &discovered {
             let src = crate::io_bounded::read_to_string_capped(
-                &m.path,
+                m.path(),
                 crate::io_bounded::SOURCE_READ_CAP,
             )?;
-            sources.insert(m.module_path.clone(), (m.path.clone(), src));
+            sources.insert(m.module_path().to_vec(), (m.path().to_path_buf(), src));
         }
         let cargo_name = ipe_backend_rust::sanitize_cargo_name(&manifest.name);
         // The entry defaults to `["Main"]`; a `programs` manifest routes its
@@ -522,26 +522,26 @@ pub(crate) fn resolve_project_sources(
     let mut discovered = project::discover_modules(src_root)?;
     if !discovered
         .iter()
-        .any(|m| m.module_path == entry_module_path)
+        .any(|m| m.module_path() == entry_module_path)
     {
-        discovered.push(project::DiscoveredModule {
-            path: entry.to_path_buf(),
-            module_path: entry_module_path.clone(),
-        });
+        discovered.push(project::DiscoveredModule::user(
+            entry.to_path_buf(),
+            entry_module_path.clone(),
+        ));
     }
     let mut sources: BTreeMap<Vec<String>, (PathBuf, String)> = BTreeMap::new();
     for m in &discovered {
-        if m.module_path == entry_module_path {
+        if m.module_path() == entry_module_path {
             sources.insert(
                 entry_module_path.clone(),
                 (entry.to_path_buf(), source.clone()),
             );
         } else {
             let src = crate::io_bounded::read_to_string_capped(
-                &m.path,
+                m.path(),
                 crate::io_bounded::SOURCE_READ_CAP,
             )?;
-            sources.insert(m.module_path.clone(), (m.path.clone(), src));
+            sources.insert(m.module_path().to_vec(), (m.path().to_path_buf(), src));
         }
     }
     Ok(ResolvedProject {

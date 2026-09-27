@@ -42,9 +42,9 @@ mod ty_templates;
 
 use capture_rewrite::force_shared_capture_clones;
 use clone_class::{
-    CloneClass, CloneEnv, classify_capture_clone, clone_class, enum_is_opaque_ffi_handle,
-    param_is_multiuse_clonable, reject_nonclone_value_reuse, rewrite_captured_clones,
-    rewrite_multiuse_clones,
+    CloneClass, CloneEnv, HandlerCapture, classify_capture_clone, classify_handler_capture,
+    clone_class, enum_is_opaque_ffi_handle, param_is_multiuse_clonable,
+    reject_nonclone_value_reuse, rewrite_captured_clones, rewrite_multiuse_clones,
 };
 use generic_syms::{collect_ir_generic_syms, default_generics_to_unit};
 #[cfg(test)]
@@ -1244,6 +1244,69 @@ fn canon_collect_pat_binds(pat: &canon::Pattern, bound: &mut BTreeSet<Symbol>) {
             }
         }
     }
+}
+
+/// Carrier kind a binder gives each name it introduces, for the capture classifiers.
+///
+/// Names are keyed by symbol, so every binder decides its own names for its
+/// scope: the innermost binder of a name wins over any outer one.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum BinderCarrier {
+    /// The binder site runs the `Arc<dyn Fn>` promotion pass for a pure-`Fun` name.
+    Promotable,
+    /// The binder has no carrier promotion; it hides any outer promotable name.
+    Shadowing,
+}
+
+/// The names one binder introduces, each with its [`BinderCarrier`].
+type BinderScope = BTreeMap<Symbol, BinderCarrier>;
+
+/// Every name `pat` binds, as [`BinderCarrier::Shadowing`].
+fn shadowing_binder_scope(pat: &canon::Pattern) -> BinderScope {
+    let mut bound = BTreeSet::new();
+    canon_collect_pat_binds(pat, &mut bound);
+    bound
+        .into_iter()
+        .map(|sym| (sym, BinderCarrier::Shadowing))
+        .collect()
+}
+
+/// Scope of a def or lambda parameter list.
+///
+/// A name bound inside a destructuring parameter shadows; each lowered param
+/// symbol (a plain-var name or a synthetic destructure binder) is promotable
+/// unless a destructuring parameter binds the same name, so a clash fails
+/// closed.
+fn param_binder_scope<'a>(
+    param_syms: impl IntoIterator<Item = Symbol>,
+    patterns: impl IntoIterator<Item = &'a canon::Pattern>,
+) -> BinderScope {
+    let mut scope = BinderScope::new();
+    for pat in patterns {
+        if !matches!(pat.value, canon::Pattern_::PVar(_)) {
+            scope.extend(shadowing_binder_scope(pat));
+        }
+    }
+    for sym in param_syms {
+        scope.entry(sym).or_insert(BinderCarrier::Promotable);
+    }
+    scope
+}
+
+/// Scope of one `let` binding: a plain name is promotable, a destructure shadows.
+fn let_binding_scope(binding: &canon::LetBinding) -> BinderScope {
+    match &binding.pat.value {
+        canon::Pattern_::PVar(name) => BinderScope::from([(*name, BinderCarrier::Promotable)]),
+        _ => shadowing_binder_scope(&binding.pat),
+    }
+}
+
+/// Scope of a `case` arm: every pattern binder is promotable at the arm site.
+fn arm_binder_scope(arm_syms: &[Symbol]) -> BinderScope {
+    arm_syms
+        .iter()
+        .map(|&sym| (sym, BinderCarrier::Promotable))
+        .collect()
 }
 
 /// Walk `expr` collecting `VarLocal` symbols free relative to `bound`.
@@ -9488,6 +9551,31 @@ fn reject_point_free_store_kernel(callee: &Callee, span: Span) -> DResult<()> {
     Ok(())
 }
 
+/// Fail-closed SEAL gate for a partial or point-free capture-cloned handler kernel (`Stream.stream`).
+///
+/// The backend re-wraps the handler argument with a per-call `.clone()` of
+/// every free local. In a partial application (eta-expanded) or a point-free
+/// reify, the handler is the synthesized closure's own parameter — a bare
+/// `Box<dyn Fn>` with no `Clone` (E0599) and no `Sync` (E0277) — and the
+/// handler-capture gate never sees the handler's captures. Refuse with
+/// IPE-L0152 (the kernel is legal only saturated — a distinct fact from the
+/// non-`Clone` capture refusal, IPE-L0126); a piped `<|` / `|>` spine is
+/// flattened to the saturated call first, so only a genuinely unsaturated use
+/// reaches here. A no-op (`Ok`) for every other callee.
+fn reject_unsaturated_handler_kernel(callee: &Callee, span: Span) -> DResult<()> {
+    if let Callee::Kernel(k) = callee
+        && k.capture_cloned_handler_arg().is_some()
+    {
+        let d = k.decl();
+        let kernel = format!("{}.{}", d.qualifier, d.name).into_boxed_str();
+        return Err(Diagnostic::Lower {
+            span,
+            msg: LowerError::UnsaturatedHandlerKernel { kernel },
+        });
+    }
+    Ok(())
+}
+
 /// Fail-closed SECURITY gate: `Secret.fromString` is legal ONLY as a saturated
 /// one-argument call. The committed-literal ban (IPE-L0150) inspects the
 /// ARGUMENT of a direct `Secret.fromString "…"` call — but that check is
@@ -10288,8 +10376,11 @@ pub struct Lowerer<'a> {
     /// pattern (`Codec f -> …`) be forwarded into a higher-order function
     /// instead of only called in place. A non-`Fun` binder registered here is a
     /// no-op — the classifier's `fun_value_arc_promotable` filter decides which
-    /// binders actually promote. Scoped save/restore per registering scope;
-    /// interior mutability so the lowering walk stays over a shared `&self`.
+    /// binders actually promote. EVERY binder scope decides its own names via
+    /// [`Self::with_binders`]: a promotable binder adds them, a non-promoting
+    /// one (a destructure) removes them, so the innermost binder of a name wins
+    /// and a shadowing destructure never inherits an outer name's promotion.
+    /// Interior mutability so the lowering walk stays over a shared `&self`.
     promotable_fn_binders: std::cell::RefCell<BTreeSet<Symbol>>,
     /// Fail-close signal: pure-`Fun` captures the classifier routed AWAY from
     /// IPE-L0126 on the promise that the symbol's binder site will decide the
@@ -13372,7 +13463,14 @@ impl<'a> Lowerer<'a> {
                     StoreSelectProjectionDefect::LiteralTypeUnsupported { ty: ty_label },
                 ));
             };
-            let lowered = self.lower_expr(value_expr)?;
+            // The projection lambda's row binders have no carrier promotion:
+            // they shadow any outer promotable name over the lowered value.
+            let row_scope: BinderScope = binders
+                .into_iter()
+                .flatten()
+                .map(|sym| (sym, BinderCarrier::Shadowing))
+                .collect();
+            let lowered = self.with_binders(&row_scope, || self.lower_expr(value_expr))?;
             return Ok(ProjectedColumn {
                 source: ProjectionSource::Literal { lowered },
                 kind,
@@ -15974,15 +16072,14 @@ impl<'a> Lowerer<'a> {
                     self.fn_is_async.set(matches!(ret, IrType::Task(_)));
                     // Params are promotable fn binders for the body's capture
                     // classifier (an inner lambda capturing a pure-`Fun` param
-                    // defers to the param loop below instead of IPE-L0126).
-                    let param_syms: Vec<Symbol> = params.iter().map(|(s, _)| *s).collect();
+                    // defers to the param loop below instead of IPE-L0126); a name
+                    // bound inside a destructuring param shadows instead.
+                    let param_scope = param_binder_scope(params.iter().map(|(s, _)| *s), patterns);
                     let mut row_vars = BTreeSet::new();
                     canon_sig_collect_arg_row_vars(ty, &mut row_vars);
                     let body_result = self
                         .reject_generic_app_entries_in(body, &row_vars)
-                        .and_then(|()| {
-                            self.with_promotable_fn_binders(param_syms, || self.lower_expr(body))
-                        });
+                        .and_then(|()| self.with_binders(&param_scope, || self.lower_expr(body)));
                     self.fn_is_async.set(prev_async);
                     // The prologue binders' types mention the def's own generics, so
                     // they resolve before those generics go out of scope.
@@ -16387,14 +16484,13 @@ impl<'a> Lowerer<'a> {
                             // Save/set/restore fn_is_async (same rationale as Typed path).
                             let prev_async = self.fn_is_async.get();
                             self.fn_is_async.set(matches!(ret, IrType::Task(_)));
-                            // Same promotable-fn-binder registration as the Typed path.
-                            let param_syms: Vec<Symbol> = params.iter().map(|(s, _)| *s).collect();
+                            // Same binder-scope registration as the Typed path.
+                            let param_scope =
+                                param_binder_scope(params.iter().map(|(s, _)| *s), patterns);
                             let body_result = self
                                 .reject_generic_app_entries_in(body, &BTreeSet::new())
                                 .and_then(|()| {
-                                    self.with_promotable_fn_binders(param_syms, || {
-                                        self.lower_expr(body)
-                                    })
+                                    self.with_binders(&param_scope, || self.lower_expr(body))
                                 });
                             self.fn_is_async.set(prev_async);
                             // Prologue binders resolve under the def's generics, as in
@@ -17878,6 +17974,19 @@ impl<'a> Lowerer<'a> {
         lambda_param_pats: &[&canon::Pattern],
         canon_body: &canon::Expr,
     ) -> DResult<Vec<(Symbol, BinderType)>> {
+        Ok(self
+            .captured_locals_at(lambda_param_pats, canon_body)?
+            .into_iter()
+            .map(|(sym, _, ty)| (sym, ty))
+            .collect())
+    }
+
+    /// [`Self::captured_locals`] with each capture's use-site span, for a diagnostic at the capture.
+    fn captured_locals_at(
+        &self,
+        lambda_param_pats: &[&canon::Pattern],
+        canon_body: &canon::Expr,
+    ) -> DResult<Vec<(Symbol, Span, BinderType)>> {
         let mut outer_bound = BTreeSet::new();
         for &p in lambda_param_pats {
             canon_collect_pat_binds(p, &mut outer_bound);
@@ -17885,7 +17994,7 @@ impl<'a> Lowerer<'a> {
         let mut free: BTreeMap<Symbol, Span> = BTreeMap::new();
         canon_collect_free_locals(&mut free, &outer_bound, canon_body);
         free.into_iter()
-            .map(|(sym, span)| Ok((sym, self.used_binder_ir_type(span)?)))
+            .map(|(sym, span)| Ok((sym, span, self.used_binder_ir_type(span)?)))
             .collect()
     }
 
@@ -17948,22 +18057,84 @@ impl<'a> Lowerer<'a> {
         out
     }
 
-    /// Run `f` with `syms` registered as promotable fn binders (see the
-    /// `promotable_fn_binders` field doc), restoring the previous registration
-    /// afterwards so nested scopes compose and shadowing resolves to the
-    /// innermost registering binder.
-    fn with_promotable_fn_binders<T>(&self, syms: Vec<Symbol>, f: impl FnOnce() -> T) -> T {
-        if syms.is_empty() {
-            return f();
-        }
-        let saved = {
-            let mut set = self.promotable_fn_binders.borrow_mut();
-            let saved = set.clone();
-            set.extend(syms);
-            saved
+    /// Refuse a non-`Clone` capture of a kernel handler the backend re-wraps with capture clones.
+    ///
+    /// The backend rebuilds the handler at `KernelFn::capture_cloned_handler_arg`
+    /// inside a fresh `move` closure and shadows each free local with
+    /// `.clone()`. Every capture is classified by [`classify_handler_capture`]:
+    /// a `Copy` leaf, a `Clone` carrier, or a promotable pure-`Fun` binder (its
+    /// binder site promotes it to the `Arc` carrier; recorded as a deferred
+    /// capture, so a binder that cannot promote re-raises IPE-L0126) pass. A
+    /// non-`Clone` capture (a destructure-bound `Box<dyn Fn>`, a task, a
+    /// decoder) fails closed with IPE-L0126 at the capture instead of a
+    /// cargo-time E0599; a capture whose type does not resolve is refused by
+    /// [`Self::used_binder_ir_type`] before classification. The saturated call is the
+    /// only shape that reaches the handler: a piped spine is flattened in
+    /// [`Self::lower_call`] and a partial or point-free use is refused by
+    /// [`reject_unsaturated_handler_kernel`].
+    fn reject_nonclone_handler_capture(
+        &self,
+        callee: &Callee,
+        args: &[canon::Expr],
+    ) -> DResult<()> {
+        let Callee::Kernel(kernel) = callee else {
+            return Ok(());
         };
+        let Some(handler) = kernel
+            .capture_cloned_handler_arg()
+            .and_then(|i| args.get(i))
+        else {
+            return Ok(());
+        };
+        for (sym, capture_span, binder_ty) in self.captured_locals_at(&[], handler)? {
+            let promotable = self.promotable_fn_binders.borrow().contains(&sym);
+            let class = classify_handler_capture(
+                self.clone_env(),
+                Some(binder_ty.classified()),
+                promotable,
+            );
+            if !class.admitted() {
+                return Err(unsupported(capture_span, Feature::StreamHandlerCapture));
+            }
+            if class == HandlerCapture::ArcCarrier {
+                self.deferred_fun_captures
+                    .borrow_mut()
+                    .entry(sym)
+                    .or_insert(capture_span);
+            }
+        }
+        Ok(())
+    }
+
+    /// Install `scope` into `promotable_fn_binders` and return the displaced state.
+    ///
+    /// A promotable name is added and a shadowing name removed, so the
+    /// innermost binder of a name decides its carrier. Installing the returned
+    /// scope undoes this installation exactly.
+    fn install_binders(&self, scope: &BinderScope) -> BinderScope {
+        let mut set = self.promotable_fn_binders.borrow_mut();
+        scope
+            .iter()
+            .map(|(&sym, &carrier)| {
+                let was_promotable = match carrier {
+                    BinderCarrier::Promotable => !set.insert(sym),
+                    BinderCarrier::Shadowing => set.remove(&sym),
+                };
+                let prior = if was_promotable {
+                    BinderCarrier::Promotable
+                } else {
+                    BinderCarrier::Shadowing
+                };
+                (sym, prior)
+            })
+            .collect()
+    }
+
+    /// Run `f` with `scope` installed, then restore the enclosing binder state.
+    fn with_binders<T>(&self, scope: &BinderScope, f: impl FnOnce() -> T) -> T {
+        let prior = self.install_binders(scope);
         let out = f();
-        *self.promotable_fn_binders.borrow_mut() = saved;
+        self.install_binders(&prior);
         out
     }
 
@@ -18282,9 +18453,13 @@ impl<'a> Lowerer<'a> {
         // Register this lambda's own params as promotable fn binders while the
         // body is lowered, so an INNER lambda capturing one of them routes to
         // the deferral (the param loop below promotes the carrier) instead of
-        // fail-closing IPE-L0126.
-        let param_syms: Vec<Symbol> = ir_params.iter().map(|(s, _)| *s).collect();
-        let mut body = self.with_promotable_fn_binders(param_syms, || self.lower_expr(cur_body))?;
+        // fail-closing IPE-L0126; a name bound inside a destructuring param
+        // shadows instead.
+        let param_scope = param_binder_scope(
+            ir_params.iter().map(|(s, _)| *s),
+            all_param_pats.iter().copied(),
+        );
+        let mut body = self.with_binders(&param_scope, || self.lower_expr(cur_body))?;
         self.fn_is_async.set(prev_async);
         // Apply the computed function-value body to the flatten-invariant pad
         // parameters (no-op for the ordinary fully-flattened lambda).
@@ -20544,6 +20719,7 @@ impl<'a> Lowerer<'a> {
                 // never-defined symbol (E0425). See
                 // [`reject_point_free_store_kernel`].
                 reject_point_free_store_kernel(&callee, e.span)?;
+                reject_unsaturated_handler_kernel(&callee, e.span)?;
                 // Fail-closed SECURITY gate: an un-applied `Secret.fromString`
                 // reference (point-free, let-bound, passed as a value) routes
                 // around the committed-literal seal gate (IPE-L0150), which reads
@@ -21085,21 +21261,24 @@ impl<'a> Lowerer<'a> {
         // `ir_type_from_ty` conversion) is gated here on its own region type.
         self.reject_float_keyed_collection(call_span)?;
 
-        // Flatten a curried call spine ONLY when its head is an accessor-intercept
-        // placeholder kernel used with a piped final argument
-        // (`base |> Store.mask .col pred` desugars to
-        // `Call(Call(Store.mask, [.col, pred]), [base])`): the accessor intercept
-        // keys on a bare `VarKernel` callee saturated to ALL its arguments, so the
-        // nested spine must collapse to `Call(Store.mask, [.col, pred, base])`,
-        // else the kernel is seen only partially applied, reified point-free, and
-        // rejected (IPE-L0146). Restricted to that head on purpose: a GENERAL
+        // Flatten a curried call spine ONLY when its head is a kernel whose
+        // gate must observe the SATURATED call: an accessor-intercept
+        // placeholder (`base |> Store.mask .col pred` desugars to
+        // `Call(Call(Store.mask, [.col, pred]), [base])`; the accessor intercept
+        // keys on a bare `VarKernel` callee saturated to ALL its arguments, else
+        // the kernel is reified point-free and rejected, IPE-L0146), or a
+        // capture-cloned handler kernel (`Stream.stream ct <| h` / `h |>
+        // Stream.stream ct`; the handler-capture gate reads the handler argument
+        // of the saturated call, else the partial is refused, IPE-L0152). The
+        // collapsed spine is exactly the direct saturated call the programmer
+        // could have written. Restricted to those heads on purpose: a GENERAL
         // flatten reshapes the call tree the downstream multi-use / last-use
         // ownership pass reads to decide moves vs clones, mis-placing a move where
         // a later use still needs the value (E0382). Every non-accessor spine is
         // left intact, so ordinary currying (`m |> Maybe.andThen f`) lowers
         // exactly as before.
         if let canon::Expr_::Call(inner_callee, inner_args) = &callee.value
-            && self.spine_head_is_accessor_intercept_placeholder(inner_callee)
+            && self.spine_head_needs_saturated_call(inner_callee)
         {
             let mut merged = inner_args.clone();
             merged.extend_from_slice(args);
@@ -21115,19 +21294,23 @@ impl<'a> Lowerer<'a> {
         }
     }
 
-    /// Whether the head of a (possibly curried) call spine resolves to an
-    /// accessor-intercept placeholder kernel (`Store.mask`, `Store.eq`, …). Gates
-    /// the spine-flatten in [`Self::lower_call`] to exactly the kernels whose
-    /// saturated accessor intercept must observe every argument — never a general
+    /// Whether a (possibly curried) call spine's head kernel must be lowered as one saturated call.
+    ///
+    /// True for an accessor-intercept placeholder (`Store.mask`, `Store.eq`, …)
+    /// and a capture-cloned handler kernel (`Stream.stream`). Gates the
+    /// spine-flatten in [`Self::lower_call`] to exactly the kernels whose
+    /// saturated-call gate must observe every argument — never a general
     /// currying reshape (which would disturb the ownership/last-use pass).
-    fn spine_head_is_accessor_intercept_placeholder(&self, callee: &canon::Expr) -> bool {
+    fn spine_head_needs_saturated_call(&self, callee: &canon::Expr) -> bool {
         let mut head = callee;
         while let canon::Expr_::Call(inner, _) = &head.value {
             head = inner;
         }
         matches!(
             self.lower_callee(head),
-            Ok(Callee::Kernel(k)) if k.is_accessor_intercept_placeholder()
+            Ok(Callee::Kernel(k))
+                if k.is_accessor_intercept_placeholder()
+                    || k.capture_cloned_handler_arg().is_some()
         )
     }
 
@@ -22240,6 +22423,7 @@ impl<'a> Lowerer<'a> {
                 // open mapper frontier (fail-closed IPE-L0134 at `ipe` time; see
                 // the method doc).
                 self.reject_fn_element_for_capability_kernel(&resolved, args)?;
+                self.reject_nonclone_handler_capture(&resolved, args)?;
                 let arity = self.callee_arity(&resolved)?;
                 match args.len().cmp(&arity) {
                     std::cmp::Ordering::Equal => {
@@ -22873,6 +23057,7 @@ impl<'a> Lowerer<'a> {
         // never-defined symbol — reject instead. See
         // [`reject_point_free_store_kernel`].
         reject_point_free_store_kernel(&resolved, call_span)?;
+        reject_unsaturated_handler_kernel(&resolved, call_span)?;
         let fn_ty = self.region_ty(callee.span).ok_or_else(|| {
             bug(
                 "ipe_lower::eta_expand_partial",
@@ -28411,14 +28596,14 @@ impl<'a> Lowerer<'a> {
         // capture of one routes to the binder-site promotion in `lower_let_pvar`
         // (decided on the LOWERED scope, eta-synthesized closures included)
         // instead of fail-closing IPE-L0126 at the capture. Destructure-bound
-        // names are deliberately NOT registered — their binder has no carrier
-        // promotion, so their fn captures keep today's honest fail-close.
-        let names: Vec<Symbol> = bindings
+        // names have no carrier promotion, so they SHADOW any outer promotable
+        // name and their fn captures keep the honest fail-close. Scopes install
+        // in source order; each binding's displaced state is kept so
+        // `lower_let_inner` can show every value only its predecessors (`let*`).
+        let saved = self.promotable_fn_binders.borrow().clone();
+        let binder_priors: Vec<BinderScope> = bindings
             .iter()
-            .filter_map(|b| match &b.pat.value {
-                canon::Pattern_::PVar(name) => Some(*name),
-                _ => None,
-            })
+            .map(|b| self.install_binders(&let_binding_scope(b)))
             .collect();
         // Register point-free aliases (`let w = wrap`) so the point-free
         // generic-slot gate can recover a top-level callee's declared template.
@@ -28429,11 +28614,13 @@ impl<'a> Lowerer<'a> {
         // its resolved key, or `None` when the value is not a top-level fn ref —
         // so a rebinding `let w = 5` of an outer alias `w` shadows it CLEARED
         // rather than leaving the stale outer alias visible.
-        self.with_promotable_fn_binders(names, || {
-            self.with_toplevel_fn_aliases(bindings, || {
-                self.with_local_string_literals(bindings, || self.lower_let_inner(bindings, body))
+        let lowered = self.with_toplevel_fn_aliases(bindings, || {
+            self.with_local_string_literals(bindings, || {
+                self.lower_let_inner(bindings, body, &binder_priors)
             })
-        })
+        });
+        *self.promotable_fn_binders.borrow_mut() = saved;
+        lowered
     }
 
     /// Register every `PVar` binding of `bindings` whose body folds to a
@@ -28601,7 +28788,7 @@ impl<'a> Lowerer<'a> {
 
     /// Register every `PVar` binding of `bindings` as a point-free alias over
     /// the closure `f`, restoring the previous map after — the point-free twin of
-    /// [`Self::with_promotable_fn_binders`]. Bindings install in source order,
+    /// [`Self::with_binders`]. Bindings install in source order,
     /// each value resolved against the map with its predecessors already present
     /// (canon `let` is sequential, so `let v = w` must see the earlier
     /// `w = wrap`). A binding whose value is not a top-level fn ref registers as
@@ -28639,7 +28826,17 @@ impl<'a> Lowerer<'a> {
         out
     }
 
-    fn lower_let_inner(&self, bindings: &[canon::LetBinding], body: &canon::Expr) -> DResult<Expr> {
+    /// Lower a `let` group whose binder scopes `lower_let` already installed.
+    ///
+    /// `binder_priors[i]` is the state binding `i`'s scope displaced; it is
+    /// re-installed before binding `i`'s value lowers, so walking the group in
+    /// reverse shows each value exactly its predecessors' binders.
+    fn lower_let_inner(
+        &self,
+        bindings: &[canon::LetBinding],
+        body: &canon::Expr,
+        binder_priors: &[BinderScope],
+    ) -> DResult<Expr> {
         let lowered_body = self.lower_expr(body)?;
 
         // Seed the accumulator with each PVar symbol's counts over the
@@ -28684,6 +28881,9 @@ impl<'a> Lowerer<'a> {
             // starting one past it. Used by the destructure move-ownership pass
             // to find each component symbol's first use-site type.
             let b_src_idx = bindings.len() - 1 - rev_i;
+            if let Some(prior) = binder_priors.get(b_src_idx) {
+                self.install_binders(prior);
+            }
             let value = self.lower_expr(&b.body)?;
             // Snapshot the lowered value for accumulator updates.  `value`
             // is moved into the match arm; a clone is needed for the update
@@ -28806,7 +29006,11 @@ impl<'a> Lowerer<'a> {
                 // catch-all — `case buildPair () of (d1, d2) -> …` reusing a
                 // Decoder-typed component is the identical E0382 gap.
                 let binder = self.lower_binder_pat(&first.pat, scrut)?;
-                let body = self.lower_expr(&first.body)?;
+                // The destructured names have no carrier promotion: they shadow
+                // any outer promotable name over the arm body.
+                let body = self.with_binders(&shadowing_binder_scope(&first.pat), || {
+                    self.lower_expr(&first.body)
+                })?;
                 // Scope = the single arm body — where the destructured
                 // components are read (see pass in the thunk builder).
                 return self.build_destructure_or_decoder_thunk(
@@ -28871,7 +29075,7 @@ impl<'a> Lowerer<'a> {
                             let shared_before = self.shared_fn_reads.borrow().clone();
                             self.register_shared_fn_arm_binders(scrut, &scrutinee, &br.pat);
                             let mut arm_body = self
-                                .with_promotable_fn_binders(arm_syms.clone(), || {
+                                .with_binders(&arm_binder_scope(&arm_syms), || {
                                     self.lower_expr(&br.body)
                                 })?;
                             *self.shared_fn_reads.borrow_mut() = shared_before;
@@ -28975,8 +29179,8 @@ impl<'a> Lowerer<'a> {
                 // ([`Self::demote_shared_fn_read`]). Scoped to this arm.
                 let shared_before = self.shared_fn_reads.borrow().clone();
                 self.register_shared_fn_arm_binders(scrut, &scrutinee, &br.pat);
-                let mut arm_body = self
-                    .with_promotable_fn_binders(arm_syms.clone(), || self.lower_expr(&br.body))?;
+                let mut arm_body =
+                    self.with_binders(&arm_binder_scope(&arm_syms), || self.lower_expr(&br.body))?;
                 *self.shared_fn_reads.borrow_mut() = shared_before;
 
                 // Move-ownership discipline for arm-bound variables — each

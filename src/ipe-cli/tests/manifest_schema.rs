@@ -77,10 +77,11 @@ fn icon_is_an_optional_project_contained_path() {
                 package : Package\npackage =\n    { name = \"iconed\", icon = \"assets/logo.png\" }\n";
     std::fs::write(dir.join("package.ipe"), with).expect("write manifest");
     let m = parse_manifest(&dir.join("package.ipe")).expect("iconed manifest parses");
+    let canon_dir = dir.canonicalize().expect("project dir canonicalizes");
     assert_eq!(
         m.icon,
-        Some(dir.join("assets/logo.png")),
-        "icon resolves against the project root"
+        Some(canon_dir.join("assets/logo.png")),
+        "icon resolves against the canonical project root"
     );
 
     let escaping = "module Package exposing (package)\n\nimport Ipe.Package exposing (..)\n\n\
