@@ -188,7 +188,8 @@ type SchemaOp
 -- The record fields are the same schema payload a `Store a` carries: `codec` is
 -- the single source of truth (its `Shape` yields the columns and their types),
 -- `specs` are the DB-only facts, `pk` is the parsed primary-key declaration
--- (an `Err` once an illegal key was declared, surfaced when the DDL is built),
+-- (an `Err` once an illegal key was declared; every read and write then fails
+-- with it),
 -- `frozenTable` / `frozenColumns` hold the table name and columns as first
 -- constructed, `table` / `currentColumns` track the current-schema view after any
 -- renames, `ops` is the ordered schema-op log, and `indexes` is the ordered index
@@ -570,8 +571,9 @@ public draft =
 -- Use it when one column identifies a row (an `id`, a `code`); the by-key
 -- operations (`get` / `update` / `delete` and their `*As` / `*On` forms) key on
 -- it. A table has one primary key: declaring a second one — another
--- `primaryKey`, or a `compositePrimaryKey2` / `compositePrimaryKey3` — makes
--- `createSql` / `migrations` return a typed `Err`.
+-- `primaryKey`, or a `compositePrimaryKey2` / `compositePrimaryKey3` — records a
+-- typed `Err` that `createSql` / `migrations` return, `secured` refuses, and
+-- every read and write on the resulting store fails with before any SQL runs.
 --
 -- Example:
 --
@@ -602,9 +604,14 @@ primaryKey =
 --
 -- A composite key has no single key column, so the by-key operations (`get` /
 -- `update` / `delete`) return a typed `Err` on such a store — reach its rows
--- with `findWhere` / `updateWhere` / `deleteWhere` over a `Cond` naming every
--- key column. Declaring a second primary key, or a key column listed twice,
--- makes `createSql` / `migrations` return a typed `Err`.
+-- with `findWhere` / `updateWhere` / `deleteWhere` naming every key column;
+-- `updateWhere` never writes any key column. Declaring a second primary key, or
+-- a key column listed twice, records a typed `Err` that every read and write on
+-- the store fails with.
+--
+-- `createSql` / `migrations` do not yet render a table-level
+-- `PRIMARY KEY (...)` clause: for a composite key they ALWAYS return a typed
+-- `Err`, so the table must already exist (created outside `Ipe.Db.Store`).
 --
 -- Example:
 --
@@ -625,9 +632,12 @@ compositePrimaryKey2 =
 -- accessor-named columns, in this order, one table-level primary key. Same
 -- rules as `compositePrimaryKey2`: key order is significant, an accessor naming
 -- a missing field is a type error, the by-key operations return a typed `Err`
--- on the resulting store, and a second key declaration makes `createSql` /
--- `migrations` return a typed `Err`. For more than three columns, or a
--- raw-column `fromColumns` draft, use `compositePrimaryKeyNamed`.
+-- on the resulting store, `updateWhere` never writes any key column, and a
+-- second key declaration records a typed `Err` that every read and write fails
+-- with. `createSql` / `migrations` ALWAYS return a typed `Err` for a composite
+-- key (no table-level `PRIMARY KEY (...)` clause is rendered yet), so the table
+-- must already exist. For more than three columns, or a raw-column
+-- `fromColumns` draft, use `compositePrimaryKeyNamed`.
 --
 -- Example:
 --
@@ -727,8 +737,9 @@ touchOnUpdate =
 -- | `primaryKeyNamed column draft` — the string form of `primaryKey`: mark the
 -- named `column` the single-column primary key. The column is checked against
 -- the draft's columns when the DDL is built. A draft that already declares a
--- primary key keeps no second one: the conflict is recorded and `createSql` /
--- `migrations` return a typed `Err`.
+-- primary key keeps no second one: the conflict is recorded as a typed `Err`
+-- that `createSql` / `migrations` return, `secured` refuses, and every read and
+-- write on the resulting store fails with.
 primaryKeyNamed : String -> Draft a -> Draft a
 primaryKeyNamed name draft =
     case draft of
@@ -760,8 +771,9 @@ primaryKeyNamed name draft =
 -- columns or for a raw-column `fromColumns` draft.
 --
 -- The list is parsed once, here, into a `CompositePk`; an illegal list is
--- recorded as a typed `Err` that `createSql` / `migrations` return (and the
--- by-key operations fail with), so no DDL is ever built from it:
+-- recorded as a typed `Err` that `createSql` / `migrations` return, `secured`
+-- refuses, and every read and write on the resulting store fails with before any
+-- SQL runs:
 --
 -- * an empty list;
 -- * a one-column list — use `primaryKeyNamed` for a single-column key;
@@ -855,22 +867,41 @@ withPrimaryKey pk draft =
                 }
 
 
--- The columns a primary-key declaration names, in declared order; empty for no
--- key or an illegal declaration.
-primaryKeyColumns : Result Error PrimaryKeyDecl -> List String
-primaryKeyColumns pk =
-    case pk of
-        Ok (SinglePk col) ->
+-- The columns a legal primary-key declaration names, in declared order; empty
+-- for no key. Takes the parsed declaration, not the `Result`: an illegal
+-- declaration has no key columns to offer, so every caller must refuse it first.
+primaryKeyColumns : PrimaryKeyDecl -> List String
+primaryKeyColumns decl =
+    case decl of
+        SinglePk col ->
             [ col ]
 
-        Ok (CompositePk first second rest) ->
+        CompositePk first second rest ->
             first :: second :: rest
 
-        Ok NoPk ->
+        NoPk ->
             []
 
-        Err _ ->
-            []
+
+-- The recorded error of an illegal primary-key declaration, or `Nothing` for a
+-- legal one. A store whose declared schema is illegal is unusable: every read
+-- and write fails with this error before any SQL is built.
+keyDeclFault : Result Error PrimaryKeyDecl -> Maybe Error
+keyDeclFault pk =
+    case pk of
+        Err e ->
+            Just e
+
+        Ok _ ->
+            Nothing
+
+
+-- `keyDeclFault` of a store's primary-key declaration.
+storeKeyFault : Store a -> Maybe Error
+storeKeyFault store =
+    case store of
+        Store r ->
+            keyDeclFault r.pk
 
 
 -- The one key column the by-key operations bind against, or the typed `Err`
@@ -1455,12 +1486,17 @@ insert : Db -> Store a -> a -> Task Error Int
 insert conn store row =
     case store of
         Store r ->
-            case DbCodec.codecToBinds r.codec row of
-                Err e ->
+            case keyDeclFault r.pk of
+                Just e ->
                     Task.fail e
 
-                Ok binds ->
-                    Db.insertFields conn r.table (insertFields r.specs binds)
+                Nothing ->
+                    case DbCodec.codecToBinds r.codec row of
+                        Err e ->
+                            Task.fail e
+
+                        Ok binds ->
+                            Db.insertFields conn r.table (insertFields r.specs binds)
 
 
 insertFields : List ColumnSpec -> List ( String, SqlValue ) -> List ( String, SqlField )
@@ -1539,29 +1575,34 @@ insertReturning : Db -> Store a -> a -> Task Error a
 insertReturning conn store row =
     case store of
         Store r ->
-            case DbCodec.codecToBinds r.codec row of
-                Err e ->
+            case keyDeclFault r.pk of
+                Just e ->
                     Task.fail e
 
-                Ok binds ->
-                    case r.codec of
-                        Codec codecR ->
-                            Task.andThen
-                                (\results ->
-                                    case results of
-                                        first :: _ ->
-                                            Task.succeed first
+                Nothing ->
+                    case DbCodec.codecToBinds r.codec row of
+                        Err e ->
+                            Task.fail e
 
-                                        [] ->
-                                            Task.fail insertReturningNoRowError
-                                )
-                                (Db.insertFieldsReturning
-                                    conn
-                                    r.table
-                                    (insertFields r.specs binds)
-                                    "*"
-                                    (codecR.mkDec {})
-                                )
+                        Ok binds ->
+                            case r.codec of
+                                Codec codecR ->
+                                    Task.andThen
+                                        (\results ->
+                                            case results of
+                                                first :: _ ->
+                                                    Task.succeed first
+
+                                                [] ->
+                                                    Task.fail insertReturningNoRowError
+                                        )
+                                        (Db.insertFieldsReturning
+                                            conn
+                                            r.table
+                                            (insertFields r.specs binds)
+                                            "*"
+                                            (codecR.mkDec {})
+                                        )
 
 
 insertReturningNoRowError : Error
@@ -1675,9 +1716,10 @@ bindValue target binds =
 -- `touchOnUpdate` are OMITTED so a client value can never overwrite a DB-filled
 -- column, and the primary key is OMITTED too — a bulk update refines existing
 -- rows, it never rewrites their identity (which would collapse every matching
--- row onto one key). Routes through the audited `Db.updateWhere`, which
--- re-validates the table and SET columns, binds every value, and refuses an
--- unscoped UPDATE.
+-- row onto one key); for a composite key EVERY key column is omitted. A store
+-- whose key declaration is illegal fails with the recorded `Err` before any SQL.
+-- Routes through the audited `Db.updateWhere`, which re-validates the table and
+-- SET columns, binds every value, and refuses an unscoped UPDATE.
 --
 -- Example:
 --
@@ -1700,20 +1742,25 @@ updateWhere conn store cond row =
                 Task.fail unconstrainedMutationError
 
             else
-                case condFragmentIn r.currentColumns cond of
+                case r.pk of
                     Err e ->
                         Task.fail e
 
-                    Ok frag ->
-                        case DbCodec.codecToBinds r.codec row of
+                    Ok decl ->
+                        case condFragmentIn r.currentColumns cond of
                             Err e ->
                                 Task.fail e
 
-                            Ok binds ->
-                                Db.updateWhere conn
-                                    r.table
-                                    (updateWhereSetFields r.specs r.pk binds)
-                                    frag
+                            Ok frag ->
+                                case DbCodec.codecToBinds r.codec row of
+                                    Err e ->
+                                        Task.fail e
+
+                                    Ok binds ->
+                                        Db.updateWhere conn
+                                            r.table
+                                            (updateWhereSetFields r.specs decl binds)
+                                            frag
 
 
 -- Project the codec binds to the UPDATE SET fields for a WHERE-scoped update:
@@ -1721,11 +1768,11 @@ updateWhere conn store cond row =
 -- `OmitField` so the database keeps its own value, every primary-key column is
 -- dropped entirely (a WHERE-scoped update never rewrites row identity), and every other
 -- column is a bound `SetField`.
-updateWhereSetFields : List ColumnSpec -> Result Error PrimaryKeyDecl -> List ( String, SqlValue ) -> List ( String, SqlField )
-updateWhereSetFields specs pk values =
+updateWhereSetFields : List ColumnSpec -> PrimaryKeyDecl -> List ( String, SqlValue ) -> List ( String, SqlField )
+updateWhereSetFields specs decl values =
     let
         keyCols =
-            primaryKeyColumns pk
+            primaryKeyColumns decl
     in
     List.map (\pair -> updateSetField specs pair)
         (List.filter (\pair -> Basics.not (bindIsKey keyCols pair)) values)
@@ -1763,12 +1810,17 @@ deleteWhere conn store cond =
                 Task.fail unconstrainedMutationError
 
             else
-                case condFragmentIn r.currentColumns cond of
-                    Err e ->
+                case keyDeclFault r.pk of
+                    Just e ->
                         Task.fail e
 
-                    Ok frag ->
-                        Db.deleteWhere conn r.table frag
+                    Nothing ->
+                        case condFragmentIn r.currentColumns cond of
+                            Err e ->
+                                Task.fail e
+
+                            Ok frag ->
+                                Db.deleteWhere conn r.table frag
 
 
 -- Whether `cond` constrains at least one column: True when its `Cond` tree
@@ -1819,9 +1871,14 @@ all : Db -> Store a -> Task Error (List a)
 all conn store =
     case store of
         Store r ->
-            Task.andThen
-                (\rows -> decodeRows r.codec rows)
-                (Db.findWhere conn r.table alwaysTrue)
+            case keyDeclFault r.pk of
+                Just e ->
+                    Task.fail e
+
+                Nothing ->
+                    Task.andThen
+                        (\rows -> decodeRows r.codec rows)
+                        (Db.findWhere conn r.table alwaysTrue)
 
 
 -- | `findWhere conn store cond` — read the rows matching `cond` and decode each
@@ -1833,9 +1890,14 @@ findWhere : Db -> Store a -> SqlFragment -> Task Error (List a)
 findWhere conn store cond =
     case store of
         Store r ->
-            Task.andThen
-                (\rows -> decodeRows r.codec rows)
-                (Db.findWhere conn r.table cond)
+            case keyDeclFault r.pk of
+                Just e ->
+                    Task.fail e
+
+                Nothing ->
+                    Task.andThen
+                        (\rows -> decodeRows r.codec rows)
+                        (Db.findWhere conn r.table cond)
 
 
 -- | `get conn store keyValue` — read the single row whose primary key equals
@@ -1881,13 +1943,18 @@ findBy : Db -> Store a -> String -> SqlValue -> Task Error (List a)
 findBy conn store col value =
     case store of
         Store r ->
-            if Basics.not (hasColumn r.currentColumns col) then
-                Task.fail (unknownColumnError col)
+            case keyDeclFault r.pk of
+                Just e ->
+                    Task.fail e
 
-            else
-                Task.andThen
-                    (\rows -> decodeRows r.codec rows)
-                    (Db.findWhere conn r.table (keyEquals col value))
+                Nothing ->
+                    if Basics.not (hasColumn r.currentColumns col) then
+                        Task.fail (unknownColumnError col)
+
+                    else
+                        Task.andThen
+                            (\rows -> decodeRows r.codec rows)
+                            (Db.findWhere conn r.table (keyEquals col value))
 
 
 -- Whether `name` is one of the store's current columns — the derived vocabulary
@@ -1914,9 +1981,14 @@ allOn : Connection mode -> Store a -> Task Error (List a)
 allOn conn store =
     case store of
         Store r ->
-            Task.andThen
-                (\rows -> decodeRows r.codec rows)
-                (Db.findWhereOn conn r.table alwaysTrue)
+            case keyDeclFault r.pk of
+                Just e ->
+                    Task.fail e
+
+                Nothing ->
+                    Task.andThen
+                        (\rows -> decodeRows r.codec rows)
+                        (Db.findWhereOn conn r.table alwaysTrue)
 
 
 -- | `findWhereOn conn store cond` — read the rows matching `cond` from an
@@ -1926,9 +1998,14 @@ findWhereOn : Connection mode -> Store a -> SqlFragment -> Task Error (List a)
 findWhereOn conn store cond =
     case store of
         Store r ->
-            Task.andThen
-                (\rows -> decodeRows r.codec rows)
-                (Db.findWhereOn conn r.table cond)
+            case keyDeclFault r.pk of
+                Just e ->
+                    Task.fail e
+
+                Nothing ->
+                    Task.andThen
+                        (\rows -> decodeRows r.codec rows)
+                        (Db.findWhereOn conn r.table cond)
 
 
 -- | `getOn conn store keyValue` — read the single row whose primary key equals
@@ -2115,7 +2192,7 @@ query store =
         , orderings = []
         , lim = Nothing
         , off = Nothing
-        , poison = Nothing
+        , poison = storeKeyFault store
         }
 
 
@@ -2876,8 +2953,19 @@ joinNamed storeA keyA storeB keyB =
         , keyB = keyB
         , frag = joinKeyEquals keyA keyB
         , order = Nothing
-        , poison = Nothing
+        , poison = firstStoreKeyFault storeA storeB
         }
+
+
+-- The first illegal primary-key declaration of a join's two stores, left first.
+firstStoreKeyFault : Store a -> Store b -> Maybe Error
+firstStoreKeyFault storeA storeB =
+    case storeKeyFault storeA of
+        Just e ->
+            Just e
+
+        Nothing ->
+            storeKeyFault storeB
 
 
 -- The join-key equality fragment `a0.keyA = a1.keyB`: each side is a validated
@@ -5634,6 +5722,20 @@ secured : Policy a -> Draft a -> Result Error (Secured a)
 secured policy draft =
     case draft of
         Draft r ->
+            case keyDeclFault r.pk of
+                Just e ->
+                    Err e
+
+                Nothing ->
+                    securedLegalKey policy draft
+
+
+-- `secured` past the primary-key check: validate every policy column against the
+-- draft, then classify.
+securedLegalKey : Policy a -> Draft a -> Result Error (Secured a)
+securedLegalKey policy draft =
+    case draft of
+        Draft r ->
             case firstUnknownPolicyColumn r.currentColumns (policyColumns policy) of
                 Just bad ->
                     Err (unknownColumnError bad)
@@ -5855,13 +5957,18 @@ maskedRead : Auth.Principal -> Db -> Store a -> Policy a -> SqlFragment -> Task 
 maskedRead principal conn store policy whereFrag =
     case store of
         Store r ->
-            case r.codec of
-                Codec codecR ->
-                    Db.findWhereMasked conn
-                        r.table
-                        (projectionTerms principal store policy r.currentColumns)
-                        whereFrag
-                        (codecR.mkDec {})
+            case keyDeclFault r.pk of
+                Just e ->
+                    Task.fail e
+
+                Nothing ->
+                    case r.codec of
+                        Codec codecR ->
+                            Db.findWhereMasked conn
+                                r.table
+                                (projectionTerms principal store policy r.currentColumns)
+                                whereFrag
+                                (codecR.mkDec {})
 
 
 -- Build the ordered projection `SqlFragment` list for a secured read: each store
@@ -5990,16 +6097,21 @@ insertAs principal conn secured row =
         Secured store policy ->
             case store of
                 Store r ->
-                    case DbCodec.codecToBinds r.codec row of
-                        Err e ->
+                    case keyDeclFault r.pk of
+                        Just e ->
                             Task.fail e
 
-                        Ok binds ->
-                            Db.insertFields conn
-                                r.table
-                                (insertFields r.specs
-                                    (forceOwnerColumns principal policy binds)
-                                )
+                        Nothing ->
+                            case DbCodec.codecToBinds r.codec row of
+                                Err e ->
+                                    Task.fail e
+
+                                Ok binds ->
+                                    Db.insertFields conn
+                                        r.table
+                                        (insertFields r.specs
+                                            (forceOwnerColumns principal policy binds)
+                                        )
 
 
 -- | `updateAs principal db secured row` — update the row whose primary key
