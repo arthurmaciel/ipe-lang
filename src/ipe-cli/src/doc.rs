@@ -2552,8 +2552,9 @@ fn generate(path: &Path, out: &Path, write_format: WriteFormat) -> Result<(), Cl
     let (json_files, markdown_files, html_files) = render_site_split(&docs, &bundle, write_format);
 
     // The site overwrites same-named files, so it is written only into a
-    // directory ipe owns — never over a user's own `doc/` or `docs/`.
-    let site = crate::output_dir::OwnedDir::claim(out)?;
+    // directory ipe owns and proven disjoint from the documented package —
+    // never over a user's own `doc/`, the package itself, or its sources.
+    let site = claim_site(path, out)?;
     write_format_dir(&site, "json", &json_files)?;
     if write_format.wants_markdown() {
         write_format_dir(&site, "markdown", &markdown_files)?;
@@ -2591,6 +2592,24 @@ fn generate(path: &Path, out: &Path, write_format: WriteFormat) -> Result<(), Cl
         )),
     );
     Ok(())
+}
+
+/// Claim `out` as the site directory for the package at `path`.
+///
+/// `out` is proven disjoint from the package root and its sources before it is
+/// claimed; a package directory without a manifest is its own root.
+///
+/// # Errors
+/// [`CliError::OutputRefused`] when `out` is the package, holds it, overlaps
+/// its sources, or is not ipe's; a manifest parse error.
+fn claim_site(path: &Path, out: &Path) -> Result<crate::output_dir::OwnedDir, CliError> {
+    use crate::output_dir::{OutputRoot, ProjectPaths};
+    let project = match crate::project::manifest_in_dir(path) {
+        Some(manifest) => ProjectPaths::from_manifest(&crate::project::parse_manifest(&manifest)?),
+        None if path.is_dir() => ProjectPaths::of_file(path),
+        None => ProjectPaths::discover(path)?,
+    };
+    OutputRoot::at(out, &project)?.claim()
 }
 
 /// Write every file in `files` into `<site>/<subdir>/`.
@@ -6072,6 +6091,49 @@ mod tests {
         assert_eq!(
             fs::read_to_string(victim.join("docs.json")).ok().as_deref(),
             Some("keep")
+        );
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    /// A doc site overlapping the documented package is refused before any write.
+    ///
+    /// The package directory, a directory holding it, and a lone entry's own
+    /// directory are each turned away; a site inside the package is claimed.
+    #[test]
+    fn claim_site_refuses_an_out_overlapping_the_package() {
+        use std::fs;
+        let tmp = std::env::temp_dir().join(format!("ipe-doc-overlap-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&tmp);
+        let pkg = tmp.join("pkg");
+        fs::create_dir_all(pkg.join("src")).expect("src dir");
+        fs::write(
+            pkg.join("src").join("Main.ipe"),
+            "module Main exposing (..)\n",
+        )
+        .expect("module");
+        fs::write(pkg.join("keep.txt"), "keep").expect("user file");
+
+        for out in [pkg.clone(), tmp.clone()] {
+            let site = claim_site(&pkg, &out);
+            assert!(
+                matches!(site, Err(CliError::OutputRefused(_))),
+                "an out holding the package must be refused, got {site:?}"
+            );
+        }
+        let lone = tmp.join("lone");
+        fs::create_dir_all(&lone).expect("lone dir");
+        let inside = claim_site(&lone.join("Main.ipe"), &lone);
+        assert!(
+            matches!(inside, Err(CliError::OutputRefused(_))),
+            "the entry's own directory must be refused, got {inside:?}"
+        );
+        assert_eq!(
+            fs::read_to_string(pkg.join("keep.txt")).ok().as_deref(),
+            Some("keep")
+        );
+        assert!(
+            claim_site(&pkg, &pkg.join("doc")).is_ok(),
+            "a site inside the package is claimed"
         );
         let _ = fs::remove_dir_all(&tmp);
     }

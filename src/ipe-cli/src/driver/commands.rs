@@ -1,13 +1,13 @@
 use super::{
-    BuildOptions, BundleHost, BundleProfile, CliError, RuntimeContext, apply_fixes_cmd,
-    attribute_canon_errors, attribute_post_link_error, bluegreen_enabled,
-    build_project_with_options, build_with_sibling_discovery_with_options, bundle_delivery,
-    collect_entry_and_siblings, create_source_root, emit_machine_error, emit_permissions,
-    find_manifest_for_ipe_file, gate_decoder_pipelines, home_to_source_map, io_err,
-    render_capabilities, resolve_analysis_entry, resolve_vendored_runtime_dir, run_version,
-    runtime_dep_from_env, single_file_cargo_name_from_env,
+    BuildOptions, BundleHost, BundleProfile, CliError, OutTarget, RuntimeContext, apply_fixes_cmd,
+    attribute_canon_errors, attribute_post_link_error, bluegreen_enabled, build_project_into,
+    build_with_sibling_discovery_into, bundle_delivery, collect_entry_and_siblings,
+    create_source_root, emit_machine_error, emit_permissions, find_manifest_for_ipe_file,
+    gate_decoder_pipelines, home_to_source_map, io_err, render_capabilities,
+    resolve_analysis_entry, resolve_vendored_runtime_dir, run_version, runtime_dep_from_env,
+    single_file_cargo_name_from_env,
 };
-use crate::output_dir::{OutputArea, OutputRoot, OwnedDir, ProjectPaths};
+use crate::output_dir::{EmitTarget, OutputArea, OutputRoot, OwnedDir, ProjectPaths};
 use crate::style::TerminalSafe;
 use crate::{
     ALL_CODES, BTreeMap, Diagnostic, Interner, Path, PathBuf, build_plan, cli_args, delivery,
@@ -301,7 +301,7 @@ pub fn run_watch(rest: &[String]) -> Result<(), CliError> {
     let out_dir = rust_area.path()?;
 
     let mut opts = watch::WatchOptions::new(PathBuf::from(entry), out_dir, runtime_dir);
-    opts.out_area = Some(rust_area);
+    opts.out_target = Some(EmitTarget::Area(rust_area));
     opts.port = args.port;
     opts.cargo_path = cargo_bin.path().to_path_buf();
     opts.quiet = args.quiet;
@@ -794,35 +794,31 @@ pub fn run_build_body(rest: &[String]) -> Result<BuildSuccess, CliError> {
         // Filled from the manifest `delivery.desktop` in
         // build_project_with_options once the manifest is parsed.
         webview_window: None,
-        out_area: Some(rust_area.clone()),
     };
 
     // No manifest found: compile entry + all sibling .ipe files in the same
     // directory. Byte-identical to `build` when the directory holds only the
     // entry file (regression-covered by the golden suite).
-    manifest.as_ref().map_or_else(
-        || {
-            build_with_sibling_discovery_with_options(
-                &entry_path,
-                &out_dir,
-                &runtime_dir,
-                options.clone(),
-            )
-        },
-        |m| build_project_with_options(m, &out_dir, &runtime_dir, options.clone()),
+    let crate_dir = emit_into(
+        &entry_path,
+        manifest.as_deref(),
+        &EmitTarget::Area(rust_area),
+        &runtime_dir,
+        options,
     )?;
 
     let native_artifact = match compile_target {
         CompileTarget::WasmClient => {
-            bundle_wasm(&rust_area.claim()?)?;
+            bundle_wasm(&crate_dir)?;
             None
         }
         CompileTarget::WasmWasi => {
-            bundle_wasi(&out_dir)?;
+            bundle_wasi(&crate_dir)?;
             None
         }
         CompileTarget::Native => Some(compile_and_finalize_native_build(
             &output,
+            &crate_dir,
             native_cargo,
             static_plan,
             runtime_dep,
@@ -852,6 +848,27 @@ pub fn run_build_body(rest: &[String]) -> Result<BuildSuccess, CliError> {
     Ok(BuildSuccess { entry, out_dir })
 }
 
+/// Emit the program at `entry_path` into `target`, returning the claimed crate directory.
+///
+/// The manifest project is emitted when one was found, else the entry with
+/// its sibling files.
+///
+/// # Errors
+/// As [`build_project_into`] and [`build_with_sibling_discovery_into`].
+fn emit_into(
+    entry_path: &Path,
+    manifest: Option<&Path>,
+    target: &EmitTarget,
+    runtime_dir: &Path,
+    options: BuildOptions,
+) -> Result<OwnedDir, CliError> {
+    let out = OutTarget::Proven(target);
+    match manifest {
+        Some(m) => build_project_into(m, out, runtime_dir, options),
+        None => build_with_sibling_discovery_into(entry_path, out, runtime_dir, options),
+    }
+}
+
 /// Compile the just-emitted native crate and write its runtime-enforcement
 /// artifacts. Split out of [`run_build`] so each stays a readable unit.
 ///
@@ -879,6 +896,7 @@ pub fn run_build_body(rest: &[String]) -> Result<BuildSuccess, CliError> {
 ///   steps it composes.
 pub fn compile_and_finalize_native_build(
     output: &OutputRoot,
+    crate_dir: &OwnedDir,
     native_cargo: Option<toolchain::CargoBin>,
     static_plan: Option<ipe_backend_rust::static_build::StaticPlan>,
     runtime_dep: bool,
@@ -893,9 +911,7 @@ pub fn compile_and_finalize_native_build(
         Some(bin) => bin,
         None => toolchain::require_cargo(toolchain::ToolIntent::Build)?,
     };
-    let rust_area = output.area(&[OutputArea::Rust]);
-    let rust_path = rust_area.path()?;
-    let out_dir = rust_path.as_path();
+    let out_dir = crate_dir.path();
     let mut cargo = std::process::Command::new(cargo_bin.path());
     cargo.arg("build").current_dir(out_dir);
     if quiet {
@@ -911,7 +927,7 @@ pub fn compile_and_finalize_native_build(
     } else {
         None
     };
-    build_emitted_project(&mut cargo, "the emitted program", runtime_ctx, out_dir)?;
+    build_emitted_project(&mut cargo, "the emitted program", runtime_ctx, crate_dir)?;
 
     let manifest_parsed = match manifest {
         Some(m) => Some(project::parse_manifest(m)?),
@@ -937,7 +953,7 @@ pub fn compile_and_finalize_native_build(
     let resolved = consented.resolved();
     if run_sandbox::is_native_bearing(&resolved.union()) {
         let profile = run_sandbox::build_profile(resolved, driver)?;
-        run_sandbox::write_build_artifacts(&rust_area.claim()?, &profile)?;
+        run_sandbox::write_build_artifacts(crate_dir, &profile)?;
     }
     Ok(artifact)
 }
@@ -1065,7 +1081,6 @@ pub fn run_eject(rest: &[String]) -> Result<(), CliError> {
         None => ProjectPaths::discover(&entry_path)?,
     };
     let target = OutputRoot::fresh(&args.out, &paths)?.claim()?;
-    let out_dir = target.path().to_path_buf();
 
     // Force the vendored, tree-shaken emit shape: a self-contained project names
     // no runtime path dependency (`runtime_dep = false`) and carries only the
@@ -1092,17 +1107,14 @@ pub fn run_eject(rest: &[String]) -> Result<(), CliError> {
         );
     }
 
-    manifest.as_ref().map_or_else(
-        || {
-            build_with_sibling_discovery_with_options(
-                &entry_path,
-                &out_dir,
-                &runtime_dir,
-                options.clone(),
-            )
-        },
-        |m| build_project_with_options(m, &out_dir, &runtime_dir, options.clone()),
-    )?;
+    emit_into(
+        &entry_path,
+        manifest.as_deref(),
+        &EmitTarget::Claimed(target.owned().clone()),
+        &runtime_dir,
+        options,
+    )
+    .map(drop)?;
     // From here on the tree is the user's: ipe drops its ownership marker so no
     // later ipe command treats the ejected project as disposable output.
     let out_dir = target.release_to_user()?;
@@ -1292,20 +1304,15 @@ pub fn run_release(rest: &[String]) -> Result<(), CliError> {
             // where the classified shape is known (build_project_with_options).
             webview_host: false,
             webview_window: None,
-            out_area: Some(rust_area.clone()),
         };
-        manifest.as_ref().map_or_else(
-            || {
-                build_with_sibling_discovery_with_options(
-                    &entry_path,
-                    &out_dir,
-                    &runtime_dir,
-                    options.clone(),
-                )
-            },
-            |m| build_project_with_options(m, &out_dir, &runtime_dir, options.clone()),
+        let crate_dir = emit_into(
+            &entry_path,
+            manifest.as_deref(),
+            &EmitTarget::Area(rust_area),
+            &runtime_dir,
+            options,
         )?;
-        bundle_wasm(&rust_area.claim()?)?;
+        bundle_wasm(&crate_dir)?;
         if show_progress {
             crate::screen::chatter(
                 crate::screen::Stream::Stderr,
@@ -1378,19 +1385,14 @@ pub fn run_release(rest: &[String]) -> Result<(), CliError> {
             production: true,
             runtime_dep: runtime_dep_from_env(),
             tree_shake_vendored: false,
-            out_area: Some(rust_area),
             ..BuildOptions::default()
         };
-        manifest.as_ref().map_or_else(
-            || {
-                build_with_sibling_discovery_with_options(
-                    &entry_path,
-                    &out_dir,
-                    &runtime_dir,
-                    options.clone(),
-                )
-            },
-            |m| build_project_with_options(m, &out_dir, &runtime_dir, options.clone()),
+        let crate_dir = emit_into(
+            &entry_path,
+            manifest.as_deref(),
+            &EmitTarget::Area(rust_area),
+            &runtime_dir,
+            options,
         )?;
 
         let mut app_cargo = std::process::Command::new(cargo_bin.path());
@@ -1400,7 +1402,7 @@ pub fn run_release(rest: &[String]) -> Result<(), CliError> {
             .args(["--target", triple.as_str()])
             .current_dir(&out_dir);
         force_cargo_terminal_ui(&mut app_cargo);
-        build_emitted_project(&mut app_cargo, "the release binary", None, &out_dir)?;
+        build_emitted_project(&mut app_cargo, "the release binary", None, &crate_dir)?;
 
         let app_target_dir = cargo_target_directory(&out_dir)?;
         // Cargo names the built binary after the emitted crate IDENTITY (the
@@ -1472,19 +1474,14 @@ pub fn run_release(rest: &[String]) -> Result<(), CliError> {
         production: true,
         runtime_dep: runtime_dep_from_env(),
         tree_shake_vendored: false,
-        out_area: Some(app_area.clone()),
         ..BuildOptions::default()
     };
-    manifest.as_ref().map_or_else(
-        || {
-            build_with_sibling_discovery_with_options(
-                &entry_path,
-                &app_out,
-                &runtime_dir,
-                options.clone(),
-            )
-        },
-        |m| build_project_with_options(m, &app_out, &runtime_dir, options.clone()),
+    let app_dir = emit_into(
+        &entry_path,
+        manifest.as_deref(),
+        &EmitTarget::Area(app_area),
+        &runtime_dir,
+        options,
     )?;
 
     let mut app_cargo = std::process::Command::new(cargo_bin.path());
@@ -1494,11 +1491,11 @@ pub fn run_release(rest: &[String]) -> Result<(), CliError> {
         .args(["--target", triple.as_str()])
         .current_dir(&app_out);
     force_cargo_terminal_ui(&mut app_cargo);
-    build_emitted_project(&mut app_cargo, "the release app", None, &app_out)?;
+    build_emitted_project(&mut app_cargo, "the release app", None, &app_dir)?;
 
     // Write the capability enforcement artifacts (ipe.profile + embedded floor).
     let profile = run_sandbox::build_profile(resolved, driver)?;
-    run_sandbox::write_build_artifacts(&app_area.claim()?, &profile)?;
+    run_sandbox::write_build_artifacts(&app_dir, &profile)?;
 
     // Locate the compiled app binary. The target dir may be a global
     // `CARGO_TARGET_DIR` (set by the user or the agent lane), so we resolve
@@ -1546,7 +1543,7 @@ pub fn run_release(rest: &[String]) -> Result<(), CliError> {
     wrapper_cargo.current_dir(&workspace_root);
     force_cargo_terminal_ui(&mut wrapper_cargo);
 
-    build_emitted_project(
+    build_workspace_crate(
         &mut wrapper_cargo,
         "the release wrapper",
         None,
@@ -1740,13 +1737,15 @@ pub fn set_executable(path: &Path) -> Result<(), CliError> {
 /// - [`CliError::Io`] if `cargo` cannot be spawned or its stderr pipe cannot be
 ///   opened.
 /// - [`CliError::EmittedBuildFailed`] if `cargo` exits non-zero.
+/// - [`CliError::OutputRefused`] if `crate_dir` was replaced before or while
+///   `cargo` ran.
 pub fn build_emitted_project(
     cargo: &mut std::process::Command,
     what: &'static str,
     runtime: Option<RuntimeContext>,
-    io_path: &Path,
+    crate_dir: &OwnedDir,
 ) -> Result<(), CliError> {
-    build_emitted_project_core(cargo, what, runtime, io_path, false).map(drop)
+    build_owned_crate(cargo, what, runtime, crate_dir, false).map(drop)
 }
 
 /// Like [`build_emitted_project`], but *captures* `cargo`'s stdout and returns
@@ -1762,13 +1761,47 @@ pub fn build_emitted_project(
 /// # Errors
 /// - [`CliError::Io`] if `cargo` cannot be spawned or its pipes opened.
 /// - [`CliError::EmittedBuildFailed`] if `cargo` exits non-zero.
+/// - [`CliError::OutputRefused`] if `crate_dir` was replaced before or while
+///   `cargo` ran.
 pub fn build_emitted_project_capturing_stdout(
     cargo: &mut std::process::Command,
     what: &'static str,
     runtime: Option<RuntimeContext>,
-    io_path: &Path,
+    crate_dir: &OwnedDir,
 ) -> Result<String, CliError> {
-    build_emitted_project_core(cargo, what, runtime, io_path, true)
+    build_owned_crate(cargo, what, runtime, crate_dir, true)
+}
+
+/// Build the claimed crate in `crate_dir`, proven that directory before `cargo` starts and after it exits.
+///
+/// `cargo` reaches the crate, its lock and its `target` by path, so a swap
+/// while it runs cannot be prevented, only detected: a directory replaced in
+/// the meantime fails the build closed instead of its output being trusted.
+fn build_owned_crate(
+    cargo: &mut std::process::Command,
+    what: &'static str,
+    runtime: Option<RuntimeContext>,
+    crate_dir: &OwnedDir,
+    capture_stdout: bool,
+) -> Result<String, CliError> {
+    crate_dir.verify()?;
+    cargo.current_dir(crate_dir.path());
+    let stdout =
+        build_emitted_project_core(cargo, what, runtime, crate_dir.path(), capture_stdout)?;
+    crate_dir.verify()?;
+    Ok(stdout)
+}
+
+/// Build a crate ipe does not own — the workspace the release wrapper lives in.
+///
+/// Nothing is written into an ipe output area, so no claim is proven.
+fn build_workspace_crate(
+    cargo: &mut std::process::Command,
+    what: &'static str,
+    runtime: Option<RuntimeContext>,
+    workspace_root: &Path,
+) -> Result<(), CliError> {
+    build_emitted_project_core(cargo, what, runtime, workspace_root, false).map(drop)
 }
 
 /// Shared body of the emitted-project build. Streams `cargo`'s stderr live (and
@@ -2056,7 +2089,7 @@ pub fn bundle_wasm(crate_dir: &OwnedDir) -> Result<(), CliError> {
         &mut cargo,
         "the emitted wasm program",
         runtime_context_for_message(),
-        out_dir,
+        crate_dir,
     )?;
 
     // Step 2: wasm-bindgen — locate the .wasm the cargo build just produced
@@ -2080,11 +2113,17 @@ pub fn bundle_wasm(crate_dir: &OwnedDir) -> Result<(), CliError> {
 
     // `wasm-bindgen` and `wasm-opt` write into `www/pkg/` by path, so it is
     // rebuilt empty under the owned crate: a symlink at any level is refused and
-    // nothing planted inside it can redirect their writes.
-    let pkg = crate_dir.path_to(Path::new("www").join("pkg"))?;
+    // nothing planted inside it can redirect their writes. Each tool's writes
+    // are proven to have landed in the owned crate once it exits.
+    let pkg_rel = Path::new("www").join("pkg");
+    let pkg = crate_dir.path_to(&pkg_rel)?;
     pkg.remove()?;
     pkg.ensure_dir()?;
     let pkg_dir = pkg.path();
+    let prove_pkg = || -> Result<(), CliError> {
+        crate_dir.verify()?;
+        crate_dir.path_to(&pkg_rel).map(drop)
+    };
 
     let wb_status = std::process::Command::new("wasm-bindgen")
         .args([
@@ -2107,6 +2146,7 @@ pub fn bundle_wasm(crate_dir: &OwnedDir) -> Result<(), CliError> {
             &WASM_BINDGEN_VERSION,
         )));
     }
+    prove_pkg()?;
 
     // Step 3: wasm-opt -Oz — optional size pass; silently skip when absent
     // (`Command::new` returns `Err` when the tool is missing).
@@ -2134,6 +2174,7 @@ pub fn bundle_wasm(crate_dir: &OwnedDir) -> Result<(), CliError> {
         );
     }
 
+    prove_pkg()?;
     let bundle_size = format_artifact_size(artifact_size_bytes(&bg_wasm)?);
     let www = out_dir.join("www");
     crate::screen::chatter(
@@ -2164,8 +2205,10 @@ pub fn bundle_wasm(crate_dir: &OwnedDir) -> Result<(), CliError> {
 /// is governed by exactly the config the emitter ships.
 ///
 /// # Errors
-/// [`CliError::EmittedBuildFailed`] when the wasip1 `cargo build` fails.
-pub fn bundle_wasi(out_dir: &Path) -> Result<PathBuf, CliError> {
+/// [`CliError::EmittedBuildFailed`] when the wasip1 `cargo build` fails;
+/// [`CliError::OutputRefused`] when `crate_dir` was replaced since its claim.
+pub fn bundle_wasi(crate_dir: &OwnedDir) -> Result<PathBuf, CliError> {
+    let out_dir = crate_dir.path();
     // Fail closed before the cross-compile: a missing toolchain becomes a clear
     // root-cause message rather than an opaque OS spawn error.
     let cargo_bin = toolchain::require_cargo(toolchain::ToolIntent::BundleWasm)?;
@@ -2192,7 +2235,7 @@ pub fn bundle_wasi(out_dir: &Path) -> Result<PathBuf, CliError> {
         &mut cargo,
         "the emitted wasm32-wasip1 module",
         runtime_context_for_message(),
-        out_dir,
+        crate_dir,
     )?;
 
     // The authoritative module path: the `.wasm` bin artifact cargo reported it
@@ -2724,22 +2767,17 @@ pub fn run_run_with_args(args: cli_args::RunArgs) -> Result<(), CliError> {
         // Filled from the manifest `delivery.desktop` in
         // build_project_with_options once the manifest is parsed.
         webview_window: None,
-        out_area: Some(rust_area.clone()),
     };
 
     // Nothing is created in the Rust area until the emit writes its crate.
     let out_dir = rust_area.path()?;
 
-    manifest.as_ref().map_or_else(
-        || {
-            build_with_sibling_discovery_with_options(
-                &entry_path,
-                &out_dir,
-                &runtime_dir,
-                options.clone(),
-            )
-        },
-        |m| build_project_with_options(m, &out_dir, &runtime_dir, options.clone()),
+    let crate_dir = emit_into(
+        &entry_path,
+        manifest.as_deref(),
+        &EmitTarget::Area(rust_area),
+        &runtime_dir,
+        options,
     )?;
 
     // Post-emit routing per compile target:
@@ -2751,13 +2789,13 @@ pub fn run_run_with_args(args: cli_args::RunArgs) -> Result<(), CliError> {
     //     from the SAME declared capability floor the native run jail reads.
     //   * Native — fall through to the cargo build + jailed exec below.
     match compile_target {
-        CompileTarget::WasmClient => return bundle_wasm(&rust_area.claim()?),
+        CompileTarget::WasmClient => return bundle_wasm(&crate_dir),
         CompileTarget::WasmWasi => {
             // The `wasi_run` feature gate already fired before emit (above), so
             // reaching here means the embedded engine is linked. Build the module
             // first — a green build is THE SEAL (ipe-accepts ⇒ cargo-builds for
             // the target) — then run it.
-            let module = bundle_wasi(&out_dir)?;
+            let module = bundle_wasi(&crate_dir)?;
             // Derive the capability floor exactly as the native jail does (the
             // consented set → `build_profile`), so the WASI context enforces the
             // SAME deny-by-default model — defend-in-depth, one capability model
@@ -2807,7 +2845,7 @@ pub fn run_run_with_args(args: cli_args::RunArgs) -> Result<(), CliError> {
     } else {
         None
     };
-    build_emitted_project(&mut cargo, "the emitted program", runtime_ctx, &out_dir)?;
+    build_emitted_project(&mut cargo, "the emitted program", runtime_ctx, &crate_dir)?;
 
     // --- Step 3: exec the emitted binary, forwarding args and exit code ---
     // The binary name is read from the emitted crate's `Cargo.toml` — the

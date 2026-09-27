@@ -234,9 +234,11 @@ impl From<OutputRefusal> for CliError {
 
 /// A directory proven ipe-owned: not a symlink, and carrying the marker.
 ///
-/// The only constructor is [`OwnedDir::claim`]. It also records the
-/// directory's identity (device and inode, or volume and file index): every [`OwnedPath`] operation
-/// refuses to act once the path names a different directory.
+/// Built only by a disjointness-proving claim ([`OutputRoot::claim`],
+/// [`AreaClaim::claim`], [`HandoverRoot::claim`]) or below one
+/// ([`OwnedDir::child`]). It also records the directory's identity (device and
+/// inode, or volume and file index): every [`OwnedPath`] operation refuses to
+/// act once the path names a different directory.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OwnedDir {
     path: PathBuf,
@@ -261,8 +263,27 @@ impl OwnedDir {
     /// [`CliError::OutputRefused`] on a refusal, an unproven `..`
     /// ([`OutputRefusal::ParentTraversal`]) included; [`CliError::Io`] on a
     /// filesystem failure.
+    #[cfg(test)]
     pub fn claim(path: &Path) -> Result<Self, CliError> {
         claim_owned(prove_parent_steps(path)?)
+    }
+
+    /// Prove the path still names the directory that was claimed.
+    ///
+    /// A process that wrote into the directory by path (cargo, wasm-bindgen)
+    /// is checked with this once it exits: a directory swapped while it ran
+    /// fails the build rather than being trusted.
+    ///
+    /// # Errors
+    /// [`OutputRefusal::Replaced`] when the path is absent or another
+    /// directory; [`OutputRefusal::Symlink`] or [`OutputRefusal::NotADirectory`]
+    /// when it is a link or not a directory; [`CliError::Io`] on a filesystem
+    /// failure.
+    pub fn verify(&self) -> Result<(), CliError> {
+        match held::HeldDir::open(&self.path)? {
+            Some(dir) if dir.id()? == self.id => Ok(()),
+            Some(_) | None => Err(OutputRefusal::Replaced(self.path.clone()).into()),
+        }
     }
 
     /// The owned directory's path.
@@ -275,7 +296,7 @@ impl OwnedDir {
     ///
     /// # Errors
     /// [`OutputRefusal::UnsafeComponent`] for anything but one plain name; as
-    /// [`OwnedDir::claim`] otherwise.
+    /// [`OutputRoot::claim`] otherwise.
     pub fn child(&self, name: &str) -> Result<Self, CliError> {
         let mut parts = Path::new(name).components();
         match (parts.next(), parts.next()) {
@@ -358,6 +379,7 @@ impl OwnedDir {
 }
 
 /// Claim `path` through held directory handles.
+#[cfg(test)]
 fn claim_owned(path: ProvenOutPath) -> Result<OwnedDir, CliError> {
     let dir = claim_held(&path)?;
     Ok(OwnedDir {
@@ -366,13 +388,14 @@ fn claim_owned(path: ProvenOutPath) -> Result<OwnedDir, CliError> {
     })
 }
 
-/// Claim `path` as [`OwnedDir::claim`] does, returning the claimed directory's handle.
+/// Claim `path` without a disjointness proof, returning the claimed directory's handle.
 ///
 /// Each directory ipe creates or adopts is opened relative to its held parent
 /// without following a link, and is marked or adopted through that handle. An
 /// existing ancestor is left as it is. The path carries no `..` or `.`, so each
 /// parent opened is the lexical one on every platform. The recursion is bounded
 /// by the path's component count.
+#[cfg(test)]
 fn claim_held(path: &ProvenOutPath) -> Result<held::HeldDir, CliError> {
     if let Some(dir) = held::HeldDir::open(path.as_path())? {
         dir.adopt()?;
@@ -797,6 +820,14 @@ impl ProjectPaths {
             let parsed = crate::project::parse_manifest(&manifest)?;
             return Ok(Self::from_manifest(&parsed));
         }
+        Ok(Self::of_file(entry))
+    }
+
+    /// The paths of a build without a manifest: `entry`'s own directory.
+    ///
+    /// `entry` is a `.ipe` file or the directory holding it.
+    #[must_use]
+    pub fn of_file(entry: &Path) -> Self {
         let root = if entry.is_dir() {
             entry.to_path_buf()
         } else {
@@ -805,11 +836,20 @@ impl ProjectPaths {
                 _ => PathBuf::from("."),
             }
         };
-        Ok(Self {
+        Self {
             root,
             sources: None,
             default_base: PathBuf::from("."),
-        })
+        }
+    }
+
+    /// The same paths, with `sources` as the recursive source root to stay clear of.
+    #[must_use]
+    pub fn with_sources(self, sources: &Path) -> Self {
+        Self {
+            sources: Some(sources.to_path_buf()),
+            ..self
+        }
     }
 }
 
@@ -844,7 +884,15 @@ impl OutputRoot {
             || project.default_base.join(DEFAULT_OUTPUT_DIR),
             PathBuf::from,
         );
-        let checked = check_disjoint(&raw, project)?;
+        Self::at(&raw, project)
+    }
+
+    /// Resolve the output root at `raw`, relative to the working directory.
+    ///
+    /// # Errors
+    /// As [`OutputRoot::resolve`].
+    pub fn at(raw: &Path, project: &ProjectPaths) -> Result<Self, CliError> {
+        let checked = check_disjoint(raw, project)?;
         adopt_checked(&checked)?;
         Ok(Self {
             path: checked.absolute,
@@ -903,7 +951,7 @@ impl OutputRoot {
     /// Claim a (possibly nested) product area for writing now.
     ///
     /// # Errors
-    /// As [`OutputRoot::area_path`] and [`OwnedDir::claim`].
+    /// As [`OutputRoot::area_path`] and [`OutputRoot::claim`].
     pub fn claim_area(&self, areas: &[OutputArea]) -> Result<OwnedDir, CliError> {
         self.area_path(areas)?;
         let mut dir = self.claim()?;
@@ -921,7 +969,7 @@ impl OutputRoot {
     /// redirect the claim into the project.
     ///
     /// # Errors
-    /// As [`OutputRoot::resolve`] and [`OwnedDir::claim`].
+    /// As [`OutputRoot::resolve`]; [`CliError::Io`] on a filesystem failure.
     pub fn claim(&self) -> Result<OwnedDir, CliError> {
         let checked = check_disjoint(self.path.as_path(), &self.project)?;
         let anchor = checked.anchor;
@@ -979,20 +1027,74 @@ impl AreaClaim {
     pub fn claim(&self) -> Result<OwnedDir, CliError> {
         self.root.claim_area(self.areas)
     }
+}
 
-    /// Claim the area for writing now, refusing unless it is the directory at `expected`.
+/// Where an emitted project is written: an area still to claim, or a directory already claimed.
+///
+/// Every variant carries a disjointness proof; a bare path cannot name a
+/// target, so no writer can re-claim a directory without one.
+#[derive(Debug, Clone)]
+pub enum EmitTarget {
+    /// A product area, claimed (and proven again) when the project is written.
+    Area(AreaClaim),
+    /// A directory claimed earlier, proven still the same when written.
+    Claimed(OwnedDir),
+}
+
+impl EmitTarget {
+    /// The output root at `out_dir` as a target, proven disjoint from `project`.
     ///
-    /// A writer handed both a path and the area it names writes nowhere when
-    /// the two disagree.
+    /// Nothing is created until the project is written.
     ///
     /// # Errors
-    /// As [`AreaClaim::claim`]; [`OutputRefusal::Replaced`] when the area is
-    /// not at `expected`.
-    pub fn claim_at(&self, expected: &Path) -> Result<OwnedDir, CliError> {
-        if self.path()? != expected {
-            return Err(OutputRefusal::Replaced(expected.to_path_buf()).into());
+    /// As [`OutputRoot::resolve`].
+    pub fn at(out_dir: &Path, project: &ProjectPaths) -> Result<Self, CliError> {
+        Ok(Self::Area(OutputRoot::at(out_dir, project)?.area(&[])))
+    }
+
+    /// The target directory's absolute path.
+    ///
+    /// # Errors
+    /// As [`OutputRoot::area_path`].
+    pub fn path(&self) -> Result<PathBuf, CliError> {
+        match self {
+            Self::Area(area) => area.path(),
+            Self::Claimed(dir) => Ok(dir.path().to_path_buf()),
         }
-        self.claim()
+    }
+
+    /// Claim the target for writing now.
+    ///
+    /// # Errors
+    /// As [`AreaClaim::claim`] and [`OwnedDir::verify`].
+    pub fn claim(&self) -> Result<OwnedDir, CliError> {
+        match self {
+            Self::Area(area) => area.claim(),
+            Self::Claimed(dir) => {
+                dir.verify()?;
+                Ok(dir.clone())
+            }
+        }
+    }
+
+    /// The target for `out_dir`: `given` when it names that directory, else the root there.
+    ///
+    /// # Errors
+    /// [`OutputRefusal::Replaced`] when `given` names another directory; as
+    /// [`EmitTarget::at`] without one.
+    pub fn for_path(
+        out_dir: &Path,
+        given: Option<Self>,
+        project: &ProjectPaths,
+    ) -> Result<Self, CliError> {
+        let Some(target) = given else {
+            return Self::at(out_dir, project);
+        };
+        if target.path()? == prove_parent_steps(out_dir)?.as_path() {
+            Ok(target)
+        } else {
+            Err(OutputRefusal::Replaced(out_dir.to_path_buf()).into())
+        }
     }
 }
 
@@ -1093,6 +1195,12 @@ impl HandoverDir {
     #[must_use]
     pub fn path(&self) -> &Path {
         self.0.path()
+    }
+
+    /// The claimed directory's handle, for writing into it before release.
+    #[must_use]
+    pub const fn owned(&self) -> &OwnedDir {
+        &self.0
     }
 
     /// Hand the directory over to the user by removing its ownership marker.
@@ -3326,16 +3434,18 @@ mod tests {
         let _ = std::fs::remove_dir_all(&base);
     }
 
-    /// An area claimed at the path it names succeeds and is marked.
+    /// A target given for the path it names is kept, and claiming it marks the area.
     #[test]
-    fn an_area_claim_at_its_own_path_succeeds() {
-        let base = scratch("area-claim-at");
+    fn a_target_for_its_own_path_is_claimed() {
+        let base = scratch("target-own-path");
         let proj = project(&base);
         let out = OutputRoot::resolve(None, &proj).expect("default out");
         let area = out.area(&[OutputArea::Rust]);
         let path = area.path().expect("area path");
         assert!(!path.exists(), "naming the area creates nothing");
-        let claimed = area.claim_at(&path).expect("claim at its own path");
+        let target = EmitTarget::for_path(&path, Some(EmitTarget::Area(area)), &proj)
+            .expect("target for its own path");
+        let claimed = target.claim().expect("claim the target");
         assert_eq!(claimed.path(), path);
         assert!(
             has_marker(&path).expect("area marker"),
@@ -3344,22 +3454,58 @@ mod tests {
         let _ = std::fs::remove_dir_all(&base);
     }
 
-    /// An area claimed at a path other than the one it names is refused
+    /// A target given for a path other than the one it names is refused
     /// before anything is created.
     #[test]
-    fn an_area_claim_at_another_path_is_refused() {
-        let base = scratch("area-claim-mismatch");
+    fn a_target_for_another_path_is_refused() {
+        let base = scratch("target-mismatch");
         let proj = project(&base);
         let out = OutputRoot::resolve(None, &proj).expect("default out");
         let area = out.area(&[OutputArea::Rust]);
         let elsewhere = base.join("elsewhere");
-        let result = area.claim_at(&elsewhere);
+        let result = EmitTarget::for_path(&elsewhere, Some(EmitTarget::Area(area)), &proj);
         assert!(
             matches!(refused(&result), Some(OutputRefusal::Replaced(_))),
-            "a mismatched area claim must be refused, got {result:?}"
+            "a mismatched target must be refused, got {result:?}"
         );
         assert!(!elsewhere.exists(), "the mismatched path is not created");
         assert!(!out.path().exists(), "the root is not created");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// A target built from a bare path overlapping the project is refused
+    /// before anything is created: no bare path reaches a claim unproven.
+    #[test]
+    fn a_target_at_the_project_is_refused() {
+        let base = scratch("target-at-project");
+        let proj = project(&base);
+        for raw in [
+            proj.root.clone(),
+            base.clone(),
+            proj.root.join("src").join("gen"),
+        ] {
+            let result = EmitTarget::at(&raw, &proj);
+            assert!(
+                refused(&result).is_some(),
+                "a target at {} must be refused, got {result:?}",
+                raw.display()
+            );
+            let for_path = EmitTarget::for_path(&raw, None, &proj);
+            assert!(
+                refused(&for_path).is_some(),
+                "a target for {} must be refused, got {for_path:?}",
+                raw.display()
+            );
+        }
+        assert!(user_files_survive(&proj.root));
+        assert!(
+            !proj.root.join(OWNERSHIP_MARKER).exists(),
+            "the project is not marked"
+        );
+        assert!(
+            !proj.root.join("src").join("gen").exists(),
+            "nothing created in sources"
+        );
         let _ = std::fs::remove_dir_all(&base);
     }
 
@@ -3375,7 +3521,7 @@ mod tests {
         out.claim().expect("claim root");
         let sources = proj.root.join("src");
         plant_link(&sources, &path);
-        let result = area.claim_at(&path);
+        let result = EmitTarget::Area(area).claim();
         assert!(
             refused(&result).is_some(),
             "a swapped area must be refused, got {result:?}"
@@ -3385,6 +3531,46 @@ mod tests {
             !sources.join(OWNERSHIP_MARKER).exists(),
             "no marker written through the link"
         );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// A claimed directory swapped for another directory, or for a link into
+    /// the project, fails verification, and a target holding it refuses the claim.
+    #[test]
+    fn a_claimed_dir_swapped_after_the_claim_is_refused() {
+        let base = scratch("claimed-swapped");
+        let proj = project(&base);
+        let out = OutputRoot::resolve(None, &proj).expect("default out");
+        let claimed = out.claim().expect("claim root");
+        assert!(claimed.verify().is_ok(), "the untouched claim verifies");
+        let target = EmitTarget::Claimed(claimed.clone());
+        std::fs::rename(out.path(), base.join("aside")).expect("move the claim aside");
+        std::fs::create_dir(out.path()).expect("recreate the path");
+        let verified = claimed.verify();
+        assert!(
+            matches!(refused(&verified), Some(OutputRefusal::Replaced(_))),
+            "a replaced directory must fail verification, got {verified:?}"
+        );
+        let result = target.claim();
+        assert!(
+            matches!(refused(&result), Some(OutputRefusal::Replaced(_))),
+            "a replaced claimed target must be refused, got {result:?}"
+        );
+        std::fs::remove_dir(out.path()).expect("remove the stand-in");
+        plant_link(&proj.root.join("src"), out.path());
+        let linked = claimed.verify();
+        assert!(
+            refused(&linked).is_some(),
+            "a link in place of the claim must fail verification, got {linked:?}"
+        );
+        let _ = std::fs::remove_file(out.path());
+        let _ = std::fs::remove_dir(out.path());
+        let missing = claimed.verify();
+        assert!(
+            matches!(refused(&missing), Some(OutputRefusal::Replaced(_))),
+            "a vanished claim must fail verification, got {missing:?}"
+        );
+        assert!(user_files_survive(&proj.root));
         let _ = std::fs::remove_dir_all(&base);
     }
 }

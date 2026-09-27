@@ -88,6 +88,7 @@ use std::time::{Duration, Instant};
 
 use ipe_intern::Interner;
 
+use crate::output_dir::{EmitTarget, OutputRefusal, OwnedDir, ProjectPaths};
 use crate::project;
 use crate::text;
 use crate::{CliError, write_emitted_project};
@@ -202,10 +203,11 @@ pub struct WatchOptions {
     /// a pre-compiled dependency tree instead of cold-building it; the E2E watch
     /// suite uses it to forward the CI shard's warm shared target.
     pub target_dir: Option<PathBuf>,
-    /// The output area `out_dir` names, when it sits in a CLI output root.
-    /// Each rebuild claims it through the root's proof; `None` claims the
-    /// `out_dir` path itself.
-    pub out_area: Option<crate::output_dir::AreaClaim>,
+    /// The proven target `out_dir` names, when the caller holds one.
+    ///
+    /// Each rebuild claims it through its proof; `None` proves `out_dir`
+    /// disjoint from the watched project before the session starts.
+    pub out_target: Option<EmitTarget>,
 }
 
 impl WatchOptions {
@@ -225,7 +227,7 @@ impl WatchOptions {
             reset_state: false,
             debugger: false,
             target_dir: None,
-            out_area: None,
+            out_target: None,
         }
     }
 }
@@ -806,6 +808,11 @@ fn run_inner(
 ) -> Result<(), CliError> {
     let initial = resolve_project_sources(&opts.entry, None)?;
     let (root_dir, entry_dir) = scope_roots(&initial, &opts.entry);
+    let out_target = EmitTarget::for_path(
+        &opts.out_dir,
+        opts.out_target.clone(),
+        &ProjectPaths::discover(&opts.entry)?,
+    )?;
 
     let scope = ipe_watch::WatchScope::build(&root_dir, &entry_dir)
         .map_err(|e| CliError::Usage(crate::text::Message::relay(&e)))?;
@@ -1006,6 +1013,8 @@ fn run_inner(
     let mut generation: u64 = 0;
     let mut compile_worker: Option<thread::JoinHandle<()>> = None;
     let mut cargo_child: Option<Arc<std::sync::Mutex<Child>>> = None;
+    // The crate the in-flight cargo build compiles, proven again once it exits.
+    let mut building: Option<OwnedDir> = None;
     // Set at `CompileDone` (Green), consumed at `CargoDone` (Green) — the
     // readiness strategy is a property of the SOURCE (does it call
     // `Web.tea`?), decided once per generation right after emit, not
@@ -1488,22 +1497,24 @@ fn run_inner(
                         // no tree-shaking (the full runtime tree keeps rebuilds
                         // incremental across a session's changing reach set).
                         let write_started = Instant::now();
-                        if let Err(e) = write_emitted_project(
+                        let crate_dir = match write_emitted_project(
                             &emitted,
-                            &opts.out_dir,
-                            opts.out_area.as_ref(),
+                            &out_target,
                             &opts.runtime_dir,
                             None,
                             false,
                         ) {
-                            emit_watch_line(
-                                &crate::style::TerminalSafe::sanitize(&format!(
-                                    "[ipe watch] failed to write emitted project: {e}"
-                                )),
-                                WatchRole::Failure,
-                            );
-                            continue;
-                        }
+                            Ok(dir) => dir,
+                            Err(e) => {
+                                emit_watch_line(
+                                    &crate::style::TerminalSafe::sanitize(&format!(
+                                        "[ipe watch] failed to write emitted project: {e}"
+                                    )),
+                                    WatchRole::Failure,
+                                );
+                                continue;
+                            }
+                        };
                         timings.write = Some(write_started.elapsed());
                         // This emit is about to be compiled into the new running
                         // binary, so it becomes the classifier's baseline for the
@@ -1551,13 +1562,16 @@ fn run_inner(
                         }
                         match spawn_cargo_build(
                             &opts.cargo_path,
-                            &opts.out_dir,
+                            crate_dir.path(),
                             opts.target_dir.as_deref(),
                             generation,
                             evt_tx.clone(),
                             opts.quiet,
                         ) {
-                            Ok(child) => cargo_child = Some(child),
+                            Ok(child) => {
+                                cargo_child = Some(child);
+                                building = Some(crate_dir);
+                            }
                             Err(e) => emit_watch_line(
                                 &crate::style::TerminalSafe::sanitize(&format!(
                                     "[ipe watch] cannot start cargo build: {e}"
@@ -1603,6 +1617,27 @@ fn run_inner(
                         timings.report(g);
                     }
                     CargoOutcome::Green(exe_path) => {
+                        // cargo wrote into the crate by path: a crate replaced
+                        // while it ran is refused, never run.
+                        let proven = building.take().map_or_else(
+                            || {
+                                Err(CliError::from(OutputRefusal::Replaced(
+                                    opts.out_dir.clone(),
+                                )))
+                            },
+                            |dir| dir.verify(),
+                        );
+                        if let Err(e) = proven {
+                            emit_watch_line(
+                                &crate::style::TerminalSafe::sanitize(&format!(
+                                    "[ipe watch] refusing the build: {e}"
+                                )),
+                                WatchRole::Failure,
+                            );
+                            emit(opts, WatchEvent::CargoFailed { generation: g });
+                            timings.report(g);
+                            continue;
+                        }
                         let restart_started = Instant::now();
                         // Deferred blue-green engagement: bind the proxy on the
                         // user's port the first time a green build is known to bind
