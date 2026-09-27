@@ -2074,7 +2074,7 @@ fn lower_dict_map_over_function_value_compiles() {
          table : Dict String (Int -> Int)\n\
          table =\n    Dict.fromList [ ( \"inc\", \\n -> n + 1 ) ]\n\
          main : Task Error ()\n\
-         main =\n    Io.println (String.fromInt (List.foldl (+) 0 (Dict.values (Dict.map (\\_ f -> f 1) table))))\n"
+         main =\n    Io.println (String.fromInt (List.foldl (\\x acc -> x + acc) 0 (Dict.values (Dict.map (\\_ f -> f 1) table))))\n"
     );
     assert_compiles("lower_dict_map_fn_value", &src);
 }
@@ -2122,11 +2122,12 @@ fn lower_dict_partition_over_function_value_compiles() {
          import Ipe.Io as Io\n\
          import Ipe.List\n\
          import Ipe.String as String\n\
-         import Ipe.Tuple as Tuple\n\
          table : Dict String (Int -> Int)\n\
          table =\n    Dict.fromList [ ( \"inc\", \\n -> n + 1 ) ]\n\
+         kept : Dict String (Int -> Int)\n\
+         kept =\n    case Dict.partition (\\_ f -> f 0 > 0) table of\n        ( yes, _ ) ->\n            yes\n\
          main : Task Error ()\n\
-         main =\n    Io.println (String.fromInt (Dict.size (Tuple.first (Dict.partition (\\_ f -> f 0 > 0) table))))\n"
+         main =\n    Io.println (String.fromInt (Dict.size kept))\n"
     );
     assert_compiles("lower_dict_partition_fn_value", &src);
 }
@@ -2192,9 +2193,10 @@ fn lower_dict_update_over_function_value_gated() {
     assert_rejected("lower_dict_update_fn_value", &src, "IPE-L0134");
 }
 
-/// A PARTIAL `Dict.update` over a function-valued dict supplies the
-/// collection only through the residual closure: the gate reads the callee's
-/// solved arrow, so the open frontier still fails closed with IPE-L0134.
+/// A PARTIAL `Dict.update` over a function-valued dict, bound point-free:
+/// the collection arrives only through the residual closure, so the gate reads
+/// the callee's solved arrow, and the open frontier still fails closed with
+/// IPE-L0134. Every top-level def is lowered, referenced from `main` or not.
 #[test]
 fn lower_dict_update_partial_over_function_value_gated() {
     let src = format!(
@@ -2204,8 +2206,10 @@ fn lower_dict_update_partial_over_function_value_gated() {
          import Ipe.String as String\n\
          table : Dict String (Int -> Int)\n\
          table =\n    Dict.fromList [ ( \"inc\", \\n -> n + 1 ) ]\n\
+         upd : Dict String (Int -> Int) -> Dict String (Int -> Int)\n\
+         upd =\n    Dict.update \"inc\" (\\m -> m)\n\
          main : Task Error ()\n\
-         main =\n    Io.println (String.fromInt (let upd = Dict.update \"inc\" (\\m -> m) in Dict.size (upd table)))\n"
+         main =\n    Io.println (String.fromInt (Dict.size table))\n"
     );
     assert_rejected("lower_dict_update_partial_fn_value", &src, "IPE-L0134");
 }
