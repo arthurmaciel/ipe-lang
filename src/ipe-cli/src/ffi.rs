@@ -18,12 +18,13 @@ use ipe_ffi::driver::{CrateName, CrateSpec, FfiCache, InstalledCrate, VersionPin
 use ipe_ffi::pkginfo::FeatureName;
 
 use crate::CliError;
+use crate::loose_file::ProjectRoot;
 use crate::text;
 
 /// The project-relative FFI cache directory.
 const CACHE_REL: &str = ".ipe/cache/ffi/rust";
 
-/// The project manifest that bounds the upward cache-discovery walk.
+/// The package manifest file name.
 const PROJECT_MANIFEST: &str = "package.ipe";
 
 /// The legacy TOML manifest name the `ipe rust install` text inspector reads
@@ -59,54 +60,52 @@ fn is_trusted_cache_dir(_dir: &Path) -> bool {
     true
 }
 
-/// Walk up from `start` looking for an FFI artifact cache, bounded at the
-/// nearest `package.ipe` project root.
+/// The FFI artifact cache of `scope`, probed in [`ProjectRoot::dir`] only.
 ///
-/// Never walks above the nearest `package.ipe`, so a planted ancestor cache
-/// outside the project cannot be discovered. A found cache not owned by the
-/// invoking uid (or group/other-writable) is REFUSED, not loaded, since its
-/// `_bindings.rs` compiles unsandboxed into the crate.
+/// Never walks up: a package's cache sits beside its `package.ipe`, and a
+/// loose file's beside the file, so a planted ancestor cache outside the
+/// scope is never discovered. A found cache not owned by the invoking uid
+/// (or other-writable) is REFUSED, not loaded, since its `_bindings.rs`
+/// compiles unsandboxed into the crate.
 ///
 /// # Errors
 ///
-/// [`CliError::UsageOwned`] when a discovered cache fails the ownership check.
-pub fn find_cache_root(start: &Path) -> Result<Option<PathBuf>, CliError> {
-    let mut dir = if start.is_dir() {
-        Some(start)
-    } else {
-        start.parent()
-    };
-    while let Some(d) = dir {
-        let candidate = d.join(CACHE_REL);
-        if candidate.is_dir() {
-            if is_trusted_cache_dir(&candidate) {
-                return Ok(Some(candidate));
-            }
-            return Err(CliError::UsageOwned(text::ffi_cache_untrusted(
-                &candidate.display(),
-            )));
-        }
-        // Stop at the project root: do not walk above the nearest package.ipe.
-        if d.join(PROJECT_MANIFEST).is_file() {
-            return Ok(None);
-        }
-        dir = d.parent();
+/// [`CliError::UsageOwned`] when the cache fails the ownership check.
+pub fn find_cache_root(scope: &ProjectRoot) -> Result<Option<PathBuf>, CliError> {
+    let candidate = scope.dir().join(CACHE_REL);
+    if !candidate.is_dir() {
+        return Ok(None);
     }
-    Ok(None)
+    if is_trusted_cache_dir(&candidate) {
+        return Ok(Some(candidate));
+    }
+    Err(CliError::UsageOwned(text::ffi_cache_untrusted(
+        &candidate.display(),
+    )))
+}
+
+/// The FFI cache for a build rooted at (or blamed on) `blame_path`, scoped by its [`ProjectRoot`].
+fn cache_root_for(blame_path: &Path) -> Result<Option<PathBuf>, CliError> {
+    find_cache_root(&ProjectRoot::of(None, blame_path))
 }
 
 /// Load the installed-crate catalog for a build rooted at (or blamed on)
 /// `blame_path`. Absent cache ⇒ empty catalog.
 ///
 /// # Errors
-/// [`CliError::Pipeline`] wrapping the catalog loader's diagnostic (a
-/// tampered or half-written cache is refused, never silently skipped).
+/// [`CliError::UsageOwned`] when the cache is untrusted or its catalog
+/// loader refuses it (a tampered or half-written cache is refused, never
+/// silently skipped).
 pub fn load_catalog_for(blame_path: &Path) -> Result<Vec<InstalledCrate>, CliError> {
-    let Some(cache_root) = find_cache_root(blame_path)? else {
+    load_catalog_at(cache_root_for(blame_path)?.as_deref())
+}
+
+/// Load the installed-crate catalog from `cache_root`; no cache ⇒ empty catalog.
+fn load_catalog_at(cache_root: Option<&Path>) -> Result<Vec<InstalledCrate>, CliError> {
+    let Some(cache_root) = cache_root else {
         return Ok(Vec::new());
     };
-    ipe_ffi::driver::load_catalog(&cache_root)
-        .map_err(|diag| CliError::UsageOwned(diag.to_string()))
+    ipe_ffi::driver::load_catalog(cache_root).map_err(|diag| CliError::UsageOwned(diag.to_string()))
 }
 
 /// Inject each installed crate's interface module into the build's source
@@ -449,8 +448,8 @@ pub struct FfiPrep {
 /// these steps independently, or (in `watch`/`lsp`) skipping them entirely —
 /// both are bugs (CO-INCR-005).
 ///
-/// `blame_path` is the project entry file or manifest: the catalog search
-/// walks up from it looking for `.ipe/cache/ffi/rust`.
+/// `blame_path` is the project entry file or manifest: the catalog is read
+/// from `.ipe/cache/ffi/rust` in its [`ProjectRoot::dir`] only.
 ///
 /// `sources` is mutated in-place: one `Rust.<Crate>` interface module is
 /// inserted per installed crate.
@@ -462,7 +461,8 @@ pub fn prepare_ffi(
     sources: &mut BTreeMap<Vec<String>, (PathBuf, String)>,
     blame_path: &Path,
 ) -> Result<FfiPrep, CliError> {
-    let mut catalog = load_catalog_for(blame_path)?;
+    let cache_root = cache_root_for(blame_path)?;
+    let mut catalog = load_catalog_at(cache_root.as_deref())?;
     // The asserted-call classifications lean on two unforgeable names: the
     // `Rust.Ffi` module and the `ipe_asserted_` wrapper prefix. No installed
     // crate may claim either — refused at load, before anything is injected.
@@ -492,7 +492,7 @@ pub fn prepare_ffi(
     // Scan for asserted calls BEFORE interface injection, while `sources`
     // holds only project (and stdlib) modules.
     let ScannedFfi { asserted, consts } = scan_asserted(sources, &catalog)?;
-    let cache_hint = find_cache_root(blame_path)?.unwrap_or_default();
+    let cache_hint = cache_root.unwrap_or_default();
     let mut injected = inject_interfaces(sources, &catalog, &cache_hint)?;
     let mut emit = assemble_emit(&catalog)?;
     if !asserted.is_empty() || !consts.is_empty() {
@@ -3812,8 +3812,8 @@ version = \"1\"
         );
     }
 
-    /// `prepare_ffi` with a blame path that has no `.ipe/cache/ffi/rust`
-    /// directory up-tree returns an empty `FfiPrep` (no crates installed).
+    /// `prepare_ffi` with no `.ipe/cache/ffi/rust` in scope returns an empty `FfiPrep`.
+    ///
     /// This is the common case for every project that has never run `ipe add`.
     #[test]
     fn prepare_ffi_no_cache_returns_empty_prep() {
@@ -3826,34 +3826,54 @@ version = \"1\"
         assert!(prep.emit.is_none(), "emit should be None with no crates");
     }
 
-    #[test]
-    fn cache_root_walk_stops_at_the_ipe_toml_project_root() {
-        let tmp = std::env::temp_dir().join(format!("ipe-t1-cacheroot-{}", std::process::id()));
+    /// A fresh scratch directory for one cache-scope test.
+    fn cache_scope_tmp(name: &str) -> PathBuf {
+        let tmp =
+            std::env::temp_dir().join(format!("ipe-cachescope-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&tmp);
-        // Ancestor cache (a planted vector) ABOVE the project root.
-        let ancestor_cache = tmp.join(CACHE_REL);
-        std::fs::create_dir_all(&ancestor_cache).expect("mk ancestor cache");
-        // The project root, with its own package.ipe, one level down; no cache.
+        std::fs::create_dir_all(&tmp).expect("mk tmp");
+        tmp
+    }
+
+    #[test]
+    fn package_scope_never_consults_a_cache_above_the_manifest() {
+        let tmp = cache_scope_tmp("pkg-ancestor");
+        std::fs::create_dir_all(tmp.join(CACHE_REL)).expect("mk ancestor cache");
         let project = tmp.join("proj");
-        std::fs::create_dir_all(&project).expect("mk project");
+        std::fs::create_dir_all(project.join("src")).expect("mk project");
         std::fs::write(
             project.join("package.ipe"),
             "module Package exposing (package)\n",
         )
         .expect("write manifest");
-        let src = project.join("src");
-        std::fs::create_dir_all(&src).expect("mk src");
-        // Discovery from inside the project must NOT climb past package.ipe to the
-        // planted ancestor cache — it returns None.
-        let found = find_cache_root(&src).expect("no error");
+        let found = find_cache_root(&ProjectRoot::of(
+            None,
+            &project.join("src").join("Main.ipe"),
+        ))
+        .expect("no error");
         assert_eq!(found, None, "must not discover the ancestor cache");
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
     #[test]
-    fn owned_project_cache_is_discovered() {
-        let tmp = std::env::temp_dir().join(format!("ipe-t1-owncache-{}", std::process::id()));
+    fn package_scope_ignores_a_cache_nested_below_the_manifest() {
+        let tmp = cache_scope_tmp("pkg-nested");
+        std::fs::write(
+            tmp.join("package.ipe"),
+            "module Package exposing (package)\n",
+        )
+        .expect("write manifest");
+        let src = tmp.join("src");
+        std::fs::create_dir_all(src.join(CACHE_REL)).expect("mk nested cache");
+        let found =
+            find_cache_root(&ProjectRoot::of(None, &src.join("Main.ipe"))).expect("no error");
+        assert_eq!(found, None, "only the manifest directory holds the cache");
         let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn owned_project_cache_is_discovered() {
+        let tmp = cache_scope_tmp("pkg-own");
         let cache = tmp.join(CACHE_REL);
         std::fs::create_dir_all(&cache).expect("mk cache");
         std::fs::write(
@@ -3861,9 +3881,45 @@ version = \"1\"
             "module Package exposing (package)\n",
         )
         .expect("manifest");
-        // The invoker owns a freshly-created dir, so it is trusted + found.
-        let found = find_cache_root(&tmp).expect("no error");
+        let found =
+            find_cache_root(&ProjectRoot::of(None, &tmp.join("package.ipe"))).expect("no error");
         assert_eq!(found.as_deref(), Some(cache.as_path()));
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn loose_file_cache_beside_the_file_is_discovered() {
+        let tmp = cache_scope_tmp("loose-own");
+        let cache = tmp.join(CACHE_REL);
+        std::fs::create_dir_all(&cache).expect("mk cache");
+        let scope = ProjectRoot::of(None, &tmp.join("Main.ipe"));
+        assert_eq!(scope, ProjectRoot::LooseFile(tmp.join("Main.ipe")));
+        let found = find_cache_root(&scope).expect("no error");
+        assert_eq!(found.as_deref(), Some(cache.as_path()));
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// An untrusted cache above a loose file is never consulted: the load
+    /// neither trusts it nor fails on it.
+    #[cfg(unix)]
+    #[test]
+    fn loose_file_never_consults_an_untrusted_parent_cache() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let tmp = cache_scope_tmp("loose-parent");
+        let planted = tmp.join(CACHE_REL);
+        std::fs::create_dir_all(&planted).expect("mk planted cache");
+        std::fs::set_permissions(&planted, std::fs::Permissions::from_mode(0o777)).expect("chmod");
+        let dir = tmp.join("scratch");
+        std::fs::create_dir_all(&dir).expect("mk loose dir");
+        let entry = dir.join("Main.ipe");
+        let found = find_cache_root(&ProjectRoot::of(None, &entry)).expect("no error");
+        assert_eq!(
+            found, None,
+            "a parent cache is outside the loose file's scope"
+        );
+        let mut sources: BTreeMap<Vec<String>, (PathBuf, String)> = BTreeMap::new();
+        let prep = prepare_ffi(&mut sources, &entry).expect("parent cache is never read");
+        assert!(prep.catalog.is_empty());
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
@@ -3871,8 +3927,7 @@ version = \"1\"
     #[test]
     fn world_writable_cache_is_refused() {
         use std::os::unix::fs::PermissionsExt as _;
-        let tmp = std::env::temp_dir().join(format!("ipe-t1-wwcache-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&tmp);
+        let tmp = cache_scope_tmp("pkg-ww");
         let cache = tmp.join(CACHE_REL);
         std::fs::create_dir_all(&cache).expect("mk cache");
         std::fs::write(
@@ -3880,10 +3935,23 @@ version = \"1\"
             "module Package exposing (package)\n",
         )
         .expect("manifest");
-        // Make the cache world-writable — the delivery vector for a planted
-        // _bindings.rs — and confirm discovery refuses it.
+        // A world-writable cache is the delivery vector for a planted
+        // `_bindings.rs`: discovery refuses it.
         std::fs::set_permissions(&cache, std::fs::Permissions::from_mode(0o777)).expect("chmod");
-        let r = find_cache_root(&tmp);
+        let r = find_cache_root(&ProjectRoot::Package(tmp.clone()));
+        assert!(matches!(r, Err(CliError::UsageOwned(_))), "{r:?}");
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn world_writable_loose_file_cache_is_refused() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let tmp = cache_scope_tmp("loose-ww");
+        let cache = tmp.join(CACHE_REL);
+        std::fs::create_dir_all(&cache).expect("mk cache");
+        std::fs::set_permissions(&cache, std::fs::Permissions::from_mode(0o777)).expect("chmod");
+        let r = find_cache_root(&ProjectRoot::LooseFile(tmp.join("Main.ipe")));
         assert!(matches!(r, Err(CliError::UsageOwned(_))), "{r:?}");
         let _ = std::fs::remove_dir_all(&tmp);
     }

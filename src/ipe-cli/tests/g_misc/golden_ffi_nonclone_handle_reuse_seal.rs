@@ -72,6 +72,9 @@ fn seed_nonclone_ffi_cache(project_root: &Path) -> bool {
     install_from_inspection(&cache, &doc.to_string()).is_ok()
 }
 
+/// The fixture's package manifest: the FFI cache is scoped to its directory.
+const FIXTURE_MANIFEST: &str = "module Package exposing (package)\n\n\npackage =\n    { name = \"ffi-fixture\", version = \"0.1.0\" }\n";
+
 fn write_project(dir: &Path, main: &str) -> bool {
     let src = dir.join("src");
     let _ = fs::remove_dir_all(dir);
@@ -79,6 +82,9 @@ fn write_project(dir: &Path, main: &str) -> bool {
         return false;
     }
     if !seed_nonclone_ffi_cache(dir) {
+        return false;
+    }
+    if fs::write(dir.join("package.ipe"), FIXTURE_MANIFEST).is_err() {
         return false;
     }
     fs::write(src.join("Main.ipe"), main).is_ok()

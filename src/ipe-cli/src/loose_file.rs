@@ -74,6 +74,19 @@ impl ProjectRoot {
             })
             .map_or_else(|| Self::LooseFile(file.to_path_buf()), Self::Package)
     }
+
+    /// The one directory this project's artifacts (its FFI cache) live in.
+    ///
+    /// A package's manifest directory, or a loose file's own directory:
+    /// nothing above either is ever consulted, so a loose file in `/tmp`
+    /// never trusts a cache another user planted in a parent directory.
+    #[must_use]
+    pub fn dir(&self) -> &Path {
+        match self {
+            Self::Package(dir) => dir,
+            Self::LooseFile(file) => entry_directory(file),
+        }
+    }
 }
 
 /// The user modules a loose file resolves to, before stdlib and FFI injection.
