@@ -2215,13 +2215,12 @@ const fn feature_code(f: Feature) -> Code {
         Feature::FloatKeyedCollection => IPE_L0117,
         Feature::RoutedWebApp => IPE_L0118,
         Feature::LetBoundAppCfg => IPE_L0119,
-        Feature::NonCloneCapture => IPE_L0126,
+        Feature::NonCloneCapture | Feature::StreamHandlerCapture => IPE_L0126,
         Feature::FunctionValueReuse => IPE_L0127,
         Feature::ForeignHandleReuse => IPE_L0130,
         Feature::RowPolyRecordAnnotation => IPE_L0131,
         Feature::FunctionElementEquality => IPE_L0134,
         Feature::NonCloneValueReuse => IPE_L0135,
-        Feature::StreamHandlerCapture => IPE_L0126,
         Feature::JsPortBoundarySeal => IPE_L0148,
     })
 }
