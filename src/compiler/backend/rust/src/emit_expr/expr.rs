@@ -661,13 +661,19 @@ pub fn emit_expr_at(
             // read of that field or of the whole base) and refuses it on a
             // row-generic base, whose witness getter only borrows.
             let moves = ipe_ir::ir_type_has_effect_carrier(field_ty);
-            let base = emit_expr_at(ctx, record, indent, child, generics)?;
+            // A non-moving read only borrows its base (the field is copied or
+            // cloned out), so a cloned receiver (`CloneVar`) reads the binding
+            // itself: the field is cloned, never the whole record.
+            let base = match record.as_ref() {
+                Expr::CloneVar(sym) if !moves => ctx.emit_ident(*sym)?,
+                _ => emit_expr_at(ctx, record, indent, child, generics)?,
+            };
             // A field read on a row-generic parameter cannot name a struct field
             // (the concrete struct is unknown at emit time): it routes through the
             // field's witness getter `ipe_<field>()`, which rustc resolves to the
             // monomorphised struct's field. A cloned row receiver (`CloneVar`,
-            // from a deferred capture) routes the same way on the clone. Any
-            // other base keeps the ordinary struct-field read.
+            // from a deferred capture) routes the same way on the borrowed
+            // binding. Any other base keeps the ordinary struct-field read.
             if let Expr::Var(sym) | Expr::CloneVar(sym) = record.as_ref()
                 && generics.is_row(*sym)
             {

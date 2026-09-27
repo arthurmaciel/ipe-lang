@@ -70,16 +70,18 @@ fn i193_update_base_ipec_accepts_and_clones_consuming_use() {
         emitted.contains("__ipe_rec"),
         "emitted main.rs must contain __ipe_rec (record update block); got:\n{emitted}"
     );
-    // At least two `model.clone()` occurrences: the access `(model.clone()).tag`
-    // AND the consuming `describe(model.clone())` argument.  A bare `model` move
-    // for either of those (ordered before the update base) would drop this count
-    // below 2 and cause E0382.
-    let clone_hits = emitted.matches("model.clone()").count();
+    // The consuming `describe(model.clone())` argument keeps `model` alive for
+    // the later update base; a bare `model` move there would be E0382.
     assert!(
-        clone_hits >= 2,
-        "expected >= 2 `model.clone()` occurrences (access + consuming arg); \
-         found {clone_hits}. A regression makes an earlier use a bare move → E0382. \
-         Emitted:\n{emitted}"
+        emitted.contains("model.clone()"),
+        "expected the consuming `describe` argument to clone `model`; a \
+         regression makes it a bare move → E0382. Emitted:\n{emitted}"
+    );
+    // The `model.tag` read borrows `model` and clones only the field.
+    assert!(
+        !emitted.contains("(model.clone())."),
+        "a field read must clone the field, never the whole record; \
+         emitted:\n{emitted}"
     );
 }
 
