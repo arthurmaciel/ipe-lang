@@ -176,8 +176,8 @@ mentions "deploy"/"production"/"Cloud Run"/"Kubernetes":
 
 * Confirm `ENV=production` will be set on runtime.
 * Confirm `IPE_AUTH_TOKEN_SECRET` ≥32 bytes.
-* Confirm `IPE_CONSOLE_AUTH` set (`token` or `app`) — production + unset
-  refuses to mount `/_ipe/console`.
+* Confirm `IPE_ADMIN_TOKEN` set (optionally with `IPE_CONSOLE_AUTH=token`) —
+  production without an admin token does not mount `/_ipe/console`.
 * Confirm session store NOT `memory` when >1 replica.
 
 Production-grade = survives restart, scales horizontally w/o losing state,
