@@ -466,9 +466,9 @@ impl OwnedPath {
         use std::sync::atomic::{AtomicU64, Ordering};
         static SEQ: AtomicU64 = AtomicU64::new(0);
         self.walk(Walk::CreateParents)?;
-        let full = self.path();
-        let parent = full.parent().unwrap_or(&self.root).to_path_buf();
-        let name = full
+        let target = self.path();
+        let parent = target.parent().unwrap_or(&self.root).to_path_buf();
+        let name = target
             .file_name()
             .map_or_else(String::new, |n| n.to_string_lossy().into_owned());
         let tmp = parent.join(format!(
@@ -493,9 +493,9 @@ impl OwnedPath {
             }
             return Err(io_err(&tmp, e));
         }
-        if let Err(e) = std::fs::rename(&tmp, &full) {
+        if let Err(e) = std::fs::rename(&tmp, &target) {
             let _ = std::fs::remove_file(&tmp);
-            return Err(io_err(&full, e));
+            return Err(io_err(&target, e));
         }
         Ok(())
     }

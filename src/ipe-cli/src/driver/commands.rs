@@ -819,7 +819,6 @@ pub fn run_build_body(rest: &[String]) -> Result<BuildSuccess, CliError> {
             None
         }
         CompileTarget::Native => Some(compile_and_finalize_native_build(
-            &out_dir,
             &output,
             native_cargo,
             static_plan,
@@ -875,7 +874,6 @@ pub fn run_build_body(rest: &[String]) -> Result<BuildSuccess, CliError> {
 /// - The toolchain, manifest-parse, and profile-construction errors of the
 ///   steps it composes.
 pub fn compile_and_finalize_native_build(
-    out_dir: &Path,
     output: &OutputRoot,
     native_cargo: Option<toolchain::CargoBin>,
     static_plan: Option<ipe_backend_rust::static_build::StaticPlan>,
@@ -891,6 +889,8 @@ pub fn compile_and_finalize_native_build(
         Some(bin) => bin,
         None => toolchain::require_cargo(toolchain::ToolIntent::Build)?,
     };
+    let rust_area = output.area_path(&[OutputArea::Rust])?;
+    let out_dir = rust_area.as_path();
     let mut cargo = std::process::Command::new(cargo_bin.path());
     cargo.arg("build").current_dir(out_dir);
     if quiet {

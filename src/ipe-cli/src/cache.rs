@@ -368,7 +368,7 @@ fn collect_files(
 /// deliberately unhashed, matching [`ipe_db::SourceFile`]'s own input shape
 /// (module path + text + origin; never the on-disk path).
 #[must_use]
-#[allow(clippy::too_many_arguments)] // a content-address key over every emit-affecting input
+#[allow(clippy::too_many_arguments, clippy::fn_params_excessive_bools)] // a content-address key over every independent emit-affecting input
 pub fn compute_project_key(
     sources: &BTreeMap<Vec<String>, (PathBuf, String)>,
     injected: &BTreeSet<Vec<String>>,

@@ -3116,9 +3116,7 @@ fn backup_preserves_a_private_files_mode() {
         assert!(false_marker(), "a lossy rewrite must report its backup");
         return;
     };
-    let mode = fs::metadata(&backup)
-        .map(|m| m.permissions().mode() & 0o777)
-        .unwrap_or(0);
+    let mode = fs::metadata(&backup).map_or(0, |m| m.permissions().mode() & 0o777);
     assert_eq!(mode, 0o600, "the backup must stay owner-only");
     let _ = fs::remove_dir_all(&dir);
 }

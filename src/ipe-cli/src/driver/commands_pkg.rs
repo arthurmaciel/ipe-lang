@@ -2627,14 +2627,14 @@ pub fn read_yes_no_default(default: bool) -> bool {
 /// # Errors
 /// [`CliError::Io`] on a filesystem failure.
 pub fn write_atomic(target: &Path, contents: &str) -> Result<(), CliError> {
+    // Unique per process, call, and instant: the temp file is created
+    // exclusively, so a stale leftover of an earlier run can never collide.
+    static TMP_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let dir = target.parent().filter(|p| !p.as_os_str().is_empty());
     let name = target.file_name().map_or_else(
         || String::from("source.ipe"),
         |n| n.to_string_lossy().into_owned(),
     );
-    // Unique per process, call, and instant: the temp file is created
-    // exclusively, so a stale leftover of an earlier run can never collide.
-    static TMP_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let seq = TMP_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let nanos = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -2802,7 +2802,7 @@ pub fn backup_user_file(real: &Path) -> Result<PathBuf, CliError> {
             Ok(mut copy) => {
                 let mut original = fs::File::open(real).map_err(|e| io_err(real, e))?;
                 std::io::copy(&mut original, &mut copy).map_err(|e| io_err(&dest, e))?;
-                copy.set_permissions(permissions.clone())
+                copy.set_permissions(permissions)
                     .map_err(|e| io_err(&dest, e))?;
                 return Ok(dest);
             }
