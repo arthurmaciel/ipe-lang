@@ -2,10 +2,13 @@
 //! Diagnostics collection over in-memory fixtures — no filesystem anywhere
 //! (the same structural proof as `ipe_db`'s own `lsp_seam.rs`).
 
+use std::collections::BTreeMap;
+
 use ipe_db::{Db as _, IpeDatabase, ModuleOrigin, SourceFile, SourceRoot};
+use ipe_lint::LintConfig;
 use ipe_lsp_features::PositionEncoding;
 use ipe_lsp_features::code_actions::{DbView, code_actions};
-use ipe_lsp_features::diagnostics::{ModuleDiagnostics, collect, to_lsp};
+use ipe_lsp_features::diagnostics::{ModuleDiagnostics, collect, collect_lint, to_lsp};
 use lsp_types::{CodeActionOrCommand, Range, TextEdit, Url};
 
 fn file(db: &IpeDatabase, path: &[&str], text: &str) -> SourceFile {
@@ -1024,6 +1027,177 @@ fn unused_imports_quick_fix_removes_a_multiline_as_import() {
     assert!(
         ipe_parse::parse_module(&fixed, &mut interner).is_ok(),
         "the fixed module must still parse: {fixed:?}"
+    );
+}
+
+// ── lint/unused-imports quick-fix: cursor away from the `import` keyword ───
+// Issue #2862: the diagnostic's span used to cover only the `import` keyword,
+// so a code action requested with the cursor elsewhere in the declaration
+// found no overlapping diagnostic. `Import::full_span` widens the span to the
+// whole declaration; these tests run the REAL `collect_lint` pipeline (not
+// the synthetic `lint_diag_on_line` helper above) so they pin the actual
+// widened range rather than a hand-picked stand-in.
+
+/// The real `lint/unused-imports` diagnostic `collect_lint` produces for
+/// `src`'s `Main` module — its range is [`ipe_syntax::Import::full_span`],
+/// not just the `import` keyword.
+#[allow(clippy::expect_used)] // test helper: a missing fixture finding is the failure
+fn unused_import_diagnostic(src: &str) -> lsp_types::Diagnostic {
+    let mut user_texts = BTreeMap::new();
+    user_texts.insert(vec!["Main".to_owned()], src.to_owned());
+    let per_module = collect_lint(&user_texts, &LintConfig::default(), PositionEncoding::Utf16);
+    let (_, diags) = per_module
+        .into_iter()
+        .find(|(module, _)| module == &vec!["Main".to_owned()])
+        .expect("Main module must appear in the lint report");
+    diags
+        .into_iter()
+        .find(|d| {
+            d.code
+                == Some(lsp_types::NumberOrString::String(
+                    "lint/unused-imports".to_owned(),
+                ))
+        })
+        .expect("fixture must trigger lint/unused-imports")
+}
+
+/// `import Foo as Bar exposing (bar)` on line 2 (0-based): unused, since
+/// neither `Bar` nor `bar` appears in `main`'s body.
+const UNUSED_IMPORT_WIDE: &str =
+    "module Main exposing (main)\n\nimport Foo as Bar exposing (bar)\n\nmain : Int\nmain = 1\n";
+
+/// A `(line, start..end)` character range, built the same way the LSP wire
+/// protocol addresses a cursor selection.
+fn point_range(line: u32, start: u32, end: u32) -> Range {
+    Range {
+        start: lsp_types::Position {
+            line,
+            character: start,
+        },
+        end: lsp_types::Position {
+            line,
+            character: end,
+        },
+    }
+}
+
+/// Asserts `actions` contains the "Remove unused import" quick fix.
+#[track_caller]
+fn assert_offers_remove_action(actions: &[CodeActionOrCommand]) {
+    assert!(
+        actions.iter().any(|a| matches!(
+            a,
+            CodeActionOrCommand::CodeAction(ca) if ca.title == "Remove unused import"
+        )),
+        "must offer the remove action: {actions:?}"
+    );
+}
+
+/// Cursor on the module name (`Foo`, cols 7..10) offers the remove action —
+/// nowhere near the `import` keyword, but inside the widened span.
+#[test]
+fn unused_imports_quick_fix_offered_with_cursor_on_module_name() {
+    let src = UNUSED_IMPORT_WIDE;
+    let db = IpeDatabase::new();
+    let entry = file(&db, &["Main"], src);
+    let root = root_of(&db, &[(&["Main"], entry)]);
+    let diag = unused_import_diagnostic(src);
+    let uri = Url::from_file_path("/fake/Main.ipe").expect("uri");
+    let actions = code_actions(
+        DbView {
+            db: &db,
+            root,
+            entry,
+        },
+        &["Main".to_owned()],
+        &uri,
+        point_range(2, 7, 10),
+        std::slice::from_ref(&diag),
+        src,
+        PositionEncoding::Utf16,
+    );
+    assert_offers_remove_action(&actions);
+}
+
+/// Cursor within the `exposing (…)` list (`bar`, cols 28..31) offers the
+/// remove action.
+#[test]
+fn unused_imports_quick_fix_offered_with_cursor_on_exposing_list() {
+    let src = UNUSED_IMPORT_WIDE;
+    let db = IpeDatabase::new();
+    let entry = file(&db, &["Main"], src);
+    let root = root_of(&db, &[(&["Main"], entry)]);
+    let diag = unused_import_diagnostic(src);
+    let uri = Url::from_file_path("/fake/Main.ipe").expect("uri");
+    let actions = code_actions(
+        DbView {
+            db: &db,
+            root,
+            entry,
+        },
+        &["Main".to_owned()],
+        &uri,
+        point_range(2, 28, 31),
+        std::slice::from_ref(&diag),
+        src,
+        PositionEncoding::Utf16,
+    );
+    assert_offers_remove_action(&actions);
+}
+
+/// Cursor on the `as Alias` identifier (`Bar`, cols 14..17) offers the remove
+/// action.
+#[test]
+fn unused_imports_quick_fix_offered_with_cursor_on_alias() {
+    let src = UNUSED_IMPORT_WIDE;
+    let db = IpeDatabase::new();
+    let entry = file(&db, &["Main"], src);
+    let root = root_of(&db, &[(&["Main"], entry)]);
+    let diag = unused_import_diagnostic(src);
+    let uri = Url::from_file_path("/fake/Main.ipe").expect("uri");
+    let actions = code_actions(
+        DbView {
+            db: &db,
+            root,
+            entry,
+        },
+        &["Main".to_owned()],
+        &uri,
+        point_range(2, 14, 17),
+        std::slice::from_ref(&diag),
+        src,
+        PositionEncoding::Utf16,
+    );
+    assert_offers_remove_action(&actions);
+}
+
+/// The refusal: a cursor on the line right after the import declaration — a
+/// genuinely unrelated line, outside even the widened span — offers no action.
+#[test]
+fn unused_imports_quick_fix_refuses_the_following_unrelated_line() {
+    let src = UNUSED_IMPORT_WIDE;
+    let db = IpeDatabase::new();
+    let entry = file(&db, &["Main"], src);
+    let root = root_of(&db, &[(&["Main"], entry)]);
+    let diag = unused_import_diagnostic(src);
+    let uri = Url::from_file_path("/fake/Main.ipe").expect("uri");
+    // Line 4 (0-based) is `main : Int` — right after the import declaration.
+    let actions = code_actions(
+        DbView {
+            db: &db,
+            root,
+            entry,
+        },
+        &["Main".to_owned()],
+        &uri,
+        point_range(4, 0, 4),
+        std::slice::from_ref(&diag),
+        src,
+        PositionEncoding::Utf16,
+    );
+    assert!(
+        actions.is_empty(),
+        "the unrelated following line must yield no remove action: {actions:?}"
     );
 }
 

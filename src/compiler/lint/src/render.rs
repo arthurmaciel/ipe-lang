@@ -48,7 +48,21 @@ pub fn render_finding_lines(
     source: &str,
     severity: Severity,
 ) -> Vec<(LineRole, String)> {
-    let loc = locate(source, finding.span.lo);
+    let start_loc = locate(source, finding.span.lo);
+    // The last byte the span actually covers (spans are half-open); a
+    // zero-width span anchors its end line to the start line.
+    let end_anchor = if finding.span.hi > finding.span.lo {
+        finding.span.hi - 1
+    } else {
+        finding.span.lo
+    };
+    let end_loc = locate(source, end_anchor);
+    // Every row's `│` gutter aligns on the widest line number the span
+    // touches, so a single-digit start line next to a double-digit end line
+    // still lines up.
+    let pad_width = end_loc.line.to_string().len();
+    let pad = " ".repeat(pad_width);
+
     let mut lines = Vec::with_capacity(finding.help.len().saturating_add(8));
 
     let title = format!("{} lint/{}", severity.word().to_uppercase(), finding.rule);
@@ -57,28 +71,52 @@ pub fn render_finding_lines(
     lines.push((LineRole::Message, finding.message.clone()));
     lines.push((LineRole::Blank, String::new()));
 
-    let line_text = source
-        .get(loc.line_start..loc.line_end)
-        .unwrap_or("")
-        .replace('\t', "    ");
-    let line_no = loc.line.to_string();
-    let pad = " ".repeat(line_no.len());
-    let caret_indent = caret_indent(source, loc.line_start, finding.span.lo);
-    let caret_width = caret_width(source, finding.span.lo, finding.span.hi);
     lines.push((
         LineRole::Snippet,
-        format!("{pad} ┌─ {file}:{}:{}", loc.line, loc.col),
+        format!("{pad} ┌─ {file}:{}:{}", start_loc.line, start_loc.col),
     ));
     lines.push((LineRole::Snippet, format!("{pad} │")));
-    lines.push((LineRole::Snippet, format!("{line_no} │ {line_text}")));
-    lines.push((
-        LineRole::Snippet,
-        format!(
-            "{pad} │ {}{}",
-            " ".repeat(caret_indent),
-            "^".repeat(caret_width.max(1))
-        ),
-    ));
+
+    // One source line + one caret row per line the span covers. `cursor`
+    // strictly increases each pass (past the current line's end), so the
+    // loop is bounded by `source`'s own length.
+    let mut cursor = finding.span.lo;
+    loop {
+        let loc = locate(source, cursor);
+        let line_text = source
+            .get(loc.line_start..loc.line_end)
+            .unwrap_or("")
+            .replace('\t', "    ");
+        let line_no = loc.line.to_string();
+        let line_no_pad = " ".repeat(pad_width.saturating_sub(line_no.len()));
+        let seg_lo = finding
+            .span
+            .lo
+            .max(u32::try_from(loc.line_start).unwrap_or(u32::MAX));
+        let seg_hi = finding
+            .span
+            .hi
+            .min(u32::try_from(loc.line_end).unwrap_or(u32::MAX));
+        let indent = caret_indent(source, loc.line_start, seg_lo);
+        let width = caret_width(source, seg_lo, seg_hi);
+        lines.push((
+            LineRole::Snippet,
+            format!("{line_no_pad}{line_no} │ {line_text}"),
+        ));
+        lines.push((
+            LineRole::Snippet,
+            format!("{pad} │ {}{}", " ".repeat(indent), "^".repeat(width.max(1))),
+        ));
+
+        if loc.line >= end_loc.line {
+            break;
+        }
+        let next = loc.line_end.saturating_add(1);
+        if next > source.len() {
+            break;
+        }
+        cursor = u32::try_from(next).unwrap_or(u32::MAX);
+    }
 
     for help in &finding.help {
         lines.push((LineRole::Help, format!("{pad} = {help}")));

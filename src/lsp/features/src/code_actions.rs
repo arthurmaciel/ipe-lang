@@ -699,84 +699,11 @@ fn remove_unused_import_action(
 
 /// The byte offset just past the end of an `import` declaration's last clause.
 ///
-/// The parser records spans for the `import` keyword and the dotted module
-/// name, but the `as Alias` identifier and the `exposing (…)` clause carry no
-/// span that reaches their end — and each may sit on a continuation line below
-/// the keyword. This walks the source from just past the module name, following
-/// the import grammar tail (`[as Ident] [exposing ( … )]`), so the returned
-/// offset covers the whole declaration however it is wrapped across lines. The
-/// `exposing` list is consumed through its balanced closing paren, so even a
-/// list broken across several lines is covered in full.
-///
-/// The walk is bounded by the remaining source length and only ever advances,
-/// so it terminates. It never indexes: every read goes through `get`, so a
-/// malformed tail yields the best offset reached rather than a panic.
+/// Delegates to [`ipe_syntax::Import::full_span`] — the single producer of this
+/// walk, shared with the `unused-imports` lint finding's own span so both land
+/// on the same declaration boundary.
 fn import_clause_end(text: &str, import: &ipe_syntax::Import) -> usize {
-    // Start just past the module name — the grammar tail (`as`, `exposing`)
-    // begins there. The keyword span is a floor for a name-less malformed tail.
-    let mut pos = import.import_kw.hi.max(import.name.span.hi) as usize;
-
-    // Advance `pos` past `count` UTF-8 characters that satisfy `pred`, stopping
-    // at the first that does not (or at end of input). Char-boundary safe.
-    let skip_while = |src: &str, from: usize, pred: &dyn Fn(char) -> bool| -> usize {
-        let rest = src.get(from..).unwrap_or("");
-        let mut consumed = 0usize;
-        for ch in rest.chars() {
-            if pred(ch) {
-                consumed += ch.len_utf8();
-            } else {
-                break;
-            }
-        }
-        from + consumed
-    };
-    // True when the source from `at` begins with `kw` followed by a
-    // non-identifier boundary (so `as` does not match inside `assets`).
-    let starts_kw = |src: &str, at: usize, kw: &str| -> bool {
-        let rest = src.get(at..).unwrap_or("");
-        rest.strip_prefix(kw).is_some_and(|after| {
-            after
-                .chars()
-                .next()
-                .is_none_or(|c| !c.is_alphanumeric() && c != '_')
-        })
-    };
-    let is_ident = |c: char| c.is_alphanumeric() || c == '_';
-
-    // Optional `as Alias` (a single, dot-free identifier).
-    let after_ws = skip_while(text, pos, &char::is_whitespace);
-    if starts_kw(text, after_ws, "as") {
-        let alias_start = skip_while(text, after_ws + "as".len(), &char::is_whitespace);
-        let alias_end = skip_while(text, alias_start, &is_ident);
-        pos = pos.max(alias_end);
-    }
-
-    // Optional `exposing ( … )` — consume through the balanced closing paren so
-    // a wrapped list (`exposing (\n  a,\n  b\n)`) is covered in full.
-    let after_ws = skip_while(text, pos, &char::is_whitespace);
-    if starts_kw(text, after_ws, "exposing") {
-        let after_kw = skip_while(text, after_ws + "exposing".len(), &char::is_whitespace);
-        if text.get(after_kw..).unwrap_or("").starts_with('(') {
-            let mut depth = 0i32;
-            let mut cursor = after_kw;
-            for ch in text.get(after_kw..).unwrap_or("").chars() {
-                cursor += ch.len_utf8();
-                match ch {
-                    '(' => depth += 1,
-                    ')' => {
-                        depth -= 1;
-                        if depth == 0 {
-                            pos = pos.max(cursor);
-                            break;
-                        }
-                    }
-                    _ => {}
-                }
-            }
-        }
-    }
-
-    pos.min(text.len())
+    import.full_span(text).hi as usize
 }
 
 /// Extract the expected module name from an IPE-N0023 `plain_message`.
