@@ -180,18 +180,16 @@ pub fn resolve_escape(project_root: &Path, name: &str, dep: &IpeDep) -> Result<(
                 project_root.join(path)
             };
             if !resolved.is_dir() {
-                return Err(CliError::Resolve(format!(
-                    "package `{name}`: path dependency `{}` does not exist",
-                    resolved.display()
-                )));
+                return Err(CliError::Resolve(
+                    crate::text::msg::resolve_path_dep_missing(&name, &resolved.display()),
+                ));
             }
             (path.display().to_string(), LockedRev::Local, resolved)
         }
         IpeDep::Index(_) => {
-            return Err(CliError::Resolve(format!(
-                "package `{name}`: an index dependency is resolved through `resolve_and_add`, \
-                 not `resolve_escape`"
-            )));
+            return Err(CliError::Resolve(
+                crate::text::msg::resolve_index_dep_escape(&name),
+            ));
         }
     };
 
@@ -530,13 +528,13 @@ fn run_git(name: &str, args: &[&str], dest: &Path, cwd: Option<&Path>) -> Result
         .env("GIT_TERMINAL_PROMPT", "0");
     let output = command
         .output()
-        .map_err(|e| CliError::Resolve(format!("package `{name}`: could not run `git`: {e}")))?;
+        .map_err(|e| CliError::Resolve(crate::text::msg::resolve_git_unavailable(&name, &e)))?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(CliError::Resolve(format!(
-            "package `{name}`: `git {}` failed: {}",
-            args.join(" "),
-            stderr.trim()
+        return Err(CliError::Resolve(crate::text::msg::resolve_git_failed(
+            &name,
+            &crate::style::TerminalSafe::sanitize(&args.join(" ")),
+            &crate::style::TerminalSafe::sanitize(stderr.trim()),
         )));
     }
     Ok(())

@@ -60,7 +60,7 @@ fn refusal(derived: ControlModel, entry_module: &str) -> CliError {
     // capitalised constructor the manifest `acceptsControl` list expects.
     let model = derived.word();
     let ctor = control_model_ctor(derived);
-    CliError::UsageOwned(crate::text::control_model_consent_refusal(
+    CliError::Usage(crate::text::msg::control_model_consent_refusal(
         &entry_module,
         &model,
         &ctor,

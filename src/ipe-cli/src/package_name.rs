@@ -48,12 +48,12 @@ impl PackageName {
     /// refused rather than joined.
     pub fn parse(raw: &str) -> Result<Self, CliError> {
         if raw.is_empty() {
-            return Err(Self::reject(raw, "a package name must not be empty"));
+            return Err(Self::reject(&crate::text::msg::package_name_empty(), raw));
         }
         if raw.len() > MAX_LEN {
             return Err(Self::reject(
+                &crate::text::msg::package_name_too_long(&MAX_LEN),
                 raw,
-                &format!("a package name must be at most {MAX_LEN} bytes"),
             ));
         }
         let mut chars = raw.chars();
@@ -61,8 +61,8 @@ impl PackageName {
             Some(first) if first.is_ascii_lowercase() || first.is_ascii_digit() => {}
             _ => {
                 return Err(Self::reject(
+                    &crate::text::msg::package_name_bad_start(),
                     raw,
-                    "a package name must start with an ASCII lowercase letter or digit",
                 ));
             }
         }
@@ -71,8 +71,8 @@ impl PackageName {
             if c == '-' {
                 if prev_dash {
                     return Err(Self::reject(
+                        &crate::text::msg::package_name_doubled_dash(),
                         raw,
-                        "a package name must not contain a doubled `-`",
                     ));
                 }
                 prev_dash = true;
@@ -81,13 +81,16 @@ impl PackageName {
             prev_dash = false;
             if !c.is_ascii_lowercase() && !c.is_ascii_digit() {
                 return Err(Self::reject(
+                    &crate::text::msg::package_name_bad_char(),
                     raw,
-                    "a package name may contain only ASCII lowercase letters, digits, and `-`",
                 ));
             }
         }
         if raw.ends_with('-') {
-            return Err(Self::reject(raw, "a package name must not end with `-`"));
+            return Err(Self::reject(
+                &crate::text::msg::package_name_trailing_dash(),
+                raw,
+            ));
         }
         Ok(Self(raw.to_owned()))
     }
@@ -99,11 +102,10 @@ impl PackageName {
     }
 
     /// Build the typed rejection for a name that is not a safe path component.
-    fn reject(raw: &str, why: &str) -> CliError {
-        CliError::Resolve(format!(
-            "`{raw}` is not a valid package name: {why} — a name is joined into a \
-             filesystem path, so it must be a single portable path component \
-             (matching `[a-z0-9]([a-z0-9]|-[a-z0-9])*`)"
+    fn reject(why: &crate::text::Message, raw: &str) -> CliError {
+        CliError::Resolve(crate::text::msg::package_name_invalid(
+            &crate::style::TerminalSafe::sanitize(raw),
+            why,
         ))
     }
 }

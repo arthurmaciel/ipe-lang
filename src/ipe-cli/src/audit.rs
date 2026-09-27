@@ -284,7 +284,7 @@ fn tier2_probe_fixture() -> Result<PathBuf, CliError> {
 /// capabilities, version, and dependency graph every check reads.
 ///
 /// # Errors
-/// [`CliError::Usage`] / [`CliError::UsageOwned`] on argument misuse or a
+/// [`CliError::Usage`] / [`CliError::Usage`] on argument misuse or a
 /// package with no manifest; [`CliError::Pipeline`] / [`CliError::Io`] when the
 /// package cannot be built or read; [`CliError::PackageAudit`] when a Tier-1
 /// check rejects the package (the gate's hard reject).
@@ -553,7 +553,7 @@ type AuditArgs = (
 /// - Neither: the check runs against the default registry index checkout (fail-closed default).
 ///
 /// # Errors
-/// [`CliError::UsageOwned`] on an unknown flag, a missing flag value, a second
+/// [`CliError::Usage`] on an unknown flag, a missing flag value, a second
 /// positional, `--plain --json` together, or `--advisory-db` and `--no-advisory-db` together.
 fn parse_audit_args(rest: &[String]) -> Result<AuditArgs, CliError> {
     let mut path: Option<PathBuf> = None;
@@ -567,10 +567,10 @@ fn parse_audit_args(rest: &[String]) -> Result<AuditArgs, CliError> {
         match arg.as_str() {
             "--index" => {
                 let value = it.next().ok_or_else(|| {
-                    CliError::UsageOwned(text::flag_needs_value(&"package audit", &"--index"))
+                    CliError::Usage(text::msg::flag_needs_value(&"package audit", &"--index"))
                 })?;
                 if index.is_some() {
-                    return Err(CliError::UsageOwned(text::flag_repeated(
+                    return Err(CliError::Usage(text::msg::flag_repeated(
                         &"package audit",
                         &"--index",
                     )));
@@ -579,43 +579,49 @@ fn parse_audit_args(rest: &[String]) -> Result<AuditArgs, CliError> {
             }
             "--advisory-db" => {
                 let value = it.next().ok_or_else(|| {
-                    CliError::UsageOwned(text::flag_needs_value(&"package audit", &"--advisory-db"))
+                    CliError::Usage(text::msg::flag_needs_value(
+                        &"package audit",
+                        &"--advisory-db",
+                    ))
                 })?;
                 if advisory_db.is_some() {
-                    return Err(CliError::UsageOwned(text::flag_repeated(
+                    return Err(CliError::Usage(text::msg::flag_repeated(
                         &"package audit",
                         &"--advisory-db",
                     )));
                 }
                 if no_advisory_db {
-                    return Err(CliError::Usage(text::audit_advisory_db_exclusive()));
+                    return Err(CliError::Usage(text::msg::audit_advisory_db_exclusive()));
                 }
                 advisory_db = Some(PathBuf::from(value));
             }
             "--no-advisory-db" => {
                 if no_advisory_db {
-                    return Err(CliError::UsageOwned(text::flag_repeated(
+                    return Err(CliError::Usage(text::msg::flag_repeated(
                         &"package audit",
                         &"--no-advisory-db",
                     )));
                 }
                 if advisory_db.is_some() {
-                    return Err(CliError::Usage(text::audit_advisory_db_exclusive()));
+                    return Err(CliError::Usage(text::msg::audit_advisory_db_exclusive()));
                 }
                 no_advisory_db = true;
             }
             "--publisher" => {
                 let value = it.next().ok_or_else(|| {
-                    CliError::UsageOwned(text::flag_needs_value(&"package audit", &"--publisher"))
+                    CliError::Usage(text::msg::flag_needs_value(
+                        &"package audit",
+                        &"--publisher",
+                    ))
                 })?;
                 if publisher.is_some() {
-                    return Err(CliError::UsageOwned(text::flag_repeated(
+                    return Err(CliError::Usage(text::msg::flag_repeated(
                         &"package audit",
                         &"--publisher",
                     )));
                 }
                 publisher = Some(SelfDeclaredPublisher::parse(value).map_err(|refusal| {
-                    CliError::UsageOwned(text::audit_publisher_not_login(
+                    CliError::Usage(text::msg::audit_publisher_not_login(
                         &format!("{value:?}"),
                         &refusal,
                     ))
@@ -628,7 +634,7 @@ fn parse_audit_args(rest: &[String]) -> Result<AuditArgs, CliError> {
             }
             positional => {
                 if path.is_some() {
-                    return Err(CliError::Usage(text::audit_single_path()));
+                    return Err(CliError::Usage(text::msg::audit_single_path()));
                 }
                 path = Some(PathBuf::from(positional));
             }
@@ -654,9 +660,9 @@ fn set_format(slot: &mut Option<OutputFormat>, requested: OutputFormat) -> Resul
             Ok(())
         }
         Some(existing) if *existing == requested => {
-            Err(CliError::Usage(text::audit_format_repeated()))
+            Err(CliError::Usage(text::msg::audit_format_repeated()))
         }
-        Some(_) => Err(CliError::UsageOwned(text::plain_json_exclusive(
+        Some(_) => Err(CliError::Usage(text::msg::plain_json_exclusive(
             &"package audit",
         ))),
     }
@@ -680,7 +686,7 @@ fn set_format(slot: &mut Option<OutputFormat>, requested: OutputFormat) -> Resul
 /// build.
 ///
 /// # Errors
-/// [`CliError::UsageOwned`] when `path` names no `package.ipe`;
+/// [`CliError::Usage`] when `path` names no `package.ipe`;
 /// [`CliError::PackageAudit`] with [`Check::NativeBindingRegen`] when the
 /// manifest declares a `wrapper` field; the build errors
 /// ([`CliError::Pipeline`] / [`CliError::Io`] / [`CliError::StaticRefusal`])
@@ -834,7 +840,7 @@ fn ffi_cache_path_or_reject(project_root: &Path) -> Result<PathBuf, CliError> {
 /// Resolve `path` (a directory or a `package.ipe`) to its manifest file.
 ///
 /// # Errors
-/// [`CliError::UsageOwned`] when the directory holds no `package.ipe`, or `path`
+/// [`CliError::Usage`] when the directory holds no `package.ipe`, or `path`
 /// is neither a directory nor a `package.ipe`.
 fn locate_manifest(path: &Path) -> Result<PathBuf, CliError> {
     if path.is_dir() {
@@ -842,9 +848,9 @@ fn locate_manifest(path: &Path) -> Result<PathBuf, CliError> {
             return Ok(manifest);
         }
         if crate::project::has_only_legacy_toml(path) {
-            return Err(CliError::Usage(text::legacy_toml_hint()));
+            return Err(CliError::Usage(text::msg::legacy_toml_hint()));
         }
-        return Err(CliError::UsageOwned(text::audit_no_manifest(
+        return Err(CliError::Usage(text::msg::audit_no_manifest(
             &path.display(),
         )));
     }
@@ -853,7 +859,7 @@ fn locate_manifest(path: &Path) -> Result<PathBuf, CliError> {
     {
         return Ok(path.to_path_buf());
     }
-    Err(CliError::UsageOwned(text::audit_not_a_package(
+    Err(CliError::Usage(text::msg::audit_not_a_package(
         &path.display(),
     )))
 }
@@ -1902,7 +1908,7 @@ mod tests {
             assert!(
                 matches!(
                     parse_audit_args(&args(&["--publisher", hostile])),
-                    Err(CliError::UsageOwned(_))
+                    Err(CliError::Usage(_))
                 ),
                 "--publisher {hostile:?} must be refused"
             );

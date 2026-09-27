@@ -81,7 +81,7 @@ const SCHEMA_MODULE: &str = "Ipe.Package";
 ///
 /// # Errors
 /// [`CliError::Io`] if the file cannot be read; [`CliError::Pipeline`] if the
-/// source does not parse (rendered with a caret snippet); [`CliError::UsageOwned`]
+/// source does not parse (rendered with a caret snippet); [`CliError::Usage`]
 /// naming the offending `package.ipe:LINE:COL` for any non-literal, non-blessed
 /// shape or a failed field validation; [`CliError::Usage`] if the source root
 /// directory does not exist.
@@ -173,7 +173,7 @@ impl ManifestFields {
     fn into_manifest(self, root: &Path) -> Result<ProjectManifest, CliError> {
         let name = self
             .name
-            .ok_or(CliError::Usage(text::package_manifest_name_required()))?;
+            .ok_or(CliError::Usage(text::msg::package_manifest_name_required()))?;
         let src_rel_raw = self.src_rel.as_deref().unwrap_or("src");
         let src_root_contained = crate::contained_path::ContainedRelPath::parse(root, src_rel_raw)
             .map_err(|reason| CliError::PathEscape {
@@ -182,7 +182,9 @@ impl ManifestFields {
             })?;
         let src_root = src_root_contained.resolved().to_path_buf();
         if !src_root.is_dir() {
-            return Err(CliError::Usage(text::package_manifest_src_root_missing()));
+            return Err(CliError::Usage(
+                text::msg::package_manifest_src_root_missing(),
+            ));
         }
         // The icon is an optional project-relative path resolved (and contained)
         // at parse time, so a packager consumes a validated path and can never be
@@ -235,13 +237,13 @@ impl Reader<'_> {
         self.interner.resolve(sym).unwrap_or("")
     }
 
-    /// Render a `package.ipe:LINE:COL: <reason>` [`CliError::UsageOwned`] for the
+    /// Render a `package.ipe:LINE:COL: <reason>` [`CliError::Usage`] for the
     /// offending `span`. Line/column are 1-based, computed from the byte offset
     /// against the source; an out-of-range offset degrades to `1:1` rather than
     /// panicking (totality).
     fn reject(&self, span: Span, reason: &str) -> CliError {
         let (line, col) = line_col(self.src, span.lo);
-        CliError::UsageOwned(text::located_refusal(
+        CliError::Usage(text::msg::located_refusal(
             &self.manifest_path.display(),
             &line,
             &col,
@@ -302,8 +304,9 @@ impl Reader<'_> {
             }
         }
 
-        let package =
-            package_value.ok_or(CliError::Usage(text::package_manifest_no_package_binding()))?;
+        let package = package_value.ok_or(CliError::Usage(
+            text::msg::package_manifest_no_package_binding(),
+        ))?;
         if !package.value.patterns.is_empty() {
             return Err(self.reject(
                 package.value.name.span,
@@ -1717,7 +1720,7 @@ const fn allocator_ctor_name(alloc: crate::build_plan::AllocatorChoice) -> &'sta
 ///
 /// # Errors
 /// [`CliError::Io`] if the manifest cannot be read or written;
-/// [`CliError::Pipeline`] if the manifest does not parse; [`CliError::UsageOwned`]
+/// [`CliError::Pipeline`] if the manifest does not parse; [`CliError::Usage`]
 /// if the manifest shape is unexpected (no `package` record, a non-list
 /// `dependencies`) or the name collides with an author-written escape entry.
 pub fn upsert_index_dependency(
@@ -1816,7 +1819,7 @@ fn edit_dependencies_list(
     };
 
     let Expr_::List(items) = &deps_expr.value else {
-        return Err(usage(text::package_manifest_deps_not_list()));
+        return Err(usage(text::msg::package_manifest_deps_not_list()));
     };
 
     let existing = locate_dep_entry(items, &interner, name);
@@ -1825,7 +1828,7 @@ fn edit_dependencies_list(
         // `dep "…" "…"`; an escape is author-owned and never overwritten.
         (Some(entry), Some(found)) => {
             if found.is_escape() {
-                return Err(usage_owned(text::pkg_add_escape_dependency(&name)));
+                return Err(usage(text::msg::pkg_add_escape_dependency(&name)));
             }
             Ok(splice(text, found.entry, entry))
         }
@@ -1850,10 +1853,10 @@ fn locate_package_record<'m>(
         .values
         .iter()
         .find(|v| interner.resolve(v.value.name.value) == Some("package"))
-        .ok_or_else(|| usage(text::package_manifest_no_package_binding_edit()))?;
+        .ok_or_else(|| usage(text::msg::package_manifest_no_package_binding_edit()))?;
     match &package.value.body.value {
         Expr_::Record(fields) => Ok(fields.as_slice()),
-        _ => Err(usage(text::package_manifest_package_not_record())),
+        _ => Err(usage(text::msg::package_manifest_package_not_record())),
     }
 }
 
@@ -2011,11 +2014,11 @@ fn insert_new_dependencies_field(
         .map_or(0, |(_, v)| v.span.hi as usize)
         .min(text.len());
     let Some(rel_close) = text.get(after_last..).and_then(|s| s.find('}')) else {
-        return Err(usage(text::package_manifest_deps_brace_not_found()));
+        return Err(usage(text::msg::package_manifest_deps_brace_not_found()));
     };
     let close_idx = after_last + rel_close;
     let (Some(before), Some(after)) = (text.get(..close_idx), text.get(close_idx..)) else {
-        return Err(usage(text::package_manifest_deps_brace_out_of_range()));
+        return Err(usage(text::msg::package_manifest_deps_brace_out_of_range()));
     };
     // Align the new field to the last field's indentation. Elm-style manifests
     // indent record fields and the closing brace to a common column; reuse the
@@ -2026,14 +2029,9 @@ fn insert_new_dependencies_field(
     Ok(format!("{opener}, {field}\n{indent}{after}"))
 }
 
-/// A fixed-message manifest-write usage refusal.
-const fn usage(message: &'static str) -> CliError {
+/// A manifest-write usage refusal.
+const fn usage(message: text::Message) -> CliError {
     CliError::Usage(message)
-}
-
-/// An owned-message manifest-write usage refusal.
-const fn usage_owned(message: String) -> CliError {
-    CliError::UsageOwned(message)
 }
 
 #[cfg(test)]
@@ -2225,14 +2223,11 @@ mod tests {
 
     // ── Rejections: totality (a clean diagnostic, never a panic) ──────────────
 
-    /// Every rejection asserts a `UsageOwned` (the reader's named-error channel)
+    /// Every rejection asserts a `Usage` (the reader's named-error channel)
     /// or a `Usage`/`Pipeline` — never a panic and never an `Ok`.
     fn assert_rejected(result: &Result<ProjectManifest, CliError>) {
         assert!(
-            matches!(
-                result,
-                Err(CliError::UsageOwned(_) | CliError::Usage(_) | CliError::Pipeline { .. })
-            ),
+            matches!(result, Err(CliError::Usage(_) | CliError::Pipeline { .. })),
             "expected a clean rejection, got {result:?}"
         );
     }
@@ -2294,7 +2289,7 @@ mod tests {
             ),
         );
         assert_rejected(&r);
-        if let Err(CliError::UsageOwned(msg)) = &r {
+        if let Err(CliError::Usage(msg)) = &r {
             assert!(
                 msg.contains("DATABASE_URL"),
                 "error names the secret: {msg}"
@@ -2931,7 +2926,7 @@ mod tests {
         let after = std::fs::read_to_string(&path).expect("read back");
         let _ = std::fs::remove_dir_all(&root);
         assert!(
-            matches!(err, CliError::Usage(_) | CliError::UsageOwned(_)),
+            matches!(err, CliError::Usage(_)),
             "the refusal is a usage error: {err:?}"
         );
         assert_eq!(

@@ -485,7 +485,7 @@ fn android_entry_name(entry: &AndroidEntry) -> String {
 /// derives, never *introduce* one.
 ///
 /// # Errors
-/// [`CliError::UsageOwned`] carrying the `IPE-P0001` refusal when any override
+/// [`CliError::Usage`] carrying the `IPE-P0001` refusal when any override
 /// permission has no backing accepted axis.
 pub fn reconcile_override(
     accepts: &BTreeSet<Capability>,
@@ -513,7 +513,7 @@ fn unbacked_permission_refusal(platform: Platform, unbacked: &[&String]) -> CliE
             crate::text::permission_consent_remedy().to_owned(),
         ))
         .collect();
-    CliError::UsageOwned(lines.join("\n"))
+    CliError::Usage(crate::text::Message::relay(&lines.join("\n")))
 }
 
 /// A structured, per-axis view of a derivation for the CLI surface — which web

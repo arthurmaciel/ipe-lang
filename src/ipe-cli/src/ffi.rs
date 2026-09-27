@@ -69,7 +69,7 @@ fn is_trusted_cache_dir(_dir: &Path) -> bool {
 ///
 /// # Errors
 ///
-/// [`CliError::UsageOwned`] when a discovered cache fails the ownership check.
+/// [`CliError::Usage`] when a discovered cache fails the ownership check.
 pub fn find_cache_root(start: &Path) -> Result<Option<PathBuf>, CliError> {
     let mut dir = if start.is_dir() {
         Some(start)
@@ -82,7 +82,7 @@ pub fn find_cache_root(start: &Path) -> Result<Option<PathBuf>, CliError> {
             if is_trusted_cache_dir(&candidate) {
                 return Ok(Some(candidate));
             }
-            return Err(CliError::UsageOwned(text::ffi_cache_untrusted(
+            return Err(CliError::Usage(text::msg::ffi_cache_untrusted(
                 &candidate.display(),
             )));
         }
@@ -106,7 +106,7 @@ pub fn load_catalog_for(blame_path: &Path) -> Result<Vec<InstalledCrate>, CliErr
         return Ok(Vec::new());
     };
     ipe_ffi::driver::load_catalog(&cache_root)
-        .map_err(|diag| CliError::UsageOwned(diag.to_string()))
+        .map_err(|diag| CliError::Usage(crate::text::Message::relay(&diag)))
 }
 
 /// Inject each installed crate's interface module into the build's source
@@ -114,7 +114,7 @@ pub fn load_catalog_for(blame_path: &Path) -> Result<Vec<InstalledCrate>, CliErr
 /// [`ipe_canon::ModuleOrigin::FfiInterface`] at input creation).
 ///
 /// # Errors
-/// [`CliError::UsageOwned`] when a project module already claims an
+/// [`CliError::Usage`] when a project module already claims an
 /// installed crate's `Rust.*` module path.
 pub fn inject_interfaces(
     sources: &mut BTreeMap<Vec<String>, (PathBuf, String)>,
@@ -125,7 +125,7 @@ pub fn inject_interfaces(
     for c in catalog {
         let mod_path: Vec<String> = c.module_name.split('.').map(str::to_owned).collect();
         if sources.contains_key(&mod_path) {
-            return Err(CliError::UsageOwned(text::ffi_module_clash(
+            return Err(CliError::Usage(text::msg::ffi_module_clash(
                 &c.module_name,
                 &c.slug,
             )));
@@ -142,7 +142,7 @@ pub fn inject_interfaces(
 /// the combined `src/ffi.rs` (one `pub mod <slug>` per crate).
 ///
 /// # Errors
-/// [`CliError::UsageOwned`] when two installed crates pin the SAME
+/// [`CliError::Usage`] when two installed crates pin the SAME
 /// dependency name to different lines — an unbuildable `Cargo.toml` refused
 /// here rather than discovered by `cargo`.
 pub fn assemble_emit(
@@ -195,7 +195,7 @@ pub fn assemble_emit(
             // the SEAL would then compile against). Fail closed — the author must
             // rename one; the two nominals are genuinely different Rust types.
             if foreign_types.contains_key(&key) {
-                return Err(CliError::UsageOwned(text::ffi_define_opaque_collision(
+                return Err(CliError::Usage(text::msg::ffi_define_opaque_collision(
                     &c.slug, &name,
                 )));
             }
@@ -203,7 +203,7 @@ pub fn assemble_emit(
         }
         for line in &c.cargo_deps {
             let Some((name, version, features)) = parse_dep_line(line) else {
-                return Err(CliError::UsageOwned(text::ffi_dependency_line_unparsable(
+                return Err(CliError::Usage(text::msg::ffi_dependency_line_unparsable(
                     &c.slug, &line,
                 )));
             };
@@ -213,7 +213,7 @@ pub fn assemble_emit(
             match dep_by_name.get_mut(&name) {
                 Some((prev_version, _)) if *prev_version != version => {
                     if direct_crate_names.contains(&name) {
-                        return Err(CliError::UsageOwned(text::ffi_dependency_pin_conflict(
+                        return Err(CliError::Usage(text::msg::ffi_dependency_pin_conflict(
                             &name,
                             &prev_version,
                             &version,
@@ -261,7 +261,7 @@ pub fn assemble_emit(
 /// seam whose two sides disagree.
 ///
 /// # Errors
-/// [`CliError::UsageOwned`] naming the crate, binding, and missing shape.
+/// [`CliError::Usage`] naming the crate, binding, and missing shape.
 fn assemble_wrapper_glue(
     c: &InstalledCrate,
     wrapper_glue: &mut BTreeMap<String, ipe_backend_rust::FfiWrapperGlue>,
@@ -272,7 +272,7 @@ fn assemble_wrapper_glue(
         }
         let glue_ty = |name: &str| -> Result<ipe_backend_rust::FfiGlueType, CliError> {
             let t = c.transparent_types.get(name).ok_or_else(|| {
-                CliError::UsageOwned(text::ffi_transparent_without_shape(
+                CliError::Usage(text::msg::ffi_transparent_without_shape(
                     &c.slug,
                     &name,
                     &b.ref_name,
@@ -468,7 +468,7 @@ pub fn prepare_ffi(
     // crate may claim either — refused at load, before anything is injected.
     for c in &catalog {
         if c.module_name == ipe_canon::asserted::ASSERTED_MODULE {
-            return Err(CliError::UsageOwned(text::ffi_reserved_module_claimed(
+            return Err(CliError::Usage(text::msg::ffi_reserved_module_claimed(
                 &c.slug,
                 &ipe_canon::asserted::ASSERTED_MODULE,
             )));
@@ -478,7 +478,7 @@ pub fn prepare_ffi(
             .iter()
             .find(|w| w.starts_with(ipe_canon::asserted::ASSERTED_WRAPPER_PREFIX))
         {
-            return Err(CliError::UsageOwned(text::ffi_reserved_wrapper_prefix(
+            return Err(CliError::Usage(text::msg::ffi_reserved_wrapper_prefix(
                 &c.slug,
                 &ident,
                 &ipe_canon::asserted::ASSERTED_WRAPPER_PREFIX,
@@ -501,7 +501,7 @@ pub fn prepare_ffi(
             .map(str::to_owned)
             .collect();
         if sources.contains_key(&mod_path) {
-            return Err(CliError::UsageOwned(text::ffi_reserved_module_exists(
+            return Err(CliError::Usage(text::msg::ffi_reserved_module_exists(
                 &ipe_canon::asserted::ASSERTED_MODULE,
             )));
         }
@@ -511,9 +511,7 @@ pub fn prepare_ffi(
         // `validate` proved every target crate is installed, so the catalog —
         // and therefore the assembled emit — is non-empty here.
         let Some(e) = emit.as_mut() else {
-            return Err(CliError::UsageOwned(
-                text::ffi_asserted_empty_catalog().to_owned(),
-            ));
+            return Err(CliError::Usage(text::msg::ffi_asserted_empty_catalog()));
         };
         if !asserted.is_empty() {
             e.bindings_source.push('\n');
@@ -546,7 +544,7 @@ pub fn prepare_ffi(
 ///
 /// # Errors
 /// [`CliError::Pipeline`] (IPE-N0038, span-attributed) for a malformed site;
-/// [`CliError::UsageOwned`] (IPE-F4414) for a refused assertion.
+/// [`CliError::Usage`] (IPE-F4414) for a refused assertion.
 /// The two native-binding surfaces one scan pass produces: forwarder calls
 /// (`Rust.fn` / `Rust.Ffi.call`) and bare-scalar constant reads (`Rust.const`).
 /// A single pass over the modules yields both — splitting the scan would
@@ -589,19 +587,19 @@ fn scan_asserted(
             if matches!(u.callee, ipe_canon::asserted::AssertedCallee::RustConst) {
                 let spec =
                     ipe_ffi::asserted::validate_const(u.path, &u.annotation, &interner, catalog)
-                        .map_err(|d| CliError::UsageOwned(d.to_string()))?;
+                        .map_err(|d| CliError::Usage(crate::text::Message::relay(&d)))?;
                 const_specs.push(spec);
             } else {
                 let spec = ipe_ffi::asserted::validate(u.path, &u.annotation, &interner, catalog)
-                    .map_err(|d| CliError::UsageOwned(d.to_string()))?;
+                    .map_err(|d| CliError::Usage(crate::text::Message::relay(&d)))?;
                 specs.push(spec);
             }
         }
     }
-    let asserted =
-        ipe_ffi::asserted::dedupe(specs).map_err(|d| CliError::UsageOwned(d.to_string()))?;
+    let asserted = ipe_ffi::asserted::dedupe(specs)
+        .map_err(|d| CliError::Usage(crate::text::Message::relay(&d)))?;
     let consts = ipe_ffi::asserted::dedupe_consts(const_specs)
-        .map_err(|d| CliError::UsageOwned(d.to_string()))?;
+        .map_err(|d| CliError::Usage(crate::text::Message::relay(&d)))?;
     Ok(ScannedFfi { asserted, consts })
 }
 
@@ -624,7 +622,7 @@ fn inspector_binary() -> Result<PathBuf, CliError> {
             }
         }
     }
-    Err(CliError::Usage(text::ffi_inspector_not_found()))
+    Err(CliError::Usage(text::msg::ffi_inspector_not_found()))
 }
 
 /// A per-invocation scratch directory under the sanctioned write-boundary
@@ -636,11 +634,11 @@ fn inspector_binary() -> Result<PathBuf, CliError> {
 fn make_scratch_dir(krate: &str) -> Result<PathBuf, CliError> {
     let home = std::env::var_os("HOME")
         .map(PathBuf::from)
-        .ok_or(CliError::Usage(text::ffi_add_home_unset()))?;
+        .ok_or(CliError::Usage(text::msg::ffi_add_home_unset()))?;
     let base = home.join(".cache/ipe/ffi-scratch");
     crate::scratch::ScratchDir::new_under(&base, &format!("add-{krate}"))
         .map(crate::scratch::ScratchDir::into_path)
-        .map_err(|e| CliError::UsageOwned(text::ffi_add_scratch_dir(&e)))
+        .map_err(|e| CliError::Usage(text::msg::ffi_add_scratch_dir(&e)))
 }
 
 /// Read-only jail binds for the toolchain, deliberately NARROW: never the
@@ -719,7 +717,7 @@ fn run_phase(
     rustup_home: Option<PathBuf>,
     payload: &[OsString],
 ) -> Result<ipe_sandbox::JailedOutput, CliError> {
-    let io_err = |detail: String| CliError::UsageOwned(text::command_refusal(&"add", &detail));
+    let io_err = |detail: String| CliError::Usage(text::msg::command_refusal(&"add", &detail));
     let spec = ipe_sandbox::JailSpec {
         network,
         scoped_tmp: scoped_tmp.to_path_buf(),
@@ -799,7 +797,7 @@ fn write_inspector_manifest(
     let path = scoped_tmp.join("ipe-install-manifest.json");
     let body = serde_json::Value::Array(arr).to_string();
     std::fs::write(&path, body)
-        .map_err(|e| CliError::UsageOwned(text::ffi_install_manifest_write_failed(&e)))?;
+        .map_err(|e| CliError::Usage(text::msg::ffi_install_manifest_write_failed(&e)))?;
     Ok(path)
 }
 
@@ -907,11 +905,11 @@ fn run_inspector_job(job: &InspectorJob, allow_build_scripts: bool) -> Result<St
     let caps = ipe_sandbox::probe();
     let mechanism = ipe_sandbox::select_mechanism(&caps);
     let unsandboxed_ok = ipe_sandbox::unsandboxed_override_set();
-    let io_err = |detail: String| CliError::UsageOwned(text::command_refusal(&"add", &detail));
+    let io_err = |detail: String| CliError::Usage(text::msg::command_refusal(&"add", &detail));
 
     match choose_sandbox_route(&mechanism, ipe_sandbox::missing_caps(&caps), unsandboxed_ok) {
         SandboxRoute::RefuseNoBwrap => {
-            return Err(CliError::Usage(text::ffi_no_bubblewrap()));
+            return Err(CliError::Usage(text::msg::ffi_no_bubblewrap()));
         }
         SandboxRoute::RefuseMissingCaps { missing } => {
             return Err(io_err(format!(
@@ -979,7 +977,7 @@ fn run_single_bwrap(
     binds: &ToolchainBinds,
     allow_build_scripts: bool,
 ) -> Result<String, CliError> {
-    let io_err = |detail: String| CliError::UsageOwned(text::command_refusal(&"add", &detail));
+    let io_err = |detail: String| CliError::Usage(text::msg::command_refusal(&"add", &detail));
     let (toolchain_ro_binds, path_prepend, rustup_home) = binds;
     let with_payload =
         |fetch_only: bool| inspector_payload(inspector, job, None, allow_build_scripts, fetch_only);
@@ -1052,7 +1050,7 @@ fn run_introspect_chunk(
     binds: &ToolchainBinds,
     payload: &[OsString],
 ) -> Result<String, CliError> {
-    let io_err = |detail: String| CliError::UsageOwned(text::command_refusal(&"add", &detail));
+    let io_err = |detail: String| CliError::Usage(text::msg::command_refusal(&"add", &detail));
     let (toolchain_ro_binds, path_prepend, rustup_home) = binds;
     let out = run_phase(
         caps,
@@ -1100,7 +1098,7 @@ fn run_manifest_bwrap_chunked(
     binds: &ToolchainBinds,
     allow_build_scripts: bool,
 ) -> Result<String, CliError> {
-    let io_err = |detail: String| CliError::UsageOwned(text::command_refusal(&"add", &detail));
+    let io_err = |detail: String| CliError::Usage(text::msg::command_refusal(&"add", &detail));
     let (toolchain_ro_binds, path_prepend, rustup_home) = binds;
 
     // Stage 1 — fetch every crate in one network-on run (no foreign code).
@@ -1190,7 +1188,7 @@ fn write_inspector_manifest_chunk(
     let arr = serde_json::json!([{ "name": spec.inspector_arg(), "features": features }]);
     let path = scoped_tmp.join(format!("ipe-install-{stage}.json"));
     std::fs::write(&path, arr.to_string())
-        .map_err(|e| CliError::UsageOwned(text::ffi_install_manifest_chunk_write_failed(&e)))?;
+        .map_err(|e| CliError::Usage(text::msg::ffi_install_manifest_chunk_write_failed(&e)))?;
     Ok(path)
 }
 
@@ -1202,7 +1200,7 @@ fn run_inspector_job_unsandboxed(
     scratch_hint: &str,
     allow_build_scripts: bool,
 ) -> Result<String, CliError> {
-    let io_err = |detail: String| CliError::UsageOwned(text::command_refusal(&"add", &detail));
+    let io_err = |detail: String| CliError::Usage(text::msg::command_refusal(&"add", &detail));
     crate::screen::chatter(
         crate::screen::Stream::Stderr,
         crate::screen::Tone::UserError,
@@ -1222,7 +1220,7 @@ fn run_inspector_job_unsandboxed(
     );
     let (program, rest) = payload
         .split_first()
-        .ok_or(CliError::Usage(text::ffi_add_no_payload()))?;
+        .ok_or(CliError::Usage(text::msg::ffi_add_no_payload()))?;
     let out = std::process::Command::new(program)
         .args(rest)
         .output()
@@ -1257,33 +1255,33 @@ fn install_wrapper(
 ) -> Result<(), CliError> {
     let manifest =
         ipe_ffi::wrapper::WrapperManifest::parse(&raw.path, &raw.expose, &raw.capabilities)
-            .map_err(|diag| CliError::UsageOwned(diag.to_string()))?;
+            .map_err(|diag| CliError::Usage(crate::text::Message::relay(&diag)))?;
     // Resolve the package-jailed relative path to an absolute directory under
     // the project root. Canonicalization also confirms the wrapper crate
     // actually exists before any jailed build.
     let rel = manifest.path().as_str();
     let abs = std::fs::canonicalize(rel)
-        .map_err(|e| CliError::UsageOwned(text::ffi_install_wrapper_crate(&rel, &e)))?;
+        .map_err(|e| CliError::Usage(text::msg::ffi_install_wrapper_crate(&rel, &e)))?;
     // The lexical `..`/absolute jail on the relative path is not enough:
     // canonicalization resolves symlinks, so a checked-in symlink under the
     // package could still point the resolved directory outside the project. Bind
     // the resolved path back inside the project root — a wrapper that escapes it
     // is refused before any jailed build.
     let project_root = std::fs::canonicalize(".")
-        .map_err(|e| CliError::UsageOwned(text::ffi_install_project_root(&e)))?;
+        .map_err(|e| CliError::Usage(text::msg::ffi_install_project_root(&e)))?;
     if !abs.starts_with(&project_root) {
-        return Err(CliError::UsageOwned(
-            text::ffi_install_wrapper_outside_root(&rel, &abs.display()),
+        return Err(CliError::Usage(
+            text::msg::ffi_install_wrapper_outside_root(&rel, &abs.display()),
         ));
     }
     let abs_str = abs
         .to_str()
-        .ok_or_else(|| CliError::UsageOwned(text::ffi_install_wrapper_not_utf8(&rel)))?
+        .ok_or_else(|| CliError::Usage(text::msg::ffi_install_wrapper_not_utf8(&rel)))?
         .to_owned();
     // The wrapper crate's Cargo package name is the inspection slug. Derive it
     // from the directory name, gated through the crate-name charset.
     let krate = CrateName::parse(abs.file_name().and_then(|n| n.to_str()).unwrap_or(rel))
-        .map_err(|diag| CliError::UsageOwned(diag.to_string()))?;
+        .map_err(|diag| CliError::Usage(crate::text::Message::relay(&diag)))?;
 
     // The capability gate runs BEFORE the trust prompt and any jailed compile: a
     // wrapper whose effects Ipê cannot contain at run must be refused before we
@@ -1308,7 +1306,7 @@ fn install_wrapper(
         crate::screen::prompt("Continue? [y/N] ");
         let _ = std::io::stdout().flush();
         if !crate::read_yes_no() {
-            return Err(CliError::Usage(text::install_aborted()));
+            return Err(CliError::Usage(text::msg::install_aborted()));
         }
     }
     let expose = manifest.expose_names();
@@ -1329,7 +1327,7 @@ fn install_wrapper(
         _ => json,
     };
     let (pkg, paths) = ipe_ffi::driver::install_from_inspection(cache, &doc_text)
-        .map_err(|diag| CliError::UsageOwned(diag.to_string()))?;
+        .map_err(|diag| CliError::Usage(crate::text::Message::relay(&diag)))?;
     let iface = ipe_ffi::interface::crate_interface(&pkg);
     crate::screen::Screen::new(crate::screen::Stream::Stdout)
         .line(
@@ -1362,7 +1360,7 @@ fn install_wrapper(
 ///      (clock/random, or none) install.
 ///
 /// # Errors
-/// [`CliError::Io`] on a read failure; [`CliError::UsageOwned`] when the
+/// [`CliError::Io`] on a read failure; [`CliError::Usage`] when the
 /// reconcile refuses the wrapper (naming every reason and the proposed set).
 /// The jail-holds verdict for THIS host — the admit path's per-target hand-off.
 ///
@@ -1492,7 +1490,7 @@ fn enforce_wrapper_capabilities(
                  non-std dependency would run uncontained. Narrow the wrapper to pure compute \
                  (Tier 1 `[rust.define.*]` covers the safe shapes), or wait for the runtime jail.",
             );
-            Err(CliError::UsageOwned(message))
+            Err(CliError::Usage(crate::text::Message::relay(&message)))
         }
     }
 }
@@ -1682,13 +1680,13 @@ fn detect_build_scripts_hint(raw: &str) -> Option<&str> {
     raw.lines().find(|l| l.contains("--allow-build-scripts"))
 }
 
-/// Map a raw inspector `UsageOwned` error string to a `CliError::Resolve`
+/// Map a raw inspector `Usage` error string to a `CliError::Resolve`
 /// that never triggers the `CommandUsage` help page.
 ///
 /// If the raw error contains the `--allow-build-scripts` refusal hint, the
 /// hint is pulled out and rendered as a separate emphasised warning banner so
 /// the user can see the actionable flag clearly.
-fn map_inspector_error(msg: String) -> CliError {
+fn map_inspector_error(msg: crate::text::Message) -> CliError {
     // Detect the hint before consuming `msg`, then branch.
     let hint_line: Option<String> = detect_build_scripts_hint(&msg).map(|l| l.trim().to_owned());
     hint_line.map_or(CliError::Resolve(msg), |hint| {
@@ -1706,7 +1704,7 @@ fn map_inspector_error(msg: String) -> CliError {
             dim = p.dim,
             r = p.reset,
         );
-        CliError::Resolve(banner)
+        CliError::Resolve(crate::text::Message::relay(&banner))
     })
 }
 
@@ -1736,7 +1734,7 @@ fn add_one(
             stage.failure(format!("resolve failed for {crate_label}"));
             // A build failure from the inspector is not command-line misuse.
             return Err(match e {
-                CliError::UsageOwned(msg) => map_inspector_error(msg),
+                CliError::Usage(msg) => map_inspector_error(msg),
                 other => other,
             });
         }
@@ -1833,7 +1831,9 @@ fn ffi_vocabulary_source(manifest_path: &Path) -> PathBuf {
 /// in `src/Ffi/<Crate>.ipe` instead.
 fn reject_legacy_define_tables(text: &str) -> Result<(), CliError> {
     if text.contains("[[rust.define.") {
-        return Err(CliError::Usage(crate::text::ffi_legacy_define_removed()));
+        return Err(CliError::Usage(
+            crate::text::msg::ffi_legacy_define_removed(),
+        ));
     }
     Ok(())
 }
@@ -1857,7 +1857,7 @@ fn reject_legacy_define_tables(text: &str) -> Result<(), CliError> {
 /// no-op: the function returns `Ok(())` immediately.
 ///
 /// # Errors
-/// [`CliError::Io`] when the manifest cannot be read; [`CliError::UsageOwned`]
+/// [`CliError::Io`] when the manifest cannot be read; [`CliError::Usage`]
 /// when the jailed inspector fails or produces an undecodable result.
 pub fn install_registry_deps_for_project(
     manifest_path: &Path,
@@ -1879,19 +1879,20 @@ pub fn install_registry_deps_for_project(
     let cache = FfiCache::at_project_root(project_root);
     let mut entries: Vec<(CrateSpec, Vec<String>)> = Vec::with_capacity(deps.len());
     for dep in &deps {
-        let name =
-            CrateName::parse(&dep.name).map_err(|diag| CliError::UsageOwned(diag.to_string()))?;
+        let name = CrateName::parse(&dep.name)
+            .map_err(|diag| CliError::Usage(crate::text::Message::relay(&diag)))?;
         let version = match dep.version.trim() {
             "" | "*" => None,
             pin => Some(
-                VersionPin::parse(pin).map_err(|diag| CliError::UsageOwned(diag.to_string()))?,
+                VersionPin::parse(pin)
+                    .map_err(|diag| CliError::Usage(crate::text::Message::relay(&diag)))?,
             ),
         };
         let mut features = Vec::with_capacity(dep.features.len());
         for feat in &dep.features {
             features.push(
                 FeatureName::parse(feat)
-                    .map_err(|defect| CliError::UsageOwned(defect.to_string()))?,
+                    .map_err(|defect| CliError::Usage(crate::text::Message::relay(&defect)))?,
             );
         }
         let features: Vec<String> = features.iter().map(|f| f.as_str().to_owned()).collect();
@@ -1902,16 +1903,16 @@ pub fn install_registry_deps_for_project(
         allow_build_scripts,
     )
     .map_err(|e| match e {
-        CliError::UsageOwned(msg) => map_inspector_error(msg),
+        CliError::Usage(msg) => map_inspector_error(msg),
         other => other,
     })?;
     let val: serde_json::Value = serde_json::from_str(&json)
-        .map_err(|e| CliError::UsageOwned(text::ffi_regen_invalid_json(&e)))?;
+        .map_err(|e| CliError::Usage(text::msg::ffi_regen_invalid_json(&e)))?;
     let items: Vec<serde_json::Value> = match val {
         serde_json::Value::Array(items) => items,
         one @ serde_json::Value::Object(_) => vec![one],
         other => {
-            return Err(CliError::UsageOwned(text::ffi_regen_unexpected_shape(
+            return Err(CliError::Usage(text::msg::ffi_regen_unexpected_shape(
                 &other,
             )));
         }
@@ -1926,7 +1927,7 @@ pub fn install_registry_deps_for_project(
             .get("name")
             .or_else(|| item.get("pkg"))
             .and_then(serde_json::Value::as_str)
-            .ok_or_else(|| CliError::UsageOwned(text::ffi_regen_item_unnamed(&item)))?
+            .ok_or_else(|| CliError::Usage(text::msg::ffi_regen_item_unnamed(&item)))?
             .to_owned();
         let merged = merge_provides(
             &item.to_string(),
@@ -1956,7 +1957,7 @@ pub fn run_rust(rest: &[String]) -> Result<(), CliError> {
         // usage hint so the dispatcher shows the `--help` page and exits
         // non-zero — matching bare `ipe package`. An explicit `ipe rust --help`
         // is still honoured as a help request upstream.
-        None => Err(CliError::Usage(text::rust_usage())),
+        None => Err(CliError::Usage(text::msg::rust_usage())),
         Some((sub, args)) if sub == "add" => run_add(args),
         Some((sub, args)) if sub == "remove" => run_remove(args),
         Some((sub, args)) if sub == "install" => run_install(args),
@@ -1983,13 +1984,13 @@ pub fn run_add(rest: &[String]) -> Result<(), CliError> {
         match arg.as_str() {
             "--features" => {
                 let raw = it.next().ok_or_else(|| {
-                    CliError::UsageOwned(text::flag_needs_value(&"rust add", &"--features"))
+                    CliError::Usage(text::msg::flag_needs_value(&"rust add", &"--features"))
                 })?;
                 // Parse, don't validate: gate each feature name at the boundary
                 // before it can reach the emitted manifest's `features` array.
                 for feat in raw.split(',') {
                     let gated = FeatureName::parse(feat)
-                        .map_err(|defect| CliError::UsageOwned(defect.to_string()))?;
+                        .map_err(|defect| CliError::Usage(crate::text::Message::relay(&defect)))?;
                     features.push(gated.as_str().to_owned());
                 }
             }
@@ -1998,12 +1999,13 @@ pub fn run_add(rest: &[String]) -> Result<(), CliError> {
             "--verbose" => verbose = true,
             other if krate.is_none() => krate = Some(other.to_owned()),
             _ => {
-                return Err(CliError::Usage(text::rust_add_usage()));
+                return Err(CliError::Usage(text::msg::rust_add_usage()));
             }
         }
     }
-    let raw = krate.ok_or(CliError::Usage(text::rust_add_usage()))?;
-    let spec = CrateSpec::parse(&raw).map_err(|diag| CliError::UsageOwned(diag.to_string()))?;
+    let raw = krate.ok_or(CliError::Usage(text::msg::rust_add_usage()))?;
+    let spec = CrateSpec::parse(&raw)
+        .map_err(|diag| CliError::Usage(crate::text::Message::relay(&diag)))?;
 
     if !assume_yes {
         use std::io::Write as _;
@@ -2015,7 +2017,7 @@ pub fn run_add(rest: &[String]) -> Result<(), CliError> {
         crate::screen::prompt("[y/N] ");
         let _ = std::io::stdout().flush();
         if !crate::read_yes_no() {
-            return Err(CliError::Usage(text::rust_add_aborted()));
+            return Err(CliError::Usage(text::msg::rust_add_aborted()));
         }
     }
 
@@ -2029,13 +2031,13 @@ pub fn run_add(rest: &[String]) -> Result<(), CliError> {
 /// [`CliError`] on misuse or a cache-delete failure.
 pub fn run_remove(rest: &[String]) -> Result<(), CliError> {
     let [raw] = rest else {
-        return Err(CliError::Usage(text::rust_remove_usage()));
+        return Err(CliError::Usage(text::msg::rust_remove_usage()));
     };
     let cache = FfiCache::at_project_root(Path::new("."));
     let slug = ipe_ffi::driver::slugify(raw);
     cache
         .remove_package(&slug)
-        .map_err(|diag| CliError::UsageOwned(diag.to_string()))?;
+        .map_err(|diag| CliError::Usage(crate::text::Message::relay(&diag)))?;
     crate::screen::Screen::new(crate::screen::Stream::Stdout)
         .line(crate::screen::Tone::Text, &format!("removed `{raw}`"))
         .emit();
@@ -2066,20 +2068,22 @@ pub fn run_install(rest: &[String]) -> Result<(), CliError> {
             "--allow-build-scripts" => allow_build_scripts = true,
             "--verbose" => verbose = true,
             _ => {
-                return Err(CliError::Usage(text::rust_install_usage()));
+                return Err(CliError::Usage(text::msg::rust_install_usage()));
             }
         }
     }
     if crate::project::manifest_in_dir(Path::new(".")).is_some() {
-        return Err(CliError::Usage(text::rust_install_package_ipe_unsupported()));
+        return Err(CliError::Usage(
+            text::msg::rust_install_package_ipe_unsupported(),
+        ));
     }
     let manifest = Path::new(PROJECT_MANIFEST_TOML);
     if !manifest.is_file() {
-        return Err(CliError::Usage(text::rust_install_no_manifest()));
+        return Err(CliError::Usage(text::msg::rust_install_no_manifest()));
     }
     let text =
         crate::io_bounded::read_to_string_capped(manifest, crate::io_bounded::MANIFEST_READ_CAP)
-            .map_err(|e| CliError::UsageOwned(text::command_refusal(&"install", &e)))?;
+            .map_err(|e| CliError::Usage(text::msg::command_refusal(&"install", &e)))?;
     let deps = rust_dependencies_from_manifest(&text);
     let wrapper = rust_wrapper_from_manifest(&text);
     if deps.is_empty() && wrapper.is_none() {
@@ -2120,19 +2124,20 @@ pub fn run_install(rest: &[String]) -> Result<(), CliError> {
         crate::screen::prompt("Continue? [y/N] ");
         let _ = std::io::stdout().flush();
         if !crate::read_yes_no() {
-            return Err(CliError::Usage(text::install_aborted()));
+            return Err(CliError::Usage(text::msg::install_aborted()));
         }
     }
     let mut entries: Vec<(CrateSpec, Vec<String>)> = Vec::with_capacity(deps.len());
     for dep in &deps {
-        let name =
-            CrateName::parse(&dep.name).map_err(|diag| CliError::UsageOwned(diag.to_string()))?;
+        let name = CrateName::parse(&dep.name)
+            .map_err(|diag| CliError::Usage(crate::text::Message::relay(&diag)))?;
         // `*` / empty keep the historical latest-stable resolution; anything
         // else pins the inspector's probe (a prerelease NEEDS an exact `=`).
         let version = match dep.version.trim() {
             "" | "*" => None,
             pin => Some(
-                VersionPin::parse(pin).map_err(|diag| CliError::UsageOwned(diag.to_string()))?,
+                VersionPin::parse(pin)
+                    .map_err(|diag| CliError::Usage(crate::text::Message::relay(&diag)))?,
             ),
         };
         // Parse, don't validate: every feature name is gated at the boundary
@@ -2141,7 +2146,7 @@ pub fn run_install(rest: &[String]) -> Result<(), CliError> {
         for feat in &dep.features {
             features.push(
                 FeatureName::parse(feat)
-                    .map_err(|defect| CliError::UsageOwned(defect.to_string()))?,
+                    .map_err(|defect| CliError::Usage(crate::text::Message::relay(&defect)))?,
             );
         }
         let features: Vec<String> = features.iter().map(|f| f.as_str().to_owned()).collect();
@@ -2156,16 +2161,16 @@ pub fn run_install(rest: &[String]) -> Result<(), CliError> {
         allow_build_scripts,
     )
     .map_err(|e| match e {
-        CliError::UsageOwned(msg) => map_inspector_error(msg),
+        CliError::Usage(msg) => map_inspector_error(msg),
         other => other,
     })?;
     let val: serde_json::Value = serde_json::from_str(&json)
-        .map_err(|e| CliError::UsageOwned(text::ffi_install_invalid_json(&e)))?;
+        .map_err(|e| CliError::Usage(text::msg::ffi_install_invalid_json(&e)))?;
     let items: Vec<serde_json::Value> = match val {
         serde_json::Value::Array(items) => items,
         one @ serde_json::Value::Object(_) => vec![one],
         other => {
-            return Err(CliError::UsageOwned(text::ffi_install_unexpected_shape(
+            return Err(CliError::Usage(text::msg::ffi_install_unexpected_shape(
                 &other,
             )));
         }
@@ -2500,7 +2505,7 @@ fn reject_ambiguous_define<'a>(
     mut unqualified: impl Iterator<Item = &'a str>,
 ) -> Result<(), CliError> {
     if !sole_dep && let Some(name) = unqualified.next() {
-        return Err(CliError::UsageOwned(text::ffi_define_crate_ambiguous(
+        return Err(CliError::Usage(text::msg::ffi_define_crate_ambiguous(
             &kind, &name,
         )));
     }
@@ -2648,17 +2653,17 @@ fn merge_provides(
         return Ok(inspection_json.to_owned());
     }
     let mut doc: serde_json::Value = serde_json::from_str(inspection_json)
-        .map_err(|e| CliError::UsageOwned(text::ffi_inspection_not_object_detail(&e)))?;
+        .map_err(|e| CliError::Usage(text::msg::ffi_inspection_not_object_detail(&e)))?;
     if !synthetic.is_empty() {
         let obj = doc
             .as_object_mut()
-            .ok_or_else(|| CliError::UsageOwned(text::ffi_inspection_not_object().to_owned()))?;
+            .ok_or_else(|| CliError::Usage(text::msg::ffi_inspection_not_object()))?;
         let serde_json::Value::Array(functions) = obj
             .entry("functions")
             .or_insert_with(|| serde_json::Value::Array(Vec::new()))
         else {
-            return Err(CliError::UsageOwned(
-                text::ffi_inspection_functions_not_array().to_owned(),
+            return Err(CliError::Usage(
+                text::msg::ffi_inspection_functions_not_array(),
             ));
         };
         functions.extend(synthetic);
@@ -2704,14 +2709,14 @@ fn merge_declared_opaques(
             t.get("name").and_then(serde_json::Value::as_str) == Some(o.rust_type.as_str())
         });
         let Some(reported) = reported else {
-            return Err(CliError::UsageOwned(text::ffi_opaque_unknown_type(
+            return Err(CliError::Usage(text::msg::ffi_opaque_unknown_type(
                 &o.ipe_name,
                 &o.rust_type,
                 &crate_name,
             )));
         };
         if transparent.contains(o.rust_type.as_str()) {
-            return Err(CliError::UsageOwned(text::ffi_opaque_is_transparent(
+            return Err(CliError::Usage(text::msg::ffi_opaque_is_transparent(
                 &o.ipe_name,
                 &o.rust_type,
             )));
@@ -2721,7 +2726,10 @@ fn merge_declared_opaques(
             .and_then(serde_json::Value::as_str)
             .filter(|p| !p.is_empty())
             .ok_or_else(|| {
-                CliError::UsageOwned(text::ffi_opaque_without_path(&o.ipe_name, &o.rust_type))
+                CliError::Usage(text::msg::ffi_opaque_without_path(
+                    &o.ipe_name,
+                    &o.rust_type,
+                ))
             })?;
         let absolute = if rust_path.starts_with("::") {
             rust_path.to_owned()
@@ -2731,7 +2739,7 @@ fn merge_declared_opaques(
         if let Some(prev) = declared.get(o.ipe_name.as_str())
             && prev.as_str() != Some(absolute.as_str())
         {
-            return Err(CliError::UsageOwned(text::ffi_opaque_declared_twice(
+            return Err(CliError::Usage(text::msg::ffi_opaque_declared_twice(
                 &o.ipe_name,
             )));
         }
@@ -2826,7 +2834,7 @@ type ForeignDefines = (
 /// A parse error in any source module is silently skipped here — the compile
 /// pipeline will surface it with full context moments later. A malformed
 /// `foreign` declaration (invalid carrier, unknown kind, …) is a typed refusal
-/// returned as an `Err` with a `CliError::UsageOwned` carrying the source path
+/// returned as an `Err` with a `CliError::Usage` carrying the source path
 /// and reason; the caller decides whether to propagate it immediately or defer.
 ///
 /// The returned vectors are the exact same `ManifestDefine*` shapes the TOML
@@ -2909,7 +2917,7 @@ impl ForeignReader<'_> {
     /// Emit a typed refusal with a source location prefix.
     fn reject(&self, span: ipe_diagnostics::Span, reason: &str) -> CliError {
         let (line, col) = line_col_from_span(self.src, span.lo);
-        CliError::UsageOwned(text::located_refusal(
+        CliError::Usage(text::msg::located_refusal(
             &self.file.display(),
             &line,
             &col,
@@ -3884,7 +3892,7 @@ version = \"1\"
         // _bindings.rs — and confirm discovery refuses it.
         std::fs::set_permissions(&cache, std::fs::Permissions::from_mode(0o777)).expect("chmod");
         let r = find_cache_root(&tmp);
-        assert!(matches!(r, Err(CliError::UsageOwned(_))), "{r:?}");
+        assert!(matches!(r, Err(CliError::Usage(_))), "{r:?}");
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
@@ -4194,7 +4202,7 @@ version = \"1\"
         )
         .expect_err("must_refuse: an un-inspected type cannot mint a handle");
         assert!(
-            matches!(&err, CliError::UsageOwned(m) if m.contains("not an inspected type")),
+            matches!(&err, CliError::Usage(m) if m.contains("not an inspected type")),
             "{err:?}"
         );
     }
@@ -4223,7 +4231,7 @@ version = \"1\"
         let err = merge_provides(&doc, "geo", &[], &[], &[], &opaques, true)
             .expect_err("must_refuse: a transparent value type is not a handle");
         assert!(
-            matches!(&err, CliError::UsageOwned(m) if m.contains("TRANSPARENTLY")),
+            matches!(&err, CliError::Usage(m) if m.contains("TRANSPARENTLY")),
             "{err:?}"
         );
     }
@@ -4444,7 +4452,7 @@ version = \"1\"
         let raw = "inspector exited with Some(1)\n\
             crates with build scripts found\n\
             pass --allow-build-scripts to proceed";
-        let err = map_inspector_error(raw.to_owned());
+        let err = map_inspector_error(crate::text::Message::relay(&raw));
         match err {
             CliError::Resolve(msg) => {
                 assert!(

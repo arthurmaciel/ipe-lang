@@ -1634,3 +1634,188 @@ error[IPE-P0001]: the packaged {platform} manifest declares OS permission(s) the
     permission with no backing accepted web capability cannot ship. Grant the backing
     capability after review by adding the axis to `accepts = [ … ]` under
     [capabilities] in package.ipe, or remove the permission from the override.
+
+# Package resolution
+
+## index-source-url-invalid
+
+package `{pkg}`: `source` must be an https://, git://, ssh://, or file:// URL (or a bare absolute path), got: {raw}
+
+## index-rev-injection
+
+package `{pkg}`: `rev` contains an injection-shaped value, got: {raw}
+
+## index-rev-not-immutable
+
+package `{pkg}`: recorded `rev` is not an immutable commit SHA (expected 40 lowercase hex chars), got: {raw} — re-run `ipe add` to record an immutable pin
+
+## index-rev-parse-unavailable
+
+package `{pkg}`: could not run `git rev-parse`: {detail}
+
+## index-rev-unresolved
+
+package `{pkg}`: `git rev-parse --verify {refspec}` failed — ref {rev} does not resolve to a commit in the fetched checkout
+
+## index-sha256-invalid
+
+package `{pkg}`: `sha256` is not a 64-char lowercase-hex content hash, got: {raw}
+
+## index-entry-unreadable
+
+index entry for `{name}` exists but could not be read — {detail}
+
+## add-package-not-in-index
+
+add: package `{name}` is not in the index — check the name, or run `ipe rust add` for a Rust crate
+
+## add-index-entry-unreadable
+
+add: could not read the index entry for `{name}` — {kind}
+
+## index-no-version-satisfies
+
+package `{name}`: no published version satisfies `{req}` (available: {available})
+
+## index-no-version-available
+
+none
+
+## index-publisher-not-login
+
+package `{name}`: index entry `publisher` is not a GitHub login: {refusal}
+
+## index-entry-missing-publisher
+
+package `{name}`: index entry is missing `publisher`
+
+## index-entry-no-versions
+
+package `{name}`: index entry lists no `[[version]]`
+
+## registry-json-malformed
+
+package `{name}`: registry JSON is malformed ({detail})
+
+## index-capability-unknown
+
+package `{name}`: {detail}
+
+## index-version-missing-field
+
+package `{name}`: a `[[version]]` entry is missing `{field}`
+
+## index-version-invalid
+
+package `{name}`: `{version}` is not a valid version: {detail}
+
+## index-capabilities-not-array
+
+package `{name}`: `capabilities` must be a `["…", …]` array, got: {raw}
+
+## publish-rev-unresolved
+
+ipe package publish: `git rev-parse --verify {refspec}` failed — ref {rev} does not resolve to a commit
+
+## publish-scratch-io
+
+ipe package publish: scratch filesystem error: {detail}
+
+## publish-clone-failed
+
+ipe package publish: could not clone your index fork `{fork_url}` — publish pushes the entry to your fork, so fork the index on GitHub first (a one-time step) and make sure git can reach it.
+  git: {git}
+
+## publish-push-failed
+
+ipe package publish: could not push `{branch}` to `{fork_url}` — nothing was published. Fix the push (git credentials / fork access), then open the PR here:
+  {url}
+  git: {git}
+
+## publish-not-git-repo
+
+ipe package publish: `{path}` is not a git repository — publish pins a committed, pushed revision, so the package must live in a git repo (or pass `--source`/`--rev`).
+
+## publish-git-unavailable
+
+ipe package publish: could not run `git`: {detail}
+
+## trust-token-invalid
+
+registry trust: `{label}` must be a non-empty token with no whitespace or control characters, got: {raw}
+
+## signature-bundle-malformed
+
+package `{pkg}`: signature bundle is malformed ({detail})
+
+## signature-required-absent
+
+package `{pkg}`: no publisher signature is present, but the configured registry trust policy requires one (`require_signature = true`) — refusing to resolve an unsigned version
+
+## signature-untrusted
+
+package `{pkg}`: a publisher signature is present but was not trusted — {detail}
+
+## trust-config-malformed
+
+registry trust config is malformed ({detail})
+
+## lock-kind-unrecognised
+
+ipe.lock: unrecognised `kind` value {value} — re-run `ipe add` to regenerate
+
+## lock-package-missing-field
+
+ipe.lock: a `[[package]]` is missing `{field}`
+
+## lock-version-invalid
+
+ipe.lock: `{version}` is not a valid version: {detail}
+
+## resolve-path-dep-missing
+
+package `{name}`: path dependency `{path}` does not exist
+
+## resolve-index-dep-escape
+
+package `{name}`: an index dependency is resolved through `resolve_and_add`, not `resolve_escape`
+
+## resolve-git-unavailable
+
+package `{name}`: could not run `git`: {detail}
+
+## resolve-git-failed
+
+package `{name}`: `git {args}` failed: {stderr}
+
+## login-error
+
+ipe login: {message}
+
+## package-name-invalid
+
+`{raw}` is not a valid package name: {why} — a name is joined into a filesystem path, so it must be a single portable path component (matching `[a-z0-9]([a-z0-9]|-[a-z0-9])*`)
+
+## package-name-empty
+
+a package name must not be empty
+
+## package-name-too-long
+
+a package name must be at most {max} bytes
+
+## package-name-bad-start
+
+a package name must start with an ASCII lowercase letter or digit
+
+## package-name-doubled-dash
+
+a package name must not contain a doubled `-`
+
+## package-name-bad-char
+
+a package name may contain only ASCII lowercase letters, digits, and `-`
+
+## package-name-trailing-dash
+
+a package name must not end with `-`

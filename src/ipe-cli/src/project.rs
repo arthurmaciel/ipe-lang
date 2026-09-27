@@ -211,7 +211,7 @@ impl ProjectManifest {
     /// chosen and how many were declared.
     ///
     /// # Errors
-    /// [`CliError::UsageOwned`] when a program's entry file does not map to a
+    /// [`CliError::Usage`] when a program's entry file does not map to a
     /// valid module path (a non-module path segment).
     pub fn resolved_entry(&self) -> Result<Vec<String>, CliError> {
         let Some(program) = self.default_program() else {
@@ -314,7 +314,7 @@ impl EntryShape {
 /// no segments at all is a manifest error, never a silently-dropped entry.
 ///
 /// # Errors
-/// [`CliError::UsageOwned`] naming the offending entry file.
+/// [`CliError::Usage`] naming the offending entry file.
 fn entry_file_to_module_path(entry: &str) -> Result<Vec<String>, CliError> {
     let rel = Path::new(entry);
     let without_ext = rel.with_extension("");
@@ -325,10 +325,10 @@ fn entry_file_to_module_path(entry: &str) -> Result<Vec<String>, CliError> {
             _ => None,
         };
         let seg = seg.ok_or_else(|| {
-            CliError::UsageOwned(text::manifest_entry_invalid(&format!("{entry:?}")))
+            CliError::Usage(text::msg::manifest_entry_invalid(&format!("{entry:?}")))
         })?;
         if !is_module_segment(seg) {
-            return Err(CliError::UsageOwned(text::manifest_entry_segment_invalid(
+            return Err(CliError::Usage(text::msg::manifest_entry_segment_invalid(
                 &format!("{entry:?}"),
                 &format!("{seg:?}"),
             )));
@@ -336,7 +336,7 @@ fn entry_file_to_module_path(entry: &str) -> Result<Vec<String>, CliError> {
         segments.push(seg.to_owned());
     }
     if segments.is_empty() {
-        return Err(CliError::UsageOwned(text::manifest_entry_no_module(
+        return Err(CliError::Usage(text::msg::manifest_entry_no_module(
             &format!("{entry:?}"),
         )));
     }
@@ -538,10 +538,10 @@ pub fn has_only_legacy_toml(dir: &Path) -> bool {
 ///
 /// # Errors
 /// [`CliError::Io`] if the file cannot be read; [`CliError::Usage`] /
-/// [`CliError::UsageOwned`] for a malformed or invalid manifest (an unsupported
+/// [`CliError::Usage`] for a malformed or invalid manifest (an unsupported
 /// driver, a bad version or dependency, an unknown capability, a denylisted
 /// `publicEnv` name, a missing source root); [`CliError::Pipeline`] when the
-/// source does not parse; and [`CliError::UsageOwned`] when the path is not a
+/// source does not parse; and [`CliError::Usage`] when the path is not a
 /// `package.ipe`.
 pub fn parse_manifest(manifest_path: &Path) -> Result<ProjectManifest, CliError> {
     if manifest_path.file_name().and_then(|n| n.to_str())
@@ -549,7 +549,7 @@ pub fn parse_manifest(manifest_path: &Path) -> Result<ProjectManifest, CliError>
     {
         return crate::package_manifest::parse_package_manifest(manifest_path);
     }
-    Err(CliError::UsageOwned(text::manifest_not_package_ipe(
+    Err(CliError::Usage(text::msg::manifest_not_package_ipe(
         &manifest_path.display(),
         &text::legacy_toml_hint(),
     )))

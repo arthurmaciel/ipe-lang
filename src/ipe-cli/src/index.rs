@@ -57,10 +57,12 @@ impl SourceUrl {
         // `-`-leading values would be parsed as git flags; `::` introduces
         // transport helpers (e.g. `ext::`) that execute arbitrary commands.
         if !allowed || raw.starts_with('-') || raw.contains("::") {
-            return Err(CliError::Resolve(format!(
-                "package `{pkg}`: `source` must be an https://, git://, ssh://, or file:// URL \
-                 (or a bare absolute path), got: {raw:?}"
-            )));
+            return Err(CliError::Resolve(
+                crate::text::msg::index_source_url_invalid(
+                    &pkg,
+                    &crate::style::TerminalSafe::sanitize(&format!("{raw:?}")),
+                ),
+            ));
         }
         Ok(Self(raw.to_owned()))
     }
@@ -124,8 +126,9 @@ impl CommitId {
                 .extension()
                 .is_some_and(|ext| ext.eq_ignore_ascii_case("lock"));
         if injection {
-            return Err(CliError::Resolve(format!(
-                "package `{pkg}`: `rev` contains an injection-shaped value, got: {raw:?}"
+            return Err(CliError::Resolve(crate::text::msg::index_rev_injection(
+                &pkg,
+                &crate::style::TerminalSafe::sanitize(&format!("{raw:?}")),
             )));
         }
         Ok(Self(raw.to_owned()))
@@ -175,11 +178,12 @@ impl PinnedRev {
         // Require exactly 40 lowercase hex chars — no uppercase, no short hashes.
         let is_sha = raw.len() == 40 && raw.chars().all(|c| matches!(c, '0'..='9' | 'a'..='f'));
         if !is_sha {
-            return Err(CliError::Resolve(format!(
-                "package `{pkg}`: recorded `rev` is not an immutable commit SHA \
-                 (expected 40 lowercase hex chars), got: {raw:?} — re-run `ipe add` \
-                 to record an immutable pin"
-            )));
+            return Err(CliError::Resolve(
+                crate::text::msg::index_rev_not_immutable(
+                    &pkg,
+                    &crate::style::TerminalSafe::sanitize(&format!("{raw:?}")),
+                ),
+            ));
         }
         Ok(Self(raw.to_owned()))
     }
@@ -204,15 +208,13 @@ impl PinnedRev {
             .current_dir(checkout)
             .output()
             .map_err(|e| {
-                CliError::Resolve(format!(
-                    "package `{pkg}`: could not run `git rev-parse`: {e}"
-                ))
+                CliError::Resolve(crate::text::msg::index_rev_parse_unavailable(&pkg, &e))
             })?;
         if !output.status.success() {
-            return Err(CliError::Resolve(format!(
-                "package `{pkg}`: `git rev-parse --verify {refspec}` failed — \
-                 ref {:?} does not resolve to a commit in the fetched checkout",
-                requested.as_str()
+            return Err(CliError::Resolve(crate::text::msg::index_rev_unresolved(
+                &pkg,
+                &crate::style::TerminalSafe::sanitize(&refspec),
+                &crate::style::TerminalSafe::sanitize(&format!("{:?}", requested.as_str())),
             )));
         }
         let raw = String::from_utf8_lossy(&output.stdout);
@@ -254,9 +256,9 @@ impl Sha256Hex {
     pub fn parse(pkg: &str, raw: &str) -> Result<Self, CliError> {
         let is_digest = raw.len() == 64 && raw.chars().all(|c| matches!(c, '0'..='9' | 'a'..='f'));
         if !is_digest {
-            return Err(CliError::Resolve(format!(
-                "package `{pkg}`: `sha256` is not a 64-char lowercase-hex content hash, \
-                 got: {raw:?}"
+            return Err(CliError::Resolve(crate::text::msg::index_sha256_invalid(
+                &pkg,
+                &crate::style::TerminalSafe::sanitize(&format!("{raw:?}")),
             )));
         }
         Ok(Self(raw.to_owned()))
@@ -419,9 +421,9 @@ pub fn read_entry_lookup(index_root: &Path, name: &str) -> EntryLookup {
             return EntryLookup::Absent;
         }
         Err(e) => {
-            return EntryLookup::Unreadable(crate::CliError::Resolve(format!(
-                "index entry for `{name}` exists but could not be read — {e}"
-            )));
+            return EntryLookup::Unreadable(crate::CliError::Resolve(
+                crate::text::msg::index_entry_unreadable(&name, &e),
+            ));
         }
     };
     match parse_entry(name.as_str(), &text) {
@@ -459,14 +461,11 @@ pub fn read_entry(index_root: &Path, name: &str) -> Result<IndexEntry, CliError>
 /// act on) keeps a readable kind description, still errno-free.
 fn read_entry_error(name: &str, e: &std::io::Error) -> CliError {
     if e.kind() == std::io::ErrorKind::NotFound {
-        CliError::Resolve(format!(
-            "add: package `{name}` is not in the index — check the name, or run \
-             `ipe rust add` for a Rust crate"
-        ))
+        CliError::Resolve(crate::text::msg::add_package_not_in_index(&name))
     } else {
-        CliError::Resolve(format!(
-            "add: could not read the index entry for `{name}` — {}",
-            e.kind()
+        CliError::Resolve(crate::text::msg::add_index_entry_unreadable(
+            &name,
+            &e.kind(),
         ))
     }
 }
@@ -487,7 +486,7 @@ fn read_entry_error(name: &str, e: &std::io::Error) -> CliError {
 /// this offline check.
 ///
 /// # Errors
-/// [`CliError::UsageOwned`] when `path` has no `.toml` file-stem to name the
+/// [`CliError::Usage`] when `path` has no `.toml` file-stem to name the
 /// package; [`CliError::Io`] when the file cannot be read; [`CliError::Resolve`]
 /// when the entry is malformed.
 pub fn validate_entry_file(path: &Path) -> Result<IndexEntry, CliError> {
@@ -496,7 +495,7 @@ pub fn validate_entry_file(path: &Path) -> Result<IndexEntry, CliError> {
         .and_then(|s| s.to_str())
         .filter(|s| !s.is_empty())
         .ok_or_else(|| {
-            CliError::UsageOwned(crate::text::index_entry_path_invalid(&path.display()))
+            CliError::Usage(crate::text::msg::index_entry_path_invalid(&path.display()))
         })?;
     let text =
         crate::io_bounded::read_to_string_capped(path, crate::io_bounded::SMALL_FILE_READ_CAP)?;
@@ -536,15 +535,15 @@ pub const MAX_ENTRY_VERSIONS: usize = 1024;
 ///   version pointing elsewhere is a name-squat and is refused.
 ///
 /// # Errors
-/// [`CliError::UsageOwned`] naming the exact rule that refused the entry.
+/// [`CliError::Usage`] naming the exact rule that refused the entry.
 pub fn admission_precheck(
     submitted: &IndexEntry,
     baseline: Option<&IndexEntry>,
     attested: Option<&AttestedActor>,
 ) -> Result<(), CliError> {
     if submitted.versions.len() > MAX_ENTRY_VERSIONS {
-        return Err(CliError::UsageOwned(
-            crate::text::index_entry_too_many_versions(
+        return Err(CliError::Usage(
+            crate::text::msg::index_entry_too_many_versions(
                 &submitted.name,
                 &submitted.versions.len(),
                 &MAX_ENTRY_VERSIONS,
@@ -561,8 +560,8 @@ pub fn admission_precheck(
         if let Some(&prior) = baseline_by_version.get(&version.version)
             && prior != version
         {
-            return Err(CliError::UsageOwned(
-                crate::text::index_entry_version_rewritten(&submitted.name, &version.version),
+            return Err(CliError::Usage(
+                crate::text::msg::index_entry_version_rewritten(&submitted.name, &version.version),
             ));
         }
     }
@@ -592,10 +591,15 @@ pub fn admission_precheck(
             submitted.versions.iter().map(|v| &v.version).collect();
         for baseline_version in baseline_by_version.keys() {
             if !submitted_versions.contains(*baseline_version) {
-                return Err(CliError::UsageOwned(reset_refusal.map_or_else(
-                    || crate::text::index_entry_version_dropped(&submitted.name, baseline_version),
+                return Err(CliError::Usage(reset_refusal.map_or_else(
+                    || {
+                        crate::text::msg::index_entry_version_dropped(
+                            &submitted.name,
+                            baseline_version,
+                        )
+                    },
                     |refusal| {
-                        crate::text::index_entry_version_dropped_reset_refused(
+                        crate::text::msg::index_entry_version_dropped_reset_refused(
                             &submitted.name,
                             baseline_version,
                             refusal,
@@ -615,7 +619,7 @@ pub fn admission_precheck(
     if let Some(expected_source) = established_source {
         for version in &submitted.versions {
             if version.source.as_str() != expected_source {
-                return Err(CliError::UsageOwned(crate::text::index_entry_source_moved(
+                return Err(CliError::Usage(crate::text::msg::index_entry_source_moved(
                     &submitted.name,
                     &version.version,
                     &version.source.as_str(),
@@ -648,14 +652,14 @@ pub fn resolve_version<'a>(
                 .iter()
                 .map(|v| v.version.to_string())
                 .collect();
-            CliError::Resolve(format!(
-                "package `{}`: no published version satisfies `{req}` (available: {})",
-                entry.name,
-                if available.is_empty() {
-                    "none".to_owned()
+            CliError::Resolve(crate::text::msg::index_no_version_satisfies(
+                &entry.name,
+                req,
+                &if available.is_empty() {
+                    crate::text::index_no_version_available().to_owned()
                 } else {
                     available.join(", ")
-                }
+                },
             ))
         })
 }
@@ -666,9 +670,7 @@ pub fn resolve_version<'a>(
 /// so a hostile entry cannot put control bytes or escapes into the error text.
 fn parse_publisher(name: &str, claimed: &str) -> Result<SelfDeclaredPublisher, CliError> {
     SelfDeclaredPublisher::parse(claimed).map_err(|refusal| {
-        CliError::Resolve(format!(
-            "package `{name}`: index entry `publisher` is not a GitHub login: {refusal}"
-        ))
+        CliError::Resolve(crate::text::msg::index_publisher_not_login(&name, &refusal))
     })
 }
 
@@ -729,16 +731,12 @@ fn parse_entry(name: &str, text: &str) -> Result<IndexEntry, CliError> {
     }
 
     let publisher = publisher
-        .ok_or_else(|| {
-            CliError::Resolve(format!(
-                "package `{name}`: index entry is missing `publisher`"
-            ))
-        })
+        .ok_or_else(|| CliError::Resolve(crate::text::msg::index_entry_missing_publisher(&name)))
         .and_then(|claimed| parse_publisher(name, &claimed))?;
     if versions.is_empty() {
-        return Err(CliError::Resolve(format!(
-            "package `{name}`: index entry lists no `[[version]]`"
-        )));
+        return Err(CliError::Resolve(
+            crate::text::msg::index_entry_no_versions(&name),
+        ));
     }
     let versions = versions
         .into_iter()
@@ -780,8 +778,9 @@ fn parse_entry(name: &str, text: &str) -> Result<IndexEntry, CliError> {
 /// `source`).
 pub fn parse_entry_json(name: &str, text: &str) -> Result<IndexEntry, CliError> {
     let malformed = |detail: &str| {
-        CliError::Resolve(format!(
-            "package `{name}`: registry JSON is malformed ({detail})"
+        CliError::Resolve(crate::text::msg::registry_json_malformed(
+            &name,
+            &crate::style::TerminalSafe::sanitize(&detail),
         ))
     };
 
@@ -822,8 +821,9 @@ pub fn parse_entry_json(name: &str, text: &str) -> Result<IndexEntry, CliError> 
 /// constructors the TOML reader uses (parse, don't validate).
 fn parse_entry_version_json(name: &str, raw: &serde_json::Value) -> Result<EntryVersion, CliError> {
     let malformed = |detail: String| {
-        CliError::Resolve(format!(
-            "package `{name}`: registry JSON is malformed ({detail})"
+        CliError::Resolve(crate::text::msg::registry_json_malformed(
+            &name,
+            &crate::style::TerminalSafe::sanitize(&detail),
         ))
     };
     let object = raw
@@ -859,8 +859,12 @@ fn parse_entry_version_json(name: &str, raw: &serde_json::Value) -> Result<Entry
             let token = cap
                 .as_str()
                 .ok_or_else(|| malformed("a `capabilities` element is not a string".to_owned()))?;
-            let parsed = Capability::from_str(token)
-                .map_err(|e| CliError::Resolve(format!("package `{name}`: {e}")))?;
+            let parsed = Capability::from_str(token).map_err(|e| {
+                CliError::Resolve(crate::text::msg::index_capability_unknown(
+                    &name,
+                    &crate::style::TerminalSafe::sanitize(&e.to_string()),
+                ))
+            })?;
             capabilities.insert(parsed);
         }
     }
@@ -905,14 +909,14 @@ impl RawVersion {
     /// missing required field, a malformed version, or an unknown capability.
     fn into_version(self, name: &str) -> Result<EntryVersion, CliError> {
         let missing = |field: &str| {
-            CliError::Resolve(format!(
-                "package `{name}`: a `[[version]]` entry is missing `{field}`"
-            ))
+            CliError::Resolve(crate::text::msg::index_version_missing_field(&name, &field))
         };
         let version_str = self.version.ok_or_else(|| missing("version"))?;
         let version = semver::Version::parse(&version_str).map_err(|e| {
-            CliError::Resolve(format!(
-                "package `{name}`: `{version_str}` is not a valid version: {e}"
+            CliError::Resolve(crate::text::msg::index_version_invalid(
+                &name,
+                &crate::style::TerminalSafe::sanitize(&version_str),
+                &crate::style::TerminalSafe::sanitize(&e.to_string()),
             ))
         })?;
         let raw_source = self.source.ok_or_else(|| missing("source"))?;
@@ -957,8 +961,9 @@ fn parse_capabilities(name: &str, raw: Option<&str>) -> Result<BTreeSet<Capabili
         .strip_prefix('[')
         .and_then(|r| r.strip_suffix(']'))
         .ok_or_else(|| {
-            CliError::Resolve(format!(
-                "package `{name}`: `capabilities` must be a `[\"…\", …]` array, got: {raw}"
+            CliError::Resolve(crate::text::msg::index_capabilities_not_array(
+                &name,
+                &crate::style::TerminalSafe::sanitize(raw),
             ))
         })?;
     let mut set = BTreeSet::new();
@@ -967,8 +972,12 @@ fn parse_capabilities(name: &str, raw: Option<&str>) -> Result<BTreeSet<Capabili
         if token.is_empty() {
             continue;
         }
-        let cap = Capability::from_str(token)
-            .map_err(|e| CliError::Resolve(format!("package `{name}`: {e}")))?;
+        let cap = Capability::from_str(token).map_err(|e| {
+            CliError::Resolve(crate::text::msg::index_capability_unknown(
+                &name,
+                &crate::style::TerminalSafe::sanitize(&e.to_string()),
+            ))
+        })?;
         set.insert(cap);
     }
     Ok(set)

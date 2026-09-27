@@ -45,8 +45,8 @@ impl DepKind {
         match raw {
             "index" => Ok(Self::Index),
             "escape" => Ok(Self::Escape),
-            other => Err(CliError::Resolve(format!(
-                "ipe.lock: unrecognised `kind` value {other:?} — re-run `ipe add` to regenerate"
+            other => Err(CliError::Resolve(crate::text::msg::lock_kind_unrecognised(
+                &crate::style::TerminalSafe::sanitize(&format!("{other:?}")),
             ))),
         }
     }
@@ -298,14 +298,14 @@ impl RawLocked {
     /// it is parsed and trusted directly so a pathological index dep at `0.0.0`
     /// is correctly classified as `Index`.
     fn into_dep(self) -> Result<LockedDep, CliError> {
-        let missing = |field: &str| {
-            CliError::Resolve(format!("ipe.lock: a `[[package]]` is missing `{field}`"))
-        };
+        let missing =
+            |field: &str| CliError::Resolve(crate::text::msg::lock_package_missing_field(&field));
         let name = self.name.ok_or_else(|| missing("name"))?;
         let version_str = self.version.ok_or_else(|| missing("version"))?;
         let version = semver::Version::parse(&version_str).map_err(|e| {
-            CliError::Resolve(format!(
-                "ipe.lock: `{version_str}` is not a valid version: {e}"
+            CliError::Resolve(crate::text::msg::lock_version_invalid(
+                &crate::style::TerminalSafe::sanitize(&version_str),
+                &crate::style::TerminalSafe::sanitize(&e.to_string()),
             ))
         })?;
         let raw_rev = self.rev.ok_or_else(|| missing("rev"))?;

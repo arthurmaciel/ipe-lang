@@ -43,7 +43,7 @@ const GRANT_TYPE: &str = "urn:ietf:params:oauth:grant-type:device_code";
 /// whether a token is stored; `--logout` removes it.
 ///
 /// # Errors
-/// [`CliError::UsageOwned`] on an unknown flag; [`CliError::Resolve`] when the
+/// [`CliError::Usage`] on an unknown flag; [`CliError::Resolve`] when the
 /// OAuth request fails, the user does not authorize in time, or the token cannot
 /// be stored.
 pub fn run_login(rest: &[String]) -> Result<(), CliError> {
@@ -550,7 +550,7 @@ fn open_in_browser(url: &str) -> bool {
 
 /// Build a login error.
 fn login_error(message: &str) -> CliError {
-    CliError::Resolve(format!("ipe login: {message}"))
+    CliError::Resolve(crate::text::msg::login_error(&message))
 }
 
 #[cfg(test)]
@@ -665,7 +665,7 @@ mod tests {
     #[test]
     fn unexpected_login_argument_is_a_usage_error() {
         let result = run_login(&["--bogus".to_owned()]);
-        assert!(matches!(result, Err(CliError::UsageOwned(_))));
+        assert!(matches!(result, Err(CliError::Usage(_))));
     }
 
     /// The token file must be created with mode 0600 — never group- or

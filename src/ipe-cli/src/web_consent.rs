@@ -148,7 +148,7 @@ fn refusal(ungranted: &[String]) -> CliError {
             crate::text::web_consent_remedy().to_owned(),
         ))
         .collect();
-    CliError::UsageOwned(lines.join("\n"))
+    CliError::Usage(crate::text::Message::relay(&lines.join("\n")))
 }
 
 #[cfg(test)]

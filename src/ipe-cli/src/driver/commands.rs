@@ -179,7 +179,7 @@ pub fn run_cli(args: &[String]) -> Result<(), CliError> {
     // the old command at its delivery-grammar equivalent rather than failing with
     // a bare unknown-command.
     if cmd == "pack" {
-        return Err(CliError::UsageOwned(text::pack_retired().to_owned()));
+        return Err(CliError::Usage(text::msg::pack_retired()));
     }
     // A command group (`ipe dev <verb> …`) dispatches to the member verb's own
     // handler — the grouped and bare forms run the same code, so a verb under
@@ -235,10 +235,6 @@ pub fn with_help_on_misuse(
     match result {
         Err(CliError::Usage(reason)) => Err(CliError::CommandUsage {
             command,
-            reason: TerminalSafe::sanitize(reason),
-        }),
-        Err(CliError::UsageOwned(reason)) => Err(CliError::CommandUsage {
-            command,
             reason: TerminalSafe::sanitize(&reason),
         }),
         other => other,
@@ -263,9 +259,9 @@ pub fn default_entry() -> Result<String, CliError> {
         return Ok("src/Main.ipe".to_owned());
     }
     if project::has_only_legacy_toml(std::path::Path::new(".")) {
-        return Err(CliError::Usage(text::legacy_toml_hint()));
+        return Err(CliError::Usage(text::msg::legacy_toml_hint()));
     }
-    Err(CliError::Usage(text::no_entry()))
+    Err(CliError::Usage(text::msg::no_entry()))
 }
 
 /// `ipe watch [<path>]` — rebuild and re-run on every source change
@@ -377,7 +373,7 @@ pub fn classify_entry_shape(entry_arg: &Path) -> Result<delivery::Shape, CliErro
 /// pedagogical [`delivery::DeliveryError`], surfaced as a usage error.
 ///
 /// # Errors
-/// [`CliError::UsageOwned`] carrying the delivery lesson on a shape mismatch, an
+/// [`CliError::Usage`] carrying the delivery lesson on a shape mismatch, an
 /// invalid runtime/host combination, or a `--static` request the delivery
 /// cannot honour; the I/O errors of [`classify_entry_shape`].
 pub fn resolve_delivery(
@@ -393,7 +389,7 @@ pub fn resolve_delivery(
         &positionals.tokens,
         wants_static,
     )
-    .map_err(|e| CliError::UsageOwned(text::command_refusal(&command, &e)))
+    .map_err(|e| CliError::Usage(text::msg::command_refusal(&command, &e)))
 }
 
 /// Route an entry argument to its `package.ipe`, when one governs it.
@@ -407,9 +403,9 @@ pub fn discover_manifest(entry_path: &Path) -> Result<Option<PathBuf>, CliError>
             return Ok(Some(manifest));
         }
         if project::has_only_legacy_toml(entry_path) {
-            return Err(CliError::Usage(text::legacy_toml_hint()));
+            return Err(CliError::Usage(text::msg::legacy_toml_hint()));
         }
-        Err(CliError::Usage(text::watch_dir_no_manifest()))
+        Err(CliError::Usage(text::msg::watch_dir_no_manifest()))
     } else {
         Ok(find_manifest_for_ipe_file(entry_path))
     }
@@ -743,7 +739,7 @@ pub fn run_build_body(rest: &[String]) -> Result<BuildSuccess, CliError> {
     let (engine, triple) = compile_target.engine_triple();
     delivery
         .admit_triple(engine, triple)
-        .map_err(|e| CliError::UsageOwned(text::command_refusal(&"build", &e)))?;
+        .map_err(|e| CliError::Usage(text::msg::command_refusal(&"build", &e)))?;
 
     // The dependency model (native OR wasm) needs no vendored tree — the runtime
     // is a path dependency. Only a dep-model-OFF build vendors the source subtree.
@@ -971,7 +967,7 @@ fn copy_native_artifact(
     src.push("debug");
     src.push(&bin_name);
     if !src.is_file() {
-        return Err(CliError::UsageOwned(text::build_binary_missing(
+        return Err(CliError::Usage(text::msg::build_binary_missing(
             &src.display(),
         )));
     }
@@ -1242,7 +1238,7 @@ pub fn run_release(rest: &[String]) -> Result<(), CliError> {
     let (engine, triple) = compile_target.engine_triple();
     bundle_delivery_resolved
         .admit_triple(engine, triple)
-        .map_err(|e| CliError::UsageOwned(text::command_refusal(&"release", &e)))?;
+        .map_err(|e| CliError::Usage(text::msg::command_refusal(&"release", &e)))?;
 
     if wasm_target {
         // Browser/wasm production path.
@@ -1409,7 +1405,7 @@ pub fn run_release(rest: &[String]) -> Result<(), CliError> {
             .join("release")
             .join(&bin_name);
         if !bin_path.is_file() {
-            return Err(CliError::UsageOwned(text::release_binary_missing(
+            return Err(CliError::Usage(text::msg::release_binary_missing(
                 &bin_path.display(),
             )));
         }
@@ -1503,7 +1499,7 @@ pub fn run_release(rest: &[String]) -> Result<(), CliError> {
         .join("release")
         .join(&release_bin_name);
     if !app_binary.is_file() {
-        return Err(CliError::UsageOwned(text::release_app_binary_missing(
+        return Err(CliError::Usage(text::msg::release_app_binary_missing(
             &app_binary.display(),
         )));
     }
@@ -1665,7 +1661,7 @@ pub fn release_bundle_report(
 ///
 /// # Errors
 ///
-/// [`CliError::UsageOwned`] if the workspace root cannot be found.
+/// [`CliError::Usage`] if the workspace root cannot be found.
 pub fn find_workspace_root() -> Result<PathBuf, CliError> {
     let cwd = std::env::current_dir().map_err(|e| CliError::Io {
         path: PathBuf::from("."),
@@ -1686,9 +1682,7 @@ pub fn find_workspace_root() -> Result<PathBuf, CliError> {
         match candidate.parent() {
             Some(p) => candidate = p,
             None => {
-                return Err(CliError::UsageOwned(
-                    text::release_workspace_root_unknown().to_owned(),
-                ));
+                return Err(CliError::Usage(text::msg::release_workspace_root_unknown()));
             }
         }
     }
@@ -2021,7 +2015,7 @@ const WASM_BINDGEN_VERSION: &str = "0.2.126";
 ///
 /// # Errors
 /// [`CliError::EmittedBuildFailed`] when the wasm `cargo build` fails;
-/// [`CliError::UsageOwned`] when `wasm-bindgen` fails.
+/// [`CliError::Usage`] when `wasm-bindgen` fails.
 pub fn bundle_wasm(out_dir: &Path) -> Result<(), CliError> {
     // Fail closed before the cross-compile: a missing toolchain becomes a clear
     // root-cause message rather than an opaque OS spawn error.
@@ -2089,7 +2083,7 @@ pub fn bundle_wasm(out_dir: &Path) -> Result<(), CliError> {
         })?;
     if !wb_status.success() {
         let code = wb_status.code().unwrap_or(1);
-        return Err(CliError::UsageOwned(text::wasm_bindgen_failed(
+        return Err(CliError::Usage(text::msg::wasm_bindgen_failed(
             &code,
             &WASM_BINDGEN_VERSION,
         )));
@@ -2207,7 +2201,7 @@ pub fn bundle_wasi(out_dir: &Path) -> Result<PathBuf, CliError> {
 /// `wasm32-wasip1/release` — parsed from the build, never reconstructed.
 ///
 /// # Errors
-/// [`CliError::UsageOwned`] when no such artifact appears in the stream (a
+/// [`CliError::Usage`] when no such artifact appears in the stream (a
 /// cargo/JSON-schema mismatch surfaces here as a precise root-cause message
 /// rather than a downstream "could not load the module" from a guessed path).
 fn wasi_artifact_path(messages: &str, out_dir: &Path) -> Result<PathBuf, CliError> {
@@ -2247,7 +2241,7 @@ fn wasi_artifact_path(messages: &str, out_dir: &Path) -> Result<PathBuf, CliErro
         }
     }
 
-    Err(CliError::UsageOwned(text::wasi_artifact_missing(
+    Err(CliError::Usage(text::msg::wasi_artifact_missing(
         &out_dir.display(),
     )))
 }
@@ -2309,7 +2303,7 @@ pub fn typed_log_file() -> PathBuf {
 /// runs before any capability resolution or consent prompt.
 ///
 /// # Errors
-/// [`CliError::UsageOwned`] naming why the session cannot be recorded or
+/// [`CliError::Usage`] naming why the session cannot be recorded or
 /// replayed.
 pub fn gate_session(
     flag: &str,
@@ -2323,12 +2317,12 @@ pub fn gate_session(
         delivery::Shape::Web => Some("a web app"),
     };
     if let Some(name) = shape_name {
-        return Err(CliError::UsageOwned(text::session_no_recordable(
+        return Err(CliError::Usage(text::msg::session_no_recordable(
             &flag, &name,
         )));
     }
     if compile_target.is_wasm() {
-        return Err(CliError::UsageOwned(text::session_native_only(&flag)));
+        return Err(CliError::Usage(text::msg::session_native_only(&flag)));
     }
     Ok(())
 }
@@ -2340,14 +2334,14 @@ pub fn gate_session(
 /// so the session gate never re-infers them.
 ///
 /// # Errors
-/// [`CliError::UsageOwned`] when the resolved capability union is
+/// [`CliError::Usage`] when the resolved capability union is
 /// native-bearing.
 pub fn gate_session_capabilities(
     flag: &str,
     resolved: &run_sandbox::ResolvedCapabilities,
 ) -> Result<(), CliError> {
     if run_sandbox::is_native_bearing(&resolved.union()) {
-        return Err(CliError::UsageOwned(text::session_jailed(&flag)));
+        return Err(CliError::Usage(text::msg::session_jailed(&flag)));
     }
     Ok(())
 }
@@ -2371,7 +2365,7 @@ pub enum SessionPlan {
 /// [`show_session_trace`] reads a trace through the capped reader.
 ///
 /// # Errors
-/// [`CliError::UsageOwned`] when the replay log is missing or not a file; the
+/// [`CliError::Usage`] when the replay log is missing or not a file; the
 /// output-root errors of claiming the log path.
 pub fn resolve_session_plan(
     session: &cli_args::SessionMode,
@@ -2393,7 +2387,7 @@ pub fn resolve_session_plan(
             if is_regular_file(&trace) {
                 return Ok(SessionPlan::ShowTrace(trace));
             }
-            Err(CliError::UsageOwned(text::replay_no_default_log(
+            Err(CliError::Usage(text::msg::replay_no_default_log(
                 &typed.display(),
                 &trace.display(),
             )))
@@ -2404,11 +2398,11 @@ pub fn resolve_session_plan(
 /// The plan for the log a user named: a trace is shown, any other log folded.
 ///
 /// # Errors
-/// [`CliError::UsageOwned`] naming the path and how to record a log, unless it
+/// [`CliError::Usage`] naming the path and how to record a log, unless it
 /// is a regular file.
 pub fn replay_plan(path: PathBuf) -> Result<SessionPlan, CliError> {
     if !is_regular_file(&path) {
-        return Err(CliError::UsageOwned(text::replay_log_missing(
+        return Err(CliError::Usage(text::msg::replay_log_missing(
             &path.display(),
         )));
     }
@@ -2640,7 +2634,7 @@ pub fn run_run_with_args(args: cli_args::RunArgs) -> Result<(), CliError> {
     let (engine, triple) = compile_target.engine_triple();
     delivery
         .admit_triple(engine, triple)
-        .map_err(|e| CliError::UsageOwned(text::command_refusal(&"run", &e)))?;
+        .map_err(|e| CliError::Usage(text::msg::command_refusal(&"run", &e)))?;
 
     // `ipe run --target wasi` EXECUTES the emitted module under embedded
     // wasmtime; fail closed BEFORE any emit or build when no engine is linked
@@ -2895,7 +2889,7 @@ pub fn run_run_with_args(args: cli_args::RunArgs) -> Result<(), CliError> {
         // (main.rs) prints it to stderr and exits 1.
         if !status.success() {
             let code = status.code().unwrap_or(1);
-            return Err(CliError::UsageOwned(text::program_exited(&bin_name, &code)));
+            return Err(CliError::Usage(text::msg::program_exited(&bin_name, &code)));
         }
         Ok(())
     }
@@ -2914,7 +2908,7 @@ pub fn run_run_with_args(args: cli_args::RunArgs) -> Result<(), CliError> {
 /// deployer escape (the raw binary opts out of the jail); this path does not.
 ///
 /// # Errors
-/// [`CliError::UsageOwned`] on a missing binary, a native artifact whose profile
+/// [`CliError::Usage`] on a missing binary, a native artifact whose profile
 /// is missing/tampered, a refused floor check, or a fail-closed jail refusal.
 pub fn run_exec(rest: &[String]) -> Result<(), CliError> {
     // Split `<dir> [-- args…]`.
@@ -2931,7 +2925,7 @@ pub fn run_exec(rest: &[String]) -> Result<(), CliError> {
         .first()
         .map_or_else(|| PathBuf::from("out").join("rust"), PathBuf::from);
     if !dir.is_dir() {
-        return Err(CliError::UsageOwned(text::exec_no_artifact_dir(
+        return Err(CliError::Usage(text::msg::exec_no_artifact_dir(
             &dir.display(),
         )));
     }
@@ -2945,7 +2939,7 @@ pub fn run_exec(rest: &[String]) -> Result<(), CliError> {
     bin.push("debug");
     bin.push(&exec_bin_name);
     if !bin.is_file() {
-        return Err(CliError::UsageOwned(text::exec_no_binary(&bin.display())));
+        return Err(CliError::Usage(text::msg::exec_no_binary(&bin.display())));
     }
 
     let app_args_os: Vec<std::ffi::OsString> =
@@ -2956,7 +2950,7 @@ pub fn run_exec(rest: &[String]) -> Result<(), CliError> {
     if run_sandbox::artifact_is_native(&bin)? {
         let profile_path = dir.join("ipe.profile");
         if !profile_path.is_file() {
-            return Err(CliError::UsageOwned(text::exec_profile_missing(
+            return Err(CliError::Usage(text::msg::exec_profile_missing(
                 &bin.display(),
             )));
         }
@@ -3009,7 +3003,7 @@ pub fn run_exec(rest: &[String]) -> Result<(), CliError> {
                 source: e,
             })?;
         if !status.success() {
-            return Err(CliError::UsageOwned(text::program_exited(
+            return Err(CliError::Usage(text::msg::program_exited(
                 &exec_bin_name,
                 &status.code().unwrap_or(1),
             )));
@@ -3100,17 +3094,17 @@ pub fn cargo_target_directory(crate_dir: &Path) -> Result<PathBuf, CliError> {
             source: e,
         })?;
     if !output.status.success() {
-        return Err(CliError::UsageOwned(text::cargo_metadata_failed(
+        return Err(CliError::Usage(text::msg::cargo_metadata_failed(
             &crate_dir.display(),
             &String::from_utf8_lossy(&output.stderr),
         )));
     }
     let meta: serde_json::Value = serde_json::from_slice(&output.stdout)
-        .map_err(|e| CliError::UsageOwned(text::cargo_metadata_unparsable(&e)))?;
+        .map_err(|e| CliError::Usage(text::msg::cargo_metadata_unparsable(&e)))?;
     meta.get("target_directory")
         .and_then(serde_json::Value::as_str)
         .map(PathBuf::from)
-        .ok_or_else(|| CliError::UsageOwned(text::cargo_metadata_no_target_dir().to_owned()))
+        .ok_or_else(|| CliError::Usage(text::msg::cargo_metadata_no_target_dir()))
 }
 
 /// `ipe explain` has been folded into `ipe doc`.
@@ -3119,7 +3113,7 @@ pub fn cargo_target_directory(crate_dir: &Path) -> Result<PathBuf, CliError> {
 /// error so the dispatcher shows the `ipe doc` help page. The command is no
 /// longer advertised; the COMMANDS registry entry was removed.
 pub fn run_explain(_rest: &[String]) -> Result<(), CliError> {
-    Err(CliError::UsageOwned(text::explain_moved().to_owned()))
+    Err(CliError::Usage(text::msg::explain_moved()))
 }
 
 /// `ipe fix <path>` — apply machine-applicable fixes to the source file.
@@ -3460,7 +3454,9 @@ pub fn build_source_graph(entry: &Path) -> Result<SourceGraph, CliError> {
         .get(&collected.entry_module_path)
         .copied()
     else {
-        return Err(CliError::Usage(text::internal_entry_not_in_source_map()));
+        return Err(CliError::Usage(
+            text::msg::internal_entry_not_in_source_map(),
+        ));
     };
 
     Ok(SourceGraph {
@@ -3573,7 +3569,7 @@ pub fn consent_to_capabilities(
 /// prompt. A program with no `.Unsafe` import is untouched.
 ///
 /// # Errors
-/// [`CliError::UsageOwned`] (`IPE-S0001`) when consent is required but absent;
+/// [`CliError::Usage`] (`IPE-S0001`) when consent is required but absent;
 /// the source-read errors of the provenance scan.
 fn acknowledge_unsafe_imports(
     resolved: &run_sandbox::ResolvedCapabilities,
@@ -3616,7 +3612,7 @@ fn acknowledge_unsafe_imports(
 /// program that reaches no web capability is untouched.
 ///
 /// # Errors
-/// [`CliError::UsageOwned`] (`IPE-S0002`) when a disclosed web axis is ungranted;
+/// [`CliError::Usage`] (`IPE-S0002`) when a disclosed web axis is ungranted;
 /// the source-read errors of the provenance scan.
 fn gate_web_consent(
     resolved: &run_sandbox::ResolvedCapabilities,
@@ -3667,7 +3663,7 @@ fn gate_web_consent(
 /// half — the crossing must be granted before the (costly) emit + cargo build.
 ///
 /// # Errors
-/// [`CliError::UsageOwned`] (`IPE-S0003`) when the disclosed native crossing is
+/// [`CliError::Usage`] (`IPE-S0003`) when the disclosed native crossing is
 /// ungranted; the source-read errors of the provenance scan.
 fn gate_native_ffi_consent(
     resolved: &run_sandbox::ResolvedCapabilities,

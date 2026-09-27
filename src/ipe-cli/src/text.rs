@@ -9,8 +9,89 @@
 //! once with exactly its placeholders, so a drifted catalog fails the build; the
 //! catalog tests add that every section has a declaration. Edit the `.md`, never
 //! a Rust string.
+//!
+//! A CLI error carries its text as a [`Message`], which only this module builds
+//! (through the functions under [`msg`]), so an error spelled as a Rust literal
+//! is a type error. A placeholder whose value is untrusted — raw user input,
+//! fetched content, a child process's output — is declared `&TerminalSafe`, so
+//! the value is sanitised before it can reach the message, whatever prints it.
 
+use std::borrow::Cow;
 use std::fmt::{self, Write as _};
+use std::ops::Deref;
+
+/// A user-facing message: a catalog text, or an already-rendered error relayed
+/// verbatim.
+///
+/// Only this module constructs one, so a message cannot be spelled as a Rust
+/// literal at a use site.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Message(Cow<'static, str>);
+
+impl Message {
+    /// A catalog text without placeholders.
+    const fn fixed(text: &'static str) -> Self {
+        Self(Cow::Borrowed(text))
+    }
+
+    /// A filled catalog text.
+    const fn filled(text: String) -> Self {
+        Self(Cow::Owned(text))
+    }
+
+    /// Relay an error value whose own `Display` is its user-facing text.
+    ///
+    /// For a compiler diagnostic, a typed refusal, or lines already built from
+    /// catalog texts.
+    #[must_use]
+    pub fn relay(rendered: &dyn fmt::Display) -> Self {
+        Self(Cow::Owned(rendered.to_string()))
+    }
+
+    /// The message text.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Display for Message {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl Deref for Message {
+    type Target = str;
+
+    fn deref(&self) -> &str {
+        &self.0
+    }
+}
+
+impl PartialEq<str> for Message {
+    fn eq(&self, other: &str) -> bool {
+        *self.0 == *other
+    }
+}
+
+impl PartialEq<&str> for Message {
+    fn eq(&self, other: &&str) -> bool {
+        *self.0 == **other
+    }
+}
+
+impl PartialEq<String> for Message {
+    fn eq(&self, other: &String) -> bool {
+        *self.0 == **other
+    }
+}
+
+impl From<Message> for String {
+    fn from(message: Message) -> Self {
+        message.0.into_owned()
+    }
+}
 
 /// The message catalog.
 pub const CATALOG: &str = include_str!("../text/messages.md");
@@ -274,6 +355,17 @@ pub fn fill(template: &str, args: &[(&str, &dyn fmt::Display)]) -> String {
     out
 }
 
+/// A message parameter as the `&dyn Display` that [`fill`] takes.
+const fn shown(value: &dyn fmt::Display) -> &dyn fmt::Display {
+    value
+}
+
+/// The Rust type of a message parameter: `&dyn Display` unless declared.
+macro_rules! param_ty {
+    () => { &dyn ::std::fmt::Display };
+    ($ty:ty) => { $ty };
+}
+
 /// Declare one catalog message as a function.
 ///
 /// A message without placeholders is its `&'static str` text; one with
@@ -297,25 +389,53 @@ macro_rules! message_fn {
             TEXT
         }
     };
-    ($(#[$meta:meta])* $name:ident($($param:ident),+) = $key:literal) => {
+    ($(#[$meta:meta])* $name:ident($($param:ident $(: $pty:ty)?),+) = $key:literal) => {
         $(#[$meta])*
         #[must_use]
-        pub fn $name($($param: &dyn fmt::Display),+) -> String {
+        pub fn $name($($param: param_ty!($($pty)?)),+) -> String {
             const TEXT: &str = checked_section($key, &[$(stringify!($param)),+]);
             // IPE-RUST-AUDIT:ACCEPTED (Arthur Maciel) — compile-time `const` assertion (not a runtime panic); fails the BUILD if this declaration drifts from its `text/messages.md` section, the catalog SEAL [ledger #boundary]
             const _: () = assert!(
                 !TEXT.is_empty(),
                 concat!("message `", $key, "` disagrees with text/messages.md")
             );
-            fill(TEXT, &[$((stringify!($param), $param)),+])
+            fill(TEXT, &[$((stringify!($param), shown($param))),+])
         }
     };
 }
 
-/// Declare the catalog's messages: a function per message, plus [`DECLARED`].
+/// Declare one catalog message as a [`Message`] function beside its text function.
+macro_rules! message_value_fn {
+    ($(#[$meta:meta])* $name:ident) => {
+        $(#[$meta])*
+        #[must_use]
+        pub const fn $name() -> Message {
+            Message::fixed(super::$name())
+        }
+    };
+    ($(#[$meta:meta])* $name:ident($($param:ident $(: $pty:ty)?),+)) => {
+        $(#[$meta])*
+        #[must_use]
+        pub fn $name($($param: param_ty!($($pty)?)),+) -> Message {
+            Message::filled(super::$name($($param),+))
+        }
+    };
+}
+
+/// Declare the catalog's messages.
+///
+/// Each gets a text function, its [`Message`] twin under [`msg`], and a
+/// [`DECLARED`] entry.
 macro_rules! messages {
-    ($($(#[$meta:meta])* $name:ident $(($($param:ident),+))? = $key:literal;)*) => {
-        $(message_fn!($(#[$meta])* $name $(($($param),+))? = $key);)*
+    ($($(#[$meta:meta])* $name:ident $(($($param:ident $(: $pty:ty)?),+))? = $key:literal;)*) => {
+        $(message_fn!($(#[$meta])* $name $(($($param $(: $pty)?),+))? = $key);)*
+
+        /// Every catalog message as a [`Message`], the only way to build one.
+        pub mod msg {
+            use super::Message;
+
+            $(message_value_fn!($(#[$meta])* $name $(($($param $(: $pty)?),+))?);)*
+        }
 
         /// Every declared message: its catalog key and its placeholders.
         pub const DECLARED: &[(&str, &[&str])] = &[$(($key, &[$($(stringify!($param)),+)?])),*];
@@ -1093,6 +1213,105 @@ messages! {
     publish_fresh_needs_blessing(name, reason) = "publish-fresh-needs-blessing";
     /// A blessing proof that does not cover the claimed publisher.
     publish_fresh_claim_not_covered(claimed) = "publish-fresh-claim-not-covered";
+    /// An index `source` that is not an accepted URL.
+    index_source_url_invalid(pkg, raw: &crate::style::TerminalSafe) = "index-source-url-invalid";
+    /// An index `rev` shaped like an injection.
+    index_rev_injection(pkg, raw: &crate::style::TerminalSafe) = "index-rev-injection";
+    /// A recorded `rev` that is not a full commit SHA.
+    index_rev_not_immutable(pkg, raw: &crate::style::TerminalSafe) = "index-rev-not-immutable";
+    /// `git rev-parse` could not be run.
+    index_rev_parse_unavailable(pkg, detail) = "index-rev-parse-unavailable";
+    /// A pinned ref that is not a commit in the fetched checkout.
+    index_rev_unresolved(pkg, refspec: &crate::style::TerminalSafe, rev: &crate::style::TerminalSafe) =
+        "index-rev-unresolved";
+    /// An index `sha256` that is not a content hash.
+    index_sha256_invalid(pkg, raw: &crate::style::TerminalSafe) = "index-sha256-invalid";
+    /// An index entry that exists but cannot be read.
+    index_entry_unreadable(name, detail) = "index-entry-unreadable";
+    /// `ipe add` of a package the index does not list.
+    add_package_not_in_index(name) = "add-package-not-in-index";
+    /// `ipe add` could not read an index entry.
+    add_index_entry_unreadable(name, kind) = "add-index-entry-unreadable";
+    /// No published version satisfies the requirement.
+    index_no_version_satisfies(name, req, available) = "index-no-version-satisfies";
+    /// The available-versions list of an entry with none.
+    index_no_version_available = "index-no-version-available";
+    /// An index entry `publisher` that is not a login.
+    index_publisher_not_login(name, refusal) = "index-publisher-not-login";
+    /// An index entry without `publisher`.
+    index_entry_missing_publisher(name) = "index-entry-missing-publisher";
+    /// An index entry without `[[version]]`.
+    index_entry_no_versions(name) = "index-entry-no-versions";
+    /// A malformed registry JSON mirror.
+    registry_json_malformed(name, detail: &crate::style::TerminalSafe) = "registry-json-malformed";
+    /// An index entry capability that is not known.
+    index_capability_unknown(name, detail: &crate::style::TerminalSafe) =
+        "index-capability-unknown";
+    /// A `[[version]]` entry missing a field.
+    index_version_missing_field(name, field) = "index-version-missing-field";
+    /// An index entry version that is not semver.
+    index_version_invalid(name, version: &crate::style::TerminalSafe, detail: &crate::style::TerminalSafe) =
+        "index-version-invalid";
+    /// An index entry `capabilities` that is not an array.
+    index_capabilities_not_array(name, raw: &crate::style::TerminalSafe) =
+        "index-capabilities-not-array";
+    /// `ipe package publish --rev` naming no commit.
+    publish_rev_unresolved(refspec: &crate::style::TerminalSafe, rev: &crate::style::TerminalSafe) =
+        "publish-rev-unresolved";
+    /// A scratch-filesystem failure during publish.
+    publish_scratch_io(detail) = "publish-scratch-io";
+    /// Cloning the author's index fork failed.
+    publish_clone_failed(fork_url, git: &crate::style::TerminalSafe) = "publish-clone-failed";
+    /// Pushing to the author's index fork failed.
+    publish_push_failed(branch, fork_url, url, git: &crate::style::TerminalSafe) =
+        "publish-push-failed";
+    /// `ipe package publish` outside a git repository.
+    publish_not_git_repo(path) = "publish-not-git-repo";
+    /// `ipe package publish` could not run `git`.
+    publish_git_unavailable(detail) = "publish-git-unavailable";
+    /// A registry trust identity field that is not a token.
+    trust_token_invalid(label, raw: &crate::style::TerminalSafe) = "trust-token-invalid";
+    /// A malformed signature bundle.
+    signature_bundle_malformed(pkg, detail: &crate::style::TerminalSafe) =
+        "signature-bundle-malformed";
+    /// An unsigned version under a policy requiring signatures.
+    signature_required_absent(pkg) = "signature-required-absent";
+    /// A publisher signature that does not verify.
+    signature_untrusted(pkg, detail: &crate::style::TerminalSafe) = "signature-untrusted";
+    /// A malformed registry trust config.
+    trust_config_malformed(detail: &crate::style::TerminalSafe) = "trust-config-malformed";
+    /// An `ipe.lock` `kind` value that is not known.
+    lock_kind_unrecognised(value: &crate::style::TerminalSafe) = "lock-kind-unrecognised";
+    /// An `ipe.lock` `[[package]]` missing a field.
+    lock_package_missing_field(field) = "lock-package-missing-field";
+    /// An `ipe.lock` version that is not semver.
+    lock_version_invalid(version: &crate::style::TerminalSafe, detail: &crate::style::TerminalSafe) =
+        "lock-version-invalid";
+    /// A path dependency whose directory does not exist.
+    resolve_path_dep_missing(name, path) = "resolve-path-dep-missing";
+    /// An index dependency given to the escape resolver.
+    resolve_index_dep_escape(name) = "resolve-index-dep-escape";
+    /// Dependency resolution could not run `git`.
+    resolve_git_unavailable(name, detail) = "resolve-git-unavailable";
+    /// A `git` step of dependency resolution failed.
+    resolve_git_failed(name, args: &crate::style::TerminalSafe, stderr: &crate::style::TerminalSafe) =
+        "resolve-git-failed";
+    /// An `ipe login` failure.
+    login_error(message) = "login-error";
+    /// A package name that is not a safe path component.
+    package_name_invalid(raw: &crate::style::TerminalSafe, why) = "package-name-invalid";
+    /// Why a package name is invalid: it is empty.
+    package_name_empty = "package-name-empty";
+    /// Why a package name is invalid: it is too long.
+    package_name_too_long(max) = "package-name-too-long";
+    /// Why a package name is invalid: its first character.
+    package_name_bad_start = "package-name-bad-start";
+    /// Why a package name is invalid: a doubled `-`.
+    package_name_doubled_dash = "package-name-doubled-dash";
+    /// Why a package name is invalid: a disallowed character.
+    package_name_bad_char = "package-name-bad-char";
+    /// Why a package name is invalid: a trailing `-`.
+    package_name_trailing_dash = "package-name-trailing-dash";
 }
 
 #[cfg(test)]
@@ -1213,11 +1432,11 @@ mod tests {
     /// Calls whose message argument must come from the catalog.
     const MESSAGE_SINKS: &[&str] = &[
         "CliError::Usage(",
-        "CliError::UsageOwned(",
         "Self::Usage(",
-        "Self::UsageOwned(",
+        "CliError::Resolve(",
+        "Self::Resolve(",
+        "Message::relay(",
         "usage(",
-        "usage_owned(",
         "login_error(",
     ];
 
@@ -1493,8 +1712,8 @@ mod tests {
 
     /// No production code spells a user-facing message as a Rust literal.
     ///
-    /// Every message sink (`CliError::Usage`/`UsageOwned` and the helpers that
-    /// wrap them) takes its text from a `text::` function, so the rendered text
+    /// Every message sink (`CliError::Usage`, `CliError::Resolve`, and the
+    /// helpers that wrap them) takes its text from a `text::` function, so the rendered text
     /// and its catalog entry cannot drift. `#[cfg(test)]` items and `tests/`
     /// directories are exempt: a test fixture is not user-facing text.
     #[test]
@@ -1529,15 +1748,17 @@ mod tests {
             r#"Err(CliError::Usage("x"))"#,
             r#"Err(CliError::Usage(
                 "split across lines"))"#,
-            r#"CliError::UsageOwned(format!("bad {x}"))"#,
-            r#"CliError::UsageOwned(format!("{}: {}", a, b))"#,
-            r#"CliError::UsageOwned(format!("{{literal braces}}"))"#,
-            r#"CliError::UsageOwned("x".to_owned())"#,
-            r#"CliError::UsageOwned(String::from("x"))"#,
-            r#"CliError::UsageOwned(format!(r"raw {x}"))"#,
-            r#"Self::UsageOwned("x".into())"#,
+            r#"CliError::Usage(format!("bad {x}"))"#,
+            r#"CliError::Usage(format!("{}: {}", a, b))"#,
+            r#"CliError::Usage(format!("{{literal braces}}"))"#,
+            r#"CliError::Usage("x".to_owned())"#,
+            r#"CliError::Usage(String::from("x"))"#,
+            r#"CliError::Usage(format!(r"raw {x}"))"#,
+            r#"Self::Usage("x".into())"#,
             r#"package_manifest::usage("x")"#,
-            r#"usage_owned(format!("no {x} here"))"#,
+            r#"Message::relay(&format!("no {x} here"))"#,
+            r#"CliError::Resolve(format!("package `{name}`: {e}"))"#,
+            r#"Self::Resolve("x".into())"#,
             r#"login_error(&format!("failed: {e}"))"#,
             "fn f() {}\n#[cfg(test)]\nfn t() {}\nfn g() { CliError::Usage(\"late\") }",
             "#[cfg(test)]\nuse x;\nfn g() { CliError::Usage(\"after a test-only use\") }",
@@ -1550,11 +1771,13 @@ mod tests {
     #[test]
     fn the_detector_passes_catalog_calls_comments_strings_and_tests() {
         let clean = [
-            "CliError::Usage(text::fix_usage())",
-            r#"CliError::UsageOwned(format!("{e}"))"#,
-            r#"CliError::UsageOwned(format!("{}\n{}", a, b))"#,
-            "CliError::UsageOwned(text::command_refusal(&a, &b))",
-            "CliError::UsageOwned(err.to_string())",
+            "CliError::Usage(text::msg::fix_usage())",
+            r#"CliError::Usage(format!("{e}"))"#,
+            r#"CliError::Usage(format!("{}\n{}", a, b))"#,
+            "CliError::Usage(text::msg::command_refusal(&a, &b))",
+            "CliError::Usage(crate::text::Message::relay(&err))",
+            "CliError::Resolve(text::msg::index_entry_no_versions(&name))",
+            "CliError::Resolve(crate::text::Message::relay(&banner))",
             "// CliError::Usage(\"in a comment\")",
             "/* CliError::Usage(\"in a block comment\") */",
             r#"let s = "CliError::Usage(\"in a string\")";"#,

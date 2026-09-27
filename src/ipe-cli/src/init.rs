@@ -355,7 +355,7 @@ fn fill_package(template: &str, project_name: &str, runtime: InitRuntime) -> Str
 /// supplied shape (or the default, `web`) is used directly.
 ///
 /// # Errors
-/// [`CliError::UsageOwned`] on an unrecognised flag or an unexpected argument;
+/// [`CliError::Usage`] on an unrecognised flag or an unexpected argument;
 /// [`CliError::Io`] on any filesystem failure.
 pub fn run_init(rest: &[String]) -> Result<(), CliError> {
     let args = parse_init_args(rest)?;
@@ -444,7 +444,7 @@ fn guard_rerun_conflict(
         return Ok(());
     };
     if stated != existing {
-        return Err(CliError::UsageOwned(text::init_shape_fixed(
+        return Err(CliError::Usage(text::msg::init_shape_fixed(
             &existing.label(),
             &stated.label(),
         )));
@@ -538,7 +538,7 @@ fn parse_init_args(rest: &[String]) -> Result<InitArgs, CliError> {
             "--shape" => {
                 let val = iter
                     .next()
-                    .ok_or(CliError::Usage(text::init_shape_needs_value()))?;
+                    .ok_or(CliError::Usage(text::msg::init_shape_needs_value()))?;
                 shape_flag = Some(parse_shape_word(val)?);
             }
             flag if flag.starts_with('-') => {
@@ -561,7 +561,7 @@ fn parse_init_args(rest: &[String]) -> Result<InitArgs, CliError> {
     // if both are present they must name the same shape.
     let shape = match (shape_positional, shape_flag) {
         (Some(p), Some(f)) if p != f => {
-            return Err(CliError::UsageOwned(text::init_shape_disagrees(
+            return Err(CliError::Usage(text::msg::init_shape_disagrees(
                 &p.label(),
                 &f.label(),
             )));
@@ -575,7 +575,7 @@ fn parse_init_args(rest: &[String]) -> Result<InitArgs, CliError> {
     if let (Some(rt), Some(sh)) = (runtime_positional, shape)
         && !sh.has_runtime_choice()
     {
-        return Err(CliError::UsageOwned(text::init_runtime_needs_web(
+        return Err(CliError::Usage(text::msg::init_runtime_needs_web(
             &rt.label(),
             &sh.label(),
         )));
@@ -593,7 +593,7 @@ fn parse_init_args(rest: &[String]) -> Result<InitArgs, CliError> {
 /// Parse a shape word positional or flag value into an [`InitShape`], with the
 /// one pedagogical "unknown shape" message.
 fn parse_shape_word(word: &str) -> Result<InitShape, CliError> {
-    InitShape::parse(word).ok_or_else(|| CliError::UsageOwned(text::init_unknown_shape(&word)))
+    InitShape::parse(word).ok_or_else(|| CliError::Usage(text::msg::init_unknown_shape(&word)))
 }
 
 /// Parse a runtime word positional into an [`InitRuntime`], with the one
@@ -602,7 +602,7 @@ fn parse_shape_word(word: &str) -> Result<InitShape, CliError> {
 /// acceptance.
 fn parse_runtime_word(word: &str) -> Result<InitRuntime, CliError> {
     let (runtime, deprecated) = InitRuntime::parse(word)
-        .ok_or_else(|| CliError::UsageOwned(text::init_unknown_runtime(&word)))?;
+        .ok_or_else(|| CliError::Usage(text::msg::init_unknown_runtime(&word)))?;
     if let Some(alias) = deprecated {
         print_runtime_rename_hint(alias, runtime);
     }
@@ -649,7 +649,7 @@ fn wizard_shape() -> Result<InitShape, CliError> {
         "5" | "server" => InitShape::Server,
         "6" | "script" => InitShape::Script,
         other => {
-            return Err(CliError::UsageOwned(text::init_unknown_shape_choice(
+            return Err(CliError::Usage(text::msg::init_unknown_shape_choice(
                 &other,
             )));
         }
@@ -683,7 +683,7 @@ fn wizard_runtime() -> Result<InitRuntime, CliError> {
             InitRuntime::Solo
         }
         other => {
-            return Err(CliError::UsageOwned(text::init_unknown_runtime_choice(
+            return Err(CliError::Usage(text::msg::init_unknown_runtime_choice(
                 &other,
             )));
         }
@@ -930,7 +930,7 @@ fn project_name_for(target_dir: &Path) -> Result<String, CliError> {
         .file_name()
         .and_then(|n| n.to_str())
         .map(str::to_owned)
-        .ok_or_else(|| CliError::UsageOwned(text::init_no_project_name(&target_dir.display())))?;
+        .ok_or_else(|| CliError::Usage(text::msg::init_no_project_name(&target_dir.display())))?;
     Ok(name)
 }
 

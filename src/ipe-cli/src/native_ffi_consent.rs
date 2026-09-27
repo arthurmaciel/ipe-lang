@@ -179,7 +179,7 @@ fn refusal(disclosures: &[String]) -> CliError {
             crate::text::native_ffi_consent_remedy().to_owned(),
         ))
         .collect();
-    CliError::UsageOwned(lines.join("\n"))
+    CliError::Usage(crate::text::Message::relay(&lines.join("\n")))
 }
 
 #[cfg(test)]

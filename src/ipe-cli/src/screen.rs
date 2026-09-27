@@ -548,7 +548,7 @@ mod tests {
 
     #[test]
     fn a_user_error_is_orange_and_an_internal_error_light_red() {
-        let usage = CliError::Usage("nothing to build here");
+        let usage = CliError::Usage(crate::text::Message::relay(&"nothing to build here"));
         let out = error_screen(&usage, true)
             .map(|s| s.render(Header::Omitted))
             .unwrap_or_default();
@@ -584,7 +584,9 @@ mod tests {
         let out = screen_of(&offline);
         assert!(!out.contains(REPORT_BUGS_PHRASE), "{out:?}");
 
-        let out = screen_of(&CliError::Usage("nothing to build here"));
+        let out = screen_of(&CliError::Usage(crate::text::Message::relay(
+            &"nothing to build here",
+        )));
         assert!(!out.contains(REPORT_BUGS_PHRASE), "{out:?}");
     }
 
@@ -708,9 +710,9 @@ mod tests {
     fn a_manifest_value_cannot_inject_escapes_into_the_help_screen() {
         let err = crate::driver::with_help_on_misuse(
             "build",
-            Err(CliError::UsageOwned(format!(
+            Err(CliError::Usage(crate::text::Message::relay(&format!(
                 "unknown manifest value `{HOSTILE}`"
-            ))),
+            )))),
         )
         .err();
         assert!(
@@ -759,7 +761,9 @@ mod tests {
 
     #[test]
     fn machine_json_escapes_the_sanitised_message_exactly_once() {
-        let err = CliError::UsageOwned(format!("bad value `a\"b\\c` {HOSTILE}"));
+        let err = CliError::Usage(crate::text::Message::relay(&format!(
+            "bad value `a\"b\\c` {HOSTILE}"
+        )));
         let line = crate::machine_output::machine_error(
             crate::cli_args::OutputFormat::Json,
             "build",
