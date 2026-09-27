@@ -1668,12 +1668,11 @@ mod tests {
     /// A marked `out/` whose `.ipe-cache` is a planted link: the build keeps
     /// going uncached (the cache is advisory), and nothing is written or read
     /// through the link.
-    #[cfg(unix)]
     #[test]
     fn in_output_cache_never_goes_through_a_planted_cache_dir_link() {
         let (base, owned, elsewhere) = claimed_out_and_elsewhere("dir-link");
         let link = owned.path().join(CACHE_DIR_NAME);
-        std::os::unix::fs::symlink(&elsewhere, &link).expect("plant .ipe-cache link");
+        crate::output_dir::test_links::plant_link(&elsewhere, &link);
         let site = in_output_site(&owned);
         let root = site.root(&owned).expect("root from the claimed dir");
 
@@ -1696,13 +1695,12 @@ mod tests {
     }
 
     /// As above, with the link one level down, at the salt partition.
-    #[cfg(unix)]
     #[test]
     fn in_output_cache_never_goes_through_a_planted_salt_link() {
         let (base, owned, elsewhere) = claimed_out_and_elsewhere("salt-link");
         let cache = owned.path().join(CACHE_DIR_NAME);
         fs::create_dir_all(&cache).expect("mkdir .ipe-cache");
-        std::os::unix::fs::symlink(&elsewhere, cache.join("salt")).expect("plant salt link");
+        crate::output_dir::test_links::plant_link(&elsewhere, &cache.join("salt"));
         let site = in_output_site(&owned);
         let root = site.root(&owned).expect("root from the claimed dir");
 
@@ -1721,7 +1719,6 @@ mod tests {
     }
 
     /// A planted link at the entry file itself is a miss, never followed.
-    #[cfg(unix)]
     #[test]
     fn in_output_load_refuses_a_linked_entry_file() {
         let (base, owned, elsewhere) = claimed_out_and_elsewhere("file-link");
@@ -1729,7 +1726,7 @@ mod tests {
         plant_entry(&planted);
         let epoch_dir = owned.path().join(CACHE_DIR_NAME).join("salt").join("epoch");
         fs::create_dir_all(&epoch_dir).expect("mkdir epoch");
-        std::os::unix::fs::symlink(&planted, epoch_dir.join("key.json")).expect("plant entry link");
+        crate::output_dir::test_links::plant_link(&planted, &epoch_dir.join("key.json"));
         assert!(try_load(&in_output_site(&owned), "epoch", "key").is_none());
         let _ = fs::remove_dir_all(&base);
     }
@@ -2319,8 +2316,43 @@ mod tests {
         let _ = fs::remove_dir_all(&base);
     }
 
+    /// An empty epoch level junctioned in place after the write held it never writes through it.
+    ///
+    /// A held level cannot be renamed on this platform, only turned into a
+    /// junction while empty.
+    #[cfg(windows)]
+    #[test]
+    fn write_entry_never_follows_an_epoch_junctioned_in_place_mid_walk() {
+        let base = std::env::temp_dir().join(format!("ipe_cache_junction_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&base);
+        let root = base.join("cache");
+        let victim = base.join("victim");
+        fs::create_dir_all(root.join("e1")).expect("make epoch");
+        fs::create_dir_all(&victim).expect("make victim");
+        let level = root.join("e1");
+        let (at, target) = (level.clone(), victim.clone());
+        let mut swap = Some(move || {
+            crate::output_dir::test_links::junction_in_place(&at, &target);
+        });
+        let held_at = level.clone();
+        crate::output_dir::held::set_level_hook(Some(Box::new(move |held: &Path| {
+            if held == held_at
+                && let Some(swap) = swap.take()
+            {
+                swap();
+            }
+        })));
+        write_entry(&root, "e1", "k.json", b"payload");
+        crate::output_dir::held::set_level_hook(None);
+        assert_eq!(
+            fs::read_dir(&victim).expect("read victim").count(),
+            0,
+            "nothing reaches the junction target"
+        );
+        let _ = fs::remove_dir_all(&base);
+    }
+
     /// An epoch or file name that is not one plain component is never written.
-    #[cfg(unix)]
     #[test]
     fn write_entry_refuses_a_non_plain_name() {
         let base = std::env::temp_dir().join(format!("ipe_cache_plain_{}", std::process::id()));

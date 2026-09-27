@@ -261,6 +261,7 @@ fn print_summary(removed: &[String], format: OutputFormat) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::output_dir::test_links::plant_link;
 
     const OUT: &Generated = &Generated {
         name: "out",
@@ -326,11 +327,8 @@ mod tests {
 
     /// A generated name that is a symlink escaping the project root is refused,
     /// and the escape target is left intact — the delete never leaves the root.
-    #[cfg(unix)]
     #[test]
     fn refuses_a_symlink_escaping_the_root() {
-        use std::os::unix::fs::symlink;
-
         let base = std::env::temp_dir().join(format!("ipe_clean_escape_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&base);
         let root = base.join("project");
@@ -341,7 +339,7 @@ mod tests {
         let real_root = std::fs::canonicalize(&root).expect("canonicalize root");
 
         // `out` inside the project is a symlink to the outside directory.
-        symlink(&outside, root.join("out")).expect("make escaping symlink");
+        plant_link(&outside, &root.join("out"));
 
         let result = remove_generated_dir(&real_root, OUT);
         assert!(
@@ -359,11 +357,8 @@ mod tests {
     /// Planted symlinks in a marked `out/` are removed as links.
     ///
     /// Neither target is followed or touched.
-    #[cfg(unix)]
     #[test]
     fn removes_planted_links_without_following_them() {
-        use std::os::unix::fs::symlink;
-
         let base = std::env::temp_dir().join(format!("ipe_clean_planted_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&base);
         let root = base.join("project");
@@ -373,8 +368,11 @@ mod tests {
         std::fs::write(outside.join("keep.txt"), b"do not delete").expect("write victim");
         let real_root = std::fs::canonicalize(&root).expect("canonicalize root");
         crate::output_dir::OwnedDir::claim(&real_root.join("out")).expect("claim out");
-        symlink(&outside, real_root.join("out").join("rust")).expect("dir link");
-        symlink(outside.join("keep.txt"), real_root.join("out").join("bin")).expect("file link");
+        plant_link(&outside, &real_root.join("out").join("rust"));
+        plant_link(
+            &outside.join("keep.txt"),
+            &real_root.join("out").join("bin"),
+        );
 
         let removed = remove_generated_dir(&real_root, OUT).expect("remove must succeed");
         assert_eq!(removed, ["out/"]);
@@ -439,11 +437,8 @@ mod tests {
     }
 
     /// A symlinked cache entry is refused, never followed.
-    #[cfg(unix)]
     #[test]
     fn refuses_a_symlinked_cache_entry() {
-        use std::os::unix::fs::symlink;
-
         let base = std::env::temp_dir().join(format!("ipe_clean_ns_link_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&base);
         let root = base.join("project");
@@ -451,7 +446,7 @@ mod tests {
         std::fs::create_dir_all(root.join(".ipe")).expect("make .ipe");
         std::fs::create_dir_all(&outside).expect("make outside");
         std::fs::write(outside.join("keep.txt"), b"do not delete").expect("write victim");
-        symlink(&outside, root.join(".ipe").join("cache")).expect("link");
+        plant_link(&outside, &root.join(".ipe").join("cache"));
         let real_root = std::fs::canonicalize(&root).expect("canonicalize root");
 
         let result = remove_generated_dir(&real_root, DOT_IPE);
@@ -510,6 +505,59 @@ mod tests {
         assert!(
             real_root.join("out").is_symlink(),
             "the planted link is not removed"
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// An `out/` emptied and junctioned in place after clean held it is refused, the target untouched.
+    ///
+    /// A held level cannot be renamed on this platform, only turned into a
+    /// junction once empty.
+    #[cfg(windows)]
+    #[test]
+    fn refuses_an_out_dir_junctioned_in_place_mid_walk() {
+        let base = std::env::temp_dir().join(format!("ipe_clean_junction_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let root = base.join("project");
+        let victim = base.join("precious");
+        std::fs::create_dir_all(&root).expect("make root");
+        std::fs::create_dir_all(&victim).expect("make victim");
+        std::fs::write(victim.join("keep.txt"), "keep").expect("write victim");
+        let real_root = std::fs::canonicalize(&root).expect("canonicalize root");
+        let out = real_root.join("out");
+        crate::output_dir::OwnedDir::claim(&out).expect("claim out");
+        std::fs::write(out.join("generated.rs"), "gen").expect("generated file");
+        let (level, target) = (out.clone(), victim.clone());
+        let mut swap = Some(move || {
+            for entry in std::fs::read_dir(&level).expect("list out") {
+                std::fs::remove_file(entry.expect("out entry").path()).expect("empty out");
+            }
+            crate::output_dir::test_links::junction_in_place(&level, &target);
+        });
+        crate::output_dir::held::set_level_hook(Some(Box::new(move |held: &Path| {
+            if held == out
+                && let Some(swap) = swap.take()
+            {
+                swap();
+            }
+        })));
+        let result = remove_generated_dir(&real_root, OUT);
+        crate::output_dir::held::set_level_hook(None);
+        assert!(
+            result.is_err(),
+            "a junctioned out/ must be refused, got: {result:?}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(victim.join("keep.txt"))
+                .ok()
+                .as_deref(),
+            Some("keep"),
+            "the junction target must be left untouched"
+        );
+        assert_eq!(
+            std::fs::read_dir(&victim).expect("read victim").count(),
+            1,
+            "nothing is removed from the junction target"
         );
         let _ = std::fs::remove_dir_all(&base);
     }

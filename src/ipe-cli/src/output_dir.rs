@@ -168,6 +168,11 @@ pub enum OutputRefusal {
         /// The deepest nesting the walk descends.
         limit: usize,
     },
+    /// A directory on the path is a Windows reparse point ipe cannot see through.
+    ///
+    /// A cloud-sync folder, a mount point, or a deduplicated directory may
+    /// lead anywhere, so ipe refuses to act inside one.
+    ReparsePoint(PathBuf),
 }
 
 impl std::fmt::Display for OutputRefusal {
@@ -269,6 +274,13 @@ impl std::fmt::Display for OutputRefusal {
                 "{} is nested more than {limit} directories deep — ipe refuses to walk it; \
                  remove the tree yourself",
                 path.display()
+            ),
+            Self::ReparsePoint(p) => write!(
+                f,
+                "{} is or lies under a reparse point (a OneDrive folder, a mount point, \
+                 or a deduplicated directory) — ipe cannot prove where it leads; \
+                 point --out at a directory outside it",
+                p.display()
             ),
         }
     }
@@ -1368,6 +1380,9 @@ fn resolve_through_existing(path: &Path) -> Option<PathBuf> {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(windows)]
+    use super::test_links::junction_in_place;
+    use super::test_links::plant_link;
     use super::*;
 
     fn scratch(tag: &str) -> PathBuf {
@@ -1498,7 +1513,6 @@ mod tests {
         let _ = std::fs::remove_dir_all(&base);
     }
 
-    #[cfg(unix)]
     #[test]
     fn symlinked_out_dir_is_refused_and_its_target_untouched() {
         let base = scratch("symlink");
@@ -1507,7 +1521,7 @@ mod tests {
         std::fs::create_dir_all(&victim).expect("make victim");
         std::fs::write(victim.join("keep.txt"), "keep").expect("write victim file");
         let link = base.join("link");
-        std::os::unix::fs::symlink(&victim, &link).expect("make symlink");
+        plant_link(&victim, &link);
 
         let result = OutputRoot::resolve(Some(&link.to_string_lossy()), &proj);
         assert!(
@@ -1524,7 +1538,7 @@ mod tests {
         // both by the CLI area check and by the emit-level claim.
         let out = OutputRoot::resolve(None, &proj).expect("default out");
         out.claim().expect("claim root");
-        std::os::unix::fs::symlink(&victim, out.path().join("rust")).expect("plant area link");
+        plant_link(&victim, &out.path().join("rust"));
         let area = out.area_path(&[OutputArea::Rust]);
         assert!(
             matches!(
@@ -1638,7 +1652,6 @@ mod tests {
     ///
     /// A cloned repository can plant a directory symlink and a file symlink;
     /// no product write, copy or removal follows them.
-    #[cfg(unix)]
     #[test]
     fn owned_paths_never_follow_planted_symlinks() {
         let base = scratch("planted");
@@ -1649,8 +1662,8 @@ mod tests {
         std::fs::write(&victim_file, "keep").expect("victim file");
 
         let out = OwnedDir::claim(&base.join("out")).expect("claim out");
-        std::os::unix::fs::symlink(&victim_dir, out.path().join("src")).expect("dir link");
-        std::os::unix::fs::symlink(&victim_file, out.path().join("app")).expect("file link");
+        plant_link(&victim_dir, &out.path().join("src"));
+        plant_link(&victim_file, &out.path().join("app"));
 
         let refused = |r: Result<OwnedPath, CliError>| {
             matches!(r, Err(CliError::OutputRefused(OutputRefusal::Symlink(_))))
@@ -1670,7 +1683,7 @@ mod tests {
 
         // A symlink planted after validation is replaced by the rename, not followed.
         let late = out.path_to("late.bin").expect("late path");
-        std::os::unix::fs::symlink(&victim_file, out.path().join("late.bin")).expect("late link");
+        plant_link(&victim_file, &out.path().join("late.bin"));
         let wrote = late.write(b"payload");
         assert!(
             matches!(
@@ -1836,7 +1849,6 @@ mod tests {
         let _ = std::fs::remove_dir_all(&base);
     }
 
-    #[cfg(unix)]
     #[test]
     fn walk_containment_refuses_a_symlink_out_of_the_project() {
         let base = scratch("contain");
@@ -1844,7 +1856,7 @@ mod tests {
         let outside = base.join("outside.ipe");
         std::fs::write(&outside, "module X\n").expect("outside file");
         let link = proj.root.join("src").join("Link.ipe");
-        std::os::unix::fs::symlink(&outside, &link).expect("make link");
+        plant_link(&outside, &link);
         let result = contained_in(&proj.root, &link);
         assert!(
             matches!(
@@ -1978,7 +1990,6 @@ mod tests {
     }
 
     /// A handover claim re-checks reserved names through a symlink planted after `fresh`.
-    #[cfg(unix)]
     #[test]
     fn handover_claim_rechecks_a_reserved_name_planted_after_fresh() {
         let base = scratch("handover_reserved_race");
@@ -1988,7 +1999,7 @@ mod tests {
         let link = base.join("later");
         let fresh =
             OutputRoot::fresh(&link.join("app").to_string_lossy(), &proj).expect("fresh target");
-        std::os::unix::fs::symlink(&sibling_cache, &link).expect("plant symlink");
+        plant_link(&sibling_cache, &link);
         let result = fresh.claim();
         assert!(
             matches!(
@@ -2120,22 +2131,6 @@ mod tests {
         plant_link(target, level);
     }
 
-    /// Plant a symbolic link at `link` pointing to `target`.
-    #[cfg(unix)]
-    fn plant_link(target: &Path, link: &Path) {
-        std::os::unix::fs::symlink(target, link).expect("plant link");
-    }
-
-    /// Plant a symbolic link at `link` pointing to `target`, a directory or file link to match it.
-    #[cfg(windows)]
-    fn plant_link(target: &Path, link: &Path) {
-        if target.is_dir() {
-            std::os::windows::fs::symlink_dir(target, link).expect("plant dir link");
-        } else {
-            std::os::windows::fs::symlink_file(target, link).expect("plant file link");
-        }
-    }
-
     /// A level swapped for a link after the walk held its parent is refused.
     ///
     /// Every level below the owned root is swapped in turn — each intermediate
@@ -2265,7 +2260,6 @@ mod tests {
     }
 
     /// An owned root replaced after the claim is refused, even when re-marked.
-    #[cfg(unix)]
     #[test]
     fn a_replaced_owned_root_is_refused() {
         let base = scratch("root_replaced");
@@ -2309,7 +2303,7 @@ mod tests {
         std::fs::remove_dir_all(&out_path).expect("remove impostor");
         let victim = base.join("victim");
         std::fs::create_dir_all(&victim).expect("make victim");
-        std::os::unix::fs::symlink(&victim, &out_path).expect("link root");
+        plant_link(&victim, &out_path);
         let wrote = target.write(b"payload");
         assert!(
             matches!(
@@ -2410,6 +2404,138 @@ mod tests {
             1,
             "the impostor gains nothing"
         );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// A held entry cannot be renamed away, so a proven removal clears exactly it.
+    #[cfg(windows)]
+    #[test]
+    fn remove_proven_clears_a_held_entry_that_cannot_be_replaced() {
+        let base = scratch("remove_proven_held");
+        let name = std::ffi::OsStr::new("doomed");
+        let doomed = base.join(name);
+        std::fs::create_dir_all(doomed.join("inner")).expect("make doomed");
+        let parent = super::held::HeldDir::open(&base)
+            .expect("open base")
+            .expect("base exists");
+        let child = parent
+            .child(name)
+            .expect("open doomed")
+            .expect("doomed exists");
+        assert!(
+            std::fs::rename(&doomed, base.join("doomed.aside")).is_err(),
+            "a held entry refuses the rename"
+        );
+        let removed = parent.remove_proven(name, child);
+        assert!(
+            removed.is_ok(),
+            "the held entry is removed, got {removed:?}"
+        );
+        assert!(!doomed.exists(), "the held entry is gone");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// A held anchor cannot be renamed away, so its canonical path stays proven.
+    #[cfg(windows)]
+    #[test]
+    fn a_held_anchor_cannot_be_replaced() {
+        let base = scratch("anchor_held");
+        let level = base.join("level");
+        std::fs::create_dir(&level).expect("make level");
+        let dir = super::held::HeldDir::open(&level)
+            .expect("open level")
+            .expect("level exists");
+        assert!(
+            std::fs::rename(&level, base.join("level.aside")).is_err(),
+            "a held anchor refuses the rename"
+        );
+        let proven = canonical_of_held(&level, &dir);
+        assert!(proven.is_ok(), "the held anchor is proven, got {proven:?}");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// A junction planted at `--out` is refused and its target untouched.
+    #[cfg(windows)]
+    #[test]
+    fn a_junctioned_out_dir_is_refused_and_its_target_untouched() {
+        let base = scratch("junction_out");
+        let proj = project(&base);
+        let victim = base.join("victim");
+        std::fs::create_dir_all(&victim).expect("make victim");
+        std::fs::write(victim.join("keep.txt"), "keep").expect("write victim file");
+        let link = base.join("link");
+        std::fs::create_dir(&link).expect("make link dir");
+        junction_in_place(&link, &victim);
+
+        let result = OutputRoot::resolve(Some(&link.to_string_lossy()), &proj);
+        assert!(
+            matches!(refused(&result), Some(OutputRefusal::Symlink(_))),
+            "a junctioned --out must be refused, got {result:?}"
+        );
+        let claim = OwnedDir::claim(&link);
+        assert!(
+            matches!(
+                claim,
+                Err(CliError::OutputRefused(OutputRefusal::Symlink(_)))
+            ),
+            "the emit-level claim refuses the junction too, got {claim:?}"
+        );
+        assert_eq!(
+            std::fs::read_dir(&victim).expect("read victim").count(),
+            1,
+            "nothing is written through the junction"
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// A held level emptied and junctioned in place mid-walk never leads an act out.
+    ///
+    /// Sharing modes stop a held level being renamed, not being turned into a
+    /// junction once empty; writes, copies and removals alike stay out of the
+    /// junction's target, which holds a file of the very name being acted on.
+    #[cfg(windows)]
+    #[test]
+    fn a_held_level_junctioned_in_place_mid_walk_never_leads_out() {
+        let base = scratch("junction_held");
+        let victim = base.join("victim");
+        std::fs::create_dir_all(&victim).expect("make victim");
+        let victim_file = victim.join("f.txt");
+        std::fs::write(&victim_file, "keep").expect("victim file");
+        let source = base.join("source.txt");
+        std::fs::write(&source, "payload").expect("copy source");
+        for op in ["write", "copy", "remove"] {
+            let out = OwnedDir::claim(&base.join(format!("out_{op}"))).expect("claim");
+            let target = out.path_to("a/f.txt").expect("target path");
+            target.write(b"old").expect("first write");
+            let level = out.path().join("a");
+            let (at, to) = (level.clone(), victim.clone());
+            swap_when_held(level, move || {
+                std::fs::remove_file(at.join("f.txt")).expect("empty the level");
+                junction_in_place(&at, &to);
+            });
+            let result = match op {
+                "write" => target.write(b"payload"),
+                "copy" => target.copy_from(&source),
+                _ => target.remove(),
+            };
+            super::held::set_level_hook(None);
+            if op != "remove" {
+                assert!(
+                    result.is_err(),
+                    "{op} into a junctioned level is refused, got {result:?}"
+                );
+            }
+            assert_eq!(
+                std::fs::read_to_string(&victim_file).ok().as_deref(),
+                Some("keep"),
+                "{op} leaves the junction target's file untouched"
+            );
+            assert_eq!(
+                std::fs::read_dir(&victim).expect("read victim").count(),
+                1,
+                "{op} creates nothing in the junction target"
+            );
+        }
         let _ = std::fs::remove_dir_all(&base);
     }
 
@@ -2552,7 +2678,6 @@ mod tests {
     }
 
     /// `OwnedDir::unlink` removes a planted link as a link and refuses a linked level above it.
-    #[cfg(unix)]
     #[test]
     fn unlink_removes_links_never_their_targets() {
         let base = scratch("unlink");
@@ -2561,8 +2686,8 @@ mod tests {
         let victim_file = victim.join("f.txt");
         std::fs::write(&victim_file, "keep").expect("victim file");
         let out = OwnedDir::claim(&base.join("out")).expect("claim out");
-        std::os::unix::fs::symlink(&victim_file, out.path().join("f.txt")).expect("file link");
-        std::os::unix::fs::symlink(&victim, out.path().join("d")).expect("dir link");
+        plant_link(&victim_file, &out.path().join("f.txt"));
+        plant_link(&victim, &out.path().join("d"));
 
         out.unlink("f.txt").expect("unlink the link");
         assert!(
@@ -2659,8 +2784,47 @@ mod tests {
         let _ = std::fs::remove_dir_all(&base);
     }
 
+    /// A claim whose held anchor is emptied and junctioned in place never creates through it.
+    ///
+    /// Both an output claim and a handover claim are driven; the held anchor
+    /// cannot be renamed, only turned into a junction while still empty.
+    #[cfg(windows)]
+    #[test]
+    fn a_claim_through_an_anchor_junctioned_mid_walk_never_follows_it() {
+        let base = scratch("claim_junction");
+        let proj = project(&base);
+        for kind in ["output", "handover"] {
+            let victim = base.join(format!("victim_{kind}"));
+            std::fs::create_dir_all(&victim).expect("make victim");
+            let anchor = base.join(format!("root_{kind}"));
+            std::fs::create_dir_all(&anchor).expect("make anchor");
+            let target = anchor.join("mid").join("out");
+            let raw = target.to_string_lossy();
+            let (at, to) = (anchor.clone(), victim.clone());
+            let claimed = if kind == "output" {
+                let out = OutputRoot::resolve(Some(&raw), &proj).expect("resolve");
+                swap_when_held(anchor, move || junction_in_place(&at, &to));
+                out.claim().map(|_| ())
+            } else {
+                let fresh = OutputRoot::fresh(&raw, &proj).expect("fresh target");
+                swap_when_held(anchor, move || junction_in_place(&at, &to));
+                fresh.claim().map(|_| ())
+            };
+            super::held::set_level_hook(None);
+            assert!(
+                claimed.is_err(),
+                "a {kind} claim into a junctioned anchor is refused, got {claimed:?}"
+            );
+            assert_eq!(
+                std::fs::read_dir(&victim).expect("read victim").count(),
+                0,
+                "a {kind} claim creates nothing in the junction target"
+            );
+        }
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
     /// A level swapped for a link before the content comparison reads is refused.
-    #[cfg(unix)]
     #[test]
     fn holds_refuses_a_level_swapped_for_a_link_mid_walk() {
         let base = scratch("holds_swap");
@@ -2691,7 +2855,6 @@ mod tests {
     }
 
     /// A pruned level swapped for a link mid-walk is removed as a link, its target untouched.
-    #[cfg(unix)]
     #[test]
     fn prune_never_follows_a_level_swapped_for_a_link_mid_walk() {
         let base = scratch("prune_swap");
@@ -2725,5 +2888,96 @@ mod tests {
             "the swapped-in link itself is pruned"
         );
         let _ = std::fs::remove_dir_all(&base);
+    }
+}
+
+/// Link-planting helpers shared by the tests of every module that walks owned trees.
+#[cfg(test)]
+pub mod test_links {
+    use std::path::Path;
+
+    /// Plant a symbolic link at `link` pointing to `target`.
+    #[cfg(unix)]
+    pub fn plant_link(target: &Path, link: &Path) {
+        std::os::unix::fs::symlink(target, link).expect("plant link");
+    }
+
+    /// Plant a symbolic link at `link` pointing to `target`, a directory or file link to match it.
+    #[cfg(windows)]
+    pub fn plant_link(target: &Path, link: &Path) {
+        if target.is_dir() {
+            std::os::windows::fs::symlink_dir(target, link).expect("plant dir link");
+        } else {
+            std::os::windows::fs::symlink_file(target, link).expect("plant file link");
+        }
+    }
+
+    /// Sets a mount-point reparse point on an existing empty directory.
+    ///
+    /// It needs only write-attributes access, which a sharing-denied rename or
+    /// delete does not block: exactly what an attacker can do to a held level.
+    #[cfg(windows)]
+    const JUNCTION_SCRIPT: &str = r#"$ErrorActionPreference = 'Stop'
+Add-Type -TypeDefinition @'
+using System;
+using System.ComponentModel;
+using System.Runtime.InteropServices;
+using System.Text;
+using Microsoft.Win32.SafeHandles;
+public static class IpeJunction {
+[DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+static extern SafeFileHandle CreateFileW(string name, uint access, uint share, IntPtr sa, uint disposition, uint flags, IntPtr template);
+[DllImport("kernel32.dll", SetLastError = true)]
+static extern bool DeviceIoControl(SafeFileHandle h, uint code, byte[] input, int inputSize, IntPtr output, int outputSize, out int returned, IntPtr overlapped);
+public static void Set(string at, string to) {
+    byte[] sub = Encoding.Unicode.GetBytes("\\??\\" + to);
+    byte[] print = Encoding.Unicode.GetBytes(to);
+    int paths = sub.Length + 2 + print.Length + 2;
+    byte[] buf = new byte[16 + paths];
+    BitConverter.GetBytes(0xA0000003u).CopyTo(buf, 0);
+    BitConverter.GetBytes((ushort)(8 + paths)).CopyTo(buf, 4);
+    BitConverter.GetBytes((ushort)sub.Length).CopyTo(buf, 10);
+    BitConverter.GetBytes((ushort)(sub.Length + 2)).CopyTo(buf, 12);
+    BitConverter.GetBytes((ushort)print.Length).CopyTo(buf, 14);
+    sub.CopyTo(buf, 16);
+    print.CopyTo(buf, 16 + sub.Length + 2);
+    using (SafeFileHandle h = CreateFileW(at, 0x100, 7, IntPtr.Zero, 3, 0x02200000, IntPtr.Zero)) {
+        if (h.IsInvalid) { throw new Win32Exception(); }
+        int returned;
+        if (!DeviceIoControl(h, 0x000900A4, buf, buf.Length, IntPtr.Zero, 0, out returned, IntPtr.Zero)) {
+            throw new Win32Exception();
+        }
+    }
+}
+}
+'@
+[IpeJunction]::Set($env:IPE_JUNCTION_AT, $env:IPE_JUNCTION_TO)
+"#;
+
+    /// Turn the empty directory `at` into a junction to `target`, in place.
+    #[cfg(windows)]
+    pub fn junction_in_place(at: &Path, target: &Path) {
+        let plain = |path: &Path| {
+            path.to_string_lossy()
+                .trim_start_matches(r"\\?\")
+                .to_owned()
+        };
+        let script: Vec<u8> = JUNCTION_SCRIPT
+            .encode_utf16()
+            .flat_map(u16::to_le_bytes)
+            .collect();
+        let encoded = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, script);
+        let status = std::process::Command::new("powershell")
+            .args(["-NoProfile", "-NonInteractive", "-EncodedCommand", &encoded])
+            .env("IPE_JUNCTION_AT", plain(at))
+            .env("IPE_JUNCTION_TO", plain(target))
+            .status()
+            .expect("run powershell");
+        assert!(
+            status.success(),
+            "junction {} -> {}",
+            at.display(),
+            target.display()
+        );
     }
 }

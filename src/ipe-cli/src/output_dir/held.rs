@@ -7,7 +7,7 @@
 //! level is refused, never traversed, and a level swapped after it was opened
 //! no longer matters because the held handle still names the real one. The
 //! per-platform primitives live in `unix` (descriptor-relative `*at` calls) and
-//! `windows` (acts under a pinned, reparse-free directory path).
+//! `windows` (handle-relative opens; path acts run under a sentinel pin).
 
 use std::ffi::OsStr;
 use std::io::{self, Read as _, Write as _};
@@ -73,7 +73,8 @@ impl HeldDir {
     ///
     /// # Errors
     /// [`OutputRefusal::NotADirectory`] when `path` is not a directory;
-    /// [`CliError::Io`] on another failure.
+    /// [`OutputRefusal::ReparsePoint`] when a level of it is a reparse point
+    /// (Windows); [`CliError::Io`] on another failure.
     pub fn open_following(path: &Path) -> Result<Option<Self>, CliError> {
         let target = if path.as_os_str().is_empty() {
             Path::new(".")
@@ -88,6 +89,10 @@ impl HeldDir {
             Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
             Err(e) if e.kind() == io::ErrorKind::NotADirectory => {
                 Err(OutputRefusal::NotADirectory(path.to_path_buf()).into())
+            }
+            #[cfg(windows)]
+            Err(e) if sys::is_reparse_refusal(&e) => {
+                Err(OutputRefusal::ReparsePoint(path.to_path_buf()).into())
             }
             Err(e) => Err(io_err(path, e)),
         }

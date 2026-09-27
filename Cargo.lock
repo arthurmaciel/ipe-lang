@@ -2977,6 +2977,7 @@ name = "ipe"
 version = "0.2.6"
 dependencies = [
  "base64 0.22.1",
+ "cap-primitives",
  "e2e-support",
  "getrandom 0.3.4",
  "hex",
