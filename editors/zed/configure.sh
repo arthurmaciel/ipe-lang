@@ -1,108 +1,103 @@
 #!/bin/sh
-# editors/zed/configure.sh — one-shot Ipê integration for Zed.
+# editors/zed/configure.sh — prepares the Ipê extension for Zed.
 #
 # Usage:
 #   curl -fsSL https://raw.githubusercontent.com/arthurmaciel/ipe-lang/main/editors/zed/configure.sh | sh
+#   (or from a checkout: sh editors/zed/configure.sh)
 #
 # What it does:
-#   1. Preflight: ipe, zed (or zeditor), curl, jq present.
-#   2. Merges the Ipê language + LSP block into ~/.config/zed/settings.json
-#      (idempotent — skips if the ipe-lsp key already present).
-#   3. Prints the dev-extension install step (Zed grammar install requires
-#      the GUI — fully automated grammar install is not yet possible via CLI).
+#   1. Preflight: ipe, zed (or zeditor), rustup + cargo (Zed compiles the
+#      extension's Rust part itself), git.
+#   2. Assembles the extension (editors/zed-ipe + the grammar's highlight
+#      queries) into ${XDG_DATA_HOME:-~/.local/share}/ipe/zed-ipe.
+#   3. Prints the one step Zed only offers in its UI: install that directory
+#      as a dev extension. The extension provides highlighting and starts
+#      `ipe lsp` itself — settings.json is never edited.
 #
-# Non-destructive: backs up settings.json before any edit.
+# Environment: IPE_EDITORS_REF (git ref a curl run fetches, default main),
+# XDG_DATA_HOME, XDG_CONFIG_HOME.
 
 set -eu
 
-# --- helpers -----------------------------------------------------------------
-
-die() { printf 'error: %s\n' "$*" >&2; exit 1; }
-
-check_cmd() {
-    command -v "$1" >/dev/null 2>&1 || die "'$1' not found — $2"
-}
+# --- bootstrap the shared helpers (local checkout, else the same ref) -------
+IPE_EDITORS_REF="${IPE_EDITORS_REF:-main}"
+IPE_SRC_ROOT=""
+case "$0" in
+    */configure.sh)
+        _d="$(cd "$(dirname "$0")/../.." 2>/dev/null && pwd)" || _d=""
+        if [ -n "$_d" ] && [ -f "$_d/editors/lib/ipe-editors.sh" ]; then IPE_SRC_ROOT="$_d"; fi ;;
+esac
+if [ -n "$IPE_SRC_ROOT" ]; then
+    # shellcheck source=../lib/ipe-editors.sh
+    . "$IPE_SRC_ROOT/editors/lib/ipe-editors.sh"
+else
+    _lib="$(mktemp)" || exit 1
+    curl -fsSL "https://raw.githubusercontent.com/arthurmaciel/ipe-lang/$IPE_EDITORS_REF/editors/lib/ipe-editors.sh" -o "$_lib" \
+        || { rm -f "$_lib"; printf 'error: cannot download editors/lib/ipe-editors.sh\n' >&2; exit 1; }
+    # shellcheck source=/dev/null
+    . "$_lib"
+    rm -f "$_lib"
+fi
+IPE_TAG="Zed"
 
 # --- preflight ---------------------------------------------------------------
+need ipe "install the Ipê toolchain first: https://github.com/arthurmaciel/ipe-lang"
+if ! ipe_have zed && ! ipe_have zeditor; then
+    die "Zed not found ('zed' or 'zeditor' on PATH) — install Zed first: https://zed.dev"
+fi
+need rustup "Zed builds the extension's Rust part with rustup — install it: https://rustup.rs"
+need cargo "install a Rust toolchain with rustup: https://rustup.rs"
+need git "Zed fetches the grammar with git"
 
-check_cmd ipe   "install the Ipê toolchain first: https://github.com/arthurmaciel/ipe-lang"
-check_cmd curl  "install curl"
-check_cmd jq    "install jq (https://jqlang.github.io/jq/) — needed to safely merge JSON config"
+EXT_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/ipe/zed-ipe"
 
-# Zed binary may be 'zed' or 'zeditor' depending on platform/install.
-ZED_CMD=""
-for candidate in zed zeditor; do
-    if command -v "$candidate" >/dev/null 2>&1; then
-        ZED_CMD="$candidate"
-        break
+# --- assemble the extension -------------------------------------------------------
+# The highlight queries come straight from the grammar (their single source);
+# the rest is editors/zed-ipe.
+ipe_workdir
+X="$IPE_WORK/zed-ipe"
+for f in extension.toml Cargo.toml Cargo.lock .cargo/config.toml src/lib.rs languages/ipe/config.toml; do
+    ipe_fetch "editors/zed-ipe/$f" "$X/$f"
+done
+# Zed reads only highlights.scm from these; it rejects a capture-less
+# injections query, so none is shipped.
+ipe_fetch "$IPE_GRAMMAR_DIR/queries/highlights.scm" "$X/languages/ipe/highlights.scm"
+grep -Eq '^rev = "[0-9a-f]{40}"$' "$X/extension.toml" \
+    || die "extension.toml does not pin the grammar to a commit"
+
+for f in extension.toml Cargo.toml Cargo.lock .cargo/config.toml src/lib.rs \
+    languages/ipe/config.toml languages/ipe/highlights.scm; do
+    ipe_install_file "$X/$f" "$EXT_DIR/$f"
+done
+# Query files an earlier run installed that Zed must no longer load.
+for q in injections locals; do
+    stale="$EXT_DIR/languages/ipe/$q.scm"
+    if [ -f "$stale" ]; then
+        b="$(ipe_backup "$stale")"
+        rm -f "$stale"
+        say "retired $stale (kept as $b)"
     fi
 done
-[ -n "$ZED_CMD" ] || die "Zed not found ('zed' or 'zeditor') — install Zed first: https://zed.dev"
 
-# --- config dir --------------------------------------------------------------
-
-CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/zed"
-mkdir -p "$CONFIG_DIR"
-SETTINGS="$CONFIG_DIR/settings.json"
-
-# --- idempotency guard -------------------------------------------------------
-
-if [ -f "$SETTINGS" ] && jq -e '.language_servers["ipe-lsp"]' "$SETTINGS" >/dev/null 2>&1; then
-    printf 'Zed: ipe-lsp already configured in %s — skipping.\n' "$SETTINGS"
-else
-    # Back up before any edit.
-    if [ -f "$SETTINGS" ]; then
-        cp "$SETTINGS" "$SETTINGS.bak"
-        printf 'Zed: backed up %s -> %s.bak\n' "$SETTINGS" "$SETTINGS"
-    fi
-
-    # Read existing JSON (or start with {}), merge in Ipê keys.
-    EXISTING="{}"
-    if [ -f "$SETTINGS" ] && [ -s "$SETTINGS" ]; then
-        EXISTING="$(cat "$SETTINGS")"
-    fi
-
-    printf '%s\n' "$EXISTING" | jq \
-        --argjson ipeLang '{
-            "path_separators": "/",
-            "matcher": { "filename": "\\.ipe$" },
-            "autoclose_before": "}] \")\n\t",
-            "brackets": [
-                { "start": "{", "end": "}", "close": true, "newline": true },
-                { "start": "[", "end": "]", "close": true, "newline": true },
-                { "start": "(", "end": ")", "close": false, "newline": false }
-            ],
-            "line_comments": ["-- "],
-            "block_comment": ["{- ", " -}"]
-        }' \
-        --argjson ipeLsp '{
-            "binary": { "path": "ipe", "arguments": ["lsp"] }
-        }' \
-        '
-          .languages["Ipê"]           = $ipeLang |
-          .language_servers["ipe-lsp"] = $ipeLsp  |
-          .auto_formatter             = true       |
-          .format_on_save             = "on"
-        ' > "$SETTINGS.tmp" && mv "$SETTINGS.tmp" "$SETTINGS"
-
-    printf 'Zed: Ipê config merged into %s\n' "$SETTINGS"
+# --- settings.json: read-only check ---------------------------------------------------
+# Older versions of this script merged keys into settings.json; the extension
+# makes them unnecessary and some were never valid Zed settings. Point them out,
+# never edit the file.
+SETTINGS="${XDG_CONFIG_HOME:-$HOME/.config}/zed/settings.json"
+if [ -f "$SETTINGS" ] && grep -Eq '"ipe-lsp"|"Ipê"|"auto_formatter"' "$SETTINGS"; then
+    warn "$SETTINGS has Ipê keys from an older setup (\"Ipê\", \"ipe-lsp\", \"auto_formatter\")"
+    warn "they are no longer needed — remove them by hand; this script does not edit settings.json"
 fi
 
-# --- grammar (requires GUI) --------------------------------------------------
+say "extension assembled at $EXT_DIR"
+cat << EOF
 
-printf '\n'
-printf '================================================================\n'
-printf 'Zed: settings updated.\n'
-printf '\n'
-printf 'Syntax highlighting requires installing the Zed extension via the GUI:\n'
-printf '\n'
-printf '  1. Open Zed.\n'
-printf '  2. Extensions -> Install Dev Extension.\n'
-printf '  3. Select the directory: editors/zed-ipe/ (from a local checkout of\n'
-printf '     https://github.com/arthurmaciel/ipe-lang).\n'
-printf '\n'
-printf 'The extension bundles the tree-sitter grammar and highlight queries.\n'
-printf 'Zed builds the grammar on first load.\n'
-printf '================================================================\n'
-printf '\n'
-printf 'Zed setup complete (LSP + formatter). Grammar install step above required.\n'
+  One step left — Zed installs local extensions only from its UI:
+    1. Open Zed; run the command palette action  zed: install dev extension
+    2. Choose the directory:  $EXT_DIR
+  Zed compiles the grammar and the extension (about a minute, first time only),
+  then highlights .ipe files and starts 'ipe lsp' for them. Trust the project
+  folder when Zed asks, or language servers stay off. Re-run this script and
+  "Rebuild" the extension in Zed's Extensions page to update.
+
+EOF

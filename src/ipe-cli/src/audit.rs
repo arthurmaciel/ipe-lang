@@ -306,9 +306,8 @@ pub fn run_audit_as(
     rest: &[String],
     blessing: Result<&BlessedPublisher, &BlessingRefusal>,
 ) -> Result<(), CliError> {
-    let (path, index_root, advisory_db_override, no_advisory_db, publisher, format) =
+    let (path, index_root, advisory_db_override, no_advisory_db, claimed, format) =
         parse_audit_args(rest)?;
-    let claimed = publisher.map(SelfDeclaredPublisher::new);
     let prepared = prepare(&path)?;
     let name = prepared.manifest.name.clone();
     let version = prepared
@@ -538,7 +537,7 @@ type AuditArgs = (
     Option<PathBuf>,
     Option<PathBuf>,
     bool,
-    Option<String>,
+    Option<SelfDeclaredPublisher>,
     OutputFormat,
 );
 
@@ -560,7 +559,7 @@ fn parse_audit_args(rest: &[String]) -> Result<AuditArgs, CliError> {
     let mut index: Option<PathBuf> = None;
     let mut advisory_db: Option<PathBuf> = None;
     let mut no_advisory_db = false;
-    let mut publisher: Option<String> = None;
+    let mut publisher: Option<SelfDeclaredPublisher> = None;
     let mut format: Option<OutputFormat> = None;
     let mut it = rest.iter();
     while let Some(arg) = it.next() {
@@ -614,7 +613,11 @@ fn parse_audit_args(rest: &[String]) -> Result<AuditArgs, CliError> {
                         "ipe package audit: --publisher given more than once",
                     ));
                 }
-                publisher = Some(value.clone());
+                publisher = Some(SelfDeclaredPublisher::parse(value).map_err(|refusal| {
+                    CliError::UsageOwned(format!(
+                        "ipe package audit: --publisher {value:?} is not a GitHub login: {refusal}"
+                    ))
+                })?);
             }
             "--plain" => set_format(&mut format, OutputFormat::Plain)?,
             "--json" => set_format(&mut format, OutputFormat::Json)?,
@@ -1881,13 +1884,25 @@ mod tests {
     fn audit_parses_publisher_flag() {
         let (_, _, _, _, publisher, _) =
             parse_audit_args(&args(&["--publisher", "arthurmaciel"])).expect("publisher");
-        assert_eq!(publisher.as_deref(), Some("arthurmaciel"));
+        assert_eq!(
+            publisher.as_ref().map(SelfDeclaredPublisher::as_str),
+            Some("arthurmaciel")
+        );
         // Absent by default.
         let (_, _, _, _, publisher, _) = parse_audit_args(&args(&[])).expect("default");
         assert_eq!(publisher, None);
         // A value is required, and it may not be given twice.
         assert!(parse_audit_args(&args(&["--publisher"])).is_err());
         assert!(parse_audit_args(&args(&["--publisher", "a", "--publisher", "b"])).is_err());
+        for hostile in ["", "evil\x1b[2J", "new\nline", "-lead", "sp ace"] {
+            assert!(
+                matches!(
+                    parse_audit_args(&args(&["--publisher", hostile])),
+                    Err(CliError::UsageOwned(_))
+                ),
+                "--publisher {hostile:?} must be refused"
+            );
+        }
     }
 
     /// Run the reserved-namespace verdict under `claimed`, with the blessing an
@@ -1898,7 +1913,7 @@ mod tests {
         claimed: Option<&str>,
         attested: Option<&str>,
     ) -> Result<(), CliError> {
-        let claimed = claimed.map(|c| SelfDeclaredPublisher::new(c.to_owned()));
+        let claimed = claimed.map(|c| SelfDeclaredPublisher::parse(c).expect("login-shaped claim"));
         let attested = attested
             .map(|a| crate::publisher::AttestedActor::parse(a).expect("login-shaped attestation"));
         let blessing = claimed

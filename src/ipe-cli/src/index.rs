@@ -670,6 +670,18 @@ pub fn resolve_version<'a>(
         })
 }
 
+/// Parse an entry's claimed `publisher` into a login-shaped [`SelfDeclaredPublisher`].
+///
+/// The refusal names only why the value is not a login, never the value itself,
+/// so a hostile entry cannot put control bytes or escapes into the error text.
+fn parse_publisher(name: &str, claimed: &str) -> Result<SelfDeclaredPublisher, CliError> {
+    SelfDeclaredPublisher::parse(claimed).map_err(|refusal| {
+        CliError::Resolve(format!(
+            "package `{name}`: index entry `publisher` is not a GitHub login: {refusal}"
+        ))
+    })
+}
+
 /// Parse an entry file's text into a typed [`IndexEntry`]. The format is a
 /// top-level `name`/`publisher` followed by one `[[version]]` table per
 /// published version. Comments (`#`) and blank lines are ignored; unrecognised
@@ -726,11 +738,13 @@ fn parse_entry(name: &str, text: &str) -> Result<IndexEntry, CliError> {
         }
     }
 
-    let publisher = publisher.map(SelfDeclaredPublisher::new).ok_or_else(|| {
-        CliError::Resolve(format!(
-            "package `{name}`: index entry is missing `publisher`"
-        ))
-    })?;
+    let publisher = publisher
+        .ok_or_else(|| {
+            CliError::Resolve(format!(
+                "package `{name}`: index entry is missing `publisher`"
+            ))
+        })
+        .and_then(|claimed| parse_publisher(name, &claimed))?;
     if versions.is_empty() {
         return Err(CliError::Resolve(format!(
             "package `{name}`: index entry lists no `[[version]]`"
@@ -791,7 +805,7 @@ pub fn parse_entry_json(name: &str, text: &str) -> Result<IndexEntry, CliError> 
         .get("publisher")
         .and_then(serde_json::Value::as_str)
         .ok_or_else(|| malformed("missing string field `publisher`"))
-        .map(|claimed| SelfDeclaredPublisher::new(claimed.to_owned()))?;
+        .and_then(|claimed| parse_publisher(name, claimed))?;
 
     let raw_versions = object
         .get("versions")
@@ -1645,6 +1659,57 @@ mod tests {
                             "sha256": "0000000000000000000000000000000000000000000000000000000000000000", "signature": null } ] }"#;
         let entry = super::parse_entry_json("x", json).expect("parses");
         assert!(entry.versions.first().expect("v").signature.is_none());
+    }
+
+    /// A `publisher` that is not login-shaped is refused by both entry readers,
+    /// and the refusal never echoes the hostile bytes.
+    #[test]
+    fn a_non_login_publisher_is_refused_by_both_readers() {
+        use crate::CliError;
+        let version = "\n[[version]]\nversion = \"1.0.0\"\nsource = \"https://example.invalid/x\"\n\
+                       rev = \"a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2\"\n\
+                       sha256 = \"0000000000000000000000000000000000000000000000000000000000000000\"\n";
+        let too_long = "x".repeat(40);
+        for hostile in [
+            "",
+            too_long.as_str(),
+            "evil\x1b[2J",
+            "bell\x07",
+            "sp ace",
+            "-lead",
+            "dou--ble",
+        ] {
+            let toml = format!("name = \"x\"\npublisher = \"{hostile}\"\n{version}");
+            let refused = super::parse_entry("x", &toml);
+            assert!(
+                matches!(refused, Err(CliError::Resolve(_))),
+                "TOML publisher {hostile:?} must be refused"
+            );
+            let Err(CliError::Resolve(msg)) = refused else {
+                return;
+            };
+            assert!(msg.contains("is not a GitHub login"), "{msg}");
+            assert!(!msg.contains('\x1b') && !msg.contains('\x07'), "{msg:?}");
+
+            let quoted = serde_json::to_string(hostile).expect("a str serializes");
+            let json = format!(
+                r#"{{ "name": "x", "publisher": {quoted},
+                    "versions": [ {{ "version": "1.0.0",
+                        "source": "https://example.invalid/x",
+                        "rev": "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2",
+                        "sha256": "0000000000000000000000000000000000000000000000000000000000000000" }} ] }}"#
+            );
+            let refused = super::parse_entry_json("x", &json);
+            assert!(
+                matches!(refused, Err(CliError::Resolve(_))),
+                "JSON publisher {hostile:?} must be refused"
+            );
+            let Err(CliError::Resolve(msg)) = refused else {
+                return;
+            };
+            assert!(msg.contains("is not a GitHub login"), "{msg}");
+            assert!(!msg.contains('\x1b') && !msg.contains('\x07'), "{msg:?}");
+        }
     }
 
     #[test]

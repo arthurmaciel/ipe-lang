@@ -172,7 +172,13 @@ pub fn run_publish(rest: &[String]) -> Result<(), CliError> {
     let entry_version =
         compute_entry_version(&manifest, args.source.as_deref(), args.rev.as_deref())?;
 
-    let claimed = SelfDeclaredPublisher::new(infer_publisher(entry_version.source.as_str()));
+    let claimed = SelfDeclaredPublisher::parse(&infer_publisher(entry_version.source.as_str()))
+        .map_err(|refusal| {
+            CliError::UsageOwned(format!(
+                "ipe package publish: the source URL's owner is not a GitHub login ({refusal}) — \
+                 publish from a `https://github.com/<owner>/<repo>` source"
+            ))
+        })?;
 
     // 2. Prove the publishing identity. A real publish resolves the signing key
     //    and then the authenticated account (`GET /user`) before the gate, so the
@@ -1612,7 +1618,7 @@ mod tests {
 
     /// A claimed publisher, as `infer_publisher` would produce it.
     fn claim(publisher: &str) -> SelfDeclaredPublisher {
-        SelfDeclaredPublisher::new(publisher.to_owned())
+        SelfDeclaredPublisher::parse(publisher).expect("login-shaped publisher")
     }
 
     /// The account a `GET /user` for `login` would authenticate.

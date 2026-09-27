@@ -1,0 +1,18 @@
+[package]
+name = "zed_ipe"
+version = "0.2.0"
+edition = "2024"
+publish = false
+license = "Apache-2.0"
+description = "Zed extension for Ipê: tree-sitter highlighting and the `ipe lsp` language server."
+
+[lib]
+path = "src/lib.rs"
+crate-type = ["cdylib"]
+
+[dependencies]
+zed_extension_api = "0.7.0"
+
+# A standalone crate Zed builds on its own, not a member of the repository's
+# workspace.
+[workspace]

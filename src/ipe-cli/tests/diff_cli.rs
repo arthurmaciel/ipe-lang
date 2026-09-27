@@ -204,3 +204,136 @@ fn cli_diff_deprecated_check_flag_still_verifies_and_warns() {
         "the deprecation notice steers to the bare word; got:\n{stderr}"
     );
 }
+
+/// Declare `version` for the package at `pkg` in a minimal `package.ipe`.
+fn write_manifest(pkg: &Path, version: &str) {
+    std::fs::write(
+        pkg.join("package.ipe"),
+        format!(
+            "module Package exposing (package)\n\n\npackage =\n    \
+             {{ name = \"lib\", version = \"{version}\" }}\n"
+        ),
+    )
+    .expect("write package.ipe");
+}
+
+/// Run report mode `ipe diff --plain <old> <new>`; return (stdout, stderr).
+fn report_plain(old: &Path, new: &Path) -> (String, String) {
+    let out = Command::new(support::ipe_bin())
+        .arg("diff")
+        .arg("--plain")
+        .arg(old)
+        .arg(new)
+        .output()
+        .expect("run ipe diff");
+    assert!(
+        out.status.success(),
+        "report mode exits 0; stderr:\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    (
+        String::from_utf8_lossy(&out.stdout).into_owned(),
+        String::from_utf8_lossy(&out.stderr).into_owned(),
+    )
+}
+
+#[test]
+fn cli_diff_report_measures_a_stable_breaking_change_as_major() {
+    let old = temp_pkg("rpt-stable-old");
+    let new = temp_pkg("rpt-stable-new");
+    write_lib(&old, V1);
+    write_lib(&new, V2_BREAKING);
+    write_manifest(&old, "1.2.0");
+
+    let (stdout, stderr) = report_plain(&old, &new);
+    assert!(
+        stdout.lines().any(|l| l == "bump\tbreaking\tmajor\t2.0.0"),
+        "a breaking change over 1.2.0 requires a major bump; got:\n{stdout}"
+    );
+    assert!(
+        !stderr.contains("declares no `version`"),
+        "a declared version needs no fallback note; got:\n{stderr}"
+    );
+
+    let human = Command::new(support::ipe_bin())
+        .arg("diff")
+        .arg(&old)
+        .arg(&new)
+        .output()
+        .expect("run ipe diff");
+    let human = String::from_utf8_lossy(&human.stdout);
+    assert!(
+        human.contains("requires at least a major bump (>= 2.0.0)"),
+        "the sentence names the major bump; got:\n{human}"
+    );
+}
+
+#[test]
+fn cli_diff_report_measures_an_initial_breaking_change_as_minor() {
+    let old = temp_pkg("rpt-initial-old");
+    let new = temp_pkg("rpt-initial-new");
+    write_lib(&old, V1);
+    write_lib(&new, V2_BREAKING);
+    write_manifest(&old, "0.3.1");
+
+    let (stdout, _) = report_plain(&old, &new);
+    assert!(
+        stdout.lines().any(|l| l == "bump\tbreaking\tminor\t0.4.0"),
+        "a breaking change over 0.3.1 requires a minor bump; got:\n{stdout}"
+    );
+}
+
+#[test]
+fn cli_diff_report_measures_a_stable_additive_change_as_minor() {
+    let old = temp_pkg("rpt-add-old");
+    let new = temp_pkg("rpt-add-new");
+    write_lib(&old, V1);
+    write_lib(&new, V2_COMPATIBLE);
+    write_manifest(&old, "1.2.0");
+
+    let (stdout, _) = report_plain(&old, &new);
+    assert!(
+        stdout
+            .lines()
+            .any(|l| l == "bump\tcompatible\tminor\t1.3.0"),
+        "an addition over 1.2.0 requires a minor bump; got:\n{stdout}"
+    );
+}
+
+#[test]
+fn cli_diff_report_notes_an_unversioned_predecessor() {
+    let old = temp_pkg("rpt-unver-old");
+    let new = temp_pkg("rpt-unver-new");
+    write_lib(&old, V1);
+    write_lib(&new, V2_BREAKING);
+
+    let (stdout, stderr) = report_plain(&old, &new);
+    assert!(
+        stdout.lines().any(|l| l == "bump\tbreaking\tminor\t0.1.0"),
+        "an unversioned tree is measured on the initial line; got:\n{stdout}"
+    );
+    assert!(
+        stderr.contains("declares no `version`"),
+        "the fallback is announced, never silent; got:\n{stderr}"
+    );
+}
+
+#[test]
+fn cli_diff_report_refuses_a_malformed_predecessor_manifest() {
+    let old = temp_pkg("rpt-bad-old");
+    let new = temp_pkg("rpt-bad-new");
+    write_lib(&old, V1);
+    write_lib(&new, V2_BREAKING);
+    write_manifest(&old, "not-a-version");
+
+    let out = Command::new(support::ipe_bin())
+        .arg("diff")
+        .arg(&old)
+        .arg(&new)
+        .output()
+        .expect("run ipe diff");
+    assert!(
+        !out.status.success(),
+        "a malformed version is refused, not measured from a guessed line"
+    );
+}

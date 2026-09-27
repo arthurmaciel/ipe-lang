@@ -4108,6 +4108,100 @@ pub fn db_conn_get_by_id<E: Send + From<String> + 'static>(
     })
 }
 
+/// The column list of a built statement that a refused column name came from.
+#[cfg(feature = "db")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ColumnList {
+    /// The `(column, SqlField)` pairs being written.
+    Fields,
+    /// The `ON CONFLICT (…)` target of an upsert.
+    ConflictTarget,
+}
+
+#[cfg(feature = "db")]
+impl ColumnList {
+    /// The qualifier this list adds before `column` in a refusal message.
+    const fn qualifier(self) -> &'static str {
+        match self {
+            Self::Fields => "",
+            Self::ConflictTarget => "conflict-target ",
+        }
+    }
+}
+
+/// The identifier slot a refused name was offered for.
+#[cfg(feature = "db")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum IdentSlot {
+    /// The target table (dotted `schema.table` admitted).
+    Table,
+    /// A column in the given list.
+    Column(ColumnList),
+}
+
+/// Why [`build_insert_sql`] / [`build_upsert_sql`] refused to build a statement.
+///
+/// Every variant carries identifier NAMES only, never a bound value, so the
+/// rendered message cannot leak row data. `Display` is the refusal text; the
+/// task edge ([`build_refusal`]) prefixes the kernel name and converts it into
+/// the task's error.
+#[cfg(feature = "db")]
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum DbBuildError {
+    /// A table or column name failed the `SqlIdent` gate for its slot.
+    InvalidIdent { slot: IdentSlot, name: String },
+    /// An upsert named no conflict-target column.
+    EmptyTarget,
+    /// A column appears twice in one list (ASCII-case-insensitive).
+    DuplicateColumn { list: ColumnList, name: String },
+    /// A conflict-target column was not supplied as a `SetField`.
+    TargetNotSupplied { name: String },
+    /// A conflict-target column was bound to `SqlNull`.
+    NullTarget { name: String },
+}
+
+#[cfg(feature = "db")]
+impl std::fmt::Display for DbBuildError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::InvalidIdent {
+                slot: IdentSlot::Table,
+                name,
+            } => write!(f, "invalid table name {name:?}"),
+            Self::InvalidIdent {
+                slot: IdentSlot::Column(list),
+                name,
+            } => write!(f, "invalid {}column name {name:?}", list.qualifier()),
+            Self::EmptyTarget => {
+                f.write_str("empty conflict target; pass the primary-key or unique columns")
+            }
+            Self::DuplicateColumn { list, name } => write!(
+                f,
+                "{}column {name:?} is listed more than once",
+                list.qualifier()
+            ),
+            Self::TargetNotSupplied { name } => write!(
+                f,
+                "conflict-target column {name:?} must be supplied as a SetField; \
+                 without a client value the conflict can never match"
+            ),
+            Self::NullTarget { name } => write!(
+                f,
+                "conflict-target column {name:?} is NULL; a NULL key never conflicts"
+            ),
+        }
+    }
+}
+
+#[cfg(feature = "db")]
+impl std::error::Error for DbBuildError {}
+
+/// Converts a statement-build refusal into the task error at the kernel edge.
+#[cfg(feature = "db")]
+fn build_refusal<E: From<String>>(kernel: &str, e: &DbBuildError) -> E {
+    E::from(format!("{kernel}: {e}"))
+}
+
 /// Shared logic for `db_insert_fields` and `db_insert_fields_returning`:
 /// validates the table name and builds the INSERT SQL + bound-arg list.
 ///
@@ -4115,7 +4209,7 @@ pub fn db_conn_get_by_id<E: Send + From<String> + 'static>(
 /// (column dropped from SQL; DB applies DEFAULT) and `Some(p)` = SetField(p).
 ///
 /// Returns `(sql_without_returning, args)` on success, or
-/// `IpeResult::Err` on invalid table/column name.  All-OmitField → returns
+/// `DbBuildError::InvalidIdent` on an invalid table/column name.  All-OmitField → returns
 /// `"INSERT INTO t DEFAULT VALUES"` with an empty arg list (valid on every
 /// engine at or above its [`DbEngine::version_floor`]).
 ///
@@ -4123,17 +4217,22 @@ pub fn db_conn_get_by_id<E: Send + From<String> + 'static>(
 /// Values are bound positionally — never interpolated.
 #[cfg(feature = "db")]
 fn build_insert_sql(
-    kernel: &str,
     table: &str,
     fields: Vec<(String, Option<SqlParam>)>,
-) -> Result<(String, Vec<SqlParam>), String> {
-    let qtable = SqlIdent::parse_dotted(table)
-        .ok_or_else(|| format!("{}: invalid table name {:?}", kernel, table))?;
+) -> Result<(String, Vec<SqlParam>), DbBuildError> {
+    let qtable = SqlIdent::parse_dotted(table).ok_or_else(|| DbBuildError::InvalidIdent {
+        slot: IdentSlot::Table,
+        name: table.to_string(),
+    })?;
     let mut cols: Vec<String> = Vec::new();
     let mut args: Vec<SqlParam> = Vec::new();
     for (col, opt) in fields {
-        let qcol = SqlIdent::parse_dotted(&col)
-            .ok_or_else(|| format!("{}: invalid column name {:?}", kernel, col))?;
+        let Some(qcol) = SqlIdent::parse_dotted(&col) else {
+            return Err(DbBuildError::InvalidIdent {
+                slot: IdentSlot::Column(ColumnList::Fields),
+                name: col,
+            });
+        };
         if let Some(p) = opt {
             cols.push(qcol.as_str().to_string());
             args.push(p);
@@ -4177,9 +4276,9 @@ pub fn db_insert_fields<E: Send + From<String> + 'static>(
     fields: Vec<(String, Option<SqlParam>)>,
 ) -> IpeTask<E, i64> {
     Box::pin(async move {
-        let (base_sql, args) = match build_insert_sql("db.insertFields", &table, fields) {
+        let (base_sql, args) = match build_insert_sql(&table, fields) {
             Ok(v) => v,
-            Err(e) => return IpeResult::Err(e.into()),
+            Err(e) => return IpeResult::Err(build_refusal("db.insertFields", &e)),
         };
         if DB_USES_RETURNING_ID {
             // Same rationale as `db_insert_row`: Postgres has no
@@ -4321,47 +4420,53 @@ pub fn db_update_fields<E: Send + From<String> + 'static>(
 /// value. An empty SET list yields `ON CONFLICT (…) DO NOTHING`
 /// (insert-if-absent), never an empty `SET`.
 ///
-/// Refused with `Err` before any SQL exists:
-/// - a table name failing `SqlIdent::parse_dotted`;
-/// - a field or conflict-target column failing `SqlIdent::parse_plain` —
-///   columns are bare names because `ON CONFLICT (…)` and `excluded.<col>`
-///   admit no qualifier;
-/// - an empty conflict target (no `ON CONFLICT` target is valid on both
-///   engines for `DO UPDATE`);
-/// - a column named twice in the fields or in the conflict target, compared
-///   ASCII-case-insensitively as both engines compare unquoted identifiers;
-/// - a conflict-target column not supplied as a `SetField` — its value would be
-///   absent or DB-generated, the conflict could never match, and the upsert
-///   would silently degrade to a plain insert.
-/// - a conflict-target column bound to `SqlNull` — NULLs never compare equal
-///   under a unique constraint, so the upsert would likewise degrade to an insert.
+/// Refused with a [`DbBuildError`] before any SQL exists:
+/// - `InvalidIdent`: a table name failing `SqlIdent::parse_dotted`, or a field
+///   or conflict-target column failing `SqlIdent::parse_plain` — columns are
+///   bare names because `ON CONFLICT (…)` and `excluded.<col>` admit no
+///   qualifier;
+/// - `EmptyTarget`: an empty conflict target (no `ON CONFLICT` target is valid
+///   on both engines for `DO UPDATE`);
+/// - `DuplicateColumn`: a column named twice in the fields or in the conflict
+///   target, compared ASCII-case-insensitively as both engines compare unquoted
+///   identifiers;
+/// - `TargetNotSupplied`: a conflict-target column not supplied as a
+///   `SetField` — its value would be absent or DB-generated, the conflict could
+///   never match, and the upsert would silently degrade to a plain insert;
+/// - `NullTarget`: a conflict-target column bound to `SqlNull` — NULLs never
+///   compare equal under a unique constraint, so the upsert would likewise
+///   degrade to an insert.
 ///
 /// Security: every interpolated name is a validated `SqlIdent`; `excluded.<col>`
 /// reuses the same validated identifier. Values bind positionally.
 #[cfg(feature = "db")]
 fn build_upsert_sql(
-    kernel: &str,
     table: &str,
     conflict_target: Vec<String>,
     fields: Vec<(String, Option<SqlParam>)>,
-) -> Result<(String, Vec<SqlParam>), String> {
-    let qtable = SqlIdent::parse_dotted(table)
-        .ok_or_else(|| format!("{kernel}: invalid table name {table:?}"))?;
+) -> Result<(String, Vec<SqlParam>), DbBuildError> {
+    let qtable = SqlIdent::parse_dotted(table).ok_or_else(|| DbBuildError::InvalidIdent {
+        slot: IdentSlot::Table,
+        name: table.to_string(),
+    })?;
     if conflict_target.is_empty() {
-        return Err(format!(
-            "{kernel}: empty conflict target; pass the primary-key or unique columns"
-        ));
+        return Err(DbBuildError::EmptyTarget);
     }
     let mut target_keys: std::collections::HashSet<String> =
         std::collections::HashSet::with_capacity(conflict_target.len());
     let mut target_cols: Vec<SqlIdent> = Vec::with_capacity(conflict_target.len());
     for col in conflict_target {
-        let qcol = SqlIdent::parse_plain(&col)
-            .ok_or_else(|| format!("{kernel}: invalid conflict-target column name {col:?}"))?;
+        let Some(qcol) = SqlIdent::parse_plain(&col) else {
+            return Err(DbBuildError::InvalidIdent {
+                slot: IdentSlot::Column(ColumnList::ConflictTarget),
+                name: col,
+            });
+        };
         if !target_keys.insert(qcol.as_str().to_ascii_lowercase()) {
-            return Err(format!(
-                "{kernel}: conflict-target column {col:?} is listed more than once"
-            ));
+            return Err(DbBuildError::DuplicateColumn {
+                list: ColumnList::ConflictTarget,
+                name: col,
+            });
         }
         target_cols.push(qcol);
     }
@@ -4373,20 +4478,25 @@ fn build_upsert_sql(
     let mut set_clauses: Vec<String> = Vec::new();
     let mut args: Vec<SqlParam> = Vec::with_capacity(fields.len());
     for (col, opt) in fields {
-        let qcol = SqlIdent::parse_plain(&col)
-            .ok_or_else(|| format!("{kernel}: invalid column name {col:?}"))?;
+        let Some(qcol) = SqlIdent::parse_plain(&col) else {
+            return Err(DbBuildError::InvalidIdent {
+                slot: IdentSlot::Column(ColumnList::Fields),
+                name: col,
+            });
+        };
         let key = qcol.as_str().to_ascii_lowercase();
         if !field_keys.insert(key.clone()) {
-            return Err(format!("{kernel}: column {col:?} is listed more than once"));
+            return Err(DbBuildError::DuplicateColumn {
+                list: ColumnList::Fields,
+                name: col,
+            });
         }
         let Some(p) = opt else {
             continue;
         };
         if target_keys.contains(&key) {
             if matches!(p, SqlParam::Null(_)) {
-                return Err(format!(
-                    "{kernel}: conflict-target column {col:?} is NULL; a NULL key never conflicts"
-                ));
+                return Err(DbBuildError::NullTarget { name: col });
             }
             supplied_target_keys.insert(key);
         } else {
@@ -4399,11 +4509,9 @@ fn build_upsert_sql(
         .iter()
         .find(|t| !supplied_target_keys.contains(&t.as_str().to_ascii_lowercase()))
     {
-        return Err(format!(
-            "{kernel}: conflict-target column {:?} must be supplied as a SetField; \
-             without a client value the conflict can never match",
-            missing.as_str()
-        ));
+        return Err(DbBuildError::TargetNotSupplied {
+            name: missing.as_str().to_string(),
+        });
     }
     let target_list = target_cols
         .iter()
@@ -4449,10 +4557,9 @@ pub fn db_upsert_fields<E: Send + From<String> + 'static>(
     fields: Vec<(String, Option<SqlParam>)>,
 ) -> IpeTask<E, i64> {
     Box::pin(async move {
-        let (sql, args) = match build_upsert_sql("db.upsertFields", &table, conflict_target, fields)
-        {
+        let (sql, args) = match build_upsert_sql(&table, conflict_target, fields) {
             Ok(v) => v,
-            Err(e) => return IpeResult::Err(e.into()),
+            Err(e) => return IpeResult::Err(build_refusal("db.upsertFields", &e)),
         };
         let sql = db_format_sql(sql);
         let mut q = sqlx::query(&sql);
@@ -4501,9 +4608,9 @@ pub fn db_insert_fields_returning<E: Send + From<String> + 'static, A: Send + 's
                     .into(),
             );
         }
-        let (base_sql, args) = match build_insert_sql("db.insertFieldsReturning", &table, fields) {
+        let (base_sql, args) = match build_insert_sql(&table, fields) {
             Ok(v) => v,
-            Err(e) => return IpeResult::Err(e.into()),
+            Err(e) => return IpeResult::Err(build_refusal("db.insertFieldsReturning", &e)),
         };
         // Validate the RETURNING projection — it is a caller-supplied String
         // interpolated into SQL. Allow "*" or a comma-separated list of valid
@@ -7383,9 +7490,8 @@ mod tests {
     fn upsert_sql(
         target: &[&str],
         fields: Vec<(&str, Option<SqlParam>)>,
-    ) -> Result<(String, Vec<SqlParam>), String> {
+    ) -> Result<(String, Vec<SqlParam>), DbBuildError> {
         build_upsert_sql(
-            "db.upsertFields",
             "kv",
             target.iter().map(|c| (*c).to_string()).collect(),
             fields
@@ -7442,52 +7548,85 @@ mod tests {
         );
     }
 
-    /// Every malformed upsert is refused before any SQL string exists.
+    /// The refusal a `DbBuildError` carries for an invalid name in `slot`.
+    fn invalid(slot: IdentSlot, name: &str) -> DbBuildError {
+        DbBuildError::InvalidIdent {
+            slot,
+            name: name.to_string(),
+        }
+    }
+
+    /// Every malformed upsert is refused with its own typed reason before any
+    /// SQL string exists.
     #[test]
     fn upsert_sql_refuses_malformed_requests() {
         let key = || ("k", Some(SqlParam::Text("a".to_string())));
+        let field_col = IdentSlot::Column(ColumnList::Fields);
+        let target_col = IdentSlot::Column(ColumnList::ConflictTarget);
         let cases = [
             (
                 "hostile table",
                 build_upsert_sql(
-                    "db.upsertFields",
                     "kv; DROP TABLE kv",
                     vec!["k".to_string()],
                     vec![("k".to_string(), Some(SqlParam::Int(1)))],
                 ),
+                invalid(IdentSlot::Table, "kv; DROP TABLE kv"),
             ),
             (
                 "hostile set column",
                 upsert_sql(&["k"], vec![key(), ("v = 1; --", Some(SqlParam::Int(1)))]),
+                invalid(field_col, "v = 1; --"),
             ),
             (
                 "hostile conflict-target column",
                 upsert_sql(&["k) DO NOTHING; --"], vec![key()]),
+                invalid(target_col, "k) DO NOTHING; --"),
             ),
             (
                 "dotted column (no qualifier allowed in excluded.<col>)",
                 upsert_sql(&["k"], vec![key(), ("kv.v", Some(SqlParam::Int(1)))]),
+                invalid(field_col, "kv.v"),
             ),
             (
                 "dotted conflict-target column",
                 upsert_sql(&["kv.k"], vec![key()]),
+                invalid(target_col, "kv.k"),
             ),
-            ("empty conflict target", upsert_sql(&[], vec![key()])),
+            (
+                "empty conflict target",
+                upsert_sql(&[], vec![key()]),
+                DbBuildError::EmptyTarget,
+            ),
             (
                 "duplicate column (case-insensitive)",
                 upsert_sql(&["k"], vec![key(), ("K", Some(SqlParam::Int(1)))]),
+                DbBuildError::DuplicateColumn {
+                    list: ColumnList::Fields,
+                    name: "K".to_string(),
+                },
             ),
             (
                 "duplicate conflict-target column",
                 upsert_sql(&["k", "K"], vec![key()]),
+                DbBuildError::DuplicateColumn {
+                    list: ColumnList::ConflictTarget,
+                    name: "K".to_string(),
+                },
             ),
             (
                 "conflict-target column absent from fields",
                 upsert_sql(&["id"], vec![key()]),
+                DbBuildError::TargetNotSupplied {
+                    name: "id".to_string(),
+                },
             ),
             (
                 "conflict-target column is OmitField",
                 upsert_sql(&["id"], vec![key(), ("id", None)]),
+                DbBuildError::TargetNotSupplied {
+                    name: "id".to_string(),
+                },
             ),
             (
                 "conflict-target column is SqlNull",
@@ -7498,10 +7637,109 @@ mod tests {
                         Some(SqlParam::Null(Box::new(SqlParam::Text(String::new())))),
                     )],
                 ),
+                DbBuildError::NullTarget {
+                    name: "k".to_string(),
+                },
             ),
         ];
-        for (label, built) in cases {
-            assert!(built.is_err(), "{label} must be refused, got {built:?}");
+        for (label, built, want) in cases {
+            assert!(
+                matches!(&built, Err(got) if *got == want),
+                "{label} must be refused with {want:?}, got {built:?}"
+            );
+        }
+    }
+
+    /// A malformed insert is refused with a typed `InvalidIdent` naming the
+    /// slot; an all-`OmitField` insert still builds `DEFAULT VALUES`.
+    #[test]
+    fn insert_sql_refuses_invalid_identifiers() {
+        let hostile_table = build_insert_sql("t; DROP TABLE t", vec![]);
+        assert!(
+            matches!(&hostile_table, Err(e) if *e == invalid(IdentSlot::Table, "t; DROP TABLE t")),
+            "hostile table must be refused: {hostile_table:?}"
+        );
+        let hostile_col =
+            build_insert_sql("t", vec![("a = 1; --".to_string(), Some(SqlParam::Int(1)))]);
+        assert!(
+            matches!(
+                &hostile_col,
+                Err(e) if *e == invalid(IdentSlot::Column(ColumnList::Fields), "a = 1; --")
+            ),
+            "hostile column must be refused: {hostile_col:?}"
+        );
+        // An `OmitField` column is still name-checked: it never reaches SQL,
+        // but a hostile name is refused rather than silently dropped.
+        let hostile_omit = build_insert_sql("t", vec![("a'".to_string(), None)]);
+        assert!(
+            matches!(
+                &hostile_omit,
+                Err(DbBuildError::InvalidIdent {
+                    slot: IdentSlot::Column(ColumnList::Fields),
+                    ..
+                })
+            ),
+            "hostile OmitField column must be refused: {hostile_omit:?}"
+        );
+        let defaults = build_insert_sql("s.t", vec![("a".to_string(), None)]);
+        assert!(
+            matches!(&defaults, Ok((sql, args)) if sql == "INSERT INTO s.t DEFAULT VALUES" && args.is_empty()),
+            "all-OmitField insert must build DEFAULT VALUES: {defaults:?}"
+        );
+    }
+
+    /// The task-edge text of every refusal is pinned byte-for-byte: it names
+    /// the kernel and the offending identifier (Debug-escaped), never a value.
+    #[test]
+    fn build_refusal_text_is_pinned() {
+        let cases = [
+            (
+                invalid(IdentSlot::Table, "t\"x"),
+                "db.upsertFields: invalid table name \"t\\\"x\"",
+            ),
+            (
+                invalid(IdentSlot::Column(ColumnList::Fields), "c;"),
+                "db.upsertFields: invalid column name \"c;\"",
+            ),
+            (
+                invalid(IdentSlot::Column(ColumnList::ConflictTarget), "c;"),
+                "db.upsertFields: invalid conflict-target column name \"c;\"",
+            ),
+            (
+                DbBuildError::EmptyTarget,
+                "db.upsertFields: empty conflict target; pass the primary-key or unique columns",
+            ),
+            (
+                DbBuildError::DuplicateColumn {
+                    list: ColumnList::Fields,
+                    name: "K".to_string(),
+                },
+                "db.upsertFields: column \"K\" is listed more than once",
+            ),
+            (
+                DbBuildError::DuplicateColumn {
+                    list: ColumnList::ConflictTarget,
+                    name: "K".to_string(),
+                },
+                "db.upsertFields: conflict-target column \"K\" is listed more than once",
+            ),
+            (
+                DbBuildError::TargetNotSupplied {
+                    name: "id".to_string(),
+                },
+                "db.upsertFields: conflict-target column \"id\" must be supplied as a \
+                 SetField; without a client value the conflict can never match",
+            ),
+            (
+                DbBuildError::NullTarget {
+                    name: "k".to_string(),
+                },
+                "db.upsertFields: conflict-target column \"k\" is NULL; a NULL key never conflicts",
+            ),
+        ];
+        for (err, want) in cases {
+            let got: String = build_refusal("db.upsertFields", &err);
+            assert_eq!(got, want, "refusal text drifted for {err:?}");
         }
     }
 
