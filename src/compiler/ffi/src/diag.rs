@@ -739,6 +739,34 @@ pub enum WireDefect {
         /// The offending feature string.
         got: String,
     },
+    /// A cached `[dependencies]` line is not the canonical pinned form.
+    ///
+    /// The manifest emitter renders `<name> = "=<version>"`, or an inline
+    /// table with a `version`/`path` key and an optional non-empty feature
+    /// list; any other text is refused rather than spliced into `Cargo.toml`.
+    InvalidDependencyLine {
+        /// The offending line.
+        got: String,
+        /// Which structural rule was broken.
+        reason: &'static str,
+    },
+    /// A dependency carries no version or path pin.
+    ///
+    /// An unpinned line would let cargo pick an arbitrary release.
+    UnpinnedDependency {
+        /// The dependency's package name.
+        name: String,
+    },
+    /// A binding names a transparent shape the crate's catalog does not carry.
+    ///
+    /// The conversion glue for that position has no shape to be built from,
+    /// so the binding cannot be wired soundly.
+    UnknownTransparentShape {
+        /// The binding's Ipê-visible name.
+        binding: String,
+        /// The transparent nominal the binding names.
+        shape: String,
+    },
     /// A `[rust.define.closure]` signature does not parse into the closed
     /// [`crate::carrier::ClosureSig`] shape: a parameter or return component
     /// outside the carrier set, a bound outside `{Send, Sync, 'static}`, a
@@ -852,6 +880,22 @@ impl fmt::Display for WireDefect {
                      [A-Za-z0-9_+./?:-])"
                 )
             }
+            Self::InvalidDependencyLine { got, reason } => {
+                write!(
+                    f,
+                    "{got:?} is not a canonical pinned dependency line: {reason}"
+                )
+            }
+            Self::UnpinnedDependency { name } => write!(
+                f,
+                "dependency `{name}` carries no version or path pin (an unpinned dependency \
+                 line is forbidden)"
+            ),
+            Self::UnknownTransparentShape { binding, shape } => write!(
+                f,
+                "binding `{binding}` converts through transparent type `{shape}`, which the \
+                 crate's `transparentTypes` does not carry"
+            ),
             Self::InvalidClosureSig { got, reason } => {
                 write!(
                     f,

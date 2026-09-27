@@ -14,6 +14,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
+use ipe_ffi::dep_line::{DepLine, DepSource};
 use ipe_ffi::driver::{CrateName, CrateSpec, FfiCache, InstalledCrate, VersionPin};
 use ipe_ffi::pkginfo::FeatureName;
 
@@ -210,9 +211,10 @@ pub fn inject_interfaces(
 /// the combined `src/ffi.rs` (one `pub mod <slug>` per crate).
 ///
 /// # Errors
-/// [`CliError::UsageOwned`] when two installed crates pin the SAME
-/// dependency name to different lines — an unbuildable `Cargo.toml` refused
-/// here rather than discovered by `cargo`.
+/// [`CliError::UsageOwned`] when two installed crates pin the SAME direct or
+/// path dependency to different sources — an unbuildable `Cargo.toml`
+/// refused here rather than discovered by `cargo` — or when a define type
+/// collides with an inspected opaque of the same crate.
 pub fn assemble_emit(
     catalog: &[InstalledCrate],
 ) -> Result<Option<ipe_backend_rust::FfiEmit>, CliError> {
@@ -238,7 +240,7 @@ pub fn assemble_emit(
     // resolves the transitive graph of the direct pins itself and legitimately links
     // both majors of a build-dep. Such a dep is dropped from the emitted `[dependencies]`
     // (recorded as unpinned) rather than exact-pinned to one arbitrary version.
-    let mut dep_by_name: BTreeMap<String, (String, BTreeSet<String>)> = BTreeMap::new();
+    let mut dep_by_name: BTreeMap<String, (DepLine, BTreeSet<FeatureName>)> = BTreeMap::new();
     let mut unpinned_transitives: BTreeSet<String> = BTreeSet::new();
     let mut bindings_source = String::from(
         "//! Foreign-crate FFI wrappers — one module per installed crate.\n\
@@ -248,7 +250,7 @@ pub fn assemble_emit(
         for (name, path) in &c.opaque_types {
             foreign_types.insert(format!("{}.{name}", c.module_name), path.clone());
         }
-        assemble_wrapper_glue(c, &mut wrapper_glue)?;
+        assemble_wrapper_glue(c, &mut wrapper_glue);
         // A `[rust.define.struct/enum]` type is DEFINED in the emitted
         // `_bindings.rs` (wrapped `pub mod <slug> { … } pub use <slug>::*;` in
         // `src/ffi.rs`), so it resolves at the crate-absolute path
@@ -270,21 +272,19 @@ pub fn assemble_emit(
             foreign_types.insert(key, format!("crate::ffi::{}::{name}", c.slug));
         }
         for line in &c.cargo_deps {
-            let Some((name, version, features)) = parse_dep_line(line) else {
-                return Err(CliError::UsageOwned(text::ffi_dependency_line_unparsable(
-                    &c.slug, &line,
-                )));
-            };
+            let name = line.name().as_str().to_owned();
             if unpinned_transitives.contains(&name) {
                 continue;
             }
             match dep_by_name.get_mut(&name) {
-                Some((prev_version, _)) if *prev_version != version => {
-                    if direct_crate_names.contains(&name) {
+                Some((prev, _)) if prev.source() != line.source() => {
+                    let path_bound = matches!(prev.source(), DepSource::Path(_))
+                        || matches!(line.source(), DepSource::Path(_));
+                    if path_bound || direct_crate_names.contains(&name) {
                         return Err(CliError::UsageOwned(text::ffi_dependency_pin_conflict(
                             &name,
-                            &prev_version,
-                            &version,
+                            &prev.source().to_string(),
+                            &line.source().to_string(),
                         )));
                     }
                     // Transitive dep resolved to different versions in different member
@@ -293,10 +293,11 @@ pub fn assemble_emit(
                     unpinned_transitives.insert(name);
                 }
                 Some((_, prev_features)) => {
-                    prev_features.extend(features);
+                    prev_features.extend(line.features().iter().cloned());
                 }
                 None => {
-                    dep_by_name.insert(name, (version, features));
+                    let features = line.features().iter().cloned().collect();
+                    dep_by_name.insert(name, (line.clone(), features));
                 }
             }
         }
@@ -309,8 +310,11 @@ pub fn assemble_emit(
         );
     }
     let dep_lines: Vec<String> = dep_by_name
-        .into_iter()
-        .map(|(name, (version, features))| render_merged_dep_line(&name, &version, &features))
+        .into_values()
+        .map(|(line, features)| {
+            line.with_features(features.into_iter().collect())
+                .to_string()
+        })
         .collect();
     Ok(Some(ipe_backend_rust::FfiEmit {
         foreign_types,
@@ -321,53 +325,27 @@ pub fn assemble_emit(
     }))
 }
 
-/// Assemble one crate's per-wrapper transparent conversion glue from the
-/// interface's structured positions + the crate's transparent shapes.
+/// Render one crate's resolved transparent glue in the backend's vocabulary.
 ///
-/// A referenced shape missing from the catalog is an internal invariant
-/// violation (the interface derived both), refused rather than emitted as a
-/// seam whose two sides disagree.
-///
-/// # Errors
-/// [`CliError::UsageOwned`] naming the crate, binding, and missing shape.
+/// Total: every shape was resolved against the crate's `transparentTypes`
+/// when the catalog loaded, so no binding can name a missing shape here.
 fn assemble_wrapper_glue(
     c: &InstalledCrate,
     wrapper_glue: &mut BTreeMap<String, ipe_backend_rust::FfiWrapperGlue>,
-) -> Result<(), CliError> {
-    for b in &c.bindings {
-        if b.transparent_params.iter().all(Option::is_none) && b.transparent_result.is_none() {
-            continue;
-        }
-        let glue_ty = |name: &str| -> Result<ipe_backend_rust::FfiGlueType, CliError> {
-            let t = c.transparent_types.get(name).ok_or_else(|| {
-                CliError::UsageOwned(text::ffi_transparent_without_shape(
-                    &c.slug,
-                    &name,
-                    &b.ref_name,
-                ))
-            })?;
-            Ok(glue_type_of(&c.module_name, &c.slug, t))
-        };
-        let mut params = Vec::with_capacity(b.transparent_params.len());
-        for p in &b.transparent_params {
-            params.push(match p {
-                None => None,
-                Some(name) => Some(glue_ty(name)?),
-            });
-        }
-        let result = match &b.transparent_result {
-            None => None,
-            Some(r) => Some(ipe_backend_rust::FfiResultGlue {
-                in_result: r.in_result,
-                ty: glue_ty(&r.type_name)?,
-            }),
-        };
+) {
+    let glue_ty =
+        |t: &ipe_ffi::transparency::TransparentType| glue_type_of(&c.module_name, &c.slug, t);
+    for (ident, g) in &c.transparent_glue {
+        let params = g.params.iter().map(|p| p.as_ref().map(glue_ty)).collect();
+        let result = g.result.as_ref().map(|r| ipe_backend_rust::FfiResultGlue {
+            in_result: r.in_result,
+            ty: glue_ty(&r.shape),
+        });
         wrapper_glue.insert(
-            b.wrapper_ident.clone(),
+            ident.clone(),
             ipe_backend_rust::FfiWrapperGlue { params, result },
         );
     }
-    Ok(())
 }
 
 /// One transparent shape in the backend's glue vocabulary. An imported crate
@@ -423,71 +401,6 @@ fn glue_type_of(
                 })
                 .collect(),
         },
-    }
-}
-
-/// Parse a generated dep line into `(name, version, features)`. Two shapes are
-/// produced by `cargo_dep_lines`:
-///   `name = "=X.Y.Z"`
-///   `name = { version = "=X.Y.Z", features = ["a", "b"] }`
-/// The version is returned WITHOUT the leading `=`. Returns `None` if neither
-/// shape matches (a malformed line the caller refuses).
-fn parse_dep_line(line: &str) -> Option<(String, String, BTreeSet<String>)> {
-    let (name, rest) = line.split_once('=')?;
-    let name = name.trim().to_owned();
-    let rest = rest.trim();
-    if let Some(inner) = rest.strip_prefix('{').and_then(|s| s.strip_suffix('}')) {
-        // Inline table: pull `version = "=X"` and `features = [...]`.
-        let version = extract_quoted_after(inner, "version")?
-            .trim_start_matches('=')
-            .to_owned();
-        let features = inner
-            .split_once("features")
-            .and_then(|(_, after)| after.split_once('['))
-            .and_then(|(_, list)| list.split_once(']'))
-            .map(|(list, _)| {
-                list.split(',')
-                    .map(|f| f.trim().trim_matches('"').to_owned())
-                    .filter(|f| !f.is_empty())
-                    .collect::<BTreeSet<String>>()
-            })
-            .unwrap_or_default();
-        Some((name, version, features))
-    } else {
-        // Bare: `"=X.Y.Z"`.
-        let version = rest
-            .trim()
-            .trim_matches('"')
-            .trim_start_matches('=')
-            .to_owned();
-        if version.is_empty() {
-            return None;
-        }
-        Some((name, version, BTreeSet::new()))
-    }
-}
-
-/// Extract the first double-quoted string that follows `key` in `s`
-/// (`key = "value"` → `Some("value")`).
-fn extract_quoted_after(s: &str, key: &str) -> Option<String> {
-    let after = s.split_once(key)?.1;
-    let after = after.split_once('"')?.1;
-    let (value, _) = after.split_once('"')?;
-    Some(value.to_owned())
-}
-
-/// Render the merged dep line, matching `render_dep_line`'s two shapes so the
-/// emitted `Cargo.toml` is byte-identical to the single-crate case when there
-/// are no extra features.
-fn render_merged_dep_line(name: &str, version: &str, features: &BTreeSet<String>) -> String {
-    if features.is_empty() {
-        format!("{name} = \"={version}\"")
-    } else {
-        let quoted: Vec<String> = features.iter().map(|f| format!("\"{f}\"")).collect();
-        format!(
-            "{name} = {{ version = \"={version}\", features = [{}] }}",
-            quoted.join(", ")
-        )
     }
 }
 
@@ -4091,6 +4004,11 @@ version = \"1\"
         }
     }
 
+    /// A canonical stored dep line, typed.
+    fn dep(line: &str) -> DepLine {
+        DepLine::parse(line).expect("fixture dep lines are canonical")
+    }
+
     #[test]
     fn conflicting_dep_pins_are_refused() {
         let mk = |slug: &str, line: &str| InstalledCrate {
@@ -4107,7 +4025,8 @@ version = \"1\"
             dep_versions: BTreeMap::new(),
             inspected_free_fns: BTreeMap::new(),
             inspected_consts: BTreeMap::new(),
-            cargo_deps: vec![line.to_owned()],
+            cargo_deps: vec![dep(line)],
+            transparent_glue: BTreeMap::new(),
             wrapper_idents: BTreeSet::new(),
         };
         // Two crates agreeing on a shared dep line dedupe to one.
@@ -4142,7 +4061,8 @@ version = \"1\"
             dep_versions: BTreeMap::new(),
             inspected_free_fns: BTreeMap::new(),
             inspected_consts: BTreeMap::new(),
-            cargo_deps: vec![line.to_owned()],
+            cargo_deps: vec![dep(line)],
+            transparent_glue: BTreeMap::new(),
             wrapper_idents: BTreeSet::new(),
         };
         let e = assemble_emit(&[
@@ -4184,7 +4104,8 @@ version = \"1\"
             dep_versions: BTreeMap::new(),
             inspected_free_fns: BTreeMap::new(),
             inspected_consts: BTreeMap::new(),
-            cargo_deps: lines.into_iter().map(str::to_owned).collect(),
+            cargo_deps: lines.into_iter().map(dep).collect(),
+            transparent_glue: BTreeMap::new(),
             wrapper_idents: BTreeSet::new(),
         };
         let e = assemble_emit(&[
@@ -4487,6 +4408,7 @@ version = \"1\"
             inspected_consts: BTreeMap::new(),
             cargo_deps: Vec::new(),
             wrapper_idents: BTreeSet::new(),
+            transparent_glue: BTreeMap::new(),
         }
     }
 
@@ -4598,6 +4520,9 @@ version = \"1\"
                 in_result: false,
             }),
         });
+        c.transparent_glue =
+            ipe_ffi::driver::resolve_transparent_glue(&c.bindings, &c.transparent_types)
+                .expect("the binding names a carried shape");
         let emit = assemble_emit(&[c]).expect("emit ok").expect("emit present");
         let glue = emit
             .wrapper_glue

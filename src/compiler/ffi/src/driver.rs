@@ -16,9 +16,10 @@ use std::collections::BTreeSet;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
+use crate::dep_line::{DepLine, DepSource};
 use crate::diag::{Diagnostic, SourceDefect};
 use crate::naming::{WRAPPER_END_SENTINEL, WRAPPER_SENTINEL_PREFIX};
-use crate::pkginfo::{CrateVersion, FeatureName, PackageName, PkgInfo};
+use crate::pkginfo::PkgInfo;
 
 // ── crate-name gate ─────────────────────────────────────────────────────────
 
@@ -963,11 +964,14 @@ pub struct InstalledCrate {
     /// the backend's conversion glue is assembled from. Empty for a legacy
     /// cache, whose interface text predates transparency.
     pub transparent_types: std::collections::BTreeMap<String, crate::transparency::TransparentType>,
-    /// Pinned `[dependencies]` lines.
-    pub cargo_deps: Vec<String>,
+    /// Pinned `[dependencies]` lines, parsed into their typed form.
+    pub cargo_deps: Vec<DepLine>,
     /// The structured interface bindings (name, wrapper, arity, signature) —
     /// the data the catalog unification re-renders a demoted module from.
     pub bindings: Vec<crate::interface::InterfaceBinding>,
+    /// Each transparent-converting binding's positions resolved to their
+    /// shapes, keyed by wrapper ident (see [`resolve_transparent_glue`]).
+    pub transparent_glue: TransparentGlueMap,
     /// Every wrapper fn identifier the interface forwards to.
     pub wrapper_idents: BTreeSet<String>,
     /// Rust lib ident → exact resolved version, from the crate's own
@@ -985,6 +989,74 @@ pub struct InstalledCrate {
     /// constant must appear here or its assertion is refused (fail-closed, no
     /// blind trust). Empty for a legacy cache, which then admits no `.const`.
     pub inspected_consts: std::collections::BTreeMap<String, InspectedConstFact>,
+}
+
+/// One binding's transparent conversion positions, each resolved to its shape.
+///
+/// Built only by [`resolve_transparent_glue`], which refuses a binding naming
+/// a shape the crate does not carry, so every position here has its shape.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TransparentGlue {
+    /// Per-parameter shape, aligned with the Ipê arity (`None` = no conversion).
+    pub params: Vec<Option<crate::transparency::TransparentType>>,
+    /// The result's shape, when the binding returns a transparent value.
+    pub result: Option<TransparentResultGlue>,
+}
+
+/// A transparent result position resolved to its shape.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TransparentResultGlue {
+    /// `true` for a `Result Error T` result, `false` for a bare `T`.
+    pub in_result: bool,
+    /// The converted shape.
+    pub shape: crate::transparency::TransparentType,
+}
+
+/// Wrapper ident → that binding's resolved transparent glue.
+pub type TransparentGlueMap = std::collections::BTreeMap<String, TransparentGlue>;
+
+/// Resolve every binding's transparent positions against the crate's shapes.
+///
+/// Bindings with no transparent position are omitted.
+///
+/// # Errors
+/// [`crate::diag::WireDefect::UnknownTransparentShape`] when a binding names
+/// a shape absent from `transparent_types`.
+pub fn resolve_transparent_glue(
+    bindings: &[crate::interface::InterfaceBinding],
+    transparent_types: &std::collections::BTreeMap<String, crate::transparency::TransparentType>,
+) -> Result<TransparentGlueMap, crate::diag::WireDefect> {
+    let mut glue = TransparentGlueMap::new();
+    for b in bindings {
+        if b.transparent_params.iter().all(Option::is_none) && b.transparent_result.is_none() {
+            continue;
+        }
+        let shape_of = |name: &str| {
+            transparent_types.get(name).cloned().ok_or_else(|| {
+                crate::diag::WireDefect::UnknownTransparentShape {
+                    binding: b.ref_name.clone(),
+                    shape: name.to_owned(),
+                }
+            })
+        };
+        let params = b
+            .transparent_params
+            .iter()
+            .map(|p| p.as_deref().map(shape_of).transpose())
+            .collect::<Result<Vec<_>, _>>()?;
+        let result = b
+            .transparent_result
+            .as_ref()
+            .map(|r| {
+                shape_of(&r.type_name).map(|shape| TransparentResultGlue {
+                    in_result: r.in_result,
+                    shape,
+                })
+            })
+            .transpose()?;
+        glue.insert(b.wrapper_ident.clone(), TransparentGlue { params, result });
+    }
+    Ok(glue)
 }
 
 /// One inspected free function's declared Rust surface, for the asserted-call
@@ -1141,24 +1213,46 @@ fn load_installed_crate(cache_root: &Path, slug: String) -> Result<InstalledCrat
             }
             out
         };
-        let define_types: BTreeSet<String> = doc
-            .get("defineTypes")
-            .and_then(serde_json::Value::as_array)
-            .map(|a| {
-                a.iter()
-                    .filter_map(|v| v.as_str().map(str::to_owned))
-                    .collect()
+        // Every array entry is decoded, never filtered: a non-string entry is a
+        // malformed manifest, not one to silently drop.
+        let string_array = |key: &str| -> Result<Vec<String>, Diagnostic> {
+            let Some(v) = doc.get(key) else {
+                return Ok(Vec::new());
+            };
+            let entries = v
+                .as_array()
+                .ok_or_else(|| malformed(format!("`{key}` is not an array")))?;
+            entries
+                .iter()
+                .enumerate()
+                .map(|(i, e)| {
+                    e.as_str()
+                        .map(str::to_owned)
+                        .ok_or_else(|| malformed(format!("{key}[{i}]: not a string")))
+                })
+                .collect()
+        };
+        let define_types: BTreeSet<String> = string_array("defineTypes")?.into_iter().collect();
+        // Each stored dependency line is parsed into its typed form here, once:
+        // only the canonical pinned shapes the manifest emitter renders pass.
+        // A path (wrapper-crate) line is refused — a wrapper install always
+        // writes `pkg.json`, so a legacy cache never legitimately carries one.
+        let cargo_deps: Vec<DepLine> = string_array("cargoDeps")?
+            .iter()
+            .map(|line| {
+                let dep = DepLine::parse(line).map_err(|defect| Diagnostic::WireMalformed {
+                    context: format!("consumer manifest `{}` cargoDeps", paths.consumer.display()),
+                    defect,
+                })?;
+                if matches!(dep.source(), DepSource::Path(_)) {
+                    return Err(malformed(format!(
+                        "cargoDeps: path dependency `{}` in a cache without `pkg.json`",
+                        dep.name().as_str()
+                    )));
+                }
+                Ok(dep)
             })
-            .unwrap_or_default();
-        let cargo_deps: Vec<String> = doc
-            .get("cargoDeps")
-            .and_then(serde_json::Value::as_array)
-            .map(|a| {
-                a.iter()
-                    .filter_map(|v| v.as_str().map(str::to_owned))
-                    .collect()
-            })
-            .unwrap_or_default();
+            .collect::<Result<_, _>>()?;
         let transparent_types: std::collections::BTreeMap<
             String,
             crate::transparency::TransparentType,
@@ -1196,44 +1290,31 @@ fn load_installed_crate(cache_root: &Path, slug: String) -> Result<InstalledCrat
                     .to_owned(),
             ));
         }
-        let bindings: Vec<crate::interface::InterfaceBinding> = doc
-            .get("bindings")
-            .and_then(serde_json::Value::as_array)
-            .map(|a| {
-                a.iter()
-                    .filter_map(|b| {
-                        let get = |k: &str| b.get(k).and_then(serde_json::Value::as_str);
-                        let transparent_params: Vec<Option<String>> = b
-                            .get("transparentParams")
-                            .and_then(serde_json::Value::as_array)
-                            .map(|ps| ps.iter().map(|p| p.as_str().map(str::to_owned)).collect())
-                            .unwrap_or_default();
-                        let transparent_result = b.get("transparentResult").and_then(|r| {
-                            Some(crate::interface::TransparentResult {
-                                type_name: r
-                                    .get("typeName")
-                                    .and_then(serde_json::Value::as_str)?
-                                    .to_owned(),
-                                in_result: r
-                                    .get("inResult")
-                                    .and_then(serde_json::Value::as_bool)?,
-                            })
-                        });
-                        Some(crate::interface::InterfaceBinding {
-                            ref_name: get("refName")?.to_owned(),
-                            wrapper_ident: get("wrapperIdent")?.to_owned(),
-                            arity: usize::try_from(
-                                b.get("arity").and_then(serde_json::Value::as_u64)?,
-                            )
-                            .ok()?,
-                            sig: get("sig")?.to_owned(),
-                            transparent_params,
-                            transparent_result,
-                        })
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
+        // Every binding is decoded, never filtered: a dropped binding would
+        // leave the interface text forwarding to a wrapper whose transparent
+        // glue was never assembled.
+        let bindings: Vec<crate::interface::InterfaceBinding> = match doc.get("bindings") {
+            None => Vec::new(),
+            Some(v) => v
+                .as_array()
+                .ok_or_else(|| malformed("`bindings` is not an array".to_owned()))?
+                .iter()
+                .enumerate()
+                .map(|(i, b)| {
+                    decode_legacy_binding(b)
+                        .ok_or_else(|| malformed(format!("bindings[{i}]: malformed binding")))
+                })
+                .collect::<Result<_, _>>()?,
+        };
+        // Fail-closed cross-check: every transparent position a binding names
+        // must resolve to a shape the manifest carries.
+        let transparent_glue =
+            resolve_transparent_glue(&bindings, &transparent_types).map_err(|defect| {
+                Diagnostic::WireMalformed {
+                    context: format!("consumer manifest `{}`", paths.consumer.display()),
+                    defect,
+                }
+            })?;
         let wrapper_idents: BTreeSet<String> =
             bindings.iter().map(|b| b.wrapper_ident.clone()).collect();
         // Fail-closed cross-check: every forwarded wrapper must exist in the
@@ -1260,6 +1341,7 @@ fn load_installed_crate(cache_root: &Path, slug: String) -> Result<InstalledCrat
             transparent_types,
             cargo_deps,
             bindings,
+            transparent_glue,
             wrapper_idents,
             dep_versions,
             inspected_free_fns: std::collections::BTreeMap::new(),
@@ -1268,12 +1350,50 @@ fn load_installed_crate(cache_root: &Path, slug: String) -> Result<InstalledCrat
     }
 }
 
+/// Decode one legacy `consumer.json` binding; `None` on any malformed field.
+///
+/// An absent (or `null`) `transparentParams`/`transparentResult` means the
+/// binding converts nothing; a present one must decode in full.
+fn decode_legacy_binding(b: &serde_json::Value) -> Option<crate::interface::InterfaceBinding> {
+    let get = |k: &str| b.get(k).and_then(serde_json::Value::as_str);
+    let transparent_params: Vec<Option<String>> = match b.get("transparentParams") {
+        None | Some(serde_json::Value::Null) => Vec::new(),
+        Some(ps) => ps
+            .as_array()?
+            .iter()
+            .map(|p| {
+                if p.is_null() {
+                    Some(None)
+                } else {
+                    p.as_str().map(|s| Some(s.to_owned()))
+                }
+            })
+            .collect::<Option<_>>()?,
+    };
+    let transparent_result = match b.get("transparentResult") {
+        None | Some(serde_json::Value::Null) => None,
+        Some(r) => Some(crate::interface::TransparentResult {
+            type_name: r.get("typeName")?.as_str()?.to_owned(),
+            in_result: r.get("inResult")?.as_bool()?,
+        }),
+    };
+    Some(crate::interface::InterfaceBinding {
+        ref_name: get("refName")?.to_owned(),
+        wrapper_ident: get("wrapperIdent")?.to_owned(),
+        arity: usize::try_from(b.get("arity")?.as_u64()?).ok()?,
+        sig: get("sig")?.to_owned(),
+        transparent_params,
+        transparent_result,
+    })
+}
+
 /// Re-derive one installed crate's whole consumer-side view from its
 /// validated inspection document — the single constructor both the catalog
 /// loader and the asserted-call tests build from.
 ///
 /// # Errors
-/// A wire-defect diagnostic when a dependency line cannot be rendered.
+/// A wire-defect diagnostic when a dependency line cannot be rendered or a
+/// binding names a transparent shape the interface does not carry.
 pub fn installed_crate_from_pkg(slug: String, pkg: &PkgInfo) -> Result<InstalledCrate, Diagnostic> {
     let mut dep_versions: std::collections::BTreeMap<String, String> =
         std::collections::BTreeMap::new();
@@ -1323,6 +1443,11 @@ pub fn installed_crate_from_pkg(slug: String, pkg: &PkgInfo) -> Result<Installed
         .iter()
         .map(|b| b.wrapper_ident.clone())
         .collect();
+    let transparent_glue = resolve_transparent_glue(&iface.bindings, &iface.transparent_types)
+        .map_err(|defect| Diagnostic::WireMalformed {
+            context: format!("interface of `{}`", pkg.name()),
+            defect,
+        })?;
     Ok(InstalledCrate {
         slug,
         module_name: iface.module_name,
@@ -1333,8 +1458,9 @@ pub fn installed_crate_from_pkg(slug: String, pkg: &PkgInfo) -> Result<Installed
         opaque_type_ids: iface.opaque_type_ids,
         define_types: iface.define_types,
         transparent_types: iface.transparent_types,
-        cargo_deps: cargo_dep_lines(pkg)?,
+        cargo_deps: cargo_deps(pkg)?,
         bindings: iface.bindings,
+        transparent_glue,
         wrapper_idents,
         dep_versions,
         inspected_free_fns,
@@ -1419,15 +1545,7 @@ pub fn emit_coverage(
 ///
 /// A dep with no resolved version fails loudly (an unpinned line would be
 /// an under-bind waiting to happen).
-pub fn cargo_dep_lines(pkg: &PkgInfo) -> Result<Vec<String>, Diagnostic> {
-    let missing_version = |name: &str| Diagnostic::WireMalformed {
-        context: format!("transitive dep `{name}`"),
-        defect: crate::diag::WireDefect::Json {
-            detail: "missing resolved version (an unpinned dependency line is forbidden)"
-                .to_owned(),
-        },
-    };
-    let mut lines = Vec::new();
+pub fn cargo_deps(pkg: &PkgInfo) -> Result<Vec<DepLine>, Diagnostic> {
     // An author-supplied wrapper crate is bound by PATH, never a registry pin:
     // the emitted app crate depends on the local wrapper directory. Its own
     // transitive deps resolve through the wrapper's `Cargo.toml`, so the single
@@ -1436,32 +1554,29 @@ pub fn cargo_dep_lines(pkg: &PkgInfo) -> Result<Vec<String>, Diagnostic> {
         // The Cargo `[dependencies]` KEY is the charset-gated package NAME, never
         // the weakly gated `pkg_path` (which may even be a `--manifest` filesystem
         // path): the type forbids any ungated string reaching the TOML key.
-        lines.push(render_path_dep_line(
-            pkg.name_pkg(),
-            pkg.wrapper_path().as_str(),
-            pkg.features(),
-        ));
-        return Ok(lines);
+        let line = DepLine::path(
+            pkg.name_pkg().clone(),
+            pkg.wrapper_path().clone(),
+            pkg.features().to_vec(),
+        )
+        .map_err(dep_defect(pkg.name()))?;
+        return Ok(vec![line]);
     }
     if pkg.transitive_deps().is_empty() {
         // No probe metadata: pin the primary crate from the package header. The
         // dependency KEY is the charset-gated package name, never `pkg_path`.
-        if pkg.version().is_empty() {
-            return Err(missing_version(pkg.name()));
-        }
-        lines.push(render_dep_line(
-            pkg.name_pkg(),
-            pkg.crate_version(),
-            pkg.features(),
-        ));
-        return Ok(lines);
+        let line = DepLine::registry(
+            pkg.name_pkg().clone(),
+            pkg.crate_version().clone(),
+            pkg.features().to_vec(),
+        )
+        .map_err(dep_defect(pkg.name()))?;
+        return Ok(vec![line]);
     }
+    let mut lines = Vec::with_capacity(pkg.transitive_deps().len());
     for dep in pkg.transitive_deps() {
         // The probe scaffold is dropped at the `PkgInfo` decode boundary, so
         // every `TransitiveDep` reaching here is a real registry package.
-        if dep.version.is_empty() {
-            return Err(missing_version(dep.name.as_str()));
-        }
         // The primary crate carries the effective feature set rustdoc
         // succeeded with. Matched on the REGISTRY package NAME, not the lib
         // ident: a crate whose lib renames its target (`async-stripe` → lib
@@ -1469,62 +1584,35 @@ pub fn cargo_dep_lines(pkg: &PkgInfo) -> Result<Vec<String>, Diagnostic> {
         // = pkg.name()`, and the `Cargo.toml` key is the package name — so
         // matching on ident would drop the feature set and ship a manifest
         // missing a mandatory runtime feature (a cargo build-script failure).
-        let features: &[FeatureName] = if dep.name.as_str() == pkg.name() {
-            pkg.features()
+        let features = if dep.name.as_str() == pkg.name() {
+            pkg.features().to_vec()
         } else {
-            &[]
+            Vec::new()
         };
-        lines.push(render_dep_line(&dep.name, &dep.version, features));
+        lines.push(
+            DepLine::registry(dep.name.clone(), dep.version.clone(), features)
+                .map_err(dep_defect(dep.name.as_str()))?,
+        );
     }
-    lines.sort();
+    lines.sort_by_cached_key(ToString::to_string);
     Ok(lines)
 }
 
-/// Render one pinned `[dependencies]` line. Every value spliced here is a
-/// decode-validated newtype whose charset gate excludes TOML metacharacters:
-/// `name` is a [`PackageName`] (`[A-Za-z0-9_-]+`, alphabetic-first), `version`
-/// a [`CrateVersion`], and each feature a [`FeatureName`]. A raw unchecked
-/// string cannot reach any of the three splice positions, so no
-/// `"`-and-newline payload can break out of its TOML string and inject manifest
-/// content — the types, not a runtime escape, close the injection class.
-fn render_dep_line(name: &PackageName, version: &CrateVersion, features: &[FeatureName]) -> String {
-    let name = name.as_str();
-    let version = version.as_str();
-    if features.is_empty() {
-        format!("{name} = \"={version}\"")
-    } else {
-        let quoted: Vec<String> = features
-            .iter()
-            .map(|f| format!("\"{}\"", f.as_str()))
-            .collect();
-        format!(
-            "{name} = {{ version = \"={version}\", features = [{}] }}",
-            quoted.join(", ")
-        )
+/// Attribute a dependency-line defect to the dependency it names.
+fn dep_defect(name: &str) -> impl FnOnce(crate::diag::WireDefect) -> Diagnostic {
+    move |defect| Diagnostic::WireMalformed {
+        context: format!("transitive dep `{name}`"),
+        defect,
     }
 }
 
-/// Render a `path` `[dependencies]` line for an author-supplied wrapper crate.
+/// The rendered `[dependencies]` lines of [`cargo_deps`].
 ///
-/// `path` is a [`crate::pkginfo::WrapperCratePath`], decode-gated to
-/// `[A-Za-z0-9._/-]` (plus space) so it carries no `"`-and-newline payload that
-/// could close its TOML string and inject manifest content; `name` and each
-/// feature are the same decode-validated newtypes `render_dep_line` splices, so
-/// no raw string reaches a TOML position.
-fn render_path_dep_line(name: &PackageName, path: &str, features: &[FeatureName]) -> String {
-    let name = name.as_str();
-    if features.is_empty() {
-        format!("{name} = {{ path = \"{path}\" }}")
-    } else {
-        let quoted: Vec<String> = features
-            .iter()
-            .map(|f| format!("\"{}\"", f.as_str()))
-            .collect();
-        format!(
-            "{name} = {{ path = \"{path}\", features = [{}] }}",
-            quoted.join(", ")
-        )
-    }
+/// # Errors
+///
+/// As [`cargo_deps`].
+pub fn cargo_dep_lines(pkg: &PkgInfo) -> Result<Vec<String>, Diagnostic> {
+    Ok(cargo_deps(pkg)?.iter().map(ToString::to_string).collect())
 }
 
 // ── S4 sentinel DCE ─────────────────────────────────────────────────────────
@@ -1558,6 +1646,7 @@ pub fn shake_bindings(source: &str, reached: &BTreeSet<String>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::diag::WireDefect;
     use serde_json::json;
 
     // ── source gates ────────────────────────────────────────────────────
@@ -2197,9 +2286,9 @@ mod tests {
     fn an_injection_bearing_version_never_reaches_a_manifest_line() {
         // An inspection whose resolved version carries a TOML-string-breakout
         // payload must be REFUSED at decode — the version can never reach
-        // `render_dep_line`, so no emitted `Cargo.toml` line can carry the
-        // injection. (The type-level guarantee: `render_dep_line` takes a
-        // `&CrateVersion`, and the only constructor is the decode-boundary
+        // a `DepLine`, so no emitted `Cargo.toml` line can carry the
+        // injection. (The type-level guarantee: `DepLine` holds a
+        // `CrateVersion`, and the only constructor is the decode-boundary
         // parse, so an un-parsed string is unrepresentable at emission.)
         let evil = "1.0\", features=[\"net\"] }\n[dependencies.evil]\npath = \"/etc";
         let decoded = PkgInfo::decode_json(
@@ -2228,8 +2317,8 @@ mod tests {
     fn an_injection_bearing_feature_never_reaches_a_manifest_line() {
         // An inspection whose effective feature set carries a TOML-array
         // breakout payload must be REFUSED at decode — the feature can never
-        // reach `render_dep_line`, so no emitted `Cargo.toml` line can carry
-        // the injection. (`render_dep_line` takes `&[FeatureName]`, whose only
+        // reach a `DepLine`, so no emitted `Cargo.toml` line can carry
+        // the injection. (`DepLine` holds `FeatureName`s, whose only
         // constructor is the decode-boundary parse.)
         let evil = "std\"]}\n[dependencies.evil]\npath = \"/tmp/evil\nx = [\"";
         let decoded = PkgInfo::decode_json(
@@ -2613,6 +2702,125 @@ mod tests {
             "expected WireMalformed, got: {err:?}"
         );
         let _ = std::fs::remove_dir_all(&cache_root);
+    }
+
+    /// A legacy manifest with every required field and `extra` merged over it.
+    fn legacy_consumer(extra: &serde_json::Value) -> String {
+        let mut doc = json!({
+            "moduleName": "Rust.Semver",
+            "kernelName": "Rust_Semver",
+            "opaqueTypes": { "Version": "::semver::Version" },
+            "defineTypes": [],
+            "cargoDeps": [],
+            "bindings": []
+        });
+        if let (Some(base), Some(over)) = (doc.as_object_mut(), extra.as_object()) {
+            for (k, v) in over {
+                base.insert(k.clone(), v.clone());
+            }
+        }
+        doc.to_string()
+    }
+
+    /// Load a legacy cache built from `extra` and return the refusal's defect.
+    fn legacy_defect(test_name: &str, extra: &serde_json::Value) -> Option<WireDefect> {
+        let cache_root = write_legacy_cache(test_name, &legacy_consumer(extra));
+        let result = load_catalog(&cache_root);
+        let _ = std::fs::remove_dir_all(&cache_root);
+        match result {
+            Err(Diagnostic::WireMalformed { defect, .. }) => Some(defect),
+            _ => None,
+        }
+    }
+
+    #[test]
+    fn a_legacy_canonical_dependency_line_loads_typed() {
+        let cache_root = write_legacy_cache(
+            "deps_ok",
+            &legacy_consumer(&json!({ "cargoDeps": ["semver = \"=1.0.26\""] })),
+        );
+        let catalog = load_catalog(&cache_root).expect("a canonical pin loads");
+        let _ = std::fs::remove_dir_all(&cache_root);
+        let deps: Vec<String> = catalog
+            .iter()
+            .flat_map(|c| c.cargo_deps.iter().map(ToString::to_string))
+            .collect();
+        assert_eq!(deps, ["semver = \"=1.0.26\""]);
+    }
+
+    #[test]
+    fn a_legacy_garbage_dependency_line_is_refused() {
+        assert!(matches!(
+            legacy_defect("deps_garbage", &json!({ "cargoDeps": ["garbage"] })),
+            Some(WireDefect::InvalidDependencyLine { .. })
+        ));
+    }
+
+    #[test]
+    fn a_legacy_non_string_array_entry_is_refused() {
+        for (name, extra) in [
+            ("deps_int", json!({ "cargoDeps": [42] })),
+            ("deps_obj", json!({ "cargoDeps": "semver = \"=1.0.26\"" })),
+            ("define_int", json!({ "defineTypes": [null] })),
+        ] {
+            assert!(
+                matches!(legacy_defect(name, &extra), Some(WireDefect::Json { .. })),
+                "{extra} must be refused"
+            );
+        }
+    }
+
+    #[test]
+    fn a_legacy_path_dependency_is_refused() {
+        assert!(matches!(
+            legacy_defect(
+                "deps_path",
+                &json!({ "cargoDeps": ["semver = { path = \"/w\" }"] })
+            ),
+            Some(WireDefect::Json { .. })
+        ));
+    }
+
+    #[test]
+    fn a_legacy_malformed_binding_is_refused() {
+        assert!(matches!(
+            legacy_defect(
+                "binding_bad",
+                &json!({ "bindings": [{ "refName": "w", "wrapperIdent": "w" }] })
+            ),
+            Some(WireDefect::Json { .. })
+        ));
+    }
+
+    #[test]
+    fn a_legacy_binding_naming_an_uncarried_shape_is_refused() {
+        let binding = json!([{
+            "refName": "w", "wrapperIdent": "w", "arity": 1,
+            "sig": "Counter -> Int", "transparentParams": ["Counter"]
+        }]);
+        let shape = |name: &str| {
+            json!([{
+                "name": name, "kind": "struct", "rustPath": name,
+                "fields": [{ "name": "value", "carrier": "Int" }]
+            }])
+        };
+        assert!(matches!(
+            legacy_defect(
+                "shape_missing",
+                &json!({ "bindings": binding, "transparentTypes": shape("Point") })
+            ),
+            Some(WireDefect::UnknownTransparentShape { .. })
+        ));
+        // The same binding over a manifest carrying its shape passes the
+        // shape check and stops only at the absent wrapper declaration.
+        let carried = legacy_defect(
+            "shape_carried",
+            &json!({ "bindings": binding, "transparentTypes": shape("Counter") }),
+        );
+        assert!(
+            matches!(&carried, Some(WireDefect::Json { detail }) if detail.contains("pub fn")),
+            "{carried:?}"
+        );
     }
 
     /// An absent `opaqueTypeIds` field is accepted — older caches omit it.

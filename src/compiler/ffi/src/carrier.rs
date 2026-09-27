@@ -713,7 +713,7 @@ impl ClosureRet {
 /// A fully-parsed `define.closure` signature.
 ///
 /// Rendered from ONLY closed carriers and bounds — never from a raw manifest
-/// string. The emitter reads this, exactly as `render_dep_line` reads
+/// string. The emitter reads this, exactly as `DepLine` renders
 /// `CrateVersion`/`FeatureName`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ClosureSig {

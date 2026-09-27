@@ -322,6 +322,7 @@ mod tests {
             transparent_types: std::collections::BTreeMap::new(),
             cargo_deps: vec![],
             bindings,
+            transparent_glue: crate::driver::TransparentGlueMap::new(),
             wrapper_idents: std::collections::BTreeSet::new(),
             dep_versions: dep_versions
                 .iter()

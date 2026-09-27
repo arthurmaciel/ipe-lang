@@ -1130,20 +1130,12 @@ module `{module}` clashes with the installed FFI crate `{krate}` — the `Rust.*
 
 installed FFI crate `{krate}` defines a `[rust.define.*]` type `{name}` whose name also names an inspected opaque type of the crate — the two are different Rust types that would collide on one nominal; rename the define type
 
-## ffi-dependency-line-unparsable
-
-installed FFI crate `{krate}` emitted an unparsable dependency line: {line}
-
 ## ffi-dependency-pin-conflict
 
-installed FFI crates pin dependency `{name}` to conflicting versions:
-  ={first}
-  ={second}
-re-add one of the crates so the version pins agree
-
-## ffi-transparent-without-shape
-
-installed FFI crate `{krate}` marks `{name}` transparent in binding `{binding}` but carries no shape for it — re-run `ipe add`
+installed FFI crates pin dependency `{name}` to conflicting sources:
+  {first}
+  {second}
+re-add one of the crates so the pins agree
 
 ## ffi-reserved-module-claimed
 

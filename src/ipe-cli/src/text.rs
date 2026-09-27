@@ -843,12 +843,8 @@ messages! {
     ffi_module_clash(module, krate) = "ffi-module-clash";
     /// An FFI define type collides with an inspected opaque type.
     ffi_define_opaque_collision(krate, name) = "ffi-define-opaque-collision";
-    /// An installed FFI crate emitted a malformed dependency line.
-    ffi_dependency_line_unparsable(krate, line) = "ffi-dependency-line-unparsable";
-    /// Installed FFI crates pin one dependency to two versions.
+    /// Installed FFI crates pin one dependency to two sources.
     ffi_dependency_pin_conflict(name, first, second) = "ffi-dependency-pin-conflict";
-    /// An FFI binding marks a type transparent without its shape.
-    ffi_transparent_without_shape(krate, name, binding) = "ffi-transparent-without-shape";
     /// An FFI crate claims the reserved asserted-call module.
     ffi_reserved_module_claimed(krate, module) = "ffi-reserved-module-claimed";
     /// An FFI wrapper uses the reserved asserted-shim prefix.

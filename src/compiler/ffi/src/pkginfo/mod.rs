@@ -377,7 +377,7 @@ pub struct TransitiveDep {
 pub struct PackageName(String);
 
 impl PackageName {
-    fn parse(s: &str) -> Result<Self, crate::diag::WireDefect> {
+    pub(crate) fn parse(s: &str) -> Result<Self, crate::diag::WireDefect> {
         let legal = !s.is_empty()
             && s.chars()
                 .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
@@ -436,7 +436,7 @@ pub(crate) const fn version_char_is_legal(c: char) -> bool {
 }
 
 impl CrateVersion {
-    fn parse(s: &str) -> Result<Self, crate::diag::WireDefect> {
+    pub(crate) fn parse(s: &str) -> Result<Self, crate::diag::WireDefect> {
         let legal = s.chars().all(version_char_is_legal);
         if legal {
             Ok(Self(s.to_owned()))
@@ -508,7 +508,7 @@ impl PkgPath {
 pub struct WrapperCratePath(String);
 
 impl WrapperCratePath {
-    fn parse(s: &str) -> Result<Self, crate::diag::WireDefect> {
+    pub(crate) fn parse(s: &str) -> Result<Self, crate::diag::WireDefect> {
         if s.is_empty() {
             return Ok(Self(String::new()));
         }
@@ -548,7 +548,7 @@ impl WrapperCratePath {
 /// Cargo's dependency-feature syntax (`dep:foo`, `foo/bar`, `dep?/feat`) while
 /// excluding every TOML-breaking character (quote, bracket, brace, backslash,
 /// control), so a name can never escape its string.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct FeatureName(String);
 
 impl FeatureName {
@@ -2181,7 +2181,7 @@ mod tests {
     }
 
     // The same gate guards a TRANSITIVE dependency's version — the transitive
-    // path is the one `render_dep_line` reaches for every non-primary crate.
+    // path is the one a `DepLine` is built from for every non-primary crate.
     #[test]
     fn an_injection_bearing_transitive_version_fails_the_whole_package() {
         let v = json!({
