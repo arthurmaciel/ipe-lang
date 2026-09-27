@@ -769,9 +769,10 @@ findBy : Db -> Store a -> String -> SqlValue -> Task Error (List a)
 ```
 
 `findBy conn store col value` — read every row whose `col` equals `value`,
-decoded through the store's codec. `col` is validated against the store's own
-derived column list before any SQL is built (a name absent from the codec's
-columns is a typed `Err`, parse-don't-validate), then reaches SQL only through
+decoded through the store's codec. `col` is the column's declared name (the
+record field it decodes into, unchanged by `renameColumn`); it is resolved to
+the store's current column before any SQL is built (a name the store does not
+declare is a typed `Err`, parse-don't-validate), then reaches SQL only through
 `Sql.column`; `value` binds as a parameter through `Sql.param`. This is the
 convenience single-column equality read; a compound predicate uses the query
 builder (`query |> where …`) or the raw-fragment escape `findWhere`.
@@ -811,6 +812,14 @@ renames, so the declared names the `Draft` builders recorded never drift from
 the current schema. Rows stay in the codec's declared field names: a codec
 store decodes into the same record, and a raw-column store reads and writes a
 `Row` keyed by its declared column names.
+
+Queries name columns the same way: every query-layer name — a `Cond` accessor
+(`eq .name …`), `orderAsc` / `orderDesc`, `findBy`, a join key, a join filter
+or sort column, a `select` projection, and every policy column — is the
+DECLARED name, resolved through the same mapping to the current column the
+emitted SQL names. A current name that is not also a declared one is not a
+query name: it is refused with a typed unknown-column `Err`, exactly as a name
+the store never had.
 
 This function is a total constructor: `from` and `to` are admitted into the
 op log unconditionally. Identifier validation happens once, in `migrations`,
@@ -1489,9 +1498,11 @@ joinNamed : Store a -> String -> Store b -> String -> Joined a b
 ```
 
 The lowered form of `join`: each accessor `.field` has already been turned
-into its validated, snake_cased column name (`keyA` / `keyB`). Builds the
-`Joined` with the key-equality WHERE fragment `a0.keyA = a1.keyB` — both sides
-reach SQL only through `Sql.column` on the aliased reference. If either key is
+into its validated, snake_cased declared column name (`keyA` / `keyB`). Each
+key resolves to its side's current column (a key the side does not declare
+poisons the join with a typed `Err`), and the `Joined` carries the
+key-equality WHERE fragment `a0.keyA = a1.keyB` — both sides reach SQL only
+through `Sql.column` on the aliased reference. If either key is
 somehow not a valid dotted identifier the fragment poisons itself (the
 `Sql.column` gate), which the runners surface as a typed `Err`; no value is
 interpolated.
@@ -1694,7 +1705,9 @@ selectNamed : Joined a b -> List ProjectionTerm -> List SqlValue -> Select row
 The lowered form of `select`: the lambda has already been read into the
 ordered `ProjectionTerm` list. Each term is one typed SELECT descriptor:
 `ColumnTerm alias col`, `LiteralTerm`, `UpperTerm dotted`, `LowerTerm dotted`,
-or `CoalesceTerm operandA operandB`. Literal-position `SqlValue` binds appear
+or `CoalesceTerm operandA operandB`; every column it names is a declared
+column, resolved here to its side's current column (an unresolvable one
+poisons the `Select`). Literal-position `SqlValue` binds appear
 in `extraBinds` in left→right, coalesce-left-before-right order, ahead of the
 WHERE binds. Builds the `Select` from the join's tables, alias-bound `FROM …
 WHERE` fragment, and any inherited `poison`. Reached only through the
