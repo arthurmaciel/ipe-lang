@@ -23,7 +23,7 @@ use ipe_diagnostics::{
     NameError, Span, StoreEqAccessorDefect, StoreSelectProjectionDefect,
 };
 use ipe_intern::{Interner, Symbol};
-use ipe_ir::free_vars::pat_bound_symbols;
+use ipe_ir::free_vars::{pat_bound_symbols, pat_moves_nested_part, pat_moves_scrutinee};
 use ipe_ir::let_inline::{inlined_let_body, let_value_is_inlined};
 use ipe_ir::{
     Arm, BinOp, BoundSet, CallPin, Callee, Capability, EnumDef, Expr, Func, FuncId, IrType,
@@ -6002,10 +6002,12 @@ fn reject_fn_value_reuse(
 ///
 /// `Expr::Destructure` value / `Expr::Match` scrutinee: a bare `sym` is matched
 /// by value in place (`let <pat> = sym;`, `match sym { .. }`), so it is a
-/// consume only when a binder moves a part out, as decided by
+/// consume only when a by-value slot moves a part out, as decided by
 /// [`PartialMove::of_pattern`] — the same classifier [`nonclone_read_after_move`]
-/// uses. A binder of a field in `copy_fields` copies it; a wildcard binds
-/// nothing. A `Match` counts one consume when ANY arm's pattern moves a part.
+/// uses. A slot over a field in `copy_fields` copies it; a wildcard binds
+/// nothing; a nested string literal is matched through a hidden by-value slot
+/// and moves its part. A `Match` counts one consume when ANY arm's pattern
+/// moves a part.
 #[allow(clippy::too_many_lines)] // exhaustive IR match; every arm is structurally required
 fn count_value_consumes(sym: Symbol, copy_fields: &BTreeSet<Symbol>, expr: &Expr) -> usize {
     match expr {
@@ -6175,11 +6177,12 @@ fn base_move_consumes(sym: Symbol, copy_fields: &BTreeSet<Symbol>, record: &Expr
 
 /// Which parts of the non-`Clone` binding a pattern match has moved out.
 ///
-/// A `match sym { .. }` / `let <pat> = sym;` binds by value, so every binder of
-/// the pattern moves its part out of `sym` (a partial move) — except a binder of
-/// a `Copy` record field, which copies it. A later read of a moved part, or of
-/// `sym` as a whole, observes a moved value (E0382); a read of an untouched or
-/// copied record field stays sound.
+/// A `match sym { .. }` / `let <pat> = sym;` binds by value, so every by-value
+/// slot of the pattern — a named binder or the hidden slot a nested string
+/// literal is matched through — moves its part out of `sym` (a partial move),
+/// except a slot over a `Copy` record field, which copies it. A later read of
+/// a moved part, or of `sym` as a whole, observes a moved value (E0382); a read
+/// of an untouched or copied record field stays sound.
 #[derive(Clone, Default, PartialEq, Eq)]
 enum PartialMove {
     /// No pattern has moved any part of the binding.
@@ -6195,23 +6198,18 @@ enum PartialMove {
 impl PartialMove {
     /// The parts `pat` moves out of a by-value scrutinee.
     ///
-    /// A record-field binder over a field in `copy_fields` copies the field
-    /// rather than moving it; every other binder moves its part.
+    /// The by-value slots are the ones the emitter creates
+    /// ([`pat_moves_scrutinee`]); a slot over a record field in `copy_fields`
+    /// copies the field rather than moving it.
     fn of_pattern(pat: &Pat, copy_fields: &BTreeSet<Symbol>) -> Self {
-        let mut bound = BTreeSet::new();
-        pat_bound_symbols(pat, &mut bound);
-        if bound.is_empty() {
+        if !pat_moves_scrutinee(pat) {
             return Self::Intact;
         }
         match pat {
             Pat::Record(fields) => {
                 let moved: BTreeSet<Symbol> = fields
                     .iter()
-                    .filter(|(f, p)| {
-                        let mut inner = BTreeSet::new();
-                        pat_bound_symbols(p, &mut inner);
-                        !inner.is_empty() && !copy_fields.contains(f)
-                    })
+                    .filter(|(f, p)| pat_moves_nested_part(p) && !copy_fields.contains(f))
                     .map(|(f, _)| *f)
                     .collect();
                 if moved.is_empty() {
@@ -6345,7 +6343,8 @@ impl<'a> NonCloneMoveState<'a> {
 /// left-to-right position stays accepted.
 ///
 /// A `Match` scrutinee or `Destructure` value of bare `sym` is matched by
-/// value: each pattern binder moves its part out. A later read of a moved
+/// value: each by-value slot of the pattern (a binder, or the hidden slot of a
+/// nested string literal) moves its part out. A later read of a moved
 /// record field, or of `sym` whole, is the same hazard; a read of a field the
 /// pattern left untouched stays accepted.
 ///
@@ -31432,6 +31431,136 @@ mod tests {
         assert!(matches!(
             match_then(read(job, IrType::Task(Box::new(IrType::Int)))),
             Ok(ref e) if hazard(&worker, e)
+        ));
+    }
+
+    /// A string literal nested in a by-value arm pattern moves the part it matches.
+    ///
+    /// The emitter matches a nested literal through a hidden by-value slot plus
+    /// an equality guard, so `case p of ( "go", _ ) -> .. ; _ -> ..` followed by a
+    /// whole-value use of `p` is a double move (IPE-L0135), as are the
+    /// constructor-payload and record-field forms and a read of the matched
+    /// record field. A top-level literal matches a borrowed scrutinee and moves
+    /// nothing.
+    #[test]
+    #[allow(clippy::too_many_lines)] // one refusal twin per by-value literal position
+    fn nonclone_nested_str_literal_arm_moves_part() {
+        use ipe_diagnostics::Feature;
+        use ipe_ir::{Arm, Expr, IrType, Match, ModPath, Pat};
+
+        use super::{
+            CloneEnv, copy_record_fields, count_value_consumes, nonclone_read_after_move,
+            reject_nonclone_value_reuse, unsupported,
+        };
+
+        let mut interner = Interner::new();
+        let main = interner.intern("Main").expect("intern");
+        let wrap = interner.intern("Wrap").expect("intern");
+        let say = interner.intern("Say").expect("intern");
+        let w = interner.intern("w").expect("intern");
+        let name = interner.intern("name").expect("intern");
+        let action = interner.intern("action").expect("intern");
+        let s = interner.intern("s").expect("intern");
+        let span = Span::DUMMY;
+        let transparent = BTreeSet::new();
+        let env = CloneEnv {
+            interner: &interner,
+            transparent_ffi: &transparent,
+        };
+        let l0135 = unsupported(span, Feature::NonCloneValueReuse);
+        let task = IrType::Task(Box::new(IrType::Int));
+        let lit = || Pat::Str("go".to_owned());
+        let hazard = |ty: &IrType, body: &Expr| nonclone_read_after_move(env, w, ty, body);
+        let reject = |ty: &IrType, body: &Expr| reject_nonclone_value_reuse(env, w, ty, body, span);
+        // `(case w of <pat> -> () ; _ -> (), <after>)`.
+        let match_then = |pat: Pat, after: Expr| {
+            let arms = vec![
+                Arm {
+                    pat,
+                    body: Expr::Unit,
+                    guard: None,
+                },
+                Arm {
+                    pat: Pat::Wildcard,
+                    body: Expr::Unit,
+                    guard: None,
+                },
+            ];
+            Match::new_flat(Expr::Var(w), arms).map(|m| Expr::Tuple(vec![Expr::Match(m), after]))
+        };
+        let refused = |ty: &IrType, pat: Pat, after: Expr| {
+            matches!(
+                match_then(pat, after),
+                Ok(ref e) if matches!(reject(ty, e), Err(ref err) if *err == l0135)
+            )
+        };
+        let accepted = |ty: &IrType, pat: Pat, after: Expr| {
+            matches!(
+                match_then(pat, after),
+                Ok(ref e) if !hazard(ty, e) && reject(ty, e).is_ok()
+            )
+        };
+
+        // Tuple element: `w : (String, Task Int)`, `case w of ("go", _)` then `w`.
+        let pair = IrType::Tuple(vec![IrType::Str, task.clone()]);
+        let str_column = || Pat::Tuple(vec![lit(), Pat::Wildcard]);
+        assert!(matches!(
+            match_then(str_column(), Expr::Var(w)),
+            Ok(ref e) if count_value_consumes(w, &BTreeSet::new(), e) == 2 && hazard(&pair, e)
+        ));
+        assert!(refused(&pair, str_column(), Expr::Var(w)));
+        assert!(accepted(
+            &pair,
+            Pat::Tuple(vec![Pat::Wildcard, Pat::Wildcard]),
+            Expr::Var(w)
+        ));
+
+        // Constructor payload: `w : Wrap (Task Int)`, `case w of Say "go"` then `w`.
+        let wrap_task = IrType::Enum {
+            home: ModPath(vec![main]),
+            name: wrap,
+            args: vec![task.clone()],
+        };
+        let say_pat = |arg: Pat| Pat::Ctor {
+            home: ModPath(vec![main]),
+            ty: wrap,
+            variant: say,
+            args: vec![arg],
+        };
+        assert!(refused(&wrap_task, say_pat(lit()), Expr::Var(w)));
+        assert!(accepted(&wrap_task, say_pat(Pat::Wildcard), Expr::Var(w)));
+
+        // Record field: `w : { name : String, action : Task Int }`,
+        // `case w of { name = "go" }` then `w`, or then `w.name`.
+        let msg = IrType::Record(BTreeMap::from([
+            (name, IrType::Str),
+            (action, task.clone()),
+        ]));
+        assert!(copy_record_fields(env, &msg).is_empty());
+        let name_pat = || Pat::Record(vec![(name, lit()), (action, Pat::Wildcard)]);
+        let read = |field, field_ty: IrType| Expr::Access {
+            record: Box::new(Expr::Var(w)),
+            field,
+            field_ty,
+        };
+        assert!(refused(&msg, name_pat(), Expr::Var(w)));
+        assert!(matches!(
+            match_then(name_pat(), read(name, IrType::Str)),
+            Ok(ref e) if hazard(&msg, e)
+        ));
+        assert!(refused(&msg, name_pat(), read(name, IrType::Str)));
+        // The untouched `action` field stays owned.
+        assert!(accepted(&msg, name_pat(), read(action, task)));
+
+        // A top-level literal borrows the scrutinee (`w.as_str()`): no consume,
+        // unlike a whole-value binder over the same scrutinee.
+        assert!(matches!(
+            match_then(lit(), Expr::Var(w)),
+            Ok(ref e) if count_value_consumes(w, &BTreeSet::new(), e) == 1
+        ));
+        assert!(matches!(
+            match_then(Pat::Var(s), Expr::Var(w)),
+            Ok(ref e) if count_value_consumes(w, &BTreeSet::new(), e) == 2
         ));
     }
 
