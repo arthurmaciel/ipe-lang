@@ -4359,10 +4359,7 @@ version = \"1\"
         b.bindings_source = "pub fn span() -> ::syn::Ident { ::syn::parse_str(\"x\") }".to_owned();
         let refused = assemble_emit(&[a, b]);
         assert!(
-            matches!(
-                &refused,
-                Err(CliError::Usage(m)) if m.contains("`syn`") && m.contains("src/ffi.rs")
-            ),
+            refused_as(&refused, syn_dropped_at("src/ffi.rs")),
             "a `::syn::` path with `syn` undeclared must refuse: {refused:?}"
         );
     }
@@ -4374,10 +4371,7 @@ version = \"1\"
             .insert("Ident".to_owned(), "::syn::Ident".to_owned());
         let refused = assemble_emit(&[a, b]);
         assert!(
-            matches!(
-                &refused,
-                Err(CliError::Usage(m)) if m.contains("`syn`") && m.contains("Rust.a.Ident")
-            ),
+            refused_as(&refused, syn_dropped_at("Rust.a.Ident")),
             "an opaque path rooted at undeclared `syn` must refuse: {refused:?}"
         );
     }
@@ -4613,41 +4607,36 @@ version = \"1\"
     #[test]
     fn inspected_members_splitting_a_named_transitive_are_refused() {
         // Two inspection documents: each member links its own `syn` major and
-        // `a` surfaces `syn::Ident`, so the emitted crate names the dropped dep.
-        let member = |name: &str, syn: &str, functions: serde_json::Value| {
+        // `a` declares the opaque handle `foreign Ident = { kind = Opaque
+        // "syn::Ident" }`. A declared opaque surfaces unconditionally (no
+        // binding has to resolve it), so the dropped root reaches the emit
+        // through exactly one site: the `Rust.A.Ident` foreign-type path.
+        let member = |name: &str, syn: &str, declared: serde_json::Value| {
             let doc = serde_json::json!({
                 "pkg": name, "name": name, "version": "1.0.0",
-                "functions": functions,
+                "functions": [],
                 "constants": [],
                 "errors": [],
                 "transitiveDeps": [
                     {"ident": name, "name": name, "version": "1.0.0"},
                     {"ident": "syn", "name": "syn", "version": syn}
                 ],
-                "foreignTypeIds": {"::syn::Ident": "proc_macro2::Ident"}
+                "declaredOpaques": declared
             })
             .to_string();
             let pkg = ipe_ffi::pkginfo::PkgInfo::decode_json(&doc).expect("decodes");
             ipe_ffi::driver::installed_crate_from_pkg(name.to_owned(), &pkg).expect("installs")
         };
-        let a = member(
-            "a",
-            "2.0.119",
-            serde_json::json!([{
-                "name": "span",
-                "params": [{"name": "text", "type": "&str", "ipeType": "String"}],
-                "results": [{"name": "", "type": "Ident", "rustType": "syn::Ident"}],
-                "effect": "pure"
-            }]),
+        let a = member("a", "2.0.119", serde_json::json!({"Ident": "::syn::Ident"}));
+        let b = member("b", "3.0.0", serde_json::json!({}));
+        assert_eq!(
+            a.opaque_types.get("Ident").map(String::as_str),
+            Some("::syn::Ident"),
+            "the declared opaque surfaces"
         );
-        let b = member("b", "3.0.0", serde_json::json!([]));
         let refused = assemble_emit(&[a, b]);
         assert!(
-            matches!(
-                &refused,
-                Err(CliError::Usage(m))
-                    if m.contains("different versions of dependency `syn`")
-            ),
+            refused_as(&refused, syn_dropped_at("Rust.A.Ident")),
             "{refused:?}"
         );
     }

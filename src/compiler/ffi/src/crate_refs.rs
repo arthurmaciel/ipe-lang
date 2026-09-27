@@ -25,7 +25,10 @@ pub struct Unlexable;
 /// splice any of them into a path. Left out: a keyword, a segment
 /// continuing a path after a plain identifier or `crate`/`self`/`super`/`Self`
 /// (`y` in `x::y`), a field or method after a lone `.`, and an identifier no
-/// `::` touches outside an import. A raw identifier `r#x` counts as `x`.
+/// `::` touches outside an import, and a lifetime or label name (`a` in
+/// `'a`) outside macro input. An identifier after a `$` or `#` sigil counts
+/// whether or not a `::` follows it, and a `::` after it opens a path. A raw
+/// identifier `r#x` counts as `x`.
 ///
 /// # Errors
 ///
@@ -64,6 +67,12 @@ enum Prev {
     Bang,
     /// The `extern` keyword: a `crate` after it opens an import.
     Extern,
+    /// A lifetime's or label's `'`: the next identifier is its name, never a
+    /// crate, and a `::` after that name opens a path.
+    Lifetime,
+    /// A `$` or `#` sigil: the next identifier is a macro fragment, counted
+    /// as a reference, and a `::` after it opens a path.
+    Sigil,
     /// Anything else.
     Other,
 }
@@ -118,6 +127,12 @@ impl Level {
     }
 
     fn read_ident(&mut self, text: &str, refs: &mut BTreeSet<String>) {
+        // `proc-macro2` lexes `'a` as a joint `'` then the identifier `a`, which
+        // names a lifetime or label. Macro input stays verbatim.
+        if matches!(self.prev, Prev::Lifetime) && !self.verbatim {
+            self.prev = Prev::Other;
+            return;
+        }
         let (name, raw) = text
             .strip_prefix("r#")
             .map_or((text, false), |name| (name, true));
@@ -143,20 +158,26 @@ impl Level {
             self.prev = Prev::Other;
             return;
         }
-        match self.prev {
-            Prev::ContinuingSep | Prev::Dot => {}
+        let next = match self.prev {
+            Prev::ContinuingSep | Prev::Dot => Prev::Segment,
             Prev::OpeningSep => {
                 refs.insert(name.to_owned());
+                Prev::Segment
             }
-            Prev::Segment | Prev::Bang | Prev::Extern | Prev::Other => {
+            Prev::Sigil => {
+                refs.insert(name.to_owned());
+                Prev::Other
+            }
+            Prev::Segment | Prev::Bang | Prev::Extern | Prev::Lifetime | Prev::Other => {
                 if self.import {
                     refs.insert(name.to_owned());
                 } else {
                     self.pending = Some(name.to_owned());
                 }
+                Prev::Segment
             }
-        }
-        self.prev = Prev::Segment;
+        };
+        self.prev = next;
     }
 
     fn read_punct(&mut self, punct: &Punct, pending: Option<String>, refs: &mut BTreeSet<String>) {
@@ -182,6 +203,8 @@ impl Level {
             }
             '.' => Prev::Dot,
             '!' => Prev::Bang,
+            '\'' if joint => Prev::Lifetime,
+            '$' | '#' => Prev::Sigil,
             ';' => {
                 self.import = false;
                 Prev::Other
@@ -201,8 +224,10 @@ mod tests {
     use super::{Unlexable, crate_references};
     use std::collections::BTreeSet;
 
+    /// The references of `src`, which must lex: an [`Unlexable`] fails the
+    /// test instead of yielding an empty set every negative assertion passes on.
     fn refs(src: &str) -> BTreeSet<String> {
-        crate_references(src).unwrap_or_default()
+        crate_references(src).expect("every test source lexes")
     }
 
     fn set(names: &[&str]) -> BTreeSet<String> {
@@ -245,6 +270,38 @@ mod tests {
     fn a_comparison_before_a_separator_opens_the_path() {
         assert!(refs("let b = a>::syn::C;").contains("syn"));
         assert!(refs("let b = a < c && d>::syn::C;").contains("syn"));
+    }
+
+    #[test]
+    fn a_lifetime_or_label_before_a_separator_opens_the_path() {
+        for src in [
+            "fn f<'a>(x: &'a ::syn::X) {}",
+            "fn f(x: &'static ::syn::X) {}",
+            "fn f() { 'a: loop { break 'a ::syn::X; } }",
+            "fn f() { 'a: loop { continue 'a ::syn::X; } }",
+            "fn f() { 'a: loop { ::syn::f() } }",
+            "fn f<'a>(x: &'a mut ::syn::X) {}",
+            "type T = Box<dyn Tr + 'static + ::syn::Tr>;",
+        ] {
+            assert_eq!(refs(src), set(&["syn"]), "{src}");
+        }
+    }
+
+    #[test]
+    fn a_lifetime_or_label_name_is_not_a_reference() {
+        assert!(refs("'a").is_empty());
+        assert!(refs("fn f<'a>(x: &'a u8) {}").is_empty());
+        assert!(refs("fn f() { 'a: loop { break 'a; } }").is_empty());
+        // Macro input stays verbatim, so there every identifier counts.
+        assert!(refs("m!('a)").contains("a"));
+        assert!(refs("m!(&'a ::syn::X)").contains("syn"));
+    }
+
+    #[test]
+    fn an_identifier_after_a_sigil_counts_and_opens_the_path() {
+        assert!(refs("#x ::syn::Y").is_superset(&set(&["x", "syn"])));
+        assert!(refs("$x ::syn::Y").is_superset(&set(&["x", "syn"])));
+        assert!(refs("quote! { #x ::syn::Y }").contains("syn"));
     }
 
     #[test]
