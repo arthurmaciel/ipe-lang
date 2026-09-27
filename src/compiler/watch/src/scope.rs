@@ -131,7 +131,7 @@ impl WatchedPath {
 
 /// Whether a directory name names one of the generated/vendor directories a
 /// confined watch excludes.
-fn is_excluded_dir_name(name: &str) -> bool {
+pub fn is_excluded_dir_name(name: &str) -> bool {
     EXCLUDED_DIR_NAMES.contains(&name)
 }
 
