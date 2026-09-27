@@ -93,9 +93,8 @@ pub(crate) fn write_project(dir: &Path, main: &str) -> bool {
 /// foreign type does not support.
 #[test]
 fn nonclone_handle_reused_fails_closed_before_cargo() {
-    let Ok(runtime) = ipe::resolve_runtime() else {
-        return; // runtime unavailable in this environment — skip silently
-    };
+    let runtime =
+        ipe::resolve_runtime().expect("runtime must resolve to prove the fail-closed refusal");
 
     let tmp = crate::support::scratch_root().join("ipec_ffi_nonclone_handle_reuse");
     // `w` is bound once, then read by TWO `slot_count` calls that both discard
