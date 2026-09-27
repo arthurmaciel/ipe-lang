@@ -842,76 +842,47 @@ impl fmt::Display for WireDefect {
                 f,
                 "unknown effect {got:?} (expected \"pure\", \"fallible\", or \"effectful\")"
             ),
-            Self::TypeRefDiscriminator { present } => {
-                if present.is_empty() {
-                    write!(
-                        f,
-                        "TypeRef must have exactly one of `param`, `prim`, `ctor`, `closure`, `serdeValue`, or `serdeValueRef`"
-                    )
-                } else {
-                    write!(
-                        f,
-                        "TypeRef carries more than one discriminator: {}",
-                        present.join(", ")
-                    )
-                }
-            }
-            Self::InvalidIdent { got } => {
-                write!(f, "{got:?} is not a legal Rust identifier")
-            }
+            Self::TypeRefDiscriminator { present } => fmt_type_ref_discriminator(f, present),
+            Self::InvalidIdent { got } => write!(f, "{got:?} is not a legal Rust identifier"),
             Self::InvalidModulePath { got } => {
                 write!(f, "{got:?} is not a legal Rust identifier path")
             }
-            Self::InvalidType { got } => {
-                write!(
-                    f,
-                    "{got:?} is outside the closed FFI type grammar (paths, generics, \
+            Self::InvalidType { got } => write!(
+                f,
+                "{got:?} is outside the closed FFI type grammar (paths, generics, \
                      borrows, tuples, arrays only — no statement tokens)"
-                )
-            }
-            Self::InvalidPattern { got } => {
-                write!(
-                    f,
-                    "{got:?} is not a legal enum-arm pattern (a variant identifier with an \
+            ),
+            Self::InvalidPattern { got } => write!(
+                f,
+                "{got:?} is not a legal enum-arm pattern (a variant identifier with an \
                      optional (..) or {{..}} suffix)"
-                )
-            }
-            Self::InvalidSelector { got } => {
-                write!(
-                    f,
-                    "{got:?} is not a legal field selector (a field identifier or a decimal \
+            ),
+            Self::InvalidSelector { got } => write!(
+                f,
+                "{got:?} is not a legal field selector (a field identifier or a decimal \
                      tuple index)"
-                )
-            }
-            Self::InvalidPkgPath { got } => {
-                write!(
-                    f,
-                    "{got:?} is not a legal package path (it carries a control character)"
-                )
-            }
+            ),
+            Self::InvalidPkgPath { got } => write!(
+                f,
+                "{got:?} is not a legal package path (it carries a control character)"
+            ),
             Self::InvalidWrapperPath { got, reason } => {
                 write!(f, "{got:?} is not a legal wrapper-crate path: {reason}")
             }
-            Self::InvalidVersion { got } => {
-                write!(
-                    f,
-                    "{got:?} is not a legal crate version (it must match the semver charset \
+            Self::InvalidVersion { got } => write!(
+                f,
+                "{got:?} is not a legal crate version (it must match the semver charset \
                      [0-9A-Za-z.*=<>~^,+ -])"
-                )
-            }
-            Self::InvalidFeature { got } => {
-                write!(
-                    f,
-                    "{got:?} is not a legal cargo feature name (it must match the charset \
+            ),
+            Self::InvalidFeature { got } => write!(
+                f,
+                "{got:?} is not a legal cargo feature name (it must match the charset \
                      [A-Za-z0-9_+./?:-])"
-                )
-            }
-            Self::InvalidDependencyLine { got, reason } => {
-                write!(
-                    f,
-                    "{got:?} is not a canonical pinned dependency line: {reason}"
-                )
-            }
+            ),
+            Self::InvalidDependencyLine { got, reason } => write!(
+                f,
+                "{got:?} is not a canonical pinned dependency line: {reason}"
+            ),
             Self::UnpinnedDependency { name } => write!(
                 f,
                 "dependency `{name}` carries no version or path pin (an unpinned dependency \
@@ -931,23 +902,35 @@ impl fmt::Display for WireDefect {
                 "binding `{binding}` describes {params} transparent parameter position(s) but \
                  has arity {arity}"
             ),
-            Self::InvalidClosureSig { got, reason } => {
-                write!(
-                    f,
-                    "{got:?} is not a legal define.closure signature: {reason}"
-                )
-            }
-            Self::RecursiveDefineType { name, cycle } => {
-                write!(
-                    f,
-                    "define type {name:?} is recursive ({}) — a nominal FFI type cannot \
+            Self::InvalidClosureSig { got, reason } => write!(
+                f,
+                "{got:?} is not a legal define.closure signature: {reason}"
+            ),
+            Self::RecursiveDefineType { name, cycle } => write!(
+                f,
+                "define type {name:?} is recursive ({}) — a nominal FFI type cannot \
                      reference itself (no boxed indirection is available in the closed carrier \
                      set); break the cycle by indirecting through a crate handle the FFI can name",
-                    cycle.join(" -> ")
-                )
-            }
+                cycle.join(" -> ")
+            ),
             Self::Json { detail } => write!(f, "{detail}"),
         }
+    }
+}
+
+/// Render a `TypeRef` that carries zero or several discriminators.
+fn fmt_type_ref_discriminator(f: &mut fmt::Formatter<'_>, present: &[String]) -> fmt::Result {
+    if present.is_empty() {
+        write!(
+            f,
+            "TypeRef must have exactly one of `param`, `prim`, `ctor`, `closure`, `serdeValue`, or `serdeValueRef`"
+        )
+    } else {
+        write!(
+            f,
+            "TypeRef carries more than one discriminator: {}",
+            present.join(", ")
+        )
     }
 }
 

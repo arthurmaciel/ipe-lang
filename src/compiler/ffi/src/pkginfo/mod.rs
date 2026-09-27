@@ -14,7 +14,7 @@ mod wire;
 
 use std::collections::BTreeMap;
 
-use wire::{WireFunction, WireParam, WirePkgInfo};
+use wire::{WireFunction, WireParam, WirePkgInfo, WireTransitiveDep};
 
 use crate::call::Call;
 use crate::carrier::{Carrier, ClosureSig, EnumDef, StructDef};
@@ -1279,6 +1279,46 @@ fn drop_recursive_define_defs(fns: &mut Vec<FnInfo>, dropped: &mut Vec<Diagnosti
     fns.retain(|f| define_def_name(f.shape()).is_none_or(|n| !recursive.contains(n.as_str())));
 }
 
+/// Decode the inspector's transitive dependencies, dropping its own probe
+/// scaffold.
+///
+/// # Errors
+/// [`Diagnostic::WireMalformed`] when a dependency's ident, name, or version
+/// is malformed.
+fn decode_transitive_deps(deps: Vec<WireTransitiveDep>) -> Result<Vec<TransitiveDep>, Diagnostic> {
+    let mut transitive_deps = Vec::with_capacity(deps.len());
+    for dep in deps {
+        // The inspector's own probe scaffold registers as a workspace
+        // member during introspection; it is a synthetic non-registry
+        // package, not a real dependency, so it never becomes a typed
+        // `TransitiveDep` (its `_ipe_ffi_probe_…` name is not even a legal
+        // `PackageName`). Dropping it here keeps a non-dependency
+        // unrepresentable past decode.
+        if dep.name.starts_with("_ipe_ffi_probe") {
+            continue;
+        }
+        let ident = RustIdent::parse(&dep.ident).map_err(|defect| Diagnostic::WireMalformed {
+            context: format!("transitive dep `{}`", dep.name),
+            defect,
+        })?;
+        let name = PackageName::parse(&dep.name).map_err(|defect| Diagnostic::WireMalformed {
+            context: format!("transitive dep `{}`", dep.name),
+            defect,
+        })?;
+        let version =
+            CrateVersion::parse(&dep.version).map_err(|defect| Diagnostic::WireMalformed {
+                context: format!("transitive dep `{}`", dep.name),
+                defect,
+            })?;
+        transitive_deps.push(TransitiveDep {
+            ident,
+            name,
+            version,
+        });
+    }
+    Ok(transitive_deps)
+}
+
 impl TryFrom<WirePkgInfo> for PkgInfo {
     type Error = Diagnostic;
 
@@ -1318,38 +1358,7 @@ impl TryFrom<WirePkgInfo> for PkgInfo {
         // cycle here — the def-bearing binding is dropped, and the emitter's
         // survivor fixpoint fans the over-drop out to every reference of it.
         drop_recursive_define_defs(&mut fns, &mut dropped);
-        let mut transitive_deps = Vec::with_capacity(w.transitive_deps.len());
-        for dep in w.transitive_deps {
-            // The inspector's own probe scaffold registers as a workspace
-            // member during introspection; it is a synthetic non-registry
-            // package, not a real dependency, so it never becomes a typed
-            // `TransitiveDep` (its `_ipe_ffi_probe_…` name is not even a legal
-            // `PackageName`). Dropping it here keeps a non-dependency
-            // unrepresentable past decode.
-            if dep.name.starts_with("_ipe_ffi_probe") {
-                continue;
-            }
-            let ident =
-                RustIdent::parse(&dep.ident).map_err(|defect| Diagnostic::WireMalformed {
-                    context: format!("transitive dep `{}`", dep.name),
-                    defect,
-                })?;
-            let name =
-                PackageName::parse(&dep.name).map_err(|defect| Diagnostic::WireMalformed {
-                    context: format!("transitive dep `{}`", dep.name),
-                    defect,
-                })?;
-            let version =
-                CrateVersion::parse(&dep.version).map_err(|defect| Diagnostic::WireMalformed {
-                    context: format!("transitive dep `{}`", dep.name),
-                    defect,
-                })?;
-            transitive_deps.push(TransitiveDep {
-                ident,
-                name,
-                version,
-            });
-        }
+        let transitive_deps = decode_transitive_deps(w.transitive_deps)?;
         // Foreign-type identity entries: keep only well-shaped `::seg::…::Seg`
         // keys and `seg::…::Seg` values (every segment a legal Rust ident).
         // A malformed entry is dropped — identity metadata only ever ENABLES

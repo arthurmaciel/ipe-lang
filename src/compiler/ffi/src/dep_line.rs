@@ -99,9 +99,10 @@ impl DepLine {
             .split_once(" = ")
             .ok_or_else(|| refuse("no `<name> = <value>` separator"))?;
         let name = PackageName::parse(name)?;
-        let parsed = match value.strip_prefix("{ ").and_then(|t| t.strip_suffix(" }")) {
-            Some(table) => Self::parse_table(name, table, &refuse)?,
-            None => {
+        let parsed =
+            if let Some(table) = value.strip_prefix("{ ").and_then(|t| t.strip_suffix(" }")) {
+                Self::parse_table(name, table, &refuse)?
+            } else {
                 let version = value
                     .strip_prefix("\"=")
                     .and_then(|v| v.strip_suffix('"'))
@@ -109,8 +110,7 @@ impl DepLine {
                         refuse("the value is neither a `\"=<version>\"` pin nor an inline table")
                     })?;
                 Self::registry(name, CrateVersion::parse(version)?, Vec::new())?
-            }
-        };
+            };
         if parsed.to_string() == line {
             Ok(parsed)
         } else {
