@@ -464,7 +464,11 @@ mod tests {
         let result = read_to_string_capped(&file, SOURCE_READ_CAP);
         let _ = std::fs::remove_dir_all(&dir);
         if privileged {
-            eprintln!("skipped: running as root, the read bit is not enforced");
+            crate::screen::chatter(
+                crate::screen::Stream::Stderr,
+                crate::screen::Tone::Aux,
+                "skipped: running as root, the read bit is not enforced",
+            );
             return;
         }
         assert!(
