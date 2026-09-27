@@ -22636,9 +22636,11 @@ impl<'a> Lowerer<'a> {
     ///   ([`Self::wrap_mapper_value`]): the wrapper takes the element on `Arc`
     ///   and demotes it to `Box` before calling the original.
     ///
-    /// A mapper whose solved type is unavailable where a bound parameter needs
-    /// it fails closed with IPE-L0134. A mapper with no function-typed bound
-    /// parameter is left untouched (byte-identical).
+    /// A mapper whose solved type is unavailable, or carries fewer arrows than
+    /// the scheme applies it to, fails closed with IPE-L0134 where a bound
+    /// parameter needs it: only a peeled [`MapperSpine`] reaches the wrapper. A
+    /// mapper with no function-typed bound parameter is left untouched
+    /// (byte-identical).
     fn retype_collection_element_param<'t>(
         &self,
         resolved: &Callee,
@@ -22668,10 +22670,10 @@ impl<'a> Lowerer<'a> {
             }) {
                 continue;
             }
-            let Some(mapper_ty) = arg_ty(arg) else {
+            let Some(spine) = arg_ty(arg).and_then(|ty| MapperSpine::peel(shape, arg, ty)) else {
                 return Err(unsupported(span, Feature::FunctionElementEquality));
             };
-            self.wrap_mapper_value(shape, arity, arg, mapper_ty, lowered, span)?;
+            self.wrap_mapper_value(shape, arity, arg, spine, lowered, span)?;
         }
         Ok(())
     }
@@ -22734,9 +22736,9 @@ impl<'a> Lowerer<'a> {
         Ok(())
     }
 
-    /// Eta-wrap the non-lambda mapper `lowered` (solved type `mapper_ty`) at
-    /// kernel position `arg` so each function-typed parameter that binds a
-    /// stored element receives it on the `Arc` carrier.
+    /// Eta-wrap the non-lambda mapper `lowered` (solved type peeled into
+    /// `spine`) at kernel position `arg` so each function-typed parameter that
+    /// binds a stored element receives it on the `Arc` carrier.
     ///
     /// ```text
     /// List.map2 applyTo fs xs
@@ -22747,29 +22749,26 @@ impl<'a> Lowerer<'a> {
     /// ```
     ///
     /// The wrapper's parameters follow the scheme mapper's spine, typed from
-    /// the solved `mapper_ty`: a bound function-typed parameter is re-carried to
+    /// the solved `spine`: a bound function-typed parameter is re-carried to
     /// [`IrType::SharedFun`] and demoted back to `Box` at the call
     /// ([`Self::demote_shared_fn_read`]); every other parameter is forwarded
     /// as-is. A top-level function reference is called in place; any other
     /// mapper (a local, an eta parameter, a computed function) is bound once by
     /// a `let` outside the wrapper and moved in, so its ownership (a move or a
     /// clone) is decided where it stood and the wrapper stays re-callable
-    /// (`Fn`). A spine or
-    /// parameter type that cannot be lowered fails closed with IPE-L0134.
+    /// (`Fn`). A spine parameter or result type that cannot be lowered fails
+    /// closed with IPE-L0134.
     fn wrap_mapper_value(
         &self,
         shape: &ipe_kernels::TyShape,
         arity: u8,
         arg: usize,
-        mapper_ty: &Ty,
+        spine: MapperSpine<'_>,
         lowered: &mut Expr,
         span: Span,
     ) -> DResult<()> {
         let refuse = || unsupported(span, Feature::FunctionElementEquality);
-        let Some(peeled) = MapperSpine::peel(shape, arg, mapper_ty) else {
-            return Err(refuse());
-        };
-        let demand = EtaDemand::mapper_wrap(shape, arity, arg, &peeled);
+        let demand = EtaDemand::mapper_wrap(shape, arity, arg, &spine);
         if demand == EtaDemand::default() {
             return Ok(());
         }
@@ -22777,7 +22776,7 @@ impl<'a> Lowerer<'a> {
         let MapperSpine {
             params: param_tys,
             ret: ret_ty,
-        } = peeled;
+        } = spine;
         let spine = param_tys.len();
         let bound =
             |param: usize, ty: &Ty| mapper_param_binds_fn_element(shape, arity, arg, param, ty);
@@ -22789,8 +22788,12 @@ impl<'a> Lowerer<'a> {
             let sym = self.eta_sym(param.saturating_add(1))?;
             let ir = self.ir_type_from_ty(ty, span).map_err(|_| refuse())?;
             if bound(param, ty) {
+                // `bound` holds only for a `Ty::Fun`, which lowers to `IrType::Fun` or errors.
                 let IrType::Fun(fn_params, fn_ret) = ir else {
-                    return Err(refuse());
+                    return Err(bug(
+                        "ipe_lower::wrap_mapper_value",
+                        "a bound function-typed mapper parameter lowered off the `Fun` carrier",
+                    ));
                 };
                 wrapper_params.push((sym, IrType::SharedFun(fn_params.clone(), fn_ret.clone())));
                 demote.push(Some((fn_params, *fn_ret)));
@@ -30791,6 +30794,76 @@ mod tests {
             "budget {} under the wrap's draw",
             demand.count()
         );
+    }
+
+    /// Whether `res` is the stored-function mapper refusal (IPE-L0134).
+    fn is_fn_element_refusal(res: &ipe_diagnostics::DResult<()>) -> bool {
+        matches!(
+            res,
+            Err(ipe_diagnostics::Diagnostic::Lower {
+                msg: ipe_diagnostics::LowerError::Unsupported(
+                    ipe_diagnostics::Feature::FunctionElementEquality
+                ),
+                ..
+            })
+        )
+    }
+
+    /// `(Unit -> Unit) -> ret`: a `List.map` mapper over a stored function
+    /// element.
+    fn fn_element_mapper(ret: Ty) -> Ty {
+        let element = Ty::Fun(Box::new(Ty::Unit), Box::new(Ty::Unit));
+        Ty::Fun(Box::new(element), Box::new(ret))
+    }
+
+    /// Run the carrier choke point on a non-lambda `List.map` mapper whose
+    /// solved type is `mapper_ty`.
+    fn retype_list_map_mapper(mapper_ty: Option<&Ty>) -> ipe_diagnostics::DResult<()> {
+        let mut outcome = Ok(());
+        with_binder_type_lowerer(|lowerer, sym| {
+            let mut args = [super::Expr::Var(sym), super::Expr::Unit];
+            outcome = lowerer.retype_collection_element_param(
+                &Callee::Kernel(KernelFn::ListMap),
+                0,
+                &mut args,
+                |_| mapper_ty,
+                UNIT_SPAN,
+            );
+        });
+        outcome
+    }
+
+    /// A non-lambda mapper with no solved type cannot be wrapped: IPE-L0134.
+    #[test]
+    fn mapper_wrap_without_solved_type_is_refused() {
+        assert!(is_fn_element_refusal(&retype_list_map_mapper(None)));
+    }
+
+    /// A solved mapper type with fewer arrows than the scheme applies cannot
+    /// be peeled: IPE-L0134.
+    #[test]
+    fn mapper_wrap_over_short_spine_is_refused() {
+        assert!(is_fn_element_refusal(&retype_list_map_mapper(Some(
+            &Ty::Unit
+        ))));
+    }
+
+    /// A bound mapper whose result type cannot be lowered is refused before
+    /// the wrapper draws an eta parameter: IPE-L0134.
+    #[test]
+    fn mapper_wrap_with_unlowerable_result_is_refused() {
+        let mapper = fn_element_mapper(Ty::Var(99));
+        assert!(is_fn_element_refusal(&retype_list_map_mapper(Some(
+            &mapper
+        ))));
+    }
+
+    /// Contrapositive: a mapper over plain elements binds no stored function
+    /// and is left untouched.
+    #[test]
+    fn mapper_over_plain_elements_is_not_wrapped() {
+        let mapper = Ty::Fun(Box::new(Ty::Unit), Box::new(Ty::Unit));
+        assert!(retype_list_map_mapper(Some(&mapper)).is_ok());
     }
 
     /// A span the binder-type tests record a free, non-polymorphic `Ty::Var` at.
