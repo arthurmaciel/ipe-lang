@@ -5,7 +5,7 @@
 //! run must exit non-zero rather than silently pass: "cannot analyze" must
 //! never read as "no panics". These pin that boundary against regression.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 fn bin() -> Command {
@@ -176,4 +176,186 @@ fn walk_of_a_missing_or_empty_tree_fails_closed() {
         let out = scan_test_paths(args);
         assert_eq!(out.status.code(), Some(2), "{args:?} must exit 2");
     }
+}
+
+/// A second, production `mod tests;` hidden behind a test-only one is refused.
+#[test]
+fn a_production_declaration_beside_a_test_only_one_fails_closed() {
+    for args in [
+        &["shadowed/src/tests/mod.rs"][..],
+        &["--walk", "shadowed/src"][..],
+    ] {
+        let out = scan_test_paths(args);
+        assert_eq!(out.status.code(), Some(2), "{args:?} must exit 2");
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            stderr.contains("shadowed/src/lib.rs"),
+            "the refusal must name the declaring file, got {stderr:?}"
+        );
+    }
+}
+
+/// A production `#[path]` or `include!` naming test code is refused.
+#[test]
+fn a_production_include_of_test_code_fails_closed() {
+    for file in ["includes/path_attr.rs", "includes/include_macro.rs"] {
+        let out = scan_test_paths(&[file]);
+        assert_eq!(out.status.code(), Some(2), "{file} must exit 2");
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            stderr.contains("tests/helper.rs"),
+            "the refusal must name the included path, got {stderr:?}"
+        );
+    }
+}
+
+/// Naming no file at all audits nothing, so it must not read as a pass.
+#[test]
+#[allow(clippy::expect_used)] // a test that cannot spawn the binary has nothing to assert
+fn no_input_fails_closed() {
+    let status = bin().status().expect("run panic-scan");
+    assert_eq!(status.code(), Some(2), "no argument must exit 2");
+}
+
+/// A fresh, empty directory under the test's scratch space.
+#[allow(clippy::expect_used)] // a test without its scratch directory has nothing to assert
+fn scratch(name: &str) -> PathBuf {
+    let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
+        .join("panic-scan-exit-codes")
+        .join(name);
+    // A leftover from an earlier run may be absent; the fresh contents written
+    // afterwards are what the test relies on.
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("create scratch directory");
+    dir
+}
+
+/// Write `contents` to `root/rel`, creating its parent directories.
+#[allow(clippy::expect_used)] // a test that cannot build its tree has nothing to assert
+fn put(root: &Path, rel: &str, contents: &str) {
+    let path = root.join(rel);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).expect("create fixture directory");
+    }
+    std::fs::write(path, contents).expect("write fixture file");
+}
+
+/// Run the binary from `root`, so every path it sees is relative to it.
+#[allow(clippy::expect_used)] // a test that cannot spawn the binary has nothing to assert
+fn scan_in(root: &Path, args: &[&str]) -> std::process::Output {
+    bin()
+        .current_dir(root)
+        .args(args)
+        .output()
+        .expect("run panic-scan")
+}
+
+/// A clean library source.
+const CLEAN_LIB: &str = "pub fn one() -> u8 {\n    1\n}\n";
+
+/// A manifest whose production targets name no test code passes.
+#[test]
+fn a_manifest_with_production_targets_passes() {
+    let root = scratch("manifest_ok");
+    put(
+        &root,
+        "krate/Cargo.toml",
+        "[package]\nname = \"krate\"\n\n[lib]\npath = \"src/lib.rs\"\n\n[[bin]]\nname = \"krate\"\npath = \"src/main.rs\"\n",
+    );
+    put(&root, "krate/src/lib.rs", CLEAN_LIB);
+    for args in [&["krate/Cargo.toml"][..], &["--walk", "krate"][..]] {
+        let out = scan_in(&root, args);
+        assert_eq!(
+            out.status.code(),
+            Some(0),
+            "{args:?} must pass, got stderr {:?}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+}
+
+/// A manifest whose production target lies in test code is refused.
+#[test]
+fn a_manifest_targeting_test_code_fails_closed() {
+    for (name, manifest) in [
+        ("manifest_lib", "[lib]\npath = \"src/tests/lib.rs\"\n"),
+        (
+            "manifest_bin",
+            "[[bin]]\nname = \"b\"\npath = \"src/tests.rs\"\n",
+        ),
+        ("manifest_build", "[package]\nbuild = \"tests/build.rs\"\n"),
+    ] {
+        let root = scratch(name);
+        put(&root, "krate/Cargo.toml", manifest);
+        put(&root, "krate/src/lib.rs", CLEAN_LIB);
+        for args in [&["krate/Cargo.toml"][..], &["--walk", "krate"][..]] {
+            let out = scan_in(&root, args);
+            assert_eq!(out.status.code(), Some(2), "{name} {args:?} must exit 2");
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            assert!(
+                stderr.contains("krate/Cargo.toml"),
+                "the refusal must name the manifest, got {stderr:?}"
+            );
+        }
+    }
+}
+
+/// A symlinked directory the walk does not follow is refused, not skipped.
+#[cfg(unix)]
+#[test]
+#[allow(clippy::expect_used)] // a test that cannot build its tree has nothing to assert
+fn walk_fails_closed_on_a_symlinked_directory() {
+    let root = scratch("symlinked_dir");
+    put(
+        &root,
+        "outside/prod.rs",
+        "pub fn f(x: Option<u8>) -> u8 {\n    x.unwrap()\n}\n",
+    );
+    put(&root, "tree/lib.rs", CLEAN_LIB);
+    std::os::unix::fs::symlink("../outside", root.join("tree/linked"))
+        .expect("create directory symlink");
+    let out = scan_in(&root, &["--walk", "tree"]);
+    assert_eq!(
+        out.status.code(),
+        Some(2),
+        "symlinked directory must exit 2"
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("tree/linked"),
+        "the refusal must name the symlink, got {stderr:?}"
+    );
+}
+
+/// A directory the walk cannot read is refused, not skipped.
+#[cfg(unix)]
+#[test]
+#[allow(clippy::expect_used)] // a test that cannot build its tree has nothing to assert
+fn walk_fails_closed_on_an_unreadable_directory() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let root = scratch("unreadable_dir");
+    put(&root, "tree/lib.rs", CLEAN_LIB);
+    put(&root, "tree/locked/prod.rs", CLEAN_LIB);
+    let locked = root.join("tree/locked");
+    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000))
+        .expect("lock directory");
+    // A privileged user reads the locked directory anyway: nothing to refuse.
+    let readable = std::fs::read_dir(&locked).is_ok();
+    let out = scan_in(&root, &["--walk", "tree"]);
+    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755))
+        .expect("unlock directory");
+    if readable {
+        return;
+    }
+    assert_eq!(
+        out.status.code(),
+        Some(2),
+        "unreadable directory must exit 2"
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("tree/locked"),
+        "the refusal must name the directory, got {stderr:?}"
+    );
 }

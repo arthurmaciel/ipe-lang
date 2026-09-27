@@ -39,8 +39,13 @@ enum Unauditable {
     NoInput,
     /// A walk found no Rust file to scan.
     EmptyWalk { dirs: NonEmpty<PathBuf> },
-    /// A test path's test-only premise, or a manifest's targets, do not hold.
+    /// A test path's test-only premise does not hold.
     TestPath {
+        path: PathBuf,
+        source: TestPathError,
+    },
+    /// A manifest cannot be read or names test code as a production target.
+    Manifest {
         path: PathBuf,
         source: TestPathError,
     },
@@ -78,6 +83,11 @@ impl fmt::Display for Unauditable {
             Self::TestPath { path, source } => write!(
                 f,
                 "{source} — cannot confirm {} is test-only; fail closed",
+                path.display()
+            ),
+            Self::Manifest { path, source } => write!(
+                f,
+                "{source} — cannot confirm {} compiles no test code into production; fail closed",
                 path.display()
             ),
             Self::Io { path, source } => {
@@ -193,7 +203,7 @@ fn run(mode: &Mode) -> Result<bool, Unauditable> {
             continue;
         }
         if is_manifest(path) {
-            panic_scan::check_manifest(path).map_err(|source| Unauditable::TestPath {
+            panic_scan::check_manifest(path).map_err(|source| Unauditable::Manifest {
                 path: path.clone(),
                 source,
             })?;
