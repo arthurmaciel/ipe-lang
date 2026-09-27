@@ -767,7 +767,8 @@ fn cli_appending_with(defs: &str, appended: &str) -> Result<String, BoxError> {
 }
 
 /// `Dict.foldl` OVER-applied (its function result applied to one more
-/// argument), its lambda mapper binding the stored `Dict` value.
+/// argument), its lambda step binding the stored `Dict` value and returning a
+/// function.
 fn over_applied_dict_foldl() -> Result<String, BoxError> {
     cli_appending_with(
         "",
@@ -894,12 +895,6 @@ fn seal_dict_map_stored_fn_into_impl_fn_kernel_builds() -> Result<(), BoxError> 
     assert_builds("seal_dict_map_stored_fn", &dict_map_predicates()?)
 }
 
-/// An over-applied `Dict.foldl`'s mapper binds the stored value's `Arc` carrier.
-#[test]
-fn over_applied_dict_foldl_emits_shared_carrier() -> Result<(), BoxError> {
-    assert_emits_shared_fn_param("emit_over_applied_dict_foldl", &over_applied_dict_foldl()?)
-}
-
 /// A named mapper is eta-wrapped onto the stored element's `Arc` carrier.
 #[test]
 fn named_mapper_map2_emits_shared_carrier() -> Result<(), BoxError> {
@@ -919,10 +914,17 @@ fn point_free_map2_emits_shared_carrier() -> Result<(), BoxError> {
     assert_emits_shared_fn_param("emit_point_free_map2", &point_free_map2()?)
 }
 
-/// An over-applied `Dict.foldl` over stored functions builds.
+/// An over-applied `Dict.foldl` needs a function-valued accumulator, so its
+/// step callback returns a function: the callback-result obligation refuses it
+/// at type time, where the function initial accumulator meets the obligated
+/// result variable.
 #[test]
-fn seal_over_applied_dict_foldl_stored_fn_builds() -> Result<(), BoxError> {
-    assert_builds("seal_over_applied_dict_foldl", &over_applied_dict_foldl()?)
+fn over_applied_dict_foldl_function_accumulator_refused() -> Result<(), BoxError> {
+    assert_rejected_code(
+        "over_applied_dict_foldl_fn_acc",
+        &over_applied_dict_foldl()?,
+        "IPE-T0001",
+    )
 }
 
 /// `List.map2` with a named mapper over stored functions builds.
