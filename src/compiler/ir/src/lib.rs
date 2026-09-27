@@ -11,10 +11,12 @@
 //! otherwise. A backend that receives a [`Program`] never has to re-check
 //! exhaustiveness.
 
+pub mod free_vars;
 mod ir;
 pub mod let_inline;
 mod pretty;
 pub mod record_shapes;
+pub mod seq_clone;
 
 pub use ir::{
     Arm, BinOp, BoundSet, CallPin, Callee, EnumDef, Expr, Func, FuncId, HtmlEventShape, IrType,

@@ -658,9 +658,10 @@ pub fn emit_expr_at(
             // A field read on a row-generic parameter cannot name a struct field
             // (the concrete struct is unknown at emit time): it routes through the
             // field's witness getter `ipe_<field>()`, which rustc resolves to the
-            // monomorphised struct's field. Any other base keeps the ordinary
-            // struct-field read.
-            if let Expr::Var(sym) = record.as_ref()
+            // monomorphised struct's field. A cloned row receiver (`CloneVar`,
+            // from a deferred capture) routes the same way on the clone. Any
+            // other base keeps the ordinary struct-field read.
+            if let Expr::Var(sym) | Expr::CloneVar(sym) = record.as_ref()
                 && generics.is_row(*sym)
             {
                 let getter = crate::naming::field_witness_getter_name(ctx.resolve_ident(*field)?);

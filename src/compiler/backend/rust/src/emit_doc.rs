@@ -4228,14 +4228,11 @@ mod tests {
         });
     }
 
-    /// The emit-time capture-clone invariant: a row-generic value only ever
-    /// reaches emission as `Access { record: Var(row) }`. Cloning the captures of
-    /// a continuation must NOT rewrite a row-generic Access receiver to a
-    /// `CloneVar` — the witness getter borrows, so the whole-row clone is
-    /// spurious AND unroutable (the Access emitter routes `Var` alone). Rewriting
-    /// it would emit a raw struct-field read on the opaque `R{n}` generic (E0609
-    /// — the exit-0-then-cargo-fail class this seal closes). The same borrowing
-    /// receiver rule keeps a non-`Clone` record receiver bare (E0599).
+    /// An eager Access receiver stays a bare `Var` under the capture-clone rewrite.
+    ///
+    /// The field read borrows and ends before the continuation moves the
+    /// receiver, so a whole-record clone is spurious; keeping it bare also keeps
+    /// a non-`Clone` record receiver emittable (E0599).
     #[test]
     fn clone_capture_leaves_row_access_receiver_a_var() {
         let fx = fixture();
@@ -4253,7 +4250,7 @@ mod tests {
         match rewritten {
             Expr::Access { record, .. } => assert!(
                 matches!(*record, Expr::Var(s) if s == row),
-                "row-generic Access receiver must stay a bare Var, not a CloneVar"
+                "eager Access receiver must stay a bare Var, not a CloneVar"
             ),
             other => panic!("expected an Access, got {other:?}"),
         }

@@ -23,7 +23,8 @@ use ipe_diagnostics::{
     NameError, Span, StoreEqAccessorDefect, StoreSelectProjectionDefect,
 };
 use ipe_intern::{Interner, Symbol};
-use ipe_ir::let_inline::inlined_let_body;
+use ipe_ir::free_vars::pat_bound_symbols;
+use ipe_ir::let_inline::{inlined_let_body, let_value_is_inlined};
 use ipe_ir::{
     Arm, BinOp, BoundSet, CallPin, Callee, Capability, EnumDef, Expr, Func, FuncId, IrType,
     KernelFn, Match, ModPath, Module, OnFormKind, Pat, Program, RowParam, RuntimeModule, TypeDef,
@@ -5814,8 +5815,13 @@ fn branch_merge(sym: Symbol, pre: FnValueMoveState, branches: &[&Expr]) -> FnVal
 /// so it fails closed on reuse via [`reject_fn_value_reuse`] (self-guarding on
 /// non-fn-carrying / `CloneOk` types, so calling it for every ineligible binder
 /// is safe — a `CopyLeaf` scalar or wildcard binder is a no-op).
+///
+/// Every non-clonable binder, whatever its [`BindingSite`], runs the
+/// non-`Clone` effect-carrier reuse gate ([`reject_nonclone_value_reuse`]);
+/// only a `let` the emitter inlines (no Rust binder exists) is exempt.
 fn apply_move_ownership(
     env: CloneEnv<'_>,
+    site: BindingSite<'_>,
     sym: Symbol,
     ir_ty: &IrType,
     scope: Expr,
@@ -5825,6 +5831,7 @@ fn apply_move_ownership(
         let mut remaining = count_var_uses(sym, &scope);
         Ok(rewrite_multiuse_clones(sym, &mut remaining, scope))
     } else {
+        reject_nonclone_binding_reuse(env, site, sym, ir_ty, &scope, span)?;
         reject_foreign_handle_reuse(env, sym, ir_ty, &scope, span)?;
         reject_fn_value_reuse(env, sym, ir_ty, &scope, span)?;
         Ok(scope)
@@ -5837,6 +5844,7 @@ fn apply_move_ownership(
 /// (`rewrite_multiuse_clones`) remain — they are unavoidable.
 fn apply_move_ownership_precomputed(
     env: CloneEnv<'_>,
+    site: BindingSite<'_>,
     sym: Symbol,
     ir_ty: &IrType,
     scope: Expr,
@@ -5847,9 +5855,51 @@ fn apply_move_ownership_precomputed(
         let mut remaining = accum.var_uses;
         Ok(rewrite_multiuse_clones(sym, &mut remaining, scope))
     } else {
+        reject_nonclone_binding_reuse(env, site, sym, ir_ty, &scope, span)?;
         reject_foreign_handle_reuse_for_count(env, ir_ty, accum.var_uses, span)?;
         reject_fn_value_reuse_for_count(env, ir_ty, accum.fn_value_uses, span)?;
         Ok(scope)
+    }
+}
+
+/// Where a binder that [`apply_move_ownership`] disciplines is introduced.
+///
+/// The site decides whether a Rust binder exists at all: a `let` whose value
+/// the emitter inlines at each use site has none, every other site has one.
+#[derive(Clone, Copy)]
+enum BindingSite<'a> {
+    /// A binder that always exists in the emitted Rust.
+    ///
+    /// A function or lambda parameter, a match-arm binder, or a destructured
+    /// component.
+    Materialized,
+    /// A `let` binder whose bound value is `value`.
+    Let {
+        /// The bound value, consulted for the emitter's let-inlining decision.
+        value: &'a Expr,
+    },
+}
+
+/// Run the non-`Clone` effect-carrier reuse gate for one binder.
+///
+/// An inlined `let` is skipped: its value is substituted at each use site, so
+/// no binder is moved, and every enclosing binder's walk sees the inlined form.
+fn reject_nonclone_binding_reuse(
+    env: CloneEnv<'_>,
+    site: BindingSite<'_>,
+    sym: Symbol,
+    ir_ty: &IrType,
+    scope: &Expr,
+    span: Span,
+) -> DResult<()> {
+    let inlined = matches!(
+        site,
+        BindingSite::Let { value } if let_value_is_inlined(sym, value, scope)
+    );
+    if inlined {
+        Ok(())
+    } else {
+        reject_nonclone_value_reuse(env, sym, ir_ty, scope, span)
     }
 }
 
@@ -6053,8 +6103,119 @@ fn base_move_consumes(sym: Symbol, record: &Expr) -> usize {
     }
 }
 
+/// Which parts of the non-`Clone` binding a pattern match has moved out.
+///
+/// A `match sym { .. }` / `let <pat> = sym;` binds by value, so every binder of
+/// the pattern moves its part out of `sym` (a partial move). A later read of a
+/// moved part, or of `sym` as a whole, observes a moved value (E0382); a read
+/// of an untouched record field stays sound.
+#[derive(Clone, Default, PartialEq, Eq)]
+enum PartialMove {
+    /// No pattern has moved any part of the binding.
+    #[default]
+    Intact,
+    /// These top-level record fields were moved out by a record pattern.
+    Fields(BTreeSet<Symbol>),
+    /// Some part the walk cannot name by field (a constructor payload, a tuple
+    /// element, the whole value bound to a variable) was moved out.
+    Opaque,
+}
+
+impl PartialMove {
+    /// The parts `pat` moves out of a by-value scrutinee.
+    fn of_pattern(pat: &Pat) -> Self {
+        let mut bound = BTreeSet::new();
+        pat_bound_symbols(pat, &mut bound);
+        if bound.is_empty() {
+            return Self::Intact;
+        }
+        match pat {
+            Pat::Record(fields) => Self::Fields(
+                fields
+                    .iter()
+                    .filter(|(_, p)| {
+                        let mut inner = BTreeSet::new();
+                        pat_bound_symbols(p, &mut inner);
+                        !inner.is_empty()
+                    })
+                    .map(|(f, _)| *f)
+                    .collect(),
+            ),
+            _ => Self::Opaque,
+        }
+    }
+
+    /// The union of two partial-move records.
+    fn union(self, other: Self) -> Self {
+        match (self, other) {
+            (Self::Opaque, _) | (_, Self::Opaque) => Self::Opaque,
+            (Self::Intact, x) | (x, Self::Intact) => x,
+            (Self::Fields(mut a), Self::Fields(b)) => {
+                a.extend(b);
+                Self::Fields(a)
+            }
+        }
+    }
+
+    /// Has any part been moved out?
+    const fn any(&self) -> bool {
+        !matches!(self, Self::Intact)
+    }
+
+    /// Has the top-level record field `field` (possibly) been moved out?
+    fn covers(&self, field: Symbol) -> bool {
+        match self {
+            Self::Intact => false,
+            Self::Fields(fs) => fs.contains(&field),
+            Self::Opaque => true,
+        }
+    }
+}
+
+/// Evaluation-order state of [`nonclone_move_walk`] for one non-`Clone` binding.
+#[derive(Clone, Default)]
+struct NonCloneMoveState {
+    /// A position has moved the whole binding.
+    consumed: bool,
+    /// A read observed a moved (or partially moved) value.
+    hazard: bool,
+    /// Parts moved out by a by-value pattern match.
+    partial: PartialMove,
+}
+
+impl NonCloneMoveState {
+    /// A read of the whole binding; `moves` marks a consuming position.
+    const fn read_whole(&mut self, moves: bool) {
+        if self.consumed || self.partial.any() {
+            self.hazard = true;
+        }
+        if moves {
+            self.consumed = true;
+        }
+    }
+
+    /// A borrowing read of the top-level record field `field`.
+    fn read_field(&mut self, field: Symbol) {
+        if self.consumed || self.partial.covers(field) {
+            self.hazard = true;
+        }
+    }
+
+    /// A by-value pattern match of the binding against `pat`.
+    fn match_pattern(&mut self, pat: &Pat) {
+        self.partial = std::mem::take(&mut self.partial).union(PartialMove::of_pattern(pat));
+    }
+
+    /// Fold one branch outcome into a conservative post-branch state.
+    fn merge(&mut self, branch: Self) {
+        self.hazard |= branch.hazard;
+        self.consumed |= branch.consumed;
+        self.partial = std::mem::take(&mut self.partial).union(branch.partial);
+    }
+}
+
 /// Is the non-`Clone` binding `sym` read, in emitted evaluation order, AFTER a
-/// position of `expr` has already moved it?
+/// position of `expr` has already moved it, wholly or in part?
 ///
 /// [`count_value_consumes`] counts a bare field read (`sym.field`) as a borrow,
 /// not a consume — sound only while `sym` is still owned. Once an earlier
@@ -6064,38 +6225,50 @@ fn base_move_consumes(sym: Symbol, record: &Expr) -> usize {
 /// consume-then-borrow shape, while a borrow-then-consume in a known
 /// left-to-right position stays accepted.
 ///
+/// A `Match` scrutinee or `Destructure` value of bare `sym` is matched by
+/// value: each pattern binder moves its part out. A later read of a moved
+/// record field, or of `sym` whole, is the same hazard; a read of a field the
+/// pattern left untouched stays accepted.
+///
 /// A kernel or FFI call has no single evaluation order: its bespoke emitters
 /// may reorder or hoist arguments. Its arguments are therefore order-unknown —
 /// a move of `sym` in one argument combined with any mention of `sym` in a
 /// sibling argument is a hazard, whichever order the emitter picks.
 fn nonclone_read_after_move(sym: Symbol, expr: &Expr) -> bool {
-    let mut state = FnValueMoveState::default();
+    let mut state = NonCloneMoveState::default();
     nonclone_move_walk(sym, expr, &mut state);
     state.hazard
 }
 
 /// Walk `expr` in emitted evaluation order for [`nonclone_read_after_move`].
 ///
-/// A bare `sym` as an `Access` base, a list length probe or index clone, a
-/// `Match` scrutinee, or a `Destructure` value is a borrowing (or field-wise
-/// partial) read; every other occurrence of `sym` moves it. `Update` field
-/// values run before the base move (`emit_update` binds them to temporaries
-/// first). Branch alternatives each continue from the pre-branch state and
-/// merge conservatively.
+/// A bare `sym` as an `Access` base is a field borrow; as a list length probe
+/// or index clone base it is a whole borrow; as a `Match` scrutinee or a
+/// `Destructure` value it is a whole borrow followed by the pattern's partial
+/// move. Every other occurrence of `sym` moves it. `Update` field values run
+/// before the base move (`emit_update` binds them to temporaries first).
+/// Branch alternatives each continue from the pre-branch state and merge
+/// conservatively.
 #[allow(clippy::too_many_lines)] // exhaustive IR match; every arm is structurally required
-fn nonclone_move_walk(sym: Symbol, expr: &Expr, state: &mut FnValueMoveState) {
+fn nonclone_move_walk(sym: Symbol, expr: &Expr, state: &mut NonCloneMoveState) {
     match expr {
         Expr::Var(s) | Expr::CloneVar(s) => {
             if *s == sym {
-                state.read(true);
+                state.read_whole(true);
             }
         }
         Expr::Lambda { body, .. } | Expr::SharedLambda { body, .. } => {
             if lambda_body_refs_sym(sym, body) {
-                state.read(true);
+                state.read_whole(true);
             }
         }
-        Expr::Access { record, .. } => nonclone_borrow_base(sym, record, state),
+        Expr::Access { record, field, .. } => {
+            if is_bare_sym(sym, record) {
+                state.read_field(*field);
+            } else {
+                nonclone_move_walk(sym, record, state);
+            }
+        }
         Expr::ListIndexClone { list, .. } | Expr::ListLenCheck { list, .. } => {
             nonclone_borrow_base(sym, list, state);
         }
@@ -6142,39 +6315,39 @@ fn nonclone_move_walk(sym: Symbol, expr: &Expr, state: &mut FnValueMoveState) {
             body,
         } => {
             nonclone_borrow_base(sym, value, state);
+            if is_bare_sym(sym, value) {
+                state.match_pattern(binder);
+            }
             if !pat_binds_symbol(binder, sym) {
                 nonclone_move_walk(sym, body, state);
             }
         }
         Expr::If { cond, then_, else_ } => {
             nonclone_move_walk(sym, cond, state);
-            let pre = *state;
-            let mut merged = pre;
+            let pre = state.clone();
             for branch in [then_.as_ref(), else_.as_ref()] {
-                let mut s = pre;
+                let mut s = pre.clone();
                 nonclone_move_walk(sym, branch, &mut s);
-                merged.hazard |= s.hazard;
-                merged.consumed |= s.consumed;
+                state.merge(s);
             }
-            *state = merged;
         }
         Expr::Match(m) => {
             nonclone_borrow_base(sym, m.scrutinee(), state);
-            let pre = *state;
-            let mut merged = pre;
+            let scrutinizes_sym = is_bare_sym(sym, m.scrutinee());
+            let pre = state.clone();
             for arm in m.arms() {
-                if pat_binds_symbol(&arm.pat, sym) {
-                    continue;
+                let mut s = pre.clone();
+                if scrutinizes_sym {
+                    s.match_pattern(&arm.pat);
                 }
-                let mut s = pre;
-                if let Some(guard) = &arm.guard {
-                    nonclone_move_walk(sym, guard, &mut s);
+                if !pat_binds_symbol(&arm.pat, sym) {
+                    if let Some(guard) = &arm.guard {
+                        nonclone_move_walk(sym, guard, &mut s);
+                    }
+                    nonclone_move_walk(sym, &arm.body, &mut s);
                 }
-                nonclone_move_walk(sym, &arm.body, &mut s);
-                merged.hazard |= s.hazard;
-                merged.consumed |= s.consumed;
+                state.merge(s);
             }
-            *state = merged;
         }
         Expr::BinOp { lhs, rhs, .. } => {
             nonclone_move_walk(sym, lhs, state);
@@ -6215,12 +6388,17 @@ fn nonclone_move_walk(sym: Symbol, expr: &Expr, state: &mut FnValueMoveState) {
     }
 }
 
-/// A borrowing base position: a bare `sym` is a non-moving read.
+/// Is `expr` the bare binding `sym` itself?
+fn is_bare_sym(sym: Symbol, expr: &Expr) -> bool {
+    matches!(expr, Expr::Var(s) | Expr::CloneVar(s) if *s == sym)
+}
+
+/// A borrowing base position: a bare `sym` is a non-moving whole read.
 ///
 /// Any other base is walked as an ordinary (possibly moving) sub-expression.
-fn nonclone_borrow_base(sym: Symbol, base: &Expr, state: &mut FnValueMoveState) {
-    if matches!(base, Expr::Var(s) | Expr::CloneVar(s) if *s == sym) {
-        state.read(false);
+fn nonclone_borrow_base(sym: Symbol, base: &Expr, state: &mut NonCloneMoveState) {
+    if is_bare_sym(sym, base) {
+        state.read_whole(false);
     } else {
         nonclone_move_walk(sym, base, state);
     }
@@ -6229,28 +6407,25 @@ fn nonclone_borrow_base(sym: Symbol, base: &Expr, state: &mut FnValueMoveState) 
 /// Order-unknown arguments of a kernel or FFI call.
 ///
 /// Each argument is walked from the shared pre-call state. A hazard inside an
-/// argument propagates; an argument that moves `sym` while a sibling argument
-/// also mentions `sym` is a hazard in whichever order the emitter evaluates
-/// them.
-fn nonclone_unordered_args(sym: Symbol, args: &[Expr], state: &mut FnValueMoveState) {
-    let pre = *state;
-    let mut merged = pre;
+/// argument propagates; an argument that moves `sym` (wholly or in part) while
+/// a sibling argument also mentions `sym` is a hazard in whichever order the
+/// emitter evaluates them.
+fn nonclone_unordered_args(sym: Symbol, args: &[Expr], state: &mut NonCloneMoveState) {
+    let pre = state.clone();
     let mut mentioning = 0usize;
     let mut moved = false;
     for a in args {
-        let mut s = pre;
+        let mut s = pre.clone();
         nonclone_move_walk(sym, a, &mut s);
-        merged.hazard |= s.hazard;
-        moved |= s.consumed && !pre.consumed;
-        merged.consumed |= s.consumed;
+        moved |= (s.consumed && !pre.consumed) || s.partial != pre.partial;
+        state.merge(s);
         if count_var_uses(sym, a) > 0 {
             mentioning = mentioning.saturating_add(1);
         }
     }
     if moved && mentioning > 1 {
-        merged.hazard = true;
+        state.hazard = true;
     }
-    *state = merged;
 }
 
 /// Returns `true` if `sym` appears as a bare `Var(sym)` record-update base
@@ -9709,49 +9884,6 @@ fn ir_type_contains_decoder(ty: &IrType) -> bool {
         IrType::Maybe(inner) | IrType::List(inner) => ir_type_contains_decoder(inner),
         IrType::Result(e, a) => ir_type_contains_decoder(e) || ir_type_contains_decoder(a),
         _ => false,
-    }
-}
-
-/// Collect every symbol `pat` binds (recursively) into `out`. Local twin
-/// of `ipe_backend_rust::pat_bound_symbols` (same shape, same crate-
-/// boundary rationale — `ipe_lower` and `ipe_backend_rust` each keep their
-/// own copy rather than share one, since IR flows one-way lower → backend).
-fn pat_bound_symbols(pat: &Pat, out: &mut BTreeSet<Symbol>) {
-    match pat {
-        Pat::Var(s) => {
-            out.insert(*s);
-        }
-        Pat::Wildcard | Pat::Int(_) | Pat::Bool(_) | Pat::Char(_) | Pat::Str(_) => {}
-        Pat::Alias(inner, s) => {
-            out.insert(*s);
-            pat_bound_symbols(inner, out);
-        }
-        Pat::Ctor { args, .. } | Pat::Tuple(args) => {
-            for p in args {
-                pat_bound_symbols(p, out);
-            }
-        }
-        Pat::Record(fields) => {
-            for (_, p) in fields {
-                pat_bound_symbols(p, out);
-            }
-        }
-        Pat::Slice { prefix, rest } => {
-            for p in prefix {
-                pat_bound_symbols(p, out);
-            }
-            if let Some(p) = rest {
-                pat_bound_symbols(p, out);
-            }
-        }
-        // Every alternative of an or-pattern binds the same names, so the first
-        // alternative's binders are the whole set — collecting one avoids
-        // duplicating a name once per alternative.
-        Pat::Or(alts) => {
-            if let Some(first) = alts.first() {
-                pat_bound_symbols(first, out);
-            }
-        }
     }
 }
 
@@ -17680,8 +17812,14 @@ impl<'a> Lowerer<'a> {
                     body: Box::new(disciplined),
                 });
             }
-            reject_nonclone_value_reuse(self.clone_env(), sym, ir_ty, &body, span)?;
-            return apply_move_ownership(self.clone_env(), sym, ir_ty, body, span);
+            return apply_move_ownership(
+                self.clone_env(),
+                BindingSite::Materialized,
+                sym,
+                ir_ty,
+                body,
+                span,
+            );
         }
         if let Some(capture_span) = deferred_capture {
             // A capture site saw `sym` as a pure `Fun`, the param's own type
@@ -17689,8 +17827,14 @@ impl<'a> Lowerer<'a> {
             // bare `Box` capture.
             return Err(unsupported(capture_span, Feature::NonCloneCapture));
         }
-        reject_nonclone_value_reuse(self.clone_env(), sym, ir_ty, &body, span)?;
-        apply_move_ownership(self.clone_env(), sym, ir_ty, body, span)
+        apply_move_ownership(
+            self.clone_env(),
+            BindingSite::Materialized,
+            sym,
+            ir_ty,
+            body,
+            span,
+        )
     }
 
     /// Fold the tuple/record destructuring `prologue` of a function's parameters
@@ -17726,6 +17870,7 @@ impl<'a> Lowerer<'a> {
                 {
                     lowered_body = apply_move_ownership(
                         self.clone_env(),
+                        BindingSite::Materialized,
                         *sym,
                         &comp_ir_ty,
                         lowered_body,
@@ -27694,6 +27839,7 @@ impl<'a> Lowerer<'a> {
                 {
                     disciplined_body = apply_move_ownership(
                         self.clone_env(),
+                        BindingSite::Materialized,
                         *sym,
                         &comp_ir_ty,
                         disciplined_body,
@@ -27884,6 +28030,7 @@ impl<'a> Lowerer<'a> {
                     if let Some(a) = precomputed {
                         apply_move_ownership_precomputed(
                             self.clone_env(),
+                            BindingSite::Let { value: &value },
                             name,
                             ir_ty,
                             acc,
@@ -27891,7 +28038,14 @@ impl<'a> Lowerer<'a> {
                             a,
                         )?
                     } else {
-                        apply_move_ownership(self.clone_env(), name, ir_ty, acc, b.body.span)?
+                        apply_move_ownership(
+                            self.clone_env(),
+                            BindingSite::Let { value: &value },
+                            name,
+                            ir_ty,
+                            acc,
+                            b.body.span,
+                        )?
                     }
                 } else {
                     acc
@@ -30337,6 +30491,202 @@ mod tests {
         };
         assert!(!nonclone_read_after_move(w, &bound_once));
         assert!(reject(&bound_once).is_ok());
+    }
+
+    /// A sequenced task whose capture-clone rewrite would clone a non-Clone
+    /// effect carrier fails closed with IPE-L0135; an eager borrow stays accepted.
+    #[test]
+    fn nonclone_taskseq_capture_clone_fails_closed() {
+        use ipe_diagnostics::Feature;
+        use ipe_ir::{CallPin, Callee, Expr, FuncId, IrType, KernelFn, ModPath, OnFormKind};
+
+        use super::{CloneEnv, reject_nonclone_value_reuse, unsupported};
+
+        let mut interner = Interner::new();
+        let main = interner.intern("Main").expect("intern");
+        let wrap = interner.intern("Wrap").expect("intern");
+        let w = interner.intern("w").expect("intern");
+        let tag = interner.intern("tag").expect("intern");
+        let span = Span::DUMMY;
+        let transparent = BTreeSet::new();
+        let env = CloneEnv {
+            interner: &interner,
+            transparent_ffi: &transparent,
+        };
+        let wrap_task = IrType::Enum {
+            home: ModPath(vec![main]),
+            name: wrap,
+            args: vec![IrType::Task(Box::new(IrType::Int))],
+        };
+        let read_tag = || Expr::Access {
+            record: Box::new(Expr::Var(w)),
+            field: tag,
+            field_ty: IrType::Int,
+        };
+        let call = |callee: Callee, args: Vec<Expr>| Expr::Call {
+            callee,
+            args,
+            pin: CallPin::None,
+            on_form: OnFormKind::NotForm,
+        };
+        let user_call = |args: Vec<Expr>| call(Callee::Func(FuncId::from_raw(0)), args);
+        let kernel_call = |args: Vec<Expr>| call(Callee::Kernel(KernelFn::StringAppend), args);
+        let seq = |effect: Expr, rest: Expr| Expr::TaskSeq {
+            effect: Box::new(effect),
+            rest: Box::new(rest),
+        };
+        let reject = |body: &Expr| reject_nonclone_value_reuse(env, w, &wrap_task, body, span);
+
+        // `f w.tag` then `g w`: the eager read borrows before the move — accepted.
+        let eager_read = seq(user_call(vec![read_tag()]), user_call(vec![Expr::Var(w)]));
+        assert!(reject(&eager_read).is_ok());
+
+        // A kernel argument may be deferred into a `move` closure, so the
+        // rewrite clones `w` there — rejected.
+        let kernel_read = seq(kernel_call(vec![read_tag()]), user_call(vec![Expr::Var(w)]));
+        let err = reject(&kernel_read).expect_err("clone of a non-Clone carrier must be rejected");
+        assert_eq!(err, unsupported(span, Feature::NonCloneValueReuse));
+
+        // A continuation that rebinds `w` captures a different value — accepted.
+        let shadowed = seq(
+            kernel_call(vec![read_tag()]),
+            Expr::Lambda {
+                params: vec![(w, IrType::Int)],
+                ret: IrType::Int,
+                body: Box::new(user_call(vec![Expr::Var(w)])),
+            },
+        );
+        assert!(reject(&shadowed).is_ok());
+    }
+
+    /// Every binder site runs the IPE-L0135 gate; only an inlined `let` is exempt.
+    ///
+    /// A `let` or destructured binder of a non-`Clone` effect carrier is
+    /// refused exactly like a parameter, and a by-value pattern match that
+    /// moves a field out makes a later read of that field (or of the whole
+    /// binding) a use-after-move, while a read of an untouched field stays
+    /// accepted.
+    #[test]
+    #[allow(clippy::too_many_lines)] // one IR fixture per binder site; splitting obscures the pairing
+    fn nonclone_gate_covers_every_binding_site_and_partial_moves() {
+        use ipe_diagnostics::Feature;
+        use ipe_ir::{
+            Arm, CallPin, Callee, Expr, FuncId, IrType, KernelFn, Match, ModPath, OnFormKind, Pat,
+        };
+
+        use super::{
+            BindingSite, CloneEnv, apply_move_ownership, nonclone_read_after_move,
+            reject_nonclone_value_reuse, unsupported,
+        };
+
+        let mut interner = Interner::new();
+        let main = interner.intern("Main").expect("intern");
+        let wrap = interner.intern("Wrap").expect("intern");
+        let w = interner.intern("w").expect("intern");
+        let mk = interner.intern("mk").expect("intern");
+        let job = interner.intern("job").expect("intern");
+        let tag = interner.intern("tag").expect("intern");
+        let j = interner.intern("j").expect("intern");
+        let span = Span::DUMMY;
+        let transparent = BTreeSet::new();
+        let env = CloneEnv {
+            interner: &interner,
+            transparent_ffi: &transparent,
+        };
+        let wrap_task = IrType::Enum {
+            home: ModPath(vec![main]),
+            name: wrap,
+            args: vec![IrType::Task(Box::new(IrType::Int))],
+        };
+        let read = |field| Expr::Access {
+            record: Box::new(Expr::Var(w)),
+            field,
+            field_ty: IrType::Int,
+        };
+        let call = |callee: Callee, args: Vec<Expr>| Expr::Call {
+            callee,
+            args,
+            pin: CallPin::None,
+            on_form: OnFormKind::NotForm,
+        };
+        let user_call = |args: Vec<Expr>| call(Callee::Func(FuncId::from_raw(0)), args);
+        let kernel_call = |args: Vec<Expr>| call(Callee::Kernel(KernelFn::StringAppend), args);
+        let own = |site: BindingSite<'_>, scope: Expr| {
+            apply_move_ownership(env, site, w, &wrap_task, scope, span)
+        };
+        let l0135 = unsupported(span, Feature::NonCloneValueReuse);
+
+        // `let w = mk in do { _ <- kernel w.tag ; g w }`: the let binder is gated
+        // like a parameter — the rewrite would clone the carrier.
+        let kernel_read_then_consume = || Expr::TaskSeq {
+            effect: Box::new(kernel_call(vec![read(tag)])),
+            rest: Box::new(user_call(vec![Expr::Var(w)])),
+        };
+        let bound_call = Expr::Var(mk);
+        let let_site = BindingSite::Let { value: &bound_call };
+        assert!(matches!(own(let_site, kernel_read_then_consume()), Err(ref e) if *e == l0135));
+        assert!(matches!(
+            own(BindingSite::Materialized, kernel_read_then_consume()),
+            Err(ref e) if *e == l0135
+        ));
+
+        // An inlined `let` has no Rust binder: its value is substituted at each
+        // use site, so the binder itself is not gated.
+        let task_list = Expr::List {
+            elem: IrType::Task(Box::new(IrType::Int)),
+            items: vec![user_call(vec![Expr::Int(1)])],
+        };
+        let pair = || Expr::Tuple(vec![Expr::Var(w), Expr::Var(w)]);
+        assert!(own(BindingSite::Let { value: &task_list }, pair()).is_ok());
+        assert!(matches!(
+            own(BindingSite::Materialized, pair()),
+            Err(ref e) if *e == l0135
+        ));
+
+        // `let { job } = w in (j, w.job)`: the pattern moved `job` out of `w`.
+        let job_pat = || Pat::Record(vec![(job, Pat::Var(j)), (tag, Pat::Wildcard)]);
+        let destructure_then = |after: Expr| Expr::Destructure {
+            binder: job_pat(),
+            value: Box::new(Expr::Var(w)),
+            body: Box::new(Expr::Tuple(vec![Expr::Var(j), after])),
+        };
+        let reject = |body: &Expr| reject_nonclone_value_reuse(env, w, &wrap_task, body, span);
+        assert!(nonclone_read_after_move(w, &destructure_then(read(job))));
+        assert!(matches!(reject(&destructure_then(read(job))), Err(ref e) if *e == l0135));
+        // The untouched `tag` field is still owned — accepted.
+        assert!(!nonclone_read_after_move(w, &destructure_then(read(tag))));
+        assert!(reject(&destructure_then(read(tag))).is_ok());
+
+        // `(case w of { job } -> () ; _ -> (), w.job)`: a match arm's pattern
+        // moves the field too; the branch merge keeps the partial move.
+        let match_then = |after: Expr| {
+            let arms = vec![
+                Arm {
+                    pat: job_pat(),
+                    body: Expr::Unit,
+                    guard: None,
+                },
+                Arm {
+                    pat: Pat::Wildcard,
+                    body: Expr::Unit,
+                    guard: None,
+                },
+            ];
+            Match::new_flat(Expr::Var(w), arms).map(|m| Expr::Tuple(vec![Expr::Match(m), after]))
+        };
+        assert!(matches!(
+            match_then(read(job)),
+            Ok(ref e) if nonclone_read_after_move(w, e)
+        ));
+        assert!(matches!(
+            match_then(read(tag)),
+            Ok(ref e) if !nonclone_read_after_move(w, e)
+        ));
+        // A read of the whole binding after any partial move — rejected.
+        assert!(matches!(
+            match_then(Expr::Var(w)),
+            Ok(ref e) if nonclone_read_after_move(w, e)
+        ));
     }
 
     /// A reuse HIDDEN inside an `Access`/`Update` record base must not slip past
