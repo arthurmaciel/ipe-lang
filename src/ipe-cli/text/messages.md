@@ -603,6 +603,14 @@ lint: findings remain at or above the gate severity (see above)
 
 {path}: file exceeds the {max}-byte read ceiling — refusing to allocate an unbounded buffer
 
+## cli-source-not-regular-file
+
+{path}: not a regular file — refusing to read a FIFO, device or socket as source; point ipe at a regular `.ipe` file
+
+## cli-source-access-denied
+
+{path}: permission denied — grant read access to the file (and read and search access to its directory) to compile it
+
 ## cli-path-escape
 
 manifest path {raw} was rejected: {reason}

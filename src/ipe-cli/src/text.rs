@@ -611,6 +611,10 @@ messages! {
     cli_lint_gate_failed = "cli-lint-gate-failed";
     /// A file exceeded the per-surface read ceiling.
     cli_file_too_large(path, max) = "cli-file-too-large";
+    /// A source path named a FIFO, device, socket or other non-regular file.
+    cli_source_not_regular_file(path) = "cli-source-not-regular-file";
+    /// A source file or directory could not be opened for lack of permission.
+    cli_source_access_denied(path) = "cli-source-access-denied";
     /// A manifest path escaped the project directory.
     cli_path_escape(raw, reason) = "cli-path-escape";
     /// A build-output location was refused.
