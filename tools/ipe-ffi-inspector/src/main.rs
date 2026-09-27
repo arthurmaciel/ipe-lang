@@ -701,6 +701,9 @@ fn run_rustdoc_source(
     let dir = probe_root.as_path();
 
     let target_dir = dir.join("target");
+    // Captured before `probe_root` moves into `ProbeDir::new` below — `dir`
+    // borrows it and cannot outlive the move.
+    let target_verify_dir = dir.join("target-verify");
 
     // The probe manifest text for a given dep-feature set. Only the
     // `consented_manifest` module writes it to disk: a write yields an unscanned
@@ -724,7 +727,7 @@ edition = "2021"
     std::fs::create_dir_all(&src_dir).map_err(|e| format!("mkdir src: {e}"))?;
     // Initial manifest uses the EXPLICIT features (empty for the default path) so
     // `fetch_dep` + `cargo metadata` resolve the crate's own feature list.
-    let initial = WrittenManifest::create(dir, &render_manifest(features))?;
+    let initial = WrittenManifest::create(ProbeDir::new(probe_root), &render_manifest(features))?;
     std::fs::write(src_dir.join("lib.rs"), "// placeholder\n")
         .map_err(|e| format!("write lib.rs: {e}"))?;
 
@@ -808,7 +811,7 @@ edition = "2021"
         // THERE, so the bound wrappers ↔ propagated features stay consistent
         // and the `ipe build ⇒ cargo build` floor holds.
         Ok((j, v)) if auto_injected && verify_stable => {
-            match injected_stable_check(&manifest, &dir.join("target-verify")) {
+            match injected_stable_check(&manifest, &target_verify_dir) {
                 StableCheck::Builds => (j, v, injected.clone(), manifest),
                 StableCheck::FeatureGated => {
                     eprintln!(
@@ -1280,7 +1283,7 @@ fn offenders_from_metadata(
     Ok(offenders)
 }
 
-use consented_manifest::{ConsentedManifest, WrittenManifest};
+use consented_manifest::{ConsentedManifest, ProbeDir, WrittenManifest};
 
 /// Probe-manifest proof tokens for the AUD-10 build-script consent gate.
 ///
@@ -1292,10 +1295,14 @@ use consented_manifest::{ConsentedManifest, WrittenManifest};
 /// replaces (written or consented), so no token outlives the file content it
 /// was issued for and no rewritten dependency graph reaches a build without a
 /// fresh scan. Neither token has a public constructor, `Clone`, or `Default`.
+/// [`WrittenManifest::create`] additionally consumes an owned [`ProbeDir`]
+/// rather than borrowing a path, so a caller structurally cannot hold onto the
+/// probe directory and call `create` on it twice: the value that would name
+/// the second call has already been moved into the first.
 mod consented_manifest {
     use super::{BuildConsentOffender, MetadataError};
     use std::cell::RefCell;
-    use std::path::Path;
+    use std::path::PathBuf;
 
     thread_local! {
         /// Every consent refusal this process issued, in issue order.
@@ -1312,17 +1319,39 @@ mod consented_manifest {
         std::fs::write(path, contents).map_err(|e| format!("write Cargo.toml: {e}"))
     }
 
+    /// A probe directory owned for exactly one [`WrittenManifest::create`] call.
+    ///
+    /// Not `Clone`, not `Copy`, no public field: the sole way to obtain one is
+    /// [`ProbeDir::new`], and the sole way to consume one is `create`. A caller
+    /// that has already moved its `ProbeDir` into `create` has no value left to
+    /// pass to a second call, so the same probe directory cannot be re-created
+    /// (and its manifest silently clobbered) — the double-create this type
+    /// exists to rule out has no representation, not merely a runtime check.
+    pub(super) struct ProbeDir(PathBuf);
+
+    impl ProbeDir {
+        /// Takes ownership of `path` as the probe directory for one manifest write.
+        #[must_use]
+        pub(super) const fn new(path: PathBuf) -> Self {
+            Self(path)
+        }
+    }
+
     /// A probe manifest on disk whose dependency graph is not yet consent-scanned.
     pub(super) struct WrittenManifest {
         path: String,
     }
 
     impl WrittenManifest {
-        /// Writes `contents` as `Cargo.toml` in `dir`.
+        /// Writes `contents` as `Cargo.toml` in `dir`, consuming the [`ProbeDir`].
         ///
         /// A non-UTF-8 directory refuses: the path handed to every later cargo
         /// step must name exactly the file written here, never a lossy copy.
-        pub(super) fn create(dir: &Path, contents: &str) -> Result<Self, String> {
+        /// Taking `dir` by value rather than `&Path` means a second `create` for
+        /// the same directory needs a second `ProbeDir` value — one the caller
+        /// cannot manufacture, only move once from `ProbeDir::new`.
+        pub(super) fn create(dir: ProbeDir, contents: &str) -> Result<Self, String> {
+            let dir: PathBuf = dir.0;
             let path = dir
                 .join("Cargo.toml")
                 .to_str()
@@ -13936,7 +13965,8 @@ mod tests {
     /// A written probe manifest in a fresh temporary directory.
     fn temp_written_manifest() -> (tempfile::TempDir, WrittenManifest) {
         let dir = tempfile::tempdir().expect("tempdir");
-        let written = WrittenManifest::create(dir.path(), "").expect("write probe manifest");
+        let written = WrittenManifest::create(ProbeDir::new(dir.path().to_path_buf()), "")
+            .expect("write probe manifest");
         (dir, written)
     }
 
@@ -14025,7 +14055,7 @@ mod tests {
     fn written_manifest_refuses_an_unwritable_directory() {
         let dir = tempfile::tempdir().expect("tempdir");
         let missing = dir.path().join("absent");
-        let created = WrittenManifest::create(&missing, "");
+        let created = WrittenManifest::create(ProbeDir::new(missing), "");
         assert!(
             matches!(&created, Err(msg) if msg.starts_with("write Cargo.toml:")),
             "no token without a completed write: {:?}",
@@ -14049,6 +14079,38 @@ mod tests {
         assert!(
             consented_manifest::drain_refusals().is_empty(),
             "a drain leaves no refusal behind"
+        );
+    }
+
+    #[test]
+    fn consent_refusal_exit_yields_the_documented_exit_code() {
+        assert_eq!(EXIT_CONSENT_REFUSED, 3, "pins the process exit contract");
+
+        // Clean run: no refusal recorded -> no exit override.
+        drop(consented_manifest::drain_refusals());
+        assert!(
+            consent_refusal_exit().is_none(),
+            "a clean run must not force an exit status"
+        );
+
+        // Refused run: `consent_refusal_exit` must yield exactly
+        // `ExitCode::from(EXIT_CONSENT_REFUSED)`, not merely `Some(_)`.
+        let (_dir, written) = temp_written_manifest();
+        let refused = ConsentedManifest::from_graph_for_test(
+            written,
+            offenders_from_metadata(&aud10_post_injection_meta()),
+            false,
+        );
+        assert!(refused.is_err());
+        let exit = consent_refusal_exit();
+        assert_eq!(
+            format!("{exit:?}"),
+            format!("{:?}", Some(ExitCode::from(EXIT_CONSENT_REFUSED))),
+            "a refused run must exit with EXIT_CONSENT_REFUSED"
+        );
+        assert!(
+            consented_manifest::drain_refusals().is_empty(),
+            "consent_refusal_exit drains the refusal it reported"
         );
     }
 
