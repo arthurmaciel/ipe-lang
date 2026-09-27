@@ -27,6 +27,7 @@ use std::path::{Path, PathBuf};
 use ipe_diagnostics::{Code, Diagnostic as SharedDiag, IPE_F4410, SandboxError};
 
 pub mod build_jail;
+pub mod home;
 pub mod run_jail;
 pub mod seccomp;
 

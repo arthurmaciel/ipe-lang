@@ -21,23 +21,12 @@ pub fn absolute(raw: Option<OsString>) -> Option<PathBuf> {
     raw.map(PathBuf::from).filter(|p| p.is_absolute())
 }
 
-/// The directory the environment variable `var` names, when it is absolute.
-#[must_use]
-pub fn absolute_var(var: &str) -> Option<PathBuf> {
-    absolute(std::env::var_os(var))
-}
-
-/// The platform variable naming the invoking user's home directory.
-#[cfg(windows)]
-const HOME_VAR: &str = "USERPROFILE";
-/// The platform variable naming the invoking user's home directory.
-#[cfg(not(windows))]
-const HOME_VAR: &str = "HOME";
-
 /// The invoking user's home directory, when it is absolute.
+///
+/// Delegates to the one compiler-side home accessor, [`ipe_sandbox::home::home_dir`].
 #[must_use]
 pub fn home() -> Option<PathBuf> {
-    absolute_var(HOME_VAR)
+    ipe_sandbox::home::home_dir()
 }
 
 /// An ambient base directory: `var` when absolute, else `<home>/<fallback>`.
