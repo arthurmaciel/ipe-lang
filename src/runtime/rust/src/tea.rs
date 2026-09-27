@@ -1184,10 +1184,19 @@ mod worker_appearance_na_tests {
     fn worker_entry_has_no_view_or_appearance_argument() {
         // The exact view-less arity the worker entry must keep, named so the
         // shape is a single declaration rather than an inline complex type.
+        #[cfg(not(feature = "debugger"))]
         type WorkerEntry = fn(
             fn(()) -> (WModel, IpeCmd<WMsg>),
             fn(WMsg, WModel) -> (WModel, IpeCmd<WMsg>),
             fn(WModel) -> IpeSub<WMsg>,
+        ) -> IpeTask<crate::error::IpeError, ()>;
+        // With the debugger the only extra argument is the session codec.
+        #[cfg(feature = "debugger")]
+        type WorkerEntry = fn(
+            fn(()) -> (WModel, IpeCmd<WMsg>),
+            fn(WMsg, WModel) -> (WModel, IpeCmd<WMsg>),
+            fn(WModel) -> IpeSub<WMsg>,
+            crate::debugger::session_log::TraceOnly,
         ) -> IpeTask<crate::error::IpeError, ()>;
         // A fn item of that arity: binding `worker_app` to it is the assertion.
         let entry: WorkerEntry = worker_app;
