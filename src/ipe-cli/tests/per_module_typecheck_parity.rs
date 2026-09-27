@@ -131,12 +131,15 @@ fn cold_state_parity(label: &str, user: &UserSources) -> (usize, usize) {
 /// `*.ipe` under it). `None` when the directory holds no `Main` module.
 fn fixture_user_sources(dir: &Path) -> Option<UserSources> {
     let discovered = project::discover_modules(dir).ok()?;
-    if !discovered.iter().any(|m| m.module_path == entry_path()) {
+    if !discovered.iter().any(|m| m.module_path() == entry_path()) {
         return None;
     }
     let mut user = UserSources::new();
     for m in discovered {
-        user.insert(m.module_path, std::fs::read_to_string(&m.path).ok()?);
+        user.insert(
+            m.module_path().to_vec(),
+            std::fs::read_to_string(m.path()).ok()?,
+        );
     }
     Some(user)
 }

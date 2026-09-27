@@ -2177,10 +2177,10 @@ impl PackageSourceSet {
         let mut sources: BTreeMap<Vec<String>, (PathBuf, String)> = BTreeMap::new();
         for m in &entries {
             let src = crate::io_bounded::read_to_string_capped(
-                &m.path,
+                m.path(),
                 crate::io_bounded::SOURCE_READ_CAP,
             )?;
-            sources.insert(m.module_path.clone(), (m.path.clone(), src));
+            sources.insert(m.module_path().to_vec(), (m.path().to_path_buf(), src));
         }
 
         // Inject the compiled-source stdlib closure (e.g. `Ipe.Css`) just like
@@ -2204,7 +2204,7 @@ impl PackageSourceSet {
 
     /// The module path of every module lowered as an inference entry.
     pub fn entry_module_paths(&self) -> impl Iterator<Item = &[String]> {
-        self.entries.iter().map(|m| m.module_path.as_slice())
+        self.entries.iter().map(|m| m.module_path())
     }
 
     /// Number of modules in the source graph (entries plus injected modules).
@@ -2223,7 +2223,7 @@ impl PackageSourceSet {
             entries: self
                 .entries
                 .iter()
-                .filter(|m| m.module_path == module_path)
+                .filter(|m| m.module_path() == module_path)
                 .cloned()
                 .collect(),
             injected: self.injected.clone(),
@@ -2279,7 +2279,7 @@ pub fn infer_package_capabilities_in(
         package
             .entries
             .iter()
-            .map(|m| (m.origin, infer_entry(db, source_root, package, m))),
+            .map(|m| (m.provenance(), infer_entry(db, source_root, package, m))),
     )
 }
 
@@ -2293,11 +2293,11 @@ type EntryInference = Result<std::collections::BTreeSet<ipe_ir::Capability>, Cli
 /// module. A stdlib module failing to lower on its own is a compiler defect the
 /// author cannot act on, so a user diagnostic outranks it; it still refuses the
 /// package, because the stdlib is trusted to lower, not exempt from disclosure.
-const fn refusal_rank(origin: project::ModuleOrigin) -> u8 {
-    match origin {
-        project::ModuleOrigin::User(project::EntryRole::Main) => 0,
-        project::ModuleOrigin::User(project::EntryRole::Library) => 1,
-        project::ModuleOrigin::EmbeddedStdlib => 2,
+const fn refusal_rank(provenance: project::ModuleProvenance) -> u8 {
+    match provenance {
+        project::ModuleProvenance::User(project::EntryRole::Main) => 0,
+        project::ModuleProvenance::User(project::EntryRole::Library) => 1,
+        project::ModuleProvenance::EmbeddedStdlib => 2,
     }
 }
 
@@ -2311,19 +2311,19 @@ fn infer_entry(
     package: &PackageSourceSet,
     module: &project::DiscoveredModule,
 ) -> EntryInference {
-    let Some(entry_file) = source_root.files(db).get(&module.module_path).copied() else {
+    let Some(entry_file) = source_root.files(db).get(module.module_path()).copied() else {
         return Err(CliError::Pipeline {
-            file: module.path.clone(),
+            file: module.path().to_path_buf(),
             src: package
                 .sources
-                .get(&module.module_path)
+                .get(module.module_path())
                 .map(|(_, s)| s.clone())
                 .unwrap_or_default(),
             diag: Box::new(Diagnostic::CompilerBug {
                 where_: "ipe.infer_package_capabilities",
                 detail: format!(
                     "entry module {} has no source file in the package root",
-                    module.module_path.join(".")
+                    module.module_path().join(".")
                 ),
             }),
         });
@@ -2352,24 +2352,24 @@ fn infer_entry(
 /// Fails closed: any refused entry refuses the whole package, since a union
 /// over only the entries that lowered would under-disclose the consumer's
 /// consent surface. An injected stdlib entry is folded under the same rule as
-/// a user entry; its origin only lowers the precedence of its refusal (see
+/// a user entry; its provenance only lowers the precedence of its refusal (see
 /// [`refusal_rank`]), ties going to the first in entry order.
 ///
 /// # Errors
 /// The selected entry refusal; [`CliError::Usage`] when there is no entry.
 fn aggregate_entry_inferences(
-    outcomes: impl IntoIterator<Item = (project::ModuleOrigin, EntryInference)>,
+    outcomes: impl IntoIterator<Item = (project::ModuleProvenance, EntryInference)>,
 ) -> Result<std::collections::BTreeSet<ipe_ir::Capability>, CliError> {
     let mut union: std::collections::BTreeSet<ipe_ir::Capability> =
         std::collections::BTreeSet::new();
     let mut refusal: Option<(u8, CliError)> = None;
     let mut any_entry = false;
-    for (origin, outcome) in outcomes {
+    for (provenance, outcome) in outcomes {
         any_entry = true;
         match outcome {
             Ok(capabilities) => union.extend(capabilities),
             Err(err) => {
-                let rank = refusal_rank(origin);
+                let rank = refusal_rank(provenance);
                 if refusal.as_ref().is_none_or(|(held, _)| rank < *held) {
                     refusal = Some((rank, err));
                 }
@@ -2403,15 +2403,15 @@ fn attribute_entry_lowering_error(
     home: &[ipe_intern::Symbol],
 ) -> CliError {
     if let Err(canon_err) =
-        attribute_canon_errors(db, source_root, &package.sources, entry_file, &entry.path)
+        attribute_canon_errors(db, source_root, &package.sources, entry_file, entry.path())
     {
         return canon_err;
     }
     let entry_source = (
-        entry.path.clone(),
+        entry.path().to_path_buf(),
         package
             .sources
-            .get(&entry.module_path)
+            .get(entry.module_path())
             .map(|(_, s)| s.clone())
             .unwrap_or_default(),
     );
@@ -3165,9 +3165,11 @@ mod capability_fold_tests {
     use ipe_ir::Capability;
     use std::collections::BTreeSet;
 
-    const MAIN: project::ModuleOrigin = project::ModuleOrigin::User(project::EntryRole::Main);
-    const SIBLING: project::ModuleOrigin = project::ModuleOrigin::User(project::EntryRole::Library);
-    const STDLIB: project::ModuleOrigin = project::ModuleOrigin::EmbeddedStdlib;
+    const MAIN: project::ModuleProvenance =
+        project::ModuleProvenance::User(project::EntryRole::Main);
+    const SIBLING: project::ModuleProvenance =
+        project::ModuleProvenance::User(project::EntryRole::Library);
+    const STDLIB: project::ModuleProvenance = project::ModuleProvenance::EmbeddedStdlib;
 
     fn set(capabilities: &[Capability]) -> BTreeSet<Capability> {
         capabilities.iter().copied().collect()
