@@ -8593,7 +8593,7 @@ fn reject_point_free_store_kernel(callee: &Callee, span: Span) -> DResult<()> {
 /// IPE-L0126; a piped `<|` / `|>` spine is flattened to the saturated call
 /// first, so only a genuinely unsaturated use reaches here. A no-op (`Ok`)
 /// for every other callee.
-fn reject_unsaturated_handler_kernel(callee: &Callee, span: Span) -> DResult<()> {
+const fn reject_unsaturated_handler_kernel(callee: &Callee, span: Span) -> DResult<()> {
     if let Callee::Kernel(k) = callee
         && k.capture_cloned_handler_arg().is_some()
     {
