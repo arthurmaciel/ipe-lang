@@ -30,6 +30,7 @@ use std::fmt::Write as _;
 use std::io::{IsTerminal as _, Write as _};
 use std::path::{Path, PathBuf};
 
+use crate::screen::{Screen, Stream, Tone};
 use crate::{CliError, health, style};
 
 // ── per-shape Main.ipe templates ─────────────────────────────────────────────
@@ -980,11 +981,11 @@ fn scaffold(target_dir: &Path, files: &[ManagedFile], force: bool) -> Result<(),
         }
     }
     if !kept.is_empty() {
-        let mut body = String::new();
+        let mut out = Screen::new(Stream::Stdout);
         for rel in kept {
-            let _ = writeln!(body, "kept {} (unchanged)", rel.display());
+            out.line(Tone::Aux, &format!("kept {} (unchanged)", rel.display()));
         }
-        print!("{}", style::frame(&style::gutter(&body)));
+        out.emit();
     }
     Ok(())
 }
@@ -1017,14 +1018,12 @@ fn write_new_file(path: &Path, contents: &str) -> Result<(), CliError> {
 /// Its original is backed up first, and the replacement is atomic.
 fn replace_file(path: &Path, contents: &str) -> Result<(), CliError> {
     if let Some(backup) = crate::rewrite_user_file(path, contents, crate::RewriteKind::Lossy)? {
-        println!(
-            "{}",
-            style::gutter(&format!(
-                "backed up {} to {}",
-                path.display(),
-                backup.display()
-            ))
-        );
+        Screen::new(Stream::Stdout)
+            .line(
+                Tone::Aux,
+                &format!("backed up {} to {}", path.display(), backup.display()),
+            )
+            .emit();
     }
     Ok(())
 }

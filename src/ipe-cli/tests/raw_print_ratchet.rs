@@ -36,7 +36,6 @@ const BUDGET: &[(&str, usize)] = &[
     ("health.rs", 11),
     ("init.rs", 6),
     ("login.rs", 7),
-    ("migrate.rs", 2),
     ("publish.rs", 4),
     ("resolve.rs", 4),
     ("run_sandbox.rs", 1),
