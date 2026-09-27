@@ -186,7 +186,7 @@ refused label needle task =
 
 securedLine : Draft Store.Row -> String
 securedLine illegal =
-    case Store.secured Store.denyAll illegal of
+    case Store.secured (Store.readOnly Store.never) illegal of
         Err e ->
             if String.contains illegalNeedle (Error.message e) then
                 "illegal-secured:rejected"
