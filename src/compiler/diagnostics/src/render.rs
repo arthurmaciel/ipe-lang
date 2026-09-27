@@ -2270,7 +2270,9 @@ const fn feature_label(f: Feature) -> &'static str {
             "a value holding a function is used more than once — function values \
              cannot be copied yet; calling it is unlimited, but a second non-call \
              use needs the value re-constructed or the code restructured to a single \
-             linear use [feature: function-value-reuse]"
+             linear use; a function decoded by a `Json.Decode` mapper is the exception \
+             — calling it consumes it, so call it once per path and never capture it \
+             in a closure [feature: function-value-reuse]"
         }
         Feature::ForeignHandleReuse => {
             "a foreign opaque FFI handle is used more than once — the handle is the \

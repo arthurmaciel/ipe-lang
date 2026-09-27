@@ -5694,7 +5694,9 @@ fn align_param_slot(
 /// Used only for the fn-value reuse gate (T4) — never for the
 /// multi-use-clone rewrite, which has different call-position semantics for
 /// `CloneOk` types (those are not directly callable, so the distinction never
-/// mattered there).
+/// mattered there). The callee exemption holds for the re-callable `Fun` carrier
+/// only; a consume-once [`IrType::FnOnceChain`] callee moves, which
+/// [`reject_fn_once_reuse`] counts instead.
 fn count_fn_value_uses(sym: Symbol, expr: &Expr) -> usize {
     match expr {
         Expr::Var(s) | Expr::CloneVar(s) => usize::from(*s == sym),
@@ -6080,6 +6082,7 @@ fn apply_move_ownership(
         reject_nonclone_binding_reuse(env, site, sym, ir_ty, &scope, span)?;
         reject_foreign_handle_reuse(env, sym, ir_ty, &scope, span)?;
         reject_fn_value_reuse(env, sym, ir_ty, &scope, span)?;
+        reject_fn_once_reuse(sym, ir_ty, &scope, span)?;
         Ok(scope)
     }
 }
@@ -6104,6 +6107,12 @@ fn apply_move_ownership_precomputed(
         reject_nonclone_binding_reuse(env, site, sym, ir_ty, &scope, span)?;
         reject_foreign_handle_reuse_for_count(env, ir_ty, accum.var_uses, span)?;
         reject_fn_value_reuse_for_count(env, ir_ty, accum.fn_value_uses, span)?;
+        reject_fn_once_reuse_for_count(
+            ir_ty,
+            accum.var_uses,
+            accum.depth1_capture_count > 0 || accum.any_depth2_capture,
+            span,
+        )?;
         Ok(scope)
     }
 }
@@ -6192,6 +6201,35 @@ fn reject_fn_value_reuse(
     span: Span,
 ) -> DResult<()> {
     reject_fn_value_reuse_for_count(env, ir_ty, count_fn_value_uses(sym, body), span)
+}
+
+/// Refuse (IPE-L0127) a consume-once [`IrType::FnOnceChain`] binder read twice or captured.
+///
+/// A `Box<dyn FnOnce>` call moves the box, so unlike a `Box<dyn Fn>` a direct
+/// callee position IS a consume: a second read on one path is a use after move,
+/// and a read inside a closure moves the box out of that closure's environment.
+/// Both live and precomputed binder paths route through here.
+fn reject_fn_once_reuse_for_count(
+    ir_ty: &IrType,
+    var_uses: usize,
+    captured: bool,
+    span: Span,
+) -> DResult<()> {
+    if matches!(ir_ty, IrType::FnOnceChain(_, _)) && (var_uses > 1 || captured) {
+        return Err(unsupported(span, Feature::FunctionValueReuse));
+    }
+    Ok(())
+}
+
+/// [`reject_fn_once_reuse_for_count`] over a walk of `body`.
+fn reject_fn_once_reuse(sym: Symbol, ir_ty: &IrType, body: &Expr, span: Span) -> DResult<()> {
+    if !matches!(ir_ty, IrType::FnOnceChain(_, _)) {
+        return Ok(());
+    }
+    let mut depths = Vec::new();
+    collect_lambda_capture_depths(sym, body, 0, &mut depths);
+    let captured = depths.iter().any(|&d| d >= 1);
+    reject_fn_once_reuse_for_count(ir_ty, count_var_uses(sym, body), captured, span)
 }
 
 /// Count the number of times `sym` is genuinely CONSUMED (moved, in emitted
@@ -22760,7 +22798,11 @@ impl<'a> Lowerer<'a> {
     /// b)`, `emit_apply`'s flat call) would not match; a multi-parameter payload
     /// therefore stays untouched (a distinct, rarer surface) rather than being
     /// silently mis-lowered.
-    fn retype_decoder_payload_mapper(resolved: &Callee, lowered_args: &mut [Expr]) {
+    fn retype_decoder_payload_mapper(
+        resolved: &Callee,
+        lowered_args: &mut [Expr],
+        span: Span,
+    ) -> DResult<()> {
         if !matches!(
             resolved,
             Callee::Kernel(
@@ -22781,17 +22823,21 @@ impl<'a> Lowerer<'a> {
                     | KernelFn::ConfigAndThen
             )
         ) {
-            return;
+            return Ok(());
         }
-        if let Some(Expr::Lambda { params, .. }) = lowered_args.first_mut() {
-            for (_, ty) in params.iter_mut() {
+        if let Some(Expr::Lambda { params, body, .. }) = lowered_args.first_mut() {
+            for (sym, ty) in params.iter_mut() {
                 if let IrType::Fun(fn_params, ret) = ty
                     && fn_params.len() == 1
                 {
                     *ty = IrType::FnOnceChain(fn_params.clone(), ret.clone());
+                    // The body's move discipline ran under the re-callable
+                    // `Fun` shape; re-check it under the consume-once one.
+                    reject_fn_once_reuse(*sym, ty, body, span)?;
                 }
             }
         }
+        Ok(())
     }
 
     /// Align every mapper argument of a higher-order kernel with the carrier of
@@ -23275,7 +23321,11 @@ impl<'a> Lowerer<'a> {
                         // an exit-0-then-cargo-fail SEAL breach).
                         let mut lowered_args = lowered_args;
                         Self::retype_result_map_error_handler(&resolved, &mut lowered_args);
-                        Self::retype_decoder_payload_mapper(&resolved, &mut lowered_args);
+                        Self::retype_decoder_payload_mapper(
+                            &resolved,
+                            &mut lowered_args,
+                            call_span,
+                        )?;
                         // Close the same frontier at a `Dict.singleton`/`insert`
                         // whose function VALUE argument is stored on the `Arc`
                         // carrier (see method doc).
@@ -32693,6 +32743,62 @@ mod tests {
         // A `Clone` record takes the rewrite's `.clone()` — accepted.
         let plain_record = IrType::Record(BTreeMap::from([(tag, IrType::Int)]));
         assert!(reject_nonclone_value_reuse(env, w, &plain_record, &kernel_read, span).is_ok());
+    }
+
+    /// A consume-once decoder mapper payload called twice or captured fails closed
+    /// with IPE-L0127; one call per path stays accepted.
+    #[test]
+    fn fn_once_chain_reuse_fails_closed() {
+        use ipe_diagnostics::Feature;
+        use ipe_ir::{BinOp, Expr, IrType};
+
+        use super::{reject_fn_once_reuse, unsupported};
+
+        let mut interner = Interner::new();
+        let f = interner.intern("f").expect("intern");
+        let x = interner.intern("x").expect("intern");
+        let span = Span::DUMMY;
+        let once = IrType::FnOnceChain(vec![IrType::Int], Box::new(IrType::Int));
+        let fun = IrType::Fun(vec![IrType::Int], Box::new(IrType::Int));
+        let call_f = |n: i64| Expr::Apply {
+            func: Box::new(Expr::Var(f)),
+            args: vec![Expr::Int(n)],
+        };
+
+        // `f 1 + f 2`: the first call moves the box — rejected.
+        let twice = Expr::BinOp {
+            op: BinOp::IntAdd,
+            lhs: Box::new(call_f(1)),
+            rhs: Box::new(call_f(2)),
+        };
+        let err = reject_fn_once_reuse(f, &once, &twice, span)
+            .expect_err("a second call of a consume-once payload must be rejected");
+        assert_eq!(err, unsupported(span, Feature::FunctionValueReuse));
+
+        // `\x -> f x`: the closure would move the box out of its environment.
+        let captured = Expr::Lambda {
+            params: vec![(x, IrType::Int)],
+            ret: IrType::Int,
+            body: Box::new(Expr::Apply {
+                func: Box::new(Expr::Var(f)),
+                args: vec![Expr::Var(x)],
+            }),
+        };
+        let err = reject_fn_once_reuse(f, &once, &captured, span)
+            .expect_err("a captured consume-once payload must be rejected");
+        assert_eq!(err, unsupported(span, Feature::FunctionValueReuse));
+
+        // One call, or one call on each branch — accepted.
+        assert!(reject_fn_once_reuse(f, &once, &call_f(1), span).is_ok());
+        let branched = Expr::If {
+            cond: Box::new(Expr::Bool(true)),
+            then_: Box::new(call_f(1)),
+            else_: Box::new(call_f(2)),
+        };
+        assert!(reject_fn_once_reuse(f, &once, &branched, span).is_ok());
+
+        // A re-callable `Fun` is out of this gate's scope.
+        assert!(reject_fn_once_reuse(f, &fun, &twice, span).is_ok());
     }
 
     /// Every binder site runs the IPE-L0135 gate; only an inlined `let` is exempt.
