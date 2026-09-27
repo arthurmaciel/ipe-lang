@@ -36,7 +36,7 @@ pub fn check(ctx: &Ctx) -> Vec<Finding> {
         }
         let simpler = match args.as_slice() {
             [f] if is_identity(ctx, f) => "identity".to_owned(),
-            [f, xs] if is_identity(ctx, f) => ctx.slice(xs.span).trim().to_owned(),
+            [f, xs] if is_identity(ctx, f) => ctx.application_slice(xs).to_owned(),
             _ => return,
         };
         findings.push(ctx.advisory(

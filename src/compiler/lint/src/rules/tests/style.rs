@@ -56,7 +56,7 @@ fn pipeline_offers_both_directions() {
         "{help}"
     );
     assert!(
-        help.contains("String.concat <| List.map fmt <| List.filter live records"),
+        help.contains("String.concat <| List.map fmt <| List.filter live <| records"),
         "{help}"
     );
 }

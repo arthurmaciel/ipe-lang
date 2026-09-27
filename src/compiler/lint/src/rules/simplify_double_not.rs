@@ -34,7 +34,7 @@ pub fn check(ctx: &Ctx) -> Vec<Finding> {
         let Some(inner) = not_arg(ctx, outer_arg) else {
             return;
         };
-        let simpler = ctx.slice(inner.span).trim();
+        let simpler = ctx.application_slice(inner);
         findings.push(ctx.advisory(
             "simplify-double-not",
             expr.span,

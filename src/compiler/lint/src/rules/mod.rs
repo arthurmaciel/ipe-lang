@@ -55,9 +55,7 @@ mod wrapper_consistency;
 mod wrapper_consistency_cross;
 
 #[cfg(test)]
-mod simplify_tests;
-#[cfg(test)]
-mod style_tests;
+mod tests;
 
 use ipe_diagnostics::{Located, Span};
 use ipe_intern::{Interner, Symbol};
@@ -134,6 +132,23 @@ impl Ctx<'_> {
             return "";
         }
         self.source.get(lo..hi).unwrap_or("")
+    }
+
+    /// The source of `expr` as it may stand in any application position.
+    ///
+    /// A parenthesised group's span includes its parens; a source call inside
+    /// one is sliced from callee through last argument instead, since an
+    /// application is valid wherever the call that held it as an argument was.
+    /// Any other form keeps its own span, parens included.
+    pub fn application_slice(&self, expr: &Expr) -> &str {
+        let span = match &expr.value {
+            Expr_::Call(callee, args) if is_source_call(expr) => Span::new(
+                callee.span.lo,
+                args.last().map_or(callee.span.hi, |a| a.span.hi),
+            ),
+            _ => expr.span,
+        };
+        self.slice(span).trim()
     }
 }
 

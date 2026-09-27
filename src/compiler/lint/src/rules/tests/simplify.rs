@@ -21,7 +21,7 @@ fn parses(src: &str) -> bool {
 }
 
 /// The findings of `rule` over `body`, after asserting the fixture parses.
-/// Uses the registry default severity, matching `style_tests.rs`'s harness —
+/// Uses the registry default severity, matching the `style` tests' harness —
 /// correct for every rule here except `no-missing-type-annotation`, which ships
 /// `Allow` by default and gets its own helper below.
 fn findings(rule: &str, body: &str) -> Vec<Finding> {
@@ -67,6 +67,12 @@ fn triple_not_reports_each_nested_pair() {
     assert!(help.iter().any(|h| h.contains("write `ok`")));
 }
 
+#[test]
+fn double_not_keeps_parens_an_operator_chain_needs() {
+    let help = help_of(DOUBLE_NOT, "    not (not (a && b))");
+    assert!(help.contains("write `(a && b)`"), "{help}");
+}
+
 // ── simplify-map-identity ────────────────────────────────────────────────────
 
 const MAP_IDENTITY: &str = "simplify-map-identity";
@@ -79,6 +85,12 @@ fn map_identity_fires_fully_applied() {
 #[test]
 fn map_identity_fires_partially_applied() {
     assert!(help_of(MAP_IDENTITY, "    List.map identity").contains("write `identity`"));
+}
+
+#[test]
+fn map_identity_over_a_call_drops_its_grouping_parens() {
+    let help = help_of(MAP_IDENTITY, "    List.map identity (load cfg)");
+    assert!(help.contains("write `load cfg`"), "{help}");
 }
 
 #[test]
