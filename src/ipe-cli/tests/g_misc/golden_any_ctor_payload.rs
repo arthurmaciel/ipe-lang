@@ -137,7 +137,7 @@ fn ctor_span_attr_dep_module() {
         return;
     };
 
-    let result = ipe::build_with_sibling_discovery(&entry, &out, &runtime);
+    let result = ipe::build_loose_file(&entry, &out, &runtime);
     assert!(
         result.is_ok(),
         "a dep-module enum wrapping a `List (Int -> Int)` must lower and build: {:?}",

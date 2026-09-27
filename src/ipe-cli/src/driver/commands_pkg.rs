@@ -1,11 +1,10 @@
 use super::{
     CliError, attribute_canon_errors, attribute_post_link_error, build_emitted_project,
-    build_project, build_source_graph, build_test_with_project_sources,
-    build_with_sibling_discovery, capabilities_including_served_widgets, cargo_target_directory,
-    classify_entry_shape, create_source_root, default_entry, discover_manifest, emit_machine_error,
-    emitted_bin_filename, force_cargo_terminal_ui, home_to_source_map, resolve_runtime,
-    resolve_vendored_runtime_dir, run_build, runtime_context_for_message,
-    typecheck_entry_via_graph,
+    build_loose_file, build_project, build_source_graph, build_test_with_project_sources,
+    capabilities_including_served_widgets, cargo_target_directory, classify_entry_shape,
+    create_source_root, default_entry, discover_manifest, emit_machine_error, emitted_bin_filename,
+    force_cargo_terminal_ui, home_to_source_map, resolve_runtime, resolve_vendored_runtime_dir,
+    run_build, runtime_context_for_message, typecheck_entry_via_graph,
 };
 use crate::output_dir::{OutputArea, OutputRoot, OwnedDir, ProjectPaths};
 use crate::publisher::{AttestedActor, BlessedPublisher};
@@ -1355,7 +1354,7 @@ pub fn build_and_run_test_entry(
     if project_src_root.is_dir() {
         build_test_with_project_sources(project_src_root, test_entry, out_dir, runtime_dir)?;
     } else {
-        build_with_sibling_discovery(test_entry, out_dir, runtime_dir)?;
+        build_loose_file(test_entry, out_dir, runtime_dir)?;
     }
 
     // Compile the emitted Rust project.

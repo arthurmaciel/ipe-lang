@@ -48,7 +48,7 @@ fn assert_ipec_exit0(label: &str, entry_rel: &str) {
     };
     // Multi-module examples require sibling-discovery so imports like
     // `import State exposing (..)` resolve to adjacent `.ipe` files.
-    let result = ipe::build_with_sibling_discovery(&entry, &out, &runtime);
+    let result = ipe::build_loose_file(&entry, &out, &runtime);
     assert!(
         result.is_ok(),
         "ipec must compile {label} cleanly (exit 0): {:?}",

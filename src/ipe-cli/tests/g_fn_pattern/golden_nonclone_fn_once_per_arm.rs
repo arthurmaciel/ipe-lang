@@ -44,7 +44,7 @@ fn i193_nonclone_fn_once_per_arm_rejected() {
         return;
     };
 
-    let built = ipe::build_with_sibling_discovery(&entry, &out, &runtime);
+    let built = ipe::build_loose_file(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
         "per-arm fn-value uses must SUM to 2 and Arc-promote the param \

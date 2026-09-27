@@ -180,7 +180,7 @@ fn transparent_import_emits_the_conversion_seam() {
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("ffi_transparent_import_out");
     let _ = fs::remove_dir_all(&out);
 
-    if let Err(err) = ipe::build_with_sibling_discovery(&entry, &out, &runtime) {
+    if let Err(err) = ipe::build_loose_file(&entry, &out, &runtime) {
         assert!(
             false_marker(),
             "transparent-import fixture must build, got: {err}"
@@ -246,7 +246,7 @@ fn transparent_import_emitted_crate_builds_and_runs() {
     let entry = tmp.join("src").join("Main.ipe");
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("ffi_transparent_import_e2e_out");
     let _ = fs::remove_dir_all(&out);
-    if let Err(err) = ipe::build_with_sibling_discovery(&entry, &out, &runtime) {
+    if let Err(err) = ipe::build_loose_file(&entry, &out, &runtime) {
         assert!(
             false_marker(),
             "transparent-import fixture must build, got: {err}"

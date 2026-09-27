@@ -249,7 +249,7 @@ impl BuildOptions {
     /// The default build options with the emit model resolved from the
     /// environment (dependency-model by default; vendored under
     /// `IPE_RUNTIME_VENDORED=1`). The zero-configuration entrypoints
-    /// ([`build`], [`build_with_sibling_discovery`], [`build_project`]) seed
+    /// ([`build`], [`build_loose_file`], [`build_project`]) seed
     /// this so a library caller gets the same default emit model a `ipe build`
     /// invocation does, rather than the raw `Default` (which is vendored — the
     /// fallback shape).
@@ -350,21 +350,17 @@ pub fn build_with_options(
 /// [`CliError::Io`] on any filesystem failure.
 /// [`CliError::DiscoveryLimitReached`] when the import closure exceeds
 /// [`crate::loose_file::LooseFileLimits::DEFAULT`].
-pub fn build_with_sibling_discovery(
-    entry: &Path,
-    out_dir: &Path,
-    runtime_dir: &Path,
-) -> Result<(), CliError> {
-    build_with_sibling_discovery_with_options(entry, out_dir, runtime_dir, BuildOptions::from_env())
+pub fn build_loose_file(entry: &Path, out_dir: &Path, runtime_dir: &Path) -> Result<(), CliError> {
+    build_loose_file_with_options(entry, out_dir, runtime_dir, BuildOptions::from_env())
 }
 
-/// [`build_with_sibling_discovery`] with explicit [`BuildOptions`] (the
+/// [`build_loose_file`] with explicit [`BuildOptions`] (the
 /// static-plan-aware variant).
 ///
 /// # Errors
-/// As [`build_with_sibling_discovery`], plus [`CliError::StaticRefusal`]
+/// As [`build_loose_file`], plus [`CliError::StaticRefusal`]
 /// when the emitted app shape cannot be static.
-pub fn build_with_sibling_discovery_with_options(
+pub fn build_loose_file_with_options(
     entry: &Path,
     out_dir: &Path,
     runtime_dir: &Path,
@@ -372,7 +368,7 @@ pub fn build_with_sibling_discovery_with_options(
 ) -> Result<(), CliError> {
     let collected = collect_entry_and_siblings(entry)?;
 
-    // No manifest on this path either (sibling discovery is the "no manifest
+    // No manifest on this path either (the loose-file closure is the "no manifest
     // found" fallback) — default to sqlite, same rationale as `build`.
     compile_modules(
         collected.sources,
@@ -388,7 +384,7 @@ pub fn build_with_sibling_discovery_with_options(
 
 /// Build `ipe verify`'s test entry against the project's `src/` sources.
 ///
-/// Unlike [`build_with_sibling_discovery`], which follows the entry's
+/// Unlike [`build_loose_file`], which follows the entry's
 /// imports within its own directory, this roots the code under test at `project_src_root`
 /// (the `src/` tree) and additionally discovers the test entry's own directory
 /// (the `tests/` tree) — so a `tests/Main.ipe` that imports `Lib.Foo` from
@@ -409,7 +405,7 @@ pub fn build_test_with_project_sources(
 
     // No manifest driver is threaded here (the test stage mirrors the sibling
     // build's "no manifest" fallback) — default to sqlite, same rationale as
-    // `build_with_sibling_discovery`.
+    // `build_loose_file`.
     compile_modules(
         collected.sources,
         collected.discovered,
@@ -432,7 +428,7 @@ pub struct CollectedSources {
 /// Collect a loose entry plus the transitive closure of sibling modules it imports.
 ///
 /// This is the file-path shorthand's source-collection step, shared by the
-/// build path ([`build_with_sibling_discovery_with_options`]) and the
+/// build path ([`build_loose_file_with_options`]) and the
 /// single-entry analysis paths ([`lower_entry_via_graph`], [`emit_ir_text`]) so all
 /// three see the SAME module set. It delegates to
 /// [`crate::loose_file::resolve_loose_file`] — the one loose-file resolver

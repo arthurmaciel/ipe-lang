@@ -60,7 +60,7 @@ fn assert_ipec_accepts_without_ipe_row(fixture: &str) {
         return;
     };
 
-    let built = ipe::build_with_sibling_discovery(&entry, &out, &runtime);
+    let built = ipe::build_loose_file(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
         "ipe build must succeed for {fixture}: {:?}",
@@ -95,7 +95,7 @@ fn assert_cargo_builds_and_runs(fixture: &str, expected_stdout: &str) {
         return;
     };
 
-    let built = ipe::build_with_sibling_discovery(&entry, &out, &runtime);
+    let built = ipe::build_loose_file(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
         "ipe build must succeed for {fixture}: {:?}",

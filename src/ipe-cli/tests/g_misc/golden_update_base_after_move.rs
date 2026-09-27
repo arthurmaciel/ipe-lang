@@ -50,7 +50,7 @@ fn i193_update_base_ipec_accepts_and_clones_consuming_use() {
         return;
     };
 
-    let built = ipe::build_with_sibling_discovery(&entry, &out, &runtime);
+    let built = ipe::build_loose_file(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
         "ipe build must succeed for update_base_after_move: {:?}",
@@ -98,9 +98,9 @@ fn i193_update_base_idempotent() {
         return;
     };
 
-    let b1 = ipe::build_with_sibling_discovery(&entry, &out1, &runtime);
+    let b1 = ipe::build_loose_file(&entry, &out1, &runtime);
     assert!(b1.is_ok(), "pass 1 must succeed: {:?}", b1.err());
-    let b2 = ipe::build_with_sibling_discovery(&entry, &out2, &runtime);
+    let b2 = ipe::build_loose_file(&entry, &out2, &runtime);
     assert!(b2.is_ok(), "pass 2 must succeed: {:?}", b2.err());
 
     let main1 = std::fs::read_to_string(out1.join("src").join("main.rs"))
@@ -131,7 +131,7 @@ fn i193_update_base_cargo_builds_and_runs() {
     assert!(runtime.is_ok(), "runtime must resolve for E2E");
     let Ok(runtime) = runtime else { return };
 
-    let built = ipe::build_with_sibling_discovery(&entry, &out, &runtime);
+    let built = ipe::build_loose_file(&entry, &out, &runtime);
     assert!(built.is_ok(), "ipe build must succeed: {:?}", built.err());
 
     let outcome = crate::support::build_and_run_emitted("update_base_after_move", &out);

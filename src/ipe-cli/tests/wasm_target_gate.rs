@@ -416,9 +416,8 @@ fn transitive_server_import_fails_naming_the_exact_chain() {
     );
     let out = dir.join("out");
     let runtime = ipe::resolve_runtime().expect("runtime must resolve");
-    let err =
-        ipe::build_with_sibling_discovery_with_options(&entry, &out, &runtime, wasm_options())
-            .expect_err("View -> Data's File.readFile must be denied transitively");
+    let err = ipe::build_loose_file_with_options(&entry, &out, &runtime, wasm_options())
+        .expect_err("View -> Data's File.readFile must be denied transitively");
     let CliError::Pipeline { diag, .. } = err else {
         panic!("expected a pipeline diagnostic, got: {err:?}");
     };
@@ -479,7 +478,7 @@ fn hydrate_glue_type_name_matches_emitted_struct_and_compiles_for_wasm() {
         wasm_hydrate_mode: true,
         ..BuildOptions::default()
     };
-    ipe::build_with_sibling_discovery_with_options(&entry, &out, &runtime, options)
+    ipe::build_loose_file_with_options(&entry, &out, &runtime, options)
         .expect("wasm-hydration must emit under --target wasm mode=hydrate");
 
     // The emitted glue must name the structurally-emitted struct, not a
