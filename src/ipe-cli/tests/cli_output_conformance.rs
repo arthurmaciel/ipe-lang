@@ -147,12 +147,6 @@ const MACHINE_CONFORMANCE: &[MachineConformance] = &[
         ),
     },
     MachineConformance {
-        command: "migrate",
-        success: MachineSuccess::ExemptWithReason(
-            "migrate rewrites a project in place; no integration harness yet",
-        ),
-    },
-    MachineConformance {
         command: "package",
         success: MachineSuccess::ExemptWithReason(
             "package resolution touches the registry/network; covered in package_* tests",

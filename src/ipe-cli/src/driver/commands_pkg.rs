@@ -7,6 +7,7 @@ use super::{
     resolve_vendored_runtime_dir, run_build, runtime_context_for_message,
     typecheck_entry_via_graph,
 };
+use crate::output_dir::{OutputArea, OutputRoot, OwnedDir, ProjectPaths};
 use crate::publisher::{AttestedActor, BlessedPublisher};
 use crate::{
     Applicability, BTreeMap, Diagnostic, HelpLine, Interner, Path, PathBuf, Suggestion, Write,
@@ -35,6 +36,28 @@ impl BundleProfile {
     /// stay a single packager parameterised by profile, not two code paths.
     const fn cargo_release(self) -> bool {
         matches!(self, Self::Release)
+    }
+
+    /// The emitted crate's area under the output root.
+    ///
+    /// `rust/` for [`Self::Dev`], `release/rust/` for [`Self::Release`] — where
+    /// `build` and `release` respectively put it.
+    const fn crate_areas(self) -> &'static [OutputArea] {
+        match self {
+            Self::Dev => &[OutputArea::Rust],
+            Self::Release => &[OutputArea::Release, OutputArea::Rust],
+        }
+    }
+
+    /// Claim the directory this profile's packaged bundles go in.
+    ///
+    /// `dist/` for [`Self::Dev`], `release/dist/` for [`Self::Release`].
+    fn dist_dir(self, output: &OutputRoot) -> Result<OwnedDir, CliError> {
+        let areas: &[OutputArea] = match self {
+            Self::Dev => &[OutputArea::Dist],
+            Self::Release => &[OutputArea::Release, OutputArea::Dist],
+        };
+        output.claim_area(areas)
     }
 
     /// The compiled binary's `target/` profile subdirectory (`debug` / `release`),
@@ -347,7 +370,8 @@ impl<'a> BundleAssembler<'a> {
         // Emit + compile the project to a binary. A webview app carries the
         // system webview as a dynamic dependency, so this is a plain
         // (non-static) native build.
-        let build_dir = manifest.root.join("out").join("rust");
+        let output = OutputRoot::resolve(None, &ProjectPaths::from_manifest(manifest))?;
+        let build_dir = output.area_path(&[OutputArea::Rust])?;
         let runtime_dir = resolve_vendored_runtime_dir(None, false)?;
         build_project(self.manifest_path, &build_dir, &runtime_dir)?;
 
@@ -377,15 +401,14 @@ impl<'a> BundleAssembler<'a> {
             )));
         }
 
-        let dist = manifest.root.join("dist").join(os.as_str());
-        pack::desktop::materialise(&layout, &binary, icon, &dist)
-            .map_err(|e| io_err(&e.path, e.source))?;
+        let dist = self.profile.dist_dir(&output)?.child(os.as_str())?;
+        let bundle_root = pack::desktop::materialise(&layout, &binary, icon, &dist)?;
 
         println!(
             "packaged `{}` for {} → {}",
             manifest.name,
             os.as_str(),
-            dist.join(&layout.root_name).display()
+            bundle_root.display()
         );
         println!("  {}", os.webview_runtime_note());
         if os != pack::desktop::DesktopOs::Linux {
@@ -421,22 +444,25 @@ impl<'a> BundleAssembler<'a> {
         let accepts = &manifest.capabilities_accept;
         let icon = manifest.icon.as_deref();
 
-        // Build the `--target wasm` SPA into the project's `out/rust`, then
-        // collect its `www/` tree. The wasm bundle pipeline (emit + cargo +
-        // wasm-bindgen) is the single source of the hostable bundle; invoking
-        // it through this binary keeps that pipeline authoritative rather than
-        // re-implemented here.
-        let build_dir = manifest.root.join("out").join("rust");
-        build_wasm_for_mobile(self.manifest_path, &build_dir, self.profile)?;
-        let www_dir = build_dir.join("www");
+        // Build the `--target wasm` SPA into the project's output root, then
+        // collect its `www/` tree from the profile's crate. The wasm bundle
+        // pipeline (emit + cargo + wasm-bindgen) is the single source of the
+        // hostable bundle; invoking it through this binary keeps that pipeline
+        // authoritative rather than re-implemented here.
+        let output = OutputRoot::resolve(None, &ProjectPaths::from_manifest(manifest))?;
+        build_wasm_for_mobile(self.manifest_path, output.path(), self.profile)?;
+        // The SPA is read from the owned crate; a symlinked `www/` is refused so
+        // the shell can never pick up files from outside the build output.
+        let www_dir = OwnedDir::claim(&output.area_path(self.profile.crate_areas())?)?
+            .path_to("www")?
+            .path();
         let bundle = pack::mobile::SpaBundle::from_www_dir(&www_dir)
             .map_err(|e| CliError::UsageOwned(e.to_string()))?;
 
         let layout = pack::mobile::layout(os, &identity, accepts, &bundle, icon)?;
 
-        let dist = manifest.root.join("dist").join(os.as_str());
-        let shell_root = pack::mobile::materialise(&layout, icon, &dist)
-            .map_err(|e| io_err(&e.path, e.source))?;
+        let dist = self.profile.dist_dir(&output)?.child(os.as_str())?;
+        let shell_root = pack::mobile::materialise(&layout, icon, &dist)?;
 
         println!(
             "packaged `{}` for {} → {}",
@@ -544,9 +570,10 @@ pub fn pack_mobile(
     BundleAssembler::gate_mobile(&manifest, &manifest_path, profile, &root)?.assemble(os)
 }
 
-/// Build the hostable SPA bundle at `build_dir/www/` through this binary —
-/// `ipe build --target wasm` for a dev bundle, `ipe release --target wasm` for a
-/// production one.
+/// Build the hostable SPA bundle under `output_root` through this binary.
+///
+/// `ipe build --target wasm` for a dev bundle (`<root>/rust/www/`), `ipe
+/// release --target wasm` for a production one (`<root>/release/rust/www/`).
 ///
 /// Invoking the same binary keeps the wasm bundle pipeline (emit + cargo +
 /// wasm-bindgen) authoritative — the mobile shell hosts exactly the bundle a
@@ -558,7 +585,7 @@ pub fn pack_mobile(
 /// wasm build exits non-zero; [`CliError::Io`] when the build cannot be spawned.
 pub fn build_wasm_for_mobile(
     manifest_path: &Path,
-    build_dir: &Path,
+    output_root: &Path,
     profile: BundleProfile,
 ) -> Result<(), CliError> {
     let exe = std::env::current_exe().map_err(|e| {
@@ -575,7 +602,7 @@ pub fn build_wasm_for_mobile(
         .arg(verb)
         .arg(project_dir)
         .args(["--target", "wasm", "--out"])
-        .arg(build_dir)
+        .arg(output_root)
         .status()
         .map_err(|source| CliError::Io {
             path: exe.clone(),
@@ -2548,7 +2575,7 @@ pub fn apply_fixes_cmd<W: Write>(entry: &Path, auto: bool, w: &mut W) -> Result<
         return Ok(());
     }
 
-    write_atomic(entry, &patched)?;
+    let backup = rewrite_user_file(entry, &patched, RewriteKind::Lossy)?;
     writeln!(
         w,
         "fix: applied {} edit(s) to {}",
@@ -2556,6 +2583,9 @@ pub fn apply_fixes_cmd<W: Write>(entry: &Path, auto: bool, w: &mut W) -> Result<
         entry.display()
     )
     .map_err(|e| io_err(entry, e))?;
+    if let Some(backup) = backup {
+        writeln!(w, "fix: original kept at {}", backup.display()).map_err(|e| io_err(entry, e))?;
+    }
     Ok(())
 }
 
@@ -2584,28 +2614,32 @@ pub fn read_yes_no_default(default: bool) -> bool {
     }
 }
 
-/// Write `contents` to `target` atomically: write a sibling temp file, then
-/// rename it over `target` (atomic on a single filesystem). On a rename
-/// failure the temp file is removed so no debris is left behind.
+/// Replace a user-owned file atomically.
 ///
-/// Retries ONCE, recreating `target`'s parent directory, when the write or
-/// rename fails with `NotFound`. This closes a real race surfaced by the
-/// emit→cargo bridge (`reconcile_emitted_project`, this function's
-/// other caller besides `ipe fix`): several `crates/ipe/tests/
-/// golden_*` integration-test files share ONE `CARGO_TARGET_TMPDIR`-rooted
-/// output directory across sibling `#[test]` functions, and `cargo-nextest`
-/// runs each test as its own process — so one test's `remove_dir_all` +
-/// rebuild can delete a directory this function is mid-write into. A single
-/// retry recovers from that transient case; a genuinely permanent failure
-/// (permissions, a disallowed ancestor) still surfaces as an error after the
-/// retry.
+/// Used for `ipe.lock`, a rewritten source, and a health config.
+///
+/// A sibling temp file is created exclusively and renamed over `target`
+/// (atomic on a single filesystem); on failure the temp file is removed.
+/// Build products never come here — they go through
+/// [`crate::output_dir::OwnedPath`]. Retries once, recreating the parent
+/// directory, when the write or rename fails with `NotFound`.
+///
+/// # Errors
+/// [`CliError::Io`] on a filesystem failure.
 pub fn write_atomic(target: &Path, contents: &str) -> Result<(), CliError> {
+    // Unique per process, call, and instant: the temp file is created
+    // exclusively, so a stale leftover of an earlier run can never collide.
+    static TMP_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let dir = target.parent().filter(|p| !p.as_os_str().is_empty());
     let name = target.file_name().map_or_else(
         || String::from("source.ipe"),
         |n| n.to_string_lossy().into_owned(),
     );
-    let tmp_name = format!(".{name}.ipec-fix.{}.tmp", std::process::id());
+    let seq = TMP_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.subsec_nanos());
+    let tmp_name = format!(".{name}.ipec-fix.{}.{seq}.{nanos}.tmp", std::process::id());
     let tmp = match dir {
         Some(d) => d.join(tmp_name),
         None => PathBuf::from(tmp_name),
@@ -2623,15 +2657,163 @@ pub fn write_atomic(target: &Path, contents: &str) -> Result<(), CliError> {
     }
 }
 
-/// Write `contents` to `tmp`, then rename it over `target`. On a rename
-/// failure the temp file is removed so no debris is left behind.
+/// Write `contents` to `tmp`, then rename it over `target`.
+///
+/// On a rename failure the temp file is removed so no debris is left behind.
+///
+/// `tmp` is created exclusively (`create_new`): a pre-existing file or symlink
+/// at that name is never truncated or written through. The replacement keeps
+/// `target`'s permission bits, so a rewrite never changes a file's mode.
 pub fn write_and_rename(tmp: &Path, target: &Path, contents: &str) -> Result<(), CliError> {
-    fs::write(tmp, contents).map_err(|e| io_err(tmp, e))?;
+    let written = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(tmp)
+        .and_then(|mut file| {
+            file.write_all(contents.as_bytes())?;
+            if let Ok(meta) = fs::metadata(target) {
+                file.set_permissions(meta.permissions())?;
+            }
+            Ok(())
+        });
+    if let Err(e) = written {
+        if e.kind() != std::io::ErrorKind::AlreadyExists {
+            let _ = fs::remove_file(tmp);
+        }
+        return Err(io_err(tmp, e));
+    }
     if let Err(e) = fs::rename(tmp, target) {
         let _ = fs::remove_file(tmp);
         return Err(io_err(target, e));
     }
     Ok(())
+}
+
+/// Whether rewriting a user file can lose information the user may want back.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RewriteKind {
+    /// Layout only, proven meaning-preserving (`ipe fmt`'s round-trip guard).
+    Lossless,
+    /// A change to the code itself (`ipe fix`, `lint --fix`, `init --force`).
+    ///
+    /// The original is copied to a backup first.
+    Lossy,
+}
+
+/// The directory, beside a rewritten file, that holds ipe's backup copies.
+pub const BACKUP_DIR: &str = ".ipe-backup";
+
+/// The most backup names tried for one file within the same nanosecond.
+const BACKUP_NAME_ATTEMPTS: u32 = 16;
+
+/// Rewrite a user-owned file the user named explicitly.
+///
+/// A symlink is resolved to the real file (the file the user edits); the
+/// original is copied to a backup first when the rewrite is
+/// [`RewriteKind::Lossy`]; then the file is replaced atomically — never
+/// truncated in place, so a crash mid-write leaves the original intact. Returns
+/// the backup path when one was made.
+///
+/// # Errors
+/// [`CliError::Io`] when the backup or the replacement fails; the original is
+/// untouched in either case.
+pub fn rewrite_user_file(
+    path: &Path,
+    contents: &str,
+    kind: RewriteKind,
+) -> Result<Option<PathBuf>, CliError> {
+    let real = fs::canonicalize(path).map_err(|e| io_err(path, e))?;
+    rewrite_real_file(&real, contents, kind)
+}
+
+/// Rewrite a user-owned file a directory walk under `root` reached.
+///
+/// As [`rewrite_user_file`], but the file must resolve inside `root`: a
+/// symlink leading out of the project is refused, never followed.
+///
+/// # Errors
+/// [`crate::output_dir::OutputRefusal::OutsideProject`] for a file escaping
+/// `root`; otherwise as [`rewrite_user_file`].
+pub fn rewrite_walked_file(
+    root: &Path,
+    path: &Path,
+    contents: &str,
+    kind: RewriteKind,
+) -> Result<Option<PathBuf>, CliError> {
+    let real = crate::output_dir::contained_in(root, path)?;
+    rewrite_real_file(&real, contents, kind)
+}
+
+/// Back `real` up when `kind` is lossy, then replace it atomically.
+fn rewrite_real_file(
+    real: &Path,
+    contents: &str,
+    kind: RewriteKind,
+) -> Result<Option<PathBuf>, CliError> {
+    let backup = match kind {
+        RewriteKind::Lossless => None,
+        RewriteKind::Lossy => Some(backup_user_file(real)?),
+    };
+    write_atomic(real, contents)?;
+    Ok(backup)
+}
+
+/// Copy `real` to `<its dir>/.ipe-backup/<name>.<nanos>.<n>`.
+///
+/// Each backup name is created exclusively, so no existing backup is replaced.
+/// The copy is created owner-only and then given the original's permission
+/// bits, so a private file never has a more readable backup, even briefly. A
+/// symlinked `.ipe-backup` is refused.
+///
+/// # Errors
+/// [`CliError::OutputRefused`] for a symlinked backup directory;
+/// [`CliError::Io`] on any filesystem failure, or when every candidate name is
+/// taken.
+pub fn backup_user_file(real: &Path) -> Result<PathBuf, CliError> {
+    let dir = real
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    let name = real.file_name().map_or_else(
+        || String::from("source"),
+        |n| n.to_string_lossy().into_owned(),
+    );
+    let backup_dir = dir.join(BACKUP_DIR);
+    if fs::symlink_metadata(&backup_dir).is_ok_and(|m| m.file_type().is_symlink()) {
+        return Err(crate::output_dir::OutputRefusal::Symlink(backup_dir).into());
+    }
+    fs::create_dir_all(&backup_dir).map_err(|e| io_err(&backup_dir, e))?;
+    let permissions = fs::metadata(real)
+        .map_err(|e| io_err(real, e))?
+        .permissions();
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_nanos());
+    for attempt in 0..BACKUP_NAME_ATTEMPTS {
+        let dest = backup_dir.join(format!("{name}.{stamp}.{attempt}"));
+        let mut options = fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt as _;
+            options.mode(0o600);
+        }
+        match options.open(&dest) {
+            Ok(mut copy) => {
+                let mut original = fs::File::open(real).map_err(|e| io_err(real, e))?;
+                std::io::copy(&mut original, &mut copy).map_err(|e| io_err(&dest, e))?;
+                copy.set_permissions(permissions)
+                    .map_err(|e| io_err(&dest, e))?;
+                return Ok(dest);
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(e) => return Err(io_err(&dest, e)),
+        }
+    }
+    Err(io_err(
+        &backup_dir,
+        std::io::Error::from(std::io::ErrorKind::AlreadyExists),
+    ))
 }
 
 pub fn io_err(path: &Path, source: std::io::Error) -> CliError {

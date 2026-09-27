@@ -736,7 +736,7 @@ fn run_scaffold(
 ) -> Result<(), CliError> {
     let fresh = is_fresh_target(target_dir)?;
     if fresh || force {
-        scaffold(target_dir, files)?;
+        scaffold(target_dir, files, force)?;
         let is_tty = std::io::stdin().is_terminal() && std::io::stdout().is_terminal();
         let interactive = should_offer_health_check(is_tty, force);
         if lib {
@@ -877,7 +877,11 @@ fn reconcile_existing(target_dir: &Path, files: &[ManagedFile]) -> Result<(), Cl
                 if let Some(parent) = path.parent() {
                     create_dir_all(parent)?;
                 }
-                write_file(&path, &file.content)?;
+                if exists {
+                    replace_file(&path, &file.content)?;
+                } else {
+                    write_new_file(&path, &file.content)?;
+                }
                 restored.push(file.rel.clone());
             }
             FileAction::Skip => skipped.push(file.rel.clone()),
@@ -955,14 +959,32 @@ fn project_name_for(target_dir: &Path) -> Result<String, CliError> {
     Ok(name)
 }
 
-/// Write every managed file into a fresh (or force-overwritten) target.
-fn scaffold(target_dir: &Path, files: &[ManagedFile]) -> Result<(), CliError> {
+/// Write every managed file into a fresh (or `--force`d) target.
+///
+/// A file that already exists is never silently replaced: without `--force` it
+/// is kept as it is (a fresh target can still hold, say, a README), and with
+/// `--force` the original is backed up before it is overwritten.
+fn scaffold(target_dir: &Path, files: &[ManagedFile], force: bool) -> Result<(), CliError> {
+    let mut kept: Vec<&Path> = Vec::new();
     for file in files {
         let path = target_dir.join(&file.rel);
         if let Some(parent) = path.parent() {
             create_dir_all(parent)?;
         }
-        write_file(&path, &file.content)?;
+        if !path.exists() {
+            write_new_file(&path, &file.content)?;
+        } else if force {
+            replace_file(&path, &file.content)?;
+        } else {
+            kept.push(&file.rel);
+        }
+    }
+    if !kept.is_empty() {
+        let mut body = String::new();
+        for rel in kept {
+            let _ = writeln!(body, "kept {} (unchanged)", rel.display());
+        }
+        print!("{}", style::frame(&style::gutter(&body)));
     }
     Ok(())
 }
@@ -974,11 +996,37 @@ fn create_dir_all(path: &Path) -> Result<(), CliError> {
     })
 }
 
-fn write_file(path: &Path, contents: &str) -> Result<(), CliError> {
-    std::fs::write(path, contents).map_err(|e| CliError::Io {
-        path: path.to_path_buf(),
-        source: e,
-    })
+/// Create a file that must not exist yet (`create_new`).
+///
+/// A file or symlink that appeared at `path` is never overwritten or written
+/// through.
+fn write_new_file(path: &Path, contents: &str) -> Result<(), CliError> {
+    std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
+        .and_then(|mut file| file.write_all(contents.as_bytes()))
+        .map_err(|e| CliError::Io {
+            path: path.to_path_buf(),
+            source: e,
+        })
+}
+
+/// Overwrite an existing user file the user asked to replace.
+///
+/// Its original is backed up first, and the replacement is atomic.
+fn replace_file(path: &Path, contents: &str) -> Result<(), CliError> {
+    if let Some(backup) = crate::rewrite_user_file(path, contents, crate::RewriteKind::Lossy)? {
+        println!(
+            "{}",
+            style::gutter(&format!(
+                "backed up {} to {}",
+                path.display(),
+                backup.display()
+            ))
+        );
+    }
+    Ok(())
 }
 
 /// Whether to offer the interactive `ipe health` check after scaffolding.

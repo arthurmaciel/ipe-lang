@@ -1323,9 +1323,8 @@ fn line_col(src: &str, off: u32) -> (usize, usize) {
 /// The inverse of [`read_package_manifest`] over the fields the manifest carries:
 /// the emitted record re-reads to an equivalent manifest. Only non-default
 /// sections are written, so a minimal manifest serialises to a minimal record.
-/// Used by `ipe migrate config` to rewrite an interim builder manifest (or a
-/// legacy `ipe.toml`) into the record form, and available to any caller that must
-/// emit a manifest.
+/// Available to any caller that must emit a manifest; the round-trip tests below
+/// pin it to the reader.
 #[must_use]
 pub fn render_manifest_record(manifest: &ProjectManifest) -> String {
     let mut fields: Vec<String> = Vec::new();
@@ -1761,12 +1760,12 @@ pub fn remove_manifest_dependency(manifest_path: &Path, name: &str) -> Result<()
     write_manifest_file(manifest_path, &updated)
 }
 
-/// Write `text` to `manifest_path`, mapping an IO failure to [`CliError::Io`].
+/// Write `text` to the user's `manifest_path` atomically, never truncating in place.
+///
+/// The edit is the one dependency entry the user asked to add or drop, with the
+/// rest of the file preserved, so no backup is kept.
 fn write_manifest_file(manifest_path: &Path, text: &str) -> Result<(), CliError> {
-    std::fs::write(manifest_path, text).map_err(|e| CliError::Io {
-        path: manifest_path.to_path_buf(),
-        source: e,
-    })
+    crate::rewrite_user_file(manifest_path, text, crate::RewriteKind::Lossless).map(|_| ())
 }
 
 /// The located byte span of a dependency entry inside the `dependencies` list,

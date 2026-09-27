@@ -125,9 +125,9 @@ fn static_emit_activates_dlmalloc_and_dynamic_rebuild_restores_baseline() {
     );
 }
 
-/// A hand-written (non-generated) `.cargo/config.toml` is never touched by
-/// the hygiene pass — only files starting with the generated marker are ours
-/// to delete.
+/// A hand-written (non-generated) `.cargo/config.toml` placed in an
+/// ipe-owned output dir is never touched by the hygiene pass — only files
+/// starting with the generated marker are ours to delete.
 #[test]
 fn dynamic_build_leaves_user_cargo_config_alone() {
     let scratch = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("static_emit_user_config");
@@ -136,13 +136,16 @@ fn dynamic_build_leaves_user_cargo_config_alone() {
     let out = scratch.join("out");
     let runtime = ipe::resolve_runtime().expect("runtime must resolve");
 
+    // The first build claims `out`; the user's config lands in the owned dir.
+    ipe::build_with_options(&entry, &out, &runtime, BuildOptions::default())
+        .expect("first dynamic build");
     let config_path = out.join(".cargo").join("config.toml");
     std::fs::create_dir_all(out.join(".cargo")).expect("mk .cargo");
     let user_config = "# hand-written by a user\n[net]\noffline = false\n";
     std::fs::write(&config_path, user_config).expect("write user config");
 
     ipe::build_with_options(&entry, &out, &runtime, BuildOptions::default())
-        .expect("dynamic build");
+        .expect("dynamic rebuild");
     let after = std::fs::read_to_string(&config_path).expect("user config must survive");
     assert_eq!(after, user_config);
 }
@@ -674,11 +677,12 @@ fn ipe_run_static_builds_and_executes_a_static_binary() {
         String::from_utf8_lossy(&run.stdout)
     );
 
-    // The executed artifact must be genuinely static.
+    // The executed artifact must be genuinely static. `--out` names the output
+    // root; the emitted crate is its `rust/` area.
     let bin = target_dir
         .join("x86_64-unknown-linux-musl")
         .join("debug")
-        .join(emitted_bin_name(&out));
+        .join(emitted_bin_name(&out.join("rust")));
     let ldd = std::process::Command::new("ldd")
         .arg(&bin)
         .output()
