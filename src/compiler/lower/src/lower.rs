@@ -15532,8 +15532,13 @@ impl<'a> Lowerer<'a> {
                 // classifier (an inner lambda capturing a pure-`Fun` param
                 // defers to the param loop below instead of IPE-L0126).
                 let param_syms: Vec<Symbol> = params.iter().map(|(s, _)| *s).collect();
-                let body_result =
-                    self.with_promotable_fn_binders(param_syms, || self.lower_expr(body));
+                let mut row_vars = BTreeSet::new();
+                canon_sig_collect_arg_row_vars(ty, &mut row_vars);
+                let body_result = self
+                    .reject_generic_app_entries_in(body, &row_vars)
+                    .and_then(|()| {
+                        self.with_promotable_fn_binders(param_syms, || self.lower_expr(body))
+                    });
                 *self.current_poly_tvars.borrow_mut() = saved_poly_tvars;
                 self.fn_is_async.set(prev_async);
                 let mut lowered_body = self.fold_param_prologues(prologue, body_result?, body)?;
@@ -15938,8 +15943,11 @@ impl<'a> Lowerer<'a> {
                     self.fn_is_async.set(matches!(ret, IrType::Task(_)));
                     // Same promotable-fn-binder registration as the Typed path.
                     let param_syms: Vec<Symbol> = params.iter().map(|(s, _)| *s).collect();
-                    let body_result =
-                        self.with_promotable_fn_binders(param_syms, || self.lower_expr(body));
+                    let body_result = self
+                        .reject_generic_app_entries_in(body, &BTreeSet::new())
+                        .and_then(|()| {
+                            self.with_promotable_fn_binders(param_syms, || self.lower_expr(body))
+                        });
                     self.fn_is_async.set(prev_async);
                     if let Some(saved) = saved_poly_tvars {
                         *self.current_poly_tvars.borrow_mut() = saved;
@@ -15987,7 +15995,9 @@ impl<'a> Lowerer<'a> {
                 // Save/set/restore fn_is_async for the 0-param (value-binding) path.
                 let prev_async = self.fn_is_async.get();
                 self.fn_is_async.set(matches!(ret, IrType::Task(_)));
-                let lowered_body = self.lower_expr(body);
+                let lowered_body = self
+                    .reject_generic_app_entries_in(body, &BTreeSet::new())
+                    .and_then(|()| self.lower_expr(body));
                 self.fn_is_async.set(prev_async);
                 if let Some(saved) = saved_poly_tvars {
                     *self.current_poly_tvars.borrow_mut() = saved;
@@ -25069,14 +25079,107 @@ impl<'a> Lowerer<'a> {
         let Some(type_var) = offending else {
             return Ok(());
         };
+        Err(self.generic_app_entry_error(kernel, span, type_var))
+    }
+
+    /// The IPE-N0051 refusal of app entry `kernel` at `span`, naming the generic `type_var` it is built over.
+    fn generic_app_entry_error(
+        &self,
+        kernel: KernelFn,
+        span: Span,
+        type_var: Symbol,
+    ) -> Diagnostic {
         let def = kernel.def();
-        Err(Diagnostic::Name {
+        Diagnostic::Name {
             span,
             msg: NameError::GenericAppEntry {
                 entry: format!("{}.{}", def.qualifier, def.name).into_boxed_str(),
                 type_var: self.resolve(type_var).unwrap_or("a").into(),
             },
-        })
+        }
+    }
+
+    /// Refuse every app-entry reference in a definition's body before any of the body is lowered.
+    ///
+    /// [`Self::lower_callee`] refuses a generic app entry where the reference
+    /// itself is lowered, but a sub-expression lowered earlier — a `let`
+    /// alias's value, a cfg field — can hit an unrelated lowering limit first
+    /// and report the program for the wrong reason. Walking the whole body
+    /// first makes IPE-N0051 the refusal wherever the entry sits.
+    ///
+    /// A region type carries no record row tails, so it cannot show whether an
+    /// entry's model reaches one of `row_vars` (the annotation's row
+    /// generics). With any row generic in scope an app entry is refused
+    /// (fail-closed).
+    ///
+    /// The walk is an explicit work stack over the canonical tree, whose size
+    /// the parser's limits already bound.
+    fn reject_generic_app_entries_in(
+        &self,
+        body: &canon::Expr,
+        row_vars: &BTreeSet<Symbol>,
+    ) -> DResult<()> {
+        let mut work: Vec<&canon::Expr> = vec![body];
+        while let Some(e) = work.pop() {
+            match &e.value {
+                canon::Expr_::VarKernel {
+                    id: Some(kernel), ..
+                } => {
+                    if kernel.is_app_entry() {
+                        self.reject_generic_app_entry(*kernel, e.span)?;
+                        if let Some(row_var) = row_vars.first() {
+                            return Err(self.generic_app_entry_error(*kernel, e.span, *row_var));
+                        }
+                    }
+                }
+                canon::Expr_::Lambda(_, inner) | canon::Expr_::Access(inner, _) => {
+                    work.push(inner);
+                }
+                canon::Expr_::Call(callee, args) => {
+                    work.extend(args.iter().rev());
+                    work.push(callee);
+                }
+                canon::Expr_::ForeignCall { args, .. }
+                | canon::Expr_::Tuple(args)
+                | canon::Expr_::List(args) => work.extend(args.iter().rev()),
+                canon::Expr_::Binop { lhs, rhs, .. } | canon::Expr_::Cons(lhs, rhs) => {
+                    work.push(rhs);
+                    work.push(lhs);
+                }
+                canon::Expr_::Case(scrutinee, branches) => {
+                    work.extend(branches.iter().rev().map(|b| &b.body));
+                    work.push(scrutinee);
+                }
+                canon::Expr_::Let(bindings, inner) => {
+                    work.push(inner);
+                    work.extend(bindings.iter().rev().map(|b| &b.body));
+                }
+                canon::Expr_::If(branches, else_expr) => {
+                    work.push(else_expr);
+                    for (cond, then) in branches.iter().rev() {
+                        work.push(then);
+                        work.push(cond);
+                    }
+                }
+                canon::Expr_::Record(fields) => work.extend(fields.iter().rev().map(|(_, v)| v)),
+                canon::Expr_::Update(base, fields) => {
+                    work.extend(fields.iter().rev().map(|(_, v)| v));
+                    work.push(base);
+                }
+                canon::Expr_::VarKernel { id: None, .. }
+                | canon::Expr_::VarLocal(_)
+                | canon::Expr_::VarTopLevel { .. }
+                | canon::Expr_::VarCtor { .. }
+                | canon::Expr_::Int(_)
+                | canon::Expr_::Float(_)
+                | canon::Expr_::Str(_)
+                | canon::Expr_::PathLit(_)
+                | canon::Expr_::CustomElementCtor(_)
+                | canon::Expr_::Char(_)
+                | canon::Expr_::Unit => {}
+            }
+        }
+        Ok(())
     }
 
     /// The first generic of the enclosing definition that `t` mentions, in a left-to-right walk.
