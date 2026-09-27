@@ -66,7 +66,7 @@ fn sprite_wrapper_pkg(wrapper_path: &str) -> PkgInfo {
 /// symbol — the emit path does not distinguish it, which is the point.
 #[test]
 fn a_marked_trait_impl_type_binds_its_symbols_and_depends_by_path() {
-    let pkg = sprite_wrapper_pkg("wrappers/sprite");
+    let pkg = sprite_wrapper_pkg("/w/wrappers/sprite");
     let bindings = emit_bindings(&pkg);
     assert!(
         bindings.contains("pub fn sprite_wrap_spawn("),
@@ -94,7 +94,7 @@ fn a_marked_trait_impl_type_binds_its_symbols_and_depends_by_path() {
     let deps = cargo_dep_lines(&pkg).expect("renders a path dep line");
     assert_eq!(
         deps,
-        [r#"sprite_wrap = { path = "wrappers/sprite" }"#],
+        [r#"sprite_wrap = { path = "/w/wrappers/sprite" }"#],
         "the wrapper is a path dependency of the emitted app crate"
     );
 }
@@ -108,7 +108,7 @@ fn a_marked_borrowed_return_method_over_drops() {
         "pkg": "sprite_wrap",
         "name": "sprite_wrap",
         "version": "0.1.0",
-        "wrapperPath": "wrappers/sprite",
+        "wrapperPath": "/w/wrappers/sprite",
         "functions": [
             {
                 "name": "spawn",

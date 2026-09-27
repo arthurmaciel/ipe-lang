@@ -721,6 +721,17 @@ pub enum WireDefect {
         /// The offending path.
         got: String,
     },
+    /// A wrapper-crate path is not an absolute, normalized, charset-legal path.
+    ///
+    /// The path is spliced into a `path = "…"` TOML value of the emitted
+    /// `Cargo.toml`; a relative or `..`-bearing path would bind a directory
+    /// other than the one the install jail canonicalized.
+    InvalidWrapperPath {
+        /// The offending path.
+        got: String,
+        /// Which structural rule was broken.
+        reason: &'static str,
+    },
     /// A resolved crate version carries a character outside the semver charset
     /// `[0-9A-Za-z.*=<>~^,+ -]`. The version is spliced into a TOML value
     /// position of the emitted `Cargo.toml` (`<name> = "=<version>"`); a value
@@ -738,6 +749,46 @@ pub enum WireDefect {
     InvalidFeature {
         /// The offending feature string.
         got: String,
+    },
+    /// A cached `[dependencies]` line is not the canonical pinned form.
+    ///
+    /// The manifest emitter renders `<name> = "=<version>"`, or an inline
+    /// table with a `version`/`path` key and an optional non-empty feature
+    /// list; any other text is refused rather than spliced into `Cargo.toml`.
+    InvalidDependencyLine {
+        /// The offending line.
+        got: String,
+        /// Which structural rule was broken.
+        reason: &'static str,
+    },
+    /// A dependency carries no version or path pin.
+    ///
+    /// An unpinned line would let cargo pick an arbitrary release.
+    UnpinnedDependency {
+        /// The dependency's package name.
+        name: String,
+    },
+    /// A binding names a transparent shape the crate's catalog does not carry.
+    ///
+    /// The conversion glue for that position has no shape to be built from,
+    /// so the binding cannot be wired soundly.
+    UnknownTransparentShape {
+        /// The binding's Ipê-visible name.
+        binding: String,
+        /// The transparent nominal the binding names.
+        shape: String,
+    },
+    /// A binding's per-parameter transparent shapes do not align with its arity.
+    ///
+    /// The conversion glue is indexed by argument position, so a misaligned
+    /// list would convert the wrong argument or skip one.
+    TransparentArityMismatch {
+        /// The binding's Ipê-visible name.
+        binding: String,
+        /// The binding's Ipê-side arity.
+        arity: usize,
+        /// How many parameter positions the binding describes.
+        params: usize,
     },
     /// A `[rust.define.closure]` signature does not parse into the closed
     /// [`crate::carrier::ClosureSig`] shape: a parameter or return component
@@ -791,84 +842,95 @@ impl fmt::Display for WireDefect {
                 f,
                 "unknown effect {got:?} (expected \"pure\", \"fallible\", or \"effectful\")"
             ),
-            Self::TypeRefDiscriminator { present } => {
-                if present.is_empty() {
-                    write!(
-                        f,
-                        "TypeRef must have exactly one of `param`, `prim`, `ctor`, `closure`, `serdeValue`, or `serdeValueRef`"
-                    )
-                } else {
-                    write!(
-                        f,
-                        "TypeRef carries more than one discriminator: {}",
-                        present.join(", ")
-                    )
-                }
-            }
-            Self::InvalidIdent { got } => {
-                write!(f, "{got:?} is not a legal Rust identifier")
-            }
+            Self::TypeRefDiscriminator { present } => fmt_type_ref_discriminator(f, present),
+            Self::InvalidIdent { got } => write!(f, "{got:?} is not a legal Rust identifier"),
             Self::InvalidModulePath { got } => {
                 write!(f, "{got:?} is not a legal Rust identifier path")
             }
-            Self::InvalidType { got } => {
-                write!(
-                    f,
-                    "{got:?} is outside the closed FFI type grammar (paths, generics, \
+            Self::InvalidType { got } => write!(
+                f,
+                "{got:?} is outside the closed FFI type grammar (paths, generics, \
                      borrows, tuples, arrays only — no statement tokens)"
-                )
-            }
-            Self::InvalidPattern { got } => {
-                write!(
-                    f,
-                    "{got:?} is not a legal enum-arm pattern (a variant identifier with an \
+            ),
+            Self::InvalidPattern { got } => write!(
+                f,
+                "{got:?} is not a legal enum-arm pattern (a variant identifier with an \
                      optional (..) or {{..}} suffix)"
-                )
-            }
-            Self::InvalidSelector { got } => {
-                write!(
-                    f,
-                    "{got:?} is not a legal field selector (a field identifier or a decimal \
+            ),
+            Self::InvalidSelector { got } => write!(
+                f,
+                "{got:?} is not a legal field selector (a field identifier or a decimal \
                      tuple index)"
-                )
+            ),
+            Self::InvalidPkgPath { got } => write!(
+                f,
+                "{got:?} is not a legal package path (it carries a control character)"
+            ),
+            Self::InvalidWrapperPath { got, reason } => {
+                write!(f, "{got:?} is not a legal wrapper-crate path: {reason}")
             }
-            Self::InvalidPkgPath { got } => {
-                write!(
-                    f,
-                    "{got:?} is not a legal package path (it carries a control character)"
-                )
-            }
-            Self::InvalidVersion { got } => {
-                write!(
-                    f,
-                    "{got:?} is not a legal crate version (it must match the semver charset \
+            Self::InvalidVersion { got } => write!(
+                f,
+                "{got:?} is not a legal crate version (it must match the semver charset \
                      [0-9A-Za-z.*=<>~^,+ -])"
-                )
-            }
-            Self::InvalidFeature { got } => {
-                write!(
-                    f,
-                    "{got:?} is not a legal cargo feature name (it must match the charset \
+            ),
+            Self::InvalidFeature { got } => write!(
+                f,
+                "{got:?} is not a legal cargo feature name (it must match the charset \
                      [A-Za-z0-9_+./?:-])"
-                )
-            }
-            Self::InvalidClosureSig { got, reason } => {
-                write!(
-                    f,
-                    "{got:?} is not a legal define.closure signature: {reason}"
-                )
-            }
-            Self::RecursiveDefineType { name, cycle } => {
-                write!(
-                    f,
-                    "define type {name:?} is recursive ({}) — a nominal FFI type cannot \
+            ),
+            Self::InvalidDependencyLine { got, reason } => write!(
+                f,
+                "{got:?} is not a canonical pinned dependency line: {reason}"
+            ),
+            Self::UnpinnedDependency { name } => write!(
+                f,
+                "dependency `{name}` carries no version or path pin (an unpinned dependency \
+                 line is forbidden)"
+            ),
+            Self::UnknownTransparentShape { binding, shape } => write!(
+                f,
+                "binding `{binding}` converts through transparent type `{shape}`, which the \
+                 crate's `transparentTypes` does not carry"
+            ),
+            Self::TransparentArityMismatch {
+                binding,
+                arity,
+                params,
+            } => write!(
+                f,
+                "binding `{binding}` describes {params} transparent parameter position(s) but \
+                 has arity {arity}"
+            ),
+            Self::InvalidClosureSig { got, reason } => write!(
+                f,
+                "{got:?} is not a legal define.closure signature: {reason}"
+            ),
+            Self::RecursiveDefineType { name, cycle } => write!(
+                f,
+                "define type {name:?} is recursive ({}) — a nominal FFI type cannot \
                      reference itself (no boxed indirection is available in the closed carrier \
                      set); break the cycle by indirecting through a crate handle the FFI can name",
-                    cycle.join(" -> ")
-                )
-            }
+                cycle.join(" -> ")
+            ),
             Self::Json { detail } => write!(f, "{detail}"),
         }
+    }
+}
+
+/// Render a `TypeRef` that carries zero or several discriminators.
+fn fmt_type_ref_discriminator(f: &mut fmt::Formatter<'_>, present: &[String]) -> fmt::Result {
+    if present.is_empty() {
+        write!(
+            f,
+            "TypeRef must have exactly one of `param`, `prim`, `ctor`, `closure`, `serdeValue`, or `serdeValueRef`"
+        )
+    } else {
+        write!(
+            f,
+            "TypeRef carries more than one discriminator: {}",
+            present.join(", ")
+        )
     }
 }
 

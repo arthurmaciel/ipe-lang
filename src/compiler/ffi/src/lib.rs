@@ -14,7 +14,7 @@
 //! forbidden.
 //!
 //! Module DAG (leaf-first): `num_coerce` → `diag` → `naming` → `carrier` /
-//! `transparency` / `pkginfo` / `typeref` → `call` → `emit` / `bindings` →
+//! `transparency` / `pkginfo` / `typeref` → `dep_line` / `call` → `emit` / `bindings` →
 //! `instance` → `driver` → `unify`.
 
 pub mod asserted;
@@ -22,6 +22,7 @@ pub mod bindings;
 pub mod call;
 pub mod capability_scan;
 pub mod carrier;
+pub mod dep_line;
 pub mod diag;
 pub mod driver;
 pub mod emit;

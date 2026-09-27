@@ -621,6 +621,8 @@ messages! {
     cli_output_refused(refusal) = "cli-output-refused";
     /// The module-discovery walk hit its depth ceiling or a symlink cycle.
     cli_discovery_limit_reached(detail) = "cli-discovery-limit-reached";
+    /// A discovered source file names a Windows reserved device as a module segment.
+    cli_device_named_module(path, segment) = "cli-device-named-module";
     /// A locked dependency falls within an advisory's affected range.
     cli_advisory_vulnerable(package, version, severity, id, description, fixed_in) =
         "cli-advisory-vulnerable";
@@ -845,12 +847,8 @@ messages! {
     ffi_module_clash(module, krate) = "ffi-module-clash";
     /// An FFI define type collides with an inspected opaque type.
     ffi_define_opaque_collision(krate, name) = "ffi-define-opaque-collision";
-    /// An installed FFI crate emitted a malformed dependency line.
-    ffi_dependency_line_unparsable(krate, line) = "ffi-dependency-line-unparsable";
-    /// Installed FFI crates pin one dependency to two versions.
+    /// Installed FFI crates pin one dependency to two sources.
     ffi_dependency_pin_conflict(name, first, second) = "ffi-dependency-pin-conflict";
-    /// An FFI binding marks a type transparent without its shape.
-    ffi_transparent_without_shape(krate, name, binding) = "ffi-transparent-without-shape";
     /// An FFI crate claims the reserved asserted-call module.
     ffi_reserved_module_claimed(krate, module) = "ffi-reserved-module-claimed";
     /// An FFI wrapper uses the reserved asserted-shim prefix.

@@ -90,6 +90,9 @@ const MAIN_IPE: &str = "module Main exposing (main)\n\
     \x20               Err _ -> Io.println \"err double\"\n\
     \x20       Err _ -> Io.println \"err shift\"\n";
 
+/// The fixture's package manifest: the FFI cache is scoped to its directory.
+const FIXTURE_MANIFEST: &str = "module Package exposing (package)\n\n\npackage =\n    { name = \"ffi-fixture\", version = \"0.1.0\" }\n";
+
 fn write_project(dir: &Path, main_ipe: &str) -> bool {
     let src = dir.join("src");
     let _ = fs::remove_dir_all(dir);
@@ -97,6 +100,9 @@ fn write_project(dir: &Path, main_ipe: &str) -> bool {
         return false;
     }
     if !seed_ffi_cache(dir) {
+        return false;
+    }
+    if fs::write(dir.join("package.ipe"), FIXTURE_MANIFEST).is_err() {
         return false;
     }
     fs::write(src.join("Main.ipe"), main_ipe).is_ok()

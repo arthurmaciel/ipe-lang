@@ -14,16 +14,18 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
+use ipe_ffi::dep_line::{DepLine, DepSource};
 use ipe_ffi::driver::{CrateName, CrateSpec, FfiCache, InstalledCrate, VersionPin};
 use ipe_ffi::pkginfo::FeatureName;
 
 use crate::CliError;
+use crate::loose_file::ProjectRoot;
 use crate::text;
 
 /// The project-relative FFI cache directory.
 const CACHE_REL: &str = ".ipe/cache/ffi/rust";
 
-/// The project manifest that bounds the upward cache-discovery walk.
+/// The package manifest file name.
 const PROJECT_MANIFEST: &str = "package.ipe";
 
 /// The legacy TOML manifest name the `ipe rust install` text inspector reads
@@ -59,54 +61,121 @@ fn is_trusted_cache_dir(_dir: &Path) -> bool {
     true
 }
 
-/// Walk up from `start` looking for an FFI artifact cache, bounded at the
-/// nearest `package.ipe` project root.
+/// The FFI artifact cache of `scope`, probed in [`ProjectRoot::dir`] only.
 ///
-/// Never walks above the nearest `package.ipe`, so a planted ancestor cache
-/// outside the project cannot be discovered. A found cache not owned by the
-/// invoking uid (or group/other-writable) is REFUSED, not loaded, since its
-/// `_bindings.rs` compiles unsandboxed into the crate.
+/// Never walks up: a package's cache sits beside its `package.ipe`, and a
+/// loose file's beside the file, so a planted ancestor cache outside the
+/// scope is never discovered. A found cache not owned by the invoking uid
+/// (or other-writable) is REFUSED, not loaded, since its `_bindings.rs`
+/// compiles unsandboxed into the crate.
 ///
 /// # Errors
 ///
-/// [`CliError::UsageOwned`] when a discovered cache fails the ownership check.
-pub fn find_cache_root(start: &Path) -> Result<Option<PathBuf>, CliError> {
-    let mut dir = if start.is_dir() {
-        Some(start)
-    } else {
-        start.parent()
-    };
-    while let Some(d) = dir {
-        let candidate = d.join(CACHE_REL);
-        if candidate.is_dir() {
-            if is_trusted_cache_dir(&candidate) {
-                return Ok(Some(candidate));
-            }
-            return Err(CliError::UsageOwned(text::ffi_cache_untrusted(
-                &candidate.display(),
-            )));
-        }
-        // Stop at the project root: do not walk above the nearest package.ipe.
-        if d.join(PROJECT_MANIFEST).is_file() {
-            return Ok(None);
-        }
-        dir = d.parent();
+/// [`CliError::FfiCacheUntrusted`] when the cache fails the ownership check.
+pub fn find_cache_root(scope: &ProjectRoot) -> Result<Option<PathBuf>, CliError> {
+    let candidate = scope.dir().join(CACHE_REL);
+    if !candidate.is_dir() {
+        return Ok(None);
     }
-    Ok(None)
+    if is_trusted_cache_dir(&candidate) {
+        return Ok(Some(candidate));
+    }
+    Err(CliError::FfiCacheUntrusted { path: candidate })
 }
 
-/// Load the installed-crate catalog for a build rooted at (or blamed on)
-/// `blame_path`. Absent cache ⇒ empty catalog.
+/// Why an installed FFI catalog was refused before anything was injected.
+///
+/// Every variant is a trust refusal: the catalog feeds `_bindings.rs`, which
+/// compiles unsandboxed into the crate, so a caller must never degrade around
+/// it as an ordinary build failure.
+#[derive(Debug)]
+pub enum FfiCatalogRefusal {
+    /// The catalog loader rejected a cache artifact (tampered or half-written).
+    Artifact(Box<ipe_ffi::diag::Diagnostic>),
+    /// An installed crate claims the reserved asserted-call module.
+    ReservedModule {
+        /// The claiming crate's slug.
+        slug: String,
+    },
+    /// An installed crate forwards to a wrapper under the reserved asserted-shim prefix.
+    ReservedWrapperPrefix {
+        /// The claiming crate's slug.
+        slug: String,
+        /// The offending wrapper identifier.
+        ident: String,
+    },
+}
+
+impl std::fmt::Display for FfiCatalogRefusal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Artifact(diag) => write!(f, "{diag}"),
+            Self::ReservedModule { slug } => f.write_str(&text::ffi_reserved_module_claimed(
+                slug,
+                &ipe_canon::asserted::ASSERTED_MODULE,
+            )),
+            Self::ReservedWrapperPrefix { slug, ident } => {
+                f.write_str(&text::ffi_reserved_wrapper_prefix(
+                    slug,
+                    ident,
+                    &ipe_canon::asserted::ASSERTED_WRAPPER_PREFIX,
+                ))
+            }
+        }
+    }
+}
+
+/// Load the installed-crate catalog for a build rooted at (or blamed on) `blame_path`.
+///
+/// Absent cache ⇒ empty catalog.
 ///
 /// # Errors
-/// [`CliError::Pipeline`] wrapping the catalog loader's diagnostic (a
+/// [`CliError::FfiCacheUntrusted`] when the cache is untrusted;
+/// [`CliError::FfiCatalogRefused`] when its catalog loader refuses it (a
 /// tampered or half-written cache is refused, never silently skipped).
 pub fn load_catalog_for(blame_path: &Path) -> Result<Vec<InstalledCrate>, CliError> {
-    let Some(cache_root) = find_cache_root(blame_path)? else {
+    load_catalog_at(find_cache_root(&ProjectRoot::of(None, blame_path))?.as_deref())
+}
+
+/// Load the installed-crate catalog from `cache_root`; no cache ⇒ empty catalog.
+fn load_catalog_at(cache_root: Option<&Path>) -> Result<Vec<InstalledCrate>, CliError> {
+    let Some(cache_root) = cache_root else {
         return Ok(Vec::new());
     };
-    ipe_ffi::driver::load_catalog(&cache_root)
-        .map_err(|diag| CliError::UsageOwned(diag.to_string()))
+    ipe_ffi::driver::load_catalog(cache_root)
+        .map_err(|diag| CliError::FfiCatalogRefused(FfiCatalogRefusal::Artifact(Box::new(diag))))
+}
+
+/// Refuse a catalog in which any crate claims an asserted-call reserved name.
+///
+/// The asserted-call classifications lean on two unforgeable names: the
+/// `Rust.Ffi` module and the `ipe_asserted_` wrapper prefix.
+///
+/// # Errors
+/// [`CliError::FfiCatalogRefused`] naming the first claiming crate.
+fn refuse_reserved_claims(catalog: &[InstalledCrate]) -> Result<(), CliError> {
+    for c in catalog {
+        if c.module_name == ipe_canon::asserted::ASSERTED_MODULE {
+            return Err(CliError::FfiCatalogRefused(
+                FfiCatalogRefusal::ReservedModule {
+                    slug: c.slug.clone(),
+                },
+            ));
+        }
+        if let Some(ident) = c
+            .wrapper_idents
+            .iter()
+            .find(|w| w.starts_with(ipe_canon::asserted::ASSERTED_WRAPPER_PREFIX))
+        {
+            return Err(CliError::FfiCatalogRefused(
+                FfiCatalogRefusal::ReservedWrapperPrefix {
+                    slug: c.slug.clone(),
+                    ident: ident.clone(),
+                },
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// Inject each installed crate's interface module into the build's source
@@ -141,10 +210,15 @@ pub fn inject_interfaces(
 /// module-qualified opaque-type map, the de-duplicated pinned dep lines, and
 /// the combined `src/ffi.rs` (one `pub mod <slug>` per crate).
 ///
+/// A wrapper crate is bound by a `name = { path = "…" }` line; identical path
+/// lines from several crates collapse to one.
+///
 /// # Errors
-/// [`CliError::UsageOwned`] when two installed crates pin the SAME
-/// dependency name to different lines — an unbuildable `Cargo.toml` refused
-/// here rather than discovered by `cargo`.
+/// [`CliError::UsageOwned`] when two installed crates pin the SAME direct or
+/// path dependency to different sources — an unbuildable `Cargo.toml`
+/// refused here rather than discovered by `cargo` — including a path line
+/// whose name is a transitive dep the members already disagree on; or when a
+/// define type collides with an inspected opaque of the same crate.
 pub fn assemble_emit(
     catalog: &[InstalledCrate],
 ) -> Result<Option<ipe_backend_rust::FfiEmit>, CliError> {
@@ -170,8 +244,12 @@ pub fn assemble_emit(
     // resolves the transitive graph of the direct pins itself and legitimately links
     // both majors of a build-dep. Such a dep is dropped from the emitted `[dependencies]`
     // (recorded as unpinned) rather than exact-pinned to one arbitrary version.
-    let mut dep_by_name: BTreeMap<String, (String, BTreeSet<String>)> = BTreeMap::new();
-    let mut unpinned_transitives: BTreeSet<String> = BTreeSet::new();
+    // A PATH line is never a transitive: it names a wrapper crate the app must
+    // link, so any disagreement on its name — with a registry pin, another
+    // path, or an already-unpinned transitive — is refused.
+    let mut dep_by_name: BTreeMap<String, (DepLine, BTreeSet<FeatureName>)> = BTreeMap::new();
+    // Unpinned transitive name → the first rendered source seen for it.
+    let mut unpinned_transitives: BTreeMap<String, String> = BTreeMap::new();
     let mut bindings_source = String::from(
         "//! Foreign-crate FFI wrappers — one module per installed crate.\n\
          //! Generated from the project's `.ipe/cache/ffi/rust` artifacts.\n",
@@ -180,7 +258,7 @@ pub fn assemble_emit(
         for (name, path) in &c.opaque_types {
             foreign_types.insert(format!("{}.{name}", c.module_name), path.clone());
         }
-        assemble_wrapper_glue(c, &mut wrapper_glue)?;
+        assemble_wrapper_glue(c, &mut wrapper_glue);
         // A `[rust.define.struct/enum]` type is DEFINED in the emitted
         // `_bindings.rs` (wrapped `pub mod <slug> { … } pub use <slug>::*;` in
         // `src/ffi.rs`), so it resolves at the crate-absolute path
@@ -202,33 +280,40 @@ pub fn assemble_emit(
             foreign_types.insert(key, format!("crate::ffi::{}::{name}", c.slug));
         }
         for line in &c.cargo_deps {
-            let Some((name, version, features)) = parse_dep_line(line) else {
-                return Err(CliError::UsageOwned(text::ffi_dependency_line_unparsable(
-                    &c.slug, &line,
-                )));
-            };
-            if unpinned_transitives.contains(&name) {
+            let name = line.name().as_str().to_owned();
+            if let Some(first) = unpinned_transitives.get(&name) {
+                if matches!(line.source(), DepSource::Path(_)) {
+                    return Err(CliError::UsageOwned(text::ffi_dependency_pin_conflict(
+                        &name,
+                        first,
+                        &line.source().to_string(),
+                    )));
+                }
                 continue;
             }
             match dep_by_name.get_mut(&name) {
-                Some((prev_version, _)) if *prev_version != version => {
-                    if direct_crate_names.contains(&name) {
+                Some((prev, _)) if prev.source() != line.source() => {
+                    let path_bound = matches!(prev.source(), DepSource::Path(_))
+                        || matches!(line.source(), DepSource::Path(_));
+                    if path_bound || direct_crate_names.contains(&name) {
                         return Err(CliError::UsageOwned(text::ffi_dependency_pin_conflict(
                             &name,
-                            &prev_version,
-                            &version,
+                            &prev.source().to_string(),
+                            &line.source().to_string(),
                         )));
                     }
                     // Transitive dep resolved to different versions in different member
                     // jails — defer to Cargo's own transitive resolution.
+                    let first = prev.source().to_string();
                     dep_by_name.remove(&name);
-                    unpinned_transitives.insert(name);
+                    unpinned_transitives.insert(name, first);
                 }
                 Some((_, prev_features)) => {
-                    prev_features.extend(features);
+                    prev_features.extend(line.features().iter().cloned());
                 }
                 None => {
-                    dep_by_name.insert(name, (version, features));
+                    let features = line.features().iter().cloned().collect();
+                    dep_by_name.insert(name, (line.clone(), features));
                 }
             }
         }
@@ -241,8 +326,11 @@ pub fn assemble_emit(
         );
     }
     let dep_lines: Vec<String> = dep_by_name
-        .into_iter()
-        .map(|(name, (version, features))| render_merged_dep_line(&name, &version, &features))
+        .into_values()
+        .map(|(line, features)| {
+            line.with_features(features.into_iter().collect())
+                .to_string()
+        })
         .collect();
     Ok(Some(ipe_backend_rust::FfiEmit {
         foreign_types,
@@ -253,53 +341,27 @@ pub fn assemble_emit(
     }))
 }
 
-/// Assemble one crate's per-wrapper transparent conversion glue from the
-/// interface's structured positions + the crate's transparent shapes.
+/// Render one crate's resolved transparent glue in the backend's vocabulary.
 ///
-/// A referenced shape missing from the catalog is an internal invariant
-/// violation (the interface derived both), refused rather than emitted as a
-/// seam whose two sides disagree.
-///
-/// # Errors
-/// [`CliError::UsageOwned`] naming the crate, binding, and missing shape.
+/// Total: every shape was resolved against the crate's `transparentTypes`
+/// when the catalog loaded, so no binding can name a missing shape here.
 fn assemble_wrapper_glue(
     c: &InstalledCrate,
     wrapper_glue: &mut BTreeMap<String, ipe_backend_rust::FfiWrapperGlue>,
-) -> Result<(), CliError> {
-    for b in &c.bindings {
-        if b.transparent_params.iter().all(Option::is_none) && b.transparent_result.is_none() {
-            continue;
-        }
-        let glue_ty = |name: &str| -> Result<ipe_backend_rust::FfiGlueType, CliError> {
-            let t = c.transparent_types.get(name).ok_or_else(|| {
-                CliError::UsageOwned(text::ffi_transparent_without_shape(
-                    &c.slug,
-                    &name,
-                    &b.ref_name,
-                ))
-            })?;
-            Ok(glue_type_of(&c.module_name, &c.slug, t))
-        };
-        let mut params = Vec::with_capacity(b.transparent_params.len());
-        for p in &b.transparent_params {
-            params.push(match p {
-                None => None,
-                Some(name) => Some(glue_ty(name)?),
-            });
-        }
-        let result = match &b.transparent_result {
-            None => None,
-            Some(r) => Some(ipe_backend_rust::FfiResultGlue {
-                in_result: r.in_result,
-                ty: glue_ty(&r.type_name)?,
-            }),
-        };
+) {
+    let glue_ty =
+        |t: &ipe_ffi::transparency::TransparentType| glue_type_of(&c.module_name, &c.slug, t);
+    for (ident, g) in &c.transparent_glue {
+        let params = g.params.iter().map(|p| p.as_ref().map(glue_ty)).collect();
+        let result = g.result.as_ref().map(|r| ipe_backend_rust::FfiResultGlue {
+            in_result: r.in_result,
+            ty: glue_ty(&r.shape),
+        });
         wrapper_glue.insert(
-            b.wrapper_ident.clone(),
+            ident.clone(),
             ipe_backend_rust::FfiWrapperGlue { params, result },
         );
     }
-    Ok(())
 }
 
 /// One transparent shape in the backend's glue vocabulary. An imported crate
@@ -358,71 +420,6 @@ fn glue_type_of(
     }
 }
 
-/// Parse a generated dep line into `(name, version, features)`. Two shapes are
-/// produced by `cargo_dep_lines`:
-///   `name = "=X.Y.Z"`
-///   `name = { version = "=X.Y.Z", features = ["a", "b"] }`
-/// The version is returned WITHOUT the leading `=`. Returns `None` if neither
-/// shape matches (a malformed line the caller refuses).
-fn parse_dep_line(line: &str) -> Option<(String, String, BTreeSet<String>)> {
-    let (name, rest) = line.split_once('=')?;
-    let name = name.trim().to_owned();
-    let rest = rest.trim();
-    if let Some(inner) = rest.strip_prefix('{').and_then(|s| s.strip_suffix('}')) {
-        // Inline table: pull `version = "=X"` and `features = [...]`.
-        let version = extract_quoted_after(inner, "version")?
-            .trim_start_matches('=')
-            .to_owned();
-        let features = inner
-            .split_once("features")
-            .and_then(|(_, after)| after.split_once('['))
-            .and_then(|(_, list)| list.split_once(']'))
-            .map(|(list, _)| {
-                list.split(',')
-                    .map(|f| f.trim().trim_matches('"').to_owned())
-                    .filter(|f| !f.is_empty())
-                    .collect::<BTreeSet<String>>()
-            })
-            .unwrap_or_default();
-        Some((name, version, features))
-    } else {
-        // Bare: `"=X.Y.Z"`.
-        let version = rest
-            .trim()
-            .trim_matches('"')
-            .trim_start_matches('=')
-            .to_owned();
-        if version.is_empty() {
-            return None;
-        }
-        Some((name, version, BTreeSet::new()))
-    }
-}
-
-/// Extract the first double-quoted string that follows `key` in `s`
-/// (`key = "value"` → `Some("value")`).
-fn extract_quoted_after(s: &str, key: &str) -> Option<String> {
-    let after = s.split_once(key)?.1;
-    let after = after.split_once('"')?.1;
-    let (value, _) = after.split_once('"')?;
-    Some(value.to_owned())
-}
-
-/// Render the merged dep line, matching `render_dep_line`'s two shapes so the
-/// emitted `Cargo.toml` is byte-identical to the single-crate case when there
-/// are no extra features.
-fn render_merged_dep_line(name: &str, version: &str, features: &BTreeSet<String>) -> String {
-    if features.is_empty() {
-        format!("{name} = \"={version}\"")
-    } else {
-        let quoted: Vec<String> = features.iter().map(|f| format!("\"{f}\"")).collect();
-        format!(
-            "{name} = {{ version = \"={version}\", features = [{}] }}",
-            quoted.join(", ")
-        )
-    }
-}
-
 /// All FFI seam outputs produced from a single project-scoped catalog load.
 ///
 /// Returned by [`prepare_ffi`]; consumed by the build pipeline, `ipe watch`,
@@ -449,42 +446,41 @@ pub struct FfiPrep {
 /// these steps independently, or (in `watch`/`lsp`) skipping them entirely —
 /// both are bugs (CO-INCR-005).
 ///
-/// `blame_path` is the project entry file or manifest: the catalog search
-/// walks up from it looking for `.ipe/cache/ffi/rust`.
+/// `blame_path` is the project entry file or manifest: the catalog is read
+/// from `.ipe/cache/ffi/rust` in its [`ProjectRoot::dir`] only.
 ///
 /// `sources` is mutated in-place: one `Rust.<Crate>` interface module is
 /// inserted per installed crate.
 ///
 /// # Errors
-/// [`CliError`] when the catalog is tampered/unreadable, or two installed
-/// crates pin the same dependency to conflicting version lines.
+/// See [`prepare_ffi_in`].
 pub fn prepare_ffi(
     sources: &mut BTreeMap<Vec<String>, (PathBuf, String)>,
     blame_path: &Path,
 ) -> Result<FfiPrep, CliError> {
-    let mut catalog = load_catalog_for(blame_path)?;
-    // The asserted-call classifications lean on two unforgeable names: the
-    // `Rust.Ffi` module and the `ipe_asserted_` wrapper prefix. No installed
-    // crate may claim either — refused at load, before anything is injected.
-    for c in &catalog {
-        if c.module_name == ipe_canon::asserted::ASSERTED_MODULE {
-            return Err(CliError::UsageOwned(text::ffi_reserved_module_claimed(
-                &c.slug,
-                &ipe_canon::asserted::ASSERTED_MODULE,
-            )));
-        }
-        if let Some(ident) = c
-            .wrapper_idents
-            .iter()
-            .find(|w| w.starts_with(ipe_canon::asserted::ASSERTED_WRAPPER_PREFIX))
-        {
-            return Err(CliError::UsageOwned(text::ffi_reserved_wrapper_prefix(
-                &c.slug,
-                &ident,
-                &ipe_canon::asserted::ASSERTED_WRAPPER_PREFIX,
-            )));
-        }
-    }
+    prepare_ffi_in(sources, &ProjectRoot::of(None, blame_path))
+}
+
+/// [`prepare_ffi`] for an already-classified `scope`.
+///
+/// The catalog is read from `.ipe/cache/ffi/rust` in [`ProjectRoot::dir`]
+/// only; a caller that classified its root once (the LSP, which honours the
+/// editor's workspace root) passes it here rather than re-deriving it.
+///
+/// # Errors
+/// [`CliError::FfiCacheUntrusted`] or [`CliError::FfiCatalogRefused`] when
+/// the catalog is untrusted, tampered, or claims a reserved name; another
+/// [`CliError`] when two installed crates pin the same dependency to
+/// conflicting version lines.
+pub fn prepare_ffi_in(
+    sources: &mut BTreeMap<Vec<String>, (PathBuf, String)>,
+    scope: &ProjectRoot,
+) -> Result<FfiPrep, CliError> {
+    let cache_root = find_cache_root(scope)?;
+    let mut catalog = load_catalog_at(cache_root.as_deref())?;
+    // No installed crate may claim a reserved name — refused at load, before
+    // anything is injected.
+    refuse_reserved_claims(&catalog)?;
     // One Ipê home per foreign type: collapse same-defining-path nominals
     // across the catalog BEFORE injection, so every injected signature and
     // the assembled `foreign_types` map agree on one nominal per type.
@@ -492,7 +488,7 @@ pub fn prepare_ffi(
     // Scan for asserted calls BEFORE interface injection, while `sources`
     // holds only project (and stdlib) modules.
     let ScannedFfi { asserted, consts } = scan_asserted(sources, &catalog)?;
-    let cache_hint = find_cache_root(blame_path)?.unwrap_or_default();
+    let cache_hint = cache_root.unwrap_or_default();
     let mut injected = inject_interfaces(sources, &catalog, &cache_hint)?;
     let mut emit = assemble_emit(&catalog)?;
     if !asserted.is_empty() || !consts.is_empty() {
@@ -3812,8 +3808,8 @@ version = \"1\"
         );
     }
 
-    /// `prepare_ffi` with a blame path that has no `.ipe/cache/ffi/rust`
-    /// directory up-tree returns an empty `FfiPrep` (no crates installed).
+    /// `prepare_ffi` with no `.ipe/cache/ffi/rust` in scope returns an empty `FfiPrep`.
+    ///
     /// This is the common case for every project that has never run `ipe add`.
     #[test]
     fn prepare_ffi_no_cache_returns_empty_prep() {
@@ -3826,34 +3822,74 @@ version = \"1\"
         assert!(prep.emit.is_none(), "emit should be None with no crates");
     }
 
-    #[test]
-    fn cache_root_walk_stops_at_the_ipe_toml_project_root() {
-        let tmp = std::env::temp_dir().join(format!("ipe-t1-cacheroot-{}", std::process::id()));
+    /// A fresh scratch directory for one cache-scope test.
+    fn cache_scope_tmp(name: &str) -> PathBuf {
+        let tmp =
+            std::env::temp_dir().join(format!("ipe-cachescope-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&tmp);
-        // Ancestor cache (a planted vector) ABOVE the project root.
-        let ancestor_cache = tmp.join(CACHE_REL);
-        std::fs::create_dir_all(&ancestor_cache).expect("mk ancestor cache");
-        // The project root, with its own package.ipe, one level down; no cache.
+        std::fs::create_dir_all(&tmp).expect("mk tmp");
+        tmp
+    }
+
+    #[test]
+    fn a_half_written_catalog_is_a_typed_refusal() {
+        let tmp = cache_scope_tmp("half-written");
+        let cache = tmp.join(CACHE_REL);
+        std::fs::create_dir_all(&cache).expect("mk cache");
+        std::fs::write(cache.join("x.consumer.json"), "{ not json").expect("write consumer");
+        let entry = tmp.join("Main.ipe");
+        let mut sources = BTreeMap::new();
+        let refused = prepare_ffi(&mut sources, &entry);
+        assert!(
+            matches!(
+                &refused,
+                Err(CliError::FfiCatalogRefused(FfiCatalogRefusal::Artifact(_)))
+            ),
+            "a half-written cache must be refused, never skipped: {:?}",
+            refused.err()
+        );
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn package_scope_never_consults_a_cache_above_the_manifest() {
+        let tmp = cache_scope_tmp("pkg-ancestor");
+        std::fs::create_dir_all(tmp.join(CACHE_REL)).expect("mk ancestor cache");
         let project = tmp.join("proj");
-        std::fs::create_dir_all(&project).expect("mk project");
+        std::fs::create_dir_all(project.join("src")).expect("mk project");
         std::fs::write(
             project.join("package.ipe"),
             "module Package exposing (package)\n",
         )
         .expect("write manifest");
-        let src = project.join("src");
-        std::fs::create_dir_all(&src).expect("mk src");
-        // Discovery from inside the project must NOT climb past package.ipe to the
-        // planted ancestor cache — it returns None.
-        let found = find_cache_root(&src).expect("no error");
+        let found = find_cache_root(&ProjectRoot::of(
+            None,
+            &project.join("src").join("Main.ipe"),
+        ))
+        .expect("no error");
         assert_eq!(found, None, "must not discover the ancestor cache");
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
     #[test]
-    fn owned_project_cache_is_discovered() {
-        let tmp = std::env::temp_dir().join(format!("ipe-t1-owncache-{}", std::process::id()));
+    fn package_scope_ignores_a_cache_nested_below_the_manifest() {
+        let tmp = cache_scope_tmp("pkg-nested");
+        std::fs::write(
+            tmp.join("package.ipe"),
+            "module Package exposing (package)\n",
+        )
+        .expect("write manifest");
+        let src = tmp.join("src");
+        std::fs::create_dir_all(src.join(CACHE_REL)).expect("mk nested cache");
+        let found =
+            find_cache_root(&ProjectRoot::of(None, &src.join("Main.ipe"))).expect("no error");
+        assert_eq!(found, None, "only the manifest directory holds the cache");
         let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn owned_project_cache_is_discovered() {
+        let tmp = cache_scope_tmp("pkg-own");
         let cache = tmp.join(CACHE_REL);
         std::fs::create_dir_all(&cache).expect("mk cache");
         std::fs::write(
@@ -3861,9 +3897,45 @@ version = \"1\"
             "module Package exposing (package)\n",
         )
         .expect("manifest");
-        // The invoker owns a freshly-created dir, so it is trusted + found.
-        let found = find_cache_root(&tmp).expect("no error");
+        let found =
+            find_cache_root(&ProjectRoot::of(None, &tmp.join("package.ipe"))).expect("no error");
         assert_eq!(found.as_deref(), Some(cache.as_path()));
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn loose_file_cache_beside_the_file_is_discovered() {
+        let tmp = cache_scope_tmp("loose-own");
+        let cache = tmp.join(CACHE_REL);
+        std::fs::create_dir_all(&cache).expect("mk cache");
+        let scope = ProjectRoot::of(None, &tmp.join("Main.ipe"));
+        assert_eq!(scope, ProjectRoot::LooseFile(tmp.join("Main.ipe")));
+        let found = find_cache_root(&scope).expect("no error");
+        assert_eq!(found.as_deref(), Some(cache.as_path()));
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// An untrusted cache above a loose file is never consulted: the load
+    /// neither trusts it nor fails on it.
+    #[cfg(unix)]
+    #[test]
+    fn loose_file_never_consults_an_untrusted_parent_cache() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let tmp = cache_scope_tmp("loose-parent");
+        let planted = tmp.join(CACHE_REL);
+        std::fs::create_dir_all(&planted).expect("mk planted cache");
+        std::fs::set_permissions(&planted, std::fs::Permissions::from_mode(0o777)).expect("chmod");
+        let dir = tmp.join("scratch");
+        std::fs::create_dir_all(&dir).expect("mk loose dir");
+        let entry = dir.join("Main.ipe");
+        let found = find_cache_root(&ProjectRoot::of(None, &entry)).expect("no error");
+        assert_eq!(
+            found, None,
+            "a parent cache is outside the loose file's scope"
+        );
+        let mut sources: BTreeMap<Vec<String>, (PathBuf, String)> = BTreeMap::new();
+        let prep = prepare_ffi(&mut sources, &entry).expect("parent cache is never read");
+        assert!(prep.catalog.is_empty());
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
@@ -3871,8 +3943,7 @@ version = \"1\"
     #[test]
     fn world_writable_cache_is_refused() {
         use std::os::unix::fs::PermissionsExt as _;
-        let tmp = std::env::temp_dir().join(format!("ipe-t1-wwcache-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&tmp);
+        let tmp = cache_scope_tmp("pkg-ww");
         let cache = tmp.join(CACHE_REL);
         std::fs::create_dir_all(&cache).expect("mk cache");
         std::fs::write(
@@ -3880,11 +3951,30 @@ version = \"1\"
             "module Package exposing (package)\n",
         )
         .expect("manifest");
-        // Make the cache world-writable — the delivery vector for a planted
-        // _bindings.rs — and confirm discovery refuses it.
+        // A world-writable cache is the delivery vector for a planted
+        // `_bindings.rs`: discovery refuses it.
         std::fs::set_permissions(&cache, std::fs::Permissions::from_mode(0o777)).expect("chmod");
-        let r = find_cache_root(&tmp);
-        assert!(matches!(r, Err(CliError::UsageOwned(_))), "{r:?}");
+        let r = find_cache_root(&ProjectRoot::Package(tmp.clone()));
+        assert!(
+            matches!(&r, Err(CliError::FfiCacheUntrusted { path }) if *path == cache),
+            "{r:?}"
+        );
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn world_writable_loose_file_cache_is_refused() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let tmp = cache_scope_tmp("loose-ww");
+        let cache = tmp.join(CACHE_REL);
+        std::fs::create_dir_all(&cache).expect("mk cache");
+        std::fs::set_permissions(&cache, std::fs::Permissions::from_mode(0o777)).expect("chmod");
+        let r = find_cache_root(&ProjectRoot::LooseFile(tmp.join("Main.ipe")));
+        assert!(
+            matches!(&r, Err(CliError::FfiCacheUntrusted { path }) if *path == cache),
+            "{r:?}"
+        );
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
@@ -3930,6 +4020,11 @@ version = \"1\"
         }
     }
 
+    /// A canonical stored dep line, typed.
+    fn dep(line: &str) -> DepLine {
+        DepLine::parse(line).expect("fixture dep lines are canonical")
+    }
+
     #[test]
     fn conflicting_dep_pins_are_refused() {
         let mk = |slug: &str, line: &str| InstalledCrate {
@@ -3946,7 +4041,8 @@ version = \"1\"
             dep_versions: BTreeMap::new(),
             inspected_free_fns: BTreeMap::new(),
             inspected_consts: BTreeMap::new(),
-            cargo_deps: vec![line.to_owned()],
+            cargo_deps: vec![dep(line)],
+            transparent_glue: BTreeMap::new(),
             wrapper_idents: BTreeSet::new(),
         };
         // Two crates agreeing on a shared dep line dedupe to one.
@@ -3981,7 +4077,8 @@ version = \"1\"
             dep_versions: BTreeMap::new(),
             inspected_free_fns: BTreeMap::new(),
             inspected_consts: BTreeMap::new(),
-            cargo_deps: vec![line.to_owned()],
+            cargo_deps: vec![dep(line)],
+            transparent_glue: BTreeMap::new(),
             wrapper_idents: BTreeSet::new(),
         };
         let e = assemble_emit(&[
@@ -4023,7 +4120,8 @@ version = \"1\"
             dep_versions: BTreeMap::new(),
             inspected_free_fns: BTreeMap::new(),
             inspected_consts: BTreeMap::new(),
-            cargo_deps: lines.into_iter().map(str::to_owned).collect(),
+            cargo_deps: lines.into_iter().map(dep).collect(),
+            transparent_glue: BTreeMap::new(),
             wrapper_idents: BTreeSet::new(),
         };
         let e = assemble_emit(&[
@@ -4051,6 +4149,125 @@ version = \"1\"
         assert!(
             clash.is_err(),
             "a direct-crate version conflict still refuses"
+        );
+    }
+
+    /// An installed crate carrying exactly `cargo_deps` and nothing else.
+    fn installed(slug: &str, cargo_deps: Vec<DepLine>) -> InstalledCrate {
+        InstalledCrate {
+            slug: slug.to_owned(),
+            module_name: format!("Rust.{slug}"),
+            kernel_name: format!("Rust_{slug}"),
+            interface_source: String::new(),
+            bindings_source: String::new(),
+            opaque_types: BTreeMap::new(),
+            opaque_type_ids: BTreeMap::new(),
+            define_types: BTreeSet::new(),
+            transparent_types: BTreeMap::new(),
+            bindings: Vec::new(),
+            dep_versions: BTreeMap::new(),
+            inspected_free_fns: BTreeMap::new(),
+            inspected_consts: BTreeMap::new(),
+            cargo_deps,
+            transparent_glue: BTreeMap::new(),
+            wrapper_idents: BTreeSet::new(),
+        }
+    }
+
+    /// Whether `result` is exactly the pin-conflict refusal for `name`.
+    fn is_pin_conflict(
+        result: &Result<Option<ipe_backend_rust::FfiEmit>, CliError>,
+        name: &str,
+        first: &str,
+        second: &str,
+    ) -> bool {
+        let expected = text::ffi_dependency_pin_conflict(&name, &first, &second);
+        matches!(result, Err(CliError::UsageOwned(m)) if *m == expected)
+    }
+
+    #[test]
+    fn a_path_and_a_registry_dep_of_one_name_are_refused() {
+        let result = assemble_emit(&[
+            installed("a", vec![dep("engine_wrap = \"=0.1.0\"")]),
+            installed("b", vec![dep("engine_wrap = { path = \"/w/engine\" }")]),
+        ]);
+        assert!(
+            is_pin_conflict(&result, "engine_wrap", "=0.1.0", "path /w/engine"),
+            "registry then path must refuse: {:?}",
+            result.map(|e| e.map(|e| e.dep_lines))
+        );
+        // The refusal holds in either order.
+        let result = assemble_emit(&[
+            installed("b", vec![dep("engine_wrap = { path = \"/w/engine\" }")]),
+            installed("a", vec![dep("engine_wrap = \"=0.1.0\"")]),
+        ]);
+        assert!(
+            is_pin_conflict(&result, "engine_wrap", "path /w/engine", "=0.1.0"),
+            "path then registry must refuse: {:?}",
+            result.map(|e| e.map(|e| e.dep_lines))
+        );
+    }
+
+    #[test]
+    fn two_different_paths_of_one_name_are_refused() {
+        let result = assemble_emit(&[
+            installed("a", vec![dep("engine_wrap = { path = \"/w/engine\" }")]),
+            installed("b", vec![dep("engine_wrap = { path = \"/v/engine\" }")]),
+        ]);
+        assert!(
+            is_pin_conflict(&result, "engine_wrap", "path /w/engine", "path /v/engine"),
+            "two paths for one name must refuse: {:?}",
+            result.map(|e| e.map(|e| e.dep_lines))
+        );
+    }
+
+    #[test]
+    fn identical_path_lines_dedupe_to_one() {
+        let line = "engine_wrap = { path = \"/w/engine\" }";
+        let emit = assemble_emit(&[
+            installed("a", vec![dep(line)]),
+            installed("b", vec![dep(line)]),
+        ])
+        .expect("identical path lines agree")
+        .expect("emit present");
+        assert_eq!(emit.dep_lines, [line]);
+    }
+
+    #[test]
+    fn a_wrapper_crate_emits_exactly_its_driver_path_line() {
+        let doc = serde_json::json!({
+            "pkg": "engine_wrap",
+            "name": "engine_wrap",
+            "version": "0.1.0",
+            "wrapperPath": "/w/engine",
+            "functions": [],
+            "errors": []
+        })
+        .to_string();
+        let pkg = ipe_ffi::pkginfo::PkgInfo::decode_json(&doc).expect("wrapper inspection decodes");
+        let cargo_deps = ipe_ffi::driver::cargo_deps(&pkg).expect("a wrapper renders a path dep");
+        let driver_lines = ipe_ffi::driver::cargo_dep_lines(&pkg).expect("same line, rendered");
+        let emit = assemble_emit(&[installed("engine_wrap", cargo_deps)])
+            .expect("a lone wrapper assembles")
+            .expect("emit present");
+        assert_eq!(emit.dep_lines, driver_lines);
+        assert_eq!(emit.dep_lines, ["engine_wrap = { path = \"/w/engine\" }"]);
+    }
+
+    // A transitive the members already disagree on is dropped for Cargo to
+    // resolve; a later PATH line of that name is a wrapper the app must link,
+    // so it is refused rather than dropped with the transitive.
+    #[test]
+    fn a_path_line_named_like_an_unpinned_transitive_is_refused() {
+        let result = assemble_emit(&[
+            installed("a", vec![dep("a = \"=1.0.0\""), dep("syn = \"=2.0.119\"")]),
+            installed("b", vec![dep("b = \"=1.0.0\""), dep("syn = \"=3.0.0\"")]),
+            installed("c", vec![dep("syn = { path = \"/w/syn\" }")]),
+        ]);
+        assert!(
+            is_pin_conflict(&result, "syn", "=2.0.119", "path /w/syn"),
+            "a path line must never be dropped as an unpinned transitive: {:?}",
+            result.map(|e| e.map(|e| e.dep_lines))
         );
     }
 
@@ -4326,7 +4543,71 @@ version = \"1\"
             inspected_consts: BTreeMap::new(),
             cargo_deps: Vec::new(),
             wrapper_idents: BTreeSet::new(),
+            transparent_glue: BTreeMap::new(),
         }
+    }
+
+    #[test]
+    fn a_crate_claiming_the_reserved_module_is_a_typed_refusal() {
+        let mut krate = crate_with_types("evil", &[], &[]);
+        krate.module_name = ipe_canon::asserted::ASSERTED_MODULE.to_owned();
+        let refused = refuse_reserved_claims(&[krate]);
+        assert!(
+            matches!(
+                &refused,
+                Err(CliError::FfiCatalogRefused(FfiCatalogRefusal::ReservedModule { slug }))
+                    if slug == "evil"
+            ),
+            "reserved-module claim must be refused: {refused:?}"
+        );
+    }
+
+    #[test]
+    fn a_crate_claiming_the_reserved_wrapper_prefix_is_a_typed_refusal() {
+        let mut krate = crate_with_types("evil", &[], &[]);
+        let ident = format!("{}shim", ipe_canon::asserted::ASSERTED_WRAPPER_PREFIX);
+        krate.wrapper_idents.insert(ident.clone());
+        let refused = refuse_reserved_claims(&[krate]);
+        assert!(
+            matches!(
+                &refused,
+                Err(CliError::FfiCatalogRefused(FfiCatalogRefusal::ReservedWrapperPrefix {
+                    slug,
+                    ident: claimed,
+                })) if slug == "evil" && *claimed == ident
+            ),
+            "reserved-prefix claim must be refused: {refused:?}"
+        );
+    }
+
+    #[test]
+    fn a_crate_off_the_reserved_names_passes_the_claim_check() {
+        let mut krate = crate_with_types("fine", &[], &[]);
+        krate.wrapper_idents.insert("ipe_wrap_fine".to_owned());
+        assert!(refuse_reserved_claims(&[krate]).is_ok());
+    }
+
+    #[test]
+    fn reserved_claim_refusals_render_their_catalog_text() {
+        let module = FfiCatalogRefusal::ReservedModule {
+            slug: "evil".to_owned(),
+        };
+        assert_eq!(
+            module.to_string(),
+            text::ffi_reserved_module_claimed(&"evil", &ipe_canon::asserted::ASSERTED_MODULE)
+        );
+        let prefix = FfiCatalogRefusal::ReservedWrapperPrefix {
+            slug: "evil".to_owned(),
+            ident: "ipe_asserted_x".to_owned(),
+        };
+        assert_eq!(
+            prefix.to_string(),
+            text::ffi_reserved_wrapper_prefix(
+                &"evil",
+                &"ipe_asserted_x",
+                &ipe_canon::asserted::ASSERTED_WRAPPER_PREFIX,
+            )
+        );
     }
 
     #[test]
@@ -4374,6 +4655,9 @@ version = \"1\"
                 in_result: false,
             }),
         });
+        c.transparent_glue =
+            ipe_ffi::driver::resolve_transparent_glue(&c.bindings, &c.transparent_types)
+                .expect("the binding names a carried shape");
         let emit = assemble_emit(&[c]).expect("emit ok").expect("emit present");
         let glue = emit
             .wrapper_glue

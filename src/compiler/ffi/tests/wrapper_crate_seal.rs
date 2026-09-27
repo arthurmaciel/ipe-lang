@@ -56,7 +56,7 @@ fn engine_wrapper_pkg(wrapper_path: &str) -> PkgInfo {
 /// a `path` dependency rather than a registry pin.
 #[test]
 fn a_wrapper_crate_binds_its_symbols_and_depends_by_path() {
-    let pkg = engine_wrapper_pkg("wrappers/engine");
+    let pkg = engine_wrapper_pkg("/w/wrappers/engine");
     let bindings = emit_bindings(&pkg);
     // The constructor binds and calls into the wrapper crate by its absolute path.
     assert!(
@@ -91,7 +91,7 @@ fn a_wrapper_crate_binds_its_symbols_and_depends_by_path() {
     let deps = cargo_dep_lines(&pkg).expect("renders a path dep line");
     assert_eq!(
         deps,
-        [r#"engine_wrap = { path = "wrappers/engine" }"#],
+        [r#"engine_wrap = { path = "/w/wrappers/engine" }"#],
         "the wrapper is a path dependency of the emitted app crate"
     );
 }
@@ -105,7 +105,7 @@ fn a_borrowed_return_fn_over_drops_with_a_diagnostic() {
         "pkg": "engine_wrap",
         "name": "engine_wrap",
         "version": "0.1.0",
-        "wrapperPath": "wrappers/engine",
+        "wrapperPath": "/w/wrappers/engine",
         "functions": [
             {
                 "name": "make",
@@ -180,7 +180,7 @@ fn the_emitted_crate_and_wrapper_path_dep_build_and_run() {
     // 2. The emitted app crate: its bindings call into the wrapper by its
     //    crate-absolute path, and it depends on the wrapper by the driver's
     //    `path` dep line (rewritten to point at the crate we just wrote).
-    let pkg = engine_wrapper_pkg("wrappers/engine");
+    let pkg = engine_wrapper_pkg("/w/wrappers/engine");
     let bindings = emit_bindings(&pkg);
     let make = wrapper_region(&bindings, "make");
     let describe = wrapper_region(&bindings, "describe");

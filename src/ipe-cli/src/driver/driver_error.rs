@@ -2,7 +2,7 @@ use super::{nearest_command, nearest_group_member};
 use crate::style::TerminalSafe;
 use crate::{
     Diagnostic, Path, PathBuf, Write, api_surface, audit, build_plan, contained_path, delivery,
-    help, io_bounded, machine_output, output_dir, publish, render, render_json, style, text,
+    ffi, help, io_bounded, machine_output, output_dir, publish, render, render_json, style, text,
     toolchain,
 };
 
@@ -347,6 +347,20 @@ pub enum CliError {
     /// A symlink, a directory holding user files, or a path overlapping the
     /// project's sources. Nothing was written, cleaned, or overwritten.
     OutputRefused(output_dir::OutputRefusal),
+    /// An FFI artifact cache failed its ownership check and was not loaded.
+    ///
+    /// Its `_bindings.rs` would compile unsandboxed into the crate, so a
+    /// cache not owned by the invoking uid (or other-writable) is refused.
+    FfiCacheUntrusted {
+        /// The refused cache directory.
+        path: PathBuf,
+    },
+    /// An installed FFI catalog was refused before anything was injected.
+    ///
+    /// A tampered or half-written cache artifact, or a crate claiming an
+    /// asserted-call reserved name: a trust refusal, never a degradable
+    /// build failure.
+    FfiCatalogRefused(ffi::FfiCatalogRefusal),
     /// The module-discovery walk hit its depth ceiling or detected a symlink
     /// cycle. Carries the maximum depth that was configured and, for a cycle,
     /// the directory path where the cycle was detected.
@@ -354,6 +368,17 @@ pub enum CliError {
         /// The depth ceiling that was enforced (`MAX_DISCOVERY_DEPTH`), or the
         /// path at which a symlink cycle was detected.
         detail: String,
+    },
+    /// A discovered source file's module path uses a Windows reserved device name.
+    ///
+    /// `Aux.ipe` opens the `AUX` device on Windows, so the same tree would
+    /// map to a different module set per platform; it is refused, never
+    /// silently skipped.
+    DeviceNamedModule {
+        /// The refused source file.
+        path: PathBuf,
+        /// The device-named segment (`Aux`, `Con`, `Com1`, …).
+        segment: String,
     },
     /// `ipe upgrade` (or `ipe health`) could not reach the release feed. This
     /// is a transient, non-zero operational result — not a command misuse — so
@@ -540,6 +565,9 @@ impl CliError {
             Self::PathEscape { .. } => "path-escape",
             Self::OutputRefused(_) => "output-refused",
             Self::DiscoveryLimitReached { .. } => "discovery-limit-reached",
+            Self::DeviceNamedModule { .. } => "device-named-module",
+            Self::FfiCacheUntrusted { .. } => "ffi-cache-untrusted",
+            Self::FfiCatalogRefused(_) => "ffi-catalog-refused",
             Self::UpgradeFeedUnreachable => "upgrade-feed-unreachable",
             Self::UpgradeCheckExit { .. } => "upgrade-check-exit",
             Self::AdvisoryVulnerable(_) => "advisory-vulnerable",
@@ -610,6 +638,9 @@ impl CliError {
             | Self::PathEscape { .. }
             | Self::OutputRefused(_)
             | Self::DiscoveryLimitReached { .. }
+            | Self::DeviceNamedModule { .. }
+            | Self::FfiCacheUntrusted { .. }
+            | Self::FfiCatalogRefused(_)
             | Self::UpgradeFeedUnreachable
             | Self::UpgradeCheckExit { .. }
             | Self::AdvisoryVulnerable(_)
@@ -843,6 +874,13 @@ impl std::fmt::Display for CliError {
             Self::DiscoveryLimitReached { detail } => {
                 f.write_str(&text::cli_discovery_limit_reached(detail))
             }
+            Self::DeviceNamedModule { path, segment } => {
+                f.write_str(&text::cli_device_named_module(&path.display(), segment))
+            }
+            Self::FfiCacheUntrusted { path } => {
+                f.write_str(&text::ffi_cache_untrusted(&path.display()))
+            }
+            Self::FfiCatalogRefused(refusal) => write!(f, "{refusal}"),
             Self::AdvisoryVulnerable(p) => {
                 let fixed_in = p
                     .fixed_in
