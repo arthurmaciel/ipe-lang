@@ -194,11 +194,11 @@ impl AttestedActor {
     /// Parse an attested GitHub login.
     ///
     /// # Errors
-    /// [`CliError::UsageOwned`] when the value is not a GitHub login; the value is
+    /// [`CliError::Usage`] when the value is not a GitHub login; the value is
     /// echoed Debug-escaped, so no control byte reaches the terminal.
     pub fn parse(raw: &str) -> Result<Self, CliError> {
         check_login_shape(raw).map_err(|refusal| {
-            CliError::UsageOwned(text::attested_actor_not_login(
+            CliError::Usage(text::msg::attested_actor_not_login(
                 &format!("{raw:?}"),
                 &refusal,
             ))
@@ -452,10 +452,10 @@ mod tests {
         let hostile = "\x1b[2Jevil\nforged line";
         let refused = AttestedActor::parse(hostile);
         assert!(
-            matches!(refused, Err(CliError::UsageOwned(_))),
+            matches!(refused, Err(CliError::Usage(_))),
             "a control-byte login must be refused"
         );
-        let Err(CliError::UsageOwned(msg)) = refused else {
+        let Err(CliError::Usage(msg)) = refused else {
             return;
         };
         assert!(!msg.contains('\x1b') && !msg.contains('\n'), "{msg:?}");

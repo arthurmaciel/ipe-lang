@@ -19,7 +19,7 @@ use crate::text;
 /// `package.ipe` so a fresh clone re-resolves the same dependency.
 ///
 /// # Errors
-/// [`CliError::UsageOwned`] when no package is named or the requirement is
+/// [`CliError::Usage`] when no package is named or the requirement is
 /// malformed; [`CliError::Usage`] when there is no `package.ipe` here;
 /// [`CliError::Resolve`] / [`CliError::HashMismatch`] on a resolution or
 /// integrity failure; [`CliError::Io`] on a filesystem failure.
@@ -33,7 +33,7 @@ pub fn run_add(rest: &[String]) -> Result<(), CliError> {
 /// `package.ipe` and `ipe.lock`.
 ///
 /// # Errors
-/// [`CliError::UsageOwned`] when no package is named; [`CliError::Usage`] when
+/// [`CliError::Usage`] when no package is named; [`CliError::Usage`] when
 /// there is no `package.ipe` here; [`CliError::Io`] on a filesystem failure.
 pub fn run_remove(rest: &[String]) -> Result<(), CliError> {
     let package = package_arg(rest, "remove")?;
@@ -58,9 +58,9 @@ fn project_root() -> Result<PathBuf, CliError> {
         return Ok(cwd);
     }
     if crate::project::has_only_legacy_toml(&cwd) {
-        return Err(CliError::Usage(text::legacy_toml_hint()));
+        return Err(CliError::Usage(text::msg::legacy_toml_hint()));
     }
-    Err(CliError::Usage(text::pkg_no_manifest()))
+    Err(CliError::Usage(text::msg::pkg_no_manifest()))
 }
 
 /// Parse `ipe add`'s single argument into a package name and a version
@@ -68,17 +68,17 @@ fn project_root() -> Result<PathBuf, CliError> {
 /// with no `@`, the requirement is `*` (the latest published version).
 ///
 /// # Errors
-/// [`CliError::UsageOwned`] on the wrong number of arguments or a malformed
+/// [`CliError::Usage`] on the wrong number of arguments or a malformed
 /// requirement.
 fn parse_add_arg(rest: &[String]) -> Result<(&str, semver::VersionReq), CliError> {
     let arg = package_arg(rest, "add")?;
     let (name, req_str) = arg.split_once('@').map_or((arg, "*"), |(n, r)| (n, r));
     if name.is_empty() {
-        return Err(CliError::UsageOwned(text::pkg_usage(&"add")));
+        return Err(CliError::Usage(text::msg::pkg_usage(&"add")));
     }
     let req = req_str
         .parse::<semver::VersionReq>()
-        .map_err(|e| CliError::UsageOwned(text::pkg_invalid_requirement(&req_str, &e)))?;
+        .map_err(|e| CliError::Usage(text::msg::pkg_invalid_requirement(&req_str, &e)))?;
     Ok((name, req))
 }
 
@@ -89,12 +89,12 @@ fn parse_add_arg(rest: &[String]) -> Result<(&str, semver::VersionReq), CliError
 /// to remove".
 ///
 /// # Errors
-/// [`CliError::UsageOwned`] naming the command's usage, or the shared
+/// [`CliError::Usage`] naming the command's usage, or the shared
 /// unknown-flag phrasing on a leading-`-` token.
 fn package_arg<'a>(rest: &'a [String], command: &str) -> Result<&'a str, CliError> {
     match rest {
         [one] if one.starts_with('-') => Err(crate::cli_args::usage_unknown_flag(command, one)),
         [one] => Ok(one.as_str()),
-        _ => Err(CliError::UsageOwned(text::pkg_usage(&command))),
+        _ => Err(CliError::Usage(text::msg::pkg_usage(&command))),
     }
 }

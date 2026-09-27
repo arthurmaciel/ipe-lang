@@ -13,6 +13,7 @@
 use std::collections::BTreeMap;
 
 use ipe_diagnostics::Span;
+use ipe_diagnostics::terminal::TerminalSafe;
 use ipe_intern::Interner;
 use ipe_syntax::{Expr, Expr_, Module};
 
@@ -98,7 +99,8 @@ impl std::error::Error for ConfigError {}
 
 /// Read a `lint.ipe` source into a [`LintConfig`].
 ///
-/// `path` names the file for diagnostics only. The source is parsed with the
+/// `path` names the file for diagnostics only; it is untrusted, so it is made
+/// [`TerminalSafe`] once here, before any rejection interpolates it. The source is parsed with the
 /// compiler front-end and its sole `lint` binding walked; no expression is ever
 /// evaluated. An unknown rule name, a non-literal argument, or an unexpected
 /// declaration is a fail-closed [`ConfigError`].
@@ -107,6 +109,8 @@ impl std::error::Error for ConfigError {}
 /// [`ConfigError`] on a parse failure, an unexpected module shape, an unknown
 /// rule name, or a non-literal / non-blessed stage.
 pub fn read_lint_config(src: &str, path: &str) -> Result<LintConfig, ConfigError> {
+    let path = TerminalSafe::sanitize(path);
+    let path = path.as_str();
     let mut interner = Interner::new();
     let module =
         ipe_parse::parse_module(src, &mut interner).map_err(|diag| ConfigError::Parse {

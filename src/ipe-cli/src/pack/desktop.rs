@@ -322,7 +322,7 @@ pub(crate) fn sanitise_identifier(name: &str) -> String {
 /// the offending manifest field.
 ///
 /// # Errors
-/// [`CliError::UsageOwned`] when `root_name` is not a single normal path
+/// [`CliError::Usage`] when `root_name` is not a single normal path
 /// component.
 fn reject_traversing_bundle_root(
     root_name: &str,
@@ -337,8 +337,8 @@ fn reject_traversing_bundle_root(
     if single_normal {
         return Ok(());
     }
-    Err(super::super::CliError::UsageOwned(
-        crate::text::bundle_name_not_a_component(&display_name),
+    Err(super::super::CliError::Usage(
+        crate::text::msg::bundle_name_not_a_component(&display_name),
     ))
 }
 
