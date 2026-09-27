@@ -46,6 +46,7 @@ pub mod io_bounded;
 pub mod lint;
 pub mod lockfile;
 pub mod login;
+pub mod loose_file;
 mod lsp;
 pub mod machine_output;
 pub mod native_ffi_consent;

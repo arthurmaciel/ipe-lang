@@ -332,26 +332,24 @@ pub fn build_with_options(
     )
 }
 
-/// Build a `.ipe` entry file and all sibling modules discovered in the same
-/// source directory.
+/// Build a loose `.ipe` entry file plus the sibling modules it imports.
 ///
-/// When no manifest is present, the entry file's parent directory is used
-/// as the source root. Every `*.ipe` file found there is loaded and compiled
-/// together — fixing IPE-N0020 for multi-file projects built via the
+/// When no manifest is present, an import `A.B` resolves to `A/B.ipe` under
+/// the entry file's directory, so a multi-file program builds via the
 /// file-path shorthand (`ipe build src/Main.ipe`).
 ///
-/// This is the faithful port of Haskell's `Graph.discoverModulesMulti
-/// (sourceRoot : ...) entryPath` call in `Ipe.Build.Compile.hs`: it probes
-/// the source root recursively and follows imports across sibling files before
-/// running the shared `compile_modules` core.
+/// The module set is the entry plus the sibling modules its imports reach,
+/// resolved by [`crate::loose_file::resolve_loose_file`] (see
+/// [`collect_entry_and_siblings`]); the entry's directory is never listed.
 ///
-/// When the source directory contains only the entry file this function is
-/// byte-identical to `build` (single-module pipeline is the identity over
-/// `link`).
+/// When the entry imports no sibling this function is byte-identical to
+/// `build` (single-module pipeline is the identity over `link`).
 ///
 /// # Errors
 /// [`CliError::Pipeline`] when the compiler rejects the program.
 /// [`CliError::Io`] on any filesystem failure.
+/// [`CliError::DiscoveryLimitReached`] when the import closure exceeds
+/// [`crate::loose_file::LooseFileLimits::DEFAULT`].
 pub fn build_with_sibling_discovery(
     entry: &Path,
     out_dir: &Path,
@@ -390,8 +388,8 @@ pub fn build_with_sibling_discovery_with_options(
 
 /// Build `ipe verify`'s test entry against the project's `src/` sources.
 ///
-/// Unlike [`build_with_sibling_discovery`], which roots discovery at the
-/// entry's own directory, this roots the code under test at `project_src_root`
+/// Unlike [`build_with_sibling_discovery`], which follows the entry's
+/// imports within its own directory, this roots the code under test at `project_src_root`
 /// (the `src/` tree) and additionally discovers the test entry's own directory
 /// (the `tests/` tree) — so a `tests/Main.ipe` that imports `Lib.Foo` from
 /// `src/Lib/Foo.ipe` resolves. See [`collect_test_sources`] for the source-set
@@ -424,51 +422,42 @@ pub fn build_test_with_project_sources(
     )
 }
 
-/// The entry file and every sibling `.ipe` module discovered in its source
-/// directory, ready to feed the shared compile core.
+/// A loose entry plus the sibling modules its imports reach, ready to feed the shared compile core.
 pub struct CollectedSources {
     pub(crate) sources: BTreeMap<Vec<String>, (PathBuf, String)>,
     pub(crate) discovered: Vec<project::DiscoveredModule>,
     pub(crate) entry_module_path: Vec<String>,
 }
 
-/// Collect the entry module plus every sibling `.ipe` file in its source
-/// directory, reading each source once.
+/// Collect a loose entry plus the transitive closure of sibling modules it imports.
 ///
 /// This is the file-path shorthand's source-collection step, shared by the
 /// build path ([`build_with_sibling_discovery_with_options`]) and the
 /// single-entry analysis paths ([`lower_entry_via_graph`], [`emit_ir_text`]) so all
-/// three see the SAME module set — a program that imports a compiled-source
-/// stdlib module resolves identically whether it is built or merely analysed.
-/// It is the equivalent of `Graph.discoverModulesMulti [srcRoot] entryPath` in
-/// `Ipe.Build.Compile.hs`; the compiled-source stdlib closure is injected
-/// downstream (in [`compile_modules_observed`] / [`lower_entry_via_graph`]),
-/// not here, so the injection routine stays single-sourced.
+/// three see the SAME module set. It delegates to
+/// [`crate::loose_file::resolve_loose_file`] — the one loose-file resolver
+/// `ipe watch` and `ipe lsp` also use — so every surface compiles the same
+/// bounded closure: one probed path per import, regular files contained in
+/// the entry's directory only, within
+/// [`crate::loose_file::LooseFileLimits::DEFAULT`], and no directory
+/// listing. The compiled-source stdlib closure is injected downstream (in
+/// [`compile_modules_observed`] / [`lower_entry_via_graph`]), not here, so
+/// the injection routine stays single-sourced.
 ///
 /// # Errors
-/// [`CliError::Pipeline`] when the entry does not parse; [`CliError::Io`] on
-/// any filesystem failure reading a discovered module.
+/// [`CliError::Pipeline`] when the entry does not parse; [`CliError::Io`] when
+/// the entry or an imported sibling cannot be read;
+/// [`CliError::DiscoveryLimitReached`] when the import closure is too large.
 pub fn collect_entry_and_siblings(entry: &Path) -> Result<CollectedSources, CliError> {
-    let source =
-        crate::io_bounded::read_to_string_capped(entry, crate::io_bounded::SOURCE_READ_CAP)?;
-    let entry_module_path = parse_entry_module_path(entry, &source)?;
-
-    // Source root: the directory containing the entry file.
-    let src_root = entry
-        .parent()
-        .filter(|p| p.is_dir())
-        .unwrap_or_else(|| Path::new("."));
-
-    // Discover ALL .ipe files in the source root (recursively).
-    let mut discovered = project::discover_modules(src_root)?;
-    ensure_entry_present(&mut discovered, entry, &entry_module_path);
-
-    let sources = read_discovered_sources(&discovered, entry, &entry_module_path, &source)?;
-
+    let loaded = crate::loose_file::resolve_loose_file(
+        entry,
+        None,
+        crate::loose_file::LooseFileLimits::DEFAULT,
+    )?;
     Ok(CollectedSources {
-        sources,
-        discovered,
-        entry_module_path,
+        sources: loaded.sources,
+        discovered: loaded.discovered,
+        entry_module_path: loaded.entry_module,
     })
 }
 
