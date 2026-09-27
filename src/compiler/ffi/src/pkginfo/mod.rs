@@ -492,47 +492,107 @@ impl PkgPath {
     }
 }
 
-/// A validated absolute filesystem path to an author-supplied wrapper crate.
+/// A decode-validated filesystem path to an author-supplied wrapper crate.
 ///
-/// This is the ONLY value by which a wrapper location reaches a TOML value
-/// position of the emitted app crate's `Cargo.toml`: [`crate::driver::cargo_dep_lines`]
-/// renders `<name> = {{ path = "<WrapperCratePath>" }}` from it. A raw,
-/// unvalidated path could carry a `"`-and-newline payload that closes the TOML
-/// string and injects arbitrary manifest content. Gating here at the decode
-/// boundary — the charset admits real absolute paths (`[A-Za-z0-9._/-]`, plus a
-/// space for a directory name) while excluding every TOML-breaking character
-/// (quote, bracket, brace, backslash, control) — makes an injection-bearing
-/// wrapper path unrepresentable past decode. Empty ⇒ the package did not come
-/// from a wrapper crate (an ordinary crates.io / git inspection).
+/// Never empty: a package with no wrapper is [`PkgSource::Registry`], not an
+/// empty path. The charset gate (`[A-Za-z0-9._/-]`, plus a space for a
+/// directory name) excludes every TOML-breaking character (quote, bracket,
+/// brace, backslash, control), and a `..` component is refused outright, so
+/// neither an injection payload nor a lexical traversal survives decode. The
+/// path is NOT yet proven to sit inside the project: only
+/// [`WrapperCratePath::jail`] yields the [`JailedWrapperDir`] a `path`
+/// dependency line is rendered from.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WrapperCratePath(String);
 
 impl WrapperCratePath {
-    fn parse(s: &str) -> Result<Self, crate::diag::WireDefect> {
-        if s.is_empty() {
-            return Ok(Self(String::new()));
+    fn parse(s: &str) -> Result<Self, WireDefect> {
+        let legal = !s.is_empty()
+            && s.chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '/' | '-' | ' '));
+        if !legal {
+            return Err(WireDefect::InvalidPkgPath { got: s.to_owned() });
         }
-        let legal = s
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '/' | '-' | ' '));
-        if legal {
-            Ok(Self(s.to_owned()))
-        } else {
-            Err(crate::diag::WireDefect::InvalidPkgPath { got: s.to_owned() })
+        if s.split('/').any(|seg| seg == "..") {
+            return Err(WireDefect::WrapperPathTraversal { got: s.to_owned() });
         }
+        Ok(Self(s.to_owned()))
     }
 
-    /// The validated wrapper-crate path (empty for a non-wrapper package).
+    /// The decode-validated (not yet root-jailed) wrapper-crate path.
     #[must_use]
     pub fn as_str(&self) -> &str {
         &self.0
     }
 
-    /// Whether the package came from an author-supplied wrapper crate.
-    #[must_use]
-    pub const fn is_empty(&self) -> bool {
-        self.0.is_empty()
+    /// Prove the wrapper crate sits inside `project_root`.
+    ///
+    /// Both sides are canonicalized, so a symlink (at any component) that
+    /// leads out of the project, an absolute path elsewhere, and a stale
+    /// absolute path left by a moved or copied project are all refused. A
+    /// relative path resolves against the project root. The canonical form is
+    /// re-checked against the charset gate, since resolving a symlink can
+    /// surface characters the stored path never carried.
+    ///
+    /// # Errors
+    ///
+    /// [`WireDefect::WrapperPathUnresolvable`] when the root or the wrapper
+    /// directory does not resolve to an existing directory;
+    /// [`WireDefect::WrapperPathOutsideRoot`] when the resolved directory
+    /// leaves the root or is not a legal `path` dependency value.
+    pub fn jail(&self, project_root: &std::path::Path) -> Result<JailedWrapperDir, WireDefect> {
+        let unresolvable = |e: &std::io::Error| WireDefect::WrapperPathUnresolvable {
+            got: self.0.clone(),
+            detail: e.to_string(),
+        };
+        let root = std::fs::canonicalize(project_root).map_err(|e| unresolvable(&e))?;
+        let resolved = std::fs::canonicalize(root.join(&self.0)).map_err(|e| unresolvable(&e))?;
+        let outside = || WireDefect::WrapperPathOutsideRoot {
+            got: self.0.clone(),
+            root: root.to_string_lossy().into_owned(),
+        };
+        if !resolved.starts_with(&root) {
+            return Err(outside());
+        }
+        if !resolved.is_dir() {
+            return Err(WireDefect::WrapperPathUnresolvable {
+                got: self.0.clone(),
+                detail: "not a directory".to_owned(),
+            });
+        }
+        let text = resolved.to_str().ok_or_else(outside)?;
+        let canonical = Self::parse(text).map_err(|_| outside())?;
+        Ok(JailedWrapperDir(canonical.0))
     }
+}
+
+/// A wrapper-crate directory proven, at load, to sit inside the project root.
+///
+/// The only value a `path = "…"` dependency line is rendered from. It holds
+/// the canonical absolute path, which passed the same charset gate as
+/// [`WrapperCratePath`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct JailedWrapperDir(String);
+
+impl JailedWrapperDir {
+    /// The canonical absolute wrapper directory.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+/// Where an inspected package's Rust code comes from.
+///
+/// Decided once at decode, so every consumer matches exhaustively: no empty
+/// path can be mistaken for a registry pin, and no registry package can carry
+/// a local path.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PkgSource {
+    /// An ordinary crates.io / git inspection, pinned by exact version.
+    Registry,
+    /// An author-supplied local wrapper crate, bound by `path`.
+    Wrapper(WrapperCratePath),
 }
 
 /// A validated Cargo feature name.
@@ -639,11 +699,10 @@ pub struct PkgInfo {
     /// no binding references it yet. Every path passed the `::seg::…::Seg`
     /// shape gate at decode (a malformed entry is dropped, never emitted raw).
     declared_opaques: std::collections::BTreeMap<String, String>,
-    /// The absolute path to the author-supplied wrapper crate this package was
-    /// inspected from, or empty for an ordinary crates.io / git inspection. When
-    /// set, the emitted app crate depends on the wrapper by `path` rather than a
-    /// registry pin (see [`crate::driver::cargo_dep_lines`]).
-    wrapper_path: WrapperCratePath,
+    /// Where the package's Rust code comes from: a registry pin, or an
+    /// author-supplied wrapper crate the emitted app crate depends on by `path`
+    /// (see [`crate::driver::cargo_dep_lines`]).
+    source: PkgSource,
     dropped: Vec<Diagnostic>,
 }
 
@@ -766,11 +825,10 @@ impl PkgInfo {
         &self.declared_opaques
     }
 
-    /// The absolute wrapper-crate path this package was inspected from, or empty
-    /// for an ordinary crates.io / git inspection.
+    /// Where the package's Rust code comes from.
     #[must_use]
-    pub const fn wrapper_path(&self) -> &WrapperCratePath {
-        &self.wrapper_path
+    pub const fn source(&self) -> &PkgSource {
+        &self.source
     }
 
     /// The bindings dropped by the validating conversion, with the reason
@@ -1360,12 +1418,16 @@ impl TryFrom<WirePkgInfo> for PkgInfo {
         // The wrapper path is spliced into a `path = "…"` TOML value of the
         // emitted manifest; gate it at the boundary so an injection-bearing
         // path fails the WHOLE package here rather than reaching the emitter.
-        let wrapper_path = WrapperCratePath::parse(&w.wrapper_path).map_err(|defect| {
-            Diagnostic::WireMalformed {
-                context: format!("crate `{}`", w.name),
-                defect,
-            }
-        })?;
+        let source = if w.wrapper_path.is_empty() {
+            PkgSource::Registry
+        } else {
+            PkgSource::Wrapper(WrapperCratePath::parse(&w.wrapper_path).map_err(|defect| {
+                Diagnostic::WireMalformed {
+                    context: format!("crate `{}`", w.name),
+                    defect,
+                }
+            })?)
+        };
         // The representation axis: classification failure of one entry is an
         // opaque fallback recorded in the catalog, never a package failure.
         let foreign_types = crate::transparency::ForeignTypeCatalog::classify(&w.types);
@@ -1396,7 +1458,7 @@ impl TryFrom<WirePkgInfo> for PkgInfo {
             foreign_type_ids,
             foreign_types,
             declared_opaques,
-            wrapper_path,
+            source,
             dropped,
         })
     }

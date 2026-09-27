@@ -21,7 +21,7 @@ use crate::CliError;
 use crate::text;
 
 /// The project-relative FFI cache directory.
-const CACHE_REL: &str = ".ipe/cache/ffi/rust";
+const CACHE_REL: &str = ipe_ffi::driver::FFI_CACHE_REL;
 
 /// The project manifest that bounds the upward cache-discovery walk.
 const PROJECT_MANIFEST: &str = "package.ipe";
@@ -267,7 +267,7 @@ fn assemble_wrapper_glue(
     wrapper_glue: &mut BTreeMap<String, ipe_backend_rust::FfiWrapperGlue>,
 ) -> Result<(), CliError> {
     for b in &c.bindings {
-        if b.transparent_params.iter().all(Option::is_none) && b.transparent_result.is_none() {
+        if b.transparent_params.is_none() && b.transparent_result.is_none() {
             continue;
         }
         let glue_ty = |name: &str| -> Result<ipe_backend_rust::FfiGlueType, CliError> {
@@ -280,8 +280,8 @@ fn assemble_wrapper_glue(
             })?;
             Ok(glue_type_of(&c.module_name, &c.slug, t))
         };
-        let mut params = Vec::with_capacity(b.transparent_params.len());
-        for p in &b.transparent_params {
+        let mut params = Vec::with_capacity(b.transparent_params.slots().len());
+        for p in b.transparent_params.slots() {
             params.push(match p {
                 None => None,
                 Some(name) => Some(glue_ty(name)?),
@@ -4432,7 +4432,7 @@ version = \"1\"
             wrapper_ident: "Rust_demo_counter_new".to_owned(),
             arity: 1,
             sig: "Int -> Counter".to_owned(),
-            transparent_params: Vec::new(),
+            transparent_params: ipe_ffi::interface::TransparentParams::None,
             transparent_result: Some(ipe_ffi::interface::TransparentResult {
                 type_name: "Counter".to_owned(),
                 in_result: false,

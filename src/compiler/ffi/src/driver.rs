@@ -425,6 +425,9 @@ pub struct ArtifactPaths {
     pub pkg_json: PathBuf,
 }
 
+/// The FFI artifact cache directory, relative to its project root.
+pub const FFI_CACHE_REL: &str = ".ipe/cache/ffi/rust";
+
 /// The project-local FFI artifact cache (`<project>/.ipe/cache/ffi/rust`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FfiCache {
@@ -436,7 +439,7 @@ impl FfiCache {
     #[must_use]
     pub fn at_project_root(project_root: &Path) -> Self {
         Self {
-            root: project_root.join(".ipe/cache/ffi/rust"),
+            root: project_root.join(FFI_CACHE_REL),
         }
     }
 
@@ -444,6 +447,33 @@ impl FfiCache {
     #[must_use]
     pub fn root(&self) -> &Path {
         &self.root
+    }
+
+    /// The project root this cache is anchored under — the jail every
+    /// wrapper crate must resolve inside.
+    ///
+    /// # Errors
+    ///
+    /// [`Diagnostic::WireMalformed`] carrying
+    /// [`crate::diag::WireDefect::CacheRootUnanchored`] when the cache is not
+    /// at `<project>/.ipe/cache/ffi/rust`.
+    pub fn project_root(&self) -> Result<&Path, Diagnostic> {
+        let unanchored = || Diagnostic::WireMalformed {
+            context: "FFI cache".to_owned(),
+            defect: crate::diag::WireDefect::CacheRootUnanchored {
+                got: self.root.to_string_lossy().into_owned(),
+            },
+        };
+        if !self.root.ends_with(FFI_CACHE_REL) {
+            return Err(unanchored());
+        }
+        let depth = Path::new(FFI_CACHE_REL).components().count();
+        let root = self.root.ancestors().nth(depth).ok_or_else(unanchored)?;
+        Ok(if root.as_os_str().is_empty() {
+            Path::new(".")
+        } else {
+            root
+        })
     }
 
     /// The artifact paths for a slug.
@@ -482,7 +512,7 @@ impl FfiCache {
         std::fs::create_dir_all(&self.root).map_err(|e| io_err(&self.root, &e))?;
         let paths = self.artifact_paths(&slugify(pkg.name()));
         let iface = crate::interface::crate_interface(pkg);
-        let consumer_json = emit_consumer_json(pkg, &iface)?;
+        let consumer_json = emit_consumer_json(pkg, &iface, self)?;
         let writes: [(&Path, String); 7] = [
             (
                 &paths.ipei,
@@ -853,6 +883,7 @@ pub fn install_from_inspection(
 pub fn emit_consumer_json(
     pkg: &PkgInfo,
     iface: &crate::interface::CrateInterface,
+    cache: &FfiCache,
 ) -> Result<String, Diagnostic> {
     let bindings: Vec<serde_json::Value> = iface
         .bindings
@@ -863,10 +894,10 @@ pub fn emit_consumer_json(
             o.insert("wrapperIdent".into(), b.wrapper_ident.clone().into());
             o.insert("arity".into(), b.arity.into());
             o.insert("sig".into(), b.sig.clone().into());
-            if b.transparent_params.iter().any(Option::is_some) {
+            if !b.transparent_params.is_none() {
                 o.insert(
                     "transparentParams".into(),
-                    serde_json::json!(b.transparent_params),
+                    serde_json::json!(b.transparent_params.slots()),
                 );
             }
             if let Some(r) = &b.transparent_result {
@@ -889,7 +920,7 @@ pub fn emit_consumer_json(
         "opaqueTypes": iface.opaque_types,
         "opaqueTypeIds": iface.opaque_type_ids,
         "defineTypes": iface.define_types,
-        "cargoDeps": cargo_dep_lines(pkg)?,
+        "cargoDeps": cargo_dep_lines(pkg, cache)?,
         "bindings": bindings,
     });
     if !transparent.is_empty()
@@ -1054,7 +1085,7 @@ fn load_installed_crate(cache_root: &Path, slug: String) -> Result<InstalledCrat
         if paths.pkg_json.is_file() {
             let pkg_text = read(&paths.pkg_json)?;
             let pkg = PkgInfo::decode_json(&pkg_text)?;
-            return installed_crate_from_pkg(slug, &pkg);
+            return installed_crate_from_pkg(slug, &pkg, &cache);
         }
         let consumer_text = read(&paths.consumer)?;
         let interface_source = read(&paths.interface)?;
@@ -1128,6 +1159,17 @@ fn load_installed_crate(cache_root: &Path, slug: String) -> Result<InstalledCrat
                     .collect()
             })
             .unwrap_or_default();
+        // A legacy manifest has no inspection document to re-derive a wrapper
+        // crate's source from, so a stored `path` dependency line cannot be
+        // jailed to the project root: refuse it rather than forward an
+        // unproven local path into the emitted `Cargo.toml`.
+        if cargo_deps.iter().any(|line| line.contains("path =")) {
+            return Err(malformed(
+                "legacy manifest binds a wrapper crate by `path`, which cannot be proven \
+                 inside the project root — re-run `ipe add` to regenerate the cache"
+                    .to_owned(),
+            ));
+        }
         let transparent_types: std::collections::BTreeMap<
             String,
             crate::transparency::TransparentType,
@@ -1168,41 +1210,60 @@ fn load_installed_crate(cache_root: &Path, slug: String) -> Result<InstalledCrat
         let bindings: Vec<crate::interface::InterfaceBinding> = doc
             .get("bindings")
             .and_then(serde_json::Value::as_array)
-            .map(|a| {
-                a.iter()
-                    .filter_map(|b| {
-                        let get = |k: &str| b.get(k).and_then(serde_json::Value::as_str);
-                        let transparent_params: Vec<Option<String>> = b
-                            .get("transparentParams")
-                            .and_then(serde_json::Value::as_array)
-                            .map(|ps| ps.iter().map(|p| p.as_str().map(str::to_owned)).collect())
-                            .unwrap_or_default();
-                        let transparent_result = b.get("transparentResult").and_then(|r| {
-                            Some(crate::interface::TransparentResult {
-                                type_name: r
-                                    .get("typeName")
-                                    .and_then(serde_json::Value::as_str)?
-                                    .to_owned(),
-                                in_result: r
-                                    .get("inResult")
-                                    .and_then(serde_json::Value::as_bool)?,
-                            })
-                        });
-                        Some(crate::interface::InterfaceBinding {
-                            ref_name: get("refName")?.to_owned(),
-                            wrapper_ident: get("wrapperIdent")?.to_owned(),
-                            arity: usize::try_from(
+            .map_or_else(
+                || Ok(Vec::new()),
+                |a| {
+                    a.iter()
+                        .filter_map(|b| {
+                            let get = |k: &str| b.get(k).and_then(serde_json::Value::as_str);
+                            let ref_name = get("refName")?.to_owned();
+                            let wrapper_ident = get("wrapperIdent")?.to_owned();
+                            let arity = usize::try_from(
                                 b.get("arity").and_then(serde_json::Value::as_u64)?,
                             )
-                            .ok()?,
-                            sig: get("sig")?.to_owned(),
-                            transparent_params,
-                            transparent_result,
+                            .ok()?;
+                            let sig = get("sig")?.to_owned();
+                            // Absent slots mean no parameter converts; present
+                            // slots must align with the binding's arity, or the
+                            // backend would skip (or misapply) a conversion.
+                            let transparent_params = match b
+                                .get("transparentParams")
+                                .and_then(serde_json::Value::as_array)
+                            {
+                                None => Ok(crate::interface::TransparentParams::None),
+                                Some(ps) => crate::interface::TransparentParams::aligned(
+                                    ps.iter().map(|p| p.as_str().map(str::to_owned)).collect(),
+                                    arity,
+                                )
+                                .map_err(|drift| {
+                                    malformed(format!("binding `{ref_name}`: {drift}"))
+                                }),
+                            };
+                            let transparent_result = b.get("transparentResult").and_then(|r| {
+                                Some(crate::interface::TransparentResult {
+                                    type_name: r
+                                        .get("typeName")
+                                        .and_then(serde_json::Value::as_str)?
+                                        .to_owned(),
+                                    in_result: r
+                                        .get("inResult")
+                                        .and_then(serde_json::Value::as_bool)?,
+                                })
+                            });
+                            Some(transparent_params.map(|transparent_params| {
+                                crate::interface::InterfaceBinding {
+                                    ref_name,
+                                    wrapper_ident,
+                                    arity,
+                                    sig,
+                                    transparent_params,
+                                    transparent_result,
+                                }
+                            }))
                         })
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
+                        .collect::<Result<Vec<_>, Diagnostic>>()
+                },
+            )?;
         let wrapper_idents: BTreeSet<String> =
             bindings.iter().map(|b| b.wrapper_ident.clone()).collect();
         // Fail-closed cross-check: every forwarded wrapper must exist in the
@@ -1243,7 +1304,11 @@ fn load_installed_crate(cache_root: &Path, slug: String) -> Result<InstalledCrat
 ///
 /// # Errors
 /// A wire-defect diagnostic when a dependency line cannot be rendered.
-pub fn installed_crate_from_pkg(slug: String, pkg: &PkgInfo) -> Result<InstalledCrate, Diagnostic> {
+pub fn installed_crate_from_pkg(
+    slug: String,
+    pkg: &PkgInfo,
+    cache: &FfiCache,
+) -> Result<InstalledCrate, Diagnostic> {
     let mut dep_versions: std::collections::BTreeMap<String, String> =
         std::collections::BTreeMap::new();
     for dep in pkg.transitive_deps() {
@@ -1302,7 +1367,7 @@ pub fn installed_crate_from_pkg(slug: String, pkg: &PkgInfo) -> Result<Installed
         opaque_type_ids: iface.opaque_type_ids,
         define_types: iface.define_types,
         transparent_types: iface.transparent_types,
-        cargo_deps: cargo_dep_lines(pkg)?,
+        cargo_deps: cargo_dep_lines(pkg, cache)?,
         bindings: iface.bindings,
         wrapper_idents,
         dep_versions,
@@ -1382,13 +1447,16 @@ pub fn emit_coverage(
 /// The `[dependencies]` lines a program using this crate's bindings needs.
 ///
 /// One exact pinned version per resolved crate — never a guessed name,
-/// never `"*"` — with the effective feature set on the primary crate.
+/// never `"*"` — with the effective feature set on the primary crate. A
+/// wrapper crate is jailed to `cache`'s project root before its `path` line
+/// is rendered.
 ///
 /// # Errors
 ///
 /// A dep with no resolved version fails loudly (an unpinned line would be
-/// an under-bind waiting to happen).
-pub fn cargo_dep_lines(pkg: &PkgInfo) -> Result<Vec<String>, Diagnostic> {
+/// an under-bind waiting to happen); a wrapper crate that does not resolve
+/// inside the project root is refused.
+pub fn cargo_dep_lines(pkg: &PkgInfo, cache: &FfiCache) -> Result<Vec<String>, Diagnostic> {
     let missing_version = |name: &str| Diagnostic::WireMalformed {
         context: format!("transitive dep `{name}`"),
         defect: crate::diag::WireDefect::Json {
@@ -1397,20 +1465,30 @@ pub fn cargo_dep_lines(pkg: &PkgInfo) -> Result<Vec<String>, Diagnostic> {
         },
     };
     let mut lines = Vec::new();
-    // An author-supplied wrapper crate is bound by PATH, never a registry pin:
-    // the emitted app crate depends on the local wrapper directory. Its own
-    // transitive deps resolve through the wrapper's `Cargo.toml`, so the single
-    // path line is the whole dependency surface the app needs to add.
-    if !pkg.wrapper_path().is_empty() {
-        // The Cargo `[dependencies]` KEY is the charset-gated package NAME, never
-        // the weakly gated `pkg_path` (which may even be a `--manifest` filesystem
-        // path): the type forbids any ungated string reaching the TOML key.
-        lines.push(render_path_dep_line(
-            pkg.name_pkg(),
-            pkg.wrapper_path().as_str(),
-            pkg.features(),
-        ));
-        return Ok(lines);
+    match pkg.source() {
+        // An author-supplied wrapper crate is bound by PATH, never a registry
+        // pin: the emitted app crate depends on the local wrapper directory. Its
+        // own transitive deps resolve through the wrapper's `Cargo.toml`, so the
+        // single path line is the whole dependency surface the app needs to add.
+        crate::pkginfo::PkgSource::Wrapper(path) => {
+            let jailed =
+                path.jail(cache.project_root()?)
+                    .map_err(|defect| Diagnostic::WireMalformed {
+                        context: format!("wrapper crate `{}`", pkg.name()),
+                        defect,
+                    })?;
+            // The Cargo `[dependencies]` KEY is the charset-gated package NAME,
+            // never the weakly gated `pkg_path` (which may even be a
+            // `--manifest` filesystem path): the type forbids any ungated string
+            // reaching the TOML key.
+            lines.push(render_path_dep_line(
+                pkg.name_pkg(),
+                &jailed,
+                pkg.features(),
+            ));
+            return Ok(lines);
+        }
+        crate::pkginfo::PkgSource::Registry => {}
     }
     if pkg.transitive_deps().is_empty() {
         // No probe metadata: pin the primary crate from the package header. The
@@ -1475,13 +1553,19 @@ fn render_dep_line(name: &PackageName, version: &CrateVersion, features: &[Featu
 
 /// Render a `path` `[dependencies]` line for an author-supplied wrapper crate.
 ///
-/// `path` is a [`crate::pkginfo::WrapperCratePath`], decode-gated to
-/// `[A-Za-z0-9._/-]` (plus space) so it carries no `"`-and-newline payload that
-/// could close its TOML string and inject manifest content; `name` and each
-/// feature are the same decode-validated newtypes `render_dep_line` splices, so
-/// no raw string reaches a TOML position.
-fn render_path_dep_line(name: &PackageName, path: &str, features: &[FeatureName]) -> String {
+/// `path` is a [`crate::pkginfo::JailedWrapperDir`]: proven inside the project
+/// root and charset-gated to `[A-Za-z0-9._/-]` (plus space), so it carries no
+/// `"`-and-newline payload that could close its TOML string and inject
+/// manifest content; `name` and each feature are the same decode-validated
+/// newtypes `render_dep_line` splices, so no raw string reaches a TOML
+/// position.
+fn render_path_dep_line(
+    name: &PackageName,
+    path: &crate::pkginfo::JailedWrapperDir,
+    features: &[FeatureName],
+) -> String {
     let name = name.as_str();
+    let path = path.as_str();
     if features.is_empty() {
         format!("{name} = {{ path = \"{path}\" }}")
     } else {
@@ -1731,6 +1815,12 @@ mod tests {
 
     fn semver_pkg() -> PkgInfo {
         PkgInfo::decode_json(&semver_json()).expect("decodes")
+    }
+
+    /// A cache for registry-only rendering: never consulted for a jail, so
+    /// its project root need not exist.
+    fn registry_cache() -> FfiCache {
+        FfiCache::at_project_root(Path::new("/nonexistent-ipe-project"))
     }
 
     #[test]
@@ -2086,7 +2176,7 @@ mod tests {
 
     #[test]
     fn dep_lines_are_pinned_exact_with_primary_features() {
-        let lines = cargo_dep_lines(&semver_pkg()).expect("renders");
+        let lines = cargo_dep_lines(&semver_pkg(), &registry_cache()).expect("renders");
         assert_eq!(
             lines,
             vec![
@@ -2111,7 +2201,7 @@ mod tests {
             .to_string(),
         )
         .expect("decodes");
-        assert!(cargo_dep_lines(&pkg).is_err());
+        assert!(cargo_dep_lines(&pkg, &registry_cache()).is_err());
     }
 
     #[test]
@@ -2131,7 +2221,7 @@ mod tests {
         // not the weakly gated `pkg_path` — the underscore form is the crate's
         // own package name and a valid Cargo `[dependencies]` key.
         assert_eq!(
-            cargo_dep_lines(&pkg).expect("renders"),
+            cargo_dep_lines(&pkg, &registry_cache()).expect("renders"),
             vec!["serde_json = \"=1.0.145\""]
         );
     }
@@ -2157,7 +2247,7 @@ mod tests {
         )
         .expect("decodes");
         assert_eq!(
-            cargo_dep_lines(&pkg).expect("renders"),
+            cargo_dep_lines(&pkg, &registry_cache()).expect("renders"),
             vec!["handle-demo = \"=0.1.0\""]
         );
     }
@@ -2246,7 +2336,7 @@ mod tests {
             .to_string(),
         )
         .expect("a legal package name decodes even when pkg_path is hostile");
-        let lines = cargo_dep_lines(&pkg).expect("renders");
+        let lines = cargo_dep_lines(&pkg, &registry_cache()).expect("renders");
         assert_eq!(lines, vec!["semver = \"=1.0.145\""]);
         assert!(
             lines.iter().all(|l| !l.contains(evil_pkg)),
@@ -2271,7 +2361,7 @@ mod tests {
             .to_string(),
         )
         .expect("legal feature set decodes");
-        let lines = cargo_dep_lines(&pkg).expect("renders a manifest line");
+        let lines = cargo_dep_lines(&pkg, &registry_cache()).expect("renders a manifest line");
         assert_eq!(
             lines,
             ["tokio = { version = \"=1.0.0\", features = [\"rt-multi-thread\"] }"]
@@ -2608,5 +2698,251 @@ mod tests {
             "an absent opaqueTypeIds field yields an empty map"
         );
         let _ = std::fs::remove_dir_all(&cache_root);
+    }
+
+    /// A minimal wrapper-crate inspection bound at `wrapper_path`.
+    fn wrapper_pkg(wrapper_path: &str) -> Result<PkgInfo, Diagnostic> {
+        PkgInfo::decode_json(
+            &json!({
+                "pkg": "engine_wrap",
+                "name": "engine_wrap",
+                "version": "0.1.0",
+                "wrapperPath": wrapper_path,
+                "functions": [],
+                "errors": []
+            })
+            .to_string(),
+        )
+    }
+
+    /// A scratch project root holding `wrappers/engine`, plus the canonical
+    /// form of that wrapper directory.
+    fn scratch_project(test_name: &str) -> (PathBuf, PathBuf) {
+        let project =
+            std::env::temp_dir().join(format!("ipe-ffi-jail-{test_name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&project);
+        std::fs::create_dir_all(project.join("wrappers/engine")).expect("scratch wrapper dir");
+        let canonical =
+            std::fs::canonicalize(project.join("wrappers/engine")).expect("canonicalizes");
+        (project, canonical)
+    }
+
+    fn jail_defect(r: &Result<Vec<String>, Diagnostic>) -> Option<&crate::diag::WireDefect> {
+        let Err(Diagnostic::WireMalformed { defect, .. }) = r else {
+            return None;
+        };
+        Some(defect)
+    }
+
+    #[test]
+    fn empty_wrapper_path_decodes_as_registry_source() {
+        let pkg = semver_pkg();
+        assert_eq!(pkg.source(), &crate::pkginfo::PkgSource::Registry);
+        let wrapped = wrapper_pkg("wrappers/engine").expect("decodes");
+        assert!(matches!(
+            wrapped.source(),
+            crate::pkginfo::PkgSource::Wrapper(p) if p.as_str() == "wrappers/engine"
+        ));
+    }
+
+    #[test]
+    fn wrapper_path_with_parent_segment_is_refused_at_decode() {
+        for got in ["../outside", "wrappers/../../outside", "wrappers/.."] {
+            let r = wrapper_pkg(got);
+            assert!(
+                matches!(
+                    r,
+                    Err(Diagnostic::WireMalformed {
+                        defect: crate::diag::WireDefect::WrapperPathTraversal { .. },
+                        ..
+                    })
+                ),
+                "`{got}` must be refused as traversal: {r:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn relative_wrapper_path_inside_the_root_renders_canonical() {
+        let (project, canonical) = scratch_project("rel-ok");
+        let pkg = wrapper_pkg("wrappers/engine").expect("decodes");
+        let deps = cargo_dep_lines(&pkg, &FfiCache::at_project_root(&project));
+        let _ = std::fs::remove_dir_all(&project);
+        assert_eq!(
+            deps.expect("jails inside the root"),
+            [format!(
+                "engine_wrap = {{ path = \"{}\" }}",
+                canonical.display()
+            )]
+        );
+    }
+
+    #[test]
+    fn absolute_wrapper_path_inside_the_root_is_accepted() {
+        let (project, canonical) = scratch_project("abs-ok");
+        let text = canonical.to_str().expect("utf-8 temp path").to_owned();
+        let pkg = wrapper_pkg(&text).expect("decodes");
+        let deps = cargo_dep_lines(&pkg, &FfiCache::at_project_root(&project));
+        let _ = std::fs::remove_dir_all(&project);
+        assert_eq!(
+            deps.expect("jails inside the root"),
+            [format!("engine_wrap = {{ path = \"{text}\" }}")]
+        );
+    }
+
+    #[test]
+    fn absolute_wrapper_path_outside_the_root_is_refused() {
+        let (project, _) = scratch_project("abs-out");
+        let (elsewhere, outside) = scratch_project("abs-out-elsewhere");
+        let pkg = wrapper_pkg(outside.to_str().expect("utf-8 temp path")).expect("decodes");
+        let r = cargo_dep_lines(&pkg, &FfiCache::at_project_root(&project));
+        let _ = std::fs::remove_dir_all(&project);
+        let _ = std::fs::remove_dir_all(&elsewhere);
+        assert!(
+            matches!(
+                jail_defect(&r),
+                Some(crate::diag::WireDefect::WrapperPathOutsideRoot { .. })
+            ),
+            "{r:?}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlinked_wrapper_dir_escaping_the_root_is_refused() {
+        let (project, _) = scratch_project("symlink");
+        let (elsewhere, outside) = scratch_project("symlink-elsewhere");
+        std::os::unix::fs::symlink(&outside, project.join("wrappers/link")).expect("symlink");
+        let pkg = wrapper_pkg("wrappers/link").expect("decodes");
+        let r = cargo_dep_lines(&pkg, &FfiCache::at_project_root(&project));
+        let _ = std::fs::remove_dir_all(&project);
+        let _ = std::fs::remove_dir_all(&elsewhere);
+        assert!(
+            matches!(
+                jail_defect(&r),
+                Some(crate::diag::WireDefect::WrapperPathOutsideRoot { .. })
+            ),
+            "{r:?}"
+        );
+    }
+
+    #[test]
+    fn missing_wrapper_dir_is_refused() {
+        let (project, _) = scratch_project("missing");
+        let pkg = wrapper_pkg("wrappers/gone").expect("decodes");
+        let r = cargo_dep_lines(&pkg, &FfiCache::at_project_root(&project));
+        let _ = std::fs::remove_dir_all(&project);
+        assert!(
+            matches!(
+                jail_defect(&r),
+                Some(crate::diag::WireDefect::WrapperPathUnresolvable { .. })
+            ),
+            "{r:?}"
+        );
+    }
+
+    #[test]
+    fn wrapper_path_naming_a_file_is_refused() {
+        let (project, _) = scratch_project("file");
+        std::fs::write(project.join("wrappers/engine/lib.rs"), "").expect("scratch file");
+        let pkg = wrapper_pkg("wrappers/engine/lib.rs").expect("decodes");
+        let r = cargo_dep_lines(&pkg, &FfiCache::at_project_root(&project));
+        let _ = std::fs::remove_dir_all(&project);
+        assert!(
+            matches!(
+                jail_defect(&r),
+                Some(crate::diag::WireDefect::WrapperPathUnresolvable { .. })
+            ),
+            "{r:?}"
+        );
+    }
+
+    #[test]
+    fn unanchored_cache_root_refuses_to_jail() {
+        let (project, _) = scratch_project("unanchored");
+        let pkg = wrapper_pkg("wrappers/engine").expect("decodes");
+        let cache = FfiCache {
+            root: project.clone(),
+        };
+        let r = cargo_dep_lines(&pkg, &cache);
+        let _ = std::fs::remove_dir_all(&project);
+        assert!(
+            matches!(
+                jail_defect(&r),
+                Some(crate::diag::WireDefect::CacheRootUnanchored { .. })
+            ),
+            "{r:?}"
+        );
+    }
+
+    #[test]
+    fn cache_project_root_strips_the_cache_suffix() {
+        let cache = FfiCache::at_project_root(Path::new("/srv/app"));
+        assert_eq!(cache.project_root().ok(), Some(Path::new("/srv/app")));
+        let here = FfiCache::at_project_root(Path::new(""));
+        assert_eq!(here.project_root().ok(), Some(Path::new(".")));
+    }
+
+    /// A legacy manifest cannot re-derive a wrapper crate's source, so a stored
+    /// `path` dependency line is refused rather than forwarded unjailed.
+    #[test]
+    fn legacy_manifest_with_path_dep_line_is_refused() {
+        let consumer = json!({
+            "moduleName": "Rust.Semver",
+            "kernelName": "Rust_Semver",
+            "opaqueTypes": { "Version": "::semver::Version" },
+            "defineTypes": [],
+            "cargoDeps": ["engine_wrap = { path = \"/etc\" }"],
+            "bindings": []
+        })
+        .to_string();
+        let cache_root = write_legacy_cache("path_dep", &consumer);
+        let r = load_catalog(&cache_root);
+        let _ = std::fs::remove_dir_all(&cache_root);
+        assert!(
+            matches!(
+                &r,
+                Err(Diagnostic::WireMalformed {
+                    defect: crate::diag::WireDefect::Json { detail },
+                    ..
+                }) if detail.contains("cannot be proven")
+            ),
+            "{r:?}"
+        );
+    }
+
+    /// Stored transparent-parameter slots that disagree with the binding's
+    /// arity are refused at load, never handed to the backend's per-position
+    /// glue lookup.
+    #[test]
+    fn legacy_manifest_with_misaligned_transparent_params_is_refused() {
+        let consumer = json!({
+            "moduleName": "Rust.Semver",
+            "kernelName": "Rust_Semver",
+            "opaqueTypes": { "Version": "::semver::Version" },
+            "defineTypes": [],
+            "cargoDeps": [],
+            "bindings": [{
+                "refName": "parse",
+                "wrapperIdent": "semver_parse",
+                "arity": 1,
+                "sig": "String -> Result Error Version",
+                "transparentParams": [null, "Version"]
+            }]
+        })
+        .to_string();
+        let cache_root = write_legacy_cache("misaligned", &consumer);
+        let r = load_catalog(&cache_root);
+        let _ = std::fs::remove_dir_all(&cache_root);
+        assert!(
+            matches!(
+                &r,
+                Err(Diagnostic::WireMalformed {
+                    defect: crate::diag::WireDefect::Json { detail },
+                    ..
+                }) if detail.contains("transparent-parameter slots")
+            ),
+            "{r:?}"
+        );
     }
 }

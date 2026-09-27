@@ -764,6 +764,41 @@ pub enum WireDefect {
         /// The cycle, as the chain of define-type names it closes over.
         cycle: Vec<String>,
     },
+    /// A wrapper-crate path carrying a `..` component.
+    ///
+    /// Traversal is refused lexically at decode, before any filesystem lookup,
+    /// so the root jail never has to reason about a path built to climb out.
+    WrapperPathTraversal {
+        /// The offending path.
+        got: String,
+    },
+    /// A wrapper-crate path that does not resolve to an existing directory.
+    ///
+    /// A moved or copied project whose cache still names the old location
+    /// lands here, refused at load rather than emitted as a `path` dependency
+    /// cargo cannot find.
+    WrapperPathUnresolvable {
+        /// The offending path.
+        got: String,
+        /// The filesystem error, rendered.
+        detail: String,
+    },
+    /// A wrapper-crate path whose canonical form (symlinks resolved) leaves the
+    /// project root, or is not a legal `path` dependency value once resolved.
+    WrapperPathOutsideRoot {
+        /// The offending path.
+        got: String,
+        /// The canonical project root it had to stay inside.
+        root: String,
+    },
+    /// An FFI cache directory that is not `<project>/.ipe/cache/ffi/rust`.
+    ///
+    /// The project root a wrapper crate is jailed to is derived from the cache
+    /// location; a cache anywhere else has no root to jail against.
+    CacheRootUnanchored {
+        /// The cache directory met.
+        got: String,
+    },
     /// The document is not the JSON shape the wire contract declares
     /// (carries the rendered serde error as detail).
     Json {
@@ -867,6 +902,27 @@ impl fmt::Display for WireDefect {
                     cycle.join(" -> ")
                 )
             }
+            Self::WrapperPathTraversal { got } => write!(
+                f,
+                "wrapper crate path {got:?} carries a `..` component — a wrapper crate \
+                 must live inside the project"
+            ),
+            Self::WrapperPathUnresolvable { got, detail } => write!(
+                f,
+                "wrapper crate path {got:?} does not resolve to a directory ({detail}); \
+                 if the project moved, re-run `ipe add` for this wrapper"
+            ),
+            Self::WrapperPathOutsideRoot { got, root } => write!(
+                f,
+                "wrapper crate path {got:?} resolves outside the project root {root:?} — \
+                 a wrapper crate must live inside the project; re-run `ipe add` from the \
+                 project that owns it"
+            ),
+            Self::CacheRootUnanchored { got } => write!(
+                f,
+                "FFI cache {got:?} is not at `<project>/.ipe/cache/ffi/rust`, so no project \
+                 root exists to jail a wrapper crate to"
+            ),
             Self::Json { detail } => write!(f, "{detail}"),
         }
     }
