@@ -695,7 +695,7 @@ could not determine the package's source URL — the index needs a public git UR
 
 ## publish-unsigned-commit
 
-no commit-signing key is configured, so the publish commit could only be pushed unsigned — the curated index requires signed commits and would never merge it, so nothing was published. Set `IPE_PUBLISH_SIGNING_KEY` to the path of an SSH signing key (the private key file; its `.pub` must be registered as a signing key on your GitHub account) and publish again.
+no commit-signing key is configured, so the publish commit could only be pushed unsigned — the curated index requires signed commits and would never merge it, so nothing was published. Run `ipe login --signing-key` to generate and register one, or set `IPE_PUBLISH_SIGNING_KEY` to the path of an SSH signing key (the private key file; its `.pub` must be registered as a signing key on your GitHub account), then publish again. A set but unreadable `IPE_PUBLISH_SIGNING_KEY` is refused too — it is never bypassed.
 
 ## publish-unresolvable-identity
 

@@ -2979,6 +2979,7 @@ dependencies = [
  "base64 0.22.1",
  "cap-primitives",
  "e2e-support",
+ "ed25519-dalek",
  "getrandom 0.3.4",
  "hex",
  "include_dir",
@@ -3019,6 +3020,7 @@ dependencies = [
  "wasmtime",
  "wasmtime-wasi",
  "winapi-util",
+ "zeroize",
 ]
 
 [[package]]
