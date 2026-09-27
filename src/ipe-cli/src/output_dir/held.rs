@@ -404,9 +404,7 @@ impl HeldDir {
     ///
     /// The contents are removed through `child`'s own handle, so a swap of
     /// `name` after it was opened cannot redirect them; the final removal
-    /// re-proves that `name` still names `child` before unlinking it. Both
-    /// handles are released first, since a held directory cannot be removed on
-    /// every platform.
+    /// re-proves that `name` still names `child` before unlinking it.
     ///
     /// # Errors
     /// [`OutputRefusal::Replaced`] when `name` no longer names `child`;
@@ -414,22 +412,28 @@ impl HeldDir {
     /// [`CliError::Io`] on a filesystem failure.
     pub fn remove_proven(&self, name: &OsStr, child: Self) -> Result<(), CliError> {
         child.remove_contents(0)?;
-        let path = self.path.join(name);
-        let still = self.child(name)?;
-        let same = still.map_or(Ok(false), |now| Ok::<_, CliError>(now.id()? == child.id()?))?;
-        drop(child);
-        if same {
-            self.dir.rmdir(name).map_err(|e| io_err(&path, e))
-        } else {
-            Err(OutputRefusal::Replaced(path).into())
-        }
+        self.release_proven(name, child)?;
+        self.dir
+            .rmdir(name)
+            .map_err(|e| io_err(&self.path.join(name), e))
     }
 
-    /// Remove the subdirectory `name` when it is empty; `false` when it is not.
+    /// Remove the held subdirectory `child`, opened as `name`, when it is empty.
+    ///
+    /// `false` when it is not: emptiness is proven through `child`'s own
+    /// handle, so a non-empty directory is kept without a removal attempt. An
+    /// empty one is removed once `name` is re-proven to name it; one refilled
+    /// in between is kept.
     ///
     /// # Errors
-    /// [`CliError::Io`] on a failure other than a non-empty directory.
-    pub fn remove_empty_dir(&self, name: &OsStr) -> Result<bool, CliError> {
+    /// [`OutputRefusal::Replaced`] when `name` no longer names `child`;
+    /// [`OutputRefusal::Symlink`] for a link there; [`CliError::Io`] on another
+    /// filesystem failure.
+    pub fn remove_empty_dir(&self, name: &OsStr, child: Self) -> Result<bool, CliError> {
+        if !child.holds_no_entries()? {
+            return Ok(false);
+        }
+        self.release_proven(name, child)?;
         match self.dir.rmdir(name) {
             Ok(()) => Ok(true),
             Err(e)
@@ -442,6 +446,39 @@ impl HeldDir {
             }
             Err(e) => Err(io_err(&self.path.join(name), e)),
         }
+    }
+
+    /// Re-prove that `name` still names the held subdirectory `child`, then release it.
+    ///
+    /// Every handle to `child` is closed on return, since a held directory
+    /// cannot be removed on every platform.
+    ///
+    /// # Errors
+    /// [`OutputRefusal::Replaced`] when `name` no longer names `child`;
+    /// [`OutputRefusal::Symlink`] or [`OutputRefusal::NotADirectory`] for a
+    /// link or a non-directory there; [`CliError::Io`] on a filesystem failure.
+    fn release_proven(&self, name: &OsStr, child: Self) -> Result<(), CliError> {
+        let same = match self.child(name)? {
+            Some(now) => now.id()? == child.id()?,
+            None => false,
+        };
+        drop(child);
+        if same {
+            Ok(())
+        } else {
+            Err(OutputRefusal::Replaced(self.path.join(name)).into())
+        }
+    }
+
+    /// Whether this directory has no entries at all.
+    ///
+    /// # Errors
+    /// [`CliError::Io`] when the directory cannot be listed.
+    fn holds_no_entries(&self) -> Result<bool, CliError> {
+        let mut names = self.dir.names().map_err(|e| io_err(&self.path, e))?;
+        names.next().map_or(Ok(true), |name| {
+            name.map(|_| false).map_err(|e| io_err(&self.path, e))
+        })
     }
 
     /// Unlink every non-directory entry under this directory whose relative path `keep` rejects.
