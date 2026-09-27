@@ -1712,34 +1712,13 @@ pub fn emit_tea_call(
             let handler_src = emit_expr_at(ctx, handler_expr, indent, child, generics)?;
             Ok(Some(format!("cmd_perform({task_s}, {handler_src})")))
         }
-        // ── Task.attempt : (Result Error a -> msg) -> Task Error a -> Cmd msg ──
-        // Elm's arg order is `(to_msg, task)`; the runtime `cmd_perform` takes
-        // `(task, to_msg)` (the exact `Cmd.perform` bridge), so the two args are
-        // emitted swapped. Reuses `cmd_perform` — no dedicated runtime symbol.
-        KernelFn::TaskAttempt => {
-            let handler_expr = arg!(0, "to_msg")?;
-            let task_e = arg!(1, "task")?;
-            let handler_src = emit_expr_at(ctx, handler_expr, indent, child, generics)?;
-            let task_s = emit_expr_at(ctx, task_e, indent, child, generics)?;
-            Ok(Some(format!("cmd_perform({task_s}, {handler_src})")))
-        }
-        // ── Arity-2: Cmd.map / Sub.map (retag a sub-component's effects) ─────────
-        // `Cmd.map : (a -> msg) -> Cmd a -> Cmd msg`  →  `cmd_map(<cmd>, <f>)`
-        // `Sub.map : (a -> msg) -> Sub a -> Sub msg`  →  `sub_map(<sub>, <f>)`
-        // The Ipê argument order is `(f, effect)`; the runtime takes
-        // `(effect, f)` (effect first so `f` infers its `A` from the effect's
-        // message type), so the two args are emitted swapped. `f` is passed
-        // through unboxed — `cmd_map`/`sub_map` are generic over `F: Fn(A) -> M`
-        // and share it via `Arc` internally, so the emitted closure value binds
-        // directly with no re-wrap.
-        KernelFn::CmdMap | KernelFn::SubMap => {
-            let handler_expr = arg!(0, "f")?;
-            let effect_e = arg!(1, "effect")?;
-            let handler_src = emit_expr_at(ctx, handler_expr, indent, child, generics)?;
-            let effect_s = emit_expr_at(ctx, effect_e, indent, child, generics)?;
-            let name = kernel_name(*k); // "cmd_map" / "sub_map"
-            Ok(Some(format!("{name}({effect_s}, {handler_src})")))
-        }
+        // `Task.attempt : (Result Error a -> msg) -> Task Error a -> Cmd msg`
+        // → `cmd_perform(<task>, <to_msg>)`; `Cmd.map`/`Sub.map :
+        // (a -> msg) -> effect a -> effect msg` → `cmd_map`/`sub_map(<effect>,
+        // <f>)`. Each is declared `ArgOrder::ContainerFirst`, so the default
+        // N-arg emitter swaps the pair and clones the function's captures at
+        // their container use sites.
+        KernelFn::TaskAttempt | KernelFn::CmdMap | KernelFn::SubMap => Ok(None),
         // ── Arity-2: tick subscriptions — standard path ──────────────────────────
         // `Sub.every : Int -> msg -> Sub msg` and
         // `Time.every : Int -> msg -> Sub msg`

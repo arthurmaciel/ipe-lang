@@ -4267,7 +4267,7 @@ impl StdlibKernel {
             Self::TaskMap3 => d("Task", "map3", 4, Pure, "task_map3", IpeOrder),
             Self::TaskMap4 => d("Task", "map4", 5, Pure, "task_map4", IpeOrder),
             Self::TaskMap5 => d("Task", "map5", 6, Pure, "task_map5", IpeOrder),
-            Self::TaskAttempt => d("Task", "attempt", 2, Tea, "cmd_perform", IpeOrder),
+            Self::TaskAttempt => d("Task", "attempt", 2, Tea, "cmd_perform", ContainerFirst),
             Self::TaskAndThen => d("Task", "andThen", 2, Pure, "task_and_then", ContainerFirst),
             Self::TaskMapError => d("Task", "mapError", 2, Pure, "task_map_error", IpeOrder),
             Self::TaskOnError => d("Task", "onError", 2, Pure, "task_on_error", IpeOrder),
@@ -4852,12 +4852,12 @@ impl StdlibKernel {
             Self::CmdNone => d("Cmd", "none", 0, Tea, "cmd_none", IpeOrder),
             Self::CmdBatch => d("Cmd", "batch", 1, Tea, "cmd_batch", IpeOrder),
             Self::CmdPerform => d("Cmd", "perform", 2, Tea, "cmd_perform", IpeOrder),
-            Self::CmdMap => d("Cmd", "map", 2, Tea, "cmd_map", IpeOrder),
+            Self::CmdMap => d("Cmd", "map", 2, Tea, "cmd_map", ContainerFirst),
             Self::SubNone => d("Sub", "none", 0, Tea, "sub_none", IpeOrder),
             Self::SubBatch => d("Sub", "batch", 1, Tea, "sub_batch", IpeOrder),
             Self::SubEvery => d("Sub", "every", 2, Tea, "sub_every", IpeOrder),
             Self::TimeEvery => d("Time", "every", 2, Tea, "time_every", IpeOrder),
-            Self::SubMap => d("Sub", "map", 2, Tea, "sub_map", IpeOrder),
+            Self::SubMap => d("Sub", "map", 2, Tea, "sub_map", ContainerFirst),
             // ── TEA: reserved pub/sub ────────────────────────────────────────
             // Qualifier "Cmd" IS in qual_vars but "publish"/"publishNoEcho" are
             // NOT yet. Absent from ALL until wired; decl() is still exhaustive.
