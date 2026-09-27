@@ -987,7 +987,7 @@ mod tests {
             );
         }
         // The weak keyword `union` is a legal field name.
-        let weak = StructDef::parse("Set", &[("union".to_owned(), "i64".to_owned())], &[])
+        let weak = StructDef::parse("Span", &[("union".to_owned(), "i64".to_owned())], &[])
             .expect("parses");
         assert!(
             classify_define_struct(&weak).is_ok(),
