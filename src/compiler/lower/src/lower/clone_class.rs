@@ -69,7 +69,29 @@ pub(super) fn enum_is_opaque_ffi_handle(env: CloneEnv<'_>, home: &ModPath, name:
         && !env.transparent_ffi.contains(&(home.clone(), name))
 }
 
+/// How a row variable nested inside a classified composite counts.
+#[derive(Clone, Copy)]
+enum RowVars {
+    /// `NonClone`, as for a closure capture.
+    ///
+    /// Capturing into a closure can demand bounds (`Send`, `'static`) that an
+    /// `R{n}` of a non-task signature does not carry.
+    CaptureFloored,
+    /// `CloneOk`, as for a value its own signature keeps owning.
+    ///
+    /// Every emitted `R{n}` carries an unconditional `Clone` bound
+    /// (`render_fn_generics`), and a row generic renders only inside a
+    /// signature that quantifies it (`GenericScope::row_name` fails closed
+    /// elsewhere).
+    SignatureBounded,
+}
+
 pub(super) fn clone_class(env: CloneEnv<'_>, t: &IrType) -> CloneClass {
+    clone_class_in(env, t, RowVars::CaptureFloored)
+}
+
+/// [`clone_class`] under the row-variable policy `rows`.
+fn clone_class_in(env: CloneEnv<'_>, t: &IrType, rows: RowVars) -> CloneClass {
     match t {
         // Scalars — primitive Copy types.
         // `Decimal` is `#[derive(Copy)]` — treat as CopyLeaf.
@@ -189,10 +211,11 @@ pub(super) fn clone_class(env: CloneEnv<'_>, t: &IrType) -> CloneClass {
         | IrType::Cmd(_)
         | IrType::Sub(_)
         | IrType::Generic(_)
-        // A row variable, like a bare generic, is floored to `NonClone` here:
-        // its `Clone` rides the emitted `R: … + Clone` witness bound, and every
-        // field read off it emits an explicit `.clone()`, so no bare capture of
-        // the whole row value relies on a `CloneOk` classification.
+        // A bare row variable, like a bare generic, is floored to `NonClone`
+        // here: its `Clone` rides the emitted `R: … + Clone` witness bound, and
+        // every field read off it emits an explicit `.clone()`, so no bare
+        // capture of the whole row value relies on a `CloneOk` classification.
+        // `clone_class_part` admits it under `RowVars::SignatureBounded`.
         | IrType::RowGeneric(_)
         // Opaque shape-app handles wrap active event loops — not Clone.
         | IrType::WebApp
@@ -206,17 +229,17 @@ pub(super) fn clone_class(env: CloneEnv<'_>, t: &IrType) -> CloneClass {
         // is `Copy`. Use `clone_class_named_composite` to floor `CopyLeaf` → `CloneOk`
         // so T5 inserts `.clone()` for multi-use bindings (e.g. `Vec<i64>`).
         IrType::Maybe(elem) | IrType::List(elem) | IrType::Set(elem) => {
-            clone_class_named_composite(env, std::iter::once(elem.as_ref()))
+            clone_class_named_composite(env, rows, std::iter::once(elem.as_ref()))
         }
         IrType::Result(e, a) | IrType::Dict(e, a) => {
-            clone_class_named_composite(env, [e.as_ref(), a.as_ref()].into_iter())
+            clone_class_named_composite(env, rows, [e.as_ref(), a.as_ref()].into_iter())
         }
-        IrType::Tuple(elems) => clone_class_composite(env, elems.iter()),
+        IrType::Tuple(elems) => clone_class_composite(env, rows, elems.iter()),
         // Named types: emitted Rust struct/enum derives `Clone` but NOT `Copy`.
         // A CopyLeaf payload (e.g. all-Int record, no-arg enum) does NOT make the
         // wrapper `Copy` — bare capture would move it on first closure call → E0525.
         // Floor to CloneOk so the rewrite inserts `.clone()` per call.
-        IrType::Record(fields) => clone_class_named_composite(env, fields.values()),
+        IrType::Record(fields) => clone_class_named_composite(env, rows, fields.values()),
         // An FFI foreign-interface opaque handle (a `Rust.*` home with no
         // transparent import) is the real foreign Rust type; its `Clone`-ness
         // is the foreign crate's decision, not Ipe's, so it is NonClone here —
@@ -227,13 +250,15 @@ pub(super) fn clone_class(env: CloneEnv<'_>, t: &IrType) -> CloneClass {
         IrType::Enum { home, name, .. } if enum_is_opaque_ffi_handle(env, home, *name) => {
             CloneClass::NonClone
         }
-        IrType::Enum { args, .. } => clone_class_named_composite(env, args.iter()),
+        IrType::Enum { args, .. } => clone_class_named_composite(env, rows, args.iter()),
         // Ui{msg} / WebRoute(page) — recurse on the message/page type-param.
         // Both emit named runtime structs (`Html<M>`, `Route<P>`, …) that derive
         // `Clone` but never `Copy`, so a `Copy` parameter floors to `CloneOk`.
-        IrType::Ui { msg, .. } => clone_class_named_composite(env, std::iter::once(msg.as_ref())),
+        IrType::Ui { msg, .. } => {
+            clone_class_named_composite(env, rows, std::iter::once(msg.as_ref()))
+        }
         IrType::WebRoute(page) => {
-            clone_class_named_composite(env, std::iter::once(page.as_ref()))
+            clone_class_named_composite(env, rows, std::iter::once(page.as_ref()))
         }
     }
 }
@@ -254,10 +279,9 @@ pub(super) fn clone_class(env: CloneEnv<'_>, t: &IrType) -> CloneClass {
 /// else a reused generic either moves twice (E0382) or clones a non-`Clone`
 /// value (E0599).
 ///
-/// Scope: only a BARE `Generic` leaf. Composites carrying a generic
-/// (`List (Generic)`, `Tuple(.., Generic)`, …) still floor to `NonClone` via the
-/// generic leaf and are intentionally out of scope here — the wider blast radius
-/// of flipping `clone_class(Generic)` itself is a separate design decision.
+/// Scope: only a BARE `Generic` leaf. A composite carrying a generic
+/// (`List (Generic)`, `Tuple(.., Generic)`, …) is already `CloneOk` through
+/// [`clone_class_part`]; `clone_class` of the bare leaf itself stays `NonClone`.
 /// A bare `Generic` param already makes [`reject_fn_value_reuse`] a
 /// no-op (`ir_contains_fun(Generic) == false`), so admitting it here loses no
 /// diagnostic — it only closes the silent double-move.
@@ -304,20 +328,28 @@ pub(super) fn classify_capture_clone(env: CloneEnv<'_>, ir_ty: &IrType) -> Optio
 /// E0507 — an `ipe`-accept-then-`cargo`-fail SEAL break. SINGLE SOURCE OF TRUTH
 /// with those two predicates: all three admit a bare `Generic` on the identical
 /// `with_clone` bound; if one changes the others must.
-fn clone_class_part(env: CloneEnv<'_>, p: &IrType) -> CloneClass {
-    match p {
-        IrType::Generic(_) => CloneClass::CloneOk,
-        other => clone_class(env, other),
+///
+/// A bare [`IrType::RowGeneric`] part is `CloneOk` only under
+/// [`RowVars::SignatureBounded`]: its `R{n}: Clone` bound is as unconditional
+/// as `T{n}: Clone`, but a closure capture of it may need bounds a non-task
+/// signature leaves off.
+fn clone_class_part(env: CloneEnv<'_>, rows: RowVars, p: &IrType) -> CloneClass {
+    match (p, rows) {
+        (IrType::Generic(_), _) | (IrType::RowGeneric(_), RowVars::SignatureBounded) => {
+            CloneClass::CloneOk
+        }
+        (other, _) => clone_class_in(env, other, rows),
     }
 }
 
 fn clone_class_composite<'a>(
     env: CloneEnv<'_>,
+    rows: RowVars,
     parts: impl Iterator<Item = &'a IrType>,
 ) -> CloneClass {
     let mut any_clone_ok = false;
     for p in parts {
-        match clone_class_part(env, p) {
+        match clone_class_part(env, rows, p) {
             CloneClass::NonClone => return CloneClass::NonClone,
             CloneClass::CloneOk => any_clone_ok = true,
             CloneClass::CopyLeaf => {}
@@ -341,9 +373,10 @@ fn clone_class_composite<'a>(
 /// derives `Clone`.
 fn clone_class_named_composite<'a>(
     env: CloneEnv<'_>,
+    rows: RowVars,
     parts: impl Iterator<Item = &'a IrType>,
 ) -> CloneClass {
-    match clone_class_composite(env, parts) {
+    match clone_class_composite(env, rows, parts) {
         CloneClass::NonClone => CloneClass::NonClone,
         // CopyLeaf is only valid for Rust primitive types that implement `Copy`.
         // Named structs and enums never derive `Copy` (derive macro doesn't emit it),
@@ -884,13 +917,15 @@ pub(super) fn rewrite_captured_clones(
 
 /// Whether a sequencing-rewrite `.clone()` on type `ir_ty` has no `Clone` impl.
 ///
-/// The capture-clone fact [`classify_capture_clone`] decides, with one
-/// widening: a bare row generic clones, because every emitted `R{n}` carries an
-/// unconditional `Clone` bound (`render_fn_generics`) and the sequenced
-/// continuation already owns the row value, so no closure-capture bound beyond
-/// the signature's is introduced.
+/// Classified as one composite part under [`RowVars::SignatureBounded`]: the
+/// sequenced continuation already owns the value, so every type variable in it
+/// (bare or nested, `T{n}` or `R{n}`) carries the signature's unconditional
+/// `Clone` bound and no closure-capture bound beyond it is introduced.
 fn seq_clone_has_no_impl(env: CloneEnv<'_>, ir_ty: &IrType) -> bool {
-    !matches!(ir_ty, IrType::RowGeneric(_)) && classify_capture_clone(env, ir_ty) == Some(false)
+    matches!(
+        clone_class_part(env, RowVars::SignatureBounded, ir_ty),
+        CloneClass::NonClone
+    )
 }
 
 /// Refuse (IPE-L0135) a reuse of a non-`Clone` binding `sym`.
@@ -901,7 +936,7 @@ fn seq_clone_has_no_impl(env: CloneEnv<'_>, ir_ty: &IrType) -> bool {
 /// binder-type resolver: a used binder whose type does not resolve is refused
 /// there, never skipped past this check.
 ///
-/// The sequencing check covers every binder [`classify_capture_clone`] marks
+/// The sequencing check covers every binder [`seq_clone_has_no_impl`] marks
 /// non-`Clone` (an effect carrier, a live app handle, a function-carrying
 /// composite); the consume-count checks below it cover effect carriers.
 pub(super) fn reject_nonclone_value_reuse(

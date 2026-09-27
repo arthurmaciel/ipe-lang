@@ -31309,6 +31309,115 @@ mod tests {
         assert!(matches!(reject(&pair_after_job(Expr::Var(w))), Err(ref e) if *e == l0135));
     }
 
+    /// The sequencing clone gate admits every type variable its signature bounds `Clone`.
+    ///
+    /// A binder read by a statement's kernel call and reused by the rest is
+    /// cloned for the statement. A composite over a row generic (`List R`,
+    /// `Maybe R`, `(R, Int)`, a custom type over `R`) clones under the
+    /// signature's `R{n}: Clone` bound, like its bare-`Generic` twin, so the
+    /// reuse is accepted; a closure capture of the same composite stays
+    /// `NonClone`. A function binder (`Fun`, `FnOnceChain`) has no `Clone`
+    /// impl, so the same reuse stays refused with IPE-L0135.
+    #[test]
+    fn seq_clone_gate_admits_row_composites_and_refuses_functions() {
+        use ipe_diagnostics::Feature;
+        use ipe_ir::{CallPin, Callee, Expr, FuncId, IrType, KernelFn, ModPath, OnFormKind};
+
+        use super::{
+            BindingSite, CloneClass, CloneEnv, apply_move_ownership, clone_class,
+            reject_nonclone_value_reuse, unsupported,
+        };
+
+        let mut interner = Interner::new();
+        let main = interner.intern("Main").expect("intern");
+        let wrap = interner.intern("Wrap").expect("intern");
+        let r = interner.intern("r").expect("intern");
+        let a = interner.intern("a").expect("intern");
+        let x = interner.intern("x").expect("intern");
+        let span = Span::DUMMY;
+        let transparent = BTreeSet::new();
+        let env = CloneEnv {
+            interner: &interner,
+            transparent_ffi: &transparent,
+        };
+        let call = |callee: Callee, args: Vec<Expr>| Expr::Call {
+            callee,
+            args,
+            pin: CallPin::None,
+            on_form: OnFormKind::NotForm,
+        };
+        // `do { kernel x ; g x }`: the statement's read of `x` is cloned so the
+        // rest can still consume it.
+        let kernel_read_then_consume = || Expr::TaskSeq {
+            effect: Box::new(call(
+                Callee::Kernel(KernelFn::StringAppend),
+                vec![Expr::Var(x)],
+            )),
+            rest: Box::new(call(Callee::Func(FuncId::from_raw(0)), vec![Expr::Var(x)])),
+        };
+        let l0135 = unsupported(span, Feature::NonCloneValueReuse);
+        let row = || IrType::RowGeneric(r);
+
+        let row_composites = [
+            row(),
+            IrType::List(Box::new(row())),
+            IrType::Maybe(Box::new(row())),
+            IrType::Tuple(vec![row(), IrType::Int]),
+            IrType::Enum {
+                home: ModPath(vec![main]),
+                name: wrap,
+                args: vec![row()],
+            },
+            IrType::List(Box::new(IrType::Generic(a))),
+        ];
+        for ty in &row_composites {
+            assert!(
+                reject_nonclone_value_reuse(env, x, ty, &kernel_read_then_consume(), span).is_ok(),
+                "a seq reuse of `{ty:?}` clones under the signature's bound"
+            );
+            assert!(
+                apply_move_ownership(
+                    env,
+                    BindingSite::Materialized,
+                    x,
+                    ty,
+                    kernel_read_then_consume(),
+                    span
+                )
+                .is_ok(),
+                "a seq reuse of `{ty:?}` binder is accepted"
+            );
+        }
+        // A closure capture keeps flooring a row variable: capture adds bounds a
+        // non-task signature's `R{n}` does not carry.
+        assert!(matches!(
+            clone_class(env, &IrType::List(Box::new(row()))),
+            CloneClass::NonClone
+        ));
+
+        let functions = [
+            IrType::Fun(vec![IrType::Int], Box::new(IrType::Str)),
+            IrType::FnOnceChain(vec![IrType::Int], Box::new(IrType::Str)),
+            IrType::List(Box::new(IrType::Fun(vec![row()], Box::new(IrType::Str)))),
+        ];
+        for ty in &functions {
+            assert!(
+                matches!(
+                    apply_move_ownership(
+                        env,
+                        BindingSite::Materialized,
+                        x,
+                        ty,
+                        kernel_read_then_consume(),
+                        span
+                    ),
+                    Err(ref e) if *e == l0135
+                ),
+                "a seq reuse of a `{ty:?}` binder has no `Clone` to call"
+            );
+        }
+    }
+
     /// A pattern binder copies a `Copy` record field instead of moving it.
     ///
     /// `let { n, job } = w` over `w : { n : Int, job : Task Int }` moves only
