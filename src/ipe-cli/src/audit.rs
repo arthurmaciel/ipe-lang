@@ -1765,7 +1765,10 @@ fn reserved_namespace_ownership(
     standing: PublisherStanding<'_>,
 ) -> Result<(), CliError> {
     let modules = crate::project::discover_modules(&prepared.manifest.src_root)?;
-    let module_paths: Vec<&[String]> = modules.iter().map(|m| m.module_path()).collect();
+    let module_paths: Vec<&[String]> = modules
+        .iter()
+        .map(crate::project::DiscoveredModule::module_path)
+        .collect();
     reserved_namespace_verdict(&prepared.manifest.name, &module_paths, standing)
 }
 

@@ -2201,7 +2201,9 @@ impl PackageSourceSet {
 
     /// The module path of every module lowered as an inference entry.
     pub fn entry_module_paths(&self) -> impl Iterator<Item = &[String]> {
-        self.entries.iter().map(|m| m.module_path())
+        self.entries
+            .iter()
+            .map(crate::project::DiscoveredModule::module_path)
     }
 
     /// Number of modules in the source graph (entries plus injected modules).
