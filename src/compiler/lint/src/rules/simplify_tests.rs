@@ -175,7 +175,8 @@ fn unannotated_top_level_value_fires_once_opted_in() {
     let hits = findings_with(&warn_on_missing_annotation(), MISSING_ANNOTATION, src);
     assert_eq!(hits.len(), 1);
     assert!(
-        hits[0]
+        hits.first()
+            .expect("exactly one finding")
             .help
             .join("\n")
             .contains("add a `main : T` signature")
