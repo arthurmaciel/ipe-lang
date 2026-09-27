@@ -154,11 +154,12 @@ pub fn assemble_emit(
     }
     let mut foreign_types: BTreeMap<String, String> = BTreeMap::new();
     let mut wrapper_glue: BTreeMap<String, ipe_backend_rust::FfiWrapperGlue> = BTreeMap::new();
-    // The DIRECT FFI crates (registry names, `_`→`-` as the dep line renders them):
-    // these are the crates the app links against and MUST be pinned exactly; a
-    // version conflict on one of these is a genuine, unbuildable error.
-    let direct_crate_names: BTreeSet<String> =
-        catalog.iter().map(|c| c.slug.replace('_', "-")).collect();
+    // The DIRECT FFI crates, keyed by cache slug: these are the crates the app
+    // links against and MUST be pinned exactly; a version conflict on one of
+    // these is a genuine, unbuildable error. A dep line matches when its name
+    // maps to a direct crate's slug, so `a-b` and `a_b` spellings both count.
+    let direct_crate_slugs: BTreeSet<&ipe_ffi::driver::FfiSlug> =
+        catalog.iter().map(|c| &c.slug).collect();
     // name → (version, unioned feature set). Cargo unifies features additively for
     // one crate+version across the graph, so a multi-crate manifest whose members
     // pin the SAME dependency (`async-stripe-shared`) at the SAME version but with
@@ -212,7 +213,7 @@ pub fn assemble_emit(
             }
             match dep_by_name.get_mut(&name) {
                 Some((prev_version, _)) if *prev_version != version => {
-                    if direct_crate_names.contains(&name) {
+                    if direct_crate_slugs.contains(&ipe_ffi::driver::FfiSlug::of(&name)) {
                         return Err(CliError::UsageOwned(text::ffi_dependency_pin_conflict(
                             &name,
                             &prev_version,
@@ -278,7 +279,7 @@ fn assemble_wrapper_glue(
                     &b.ref_name,
                 ))
             })?;
-            Ok(glue_type_of(&c.module_name, &c.slug, t))
+            Ok(glue_type_of(&c.module_name, c.slug.as_str(), t))
         };
         let mut params = Vec::with_capacity(b.transparent_params.len());
         for p in &b.transparent_params {
@@ -2031,7 +2032,8 @@ pub fn run_remove(rest: &[String]) -> Result<(), CliError> {
         return Err(CliError::Usage(text::rust_remove_usage()));
     };
     let cache = FfiCache::at_project_root(Path::new("."));
-    let slug = ipe_ffi::driver::slugify(raw);
+    let krate = CrateName::parse(raw).map_err(|diag| CliError::UsageOwned(diag.to_string()))?;
+    let slug = ipe_ffi::driver::FfiSlug::of(krate.as_str());
     cache
         .remove_package(&slug)
         .map_err(|diag| CliError::UsageOwned(diag.to_string()))?;
@@ -3932,7 +3934,7 @@ version = \"1\"
     #[test]
     fn conflicting_dep_pins_are_refused() {
         let mk = |slug: &str, line: &str| InstalledCrate {
-            slug: slug.to_owned(),
+            slug: ipe_ffi::driver::FfiSlug::of(slug),
             module_name: format!("Rust.{slug}"),
             kernel_name: format!("Rust_{slug}"),
             interface_source: String::new(),
@@ -3967,7 +3969,7 @@ version = \"1\"
         // (as a transitive dep) and with features by another (its own self-line).
         // Same version → Cargo-style feature union, NOT a conflict.
         let mk = |slug: &str, line: &str| InstalledCrate {
-            slug: slug.to_owned(),
+            slug: ipe_ffi::driver::FfiSlug::of(slug),
             module_name: format!("Rust.{slug}"),
             kernel_name: format!("Rust_{slug}"),
             interface_source: String::new(),
@@ -4009,7 +4011,7 @@ version = \"1\"
         // NOT be exact-pinned to one arbitrary version. It is dropped so Cargo resolves
         // the transitive graph of the direct pins itself.
         let mk = |slug: &str, lines: Vec<&str>| InstalledCrate {
-            slug: slug.to_owned(),
+            slug: ipe_ffi::driver::FfiSlug::of(slug),
             module_name: format!("Rust.{slug}"),
             kernel_name: format!("Rust_{slug}"),
             interface_source: String::new(),
@@ -4307,7 +4309,7 @@ version = \"1\"
     /// A one-crate `InstalledCrate` with the given opaque + define type maps.
     fn crate_with_types(slug: &str, opaque: &[(&str, &str)], define: &[&str]) -> InstalledCrate {
         InstalledCrate {
-            slug: slug.to_owned(),
+            slug: ipe_ffi::driver::FfiSlug::of(slug),
             module_name: format!("Rust.{slug}"),
             kernel_name: format!("Rust_{slug}"),
             interface_source: String::new(),
@@ -4346,6 +4348,26 @@ version = \"1\"
                 .get("Rust.iced.Message")
                 .map(String::as_str),
             Some("crate::ffi::iced::Message")
+        );
+    }
+
+    #[test]
+    fn a_keyword_crate_emits_a_legal_module_name() {
+        // `pub mod match` would pass ipe and fail cargo; the slug suffixes it.
+        let emit = assemble_emit(&[crate_with_types("match", &[], &["Counter"])])
+            .expect("emit ok")
+            .expect("emit present");
+        assert!(
+            emit.bindings_source.contains("pub mod match_ {\n")
+                && !emit.bindings_source.contains("pub mod match {"),
+            "{}",
+            emit.bindings_source
+        );
+        assert_eq!(
+            emit.foreign_types
+                .get("Rust.match.Counter")
+                .map(String::as_str),
+            Some("crate::ffi::match_::Counter")
         );
     }
 

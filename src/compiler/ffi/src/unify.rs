@@ -310,7 +310,7 @@ mod tests {
                 transparent_result: None,
             })
             .collect();
-        let slug = module.to_lowercase().replace('.', "_");
+        let slug = crate::driver::FfiSlug::of(&module.to_lowercase().replace('.', "_"));
         InstalledCrate {
             kernel_name: module.replace('.', "_"),
             module_name: module.to_owned(),

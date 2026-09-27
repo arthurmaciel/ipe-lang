@@ -311,8 +311,9 @@ impl fmt::Display for AssertedDefect {
     }
 }
 
-/// The closed set of crate-source gate rejections (`IPE-F4411`). Every rule
-/// runs BEFORE the input can reach a command line or the network.
+/// The closed set of crate-source gate rejections (`IPE-F4411`). Every input
+/// rule runs BEFORE the input can reach a command line or the network;
+/// [`SourceDefect::SlugCollision`] runs before the FFI cache is written.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SourceDefect {
     /// A crate name outside `[A-Za-z0-9_-]+`.
@@ -375,6 +376,16 @@ pub enum SourceDefect {
         /// The offending capability name.
         got: String,
     },
+    /// A crate whose cache slug is already held by a different installed
+    /// crate (`a-b` and `a_b` both map to `a_b`). One slug names one
+    /// `pub mod` in the emitted `src/ffi.rs`, so the second crate is refused
+    /// rather than silently overwriting the first.
+    SlugCollision {
+        /// The shared cache slug.
+        slug: String,
+        /// The installed crate that already holds the slug.
+        installed: String,
+    },
 }
 
 impl fmt::Display for SourceDefect {
@@ -424,6 +435,12 @@ impl fmt::Display for SourceDefect {
                 f,
                 "[rust.wrapper] declares unknown capability {got:?} (expected one of: \
                  network, filesystem, database, env, subprocess, clock, random, native-ffi)"
+            ),
+            Self::SlugCollision { slug, installed } => write!(
+                f,
+                "crate name maps to FFI module `{slug}`, already held by installed \
+                 crate `{installed}` — two crates cannot share one module; run \
+                 `ipe rust remove {installed}` first"
             ),
         }
     }

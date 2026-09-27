@@ -235,7 +235,10 @@ pub fn validate(
         path: path.as_str().to_owned(),
         defect,
     };
-    let Some(target) = catalog.iter().find(|c| c.slug == path.crate_ident()) else {
+    let Some(target) = catalog
+        .iter()
+        .find(|c| c.slug.as_str() == path.crate_ident())
+    else {
         return Err(refused(AssertedDefect::TargetCrateNotInstalled {
             crate_ident: path.crate_ident().to_owned(),
         }));
@@ -610,7 +613,10 @@ pub fn validate_const(
         path: path.as_str().to_owned(),
         defect,
     };
-    let Some(target) = catalog.iter().find(|c| c.slug == path.crate_ident()) else {
+    let Some(target) = catalog
+        .iter()
+        .find(|c| c.slug.as_str() == path.crate_ident())
+    else {
         return Err(refused(AssertedDefect::TargetCrateNotInstalled {
             crate_ident: path.crate_ident().to_owned(),
         }));
@@ -836,7 +842,8 @@ mod tests {
         })
         .to_string();
         let pkg = PkgInfo::decode_json(&doc).expect("decodes");
-        crate::driver::installed_crate_from_pkg("semver".to_owned(), &pkg).expect("installs")
+        crate::driver::installed_crate_from_pkg(crate::driver::FfiSlug::of("semver"), &pkg)
+            .expect("installs")
     }
 
     fn validated_const(ty: &str, path: &str) -> Result<ConstSpec, Diagnostic> {

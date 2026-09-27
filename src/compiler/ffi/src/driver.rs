@@ -387,18 +387,68 @@ pub fn trust_summary(
 
 // ── project-local cache ─────────────────────────────────────────────────────
 
-/// The filesystem slug for a crate's cache artifacts.
-#[must_use]
-pub fn slugify(name: &str) -> String {
-    name.chars()
-        .map(|c| {
+/// A crate's cache slug: its artifact filename stem and its `pub mod` name
+/// in the emitted `src/ffi.rs`.
+///
+/// Both constructors guarantee a legal, non-keyword Rust identifier:
+/// lowercase ASCII alphanumerics and `_`, never a leading digit, never a
+/// Rust keyword (`ipe_intern::RUST_KEYWORDS`), never a bare `_`. A slug that
+/// exists can be spliced into `pub mod {slug}` and `crate::ffi::{slug}::…`
+/// without a later check.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct FfiSlug(String);
+
+impl FfiSlug {
+    /// The slug for a crate name — total and deterministic.
+    ///
+    /// Lowercases ASCII alphanumerics and maps every other character to `_`,
+    /// prefixes `_` to a leading digit (`2d` → `_2d`), and suffixes `_` to a
+    /// keyword or a bare `_` (`match` → `match_`, `""` → `__`). The mapping
+    /// is not injective (`a-b` and `a_b` share `a_b`);
+    /// [`FfiCache::write_package`] refuses the second crate that would claim
+    /// an occupied slug.
+    #[must_use]
+    pub fn of(name: &str) -> Self {
+        let mut slug = String::with_capacity(name.len() + 2);
+        if name.starts_with(|c: char| c.is_ascii_digit()) {
+            slug.push('_');
+        }
+        slug.extend(name.chars().map(|c| {
             if c.is_ascii_alphanumeric() {
                 c.to_ascii_lowercase()
             } else {
                 '_'
             }
-        })
-        .collect()
+        }));
+        if slug.is_empty() {
+            slug.push('_');
+        }
+        if slug == "_" || ipe_intern::is_rust_keyword(&slug) {
+            slug.push('_');
+        }
+        Self(slug)
+    }
+
+    /// Accept `s` only when it is already a slug — a fixed point of
+    /// [`FfiSlug::of`]. The loader parses cache filenames through this, so a
+    /// hand-placed `match.consumer.json` never reaches the emitter.
+    #[must_use]
+    pub fn from_canonical(s: &str) -> Option<Self> {
+        let slug = Self::of(s);
+        (slug.0 == s).then_some(slug)
+    }
+
+    /// The slug text.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Display for FfiSlug {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
 }
 
 /// The artifact paths for one bound crate.
@@ -447,7 +497,7 @@ impl FfiCache {
 
     /// The artifact paths for a slug.
     #[must_use]
-    pub fn artifact_paths(&self, slug: &str) -> ArtifactPaths {
+    pub fn artifact_paths(&self, slug: &FfiSlug) -> ArtifactPaths {
         ArtifactPaths {
             ipei: self.root.join(format!("{slug}.ipei")),
             kernel_json: self.root.join(format!("{slug}.kernel.json")),
@@ -466,9 +516,17 @@ impl FfiCache {
     /// other six artifacts are debug/watch projections the loader never
     /// trusts.
     ///
+    /// The slug is [`FfiSlug::of`] the crate name. A slug whose stored
+    /// `pkg.json` names a DIFFERENT crate is refused before anything is
+    /// written, so two crates never share one `pub mod` or one artifact set.
+    /// Reinstalling the same crate overwrites; an absent or undecodable
+    /// `pkg.json` is overwritten too (the regenerate-the-cache repair path).
+    ///
     /// # Errors
     ///
-    /// `IPE-F4412` naming the first path that could not be written.
+    /// `IPE-F4411` ([`SourceDefect::SlugCollision`]) when another installed
+    /// crate holds the slug; `IPE-F4412` naming the first path that could not
+    /// be written.
     pub fn write_package(
         &self,
         pkg: &PkgInfo,
@@ -478,8 +536,20 @@ impl FfiCache {
             path: path.to_string_lossy().into_owned(),
             detail: e.to_string(),
         };
+        let slug = FfiSlug::of(pkg.name());
+        let paths = self.artifact_paths(&slug);
+        if let Some(installed) = stored_crate_name(&paths.pkg_json)
+            && installed != pkg.name()
+        {
+            return Err(Diagnostic::SourceRejected {
+                source: pkg.name().to_owned(),
+                defect: SourceDefect::SlugCollision {
+                    slug: slug.as_str().to_owned(),
+                    installed,
+                },
+            });
+        }
         std::fs::create_dir_all(&self.root).map_err(|e| io_err(&self.root, &e))?;
-        let paths = self.artifact_paths(&slugify(pkg.name()));
         let iface = crate::interface::crate_interface(pkg);
         let consumer_json = emit_consumer_json(pkg, &iface)?;
         let writes: [(&Path, String); 7] = [
@@ -506,7 +576,7 @@ impl FfiCache {
     /// # Errors
     ///
     /// `IPE-F4412` naming the first path that exists but cannot be deleted.
-    pub fn remove_package(&self, slug: &str) -> Result<(), Diagnostic> {
+    pub fn remove_package(&self, slug: &FfiSlug) -> Result<(), Diagnostic> {
         let paths = self.artifact_paths(slug);
         for path in [
             &paths.ipei,
@@ -530,6 +600,14 @@ impl FfiCache {
         }
         Ok(())
     }
+}
+
+/// The crate name a stored `pkg.json` records, when it reads and decodes.
+fn stored_crate_name(pkg_json: &Path) -> Option<String> {
+    let text = std::fs::read_to_string(pkg_json).ok()?;
+    PkgInfo::decode_json(&text)
+        .ok()
+        .map(|pkg| pkg.name().to_owned())
 }
 
 // ── pkg-config missing-library detection ────────────────────────────────────
@@ -937,7 +1015,7 @@ pub fn emit_consumer_json(
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InstalledCrate {
     /// The cache slug (`semver`).
-    pub slug: String,
+    pub slug: FfiSlug,
     /// Ipê module qualifier (`Rust.Semver`).
     pub module_name: String,
     /// Kernel-name prefix (`Rust_Semver`).
@@ -1028,8 +1106,9 @@ pub struct InspectedConstFact {
 /// # Errors
 ///
 /// `IPE-F4412` for an unreadable artifact; a wire-defect diagnostic for a
-/// malformed consumer manifest, a malformed inspection document, or a missing
-/// wrapper.
+/// malformed consumer manifest, a malformed inspection document, a missing
+/// wrapper, a cache filename stem that is not a canonical [`FfiSlug`], or an
+/// inspection document whose crate does not map to its filename slug.
 pub fn load_catalog(cache_root: &Path) -> Result<Vec<InstalledCrate>, Diagnostic> {
     if !cache_root.is_dir() {
         return Ok(Vec::new());
@@ -1038,13 +1117,21 @@ pub fn load_catalog(cache_root: &Path) -> Result<Vec<InstalledCrate>, Diagnostic
         path: path.to_string_lossy().into_owned(),
         detail,
     };
-    let mut slugs: Vec<String> = Vec::new();
+    let mut slugs: Vec<FfiSlug> = Vec::new();
     let entries = std::fs::read_dir(cache_root).map_err(|e| io_err(cache_root, e.to_string()))?;
     for entry in entries {
         let entry = entry.map_err(|e| io_err(cache_root, e.to_string()))?;
         let name = entry.file_name().to_string_lossy().into_owned();
-        if let Some(slug) = name.strip_suffix(".consumer.json") {
-            slugs.push(slug.to_owned());
+        if let Some(stem) = name.strip_suffix(".consumer.json") {
+            // The stem becomes a `pub mod` name; a non-canonical one (a
+            // keyword, a leading digit, a hand-placed file) never loads.
+            let slug = FfiSlug::from_canonical(stem).ok_or_else(|| Diagnostic::WireMalformed {
+                context: format!("FFI cache entry `{name}`"),
+                defect: crate::diag::WireDefect::InvalidIdent {
+                    got: stem.to_owned(),
+                },
+            })?;
+            slugs.push(slug);
         }
     }
     slugs.sort();
@@ -1061,7 +1148,7 @@ pub fn load_catalog(cache_root: &Path) -> Result<Vec<InstalledCrate>, Diagnostic
 ///
 /// As [`load_catalog`], scoped to this slug's artifacts.
 #[allow(clippy::too_many_lines)] // one linear artifact decode-and-cross-check cascade
-fn load_installed_crate(cache_root: &Path, slug: String) -> Result<InstalledCrate, Diagnostic> {
+fn load_installed_crate(cache_root: &Path, slug: FfiSlug) -> Result<InstalledCrate, Diagnostic> {
     let io_err = |path: &Path, detail: String| Diagnostic::ArtifactIo {
         path: path.to_string_lossy().into_owned(),
         detail,
@@ -1085,6 +1172,18 @@ fn load_installed_crate(cache_root: &Path, slug: String) -> Result<InstalledCrat
         if paths.pkg_json.is_file() {
             let pkg_text = read(&paths.pkg_json)?;
             let pkg = PkgInfo::decode_json(&pkg_text)?;
+            if FfiSlug::of(pkg.name()) != slug {
+                return Err(Diagnostic::WireMalformed {
+                    context: format!("inspection document `{}`", paths.pkg_json.display()),
+                    defect: crate::diag::WireDefect::Json {
+                        detail: format!(
+                            "crate `{}` does not belong under cache slug `{slug}` — \
+                             re-run `ipe add`",
+                            pkg.name()
+                        ),
+                    },
+                });
+            }
             return installed_crate_from_pkg(slug, &pkg);
         }
         let consumer_text = read(&paths.consumer)?;
@@ -1274,7 +1373,10 @@ fn load_installed_crate(cache_root: &Path, slug: String) -> Result<InstalledCrat
 ///
 /// # Errors
 /// A wire-defect diagnostic when a dependency line cannot be rendered.
-pub fn installed_crate_from_pkg(slug: String, pkg: &PkgInfo) -> Result<InstalledCrate, Diagnostic> {
+pub fn installed_crate_from_pkg(
+    slug: FfiSlug,
+    pkg: &PkgInfo,
+) -> Result<InstalledCrate, Diagnostic> {
     let mut dep_versions: std::collections::BTreeMap<String, String> =
         std::collections::BTreeMap::new();
     for dep in pkg.transitive_deps() {
@@ -1785,10 +1887,14 @@ mod tests {
         assert!(coverage.contains("Dropped bindings: 1"), "{coverage}");
         assert!(coverage.contains("contradictory shape flags"), "{coverage}");
         assert!(coverage.contains("facade guidance"), "{coverage}");
-        cache.remove_package("semver").expect("removes");
+        cache
+            .remove_package(&FfiSlug::of("semver"))
+            .expect("removes");
         assert!(!paths.ipei.exists());
         // Idempotent: removing again is fine.
-        cache.remove_package("semver").expect("idempotent");
+        cache
+            .remove_package(&FfiSlug::of("semver"))
+            .expect("idempotent");
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
@@ -2109,8 +2215,181 @@ mod tests {
 
     #[test]
     fn slug_is_lowercase_alnum_underscore() {
-        assert_eq!(slugify("semver"), "semver");
-        assert_eq!(slugify("Serde-Json"), "serde_json");
+        assert_eq!(FfiSlug::of("semver").as_str(), "semver");
+        assert_eq!(FfiSlug::of("Serde-Json").as_str(), "serde_json");
+    }
+
+    #[test]
+    fn slug_never_is_a_keyword_a_leading_digit_or_a_bare_underscore() {
+        assert_eq!(FfiSlug::of("match").as_str(), "match_");
+        assert_eq!(FfiSlug::of("Self").as_str(), "self_");
+        assert_eq!(FfiSlug::of("2d").as_str(), "_2d");
+        assert_eq!(FfiSlug::of("_").as_str(), "__");
+        assert_eq!(FfiSlug::of("").as_str(), "__");
+        assert_eq!(FfiSlug::of("-").as_str(), "__");
+        for kw in ipe_intern::RUST_KEYWORDS {
+            let slug = FfiSlug::of(kw);
+            assert!(
+                !ipe_intern::is_rust_keyword(slug.as_str()),
+                "`{kw}` must not slug to a keyword: `{slug}`"
+            );
+            assert_eq!(FfiSlug::from_canonical(slug.as_str()), Some(slug));
+        }
+    }
+
+    #[test]
+    fn every_slug_is_a_legal_module_name_and_a_fixed_point() {
+        let corpus = [
+            "semver",
+            "Serde-Json",
+            "a-b",
+            "a_b",
+            "match",
+            "MATCH",
+            "2d",
+            "9",
+            "_",
+            "__",
+            "",
+            "-",
+            "self",
+            "Self",
+            "crate",
+            "super",
+            "_2d",
+            "x-2",
+            "é",
+            "a.b",
+        ];
+        for name in corpus {
+            let slug = FfiSlug::of(name);
+            let s = slug.as_str();
+            let mut chars = s.chars();
+            let first_ok = chars
+                .next()
+                .is_some_and(|c| c.is_ascii_lowercase() || c == '_');
+            assert!(first_ok, "`{name}` → `{s}` must start with a letter or `_`");
+            assert!(
+                s.chars()
+                    .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_'),
+                "`{name}` → `{s}` must be lowercase alnum/underscore"
+            );
+            assert_ne!(s, "_", "`{name}` must never slug to a bare `_`");
+            assert!(
+                !ipe_intern::is_rust_keyword(s),
+                "`{name}` → `{s}` is a keyword"
+            );
+            assert_eq!(
+                FfiSlug::of(s),
+                slug,
+                "`{name}` → `{s}` must be a fixed point"
+            );
+        }
+    }
+
+    #[test]
+    fn from_canonical_refuses_every_non_slug() {
+        for bad in ["match", "2d", "Match", "a-b", "_", "", "self", "a.b"] {
+            assert_eq!(
+                FfiSlug::from_canonical(bad),
+                None,
+                "`{bad}` must be refused"
+            );
+        }
+        for good in ["match_", "semver", "_2d", "a_b", "__"] {
+            assert_eq!(
+                FfiSlug::from_canonical(good).map(|s| s.as_str().to_owned()),
+                Some(good.to_owned())
+            );
+        }
+    }
+
+    fn named_json(name: &str) -> String {
+        let mut doc: serde_json::Value = serde_json::from_str(&semver_json()).expect("json");
+        doc["pkg"] = json!(name);
+        doc["name"] = json!(name);
+        doc.to_string()
+    }
+
+    #[test]
+    fn write_package_refuses_a_second_crate_on_an_occupied_slug() {
+        let tmp = std::env::temp_dir().join(format!("ipe-ffi-collide-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        let cache = FfiCache::at_project_root(&tmp);
+        install_from_inspection(&cache, &named_json("a-b")).expect("first crate installs");
+        // The same crate re-installs over itself.
+        install_from_inspection(&cache, &named_json("a-b")).expect("same crate reinstalls");
+        // A different crate mapping to the same slug is refused, and the
+        // holder's artifacts survive untouched.
+        let refused = install_from_inspection(&cache, &named_json("a_b"));
+        assert!(
+            matches!(
+                &refused,
+                Err(Diagnostic::SourceRejected {
+                    defect: SourceDefect::SlugCollision { slug, installed },
+                    ..
+                }) if slug == "a_b" && installed == "a-b"
+            ),
+            "a slug collision must be refused: {refused:?}"
+        );
+        let catalog = load_catalog(cache.root()).expect("loads");
+        assert_eq!(catalog.len(), 1);
+        assert!(catalog.first().is_some_and(|c| c.slug.as_str() == "a_b"));
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn keyword_crate_installs_under_a_suffixed_slug() {
+        let tmp = std::env::temp_dir().join(format!("ipe-ffi-kwslug-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        let cache = FfiCache::at_project_root(&tmp);
+        let (_pkg, paths) =
+            install_from_inspection(&cache, &named_json("match")).expect("installs");
+        assert!(
+            paths.pkg_json.ends_with("match_.pkg.json"),
+            "{}",
+            paths.pkg_json.display()
+        );
+        let catalog = load_catalog(cache.root()).expect("loads");
+        assert!(catalog.first().is_some_and(|c| c.slug.as_str() == "match_"));
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn load_catalog_refuses_a_non_canonical_cache_filename() {
+        let tmp = std::env::temp_dir().join(format!("ipe-ffi-badslug-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        let cache = FfiCache::at_project_root(&tmp);
+        let (_pkg, paths) = install_from_inspection(&cache, &semver_json()).expect("installs");
+        let planted = paths.consumer.with_file_name("match.consumer.json");
+        std::fs::copy(&paths.consumer, &planted).expect("plant");
+        let loaded = load_catalog(cache.root());
+        assert!(
+            matches!(
+                &loaded,
+                Err(Diagnostic::WireMalformed {
+                    defect: crate::diag::WireDefect::InvalidIdent { got },
+                    ..
+                }) if got == "match"
+            ),
+            "a keyword cache stem must never load: {loaded:?}"
+        );
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn load_catalog_refuses_a_pkg_json_filed_under_a_foreign_slug() {
+        let tmp = std::env::temp_dir().join(format!("ipe-ffi-foreign-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        let cache = FfiCache::at_project_root(&tmp);
+        let (_pkg, paths) = install_from_inspection(&cache, &semver_json()).expect("installs");
+        std::fs::write(&paths.pkg_json, named_json("uuid")).expect("plant");
+        let loaded = load_catalog(cache.root());
+        assert!(
+            matches!(&loaded, Err(Diagnostic::WireMalformed { .. })),
+            "a pkg.json naming another crate must not load: {loaded:?}"
+        );
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     // ── manifest lines ──────────────────────────────────────────────────
