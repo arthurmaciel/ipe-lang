@@ -47,15 +47,18 @@ impl GrantScope {
         }
     }
 
-    const fn purpose(self) -> &'static str {
+    fn purpose(self) -> String {
         match self {
-            Self::Publish => "To authorize ipe",
+            Self::Publish => crate::text::login_grant_purpose_publish().to_owned(),
             Self::RegisterSigningKey => {
-                "To let ipe add the signing key (scope `write:ssh_signing_key`, used once, never stored)"
+                crate::text::login_grant_purpose_signing_key(&self.as_str())
             }
         }
     }
 }
+
+/// The one scope the signing-key-registration grant requests.
+pub(crate) const SIGNING_KEY_SCOPE: &str = GrantScope::RegisterSigningKey.as_str();
 
 /// Upper bound on the poll interval (seconds) accepted from GitHub's response.
 /// A hostile or malformed `interval` (up to `u64::MAX`) is clamped to this, so
@@ -222,11 +225,10 @@ fn authorize<T>(scope: GrantScope, parse: fn(&str) -> Option<T>) -> Result<T, Cl
     crate::screen::Screen::new(crate::screen::Stream::Stdout)
         .line(
             crate::screen::Tone::Text,
-            &format!(
-                "{}, visit:\n  {}\nand enter the code:  {}",
-                scope.purpose(),
-                device.verification_uri.as_str(),
-                device.user_code
+            &crate::text::login_device_prompt(
+                &scope.purpose(),
+                &device.verification_uri.as_str(),
+                &crate::style::TerminalSafe::sanitize(&device.user_code),
             ),
         )
         .emit();
@@ -641,7 +643,7 @@ fn open_in_browser(url: &str) -> bool {
 }
 
 /// Build a login error.
-fn login_error(message: &crate::text::Message) -> CliError {
+pub(crate) fn login_error(message: &crate::text::Message) -> CliError {
     CliError::Resolve(crate::text::msg::login_error(message))
 }
 
