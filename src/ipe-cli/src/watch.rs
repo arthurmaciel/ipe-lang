@@ -86,8 +86,6 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use ipe_intern::Interner;
-
 use crate::project;
 use crate::text;
 use crate::{CliError, write_emitted_project};
@@ -437,17 +435,18 @@ pub(crate) struct ResolvedProject {
 /// Resolve `entry` (a `.ipe` file or a project directory) into a fresh
 /// [`ResolvedProject`] by re-reading every relevant file from disk. Mirrors
 /// `run_build`'s dispatch: directory → `package.ipe` inside it; `.ipe` → walk
-/// up for a manifest, else sibling discovery.
+/// up for a manifest, else the loose-file import closure
+/// ([`crate::loose_file::resolve_loose_file`]).
 ///
 /// `entry_text_override`, when given, shadows the entry `.ipe` file's disk
-/// bytes in the no-manifest branch — the LSP hands the unsaved editor
-/// buffer here so module-path discovery follows what the author sees, not
-/// stale disk state. `ipe watch` always passes `None` (disk is its truth).
+/// bytes in the no-manifest branch. `ipe watch` always passes `None` (disk
+/// is its truth).
 ///
 /// # Errors
 /// [`CliError::Io`] on any filesystem failure; [`CliError::Pipeline`] if the
-/// entry file itself fails to parse (needed only to learn its declared
-/// module path in the no-manifest case).
+/// entry file itself fails to parse (needed only to learn its imports in the
+/// no-manifest case); [`CliError::DiscoveryLimitReached`] when a loose
+/// file's import closure is too large.
 pub(crate) fn resolve_project_sources(
     entry: &Path,
     entry_text_override: Option<&str>,
@@ -494,60 +493,16 @@ pub(crate) fn resolve_project_sources(
         });
     }
 
-    // No manifest: sibling discovery, mirroring `build_with_sibling_discovery`.
-    let source = match entry_text_override {
-        Some(text) => text.to_owned(),
-        None => {
-            crate::io_bounded::read_to_string_capped(entry, crate::io_bounded::SOURCE_READ_CAP)?
-        }
-    };
-    let mut name_interner = Interner::new();
-    let parsed = ipe_parse::parse_module(&source, &mut name_interner).map_err(|diag| {
-        CliError::Pipeline {
-            file: entry.to_path_buf(),
-            src: source.clone(),
-            diag: Box::new(diag),
-        }
-    })?;
-    let entry_module_path: Vec<String> = parsed
-        .name
-        .value
-        .iter()
-        .map(|s| name_interner.resolve(*s).unwrap_or_default().to_owned())
-        .collect();
-    let src_root = entry
-        .parent()
-        .filter(|p| p.is_dir())
-        .unwrap_or_else(|| Path::new("."));
-    let mut discovered = project::discover_modules(src_root)?;
-    if !discovered
-        .iter()
-        .any(|m| m.module_path == entry_module_path)
-    {
-        discovered.push(project::DiscoveredModule {
-            path: entry.to_path_buf(),
-            module_path: entry_module_path.clone(),
-        });
-    }
-    let mut sources: BTreeMap<Vec<String>, (PathBuf, String)> = BTreeMap::new();
-    for m in &discovered {
-        if m.module_path == entry_module_path {
-            sources.insert(
-                entry_module_path.clone(),
-                (entry.to_path_buf(), source.clone()),
-            );
-        } else {
-            let src = crate::io_bounded::read_to_string_capped(
-                &m.path,
-                crate::io_bounded::SOURCE_READ_CAP,
-            )?;
-            sources.insert(m.module_path.clone(), (m.path.clone(), src));
-        }
-    }
+    // No manifest: the loose-file closure, the same one `ipe build` compiles.
+    let loaded = crate::loose_file::resolve_loose_file(
+        entry,
+        entry_text_override,
+        crate::loose_file::LooseFileLimits::DEFAULT,
+    )?;
     Ok(ResolvedProject {
-        sources,
-        discovered,
-        entry_path: entry_module_path,
+        sources: loaded.sources,
+        discovered: loaded.discovered,
+        entry_path: loaded.entry_module,
         blame_path: entry.to_path_buf(),
         db_driver: ipe_backend_rust::DbDriver::Sqlite,
         wasm_public_env: Vec::new(),
@@ -559,8 +514,8 @@ pub(crate) fn resolve_project_sources(
 /// itself to, derived from one resolved snapshot.
 fn scope_roots(resolved: &ResolvedProject, entry: &Path) -> (PathBuf, PathBuf) {
     // The manifest's directory when a `package.ipe` is the blame path;
-    // otherwise the blame path IS the entry file, so its parent is the source
-    // root — matching `build_with_sibling_discovery`.
+    // otherwise the blame path IS the entry file, and its parent holds every
+    // module of the loose-file closure (the resolver reads nothing outside it).
     if resolved.blame_path.file_name().and_then(|n| n.to_str())
         == Some(crate::package_manifest::PACKAGE_IPE)
     {
