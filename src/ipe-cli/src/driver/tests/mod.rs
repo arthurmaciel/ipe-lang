@@ -2815,8 +2815,8 @@ fn session_is_refused_for_a_native_bearing_program() {
     use crate::run_sandbox::ResolvedCapabilities;
     use ipe_ir::Capability;
     use std::collections::BTreeSet;
-    let native: BTreeSet<Capability> = [Capability::NativeFfi].into_iter().collect();
-    let raw: BTreeSet<Capability> = [Capability::FfiRaw].into_iter().collect();
+    let native: BTreeSet<Capability> = std::iter::once(Capability::NativeFfi).collect();
+    let raw: BTreeSet<Capability> = std::iter::once(Capability::FfiRaw).collect();
     let bearing = [
         ResolvedCapabilities {
             inferred: native.clone(),
