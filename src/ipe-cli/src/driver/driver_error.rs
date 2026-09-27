@@ -98,6 +98,17 @@ pub enum CliError {
     /// (no `IPE_HOME`, `XDG_DATA_HOME`, or `HOME`). Without a home there is
     /// nowhere to write the runtime the emitted project links against.
     RuntimeHomeUnknown,
+    /// No per-user cache directory could be resolved: neither `XDG_CACHE_HOME`
+    /// nor `HOME` names an absolute path. Refused rather than falling back to a
+    /// directory relative to the current working directory.
+    CacheHomeUnknown,
+    /// An explicit directory override (`IPE_INDEX_DIR`, `IPE_HOME`) is set but is
+    /// not an absolute path. Refused rather than resolved against the current
+    /// working directory or silently replaced by the default location.
+    EnvDirNotAbsolute {
+        /// The environment variable carrying the refused value.
+        var: &'static str,
+    },
     /// Writing the embedded runtime source to `<IPE_HOME>/runtime/<version>/rust`
     /// failed (disk full, permission denied, or a drifted embed). This is a
     /// fail-closed refusal — the build stops rather than link a wrong or empty
@@ -206,6 +217,15 @@ pub enum CliError {
     /// A publish precondition is a hard, typed refusal — never a warning — because
     /// a merged index entry must pin an immutable, reproducible revision.
     Publish(publish::Refusal),
+    /// A package version cannot enter the index — malformed, carrying build
+    /// metadata, or not above every version already published. Raised at
+    /// publish, at admission, and when an index entry is read, so no ambiguous
+    /// or regressing version reaches resolution or the enforced-semver check.
+    /// The refusal is boxed to keep `CliError` within its size ceiling.
+    VersionRefused {
+        package: String,
+        refusal: Box<crate::published_version::VersionRefusal>,
+    },
     /// `ipe doc check` found one or more exposed bindings without a doc-comment.
     /// Carries the ready-to-print coverage report. This is a legitimate gate
     /// result — the check ran correctly and the package is under-documented — not
@@ -497,6 +517,8 @@ impl CliError {
             Self::RuntimeNotFound => "runtime-not-found",
             Self::RuntimeDirInvalid { .. } => "runtime-dir-invalid",
             Self::RuntimeHomeUnknown => "runtime-home-unknown",
+            Self::CacheHomeUnknown => "cache-home-unknown",
+            Self::EnvDirNotAbsolute { .. } => "env-dir-not-absolute",
             Self::RuntimeMaterializeFailed { .. } => "runtime-materialize-failed",
             Self::RuntimeVersionMismatch { .. } => "runtime-version-mismatch",
             Self::EmittedBuildFailed { .. } => "emitted-build-failed",
@@ -510,6 +532,7 @@ impl CliError {
             Self::SemverRejected { .. } => "semver-rejected",
             Self::PackageAudit(_) => "package-audit",
             Self::Publish(_) => "publish",
+            Self::VersionRefused { .. } => "version-refused",
             Self::DocCoverage(_) => "doc-coverage",
             Self::DocExamplesFailed(_) => "doc-examples-failed",
             Self::CommandUsage { .. } => "command-usage",
@@ -568,6 +591,8 @@ impl CliError {
             | Self::RuntimeNotFound
             | Self::RuntimeDirInvalid { .. }
             | Self::RuntimeHomeUnknown
+            | Self::CacheHomeUnknown
+            | Self::EnvDirNotAbsolute { .. }
             | Self::RuntimeMaterializeFailed { .. }
             | Self::UnknownCode { .. }
             | Self::DocNotFound { .. }
@@ -579,6 +604,7 @@ impl CliError {
             | Self::SemverRejected { .. }
             | Self::PackageAudit(_)
             | Self::Publish(_)
+            | Self::VersionRefused { .. }
             | Self::DocCoverage(_)
             | Self::DocExamplesFailed(_)
             | Self::CommandUsage { .. }
@@ -666,6 +692,8 @@ impl std::fmt::Display for CliError {
                 f.write_str(&render(diag, &file.to_string_lossy(), src))
             }
             Self::RuntimeNotFound => f.write_str(text::cli_runtime_not_found()),
+            Self::CacheHomeUnknown => f.write_str(text::cli_cache_home_unknown()),
+            Self::EnvDirNotAbsolute { var } => f.write_str(&text::cli_env_dir_not_absolute(var)),
             Self::RuntimeDirInvalid { .. }
             | Self::RuntimeHomeUnknown
             | Self::RuntimeMaterializeFailed { .. }
@@ -695,7 +723,11 @@ impl std::fmt::Display for CliError {
                 package,
                 expected,
                 actual,
-            } => f.write_str(&text::cli_hash_mismatch(package, expected, actual)),
+            } => f.write_str(&text::cli_hash_mismatch(
+                &package.escape_debug(),
+                expected,
+                actual,
+            )),
             Self::DocNotFound { query, suggestions } => {
                 f.write_str(&text::cli_doc_not_found(query))?;
                 if !suggestions.is_empty() {
@@ -730,6 +762,9 @@ impl std::fmt::Display for CliError {
             }
             Self::PackageAudit(rejection) => write!(f, "{rejection}"),
             Self::Publish(refusal) => f.write_str(&text::cli_publish_refused(refusal)),
+            Self::VersionRefused { package, refusal } => {
+                f.write_str(&text::cli_version_refused(&package.escape_debug(), refusal))
+            }
             // The reason, then the command's full `--help` page (indented,
             // coloured for a terminal). Rendered against stderr because misuse
             // output goes there. A known command always has a help page; the

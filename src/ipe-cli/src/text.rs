@@ -391,8 +391,8 @@ messages! {
     doc_single_path = "doc-single-path";
     /// `ipe add`'s inspector binary is missing.
     ffi_inspector_not_found = "ffi-inspector-not-found";
-    /// `ipe add` cannot make a safe scratch directory without `HOME`.
-    ffi_add_home_unset = "ffi-add-home-unset";
+    /// `ipe add` cannot make a safe scratch directory without an absolute `HOME`.
+    ffi_add_home_not_absolute = "ffi-add-home-not-absolute";
     /// `ipe add` has no bubblewrap isolation available.
     ffi_no_bubblewrap = "ffi-no-bubblewrap";
     /// `ipe add`'s inspector payload was empty.
@@ -547,6 +547,10 @@ messages! {
     cli_static_refusal(refusal) = "cli-static-refusal";
     /// The Ipe runtime module tree could not be located.
     cli_runtime_not_found = "cli-runtime-not-found";
+    /// Neither `$XDG_CACHE_HOME` nor `$HOME` names an absolute directory.
+    cli_cache_home_unknown = "cli-cache-home-unknown";
+    /// A directory environment variable is set to a relative path.
+    cli_env_dir_not_absolute(var) = "cli-env-dir-not-absolute";
     /// `$IPE_RUNTIME_DIR` does not name a runtime crate root.
     cli_runtime_dir_invalid(path) = "cli-runtime-dir-invalid";
     /// The invalid runtime dir looks like the inner module directory.
@@ -593,6 +597,8 @@ messages! {
     cli_semver_rejected(required, floor, proposed) = "cli-semver-rejected";
     /// `ipe package publish` declined to proceed.
     cli_publish_refused(refusal) = "cli-publish-refused";
+    /// A package's version cannot enter the package index.
+    cli_version_refused(package, refusal) = "cli-version-refused";
     /// A command group was followed by a token that is not one of its verbs.
     cli_unknown_group_verb(group, attempted) = "cli-unknown-group-verb";
     /// The near-miss suggestion offered for an unknown group verb.
@@ -763,8 +769,8 @@ messages! {
     index_entry_source_moved(name, version, source, expected) = "index-entry-source-moved";
     /// `ipe clean` ran outside a project root.
     clean_no_manifest = "clean-no-manifest";
-    /// `ipe diff` was given a malformed version.
-    diff_invalid_version(raw) = "diff-invalid-version";
+    /// `ipe diff` was given a version the package index would refuse.
+    diff_invalid_version(refusal) = "diff-invalid-version";
     /// `ipe fmt` found no `.ipe` files.
     fmt_no_files(root) = "fmt-no-files";
     /// `ipe fmt --check` found unformatted files.

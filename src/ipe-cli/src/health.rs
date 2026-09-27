@@ -173,23 +173,9 @@ impl ConfigTarget {
 /// The `~/.cargo/config.toml` path (`$CARGO_HOME/config.toml`, else
 /// `~/.cargo/config.toml`).
 fn cargo_config_path() -> Result<PathBuf, CliError> {
-    if let Some(cargo_home) = std::env::var_os("CARGO_HOME") {
-        return Ok(PathBuf::from(cargo_home).join("config.toml"));
-    }
-    let home = home_dir()
+    let cargo_home = crate::env_dir::tool_home("CARGO_HOME", ".cargo")
         .ok_or_else(|| CliError::UsageOwned(crate::text::health_home_unknown().to_owned()))?;
-    Ok(home.join(".cargo").join("config.toml"))
-}
-
-/// The current user's home directory.
-fn home_dir() -> Option<PathBuf> {
-    #[cfg(windows)]
-    let var = "USERPROFILE";
-    #[cfg(not(windows))]
-    let var = "HOME";
-    std::env::var_os(var)
-        .map(PathBuf::from)
-        .filter(|p| !p.as_os_str().is_empty())
+    Ok(cargo_home.join("config.toml"))
 }
 
 /// The value a [`ConfigEdit`] sets — a string or a string array.

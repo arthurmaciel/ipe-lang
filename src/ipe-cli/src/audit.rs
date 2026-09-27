@@ -60,6 +60,7 @@ use ipe_ir::Capability;
 use crate::CliError;
 use crate::cli_args::OutputFormat;
 use crate::project::{self, ProjectManifest};
+use crate::published_version::PublishedVersion;
 use crate::publisher::{BlessedPublisher, BlessingRefusal, SelfDeclaredPublisher};
 use crate::scratch::ScratchDir;
 use crate::text;
@@ -324,7 +325,7 @@ pub fn run_audit_as(
     let effective_advisory_db: Option<PathBuf> = if no_advisory_db {
         None
     } else {
-        Some(advisory_db_override.unwrap_or_else(crate::resolve::index_root))
+        Some(advisory_db_override.map_or_else(crate::resolve::index_root, Ok)?)
     };
 
     let outcome = audit_gate(
@@ -1271,9 +1272,10 @@ fn disclosure_summary(name: &str, disclosure: &Disclosure) -> String {
 ///
 /// # Errors
 /// [`CliError::PackageAudit`] on an under-bump or a missing manifest version;
+/// [`CliError::VersionRefused`] when the manifest version carries build metadata;
 /// [`CliError::Diff`] when a tree cannot be diffed; resolution errors otherwise.
 fn enforced_semver(prepared: &Prepared, index_root: Option<&Path>) -> Result<(), CliError> {
-    let Some(new_version) = prepared.manifest.version.clone() else {
+    let Some(manifest_version) = prepared.manifest.version.clone() else {
         return Err(reject(
             Check::Semver,
             "the manifest declares no `version = \"…\"` — the enforced-semver check needs a \
@@ -1281,6 +1283,8 @@ fn enforced_semver(prepared: &Prepared, index_root: Option<&Path>) -> Result<(),
                 .to_owned(),
         ));
     };
+    let new_version = PublishedVersion::from_semver(manifest_version)
+        .map_err(|refusal| refusal.for_package(&prepared.manifest.name))?;
 
     // A prerelease (`X.Y.Z-<pre>`) is, by semver §9, explicitly unstable and
     // exempt from the compatibility guarantee a release version carries. Range
@@ -1288,11 +1292,11 @@ fn enforced_semver(prepared: &Prepared, index_root: Option<&Path>) -> Result<(),
     // semantics) never resolves a prerelease for a non-prerelease requirement, so
     // no consumer on a stable range can even see one — enforcing an API-bump on it
     // would only reject a normal iteration (`X.Y.Z-a` → `X.Y.Z-b`) that harms no
-    // one. Monotonicity is still guaranteed independently: `admission_precheck`'s
-    // immutability check forbids rewriting a published version, and the successor
-    // must exceed every published one. So a prerelease clears this check by being
-    // a prerelease, never by an API delta.
-    if !new_version.pre.is_empty() {
+    // one. Monotonicity is still guaranteed independently: `admission_precheck`
+    // forbids rewriting a published version and refuses a successor that does not
+    // exceed every published one (prereleases included). So a prerelease clears
+    // this check by being a prerelease, never by an API delta.
+    if new_version.is_prerelease() {
         crate::screen::Screen::new(crate::screen::Stream::Stdout)
             .line(
                 crate::screen::Tone::Text,
@@ -1307,7 +1311,8 @@ fn enforced_semver(prepared: &Prepared, index_root: Option<&Path>) -> Result<(),
         return Ok(());
     }
 
-    let index_root = index_root.map_or_else(crate::resolve::index_root, Path::to_path_buf);
+    let index_root =
+        index_root.map_or_else(crate::resolve::index_root, |root| Ok(root.to_path_buf()))?;
     // Absent ⇒ a first submission; no predecessor to enforce.
     // Unreadable ⇒ fail closed: a corrupt predecessor must not silently pass
     // as "first version" — propagate the error so the gate refuses.
@@ -1355,8 +1360,12 @@ fn enforced_semver(prepared: &Prepared, index_root: Option<&Path>) -> Result<(),
         .manifest_path
         .parent()
         .map_or_else(|| PathBuf::from("."), Path::to_path_buf);
-    let report =
-        crate::diff::check_semver_bump(&baseline, &new_tree, &previous.version, &new_version)?;
+    let report = crate::diff::check_semver_bump(
+        &baseline,
+        &new_tree,
+        previous.version.as_semver(),
+        new_version.as_semver(),
+    )?;
     if report.satisfied {
         Ok(())
     } else {
@@ -1378,11 +1387,11 @@ fn enforced_semver(prepared: &Prepared, index_root: Option<&Path>) -> Result<(),
 /// is none (a first stable version).
 fn stable_baseline<'a>(
     versions: &'a [crate::index::EntryVersion],
-    new_version: &semver::Version,
+    new_version: &PublishedVersion,
 ) -> Option<&'a crate::index::EntryVersion> {
     versions
         .iter()
-        .filter(|v| v.version.pre.is_empty() && v.version < *new_version)
+        .filter(|v| !v.version.is_prerelease() && v.version < *new_version)
         .max_by(|a, b| a.version.cmp(&b.version))
 }
 
@@ -1608,14 +1617,11 @@ fn advisory_check_with_base(
 ) -> Result<(), CliError> {
     let lockfile = crate::lockfile::Lockfile::read(&prepared.manifest.root)?;
     for dep in lockfile.packages() {
-        // The lockfile is re-read from disk here, an independent trust boundary
-        // from the resolver that wrote it: a hand-edited `ipe.lock` can carry a
-        // `name` the resolver would never emit (e.g. `../../x`), and that name
-        // flows into a registry URL segment and an advisory-DB path join. Parse
-        // it once, here, into the typed `PackageName` — a single non-traversing
-        // path component by construction — so no raw name reaches either sink.
-        let name = crate::package_name::PackageName::parse(&dep.name)?;
-        check_one_dep_advisories(db_root, &name, &dep.version, base_url)?;
+        // `Lockfile::read` parses each `name` into a `PackageName` — a single
+        // non-traversing path component by construction — so a hand-edited
+        // `ipe.lock` name never reaches the registry URL segment or the
+        // advisory-DB path join raw.
+        check_one_dep_advisories(db_root, &dep.name, dep.version.as_semver(), base_url)?;
     }
     Ok(())
 }
@@ -1869,6 +1875,7 @@ const fn reject(check: Check, message: String) -> CliError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::published_version::VersionRefusal;
 
     fn args(v: &[&str]) -> Vec<String> {
         v.iter().map(|x| (*x).to_owned()).collect()
@@ -2792,6 +2799,34 @@ mod tests {
         );
     }
 
+    /// A published version from a literal the test knows is valid.
+    #[allow(clippy::expect_used)] // test fixture: the literal is a valid published version
+    fn published(raw: &str) -> PublishedVersion {
+        PublishedVersion::parse(raw).expect("valid published version")
+    }
+
+    /// A manifest version carrying build metadata is refused by the enforced-semver
+    /// check before any index read, prerelease or release alike: `+meta` never
+    /// names a publishable version.
+    #[test]
+    fn enforced_semver_refuses_build_metadata() {
+        let index_root = make_test_dir("semver-build-metadata");
+        for raw in ["1.0.0+b", "0.0.0-smoke.2+sha.abc"] {
+            let mut prepared = make_prepared(&index_root.join("proj"));
+            prepared.manifest.version = Some(raw.parse().expect("valid semver with build"));
+            let result = enforced_semver(&prepared, Some(&index_root));
+            assert!(
+                matches!(
+                    &result,
+                    Err(CliError::VersionRefused { refusal, .. })
+                        if matches!(**refusal, VersionRefusal::BuildMetadata { .. })
+                ),
+                "{raw} must be refused for build metadata: {result:?}"
+            );
+        }
+        let _ = std::fs::remove_dir_all(&index_root);
+    }
+
     /// Write a one-package index at `index_root` publishing `versions` of
     /// `test-pkg`.
     fn write_index_versions(index_root: &std::path::Path, versions: &[&str]) {
@@ -2845,9 +2880,9 @@ mod tests {
             .expect("entry present");
         let _ = std::fs::remove_dir_all(&index_root);
 
-        let new_version = semver::Version::new(0, 1, 1);
+        let new_version = published("0.1.1");
         let baseline = stable_baseline(&entry.versions, &new_version).expect("a stable baseline");
-        assert_eq!(baseline.version, semver::Version::new(0, 1, 0));
+        assert_eq!(baseline.version, published("0.1.0"));
 
         let with_export = |names: &[&str]| {
             let mut module = crate::api_surface::ModuleApi::default();
@@ -2860,8 +2895,13 @@ mod tests {
         };
         let stable_api = with_export(&["f", "g"]);
         let rc_api = with_export(&["f"]);
-        let report = crate::diff::report(&stable_api, &rc_api, &baseline.version, &new_version)
-            .expect("floor does not overflow");
+        let report = crate::diff::report(
+            &stable_api,
+            &rc_api,
+            baseline.version.as_semver(),
+            new_version.as_semver(),
+        )
+        .expect("floor does not overflow");
         assert_eq!(report.floor, semver::Version::new(0, 2, 0));
         assert!(
             !report.satisfied,
@@ -2869,7 +2909,7 @@ mod tests {
         );
 
         assert!(
-            stable_baseline(&entry.versions, &semver::Version::new(0, 0, 9)).is_none(),
+            stable_baseline(&entry.versions, &published("0.0.9")).is_none(),
             "no release below the new version is a first stable version"
         );
     }
@@ -2914,7 +2954,7 @@ mod tests {
              version = \"{version}\"\n\
              source = \"https://github.com/example/{pkg_name}\"\n\
              rev = \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"\n\
-             sha256 = \"deadbeef\"\n\
+             sha256 = \"deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef\"\n\
              kind = \"index\"\n"
         );
         std::fs::write(project_root.join("ipe.lock"), content).expect("write ipe.lock");

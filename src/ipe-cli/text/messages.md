@@ -144,9 +144,9 @@ ipe doc: expected a single <path> argument
 
 ipe add: `ipe-ffi-inspector` not found beside the `ipe` binary or on PATH
 
-## ffi-add-home-unset
+## ffi-add-home-not-absolute
 
-ipe add: HOME is not set; cannot create a safe scratch directory
+ipe add: HOME is not an absolute path; cannot create a safe scratch directory
 
 ## ffi-no-bubblewrap
 
@@ -465,6 +465,14 @@ static build refused: {refusal}
 
 could not locate the Ipe runtime; set IPE_RUNTIME_DIR to an explicit path or pass --runtime <dir>
 
+## cli-cache-home-unknown
+
+could not determine the per-user cache directory: neither XDG_CACHE_HOME nor HOME is set to an absolute path; set XDG_CACHE_HOME to an absolute, writable directory
+
+## cli-env-dir-not-absolute
+
+{var} is set but is not an absolute path; set it to an absolute directory or unset it to use the default location
+
 ## cli-runtime-dir-invalid
 
 IPE_RUNTIME_DIR points at {path}, which is not an Ipe runtime crate root (its Cargo.toml must declare `name = "ipe-runtime-rust"`)
@@ -563,6 +571,10 @@ version {proposed} does not clear the required {required} bump — the new versi
 ## cli-publish-refused
 
 ipe package publish refused: {refusal}
+
+## cli-version-refused
+
+package `{package}`: {refusal}
 
 ## cli-unknown-group-verb
 
@@ -956,7 +968,7 @@ clean: no package.ipe here — run it from an Ipê project root
 
 ## diff-invalid-version
 
-diff: invalid version `{raw}`
+diff: {refusal}
 
 ## fmt-no-files
 
@@ -977,7 +989,7 @@ fmt: no such file or directory: {root}
 
 ## health-home-unknown
 
-health: cannot locate your home directory (neither CARGO_HOME nor HOME is set)
+health: cannot locate your home directory (neither CARGO_HOME nor HOME is an absolute path)
 
 ## health-install-command-empty
 
