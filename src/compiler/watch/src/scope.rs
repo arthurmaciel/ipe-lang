@@ -375,9 +375,14 @@ impl WatchScope {
             }
         }
 
+        // A counted source is a real file directly inside a watched directory:
+        // every directory on its way from the root was reached without
+        // following a symlink (`symlink_metadata` alone only refuses a
+        // symlinked leaf, not a symlinked ancestor).
         let file_count = relevant
             .iter()
             .filter(|path| is_source_file(path) && !is_manifest_file(path))
+            .filter(|path| path.parent().is_some_and(|dir| watched_dirs.contains(dir)))
             .filter(|path| std::fs::symlink_metadata(path).is_ok_and(|meta| meta.is_file()))
             .count();
         Ok(Self {
