@@ -16,11 +16,11 @@
 //! | `borrow_then_consume_call` | `tagFirst w.tag (consume w)` | builds + prints `10` |
 //! | `let_bound_borrow_then_consume` | `let t = w.tag in both (consume w) t` | builds + prints `10` |
 //! | `seq_kernel_read_then_consume` | `do { Io.println (String.fromInt w.tag) ; both (consume w) 0 }` | fail-closed IPE-L0135 |
-//! | `and_then_kernel_read_then_consume` | `Task.andThen (\x -> both (consume w) x) (Task.succeed w.tag)` | fail-closed IPE-L0135 |
+//! | `and_then_kernel_read_then_consume` | `Task.andThen (\x -> both (consume w) x) (Task.succeed w.tag)` | fail-closed IPE-L0126 |
 //! | `let_bound_seq_kernel_read` | `let w = mk n in do { .. w.tag .. ; both (consume w) 0 }` | fail-closed IPE-L0135 |
 //! | `destructured_seq_kernel_read` | `let (w, _) = pair n in do { .. w.tag .. ; both (consume w) 0 }` | fail-closed IPE-L0135 |
 //! | `partial_move_then_same_field` | `case w of { job } -> withLists job (Task.sequence [ w.job ]) ..` | fail-closed IPE-L0135 |
-//! | `seq_user_arg_read_then_consume` | `do { x <- tagTask w.tag ; both (consume w) x }` | builds + prints `10` |
+//! | `seq_user_arg_read_then_consume` | `do { x <- tagTask w.tag ; both (consume w) x }` | fail-closed IPE-L0126 |
 //! | `seq_user_statement_read_then_consume` | `do { announce w.tag ; both (consume w) 0 }` | builds + prints `3`, `7` |
 //!
 //! A kernel call's argument order is chosen by its emitter, so a move and a
@@ -35,9 +35,15 @@
 //! deferred position of the effect — a kernel argument may run inside a `move`
 //! closure. A non-`Clone` record has no clone, so that shape is refused for
 //! every binder form: a parameter, a `let`, and a destructured component. A
-//! user function's arguments run eagerly, so the same read there only borrows
-//! and round-trips. A record pattern moves the fields it binds, so reading one
-//! of them again through `w` is refused too.
+//! user function's arguments run eagerly, so the same read in a plain
+//! statement only borrows and round-trips. A record pattern moves the fields it
+//! binds, so reading one of them again through `w` is refused too.
+//!
+//! A continuation lambda (an explicit `Task.andThen` or a `<-` bind, which
+//! desugars to one) that passes `w` to a call captures a non-`Clone` value in a
+//! closure. The capture gate refuses that with IPE-L0126 while the lambda body
+//! is lowered, before the parameter's reuse gate runs, whatever the effect
+//! reads.
 //!
 //! ```text
 //! # gate check only (fast):
@@ -321,7 +327,9 @@ main =
     run { job = Task.succeed 7, tag = 3 }
 ";
 
-/// The same hazard through an explicit `Task.andThen` continuation.
+/// The same hazard through an explicit `Task.andThen` continuation. The
+/// continuation captures `w` and passes it to `consume`, so the closure-capture
+/// gate refuses it first (IPE-L0126).
 const AND_THEN_KERNEL_READ_THEN_CONSUME: &str = r"
 
 run : { job : Task Error Int, tag : Int } -> Task Error ()
@@ -388,8 +396,8 @@ main =
     run { job = Task.succeed 7, tag = 3 }
 ";
 
-/// A user function's argument is evaluated eagerly, so `tagTask w.tag` only
-/// borrows `w` before the continuation consumes it. Prints `10`.
+/// A `<-` bind desugars to a `Task.andThen` continuation lambda; passing the
+/// captured `w` to `consume` there is a non-`Clone` closure capture (IPE-L0126).
 const SEQ_USER_ARG_READ_THEN_CONSUME: &str = r"
 
 run : { job : Task Error Int, tag : Int } -> Task Error ()
@@ -486,7 +494,7 @@ fn and_then_kernel_read_then_consume_fails_closed() {
     assert_rejected(
         "and_then_kernel_read_then_consume",
         &seq_program(AND_THEN_KERNEL_READ_THEN_CONSUME),
-        ipe_diagnostics::IPE_L0135,
+        ipe_diagnostics::IPE_L0126,
     );
 }
 
@@ -518,11 +526,11 @@ fn partial_move_then_same_field_fails_closed() {
 }
 
 #[test]
-fn seq_user_arg_read_then_consume_round_trips() {
-    assert_accepted(
+fn seq_user_arg_read_then_consume_capture_fails_closed() {
+    assert_rejected(
         "seq_user_arg_read_then_consume",
         &seq_program(SEQ_USER_ARG_READ_THEN_CONSUME),
-        "10",
+        ipe_diagnostics::IPE_L0126,
     );
 }
 
