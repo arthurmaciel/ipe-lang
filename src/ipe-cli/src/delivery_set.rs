@@ -147,7 +147,7 @@ impl DeliverySet {
     /// delivery, today's `release` behaviour.
     ///
     /// # Errors
-    /// [`CliError::UsageOwned`] naming a duplicate entry; [`CliError::UsageOwned`]
+    /// [`CliError::Usage`] naming a duplicate entry; [`CliError::Usage`]
     /// for a web-only entry on a non-web shape (the shape lesson); the underlying
     /// [`DeliveryError`] for any other invalid combination or a `--static`
     /// request the delivery cannot honour.
@@ -310,13 +310,16 @@ impl ReleaseOutcome {
 /// The duplicate-entry rejection, naming the repeated delivery and the fix.
 fn duplicate_entry(entry: ShipEntry) -> CliError {
     let words = describe_entry(entry);
-    CliError::UsageOwned(crate::text::ships_repeated(&words))
+    CliError::Usage(crate::text::msg::ships_repeated(&words))
 }
 
 /// The web-entry-on-non-web-shape rejection, in the pedagogical two-axis voice.
 fn web_entry_on_non_web(pinned: Shape, entry: ShipEntry) -> CliError {
     let words = describe_entry(entry);
-    CliError::UsageOwned(crate::text::ships_shape_mismatch(&words, &pinned.word()))
+    CliError::Usage(crate::text::msg::ships_shape_mismatch(
+        &words,
+        &pinned.word(),
+    ))
 }
 
 /// The CLI delivery words a ship entry stands for, for a diagnostic. The
@@ -398,7 +401,7 @@ mod tests {
     fn web_entry_on_non_web_shape_is_pedagogical() {
         for shape in [Shape::Script, Shape::Tui, Shape::Cli, Shape::Worker] {
             let err = DeliverySet::resolve(shape, &[ShipEntry::SoloIos]).unwrap_err();
-            let CliError::UsageOwned(msg) = err else {
+            let CliError::Usage(msg) = err else {
                 panic!("expected a named rejection, got {err:?}");
             };
             assert!(msg.contains(shape.word()), "names the shape: {msg}");
@@ -423,7 +426,7 @@ mod tests {
     fn duplicate_entry_is_rejected() {
         let err =
             DeliverySet::resolve(Shape::Web, &[ShipEntry::Solo, ShipEntry::Solo]).unwrap_err();
-        let CliError::UsageOwned(msg) = err else {
+        let CliError::Usage(msg) = err else {
             panic!("expected a named rejection, got {err:?}");
         };
         assert!(msg.contains("twice"), "names the duplicate: {msg}");
@@ -473,7 +476,10 @@ mod tests {
         let outcome = set.release_each(|plan| {
             if matches!(plan.delivery().runtime(), Some(Runtime::Solo)) && plan.slug() == "web-solo"
             {
-                Err(CliError::UsageOwned("solo bundle failed".to_owned()))
+                Err(CliError::Usage(crate::text::msg::command_refusal(
+                    &"release",
+                    &"solo bundle failed",
+                )))
             } else {
                 Ok(PathBuf::from(plan.slug()))
             }

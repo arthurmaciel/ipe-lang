@@ -84,9 +84,9 @@ impl Identity {
         let clean = |label: &str, raw: &str| -> Result<String, CliError> {
             let trimmed = raw.trim();
             if trimmed.is_empty() || trimmed.chars().any(|c| c.is_control() || c.is_whitespace()) {
-                return Err(CliError::Resolve(format!(
-                    "registry trust: `{label}` must be a non-empty token with no whitespace or \
-                     control characters, got: {raw:?}"
+                return Err(CliError::Resolve(crate::text::msg::trust_token_invalid(
+                    &label,
+                    &crate::style::TerminalSafe::sanitize(&format!("{raw:?}")),
                 )));
             }
             Ok(trimmed.to_owned())
@@ -175,8 +175,9 @@ impl SignatureBundle {
     /// [`MAX_BUNDLE_BYTES`], is not valid JSON, or is not a JSON object.
     pub fn parse(pkg: &str, raw: &str) -> Result<Self, CliError> {
         let refuse = |detail: &str| {
-            CliError::Resolve(format!(
-                "package `{pkg}`: signature bundle is malformed ({detail})"
+            CliError::Resolve(crate::text::msg::signature_bundle_malformed(
+                &pkg,
+                &crate::style::TerminalSafe::sanitize(detail),
             ))
         };
         let trimmed = raw.trim();
@@ -332,11 +333,9 @@ pub fn evaluate_signature(
         // Absent signature: fail closed only when the policy requires one.
         || {
             if policy.require_signature() {
-                Err(CliError::Resolve(format!(
-                    "package `{pkg}`: no publisher signature is present, but the configured \
-                     registry trust policy requires one (`require_signature = true`) — refusing \
-                     to resolve an unsigned version"
-                )))
+                Err(CliError::Resolve(
+                    crate::text::msg::signature_required_absent(&pkg),
+                ))
             } else {
                 Ok(SignatureOutcome::UnsignedAllowed)
             }
@@ -348,9 +347,9 @@ pub fn evaluate_signature(
                 .verify(bundle, subject_digest, source_tree, policy)
                 .map(SignatureOutcome::Verified)
                 .map_err(|e| {
-                    CliError::Resolve(format!(
-                        "package `{pkg}`: a publisher signature is present but was not trusted \
-                         — {e}"
+                    CliError::Resolve(crate::text::msg::signature_untrusted(
+                        &pkg,
+                        &crate::style::TerminalSafe::sanitize(&e.to_string()),
                     ))
                 })
         },
@@ -381,8 +380,11 @@ pub fn evaluate_signature(
 /// nothing" — a typo in an allowlist must not quietly widen (or here, void) the
 /// trusted set.
 pub fn parse_trust_policy_toml(text: &str) -> Result<TrustPolicy, CliError> {
-    let refuse =
-        |detail: &str| CliError::Resolve(format!("registry trust config is malformed ({detail})"));
+    let refuse = |detail: &str| {
+        CliError::Resolve(crate::text::msg::trust_config_malformed(
+            &crate::style::TerminalSafe::sanitize(detail),
+        ))
+    };
     let table: toml::Table = text
         .parse()
         .map_err(|e| refuse(&format!("not valid TOML: {e}")))?;

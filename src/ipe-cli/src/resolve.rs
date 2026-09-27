@@ -148,16 +148,16 @@ pub fn resolve_escape(project_root: &Path, name: &str, dep: &IpeDep) -> Result<(
             // Parse-don't-validate: convert the raw manifest strings to typed
             // newtypes at this escape-path boundary before they reach the git
             // sink, so the sink cannot be called with an unvalidated value.
-            let typed_url = SourceUrl::parse(name, url)?;
+            let typed_url = SourceUrl::parse(&package_name, url)?;
             // The requested ref (may be a branch or HEAD) is injection-gated
             // here but not yet an immutable pin.
             let raw_rev = rev.as_deref().unwrap_or("HEAD");
-            let requested = CommitId::parse(name, raw_rev)?;
+            let requested = CommitId::parse(&package_name, raw_rev)?;
             // Fetch first into a temporary location keyed by the requested ref,
             // then resolve to the concrete SHA that names the exact commit.
             let checkout =
                 fetch_git_requested(project_root, &package_name, &typed_url, &requested)?;
-            let pinned = PinnedRev::resolve_in_checkout(name, &checkout, &requested)?;
+            let pinned = PinnedRev::resolve_in_checkout(&package_name, &checkout, &requested)?;
             // Re-key the cache dir by the immutable SHA so fetch and verify
             // share the same key regardless of what ref was requested.
             let final_dest = escape_cache_dir(project_root, &package_name, &pinned);
@@ -188,19 +188,17 @@ pub fn resolve_escape(project_root: &Path, name: &str, dep: &IpeDep) -> Result<(
                 project_root.join(path)
             };
             if !resolved.is_dir() {
-                return Err(CliError::Resolve(format!(
-                    "package `{name}`: path dependency `{}` does not exist",
-                    resolved.display()
-                )));
+                return Err(CliError::Resolve(
+                    crate::text::msg::resolve_path_dep_missing(&name, &resolved.display()),
+                ));
             }
             let source = LocalSource::from_path(&package_name, path)?;
             (LockedOrigin::Path { source }, resolved)
         }
         IpeDep::Index(_) => {
-            return Err(CliError::Resolve(format!(
-                "package `{name}`: an index dependency is resolved through `resolve_and_add`, \
-                 not `resolve_escape`"
-            )));
+            return Err(CliError::Resolve(
+                crate::text::msg::resolve_index_dep_escape(&name),
+            ));
         }
     };
 
@@ -560,13 +558,13 @@ fn run_git(name: &str, args: &[&str], dest: &Path, cwd: Option<&Path>) -> Result
         .env("GIT_TERMINAL_PROMPT", "0");
     let output = command
         .output()
-        .map_err(|e| CliError::Resolve(format!("package `{name}`: could not run `git`: {e}")))?;
+        .map_err(|e| CliError::Resolve(crate::text::msg::resolve_git_unavailable(&name, &e)))?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(CliError::Resolve(format!(
-            "package `{name}`: `git {}` failed: {}",
-            args.join(" "),
-            stderr.trim()
+        return Err(CliError::Resolve(crate::text::msg::resolve_git_failed(
+            &name,
+            &crate::style::TerminalSafe::sanitize(&args.join(" ")),
+            &crate::style::TerminalSafe::sanitize(stderr.trim()),
         )));
     }
     Ok(())
@@ -672,6 +670,12 @@ mod tests {
     use std::path::{Path, PathBuf};
     use std::process::Command;
 
+    /// A fixture package name.
+    #[allow(clippy::expect_used)] // fixture names are literal registry names
+    fn pn(raw: &str) -> PackageName {
+        PackageName::parse(raw).expect("fixture package name parses")
+    }
+
     fn temp_dir(_tag: &str) -> PathBuf {
         let sd = crate::scratch::ScratchDir::new("ipe-resolve-test").expect("scratch dir");
         let p = sd.path().to_path_buf();
@@ -722,7 +726,7 @@ mod tests {
         std::fs::write(dir.join("a.txt"), "hello").expect("write");
         let real = Sha256Hex::of_tree(&dir).expect("hash");
         verify_hash("p", &dir, &real).expect("matching hash passes");
-        let wrong = Sha256Hex::parse("p", &"0".repeat(64)).expect("valid digest");
+        let wrong = Sha256Hex::parse(&pn("p"), &"0".repeat(64)).expect("valid digest");
         let err = verify_hash("p", &dir, &wrong).unwrap_err();
         assert!(matches!(err, crate::CliError::HashMismatch { .. }));
         let _ = std::fs::remove_dir_all(&dir);
@@ -941,13 +945,13 @@ mod tests {
 
         // An escape dep: version 0.0.0 + 40-hex rev.
         let sha = "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2";
-        let pinned_sha = PinnedRev::from_full_sha("myescape", sha).expect("valid sha");
-        let digest = Sha256Hex::parse("p", &"0".repeat(64)).expect("valid digest");
+        let pinned_sha = PinnedRev::from_full_sha(&pn("myescape"), sha).expect("valid sha");
+        let digest = Sha256Hex::parse(&pn("p"), &"0".repeat(64)).expect("valid digest");
         let escape_dep = LockedDep {
             name: PackageName::parse("myescape").expect("valid name"),
             version: PublishedVersion::new(0, 0, 0),
             origin: LockedOrigin::Git {
-                source: SourceUrl::parse("myescape", "https://example.invalid/myescape")
+                source: SourceUrl::parse(&pn("myescape"), "https://example.invalid/myescape")
                     .expect("valid url"),
                 rev: pinned_sha.clone(),
             },
@@ -959,9 +963,9 @@ mod tests {
             name: PackageName::parse("mypkg").expect("valid name"),
             version: PublishedVersion::parse("1.2.0").expect("valid"),
             origin: LockedOrigin::Index {
-                source: SourceUrl::parse("mypkg", "https://example.invalid/mypkg")
+                source: SourceUrl::parse(&pn("mypkg"), "https://example.invalid/mypkg")
                     .expect("valid url"),
-                rev: PinnedRev::from_full_sha("mypkg", sha).expect("valid sha"),
+                rev: PinnedRev::from_full_sha(&pn("mypkg"), sha).expect("valid sha"),
             },
             sha256: digest,
         };
@@ -1056,9 +1060,9 @@ mod tests {
         // `fetch_git_into` directly, enforcing parse-don't-validate at the sink.
         let src = git_source("dash-url-clone", "module Lib\n");
         let dest = temp_dir("dash-url-dest");
-        let url = SourceUrl::parse("p", &src.display().to_string())
+        let url = SourceUrl::parse(&pn("p"), &src.display().to_string())
             .expect("local path is a valid source URL");
-        let rev = CommitId::parse("p", "HEAD").expect("HEAD is a valid commit id");
+        let rev = CommitId::parse(&pn("p"), "HEAD").expect("HEAD is a valid commit id");
         fetch_git_into("p", &url, rev.as_str(), &dest)
             .expect("clone succeeds for a valid local repo");
         assert!(dest.is_dir(), "destination was populated");
@@ -1070,14 +1074,14 @@ mod tests {
     fn source_url_newtype_rejects_ext_transport_before_fetch() {
         // A `source` field containing `ext::` must be rejected by `SourceUrl::parse`
         // at the index-parse boundary; `fetch_git_into` is never called.
-        let err = SourceUrl::parse("evil", "ext::sh -c 'id'").unwrap_err();
+        let err = SourceUrl::parse(&pn("evil"), "ext::sh -c 'id'").unwrap_err();
         let msg = format!("{err}");
         assert!(msg.contains("source"), "{msg}");
     }
 
     #[test]
     fn source_url_newtype_rejects_dash_leading_before_fetch() {
-        let err = SourceUrl::parse("evil", "--upload-pack=malicious").unwrap_err();
+        let err = SourceUrl::parse(&pn("evil"), "--upload-pack=malicious").unwrap_err();
         let msg = format!("{err}");
         assert!(msg.contains("source"), "{msg}");
     }
@@ -1087,21 +1091,21 @@ mod tests {
         // An injection-shaped `rev` (leading `-`) is rejected at parse time
         // so it never reaches `git checkout`. Ordinary ref names are accepted.
         assert!(
-            CommitId::parse("ok", "main").is_ok(),
+            CommitId::parse(&pn("ok"), "main").is_ok(),
             "branch names are valid refs"
         );
         assert!(
-            CommitId::parse("ok", "abc").is_ok(),
+            CommitId::parse(&pn("ok"), "abc").is_ok(),
             "short hashes are valid refs"
         );
-        let err = CommitId::parse("evil", "-S injected").unwrap_err();
+        let err = CommitId::parse(&pn("evil"), "-S injected").unwrap_err();
         let msg = format!("{err}");
         assert!(msg.contains("rev"), "{msg}");
     }
 
     #[test]
     fn commit_id_newtype_rejects_dash_rev_before_checkout() {
-        let err = CommitId::parse("evil", "-S injected").unwrap_err();
+        let err = CommitId::parse(&pn("evil"), "-S injected").unwrap_err();
         let msg = format!("{err}");
         assert!(msg.contains("rev"), "{msg}");
     }

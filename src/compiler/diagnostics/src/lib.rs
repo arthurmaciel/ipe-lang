@@ -8,6 +8,7 @@ mod diagnostic;
 pub mod path_check;
 mod render;
 mod span;
+pub mod terminal;
 
 // Re-export the whole taxonomy with a glob so no downstream-nameable code can be
 // omitted by a hand-synced list: every `IPE_*` constant, `ALL_CODES`, `Code`,

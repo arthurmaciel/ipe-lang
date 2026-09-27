@@ -68,7 +68,7 @@ use crate::CliError;
 /// [`CliError::Usage`] on flag misuse; [`CliError::Io`] on a filesystem
 /// failure; [`CliError::Pipeline`] when a file cannot be parsed or the
 /// formatter's round-trip guard trips. Under `--check`, an unformatted file is
-/// reported as a non-zero exit via [`CliError::UsageOwned`] carrying the list.
+/// reported as a non-zero exit via [`CliError::Usage`] carrying the list.
 pub fn run_fmt(rest: &[String]) -> Result<(), CliError> {
     // `--help` / `-h` is a request for output, not an error — honour it before
     // the typed parse (which treats every dashed token as a flag to validate).
@@ -107,7 +107,7 @@ fn run_fmt_inplace(
     let root = PathBuf::from(path.unwrap_or("."));
     let files = collect_ipe_files(&root)?;
     if files.is_empty() {
-        return Err(CliError::UsageOwned(crate::text::fmt_no_files(
+        return Err(CliError::Usage(crate::text::msg::fmt_no_files(
             &root.display(),
         )));
     }
@@ -195,7 +195,7 @@ fn report_check(
                 .map(|p| format!("  {}", p.display()))
                 .collect::<Vec<_>>()
                 .join("\n");
-            Err(CliError::UsageOwned(crate::text::fmt_unformatted_files(
+            Err(CliError::Usage(crate::text::msg::fmt_unformatted_files(
                 &list,
             )))
         }
@@ -217,9 +217,7 @@ fn run_fmt_stdin(check: bool) -> Result<(), CliError> {
         if formatted != src {
             // Print a unified diff for CI consumption.
             diff_eprint("<stdin>", &src, &formatted);
-            return Err(CliError::UsageOwned(
-                crate::text::fmt_stdin_unformatted().to_owned(),
-            ));
+            return Err(CliError::Usage(crate::text::msg::fmt_stdin_unformatted()));
         }
     } else {
         std::io::Write::write_all(&mut std::io::stdout(), formatted.as_bytes()).map_err(|e| {
@@ -286,7 +284,7 @@ fn collect_ipe_files(root: &Path) -> Result<Vec<PathBuf>, CliError> {
         return Ok(vec![root.to_path_buf()]);
     }
     if !root.is_dir() {
-        return Err(CliError::UsageOwned(crate::text::fmt_no_such_path(
+        return Err(CliError::Usage(crate::text::msg::fmt_no_such_path(
             &root.display(),
         )));
     }

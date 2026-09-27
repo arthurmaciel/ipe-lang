@@ -485,7 +485,7 @@ fn android_entry_name(entry: &AndroidEntry) -> String {
 /// derives, never *introduce* one.
 ///
 /// # Errors
-/// [`CliError::UsageOwned`] carrying the `IPE-P0001` refusal when any override
+/// [`CliError::Usage`] carrying the `IPE-P0001` refusal when any override
 /// permission has no backing accepted axis.
 pub fn reconcile_override(
     accepts: &BTreeSet<Capability>,
@@ -506,14 +506,19 @@ pub fn reconcile_override(
 /// The typed, fail-closed refusal naming each override permission with no backing
 /// accepted axis, and the remedy.
 fn unbacked_permission_refusal(platform: Platform, unbacked: &[&String]) -> CliError {
-    let header = crate::text::permission_consent_header(&platform.as_str());
-    let lines: Vec<String> = std::iter::once(header)
-        .chain(unbacked.iter().map(|name| crate::text::consent_item(name)))
-        .chain(std::iter::once(
-            crate::text::permission_consent_remedy().to_owned(),
+    CliError::Usage(crate::text::Message::lines(
+        std::iter::once(crate::text::msg::permission_consent_header(
+            &platform.as_str(),
         ))
-        .collect();
-    CliError::UsageOwned(lines.join("\n"))
+        .chain(
+            unbacked
+                .iter()
+                .map(|name| crate::text::msg::consent_item(name)),
+        )
+        .chain(std::iter::once(
+            crate::text::msg::permission_consent_remedy(),
+        )),
+    ))
 }
 
 /// A structured, per-axis view of a derivation for the CLI surface — which web

@@ -46,7 +46,7 @@ pub(crate) struct LintArgs {
 /// be combined (same rule as `health --yes --json`).
 ///
 /// # Errors
-/// [`CliError::UsageOwned`] on an unknown flag, a second positional, or
+/// [`CliError::Usage`] on an unknown flag, a second positional, or
 /// `--fix` combined with `--json`/`--plain`.
 pub(crate) fn parse_lint_args(rest: &[String]) -> Result<LintArgs, CliError> {
     let mut entry: Option<String> = None;
@@ -63,7 +63,7 @@ pub(crate) fn parse_lint_args(rest: &[String]) -> Result<LintArgs, CliError> {
             }
             positional => {
                 if entry.is_some() {
-                    return Err(CliError::Usage(text::lint_single_path()));
+                    return Err(CliError::Usage(text::msg::lint_single_path()));
                 }
                 entry = Some(positional.to_owned());
             }
@@ -71,9 +71,7 @@ pub(crate) fn parse_lint_args(rest: &[String]) -> Result<LintArgs, CliError> {
     }
     let format = format.unwrap_or_default();
     if fix && format != cli_args::OutputFormat::Human {
-        return Err(CliError::UsageOwned(
-            text::lint_fix_with_format().to_owned(),
-        ));
+        return Err(CliError::Usage(text::msg::lint_fix_with_format()));
     }
     Ok(LintArgs { entry, fix, format })
 }
@@ -82,7 +80,7 @@ pub(crate) fn parse_lint_args(rest: &[String]) -> Result<LintArgs, CliError> {
 ///
 /// # Errors
 /// [`CliError::Usage`] on misuse; [`CliError::Io`] on a filesystem failure;
-/// [`CliError::Pipeline`] if an entry file fails to parse; [`CliError::UsageOwned`]
+/// [`CliError::Pipeline`] if an entry file fails to parse; [`CliError::Usage`]
 /// for a malformed `lint.ipe`; [`CliError::LintGateFailed`] when a surviving
 /// finding is at or above the gate severity (report path only).
 pub(crate) fn run_lint(rest: &[String]) -> Result<(), CliError> {
@@ -135,7 +133,7 @@ fn load_config(blame_path: &Path) -> Result<LintConfig, CliError> {
     let text =
         crate::io_bounded::read_to_string_capped(&lint_ipe, crate::io_bounded::MANIFEST_READ_CAP)?;
     ipe_lint::read_lint_config(&text, &lint_ipe.display().to_string())
-        .map_err(|e| CliError::UsageOwned(e.to_string()))
+        .map_err(|e| CliError::Usage(crate::text::Message::relay(&e)))
 }
 
 /// Run the linter and print each finding; fail the gate if any survives at or
