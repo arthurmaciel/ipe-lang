@@ -101,11 +101,22 @@ main =
 fn untyped_embed_row_model_refused_or_builds() {
     let name = "untyped_embed_row_model";
     let Some(entry) = write_single(name, UNTYPED_EMBED_ROW_MODEL) else {
+        assert!(
+            false_marker(),
+            "{name}: could not write the fixture into the scratch dir"
+        );
         return;
     };
     let out = out_dir(name);
-    let Ok(runtime) = ipe::resolve_runtime() else {
-        return;
+    let runtime = match ipe::resolve_runtime() {
+        Ok(runtime) => runtime,
+        Err(err) => {
+            assert!(
+                false_marker(),
+                "{name}: the embedded runtime could not be resolved: {err:?}"
+            );
+            return;
+        }
     };
     match ipe::build(&entry, &out, &runtime) {
         Ok(()) => crate::support::assert_seal_builds(name, &out),

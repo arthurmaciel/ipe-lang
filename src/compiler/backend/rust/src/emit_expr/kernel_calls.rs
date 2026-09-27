@@ -33,11 +33,11 @@ pub const fn kernel_swaps_first_two(k: ipe_ir::KernelFn) -> bool {
             | KernelFn::JsonDecAndThen
             | KernelFn::ConfigAndThen
             | KernelFn::DbDecAndThen
-            // `Task.andThen f task` — Ipê passes continuation first; Rust runtime
-            // `task_and_then(task, f)` expects effect first so Rust evaluates the
-            // effect expression BEFORE the continuation closure captures shared Db
-            // pool values, preventing E0507 / E0382 move conflicts at connect-use
-            // sites (see `Expr::TaskSeq` below for the auto-force counterpart).
+            // `Task.andThen f task` — Ipê passes the continuation first; the
+            // runtime `task_and_then(task, f)` takes the effect first. The swap
+            // evaluates the effect before the continuation closure captures, so
+            // a binding both use would be moved first (E0382);
+            // `swapped_container_clone_rewrite` clones it at the effect site.
             | KernelFn::TaskAndThen
     )
 }

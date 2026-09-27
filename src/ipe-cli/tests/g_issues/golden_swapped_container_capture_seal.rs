@@ -17,6 +17,16 @@
 //! | `Result.map` | `Result.map (\v -> v ++ label) (wrapOk label)` | `cc` |
 //! | `Result.andThen` | `Result.andThen (\v -> Ok (v ++ label)) (wrapOk label)` | `dd` |
 //! | `Result.mapError` | `Result.mapError (\e -> e ++ label) (wrapErr label)` | `ee` |
+//! | `Maybe.andThen`, fn param | `Maybe.andThen f (f s)` | `hhh` |
+//! | `Maybe.map`, fn param | `Maybe.map (\x -> f x) (wrapJust (f s))` | `iii` |
+//! | `Task.andThen`, fn param | `Task.andThen (\x -> f x) (f s)` | printed last: `jjj` |
+//! | container binder shadows | `Maybe.map (\v -> v ++ label) (case wrapJust label of Just label -> …)` | `k!k` |
+//!
+//! The function-parameter rows pin the other half of the rewrite: a parameter
+//! `f` read only in direct callee position stays a non-`Clone` `Box<dyn Fn>`
+//! (callee reads borrow), so the container's `f s` must stay a borrowing call
+//! and never become `(f.clone())(s)` (E0599). The shadow row pins that a
+//! container binder rebinding the captured name is not rewritten.
 //!
 //! ```text
 //! # emit check only (fast):
@@ -64,11 +74,22 @@ fn out_dir(name: &str) -> PathBuf {
 #[track_caller]
 fn assert_accepted(name: &str, source: &str, expected_stdout: &str) {
     let Some(entry) = write_single(name, source) else {
+        assert!(
+            false_marker(),
+            "{name}: could not write the fixture into the scratch dir"
+        );
         return;
     };
     let out = out_dir(name);
-    let Ok(runtime) = ipe::resolve_runtime() else {
-        return;
+    let runtime = match ipe::resolve_runtime() {
+        Ok(runtime) => runtime,
+        Err(err) => {
+            assert!(
+                false_marker(),
+                "{name}: the embedded runtime could not be resolved: {err:?}"
+            );
+            return;
+        }
     };
     match ipe::build(&entry, &out, &runtime) {
         Ok(()) => {}
@@ -106,13 +127,15 @@ fn assert_accepted(name: &str, source: &str, expected_stdout: &str) {
 }
 
 /// Every Ipê-callable container-first `Maybe`/`Result` kernel, each with a
-/// function argument that captures the `String` its container moves.
+/// function argument that captures the `String` its container moves, plus the
+/// function-parameter callee and shadowed-binder shapes.
 const SWAPPED_CONTAINER_CAPTURE: &str = r#"module Main exposing (main)
 
 import Ipe.Io as Io
 import Ipe.Maybe as Maybe
 import Ipe.Result as Result
 import Ipe.String as String
+import Ipe.Task as Task
 
 
 wrapJust : String -> Maybe String
@@ -165,17 +188,53 @@ resultMapError label =
     Result.mapError (\e -> e ++ label) (wrapErr label)
 
 
+andThenFnParam : (String -> Maybe String) -> String -> Maybe String
+andThenFnParam f s =
+    Maybe.andThen f (f s)
+
+
+mapFnParam : (String -> String) -> String -> Maybe String
+mapFnParam f s =
+    Maybe.map (\x -> f x) (wrapJust (f s))
+
+
+taskFnParam : (String -> Task Error String) -> String -> Task Error String
+taskFnParam f s =
+    Task.andThen (\x -> f x) (f s)
+
+
+shadowedBinder : String -> Maybe String
+shadowedBinder label =
+    Maybe.map
+        (\v -> v ++ label)
+        (case wrapJust label of
+            Just label ->
+                Just (label ++ "!")
+
+            Nothing ->
+                Nothing
+        )
+
+
 main : Task Error ()
 main =
-    Io.println
-        (String.join ","
-            [ Maybe.withDefault "none" (maybeMap "a")
-            , Maybe.withDefault "none" (maybeAndThen "b")
-            , Result.withDefault "err" (resultMap "c")
-            , Result.withDefault "err" (resultAndThen "d")
-            , errOr "ok" (resultMapError "e")
-            ]
+    Task.andThen
+        (\t ->
+            Io.println
+                (String.join ","
+                    [ Maybe.withDefault "none" (maybeMap "a")
+                    , Maybe.withDefault "none" (maybeAndThen "b")
+                    , Result.withDefault "err" (resultMap "c")
+                    , Result.withDefault "err" (resultAndThen "d")
+                    , errOr "ok" (resultMapError "e")
+                    , Maybe.withDefault "none" (andThenFnParam (\v -> Just (v ++ "h")) "h")
+                    , Maybe.withDefault "none" (mapFnParam (\v -> v ++ "i") "i")
+                    , Maybe.withDefault "none" (shadowedBinder "k")
+                    , t
+                    ]
+                )
         )
+        (taskFnParam (\v -> Task.succeed (v ++ "j")) "j")
 "#;
 
 #[test]
@@ -183,6 +242,6 @@ fn swapped_container_capture_builds() {
     assert_accepted(
         "swapped_container_capture",
         SWAPPED_CONTAINER_CAPTURE,
-        "aa,bb,cc,dd,ee",
+        "aa,bb,cc,dd,ee,hhh,iii,k!k,jjj",
     );
 }

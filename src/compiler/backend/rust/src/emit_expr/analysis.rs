@@ -214,6 +214,9 @@ pub fn collect_free_vars(expr: &Expr, out: &mut std::collections::BTreeSet<Symbo
                 pat_bound_symbols(&arm.pat, &mut bound);
                 let mut body_free = std::collections::BTreeSet::new();
                 collect_free_vars(&arm.body, &mut body_free);
+                if let Some(guard) = &arm.guard {
+                    collect_free_vars(guard, &mut body_free);
+                }
                 for b in &bound {
                     body_free.remove(b);
                 }
@@ -279,6 +282,13 @@ pub fn collect_free_vars(expr: &Expr, out: &mut std::collections::BTreeSet<Symbo
 /// so this never needs a Copy/non-Copy type check to stay sound; it only ever
 /// clones a variable that a caller determined is genuinely captured (see
 /// `clone_targets_in_expr`).
+///
+/// A bare `Var` in direct [`Expr::Apply`] callee position is never rewritten:
+/// a call through `Fn` borrows its callee, so no clone is needed there, and
+/// the callee may be a non-`Clone` `Box<dyn Fn>` carrier the lowerer left
+/// unpromoted precisely because callee reads are not moves (the same
+/// exemption as the lowerer's `fn_value_move_walk`). Cloning it would emit
+/// `(f.clone())(x)` on a type with no `clone` (E0599).
 ///
 /// `row_binders` is the enclosing function's set of row-generic parameter
 /// binders (the symbols the Access emitter routes through a borrowing witness
@@ -467,7 +477,11 @@ pub fn clone_free_target(
             }
         }
         Expr::Apply { func, args } => Expr::Apply {
-            func: Box::new(clone_free_target(*func, target, row_binders)),
+            // A direct callee borrows through `Fn`: it stays a bare `Var`.
+            func: match *func {
+                Expr::Var(s) => Box::new(Expr::Var(s)),
+                other => Box::new(clone_free_target(other, target, row_binders)),
+            },
             args: args
                 .into_iter()
                 .map(|a| clone_free_target(a, target, row_binders))
