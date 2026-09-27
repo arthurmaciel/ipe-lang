@@ -102,9 +102,12 @@ impl PackageName {
     }
 
     /// Build the typed rejection for a name that is not a safe path component.
+    ///
+    /// The raw name is shown escaped, not stripped: a name is one token, so the
+    /// user must see exactly which byte was refused.
     fn reject(why: &crate::text::Message, raw: &str) -> CliError {
         CliError::Resolve(crate::text::msg::package_name_invalid(
-            &crate::style::TerminalSafe::sanitize(raw),
+            &crate::style::TerminalSafe::sanitize(&raw.escape_debug().to_string()),
             why,
         ))
     }
