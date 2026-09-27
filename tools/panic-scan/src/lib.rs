@@ -17,10 +17,13 @@
 use proc_macro2::{Delimiter, TokenStream, TokenTree};
 use std::str::FromStr;
 
+mod manifest;
 mod test_path;
 
+pub use manifest::{ManifestError, ManifestTargets, parse_manifest};
 pub use test_path::{
-    TestPathError, check_test_path, is_template_path, is_test_path, is_verified_test_path,
+    TestPathError, UngatedBy, check_manifest, check_test_path, is_template_path, is_test_path,
+    is_verified_test_path,
 };
 
 /// Panic-invoking macros (each may be invoked with `()`, `[]`, or `{}`).
