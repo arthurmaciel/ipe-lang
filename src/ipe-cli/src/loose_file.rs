@@ -8,9 +8,13 @@
 //! contained in the entry's directory are read, and the closure is capped by
 //! [`LooseFileLimits`]. No unrelated file is ever opened, so a loose file in
 //! `/tmp` or `$HOME` reads nothing unrelated to it. A directory is listed
-//! only on a case-insensitive filesystem, and only to compare entry names
-//! against a probed name's exact spelling, so one file never loads under two
-//! module keys (`import Helper` and `import HELPER`).
+//! only when a probed name's case-swapped spelling also resolves — always on
+//! a case-insensitive filesystem, and on a case-sensitive one when such a
+//! sibling exists — and only to compare entry names against the probed name's
+//! exact spelling, so one file never loads under two module keys (`import
+//! Helper` and `import HELPER`). Each directory is listed at most once per
+//! load, and the names listed across the load are capped by
+//! [`LooseFileLimits::listed_names`].
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::{OsStr, OsString};
@@ -32,10 +36,8 @@ pub const MAX_LOOSE_FILE_BYTES: u64 = 64 * 1024 * 1024;
 /// Upper bound on the distinct module paths a loose-file load probes, the entry included.
 pub const MAX_LOOSE_FILE_PROBES: usize = 4096;
 
-/// Upper bound on the directory entries one exact-spelling check compares.
-///
-/// Past it the probed name counts as misspelled, so the check fails closed.
-const MAX_SPELLING_SCAN: usize = 65_536;
+/// Upper bound on the directory entry names a loose-file load lists for exact-spelling checks.
+pub const MAX_LOOSE_FILE_LISTED_NAMES: usize = 65_536;
 
 /// The ceilings one loose-file load is held to.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -46,6 +48,8 @@ pub struct LooseFileLimits {
     pub bytes: u64,
     /// Most distinct module paths the closure's imports may name, the entry included.
     pub probes: usize,
+    /// Most directory entry names the exact-spelling checks may list, summed over every directory.
+    pub listed_names: usize,
 }
 
 impl LooseFileLimits {
@@ -54,6 +58,7 @@ impl LooseFileLimits {
         modules: MAX_LOOSE_FILE_MODULES,
         bytes: MAX_LOOSE_FILE_BYTES,
         probes: MAX_LOOSE_FILE_PROBES,
+        listed_names: MAX_LOOSE_FILE_LISTED_NAMES,
     };
 }
 
@@ -175,6 +180,7 @@ pub fn resolve_loose_file(
     sources.insert(entry_module.clone(), (entry.to_path_buf(), entry_source));
 
     let source_dir = SourceDir::open(entry_directory(entry));
+    let mut spelling = Spelling::new(FsListing, entry, limits.listed_names);
     while let Some(module) = pending.pop() {
         if probed.contains(&module) {
             continue;
@@ -192,7 +198,7 @@ pub fn resolve_loose_file(
         probed_files.push(relative);
         let vetted = source_dir
             .as_ref()
-            .map(|dir| dir.vet(&module))
+            .map(|dir| dir.vet(&module, &mut spelling))
             .transpose()?;
         let Some(sibling) = vetted.flatten() else {
             continue;
@@ -342,33 +348,32 @@ impl<'e> SourceDir<'e> {
     /// [`CliError::SourceRefused`] when the probed file exists but is a FIFO,
     /// device, socket or directory, or when a directory on the way may not
     /// be searched — a module the process cannot see is refused, never
-    /// mistaken for a missing one.
-    fn vet<'d>(&'d self, module: &'d [String]) -> Result<Option<VettedSibling<'d>>, CliError> {
-        let (Some(relative), Some((_, dir_segments))) = (module_file(module), module.split_last())
+    /// mistaken for a missing one; any error of [`Spelling::is_exact`].
+    fn vet<'d>(
+        &'d self,
+        module: &'d [String],
+        spelling: &mut Spelling<'_, impl DirListing>,
+    ) -> Result<Option<VettedSibling<'d>>, CliError> {
+        let (Some(relative), Some((file_segment, dir_segments))) =
+            (module_file(module), module.split_last())
         else {
             return Ok(None);
         };
         let path = self.spelled.join(relative);
         let mut dir = self.spelled.to_path_buf();
         for segment in dir_segments {
-            dir.push(segment);
-            if !lstat_kind(&dir, &path)?.is_some_and(|kind| kind.is_dir())
-                || !dir
-                    .parent()
-                    .is_some_and(|parent| is_spelled_on_disk(parent, segment))
+            let child = dir.join(segment);
+            if !lstat_kind(&child, &path)?.is_some_and(|kind| kind.is_dir())
+                || !spelling.is_exact(&dir, segment, &path)?
             {
                 return Ok(None);
             }
+            dir = child;
         }
         let Some(kind) = lstat_kind(&path, &path)? else {
             return Ok(None);
         };
-        let is_spelled = || {
-            path.file_name()
-                .and_then(OsStr::to_str)
-                .is_some_and(|name| is_spelled_on_disk(&dir, name))
-        };
-        if kind.is_symlink() || !is_spelled() {
+        if kind.is_symlink() || !spelling.is_exact(&dir, &format!("{file_segment}.ipe"), &path)? {
             return Ok(None);
         }
         if !kind.is_file() {
@@ -481,31 +486,117 @@ fn open_module_beneath(dir: BorrowedFd<'_>, module: &[String]) -> std::io::Resul
     Ok(fs::File::from(file))
 }
 
-/// Whether the existing entry `dir/name` is spelled on disk exactly as `name`.
-///
-/// A case-insensitive filesystem resolves `HELPER.ipe` to `Helper.ipe`,
-/// which would load one file under two module keys. When the case-swapped
-/// spelling does not resolve, the lookup that found `name` was exact and
-/// nothing is listed; otherwise the directory's entry names are compared
-/// against `name`. An unreadable listing fails closed.
-fn is_spelled_on_disk(dir: &Path, name: &str) -> bool {
-    if fs::symlink_metadata(dir.join(swap_ascii_case(name))).is_err() {
-        return true;
-    }
-    fs::read_dir(dir).is_ok_and(|entries| {
-        names_include_exactly(
-            entries.map_while(Result::ok).map(|entry| entry.file_name()),
-            name,
-        )
-    })
+/// The filesystem reads the exact-spelling check makes.
+trait DirListing {
+    /// Whether `path` may name an entry: `false` only when the lookup reports it absent.
+    fn may_resolve(&self, path: &Path) -> bool;
+
+    /// The entry names of `dir`, at most `limit` of them; `None` when it holds more.
+    ///
+    /// # Errors
+    /// The I/O error opening `dir` or reading one of its entries.
+    fn names(&self, dir: &Path, limit: usize) -> std::io::Result<Option<Vec<OsString>>>;
 }
 
-/// Whether `names` holds `name` byte for byte within its first [`MAX_SPELLING_SCAN`] entries.
-fn names_include_exactly(names: impl IntoIterator<Item = OsString>, name: &str) -> bool {
-    names
-        .into_iter()
-        .take(MAX_SPELLING_SCAN)
-        .any(|entry| entry.as_os_str() == OsStr::new(name))
+/// The real filesystem.
+struct FsListing;
+
+impl DirListing for FsListing {
+    fn may_resolve(&self, path: &Path) -> bool {
+        !fs::symlink_metadata(path).is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound)
+    }
+
+    fn names(&self, dir: &Path, limit: usize) -> std::io::Result<Option<Vec<OsString>>> {
+        let mut names = Vec::new();
+        for entry in fs::read_dir(dir)? {
+            if names.len() >= limit {
+                return Ok(None);
+            }
+            names.push(entry?.file_name());
+        }
+        Ok(Some(names))
+    }
+}
+
+/// The exact-spelling checks of one load: each directory is listed at most
+/// once, and every listing is charged to one budget of entry names.
+struct Spelling<'e, L> {
+    /// The filesystem reads the checks make.
+    listing: L,
+    /// The load's entry file, named by the budget refusal.
+    entry: &'e Path,
+    /// Every directory listed so far, with its entry names.
+    listed: BTreeMap<PathBuf, BTreeSet<OsString>>,
+    /// The entry names the load may still list.
+    remaining: usize,
+    /// The whole budget, [`LooseFileLimits::listed_names`].
+    limit: usize,
+}
+
+impl<'e, L: DirListing> Spelling<'e, L> {
+    /// The checks for the load of `entry`, listing at most `limit` entry names in all.
+    fn new(listing: L, entry: &'e Path, limit: usize) -> Self {
+        Self {
+            listing,
+            entry,
+            listed: BTreeMap::new(),
+            remaining: limit,
+            limit,
+        }
+    }
+
+    /// Whether the existing entry `dir/name` is spelled on disk exactly as `name`.
+    ///
+    /// A case-insensitive filesystem resolves `HELPER.ipe` to `Helper.ipe`,
+    /// which would load one file under two module keys. When the case-swapped
+    /// spelling is absent, the lookup that found `name` was exact and nothing
+    /// is listed; otherwise the directory's entry names are compared against
+    /// `name`.
+    ///
+    /// # Errors
+    /// [`CliError::DiscoveryLimitReached`] when the listing would pass the
+    /// load's budget; [`CliError::SourceRefused`] with
+    /// [`io_bounded::SourceRefusal::AccessDenied`], naming `probed`, when the
+    /// listing is denied; [`CliError::Io`] when it otherwise fails. A listing
+    /// that cannot be completed never reads as a misspelling.
+    fn is_exact(&mut self, dir: &Path, name: &str, probed: &Path) -> Result<bool, CliError> {
+        if !self.listing.may_resolve(&dir.join(swap_ascii_case(name))) {
+            return Ok(true);
+        }
+        if let Some(names) = self.listed.get(dir) {
+            return Ok(names.contains(OsStr::new(name)));
+        }
+        let names = match self.listing.names(dir, self.remaining) {
+            Ok(Some(names)) => names,
+            Ok(None) => {
+                return Err(closure_too_large(
+                    self.entry,
+                    &format!(
+                        "modules whose directories list more than {} entries",
+                        self.limit
+                    ),
+                ));
+            }
+            Err(error) => return Err(listing_error(dir, probed, error)),
+        };
+        self.remaining = self.remaining.saturating_sub(names.len());
+        let names: BTreeSet<OsString> = names.into_iter().collect();
+        let is_exact = names.contains(OsStr::new(name));
+        self.listed.insert(dir.to_path_buf(), names);
+        Ok(is_exact)
+    }
+}
+
+/// The typed failure for a directory listing that could not be read.
+fn listing_error(dir: &Path, probed: &Path, source: std::io::Error) -> CliError {
+    if source.kind() == std::io::ErrorKind::PermissionDenied {
+        io_bounded::source_refused(probed, io_bounded::SourceRefusal::AccessDenied)
+    } else {
+        CliError::Io {
+            path: dir.to_path_buf(),
+            source,
+        }
+    }
 }
 
 /// `name` with every ASCII letter's case inverted.
@@ -540,14 +631,16 @@ fn module_segments(symbols: &[Symbol], interner: &Interner) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
+    use std::cell::Cell;
+    use std::collections::BTreeMap;
     use std::ffi::OsString;
     use std::fs;
     use std::path::{Path, PathBuf};
 
     use super::{
-        CliError, LooseFileLimits, LooseFileSources, MAX_SPELLING_SCAN, ProjectRoot, SiblingRead,
-        SourceDir, VettedSibling, io_bounded, is_spelled_on_disk, module_file,
-        names_include_exactly, resolve_loose_file, swap_ascii_case,
+        CliError, DirListing, FsListing, LooseFileLimits, LooseFileSources, ProjectRoot,
+        SiblingRead, SourceDir, Spelling, VettedSibling, io_bounded, module_file,
+        resolve_loose_file, swap_ascii_case,
     };
 
     /// A fresh, canonical scratch directory unique to `name` and this process.
@@ -586,8 +679,10 @@ mod tests {
     /// The path the resolver's checks vet for `module` under `dir`, if any.
     fn vetted_path(dir: &Path, module: &[String]) -> Option<PathBuf> {
         let source_dir = SourceDir::open(dir)?;
+        let entry = dir.join("Main.ipe");
+        let mut spelling = Spelling::new(FsListing, &entry, LooseFileLimits::DEFAULT.listed_names);
         source_dir
-            .vet(module)
+            .vet(module, &mut spelling)
             .ok()
             .flatten()
             .map(|sibling| sibling.path)
@@ -609,35 +704,180 @@ mod tests {
         entries.iter().map(OsString::from).collect()
     }
 
+    /// An in-memory case-insensitive filesystem: each directory maps to its entry names.
+    ///
+    /// A path resolves when its parent holds a name equal to it ignoring
+    /// ASCII case; `failure` makes every listing fail with that error kind.
+    struct CaseInsensitive {
+        dirs: BTreeMap<PathBuf, Vec<OsString>>,
+        failure: Option<std::io::ErrorKind>,
+        listings: Cell<usize>,
+    }
+
+    impl CaseInsensitive {
+        fn new(dirs: &[(&str, &[&str])]) -> Self {
+            Self {
+                dirs: dirs
+                    .iter()
+                    .map(|(dir, entries)| (PathBuf::from(dir), names(entries)))
+                    .collect(),
+                failure: None,
+                listings: Cell::new(0),
+            }
+        }
+
+        fn failing(dirs: &[(&str, &[&str])], failure: std::io::ErrorKind) -> Self {
+            Self {
+                failure: Some(failure),
+                ..Self::new(dirs)
+            }
+        }
+    }
+
+    impl DirListing for &CaseInsensitive {
+        fn may_resolve(&self, path: &Path) -> bool {
+            let (Some(parent), Some(name)) = (path.parent(), path.file_name()) else {
+                return false;
+            };
+            self.dirs
+                .get(parent)
+                .is_some_and(|entries| entries.iter().any(|entry| entry.eq_ignore_ascii_case(name)))
+        }
+
+        fn names(&self, dir: &Path, limit: usize) -> std::io::Result<Option<Vec<OsString>>> {
+            self.listings.set(self.listings.get().saturating_add(1));
+            if let Some(kind) = self.failure {
+                return Err(kind.into());
+            }
+            let entries = self.dirs.get(dir).cloned().unwrap_or_default();
+            Ok((entries.len() <= limit).then_some(entries))
+        }
+    }
+
+    fn spelling(fs: &CaseInsensitive, limit: usize) -> Spelling<'static, &CaseInsensitive> {
+        Spelling::new(fs, Path::new("/p/Main.ipe"), limit)
+    }
+
+    fn probed() -> PathBuf {
+        PathBuf::from("/p/Helper.ipe")
+    }
+
     #[test]
     fn a_case_variant_is_not_the_exact_spelling() {
-        assert!(!names_include_exactly(names(&["helper.ipe"]), "Helper.ipe"));
-        assert!(!names_include_exactly(names(&["HELPER.ipe"]), "Helper.ipe"));
-        assert!(!names_include_exactly(names(&["Helper.IPE"]), "Helper.ipe"));
-        assert!(!names_include_exactly(names(&["lib", "Lib2"]), "Lib"));
-        assert!(!names_include_exactly(names(&[]), "Helper.ipe"));
+        let fs = CaseInsensitive::new(&[("/p", &["Helper.ipe", "Lib"])]);
+        let mut spelling = spelling(&fs, 16);
+        let dir = Path::new("/p");
+        for variant in ["HELPER.ipe", "helper.ipe", "Helper.IPE"] {
+            assert!(
+                matches!(spelling.is_exact(dir, variant, &probed()), Ok(false)),
+                "`{variant}` resolves case-insensitively but is not the exact spelling"
+            );
+        }
+        assert!(matches!(
+            spelling.is_exact(dir, "lib", &probed()),
+            Ok(false)
+        ));
     }
 
     #[test]
     fn the_exact_spelling_is_found_among_case_variants() {
-        assert!(names_include_exactly(
-            names(&["helper.ipe", "Other.ipe", "Helper.ipe"]),
-            "Helper.ipe"
+        let fs = CaseInsensitive::new(&[("/p", &["helper.ipe", "Other.ipe", "Helper.ipe", "Lib"])]);
+        let mut spelling = spelling(&fs, 16);
+        let dir = Path::new("/p");
+        assert!(matches!(
+            spelling.is_exact(dir, "Helper.ipe", &probed()),
+            Ok(true)
         ));
-        assert!(names_include_exactly(names(&["lib", "Lib"]), "Lib"));
+        assert!(matches!(spelling.is_exact(dir, "Lib", &probed()), Ok(true)));
     }
 
     #[test]
-    fn the_spelling_scan_fails_closed_past_its_ceiling() {
-        let filler = (0..MAX_SPELLING_SCAN).map(|n| OsString::from(format!("F{n}.ipe")));
-        let late = filler
-            .clone()
-            .chain(std::iter::once(OsString::from("Helper.ipe")));
-        assert!(!names_include_exactly(late, "Helper.ipe"));
-        let last_in_budget = filler
-            .take(MAX_SPELLING_SCAN - 1)
-            .chain(std::iter::once(OsString::from("Helper.ipe")));
-        assert!(names_include_exactly(last_in_budget, "Helper.ipe"));
+    fn a_directory_is_listed_once_per_load() {
+        let fs = CaseInsensitive::new(&[("/p", &["Helper.ipe", "Other.ipe"])]);
+        let mut spelling = spelling(&fs, 2);
+        let dir = Path::new("/p");
+        for name in ["Helper.ipe", "HELPER.ipe", "Other.ipe", "Helper.ipe"] {
+            assert!(spelling.is_exact(dir, name, &probed()).is_ok());
+        }
+        assert_eq!(fs.listings.get(), 1, "later probes reuse the first listing");
+    }
+
+    #[test]
+    fn an_absent_case_swap_is_exact_without_listing() {
+        let fs = CaseInsensitive::new(&[("/p", &[])]);
+        let mut spelling = spelling(&fs, 0);
+        assert!(matches!(
+            spelling.is_exact(Path::new("/p"), "Helper.ipe", &probed()),
+            Ok(true)
+        ));
+        assert_eq!(fs.listings.get(), 0);
+    }
+
+    #[test]
+    fn the_listing_budget_is_exact_and_aggregate() {
+        let fs = CaseInsensitive::new(&[
+            ("/p", &["Helper.ipe", "Lib"]),
+            ("/p/Lib", &["Util.ipe", "Other.ipe"]),
+        ]);
+        let mut at_budget = spelling(&fs, 4);
+        assert!(matches!(
+            at_budget.is_exact(Path::new("/p"), "Lib", &probed()),
+            Ok(true)
+        ));
+        assert!(matches!(
+            at_budget.is_exact(Path::new("/p/Lib"), "Util.ipe", &probed()),
+            Ok(true)
+        ));
+
+        let mut past_budget = spelling(&fs, 3);
+        assert!(matches!(
+            past_budget.is_exact(Path::new("/p"), "Lib", &probed()),
+            Ok(true)
+        ));
+        assert!(
+            matches!(
+                past_budget.is_exact(Path::new("/p/Lib"), "Util.ipe", &probed()),
+                Err(CliError::DiscoveryLimitReached { .. })
+            ),
+            "one entry name past the load's budget is refused, never read as a misspelling"
+        );
+    }
+
+    #[test]
+    fn a_denied_listing_is_refused_as_access_denied() {
+        let fs = CaseInsensitive::failing(
+            &[("/p", &["Helper.ipe"])],
+            std::io::ErrorKind::PermissionDenied,
+        );
+        let mut spelling = spelling(&fs, 16);
+        assert!(matches!(
+            spelling.is_exact(Path::new("/p"), "HELPER.ipe", &probed()),
+            Err(CliError::SourceRefused {
+                reason: io_bounded::SourceRefusal::AccessDenied,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn a_failed_listing_is_an_io_error() {
+        let fs = CaseInsensitive::failing(&[("/p", &["Helper.ipe"])], std::io::ErrorKind::Other);
+        let mut spelling = spelling(&fs, 16);
+        assert!(matches!(
+            spelling.is_exact(Path::new("/p"), "Helper.ipe", &probed()),
+            Err(CliError::Io { .. })
+        ));
+    }
+
+    /// A case-swapped sibling (case-sensitive filesystem) forces a listing that finds the exact name.
+    #[test]
+    fn a_case_swapped_sibling_does_not_hide_the_exact_spelling() {
+        let dir = scratch_dir("case-swapped-sibling");
+        write(&dir.join("Helper.ipe"), "module Helper exposing (x)\n");
+        write(&dir.join("hELPER.IPE"), "module Other exposing (y)\n");
+        let vetted = vetted_path(&dir, &module(&["Helper"]));
+        let _ = fs::remove_dir_all(&dir);
+        assert_eq!(vetted, Some(dir.join("Helper.ipe")));
     }
 
     #[test]
@@ -653,8 +893,6 @@ mod tests {
             &dir.join("Lib").join("Helper.ipe"),
             "module Lib.Helper exposing (x)\n",
         );
-        assert!(is_spelled_on_disk(&dir, "Lib"));
-        assert!(is_spelled_on_disk(&dir.join("Lib"), "Helper.ipe"));
         assert_eq!(
             vetted_path(&dir, &module(&["Lib", "Helper"])),
             Some(dir.join("Lib").join("Helper.ipe"))
@@ -1143,9 +1381,10 @@ mod tests {
         );
         make_fifo(&dir.join("Pipe.ipe"));
 
+        let mut spelling = Spelling::new(FsListing, &entry, LooseFileLimits::DEFAULT.listed_names);
         let path_level = SourceDir::open(&dir).map(|source_dir| {
             source_dir
-                .vet(&module(&["Pipe"]))
+                .vet(&module(&["Pipe"]), &mut spelling)
                 .map(|sibling| sibling.map(|vetted| vetted.path))
         });
         let handle_level = read_unvetted(&dir, &module(&["Pipe"]));
@@ -1247,6 +1486,42 @@ mod tests {
         assert!(
             is_refused(&loaded, io_bounded::SourceRefusal::AccessDenied),
             "a sibling read from an exec-only directory is refused as access denied"
+        );
+    }
+
+    /// A spelling listing the process may not read is refused, never taken for a misspelling.
+    ///
+    /// The case-swapped sibling forces the listing of the exec-only `Lib`.
+    /// Skipped when running as root.
+    #[cfg(unix)]
+    #[test]
+    #[allow(clippy::expect_used)] // test fixture: an unchangeable mode IS the failure
+    fn an_unlistable_spelling_directory_is_refused_as_access_denied() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let dir = scratch_dir("unlistable-spelling");
+        let entry = dir.join("Main.ipe");
+        write(
+            &entry,
+            "module Main exposing (main)\n\nimport Lib.Helper\n\nmain = Lib.Helper.x\n",
+        );
+        let lib = dir.join("Lib");
+        write(
+            &lib.join("Helper.ipe"),
+            "module Lib.Helper exposing (x)\n\nx = 1\n",
+        );
+        write(&lib.join("hELPER.IPE"), "module Other exposing (y)\n");
+        fs::set_permissions(&lib, fs::Permissions::from_mode(0o311)).expect("drop the read bit");
+        let privileged = fs::read_dir(&lib).is_ok();
+        let loaded = resolve_loose_file(&entry, None, LooseFileLimits::DEFAULT);
+        let _ = fs::set_permissions(&lib, fs::Permissions::from_mode(0o755));
+        let _ = fs::remove_dir_all(&dir);
+        if privileged {
+            eprintln!("skipped: running as root, directory permissions are not enforced");
+            return;
+        }
+        assert!(
+            is_refused(&loaded, io_bounded::SourceRefusal::AccessDenied),
+            "an unlistable directory is refused as access denied"
         );
     }
 }
