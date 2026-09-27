@@ -37,9 +37,10 @@ use crate::{CliError, io_err};
 /// The file whose presence marks a directory as ipe-owned.
 pub const OWNERSHIP_MARKER: &str = ".ipe-output";
 
-/// The per-project namespace directory ipe keeps its caches in, owned by the
-/// FFI cache so the FFI cache root can never move out from under the
-/// reserved-name refusal.
+/// The per-project namespace directory ipe keeps its caches in.
+///
+/// Owned by the FFI cache, so the FFI cache root can never move out from
+/// under the reserved-name refusal.
 pub use ipe_ffi::driver::CACHE_NAMESPACE_DIR;
 
 /// Declares an enum of reserved directory names, each with the display name it

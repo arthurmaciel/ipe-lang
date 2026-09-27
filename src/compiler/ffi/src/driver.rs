@@ -424,15 +424,16 @@ pub struct ArtifactPaths {
     pub pkg_json: PathBuf,
 }
 
-/// The per-project namespace directory ipe keeps its caches in. Every
-/// consumer (reserved-name refusal, audit symlink walk, cache discovery)
-/// derives from this one constant.
+/// The per-project namespace directory ipe keeps its caches in.
+///
+/// Every consumer (reserved-name refusal, audit symlink walk, cache
+/// discovery) derives from this one constant.
 pub const CACHE_NAMESPACE_DIR: &str = ".ipe";
 
-/// The project-relative path components of the FFI artifact cache, in walk
-/// order, the cache namespace first. [`FfiCache::at_project_root`] joins
-/// exactly these, so a no-follow walk over them visits every component the
-/// cache's writes and deletes traverse.
+/// The project-relative FFI cache path components, namespace first.
+///
+/// [`FfiCache::at_project_root`] joins exactly these, so a no-follow walk over
+/// them visits every component the cache's writes and deletes traverse.
 pub const FFI_CACHE_COMPONENTS: [&str; 4] = [CACHE_NAMESPACE_DIR, "cache", "ffi", "rust"];
 
 /// The project-local FFI artifact cache (`<project>/.ipe/cache/ffi/rust`).
