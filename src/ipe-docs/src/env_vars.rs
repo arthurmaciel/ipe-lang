@@ -209,10 +209,11 @@ pub static ENV_VARS: &[EnvVar] = &[
     },
     EnvVar {
         name: "IPE_INDEX_DIR",
-        default: "unset (~/.ipe/index)",
+        default: "unset ($XDG_CACHE_HOME/ipe/index, then $HOME/.cache/ipe/index)",
         purpose: "Override the root directory of the package-index checkout used by \
                   `ipe add` / `ipe install`. Points to a local mirror of the \
-                  ipe-registry index. Useful for air-gapped environments.",
+                  ipe-registry index. Useful for air-gapped environments. Must be an \
+                  absolute path.",
         subsystem: Subsystem::Build,
         class: Class::Tunable,
     },
@@ -850,7 +851,8 @@ pub static ENV_VARS: &[EnvVar] = &[
         name: "IPE_HOME",
         default: "unset ($XDG_DATA_HOME/ipe, then $HOME/.ipe)",
         purpose: "Root directory for materialised runtime source, config, and cached \
-                  binaries. Overrides the XDG / home-directory fallback.",
+                  binaries. Overrides the XDG / home-directory fallback. Must be an \
+                  absolute path.",
         subsystem: Subsystem::Runtime,
         class: Class::Tunable,
     },

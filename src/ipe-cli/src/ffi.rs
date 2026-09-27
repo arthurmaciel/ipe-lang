@@ -647,14 +647,13 @@ fn inspector_binary() -> Result<PathBuf, CliError> {
 /// root (`~/.cache/ipe/ffi-scratch/`), created with an unpredictable name via
 /// 128-bit OS entropy and exclusive-create semantics so a pre-seeded symlink or
 /// directory causes failure rather than reuse.  `/tmp` is never used: it is
-/// world-writable and outside the write-boundary.  HOME must be set; absent it
-/// the function fails closed rather than falling back to a world-writable path.
+/// world-writable and outside the write-boundary.  HOME must be an absolute
+/// path; absent that the function fails closed rather than falling back to a
+/// world-writable or working-directory-relative path.
 fn make_scratch_dir(krate: &str) -> Result<PathBuf, CliError> {
-    let home = std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .ok_or(CliError::Usage(
-            "ipe add: HOME is not set; cannot create a safe scratch directory",
-        ))?;
+    let home = crate::env_dir::home().ok_or(CliError::Usage(
+        "ipe add: HOME is not an absolute path; cannot create a safe scratch directory",
+    ))?;
     let base = home.join(".cache/ipe/ffi-scratch");
     crate::scratch::ScratchDir::new_under(&base, &format!("add-{krate}"))
         .map(crate::scratch::ScratchDir::into_path)
@@ -674,7 +673,7 @@ fn toolchain_binds(inspector: &Path) -> (Vec<PathBuf>, Vec<PathBuf>, Option<Path
     }
     let mut path_prepend = Vec::new();
     let mut rustup_home = None;
-    if let Some(home) = std::env::var_os("HOME").map(PathBuf::from) {
+    if let Some(home) = crate::env_dir::home() {
         let cargo_bin = home.join(".cargo/bin");
         if cargo_bin.is_dir() {
             path_prepend.push(cargo_bin.clone());

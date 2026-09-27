@@ -98,6 +98,13 @@ pub enum CliError {
     /// nor `HOME` names an absolute path. Refused rather than falling back to a
     /// directory relative to the current working directory.
     CacheHomeUnknown,
+    /// An explicit directory override (`IPE_INDEX_DIR`, `IPE_HOME`) is set but is
+    /// not an absolute path. Refused rather than resolved against the current
+    /// working directory or silently replaced by the default location.
+    EnvDirNotAbsolute {
+        /// The environment variable carrying the refused value.
+        var: &'static str,
+    },
     /// Writing the embedded runtime source to `<IPE_HOME>/runtime/<version>/rust`
     /// failed (disk full, permission denied, or a drifted embed). This is a
     /// fail-closed refusal — the build stops rather than link a wrong or empty
@@ -499,6 +506,7 @@ impl CliError {
             Self::RuntimeDirInvalid { .. } => "runtime-dir-invalid",
             Self::RuntimeHomeUnknown => "runtime-home-unknown",
             Self::CacheHomeUnknown => "cache-home-unknown",
+            Self::EnvDirNotAbsolute { .. } => "env-dir-not-absolute",
             Self::RuntimeMaterializeFailed { .. } => "runtime-materialize-failed",
             Self::RuntimeVersionMismatch { .. } => "runtime-version-mismatch",
             Self::EmittedBuildFailed { .. } => "emitted-build-failed",
@@ -574,6 +582,11 @@ impl std::fmt::Display for CliError {
                  nor HOME is set to an absolute path; set XDG_CACHE_HOME to an absolute, \
                  writable directory"
             ),
+            Self::EnvDirNotAbsolute { var } => write!(
+                f,
+                "{var} is set but is not an absolute path; set it to an absolute directory \
+                 or unset it to use the default location"
+            ),
             Self::RuntimeDirInvalid { .. }
             | Self::RuntimeHomeUnknown
             | Self::RuntimeMaterializeFailed { .. }
@@ -597,9 +610,10 @@ impl std::fmt::Display for CliError {
                 actual,
             } => write!(
                 f,
-                "package `{package}`: content hash mismatch — the fetched source does not \
+                "package `{}`: content hash mismatch — the fetched source does not \
                  match the hash the index pinned.\n  expected: {expected}\n  actual:   {actual}\n\
-                 the source was NOT trusted; nothing was written."
+                 the source was NOT trusted; nothing was written.",
+                package.escape_debug()
             ),
             Self::UnknownCode { input, suggestions } => {
                 write!(f, "unknown error code `{input}`")?;
@@ -628,7 +642,7 @@ impl std::fmt::Display for CliError {
             Self::PackageAudit(rejection) => write!(f, "{rejection}"),
             Self::Publish(refusal) => write!(f, "ipe package publish refused: {refusal}"),
             Self::VersionRefused { package, refusal } => {
-                write!(f, "package `{package}`: {refusal}")
+                write!(f, "package `{}`: {refusal}", package.escape_debug())
             }
             // The reason, then the command's full `--help` page (indented,
             // coloured for a terminal). Rendered against stderr because misuse

@@ -256,10 +256,8 @@ fn cache_base_from(
     xdg_cache_home: Option<std::ffi::OsString>,
     home: Option<std::ffi::OsString>,
 ) -> Result<PathBuf, CliError> {
-    let absolute = |raw: std::ffi::OsString| Some(PathBuf::from(raw)).filter(|p| p.is_absolute());
-    xdg_cache_home
-        .and_then(absolute)
-        .or_else(|| home.and_then(absolute).map(|h| h.join(".cache")))
+    crate::env_dir::absolute(xdg_cache_home)
+        .or_else(|| crate::env_dir::absolute(home).map(|h| h.join(".cache")))
         .ok_or(CliError::CacheHomeUnknown)
 }
 
@@ -278,10 +276,16 @@ pub fn default_index_root() -> Result<PathBuf, CliError> {
 /// The index checkout root: `IPE_INDEX_DIR` when set, else [`default_index_root`].
 ///
 /// # Errors
-/// [`CliError::CacheHomeUnknown`] when `IPE_INDEX_DIR` is unset and no per-user
-/// cache base can be resolved.
+/// - [`CliError::EnvDirNotAbsolute`] when `IPE_INDEX_DIR` is set but not absolute.
+/// - [`CliError::CacheHomeUnknown`] when `IPE_INDEX_DIR` is unset and no per-user
+///   cache base can be resolved.
 pub fn index_root() -> Result<PathBuf, CliError> {
-    std::env::var_os(INDEX_DIR_ENV).map_or_else(default_index_root, |dir| Ok(PathBuf::from(dir)))
+    index_root_from(std::env::var_os(INDEX_DIR_ENV))
+}
+
+/// Resolve the index root from the raw `IPE_INDEX_DIR` value.
+fn index_root_from(index_dir: Option<std::ffi::OsString>) -> Result<PathBuf, CliError> {
+    crate::env_dir::explicit_override(INDEX_DIR_ENV, index_dir)?.map_or_else(default_index_root, Ok)
 }
 
 /// The content hash of a source tree.
@@ -1158,6 +1162,26 @@ mod tests {
             assert!(
                 matches!(err, CliError::CacheHomeUnknown),
                 "xdg={xdg:?} home={home:?}: {err:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn index_root_uses_an_absolute_override() {
+        let root = index_root_from(Some(OsString::from("/srv/ipe-index")));
+        assert!(matches!(root, Ok(p) if p == PathBuf::from("/srv/ipe-index")));
+    }
+
+    #[test]
+    fn index_root_refuses_a_relative_or_empty_override() {
+        for raw in ["", "index", "./index", "../elsewhere"] {
+            let root = index_root_from(Some(OsString::from(raw)));
+            assert!(
+                matches!(
+                    root,
+                    Err(CliError::EnvDirNotAbsolute { var: INDEX_DIR_ENV })
+                ),
+                "IPE_INDEX_DIR={raw:?} must be refused: {root:?}"
             );
         }
     }

@@ -218,24 +218,13 @@ fn resolve(path_var: &OsString, install_dirs: &[PathBuf]) -> Resolution {
 fn known_install_dirs() -> Vec<PathBuf> {
     let mut dirs = Vec::new();
     // The rustup default: `$CARGO_HOME/bin`, or `~/.cargo/bin` when unset.
-    if let Some(cargo_home) = std::env::var_os("CARGO_HOME") {
-        dirs.push(PathBuf::from(cargo_home).join("bin"));
+    if let Some(cargo_home) = crate::env_dir::absolute_var("CARGO_HOME") {
+        dirs.push(cargo_home.join("bin"));
     }
-    if let Some(home) = home_dir() {
+    if let Some(home) = crate::env_dir::home() {
         dirs.push(home.join(".cargo").join("bin"));
     }
     dirs
-}
-
-/// The current user's home directory, from the platform's home variable.
-fn home_dir() -> Option<PathBuf> {
-    #[cfg(windows)]
-    let var = "USERPROFILE";
-    #[cfg(not(windows))]
-    let var = "HOME";
-    std::env::var_os(var)
-        .map(PathBuf::from)
-        .filter(|p| !p.as_os_str().is_empty())
 }
 
 /// Whether `path` is a regular file the OS would run.

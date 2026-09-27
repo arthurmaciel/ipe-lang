@@ -1482,14 +1482,9 @@ pub const fn default_ro_binds() -> Vec<PathBuf> {
 ))]
 #[must_use]
 pub fn toolchain_ro_binds() -> Vec<PathBuf> {
-    let home_dir = |var: &str, fallback: &str| -> Option<PathBuf> {
-        std::env::var_os(var)
-            .map(PathBuf::from)
-            .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(fallback)))
-    };
     [
-        home_dir("CARGO_HOME", ".cargo"),
-        home_dir("RUSTUP_HOME", ".rustup"),
+        crate::env_dir::tool_home("CARGO_HOME", ".cargo"),
+        crate::env_dir::tool_home("RUSTUP_HOME", ".rustup"),
     ]
     .into_iter()
     .flatten()
@@ -1650,19 +1645,15 @@ fn manifest_path_dependencies(manifest: &str) -> Vec<PathBuf> {
     target_os = "freebsd"
 ))]
 fn cargo_home_env() -> Vec<(String, std::ffi::OsString)> {
-    let home = |var: &str, fallback: &str| -> Option<std::ffi::OsString> {
-        std::env::var_os(var)
-            .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(fallback).into()))
-            .filter(|p| Path::new(p).exists())
-    };
+    let existing = |dir: Option<PathBuf>| dir.filter(|p| p.exists()).map(PathBuf::into_os_string);
     let mut out: Vec<(String, std::ffi::OsString)> = Vec::new();
-    if let Some(v) = home("CARGO_HOME", ".cargo") {
+    if let Some(v) = existing(crate::env_dir::tool_home("CARGO_HOME", ".cargo")) {
         out.push(("CARGO_HOME".to_owned(), v));
     }
-    if let Some(v) = home("RUSTUP_HOME", ".rustup") {
+    if let Some(v) = existing(crate::env_dir::tool_home("RUSTUP_HOME", ".rustup")) {
         out.push(("RUSTUP_HOME".to_owned(), v));
     }
-    if let Some(h) = std::env::var_os("HOME").filter(|p| Path::new(p).exists()) {
+    if let Some(h) = existing(crate::env_dir::home()) {
         out.push(("HOME".to_owned(), h));
     }
     out

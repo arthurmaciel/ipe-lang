@@ -34,6 +34,7 @@ pub mod diff;
 pub mod doc;
 pub mod doc_bundle;
 pub mod doc_type_search;
+pub mod env_dir;
 pub mod ffi;
 pub mod fmt;
 pub mod health;
