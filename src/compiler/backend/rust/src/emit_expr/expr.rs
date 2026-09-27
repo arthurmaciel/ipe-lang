@@ -7,8 +7,8 @@ use super::{
     emit_lambda_unboxed, emit_match_scrutinee, emit_process_run_in_pty_call,
     emit_process_run_with_call, emit_record, emit_server_call, emit_shared_lambda,
     emit_task_retry_call, emit_tea_call, emit_ui_call, emit_ui_template, emit_update,
-    float_literal, free_vars, indent_of, inlined_let_body, ir_type_is_definitely_copy, op_str,
-    render_type, rust_string_literal, swapped_container_clone_rewrite,
+    float_literal, free_vars, indent_of, inlined_let_body, op_str, render_type,
+    rust_string_literal, swapped_container_clone_rewrite,
 };
 use crate::EmitCtx;
 
@@ -644,9 +644,9 @@ pub fn emit_expr_at(
             // `docs/adr/0002-codegen-soundness-and-the-seal.md`
             // §3): Ipê is a purely-functional language with value semantics,
             // so every field read is logically a copy.  A field whose solved
-            // type is UNCONDITIONALLY `Copy` in the emitted Rust (Int / Float
-            // / Bool / Char / Unit / Order / Decimal / ErrorKind / the Copy
-            // id-wrapper opaques) is read bare — the read IS the copy.  Every
+            // type is UNCONDITIONALLY `Copy` in the emitted Rust
+            // (`ipe_ir::ir_type_is_copy`, the Copy fact the lowerer's
+            // `CopyLeaf` class reads too) is read bare — the read IS the copy.  Every
             // other field (heap-backed String / Vec / synthesized structs /
             // generics) keeps `.clone()`: rustc does NOT elide a `.clone()`
             // call on a heap type, and the clone is what prevents partial-move
@@ -680,14 +680,14 @@ pub fn emit_expr_at(
                     });
                 }
                 let getter = crate::naming::field_witness_getter_name(ctx.resolve_ident(*field)?);
-                if ir_type_is_definitely_copy(field_ty) {
+                if ipe_ir::ir_type_is_copy(field_ty) {
                     // The getter borrows; a `Copy` field is copied out by deref.
                     return Ok(format!("*({base}).{getter}()"));
                 }
                 return Ok(format!("({base}).{getter}().clone()"));
             }
             let field = ctx.emit_ident(*field)?;
-            if moves || ir_type_is_definitely_copy(field_ty) {
+            if moves || ipe_ir::ir_type_is_copy(field_ty) {
                 Ok(format!("({base}).{field}"))
             } else {
                 Ok(format!("({base}).{field}.clone()"))

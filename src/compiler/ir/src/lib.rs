@@ -23,7 +23,7 @@ pub use ir::{
     KernelClass, KernelFn, Match, ModPath, Module, OnFormKind, Pat, Program, RowParam,
     RuntimeFeatureId, RuntimeModule, TypeDef, UiCtor, UiPlain, Variant, carrier_is_clone,
     fun_value_arc_promotable, ir_type_feature_requirement, ir_type_has_effect_carrier,
-    ir_type_is_derivable, ir_type_is_serde, is_dispatch_free, is_irrefutable,
+    ir_type_is_copy, ir_type_is_derivable, ir_type_is_serde, is_dispatch_free, is_irrefutable,
 };
 pub use pretty::{MAX_IR_RENDER_DEPTH, pretty};
 

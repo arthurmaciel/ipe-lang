@@ -27,40 +27,6 @@ pub fn indent_of(level: usize) -> String {
     "    ".repeat(level)
 }
 
-/// Is `ty` a Rust type that is UNCONDITIONALLY `Copy` in every emission this
-/// backend produces? Mirrors `ipe_lower::lower::clone_class`'s `CopyLeaf`
-/// classification exactly.
-///
-/// Deliberately conservative: a `Generic(_)` type parameter is bounded only by
-/// `Clone` (`emit_func` injects `Clone`, never `Copy`), so it must return
-/// `false` even though a caller might monomorphize it to a Copy type at some
-/// call site — the backend has no per-call-site visibility here. A user
-/// `Enum`/`Record` also returns `false`: synthesized enums/structs derive
-/// `Clone`, not `Copy`. `StreamWriter`/`WebSocketServer` are
-/// `#[derive(Clone, Copy)]` i64 id wrappers (`server_stream.rs` / websocket
-/// server), matching `clone_class`'s own `CopyLeaf` arm for them.
-///
-/// Used by the `Expr::Access` emission arm for AUD-09's type-directed
-/// Copy elision — see
-/// `docs/adr/0002-codegen-soundness-and-the-seal.md` §3.
-pub const fn ir_type_is_definitely_copy(ty: &IrType) -> bool {
-    matches!(
-        ty,
-        IrType::Int
-            | IrType::Float
-            | IrType::Bool
-            | IrType::Char
-            | IrType::Unit
-            | IrType::BackoffStrategy
-            | IrType::Order
-            | IrType::HttpMethod
-            | IrType::Decimal
-            | IrType::ErrorKind
-            | IrType::StreamWriter
-            | IrType::WebSocketServer
-    )
-}
-
 /// Does `sym` — a function-typed binder — appear anywhere in `body` in a
 /// VALUE position (stored in data, passed as an argument, returned bare,
 /// captured by a closure), as opposed to only ever being the callee of a

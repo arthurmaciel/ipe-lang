@@ -4,6 +4,8 @@
 
 mod support;
 
+#[path = "g_issues/golden_copy_tuple_field_read_seal.rs"]
+mod golden_copy_tuple_field_read_seal;
 #[path = "g_issues/golden_generic_carrier_send_seal.rs"]
 mod golden_generic_carrier_send_seal;
 #[path = "g_issues/golden_generic_msg_forward_sync_seal.rs"]

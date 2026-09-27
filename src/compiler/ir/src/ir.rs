@@ -2617,6 +2617,123 @@ pub fn carrier_is_clone(ty: &IrType) -> bool {
     }
 }
 
+/// Is the emitted Rust type of `ty` unconditionally `Copy`?
+///
+/// The single Copy fact both consumers read: the lowerer's capture-clone
+/// classifier (`CopyLeaf`) and the backend's field-read copy elision. A `true`
+/// for a type whose emitted Rust is not `Copy` drops a needed `.clone()` and
+/// the emitted crate fails cargo with E0382 after `ipe` exit 0 (a SEAL break);
+/// a `false` for a `Copy` type only costs a needless clone. So the `true` set is
+/// exactly the leaves whose runtime type derives `Copy`, plus the one
+/// structural composite rustc makes `Copy` from its parts:
+///
+/// * scalars (`i64`, `f64`, `bool`, `char`, `()`) and the runtime's
+///   `#[derive(Clone, Copy)]` leaves — `BackoffStrategy`, `IpeOrder`,
+///   `HttpMethod`, `Decimal`, `IpeErrorKind`, and the connection handles
+///   `StreamWriter` / `WsHandle`;
+/// * a tuple, emitted as a bare Rust tuple `(A, B, …)`, is `Copy` iff every
+///   part is (the empty tuple is `()`).
+///
+/// Every nominal composite is `false` even over all-`Copy` parts: `Maybe`,
+/// `List`, `Set`, `Result`, `Dict` emit named runtime/std types that never
+/// implement `Copy`, and synthesized record structs and enums derive `Clone`
+/// but not `Copy`. A `Generic` / `RowGeneric` is `false`: its emitted bound is
+/// `Clone`, never `Copy`.
+///
+/// The match is exhaustive with no wildcard: a new [`IrType`] variant must make
+/// an explicit Copy decision here.
+#[must_use]
+pub fn ir_type_is_copy(ty: &IrType) -> bool {
+    match ty {
+        IrType::Int
+        | IrType::Float
+        | IrType::Bool
+        | IrType::Char
+        | IrType::Unit
+        | IrType::BackoffStrategy
+        | IrType::Order
+        | IrType::HttpMethod
+        | IrType::Decimal
+        | IrType::ErrorKind
+        | IrType::StreamWriter
+        | IrType::WebSocketServer => true,
+        IrType::Tuple(parts) => parts.iter().all(ir_type_is_copy),
+        IrType::Str
+        | IrType::Bytes
+        | IrType::Json
+        | IrType::Db
+        | IrType::UiPlain(_)
+        | IrType::WebReq
+        | IrType::SessionHandle
+        | IrType::CustomElement { .. }
+        | IrType::Error
+        | IrType::ErrorDetails
+        | IrType::ErrorInfo
+        | IrType::PanicInfo
+        | IrType::TypeInfo
+        | IrType::SqlFragment
+        | IrType::Secret
+        | IrType::Path
+        | IrType::Url
+        | IrType::UrlRelative
+        | IrType::Dsn
+        | IrType::Connection
+        | IrType::ConnReadOnly
+        | IrType::ConnReadWrite
+        | IrType::Setting
+        | IrType::ShapeWeb
+        | IrType::ShapeWebView
+        | IrType::ShapeTerminal
+        | IrType::ServerRequest
+        | IrType::ServerResponse
+        | IrType::ServerRoute
+        | IrType::ServerCookie
+        | IrType::HttpRequest
+        | IrType::Regex
+        | IrType::WebSocketServerCfg
+        | IrType::ProcessRunWithCfg
+        | IrType::ProcessRunInPtyCfg
+        | IrType::CacheCfg
+        | IrType::WebSocketClientCfg
+        | IrType::CacheStats
+        | IrType::CsvDoc
+        | IrType::EmailMessage
+        | IrType::EmailAttachment
+        | IrType::EmailSesConfig
+        | IrType::EmailSmtpConfig
+        | IrType::EmailProvider
+        | IrType::CryptoKey
+        | IrType::CryptoMac
+        | IrType::EmailAddress
+        | IrType::Locale
+        | IrType::Principal
+        | IrType::AuthConfig
+        | IrType::TokenSource
+        | IrType::SharedFun(_, _)
+        | IrType::Decoder(_)
+        | IrType::Fun(_, _)
+        | IrType::FnOnceChain(_, _)
+        | IrType::Task(_)
+        | IrType::Cmd(_)
+        | IrType::Sub(_)
+        | IrType::Generic(_)
+        | IrType::RowGeneric(_)
+        | IrType::WebApp
+        | IrType::TuiApp
+        | IrType::CliApp
+        | IrType::WorkerApp
+        | IrType::Maybe(_)
+        | IrType::List(_)
+        | IrType::Set(_)
+        | IrType::Result(_, _)
+        | IrType::Dict(_, _)
+        | IrType::Record(_)
+        | IrType::Enum { .. }
+        | IrType::Ui { .. }
+        | IrType::WebRoute(_) => false,
+    }
+}
+
 /// Does `ty` embed a `Task` / `Cmd` / `Sub` effect carrier anywhere?
 ///
 /// Every effect carrier renders to a runtime value with no `Clone` impl, so a
@@ -5666,5 +5783,97 @@ mod serde_persistence_tests {
         assert!(dump_b.contains("Increment") && dump_b.contains("Decrement"));
         assert!(dump_b.contains("main"));
         Ok(())
+    }
+
+    // ── ir_type_is_copy (the one Copy fact) ────────────────────────────────
+
+    /// Every scalar and runtime `#[derive(Copy)]` leaf is `Copy`.
+    #[test]
+    fn copy_leaves_are_copy() {
+        for ty in [
+            IrType::Int,
+            IrType::Float,
+            IrType::Bool,
+            IrType::Char,
+            IrType::Unit,
+            IrType::BackoffStrategy,
+            IrType::Order,
+            IrType::HttpMethod,
+            IrType::Decimal,
+            IrType::ErrorKind,
+            IrType::StreamWriter,
+            IrType::WebSocketServer,
+        ] {
+            assert!(ir_type_is_copy(&ty), "{ty:?} must be Copy");
+        }
+    }
+
+    /// Heap-backed leaves, function carriers, and type variables are not `Copy`.
+    #[test]
+    fn non_copy_leaves_are_not_copy() {
+        for ty in [
+            IrType::Str,
+            IrType::Bytes,
+            IrType::Json,
+            IrType::Error,
+            IrType::Secret,
+            IrType::Regex,
+            IrType::Generic(Symbol::from_raw(0)),
+            IrType::RowGeneric(Symbol::from_raw(0)),
+            IrType::Fun(vec![IrType::Int], Box::new(IrType::Int)),
+            IrType::SharedFun(vec![IrType::Int], Box::new(IrType::Int)),
+            IrType::Task(Box::new(IrType::Int)),
+            IrType::Decoder(Box::new(IrType::Int)),
+        ] {
+            assert!(!ir_type_is_copy(&ty), "{ty:?} must not be Copy");
+        }
+    }
+
+    /// A tuple is `Copy` iff every part is; the empty tuple is `()`.
+    #[test]
+    fn tuple_is_copy_iff_every_part_is() {
+        assert!(ir_type_is_copy(&IrType::Tuple(vec![])));
+        assert!(ir_type_is_copy(&IrType::Tuple(vec![
+            IrType::Int,
+            IrType::Decimal
+        ])));
+        assert!(ir_type_is_copy(&IrType::Tuple(vec![
+            IrType::Bool,
+            IrType::Tuple(vec![IrType::Char, IrType::Unit]),
+        ])));
+        assert!(!ir_type_is_copy(&IrType::Tuple(vec![
+            IrType::Int,
+            IrType::Str
+        ])));
+        assert!(!ir_type_is_copy(&IrType::Tuple(vec![
+            IrType::Int,
+            IrType::Tuple(vec![IrType::Float, IrType::Generic(Symbol::from_raw(0))]),
+        ])));
+        assert!(!ir_type_is_copy(&IrType::Tuple(vec![
+            IrType::Int,
+            IrType::List(Box::new(IrType::Int)),
+        ])));
+    }
+
+    /// Named composites never emit a `Copy` type, even over all-`Copy` parts.
+    #[test]
+    fn named_composites_over_copy_parts_are_not_copy() {
+        let int = || Box::new(IrType::Int);
+        for ty in [
+            IrType::Maybe(int()),
+            IrType::List(int()),
+            IrType::Set(int()),
+            IrType::Result(int(), int()),
+            IrType::Dict(int(), int()),
+            IrType::Record(BTreeMap::from([(Symbol::from_raw(0), IrType::Int)])),
+            IrType::Enum {
+                home: ModPath(vec![]),
+                name: Symbol::from_raw(0),
+                args: vec![],
+            },
+            IrType::WebRoute(int()),
+        ] {
+            assert!(!ir_type_is_copy(&ty), "{ty:?} must not be Copy");
+        }
     }
 }

@@ -15,7 +15,7 @@ use std::collections::BTreeSet;
 
 use ipe_diagnostics::{DResult, Feature, Span};
 use ipe_intern::{Interner, Symbol};
-use ipe_ir::{Expr, IrType, ModPath, Pat};
+use ipe_ir::{Expr, IrType, ModPath, Pat, ir_type_is_copy};
 
 use super::capture_rewrite::force_shared_capture_clones;
 
@@ -23,7 +23,8 @@ use super::capture_rewrite::force_shared_capture_clones;
 //
 // Classifies an `IrType` for the capture-clone rewrite that makes closures
 // `Fn` (not `FnOnce`). Rules:
-//   CopyLeaf  — scalar types that are `Copy`; reads are bare moves (copies).
+//   CopyLeaf  — types whose emitted Rust is `Copy` (`ipe_ir::ir_type_is_copy`,
+//               shared with the backend); reads are bare moves (copies).
 //   CloneOk   — types that derive `Clone` in the runtime; reads inside closures
 //               must use `{name}.clone()` so the closure is re-callable.
 //   NonClone  — types that do NOT implement `Clone` (functions, tasks, decoders,
@@ -69,13 +70,31 @@ pub(super) fn enum_is_opaque_ffi_handle(env: CloneEnv<'_>, home: &ModPath, name:
         && !env.transparent_ffi.contains(&(home.clone(), name))
 }
 
+/// The capture-clone class of `t`.
+///
+/// `CopyLeaf` comes ONLY from [`ir_type_is_copy`] — the one Copy fact the
+/// backend's field-read elision reads too — so the two can never disagree on
+/// which types are `Copy`. Every other type is `CloneOk` or `NonClone` by
+/// [`is_clone`].
 pub(super) fn clone_class(env: CloneEnv<'_>, t: &IrType) -> CloneClass {
+    if ir_type_is_copy(t) {
+        CloneClass::CopyLeaf
+    } else if is_clone(env, t) {
+        CloneClass::CloneOk
+    } else {
+        CloneClass::NonClone
+    }
+}
+
+/// Does the emitted Rust type of `t` implement `Clone`?
+///
+/// Every `Copy` type is `Clone`, so the scalar `Copy` leaves answer `true`
+/// here as well; [`clone_class`] tests [`ir_type_is_copy`] first, so this
+/// predicate never decides `CopyLeaf`. Conservative: when unsure → `false`
+/// (fail-closed, never a silent cargo failure).
+fn is_clone(env: CloneEnv<'_>, t: &IrType) -> bool {
     match t {
-        // Scalars — primitive Copy types.
-        // `Decimal` is `#[derive(Copy)]` — treat as CopyLeaf.
-        // StreamWriter is `#[derive(Clone, Copy)]` — an i64 id wrapper
-        // (server_stream.rs:38). Bare capture is sound.
-        // `WsHandle` is `#[derive(Clone, Copy)]` — an i64 id wrapper.
+        // Scalars and the runtime's `#[derive(Clone, Copy)]` leaves.
         IrType::Int
         | IrType::Float
         | IrType::Bool
@@ -87,7 +106,7 @@ pub(super) fn clone_class(env: CloneEnv<'_>, t: &IrType) -> CloneClass {
         | IrType::Decimal
         | IrType::ErrorKind
         | IrType::StreamWriter
-        | IrType::WebSocketServer => CloneClass::CopyLeaf,
+        | IrType::WebSocketServer
         // Runtime-verified Clone types.
         // Str(String), Bytes(Vec<u8>), Json(serde_json::Value), Db(Arc-backed),
         // UiPlain (element.rs derives Clone), WebReq (req.rs derives Clone).
@@ -101,13 +120,12 @@ pub(super) fn clone_class(env: CloneEnv<'_>, t: &IrType) -> CloneClass {
         // `Path` is `#[derive(Clone)]` (no Copy — carries a heap-allocated
         // cleaned `String`; `PartialEq`/`Eq` derived — a path is not a secret).
         // The nominal error-payload types derive Clone (not Copy — each
-        // carries heap-allocated `String`s; SEAL fix).
+        // carries heap-allocated `String`s).
         // Runtime-verified Clone server/http opaques (audited):
-        // ServerRequest/ServerResponse/ServerCookie (server.rs:33/50/59),
-        // ServerRoute (server.rs:136), HttpRequest (http_client.rs:64) all
-        // `#[derive(Clone, …)]`.
+        // ServerRequest/ServerResponse/ServerCookie/ServerRoute (server.rs),
+        // HttpRequest (http_client.rs) all `#[derive(Clone, …)]`.
         // `WsServerCfg` holds Arc<dyn Fn> callbacks — Clone via Arc.
-        IrType::Str
+        | IrType::Str
         | IrType::Bytes
         | IrType::Json
         | IrType::Db
@@ -168,17 +186,17 @@ pub(super) fn clone_class(env: CloneEnv<'_>, t: &IrType) -> CloneClass {
         | IrType::Locale
         // `Principal` wraps a `String` — `Clone` but not `Copy`.
         | IrType::Principal
-        // `AuthConfig` / `TokenSource` derive `Clone` — `CloneOk`.
+        // `AuthConfig` / `TokenSource` derive `Clone`.
         | IrType::AuthConfig
         | IrType::TokenSource
         // The promoted `Arc<dyn Fn>` carrier is `Clone` (a refcount bump), so a
-        // `SharedFun` slot is `CloneOk` — this is what lets a composite carrying
+        // `SharedFun` slot is clonable — this is what lets a composite carrying
         // it become clonable and so reusable.
         | IrType::SharedFun(_, _)
         // The runtime `Decoder<E, T>` carries `run : Arc<dyn Fn + Send + Sync>`
         // with a hand-written unconditional `Clone`, so a `Decoder` slot is
-        // `CloneOk` and never poisons its enclosing composite.
-        | IrType::Decoder(_) => CloneClass::CloneOk,
+        // clonable and never poisons its enclosing composite.
+        | IrType::Decoder(_) => true,
         // Non-Clone: function-typed, task, Cmd, Sub.
         // Also Generic(_) until T5 (which injects `T: Clone`).
         IrType::Fun(_, _)
@@ -198,43 +216,33 @@ pub(super) fn clone_class(env: CloneEnv<'_>, t: &IrType) -> CloneClass {
         | IrType::WebApp
         | IrType::TuiApp
         | IrType::CliApp
-        | IrType::WorkerApp => CloneClass::NonClone,
-        // Composite: CloneOk iff all components CloneOk (no NonClone part).
-        // `Maybe`, `List`, `Set`, `Result`, `Dict` are NAMED Rust types
-        // (`IpeMaybe<T>`, `Vec<T>`, `BTreeSet<T>`, `IpeResult<E,A>`,
-        // `HashMap<K,V>`) — they never implement `Copy` even when every element
-        // is `Copy`. Use `clone_class_named_composite` to floor `CopyLeaf` → `CloneOk`
-        // so T5 inserts `.clone()` for multi-use bindings (e.g. `Vec<i64>`).
-        IrType::Maybe(elem) | IrType::List(elem) | IrType::Set(elem) => {
-            clone_class_named_composite(env, std::iter::once(elem.as_ref()))
-        }
+        | IrType::WorkerApp => false,
+        // Composites: `Clone` iff every part is. The Copy side is decided by
+        // `ir_type_is_copy` alone: a tuple of `Copy` parts is a `Copy` Rust
+        // tuple, while the named composites (`IpeMaybe<T>`, `Vec<T>`,
+        // `BTreeSet<T>`, `IpeResult<E,A>`, `HashMap<K,V>`, synthesized record
+        // structs and enums, `Html<M>`, `Route<P>`) derive `Clone` but never
+        // `Copy`, so an all-`Copy` payload still lands on `CloneOk` and the
+        // rewrite inserts `.clone()` per call (a bare capture would move on the
+        // first closure call → E0525).
+        IrType::Maybe(elem) | IrType::List(elem) | IrType::Set(elem) => part_is_clone(env, elem),
         IrType::Result(e, a) | IrType::Dict(e, a) => {
-            clone_class_named_composite(env, [e.as_ref(), a.as_ref()].into_iter())
+            part_is_clone(env, e) && part_is_clone(env, a)
         }
-        IrType::Tuple(elems) => clone_class_composite(env, elems.iter()),
-        // Named types: emitted Rust struct/enum derives `Clone` but NOT `Copy`.
-        // A CopyLeaf payload (e.g. all-Int record, no-arg enum) does NOT make the
-        // wrapper `Copy` — bare capture would move it on first closure call → E0525.
-        // Floor to CloneOk so the rewrite inserts `.clone()` per call.
-        IrType::Record(fields) => clone_class_named_composite(env, fields.values()),
+        IrType::Tuple(elems) => elems.iter().all(|p| part_is_clone(env, p)),
+        IrType::Record(fields) => fields.values().all(|p| part_is_clone(env, p)),
         // An FFI foreign-interface opaque handle (a `Rust.*` home with no
         // transparent import) is the real foreign Rust type; its `Clone`-ness
         // is the foreign crate's decision, not Ipe's, so it is NonClone here —
         // a duplicating `.clone()` on a non-`Clone` foreign type (e.g.
         // `bevy_ecs::World`) would be cargo E0599 after `ipe` exit 0 (a SEAL
         // break). A TRANSPARENT import lowers to a real app enum and takes the
-        // ordinary named-composite class below, like any user enum.
-        IrType::Enum { home, name, .. } if enum_is_opaque_ffi_handle(env, home, *name) => {
-            CloneClass::NonClone
-        }
-        IrType::Enum { args, .. } => clone_class_named_composite(env, args.iter()),
+        // ordinary composite rule below, like any user enum.
+        IrType::Enum { home, name, .. } if enum_is_opaque_ffi_handle(env, home, *name) => false,
+        IrType::Enum { args, .. } => args.iter().all(|p| part_is_clone(env, p)),
         // Ui{msg} / WebRoute(page) — recurse on the message/page type-param.
-        // Both emit named runtime structs (`Html<M>`, `Route<P>`, …) that derive
-        // `Clone` but never `Copy`, so a `Copy` parameter floors to `CloneOk`.
-        IrType::Ui { msg, .. } => clone_class_named_composite(env, std::iter::once(msg.as_ref())),
-        IrType::WebRoute(page) => {
-            clone_class_named_composite(env, std::iter::once(page.as_ref()))
-        }
+        IrType::Ui { msg, .. } => part_is_clone(env, msg),
+        IrType::WebRoute(page) => part_is_clone(env, page),
     }
 }
 
@@ -288,9 +296,9 @@ pub(super) fn classify_capture_clone(env: CloneEnv<'_>, ir_ty: &IrType) -> Optio
     }
 }
 
-/// The clone class of one COMPOSITE PART.
+/// Is one COMPOSITE PART `Clone`?
 ///
-/// A bare [`IrType::Generic`] part is `CloneOk`, not `NonClone`: every emitted
+/// A bare [`IrType::Generic`] part is clonable, not `NonClone`: every emitted
 /// generic fn stamps `T: Clone` unconditionally (`render_fn_generics`), so a
 /// composite carrying the tvar (`Vec<(T, String)>` for an `enum`'s pairs,
 /// `Vec<Variant<T>>` for a `taggedUnion`'s variants) is `Clone` whenever the
@@ -304,52 +312,8 @@ pub(super) fn classify_capture_clone(env: CloneEnv<'_>, ir_ty: &IrType) -> Optio
 /// E0507 — an `ipe`-accept-then-`cargo`-fail SEAL break. SINGLE SOURCE OF TRUTH
 /// with those two predicates: all three admit a bare `Generic` on the identical
 /// `with_clone` bound; if one changes the others must.
-fn clone_class_part(env: CloneEnv<'_>, p: &IrType) -> CloneClass {
-    match p {
-        IrType::Generic(_) => CloneClass::CloneOk,
-        other => clone_class(env, other),
-    }
-}
-
-fn clone_class_composite<'a>(
-    env: CloneEnv<'_>,
-    parts: impl Iterator<Item = &'a IrType>,
-) -> CloneClass {
-    let mut any_clone_ok = false;
-    for p in parts {
-        match clone_class_part(env, p) {
-            CloneClass::NonClone => return CloneClass::NonClone,
-            CloneClass::CloneOk => any_clone_ok = true,
-            CloneClass::CopyLeaf => {}
-        }
-    }
-    if any_clone_ok {
-        CloneClass::CloneOk
-    } else {
-        CloneClass::CopyLeaf
-    }
-}
-
-/// Like [`clone_class_composite`] but floors `CopyLeaf` to `CloneOk`.
-///
-/// Use for **named Rust types** (emitted `struct` / `enum`) that derive `Clone`
-/// but **not** `Copy`.  A payload of all-scalar fields makes
-/// `clone_class_composite` return `CopyLeaf`, falsely claiming the wrapper is
-/// `Copy`.  Bare capture of such a type inside a `move` closure moves the value
-/// on first call, causing E0525 on any subsequent call.  Flooring to `CloneOk`
-/// ensures the rewrite inserts `.clone()` per call — safe because the wrapper
-/// derives `Clone`.
-fn clone_class_named_composite<'a>(
-    env: CloneEnv<'_>,
-    parts: impl Iterator<Item = &'a IrType>,
-) -> CloneClass {
-    match clone_class_composite(env, parts) {
-        CloneClass::NonClone => CloneClass::NonClone,
-        // CopyLeaf is only valid for Rust primitive types that implement `Copy`.
-        // Named structs and enums never derive `Copy` (derive macro doesn't emit it),
-        // so the weakest safe class here is `CloneOk`.
-        CloneClass::CloneOk | CloneClass::CopyLeaf => CloneClass::CloneOk,
-    }
+fn part_is_clone(env: CloneEnv<'_>, p: &IrType) -> bool {
+    matches!(p, IrType::Generic(_)) || is_clone(env, p)
 }
 
 /// Does `pat` bind ANY symbol in `a` OR `b`? One walk of `pat` tests each bound
@@ -1307,5 +1271,101 @@ pub(super) fn rewrite_multiuse_clones(sym: Symbol, remaining: &mut usize, expr: 
                 .map(|a| rewrite_multiuse_clones(sym, remaining, a))
                 .collect(),
         },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::{BTreeMap, BTreeSet};
+
+    use ipe_intern::{Interner, Symbol};
+    use ipe_ir::{IrType, ModPath, ir_type_is_copy};
+
+    use super::{CloneClass, CloneEnv, clone_class};
+
+    fn representative_types() -> Vec<IrType> {
+        let int = || Box::new(IrType::Int);
+        let tvar = || IrType::Generic(Symbol::from_raw(0));
+        vec![
+            IrType::Int,
+            IrType::Decimal,
+            IrType::StreamWriter,
+            IrType::Str,
+            IrType::Secret,
+            tvar(),
+            IrType::Fun(vec![IrType::Int], int()),
+            IrType::Task(int()),
+            IrType::Tuple(vec![]),
+            IrType::Tuple(vec![IrType::Int, IrType::Bool]),
+            IrType::Tuple(vec![IrType::Int, IrType::Str]),
+            IrType::Tuple(vec![IrType::Int, tvar()]),
+            IrType::Tuple(vec![IrType::Int, IrType::Task(int())]),
+            IrType::Maybe(int()),
+            IrType::List(int()),
+            IrType::Dict(int(), int()),
+            IrType::Record(BTreeMap::from([(Symbol::from_raw(0), IrType::Int)])),
+            IrType::Enum {
+                home: ModPath(vec![]),
+                name: Symbol::from_raw(0),
+                args: vec![],
+            },
+        ]
+    }
+
+    /// `CopyLeaf` is exactly the shared [`ir_type_is_copy`] fact.
+    #[test]
+    fn copy_leaf_agrees_with_shared_copy_fact() {
+        let interner = Interner::new();
+        let transparent_ffi = BTreeSet::new();
+        let env = CloneEnv {
+            interner: &interner,
+            transparent_ffi: &transparent_ffi,
+        };
+        for ty in representative_types() {
+            assert_eq!(
+                clone_class(env, &ty) == CloneClass::CopyLeaf,
+                ir_type_is_copy(&ty),
+                "CopyLeaf and ir_type_is_copy disagree on {ty:?}"
+            );
+        }
+    }
+
+    /// Non-`Copy` types split into `CloneOk` / `NonClone` by their parts.
+    #[test]
+    fn non_copy_types_classify_by_clone() {
+        let interner = Interner::new();
+        let transparent_ffi = BTreeSet::new();
+        let env = CloneEnv {
+            interner: &interner,
+            transparent_ffi: &transparent_ffi,
+        };
+        let int = || Box::new(IrType::Int);
+        let cases = [
+            (
+                IrType::Tuple(vec![IrType::Int, IrType::Str]),
+                CloneClass::CloneOk,
+            ),
+            (
+                IrType::Tuple(vec![IrType::Int, IrType::Generic(Symbol::from_raw(0))]),
+                CloneClass::CloneOk,
+            ),
+            (
+                IrType::Tuple(vec![IrType::Int, IrType::Task(int())]),
+                CloneClass::NonClone,
+            ),
+            (IrType::List(int()), CloneClass::CloneOk),
+            (
+                IrType::Record(BTreeMap::from([(Symbol::from_raw(0), IrType::Int)])),
+                CloneClass::CloneOk,
+            ),
+            (IrType::Generic(Symbol::from_raw(0)), CloneClass::NonClone),
+            (
+                IrType::Maybe(Box::new(IrType::Fun(vec![], int()))),
+                CloneClass::NonClone,
+            ),
+        ];
+        for (ty, want) in cases {
+            assert_eq!(clone_class(env, &ty), want, "wrong clone class for {ty:?}");
+        }
     }
 }

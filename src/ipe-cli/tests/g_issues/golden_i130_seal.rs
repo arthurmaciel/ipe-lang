@@ -3,7 +3,7 @@
 //!
 //! Fixes:
 //!
-//! * **Fix 1** — `clone_class_named_composite`: floors `CopyLeaf` → `CloneOk`
+//! * **Fix 1** — `ipe_ir::ir_type_is_copy`: never `CopyLeaf`, only `CloneOk`,
 //!   for named composite types (`IrType::Record` / `IrType::Enum`).  Emitted
 //!   Rust structs and enums derive `Clone` but NOT `Copy`, so `CopyLeaf` here
 //!   is a wrong claim that produces E0525.
@@ -72,7 +72,7 @@ fn assert_ipec_gate(fixture: &str, out_suffix: &str, expected: ipe_diagnostics::
 /// with no payload fields.  Without the fix, `clone_class(Enum{args:[]})` returned
 /// `CopyLeaf` (composite over empty iterator); the bare capture made the
 /// lambda `FnOnce` → E0525 on the second element.
-/// Fix 1: `clone_class_named_composite` floors `CopyLeaf` → `CloneOk`;
+/// Fix 1: `ipe_ir::ir_type_is_copy` keeps named types out of `CopyLeaf`;
 /// the lambda emits `CloneVar(color)` → re-callable.
 /// Expected output: "green,green,green".
 #[test]
@@ -120,7 +120,7 @@ fn c01_enum_capture_fix1() {
 /// all-Int record alias.  Without the fix, `clone_class(Record{fields:[Int,Int]})`
 /// returned `CopyLeaf` (all fields `CopyLeaf`); emitted Rust struct derives
 /// `Clone` but NOT `Copy` → bare capture → `FnOnce` → `E0525` on second element.
-/// Fix 1: `clone_class_named_composite` floors to `CloneOk` for named types.
+/// Fix 1: `ipe_ir::ir_type_is_copy` keeps named types out of `CopyLeaf`.
 /// Expected output: "1,5 2,5 3,5".
 #[test]
 fn c02_record_capture_fix1() {
