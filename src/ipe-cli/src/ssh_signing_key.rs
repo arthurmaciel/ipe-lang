@@ -634,8 +634,7 @@ struct TerminalConsent;
 
 impl Consent for TerminalConsent {
     fn confirm(&mut self, question: &str) -> bool {
-        print!("{}", crate::style::gutter(&format!("\n{question} [y/N] ")));
-        let _ = std::io::stdout().flush();
+        crate::screen::prompt(&format!("\n{question} [y/N] "));
         crate::read_yes_no_default(false)
     }
 }
@@ -730,10 +729,9 @@ fn run_interactive(env_value: Option<&OsStr>, config_dir: Option<&Path>) -> Resu
         &mut GithubRegistrar,
     )
     .map_err(|e| CliError::Resolve(format!("ipe login: {e}")))?;
-    print!(
-        "{}",
-        crate::style::frame(&crate::style::gutter(&outcome.message()))
-    );
+    crate::screen::Screen::new(crate::screen::Stream::Stdout)
+        .line(crate::screen::Tone::Text, &outcome.message())
+        .emit();
     Ok(())
 }
 
@@ -750,13 +748,13 @@ pub(crate) fn offer_after_login() -> Result<(), CliError> {
         return run_interactive(env_value.as_deref(), config_dir.as_deref());
     }
     if lookup(env_value.as_deref(), config_dir.as_deref()) == KeyLookup::Missing {
-        print!(
-            "{}",
-            crate::style::frame(&crate::style::gutter(
+        crate::screen::Screen::new(crate::screen::Stream::Stdout)
+            .line(
+                crate::screen::Tone::Aux,
                 "No commit-signing key is configured; `ipe package publish` needs one. Run \
-                 `ipe login --signing-key` in a terminal to generate and register it."
-            ))
-        );
+                 `ipe login --signing-key` in a terminal to generate and register it.",
+            )
+            .emit();
     }
     Ok(())
 }
