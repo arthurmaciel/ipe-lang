@@ -212,7 +212,7 @@ fn visit_expr(expr: &Expr, f: &mut impl FnMut(&Expr)) {
                 visit_expr(body, f);
             }
         }
-        Expr_::Lambda(_params, body) | Expr_::Access(body, _) => visit_expr(body, f),
+        Expr_::Lambda(_, body) | Expr_::Access(body, _) => visit_expr(body, f),
         Expr_::Binops(pairs, last) => {
             for (operand, _op) in pairs {
                 visit_expr(operand, f);

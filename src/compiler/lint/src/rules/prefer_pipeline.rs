@@ -43,20 +43,20 @@ pub fn check(ctx: &Ctx) -> Vec<Finding> {
 /// `Binops` node: `|>`/`<|` (precedence 0) bind looser than every binary
 /// operator there, so an unparenthesised replacement must gain parens.
 fn walk(ctx: &Ctx, expr: &Expr, out: &mut Vec<Finding>, in_binop_operand: bool) {
-    if let Some(chain) = Chain::of(expr) {
-        if let Some(finding) = chain.finding(ctx, expr, in_binop_operand) {
-            out.push(finding);
-            // The chain links are covered by this one rewrite; only their
-            // leading arguments and the subject can hold further nests.
-            for link in &chain.links {
-                walk(ctx, link.callee, out, false);
-                for arg in link.leading {
-                    walk(ctx, arg, out, false);
-                }
+    if let Some(chain) = Chain::of(expr)
+        && let Some(finding) = chain.finding(ctx, expr, in_binop_operand)
+    {
+        out.push(finding);
+        // The chain links are covered by this one rewrite; only their
+        // leading arguments and the subject can hold further nests.
+        for link in &chain.links {
+            walk(ctx, link.callee, out, false);
+            for arg in link.leading {
+                walk(ctx, arg, out, false);
             }
-            walk(ctx, chain.subject, out, false);
-            return;
         }
+        walk(ctx, chain.subject, out, false);
+        return;
     }
     match &expr.value {
         Expr_::Call(callee, args) => {
@@ -142,7 +142,7 @@ impl<'a> Chain<'a> {
                 break;
             }
             let (last, leading) = args.split_last()?;
-            text.get_or_insert(Span::new(callee.span.lo, last.span.hi));
+            text.get_or_insert_with(|| Span::new(callee.span.lo, last.span.hi));
             links.push(Link { callee, leading });
             cur = last;
         }
