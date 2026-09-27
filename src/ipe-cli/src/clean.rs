@@ -152,9 +152,76 @@ fn project_root() -> Result<PathBuf, CliError> {
 /// refused, its target untouched; an `out/` without ipe's ownership marker is
 /// refused untouched; and a removal never follows a symlink met inside the tree.
 ///
+/// On Unix every act goes through held directory handles: the candidate is
+/// opened relative to the held root without following a link, the marker is
+/// read and the tree emptied through that handle, and the final removal
+/// re-proves the name still names it — a level swapped for a link mid-walk is
+/// refused, its target untouched.
+///
 /// # Errors
 /// [`CliError::OutputRefused`] for a symlink or an unmarked `out/`;
 /// [`CliError::Io`] on a stat or remove failure.
+#[cfg(unix)]
+fn remove_generated_dir(root: &Path, generated: &Generated) -> Result<Vec<String>, CliError> {
+    use crate::output_dir::OutputRefusal;
+    use crate::output_dir::held::{EntryKind, HeldDir, level_held};
+    let name = generated.name;
+    let candidate = root.join(name);
+    let Some(root_dir) = HeldDir::open_following(root)? else {
+        return Ok(Vec::new());
+    };
+    let os_name = std::ffi::OsStr::new(name);
+    match root_dir.kind_of(os_name)? {
+        EntryKind::Symlink => return Err(OutputRefusal::Symlink(candidate).into()),
+        EntryKind::Absent | EntryKind::Other => return Ok(Vec::new()),
+        EntryKind::Directory => {}
+    }
+    let Some(dir) = root_dir.child(os_name)? else {
+        return Ok(Vec::new());
+    };
+    level_held(dir.path());
+    match generated.proof {
+        Proof::Marker => {
+            if !dir.has_marker()? {
+                return Err(OutputRefusal::NotIpeOwned(candidate).into());
+            }
+            root_dir.remove_proven(os_name, &dir)?;
+            Ok(vec![format!("{name}/")])
+        }
+        Proof::Namespace(entries) => {
+            let mut removed = Vec::new();
+            for entry in entries {
+                let os_entry = std::ffi::OsStr::new(entry);
+                match dir.kind_of(os_entry)? {
+                    EntryKind::Directory => {
+                        dir.remove_entry(os_entry)?;
+                        removed.push(format!("{name}/{entry}/"));
+                    }
+                    EntryKind::Symlink => {
+                        return Err(OutputRefusal::Symlink(candidate.join(entry)).into());
+                    }
+                    EntryKind::Absent | EntryKind::Other => {}
+                }
+            }
+            if root_dir.remove_empty_dir(os_name)? {
+                return Ok(vec![format!("{name}/")]);
+            }
+            Ok(removed)
+        }
+    }
+}
+
+/// Remove one generated directory under `root`, returning what went for the summary.
+///
+/// Nothing when it is absent or not a directory. Every entry is lstat'd, never
+/// followed: a symlinked `out/`/`.ipe/` (or a symlinked entry in `.ipe/`) is
+/// refused, its target untouched; an `out/` without ipe's ownership marker is
+/// refused untouched; and a removal never follows a symlink met inside the tree.
+///
+/// # Errors
+/// [`CliError::OutputRefused`] for a symlink or an unmarked `out/`;
+/// [`CliError::Io`] on a stat or remove failure.
+#[cfg(not(unix))]
 fn remove_generated_dir(root: &Path, generated: &Generated) -> Result<Vec<String>, CliError> {
     let name = generated.name;
     let candidate = root.join(name);
@@ -196,6 +263,7 @@ fn remove_generated_dir(root: &Path, generated: &Generated) -> Result<Vec<String
 ///
 /// # Errors
 /// [`CliError::OutputRefused`] for a symlink; [`CliError::Io`] on a stat failure.
+#[cfg(not(unix))]
 fn is_real_dir(path: &Path) -> Result<bool, CliError> {
     match std::fs::symlink_metadata(path) {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(false),
@@ -211,6 +279,7 @@ fn is_real_dir(path: &Path) -> Result<bool, CliError> {
 }
 
 /// Whether the directory `dir` has no entries.
+#[cfg(not(unix))]
 fn is_empty(dir: &Path) -> Result<bool, CliError> {
     let mut entries = std::fs::read_dir(dir).map_err(|e| CliError::Io {
         path: dir.to_path_buf(),
@@ -220,6 +289,7 @@ fn is_empty(dir: &Path) -> Result<bool, CliError> {
 }
 
 /// Remove the directory tree `dir`; `remove_dir_all` never follows a symlink in it.
+#[cfg(not(unix))]
 fn remove_tree(dir: &Path) -> Result<(), CliError> {
     std::fs::remove_dir_all(dir).map_err(|e| CliError::Io {
         path: dir.to_path_buf(),
@@ -481,6 +551,53 @@ mod tests {
             "the link target survives"
         );
 
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// An `out/` swapped for a link after clean held it is refused, the link's target untouched.
+    #[cfg(unix)]
+    #[test]
+    fn refuses_an_out_dir_swapped_for_a_link_mid_walk() {
+        let base = std::env::temp_dir().join(format!("ipe_clean_swap_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let root = base.join("project");
+        let victim = base.join("precious");
+        std::fs::create_dir_all(&root).expect("make root");
+        std::fs::create_dir_all(&victim).expect("make victim");
+        std::fs::write(victim.join("keep.txt"), "keep").expect("write victim");
+        let real_root = std::fs::canonicalize(&root).expect("canonicalize root");
+        let out = real_root.join("out");
+        crate::output_dir::OwnedDir::claim(&out).expect("claim out");
+        std::fs::write(out.join("generated.rs"), "gen").expect("generated file");
+        let (level, target) = (out.clone(), victim.clone());
+        let mut swap = Some(move || {
+            std::fs::rename(&level, level.with_extension("aside")).expect("move out aside");
+            std::os::unix::fs::symlink(&target, &level).expect("plant link");
+        });
+        crate::output_dir::held::set_level_hook(Some(Box::new(move |held: &Path| {
+            if held == out
+                && let Some(swap) = swap.take()
+            {
+                swap();
+            }
+        })));
+        let result = remove_generated_dir(&real_root, OUT);
+        crate::output_dir::held::set_level_hook(None);
+        assert!(
+            matches!(result, Err(CliError::OutputRefused(_))),
+            "a swapped-in link must be refused, got: {result:?}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(victim.join("keep.txt"))
+                .ok()
+                .as_deref(),
+            Some("keep"),
+            "the link target must be left untouched"
+        );
+        assert!(
+            real_root.join("out").is_symlink(),
+            "the planted link is not removed"
+        );
         let _ = std::fs::remove_dir_all(&base);
     }
 }

@@ -418,6 +418,154 @@ impl HeldDir {
         }
         Ok(())
     }
+
+    /// Open the directory above this one through the handle, not the path.
+    ///
+    /// `Ok(None)` at the filesystem root, whose parent is itself.
+    ///
+    /// # Errors
+    /// [`CliError::Io`] when the parent cannot be opened or stat'd.
+    pub fn parent(&self) -> Result<Option<Self>, CliError> {
+        let path = self.path.parent().unwrap_or(&self.path).to_path_buf();
+        let fd = rustix::fs::openat(&self.dir, "..", dir_flags(), Mode::empty())
+            .map_err(|e| errno_err(&path, e))?;
+        let parent = Self {
+            dir: std::fs::File::from(fd),
+            path,
+        };
+        Ok((parent.id()? != self.id()?).then_some(parent))
+    }
+
+    /// Whether looking `path` up now reaches this very directory.
+    ///
+    /// # Errors
+    /// [`CliError::Io`] when `path` cannot be stat'd or the handle cannot be.
+    pub fn is_at(&self, path: &Path) -> Result<bool, CliError> {
+        let meta = std::fs::metadata(path).map_err(|e| io_err(path, e))?;
+        Ok(DirId {
+            dev: meta.dev(),
+            ino: meta.ino(),
+        } == self.id()?)
+    }
+
+    /// Empty the held subdirectory `child`, then remove the entry `name` it was opened as.
+    ///
+    /// The contents are removed through `child`'s own handle, so a swap of
+    /// `name` after it was opened cannot redirect them; the final removal
+    /// re-proves that `name` still names `child` before unlinking it.
+    ///
+    /// # Errors
+    /// [`OutputRefusal::Replaced`] when `name` no longer names `child`;
+    /// [`OutputRefusal::Symlink`] for a link there; [`OutputRefusal::TooDeep`];
+    /// [`CliError::Io`] on a filesystem failure.
+    pub fn remove_proven(&self, name: &OsStr, child: &Self) -> Result<(), CliError> {
+        child.remove_contents(0)?;
+        let path = self.path.join(name);
+        let still = self.child(name)?;
+        if still.map_or(Ok(false), |now| Ok::<_, CliError>(now.id()? == child.id()?))? {
+            rustix::fs::unlinkat(&self.dir, name, AtFlags::REMOVEDIR)
+                .map_err(|e| errno_err(&path, e))
+        } else {
+            Err(OutputRefusal::Replaced(path).into())
+        }
+    }
+
+    /// Remove the subdirectory `name` when it is empty; `false` when it is not.
+    ///
+    /// # Errors
+    /// [`CliError::Io`] on a failure other than a non-empty directory.
+    pub fn remove_empty_dir(&self, name: &OsStr) -> Result<bool, CliError> {
+        match rustix::fs::unlinkat(&self.dir, name, AtFlags::REMOVEDIR) {
+            Ok(()) => Ok(true),
+            Err(e) if e == Errno::NOTEMPTY || e == Errno::EXIST => Ok(false),
+            Err(e) => Err(errno_err(&self.path.join(name), e)),
+        }
+    }
+
+    /// Unlink every non-directory entry under this directory whose relative path `keep` rejects.
+    ///
+    /// `rel` is this directory's path relative to the root `keep` judges and is
+    /// restored on return. Directories are descended through held handles and
+    /// kept; a link is judged and removed as the link it is, never followed.
+    ///
+    /// # Errors
+    /// [`OutputRefusal::TooDeep`] past `max_depth`; [`OutputRefusal::Symlink`]
+    /// when a subdirectory is swapped for a link mid-walk; [`CliError::Io`] on a
+    /// filesystem failure.
+    pub fn prune<F: Fn(&Path) -> bool>(
+        &self,
+        rel: &mut PathBuf,
+        keep: &F,
+        depth: usize,
+        max_depth: usize,
+    ) -> Result<(), CliError> {
+        if depth > max_depth {
+            return Err(OutputRefusal::TooDeep {
+                path: self.path.clone(),
+                limit: max_depth,
+            }
+            .into());
+        }
+        let entries = Dir::read_from(&self.dir).map_err(|e| errno_err(&self.path, e))?;
+        for entry in entries {
+            let entry = match entry {
+                Ok(entry) => entry,
+                Err(e) if e == Errno::NOENT => continue,
+                Err(e) => return Err(errno_err(&self.path, e)),
+            };
+            let name = OsStr::from_bytes(entry.file_name().to_bytes());
+            if is_dot(name) {
+                continue;
+            }
+            rel.push(name);
+            let result = match self.kind_of(name) {
+                Ok(EntryKind::Absent) => Ok(()),
+                Ok(EntryKind::Directory) => self.child(name).and_then(|child| {
+                    child.map_or(Ok(()), |child| {
+                        level_held(child.path());
+                        child.prune(rel, keep, depth.saturating_add(1), max_depth)
+                    })
+                }),
+                Ok(EntryKind::Symlink | EntryKind::Other) => {
+                    if keep(rel) {
+                        Ok(())
+                    } else {
+                        self.unlink(name)
+                    }
+                }
+                Err(e) => Err(e),
+            };
+            rel.pop();
+            result?;
+        }
+        Ok(())
+    }
+
+    /// Whether the entry `name` is a regular file holding exactly `contents`.
+    ///
+    /// A link, a non-file, an absent entry, or any read failure counts as not
+    /// holding them, so the caller rewrites.
+    #[must_use]
+    pub fn holds_contents(&self, name: &OsStr, contents: &[u8]) -> bool {
+        let flags = OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::CLOEXEC;
+        let Ok(fd) = rustix::fs::openat(&self.dir, name, flags, Mode::empty()) else {
+            return false;
+        };
+        let file = std::fs::File::from(fd);
+        let Ok(len) = u64::try_from(contents.len()) else {
+            return false;
+        };
+        if !file
+            .metadata()
+            .is_ok_and(|meta| meta.is_file() && meta.len() == len)
+        {
+            return false;
+        }
+        let mut existing = Vec::with_capacity(contents.len());
+        file.take(len.saturating_add(1))
+            .read_to_end(&mut existing)
+            .is_ok_and(|_| existing == contents)
+    }
 }
 
 /// Whether `name` is the `.` or `..` entry of a listing.

@@ -2105,11 +2105,7 @@ pub fn reconcile_emitted_project(
 /// # Errors
 /// As [`OwnedPath::write`].
 pub fn write_if_changed(target: &OwnedPath, contents: &str) -> Result<(), CliError> {
-    let path = target.path();
-    if fs::symlink_metadata(&path)
-        .is_ok_and(|meta| meta.is_file() && meta.len() == contents.len() as u64)
-        && fs::read_to_string(&path).is_ok_and(|existing| existing == contents)
-    {
+    if target.holds(contents.as_bytes())? {
         return Ok(());
     }
     target.write(contents.as_bytes())
@@ -2119,9 +2115,9 @@ pub fn write_if_changed(target: &OwnedPath, contents: &str) -> Result<(), CliErr
 ///
 /// The walk starts at an [`OwnedPath`] (a symlinked `src/` is refused) and
 /// classifies entries without following links, so a symlink inside the tree is
-/// removed as the link it is, never traversed. Each unlink goes through
-/// [`OwnedDir::unlink`], so a level swapped for a link after the listing cannot
-/// redirect it. Directories are kept (empty ones are harmless to `cargo`), which
+/// removed as the link it is, never traversed. On Unix each level is listed and
+/// unlinked through its held handle ([`OwnedPath::prune_files`]), so a level
+/// swapped for a link mid-walk is refused, never followed. Directories are kept (empty ones are harmless to `cargo`), which
 /// keeps the pass's blast radius minimal.
 ///
 /// # Errors
@@ -2133,6 +2129,26 @@ pub fn prune_orphaned_files(
     manifest: &BTreeMap<PathBuf, String>,
 ) -> Result<(), CliError> {
     let src = crate_dir.path_to("src")?;
+    prune_src(&src, manifest, crate_dir)
+}
+
+/// Prune `src` through held directory handles.
+#[cfg(unix)]
+fn prune_src(
+    src: &OwnedPath,
+    manifest: &BTreeMap<PathBuf, String>,
+    _crate_dir: &OwnedDir,
+) -> Result<(), CliError> {
+    src.prune_files(|rel| manifest.contains_key(rel), MAX_PRUNE_DEPTH)
+}
+
+/// Prune `src` level by level.
+#[cfg(not(unix))]
+fn prune_src(
+    src: &OwnedPath,
+    manifest: &BTreeMap<PathBuf, String>,
+    crate_dir: &OwnedDir,
+) -> Result<(), CliError> {
     prune_dir(&src.path(), manifest, crate_dir, 0)
 }
 
@@ -2142,6 +2158,7 @@ pub const MAX_PRUNE_DEPTH: usize = 128;
 
 /// One level of [`prune_orphaned_files`], at nesting `depth` below `src/`;
 /// `dir` was reached without following a link.
+#[cfg(not(unix))]
 fn prune_dir(
     dir: &Path,
     manifest: &BTreeMap<PathBuf, String>,
