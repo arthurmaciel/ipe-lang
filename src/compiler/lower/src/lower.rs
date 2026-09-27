@@ -3078,32 +3078,54 @@ fn ir_type_mentions_generic(ty: &IrType, tv: Symbol) -> bool {
 /// structural-walk shape of [`body_boxes_generic_callback`] (the `'static`
 /// callback obligation) rather than the kernel-on-param matchers.
 fn ir_type_generic_in_decoder(ty: &IrType, tv: Symbol) -> bool {
+    ir_type_generic_in_carrier(ty, tv, |t| matches!(t, IrType::Decoder(_)))
+}
+
+/// Does the type variable `tv` appear INSIDE a `Cmd` / `Sub` payload anywhere in `ty`?
+///
+/// A `Cmd msg` / `Sub msg` holds its message producers as `Send + 'static`
+/// boxed closures (`cmd_perform`, `sub_map`, the terminal input handlers of
+/// `tui_sub_on_key` / `cli_sub_on_line`), and every TEA loop runs its `msg` on
+/// that same bound. A generic helper whose signature carries a `Cmd tv` /
+/// `Sub tv` — `keys : (KeyEvent -> msg) -> Sub msg`, point-free
+/// (`keys = Sub.onKey`) or capturing a bare `msg` (`keys m = Sub.onKey (\_ ->
+/// m)`) — therefore needs `tv: Send + 'static`, or the emitted body fails
+/// `cargo build` (E0310 / E0277). Every concrete message a loop accepts already
+/// satisfies the bound, so it never rejects a caller.
+fn ir_type_generic_in_tea_carrier(ty: &IrType, tv: Symbol) -> bool {
+    ir_type_generic_in_carrier(ty, tv, |t| matches!(t, IrType::Cmd(_) | IrType::Sub(_)))
+}
+
+/// Does the type variable `tv` appear inside a node `is_carrier` selects, anywhere in `ty`?
+///
+/// The carrier node itself is the obligation when it mentions `tv`; every other
+/// compound type is walked through, so a nested carrier (`Task Error (Decoder
+/// tv)`, `List (Sub tv)`, a function returning `Sub tv`) is found too.
+fn ir_type_generic_in_carrier(ty: &IrType, tv: Symbol, is_carrier: fn(&IrType) -> bool) -> bool {
+    if is_carrier(ty) {
+        return ir_type_mentions_generic(ty, tv);
+    }
+    let walk = |t: &IrType| ir_type_generic_in_carrier(t, tv, is_carrier);
     match ty {
-        // A `Decoder` payload that mentions `tv` is the obligation itself.
-        IrType::Decoder(inner) => ir_type_mentions_generic(inner, tv),
-        // Recurse through every compound carrier; a `Decoder` may be nested
-        // (e.g. `Task Error (Decoder tv)`, `List (Decoder tv)`).
         IrType::Task(inner)
         | IrType::Maybe(inner)
         | IrType::List(inner)
+        | IrType::Decoder(inner)
         | IrType::Cmd(inner)
         | IrType::Sub(inner)
         | IrType::Set(inner)
         | IrType::WebRoute(inner)
-        | IrType::Ui { msg: inner, .. } => ir_type_generic_in_decoder(inner, tv),
+        | IrType::Ui { msg: inner, .. } => walk(inner),
         IrType::Result(a, b) | IrType::Dict(a, b) | IrType::CustomElement { down: a, up: b } => {
-            ir_type_generic_in_decoder(a, tv) || ir_type_generic_in_decoder(b, tv)
+            walk(a) || walk(b)
         }
-        IrType::Tuple(items) => items.iter().any(|t| ir_type_generic_in_decoder(t, tv)),
-        IrType::Enum { args, .. } => args.iter().any(|t| ir_type_generic_in_decoder(t, tv)),
-        IrType::Record(fields) => fields.values().any(|t| ir_type_generic_in_decoder(t, tv)),
+        IrType::Tuple(items) => items.iter().any(walk),
+        IrType::Enum { args, .. } => args.iter().any(walk),
+        IrType::Record(fields) => fields.values().any(walk),
         IrType::Fun(params, ret)
         | IrType::SharedFun(params, ret)
-        | IrType::FnOnceChain(params, ret) => {
-            params.iter().any(|t| ir_type_generic_in_decoder(t, tv))
-                || ir_type_generic_in_decoder(ret, tv)
-        }
-        // Nullary leaves + the non-parametric `UiPlain` carry no `Decoder`.
+        | IrType::FnOnceChain(params, ret) => params.iter().any(walk) || walk(ret),
+        // Nullary leaves + the non-parametric `UiPlain` carry no payload.
         IrType::Generic(_)
         | IrType::Int
         | IrType::Float
@@ -3973,6 +3995,28 @@ fn body_move_closure_captures_generic(tv: Symbol, expr: &Expr) -> bool {
     }
 }
 
+/// Bound every tvar the signature carries inside a `Cmd` / `Sub` with `Send + 'static`.
+///
+/// The runtime stores a message producer as a `Send + 'static` boxed closure,
+/// so a generic helper over `Cmd msg` / `Sub msg` needs `msg: Send + 'static`
+/// whatever its arity — a point-free value binding (`keys = Sub.onKey`)
+/// included. See [`ir_type_generic_in_tea_carrier`].
+fn apply_tea_carrier_bounds(
+    type_params: &mut [(Symbol, BoundSet)],
+    params: &[(Symbol, IrType)],
+    ret: &IrType,
+) {
+    for (tv, bounds) in type_params.iter_mut() {
+        if params
+            .iter()
+            .any(|(_, ty)| ir_type_generic_in_tea_carrier(ty, *tv))
+            || ir_type_generic_in_tea_carrier(ret, *tv)
+        {
+            *bounds = bounds.with_send();
+        }
+    }
+}
+
 /// GENERAL type-param-bound propagation for the emitted signature.
 ///
 /// Two families of obligation land here. Most are kernel-on-param
@@ -4018,6 +4062,7 @@ fn apply_kernel_type_param_bounds(
     ret: &IrType,
     body: &Expr,
 ) {
+    apply_tea_carrier_bounds(type_params, params, ret);
     // IpeRow: a `Db.get*(field, &row)` accessor whose ROW arg (index 1)
     // is the tracked param. Wildcard-`any`-only: a genuine named tvar never
     // legitimately flows into a row accessor, and restricting to wildcards keeps
@@ -15469,7 +15514,8 @@ impl<'a> Lowerer<'a> {
                 // take the identical `params: []` path the backend already
                 // emits for zero-arg fn calls — no shared mutable cell, no
                 // memoization to break.
-                let type_params = compute_type_params(quantified_syms, var_bounds, &[], &ret);
+                let mut type_params = compute_type_params(quantified_syms, var_bounds, &[], &ret);
+                apply_tea_carrier_bounds(&mut type_params, &[], &ret);
                 Ok(Func {
                     id,
                     name,
@@ -29428,6 +29474,62 @@ mod tests {
         ));
         assert!(!super::ir_type_generic_in_decoder(
             &IrType::Decoder(Box::new(IrType::Int)),
+            a
+        ));
+    }
+
+    /// The `Cmd` / `Sub` `Send`-obligation walk fires only on a tvar inside one of them.
+    ///
+    /// It must reach the point-free input-subscription helper's signature
+    /// `(KeyEvent -> msg) -> Sub msg` (the `Sub` under a function's return), and
+    /// never bound a bare tvar, a tvar under another carrier, or an unrelated tvar.
+    #[test]
+    fn generic_in_tea_carrier_is_precise() {
+        use ipe_ir::IrType;
+
+        let mut interner = Interner::new();
+        let a = interner.intern("a").unwrap();
+        let b = interner.intern("b").unwrap();
+        let ga = || IrType::Generic(a);
+
+        // Fires: `Sub a` / `Cmd a` directly, nested, and as a returned function's result.
+        assert!(super::ir_type_generic_in_tea_carrier(
+            &IrType::Sub(Box::new(ga())),
+            a
+        ));
+        assert!(super::ir_type_generic_in_tea_carrier(
+            &IrType::Tuple(vec![IrType::Int, IrType::Cmd(Box::new(ga()))]),
+            a
+        ));
+        assert!(super::ir_type_generic_in_tea_carrier(
+            &IrType::List(Box::new(IrType::Sub(Box::new(ga())))),
+            a
+        ));
+        assert!(super::ir_type_generic_in_tea_carrier(
+            &IrType::Fun(
+                vec![IrType::Fun(vec![IrType::Str], Box::new(ga()))],
+                Box::new(IrType::Sub(Box::new(ga()))),
+            ),
+            a
+        ));
+
+        // Never fires: a bare tvar, a tvar only under a function or a non-TEA
+        // carrier, a `Sub` over a different tvar, or a concrete `Cmd`.
+        assert!(!super::ir_type_generic_in_tea_carrier(&ga(), a));
+        assert!(!super::ir_type_generic_in_tea_carrier(
+            &IrType::Fun(vec![IrType::Str], Box::new(ga())),
+            a
+        ));
+        assert!(!super::ir_type_generic_in_tea_carrier(
+            &IrType::Task(Box::new(ga())),
+            a
+        ));
+        assert!(!super::ir_type_generic_in_tea_carrier(
+            &IrType::Sub(Box::new(IrType::Generic(b))),
+            a
+        ));
+        assert!(!super::ir_type_generic_in_tea_carrier(
+            &IrType::Cmd(Box::new(IrType::Int)),
             a
         ));
     }
