@@ -1574,7 +1574,7 @@ fn db_gate_scan_refuses_a_renamed_gate() {
 #[test]
 fn smtp_scan_admits_a_vetted_host() {
     let fixture = "async fn send() {
-    let vetted = VettedDial::for_host(&cfg.host, port).await?;
+    let vetted = VettedDial::for_configured_host(&host, port).await?;
     let tb = AsyncSmtpTransport::<Tokio1Executor>::builder_dangerous(
         vetted.dial_host(&cfg.host),
     );
@@ -1591,7 +1591,7 @@ fn smtp_scan_admits_a_vetted_host() {
 #[test]
 fn smtp_scan_refuses_a_guard_in_a_comment_or_string() {
     let fixture = r#"async fn send() {
-    // let vetted = VettedDial::for_host(&cfg.host, port); vetted.dial_host(h)
+    // let vetted = VettedDial::for_configured_host(&host, port); vetted.dial_host(h)
     let a = AsyncSmtpTransport::<Tokio1Executor>::builder_dangerous(&cfg.host);
     let b = AsyncSmtpTransport::<Tokio1Executor>::builder_dangerous("vetted.dial_host(h)");
     let c = AsyncSmtpTransport::<Tokio1Executor>::relay(&cfg.host);

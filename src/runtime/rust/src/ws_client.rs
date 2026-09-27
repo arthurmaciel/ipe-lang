@@ -1080,7 +1080,9 @@ mod wasm_client {
             if ws.ready_state() != web_sys::WebSocket::OPEN {
                 return Err(E::from(format!("{op_name}: socket {id} is not open")));
             }
-            f(ws).map_err(|e| E::from(format!("{op_name}: {e:?}")))
+            // The browser's exception text is not echoed: it may quote the
+            // socket's URL, which can carry credentials.
+            f(ws).map_err(|_| E::from(format!("{op_name}: the browser refused the operation")))
         })
     }
 

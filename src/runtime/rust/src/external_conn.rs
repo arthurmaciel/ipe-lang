@@ -97,8 +97,11 @@ async fn open_external<E: Send + From<String> + 'static>(
         DsnDriver::Postgres => {
             // Defence in depth: the host the `Dsn` parse boundary extracted is
             // gated here, and `VettedPool::connect` independently gates every
-            // host its own parse of the URL finds.
-            if let Err(refusal) = VettedDial::for_host(dsn.host(), dsn.port()).await {
+            // host its own parse of the URL finds. A `DsnHost` is proven not to
+            // be part of the DSN's credentials, so the refusal may name it.
+            if let Err(refusal) =
+                VettedDial::for_configured_host(dsn.host().configured(), dsn.port()).await
+            {
                 return IpeResult::Err(str_err(&format!("external connect: {refusal}")));
             }
             match VettedPool::<sqlx::Postgres>::connect(&url, EXTERNAL_POOL_MAX_CONNECTIONS).await {
@@ -187,7 +190,9 @@ mod tests {
     async fn pg_ssrf_blocked(dsn_str: &str) -> bool {
         match dsn_parse::<String>(dsn_str.to_string()) {
             IpeResult::Ok(dsn) if dsn.driver() == DsnDriver::Postgres => {
-                VettedDial::for_host(dsn.host(), dsn.port()).await.is_err()
+                VettedDial::for_configured_host(dsn.host().configured(), dsn.port())
+                    .await
+                    .is_err()
             }
             _ => false,
         }
@@ -220,7 +225,7 @@ mod tests {
             IpeResult::Ok(d) => d,
             IpeResult::Err(e) => panic!("DSN parse failed: {e}"),
         };
-        let err = VettedDial::for_host(dsn.host(), dsn.port())
+        let err = VettedDial::for_configured_host(dsn.host().configured(), dsn.port())
             .await
             .expect_err("loopback must be blocked");
         assert!(
@@ -228,6 +233,32 @@ mod tests {
             "SSRF block must identify as 'blocked', not a connect/TLS error: {err}"
         );
         unsafe { std::env::remove_var("IPE_HTTP_DENY_PRIVATE") };
+    }
+
+    /// A clean DSN's refusal names its proven host and no credential.
+    #[tokio::test]
+    async fn a_clean_dsn_refusal_names_its_host_and_no_credential() {
+        use crate::ssrf::DialPolicy;
+        use crate::ssrf::test_resolvers::NoDns;
+        let parsed =
+            dsn_parse::<String>("postgres://admin:s3cr3t-pw@127.0.0.1:5432/app".to_owned());
+        assert!(matches!(parsed, IpeResult::Ok(_)), "a clean DSN must parse");
+        let IpeResult::Ok(dsn) = parsed else {
+            return;
+        };
+        let refused = VettedDial::for_configured_host_with(
+            DialPolicy::DenyPrivate,
+            &NoDns,
+            dsn.host().configured(),
+            dsn.port(),
+        )
+        .await;
+        assert!(refused.is_err(), "loopback must be refused");
+        let shown = refused.map_or_else(|e| format!("{e} {e:?}"), |_| String::new());
+        assert!(shown.contains("127.0.0.1"), "{shown}");
+        for secret in ["admin", "s3cr3t"] {
+            assert!(!shown.contains(secret), "leaked {secret:?}: {shown}");
+        }
     }
 
     #[test]
@@ -241,7 +272,10 @@ mod tests {
         };
         assert_eq!(dsn.driver(), DsnDriver::Sqlite);
         // SQLite host is empty; VettedDial is only called for Postgres — gate not applied.
-        assert!(dsn.host().is_empty(), "sqlite DSN must have empty host");
+        assert!(
+            dsn.host().as_str().is_empty(),
+            "sqlite DSN must have empty host"
+        );
         unsafe { std::env::remove_var("IPE_HTTP_DENY_PRIVATE") };
     }
 

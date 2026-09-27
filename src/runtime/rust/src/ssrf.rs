@@ -533,16 +533,16 @@ pub async fn vet_host_with<R: HostResolver>(
 
 /// Resolve a configured `host` once through the system resolver under [`dns_timeout`].
 ///
-/// The host is named by configuration, not read from a URL's authority, so a
-/// refusal names it.
+/// A [`ConfiguredHost`] cannot be part of a URL's credentials, so a refusal
+/// names it.
 ///
 /// # Errors
 ///
 /// [`SsrfRefusal`] naming why the host was refused.
-pub async fn vet_host(host: &str, port: u16) -> Result<SocketAddr, SsrfRefusal> {
+pub async fn vet_host(host: &ConfiguredHost, port: u16) -> Result<SocketAddr, SsrfRefusal> {
     vet_host_with(
         &SystemResolver,
-        host,
+        host.as_str(),
         HostDisclosure::Named,
         port,
         dns_timeout(),
@@ -550,10 +550,111 @@ pub async fn vet_host(host: &str, port: u16) -> Result<SocketAddr, SsrfRefusal> 
     .await
 }
 
+/// A host a refusal may name, because it cannot be part of a URL's credentials.
+///
+/// Built only from a configuration field that holds a host and nothing else
+/// (`ConfiguredHost::from_config`) or from a URL whose userinfo is proven
+/// not to run past its authority (`UnambiguousUrl`). A host read from any
+/// other URL has no way into this type, so no refusal naming a
+/// `ConfiguredHost` can echo part of a user name or password.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ConfiguredHost(String);
+
+impl ConfiguredHost {
+    /// The host a configuration field names on its own, never read from a URL.
+    #[cfg_attr(not(any(feature = "db", feature = "email")), allow(dead_code))]
+    pub(crate) const fn from_config(host: String) -> Self {
+        Self(host)
+    }
+
+    /// A host `url` names outside its authority: a query parameter's value,
+    /// or a driver's own reading of `url`.
+    #[cfg_attr(not(feature = "db"), allow(dead_code))]
+    pub(crate) const fn named_by(_url: &UnambiguousUrl, host: String) -> Self {
+        Self(host)
+    }
+
+    /// The host as configured.
+    #[must_use]
+    pub const fn as_str(&self) -> &str {
+        self.0.as_str()
+    }
+}
+
+/// Why a URL is not an [`UnambiguousUrl`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(not(feature = "db"), allow(dead_code))]
+pub(crate) enum UrlUnproven {
+    /// Its user name and password may run past its authority
+    /// ([`userinfo_is_ambiguous`]).
+    AmbiguousUserinfo,
+    /// It does not parse.
+    Invalid,
+}
+
+/// A URL whose user name and password cannot run past its authority.
+///
+/// Built only after [`userinfo_is_ambiguous`] clears the parse it holds, so
+/// every host read from it, by its authority or a query parameter, is a
+/// [`ConfiguredHost`]. Holds the URL's credentials, so it has no `Debug` or
+/// `Display`.
+#[cfg_attr(not(feature = "db"), allow(dead_code))]
+pub(crate) struct UnambiguousUrl {
+    raw: String,
+    parsed: Url,
+}
+
+#[cfg_attr(not(feature = "db"), allow(dead_code))]
+impl UnambiguousUrl {
+    /// Parse `raw`, refusing it when its userinfo is ambiguous.
+    ///
+    /// Ambiguity is decided first, so a URL that does not parse and holds an
+    /// `@` is refused as ambiguous.
+    pub(crate) fn parse(raw: &str) -> Result<Self, UrlUnproven> {
+        let parsed = Url::parse(raw);
+        if userinfo_is_ambiguous(raw, parsed.as_ref().ok()) {
+            return Err(UrlUnproven::AmbiguousUserinfo);
+        }
+        parsed
+            .map(|parsed| Self {
+                raw: raw.to_owned(),
+                parsed,
+            })
+            .map_err(|_| UrlUnproven::Invalid)
+    }
+
+    /// `parsed`, the parse of `raw`, unless `raw`'s userinfo is ambiguous.
+    pub(crate) fn of_parsed(raw: &str, parsed: Url) -> Option<Self> {
+        (!userinfo_is_ambiguous(raw, Some(&parsed))).then(|| Self {
+            raw: raw.to_owned(),
+            parsed,
+        })
+    }
+
+    /// The URL as written.
+    pub(crate) const fn as_str(&self) -> &str {
+        self.raw.as_str()
+    }
+
+    /// The parse the ambiguity check cleared.
+    pub(crate) const fn url(&self) -> &Url {
+        &self.parsed
+    }
+
+    /// The authority's host, when it names a non-empty one.
+    pub(crate) fn host(&self) -> Option<ConfiguredHost> {
+        self.parsed
+            .host_str()
+            .filter(|host| !host.is_empty())
+            .map(|host| ConfiguredHost(host.to_owned()))
+    }
+}
+
 /// Proof that `host:port` passed the SSRF gate under the policy in effect.
 ///
-/// The only constructors are [`VettedDial::for_host`],
-/// [`VettedDial::for_host_with`], [`VettedDial::for_url`] and [`vet_url_with`].
+/// The only constructors are [`VettedDial::for_configured_host`],
+/// [`VettedDial::for_configured_host_with`], [`VettedDial::for_url`] and
+/// [`vet_url_with`].
 /// Under [`DialPolicy::DenyPrivate`] the proof is the vetted address itself,
 /// and the caller MUST dial that address rather than the name — dialling the
 /// name resolves it again and reopens the DNS-rebinding window.
@@ -572,26 +673,33 @@ pub(crate) enum VettedDial {
 #[cfg_attr(not(any(feature = "db", feature = "email")), allow(dead_code))]
 impl VettedDial {
     /// Vet `host:port` under the environment's policy and the system resolver.
-    pub(crate) async fn for_host(host: &str, port: u16) -> Result<Self, SsrfRefusal> {
-        Self::for_host_with(DialPolicy::from_env(), &SystemResolver, host, port).await
+    pub(crate) async fn for_configured_host(
+        host: &ConfiguredHost,
+        port: u16,
+    ) -> Result<Self, SsrfRefusal> {
+        Self::for_configured_host_with(DialPolicy::from_env(), &SystemResolver, host, port).await
     }
 
     /// Vet `host:port` under `policy`, resolving through `resolver`.
     ///
-    /// `host` is a configured host or one read from a URL whose userinfo the
-    /// caller already refused as ambiguous, so a refusal names it.
-    pub(crate) async fn for_host_with<R: HostResolver>(
+    /// A [`ConfiguredHost`] cannot be part of a URL's credentials, so a
+    /// refusal names it.
+    pub(crate) async fn for_configured_host_with<R: HostResolver>(
         policy: DialPolicy,
         resolver: &R,
-        host: &str,
+        host: &ConfiguredHost,
         port: u16,
     ) -> Result<Self, SsrfRefusal> {
         match policy {
-            DialPolicy::DenyPrivate => {
-                vet_host_with(resolver, host, HostDisclosure::Named, port, dns_timeout())
-                    .await
-                    .map(Self::Pinned)
-            }
+            DialPolicy::DenyPrivate => vet_host_with(
+                resolver,
+                host.as_str(),
+                HostDisclosure::Named,
+                port,
+                dns_timeout(),
+            )
+            .await
+            .map(Self::Pinned),
             DialPolicy::AllowAll => Ok(Self::Unrestricted),
         }
     }
@@ -1030,6 +1138,40 @@ mod tests {
     use super::test_resolvers::{Answers, NoDns, PublicThenPrivate, Stalls};
     use super::*;
 
+    /// `host` as a configuration field names it.
+    fn configured(host: &str) -> ConfiguredHost {
+        ConfiguredHost::from_config(host.to_owned())
+    }
+
+    /// A URL whose userinfo may run past its authority is never an
+    /// `UnambiguousUrl`, so no host read from it becomes a `ConfiguredHost`.
+    #[test]
+    fn unambiguous_url_refuses_every_spilled_userinfo() {
+        for url in [
+            "postgres://admin:8/s3cr3t?pw@db.example/app",
+            "postgres://admin:8/s3cr3t#pw@db.example/app",
+            "postgres://admin:8/s3cr3t-pw@db.example/app",
+            "http://admin\\s3cr3t@db.example/",
+            "not a url with admin@s3cr3t",
+        ] {
+            assert!(
+                matches!(
+                    UnambiguousUrl::parse(url),
+                    Err(UrlUnproven::AmbiguousUserinfo)
+                ),
+                "{url:?}"
+            );
+        }
+        assert!(matches!(
+            UnambiguousUrl::parse("not a url"),
+            Err(UrlUnproven::Invalid)
+        ));
+        let host = UnambiguousUrl::parse("postgres://admin:s3cr3t@db.example/app")
+            .ok()
+            .and_then(|url| url.host());
+        assert_eq!(host, Some(configured("db.example")));
+    }
+
     const DEADLINE: Duration = Duration::from_secs(5);
 
     /// The URL gate's deny-private verdict, rendered as the `http:` surface shows it.
@@ -1210,8 +1352,13 @@ mod tests {
             ("10.0.0.5", BlockedRange::Private),
             ("0.0.0.0", BlockedRange::Reserved),
         ] {
-            let refused =
-                VettedDial::for_host_with(DialPolicy::DenyPrivate, &NoDns, host, 5432).await;
+            let refused = VettedDial::for_configured_host_with(
+                DialPolicy::DenyPrivate,
+                &NoDns,
+                &configured(host),
+                5432,
+            )
+            .await;
             assert!(
                 matches!(refused, Err(SsrfRefusal::Blocked { range: r, .. }) if r == range),
                 "{host:?} must be refused as {range}: {refused:?}"
@@ -1221,8 +1368,13 @@ mod tests {
 
     #[tokio::test]
     async fn vetted_dial_pins_a_public_literal_with_its_port() {
-        let vetted =
-            VettedDial::for_host_with(DialPolicy::DenyPrivate, &NoDns, "1.1.1.1", 5432).await;
+        let vetted = VettedDial::for_configured_host_with(
+            DialPolicy::DenyPrivate,
+            &NoDns,
+            &configured("1.1.1.1"),
+            5432,
+        )
+        .await;
         assert_eq!(
             vetted,
             Ok(VettedDial::Pinned(SocketAddr::new(
@@ -1235,7 +1387,13 @@ mod tests {
     #[tokio::test]
     async fn vetted_dial_is_unrestricted_when_the_policy_allows_all() {
         for host in ["127.0.0.1", "10.0.0.1", "internal.example"] {
-            let vetted = VettedDial::for_host_with(DialPolicy::AllowAll, &NoDns, host, 5432).await;
+            let vetted = VettedDial::for_configured_host_with(
+                DialPolicy::AllowAll,
+                &NoDns,
+                &configured(host),
+                5432,
+            )
+            .await;
             assert_eq!(vetted, Ok(VettedDial::Unrestricted), "{host:?}");
             assert_eq!(VettedDial::Unrestricted.dial_host(host), host);
         }
@@ -1247,9 +1405,13 @@ mod tests {
     #[tokio::test]
     async fn vetted_dial_pins_the_first_answer_against_rebinding() {
         let resolver = PublicThenPrivate::new();
-        let first =
-            VettedDial::for_host_with(DialPolicy::DenyPrivate, &resolver, "rebind.example", 5432)
-                .await;
+        let first = VettedDial::for_configured_host_with(
+            DialPolicy::DenyPrivate,
+            &resolver,
+            &configured("rebind.example"),
+            5432,
+        )
+        .await;
         assert_eq!(
             first,
             Ok(VettedDial::Pinned(SocketAddr::new(
@@ -1264,9 +1426,13 @@ mod tests {
         );
         assert_eq!(resolver.calls(), 1);
 
-        let second =
-            VettedDial::for_host_with(DialPolicy::DenyPrivate, &resolver, "rebind.example", 5432)
-                .await;
+        let second = VettedDial::for_configured_host_with(
+            DialPolicy::DenyPrivate,
+            &resolver,
+            &configured("rebind.example"),
+            5432,
+        )
+        .await;
         assert_eq!(
             second,
             Err(SsrfRefusal::Blocked {

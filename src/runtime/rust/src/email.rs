@@ -748,7 +748,8 @@ async fn send_smtp<E: From<String>>(cfg: &SmtpConfig, m: &EmailMessage) -> IpeRe
     // transport dials the vetted address, never the name (a second resolution
     // could rebind to an internal host); the certificate is still verified
     // against `cfg.host`, which `TlsParameters` carries.
-    let vetted = match crate::ssrf::VettedDial::for_host(&cfg.host, port).await {
+    let configured = crate::ssrf::ConfiguredHost::from_config(cfg.host.clone());
+    let vetted = match crate::ssrf::VettedDial::for_configured_host(&configured, port).await {
         Ok(vetted) => vetted,
         Err(refusal) => return IpeResult::Err(format!("email.send/Smtp: {refusal}").into()),
     };
@@ -1001,11 +1002,12 @@ mod tests {
             user: String::new(),
             pass: crate::secret::secret_from_string(String::new()),
         };
-        // VettedDial::for_host mirrors the guard in email_send_smtp exactly.
+        // VettedDial::for_configured_host mirrors the guard in email_send_smtp exactly.
         // We test at this layer rather than driving the full send so the test
         // dials nothing (IP literals are decided without a lookup).
         let port_u16 = u16::try_from(cfg.port).unwrap_or(25);
-        match crate::ssrf::VettedDial::for_host(&cfg.host, port_u16).await {
+        let configured = crate::ssrf::ConfiguredHost::from_config(cfg.host.clone());
+        match crate::ssrf::VettedDial::for_configured_host(&configured, port_u16).await {
             Err(e) => IpeResult::Err(format!("email.send/Smtp: {e}")),
             Ok(_) => IpeResult::Ok("gate-passed".into()),
         }

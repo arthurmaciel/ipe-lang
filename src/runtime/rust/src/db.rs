@@ -3,7 +3,10 @@
 // config.rs (generated at build time per package.ipe database driver).
 use super::json::{Decoder, JsonVal, decode_and_map, decode_err_str, decode_field, decode_ok};
 use super::*;
-use crate::ssrf::{DialPolicy, HostResolver, SsrfRefusal, SystemResolver, VettedDial};
+use crate::ssrf::{
+    ConfiguredHost, DialPolicy, HostResolver, SsrfRefusal, SystemResolver, UnambiguousUrl,
+    UrlUnproven, VettedDial,
+};
 use sqlx::{Column, Row, TypeInfo};
 use std::collections::HashMap;
 
@@ -1339,8 +1342,8 @@ const MAX_POSTGRES_DIAL_TARGETS: usize = 8;
 /// One place a PostgreSQL connection URL can make the driver dial.
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum DialTarget {
-    /// A TCP host and port.
-    Tcp { host: String, port: u16 },
+    /// A TCP host and port, read from a URL whose userinfo is unambiguous.
+    Tcp { host: ConfiguredHost, port: u16 },
     /// A local Unix-domain socket directory.
     Socket,
     /// No host in the URL, so the driver picks one itself.
@@ -1360,15 +1363,11 @@ enum DialTarget {
 /// so the gate can refuse the whole set rather than trust one reading of the
 /// driver's precedence. A URL naming no host yields exactly
 /// [`DialTarget::DriverDefault`].
-fn postgres_dial_targets(url: &str) -> Result<Vec<DialTarget>, DbConnectError> {
-    let parsed = ::url::Url::parse(url);
-    if crate::ssrf::userinfo_is_ambiguous(url, parsed.as_ref().ok()) {
-        return Err(DbConnectError::MisplacedUserinfo);
-    }
-    let parsed = parsed.map_err(|_| DbConnectError::InvalidUrl)?;
+fn read_dial_targets(url: &UnambiguousUrl) -> Result<Vec<DialTarget>, DbConnectError> {
+    let parsed = url.url();
     let mut port = parsed.port().unwrap_or(POSTGRES_DEFAULT_PORT);
-    let mut hosts: Vec<Option<String>> = Vec::new();
-    let mut push_host = |host: Option<String>| {
+    let mut hosts: Vec<Option<ConfiguredHost>> = Vec::new();
+    let mut push_host = |host: Option<ConfiguredHost>| {
         if hosts.len() >= MAX_POSTGRES_DIAL_TARGETS {
             return Err(DbConnectError::TooManyDialTargets {
                 limit: MAX_POSTGRES_DIAL_TARGETS,
@@ -1377,14 +1376,17 @@ fn postgres_dial_targets(url: &str) -> Result<Vec<DialTarget>, DbConnectError> {
         hosts.push(host);
         Ok(())
     };
-    if let Some(host) = parsed.host_str().filter(|h| !h.is_empty()) {
-        let socket = host.starts_with("%2F") || host.starts_with("%2f");
-        push_host((!socket).then(|| host.to_owned()))?;
+    if let Some(host) = url.host() {
+        let socket = host.as_str().starts_with("%2F") || host.as_str().starts_with("%2f");
+        push_host((!socket).then_some(host))?;
     }
     for (key, value) in parsed.query_pairs() {
         match &*key {
             "host" | "hostaddr" => {
-                push_host((!value.starts_with('/')).then(|| value.into_owned()))?;
+                push_host(
+                    (!value.starts_with('/'))
+                        .then(|| ConfiguredHost::named_by(url, value.into_owned())),
+                )?;
             }
             "port" => {
                 port = value.parse().map_err(|_| DbConnectError::InvalidUrl)?;
@@ -1426,7 +1428,7 @@ pub struct SqliteUrl {
 
 /// A PostgreSQL connection URL and every target it makes the driver dial.
 pub struct PostgresUrl {
-    url: String,
+    url: UnambiguousUrl,
     targets: Vec<DialTarget>,
 }
 
@@ -1435,12 +1437,14 @@ impl PostgresUrl {
     ///
     /// # Errors
     ///
-    /// [`DbConnectError::InvalidUrl`] when the targets cannot be read.
+    /// [`DbConnectError::MisplacedUserinfo`] when the userinfo is ambiguous,
+    /// and [`DbConnectError::InvalidUrl`] when the targets cannot be read.
     fn parse(url: &str) -> Result<Self, DbConnectError> {
-        postgres_dial_targets(url).map(|targets| Self {
-            url: url.to_owned(),
-            targets,
-        })
+        let url = UnambiguousUrl::parse(url).map_err(|unproven| match unproven {
+            UrlUnproven::AmbiguousUserinfo => DbConnectError::MisplacedUserinfo,
+            UrlUnproven::Invalid => DbConnectError::InvalidUrl,
+        })?;
+        read_dial_targets(&url).map(|targets| Self { url, targets })
     }
 }
 
@@ -1509,7 +1513,7 @@ impl DbUrl {
 
 /// Admit one dial target under `policy`.
 ///
-/// A TCP host goes through [`VettedDial::for_host_with`]. A Unix socket
+/// A TCP host goes through [`VettedDial::for_configured_host_with`]. A Unix socket
 /// reaches the local server exactly as loopback TCP does, and a driver default
 /// is unproven (it may resolve to `localhost`), so under deny-private both are
 /// refused; with the policy off they pass, as loopback TCP does.
@@ -1520,7 +1524,7 @@ async fn vet_dial_target<R: HostResolver>(
 ) -> Result<VettedDial, DbConnectError> {
     match (target, policy) {
         (DialTarget::Tcp { host, port }, _) => {
-            VettedDial::for_host_with(policy, resolver, host, *port)
+            VettedDial::for_configured_host_with(policy, resolver, host, *port)
                 .await
                 .map_err(DbConnectError::HostRefused)
         }
@@ -1538,7 +1542,7 @@ async fn vet_dial_target<R: HostResolver>(
 
 /// The PostgreSQL options `url` makes the driver dial, gated and pinned.
 ///
-/// Every target from [`postgres_dial_targets`] must pass [`vet_dial_target`];
+/// Every target from [`read_dial_targets`] must pass [`vet_dial_target`];
 /// a URL that does not parse is refused, since its targets cannot be proven
 /// safe. The options are then the driver's own reading of `url`. Under
 /// deny-private that reading must dial TCP, and its host is replaced by the
@@ -1559,20 +1563,25 @@ async fn postgres_connect_options<R: HostResolver>(
         let dial = vet_dial_target(target, policy, resolver).await?;
         vetted.push((target.clone(), dial));
     }
-    let options: sqlx::postgres::PgConnectOptions =
-        url.url.parse().map_err(|_| DbConnectError::InvalidUrl)?;
+    let options: sqlx::postgres::PgConnectOptions = url
+        .url
+        .as_str()
+        .parse()
+        .map_err(|_| DbConnectError::InvalidUrl)?;
     match policy {
         DialPolicy::AllowAll => Ok(options),
-        DialPolicy::DenyPrivate => pin_postgres_options(options, &vetted, resolver).await,
+        DialPolicy::DenyPrivate => pin_postgres_options(&url.url, options, &vetted, resolver).await,
     }
 }
 
-/// Replace the dialled host in `options` with its vetted address.
+/// Replace the dialled host in `options`, the driver's reading of `url`, with
+/// its vetted address.
 ///
 /// Reuses the address a target in `vetted` already resolved to for the same
 /// host and port, so the name is resolved once; a host the target scan did not
 /// name is vetted here.
 async fn pin_postgres_options<R: HostResolver>(
+    url: &UnambiguousUrl,
     options: sqlx::postgres::PgConnectOptions,
     vetted: &[(DialTarget, VettedDial)],
     resolver: &R,
@@ -1599,7 +1608,7 @@ async fn pin_postgres_options<R: HostResolver>(
         .iter()
         .find_map(|(target, dial)| match (target, dial) {
             (DialTarget::Tcp { host: h, port: p }, VettedDial::Pinned(_))
-                if *h == host && *p == port =>
+                if h.as_str() == host && *p == port =>
             {
                 Some(*dial)
             }
@@ -1607,9 +1616,14 @@ async fn pin_postgres_options<R: HostResolver>(
         });
     let dial = match known {
         Some(dial) => dial,
-        None => VettedDial::for_host_with(DialPolicy::DenyPrivate, resolver, &host, port)
-            .await
-            .map_err(DbConnectError::HostRefused)?,
+        None => VettedDial::for_configured_host_with(
+            DialPolicy::DenyPrivate,
+            resolver,
+            &ConfiguredHost::named_by(url, host.clone()),
+            port,
+        )
+        .await
+        .map_err(DbConnectError::HostRefused)?,
     };
     Ok(options.host(&dial.dial_host(&host)))
 }
@@ -4839,6 +4853,11 @@ pub fn db_insert_fields_returning<E: Send + From<String> + 'static, A: Send + 's
 mod tests {
     use super::*;
 
+    /// Every target `url` makes the driver dial, as [`PostgresUrl::parse`] reads them.
+    fn postgres_dial_targets(url: &str) -> Result<Vec<DialTarget>, DbConnectError> {
+        PostgresUrl::parse(url).map(|url| url.targets)
+    }
+
     #[test]
     fn url_is_cacheable_bare_memory_is_not_cacheable() {
         assert!(!url_is_cacheable(":memory:"));
@@ -5312,7 +5331,7 @@ mod tests {
     #[test]
     fn postgres_dial_targets_cover_every_dial_source() {
         let tcp = |host: &str, port| DialTarget::Tcp {
-            host: host.to_string(),
+            host: ConfiguredHost::from_config(host.to_owned()),
             port,
         };
         assert_eq!(
@@ -5405,7 +5424,7 @@ mod tests {
         assert_eq!(
             postgres_dial_targets("postgres://admin:s3cr@3t-pw@db.example:6432/app"),
             Ok(vec![DialTarget::Tcp {
-                host: "db.example".to_owned(),
+                host: ConfiguredHost::from_config("db.example".to_owned()),
                 port: 6432,
             }])
         );
@@ -8884,11 +8903,11 @@ mod tests {
             targets,
             Some(vec![
                 DialTarget::Tcp {
-                    host: "public.example".to_owned(),
+                    host: ConfiguredHost::from_config("public.example".to_owned()),
                     port: POSTGRES_DEFAULT_PORT,
                 },
                 DialTarget::Tcp {
-                    host: "169.254.169.254".to_owned(),
+                    host: ConfiguredHost::from_config("169.254.169.254".to_owned()),
                     port: POSTGRES_DEFAULT_PORT,
                 },
             ])
