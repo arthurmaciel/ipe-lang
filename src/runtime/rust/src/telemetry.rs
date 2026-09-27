@@ -232,6 +232,15 @@ impl Posture {
             !cfg!(debug_assertions),
         )
     }
+
+    /// The label logged at startup (`posture=<label>`).
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Dev => "dev",
+            Self::Production => "production",
+        }
+    }
 }
 
 /// Production gate over [`Posture::from_env`]. A release binary deployed
@@ -269,31 +278,13 @@ impl ConsoleAuthMode {
     /// non-UTF-8 value resolves to `Off` in every posture.
     #[must_use]
     pub fn parse(raw: RawEnv<'_>, posture: Posture) -> Self {
-        let value = match raw {
-            RawEnv::NotUnicode => return Self::Off,
-            RawEnv::Absent => "",
-            RawEnv::Value(value) => value.trim(),
-        };
-        if value.is_empty() {
-            return match posture {
-                Posture::Production => Self::UnsetProd,
-                Posture::Dev => Self::DevOpen,
-            };
-        }
-        if value.eq_ignore_ascii_case("token") {
-            Self::Token
-        } else if value.eq_ignore_ascii_case("app") {
-            Self::App
-        } else {
-            Self::Off
-        }
+        ConsoleAuthResolution::resolve(raw, posture).mode
     }
 
     /// Resolve the setting from the process environment.
     #[must_use]
     pub fn from_env() -> Self {
-        let read = crate::system::read_env_var("IPE_CONSOLE_AUTH");
-        Self::parse(RawEnv::from_read(&read), Posture::from_env())
+        ConsoleAuthResolution::from_env().mode
     }
 
     /// The label logged at console mount (`mode=<label>`).
@@ -306,6 +297,114 @@ impl ConsoleAuthMode {
             Self::UnsetProd => "unset-prod",
             Self::DevOpen => "dev-open",
         }
+    }
+}
+
+/// Where the effective console-auth mode came from.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ConsoleAuthSource {
+    /// `IPE_CONSOLE_AUTH` names a recognised mode, enforced in every posture.
+    Explicit,
+    /// `IPE_CONSOLE_AUTH` holds an unrecognised or non-UTF-8 value.
+    ///
+    /// The surface is refused (`Off`).
+    Invalid,
+    /// `IPE_CONSOLE_AUTH` is unset or blank: the posture picks the mode.
+    PostureDefault,
+}
+
+impl ConsoleAuthSource {
+    /// The label logged at startup (`source=<label>`).
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Explicit => "env",
+            Self::Invalid => "env-invalid",
+            Self::PostureDefault => "posture-default",
+        }
+    }
+}
+
+/// The effective console-auth setting: posture, mode, and the mode's source.
+///
+/// The single parse of `IPE_CONSOLE_AUTH`; [`ConsoleAuthMode::parse`] and
+/// [`ConsoleAuthMode::from_env`] project it. It holds no credential, so
+/// nothing derived from it can leak one.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct ConsoleAuthResolution {
+    /// The deployment posture in effect.
+    pub posture: Posture,
+    /// The effective auth mode.
+    pub mode: ConsoleAuthMode,
+    /// Whether the mode was set explicitly or defaulted from the posture.
+    pub source: ConsoleAuthSource,
+}
+
+impl ConsoleAuthResolution {
+    /// Resolve a raw `IPE_CONSOLE_AUTH` value (trimmed, case-insensitive).
+    ///
+    /// `posture` picks the mode only when `raw` is absent or blank; a
+    /// recognised explicit value wins in every posture; an unrecognised or
+    /// non-UTF-8 value resolves to `Off`.
+    #[must_use]
+    pub fn resolve(raw: RawEnv<'_>, posture: Posture) -> Self {
+        let (mode, source) = match raw {
+            RawEnv::NotUnicode => (ConsoleAuthMode::Off, ConsoleAuthSource::Invalid),
+            RawEnv::Absent => (
+                Self::posture_default(posture),
+                ConsoleAuthSource::PostureDefault,
+            ),
+            RawEnv::Value(value) => Self::from_value(value.trim(), posture),
+        };
+        Self {
+            posture,
+            mode,
+            source,
+        }
+    }
+
+    fn from_value(value: &str, posture: Posture) -> (ConsoleAuthMode, ConsoleAuthSource) {
+        if value.is_empty() {
+            (
+                Self::posture_default(posture),
+                ConsoleAuthSource::PostureDefault,
+            )
+        } else if value.eq_ignore_ascii_case("token") {
+            (ConsoleAuthMode::Token, ConsoleAuthSource::Explicit)
+        } else if value.eq_ignore_ascii_case("app") {
+            (ConsoleAuthMode::App, ConsoleAuthSource::Explicit)
+        } else if value.eq_ignore_ascii_case("off") {
+            (ConsoleAuthMode::Off, ConsoleAuthSource::Explicit)
+        } else {
+            (ConsoleAuthMode::Off, ConsoleAuthSource::Invalid)
+        }
+    }
+
+    const fn posture_default(posture: Posture) -> ConsoleAuthMode {
+        match posture {
+            Posture::Production => ConsoleAuthMode::UnsetProd,
+            Posture::Dev => ConsoleAuthMode::DevOpen,
+        }
+    }
+
+    /// Resolve the setting from the process environment.
+    #[must_use]
+    pub fn from_env() -> Self {
+        let read = crate::system::read_env_var("IPE_CONSOLE_AUTH");
+        Self::resolve(RawEnv::from_read(&read), Posture::from_env())
+    }
+
+    /// The one startup line naming the effective posture, mode, and source.
+    ///
+    /// Built from labels alone: never a token, its length, or any prefix.
+    #[must_use]
+    pub fn startup_line(self) -> String {
+        format!(
+            "[ipe.console] auth posture={} mode={} source={}",
+            self.posture.label(),
+            self.mode.label(),
+            self.source.label()
+        )
     }
 }
 
@@ -1061,6 +1160,75 @@ mod tests {
         ] {
             assert_eq!(Posture::parse(env, ipe_env, true), Posture::Production);
             assert_eq!(Posture::parse(env, ipe_env, false), Posture::Dev);
+        }
+    }
+
+    #[test]
+    fn console_auth_resolution_names_mode_and_source() {
+        use ConsoleAuthMode as M;
+        use ConsoleAuthSource as S;
+        let bad = not_unicode();
+        for posture in [Posture::Dev, Posture::Production] {
+            let default = match posture {
+                Posture::Dev => M::DevOpen,
+                Posture::Production => M::UnsetProd,
+            };
+            for (raw, mode, source) in [
+                (RawEnv::Absent, default, S::PostureDefault),
+                (RawEnv::Value(""), default, S::PostureDefault),
+                (RawEnv::Value("  "), default, S::PostureDefault),
+                (RawEnv::Value("token"), M::Token, S::Explicit),
+                (RawEnv::Value(" TOKEN "), M::Token, S::Explicit),
+                (RawEnv::Value("app"), M::App, S::Explicit),
+                (RawEnv::Value("Off"), M::Off, S::Explicit),
+                (RawEnv::Value("tokne"), M::Off, S::Invalid),
+                (RawEnv::from_read(&bad), M::Off, S::Invalid),
+            ] {
+                let resolved = ConsoleAuthResolution::resolve(raw, posture);
+                assert_eq!(
+                    resolved,
+                    ConsoleAuthResolution {
+                        posture,
+                        mode,
+                        source
+                    },
+                    "IPE_CONSOLE_AUTH={raw:?} under {posture:?}"
+                );
+                assert_eq!(ConsoleAuthMode::parse(raw, posture), mode);
+            }
+        }
+    }
+
+    #[test]
+    fn console_auth_startup_line_is_labels_only() {
+        // The line is fully determined by three enum labels: equality with
+        // the expected text proves no credential, length, or prefix can
+        // appear in it.
+        for (raw, posture, expected) in [
+            (
+                RawEnv::Value("token"),
+                Posture::Dev,
+                "[ipe.console] auth posture=dev mode=token source=env",
+            ),
+            (
+                RawEnv::Absent,
+                Posture::Dev,
+                "[ipe.console] auth posture=dev mode=dev-open source=posture-default",
+            ),
+            (
+                RawEnv::Absent,
+                Posture::Production,
+                "[ipe.console] auth posture=production mode=unset-prod source=posture-default",
+            ),
+            (
+                RawEnv::Value("s3cret"),
+                Posture::Dev,
+                "[ipe.console] auth posture=dev mode=off source=env-invalid",
+            ),
+        ] {
+            let line = ConsoleAuthResolution::resolve(raw, posture).startup_line();
+            assert_eq!(line, expected);
+            assert!(!line.contains("s3cret"), "startup line leaked a value");
         }
     }
 

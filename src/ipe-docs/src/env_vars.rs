@@ -360,10 +360,13 @@ pub static ENV_VARS: &[EnvVar] = &[
         name: "IPE_CONSOLE_AUTH",
         default: "unset (token in production, open in dev)",
         purpose: "Console authentication mode: `token` (admin-token gate, enforced in \
-                  every posture), `off` (console disabled), `app` (app callback; mounted \
-                  but answers 501 on the Rust runtime). Only an unset or blank value falls \
-                  back to the production/dev default; any other value (including a \
-                  non-UTF-8 one) disables the console.",
+                  every posture, dev included), `off` (console disabled), `app` (app \
+                  callback; mounted but answers 501 on the Rust runtime). The posture \
+                  picks the default only when the variable is unset or blank; any other \
+                  value (including a non-UTF-8 one) disables the console. The effective \
+                  posture, mode, and source are logged once at startup \
+                  (`[ipe.console] auth posture=… mode=… source=env|env-invalid|posture-default`); \
+                  no token is ever logged.",
         subsystem: Subsystem::Console,
         class: Class::SecurityTunable,
     },

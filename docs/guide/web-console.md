@@ -92,7 +92,7 @@ presented as `Authorization: Bearer <token>` or as the password of HTTP Basic au
 | Variable | Default | Effect |
 |----------|---------|--------|
 | `IPE_ADMIN_TOKEN` | unset | Admin token: opens the console and `/_ipe/metrics` in production or under `IPE_CONSOLE_AUTH=token`. Without it (or with a non-UTF-8 value) a production console is not mounted. |
-| `IPE_CONSOLE_AUTH` | auto (token in production, open in dev) | `token` requires a credential in every posture; `off` disables the console; `app` mounts it but answers 501 on the Rust runtime (the `consoleAuth` callback is not supported there). Only an unset or blank value falls back to the posture default; any other value (including a non-UTF-8 one) disables it too. |
+| `IPE_CONSOLE_AUTH` | auto (token in production, open in dev) | `token` requires a credential in every posture, dev included; `off` disables the console; `app` mounts it but answers 501 on the Rust runtime (the `consoleAuth` callback is not supported there). The posture picks the default only when the variable is unset or blank; any other value (including a non-UTF-8 one) disables it too. Startup logs the effective posture, mode, and source once (`[ipe.console] auth posture=… mode=… source=…`), never a token. |
 | `IPE_CONSOLE_EMBED` | auto (on in dev) | Set to `off` to disable the embedded console. |
 | `IPE_CONSOLE_HUB` | unset | Base URL of a remote Ipê Hub OTLP collector. |
 | `IPE_DEV_BANNER` | auto (on in dev) | Set to `off` to suppress the dev-mode banner. |
