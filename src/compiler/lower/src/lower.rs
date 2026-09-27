@@ -30531,18 +30531,17 @@ mod tests {
                 CarrierSend::Always
             ));
         }
-        for always in [IrType::Decoder(generic())] {
-            assert!(ir_type_generic_in_send_carrier(
-                &always,
-                a,
-                CarrierSend::Always
-            ));
-            assert!(!ir_type_generic_in_send_carrier(
-                &always,
-                a,
-                CarrierSend::Effect
-            ));
-        }
+        let always = IrType::Decoder(generic());
+        assert!(ir_type_generic_in_send_carrier(
+            &always,
+            a,
+            CarrierSend::Always
+        ));
+        assert!(!ir_type_generic_in_send_carrier(
+            &always,
+            a,
+            CarrierSend::Effect
+        ));
         let effect_bound = CarrierSend::Effect.oblige(BoundSet::UNBOUNDED);
         assert!(effect_bound.has_effect_send() && effect_bound.has_static());
         assert!(
