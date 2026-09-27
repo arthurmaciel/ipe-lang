@@ -438,7 +438,12 @@ pub(crate) struct ResolvedProject {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum ScopeSpec {
     /// A manifest project: the manifest's directory, watched recursively.
-    Package(PathBuf),
+    Package {
+        /// The manifest's directory.
+        root: PathBuf,
+        /// Every module file the bounded module discovery found.
+        source_files: Vec<PathBuf>,
+    },
     /// A loose file: the entry and the sibling module files its import closure probes.
     LooseFile {
         /// The entry `.ipe` file as given on the command line.
@@ -455,7 +460,9 @@ impl ScopeSpec {
     /// [`ipe_watch::ScopeError`] when the root is missing or the scope is too large.
     fn build(&self) -> Result<ipe_watch::WatchScope, ipe_watch::ScopeError> {
         match self {
-            Self::Package(root) => ipe_watch::WatchScope::build(root, root),
+            Self::Package { root, source_files } => {
+                ipe_watch::WatchScope::build(root, root, source_files)
+            }
             Self::LooseFile {
                 entry,
                 module_files,
@@ -514,6 +521,7 @@ pub(crate) fn resolve_project_sources(
         let package_root = manifest_path
             .parent()
             .map_or_else(|| PathBuf::from("."), Path::to_path_buf);
+        let source_files = discovered.iter().map(|m| m.path.clone()).collect();
         return Ok(ResolvedProject {
             sources,
             discovered,
@@ -522,7 +530,10 @@ pub(crate) fn resolve_project_sources(
             db_driver: manifest.driver,
             wasm_public_env: manifest.wasm.public_env,
             cargo_name,
-            scope: ScopeSpec::Package(package_root),
+            scope: ScopeSpec::Package {
+                root: package_root,
+                source_files,
+            },
         });
     }
 
@@ -573,7 +584,7 @@ fn rescope(
     shared: &RwLock<ipe_watch::WatchScope>,
     spec: &ScopeSpec,
 ) -> bool {
-    if matches!(spec, ScopeSpec::Package(_)) {
+    if matches!(spec, ScopeSpec::Package { .. }) {
         return false;
     }
     let next = match spec.build() {
