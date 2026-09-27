@@ -26,10 +26,12 @@
   "playground-jail",
   "quick-check",
   "registry-admission",
+  "runtime-feature-combos",
   "runtime-full-features",
   "seal-slice",
   "seal-smoke",
   "stdlib-docs-drift",
   "test",
-  "wasm-floor"
+  "wasm-floor",
+  "windows-check"
 ]

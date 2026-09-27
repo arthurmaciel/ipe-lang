@@ -35,6 +35,18 @@ checks:
   - context: clippy
     disposition: gate
     producer: ci.yml
+  - context: runtime-feature-combos
+    disposition: gate
+    producer: ci.yml
+    guards: >-
+      Every runtime feature combination the emitter can select builds clean
+      under clippy (SEAL); path-gated, so a skip on a non-emit PR passes.
+  - context: windows-check
+    disposition: gate
+    producer: ci.yml
+    guards: >-
+      The Windows output-directory code compiles, so its held-handle,
+      reparse-point-refusing file operations ship rather than rot unbuilt.
   - context: quick-check
     disposition: gate
     producer: ci.yml
@@ -164,10 +176,6 @@ checks:
     disposition: nightly-gate
     producer: ci.yml
     guards: Security
-  - context: runtime-feature-combos
-    disposition: nightly-gate
-    producer: ci.yml
-    guards: SEAL
 
   # ── Cross-platform jail proofs — nightly-gate (Security §1) ───────────────
   # The Linux jail Tier-2 proofs — the containment gate CI produces on GitHub-

@@ -2977,6 +2977,7 @@ name = "ipe"
 version = "0.3.0"
 dependencies = [
  "base64 0.22.1",
+ "cap-primitives",
  "e2e-support",
  "getrandom 0.3.4",
  "hex",
@@ -3017,6 +3018,7 @@ dependencies = [
  "ureq",
  "wasmtime",
  "wasmtime-wasi",
+ "winapi-util",
 ]
 
 [[package]]

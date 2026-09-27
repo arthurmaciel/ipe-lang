@@ -2009,6 +2009,11 @@ pub fn format_artifact_size(bytes: u64) -> String {
 }
 
 /// The `wasm-bindgen-cli` version that matches the runtime's pinned `wasm-bindgen` crate.
+///
+/// `src/runtime/rust/Cargo.toml`'s `wasm-bindgen` dependency line is the
+/// canonical spelling of this version; `ipe_backend_rust::project`'s
+/// `wasm_bindgen_version_matches_the_runtime_pin` test fails the build the
+/// instant this constant drifts from it.
 const WASM_BINDGEN_VERSION: &str = "0.2.126";
 
 /// Run the three post-emit bundle steps for `--target wasm`:
@@ -3494,7 +3499,7 @@ pub fn user_sources_for_unsafe_scan(
             .iter()
             .map(|d| {
                 crate::io_bounded::read_to_string_capped(
-                    &d.path,
+                    d.path(),
                     crate::io_bounded::SOURCE_READ_CAP,
                 )
             })
@@ -3710,10 +3715,10 @@ pub fn named_sources_for_web_scan(
         let mut out = Vec::with_capacity(discovered.len());
         for m in &discovered {
             let src = crate::io_bounded::read_to_string_capped(
-                &m.path,
+                m.path(),
                 crate::io_bounded::SOURCE_READ_CAP,
             )?;
-            out.push((m.module_path.join("."), src));
+            out.push((m.module_path().join("."), src));
         }
         return Ok(out);
     }
