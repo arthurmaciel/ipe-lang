@@ -211,6 +211,25 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo clippy --all-targets --workspace -- -D warnings
 
+  # The CLI's Windows-only code (held output-directory handles, reparse-point
+  # refusal) never compiles on a Linux runner, so a cfg(windows) break would
+  # otherwise surface only at release. Type-checks the CLI and its tests for
+  # Windows on every code change, then runs the owned-tree suites (output
+  # directory, clean, cache), whose link and junction refusals only a Windows
+  # filesystem can exercise.
+  windows-check:
+    runs-on: windows-latest
+    needs: changes
+    if: needs.changes.outputs.code == 'true' || github.event_name != 'pull_request'
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/rust-toolchain-pinned
+      - uses: mozilla-actions/sccache-action@v0.0.9
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo check --locked -p ipe --all-targets
+      - uses: taiki-e/install-action@nextest
+      - run: cargo nextest run --locked -p ipe --lib -E 'test(/^(output_dir|clean|cache)::/)'
+
   # No compiler-internal jargon or raw Rust types leak into user-facing text
   # (rendered diagnostic goldens + `ipe explain` pages). Pure git + ripgrep, no
   # toolchain, so it stays on the fast required PR path.

@@ -175,10 +175,44 @@ fn open_nonblocking(path: &Path, final_link: FinalLink) -> Result<File, CliError
         .map_err(|errno| open_error(path, errno.into()))
 }
 
+/// Open `path` read-only; under [`FinalLink::Refuse`] a reparse point in the
+/// final component (symlink, junction) is opened as itself, never followed, and
+/// refused on the opened handle's attributes, so no swap after a path check
+/// reaches its target.
+#[cfg(windows)]
+fn open_nonblocking(path: &Path, final_link: FinalLink) -> Result<File, CliError> {
+    use std::os::windows::fs::{MetadataExt as _, OpenOptionsExt as _};
+    /// `FILE_FLAG_OPEN_REPARSE_POINT`: opens a reparse point itself, never its target.
+    const OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+    /// `FILE_ATTRIBUTE_REPARSE_POINT`.
+    const ATTR_REPARSE_POINT: u32 = 0x400;
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true);
+    if final_link == FinalLink::Refuse {
+        options.custom_flags(OPEN_REPARSE_POINT);
+    }
+    let file = options
+        .open(path)
+        .map_err(|source| open_error(path, source))?;
+    if final_link == FinalLink::Refuse {
+        let attributes = file
+            .metadata()
+            .map_err(|source| CliError::Io {
+                path: path.to_path_buf(),
+                source,
+            })?
+            .file_attributes();
+        if attributes & ATTR_REPARSE_POINT != 0 {
+            return Err(source_refused(path, SourceRefusal::NotRegularFile));
+        }
+    }
+    Ok(file)
+}
+
 /// Open `path` read-only, refusing a final symlink first under [`FinalLink::Refuse`].
 ///
 /// Off unix a FIFO can still block the open; the handle check still refuses it.
-#[cfg(not(unix))]
+#[cfg(not(any(unix, windows)))]
 fn open_nonblocking(path: &Path, final_link: FinalLink) -> Result<File, CliError> {
     let is_link = std::fs::symlink_metadata(path).is_ok_and(|meta| meta.file_type().is_symlink());
     if final_link == FinalLink::Refuse && is_link {

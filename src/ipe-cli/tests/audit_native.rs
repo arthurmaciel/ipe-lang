@@ -559,7 +559,10 @@ mod real_jail {
     ) -> JailProbeRunner<'a> {
         // The real build needs the toolchain reachable inside the jail (read-only).
         let mut ro_binds = default_ro_binds();
-        ro_binds.extend(ipe::audit_native::toolchain_ro_binds());
+        ro_binds.extend(
+            ipe::audit_native::toolchain_ro_binds()
+                .expect("the test environment's toolchain homes are absolute or unset"),
+        );
         JailProbeRunner::new(
             tools,
             harness.wrapper.clone(),

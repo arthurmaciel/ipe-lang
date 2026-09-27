@@ -62,7 +62,7 @@ fn resolve_user_sources(
 fn load_error(err: &CliError) -> LoadError {
     let detail = err.to_string();
     match err {
-        CliError::Io { .. } => LoadError::Io(detail),
+        CliError::Io { .. } | CliError::SourceRefused { .. } => LoadError::Io(detail),
         CliError::FileTooLarge { .. } | CliError::DiscoveryLimitReached { .. } => {
             LoadError::Limit(detail)
         }
@@ -111,7 +111,11 @@ fn load_error(err: &CliError) -> LoadError {
         | CliError::AdvisoryDbMalformed { .. }
         | CliError::WasiRunFeatureDisabled
         | CliError::WasiRunFailed { .. }
-        | CliError::WasiRunExited { .. } => LoadError::Pipeline(detail),
+        | CliError::WasiRunExited { .. }
+        | CliError::CacheHomeUnknown
+        | CliError::EnvDirNotAbsolute { .. }
+        | CliError::LockRefused(_)
+        | CliError::VersionRefused { .. } => LoadError::Pipeline(detail),
     }
 }
 

@@ -31,5 +31,6 @@
   "seal-smoke",
   "stdlib-docs-drift",
   "test",
-  "wasm-floor"
+  "wasm-floor",
+  "windows-check"
 ]

@@ -836,7 +836,9 @@ pub fn run_audit_entry(rest: &[String]) -> Result<(), CliError> {
     // Fail closed: a present-but-unreadable baseline propagates as an error
     // so the structural prechecks below never run against an empty baseline and
     // silently classify every submitted version as "new".
-    let index_root = index_root_opt.clone().unwrap_or_else(resolve::index_root);
+    let index_root = index_root_opt
+        .clone()
+        .map_or_else(resolve::index_root, Ok)?;
     let baseline: Option<index::IndexEntry> =
         index::read_entry_lookup(&index_root, &submitted.name).require_present()?;
 
@@ -847,11 +849,13 @@ pub fn run_audit_entry(rest: &[String]) -> Result<(), CliError> {
     // the index PR directly would bypass.
     index::admission_precheck(&submitted, baseline.as_ref(), attested_actor.as_ref())?;
 
-    let baseline_by_version: std::collections::BTreeMap<&semver::Version, &index::EntryVersion> =
-        baseline
-            .as_ref()
-            .map(|e| e.versions.iter().map(|v| (&v.version, v)).collect())
-            .unwrap_or_default();
+    let baseline_by_version: std::collections::BTreeMap<
+        &crate::published_version::PublishedVersion,
+        &index::EntryVersion,
+    > = baseline
+        .as_ref()
+        .map(|e| e.versions.iter().map(|v| (&v.version, v)).collect())
+        .unwrap_or_default();
 
     // The new versions are those present in the submitted entry but absent from
     // the baseline. A PR normally adds exactly one. Each is fetched, hash-verified,
@@ -871,11 +875,7 @@ pub fn run_audit_entry(rest: &[String]) -> Result<(), CliError> {
     // A scratch root for fetch caches under the standard per-user cache root
     // (the write-boundary from PRINCIPLES.md), isolated per process so concurrent
     // audit-entry runs never share a cache directory.
-    let cache_base = std::env::var_os("XDG_CACHE_HOME")
-        .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".cache")))
-        .unwrap_or_else(|| PathBuf::from(".ipe"));
-    let scratch_root = cache_base
+    let scratch_root = resolve::default_cache_base()?
         .join("ipe")
         .join(format!("audit-entry-{}", std::process::id()));
     std::fs::create_dir_all(&scratch_root).map_err(|e| CliError::Io {
@@ -2172,8 +2172,8 @@ impl PackageSourceSet {
 
         let mut sources: BTreeMap<Vec<String>, (PathBuf, String)> = BTreeMap::new();
         for m in &entries {
-            let src = crate::io_bounded::read_walked_source(&m.path)?;
-            sources.insert(m.module_path.clone(), (m.path.clone(), src));
+            let src = crate::io_bounded::read_walked_source(m.path())?;
+            sources.insert(m.module_path().to_vec(), (m.path().to_path_buf(), src));
         }
 
         // Inject the compiled-source stdlib closure (e.g. `Ipe.Css`) just like
@@ -2197,7 +2197,9 @@ impl PackageSourceSet {
 
     /// The module path of every module lowered as an inference entry.
     pub fn entry_module_paths(&self) -> impl Iterator<Item = &[String]> {
-        self.entries.iter().map(|m| m.module_path.as_slice())
+        self.entries
+            .iter()
+            .map(crate::project::DiscoveredModule::module_path)
     }
 
     /// Number of modules in the source graph (entries plus injected modules).
@@ -2216,7 +2218,7 @@ impl PackageSourceSet {
             entries: self
                 .entries
                 .iter()
-                .filter(|m| m.module_path == module_path)
+                .filter(|m| m.module_path() == module_path)
                 .cloned()
                 .collect(),
             injected: self.injected.clone(),
@@ -2286,11 +2288,11 @@ type EntryInference = Result<std::collections::BTreeSet<ipe_ir::Capability>, Cli
 /// module. A stdlib module failing to lower on its own is a compiler defect the
 /// author cannot act on, so a user diagnostic outranks it; it still refuses the
 /// package, because the stdlib is trusted to lower, not exempt from disclosure.
-const fn refusal_rank(provenance: project::EntryProvenance) -> u8 {
+const fn refusal_rank(provenance: project::ModuleProvenance) -> u8 {
     match provenance {
-        project::EntryProvenance::User(project::EntryRole::Main) => 0,
-        project::EntryProvenance::User(project::EntryRole::Library) => 1,
-        project::EntryProvenance::EmbeddedStdlib => 2,
+        project::ModuleProvenance::User(project::EntryRole::Main) => 0,
+        project::ModuleProvenance::User(project::EntryRole::Library) => 1,
+        project::ModuleProvenance::EmbeddedStdlib => 2,
     }
 }
 
@@ -2304,19 +2306,19 @@ fn infer_entry(
     package: &PackageSourceSet,
     module: &project::DiscoveredModule,
 ) -> EntryInference {
-    let Some(entry_file) = source_root.files(db).get(&module.module_path).copied() else {
+    let Some(entry_file) = source_root.files(db).get(module.module_path()).copied() else {
         return Err(CliError::Pipeline {
-            file: module.path.clone(),
+            file: module.path().to_path_buf(),
             src: package
                 .sources
-                .get(&module.module_path)
+                .get(module.module_path())
                 .map(|(_, s)| s.clone())
                 .unwrap_or_default(),
             diag: Box::new(Diagnostic::CompilerBug {
                 where_: "ipe.infer_package_capabilities",
                 detail: format!(
                     "entry module {} has no source file in the package root",
-                    module.module_path.join(".")
+                    module.module_path().join(".")
                 ),
             }),
         });
@@ -2351,7 +2353,7 @@ fn infer_entry(
 /// # Errors
 /// The selected entry refusal; [`CliError::Usage`] when there is no entry.
 fn aggregate_entry_inferences(
-    outcomes: impl IntoIterator<Item = (project::EntryProvenance, EntryInference)>,
+    outcomes: impl IntoIterator<Item = (project::ModuleProvenance, EntryInference)>,
 ) -> Result<std::collections::BTreeSet<ipe_ir::Capability>, CliError> {
     let mut union: std::collections::BTreeSet<ipe_ir::Capability> =
         std::collections::BTreeSet::new();
@@ -2396,15 +2398,15 @@ fn attribute_entry_lowering_error(
     home: &[ipe_intern::Symbol],
 ) -> CliError {
     if let Err(canon_err) =
-        attribute_canon_errors(db, source_root, &package.sources, entry_file, &entry.path)
+        attribute_canon_errors(db, source_root, &package.sources, entry_file, entry.path())
     {
         return canon_err;
     }
     let entry_source = (
-        entry.path.clone(),
+        entry.path().to_path_buf(),
         package
             .sources
-            .get(&entry.module_path)
+            .get(entry.module_path())
             .map(|(_, s)| s.clone())
             .unwrap_or_default(),
     );
@@ -3158,10 +3160,11 @@ mod capability_fold_tests {
     use ipe_ir::Capability;
     use std::collections::BTreeSet;
 
-    const MAIN: project::EntryProvenance = project::EntryProvenance::User(project::EntryRole::Main);
-    const SIBLING: project::EntryProvenance =
-        project::EntryProvenance::User(project::EntryRole::Library);
-    const STDLIB: project::EntryProvenance = project::EntryProvenance::EmbeddedStdlib;
+    const MAIN: project::ModuleProvenance =
+        project::ModuleProvenance::User(project::EntryRole::Main);
+    const SIBLING: project::ModuleProvenance =
+        project::ModuleProvenance::User(project::EntryRole::Library);
+    const STDLIB: project::ModuleProvenance = project::ModuleProvenance::EmbeddedStdlib;
 
     fn set(capabilities: &[Capability]) -> BTreeSet<Capability> {
         capabilities.iter().copied().collect()

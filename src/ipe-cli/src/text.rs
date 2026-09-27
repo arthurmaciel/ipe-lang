@@ -391,8 +391,8 @@ messages! {
     doc_single_path = "doc-single-path";
     /// `ipe add`'s inspector binary is missing.
     ffi_inspector_not_found = "ffi-inspector-not-found";
-    /// `ipe add` cannot make a safe scratch directory without `HOME`.
-    ffi_add_home_unset = "ffi-add-home-unset";
+    /// `ipe add` cannot make a safe scratch directory without an absolute `HOME`.
+    ffi_add_home_not_absolute = "ffi-add-home-not-absolute";
     /// `ipe add` has no bubblewrap isolation available.
     ffi_no_bubblewrap = "ffi-no-bubblewrap";
     /// `ipe add`'s inspector payload was empty.
@@ -445,7 +445,7 @@ messages! {
     package_audit_entry_single_path = "package-audit-entry-single-path";
     /// `ipe package audit-entry` without its entry-file path.
     package_audit_entry_usage = "package-audit-entry-usage";
-    /// Capability inference over a package with no module to analyse.
+    /// Capability inference found no package module to analyse.
     package_capability_inference_no_module = "package-capability-inference-no-module";
     /// `package.ipe` with no `name` field.
     package_manifest_name_required = "package-manifest-name-required";
@@ -547,6 +547,10 @@ messages! {
     cli_static_refusal(refusal) = "cli-static-refusal";
     /// The Ipe runtime module tree could not be located.
     cli_runtime_not_found = "cli-runtime-not-found";
+    /// Neither `$XDG_CACHE_HOME` nor `$HOME` names an absolute directory.
+    cli_cache_home_unknown = "cli-cache-home-unknown";
+    /// A directory environment variable is set to a relative path.
+    cli_env_dir_not_absolute(var) = "cli-env-dir-not-absolute";
     /// `$IPE_RUNTIME_DIR` does not name a runtime crate root.
     cli_runtime_dir_invalid(path) = "cli-runtime-dir-invalid";
     /// The invalid runtime dir looks like the inner module directory.
@@ -593,6 +597,8 @@ messages! {
     cli_semver_rejected(required, floor, proposed) = "cli-semver-rejected";
     /// `ipe package publish` declined to proceed.
     cli_publish_refused(refusal) = "cli-publish-refused";
+    /// A package's version cannot enter the package index.
+    cli_version_refused(package, refusal) = "cli-version-refused";
     /// A command group was followed by a token that is not one of its verbs.
     cli_unknown_group_verb(group, attempted) = "cli-unknown-group-verb";
     /// The near-miss suggestion offered for an unknown group verb.
@@ -658,6 +664,22 @@ messages! {
     publish_unsigned_commit = "publish-unsigned-commit";
     /// Publish without a resolvable GitHub identity.
     publish_unresolvable_identity = "publish-unresolvable-identity";
+    /// An `ipe.lock` `[[package]]` table lacks a required field.
+    lock_missing_field(field) = "lock-missing-field";
+    /// An `ipe.lock` package carries an unrecognised `kind`.
+    lock_unknown_kind(package, kind) = "lock-unknown-kind";
+    /// An `ipe.lock` index dependency records a `local` rev.
+    lock_index_dep_local_rev(package) = "lock-index-dep-local-rev";
+    /// A path dependency's `source` cannot be recorded in `ipe.lock`.
+    lock_unrecordable_local_source(package, max, raw) = "lock-unrecordable-local-source";
+    /// A path dependency's path is not valid UTF-8.
+    lock_non_utf8_local_path(package, path) = "lock-non-utf8-local-path";
+    /// A version string that is not valid semver.
+    version_refused_malformed(raw, reason) = "version-refused-malformed";
+    /// A version carrying build metadata.
+    version_refused_build_metadata(version, build) = "version-refused-build-metadata";
+    /// A version not above the greatest published one.
+    version_refused_not_above(candidate, greatest) = "version-refused-not-above";
     /// The documentation site's skip-to-content link.
     site_skip_link = "site-skip-link";
     /// The accessible name of the site navigation.
@@ -769,8 +791,8 @@ messages! {
     index_entry_source_moved(name, version, source, expected) = "index-entry-source-moved";
     /// `ipe clean` ran outside a project root.
     clean_no_manifest = "clean-no-manifest";
-    /// `ipe diff` was given a malformed version.
-    diff_invalid_version(raw) = "diff-invalid-version";
+    /// `ipe diff` was given a version the package index would refuse.
+    diff_invalid_version(refusal) = "diff-invalid-version";
     /// `ipe fmt` found no `.ipe` files.
     fmt_no_files(root) = "fmt-no-files";
     /// `ipe fmt --check` found unformatted files.
@@ -1069,6 +1091,12 @@ messages! {
     output_unsafe_component(path) = "output-unsafe-component";
     /// A walked file that resolves outside the project.
     output_outside_project(path, root) = "output-outside-project";
+    /// An owned directory whose path now names a different directory.
+    output_replaced(path) = "output-replaced";
+    /// A directory tree nested past the walk's depth ceiling.
+    output_too_deep(path, limit) = "output-too-deep";
+    /// A path on or under a Windows reparse point.
+    output_reparse_point(path) = "output-reparse-point";
     /// A GitHub login with nothing before its optional `[bot]` suffix.
     login_empty = "login-empty";
     /// A GitHub login past the length ceiling.

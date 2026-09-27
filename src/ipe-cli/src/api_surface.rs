@@ -174,18 +174,19 @@ pub fn read_tree(root: &Path) -> Result<BTreeMap<ModulePath, (PathBuf, String)>,
     let mut sources = BTreeMap::new();
     for m in discovered {
         let read = if walked {
-            crate::io_bounded::read_walked_source(&m.path)
+            crate::io_bounded::read_walked_source(m.path())
         } else {
-            crate::io_bounded::read_to_string_capped(&m.path, crate::io_bounded::SOURCE_READ_CAP)
+            crate::io_bounded::read_to_string_capped(m.path(), crate::io_bounded::SOURCE_READ_CAP)
         };
         let src = read.map_err(|e| match e {
             crate::CliError::Io { path, source } => DiffError::Io { path, source },
             other => DiffError::Io {
-                path: m.path.clone(),
+                path: m.path().to_path_buf(),
                 source: std::io::Error::other(other.to_string()),
             },
         })?;
-        sources.insert(m.module_path, (m.path, src));
+        let (path, module_path) = m.into_paths();
+        sources.insert(module_path, (path, src));
     }
     if sources.is_empty() {
         return Err(DiffError::Empty {
@@ -446,10 +447,10 @@ pub fn extract_stdlib_module(segments: &[String], source: &str) -> Result<Public
         segments.to_vec(),
     )];
 
-    // Inject the module's compiled-source import closure, then mark the target
-    // itself as embedded stdlib so it may declare into the reserved namespace.
-    let mut injected = project::inject_compiled_std_closure(&mut prepared, &mut discovered);
-    injected.insert(segments.to_vec());
+    // Inject the module's compiled-source import closure. The target's own
+    // `embedded_stdlib` record makes it trusted alongside its dependencies, so it
+    // may declare into the reserved namespace.
+    let injected = project::inject_compiled_std_closure(&mut prepared, &mut discovered);
 
     let source_root = crate::create_source_root(&db, &prepared, &injected, &BTreeSet::new());
 

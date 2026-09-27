@@ -509,8 +509,8 @@ pub(crate) fn resolve_project_sources(
         let discovered = project::discover_modules(&manifest.src_root)?;
         let mut sources: BTreeMap<Vec<String>, (PathBuf, String)> = BTreeMap::new();
         for m in &discovered {
-            let src = crate::io_bounded::read_walked_source(&m.path)?;
-            sources.insert(m.module_path.clone(), (m.path.clone(), src));
+            let src = crate::io_bounded::read_walked_source(m.path())?;
+            sources.insert(m.module_path().to_vec(), (m.path().to_path_buf(), src));
         }
         let cargo_name = ipe_backend_rust::sanitize_cargo_name(&manifest.name);
         // The entry defaults to `["Main"]`; a `programs` manifest routes its
@@ -521,7 +521,7 @@ pub(crate) fn resolve_project_sources(
         let package_root = manifest_path
             .parent()
             .map_or_else(|| PathBuf::from("."), Path::to_path_buf);
-        let source_files = discovered.iter().map(|m| m.path.clone()).collect();
+        let source_files = discovered.iter().map(|m| m.path().to_path_buf()).collect();
         return Ok(ResolvedProject {
             sources,
             discovered,

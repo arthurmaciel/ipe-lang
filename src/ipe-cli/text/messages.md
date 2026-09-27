@@ -144,9 +144,9 @@ ipe doc: expected a single <path> argument
 
 ipe add: `ipe-ffi-inspector` not found beside the `ipe` binary or on PATH
 
-## ffi-add-home-unset
+## ffi-add-home-not-absolute
 
-ipe add: HOME is not set; cannot create a safe scratch directory
+ipe add: HOME is not an absolute path; cannot create a safe scratch directory
 
 ## ffi-no-bubblewrap
 
@@ -465,6 +465,14 @@ static build refused: {refusal}
 
 could not locate the Ipe runtime; set IPE_RUNTIME_DIR to an explicit path or pass --runtime <dir>
 
+## cli-cache-home-unknown
+
+could not determine the per-user cache directory: neither XDG_CACHE_HOME nor the home directory (HOME, or USERPROFILE on Windows) is set to an absolute path; set XDG_CACHE_HOME to an absolute, writable directory
+
+## cli-env-dir-not-absolute
+
+{var} is set but is not an absolute path; set it to an absolute directory or unset it to use the default location
+
 ## cli-runtime-dir-invalid
 
 IPE_RUNTIME_DIR points at {path}, which is not an Ipe runtime crate root (its Cargo.toml must declare `name = "ipe-runtime-rust"`)
@@ -563,6 +571,10 @@ version {proposed} does not clear the required {required} bump — the new versi
 ## cli-publish-refused
 
 ipe package publish refused: {refusal}
+
+## cli-version-refused
+
+package `{package}`: {refusal}
 
 ## cli-unknown-group-verb
 
@@ -700,6 +712,42 @@ no commit-signing key is configured, so the publish commit could only be pushed 
 ## publish-unresolvable-identity
 
 could not resolve your GitHub identity for the index-PR commit — the curated index requires signed commits marked "Verified", which is only possible when the commit's committer is your authenticated GitHub account's verified noreply identity. Run `ipe login` so publish can sign the index PR under your verified GitHub identity, then publish again. Nothing was published.
+
+# Lockfile refusals
+
+## lock-missing-field
+
+ipe.lock: a `[[package]]` is missing `{field}`
+
+## lock-unknown-kind
+
+ipe.lock: package `{package}` has an unrecognised `kind` value "{kind}" — re-run `ipe add` to regenerate
+
+## lock-index-dep-local-rev
+
+ipe.lock: package `{package}` is an index dependency but records a `local` rev — an index dependency is always pinned to a commit; re-run `ipe add`
+
+## lock-unrecordable-local-source
+
+package `{package}`: a path dependency's `source` must be a non-empty path of at most {max} bytes with no control characters or `"`, got: "{raw}"
+
+## lock-non-utf8-local-path
+
+package `{package}`: path dependency `{path}` is not valid UTF-8 and cannot be recorded in ipe.lock
+
+# Version refusals
+
+## version-refused-malformed
+
+{raw} is not a valid semantic version: {reason}
+
+## version-refused-build-metadata
+
+version {version} carries build metadata (`+{build}`), which the package index refuses — semver precedence ignores it, so the version would not name one release unambiguously. Drop the `+…` suffix from the version.
+
+## version-refused-not-above
+
+version {candidate} is not above the greatest published version {greatest} — every new version must exceed every version already in the index. Publish a version above {greatest}.
 
 # Documentation site
 
@@ -872,6 +920,18 @@ the source root {path} cannot be resolved — ipe cannot prove the output stays 
 
 {path} resolves outside the project at {root} — a directory walk never rewrites it
 
+## output-replaced
+
+{path} was replaced after ipe claimed it — refusing to write or delete in it; run the command again
+
+## output-too-deep
+
+{path} is nested more than {limit} directories deep — ipe refuses to walk it; remove the tree yourself
+
+## output-reparse-point
+
+{path} is or lies under a reparse point (a OneDrive folder, a mount point, or a deduplicated directory) — ipe cannot prove where it leads; point --out at a directory outside it
+
 # Publisher identity
 
 ## login-empty
@@ -968,7 +1028,7 @@ clean: no package.ipe here — run it from an Ipê project root
 
 ## diff-invalid-version
 
-diff: invalid version `{raw}`
+diff: {refusal}
 
 ## fmt-no-files
 
@@ -989,7 +1049,7 @@ fmt: no such file or directory: {root}
 
 ## health-home-unknown
 
-health: cannot locate your home directory (neither CARGO_HOME nor HOME is set)
+health: cannot locate your home directory (neither CARGO_HOME nor HOME is an absolute path)
 
 ## health-install-command-empty
 
