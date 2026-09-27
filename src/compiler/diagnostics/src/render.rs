@@ -2279,7 +2279,10 @@ const fn feature_label(f: Feature) -> &'static str {
              not `Clone`, so the second use has no sound copy to make; thread \
              the value linearly (bind and use it once), read the fields you \
              need into `let` bindings before the consuming use, or restructure \
-             so the effect flows through a single continuation \
+             so the effect flows through a single continuation. The same holds \
+             for a record holding a live app handle (`WebApp`/`TuiApp`/`CliApp`/\
+             `WorkerApp`) that a `Task` step reads and the next step reuses: bind \
+             the field read with `let` before the step \
              [feature: non-clone-value-reuse]"
         }
     }

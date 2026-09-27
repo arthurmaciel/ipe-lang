@@ -30967,6 +30967,7 @@ mod tests {
         let wrap = interner.intern("Wrap").expect("intern");
         let w = interner.intern("w").expect("intern");
         let tag = interner.intern("tag").expect("intern");
+        let app = interner.intern("app").expect("intern");
         let span = Span::DUMMY;
         let transparent = BTreeSet::new();
         let env = CloneEnv {
@@ -31017,6 +31018,19 @@ mod tests {
             },
         );
         assert!(reject(&shadowed).is_ok());
+
+        // A record holding a live app handle is non-`Clone` without being an
+        // effect carrier: the deferred read would clone it — rejected.
+        let app_record =
+            IrType::Record(BTreeMap::from([(app, IrType::WebApp), (tag, IrType::Int)]));
+        let err = reject_nonclone_value_reuse(env, w, &app_record, &kernel_read, span)
+            .expect_err("clone of a record holding a WebApp must be rejected");
+        assert_eq!(err, unsupported(span, Feature::NonCloneValueReuse));
+        assert!(reject_nonclone_value_reuse(env, w, &app_record, &eager_read, span).is_ok());
+
+        // A `Clone` record takes the rewrite's `.clone()` — accepted.
+        let plain_record = IrType::Record(BTreeMap::from([(tag, IrType::Int)]));
+        assert!(reject_nonclone_value_reuse(env, w, &plain_record, &kernel_read, span).is_ok());
     }
 
     /// Every binder site runs the IPE-L0135 gate; only an inlined `let` is exempt.

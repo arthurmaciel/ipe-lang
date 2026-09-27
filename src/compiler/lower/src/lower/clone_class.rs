@@ -882,13 +882,28 @@ pub(super) fn rewrite_captured_clones(
     }
 }
 
-/// Refuse (IPE-L0135) a reuse of a non-`Clone` effect-carrier binding `sym`.
+/// Whether a sequencing-rewrite `.clone()` on type `ir_ty` has no `Clone` impl.
+///
+/// The capture-clone fact [`classify_capture_clone`] decides, with one
+/// widening: a bare row generic clones, because every emitted `R{n}` carries an
+/// unconditional `Clone` bound (`render_fn_generics`) and the sequenced
+/// continuation already owns the row value, so no closure-capture bound beyond
+/// the signature's is introduced.
+fn seq_clone_has_no_impl(env: CloneEnv<'_>, ir_ty: &IrType) -> bool {
+    !matches!(ir_ty, IrType::RowGeneric(_)) && classify_capture_clone(env, ir_ty) == Some(false)
+}
+
+/// Refuse (IPE-L0135) a reuse of a non-`Clone` binding `sym`.
 ///
 /// Reached only through the lowerer's single move-ownership entry point, so
 /// every used binder of every form (parameter, arm binder, `let`, destructured
 /// component) runs it. The binder's type comes from the lowerer's fail-closed
 /// binder-type resolver: a used binder whose type does not resolve is refused
 /// there, never skipped past this check.
+///
+/// The sequencing check covers every binder [`classify_capture_clone`] marks
+/// non-`Clone` (an effect carrier, a live app handle, a function-carrying
+/// composite); the consume-count checks below it cover effect carriers.
 pub(super) fn reject_nonclone_value_reuse(
     env: CloneEnv<'_>,
     sym: Symbol,
@@ -896,16 +911,15 @@ pub(super) fn reject_nonclone_value_reuse(
     body: &Expr,
     span: Span,
 ) -> DResult<()> {
-    if !super::ir_type_has_effect_carrier(ir_ty)
-        || !matches!(clone_class(env, ir_ty), CloneClass::NonClone)
-    {
-        return Ok(());
-    }
+    let never_clones = seq_clone_has_no_impl(env, ir_ty);
     // A sequenced task or argument-reversed kernel whose first-evaluated operand
     // the emitter must rewrite to `sym.clone()` (so the continuation can still
     // capture `sym`) has no `Clone` impl to call.
-    if ipe_ir::seq_clone::seq_rewrite_clones_symbol(sym, body) {
+    if never_clones && ipe_ir::seq_clone::seq_rewrite_clones_symbol(sym, body) {
         return Err(super::unsupported(span, Feature::NonCloneValueReuse));
+    }
+    if !never_clones || !super::ir_type_has_effect_carrier(ir_ty) {
+        return Ok(());
     }
     let consumes = super::count_value_consumes(sym, body);
     if consumes > 1 {
