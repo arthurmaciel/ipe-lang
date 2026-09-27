@@ -1,5 +1,6 @@
 use super::{CtorScheme, DResult, Interner, Symbol, Ty, TyBounds};
 
+/// Interned symbols of every built-in type, constructor, and field name.
 pub struct Builtins {
     pub int: Symbol,
     pub float: Symbol,
