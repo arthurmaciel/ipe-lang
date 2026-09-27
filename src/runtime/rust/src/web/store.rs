@@ -310,8 +310,12 @@ impl<Model, Msg> FileStore<Model, Msg> {
     #[must_use]
     pub fn new(path: &str, ttl: Duration, schema_tag: [u8; 32]) -> Self {
         let path = std::path::PathBuf::from(path);
-        let disk = std::fs::read_to_string(&path)
-            .ok()
+        // A symlink at the map path is never read through: the store starts
+        // empty, and `persist`'s rename later replaces the link itself.
+        let is_link = std::fs::symlink_metadata(&path).is_ok_and(|m| m.file_type().is_symlink());
+        let disk = (!is_link)
+            .then(|| std::fs::read_to_string(&path).ok())
+            .flatten()
             .and_then(|s| serde_json::from_str::<HashMap<String, (String, i64)>>(&s).ok())
             .unwrap_or_default();
         FileStore {
@@ -340,8 +344,12 @@ impl<Model, Msg> FileStore<Model, Msg> {
             return;
         };
         let tmp = self.path.with_extension("tmp");
+        // The temp file is created exclusively: a leftover temp (or a symlink
+        // planted at its name) is removed as the entry it is, never opened, so
+        // the map can never be written through a link.
+        let _ = std::fs::remove_file(&tmp);
         let mut opts = std::fs::OpenOptions::new();
-        opts.write(true).create(true).truncate(true);
+        opts.write(true).create_new(true);
         #[cfg(unix)]
         {
             use std::os::unix::fs::OpenOptionsExt as _;
@@ -350,9 +358,8 @@ impl<Model, Msg> FileStore<Model, Msg> {
         let Ok(mut file) = opts.open(&tmp) else {
             return;
         };
-        // `OpenOptions::mode` applies only when the file is freshly created; a
-        // pre-existing temp (a prior crashed write) keeps its old mode. Set it
-        // explicitly so the map is ALWAYS 0600 before it holds any secret.
+        // Belt and braces: pin the mode on the open handle before any secret
+        // is written.
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt as _;
@@ -497,6 +504,109 @@ fn now_secs() -> i64 {
         .unwrap_or(0)
 }
 
+/// Upper bound on connections one sqlx-backed session-store pool holds.
+#[cfg(feature = "db")]
+const SESSION_STORE_MAX_CONNECTIONS: u32 = 10;
+
+/// Why a persistent session store could not open.
+///
+/// Credential-free by construction: no variant holds a driver error, whose
+/// message can echo the connection URL, so the fallback log line cannot leak it.
+#[cfg(any(feature = "db", feature = "redis_store"))]
+#[derive(Debug)]
+pub enum StoreOpenError {
+    /// [`crate::db::VettedPool::connect`] refused the pool.
+    #[cfg(feature = "db")]
+    Connect(crate::db::DbConnectError),
+    /// Creating the session table failed.
+    #[cfg(feature = "db")]
+    Schema(crate::db::DbFailure),
+    /// The Redis client could not connect or answer `PING`.
+    #[cfg(feature = "redis_store")]
+    Redis(redis::ErrorKind),
+}
+
+#[cfg(any(feature = "db", feature = "redis_store"))]
+impl std::fmt::Display for StoreOpenError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            #[cfg(feature = "db")]
+            Self::Connect(refused) => write!(f, "{refused}"),
+            #[cfg(feature = "db")]
+            Self::Schema(failure) => write!(f, "session table setup failed: {failure}"),
+            #[cfg(feature = "redis_store")]
+            Self::Redis(kind) => write!(f, "redis error ({kind:?})"),
+        }
+    }
+}
+
+#[cfg(any(feature = "db", feature = "redis_store"))]
+impl std::error::Error for StoreOpenError {}
+
+#[cfg(feature = "db")]
+impl StoreOpenError {
+    /// Whether a connect-time policy gate refused the store.
+    ///
+    /// A refused host, an unvettable URL, or an unsupported engine is a
+    /// policy refusal, so [`choose_store`] refuses startup on it rather than
+    /// degrade to memory. That includes a host the SSRF gate could not
+    /// resolve or resolved too slowly: such a failure may be transient DNS,
+    /// but a host the gate never vetted is not dialled, and falling back would
+    /// silently run without the configured store, so it fails closed. A
+    /// driver failure after the gate admitted the target (unreachable server,
+    /// failed version query, table setup) is not a policy refusal.
+    ///
+    /// Every variant is classified by name, with no wildcard, so a new refusal
+    /// variant is a compile error here until it is classified, never a silent
+    /// fallback to memory.
+    const fn is_policy_refusal(&self) -> bool {
+        use crate::db::{DbConnectError, EngineVersionError};
+        use crate::ssrf::SsrfRefusal;
+        match self {
+            Self::Connect(failure) => match failure {
+                DbConnectError::InvalidUrl
+                | DbConnectError::MisplacedUserinfo
+                | DbConnectError::TooManyDialTargets { .. }
+                | DbConnectError::UnsupportedScheme
+                | DbConnectError::EngineMismatch { .. } => true,
+                DbConnectError::HostRefused(refusal) => match refusal {
+                    SsrfRefusal::Blocked { .. }
+                    | SsrfRefusal::Unresolvable { .. }
+                    | SsrfRefusal::NoAddresses { .. }
+                    | SsrfRefusal::Timeout { .. }
+                    | SsrfRefusal::LocalSocket
+                    | SsrfRefusal::UnprovenTarget
+                    | SsrfRefusal::UnpinnableTlsName { .. } => true,
+                },
+                DbConnectError::EngineRefused(refused) => match refused {
+                    EngineVersionError::UnknownEngine
+                    | EngineVersionError::Unparseable { .. }
+                    | EngineVersionError::BelowFloor { .. } => true,
+                },
+                DbConnectError::Unreachable(_) | DbConnectError::VersionUnreadable(_) => false,
+            },
+            Self::Schema(_) => false,
+            #[cfg(feature = "redis_store")]
+            Self::Redis(_) => false,
+        }
+    }
+}
+
+/// The fail-closed startup error for a `backend` store a policy gate refused.
+#[cfg(feature = "db")]
+fn store_refused_error(backend: &str, refused: &StoreOpenError) -> StoreConfigError {
+    StoreConfigError(format!(
+        "IPE_WEB_STORE={backend} refused at connect ({refused}); fix the connection URL \
+         or the server, or set IPE_WEB_STORE=file|memory"
+    ))
+}
+
+/// The startup line logged when a persistent `backend` store falls back to memory.
+#[cfg(any(feature = "db", feature = "redis_store"))]
+fn store_unavailable_log_line(backend: &str, refused: &StoreOpenError) -> String {
+    format!("[ipe.live] {backend} store unavailable ({refused}); falling back to memory")
+}
+
 // ─── SQLite store — persistent model checkpoint + live mem-cache ─────────────
 
 /// Persistent store: keeps a `mem_cache` of live handles (same-process, owns the
@@ -518,9 +628,23 @@ pub struct SqliteStore<Model, Msg> {
 
 #[cfg(feature = "db")]
 impl<Model, Msg> SqliteStore<Model, Msg> {
-    pub async fn new(path: &str, ttl: Duration, schema_tag: [u8; 32]) -> Result<Self, sqlx::Error> {
-        let url = format!("sqlite:{path}?mode=rwc");
-        let pool = sqlx::SqlitePool::connect(&url).await?;
+    /// Open (creating if missing) the SQLite session store at `path`.
+    ///
+    /// # Errors
+    ///
+    /// [`StoreOpenError`] when the pool is refused or the table cannot be created.
+    pub async fn new(
+        path: &str,
+        ttl: Duration,
+        schema_tag: [u8; 32],
+    ) -> Result<Self, StoreOpenError> {
+        let url = crate::db::DbUrl::parse(&format!("sqlite:{path}?mode=rwc"))
+            .map_err(StoreOpenError::Connect)?;
+        let pool =
+            crate::db::VettedPool::<sqlx::Sqlite>::connect(&url, SESSION_STORE_MAX_CONNECTIONS)
+                .await
+                .map_err(StoreOpenError::Connect)?
+                .into_pool();
         // A pre-existing table from before the schema-tag column existed is
         // left as-is by IF NOT EXISTS; statements referencing the missing
         // column then error and are swallowed by the callers' existing
@@ -532,7 +656,8 @@ impl<Model, Msg> SqliteStore<Model, Msg> {
              schema_tag TEXT NOT NULL)",
         )
         .execute(&pool)
-        .await?;
+        .await
+        .map_err(|e| StoreOpenError::Schema(crate::db::DbFailure::of(&e)))?;
         Ok(SqliteStore {
             pool,
             mem_cache: RwLock::new(HashMap::new()),
@@ -706,12 +831,22 @@ pub struct PostgresStore<Model, Msg> {
 
 #[cfg(feature = "db")]
 impl<Model, Msg> PostgresStore<Model, Msg> {
+    /// Open the PostgreSQL session store at `conn_str`.
+    ///
+    /// # Errors
+    ///
+    /// [`StoreOpenError`] when the pool is refused or the table cannot be created.
     pub async fn new(
         conn_str: &str,
         ttl: Duration,
         schema_tag: [u8; 32],
-    ) -> Result<Self, sqlx::Error> {
-        let pool = sqlx::PgPool::connect(conn_str).await?;
+    ) -> Result<Self, StoreOpenError> {
+        let url = crate::db::DbUrl::parse(conn_str).map_err(StoreOpenError::Connect)?;
+        let pool =
+            crate::db::VettedPool::<sqlx::Postgres>::connect(&url, SESSION_STORE_MAX_CONNECTIONS)
+                .await
+                .map_err(StoreOpenError::Connect)?
+                .into_pool();
         // Pre-existing tables keep their old column set (IF NOT EXISTS) —
         // same fail-soft degradation as SqliteStore::new.
         sqlx::query(
@@ -720,7 +855,8 @@ impl<Model, Msg> PostgresStore<Model, Msg> {
              schema_tag TEXT NOT NULL)",
         )
         .execute(&pool)
-        .await?;
+        .await
+        .map_err(|e| StoreOpenError::Schema(crate::db::DbFailure::of(&e)))?;
         Ok(PostgresStore {
             pool,
             mem_cache: RwLock::new(HashMap::new()),
@@ -896,19 +1032,33 @@ pub struct RedisStore<Model, Msg> {
 
 #[cfg(feature = "redis_store")]
 impl<Model, Msg> RedisStore<Model, Msg> {
+    /// Open the Redis session store at `addr`.
+    ///
+    /// # Errors
+    ///
+    /// [`StoreOpenError::Redis`] when the client cannot connect or answer `PING`;
+    /// it keeps only the error kind, never the driver message.
     pub async fn new(
         addr: &str,
         ttl: Duration,
         schema_tag: [u8; 32],
-    ) -> Result<Self, redis::RedisError> {
+    ) -> Result<Self, StoreOpenError> {
+        let refused = |e: redis::RedisError| StoreOpenError::Redis(e.kind());
         let client = if addr.contains("://") {
-            redis::Client::open(addr)?
+            redis::Client::open(addr)
         } else {
-            redis::Client::open(format!("redis://{addr}"))?
-        };
-        let mut conn = client.get_multiplexed_async_connection().await?;
+            redis::Client::open(format!("redis://{addr}"))
+        }
+        .map_err(refused)?;
+        let mut conn = client
+            .get_multiplexed_async_connection()
+            .await
+            .map_err(refused)?;
         // Ping so a misconfigured URL fails at startup, not on first write.
-        redis::cmd("PING").query_async::<()>(&mut conn).await?;
+        redis::cmd("PING")
+            .query_async::<()>(&mut conn)
+            .await
+            .map_err(refused)?;
         Ok(RedisStore {
             conn,
             mem_cache: RwLock::new(HashMap::new()),
@@ -1125,17 +1275,21 @@ impl StoreBackend {
     }
 }
 
-/// Select a backend from the parsed `IPE_WEB_STORE`. A backend this build cannot
-/// serve is a fail-closed [`StoreConfigError`] (surfaced by the caller as a task
-/// error → stderr + exit 1, or a 503 mount route), NEVER a silent swap. A
-/// persistent backend that parses but fails to *connect* at runtime (a dead DB
-/// / bad URL) still degrades to memory — that is an environment fault, not an
-/// operator mis-request, and matches the prior best-effort posture. The
-/// `Model: Serialize` bound is for the persistent backends; memory needs none,
-/// but a single signature keeps the codegen call uniform (it derives serde on
-/// the model when emitting this). `schema_tag` (the compile-time Model schema
-/// fingerprint, H24) is forwarded to the persistent backends only — memory
-/// never round-trips through bytes.
+/// Select and open the session store named by the parsed `IPE_WEB_STORE`.
+///
+/// Fail-closed cases are a [`StoreConfigError`] (surfaced by the caller as a
+/// task error, then stderr + exit 1, or a 503 mount route), NEVER a silent swap:
+/// a backend this build cannot serve, and a persistent backend a connect-time
+/// policy gate refuses (an SSRF-refused or unvettable connection URL, or an
+/// engine below its version floor), since neither changes on retry. A persistent
+/// backend that fails to connect for a transient reason (an unreachable server,
+/// a failed version query or table setup) degrades to memory with a
+/// credential-free log line: that is an environment fault, not an operator
+/// mis-request. The `Model: Serialize` bound is for the persistent backends;
+/// memory needs none, but a single signature keeps the codegen call uniform (it
+/// derives serde on the model when emitting this). `schema_tag` (the
+/// compile-time Model schema fingerprint, H24) is forwarded to the persistent
+/// backends only; memory never round-trips through bytes.
 pub async fn choose_store<Model, Msg>(
     kind: &str,
     path: &str,
@@ -1154,9 +1308,8 @@ where
                 eprintln!("[ipe.live] session store: sqlite @ {path}");
                 return Ok(Arc::new(s));
             }
-            Err(e) => {
-                eprintln!("[ipe.live] sqlite store unavailable ({e}); falling back to memory")
-            }
+            Err(e) if e.is_policy_refusal() => return Err(store_refused_error("sqlite", &e)),
+            Err(e) => eprintln!("{}", store_unavailable_log_line("sqlite", &e)),
         },
         #[cfg(feature = "db")]
         StoreBackend::Postgres => match PostgresStore::new(path, ttl, schema_tag).await {
@@ -1164,9 +1317,8 @@ where
                 eprintln!("[ipe.live] session store: postgres");
                 return Ok(Arc::new(s));
             }
-            Err(e) => {
-                eprintln!("[ipe.live] postgres store unavailable ({e}); falling back to memory")
-            }
+            Err(e) if e.is_policy_refusal() => return Err(store_refused_error("postgres", &e)),
+            Err(e) => eprintln!("{}", store_unavailable_log_line("postgres", &e)),
         },
         #[cfg(feature = "redis_store")]
         StoreBackend::Redis => match RedisStore::new(path, ttl, schema_tag).await {
@@ -1174,9 +1326,7 @@ where
                 eprintln!("[ipe.live] session store: redis");
                 return Ok(Arc::new(s));
             }
-            Err(e) => {
-                eprintln!("[ipe.live] redis store unavailable ({e}); falling back to memory")
-            }
+            Err(e) => eprintln!("{}", store_unavailable_log_line("redis", &e)),
         },
         #[cfg(feature = "web")]
         StoreBackend::File => {
@@ -1330,6 +1480,168 @@ mod tests {
     /// A fixed tag for tests that only exercise same-schema behaviour.
     #[cfg(any(feature = "db", feature = "redis_store", feature = "web"))]
     const TEST_TAG: [u8; 32] = [7u8; 32];
+
+    /// Neither the fallback log line nor the `Debug` form of a store refusal
+    /// carries the password or user its URL held.
+    #[cfg(any(feature = "db", feature = "redis_store"))]
+    fn assert_store_refusal_credential_free(backend: &str, refused: &StoreOpenError) {
+        for rendered in [
+            store_unavailable_log_line(backend, refused),
+            format!("{refused:?}"),
+        ] {
+            assert!(
+                !rendered.contains("s3cr3t-pw"),
+                "password leaked: {rendered}"
+            );
+            assert!(!rendered.contains("admin"), "user leaked: {rendered}");
+        }
+    }
+
+    /// A PostgreSQL store whose URL the driver rejects falls back without
+    /// logging the credentials the URL carried.
+    #[cfg(feature = "db")]
+    #[tokio::test]
+    async fn postgres_store_refusal_log_is_credential_free() {
+        let url = "postgres://admin:s3cr3t-pw@db.internal/prod?sslmode=s3cr3t-pw";
+        let opened: Result<PostgresStore<i32, ()>, _> =
+            PostgresStore::new(url, Duration::from_secs(60), TEST_TAG).await;
+        let refused = opened.err();
+        assert!(refused.is_some(), "an invalid sslmode must be refused");
+        if let Some(refused) = refused {
+            assert_store_refusal_credential_free("postgres", &refused);
+        }
+    }
+
+    /// A SQLite store that cannot open its file falls back without logging
+    /// the driver's message.
+    #[cfg(feature = "db")]
+    #[tokio::test]
+    async fn sqlite_store_refusal_log_is_credential_free() {
+        let path = "/nonexistent-admin-s3cr3t-pw/sessions.db";
+        let opened: Result<SqliteStore<i32, ()>, _> =
+            SqliteStore::new(path, Duration::from_secs(60), TEST_TAG).await;
+        let refused = opened.err();
+        assert!(
+            refused.is_some(),
+            "a file in a missing directory must be refused"
+        );
+        if let Some(refused) = refused {
+            assert!(matches!(refused, StoreOpenError::Connect(_)));
+            assert_store_refusal_credential_free("sqlite", &refused);
+        }
+    }
+
+    /// A PostgreSQL store the SSRF gate refuses fails startup instead of
+    /// silently degrading to in-memory sessions, and the error is credential-free.
+    #[cfg(feature = "db")]
+    #[tokio::test]
+    async fn postgres_store_policy_refusal_refuses_startup() {
+        unsafe { std::env::set_var("IPE_HTTP_DENY_PRIVATE", "1") };
+        for url in [
+            "postgres://admin:s3cr3t-pw@127.0.0.1/prod",
+            "postgres:///prod?user=admin&password=s3cr3t-pw",
+            "postgres:///prod?host=/var/run/postgresql&password=s3cr3t-pw",
+        ] {
+            let refused =
+                choose_store::<i32, ()>("postgres", url, Duration::from_secs(60), TEST_TAG)
+                    .await
+                    .err();
+            assert!(
+                refused.is_some(),
+                "{url:?} must refuse startup, not fall back to memory"
+            );
+            if let Some(StoreConfigError(msg)) = refused {
+                assert!(msg.contains("refused"), "unexpected refusal: {msg}");
+                assert!(!msg.contains("s3cr3t-pw"), "password leaked: {msg}");
+                assert!(!msg.contains("admin"), "user leaked: {msg}");
+            }
+        }
+        unsafe { std::env::remove_var("IPE_HTTP_DENY_PRIVATE") };
+    }
+
+    /// A transient connect failure is not a policy refusal: it keeps the
+    /// documented fallback to memory.
+    #[cfg(feature = "db")]
+    #[test]
+    fn transient_store_failures_are_not_policy_refusals() {
+        use crate::db::{DbConnectError, DbEngine, DbFailure, EngineVersion, EngineVersionError};
+        use crate::ssrf::{BlockedHost, BlockedRange, HostShown, SsrfRefusal};
+        use std::net::{IpAddr, Ipv4Addr};
+        let transient = [
+            StoreOpenError::Connect(DbConnectError::Unreachable(DbFailure::Io)),
+            StoreOpenError::Connect(DbConnectError::VersionUnreadable(DbFailure::PoolTimedOut)),
+            StoreOpenError::Schema(DbFailure::Other),
+        ];
+        for e in &transient {
+            assert!(!e.is_policy_refusal(), "{e} must fall back, not refuse");
+        }
+        let policy = [
+            StoreOpenError::Connect(DbConnectError::HostRefused(SsrfRefusal::LocalSocket)),
+            StoreOpenError::Connect(DbConnectError::InvalidUrl),
+            StoreOpenError::Connect(DbConnectError::MisplacedUserinfo),
+            StoreOpenError::Connect(DbConnectError::TooManyDialTargets { limit: 8 }),
+            StoreOpenError::Connect(DbConnectError::UnsupportedScheme),
+            StoreOpenError::Connect(DbConnectError::EngineMismatch {
+                url: DbEngine::Sqlite,
+                driver: DbEngine::Postgres,
+            }),
+            StoreOpenError::Connect(DbConnectError::HostRefused(SsrfRefusal::Blocked {
+                host: BlockedHost::Named {
+                    host: "10.0.0.1".to_owned(),
+                    ip: IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)),
+                },
+                range: BlockedRange::Private,
+            })),
+            StoreOpenError::Connect(DbConnectError::HostRefused(SsrfRefusal::Unresolvable {
+                host: HostShown::Named("db.invalid".to_owned()),
+                kind: std::io::ErrorKind::NotFound,
+            })),
+            StoreOpenError::Connect(DbConnectError::HostRefused(SsrfRefusal::NoAddresses {
+                host: HostShown::Named("db.invalid".to_owned()),
+            })),
+            StoreOpenError::Connect(DbConnectError::HostRefused(SsrfRefusal::Timeout {
+                host: HostShown::Named("db.invalid".to_owned()),
+                after: Duration::from_secs(1),
+            })),
+            StoreOpenError::Connect(DbConnectError::HostRefused(SsrfRefusal::UnprovenTarget)),
+            StoreOpenError::Connect(DbConnectError::HostRefused(
+                SsrfRefusal::UnpinnableTlsName {
+                    host: crate::ssrf::ConfiguredHost::from_config("db.example".to_owned()),
+                },
+            )),
+            StoreOpenError::Connect(DbConnectError::EngineRefused(
+                EngineVersionError::UnknownEngine,
+            )),
+            StoreOpenError::Connect(DbConnectError::EngineRefused(
+                EngineVersionError::Unparseable {
+                    engine: DbEngine::Postgres,
+                },
+            )),
+            StoreOpenError::Connect(DbConnectError::EngineRefused(
+                EngineVersionError::BelowFloor {
+                    engine: DbEngine::Sqlite,
+                    found: EngineVersion::new(1, 0),
+                },
+            )),
+        ];
+        for e in &policy {
+            assert!(e.is_policy_refusal(), "{e} must refuse startup");
+        }
+    }
+
+    /// A Redis store that cannot connect falls back logging only the error kind.
+    #[cfg(feature = "redis_store")]
+    #[tokio::test]
+    async fn redis_store_refusal_log_is_credential_free() {
+        let url = "redis://admin:s3cr3t-pw@127.0.0.1:1/";
+        let opened: Result<RedisStore<i32, ()>, _> =
+            RedisStore::new(url, Duration::from_secs(60), TEST_TAG).await;
+        let refused = opened.err();
+        assert!(refused.is_some(), "a closed port must be refused");
+        if let Some(refused) = refused {
+            assert_store_refusal_credential_free("redis", &refused);
+        }
+    }
 
     /// Restart survival: a store writes a checkpoint, a FRESH store over the same
     /// file (no mem-cache) decodes it as a `Cold` model.
@@ -1810,6 +2122,39 @@ mod tests {
         assert_eq!(s.web_sessions().await.len(), 1);
         s.delete(&cold_sid).await;
         s.delete(&web_sid).await;
+    }
+
+    /// Symlinks planted at the map path and its temp name are never followed.
+    ///
+    /// The persisted map replaces the links, and their targets survive.
+    #[cfg(all(feature = "web", unix))]
+    #[tokio::test]
+    async fn file_store_never_writes_through_planted_symlinks() {
+        let dir = std::env::temp_dir().join(format!("ipetest_file_links_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(std::fs::create_dir_all(&dir).is_ok(), "make scratch dir");
+        let victim = dir.join("victim.txt");
+        assert!(std::fs::write(&victim, "keep").is_ok(), "write victim");
+        let map = dir.join("sessions.json");
+        assert!(
+            std::os::unix::fs::symlink(&victim, &map).is_ok(),
+            "map link"
+        );
+        assert!(
+            std::os::unix::fs::symlink(&victim, dir.join("sessions.tmp")).is_ok(),
+            "temp link"
+        );
+        let Some(p) = map.to_str() else {
+            assert!(map.to_str().is_some(), "utf-8 temp path");
+            return;
+        };
+        let s: FileStore<i32, ()> = FileStore::new(p, Duration::from_secs(60), TEST_TAG);
+        s.set("s1", handle_i32(7)).await;
+        assert_eq!(
+            std::fs::read_to_string(&victim).ok().as_deref(),
+            Some("keep")
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// File-store restart survival: a store writes a checkpoint, a FRESH store

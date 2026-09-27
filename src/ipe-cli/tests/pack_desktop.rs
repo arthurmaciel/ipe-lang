@@ -102,6 +102,58 @@ fn plist_of(layout: &desktop::BundleLayout) -> String {
         .expect("mac layout has an Info.plist")
 }
 
+// ── Planted symlinks in an owned dist (always run) ───────────────────────────
+
+/// Planted symlinks in an owned `dist/<os>` are refused.
+///
+/// Both a symlinked bundle root and a path through a planted directory link
+/// are refused; the link targets survive intact.
+#[cfg(unix)]
+#[test]
+fn materialise_refuses_planted_symlinks() {
+    let dir = std::path::Path::new(env!("CARGO_TARGET_TMPDIR"))
+        .join(format!("pack_desktop_symlink_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let victim = dir.join("victim");
+    std::fs::create_dir_all(&victim).expect("victim dir");
+    std::fs::write(victim.join("keep.txt"), "keep").expect("victim file");
+    let fake_binary = dir.join("fake-binary");
+    std::fs::write(&fake_binary, "binary").expect("fake binary");
+
+    let identity = BundleIdentity::new("counter", Some("1.2.3"), None);
+    let layout =
+        desktop::layout(DesktopOs::Linux, &identity, &accepts(&[]), None).expect("linux layout");
+
+    // A symlinked bundle root: never removed through.
+    let dist = ipe::output_dir::OwnedDir::claim(&dir.join("dist-a")).expect("claim dist");
+    std::os::unix::fs::symlink(&victim, dist.path().join(&layout.root_name)).expect("link");
+    let result = desktop::materialise(&layout, &fake_binary, None, &dist);
+    assert!(
+        matches!(result, Err(ipe::CliError::OutputRefused(_))),
+        "a symlinked bundle root must be refused, got {result:?}"
+    );
+    assert!(
+        victim.join("keep.txt").is_file(),
+        "the link target survives"
+    );
+
+    // A symlinked directory inside the tree the bundle is rebuilt in: refused.
+    let dist_b = ipe::output_dir::OwnedDir::claim(&dir.join("dist-b")).expect("claim dist");
+    std::os::unix::fs::symlink(&victim, dist_b.path().join("elsewhere")).expect("link");
+    let escaped = dist_b.path_to("elsewhere/keep.txt");
+    assert!(
+        matches!(escaped, Err(ipe::CliError::OutputRefused(_))),
+        "a path through a planted directory link must be refused, got {escaped:?}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(victim.join("keep.txt"))
+            .ok()
+            .as_deref(),
+        Some("keep")
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 // ── End-to-end Linux artifact (IPE_E2E=1) ─────────────────────────────────────
 
 /// Compile a real binary, then materialise its Linux bundle and assert the
@@ -117,7 +169,7 @@ fn linux_bundle_is_materialised_end_to_end() {
         return;
     }
 
-    let dir = std::env::temp_dir().join("pack_desktop_linux_e2e");
+    let dir = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("pack_desktop_linux_e2e");
     let _ = std::fs::remove_dir_all(&dir);
     let src = dir.join("src");
     std::fs::create_dir_all(&src).expect("create project src dir");
@@ -136,7 +188,8 @@ fn linux_bundle_is_materialised_end_to_end() {
     let identity = BundleIdentity::new("counter", Some("1.2.3"), None);
     let layout =
         desktop::layout(DesktopOs::Linux, &identity, &accepts(&[]), None).expect("linux layout");
-    let dist = dir.join("dist").join("linux");
+    let dist = ipe::output_dir::OwnedDir::claim(&dir.join("out").join("dist").join("linux"))
+        .expect("claim dist");
     let bundle_root = desktop::materialise(&layout, &exe, None, &dist).expect("materialise");
 
     // The binary landed and is executable.

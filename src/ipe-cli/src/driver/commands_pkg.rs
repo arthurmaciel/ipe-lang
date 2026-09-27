@@ -1,11 +1,14 @@
 use super::{
-    CliError, build_emitted_project, build_project, build_source_graph,
-    build_test_with_project_sources, build_with_sibling_discovery,
-    capabilities_including_served_widgets, cargo_target_directory, classify_entry_shape,
-    create_source_root, default_entry, discover_manifest, emit_machine_error, emitted_bin_filename,
-    force_cargo_terminal_ui, resolve_runtime, resolve_vendored_runtime_dir, run_build,
-    runtime_context_for_message, typecheck_entry_via_graph,
+    CliError, attribute_canon_errors, attribute_post_link_error, build_emitted_project,
+    build_project, build_source_graph, build_test_with_project_sources,
+    build_with_sibling_discovery, capabilities_including_served_widgets, cargo_target_directory,
+    classify_entry_shape, create_source_root, default_entry, discover_manifest, emit_machine_error,
+    emitted_bin_filename, force_cargo_terminal_ui, home_to_source_map, resolve_runtime,
+    resolve_vendored_runtime_dir, run_build, runtime_context_for_message,
+    typecheck_entry_via_graph,
 };
+use crate::output_dir::{OutputArea, OutputRoot, OwnedDir, ProjectPaths};
+use crate::publisher::{AttestedActor, BlessedPublisher};
 use crate::{
     Applicability, BTreeMap, Diagnostic, HelpLine, Interner, Path, PathBuf, Suggestion, Write,
     audit, cli_args, contained_path, delivery, ffi, fmt, fs, index, pack, progress, project,
@@ -33,6 +36,28 @@ impl BundleProfile {
     /// stay a single packager parameterised by profile, not two code paths.
     const fn cargo_release(self) -> bool {
         matches!(self, Self::Release)
+    }
+
+    /// The emitted crate's area under the output root.
+    ///
+    /// `rust/` for [`Self::Dev`], `release/rust/` for [`Self::Release`] — where
+    /// `build` and `release` respectively put it.
+    const fn crate_areas(self) -> &'static [OutputArea] {
+        match self {
+            Self::Dev => &[OutputArea::Rust],
+            Self::Release => &[OutputArea::Release, OutputArea::Rust],
+        }
+    }
+
+    /// Claim the directory this profile's packaged bundles go in.
+    ///
+    /// `dist/` for [`Self::Dev`], `release/dist/` for [`Self::Release`].
+    fn dist_dir(self, output: &OutputRoot) -> Result<OwnedDir, CliError> {
+        let areas: &[OutputArea] = match self {
+            Self::Dev => &[OutputArea::Dist],
+            Self::Release => &[OutputArea::Release, OutputArea::Dist],
+        };
+        output.claim_area(areas)
     }
 
     /// The compiled binary's `target/` profile subdirectory (`debug` / `release`),
@@ -345,7 +370,8 @@ impl<'a> BundleAssembler<'a> {
         // Emit + compile the project to a binary. A webview app carries the
         // system webview as a dynamic dependency, so this is a plain
         // (non-static) native build.
-        let build_dir = manifest.root.join("out").join("rust");
+        let output = OutputRoot::resolve(None, &ProjectPaths::from_manifest(manifest))?;
+        let build_dir = output.area_path(&[OutputArea::Rust])?;
         let runtime_dir = resolve_vendored_runtime_dir(None, false)?;
         build_project(self.manifest_path, &build_dir, &runtime_dir)?;
 
@@ -375,15 +401,14 @@ impl<'a> BundleAssembler<'a> {
             )));
         }
 
-        let dist = manifest.root.join("dist").join(os.as_str());
-        pack::desktop::materialise(&layout, &binary, icon, &dist)
-            .map_err(|e| io_err(&e.path, e.source))?;
+        let dist = self.profile.dist_dir(&output)?.child(os.as_str())?;
+        let bundle_root = pack::desktop::materialise(&layout, &binary, icon, &dist)?;
 
         println!(
             "packaged `{}` for {} → {}",
             manifest.name,
             os.as_str(),
-            dist.join(&layout.root_name).display()
+            bundle_root.display()
         );
         println!("  {}", os.webview_runtime_note());
         if os != pack::desktop::DesktopOs::Linux {
@@ -419,22 +444,25 @@ impl<'a> BundleAssembler<'a> {
         let accepts = &manifest.capabilities_accept;
         let icon = manifest.icon.as_deref();
 
-        // Build the `--target wasm` SPA into the project's `out/rust`, then
-        // collect its `www/` tree. The wasm bundle pipeline (emit + cargo +
-        // wasm-bindgen) is the single source of the hostable bundle; invoking
-        // it through this binary keeps that pipeline authoritative rather than
-        // re-implemented here.
-        let build_dir = manifest.root.join("out").join("rust");
-        build_wasm_for_mobile(self.manifest_path, &build_dir, self.profile)?;
-        let www_dir = build_dir.join("www");
+        // Build the `--target wasm` SPA into the project's output root, then
+        // collect its `www/` tree from the profile's crate. The wasm bundle
+        // pipeline (emit + cargo + wasm-bindgen) is the single source of the
+        // hostable bundle; invoking it through this binary keeps that pipeline
+        // authoritative rather than re-implemented here.
+        let output = OutputRoot::resolve(None, &ProjectPaths::from_manifest(manifest))?;
+        build_wasm_for_mobile(self.manifest_path, output.path(), self.profile)?;
+        // The SPA is read from the owned crate; a symlinked `www/` is refused so
+        // the shell can never pick up files from outside the build output.
+        let www_dir = OwnedDir::claim(&output.area_path(self.profile.crate_areas())?)?
+            .path_to("www")?
+            .path();
         let bundle = pack::mobile::SpaBundle::from_www_dir(&www_dir)
             .map_err(|e| CliError::UsageOwned(e.to_string()))?;
 
         let layout = pack::mobile::layout(os, &identity, accepts, &bundle, icon)?;
 
-        let dist = manifest.root.join("dist").join(os.as_str());
-        let shell_root = pack::mobile::materialise(&layout, icon, &dist)
-            .map_err(|e| io_err(&e.path, e.source))?;
+        let dist = self.profile.dist_dir(&output)?.child(os.as_str())?;
+        let shell_root = pack::mobile::materialise(&layout, icon, &dist)?;
 
         println!(
             "packaged `{}` for {} → {}",
@@ -542,9 +570,10 @@ pub fn pack_mobile(
     BundleAssembler::gate_mobile(&manifest, &manifest_path, profile, &root)?.assemble(os)
 }
 
-/// Build the hostable SPA bundle at `build_dir/www/` through this binary —
-/// `ipe build --target wasm` for a dev bundle, `ipe release --target wasm` for a
-/// production one.
+/// Build the hostable SPA bundle under `output_root` through this binary.
+///
+/// `ipe build --target wasm` for a dev bundle (`<root>/rust/www/`), `ipe
+/// release --target wasm` for a production one (`<root>/release/rust/www/`).
 ///
 /// Invoking the same binary keeps the wasm bundle pipeline (emit + cargo +
 /// wasm-bindgen) authoritative — the mobile shell hosts exactly the bundle a
@@ -556,7 +585,7 @@ pub fn pack_mobile(
 /// wasm build exits non-zero; [`CliError::Io`] when the build cannot be spawned.
 pub fn build_wasm_for_mobile(
     manifest_path: &Path,
-    build_dir: &Path,
+    output_root: &Path,
     profile: BundleProfile,
 ) -> Result<(), CliError> {
     let exe = std::env::current_exe().map_err(|e| {
@@ -573,7 +602,7 @@ pub fn build_wasm_for_mobile(
         .arg(verb)
         .arg(project_dir)
         .args(["--target", "wasm", "--out"])
-        .arg(build_dir)
+        .arg(output_root)
         .status()
         .map_err(|source| CliError::Io {
             path: exe.clone(),
@@ -752,8 +781,16 @@ pub fn run_validate_entry(rest: &[String]) -> Result<(), CliError> {
     Ok(())
 }
 
-/// `ipe package audit-entry <packages/<name>.toml> [--index <root>]` — the index
-/// CI's authoritative receiving gate for a submitted entry.
+/// `ipe package audit-entry <packages/<name>.toml> [--index <root>]
+/// [--attested-actor <login>]` — the index CI's authoritative receiving gate for
+/// a submitted entry.
+///
+/// `--attested-actor` is the authenticated PR author the admission workflow reads
+/// from GitHub's event context. It is the only identity the reserved-namespace
+/// exemption and the reserved smoke reset accept: absent it, or when it does not
+/// equal the entry's claimed `publisher`, or is not the blessed first-party
+/// identity, both privileges are refused (fail-closed). Every other check is
+/// identical with or without it.
 ///
 /// Composes the existing pieces in a fixed, fail-closed order so the CI cannot
 /// diverge from `ipe package audit`:
@@ -783,10 +820,18 @@ pub fn run_validate_entry(rest: &[String]) -> Result<(), CliError> {
 /// failure; [`CliError::HashMismatch`] on an integrity mismatch; and
 /// [`CliError::PackageAudit`] when a Tier-1 check rejects a version.
 pub fn run_audit_entry(rest: &[String]) -> Result<(), CliError> {
-    let (entry_path, index_root_opt) = parse_audit_entry_args(rest)?;
+    let AuditEntryArgs {
+        entry_path,
+        index_root: index_root_opt,
+        attested_actor,
+    } = parse_audit_entry_args(rest)?;
 
     // Step 1 — schema: parse + validate the submitted entry file.
     let submitted = index::validate_entry_file(&entry_path)?;
+
+    // The blessed privileges rest on the attested PR author, bound to the entry's
+    // claimed publisher — never on the self-declared `publisher` alone.
+    let blessing = BlessedPublisher::from_attested(attested_actor.as_ref(), &submitted.publisher);
 
     // Step 2 — baseline: read the previously-published entry (if any).
     // Fail closed: a present-but-unreadable baseline propagates as an error
@@ -801,7 +846,7 @@ pub fn run_audit_entry(rest: &[String]) -> Result<(), CliError> {
     // is the authoritative wall (ADR 0007) — it enforces these even for an entry
     // hand-edited around the author-side `ipe publish`, which an attacker opening
     // the index PR directly would bypass.
-    index::admission_precheck(&submitted, baseline.as_ref())?;
+    index::admission_precheck(&submitted, baseline.as_ref(), attested_actor.as_ref())?;
 
     let baseline_by_version: std::collections::BTreeMap<&semver::Version, &index::EntryVersion> =
         baseline
@@ -857,14 +902,15 @@ pub fn run_audit_entry(rest: &[String]) -> Result<(), CliError> {
         // the verified source tree. Pass --index so the enforced-semver check reads
         // the right baseline. Reject on the first failing check.
         let checkout_str = checkout.to_string_lossy().into_owned();
-        // Pass the submitted entry's publisher so the reserved-namespace ownership
-        // check can exempt the blessed first-party publisher and reject any other
-        // publisher whose source tree provides a reserved-namespace (`Ipe.*`)
-        // module — the admission-time squat-proofing of the trusted namespace.
+        // Pass the submitted entry's claimed publisher (named in a reject) and the
+        // attestation-backed blessing: the reserved-namespace ownership check
+        // exempts only a proven blessed publisher and rejects any other whose
+        // source tree provides a reserved-namespace (`Ipe.*`) module — the
+        // admission-time squat-proofing of the trusted namespace.
         let mut audit_args: Vec<String> = vec![
             checkout_str,
             "--publisher".to_owned(),
-            submitted.publisher.clone(),
+            submitted.publisher.as_str().to_owned(),
         ];
         if let Some(ir) = &index_root_opt {
             audit_args.push("--index".to_owned());
@@ -874,7 +920,7 @@ pub fn run_audit_entry(rest: &[String]) -> Result<(), CliError> {
         // descriptive typed CliError (PackageAudit / HashMismatch / etc.) whose
         // Display names the failing check; the version context is clear from
         // the eprintln below and the structured error kind.
-        if let Err(e) = audit::run_audit(&audit_args) {
+        if let Err(e) = audit::run_audit_as(&audit_args, blessing.as_ref()) {
             eprintln!(
                 "audit-entry: `{}` version {} rejected",
                 submitted.name, ver_str
@@ -899,18 +945,42 @@ pub fn run_audit_entry(rest: &[String]) -> Result<(), CliError> {
     Ok(())
 }
 
-/// Parse `ipe package audit-entry`'s tail: a required positional entry-file path
-/// and an optional `--index <dir>`.
+/// The parsed `ipe package audit-entry` invocation.
+#[derive(Debug)]
+pub struct AuditEntryArgs {
+    /// The submitted `packages/<name>.toml` entry file.
+    pub entry_path: PathBuf,
+    /// The baseline index checkout (`--index`); the resolver's index root when absent.
+    pub index_root: Option<PathBuf>,
+    /// The admission workflow's authenticated PR author (`--attested-actor`).
+    pub attested_actor: Option<AttestedActor>,
+}
+
+/// Parse `ipe package audit-entry`'s tail: a required positional entry-file path,
+/// an optional `--index <dir>`, and an optional `--attested-actor <login>`.
 ///
 /// # Errors
 /// [`CliError::Usage`] when the entry file is missing; [`CliError::UsageOwned`] on
-/// an unknown flag, a missing `--index` value, or a duplicate flag/positional.
-pub fn parse_audit_entry_args(rest: &[String]) -> Result<(PathBuf, Option<PathBuf>), CliError> {
+/// an unknown flag, a missing flag value, a duplicate flag/positional, or an
+/// `--attested-actor` that is not a GitHub login.
+pub fn parse_audit_entry_args(rest: &[String]) -> Result<AuditEntryArgs, CliError> {
     let mut entry_path: Option<PathBuf> = None;
     let mut index_root: Option<PathBuf> = None;
+    let mut attested_actor: Option<AttestedActor> = None;
     let mut it = rest.iter();
     while let Some(arg) = it.next() {
         match arg.as_str() {
+            "--attested-actor" => {
+                let value = it.next().ok_or(CliError::Usage(
+                    "ipe package audit-entry: --attested-actor needs a value",
+                ))?;
+                if attested_actor.is_some() {
+                    return Err(CliError::Usage(
+                        "ipe package audit-entry: --attested-actor given more than once",
+                    ));
+                }
+                attested_actor = Some(AttestedActor::parse(value)?);
+            }
             "--index" => {
                 let value = it.next().ok_or(CliError::Usage(
                     "ipe package audit-entry: --index needs a value",
@@ -935,10 +1005,15 @@ pub fn parse_audit_entry_args(rest: &[String]) -> Result<(PathBuf, Option<PathBu
             }
         }
     }
-    let path = entry_path.ok_or(CliError::Usage(
-        "usage: ipe package audit-entry <packages/<name>.toml> [--index <root>]",
+    let entry_path = entry_path.ok_or(CliError::Usage(
+        "usage: ipe package audit-entry <packages/<name>.toml> [--index <root>] \
+         [--attested-actor <login>]",
     ))?;
-    Ok((path, index_root))
+    Ok(AuditEntryArgs {
+        entry_path,
+        index_root,
+        attested_actor,
+    })
 }
 
 /// Resolve a `check`/analysis `<path>` argument to the entry `.ipe` file the
@@ -2055,40 +2130,149 @@ pub fn verify_capabilities(
 /// — the same whole-tree posture the enforced-semver check already takes over the
 /// package's public API.
 ///
-/// This lowers each discovered module in turn (with every sibling source present,
-/// so cross-module imports resolve) and unions their inferred capabilities. A
-/// module that fails to lower on its own — e.g. one that is only meaningful as a
-/// dependency of another — is skipped for the union rather than failing the whole
-/// inference, so a helper module never masks a sibling's real effect.
+/// Each discovered module is lowered as its own entry (with every sibling source
+/// present, so cross-module imports resolve) and their inferred capabilities are
+/// unioned. A module that fails to lower on its own — e.g. one that is only
+/// meaningful as a dependency of another — is skipped for the union rather than
+/// failing the whole inference, so a helper module never masks a sibling's real
+/// effect. Every entry links the WHOLE package source tree, exactly as
+/// `ipe build` does, so a module that does not compile at all (a name or type
+/// error, imported or not) fails every entry: the package is refused, never
+/// disclosed with that module's capabilities silently missing.
 ///
 /// # Errors
 /// [`CliError::Pipeline`] / [`CliError::Io`] when the package cannot be read or
-/// no module lowers at all.
+/// no module lowers at all; the diagnostic is framed against the module that
+/// owns it.
 pub fn infer_package_capabilities(
     manifest_path: &Path,
 ) -> Result<std::collections::BTreeSet<ipe_ir::Capability>, CliError> {
-    let manifest = project::parse_manifest(manifest_path)?;
-    let mut discovered = project::discover_modules(&manifest.src_root)?;
+    let package = PackageSourceSet::read(manifest_path)?;
+    infer_package_capabilities_in(&ipe_db::IpeDatabase::new(), &package)
+}
 
-    // Read every module's source once; the shared map lets each per-module
-    // lowering resolve its sibling imports.
-    let mut sources: BTreeMap<Vec<String>, (PathBuf, String)> = BTreeMap::new();
-    for m in &discovered {
-        let src =
-            crate::io_bounded::read_to_string_capped(&m.path, crate::io_bounded::SOURCE_READ_CAP)?;
-        sources.insert(m.module_path.clone(), (m.path.clone(), src));
+/// Every source a package's capability inference sees, plus its entry modules.
+///
+/// Sources are the package's own modules plus the compiled-source stdlib closure
+/// and FFI interface modules the build injects.
+#[derive(Clone, Debug)]
+pub struct PackageSourceSet {
+    sources: BTreeMap<Vec<String>, (PathBuf, String)>,
+    entries: Vec<project::DiscoveredModule>,
+    injected: std::collections::BTreeSet<Vec<String>>,
+    ffi_injected: std::collections::BTreeSet<Vec<String>>,
+}
+
+impl PackageSourceSet {
+    /// Read the package rooted at `manifest_path`: every discovered module's
+    /// source (read once, bounded), then the same compiled-source stdlib closure
+    /// and FFI interface injection the build performs.
+    ///
+    /// # Errors
+    /// [`CliError::Io`] / manifest errors when the package cannot be read.
+    pub fn read(manifest_path: &Path) -> Result<Self, CliError> {
+        let manifest = project::parse_manifest(manifest_path)?;
+        let mut entries = project::discover_modules(&manifest.src_root)?;
+
+        let mut sources: BTreeMap<Vec<String>, (PathBuf, String)> = BTreeMap::new();
+        for m in &entries {
+            let src = crate::io_bounded::read_to_string_capped(
+                &m.path,
+                crate::io_bounded::SOURCE_READ_CAP,
+            )?;
+            sources.insert(m.module_path.clone(), (m.path.clone(), src));
+        }
+
+        // Inject the compiled-source stdlib closure (e.g. `Ipe.Css`) just like
+        // the real build path, so a module that imports a compiled-source stdlib
+        // module lowers standalone here instead of failing name resolution
+        // (which, since a failing entry surfaces its real diagnostic, would
+        // otherwise abort build).
+        let injected = project::inject_compiled_std_closure(&mut sources, &mut entries);
+        // Inject the FFI interface modules (installed crates + the asserted-call
+        // `Rust.Ffi` module) exactly as the build does, so an FFI-using module
+        // lowers here and its `native-ffi`/`ffi-raw` capabilities are inferred
+        // rather than the whole module being skipped on a resolve failure.
+        let ffi_injected = ffi::prepare_ffi(&mut sources, manifest_path)?.injected;
+        Ok(Self {
+            sources,
+            entries,
+            injected,
+            ffi_injected,
+        })
     }
 
-    // Inject the compiled-source stdlib closure (e.g. `Ipe.Css`) just like the
-    // real build path, so a module that imports a compiled-source stdlib module
-    // lowers standalone here instead of failing name resolution (which, since a
-    // failing entry surfaces its real diagnostic, would otherwise abort build).
-    let injected = project::inject_compiled_std_closure(&mut sources, &mut discovered);
-    // Inject the FFI interface modules (installed crates + the asserted-call
-    // `Rust.Ffi` module) exactly as the build does, so an FFI-using module
-    // lowers here and its `native-ffi`/`ffi-raw` capabilities are inferred
-    // rather than the whole module being skipped on a resolve failure.
-    let ffi_injected = ffi::prepare_ffi(&mut sources, manifest_path)?.injected;
+    /// The module path of every module lowered as an inference entry.
+    pub fn entry_module_paths(&self) -> impl Iterator<Item = &[String]> {
+        self.entries.iter().map(|m| m.module_path.as_slice())
+    }
+
+    /// Number of modules in the source graph (entries plus injected modules).
+    #[must_use]
+    pub fn module_count(&self) -> usize {
+        self.sources.len()
+    }
+
+    /// The same source graph with `module_path` as its only entry — the
+    /// single-entry view whose capability sets [`infer_package_capabilities_in`]
+    /// unions over every entry.
+    #[must_use]
+    pub fn restricted_to_entry(&self, module_path: &[String]) -> Self {
+        Self {
+            sources: self.sources.clone(),
+            entries: self
+                .entries
+                .iter()
+                .filter(|m| m.module_path == module_path)
+                .cloned()
+                .collect(),
+            injected: self.injected.clone(),
+            ffi_injected: self.ffi_injected.clone(),
+        }
+    }
+}
+
+/// [`infer_package_capabilities`] over one caller-supplied database.
+///
+/// Every entry is lowered against ONE shared [`ipe_db::SourceRoot`], so each
+/// module's per-file queries (parse, canonicalize, interface) run once for the
+/// whole package rather than once per entry.
+///
+/// Determinism: an entry's capability set is a function of its
+/// `(root, entry)` query key alone. Symbol numbering on the shared interner
+/// varies with demand order, but no capability depends on a symbol's number,
+/// and the fresh-name avoid-set is the build's own (the identifier words of the
+/// whole root), so each entry lowers exactly as a cold build over the same root
+/// would. Entries are visited in the fixed [`PackageSourceSet`] order, and the
+/// union is order-independent.
+///
+/// # Errors
+/// [`CliError::Pipeline`] when no module lowers (the entry `Main`'s diagnostic
+/// when it fails, else the first failure), framed against the module that owns
+/// it; [`CliError::Usage`] when the package
+/// has no module at all.
+pub fn infer_package_capabilities_in(
+    db: &ipe_db::IpeDatabase,
+    package: &PackageSourceSet,
+) -> Result<std::collections::BTreeSet<ipe_ir::Capability>, CliError> {
+    let source_root = create_source_root(
+        db,
+        &package.sources,
+        &package.injected,
+        &package.ffi_injected,
+    );
+
+    // The fresh-name collision universe the build path sets: the identifier
+    // words of every module in the root — a pure function of the source inputs,
+    // so the lowering pools mint the same names whatever entries ran before on
+    // this shared interner. Set before the first `lower_program` executes; the
+    // guard is released at the end of the statement, before any further query.
+    let mut fresh_avoid: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    for file in source_root.files(db).values() {
+        fresh_avoid.extend(ipe_db::identifier_words(db, *file).iter().cloned());
+    }
+    ipe_db::Db::interner(db).lock().set_fresh_avoid(fresh_avoid);
+
     let mut inferred: std::collections::BTreeSet<ipe_ir::Capability> =
         std::collections::BTreeSet::new();
     let mut any_lowered = false;
@@ -2097,38 +2281,35 @@ pub fn infer_package_capabilities(
     // entry module `Main` if it fails, otherwise the first failure seen.
     let mut lowering_error: Option<CliError> = None;
 
-    // Lower each module as its own entry (a fresh database per module keeps the
-    // interning deterministic and the borrow of the shared interner scoped). A
-    // module that does not lower standalone is skipped, never fatal — its
-    // capabilities, if any, surface through whichever sibling does reach it.
-    for m in &discovered {
-        let db = ipe_db::IpeDatabase::new();
-        let source_root = create_source_root(&db, &sources, &injected, &ffi_injected);
-        let Some(entry_file) = source_root.files(&db).get(&m.module_path).copied() else {
+    // Lower each module as its own entry. A module that does not lower
+    // standalone is skipped, never fatal — its capabilities, if any, surface
+    // through whichever sibling does reach it.
+    for m in &package.entries {
+        let Some(entry_file) = source_root.files(db).get(&m.module_path).copied() else {
             continue;
         };
-        match ipe_db::lower_program(&db, source_root, entry_file) {
+        match ipe_db::lower_program(db, source_root, entry_file) {
             Ok(program) => {
                 inferred.extend(capabilities_including_served_widgets(
-                    &db,
+                    db,
                     source_root,
                     entry_file,
                     program,
                 ));
                 any_lowered = true;
             }
-            Err((diag, _)) => {
+            Err((diag, home)) => {
                 let is_entry = m.module_path.last().map(String::as_str) == Some("Main");
                 if lowering_error.is_none() || is_entry {
-                    let src = sources
-                        .get(&m.module_path)
-                        .map(|(_, s)| s.clone())
-                        .unwrap_or_default();
-                    lowering_error = Some(CliError::Pipeline {
-                        file: m.path.clone(),
-                        src,
-                        diag: Box::new(diag.clone()),
-                    });
+                    lowering_error = Some(attribute_entry_lowering_error(
+                        db,
+                        source_root,
+                        package,
+                        m,
+                        entry_file,
+                        diag.clone(),
+                        home,
+                    ));
                 }
             }
         }
@@ -2142,6 +2323,51 @@ pub fn infer_package_capabilities(
         Err(lowering_error.unwrap_or(CliError::Usage(
             "package capability inference: no module in the package could be lowered",
         )))
+    }
+}
+
+/// Frame one entry's lowering failure against the module that OWNS it.
+///
+/// The build's own attribution: a canon error is blamed on its own module's
+/// file via [`attribute_canon_errors`] (the root holds every package module, so
+/// an unimported sibling that fails to canonicalize fails every entry, exactly
+/// as `ipe build` refuses it); a post-link error goes through
+/// [`attribute_post_link_error`]. Demanded after `lower_program`, so every
+/// query here is a memo hit.
+fn attribute_entry_lowering_error(
+    db: &ipe_db::IpeDatabase,
+    source_root: ipe_db::SourceRoot,
+    package: &PackageSourceSet,
+    entry: &project::DiscoveredModule,
+    entry_file: ipe_db::SourceFile,
+    diag: Diagnostic,
+    home: &[ipe_intern::Symbol],
+) -> CliError {
+    if let Err(canon_err) =
+        attribute_canon_errors(db, source_root, &package.sources, entry_file, &entry.path)
+    {
+        return canon_err;
+    }
+    let entry_source = (
+        entry.path.clone(),
+        package
+            .sources
+            .get(&entry.module_path)
+            .map(|(_, s)| s.clone())
+            .unwrap_or_default(),
+    );
+    let home_to_source = home_to_source_map(ipe_db::Db::interner(db), &package.sources);
+    if let Ok(linked) = ipe_db::linked_program(db, source_root, entry_file) {
+        attribute_post_link_error(&linked.module, &home_to_source, &entry_source, diag, home)
+    } else {
+        // A link failure has no linked program to scan: frame the lowering
+        // diagnostic against its home module when known, else the entry.
+        let (file, src) = home_to_source.get(home).cloned().unwrap_or(entry_source);
+        CliError::Pipeline {
+            file,
+            src,
+            diag: Box::new(diag),
+        }
     }
 }
 
@@ -2349,7 +2575,7 @@ pub fn apply_fixes_cmd<W: Write>(entry: &Path, auto: bool, w: &mut W) -> Result<
         return Ok(());
     }
 
-    write_atomic(entry, &patched)?;
+    let backup = rewrite_user_file(entry, &patched, RewriteKind::Lossy)?;
     writeln!(
         w,
         "fix: applied {} edit(s) to {}",
@@ -2357,6 +2583,9 @@ pub fn apply_fixes_cmd<W: Write>(entry: &Path, auto: bool, w: &mut W) -> Result<
         entry.display()
     )
     .map_err(|e| io_err(entry, e))?;
+    if let Some(backup) = backup {
+        writeln!(w, "fix: original kept at {}", backup.display()).map_err(|e| io_err(entry, e))?;
+    }
     Ok(())
 }
 
@@ -2385,28 +2614,32 @@ pub fn read_yes_no_default(default: bool) -> bool {
     }
 }
 
-/// Write `contents` to `target` atomically: write a sibling temp file, then
-/// rename it over `target` (atomic on a single filesystem). On a rename
-/// failure the temp file is removed so no debris is left behind.
+/// Replace a user-owned file atomically.
 ///
-/// Retries ONCE, recreating `target`'s parent directory, when the write or
-/// rename fails with `NotFound`. This closes a real race surfaced by the
-/// emit→cargo bridge (`reconcile_emitted_project`, this function's
-/// other caller besides `ipe fix`): several `crates/ipe/tests/
-/// golden_*` integration-test files share ONE `CARGO_TARGET_TMPDIR`-rooted
-/// output directory across sibling `#[test]` functions, and `cargo-nextest`
-/// runs each test as its own process — so one test's `remove_dir_all` +
-/// rebuild can delete a directory this function is mid-write into. A single
-/// retry recovers from that transient case; a genuinely permanent failure
-/// (permissions, a disallowed ancestor) still surfaces as an error after the
-/// retry.
+/// Used for `ipe.lock`, a rewritten source, and a health config.
+///
+/// A sibling temp file is created exclusively and renamed over `target`
+/// (atomic on a single filesystem); on failure the temp file is removed.
+/// Build products never come here — they go through
+/// [`crate::output_dir::OwnedPath`]. Retries once, recreating the parent
+/// directory, when the write or rename fails with `NotFound`.
+///
+/// # Errors
+/// [`CliError::Io`] on a filesystem failure.
 pub fn write_atomic(target: &Path, contents: &str) -> Result<(), CliError> {
+    // Unique per process, call, and instant: the temp file is created
+    // exclusively, so a stale leftover of an earlier run can never collide.
+    static TMP_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let dir = target.parent().filter(|p| !p.as_os_str().is_empty());
     let name = target.file_name().map_or_else(
         || String::from("source.ipe"),
         |n| n.to_string_lossy().into_owned(),
     );
-    let tmp_name = format!(".{name}.ipec-fix.{}.tmp", std::process::id());
+    let seq = TMP_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.subsec_nanos());
+    let tmp_name = format!(".{name}.ipec-fix.{}.{seq}.{nanos}.tmp", std::process::id());
     let tmp = match dir {
         Some(d) => d.join(tmp_name),
         None => PathBuf::from(tmp_name),
@@ -2424,15 +2657,163 @@ pub fn write_atomic(target: &Path, contents: &str) -> Result<(), CliError> {
     }
 }
 
-/// Write `contents` to `tmp`, then rename it over `target`. On a rename
-/// failure the temp file is removed so no debris is left behind.
+/// Write `contents` to `tmp`, then rename it over `target`.
+///
+/// On a rename failure the temp file is removed so no debris is left behind.
+///
+/// `tmp` is created exclusively (`create_new`): a pre-existing file or symlink
+/// at that name is never truncated or written through. The replacement keeps
+/// `target`'s permission bits, so a rewrite never changes a file's mode.
 pub fn write_and_rename(tmp: &Path, target: &Path, contents: &str) -> Result<(), CliError> {
-    fs::write(tmp, contents).map_err(|e| io_err(tmp, e))?;
+    let written = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(tmp)
+        .and_then(|mut file| {
+            file.write_all(contents.as_bytes())?;
+            if let Ok(meta) = fs::metadata(target) {
+                file.set_permissions(meta.permissions())?;
+            }
+            Ok(())
+        });
+    if let Err(e) = written {
+        if e.kind() != std::io::ErrorKind::AlreadyExists {
+            let _ = fs::remove_file(tmp);
+        }
+        return Err(io_err(tmp, e));
+    }
     if let Err(e) = fs::rename(tmp, target) {
         let _ = fs::remove_file(tmp);
         return Err(io_err(target, e));
     }
     Ok(())
+}
+
+/// Whether rewriting a user file can lose information the user may want back.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RewriteKind {
+    /// Layout only, proven meaning-preserving (`ipe fmt`'s round-trip guard).
+    Lossless,
+    /// A change to the code itself (`ipe fix`, `lint --fix`, `init --force`).
+    ///
+    /// The original is copied to a backup first.
+    Lossy,
+}
+
+/// The directory, beside a rewritten file, that holds ipe's backup copies.
+pub const BACKUP_DIR: &str = ".ipe-backup";
+
+/// The most backup names tried for one file within the same nanosecond.
+const BACKUP_NAME_ATTEMPTS: u32 = 16;
+
+/// Rewrite a user-owned file the user named explicitly.
+///
+/// A symlink is resolved to the real file (the file the user edits); the
+/// original is copied to a backup first when the rewrite is
+/// [`RewriteKind::Lossy`]; then the file is replaced atomically — never
+/// truncated in place, so a crash mid-write leaves the original intact. Returns
+/// the backup path when one was made.
+///
+/// # Errors
+/// [`CliError::Io`] when the backup or the replacement fails; the original is
+/// untouched in either case.
+pub fn rewrite_user_file(
+    path: &Path,
+    contents: &str,
+    kind: RewriteKind,
+) -> Result<Option<PathBuf>, CliError> {
+    let real = fs::canonicalize(path).map_err(|e| io_err(path, e))?;
+    rewrite_real_file(&real, contents, kind)
+}
+
+/// Rewrite a user-owned file a directory walk under `root` reached.
+///
+/// As [`rewrite_user_file`], but the file must resolve inside `root`: a
+/// symlink leading out of the project is refused, never followed.
+///
+/// # Errors
+/// [`crate::output_dir::OutputRefusal::OutsideProject`] for a file escaping
+/// `root`; otherwise as [`rewrite_user_file`].
+pub fn rewrite_walked_file(
+    root: &Path,
+    path: &Path,
+    contents: &str,
+    kind: RewriteKind,
+) -> Result<Option<PathBuf>, CliError> {
+    let real = crate::output_dir::contained_in(root, path)?;
+    rewrite_real_file(&real, contents, kind)
+}
+
+/// Back `real` up when `kind` is lossy, then replace it atomically.
+fn rewrite_real_file(
+    real: &Path,
+    contents: &str,
+    kind: RewriteKind,
+) -> Result<Option<PathBuf>, CliError> {
+    let backup = match kind {
+        RewriteKind::Lossless => None,
+        RewriteKind::Lossy => Some(backup_user_file(real)?),
+    };
+    write_atomic(real, contents)?;
+    Ok(backup)
+}
+
+/// Copy `real` to `<its dir>/.ipe-backup/<name>.<nanos>.<n>`.
+///
+/// Each backup name is created exclusively, so no existing backup is replaced.
+/// The copy is created owner-only and then given the original's permission
+/// bits, so a private file never has a more readable backup, even briefly. A
+/// symlinked `.ipe-backup` is refused.
+///
+/// # Errors
+/// [`CliError::OutputRefused`] for a symlinked backup directory;
+/// [`CliError::Io`] on any filesystem failure, or when every candidate name is
+/// taken.
+pub fn backup_user_file(real: &Path) -> Result<PathBuf, CliError> {
+    let dir = real
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    let name = real.file_name().map_or_else(
+        || String::from("source"),
+        |n| n.to_string_lossy().into_owned(),
+    );
+    let backup_dir = dir.join(BACKUP_DIR);
+    if fs::symlink_metadata(&backup_dir).is_ok_and(|m| m.file_type().is_symlink()) {
+        return Err(crate::output_dir::OutputRefusal::Symlink(backup_dir).into());
+    }
+    fs::create_dir_all(&backup_dir).map_err(|e| io_err(&backup_dir, e))?;
+    let permissions = fs::metadata(real)
+        .map_err(|e| io_err(real, e))?
+        .permissions();
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_nanos());
+    for attempt in 0..BACKUP_NAME_ATTEMPTS {
+        let dest = backup_dir.join(format!("{name}.{stamp}.{attempt}"));
+        let mut options = fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt as _;
+            options.mode(0o600);
+        }
+        match options.open(&dest) {
+            Ok(mut copy) => {
+                let mut original = fs::File::open(real).map_err(|e| io_err(real, e))?;
+                std::io::copy(&mut original, &mut copy).map_err(|e| io_err(&dest, e))?;
+                copy.set_permissions(permissions)
+                    .map_err(|e| io_err(&dest, e))?;
+                return Ok(dest);
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(e) => return Err(io_err(&dest, e)),
+        }
+    }
+    Err(io_err(
+        &backup_dir,
+        std::io::Error::from(std::io::ErrorKind::AlreadyExists),
+    ))
 }
 
 pub fn io_err(path: &Path, source: std::io::Error) -> CliError {

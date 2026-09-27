@@ -525,7 +525,7 @@ jobs:
           IPE="$PWD/target/release/ipe"
           WARM="$(mktemp -d)"
           cd "$WARM"
-          "$IPE" build "$GITHUB_WORKSPACE/examples/shapes/non-tea/hello-world/package.ipe" --out out/rust
+          "$IPE" build "$GITHUB_WORKSPACE/examples/shapes/non-tea/hello-world/package.ipe" --out out
           cd out/rust
           cargo build --release   # compiles the runtime dep tree into the shared target
       - name: Emit + build + run (examples/shapes/non-tea/hello-world)
@@ -535,7 +535,7 @@ jobs:
           set -euo pipefail
           IPE="$PWD/target/release/ipe"
           cd examples/shapes/non-tea/hello-world
-          "$IPE" build package.ipe --out out/rust
+          "$IPE" build package.ipe --out out
           cd out/rust
           cargo build --release   # incremental: deps already in the shared target
           OUT="$(cargo run --release --quiet)"
@@ -580,7 +580,7 @@ jobs:
           set -euo pipefail
           IPE="$PWD/target/release/ipe"
           WARM="$(mktemp -d)"; cd "$WARM"
-          "$IPE" build "$GITHUB_WORKSPACE/examples/shapes/script/release-preflight/package.ipe" --out out/rust
+          "$IPE" build "$GITHUB_WORKSPACE/examples/shapes/script/release-preflight/package.ipe" --out out
           cd out/rust && cargo build
       - name: Check + emit + build every first-party shape
         env:
@@ -596,7 +596,7 @@ jobs:
             if ! "$IPE" type-check "$entry"; then
               echo "::error::ipe type-check regressed: $dir"; fail=1; echo "::endgroup::"; continue
             fi
-            if ! "$IPE" build "$toml" --out "$dir/out/rust"; then
+            if ! "$IPE" build "$toml" --out "$dir/out"; then
               echo "::error::ipe build regressed: $dir"; fail=1; echo "::endgroup::"; continue
             fi
             # A debug build proves the emitted crate compiles and links — the two
@@ -1542,7 +1542,7 @@ jobs:
           IPE="$PWD/target/release/ipe"
           OUT="${{ runner.temp }}/geo-clipboard-emitted"
           "$IPE" build examples/shapes/web/geo-clipboard/package.ipe --out "$OUT"
-          echo "IPE_GEO_CLIPBOARD_EMITTED=$OUT" >> "$GITHUB_ENV"
+          echo "IPE_GEO_CLIPBOARD_EMITTED=$OUT/rust" >> "$GITHUB_ENV"
       - name: Cargo-build emitted project
         env:
           CARGO_TARGET_DIR: ${{ github.workspace }}/.cache/browser-e2e-target

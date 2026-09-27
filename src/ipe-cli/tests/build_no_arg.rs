@@ -15,7 +15,8 @@ use std::sync::atomic::{AtomicU32, Ordering};
 fn fresh_dir(tag: &str) -> PathBuf {
     static COUNTER: AtomicU32 = AtomicU32::new(0);
     let n = COUNTER.fetch_add(1, Ordering::Relaxed);
-    let dir = std::env::temp_dir().join(format!("ipe_noarg_test_{tag}_{}_{n}", std::process::id()));
+    let dir = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
+        .join(format!("ipe_noarg_test_{tag}_{}_{n}", std::process::id()));
     let _ = fs::remove_dir_all(&dir);
     dir
 }
@@ -177,11 +178,13 @@ fn build_flag_first_no_entry_resolves_default() {
         "`ipe build --out <dir>` (no positional) must succeed: {build_result:?}"
     );
 
-    // THE SEAL.
+    // THE SEAL. `--out` names the output root; the emitted crate is its
+    // `rust/` area.
+    let crate_dir = out_dir.join("rust");
     let cargo_status = std::process::Command::new("cargo")
         .arg("build")
-        .current_dir(&out_dir)
-        .env("CARGO_TARGET_DIR", out_dir.join("target"))
+        .current_dir(&crate_dir)
+        .env("CARGO_TARGET_DIR", crate_dir.join("target"))
         .env("IPE_RUNTIME_DIR", &runtime_dir)
         .status();
     assert!(
@@ -189,6 +192,6 @@ fn build_flag_first_no_entry_resolves_default() {
         "cargo build on the emitted project must succeed: {cargo_status:?}"
     );
 
-    let _ = fs::remove_dir_all(out_dir.join("target"));
+    let _ = fs::remove_dir_all(crate_dir.join("target"));
     let _ = fs::remove_dir_all(&dir);
 }

@@ -1,6 +1,9 @@
-# Emitted Rust project and its build artifacts.
+# ipe build output (the emitted Rust crate, binaries, release artifacts).
 /out/
 /target/
 
 # Per-project cache (FFI bindings, incremental build cache).
 /.ipe/
+
+# Copies ipe keeps of a source file before `ipe fix` / `lint --fix` rewrites it.
+.ipe-backup/

@@ -23,6 +23,9 @@ use std::path::{Path, PathBuf};
 
 use ipe_ir::Capability;
 
+use crate::CliError;
+use crate::output_dir::OwnedDir;
+
 use super::permissions::{self, Platform};
 
 /// A desktop operating system this packager targets.
@@ -629,31 +632,14 @@ fn desktop_value_escape(text: &str) -> String {
     out
 }
 
-/// A filesystem error while materialising a desktop bundle: the path it happened
-/// on and its OS cause. A typed error so the CLI boundary can blame the exact
-/// file rather than surfacing a bare `io::Error`.
-#[derive(Debug)]
-pub struct MaterialiseError {
-    /// The path the operation was attempting.
-    pub path: PathBuf,
-    /// The underlying OS error.
-    pub source: std::io::Error,
-}
-
-impl std::fmt::Display for MaterialiseError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "packaging {}: {}", self.path.display(), self.source)
-    }
-}
-
-impl std::error::Error for MaterialiseError {}
-
-/// Materialise `layout` under `dist_dir/<root_name>`.
+/// Materialise `layout` as the bundle `dist/<root_name>` inside the owned `dist`.
 ///
 /// Generated files are written verbatim, the compiled `binary` is copied (and
 /// made executable on Unix), and the source `icon` is rendered into the bundle's
 /// per-OS icon slot. A fresh, deterministic tree: an existing bundle directory of
 /// the same name is removed first so a re-pack never leaves stale files behind.
+/// Every path is a [`crate::output_dir::OwnedPath`], so a symlink planted in the owned `dist` is
+/// refused — never removed through, written through, or copied onto.
 ///
 /// Icon rendering is a byte copy of the source into the per-OS icon filename: the
 /// source PNG is a valid Linux icon as-is, and the macOS `.icns` / Windows `.ico`
@@ -662,40 +648,37 @@ impl std::error::Error for MaterialiseError {}
 /// `.icns`/`.ico` re-encode is the runner's job.
 ///
 /// # Errors
-/// [`MaterialiseError`] naming the exact path on any filesystem failure.
+/// [`CliError::OutputRefused`] for a symlink or non-plain name on the way;
+/// [`CliError::Io`] naming the exact path on any filesystem failure.
 pub fn materialise(
     layout: &BundleLayout,
     binary: &Path,
     icon: Option<&Path>,
-    dist_dir: &Path,
-) -> Result<PathBuf, MaterialiseError> {
-    let bundle_root = dist_dir.join(&layout.root_name);
-    if bundle_root.exists() {
-        remove_tree(&bundle_root)?;
-    }
-    mkdirs(&bundle_root)?;
+    dist: &OwnedDir,
+) -> Result<PathBuf, CliError> {
+    let bundle_root = dist.path_to(&layout.root_name)?;
+    bundle_root.remove()?;
+    bundle_root.ensure_dir()?;
 
     for file in &layout.files {
-        let dest = bundle_root.join(rel_to_native(&file.rel_path));
-        if let Some(parent) = dest.parent() {
-            mkdirs(parent)?;
-        }
+        let entry =
+            dist.path_to(Path::new(&layout.root_name).join(rel_to_native(&file.rel_path)))?;
         match &file.content {
-            BundleContent::Generated(text) => write_file(&dest, text.as_bytes())?,
+            BundleContent::Generated(text) => entry.write(text.as_bytes())?,
             BundleContent::AppBinary => {
-                copy_file(binary, &dest)?;
-                make_executable(&dest)?;
+                entry.copy_from(binary)?;
+                make_executable(&entry.path())?;
             }
             BundleContent::Icon => {
                 // Present only when the layout carries an icon, which the layout
                 // builder emits only when a source icon was given.
                 if let Some(src) = icon {
-                    copy_file(src, &dest)?;
+                    entry.copy_from(src)?;
                 }
             }
         }
     }
-    Ok(bundle_root)
+    Ok(bundle_root.path())
 }
 
 /// Translate a bundle-relative `/`-separated path into a native `PathBuf`.
@@ -703,54 +686,18 @@ fn rel_to_native(rel: &str) -> PathBuf {
     rel.split('/').collect()
 }
 
-fn mkdirs(path: &Path) -> Result<(), MaterialiseError> {
-    std::fs::create_dir_all(path).map_err(|source| MaterialiseError {
-        path: path.to_path_buf(),
-        source,
-    })
-}
-
-fn remove_tree(path: &Path) -> Result<(), MaterialiseError> {
-    std::fs::remove_dir_all(path).map_err(|source| MaterialiseError {
-        path: path.to_path_buf(),
-        source,
-    })
-}
-
-fn write_file(path: &Path, bytes: &[u8]) -> Result<(), MaterialiseError> {
-    std::fs::write(path, bytes).map_err(|source| MaterialiseError {
-        path: path.to_path_buf(),
-        source,
-    })
-}
-
-fn copy_file(from: &Path, to: &Path) -> Result<(), MaterialiseError> {
-    std::fs::copy(from, to)
-        .map(|_bytes| ())
-        .map_err(|source| MaterialiseError {
-            path: from.to_path_buf(),
-            source,
-        })
-}
-
 /// Set the owner-execute bit on a materialised file on Unix; a no-op elsewhere.
 #[cfg(unix)]
-fn make_executable(path: &Path) -> Result<(), MaterialiseError> {
+fn make_executable(path: &Path) -> Result<(), CliError> {
     use std::os::unix::fs::PermissionsExt as _;
-    let meta = std::fs::metadata(path).map_err(|source| MaterialiseError {
-        path: path.to_path_buf(),
-        source,
-    })?;
+    let meta = std::fs::symlink_metadata(path).map_err(|e| crate::io_err(path, e))?;
     let mut perms = meta.permissions();
     perms.set_mode(perms.mode() | 0o755);
-    std::fs::set_permissions(path, perms).map_err(|source| MaterialiseError {
-        path: path.to_path_buf(),
-        source,
-    })
+    std::fs::set_permissions(path, perms).map_err(|e| crate::io_err(path, e))
 }
 
 #[cfg(not(unix))]
-fn make_executable(_path: &Path) -> Result<(), MaterialiseError> {
+fn make_executable(_path: &Path) -> Result<(), CliError> {
     Ok(())
 }
 

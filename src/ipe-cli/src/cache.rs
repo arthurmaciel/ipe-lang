@@ -57,7 +57,9 @@
 //! - every in-scope module's path, trust origin (injected stdlib vs. user
 //!   source — the module-IDENTITY axis the design doc's cache-key-
 //!   completeness note calls out: an add/delete/rename of a module MUST
-//!   yield a different key, never a stale hit), and full source text.
+//!   yield a different key, never a stale hit), and full source text,
+//! - every emit-shape build flag (target, production, `--debugger`,
+//!   hot-appearance, the webview host and window).
 //!
 //! `blame_path` (diagnostic-only) and the vendored runtime tree are
 //! deliberately NOT part of the key: neither affects [`EmittedProject`]'s
@@ -111,6 +113,8 @@ use ipe_backend::EmittedProject;
 use ipe_backend_rust::DbDriver;
 use ipe_intern::{Interner, SerdeInternerGuard};
 use ipe_ir::Program;
+
+use crate::output_dir::OwnedDir;
 use sha2::{Digest, Sha256};
 
 /// Domain-separation tag for the content-address hash — bumped whenever the
@@ -366,7 +370,7 @@ fn collect_files(
 /// deliberately unhashed, matching [`ipe_db::SourceFile`]'s own input shape
 /// (module path + text + origin; never the on-disk path).
 #[must_use]
-#[allow(clippy::too_many_arguments)] // a content-address key over every emit-affecting input
+#[allow(clippy::too_many_arguments, clippy::fn_params_excessive_bools)] // a content-address key over every independent emit-affecting input
 pub fn compute_project_key(
     sources: &BTreeMap<Vec<String>, (PathBuf, String)>,
     injected: &BTreeSet<Vec<String>>,
@@ -375,6 +379,7 @@ pub fn compute_project_key(
     target: ipe_ir::Target,
     wasm_public_env: &[String],
     production: bool,
+    debugger: bool,
     hot_appearance: bool,
     webview_host: bool,
     webview_window: Option<&ipe_backend_rust::WebViewWindow>,
@@ -419,6 +424,12 @@ pub fn compute_project_key(
     // vice versa. (For a Debug-free program the emitted bytes are identical
     // either way; the extra key bit only costs a one-time cold entry.)
     hasher.update([u8::from(production)]);
+
+    // `--debugger` changes the emitted crate: the runtime `debugger` feature,
+    // the cli/worker entry's session-codec argument and the serde derives the
+    // typed session log needs. A debugger build must never be served a plain
+    // cached project (it would fail cargo on the entry's arity), or vice versa.
+    hasher.update([u8::from(debugger)]);
 
     let entry_len = u64::try_from(entry_path.len()).unwrap_or(u64::MAX);
     hasher.update(entry_len.to_le_bytes());
@@ -577,16 +588,179 @@ fn derive_epoch_uncached() -> Option<String> {
     Some(hex::encode(hasher.finalize()))
 }
 
-/// The default cache root for a build writing to `out_dir`, honouring the
-/// `IPE_BUILD_CACHE` / `IPE_BUILD_CACHE_DIR` environment overrides.
+/// The directory below the build output that holds the default cache.
+pub const CACHE_DIR_NAME: &str = ".ipe-cache";
+
+/// Where the build cache lives, chosen before the output dir is claimed.
+///
+/// A site only reads. Writing takes a [`CacheRoot`], and an in-output site
+/// yields one only from the claimed output dir ([`CacheSite::root`]), so no
+/// cache write can reach the output dir before the claim proves it ipe's.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CacheSite {
+    /// `<out_dir>/.ipe-cache/<salt>`, inside the build output.
+    InOutput {
+        /// The output dir the build claims.
+        out_dir: PathBuf,
+        /// The per-user secret naming the partition.
+        salt: String,
+    },
+    /// A directory the user named through `IPE_BUILD_CACHE_DIR`.
+    Explicit(PathBuf),
+}
+
+/// A writable build-cache root.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CacheRoot {
+    /// `.ipe-cache/<salt>` below a claimed output dir.
+    ///
+    /// Every write goes through [`OwnedDir::path_to`], which refuses a symlink
+    /// at any level and replaces the entry by a rename.
+    InOwned {
+        /// The claimed output dir.
+        dir: OwnedDir,
+        /// The per-user secret naming the partition.
+        salt: String,
+    },
+    /// A directory the user named through `IPE_BUILD_CACHE_DIR`.
+    Explicit(PathBuf),
+}
+
+impl CacheSite {
+    /// The writable root, given `claimed`, the claim of this site's output dir.
+    ///
+    /// `None` when `claimed` is some other directory.
+    #[must_use]
+    pub fn root(&self, claimed: &OwnedDir) -> Option<CacheRoot> {
+        match self {
+            Self::InOutput { out_dir, salt } => {
+                (claimed.path() == out_dir).then(|| CacheRoot::InOwned {
+                    dir: claimed.clone(),
+                    salt: salt.clone(),
+                })
+            }
+            Self::Explicit(dir) => Some(CacheRoot::Explicit(dir.clone())),
+        }
+    }
+
+    /// The bytes of entry `file_name` under `epoch`, read through no symlink.
+    ///
+    /// An in-output entry is read only from a marked, non-symlink output dir;
+    /// every level below it (and below an explicit root) is lstat'd, and a
+    /// symlink anywhere is a miss.
+    fn read(&self, epoch: &str, file_name: &str) -> Option<Vec<u8>> {
+        match self {
+            Self::InOutput { out_dir, salt } => {
+                let meta = fs::symlink_metadata(out_dir).ok()?;
+                let owned =
+                    meta.is_dir() && crate::output_dir::has_marker(out_dir).unwrap_or(false);
+                if !owned {
+                    return None;
+                }
+                read_without_links(out_dir, &[CACHE_DIR_NAME, salt.as_str(), epoch, file_name])
+            }
+            Self::Explicit(dir) => read_without_links(dir, &[epoch, file_name]),
+        }
+    }
+}
+
+impl CacheRoot {
+    /// Best-effort write of entry `file_name` under `epoch`.
+    ///
+    /// Every failure is swallowed, a refused symlink included.
+    fn write(&self, epoch: &str, file_name: &str, bytes: &[u8]) {
+        match self {
+            Self::InOwned { dir, salt } => {
+                let rel = Path::new(CACHE_DIR_NAME)
+                    .join(salt)
+                    .join(epoch)
+                    .join(file_name);
+                if let Ok(path) = dir.path_to(rel) {
+                    let _ = path.write(bytes);
+                }
+            }
+            Self::Explicit(root) => write_entry(root, epoch, file_name, bytes),
+        }
+    }
+}
+
+/// Read `base/<parts...>` when each part is one plain name and no level is a symlink.
+///
+/// The opened file must be the regular file the lstat saw, so a link swapped
+/// in after the check is a miss too.
+fn read_without_links(base: &Path, parts: &[&str]) -> Option<Vec<u8>> {
+    use std::io::Read as _;
+    let mut path = base.to_path_buf();
+    let mut seen = None;
+    for part in parts {
+        let mut components = Path::new(part).components();
+        if !matches!(
+            (components.next(), components.next()),
+            (Some(std::path::Component::Normal(_)), None)
+        ) {
+            return None;
+        }
+        path.push(part);
+        let meta = fs::symlink_metadata(&path).ok()?;
+        if meta.file_type().is_symlink() {
+            return None;
+        }
+        seen = Some(meta);
+    }
+    let seen = seen.filter(fs::Metadata::is_file)?;
+    let mut file = open_entry(&path)?;
+    let opened = file.metadata().ok()?;
+    if !same_file(&seen, &opened) {
+        return None;
+    }
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes).ok()?;
+    Some(bytes)
+}
+
+/// Open `path` read-only, refusing a final symlink and never blocking on a FIFO.
+#[cfg(unix)]
+fn open_entry(path: &Path) -> Option<fs::File> {
+    use rustix::fs::{Mode, OFlags};
+    let flags = OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::CLOEXEC;
+    rustix::fs::open(path, flags, Mode::empty())
+        .ok()
+        .map(fs::File::from)
+}
+
+/// Open `path` read-only.
+#[cfg(not(unix))]
+fn open_entry(path: &Path) -> Option<fs::File> {
+    fs::File::open(path).ok()
+}
+
+/// Whether two metadata records name the same file.
+#[cfg(unix)]
+fn same_file(a: &fs::Metadata, b: &fs::Metadata) -> bool {
+    use std::os::unix::fs::MetadataExt as _;
+    a.dev() == b.dev() && a.ino() == b.ino()
+}
+
+/// No portable file identity here, so never the same file: the cache runs cold.
+#[cfg(not(unix))]
+const fn same_file(_: &fs::Metadata, _: &fs::Metadata) -> bool {
+    false
+}
+
+/// The cache site for a build writing to `out_dir`.
 ///
 /// - `IPE_BUILD_CACHE=0` (also `off` / `false`) disables the cache entirely.
 /// - `IPE_BUILD_CACHE_DIR=<path>` overrides the default location.
-/// - Otherwise: `<out_dir>/.ipe-cache` — colocated with the build output
-///   so `rm -rf <out_dir>` (the existing "force a clean rebuild" ritual)
-///   also resets the cache, with no new mental model to learn.
+/// - Otherwise: `<out_dir>/.ipe-cache/<user salt>`, colocated with the build
+///   output so removing it also resets the cache.
+///
+/// A cached entry is emitted verbatim, so the default partition is named by a
+/// secret per-user salt kept in `IPE_HOME`: a cache a cloned repository ships
+/// inside a force-added `out/` sits under a name this user never reads, and can
+/// never substitute the Rust built from the sources. No salt (no resolvable
+/// `IPE_HOME`) disables the default cache.
 #[must_use]
-pub fn env_cache_dir(out_dir: &Path) -> Option<PathBuf> {
+pub fn env_cache_dir(out_dir: &Path) -> Option<CacheSite> {
     if matches!(
         std::env::var("IPE_BUILD_CACHE").as_deref(),
         Ok("0" | "off" | "false")
@@ -594,13 +768,126 @@ pub fn env_cache_dir(out_dir: &Path) -> Option<PathBuf> {
         return None;
     }
     if let Ok(dir) = std::env::var("IPE_BUILD_CACHE_DIR") {
-        return Some(PathBuf::from(dir));
+        return Some(CacheSite::Explicit(PathBuf::from(dir)));
     }
-    Some(out_dir.join(".ipe-cache"))
+    default_cache_site(out_dir)
 }
 
-fn entry_file_path(cache_root: &Path, epoch: &str, key: &str) -> PathBuf {
-    cache_root.join(epoch).join(format!("{key}.json"))
+/// `<out_dir>/.ipe-cache/<user salt>`, or `None` when no salt is available.
+fn default_cache_site(out_dir: &Path) -> Option<CacheSite> {
+    static SALT: OnceLock<Option<String>> = OnceLock::new();
+    let salt = SALT.get_or_init(user_cache_salt).clone()?;
+    Some(CacheSite::InOutput {
+        out_dir: out_dir.to_path_buf(),
+        salt,
+    })
+}
+
+/// The bytes of randomness in a per-user cache salt.
+const SALT_BYTES: usize = 32;
+
+/// The per-user secret naming the default cache partition, created on first use.
+///
+/// Stored as hex in `$IPE_HOME/build-cache-salt` (owner-only). A symlink or a
+/// malformed file there yields `None` (the default cache is then disabled),
+/// never a salt an attacker could have chosen.
+fn user_cache_salt() -> Option<String> {
+    use std::io::{Read as _, Write as _};
+    let home = crate::runtime_embed::ipe_home().ok()?;
+    let path = home.join("build-cache-salt");
+    let read = |path: &Path| -> Option<String> {
+        let meta = fs::symlink_metadata(path).ok()?;
+        if !meta.file_type().is_file() {
+            return None;
+        }
+        let mut text = String::new();
+        fs::File::open(path)
+            .ok()?
+            .take(128)
+            .read_to_string(&mut text)
+            .ok()?;
+        let text = text.trim().to_owned();
+        (text.len() == SALT_BYTES * 2 && text.bytes().all(|b| b.is_ascii_hexdigit()))
+            .then_some(text)
+    };
+    if fs::symlink_metadata(&path).is_ok() {
+        return read(&path);
+    }
+    let mut bytes = [0u8; SALT_BYTES];
+    getrandom::fill(&mut bytes).ok()?;
+    let salt = hex::encode(bytes);
+    fs::create_dir_all(&home).ok()?;
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        options.mode(0o600);
+    }
+    match options.open(&path) {
+        Ok(mut file) => {
+            file.write_all(salt.as_bytes()).ok()?;
+            Some(salt)
+        }
+        // A concurrent first build won the race: use the salt it wrote.
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => read(&path),
+        Err(_) => None,
+    }
+}
+
+/// Whether any existing level from `cache_root` down to `path` is a symlink.
+///
+/// A cache write is skipped rather than made through a link.
+fn crosses_symlink(cache_root: &Path, path: &Path) -> bool {
+    let Ok(rel) = path.strip_prefix(cache_root) else {
+        return true;
+    };
+    let mut current = cache_root.to_path_buf();
+    let is_link = |p: &Path| fs::symlink_metadata(p).is_ok_and(|m| m.file_type().is_symlink());
+    if is_link(&current) {
+        return true;
+    }
+    for part in rel.components() {
+        current.push(part);
+        if is_link(&current) {
+            return true;
+        }
+    }
+    false
+}
+
+/// Write `bytes` to `<cache_root>/<epoch>/<file_name>` via an exclusive temp file and a rename.
+///
+/// Best-effort: every failure is swallowed. A symlink anywhere below
+/// `cache_root` skips the write. The temp name carries this process's PID, so
+/// two concurrent builds storing the same key never share a temp file.
+fn write_entry(cache_root: &Path, epoch: &str, file_name: &str, bytes: &[u8]) {
+    use std::io::Write as _;
+    let dir = cache_root.join(epoch);
+    let path = dir.join(file_name);
+    let tmp = dir.join(format!("{file_name}.{}.tmp", std::process::id()));
+    if crosses_symlink(cache_root, &dir) || fs::create_dir_all(&dir).is_err() {
+        return;
+    }
+    if crosses_symlink(cache_root, &path) {
+        return;
+    }
+    let written = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&tmp)
+        .and_then(|mut file| file.write_all(bytes));
+    if written.is_err() {
+        return;
+    }
+    if fs::rename(&tmp, &path).is_err() {
+        let _ = fs::remove_file(&tmp);
+    }
+}
+
+/// The file name of the `EmittedProject`-tier entry for `key`.
+fn entry_file_name(key: &str) -> String {
+    format!("{key}.json")
 }
 
 /// Look up a cached [`EmittedProject`] for `key` under `epoch`. Every
@@ -608,9 +895,8 @@ fn entry_file_path(cache_root: &Path, epoch: &str, key: &str) -> PathBuf {
 /// deserializes but fails `RelPath`'s validation) is a plain cache MISS —
 /// `None`, never an error, matching "corrupt entry -> discard".
 #[must_use]
-pub fn try_load(cache_root: &Path, epoch: &str, key: &str) -> Option<EmittedProject> {
-    let path = entry_file_path(cache_root, epoch, key);
-    let bytes = fs::read(&path).ok()?;
+pub fn try_load(site: &CacheSite, epoch: &str, key: &str) -> Option<EmittedProject> {
+    let bytes = site.read(epoch, &entry_file_name(key))?;
     serde_json::from_slice(&bytes).ok()
 }
 
@@ -623,33 +909,18 @@ pub fn try_load(cache_root: &Path, epoch: &str, key: &str) -> Option<EmittedProj
 /// missing-then-appearing file is the only visible race, which `try_load`
 /// already treats as an ordinary miss.
 ///
-/// The tmp file name is suffixed with this process's PID (mirroring
-/// `write_atomic`'s existing convention) so two CONCURRENT `ipe build`
-/// invocations computing the SAME key never write to the same tmp path —
-/// without that, two racing writers could interleave into one file before
-/// either renamed it, corrupting the entry a third reader might load in
-/// between (a real hazard the single shared-name `entry.json.tmp` form
-/// would have had, distinct from the deliberately-tolerated "a fresh entry
-/// was written between my miss-check and now" race).
-pub fn store(cache_root: &Path, epoch: &str, key: &str, project: &EmittedProject) {
-    let path = entry_file_path(cache_root, epoch, key);
-    let Some(dir) = path.parent() else {
-        return;
-    };
-    if fs::create_dir_all(dir).is_err() {
-        return;
-    }
+/// The tmp file name carries this process's PID, so two concurrent
+/// `ipe build` invocations computing the same key never write to the same
+/// tmp path and so never interleave into one entry a third reader could load.
+///
+/// An in-output root writes through [`OwnedDir::path_to`]: a symlink planted
+/// at any level below the claimed output dir skips the store, never writes
+/// through the link.
+pub fn store(root: &CacheRoot, epoch: &str, key: &str, project: &EmittedProject) {
     let Ok(json) = serde_json::to_vec(project) else {
         return;
     };
-    let tmp = path.with_extension(format!("json.{}.tmp", std::process::id()));
-    if fs::write(&tmp, &json).is_err() {
-        let _ = fs::remove_file(&tmp);
-        return;
-    }
-    if fs::rename(&tmp, &path).is_err() {
-        let _ = fs::remove_file(&tmp);
-    }
+    root.write(epoch, &entry_file_name(key), &json);
 }
 
 // ---------------------------------------------------------------------------
@@ -692,8 +963,9 @@ pub fn store(cache_root: &Path, epoch: &str, key: &str, project: &EmittedProject
 // string, a malformed `Match` — is `None`/silently-swallowed, the SAME
 // "corrupt entry -> discard" contract the `EmittedProject` tier established.
 
-fn ir_entry_file_path(cache_root: &Path, epoch: &str, key: &str) -> PathBuf {
-    cache_root.join(epoch).join(format!("{key}.ir.json"))
+/// The file name of the lowered-IR-tier entry for `key`.
+fn ir_entry_file_name(key: &str) -> String {
+    format!("{key}.ir.json")
 }
 
 /// Look up a cached lowered [`Program`] for `key` under `epoch`, relocating
@@ -705,13 +977,12 @@ fn ir_entry_file_path(cache_root: &Path, epoch: &str, key: &str) -> PathBuf {
 /// exactly ([`try_load`]).
 #[must_use]
 pub fn try_load_ir(
-    cache_root: &Path,
+    site: &CacheSite,
     epoch: &str,
     key: &str,
     interner: &Arc<Mutex<Interner>>,
 ) -> Option<Program> {
-    let path = ir_entry_file_path(cache_root, epoch, key);
-    let bytes = fs::read(&path).ok()?;
+    let bytes = site.read(epoch, &ir_entry_file_name(key))?;
     let _guard = SerdeInternerGuard::install(Arc::clone(interner));
     serde_json::from_slice(&bytes).ok()
 }
@@ -723,19 +994,12 @@ pub fn try_load_ir(
 /// failure. PID-suffixed tmp name for the same concurrent-writer safety
 /// [`store`]'s own doc explains.
 pub fn store_ir(
-    cache_root: &Path,
+    root: &CacheRoot,
     epoch: &str,
     key: &str,
     program: &Program,
     interner: &Arc<Mutex<Interner>>,
 ) {
-    let path = ir_entry_file_path(cache_root, epoch, key);
-    let Some(dir) = path.parent() else {
-        return;
-    };
-    if fs::create_dir_all(dir).is_err() {
-        return;
-    }
     let json = {
         let _guard = SerdeInternerGuard::install(Arc::clone(interner));
         serde_json::to_vec(program)
@@ -743,19 +1007,28 @@ pub fn store_ir(
     let Ok(json) = json else {
         return;
     };
-    let tmp = path.with_extension(format!("ir.json.{}.tmp", std::process::id()));
-    if fs::write(&tmp, &json).is_err() {
-        let _ = fs::remove_file(&tmp);
-        return;
-    }
-    if fs::rename(&tmp, &path).is_err() {
-        let _ = fs::remove_file(&tmp);
-    }
+    root.write(epoch, &ir_entry_file_name(key), &json);
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn entry_file_path(cache_root: &Path, epoch: &str, key: &str) -> PathBuf {
+        cache_root.join(epoch).join(entry_file_name(key))
+    }
+
+    fn ir_entry_file_path(cache_root: &Path, epoch: &str, key: &str) -> PathBuf {
+        cache_root.join(epoch).join(ir_entry_file_name(key))
+    }
+
+    fn explicit_site(dir: &Path) -> CacheSite {
+        CacheSite::Explicit(dir.to_path_buf())
+    }
+
+    fn explicit_root(dir: &Path) -> CacheRoot {
+        CacheRoot::Explicit(dir.to_path_buf())
+    }
 
     type TestSources = BTreeMap<Vec<String>, (PathBuf, String)>;
 
@@ -796,6 +1069,7 @@ mod tests {
             false,
             false,
             false,
+            false,
             None,
         );
         let b = compute_project_key(
@@ -805,6 +1079,7 @@ mod tests {
             DbDriver::Sqlite,
             ipe_ir::Target::Native,
             &[],
+            false,
             false,
             false,
             false,
@@ -826,6 +1101,7 @@ mod tests {
             false,
             false,
             false,
+            false,
             None,
         );
         if let Some(main) = sources.get_mut(&vec!["Main".to_owned()]) {
@@ -838,6 +1114,7 @@ mod tests {
             DbDriver::Sqlite,
             ipe_ir::Target::Native,
             &[],
+            false,
             false,
             false,
             false,
@@ -859,6 +1136,7 @@ mod tests {
             false,
             false,
             false,
+            false,
             None,
         );
         let postgres = compute_project_key(
@@ -868,6 +1146,7 @@ mod tests {
             DbDriver::Postgres,
             ipe_ir::Target::Native,
             &[],
+            false,
             false,
             false,
             false,
@@ -894,6 +1173,7 @@ mod tests {
             false,
             false,
             false,
+            false,
             None,
         );
         let prod = compute_project_key(
@@ -906,9 +1186,37 @@ mod tests {
             true,
             false,
             false,
+            false,
             None,
         );
         assert_ne!(dev, prod, "the production flag is part of the key");
+    }
+
+    /// A `--debugger` emit differs from a plain one (runtime feature, session
+    /// codec argument, serde derives), so the key must separate the two.
+    #[test]
+    fn key_changes_with_debugger() {
+        let (sources, injected) = sample_sources();
+        let key = |debugger| {
+            compute_project_key(
+                &sources,
+                &injected,
+                &entry(),
+                DbDriver::Sqlite,
+                ipe_ir::Target::Native,
+                &[],
+                false,
+                debugger,
+                false,
+                false,
+                None,
+            )
+        };
+        assert_ne!(
+            key(false),
+            key(true),
+            "the debugger flag is part of the key"
+        );
     }
 
     /// The dev appearance hot-swap flag routes style literals through a
@@ -927,6 +1235,7 @@ mod tests {
             false,
             false,
             false,
+            false,
             None,
         );
         let on = compute_project_key(
@@ -936,6 +1245,7 @@ mod tests {
             DbDriver::Sqlite,
             ipe_ir::Target::Native,
             &[],
+            false,
             false,
             true,
             false,
@@ -964,6 +1274,7 @@ mod tests {
                 DbDriver::Sqlite,
                 ipe_ir::Target::Native,
                 &[],
+                false,
                 false,
                 false,
                 true,
@@ -1000,6 +1311,7 @@ mod tests {
             false,
             false,
             false,
+            false,
             None,
         );
         let with_allowlist = compute_project_key(
@@ -1009,6 +1321,7 @@ mod tests {
             DbDriver::Sqlite,
             ipe_ir::Target::Native,
             &["API_BASE_URL".to_owned()],
+            false,
             false,
             false,
             false,
@@ -1033,6 +1346,7 @@ mod tests {
             false,
             false,
             false,
+            false,
             None,
         );
         let b = compute_project_key(
@@ -1042,6 +1356,7 @@ mod tests {
             DbDriver::Sqlite,
             ipe_ir::Target::Native,
             &[],
+            false,
             false,
             false,
             false,
@@ -1060,6 +1375,7 @@ mod tests {
             DbDriver::Sqlite,
             ipe_ir::Target::Native,
             &[],
+            false,
             false,
             false,
             false,
@@ -1084,6 +1400,7 @@ mod tests {
             false,
             false,
             false,
+            false,
             None,
         );
         assert_ne!(base, with_extra, "adding a module must change the key");
@@ -1099,6 +1416,7 @@ mod tests {
             DbDriver::Sqlite,
             ipe_ir::Target::Native,
             &[],
+            false,
             false,
             false,
             false,
@@ -1131,6 +1449,7 @@ mod tests {
             false,
             false,
             false,
+            false,
             None,
         );
         let b = compute_project_key(
@@ -1140,6 +1459,7 @@ mod tests {
             DbDriver::Sqlite,
             ipe_ir::Target::Native,
             &[],
+            false,
             false,
             false,
             false,
@@ -1173,6 +1493,7 @@ mod tests {
             false,
             false,
             false,
+            false,
             None,
         );
         let b = compute_project_key(
@@ -1185,11 +1506,13 @@ mod tests {
             false,
             false,
             false,
+            false,
             None,
         );
         assert_ne!(a, b, "differently-segmented module paths must not collide");
     }
 
+    #[cfg(unix)] // a cache hit needs a file identity check
     #[test]
     fn store_and_load_round_trip() {
         let dir = std::env::temp_dir().join(format!("ipe-cache-test-{}", std::process::id()));
@@ -1206,17 +1529,17 @@ mod tests {
         };
 
         assert!(
-            try_load(&cache_root, "epoch-a", "key-a").is_none(),
+            try_load(&explicit_site(&cache_root), "epoch-a", "key-a").is_none(),
             "empty cache misses"
         );
-        store(&cache_root, "epoch-a", "key-a", &project);
-        let loaded = try_load(&cache_root, "epoch-a", "key-a");
+        store(&explicit_root(&cache_root), "epoch-a", "key-a", &project);
+        let loaded = try_load(&explicit_site(&cache_root), "epoch-a", "key-a");
         assert_eq!(loaded, Some(project));
 
         // A different epoch or key must NOT see the stored entry — the
         // version-epoch/content-address separation is structural.
-        assert!(try_load(&cache_root, "epoch-b", "key-a").is_none());
-        assert!(try_load(&cache_root, "epoch-a", "key-b").is_none());
+        assert!(try_load(&explicit_site(&cache_root), "epoch-b", "key-a").is_none());
+        assert!(try_load(&explicit_site(&cache_root), "epoch-a", "key-b").is_none());
 
         let _ = fs::remove_dir_all(&dir);
     }
@@ -1231,7 +1554,7 @@ mod tests {
         fs::write(&path, b"not valid json at all {{{").expect("write must succeed");
 
         assert!(
-            try_load(&cache_root, "epoch", "key").is_none(),
+            try_load(&explicit_site(&cache_root), "epoch", "key").is_none(),
             "corrupt entry must be discarded as a miss, never a panic or error propagation"
         );
 
@@ -1257,7 +1580,7 @@ mod tests {
         )
         .expect("write must succeed");
 
-        assert!(try_load(&cache_root, "epoch", "key").is_none());
+        assert!(try_load(&explicit_site(&cache_root), "epoch", "key").is_none());
 
         let _ = fs::remove_dir_all(&dir);
     }
@@ -1271,8 +1594,201 @@ mod tests {
         // explicit-cache-dir seam, never via `std::env::set_var` — see that
         // module's doc for why).
         let out_dir = Path::new("/tmp/ipe-cache-dir-does-not-need-to-exist");
-        let default = env_cache_dir(out_dir);
-        assert_eq!(default, Some(out_dir.join(".ipe-cache")));
+        let default = default_cache_site(out_dir);
+        // The default sits under `<out>/.ipe-cache/` in a partition named by
+        // the per-user salt — 64 hex digits a shipped cache cannot predict.
+        if let Some(site) = &default {
+            let in_output_with_hex_salt = match site {
+                CacheSite::InOutput { out_dir: dir, salt } => {
+                    dir.as_path() == out_dir
+                        && salt.len() == 64
+                        && salt.bytes().all(|b| b.is_ascii_hexdigit())
+                }
+                CacheSite::Explicit(_) => false,
+            };
+            assert!(
+                in_output_with_hex_salt,
+                "the default is `<out>/.ipe-cache/<hex salt>`, got {site:?}"
+            );
+        }
+    }
+
+    /// A claimed `out/` in a fresh scratch base, plus a directory outside it.
+    fn claimed_out_and_elsewhere(tag: &str) -> (PathBuf, OwnedDir, PathBuf) {
+        let base = std::env::temp_dir().join(format!("ipe-cache-{tag}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&base);
+        let elsewhere = base.join("elsewhere");
+        fs::create_dir_all(&elsewhere).expect("create the outside dir");
+        let owned = OwnedDir::claim(&base.join("out")).expect("claim out");
+        (base, owned, elsewhere)
+    }
+
+    fn in_output_site(owned: &OwnedDir) -> CacheSite {
+        CacheSite::InOutput {
+            out_dir: owned.path().to_path_buf(),
+            salt: "salt".to_owned(),
+        }
+    }
+
+    fn sample_project() -> EmittedProject {
+        let mut files = BTreeMap::new();
+        files.insert(
+            ipe_backend::RelPath::new("src/main.rs").expect("valid path"),
+            "fn main() {}".to_owned(),
+        );
+        EmittedProject {
+            files,
+            cargo_toml: "[package]\nname = \"x\"\n".to_owned(),
+            uses_webview: false,
+        }
+    }
+
+    fn plant_entry(path: &Path) {
+        fs::create_dir_all(path.parent().expect("has parent")).expect("mkdir planted entry");
+        fs::write(
+            path,
+            serde_json::to_vec(&sample_project()).expect("serialize"),
+        )
+        .expect("plant entry");
+    }
+
+    /// Every entry below `dir`, recursively.
+    fn tree(dir: &Path) -> Vec<PathBuf> {
+        let mut found = Vec::new();
+        let mut stack = vec![dir.to_path_buf()];
+        while let Some(next) = stack.pop() {
+            for entry in fs::read_dir(&next).into_iter().flatten().flatten() {
+                let path = entry.path();
+                if entry.file_type().is_ok_and(|t| t.is_dir()) {
+                    stack.push(path.clone());
+                }
+                found.push(path);
+            }
+        }
+        found
+    }
+
+    /// A marked `out/` whose `.ipe-cache` is a planted link: the build keeps
+    /// going uncached (the cache is advisory), and nothing is written or read
+    /// through the link.
+    #[cfg(unix)]
+    #[test]
+    fn in_output_cache_never_goes_through_a_planted_cache_dir_link() {
+        let (base, owned, elsewhere) = claimed_out_and_elsewhere("dir-link");
+        let link = owned.path().join(CACHE_DIR_NAME);
+        std::os::unix::fs::symlink(&elsewhere, &link).expect("plant .ipe-cache link");
+        let site = in_output_site(&owned);
+        let root = site.root(&owned).expect("root from the claimed dir");
+
+        store(&root, "epoch", "key", &sample_project());
+        assert!(
+            tree(&elsewhere).is_empty(),
+            "nothing may be written through the planted link"
+        );
+        assert!(
+            fs::symlink_metadata(&link).is_ok_and(|m| m.file_type().is_symlink()),
+            "the planted link is left as found"
+        );
+
+        plant_entry(&elsewhere.join("salt").join("epoch").join("key.json"));
+        assert!(
+            try_load(&site, "epoch", "key").is_none(),
+            "an entry behind the planted link is never loaded"
+        );
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    /// As above, with the link one level down, at the salt partition.
+    #[cfg(unix)]
+    #[test]
+    fn in_output_cache_never_goes_through_a_planted_salt_link() {
+        let (base, owned, elsewhere) = claimed_out_and_elsewhere("salt-link");
+        let cache = owned.path().join(CACHE_DIR_NAME);
+        fs::create_dir_all(&cache).expect("mkdir .ipe-cache");
+        std::os::unix::fs::symlink(&elsewhere, cache.join("salt")).expect("plant salt link");
+        let site = in_output_site(&owned);
+        let root = site.root(&owned).expect("root from the claimed dir");
+
+        store(&root, "epoch", "key", &sample_project());
+        assert!(
+            tree(&elsewhere).is_empty(),
+            "nothing may be written through the planted link"
+        );
+
+        plant_entry(&elsewhere.join("epoch").join("key.json"));
+        assert!(
+            try_load(&site, "epoch", "key").is_none(),
+            "an entry behind the planted link is never loaded"
+        );
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    /// A planted link at the entry file itself is a miss, never followed.
+    #[cfg(unix)]
+    #[test]
+    fn in_output_load_refuses_a_linked_entry_file() {
+        let (base, owned, elsewhere) = claimed_out_and_elsewhere("file-link");
+        let planted = elsewhere.join("key.json");
+        plant_entry(&planted);
+        let epoch_dir = owned.path().join(CACHE_DIR_NAME).join("salt").join("epoch");
+        fs::create_dir_all(&epoch_dir).expect("mkdir epoch");
+        std::os::unix::fs::symlink(&planted, epoch_dir.join("key.json")).expect("plant entry link");
+        assert!(try_load(&in_output_site(&owned), "epoch", "key").is_none());
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[cfg(unix)] // a cache hit needs a file identity check
+    #[test]
+    fn in_output_round_trip_stays_inside_the_claimed_dir() {
+        let (base, owned, elsewhere) = claimed_out_and_elsewhere("round-trip");
+        let site = in_output_site(&owned);
+        let root = site.root(&owned).expect("root from the claimed dir");
+        let project = sample_project();
+        store(&root, "epoch", "key", &project);
+        assert_eq!(try_load(&site, "epoch", "key"), Some(project));
+        assert!(
+            owned
+                .path()
+                .join(CACHE_DIR_NAME)
+                .join("salt")
+                .join("epoch")
+                .join("key.json")
+                .is_file()
+        );
+        assert!(tree(&elsewhere).is_empty());
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    /// An in-output site yields a writable root only from its own claimed dir.
+    #[test]
+    fn in_output_site_yields_no_root_from_another_claimed_dir() {
+        let (base, owned, _) = claimed_out_and_elsewhere("other-dir");
+        let site = CacheSite::InOutput {
+            out_dir: base.join("not-out"),
+            salt: "salt".to_owned(),
+        };
+        assert!(site.root(&owned).is_none());
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    /// An unmarked dir is not ipe's, so its cache is never read.
+    #[test]
+    fn in_output_load_needs_a_marked_output_dir() {
+        let base = std::env::temp_dir().join(format!("ipe-cache-unmarked-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&base);
+        let out = base.join("out");
+        plant_entry(
+            &out.join(CACHE_DIR_NAME)
+                .join("salt")
+                .join("epoch")
+                .join("key.json"),
+        );
+        let site = CacheSite::InOutput {
+            out_dir: out,
+            salt: "salt".to_owned(),
+        };
+        assert!(try_load(&site, "epoch", "key").is_none());
+        let _ = fs::remove_dir_all(&base);
     }
 
     // -----------------------------------------------------------------
@@ -1429,6 +1945,7 @@ mod tests {
         assert_ne!(base, edited, "a body edit must change the IR key");
     }
 
+    #[cfg(unix)] // a cache hit needs a file identity check
     #[test]
     fn ir_store_and_load_round_trip_within_one_interner() -> ipe_diagnostics::DResult<()> {
         let mut plain = Interner::new();
@@ -1440,17 +1957,23 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
 
         assert!(
-            try_load_ir(&cache_root, "epoch-a", "key-a", &interner).is_none(),
+            try_load_ir(&explicit_site(&cache_root), "epoch-a", "key-a", &interner).is_none(),
             "empty cache misses"
         );
-        store_ir(&cache_root, "epoch-a", "key-a", &program, &interner);
-        let loaded = try_load_ir(&cache_root, "epoch-a", "key-a", &interner);
+        store_ir(
+            &explicit_root(&cache_root),
+            "epoch-a",
+            "key-a",
+            &program,
+            &interner,
+        );
+        let loaded = try_load_ir(&explicit_site(&cache_root), "epoch-a", "key-a", &interner);
         assert_eq!(loaded, Some(program));
 
         // Different epoch/key must not see the entry — same structural
         // separation as the `EmittedProject` tier.
-        assert!(try_load_ir(&cache_root, "epoch-b", "key-a", &interner).is_none());
-        assert!(try_load_ir(&cache_root, "epoch-a", "key-b", &interner).is_none());
+        assert!(try_load_ir(&explicit_site(&cache_root), "epoch-b", "key-a", &interner).is_none());
+        assert!(try_load_ir(&explicit_site(&cache_root), "epoch-a", "key-b", &interner).is_none());
 
         let _ = fs::remove_dir_all(&dir);
         Ok(())
@@ -1465,6 +1988,7 @@ mod tests {
     /// resolved-name comparison — not raw `Symbol` equality, which is not
     /// expected to survive the boundary) matches a Program built fresh in
     /// the reader's own, unrelated interner.
+    #[cfg(unix)] // a cache hit needs a file identity check
     #[test]
     fn ir_cache_hit_survives_cross_process_symbol_id_drift() -> ipe_diagnostics::DResult<()> {
         let dir = std::env::temp_dir().join(format!("ipec-ir-cache-drift-{}", std::process::id()));
@@ -1478,7 +2002,13 @@ mod tests {
         }
         let program_a = sample_ir_program(&mut interner_a)?;
         let interner_a = Arc::new(Mutex::new(interner_a));
-        store_ir(&cache_root, "epoch", "key", &program_a, &interner_a);
+        store_ir(
+            &explicit_root(&cache_root),
+            "epoch",
+            "key",
+            &program_a,
+            &interner_a,
+        );
 
         // "Process B" (the reader): DIFFERENT noise, different count/order.
         let mut interner_b = Interner::new();
@@ -1486,8 +2016,8 @@ mod tests {
             interner_b.intern(noise)?;
         }
         let interner_b = Arc::new(Mutex::new(interner_b));
-        let program_b =
-            try_load_ir(&cache_root, "epoch", "key", &interner_b).expect("must be a cache hit");
+        let program_b = try_load_ir(&explicit_site(&cache_root), "epoch", "key", &interner_b)
+            .expect("must be a cache hit");
 
         // "Process C" (ground truth): independent construction, never
         // touches the cache at all.
@@ -1525,7 +2055,7 @@ mod tests {
 
         let interner = Arc::new(Mutex::new(Interner::new()));
         assert!(
-            try_load_ir(&cache_root, "epoch", "key", &interner).is_none(),
+            try_load_ir(&explicit_site(&cache_root), "epoch", "key", &interner).is_none(),
             "corrupt entry must be discarded as a miss, never a panic or error propagation"
         );
 
@@ -1554,7 +2084,7 @@ mod tests {
 
         let interner = Arc::new(Mutex::new(Interner::new()));
         assert!(
-            try_load_ir(&cache_root, "epoch", "key", &interner).is_none(),
+            try_load_ir(&explicit_site(&cache_root), "epoch", "key", &interner).is_none(),
             "a poisoned Symbol text must be rejected — whole entry discarded, never partially trusted"
         );
         // The poisoned text must never have reached the interner.

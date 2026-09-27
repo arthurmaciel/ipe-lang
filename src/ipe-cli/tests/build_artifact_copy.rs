@@ -21,10 +21,11 @@ type BoxError = Box<dyn std::error::Error + Send + Sync + 'static>;
 const SRC_A: &str = "module Main exposing (main)\n\nimport Ipe.Io\n\nmain = Io.println \"AAA\"\n";
 const SRC_B: &str = "module Main exposing (main)\n\nimport Ipe.Io\n\nmain = Io.println \"BBB\"\n";
 
-/// `ipe build <entry> --out <project>/out/rust`, with `CARGO_TARGET_DIR` forced
-/// to a SHARED directory OUTSIDE the project, and the emitted crate name pinned
-/// so both projects collide on the same shared-target path. Returns the
-/// project's `out/bin/<name>` path.
+/// Run `ipe build <entry> --out <project>/out` against a shared target.
+///
+/// `CARGO_TARGET_DIR` is forced to a SHARED directory OUTSIDE the project, and
+/// the emitted crate name pinned so both projects collide on the same
+/// shared-target path. Returns the project's `out/bin/<name>` path.
 fn build_into_shared_target(
     tag: &str,
     src: &str,
@@ -37,12 +38,13 @@ fn build_into_shared_target(
     let runtime_dir = ipe::resolve_runtime()
         .map_err(|e| -> BoxError { format!("runtime dir must resolve: {e}").into() })?;
 
-    let project = std::env::temp_dir().join(format!("ipe_build_artifact_copy_{tag}"));
+    let project = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
+        .join(format!("ipe_build_artifact_copy_{tag}"));
     let _ = fs::remove_dir_all(&project);
     fs::create_dir_all(&project)?;
     let entry = project.join("Main.ipe");
     fs::write(&entry, src)?;
-    let out_dir = project.join("out").join("rust");
+    let out_dir = project.join("out");
 
     let status = std::process::Command::new(ipe_bin)
         .args(["build", &entry.to_string_lossy(), "--out"])
@@ -85,7 +87,8 @@ fn build_copies_the_artifact_into_project_out_bin() -> Result<(), BoxError> {
         eprintln!("skipping (ipe binary not present — nextest archive on another host)");
         return Ok(());
     }
-    let shared = std::env::temp_dir().join("ipe_build_artifact_copy_sharedA");
+    let shared = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
+        .join("ipe_build_artifact_copy_sharedA");
     let _ = fs::remove_dir_all(&shared);
 
     let copied = build_into_shared_target("solo", SRC_A, &shared)?;
@@ -130,7 +133,8 @@ fn a_second_same_named_project_does_not_clobber_the_first_out_bin() -> Result<()
         eprintln!("skipping (ipe binary not present — nextest archive on another host)");
         return Ok(());
     }
-    let shared = std::env::temp_dir().join("ipe_build_artifact_copy_sharedAB");
+    let shared = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
+        .join("ipe_build_artifact_copy_sharedAB");
     let _ = fs::remove_dir_all(&shared);
 
     // Project A → out/bin/app is A's binary.

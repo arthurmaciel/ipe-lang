@@ -64,7 +64,8 @@ fn ipe_build_into_shared(
         .env("NO_COLOR", "1")
         .status()
         .expect("ipe build must spawn");
-    (out_dir, status.success())
+    // `--out` names the output root; the emitted crate is its `rust/` area.
+    (out_dir.join("rust"), status.success())
 }
 
 /// Re-run `cargo build` on an already-emitted project into `shared_target`,
@@ -102,7 +103,8 @@ fn probe_shared_target_never_masks_a_broken_emit() {
         return;
     }
 
-    let root = std::env::temp_dir().join(format!("ipe_probe_soundness_{}", std::process::id()));
+    let root = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
+        .join(format!("ipe_probe_soundness_{}", std::process::id()));
     let _ = fs::remove_dir_all(&root);
     let shared_target = root.join("shared-target");
 

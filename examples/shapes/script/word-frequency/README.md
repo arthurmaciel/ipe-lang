@@ -6,6 +6,6 @@ every step returns a new list rather than mutating the last. The worked example
 for the [`Ipe.List` guide](../../../../docs/guide/list.md).
 
 ```
-ipe build package.ipe --out out/rust
+ipe build package.ipe
 cargo run --manifest-path out/rust/Cargo.toml
 ```

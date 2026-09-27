@@ -22,7 +22,7 @@ pub use css_value_safety::css_value_is_safe;
 
 pub mod reserved_namespace;
 pub use reserved_namespace::{
-    BLESSED_PUBLISHER, RESERVED_MODULE_PREFIXES, RESERVED_PACKAGE_PREFIXES, is_blessed_publisher,
+    BLESSED_PUBLISHER, RESERVED_MODULE_PREFIXES, RESERVED_PACKAGE_PREFIXES,
     is_reserved_module_path, reserved_package_prefix_of, reserved_prefix_of,
 };
 
@@ -2901,6 +2901,11 @@ pub enum StdlibKernel {
     DbDeleteWhere,
     /// `Db.updateWhere : Db -> String -> List (String, SqlField) -> SqlFragment -> Task Error Int`
     DbUpdateWhere,
+    /// `Db.upsertFields : Db -> String -> List String -> List (String, SqlField) -> Task Error Int`
+    /// — `INSERT … ON CONFLICT (<target>) DO UPDATE SET c = excluded.c, …`
+    /// (update-in-place on both backends); the `List String` is the conflict
+    /// target.
+    DbUpsertFields,
     // ── Ipe.Secret — opaque secret-string wrapper ─────────
     // The ONLY public constructor: every `Secret` value traces back to one of
     // these calls. Never derivable from a bare `String` implicitly.
@@ -3149,6 +3154,10 @@ pub enum StdlibKernel {
     UrlQuery,
     /// `Url.fragment : Url -> Maybe String` — the fragment (no `#`), or `Nothing`.
     UrlFragment,
+    /// `Url.schemeShown : Url -> String` — the scheme as an error message may
+    /// show it: a well-known scheme quoted, any other withheld (a user name
+    /// can parse as the scheme). Private to `Ipe.Url`; backs `checkScheme`.
+    UrlSchemeShown,
     /// `Url.buildQuery : List (String, String) -> String` — the injection-safe
     /// query-string builder; every key/value is percent-encoded.
     UrlBuildQuery,
@@ -5074,6 +5083,7 @@ impl StdlibKernel {
             ),
             Self::DbDeleteWhere => d("Db", "deleteWhere", 3, Db, "db_delete_where"),
             Self::DbUpdateWhere => d("Db", "updateWhere", 4, Db, "db_update_where"),
+            Self::DbUpsertFields => d("Db", "upsertFields", 4, Db, "db_upsert_fields"),
             // ── Ipe.Secret — opaque secret-string wrapper ─
             Self::SecretFromString => d("Secret", "fromString", 1, Pure, "secret_from_string"),
             Self::SecretReveal => d("Secret", "reveal", 1, Pure, "secret_reveal"),
@@ -5236,6 +5246,7 @@ impl StdlibKernel {
             Self::UrlPath => d("Url", "path", 1, Pure, "url_path"),
             Self::UrlQuery => d("Url", "query", 1, Pure, "url_query"),
             Self::UrlFragment => d("Url", "fragment", 1, Pure, "url_fragment"),
+            Self::UrlSchemeShown => d("Url", "schemeShown", 1, Pure, "url_scheme_shown"),
             Self::UrlBuildQuery => d("Url", "buildQuery", 1, Pure, "url_build_query"),
             Self::UrlRelativeParse => d("Url", "relative", 1, Pure, "url_relative"),
             Self::UrlRelativePath => d("Url", "relativePath", 1, Pure, "url_relative_path"),
@@ -6424,6 +6435,7 @@ impl StdlibKernel {
         Self::DbFindProjectionOrdered,
         Self::DbDeleteWhere,
         Self::DbUpdateWhere,
+        Self::DbUpsertFields,
         Self::SecretFromString,
         Self::SecretReveal,
         Self::SecretUse,
@@ -6514,6 +6526,7 @@ impl StdlibKernel {
         Self::UrlPath,
         Self::UrlQuery,
         Self::UrlFragment,
+        Self::UrlSchemeShown,
         Self::UrlBuildQuery,
         Self::UrlRelativeParse,
         Self::UrlRelativePath,
@@ -8117,6 +8130,13 @@ impl StdlibKernel {
         const STRING_TO_UPDATE_FIELDS: TyShape =
             TyShape::Fun(&STRING, &LIST_SQLVALUE_TO_LIST_SQLFIELD_TO_TASK_INT);
         const DB_UPDATE_FIELDS: TyShape = TyShape::Fun(&DB, &STRING_TO_UPDATE_FIELDS);
+        // `upsertFields : Db -> String -> List String
+        //                 -> List (String, SqlField) -> Task Int`.
+        const LIST_STRING_TO_LIST_SQLFIELD_TO_TASK_INT: TyShape =
+            TyShape::Fun(&LIST_STRING, &LIST_SQLFIELD_TO_TASK_INT);
+        const STRING_TO_UPSERT_FIELDS: TyShape =
+            TyShape::Fun(&STRING, &LIST_STRING_TO_LIST_SQLFIELD_TO_TASK_INT);
+        const DB_UPSERT_FIELDS: TyShape = TyShape::Fun(&DB, &STRING_TO_UPSERT_FIELDS);
         // Db.exec / query / findWhere / deleteWhere / etc. (opaque Db + Dict rows,
         // no record).
         // `Db.connect : () -> Task Db`.
@@ -9921,7 +9941,9 @@ impl StdlibKernel {
 
             // ── Url. ──
             Self::UrlFromString => Some(&STRING_TO_RESULT_ERR_URL),
-            Self::UrlToString | Self::UrlScheme | Self::UrlPath => Some(&URL_TO_STRING),
+            Self::UrlToString | Self::UrlScheme | Self::UrlSchemeShown | Self::UrlPath => {
+                Some(&URL_TO_STRING)
+            }
             Self::UrlHost | Self::UrlQuery | Self::UrlFragment => Some(&URL_TO_MAYBE_STRING),
             Self::UrlPort => Some(&URL_TO_MAYBE_INT),
             Self::UrlBuildQuery => Some(&URL_BUILD_QUERY),
@@ -10066,6 +10088,7 @@ impl StdlibKernel {
             Self::DbFindProjectionOrdered => Some(&DB_FIND_PROJECTION_ORDERED),
             Self::DbDeleteWhere => Some(&DB_DELETE_WHERE),
             Self::DbUpdateWhere => Some(&DB_UPDATE_WHERE),
+            Self::DbUpsertFields => Some(&DB_UPSERT_FIELDS),
             Self::DbInsertFields => Some(&DB_INSERT_FIELDS),
             Self::DbUpdateFields => Some(&DB_UPDATE_FIELDS),
             Self::DbInsertFieldsReturning => Some(&DB_INSERT_FIELDS_RETURNING),
@@ -10981,6 +11004,7 @@ impl StdlibKernel {
             | Self::DbFindProjectionOrdered
             | Self::DbDeleteWhere
             | Self::DbUpdateWhere
+            | Self::DbUpsertFields
             | Self::DbDefaultMigration
             | Self::DbDecString
             | Self::DbDecInt
@@ -12071,6 +12095,7 @@ impl StdlibKernel {
             | Self::UrlPath
             | Self::UrlQuery
             | Self::UrlFragment
+            | Self::UrlSchemeShown
             | Self::UrlBuildQuery
             | Self::UrlRelativeParse
             | Self::UrlRelativePath
@@ -13047,6 +13072,7 @@ impl StdlibKernel {
                 | Self::UrlPath
                 | Self::UrlQuery
                 | Self::UrlFragment
+                | Self::UrlSchemeShown
                 | Self::UrlBuildQuery
                 | Self::UrlRelativeParse
                 | Self::UrlRelativePath
@@ -14815,6 +14841,8 @@ mod tests {
             StdlibKernel::UrlFromString,
             StdlibKernel::UrlToString,
             StdlibKernel::UrlScheme,
+            // `Url.checkScheme` names a refused scheme through this, client-side too.
+            StdlibKernel::UrlSchemeShown,
             // `Attributes.linkTarget` / `href` parse a relative reference client-side
             // (the same `url` crate wasm build) to render a Web-shape `href`.
             StdlibKernel::UrlRelativeParse,

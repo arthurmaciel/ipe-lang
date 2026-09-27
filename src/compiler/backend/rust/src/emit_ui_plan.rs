@@ -1432,6 +1432,7 @@ pub const fn appearance_literal_args(k: KernelFn) -> &'static [(usize, LitKind)]
         | KernelFn::DbFindProjectionOrdered
         | KernelFn::DbDeleteWhere
         | KernelFn::DbUpdateWhere
+        | KernelFn::DbUpsertFields
         | KernelFn::SecretFromString
         | KernelFn::SecretReveal
         | KernelFn::SecretUse
@@ -1512,6 +1513,7 @@ pub const fn appearance_literal_args(k: KernelFn) -> &'static [(usize, LitKind)]
         | KernelFn::UrlPath
         | KernelFn::UrlQuery
         | KernelFn::UrlFragment
+        | KernelFn::UrlSchemeShown
         | KernelFn::UrlBuildQuery
         | KernelFn::UrlRelativeParse
         | KernelFn::UrlRelativePath

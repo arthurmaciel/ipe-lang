@@ -718,15 +718,30 @@ pub(crate) fn cli_run_cmd_tracked<M: Send + 'static>(
 /// `crate::tui::render_lines_view`, which shares the terminal runtime module
 /// with `tui_app`. A `Cli.tea` program selects the `tui` feature, so a plain
 /// `tokio` program (web/server, no terminal shape) never compiles this entry.
+///
+/// A `--debugger` build takes the program's session `codec` too: the recorder
+/// dumps the trace and typed log through it on exit, and with
+/// `IPE_DEBUGGER_REPLAY` set the loop never starts — the named log is replayed
+/// instead (see [`crate::debugger::session_log`]).
 #[cfg(all(not(target_arch = "wasm32"), feature = "tui"))]
-pub fn console_app<Model, Msg, E, FInit, FUpdate, FView, FSubs>(
+pub fn console_app<
+    Model,
+    Msg,
+    E,
+    FInit,
+    FUpdate,
+    FView,
+    FSubs,
+    #[cfg(feature = "debugger")] Codec: crate::debugger::session_log::SessionCodec<Msg, Model> + Send + 'static,
+>(
     init: FInit,
     update: FUpdate,
     view: FView,
     subscriptions: FSubs,
+    #[cfg(feature = "debugger")] codec: Codec,
 ) -> IpeTask<E, ()>
 where
-    E: Send + 'static,
+    E: From<String> + Send + 'static,
     Model: Clone + Send + crate::stringify::IpeStringify + 'static,
     Msg: Clone + Send + crate::stringify::IpeStringify + 'static,
     FInit: Fn(()) -> (Model, IpeCmd<Msg>) + Send + 'static,
@@ -736,6 +751,18 @@ where
 {
     Box::pin(async move {
         use std::io::Write;
+        // A replay run folds the recorded log and never starts the live loop:
+        // no stdin is read, no `Cmd` (not even `init`'s) and no `Sub` runs.
+        #[cfg(feature = "debugger")]
+        if let Some(log) = crate::debugger::session_log::replay_request() {
+            let (init_model, _unrun) = init(());
+            return match crate::debugger::session_log::replay_file(
+                &codec, &log, init_model, &update,
+            ) {
+                Ok(()) => ok_res(()),
+                Err(refusal) => IpeResult::Err(E::from(refusal.to_string())),
+            };
+        }
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<CliEvent<Msg>>();
 
         // Blocking stdin reader → raw Line events, then Eof. The line handlers are
@@ -867,11 +894,11 @@ where
         }
         submgr.stop_all();
         let _ = std::io::stdout().write_all(b"\n");
-        // Dump the recorded session's portable replay log to the
-        // `IPE_DEBUGGER_RECORD` destination (fail-closed to plain text), a no-op
-        // when that env var is unset. The recorder ring already bounds the log.
+        // Dump the recorded session (plain trace + typed log) to the
+        // `IPE_DEBUGGER_RECORD` destination, a no-op when that env var is unset.
+        // The recorder ring already bounds the log.
         #[cfg(feature = "debugger")]
-        crate::debugger::record_sink::dump_replay_log(&recorder, &update);
+        crate::debugger::record_sink::dump_session(&recorder, &update, &codec);
         ok_res(())
     })
 }
@@ -1112,14 +1139,27 @@ fn worker_spawn_subs<M: Clone + Send + 'static>(
 /// one-shot effect. An effect-only worker runs until its effects drain; a
 /// subscription worker runs until its subscriptions become `Sub.none`. A worker
 /// whose `init` issues neither an effect nor a subscription completes at once.
+///
+/// A `--debugger` build takes the program's session `codec` too, exactly as
+/// `console_app` does: record on exit, or replay instead of running when
+/// `IPE_DEBUGGER_REPLAY` is set.
 #[cfg(all(feature = "tokio", not(target_arch = "wasm32")))]
-pub fn worker_app<Model, Msg, E, FInit, FUpdate, FSubs>(
+pub fn worker_app<
+    Model,
+    Msg,
+    E,
+    FInit,
+    FUpdate,
+    FSubs,
+    #[cfg(feature = "debugger")] Codec: crate::debugger::session_log::SessionCodec<Msg, Model> + Send + 'static,
+>(
     init: FInit,
     update: FUpdate,
     subscriptions: FSubs,
+    #[cfg(feature = "debugger")] codec: Codec,
 ) -> IpeTask<E, ()>
 where
-    E: Send + 'static,
+    E: From<String> + Send + 'static,
     Model: Clone + Send + crate::stringify::IpeStringify + 'static,
     Msg: Clone + Send + crate::stringify::IpeStringify + 'static,
     FInit: Fn(()) -> (Model, IpeCmd<Msg>) + Send + 'static,
@@ -1127,6 +1167,18 @@ where
     FSubs: Fn(Model) -> IpeSub<Msg> + Send + 'static,
 {
     Box::pin(async move {
+        // A replay run folds the recorded log and never starts the live loop:
+        // no `Cmd` (not even `init`'s) and no `Sub` runs.
+        #[cfg(feature = "debugger")]
+        if let Some(log) = crate::debugger::session_log::replay_request() {
+            let (init_model, _unrun) = init(());
+            return match crate::debugger::session_log::replay_file(
+                &codec, &log, init_model, &update,
+            ) {
+                Ok(()) => ok_res(()),
+                Err(refusal) => IpeResult::Err(E::from(refusal.to_string())),
+            };
+        }
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<WorkerEvent<Msg>>();
         let outstanding = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
 
@@ -1147,7 +1199,7 @@ where
         // event can ever arrive — terminate rather than block forever on `recv`.
         if live_subs == 0 && outstanding.load(std::sync::atomic::Ordering::SeqCst) == 0 {
             #[cfg(feature = "debugger")]
-            crate::debugger::record_sink::dump_replay_log(&recorder, &update);
+            crate::debugger::record_sink::dump_session(&recorder, &update, &codec);
             return ok_res(());
         }
 
@@ -1180,12 +1232,11 @@ where
         for h in sub_handles.drain(..) {
             h.abort();
         }
-        // Dump the recorded session's portable replay log to the
-        // `IPE_DEBUGGER_RECORD` destination (fail-closed to plain text), a no-op
-        // when that env var is unset. A worker has no view surface, so this
-        // replay/inspect dump is its only debugger output.
+        // Dump the recorded session (plain trace + typed log) to the
+        // `IPE_DEBUGGER_RECORD` destination, a no-op when that env var is unset.
+        // A worker has no view surface, so this dump is its only debugger output.
         #[cfg(feature = "debugger")]
-        crate::debugger::record_sink::dump_replay_log(&recorder, &update);
+        crate::debugger::record_sink::dump_session(&recorder, &update, &codec);
         ok_res(())
     })
 }
@@ -1412,10 +1463,19 @@ mod worker_appearance_na_tests {
     fn worker_entry_has_no_view_or_appearance_argument() {
         // The exact view-less arity the worker entry must keep, named so the
         // shape is a single declaration rather than an inline complex type.
+        #[cfg(not(feature = "debugger"))]
         type WorkerEntry = fn(
             fn(()) -> (WModel, IpeCmd<WMsg>),
             fn(WMsg, WModel) -> (WModel, IpeCmd<WMsg>),
             fn(WModel) -> IpeSub<WMsg>,
+        ) -> IpeTask<crate::error::IpeError, ()>;
+        // With the debugger the only extra argument is the session codec.
+        #[cfg(feature = "debugger")]
+        type WorkerEntry = fn(
+            fn(()) -> (WModel, IpeCmd<WMsg>),
+            fn(WMsg, WModel) -> (WModel, IpeCmd<WMsg>),
+            fn(WModel) -> IpeSub<WMsg>,
+            crate::debugger::session_log::TraceOnly,
         ) -> IpeTask<crate::error::IpeError, ()>;
         // A fn item of that arity: binding `worker_app` to it is the assertion.
         let entry: WorkerEntry = worker_app;

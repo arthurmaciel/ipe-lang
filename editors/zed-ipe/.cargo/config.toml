@@ -1,0 +1,8 @@
+# Zed compiles this crate for wasm32-wasip2 under the user's global cargo
+# config. Host-only link flags set there (e.g. `-fuse-ld=mold` in
+# `build.rustflags`) break the wasm link. A target's `rustflags` replace
+# `build.rustflags` outright, so this entry pins the wasm flags; it must stay
+# non-empty (cargo treats an empty list as unset). `debuginfo=0` is the
+# release default, i.e. a no-op.
+[target.wasm32-wasip2]
+rustflags = ["-C", "debuginfo=0"]

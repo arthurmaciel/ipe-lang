@@ -2499,6 +2499,18 @@ impl<'a> EmitCtx<'a> {
         self.uses_http || self.uses_email
     }
 
+    /// `true` when the emitted crate reaches the `ssrf` runtime module — so
+    /// `project::assemble_project_files` declares it and adds tokio's `"net"`
+    /// feature, which its resolver (`tokio::net::lookup_host`) needs.
+    ///
+    /// Reached by every surface that dials a network host: the HTTP client
+    /// ([`Self::reaches_http_client`]), the WebSocket client, and the database.
+    /// This is the single source of truth shared by the `mod.rs` append and the
+    /// manifest augmenter, so the module is never declared without the feature.
+    pub(crate) const fn reaches_ssrf(&self) -> bool {
+        self.reaches_http_client() || self.uses_websocket || self.uses_db
+    }
+
     /// `true` when the emitted crate reaches the `jwt` runtime module — so
     /// `project::assemble_project_files` declares it and adds the `jsonwebtoken`
     /// dependency.
@@ -2746,7 +2758,7 @@ impl<'a> EmitCtx<'a> {
     /// `http_client.rs` targets a typed `crate::url::Url`), the WebSocket
     /// client ([`Self::uses_websocket`], whose `ws_client.rs` calls
     /// `::url::Url::parse`), or the Db surface ([`Self::uses_db`], whose
-    /// `db.rs::build_pool` applies the SSRF host gate via `::url::Url::parse`
+    /// `db.rs::VettedPool::connect` applies the SSRF host gate via `::url::Url::parse`
     /// and `ssrf.rs` parses URLs with `url::Url`). The shared `ssrf` validators
     /// (`use url::Url`) are declared exactly when any of these is, so this union
     /// covers them too. This is the single source of truth shared by the manifest
@@ -2845,6 +2857,19 @@ impl<'a> EmitCtx<'a> {
             .get(&(home.clone(), sym))
             .copied()
             .unwrap_or(true)
+    }
+
+    /// Does this program emit `serde` derives on its serde-legal types?
+    ///
+    /// Both browser shapes route seal types through serde (the Web session
+    /// store, the `CustomElement` down/up seam), and a `--debugger` build encodes
+    /// a cli/worker session's `Msg` (and, when legal, `Model`) into the typed
+    /// session log `ipe run --replay` reads. The derive only ever lands on a
+    /// type the serde fixpoint proved derivable, so widening this gate is
+    /// cargo-buildable by construction. The ONE predicate every serde derive
+    /// site and the app-crate `serde` dependency read, so they cannot drift.
+    pub(crate) const fn derives_serde(&self) -> bool {
+        self.uses_web || self.uses_webview || self.debugger
     }
 
     /// Is user enum `sym`'s rendered Rust type `Clone` (every variant payload
