@@ -280,12 +280,15 @@ fn scan_stub_commands() -> Arc<BTreeSet<String>> {
             let src_root = workspace_path("src/ipe-cli/src");
             let mut stub_commands = BTreeSet::new();
 
-            // Collect every Rust production source file (not tests/).
+            // Collect every Rust production source file: confirmed test
+            // modules and the coverage probes themselves are excluded.
             let files: Vec<PathBuf> = rs_files_under(&src_root)
                 .into_iter()
                 .filter(|p| {
-                    let s = p.to_string_lossy().replace('\\', "/");
-                    !s.contains("/tests/") && !s.contains("coverage/")
+                    p.strip_prefix(&src_root).ok().is_none_or(|rel| {
+                        !panic_scan::is_verified_test_path(&src_root, rel)
+                            && !rel.starts_with("coverage")
+                    })
                 })
                 .collect();
 

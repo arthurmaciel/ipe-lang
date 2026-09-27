@@ -40,8 +40,12 @@ impl AspectCheck<CompilerCrate> for TestedColumn {
 
 // ── no-panic ──────────────────────────────────────────────────────────────────
 
-/// Column **no-panic**: no `unwrap()`, `expect(`, `panic!(`, or `.index(` in
-/// production source (outside `#[cfg(test)]` / `mod tests { … }` blocks).
+/// Column **no-panic**: no `unwrap()`, `expect(`, `panic!(`, or `.index(` in production source.
+///
+/// Production source excludes inline `#[cfg(test)]` / `mod tests { … }` blocks
+/// and the out-of-line test modules [`panic_scan::is_verified_test_path`]
+/// confirms (a `tests/` directory or `tests.rs` declared `#[cfg(test)] mod
+/// tests;`); an unconfirmed test module stays in scope.
 ///
 /// Panics in production code violate the soundness principle: a well-typed Ipê
 /// program must never trigger a runtime failure in the generated Rust, and the
@@ -58,6 +62,12 @@ impl AspectCheck<CompilerCrate> for NoPanicColumn {
         let mut violations: Vec<String> = Vec::new();
 
         for path in &files {
+            let is_test_module = path
+                .strip_prefix(item.src_path.as_path())
+                .is_ok_and(|rel| panic_scan::is_verified_test_path(&item.src_path, rel));
+            if is_test_module {
+                continue;
+            }
             let Ok(src) = std::fs::read_to_string(path) else {
                 continue;
             };
