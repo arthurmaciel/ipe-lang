@@ -202,6 +202,10 @@ pub struct WatchOptions {
     /// a pre-compiled dependency tree instead of cold-building it; the E2E watch
     /// suite uses it to forward the CI shard's warm shared target.
     pub target_dir: Option<PathBuf>,
+    /// The output area `out_dir` names, when it sits in a CLI output root.
+    /// Each rebuild claims it through the root's proof; `None` claims the
+    /// `out_dir` path itself.
+    pub out_area: Option<crate::output_dir::AreaClaim>,
 }
 
 impl WatchOptions {
@@ -221,6 +225,7 @@ impl WatchOptions {
             reset_state: false,
             debugger: false,
             target_dir: None,
+            out_area: None,
         }
     }
 }
@@ -1486,6 +1491,7 @@ fn run_inner(
                         if let Err(e) = write_emitted_project(
                             &emitted,
                             &opts.out_dir,
+                            opts.out_area.as_ref(),
                             &opts.runtime_dir,
                             None,
                             false,

@@ -339,10 +339,12 @@ pub fn capfloor_static_source(profile: &SandboxProfile) -> String {
 ///
 /// # Errors
 ///
-/// [`CliError::OutputRefused`] when `out_dir` is not ipe-owned or holds a
-/// symlink on the way; [`CliError::Io`] on any filesystem failure.
-pub fn write_build_artifacts(out_dir: &Path, profile: &SandboxProfile) -> Result<(), CliError> {
-    let crate_dir = crate::output_dir::OwnedDir::claim(out_dir)?;
+/// [`CliError::OutputRefused`] when `crate_dir` was replaced since its claim or
+/// holds a symlink on the way; [`CliError::Io`] on any filesystem failure.
+pub fn write_build_artifacts(
+    crate_dir: &crate::output_dir::OwnedDir,
+    profile: &SandboxProfile,
+) -> Result<(), CliError> {
     // 1. The ipe.profile mirror.
     crate_dir
         .path_to("ipe.profile")?

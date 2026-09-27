@@ -110,6 +110,11 @@ pub struct BuildOptions {
     /// when [`Self::webview_host`]. Filled in `build_project_with_options` once
     /// the manifest is parsed; `None` selects the built-in fallback window.
     pub webview_window: Option<ipe_backend_rust::WebViewWindow>,
+    /// The output area the emitted crate is written to, when the build writes
+    /// into a CLI output root. The emit claims it through the root's proof, so
+    /// a level swapped after the path was computed cannot redirect the write.
+    /// `None` claims the `out_dir` path itself.
+    pub out_area: Option<crate::output_dir::AreaClaim>,
 }
 
 /// Select the emit model from the environment.
@@ -792,6 +797,7 @@ pub fn compile_modules_observed(
             write_emitted_project(
                 &emitted,
                 out_dir,
+                options.out_area.as_ref(),
                 runtime_dir,
                 options.static_plan.as_ref(),
                 options.tree_shake_vendored,
@@ -858,6 +864,7 @@ pub fn compile_modules_observed(
                 let written = write_emitted_project(
                     &emitted,
                     out_dir,
+                    options.out_area.as_ref(),
                     runtime_dir,
                     options.static_plan.as_ref(),
                     options.tree_shake_vendored,
@@ -920,6 +927,7 @@ pub fn compile_modules_observed(
     let written = write_emitted_project(
         &emitted,
         out_dir,
+        options.out_area.as_ref(),
         runtime_dir,
         options.static_plan.as_ref(),
         options.tree_shake_vendored,
@@ -1840,15 +1848,19 @@ pub fn rust_raw_str_literal(s: &str) -> String {
 /// never leak from an earlier static build into later ones.
 ///
 /// Returns the claimed `out_dir`, the only source of a writable in-output
-/// build-cache root.
+/// build-cache root. With `out_area`, `out_dir` is claimed as that area of its
+/// output root, the root's disjointness from the project proven again.
 ///
 /// # Errors
 /// [`CliError::Io`] on any filesystem failure; [`CliError::StaticRefusal`]
 /// for a webview shape under a static plan; [`CliError::Pipeline`] on a
-/// backend-invariant breach (manifest anchor drift).
+/// backend-invariant breach (manifest anchor drift);
+/// [`CliError::OutputRefused`] when `out_dir` cannot be claimed or is not the
+/// directory `out_area` names.
 pub fn write_emitted_project(
     emitted: &ipe_backend::EmittedProject,
     out_dir: &Path,
+    out_area: Option<&crate::output_dir::AreaClaim>,
     runtime_dir: &Path,
     static_plan: Option<&ipe_backend_rust::static_build::StaticPlan>,
     tree_shake_vendored: bool,
@@ -1873,7 +1885,10 @@ pub fn write_emitted_project(
     }
     // The reconcile below prunes and overwrites, so it runs only in a directory
     // proven ipe-owned — a user tree passed as `out_dir` is refused untouched.
-    let crate_dir = crate::output_dir::OwnedDir::claim(out_dir)?;
+    let crate_dir = match out_area {
+        Some(area) => area.claim_at(out_dir)?,
+        None => OwnedDir::claim(out_dir)?,
+    };
     reconcile_emitted_project(&manifest, &crate_dir)?;
     if static_plan.is_none() {
         remove_stale_static_config(&crate_dir)?;
