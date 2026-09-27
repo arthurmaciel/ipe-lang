@@ -659,7 +659,8 @@ fn added_report(
 mod tests {
     use super::{
         added_report, cache_base_from, dep_cache_dir, escape_cache_dir, fetch_git_into,
-        package_cache_dir, resolve_and_remove, resolve_escape, verify_hash, verify_lockfile_hashes,
+        index_root_from, package_cache_dir, resolve_and_remove, resolve_escape, verify_hash,
+        verify_lockfile_hashes,
     };
     use crate::CliError;
     use crate::index::{CommitId, PinnedRev, Sha256Hex, SourceUrl};
