@@ -29391,6 +29391,72 @@ mod tests {
         assert!(reject(&bound_once).is_ok());
     }
 
+    /// A sequenced task whose capture-clone rewrite would clone a non-Clone
+    /// effect carrier fails closed with IPE-L0135; an eager borrow stays accepted.
+    #[test]
+    fn nonclone_taskseq_capture_clone_fails_closed() {
+        use ipe_diagnostics::Feature;
+        use ipe_ir::{CallPin, Callee, Expr, FuncId, IrType, KernelFn, ModPath, OnFormKind};
+
+        use super::{CloneEnv, reject_nonclone_value_reuse, unsupported};
+
+        let mut interner = Interner::new();
+        let main = interner.intern("Main").expect("intern");
+        let wrap = interner.intern("Wrap").expect("intern");
+        let w = interner.intern("w").expect("intern");
+        let tag = interner.intern("tag").expect("intern");
+        let span = Span::DUMMY;
+        let transparent = BTreeSet::new();
+        let env = CloneEnv {
+            interner: &interner,
+            transparent_ffi: &transparent,
+        };
+        let wrap_task = IrType::Enum {
+            home: ModPath(vec![main]),
+            name: wrap,
+            args: vec![IrType::Task(Box::new(IrType::Int))],
+        };
+        let read_tag = || Expr::Access {
+            record: Box::new(Expr::Var(w)),
+            field: tag,
+            field_ty: IrType::Int,
+        };
+        let call = |callee: Callee, args: Vec<Expr>| Expr::Call {
+            callee,
+            args,
+            pin: CallPin::None,
+            on_form: OnFormKind::NotForm,
+        };
+        let user_call = |args: Vec<Expr>| call(Callee::Func(FuncId::from_raw(0)), args);
+        let kernel_call = |args: Vec<Expr>| call(Callee::Kernel(KernelFn::StringAppend), args);
+        let seq = |effect: Expr, rest: Expr| Expr::TaskSeq {
+            effect: Box::new(effect),
+            rest: Box::new(rest),
+        };
+        let reject = |body: &Expr| reject_nonclone_value_reuse(env, w, &wrap_task, body, span);
+
+        // `f w.tag` then `g w`: the eager read borrows before the move — accepted.
+        let eager_read = seq(user_call(vec![read_tag()]), user_call(vec![Expr::Var(w)]));
+        assert!(reject(&eager_read).is_ok());
+
+        // A kernel argument may be deferred into a `move` closure, so the
+        // rewrite clones `w` there — rejected.
+        let kernel_read = seq(kernel_call(vec![read_tag()]), user_call(vec![Expr::Var(w)]));
+        let err = reject(&kernel_read).expect_err("clone of a non-Clone carrier must be rejected");
+        assert_eq!(err, unsupported(span, Feature::NonCloneValueReuse));
+
+        // A continuation that rebinds `w` captures a different value — accepted.
+        let shadowed = seq(
+            kernel_call(vec![read_tag()]),
+            Expr::Lambda {
+                params: vec![(w, IrType::Int)],
+                ret: IrType::Int,
+                body: Box::new(user_call(vec![Expr::Var(w)])),
+            },
+        );
+        assert!(reject(&shadowed).is_ok());
+    }
+
     /// A reuse HIDDEN inside an `Access`/`Update` record base must not slip past
     /// the reuse gates. The two counters treat a BARE base differently by design:
     ///

@@ -891,6 +891,11 @@ pub(super) fn reject_nonclone_value_reuse(
     {
         return Ok(());
     }
+    // A sequenced task whose effect the emitter must rewrite to `sym.clone()`
+    // (so the continuation can still capture `sym`) has no `Clone` impl to call.
+    if ipe_ir::seq_clone::seq_rewrite_clones_symbol(sym, body) {
+        return Err(super::unsupported(span, Feature::NonCloneValueReuse));
+    }
     let consumes = super::count_value_consumes(sym, body);
     if consumes > 1 {
         return Err(super::unsupported(span, Feature::NonCloneValueReuse));
