@@ -1845,7 +1845,7 @@ mod tests {
     fn cargo_config_path_honours_an_absolute_cargo_home_and_defaults_when_unset_or_empty() {
         let home = PathBuf::from("/home/u");
         let got = cargo_config_path_from(Some("/opt/cargo".into()), Some(home.clone()));
-        assert!(matches!(got, Ok(p) if p == PathBuf::from("/opt/cargo/config.toml")));
+        assert!(matches!(got, Ok(p) if p == std::path::Path::new("/opt/cargo/config.toml")));
         for raw in [None, Some("")] {
             let got = cargo_config_path_from(raw.map(std::ffi::OsString::from), Some(home.clone()));
             assert!(

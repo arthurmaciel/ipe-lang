@@ -1152,10 +1152,7 @@ import String
             DiscoveredModule::embedded_stdlib(PathBuf::from("<embedded-stdlib>"), palette.clone());
         let squat = DiscoveredModule::user(PathBuf::from("src/Std/Palette.ipe"), palette.clone());
 
-        for records in [
-            vec![embedded.clone(), squat.clone()],
-            vec![squat.clone(), embedded.clone()],
-        ] {
+        for records in [vec![embedded.clone(), squat.clone()], vec![squat, embedded]] {
             assert!(
                 !embedded_stdlib_modules(&records).contains(&palette),
                 "a user-claimed path must not be trusted"

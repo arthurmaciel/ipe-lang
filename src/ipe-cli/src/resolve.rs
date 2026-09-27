@@ -1181,7 +1181,7 @@ mod tests {
     #[test]
     fn index_root_uses_an_absolute_override() {
         let root = index_root_from(Some(OsString::from("/srv/ipe-index")));
-        assert!(matches!(root, Ok(p) if p == PathBuf::from("/srv/ipe-index")));
+        assert!(matches!(root, Ok(p) if p == std::path::Path::new("/srv/ipe-index")));
     }
 
     #[test]

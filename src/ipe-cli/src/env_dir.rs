@@ -162,7 +162,7 @@ mod tests {
             Some("/home/u".into()),
             ".cargo",
         );
-        assert!(matches!(got, Ok(Some(p)) if p == PathBuf::from("/opt/cargo")));
+        assert!(matches!(got, Ok(Some(p)) if p == std::path::Path::new("/opt/cargo")));
     }
 
     #[test]
@@ -213,7 +213,7 @@ mod tests {
     #[test]
     fn explicit_override_absolute_is_used() {
         let got = explicit_override("IPE_INDEX_DIR", Some("/srv/index".into()));
-        assert!(matches!(got, Ok(Some(p)) if p == PathBuf::from("/srv/index")));
+        assert!(matches!(got, Ok(Some(p)) if p == std::path::Path::new("/srv/index")));
     }
 
     #[test]

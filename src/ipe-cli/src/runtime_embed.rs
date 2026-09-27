@@ -648,7 +648,7 @@ mod tests {
             Some("/xdg".into()),
             Some("/home/u".into()),
         );
-        assert!(matches!(got, Ok(p) if p == PathBuf::from("/opt/ipe")));
+        assert!(matches!(got, Ok(p) if p == std::path::Path::new("/opt/ipe")));
     }
 
     #[test]
@@ -665,9 +665,9 @@ mod tests {
     #[test]
     fn ipe_home_skips_a_relative_xdg_data_home() {
         let got = ipe_home_from(None, Some("rel".into()), Some("/home/u".into()));
-        assert!(matches!(got, Ok(p) if p == PathBuf::from("/home/u/.ipe")));
+        assert!(matches!(got, Ok(p) if p == std::path::Path::new("/home/u/.ipe")));
         let got = ipe_home_from(None, Some("/xdg".into()), Some("/home/u".into()));
-        assert!(matches!(got, Ok(p) if p == PathBuf::from("/xdg/ipe")));
+        assert!(matches!(got, Ok(p) if p == std::path::Path::new("/xdg/ipe")));
     }
 
     #[test]

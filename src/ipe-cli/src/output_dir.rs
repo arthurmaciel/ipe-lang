@@ -2825,12 +2825,20 @@ pub mod test_links {
     use std::path::Path;
 
     /// Plant a symbolic link at `link` pointing to `target`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the link cannot be created (a test-setup failure).
     #[cfg(unix)]
     pub fn plant_link(target: &Path, link: &Path) {
         std::os::unix::fs::symlink(target, link).expect("plant link");
     }
 
     /// Plant a symbolic link at `link` pointing to `target`, a directory or file link to match it.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the link cannot be created (a test-setup failure).
     #[cfg(windows)]
     pub fn plant_link(target: &Path, link: &Path) {
         if target.is_dir() {
