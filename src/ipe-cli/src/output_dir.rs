@@ -362,7 +362,7 @@ impl OwnedDir {
     /// Claim the plain-named subdirectory `name` through this directory's held handle.
     #[cfg(unix)]
     fn claim_child(&self, name: &str) -> Result<Self, CliError> {
-        let parent = held::HeldDir::open(&self.path)?.ok_or_else(|| {
+        let parent = super::held::HeldDir::open(&self.path)?.ok_or_else(|| {
             io_err(
                 &self.path,
                 std::io::Error::from(std::io::ErrorKind::NotFound),
@@ -541,7 +541,7 @@ impl OwnedPath {
     ///
     /// `Ok(None)` when absent.
     fn held_root(&self) -> Result<Option<held::HeldDir>, CliError> {
-        let Some(root) = held::HeldDir::open(&self.root)? else {
+        let Some(root) = super::held::HeldDir::open(&self.root)? else {
             return Ok(None);
         };
         if root.id()? != self.root_id {
@@ -1594,11 +1594,23 @@ fn hold_deepest_existing(raw: &Path, absolute: &Path) -> Result<Anchor, CliError
         found = held::HeldDir::open_following(current)?;
     };
     tail.reverse();
-    let real = std::fs::canonicalize(dir.path()).map_err(|e| io_err(dir.path(), e))?;
-    if !dir.is_at(&real)? {
-        return Err(OutputRefusal::Replaced(raw.to_path_buf()).into());
-    }
+    let real = canonical_of_held(raw, &dir)?;
     Ok(Anchor { dir, real, tail })
+}
+
+/// The canonical path of the held `dir`, proven to name that very directory.
+///
+/// # Errors
+/// [`OutputRefusal::Replaced`] when the path now names another directory;
+/// [`CliError::Io`] when it cannot be resolved.
+#[cfg(unix)]
+fn canonical_of_held(raw: &Path, dir: &held::HeldDir) -> Result<PathBuf, CliError> {
+    let real = std::fs::canonicalize(dir.path()).map_err(|e| io_err(dir.path(), e))?;
+    if dir.is_at(&real)? {
+        Ok(real)
+    } else {
+        Err(OutputRefusal::Replaced(raw.to_path_buf()).into())
+    }
 }
 
 /// The resolved form of `absolute`: its deepest existing level canonicalised, the rest appended.
@@ -2616,6 +2628,134 @@ mod tests {
             0,
             "nothing reaches the link target"
         );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// A proven removal whose entry now names another directory is refused, the impostor untouched.
+    #[cfg(unix)]
+    #[test]
+    fn remove_proven_refuses_an_entry_replaced_after_it_was_held() {
+        let base = scratch("remove_proven_swap");
+        let name = std::ffi::OsStr::new("doomed");
+        let doomed = base.join(name);
+        std::fs::create_dir_all(doomed.join("inner")).expect("make doomed");
+        let parent = super::held::HeldDir::open(&base)
+            .expect("open base")
+            .expect("base exists");
+        let child = parent
+            .child(name)
+            .expect("open doomed")
+            .expect("doomed exists");
+        // Kept alive so the impostor cannot reuse the held inode.
+        let aside = base.join("doomed.aside");
+        std::fs::rename(&doomed, &aside).expect("move doomed aside");
+        std::fs::create_dir(&doomed).expect("plant impostor");
+        std::fs::write(doomed.join("keep.txt"), "keep").expect("impostor file");
+
+        let removed = parent.remove_proven(name, &child);
+        assert!(
+            matches!(
+                removed,
+                Err(CliError::OutputRefused(OutputRefusal::Replaced(_)))
+            ),
+            "the replaced entry is refused, got {removed:?}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(doomed.join("keep.txt"))
+                .ok()
+                .as_deref(),
+            Some("keep"),
+            "the impostor's contents survive"
+        );
+        assert_eq!(
+            std::fs::read_dir(&doomed).expect("read impostor").count(),
+            1,
+            "the impostor gains and loses nothing"
+        );
+        assert_eq!(
+            std::fs::read_dir(&aside).expect("read held").count(),
+            0,
+            "the clear went through the held handle"
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// A held level whose path now names another directory is refused, the impostor untouched.
+    #[cfg(unix)]
+    #[test]
+    fn an_anchor_replaced_after_it_was_held_is_refused() {
+        let base = scratch("anchor_replaced");
+        let level = base.join("level");
+        std::fs::create_dir(&level).expect("make level");
+        let dir = super::held::HeldDir::open(&level)
+            .expect("open level")
+            .expect("level exists");
+        // Kept alive so the impostor cannot reuse the held inode.
+        std::fs::rename(&level, base.join("level.aside")).expect("move level aside");
+        std::fs::create_dir(&level).expect("plant impostor");
+        std::fs::write(level.join("keep.txt"), "keep").expect("impostor file");
+
+        let proven = canonical_of_held(&level, &dir);
+        assert!(
+            matches!(
+                proven,
+                Err(CliError::OutputRefused(OutputRefusal::Replaced(_)))
+            ),
+            "the replaced anchor is refused, got {proven:?}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(level.join("keep.txt"))
+                .ok()
+                .as_deref(),
+            Some("keep"),
+            "the impostor's contents survive"
+        );
+        assert_eq!(
+            std::fs::read_dir(&level).expect("read impostor").count(),
+            1,
+            "the impostor gains nothing"
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// The `..` walk above a held anchor disagreeing with its canonical ancestors is refused.
+    ///
+    /// The anchor's parent is moved deeper (the walk outlasts the ancestors)
+    /// and shallower (the walk runs out first); neither move is written to.
+    #[cfg(unix)]
+    #[test]
+    fn a_marked_ancestor_walk_over_a_moved_anchor_is_refused() {
+        let base = scratch("ancestor_moved");
+        let moves: [(&str, &[&str]); 2] = [("deeper", &["x", "y", "b"]), ("shallower", &["b"])];
+        for (label, to) in moves {
+            let root = base.join(label);
+            let anchor_path = root.join("a").join("b").join("c");
+            std::fs::create_dir_all(&anchor_path).expect("make anchor");
+            let anchor = hold_deepest_existing(&anchor_path, &anchor_path).expect("hold anchor");
+            let moved = to.iter().fold(root.clone(), |p, n| p.join(n));
+            std::fs::create_dir_all(moved.parent().expect("moved parent")).expect("make above");
+            std::fs::rename(root.join("a").join("b"), &moved).expect("move anchor parent");
+
+            let checked = check_no_marked_ancestor_held(&anchor_path, &anchor);
+            assert!(
+                matches!(
+                    checked,
+                    Err(CliError::OutputRefused(OutputRefusal::Replaced(_)))
+                ),
+                "an anchor moved {label} is refused, got {checked:?}"
+            );
+            assert_eq!(
+                std::fs::read_dir(moved.join("c"))
+                    .expect("read anchor")
+                    .count(),
+                0,
+                "the anchor moved {label} gains nothing"
+            );
+            assert!(
+                !moved.join(OWNERSHIP_MARKER).exists(),
+                "the parent moved {label} is never marked"
+            );
+        }
         let _ = std::fs::remove_dir_all(&base);
     }
 
