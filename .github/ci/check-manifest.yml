@@ -146,16 +146,38 @@ checks:
     guards: SEAL
     aggregates: [seal-slice-shard]
 
-  # ── Heavy soundness / sanitizers — nightly-gate ───────────────────────────
+  # ── Per-PR soundness / SEAL gates ─────────────────────────────────────────
+  # Run on every relevant PR (path-gated by `changes`; a skipped job reports
+  # success) and finish in a few minutes, so a red blocks the merge rather than
+  # waiting for the next promotion.
   - context: asan-all
-    disposition: nightly-gate
+    disposition: gate
     producer: ci.yml
     guards: Soundness
     aggregates: [asan]
   - context: tsan
-    disposition: nightly-gate
+    disposition: gate
     producer: ci.yml
     guards: Soundness
+  - context: runtime-feature-combos
+    disposition: gate
+    producer: ci.yml
+    guards: SEAL
+  - context: "linux-arm64-tier2 (fifth platform — fail-closed refuse-to-certify proof)"
+    disposition: gate
+    producer: ci.yml
+    guards: Security
+  - context: "windows-x64 (Docker Windows container, process isolation)"
+    disposition: gate
+    producer: admission-sandbox.yml
+    guards: Security
+  - context: "freebsd-x64 (jail(8) inside vmactions VM)"
+    disposition: gate
+    producer: admission-sandbox.yml
+    guards: Security
+
+  # ── Heavy / off-PR soundness proofs — nightly-gate ────────────────────────
+  # Either too slow for the per-PR path or not produced on pull_request at all.
   - context: "seal-modset (vendored emit model)"
     disposition: nightly-gate
     producer: ci.yml
@@ -164,10 +186,6 @@ checks:
     disposition: nightly-gate
     producer: ci.yml
     guards: Security
-  - context: runtime-feature-combos
-    disposition: nightly-gate
-    producer: ci.yml
-    guards: SEAL
 
   # ── Cross-platform jail proofs — nightly-gate (Security §1) ───────────────
   # The Linux jail Tier-2 proofs — the containment gate CI produces on GitHub-
@@ -179,18 +197,6 @@ checks:
   - context: "linux-x64-tier2 (bwrap+seccomp — the real Linux jail proof)"
     disposition: nightly-gate
     producer: ci.yml
-    guards: Security
-  - context: "linux-arm64-tier2 (fifth platform — fail-closed refuse-to-certify proof)"
-    disposition: nightly-gate
-    producer: ci.yml
-    guards: Security
-  - context: "windows-x64 (Docker Windows container, process isolation)"
-    disposition: nightly-gate
-    producer: admission-sandbox.yml
-    guards: Security
-  - context: "freebsd-x64 (jail(8) inside vmactions VM)"
-    disposition: nightly-gate
-    producer: admission-sandbox.yml
     guards: Security
 
   # ── C-free / static portability — nightly-gate + informational ────────────

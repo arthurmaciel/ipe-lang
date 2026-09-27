@@ -745,9 +745,8 @@ jobs:
   # Runtime-soundness gate on the PR boundary (PRINCIPLE 3): a codegen/runtime
   # change is exactly what introduces memory UB, so ASAN gates PRE-merge on any
   # emit-relevant PR. Sharded 1/6 via nextest partitioning; `asan-all` is the
-  # single stable context (mirrors `e2e-all`) that branch protection could require
-  # once these are proven green — deliberately NOT added to the required ruleset
-  # yet. Path-scoping keeps it off a docs/CI-only PR; always runs on push/nightly.
+  # single stable required context (mirrors `e2e-all`). Path-scoping keeps it off
+  # a docs/CI-only PR; always runs on push/nightly.
   asan:
     name: asan (${{ matrix.shard }}/6)
     runs-on: ubuntu-latest

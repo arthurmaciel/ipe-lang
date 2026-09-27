@@ -1,5 +1,6 @@
 [
   "artifact-guard",
+  "asan-all",
   "capabilities-docs-drift",
   "cargo-deny",
   "cli-docs-drift",
@@ -13,8 +14,10 @@
   "first-party check floor (ipe type-check only)",
   "first-party shapes (build gate)",
   "fmt",
+  "freebsd-x64 (jail(8) inside vmactions VM)",
   "grammar",
   "linux-arm64 (seccomp socket-deny + bubblewrap)",
+  "linux-arm64-tier2 (fifth platform \u2014 fail-closed refuse-to-certify proof)",
   "linux-x64 (seccomp socket-deny + bubblewrap)",
   "macos-arm64 (sandbox-exec / Seatbelt)",
   "manifest-lock-consistency",
@@ -23,10 +26,13 @@
   "playground-jail",
   "quick-check",
   "registry-admission",
+  "runtime-feature-combos",
   "runtime-full-features",
   "seal-slice",
   "seal-smoke",
   "stdlib-docs-drift",
   "test",
-  "wasm-floor"
+  "tsan",
+  "wasm-floor",
+  "windows-x64 (Docker Windows container, process isolation)"
 ]

@@ -13,53 +13,34 @@ automated by a workflow token).
 
 ## Intended required set (= manifest `gate` + `gate-external` contexts)
 
-See `ci/required-set.json`. As of this change, 26 contexts:
-
-```
-artifact-guard
-capabilities-docs-drift
-cargo-deny
-clippy
-diagnostic-tone
-doc-string example gate
-e2e-all
-env-docs-drift
-explain-page example gate (ADR 0059)
-first-party check floor (ipe type-check only)
-first-party shapes (build gate)
-fmt
-linux-arm64 (seccomp socket-deny + bubblewrap)
-linux-x64 (seccomp socket-deny + bubblewrap)
-macos-arm64 (sandbox-exec / Seatbelt)
-markdown-parity
-panic-scan
-playground-jail
-quick-check
-registry-admission
-runtime-full-features
-seal-slice
-seal-smoke
-stdlib-docs-drift
-test
-wasm-floor
-```
+`ci/required-set.json` is the list; `manifest-guard` fails a PR when it drifts
+from the manifest.
 
 ## Delta vs live `main-protection` ruleset (id 22326541)
 
 Measured against the ruleset's current `required_status_checks`.
 
-**Add to the required set** (already produced per-change, promote to required —
-they are `gate` in the manifest but were not in the ruleset):
+**Add to the required set** (manifest `gate`, produced per-change, absent from
+the ruleset):
 
-- `env-docs-drift` — deterministic env-docs diff (parity with `stdlib-docs-drift`).
-- `capabilities-docs-drift` — deterministic capabilities-docs diff.
-- `panic-scan` — panic-pattern scan (Soundness).
-- `registry-admission` — registry admission gate.
-- `markdown-parity` — deterministic Markdown parse-SSOT snapshot diff (parity
-  with `stdlib-docs-drift`; a red is a drift between the doc-side port and
-  `Ipe.Markdown`).
+- `cli-docs-drift`, `cli-transcripts-drift`, `markdown-parity` — deterministic
+  generated-docs / parse-SSOT snapshot diffs (parity with `stdlib-docs-drift`).
+- `grammar` — tree-sitter grammar drift guard.
+- `manifest-lock-consistency` — Cargo.lock / Cargo.toml version lockstep.
+- `runtime-feature-combos` — every emitted-runtime feature combination builds
+  (SEAL); path-gated on `emit`.
+- `asan-all`, `tsan` — sanitizers over the runtime + compiler crates
+  (Soundness); path-gated on `emit`.
+- `linux-arm64-tier2 (fifth platform — fail-closed refuse-to-certify proof)` —
+  aarch64 refuse-to-certify proof (Security); path-gated on `code`.
+- `freebsd-x64 (jail(8) inside vmactions VM)`,
+  `windows-x64 (Docker Windows container, process isolation)` — admission jail
+  proofs (Security); path-gated on `code`.
 
-No other changes: every other live required context is a manifest `gate` and stays.
+Each is path-gated by a job-level `if:` on the `changes` outputs, so on a PR
+outside its paths the job reports `skipped`, which satisfies a required context.
+
+No removals: every live required context is a manifest `gate`.
 
 ## Applying the delta (human step)
 
@@ -68,7 +49,7 @@ Reconcile the live ruleset to `.github/ci/required-set.json`. Example (review be
 ```bash
 # Fetch, edit required_status_checks to match ci/required-set.json, then PATCH.
 gh api repos/arthurmaciel/ipe-lang/rulesets/22326541 > /tmp/rs.json
-# ... edit /tmp/rs.json required_status_checks to the 26 contexts ...
+# ... edit /tmp/rs.json required_status_checks to the contexts in required-set.json ...
 gh api -X PUT repos/arthurmaciel/ipe-lang/rulesets/22326541 --input /tmp/rs.json
 ```
 
@@ -78,9 +59,11 @@ fail-closed `promotion-ready` job on the next promotion, not by branch protectio
 
 ## Nightly-gate contexts (NOT branch-protection required)
 
-Heavy checks run nightly. A red does not block a PR and is
-surfaced by `ci-health`. See the `nightly-gate` entries in the manifest (the
-Linux jail proofs, sanitizers, seal-modset, browser-e2e, runtime-feature-combos).
+Checks too slow for the per-PR path, or not produced on `pull_request`. A red
+does not block a PR and is surfaced by `ci-health`. See the `nightly-gate`
+entries in the manifest (seal-modset, browser-e2e, linux-x64-tier2,
+linux-cfree-gate). A check that runs on every relevant PR and finishes in a few
+minutes is a `gate`, never `nightly-gate` — otherwise a PR auto-merges red.
 
 ## Flagged: required-but-flaky and informational-but-noisy
 
@@ -97,8 +80,8 @@ Reconciling the current checks against the disposition table surfaced these:
   checklist); `#2247`/`#2248`/`#2249` are the revival trigger for restoring them
   when self-hosted / real-OS runners exist. `macos-arm64` (Seatbelt) and the
   Linux Tier-2 jails remain the gating containment proofs.
-- **`asan`/`tsan`/`browser-e2e`/Linux jail-tier2 proofs — heavy, previously silent
-  advisory reds.** Now `nightly-gate` with a surface; no longer un-watched.
+- **`browser-e2e` / `linux-x64-tier2` — heavy or env-flaky, off the PR path.**
+  `nightly-gate` with a surface; no longer un-watched.
 - **`install-smoke ×4` — installer UX, network-dependent → intermittently noisy.**
   `informational`, owner `release`; the dedup issue keeps one surface per red
   instead of an email per run.
