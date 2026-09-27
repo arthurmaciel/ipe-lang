@@ -1073,6 +1073,12 @@ messages! {
     output_unsafe_component(path) = "output-unsafe-component";
     /// A walked file that resolves outside the project.
     output_outside_project(path, root) = "output-outside-project";
+    /// An owned directory whose path now names a different directory.
+    output_replaced(path) = "output-replaced";
+    /// A directory tree nested past the walk's depth ceiling.
+    output_too_deep(path, limit) = "output-too-deep";
+    /// A path on or under a Windows reparse point.
+    output_reparse_point(path) = "output-reparse-point";
     /// A GitHub login with nothing before its optional `[bot]` suffix.
     login_empty = "login-empty";
     /// A GitHub login past the length ceiling.

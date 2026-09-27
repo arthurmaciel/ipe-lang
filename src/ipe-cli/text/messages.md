@@ -872,6 +872,18 @@ the source root {path} cannot be resolved — ipe cannot prove the output stays 
 
 {path} resolves outside the project at {root} — a directory walk never rewrites it
 
+## output-replaced
+
+{path} was replaced after ipe claimed it — refusing to write or delete in it; run the command again
+
+## output-too-deep
+
+{path} is nested more than {limit} directories deep — ipe refuses to walk it; remove the tree yourself
+
+## output-reparse-point
+
+{path} is or lies under a reparse point (a OneDrive folder, a mount point, or a deduplicated directory) — ipe cannot prove where it leads; point --out at a directory outside it
+
 # Publisher identity
 
 ## login-empty

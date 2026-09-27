@@ -35,6 +35,12 @@ checks:
   - context: clippy
     disposition: gate
     producer: ci.yml
+  - context: windows-check
+    disposition: gate
+    producer: ci.yml
+    guards: >-
+      The Windows output-directory code compiles, so its held-handle,
+      reparse-point-refusing file operations ship rather than rot unbuilt.
   - context: quick-check
     disposition: gate
     producer: ci.yml
