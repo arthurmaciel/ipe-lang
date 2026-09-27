@@ -138,6 +138,20 @@ impl TerminalSafe {
     }
 }
 
+/// Sanitise a borrowed string; see [`TerminalSafe::sanitize`].
+impl From<&str> for TerminalSafe {
+    fn from(raw: &str) -> Self {
+        Self::sanitize(raw)
+    }
+}
+
+/// Sanitise an owned string; see [`TerminalSafe::sanitize`].
+impl From<String> for TerminalSafe {
+    fn from(raw: String) -> Self {
+        Self::sanitize(&raw)
+    }
+}
+
 /// Indent that opens every continuation line of a [`TerminalSafe`] rendered inline.
 ///
 /// Wider than the output gutter, so a continuation line never starts where a

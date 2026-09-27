@@ -1686,9 +1686,10 @@ fn ffi_build_error(diag: ipe_ffi::diag::Diagnostic) -> CliError {
 }
 
 /// Emit the raw inspector error log to stderr — the `--verbose` escape hatch
-/// behind the summarised build diagnostic. Each line is stripped of control
-/// characters (except tab) so raw build-script stderr cannot forge terminal
-/// markup. A document with no error channel prints nothing.
+/// behind the summarised build diagnostic. Each line renders as inline
+/// [`TerminalSafe`](crate::style::TerminalSafe), so raw build-script stderr
+/// cannot forge terminal markup or an output line. A document with no error
+/// channel prints nothing.
 fn emit_raw_inspector_log(inspection_json: &str) {
     let log = ipe_ffi::driver::inspection_error_log(inspection_json);
     if log.is_empty() {
@@ -1700,10 +1701,7 @@ fn emit_raw_inspector_log(inspection_json: &str) {
         "raw inspector log (--verbose):",
     );
     for line in &log {
-        let clean: String = line
-            .chars()
-            .filter(|c| *c == '\t' || !c.is_control())
-            .collect();
+        let clean = crate::style::TerminalSafe::sanitize(line);
         crate::screen::chatter(
             crate::screen::Stream::Stderr,
             crate::screen::Tone::Aux,

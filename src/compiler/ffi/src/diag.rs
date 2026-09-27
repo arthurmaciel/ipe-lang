@@ -8,6 +8,7 @@
 
 use std::fmt;
 
+use ipe_diagnostics::terminal::TerminalSafe;
 use ipe_diagnostics::{
     Code, Diagnostic as SharedDiag, FfiError, IPE_F4400, IPE_F4401, IPE_F4402, IPE_F4411,
     IPE_F4412, IPE_F4414, IPE_F4415,
@@ -120,38 +121,41 @@ impl From<Diagnostic> for FfiError {
     fn from(d: Diagnostic) -> Self {
         match d {
             Diagnostic::CallUnrenderable { function, defect } => Self::CallUnrenderable {
-                function,
-                detail: defect.to_string(),
+                function: function.into(),
+                detail: defect.to_string().into(),
             },
             Diagnostic::GenericNotBindable { callee, defect } => Self::GenericNotBindable {
-                callee,
-                detail: defect.to_string(),
+                callee: callee.into(),
+                detail: defect.to_string().into(),
             },
             Diagnostic::WireMalformed { context, defect } => Self::WireMalformed {
-                context,
-                detail: defect.to_string(),
+                context: context.into(),
+                detail: defect.to_string().into(),
             },
             Diagnostic::ShapeContradiction { function, flags } => Self::ShapeContradiction {
-                function,
-                flags: flags.iter().map(ToString::to_string).collect(),
+                function: function.into(),
+                flags: flags.into_iter().map(TerminalSafe::from).collect(),
             },
             Diagnostic::SourceRejected { source, defect } => Self::SourceRejected {
-                source,
-                detail: defect.to_string(),
+                source: source.into(),
+                detail: defect.to_string().into(),
             },
-            Diagnostic::ArtifactIo { path, detail } => Self::ArtifactIo { path, detail },
+            Diagnostic::ArtifactIo { path, detail } => Self::ArtifactIo {
+                path: path.into(),
+                detail: detail.into(),
+            },
             Diagnostic::AssertedRefused { path, defect } => Self::AssertedRefused {
-                path,
-                detail: defect.to_string(),
+                path: path.into(),
+                detail: defect.to_string().into(),
             },
             Diagnostic::SystemLibraryNotFound {
                 system_lib,
                 crate_name,
                 install_hint,
             } => Self::SystemLibraryNotFound {
-                system_lib: system_lib.as_str().to_owned(),
-                crate_name,
-                install_hint,
+                system_lib: system_lib.as_str().into(),
+                crate_name: crate_name.into(),
+                install_hint: install_hint.into(),
             },
         }
     }
@@ -772,26 +776,41 @@ pub enum WireDefect {
     },
 }
 
+/// A wire defect renders terminal-safe and inline, whichever field carries the untrusted bytes.
+///
+/// The text is relayed to the terminal as is, so a newline or escape in a
+/// crate's inspected value, a refusal reason, or a decode error cannot open a
+/// forged output line: every continuation line is indented.
 impl fmt::Display for WireDefect {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::UnknownCallKind { got } => write!(
+        let raw = UnsanitizedWireDefect(self).to_string();
+        write!(f, "{}", TerminalSafe::sanitize(&raw))
+    }
+}
+
+/// A [`WireDefect`]'s text before sanitisation; only its `Display` reads it.
+struct UnsanitizedWireDefect<'a>(&'a WireDefect);
+
+impl fmt::Display for UnsanitizedWireDefect<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.0 {
+            WireDefect::UnknownCallKind { got } => write!(
                 f,
                 "unknown call kind {got:?} (expected \"method\" or \"function\")"
             ),
-            Self::UnknownByKind { got } => write!(
+            WireDefect::UnknownByKind { got } => write!(
                 f,
                 "unknown receiver `by` kind {got:?} (expected \"ref\", \"refmut\", or \"value\")"
             ),
-            Self::UnknownClosureKind { got } => write!(
+            WireDefect::UnknownClosureKind { got } => write!(
                 f,
                 "unknown closure kind {got:?} (expected \"Fn\", \"FnMut\", or \"FnOnce\")"
             ),
-            Self::UnknownEffect { got } => write!(
+            WireDefect::UnknownEffect { got } => write!(
                 f,
                 "unknown effect {got:?} (expected \"pure\", \"fallible\", or \"effectful\")"
             ),
-            Self::TypeRefDiscriminator { present } => {
+            WireDefect::TypeRefDiscriminator { present } => {
                 if present.is_empty() {
                     write!(
                         f,
@@ -805,60 +824,60 @@ impl fmt::Display for WireDefect {
                     )
                 }
             }
-            Self::InvalidIdent { got } => {
+            WireDefect::InvalidIdent { got } => {
                 write!(f, "{got:?} is not a legal Rust identifier")
             }
-            Self::InvalidModulePath { got } => {
+            WireDefect::InvalidModulePath { got } => {
                 write!(f, "{got:?} is not a legal Rust identifier path")
             }
-            Self::InvalidType { got } => {
+            WireDefect::InvalidType { got } => {
                 write!(
                     f,
                     "{got:?} is outside the closed FFI type grammar (paths, generics, \
                      borrows, tuples, arrays only — no statement tokens)"
                 )
             }
-            Self::InvalidPattern { got } => {
+            WireDefect::InvalidPattern { got } => {
                 write!(
                     f,
                     "{got:?} is not a legal enum-arm pattern (a variant identifier with an \
                      optional (..) or {{..}} suffix)"
                 )
             }
-            Self::InvalidSelector { got } => {
+            WireDefect::InvalidSelector { got } => {
                 write!(
                     f,
                     "{got:?} is not a legal field selector (a field identifier or a decimal \
                      tuple index)"
                 )
             }
-            Self::InvalidPkgPath { got } => {
+            WireDefect::InvalidPkgPath { got } => {
                 write!(
                     f,
                     "{got:?} is not a legal package path (it carries a control character)"
                 )
             }
-            Self::InvalidVersion { got } => {
+            WireDefect::InvalidVersion { got } => {
                 write!(
                     f,
                     "{got:?} is not a legal crate version (it must match the semver charset \
                      [0-9A-Za-z.*=<>~^,+ -])"
                 )
             }
-            Self::InvalidFeature { got } => {
+            WireDefect::InvalidFeature { got } => {
                 write!(
                     f,
                     "{got:?} is not a legal cargo feature name (it must match the charset \
                      [A-Za-z0-9_+./?:-])"
                 )
             }
-            Self::InvalidClosureSig { got, reason } => {
+            WireDefect::InvalidClosureSig { got, reason } => {
                 write!(
                     f,
                     "{got:?} is not a legal define.closure signature: {reason}"
                 )
             }
-            Self::RecursiveDefineType { name, cycle } => {
+            WireDefect::RecursiveDefineType { name, cycle } => {
                 write!(
                     f,
                     "define type {name:?} is recursive ({}) — a nominal FFI type cannot \
@@ -867,7 +886,7 @@ impl fmt::Display for WireDefect {
                     cycle.join(" -> ")
                 )
             }
-            Self::Json { detail } => write!(f, "{detail}"),
+            WireDefect::Json { detail } => write!(f, "{detail}"),
         }
     }
 }
@@ -875,6 +894,55 @@ impl fmt::Display for WireDefect {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const FORGED: &str = "x\nerror: forged\u{1b}[2K";
+
+    fn assert_unforged(text: &str) {
+        assert!(text.contains("error: forged"), "{text}");
+        assert!(!text.contains("[2K"), "{text}");
+        assert!(
+            text.lines().all(|line| !line.starts_with("error: forged")),
+            "{text}"
+        );
+    }
+
+    /// A newline or escape in a relayed wire defect's free-text field stays on its owning line.
+    #[test]
+    fn a_wire_defect_cannot_forge_an_output_line() {
+        let defects = [
+            WireDefect::Json {
+                detail: FORGED.to_owned(),
+            },
+            WireDefect::InvalidClosureSig {
+                got: "Fn()".to_owned(),
+                reason: FORGED.to_owned(),
+            },
+            WireDefect::RecursiveDefineType {
+                name: "Tree".to_owned(),
+                cycle: vec!["Tree".to_owned(), FORGED.to_owned()],
+            },
+        ];
+        for defect in defects {
+            assert_unforged(&defect.to_string());
+        }
+    }
+
+    /// A newline in an FFI diagnostic's name or detail stays on its owning line.
+    #[test]
+    fn an_ffi_diagnostic_cannot_forge_an_output_line() {
+        let io = Diagnostic::ArtifactIo {
+            path: FORGED.to_owned(),
+            detail: FORGED.to_owned(),
+        };
+        assert_unforged(&io.to_string());
+        let wire = Diagnostic::WireMalformed {
+            context: FORGED.to_owned(),
+            defect: WireDefect::Json {
+                detail: FORGED.to_owned(),
+            },
+        };
+        assert_unforged(&wire.to_string());
+    }
 
     #[test]
     fn each_variant_maps_to_its_taxonomy_code() {

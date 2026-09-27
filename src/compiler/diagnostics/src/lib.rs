@@ -32,6 +32,67 @@ pub use span::{Located, Span};
 mod tests {
     use super::*;
 
+    /// A newline or escape in any FFI or sandbox field never opens a forged output line.
+    #[test]
+    fn ffi_and_sandbox_fields_cannot_forge_an_output_line() {
+        const FORGED: &str = "x\nerror: forged\u{1b}[2K";
+        let hostile = || terminal::TerminalSafe::from(FORGED);
+        let diagnostics = [
+            FfiError::CallUnrenderable {
+                function: hostile(),
+                detail: hostile(),
+            },
+            FfiError::GenericNotBindable {
+                callee: hostile(),
+                detail: hostile(),
+            },
+            FfiError::WireMalformed {
+                context: hostile(),
+                detail: hostile(),
+            },
+            FfiError::ShapeContradiction {
+                function: hostile(),
+                flags: vec![hostile(), hostile()],
+            },
+            FfiError::SourceRejected {
+                source: hostile(),
+                detail: hostile(),
+            },
+            FfiError::ArtifactIo {
+                path: hostile(),
+                detail: hostile(),
+            },
+            FfiError::AssertedRefused {
+                path: hostile(),
+                detail: hostile(),
+            },
+            FfiError::SystemLibraryNotFound {
+                system_lib: hostile(),
+                crate_name: hostile(),
+                install_hint: hostile(),
+            },
+        ]
+        .map(|msg| Diagnostic::Ffi { msg })
+        .into_iter()
+        .chain([
+            Diagnostic::Sandbox {
+                msg: SandboxError::BuildJail { detail: hostile() },
+            },
+            Diagnostic::Sandbox {
+                msg: SandboxError::RunJail { detail: hostile() },
+            },
+        ]);
+        for diagnostic in diagnostics {
+            let text = render(&diagnostic, "", "");
+            assert!(text.contains("error: forged"), "{text}");
+            assert!(!text.contains("[2K"), "{text}");
+            assert!(
+                text.lines().all(|line| !line.starts_with("error: forged")),
+                "{text}"
+            );
+        }
+    }
+
     // Build a sample `Diagnostic` for Ffi, Sandbox, Consent, and `CompilerBug`
     // families.  Returns `None` for Parse/Name/Type/Lower codes; those families
     // have dedicated unit tests in their own modules.

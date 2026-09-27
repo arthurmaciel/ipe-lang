@@ -276,10 +276,13 @@ fn ffi_prose(msg: &FfiError) -> String {
         FfiError::WireMalformed { context, detail } => {
             format!("The inspection data for `{context}` is malformed: {detail}.")
         }
-        FfiError::ShapeContradiction { function, flags } => format!(
-            "`{function}` declares contradictory shape flags at once: {}.",
-            flags.join(" + ")
-        ),
+        FfiError::ShapeContradiction { function, flags } => {
+            let flags: Vec<String> = flags.iter().map(ToString::to_string).collect();
+            format!(
+                "`{function}` declares contradictory shape flags at once: {}.",
+                flags.join(" + ")
+            )
+        }
         FfiError::SourceRejected { source, detail } => {
             format!("The crate source `{source}` was rejected at the security gate: {detail}.")
         }

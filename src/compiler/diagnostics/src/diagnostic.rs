@@ -32,6 +32,7 @@ use crate::code::{
     IPE_T0015, IPE_T0016, IPE_T0017, IPE_T0018, IPE_T0019, IPE_T0020, Severity,
 };
 use crate::span::Span;
+use crate::terminal::TerminalSafe;
 
 // ===========================================================================
 // Plain-old-data payload enums
@@ -1614,6 +1615,11 @@ pub enum StoreSelectProjectionDefect {
 
 /// The closed defect payload for FFI-generator diagnostics (`IPE-F44xx`).
 ///
+/// Every field is [`TerminalSafe`]: a name or detail may come from a crate,
+/// its build output, or the filesystem, and the renderer places it inline,
+/// so a newline in it continues the sentence instead of opening a forged
+/// output line.
+///
 /// Each variant names exactly one taxonomy code. Producer crates construct
 /// these and convert them to [`Diagnostic::Ffi`]; the shared renderer is the
 /// only place that turns a `FfiError` into bytes.
@@ -1623,70 +1629,72 @@ pub enum FfiError {
     /// rendering total; refused before emission.
     CallUnrenderable {
         /// The wrapper-reference name of the function whose call was refused.
-        function: String,
+        function: TerminalSafe,
         /// A short description of which structural check failed.
-        detail: String,
+        detail: TerminalSafe,
     },
     /// `IPE-F4400` — a generic FFI call site (or its binding) cannot be
     /// soundly bound; the instantiation falls outside the closed bindable set.
     GenericNotBindable {
         /// The qualified Ipê callee.
-        callee: String,
+        callee: TerminalSafe,
         /// A short description of which bindability rule was broken.
-        detail: String,
+        detail: TerminalSafe,
     },
     /// `IPE-F4401` — inspector wire data carried a value outside its closed
     /// legal set.
     WireMalformed {
         /// Where in the wire document the defect was met.
-        context: String,
+        context: TerminalSafe,
         /// A short description of which wire rule was broken.
-        detail: String,
+        detail: TerminalSafe,
     },
     /// `IPE-F4402` — a function's shape flags are contradictory.
     ShapeContradiction {
         /// The function whose flags contradict.
-        function: String,
+        function: TerminalSafe,
         /// The flag names that were simultaneously set.
-        flags: Vec<String>,
+        flags: Vec<TerminalSafe>,
     },
     /// `IPE-F4411` — an untrusted crate source was rejected at the driver
     /// gate.
     SourceRejected {
         /// The offending input, verbatim.
-        source: String,
+        source: TerminalSafe,
         /// A short description of which gate rule was broken.
-        detail: String,
+        detail: TerminalSafe,
     },
     /// `IPE-F4412` — an FFI cache artifact could not be read, written, or
     /// removed.
     ArtifactIo {
         /// The artifact path.
-        path: String,
+        path: TerminalSafe,
         /// The rendered OS error.
-        detail: String,
+        detail: TerminalSafe,
     },
     /// `IPE-F4414` — an author-asserted foreign call (`Rust.Ffi.call`) was
     /// refused at validation.
     AssertedRefused {
         /// The asserted Rust path, verbatim.
-        path: String,
+        path: TerminalSafe,
         /// A short description of which rule refused it.
-        detail: String,
+        detail: TerminalSafe,
     },
     /// `IPE-F4415` — the inspector's build failed because a required system
     /// library is not installed on the host.
     SystemLibraryNotFound {
         /// The `pkg-config` library name that was not found.
-        system_lib: String,
+        system_lib: TerminalSafe,
         /// The Rust crate whose `build.rs` required the library.
-        crate_name: String,
+        crate_name: TerminalSafe,
         /// A short OS-aware install hint.
-        install_hint: String,
+        install_hint: TerminalSafe,
     },
 }
 
 /// The closed defect payload for sandbox diagnostics (`IPE-F441x`).
+///
+/// The detail is [`TerminalSafe`]: it may carry an OS error or a path.
 ///
 /// Covers both the build-jail (`IPE-F4410`, produced by `ipe_sandbox`) and
 /// the run-jail (`IPE-F4413`, produced by `ipe_sandbox::run_jail`). Producer
@@ -1698,14 +1706,14 @@ pub enum SandboxError {
     /// or output cap exceeded).
     BuildJail {
         /// A short description of why the jail could not be established.
-        detail: String,
+        detail: TerminalSafe,
     },
     /// `IPE-F4413` — no runtime jail could be established around the emitted
     /// app, or a jailed run failed.
     RunJail {
         /// A short description of why the jail could not be established or
         /// the run failed.
-        detail: String,
+        detail: TerminalSafe,
     },
 }
 
@@ -3031,8 +3039,8 @@ mod code_family_tests {
             (
                 Diagnostic::Ffi {
                     msg: FfiError::WireMalformed {
-                        context: "test".to_owned(),
-                        detail: "test".to_owned(),
+                        context: "test".into(),
+                        detail: "test".into(),
                     },
                 },
                 Family::Ffi,
@@ -3040,7 +3048,7 @@ mod code_family_tests {
             (
                 Diagnostic::Sandbox {
                     msg: SandboxError::BuildJail {
-                        detail: "test".to_owned(),
+                        detail: "test".into(),
                     },
                 },
                 Family::Ffi,
