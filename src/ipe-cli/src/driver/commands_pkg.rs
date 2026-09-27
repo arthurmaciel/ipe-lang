@@ -3169,8 +3169,8 @@ mod capability_fold_tests {
     const SIBLING: project::ModuleOrigin = project::ModuleOrigin::User(project::EntryRole::Library);
     const STDLIB: project::ModuleOrigin = project::ModuleOrigin::EmbeddedStdlib;
 
-    fn lowered(capabilities: &[Capability]) -> EntryInference {
-        Ok(capabilities.iter().copied().collect())
+    fn set(capabilities: &[Capability]) -> BTreeSet<Capability> {
+        capabilities.iter().copied().collect()
     }
 
     const fn refused(reason: &'static str) -> EntryInference {
@@ -3183,7 +3183,7 @@ mod capability_fold_tests {
     #[test]
     fn a_failed_sibling_refuses_the_package_instead_of_under_disclosing() {
         let verdict = aggregate_entry_inferences([
-            (MAIN, lowered(&[Capability::Network])),
+            (MAIN, Ok(set(&[Capability::Network]))),
             (SIBLING, refused("sibling failed to lower")),
         ]);
         assert!(
@@ -3197,8 +3197,8 @@ mod capability_fold_tests {
     fn a_failed_entry_refuses_regardless_of_order() {
         let verdict = aggregate_entry_inferences([
             (SIBLING, refused("first entry failed")),
-            (MAIN, lowered(&[Capability::Network])),
-            (SIBLING, lowered(&[Capability::Unsafe])),
+            (MAIN, Ok(set(&[Capability::Network]))),
+            (SIBLING, Ok(set(&[Capability::Unsafe]))),
         ]);
         assert!(
             matches!(verdict, Err(CliError::Usage("first entry failed"))),
@@ -3225,9 +3225,9 @@ mod capability_fold_tests {
     #[test]
     fn a_failed_stdlib_entry_refuses_the_package() {
         let verdict = aggregate_entry_inferences([
-            (MAIN, lowered(&[Capability::Network])),
+            (MAIN, Ok(set(&[Capability::Network]))),
             (STDLIB, refused("stdlib entry failed")),
-            (SIBLING, lowered(&[])),
+            (SIBLING, Ok(set(&[]))),
         ]);
         assert!(
             matches!(verdict, Err(CliError::Usage("stdlib entry failed"))),
@@ -3262,9 +3262,9 @@ mod capability_fold_tests {
     #[test]
     fn every_entry_lowered_discloses_the_union() {
         let verdict = aggregate_entry_inferences([
-            (MAIN, lowered(&[Capability::Network])),
-            (SIBLING, lowered(&[Capability::Unsafe])),
-            (SIBLING, lowered(&[])),
+            (MAIN, Ok(set(&[Capability::Network]))),
+            (SIBLING, Ok(set(&[Capability::Unsafe]))),
+            (SIBLING, Ok(set(&[]))),
         ]);
         let expected: BTreeSet<Capability> = [Capability::Network, Capability::Unsafe]
             .into_iter()
