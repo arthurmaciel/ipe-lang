@@ -1123,10 +1123,14 @@ fn run_inner(
                 // `spawn_cargo_build`) observes the exit via its own poll
                 // and reports `CargoOutcome::Killed`, so this arm never
                 // blocks the orchestrator.
-                if let Some(child) = cargo_child.take()
-                    && let Ok(mut child) = child.lock()
-                {
-                    child.supersede();
+                if let Some(child) = cargo_child.take() {
+                    // A poisoned lock still guards a live child to kill — the
+                    // kill must not be skipped just because some other thread
+                    // panicked while briefly holding the lock.
+                    child
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .supersede();
                 }
 
                 let resolved = match resolve_project_sources(&opts.entry, None) {
@@ -1818,10 +1822,14 @@ fn run_inner(
     // SIGTERM ceiling as a direct result.
     drop(watcher);
 
-    if let Some(child) = cargo_child.take()
-        && let Ok(mut child) = child.lock()
-    {
-        child.supersede();
+    if let Some(child) = cargo_child.take() {
+        // A poisoned lock still guards a live child to kill — the kill must
+        // not be skipped just because some other thread panicked while
+        // briefly holding the lock.
+        child
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .supersede();
     }
     supervisor.shutdown(opts.restart_timeouts);
     // Stop the front proxy AFTER the supervised child is down: it held the
@@ -3095,16 +3103,23 @@ fn spawn_cargo_build(
 
     thread::spawn(move || {
         let status = loop {
-            let polled = shared_for_waiter.lock().ok().and_then(|mut c| {
-                let superseded = c.superseded;
-                c.child
-                    .try_wait()
-                    .ok()
-                    .flatten()
-                    .map(|status| (status, superseded))
-            });
-            if let Some(exit) = polled {
-                break Some(exit);
+            match shared_for_waiter.lock() {
+                // A poisoned lock means the orchestrator thread panicked while
+                // holding it; the exit status can no longer be observed, so
+                // stop polling rather than spin forever.
+                Err(_) => break None,
+                Ok(mut guard) => {
+                    let superseded = guard.superseded;
+                    let polled = guard.child.try_wait();
+                    drop(guard);
+                    match polled {
+                        Ok(Some(status)) => break Some((status, superseded)),
+                        Ok(None) => {}
+                        // A persistent `try_wait` error can never resolve by
+                        // retrying, so stop rather than poll forever.
+                        Err(_) => break None,
+                    }
+                }
             }
             thread::sleep(Duration::from_millis(30));
         };

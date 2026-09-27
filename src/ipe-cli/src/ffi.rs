@@ -3933,6 +3933,7 @@ version = \"1\"
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
+    #[cfg(unix)]
     #[test]
     fn owned_project_cache_is_discovered() {
         let tmp = std::env::temp_dir().join(format!("ipe-t1-owncache-{}", std::process::id()));
@@ -3947,6 +3948,29 @@ version = \"1\"
         // The invoker owns a freshly-created dir, so it is trusted + found.
         let found = find_cache_root(&tmp).expect("no error");
         assert_eq!(found.as_deref(), Some(cache.as_path()));
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// On a host with no portable owner check (`HOST_CACHE_OWNERSHIP` is
+    /// `Unverifiable`), even a freshly-created, invoker-owned cache is
+    /// refused — the fail-closed twin of `owned_project_cache_is_discovered`.
+    #[cfg(not(unix))]
+    #[test]
+    fn owned_project_cache_is_refused_when_unverifiable() {
+        let tmp = std::env::temp_dir().join(format!("ipe-t1-owncache-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        let cache = tmp.join(CACHE_REL);
+        std::fs::create_dir_all(&cache).expect("mk cache");
+        std::fs::write(
+            tmp.join("package.ipe"),
+            "module Package exposing (package)\n",
+        )
+        .expect("manifest");
+        let result = find_cache_root(&tmp);
+        assert!(matches!(result, Err(CliError::UsageOwned(_))), "{result:?}");
+        if let Err(CliError::UsageOwned(msg)) = result {
+            assert_eq!(msg, text::ffi_cache_unverifiable(&cache.display()));
+        }
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
