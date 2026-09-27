@@ -5360,6 +5360,25 @@ enum BindingSite<'a> {
     },
 }
 
+/// How often the closure a lambda lowers to may be invoked.
+///
+/// Decided by the lambda's syntactic position alone: only an inline lambda in a
+/// kernel's `once_callback_arg` slot is [`Self::AtMostOnce`]; every other lambda
+/// is [`Self::Reentrant`].
+#[derive(Clone, Copy)]
+enum LambdaInvocation {
+    /// The closure may run any number of times (`Box<dyn Fn>` / `Arc<dyn Fn>`).
+    ///
+    /// A non-`Clone` capture has no sound lowering and is refused (IPE-L0126).
+    Reentrant,
+    /// The closure runs at most once.
+    ///
+    /// It is emitted as `Box<dyn FnOnce>`, built after its sibling arguments, so
+    /// a non-`Clone` effect-carrier capture is moved in, under the same reuse
+    /// gate a binder of that value gets.
+    AtMostOnce,
+}
+
 /// Run the non-`Clone` effect-carrier reuse gate for one binder.
 ///
 /// An inlined `let` is skipped: its value is substituted at each use site, so
@@ -5769,6 +5788,13 @@ fn nonclone_move_walk(sym: Symbol, expr: &Expr, state: &mut NonCloneMoveState) {
                 nonclone_move_walk(sym, a, state);
             }
         }
+        Expr::Call {
+            callee: Callee::Kernel(k),
+            args,
+            ..
+        } if k.once_callback_arg().is_some() => {
+            nonclone_once_callback_args(sym, *k, args, state);
+        }
         Expr::Call { args, .. } => nonclone_unordered_args(sym, args, state),
         Expr::Apply { func, args } => {
             nonclone_move_walk(sym, func, state);
@@ -5890,7 +5916,11 @@ fn nonclone_borrow_base(sym: Symbol, base: &Expr, state: &mut NonCloneMoveState)
 /// argument propagates; an argument that moves `sym` (wholly or in part) while
 /// a sibling argument also mentions `sym` is a hazard in whichever order the
 /// emitter evaluates them.
-fn nonclone_unordered_args(sym: Symbol, args: &[Expr], state: &mut NonCloneMoveState) {
+fn nonclone_unordered_args<'a>(
+    sym: Symbol,
+    args: impl IntoIterator<Item = &'a Expr>,
+    state: &mut NonCloneMoveState,
+) {
     let pre = state.clone();
     let mut mentioning = 0usize;
     let mut moved = false;
@@ -5905,6 +5935,33 @@ fn nonclone_unordered_args(sym: Symbol, args: &[Expr], state: &mut NonCloneMoveS
     }
     if moved && mentioning > 1 {
         state.hazard = true;
+    }
+}
+
+/// Arguments of a kernel call with an at-most-once callback slot.
+///
+/// The emitter evaluates every sibling argument first and builds the slot's
+/// `FnOnce` closure last ([`KernelFn::once_callback_arg`]), so a read of `sym`
+/// in a sibling followed by the closure moving it is accepted, while the
+/// siblings among themselves stay order-unknown.
+fn nonclone_once_callback_args(
+    sym: Symbol,
+    kernel: KernelFn,
+    args: &[Expr],
+    state: &mut NonCloneMoveState,
+) {
+    let slot = kernel.once_callback_arg();
+    let is_slot = |i: usize| slot == Some(i);
+    nonclone_unordered_args(
+        sym,
+        args.iter()
+            .enumerate()
+            .filter(|(i, _)| !is_slot(*i))
+            .map(|(_, a)| a),
+        state,
+    );
+    for (_, callback) in args.iter().enumerate().filter(|(i, _)| is_slot(*i)) {
+        nonclone_move_walk(sym, callback, state);
     }
 }
 
@@ -9755,6 +9812,14 @@ pub struct Lowerer<'a> {
     /// IPE-L0126 instead of emitting a `.clone()` on a non-`Clone` `Box`
     /// (E0599 — a SEAL break). Cleared per def.
     deferred_fun_captures: std::cell::RefCell<BTreeMap<Symbol, Span>>,
+    /// Non-`Clone` captures an at-most-once continuation moved, with its span.
+    ///
+    /// Every closure the lowerer builds around lowered code (a re-entrant
+    /// lambda, an eta-expanded partial application, a destructure thunk) checks
+    /// the entries recorded while its body was lowered: a moved local it also
+    /// captures would be moved out of a re-invokable closure (E0507), so it is
+    /// refused with IPE-L0126 instead. Cleared per def.
+    one_shot_moved: std::cell::RefCell<Vec<(Symbol, Span)>>,
     /// A `let`-bound local that names a top-level function, mapped to that
     /// function's `(module, name)` key — a point-free alias `let w = wrap`.
     ///
@@ -11500,6 +11565,7 @@ impl<'a> Lowerer<'a> {
             fn_is_async: Cell::new(false),
             promotable_fn_binders: std::cell::RefCell::new(BTreeSet::new()),
             deferred_fun_captures: std::cell::RefCell::new(BTreeMap::new()),
+            one_shot_moved: std::cell::RefCell::new(Vec::new()),
             toplevel_fn_aliases: std::cell::RefCell::new(BTreeMap::new()),
             local_string_literals: std::cell::RefCell::new(BTreeMap::new()),
             shared_fn_reads: std::cell::RefCell::new(BTreeMap::new()),
@@ -15079,6 +15145,7 @@ impl<'a> Lowerer<'a> {
         // classifier and the binder sites; a def that errored out mid-lowering
         // must not leak its signals into the next def.
         self.deferred_fun_captures.borrow_mut().clear();
+        self.one_shot_moved.borrow_mut().clear();
         // Eta names are scope-local to one function: reset the monotonic cursor so
         // each def draws `eta_0, eta_1, …` afresh. Within the def the cursor only
         // advances (never reuses), so no two live eta binders collide even when a
@@ -17186,16 +17253,28 @@ impl<'a> Lowerer<'a> {
     /// The deferral is recorded so a binder that cannot resolve the `Fun` shape
     /// re-raises this IPE-L0126 instead of leaking an unsound bare `Box`
     /// capture (fail-closed both ways).
+    ///
+    /// An [`LambdaInvocation::AtMostOnce`] closure instead MOVES a non-`Clone`
+    /// effect-carrier capture: the reuse gate runs over its body as over a
+    /// binder's scope, and the move is recorded in `one_shot_moved`. A
+    /// [`LambdaInvocation::Reentrant`] closure refuses (IPE-L0126) any capture
+    /// that a continuation lowered inside its body (from `moved_since` on)
+    /// moved, since a re-run would find it gone.
     fn rewrite_lambda_captures(
         &self,
-        all_param_pats: &[&canon::Pattern],
-        cur_body: &canon::Expr,
+        captures: Vec<(Symbol, Option<IrType>)>,
+        invocation: LambdaInvocation,
+        moved_since: usize,
         span: Span,
         body: Expr,
     ) -> DResult<Expr> {
-        let captures = self.captured_locals(all_param_pats, cur_body);
+        if matches!(invocation, LambdaInvocation::Reentrant) {
+            let captured: BTreeSet<Symbol> = captures.iter().map(|(sym, _)| *sym).collect();
+            self.reject_one_shot_escape(moved_since, &captured)?;
+        }
         let mut clone_set: BTreeSet<Symbol> = BTreeSet::new();
         let mut noncl_set: BTreeSet<Symbol> = BTreeSet::new();
+        let mut moved: Vec<(Symbol, IrType)> = Vec::new();
         for (sym, ir_ty) in captures {
             if ir_ty.as_ref().is_some_and(fun_value_arc_promotable)
                 && self.promotable_fn_binders.borrow().contains(&sym)
@@ -17207,13 +17286,47 @@ impl<'a> Lowerer<'a> {
                 Some(true) => {
                     clone_set.insert(sym);
                 }
-                Some(false) => {
-                    noncl_set.insert(sym);
-                }
+                Some(false) => match (invocation, ir_ty) {
+                    (LambdaInvocation::AtMostOnce, Some(ty)) if ir_type_has_effect_carrier(&ty) => {
+                        moved.push((sym, ty));
+                    }
+                    _ => {
+                        noncl_set.insert(sym);
+                    }
+                },
                 None => {}
             }
         }
-        rewrite_captured_clones(&clone_set, &noncl_set, span, body, 0)
+        let mut body = rewrite_captured_clones(&clone_set, &noncl_set, span, body, 0)?;
+        for (sym, ty) in moved {
+            body = apply_move_ownership(
+                self.clone_env(),
+                BindingSite::Materialized,
+                sym,
+                &ty,
+                body,
+                span,
+            )?;
+            self.one_shot_moved.borrow_mut().push((sym, span));
+        }
+        Ok(body)
+    }
+
+    /// Refuse a one-shot move that a re-invokable closure would repeat.
+    ///
+    /// Every `one_shot_moved` entry recorded from `since` on names a local an
+    /// at-most-once continuation moved; when `captured` holds it, the enclosing
+    /// closure being built may run again and re-move it (E0507), so it is
+    /// refused with IPE-L0126 at the continuation.
+    fn reject_one_shot_escape(&self, since: usize, captured: &BTreeSet<Symbol>) -> DResult<()> {
+        self.one_shot_moved
+            .borrow()
+            .iter()
+            .skip(since)
+            .find(|(sym, _)| captured.contains(sym))
+            .map_or(Ok(()), |(_, span)| {
+                Err(unsupported(*span, Feature::NonCloneCapture))
+            })
     }
 
     /// Run `f` with `syms` registered as promotable fn binders (see the
@@ -17392,6 +17505,7 @@ impl<'a> Lowerer<'a> {
         params: &[canon::Pattern],
         body: &canon::Expr,
         span: Span,
+        invocation: LambdaInvocation,
     ) -> DResult<Expr> {
         // The region type the solver recorded for this lambda is its arrow.
         let ty = self.region_ty(span).ok_or_else(|| {
@@ -17518,6 +17632,8 @@ impl<'a> Lowerer<'a> {
         // the deferral (the param loop below promotes the carrier) instead of
         // fail-closing IPE-L0126.
         let param_syms: Vec<Symbol> = ir_params.iter().map(|(s, _)| *s).collect();
+        let captures = self.captured_locals(&all_param_pats, cur_body);
+        let moved_since = self.one_shot_moved.borrow().len();
         let mut body = self.with_promotable_fn_binders(param_syms, || self.lower_expr(cur_body))?;
         self.fn_is_async.set(prev_async);
         // Apply the computed function-value body to the flatten-invariant pad
@@ -17531,7 +17647,7 @@ impl<'a> Lowerer<'a> {
         // T3: Capture-clone rewrite — classify free locals captured
         // by this closure and replace CloneOk reads with `.clone()`, emitting
         // IPE-L0125 for NonClone captures outside callee position.
-        body = self.rewrite_lambda_captures(&all_param_pats, cur_body, span, body)?;
+        body = self.rewrite_lambda_captures(captures, invocation, moved_since, span, body)?;
         // Fold each destructuring param's `Destructure` around the body,
         // OUTERMOST-first (reverse of source order) so the first parameter's
         // destructure is the outermost binding — identical to the def-head
@@ -19552,7 +19668,9 @@ impl<'a> Lowerer<'a> {
                 }
             }
             canon::Expr_::Call(callee, args) => self.lower_call(callee, args, e.span),
-            canon::Expr_::Lambda(params, body) => self.lower_lambda(params, body, e.span),
+            canon::Expr_::Lambda(params, body) => {
+                self.lower_lambda(params, body, e.span, LambdaInvocation::Reentrant)
+            }
             canon::Expr_::Let(bindings, body) => self.lower_let(bindings, body),
             canon::Expr_::If(branches, else_expr) => {
                 // A multi-way `if` (with `else if` branches) lowers to right-
@@ -21358,6 +21476,44 @@ impl<'a> Lowerer<'a> {
         Ok(())
     }
 
+    /// The at-most-once callback slot of a saturated kernel call, if any.
+    ///
+    /// Structural: the callee is a resolved kernel whose runtime wrapper takes
+    /// that slot as an owned `FnOnce` built after its sibling arguments
+    /// ([`KernelFn::once_callback_arg`]), applied to exactly its arity. A
+    /// partial or over-application has no such slot: its residual closure may
+    /// be re-invoked.
+    fn once_callback_slot(
+        &self,
+        callee: &canon::Expr,
+        args: &[canon::Expr],
+    ) -> DResult<Option<usize>> {
+        let canon::Expr_::VarKernel { id: Some(k), .. } = &callee.value else {
+            return Ok(None);
+        };
+        let Some(slot) = k.once_callback_arg() else {
+            return Ok(None);
+        };
+        let arity = self.callee_arity(&Callee::Kernel(*k))?;
+        Ok((args.len() == arity).then_some(slot))
+    }
+
+    /// Refuse a one-shot move inside the arguments of a re-invokable residual.
+    ///
+    /// An eta-expanded partial application inlines non-`Clone` argument
+    /// expressions into a closure that re-evaluates them per call; a
+    /// continuation lowered among those arguments (a `one_shot_moved` entry
+    /// from `since` on) would re-move its capture (E0507), so it is refused
+    /// with IPE-L0126.
+    fn reject_one_shot_in_residual(&self, since: usize) -> DResult<()> {
+        self.one_shot_moved
+            .borrow()
+            .get(since)
+            .map_or(Ok(()), |(_, span)| {
+                Err(unsupported(*span, Feature::NonCloneCapture))
+            })
+    }
+
     // A single funnel that lowers ctor / kernel / top-level / value-callee
     // applications, each arm reshaping arity + carriers; splitting would scatter
     // the shared arg-lowering and gate sequence across helpers without clarity.
@@ -21369,9 +21525,18 @@ impl<'a> Lowerer<'a> {
         call_span: Span,
         peeked: Option<Callee>,
     ) -> DResult<Expr> {
+        let once_slot = self.once_callback_slot(callee, args)?;
+        let moved_since = self.one_shot_moved.borrow().len();
         let lowered_args = args
             .iter()
-            .map(|a| self.lower_expr(a))
+            .enumerate()
+            .map(|(i, a)| match &a.value {
+                canon::Expr_::Lambda(params, body) if once_slot == Some(i) => {
+                    self.reject_function_through_type_var(a)?;
+                    self.lower_lambda(params, body, a.span, LambdaInvocation::AtMostOnce)
+                }
+                _ => self.lower_expr(a),
+            })
             .collect::<DResult<Vec<_>>>()?;
         match &callee.value {
             canon::Expr_::VarCtor {
@@ -21441,6 +21606,7 @@ impl<'a> Lowerer<'a> {
                     // captures the supplied args and takes the missing ones.
                     // Applies the same T4 capture-clone discipline as
                     // `eta_expand_partial` for named-function partial application.
+                    self.reject_one_shot_in_residual(moved_since)?;
                     self.eta_expand_partial_ctor(
                         callee,
                         ctor_home,
@@ -21550,6 +21716,7 @@ impl<'a> Lowerer<'a> {
                         })
                     }
                     std::cmp::Ordering::Less => {
+                        self.reject_one_shot_in_residual(moved_since)?;
                         self.eta_expand_partial(callee, resolved, lowered_args, arity, call_span)
                     }
                     std::cmp::Ordering::Greater => {
@@ -21587,6 +21754,7 @@ impl<'a> Lowerer<'a> {
                     && arity != 0
                     && args.len() < arity
                 {
+                    self.reject_one_shot_in_residual(moved_since)?;
                     return self.eta_expand_value_partial(callee, lowered_args, arity, call_span);
                 }
                 Ok(Expr::Apply {
@@ -26941,6 +27109,10 @@ impl<'a> Lowerer<'a> {
         // classified by the shared `classify_capture_clone` rule.
         let thunk_body = {
             let captures = self.captured_locals(&[], canon_value);
+            // The thunk re-runs at every read of a bound component, so no local
+            // a continuation inside `value` moved may be one it captures.
+            let captured: BTreeSet<Symbol> = captures.iter().map(|(sym, _)| *sym).collect();
+            self.reject_one_shot_escape(0, &captured)?;
             let mut clone_set: BTreeSet<Symbol> = BTreeSet::new();
             let mut noncl_set: BTreeSet<Symbol> = BTreeSet::new();
             for (sym, ir_ty) in captures {

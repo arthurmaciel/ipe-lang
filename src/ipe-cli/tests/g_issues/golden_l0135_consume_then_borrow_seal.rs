@@ -16,12 +16,16 @@
 //! | `borrow_then_consume_call` | `tagFirst w.tag (consume w)` | builds + prints `10` |
 //! | `let_bound_borrow_then_consume` | `let t = w.tag in both (consume w) t` | builds + prints `10` |
 //! | `seq_kernel_read_then_consume` | `do { Io.println (String.fromInt w.tag) ; both (consume w) 0 }` | fail-closed IPE-L0135 |
-//! | `and_then_kernel_read_then_consume` | `Task.andThen (\x -> both (consume w) x) (Task.succeed w.tag)` | fail-closed IPE-L0126 |
+//! | `and_then_kernel_read_then_consume` | `Task.andThen (\x -> both (consume w) x) (Task.succeed w.tag)` | fail-closed IPE-L0135 |
 //! | `let_bound_seq_kernel_read` | `let w = mk n in do { .. w.tag .. ; both (consume w) 0 }` | fail-closed IPE-L0135 |
 //! | `destructured_seq_kernel_read` | `let (w, _) = pair n in do { .. w.tag .. ; both (consume w) 0 }` | fail-closed IPE-L0135 |
 //! | `partial_move_then_same_field` | `case w of { job } -> withLists job (Task.sequence [ w.job ]) ..` | fail-closed IPE-L0135 |
-//! | `seq_user_arg_read_then_consume` | `do { x <- tagTask w.tag ; both (consume w) x }` | fail-closed IPE-L0126 |
+//! | `seq_user_arg_read_then_consume` | `do { x <- tagTask w.tag ; both (consume w) x }` | builds + prints `10` |
 //! | `seq_user_statement_read_then_consume` | `do { announce w.tag ; both (consume w) 0 }` | builds + prints `3`, `7` |
+//! | `continuation_double_consume` | `Task.andThen (\x -> both (consume w) (String.length (label w))) (tagTask 1)` | fail-closed IPE-L0135 |
+//! | `consume_beside_continuation` | `Task.andThen (\x -> both (consume w) x) (consume w)` | fail-closed IPE-L0135 |
+//! | `continuation_in_reentrant_lambda` | `Task.map (\n -> Task.andThen (\x -> both (consume w) x) (tagTask n)) ..` | fail-closed IPE-L0126 |
+//! | `continuation_in_partial_application` | `let step = both (Task.andThen (\_ -> consume w) (tagTask 1)) in step 1` | fail-closed IPE-L0126 |
 //!
 //! A kernel call's argument order is chosen by its emitter, so a move and a
 //! read of the same record in sibling kernel arguments are rejected in either
@@ -40,10 +44,13 @@
 //! binds, so reading one of them again through `w` is refused too.
 //!
 //! A continuation lambda (an explicit `Task.andThen` or a `<-` bind, which
-//! desugars to one) that passes `w` to a call captures a non-`Clone` value in a
-//! closure. The capture gate refuses that with IPE-L0126 while the lambda body
-//! is lowered, before the parameter's reuse gate runs, whatever the effect
-//! reads.
+//! desugars to one) runs at most once and is built after its effect, so it
+//! moves a captured non-`Clone` record under the same reuse gate a binder gets.
+//! A kernel-argument read of `w` in the effect is still refused (IPE-L0135), a
+//! user-argument read round-trips, and a second use of `w` inside or beside the
+//! continuation is IPE-L0135. A continuation nested in a closure that may run
+//! again (a re-entrant lambda or a partial application's residual) would move
+//! `w` twice, so it is refused with IPE-L0126.
 //!
 //! ```text
 //! # gate check only (fast):
@@ -327,9 +334,9 @@ main =
     run { job = Task.succeed 7, tag = 3 }
 ";
 
-/// The same hazard through an explicit `Task.andThen` continuation. The
-/// continuation captures `w` and passes it to `consume`, so the closure-capture
-/// gate refuses it first (IPE-L0126).
+/// The same hazard through an explicit `Task.andThen` continuation: the
+/// continuation moves `w`, and the kernel-argument read in the effect would
+/// need `w.clone()` (IPE-L0135).
 const AND_THEN_KERNEL_READ_THEN_CONSUME: &str = r"
 
 run : { job : Task Error Int, tag : Int } -> Task Error ()
@@ -396,8 +403,9 @@ main =
     run { job = Task.succeed 7, tag = 3 }
 ";
 
-/// A `<-` bind desugars to a `Task.andThen` continuation lambda; passing the
-/// captured `w` to `consume` there is a non-`Clone` closure capture (IPE-L0126).
+/// A `<-` bind desugars to a `Task.andThen` continuation lambda that moves the
+/// captured `w`; `tagTask`'s argument is read eagerly before the closure is
+/// built. Prints `10`.
 const SEQ_USER_ARG_READ_THEN_CONSUME: &str = r"
 
 run : { job : Task Error Int, tag : Int } -> Task Error ()
@@ -420,6 +428,65 @@ run w =
     do
         announce w.tag
         both (consume w) 0
+
+
+main : Task Error ()
+main =
+    run { job = Task.succeed 7, tag = 3 }
+";
+
+/// A continuation consumes the captured `w` twice.
+const CONTINUATION_DOUBLE_CONSUME: &str = r"
+
+run : { job : Task Error Int, tag : Int } -> Task Error ()
+run w =
+    Task.andThen (\x -> both (consume w) (x + String.length (label w))) (tagTask 1)
+
+
+main : Task Error ()
+main =
+    run { job = Task.succeed 7, tag = 3 }
+";
+
+/// The effect consumes `w` and the continuation moves it again.
+const CONSUME_BESIDE_CONTINUATION: &str = r"
+
+run : { job : Task Error Int, tag : Int } -> Task Error ()
+run w =
+    Task.andThen (\x -> both (consume w) x) (consume w)
+
+
+main : Task Error ()
+main =
+    run { job = Task.succeed 7, tag = 3 }
+";
+
+/// A continuation inside a `Task.map` mapper, a closure that may run again.
+const CONTINUATION_IN_REENTRANT_LAMBDA: &str = r"
+
+run : { job : Task Error Int, tag : Int } -> Task Error ()
+run w =
+    Task.andThen
+        (\t -> t)
+        (Task.map (\n -> Task.andThen (\x -> both (consume w) x) (tagTask n)) (tagTask 1))
+
+
+main : Task Error ()
+main =
+    run { job = Task.succeed 7, tag = 3 }
+";
+
+/// A continuation among the arguments of a partial application, whose residual
+/// closure re-evaluates them per call.
+const CONTINUATION_IN_PARTIAL_APPLICATION: &str = r"
+
+run : { job : Task Error Int, tag : Int } -> Task Error ()
+run w =
+    let
+        step =
+            both (Task.andThen (\_ -> consume w) (tagTask 1))
+    in
+    step 1
 
 
 main : Task Error ()
@@ -494,7 +561,7 @@ fn and_then_kernel_read_then_consume_fails_closed() {
     assert_rejected(
         "and_then_kernel_read_then_consume",
         &seq_program(AND_THEN_KERNEL_READ_THEN_CONSUME),
-        ipe_diagnostics::IPE_L0126,
+        ipe_diagnostics::IPE_L0135,
     );
 }
 
@@ -526,11 +593,11 @@ fn partial_move_then_same_field_fails_closed() {
 }
 
 #[test]
-fn seq_user_arg_read_then_consume_capture_fails_closed() {
-    assert_rejected(
+fn seq_user_arg_read_then_consume_round_trips() {
+    assert_accepted(
         "seq_user_arg_read_then_consume",
         &seq_program(SEQ_USER_ARG_READ_THEN_CONSUME),
-        ipe_diagnostics::IPE_L0126,
+        "10",
     );
 }
 
@@ -540,5 +607,41 @@ fn seq_user_statement_read_then_consume_round_trips() {
         "seq_user_statement_read_then_consume",
         &seq_program(SEQ_USER_STATEMENT_READ_THEN_CONSUME),
         "3\n7",
+    );
+}
+
+#[test]
+fn continuation_double_consume_fails_closed() {
+    assert_rejected(
+        "continuation_double_consume",
+        &seq_program(CONTINUATION_DOUBLE_CONSUME),
+        ipe_diagnostics::IPE_L0135,
+    );
+}
+
+#[test]
+fn consume_beside_continuation_fails_closed() {
+    assert_rejected(
+        "consume_beside_continuation",
+        &seq_program(CONSUME_BESIDE_CONTINUATION),
+        ipe_diagnostics::IPE_L0135,
+    );
+}
+
+#[test]
+fn continuation_in_reentrant_lambda_fails_closed() {
+    assert_rejected(
+        "continuation_in_reentrant_lambda",
+        &seq_program(CONTINUATION_IN_REENTRANT_LAMBDA),
+        ipe_diagnostics::IPE_L0126,
+    );
+}
+
+#[test]
+fn continuation_in_partial_application_fails_closed() {
+    assert_rejected(
+        "continuation_in_partial_application",
+        &seq_program(CONTINUATION_IN_PARTIAL_APPLICATION),
+        ipe_diagnostics::IPE_L0126,
     );
 }
