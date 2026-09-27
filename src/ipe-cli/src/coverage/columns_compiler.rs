@@ -60,6 +60,8 @@ impl AspectCheck<CompilerCrate> for NoPanicColumn {
     fn check(&self, item: &CompilerCrate) -> Cell {
         let files = rust_files(&item.src_path);
         let mut violations: Vec<String> = Vec::new();
+        // An unread file is unaudited, not clean: it holes the crate.
+        let mut unreadable: Vec<String> = Vec::new();
 
         for path in &files {
             let is_test_module = path
@@ -68,8 +70,12 @@ impl AspectCheck<CompilerCrate> for NoPanicColumn {
             if is_test_module {
                 continue;
             }
-            let Ok(src) = std::fs::read_to_string(path) else {
-                continue;
+            let src = match std::fs::read_to_string(path) {
+                Ok(src) => src,
+                Err(error) => {
+                    unreadable.push(format!("{} ({error})", path.display()));
+                    continue;
+                }
             };
             let prod = prod_source(&src);
             if has_prod_panic(&prod) {
@@ -78,6 +84,14 @@ impl AspectCheck<CompilerCrate> for NoPanicColumn {
             }
         }
 
+        if !unreadable.is_empty() {
+            return Cell::Hole(format!(
+                "`{}` cannot be audited for panic-prone patterns: unreadable \
+                 production source: {}",
+                item.name,
+                unreadable.join(", ")
+            ));
+        }
         if violations.is_empty() {
             Cell::Ok
         } else {

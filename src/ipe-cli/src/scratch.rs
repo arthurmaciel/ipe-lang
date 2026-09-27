@@ -438,9 +438,14 @@ mod tests {
                 if is_test_module {
                     continue;
                 }
-                let Ok(source) = std::fs::read_to_string(path) else {
-                    continue;
-                };
+                // An unread file is unaudited, not clean.
+                let source = std::fs::read_to_string(path);
+                assert!(
+                    source.is_ok(),
+                    "cannot read {}: {source:?} — an unread file cannot be audited",
+                    path.display()
+                );
+                let Ok(source) = source else { return };
                 assert_predictable_temp_free(path, &source);
             }
         }
