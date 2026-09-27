@@ -907,15 +907,18 @@ pub(super) fn reject_nonclone_value_reuse(
     if ipe_ir::seq_clone::seq_rewrite_clones_symbol(sym, body) {
         return Err(super::unsupported(span, Feature::NonCloneValueReuse));
     }
-    let consumes = super::count_value_consumes(sym, body);
+    // A by-value pattern binder of a `Copy` record field copies it, so a
+    // pattern that moves no part does not consume `sym`.
+    let copy_fields = super::copy_record_fields(env, ir_ty);
+    let consumes = super::count_value_consumes(sym, &copy_fields, body);
     if consumes > 1 {
         return Err(super::unsupported(span, Feature::NonCloneValueReuse));
     }
     // A borrowing read (`sym.field`, a length probe) that the emitted order
     // evaluates AFTER a move of `sym` observes a moved value (E0382), even
     // though the borrow itself is not a consume. A by-value pattern match
-    // (`match sym`, `let <pat> = sym`) moves the parts its binders bind with
-    // no consume counted, so a later read of a moved part is the same hazard.
+    // (`match sym`, `let <pat> = sym`) moves the parts its binders bind, so a
+    // later read of a moved part is the same hazard.
     if super::nonclone_read_after_move(env, sym, ir_ty, body) {
         return Err(super::unsupported(span, Feature::NonCloneValueReuse));
     }
