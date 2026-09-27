@@ -118,6 +118,8 @@ mod golden_l0135_access_base_move_seal;
 mod golden_l0135_consume_then_borrow_seal;
 #[path = "g_issues/golden_l0135_effect_field_move_seal.rs"]
 mod golden_l0135_effect_field_move_seal;
+#[path = "g_issues/golden_l0135_seq_clone_fact_seal.rs"]
+mod golden_l0135_seq_clone_fact_seal;
 #[path = "g_issues/golden_l0135_union_task_reuse_seal.rs"]
 mod golden_l0135_union_task_reuse_seal;
 #[path = "g_issues/golden_stream_handler_capture_seal.rs"]
