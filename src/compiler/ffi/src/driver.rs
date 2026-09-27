@@ -1563,16 +1563,15 @@ pub fn cargo_deps(pkg: &PkgInfo) -> Result<Vec<DepLine>, Diagnostic> {
     // the emitted app crate depends on the local wrapper directory. Its own
     // transitive deps resolve through the wrapper's `Cargo.toml`, so the single
     // path line is the whole dependency surface the app needs to add.
-    if !pkg.wrapper_path().is_empty() {
+    if let Some(wrapper_path) = pkg.wrapper_path() {
         // The Cargo `[dependencies]` KEY is the charset-gated package NAME, never
         // the weakly gated `pkg_path` (which may even be a `--manifest` filesystem
         // path): the type forbids any ungated string reaching the TOML key.
         let line = DepLine::path(
             pkg.name_pkg().clone(),
-            pkg.wrapper_path().clone(),
+            wrapper_path.clone(),
             pkg.features().to_vec(),
-        )
-        .map_err(dep_defect(pkg.name()))?;
+        );
         return Ok(vec![line]);
     }
     if pkg.transitive_deps().is_empty() {

@@ -502,36 +502,53 @@ impl PkgPath {
 /// boundary — the charset admits real absolute paths (`[A-Za-z0-9._/-]`, plus a
 /// space for a directory name) while excluding every TOML-breaking character
 /// (quote, bracket, brace, backslash, control) — makes an injection-bearing
-/// wrapper path unrepresentable past decode. Empty ⇒ the package did not come
-/// from a wrapper crate (an ordinary crates.io / git inspection).
+/// wrapper path unrepresentable past decode.
+///
+/// The path is also absolute and lexically normalized: it starts at `/`, names
+/// a directory below the root, and carries no empty, `.` or `..` segment. The
+/// install jail canonicalizes the wrapper under the project root before the
+/// inspector reports it, so a relative or `..`-bearing value can only come from
+/// a tampered cache — it would bind a directory the jail never checked. Every
+/// load re-parses through this gate, so the jail holds at each boundary.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WrapperCratePath(String);
 
 impl WrapperCratePath {
+    /// Parse an absolute, normalized, charset-legal wrapper-crate path.
+    ///
+    /// # Errors
+    /// [`crate::diag::WireDefect::InvalidWrapperPath`] naming the broken rule.
     pub(crate) fn parse(s: &str) -> Result<Self, crate::diag::WireDefect> {
-        if s.is_empty() {
-            return Ok(Self(String::new()));
-        }
+        let refuse = |reason: &'static str| crate::diag::WireDefect::InvalidWrapperPath {
+            got: s.to_owned(),
+            reason,
+        };
         let legal = s
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '/' | '-' | ' '));
-        if legal {
-            Ok(Self(s.to_owned()))
-        } else {
-            Err(crate::diag::WireDefect::InvalidPkgPath { got: s.to_owned() })
+        if !legal {
+            return Err(refuse("it carries a character outside `[A-Za-z0-9._/ -]`"));
         }
+        let below_root = s
+            .strip_prefix('/')
+            .ok_or_else(|| refuse("it is not absolute"))?;
+        if below_root.is_empty() {
+            return Err(refuse("it names the filesystem root"));
+        }
+        for segment in below_root.split('/') {
+            match segment {
+                "" => return Err(refuse("it has an empty segment (`//` or a trailing `/`)")),
+                "." | ".." => return Err(refuse("it has a `.` or `..` segment")),
+                _ => {}
+            }
+        }
+        Ok(Self(s.to_owned()))
     }
 
-    /// The validated wrapper-crate path (empty for a non-wrapper package).
+    /// The validated absolute wrapper-crate path.
     #[must_use]
     pub fn as_str(&self) -> &str {
         &self.0
-    }
-
-    /// Whether the package came from an author-supplied wrapper crate.
-    #[must_use]
-    pub const fn is_empty(&self) -> bool {
-        self.0.is_empty()
     }
 }
 
@@ -640,10 +657,10 @@ pub struct PkgInfo {
     /// shape gate at decode (a malformed entry is dropped, never emitted raw).
     declared_opaques: std::collections::BTreeMap<String, String>,
     /// The absolute path to the author-supplied wrapper crate this package was
-    /// inspected from, or empty for an ordinary crates.io / git inspection. When
-    /// set, the emitted app crate depends on the wrapper by `path` rather than a
-    /// registry pin (see [`crate::driver::cargo_dep_lines`]).
-    wrapper_path: WrapperCratePath,
+    /// inspected from, or `None` for an ordinary crates.io / git inspection.
+    /// When set, the emitted app crate depends on the wrapper by `path` rather
+    /// than a registry pin (see [`crate::driver::cargo_dep_lines`]).
+    wrapper_path: Option<WrapperCratePath>,
     dropped: Vec<Diagnostic>,
 }
 
@@ -766,11 +783,11 @@ impl PkgInfo {
         &self.declared_opaques
     }
 
-    /// The absolute wrapper-crate path this package was inspected from, or empty
-    /// for an ordinary crates.io / git inspection.
+    /// The absolute wrapper-crate path this package was inspected from, or
+    /// `None` for an ordinary crates.io / git inspection.
     #[must_use]
-    pub const fn wrapper_path(&self) -> &WrapperCratePath {
-        &self.wrapper_path
+    pub const fn wrapper_path(&self) -> Option<&WrapperCratePath> {
+        self.wrapper_path.as_ref()
     }
 
     /// The bindings dropped by the validating conversion, with the reason
@@ -1358,14 +1375,20 @@ impl TryFrom<WirePkgInfo> for PkgInfo {
             );
         }
         // The wrapper path is spliced into a `path = "…"` TOML value of the
-        // emitted manifest; gate it at the boundary so an injection-bearing
-        // path fails the WHOLE package here rather than reaching the emitter.
-        let wrapper_path = WrapperCratePath::parse(&w.wrapper_path).map_err(|defect| {
-            Diagnostic::WireMalformed {
-                context: format!("crate `{}`", w.name),
-                defect,
-            }
-        })?;
+        // emitted manifest; gate it at the boundary so an injection-bearing,
+        // relative, or `..`-bearing path fails the WHOLE package here rather
+        // than reaching the emitter. The wire's empty string means "not a
+        // wrapper" and becomes `None`, never a path.
+        let wrapper_path = if w.wrapper_path.is_empty() {
+            None
+        } else {
+            Some(WrapperCratePath::parse(&w.wrapper_path).map_err(|defect| {
+                Diagnostic::WireMalformed {
+                    context: format!("crate `{}`", w.name),
+                    defect,
+                }
+            })?)
+        };
         // The representation axis: classification failure of one entry is an
         // opaque fallback recorded in the catalog, never a package failure.
         let foreign_types = crate::transparency::ForeignTypeCatalog::classify(&w.types);
@@ -2153,6 +2176,65 @@ mod tests {
         });
         let pkg = decode(&v).expect("manifest-path-shaped pkg decodes");
         assert_eq!(pkg.pkg_path(), "crates/semver-tool/Cargo.toml");
+    }
+
+    fn wrapper_doc(path: &str) -> serde_json::Value {
+        json!({
+            "pkg": "engine_wrap",
+            "name": "engine_wrap",
+            "version": "0.1.0",
+            "wrapperPath": path,
+            "functions": [],
+            "errors": []
+        })
+    }
+
+    #[test]
+    fn an_absolute_normalized_wrapper_path_decodes() {
+        let pkg = decode(&wrapper_doc("/home/u/proj/wrappers/engine wrap"))
+            .expect("an absolute normalized wrapper path decodes");
+        assert_eq!(
+            pkg.wrapper_path().map(WrapperCratePath::as_str),
+            Some("/home/u/proj/wrappers/engine wrap")
+        );
+    }
+
+    #[test]
+    fn an_empty_wrapper_path_is_not_a_wrapper() {
+        let pkg = decode(&wrapper_doc("")).expect("an ordinary inspection decodes");
+        assert!(pkg.wrapper_path().is_none());
+    }
+
+    // The install jail canonicalizes the wrapper under the project root; a
+    // stored path that is relative, `..`-bearing, or otherwise unnormalized
+    // could bind a directory the jail never checked. Each fails the WHOLE
+    // package at load.
+    #[test]
+    fn an_unjailed_wrapper_path_fails_the_whole_package() {
+        for bad in [
+            "wrappers/engine",
+            "./wrappers/engine",
+            "../evil",
+            "/",
+            "/home/u/../../etc",
+            "/home/u/proj/..",
+            "/home/./u",
+            "/home//u",
+            "/home/u/",
+            "/home/u\"\n[dependencies.evil]",
+            "C:\\wrappers\\engine",
+        ] {
+            assert!(
+                matches!(
+                    decode(&wrapper_doc(bad)),
+                    Err(Diagnostic::WireMalformed {
+                        defect: WireDefect::InvalidWrapperPath { .. },
+                        ..
+                    })
+                ),
+                "{bad:?} must be refused as an unjailed wrapper path"
+            );
+        }
     }
 
     // The resolved `version` is spliced into a TOML value position of the

@@ -60,25 +60,21 @@ impl DepLine {
         })
     }
 
-    /// A wrapper-crate dependency bound by local `path`.
+    /// A wrapper-crate dependency bound by local absolute `path`.
     ///
-    /// # Errors
-    /// [`WireDefect::UnpinnedDependency`] when `path` is empty.
-    pub fn path(
+    /// Infallible: a [`WrapperCratePath`] is absolute and normalized by
+    /// construction, so there is no empty or unjailed path to refuse here.
+    #[must_use]
+    pub const fn path(
         name: PackageName,
         path: WrapperCratePath,
         features: Vec<FeatureName>,
-    ) -> Result<Self, WireDefect> {
-        if path.is_empty() {
-            return Err(WireDefect::UnpinnedDependency {
-                name: name.as_str().to_owned(),
-            });
-        }
-        Ok(Self {
+    ) -> Self {
+        Self {
             name,
             source: DepSource::Path(path),
             features,
-        })
+        }
     }
 
     /// Parse a stored line, accepting exactly the form [`fmt::Display`] renders.
@@ -91,8 +87,9 @@ impl DepLine {
     /// # Errors
     /// [`WireDefect::InvalidDependencyLine`] for a line off the canonical
     /// grammar; the component newtype's own defect for an illegal name,
-    /// version, path, or feature; [`WireDefect::UnpinnedDependency`] for an
-    /// empty version or path.
+    /// version, or feature; [`WireDefect::InvalidWrapperPath`] for a path that
+    /// is empty, relative, `..`-bearing, or outside its charset;
+    /// [`WireDefect::UnpinnedDependency`] for an empty version.
     pub fn parse(line: &str) -> Result<Self, WireDefect> {
         let refuse = |reason: &'static str| WireDefect::InvalidDependencyLine {
             got: line.to_owned(),
@@ -139,7 +136,7 @@ impl DepLine {
         if let Some(version) = quoted_value(head, "version = \"=") {
             Self::registry(name, CrateVersion::parse(version)?, features)
         } else if let Some(path) = quoted_value(head, "path = \"") {
-            Self::path(name, WrapperCratePath::parse(path)?, features)
+            Ok(Self::path(name, WrapperCratePath::parse(path)?, features))
         } else {
             Err(refuse(
                 "the inline table has neither a `version` nor a `path` key",
@@ -292,7 +289,7 @@ mod tests {
         ));
         assert!(matches!(
             DepLine::parse("x = { path = \"/a\\\"b\" }"),
-            Err(WireDefect::InvalidPkgPath { .. })
+            Err(WireDefect::InvalidWrapperPath { .. })
         ));
         assert!(matches!(
             DepLine::parse("x = { version = \"=1.0\", features = [\"a}\"] }"),
@@ -310,9 +307,32 @@ mod tests {
             DepLine::parse("x = \"=\""),
             Err(WireDefect::UnpinnedDependency { .. })
         ));
-        assert!(matches!(
-            DepLine::parse("x = { path = \"\" }"),
-            Err(WireDefect::UnpinnedDependency { .. })
-        ));
+    }
+
+    // A stored path line is re-jailed on load: only an absolute, normalized
+    // path parses, so a tampered cache cannot bind a directory the install
+    // jail never canonicalized.
+    #[test]
+    fn an_unjailed_path_line_is_refused() {
+        for path in [
+            "",
+            "wrappers/engine",
+            "./wrappers/engine",
+            "../evil",
+            "/",
+            "/w/../etc",
+            "/w/.",
+            "/w//engine",
+            "/w/engine/",
+        ] {
+            let line = format!("x = {{ path = \"{path}\" }}");
+            assert!(
+                matches!(
+                    DepLine::parse(&line),
+                    Err(WireDefect::InvalidWrapperPath { .. })
+                ),
+                "{line:?} must be refused as an unjailed wrapper path"
+            );
+        }
     }
 }

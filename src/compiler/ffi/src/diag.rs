@@ -721,6 +721,17 @@ pub enum WireDefect {
         /// The offending path.
         got: String,
     },
+    /// A wrapper-crate path is not an absolute, normalized, charset-legal path.
+    ///
+    /// The path is spliced into a `path = "…"` TOML value of the emitted
+    /// `Cargo.toml`; a relative or `..`-bearing path would bind a directory
+    /// other than the one the install jail canonicalized.
+    InvalidWrapperPath {
+        /// The offending path.
+        got: String,
+        /// Which structural rule was broken.
+        reason: &'static str,
+    },
     /// A resolved crate version carries a character outside the semver charset
     /// `[0-9A-Za-z.*=<>~^,+ -]`. The version is spliced into a TOML value
     /// position of the emitted `Cargo.toml` (`<name> = "=<version>"`); a value
@@ -877,6 +888,9 @@ impl fmt::Display for WireDefect {
                     f,
                     "{got:?} is not a legal package path (it carries a control character)"
                 )
+            }
+            Self::InvalidWrapperPath { got, reason } => {
+                write!(f, "{got:?} is not a legal wrapper-crate path: {reason}")
             }
             Self::InvalidVersion { got } => {
                 write!(
