@@ -3015,7 +3015,7 @@ mod tests {
             let root = base.join(label);
             let anchor_path = root.join("a").join("b").join("c");
             std::fs::create_dir_all(&anchor_path).expect("make anchor");
-            let proven = prove_parent_steps(&anchor_path, &anchor_path).expect("prove anchor");
+            let proven = prove_parent_steps(&anchor_path).expect("prove anchor");
             let anchor = hold_deepest_existing(&anchor_path, &proven).expect("hold anchor");
             let relocated = to.iter().fold(root.clone(), |p, n| p.join(n));
             std::fs::create_dir_all(relocated.parent().expect("moved parent")).expect("make above");
