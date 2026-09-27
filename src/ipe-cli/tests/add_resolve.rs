@@ -341,7 +341,7 @@ fn add_appends_updates_and_never_overwrites_an_escape() {
     let err = resolve::resolve_and_add(&proj, "locallib", &req3, &esc_index)
         .expect_err("adding an index dep over an escape name must be refused");
     assert!(
-        matches!(err, ipe::CliError::Usage(_) | ipe::CliError::UsageOwned(_)),
+        matches!(err, ipe::CliError::Usage(_)),
         "the escape-collision refusal is a usage error: {err:?}"
     );
     // The escape is untouched and the file still parses.

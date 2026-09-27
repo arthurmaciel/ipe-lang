@@ -162,7 +162,7 @@ impl ConfigTarget {
     /// # Errors
     /// [`CliError::RuntimeHomeUnknown`] when no home can be resolved for the Ipê
     /// target; for Cargo, [`CliError::EnvDirNotAbsolute`] when `CARGO_HOME` is
-    /// relative and [`CliError::UsageOwned`] when no home can be resolved.
+    /// relative and [`CliError::Usage`] when no home can be resolved.
     fn path(self) -> Result<PathBuf, CliError> {
         match self {
             Self::IpeHome => Ok(runtime_embed::ipe_home()?.join("config.toml")),
@@ -185,13 +185,13 @@ fn cargo_config_path() -> Result<PathBuf, CliError> {
 /// [`CliError::EnvDirNotAbsolute`] when `CARGO_HOME` is set, non-empty, and
 /// relative — cargo resolves it against its working directory, so writing the
 /// home default instead would edit a file cargo never reads;
-/// [`CliError::UsageOwned`] when `CARGO_HOME` is unset and no home resolves.
+/// [`CliError::Usage`] when `CARGO_HOME` is unset and no home resolves.
 fn cargo_config_path_from(
     cargo_home: Option<std::ffi::OsString>,
     home: Option<PathBuf>,
 ) -> Result<PathBuf, CliError> {
     let cargo_home = crate::env_dir::tool_home_from("CARGO_HOME", cargo_home, home, ".cargo")?
-        .ok_or_else(|| CliError::UsageOwned(crate::text::health_home_unknown().to_owned()))?;
+        .ok_or_else(|| CliError::Usage(crate::text::msg::health_home_unknown()))?;
     Ok(cargo_home.join("config.toml"))
 }
 
@@ -358,7 +358,7 @@ impl Report {
 /// never prompt and never mutate.
 ///
 /// # Errors
-/// [`CliError::UsageOwned`] on an unknown flag or a combination the parse
+/// [`CliError::Usage`] on an unknown flag or a combination the parse
 /// rejects (`--yes` with `--plain` / `--json`, which never mutate); a filesystem
 /// error from an accepted fix.
 pub fn run_health(rest: &[String]) -> Result<(), CliError> {
@@ -1567,19 +1567,19 @@ fn apply_one(fix: &Fix) -> Result<String, CliError> {
 /// `argv`, and never invokes a shell or `sudo`.
 ///
 /// # Errors
-/// [`CliError::UsageOwned`] when `argv` is empty, the program cannot be
+/// [`CliError::Usage`] when `argv` is empty, the program cannot be
 /// launched, or it exits non-zero.
 fn run_install(argv: &[String]) -> Result<(), CliError> {
-    let (program, rest) = argv.split_first().ok_or_else(|| {
-        CliError::UsageOwned(crate::text::health_install_command_empty().to_owned())
-    })?;
+    let (program, rest) = argv
+        .split_first()
+        .ok_or_else(|| CliError::Usage(crate::text::msg::health_install_command_empty()))?;
     let status = Command::new(program).args(rest).status().map_err(|e| {
-        CliError::UsageOwned(crate::text::health_install_launch_failed(&program, &e))
+        CliError::Usage(crate::text::msg::health_install_launch_failed(&program, &e))
     })?;
     if status.success() {
         Ok(())
     } else {
-        Err(CliError::UsageOwned(crate::text::health_install_failed(
+        Err(CliError::Usage(crate::text::msg::health_install_failed(
             &program,
         )))
     }
@@ -1598,7 +1598,7 @@ fn run_install(argv: &[String]) -> Result<(), CliError> {
 /// numbered backup captures the prior state first, so the change is reversible.
 ///
 /// # Errors
-/// [`CliError::Io`] on a filesystem failure; [`CliError::UsageOwned`] when the
+/// [`CliError::Io`] on a filesystem failure; [`CliError::Usage`] when the
 /// existing file does not parse as TOML (the command will not blindly overwrite
 /// a file it cannot understand).
 fn apply_config_edit(path: &Path, key: &[&str], value: &ConfigValue) -> Result<(), CliError> {
@@ -1614,7 +1614,10 @@ fn apply_config_edit(path: &Path, key: &[&str], value: &ConfigValue) -> Result<(
     };
 
     let mut doc = existing.parse::<toml_edit::DocumentMut>().map_err(|e| {
-        CliError::UsageOwned(crate::text::health_config_not_toml(&path.display(), &e))
+        CliError::Usage(crate::text::msg::health_config_not_toml(
+            &path.display(),
+            &e,
+        ))
     })?;
 
     // Idempotent: if the key already holds exactly this value, no write, no
@@ -1637,8 +1640,8 @@ fn apply_config_edit(path: &Path, key: &[&str], value: &ConfigValue) -> Result<(
     // Parse-verify BEFORE the write becomes live: a render that does not
     // round-trip is a bug, and we roll back rather than write it.
     if rendered.parse::<toml_edit::DocumentMut>().is_err() {
-        return Err(CliError::UsageOwned(
-            crate::text::health_config_edit_unparsable(&path.display()),
+        return Err(CliError::Usage(
+            crate::text::msg::health_config_edit_unparsable(&path.display()),
         ));
     }
 
@@ -1854,7 +1857,7 @@ mod tests {
             );
         }
         let got = cargo_config_path_from(None, None);
-        assert!(matches!(got, Err(CliError::UsageOwned(_))));
+        assert!(matches!(got, Err(CliError::Usage(_))));
     }
 
     fn sample_report() -> Report {
@@ -2033,7 +2036,7 @@ mod tests {
         std::fs::write(&cfg, "this is not = = toml [[[").expect("seed");
         let val = ConfigValue::Str("y".to_owned());
         let err = apply_config_edit(&cfg, &["build", "x"], &val);
-        assert!(matches!(err, Err(CliError::UsageOwned(_))));
+        assert!(matches!(err, Err(CliError::Usage(_))));
         // The broken file is left untouched — never overwritten.
         assert_eq!(
             std::fs::read_to_string(&cfg).expect("read"),
@@ -2157,7 +2160,7 @@ mod tests {
 
     #[test]
     fn empty_install_argv_is_refused() {
-        assert!(matches!(run_install(&[]), Err(CliError::UsageOwned(_))));
+        assert!(matches!(run_install(&[]), Err(CliError::Usage(_))));
     }
 
     #[test]

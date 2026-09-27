@@ -101,7 +101,7 @@ pub const fn axis_for_driver(
 ///
 /// # Errors
 ///
-/// [`CliError::UsageOwned`] wrapping the [`RunJailDefect`] display when the
+/// [`CliError::Usage`] wrapping the [`RunJailDefect`] display when the
 /// profile cannot be lowered (an unknown database driver — fail-closed).
 pub fn build_profile(
     caps: &ResolvedCapabilities,
@@ -145,7 +145,7 @@ pub fn override_requested() -> bool {
 ///
 /// # Errors
 ///
-/// [`CliError::UsageOwned`] carrying the refusal (`IPE-F4413`) when consent is
+/// [`CliError::Usage`] carrying the refusal (`IPE-F4413`) when consent is
 /// absent.
 pub fn resolve_refusal(
     defect: &RunJailDefect,
@@ -202,7 +202,7 @@ pub fn resolve_refusal(
 ///
 /// # Errors
 ///
-/// [`CliError::UsageOwned`] on any fail-closed refusal.
+/// [`CliError::Usage`] on any fail-closed refusal.
 pub fn jail_and_exec(
     profile: &SandboxProfile,
     union: &BTreeSet<Capability>,
@@ -392,14 +392,14 @@ const FLOOR_REFERENCE: &str = "    // Retain the embedded capability floor (keep
 ///
 /// # Errors
 ///
-/// [`CliError::UsageOwned`] if the `fn main` anchor is absent (the emitted
+/// [`CliError::Usage`] if the `fn main` anchor is absent (the emitted
 /// program shape has drifted — refuse rather than emit an unreferenced floor
 /// that a linker would collect).
 fn inject_floor_reference(src: &str) -> Result<String, CliError> {
     const ANCHOR: &str = "fn main() {\n";
     let idx = src
         .find(ANCHOR)
-        .ok_or_else(|| CliError::UsageOwned(crate::text::run_main_anchor_absent().to_owned()))?;
+        .ok_or_else(|| CliError::Usage(crate::text::msg::run_main_anchor_absent()))?;
     let insert_at = idx + ANCHOR.len();
     let mut out = String::with_capacity(src.len() + FLOOR_REFERENCE.len());
     out.push_str(&src[..insert_at]);
@@ -435,7 +435,7 @@ pub fn artifact_is_native(binary_path: &Path) -> Result<bool, CliError> {
 ///
 /// # Errors
 ///
-/// [`CliError::UsageOwned`] on a missing/tampered profile or a profile weaker
+/// [`CliError::Usage`] on a missing/tampered profile or a profile weaker
 /// than the embedded floor (both refuse-to-run).
 pub fn load_and_verify_artifact(
     profile_path: &Path,
@@ -449,7 +449,7 @@ pub fn load_and_verify_artifact(
         crate::io_bounded::SMALL_FILE_READ_CAP,
     )?;
     let profile = run_jail::parse_profile(&profile_text).map_err(|e| {
-        CliError::UsageOwned(crate::text::run_profile_unparsable(
+        CliError::Usage(crate::text::msg::run_profile_unparsable(
             &RunJailDefect::ProfileWeakerThanFloor.code().as_str(),
             &e,
         ))
@@ -463,16 +463,16 @@ pub fn load_and_verify_artifact(
         source: e,
     })?;
     let floor = run_jail::scan_capfloor(&binary).ok_or_else(|| {
-        CliError::UsageOwned(crate::text::run_floor_unreadable(
+        CliError::Usage(crate::text::msg::run_floor_unreadable(
             &RunJailDefect::ProfileWeakerThanFloor.code().as_str(),
         ))
     })?;
 
     // The profile MUST isolate at least as much as the embedded floor.
     if !profile.satisfies_capfloor(&floor) {
-        return Err(CliError::UsageOwned(
-            RunJailDefect::ProfileWeakerThanFloor.to_string(),
-        ));
+        return Err(CliError::Usage(crate::text::Message::relay(
+            &RunJailDefect::ProfileWeakerThanFloor,
+        )));
     }
     Ok(profile)
 }

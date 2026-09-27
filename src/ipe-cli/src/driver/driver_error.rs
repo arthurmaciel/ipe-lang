@@ -44,8 +44,9 @@ pub struct AdvisoryVulnerablePayload {
 /// of the Ipê program being compiled.
 #[derive(Debug)]
 pub enum CliError {
-    /// Command-line misuse; carries a fixed usage hint.
-    Usage(&'static str),
+    /// Command-line or manifest misuse; carries the catalog message saying what
+    /// was wrong and how to fix it.
+    Usage(text::Message),
     /// No command, or an unrecognised one: the top-level help is shown and the
     /// process exits non-zero. Distinct from [`Self::Usage`] because it renders
     /// the full sectioned screen (coloured for a terminal) rather than a hint.
@@ -53,11 +54,6 @@ pub enum CliError {
     /// `attempted` is the token the user typed (empty when no command was
     /// given); a near-miss to a known command is offered as a `maybe` hint.
     UnknownCommand { attempted: TerminalSafe },
-    /// Command-line / manifest misuse whose message must echo user-supplied
-    /// input (e.g. an unrecognised manifest value) — kept distinct from
-    /// [`Self::Usage`] so no call site needs to leak a `String` into a
-    /// `&'static str` just to report what the user actually wrote.
-    UsageOwned(String),
     /// A filesystem operation failed at `path`.
     Io {
         path: PathBuf,
@@ -182,7 +178,7 @@ pub enum CliError {
     /// Package resolution failed for a non-security reason: an index entry could
     /// not be found or parsed, no published version satisfied the requirement, or
     /// a `git` fetch of the source failed. Carries a message naming the package.
-    Resolve(String),
+    Resolve(text::Message),
     /// `ipe.lock` cannot record or admit a dependency: a missing field, an
     /// unrecognised `kind`, an impossible `source`/`rev`/`kind` pairing, or a
     /// path dependency that cannot be written into the lockfile. Boxed to keep
@@ -248,7 +244,7 @@ pub enum CliError {
     /// the reason followed by that command's full, indented `--help` page — the
     /// uniform "misuse shows help" output every command shares, printed to stderr
     /// by [`crate::run_cli`]'s caller. The command name is always a known command
-    /// (the dispatcher wraps a raw [`Self::Usage`] / [`Self::UsageOwned`] into
+    /// (the dispatcher wraps a raw [`Self::Usage`] into
     /// this only for a command it recognised).
     CommandUsage {
         /// The command whose help page to show (a known command name).
@@ -440,7 +436,10 @@ impl From<toolchain::ToolchainMissing> for CliError {
 
 impl From<api_surface::DiffError> for CliError {
     fn from(err: api_surface::DiffError) -> Self {
-        Self::Diff(err)
+        match err {
+            api_surface::DiffError::Source(refusal) => *refusal,
+            other => Self::Diff(other),
+        }
     }
 }
 
@@ -454,7 +453,7 @@ impl From<delivery::DeliveryError> for CliError {
     /// A delivery refusal is a pedagogical, user-facing message; it surfaces
     /// through the reader's named-error channel.
     fn from(err: delivery::DeliveryError) -> Self {
-        Self::UsageOwned(err.to_string())
+        Self::Usage(text::Message::relay(&err))
     }
 }
 
@@ -515,7 +514,7 @@ impl CliError {
     #[must_use]
     pub const fn machine_kind(&self) -> &'static str {
         match self {
-            Self::Usage(_) | Self::UsageOwned(_) => "usage",
+            Self::Usage(_) => "usage",
             Self::UnknownCommand { .. } => "unknown-command",
             Self::Io { .. } => "io",
             Self::Pipeline { .. } => "pipeline",
@@ -590,7 +589,6 @@ impl CliError {
             }
             Self::RuntimeVersionMismatch { .. } => Internal,
             Self::Usage(_)
-            | Self::UsageOwned(_)
             | Self::UnknownCommand { .. }
             | Self::Io { .. }
             | Self::Pipeline { .. }
@@ -691,8 +689,7 @@ impl std::fmt::Display for CliError {
     #[allow(clippy::too_many_lines)]
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Usage(hint) => write!(f, "{hint}"),
-            Self::UsageOwned(hint) => write!(f, "{hint}"),
+            Self::Usage(hint) => f.write_str(hint),
             Self::UnknownCommand { attempted } => fmt_unknown_command(attempted, f),
             Self::Io { path, source } => fmt_io_error(path, source, f),
             Self::Pipeline { file, src, diag } => {

@@ -68,7 +68,7 @@ pub(crate) struct CleanArgs {
 /// the command takes no positional argument.
 ///
 /// # Errors
-/// [`CliError::UsageOwned`] on an unknown flag or any positional argument.
+/// [`CliError::Usage`] on an unknown flag or any positional argument.
 pub(crate) fn parse_clean_args(rest: &[String]) -> Result<CleanArgs, CliError> {
     let mut format: Option<OutputFormat> = None;
     for arg in rest {
@@ -95,7 +95,7 @@ pub(crate) fn parse_clean_args(rest: &[String]) -> Result<CleanArgs, CliError> {
 /// `--plain` prints one removed path per line, flush-left.
 ///
 /// # Errors
-/// [`CliError::UsageOwned`] on any unrecognised argument or when the current
+/// [`CliError::Usage`] on any unrecognised argument or when the current
 /// directory is not an Ipê project (no `package.ipe`); [`CliError::Io`] on a
 /// filesystem failure while removing a directory.
 pub fn run_clean(rest: &[String]) -> Result<(), CliError> {
@@ -127,7 +127,7 @@ pub(crate) fn clean_root(root: &Path) -> Result<Vec<String>, CliError> {
 /// real, symlink-resolved paths.
 ///
 /// # Errors
-/// [`CliError::UsageOwned`] when there is no `package.ipe` here (fail-closed: no
+/// [`CliError::Usage`] when there is no `package.ipe` here (fail-closed: no
 /// project, nothing to clean), with the legacy-toml hint when only a legacy
 /// `ipe.toml` is present; [`CliError::Io`] when the directory cannot be
 /// canonicalised.
@@ -135,9 +135,9 @@ fn project_root() -> Result<PathBuf, CliError> {
     let cwd = PathBuf::from(".");
     if crate::project::manifest_in_dir(&cwd).is_none() {
         if crate::project::has_only_legacy_toml(&cwd) {
-            return Err(CliError::Usage(text::legacy_toml_hint()));
+            return Err(CliError::Usage(text::msg::legacy_toml_hint()));
         }
-        return Err(CliError::UsageOwned(text::clean_no_manifest().to_owned()));
+        return Err(CliError::Usage(text::msg::clean_no_manifest()));
     }
     std::fs::canonicalize(&cwd).map_err(|e| CliError::Io {
         path: cwd,
