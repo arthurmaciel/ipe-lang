@@ -2183,11 +2183,11 @@ fn lower_dict_update_partial_over_function_value_gated() {
     assert_rejected("lower_dict_update_partial_fn_value", &src, "IPE-L0134");
 }
 
-/// A `Set` higher-order kernel stays open (its `Ord`-bound element admits no
-/// function, so the lowerer never re-carriers it): `Set.foldl` threading a
-/// `List (Int -> Int)` accumulator must fail closed with IPE-L0134.
+/// A `Set` element is `Ord`-bound, so it never holds a function and no `Set`
+/// mapper parameter binds a stored function: `Set.foldl` threading a
+/// `List (Int -> Int)` accumulator compiles.
 #[test]
-fn lower_set_foldl_with_function_accumulator_gated() {
+fn lower_set_foldl_with_function_accumulator_compiles() {
     let src = format!(
         "{HEAD}import Ipe.Io as Io\n\
          import Ipe.List\n\
@@ -2198,7 +2198,7 @@ fn lower_set_foldl_with_function_accumulator_gated() {
          main : Task Error ()\n\
          main =\n    Io.println (String.fromInt (List.length (Set.foldl (\\_ acc -> acc) steps (Set.fromList [ 1, 2 ]))))\n"
     );
-    assert_rejected("lower_set_foldl_fn_acc", &src, "IPE-L0134");
+    assert_compiles("lower_set_foldl_fn_acc", &src);
 }
 
 /// A generic union `Wrap a` at a non-`Clone` concrete payload (`Task Error Int`)

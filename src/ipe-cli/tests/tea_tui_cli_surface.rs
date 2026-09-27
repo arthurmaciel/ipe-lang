@@ -749,6 +749,64 @@ fn dict_map_predicates() -> Result<String, BoxError> {
     )
 }
 
+/// Stored `Int -> Int` steps, each applied to the line length.
+const STORED_STEPS: &str = r"[ \n -> n + 1, \n -> n * 2 ]";
+
+/// `CLI_APP` whose `Line s` branch appends `appended` (a `List String`), with
+/// `Ipe.Dict`/`Ipe.List`/`Ipe.String` imported and top-level `defs` added.
+fn cli_appending_with(defs: &str, appended: &str) -> Result<String, BoxError> {
+    let src = cli_appending(
+        "import Ipe.Dict as Dict\nimport Ipe.List as List\nimport Ipe.String as String\n",
+        appended,
+    )?;
+    variant(
+        &src,
+        "subscriptions : Model -> Sub Msg\n",
+        &format!("{defs}\nsubscriptions : Model -> Sub Msg\n"),
+    )
+}
+
+/// `Dict.foldl` OVER-applied (its function result applied to one more
+/// argument), its lambda mapper binding the stored `Dict` value.
+fn over_applied_dict_foldl() -> Result<String, BoxError> {
+    cli_appending_with(
+        "",
+        r#"[ String.fromInt (Dict.foldl (\_k f acc -> \n -> f (acc n)) (\n -> n) (Dict.fromList [ ( "inc", \n -> n + 1 ), ( "dbl", \n -> n * 2 ) ]) (String.length s)) ]"#,
+    )
+}
+
+/// `List.map2` whose mapper is a NAMED top-level function binding the stored
+/// element.
+fn named_mapper_map2() -> Result<String, BoxError> {
+    cli_appending_with(
+        "applyTo : (Int -> Int) -> Int -> Int\napplyTo f n =\n    f n\n",
+        &format!(
+            "List.map String.fromInt (List.map2 applyTo {STORED_STEPS} [ String.length s, 3 ])"
+        ),
+    )
+}
+
+/// `List.map2` whose mapper is a LET-BOUND lambda binding the stored element.
+fn let_bound_mapper_map2() -> Result<String, BoxError> {
+    cli_appending_with(
+        "",
+        &format!(
+            "(let\n                app =\n                    \\f n -> f (n + 1) + 1\n            in\n            List.map String.fromInt (List.map2 app {STORED_STEPS} [ String.length s, 3 ]))"
+        ),
+    )
+}
+
+/// A POINT-FREE `List.map2` reference, applied later to a mapper binding the
+/// stored element.
+fn point_free_map2() -> Result<String, BoxError> {
+    cli_appending_with(
+        "",
+        &format!(
+            "(let\n                m =\n                    List.map2\n            in\n            List.map String.fromInt (m (\\f n -> f n) {STORED_STEPS} [ String.length s, 3 ]))"
+        ),
+    )
+}
+
 /// Whether some emitted closure binds a parameter on the `Arc` function carrier.
 fn closure_binds_shared_fn(rust: &str) -> bool {
     rust.match_indices("move |").any(|(at, opener)| {
@@ -834,6 +892,55 @@ fn seal_sort_by_stored_fn_into_impl_fn_kernel_builds() -> Result<(), BoxError> {
 #[test]
 fn seal_dict_map_stored_fn_into_impl_fn_kernel_builds() -> Result<(), BoxError> {
     assert_builds("seal_dict_map_stored_fn", &dict_map_predicates()?)
+}
+
+/// An over-applied `Dict.foldl`'s mapper binds the stored value's `Arc` carrier.
+#[test]
+fn over_applied_dict_foldl_emits_shared_carrier() -> Result<(), BoxError> {
+    assert_emits_shared_fn_param("emit_over_applied_dict_foldl", &over_applied_dict_foldl()?)
+}
+
+/// A named mapper is eta-wrapped onto the stored element's `Arc` carrier.
+#[test]
+fn named_mapper_map2_emits_shared_carrier() -> Result<(), BoxError> {
+    assert_emits_shared_fn_param("emit_named_mapper_map2", &named_mapper_map2()?)
+}
+
+/// A let-bound lambda mapper is eta-wrapped onto the `Arc` carrier.
+#[test]
+fn let_bound_mapper_map2_emits_shared_carrier() -> Result<(), BoxError> {
+    assert_emits_shared_fn_param("emit_let_bound_mapper_map2", &let_bound_mapper_map2()?)
+}
+
+/// A point-free `List.map2`'s eta mapper parameter is wrapped onto the `Arc`
+/// carrier.
+#[test]
+fn point_free_map2_emits_shared_carrier() -> Result<(), BoxError> {
+    assert_emits_shared_fn_param("emit_point_free_map2", &point_free_map2()?)
+}
+
+/// An over-applied `Dict.foldl` over stored functions builds.
+#[test]
+fn seal_over_applied_dict_foldl_stored_fn_builds() -> Result<(), BoxError> {
+    assert_builds("seal_over_applied_dict_foldl", &over_applied_dict_foldl()?)
+}
+
+/// `List.map2` with a named mapper over stored functions builds.
+#[test]
+fn seal_named_mapper_map2_stored_fn_builds() -> Result<(), BoxError> {
+    assert_builds("seal_named_mapper_map2", &named_mapper_map2()?)
+}
+
+/// `List.map2` with a let-bound lambda mapper over stored functions builds.
+#[test]
+fn seal_let_bound_mapper_map2_stored_fn_builds() -> Result<(), BoxError> {
+    assert_builds("seal_let_bound_mapper_map2", &let_bound_mapper_map2()?)
+}
+
+/// A point-free `List.map2` applied to stored functions builds.
+#[test]
+fn seal_point_free_map2_stored_fn_builds() -> Result<(), BoxError> {
+    assert_builds("seal_point_free_map2", &point_free_map2()?)
 }
 
 /// A let-bound `Cli.Sub.onLine` applied later builds.

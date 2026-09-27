@@ -208,6 +208,44 @@ fn arrow_params(fn_ty: &Ty) -> Vec<&Ty> {
     params
 }
 
+/// The parameter count of the mapper at kernel position `arg` of scheme
+/// `shape`: the length of that argument's own arrow spine (0 for a non-arrow).
+fn scheme_mapper_arity(shape: &ipe_kernels::TyShape, arg: usize) -> usize {
+    let Some(mapper) = ipe_kernels::spine_arg(shape, arg) else {
+        return 0;
+    };
+    let mut count = 0;
+    while ipe_kernels::spine_arg(mapper, count).is_some() {
+        count = count.saturating_add(1);
+    }
+    count
+}
+
+/// Whether a reference to `kernel` at solved type `ty` hands some mapper a
+/// FUNCTION-typed parameter that binds a stored element — the instance whose
+/// mapper must pass the carrier choke point
+/// (`Lowerer::retype_collection_element_param`).
+fn kernel_ref_binds_fn_element(kernel: KernelFn, ty: &Ty) -> bool {
+    let Some(shape) = kernel.scheme_shape() else {
+        return false;
+    };
+    let arity = kernel.def().arity;
+    arrow_params(ty)
+        .iter()
+        .take(usize::from(arity))
+        .enumerate()
+        .any(|(arg, mapper_ty)| {
+            arrow_params(mapper_ty)
+                .iter()
+                .take(scheme_mapper_arity(shape, arg))
+                .enumerate()
+                .any(|(param, param_ty)| {
+                    matches!(param_ty, Ty::Fun(..))
+                        && ipe_kernels::mapper_param_binds_stored_element(shape, arity, arg, param)
+                })
+        })
+}
+
 /// Whether `t` still holds a type variable anywhere, an open record row tail included.
 ///
 /// The walk is bounded by the solved type's own depth.
@@ -20880,8 +20918,14 @@ impl<'a> Lowerer<'a> {
                 // (`List.map Sub.onKey hs`, `let on = Sub.onKey`) into
                 // `\x -> kernel x`, so that arm fires on every path. See
                 // `StdlibKernel::requires_saturated_emit`.
+                //
+                // A higher-order kernel whose mapper binds a stored FUNCTION
+                // element at this instance takes the same eta route, so its
+                // mapper eta parameter reaches the carrier choke point
+                // ([`Self::retype_collection_element_param`]) exactly as a
+                // saturated call's mapper does.
                 if let Callee::Kernel(k) = &callee
-                    && k.requires_saturated_emit()
+                    && (k.requires_saturated_emit() || kernel_ref_binds_fn_element(*k, ty))
                 {
                     let arity = self.callee_arity(&callee)?;
                     return self.eta_expand_partial(e, callee, Vec::new(), arity, e.span);
@@ -22366,22 +22410,79 @@ impl<'a> Lowerer<'a> {
         }
     }
 
-    /// Re-type every mapper-closure parameter of a higher-order kernel that
-    /// binds a STORED element from the direct `Fun` carrier ([`IrType::Fun`],
-    /// `Box`) to the storage `SharedFun` carrier ([`IrType::SharedFun`], `Arc`).
+    /// Align every mapper argument of a higher-order kernel with the carrier of
+    /// the STORED element it binds: the single choke point every route by which
+    /// a kernel receives a mapper passes through — a saturated, partial, or
+    /// over-applied call ([`Self::lower_call_uniform`], before the arity split)
+    /// and the eta parameters of a point-free reference
+    /// ([`Self::eta_expand_partial`]).
     ///
     /// A function stored in a `List` element, a `Dict` value, a tuple
     /// component, or a record field is carried on `Arc<dyn Fn>`. When such a
     /// collection flows into `List.map`/`Dict.foldl`/`List.map2`/… the runtime
-    /// kernel monomorphises its element type to `Arc<dyn Fn>`, so the mapper
-    /// closure's parameter fed that element must be `Arc<dyn Fn>` too — but
-    /// [`Self::lower_lambda`] stamps a function-typed parameter as the direct
-    /// `Fun` (`Box`) carrier, which is the `Arc`-vs-`Box` frontier.
+    /// kernel monomorphises its element type to `Arc<dyn Fn>`, so the mapper's
+    /// parameter fed that element must accept `Arc<dyn Fn>` too, while a lowered
+    /// function-typed parameter or value sits on the direct `Fun` (`Box`)
+    /// carrier: the `Arc`-vs-`Box` frontier (`E0277`/`E0308`).
     ///
     /// Which parameter binds which element is derived from the kernel's scheme
     /// alone ([`ipe_kernels::mapper_param_binds_stored_element`]), so every
-    /// schemed higher-order kernel is covered with no list to drift. A
-    /// parameter whose solved type is not a bare function keeps its lowered
+    /// schemed higher-order kernel is covered with no list to drift. `first` is
+    /// the kernel position of `lowered_args[0]`; `arg_ty` yields the solved type
+    /// of the argument at a kernel position.
+    ///
+    /// - An inline lambda has its bound function-typed parameters re-typed in
+    ///   place ([`Self::flip_mapper_lambda_params`]).
+    /// - Any other mapper expression (a top-level function, a local binding, an
+    ///   eta parameter, a computed function) is eta-wrapped
+    ///   ([`Self::wrap_mapper_value`]): the wrapper takes the element on `Arc`
+    ///   and demotes it to `Box` before calling the original.
+    ///
+    /// A mapper whose solved type is unavailable where a bound parameter needs
+    /// it fails closed with IPE-L0134. A mapper with no function-typed bound
+    /// parameter is left untouched (byte-identical).
+    fn retype_collection_element_param<'t>(
+        &self,
+        resolved: &Callee,
+        first: usize,
+        lowered_args: &mut [Expr],
+        arg_ty: impl Fn(usize) -> Option<&'t Ty>,
+        span: Span,
+    ) -> DResult<()> {
+        let Callee::Kernel(kernel) = resolved else {
+            return Ok(());
+        };
+        let Some(shape) = kernel.scheme_shape() else {
+            return Ok(());
+        };
+        let arity = kernel.def().arity;
+        for (offset, lowered) in lowered_args.iter_mut().enumerate() {
+            let arg = first.saturating_add(offset);
+            if let Expr::Lambda { params, body, .. } | Expr::SharedLambda { params, body, .. } =
+                lowered
+            {
+                self.flip_mapper_lambda_params(shape, arity, arg, params, body)?;
+                continue;
+            }
+            let binding = scheme_mapper_arity(shape, arg);
+            if !(0..binding).any(|param| {
+                ipe_kernels::mapper_param_binds_stored_element(shape, arity, arg, param)
+            }) {
+                continue;
+            }
+            let Some(mapper_ty) = arg_ty(arg) else {
+                return Err(unsupported(span, Feature::FunctionElementEquality));
+            };
+            self.wrap_mapper_value(shape, arity, arg, mapper_ty, lowered, span)?;
+        }
+        Ok(())
+    }
+
+    /// Flip each function-typed parameter of the lambda mapper at kernel
+    /// position `arg` that binds a stored element from the `Box` to the `Arc`
+    /// carrier.
+    ///
+    /// A parameter whose lowered type is not a bare function keeps its
     /// carrier: a composite (`Maybe (a -> b)`, a tuple, a record) is already
     /// normalized by its own type, and a non-function element never flips.
     ///
@@ -22396,53 +22497,149 @@ impl<'a> Lowerer<'a> {
     /// `List.map Sub.onLine [..]`, a `\p -> List.filter p xs`) is
     /// `ipe`-accept-then-`cargo`-fail (`E0277`). A body with no non-callee read
     /// is left untouched (byte-identical, no eta draw).
-    fn retype_collection_element_param(
+    fn flip_mapper_lambda_params(
         &self,
-        resolved: &Callee,
-        lowered_args: &mut [Expr],
+        shape: &ipe_kernels::TyShape,
+        arity: u8,
+        arg: usize,
+        params: &mut [(Symbol, IrType)],
+        body: &mut Expr,
     ) -> DResult<()> {
-        let Callee::Kernel(kernel) = resolved else {
-            return Ok(());
-        };
-        let Some(shape) = kernel.scheme_shape() else {
-            return Ok(());
-        };
-        let arity = kernel.def().arity;
-        for (arg, lowered) in lowered_args.iter_mut().enumerate() {
-            let (Expr::Lambda { params, body, .. } | Expr::SharedLambda { params, body, .. }) =
-                lowered
-            else {
+        for (param, (sym, ty)) in params.iter_mut().enumerate() {
+            let IrType::Fun(fn_params, ret) = ty else {
                 continue;
             };
-            for (param, (sym, ty)) in params.iter_mut().enumerate() {
-                let IrType::Fun(fn_params, ret) = ty else {
-                    continue;
+            if !ipe_kernels::mapper_param_binds_stored_element(shape, arity, arg, param) {
+                continue;
+            }
+            let (sym, fn_params, ret) = (*sym, fn_params.clone(), (**ret).clone());
+            *ty = IrType::SharedFun(fn_params.clone(), Box::new(ret.clone()));
+            let original = std::mem::replace(body, Expr::Unit);
+            let (shimmed, rewrote) = shim_fn_value_reads_tracked(
+                sym,
+                &fn_params,
+                &ret,
+                self.eta_slice(),
+                &self.builtin_runtime_ctors(),
+                original,
+            )?;
+            *body = if rewrote {
+                let mut remaining = count_var_uses(sym, &shimmed);
+                let disciplined = rewrite_multiuse_clones(sym, &mut remaining, shimmed);
+                // Reserve the shim's eta block so a sibling site does not reuse it.
+                self.advance_eta(fn_params.len());
+                force_shared_capture_clones(sym, disciplined)
+            } else {
+                shimmed
+            };
+        }
+        Ok(())
+    }
+
+    /// Eta-wrap the non-lambda mapper `lowered` (solved type `mapper_ty`) at
+    /// kernel position `arg` so each function-typed parameter that binds a
+    /// stored element receives it on the `Arc` carrier.
+    ///
+    /// ```text
+    /// List.map2 applyTo fs xs
+    /// ─────────────────────────────────────────────────────────────────────
+    /// list_map2(move |eta_1: Arc<dyn Fn(i64) -> i64>, eta_2: i64| -> i64 {
+    ///     (apply_to)(Box::new(move |eta_3: i64| -> i64 { (eta_1)(eta_3) }), eta_2)
+    /// }, fs, xs)
+    /// ```
+    ///
+    /// The wrapper's parameters follow the scheme mapper's spine, typed from
+    /// the solved `mapper_ty`: a bound function-typed parameter is re-carried to
+    /// [`IrType::SharedFun`] and demoted back to `Box` at the call
+    /// ([`Self::demote_shared_fn_read`]); every other parameter is forwarded
+    /// as-is. A top-level function reference is called in place; any other
+    /// mapper (a local, an eta parameter, a computed function) is bound once by
+    /// a `let` outside the wrapper and moved in, so its ownership (a move or a
+    /// clone) is decided where it stood and the wrapper stays re-callable
+    /// (`Fn`). A spine or
+    /// parameter type that cannot be lowered fails closed with IPE-L0134.
+    fn wrap_mapper_value(
+        &self,
+        shape: &ipe_kernels::TyShape,
+        arity: u8,
+        arg: usize,
+        mapper_ty: &Ty,
+        lowered: &mut Expr,
+        span: Span,
+    ) -> DResult<()> {
+        let refuse = || unsupported(span, Feature::FunctionElementEquality);
+        let spine = scheme_mapper_arity(shape, arg);
+        let mut param_tys: Vec<&Ty> = Vec::with_capacity(spine);
+        let mut ret_ty = mapper_ty;
+        for _ in 0..spine {
+            let Ty::Fun(param, rest) = ret_ty else {
+                return Err(refuse());
+            };
+            param_tys.push(&**param);
+            ret_ty = &**rest;
+        }
+        let bound = |param: usize, ty: &Ty| {
+            matches!(ty, Ty::Fun(..))
+                && ipe_kernels::mapper_param_binds_stored_element(shape, arity, arg, param)
+        };
+        if !param_tys
+            .iter()
+            .enumerate()
+            .any(|(param, ty)| bound(param, *ty))
+        {
+            return Ok(());
+        }
+        let ret = self.ir_type_from_ty(ret_ty, span).map_err(|_| refuse())?;
+        let hold = self.eta_sym(0)?;
+        let mut wrapper_params: Vec<(Symbol, IrType)> = Vec::with_capacity(spine);
+        let mut demote: Vec<Option<(Vec<IrType>, IrType)>> = Vec::with_capacity(spine);
+        for (param, ty) in param_tys.iter().enumerate() {
+            let sym = self.eta_sym(param.saturating_add(1))?;
+            let ir = self.ir_type_from_ty(ty, span).map_err(|_| refuse())?;
+            if bound(param, *ty) {
+                let IrType::Fun(fn_params, fn_ret) = ir else {
+                    return Err(refuse());
                 };
-                if !ipe_kernels::mapper_param_binds_stored_element(shape, arity, arg, param) {
-                    continue;
-                }
-                let (sym, fn_params, ret) = (*sym, fn_params.clone(), (**ret).clone());
-                *ty = IrType::SharedFun(fn_params.clone(), Box::new(ret.clone()));
-                let original = std::mem::replace(body.as_mut(), Expr::Unit);
-                let (shimmed, rewrote) = shim_fn_value_reads_tracked(
-                    sym,
-                    &fn_params,
-                    &ret,
-                    self.eta_slice(),
-                    &self.builtin_runtime_ctors(),
-                    original,
-                )?;
-                *body.as_mut() = if rewrote {
-                    let mut remaining = count_var_uses(sym, &shimmed);
-                    let disciplined = rewrite_multiuse_clones(sym, &mut remaining, shimmed);
-                    // Reserve the shim's eta block so a sibling site does not reuse it.
-                    self.advance_eta(fn_params.len());
-                    force_shared_capture_clones(sym, disciplined)
-                } else {
-                    shimmed
-                };
+                wrapper_params.push((sym, IrType::SharedFun(fn_params.clone(), fn_ret.clone())));
+                demote.push(Some((fn_params, *fn_ret)));
+            } else {
+                wrapper_params.push((sym, ir));
+                demote.push(None);
             }
         }
+        // Reserve the holder and the wrapper's params before the demote
+        // adapters below draw their own eta blocks.
+        self.advance_eta(spine.saturating_add(1));
+        let mut call_args: Vec<Expr> = Vec::with_capacity(spine);
+        for ((sym, _), carrier) in wrapper_params.iter().zip(demote) {
+            call_args.push(match carrier {
+                Some((fn_params, fn_ret)) => {
+                    self.demote_shared_fn_read(Expr::Var(*sym), &fn_params, &fn_ret)?
+                }
+                None => Expr::Var(*sym),
+            });
+        }
+        let original = std::mem::replace(lowered, Expr::Unit);
+        let (callee, held) = match original {
+            leaf @ Expr::FuncValue { .. } => (leaf, None),
+            other => (Expr::Var(hold), Some(other)),
+        };
+        let wrapper = Expr::Lambda {
+            params: wrapper_params,
+            ret,
+            body: Box::new(Expr::Apply {
+                func: Box::new(callee),
+                args: call_args,
+            }),
+        };
+        *lowered = match held {
+            Some(value) => Expr::Let {
+                name: hold,
+                value: Box::new(value),
+                body: Box::new(wrapper),
+            },
+            None => wrapper,
+        };
         Ok(())
     }
 
@@ -22609,6 +22806,18 @@ impl<'a> Lowerer<'a> {
                 self.reject_fn_element_for_capability_kernel(&resolved, callee.span, args)?;
                 self.reject_nonclone_handler_capture(&resolved, args)?;
                 let arity = self.callee_arity(&resolved)?;
+                // Close the `Arc`-vs-`Box` frontier at a higher-order kernel's
+                // mapper over stored functions, once, ahead of the arity split,
+                // so the saturated, partial, and over-applied shapes share one
+                // choke point (see method doc).
+                let mut lowered_args = lowered_args;
+                self.retype_collection_element_param(
+                    &resolved,
+                    0,
+                    &mut lowered_args,
+                    |arg| args.get(arg).and_then(|a| self.region_ty(a.span)),
+                    call_span,
+                )?;
                 match args.len().cmp(&arity) {
                     std::cmp::Ordering::Equal => {
                         // pin a polymorphic kernel's genuinely-free result
@@ -22628,9 +22837,6 @@ impl<'a> Lowerer<'a> {
                         let mut lowered_args = lowered_args;
                         Self::retype_result_map_error_handler(&resolved, &mut lowered_args);
                         Self::retype_decoder_payload_mapper(&resolved, &mut lowered_args);
-                        // Close the `Arc`-vs-`Box` frontier at a higher-order
-                        // kernel's mapper over stored functions (see method doc).
-                        self.retype_collection_element_param(&resolved, &mut lowered_args)?;
                         // Close the same frontier at a `Dict.singleton`/`insert`
                         // whose function VALUE argument is stored on the `Arc`
                         // carrier (see method doc).
@@ -23259,10 +23465,6 @@ impl<'a> Lowerer<'a> {
         // The missing parameters are argument positions `supplied..arity`.
         let mut params: Vec<(Symbol, IrType)> = Vec::with_capacity(arity - supplied);
         let mut call_args = lowered_args;
-        // A supplied mapper of a partially-applied higher-order kernel binds the
-        // same stored element the saturated call does: re-carrier it before the
-        // capture pass below can hoist it out of view.
-        self.retype_collection_element_param(&resolved, &mut call_args)?;
         // T4: the supplied args are captured inside the emitted closure.
         // A non-Copy CloneOk arg (e.g. a String-typed var) must be cloned on
         // each call so the closure is `Fn` (re-callable), not `FnOnce`.
@@ -23405,6 +23607,20 @@ impl<'a> Lowerer<'a> {
             call_args.push(Expr::Var(sym));
         }
         self.advance_eta(arity.saturating_sub(supplied));
+        // A missing mapper position is an eta parameter the residual call
+        // forwards to the kernel: it binds the same stored element a supplied
+        // mapper does, so it passes the same choke point (a point-free
+        // `let m = List.map2 in m f fs xs`). Supplied positions already passed it
+        // in [`Self::lower_call_uniform`].
+        if let Some(missing) = call_args.get_mut(supplied..) {
+            self.retype_collection_element_param(
+                &resolved,
+                supplied,
+                missing,
+                |arg| arg_tys.get(arg).copied(),
+                call_span,
+            )?;
+        }
         // T8: use the JSON-friendly variant for the lambda return
         // type for the same reason the eta-params (above) use it: when
         // `ret_ty` is `Task a` (a 1-arg Task) and `a` is a free `Ty::Var`

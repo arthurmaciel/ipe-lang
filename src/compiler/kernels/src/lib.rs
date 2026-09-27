@@ -762,10 +762,10 @@ const fn items_hold_var(items: &[TyShape], var: u8) -> bool {
 }
 
 /// Whether some shape of `items` stores `var` ([`shape_stores_var`]).
-const fn items_store_var(items: &[TyShape], var: u8, reach: SlotReach) -> bool {
+const fn items_store_var(items: &[TyShape], var: u8) -> bool {
     let mut rest = items;
     while let Some((item, tail)) = rest.split_first() {
-        if shape_stores_var(item, var, reach) {
+        if shape_stores_var(item, var) {
             return true;
         }
         rest = tail;
@@ -799,39 +799,24 @@ pub const fn slot_admits_function(tag: BuiltinTag, slot: usize) -> bool {
     storage_slot(tag, slot) && !matches!(tag, BuiltinTag::Set)
 }
 
-/// Which constructor slots [`shape_stores_var`] counts as storage.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum SlotReach {
-    /// Every [`storage_slot`].
-    Stored,
-    /// Only the storage slots that can hold a function ([`slot_admits_function`]).
-    FunctionAdmitting,
-}
-
-/// Whether `slot` of `tag` counts as storage under `reach`.
-const fn slot_counts(tag: BuiltinTag, slot: usize, reach: SlotReach) -> bool {
-    match reach {
-        SlotReach::Stored => storage_slot(tag, slot),
-        SlotReach::FunctionAdmitting => slot_admits_function(tag, slot),
-    }
-}
-
-/// Whether scheme variable `var` sits directly in a storage slot of `shape`, at any depth outside an arrow.
+/// Whether scheme variable `var` sits directly in a function-admitting storage slot of `shape`, at any depth outside an arrow.
 ///
-/// A storage slot is a constructor slot [`slot_counts`] under `reach`, a tuple
-/// component, or a record field: the positions the lowerer carries a function
-/// on the `Arc` storage carrier. Any other constructor argument keeps the
-/// direct carrier, and an arrow's sides are direct positions, so neither
-/// counts — though a storage slot nested under them does.
+/// A function-admitting storage slot is a constructor slot
+/// [`slot_admits_function`] names, a tuple component, or a record field: the
+/// positions the lowerer carries a function on the `Arc` storage carrier and
+/// that a function can actually occupy. Any other constructor argument keeps
+/// the direct carrier (a `Set` element never holds a function), and an arrow's
+/// sides are direct positions, so neither counts — though a storage slot
+/// nested under them does.
 #[must_use]
-pub const fn shape_stores_var(shape: &TyShape, var: u8, reach: SlotReach) -> bool {
+pub const fn shape_stores_var(shape: &TyShape, var: u8) -> bool {
     match shape {
         TyShape::Con(tag, items) => {
             let mut rest: &[TyShape] = items;
             let mut slot = 0;
             while let Some((item, tail)) = rest.split_first() {
-                if (is_var(item, var) && slot_counts(*tag, slot, reach))
-                    || shape_stores_var(item, var, reach)
+                if (is_var(item, var) && slot_admits_function(*tag, slot))
+                    || shape_stores_var(item, var)
                 {
                     return true;
                 }
@@ -840,11 +825,11 @@ pub const fn shape_stores_var(shape: &TyShape, var: u8, reach: SlotReach) -> boo
             }
             false
         }
-        TyShape::Tuple(items) => items_hold_var(items, var) || items_store_var(items, var, reach),
+        TyShape::Tuple(items) => items_hold_var(items, var) || items_store_var(items, var),
         TyShape::Record { fields, .. } => {
             let mut rest = *fields;
             while let Some(((_, field), tail)) = rest.split_first() {
-                if is_var(field, var) || shape_stores_var(field, var, reach) {
+                if is_var(field, var) || shape_stores_var(field, var) {
                     return true;
                 }
                 rest = tail;
@@ -870,19 +855,13 @@ pub const fn spine_arg(shape: &TyShape, index: usize) -> Option<&TyShape> {
     None
 }
 
-/// Whether an argument of a kernel with scheme `shape` other than `arg`, among its first `arity`, stores `var` under `reach`.
-const fn var_stored_elsewhere(
-    shape: &TyShape,
-    arity: usize,
-    arg: usize,
-    var: u8,
-    reach: SlotReach,
-) -> bool {
+/// Whether an argument of a kernel with scheme `shape` other than `arg`, among its first `arity`, stores `var` ([`shape_stores_var`]).
+const fn var_stored_elsewhere(shape: &TyShape, arity: usize, arg: usize, var: u8) -> bool {
     let mut other = 0;
     while other < arity {
         if other != arg
             && let Some(collection) = spine_arg(shape, other)
-            && shape_stores_var(collection, var, reach)
+            && shape_stores_var(collection, var)
         {
             return true;
         }
@@ -895,7 +874,7 @@ const fn var_stored_elsewhere(
 ///
 /// Holds when that parameter is a bare scheme variable which another of the
 /// kernel's `arity` arguments stores in a function-admitting slot
-/// ([`shape_stores_var`] under [`SlotReach::FunctionAdmitting`]): the kernel
+/// ([`shape_stores_var`]): the kernel
 /// feeds the parameter an element read out of that argument, so the
 /// parameter's carrier is the element's storage carrier. `List.map`'s `a`,
 /// each list of `List.map2`, and the value of `Dict.map` qualify; the
@@ -923,17 +902,19 @@ pub const fn mapper_param_binds_stored_element(
     let Some(TyShape::Var(var)) = spine_arg(mapper, param) else {
         return false;
     };
-    var_stored_elsewhere(shape, arity, arg, *var, SlotReach::FunctionAdmitting)
+    var_stored_elsewhere(shape, arity, arg, *var)
 }
 
-/// Whether some scheme variable of the mapper parameter `param` is stored by an argument of the kernel other than `arg`.
+/// Whether some scheme variable of the mapper parameter `param` is stored, in a function-admitting slot, by an argument of the kernel other than `arg`.
 ///
 /// Walks every variable of `param` — under an arrow, a constructor, a tuple,
-/// or a record (row variable included) — against every storage slot
-/// ([`SlotReach::Stored`]).
+/// or a record (row variable included) — against every storage slot that can
+/// hold a function ([`shape_stores_var`]). A variable stored only
+/// in a slot that admits no function (a `Set` element) never carries a
+/// function into the mapper, so it opens no frontier.
 const fn param_reads_stored(param: &TyShape, shape: &TyShape, arity: usize, arg: usize) -> bool {
     match param {
-        TyShape::Var(var) => var_stored_elsewhere(shape, arity, arg, *var, SlotReach::Stored),
+        TyShape::Var(var) => var_stored_elsewhere(shape, arity, arg, *var),
         TyShape::Fun(from, to) => {
             param_reads_stored(from, shape, arity, arg) || param_reads_stored(to, shape, arity, arg)
         }
@@ -949,7 +930,7 @@ const fn param_reads_stored(param: &TyShape, shape: &TyShape, arity: usize, arg:
         }
         TyShape::Record { fields, tail } => {
             if let RowTailShape::Open(var) = tail
-                && var_stored_elsewhere(shape, arity, arg, *var, SlotReach::Stored)
+                && var_stored_elsewhere(shape, arity, arg, *var)
             {
                 return true;
             }
@@ -970,10 +951,9 @@ const fn param_reads_stored(param: &TyShape, shape: &TyShape, arity: usize, arg:
 ///
 /// The lowerer's `retype_collection_element_param` aligns exactly the
 /// parameters [`mapper_param_binds_stored_element`] names. Any other mapper
-/// parameter reading a stored variable — a wrapped one (`Dict.update`'s
-/// `Maybe v`) or one fed from a slot that admits no function (a `Set`
-/// element) — leaves the frontier open, so the kernel must refuse a function
-/// element ([`ElementCapability::MapperFrontierOpen`]). Derived from the scheme
+/// parameter reading a function-admitting stored variable — a wrapped one
+/// (`Dict.update`'s `Maybe v`) — leaves the frontier open, so the kernel must
+/// refuse a function element ([`ElementCapability::MapperFrontierOpen`]). Derived from the scheme
 /// and the same binding predicate the lowerer consults, so graduation to
 /// `CloneOk` needs no hand-maintained list.
 #[must_use]
@@ -16288,9 +16268,9 @@ mod tests {
     /// The mapper frontier is derived from each scheme: over every wired kernel,
     /// exactly the kernels feeding a stored element into a parameter the
     /// lowerer cannot re-carrier stay `MapperFrontierOpen` (fail-closed
-    /// IPE-L0134) — `Dict.update`'s `Maybe v` and every `Set` higher-order
-    /// kernel, whose `Ord`-bound element admits no function — and every
-    /// graduated mapper kernel is `CloneOk`.
+    /// IPE-L0134) — only `Dict.update`'s `Maybe v` — and every graduated
+    /// mapper kernel is `CloneOk`, the `Set` higher-order family included: its
+    /// `Ord`-bound element admits no function, so it feeds none to a mapper.
     #[test]
     fn open_frontier_mapper_kernels_forbid_a_function_element() {
         use super::ElementCapability;
@@ -16300,14 +16280,7 @@ mod tests {
             .copied()
             .filter(|k| k.element_capability() == Some(ElementCapability::MapperFrontierOpen))
             .collect();
-        let mut expected_open = [
-            K::DictUpdate,
-            K::SetMap,
-            K::SetFilter,
-            K::SetFoldl,
-            K::SetFoldr,
-            K::SetPartition,
-        ];
+        let mut expected_open = [K::DictUpdate];
         let mut got_open = open.clone();
         expected_open.sort_by_key(|k| format!("{k:?}"));
         got_open.sort_by_key(|k| format!("{k:?}"));
@@ -16329,6 +16302,11 @@ mod tests {
             K::DictFoldr,
             K::DictFilter,
             K::DictPartition,
+            K::SetMap,
+            K::SetFilter,
+            K::SetFoldl,
+            K::SetFoldr,
+            K::SetPartition,
         ] {
             assert_eq!(
                 k.element_capability(),
@@ -17343,11 +17321,6 @@ mod tests {
             StdlibKernel::ListMaximum,
             StdlibKernel::ListMinimum,
             StdlibKernel::DictUpdate,
-            StdlibKernel::SetMap,
-            StdlibKernel::SetFilter,
-            StdlibKernel::SetFoldl,
-            StdlibKernel::SetFoldr,
-            StdlibKernel::SetPartition,
         ];
 
         for k in StdlibKernel::ALL {
