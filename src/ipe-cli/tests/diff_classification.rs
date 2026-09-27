@@ -7,8 +7,8 @@ use std::collections::BTreeMap;
 
 use ipe::api_surface::{ModuleApi, PublicApi, UnionApi};
 use ipe::diff::{
-    ApiChange, Compatibility, FloorOverflow, Predecessor, RequiredBump, SemverReport, bump_floor,
-    diff_api, magnitude, required_bump,
+    ApiChange, Compatibility, FloorOverflow, Magnitude, Predecessor, ReleaseLine, RequiredBump,
+    SemverReport, bump_floor, diff_api, magnitude, required_bump,
 };
 use semver::Version;
 
@@ -68,7 +68,11 @@ fn value_added_is_compatible() {
             name: "g".to_owned(),
         }]
     );
-    assert_eq!(magnitude(&changes), Compatibility::Compatible);
+    assert_eq!(magnitude(&changes), Magnitude::Additive);
+    assert_eq!(
+        magnitude(&changes).compatibility(),
+        Compatibility::Compatible
+    );
 }
 
 #[test]
@@ -83,7 +87,7 @@ fn value_removed_is_breaking() {
             name: "g".to_owned(),
         }]
     );
-    assert_eq!(magnitude(&changes), Compatibility::Breaking);
+    assert_eq!(magnitude(&changes), Magnitude::Breaking);
 }
 
 #[test]
@@ -100,7 +104,7 @@ fn value_signature_change_is_breaking() {
             new: "Int -> String".to_owned(),
         }]
     );
-    assert_eq!(magnitude(&changes), Compatibility::Breaking);
+    assert_eq!(magnitude(&changes), Magnitude::Breaking);
 }
 
 #[test]
@@ -119,7 +123,7 @@ fn module_added_is_compatible_and_removed_is_breaking() {
             module: "Extra".to_owned(),
         }]
     );
-    assert_eq!(magnitude(&added), Compatibility::Compatible);
+    assert_eq!(magnitude(&added), Magnitude::Additive);
 
     let removed = diff_api(&two, &one);
     assert_eq!(
@@ -128,7 +132,7 @@ fn module_added_is_compatible_and_removed_is_breaking() {
             module: "Extra".to_owned(),
         }]
     );
-    assert_eq!(magnitude(&removed), Compatibility::Breaking);
+    assert_eq!(magnitude(&removed), Magnitude::Breaking);
 }
 
 #[test]
@@ -144,7 +148,7 @@ fn union_added_is_compatible_removed_is_breaking() {
             name: "Shape".to_owned(),
         }]
     );
-    assert_eq!(magnitude(&added), Compatibility::Compatible);
+    assert_eq!(magnitude(&added), Magnitude::Additive);
 
     let removed = diff_api(&with_union, &no_union);
     assert_eq!(
@@ -154,7 +158,7 @@ fn union_added_is_compatible_removed_is_breaking() {
             name: "Shape".to_owned(),
         }]
     );
-    assert_eq!(magnitude(&removed), Compatibility::Breaking);
+    assert_eq!(magnitude(&removed), Magnitude::Breaking);
 }
 
 #[test]
@@ -173,7 +177,7 @@ fn union_arity_change_is_breaking() {
             new: 1,
         }]
     );
-    assert_eq!(magnitude(&changes), Compatibility::Breaking);
+    assert_eq!(magnitude(&changes), Magnitude::Breaking);
 }
 
 #[test]
@@ -196,7 +200,7 @@ fn constructor_added_is_breaking() {
         }]
     );
     // A new constructor to an exposed union breaks exhaustive matches.
-    assert_eq!(magnitude(&changes), Compatibility::Breaking);
+    assert_eq!(magnitude(&changes), Magnitude::Breaking);
 }
 
 #[test]
@@ -218,7 +222,7 @@ fn constructor_removed_and_arg_change_are_breaking() {
             ctor: "Rect".to_owned(),
         }]
     );
-    assert_eq!(magnitude(&removed), Compatibility::Breaking);
+    assert_eq!(magnitude(&removed), Magnitude::Breaking);
 
     let changed_arg = api(
         &[],
@@ -236,7 +240,7 @@ fn constructor_removed_and_arg_change_are_breaking() {
             ctor: "Circle".to_owned(),
         }]
     );
-    assert_eq!(magnitude(&changed), Compatibility::Breaking);
+    assert_eq!(magnitude(&changed), Magnitude::Breaking);
 }
 
 #[test]
@@ -245,16 +249,117 @@ fn identical_apis_have_no_changes_and_are_compatible() {
     let b = api(&[("f", "Int -> Int")], &[]);
     let changes = diff_api(&a, &b);
     assert!(changes.is_empty());
-    assert_eq!(magnitude(&changes), Compatibility::Compatible);
+    assert_eq!(magnitude(&changes), Magnitude::Unchanged);
+    assert_eq!(
+        magnitude(&changes).compatibility(),
+        Compatibility::Compatible
+    );
 }
 
 #[test]
 fn required_bump_maps_pre_one_zero() {
+    let line = ReleaseLine::Initial;
     assert_eq!(
-        required_bump(Compatibility::Compatible),
+        required_bump(line, Magnitude::Unchanged),
         RequiredBump::Patch
     );
-    assert_eq!(required_bump(Compatibility::Breaking), RequiredBump::Minor);
+    assert_eq!(
+        required_bump(line, Magnitude::Additive),
+        RequiredBump::Patch
+    );
+    assert_eq!(
+        required_bump(line, Magnitude::Breaking),
+        RequiredBump::Minor
+    );
+}
+
+#[test]
+fn required_bump_maps_stable_line() {
+    let line = ReleaseLine::Stable;
+    assert_eq!(
+        required_bump(line, Magnitude::Unchanged),
+        RequiredBump::Patch
+    );
+    assert_eq!(
+        required_bump(line, Magnitude::Additive),
+        RequiredBump::Minor
+    );
+    assert_eq!(
+        required_bump(line, Magnitude::Breaking),
+        RequiredBump::Major
+    );
+}
+
+#[test]
+fn release_line_is_read_from_the_predecessor_major() {
+    assert_eq!(
+        ReleaseLine::of(&Predecessor::of(&Version::new(0, 9, 9))),
+        ReleaseLine::Initial
+    );
+    assert_eq!(
+        ReleaseLine::of(&Predecessor::of(&Version::new(1, 0, 0))),
+        ReleaseLine::Stable
+    );
+    assert_eq!(
+        ReleaseLine::of(&Predecessor::of(&parse("1.0.0-rc.1"))),
+        ReleaseLine::Stable,
+        "a prerelease of 1.0.0 sits on the stable line (fail closed)"
+    );
+}
+
+#[test]
+fn a_breaking_minor_bump_on_the_stable_line_is_refused() {
+    let old_api = api(&[("f", "Int"), ("g", "Int")], &[]);
+    let new_api = api(&[("f", "Int")], &[]);
+    let old_v = Version::new(1, 2, 0);
+
+    let minor = report(&old_api, &new_api, &old_v, &Version::new(1, 3, 0));
+    assert_eq!(minor.required, RequiredBump::Major);
+    assert_eq!(minor.floor, Version::new(2, 0, 0));
+    assert!(
+        !minor.satisfied,
+        "1.2.0 -> 1.3.0 with a breaking change would reach every ^1.2 consumer"
+    );
+
+    let patch = report(&old_api, &new_api, &old_v, &Version::new(1, 2, 1));
+    assert!(
+        !patch.satisfied,
+        "1.2.0 -> 1.2.1 under-bumps a breaking change"
+    );
+
+    let major = report(&old_api, &new_api, &old_v, &Version::new(2, 0, 0));
+    assert!(major.satisfied, "1.2.0 -> 2.0.0 clears a breaking change");
+}
+
+#[test]
+fn an_additive_patch_bump_on_the_stable_line_is_refused() {
+    let old_api = api(&[("f", "Int")], &[]);
+    let new_api = api(&[("f", "Int"), ("g", "Int")], &[]);
+    let old_v = Version::new(1, 2, 0);
+
+    let patch = report(&old_api, &new_api, &old_v, &Version::new(1, 2, 1));
+    assert_eq!(patch.required, RequiredBump::Minor);
+    assert_eq!(patch.floor, Version::new(1, 3, 0));
+    assert!(
+        !patch.satisfied,
+        "an addition on the stable line needs a minor bump"
+    );
+
+    let minor = report(&old_api, &new_api, &old_v, &Version::new(1, 3, 0));
+    assert!(minor.satisfied);
+}
+
+#[test]
+fn an_unchanged_api_on_the_stable_line_needs_only_a_patch() {
+    let old_api = api(&[("f", "Int")], &[]);
+    let old_v = Version::new(1, 2, 0);
+
+    let patch = report(&old_api, &old_api, &old_v, &Version::new(1, 2, 1));
+    assert_eq!(patch.required, RequiredBump::Patch);
+    assert!(patch.satisfied);
+
+    let same = report(&old_api, &old_api, &old_v, &old_v);
+    assert!(!same.satisfied, "1.2.0 -> 1.2.0 is refused");
 }
 
 #[test]
@@ -321,18 +426,39 @@ fn a_release_does_not_admit_itself_as_successor() {
 fn a_breaking_change_over_a_prerelease_still_requires_a_minor_bump() {
     let old_api = api(&[("f", "Int"), ("g", "Int")], &[]);
     let new_api = api(&[("f", "Int")], &[]);
-    let rc = parse("1.0.0-rc.1");
+    let rc = parse("0.3.0-rc.1");
 
-    let graduated = report(&old_api, &new_api, &rc, &Version::new(1, 0, 0));
+    let graduated = report(&old_api, &new_api, &rc, &Version::new(0, 3, 0));
     assert_eq!(graduated.required, RequiredBump::Minor);
-    assert_eq!(graduated.floor, Version::new(1, 1, 0));
+    assert_eq!(graduated.floor, Version::new(0, 4, 0));
     assert!(
         !graduated.satisfied,
         "graduating a prerelease does not clear a breaking delta"
     );
 
-    let bumped = report(&old_api, &new_api, &rc, &Version::new(1, 1, 0));
+    let bumped = report(&old_api, &new_api, &rc, &Version::new(0, 4, 0));
     assert!(bumped.satisfied);
+}
+
+#[test]
+fn a_breaking_change_over_a_stable_prerelease_requires_a_major_bump() {
+    let old_api = api(&[("f", "Int"), ("g", "Int")], &[]);
+    let new_api = api(&[("f", "Int")], &[]);
+    let rc = parse("2.0.0-rc.1");
+
+    let graduated = report(&old_api, &new_api, &rc, &Version::new(2, 0, 0));
+    assert_eq!(graduated.required, RequiredBump::Major);
+    assert_eq!(graduated.floor, Version::new(3, 0, 0));
+    assert!(
+        !graduated.satisfied,
+        "graduating a prerelease does not clear a breaking delta"
+    );
+
+    let minor = report(&old_api, &new_api, &rc, &Version::new(2, 1, 0));
+    assert!(!minor.satisfied);
+
+    let major = report(&old_api, &new_api, &rc, &Version::new(3, 0, 0));
+    assert!(major.satisfied);
 }
 
 #[test]
@@ -354,6 +480,28 @@ fn a_floor_that_overflows_is_refused() {
             ..
         })
     ));
+
+    let top_major = Predecessor::of(&Version::new(u64::MAX, 0, 0));
+    assert!(matches!(
+        bump_floor(&top_major, RequiredBump::Major),
+        Err(FloorOverflow {
+            required: RequiredBump::Major,
+            ..
+        })
+    ));
+
+    let breaking_old = api(&[("f", "Int"), ("g", "Int")], &[]);
+    let breaking_new = api(&[("f", "Int")], &[]);
+    assert!(
+        ipe::diff::report(
+            &breaking_old,
+            &breaking_new,
+            &Version::new(u64::MAX, 0, 0),
+            &Version::new(u64::MAX, 1, 0),
+        )
+        .is_err(),
+        "a breaking change over the top major refuses every successor"
+    );
 
     let old_api = api(&[("f", "Int")], &[]);
     assert!(

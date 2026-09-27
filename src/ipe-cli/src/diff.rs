@@ -1,15 +1,22 @@
 //! `ipe diff <old> <new>` — public-API delta + enforced semver.
 //!
 //! Compares two package versions by their [`crate::api_surface::PublicApi`],
-//! classifies each change as breaking or compatible (Elm's `elm diff` rules,
-//! mapped to Ipê's pre-1.0 semver), and derives the required version bump. The
-//! gate consumes [`check_semver_bump`] to reject a version that under-bumps.
+//! classifies each change as breaking or additive (Elm's `elm diff` rules), and
+//! derives the required version bump from the delta's [`Magnitude`] and the
+//! predecessor's [`ReleaseLine`]. The gate consumes [`check_semver_bump`] to
+//! reject a version that under-bumps.
 //!
-//! Ipê is pre-1.0, so a major bump is reserved: a **breaking** delta requires a
-//! **minor** bump, a **compatible** delta a **patch** bump (matching the
-//! release-please config). The classifier is conservative (Security first): a
-//! change it cannot prove compatible is breaking — a false-breaking wastes a
-//! version number, a false-compatible ships a silent break.
+//! | Delta     | `0.y.z` predecessor | `x.y.z` predecessor, `x >= 1` |
+//! |-----------|---------------------|-------------------------------|
+//! | unchanged | patch               | patch                         |
+//! | additive  | patch               | minor                         |
+//! | breaking  | minor               | major                         |
+//!
+//! On the initial `0.y.z` line the major component is reserved, so every class
+//! shifts down one component (Cargo's caret semantics: `^0.y` admits only
+//! `0.y.*`). The classifier is conservative (Security first): a change it cannot
+//! prove compatible is breaking — a false-breaking wastes a version number, a
+//! false-compatible ships a silent break.
 
 use std::path::{Path, PathBuf};
 
@@ -27,14 +34,58 @@ pub enum Compatibility {
     Breaking,
 }
 
-/// The minimum version-component bump a delta requires (pre-1.0 mapping).
+/// The size of a public-API delta, ordered from least to most severe.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Magnitude {
+    /// No public-API change (a re-release still needs a new version).
+    Unchanged,
+    /// Only additions — existing users keep compiling.
+    Additive,
+    /// At least one removal, rename, or type change.
+    Breaking,
+}
+
+impl Magnitude {
+    /// Whether a delta of this magnitude breaks existing users.
+    #[must_use]
+    pub const fn compatibility(self) -> Compatibility {
+        match self {
+            Self::Unchanged | Self::Additive => Compatibility::Compatible,
+            Self::Breaking => Compatibility::Breaking,
+        }
+    }
+}
+
+/// The semver line a predecessor sits on, which fixes the bump each delta needs.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ReleaseLine {
+    /// Major `0` (`0.y.z`): the major component is reserved.
+    Initial,
+    /// Major `>= 1`: a breaking delta requires a major bump.
+    Stable,
+}
+
+impl ReleaseLine {
+    /// The line of `predecessor`, read from its core's major component.
+    #[must_use]
+    pub const fn of(predecessor: &Predecessor) -> Self {
+        if predecessor.core().major == 0 {
+            Self::Initial
+        } else {
+            Self::Stable
+        }
+    }
+}
+
+/// The minimum version-component bump a delta requires.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RequiredBump {
-    /// A patch bump (`0.y.Z`) — a compatible delta (or no change; a re-release
-    /// still needs a new version).
+    /// A patch bump (`x.y.Z`).
     Patch,
-    /// A minor bump (`0.Y.0`) — a breaking delta (major is reserved pre-1.0).
+    /// A minor bump (`x.Y.0`).
     Minor,
+    /// A major bump (`X.0.0`).
+    Major,
 }
 
 /// One classified difference between two public APIs.
@@ -122,8 +173,8 @@ impl ApiChange {
 pub struct SemverReport {
     /// Every classified change, in a deterministic order.
     pub changes: Vec<ApiChange>,
-    /// The overall compatibility (breaking if any change is breaking).
-    pub compatibility: Compatibility,
+    /// The overall magnitude (breaking if any change is breaking).
+    pub magnitude: Magnitude,
     /// The minimum bump the delta requires.
     pub required: RequiredBump,
     /// The minimum acceptable new version given `old_version` and `required`.
@@ -244,27 +295,36 @@ fn diff_module(module: &str, old: &ModuleApi, new: &ModuleApi, changes: &mut Vec
     }
 }
 
-/// The overall compatibility of a set of changes: breaking if any change is
-/// breaking, else compatible (the max-magnitude fold, collapsed to two
-/// outcomes). An empty delta is compatible.
+/// The overall magnitude of a set of changes (the max-severity fold).
+///
+/// Breaking if any change is breaking, additive if any change exists (every
+/// compatible [`ApiChange`] kind is an addition), unchanged for an empty delta.
 #[must_use]
-pub fn magnitude(changes: &[ApiChange]) -> Compatibility {
+pub fn magnitude(changes: &[ApiChange]) -> Magnitude {
     if changes
         .iter()
         .any(|c| c.compatibility() == Compatibility::Breaking)
     {
-        Compatibility::Breaking
+        Magnitude::Breaking
+    } else if changes.is_empty() {
+        Magnitude::Unchanged
     } else {
-        Compatibility::Compatible
+        Magnitude::Additive
     }
 }
 
-/// Map a delta's compatibility to its required bump (pre-1.0).
+/// Map a delta's magnitude on a release line to its required bump.
+///
+/// The whole semver rule as one exhaustive table: the initial `0.y.z` line
+/// shifts every class down one component because its major is reserved.
 #[must_use]
-pub const fn required_bump(compat: Compatibility) -> RequiredBump {
-    match compat {
-        Compatibility::Compatible => RequiredBump::Patch,
-        Compatibility::Breaking => RequiredBump::Minor,
+pub const fn required_bump(line: ReleaseLine, magnitude: Magnitude) -> RequiredBump {
+    match (line, magnitude) {
+        (ReleaseLine::Initial | ReleaseLine::Stable, Magnitude::Unchanged)
+        | (ReleaseLine::Initial, Magnitude::Additive) => RequiredBump::Patch,
+        (ReleaseLine::Initial, Magnitude::Breaking)
+        | (ReleaseLine::Stable, Magnitude::Additive) => RequiredBump::Minor,
+        (ReleaseLine::Stable, Magnitude::Breaking) => RequiredBump::Major,
     }
 }
 
@@ -325,13 +385,14 @@ impl std::fmt::Display for FloorOverflow {
 
 impl std::error::Error for FloorOverflow {}
 
-/// The minimum acceptable new version given the predecessor and the required
-/// bump (pre-1.0 floors).
+/// The minimum acceptable new version given the predecessor and the required bump.
 ///
 /// - `Patch` over a release `C`: `C` with `patch + 1` — any strict increase.
 /// - `Patch` over a prerelease of `C`: `C` itself — graduating the prerelease.
 /// - `Minor` over either: at least `major.(minor + 1).0` — a patch bump, or
-///   graduating a prerelease, does not clear a breaking delta.
+///   graduating a prerelease, does not clear it.
+/// - `Major` over either: at least `(major + 1).0.0` — a minor bump, or
+///   graduating a prerelease, does not clear it.
 ///
 /// # Errors
 /// [`FloorOverflow`] when the bumped component would exceed `u64::MAX` — fail
@@ -355,6 +416,11 @@ pub fn bump_floor(
             .minor
             .checked_add(1)
             .map(|minor| Version::new(core.major, minor, 0))
+            .ok_or_else(overflow),
+        (Predecessor::Release(core) | Predecessor::PrereleaseOf(core), RequiredBump::Major) => core
+            .major
+            .checked_add(1)
+            .map(|major| Version::new(major, 0, 0))
             .ok_or_else(overflow),
     }
 }
@@ -387,13 +453,14 @@ pub fn report(
     new_version: &Version,
 ) -> Result<SemverReport, FloorOverflow> {
     let changes = diff_api(old_api, new_api);
-    let compatibility = magnitude(&changes);
-    let required = required_bump(compatibility);
-    let floor = bump_floor(&Predecessor::of(old_version), required)?;
+    let magnitude = magnitude(&changes);
+    let predecessor = Predecessor::of(old_version);
+    let required = required_bump(ReleaseLine::of(&predecessor), magnitude);
+    let floor = bump_floor(&predecessor, required)?;
     let satisfied = *new_version >= floor;
     Ok(SemverReport {
         changes,
-        compatibility,
+        magnitude,
         required,
         floor,
         satisfied,
@@ -407,6 +474,7 @@ impl RequiredBump {
         match self {
             Self::Patch => "patch",
             Self::Minor => "minor",
+            Self::Major => "major",
         }
     }
 }
@@ -473,7 +541,7 @@ const fn compat_word(compatibility: Compatibility) -> &'static str {
 ///   "changes": ["…", …]}`, a stable object.
 fn print_report(report: &SemverReport, format: crate::cli_args::OutputFormat) {
     use crate::cli_args::OutputFormat::{Human, Json, Plain};
-    let compat = compat_word(report.compatibility);
+    let compat = compat_word(report.magnitude.compatibility());
     let required = report.required.as_str();
     match format {
         Plain => {
@@ -605,7 +673,9 @@ fn run_diff_with(rest: &[String], notice: &mut dyn FnMut(&str)) -> Result<(), Cl
     match check {
         None => {
             // Report mode: diff against a placeholder version pair so the report
-            // still names the required bump. The floor is informational here.
+            // still names the required bump. The floor is informational here, and
+            // the bump is the initial `0.y.z` line's; `check` reads the real line
+            // from the given predecessor version.
             let old_api = extract_tree(&old_tree)?;
             let new_api = extract_tree(&new_tree)?;
             let placeholder = Version::new(0, 0, 0);

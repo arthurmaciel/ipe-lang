@@ -1032,7 +1032,179 @@ impl Printer<'_> {
     // -- Expressions --------------------------------------------------------
 
     /// Format an expression at the given indentation (in 4-space units).
+    ///
+    /// A `do` block reaches the printer already desugared into its
+    /// `Task.andThen` / `let` chain; it is re-sugared here so the output keeps
+    /// the source's `do` form. The desugared chain is not always printable:
+    /// a bare-run line becomes `let _ = task in …`, which the parser rejects
+    /// outside a `do` (`BareWildcardBinding`).
     fn expr(&self, e: &Expr, indent: usize) -> String {
+        self.do_view(e).map_or_else(
+            || self.expr_node(e, indent),
+            |view| self.do_block(&view, indent),
+        )
+    }
+
+    /// The source offset just past the `do` keyword of a block's span.
+    ///
+    /// `None` when `span` is not a `do` block's. The `do` desugar stamps the
+    /// outermost node of its chain with the keyword's own span; a
+    /// parenthesised group re-stamps its inner node with the group's span, so
+    /// `(do …)` is recognised by its leading keyword.
+    /// Always `None` without source: the equivalence guard compares the
+    /// desugared form directly.
+    fn do_keyword_end(&self, span: ipe_diagnostics::Span) -> Option<usize> {
+        let lo = span.lo as usize;
+        let text = self.src?.get(lo..span.hi as usize)?;
+        if text == "do" {
+            return Some(lo + text.len());
+        }
+        if !text.ends_with(')') {
+            return None;
+        }
+        let inner = text.strip_prefix('(')?;
+        let rest = inner.trim_start_matches(|c: char| c == '(' || c.is_whitespace());
+        let after = rest.strip_prefix("do")?;
+        after
+            .starts_with(char::is_whitespace)
+            .then_some(lo + (text.len() - after.len()))
+    }
+
+    /// Recover the statements of the `do` block whose desugared chain is `e`.
+    ///
+    /// `None` when `e` is not a `do` block.
+    fn do_view<'e>(&self, e: &'e Expr) -> Option<DoView<'e>> {
+        let keyword_end = self.do_keyword_end(e.span)?;
+        let mut steps = Vec::new();
+        let mut cur = e;
+        loop {
+            let outer = steps.is_empty();
+            // A nested `do` in result position carries its own keyword span:
+            // it is this block's result, printed as its own `do` block.
+            if !outer && self.do_keyword_end(cur.span).is_some() {
+                break;
+            }
+            let Some((step, rest)) = self.do_step(cur, outer) else {
+                break;
+            };
+            steps.push(step);
+            cur = rest;
+        }
+        // A parenthesised node whose text merely starts with `(do` may be an
+        // application or access headed by the block (`(do …) x`), which peels
+        // no statement: print that node by its own shape. A lone-statement
+        // `(do t)` prints as `(t)`, the same tree.
+        if steps.is_empty() && keyword_end != e.span.hi as usize {
+            return None;
+        }
+        Some(DoView {
+            keyword_end,
+            steps,
+            result: cur,
+        })
+    }
+
+    /// Peel one `do` statement off the front of a desugared chain.
+    ///
+    /// Returns the statement with the rest of the chain. The shapes mirror the
+    /// parser's `desugar_do` span discipline:
+    /// - bind `p <- t` is `Task.andThen (\p -> rest) t` with a zero-width
+    ///   lambda span (no written lambda is zero-width);
+    /// - bare run `t` is `let _ = t in rest` whose `_` carries `t`'s own span
+    ///   (a written `let _ =` is rejected by the parser);
+    /// - pure `p = v` is `let p = v in rest` stamped with the `=` span, which
+    ///   lies after the binder (a written `let` starts before its binder). The
+    ///   outermost node carries the `do` span instead, so there any
+    ///   single-binding `let` over a statement binder is accepted — printing a
+    ///   lone `let … in` result as a statement re-parses to the same AST.
+    fn do_step<'e>(&self, e: &'e Expr, outer: bool) -> Option<(DoStep<'e>, &'e Expr)> {
+        match &e.value {
+            Expr_::Call(head, args) => {
+                let Expr_::VarQual(module, name) = &head.value else {
+                    return None;
+                };
+                let [lam, task] = args.as_slice() else {
+                    return None;
+                };
+                let Expr_::Lambda(params, cont) = &lam.value else {
+                    return None;
+                };
+                let [pat] = params.as_slice() else {
+                    return None;
+                };
+                let synthetic = lam.span.lo == lam.span.hi
+                    && self.sym(*module) == "Task"
+                    && self.sym(*name) == "andThen";
+                (synthetic && is_do_binder(&pat.value))
+                    .then_some((DoStep::Bind(pat, task), cont.as_ref()))
+            }
+            Expr_::Let(bindings, cont) => {
+                let [b] = bindings.as_slice() else {
+                    return None;
+                };
+                if matches!(b.pat.value, Pattern_::PAnything) && b.pat.span == b.body.span {
+                    return Some((DoStep::Run(&b.body), cont.as_ref()));
+                }
+                let stamped_after_binder = e.span.lo >= b.pat.span.hi;
+                ((outer || stamped_after_binder) && is_do_binder(&b.pat.value))
+                    .then_some((DoStep::Let(&b.pat, &b.body), cont.as_ref()))
+            }
+            _ => None,
+        }
+    }
+
+    /// Print a recovered `do` block, one statement per line one level in.
+    ///
+    /// The result expression comes last; comments written between statements
+    /// keep their place.
+    fn do_block(&self, view: &DoView<'_>, indent: usize) -> String {
+        let stmt_pad = pad(indent + 1);
+        let mut out = String::from("do");
+        let mut prev_hi = view.keyword_end;
+        for step in &view.steps {
+            let (lo, line, hi) = match step {
+                DoStep::Bind(pat, task) => (
+                    pat.span.lo,
+                    format!(
+                        "{} <- {}",
+                        self.pattern(&pat.value),
+                        self.expr(task, indent + 1)
+                    ),
+                    task.span.hi,
+                ),
+                DoStep::Let(pat, value) => (
+                    pat.span.lo,
+                    format!(
+                        "{} = {}",
+                        self.pattern(&pat.value),
+                        self.expr(value, indent + 1)
+                    ),
+                    value.span.hi,
+                ),
+                DoStep::Run(task) => (task.span.lo, self.expr(task, indent + 1), task.span.hi),
+            };
+            for c in self.comments_before(prev_hi, lo as usize) {
+                let _ = write!(out, "\n{stmt_pad}{}", c.text);
+            }
+            let _ = write!(out, "\n{stmt_pad}{line}");
+            prev_hi = hi as usize;
+        }
+        // With no statement peeled, the result IS the `do`-stamped node: print
+        // its own shape, or `expr` would recognise the block again.
+        let result = if view.steps.is_empty() {
+            self.expr_node(view.result, indent + 1)
+        } else {
+            for c in self.comments_before(prev_hi, view.result.span.lo as usize) {
+                let _ = write!(out, "\n{stmt_pad}{}", c.text);
+            }
+            self.expr(view.result, indent + 1)
+        };
+        let _ = write!(out, "\n{stmt_pad}{result}");
+        out
+    }
+
+    /// Format an expression node by its own shape, without `do` re-sugaring.
+    fn expr_node(&self, e: &Expr, indent: usize) -> String {
         match &e.value {
             Expr_::VarLocal(s) => self.sym(*s),
             Expr_::VarQual(q, n) => format!("{}.{}", self.sym(*q), self.sym(*n)),
@@ -1258,7 +1430,9 @@ impl Printer<'_> {
     /// unambiguous and elm-format leaves both calls bare. Only a nested operator
     /// chain, `case` / `if` / `let`, or lambda still needs wrapping.
     fn binop_operand(&self, e: &Expr, indent: usize) -> String {
-        if matches!(e.value, Expr_::Call(..)) {
+        // A `do` block desugars to a call, but its statement layout would
+        // swallow a following operator line: it keeps its parentheses.
+        if matches!(e.value, Expr_::Call(..)) && self.do_keyword_end(e.span).is_none() {
             self.expr(e, indent)
         } else {
             self.expr_atom(e, indent)
@@ -1492,6 +1666,32 @@ const fn is_negative_literal(e: &Expr_) -> bool {
         Expr_::Float(f) => f.is_sign_negative(),
         _ => false,
     }
+}
+
+/// One statement of a `do` block recovered from its desugared chain.
+enum DoStep<'e> {
+    /// `p <- task` — run `task`, bind its result.
+    Bind(&'e Pattern, &'e Expr),
+    /// `p = value` — a pure binding.
+    Let(&'e Pattern, &'e Expr),
+    /// `task` — run for effect, result discarded.
+    Run(&'e Expr),
+}
+
+/// A `do` block recovered from its desugared chain.
+struct DoView<'e> {
+    /// Source offset just past the `do` keyword.
+    keyword_end: usize,
+    /// The statements before the result, in source order.
+    steps: Vec<DoStep<'e>>,
+    /// The block's final (result) expression.
+    result: &'e Expr,
+}
+
+/// Whether `p` can head a `do` statement: the parser accepts only a lowercase
+/// name or `_` before `<-` / `=`.
+const fn is_do_binder(p: &Pattern_) -> bool {
+    matches!(p, Pattern_::PVar(_) | Pattern_::PAnything)
 }
 
 /// Whether an expression needs parentheses when it appears in atom position
@@ -1992,5 +2192,173 @@ mod tests {
                 );
             }
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // `do` blocks — the printer re-sugars the parser's desugared chain
+    // -----------------------------------------------------------------------
+
+    /// Wrap `body` (already indented for a top-level definition) as a module.
+    fn do_module(body: &str) -> String {
+        format!("module M exposing (main)\n\n\nmain =\n{body}")
+    }
+
+    /// Format `src` and assert a fixed point that is still a `do` block.
+    ///
+    /// Returns the first pass's output.
+    fn assert_do_round_trips(src: &str) -> String {
+        let once = format_source(src).expect("do block formats");
+        let twice = format_source(&once).expect("formatted do block re-formats");
+        assert_eq!(once, twice, "not idempotent for:\n{src}\noutput:\n{once}");
+        assert!(once.contains("do\n"), "`do` form lost:\n{once}");
+        once
+    }
+
+    /// The reported ICE: a bare-run line and a wildcard bind in a `do` block.
+    ///
+    /// The bare run desugars to `let _ = task in …`, which the printer used to
+    /// emit verbatim and the re-parse rejected with
+    /// `MalformedLet(BareWildcardBinding)`.
+    #[test]
+    fn do_wildcard_bind_and_bare_run_round_trip() {
+        let src = do_module(
+            "    do\n        x <- Task.succeed 1\n        _ <- Task.succeed 2\n        Io.println \"run\"\n        Task.succeed x\n",
+        );
+        let out = assert_do_round_trips(&src);
+        assert_eq!(out, src, "canonical do block must be a fixed point");
+    }
+
+    /// Every statement shape the `do` grammar admits survives in source order.
+    ///
+    /// Named bind, wildcard bind, bare run, pure `name =`, pure `_ =`.
+    #[test]
+    fn do_every_statement_shape_is_a_fixed_point() {
+        let src = do_module(
+            "    do\n        a <- Task.succeed 1\n        _ <- Task.succeed 2\n        Io.println \"step\"\n        b = a + 1\n        _ = b\n        Task.succeed b\n",
+        );
+        let out = assert_do_round_trips(&src);
+        assert_eq!(out, src, "canonical do block must be a fixed point");
+    }
+
+    /// Each statement shape is recognised in leading position.
+    ///
+    /// The first statement's node carries the `do` span, not its own.
+    #[test]
+    fn do_each_shape_in_leading_position() {
+        let leads = [
+            "x <- Task.succeed 1",
+            "_ <- Task.succeed 1",
+            "Io.println \"first\"",
+            "x = 1",
+            "_ = 1",
+        ];
+        for lead in leads {
+            let src = do_module(&format!("    do\n        {lead}\n        Task.succeed 0\n"));
+            let out = assert_do_round_trips(&src);
+            assert_eq!(out, src, "leading `{lead}` must be a fixed point");
+        }
+    }
+
+    /// A single-statement `do` keeps its keyword.
+    #[test]
+    fn do_single_statement_round_trips() {
+        let src = do_module("    do\n        Task.succeed 0\n");
+        let out = assert_do_round_trips(&src);
+        assert_eq!(out, src, "single-statement do must be a fixed point");
+    }
+
+    /// Nested `do` blocks each stay their own block.
+    ///
+    /// Covers result position, a bind's task, a bare run, and a lambda body.
+    #[test]
+    fn do_nested_blocks_round_trip() {
+        let nested = [
+            "    do\n        x <- Task.succeed 1\n        do\n            y <- Task.succeed x\n            Task.succeed y\n",
+            "    do\n        x <- do\n            Io.println \"inner\"\n            Task.succeed 1\n        Task.succeed x\n",
+            "    do\n        do\n            Io.println \"inner\"\n            Task.succeed 1\n        Task.succeed 2\n",
+        ];
+        for body in nested {
+            let out = assert_do_round_trips(&do_module(body));
+            assert_eq!(
+                out.matches("do\n").count(),
+                2,
+                "nested do flattened or lost:\n{out}"
+            );
+        }
+        let in_lambda = "    Task.andThen\n        (\\x ->\n            do\n                Io.println \"in lambda\"\n                Task.succeed x\n        )\n        (Task.succeed 1)\n";
+        assert_do_round_trips(&do_module(in_lambda));
+    }
+
+    /// A `do` block in atom position keeps its parentheses.
+    ///
+    /// Bare, its statement layout would swallow the following argument or
+    /// operator line.
+    #[test]
+    fn do_in_atom_position_round_trips() {
+        let cases = [
+            "    f\n        (do\n            Io.println \"arg\"\n            Task.succeed 1\n        )\n        y\n",
+            "    (do\n        Io.println \"operand\"\n        Task.succeed 1\n    )\n        |> Task.map f\n",
+        ];
+        for body in cases {
+            let out = assert_do_round_trips(&do_module(body));
+            assert!(
+                out.contains("(do\n"),
+                "do in atom position lost its parens:\n{out}"
+            );
+        }
+    }
+
+    /// Block-form expressions as statement tasks, bind sources, and results.
+    ///
+    /// `case`, `if`, and `let` layouts must not collide with statement
+    /// alignment.
+    #[test]
+    fn do_block_form_statements_round_trip() {
+        let cases = [
+            "    do\n        x <- case m of\n            Just v ->\n                Task.succeed v\n\n            Nothing ->\n                Task.succeed 0\n        Task.succeed x\n",
+            "    do\n        x <- if c then\n            Task.succeed 1\n\n        else\n            Task.succeed 2\n        Task.succeed x\n",
+            "    do\n        Io.println \"run\"\n        let\n            y =\n                1\n        in\n        Task.succeed y\n",
+        ];
+        for body in cases {
+            assert_do_round_trips(&do_module(body));
+        }
+    }
+
+    /// A comment between two statements keeps its place in the block.
+    #[test]
+    fn do_comment_between_statements_survives() {
+        let src = do_module(
+            "    do\n        x <- Task.succeed 1\n        -- between statements\n        Io.println \"run\"\n        Task.succeed x\n",
+        );
+        let out = assert_do_round_trips(&src);
+        assert_eq!(out, src, "commented do block must be a fixed point");
+    }
+
+    /// A tuple or record destructure before `<-` is refused as a parse error.
+    ///
+    /// The `do` grammar admits only a lowercase name or `_` there.
+    #[test]
+    fn do_destructuring_bind_is_refused() {
+        for binder in ["( a, b )", "{ a }"] {
+            let src = do_module(&format!(
+                "    do\n        {binder} <- t\n        Task.succeed a\n"
+            ));
+            assert!(
+                matches!(format_source(&src), Err(FmtError::Parse { .. })),
+                "destructuring `{binder} <-` must be refused as a parse error"
+            );
+        }
+    }
+
+    /// A whole-pattern `let _ =` outside a `do` stays refused.
+    ///
+    /// Re-sugaring does not widen what the formatter accepts.
+    #[test]
+    fn bare_wildcard_let_outside_do_is_refused() {
+        let src = do_module("    let\n        _ =\n            1\n    in\n    2\n");
+        assert!(
+            matches!(format_source(&src), Err(FmtError::Parse { .. })),
+            "`let _ =` outside a do must stay a parse error"
+        );
     }
 }

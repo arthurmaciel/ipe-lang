@@ -97,9 +97,10 @@ package =
 
 - **`name`** is the package's name in the index — it must be unique there.
 - **`version`** is a [semantic version](https://semver.org). The index enforces
-  semver: a release whose public API changed incompatibly must bump the major
-  version, an addition must bump the minor, and the audit **rejects an
-  under-bump** (see below).
+  semver: from `1.0.0` on, a release whose public API changed incompatibly must
+  bump the major version and an addition must bump the minor. On the initial
+  `0.y.z` line the major is reserved, so an incompatible change bumps the minor
+  and an addition the patch. The audit **rejects an under-bump** (see below).
 - **`exposedModules`** lists every module a consumer may import. Add a public
   module under `src/` and list it here; a module not listed stays internal to the
   package.
