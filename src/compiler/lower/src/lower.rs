@@ -3108,6 +3108,28 @@ fn ir_type_mentions_generic(ty: &IrType, tv: Symbol) -> bool {
     }
 }
 
+/// The payload of a `Send + 'static` carrier: a `Cmd`, `Sub` or `Decoder`.
+///
+/// The runtime boxes each of these as a `Send + 'static` value, so every type
+/// it carries must be `Send + 'static` too. `None` for every other type.
+const fn ir_type_send_carrier_payload(ty: &IrType) -> Option<&IrType> {
+    match ty {
+        IrType::Cmd(inner) | IrType::Sub(inner) | IrType::Decoder(inner) => Some(inner),
+        _ => None,
+    }
+}
+
+/// Does the type variable `tv` appear inside a `Send + 'static` carrier's payload anywhere in `ty`?
+///
+/// The carriers are [`ir_type_send_carrier_payload`]'s; the walk is the total
+/// [`ir_type_mentions`] recursion, so a carrier nested under a function type,
+/// a container, or another carrier is found.
+fn ir_type_generic_in_send_carrier(ty: &IrType, tv: Symbol) -> bool {
+    ir_type_mentions(ty, &|t| {
+        ir_type_send_carrier_payload(t).is_some_and(|inner| ir_type_mentions_generic(inner, tv))
+    })
+}
+
 /// Does the type variable `tv` appear INSIDE a [`IrType::Decoder`] payload
 /// anywhere in `ty`?
 ///
@@ -9822,12 +9844,15 @@ pub struct Lowerer<'a> {
     /// IPE-L0126 instead of emitting a `.clone()` on a non-`Clone` `Box`
     /// (E0599 — a SEAL break). Cleared per def.
     deferred_fun_captures: std::cell::RefCell<BTreeMap<Symbol, Span>>,
-    /// The current def's type variables obliged `Send + Sync` because a
-    /// sync-capturing kernel ([`KernelFn::sync_captured_args`]) moves a value
-    /// whose solved type reaches them bare into a thread-shared carrier.
-    /// Recorded at every kernel reference by [`Self::note_sync_captures`],
-    /// folded into the def's generic bounds when it is finalized. Cleared per def.
-    sync_obliged_tvars: std::cell::RefCell<BTreeSet<Symbol>>,
+    /// The auto-trait bounds the current def's body obliges on its type variables.
+    ///
+    /// `Send + Sync` where a sync-capturing kernel moves a value reaching the
+    /// variable bare into a thread-shared carrier ([`Self::note_sync_captures`]);
+    /// `Send + 'static` where a reference's solved type carries the variable
+    /// under a `Cmd` / `Sub` / `Decoder` ([`Self::note_carrier_sends`]).
+    /// Recorded at every reference, folded into the def's generic bounds when it
+    /// is finalized. Cleared per def.
+    recorded_bounds: std::cell::RefCell<BTreeMap<Symbol, BoundSet>>,
     /// The current def's user-function references, each with the solved type
     /// it instantiates the callee at. Recorded at every reference by
     /// [`Self::note_callee_instance`], drained per def into the cross-call
@@ -11547,7 +11572,7 @@ impl<'a> Lowerer<'a> {
             fn_is_async: Cell::new(false),
             promotable_fn_binders: std::cell::RefCell::new(BTreeSet::new()),
             deferred_fun_captures: std::cell::RefCell::new(BTreeMap::new()),
-            sync_obliged_tvars: std::cell::RefCell::new(BTreeSet::new()),
+            recorded_bounds: std::cell::RefCell::new(BTreeMap::new()),
             callee_instances: std::cell::RefCell::new(Vec::new()),
             toplevel_fn_aliases: std::cell::RefCell::new(BTreeMap::new()),
             local_string_literals: std::cell::RefCell::new(BTreeMap::new()),
@@ -15183,7 +15208,7 @@ impl<'a> Lowerer<'a> {
         // classifier and the binder sites; a def that errored out mid-lowering
         // must not leak its signals into the next def.
         self.deferred_fun_captures.borrow_mut().clear();
-        self.sync_obliged_tvars.borrow_mut().clear();
+        self.recorded_bounds.borrow_mut().clear();
         self.callee_instances.borrow_mut().clear();
         // Eta names are scope-local to one function: reset the monotonic cursor so
         // each def draws `eta_0, eta_1, …` afresh. Within the def the cursor only
@@ -15216,9 +15241,9 @@ impl<'a> Lowerer<'a> {
     /// Two independent sources oblige a generic: a kernel the body applies to a
     /// parameter binder of that generic ([`apply_kernel_type_param_bounds`]:
     /// `IpeRow` for wildcard `any` only, `IpeStringify`, `Send + 'static`,
-    /// `Sync`), and a sync-capturing kernel reference whose solved
-    /// instantiation reaches the generic ([`Self::apply_sync_capture_bounds`],
-    /// recorded while the body lowered).
+    /// `Sync`), and a reference whose solved instantiation reaches the generic
+    /// through a sync capture or a `Cmd` / `Sub` / `Decoder` carrier
+    /// ([`Self::apply_recorded_bounds`], recorded while the body lowered).
     fn finalize_type_params(
         &self,
         type_params: &mut [(Symbol, BoundSet)],
@@ -15228,7 +15253,7 @@ impl<'a> Lowerer<'a> {
         body: &Expr,
     ) {
         apply_kernel_type_param_bounds(type_params, wildcard_any_syms, params, ret, body);
-        self.apply_sync_capture_bounds(type_params);
+        self.apply_recorded_bounds(type_params);
     }
 
     /// Lower one definition's signature and body, before its bounds are folded in.
@@ -24961,6 +24986,7 @@ impl<'a> Lowerer<'a> {
             Callee::Func(id) => self.note_callee_instance(*id, callee.span),
             Callee::Ffi { .. } => {}
         }
+        self.note_carrier_sends(callee.span);
         Ok(resolved)
     }
 
@@ -25138,7 +25164,11 @@ impl<'a> Lowerer<'a> {
                 )
             }));
         }
-        self.sync_obliged_tvars.borrow_mut().extend(obliged);
+        let mut recorded = self.recorded_bounds.borrow_mut();
+        for tv in obliged {
+            let slot = recorded.entry(tv).or_insert(BoundSet::UNBOUNDED);
+            *slot = slot.with_sync();
+        }
     }
 
     /// Whether `t` mentions the current def's generic `tv` anywhere.
@@ -25157,12 +25187,61 @@ impl<'a> Lowerer<'a> {
         }
     }
 
-    /// Fold the def's recorded capture-`Sync` obligations into its generic bounds.
-    fn apply_sync_capture_bounds(&self, type_params: &mut [(Symbol, BoundSet)]) {
-        let obliged = self.sync_obliged_tvars.take();
+    /// Record the `Send + 'static` obligation a reference's `Cmd` / `Sub` / `Decoder` carriers place on the def's generics.
+    ///
+    /// The runtime boxes every `Cmd` / `Sub` / `Decoder` as a `Send + 'static`
+    /// value and bounds the types they carry to match (`cmd_map`'s and
+    /// `sub_map`'s `A`, the decoder combinators' element). A generic can ride
+    /// such a carrier only inside the body — `Sub.map k (Sub.every 1000 x)` with
+    /// `x : a` — while the signature shows it bare or under a function type
+    /// only, so a signature walk misses it. Every reference routes through
+    /// [`Self::lower_callee`], and each one's solved type (`span`'s region
+    /// type) is lowered in the def's generics; every generic under a carrier
+    /// anywhere in it, a produced value or an argument alike, is obliged. The
+    /// carrier set is [`ir_type_send_carrier_payload`], so a kernel producing
+    /// one of those carriers is covered with no per-kernel entry.
+    ///
+    /// Fail-closed: a missing region type obliges every generic of the def; a
+    /// type that does not lower obliges every generic it mentions. Over-bounding
+    /// stays buildable: every emitted concrete type is `Send + 'static`, and a
+    /// generic caller receives the bound through call-site propagation.
+    fn note_carrier_sends(&self, span: Span) {
+        let poly: BTreeSet<Symbol> = self.current_poly_tvars.borrow().values().copied().collect();
+        if poly.is_empty() {
+            return;
+        }
+        let obliged: Vec<Symbol> = self.region_ty(span).map_or_else(
+            || poly.iter().copied().collect(),
+            |solved| {
+                self.ir_type_from_ty(solved, span).map_or_else(
+                    |_| {
+                        poly.iter()
+                            .copied()
+                            .filter(|tv| self.ty_mentions_poly_tvar(solved, *tv))
+                            .collect()
+                    },
+                    |ir| {
+                        poly.iter()
+                            .copied()
+                            .filter(|tv| ir_type_generic_in_send_carrier(&ir, *tv))
+                            .collect()
+                    },
+                )
+            },
+        );
+        let mut recorded = self.recorded_bounds.borrow_mut();
+        for tv in obliged {
+            let slot = recorded.entry(tv).or_insert(BoundSet::UNBOUNDED);
+            *slot = slot.with_send();
+        }
+    }
+
+    /// Fold the def's recorded auto-trait obligations into its generic bounds.
+    fn apply_recorded_bounds(&self, type_params: &mut [(Symbol, BoundSet)]) {
+        let recorded = self.recorded_bounds.take();
         for (tv, bounds) in type_params.iter_mut() {
-            if obliged.contains(tv) {
-                *bounds = bounds.with_sync();
+            if let Some(obliged) = recorded.get(tv) {
+                oblige_auto_traits(bounds, *obliged);
             }
         }
     }
