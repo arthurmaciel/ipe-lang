@@ -264,7 +264,7 @@ pub(super) fn param_is_multiuse_clonable(env: CloneEnv<'_>, ir_ty: &IrType) -> b
 /// The `Clone`-treatment a captured symbol of type `ir_ty` receives inside a
 /// closure body: `Some(true)` clones at the boundary (`.clone()` / `CloneVar`),
 /// `Some(false)` is a genuinely non-`Clone` capture (bare only in depth-0 callee
-/// position, else IPE-L0126), `None` is a `CopyLeaf`/untyped capture left bare.
+/// position, else IPE-L0126), `None` is a `CopyLeaf` capture left bare.
 ///
 /// A bare [`IrType::Generic`] capture clones, exactly as a bare `Generic` PARAM
 /// does under [`param_is_multiuse_clonable`]: `render_fn_generics` stamps
@@ -273,15 +273,14 @@ pub(super) fn param_is_multiuse_clonable(env: CloneEnv<'_>, ir_ty: &IrType) -> b
 /// at the CALLER by that bound before the clone is reached. SINGLE SOURCE OF
 /// TRUTH with `param_is_multiuse_clonable` — both admit a bare `Generic` on the
 /// same emitted `with_clone` bound; if one changes the other must.
-pub(super) fn classify_capture_clone(env: CloneEnv<'_>, ir_ty: Option<&IrType>) -> Option<bool> {
-    match ir_ty {
-        Some(IrType::Generic(_)) => Some(true),
-        Some(t) => match clone_class(env, t) {
-            CloneClass::CloneOk => Some(true),
-            CloneClass::NonClone => Some(false),
-            CloneClass::CopyLeaf => None,
-        },
-        None => None,
+pub(super) fn classify_capture_clone(env: CloneEnv<'_>, ir_ty: &IrType) -> Option<bool> {
+    if matches!(ir_ty, IrType::Generic(_)) {
+        return Some(true);
+    }
+    match clone_class(env, ir_ty) {
+        CloneClass::CloneOk => Some(true),
+        CloneClass::NonClone => Some(false),
+        CloneClass::CopyLeaf => None,
     }
 }
 
@@ -882,8 +881,10 @@ pub(super) fn rewrite_captured_clones(
 /// Refuse (IPE-L0135) a reuse of a non-`Clone` effect-carrier binding `sym`.
 ///
 /// Reached only through the lowerer's single move-ownership entry point, so
-/// every binder form (parameter, arm binder, `let`, destructured component)
-/// runs it.
+/// every used binder of every form (parameter, arm binder, `let`, destructured
+/// component) runs it. The binder's type comes from the lowerer's fail-closed
+/// binder-type resolver: a used binder whose type does not resolve is refused
+/// there, never skipped past this check.
 pub(super) fn reject_nonclone_value_reuse(
     env: CloneEnv<'_>,
     sym: Symbol,
