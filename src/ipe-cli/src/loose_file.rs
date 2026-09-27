@@ -11,6 +11,8 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
+#[cfg(unix)]
+use std::os::fd::{AsFd, BorrowedFd, OwnedFd};
 use std::path::{Path, PathBuf};
 
 use ipe_intern::{Interner, Symbol};
@@ -23,6 +25,9 @@ pub const MAX_LOOSE_FILE_MODULES: usize = 256;
 /// Upper bound on the source bytes a loose-file load reads across its whole closure.
 pub const MAX_LOOSE_FILE_BYTES: u64 = 64 * 1024 * 1024;
 
+/// Upper bound on the distinct module paths a loose-file load probes, the entry included.
+pub const MAX_LOOSE_FILE_PROBES: usize = 4096;
+
 /// The ceilings one loose-file load is held to.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct LooseFileLimits {
@@ -30,6 +35,8 @@ pub struct LooseFileLimits {
     pub modules: usize,
     /// Most source bytes the closure may hold, the entry included.
     pub bytes: u64,
+    /// Most distinct module paths the closure's imports may name, the entry included.
+    pub probes: usize,
 }
 
 impl LooseFileLimits {
@@ -37,6 +44,7 @@ impl LooseFileLimits {
     pub const DEFAULT: Self = Self {
         modules: MAX_LOOSE_FILE_MODULES,
         bytes: MAX_LOOSE_FILE_BYTES,
+        probes: MAX_LOOSE_FILE_PROBES,
     };
 }
 
@@ -77,34 +85,52 @@ pub struct LooseFileSources {
     pub discovered: Vec<project::DiscoveredModule>,
     /// The entry's declared module path.
     pub entry_module: Vec<String>,
+    /// Every sibling file the closure's imports probe, relative to the entry's directory.
+    ///
+    /// A probed file that does not exist yet is listed too, so a watcher
+    /// sees it appear.
+    pub probed_files: Vec<PathBuf>,
 }
+
+/// The outcome of reading one vetted sibling: its path and text, or `None` when it is no regular file.
+type SiblingRead = Result<Option<(PathBuf, String)>, CliError>;
 
 /// Load a loose file plus the transitive closure of sibling modules it imports.
 ///
 /// An import `A.B` resolves to `<dir>/A/B.ipe`, where `<dir>` is the entry's
-/// directory; only that one path is probed, and only a regular file (not a
-/// symlink) that canonicalizes inside `<dir>` is read. The read itself walks
-/// `A` then `B.ipe` from `<dir>` refusing every symlink, and reads from the
-/// handle it opened, so a file swapped after the checks can neither escape
-/// `<dir>` nor block the load. An import with no such file (the stdlib, a
-/// typo) is left for the compiler to resolve or report. A sibling that fails
-/// to parse is still loaded — the compiler reports its errors — but
-/// contributes no further imports. `entry_text` shadows the entry's disk
-/// bytes (an unsaved editor buffer).
+/// directory; only that one path is probed, and only a regular file under
+/// real (non-symlink) directories that canonicalizes inside `<dir>` is read.
+/// On unix the read walks `A` then `B.ipe` from a `<dir>` handle opened once,
+/// refusing every symlink, and reads from the handle it opened, so a file
+/// swapped after the checks can neither escape `<dir>` nor block the load.
+/// Other platforms reopen the checked path and have no such race guarantee.
+/// An import with no such file (the stdlib, a typo) is left for the compiler
+/// to resolve or report. A sibling that fails to parse is still loaded — the
+/// compiler reports its errors — but contributes no further imports.
+/// `entry_text` shadows the entry's disk bytes (an unsaved editor buffer).
 ///
 /// # Errors
 /// [`CliError::Pipeline`] when the entry does not parse; [`CliError::Io`]
 /// when the entry or a probed module cannot be read;
-/// [`CliError::DiscoveryLimitReached`] when the import closure exceeds
-/// `limits`.
+/// [`CliError::FileTooLarge`] when one file passes
+/// [`io_bounded::SOURCE_READ_CAP`]; [`CliError::DiscoveryLimitReached`] when
+/// the import closure exceeds `limits`.
 pub fn resolve_loose_file(
     entry: &Path,
     entry_text: Option<&str>,
     limits: LooseFileLimits,
 ) -> Result<LooseFileSources, CliError> {
     let entry_source = match entry_text {
+        Some(text) if source_bytes(text) > limits.bytes => {
+            return Err(bytes_past_budget(entry, limits));
+        }
         Some(text) => text.to_owned(),
-        None => io_bounded::read_to_string_capped(entry, io_bounded::SOURCE_READ_CAP)?,
+        None => charge_budget(
+            io_bounded::read_to_string_capped(entry, budget_cap(limits.bytes)),
+            entry,
+            limits.bytes,
+            limits,
+        )?,
     };
     let mut interner = Interner::new();
     let parsed = ipe_parse::parse_module(&entry_source, &mut interner).map_err(|diag| {
@@ -118,39 +144,48 @@ pub fn resolve_loose_file(
     let mut pending = imported_modules(&parsed, &interner);
     let mut total_bytes = source_bytes(&entry_source);
     let mut probed: BTreeSet<Vec<String>> = BTreeSet::from([entry_module.clone()]);
+    let mut probed_files = Vec::new();
     let mut sources: BTreeMap<Vec<String>, (PathBuf, String)> = BTreeMap::new();
     sources.insert(entry_module.clone(), (entry.to_path_buf(), entry_source));
 
-    let source_dir = entry_directory(entry);
-    if let Ok(canonical_dir) = fs::canonicalize(source_dir) {
-        while let Some(module) = pending.pop() {
-            if !probed.insert(module.clone()) {
-                continue;
-            }
-            let Some(path) = sibling_module_file(source_dir, &canonical_dir, &module) else {
-                continue;
-            };
-            if sources.len() >= limits.modules {
-                return Err(closure_too_large(
-                    entry,
-                    &format!("more than {} sibling modules", limits.modules),
-                ));
-            }
-            let Some(source) = read_sibling_module(&canonical_dir, &module, &path)? else {
-                continue;
-            };
-            total_bytes = total_bytes.saturating_add(source_bytes(&source));
-            if total_bytes > limits.bytes {
-                return Err(closure_too_large(
-                    entry,
-                    &format!("more than {} bytes of sibling source", limits.bytes),
-                ));
-            }
-            if let Ok(parsed) = ipe_parse::parse_module(&source, &mut interner) {
-                pending.extend(imported_modules(&parsed, &interner));
-            }
-            sources.insert(module, (path, source));
+    let source_dir = SourceDir::open(entry_directory(entry));
+    while let Some(module) = pending.pop() {
+        if probed.contains(&module) {
+            continue;
         }
+        if probed.len() >= limits.probes {
+            return Err(closure_too_large(
+                entry,
+                &format!("more than {} distinct modules", limits.probes),
+            ));
+        }
+        probed.insert(module.clone());
+        let Some(relative) = module_file(&module) else {
+            continue;
+        };
+        probed_files.push(relative);
+        let Some(sibling) = source_dir.as_ref().and_then(|dir| dir.vet(&module)) else {
+            continue;
+        };
+        if sources.len() >= limits.modules {
+            return Err(closure_too_large(
+                entry,
+                &format!("more than {} sibling modules", limits.modules),
+            ));
+        }
+        let remaining = limits.bytes.saturating_sub(total_bytes);
+        let read = sibling.read(budget_cap(remaining));
+        let Some((path, source)) = charge_budget(read, entry, remaining, limits)? else {
+            continue;
+        };
+        total_bytes = total_bytes.saturating_add(source_bytes(&source));
+        if total_bytes > limits.bytes {
+            return Err(bytes_past_budget(entry, limits));
+        }
+        if let Ok(parsed) = ipe_parse::parse_module(&source, &mut interner) {
+            pending.extend(imported_modules(&parsed, &interner));
+        }
+        sources.insert(module, (path, source));
     }
 
     let discovered = sources
@@ -164,6 +199,7 @@ pub fn resolve_loose_file(
         sources,
         discovered,
         entry_module,
+        probed_files,
     })
 }
 
@@ -171,6 +207,34 @@ pub fn resolve_loose_file(
 fn closure_too_large(entry: &Path, what: &str) -> CliError {
     CliError::DiscoveryLimitReached {
         detail: format!("`{}` imports {what}", entry.display()),
+    }
+}
+
+/// The refusal for a closure past [`LooseFileLimits::bytes`].
+fn bytes_past_budget(entry: &Path, limits: LooseFileLimits) -> CliError {
+    closure_too_large(
+        entry,
+        &format!("more than {} bytes of source", limits.bytes),
+    )
+}
+
+/// The most bytes one file may be read to with `remaining` bytes of budget left.
+fn budget_cap(remaining: u64) -> u64 {
+    remaining.min(io_bounded::SOURCE_READ_CAP)
+}
+
+/// Turn a read the byte budget cut short, not the per-file cap, into the closure refusal.
+fn charge_budget<T>(
+    read: Result<T, CliError>,
+    entry: &Path,
+    remaining: u64,
+    limits: LooseFileLimits,
+) -> Result<T, CliError> {
+    match read {
+        Err(CliError::FileTooLarge { .. }) if remaining < io_bounded::SOURCE_READ_CAP => {
+            Err(bytes_past_budget(entry, limits))
+        }
+        other => other,
     }
 }
 
@@ -187,91 +251,177 @@ fn entry_directory(entry: &Path) -> &Path {
         .unwrap_or_else(|| Path::new("."))
 }
 
-/// The on-disk file for sibling `module` under `source_dir`.
+/// The file module `A.B` lives in, `A/B.ipe`, relative to the entry's directory.
 ///
-/// `None` unless every segment is a module segment and the path is a regular
-/// file (not a symlink) that canonicalizes inside `canonical_dir`, the
-/// canonical form of `source_dir`. The returned path keeps `source_dir`'s
-/// spelling so diagnostics name the file as the user wrote its directory.
-fn sibling_module_file(
-    source_dir: &Path,
-    canonical_dir: &Path,
-    module: &[String],
-) -> Option<PathBuf> {
-    if module.is_empty()
-        || !module
-            .iter()
-            .all(|segment| project::is_module_segment(segment))
-    {
-        return None;
-    }
-    let mut path = source_dir.to_path_buf();
-    path.extend(module);
-    path.set_extension("ipe");
-    let is_regular_file = fs::symlink_metadata(&path).is_ok_and(|meta| meta.file_type().is_file());
-    let is_contained =
-        fs::canonicalize(&path).is_ok_and(|canonical| canonical.starts_with(canonical_dir));
-    (is_regular_file && is_contained).then_some(path)
+/// `None` unless the path is non-empty and every segment is a module
+/// segment, so no `..`, separator or empty component can reach the path.
+fn module_file(module: &[String]) -> Option<PathBuf> {
+    let (file_segment, dir_segments) = module.split_last()?;
+    module
+        .iter()
+        .all(|segment| project::is_module_segment(segment))
+        .then(|| {
+            let mut path: PathBuf = dir_segments.iter().collect();
+            path.push(format!("{file_segment}.ipe"));
+            path
+        })
 }
 
-/// Read sibling `module` from the handle [`open_module_beneath`] returns.
-///
-/// `None` when the opened file is not a regular file (a FIFO or device
-/// swapped in after the path checks); `path` only names the file in errors.
-///
-/// # Errors
-/// [`CliError::Io`] when the walk to the file or its read fails;
-/// [`CliError::FileTooLarge`] past [`io_bounded::SOURCE_READ_CAP`].
-fn read_sibling_module(
-    canonical_dir: &Path,
-    module: &[String],
-    path: &Path,
-) -> Result<Option<String>, CliError> {
-    let io_error = |source| CliError::Io {
-        path: path.to_path_buf(),
-        source,
-    };
-    let file = open_module_beneath(canonical_dir, module).map_err(io_error)?;
-    if !file.metadata().map_err(io_error)?.is_file() {
-        return Ok(None);
-    }
-    io_bounded::read_open_file_capped(file, path, io_bounded::SOURCE_READ_CAP).map(Some)
+/// The entry's directory, resolved once before any sibling is probed.
+struct SourceDir<'e> {
+    /// The directory as the entry path spells it, so diagnostics name files as the user wrote them.
+    spelled: &'e Path,
+    /// The canonical form of `spelled`, the containment bound.
+    canonical: PathBuf,
+    /// The handle every sibling read walks down from, opened `O_NOFOLLOW`.
+    ///
+    /// An open failure is kept rather than raised: it surfaces only when a
+    /// vetted sibling is read, so an entry importing nothing on disk loads
+    /// from a directory it may not list.
+    #[cfg(unix)]
+    handle: Result<OwnedFd, rustix::io::Errno>,
 }
 
-/// Open `<canonical_dir>/A/B.ipe` for module `A.B`, one segment at a time, refusing every symlink.
+impl<'e> SourceDir<'e> {
+    /// Resolve `spelled`, or `None` when it does not canonicalize (no sibling can be read then).
+    fn open(spelled: &'e Path) -> Option<Self> {
+        let canonical = fs::canonicalize(spelled).ok()?;
+        #[cfg(unix)]
+        let handle = {
+            use rustix::fs::{Mode, OFlags};
+            rustix::fs::open(
+                canonical.as_path(),
+                OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+                Mode::empty(),
+            )
+        };
+        Some(Self {
+            spelled,
+            canonical,
+            #[cfg(unix)]
+            handle,
+        })
+    }
+
+    /// The sibling file for `module`, when every check a read relies on holds.
+    ///
+    /// `None` unless every intermediate directory is a real directory (not a
+    /// symlink), the file is a regular file (not a symlink), and it
+    /// canonicalizes inside this directory. The two layers agree: a path the
+    /// no-follow walk in [`VettedSibling::read`] would refuse is refused here
+    /// first, so only a swap after these checks reaches that walk.
+    fn vet<'d>(&'d self, module: &'d [String]) -> Option<VettedSibling<'d>> {
+        let relative = module_file(module)?;
+        let (_, dir_segments) = module.split_last()?;
+        let mut dir = self.spelled.to_path_buf();
+        for segment in dir_segments {
+            dir.push(segment);
+            if !fs::symlink_metadata(&dir).is_ok_and(|meta| meta.file_type().is_dir()) {
+                return None;
+            }
+        }
+        let path = self.spelled.join(relative);
+        let is_regular_file =
+            fs::symlink_metadata(&path).is_ok_and(|meta| meta.file_type().is_file());
+        let is_contained =
+            fs::canonicalize(&path).is_ok_and(|canonical| canonical.starts_with(&self.canonical));
+        (is_regular_file && is_contained).then_some(VettedSibling {
+            dir: self,
+            segments: module,
+            path,
+        })
+    }
+}
+
+/// A sibling module that passed [`SourceDir::vet`]; reading consumes it.
+struct VettedSibling<'d> {
+    /// The directory the sibling was vetted against.
+    dir: &'d SourceDir<'d>,
+    /// The module path, one directory segment per element, the file stem last.
+    segments: &'d [String],
+    /// The file's path as the user spelled the entry's directory, for diagnostics.
+    path: PathBuf,
+}
+
+impl VettedSibling<'_> {
+    /// Read the sibling from the handle the no-follow walk opens, at most `cap` bytes.
+    ///
+    /// `None` when the opened file is not a regular file (a FIFO or device
+    /// swapped in after the checks).
+    ///
+    /// # Errors
+    /// [`CliError::Io`] when the walk to the file or its read fails;
+    /// [`CliError::FileTooLarge`] past `cap`.
+    fn read(self, cap: u64) -> SiblingRead {
+        let opened = self
+            .open()
+            .and_then(|file| file.metadata().map(|meta| (file, meta.is_file())));
+        let (file, is_file) = match opened {
+            Ok(opened) => opened,
+            Err(source) => {
+                return Err(CliError::Io {
+                    path: self.path,
+                    source,
+                });
+            }
+        };
+        if !is_file {
+            return Ok(None);
+        }
+        io_bounded::read_open_file_capped(file, &self.path, cap)
+            .map(|source| Some((self.path, source)))
+    }
+
+    /// Open the sibling beneath the directory handle, refusing every symlink.
+    #[cfg(unix)]
+    fn open(&self) -> std::io::Result<fs::File> {
+        let dir = self
+            .dir
+            .handle
+            .as_ref()
+            .map_err(|errno| std::io::Error::from(*errno))?;
+        open_module_beneath(dir.as_fd(), self.segments)
+    }
+
+    /// Open the sibling by its canonical path; off unix nothing stops a swap after the checks.
+    #[cfg(not(unix))]
+    fn open(&self) -> std::io::Result<fs::File> {
+        let mut path = self.dir.canonical.clone();
+        path.extend(self.segments);
+        path.set_extension("ipe");
+        fs::File::open(path)
+    }
+}
+
+/// Open `A/B.ipe` for module `A.B` beneath `dir`, one segment at a time, refusing every symlink.
 ///
 /// Each directory is opened relative to its parent's handle with
-/// `O_NOFOLLOW`, and the file with `O_NOFOLLOW | O_NONBLOCK`, so the opened
-/// file lies inside `canonical_dir` by construction and a FIFO never blocks
-/// the open.
+/// `O_NOFOLLOW`, and the file with `O_NOFOLLOW | O_NONBLOCK | O_NOCTTY`, so
+/// the opened file lies beneath `dir` by construction, a FIFO never blocks
+/// the open, and a terminal device never becomes the controlling terminal.
 #[cfg(unix)]
-fn open_module_beneath(canonical_dir: &Path, module: &[String]) -> std::io::Result<fs::File> {
+fn open_module_beneath(dir: BorrowedFd<'_>, module: &[String]) -> std::io::Result<fs::File> {
     use rustix::fs::{Mode, OFlags};
     let Some((file_segment, dir_segments)) = module.split_last() else {
         return Err(std::io::ErrorKind::NotFound.into());
     };
-    let mut dir = rustix::fs::open(
-        canonical_dir,
-        OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC,
-        Mode::empty(),
-    )?;
     let dir_flags = OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC;
+    let mut descended: Option<OwnedFd> = None;
     for segment in dir_segments {
-        dir = rustix::fs::openat(&dir, segment.as_str(), dir_flags, Mode::empty())?;
+        let parent = descended.as_ref().map_or(dir, AsFd::as_fd);
+        descended = Some(rustix::fs::openat(
+            parent,
+            segment.as_str(),
+            dir_flags,
+            Mode::empty(),
+        )?);
     }
-    let file_flags = OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::CLOEXEC;
+    let parent = descended.as_ref().map_or(dir, AsFd::as_fd);
+    let file_flags =
+        OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::NOCTTY | OFlags::CLOEXEC;
     let file_name = format!("{file_segment}.ipe");
-    let file = rustix::fs::openat(&dir, file_name.as_str(), file_flags, Mode::empty())?;
+    let file = rustix::fs::openat(parent, file_name.as_str(), file_flags, Mode::empty())?;
     Ok(fs::File::from(file))
-}
-
-/// Open `<canonical_dir>/A/B.ipe` for module `A.B`.
-#[cfg(not(unix))]
-fn open_module_beneath(canonical_dir: &Path, module: &[String]) -> std::io::Result<fs::File> {
-    let mut path = canonical_dir.to_path_buf();
-    path.extend(module);
-    path.set_extension("ipe");
-    fs::File::open(path)
 }
 
 /// Every module path `parsed` imports.
@@ -297,8 +447,8 @@ mod tests {
     use std::path::{Path, PathBuf};
 
     use super::{
-        CliError, LooseFileLimits, LooseFileSources, ProjectRoot, open_module_beneath,
-        read_sibling_module, resolve_loose_file, sibling_module_file,
+        CliError, LooseFileLimits, LooseFileSources, ProjectRoot, SiblingRead, SourceDir,
+        VettedSibling, io_bounded, module_file, resolve_loose_file,
     };
 
     /// A fresh, canonical scratch directory unique to `name` and this process.
@@ -332,6 +482,24 @@ mod tests {
             modules,
             ..LooseFileLimits::DEFAULT
         }
+    }
+
+    /// The path the resolver's checks vet for `module` under `dir`, if any.
+    fn vetted_path(dir: &Path, module: &[String]) -> Option<PathBuf> {
+        let source_dir = SourceDir::open(dir)?;
+        source_dir.vet(module).map(|sibling| sibling.path)
+    }
+
+    /// Read `module` under `dir` skipping the path checks, as a swap after them would.
+    fn read_unvetted(dir: &Path, module: &[String]) -> Option<SiblingRead> {
+        let source_dir = SourceDir::open(dir)?;
+        let path = dir.join(module_file(module)?);
+        let sibling = VettedSibling {
+            dir: &source_dir,
+            segments: module,
+            path,
+        };
+        Some(sibling.read(io_bounded::SOURCE_READ_CAP))
     }
 
     #[test]
@@ -408,6 +576,17 @@ mod tests {
             ]
         );
         assert_eq!(loaded.discovered.len(), 3);
+        let mut probed_files = loaded.probed_files;
+        probed_files.sort();
+        assert_eq!(
+            probed_files,
+            vec![
+                PathBuf::from("Helper.ipe"),
+                Path::new("Ipe").join("Io.ipe"),
+                Path::new("Lib").join("Util.ipe"),
+            ],
+            "every probed sibling path is listed, the missing stdlib one included"
+        );
     }
 
     #[test]
@@ -462,6 +641,30 @@ mod tests {
         );
     }
 
+    #[test]
+    fn loose_file_import_probes_past_the_probe_limit_are_refused() {
+        let dir = scratch_dir("probes");
+        let entry = dir.join("Main.ipe");
+        // Neither import exists on disk: probing alone must be bounded.
+        write(
+            &entry,
+            "module Main exposing (main)\n\nimport A\nimport B\n\nmain = 1\n",
+        );
+        let probes = |probes| LooseFileLimits {
+            probes,
+            ..LooseFileLimits::DEFAULT
+        };
+
+        let at_limit = resolve_loose_file(&entry, None, probes(3));
+        let past_limit = resolve_loose_file(&entry, None, probes(2));
+        let _ = fs::remove_dir_all(&dir);
+        assert!(at_limit.is_ok(), "Main, A and B fit a probe limit of three");
+        assert!(
+            matches!(past_limit, Err(CliError::DiscoveryLimitReached { .. })),
+            "a closure naming one module past the probe limit is refused"
+        );
+    }
+
     #[cfg(unix)]
     #[test]
     #[allow(clippy::expect_used)] // a load failure IS the regression under test
@@ -507,6 +710,48 @@ mod tests {
         let loaded = resolve_loose_file(&entry, None, LooseFileLimits::DEFAULT);
         let _ = fs::remove_dir_all(&dir);
         let _ = fs::remove_dir_all(&outside);
+        let loaded = loaded.expect("entry still loads");
+        assert_eq!(user_modules(&loaded), vec![module(&["Main"])]);
+    }
+
+    /// The path check refuses a directory symlink that stays inside, as the no-follow walk would.
+    #[cfg(unix)]
+    #[test]
+    #[allow(clippy::expect_used)] // a load failure IS the regression under test
+    fn loose_file_never_follows_a_directory_symlinked_inside_its_directory() {
+        let dir = scratch_dir("dir-symlink-inside");
+        let entry = dir.join("Main.ipe");
+        write(
+            &entry,
+            "module Main exposing (main)\n\nimport A.B\n\nmain = A.B.b\n",
+        );
+        write(
+            &dir.join("Real").join("B.ipe"),
+            "module A.B exposing (b)\n\nb = 1\n",
+        );
+        std::os::unix::fs::symlink(dir.join("Real"), dir.join("A")).expect("plant symlink");
+
+        let probed = dir.join("A").join("B.ipe");
+        let passes_regular_file_check =
+            fs::symlink_metadata(&probed).is_ok_and(|meta| meta.file_type().is_file());
+        let passes_containment =
+            fs::canonicalize(&probed).is_ok_and(|canonical| canonical.starts_with(&dir));
+        let path_level = vetted_path(&dir, &module(&["A", "B"]));
+        let handle_level = read_unvetted(&dir, &module(&["A", "B"]));
+        let loaded = resolve_loose_file(&entry, None, LooseFileLimits::DEFAULT);
+        let _ = fs::remove_dir_all(&dir);
+        assert!(
+            passes_regular_file_check && passes_containment,
+            "only the symlinked directory component sets this path apart"
+        );
+        assert_eq!(
+            path_level, None,
+            "the path check refuses the symlinked directory"
+        );
+        assert!(
+            matches!(handle_level, Some(Err(CliError::Io { .. }))),
+            "the no-follow walk refuses the symlinked directory"
+        );
         let loaded = loaded.expect("entry still loads");
         assert_eq!(user_modules(&loaded), vec![module(&["Main"])]);
     }
@@ -562,7 +807,32 @@ mod tests {
         );
         assert!(
             matches!(past_budget, Err(CliError::DiscoveryLimitReached { .. })),
-            "a closure one byte past the budget is refused"
+            "a sibling read one byte past the budget is refused as a closure limit"
+        );
+    }
+
+    #[test]
+    fn loose_file_entry_past_the_byte_budget_is_refused_before_parsing() {
+        let dir = scratch_dir("entry-bytes");
+        let entry = dir.join("Main.ipe");
+        let entry_text = "module Main exposing (main)\n\nmain = 1\n";
+        write(&entry, entry_text);
+        let entry_bytes = u64::try_from(entry_text.len()).unwrap_or(0);
+        let budget = LooseFileLimits {
+            bytes: entry_bytes - 1,
+            ..LooseFileLimits::DEFAULT
+        };
+
+        let from_disk = resolve_loose_file(&entry, None, budget);
+        let from_buffer = resolve_loose_file(&entry, Some(entry_text), budget);
+        let _ = fs::remove_dir_all(&dir);
+        assert!(
+            matches!(from_disk, Err(CliError::DiscoveryLimitReached { .. })),
+            "an entry file one byte past the budget is refused"
+        );
+        assert!(
+            matches!(from_buffer, Err(CliError::DiscoveryLimitReached { .. })),
+            "an editor buffer one byte past the budget is refused"
         );
     }
 
@@ -596,11 +866,11 @@ mod tests {
         );
     }
 
-    /// Only the containment check refuses a module reached through a directory symlinked outside.
+    /// Both layers refuse a module reached through a directory symlinked outside.
     #[cfg(unix)]
     #[test]
     #[allow(clippy::expect_used)] // test fixture: a failed symlink IS the failure
-    fn sibling_path_through_a_parent_symlinked_outside_is_refused_by_containment() {
+    fn sibling_path_through_a_parent_symlinked_outside_is_refused() {
         let outside = scratch_dir("parent-link-outside");
         write(&outside.join("B.ipe"), "module A.B exposing (b)\n\nb = 1\n");
         let dir = scratch_dir("parent-link");
@@ -609,17 +879,17 @@ mod tests {
         let probed = dir.join("A").join("B.ipe");
         let passes_regular_file_check =
             fs::symlink_metadata(&probed).is_ok_and(|meta| meta.file_type().is_file());
-        let path_level = sibling_module_file(&dir, &dir, &module(&["A", "B"]));
-        let handle_level = open_module_beneath(&dir, &module(&["A", "B"]));
+        let path_level = vetted_path(&dir, &module(&["A", "B"]));
+        let handle_level = read_unvetted(&dir, &module(&["A", "B"]));
         let _ = fs::remove_dir_all(&dir);
         let _ = fs::remove_dir_all(&outside);
         assert!(
             passes_regular_file_check,
             "the file behind the symlinked parent is a regular file"
         );
-        assert_eq!(path_level, None, "containment refuses the escaping path");
+        assert_eq!(path_level, None, "the path check refuses the escaping path");
         assert!(
-            handle_level.is_err(),
+            matches!(handle_level, Some(Err(CliError::Io { .. }))),
             "the no-follow walk refuses the symlinked directory"
         );
     }
@@ -640,8 +910,8 @@ mod tests {
 
         let passes_containment =
             fs::canonicalize(dir.join("X.ipe")).is_ok_and(|canonical| canonical.starts_with(&dir));
-        let path_level = sibling_module_file(&dir, &dir, &module(&["X"]));
-        let handle_level = open_module_beneath(&dir, &module(&["X"]));
+        let path_level = vetted_path(&dir, &module(&["X"]));
+        let handle_level = read_unvetted(&dir, &module(&["X"]));
         let loaded = resolve_loose_file(&entry, None, LooseFileLimits::DEFAULT);
         let _ = fs::remove_dir_all(&dir);
         assert!(
@@ -650,7 +920,7 @@ mod tests {
         );
         assert_eq!(path_level, None, "the regular-file check refuses a symlink");
         assert!(
-            handle_level.is_err(),
+            matches!(handle_level, Some(Err(CliError::Io { .. }))),
             "the no-follow open refuses the final symlink"
         );
         let loaded = loaded.expect("entry still loads");
@@ -663,10 +933,10 @@ mod tests {
         let sub = dir.join("sub");
         write(&sub.join("X.ipe"), "module X exposing (x)\n\nx = 1\n");
 
-        let plain = sibling_module_file(&sub, &sub, &module(&["X"]));
-        let parent = sibling_module_file(&sub, &sub, &module(&["..", "sub", "X"]));
-        let empty = sibling_module_file(&sub, &sub, &module(&["", "X"]));
-        let none = sibling_module_file(&sub, &sub, &[]);
+        let plain = vetted_path(&sub, &module(&["X"]));
+        let parent = vetted_path(&sub, &module(&["..", "sub", "X"]));
+        let empty = vetted_path(&sub, &module(&["", "X"]));
+        let none = vetted_path(&sub, &[]);
         let _ = fs::remove_dir_all(&dir);
         assert_eq!(plain, Some(sub.join("X.ipe")), "the control path resolves");
         assert_eq!(parent, None, "a `..` segment is refused");
@@ -687,12 +957,12 @@ mod tests {
             .expect("run mkfifo");
         assert!(made.success(), "mkfifo creates the fixture");
 
-        let path_level = sibling_module_file(&dir, &dir, &module(&["Pipe"]));
-        let handle_level = read_sibling_module(&dir, &module(&["Pipe"]), &fifo);
+        let path_level = vetted_path(&dir, &module(&["Pipe"]));
+        let handle_level = read_unvetted(&dir, &module(&["Pipe"]));
         let _ = fs::remove_dir_all(&dir);
         assert_eq!(path_level, None, "the path check refuses a FIFO");
         assert!(
-            matches!(handle_level, Ok(None)),
+            matches!(handle_level, Some(Ok(None))),
             "the handle check refuses a FIFO without reading it"
         );
     }
