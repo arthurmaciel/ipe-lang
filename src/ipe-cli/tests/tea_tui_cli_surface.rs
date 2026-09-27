@@ -663,13 +663,13 @@ fn seal_stored_fn_element_into_impl_fn_kernel_builds() -> Result<(), BoxError> {
 /// value read through a fresh closure first.
 #[test]
 fn cli_on_line_point_free_in_list_map_emits_adapted_handler() -> Result<(), BoxError> {
+    const BRIDGE: &str = "cli_sub_on_line({ let __ipe_on_line = ";
     let name = "emit_cli_list_map";
     let src = cli_subscribing("Sub.batch (List.map Sub.onLine [ onLine, Line ])")?;
     if let Err(e) = compile(name, &src)? {
         return Err(format!("{name}: expected ipe success, got {e:?}").into());
     }
     let rust = emitted_rust(name);
-    const BRIDGE: &str = "cli_sub_on_line({ let __ipe_on_line = ";
     if !rust.contains(BRIDGE) {
         return Err(format!("{name}: `onLine` handler not bridged:\n{rust}").into());
     }

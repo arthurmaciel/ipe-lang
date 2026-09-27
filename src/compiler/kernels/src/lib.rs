@@ -16275,13 +16275,12 @@ mod tests {
     fn open_frontier_mapper_kernels_forbid_a_function_element() {
         use super::ElementCapability;
         use StdlibKernel as K;
-        let open: Vec<K> = K::ALL
+        let mut got_open: Vec<K> = K::ALL
             .iter()
             .copied()
             .filter(|k| k.element_capability() == Some(ElementCapability::MapperFrontierOpen))
             .collect();
         let mut expected_open = [K::DictUpdate];
-        let mut got_open = open.clone();
         expected_open.sort_by_key(|k| format!("{k:?}"));
         got_open.sort_by_key(|k| format!("{k:?}"));
         assert_eq!(

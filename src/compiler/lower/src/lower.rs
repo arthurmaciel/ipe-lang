@@ -23474,6 +23474,49 @@ impl<'a> Lowerer<'a> {
             .collect()
     }
 
+    /// The fresh binder and IR type of each missing argument slot
+    /// `supplied..arity` of a partially-applied callee.
+    fn eta_missing_params(
+        &self,
+        resolved: &Callee,
+        arg_tys: &[&Ty],
+        supplied: usize,
+        arity: usize,
+        call_span: Span,
+    ) -> DResult<Vec<(Symbol, IrType)>> {
+        let mut params: Vec<(Symbol, IrType)> = Vec::with_capacity(arity - supplied);
+        for (offset, arg_ty) in arg_tys.get(supplied..).unwrap_or(&[]).iter().enumerate() {
+            // Draw slot `offset` from the current position of the per-def monotonic
+            // eta cursor; `advance_eta` below reserves the whole block so a
+            // subsequently-lowered nested eta-lambda never reuses these names.
+            let sym = self.eta_sym(offset)?;
+            // Use the JSON-friendly variant so that a free `Ty::Var` in the
+            // missing-arg slot — the common case for diverging / always-failing
+            // tasks passed to `Task.andThen` or `Cmd.perform` where the result
+            // type `a` is never constrained — maps to `IrType::Json` (`JsonVal`)
+            // instead of raising IPE-L0102.  The eta-param is only a closure
+            // binder forwarded verbatim to the full kernel call; its concrete
+            // Rust type is unified by the compiler from the call site, so
+            // `JsonVal` is a sound stand-in for any unconstrained `Ty::Var`.
+            //
+            // (`f7_succeed_curried`): EXCEPT the `next_decoder` slot
+            // (the kernel's LAST argument) of the five JsonDec.Pipeline /
+            // Db.Decode curried-combinator kernels — that one slot needs the
+            // curried `FnOnce`-chain shape, never the flattened `Fun` this
+            // JSON-friendly path would otherwise produce. See
+            // `ir_type_from_ty_pipeline_decoder`'s doc comment.
+            let ir = if Self::is_pipeline_next_decoder_kernel(resolved)
+                && supplied + offset == arity - 1
+            {
+                self.ir_type_from_ty_pipeline_decoder(arg_ty, call_span)?
+            } else {
+                self.ir_type_from_ty_json(arg_ty, call_span)?
+            };
+            params.push((sym, ir));
+        }
+        Ok(params)
+    }
+
     /// Eta-expand a partial application `f a0 … a_{k-1}` (with `k < arity`) into a
     /// boxed closure `\eta_k … eta_{arity-1} -> f(a0, …, a_{k-1}, eta_k, …)` — a
     /// first-class function value of the residual arrow type. The supplied
@@ -23511,7 +23554,6 @@ impl<'a> Lowerer<'a> {
 
         let supplied = lowered_args.len();
         // The missing parameters are argument positions `supplied..arity`.
-        let mut params: Vec<(Symbol, IrType)> = Vec::with_capacity(arity - supplied);
         let mut call_args = lowered_args;
         // T4: the supplied args are captured inside the emitted closure.
         // A non-Copy CloneOk arg (e.g. a String-typed var) must be cloned on
@@ -23600,36 +23642,8 @@ impl<'a> Lowerer<'a> {
                 }
             }
         }
-        for (offset, arg_ty) in arg_tys.get(supplied..).unwrap_or(&[]).iter().enumerate() {
-            // Draw slot `offset` from the current position of the per-def monotonic
-            // eta cursor; `advance_eta` below reserves the whole block so a
-            // subsequently-lowered nested eta-lambda never reuses these names.
-            let sym = self.eta_sym(offset)?;
-            // Use the JSON-friendly variant so that a free `Ty::Var` in the
-            // missing-arg slot — the common case for diverging / always-failing
-            // tasks passed to `Task.andThen` or `Cmd.perform` where the result
-            // type `a` is never constrained — maps to `IrType::Json` (`JsonVal`)
-            // instead of raising IPE-L0102.  The eta-param is only a closure
-            // binder forwarded verbatim to the full kernel call; its concrete
-            // Rust type is unified by the compiler from the call site, so
-            // `JsonVal` is a sound stand-in for any unconstrained `Ty::Var`.
-            //
-            // (`f7_succeed_curried`): EXCEPT the `next_decoder` slot
-            // (the kernel's LAST argument) of the five JsonDec.Pipeline /
-            // Db.Decode curried-combinator kernels — that one slot needs the
-            // curried `FnOnce`-chain shape, never the flattened `Fun` this
-            // JSON-friendly path would otherwise produce. See
-            // `ir_type_from_ty_pipeline_decoder`'s doc comment.
-            let ir = if Self::is_pipeline_next_decoder_kernel(&resolved)
-                && supplied + offset == arity - 1
-            {
-                self.ir_type_from_ty_pipeline_decoder(arg_ty, call_span)?
-            } else {
-                self.ir_type_from_ty_json(arg_ty, call_span)?
-            };
-            params.push((sym, ir));
-            call_args.push(Expr::Var(sym));
-        }
+        let params = self.eta_missing_params(&resolved, &arg_tys, supplied, arity, call_span)?;
+        call_args.extend(params.iter().map(|&(sym, _)| Expr::Var(sym)));
         self.advance_eta(arity.saturating_sub(supplied));
         // A missing mapper position is an eta parameter the residual call
         // forwards to the kernel: it binds the same stored element a supplied
