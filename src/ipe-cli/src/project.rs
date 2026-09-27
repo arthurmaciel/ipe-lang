@@ -436,9 +436,8 @@ pub fn is_denylisted_public_env_name(name: &str) -> bool {
 
 /// A discovered Ipê source file with its resolved module path.
 ///
-/// Built only through [`DiscoveredModule::user`] or, inside
-/// [`inject_compiled_std_closure`], the stdlib constructor, so the
-/// [`EntryProvenance`] cannot be set freely.
+/// Built only through [`DiscoveredModule::user`] or the crate-internal stdlib
+/// constructor, so the [`EntryProvenance`] cannot be set outside this crate.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct DiscoveredModule {
     /// Absolute path to the `.ipe` source file.
@@ -461,8 +460,9 @@ impl DiscoveredModule {
         }
     }
 
-    /// A compiled-source stdlib module the injection closure inserted.
-    const fn embedded_stdlib(path: PathBuf, module_path: Vec<String>) -> Self {
+    /// A compiled-source stdlib module: inserted by the injection closure, or
+    /// extracted for the API surface of an embedded stdlib module.
+    pub(crate) const fn embedded_stdlib(path: PathBuf, module_path: Vec<String>) -> Self {
         Self {
             path,
             module_path,
