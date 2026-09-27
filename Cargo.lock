@@ -3197,6 +3197,7 @@ name = "ipe_diagnostics"
 version = "0.3.0"
 dependencies = [
  "ipe_path_core",
+ "unicode-general-category",
  "unicode-width",
 ]
 

@@ -84,7 +84,7 @@ pub enum Diagnostic {
     /// CLI can surface a targeted install hint instead of a raw cargo dump.
     SystemLibraryNotFound {
         /// The `pkg-config` library name that was not found (e.g. `wayland-client`).
-        system_lib: String,
+        system_lib: crate::driver::SysLibName,
         /// The Rust crate whose `build.rs` required the library (e.g. `wayland-sys`).
         crate_name: String,
         /// A short OS-aware install hint, or a generic `-dev`/`.pc` fallback.
@@ -149,7 +149,7 @@ impl From<Diagnostic> for FfiError {
                 crate_name,
                 install_hint,
             } => Self::SystemLibraryNotFound {
-                system_lib,
+                system_lib: system_lib.as_str().to_owned(),
                 crate_name,
                 install_hint,
             },
