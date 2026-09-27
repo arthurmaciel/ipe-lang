@@ -2637,7 +2637,85 @@ pub fn ir_type_has_effect_carrier(ty: &IrType) -> bool {
         IrType::Enum { args, .. } => args.iter().any(ir_type_has_effect_carrier),
         IrType::Ui { msg, .. } => ir_type_has_effect_carrier(msg),
         IrType::WebRoute(page) => ir_type_has_effect_carrier(page),
-        _ => false,
+        // Scalar and opaque runtime leaves hold no effect carrier.
+        IrType::Int
+        | IrType::Float
+        | IrType::Bool
+        | IrType::Str
+        | IrType::Char
+        | IrType::Unit
+        | IrType::Bytes
+        | IrType::Json
+        | IrType::BackoffStrategy
+        | IrType::Order
+        | IrType::HttpMethod
+        | IrType::Decimal
+        | IrType::ErrorKind
+        | IrType::Error
+        | IrType::ErrorDetails
+        | IrType::ErrorInfo
+        | IrType::PanicInfo
+        | IrType::TypeInfo
+        | IrType::SqlFragment
+        | IrType::Secret
+        | IrType::Path
+        | IrType::Url
+        | IrType::UrlRelative
+        | IrType::Dsn
+        | IrType::Db
+        | IrType::Connection
+        | IrType::ConnReadOnly
+        | IrType::ConnReadWrite
+        | IrType::Setting
+        | IrType::ShapeWeb
+        | IrType::ShapeWebView
+        | IrType::ShapeTerminal
+        | IrType::ServerRequest
+        | IrType::ServerResponse
+        | IrType::ServerRoute
+        | IrType::ServerCookie
+        | IrType::StreamWriter
+        | IrType::HttpRequest
+        | IrType::Regex
+        | IrType::WebSocketServer
+        | IrType::WebSocketServerCfg
+        | IrType::UiPlain(_)
+        | IrType::WebReq
+        | IrType::SessionHandle
+        | IrType::ProcessRunWithCfg
+        | IrType::ProcessRunInPtyCfg
+        | IrType::CacheCfg
+        | IrType::WebSocketClientCfg
+        | IrType::CacheStats
+        | IrType::CsvDoc
+        | IrType::EmailMessage
+        | IrType::EmailAttachment
+        | IrType::EmailSesConfig
+        | IrType::EmailSmtpConfig
+        | IrType::EmailProvider
+        | IrType::CryptoKey
+        | IrType::CryptoMac
+        | IrType::EmailAddress
+        | IrType::Locale
+        | IrType::Principal
+        | IrType::AuthConfig
+        | IrType::TokenSource
+        // Live app handles: move-only, yet not a `Task`/`Cmd`/`Sub` carrier.
+        | IrType::WebApp
+        | IrType::TuiApp
+        | IrType::CliApp
+        | IrType::WorkerApp
+        // Seal args are phantom; the widget handle stores only its tag.
+        | IrType::CustomElement { .. }
+        // A function or decoder value only MENTIONS an effect type in its
+        // signature; it stores no effect carrier until applied.
+        | IrType::Fun(_, _)
+        | IrType::SharedFun(_, _)
+        | IrType::FnOnceChain(_, _)
+        | IrType::Decoder(_)
+        // A type variable's instantiation is decided by the caller.
+        | IrType::Generic(_)
+        | IrType::RowGeneric(_) => false,
     }
 }
 
