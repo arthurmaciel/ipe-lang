@@ -1727,7 +1727,7 @@ fn detect_build_scripts_hint(raw: &str) -> Option<&str> {
 /// that never triggers the `CommandUsage` help page.
 ///
 /// If the raw error contains the `--allow-build-scripts` refusal hint, the
-/// hint is pulled out and rendered as a separate emphasised warning banner so
+/// hint is pulled out and rendered as a separate plain-text warning banner so
 /// the user can see the actionable flag clearly.
 fn map_inspector_error(msg: crate::text::Message) -> CliError {
     // Detect the hint before consuming `msg`, then branch.
@@ -1736,35 +1736,29 @@ fn map_inspector_error(msg: crate::text::Message) -> CliError {
     hint_line.map_or(CliError::Resolve(msg), |hint| {
         // The build-scripts refusal: render the hint as a banner so the
         // `--allow-build-scripts` flag stands out as the actionable next step.
-        CliError::Resolve(crate::text::Message::relay(&BuildScriptsBanner {
-            hint,
-            palette: crate::style::Palette::for_stream(&std::io::stderr()),
-        }))
+        CliError::Resolve(crate::text::Message::relay(&BuildScriptsBanner { hint }))
     })
 }
 
 /// The warning banner for an inspector refusal that `--allow-build-scripts`
 /// would lift.
+///
+/// Plain text: a relayed [`crate::text::Message`] is sanitised whole, so the
+/// banner carries no styling escapes of its own.
 pub(crate) struct BuildScriptsBanner {
     /// The inspector's hint line.
     hint: crate::style::TerminalSafe,
-    /// The stderr palette the banner is styled with.
-    palette: crate::style::Palette,
 }
 
 impl std::fmt::Display for BuildScriptsBanner {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "{y}warning:{r} some crates in the dependency graph have build scripts.\n\
-             Pass {bold}--allow-build-scripts{r} to proceed (you will see a warning naming\n\
+            "warning: some crates in the dependency graph have build scripts.\n\
+             Pass --allow-build-scripts to proceed (you will see a warning naming\n\
              those packages first, and they will run inside the isolation jail).\n\
              \n\
-             {dim}hint: {hint}{r}",
-            y = self.palette.bright_yellow,
-            bold = self.palette.bold,
-            dim = self.palette.dim,
-            r = self.palette.reset,
+             hint: {hint}",
             hint = self.hint,
         )
     }
@@ -4518,9 +4512,17 @@ version = \"1\"
         match err {
             CliError::Resolve(msg) => {
                 assert!(
-                    msg.contains("--allow-build-scripts"),
-                    "the actionable flag must appear in the message"
+                    msg.starts_with(
+                        "warning: some crates in the dependency graph have build scripts.\n\
+                         Pass --allow-build-scripts to proceed"
+                    ),
+                    "the banner leads with the plain warning and flag: {msg:?}"
                 );
+                assert!(
+                    msg.ends_with("hint: pass --allow-build-scripts to proceed"),
+                    "the inspector hint closes the banner: {msg:?}"
+                );
+                assert!(!msg.contains('\u{1b}'), "the banner is plain text: {msg:?}");
             }
             other => panic!("expected Resolve, got {other:?}"),
         }

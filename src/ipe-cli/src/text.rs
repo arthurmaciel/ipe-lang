@@ -17,7 +17,7 @@
 //! the value is sanitised before it can reach the message, whatever prints it.
 
 use std::borrow::Cow;
-use std::fmt::{self, Write as _};
+use std::fmt;
 use std::ops::Deref;
 
 /// A user-facing message: a catalog text, or an already-rendered error relayed
@@ -40,6 +40,9 @@ impl Message {
     }
 
     /// A filled or relayed text, with escapes and stray control bytes stripped.
+    ///
+    /// [`fill`] already sanitised each value at its boundary; this whole-text
+    /// pass is the second, independent gate.
     fn filled(text: &str) -> Self {
         Self(Cow::Owned(
             crate::style::TerminalSafe::sanitize(text)
@@ -389,7 +392,10 @@ const fn has_placeholder(body: &[u8], name: &[u8]) -> bool {
 
 /// Fill `template`'s `{name}` placeholders from `args`.
 ///
-/// Brace text that names no argument is kept as written.
+/// Each value is sanitised on its own before it is inserted, so an escape
+/// sequence a value opens (an unterminated OSC, say) ends at the value's
+/// boundary and cannot swallow the catalog text after it. Brace text that
+/// names no argument is kept as written.
 #[must_use]
 pub fn fill(template: &str, args: &[(&str, &dyn fmt::Display)]) -> String {
     let mut out = String::with_capacity(template.len());
@@ -408,7 +414,7 @@ pub fn fill(template: &str, args: &[(&str, &dyn fmt::Display)]) -> String {
             rest = after;
             continue;
         };
-        let _ = write!(out, "{value}");
+        out.push_str(crate::style::TerminalSafe::sanitize(&value.to_string()).as_str());
         rest = after.get(close.saturating_add(1)..).unwrap_or("");
     }
     out.push_str(rest);
@@ -1466,6 +1472,19 @@ mod tests {
                 .any(|c| c.is_control() && c != '\n' && c != '\t'),
             "control byte survived in {joined:?}"
         );
+    }
+
+    /// An escape a value leaves open ends at the value: an unterminated OSC
+    /// cannot swallow the trusted catalog text that follows it.
+    #[test]
+    fn an_unterminated_escape_in_a_value_keeps_the_catalog_tail() {
+        let message = msg::publish_no_version(&"x\u{1b}]");
+        assert_eq!(
+            message,
+            "ipe package publish: `x` declares no `version = \"…\"` — publish records the version being published, so the manifest must name one."
+        );
+        let csi = msg::publish_no_version(&"y\u{1b}[");
+        assert!(csi.ends_with("so the manifest must name one."), "{csi:?}");
     }
 
     /// A relayed refusal is sanitised: its own `Display` cannot smuggle an

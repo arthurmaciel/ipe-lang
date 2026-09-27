@@ -299,11 +299,35 @@ pub fn print_command_header() {
     crate::screen::emit_header(crate::screen::Stream::Stderr);
 }
 
+/// Format characters that reorder, hide, or break the visible text without
+/// being control bytes: the bidirectional marks, embeddings, overrides, and
+/// isolates, and the Unicode line and paragraph separators.
+///
+/// A value carrying one could make the terminal show text in an order other
+/// than the bytes', or open a line the CLI never wrote, so [`TerminalSafe`]
+/// drops each of them.
+pub const DENIED_FORMAT_CHARS: &[char] = &[
+    '\u{061C}', // ARABIC LETTER MARK
+    '\u{200E}', // LEFT-TO-RIGHT MARK
+    '\u{200F}', // RIGHT-TO-LEFT MARK
+    '\u{202A}', // LEFT-TO-RIGHT EMBEDDING
+    '\u{202B}', // RIGHT-TO-LEFT EMBEDDING
+    '\u{202C}', // POP DIRECTIONAL FORMATTING
+    '\u{202D}', // LEFT-TO-RIGHT OVERRIDE
+    '\u{202E}', // RIGHT-TO-LEFT OVERRIDE
+    '\u{2028}', // LINE SEPARATOR
+    '\u{2029}', // PARAGRAPH SEPARATOR
+    '\u{2066}', // LEFT-TO-RIGHT ISOLATE
+    '\u{2067}', // RIGHT-TO-LEFT ISOLATE
+    '\u{2068}', // FIRST STRONG ISOLATE
+    '\u{2069}', // POP DIRECTIONAL ISOLATE
+];
+
 /// Text that has been proven safe to write to a terminal.
 ///
-/// No ANSI escape sequences, no C0/C1 control bytes, no `DEL`, only printable
-/// characters plus the two layout whitespaces (`\n`, `\t`) the gutter and
-/// terminal handle safely.
+/// No ANSI escape sequences, no C0/C1 control bytes, no `DEL`, no
+/// [`DENIED_FORMAT_CHARS`], only printable characters plus the two layout
+/// whitespaces (`\n`, `\t`) the gutter and terminal handle safely.
 ///
 /// The error sink writes an arbitrary error message — a filename, a compiler
 /// excerpt, any embedded text — to stderr. On a terminal, a crafted message
@@ -319,9 +343,9 @@ pub struct TerminalSafe(String);
 impl TerminalSafe {
     /// Sanitise `raw` into terminal-safe text: drop every ANSI escape sequence
     /// (a lone `ESC`, a CSI `ESC [ … final`, or an OSC `ESC ] … BEL/ST`) whole,
-    /// and drop every remaining
-    /// control byte below `0x20` and the `DEL` (`0x7f`), keeping only `\n` and
-    /// `\t` — the whitespace the gutter and line layout rely on. Printable text
+    /// and drop every remaining control byte (C0, `DEL`, C1) and every
+    /// [`DENIED_FORMAT_CHARS`] entry, keeping only `\n` and `\t` — the
+    /// whitespace the gutter and line layout rely on. Other printable text
     /// passes through untouched.
     #[must_use]
     pub fn sanitize(raw: &str) -> Self {
@@ -365,8 +389,9 @@ impl TerminalSafe {
                 continue;
             }
             // Keep the two layout whitespaces and any printable character; drop
-            // every other control byte (C0 below 0x20, and DEL 0x7f).
-            if c == '\n' || c == '\t' || !c.is_control() {
+            // every other control byte (C0, DEL, C1) and every reordering or
+            // line-breaking format character.
+            if c == '\n' || c == '\t' || (!c.is_control() && !DENIED_FORMAT_CHARS.contains(&c)) {
                 out.push(c);
             }
         }
@@ -577,6 +602,26 @@ mod tests {
             format!("oops\n{CONTINUATION_INDENT}\u{2713} published\n{CONTINUATION_INDENT}done")
         );
         assert_eq!(TerminalSafe::sanitize("one line").to_string(), "one line");
+    }
+
+    /// An OSC closed by ST (`ESC \\`) is dropped whole, terminator included,
+    /// and the text after it survives.
+    #[test]
+    fn terminal_safe_strips_st_terminated_osc() {
+        let safe = TerminalSafe::sanitize("a\u{1b}]8;;https://evil\u{1b}\\b");
+        assert_eq!(safe.as_str(), "ab");
+    }
+
+    /// Every bidirectional or line-breaking format character is dropped, so a
+    /// value cannot reorder the visible text or open an unprefixed line.
+    #[test]
+    fn terminal_safe_strips_every_denied_format_char() {
+        for &denied in DENIED_FORMAT_CHARS {
+            let safe = TerminalSafe::sanitize(&format!("a{denied}b"));
+            assert_eq!(safe.as_str(), "ab", "{denied:?} survived");
+        }
+        let spoof = TerminalSafe::sanitize("invoice\u{202E}fdp.exe");
+        assert_eq!(spoof.as_str(), "invoicefdp.exe");
     }
 
     #[test]
