@@ -1,19 +1,20 @@
 # zed-ipe
 
-A [Zed](https://zed.dev/) extension for Ipê: syntax highlighting via the
-`tree-sitter-ipe` grammar plus the `ipe` LSP.
+A [Zed](https://zed.dev/) extension for Ipê: syntax highlighting through the
+`tree-sitter-ipe` grammar, and the `ipe lsp` language server (completion,
+go-to-definition, code actions, diagnostics, formatting).
 
-Install as a dev extension: **Extensions** → **Install Dev Extension** → select
-this directory. Zed builds the grammar declared in `extension.toml` and loads
-the language config and highlight queries from `languages/ipe/`.
+Install it with `editors/zed/configure.sh`, which assembles the extension —
+this directory plus the grammar's `queries/highlights.scm`, its single source —
+into `~/.local/share/ipe/zed-ipe`; then run **zed: install dev extension** in
+Zed and pick that directory. Installing this directory directly gives no
+highlighting (the query is not duplicated here).
 
-The `.scm` query files under `languages/ipe/` are copies of the source-of-truth
-queries in `../tree-sitter-ipe/queries/` (Zed requires them co-located with the
-language). When the grammar's queries change, re-copy them:
+- `extension.toml` pins the grammar to a commit (`rev`); bump it after a
+  grammar or query change — `editors/tests/configure-test.sh` fails while the
+  pin and the checkout disagree.
+- `src/lib.rs` starts `ipe lsp` from the project's `PATH`.
+- `.cargo/config.toml` keeps host-only `rustflags` from a global cargo config
+  (e.g. a mold linker flag) out of Zed's wasm build.
 
-```bash
-cp ../tree-sitter-ipe/queries/{highlights,injections,locals}.scm languages/ipe/
-```
-
-For LSP setup and the full per-editor guide, see
-`docs/topics/editor-integration.md` in the repository root.
+See `docs/topics/editor-integration.md` for every editor.

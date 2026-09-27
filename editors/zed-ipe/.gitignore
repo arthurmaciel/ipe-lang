@@ -1,0 +1,4 @@
+# Build outputs Zed writes into a dev extension's directory.
+/extension.wasm
+/grammars/
+/target/

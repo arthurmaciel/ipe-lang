@@ -14,11 +14,29 @@
 #
 # DB defaults to .ipe-index/index.db (gitignored). Agents: prefer this over rg
 # for "where is X defined / who imports Y / which examples exercise a module".
+#
+# The build output is always out-of-tree (SSOT for the binary's location — this
+# is the only place that decides it). Resolution order:
+#   1. $CARGO_TARGET_DIR, when set (e.g. a per-worktree warm target dir).
+#   2. /mnt/ipe-scratch/warm-targets/ipe-index, one shared default so every
+#      worktree reuses a single prebuilt binary instead of each rebuilding.
+#   3. ${XDG_CACHE_HOME:-$HOME/.cache}/ipe-index/target, when /mnt/ipe-scratch
+#      isn't mounted.
 set -euo pipefail
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-BIN="$REPO/tools/ipe-index/target/release/ipe-index"
+
+if [ -n "${CARGO_TARGET_DIR:-}" ]; then
+    TARGET_DIR="$CARGO_TARGET_DIR"
+elif [ -d /mnt/ipe-scratch ]; then
+    TARGET_DIR="/mnt/ipe-scratch/warm-targets/ipe-index"
+else
+    TARGET_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/ipe-index/target"
+fi
+
+BIN="$TARGET_DIR/release/ipe-index"
 if [ ! -x "$BIN" ]; then
     echo "ipe-index: building the Rust binary (first run)…" >&2
-    ( cd "$REPO/tools/ipe-index" && CARGO_TARGET_DIR=target cargo build --release >&2 )
+    CARGO_TARGET_DIR="$TARGET_DIR" cargo build --release \
+        --manifest-path "$REPO/tools/ipe-index/Cargo.toml" >&2
 fi
 exec "$BIN" "$@"
