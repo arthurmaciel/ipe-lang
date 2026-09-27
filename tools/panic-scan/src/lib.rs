@@ -17,6 +17,12 @@
 use proc_macro2::{Delimiter, TokenStream, TokenTree};
 use std::str::FromStr;
 
+mod test_path;
+
+pub use test_path::{
+    TestPathError, check_test_path, is_template_path, is_test_path, is_verified_test_path,
+};
+
 /// Panic-invoking macros (each may be invoked with `()`, `[]`, or `{}`).
 const MACROS: &[&str] = &[
     "panic",
