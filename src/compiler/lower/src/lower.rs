@@ -23440,6 +23440,40 @@ impl<'a> Lowerer<'a> {
         peel_arrow_arity(fn_ty, arity, site, short_arrow)
     }
 
+    /// The clone class of each of the first `supplied` argument slots of a
+    /// partially-applied callee, or `None` for a genuinely indeterminate slot.
+    fn supplied_slot_classes(
+        &self,
+        arg_tys: &[&Ty],
+        supplied: usize,
+        call_span: Span,
+    ) -> Vec<Option<CloneClass>> {
+        arg_tys
+            .iter()
+            .take(supplied)
+            .map(|slot_ty| {
+                match self.ir_type_from_ty(slot_ty, call_span) {
+                    // A bare `Generic` slot clones, not moves: every emitted
+                    // generic carries an unconditional `T: Clone`
+                    // (`render_fn_generics`), so a supplied generic arg captured by
+                    // the re-callable `Fn` residual clones per call. SSOT with
+                    // `param_is_multiuse_clonable` / `classify_capture_clone`;
+                    // without it a threaded generic is moved out of the `Fn` env
+                    // (E0507).
+                    Ok(IrType::Generic(_)) => Some(CloneClass::CloneOk),
+                    Ok(ir_ty) => Some(clone_class(self.clone_env(), &ir_ty)),
+                    // T7b: ir_type_from_ty failed, but the slot's top-level type
+                    // IS a function arrow.  The failure is from a nested Ty::Var
+                    // (e.g. the polymorphic result type `a` in `Task Error a`).
+                    // A Fun slot is always NonClone — forwarding is safe.
+                    Err(_) if matches!(slot_ty, Ty::Fun(_, _)) => Some(CloneClass::NonClone),
+                    // Genuinely indeterminate slot — conservative None.
+                    Err(_) => None,
+                }
+            })
+            .collect()
+    }
+
     /// Eta-expand a partial application `f a0 … a_{k-1}` (with `k < arity`) into a
     /// boxed closure `\eta_k … eta_{arity-1} -> f(a0, …, a_{k-1}, eta_k, …)` — a
     /// first-class function value of the residual arrow type. The supplied
@@ -23502,32 +23536,8 @@ impl<'a> Lowerer<'a> {
         // Any other failed slot stays `None` → fail-close below (T7 original).
         let mut hoisted: Vec<(Symbol, Expr)> = Vec::new();
         let mut cap_cursor = 0usize;
-        // ir_type_from_ty needs `&mut self`, so classify every supplied slot
-        // BEFORE the iter_mut borrow of call_args.
-        let slot_classes: Vec<Option<CloneClass>> = arg_tys
-            .iter()
-            .take(supplied)
-            .map(|slot_ty| {
-                match self.ir_type_from_ty(slot_ty, call_span) {
-                    // A bare `Generic` slot clones, not moves: every emitted
-                    // generic carries an unconditional `T: Clone`
-                    // (`render_fn_generics`), so a supplied generic arg captured by
-                    // the re-callable `Fn` residual clones per call. SSOT with
-                    // `param_is_multiuse_clonable` / `classify_capture_clone`;
-                    // without it a threaded generic is moved out of the `Fn` env
-                    // (E0507).
-                    Ok(IrType::Generic(_)) => Some(CloneClass::CloneOk),
-                    Ok(ir_ty) => Some(clone_class(self.clone_env(), &ir_ty)),
-                    // T7b: ir_type_from_ty failed, but the slot's top-level type
-                    // IS a function arrow.  The failure is from a nested Ty::Var
-                    // (e.g. the polymorphic result type `a` in `Task Error a`).
-                    // A Fun slot is always NonClone — forwarding is safe.
-                    Err(_) if matches!(slot_ty, Ty::Fun(_, _)) => Some(CloneClass::NonClone),
-                    // Genuinely indeterminate slot — conservative None.
-                    Err(_) => None,
-                }
-            })
-            .collect();
+        // Classify every supplied slot BEFORE the iter_mut borrow of call_args.
+        let slot_classes = self.supplied_slot_classes(&arg_tys, supplied, call_span);
         for (arg, cls) in call_args.iter_mut().zip(slot_classes) {
             if let Expr::Var(sym) = *arg {
                 match cls {
