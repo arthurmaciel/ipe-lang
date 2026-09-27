@@ -2192,7 +2192,7 @@ impl PackageSourceSet {
         // Inject the FFI interface modules (installed crates + the asserted-call
         // `Rust.Ffi` module) exactly as the build does, so an FFI-using module
         // lowers here and its `native-ffi`/`ffi-raw` capabilities are inferred
-        // rather than the whole module being skipped on a resolve failure.
+        // instead of the package being refused on a resolve failure.
         let ffi_injected = ffi::prepare_ffi(&mut sources, manifest_path)?.injected;
         Ok(Self {
             sources,
