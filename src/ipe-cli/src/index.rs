@@ -644,7 +644,7 @@ pub fn admission_precheck(
     for version in &submitted.versions {
         if !baseline_by_version.contains_key(&version.version) {
             require_successor(greatest_published, &version.version)
-                .map_err(|refusal| refusal.for_package(&submitted.name))?;
+                .map_err(|refusal| refusal.for_package(submitted.name.as_str()))?;
         }
     }
 
