@@ -16,6 +16,7 @@
 use std::path::PathBuf;
 
 use ipe::CliError;
+use ipe_diagnostics::{Diagnostic, Feature, LowerError};
 
 use crate::support::repo_root;
 
@@ -64,7 +65,7 @@ fn assert_accepted_and_builds(fixture: &str) {
     );
 }
 
-/// A fixture is refused at ipe time with IPE-L0126.
+/// A fixture is refused at ipe time with IPE-L0126 raised by the stream-handler gate.
 fn assert_refused_l0126(fixture: &str) {
     let out = out_dir(fixture);
     let built = ipe::build(&fixture_entry(fixture), &out, &runtime_dir());
@@ -76,6 +77,22 @@ fn assert_refused_l0126(fixture: &str) {
         got,
         Some(ipe_diagnostics::IPE_L0126),
         "{fixture}: a non-Clone or unsaturated Stream.stream handler must fail closed at ipe time, got {built:?}"
+    );
+    // The code alone is shared with the generic capture refusal; the feature
+    // pins the refusal to the stream-handler gate itself.
+    assert!(
+        matches!(
+            &built,
+            Err(CliError::Pipeline { diag, .. })
+                if matches!(
+                    diag.as_ref(),
+                    Diagnostic::Lower {
+                        msg: LowerError::Unsupported(Feature::StreamHandlerCapture),
+                        ..
+                    }
+                )
+        ),
+        "{fixture}: the refusal must come from the stream-handler capture gate, got {built:?}"
     );
 }
 
@@ -119,4 +136,19 @@ fn partial_application_is_refused() {
 #[test]
 fn point_free_reference_is_refused() {
     assert_refused_l0126("stream_point_free");
+}
+
+/// A destructure that shadows a promotable fn param does not inherit its promotion.
+///
+/// The inner `f` is a destructure-bound `Box<dyn Fn>`: the handler capture of
+/// it is refused, never classed as the outer param's `Arc` carrier.
+#[test]
+fn shadowed_destructured_fn_capture_is_refused() {
+    assert_refused_l0126("stream_shadowed_destructured_fn_capture");
+}
+
+/// A plain `let` that shadows a fn param is itself promotable and builds.
+#[test]
+fn shadowed_let_fn_capture_builds() {
+    assert_accepted_and_builds("stream_shadowed_let_fn_capture");
 }
