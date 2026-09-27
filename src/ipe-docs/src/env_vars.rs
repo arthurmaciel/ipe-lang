@@ -348,16 +348,19 @@ pub static ENV_VARS: &[EnvVar] = &[
         name: "IPE_ADMIN_TOKEN",
         default: "unset",
         purpose: "Bearer token granting access to the embedded developer console in \
-                  production. Provide via your secret manager; never commit. Falls back \
-                  to `IPE_CONSOLE_TOKEN`, then `IPE_METRICS_TOKEN`.",
+                  production or under `IPE_CONSOLE_AUTH=token`. Provide via your \
+                  secret manager; never commit. Falls back to `IPE_CONSOLE_TOKEN`, \
+                  then `IPE_METRICS_TOKEN`.",
         subsystem: Subsystem::Console,
         class: Class::Secret,
     },
     EnvVar {
         name: "IPE_CONSOLE_AUTH",
-        default: "unset (token in production, off in dev)",
-        purpose: "Console authentication mode: `token` (bearer-token gate), `off` \
-                  (disable auth — dev only). Unset uses the production/dev heuristic.",
+        default: "unset (token in production, open in dev)",
+        purpose: "Console authentication mode: `token` (admin-token gate, enforced in \
+                  every posture), `off` (console disabled), `app` (app callback; \
+                  refused on the Rust runtime). Only an unset value falls back to the \
+                  production/dev default; any other value disables the console.",
         subsystem: Subsystem::Console,
         class: Class::SecurityTunable,
     },

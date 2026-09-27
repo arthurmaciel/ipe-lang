@@ -179,6 +179,68 @@ pub fn production_from_env() -> bool {
     !matches!(e.as_str(), "dev" | "development" | "local")
 }
 
+/// The resolved `IPE_CONSOLE_AUTH` setting for the console + metrics surface.
+///
+/// An explicit value is enforced whatever the posture; the posture only picks
+/// the default when the variable is unset or empty. An unrecognised value
+/// resolves to `Off` — the surface is refused, never widened.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ConsoleAuthMode {
+    /// Surface declared absent (`off`, or any unrecognised value).
+    Off,
+    /// Explicit `token`: an admin token is required in every posture.
+    Token,
+    /// Explicit `app`: the app-supplied `consoleAuth` callback decides.
+    App,
+    /// Unset in production: an admin token is required.
+    UnsetProd,
+    /// Unset in dev: open.
+    DevOpen,
+}
+
+impl ConsoleAuthMode {
+    /// Parse a raw `IPE_CONSOLE_AUTH` value (trimmed, case-insensitive).
+    ///
+    /// `production` is consulted only when `raw` is absent or blank.
+    #[must_use]
+    pub fn parse(raw: Option<&str>, production: bool) -> Self {
+        let value = raw.map(str::trim).unwrap_or_default();
+        if value.is_empty() {
+            return if production {
+                Self::UnsetProd
+            } else {
+                Self::DevOpen
+            };
+        }
+        if value.eq_ignore_ascii_case("token") {
+            Self::Token
+        } else if value.eq_ignore_ascii_case("app") {
+            Self::App
+        } else {
+            Self::Off
+        }
+    }
+
+    /// Resolve the setting from the process environment.
+    #[must_use]
+    pub fn from_env() -> Self {
+        let raw = crate::system::read_env_var("IPE_CONSOLE_AUTH").ok();
+        Self::parse(raw.as_deref(), production_from_env())
+    }
+
+    /// The label logged at console mount (`mode=<label>`).
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Off => "off",
+            Self::Token => "token",
+            Self::App => "app",
+            Self::UnsetProd => "unset-prod",
+            Self::DevOpen => "dev-open",
+        }
+    }
+}
+
 /// Floating "🔍 Console" link injected into every dev-mode `text/html` response
 /// — both the Ipe.Web page path and every buffered Ipe.Http.Server response
 /// . Lives here (the always-compiled
@@ -189,7 +251,7 @@ pub fn production_from_env() -> bool {
 /// itself; a console link inside the console is recursive), in production
 /// (`ENV`/`IPE_ENV` non-dev), when the banner is turned off (`IPE_DEV_BANNER=off|0`,
 /// ), and when the console surface is disabled (`IPE_CONSOLE_EMBED=off`
-/// / `IPE_CONSOLE_AUTH=off`). The union of  and the live path's gates —
+/// / `IPE_CONSOLE_AUTH` resolving to `off`). The union of  and the live path's gates —
 /// suppression only ever makes bodies match MORE often across odd configs, and
 /// the sweep's env (nothing set) hits the injecting path either way.
 ///
@@ -210,7 +272,7 @@ pub fn dev_console_banner(base: &str) -> String {
     if matches!(
         crate::system::read_env_var("IPE_CONSOLE_EMBED").as_deref(),
         Ok("off" | "0" | "false")
-    ) || crate::system::read_env_var("IPE_CONSOLE_AUTH").is_ok_and(|v| v == "off")
+    ) || ConsoleAuthMode::from_env() == ConsoleAuthMode::Off
     {
         return String::new();
     }
