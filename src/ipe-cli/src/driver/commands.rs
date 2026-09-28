@@ -1760,6 +1760,16 @@ pub fn build_emitted_project_capturing_stdout(
     build_emitted_project_core(cargo, what, runtime, io_path, true)
 }
 
+/// Whether `cmd` already carries cargo's own `-q`/`--quiet` flag — the single
+/// SSOT for "this build should stay quiet" read back off the command a caller
+/// already built, rather than a second quiet flag threaded through every
+/// [`build_emitted_project`] call site just to gate the dependency-resolve
+/// stage below.
+fn cargo_is_quiet(cmd: &std::process::Command) -> bool {
+    cmd.get_args()
+        .any(|a| matches!(a.to_str(), Some("-q" | "--quiet")))
+}
+
 /// Shared body of the emitted-project build. Streams `cargo`'s stderr live (and
 /// accumulates it for the typed failure diagnostic); `cargo`'s stdout is either
 /// inherited (`capture_stdout == false`, the default `cargo build` where stdout
@@ -1787,7 +1797,35 @@ fn build_emitted_project_core(
     // `--locked` flag below makes the build refuse to touch the network or
     // re-resolve: any lock↔manifest drift fails closed as a build error at `ipe`
     // time, never a silent divergence.
-    lock_emitted_dependencies(cargo, io_path)?;
+    //
+    // This lockfile resolve is the one genuinely silent gap in the whole
+    // command: it runs before `force_cargo_terminal_ui`'s forced progress bar
+    // has anything to draw, so without a stage of our own the terminal sits
+    // frozen with no feedback. A stage covers exactly this gap and is settled
+    // (never left running) before the relay loop below starts forwarding
+    // cargo's own output, so the two never draw over one another. Skipped when
+    // the caller told cargo itself to stay quiet (`-q`/`--quiet`) — that is the
+    // one SSOT for this build's quiet intent, so no second flag is threaded
+    // through every caller just to gate this line.
+    let dep_stage = (!cargo_is_quiet(cargo)).then(|| {
+        crate::progress::Stage::start(
+            std::io::stderr(),
+            "resolving the emitted crate's dependencies…",
+        )
+    });
+    match lock_emitted_dependencies(cargo, io_path) {
+        Ok(()) => {
+            if let Some(stage) = dep_stage {
+                stage.success("dependencies resolved");
+            }
+        }
+        Err(e) => {
+            if let Some(stage) = dep_stage {
+                stage.failure("dependency resolution failed");
+            }
+            return Err(e);
+        }
+    }
     cargo.arg("--locked");
 
     // Pipe stderr so we can both forward it live AND capture it for the typed
@@ -1827,8 +1865,12 @@ fn build_emitted_project_core(
                 break;
             }
             // Forward this chunk live so the user sees cargo's progress as it
-            // happens; also accumulate it for a failure diagnostic.
-            screen::emit_machine(screen::Stream::Stderr, &line);
+            // happens — indented one shared column off the edge, never the raw
+            // chunk (see `screen::indent_relay_chunk`) — and separately
+            // accumulate the UNINDENTED chunk for the failure diagnostic, so
+            // the relay's cosmetic indent never leaks into `captured` text a
+            // downstream matcher or the typed `CliError` compares verbatim.
+            screen::emit_machine(screen::Stream::Stderr, &screen::indent_relay_chunk(&line));
             captured.push_str(&line);
         }
     }
@@ -3773,6 +3815,34 @@ mod artifact_name_tests {
             file.starts_with(&name),
             "the delivered file name extends the friendly name"
         );
+    }
+}
+
+#[cfg(test)]
+mod cargo_is_quiet_tests {
+    //! Pins the SSOT the dependency-resolve stage reads to decide whether to
+    //! show itself: a cargo `Command` already carrying `-q`/`--quiet` (set by
+    //! the caller for a quiet build) must be recognised, and one that carries
+    //! neither must not be mistaken for a quiet build.
+    use super::cargo_is_quiet;
+
+    #[test]
+    fn short_and_long_quiet_flags_are_both_recognised() {
+        for flag in ["-q", "--quiet"] {
+            let mut cmd = std::process::Command::new("cargo");
+            cmd.arg("build").arg(flag);
+            assert!(cargo_is_quiet(&cmd), "{flag} must read as quiet");
+        }
+    }
+
+    #[test]
+    fn a_command_with_no_quiet_flag_is_not_quiet() {
+        let mut cmd = std::process::Command::new("cargo");
+        cmd.arg("build")
+            .arg("--locked")
+            .arg("--target")
+            .arg("x86_64-unknown-linux-gnu");
+        assert!(!cargo_is_quiet(&cmd));
     }
 }
 

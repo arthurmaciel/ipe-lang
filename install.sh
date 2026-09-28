@@ -9,6 +9,8 @@ set -eu
 
 REPO="arthurmaciel/ipe-lang"
 INSTALL_DIR="${IPE_INSTALL_DIR:-$HOME/.local/bin}"
+# Set only by `ipe upgrade`'s own wrapper — see die_no_prebuilt below.
+WRAPPED="${IPE_UPGRADE_WRAPPED:-0}"
 
 # ── Palette ──────────────────────────────────────────────────────────────────
 # Mirror the CLI (style.rs): a soft Ipê-amarelo (256-colour 222) for the banner,
@@ -78,16 +80,24 @@ stage_fail() {
   STAGE_LABEL=''
 }
 
-# info — a dimmed, deeper-indented sub-note beneath a stage (a soft skip, a
-# secondary fact). Never a stage outcome itself. If a stage is still running on
-# a terminal, settle its line first (a soft skip, in dim) so the note lands on
-# its own line rather than overwriting the spinner.
-info() {
+# stage_skip — settle a running stage as a neutral soft-skip (dim bullet, TTY
+# only), with no message of its own. Use this when the caller will state the
+# actual fact separately (or not at all) — it exists so a stage can be closed
+# cleanly without forcing a restatement that the next line would duplicate.
+stage_skip() {
   if [ -n "$STAGE_LABEL" ] && [ "$IS_TTY" = 1 ]; then
     printf '\r  %s•%s %s%s%s\033[0K\n' \
       "$C_DIM" "$C_RESET" "$C_DIM" "$STAGE_LABEL" "$C_RESET" >&2
     STAGE_LABEL=''
   fi
+}
+
+# info — a dimmed, deeper-indented sub-note beneath a stage (a soft skip, a
+# secondary fact). Never a stage outcome itself. Settles any running stage
+# first (see stage_skip) so the note lands on its own line rather than
+# overwriting the spinner.
+info() {
+  stage_skip
   printf '    %s%s%s\n' "$C_DIM" "$1" "$C_RESET" >&2
 }
 
@@ -105,8 +115,20 @@ die() {
 # die_no_prebuilt TAG PLAT CPU — exits 2, a distinct code the `ipe upgrade`
 # wrapper uses to show the "still being generated" message instead of generic
 # failure text. Exit 2 (not 1) signals "no prebuilt binary" specifically.
+#
+# IPE_UPGRADE_WRAPPED=1 marks a run launched BY `ipe upgrade` (never set by a
+# direct `curl | sh`): that wrapper renders its own single failure message
+# using the real resolved tag, so this function skips its own stderr banner
+# (the wrapper would otherwise show that banner AND its own message, and its
+# own message used to fall back to the running binary's version rather than
+# the tag actually probed here) and instead hands the tag back over stdout,
+# the one channel this script never otherwise writes to.
 die_no_prebuilt() {
   _tag="$1"; _plat="$2"; _cpu="$3"
+  if [ "$WRAPPED" = 1 ]; then
+    printf '%s\n' "$_tag"
+    exit 2
+  fi
   printf '\n  %s%s%s No prebuilt binary for %s on %s-%s.\n' \
     "$C_BOLD" "$C_RED" "$C_RESET" "$_tag" "$_plat" "$_cpu" >&2
   printf '      Possibly the binaries for that version are still being generated.\n' >&2
@@ -205,7 +227,10 @@ if curl -fsSL -o /dev/null -I --max-time 10 "$url" 2>/dev/null; then
   have_bin=1
   stage_ok "Prebuilt binary available for $plat-$cpu."
 else
-  info "No prebuilt binary for $tag on $plat-$cpu."
+  # Settle the stage without restating the fact here — the fact is stated
+  # exactly once, either by the retry prompt just below or by die_no_prebuilt
+  # at the final gate; saying it here too was a literal duplicate.
+  stage_skip
   if [ -n "${IPE_VERSION:-}" ] && [ "$IS_TTY" = 1 ] && [ -r /dev/tty ]; then
     printf '\n    %sNo prebuilt ipe %s binary for %s-%s.%s\n' \
       "$C_BOLD" "$ver" "$plat" "$cpu" "$C_RESET" >&2

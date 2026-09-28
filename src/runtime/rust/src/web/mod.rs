@@ -4665,10 +4665,17 @@ where
     };
     if !proxy_active && console::gate_allows() {
         eprintln!("{}", store::memory_store_log_line(web_ttl()));
-        eprintln!(
-            "[ipe.console] inline console mounted as Ipe.Web sub-app at /_ipe/console mode={}",
-            console::console_auth_mode_label()
-        );
+        {
+            use std::io::IsTerminal;
+            let msg = format!(
+                "[ipe.console] inline console mounted as Ipe.Web sub-app at /_ipe/console mode={}",
+                console::console_auth_mode_label()
+            );
+            eprintln!(
+                "{}",
+                crate::system::gutter_line(&msg, std::io::stderr().is_terminal())
+            );
+        }
         router = router
             .route("/_ipe/console", get(console::console_html))
             .route("/_ipe/console/api/overview", get(console::api_overview))

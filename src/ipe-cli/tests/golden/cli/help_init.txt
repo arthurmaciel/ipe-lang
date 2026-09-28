@@ -2,6 +2,7 @@ exit: 0
 ---
 
   Ipê language - v<VERSION> - https://github.com/arthurmaciel/ipe-lang
+
   Scaffold a new Ipê project.
 
   ipe init [<directory>] [<shape>] [<runtime>]

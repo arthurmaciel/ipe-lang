@@ -97,7 +97,7 @@ mod driver;
 
 pub use driver::{
     AdvisoryVulnerablePayload, BuildOptions, CliError, INSTALL_SH_URL, PackageSourceSet,
-    RuntimeContext, apply_fixes, bluegreen_enabled, build, build_project,
+    RuntimeContext, UPGRADE_WRAPPED_ENV, apply_fixes, bluegreen_enabled, build, build_project,
     build_project_with_options, build_with_options, build_with_sibling_discovery,
     build_with_sibling_discovery_with_options, code_index, compile_prepared, create_source_root,
     emit_ir_text, explain_lookup, hot_appearance_enabled, infer_package_capabilities,

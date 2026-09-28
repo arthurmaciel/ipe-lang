@@ -1738,6 +1738,11 @@ pub fn run_version(rest: &[String]) -> Result<(), CliError> {
 pub const INSTALL_SH_URL: &str =
     "https://raw.githubusercontent.com/arthurmaciel/ipe-lang/main/install.sh";
 
+/// The env var that marks an `install.sh` run as launched BY this wrapper
+/// (never by a direct `curl | sh`). `pub` so the install-drift test can assert
+/// `install.sh` reads the same name — see [`run_installer`].
+pub const UPGRADE_WRAPPED_ENV: &str = "IPE_UPGRADE_WRAPPED";
+
 /// `ipe upgrade` — self-update by re-running the release installer.
 ///
 /// Checks the latest published release, then installs it when a newer one is
@@ -1863,10 +1868,10 @@ pub fn run_upgrade(rest: &[String]) -> Result<(), CliError> {
                 .as_ref()
                 .map(semver::Version::to_string)
                 .unwrap_or_default();
+            let (glyph, tint) = style::Outcome::Step.glyph_and_tint(p);
             crate::screen::Screen::new(crate::screen::Stream::Stdout)
                 .styled(&format!(
-                    "{}?{}  {}",
-                    p.yellow,
+                    "{tint}{glyph}{} {}",
                     p.reset,
                     text::upgrade_available(&cur, &lat)
                 ))
@@ -1929,9 +1934,19 @@ pub fn run_installer(command: &str) -> Result<(), CliError> {
     // red failure) BEFORE the child inherits the terminal, so the installer's
     // own staged output begins on a fresh, uncorrupted line.
     let stage = progress::Stage::start(std::io::stderr(), "Launching the release installer…");
+    // IPE_UPGRADE_WRAPPED tells install.sh it is running under us: on its
+    // "no prebuilt binary" failure it skips its own stderr banner (we render
+    // the one failure message ourselves, below) and instead writes the tag it
+    // actually resolved and probed to stdout — the one channel install.sh
+    // otherwise never uses — so we can report the real target version instead
+    // of guessing. `stdout` is piped only for that reason; every other
+    // install.sh message (progress, prompts, success) is on stderr and stays
+    // inherited so the installer's own terminal drawing is unaffected.
     let child = std::process::Command::new("sh")
         .arg("-c")
         .arg(command)
+        .env(UPGRADE_WRAPPED_ENV, "1")
+        .stdout(std::process::Stdio::piped())
         .spawn();
     let mut child = match child {
         Ok(child) => {
@@ -1947,9 +1962,25 @@ pub fn run_installer(command: &str) -> Result<(), CliError> {
             )));
         }
     };
+
+    // Drain the piped stdout on its own thread while we wait, so a filled
+    // pipe buffer can never deadlock against `wait()`. Bounded: install.sh
+    // writes at most one short line here; `take` caps the read regardless.
+    let stdout_pipe = child.stdout.take();
+    let reader = std::thread::spawn(move || -> String {
+        use std::io::Read as _;
+        let Some(out) = stdout_pipe else {
+            return String::new();
+        };
+        let mut buf = String::new();
+        let _ = out.take(4096).read_to_string(&mut buf);
+        buf
+    });
+
     let status = child
         .wait()
         .map_err(|e| CliError::Usage(text::msg::upgrade_installer_wait_failed(&e)))?;
+    let captured_tag = reader.join().unwrap_or_default();
     if status.success() {
         return Ok(());
     }
@@ -1974,9 +2005,20 @@ pub fn run_installer(command: &str) -> Result<(), CliError> {
                 other => other,
             }
         );
-        // The version is not known here (the installer resolves it); use the
-        // running binary's version as the best available proxy.
-        let version = format!("v{}", env!("CARGO_PKG_VERSION"));
+        // install.sh hands back the tag it actually resolved and probed (see
+        // IPE_UPGRADE_WRAPPED above). Mirrors install.sh's own
+        // `ver="${tag#ipe-}"` prefix strip; fall back to the running binary's
+        // version only if that channel came back empty (an install.sh from
+        // before this contract).
+        let resolved = captured_tag.trim();
+        let version = if resolved.is_empty() {
+            format!("v{}", env!("CARGO_PKG_VERSION"))
+        } else {
+            resolved
+                .strip_prefix("ipe-")
+                .unwrap_or(resolved)
+                .to_string()
+        };
         return Err(CliError::UpgradeNoPrebuilt {
             version: crate::style::TerminalSafe::sanitize(&version),
             platform: crate::style::TerminalSafe::sanitize(&platform),

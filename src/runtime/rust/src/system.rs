@@ -52,20 +52,28 @@ pub(crate) fn read_env_var(key: &str) -> Result<String, std::env::VarError> {
     }
 }
 
-/// Render a runtime status line (e.g. the HTTP `listening on` banner) with a
-/// 2-space left gutter ONLY when stderr is an interactive terminal; a piped or
+/// Render a runtime status line (e.g. the HTTP `listening on` banner, or an
+/// `[ipe.live]`/`[ipe.console]` session-store/console line) with a 4-space
+/// left gutter ONLY when stderr is an interactive terminal; a piped or
 /// redirected stderr (test harness, production log capture) stays flush-left so
 /// downstream `contains(...)` matchers see the bare line. The `is_terminal`
 /// decision is a parameter so the indent rule is testable without a pty.
 ///
-/// Gated to `server`: the only callers are the `server::server_listen` and
-/// `web::serve_web` HTTP `listening on` banners, both `#[cfg(feature =
-/// "server")]` (`web` implies `server`), so a build without the server surface
-/// would otherwise carry this as dead code.
+/// Four spaces, not the CLI's plain 2-space `GUTTER`: under `ipe watch`, these
+/// lines are the spawned app's own output, printed one level deeper than the
+/// `[ipe watch] ...` status lines that frame it (which themselves render at
+/// two gutter-widths) — so this nests under them rather than under the
+/// top-level banner.
+///
+/// Gated to `server`: the callers are the `server::server_listen` and
+/// `web::serve_web` HTTP `listening on` banners and the `web` session-store /
+/// console-mount startup lines, all `#[cfg(feature = "server")]` reachable
+/// (`web` implies `server`), so a build without the server surface would
+/// otherwise carry this as dead code.
 #[cfg(feature = "server")]
 pub(crate) fn gutter_line(msg: &str, is_terminal: bool) -> String {
     if is_terminal {
-        format!("  {msg}")
+        format!("    {msg}")
     } else {
         msg.to_string()
     }
@@ -1146,10 +1154,11 @@ mod gutter_line_tests {
 
     #[test]
     fn indents_only_under_a_terminal() {
-        // Terminal stderr → 2-space gutter for the human dev loop.
+        // Terminal stderr → 4-space gutter for the human dev loop (nests under
+        // the CLI's own `[ipe watch] ...` status lines).
         assert_eq!(
             gutter_line("[ipe.http.server] listening on http://127.0.0.1:8000", true),
-            "  [ipe.http.server] listening on http://127.0.0.1:8000"
+            "    [ipe.http.server] listening on http://127.0.0.1:8000"
         );
         // Piped/redirected stderr (the E2E harness reads through a pipe) stays
         // flush-left so `contains("[ipe.http.server] listening on")` matchers hold.

@@ -10,6 +10,7 @@
 use super::SessionEntry;
 use async_trait::async_trait;
 use std::collections::HashMap;
+use std::io::IsTerminal;
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
 
@@ -1309,7 +1310,13 @@ where
         #[cfg(feature = "db")]
         StoreBackend::Sqlite => match SqliteStore::new(path, ttl, schema_tag).await {
             Ok(s) => {
-                eprintln!("[ipe.live] session store: sqlite @ {path}");
+                eprintln!(
+                    "{}",
+                    crate::system::gutter_line(
+                        &format!("[ipe.live] session store: sqlite @ {path}"),
+                        std::io::stderr().is_terminal()
+                    )
+                );
                 return Ok(Arc::new(s));
             }
             Err(e) if e.is_policy_refusal() => return Err(store_refused_error("sqlite", &e)),
@@ -1318,7 +1325,13 @@ where
         #[cfg(feature = "db")]
         StoreBackend::Postgres => match PostgresStore::new(path, ttl, schema_tag).await {
             Ok(s) => {
-                eprintln!("[ipe.live] session store: postgres");
+                eprintln!(
+                    "{}",
+                    crate::system::gutter_line(
+                        "[ipe.live] session store: postgres",
+                        std::io::stderr().is_terminal()
+                    )
+                );
                 return Ok(Arc::new(s));
             }
             Err(e) if e.is_policy_refusal() => return Err(store_refused_error("postgres", &e)),
@@ -1327,14 +1340,26 @@ where
         #[cfg(feature = "redis_store")]
         StoreBackend::Redis => match RedisStore::new(path, ttl, schema_tag).await {
             Ok(s) => {
-                eprintln!("[ipe.live] session store: redis");
+                eprintln!(
+                    "{}",
+                    crate::system::gutter_line(
+                        "[ipe.live] session store: redis",
+                        std::io::stderr().is_terminal()
+                    )
+                );
                 return Ok(Arc::new(s));
             }
             Err(e) => eprintln!("{}", store_unavailable_log_line("redis", &e)),
         },
         #[cfg(feature = "web")]
         StoreBackend::File => {
-            eprintln!("[ipe.live] session store: file @ {path}");
+            eprintln!(
+                "{}",
+                crate::system::gutter_line(
+                    &format!("[ipe.live] session store: file @ {path}"),
+                    std::io::stderr().is_terminal()
+                )
+            );
             return Ok(Arc::new(FileStore::new(path, ttl, schema_tag)));
         }
         // A parsed-but-feature-absent persistent backend is impossible
@@ -1353,12 +1378,19 @@ where
 /// Produces the `[ipe.live] session store: memory (ttl=…)` startup log line,
 /// with a `YYYY/MM/DD HH:MM:SS` timestamp prefix and a human-readable TTL.
 /// Shared so the in-process console sub-app mount emits the same line format.
+///
+/// Terminal-gutters the whole line (timestamp included) through
+/// [`crate::system::gutter_line`] here, once, rather than at each of this
+/// function's two call sites — the same SSOT reason the sibling backend-
+/// confirmation lines in [`choose_store`] gutter inline: one indent rule, one
+/// place it is applied.
 pub(crate) fn memory_store_log_line(ttl: Duration) -> String {
-    format!(
+    let msg = format!(
         "{} [ipe.live] session store: memory (ttl={})",
         go_log_timestamp(),
         go_duration_string(ttl)
-    )
+    );
+    crate::system::gutter_line(&msg, std::io::stderr().is_terminal())
 }
 
 /// Render the current local time as `YYYY/MM/DD HH:MM:SS`.
