@@ -822,7 +822,9 @@ fn open_pr(
     let fork_url = format!("https://github.com/{fork_owner}/{index_name}.git");
 
     let scratch = ScratchDir::new("ipe-publish").map_err(|e| scratch_io(&e))?;
-    let clone = scratch.child(index_name);
+    let clone = crate::scratch::ScratchLeaf::new(index_name)
+        .map(|leaf| scratch.child(&leaf))
+        .map_err(|e| scratch_io(&e.into()))?;
 
     // Shallow-clone the fork — it carries the index's `main` history, which the
     // branch must descend from for the compare page to work.

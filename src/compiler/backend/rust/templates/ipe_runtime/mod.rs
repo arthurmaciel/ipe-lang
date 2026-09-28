@@ -33,6 +33,7 @@ pub mod log;
 pub mod math;
 pub mod money;
 pub mod path_core;
+pub mod scratch;
 pub mod path;
 pub mod secret;
 pub mod app_config;

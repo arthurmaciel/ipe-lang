@@ -14992,10 +14992,9 @@ impl StdlibKernel {
     /// declare `random`.
     ///
     /// NOTE the `random` feature gates the `random.rs` module. `getrandom` (the
-    /// entropy source) is shared with the `crypto_core` module
-    /// (`crypto_random_bytes` / `crypto_random_token`), so it is selected whenever
-    /// `random` OR the crypto floor is reached; a Program that reaches neither
-    /// drops it. On native, `random.rs` uses no `getrandom` at all — only its
+    /// entropy source) is always present: the `crypto_core` entropy pair and the
+    /// private-scratch names draw from it too. On native, `random.rs` uses no
+    /// `getrandom` at all — only its
     /// `cfg(target_arch = "wasm32")` seed arm does.
     #[must_use]
     pub const fn is_random(self) -> bool {
@@ -15265,7 +15264,7 @@ impl StdlibKernel {
     ///
     /// Used by `ipe_lower` to detect `uses_crypto_core` and by the backend to
     /// select the `crypto-core` Cargo feature (which pulls `sha2` / `hmac` /
-    /// `subtle` / `getrandom`). A program that reaches no crypto-floor kernel —
+    /// `subtle`). A program that reaches no crypto-floor kernel —
     /// and no `crypto` / `jwt` / `db` / `web` / `webview` / `email` / `server`
     /// surface that reaches the floor transitively (folded in by the backend's
     /// `reaches_crypto_core`) — drops the module and its crates. Disjoint from
@@ -17131,8 +17130,8 @@ mod tests {
     }
 
     /// Every crypto-floor kernel emits a symbol into `crypto_core.rs` (the sole
-    /// consumer of `sha2` / `hmac` / the `subtle` compare / the `getrandom`
-    /// entropy pair once `crypto-core` gates them), so `is_crypto_core()` MUST
+    /// consumer of `sha2` / `hmac` / the `subtle` compare once `crypto-core`
+    /// gates them), so `is_crypto_core()` MUST
     /// report exactly the kernels whose emit symbol resides there — and NONE of
     /// the heavy `crypto.rs` kernels. Residency is content-addressed off the emit
     /// symbol, the SAME discipline `crypto_predicate_tracks_heavy_module_residency`
@@ -17162,7 +17161,7 @@ mod tests {
                 "{k:?} emits `{emit}` (qualifier `{qual}`): is_crypto_core()={} but \
                  crypto_core residency={} — the emitted crate would either fail to \
                  select the `crypto-core` feature (E0433 for a floor kernel) or pull \
-                 sha2/hmac/subtle/getrandom into a program that reaches no crypto floor",
+                 sha2/hmac/subtle into a program that reaches no crypto floor",
                 k.is_crypto_core(),
                 lives_in_floor,
             );

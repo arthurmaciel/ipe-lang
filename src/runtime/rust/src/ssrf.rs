@@ -1101,10 +1101,9 @@ mod pinned_relay {
     use super::VettedAddr;
     use std::future::Future;
     use std::io;
-    use std::os::unix::fs::{DirBuilderExt, MetadataExt};
+    use std::os::unix::fs::MetadataExt;
     use std::path::{Path, PathBuf};
     use std::sync::Arc;
-    use std::sync::atomic::{AtomicU64, Ordering};
     use std::time::Duration;
     use tokio::net::{TcpStream, UnixListener, UnixStream};
     use tokio::sync::{OwnedSemaphorePermit, Semaphore, oneshot};
@@ -1118,8 +1117,8 @@ mod pinned_relay {
     /// The bytes one direction of a relayed connection buffers.
     const RELAY_BUFFER_BYTES: usize = 16 * 1024;
 
-    /// How many fresh directory names the relay tries per base directory.
-    const RELAY_DIR_ATTEMPTS: u32 = 8;
+    /// The diagnostic tag in every relay directory name.
+    const RELAY_LABEL: &str = "ipe-pgr";
 
     /// The longest socket path every Unix `sockaddr_un` holds, terminator excluded.
     const SOCKET_PATH_MAX_BYTES: usize = 103;
@@ -1212,39 +1211,34 @@ mod pinned_relay {
     /// Returns the directory and its owner's uid, the only uid the relay
     /// serves.
     fn create_private_dir(socket_name: &str) -> Result<(PathBuf, u32), RelayUnavailable> {
-        static NEXT: AtomicU64 = AtomicU64::new(0);
-        create_private_dir_in(
-            &[std::env::temp_dir(), PathBuf::from("/tmp")],
-            socket_name,
-            || NEXT.fetch_add(1, Ordering::Relaxed),
-        )
+        create_private_dir_in(&[std::env::temp_dir(), PathBuf::from("/tmp")], socket_name)
     }
 
     /// Create an owner-only directory under the first of `bases` that admits one.
     ///
-    /// Each base is tried with up to [`RELAY_DIR_ATTEMPTS`] names numbered by
-    /// `next`: a name already taken moves on to the next number, and a base
-    /// whose socket path would not fit a `sockaddr_un`, or that refuses the
-    /// directory, moves on to the next base.
+    /// Each directory comes from the shared scratch core: a base proven
+    /// trusted, a CSPRNG name, exclusive 0700 creation. A base whose socket
+    /// path would not fit a `sockaddr_un`, or that refuses the directory,
+    /// moves on to the next base.
     fn create_private_dir_in(
         bases: &[PathBuf],
         socket_name: &str,
-        mut next: impl FnMut() -> u64,
     ) -> Result<(PathBuf, u32), RelayUnavailable> {
-        let pid = std::process::id();
+        let below_base =
+            1 + crate::scratch::max_scratch_name_len(RELAY_LABEL) + 1 + socket_name.len();
         for base in bases {
-            for _ in 0..RELAY_DIR_ATTEMPTS {
-                let n = next();
-                let dir = base.join(format!("ipe-pg-relay-{pid}-{n}"));
-                if dir.join(socket_name).as_os_str().len() > SOCKET_PATH_MAX_BYTES {
-                    break;
-                }
-                match std::fs::DirBuilder::new().mode(0o700).create(&dir) {
-                    Ok(()) => return owner_only(&dir).map(|owner| (dir, owner)),
-                    Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {}
-                    Err(_) => break,
-                }
+            if base.as_os_str().len() + below_base > SOCKET_PATH_MAX_BYTES {
+                continue;
             }
+            let Ok(dir) = crate::file::private_temp_dir_under(base, RELAY_LABEL) else {
+                continue;
+            };
+            // The core creates under the resolved base, which may be longer.
+            if dir.join(socket_name).as_os_str().len() > SOCKET_PATH_MAX_BYTES {
+                let _removed = std::fs::remove_dir(&dir);
+                continue;
+            }
+            return owner_only(&dir).map(|owner| (dir, owner));
         }
         Err(RelayUnavailable)
     }
@@ -1430,8 +1424,8 @@ mod pinned_relay {
     #[cfg(test)]
     mod tests {
         use super::{
-            PinnedRelay, RELAY_DIR_ATTEMPTS, RelayUnavailable, SOCKET_PATH_MAX_BYTES, Semaphore,
-            VettedAddr, create_private_dir_in, owner_only, relay_ceiling,
+            PinnedRelay, RelayUnavailable, SOCKET_PATH_MAX_BYTES, Semaphore, VettedAddr,
+            create_private_dir_in, owner_only, relay_ceiling,
         };
         use std::fs::Permissions;
         use std::os::unix::fs::PermissionsExt;
@@ -1565,58 +1559,48 @@ mod pinned_relay {
             assert!(real.exists(), "the link target must be left alone");
         }
 
-        /// A name already taken is skipped for the next number.
-        #[test]
-        fn a_taken_name_moves_on_to_the_next_number() {
-            let base = Scratch::new("taken");
-            let taken = base.path().join(relay_dir_name(0));
-            assert!(std::fs::create_dir(&taken).is_ok());
-            let mut numbers = 0_u64..;
-            let made = create_private_dir_in(&[base.path().to_path_buf()], ".s.PGSQL.5432", || {
-                numbers.next().unwrap_or(u64::MAX)
-            });
-            let Ok((dir, _owner)) = made else {
-                assert!(made.is_ok(), "{made:?}");
-                return;
-            };
-            assert_eq!(dir, base.path().join(relay_dir_name(1)));
-        }
-
         /// A base whose socket path would overflow a `sockaddr_un` is passed
         /// over for the next base, and alone it is refused, creating nothing.
         #[test]
         fn a_base_too_long_for_the_socket_path_is_passed_over() {
             let base = Scratch::new("long");
             let long = base.path().join("d".repeat(SOCKET_PATH_MAX_BYTES));
-            let short = base.path().to_path_buf();
-            let alone = create_private_dir_in(std::slice::from_ref(&long), ".s.PGSQL.5432", || 0);
+            let short = PathBuf::from("/tmp");
+            let alone = create_private_dir_in(std::slice::from_ref(&long), ".s.PGSQL.5432");
             assert_eq!(alone, Err(RelayUnavailable));
             assert!(!long.exists());
-            let made = create_private_dir_in(&[long.clone(), short.clone()], ".s.PGSQL.5432", || 0);
+            let made = create_private_dir_in(&[long.clone(), short.clone()], ".s.PGSQL.5432");
             let Ok((dir, _owner)) = made else {
                 assert!(made.is_ok(), "{made:?}");
                 return;
             };
-            assert_eq!(dir, short.join(relay_dir_name(0)));
+            let _removed = std::fs::remove_dir(&dir);
+            assert_eq!(dir.parent(), std::fs::canonicalize(&short).ok().as_deref());
             assert!(!long.exists());
         }
 
-        /// Every name taken in every base, or a base that cannot hold the
-        /// directory, leaves the relay unavailable.
+        /// Relay directories are unpredictable: two in one base never share a name.
         #[test]
-        fn exhausted_names_leave_the_relay_unavailable() {
-            let base = Scratch::new("exhausted");
-            for n in 0..u64::from(RELAY_DIR_ATTEMPTS) {
-                assert!(std::fs::create_dir(base.path().join(relay_dir_name(n))).is_ok());
-            }
-            let mut numbers = 0_u64..;
-            let made = create_private_dir_in(&[base.path().to_path_buf()], ".s.PGSQL.5432", || {
-                numbers.next().unwrap_or(u64::MAX)
-            });
-            assert_eq!(made, Err(RelayUnavailable));
-            let missing = base.path().join("missing");
-            let made = create_private_dir_in(&[missing], ".s.PGSQL.5432", || 0);
-            assert_eq!(made, Err(RelayUnavailable));
+        fn relay_directories_draw_fresh_names() {
+            let bases = [PathBuf::from("/tmp")];
+            let first = create_private_dir_in(&bases, ".s.PGSQL.5432");
+            let second = create_private_dir_in(&bases, ".s.PGSQL.5432");
+            assert!(first.is_ok() && second.is_ok(), "{first:?} {second:?}");
+            let (Ok((first, _)), Ok((second, _))) = (first, second) else {
+                return;
+            };
+            let _first_removed = std::fs::remove_dir(&first);
+            let _second_removed = std::fs::remove_dir(&second);
+            assert_ne!(first, second);
+        }
+
+        /// No base leaves the relay unavailable.
+        #[test]
+        fn no_base_leaves_the_relay_unavailable() {
+            assert_eq!(
+                create_private_dir_in(&[], ".s.PGSQL.5432"),
+                Err(RelayUnavailable)
+            );
         }
 
         /// An address no test server answers on.
@@ -1624,21 +1608,14 @@ mod pinned_relay {
             VettedAddr::assume_vetted_for_test(std::net::SocketAddr::from(([127, 0, 0, 1], 9)))
         }
 
-        /// The relay directory name numbered `n` for this process.
-        fn relay_dir_name(n: u64) -> String {
-            format!("ipe-pg-relay-{}-{n}", std::process::id())
-        }
-
-        /// A test's own directory under `/tmp`, removed when dropped.
+        /// A test's own private scratch directory under `/tmp`, removed when dropped.
         struct Scratch(PathBuf);
 
         impl Scratch {
             fn new(label: &str) -> Self {
-                let dir = PathBuf::from("/tmp")
-                    .join(format!("ipe-relay-test-{}-{label}", std::process::id()));
-                let _stale = std::fs::remove_dir_all(&dir);
-                assert!(std::fs::create_dir(&dir).is_ok(), "{dir:?}");
-                Self(dir)
+                let dir = crate::file::private_temp_dir_under(Path::new("/tmp"), label);
+                assert!(dir.is_ok(), "{dir:?}");
+                Self(dir.unwrap_or_default())
             }
 
             fn path(&self) -> &Path {

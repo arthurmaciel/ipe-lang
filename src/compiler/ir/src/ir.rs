@@ -193,7 +193,7 @@ pub struct Module {
     /// `pub mod random;` in the emitted `ipe_runtime/mod.rs`. `random` is a
     /// standalone leaf — no other surface reaches it — so this flag alone gates
     /// the module. The `random` feature gates only the module declaration, NOT the
-    /// `getrandom` crate (which the `crypto_core` floor keeps present);
+    /// `getrandom` crate (which the runtime always carries);
     /// a program that reaches no `Ipe.Random` kernel drops the `random.rs` module.
     pub uses_random: bool,
     /// `true` when the lowerer detected an `Ipe.Log` kernel
@@ -230,7 +230,7 @@ pub struct Module {
     /// `KernelFn::is_crypto_core()` variant. The backend folds this flag with the
     /// crypto/jwt/db/web/webview/email/server surfaces (`reaches_crypto_core`) to
     /// select the `crypto-core` runtime feature — `crypto_core.rs` plus its
-    /// `sha2`, `hmac`, `subtle`, and `getrandom` dependencies. A program that
+    /// `sha2`, `hmac`, and `subtle` dependencies. A program that
     /// reaches none of these drops the module and that whole dependency subtree.
     pub uses_crypto_core: bool,
     /// `true` when the lowerer detected at least one `Ipe.Secret` kernel call

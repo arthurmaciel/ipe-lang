@@ -782,7 +782,10 @@ fn run_link_probe(name: &str) -> LinkerProbeResult {
     let Ok(scratch) = ScratchDir::new("ipe-linker-probe") else {
         return LinkerProbeResult::Rejected;
     };
-    let out_path = scratch.child("probe");
+    let Ok(out_path) = crate::scratch::ScratchLeaf::new("probe").map(|leaf| scratch.child(&leaf))
+    else {
+        return LinkerProbeResult::Rejected;
+    };
     let out = Command::new("rustc")
         .args([
             "-",

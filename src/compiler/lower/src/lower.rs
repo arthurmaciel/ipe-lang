@@ -8234,7 +8234,7 @@ struct KernelUsage {
     uuid: bool,
     /// Any `Ipe.Random` kernel — gates the `random.rs` runtime module (the
     /// `random` feature). A standalone leaf; no other surface reaches it. Does NOT
-    /// gate `getrandom` (kept by the `crypto_core` floor).
+    /// gate `getrandom` (always present in the runtime).
     random: bool,
     /// Any `Ipe.Log` kernel — gates the `log.rs` runtime module (the `log`
     /// feature) and the base `chrono` crate (via `log = ["dep:chrono"]`).
@@ -8255,7 +8255,7 @@ struct KernelUsage {
     /// Any crypto-FLOOR kernel (SHA-2 hash, the HMAC family, RSA sign/verify,
     /// constant-time compare, the entropy pair, the `Key`/`Mac` newtypes) — gates
     /// the `crypto_core.rs` runtime module (the `crypto-core` feature) and its
-    /// `sha2` + `hmac` + `subtle` + `getrandom` dependencies. The heavy `crypto`
+    /// `sha2` + `hmac` + `subtle` dependencies. The heavy `crypto`
     /// surface and the `jwt`/`db`/`web`/`webview`/`email`/`server` surfaces reach
     /// the floor transitively (folded in by the backend's `reaches_crypto_core`),
     /// so this flag alone gates only the direct crypto-floor reach.

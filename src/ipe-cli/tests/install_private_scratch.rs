@@ -11,10 +11,10 @@
 
 use std::io;
 use std::os::unix::fs::PermissionsExt as _;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use ipe_sandbox::scratch::ScratchDir;
+use ipe_sandbox::scratch::{ScratchDir, ScratchLeaf};
 
 const BEGIN: &str = "# >>> private-scratch helpers";
 const END: &str = "# <<< private-scratch helpers";
@@ -69,6 +69,11 @@ fn root(label: &str) -> io::Result<ScratchDir> {
     ScratchDir::new_under(Path::new(env!("CARGO_TARGET_TMPDIR")), label)
 }
 
+/// The path of the entry `name` directly inside `r`.
+fn child(r: &ScratchDir, name: &str) -> io::Result<PathBuf> {
+    Ok(r.child(&ScratchLeaf::new(name)?))
+}
+
 fn mkdir_mode(path: &Path, mode: u32) -> io::Result<()> {
     std::fs::create_dir(path)?;
     std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode))
@@ -77,12 +82,12 @@ fn mkdir_mode(path: &Path, mode: u32) -> io::Result<()> {
 #[test]
 fn private_dir_ok_accepts_only_an_owned_0700_directory() -> io::Result<()> {
     let r = root("install-private-dir")?;
-    let private = r.child("private");
+    let private = child(&r, "private")?;
     mkdir_mode(&private, 0o700)?;
     assert!(helper_accepts("private_dir_ok", &private)?);
 
     for (name, mode) in [("world", 0o777), ("group", 0o750), ("other", 0o705)] {
-        let dir = r.child(name);
+        let dir = child(&r, name)?;
         mkdir_mode(&dir, mode)?;
         assert!(
             !helper_accepts("private_dir_ok", &dir)?,
@@ -90,7 +95,7 @@ fn private_dir_ok_accepts_only_an_owned_0700_directory() -> io::Result<()> {
         );
     }
 
-    let link = r.child("link");
+    let link = child(&r, "link")?;
     std::os::unix::fs::symlink(&private, &link)?;
     assert!(
         !helper_accepts("private_dir_ok", &link)?,
@@ -102,7 +107,7 @@ fn private_dir_ok_accepts_only_an_owned_0700_directory() -> io::Result<()> {
 #[test]
 fn trusted_tmp_base_refuses_a_non_sticky_world_writable_base() -> io::Result<()> {
     let r = root("install-base")?;
-    let open = r.child("open");
+    let open = child(&r, "open")?;
     mkdir_mode(&open, 0o777)?;
     assert!(!helper_accepts("trusted_tmp_base", &open)?);
 
@@ -113,7 +118,7 @@ fn trusted_tmp_base_refuses_a_non_sticky_world_writable_base() -> io::Result<()>
         "a base under a non-sticky world-writable ancestor must be refused"
     );
 
-    let sticky = r.child("sticky");
+    let sticky = child(&r, "sticky")?;
     mkdir_mode(&sticky, 0o1777)?;
     assert!(helper_accepts("trusted_tmp_base", &sticky)?);
     Ok(())
@@ -122,10 +127,10 @@ fn trusted_tmp_base_refuses_a_non_sticky_world_writable_base() -> io::Result<()>
 #[test]
 fn tag_file_ok_refuses_a_planted_symlink_and_leaves_its_target() -> io::Result<()> {
     let r = root("install-tag")?;
-    let canary = r.child("canary");
+    let canary = child(&r, "canary")?;
     std::fs::write(&canary, b"canary")?;
 
-    let private = r.child("private");
+    let private = child(&r, "private")?;
     mkdir_mode(&private, 0o700)?;
     let link = private.join("tag");
     std::os::unix::fs::symlink(&canary, &link)?;
@@ -143,7 +148,7 @@ fn tag_file_ok_refuses_a_planted_symlink_and_leaves_its_target() -> io::Result<(
         "a group/other-readable tag file must be refused"
     );
 
-    let open = r.child("open");
+    let open = child(&r, "open")?;
     mkdir_mode(&open, 0o755)?;
     let exposed = open.join("tag");
     std::fs::write(&exposed, b"")?;
@@ -299,9 +304,9 @@ fn scratch_private_verdict_refuses_foreign_or_open_entries() -> io::Result<()> {
 #[test]
 fn trusted_tmp_base_refuses_a_non_directory_or_missing_base() -> io::Result<()> {
     let r = root("install-nondir")?;
-    let file = r.child("file");
+    let file = child(&r, "file")?;
     std::fs::write(&file, b"")?;
     assert!(!helper_accepts("trusted_tmp_base", &file)?);
-    assert!(!helper_accepts("trusted_tmp_base", &r.child("missing"))?);
+    assert!(!helper_accepts("trusted_tmp_base", &child(&r, "missing")?)?);
     Ok(())
 }

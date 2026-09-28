@@ -3173,7 +3173,12 @@ fn check_examples() -> Result<(), CliError> {
             let module_src = synthesize_module(&ex.body, module_name, &module_imports);
 
             // Write to a temp file.
-            let snippet_path = tmp_dir.child("Main.ipe");
+            let snippet_path = crate::scratch::ScratchLeaf::new("Main.ipe")
+                .map(|leaf| tmp_dir.child(&leaf))
+                .map_err(|e| CliError::Io {
+                    path: tmp_dir.path().to_path_buf(),
+                    source: e.into(),
+                })?;
             std::fs::write(&snippet_path, &module_src)
                 .map_err(|e| crate::io_err(&snippet_path, e))?;
 

@@ -117,8 +117,8 @@ pub enum RuntimeFeature {
     Uuid,
     /// `random` — the `random.rs` module (`reaches_random()`: an `Ipe.Random`
     /// kernel). A standalone leaf — no surface implies it. The feature gates the
-    /// MODULE only, not `getrandom`, which is shared with `crypto_core` and
-    /// enabled by `random || crypto-core`.
+    /// MODULE only, not `getrandom`, which is always present (shared with
+    /// `crypto_core` and the private-scratch names).
     Random,
     /// `log` — the `log.rs` module (`reaches_log()`: an `Ipe.Log` kernel). A
     /// standalone leaf — no surface implies it. Enables base `chrono` (`log =
@@ -140,12 +140,11 @@ pub enum RuntimeFeature {
     /// standalone leaf. The std-only `Ipe.Char` kernels stay in `char_kernel.rs`.
     CharCategory,
     /// `crypto-core` — the cryptographic floor: `crypto_core.rs` and its `sha2`
-    /// hash / `hmac` / `subtle` constant-time / `getrandom` entropy deps
+    /// hash / `hmac` / `subtle` constant-time deps
     /// (`reaches_crypto_core()`: a crypto-floor kernel, OR the crypto / jwt / db /
     /// web / webview / email / server surfaces, all of which reach the floor). A
-    /// bare synchronous Program reaches none of these and drops the module, the
-    /// `sha2`/`hmac`/`subtle` subtree, and — since `getrandom` is enabled only by
-    /// `random || crypto-core` — `getrandom` too.
+    /// bare synchronous Program reaches none of these and drops the module and
+    /// the `sha2`/`hmac`/`subtle` subtree.
     CryptoCore,
     /// `secret` — the `secret.rs` opaque secret-string module and its `zeroize`
     /// dep (`reaches_secret()`: a `Secret.*` kernel / `Secret`-typed value, or the

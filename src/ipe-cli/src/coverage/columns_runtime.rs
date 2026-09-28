@@ -32,6 +32,23 @@ fn scratch_dir() -> Result<crate::scratch::ScratchDir, String> {
 /// characters) makes the mapping a bijection over the stdlib symbol surface.
 /// Any other character (not expected for stdlib symbols) is replaced by `-` so
 /// the key stays filesystem-safe without colliding with `.` or `_`.
+/// The file a probe program is written to: its module is `Main`.
+const MAIN_FILE: &str = "Main.ipe";
+
+/// The path of `parts` below `scratch`, each part one validated entry name.
+fn scratch_child(scratch: &crate::scratch::ScratchDir, parts: &[&str]) -> Option<PathBuf> {
+    let mut path = scratch.path().to_path_buf();
+    for part in parts {
+        path.push(crate::scratch::ScratchLeaf::new(part).ok()?);
+    }
+    Some(path)
+}
+
+/// The verdict for a probe whose scratch path is not a valid entry name.
+fn unscratchable_cell() -> Cell {
+    Cell::Warn("probe scratch path is not a valid entry name; probe skipped".to_owned())
+}
+
 fn symbol_scratch_key(sym: &StdlibSymbol) -> String {
     let dotted = format!("{}.{}", sym.module.join("."), sym.name);
     dotted
@@ -111,7 +128,9 @@ impl AspectCheck<StdlibSymbol> for LowersColumn {
             Ok(s) => s,
             Err(reason) => return unavailable_cell(&reason),
         };
-        let snippet = scratch.child("Main.ipe");
+        let Some(snippet) = scratch_child(scratch, &[MAIN_FILE]) else {
+            return unscratchable_cell();
+        };
         // The seam is "type-checks but does not lower": a probe that does not
         // type-check is a point-free-reference limitation for this symbol, not a
         // lowering gap.
@@ -217,7 +236,9 @@ impl AspectCheck<StdlibSymbol> for ComposesColumn {
             Ok(s) => s,
             Err(reason) => return unavailable_cell(&reason),
         };
-        let snippet = scratch.child("Main.ipe");
+        let Some(snippet) = scratch_child(scratch, &[MAIN_FILE]) else {
+            return unscratchable_cell();
+        };
         // A nested probe that does not type-check is a generator limitation for
         // this symbol's shape, not a lowering gap: report it inapplicable so it
         // is not a false hole.
@@ -322,7 +343,9 @@ impl AspectCheck<StdlibSymbol> for BuildRunColumn {
         // symbols on distinct threads) never clobbers a sibling's snippet. The
         // module is `Main`, so the file must be named `Main.ipe`; the per-symbol
         // parent is what keeps it unique.
-        let snippet = scratch.child(&symbol_scratch_key(sym)).join("Main.ipe");
+        let Some(snippet) = scratch_child(scratch, &[&symbol_scratch_key(sym), MAIN_FILE]) else {
+            return unscratchable_cell();
+        };
         // The point-free reference program can fail to compile for a reason that
         // is a property of the probe FORM, not a build gap: a value the language
         // refuses point-free, a fully-polymorphic unused binding, or a lowerer ICE

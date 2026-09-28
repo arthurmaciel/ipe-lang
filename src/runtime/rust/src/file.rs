@@ -354,17 +354,23 @@ pub fn file_is_dir<E: Send + 'static>(path: Path) -> IpeTask<E, bool> {
 // ─── Temp paths ────────────────────────────────────────────────────────────
 
 /// `Ipe.File.tempFile : String -> Task Error String`
-/// Create a uniquely-named empty file in the system temp directory, using
-/// `prefix` as the filename prefix. Returns the absolute path.
+/// Create a private, unpredictably named empty file in the system temp
+/// directory and return its absolute path; `prefix` is a diagnostic tag only.
 /// The caller is responsible for removing the file when done.
 ///
-/// Implementation: retry loop with a monotonic-time + process-ID suffix until
-/// exclusive creation succeeds (`O_CREAT|O_EXCL` semantics via
-/// `OpenOptions::create_new`). No `tempfile` crate needed (pure `std`).
+/// Created through the shared scratch core ([`super::scratch`]): the temp
+/// directory is proven trusted, the name carries 128 bits of CSPRNG entropy,
+/// and the file is opened `O_EXCL` + `O_NOFOLLOW` with mode 0600.
 #[must_use]
 pub fn file_temp_file<E: Send + From<String> + 'static>(prefix: String) -> IpeTask<E, String> {
     Box::pin(async move {
-        match run_blocking(move || make_temp_path(&prefix, false)).await {
+        match run_blocking(move || {
+            exclusive_temp_file(&prefix)
+                .map(|(path, _file)| path.to_string_lossy().into_owned())
+                .map_err(|e| e.to_string())
+        })
+        .await
+        {
             Ok(p) => ok_res(p),
             Err(e) => IpeResult::Err(str_err(&e)),
         }
@@ -372,78 +378,98 @@ pub fn file_temp_file<E: Send + From<String> + 'static>(prefix: String) -> IpeTa
 }
 
 /// `Ipe.File.tempDir : String -> Task Error String`
-/// Create a uniquely-named directory in the system temp directory, using
-/// `prefix` as the directory name prefix. Returns the absolute path.
-/// The caller is responsible for removing the directory when done.
+/// Create a private (mode 0700), unpredictably named directory in the system
+/// temp directory and return its absolute path; `prefix` is a diagnostic tag
+/// only. The caller is responsible for removing the directory when done.
 #[must_use]
 pub fn file_temp_dir<E: Send + From<String> + 'static>(prefix: String) -> IpeTask<E, String> {
     Box::pin(async move {
-        match run_blocking(move || make_temp_path(&prefix, true)).await {
+        match run_blocking(move || {
+            private_temp_dir(&prefix)
+                .map(|path| path.to_string_lossy().into_owned())
+                .map_err(|e| e.to_string())
+        })
+        .await
+        {
             Ok(p) => ok_res(p),
             Err(e) => IpeResult::Err(str_err(&e)),
         }
     })
 }
 
-/// Shared helper: create a uniquely-named file (`is_dir=false`) or directory
-/// (`is_dir=true`) in the system temp directory, returning its absolute path.
+/// The OS CSPRNG, as the scratch core's entropy source.
+#[cfg(not(target_family = "wasm"))]
+fn os_entropy(buf: &mut [u8]) -> std::io::Result<()> {
+    getrandom::getrandom(buf).map_err(|e| std::io::Error::other(e.to_string()))
+}
+
+/// The raw profile-directory value the scratch core proves non-unix bases against.
+#[cfg(not(target_family = "wasm"))]
+fn profile_dir() -> Option<std::ffi::OsString> {
+    super::system::read_env_var_os(super::scratch::PROFILE_VAR)
+}
+
+/// The refusal on a target with no filesystem to hold scratch.
+#[cfg(target_family = "wasm")]
+fn no_scratch() -> std::io::Error {
+    std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        "no temporary directory on this target",
+    )
+}
+
+/// Create a private directory under the system temp directory.
 ///
-/// Uses a monotonic-time nanos + process-ID suffix and retries up to 32 times
-/// to get an exclusive slot (the same approach libc `tempfile()` uses).  No
-/// external crate needed.
-fn make_temp_path(prefix: &str, is_dir: bool) -> Result<String, String> {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    // Sanitise the caller-controlled prefix: keep only filename-safe chars so it
-    // cannot contain a path separator ('/'/'\\' — would escape temp_dir) or be
-    // absolute. Without this, prefix="../../etc/" or "/tmp/evil" is a
-    // write-arbitrary-path primitive (Path::join honours absolute/.. components).
-    let prefix: String = prefix
-        .chars()
-        .filter(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
-        .collect();
-    let prefix = prefix.as_str();
-    let base = std::env::temp_dir();
-    let pid = std::process::id();
-    // Retry loop: collision is extremely rare but theoretically possible.
-    for attempt in 0u32..32 {
-        let nanos = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map_or(attempt, |d| d.subsec_nanos());
-        let name = format!("{prefix}{pid}{nanos:08x}{attempt:04x}");
-        let path = base.join(&name);
-        if is_dir {
-            // Owner-only (0700) on Unix — a temp dir created with the default
-            // umask can be world-readable/traversable, exposing whatever the
-            // caller writes into it .
-            #[cfg_attr(not(unix), allow(unused_mut))] // mutated only under cfg(unix)
-            let mut builder = std::fs::DirBuilder::new();
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::DirBuilderExt;
-                builder.mode(0o700);
-            }
-            match builder.create(&path) {
-                Ok(()) => return Ok(path.to_string_lossy().into_owned()),
-                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
-                Err(e) => return Err(format!("{e}")),
-            }
-        } else {
-            // Owner-only (0600) on Unix — same rationale;  CreateTemp is 0600.
-            let mut opts = std::fs::OpenOptions::new();
-            opts.write(true).create_new(true);
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::OpenOptionsExt;
-                opts.mode(0o600);
-            }
-            match opts.open(&path) {
-                Ok(_) => return Ok(path.to_string_lossy().into_owned()),
-                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
-                Err(e) => return Err(format!("{e}")),
-            }
-        }
-    }
-    Err("could not create a unique temporary path after 32 attempts".to_string())
+/// # Errors
+/// As [`super::scratch::create_private_dir`], or `Unsupported` on wasm.
+pub(crate) fn private_temp_dir(label: &str) -> std::io::Result<std::path::PathBuf> {
+    private_temp_dir_under(&std::env::temp_dir(), label)
+}
+
+/// Create a private directory under `base` through the shared scratch core.
+///
+/// # Errors
+/// As [`super::scratch::create_private_dir`].
+#[cfg(not(target_family = "wasm"))]
+pub(crate) fn private_temp_dir_under(
+    base: &std::path::Path,
+    label: &str,
+) -> std::io::Result<std::path::PathBuf> {
+    super::scratch::create_private_dir(base, label, os_entropy, profile_dir)
+}
+
+/// Refuse a private directory: wasm has no filesystem to hold scratch.
+///
+/// # Errors
+/// Always `Unsupported`.
+#[cfg(target_family = "wasm")]
+pub(crate) fn private_temp_dir_under(
+    _base: &std::path::Path,
+    _label: &str,
+) -> std::io::Result<std::path::PathBuf> {
+    Err(no_scratch())
+}
+
+/// Create a private, unpredictably named file directly under the system temp directory.
+///
+/// # Errors
+/// As [`super::scratch::create_exclusive_file`].
+#[cfg(not(target_family = "wasm"))]
+pub(crate) fn exclusive_temp_file(
+    label: &str,
+) -> std::io::Result<(std::path::PathBuf, std::fs::File)> {
+    super::scratch::create_exclusive_file(&std::env::temp_dir(), label, os_entropy, profile_dir)
+}
+
+/// Refuse a temp file: wasm has no filesystem to hold scratch.
+///
+/// # Errors
+/// Always `Unsupported`.
+#[cfg(target_family = "wasm")]
+pub(crate) fn exclusive_temp_file(
+    _label: &str,
+) -> std::io::Result<(std::path::PathBuf, std::fs::File)> {
+    Err(no_scratch())
 }
 
 // ─── Copy / rename ─────────────────────────────────────────────────────────

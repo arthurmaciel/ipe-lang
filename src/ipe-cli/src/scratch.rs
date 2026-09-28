@@ -5,7 +5,7 @@
 //! typed refusals. Read what an external writer wrote through
 //! [`ScratchFile::read_all`], never by re-opening the path.
 
-pub use ipe_sandbox::scratch::{ScratchDir, ScratchFile};
+pub use ipe_sandbox::scratch::{ScratchDir, ScratchFile, ScratchLeaf};
 
 // ── Tests ────────────────────────────────────────────────────────────────────
 

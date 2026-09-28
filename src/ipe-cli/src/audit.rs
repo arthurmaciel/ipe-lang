@@ -275,7 +275,12 @@ fn tier2_probe_fixture() -> Result<PathBuf, CliError> {
         path: PathBuf::from("ipe-tier2-fixture"),
         source: e,
     })?;
-    let path = scratch.child(name);
+    let path = crate::scratch::ScratchLeaf::new(name)
+        .map(|leaf| scratch.child(&leaf))
+        .map_err(|e| CliError::Io {
+            path: PathBuf::from(name),
+            source: e.into(),
+        })?;
     std::fs::write(&path, bytes).map_err(|e| CliError::Io {
         path: path.clone(),
         source: e,

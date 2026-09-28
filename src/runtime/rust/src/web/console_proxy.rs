@@ -333,43 +333,21 @@ fn pick_free_port() -> Option<u16> {
     Some(port)
 }
 
-/// Gate → pick port → spawn the pre-built console child → wait for readiness →
-/// init the proxy state + shutdown hook. Returns `true` when the reverse proxy
-/// is live (the caller mounts `proxy_routes` instead of the in-process console);
-/// `false` on gate-closed / binary-absent / spawn-fail / readiness-timeout
-/// (caller mounts the in-process console fallback — no side effects left behind).
+/// The console child's data store path.
 ///
-/// Reads the parent's `IPE_CONSOLE_DB_PATH` (the telemetry spill D writes) and
-/// wires it to the child's `IPE_CONSOLE_HUB_DB` so the dashboard renders what
-/// the parent recorded. Decided BEFORE the router is built so both the proxy and
-/// the in-process fallback sit under the same observability middleware.
-/// The console child's data store path. The user's `IPE_CONSOLE_DB_PATH` when
-/// set (durable history at their chosen location), else an internal per-process
-/// temp file so the console works zero-config (a lean app gets a live console
-/// without configuring durability).
-fn console_store_path() -> String {
+/// The user's `IPE_CONSOLE_DB_PATH` when set (durable history at their chosen
+/// location); otherwise `console.db` inside a fresh private scratch directory,
+/// so the console works zero-config without a path another local user could
+/// predict, pre-create, or redirect.
+///
+/// # Errors
+/// The scratch-creation error when no private directory can be made under the
+/// system temp directory; the caller then serves the in-process console.
+fn console_store_path() -> std::io::Result<String> {
     match crate::system::read_env_var("IPE_CONSOLE_DB_PATH") {
-        Ok(p) if !p.is_empty() => p,
-        // Default to a per-process file in the temp dir, but add an UNGUESSABLE
-        // suffix: a bare `ipe-console-<pid>.db` is predictable, so a local
-        // attacker on the shared temp dir could pre-create that path (or a
-        // symlink) and hijack/redirect the console store (TOCTOU). The nonce is
-        // OS-seeded via RandomState (std-only — no new crate in this shared
-        // module). Computed once per process and passed to the child via env.
-        _ => {
-            use std::hash::{BuildHasher, Hasher};
-            let nonce = std::collections::hash_map::RandomState::new()
-                .build_hasher()
-                .finish();
-            std::env::temp_dir()
-                .join(format!(
-                    "ipe-console-{}-{:016x}.db",
-                    std::process::id(),
-                    nonce
-                ))
-                .to_string_lossy()
-                .into_owned()
-        }
+        Ok(p) if !p.is_empty() => Ok(p),
+        _ => crate::file::private_temp_dir("ipe-console")
+            .map(|dir| dir.join("console.db").to_string_lossy().into_owned()),
     }
 }
 
@@ -388,6 +366,19 @@ fn parent_spill_active() -> bool {
     }
 }
 
+/// Start the console child behind the reverse proxy, or report the fallback.
+///
+/// Gate → pick port → spawn the pre-built console child → wait for readiness →
+/// init the proxy state + shutdown hook. Returns `true` when the reverse proxy
+/// is live (the caller mounts `proxy_routes` instead of the in-process console);
+/// `false` on gate-closed / binary-absent / no-private-store / spawn-fail /
+/// readiness-timeout
+/// (caller mounts the in-process console fallback — no side effects left behind).
+///
+/// Reads the parent's `IPE_CONSOLE_DB_PATH` (the telemetry spill D writes) and
+/// wires it to the child's `IPE_CONSOLE_HUB_DB` so the dashboard renders what
+/// the parent recorded. Decided BEFORE the router is built so both the proxy and
+/// the in-process fallback sit under the same observability middleware.
 pub async fn ensure_console_proxy() -> bool {
     if !super::console::gate_allows() {
         return false;
@@ -402,7 +393,16 @@ pub async fn ensure_console_proxy() -> bool {
     //     directly; the child only reads it. No push.
     //   - lean/memory parent → the child collects: the parent PUSHES its in-RAM
     //     telemetry to the child, which writes + reads the store.
-    let store = console_store_path();
+    let store = match console_store_path() {
+        Ok(store) => store,
+        Err(e) => {
+            crate::system::emit_runtime_log(
+                "console",
+                &format!("no private console store ({e}); falling back to in-process console"),
+            );
+            return false;
+        }
+    };
     let parent_writes = parent_spill_active();
     let port = match pick_free_port() {
         Some(p) => p,

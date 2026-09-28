@@ -904,9 +904,10 @@ mod lexical {
             reason: "the home names the audited reader refuses; reads nothing",
         },
         Allowed {
-            file: "src/compiler/sandbox/src/scratch.rs",
+            file: "src/runtime/rust/src/scratch.rs",
             func: "PROFILE_VAR",
-            reason: "names the profile variable in a refusal message; the read is `home::home_dir`",
+            reason: "names the profile variable a non-unix scratch base is proven inside; the \
+                     scratch core refuses an unset, empty, or relative value",
         },
         Allowed {
             file: "src/ipe-cli/src/audit_native.rs",
