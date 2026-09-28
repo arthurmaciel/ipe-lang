@@ -9,5 +9,9 @@ ipe_path_core = { path = "../path-core" }
 ipe_env = { path = "../env" }
 unicode-width = "0.1"
 
+[dev-dependencies]
+# The Unicode general-category data the format-character deny table is checked against.
+unicode-general-category = "1"
+
 [lints]
 workspace = true

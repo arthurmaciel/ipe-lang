@@ -394,7 +394,7 @@ impl VettedSibling<'_> {
             .open()
             .map_err(|source| io_bounded::open_error(&self.path, source))?;
         let file = io_bounded::regular_file(file, &self.path)?;
-        io_bounded::read_open_file_capped(file, &self.path, cap).map(|source| (self.path, source))
+        io_bounded::read_opened_capped(file, &self.path, cap).map(|source| (self.path, source))
     }
 
     /// Open the sibling beneath the directory handle, refusing every symlink.

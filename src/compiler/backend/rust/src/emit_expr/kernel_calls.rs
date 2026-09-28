@@ -23,8 +23,13 @@ use core::fmt::Write as _;
 ///
 /// `None` when the callee does not reverse, the call is not the two-argument
 /// `f container` shape, or `f` captures none of `container`'s free variables —
-/// the caller then emits `container` unchanged.
-pub fn swapped_container_clone_rewrite(callee: &Callee, args: &[Expr]) -> Option<Expr> {
+/// the caller then emits `container` unchanged. `payloads` is the named enums'
+/// variant payload table the rewrite's inlined-`let` decision reads.
+pub fn swapped_container_clone_rewrite(
+    callee: &Callee,
+    args: &[Expr],
+    payloads: &ipe_ir::EnumPayloadTable,
+) -> Option<Expr> {
     if !callee.evaluates_args_reversed() {
         return None;
     }
@@ -44,7 +49,7 @@ pub fn swapped_container_clone_rewrite(callee: &Callee, args: &[Expr]) -> Option
     if targets.is_empty() {
         return None;
     }
-    Some(clone_targets_in_expr(container.clone(), &targets))
+    Some(clone_targets_in_expr(container.clone(), &targets, payloads))
 }
 
 /// Whether a `Call` node hits one of the bespoke kernel special cases the

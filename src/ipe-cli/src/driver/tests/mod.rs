@@ -610,6 +610,7 @@ fn false_marker() -> bool {
 
 /// Creates a temp directory with a nested `src/Main.ipe` and a `package.ipe`
 /// at the project root, confirming the upward walk finds the manifest.
+#[cfg(unix)]
 #[test]
 fn find_manifest_walks_up_to_project_root() {
     let tmp = std::env::temp_dir().join("ipec_find_manifest_test");
@@ -625,11 +626,34 @@ fn find_manifest_walks_up_to_project_root() {
     let main_ipe = src.join("Main.ipe");
     fs::write(&main_ipe, "module Main exposing (main)\nmain = 0\n").expect("write Main.ipe");
 
-    let found = find_manifest_for_ipe_file(&main_ipe);
+    let found = find_manifest_for_ipe_file(&main_ipe).expect("owned manifest is trusted");
     assert_eq!(
         found.as_deref(),
         Some(manifest.as_path()),
         "upward walk must find package.ipe at project root"
+    );
+    let _ = fs::remove_dir_all(&tmp);
+}
+
+/// Off Unix a manifest found above a file entry cannot be owner-checked, so
+/// the walk refuses it, naming the explicit-directory fix — the fail-closed
+/// twin of `find_manifest_walks_up_to_project_root`.
+#[cfg(not(unix))]
+#[test]
+fn find_manifest_refuses_an_unverifiable_manifest() {
+    let tmp = std::env::temp_dir().join("ipec_find_manifest_unverifiable_test");
+    let _ = fs::remove_dir_all(&tmp);
+    let src = tmp.join("src");
+    fs::create_dir_all(&src).expect("create src/");
+    let manifest = tmp.join("package.ipe");
+    fs::write(&manifest, "module Package exposing (package)\n").expect("write package.ipe");
+    let main_ipe = src.join("Main.ipe");
+    fs::write(&main_ipe, "module Main exposing (main)\nmain = 0\n").expect("write Main.ipe");
+
+    let refused = find_manifest_for_ipe_file(&main_ipe);
+    assert!(
+        matches!(&refused, Err(crate::CliError::Usage(msg)) if *msg == crate::text::msg::manifest_unverifiable(&manifest.display())),
+        "{refused:?}"
     );
     let _ = fs::remove_dir_all(&tmp);
 }
@@ -912,7 +936,7 @@ fn find_manifest_returns_none_when_absent() {
     // on all systems, so we only assert non-panicking behaviour and that
     // the returned path (if Some) is a real file.
     let found = find_manifest_for_ipe_file(&ipe);
-    if let Some(ref p) = found {
+    if let Ok(Some(ref p)) = found {
         assert!(p.is_file(), "if Some, the manifest must exist on disk");
     }
     let _ = fs::remove_dir_all(&tmp);

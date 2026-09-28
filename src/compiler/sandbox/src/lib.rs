@@ -97,7 +97,9 @@ impl From<SandboxDefect> for SandboxError {
                     .to_owned()
             }
         };
-        Self::BuildJail { detail }
+        Self::BuildJail {
+            detail: detail.into(),
+        }
     }
 }
 

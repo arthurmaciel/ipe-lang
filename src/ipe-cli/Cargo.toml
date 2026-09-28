@@ -89,7 +89,7 @@ hex = "0.4"
 # `getrandom` is a thin cross-platform wrapper over each target's real CSPRNG
 # (`getrandom(2)`/`/dev/urandom` on Unix, `BCryptGenRandom` on Windows), so the
 # security control has no silent non-CSPRNG fallback on any released target.
-getrandom = "0.3"
+getrandom = { version = "0.3", features = ["std"] }
 # `ipe login`'s opt-in signing-key setup (`src/ssh_signing_key.rs`) generates an
 # ed25519 keypair in process — no `ssh-keygen` subprocess, so no argv or PATH
 # exposure — and encodes it in the OpenSSH format. `ed25519-dalek` (already in the
@@ -178,7 +178,7 @@ wasmtime-wasi = { version = "35", default-features = false, features = ["preview
 # check adds no new vetted crate. Unix-only: the query has no portable analogue
 # on the non-Unix targets this CLI builds for.
 [target.'cfg(unix)'.dependencies]
-rustix = { version = "0.38", features = ["fs", "termios"] }
+rustix = { version = "0.38", features = ["fs", "process", "termios"] }
 
 # Held output-directory handles read a handle's volume serial number and file
 # index (`GetFileInformationByHandle`) through a safe wrapper, and open entries
@@ -194,6 +194,8 @@ winapi-util = "0.1"
 # `cargo build --message-format=json` parsing that locates the produced binary
 # lives in the `e2e_support` crate, so serde_json is pulled in transitively.
 e2e-support = { path = "../../tools/e2e-support" }
+# The by-path catalog reader the FFI negative tests load their own caches with.
+ipe_ffi = { path = "../compiler/ffi", features = ["testing"] }
 
 [lints]
 workspace = true

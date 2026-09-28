@@ -18,6 +18,7 @@ use ipe_ffi::driver::{CargoDep, CrateName, CrateSpec, FfiCache, InstalledCrate, 
 use ipe_ffi::pkginfo::FeatureName;
 
 use crate::CliError;
+use crate::owner_trust::{self, TrustedCache};
 use crate::text;
 
 /// The project-relative FFI cache directory.
@@ -31,60 +32,29 @@ const PROJECT_MANIFEST: &str = "package.ipe";
 /// work that lifts those bindings out of a `package.ipe`.
 const PROJECT_MANIFEST_TOML: &str = "ipe.toml";
 
-/// The invoking user's real uid, read from the owner of `/proc/self` (no FFI
-/// dependency). `u32::MAX` on failure — a sentinel no real cache dir matches,
-/// so a failed read refuses rather than accepts.
-#[cfg(unix)]
-fn current_uid() -> u32 {
-    use std::os::unix::fs::MetadataExt as _;
-    std::fs::metadata("/proc/self").map_or(u32::MAX, |m| m.uid())
-}
-
-/// Whether a path is owned by the current uid and not world-writable — an FFI
-/// cache anyone can write is a code-injection delivery vector (its
-/// `_bindings.rs` compiles unsandboxed into the crate), so it is refused
-/// rather than loaded. Group-writability is not rejected: a default umask of
-/// `0o002` makes user-created dirs group-writable under the user's own private
-/// group, and rejecting that would refuse every legitimately-installed cache;
-/// the load-time re-derivation gate is the primary barrier, this narrows the
-/// discovery surface.
-#[cfg(unix)]
-fn is_trusted_cache_dir(dir: &Path) -> bool {
-    use std::os::unix::fs::MetadataExt as _;
-    std::fs::metadata(dir).is_ok_and(|md| md.uid() == current_uid() && md.mode() & 0o002 == 0)
-}
-
-#[cfg(not(unix))]
-fn is_trusted_cache_dir(_dir: &Path) -> bool {
-    true
-}
-
 /// Walk up from `start` looking for an FFI artifact cache, bounded at the
 /// nearest `package.ipe` project root.
 ///
 /// Never walks above the nearest `package.ipe`, so a planted ancestor cache
-/// outside the project cannot be discovered. A found cache not owned by the
-/// invoking uid (or group/other-writable) is REFUSED, not loaded, since its
-/// `_bindings.rs` compiles unsandboxed into the crate.
+/// outside the project cannot be discovered. A found cache is held open
+/// through no-follow handles once every component below the directory it was
+/// found in passed the owner rule (see [`owner_trust::open_cache`]); one
+/// reached through a link, or writable by another user, is REFUSED, not
+/// loaded, since its `_bindings.rs` compiles unsandboxed into the crate.
 ///
 /// # Errors
 ///
-/// [`CliError::Usage`] when a discovered cache fails the ownership check.
-pub fn find_cache_root(start: &Path) -> Result<Option<PathBuf>, CliError> {
+/// [`CliError::Usage`] when a discovered cache fails the ownership check;
+/// [`CliError::Io`] when a component cannot be opened.
+pub fn find_cache_root(start: &Path) -> Result<Option<TrustedCache>, CliError> {
     let mut dir = if start.is_dir() {
         Some(start)
     } else {
         start.parent()
     };
     while let Some(d) = dir {
-        let candidate = d.join(CACHE_REL);
-        if candidate.is_dir() {
-            if is_trusted_cache_dir(&candidate) {
-                return Ok(Some(candidate));
-            }
-            return Err(CliError::Usage(text::msg::ffi_cache_untrusted(
-                &candidate.display(),
-            )));
+        if let Some(cache) = owner_trust::open_cache(d, CACHE_REL)? {
+            return Ok(Some(cache));
         }
         // Stop at the project root: do not walk above the nearest package.ipe.
         if d.join(PROJECT_MANIFEST).is_file() {
@@ -99,14 +69,24 @@ pub fn find_cache_root(start: &Path) -> Result<Option<PathBuf>, CliError> {
 /// `blame_path`. Absent cache ⇒ empty catalog.
 ///
 /// # Errors
-/// [`CliError::Pipeline`] wrapping the catalog loader's diagnostic (a
-/// tampered or half-written cache is refused, never silently skipped).
+/// [`CliError::Usage`] relaying the catalog loader's diagnostic (a tampered
+/// or half-written cache is refused, never silently skipped), or refusing a
+/// cache entry that fails the owner rule.
 pub fn load_catalog_for(blame_path: &Path) -> Result<Vec<InstalledCrate>, CliError> {
-    let Some(cache_root) = find_cache_root(blame_path)? else {
-        return Ok(Vec::new());
+    load_located_catalog(blame_path).map(|(catalog, _)| catalog)
+}
+
+/// The catalog for `blame_path` with the path of the cache it was read from
+/// (empty when no cache exists), from one discovery walk.
+///
+/// # Errors
+/// As [`load_catalog_for`].
+fn load_located_catalog(blame_path: &Path) -> Result<(Vec<InstalledCrate>, PathBuf), CliError> {
+    let Some(cache) = find_cache_root(blame_path)? else {
+        return Ok((Vec::new(), PathBuf::new()));
     };
-    ipe_ffi::driver::load_catalog(&cache_root)
-        .map_err(|diag| CliError::Usage(crate::text::Message::relay(&diag)))
+    let catalog = ipe_ffi::driver::load_catalog_from(&cache)?;
+    Ok((catalog, cache.path().to_path_buf()))
 }
 
 /// Inject each installed crate's interface module into the build's source
@@ -499,7 +479,7 @@ pub fn prepare_ffi(
     sources: &mut BTreeMap<Vec<String>, (PathBuf, String)>,
     blame_path: &Path,
 ) -> Result<FfiPrep, CliError> {
-    let mut catalog = load_catalog_for(blame_path)?;
+    let (mut catalog, cache_hint) = load_located_catalog(blame_path)?;
     // The asserted-call classifications lean on two unforgeable names: the
     // `Rust.Ffi` module and the `ipe_asserted_` wrapper prefix. No installed
     // crate may claim either — refused at load, before anything is injected.
@@ -529,7 +509,6 @@ pub fn prepare_ffi(
     // Scan for asserted calls BEFORE interface injection, while `sources`
     // holds only project (and stdlib) modules.
     let ScannedFfi { asserted, consts } = scan_asserted(sources, &catalog)?;
-    let cache_hint = find_cache_root(blame_path)?.unwrap_or_default();
     let mut injected = inject_interfaces(sources, &catalog, &cache_hint)?;
     let mut emit = assemble_emit(&catalog)?;
     if !asserted.is_empty() || !consts.is_empty() {
@@ -1742,9 +1721,10 @@ fn ffi_build_error(diag: ipe_ffi::diag::Diagnostic) -> CliError {
 }
 
 /// Emit the raw inspector error log to stderr — the `--verbose` escape hatch
-/// behind the summarised build diagnostic. Each line is stripped of control
-/// characters (except tab) so raw build-script stderr cannot forge terminal
-/// markup. A document with no error channel prints nothing.
+/// behind the summarised build diagnostic. Each line renders as inline
+/// [`TerminalSafe`](crate::style::TerminalSafe), so raw build-script stderr
+/// cannot forge terminal markup or an output line. A document with no error
+/// channel prints nothing.
 fn emit_raw_inspector_log(inspection_json: &str) {
     let log = ipe_ffi::driver::inspection_error_log(inspection_json);
     if log.is_empty() {
@@ -1756,10 +1736,7 @@ fn emit_raw_inspector_log(inspection_json: &str) {
         "raw inspector log (--verbose):",
     );
     for line in &log {
-        let clean: String = line
-            .chars()
-            .filter(|c| *c == '\t' || !c.is_control())
-            .collect();
+        let clean = crate::style::TerminalSafe::sanitize(line);
         crate::screen::chatter(
             crate::screen::Stream::Stderr,
             crate::screen::Tone::Aux,
@@ -1956,8 +1933,9 @@ fn reject_legacy_define_tables(text: &str) -> Result<(), CliError> {
 /// Used by the package audit gate to regenerate bindings from the pinned crates
 /// rather than trusting any committed cache. The generated artifacts are written
 /// into the project's own `.ipe/cache/ffi/rust` directory, so the audit gate's
-/// ownership check (`is_trusted_cache_dir`) passes — the directory is created by
-/// the invoking process under the invoking uid, not world-writable.
+/// ownership check ([`owner_trust::open_cache`]) passes — the directory is
+/// created by the invoking process under the invoking uid, and no other user
+/// can write it.
 ///
 /// `allow_build_scripts` controls whether the bwrap-jailed inspector runs each
 /// crate's build scripts. The audit gate always passes `true` because build
@@ -3966,10 +3944,11 @@ version = \"1\"
         // Discovery from inside the project must NOT climb past package.ipe to the
         // planted ancestor cache — it returns None.
         let found = find_cache_root(&src).expect("no error");
-        assert_eq!(found, None, "must not discover the ancestor cache");
+        assert!(found.is_none(), "must not discover the ancestor cache");
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
+    #[cfg(unix)]
     #[test]
     fn owned_project_cache_is_discovered() {
         let tmp = std::env::temp_dir().join(format!("ipe-t1-owncache-{}", std::process::id()));
@@ -3983,7 +3962,32 @@ version = \"1\"
         .expect("manifest");
         // The invoker owns a freshly-created dir, so it is trusted + found.
         let found = find_cache_root(&tmp).expect("no error");
-        assert_eq!(found.as_deref(), Some(cache.as_path()));
+        assert_eq!(
+            found.as_ref().map(TrustedCache::path),
+            Some(cache.as_path())
+        );
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// On a host with no portable owner check, even a freshly-created, invoker-owned cache is
+    /// refused — the fail-closed twin of `owned_project_cache_is_discovered`.
+    #[cfg(not(unix))]
+    #[test]
+    fn owned_project_cache_is_refused_when_unverifiable() {
+        let tmp = std::env::temp_dir().join(format!("ipe-t1-owncache-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        let cache = tmp.join(CACHE_REL);
+        std::fs::create_dir_all(&cache).expect("mk cache");
+        std::fs::write(
+            tmp.join("package.ipe"),
+            "module Package exposing (package)\n",
+        )
+        .expect("manifest");
+        let result = find_cache_root(&tmp);
+        assert!(matches!(result, Err(CliError::Usage(_))), "{result:?}");
+        if let Err(CliError::Usage(msg)) = result {
+            assert_eq!(msg, text::msg::ffi_cache_unverifiable(&cache.display()));
+        }
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
@@ -4005,6 +4009,9 @@ version = \"1\"
         std::fs::set_permissions(&cache, std::fs::Permissions::from_mode(0o777)).expect("chmod");
         let r = find_cache_root(&tmp);
         assert!(matches!(r, Err(CliError::Usage(_))), "{r:?}");
+        if let Err(CliError::Usage(msg)) = r {
+            assert_eq!(msg, text::msg::ffi_cache_untrusted(&cache.display()));
+        }
         let _ = std::fs::remove_dir_all(&tmp);
     }
 

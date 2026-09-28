@@ -777,9 +777,9 @@ fn run_bundle_lookup(key: &str, format: OutputFormat) -> Result<(), CliError> {
                 .map(|e| format!("  {}:{}", kind, e.key))
                 .collect();
             let hint = if near.is_empty() {
-                String::from("  (no entries in this kind)")
+                text::TerminalBlock::lines(["  (no entries in this kind)"])
             } else {
-                near.join("\n")
+                text::TerminalBlock::lines(near)
             };
             Err(CliError::Usage(text::msg::doc_no_entry_for_key(
                 &kind, &k, &hint,

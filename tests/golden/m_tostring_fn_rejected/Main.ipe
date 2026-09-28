@@ -9,4 +9,4 @@ addOne x =
 
 
 main =
-    Io.println (toString addOne)
+    Io.println """{{addOne}}"""

@@ -887,7 +887,7 @@ impl std::fmt::Display for CliError {
                 let fixed_in = p
                     .fixed_in
                     .as_ref()
-                    .map(|v| text::cli_advisory_fixed_in(v))
+                    .map(|v| String::from(text::cli_advisory_fixed_in(v)))
                     .unwrap_or_default();
                 f.write_str(&text::cli_advisory_vulnerable(
                     &p.package,
@@ -1060,11 +1060,11 @@ pub fn fmt_emitted_build_failed(
         // not the user's source: a calm, actionable message with no bug-report
         // invitation.
         EmittedBuildCause::RegistryUnreachable => {
-            let detail = if trimmed.is_empty() {
+            let detail = String::from(if trimmed.is_empty() {
                 text::cli_cargo_fetch_failed(code, what)
             } else {
                 text::cli_cargo_fetch_failed_detail(code, what, &trimmed)
-            };
+            });
             let d = Diagnostic::RegistryUnreachable { detail };
             f.write_str(&render(&d, "", ""))
         }
@@ -1073,11 +1073,11 @@ pub fn fmt_emitted_build_failed(
         // embeds the full cargo stderr, so a report carries everything needed to
         // reproduce the miscompile.
         EmittedBuildCause::Miscompile => {
-            let detail = if trimmed.is_empty() {
+            let detail = String::from(if trimmed.is_empty() {
                 text::cli_cargo_compile_failed(code, what)
             } else {
                 text::cli_cargo_compile_failed_detail(code, what, &trimmed)
-            };
+            });
             let ice = Diagnostic::CompilerBug {
                 where_: "emit.cargo_build",
                 detail,

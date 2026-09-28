@@ -238,7 +238,7 @@ fn open_nonblocking(path: &Path, final_link: FinalLink) -> Result<File, CliError
 /// - [`CliError::Io`] (kind `InvalidData`) if the content is not valid UTF-8.
 pub fn read_to_string_capped(path: &Path, max: u64) -> Result<String, CliError> {
     let f = open_regular(path, FinalLink::Follow)?;
-    read_open_file_capped(f, path, max)
+    read_opened_capped(f, path, max)
 }
 
 /// Read a source file a no-follow walk found, refusing a final symlink swapped in since.
@@ -251,23 +251,29 @@ pub fn read_to_string_capped(path: &Path, max: u64) -> Result<String, CliError> 
 /// As [`read_to_string_capped`]; a final symlink is [`CliError::SourceRefused`].
 pub fn read_walked_source(path: &Path) -> Result<String, CliError> {
     let f = open_regular(path, FinalLink::Refuse)?;
-    read_open_file_capped(f, path, SOURCE_READ_CAP)
+    read_opened_capped(f, path, SOURCE_READ_CAP)
 }
 
-/// Read an already-open file to a `String` under the same ceiling as [`read_to_string_capped`].
+/// Read an already-opened `reader` to a `String` under the same `max`-byte
+/// ceiling as [`read_to_string_capped`]: the single cap implementation.
 ///
 /// For callers that vetted the handle itself (an `fstat` after an
-/// `O_NOFOLLOW` open) and must read from THAT handle, not reopen the path.
-/// `path` only names the file in errors.
+/// `O_NOFOLLOW` open, or a held, owner-checked handle) and must read from
+/// THAT handle, not reopen the path. `path` only names the file in errors.
 ///
 /// # Errors
 ///
-/// - [`CliError::Io`] if the file cannot be read.
-/// - [`CliError::FileTooLarge`] if the file exceeds `max` bytes.
+/// - [`CliError::Io`] if the reader fails.
+/// - [`CliError::FileTooLarge`] if it yields more than `max` bytes.
 /// - [`CliError::Io`] (kind `InvalidData`) if the content is not valid UTF-8.
-pub fn read_open_file_capped(f: File, path: &Path, max: u64) -> Result<String, CliError> {
+pub fn read_opened_capped(
+    reader: impl std::io::Read,
+    path: &Path,
+    max: u64,
+) -> Result<String, CliError> {
     let mut buf = Vec::new();
-    f.take(max.saturating_add(1))
+    reader
+        .take(max.saturating_add(1))
         .read_to_end(&mut buf)
         .map_err(|e| CliError::Io {
             path: path.to_path_buf(),

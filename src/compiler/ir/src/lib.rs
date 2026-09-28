@@ -11,19 +11,27 @@
 //! otherwise. A backend that receives a [`Program`] never has to re-check
 //! exhaustiveness.
 
+mod enum_facts;
 pub mod free_vars;
+mod held;
 mod ir;
 pub mod let_inline;
 mod pretty;
 pub mod record_shapes;
 pub mod seq_clone;
 
+pub use enum_facts::{EnumTraits, RuntimeBridgedEnum, payload_leaf_is_clone};
+pub use held::{
+    EnumPayloadTable, MAX_HELD_WALK_DEPTH, Reach, enum_payload_holds, enum_payload_table,
+    ir_type_holds, ir_type_reaches,
+};
 pub use ir::{
-    Arm, BinOp, BoundSet, CallPin, Callee, EnumDef, EvalOrder, Expr, Func, FuncId, HtmlEventShape,
-    IrType, KernelClass, KernelFn, Match, ModPath, Module, OnFormKind, Pat, Program, RowParam,
-    RuntimeFeatureId, RuntimeModule, TypeDef, UiCtor, UiPlain, Variant, carrier_is_clone,
-    fun_value_arc_promotable, ir_type_feature_requirement, ir_type_has_effect_carrier,
-    ir_type_is_derivable, ir_type_is_serde, is_dispatch_free, is_irrefutable,
+    Arm, BinOp, BoundSet, CallPin, Callee, Carried, CarrierLeaf, EnumDef, EvalOrder, Expr, Func,
+    FuncId, HtmlEventShape, IrType, KernelClass, KernelFn, Match, ModPath, Module, OnFormKind, Pat,
+    Program, RowParam, RuntimeFeatureId, RuntimeModule, TypeDef, UiCtor, UiPlain, Variant,
+    carrier_is_clone, carrier_leaf, fun_value_arc_promotable, ir_type_feature_requirement,
+    ir_type_has_effect_carrier, ir_type_is_derivable, ir_type_is_serde, is_dispatch_free,
+    is_irrefutable,
 };
 pub use pretty::{MAX_IR_RENDER_DEPTH, pretty};
 

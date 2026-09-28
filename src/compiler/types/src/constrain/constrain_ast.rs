@@ -19,8 +19,10 @@ pub enum ObligationKind {
     SetMapResult,
     /// `Db.*` params-list element carrying the SQL-bind-parameter bound.
     SqlParam,
-    /// `Log.*With` / `Debug.log` stringified value (Show).
+    /// `Debug.log` stringified value (Show).
     Show,
+    /// `Log.*With` attribute-list element (the closed interpolable scalar set).
+    Interpolable,
     /// `Web.tea` / `Web.embed` Model var (routed-Web page-field check).
     WebModel,
     /// `Web.tea` / `Web.embed` notFound var (routed-Web page-field check).
@@ -64,10 +66,10 @@ pub const OBLIGATION_SLOTS: &[(StdlibKernel, u32, ObligationKind)] = {
         (K::DbQueryDecode, 1, O::SqlParam),
         (K::DbConnQueryDecode, 1, O::SqlParam),
         // `Log.*With` list element / `Debug.log` value — Show, raw var 0.
-        (K::LogInfoWith, 0, O::Show),
-        (K::LogDebugWith, 0, O::Show),
-        (K::LogWarnWith, 0, O::Show),
-        (K::LogErrorWith, 0, O::Show),
+        (K::LogInfoWith, 0, O::Interpolable),
+        (K::LogDebugWith, 0, O::Interpolable),
+        (K::LogWarnWith, 0, O::Interpolable),
+        (K::LogErrorWith, 0, O::Interpolable),
         (K::DebugLog, 0, O::Show),
         // `Web.tea` / `Web.embed` — Model var 0, notFound var 2.
         (K::WebApp, 0, O::WebModel),
@@ -589,18 +591,24 @@ impl Builder<'_> {
                 let list_s2 = self.list_var(s)?;
                 return self.structure(FlatType::Fun(list_s, list_s2));
             }
-            // `Basics.toString : a -> String`. The argument carries the
-            // STRINGIFY obligation (a bounded super-var → Rust `IpeStringify`):
-            // a scalar / record / ADT satisfies it, a bare function (or a value
-            // nesting one) fails CLOSED at type-check rather than emitting an
-            // unbounded `basics_to_string::<T>` that `cargo` rejects. Direct-build
-            // (not stdlib_scheme + tie): only the argument position is bounded.
-            // This is the shared lever for the whole Stringify-bounded family
-            // (Log.*With / Debug.toString) — wire those the same way.
-            if matches!(
-                k,
-                StdlibKernel::BasicsToString | StdlibKernel::ErrorToString
-            ) {
+            // `{{expr}}` interpolation (`Interpolate : a -> String`). The
+            // argument carries the INTERPOLABLE obligation (a bounded super-var
+            // → the sealed Rust `IpeInterpolate`): only the closed scalar set
+            // `String` / `Int` / `Float` / `Bool` / `Char` satisfies it; a
+            // record, ADT, container, opaque runtime type or function fails
+            // CLOSED at type-check (IPE-T0014) rather than reaching a Debug
+            // rendering or an unbounded `interpolate_to_string::<T>` that
+            // `cargo` rejects. Direct-build (not stdlib_scheme + tie): only the
+            // argument position is bounded.
+            if matches!(k, StdlibKernel::Interpolate) {
+                let s = self.super_var(TyBounds::interpolable(), span)?;
+                let string_ty = self.string_var()?;
+                return self.structure(FlatType::Fun(s, string_ty));
+            }
+            // `Error.toString`. The argument carries the STRINGIFY obligation
+            // (a bounded super-var → Rust `IpeStringify`): a bare function (or a
+            // value nesting one) fails CLOSED at type-check.
+            if matches!(k, StdlibKernel::ErrorToString) {
                 let s = self.super_var(TyBounds::show(), span)?;
                 let string_ty = self.string_var()?;
                 return self.structure(FlatType::Fun(s, string_ty));
@@ -707,10 +715,12 @@ impl Builder<'_> {
                 return Ok(var);
             }
             // `Log.*With : String -> List a -> Task Error ()` — the attr-list
-            // ELEMENT `a` carries the STRINGIFY obligation. Same
-            // `stdlib_scheme` + tie shape as Dict/Set: instantiate the base
-            // scheme and tie its list-element `var(0)` to a Show super-var, so a
-            // non-showable element (a function) fails closed at type-check.
+            // ELEMENT `a` carries the INTERPOLABLE obligation (the same closed
+            // scalar set as `{{…}}`). Same `stdlib_scheme` + tie shape as
+            // Dict/Set: instantiate the base scheme and tie its list-element
+            // `var(0)` to an interpolable super-var, so a record, ADT,
+            // container, opaque runtime type (a `Secret`, a `Request`) or
+            // function element fails closed at type-check.
             if matches!(
                 k,
                 StdlibKernel::LogInfoWith
@@ -724,24 +734,24 @@ impl Builder<'_> {
                 })?;
                 let (var, vars) = self.instantiate_tracked(&ty)?;
                 self.tie_hof_results(k, &vars, span)?;
-                let slot =
-                    Self::obligation_slot(k, ObligationKind::Show).ok_or(Diagnostic::Lower {
+                let slot = Self::obligation_slot(k, ObligationKind::Interpolable).ok_or(
+                    Diagnostic::Lower {
                         span,
                         msg: LowerError::Unsupported(Feature::Kernels),
-                    })?;
+                    },
+                )?;
                 let elem_var = *vars.get(&slot).ok_or(Diagnostic::Lower {
                     span,
                     msg: LowerError::Unsupported(Feature::Kernels),
                 })?;
-                let s = self.super_var(TyBounds::show(), span)?;
+                let s = self.super_var(TyBounds::interpolable(), span)?;
                 self.eq(span, elem_var, s);
                 return Ok(var);
             }
             // `Debug.log : String -> a -> a` — the value `a` (shared by the
             // argument and result, raw scheme-var 0) carries the STRINGIFY
-            // obligation (the runtime stringifies it through the same
-            // `IpeStringify` path as `Basics.toString`). Same `stdlib_scheme` +
-            // tie shape as `Log.*With`: tying the ONE super-var to both
+            // obligation (the runtime stringifies it through `IpeStringify`).
+            // Same `stdlib_scheme` + tie shape as `Log.*With`: tying the ONE super-var to both
             // positions keeps `Debug.log Int 5` (concrete, satisfies `show`)
             // accepted while a bare-function value fails closed — no spurious
             // IPE-L0108 for a well-typed showable value.

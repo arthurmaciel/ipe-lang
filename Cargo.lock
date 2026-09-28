@@ -3204,6 +3204,7 @@ version = "0.3.1"
 dependencies = [
  "ipe_env",
  "ipe_path_core",
+ "unicode-general-category",
  "unicode-width",
 ]
 

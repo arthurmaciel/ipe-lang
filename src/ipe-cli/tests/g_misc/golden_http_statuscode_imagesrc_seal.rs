@@ -85,11 +85,11 @@ fn statuscode_seal_builds_and_runs() {
         "statuscode_seal: emitted crate must build and exit 0; stdout:\n{}",
         outcome.stdout
     );
-    let expected = "code=200 ok=True\n\
-                    code=301 redirect=True\n\
-                    code=404 client=True\n\
-                    code=500 server=True\n\
-                    neg=False";
+    let expected = "code=200 ok=true\n\
+                    code=301 redirect=true\n\
+                    code=404 client=true\n\
+                    code=500 server=true\n\
+                    neg=false";
     assert_eq!(
         outcome.stdout.trim(),
         expected,

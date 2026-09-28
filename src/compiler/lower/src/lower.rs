@@ -26,10 +26,10 @@ use ipe_intern::{Interner, Symbol};
 use ipe_ir::free_vars::{pat_bound_symbols, pat_moves_nested_part, pat_moves_scrutinee};
 use ipe_ir::let_inline::{inlined_let_body, let_value_is_inlined};
 use ipe_ir::{
-    AppSurface, Arm, BinOp, BoundSet, CallPin, Callee, Capability, EnumDef, Expr, Func, FuncId,
-    IrType, KernelFn, Match, ModPath, Module, OnFormKind, Pat, Program, RowParam, RuntimeModule,
-    TypeDef, UiCtor, UiPlain, Variant, fun_value_arc_promotable, ir_type_has_effect_carrier,
-    ir_type_is_serde, is_dispatch_free, is_irrefutable,
+    AppSurface, Arm, BinOp, BoundSet, CallPin, Callee, Capability, EnumDef, EnumPayloadTable, Expr,
+    Func, FuncId, IrType, KernelFn, Match, ModPath, Module, OnFormKind, Pat, Program, RowParam,
+    RuntimeModule, TypeDef, UiCtor, UiPlain, Variant, fun_value_arc_promotable,
+    ir_type_has_effect_carrier, ir_type_holds, ir_type_is_serde, is_dispatch_free, is_irrefutable,
 };
 use ipe_types::{RowTail, SolvedTypes, Ty, TyBounds};
 
@@ -2759,10 +2759,10 @@ fn count_var_uses(sym: Symbol, expr: &Expr) -> usize {
 //
 // Some runtime kernels are generic over a type parameter with a Rust trait bound
 // — `db_get_*<R: IpeRow>(field: String, row: &R)`,
-// `basics_to_string<T: std::fmt::Display>(v: T)`. When such a kernel is
+// `interpolate_to_string<T: IpeInterpolate>(v: T)`. When such a kernel is
 // applied to a value whose Ipê type is a generic/wildcard type-param, the
 // enclosing emitted function must carry the kernel's Rust bound on THAT generic
-// — otherwise the body's `db_get_string(_, &payload)` / `basics_to_string(x)`
+// — otherwise the body's `db_get_string(_, &payload)` / `interpolate_to_string(x)`
 // call cannot prove the bound and the program, well-typed to `ipe`, fails
 // `cargo build` with E0277 (a SEAL violation).
 //
@@ -2772,7 +2772,7 @@ fn count_var_uses(sym: Symbol, expr: &Expr) -> usize {
 // symbol like `dbGetLabel` that lowers to `main_db_get_label`). It fires iff the
 // body contains an actual bound-obliging KERNEL application whose OBLIGING
 // argument (the exact position the kernel bounds — arg 1 for `Db.get*`, arg 0
-// for `toString`) is a `Var`/`CloneVar` referencing the tracked param. This
+// for `{{…}}` interpolation) is a `Var`/`CloneVar` referencing the tracked param. This
 // forbids the false classes: a string literal is not a kernel `Call`; a
 // `db_get_`-named USER symbol is a `Call` to a `Callee::Local`/`FuncValue`, not
 // a `Callee::Kernel(..)`; and a call on a CONCRETE value does not reference the
@@ -2801,7 +2801,7 @@ const fn is_db_row_accessor(k: KernelFn) -> bool {
 /// `matcher(tracked, k, args)` answers, for the currently-tracked symbol
 /// `tracked`, whether the call `Callee::Kernel(k)` applied to `args` obligates
 /// it — e.g. `IpeRow`'s `is_db_row_accessor(k) && args[1] is Var(tracked)` (`IpeRow`),
-/// or stringify's `k == BasicsToString && args[0] is Var(tracked)` (`IpeStringify`). Every
+/// or interpolation's `k == Interpolate && args[0] is Var(tracked)` (`IpeInterpolate`). Every
 /// distinct kernel→bound obligation is expressed as one such matcher; the
 /// STRUCTURAL walk (shadow discipline + alias-transparency) is shared, so a new
 /// bound reuses this whole traversal by supplying only its own matcher.
@@ -4310,7 +4310,7 @@ fn apply_tea_carrier_bounds(
 /// ([`ir_type_generic_in_decoder`]).
 ///
 /// A kernel whose Rust signature bounds a type parameter — `db_get_*<R: IpeRow>`,
-/// `basics_to_string<T: std::fmt::Display>` — obliges that Rust bound on the Ipê
+/// `interpolate_to_string<T: IpeInterpolate>` — obliges that Rust bound on the Ipê
 /// generic its argument resolves to. When such a kernel is applied,
 /// alias-transparently, to a value whose type is `Generic(tv)`, we add the
 /// required bound to `tv`'s emitted generic so the body type-checks and
@@ -4352,13 +4352,13 @@ fn apply_kernel_type_param_bounds(
     // golden). `DbGetById` (arity 3) takes a `Db` handle, not a row, so it is
     // excluded by `is_db_row_accessor`.
     let ipe_row_matcher = obliges_ipe_row_bound;
-    // Stringify: a `Basics.toString(x)` application whose sole arg (index 0)
-    // is the tracked param. Applies to wildcard `any` AND named tvars — `toString`
-    // is legitimate on a polymorphic value, and `IpeStringify` is satisfiable by
-    // every scalar AND every composite caller (record/ADT/list/map), so no
-    // composite call site can exit-0-then-cargo-fail (see `BoundSet::SHOW`).
-    let stringify_matcher = |tracked: Symbol, k: KernelFn, args: &[Expr]| -> bool {
-        matches!(k, KernelFn::BasicsToString) && arg_is_tracked_var(args, 0, tracked)
+    // Interpolation: an `Interpolate(x)` application whose sole arg (index 0) is
+    // the tracked param. Applies to wildcard `any` AND named tvars. The bound is
+    // the sealed `IpeInterpolate` (the closed scalar set), the same set the type
+    // checker's interpolable obligation admits at every caller, so no call site
+    // can exit-0-then-cargo-fail (see `BoundSet::INTERPOLABLE`).
+    let interpolate_matcher = |tracked: Symbol, k: KernelFn, args: &[Expr]| -> bool {
+        matches!(k, KernelFn::Interpolate) && arg_is_tracked_var(args, 0, tracked)
     };
     // `Sub.subscribeWebSocket raw kind msg` — the bare `msg` (arg index 2) is
     // MOVED into the `sub_subscribe_ws_open<M: Send + 'static>` runtime fn (the
@@ -4401,9 +4401,9 @@ fn apply_kernel_type_param_bounds(
         if is_wildcard && fires_on(&ipe_row_matcher) {
             *bounds = bounds.with_ipe_row();
         }
-        // Stringify (`IpeStringify`) — wildcard OR named.
-        if fires_on(&stringify_matcher) {
-            *bounds = bounds.with_show();
+        // Interpolation (`IpeInterpolate`) — wildcard OR named.
+        if fires_on(&interpolate_matcher) {
+            *bounds = bounds.with_interpolable();
         }
         // `Send + 'static` — the bare `onOpen` msg moved into the
         // `sub_subscribe_ws_open` Source closure. Wildcard OR named (the msg is a
@@ -5850,10 +5850,11 @@ impl FnValueMoveState {
 /// a bare-`Box`-carried fn binding — exactly the reads the `Arc` carrier
 /// promotion must serve. A conservative branch merge (any branch's move marks
 /// the post-branch state consumed) fails toward promotion, which is always
-/// sound.
-fn fn_value_use_after_consume(sym: Symbol, expr: &Expr) -> bool {
+/// sound. `payloads` is the named enums' variant payload table the emitter's
+/// `let`-inlining decision reads.
+fn fn_value_use_after_consume(sym: Symbol, expr: &Expr, payloads: &EnumPayloadTable) -> bool {
     let mut state = FnValueMoveState::default();
-    fn_value_move_walk(sym, expr, &mut state);
+    fn_value_move_walk(sym, expr, &mut state, payloads);
     state.hazard
 }
 
@@ -5863,7 +5864,12 @@ fn fn_value_use_after_consume(sym: Symbol, expr: &Expr) -> bool {
 /// alternatives (`If`/`Match`) each continue from the pre-branch state; their
 /// hazards OR and their moves OR into the post-branch `consumed`.
 #[allow(clippy::too_many_lines)]
-fn fn_value_move_walk(sym: Symbol, expr: &Expr, state: &mut FnValueMoveState) {
+fn fn_value_move_walk(
+    sym: Symbol,
+    expr: &Expr,
+    state: &mut FnValueMoveState,
+    payloads: &EnumPayloadTable,
+) {
     match expr {
         Expr::Var(s) | Expr::CloneVar(s) => {
             if *s == sym {
@@ -5881,33 +5887,33 @@ fn fn_value_move_walk(sym: Symbol, expr: &Expr, state: &mut FnValueMoveState) {
             match func.as_ref() {
                 // Direct callee: a borrowing read, not a move.
                 Expr::Var(s) | Expr::CloneVar(s) if *s == sym => state.read(false),
-                other => fn_value_move_walk(sym, other, state),
+                other => fn_value_move_walk(sym, other, state, payloads),
             }
             for a in args {
-                fn_value_move_walk(sym, a, state);
+                fn_value_move_walk(sym, a, state, payloads);
             }
         }
         // A kernel whose runtime takes its arguments reversed evaluates them
         // last-to-first.
         Expr::Call { callee, args, .. } => {
             for a in callee.args_in_eval_order(args) {
-                fn_value_move_walk(sym, a, state);
+                fn_value_move_walk(sym, a, state, payloads);
             }
         }
         Expr::Ctor { args, .. } | Expr::TailRecur { args } => {
             for a in args {
-                fn_value_move_walk(sym, a, state);
+                fn_value_move_walk(sym, a, state, payloads);
             }
         }
         // An inlined `let` evaluates its value at each use site of `name`, not
         // at the binding (see [`ipe_ir::let_inline::inlined_let_body`]).
         Expr::Let { name, value, body } => {
-            if let Some(inlined) = inlined_let_body(*name, value, body) {
-                fn_value_move_walk(sym, &inlined, state);
+            if let Some(inlined) = inlined_let_body(*name, value, body, payloads) {
+                fn_value_move_walk(sym, &inlined, state, payloads);
             } else {
-                fn_value_move_walk(sym, value, state);
+                fn_value_move_walk(sym, value, state, payloads);
                 if *name != sym {
-                    fn_value_move_walk(sym, body, state);
+                    fn_value_move_walk(sym, body, state, payloads);
                 }
             }
         }
@@ -5916,63 +5922,63 @@ fn fn_value_move_walk(sym: Symbol, expr: &Expr, state: &mut FnValueMoveState) {
             value,
             body,
         } => {
-            fn_value_move_walk(sym, value, state);
+            fn_value_move_walk(sym, value, state, payloads);
             if !pat_binds_symbol(binder, sym) {
-                fn_value_move_walk(sym, body, state);
+                fn_value_move_walk(sym, body, state, payloads);
             }
         }
         Expr::If { cond, then_, else_ } => {
-            fn_value_move_walk(sym, cond, state);
-            *state = branch_merge(sym, *state, &[then_, else_]);
+            fn_value_move_walk(sym, cond, state, payloads);
+            *state = branch_merge(sym, *state, &[then_, else_], payloads);
         }
         Expr::Match(m) => {
-            fn_value_move_walk(sym, m.scrutinee(), state);
+            fn_value_move_walk(sym, m.scrutinee(), state, payloads);
             let bodies: Vec<&Expr> = m
                 .arms()
                 .iter()
                 .filter(|arm| !pat_binds_symbol(&arm.pat, sym))
                 .map(|arm| &arm.body)
                 .collect();
-            *state = branch_merge(sym, *state, &bodies);
+            *state = branch_merge(sym, *state, &bodies, payloads);
         }
         Expr::BinOp { lhs, rhs, .. } => {
-            fn_value_move_walk(sym, lhs, state);
-            fn_value_move_walk(sym, rhs, state);
+            fn_value_move_walk(sym, lhs, state, payloads);
+            fn_value_move_walk(sym, rhs, state, payloads);
         }
         Expr::Tuple(items) | Expr::List { items, .. } => {
             for e in items {
-                fn_value_move_walk(sym, e, state);
+                fn_value_move_walk(sym, e, state, payloads);
             }
         }
         Expr::Cons { head, tail } => {
-            fn_value_move_walk(sym, head, state);
-            fn_value_move_walk(sym, tail, state);
+            fn_value_move_walk(sym, head, state, payloads);
+            fn_value_move_walk(sym, tail, state, payloads);
         }
         Expr::ListIndexClone { list, .. } | Expr::ListLenCheck { list, .. } => {
-            fn_value_move_walk(sym, list, state);
+            fn_value_move_walk(sym, list, state, payloads);
         }
         Expr::Record { fields, .. } => {
             for (_, e) in fields {
-                fn_value_move_walk(sym, e, state);
+                fn_value_move_walk(sym, e, state, payloads);
             }
         }
         Expr::Update { record, fields } => {
-            fn_value_move_walk(sym, record, state);
+            fn_value_move_walk(sym, record, state, payloads);
             for (_, e) in fields {
-                fn_value_move_walk(sym, e, state);
+                fn_value_move_walk(sym, e, state, payloads);
             }
         }
         Expr::TaskSeq { effect, rest } => {
-            fn_value_move_walk(sym, effect, state);
-            fn_value_move_walk(sym, rest, state);
+            fn_value_move_walk(sym, effect, state, payloads);
+            fn_value_move_walk(sym, rest, state, payloads);
         }
         Expr::TailLoop { params, body } => {
             if !params.iter().any(|(s, _)| *s == sym) {
-                fn_value_move_walk(sym, body, state);
+                fn_value_move_walk(sym, body, state, payloads);
             }
         }
         Expr::Access { record, .. } => {
-            fn_value_move_walk(sym, record, state);
+            fn_value_move_walk(sym, record, state, payloads);
         }
         Expr::Int(_)
         | Expr::Bool(_)
@@ -5991,11 +5997,16 @@ fn fn_value_move_walk(sym: Symbol, expr: &Expr, state: &mut FnValueMoveState) {
 /// hazard propagates (OR), and the post-branch `consumed` is the OR of the
 /// branches' moves (a value moved in ANY branch is treated as possibly-moved
 /// afterward — the conservative direction, which only ever promotes more).
-fn branch_merge(sym: Symbol, pre: FnValueMoveState, branches: &[&Expr]) -> FnValueMoveState {
+fn branch_merge(
+    sym: Symbol,
+    pre: FnValueMoveState,
+    branches: &[&Expr],
+    payloads: &EnumPayloadTable,
+) -> FnValueMoveState {
     let mut merged = pre;
     for branch in branches {
         let mut s = pre;
-        fn_value_move_walk(sym, branch, &mut s);
+        fn_value_move_walk(sym, branch, &mut s, payloads);
         merged.hazard |= s.hazard;
         merged.consumed |= s.consumed;
     }
@@ -6129,7 +6140,7 @@ fn reject_nonclone_binding_reuse(
 ) -> DResult<()> {
     let inlined = matches!(
         site,
-        BindingSite::Let { value } if let_value_is_inlined(sym, value, scope)
+        BindingSite::Let { value } if let_value_is_inlined(sym, value, scope, env.payloads)
     );
     if inlined {
         Ok(())
@@ -6164,7 +6175,7 @@ fn reject_fn_value_reuse_for_count(
     fn_count: usize,
     span: Span,
 ) -> DResult<()> {
-    if ir_contains_fun(ir_ty)
+    if ir_contains_fun(ir_ty, env.payloads)
         && matches!(clone_class(env, ir_ty), CloneClass::NonClone)
         && fn_count > 1
     {
@@ -6472,6 +6483,8 @@ fn copy_record_fields(env: CloneEnv<'_>, ir_ty: &IrType) -> BTreeSet<Symbol> {
 struct NonCloneMoveState<'a> {
     /// The binding's `Copy` record fields; a pattern binder copies these out.
     copy_fields: &'a BTreeSet<Symbol>,
+    /// The named enums' variant payloads, for the move-only field test.
+    payloads: &'a EnumPayloadTable,
     /// A position has moved the whole binding.
     consumed: bool,
     /// A read observed a moved (or partially moved) value.
@@ -6482,9 +6495,10 @@ struct NonCloneMoveState<'a> {
 
 impl<'a> NonCloneMoveState<'a> {
     /// The state before any position of the scope has run.
-    const fn new(copy_fields: &'a BTreeSet<Symbol>) -> Self {
+    const fn new(copy_fields: &'a BTreeSet<Symbol>, payloads: &'a EnumPayloadTable) -> Self {
         Self {
             copy_fields,
+            payloads,
             consumed: false,
             hazard: false,
             partial: PartialMove::Intact,
@@ -6560,7 +6574,7 @@ impl<'a> NonCloneMoveState<'a> {
 /// sibling argument is a hazard, whichever order the emitter picks.
 fn nonclone_read_after_move(env: CloneEnv<'_>, sym: Symbol, ir_ty: &IrType, expr: &Expr) -> bool {
     let copy_fields = copy_record_fields(env, ir_ty);
-    let mut state = NonCloneMoveState::new(&copy_fields);
+    let mut state = NonCloneMoveState::new(&copy_fields, env.payloads);
     nonclone_move_walk(sym, expr, &mut state);
     state.hazard
 }
@@ -6594,7 +6608,7 @@ fn nonclone_move_walk(sym: Symbol, expr: &Expr, state: &mut NonCloneMoveState<'_
             field_ty,
         } => {
             if is_bare_sym(sym, record) {
-                if ir_type_has_effect_carrier(field_ty) {
+                if ir_type_has_effect_carrier(field_ty, state.payloads) {
                     state.move_field(*field);
                 } else {
                     state.read_field(*field);
@@ -6635,7 +6649,7 @@ fn nonclone_move_walk(sym: Symbol, expr: &Expr, state: &mut NonCloneMoveState<'_
         // at the binding: `let xs = [f w.tag] in g (consume w) xs xs` emits
         // `g(consume(w), vec![f(w.tag)], ..)`, a read of `w` after its move.
         Expr::Let { name, value, body } => {
-            if let Some(inlined) = inlined_let_body(*name, value, body) {
+            if let Some(inlined) = inlined_let_body(*name, value, body, state.payloads) {
                 nonclone_move_walk(sym, &inlined, state);
             } else {
                 nonclone_move_walk(sym, value, state);
@@ -7008,25 +7022,13 @@ fn reject_foreign_handle_reuse(
 /// user-enum payload? Such a handle is non-`Clone` by the foreign crate's
 /// decision, so a duplicating rewrite on it is unsound.
 fn ir_type_has_ffi_foreign_handle(env: CloneEnv<'_>, ty: &IrType) -> bool {
-    match ty {
-        IrType::Enum { home, name, args } => {
-            enum_is_opaque_ffi_handle(env, home, *name)
-                || args.iter().any(|a| ir_type_has_ffi_foreign_handle(env, a))
-        }
-        IrType::Maybe(e) | IrType::List(e) | IrType::Set(e) => {
-            ir_type_has_ffi_foreign_handle(env, e)
-        }
-        IrType::Result(a, b) | IrType::Dict(a, b) => {
-            ir_type_has_ffi_foreign_handle(env, a) || ir_type_has_ffi_foreign_handle(env, b)
-        }
-        IrType::Tuple(es) => es.iter().any(|e| ir_type_has_ffi_foreign_handle(env, e)),
-        IrType::Record(fields) => fields
-            .values()
-            .any(|e| ir_type_has_ffi_foreign_handle(env, e)),
-        IrType::Ui { msg, .. } => ir_type_has_ffi_foreign_handle(env, msg),
-        IrType::WebRoute(page) => ir_type_has_ffi_foreign_handle(env, page),
-        _ => false,
-    }
+    let is_handle = |t: &IrType| {
+        let IrType::Enum { home, name, .. } = t else {
+            return false;
+        };
+        enum_is_opaque_ffi_handle(env, home, *name)
+    };
+    ir_type_holds(ty, env.payloads, &is_handle)
 }
 
 // ── Fn-value Arc-carrier promotion (position-typed carrier model) ────────────
@@ -8734,10 +8736,10 @@ fn reachable_from_seeds<'a>(
 /// consumers — the emitted-binary prune and the package capability audit —
 /// seed from this one list, so a backend-synthesised call can never be kept by
 /// one and missed by the other.
-fn backend_invoked_roots<'a>(
-    funcs: impl Iterator<Item = &'a Func> + Clone,
-    interner: &Interner,
-) -> Vec<FuncId> {
+fn backend_invoked_roots<'a, I>(funcs: &I, interner: &Interner) -> Vec<FuncId>
+where
+    I: Iterator<Item = &'a Func> + Clone,
+{
     let mut roots: Vec<FuncId> = funcs
         .clone()
         .filter(|f| interner.resolve(f.name) == Some(ipe_ir::HYDRATION_PROJECTION_NAME))
@@ -8894,7 +8896,7 @@ fn prune_dead_type_decls(funcs: &[Func], types_ir: &mut Vec<TypeDef>, records: &
 /// * a **constructor / pattern head** (`Expr::Ctor` / `Pat::Ctor`) — a value
 ///   built or matched by naming a variant, which carries no `IrType` slot yet
 ///   forces the enum's declaration to be emitted. Missing this arm is an
-///   UNDER-prune: `toString (Circle 5)` names no `Shape` type in a signature,
+///   UNDER-prune: `"""{{Circle 5}}"""` names no `Shape` type in a signature,
 ///   so the enum would be dropped and the emitter would `enum_name`-ICE.
 ///
 /// The match is exhaustive over `Expr` (mirroring [`scan_kernel_usage`]) so a
@@ -9497,7 +9499,7 @@ pub fn capabilities_reached_from(
         .filter(|f| is_root_home(&f.home))
         .map(|f| f.id)
         .collect();
-    seeds.extend(backend_invoked_roots(funcs.clone(), interner));
+    seeds.extend(backend_invoked_roots(&funcs, interner));
     let ids = reachable_from_seeds(funcs.clone(), seeds);
     let live = funcs.filter(|f| ids.contains(&f.id));
     ReachedCapabilities {
@@ -10310,24 +10312,15 @@ fn rewrite_var_free_occurrences(
     }
 }
 
-/// Does `ty` structurally contain [`IrType::Decoder`] anywhere (itself, or
-/// nested inside a `Tuple`/`Record`/`Maybe`/`Result`/`List`)? Gates the
-/// destructure-thunk rewrite: a `Tuple`/`Record` binder whose aggregate
-/// type contains a Decoder anywhere needs the WHOLE destructure thunked
-/// (spec §2.2) — a Decoder nested inside e.g. `Maybe (Decoder a)` is out of
-/// today's realistic reach (Decoders aren't optional in practice) but the
-/// predicate stays structurally total rather than special-cased to Tuple/
-/// Record only, matching `ipe_ir::let_inline::ir_type_contains_task`'s
-/// existing shape (AUD-04).
-fn ir_type_contains_decoder(ty: &IrType) -> bool {
-    match ty {
-        IrType::Decoder(_) => true,
-        IrType::Tuple(elems) => elems.iter().any(ir_type_contains_decoder),
-        IrType::Record(fields) => fields.values().any(ir_type_contains_decoder),
-        IrType::Maybe(inner) | IrType::List(inner) => ir_type_contains_decoder(inner),
-        IrType::Result(e, a) => ir_type_contains_decoder(e) || ir_type_contains_decoder(a),
-        _ => false,
-    }
+/// Does a value of type `ty` hold an [`IrType::Decoder`] anywhere?
+///
+/// Gates the destructure-thunk rewrite: a binder whose aggregate type holds a
+/// Decoder anywhere needs the WHOLE destructure thunked (spec §2.2). One leaf
+/// over the shared held-value walk ([`ir_type_holds`]), so every carrier —
+/// named-enum variant payloads from `payloads` included — is descended exactly
+/// as every other held-value predicate descends it.
+fn ir_type_contains_decoder(ty: &IrType, payloads: &EnumPayloadTable) -> bool {
+    ir_type_holds(ty, payloads, &|t: &IrType| matches!(t, IrType::Decoder(_)))
 }
 
 /// Rebuild `pat` with every bound name EXCEPT `keep` erased to
@@ -10465,6 +10458,13 @@ pub struct Lowerer<'a> {
     /// to ordinary app enums; only the REMAINING `Rust.*`-home enums are
     /// opaque handles for the clone/ctor gates.
     transparent_ffi_unions: BTreeSet<(ModPath, Symbol)>,
+    /// The lowered program's enum variant payloads, keyed `(home, name)`.
+    ///
+    /// Filled once every union is lowered, before any def body: the clone,
+    /// effect-carrier, and FFI-handle predicates read it to see what a user
+    /// enum holds — the same table shape the backend's enum-`Clone` fixpoint
+    /// reads, so both stages agree on which enums are `Clone`.
+    enum_payloads: EnumPayloadTable,
     /// The constructors of those transparent unions, keyed `(home, ctor)` —
     /// the one `Rust.*` constructor set a user program may legitimately
     /// construct and match.
@@ -12555,6 +12555,7 @@ impl<'a> Lowerer<'a> {
             enum_variants,
             ctor_arity,
             transparent_ffi_unions,
+            enum_payloads: EnumPayloadTable::new(),
             transparent_ffi_ctors,
             eta_params,
             eta_base: Cell::new(0),
@@ -14820,7 +14821,7 @@ impl<'a> Lowerer<'a> {
     /// the one site that attaches a non-empty home.
     #[allow(clippy::similar_names)] // `uses_ui` / `uses_tui_shape` are intentionally similar
     #[allow(clippy::too_many_lines)] // the module-assembly tail is one linear pass
-    pub fn run(self) -> Result<Program, (Diagnostic, Vec<Symbol>)> {
+    pub fn run(mut self) -> Result<Program, (Diagnostic, Vec<Symbol>)> {
         let mut types_ir: Vec<TypeDef> = Vec::with_capacity(self.m.unions.len());
         for u in &self.m.unions {
             // `Ipe.Cache`'s opaque `type Cache k v = Cache Int` is backed
@@ -14838,10 +14839,7 @@ impl<'a> Lowerer<'a> {
             // equals its defining module, but the lowerer does not thread it here
             // and enum-shape errors are rare + already span-precise.
             let def = self.lower_enum(u).map_err(|d| (d, Vec::new()))?;
-            if self.is_cache_handle_union(u)
-                || self.is_config_decoder_union(u)
-                || self.is_pubsub_topic_union(u)
-            {
+            if self.is_runtime_bridged_union(u) {
                 continue;
             }
             // A foreign OPAQUE type from an FFI interface module (`module
@@ -14860,19 +14858,18 @@ impl<'a> Lowerer<'a> {
             {
                 continue;
             }
-            // `Ipe.Email`'s `type EmailProvider` is backed by the runtime enum
-            // `ipe_runtime::email::EmailProvider` (ctor names match verbatim).
-            // Skip its `EnumDef` so the backend never emits a duplicate
-            // `StdEmailEmailProvider`; the `builtin_runtime_enum` / `enum_name`
-            // overrides route the type + ctors + patterns to the runtime enum
-            // (mirrors the `IpeCacheHandle` suppression + the reference's
-            // `runtimeOpaqueTypes` mapping). `lower_enum` is still called above
-            // for its ctor-payload validation side effect.
-            if self.is_email_provider_union(u) {
-                continue;
-            }
             types_ir.push(TypeDef::Enum(def));
         }
+        let prelude_enums = self.synthetic_prelude_enums();
+        self.enum_payloads = ipe_ir::enum_payload_table(
+            types_ir
+                .iter()
+                .map(|td| {
+                    let TypeDef::Enum(def) = td;
+                    def
+                })
+                .chain(prelude_enums.iter()),
+        );
 
         let mut funcs = Vec::with_capacity(self.m.defs.len());
         let mut entry = None;
@@ -14918,7 +14915,7 @@ impl<'a> Lowerer<'a> {
         }
         // Externally-invoked roots besides `main` that dead-function elimination
         // must keep (see [`backend_invoked_roots`]).
-        let export_roots = backend_invoked_roots(funcs.iter(), self.interner);
+        let export_roots = backend_invoked_roots(&funcs.iter(), self.interner);
 
         // Cross-call type-parameter-bound propagation. The per-function
         // `apply_kernel_type_param_bounds` pass infers bounds from each body in
@@ -15753,12 +15750,33 @@ impl<'a> Lowerer<'a> {
         }
     }
 
-    /// is `u` the `Ipe.Cache.Cache` opaque handle union — home
-    /// `["Std", "Cache"]`, name `Cache`? Its `EnumDef` is suppressed (the type
-    /// is backed by the runtime `IpeCacheHandle`); the backend routes the type +
-    /// ctor + pattern there via `builtin_runtime_enum`/`enum_name` overrides.
-    fn is_cache_handle_union(&self, u: &canon::Union) -> bool {
-        self.is_cache_handle_con(&u.home, u.name)
+    /// Is `u` a stdlib union whose Rust type the runtime defines?
+    ///
+    /// Such a union gets no `EnumDef`: `Ipe.Cache.Cache` is the runtime
+    /// `IpeCacheHandle` (its phantom `k`/`v` would otherwise be unused enum
+    /// parameters, E0392), `Ipe.Email.EmailProvider` is the runtime
+    /// `email::EmailProvider`, and `Ipe.Config.Decoder` / `Ipe.PubSub.Topic`
+    /// exist only to name a type whose every annotation lowers to the shared
+    /// decoder carrier / topic-name `String`. The set is
+    /// [`ipe_ir::RuntimeBridgedEnum`], the table the backend's enum-fact lookup
+    /// reads, so a skipped union is always one the backend knows the facts of.
+    fn is_runtime_bridged_union(&self, u: &canon::Union) -> bool {
+        self.runtime_bridged_enum(&u.home, u.name)
+            .is_some_and(ipe_ir::RuntimeBridgedEnum::is_source_union)
+    }
+
+    /// The runtime-bridged enum `(module, name)` names, if any.
+    fn runtime_bridged_enum(
+        &self,
+        module: &[Symbol],
+        name: Symbol,
+    ) -> Option<ipe_ir::RuntimeBridgedEnum> {
+        let name = self.interner.resolve(name)?;
+        let home = module
+            .iter()
+            .map(|s| self.interner.resolve(*s))
+            .collect::<Option<Vec<&str>>>()?;
+        ipe_ir::RuntimeBridgedEnum::classify(&home, name)
     }
 
     /// Is `u` a foreign opaque type declared by a driver-generated FFI
@@ -15781,45 +15799,8 @@ impl<'a> Lowerer<'a> {
         CloneEnv {
             interner: self.interner,
             transparent_ffi: &self.transparent_ffi_unions,
+            payloads: &self.enum_payloads,
         }
-    }
-
-    /// is `u` the `Ipe.Config.Decoder` opaque carrier re-declaration —
-    /// module `["Std", "Config"]`, name `Decoder`? `Ipe.Config` re-declares
-    /// `type Decoder a = Decoder` only to put the name in its export set (matching
-    /// the reference); the type IS the shared `IrType::Decoder` carrier
-    /// (`ipe_runtime::json::Decoder<E, T>`), and every `Decoder a` annotation
-    /// already lowers to it via the ABOVE-guard `Decoder` arm. Skip its `EnumDef`
-    /// so the backend never emits a phantom-param `enum IpeConfigDecoder<T1>`
-    /// (E0392) — the nullary `Decoder` ctor is opaque (never constructed or
-    /// matched in Ipê source), so no enum is needed. Same shape as
-    /// [`Self::is_cache_handle_union`].
-    fn is_config_decoder_union(&self, u: &canon::Union) -> bool {
-        self.interner.resolve(u.name) == Some("Decoder")
-            && matches!(
-                u.home.as_slice(),
-                [a, b] if self.interner.resolve(*a) == Some("Ipe")
-                    && self.interner.resolve(*b) == Some("Config")
-            )
-    }
-
-    /// is `u` the `Ipe.PubSub.Topic` phantom handle declaration — module
-    /// `["Ipe", "PubSub"]`, name `Topic`? `Ipe.PubSub` declares
-    /// `type Topic a = Topic` only to give the payload variable `a` a valid type
-    /// declaration; at runtime a `Topic a` erases to the bare topic-name string
-    /// (`IrType::Str`), which every `Topic a` annotation already lowers to via the
-    /// ABOVE-guard `Topic` arm. Skip its `EnumDef` so the backend never emits a
-    /// phantom-param `enum IpePubSubTopic<T1>` (E0392) — the nullary `Topic` ctor
-    /// is opaque (never constructed or matched in Ipê source; the handle IS a
-    /// `String`), so no enum is needed. Same shape as
-    /// [`Self::is_config_decoder_union`].
-    fn is_pubsub_topic_union(&self, u: &canon::Union) -> bool {
-        self.interner.resolve(u.name) == Some("Topic")
-            && matches!(
-                u.home.as_slice(),
-                [a, b] if self.interner.resolve(*a) == Some("Ipe")
-                    && self.interner.resolve(*b) == Some("PubSub")
-            )
     }
 
     /// is `(module, name)` the `Ipe.Db.Store.Cond` typed-query predicate —
@@ -15916,33 +15897,17 @@ impl<'a> Lowerer<'a> {
             )
     }
 
-    /// is `(module, name)` the `Ipe.Cache.Cache` opaque handle type —
-    /// module `["Ipe", "Cache"]`, name `Cache`? Its `k`/`v` args are dropped at
-    /// lowering (backed by the non-generic runtime `IpeCacheHandle`).
+    /// is `(module, name)` the `Ipe.Cache.Cache` opaque handle type?
+    ///
+    /// Its `k`/`v` args are dropped at lowering (backed by the non-generic
+    /// runtime `IpeCacheHandle`).
     fn is_cache_handle_con(&self, module: &[Symbol], name: Symbol) -> bool {
-        self.interner.resolve(name) == Some("Cache")
-            && matches!(
-                module,
-                [a, b] if self.interner.resolve(*a) == Some("Ipe")
-                    && self.interner.resolve(*b) == Some("Cache")
-            )
-    }
-
-    /// is `u` the `Ipe.Email.EmailProvider` opaque ADT — module
-    /// `["Ipe", "Email"]`, name `EmailProvider`? Backed by the runtime enum
-    /// `ipe_runtime::email::EmailProvider`, so its `EnumDef` is suppressed.
-    fn is_email_provider_union(&self, u: &canon::Union) -> bool {
-        self.is_email_provider_con(&u.home, u.name)
+        self.runtime_bridged_enum(module, name) == Some(ipe_ir::RuntimeBridgedEnum::CacheHandle)
     }
 
     /// is `(module, name)` the `Ipe.Email.EmailProvider` opaque ADT?
     fn is_email_provider_con(&self, module: &[Symbol], name: Symbol) -> bool {
-        self.interner.resolve(name) == Some("EmailProvider")
-            && matches!(
-                module,
-                [a, b] if self.interner.resolve(*a) == Some("Ipe")
-                    && self.interner.resolve(*b) == Some("Email")
-            )
+        self.runtime_bridged_enum(module, name) == Some(ipe_ir::RuntimeBridgedEnum::EmailProvider)
     }
 
     /// is `(home, name)` a kernel-implicit opaque `Ipe.Server` nominal —
@@ -16172,8 +16137,10 @@ impl<'a> Lowerer<'a> {
                     // derive `Clone`/`Debug`/`PartialEq`.  The cfg record is
                     // consumed structurally by `emit_web_app_inner` (never
                     // materialised as a runtime value), so its IR struct is
-                    // not needed.
-                    if !ir_contains_fun(&ir) && seen.insert(ir.clone()) {
+                    // not needed. Only the record's own field types count: a
+                    // function inside a named enum's payload belongs to that
+                    // enum's definition, so no payload table is consulted.
+                    if !ir_contains_fun(&ir, &EnumPayloadTable::new()) && seen.insert(ir.clone()) {
                         out.push(ir);
                     }
                 }
@@ -16245,7 +16212,7 @@ impl<'a> Lowerer<'a> {
     ///
     /// Two independent sources oblige a generic: a kernel the body applies to a
     /// parameter binder of that generic ([`apply_kernel_type_param_bounds`]:
-    /// `IpeRow` for wildcard `any` only, `IpeStringify`, `Send + 'static`,
+    /// `IpeRow` for wildcard `any` only, `IpeInterpolate`, `Send + 'static`,
     /// `Sync`), and a reference whose solved instantiation reaches the generic
     /// through a sync capture or a `Cmd` / `Sub` / `Decoder` carrier
     /// ([`Self::apply_recorded_bounds`], recorded while the body lowered).
@@ -16707,10 +16674,11 @@ impl<'a> Lowerer<'a> {
                     // borrows; a move-only effect-carrier field (`Task` / `Cmd` /
                     // `Sub`, or a type embedding one) has no `Clone` to turn that
                     // borrow into a value, so the signature fails closed here.
-                    if row_params
-                        .iter()
-                        .any(|rp| rp.fields.values().any(ir_type_has_effect_carrier))
-                    {
+                    if row_params.iter().any(|rp| {
+                        rp.fields
+                            .values()
+                            .any(|t| ir_type_has_effect_carrier(t, &self.enum_payloads))
+                    }) {
                         return Err(unsupported(sig_span, Feature::NonCloneValueReuse));
                     }
                     let row_syms: BTreeSet<Symbol> = params
@@ -17061,11 +17029,15 @@ impl<'a> Lowerer<'a> {
         if b.has_eq() {
             set = set.with_eq();
         }
-        // Stringify (`toString` / `Log.*With`) → Rust `IpeStringify`. Like `eq`,
-        // it adds no `Copy` (a single stringify moves/borrows the value); the
-        // multi-use case is the general Clone concern, not Stringify-specific.
+        // Stringify (`Debug.log` / `Error.toString`) → Rust `IpeStringify`, and
+        // interpolation (`{{…}}` / `Log.*With`) → the sealed `IpeInterpolate`.
+        // Like `eq`, neither adds `Copy` (a single render moves/borrows the
+        // value); the multi-use case is the general Clone concern.
         if b.has_show() {
             set = set.with_show();
+        }
+        if b.has_interpolable() {
+            set = set.with_interpolable();
         }
         // A `Set` element needs Rust `Ord` (`BTreeSet<A>`); a `Dict` key needs
         // `Hash + Ord` (`HashMap<K, V>` + the determinism-sorted key ops) plus
@@ -24728,6 +24700,7 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::StringToInt
                 | KernelFn::StringToFloat
                 | KernelFn::StringFromChar
+                | KernelFn::StringFromBool
                 | KernelFn::StringFromList
                 | KernelFn::StringConcat
                 | KernelFn::StringWords
@@ -24765,7 +24738,7 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::ListUnique
                 | KernelFn::ListUnzip
                 | KernelFn::BasicsNot
-                | KernelFn::BasicsToString
+                | KernelFn::Interpolate
                 | KernelFn::BasicsIdentity
                 | KernelFn::BasicsFst
                 | KernelFn::BasicsSnd
@@ -27059,6 +27032,7 @@ impl<'a> Lowerer<'a> {
                     ("String", "toInt") => Ok(Callee::Kernel(KernelFn::StringToInt)),
                     ("String", "toFloat") => Ok(Callee::Kernel(KernelFn::StringToFloat)),
                     ("String", "fromChar") => Ok(Callee::Kernel(KernelFn::StringFromChar)),
+                    ("String", "fromBool") => Ok(Callee::Kernel(KernelFn::StringFromBool)),
                     ("String", "fromList") => Ok(Callee::Kernel(KernelFn::StringFromList)),
                     ("String", "concat") => Ok(Callee::Kernel(KernelFn::StringConcat)),
                     ("String", "words") => Ok(Callee::Kernel(KernelFn::StringWords)),
@@ -27159,7 +27133,6 @@ impl<'a> Lowerer<'a> {
                     ("Basics", "snd") => Ok(Callee::Kernel(KernelFn::BasicsSnd)),
                     ("Basics", "modBy") => Ok(Callee::Kernel(KernelFn::BasicsModBy)),
                     ("Basics", "clamp") => Ok(Callee::Kernel(KernelFn::BasicsClamp)),
-                    ("Basics", "toString") => Ok(Callee::Kernel(KernelFn::BasicsToString)),
                     // ── Basics numerics ────────────────────────────────
                     ("Basics", "negate") => Ok(Callee::Kernel(KernelFn::BasicsNegate)),
                     ("Basics", "abs") => Ok(Callee::Kernel(KernelFn::BasicsAbs)),
@@ -29075,7 +29048,8 @@ impl<'a> Lowerer<'a> {
         let value_ir_ty = self
             .region_ty(value_span)
             .and_then(|ty| self.ir_type_from_ty(ty, value_span).ok());
-        let Some(ir_ty) = value_ir_ty.filter(ir_type_contains_decoder) else {
+        let Some(ir_ty) = value_ir_ty.filter(|t| ir_type_contains_decoder(t, &self.enum_payloads))
+        else {
             // a destructure binder (`let (a, b) = pair in …`, single-arm
             // `case p of (a, b) -> …`) whose value type contains NO Decoder used
             // to emit a bare `Destructure` with NO move-ownership discipline on
@@ -29264,7 +29238,7 @@ impl<'a> Lowerer<'a> {
                         || count_fn_value_uses(name, &acc) > 1
                 },
                 |a| a.fn_flags.non_callee_ge1 || a.fn_value_uses > 1,
-            ) || fn_value_use_after_consume(name, &acc));
+            ) || fn_value_use_after_consume(name, &acc, &self.enum_payloads));
         let mut acc = match (&fun_shape, new_trigger) {
             (Some((ps, r)), true) => {
                 // `shim_fn_value_reads` rewrites non-callee Var(name) reads
@@ -31831,7 +31805,8 @@ mod tests {
     /// ipe exit 0).
     #[test]
     fn carrier_clone_authority_agrees_with_clone_class() {
-        use ipe_ir::{IrType, carrier_is_clone};
+        use ipe_intern::Symbol;
+        use ipe_ir::{EnumPayloadTable, IrType, ModPath, carrier_is_clone};
 
         use super::{CloneClass, CloneEnv, clone_class};
 
@@ -31842,12 +31817,47 @@ mod tests {
         // interner suffices: no sample carries a `Rust.*` home.
         let interner = Interner::new();
         let transparent = BTreeSet::new();
+        let fun = IrType::Fun(vec![IrType::Int], Box::new(IrType::Int));
+        let home = ModPath(vec![Symbol::from_raw(1)]);
+        let (plain, boxed_fn, shared_fn, wrap) = (
+            Symbol::from_raw(2),
+            Symbol::from_raw(3),
+            Symbol::from_raw(4),
+            Symbol::from_raw(5),
+        );
+        let ctor = Symbol::from_raw(6);
+        let param = IrType::Generic(Symbol::from_raw(7));
+        let payloads: EnumPayloadTable = [
+            (plain, vec![IrType::Int, IrType::Str]),
+            (boxed_fn, vec![IrType::Maybe(Box::new(fun.clone()))]),
+            (
+                shared_fn,
+                vec![IrType::SharedFun(vec![IrType::Int], Box::new(IrType::Int))],
+            ),
+            (wrap, vec![param]),
+        ]
+        .into_iter()
+        .map(|(name, fields)| ((home.clone(), name), vec![(ctor, fields)]))
+        .collect();
+        let named = |name: Symbol, args: Vec<IrType>| IrType::Enum {
+            home: home.clone(),
+            name,
+            args,
+        };
         let env = CloneEnv {
             interner: &interner,
             transparent_ffi: &transparent,
+            payloads: &payloads,
         };
-        let fun = IrType::Fun(vec![IrType::Int], Box::new(IrType::Int));
         let samples: Vec<IrType> = vec![
+            named(plain, Vec::new()),
+            named(boxed_fn, Vec::new()),
+            named(shared_fn, Vec::new()),
+            named(wrap, vec![IrType::Int]),
+            named(wrap, vec![fun.clone()]),
+            named(wrap, vec![named(boxed_fn, Vec::new())]),
+            IrType::Maybe(Box::new(named(boxed_fn, Vec::new()))),
+            IrType::List(Box::new(named(plain, Vec::new()))),
             IrType::Int,
             IrType::Str,
             IrType::Bytes,
@@ -31858,18 +31868,24 @@ mod tests {
             IrType::Decoder(Box::new(IrType::Int)),
             IrType::Maybe(Box::new(fun.clone())),
             IrType::Maybe(Box::new(IrType::Int)),
-            IrType::Tuple(vec![IrType::Str, fun]),
+            IrType::Tuple(vec![IrType::Str, fun.clone()]),
             IrType::Tuple(vec![IrType::Str, IrType::Int]),
             IrType::List(Box::new(IrType::Str)),
             IrType::Result(Box::new(IrType::Error), Box::new(IrType::Int)),
         ];
         for ty in &samples {
             assert_eq!(
-                carrier_is_clone(ty),
+                carrier_is_clone(ty, &payloads),
                 clone_class(env, ty) != CloneClass::NonClone,
                 "carrier_is_clone / clone_class drift on {ty:?}"
             );
         }
+        // Both sides agreeing is vacuous if both are wrong: pin the enum verdicts.
+        assert!(carrier_is_clone(&named(plain, Vec::new()), &payloads));
+        assert!(carrier_is_clone(&named(shared_fn, Vec::new()), &payloads));
+        assert!(carrier_is_clone(&named(wrap, vec![IrType::Int]), &payloads));
+        assert!(!carrier_is_clone(&named(boxed_fn, Vec::new()), &payloads));
+        assert!(!carrier_is_clone(&named(wrap, vec![fun]), &payloads));
     }
 
     /// SEAL: an FFI foreign opaque handle (`Rust.*`-homed `Enum`) is a real
@@ -31898,6 +31914,7 @@ mod tests {
         let env = CloneEnv {
             interner: &interner,
             transparent_ffi: &transparent,
+            payloads: &ipe_ir::EnumPayloadTable::new(),
         };
 
         let ffi_home = ModPath(vec![rust, bevy]);
@@ -31957,6 +31974,7 @@ mod tests {
         let env_t = CloneEnv {
             interner: &interner,
             transparent_ffi: &transparent_world,
+            payloads: &ipe_ir::EnumPayloadTable::new(),
         };
         assert_eq!(clone_class(env_t, &world_ty), CloneClass::CloneOk);
         assert!(param_is_multiuse_clonable(env_t, &world_ty));
@@ -31985,6 +32003,7 @@ mod tests {
         let env = CloneEnv {
             interner: &interner,
             transparent_ffi: &transparent,
+            payloads: &ipe_ir::EnumPayloadTable::new(),
         };
 
         let world_ty = IrType::Enum {
@@ -32029,6 +32048,7 @@ mod tests {
         let env = CloneEnv {
             interner: &interner,
             transparent_ffi: &transparent,
+            payloads: &ipe_ir::EnumPayloadTable::new(),
         };
 
         // `Wrap (Task Error Int)` — a user union carrying a Task effect carrier.
@@ -32040,18 +32060,19 @@ mod tests {
         };
 
         // The predicate finds the carrier bare, in a union, and in a `Maybe`.
-        assert!(ir_type_has_effect_carrier(&task_ty));
-        assert!(ir_type_has_effect_carrier(&wrap_task));
-        assert!(ir_type_has_effect_carrier(&IrType::Maybe(Box::new(
-            task_ty
-        ))));
+        assert!(ir_type_has_effect_carrier(&task_ty, env.payloads));
+        assert!(ir_type_has_effect_carrier(&wrap_task, env.payloads));
+        assert!(ir_type_has_effect_carrier(
+            &IrType::Maybe(Box::new(task_ty)),
+            env.payloads
+        ));
         // A `Clone` payload carries no effect and is out of scope.
         let wrap_int = IrType::Enum {
             home: ModPath(vec![main]),
             name: wrap,
             args: vec![IrType::Int],
         };
-        assert!(!ir_type_has_effect_carrier(&wrap_int));
+        assert!(!ir_type_has_effect_carrier(&wrap_int, env.payloads));
 
         // Reuse: `sym` appears twice → fail closed with IPE-L0135.
         let reused = Expr::Tuple(vec![Expr::Var(sym), Expr::Var(sym)]);
@@ -32105,6 +32126,85 @@ mod tests {
         );
     }
 
+    /// A user enum whose variant PAYLOAD (not a type argument) holds a `Task` or
+    /// an opaque FFI handle is seen by every held-value predicate, and is
+    /// `NonClone` — matching the backend's enum-`Clone` fixpoint, which gives
+    /// such an enum no `Clone` impl.
+    #[test]
+    fn enum_payload_effect_and_ffi_handle_are_seen() -> ipe_diagnostics::DResult<()> {
+        use ipe_ir::{EnumDef, IrType, ModPath, Variant, enum_payload_table};
+
+        use super::{
+            CloneClass, CloneEnv, clone_class, ir_type_has_effect_carrier,
+            ir_type_has_ffi_foreign_handle, param_is_multiuse_clonable,
+        };
+
+        let mut interner = Interner::new();
+        let main = ModPath(vec![interner.intern("Main")?]);
+        let ffi_home = ModPath(vec![interner.intern("Rust")?, interner.intern("Bevy_ecs")?]);
+        let world = interner.intern("World")?;
+        let job = interner.intern("Job")?;
+        let run = interner.intern("Run")?;
+        let holder = interner.intern("Holder")?;
+        let hold = interner.intern("Hold")?;
+        let plain = interner.intern("Plain")?;
+        let text = interner.intern("Text")?;
+        let world_ty = IrType::Enum {
+            home: ffi_home,
+            name: world,
+            args: vec![],
+        };
+        let def = |name, ctor, fields| EnumDef {
+            name,
+            home: main.clone(),
+            type_params: Vec::new(),
+            variants: vec![Variant { name: ctor, fields }],
+        };
+        let defs = [
+            def(job, run, vec![IrType::Task(Box::new(IrType::Unit))]),
+            def(holder, hold, vec![IrType::Maybe(Box::new(world_ty))]),
+            def(plain, text, vec![IrType::Str]),
+        ];
+        let payloads = enum_payload_table(&defs);
+        let transparent = BTreeSet::new();
+        let env = CloneEnv {
+            interner: &interner,
+            transparent_ffi: &transparent,
+            payloads: &payloads,
+        };
+        let named = |name| IrType::Enum {
+            home: main.clone(),
+            name,
+            args: vec![],
+        };
+
+        // `type Job = Run (Task ())`: an effect carrier, NonClone.
+        let job_ty = named(job);
+        assert!(ir_type_has_effect_carrier(&job_ty, env.payloads));
+        assert!(ir_type_has_effect_carrier(
+            &IrType::Tuple(vec![IrType::Int, job_ty.clone()]),
+            env.payloads
+        ));
+        assert_eq!(clone_class(env, &job_ty), CloneClass::NonClone);
+        assert_eq!(
+            clone_class(env, &IrType::List(Box::new(job_ty))),
+            CloneClass::NonClone
+        );
+
+        // `type Holder = Hold (Maybe World)`: the payload FFI handle is found.
+        let holder_ty = named(holder);
+        assert!(ir_type_has_ffi_foreign_handle(env, &holder_ty));
+        assert_eq!(clone_class(env, &holder_ty), CloneClass::NonClone);
+        assert!(!param_is_multiuse_clonable(env, &holder_ty));
+
+        // A `Clone` payload stays CloneOk and carries neither.
+        let plain_ty = named(plain);
+        assert!(!ir_type_has_effect_carrier(&plain_ty, env.payloads));
+        assert!(!ir_type_has_ffi_foreign_handle(env, &plain_ty));
+        assert_eq!(clone_class(env, &plain_ty), CloneClass::CloneOk);
+        Ok(())
+    }
+
     /// A borrowing read of a non-`Clone` effect carrier that the emitted order
     /// evaluates AFTER a move of the carrier fails closed with IPE-L0135.
     ///
@@ -32132,6 +32232,7 @@ mod tests {
         let env = CloneEnv {
             interner: &interner,
             transparent_ffi: &transparent,
+            payloads: &ipe_ir::EnumPayloadTable::new(),
         };
         let wrap_task = IrType::Enum {
             home: ModPath(vec![main]),
@@ -32290,6 +32391,7 @@ mod tests {
         let env = CloneEnv {
             interner: &interner,
             transparent_ffi: &transparent,
+            payloads: &ipe_ir::EnumPayloadTable::new(),
         };
         let wrap_task = IrType::Enum {
             home: ModPath(vec![main]),
@@ -32384,6 +32486,7 @@ mod tests {
         let env = CloneEnv {
             interner: &interner,
             transparent_ffi: &transparent,
+            payloads: &ipe_ir::EnumPayloadTable::new(),
         };
         let wrap_task = IrType::Enum {
             home: ModPath(vec![main]),
@@ -32464,6 +32567,7 @@ mod tests {
         let env = CloneEnv {
             interner: &interner,
             transparent_ffi: &transparent,
+            payloads: &ipe_ir::EnumPayloadTable::new(),
         };
         let wrap_task = IrType::Enum {
             home: ModPath(vec![main]),
@@ -32635,6 +32739,7 @@ mod tests {
         let env = CloneEnv {
             interner: &interner,
             transparent_ffi: &transparent,
+            payloads: &ipe_ir::EnumPayloadTable::new(),
         };
         let task = IrType::Task(Box::new(IrType::Int));
         let ui_int = IrType::Ui {
@@ -32843,6 +32948,7 @@ mod tests {
         let env = CloneEnv {
             interner: &interner,
             transparent_ffi: &transparent,
+            payloads: &ipe_ir::EnumPayloadTable::new(),
         };
         let l0135 = unsupported(span, Feature::NonCloneValueReuse);
         let task = IrType::Task(Box::new(IrType::Int));

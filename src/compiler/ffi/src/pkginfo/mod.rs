@@ -14,7 +14,7 @@ mod wire;
 
 use std::collections::BTreeMap;
 
-use wire::{WireFunction, WireParam, WirePkgInfo};
+use wire::{WireConstant, WireFunction, WireParam, WirePkgInfo, WireTransitiveDep};
 
 use crate::call::Call;
 use crate::carrier::{Carrier, ClosureSig, EnumDef, StructDef};
@@ -1516,130 +1516,169 @@ fn drop_recursive_define_defs(fns: &mut Vec<FnInfo>, dropped: &mut Vec<Diagnosti
     fns.retain(|f| define_def_name(f.shape()).is_none_or(|n| !recursive.contains(n.as_str())));
 }
 
+/// Parse `w`'s three identity fields (package path, crate name, declared
+/// version), tagging every failure with the same `WireMalformed` context.
+fn decode_identity(w: &WirePkgInfo) -> Result<(PkgPath, PackageName, CrateVersion), Diagnostic> {
+    let pkg_path = PkgPath::parse(&w.pkg).map_err(|defect| Diagnostic::WireMalformed {
+        context: "package inspection document".to_owned(),
+        defect,
+    })?;
+    let name = PackageName::parse(&w.name).map_err(|defect| Diagnostic::WireMalformed {
+        context: format!("crate `{}`", w.name),
+        defect,
+    })?;
+    let version = CrateVersion::parse(&w.version).map_err(|defect| Diagnostic::WireMalformed {
+        context: format!("crate `{}`", w.name),
+        defect,
+    })?;
+    Ok((pkg_path, name, version))
+}
+
+/// Decode every wire function, collapse duplicate wrapper-reference names,
+/// and drop any def caught in a recursive define-type cycle. A defective or
+/// over-dropped binding is recorded in the returned diagnostics rather than
+/// failing the whole package.
+fn decode_functions(functions: Vec<WireFunction>) -> (Vec<FnInfo>, Vec<Diagnostic>) {
+    let mut fns = Vec::with_capacity(functions.len());
+    let mut dropped = Vec::new();
+    for wf in functions {
+        match FnInfo::try_from(wf) {
+            Ok(f) => fns.push(f),
+            // Over-drop: the one defective binding is refused and
+            // recorded; every other binding in the package survives.
+            Err(d) => dropped.push(d),
+        }
+    }
+    // Collapse duplicate wrapper-reference names at the decode boundary
+    // (first wins) so all three emitters see the same deduped list by
+    // construction — a real `to_string` colliding with the synthetic
+    // Display bridge is one entry, never a duplicate Rust item.
+    let mut seen_refs = std::collections::BTreeSet::new();
+    fns.retain(|f| seen_refs.insert(f.wrapper_ref_name()));
+    // A directly- or mutually-recursive define type has no boxed
+    // indirection in the closed carrier set, so emitting it would be an
+    // infinitely-sized Rust type (`error[E0072]`). Refuse every def on a
+    // cycle here — the def-bearing binding is dropped, and the emitter's
+    // survivor fixpoint fans the over-drop out to every reference of it.
+    drop_recursive_define_defs(&mut fns, &mut dropped);
+    (fns, dropped)
+}
+
+/// Decode the reported transitive dependencies, dropping the inspector's own
+/// synthetic probe scaffold (never a real registry dependency).
+fn decode_transitive_deps(deps: Vec<WireTransitiveDep>) -> Result<Vec<TransitiveDep>, Diagnostic> {
+    let mut transitive_deps = Vec::with_capacity(deps.len());
+    for dep in deps {
+        // The inspector's own probe scaffold registers as a workspace
+        // member during introspection; it is a synthetic non-registry
+        // package, not a real dependency, so it never becomes a typed
+        // `TransitiveDep` (its `_ipe_ffi_probe_…` name is not even a legal
+        // `PackageName`). Dropping it here keeps a non-dependency
+        // unrepresentable past decode.
+        if dep.name.starts_with("_ipe_ffi_probe") {
+            continue;
+        }
+        let ident = RustIdent::parse(&dep.ident).map_err(|defect| Diagnostic::WireMalformed {
+            context: format!("transitive dep `{}`", dep.name),
+            defect,
+        })?;
+        let name = PackageName::parse(&dep.name).map_err(|defect| Diagnostic::WireMalformed {
+            context: format!("transitive dep `{}`", dep.name),
+            defect,
+        })?;
+        let version =
+            CrateVersion::parse(&dep.version).map_err(|defect| Diagnostic::WireMalformed {
+                context: format!("transitive dep `{}`", dep.name),
+                defect,
+            })?;
+        transitive_deps.push(TransitiveDep {
+            ident,
+            name,
+            version,
+        });
+    }
+    Ok(transitive_deps)
+}
+
+/// Foreign-type identity entries: keep only well-shaped `::seg::…::Seg` keys
+/// and `seg::…::Seg` values (every segment a legal Rust ident). A malformed
+/// entry is dropped — identity metadata only ever ENABLES nominal
+/// unification, so absence is the safe default.
+fn decode_foreign_type_ids(
+    ids: std::collections::BTreeMap<String, String>,
+) -> std::collections::BTreeMap<String, String> {
+    ids.into_iter()
+        .filter(|(k, v)| {
+            k.strip_prefix("::").is_some_and(is_rust_path_shaped) && is_rust_path_shaped(v)
+        })
+        .collect()
+}
+
+/// Each feature is spliced into a `features = [ … ]` array of the emitted
+/// `Cargo.toml`; gate it at the boundary so an injection-bearing feature
+/// fails the WHOLE package here rather than reaching the emitter.
+fn decode_features(
+    features: Vec<String>,
+    crate_name: &str,
+) -> Result<Vec<FeatureName>, Diagnostic> {
+    let mut out = Vec::with_capacity(features.len());
+    for f in features {
+        out.push(
+            FeatureName::parse(&f).map_err(|defect| Diagnostic::WireMalformed {
+                context: format!("crate `{crate_name}`"),
+                defect,
+            })?,
+        );
+    }
+    Ok(out)
+}
+
+/// The wrapper path is spliced into a `path = "…"` TOML value of the emitted
+/// manifest; gate it at the boundary so an injection-bearing path fails the
+/// WHOLE package here rather than reaching the emitter.
+fn decode_source(wrapper_path: &str, crate_name: &str) -> Result<PkgSource, Diagnostic> {
+    if wrapper_path.is_empty() {
+        Ok(PkgSource::Registry)
+    } else {
+        Ok(PkgSource::Wrapper(
+            WrapperCratePath::parse(wrapper_path).map_err(|defect| Diagnostic::WireMalformed {
+                context: format!("crate `{crate_name}`"),
+                defect,
+            })?,
+        ))
+    }
+}
+
+/// Inspected constants: keep only a well-shaped crate-relative path
+/// (`seg::…::SEG`, every segment a legal Rust ident) with a non-empty
+/// recorded type. A malformed entry is dropped — absence only disables a
+/// `.const` cross-check (fail-closed), never admits an unverified read.
+fn decode_consts(constants: Vec<WireConstant>) -> Vec<ConstInfo> {
+    constants
+        .into_iter()
+        .filter(|c| !c.path.is_empty() && !c.ty.is_empty() && is_rust_path_shaped(&c.path))
+        .map(|c| ConstInfo {
+            path: c.path,
+            ty: c.ty,
+        })
+        .collect()
+}
+
 impl TryFrom<WirePkgInfo> for PkgInfo {
     type Error = Diagnostic;
 
     fn try_from(w: WirePkgInfo) -> Result<Self, Diagnostic> {
-        let pkg_path = PkgPath::parse(&w.pkg).map_err(|defect| Diagnostic::WireMalformed {
-            context: "package inspection document".to_owned(),
-            defect,
-        })?;
-        let name = PackageName::parse(&w.name).map_err(|defect| Diagnostic::WireMalformed {
-            context: format!("crate `{}`", w.name),
-            defect,
-        })?;
-        let version =
-            CrateVersion::parse(&w.version).map_err(|defect| Diagnostic::WireMalformed {
-                context: format!("crate `{}`", w.name),
-                defect,
-            })?;
-        let mut fns = Vec::with_capacity(w.functions.len());
-        let mut dropped = Vec::new();
-        for wf in w.functions {
-            match FnInfo::try_from(wf) {
-                Ok(f) => fns.push(f),
-                // Over-drop: the one defective binding is refused and
-                // recorded; every other binding in the package survives.
-                Err(d) => dropped.push(d),
-            }
-        }
-        // Collapse duplicate wrapper-reference names at the decode boundary
-        // (first wins) so all three emitters see the same deduped list by
-        // construction — a real `to_string` colliding with the synthetic
-        // Display bridge is one entry, never a duplicate Rust item.
-        let mut seen_refs = std::collections::BTreeSet::new();
-        fns.retain(|f| seen_refs.insert(f.wrapper_ref_name()));
-        // A directly- or mutually-recursive define type has no boxed
-        // indirection in the closed carrier set, so emitting it would be an
-        // infinitely-sized Rust type (`error[E0072]`). Refuse every def on a
-        // cycle here — the def-bearing binding is dropped, and the emitter's
-        // survivor fixpoint fans the over-drop out to every reference of it.
-        drop_recursive_define_defs(&mut fns, &mut dropped);
-        let mut transitive_deps = Vec::with_capacity(w.transitive_deps.len());
-        for dep in w.transitive_deps {
-            // The inspector's own probe scaffold registers as a workspace
-            // member during introspection; it is a synthetic non-registry
-            // package, not a real dependency, so it never becomes a typed
-            // `TransitiveDep` (its `_ipe_ffi_probe_…` name is not even a legal
-            // `PackageName`). Dropping it here keeps a non-dependency
-            // unrepresentable past decode.
-            if dep.name.starts_with("_ipe_ffi_probe") {
-                continue;
-            }
-            let ident =
-                RustIdent::parse(&dep.ident).map_err(|defect| Diagnostic::WireMalformed {
-                    context: format!("transitive dep `{}`", dep.name),
-                    defect,
-                })?;
-            let name =
-                PackageName::parse(&dep.name).map_err(|defect| Diagnostic::WireMalformed {
-                    context: format!("transitive dep `{}`", dep.name),
-                    defect,
-                })?;
-            let version =
-                CrateVersion::parse(&dep.version).map_err(|defect| Diagnostic::WireMalformed {
-                    context: format!("transitive dep `{}`", dep.name),
-                    defect,
-                })?;
-            transitive_deps.push(TransitiveDep {
-                ident,
-                name,
-                version,
-            });
-        }
-        // Foreign-type identity entries: keep only well-shaped `::seg::…::Seg`
-        // keys and `seg::…::Seg` values (every segment a legal Rust ident).
-        // A malformed entry is dropped — identity metadata only ever ENABLES
-        // nominal unification, so absence is the safe default.
-        let foreign_type_ids = w
-            .foreign_type_ids
-            .into_iter()
-            .filter(|(k, v)| {
-                k.strip_prefix("::").is_some_and(is_rust_path_shaped) && is_rust_path_shaped(v)
-            })
-            .collect();
+        let (pkg_path, name, version) = decode_identity(&w)?;
+        let (fns, dropped) = decode_functions(w.functions);
+        let transitive_deps = decode_transitive_deps(w.transitive_deps)?;
+        let foreign_type_ids = decode_foreign_type_ids(w.foreign_type_ids);
         let declared_opaques = decode_declared_opaques(w.declared_opaques, &w.name)?;
-        // Each feature is spliced into a `features = [ … ]` array of the
-        // emitted `Cargo.toml`; gate it at the boundary so an injection-bearing
-        // feature fails the WHOLE package here rather than reaching the emitter.
-        let mut features = Vec::with_capacity(w.features.len());
-        for f in w.features {
-            features.push(
-                FeatureName::parse(&f).map_err(|defect| Diagnostic::WireMalformed {
-                    context: format!("crate `{}`", w.name),
-                    defect,
-                })?,
-            );
-        }
-        // The wrapper path is spliced into a `path = "…"` TOML value of the
-        // emitted manifest; gate it at the boundary so an injection-bearing
-        // path fails the WHOLE package here rather than reaching the emitter.
-        let source = if w.wrapper_path.is_empty() {
-            PkgSource::Registry
-        } else {
-            PkgSource::Wrapper(WrapperCratePath::parse(&w.wrapper_path).map_err(|defect| {
-                Diagnostic::WireMalformed {
-                    context: format!("crate `{}`", w.name),
-                    defect,
-                }
-            })?)
-        };
+        let features = decode_features(w.features, &w.name)?;
+        let source = decode_source(&w.wrapper_path, &w.name)?;
         // The representation axis: classification failure of one entry is an
         // opaque fallback recorded in the catalog, never a package failure.
         let foreign_types = crate::transparency::ForeignTypeCatalog::classify(&w.types);
-        // Inspected constants: keep only a well-shaped crate-relative path
-        // (`seg::…::SEG`, every segment a legal Rust ident) with a non-empty
-        // recorded type. A malformed entry is dropped — absence only disables a
-        // `.const` cross-check (fail-closed), never admits an unverified read.
-        let consts = w
-            .constants
-            .into_iter()
-            .filter(|c| !c.path.is_empty() && !c.ty.is_empty() && is_rust_path_shaped(&c.path))
-            .map(|c| ConstInfo {
-                path: c.path,
-                ty: c.ty,
-            })
-            .collect();
+        let consts = decode_consts(w.constants);
         Ok(Self {
             pkg_path,
             name,

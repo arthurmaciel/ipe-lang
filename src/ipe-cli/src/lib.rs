@@ -53,6 +53,7 @@ pub mod machine_output;
 pub mod native_ffi_consent;
 pub mod net;
 pub mod output_dir;
+pub mod owner_trust;
 pub mod pack;
 pub mod package_manifest;
 pub mod package_name;
@@ -93,6 +94,30 @@ pub(crate) use ipe_diagnostics::{
     title,
 };
 pub(crate) use ipe_intern::Interner;
+
+// The type checker's interpolable scalar set and the runtime's sealed
+// `IpeInterpolate` impl set name the same types in the same order: a drift
+// breaks this crate's build instead of reaching an emitted `cargo` E0277.
+// IPE-RUST-AUDIT:ACCEPTED (Arthur Maciel) — compile-time `const` assertion (not a runtime panic); fails the BUILD if the interpolable set drifts from the runtime's sealed impl set, the interpolation SEAL [ledger #boundary]
+#[allow(clippy::assertions_on_constants)] // the constant IS the tripwire
+const _: () = assert!(
+    names_eq(
+        &ipe_diagnostics::INTERPOLABLE_TYPES,
+        &ipe_runtime_rust::stringify::INTERPOLABLE_IPE_TYPES,
+    ),
+    "the interpolable scalar set must match the runtime's IpeInterpolate impls"
+);
+
+/// Element-wise `&str`-slice equality in a `const` context.
+const fn names_eq(a: &[&str], b: &[&str]) -> bool {
+    match (a, b) {
+        ([], []) => true,
+        ([x, a_rest @ ..], [y, b_rest @ ..]) => {
+            text::bytes_eq(x.as_bytes(), y.as_bytes()) && names_eq(a_rest, b_rest)
+        }
+        _ => false,
+    }
+}
 
 mod driver;
 

@@ -599,14 +599,28 @@ pub fn read_discovered_sources(
 ///
 /// When given a file entry, the driver locates the project root (where
 /// `package.ipe` lives) before building, so the full module graph is compiled
-/// instead of just the single entry file.
-pub fn find_manifest_for_ipe_file(ipe_file: &Path) -> Option<PathBuf> {
-    let mut dir = ipe_file.parent()?;
+/// instead of just the single entry file. The user never named the manifest
+/// this finds, so it is obeyed only once it passes the owner rule
+/// ([`crate::owner_trust::admit_discovered_manifest`]).
+///
+/// # Errors
+///
+/// [`CliError::Usage`] when the nearest manifest is a link, or another user
+/// owns it or could write or replace it; [`CliError::Io`] when it cannot be
+/// inspected.
+pub fn find_manifest_for_ipe_file(ipe_file: &Path) -> Result<Option<PathBuf>, CliError> {
+    let Some(mut dir) = ipe_file.parent() else {
+        return Ok(None);
+    };
     loop {
         if let Some(manifest) = project::manifest_in_dir(dir) {
-            return Some(manifest);
+            crate::owner_trust::admit_discovered_manifest(&manifest)?;
+            return Ok(Some(manifest));
         }
-        dir = dir.parent()?;
+        let Some(up) = dir.parent() else {
+            return Ok(None);
+        };
+        dir = up;
     }
 }
 

@@ -219,14 +219,15 @@ pub enum ScopeError {
     TooManyFiles { found: usize, max: usize },
 }
 
+/// Paths render quoted and escaped: a directory name is attacker-chosen when a
+/// checkout is, and a newline or escape in it must not open a forged output line.
 impl std::fmt::Display for ScopeError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::RootNotFound(p) => write!(f, "watch: project root not found: {}", p.display()),
+            Self::RootNotFound(p) => write!(f, "watch: project root not found: {p:?}"),
             Self::EntryDirEscapesRoot(p) => write!(
                 f,
-                "watch: entry directory escapes the project root (symlink?): {}",
-                p.display()
+                "watch: entry directory escapes the project root (symlink?): {p:?}"
             ),
             Self::TooManyFiles { found, max } => write!(
                 f,
@@ -522,6 +523,21 @@ fn is_manifest_file(path: &Path) -> bool {
 mod tests {
     use super::*;
     use std::fs;
+
+    /// A newline or escape in a watched path renders escaped, never as a fresh output line.
+    #[test]
+    fn a_scope_error_path_cannot_forge_an_output_line() {
+        let forged = PathBuf::from("x\nerror: forged\u{1b}[2K");
+        let errors = [
+            ScopeError::RootNotFound(forged.clone()),
+            ScopeError::EntryDirEscapesRoot(forged),
+        ];
+        for error in errors {
+            let text = error.to_string();
+            assert_eq!(text.lines().count(), 1, "{text}");
+            assert!(!text.contains('\u{1b}'), "{text}");
+        }
+    }
 
     fn tmp_dir(tag: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!(

@@ -1,7 +1,13 @@
-//! `IpeStringify` — the total Ipê value stringifier.
+//! `IpeStringify` — the total Ipê value stringifier — and `IpeInterpolate`,
+//! the closed scalar renderer behind `{{expr}}` interpolation and `Log.*With`.
 //!
-//! Backs `Basics.errorToString` (and `Ipe.Test.debugShow`, which is just
-//! `errorToString v`). Every type reachable from a generic `errorToString`
+//! `IpeInterpolate` is sealed and implemented for exactly the five interpolable
+//! scalars ([`INTERPOLABLE_IPE_TYPES`]); no record, ADT, container or opaque
+//! runtime type can reach an interpolation or a log attribute, so neither path
+//! has a `Debug` fallback.
+//!
+//! `IpeStringify` backs `Basics.errorToString` (and `Ipe.Test.debugShow`, which
+//! is just `errorToString v`). Every type reachable from a generic `errorToString`
 //! call implements this trait (runtime primitives below; every codegen-emitted
 //! record/ADT gets an `IpeStringify` impl from the compiler's emitter).
 //!
@@ -91,6 +97,53 @@ impl<T: core::fmt::Debug> ViaDebug for &Wrap<T> {
     }
 }
 
+// ─── Interpolation: the closed scalar set ───────────────────────────────────
+
+/// Renders an interpolable scalar for `{{expr}}` and `Log.*With` attributes.
+///
+/// Sealed and implemented for exactly the rows of the `interpolable_scalars!`
+/// table below, each through the same function its `String.from*` conversion
+/// uses, so an interpolation and the explicit conversion never disagree.
+pub trait IpeInterpolate: sealed::Sealed {
+    /// The rendered text of `self`.
+    fn ipe_interpolate(&self) -> String;
+}
+
+/// One table — `Rust type => Ipê name, render` — generates the sealing impls,
+/// the `IpeInterpolate` impls and [`INTERPOLABLE_IPE_TYPES`], so the name list
+/// the compiler is checked against and the impl set cannot drift apart.
+macro_rules! interpolable_scalars {
+    ($($rust:ty => $ipe:literal, |$v:ident| $render:expr;)*) => {
+        /// The Ipê types [`IpeInterpolate`] is implemented for, by Ipê name —
+        /// the runtime side of the compiler's interpolable set, asserted equal
+        /// to it at build time (`ipe-cli`) so the two cannot drift.
+        pub const INTERPOLABLE_IPE_TYPES: [&str; [$($ipe),*].len()] = [$($ipe),*];
+
+        mod sealed {
+            /// Seals [`super::IpeInterpolate`]: only this module can implement it.
+            pub trait Sealed {}
+            $(impl Sealed for $rust {})*
+        }
+
+        $(
+            impl IpeInterpolate for $rust {
+                fn ipe_interpolate(&self) -> String {
+                    let $v = self;
+                    $render
+                }
+            }
+        )*
+    };
+}
+
+interpolable_scalars! {
+    String => "String", |s| s.clone();
+    i64 => "Int", |n| crate::string::string_from_int(*n);
+    f64 => "Float", |x| crate::string::string_from_float(*x);
+    bool => "Bool", |b| crate::string::string_from_bool(*b);
+    char => "Char", |c| crate::string::string_from_char(*c);
+}
+
 // ─── Scalars ────────────────────────────────────────────────────────────────
 
 impl IpeStringify for String {
@@ -158,7 +211,7 @@ impl IpeStringify for f64 {
 
 impl IpeStringify for bool {
     fn ipe_show(&self) -> String {
-        self.to_string()
+        crate::string::string_from_bool(*self)
     }
 }
 
@@ -465,6 +518,18 @@ mod tests {
                 (&Wrap(&self.debug_only)).dispatch()
             )
         }
+    }
+
+    // Interpolation renders each scalar exactly as its `String.from*` does.
+    #[test]
+    fn interpolate_matches_the_string_conversions() {
+        for f in [42.5, 1e6, 1e21, -0.0, 0.0001, f64::INFINITY, f64::NAN] {
+            assert_eq!(f.ipe_interpolate(), crate::string::string_from_float(f));
+        }
+        assert_eq!(7i64.ipe_interpolate(), "7");
+        assert_eq!(true.ipe_interpolate(), "true");
+        assert_eq!('x'.ipe_interpolate(), "x");
+        assert_eq!("hi".to_string().ipe_interpolate(), "hi");
     }
 
     #[test]

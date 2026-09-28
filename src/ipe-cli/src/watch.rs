@@ -70,10 +70,10 @@
 //!
 //! `cargo build` cancellation (never overlapping cargo builds) uses the
 //! portable equivalent for a plain OS process: the
-//! orchestrator holds the `Child` handle directly and calls `.kill()` on a
-//! superseding batch; a dedicated per-build "waiter" thread blocks on
-//! `.wait()` and reports completion (or, if killed, a status the
-//! orchestrator recognises as "superseded, not a real failure") through the
+//! orchestrator holds the `Child` handle directly and supersedes it (records
+//! the kill, then `.kill()`s) on a superseding batch; a dedicated per-build
+//! "waiter" thread polls for exit and reports completion (or, when the
+//! orchestrator recorded the kill, "superseded, not a real failure") through the
 //! SAME unified event channel, tagged with a generation counter so a stale
 //! completion from an already-superseded cycle is silently ignored rather
 //! than raced against the new one.
@@ -506,7 +506,7 @@ pub(crate) fn resolve_project_sources(
             }
         }
     } else {
-        crate::find_manifest_for_ipe_file(entry)
+        crate::find_manifest_for_ipe_file(entry)?
     };
 
     if let Some(manifest_path) = manifest_path {
@@ -819,6 +819,25 @@ enum CargoOutcome {
     Killed,
 }
 
+/// An in-flight `cargo build` child plus whether the orchestrator killed it.
+///
+/// "Killed by us" is recorded at the kill site rather than inferred from the
+/// exit status: an exit status cannot tell our kill apart from a crash, an
+/// out-of-memory kill, or (off unix) an ordinary compile error, and treating
+/// any of those as superseded would silently drop a real failure.
+struct CargoChild {
+    child: Child,
+    superseded: bool,
+}
+
+impl CargoChild {
+    /// Record that the orchestrator is ending this build, then kill it.
+    fn supersede(&mut self) {
+        self.superseded = true;
+        let _ = self.child.kill();
+    }
+}
+
 /// Run `ipe watch` until the process receives a shutdown signal (Ctrl-C) or
 /// every event source disconnects.
 ///
@@ -1048,7 +1067,7 @@ fn run_inner(
     let mut supervisor = ipe_watch::SupervisorState::fresh();
     let mut generation: u64 = 0;
     let mut compile_worker: Option<thread::JoinHandle<()>> = None;
-    let mut cargo_child: Option<Arc<std::sync::Mutex<Child>>> = None;
+    let mut cargo_child: Option<Arc<std::sync::Mutex<CargoChild>>> = None;
     // Set at `CompileDone` (Green), consumed at `CargoDone` (Green) — the
     // readiness strategy is a property of the SOURCE (does it call
     // `Web.tea`?), decided once per generation right after emit, not
@@ -1152,10 +1171,14 @@ fn run_inner(
                 // `spawn_cargo_build`) observes the exit via its own poll
                 // and reports `CargoOutcome::Killed`, so this arm never
                 // blocks the orchestrator.
-                if let Some(child) = cargo_child.take()
-                    && let Ok(mut child) = child.lock()
-                {
-                    let _ = child.kill();
+                if let Some(child) = cargo_child.take() {
+                    // A poisoned lock still guards a live child to kill — the
+                    // kill must not be skipped just because some other thread
+                    // panicked while briefly holding the lock.
+                    child
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .supersede();
                 }
 
                 let resolved = match resolve_project_sources(&opts.entry, None) {
@@ -1851,10 +1874,14 @@ fn run_inner(
     // SIGTERM ceiling as a direct result.
     drop(watcher);
 
-    if let Some(child) = cargo_child.take()
-        && let Ok(mut child) = child.lock()
-    {
-        let _ = child.kill();
+    if let Some(child) = cargo_child.take() {
+        // A poisoned lock still guards a live child to kill — the kill must
+        // not be skipped just because some other thread panicked while
+        // briefly holding the lock.
+        child
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .supersede();
     }
     supervisor.shutdown(opts.restart_timeouts);
     // Stop the front proxy AFTER the supervised child is down: it held the
@@ -3083,7 +3110,7 @@ fn spawn_cargo_build(
     generation: u64,
     evt_tx: mpsc::Sender<OrchestratorEvent>,
     quiet: bool,
-) -> std::io::Result<Arc<std::sync::Mutex<Child>>> {
+) -> std::io::Result<Arc<std::sync::Mutex<CargoChild>>> {
     let mut cmd = Command::new(cargo_path);
     cmd.arg("build")
         .arg("--message-format=json")
@@ -3114,7 +3141,10 @@ fn spawn_cargo_build(
     // child before it can exit.
     let stdout = child.stdout.take();
     let stderr = child.stderr.take();
-    let shared = Arc::new(std::sync::Mutex::new(child));
+    let shared = Arc::new(std::sync::Mutex::new(CargoChild {
+        child,
+        superseded: false,
+    }));
     let shared_for_waiter = Arc::clone(&shared);
 
     let stdout_reader = thread::spawn(move || read_all(stdout));
@@ -3125,12 +3155,23 @@ fn spawn_cargo_build(
 
     thread::spawn(move || {
         let status = loop {
-            let polled = shared_for_waiter
-                .lock()
-                .ok()
-                .and_then(|mut c| c.try_wait().ok().flatten());
-            if let Some(status) = polled {
-                break Some(status);
+            match shared_for_waiter.lock() {
+                // A poisoned lock means the orchestrator thread panicked while
+                // holding it; the exit status can no longer be observed, so
+                // stop polling rather than spin forever.
+                Err(_) => break None,
+                Ok(mut guard) => {
+                    let superseded = guard.superseded;
+                    let polled = guard.child.try_wait();
+                    drop(guard);
+                    match polled {
+                        Ok(Some(status)) => break Some((status, superseded)),
+                        Ok(None) => {}
+                        // A persistent `try_wait` error can never resolve by
+                        // retrying, so stop rather than poll forever.
+                        Err(_) => break None,
+                    }
+                }
             }
             thread::sleep(Duration::from_millis(30));
         };
@@ -3138,7 +3179,7 @@ fn spawn_cargo_build(
         let err_buf = stderr_reader.join().unwrap_or_default();
         let outcome = match status {
             None => CargoOutcome::Red("cargo build: could not observe exit status".to_owned()),
-            Some(status) if status.success() => find_executable_path(&out_buf).map_or_else(
+            Some((status, _)) if status.success() => find_executable_path(&out_buf).map_or_else(
                 || {
                     CargoOutcome::Red(
                         "cargo build succeeded but produced no executable artifact".to_owned(),
@@ -3146,13 +3187,8 @@ fn spawn_cargo_build(
                 },
                 CargoOutcome::Green,
             ),
-            Some(status) => {
-                if is_killed_status(status) {
-                    CargoOutcome::Killed
-                } else {
-                    CargoOutcome::Red(err_buf)
-                }
-            }
+            Some((_, true)) => CargoOutcome::Killed,
+            Some((_, false)) => CargoOutcome::Red(err_buf),
         };
         let _ = evt_tx.send(OrchestratorEvent::CargoDone {
             generation,
@@ -3197,24 +3233,6 @@ fn relay_and_capture_stderr(pipe: Option<impl std::io::Read>) -> String {
         }
     }
     captured
-}
-
-/// Whether a non-success exit status looks like "killed by us" (a signal
-/// termination on unix, matching `Child::kill`'s SIGKILL) rather than a
-/// genuine compile error — used to route a superseded build to
-/// `CargoOutcome::Killed` (silently dropped) instead of
-/// `CargoOutcome::Red` (reported as a failure INV-3 must preserve
-/// last-good against).
-fn is_killed_status(status: std::process::ExitStatus) -> bool {
-    #[cfg(unix)]
-    {
-        use std::os::unix::process::ExitStatusExt as _;
-        status.signal().is_some()
-    }
-    #[cfg(not(unix))]
-    {
-        !status.success()
-    }
 }
 
 /// Parse `cargo build --message-format=json`'s stdout for the produced
@@ -4054,5 +4072,71 @@ mod tests {
             }
         );
         assert_eq!(after.blame_path, entry);
+    }
+
+    /// Write an executable fake `cargo` running `body` into a fresh directory
+    /// named after `name`, returning the script path.
+    #[cfg(unix)]
+    fn fake_cargo(name: &str, body: &str) -> PathBuf {
+        use std::os::unix::fs::PermissionsExt as _;
+        let dir = std::env::temp_dir().join(format!(
+            "ipe_watch_fake_cargo_{name}_{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).expect("create fake cargo dir");
+        let path = dir.join("cargo");
+        std::fs::write(&path, format!("#!/bin/sh\n{body}\n")).expect("write fake cargo");
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755))
+            .expect("make fake cargo executable");
+        path
+    }
+
+    /// Spawn `cargo` through the watch build path and return the outcome its
+    /// waiter reports, after `before_exit` has run against the live child.
+    #[cfg(unix)]
+    fn cargo_outcome(
+        cargo: &Path,
+        before_exit: impl FnOnce(&std::sync::Mutex<super::CargoChild>),
+    ) -> Option<super::CargoOutcome> {
+        let out_dir = cargo.parent().expect("fake cargo has a parent dir");
+        let (tx, rx) = mpsc::channel();
+        let child =
+            super::spawn_cargo_build(cargo, out_dir, Some(&out_dir.join("target")), 1, tx, true)
+                .expect("spawn fake cargo");
+        before_exit(child.as_ref());
+        let event = rx.recv_timeout(Duration::from_secs(30));
+        let _ = std::fs::remove_dir_all(out_dir);
+        match event {
+            Ok(OrchestratorEvent::CargoDone { outcome, .. }) => Some(outcome),
+            _ => None,
+        }
+    }
+
+    /// A build that dies by a signal nobody in the orchestrator sent (a crash,
+    /// an out-of-memory kill) is a real failure, never a silent supersede.
+    #[cfg(unix)]
+    #[test]
+    fn unrequested_signal_death_is_a_failure() {
+        let cargo = fake_cargo("signal", "kill -9 $$");
+        let outcome = cargo_outcome(&cargo, |_| {});
+        assert!(
+            matches!(outcome, Some(super::CargoOutcome::Red(_))),
+            "a signal death the orchestrator did not request must report Red"
+        );
+    }
+
+    /// A build the orchestrator supersedes reports `Killed`, so the stale
+    /// cycle is dropped rather than shown as a failure.
+    #[cfg(unix)]
+    #[test]
+    fn superseded_build_reports_killed() {
+        let cargo = fake_cargo("supersede", "exec sleep 30");
+        let outcome = cargo_outcome(&cargo, |child| {
+            child.lock().expect("cargo child lock").supersede();
+        });
+        assert!(
+            matches!(outcome, Some(super::CargoOutcome::Killed)),
+            "a superseded build must report Killed"
+        );
     }
 }
