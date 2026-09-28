@@ -57,12 +57,6 @@ impl HomeDir {
         Some(Self(path))
     }
 
-    /// Borrow the verified path.
-    #[must_use]
-    pub fn as_path(&self) -> &std::path::Path {
-        &self.0
-    }
-
     /// Unwrap into the verified path.
     #[must_use]
     pub fn into_path(self) -> std::path::PathBuf {

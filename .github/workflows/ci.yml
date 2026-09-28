@@ -252,6 +252,7 @@ jobs:
           'test(/^(output_dir|clean|cache|owner_trust)::/)
           | test(=ffi::tests::owned_project_cache_is_refused_when_unverifiable)
           | test(=driver::tests::find_manifest_refuses_an_unverifiable_manifest)'
+      - run: cargo nextest run --locked -p ipe_sandbox --lib -E 'test(/^home::tests::/)'
 
   # No compiler-internal jargon or raw Rust types leak into user-facing text
   # (rendered diagnostic goldens + `ipe explain` pages). Pure git + ripgrep, no
