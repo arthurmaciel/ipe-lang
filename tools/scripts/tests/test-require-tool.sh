@@ -535,6 +535,10 @@ got="$(cd "$fixture_dir/optroot" && bash -c "source '$lib'; enumerate_files v '*
 check "enumerate_files: a '-delete' root is scanned as a directory" "$got" "./-delete/keep.txt|"
 check "enumerate_files: a '-delete' root never deletes" \
     "$([ -e "$fixture_dir/optroot/-delete/keep.txt" ] && echo kept || echo deleted)" kept
+mkdir -p "$fixture_dir/bangroot/!" "$fixture_dir/bangroot/decoy.txt"
+printf 'x\n' > "$fixture_dir/bangroot/!/a.txt"
+got="$(cd "$fixture_dir/bangroot" && bash -c "source '$lib'; enumerate_files v '*.txt' '!'; printf '%s|' \"\${v[@]}\"" 2>&1)"
+check "enumerate_files: a '!' root is scanned as a directory, never negates" "$got" "./!/a.txt|"
 
 # ── artifact-guard: producer failure, forbidden artifact, clean tree ─────────
 guard="$repo_root/.github/ci/artifact-guard.sh"

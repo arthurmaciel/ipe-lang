@@ -398,12 +398,12 @@ _enumerate_files_into() {
             exit 2
         fi
     done
-    # A root spelled like an option (`-delete`) would be read by find as part
-    # of its expression, so every such root is pinned to a path first.
+    # A root find would read as the start of its expression (`-delete`, `!`,
+    # `(`, `)`, `,`) is pinned to a path first, so it is only ever a root.
     local -a __ef_roots=()
     for __ef_root in "$@"; do
         case "$__ef_root" in
-            -*) __ef_roots+=("./$__ef_root") ;;
+            -* | '!'* | '('* | ')'* | ,*) __ef_roots+=("./$__ef_root") ;;
             *) __ef_roots+=("$__ef_root") ;;
         esac
     done
