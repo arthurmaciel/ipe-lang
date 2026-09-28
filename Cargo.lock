@@ -3350,6 +3350,7 @@ version = "0.3.1"
 name = "ipe_sandbox"
 version = "0.3.1"
 dependencies = [
+ "getrandom 0.3.4",
  "ipe_diagnostics",
  "ipe_kernels",
  "libc",
