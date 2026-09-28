@@ -94,12 +94,12 @@ mod released {
         /// Construct the proof that `name` still names the held subdirectory at `path`.
         ///
         /// Called only by [`HeldDir::release_proven`](super::HeldDir::release_proven).
-        pub(super) fn new(name: &'n OsStr, path: PathBuf) -> Self {
+        pub(super) const fn new(name: &'n OsStr, path: PathBuf) -> Self {
             Self { name, path }
         }
 
         /// The re-proven name.
-        pub(super) fn name(&self) -> &'n OsStr {
+        pub(super) const fn name(&self) -> &'n OsStr {
             self.name
         }
 

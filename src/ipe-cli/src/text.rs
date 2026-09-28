@@ -519,7 +519,7 @@ pub fn fill(template: &str, args: &[(&str, &dyn Placeholder)]) -> String {
 }
 
 /// A message parameter as the `&dyn Placeholder` that [`fill`] takes.
-const fn shown<'a>(value: &'a dyn Placeholder) -> &'a dyn Placeholder {
+const fn shown(value: &dyn Placeholder) -> &dyn Placeholder {
     value
 }
 

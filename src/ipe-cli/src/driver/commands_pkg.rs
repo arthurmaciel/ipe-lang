@@ -2416,6 +2416,7 @@ fn package_reached_capabilities(
                     .collect::<Option<Vec<_>>>()
             })
             .collect();
+        drop(interner);
         (reached.capabilities, reached_homes)
     };
 

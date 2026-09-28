@@ -323,7 +323,6 @@ mod held {
             Err(e) => e,
         };
         match entry_type(parent, name) {
-            Ok(None) => Ok(None),
             Ok(Some(FileType::Symlink)) => Err(CliError::Usage(text::msg::ffi_cache_symlink(
                 &shown.display(),
             ))),
@@ -331,14 +330,17 @@ mod held {
                 path: shown.to_path_buf(),
                 source: open_err.into(),
             }),
-            Ok(Some(
-                FileType::RegularFile
-                | FileType::Fifo
-                | FileType::Socket
-                | FileType::CharacterDevice
-                | FileType::BlockDevice
-                | FileType::Unknown,
-            )) => Ok(None),
+            Ok(
+                None
+                | Some(
+                    FileType::RegularFile
+                    | FileType::Fifo
+                    | FileType::Socket
+                    | FileType::CharacterDevice
+                    | FileType::BlockDevice
+                    | FileType::Unknown,
+                ),
+            ) => Ok(None),
         }
     }
 

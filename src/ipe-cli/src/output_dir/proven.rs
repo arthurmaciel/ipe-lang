@@ -43,7 +43,7 @@ impl ProvenOutPath {
     pub fn parent(&self) -> Option<Self> {
         self.0
             .file_name()
-            .and(self.0.parent())
+            .and_then(|_| self.0.parent())
             .map(|parent| Self(parent.to_path_buf()))
     }
 }
