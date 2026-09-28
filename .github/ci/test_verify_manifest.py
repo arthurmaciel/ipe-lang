@@ -56,12 +56,17 @@ def _write(path: str, content: str) -> None:
 
 
 class SccacheFixture:
-    """A scratch `.github`-shaped tree: workflows/, actions/sccache/, ci/."""
+    """A scratch repository whose `.github/` holds workflows/, actions/sccache/,
+    ci/ — `repo` is the repository root local `uses: ./...` resolve against."""
 
     def __init__(self, tmp: str, *, composite: str | None = VALID_COMPOSITE):
-        self.root = tmp
+        self.repo = tmp
+        self.root = os.path.join(tmp, ".github")
+        os.makedirs(self.root, exist_ok=True)
+        tmp = self.root
         if composite is not None:
             _write(os.path.join(tmp, "actions", "sccache", "action.yml"), composite)
+        self.deterministic_checks(context="unrelated", step="Unrelated step")
 
     def workflow(self, fname: str, content: str) -> None:
         _write(os.path.join(self.root, "workflows", fname), content)
@@ -77,7 +82,7 @@ class SccacheFixture:
 
         _write(
             os.path.join(self.root, "ci", "deterministic-checks.json"),
-            json.dumps({"checks": [{"context": context, "step": step}]}),
+            json.dumps({"about": "fixture", "checks": [{"context": context, "step": step}]}),
         )
 
     def errors(self) -> list[str]:
@@ -707,6 +712,323 @@ class TestSccacheWiringRefusals(unittest.TestCase):
             ),
             errors,
         )
+
+
+
+def _ci(job_body: str, *, top: str = "") -> str:
+    """A one-job `ci.yml` (job id `clippy`) with `job_body` under the job."""
+    return (
+        "name: ci\non: push\n"
+        + top
+        + "jobs:\n  clippy:\n    runs-on: ubuntu-latest\n"
+        + textwrap.indent(textwrap.dedent(job_body), "    ")
+    )
+
+
+class TestSccacheWiringClosure(unittest.TestCase):
+    """Each class of wiring check 6 must refuse, one fixture per shape."""
+
+    def setUp(self) -> None:
+        self._tmpdir = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmpdir.cleanup)
+        self.fx = SccacheFixture(self._tmpdir.name)
+
+    def assertRefused(self, *needles: str) -> list[str]:
+        errors = self.fx.errors()
+        self.assertTrue(any(all(n in e for n in needles) for e in errors), errors)
+        return errors
+
+    def ci(self, job_body: str, **kw: str) -> None:
+        self.fx.workflow("ci.yml", _ci(job_body, **kw))
+
+    def repo_action(self, rel_dir: str, content: str, fname: str = "action.yml") -> None:
+        _write(os.path.join(self.fx.repo, rel_dir, fname), textwrap.dedent(content))
+
+    # ---- positive: benign shapes stay clean ------------------------------
+
+    def test_yaml_comment_naming_the_wrapper_is_not_scanned(self) -> None:
+        self.fx.workflow(
+            "ci.yml",
+            "# a job that wants RUSTC_WRAPPER uses ./.github/actions/sccache\n"
+            + _ci("steps:\n  - uses: ./.github/actions/sccache\n  - run: cargo build\n"),
+        )
+        self.assertEqual(self.fx.errors(), [])
+
+    def test_benign_composite_outside_github_actions_passes(self) -> None:
+        self.repo_action(
+            "tools/ci/setup",
+            "runs:\n  using: composite\n  steps:\n    - shell: bash\n      run: rustc --version\n",
+        )
+        self.ci("steps:\n  - uses: ./tools/ci/setup\n  - run: cargo build\n")
+        self.assertEqual(self.fx.errors(), [])
+
+    # ---- (c) free-text wiring, no $GITHUB_ENV needed ----------------------
+
+    def test_inline_env_in_run_is_refused(self) -> None:
+        self.ci("steps:\n  - name: Build\n    run: RUSTC_WRAPPER=sccache cargo build\n")
+        self.assertRefused("step 'Build' run:", "RUSTC_WRAPPER")
+
+    def test_export_in_run_is_refused(self) -> None:
+        self.ci("steps:\n  - name: Build\n    run: export rustc_workspace_wrapper=sccache\n")
+        self.assertRefused("step 'Build' run:")
+
+    def test_step_shell_wrapper_is_refused(self) -> None:
+        self.ci(
+            "steps:\n  - name: Build\n    shell: env RUSTC_WRAPPER=sccache bash -e {0}\n"
+            "    run: cargo build\n"
+        )
+        self.assertRefused("step 'Build' shell:")
+
+    def test_job_defaults_run_shell_is_refused(self) -> None:
+        self.ci(
+            "defaults:\n  run:\n    shell: env RUSTC_WRAPPER=sccache bash {0}\n"
+            "steps:\n  - run: cargo build\n"
+        )
+        self.assertRefused("job 'clippy' defaults.run.shell")
+
+    def test_workflow_defaults_run_shell_is_refused(self) -> None:
+        self.ci(
+            "steps:\n  - run: cargo build\n",
+            top="defaults:\n  run:\n    shell: env SCCACHE_GHA_ENABLED=true bash {0}\n",
+        )
+        self.assertRefused("ci.yml defaults.run.shell")
+
+    def test_cargo_config_flag_is_refused(self) -> None:
+        self.ci("steps:\n  - name: Build\n    run: cargo --config build.rustc-wrapper='\"sccache\"' build\n")
+        self.assertRefused("step 'Build' run:", "rustc-wrapper")
+
+    def test_cargo_config_file_write_is_refused(self) -> None:
+        self.ci(
+            "steps:\n  - name: Cfg\n"
+            "    run: printf '[build]\\nrustc-wrapper = \"sccache\"\\n' >> ~/.cargo/config.toml\n"
+        )
+        self.assertRefused("step 'Cfg' run:")
+
+    def test_with_input_naming_the_wrapper_is_refused(self) -> None:
+        self.ci("steps:\n  - uses: some/action@v1\n    with:\n      rustc-wrapper: sccache\n")
+        self.assertRefused("with.rustc-wrapper")
+
+    def test_composite_step_shell_wrapper_is_refused(self) -> None:
+        self.fx.composite(
+            "w",
+            "runs:\n  using: composite\n  steps:\n"
+            "    - shell: env RUSTC_WRAPPER=sccache bash {0}\n      run: cargo build\n",
+        )
+        self.ci("steps:\n  - uses: ./.github/actions/w\n")
+        self.assertRefused("./.github/actions/w/action.yml", "shell:")
+
+    # ---- (b) every wrapper key, every scope ------------------------------
+
+    def test_workspace_wrapper_env_keys_are_refused(self) -> None:
+        for key in ("RUSTC_WORKSPACE_WRAPPER", "CARGO_BUILD_RUSTC_WORKSPACE_WRAPPER"):
+            with self.subTest(key=key):
+                self.ci(f"env:\n  {key}: sccache\nsteps:\n  - run: cargo build\n")
+                self.assertRefused("job 'clippy' env sets", key.casefold())
+
+    def test_env_key_inside_other_composite_is_refused(self) -> None:
+        self.fx.composite(
+            "w",
+            "runs:\n  using: composite\n  steps:\n"
+            "    - name: B\n      shell: bash\n      run: cargo build\n"
+            "      env:\n        RUSTC_WRAPPER: sccache\n",
+        )
+        self.ci("steps:\n  - uses: ./.github/actions/w\n")
+        self.assertRefused("./.github/actions/w/action.yml: step 'B' env sets")
+
+    def test_non_mapping_env_at_every_scope_fails_closed(self) -> None:
+        expr = "${{ fromJSON(vars.E) }}"
+        cases = {
+            "job": f"env: {expr}\nsteps: []\n",
+            "container": f"container:\n  image: rust\n  env: {expr}\nsteps: []\n",
+            "service": f"services:\n  db:\n    image: pg\n    env: {expr}\nsteps: []\n",
+        }
+        for scope, body in cases.items():
+            with self.subTest(scope=scope):
+                self.ci(body)
+                self.assertRefused("not a plain mapping")
+        self.ci("steps:\n  - uses: ./.github/actions/w\n")
+        self.fx.composite(
+            "w",
+            f"runs:\n  using: composite\n  steps:\n    - name: B\n      shell: bash\n"
+            f"      run: x\n      env: {expr}\n",
+        )
+        self.assertRefused("./.github/actions/w/action.yml: step 'B'", "not a plain mapping")
+
+    # ---- local `uses:` resolution (F1) -----------------------------------
+
+    def test_unresolved_local_action_is_refused(self) -> None:
+        for uses in ("./.github/actions/sccache@main", "./tools/ci/cache", "./.github/actions/nope"):
+            with self.subTest(uses=uses):
+                self.ci(f"steps:\n  - uses: {uses}\n")
+                self.assertRefused("does not exist")
+
+    def test_local_action_escaping_repo_is_refused(self) -> None:
+        self.ci("steps:\n  - uses: ./../elsewhere\n")
+        self.assertRefused("escapes the repository root")
+
+    def test_node_and_docker_local_actions_are_refused(self) -> None:
+        for using in ("node20", "docker"):
+            with self.subTest(using=using):
+                self.fx.composite("opaque", f"runs:\n  using: {using}\n  main: index.js\n")
+                self.ci("steps:\n  - uses: ./.github/actions/opaque\n")
+                self.assertRefused("must be 'composite'", repr(using))
+
+    def test_both_action_yml_and_yaml_is_refused(self) -> None:
+        self.fx.composite("w", "runs:\n  using: composite\n  steps: []\n")
+        _write(
+            os.path.join(self.fx.root, "actions", "w", "action.yaml"),
+            "runs:\n  using: composite\n  steps: []\n",
+        )
+        self.ci("steps:\n  - uses: ./.github/actions/w\n")
+        self.assertRefused("both action.yml and action.yaml")
+
+    def test_action_yaml_extension_is_resolved(self) -> None:
+        _write(
+            os.path.join(self.fx.root, "actions", "w", "action.yaml"),
+            "runs:\n  using: composite\n  steps:\n    - uses: mozilla-actions/sccache-action@v1\n",
+        )
+        self.ci("steps:\n  - uses: ./.github/actions/w\n")
+        self.assertRefused("./.github/actions/w/action.yml", "runs the raw")
+
+    def test_composite_outside_github_actions_reaching_sccache_hits_rule_d(self) -> None:
+        self.fx.deterministic_checks(context="clippy", step="Run clippy")
+        self.repo_action(
+            "tools/ci/cache",
+            "runs:\n  using: composite\n  steps:\n    - uses: ./.github/actions/sccache\n",
+        )
+        self.ci("steps:\n  - uses: ./tools/ci/cache\n  - name: Run clippy\n    run: cargo clippy\n")
+        self.assertRefused("job 'clippy' uses", "via ./tools/ci/cache", "Run clippy")
+
+    def test_nested_path_composite_running_raw_action_is_refused(self) -> None:
+        self.fx.composite("x/y", "runs:\n  using: composite\n  steps:\n    - uses: mozilla-actions/sccache-action@v1\n")
+        self.ci("steps:\n  - uses: ./.github/actions/x/y\n")
+        self.assertRefused("./.github/actions/x/y/action.yml", "runs the raw")
+
+    def test_case_variant_sanctioned_path_hits_rule_d(self) -> None:
+        self.fx.deterministic_checks(context="clippy", step="Run clippy")
+        self.ci(
+            "steps:\n  - uses: ./.github/actions/sccache\n  - uses: ./.github/Actions/SCCACHE\n"
+            "  - name: Run clippy\n    run: cargo clippy\n"
+        )
+        self.assertRefused("job 'clippy' uses ./.github/actions/sccache", "Run clippy")
+
+    def test_nesting_past_the_bound_is_refused(self) -> None:
+        self.fx.deterministic_checks(context="clippy", step="Run clippy")
+        limit = verify_manifest.LOCAL_ACTION_DEPTH_LIMIT
+        for i in range(limit + 5):
+            self.fx.composite(
+                f"c{i}", f"runs:\n  using: composite\n  steps:\n    - uses: ./.github/actions/c{i + 1}\n"
+            )
+        self.fx.composite(
+            f"c{limit + 5}", "runs:\n  using: composite\n  steps:\n    - uses: ./.github/actions/sccache\n"
+        )
+        self.ci("steps:\n  - uses: ./.github/actions/c0\n  - name: Run clippy\n    run: cargo clippy\n")
+        self.assertRefused("nesting exceeds")
+
+    def test_nesting_at_the_bound_is_decided(self) -> None:
+        self.fx.deterministic_checks(context="clippy", step="Run clippy")
+        limit = verify_manifest.LOCAL_ACTION_DEPTH_LIMIT
+        for i in range(limit - 1):
+            self.fx.composite(
+                f"c{i}", f"runs:\n  using: composite\n  steps:\n    - uses: ./.github/actions/c{i + 1}\n"
+            )
+        self.fx.composite(
+            f"c{limit - 1}", "runs:\n  using: composite\n  steps:\n    - uses: ./.github/actions/sccache\n"
+        )
+        self.ci("steps:\n  - uses: ./.github/actions/c0\n  - name: Run clippy\n    run: cargo clippy\n")
+        errors = self.assertRefused("job 'clippy' uses", "via ./.github/actions/c0")
+        self.assertFalse(any("nesting exceeds" in e for e in errors), errors)
+
+    def test_local_action_cycle_is_refused(self) -> None:
+        self.fx.composite("a", "runs:\n  using: composite\n  steps:\n    - uses: ./.github/actions/b\n")
+        self.fx.composite("b", "runs:\n  using: composite\n  steps:\n    - uses: ./.github/actions/a\n")
+        self.ci("steps:\n  - uses: ./.github/actions/a\n")
+        self.assertRefused("local action cycle")
+
+    def test_missing_local_reusable_workflow_is_refused(self) -> None:
+        self.fx.workflow(
+            "ci.yml", "name: ci\non: push\njobs:\n  a:\n    uses: ./.github/workflows/gone.yml\n"
+        )
+        self.assertRefused("local reusable workflow", "does not exist")
+
+    # ---- strict positive proof of the sanctioned composite (F2) ----------
+
+    def _sanctioned(self, steps: str) -> None:
+        _write(
+            os.path.join(self.fx.root, "actions", "sccache", "action.yml"),
+            "runs:\n  using: composite\n  steps:\n" + textwrap.indent(textwrap.dedent(steps), "    "),
+        )
+        self.ci("steps:\n  - run: cargo build\n")
+
+    def test_composite_writing_only_one_var_is_refused(self) -> None:
+        self._sanctioned(
+            "- uses: mozilla-actions/sccache-action@v0.0.9\n"
+            "- shell: bash\n  run: echo SCCACHE_GHA_ENABLED=true >> $GITHUB_ENV\n"
+        )
+        self.assertRefused("no step writes", "RUSTC_WRAPPER")
+
+    def test_composite_loose_write_is_not_proof(self) -> None:
+        self._sanctioned(
+            "- uses: mozilla-actions/sccache-action@v0.0.9\n"
+            "- shell: bash\n  run: |\n"
+            "    # RUSTC_WRAPPER=sccache SCCACHE_GHA_ENABLED=true $GITHUB_ENV\n"
+            "    printf '%s=%s\\n' RUSTC_WRAPPER sccache >> \"$GITHUB_ENV\"\n"
+        )
+        self.assertRefused("no step writes")
+
+    def test_composite_conditional_wiring_is_not_proof(self) -> None:
+        self._sanctioned(
+            "- uses: mozilla-actions/sccache-action@v0.0.9\n"
+            "- shell: bash\n  if: false\n  run: |\n"
+            "    echo \"RUSTC_WRAPPER=sccache\" >> \"$GITHUB_ENV\"\n"
+            "    echo \"SCCACHE_GHA_ENABLED=true\" >> \"$GITHUB_ENV\"\n"
+        )
+        self.assertRefused("no step writes")
+
+    def test_composite_conditional_install_is_not_proof(self) -> None:
+        self._sanctioned(
+            "- uses: mozilla-actions/sccache-action@v0.0.9\n  if: false\n"
+            "- shell: bash\n  run: |\n"
+            "    echo \"RUSTC_WRAPPER=sccache\" >> \"$GITHUB_ENV\"\n"
+            "    echo \"SCCACHE_GHA_ENABLED=true\" >> \"$GITHUB_ENV\"\n"
+        )
+        self.assertRefused("no unconditional step installs")
+
+    # ---- deterministic-checks SSOT (F4) -----------------------------------
+
+    def test_missing_deterministic_checks_file_is_refused(self) -> None:
+        os.remove(os.path.join(self.fx.root, "ci", "deterministic-checks.json"))
+        self.ci("steps:\n  - uses: ./.github/actions/sccache\n  - name: Run clippy\n    run: cargo clippy\n")
+        self.assertRefused("cannot establish the deterministic check steps")
+
+    def test_malformed_deterministic_checks_file_is_refused(self) -> None:
+        _write(os.path.join(self.fx.root, "ci", "deterministic-checks.json"), '{"checks": "x"}')
+        self.ci("steps:\n  - run: cargo build\n")
+        self.assertRefused("cannot establish the deterministic check steps")
+
+    # ---- malformed shapes (F5) --------------------------------------------
+
+    def test_malformed_shapes_are_refused(self) -> None:
+        cases = {
+            "doc": ("- a\n- b\n", "the workflow document is not a mapping"),
+            "jobs": ("name: ci\non: push\njobs: [1]\n", "jobs: is not a non-empty mapping"),
+            "job": ("name: ci\non: push\njobs:\n  clippy: 3\n", "the job is not a mapping"),
+            "steps": (_ci("steps: oops\n"), "steps: is not a list"),
+            "step": (_ci("steps:\n  - just-a-string\n"), "steps[0] is not a mapping"),
+            "services": (_ci("services: [pg]\nsteps: []\n"), "services: is not a mapping"),
+            "container": (_ci("container: [rust]\nsteps: []\n"), "container: is not"),
+            "defaults": (_ci("defaults: x\nsteps: []\n"), "defaults: is not a mapping"),
+            "run": (_ci("steps:\n  - run: [a]\n"), "run: is not a string"),
+        }
+        for what, (doc, needle) in cases.items():
+            with self.subTest(what=what):
+                self.fx.workflow("ci.yml", doc)
+                self.assertRefused(needle)
+
+    def test_malformed_composite_steps_are_refused(self) -> None:
+        self.fx.composite("w", "runs:\n  using: composite\n  steps: nope\n")
+        self.ci("steps:\n  - uses: ./.github/actions/w\n")
+        self.assertRefused("steps: is not a list")
 
 
 if __name__ == "__main__":

@@ -37,17 +37,19 @@ Checks performed
      `uses: ./.github/actions/sccache`, a composite action that installs
      `mozilla-actions/sccache-action` and writes RUSTC_WRAPPER/
      SCCACHE_GHA_ENABLED to `$GITHUB_ENV` itself, so the wrapper can never
-     exist in a job without the binary that backs it. This refuses: a raw
-     `mozilla-actions/sccache-action` reference anywhere else (case-folded);
-     a workflow-, job-, or step-level `env:` key RUSTC_WRAPPER/
-     SCCACHE_GHA_ENABLED (case-folded) outside the composite; a `run:` step
-     writing RUSTC_WRAPPER/SCCACHE_* into `$GITHUB_ENV` outside the
-     composite; and a job that uses the composite while also owning a step
-     named in `ci/deterministic-checks.json` (sccache's GitHub Actions cache
-     backend does network I/O a deterministic check must never risk). It
-     also validates the composite action itself installs the action and
-     writes both vars. Checked across every workflow, not just the
-     non-plumbing ones `workflow_jobs()` covers for status contexts.
+     exist in a job without the binary that backs it. Every local `./` `uses:`
+     (step or composite step) is resolved on disk (action.yml, then
+     action.yaml) under a case-folded, normalized id; an unresolved, ambiguous,
+     non-composite, cyclic, or over-deep local action is refused. Outside the
+     composite this refuses: a raw `mozilla-actions/sccache-action` reference;
+     an `env:` key naming a rustc wrapper or SCCACHE_* at any scope; and any
+     `run:`, `shell:`, `defaults.run.shell`, or `with:` text naming one (or
+     cargo's `rustc-wrapper` config spelling). A job that reaches the
+     composite, directly or through local actions, may not own a step named
+     in `ci/deterministic-checks.json` (sccache's cache backend does network
+     I/O a deterministic check must never risk). The composite itself must
+     prove its wiring with unconditional literal writes. Malformed shapes are
+     refused, never skipped. Limits are listed on `check_sccache_wiring`.
 
 Pure stdlib + PyYAML (already a CI dependency).  No network.
 """
@@ -84,18 +86,13 @@ CANCEL_WATCHER_JOB_ID = "cancel-on-cheap-red"
 
 SCCACHE_ACTION_PREFIX = "mozilla-actions/sccache-action@"
 SCCACHE_COMPOSITE_USES = "./.github/actions/sccache"
-# Canonical repo-root-relative form of SCCACHE_COMPOSITE_USES, and the form
-# every local `uses:` reference is normalized to before comparison (rule (d)
-# used to compare the raw string, so "./.github/actions/sccache/" and
-# "./.github/actions/./sccache" silently bypassed it).
-SCCACHE_COMPOSITE_NORMALIZED = posixpath.normpath(SCCACHE_COMPOSITE_USES.rstrip("/"))
-SCCACHE_COMPOSITE_REL_PATH = os.path.join("actions", "sccache", "action.yml")
+# Identity of a local action: its repo-root-relative path, normalized
+# (`./x/`, `./x`, `./a/../x` are one path) and case-folded (macOS and
+# Windows runners resolve paths case-insensitively).
+SCCACHE_COMPOSITE_ID = posixpath.normpath(SCCACHE_COMPOSITE_USES[2:]).casefold()
 SCCACHE_WRAPPER_VAR = "RUSTC_WRAPPER"
 SCCACHE_GHA_VAR = "SCCACHE_GHA_ENABLED"
-# SSOT: every env-var name that hands rustc a wrapper. Reused for BOTH the
-# exact env-key match (b) and the run:-text scan (c) — a `printf`/`export`
-# write that never matches a literal `KEY=` assignment is still a wiring
-# write and must be refused the same as one that does.
+# SSOT: every env-var name that hands rustc a wrapper.
 SCCACHE_WRAPPER_KEY_NAMES = (
     SCCACHE_WRAPPER_VAR,
     "CARGO_BUILD_RUSTC_WRAPPER",
@@ -103,25 +100,41 @@ SCCACHE_WRAPPER_KEY_NAMES = (
     "CARGO_BUILD_RUSTC_WORKSPACE_WRAPPER",
 )
 SCCACHE_ENV_KEYS = {k.casefold() for k in SCCACHE_WRAPPER_KEY_NAMES} | {SCCACHE_GHA_VAR.casefold()}
-# Any wrapper-shaped key above, OR a generic SCCACHE_* key (covers
-# SCCACHE_GHA_ENABLED and any other sccache-shaped knob) — matched anywhere a
-# `run:` script also mentions $GITHUB_ENV, with no requirement on assignment
-# syntax. Over-strict by design (PRINCIPLES: fail closed on untrusted shape) —
-# a refused false positive is cheap, a missed wiring write is not.
+# Any wrapper-shaped key above, OR a generic SCCACHE_* key.
 SCCACHE_KEY_RE = re.compile(
     "(?:" + "|".join(re.escape(k) for k in SCCACHE_WRAPPER_KEY_NAMES) + r"|SCCACHE_[A-Z0-9_]*)",
     re.IGNORECASE,
 )
+# Loose refusal predicate over free text (`run:`, `shell:`, `defaults.run.
+# shell`, `with:` values): any wrapper/sccache-shaped key, or cargo's own
+# `rustc-wrapper`/`rustc-workspace-wrapper` config spelling (`cargo --config
+# build.rustc-wrapper=...`, a written `.cargo/config.toml`). No assignment
+# syntax and no `$GITHUB_ENV` is required — an inline `KEY=v cmd`, an
+# `export`, a `shell: env KEY=v bash {0}` wires rustc just as well. Over-strict
+# by design: a refused false positive is cheap, a missed wiring is not.
+SCCACHE_WIRING_TEXT_RE = re.compile(
+    SCCACHE_KEY_RE.pattern + r"|rustc[-_](?:workspace[-_])?wrapper",
+    re.IGNORECASE,
+)
+# Strict positive proof for the sanctioned composite: each var is written to
+# `$GITHUB_ENV` by one literal, whole-line `echo`, value fixed. Nothing looser
+# counts as proof that the wrapper is wired.
+_GITHUB_ENV_SINK = r"""\s*>>\s*(?:"\$GITHUB_ENV"|\$GITHUB_ENV|"\$\{GITHUB_ENV\}"|\$\{GITHUB_ENV\})\s*$"""
 
 
-def _mentions_github_env_write(run: str) -> bool:
-    """True when a `run:` script mentions $GITHUB_ENV alongside any
-    sccache-wiring-shaped key, regardless of exact assignment syntax
-    (`KEY=val >> $GITHUB_ENV`, `printf '%s=%s' KEY val >> "$GITHUB_ENV"`,
-    `echo "KEY=$val" | tee -a "$GITHUB_ENV"`, ...). Only a co-occurrence
-    check — deliberately not tied to `=`, which a shaped write need not use.
-    """
-    return "GITHUB_ENV" in run and bool(SCCACHE_KEY_RE.search(run))
+def _wire_line_re(key: str, value: str) -> re.Pattern[str]:
+    kv = re.escape(f"{key}={value}")
+    return re.compile(rf"""^\s*echo\s+(?:"{kv}"|'{kv}'|{kv}){_GITHUB_ENV_SINK}""", re.MULTILINE)
+
+
+SCCACHE_REQUIRED_WRITES = (
+    (SCCACHE_WRAPPER_VAR, _wire_line_re(SCCACHE_WRAPPER_VAR, "sccache")),
+    (SCCACHE_GHA_VAR, _wire_line_re(SCCACHE_GHA_VAR, "true")),
+)
+# Bound on local-action nesting; a chain deeper than this is refused, never
+# assumed not to reach the sccache composite.
+LOCAL_ACTION_DEPTH_LIMIT = 20
+
 
 VALID_DISPOSITIONS = {"gate", "gate-external", "nightly-gate", "informational", "delete"}
 # Workflows whose jobs are release/automation plumbing, never PR/promotion
@@ -212,12 +225,14 @@ def produced_contexts(jobs: list[Job]) -> dict[str, list[str]]:
     return contexts
 
 
-def load_deterministic_checks(errors: list[str]) -> list[tuple[str, str]] | None:
+def load_deterministic_checks(
+    errors: list[str], root: str = REPO_ROOT
+) -> list[tuple[str, str]] | None:
     """Parse `ci/deterministic-checks.json` into (context, step) pairs, or
     record why it is malformed.  Strict: the shell consumers match these
     strings byte-exactly, so anything a consumer could misread is rejected.
     """
-    where = DETERMINISTIC_CHECKS_FILE
+    where = os.path.join(root, "ci", "deterministic-checks.json")
     try:
         with open(where) as f:
             doc = json.load(f)
@@ -345,24 +360,33 @@ def check_deterministic_set(jobs: list[Job], errors: list[str]) -> None:
         )
 
 
+def _refuse_shape(loc: str, what: str, expected: str, got: object, errors: list[str]) -> None:
+    errors.append(
+        f"{loc}: {what} is not {expected} (got {type(got).__name__}: {got!r}) — "
+        "cannot verify it carries no sccache wiring; refused fail-closed"
+    )
+
+
 @dataclass(frozen=True)
 class Step:
     """One workflow (or composite action) step, typed just enough for the
-    sccache-wiring checks: `uses:`/`name:`/`env:`/`run:` are read nowhere
+    sccache-wiring checks: `uses:`/`name:`/`run:`/`shell:` are read nowhere
     else in this module via raw `.get()`.
     """
 
     raw: dict
 
+    def _str(self, key: str) -> str | None:
+        v = self.raw.get(key)
+        return v if isinstance(v, str) else None
+
     @property
     def name(self) -> str | None:
-        n = self.raw.get("name")
-        return n if isinstance(n, str) else None
+        return self._str("name")
 
     @property
     def uses(self) -> str | None:
-        u = self.raw.get("uses")
-        return u if isinstance(u, str) else None
+        return self._str("uses")
 
     @property
     def uses_folded(self) -> str:
@@ -370,8 +394,34 @@ class Step:
 
     @property
     def run(self) -> str | None:
-        r = self.raw.get("run")
-        return r if isinstance(r, str) else None
+        return self._str("run")
+
+    @property
+    def shell(self) -> str | None:
+        return self._str("shell")
+
+    @property
+    def label(self) -> str:
+        return self.name or self.uses or "<unnamed>"
+
+
+def _typed_steps(container: dict, loc: str, errors: list[str]) -> list[Step]:
+    """`steps:` of a job or composite `runs:` as typed steps. Absent is empty;
+    present but not a list, or an entry that is not a mapping, is refused —
+    an unreadable step cannot be proven free of sccache wiring."""
+    if "steps" not in container:
+        return []
+    raw = container["steps"]
+    if not isinstance(raw, list):
+        _refuse_shape(loc, "steps:", "a list", raw, errors)
+        return []
+    out: list[Step] = []
+    for i, st in enumerate(raw):
+        if isinstance(st, dict):
+            out.append(Step(st))
+        else:
+            _refuse_shape(loc, f"steps[{i}]", "a mapping", st, errors)
+    return out
 
 
 @dataclass(frozen=True)
@@ -379,26 +429,18 @@ class WorkflowJob:
     job_id: str
     raw: dict
 
-    @property
-    def steps(self) -> list[Step]:
-        return [Step(st) for st in (self.raw.get("steps") or []) if isinstance(st, dict)]
-
 
 @dataclass(frozen=True)
 class SccacheWorkflow:
     fname: str
     doc: dict
-
-    @property
-    def jobs(self) -> list[WorkflowJob]:
-        return [
-            WorkflowJob(str(jid), j)
-            for jid, j in (self.doc.get("jobs") or {}).items()
-            if isinstance(j, dict)
-        ]
+    jobs: list[WorkflowJob]
 
 
 def _load_sccache_workflows(root: str, errors: list[str]) -> list[SccacheWorkflow]:
+    """Every workflow (`*.yml` and `*.yaml`), typed. A document that is not a
+    mapping, a `jobs:` that is not a non-empty mapping, or a job that is not a
+    mapping is refused, never skipped."""
     out: list[SccacheWorkflow] = []
     paths = sorted(
         p
@@ -413,8 +455,20 @@ def _load_sccache_workflows(root: str, errors: list[str]) -> list[SccacheWorkflo
         except yaml.YAMLError as e:
             errors.append(f"{fname} is not valid YAML: {e}")
             continue
-        if isinstance(doc, dict):
-            out.append(SccacheWorkflow(fname, doc))
+        if not isinstance(doc, dict):
+            _refuse_shape(fname, "the workflow document", "a mapping", doc, errors)
+            continue
+        raw_jobs = doc.get("jobs")
+        if not isinstance(raw_jobs, dict) or not raw_jobs:
+            _refuse_shape(fname, "jobs:", "a non-empty mapping", raw_jobs, errors)
+            continue
+        jobs: list[WorkflowJob] = []
+        for jid, j in raw_jobs.items():
+            if isinstance(j, dict):
+                jobs.append(WorkflowJob(str(jid), j))
+            else:
+                _refuse_shape(f"{fname}: job {str(jid)!r}", "the job", "a mapping", j, errors)
+        out.append(SccacheWorkflow(fname, doc, jobs))
     return out
 
 
@@ -442,296 +496,359 @@ def _scoped_env(container: dict, loc: str, errors: list[str]) -> dict:
     return {}
 
 
-def _normalize_local_uses(uses: str | None) -> str | None:
-    """Repo-root-relative normalized form of a local `uses: ./...` action
-    reference, or None when `uses` is not a local reference (a pinned
-    third-party action, `docker://...`, etc). GitHub resolves a local `uses:`
-    relative to the repository root regardless of which workflow or composite
-    action contains it, so "./.github/actions/sccache",
-    "./.github/actions/sccache/", and "./.github/actions/./sccache" must all
-    normalize to the one identical path before being compared.
-    """
+def _refuse_env_keys(env: dict, loc: str, errors: list[str]) -> None:
+    for key in sorted(_env_keys_folded(env) & SCCACHE_ENV_KEYS):
+        errors.append(
+            f"{loc} env sets {key!r} — sccache wiring must come only from "
+            f"{SCCACHE_COMPOSITE_USES}, never a hand-set env:"
+        )
+
+
+def _refuse_wiring_text(text: str | None, loc: str, what: str, errors: list[str]) -> None:
+    """Rule (c): free text outside the sanctioned composite that names any
+    wrapper/sccache-shaped key or cargo's `rustc-wrapper` spelling."""
+    if text is None:
+        return
+    m = SCCACHE_WIRING_TEXT_RE.search(text)
+    if m:
+        errors.append(
+            f"{loc} {what} writes {SCCACHE_WRAPPER_VAR}/rustc-wrapper/SCCACHE_*-shaped "
+            f"wiring ({m.group(0)!r}: inline env, export, $GITHUB_ENV, `cargo "
+            f"--config`, or a cargo config file) outside {SCCACHE_COMPOSITE_USES} — "
+            "the composite is the one sanctioned setter"
+        )
+
+
+def _audit_defaults(container: dict, loc: str, errors: list[str]) -> None:
+    """`defaults.run.shell` at workflow or job scope wraps every `run:` step,
+    so a wrapper hidden there wires rustc for the whole scope."""
+    if "defaults" not in container:
+        return
+    d = container["defaults"]
+    if not isinstance(d, dict):
+        _refuse_shape(loc, "defaults:", "a mapping", d, errors)
+        return
+    if "run" not in d:
+        return
+    r = d["run"]
+    if not isinstance(r, dict):
+        _refuse_shape(loc, "defaults.run:", "a mapping", r, errors)
+        return
+    if "shell" in r:
+        if isinstance(r["shell"], str):
+            _refuse_wiring_text(r["shell"], loc, "defaults.run.shell", errors)
+        else:
+            _refuse_shape(loc, "defaults.run.shell", "a string", r["shell"], errors)
+
+
+def _audit_step(st: Step, loc: str, errors: list[str]) -> None:
+    """Rules (a)/(b)/(c) for one step outside the sanctioned composite."""
+    if st.uses is not None and st.uses_folded.startswith(SCCACHE_ACTION_PREFIX.casefold()):
+        errors.append(
+            f"{loc} runs the raw {SCCACHE_ACTION_PREFIX}... action directly — use "
+            f"{SCCACHE_COMPOSITE_USES} instead, the one place it may run"
+        )
+    _refuse_env_keys(_scoped_env(st.raw, f"{loc} env", errors), loc, errors)
+    for key in ("run", "shell"):
+        if key in st.raw and not isinstance(st.raw[key], str):
+            _refuse_shape(loc, f"{key}:", "a string", st.raw[key], errors)
+    _refuse_wiring_text(st.run, loc, "run:", errors)
+    _refuse_wiring_text(st.shell, loc, "shell:", errors)
+    if "with" in st.raw:
+        w = st.raw["with"]
+        if not isinstance(w, dict):
+            _refuse_shape(loc, "with:", "a mapping", w, errors)
+        else:
+            for k, v in w.items():
+                _refuse_wiring_text(f"{k}: {v}", loc, f"with.{k}", errors)
+
+
+@dataclass(frozen=True)
+class LocalAction:
+    """A resolved local composite action: `id` is its identity (see
+    `SCCACHE_COMPOSITE_ID`), `display` the path as written for messages."""
+
+    id: str
+    display: str
+    steps: list[Step]
+
+
+def _local_action_path(uses: str | None) -> str | None:
+    """The normalized repo-root-relative path of a local `uses: ./...`
+    reference, or None when `uses` is not local (a pinned third-party
+    action, `docker://...`). GitHub resolves a local `uses:` against the
+    repository root regardless of which file contains it."""
     if uses is None or not uses.startswith("./"):
         return None
-    return posixpath.normpath(uses.rstrip("/"))
+    return posixpath.normpath(uses[2:])
 
 
-def _discover_local_composites(root: str, errors: list[str]) -> dict[str, list[Step]]:
-    """Every local composite action under `.github/actions/*/action.y*ml`,
-    keyed by the normalized `uses:` path another workflow or composite would
-    reference it by, mapped to its own steps. A local action that is not a
-    composite (`using: node20`/docker) is opaque to this static YAML pass —
-    excluded, since it cannot itself declare a nested `uses:` step to a
-    composite this repo controls.
-    """
-    composites: dict[str, list[Step]] = {}
-    for path in sorted(glob.glob(os.path.join(root, "actions", "*", "action.y*ml"))):
-        rel_dir = os.path.relpath(os.path.dirname(path), root).replace(os.sep, "/")
-        uses_id = posixpath.normpath(".github/" + rel_dir)
+class LocalActions:
+    """Every local action reachable from a `uses: ./...`, resolved on disk
+    the way GitHub does (repo root, then `action.yml`, then `action.yaml`).
+    Resolution is the graph: nothing is discovered by glob, so no reference
+    can point at an action this pass never read. Anything it cannot read as
+    a composite is refused, never taken to not reach sccache."""
+
+    def __init__(self, root: str, errors: list[str]):
+        self.root = root
+        self.errors = errors
+        self._by_id: dict[str, LocalAction | None] = {}
+        self._reach: dict[str, bool] = {}
+
+    def disk_dir(self, rel: str) -> str:
+        # `root` is the `.github` directory; the repository root is its parent.
+        if rel == ".github":
+            return self.root
+        if rel.startswith(".github/"):
+            return os.path.join(self.root, rel[len(".github/"):])
+        return os.path.join(os.path.dirname(self.root), rel)
+
+    def resolve(self, uses: str | None, loc: str) -> LocalAction | None:
+        """The composite behind a local `uses:`, or None (not local, or
+        refused — the refusal is recorded)."""
+        rel = _local_action_path(uses)
+        if rel is None:
+            return None
+        aid = rel.casefold()
+        if aid in self._by_id:
+            return self._by_id[aid]
+        self._by_id[aid] = None
+        if rel in (".", "..") or rel.startswith("../") or os.path.isabs(rel):
+            self.errors.append(f"{loc}: local action {uses!r} escapes the repository root; refused")
+            return None
+        action = self._load(rel, uses or rel, loc)
+        self._by_id[aid] = action
+        if action is not None and aid != SCCACHE_COMPOSITE_ID:
+            for st in action.steps:
+                _audit_step(st, f"{action.display}/action.yml: step {st.label!r}", self.errors)
+        return action
+
+    def _load(self, rel: str, shown: str, loc: str) -> LocalAction | None:
+        d = self.disk_dir(rel)
+        found = [
+            os.path.join(d, n) for n in ("action.yml", "action.yaml") if os.path.isfile(os.path.join(d, n))
+        ]
+        if not found:
+            self.errors.append(
+                f"{loc}: local action {shown!r} does not exist (no action.yml/action.yaml "
+                f"at {d}) — an unresolved action cannot be proven sccache-free; refused"
+            )
+            return None
+        if len(found) > 1:
+            self.errors.append(
+                f"{loc}: local action {shown!r} has both action.yml and action.yaml — "
+                "ambiguous; refused"
+            )
+            return None
+        path = found[0]
         try:
             with open(path) as f:
                 doc = yaml.safe_load(f)
         except yaml.YAMLError as e:
-            errors.append(f"{uses_id}/action.yml is not valid YAML: {e}")
-            continue
+            self.errors.append(f"{path} is not valid YAML: {e}")
+            return None
         if not isinstance(doc, dict):
-            continue
+            _refuse_shape(path, "the action document", "a mapping", doc, self.errors)
+            return None
         runs = doc.get("runs")
-        if not isinstance(runs, dict) or runs.get("using") != "composite":
-            continue
-        steps = [st for st in (runs.get("steps") or []) if isinstance(st, dict)]
-        composites[uses_id] = [Step(st) for st in steps]
-    return composites
+        if not isinstance(runs, dict):
+            _refuse_shape(path, "runs:", "a mapping", runs, self.errors)
+            return None
+        if runs.get("using") != "composite":
+            self.errors.append(
+                f"{path}: `runs.using` must be 'composite' (got {runs.get('using')!r}) — a "
+                "node/docker local action is opaque to this check; refused"
+            )
+            return None
+        display = "./" + rel
+        return LocalAction(rel.casefold(), display, _typed_steps(runs, path, self.errors))
+
+    def reaches_sccache(self, action: LocalAction, loc: str) -> bool:
+        """Whether `action` is, or transitively `uses:`, the sanctioned
+        composite. A cycle or a chain past `LOCAL_ACTION_DEPTH_LIMIT` is
+        recorded as a refusal and answered True (fail closed)."""
+        return self._walk(action, loc, 0, frozenset())
+
+    def _walk(self, action: LocalAction, loc: str, depth: int, stack: frozenset[str]) -> bool:
+        if action.id == SCCACHE_COMPOSITE_ID:
+            return True
+        if action.id in self._reach:
+            return self._reach[action.id]
+        if action.id in stack:
+            self.errors.append(f"{loc}: local action cycle through {action.display}; refused")
+            return True
+        if depth >= LOCAL_ACTION_DEPTH_LIMIT:
+            self.errors.append(
+                f"{loc}: local action nesting exceeds {LOCAL_ACTION_DEPTH_LIMIT} levels at "
+                f"{action.display} — reach of {SCCACHE_COMPOSITE_USES} cannot be decided; refused"
+            )
+            return True
+        hit = False
+        for st in action.steps:
+            child = self.resolve(st.uses, f"{action.display}/action.yml: step {st.label!r}")
+            if child is not None and self._walk(child, loc, depth + 1, stack | {action.id}):
+                hit = True
+        self._reach[action.id] = hit
+        return hit
 
 
-def _composite_uses_graph(composites: dict[str, list[Step]]) -> dict[str, set[str]]:
-    """`uses_id -> {other local uses_ids its steps reference}`, so nesting
-    (a wrapper composite that itself `uses:` the sccache composite) is
-    traversable rather than only visible one hop deep.
-    """
-    graph: dict[str, set[str]] = {cid: set() for cid in composites}
-    for cid, steps in composites.items():
-        for st in steps:
-            norm = _normalize_local_uses(st.uses)
-            if norm is not None:
-                graph[cid].add(norm)
-    return graph
-
-
-def _reaches(start: str, graph: dict[str, set[str]], target: str, depth_limit: int = 20) -> bool:
-    """BFS with a visited set (cycle-safe) and a depth bound (a runaway or
-    self-referential composite chain terminates rather than looping forever)."""
-    if start == target:
-        return True
-    visited = {start}
-    frontier = [start]
-    depth = 0
-    while frontier and depth <= depth_limit:
-        nxt_frontier: list[str] = []
-        for node in frontier:
-            for nxt in graph.get(node, ()):
-                if nxt == target:
-                    return True
-                if nxt not in visited:
-                    visited.add(nxt)
-                    nxt_frontier.append(nxt)
-        frontier = nxt_frontier
-        depth += 1
-    return False
-
-
-def _audit_other_composites(composites: dict[str, list[Step]], errors: list[str]) -> None:
-    """Apply rules (a)/(b)/(c) to every local composite action EXCEPT the
-    sanctioned sccache one (which `_check_sccache_composite` audits under its
-    own, different, expectations): a wrapper composite that runs the raw
-    action, hand-sets the wiring env, or writes $GITHUB_ENV itself escapes
-    check 6 just as effectively as a workflow step would.
-    """
-    for cid, steps in composites.items():
-        if cid == SCCACHE_COMPOSITE_NORMALIZED:
-            continue
-        for st in steps:
-            label = st.name or st.uses or "<unnamed>"
-            loc = f"{cid}/action.yml"
-            if st.uses is not None and st.uses_folded.startswith(SCCACHE_ACTION_PREFIX.casefold()):
-                errors.append(
-                    f"{loc}: step {label!r} runs the raw {SCCACHE_ACTION_PREFIX}... "
-                    f"action directly — use {SCCACHE_COMPOSITE_USES} instead, the one "
-                    "place it may run"
-                )
-            step_env = _scoped_env(st.raw, f"{loc}: step {label!r}", errors)
-            for key in _env_keys_folded(step_env) & SCCACHE_ENV_KEYS:
-                errors.append(
-                    f"{loc}: step {label!r} env sets {key!r} — sccache wiring must "
-                    f"come only from {SCCACHE_COMPOSITE_USES}, never a hand-set env:"
-                )
-            if st.run and _mentions_github_env_write(st.run):
-                errors.append(
-                    f"{loc}: step {label!r} writes {SCCACHE_WRAPPER_VAR}/"
-                    f"{SCCACHE_GHA_VAR}-shaped output into $GITHUB_ENV outside "
-                    f"{SCCACHE_COMPOSITE_USES} — the composite is the one "
-                    "sanctioned setter"
-                )
-
-
-def _deterministic_step_names(root: str) -> set[str]:
-    """Step names ci/deterministic-checks.json lists, read fresh — the SSOT,
-    never hardcoded here.  A missing/malformed file yields no names; check 5
-    (`check_deterministic_set`) is what holds the file itself accountable.
-    """
-    try:
-        with open(os.path.join(root, "ci", "deterministic-checks.json")) as f:
-            doc = json.load(f)
-    except (OSError, ValueError):
-        return set()
-    checks = doc.get("checks") if isinstance(doc, dict) else None
-    if not isinstance(checks, list):
-        return set()
-    return {e["step"] for e in checks if isinstance(e, dict) and isinstance(e.get("step"), str)}
-
-
-def _check_sccache_composite(root: str, errors: list[str]) -> None:
+def _check_sccache_composite(actions: LocalActions, errors: list[str]) -> None:
     """The composite action is the one sanctioned place `sccache-action` may
-    run and `$GITHUB_ENV` may be written — verify it actually does both, so a
-    job trusting `uses: ./.github/actions/sccache` gets a real wrapper.
+    run and `$GITHUB_ENV` may be written — prove it does both, so a job
+    trusting `uses: ./.github/actions/sccache` gets a real wrapper. Proof is
+    strict: an unconditional install step, and unconditional `bash` steps
+    whose literal lines write `RUSTC_WRAPPER=sccache` and
+    `SCCACHE_GHA_ENABLED=true` to `$GITHUB_ENV`.
     """
-    path = os.path.join(root, SCCACHE_COMPOSITE_REL_PATH)
-    if not os.path.isfile(path):
-        errors.append(f"{path} does not exist — no composite action to wire sccache through")
+    action = actions.resolve(SCCACHE_COMPOSITE_USES, "sccache composite self-check")
+    if action is None:
         return
-    try:
-        with open(path) as f:
-            doc = yaml.safe_load(f)
-    except yaml.YAMLError as e:
-        errors.append(f"{path} is not valid YAML: {e}")
-        return
-    if not isinstance(doc, dict):
-        errors.append(f"{path}: empty or non-mapping document")
-        return
-    runs = doc.get("runs") or {}
-    if runs.get("using") != "composite":
-        errors.append(f"{path}: `runs.using` must be 'composite'")
-    steps = [Step(st) for st in (runs.get("steps") or []) if isinstance(st, dict)]
-    if not any(st.uses_folded.startswith(SCCACHE_ACTION_PREFIX.casefold()) for st in steps):
-        errors.append(f"{path}: no step installs {SCCACHE_ACTION_PREFIX}...")
-    if not any(st.run and _mentions_github_env_write(st.run) for st in steps):
+    where = f"{action.display}/action.yml"
+    unconditional = [st for st in action.steps if "if" not in st.raw and "continue-on-error" not in st.raw]
+    if not any(st.uses_folded.startswith(SCCACHE_ACTION_PREFIX.casefold()) for st in unconditional):
+        errors.append(f"{where}: no unconditional step installs {SCCACHE_ACTION_PREFIX}...")
+    writers = [st.run for st in unconditional if st.run is not None and st.shell == "bash"]
+    missing = [key for key, rx in SCCACHE_REQUIRED_WRITES if not any(rx.search(r) for r in writers)]
+    if missing:
         errors.append(
-            f"{path}: no step writes {SCCACHE_WRAPPER_VAR}/{SCCACHE_GHA_VAR} to "
-            "$GITHUB_ENV — installing the binary alone never wires rustc to it"
+            f"{where}: no step writes {SCCACHE_WRAPPER_VAR}/{SCCACHE_GHA_VAR} to "
+            f"$GITHUB_ENV (missing literal write of {missing}) — installing the binary "
+            "alone never wires rustc to it"
         )
 
 
-def _job_sub_env_scopes(job_raw: dict) -> list[tuple[str, dict]]:
+def _job_sub_env_scopes(job_raw: dict, loc: str, errors: list[str]) -> list[tuple[str, dict]]:
     """(scope-name, raw-container) pairs for a job's `container:` and each
     `services.<id>:` sub-scope — each may carry its own `env:` a
-    sccache-wiring key could hide in, same as the job's own `env:`."""
+    sccache-wiring key could hide in, same as the job's own `env:`. A
+    string `container:` (image only) has no env; any other non-mapping
+    shape is refused."""
     scopes: list[tuple[str, dict]] = []
-    container = job_raw.get("container")
-    if isinstance(container, dict):
-        scopes.append(("container", container))
-    services = job_raw.get("services")
-    if isinstance(services, dict):
-        for sid, svc in services.items():
-            if isinstance(svc, dict):
-                scopes.append((f"service {sid!r}", svc))
+    if "container" in job_raw:
+        container = job_raw["container"]
+        if isinstance(container, dict):
+            scopes.append(("container", container))
+        elif not isinstance(container, str):
+            _refuse_shape(loc, "container:", "a mapping or image string", container, errors)
+    if "services" in job_raw:
+        services = job_raw["services"]
+        if not isinstance(services, dict):
+            _refuse_shape(loc, "services:", "a mapping", services, errors)
+        else:
+            for sid, svc in services.items():
+                if isinstance(svc, dict):
+                    scopes.append((f"service {sid!r}", svc))
+                else:
+                    _refuse_shape(loc, f"service {sid!r}", "a mapping", svc, errors)
     return scopes
 
 
 def check_sccache_wiring(errors: list[str], root: str = REPO_ROOT) -> None:
     """The only sanctioned way a job gets sccache is `uses:
-    ./.github/actions/sccache` (see `_check_sccache_composite`) — a wrapper
-    can then never exist in a job without the binary that backs it, by
-    construction. This refuses every other way RUSTC_WRAPPER/
-    SCCACHE_GHA_ENABLED could reach a job:
-      (a) a raw `mozilla-actions/sccache-action` reference in a workflow OR
-          any other local composite action (case-folded `uses:` match — the
-          sccache composite is the only legal site);
-      (b) a workflow-, job-, step-, container-, or service-level `env:` key
-          naming a wrapper var or SCCACHE_GHA_ENABLED (case-folded key), in a
-          workflow or any other local composite action — and any `env:` that
-          is present but not a plain mapping is refused outright, fail-closed,
-          since its keys cannot be proven absent;
-      (c) a `run:` step (in a workflow or any other local composite action)
-          mentioning $GITHUB_ENV alongside a wrapper var or SCCACHE_* key, any
-          assignment syntax;
-      (d) a job that reaches the sccache composite — directly, or indirectly
-          through a chain of local composite actions — while also owning a
-          step named in `ci/deterministic-checks.json`; sccache's GitHub
-          Actions cache backend does network I/O, which a deterministic
-          (must-be-network-free) check step must never risk. `uses:` local
-          references are compared normalized (`./x/`, `./x`, `./a/../x` all
-          the same path), not as raw strings.
-    Checked over EVERY workflow (`*.yml` and `*.yaml`) and EVERY local
-    composite action under `.github/actions/*/action.y*ml`, not just the
-    non-plumbing workflows `workflow_jobs()` covers for status contexts — a
-    plumbing workflow, or a wrapper composite nobody scans directly, can wire
-    sccache without ever producing a gated context.
+    ./.github/actions/sccache` (see `_check_sccache_composite`), so a wrapper
+    never exists in a job without the binary that backs it. Refused:
+      (a) a raw `mozilla-actions/sccache-action` reference (case-folded) in a
+          workflow or any other reachable local action;
+      (b) an `env:` key naming a wrapper var or SCCACHE_GHA_ENABLED
+          (case-folded) at workflow, job, container, service, or step scope,
+          in a workflow or any other reachable local action; an `env:` that
+          is present but not a plain mapping is refused outright;
+      (c) free text naming a wrapper var, an SCCACHE_* key, or cargo's
+          `rustc-wrapper` spelling in a `run:`, step `shell:`, workflow/job
+          `defaults.run.shell`, or `with:` value — any syntax, `$GITHUB_ENV`
+          or not (YAML comments are not values and are never read);
+      (d) a job that reaches the sccache composite — directly or through any
+          chain of local actions — while owning a step named in
+          `ci/deterministic-checks.json` (sccache's GitHub Actions cache
+          backend does network I/O); an unreadable deterministic-checks file
+          is itself refused, since the step set cannot be established.
+    Every local `uses: ./...` is resolved on disk from the repo root
+    (`action.yml`, then `action.yaml`); an unresolvable, ambiguous, non-
+    composite (node/docker), cyclic, or over-deep (> LOCAL_ACTION_DEPTH_LIMIT)
+    reference is refused. Identity is the normalized, case-folded path. A
+    malformed shape (`jobs:`, `steps:`, a job, a step, `env:`, `defaults:`,
+    `container:`, `services:`) is refused, never skipped.
+
+    LIMIT — static YAML cannot see, and this check does NOT prove absent:
+      - a REMOTE reusable workflow (`jobs.<id>.uses: owner/repo/...@ref`);
+      - a third-party action that itself exports a wrapper into the job;
+      - a repo script invoked from `run:` (`run: tools/ci/wire.sh`) that
+        writes a wrapper or `$GITHUB_ENV`;
+      - key indirection assembled at run time (`K=WRAPPER; echo
+        "RUSTC_$K=..." >> "$GITHUB_ENV"`) or an `env:` value carrying such a
+        key through `${{ }}`.
+    Those are review-gated, not machine-gated.
     """
-    _check_sccache_composite(root, errors)
-    deterministic_steps = _deterministic_step_names(root)
+    start = len(errors)
+    actions = LocalActions(root, errors)
+    _check_sccache_composite(actions, errors)
 
-    composites = _discover_local_composites(root, errors)
-    composite_graph = _composite_uses_graph(composites)
-    _audit_other_composites(composites, errors)
+    det_errors: list[str] = []
+    pairs = load_deterministic_checks(det_errors, root)
+    if pairs is None:
+        errors.append(
+            "check 6 cannot establish the deterministic check steps "
+            f"({det_errors[0] if det_errors else 'unreadable'}) — refused fail-closed"
+        )
+        deterministic_steps: set[str] = set()
+    else:
+        deterministic_steps = {step for _, step in pairs}
 
-    def _sccache_reach(uses: str | None) -> tuple[bool, str | None]:
-        """(reaches sccache?, the intermediate composite id if indirect)."""
-        norm = _normalize_local_uses(uses)
-        if norm is None:
-            return False, None
-        if norm == SCCACHE_COMPOSITE_NORMALIZED:
-            return True, None
-        if norm in composites and _reaches(norm, composite_graph, SCCACHE_COMPOSITE_NORMALIZED):
-            return True, norm
-        return False, None
+    # Defence in depth: every action on disk under `.github/actions/` is
+    # audited even when nothing references it yet. Reachability never relies
+    # on this list — it comes from resolving each `uses:`.
+    for pattern in ("action.yml", "action.yaml"):
+        for path in sorted(glob.glob(os.path.join(root, "actions", "**", pattern), recursive=True)):
+            rel = os.path.relpath(os.path.dirname(path), root).replace(os.sep, "/")
+            actions.resolve(f"./.github/{rel}", "local action audit")
 
     for wf in _load_sccache_workflows(root, errors):
-        wf_env = _scoped_env(wf.doc, f"{wf.fname}: workflow-level env", errors)
-        for key in _env_keys_folded(wf_env) & SCCACHE_ENV_KEYS:
-            errors.append(
-                f"{wf.fname}: workflow-level env sets {key!r} — sccache wiring "
-                f"must come only from {SCCACHE_COMPOSITE_USES}, never inherited env"
-            )
+        wloc = f"{wf.fname}: workflow-level"
+        _refuse_env_keys(_scoped_env(wf.doc, f"{wloc} env", errors), wloc, errors)
+        _audit_defaults(wf.doc, wf.fname, errors)
         for job in wf.jobs:
-            job_env = _scoped_env(job.raw, f"{wf.fname}: job {job.job_id!r} env", errors)
-            for key in _env_keys_folded(job_env) & SCCACHE_ENV_KEYS:
+            jloc = f"{wf.fname}: job {job.job_id!r}"
+            _refuse_env_keys(_scoped_env(job.raw, f"{jloc} env", errors), jloc, errors)
+            _audit_defaults(job.raw, jloc, errors)
+            for scope_name, scope_raw in _job_sub_env_scopes(job.raw, jloc, errors):
+                sloc = f"{jloc} {scope_name}"
+                _refuse_env_keys(_scoped_env(scope_raw, f"{sloc} env", errors), sloc, errors)
+            call = job.raw.get("uses")
+            if "uses" in job.raw and not isinstance(call, str):
+                _refuse_shape(jloc, "uses:", "a string", call, errors)
+            call_rel = _local_action_path(call if isinstance(call, str) else None)
+            if call_rel is not None and not os.path.isfile(actions.disk_dir(call_rel)):
                 errors.append(
-                    f"{wf.fname}: job {job.job_id!r} env sets {key!r} — sccache "
-                    f"wiring must come only from {SCCACHE_COMPOSITE_USES}, never "
-                    "a hand-set env:"
+                    f"{jloc}: local reusable workflow {call!r} does not exist — "
+                    "cannot be proven sccache-free; refused"
                 )
-            for scope_name, scope_raw in _job_sub_env_scopes(job.raw):
-                scope_env = _scoped_env(
-                    scope_raw, f"{wf.fname}: job {job.job_id!r} {scope_name} env", errors
-                )
-                for key in _env_keys_folded(scope_env) & SCCACHE_ENV_KEYS:
-                    errors.append(
-                        f"{wf.fname}: job {job.job_id!r} {scope_name} env sets "
-                        f"{key!r} — sccache wiring must come only from "
-                        f"{SCCACHE_COMPOSITE_USES}, never a hand-set env:"
-                    )
-            uses_composite = False
-            composite_via: str | None = None
-            for st in job.steps:
-                label = st.name or st.uses or "<unnamed>"
-                if st.uses is not None and st.uses_folded.startswith(SCCACHE_ACTION_PREFIX.casefold()):
-                    errors.append(
-                        f"{wf.fname}: job {job.job_id!r} step {label!r} runs the "
-                        f"raw {SCCACHE_ACTION_PREFIX}... action directly — use "
-                        f"{SCCACHE_COMPOSITE_USES} instead, the one place it may run"
-                    )
-                reaches, via = _sccache_reach(st.uses)
-                if reaches:
-                    uses_composite = True
-                    composite_via = composite_via or via
-                step_env = _scoped_env(
-                    st.raw, f"{wf.fname}: job {job.job_id!r} step {label!r} env", errors
-                )
-                for key in _env_keys_folded(step_env) & SCCACHE_ENV_KEYS:
-                    errors.append(
-                        f"{wf.fname}: job {job.job_id!r} step {label!r} env sets "
-                        f"{key!r} — sccache wiring must come only from "
-                        f"{SCCACHE_COMPOSITE_USES}, never a hand-set env:"
-                    )
-                if st.run and _mentions_github_env_write(st.run):
-                    errors.append(
-                        f"{wf.fname}: job {job.job_id!r} step {label!r} writes "
-                        f"{SCCACHE_WRAPPER_VAR}/{SCCACHE_GHA_VAR}-shaped output into "
-                        f"$GITHUB_ENV outside {SCCACHE_COMPOSITE_USES} — the "
-                        "composite is the one sanctioned setter"
-                    )
-            if uses_composite:
-                own_names = {st.name for st in job.steps if st.name is not None}
-                hit = sorted(own_names & deterministic_steps)
+            steps = _typed_steps(job.raw, jloc, errors)
+            via: str | None = None
+            reaches = False
+            for st in steps:
+                stloc = f"{jloc} step {st.label!r}"
+                _audit_step(st, stloc, errors)
+                action = actions.resolve(st.uses, stloc)
+                if action is not None and actions.reaches_sccache(action, stloc):
+                    reaches = True
+                    if via is None and action.id != SCCACHE_COMPOSITE_ID:
+                        via = action.display
+            if reaches:
+                hit = sorted({st.name for st in steps if st.name is not None} & deterministic_steps)
                 if hit:
-                    via_note = f" (via {composite_via})" if composite_via else ""
+                    via_note = f" (via {via})" if via else ""
                     errors.append(
-                        f"{wf.fname}: job {job.job_id!r} uses {SCCACHE_COMPOSITE_USES}"
-                        f"{via_note} but also owns deterministic check step(s) {hit} — "
-                        "sccache's GitHub Actions cache backend does network I/O "
-                        "inside a step that must be network-free "
-                        "(ci/deterministic-checks.json)"
+                        f"{jloc} uses {SCCACHE_COMPOSITE_USES}{via_note} but also owns "
+                        f"deterministic check step(s) {hit} — sccache's GitHub Actions "
+                        "cache backend does network I/O inside a step that must be "
+                        "network-free (ci/deterministic-checks.json)"
                     )
+
+    # One defect reached from several sites is reported once.
+    own = list(dict.fromkeys(errors[start:]))
+    del errors[start:]
+    errors.extend(own)
 
 
 def load_manifest() -> dict:
