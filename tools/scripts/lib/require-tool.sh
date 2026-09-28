@@ -99,11 +99,11 @@ _require_known_command() {
         echo "$__kc_caller: $__kc_desc: '$__kc_cmd' is ${__kc_kind:-not a command} — pass an executable file, never a builtin, shell function, alias, or pipeline" >&2
         exit 2
     fi
-    __kc_path="$(type -P -- "$__kc_cmd" 2>/dev/null)" && [ -n "$__kc_path" ] \
-        && __kc_real="$(readlink -f -- "$__kc_path" 2>/dev/null)" && [ -n "$__kc_real" ] || {
+    if ! { __kc_path="$(type -P -- "$__kc_cmd" 2>/dev/null)" && [ -n "$__kc_path" ] \
+        && __kc_real="$(readlink -f -- "$__kc_path" 2>/dev/null)" && [ -n "$__kc_real" ]; }; then
         echo "$__kc_caller: $__kc_desc: cannot resolve '$__kc_cmd' to an executable file" >&2
         exit 2
-    }
+    fi
     if ! "_require_${__kc_contract}_name" "${__kc_cmd##*/}" \
         || [ "${__kc_real##*/}" != "${__kc_cmd##*/}" ]; then
         echo "$__kc_caller: $__kc_desc: '$__kc_cmd' (resolves to $__kc_real) is not a known-contract $__kc_contract — see _require_${__kc_contract}_name" >&2
