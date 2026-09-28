@@ -37,6 +37,7 @@ sandbox() {
 }
 stub() { printf '#!/bin/sh\n%s\n' "$2" > "$SB/bin/$1"; chmod +x "$SB/bin/$1"; }
 ORIG_PATH="$PATH"
+ORIG_HOME="$HOME"
 
 # --- lib: backups and managed blocks -----------------------------------------------
 sandbox lib
@@ -175,6 +176,8 @@ check "Zed: extension assembled" \
 # target); skips with a message when wasm32-wasip2 is not installed locally.
 ZED_ASSEMBLED="$XDG_DATA_HOME/ipe/zed-ipe"
 PATH="$ORIG_PATH"
+# The sandboxed HOME hides the real toolchain; point rustup and cargo back at it.
+export RUSTUP_HOME="${RUSTUP_HOME:-$ORIG_HOME/.rustup}" CARGO_HOME="${CARGO_HOME:-$ORIG_HOME/.cargo}"
 if command -v rustup > /dev/null 2>&1 && command -v cargo > /dev/null 2>&1 \
     && (cd "$ZED_ASSEMBLED" && rustup target list --installed 2> /dev/null | grep -qx wasm32-wasip2); then
     WASM_TARGET_DIR="$WORK/zed-wasm-build"
