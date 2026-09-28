@@ -8,7 +8,8 @@
 //! through the handle that passed the check, so no path swap between check and
 //! use can redirect a read.
 
-use std::path::Path;
+use std::fmt;
+use std::path::{Path, PathBuf};
 
 use ipe_ffi::diag::Diagnostic;
 
@@ -128,6 +129,112 @@ pub const fn container_breach(stamp: Stamp, invoker: Invoker) -> Option<Breach> 
     }
 }
 
+/// What a failed trust check guarded.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TrustSubject {
+    /// A discovered `package.ipe`.
+    Manifest,
+    /// The FFI artifact cache or the catalog loaded from it.
+    Ffi,
+}
+
+/// A discovered manifest or FFI cache refused because it failed a trust check.
+///
+/// Each variant names the refused entry; [`TrustRefusal::message`] is its
+/// user-facing text.
+#[derive(Debug)]
+pub enum TrustRefusal {
+    /// The discovered manifest is a symbolic link.
+    ManifestSymlink(PathBuf),
+    /// Another user can write or replace the discovered manifest.
+    ManifestUntrusted(PathBuf),
+    /// This host has no owner check, so the discovered manifest is not obeyed.
+    ManifestUnverifiable(PathBuf),
+    /// This host has no owner check, so the FFI cache is not loaded.
+    FfiCacheUnverifiable(PathBuf),
+    /// An FFI cache component or artifact is a symbolic link.
+    FfiCacheSymlink(PathBuf),
+    /// Another user can write an FFI cache component or artifact.
+    FfiCacheUntrusted(PathBuf),
+    /// An FFI cache artifact is not a regular file.
+    FfiCacheNotRegular(PathBuf),
+    /// An FFI cache directory lists more entries than its cap.
+    FfiCacheTooManyEntries {
+        /// The refused cache directory.
+        path: PathBuf,
+        /// The entry cap that was exceeded.
+        cap: usize,
+    },
+    /// The catalog loader refused an FFI cache artifact's content.
+    FfiCatalog(Box<Diagnostic>),
+    /// An installed crate claims the reserved asserted-call module.
+    FfiReservedModule {
+        /// The claiming crate.
+        slug: String,
+    },
+    /// An installed crate declares a wrapper under the reserved asserted-call prefix.
+    FfiReservedWrapperPrefix {
+        /// The claiming crate.
+        slug: String,
+        /// The offending wrapper identifier.
+        ident: String,
+    },
+}
+
+impl TrustRefusal {
+    /// Whether the refused entry is a manifest or part of the FFI cache.
+    #[must_use]
+    pub const fn subject(&self) -> TrustSubject {
+        match self {
+            Self::ManifestSymlink(_)
+            | Self::ManifestUntrusted(_)
+            | Self::ManifestUnverifiable(_) => TrustSubject::Manifest,
+            Self::FfiCacheUnverifiable(_)
+            | Self::FfiCacheSymlink(_)
+            | Self::FfiCacheUntrusted(_)
+            | Self::FfiCacheNotRegular(_)
+            | Self::FfiCacheTooManyEntries { .. }
+            | Self::FfiCatalog(_)
+            | Self::FfiReservedModule { .. }
+            | Self::FfiReservedWrapperPrefix { .. } => TrustSubject::Ffi,
+        }
+    }
+
+    /// The refusal's user-facing text, naming the refused entry and the fix.
+    #[must_use]
+    pub fn message(&self) -> text::Message {
+        match self {
+            Self::ManifestSymlink(path) => text::msg::manifest_symlink(&path.display()),
+            Self::ManifestUntrusted(path) => text::msg::manifest_untrusted(&path.display()),
+            Self::ManifestUnverifiable(path) => text::msg::manifest_unverifiable(&path.display()),
+            Self::FfiCacheUnverifiable(path) => text::msg::ffi_cache_unverifiable(&path.display()),
+            Self::FfiCacheSymlink(path) => text::msg::ffi_cache_symlink(&path.display()),
+            Self::FfiCacheUntrusted(path) => text::msg::ffi_cache_untrusted(&path.display()),
+            Self::FfiCacheNotRegular(path) => text::msg::ffi_cache_not_regular(&path.display()),
+            Self::FfiCacheTooManyEntries { path, cap } => {
+                text::msg::ffi_cache_too_many_entries(&path.display(), cap)
+            }
+            Self::FfiCatalog(diag) => text::Message::relay(&**diag),
+            Self::FfiReservedModule { slug } => {
+                text::msg::ffi_reserved_module_claimed(slug, &ipe_canon::asserted::ASSERTED_MODULE)
+            }
+            Self::FfiReservedWrapperPrefix { slug, ident } => {
+                text::msg::ffi_reserved_wrapper_prefix(
+                    slug,
+                    ident,
+                    &ipe_canon::asserted::ASSERTED_WRAPPER_PREFIX,
+                )
+            }
+        }
+    }
+}
+
+impl fmt::Display for TrustRefusal {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.message())
+    }
+}
+
 /// A failure while loading the catalog from a held FFI cache.
 #[derive(Debug)]
 pub enum CacheLoadError {
@@ -146,7 +253,9 @@ impl From<Diagnostic> for CacheLoadError {
 impl From<CacheLoadError> for CliError {
     fn from(err: CacheLoadError) -> Self {
         match err {
-            CacheLoadError::Catalog(diag) => Self::Usage(text::Message::relay(&diag)),
+            CacheLoadError::Catalog(diag) => {
+                Self::TrustRefused(TrustRefusal::FfiCatalog(Box::new(diag)))
+            }
             CacheLoadError::Cli(err) => err,
         }
     }
@@ -161,8 +270,8 @@ impl From<CacheLoadError> for CliError {
 ///
 /// # Errors
 ///
-/// [`CliError::Usage`] naming the refused manifest; [`CliError::Io`] when it
-/// cannot be inspected.
+/// [`CliError::TrustRefused`] naming the refused manifest; [`CliError::Io`]
+/// when it cannot be inspected.
 #[cfg(unix)]
 pub fn admit_discovered_manifest(manifest: &Path) -> Result<(), CliError> {
     let invoker = Invoker::current();
@@ -170,11 +279,12 @@ pub fn admit_discovered_manifest(manifest: &Path) -> Result<(), CliError> {
         path: path.to_path_buf(),
         source,
     };
-    let untrusted = || CliError::Usage(text::msg::manifest_untrusted(&manifest.display()));
+    let untrusted =
+        || CliError::TrustRefused(TrustRefusal::ManifestUntrusted(manifest.to_path_buf()));
     let meta = std::fs::symlink_metadata(manifest).map_err(|e| io(manifest, e))?;
     if meta.file_type().is_symlink() {
-        return Err(CliError::Usage(text::msg::manifest_symlink(
-            &manifest.display(),
+        return Err(CliError::TrustRefused(TrustRefusal::ManifestSymlink(
+            manifest.to_path_buf(),
         )));
     }
     if !meta.is_file() || breach(Stamp::of(&meta), invoker).is_some() {
@@ -195,7 +305,7 @@ pub fn admit_discovered_manifest(manifest: &Path) -> Result<(), CliError> {
 ///
 /// # Errors
 ///
-/// Always [`CliError::Usage`] naming the manifest (see [`refuse_unverifiable_manifest`]).
+/// Always [`CliError::TrustRefused`] naming the manifest (see [`refuse_unverifiable_manifest`]).
 #[cfg(not(unix))]
 pub fn admit_discovered_manifest(manifest: &Path) -> Result<(), CliError> {
     refuse_unverifiable_manifest(manifest)
@@ -208,10 +318,10 @@ pub fn admit_discovered_manifest(manifest: &Path) -> Result<(), CliError> {
 ///
 /// # Errors
 ///
-/// Always [`CliError::Usage`] naming the manifest and the explicit-directory fix.
+/// Always [`CliError::TrustRefused`] naming the manifest and the explicit-directory fix.
 pub fn refuse_unverifiable_manifest(manifest: &Path) -> Result<(), CliError> {
-    Err(CliError::Usage(text::msg::manifest_unverifiable(
-        &manifest.display(),
+    Err(CliError::TrustRefused(TrustRefusal::ManifestUnverifiable(
+        manifest.to_path_buf(),
     )))
 }
 
@@ -223,13 +333,13 @@ pub fn refuse_unverifiable_manifest(manifest: &Path) -> Result<(), CliError> {
 ///
 /// # Errors
 ///
-/// [`CliError::Usage`] when anything exists at `anchor/rel`, link or not;
+/// [`CliError::TrustRefused`] when anything exists at `anchor/rel`, link or not;
 /// [`CliError::Io`] when its presence cannot be determined.
 pub fn refuse_unverifiable_cache(anchor: &Path, rel: &str) -> Result<(), CliError> {
     let candidate = anchor.join(rel);
     match std::fs::symlink_metadata(&candidate) {
-        Ok(_) => Err(CliError::Usage(text::msg::ffi_cache_unverifiable(
-            &candidate.display(),
+        Ok(_) => Err(CliError::TrustRefused(TrustRefusal::FfiCacheUnverifiable(
+            candidate,
         ))),
         Err(e)
             if matches!(
@@ -263,10 +373,9 @@ mod held {
     use rustix::fs::{AtFlags, CWD, FileType, Mode, OFlags};
     use rustix::io::Errno;
 
-    use super::{CacheLoadError, Invoker, MAX_CACHE_ENTRIES, Stamp, breach};
+    use super::{CacheLoadError, Invoker, MAX_CACHE_ENTRIES, Stamp, TrustRefusal, breach};
     use crate::CliError;
     use crate::io_bounded::{FFI_CACHE_READ_CAP, read_opened_capped};
-    use crate::text;
 
     /// The FFI cache directory, held open once every component passed the owner rule.
     #[derive(Debug)]
@@ -310,7 +419,7 @@ mod held {
     ///
     /// # Errors
     ///
-    /// [`CliError::Usage`] when the component is a symbolic link; [`CliError::Io`]
+    /// [`CliError::TrustRefused`] when the component is a symbolic link; [`CliError::Io`]
     /// when it cannot be opened for another reason.
     fn open_component(
         parent: BorrowedFd<'_>,
@@ -323,9 +432,9 @@ mod held {
             Err(e) => e,
         };
         match entry_type(parent, name) {
-            Ok(Some(FileType::Symlink)) => Err(CliError::Usage(text::msg::ffi_cache_symlink(
-                &shown.display(),
-            ))),
+            Ok(Some(FileType::Symlink)) => Err(CliError::TrustRefused(
+                TrustRefusal::FfiCacheSymlink(shown.to_path_buf()),
+            )),
             Ok(Some(FileType::Directory)) | Err(_) => Err(CliError::Io {
                 path: shown.to_path_buf(),
                 source: open_err.into(),
@@ -353,7 +462,7 @@ mod held {
     ///
     /// # Errors
     ///
-    /// [`CliError::Usage`] when a component is a symbolic link or some user
+    /// [`CliError::TrustRefused`] when a component is a symbolic link or some user
     /// other than the invoker can write it; [`CliError::Io`] when a component
     /// cannot be opened or inspected.
     pub fn open_cache(anchor: &Path, rel: &str) -> Result<Option<TrustedCache>, CliError> {
@@ -380,8 +489,8 @@ mod held {
             held = Some(dir);
         }
         if let Some(path) = breached {
-            return Err(CliError::Usage(text::msg::ffi_cache_untrusted(
-                &path.display(),
+            return Err(CliError::TrustRefused(TrustRefusal::FfiCacheUntrusted(
+                path,
             )));
         }
         Ok(held.map(|dir| TrustedCache {
@@ -398,7 +507,7 @@ mod held {
     ///
     /// # Errors
     ///
-    /// [`CliError::Usage`] past `cap` entries; [`CliError::Io`] when the
+    /// [`CliError::TrustRefused`] past `cap` entries; [`CliError::Io`] when the
     /// directory cannot be listed.
     pub fn list_capped(dir: &File, path: &Path, cap: usize) -> Result<Vec<String>, CliError> {
         let io = |e: Errno| CliError::Io {
@@ -415,10 +524,12 @@ mod held {
             }
             seen = seen.saturating_add(1);
             if seen > cap {
-                return Err(CliError::Usage(text::msg::ffi_cache_too_many_entries(
-                    &path.display(),
-                    &cap,
-                )));
+                return Err(CliError::TrustRefused(
+                    TrustRefusal::FfiCacheTooManyEntries {
+                        path: path.to_path_buf(),
+                        cap,
+                    },
+                ));
             }
             let Ok(name) = raw.to_str() else {
                 continue;
@@ -456,8 +567,8 @@ mod held {
                 Err(e) if e == Errno::NOENT => return Ok(None),
                 Err(e) => {
                     return match entry_type(self.dir.as_fd(), Path::new(name)) {
-                        Ok(Some(FileType::Symlink)) => refuse(CliError::Usage(
-                            text::msg::ffi_cache_symlink(&path.display()),
+                        Ok(Some(FileType::Symlink)) => refuse(CliError::TrustRefused(
+                            TrustRefusal::FfiCacheSymlink(path.clone()),
                         )),
                         Ok(_) | Err(_) => Err(io(e.into())),
                     };
@@ -466,13 +577,13 @@ mod held {
             let file = File::from(fd);
             let meta = file.metadata().map_err(io)?;
             if !meta.file_type().is_file() {
-                return refuse(CliError::Usage(text::msg::ffi_cache_not_regular(
-                    &path.display(),
+                return refuse(CliError::TrustRefused(TrustRefusal::FfiCacheNotRegular(
+                    path.clone(),
                 )));
             }
             if breach(Stamp::of(&meta), self.invoker).is_some() {
-                return refuse(CliError::Usage(text::msg::ffi_cache_untrusted(
-                    &path.display(),
+                return refuse(CliError::TrustRefused(TrustRefusal::FfiCacheUntrusted(
+                    path.clone(),
                 )));
             }
             read_opened_capped(&file, &path, FFI_CACHE_READ_CAP)

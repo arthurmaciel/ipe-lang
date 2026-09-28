@@ -32,7 +32,9 @@ use lsp_types::{
 };
 
 use ipe_lsp_features::PositionEncoding;
-pub use loader::{LoadError, LoadedFile, LoadedProject, ModuleOrigin, ProjectLoader};
+pub use loader::{
+    LimitSource, LoadDisposition, LoadError, LoadedFile, LoadedProject, ModuleOrigin, ProjectLoader,
+};
 
 /// A fatal server failure: a protocol-level error on the JSON-RPC channel.
 /// Per-request failures never surface here — they answer the one request

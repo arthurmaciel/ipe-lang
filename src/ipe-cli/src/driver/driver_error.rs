@@ -376,6 +376,11 @@ pub enum CliError {
         /// path at which a symlink cycle was detected.
         detail: String,
     },
+    /// A discovered manifest or FFI cache failed its trust check and was not used.
+    ///
+    /// Either one steers or compiles into the build unsandboxed, so one some
+    /// other user could have written is refused rather than obeyed.
+    TrustRefused(crate::owner_trust::TrustRefusal),
     /// `ipe upgrade` (or `ipe health`) could not reach the release feed. This
     /// is a transient, non-zero operational result — not a command misuse — so
     /// it exits with no `--help` page and renders its own message. Carries
@@ -568,6 +573,7 @@ impl CliError {
             Self::PathEscape { .. } => "path-escape",
             Self::OutputRefused(_) => "output-refused",
             Self::DiscoveryLimitReached { .. } => "discovery-limit-reached",
+            Self::TrustRefused(_) => "trust-refused",
             Self::UpgradeFeedUnreachable => "upgrade-feed-unreachable",
             Self::UpgradeCheckExit { .. } => "upgrade-check-exit",
             Self::AdvisoryVulnerable(_) => "advisory-vulnerable",
@@ -641,6 +647,7 @@ impl CliError {
             | Self::PathEscape { .. }
             | Self::OutputRefused(_)
             | Self::DiscoveryLimitReached { .. }
+            | Self::TrustRefused(_)
             | Self::UpgradeFeedUnreachable
             | Self::UpgradeCheckExit { .. }
             | Self::AdvisoryVulnerable(_)
@@ -883,6 +890,7 @@ impl std::fmt::Display for CliError {
             Self::DiscoveryLimitReached { detail } => {
                 f.write_str(&text::cli_discovery_limit_reached(detail))
             }
+            Self::TrustRefused(refusal) => f.write_str(&refusal.message()),
             Self::AdvisoryVulnerable(p) => {
                 let fixed_in = p
                     .fixed_in

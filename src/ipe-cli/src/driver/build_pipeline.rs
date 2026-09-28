@@ -646,9 +646,97 @@ pub fn read_discovered_sources(
     Ok(sources)
 }
 
-/// Walk up the directory tree from a `.ipe` file's parent, looking for a
-/// `package.ipe` manifest. Returns the manifest path if found, or `None` when
-/// the walk reaches the filesystem root.
+/// The most directories [`find_manifest_for_ipe_file`] examines on its way up.
+pub const MAX_MANIFEST_WALK_DEPTH: usize = 64;
+
+/// Entries whose presence marks a directory as a version-control root.
+const VCS_ROOT_MARKERS: [&str; 3] = [".git", ".hg", ".jj"];
+
+/// The identity of a directory, independent of the path spelling that reached it.
+///
+/// On Unix the device and inode pair; elsewhere the canonical path. Two
+/// spellings of one directory (a symlinked home, an aliased mount) compare
+/// equal, and two directories never do.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct DirIdentity(DirIdentityKey);
+
+#[cfg(unix)]
+type DirIdentityKey = (u64, u64);
+#[cfg(not(unix))]
+type DirIdentityKey = PathBuf;
+
+impl DirIdentity {
+    /// The identity of the directory `dir` resolves to.
+    ///
+    /// # Errors
+    ///
+    /// The I/O error that kept `dir` from being inspected.
+    pub fn read(dir: &Path) -> std::io::Result<Self> {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt as _;
+            std::fs::metadata(dir).map(|meta| Self((meta.dev(), meta.ino())))
+        }
+        #[cfg(not(unix))]
+        {
+            std::fs::canonicalize(dir).map(Self)
+        }
+    }
+}
+
+/// Whether `err` shows that no directory exists at the inspected path.
+fn names_no_directory(err: &std::io::Error) -> bool {
+    matches!(
+        err.kind(),
+        std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
+    )
+}
+
+/// How the user's home bounds a manifest walk.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub enum HomeCeiling {
+    /// No home directory is configured, or none exists at the configured path.
+    ///
+    /// A directory that does not exist is no ancestor of any file, so only
+    /// version-control roots and the depth cap bound the walk.
+    Absent,
+    /// The walk stops at the directory with this identity.
+    At(DirIdentity),
+    /// A home exists but its identity cannot be read.
+    ///
+    /// No directory above the start can be shown to lie below the home, so
+    /// the walk examines the start directory alone.
+    Unreadable,
+}
+
+impl HomeCeiling {
+    /// The ceiling a configured `home` sets, read once.
+    #[must_use]
+    pub fn of(home: Option<&Path>) -> Self {
+        home.map_or(Self::Absent, |dir| match DirIdentity::read(dir) {
+            Ok(identity) => Self::At(identity),
+            Err(err) if names_no_directory(&err) => Self::Absent,
+            Err(_) => Self::Unreadable,
+        })
+    }
+
+    /// Whether the walk ends at `here` once its manifest has been looked for.
+    ///
+    /// A directory that exists but whose identity cannot be read may be the
+    /// home, so it ends the walk.
+    fn stops_at(&self, here: &Path) -> bool {
+        match self {
+            Self::Absent => false,
+            Self::Unreadable => true,
+            Self::At(home) => match DirIdentity::read(here) {
+                Ok(identity) => identity == *home,
+                Err(err) => !names_no_directory(&err),
+            },
+        }
+    }
+}
+
+/// Walk up from a `.ipe` file's parent to the nearest `package.ipe`.
 ///
 /// When given a file entry, the driver locates the project root (where
 /// `package.ipe` lives) before building, so the full module graph is compiled
@@ -656,25 +744,69 @@ pub fn read_discovered_sources(
 /// this finds, so it is obeyed only once it passes the owner rule
 /// ([`crate::owner_trust::admit_discovered_manifest`]).
 ///
+/// The walk stops at a ceiling: the first version-control root or the user's
+/// home directory. A manifest in the ceiling directory itself is still found;
+/// one above it lies outside the user's tree and is never consulted, so
+/// `None` (a loose file) is returned instead. See [`find_manifest_bounded`].
+///
 /// # Errors
 ///
-/// [`CliError::Usage`] when the nearest manifest is a link, or another user
-/// owns it or could write or replace it; [`CliError::Io`] when it cannot be
-/// inspected.
+/// As [`find_manifest_bounded`].
 pub fn find_manifest_for_ipe_file(ipe_file: &Path) -> Result<Option<PathBuf>, CliError> {
-    let Some(mut dir) = ipe_file.parent() else {
-        return Ok(None);
-    };
-    loop {
-        if let Some(manifest) = project::manifest_in_dir(dir) {
+    let home = HomeCeiling::of(crate::env_dir::home().as_deref());
+    find_manifest_bounded(ipe_file, &home, MAX_MANIFEST_WALK_DEPTH)
+}
+
+/// Walk up from `ipe_file`'s parent to the nearest `package.ipe`, below a ceiling.
+///
+/// At each directory a manifest is looked for first; the walk then ends with
+/// `None` when that directory holds a version-control root marker, is
+/// `home`, or is the filesystem root. At most `max_depth` directories are
+/// examined.
+///
+/// The walk steps up the path as given, so a found manifest keeps the
+/// spelling the caller used. The `home` ceiling is matched by the
+/// [`DirIdentity`] of each directory stepped through, never by its
+/// spelling, so a home reached through any alias still stops the walk.
+///
+/// # Errors
+///
+/// [`CliError::TrustRefused`] when the nearest manifest is a link, or another
+/// user owns it or could write or replace it; [`CliError::Io`] when it cannot
+/// be inspected; [`CliError::DiscoveryLimitReached`] when `max_depth`
+/// directories pass with neither a manifest nor a ceiling.
+pub fn find_manifest_bounded(
+    ipe_file: &Path,
+    home: &HomeCeiling,
+    max_depth: usize,
+) -> Result<Option<PathBuf>, CliError> {
+    let mut dir = ipe_file.parent();
+    for _ in 0..max_depth {
+        let Some(here) = dir else {
+            return Ok(None);
+        };
+        if let Some(manifest) = project::manifest_in_dir(here) {
             crate::owner_trust::admit_discovered_manifest(&manifest)?;
             return Ok(Some(manifest));
         }
-        let Some(up) = dir.parent() else {
+        let at_ceiling = home.stops_at(here)
+            || VCS_ROOT_MARKERS
+                .iter()
+                .any(|marker| here.join(marker).symlink_metadata().is_ok());
+        if at_ceiling {
             return Ok(None);
-        };
-        dir = up;
+        }
+        dir = here.parent();
     }
+    if dir.is_none() {
+        return Ok(None);
+    }
+    Err(CliError::DiscoveryLimitReached {
+        detail: format!(
+            "the search for `package.ipe` above `{}` passed the {max_depth}-directory ceiling",
+            ipe_file.display()
+        ),
+    })
 }
 
 /// Whether [`compile_modules_observed`] served an on-disk build-cache

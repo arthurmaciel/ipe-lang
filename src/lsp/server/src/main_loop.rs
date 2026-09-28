@@ -20,7 +20,7 @@ use lsp_types::{InitializeParams, PublishDiagnosticsParams, TextDocumentContentC
 use ipe_lsp_features::{PositionEncoding, diagnostics, offset};
 
 use crate::ServerError;
-use crate::loader::{LoadedFile, LoadedProject, ModuleOrigin, ProjectLoader};
+use crate::loader::{LoadDisposition, LoadedFile, LoadedProject, ModuleOrigin, ProjectLoader};
 
 /// The typed outcome of an LSP feature request. `null` is reserved for
 /// `NoResult`; a params-decode failure and an internal encoding bug are
@@ -79,24 +79,102 @@ fn load_lint_config(workspace_root: &Path) -> ipe_lint::LintConfig {
     })
 }
 
+/// One adopted project layout: its module set and both path-module maps.
+struct Layout {
+    entry_module: Vec<String>,
+    /// The loaded modules (disk truth; overlays shadow it).
+    disk: BTreeMap<Vec<String>, LoadedFile>,
+    module_of_path: BTreeMap<PathBuf, Vec<String>>,
+    /// Reverse of `module_of_path`: a user module's normalized on-disk path.
+    ///
+    /// Built once per layout in [`Layout::of`] so per-request URI resolution
+    /// and per-edit overlay lookup are `O(log n)`, not a linear scan or a
+    /// re-canonicalize.
+    path_of_module: BTreeMap<Vec<String>, PathBuf>,
+}
+
+impl Layout {
+    /// Index a loaded project, canonicalizing each user path once.
+    fn of(project: LoadedProject) -> Self {
+        let path_of_module: BTreeMap<Vec<String>, PathBuf> = project
+            .files
+            .iter()
+            .filter(|(_, file)| file.origin == ModuleOrigin::User)
+            .map(|(module, file)| (module.clone(), normalize(&file.path)))
+            .collect();
+        let module_of_path = path_of_module
+            .iter()
+            .map(|(module, path)| (path.clone(), module.clone()))
+            .collect();
+        Self {
+            entry_module: project.entry_module,
+            disk: project.files,
+            module_of_path,
+            path_of_module,
+        }
+    }
+}
+
+/// The layout the server analyzes, as the latest load verdict allows.
+///
+/// A refused load can only reach [`Served::Refused`] or keep a
+/// [`Served::Trusted`] layout, so no fallback outlives a refusal.
+enum Served {
+    /// No layout: nothing loaded yet, or a degraded load had no buffer to serve.
+    Unloaded,
+    /// The single-file layout of a degraded load.
+    Fallback(Layout),
+    /// No layout: the load was refused for a cause no buffer edit lifts.
+    ///
+    /// Only an open, save, close, or watched-file event re-runs the load,
+    /// the watched-file event anchored at the refused path.
+    Refused {
+        /// The path whose load was refused.
+        anchor: PathBuf,
+    },
+    /// The layout of a successful load.
+    Trusted(Layout),
+}
+
+impl Served {
+    /// The layout being analyzed, if any.
+    const fn layout(&self) -> Option<&Layout> {
+        match self {
+            Self::Unloaded | Self::Refused { .. } => None,
+            Self::Fallback(layout) | Self::Trusted(layout) => Some(layout),
+        }
+    }
+
+    /// Whether an edit to the buffer re-runs the load.
+    ///
+    /// Only an unloaded or degraded state retries: the edit may be the one
+    /// that lets the load succeed. A trusted layout is settled, and a refusal
+    /// counted nothing the buffer holds, so re-running it per keystroke would
+    /// repeat the refused filesystem work for the same verdict.
+    const fn retries_on_edit(&self) -> bool {
+        matches!(self, Self::Unloaded | Self::Fallback(_))
+    }
+
+    /// The path a watched-file event re-runs the load from, if any.
+    fn watched_file_anchor(&self) -> Option<PathBuf> {
+        match self {
+            Self::Unloaded => None,
+            Self::Refused { anchor } => Some(anchor.clone()),
+            Self::Fallback(layout) | Self::Trusted(layout) => {
+                layout.module_of_path.keys().next().cloned()
+            }
+        }
+    }
+}
+
 struct State {
     workspace_root: Option<PathBuf>,
     encoding: PositionEncoding,
     db: ipe_db::IpeDatabase,
     root: Option<ipe_db::SourceRoot>,
-    entry_module: Vec<String>,
-    /// The last loaded project layout (disk truth; overlays shadow it).
-    disk: BTreeMap<Vec<String>, LoadedFile>,
     /// Open editor buffers, keyed by normalized path.
     overlays: BTreeMap<PathBuf, String>,
-    module_of_path: BTreeMap<PathBuf, Vec<String>>,
-    /// Reverse of `module_of_path`: a user module's normalized on-disk path.
-    /// Built once per layout in [`adopt`] so per-request URI resolution and
-    /// per-edit overlay lookup are `O(log n)`, not a linear scan / re-canonicalize.
-    path_of_module: BTreeMap<Vec<String>, PathBuf>,
-    /// Whether the current layout is the degraded single-file fallback
-    /// (project resolution failed — retry a full load on the next edit).
-    fallback: bool,
+    served: Served,
     generation: u64,
     /// The single in-flight diagnostics worker. At most one exists at a time:
     /// a new `recompute` call joins (cancels) the previous one before spawning
@@ -118,9 +196,22 @@ struct State {
 }
 
 impl State {
+    /// The entry module of the served layout; empty when none is served.
+    fn entry_module(&self) -> &[String] {
+        let none: &[String] = &[];
+        self.served
+            .layout()
+            .map_or(none, |layout| layout.entry_module.as_slice())
+    }
+
+    /// The module a normalized path maps to in the served layout.
+    fn module_of_path(&self, path: &Path) -> Option<&Vec<String>> {
+        self.served.layout()?.module_of_path.get(path)
+    }
+
     /// The document URI of a user module, when it has an on-disk path.
     fn uri_for_module(&self, module: &[String]) -> Option<Url> {
-        let path = self.path_of_module.get(module)?;
+        let path = self.served.layout()?.path_of_module.get(module)?;
         Url::from_file_path(path).ok()
     }
 
@@ -129,7 +220,7 @@ impl State {
     /// full document is never cloned just to satisfy the borrow checker.
     fn locate(&self, uri: &Url) -> Option<(Vec<String>, ipe_db::SourceFile)> {
         let path = normalize(&uri.to_file_path().ok()?);
-        let module = self.module_of_path.get(&path)?.clone();
+        let module = self.module_of_path(&path)?.clone();
         let root = self.root?;
         let file = root.files(&self.db).get(&module).copied()?;
         Some((module, file))
@@ -141,12 +232,8 @@ impl State {
             encoding,
             db: ipe_db::IpeDatabase::new(),
             root: None,
-            entry_module: Vec::new(),
-            disk: BTreeMap::new(),
             overlays: BTreeMap::new(),
-            module_of_path: BTreeMap::new(),
-            path_of_module: BTreeMap::new(),
-            fallback: false,
+            served: Served::Unloaded,
             generation: 0,
             worker: None,
             worker_cancel: None,
@@ -334,7 +421,7 @@ fn position_ctx<'db>(
     let Some(root) = state.root else {
         return Err(FeatureOutcome::NoResult);
     };
-    let Some(entry_file) = root.files(&state.db).get(&state.entry_module).copied() else {
+    let Some(entry_file) = root.files(&state.db).get(state.entry_module()).copied() else {
         return Err(FeatureOutcome::NoResult);
     };
     let byte = offset::position_to_offset(text, position, state.encoding);
@@ -764,9 +851,10 @@ fn handle_notification(
             for change in &params.content_changes {
                 apply_content_change(text, change, encoding);
             }
-            if state.fallback {
-                // Project resolution failed at open; the edit may have fixed
-                // the very defect (e.g. the module header) that blocked it.
+            if state.served.retries_on_edit() {
+                // Unloaded or degraded; the edit may have fixed the very
+                // defect (a module header, an oversized import closure) that
+                // blocked the load.
                 ensure_project_fresh(state, loader, &path);
             }
             sync_inputs(state);
@@ -804,8 +892,7 @@ fn handle_notification(
             recompute(state, diag_tx);
         }
         DidChangeWatchedFiles::METHOD => {
-            let anchor = state.module_of_path.keys().next().cloned();
-            if let Some(anchor) = anchor {
+            if let Some(anchor) = state.served.watched_file_anchor() {
                 ensure_project_fresh(state, loader, &anchor);
                 sync_inputs(state);
                 recompute(state, diag_tx);
@@ -817,7 +904,8 @@ fn handle_notification(
 
 /// Load the project for `path` if the current layout does not know it.
 fn ensure_project(state: &mut State, loader: &dyn ProjectLoader, path: &Path) {
-    if state.module_of_path.contains_key(path) && !state.fallback {
+    if matches!(&state.served, Served::Trusted(layout) if layout.module_of_path.contains_key(path))
+    {
         return;
     }
     ensure_project_fresh(state, loader, path);
@@ -826,46 +914,60 @@ fn ensure_project(state: &mut State, loader: &dyn ProjectLoader, path: &Path) {
 /// Unconditionally re-resolve the project layout anchored at `path`.
 fn ensure_project_fresh(state: &mut State, loader: &dyn ProjectLoader, path: &Path) {
     let open_text = state.overlays.get(path).map(String::as_str);
-    match loader.load(state.workspace_root.as_deref(), path, open_text) {
-        Ok(project) => {
-            adopt(state, project);
-            state.fallback = false;
-        }
-        Err(err) => {
-            eprintln!("[ipe lsp] project load failed: {}", err.detail);
-            if state.disk.is_empty() {
-                // Never successfully loaded: degrade to a single-file layout
-                // so parse diagnostics still flow for the open buffer;
-                // retried on the next edit.
-                if let Some(text) = state.overlays.get(path).cloned() {
-                    let module = vec![module_name_fallback(path)];
-                    let mut files = BTreeMap::new();
-                    files.insert(
-                        module.clone(),
-                        LoadedFile {
-                            path: path.to_path_buf(),
-                            text,
-                            origin: ModuleOrigin::User,
-                        },
-                    );
-                    adopt(
-                        state,
-                        LoadedProject {
-                            files,
-                            entry_module: module,
-                        },
-                    );
-                    state.fallback = true;
+    let verdict = loader.load(state.workspace_root.as_deref(), path, open_text);
+    let previous = std::mem::replace(&mut state.served, Served::Unloaded);
+    state.served = match verdict {
+        Ok(project) => Served::Trusted(Layout::of(project)),
+        Err(err) => match (err.disposition(), previous) {
+            // A previously-good layout is kept rather than replaced: a
+            // fallback would drop every other module from the salsa root and
+            // clear their real diagnostics on the next publish. Save and
+            // watched-file events retry unconditionally.
+            (_, Served::Trusted(layout)) => {
+                eprintln!("[ipe lsp] project load failed, keeping the last good layout: {err}");
+                Served::Trusted(layout)
+            }
+            (
+                LoadDisposition::Refuse,
+                Served::Unloaded | Served::Fallback(_) | Served::Refused { .. },
+            ) => {
+                eprintln!("[ipe lsp] project load refused: {err}");
+                Served::Refused {
+                    anchor: path.to_path_buf(),
                 }
             }
-            // A previously-good layout exists: keep it rather than degrading
-            // to the single-file fallback, which would drop every other
-            // module from the salsa root and clear their real diagnostics
-            // on the next publish. `DidSaveTextDocument` and
-            // `DidChangeWatchedFiles` retry unconditionally, so the next
-            // settled state re-resolves the full project.
-        }
-    }
+            (LoadDisposition::Degrade, Served::Fallback(layout)) => {
+                eprintln!("[ipe lsp] project load failed: {err}");
+                Served::Fallback(layout)
+            }
+            (LoadDisposition::Degrade, Served::Unloaded | Served::Refused { .. }) => {
+                eprintln!("[ipe lsp] project load failed: {err}");
+                // Degrade to a single-file layout so parse diagnostics still
+                // flow for the open buffer; retried on the next edit.
+                state.overlays.get(path).map_or(Served::Unloaded, |text| {
+                    Served::Fallback(single_file_layout(path, text.clone()))
+                })
+            }
+        },
+    };
+}
+
+/// The one-module layout of a buffer served on its own.
+fn single_file_layout(path: &Path, text: String) -> Layout {
+    let module = vec![module_name_fallback(path)];
+    let mut files = BTreeMap::new();
+    files.insert(
+        module.clone(),
+        LoadedFile {
+            path: path.to_path_buf(),
+            text,
+            origin: ModuleOrigin::User,
+        },
+    );
+    Layout::of(LoadedProject {
+        files,
+        entry_module: module,
+    })
 }
 
 fn module_name_fallback(path: &Path) -> String {
@@ -875,51 +977,33 @@ fn module_name_fallback(path: &Path) -> String {
         .to_owned()
 }
 
-fn adopt(state: &mut State, project: LoadedProject) {
-    state.entry_module = project.entry_module;
-    // Canonicalize each user path once here, and keep both directions of the
-    // path<->module mapping so the request handlers and `sync_inputs` never
-    // re-canonicalize or linear-scan on the hot path.
-    state.path_of_module = project
-        .files
-        .iter()
-        .filter(|(_, file)| file.origin == ModuleOrigin::User)
-        .map(|(module, file)| (module.clone(), normalize(&file.path)))
-        .collect();
-    state.module_of_path = state
-        .path_of_module
-        .iter()
-        .map(|(module, path)| (path.clone(), module.clone()))
-        .collect();
-    state.disk = project.files;
-}
-
 /// Reconcile the salsa inputs with the current layout, open-buffer overlays
 /// shadowing disk text.
 fn sync_inputs(state: &mut State) {
-    if state.disk.is_empty() {
-        return;
-    }
-    let desired: BTreeMap<Vec<String>, (String, ModuleOrigin)> = state
-        .disk
-        .iter()
-        .map(|(module, file)| {
-            // Only a user module can carry an open-buffer overlay, and its
-            // normalized path was canonicalized once in `adopt`; reuse it rather
-            // than re-canonicalizing every module (a syscall) on each keystroke.
-            let overlay = state
-                .path_of_module
-                .get(module)
-                .and_then(|path| state.overlays.get(path));
-            let text = overlay.unwrap_or(&file.text).clone();
-            (module.clone(), (text, file.origin))
-        })
-        .collect();
+    let desired: BTreeMap<Vec<String>, (String, ModuleOrigin)> =
+        state.served.layout().map_or_else(BTreeMap::new, |layout| {
+            layout
+                .disk
+                .iter()
+                .map(|(module, file)| {
+                    // Only a user module can carry an open-buffer overlay, and
+                    // its normalized path was canonicalized once in
+                    // `Layout::of`; reuse it rather than re-canonicalizing
+                    // every module (a syscall) on each keystroke.
+                    let overlay = layout
+                        .path_of_module
+                        .get(module)
+                        .and_then(|path| state.overlays.get(path));
+                    let text = overlay.unwrap_or(&file.text).clone();
+                    (module.clone(), (text, file.origin))
+                })
+                .collect()
+        });
     if let Some(root) = state.root {
         // Blocks until any in-flight worker's cancelled query unwinds and
         // drops its database clone — the cancellation edge.
         ipe_db::sync_source_root(&mut state.db, root, &desired);
-    } else {
+    } else if !desired.is_empty() {
         let files: BTreeMap<Vec<String>, ipe_db::SourceFile> = desired
             .iter()
             .map(|(module, (text, origin))| {
@@ -959,13 +1043,22 @@ fn apply_content_change(
 /// at most one live worker at any time, so fast edits cannot accumulate
 /// unbounded threads or memory.
 fn recompute(state: &mut State, diag_tx: &Sender<DiagnosticsBatch>) {
-    let Some(root) = state.root else { return };
-    let Some(entry_file) = root.files(&state.db).get(&state.entry_module).copied() else {
-        return;
-    };
+    let served = state.root.and_then(|root| {
+        let entry_file = root.files(&state.db).get(state.entry_module()).copied()?;
+        Some((root, entry_file))
+    });
 
     // Bump the generation first so the outgoing worker's batch is stale.
     state.generation = state.generation.wrapping_add(1);
+
+    let Some((root, entry_file)) = served else {
+        // Nothing is served: an empty batch clears what an earlier layout published.
+        let _ = diag_tx.send(DiagnosticsBatch {
+            generation: state.generation,
+            per_uri: Vec::new(),
+        });
+        return;
+    };
 
     // Cancel the previous worker by joining it. The worker holds a cloned
     // `IpeDatabase`; `sync_source_root` (called on every edit before
@@ -987,11 +1080,13 @@ fn recompute(state: &mut State, diag_tx: &Sender<DiagnosticsBatch>) {
     let generation = state.generation;
     let db = state.db.clone();
     let encoding = state.encoding;
-    let entry_module = state.entry_module.clone();
+    let entry_module = state.entry_module().to_vec();
     let mut uri_of: BTreeMap<Vec<String>, Url> = BTreeMap::new();
-    for (module, path) in &state.path_of_module {
-        if let Ok(uri) = Url::from_file_path(path) {
-            uri_of.insert(module.clone(), uri);
+    if let Some(layout) = state.served.layout() {
+        for (module, path) in &layout.path_of_module {
+            if let Ok(uri) = Url::from_file_path(path) {
+                uri_of.insert(module.clone(), uri);
+            }
         }
     }
     // Load the workspace lint.ipe once per recompute cycle, on the main thread
@@ -1157,7 +1252,7 @@ fn code_action_result(state: &State, params: &serde_json::Value) -> FeatureOutco
     let Some(root) = state.root else {
         return FeatureOutcome::NoResult;
     };
-    let Some(entry_file) = root.files(&state.db).get(&state.entry_module).copied() else {
+    let Some(entry_file) = root.files(&state.db).get(state.entry_module()).copied() else {
         return FeatureOutcome::NoResult;
     };
     let view = ipe_lsp_features::code_actions::DbView {
@@ -1234,7 +1329,7 @@ fn inlay_hints_result(state: &State, params: &serde_json::Value) -> FeatureOutco
     let Some(root) = state.root else {
         return FeatureOutcome::NoResult;
     };
-    let Some(entry_file) = root.files(&state.db).get(&state.entry_module).copied() else {
+    let Some(entry_file) = root.files(&state.db).get(state.entry_module()).copied() else {
         return FeatureOutcome::NoResult;
     };
     let hints = ipe_lsp_features::inlay_hints::inlay_hints(
@@ -1451,18 +1546,19 @@ fn publish(state: &mut State, connection: &Connection, batch: DiagnosticsBatch) 
 mod tests {
     use std::collections::BTreeMap;
     use std::sync::Arc;
-    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::time::Duration;
 
     use crossbeam_channel::RecvTimeoutError;
 
     use super::{
-        Connection, DiagnosticsBatch, FeatureOutcome, LoadedFile, LoadedProject, Message,
-        ModuleOrigin, Path, PathBuf, PositionEncoding, ProjectLoader, PublishDiagnostics,
-        PublishDiagnosticsParams, State, Url, adopt, ensure_project_fresh, normalize, publish,
-        recompute, sync_inputs,
+        Connection, DiagnosticsBatch, DidChangeTextDocument, DidChangeWatchedFiles, FeatureOutcome,
+        Layout, LoadedFile, LoadedProject, Message, ModuleOrigin, Notification, Path, PathBuf,
+        PositionEncoding, ProjectLoader, PublishDiagnostics, PublishDiagnosticsParams, Served,
+        State, TextDocumentContentChangeEvent, Url, ensure_project_fresh, handle_notification,
+        normalize, publish, recompute, sync_inputs,
     };
-    use crate::loader::LoadError;
+    use crate::loader::{LimitSource, LoadDisposition, LoadError};
     use lsp_types::notification::Notification as _;
 
     const MAIN_TEXT: &str = "module Main exposing (main)\n\nimport Ipe.Io as Io\n\nmain : Task Error ()\nmain =\n    Io.println \"ok\"\n";
@@ -1485,9 +1581,7 @@ mod tests {
             open_text: Option<&str>,
         ) -> Result<LoadedProject, LoadError> {
             if self.fail_next.swap(false, Ordering::SeqCst) {
-                return Err(LoadError {
-                    detail: "simulated transient failure".to_owned(),
-                });
+                return Err(LoadError::Io("simulated transient failure".to_owned()));
             }
             let mut files = BTreeMap::new();
             files.insert(
@@ -1527,6 +1621,428 @@ mod tests {
         }
     }
 
+    #[test]
+    fn load_error_disposition_splits_degrade_from_refuse() {
+        let detail = || "detail".to_owned();
+        for degraded in [
+            LoadError::Pipeline(detail()),
+            LoadError::Io(detail()),
+            LoadError::Refused(detail()),
+            LoadError::Limit {
+                lifted_by: LimitSource::Buffer,
+                detail: detail(),
+            },
+        ] {
+            assert_eq!(
+                degraded.disposition(),
+                LoadDisposition::Degrade,
+                "{degraded:?}"
+            );
+        }
+        for refused in [
+            LoadError::Limit {
+                lifted_by: LimitSource::Filesystem,
+                detail: detail(),
+            },
+            LoadError::FfiUntrusted(detail()),
+            LoadError::ManifestUntrusted(detail()),
+        ] {
+            assert_eq!(
+                refused.disposition(),
+                LoadDisposition::Refuse,
+                "{refused:?}"
+            );
+            assert_eq!(refused.to_string(), "detail");
+        }
+    }
+
+    /// A loader whose every `load` fails with one fixed error.
+    struct FailingLoader(LoadError);
+
+    impl ProjectLoader for FailingLoader {
+        fn load(
+            &self,
+            _workspace_root: Option<&Path>,
+            _open_file: &Path,
+            _open_text: Option<&str>,
+        ) -> Result<LoadedProject, LoadError> {
+            Err(self.0.clone())
+        }
+    }
+
+    /// Every refusal a load can end in, one per refusing variant.
+    fn every_refusal() -> [LoadError; 3] {
+        [
+            LoadError::Limit {
+                lifted_by: LimitSource::Filesystem,
+                detail: "ceiling".to_owned(),
+            },
+            LoadError::FfiUntrusted("untrusted".to_owned()),
+            LoadError::ManifestUntrusted("untrusted".to_owned()),
+        ]
+    }
+
+    #[test]
+    fn a_refused_load_serves_no_layout() {
+        let main_path = normalize(Path::new("/lsp-refuse-test/Main.ipe"));
+        for refusal in every_refusal() {
+            let mut state = State::new(None, PositionEncoding::Utf16);
+            state
+                .overlays
+                .insert(main_path.clone(), MAIN_TEXT.to_owned());
+            ensure_project_fresh(&mut state, &FailingLoader(refusal), &main_path);
+            assert!(
+                matches!(&state.served, Served::Refused { anchor } if *anchor == main_path),
+                "a refusal must adopt no layout and anchor at the refused path"
+            );
+            assert!(
+                state.served.layout().is_none(),
+                "a refusal serves no layout"
+            );
+            assert!(
+                !state.served.retries_on_edit(),
+                "a refusal no edit can lift must not re-run the load per keystroke"
+            );
+            assert_eq!(
+                state.served.watched_file_anchor(),
+                Some(main_path.clone()),
+                "a watched-file event must re-run the refused load"
+            );
+        }
+    }
+
+    /// A loader that counts its loads and refuses on a filesystem ceiling while armed.
+    struct CountingRefusalLoader {
+        loads: AtomicUsize,
+        refusing: AtomicBool,
+    }
+
+    impl CountingRefusalLoader {
+        const fn refusing() -> Self {
+            Self {
+                loads: AtomicUsize::new(0),
+                refusing: AtomicBool::new(true),
+            }
+        }
+
+        fn loads(&self) -> usize {
+            self.loads.load(Ordering::SeqCst)
+        }
+    }
+
+    impl ProjectLoader for CountingRefusalLoader {
+        fn load(
+            &self,
+            _workspace_root: Option<&Path>,
+            open_file: &Path,
+            open_text: Option<&str>,
+        ) -> Result<LoadedProject, LoadError> {
+            self.loads.fetch_add(1, Ordering::SeqCst);
+            if self.refusing.load(Ordering::SeqCst) {
+                return Err(LoadError::Limit {
+                    lifted_by: LimitSource::Filesystem,
+                    detail: "manifest walk ceiling".to_owned(),
+                });
+            }
+            let mut files = BTreeMap::new();
+            files.insert(
+                vec!["Main".to_owned()],
+                LoadedFile {
+                    path: open_file.to_path_buf(),
+                    text: open_text.unwrap_or(MAIN_TEXT).to_owned(),
+                    origin: ModuleOrigin::User,
+                },
+            );
+            Ok(LoadedProject {
+                files,
+                entry_module: vec!["Main".to_owned()],
+            })
+        }
+    }
+
+    /// Deliver an empty `workspace/didChangeWatchedFiles` notification.
+    fn did_change_watched_files(
+        state: &mut State,
+        loader: &dyn ProjectLoader,
+        diag_tx: &crossbeam_channel::Sender<DiagnosticsBatch>,
+    ) {
+        let params = lsp_types::DidChangeWatchedFilesParams { changes: vec![] };
+        let note = Notification::new(DidChangeWatchedFiles::METHOD.to_owned(), params);
+        handle_notification(state, loader, &note, diag_tx);
+    }
+
+    #[test]
+    fn a_refused_load_is_not_rerun_by_a_keystroke() {
+        let main_path = normalize(Path::new("/lsp-refuse-keystroke-test/Main.ipe"));
+        let loader = CountingRefusalLoader::refusing();
+        let (diag_tx, _diag_rx) = crossbeam_channel::unbounded::<DiagnosticsBatch>();
+        let mut state = State::new(None, PositionEncoding::Utf16);
+        state
+            .overlays
+            .insert(main_path.clone(), MAIN_TEXT.to_owned());
+        ensure_project_fresh(&mut state, &loader, &main_path);
+        assert_eq!(loader.loads(), 1, "the refused load ran once");
+        for _ in 0..3 {
+            did_change(&mut state, &loader, &main_path, MAIN_TEXT, &diag_tx);
+        }
+        assert_eq!(
+            loader.loads(),
+            1,
+            "a keystroke must not re-run a load refused on the filesystem"
+        );
+        assert!(
+            matches!(state.served, Served::Refused { .. }),
+            "the refusal stands until a filesystem event"
+        );
+    }
+
+    #[test]
+    fn a_refused_load_is_rerun_by_a_watched_file_event() {
+        let main_path = normalize(Path::new("/lsp-refuse-watched-test/Main.ipe"));
+        let loader = CountingRefusalLoader::refusing();
+        let (diag_tx, _diag_rx) = crossbeam_channel::unbounded::<DiagnosticsBatch>();
+        let mut state = State::new(None, PositionEncoding::Utf16);
+        state
+            .overlays
+            .insert(main_path.clone(), MAIN_TEXT.to_owned());
+        ensure_project_fresh(&mut state, &loader, &main_path);
+        did_change_watched_files(&mut state, &loader, &diag_tx);
+        assert_eq!(
+            loader.loads(),
+            2,
+            "a watched-file event must re-run the refused load"
+        );
+        assert!(
+            matches!(state.served, Served::Refused { .. }),
+            "an unchanged filesystem refuses again"
+        );
+        loader.refusing.store(false, Ordering::SeqCst);
+        did_change_watched_files(&mut state, &loader, &diag_tx);
+        assert_eq!(loader.loads(), 3);
+        assert!(
+            matches!(state.served, Served::Trusted(_)),
+            "the filesystem change that lifts the ceiling must be served"
+        );
+    }
+
+    #[test]
+    fn nothing_loaded_gives_a_watched_file_event_no_anchor() {
+        let loader = CountingRefusalLoader::refusing();
+        let (diag_tx, _diag_rx) = crossbeam_channel::unbounded::<DiagnosticsBatch>();
+        let mut state = State::new(None, PositionEncoding::Utf16);
+        did_change_watched_files(&mut state, &loader, &diag_tx);
+        assert_eq!(loader.loads(), 0, "no anchor, no load");
+        assert!(matches!(state.served, Served::Unloaded));
+    }
+
+    #[test]
+    fn a_refused_load_keeps_a_trusted_layout() {
+        let main_path = normalize(Path::new("/lsp-refuse-keep-test/Main.ipe"));
+        let loader = BufferCeilingLoader::new(MAIN_TEXT.len());
+        for refusal in every_refusal() {
+            let mut state = State::new(None, PositionEncoding::Utf16);
+            state
+                .overlays
+                .insert(main_path.clone(), MAIN_TEXT.to_owned());
+            ensure_project_fresh(&mut state, &loader, &main_path);
+            assert!(matches!(state.served, Served::Trusted(_)), "first load");
+            ensure_project_fresh(&mut state, &FailingLoader(refusal), &main_path);
+            assert!(
+                matches!(state.served, Served::Trusted(_)),
+                "a refusal must keep the layout of an earlier trusted load"
+            );
+        }
+    }
+
+    #[test]
+    fn a_degraded_load_serves_the_single_file_fallback() {
+        let main_path = normalize(Path::new("/lsp-degrade-test/Main.ipe"));
+        for degraded in [
+            LoadError::Pipeline("bad header".to_owned()),
+            LoadError::Refused("not a regular file".to_owned()),
+            LoadError::Limit {
+                lifted_by: LimitSource::Buffer,
+                detail: "import closure ceiling".to_owned(),
+            },
+        ] {
+            let mut state = State::new(None, PositionEncoding::Utf16);
+            state
+                .overlays
+                .insert(main_path.clone(), MAIN_TEXT.to_owned());
+            ensure_project_fresh(&mut state, &FailingLoader(degraded), &main_path);
+            assert!(
+                matches!(state.served, Served::Fallback(_)),
+                "a degrade must adopt the open buffer"
+            );
+            assert!(
+                state.served.retries_on_edit(),
+                "a degrade must arm the per-edit retry"
+            );
+        }
+    }
+
+    /// A loader answering by the open buffer's size, the shape of a loose file's closure ceiling.
+    ///
+    /// A buffer longer than `ceiling` bytes hits a buffer-counted limit;
+    /// arming `refuse_next` makes the next load a filesystem-counted one.
+    struct BufferCeilingLoader {
+        ceiling: usize,
+        refuse_next: AtomicBool,
+    }
+
+    impl BufferCeilingLoader {
+        const fn new(ceiling: usize) -> Self {
+            Self {
+                ceiling,
+                refuse_next: AtomicBool::new(false),
+            }
+        }
+    }
+
+    impl ProjectLoader for BufferCeilingLoader {
+        fn load(
+            &self,
+            _workspace_root: Option<&Path>,
+            open_file: &Path,
+            open_text: Option<&str>,
+        ) -> Result<LoadedProject, LoadError> {
+            if self.refuse_next.swap(false, Ordering::SeqCst) {
+                return Err(LoadError::Limit {
+                    lifted_by: LimitSource::Filesystem,
+                    detail: "manifest walk ceiling".to_owned(),
+                });
+            }
+            let text = open_text.unwrap_or_default();
+            if text.len() > self.ceiling {
+                return Err(LoadError::Limit {
+                    lifted_by: LimitSource::Buffer,
+                    detail: "import closure ceiling".to_owned(),
+                });
+            }
+            let mut files = BTreeMap::new();
+            files.insert(
+                vec!["Main".to_owned()],
+                LoadedFile {
+                    path: open_file.to_path_buf(),
+                    text: text.to_owned(),
+                    origin: ModuleOrigin::User,
+                },
+            );
+            Ok(LoadedProject {
+                files,
+                entry_module: vec!["Main".to_owned()],
+            })
+        }
+    }
+
+    /// Replace the whole buffer at `path` through a `didChange` notification.
+    #[allow(clippy::expect_used)] // test fixture: an absolute path always has a file URI
+    fn did_change(
+        state: &mut State,
+        loader: &dyn ProjectLoader,
+        path: &Path,
+        text: &str,
+        diag_tx: &crossbeam_channel::Sender<DiagnosticsBatch>,
+    ) {
+        let params = lsp_types::DidChangeTextDocumentParams {
+            text_document: lsp_types::VersionedTextDocumentIdentifier {
+                uri: Url::from_file_path(path).expect("file uri"),
+                version: 2,
+            },
+            content_changes: vec![TextDocumentContentChangeEvent {
+                range: None,
+                range_length: None,
+                text: text.to_owned(),
+            }],
+        };
+        let note = Notification::new(DidChangeTextDocument::METHOD.to_owned(), params);
+        handle_notification(state, loader, &note, diag_tx);
+    }
+
+    /// The buffer past its padding: the same module, longer than `MAIN_TEXT`.
+    fn oversized_main() -> String {
+        format!("{MAIN_TEXT}\n-- padding past the ceiling\n")
+    }
+
+    #[test]
+    fn a_buffer_limit_degrades_and_an_edit_under_it_is_served_on_did_change() {
+        let main_path = normalize(Path::new("/lsp-buffer-limit-test/Main.ipe"));
+        let loader = BufferCeilingLoader::new(MAIN_TEXT.len());
+        let (diag_tx, _diag_rx) = crossbeam_channel::unbounded::<DiagnosticsBatch>();
+        let mut state = State::new(None, PositionEncoding::Utf16);
+        state.overlays.insert(main_path.clone(), oversized_main());
+        ensure_project_fresh(&mut state, &loader, &main_path);
+        assert!(
+            matches!(state.served, Served::Fallback(_)),
+            "a buffer-counted limit must degrade, not refuse"
+        );
+        did_change(&mut state, &loader, &main_path, MAIN_TEXT, &diag_tx);
+        assert!(
+            matches!(state.served, Served::Trusted(_)),
+            "an edit under the limit must be re-served as the trusted layout"
+        );
+    }
+
+    #[test]
+    #[allow(clippy::expect_used)] // test fixture: an absolute path always has a file URI
+    fn degrade_then_refuse_serves_nothing_until_a_watched_file_event() {
+        let main_path = normalize(Path::new("/lsp-degrade-refuse-test/Main.ipe"));
+        let main_uri = Url::from_file_path(&main_path).expect("main uri");
+        let loader = BufferCeilingLoader::new(MAIN_TEXT.len());
+        let (diag_tx, diag_rx) = crossbeam_channel::unbounded::<DiagnosticsBatch>();
+        let mut state = State::new(None, PositionEncoding::Utf16);
+        state.overlays.insert(main_path.clone(), oversized_main());
+        ensure_project_fresh(&mut state, &loader, &main_path);
+        sync_inputs(&mut state);
+        assert!(
+            matches!(state.served, Served::Fallback(_)),
+            "degraded first"
+        );
+        assert!(state.locate(&main_uri).is_some(), "the fallback is served");
+
+        loader.refuse_next.store(true, Ordering::SeqCst);
+        did_change(&mut state, &loader, &main_path, &oversized_main(), &diag_tx);
+        assert!(
+            matches!(state.served, Served::Refused { .. }),
+            "a refusal must drop the fallback, not keep serving it"
+        );
+        assert!(
+            state.locate(&main_uri).is_none(),
+            "no request may be answered from the dropped fallback"
+        );
+        assert_eq!(
+            state.root.map_or(0, |root| root.files(&state.db).len()),
+            0,
+            "the analyzed module set must be empty"
+        );
+        let cleared = diag_rx.try_recv().expect("a clearing diagnostics batch");
+        assert_eq!(cleared.generation, state.generation);
+        assert!(
+            cleared.per_uri.is_empty(),
+            "the fallback's diagnostics must be cleared"
+        );
+
+        did_change(&mut state, &loader, &main_path, MAIN_TEXT, &diag_tx);
+        assert!(
+            matches!(state.served, Served::Refused { .. }),
+            "an edit must not re-run a load refused on the filesystem"
+        );
+        assert!(
+            state.locate(&main_uri).is_none(),
+            "the refusal still serves nothing"
+        );
+
+        did_change_watched_files(&mut state, &loader, &diag_tx);
+        assert!(
+            matches!(state.served, Served::Trusted(_)),
+            "a watched-file event must retry the load and serve its layout"
+        );
+        assert!(
+            state.locate(&main_uri).is_some(),
+            "the trusted layout is served"
+        );
+    }
+
     /// A load failure on an already-well-formed project (CO-INCR-007) must
     /// not clear `Lib`'s real diagnostics: the prior layout is kept and
     /// retried later, not replaced by the single-file fallback.
@@ -1549,7 +2065,10 @@ mod tests {
         // First load succeeds: both modules known, Lib carries a real
         // compiler diagnostic.
         ensure_project_fresh(&mut state, &loader, &main_path);
-        assert!(!state.fallback, "first load must succeed cleanly");
+        assert!(
+            matches!(state.served, Served::Trusted(_)),
+            "first load must succeed cleanly"
+        );
         sync_inputs(&mut state);
 
         let (diag_tx, diag_rx) = crossbeam_channel::unbounded::<DiagnosticsBatch>();
@@ -1831,7 +2350,7 @@ mod tests {
             files,
             entry_module: vec!["Main".to_owned()],
         };
-        adopt(&mut state, project);
+        state.served = Served::Trusted(Layout::of(project));
         sync_inputs(&mut state);
         (state, helper_path, main_path)
     }
