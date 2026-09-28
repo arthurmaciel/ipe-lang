@@ -580,7 +580,7 @@ mod tests {
     fn a_rustup_home_at_or_above_the_cargo_home_is_refused() {
         let (_dir, root) = toolchain_tree();
         let cargo_home = root.join("cargo");
-        for rustup in [cargo_home.clone(), root.clone()] {
+        for rustup in [cargo_home.clone(), root] {
             let refused = toolchain_binds_from(Some(&cargo_home), Some(rustup));
             assert!(matches!(
                 refused,
