@@ -170,6 +170,7 @@ impl Builder<'_> {
                 let mut rigid_vars = BTreeMap::new();
                 let mut wildcards = Vec::new();
                 let mut param_counts = Vec::with_capacity(patterns.len());
+                let mut bare_params = Vec::with_capacity(patterns.len());
                 let mut local = BTreeMap::new();
                 let mut cursor: &canon::Type = handler_expansion.as_ref().unwrap_or(ty);
                 for pat in patterns {
@@ -191,6 +192,7 @@ impl Builder<'_> {
                         &mut wildcards,
                     )?;
                     param_counts.push(wildcards.len().saturating_sub(before));
+                    bare_params.push(self.is_wildcard_any_ty(&arg));
                     self.constrain_pattern(&mut local, pat, arg_var)?;
                     // Record the param pattern's region so the lowerer can read the
                     // solved param type (record-param field-set completion, IPE-T0015
@@ -246,6 +248,8 @@ impl Builder<'_> {
                         key: (self.current_home.clone(), name.value),
                         wildcards,
                         param_counts,
+                        bare_params,
+                        span: name.span,
                     });
                 }
                 Ok(())

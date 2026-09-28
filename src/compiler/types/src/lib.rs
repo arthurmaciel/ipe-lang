@@ -41,7 +41,7 @@ use std::sync::Arc;
 
 use ipe_canon::ModuleExports;
 use ipe_canon::ast as canon;
-use ipe_diagnostics::{DResult, Diagnostic, LowerError, Span, TypeError};
+use ipe_diagnostics::{DResult, Diagnostic, LowerError, Span, TypeError, WildcardDependence};
 use ipe_intern::{Interner, Symbol};
 
 pub use constrain::{kernel_type_table, resolve_scheme};
@@ -183,7 +183,7 @@ pub struct SignatureWildcards {
     /// these counts before pairing its `k`-th mint with wildcard `k`.
     pub param_counts: Vec<usize>,
     /// Parameter wildcard index → the ground type the body pinned it to
-    /// ([`ty_is_pinnable`]). A pinned wildcard lowers to that concrete type, so
+    /// ([`ty_is_ground`]). A pinned wildcard lowers to that concrete type, so
     /// every use must instantiate it at exactly that type.
     pub pins: BTreeMap<usize, Ty>,
 }
@@ -889,28 +889,74 @@ fn infer_core(
     // its own `i`-th wildcard. It stays out of `poly_var_map`: a wildcard is no
     // named type parameter of the enclosing function.
     //
-    // A parameter wildcard the body pinned to one ground type (`h x = x + x ==
-    // x` defaults it to `Int`; `f x = String.length x` pins `String`) is no
-    // generic at all: record the pin so the lowerer emits that concrete type and
-    // every use site is held to it ([`check_wildcard_pins`]).
+    // Every parameter wildcard is classified ([`classify_param_wildcard`]): one
+    // the body left an independent free variable stays a generic; one the body
+    // pinned to one ground type (`h x = x + x == x` defaults it to `Int`; `f x =
+    // String.length x` pins `String`) is no generic at all, so the pin is
+    // recorded for the lowerer to emit concretely and every use site is held to
+    // it ([`check_wildcard_pins`]). Any other solved root — a signature type
+    // variable, another parameter's wildcard, a structure that still leaves part
+    // of the type open — has no sound lowering and is refused here (IPE-T0021).
     let mut signature_wildcards: BTreeMap<(Vec<Symbol>, Symbol), SignatureWildcards> =
         BTreeMap::new();
     for entry in &generated.typed_wildcards {
-        let param_wildcards: usize = entry.param_counts.iter().sum();
-        let mut pins = BTreeMap::new();
         for (i, wildcard) in entry.wildcards.iter().enumerate() {
-            match lift!(uf.content(*wildcard)) {
-                Content::Super { bounds: b, .. } if !b.is_empty() => {
-                    let sym = lift!(interner.intern(&wildcard_bound_key(i)));
-                    bounds.entry(entry.key.clone()).or_default().insert(sym, b);
-                }
-                Content::Structure(_) if i < param_wildcards => {
-                    let ty = lift!(zonk(&mut uf, budget, *wildcard));
-                    if ty_is_pinnable(&ty) {
+            if let Content::Super { bounds: b, .. } = lift!(uf.content(*wildcard))
+                && !b.is_empty()
+            {
+                let sym = lift!(interner.intern(&wildcard_bound_key(i)));
+                bounds.entry(entry.key.clone()).or_default().insert(sym, b);
+            }
+        }
+        let rigid_names = poly_var_map.get(&entry.key);
+        let mut pins = BTreeMap::new();
+        // Solved root of each free (or row-record) parameter wildcard → its
+        // 1-based parameter, so a second wildcard on that root is refused.
+        let mut free_roots: BTreeMap<VarId, usize> = BTreeMap::new();
+        let mut wildcards = entry.wildcards.iter().enumerate();
+        for (param, (&count, &bare)) in entry
+            .param_counts
+            .iter()
+            .zip(entry.bare_params.iter())
+            .enumerate()
+        {
+            let parameter = param.saturating_add(1);
+            for (i, wildcard) in wildcards.by_ref().take(count) {
+                let fact = lift!(classify_param_wildcard(
+                    &mut uf,
+                    budget,
+                    interner,
+                    rigid_names,
+                    *wildcard,
+                    bare
+                ));
+                let dependence = match fact {
+                    WildcardFact::Pinned(ty) => {
                         pins.insert(i, ty);
+                        None
                     }
+                    WildcardFact::Free | WildcardFact::RowRecord => {
+                        let root = lift!(uf.find(*wildcard));
+                        let earlier = free_roots.get(&root).copied();
+                        if earlier.is_none() {
+                            free_roots.insert(root, parameter);
+                        }
+                        earlier.map(|parameter| WildcardDependence::SharedWith { parameter })
+                    }
+                    WildcardFact::Dependent(dependence) => Some(dependence),
+                };
+                if let Some(dependence) = dependence {
+                    return Err((
+                        Diagnostic::Type {
+                            span: entry.span,
+                            msg: TypeError::WildcardNotIndependent {
+                                parameter,
+                                dependence,
+                            },
+                        },
+                        Vec::new(),
+                    ));
                 }
-                _ => {}
             }
         }
         signature_wildcards.insert(
@@ -1079,17 +1125,16 @@ fn infer_core(
     ));
     // A pinned parameter wildcard lowers to its one ground type: hold every use
     // — same module, or a dependent one through the interface — to it.
+    // Every wildcard-carrying binding has an entry (possibly empty), so a use
+    // whose binding has none is a drift, never "nothing pinned".
     let mut pins_for_apps: PinTable = signature_wildcards
         .iter()
-        .filter(|(_, w)| !w.pins.is_empty())
         .map(|(key, w)| (key.clone(), w.pins.clone()))
         .collect();
     if let Some(ctx) = scoped {
         for (path, iface) in ctx.deps {
             for (name, scheme) in &iface.values {
-                if !scheme.wildcard_pins.is_empty() {
-                    pins_for_apps.insert((path.clone(), *name), scheme.wildcard_pins.clone());
-                }
+                pins_for_apps.insert((path.clone(), *name), scheme.wildcard_pins.clone());
             }
         }
     }
@@ -1466,6 +1511,10 @@ pub fn wildcard_bound_index(interner: &Interner, sym: Symbol) -> Option<usize> {
 /// `Int` would pass here and fail `cargo` with a type mismatch. A use whose
 /// wildcard stays non-ground (it flows into the caller's own generic) is
 /// rejected too: it cannot be shown to be the pinned type.
+///
+/// A use that instantiates wildcards of a binding the pin table has no entry
+/// for is a compiler bug: the table holds every wildcard-carrying binding, so a
+/// missing entry must never read as "nothing pinned".
 fn check_wildcard_pins(
     uf: &mut UnionFind<Content>,
     budget: &mut Budget,
@@ -1475,7 +1524,16 @@ fn check_wildcard_pins(
 ) -> DResult<()> {
     for app in apps {
         let Some(binding_pins) = pins.get(&(app.home.clone(), app.name)) else {
-            continue;
+            if app.wildcards.is_empty() {
+                continue;
+            }
+            return Err(Diagnostic::CompilerBug {
+                where_: "ipe_types::check_wildcard_pins",
+                detail: format!(
+                    "use site instantiates {} wildcard(s) of a binding with no pin entry",
+                    app.wildcards.len()
+                ),
+            });
         };
         for (i, pinned) in binding_pins {
             // The definition and its use instantiate one signature, so their
@@ -1507,18 +1565,129 @@ fn check_wildcard_pins(
     Ok(())
 }
 
-/// Whether a solved wildcard type is a pin the lowerer emits concretely.
+/// Whether a resolved type is ground: no type variable and no open record row.
 ///
-/// It must be ground (no type variable), and free of records: a record-typed
-/// wildcard lowers to a structural row generic that admits wider caller
-/// records, so it is no single pinned type.
-fn ty_is_pinnable(ty: &Ty) -> bool {
+/// This is the read-back form of "the type is fully known": the lowerer
+/// concretizes a wildcard parameter's region only when it holds. Inference
+/// classifies a wildcard with `solved_is_ground` instead, which also sees
+/// the open rows [`zonk`] reads back as closed; every type it admits is one
+/// this admits, so the lowerer never concretizes a wildcard inference left
+/// unpinned.
+#[must_use]
+pub fn ty_is_ground(ty: &Ty) -> bool {
     match ty {
-        Ty::Var(_) | Ty::Record(..) => false,
+        Ty::Var(_) | Ty::Record(_, RowTail::Open(_)) => false,
         Ty::Unit => true,
-        Ty::Fun(a, b) => ty_is_pinnable(a) && ty_is_pinnable(b),
-        Ty::Con { args, .. } => args.iter().all(ty_is_pinnable),
-        Ty::Tuple(elems) => elems.iter().all(ty_is_pinnable),
+        Ty::Record(fields, RowTail::Closed) => fields.values().all(ty_is_ground),
+        Ty::Fun(a, b) => ty_is_ground(a) && ty_is_ground(b),
+        Ty::Con { args, .. } => args.iter().all(ty_is_ground),
+        Ty::Tuple(elems) => elems.iter().all(ty_is_ground),
+    }
+}
+
+/// Whether every solver node reachable from `roots` is known: no type
+/// variable, and every record extension ends in the closed-row sentinel.
+///
+/// Read on the union-find, not on a zonked [`Ty`]: [`zonk`] presents every
+/// record as closed, so an open row a field read left behind is invisible
+/// after read-back. A type this admits zonks to one [`ty_is_ground`] admits.
+///
+/// # Errors
+/// A union-find invariant violation, or [`TypeError::StepBudgetExceeded`]
+/// once the shared budget is spent.
+fn solved_is_ground(
+    uf: &mut UnionFind<Content>,
+    budget: &mut Budget,
+    roots: impl IntoIterator<Item = VarId>,
+) -> DResult<bool> {
+    let mut work: Vec<VarId> = roots.into_iter().collect();
+    let mut seen: BTreeSet<VarId> = BTreeSet::new();
+    while let Some(var) = work.pop() {
+        budget.tick()?;
+        let root = uf.find(var)?;
+        if !seen.insert(root) {
+            continue;
+        }
+        match uf.root_content(root)? {
+            Content::Flex | Content::Rigid | Content::Super { .. } => return Ok(false),
+            Content::Structure(FlatType::Unit | FlatType::EmptyRecord) => {}
+            Content::Structure(FlatType::Fun(arg, result)) => {
+                work.push(*arg);
+                work.push(*result);
+            }
+            Content::Structure(FlatType::Con { args, .. }) => work.extend(args.iter().copied()),
+            Content::Structure(FlatType::Tuple(elems)) => work.extend(elems.iter().copied()),
+            Content::Structure(FlatType::Record(fields, ext)) => {
+                work.extend(fields.values().copied());
+                work.push(*ext);
+            }
+        }
+    }
+    Ok(true)
+}
+
+/// What a parameter wildcard's solved root makes of it.
+enum WildcardFact {
+    /// An unsolved non-rigid variable: the wildcard stays its own generic.
+    Free,
+    /// A bare `any` parameter solved to a record whose every field is ground:
+    /// it lowers to a structural row generic admitting wider caller records.
+    /// A field holding an unknown leaves the lowerer no concrete field type,
+    /// so such a record is a partial structure instead.
+    RowRecord,
+    /// One ground type the lowerer emits concretely ([`solved_is_ground`]).
+    Pinned(Ty),
+    /// A root no lowering keeps independent; the binding is refused.
+    Dependent(WildcardDependence),
+}
+
+/// Classify one parameter wildcard by its solved root.
+///
+/// `rigid_names` maps the binding's signature-variable roots to their names;
+/// `bare` says whether the wildcard is the parameter's whole annotation.
+fn classify_param_wildcard(
+    uf: &mut UnionFind<Content>,
+    budget: &mut Budget,
+    interner: &Interner,
+    rigid_names: Option<&BTreeMap<u32, Symbol>>,
+    wildcard: VarId,
+    bare: bool,
+) -> DResult<WildcardFact> {
+    match uf.content(wildcard)? {
+        Content::Flex | Content::Super { rigid: false, .. } => Ok(WildcardFact::Free),
+        Content::Rigid | Content::Super { rigid: true, .. } => {
+            let root = uf.find(wildcard)?;
+            let name = rigid_names
+                .and_then(|names| names.get(&root))
+                .and_then(|sym| interner.resolve(*sym))
+                .map(Box::from);
+            Ok(WildcardFact::Dependent(WildcardDependence::TypeVariable {
+                name,
+            }))
+        }
+        Content::Structure(flat) => {
+            // A bare record's row tail is its extensibility, so only its fields
+            // must be ground; anywhere else an open row is an unknown.
+            let ground = if bare && let FlatType::Record(fields, _) = &flat {
+                if solved_is_ground(uf, budget, fields.values().copied())? {
+                    return Ok(WildcardFact::RowRecord);
+                }
+                false
+            } else {
+                solved_is_ground(uf, budget, [wildcard])?
+            };
+            let ty = zonk(uf, budget, wildcard)?;
+            if ground {
+                Ok(WildcardFact::Pinned(ty))
+            } else {
+                let mut namer = VarNamer::new();
+                Ok(WildcardFact::Dependent(
+                    WildcardDependence::PartialStructure {
+                        found: Box::new(ty_to_doc(&ty, interner, &mut namer)?),
+                    },
+                ))
+            }
+        }
     }
 }
 
@@ -6480,6 +6649,176 @@ h x =
             sole_bound(&solved, &mut i, "insertOne").is_some_and(TyBounds::has_sql_param),
             "`insertOne`'s wildcard must carry the SQL-parameter obligation"
         );
+    }
+
+    /// The IPE-T0021 dependence `solved` refused its binding with, if any.
+    fn wildcard_refusal(solved: &DResult<SolvedTypes>) -> Option<(usize, &WildcardDependence)> {
+        match solved {
+            Err(Diagnostic::Type {
+                msg:
+                    TypeError::WildcardNotIndependent {
+                        parameter,
+                        dependence,
+                    },
+                ..
+            }) => Some((*parameter, dependence)),
+            _ => None,
+        }
+    }
+
+    /// A parameter wildcard the body unifies with a signature type variable is
+    /// that variable, never an independent generic, so the binding is refused
+    /// and the diagnostic names the variable.
+    #[test]
+    fn wildcard_tied_to_a_type_variable_is_refused() {
+        let src = format!(
+            "{M2C_HDR}k : a -> any -> List a\nk x y =\n    [ x, y ]\n\nmain =\n    k 1 2\n"
+        );
+        let (solved, _i, _m) = infer_src(&src);
+        assert!(
+            matches!(
+                wildcard_refusal(&solved),
+                Some((2, WildcardDependence::TypeVariable { name: Some(n) })) if &**n == "a"
+            ),
+            "a wildcard unified with `a` must be refused as IPE-T0021: {solved:?}"
+        );
+    }
+
+    /// Two parameter wildcards the body unifies with each other are one type,
+    /// so the later one is refused as shared with the earlier parameter.
+    #[test]
+    fn wildcards_aliased_to_each_other_are_refused() {
+        let src =
+            format!("{M2C_HDR}g : any -> any -> Bool\ng x y =\n    x == y\n\nmain =\n    g 1 2\n");
+        let (solved, _i, _m) = infer_src(&src);
+        assert!(
+            matches!(
+                wildcard_refusal(&solved),
+                Some((2, WildcardDependence::SharedWith { parameter: 1 }))
+            ),
+            "two aliased wildcards must be refused as IPE-T0021: {solved:?}"
+        );
+    }
+
+    /// A wildcard the body solves to a structure that still holds a free
+    /// variable or an open record row — bare, nested in `List any`, a record
+    /// nested in a tuple, or a bare record whose field is not ground — has no
+    /// single lowering, so the binding is refused.
+    #[test]
+    fn wildcard_solved_to_a_partial_structure_is_refused() {
+        for (what, def, parameter) in [
+            (
+                "a tuple with an open slot",
+                "f : any -> Int\nf p =\n    case p of\n        ( a, _ ) ->\n            a + 1\n",
+                1,
+            ),
+            (
+                "a nested tuple with an open slot",
+                "f : List any -> Bool\nf xs =\n    case xs of\n        [ ( a, _ ) ] ->\n            a\n\n        _ ->\n            False\n",
+                1,
+            ),
+            (
+                "a record nested in a tuple",
+                "f : any -> Int\nf p =\n    case p of\n        ( a, r ) ->\n            a + r.x\n",
+                1,
+            ),
+            (
+                "a nested record read through a tuple after a concrete parameter",
+                "f : Int -> any -> Int\nf n p =\n    case p of\n        ( a, r ) ->\n            n + a + r.x\n",
+                2,
+            ),
+            (
+                "a bare record whose field holds a tuple with an open slot",
+                "f : any -> Int\nf p =\n    case p.pair of\n        ( a, _ ) ->\n            a + 1\n",
+                1,
+            ),
+            (
+                "a bare record whose field is an open record",
+                "f : any -> Int\nf p =\n    p.inner.y + 1\n",
+                1,
+            ),
+        ] {
+            let src = format!("{M2C_HDR}{def}\nmain =\n    0\n");
+            let (solved, _i, _m) = infer_src(&src);
+            assert!(
+                matches!(
+                    wildcard_refusal(&solved),
+                    Some((p, WildcardDependence::PartialStructure { .. })) if p == parameter
+                ),
+                "{what} must be refused as IPE-T0021: {solved:?}"
+            );
+        }
+    }
+
+    /// The acceptance side: an identity wildcard threaded to the return, two
+    /// independent wildcards, two wildcards the body pins to the same ground
+    /// type, and a bare record wildcard the body field-reads all type-check.
+    #[test]
+    fn independent_threaded_or_pinned_wildcards_are_accepted() {
+        for (what, def, use_) in [
+            (
+                "an identity",
+                "thread : any -> any\nthread x =\n    x\n",
+                "thread 1",
+            ),
+            (
+                "two independent wildcards",
+                "constFn : any -> any -> Int\nconstFn x y =\n    0\n",
+                "constFn 1 \"s\"",
+            ),
+            (
+                "two wildcards pinned to one ground type",
+                "add : any -> any -> Int\nadd x y =\n    x + y + 1\n",
+                "add 1 2",
+            ),
+            (
+                "a field-read bare record",
+                "getName : any -> String\ngetName p =\n    p.name\n",
+                "getName { name = \"a\", age = 1 }",
+            ),
+        ] {
+            let src = format!("{M2C_HDR}{def}\nmain =\n    {use_}\n");
+            let (solved, _i, _m) = infer_src(&src);
+            assert!(solved.is_ok(), "{what} must type-check: {solved:?}");
+        }
+    }
+
+    /// Two wildcards the body pins to one ground type each record that pin.
+    #[test]
+    fn wildcards_sharing_a_ground_root_are_both_pinned() {
+        let src = format!(
+            "{M2C_HDR}add : any -> any -> Int\nadd x y =\n    x + y + 1\n\nmain =\n    add 1 2\n"
+        );
+        let (solved, mut i, _m) = infer_src(&src);
+        let solved = solved.expect("`add 1 2` must type-check");
+        let sig = signature_wildcards_of(&solved, &mut i, "add");
+        assert!(
+            matches!(sig, Some(w) if w.param_counts == [1, 1] && w.pins.len() == 2),
+            "`add` must pin both wildcards: {sig:?}"
+        );
+    }
+
+    /// Groundness admits closed records of ground fields and refuses a bare
+    /// variable, an open row, and a variable nested in a record field.
+    #[test]
+    fn ty_is_ground_refuses_variables_and_open_rows() {
+        let mut i = Interner::new();
+        let x = i.intern("x").expect("intern a field name");
+        let int_ty = Ty::Con {
+            module: Vec::new(),
+            name: i.intern("Int").expect("intern a primitive name"),
+            args: Vec::new(),
+        };
+        let record = |field: Ty, tail: RowTail| Ty::Record(BTreeMap::from([(x, field)]), tail);
+        assert!(ty_is_ground(&record(int_ty.clone(), RowTail::Closed)));
+        assert!(ty_is_ground(&Ty::Tuple(vec![int_ty.clone(), Ty::Unit])));
+        assert!(!ty_is_ground(&Ty::Var(0)));
+        assert!(!ty_is_ground(&record(int_ty.clone(), RowTail::Open(1))));
+        assert!(!ty_is_ground(&record(Ty::Var(2), RowTail::Closed)));
+        assert!(!ty_is_ground(&Ty::Tuple(vec![
+            int_ty,
+            record(Ty::Unit, RowTail::Open(3))
+        ])));
     }
 
     /// The gate itself: the interpolation obligation admits exactly the scalar

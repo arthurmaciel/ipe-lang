@@ -1,0 +1,15 @@
+module Main exposing (main)
+
+import Ipe.List as List
+import Ipe.String as String
+import Ipe.Io as Io
+
+
+total : List any -> Int
+total xss =
+    List.length (List.concat xss)
+
+
+main : Task ()
+main =
+    Io.println (String.fromInt (total [ [ 1 ], [ 2, 3 ] ]))

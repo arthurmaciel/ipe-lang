@@ -1,0 +1,20 @@
+module Main exposing (main)
+
+import Ipe.List as List
+import Ipe.String as String
+import Ipe.Io as Io
+
+
+count : any -> Int
+count xs =
+    List.length (List.map (\n -> n + 1) xs)
+
+
+nameOf : any -> String
+nameOf person =
+    person.name
+
+
+main : Task ()
+main =
+    Io.println (nameOf { name = "Ana", age = 3 } ++ String.fromInt (count [ 1, 2 ]))
