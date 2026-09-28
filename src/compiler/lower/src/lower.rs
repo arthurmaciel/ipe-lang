@@ -8692,10 +8692,20 @@ fn reachable_func_ids(
     let Some(entry) = entry else {
         return funcs.iter().map(|f| f.id).collect();
     };
-    let by_id: BTreeMap<FuncId, &Func> = funcs.iter().map(|f| (f.id, f)).collect();
+    let mut seeds = vec![entry];
+    seeds.extend_from_slice(extra_roots);
+    reachable_from_seeds(funcs.iter(), seeds)
+}
+
+/// The fix-point closure of `seeds` over the `Callee::Func`/[`Expr::FuncValue`]
+/// call graph of `funcs` — the one traversal every reachability consumer runs.
+fn reachable_from_seeds<'a>(
+    funcs: impl Iterator<Item = &'a Func>,
+    seeds: Vec<FuncId>,
+) -> BTreeSet<FuncId> {
+    let by_id: BTreeMap<FuncId, &Func> = funcs.map(|f| (f.id, f)).collect();
     let mut reachable: BTreeSet<FuncId> = BTreeSet::new();
-    let mut worklist = vec![entry];
-    worklist.extend_from_slice(extra_roots);
+    let mut worklist = seeds;
     while let Some(id) = worklist.pop() {
         if !reachable.insert(id) {
             continue;
@@ -8712,6 +8722,43 @@ fn reachable_func_ids(
         }
     }
     reachable
+}
+
+/// The functions the backend invokes without any IR call edge naming them.
+///
+/// Two kinds, in function order: every wasm-hydration island projection
+/// ([`ipe_ir::HYDRATION_PROJECTION_NAME`]), called only by generated `hydrate`
+/// glue; and the compiled-source `Ipe.Duration.toMillis` accessor, which the
+/// `Http.withTimeout` kernel's emitted code calls to unwrap its typed
+/// `Duration` — rooted iff some function uses `withTimeout`. Both reachability
+/// consumers — the emitted-binary prune and the package capability audit —
+/// seed from this one list, so a backend-synthesised call can never be kept by
+/// one and missed by the other.
+fn backend_invoked_roots<'a>(
+    funcs: impl Iterator<Item = &'a Func> + Clone,
+    interner: &Interner,
+) -> Vec<FuncId> {
+    let mut roots: Vec<FuncId> = funcs
+        .clone()
+        .filter(|f| interner.resolve(f.name) == Some(ipe_ir::HYDRATION_PROJECTION_NAME))
+        .map(|f| f.id)
+        .collect();
+    // Matched on both the name and the `["Ipe", "Duration"]` home, so an
+    // unrelated `toMillis` in another module is never mistaken for it.
+    let duration_to_millis = funcs.clone().find(|f| {
+        interner.resolve(f.name) == Some("toMillis")
+            && matches!(
+                f.home.0.as_slice(),
+                [seg0, seg1] if interner.resolve(*seg0) == Some("Ipe")
+                    && interner.resolve(*seg1) == Some("Duration")
+            )
+    });
+    if let Some(to_millis) = duration_to_millis
+        && funcs.clone().any(|f| body_uses_http_with_timeout(&f.body))
+    {
+        roots.push(to_millis.id);
+    }
+    roots
 }
 
 /// Walk an [`IrType`] tree, recording every user-enum nominal identity
@@ -9366,22 +9413,44 @@ fn pat_matches_sqlvalue(pat: &Pat, enums: &[Symbol]) -> bool {
 /// exhaustive over the reachable kernels rather than stopping once the flags
 /// saturate.
 pub fn program_capabilities_scan(program: &Program) -> BTreeSet<Capability> {
+    // Every function the lowered program still holds is scanned: the emitted
+    // binary's program was already pruned to its entry-reachable set, and a
+    // program lowered without that prune keeps its whole API as the honest
+    // superset.
+    let mut caps = body_capabilities(
+        program
+            .modules
+            .iter()
+            .flat_map(|m| m.funcs.iter().map(|f| &f.body)),
+    );
+    // `unsafe` is import-derived, not kernel-tagged: the signal is that the
+    // program imported an `Ipe.<M>.Unsafe` submodule, so it comes from the
+    // whole-program fact the lowerer threaded through, not from a kernel visit.
+    if program.imports_unsafe_submodule {
+        caps.insert(Capability::Unsafe);
+    }
+    // Each disclosed web axis is import-derived too — a reserved `Ipe.Browser.<Api>`
+    // import (union-folded across every linked module), not a kernel visit. This is
+    // the specific `js-port:<axis>` axis; the raw `Js.send`/`Js.subscribe` kernels
+    // add the `:raw` floor separately through the kernel scan above.
+    for w in &program.imported_web_capabilities {
+        caps.insert(Capability::JsPort(*w));
+    }
+    caps
+}
+
+/// The kernel-derived capabilities of `bodies`: each visited kernel's
+/// [`KernelFn::capability`], plus [`Capability::NativeFfi`] for any `Rust.`
+/// crossing and [`Capability::FfiRaw`] for an author-asserted one.
+///
+/// Import-derived capabilities are not visible in a body; callers add them.
+fn body_capabilities<'a>(bodies: impl Iterator<Item = &'a Expr>) -> BTreeSet<Capability> {
     let mut usage = KernelUsage {
         collect_caps: true,
         ..KernelUsage::default()
     };
-    // Capabilities are inferred over EVERY function in the program, not the
-    // entry-reachable subset: this is the honest superset a package audit
-    // reports for a library, where an exposed-but-locally-uncalled function is a
-    // real effect a downstream consumer can invoke. The emitted binary's own
-    // dependency set is trimmed separately (the lowerer prunes dead functions
-    // for the emitted-binary case before this scan ever sees them), so the two
-    // consumers do not conflict: emission gets the reachable set, the audit gets
-    // the honest whole-API set.
-    for module in &program.modules {
-        for func in &module.funcs {
-            scan_kernel_usage(&func.body, &mut usage);
-        }
+    for body in bodies {
+        scan_kernel_usage(body, &mut usage);
     }
     if usage.ffi {
         usage.caps.insert(Capability::NativeFfi);
@@ -9389,20 +9458,52 @@ pub fn program_capabilities_scan(program: &Program) -> BTreeSet<Capability> {
     if usage.ffi_asserted {
         usage.caps.insert(Capability::FfiRaw);
     }
-    // `unsafe` is import-derived, not kernel-tagged: the signal is that the
-    // program imported an `Ipe.<M>.Unsafe` submodule, so it comes from the
-    // whole-program fact the lowerer threaded through, not from a kernel visit.
-    if program.imports_unsafe_submodule {
-        usage.caps.insert(Capability::Unsafe);
-    }
-    // Each disclosed web axis is import-derived too — a reserved `Ipe.Browser.<Api>`
-    // import (union-folded across every linked module), not a kernel visit. This is
-    // the specific `js-port:<axis>` axis; the raw `Js.send`/`Js.subscribe` kernels
-    // add the `:raw` floor separately through the kernel scan above.
-    for w in &program.imported_web_capabilities {
-        usage.caps.insert(Capability::JsPort(*w));
-    }
     usage.caps
+}
+
+/// What a set of root modules reaches in a lowered program.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ReachedCapabilities {
+    /// Kernel-derived capabilities of every reached function (see
+    /// [`capabilities_reached_from`]); import-derived ones are excluded.
+    pub capabilities: BTreeSet<Capability>,
+    /// The home module of every reached function, root modules included.
+    pub reached_homes: BTreeSet<ModPath>,
+}
+
+/// The kernel-derived capabilities reachable from every function whose home
+/// satisfies `is_root_home`, plus the backend-invoked roots.
+///
+/// Reachability is the emitted-binary prune's own call graph, seeded from
+/// every root-module function instead of `main`: a root module's function is
+/// in the consumer-callable surface whether or not anything local calls it,
+/// while a non-root module contributes only the functions a root reaches. A
+/// non-root module whose exports nothing reaches therefore discloses nothing —
+/// its bodies cannot run.
+///
+/// Import-derived capabilities (`Unsafe`, `JsPort`) are not included: they are
+/// facts of an importing module's source, which the caller attributes using
+/// [`ReachedCapabilities::reached_homes`].
+#[must_use]
+pub fn capabilities_reached_from(
+    program: &Program,
+    interner: &Interner,
+    is_root_home: impl Fn(&ModPath) -> bool,
+) -> ReachedCapabilities {
+    // `FuncId`s are unique program-wide, so one closure spans every module.
+    let funcs = program.modules.iter().flat_map(|m| m.funcs.iter());
+    let mut seeds: Vec<FuncId> = funcs
+        .clone()
+        .filter(|f| is_root_home(&f.home))
+        .map(|f| f.id)
+        .collect();
+    seeds.extend(backend_invoked_roots(funcs.clone(), interner));
+    let ids = reachable_from_seeds(funcs.clone(), seeds);
+    let live = funcs.filter(|f| ids.contains(&f.id));
+    ReachedCapabilities {
+        capabilities: body_capabilities(live.clone().map(|f| &f.body)),
+        reached_homes: live.map(|f| f.home.clone()).collect(),
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -14779,22 +14880,6 @@ impl<'a> Lowerer<'a> {
         // diagnostic (`IPE-L0136`). Captured from the canonical def alongside the
         // entry `FuncId`, since a lowered `Func` carries no span.
         let mut entry_span: Option<Span> = None;
-        // Externally-invoked export roots besides `main` that dead-function
-        // elimination must keep. The wasm-hydration island projection is called
-        // only by generated `hydrate` glue, never from user code, so the call
-        // graph alone would prune it and the glue would reference an absent
-        // function.
-        let mut export_roots: Vec<FuncId> = Vec::new();
-        // The `Http.withTimeout` kernel emits a call to the compiled-source
-        // `Ipe.Duration.toMillis` accessor to unwrap its typed `Duration`
-        // argument into the transport DTO's raw-millisecond field. That call is
-        // synthesised in the backend, so it contributes no `Callee::Func` edge to
-        // the reachability graph; without an explicit root the accessor is pruned
-        // as dead and the emitted crate references an absent function (a SEAL
-        // breach). Capture its `FuncId` here and root it below iff `withTimeout`
-        // is actually used, so a program that never calls it keeps the accessor
-        // pruned.
-        let mut duration_to_millis_id: Option<FuncId> = None;
         // Each def's user-function references with their solved
         // instantiations, for the cross-call bound propagation below.
         let mut callee_instances: std::collections::HashMap<FuncId, Vec<CalleeInstance>> =
@@ -14829,29 +14914,11 @@ impl<'a> Lowerer<'a> {
                 entry = Some(func.id);
                 entry_span = Some(def.name().span);
             }
-            if self.interner.resolve(func.name) == Some(ipe_ir::HYDRATION_PROJECTION_NAME) {
-                export_roots.push(func.id);
-            }
-            // Record the compiled-source `Ipe.Duration.toMillis` accessor (see the
-            // `duration_to_millis_id` declaration above). Matched on both the
-            // resolved name and the `["Ipe", "Duration"]` home so an unrelated
-            // `toMillis` in another module is never mistaken for it.
-            if self.interner.resolve(func.name) == Some("toMillis")
-                && let [seg0, seg1] = func.home.0.as_slice()
-                && self.interner.resolve(*seg0) == Some("Ipe")
-                && self.interner.resolve(*seg1) == Some("Duration")
-            {
-                duration_to_millis_id = Some(func.id);
-            }
             funcs.push(func);
         }
-        // Root `Ipe.Duration.toMillis` iff a `Http.withTimeout` kernel call is
-        // present, keeping the backend-synthesised accessor call resolvable.
-        if let Some(to_millis) = duration_to_millis_id
-            && funcs.iter().any(|f| body_uses_http_with_timeout(&f.body))
-        {
-            export_roots.push(to_millis);
-        }
+        // Externally-invoked roots besides `main` that dead-function elimination
+        // must keep (see [`backend_invoked_roots`]).
+        let export_roots = backend_invoked_roots(funcs.iter(), self.interner);
 
         // Cross-call type-parameter-bound propagation. The per-function
         // `apply_kernel_type_param_bounds` pass infers bounds from each body in

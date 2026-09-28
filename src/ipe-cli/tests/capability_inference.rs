@@ -133,11 +133,12 @@ fn per_entry_union(package: &PackageSourceSet) -> BTreeSet<Capability> {
     union
 }
 
-fn assert_shared_equals_per_entry(
+/// The package's disclosed set, after pinning that the shared graph equals the
+/// per-entry union and that the public entry point agrees run after run.
+fn shared_capabilities(
     tag: &str,
     files: &[(&str, &str)],
-    must_contain: &[Capability],
-) -> Result<(), Box<dyn Error>> {
+) -> Result<BTreeSet<Capability>, Box<dyn Error>> {
     let dir = scratch_package(tag, files)?;
     let manifest = dir.join("package.ipe");
     let package = PackageSourceSet::read(&manifest)?;
@@ -151,14 +152,22 @@ fn assert_shared_equals_per_entry(
     // The public entry point agrees, run after run.
     assert_eq!(ipe::infer_package_capabilities(&manifest)?, shared);
     assert_eq!(ipe::infer_package_capabilities(&manifest)?, shared);
+    let _ = fs::remove_dir_all(&dir);
+    Ok(shared)
+}
+
+fn assert_shared_equals_per_entry(
+    tag: &str,
+    files: &[(&str, &str)],
+    must_contain: &[Capability],
+) -> Result<(), Box<dyn Error>> {
+    let shared = shared_capabilities(tag, files)?;
     for cap in must_contain {
         assert!(
             shared.contains(cap),
             "fixture `{tag}` must lower and disclose {cap:?}, got {shared:?}"
         );
     }
-
-    let _ = fs::remove_dir_all(&dir);
     Ok(())
 }
 
@@ -168,6 +177,81 @@ fn shared_graph_equals_per_entry_union_with_an_unimported_sibling() -> Result<()
         "unsafe_sibling",
         UNSAFE_AND_SIBLING_NETWORK,
         &[Capability::Unsafe, Capability::Network],
+    )
+}
+
+// ---------------------------------------------------------------------------
+// Disclosure follows reachability from the package's own code
+// ---------------------------------------------------------------------------
+
+/// `Main` imports `Ipe.Time` but calls only its pure `isLeapYear`; the
+/// clock-reading exports stay uncalled.
+const IMPORTS_TIME_CALLS_ONLY_PURE: &[(&str, &str)] = &[(
+    "Main.ipe",
+    "module Main exposing (main)\n\nimport Ipe.Io as Io\nimport Ipe.Time as Time\n\n\
+     main : Task ()\nmain =\n\
+     \x20   if Time.isLeapYear 2024 then\n\
+     \x20       Io.println \"leap\"\n\n\
+     \x20   else\n\
+     \x20       Io.println \"common\"\n",
+)];
+
+/// `Main` calls `Ipe.Time.now`, which reads the clock.
+const CALLS_TIME_NOW: &[(&str, &str)] = &[(
+    "Main.ipe",
+    "module Main exposing (main)\n\nimport Ipe.Io as Io\nimport Ipe.Task as Task\n\
+     import Ipe.Time as Time\n\n\
+     main : Task ()\nmain =\n\
+     \x20   Time.now ()\n\
+     \x20       |> Task.andThen (\\t -> Io.println (Time.timeString t))\n",
+)];
+
+/// `Main` is pure; the package module `Clock` exposes a clock read nothing in
+/// the package calls, which a consumer still can.
+const OWN_UNCALLED_CLOCK_EXPORT: &[(&str, &str)] = &[
+    (
+        "Main.ipe",
+        "module Main exposing (main)\n\nimport Ipe.Io as Io\n\n\
+         main : Task ()\nmain =\n\x20   Io.println \"ok\"\n",
+    ),
+    (
+        "Clock.ipe",
+        "module Clock exposing (stamp)\n\nimport Ipe.Error exposing (Error)\n\
+         import Ipe.Time as Time\nimport Ipe.Time.Timestamp exposing (Timestamp)\n\n\
+         stamp : Task Error Timestamp\nstamp =\n\x20   Time.now ()\n",
+    ),
+];
+
+/// An imported stdlib module whose clock-reading exports the package never
+/// calls does not disclose `clock`.
+#[test]
+fn an_unused_stdlib_export_does_not_disclose_its_capability() -> Result<(), Box<dyn Error>> {
+    let shared = shared_capabilities("time_pure_only", IMPORTS_TIME_CALLS_ONLY_PURE)?;
+    assert!(
+        !shared.contains(&Capability::Clock),
+        "an uncalled `Time.now` must not disclose `clock`, got {shared:?}"
+    );
+    assert!(
+        !shared.contains(&Capability::Unsafe),
+        "no `*.Unsafe` module is imported or reached, got {shared:?}"
+    );
+    Ok(())
+}
+
+/// Calling the same stdlib export discloses its capability.
+#[test]
+fn a_called_stdlib_export_discloses_its_capability() -> Result<(), Box<dyn Error>> {
+    assert_shared_equals_per_entry("time_now", CALLS_TIME_NOW, &[Capability::Clock])
+}
+
+/// A package module's own export is consumer-callable, so its capability is
+/// disclosed even when nothing in the package calls it (never under-disclose).
+#[test]
+fn an_uncalled_package_export_still_discloses_its_capability() -> Result<(), Box<dyn Error>> {
+    assert_shared_equals_per_entry(
+        "own_uncalled_clock",
+        OWN_UNCALLED_CLOCK_EXPORT,
+        &[Capability::Clock],
     )
 }
 
