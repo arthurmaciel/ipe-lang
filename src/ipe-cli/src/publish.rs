@@ -16,9 +16,11 @@
 //! The curated index enforces `required_signatures`, so the publish commit must
 //! be signed AND marked "Verified" or it can never merge. Two preconditions,
 //! each fail-closed:
-//!  - Set `IPE_PUBLISH_SIGNING_KEY` to the path of an SSH signing key (the
-//!    private-key file; its `.pub` must be registered as a *signing* key on the
-//!    GitHub account that owns the fork) — publish signs the commit with it.
+//!  - An SSH signing key whose `.pub` is registered as a *signing* key on the
+//!    GitHub account that owns the fork — publish signs the commit with it. The
+//!    key `ipe login` generates and registers is used by default;
+//!    `IPE_PUBLISH_SIGNING_KEY` (a private-key file path) overrides it
+//!    (see [`crate::ssh_signing_key`]).
 //!  - Run `ipe login` (or set `GITHUB_TOKEN`): publish derives the committer
 //!    identity from the authenticated publishing account (`GET /user`) and
 //!    authors the commit under that account's verified GitHub noreply identity
@@ -609,47 +611,37 @@ fn print_dry_run(entry_toml: &str, plan: &PrPlan, identity: Option<&CommitIdenti
 /// The SSH key used to sign the publish commit, parsed once at the boundary
 /// into a value that only holds a path to a readable, regular key file.
 ///
-/// `parse, don't validate` at the signing boundary: the raw
-/// `IPE_PUBLISH_SIGNING_KEY` string is turned into a `SigningKey` exactly once,
-/// and only a value that names an existing regular file reaches the commit step
-/// — an unset, empty, or unreadable configuration can never be mistaken for a
+/// `parse, don't validate` at the signing boundary: the configuration
+/// (`IPE_PUBLISH_SIGNING_KEY`, else the key `ipe login` stored) is resolved
+/// into a `SigningKey` exactly once by [`crate::ssh_signing_key::lookup`], and
+/// only a value that names an existing regular file reaches the commit step —
+/// an unset, empty, or unreadable configuration can never be mistaken for a
 /// usable key downstream, so the only reachable outcome without a real key is a
 /// typed refusal, never an unsigned push. The key material itself stays in the
 /// file: only its path is handed to `git -c user.signingkey=<path>`, so no
 /// private-key bytes ever reach an argv or a log line.
-struct SigningKey(PathBuf);
+struct SigningKey(crate::ssh_signing_key::PrivateKeyPath);
 
 impl SigningKey {
-    /// The environment variable naming the SSH signing key's private-key file.
-    const ENV: &'static str = "IPE_PUBLISH_SIGNING_KEY";
-
     /// Resolve the configured signing key, if one is usable.
     ///
-    /// Returns `Some` only when `IPE_PUBLISH_SIGNING_KEY` names an existing
-    /// regular file; an unset variable, an empty value, or a path that is not a
-    /// readable regular file all yield `None`, which the caller turns into a
-    /// fail-closed [`Refusal::UnsignedCommit`].
-    fn from_env() -> Option<Self> {
-        Self::from_raw(std::env::var(Self::ENV).ok().as_deref())
+    /// A set `IPE_PUBLISH_SIGNING_KEY` is authoritative: it must name an
+    /// existing regular file, and when it does not publish refuses rather than
+    /// fall back to the stored key. Unset, the key `ipe login` stored is used.
+    /// `None` becomes a fail-closed [`Refusal::UnsignedCommit`].
+    fn configured() -> Option<Self> {
+        crate::ssh_signing_key::configured().map(Self)
     }
 
-    /// The pure core of [`Self::from_env`]: turn a raw configuration value into a
-    /// usable key, or `None`. An absent value (`None`), an empty/whitespace
-    /// value, or a path that is not a readable regular file all fail closed.
+    /// Parse a raw `IPE_PUBLISH_SIGNING_KEY` value alone: an absent value
+    /// (`None`), an empty/whitespace value, or a path that is not a readable
+    /// regular file all fail closed.
+    #[cfg(test)]
     fn from_raw(raw: Option<&str>) -> Option<Self> {
-        let trimmed = raw?.trim();
-        if trimmed.is_empty() {
-            return None;
-        }
-        let path = PathBuf::from(trimmed);
-        // A regular file the process can stat is the proof the key exists; git
-        // reads the bytes itself, so absent that proof publish refuses rather
-        // than hand git a path that would make signing fail or silently skip.
-        if std::fs::metadata(&path).is_ok_and(|m| m.is_file()) {
-            Some(Self(path))
-        } else {
-            None
-        }
+        raw.and_then(|r| {
+            crate::ssh_signing_key::PrivateKeyPath::from_env_value(std::ffi::OsStr::new(r))
+        })
+        .map(Self)
     }
 
     /// The `-c` overrides that make `git commit` produce an SSH-signed commit
@@ -664,7 +656,7 @@ impl SigningKey {
             "-c".to_owned(),
             "gpg.format=ssh".to_owned(),
             "-c".to_owned(),
-            format!("user.signingkey={}", self.0.display()),
+            format!("user.signingkey={}", self.0.as_path().display()),
             "-c".to_owned(),
             "commit.gpgsign=true".to_owned(),
         ]
@@ -746,7 +738,7 @@ struct PublishCredentials {
 /// [`Refusal::UnsignedCommit`] with no usable signing key;
 /// [`Refusal::UnresolvableIdentity`] when `GET /user` cannot prove the account.
 fn resolve_publish_credentials() -> Result<PublishCredentials, CliError> {
-    let signing_key = SigningKey::from_env().ok_or_else(|| refuse(Refusal::UnsignedCommit))?;
+    let signing_key = SigningKey::configured().ok_or_else(|| refuse(Refusal::UnsignedCommit))?;
     let identity = resolve_publisher_identity().map_err(refuse)?;
     Ok(PublishCredentials {
         signing_key,

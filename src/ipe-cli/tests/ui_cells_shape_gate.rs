@@ -107,7 +107,7 @@ import Ipe.Tea.Tui as Tui
 import Ipe.Ui.Cells as Cells
 import Ipe.Ui.Cells exposing (Screen)
 import Ipe.Tea.Terminal.Cmd
-import Ipe.Tea.Terminal.Sub
+import Ipe.Tea.Tui.Sub
 
 type Msg = NoOp
 
@@ -132,7 +132,7 @@ view _model =
 
 subscriptions : Model -> Sub Msg
 subscriptions _model =
-    Sub.none
+    Sub.onKey onKey
 
 type alias KeyEvent = { kind : String, value : String }
 
@@ -143,7 +143,7 @@ onKey _event =
 main =
     Tui.tea
         { init = init, update = update, view = view
-        , subscriptions = subscriptions, onKey = onKey
+        , subscriptions = subscriptions
         }
 "#;
 
@@ -174,6 +174,7 @@ fn terminal_view_with_ui_cells_is_accepted() -> Result<(), BoxError> {
 const CLI_UI_CELLS: &str = r"module Main exposing (main)
 
 import Ipe.Tea.Cli as Cli
+import Ipe.Tea.Cli.Sub as Sub
 import Ipe.Ui.Cli exposing (Lines)
 import Ipe.Ui as Ui
 
@@ -197,7 +198,7 @@ view _model =
 
 subscriptions : Model -> Sub Msg
 subscriptions _model =
-    Sub.none
+    Sub.onLine onLine
 
 onLine : String -> Msg
 onLine _line =
@@ -206,7 +207,7 @@ onLine _line =
 main =
     Cli.tea
         { init = init, update = update, view = view
-        , subscriptions = subscriptions, onLine = onLine
+        , subscriptions = subscriptions
         }
 ";
 
@@ -259,7 +260,7 @@ view _model =
 
 subscriptions : Model -> Sub Msg
 subscriptions _model =
-    Sub.none
+    Sub.onKey onKey
 
 type alias KeyEvent = { kind : String, value : String }
 
@@ -270,7 +271,7 @@ onKey _event =
 main =
     Tui.tea
         { init = init, update = update, view = view
-        , subscriptions = subscriptions, onKey = onKey
+        , subscriptions = subscriptions
         }
 "#;
 
@@ -308,7 +309,7 @@ view _model =
 
 subscriptions : Model -> Sub Msg
 subscriptions _model =
-    Sub.none
+    Sub.onKey onKey
 
 type alias KeyEvent = { kind : String, value : String }
 
@@ -319,7 +320,7 @@ onKey _event =
 main =
     Tui.tea
         { init = init, update = update, view = view
-        , subscriptions = subscriptions, onKey = onKey
+        , subscriptions = subscriptions
         }
 "#;
 
@@ -370,7 +371,7 @@ view model =
 
 subscriptions : Model -> Sub Msg
 subscriptions _model =
-    Sub.none
+    Sub.onLine onLine
 
 onLine : String -> Msg
 onLine _line =
@@ -379,7 +380,7 @@ onLine _line =
 main =
     Cli.tea
         { init = init, update = update, view = view
-        , subscriptions = subscriptions, onLine = onLine
+        , subscriptions = subscriptions
         }
 "#;
 
@@ -423,7 +424,7 @@ view model =
 
 subscriptions : Model -> Sub Msg
 subscriptions _model =
-    Sub.none
+    Sub.onLine onLine
 
 onLine : String -> Msg
 onLine _line =
@@ -432,7 +433,7 @@ onLine _line =
 main =
     Cli.tea
         { init = init, update = update, view = view
-        , subscriptions = subscriptions, onLine = onLine
+        , subscriptions = subscriptions
         }
 "#;
 

@@ -15,7 +15,7 @@ import Ipe.Dict as Dict
 import Ipe.Tea.Terminal.Cmd
 import Ipe.List
 import Ipe.String
-import Ipe.Tea.Terminal.Sub
+import Ipe.Tea.Cli.Sub
 
 type Msg
     = GotLine String
@@ -114,7 +114,7 @@ view model =
 
 subscriptions : Model -> Sub Msg
 subscriptions _model =
-    Sub.none
+    Sub.onLine onLine
 
 onLine : String -> Msg
 onLine line =
@@ -126,5 +126,4 @@ main =
         , update = update
         , view = view
         , subscriptions = subscriptions
-        , onLine = onLine
         }

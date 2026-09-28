@@ -563,16 +563,11 @@ impl<'a> Builder<'a> {
     /// fresh `vars` map (`a -> a` becomes `f -> f`, one shared flex), so calling
     /// `identity` at `Int` and at `Bool` in the same module yields two
     /// independent, separately-satisfiable instantiations.
-    pub fn instantiate(&mut self, ty: &Ty) -> DResult<VarId> {
-        let (var, _vars) = self.instantiate_tracked(ty)?;
-        Ok(var)
-    }
-
-    /// [`Self::instantiate`], additionally returning the alpha-renaming map
-    /// (scheme type-variable raw id → fresh variable). The map lets a use site be
-    /// checked post-solve against the binding's super-type obligations: each
-    /// obligated scheme variable's fresh variable reveals the concrete type this
-    /// use pinned it to.
+    ///
+    /// The alpha-renaming map (scheme type-variable raw id → fresh variable) is
+    /// returned alongside the type. It lets a use site be checked post-solve
+    /// against the binding's super-type obligations: each obligated scheme
+    /// variable's fresh variable reveals the concrete type this use pinned it to.
     pub fn instantiate_tracked(&mut self, ty: &Ty) -> DResult<(VarId, BTreeMap<u32, VarId>)> {
         let mut vars = BTreeMap::new();
         let var = self.instantiate_in(ty, &mut vars, /* rigid */ false)?;
@@ -583,7 +578,7 @@ impl<'a> Builder<'a> {
     /// the fresh variables of its payload fields and of its result enum type.
     /// Sharing the map keeps a generic constructor's field and result variables
     /// linked at this use site (`Just : a -> Maybe a` instantiated at `a = Int`
-    /// ties the payload to the result), exactly like [`Self::instantiate`] over the
+    /// ties the payload to the result), exactly like [`Self::instantiate_tracked`] over the
     /// equivalent arrow — but decomposed, so a pattern can bind each field and a
     /// value reference can rebuild the arrow.
     pub fn instantiate_ctor(&mut self, scheme: &CtorScheme) -> DResult<(Vec<VarId>, VarId)> {

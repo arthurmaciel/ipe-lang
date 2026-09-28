@@ -21,10 +21,9 @@
 //!
 //! At the solver level, [`FlatType::EmptyRecord`] is the closed-tail sentinel
 //! (mirrors `EmptyRecord1`); an open tail is a plain [`Content::Flex`] variable.
-//! The only open records currently are the `Web.tea` / `Tui.tea` kernel cfg
-//! records, which absorb optional fields
-//! (`head` / `consoleAuth` / `guard` / `status` / `onKey` …) without forcing
-//! every app to enumerate empty optionals.
+//! The only open record currently is the `Web.tea` kernel cfg record, which
+//! absorbs optional fields (`head` / `consoleAuth` / `guard` / `status` …)
+//! without forcing every app to enumerate empty optionals.
 
 use std::collections::BTreeMap;
 
@@ -205,21 +204,22 @@ impl TyBounds {
     const SHOW: u16 = 1 << 7;
     /// The append obligation (`++` → `Appendable a ⊇ { String, List a }`).
     const APPEND: u16 = 1 << 8;
-    /// The higher-order-kernel callback-result obligation: this variable is
-    /// the final RESULT of
-    /// a callback arrow that a `Maybe`/`Result` higher-order kernel FULLY
-    /// APPLIES at runtime — `b` in `map`'s `(a -> b)`, `v` in `map2..5`'s
-    /// `(a -> … -> v)`, `f` in `mapError`'s `(e -> f)`, and `b` in `andMap`'s
-    /// payload `Con (a -> b)`. It must not itself be a function: every such
-    /// runtime kernel takes an exact-arity `FnOnce(..) -> R` closure, while
-    /// the IR FLATTENS a curried Ipê function into one multi-parameter `Fun`
-    /// — so a callback with residual arity (its result is another arrow) has
-    /// no sound lowering and would reach `cargo build` as E0277/E0308. The
-    /// 4th-attempt version of this bit covered ONLY `andMap`; the identical
-    /// hazard through `Result.map add` (2-arity callback) was its 13th
-    /// bypass shape. `andThen` / `traverse` need no bit — their callback
-    /// results are `Con`-headed in the scheme itself, so a curried callback
-    /// is already a plain type mismatch. Deliberately SHALLOW on structure
+    /// The higher-order-kernel callback-result obligation.
+    ///
+    /// This variable is the final RESULT of a callback arrow that a
+    /// higher-order kernel FULLY APPLIES at runtime — `b` in `List.map`'s
+    /// `(a -> b)`, the accumulator in `foldl`'s `(a -> b -> b)`, `v` in
+    /// `map2..5`'s `(a -> … -> v)`, and `b` in `andMap`'s payload
+    /// `Con (a -> b)`. `StdlibKernel::hof_result_vars` derives the set from
+    /// each kernel's scheme shape. It must not itself be a function: every
+    /// such runtime kernel takes an exact-arity closure, while the IR
+    /// FLATTENS a curried Ipê function into one multi-parameter `Fun` — so a
+    /// callback with residual arity (its result is another arrow) has no
+    /// sound lowering and would reach `cargo build` as E0593/E0277/E0308.
+    /// A callback whose result is `Con`-headed in the scheme (`andThen`,
+    /// `traverse`) needs no bit: a curried callback there is already a plain
+    /// type mismatch. `Task`/`Cmd`/`Sub`/`Decoder` kernels box their
+    /// callbacks and are exempt. Deliberately SHALLOW on structure
     /// (only the head, never nested — see [`Self::has_hof_kernel_result`]):
     /// a collection-of-functions payload is a different, already-gated
     /// hazard. Fails CLOSED on a bare variable, exactly like every sibling

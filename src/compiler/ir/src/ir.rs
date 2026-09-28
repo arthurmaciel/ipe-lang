@@ -3049,13 +3049,14 @@ pub enum Callee {
 }
 
 impl Callee {
-    /// Whether a call to this callee evaluates its arguments in the REVERSE of
-    /// their IR order — a kernel whose runtime function takes them reversed
-    /// ([`ipe_kernels::StdlibKernel::swaps_first_two`]). Analyses that depend on
+    /// Whether a call to this callee evaluates its arguments in the reverse of their IR order.
+    ///
+    /// Holds exactly for a kernel whose registry row declares
+    /// [`ipe_kernels::ArgOrder::ContainerFirst`]. Analyses that depend on
     /// evaluation order visit a call's arguments reversed exactly when this holds.
     #[must_use]
     pub const fn evaluates_args_reversed(&self) -> bool {
-        matches!(self, Self::Kernel(k) if k.swaps_first_two())
+        matches!(self, Self::Kernel(k) if matches!(k.arg_order(), ipe_kernels::ArgOrder::ContainerFirst))
     }
 
     /// Whether the emitter renders every argument of a call to this callee in
