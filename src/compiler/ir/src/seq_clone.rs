@@ -505,4 +505,56 @@ mod tests {
             vec![thunk(consume()), kernel(vec![read(Expr::Var(w), tag)])],
         )));
     }
+
+    #[test]
+    fn clone_free_target_leaves_an_index_read_list_bare() {
+        let w = Symbol::from_raw(1);
+        let rewritten = clone_free_target(
+            Expr::ListIndexClone {
+                list: Box::new(Expr::Var(w)),
+                index: 0,
+            },
+            w,
+        );
+        assert!(
+            matches!(rewritten, Expr::ListIndexClone { ref list, index: 0 } if matches!(**list, Expr::Var(s) if s == w)),
+            "an index read borrows the list: {rewritten:?}"
+        );
+    }
+
+    #[test]
+    fn clone_free_target_leaves_a_length_check_list_bare() {
+        let w = Symbol::from_raw(1);
+        let rewritten = clone_free_target(
+            Expr::ListLenCheck {
+                list: Box::new(Expr::Var(w)),
+                len: 2,
+                exact: true,
+            },
+            w,
+        );
+        assert!(
+            matches!(rewritten, Expr::ListLenCheck { ref list, len: 2, exact: true } if matches!(**list, Expr::Var(s) if s == w)),
+            "a length check borrows the list: {rewritten:?}"
+        );
+    }
+
+    #[test]
+    fn clone_free_target_clones_a_consuming_read() {
+        let w = Symbol::from_raw(1);
+        let rewritten = clone_free_target(
+            Expr::Cons {
+                head: Box::new(Expr::Var(w)),
+                tail: Box::new(Expr::List {
+                    elem: IrType::Int,
+                    items: Vec::new(),
+                }),
+            },
+            w,
+        );
+        assert!(
+            matches!(rewritten, Expr::Cons { ref head, .. } if matches!(**head, Expr::CloneVar(s) if s == w)),
+            "a cons head moves the value: {rewritten:?}"
+        );
+    }
 }

@@ -166,6 +166,13 @@ pub fn wrapper_ipe_signature(f: &FnInfo) -> String {
         let parts: Vec<String> = f.params().iter().map(param_ipe_type).collect();
         parts.join(" -> ")
     };
+    format!("{param_sig} -> {}", wrapper_ipe_result(f))
+}
+
+/// The Ipê result type of one binding — the part of
+/// [`wrapper_ipe_signature`] after its parameters.
+#[must_use]
+pub fn wrapper_ipe_result(f: &FnInfo) -> String {
     let non_err: Vec<&Param> = f
         .results()
         .iter()
@@ -211,7 +218,7 @@ pub fn wrapper_ipe_signature(f: &FnInfo) -> String {
             format!("{carrier} {}", paren_multi(&ok))
         }
     };
-    format!("{param_sig} -> {result_ty}")
+    result_ty
 }
 
 /// Drop ONE leading `Result <err>` layer off a rendered Ipê type, returning

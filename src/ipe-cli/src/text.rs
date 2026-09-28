@@ -1066,8 +1066,8 @@ messages! {
     ffi_module_clash(module, krate) = "ffi-module-clash";
     /// An FFI define type collides with an inspected opaque type.
     ffi_define_opaque_collision(krate, name) = "ffi-define-opaque-collision";
-    /// An installed FFI crate emitted a malformed dependency line.
-    ffi_dependency_line_unparsable(krate, line) = "ffi-dependency-line-unparsable";
+    /// Installed FFI crates bind one dependency name to two different sources.
+    ffi_dependency_source_conflict(name, first, second) = "ffi-dependency-source-conflict";
     /// Installed FFI crates pin one dependency to two versions.
     ffi_dependency_pin_conflict(name, first, second) = "ffi-dependency-pin-conflict";
     /// An FFI binding marks a type transparent without its shape.
@@ -1086,14 +1086,6 @@ messages! {
     ffi_install_manifest_write_failed(detail) = "ffi-install-manifest-write-failed";
     /// `ipe install` could not write a manifest chunk.
     ffi_install_manifest_chunk_write_failed(detail) = "ffi-install-manifest-chunk-write-failed";
-    /// `ipe install` could not resolve a wrapper crate path.
-    ffi_install_wrapper_crate(path, detail) = "ffi-install-wrapper-crate";
-    /// `ipe install` could not resolve the project root.
-    ffi_install_project_root(detail) = "ffi-install-project-root";
-    /// An `ipe install` wrapper crate resolves outside the project root.
-    ffi_install_wrapper_outside_root(path, resolved) = "ffi-install-wrapper-outside-root";
-    /// An `ipe install` wrapper crate path is not UTF-8.
-    ffi_install_wrapper_not_utf8(path) = "ffi-install-wrapper-not-utf8";
     /// FFI regeneration read malformed inspector JSON.
     ffi_regen_invalid_json(detail) = "ffi-regen-invalid-json";
     /// FFI regeneration read inspector output of an unexpected shape.
@@ -1172,6 +1164,54 @@ messages! {
     login_move_failed(path, detail) = "login-move-failed";
     /// The token file could not be removed.
     login_remove_failed(path, detail) = "login-remove-failed";
+    /// The device-flow prompt: what the grant is for, where to go, and the code.
+    login_device_prompt(purpose, url, code: &crate::style::TerminalSafe) = "login-device-prompt";
+    /// What the publish-token grant is for.
+    login_grant_purpose_publish = "login-grant-purpose-publish";
+    /// What the one-shot signing-key-registration grant is for.
+    login_grant_purpose_signing_key(scope) = "login-grant-purpose-signing-key";
+    /// `ipe login --status`: the signing key comes from the environment variable.
+    signing_key_status_env(path: &crate::style::TerminalSafe, env) = "signing-key-status-env";
+    /// `ipe login --status`: the environment variable names no usable key.
+    signing_key_status_env_unusable(env) = "signing-key-status-env-unusable";
+    /// `ipe login --status`: the signing key `ipe login` generated.
+    signing_key_status_stored(path: &crate::style::TerminalSafe) = "signing-key-status-stored";
+    /// `ipe login --status`: no signing key is configured.
+    signing_key_status_none = "signing-key-status-none";
+    /// Signing-key setup found a usable key already configured.
+    signing_key_already_configured(path: &crate::style::TerminalSafe) = "signing-key-already-configured";
+    /// Signing-key setup found the environment variable set but unusable.
+    signing_key_env_unusable(env) = "signing-key-env-unusable";
+    /// The user declined signing-key setup.
+    signing_key_declined(env) = "signing-key-declined";
+    /// A signing key was generated, registered, and stored.
+    signing_key_registered(path: &crate::style::TerminalSafe, settings) = "signing-key-registered";
+    /// The consent question before generating and registering a signing key.
+    signing_key_consent_question(path: &crate::style::TerminalSafe, scope, revoke_url) = "signing-key-consent-question";
+    /// No signing key is configured and no terminal is available to set one up.
+    signing_key_hint_no_terminal = "signing-key-hint-no-terminal";
+    /// `ipe login --signing-key` without an interactive terminal.
+    signing_key_needs_terminal = "signing-key-needs-terminal";
+    /// No config directory could be determined for the signing key.
+    signing_key_no_config_dir = "signing-key-no-config-dir";
+    /// A non-key entry occupies a signing-key file name.
+    signing_key_occupied(path: &crate::style::TerminalSafe) = "signing-key-occupied";
+    /// The config directory cannot hold the hard links key storage relies on.
+    signing_key_link_unsupported(dir: &crate::style::TerminalSafe, detail: &crate::style::TerminalSafe, env) = "signing-key-link-unsupported";
+    /// The OS random-number generator failed.
+    signing_key_generation_failed = "signing-key-generation-failed";
+    /// A filesystem step before registration failed.
+    signing_key_write_failed(path: &crate::style::TerminalSafe, detail: &crate::style::TerminalSafe) = "signing-key-write-failed";
+    /// Registration failed and the local key was removed.
+    signing_key_registration_failed(reason: &crate::text::Message) = "signing-key-registration-failed";
+    /// The key is registered on GitHub but could not be stored locally.
+    signing_key_commit_failed(path: &crate::style::TerminalSafe, detail: &crate::style::TerminalSafe, title, settings) = "signing-key-commit-failed";
+    /// The key-registration device-flow authorization failed.
+    signing_key_authorization_failed(reason: &crate::style::TerminalSafe) = "signing-key-authorization-failed";
+    /// GitHub refused the signing key.
+    signing_key_refused(status, message: &crate::style::TerminalSafe) = "signing-key-refused";
+    /// The key-registration request got no HTTP answer.
+    signing_key_unreachable(reason: &crate::style::TerminalSafe) = "signing-key-unreachable";
     /// `ipe add` was given a malformed version requirement.
     pkg_invalid_requirement(requirement, detail) = "pkg-invalid-requirement";
     /// The usage line of `ipe add` / `ipe remove`.
@@ -1300,6 +1340,8 @@ messages! {
     output_too_deep(path, limit) = "output-too-deep";
     /// A path on or under a Windows reparse point.
     output_reparse_point(path) = "output-reparse-point";
+    /// An entry another program holds open, so ipe cannot remove or replace it.
+    output_in_use(path) = "output-in-use";
     /// A GitHub login with nothing before its optional `[bot]` suffix.
     login_empty = "login-empty";
     /// A GitHub login past the length ceiling.

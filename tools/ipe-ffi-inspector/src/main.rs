@@ -17,7 +17,7 @@
 use std::collections::{HashMap, HashSet};
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, ExitCode};
 
 mod model;
 use model::*;
@@ -26,7 +26,7 @@ use model::*;
 
 // Large rustdoc-JSON walker; the single dispatch reads clearer whole than split.
 #[allow(clippy::too_many_lines)]
-fn main() {
+fn main() -> ExitCode {
     let raw_args: Vec<String> = std::env::args().skip(1).collect();
 
     let mut features: Vec<String> = Vec::new();
@@ -175,7 +175,7 @@ fn main() {
         );
         eprintln!();
         eprintln!("Requires nightly Rust: rustup toolchain install nightly");
-        std::process::exit(1);
+        return ExitCode::FAILURE;
     }
 
     let git = git_url.as_ref().map(|u| GitSource {
@@ -213,7 +213,7 @@ fn main() {
                     wrapper_path: String::new(),
                 };
                 println!("{}", serde_json::to_string_pretty(&err).unwrap_or_default());
-                std::process::exit(1);
+                return ExitCode::FAILURE;
             }
         },
         None => crate_args
@@ -257,7 +257,7 @@ fn main() {
         && let Err(e) = load_xc_checkpoint(path)
     {
         eprintln!("ipe-ffi-inspector: --xc-load {path}: {e}");
-        std::process::exit(1);
+        return ExitCode::FAILURE;
     }
 
     if let Some(path) = &xc_save {
@@ -273,12 +273,15 @@ fn main() {
             // Populate: bindings discarded (verify_stable=false).
             let _ = inspect_crate(&spec.name, &spec.features, spec.git.as_ref(), false);
         }
+        if let Some(refused) = consent_refusal_exit() {
+            return refused;
+        }
         if let Err(e) = save_xc_checkpoint(path) {
             eprintln!("ipe-ffi-inspector: --xc-save {path}: {e}");
-            std::process::exit(1);
+            return ExitCode::FAILURE;
         }
         eprintln!("ipe-ffi-inspector: cross-crate maps checkpointed to {path}");
-        return;
+        return ExitCode::SUCCESS;
     }
 
     // Bind path. With a checkpoint loaded, the populate pass is already
@@ -349,6 +352,35 @@ fn main() {
             println!("{body}");
         }
     }
+    consent_refusal_exit().unwrap_or(ExitCode::SUCCESS)
+}
+
+/// Process exit status for a run the build-script consent gate refused.
+const EXIT_CONSENT_REFUSED: u8 = 3;
+
+/// The [`EXIT_CONSENT_REFUSED`] status when any consent scan refused this run.
+///
+/// Each distinct refusal is repeated on stderr so a caller that reads only the
+/// exit status and stderr still sees which packages to consent to; a refusal
+/// never leaves the process with a success status.
+fn consent_refusal_exit() -> Option<ExitCode> {
+    let refusals = distinct_refusals(consented_manifest::drain_refusals());
+    if refusals.is_empty() {
+        return None;
+    }
+    for refusal in &refusals {
+        eprintln!("{refusal}");
+    }
+    Some(ExitCode::from(EXIT_CONSENT_REFUSED))
+}
+
+/// The distinct refusals in first-issued order.
+fn distinct_refusals(refusals: Vec<String>) -> Vec<String> {
+    let mut seen: HashSet<String> = HashSet::new();
+    refusals
+        .into_iter()
+        .filter(|r| seen.insert(r.clone()))
+        .collect()
 }
 
 /// Print the tail-filter drop histogram to stderr (diagnostic `--audit` only).
@@ -668,15 +700,18 @@ fn run_rustdoc_source(
         };
     let dir = probe_root.as_path();
 
-    let manifest_str = dir.join("Cargo.toml").to_string_lossy().to_string();
     let target_dir = dir.join("target");
+    // Captured before `probe_root` moves into `ProbeDir::new` below — `dir`
+    // borrows it and cannot outlive the move.
+    let target_verify_dir = dir.join("target-verify");
 
-    // Write the probe manifest with a given dep-feature set. A write yields an
-    // unscanned `WrittenManifest`; only a consent scan of that exact file turns
-    // it into the `ConsentedManifest` a build step accepts.
-    let write_manifest = |feats: &[String]| -> Result<(), String> {
+    // The probe manifest text for a given dep-feature set. Only the
+    // `consented_manifest` module writes it to disk: a write yields an unscanned
+    // `WrittenManifest`, and only a consent scan of that exact file turns it into
+    // the `ConsentedManifest` a build step accepts.
+    let render_manifest = |feats: &[String]| -> String {
         let dep_entry = build_dep_entry_source(crate_name, feats, git, path, req_version);
-        let toml_content = format!(
+        format!(
             r#"[package]
 name = "_ipe_ffi_probe_{safe_name}"
 version = "0.1.0"
@@ -685,17 +720,14 @@ edition = "2021"
 [dependencies]
 {dep_entry}
 "#
-        );
-        std::fs::write(dir.join("Cargo.toml"), &toml_content)
-            .map_err(|e| format!("write Cargo.toml: {e}"))
+        )
     };
 
     let src_dir = dir.join("src");
     std::fs::create_dir_all(&src_dir).map_err(|e| format!("mkdir src: {e}"))?;
     // Initial manifest uses the EXPLICIT features (empty for the default path) so
     // `fetch_dep` + `cargo metadata` resolve the crate's own feature list.
-    write_manifest(features)?;
-    let initial = WrittenManifest::new(manifest_str.clone());
+    let initial = WrittenManifest::create(ProbeDir::new(probe_root), &render_manifest(features))?;
     std::fs::write(src_dir.join("lib.rs"), "// placeholder\n")
         .map_err(|e| format!("write lib.rs: {e}"))?;
 
@@ -725,8 +757,7 @@ edition = "2021"
     // Injected features can enable optional dependencies, so the rewritten
     // manifest's graph is fetched before the fetch-only phase returns.
     let written = if auto_injected {
-        write_manifest(&injected)?;
-        let rewritten = WrittenManifest::new(manifest_str);
+        let rewritten = initial.rewrite(&render_manifest(&injected))?;
         fetch_dep(rewritten.path())?;
         rewritten
     } else {
@@ -753,7 +784,7 @@ edition = "2021"
     // Default-feature fallback: the rewritten manifest is re-scanned before any
     // build sees it.
     let to_default = |stale: ConsentedManifest| -> Result<ConsentedManifest, String> {
-        ConsentedManifest::scan(stale.rewrite(|| write_manifest(&[]))?, allow_build_scripts)
+        ConsentedManifest::scan(stale.rewrite(&render_manifest(&[]))?, allow_build_scripts)
     };
 
     // [#100 Part B] `effective_features` = the set rustdoc actually SUCCEEDED with.
@@ -780,7 +811,7 @@ edition = "2021"
         // THERE, so the bound wrappers ↔ propagated features stay consistent
         // and the `ipe build ⇒ cargo build` floor holds.
         Ok((j, v)) if auto_injected && verify_stable => {
-            match injected_stable_check(&manifest, &dir.join("target-verify")) {
+            match injected_stable_check(&manifest, &target_verify_dir) {
                 StableCheck::Builds => (j, v, injected.clone(), manifest),
                 StableCheck::FeatureGated => {
                     eprintln!(
@@ -1090,6 +1121,8 @@ enum MetadataError {
     Parse(String),
     /// The JSON lacks a field the graph walk depends on.
     Malformed(&'static str),
+    /// The host target triple the graph is filtered to is undeterminable.
+    UnknownHost(HostTripleError),
 }
 
 impl std::fmt::Display for MetadataError {
@@ -1101,6 +1134,7 @@ impl std::fmt::Display for MetadataError {
             }
             Self::Parse(e) => write!(f, "`cargo metadata` output is not JSON: {e}"),
             Self::Malformed(what) => write!(f, "`cargo metadata` output is malformed: {what}"),
+            Self::UnknownHost(e) => write!(f, "cannot determine the host target triple: {e}"),
         }
     }
 }
@@ -1249,17 +1283,59 @@ fn offenders_from_metadata(
     Ok(offenders)
 }
 
-use consented_manifest::{ConsentedManifest, WrittenManifest};
+use consented_manifest::{ConsentedManifest, ProbeDir, WrittenManifest};
 
 /// Probe-manifest proof tokens for the AUD-10 build-script consent gate.
 ///
 /// Every build step (`cargo +nightly rustdoc`, the stable `cargo check`, the
 /// transitive-dependency walk) takes a [`ConsentedManifest`], and the only way
 /// to obtain one is to consent-scan the [`WrittenManifest`] a write produced.
-/// Rewriting the manifest consumes the token, so no rewritten dependency graph
-/// reaches a build without a fresh scan.
+/// This module is the sole writer of the probe manifest: the first write
+/// creates a [`WrittenManifest`], and every later write consumes the token it
+/// replaces (written or consented), so no token outlives the file content it
+/// was issued for and no rewritten dependency graph reaches a build without a
+/// fresh scan. Neither token has a public constructor, `Clone`, or `Default`.
+/// [`WrittenManifest::create`] additionally consumes an owned [`ProbeDir`]
+/// rather than borrowing a path, so a caller structurally cannot hold onto the
+/// probe directory and call `create` on it twice: the value that would name
+/// the second call has already been moved into the first.
 mod consented_manifest {
     use super::{BuildConsentOffender, MetadataError};
+    use std::cell::RefCell;
+    use std::path::PathBuf;
+
+    thread_local! {
+        /// Every consent refusal this process issued, in issue order.
+        static REFUSALS: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
+    }
+
+    /// Takes every consent refusal recorded so far, leaving none behind.
+    pub(super) fn drain_refusals() -> Vec<String> {
+        REFUSALS.with(|r| std::mem::take(&mut *r.borrow_mut()))
+    }
+
+    /// Writes `contents` to the probe manifest at `path`.
+    fn write_manifest(path: &str, contents: &str) -> Result<(), String> {
+        std::fs::write(path, contents).map_err(|e| format!("write Cargo.toml: {e}"))
+    }
+
+    /// A probe directory owned for exactly one [`WrittenManifest::create`] call.
+    ///
+    /// Not `Clone`, not `Copy`, no public field: the sole way to obtain one is
+    /// [`ProbeDir::new`], and the sole way to consume one is `create`. A caller
+    /// that has already moved its `ProbeDir` into `create` has no value left to
+    /// pass to a second call, so the same probe directory cannot be re-created
+    /// (and its manifest silently clobbered) — the double-create this type
+    /// exists to rule out has no representation, not merely a runtime check.
+    pub(super) struct ProbeDir(PathBuf);
+
+    impl ProbeDir {
+        /// Takes ownership of `path` as the probe directory for one manifest write.
+        #[must_use]
+        pub(super) const fn new(path: PathBuf) -> Self {
+            Self(path)
+        }
+    }
 
     /// A probe manifest on disk whose dependency graph is not yet consent-scanned.
     pub(super) struct WrittenManifest {
@@ -1267,10 +1343,33 @@ mod consented_manifest {
     }
 
     impl WrittenManifest {
-        /// Names the manifest file a write just produced.
-        #[must_use]
-        pub(super) const fn new(path: String) -> Self {
-            Self { path }
+        /// Writes `contents` as `Cargo.toml` in `dir`, consuming the [`ProbeDir`].
+        ///
+        /// A non-UTF-8 directory refuses: the path handed to every later cargo
+        /// step must name exactly the file written here, never a lossy copy.
+        /// Taking `dir` by value rather than `&Path` means a second `create` for
+        /// the same directory needs a second `ProbeDir` value — one the caller
+        /// cannot manufacture, only move once from `ProbeDir::new`.
+        pub(super) fn create(dir: ProbeDir, contents: &str) -> Result<Self, String> {
+            let dir: PathBuf = dir.0;
+            let path = dir
+                .join("Cargo.toml")
+                .to_str()
+                .ok_or_else(|| {
+                    format!(
+                        "refusing to inspect: probe directory {} is not valid UTF-8",
+                        dir.display()
+                    )
+                })?
+                .to_owned();
+            write_manifest(&path, contents)?;
+            Ok(Self { path })
+        }
+
+        /// Replaces the manifest's contents, consuming this token.
+        pub(super) fn rewrite(self, contents: &str) -> Result<Self, String> {
+            write_manifest(&self.path, contents)?;
+            Ok(self)
         }
 
         /// The manifest path, for fetch and metadata steps that run no foreign code.
@@ -1301,26 +1400,39 @@ mod consented_manifest {
             Self::from_graph(written, offenders, allow_build_scripts)
         }
 
-        /// Decides consent for `written` from its offender scan.
-        pub(super) fn from_graph(
+        /// Decides consent for `written` from its offender scan, recording a refusal.
+        fn from_graph(
             written: WrittenManifest,
             offenders: Result<Vec<BuildConsentOffender>, MetadataError>,
             allow_build_scripts: bool,
         ) -> Result<Self, String> {
-            if let Some(warning) =
-                super::consent_decision_from_graph(offenders, allow_build_scripts)?
-            {
-                eprintln!("{warning}");
+            match super::consent_decision_from_graph(offenders, allow_build_scripts) {
+                Ok(warning) => {
+                    if let Some(warning) = warning {
+                        eprintln!("{warning}");
+                    }
+                    Ok(Self { path: written.path })
+                }
+                Err(refusal) => {
+                    REFUSALS.with(|r| r.borrow_mut().push(refusal.clone()));
+                    Err(refusal)
+                }
             }
-            Ok(Self { path: written.path })
         }
 
-        /// Rewrites the manifest via `write`, surrendering this consent.
-        pub(super) fn rewrite(
-            self,
-            write: impl FnOnce() -> Result<(), String>,
-        ) -> Result<WrittenManifest, String> {
-            write()?;
+        /// Test seam: decides consent from a supplied offender scan.
+        #[cfg(test)]
+        pub(super) fn from_graph_for_test(
+            written: WrittenManifest,
+            offenders: Result<Vec<BuildConsentOffender>, MetadataError>,
+            allow_build_scripts: bool,
+        ) -> Result<Self, String> {
+            Self::from_graph(written, offenders, allow_build_scripts)
+        }
+
+        /// Replaces the manifest's contents, surrendering this consent.
+        pub(super) fn rewrite(self, contents: &str) -> Result<WrittenManifest, String> {
+            write_manifest(&self.path, contents)?;
             Ok(WrittenManifest { path: self.path })
         }
 
@@ -1431,27 +1543,99 @@ fn collect_transitive_deps(
     // crate to build (and fail) on the host. The emitted app builds on this
     // same host, so the host-filtered graph is the right pin set; a dep only
     // reachable on another platform stays unpinned there (cargo resolves it
-    // through the direct pins), never force-built here.
-    let host = host_target_triple();
-    let filter: Vec<&str> = host
-        .as_deref()
-        .map_or_else(Vec::new, |h| vec!["--filter-platform", h]);
-    transitive_deps_from_metadata(&run_cargo_metadata(manifest.path(), &filter)?)
+    // through the direct pins), never force-built here. An undeterminable host
+    // refuses: the unfiltered graph would pin every platform's deps.
+    let host = host_target_triple().map_err(MetadataError::UnknownHost)?;
+    transitive_deps_from_metadata(&run_cargo_metadata(
+        manifest.path(),
+        &["--filter-platform", host.as_str()],
+    )?)
 }
 
-/// The host target triple (`rustc -vV` `host:` line), for platform-filtering
-/// the metadata graph. `None` on any failure (fail-soft: unfiltered metadata,
-/// the pre-existing behavior).
-fn host_target_triple() -> Option<String> {
-    let out = Command::new("rustc").arg("-vV").output().ok()?;
-    if !out.status.success() {
-        return None;
+/// A host target triple exactly as `rustc -vV` reports it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct HostTriple(String);
+
+impl HostTriple {
+    /// The triple text, for `cargo metadata --filter-platform`.
+    #[must_use]
+    const fn as_str(&self) -> &str {
+        self.0.as_str()
     }
-    let text = String::from_utf8(out.stdout).ok()?;
-    text.lines()
-        .find_map(|l| l.strip_prefix("host: "))
-        .map(|h| h.trim().to_owned())
-        .filter(|h| !h.is_empty())
+}
+
+/// Why the host target triple could not be determined.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum HostTripleError {
+    /// `rustc` could not be spawned.
+    Spawn(String),
+    /// `rustc -vV` exited unsuccessfully.
+    Failed(String),
+    /// Its stdout was not UTF-8.
+    NotUtf8,
+    /// Its stdout carries no `host:` line.
+    Missing,
+    /// Its stdout carries more than one `host:` line.
+    Ambiguous,
+    /// The `host:` value is not a well-formed target triple.
+    Malformed(String),
+}
+
+impl std::fmt::Display for HostTripleError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Spawn(e) => write!(f, "could not run `rustc -vV`: {e}"),
+            Self::Failed(status) => write!(f, "`rustc -vV` failed ({status})"),
+            Self::NotUtf8 => f.write_str("`rustc -vV` output is not UTF-8"),
+            Self::Missing => f.write_str("`rustc -vV` output has no `host:` line"),
+            Self::Ambiguous => f.write_str("`rustc -vV` output has more than one `host:` line"),
+            Self::Malformed(h) => write!(f, "`rustc -vV` reports a malformed host triple {h:?}"),
+        }
+    }
+}
+
+/// The host target triple from `rustc -vV`, for platform-filtering the metadata graph.
+fn host_target_triple() -> Result<HostTriple, HostTripleError> {
+    let out = Command::new("rustc")
+        .arg("-vV")
+        .output()
+        .map_err(|e| HostTripleError::Spawn(e.to_string()))?;
+    if !out.status.success() {
+        return Err(HostTripleError::Failed(out.status.to_string()));
+    }
+    parse_host_triple(&out.stdout)
+}
+
+/// Parses the single `host:` line of `rustc -vV` output into a [`HostTriple`].
+///
+/// A triple is two or more non-empty `-`-separated components drawn from
+/// `[A-Za-z0-9_.]`; anything else refuses rather than reaching cargo's argv.
+fn parse_host_triple(stdout: &[u8]) -> Result<HostTriple, HostTripleError> {
+    let text = std::str::from_utf8(stdout).map_err(|_| HostTripleError::NotUtf8)?;
+    let mut hosts = text
+        .lines()
+        .filter_map(|l| l.strip_prefix("host:"))
+        .map(str::trim);
+    let host = hosts.next().ok_or(HostTripleError::Missing)?;
+    if hosts.next().is_some() {
+        return Err(HostTripleError::Ambiguous);
+    }
+    let well_formed = host.split('-').count() >= 2
+        && host.split('-').all(|part| {
+            !part.is_empty()
+                && part
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.'))
+        });
+    if well_formed {
+        Ok(HostTriple(host.to_owned()))
+    } else {
+        Err(HostTripleError::Malformed(
+            host.chars()
+                .filter(|c| c.is_ascii_graphic() || *c == ' ')
+                .collect(),
+        ))
+    }
 }
 
 /// WALL-B (#75): the PURE extraction half of `collect_transitive_deps` — given a
@@ -9125,19 +9309,6 @@ fn bound_is_higher_ranked(bound: &serde_json::Value) -> bool {
         .is_some_and(|a| !a.is_empty())
 }
 
-/// The super-trait closure of a modellable-5 trait is statically known and
-/// entirely marker/modellable (`Eq: PartialEq`, `Ord: PartialOrd + Eq`, the
-/// rest have no constraining super). So once a trait NAME is in the modellable-5
-/// its closure introduces no hole (C3 holds by construction). A trait NOT in the
-/// modellable-5 is rejected before we'd need its closure. This returns whether
-/// `name`'s super-closure stays inside the modellable-5 ∪ markers.
-fn modellable_5_superclosure_ok(name: &str) -> bool {
-    // All five have only marker/modellable supers — verified against std:
-    //   Hash: (none constraining)   Eq: PartialEq   Ord: PartialOrd+Eq
-    //   Clone: Sized                Default: Sized
-    is_modellable_5(name)
-}
-
 /// Classify ONE trait bound on a USED param for the modellable check (C3):
 ///   * marker/auto trait or lifetime bound → contributes no `<T: …>` bound (Ok None)
 ///   * higher-ranked (`for<'a>`) → drop (C2 sibling)
@@ -9165,8 +9336,9 @@ fn classify_param_bound(bound: &serde_json::Value) -> Result<Option<String>, Gen
             .unwrap_or(&serde_json::Value::Null),
     ) && is_modellable_5(std_tag)
     {
-        // super-closure of every modellable-5 trait is marker/modellable.
-        debug_assert!(modellable_5_superclosure_ok(std_tag));
+        // Every modellable-5 trait's super-closure is marker/modellable
+        // (`Eq: PartialEq`, `Ord: PartialOrd + Eq`, `Clone`/`Default`: `Sized`,
+        // `Hash`: none), so admitting the name introduces no unmodelled bound.
         return Ok(Some(std_tag.to_string()));
     }
     // A confirmed std trait that is NOT modellable-5 (Display / FromStr /
@@ -13790,20 +13962,26 @@ mod tests {
         })
     }
 
+    /// A written probe manifest in a fresh temporary directory.
+    fn temp_written_manifest() -> (tempfile::TempDir, WrittenManifest) {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let written = WrittenManifest::create(ProbeDir::new(dir.path().to_path_buf()), "")
+            .expect("write probe manifest");
+        (dir, written)
+    }
+
     #[test]
     fn consent_refuses_build_script_dep_added_by_injected_feature() {
-        let written = || WrittenManifest::new("probe/Cargo.toml".to_owned());
-        assert!(
-            ConsentedManifest::from_graph(
-                written(),
-                offenders_from_metadata(&aud10_pre_injection_meta()),
-                false,
-            )
-            .is_ok(),
-            "the pre-injection graph is clean"
-        );
-        let refused = ConsentedManifest::from_graph(
-            written(),
+        let (_dir, written) = temp_written_manifest();
+        let clean = ConsentedManifest::from_graph_for_test(
+            written,
+            offenders_from_metadata(&aud10_pre_injection_meta()),
+            false,
+        )
+        .expect("the pre-injection graph is clean");
+        let written = clean.rewrite("").expect("rewrite");
+        let refused = ConsentedManifest::from_graph_for_test(
+            written,
             offenders_from_metadata(&aud10_post_injection_meta()),
             false,
         )
@@ -13813,9 +13991,10 @@ mod tests {
             refused.contains("openssl-sys") && refused.contains("--allow-build-scripts"),
             "the injected graph must refuse without the flag: {refused:?}"
         );
+        let (_dir, written) = temp_written_manifest();
         assert!(
-            ConsentedManifest::from_graph(
-                written(),
+            ConsentedManifest::from_graph_for_test(
+                written,
                 offenders_from_metadata(&aud10_post_injection_meta()),
                 true,
             )
@@ -13826,27 +14005,24 @@ mod tests {
 
     #[test]
     fn consent_rewrite_surrenders_the_token_until_rescanned() {
-        let consented = ConsentedManifest::from_graph(
-            WrittenManifest::new("probe/Cargo.toml".to_owned()),
+        let (dir, written) = temp_written_manifest();
+        let consented = ConsentedManifest::from_graph_for_test(
+            written,
             offenders_from_metadata(&aud10_pre_injection_meta()),
             false,
         )
-        .ok()
-        .unwrap_or_else(|| panic!("the pre-injection graph is clean"));
-        let failed = consented.rewrite(|| Err("write Cargo.toml: denied".to_owned()));
-        assert!(matches!(failed, Err(msg) if msg == "write Cargo.toml: denied"));
-        let consented = ConsentedManifest::from_graph(
-            WrittenManifest::new("probe/Cargo.toml".to_owned()),
-            offenders_from_metadata(&aud10_pre_injection_meta()),
-            false,
-        )
-        .ok()
-        .unwrap_or_else(|| panic!("the pre-injection graph is clean"));
-        let Ok(rewritten) = consented.rewrite(|| Ok(())) else {
-            panic!("a successful write yields an unscanned manifest");
-        };
-        assert_eq!(rewritten.path(), "probe/Cargo.toml");
-        let rescanned = ConsentedManifest::from_graph(
+        .expect("the pre-injection graph is clean");
+        let rewritten = consented
+            .rewrite("# rewritten\n")
+            .expect("a successful write yields an unscanned manifest");
+        let on_disk = dir.path().join("Cargo.toml");
+        assert_eq!(rewritten.path(), on_disk.to_str().expect("utf-8 tempdir"));
+        assert_eq!(
+            std::fs::read_to_string(&on_disk).expect("read back"),
+            "# rewritten\n",
+            "the module is the manifest's writer"
+        );
+        let rescanned = ConsentedManifest::from_graph_for_test(
             rewritten,
             offenders_from_metadata(&aud10_post_injection_meta()),
             false,
@@ -13854,6 +14030,231 @@ mod tests {
         assert!(
             rescanned.is_err(),
             "a rewritten graph is re-decided, not inherited"
+        );
+    }
+
+    #[test]
+    fn consent_rewrite_failure_consumes_the_token() {
+        let (dir, written) = temp_written_manifest();
+        let consented = ConsentedManifest::from_graph_for_test(
+            written,
+            offenders_from_metadata(&aud10_pre_injection_meta()),
+            false,
+        )
+        .expect("the pre-injection graph is clean");
+        dir.close().expect("remove probe dir");
+        let failed = consented.rewrite("");
+        assert!(
+            matches!(&failed, Err(msg) if msg.starts_with("write Cargo.toml:")),
+            "a failed rewrite refuses and leaves no token: {:?}",
+            failed.as_ref().map(WrittenManifest::path)
+        );
+    }
+
+    #[test]
+    fn written_manifest_refuses_an_unwritable_directory() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let missing = dir.path().join("absent");
+        let created = WrittenManifest::create(ProbeDir::new(missing), "");
+        assert!(
+            matches!(&created, Err(msg) if msg.starts_with("write Cargo.toml:")),
+            "no token without a completed write: {:?}",
+            created.as_ref().map(WrittenManifest::path)
+        );
+    }
+
+    #[test]
+    fn consent_refusal_is_recorded_for_the_exit_status() {
+        drop(consented_manifest::drain_refusals());
+        let (_dir, written) = temp_written_manifest();
+        let refused = ConsentedManifest::from_graph_for_test(
+            written,
+            offenders_from_metadata(&aud10_post_injection_meta()),
+            false,
+        );
+        assert!(refused.is_err());
+        let recorded = consented_manifest::drain_refusals();
+        assert_eq!(recorded.len(), 1, "recorded: {recorded:?}");
+        assert!(recorded.first().is_some_and(|r| r.contains("openssl-sys")));
+        assert!(
+            consented_manifest::drain_refusals().is_empty(),
+            "a drain leaves no refusal behind"
+        );
+    }
+
+    #[test]
+    fn consent_refusal_exit_yields_the_documented_exit_code() {
+        assert_eq!(EXIT_CONSENT_REFUSED, 3, "pins the process exit contract");
+
+        // Clean run: no refusal recorded -> no exit override.
+        drop(consented_manifest::drain_refusals());
+        assert!(
+            consent_refusal_exit().is_none(),
+            "a clean run must not force an exit status"
+        );
+
+        // Refused run: `consent_refusal_exit` must yield exactly
+        // `ExitCode::from(EXIT_CONSENT_REFUSED)`, not merely `Some(_)`.
+        let (_dir, written) = temp_written_manifest();
+        let refused = ConsentedManifest::from_graph_for_test(
+            written,
+            offenders_from_metadata(&aud10_post_injection_meta()),
+            false,
+        );
+        assert!(refused.is_err());
+        let exit = consent_refusal_exit();
+        assert_eq!(
+            format!("{exit:?}"),
+            format!("{:?}", Some(ExitCode::from(EXIT_CONSENT_REFUSED))),
+            "a refused run must exit with EXIT_CONSENT_REFUSED"
+        );
+        assert!(
+            consented_manifest::drain_refusals().is_empty(),
+            "consent_refusal_exit drains the refusal it reported"
+        );
+    }
+
+    #[test]
+    fn unreadable_graph_refusal_is_recorded_even_with_consent() {
+        drop(consented_manifest::drain_refusals());
+        let (_dir, written) = temp_written_manifest();
+        let refused = ConsentedManifest::from_graph_for_test(
+            written,
+            Err(MetadataError::UnknownHost(HostTripleError::Missing)),
+            true,
+        );
+        let msg = refused.err().unwrap_or_default();
+        assert!(
+            msg.starts_with("refusing to inspect") && msg.contains("host target triple"),
+            "an undeterminable host refuses: {msg:?}"
+        );
+        assert_eq!(consented_manifest::drain_refusals(), vec![msg]);
+    }
+
+    #[test]
+    fn a_clean_consent_records_no_refusal() {
+        drop(consented_manifest::drain_refusals());
+        let (_dir, written) = temp_written_manifest();
+        assert!(
+            ConsentedManifest::from_graph_for_test(
+                written,
+                offenders_from_metadata(&aud10_pre_injection_meta()),
+                false,
+            )
+            .is_ok()
+        );
+        assert!(consented_manifest::drain_refusals().is_empty());
+    }
+
+    #[test]
+    fn distinct_refusals_keep_first_issue_order() {
+        let refusals = vec!["b".to_owned(), "a".to_owned(), "b".to_owned()];
+        assert_eq!(
+            distinct_refusals(refusals),
+            vec!["b".to_owned(), "a".to_owned()]
+        );
+        assert!(distinct_refusals(Vec::new()).is_empty());
+    }
+
+    #[test]
+    fn host_triple_parses_the_single_host_line() {
+        let out = b"rustc 1.98.1 (abc 2026-01-01)\nbinary: rustc\nhost: x86_64-unknown-linux-gnu\nrelease: 1.98.1\n";
+        assert_eq!(
+            parse_host_triple(out).map(|h| h.as_str().to_owned()),
+            Ok("x86_64-unknown-linux-gnu".to_owned())
+        );
+        assert_eq!(
+            parse_host_triple(b"host: thumbv7em-none-eabihf\n").map(|h| h.as_str().to_owned()),
+            Ok("thumbv7em-none-eabihf".to_owned())
+        );
+    }
+
+    #[test]
+    fn host_triple_refuses_missing_ambiguous_and_non_utf8_output() {
+        assert_eq!(
+            parse_host_triple(b"rustc 1.98.1\nrelease: 1.98.1\n"),
+            Err(HostTripleError::Missing)
+        );
+        assert_eq!(parse_host_triple(b""), Err(HostTripleError::Missing));
+        assert_eq!(
+            parse_host_triple(b"host: x86_64-unknown-linux-gnu\nhost: aarch64-apple-darwin\n"),
+            Err(HostTripleError::Ambiguous)
+        );
+        assert_eq!(
+            parse_host_triple(b"host: \xff\xfe\n"),
+            Err(HostTripleError::NotUtf8)
+        );
+    }
+
+    #[test]
+    fn host_triple_refuses_malformed_values() {
+        for bad in [
+            "host: \n",
+            "host: x86_64\n",
+            "host: -unknown-linux\n",
+            "host: x86_64--linux\n",
+            "host: x86_64-unknown-linux-gnu-\n",
+            "host: x86_64-unknown-linux-gnu;rm\n",
+            "host: x86_64-unknown linux-gnu\n",
+            "host: --all-features\n",
+        ] {
+            assert!(
+                matches!(
+                    parse_host_triple(bad.as_bytes()),
+                    Err(HostTripleError::Malformed(_))
+                ),
+                "{bad:?} must refuse as malformed"
+            );
+        }
+        assert_eq!(
+            parse_host_triple(b"host: a-b\x07c\n"),
+            Err(HostTripleError::Malformed("a-bc".to_owned())),
+            "a refused value is echoed without control characters"
+        );
+    }
+
+    #[test]
+    fn metadata_error_names_an_unknown_host() {
+        let msg = MetadataError::UnknownHost(HostTripleError::Ambiguous).to_string();
+        assert!(
+            msg.starts_with("cannot determine the host target triple")
+                && msg.contains("more than one `host:` line"),
+            "{msg:?}"
+        );
+    }
+
+    /// Drives `run_rustdoc_source` end to end against a local build-script crate.
+    ///
+    /// The crate's single feature is auto-injected, so the probe manifest is
+    /// created, rewritten through the token, fetched, and consent-scanned; the
+    /// scan must refuse before any build step and record the refusal.
+    #[test]
+    fn run_rustdoc_source_refuses_an_unconsented_build_script() {
+        drop(consented_manifest::drain_refusals());
+        let krate = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            krate.path().join("Cargo.toml"),
+            "[package]\nname = \"consent_probe_wrapper\"\nversion = \"0.1.0\"\n\
+             edition = \"2021\"\n\n[features]\nextra = []\n",
+        )
+        .expect("write wrapper manifest");
+        std::fs::write(krate.path().join("build.rs"), "fn main() {}\n").expect("write build.rs");
+        std::fs::create_dir_all(krate.path().join("src")).expect("mkdir src");
+        std::fs::write(krate.path().join("src/lib.rs"), "pub fn f() {}\n").expect("write lib.rs");
+        let path = krate.path().to_str().expect("utf-8 tempdir");
+        let refused = run_rustdoc_source("consent_probe_wrapper", &[], None, Some(path), false)
+            .err()
+            .unwrap_or_default();
+        assert!(
+            refused.starts_with("refusing to inspect")
+                && refused.contains("consent_probe_wrapper (build script (build.rs))")
+                && refused.contains("--allow-build-scripts"),
+            "an unconsented build script refuses before any build: {refused:?}"
+        );
+        assert_eq!(
+            consented_manifest::drain_refusals(),
+            vec![refused],
+            "the refusal reaches the exit status"
         );
     }
 

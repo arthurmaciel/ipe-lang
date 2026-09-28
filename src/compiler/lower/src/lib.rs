@@ -28,6 +28,11 @@ mod lower;
 /// by manifest generation (SP2) and sandbox configuration (SP4).
 pub use capabilities::program_capabilities;
 
+/// Root-seeded capability reachability: the kernel-derived capabilities a set of
+/// root modules reaches, with the home of every reached function. Consumed by
+/// the package capability audit.
+pub use capabilities::{ReachedCapabilities, capabilities_reached_from};
+
 /// The generated `ipe-ce-<hex16>` custom-element tag for a widget hook at a
 /// cleaned, in-project path. The SINGLE definition the lowerer uses to render the
 /// `CustomElement.node` view node — re-exported so the build stage that serves the widget
@@ -106,11 +111,14 @@ pub fn lower(
     // conflict within one `fresh_symbols` expression). Each field equals its
     // former standalone `count_*` / `max_*` walker.
     let pool_counts = lower::module_symbol_pool_counts(m, interner);
+    // Mapper wraps draw an eta block sized by the mapper's solved type, which
+    // the per-site charges above do not see; reserve it on top.
     let eta_params = interner
         .fresh_symbols(
             "eta_",
             pool_counts
                 .max_live_eta_params
+                .saturating_add(lower::max_mapper_wrap_eta_demand(m, types))
                 .max(max_ctor_arity)
                 .max(MAX_CALLEE_ARITY),
         )

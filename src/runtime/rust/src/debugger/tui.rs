@@ -23,7 +23,7 @@
 //! | Ctrl-R     | Reset to init: clear history, restart fresh  |
 //!
 //! These keys are consumed by the debugger and are never forwarded to the
-//! application's `on_key` handler while time-travel mode is active.
+//! application's `Tui.Sub.onKey` handlers while time-travel mode is active.
 //!
 //! ## Safety
 //!

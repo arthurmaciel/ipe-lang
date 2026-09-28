@@ -23,7 +23,7 @@
 #![allow(clippy::expect_used)] // test setup: a failed decode / scratch-dir op IS the failure
 
 use ipe_ffi::bindings::{emit_bindings, surviving_ref_names};
-use ipe_ffi::driver::cargo_dep_lines;
+use ipe_ffi::driver::{FfiCache, cargo_dep_lines};
 use ipe_ffi::interface::crate_interface;
 use ipe_ffi::pkginfo::PkgInfo;
 
@@ -91,10 +91,27 @@ fn a_marked_trait_impl_type_binds_its_symbols_and_depends_by_path() {
         "the marked type resolves to an Ipê-held opaque nominal: {:?}",
         iface.opaque_types
     );
-    let deps = cargo_dep_lines(&pkg).expect("renders a path dep line");
+    // The relative wrapper path is jailed to the project root at load and
+    // rendered as its canonical absolute directory.
+    let project =
+        std::env::temp_dir().join(format!("ipe-sprite-wrap-dep-line-{}", std::process::id()));
+    std::fs::create_dir_all(project.join("wrappers/sprite")).expect("scratch wrapper dir");
+    std::fs::write(
+        project.join("wrappers/sprite/Cargo.toml"),
+        "[package]\nname = \"sprite_wrap\"\nversion = \"0.1.0\"\n",
+    )
+    .expect("scratch wrapper manifest");
+    let canonical =
+        std::fs::canonicalize(project.join("wrappers/sprite")).expect("wrapper dir canonicalizes");
+    let deps = cargo_dep_lines(&pkg, &FfiCache::at_project_root(&project))
+        .expect("renders a path dep line");
+    let _ = std::fs::remove_dir_all(&project);
     assert_eq!(
         deps,
-        [r#"sprite_wrap = { path = "wrappers/sprite" }"#],
+        [format!(
+            "sprite_wrap = {{ path = \"{}\" }}",
+            canonical.display()
+        )],
         "the wrapper is a path dependency of the emitted app crate"
     );
 }
