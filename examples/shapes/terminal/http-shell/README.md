@@ -1,7 +1,8 @@
 # http-shell — an HTTP query shell over `Cli.tea`
 
-A line-driven REPL. `Cli.tea` reads one line of standard input at a
-time, turns it into a command, and re-renders `view : Model -> String`.
+A line-driven REPL. `subscriptions` subscribes with `Cli.Sub.onLine`, so
+`Cli.tea` reads one line of standard input at a time, turns it into a
+command, and re-renders `view : Model -> Lines Msg`.
 
 - `get <url>` performs a real `Http.get`, then prints the response status and
   body. The request runs as a `Task`, so the input loop never blocks.
