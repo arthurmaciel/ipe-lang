@@ -385,7 +385,7 @@ fn byte_column(text: &str, byte: usize) -> usize {
 
 #[cfg(test)]
 mod tests {
-    use ipe_db::{IpeDatabase, ModuleOrigin, SourceFile, SourceRoot};
+    use ipe_db::{Db as _, IpeDatabase, ModuleOrigin, SourceFile, SourceRoot};
     use lsp_types::{Position, Range};
 
     use crate::offset::{PositionEncoding, offset_to_position};
