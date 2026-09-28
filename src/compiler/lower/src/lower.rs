@@ -26,9 +26,9 @@ use ipe_intern::{Interner, Symbol};
 use ipe_ir::free_vars::{pat_bound_symbols, pat_moves_nested_part, pat_moves_scrutinee};
 use ipe_ir::let_inline::{inlined_let_body, let_value_is_inlined};
 use ipe_ir::{
-    Arm, BinOp, BoundSet, CallPin, Callee, Capability, EnumDef, Expr, Func, FuncId, IrType,
-    KernelFn, Match, ModPath, Module, OnFormKind, Pat, Program, RowParam, RuntimeModule, TypeDef,
-    UiCtor, UiPlain, Variant, fun_value_arc_promotable, ir_type_has_effect_carrier,
+    AppSurface, Arm, BinOp, BoundSet, CallPin, Callee, Capability, EnumDef, Expr, Func, FuncId,
+    IrType, KernelFn, Match, ModPath, Module, OnFormKind, Pat, Program, RowParam, RuntimeModule,
+    TypeDef, UiCtor, UiPlain, Variant, fun_value_arc_promotable, ir_type_has_effect_carrier,
     ir_type_is_serde, is_dispatch_free, is_irrefutable,
 };
 use ipe_types::{RowTail, SolvedTypes, Ty, TyBounds};
@@ -78,6 +78,9 @@ use ty_templates::{
 /// One lowered function parameter: its (possibly synthetic) binder name and its
 /// IR type.
 type IrParam = (Symbol, IrType);
+
+/// A lowered function arrow: its parameter types and its return type.
+type IrArrow = (Vec<IrType>, IrType);
 
 /// A tuple-parameter destructure-prologue entry: the synthetic binder name the
 /// parameter was given, paired with the irrefutable tuple [`Pat`] that opens it
@@ -206,6 +209,96 @@ fn arrow_params(fn_ty: &Ty) -> Vec<&Ty> {
         cur = rest.as_ref();
     }
     params
+}
+
+/// The parameter count of the mapper at kernel position `arg` of scheme
+/// `shape`: the length of that argument's own arrow spine (0 for a non-arrow).
+const fn scheme_mapper_arity(shape: &ipe_kernels::TyShape, arg: usize) -> usize {
+    let Some(mapper) = ipe_kernels::spine_arg(shape, arg) else {
+        return 0;
+    };
+    let mut count = 0;
+    while ipe_kernels::spine_arg(mapper, count).is_some() {
+        count = count.saturating_add(1);
+    }
+    count
+}
+
+/// A mapper's solved type split along its scheme spine: one type per mapper parameter, then the result.
+///
+/// Built only by [`MapperSpine::peel`], so a mapper whose solved type is
+/// shorter than its scheme spine has no representation past the choke point.
+#[derive(Debug, PartialEq, Eq)]
+pub struct MapperSpine<'t> {
+    params: Vec<&'t Ty>,
+    ret: &'t Ty,
+}
+
+impl<'t> MapperSpine<'t> {
+    /// Split `spine` parameter types off `mapper_ty`; `None` when it has fewer arrows.
+    #[must_use]
+    pub fn peel(mapper_ty: &'t Ty, spine: usize) -> Option<Self> {
+        let mut params = Vec::with_capacity(spine);
+        let mut tail = mapper_ty;
+        for _ in 0..spine {
+            let Ty::Fun(head, rest) = tail else {
+                return None;
+            };
+            params.push(&**head);
+            tail = &**rest;
+        }
+        Some(Self { params, ret: tail })
+    }
+
+    /// The mapper parameter types, in order.
+    #[must_use]
+    pub fn params(&self) -> &[&'t Ty] {
+        &self.params
+    }
+
+    /// The mapper result type after every spine parameter.
+    #[must_use]
+    pub const fn ret(&self) -> &'t Ty {
+        self.ret
+    }
+}
+
+/// Whether a reference to `kernel` at solved type `ty` hands some mapper a
+/// FUNCTION-typed parameter that binds a stored element — the instance whose
+/// mapper must pass the carrier choke point
+/// (`Lowerer::retype_collection_element_param`).
+fn kernel_ref_binds_fn_element(kernel: KernelFn, ty: &Ty) -> bool {
+    let Some(shape) = kernel.scheme_shape() else {
+        return false;
+    };
+    let arity = kernel.def().arity;
+    arrow_params(ty)
+        .iter()
+        .take(usize::from(arity))
+        .enumerate()
+        .any(|(arg, mapper_ty)| {
+            arrow_params(mapper_ty)
+                .iter()
+                .take(scheme_mapper_arity(shape, arg))
+                .enumerate()
+                .any(|(param, param_ty)| {
+                    mapper_param_binds_fn_element(shape, arity, arg, param, param_ty)
+                })
+        })
+}
+
+/// Whether parameter `param` (solved type `ty`) of the mapper at kernel
+/// position `arg` receives a stored FUNCTION element — the parameter the
+/// carrier choke point re-carries to `Arc`.
+const fn mapper_param_binds_fn_element(
+    shape: &ipe_kernels::TyShape,
+    arity: u8,
+    arg: usize,
+    param: usize,
+    ty: &Ty,
+) -> bool {
+    matches!(ty, Ty::Fun(..))
+        && ipe_kernels::mapper_param_binds_stored_element(shape, arity, arg, param)
 }
 
 /// Whether `t` still holds a type variable anywhere, an open record row tail included.
@@ -3267,32 +3360,54 @@ fn ir_type_generic_in_send_carrier(ty: &IrType, tv: Symbol) -> bool {
 /// structural-walk shape of [`body_boxes_generic_callback`] (the `'static`
 /// callback obligation) rather than the kernel-on-param matchers.
 fn ir_type_generic_in_decoder(ty: &IrType, tv: Symbol) -> bool {
+    ir_type_generic_in_carrier(ty, tv, |t| matches!(t, IrType::Decoder(_)))
+}
+
+/// Does the type variable `tv` appear INSIDE a `Cmd` / `Sub` payload anywhere in `ty`?
+///
+/// A `Cmd msg` / `Sub msg` holds its message producers as `Send + 'static`
+/// boxed closures (`cmd_perform`, `sub_map`, the terminal input handlers of
+/// `tui_sub_on_key` / `cli_sub_on_line`), and every TEA loop runs its `msg` on
+/// that same bound. A generic helper whose signature carries a `Cmd tv` /
+/// `Sub tv` — `keys : (KeyEvent -> msg) -> Sub msg`, point-free
+/// (`keys = Sub.onKey`) or capturing a bare `msg` (`keys m = Sub.onKey (\_ ->
+/// m)`) — therefore needs `tv: Send + 'static`, or the emitted body fails
+/// `cargo build` (E0310 / E0277). Every concrete message a loop accepts already
+/// satisfies the bound, so it never rejects a caller.
+fn ir_type_generic_in_tea_carrier(ty: &IrType, tv: Symbol) -> bool {
+    ir_type_generic_in_carrier(ty, tv, |t| matches!(t, IrType::Cmd(_) | IrType::Sub(_)))
+}
+
+/// Does the type variable `tv` appear inside a node `is_carrier` selects, anywhere in `ty`?
+///
+/// The carrier node itself is the obligation when it mentions `tv`; every other
+/// compound type is walked through, so a nested carrier (`Task Error (Decoder
+/// tv)`, `List (Sub tv)`, a function returning `Sub tv`) is found too.
+fn ir_type_generic_in_carrier(ty: &IrType, tv: Symbol, is_carrier: fn(&IrType) -> bool) -> bool {
+    if is_carrier(ty) {
+        return ir_type_mentions_generic(ty, tv);
+    }
+    let walk = |t: &IrType| ir_type_generic_in_carrier(t, tv, is_carrier);
     match ty {
-        // A `Decoder` payload that mentions `tv` is the obligation itself.
-        IrType::Decoder(inner) => ir_type_mentions_generic(inner, tv),
-        // Recurse through every compound carrier; a `Decoder` may be nested
-        // (e.g. `Task Error (Decoder tv)`, `List (Decoder tv)`).
         IrType::Task(inner)
         | IrType::Maybe(inner)
         | IrType::List(inner)
+        | IrType::Decoder(inner)
         | IrType::Cmd(inner)
         | IrType::Sub(inner)
         | IrType::Set(inner)
         | IrType::WebRoute(inner)
-        | IrType::Ui { msg: inner, .. } => ir_type_generic_in_decoder(inner, tv),
+        | IrType::Ui { msg: inner, .. } => walk(inner),
         IrType::Result(a, b) | IrType::Dict(a, b) | IrType::CustomElement { down: a, up: b } => {
-            ir_type_generic_in_decoder(a, tv) || ir_type_generic_in_decoder(b, tv)
+            walk(a) || walk(b)
         }
-        IrType::Tuple(items) => items.iter().any(|t| ir_type_generic_in_decoder(t, tv)),
-        IrType::Enum { args, .. } => args.iter().any(|t| ir_type_generic_in_decoder(t, tv)),
-        IrType::Record(fields) => fields.values().any(|t| ir_type_generic_in_decoder(t, tv)),
+        IrType::Tuple(items) => items.iter().any(walk),
+        IrType::Enum { args, .. } => args.iter().any(walk),
+        IrType::Record(fields) => fields.values().any(walk),
         IrType::Fun(params, ret)
         | IrType::SharedFun(params, ret)
-        | IrType::FnOnceChain(params, ret) => {
-            params.iter().any(|t| ir_type_generic_in_decoder(t, tv))
-                || ir_type_generic_in_decoder(ret, tv)
-        }
-        // Nullary leaves + the non-parametric `UiPlain` carry no `Decoder`.
+        | IrType::FnOnceChain(params, ret) => params.iter().any(walk) || walk(ret),
+        // Nullary leaves + the non-parametric `UiPlain` carry no payload.
         IrType::Generic(_)
         | IrType::Int
         | IrType::Float
@@ -4162,6 +4277,28 @@ fn body_move_closure_captures_generic(tv: Symbol, expr: &Expr) -> bool {
     }
 }
 
+/// Bound every tvar the signature carries inside a `Cmd` / `Sub` with `Send + 'static`.
+///
+/// The runtime stores a message producer as a `Send + 'static` boxed closure,
+/// so a generic helper over `Cmd msg` / `Sub msg` needs `msg: Send + 'static`
+/// whatever its arity — a point-free value binding (`keys = Sub.onKey`)
+/// included. See [`ir_type_generic_in_tea_carrier`].
+fn apply_tea_carrier_bounds(
+    type_params: &mut [(Symbol, BoundSet)],
+    params: &[(Symbol, IrType)],
+    ret: &IrType,
+) {
+    for (tv, bounds) in type_params.iter_mut() {
+        if params
+            .iter()
+            .any(|(_, ty)| ir_type_generic_in_tea_carrier(ty, *tv))
+            || ir_type_generic_in_tea_carrier(ret, *tv)
+        {
+            *bounds = bounds.with_send();
+        }
+    }
+}
+
 /// GENERAL type-param-bound propagation for the emitted signature.
 ///
 /// Two families of obligation land here. Most are kernel-on-param
@@ -4207,6 +4344,7 @@ fn apply_kernel_type_param_bounds(
     ret: &IrType,
     body: &Expr,
 ) {
+    apply_tea_carrier_bounds(type_params, params, ret);
     // IpeRow: a `Db.get*(field, &row)` accessor whose ROW arg (index 1)
     // is the tracked param. Wildcard-`any`-only: a genuine named tvar never
     // legitimately flows into a row accessor, and restricting to wildcards keeps
@@ -7399,7 +7537,6 @@ fn eta_shared_rebind(
 /// [`fn_value_read_flags`], so trigger and rewrite cover the same read set).
 /// Shadow discipline mirrors [`count_fn_value_uses`]; enumerated exhaustively
 /// (no `_` catch-all).
-#[allow(clippy::too_many_lines)]
 fn shim_fn_value_reads(
     sym: Symbol,
     param_tys: &[IrType],
@@ -7408,7 +7545,47 @@ fn shim_fn_value_reads(
     builtin_ctors: &[Symbol],
     expr: Expr,
 ) -> DResult<Expr> {
-    shim_fn_value_reads_at(sym, param_tys, ret, eta_pool, builtin_ctors, expr, false)
+    shim_fn_value_reads_tracked(sym, param_tys, ret, eta_pool, builtin_ctors, expr)
+        .map(|(expr, _)| expr)
+}
+
+/// [`shim_fn_value_reads`], also reporting whether any read was rewritten.
+///
+/// `false` means `expr` came back unchanged, so the caller draws no eta block.
+fn shim_fn_value_reads_tracked(
+    sym: Symbol,
+    param_tys: &[IrType],
+    ret: &IrType,
+    eta_pool: &[Symbol],
+    builtin_ctors: &[Symbol],
+    expr: Expr,
+) -> DResult<(Expr, bool)> {
+    let site = ShimSite {
+        sym,
+        param_tys,
+        ret,
+        eta_pool,
+        builtin_ctors,
+        rewrote: Cell::new(false),
+    };
+    let expr = shim_fn_value_reads_at(&site, expr, false)?;
+    Ok((expr, site.rewrote.get()))
+}
+
+/// The fixed inputs of one [`shim_fn_value_reads`] walk, plus whether it rewrote a read.
+struct ShimSite<'a> {
+    /// The re-carriered function binder whose value reads are shimmed.
+    sym: Symbol,
+    /// The binder's parameter types.
+    param_tys: &'a [IrType],
+    /// The binder's return type.
+    ret: &'a IrType,
+    /// The eta names a shim closure binds its parameters to.
+    eta_pool: &'a [Symbol],
+    /// The built-in runtime constructors whose payload keeps the `Box` carrier.
+    builtin_ctors: &'a [Symbol],
+    /// Set once any read of `sym` is rewritten.
+    rewrote: Cell<bool>,
 }
 
 /// Worker for [`shim_fn_value_reads`], threading `in_storage`: `true` while the
@@ -7420,39 +7597,31 @@ fn shim_fn_value_reads(
 /// empty-tail turbofish; every other position (a direct call arg, a return, a
 /// binding value) keeps the `Box` carrier ([`fn_read_shim`]) and resets the flag.
 #[allow(clippy::too_many_lines)]
-fn shim_fn_value_reads_at(
-    sym: Symbol,
-    param_tys: &[IrType],
-    ret: &IrType,
-    eta_pool: &[Symbol],
-    builtin_ctors: &[Symbol],
-    expr: Expr,
-    in_storage: bool,
-) -> DResult<Expr> {
+fn shim_fn_value_reads_at(site: &ShimSite<'_>, expr: Expr, in_storage: bool) -> DResult<Expr> {
+    let sym = site.sym;
     // Most positions are NOT storage-element positions: recursing through them
     // resets the flag. Only the storable-element arms below re-enter with it set.
-    let recurse =
-        |e: Expr| shim_fn_value_reads_at(sym, param_tys, ret, eta_pool, builtin_ctors, e, false);
+    let recurse = |e: Expr| shim_fn_value_reads_at(site, e, false);
     let recurse_all = |items: Vec<Expr>| {
         items
             .into_iter()
-            .map(|e| shim_fn_value_reads_at(sym, param_tys, ret, eta_pool, builtin_ctors, e, false))
+            .map(|e| shim_fn_value_reads_at(site, e, false))
             .collect::<DResult<Vec<Expr>>>()
     };
-    let recurse_storage =
-        |e: Expr| shim_fn_value_reads_at(sym, param_tys, ret, eta_pool, builtin_ctors, e, true);
+    let recurse_storage = |e: Expr| shim_fn_value_reads_at(site, e, true);
     let recurse_all_storage = |items: Vec<Expr>| {
         items
             .into_iter()
-            .map(|e| shim_fn_value_reads_at(sym, param_tys, ret, eta_pool, builtin_ctors, e, true))
+            .map(|e| shim_fn_value_reads_at(site, e, true))
             .collect::<DResult<Vec<Expr>>>()
     };
     match expr {
         Expr::Var(s) | Expr::CloneVar(s) if s == sym => {
+            site.rewrote.set(true);
             if in_storage {
-                fn_read_shim_shared(sym, param_tys, ret, eta_pool)
+                fn_read_shim_shared(sym, site.param_tys, site.ret, site.eta_pool)
             } else {
-                fn_read_shim(sym, param_tys, ret, eta_pool)
+                fn_read_shim(sym, site.param_tys, site.ret, site.eta_pool)
             }
         }
         Expr::Var(_)
@@ -7566,14 +7735,12 @@ fn shim_fn_value_reads_at(
             })
         }
         Expr::Match(m) => Ok(Expr::Match(m.try_map_bodies(
-            |scrutinee| {
-                shim_fn_value_reads(sym, param_tys, ret, eta_pool, builtin_ctors, scrutinee)
-            },
+            |scrutinee| shim_fn_value_reads_at(site, scrutinee, false),
             |pat, body, guard| {
                 let body = if pat_binds_symbol(pat, sym) {
                     body
                 } else {
-                    shim_fn_value_reads(sym, param_tys, ret, eta_pool, builtin_ctors, body)?
+                    shim_fn_value_reads_at(site, body, false)?
                 };
                 Ok((body, guard))
             },
@@ -7608,7 +7775,7 @@ fn shim_fn_value_reads_at(
             variant,
             args,
         } => {
-            let args = if builtin_ctors.contains(&variant) {
+            let args = if site.builtin_ctors.contains(&variant) {
                 recurse_all(args)?
             } else {
                 recurse_all_storage(args)?
@@ -10521,28 +10688,37 @@ fn normalize_record_fun_carriers(ty: IrType) -> IrType {
                 .collect();
             IrType::Record(flipped)
         }
-        // A COLLECTION element position (`List`/`Set` element, `Dict` value) and a
-        // `Tuple` component: a function stored there is carried on `Arc` too, so
-        // flip a bare `Fun` element after recursing. `flip_fun_in_storage_element`
-        // is the O(1) element analogue of the record-field flip above; `recur`
-        // first descends so a nested composite's own fields/elements are flipped
-        // identically. A `Dict` KEY is not a storage-carrier position a function
-        // can legitimately occupy (a function is neither `Ord` nor `Hash`), so its
-        // recursion never surfaces a storable `Fun` — leaving the flip on the
-        // VALUE alone.
-        //
-        // A `Maybe`/`Result` payload is NOT flipped: its runtime enum
-        // (`IpeMaybe`/`IpeResult`) has a fn payload consumed by the `andMap`/`map`
-        // kernels as an owned `FnOnce` (`Box`), so it stays on the `Box` carrier —
-        // recurse into a nested composite under the payload without flipping the
-        // payload arrow itself.
-        IrType::Maybe(e) => IrType::Maybe(Box::new(recur(*e))),
-        IrType::List(e) => IrType::List(Box::new(flip_fun_in_storage_element(recur(*e)))),
-        IrType::Set(e) => IrType::Set(Box::new(flip_fun_in_storage_element(recur(*e)))),
-        IrType::Result(a, b) => IrType::Result(Box::new(recur(*a)), Box::new(recur(*b))),
+        // A builtin constructor slot flips a bare `Fun` to `Arc` exactly when the
+        // kernel registry names it a storage slot ([`ipe_kernels::storage_slot`]:
+        // a `List`/`Set` element, a `Dict` value) — the one fact the scheme-side
+        // mapper derivation also reads, so the emitted carrier and the binding
+        // derivation cannot drift. `recur` first descends so a nested composite's
+        // own fields/elements are flipped identically. A `Dict` key and a
+        // `Maybe`/`Result` payload are not storage slots: the runtime enum
+        // (`IpeMaybe`/`IpeResult`) consumes a fn payload as an owned `FnOnce`
+        // (`Box`), and a function is never a key (neither `Ord` nor `Hash`).
+        IrType::Maybe(e) => IrType::Maybe(Box::new(flip_in_slot(
+            ipe_kernels::BuiltinTag::Maybe,
+            0,
+            recur(*e),
+        ))),
+        IrType::List(e) => IrType::List(Box::new(flip_in_slot(
+            ipe_kernels::BuiltinTag::List,
+            0,
+            recur(*e),
+        ))),
+        IrType::Set(e) => IrType::Set(Box::new(flip_in_slot(
+            ipe_kernels::BuiltinTag::Set,
+            0,
+            recur(*e),
+        ))),
+        IrType::Result(a, b) => IrType::Result(
+            Box::new(flip_in_slot(ipe_kernels::BuiltinTag::Result, 0, recur(*a))),
+            Box::new(flip_in_slot(ipe_kernels::BuiltinTag::Result, 1, recur(*b))),
+        ),
         IrType::Dict(a, b) => IrType::Dict(
-            Box::new(recur(*a)),
-            Box::new(flip_fun_in_storage_element(recur(*b))),
+            Box::new(flip_in_slot(ipe_kernels::BuiltinTag::Dict, 0, recur(*a))),
+            Box::new(flip_in_slot(ipe_kernels::BuiltinTag::Dict, 1, recur(*b))),
         ),
         IrType::Tuple(es) => IrType::Tuple(
             es.into_iter()
@@ -10564,6 +10740,17 @@ fn normalize_record_fun_carriers(ty: IrType) -> IrType {
             IrType::SharedFun(ps.into_iter().map(recur).collect(), Box::new(recur(*r)))
         }
         other => other,
+    }
+}
+
+/// Flip `elem` to the storage carrier ([`flip_fun_in_storage_element`]) iff
+/// argument `slot` of the builtin constructor `tag` is a storage slot
+/// ([`ipe_kernels::storage_slot`]); any other slot keeps its carrier.
+fn flip_in_slot(tag: ipe_kernels::BuiltinTag, slot: usize, elem: IrType) -> IrType {
+    if ipe_kernels::storage_slot(tag, slot) {
+        flip_fun_in_storage_element(elem)
+    } else {
+        elem
     }
 }
 
@@ -10835,10 +11022,6 @@ pub fn max_ctor_arity_per_module(m: &canon::Module) -> usize {
 #[cfg(test)]
 #[must_use]
 pub fn max_live_eta_params(m: &canon::Module) -> usize {
-    /// The widest eta block any single call / fn-typed-let site can draw:
-    /// a residual arrow up to the widest callable arity, matching the eta / cap
-    /// pool floor in [`crate::lower`].
-    const MAX_ETA_PER_SITE: usize = 16;
     // A first-class / partial constructor eta-expands over its remaining payload
     // positions, whose count is uncapped at the language surface — so its per-site
     // charge is the widest ctor arity, not the `MAX_ETA_PER_SITE` floor a
@@ -11671,7 +11854,84 @@ const fn top_col_needs_slice(pat: &canon::Pattern) -> bool {
 
 /// The widest eta block any single call / fn-typed-`let` site can draw — the
 /// residual-arrow floor shared with the eta / cap pool sizing.
-const MAX_ETA_PER_SITE: usize = 16;
+pub const MAX_ETA_PER_SITE: usize = 16;
+
+/// The eta names one call site has drawn, proven within [`MAX_ETA_PER_SITE`].
+///
+/// The pool sizing ([`count_body_pool_sites`]) charges every call site exactly
+/// `MAX_ETA_PER_SITE` names, so a site that drew more would overrun a pool
+/// sized to that charge. [`EtaDemand::charge`] is the only way to grow a
+/// demand and refuses past the ceiling, so every held demand fits its
+/// site's charge and the refusal is a typed IPE-L0155, never a pool overrun.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct EtaDemand(usize);
+
+impl EtaDemand {
+    /// A call site that has drawn no eta names yet.
+    pub const EMPTY: Self = Self(0);
+
+    /// This demand grown by `names`; `None` past [`MAX_ETA_PER_SITE`].
+    #[must_use]
+    pub const fn charge(self, names: usize) -> Option<Self> {
+        match self.0.checked_add(names) {
+            Some(total) if total <= MAX_ETA_PER_SITE => Some(Self(total)),
+            _ => None,
+        }
+    }
+
+    /// The names one mapper wrap ([`Lowerer::wrap_mapper_value`]) at kernel
+    /// position `arg` draws: none when no spine parameter binds a stored
+    /// function element (the mapper is left untouched); otherwise the holder,
+    /// one wrapper parameter per spine slot, and one demote-adapter parameter
+    /// per arrow parameter of each bound function.
+    #[must_use]
+    pub fn mapper_wrap_names(
+        shape: &ipe_kernels::TyShape,
+        arity: u8,
+        arg: usize,
+        spine: &MapperSpine<'_>,
+    ) -> usize {
+        let mut bound = spine
+            .params()
+            .iter()
+            .enumerate()
+            .filter(|(param, ty)| mapper_param_binds_fn_element(shape, arity, arg, *param, ty))
+            .peekable();
+        if bound.peek().is_none() {
+            return 0;
+        }
+        let demote = bound.fold(0_usize, |acc, (_, ty)| {
+            acc.saturating_add(arrow_params(ty).len())
+        });
+        spine
+            .params()
+            .len()
+            .saturating_add(1)
+            .saturating_add(demote)
+    }
+
+    /// The names wrapping every mapper argument of `kernel` draws, given the
+    /// solved type of the argument at each kernel position (`None` when
+    /// unknown, which the wrapper refuses before drawing).
+    #[must_use]
+    pub fn kernel_mapper_names<'t>(
+        kernel: KernelFn,
+        arg_tys: impl IntoIterator<Item = Option<&'t Ty>>,
+    ) -> usize {
+        let Some(shape) = kernel.scheme_shape() else {
+            return 0;
+        };
+        let arity = kernel.def().arity;
+        arg_tys
+            .into_iter()
+            .enumerate()
+            .filter_map(|(arg, ty)| {
+                let spine = MapperSpine::peel(ty?, scheme_mapper_arity(shape, arg))?;
+                Some(Self::mapper_wrap_names(shape, arity, arg, &spine))
+            })
+            .fold(0, usize::saturating_add)
+    }
+}
 
 /// One exhaustive per-expression walk accumulating every body-derived pool
 /// counter at once. Each arm charges its own counters, then folds the
@@ -11834,6 +12094,105 @@ pub fn module_symbol_pool_counts(m: &canon::Module, interner: &Interner) -> Pool
         counts.tuple_elem_rebind_sites += body_counts.tuple_elem_rebind_sites;
     }
     counts
+}
+
+/// The widest per-def total of eta symbols mapper wraps can draw
+/// ([`EtaDemand::kernel_mapper_names`]), for the eta pool to reserve on top of
+/// [`module_symbol_pool_counts`]' per-site charges.
+#[must_use]
+pub fn max_mapper_wrap_eta_demand(m: &canon::Module, types: &SolvedTypes) -> usize {
+    m.defs
+        .iter()
+        .map(|d| {
+            let body = match d {
+                canon::Def::Typed { body, .. } | canon::Def::Untyped { body, .. } => body,
+            };
+            mapper_wrap_eta_demand(body, d.home(), types)
+        })
+        .max()
+        .unwrap_or(0)
+}
+
+/// The eta symbols every mapper wrap in `body` can draw, summed.
+///
+/// A wrap reads its mapper's type from the kernel reference's solved arrow
+/// (a partial or bare reference) or from the argument's own region (a
+/// saturated call); both are charged, so the sum covers whichever the
+/// lowering reads. The walk is an explicit work stack over the canonical
+/// tree, whose size the parser's limits already bound.
+fn mapper_wrap_eta_demand(body: &canon::Expr, home: &[Symbol], types: &SolvedTypes) -> usize {
+    let region = |span: Span| types.regions.get(&(home.to_vec(), span));
+    let mut total: usize = 0;
+    let mut work: Vec<&canon::Expr> = vec![body];
+    while let Some(e) = work.pop() {
+        match &e.value {
+            canon::Expr_::VarKernel {
+                id: Some(kernel), ..
+            } => {
+                if let Some(ty) = region(e.span) {
+                    let at_ref = EtaDemand::kernel_mapper_names(
+                        *kernel,
+                        arrow_params(ty).into_iter().map(Some),
+                    );
+                    total = total.saturating_add(at_ref);
+                }
+            }
+            canon::Expr_::Lambda(_, inner) | canon::Expr_::Access(inner, _) => work.push(inner),
+            canon::Expr_::Call(callee, args) => {
+                if let canon::Expr_::VarKernel {
+                    id: Some(kernel), ..
+                } = &callee.value
+                {
+                    let at_args = EtaDemand::kernel_mapper_names(
+                        *kernel,
+                        args.iter().map(|a| region(a.span)),
+                    );
+                    total = total.saturating_add(at_args);
+                }
+                work.extend(args.iter().rev());
+                work.push(callee);
+            }
+            canon::Expr_::ForeignCall { args, .. }
+            | canon::Expr_::Tuple(args)
+            | canon::Expr_::List(args) => work.extend(args.iter().rev()),
+            canon::Expr_::Binop { lhs, rhs, .. } | canon::Expr_::Cons(lhs, rhs) => {
+                work.push(rhs);
+                work.push(lhs);
+            }
+            canon::Expr_::Case(scrutinee, branches) => {
+                work.extend(branches.iter().rev().map(|b| &b.body));
+                work.push(scrutinee);
+            }
+            canon::Expr_::Let(bindings, inner) => {
+                work.push(inner);
+                work.extend(bindings.iter().rev().map(|b| &b.body));
+            }
+            canon::Expr_::If(branches, else_expr) => {
+                work.push(else_expr);
+                for (cond, then) in branches.iter().rev() {
+                    work.push(then);
+                    work.push(cond);
+                }
+            }
+            canon::Expr_::Record(fields) => work.extend(fields.iter().rev().map(|(_, v)| v)),
+            canon::Expr_::Update(base, fields) => {
+                work.extend(fields.iter().rev().map(|(_, v)| v));
+                work.push(base);
+            }
+            canon::Expr_::VarKernel { id: None, .. }
+            | canon::Expr_::VarLocal(_)
+            | canon::Expr_::VarTopLevel { .. }
+            | canon::Expr_::VarCtor { .. }
+            | canon::Expr_::Int(_)
+            | canon::Expr_::Float(_)
+            | canon::Expr_::Str(_)
+            | canon::Expr_::PathLit(_)
+            | canon::Expr_::CustomElementCtor(_)
+            | canon::Expr_::Char(_)
+            | canon::Expr_::Unit => {}
+        }
+    }
+    total
 }
 
 /// Every pre-minted, collision-free synthetic-symbol pool [`Lowerer::new`]
@@ -14014,6 +14373,41 @@ impl<'a> Lowerer<'a> {
         Ok(Expr::Call {
             callee: Callee::Func(id),
             args: vec![Expr::Str(column), lowered_store],
+            pin: CallPin::None,
+            on_form: OnFormKind::NotForm,
+        })
+    }
+
+    /// Dispatch a `Store.compositePrimaryKey2` / `Store.compositePrimaryKey3`
+    /// call intercepted at lowering.
+    ///
+    /// Every argument but the last is a key-column accessor (`.field`); each
+    /// names a validated column. The names go, in declaration order, as one
+    /// `List String` to the `compositePrimaryKeyNamed` stdlib helper, which
+    /// refuses a duplicate or conflicting key.
+    fn lower_store_composite_pk(&self, args: &[canon::Expr]) -> DResult<Expr> {
+        let Some((store, accessors)) = args.split_last() else {
+            return Err(bug(
+                "ipe_lower::lower_store_composite_pk",
+                "Store composite-key kernel with no arguments",
+            ));
+        };
+        let items = accessors
+            .iter()
+            .map(|acc| {
+                self.accessor_column(acc)
+                    .map(|(column, _)| Expr::Str(column))
+            })
+            .collect::<DResult<Vec<_>>>()?;
+        let lowered_store = self.lower_expr(store)?;
+        let columns = Expr::List {
+            elem: IrType::Str,
+            items,
+        };
+        let id = self.store_named_func_id("compositePrimaryKeyNamed")?;
+        Ok(Expr::Call {
+            callee: Callee::Func(id),
+            args: vec![columns, lowered_store],
             pin: CallPin::None,
             on_form: OnFormKind::NotForm,
         })
@@ -16545,7 +16939,8 @@ impl<'a> Lowerer<'a> {
                 // take the identical `params: []` path the backend already
                 // emits for zero-arg fn calls — no shared mutable cell, no
                 // memoization to break.
-                let type_params = compute_type_params(quantified_syms, var_bounds, &[], &ret);
+                let mut type_params = compute_type_params(quantified_syms, var_bounds, &[], &ret);
+                apply_tea_carrier_bounds(&mut type_params, &[], &ret);
                 Ok(DefParts {
                     type_params,
                     wildcard_any_syms: BTreeSet::new(),
@@ -19894,7 +20289,7 @@ impl<'a> Lowerer<'a> {
 
     /// Element-capability soundness gate: reject a `List`/`Dict`/`Set` kernel
     /// that cannot represent a function-carrying element when any of its
-    /// collection arguments carries one.
+    /// collection parameters carries one.
     ///
     /// A `List` element / `Dict`-value function is a storable value on the
     /// `Clone` `Arc<dyn Fn>` carrier, so the region gate admits it — but that
@@ -19903,15 +20298,22 @@ impl<'a> Lowerer<'a> {
     /// So a kernel that compares/orders its element, OR a higher-order kernel
     /// whose mapper frontier is still open, would emit Rust `cargo` rejects. The
     /// registry's [`StdlibKernel::element_capability`] records which kernels
-    /// forbid a function element and why (equality, ordering, or open frontier) —
-    /// an explicit exhaustive SSOT fact, coherence-tested; this gate consults it
-    /// and fails closed with IPE-L0134 at `ipe` time. A kernel whose element
-    /// capability is `CloneOk` (pure structural, or a frontier-closed
-    /// map/fold/filter) is sound over a function element and left through. A
-    /// non-collection kernel carries no element capability and is a no-op here.
+    /// forbid a function element and why (equality and ordering stated, the
+    /// open mapper frontier derived from the scheme and build-time checked);
+    /// this gate consults it and fails closed with IPE-L0134 at `ipe` time. A
+    /// kernel whose element capability is `CloneOk` (pure structural, or a
+    /// frontier-closed map/fold/filter) is sound over a function element and
+    /// left through. A non-collection kernel carries no element capability and
+    /// is a no-op here.
+    ///
+    /// Every parameter of the callee's solved arrow (`callee_span`) is
+    /// inspected, not only the supplied `args`: a partial application
+    /// (`Dict.update k g`) or a point-free reference supplies the collection
+    /// later, so reading the arguments alone would let it through open.
     fn reject_fn_element_for_capability_kernel(
         &self,
         resolved: &Callee,
+        callee_span: Span,
         args: &[canon::Expr],
     ) -> DResult<()> {
         let Callee::Kernel(k) = resolved else {
@@ -19933,6 +20335,13 @@ impl<'a> Lowerer<'a> {
             {
                 return Err(unsupported(arg.span, Feature::FunctionElementEquality));
             }
+        }
+        if let Some(fn_ty) = self.region_ty(callee_span)
+            && arrow_params(fn_ty)
+                .into_iter()
+                .any(|param| collection_storable_element_carries_function(self.interner, param))
+        {
+            return Err(unsupported(callee_span, Feature::FunctionElementEquality));
         }
         Ok(())
     }
@@ -20720,6 +21129,9 @@ impl<'a> Lowerer<'a> {
                 // [`reject_point_free_store_kernel`].
                 reject_point_free_store_kernel(&callee, e.span)?;
                 reject_unsaturated_handler_kernel(&callee, e.span)?;
+                // A point-free collection kernel receives its collection later,
+                // so the element-capability gate reads the reference's arrow.
+                self.reject_fn_element_for_capability_kernel(&callee, e.span, &[])?;
                 // Fail-closed SECURITY gate: an un-applied `Secret.fromString`
                 // reference (point-free, let-bound, passed as a value) routes
                 // around the committed-literal seal gate (IPE-L0150), which reads
@@ -20728,6 +21140,30 @@ impl<'a> Lowerer<'a> {
                 // whose argument the literal gate sees. See
                 // [`reject_unapplied_secret_from_string`].
                 reject_unapplied_secret_from_string(&callee, e.span)?;
+                // A kernel whose emit arm carries a bridge or a guard is emitted
+                // only as a saturated call: eta-expand the point-free reference
+                // (`List.map Sub.onKey hs`, `let on = Sub.onKey`) into
+                // `\x -> kernel x`, so that arm fires on every path. See
+                // `StdlibKernel::requires_saturated_emit`.
+                //
+                // A higher-order kernel whose mapper binds a stored FUNCTION
+                // element at this instance takes the same eta route, so its
+                // mapper eta parameter reaches the carrier choke point
+                // ([`Self::retype_collection_element_param`]) exactly as a
+                // saturated call's mapper does.
+                if let Callee::Kernel(k) = &callee
+                    && (k.requires_saturated_emit() || kernel_ref_binds_fn_element(*k, ty))
+                {
+                    let arity = self.callee_arity(&callee)?;
+                    return self.eta_expand_partial(
+                        e,
+                        callee,
+                        Vec::new(),
+                        arity,
+                        EtaDemand::EMPTY,
+                        e.span,
+                    );
+                }
                 // For kernel callees use the JSON-aware type resolver so that
                 // a `Value = any = Ty::Var` in the argument / return position
                 // of a JSON kernel (e.g. `JsonEnc.string : String -> Value`)
@@ -20905,83 +21341,48 @@ impl<'a> Lowerer<'a> {
         )
     }
 
-    /// T3 (Tier 1 backstop — see [`Self::lower_callee`]'s doc comment):
-    /// `Maybe.andMap` / `Result.andMap` resolved to a CURRIED (arity ≥ 2)
-    /// payload function.
+    /// Refuse a higher-order kernel reference whose solved callback final result is a function.
     ///
-    /// `andMap : Maybe (a -> b) -> Maybe a -> Maybe b` (`Result e (a -> b) ->
-    /// Result e a -> Result e b`) is arity-1 per application: it fully
-    /// applies the wrapped function to exactly one argument. When the
-    /// wrapped function is itself curried (`\a b -> …`, IR-flattened to one
-    /// multi-parameter `Fun`), `a` instantiates to the first parameter and
-    /// `b` to the REMAINING curried tail — itself a `Ty::Fun`. This
-    /// reference's own solved type then has `Maybe b` / `Result e b` as its
-    /// tail with `b` a function: the applicative chain has not reached a
-    /// fully-applied value, and finishing it needs a nested-closure
-    /// (`curryN`-style) lowering this Stage does not implement (Stage 2,
-    /// tracked separately — see
-    /// `docs/adr/0002-codegen-soundness-and-the-seal.md` §3). Fail closed
-    /// here rather than let an unfinished chain reach a use site with no
-    /// sound lowering.
+    /// Every runtime higher-order kernel takes an exact-arity closure, while
+    /// the IR flattens a curried callback into one multi-parameter `Fun`, so a
+    /// callback whose final result is another arrow (`List.map add`, a
+    /// curried `andMap` payload, a function-valued fold accumulator) has no
+    /// sound lowering. [`KernelFn::hof_result_vars`] names the scheme
+    /// variables each callback returns; each is aligned with the reference's
+    /// own solved type ([`scheme_var_instance`]) and a `Ty::Fun` there fails
+    /// closed with IPE-L0154.
     ///
-    /// `andMap`'s OWN solved type at `callee`'s span
-    /// (`self.region_ty(callee.span)`) is already the FULLY unified
-    /// signature for every use, because HM solving is global across the
-    /// whole binding: a `let`-bound partial application's LATER use still
-    /// constrains the same type variables through the let-binding's own
-    /// type, so `Result.andMap`'s reference type already reflects
-    /// `b = Int -> Int -> Int` by the time lowering runs (solving completes
-    /// before lowering starts). So this check does not need to look at any
-    /// ARGUMENT EXPRESSIONS, nor at how this reference is being used — it
-    /// peels `andMap`'s fixed arity (2) off ITS OWN reference type and
-    /// inspects the trailing payload position of the result (`b` in
-    /// `Maybe b` / `Result e b`) for a residual `Ty::Fun`, catching the
-    /// curried-payload hazard under every syntactic spelling and every
-    /// aliasing hop between the kernel reference and its eventual use.
-    ///
-    /// Only fires for the two `andMap` kernels; every other resolved callee
-    /// is untouched (`Ok(())` fast path). Kept as defense-in-depth behind the
-    /// primary Tier-2 type-checker obligation (see [`Self::lower_callee`]'s
-    /// doc comment) — a bug in the Tier-2 wiring should not silently reopen
-    /// this hazard.
-    fn reject_curried_andmap_payload(
+    /// The reference's solved type is the fully unified signature for every
+    /// use, since solving completes before lowering, so no argument or use
+    /// site needs inspecting: every syntactic spelling and aliasing hop is
+    /// covered. The type checker's `hof_kernel_result` obligation (IPE-T0014)
+    /// is the primary gate; this is its independent backstop. A reference
+    /// with no recorded solved type, or whose solved type does not align with
+    /// the scheme at a classified variable, carries no proof of safety and is
+    /// refused too.
+    fn reject_hof_callback_function_result(
         &self,
         resolved: &Callee,
         callee: &canon::Expr,
     ) -> DResult<()> {
-        if !matches!(
-            resolved,
-            Callee::Kernel(KernelFn::MaybeAndMap | KernelFn::ResultAndMap)
-        ) {
+        let Callee::Kernel(kernel) = resolved else {
+            return Ok(());
+        };
+        let results = kernel.hof_result_vars();
+        if results.is_empty() {
             return Ok(());
         }
-        // `andMap`'s own reference type: `Con a -> Con (a -> b) -> Con b`
-        // (Maybe/Result-headed). Peel exactly its fixed arity (2 arrows) to
-        // reach the final `Con b` return — independent of how many arguments
-        // any particular AST node happens to supply at this reference.
-        let Some(ty) = self.region_ty(callee.span) else {
-            return Ok(());
+        let (Some(shape), Some(solved)) = (kernel.scheme_shape(), self.region_ty(callee.span))
+        else {
+            return Err(unsupported(callee.span, Feature::HofCallbackFunctionResult));
         };
-        let Ty::Fun(_, after_first_arrow) = ty else {
-            return Ok(());
-        };
-        let Ty::Fun(_, call_ret) = after_first_arrow.as_ref() else {
-            return Ok(());
-        };
-        // `call_ret` is `Maybe b` / `Result e b` — the payload position is
-        // the LAST type argument of that `Con`. The curried signal is
-        // whether `b` is ITSELF an arrow (arity ≥ 2 flattened into one
-        // `IrType::Fun`, which `maybe_and_map`/`result_and_map`'s
-        // `F: FnOnce(A) -> B` cannot represent when `B` is a function — no
-        // `Box<dyn Fn(A0,A1)->R>` implements `FnOnce(A0) -> (A1 -> R)`).
-        let Ty::Con { args: ret_args, .. } = call_ret.as_ref() else {
-            return Ok(());
-        };
-        let Some(b) = ret_args.last() else {
-            return Ok(());
-        };
-        if matches!(b, Ty::Fun(_, _)) {
-            return Err(unsupported(callee.span, Feature::CtorPayloadFunction));
+        if results.vars().any(|var| {
+            matches!(
+                scheme_var_instance(shape, solved, var),
+                None | Some(Ty::Fun(..))
+            )
+        }) {
+            return Err(unsupported(callee.span, Feature::HofCallbackFunctionResult));
         }
         Ok(())
     }
@@ -21378,12 +21779,11 @@ impl<'a> Lowerer<'a> {
                 // ── Tui.tea / Cli.tea cfg literal (L0107 exemption) ──
                 //
                 // Same pattern as `Web.tea`: intercept the single cfg-record arg
-                // BEFORE the uniform `lower_expr` path so function-typed fields
-                // (init/update/view/subscriptions/onKey) do not trip IPE-L0107.
-                // Cli.tea — 5-field cfg (init/update/view/
-                //   subscriptions/onLine), all function-typed; without this arm
-                //   every real `Cli.tea` call would trip IPE-L0107 and the
-                //   emit_console path could never fire.
+                // BEFORE the uniform `lower_expr` path so the function-typed
+                // fields (init/update/view/subscriptions) do not trip IPE-L0107;
+                // without this arm every real `Tui.tea` / `Cli.tea` call would
+                // trip IPE-L0107 and the emit_tui / emit_console path could
+                // never fire.
                 // A non-literal cfg (let-bound, piped, etc.) is rejected here with
                 // IPE-L0119 at the argument span — fail-closed, never an ICE.
                 Callee::Kernel(
@@ -21663,6 +22063,13 @@ impl<'a> Lowerer<'a> {
                     | KernelFn::StoreTouchOnUpdate,
                 ) if args.len() == 2 => {
                     return Ok(Intercepted::Done(self.lower_store_spec(&peek, args)?));
+                }
+                // Composite primary keys — one accessor per key column + store.
+                Callee::Kernel(KernelFn::StoreCompositePrimaryKey2) if args.len() == 3 => {
+                    return Ok(Intercepted::Done(self.lower_store_composite_pk(args)?));
+                }
+                Callee::Kernel(KernelFn::StoreCompositePrimaryKey3) if args.len() == 4 => {
+                    return Ok(Intercepted::Done(self.lower_store_composite_pk(args)?));
                 }
                 // `defaultText` / `defaultInt` — arity 3 (accessor + value + store).
                 Callee::Kernel(KernelFn::StoreDefaultText | KernelFn::StoreDefaultInt)
@@ -22202,64 +22609,291 @@ impl<'a> Lowerer<'a> {
         }
     }
 
-    /// Re-type a `List` higher-order kernel's mapper closure ELEMENT parameter
-    /// from the direct `Fun` carrier ([`IrType::Fun`], `Box`) to the storage
-    /// `SharedFun` carrier ([`IrType::SharedFun`], `Arc`) when the collection it
-    /// operates over is a stored `List` of functions.
+    /// Align every mapper argument of a higher-order kernel with the carrier of
+    /// the STORED element it binds: the single choke point every route by which
+    /// a kernel receives a mapper passes through — a saturated, partial, or
+    /// over-applied call ([`Self::lower_call_uniform`], before the arity split)
+    /// and the eta parameters of a point-free reference
+    /// ([`Self::eta_expand_partial`]).
     ///
-    /// A `List (Int -> Int)` element is carried on `Arc<dyn Fn>` (the
-    /// element-carrier flip). When such a list flows into `List.map`/`foldl`/… the
-    /// runtime kernel monomorphises its element type `T0` to `Arc<dyn Fn>`, so the
-    /// mapper closure's element parameter must be `Arc<dyn Fn>` too — but
-    /// [`Self::lower_lambda`] stamps a function-typed parameter as the direct
-    /// `Fun` (`Box`) carrier, which is the `Arc`-vs-`Box` frontier
-    /// (design §8 risk 1). Aligning the closure's element parameter carrier with
-    /// the list's element carrier here closes the frontier at the producer's own
-    /// mapper, so no read-out adapter is needed.
+    /// A function stored in a `List` element, a `Dict` value, a tuple
+    /// component, or a record field is carried on `Arc<dyn Fn>`. When such a
+    /// collection flows into `List.map`/`Dict.foldl`/`List.map2`/… the runtime
+    /// kernel monomorphises its element type to `Arc<dyn Fn>`, so the mapper's
+    /// parameter fed that element must accept `Arc<dyn Fn>` too, while a lowered
+    /// function-typed parameter or value sits on the direct `Fun` (`Box`)
+    /// carrier: the `Arc`-vs-`Box` frontier (`E0277`/`E0308`).
     ///
-    /// The mapper is the FIRST argument and the list is the LAST; the element
-    /// parameter is closure-param index 0 for the whole family except
-    /// `indexedMap`, whose element is param index 1 (the leading `Int` index is
-    /// the first). Only fires when the list arg's solved element is a function;
-    /// otherwise a no-op, so a non-function-element list is byte-identical.
-    fn retype_collection_element_param(
+    /// Which parameter binds which element is derived from the kernel's scheme
+    /// alone ([`ipe_kernels::mapper_param_binds_stored_element`]), so every
+    /// schemed higher-order kernel is covered with no list to drift. `first` is
+    /// the kernel position of `lowered_args[0]`; `arg_ty` yields the solved type
+    /// of the argument at a kernel position.
+    ///
+    /// - An inline lambda has its bound function-typed parameters re-typed in
+    ///   place ([`Self::flip_mapper_lambda_params`]).
+    /// - Any other mapper expression (a top-level function, a local binding, an
+    ///   eta parameter, a computed function) is eta-wrapped
+    ///   ([`Self::wrap_mapper_value`]): the wrapper takes the element on `Arc`
+    ///   and demotes it to `Box` before calling the original.
+    ///
+    /// A mapper whose solved type is unavailable, or carries fewer arrows than
+    /// the scheme applies it to, fails closed with IPE-L0134 where a bound
+    /// parameter needs it: only a peeled [`MapperSpine`] reaches the wrapper. A
+    /// mapper with no function-typed bound parameter is left untouched
+    /// (byte-identical).
+    ///
+    /// `site` is the eta demand the enclosing call site has already drawn;
+    /// every block drawn here is charged on top of it ([`EtaDemand`]) and the
+    /// grown demand returned, and a site past [`MAX_ETA_PER_SITE`] fails
+    /// closed with IPE-L0155.
+    fn retype_collection_element_param<'t>(
         &self,
         resolved: &Callee,
-        canon_args: &[canon::Expr],
+        first: usize,
         lowered_args: &mut [Expr],
-    ) {
-        let elem_param_index = match resolved {
-            Callee::Kernel(
-                KernelFn::ListMap
-                | KernelFn::ListFilter
-                | KernelFn::ListFoldl
-                | KernelFn::ListFoldr
-                | KernelFn::ListConcatMap
-                | KernelFn::ListFilterMap
-                | KernelFn::ListAny
-                | KernelFn::ListAll
-                | KernelFn::ListFind,
-            ) => 0,
-            Callee::Kernel(KernelFn::ListIndexedMap) => 1,
-            _ => return,
+        arg_ty: impl Fn(usize) -> Option<&'t Ty>,
+        site: EtaDemand,
+        span: Span,
+    ) -> DResult<EtaDemand> {
+        let Callee::Kernel(kernel) = resolved else {
+            return Ok(site);
         };
-        // The list is the last argument; consult its solved element carrier.
-        let Some(list_arg) = canon_args.last() else {
-            return;
+        let Some(shape) = kernel.scheme_shape() else {
+            return Ok(site);
         };
-        let list_stores_fn = self
-            .region_ty(list_arg.span)
-            .is_some_and(|ty| collection_storable_element_carries_function(self.interner, ty));
-        if !list_stores_fn {
-            return;
+        let arity = kernel.def().arity;
+        let mut site = site;
+        for (offset, lowered) in lowered_args.iter_mut().enumerate() {
+            let arg = first.saturating_add(offset);
+            if let Expr::Lambda { params, body, .. } | Expr::SharedLambda { params, body, .. } =
+                lowered
+            {
+                site =
+                    self.flip_mapper_lambda_params(shape, arity, arg, params, body, site, span)?;
+                continue;
+            }
+            let binding = scheme_mapper_arity(shape, arg);
+            if !(0..binding).any(|param| {
+                ipe_kernels::mapper_param_binds_stored_element(shape, arity, arg, param)
+            }) {
+                continue;
+            }
+            let Some(spine) = arg_ty(arg).and_then(|ty| MapperSpine::peel(ty, binding)) else {
+                return Err(unsupported(span, Feature::FunctionElementEquality));
+            };
+            site = self.wrap_mapper_value(shape, arity, arg, &spine, lowered, site, span)?;
         }
-        if let Some(Expr::Lambda { params, .. } | Expr::SharedLambda { params, .. }) =
-            lowered_args.first_mut()
-            && let Some((_, ty)) = params.get_mut(elem_param_index)
-            && let IrType::Fun(fn_params, ret) = ty
-        {
-            *ty = IrType::SharedFun(fn_params.clone(), ret.clone());
+        Ok(site)
+    }
+
+    /// Flip each function-typed parameter of the lambda mapper at kernel
+    /// position `arg` that binds a stored element from the `Box` to the `Arc`
+    /// carrier.
+    ///
+    /// A parameter whose lowered type is not a bare function keeps its
+    /// carrier: a composite (`Maybe (a -> b)`, a tuple, a record) is already
+    /// normalized by its own type, and a non-function element never flips.
+    ///
+    /// The mapper body was lowered while the parameter was still on the `Box`
+    /// carrier, so the flip also reconciles the body's reads with the new
+    /// `Arc` carrier — the same discipline [`Self::apply_param_move_ownership`]
+    /// applies to an `Arc`-rebound param: a direct callee read stays (an `Arc`
+    /// is callable by auto-deref), every other read re-dispatches through a fresh
+    /// closure on the carrier its position expects ([`shim_fn_value_reads`]). An
+    /// `Arc<dyn Fn>` does not itself implement `Fn`, so without the shim a value
+    /// read flowing into a generic `F: Fn` / `impl Fn` parameter (a point-free
+    /// `List.map Sub.onLine [..]`, a `\p -> List.filter p xs`) is
+    /// `ipe`-accept-then-`cargo`-fail (`E0277`). A body with no non-callee read
+    /// is left untouched (byte-identical, no eta draw).
+    ///
+    /// Each shim block is charged to `site` only when the body needs it, and
+    /// the grown demand is returned; a needed block past [`MAX_ETA_PER_SITE`]
+    /// fails closed with IPE-L0155.
+    #[allow(clippy::too_many_arguments)] // the site demand and span thread through the one choke point
+    fn flip_mapper_lambda_params(
+        &self,
+        shape: &ipe_kernels::TyShape,
+        arity: u8,
+        arg: usize,
+        params: &mut [(Symbol, IrType)],
+        body: &mut Expr,
+        site: EtaDemand,
+        span: Span,
+    ) -> DResult<EtaDemand> {
+        let mut site = site;
+        for (param, (sym, ty)) in params.iter_mut().enumerate() {
+            let IrType::Fun(fn_params, ret) = ty else {
+                continue;
+            };
+            if !ipe_kernels::mapper_param_binds_stored_element(shape, arity, arg, param) {
+                continue;
+            }
+            let (sym, fn_params, ret) = (*sym, fn_params.clone(), (**ret).clone());
+            *ty = IrType::SharedFun(fn_params.clone(), Box::new(ret.clone()));
+            let original = std::mem::replace(body, Expr::Unit);
+            let Some(charged) = site.charge(fn_params.len()) else {
+                // Past the ceiling the walk gets no eta names: its only failure
+                // is a shim drawing one, so any rewrite (or failure) means the
+                // block is needed and refused; an unrewritten body draws none.
+                let (unchanged, rewrote) = shim_fn_value_reads_tracked(
+                    sym,
+                    &fn_params,
+                    &ret,
+                    &[],
+                    &self.builtin_runtime_ctors(),
+                    original,
+                )
+                .map_err(|_| unsupported(span, Feature::EtaSiteLimit))?;
+                if rewrote {
+                    return Err(unsupported(span, Feature::EtaSiteLimit));
+                }
+                *body = unchanged;
+                continue;
+            };
+            let (shimmed, rewrote) = shim_fn_value_reads_tracked(
+                sym,
+                &fn_params,
+                &ret,
+                self.eta_slice(),
+                &self.builtin_runtime_ctors(),
+                original,
+            )?;
+            *body = if rewrote {
+                let mut remaining = count_var_uses(sym, &shimmed);
+                let disciplined = rewrite_multiuse_clones(sym, &mut remaining, shimmed);
+                // Reserve the shim's eta block so a sibling site does not reuse it.
+                self.advance_eta(fn_params.len());
+                site = charged;
+                force_shared_capture_clones(sym, disciplined)
+            } else {
+                shimmed
+            };
         }
+        Ok(site)
+    }
+
+    /// Eta-wrap the non-lambda mapper `lowered` (solved type split as `spine`) at
+    /// kernel position `arg` so each function-typed parameter that binds a
+    /// stored element receives it on the `Arc` carrier.
+    ///
+    /// ```text
+    /// List.map2 applyTo fs xs
+    /// ─────────────────────────────────────────────────────────────────────
+    /// list_map2(move |eta_1: Arc<dyn Fn(i64) -> i64>, eta_2: i64| -> i64 {
+    ///     (apply_to)(Box::new(move |eta_3: i64| -> i64 { (eta_1)(eta_3) }), eta_2)
+    /// }, fs, xs)
+    /// ```
+    ///
+    /// The wrapper's parameters follow the scheme mapper's spine, typed from
+    /// the solved spine: a bound function-typed parameter is re-carried to
+    /// [`IrType::SharedFun`] and demoted back to `Box` at the call
+    /// ([`Self::demote_shared_fn_read`]); every other parameter is forwarded
+    /// as-is. A top-level function reference is called in place; any other
+    /// mapper (a local, an eta parameter, a computed function) is bound once by
+    /// a `let` outside the wrapper and moved in, so its ownership (a move or a
+    /// clone) is decided where it stood and the wrapper stays re-callable
+    /// (`Fn`).
+    ///
+    /// The wrapper draws one holder name, one name per spine parameter, and
+    /// one per argument of each demoted parameter. That whole demand is
+    /// charged to `site` before the first draw and the grown demand returned;
+    /// a demand past [`MAX_ETA_PER_SITE`] fails closed with IPE-L0155. A
+    /// parameter type that cannot be lowered fails closed with IPE-L0134.
+    #[allow(clippy::too_many_arguments)] // the site demand and span thread through the one choke point
+    fn wrap_mapper_value(
+        &self,
+        shape: &ipe_kernels::TyShape,
+        arity: u8,
+        arg: usize,
+        spine: &MapperSpine<'_>,
+        lowered: &mut Expr,
+        site: EtaDemand,
+        span: Span,
+    ) -> DResult<EtaDemand> {
+        let refuse = || unsupported(span, Feature::FunctionElementEquality);
+        let names = EtaDemand::mapper_wrap_names(shape, arity, arg, spine);
+        if names == 0 {
+            return Ok(site);
+        }
+        let bound =
+            |param: usize, ty: &Ty| mapper_param_binds_fn_element(shape, arity, arg, param, ty);
+        let ret = self
+            .ir_type_from_ty(spine.ret(), span)
+            .map_err(|_| refuse())?;
+        // Every parameter's carrier, decided before any eta name is drawn so the
+        // whole demand is charged up front.
+        let mut carriers: Vec<(IrType, Option<IrArrow>)> = Vec::with_capacity(spine.params().len());
+        for (param, ty) in spine.params().iter().enumerate() {
+            let ir = self.ir_type_from_ty(ty, span).map_err(|_| refuse())?;
+            if bound(param, ty) {
+                // `bound` holds only for a `Ty::Fun`, which lowers to `IrType::Fun` or errors.
+                let IrType::Fun(fn_params, fn_ret) = ir else {
+                    return Err(bug(
+                        "ipe_lower::wrap_mapper_value",
+                        "a bound function-typed mapper parameter lowered off the `Fun` carrier",
+                    ));
+                };
+                carriers.push((
+                    IrType::SharedFun(fn_params.clone(), fn_ret.clone()),
+                    Some((fn_params, *fn_ret)),
+                ));
+            } else {
+                carriers.push((ir, None));
+            }
+        }
+        let block = spine.params().len().saturating_add(1);
+        let site = site
+            .charge(names)
+            .ok_or_else(|| unsupported(span, Feature::EtaSiteLimit))?;
+        let drawn_from = self.eta_base.get();
+        let holder = self.eta_sym(0)?;
+        let mut wrapper_params: Vec<(Symbol, IrType)> = Vec::with_capacity(carriers.len());
+        let mut demote: Vec<Option<IrArrow>> = Vec::with_capacity(carriers.len());
+        for (param, (carrier, adapter)) in carriers.into_iter().enumerate() {
+            wrapper_params.push((self.eta_sym(param.saturating_add(1))?, carrier));
+            demote.push(adapter);
+        }
+        // Reserve the holder and the wrapper's params before the demote
+        // adapters below draw their own eta blocks.
+        self.advance_eta(block);
+        let mut call_args: Vec<Expr> = Vec::with_capacity(wrapper_params.len());
+        for ((sym, _), carrier) in wrapper_params.iter().zip(demote) {
+            call_args.push(match carrier {
+                Some((fn_params, fn_ret)) => {
+                    self.demote_shared_fn_read(Expr::Var(*sym), &fn_params, &fn_ret)?
+                }
+                None => Expr::Var(*sym),
+            });
+        }
+        if self.eta_base.get().saturating_sub(drawn_from) != names {
+            return Err(bug(
+                "ipe_lower::wrap_mapper_value",
+                "mapper wrap drew a different eta count than its budgeted EtaDemand",
+            ));
+        }
+        let original = std::mem::replace(lowered, Expr::Unit);
+        let (callee, held) = match original {
+            leaf @ Expr::FuncValue { .. } => (leaf, None),
+            other => (Expr::Var(holder), Some(other)),
+        };
+        let wrapper = Expr::Lambda {
+            params: wrapper_params,
+            ret,
+            body: Box::new(Expr::Apply {
+                func: Box::new(callee),
+                args: call_args,
+            }),
+        };
+        *lowered = match held {
+            Some(value) => Expr::Let {
+                name: holder,
+                value: Box::new(value),
+                body: Box::new(wrapper),
+            },
+            None => wrapper,
+        };
+        Ok(site)
     }
 
     /// Re-carrier the function-typed VALUE argument of a `Dict` constructor
@@ -22422,9 +23056,22 @@ impl<'a> Lowerer<'a> {
                 // function-carrying element — an equality/ordering compare or an
                 // open mapper frontier (fail-closed IPE-L0134 at `ipe` time; see
                 // the method doc).
-                self.reject_fn_element_for_capability_kernel(&resolved, args)?;
+                self.reject_fn_element_for_capability_kernel(&resolved, callee.span, args)?;
                 self.reject_nonclone_handler_capture(&resolved, args)?;
                 let arity = self.callee_arity(&resolved)?;
+                // Close the `Arc`-vs-`Box` frontier at a higher-order kernel's
+                // mapper over stored functions, once, ahead of the arity split,
+                // so the saturated, partial, and over-applied shapes share one
+                // choke point (see method doc).
+                let mut lowered_args = lowered_args;
+                let site = self.retype_collection_element_param(
+                    &resolved,
+                    0,
+                    &mut lowered_args,
+                    |arg| args.get(arg).and_then(|a| self.region_ty(a.span)),
+                    EtaDemand::EMPTY,
+                    call_span,
+                )?;
                 match args.len().cmp(&arity) {
                     std::cmp::Ordering::Equal => {
                         // pin a polymorphic kernel's genuinely-free result
@@ -22444,9 +23091,6 @@ impl<'a> Lowerer<'a> {
                         let mut lowered_args = lowered_args;
                         Self::retype_result_map_error_handler(&resolved, &mut lowered_args);
                         Self::retype_decoder_payload_mapper(&resolved, &mut lowered_args);
-                        // Close the `Arc`-vs-`Box` frontier at a `List` HOF
-                        // mapper over a stored list of functions (see method doc).
-                        self.retype_collection_element_param(&resolved, args, &mut lowered_args);
                         // Close the same frontier at a `Dict.singleton`/`insert`
                         // whose function VALUE argument is stored on the `Arc`
                         // carrier (see method doc).
@@ -22493,9 +23137,14 @@ impl<'a> Lowerer<'a> {
                             on_form,
                         })
                     }
-                    std::cmp::Ordering::Less => {
-                        self.eta_expand_partial(callee, resolved, lowered_args, arity, call_span)
-                    }
+                    std::cmp::Ordering::Less => self.eta_expand_partial(
+                        callee,
+                        resolved,
+                        lowered_args,
+                        arity,
+                        site,
+                        call_span,
+                    ),
                     std::cmp::Ordering::Greater => {
                         self.saturate_over(callee, resolved, lowered_args, arity, call_span)
                     }
@@ -23033,6 +23682,100 @@ impl<'a> Lowerer<'a> {
         })
     }
 
+    /// The parameter types and return type of the `arity`-arrow callee at `span`.
+    ///
+    /// Reads the solved region type and peels exactly `arity` arrows. A missing
+    /// region type or a short arrow is unreachable for well-typed input and
+    /// surfaces as a [`Diagnostic::CompilerBug`] naming `site` with the matching
+    /// `(no_type, short_arrow)` detail.
+    fn callee_arrow(
+        &self,
+        span: Span,
+        arity: usize,
+        site: &'static str,
+        (no_type, short_arrow): (&'static str, &'static str),
+    ) -> DResult<(Vec<&Ty>, &Ty)> {
+        let fn_ty = self.region_ty(span).ok_or_else(|| bug(site, no_type))?;
+        peel_arrow_arity(fn_ty, arity, site, short_arrow)
+    }
+
+    /// The clone class of each of the first `supplied` argument slots of a
+    /// partially-applied callee, or `None` for a genuinely indeterminate slot.
+    fn supplied_slot_classes(
+        &self,
+        arg_tys: &[&Ty],
+        supplied: usize,
+        call_span: Span,
+    ) -> Vec<Option<CloneClass>> {
+        arg_tys
+            .iter()
+            .take(supplied)
+            .map(|slot_ty| {
+                match self.ir_type_from_ty(slot_ty, call_span) {
+                    // A bare `Generic` slot clones, not moves: every emitted
+                    // generic carries an unconditional `T: Clone`
+                    // (`render_fn_generics`), so a supplied generic arg captured by
+                    // the re-callable `Fn` residual clones per call. SSOT with
+                    // `param_is_multiuse_clonable` / `classify_capture_clone`;
+                    // without it a threaded generic is moved out of the `Fn` env
+                    // (E0507).
+                    Ok(IrType::Generic(_)) => Some(CloneClass::CloneOk),
+                    Ok(ir_ty) => Some(clone_class(self.clone_env(), &ir_ty)),
+                    // T7b: ir_type_from_ty failed, but the slot's top-level type
+                    // IS a function arrow.  The failure is from a nested Ty::Var
+                    // (e.g. the polymorphic result type `a` in `Task Error a`).
+                    // A Fun slot is always NonClone — forwarding is safe.
+                    Err(_) if matches!(slot_ty, Ty::Fun(_, _)) => Some(CloneClass::NonClone),
+                    // Genuinely indeterminate slot — conservative None.
+                    Err(_) => None,
+                }
+            })
+            .collect()
+    }
+
+    /// The fresh binder and IR type of each missing argument slot
+    /// `supplied..arity` of a partially-applied callee.
+    fn eta_missing_params(
+        &self,
+        resolved: &Callee,
+        arg_tys: &[&Ty],
+        supplied: usize,
+        arity: usize,
+        call_span: Span,
+    ) -> DResult<Vec<(Symbol, IrType)>> {
+        let mut params: Vec<(Symbol, IrType)> = Vec::with_capacity(arity - supplied);
+        for (offset, arg_ty) in arg_tys.get(supplied..).unwrap_or(&[]).iter().enumerate() {
+            // Draw slot `offset` from the current position of the per-def monotonic
+            // eta cursor; `advance_eta` below reserves the whole block so a
+            // subsequently-lowered nested eta-lambda never reuses these names.
+            let sym = self.eta_sym(offset)?;
+            // Use the JSON-friendly variant so that a free `Ty::Var` in the
+            // missing-arg slot — the common case for diverging / always-failing
+            // tasks passed to `Task.andThen` or `Cmd.perform` where the result
+            // type `a` is never constrained — maps to `IrType::Json` (`JsonVal`)
+            // instead of raising IPE-L0102.  The eta-param is only a closure
+            // binder forwarded verbatim to the full kernel call; its concrete
+            // Rust type is unified by the compiler from the call site, so
+            // `JsonVal` is a sound stand-in for any unconstrained `Ty::Var`.
+            //
+            // (`f7_succeed_curried`): EXCEPT the `next_decoder` slot
+            // (the kernel's LAST argument) of the five JsonDec.Pipeline /
+            // Db.Decode curried-combinator kernels — that one slot needs the
+            // curried `FnOnce`-chain shape, never the flattened `Fun` this
+            // JSON-friendly path would otherwise produce. See
+            // `ir_type_from_ty_pipeline_decoder`'s doc comment.
+            let ir = if Self::is_pipeline_next_decoder_kernel(resolved)
+                && supplied + offset == arity - 1
+            {
+                self.ir_type_from_ty_pipeline_decoder(arg_ty, call_span)?
+            } else {
+                self.ir_type_from_ty_json(arg_ty, call_span)?
+            };
+            params.push((sym, ir));
+        }
+        Ok(params)
+    }
+
     /// Eta-expand a partial application `f a0 … a_{k-1}` (with `k < arity`) into a
     /// boxed closure `\eta_k … eta_{arity-1} -> f(a0, …, a_{k-1}, eta_k, …)` — a
     /// first-class function value of the residual arrow type. The supplied
@@ -23050,6 +23793,7 @@ impl<'a> Lowerer<'a> {
         resolved: Callee,
         lowered_args: Vec<Expr>,
         arity: usize,
+        site: EtaDemand,
         call_span: Span,
     ) -> DResult<Expr> {
         // Fail-closed SEAL gate: eta-expanding a PARTIAL application of an
@@ -23058,22 +23802,18 @@ impl<'a> Lowerer<'a> {
         // [`reject_point_free_store_kernel`].
         reject_point_free_store_kernel(&resolved, call_span)?;
         reject_unsaturated_handler_kernel(&resolved, call_span)?;
-        let fn_ty = self.region_ty(callee.span).ok_or_else(|| {
-            bug(
-                "ipe_lower::eta_expand_partial",
-                "no inferred type for a partially-applied callee",
-            )
-        })?;
-        let (arg_tys, ret_ty) = peel_arrow_arity(
-            fn_ty,
+        let (arg_tys, ret_ty) = self.callee_arrow(
+            callee.span,
             arity,
             "ipe_lower::eta_expand_partial",
-            "callee type has fewer arrows than its arity",
+            (
+                "no inferred type for a partially-applied callee",
+                "callee type has fewer arrows than its arity",
+            ),
         )?;
 
         let supplied = lowered_args.len();
         // The missing parameters are argument positions `supplied..arity`.
-        let mut params: Vec<(Symbol, IrType)> = Vec::with_capacity(arity - supplied);
         let mut call_args = lowered_args;
         // T4: the supplied args are captured inside the emitted closure.
         // A non-Copy CloneOk arg (e.g. a String-typed var) must be cloned on
@@ -23098,32 +23838,8 @@ impl<'a> Lowerer<'a> {
         // Any other failed slot stays `None` → fail-close below (T7 original).
         let mut hoisted: Vec<(Symbol, Expr)> = Vec::new();
         let mut cap_cursor = 0usize;
-        // ir_type_from_ty needs `&mut self`, so classify every supplied slot
-        // BEFORE the iter_mut borrow of call_args.
-        let slot_classes: Vec<Option<CloneClass>> = arg_tys
-            .iter()
-            .take(supplied)
-            .map(|slot_ty| {
-                match self.ir_type_from_ty(slot_ty, call_span) {
-                    // A bare `Generic` slot clones, not moves: every emitted
-                    // generic carries an unconditional `T: Clone`
-                    // (`render_fn_generics`), so a supplied generic arg captured by
-                    // the re-callable `Fn` residual clones per call. SSOT with
-                    // `param_is_multiuse_clonable` / `classify_capture_clone`;
-                    // without it a threaded generic is moved out of the `Fn` env
-                    // (E0507).
-                    Ok(IrType::Generic(_)) => Some(CloneClass::CloneOk),
-                    Ok(ir_ty) => Some(clone_class(self.clone_env(), &ir_ty)),
-                    // T7b: ir_type_from_ty failed, but the slot's top-level type
-                    // IS a function arrow.  The failure is from a nested Ty::Var
-                    // (e.g. the polymorphic result type `a` in `Task Error a`).
-                    // A Fun slot is always NonClone — forwarding is safe.
-                    Err(_) if matches!(slot_ty, Ty::Fun(_, _)) => Some(CloneClass::NonClone),
-                    // Genuinely indeterminate slot — conservative None.
-                    Err(_) => None,
-                }
-            })
-            .collect();
+        // Classify every supplied slot BEFORE the iter_mut borrow of call_args.
+        let slot_classes = self.supplied_slot_classes(&arg_tys, supplied, call_span);
         for (arg, cls) in call_args.iter_mut().zip(slot_classes) {
             if let Expr::Var(sym) = *arg {
                 match cls {
@@ -23186,37 +23902,35 @@ impl<'a> Lowerer<'a> {
                 }
             }
         }
-        for (offset, arg_ty) in arg_tys.get(supplied..).unwrap_or(&[]).iter().enumerate() {
-            // Draw slot `offset` from the current position of the per-def monotonic
-            // eta cursor; `advance_eta` below reserves the whole block so a
-            // subsequently-lowered nested eta-lambda never reuses these names.
-            let sym = self.eta_sym(offset)?;
-            // Use the JSON-friendly variant so that a free `Ty::Var` in the
-            // missing-arg slot — the common case for diverging / always-failing
-            // tasks passed to `Task.andThen` or `Cmd.perform` where the result
-            // type `a` is never constrained — maps to `IrType::Json` (`JsonVal`)
-            // instead of raising IPE-L0102.  The eta-param is only a closure
-            // binder forwarded verbatim to the full kernel call; its concrete
-            // Rust type is unified by the compiler from the call site, so
-            // `JsonVal` is a sound stand-in for any unconstrained `Ty::Var`.
-            //
-            // (`f7_succeed_curried`): EXCEPT the `next_decoder` slot
-            // (the kernel's LAST argument) of the five JsonDec.Pipeline /
-            // Db.Decode curried-combinator kernels — that one slot needs the
-            // curried `FnOnce`-chain shape, never the flattened `Fun` this
-            // JSON-friendly path would otherwise produce. See
-            // `ir_type_from_ty_pipeline_decoder`'s doc comment.
-            let ir = if Self::is_pipeline_next_decoder_kernel(&resolved)
-                && supplied + offset == arity - 1
-            {
-                self.ir_type_from_ty_pipeline_decoder(arg_ty, call_span)?
-            } else {
-                self.ir_type_from_ty_json(arg_ty, call_span)?
-            };
-            params.push((sym, ir));
-            call_args.push(Expr::Var(sym));
-        }
+        let params = self.eta_missing_params(&resolved, &arg_tys, supplied, arity, call_span)?;
+        call_args.extend(params.iter().map(|&(sym, _)| Expr::Var(sym)));
         self.advance_eta(arity.saturating_sub(supplied));
+        // A missing mapper position is an eta parameter the residual call
+        // forwards to the kernel: it binds the same stored element a supplied
+        // mapper does, so it passes the same choke point (a point-free
+        // `let m = List.map2 in m f fs xs`). Supplied positions already passed it
+        // in [`Self::lower_call_uniform`], whose wraps `site` already holds; the
+        // residual block just drawn is charged on top of them, and only a
+        // mapping kernel draws further.
+        if let Some(missing) = call_args.get_mut(supplied..) {
+            match site.charge(arity.saturating_sub(supplied)) {
+                Some(site) => {
+                    self.retype_collection_element_param(
+                        &resolved,
+                        supplied,
+                        missing,
+                        |arg| arg_tys.get(arg).copied(),
+                        site,
+                        call_span,
+                    )?;
+                }
+                None if matches!(&resolved, Callee::Kernel(kernel) if kernel.scheme_shape().is_some()) =>
+                {
+                    return Err(unsupported(call_span, Feature::EtaSiteLimit));
+                }
+                None => {}
+            }
+        }
         // T8: use the JSON-friendly variant for the lambda return
         // type for the same reason the eta-params (above) use it: when
         // `ret_ty` is `Task a` (a 1-arg Task) and `a` is a free `Ty::Var`
@@ -23314,17 +24028,14 @@ impl<'a> Lowerer<'a> {
         arity: usize,
         call_span: Span,
     ) -> DResult<Expr> {
-        let fn_ty = self.region_ty(callee.span).ok_or_else(|| {
-            bug(
-                "ipe_lower::eta_expand_value_partial",
-                "no inferred type for a partially-applied function value",
-            )
-        })?;
-        let (arg_tys, ret_ty) = peel_arrow_arity(
-            fn_ty,
+        let (arg_tys, ret_ty) = self.callee_arrow(
+            callee.span,
             arity,
             "ipe_lower::eta_expand_value_partial",
-            "value callee type has fewer arrows than its arrow-arity",
+            (
+                "no inferred type for a partially-applied function value",
+                "value callee type has fewer arrows than its arrow-arity",
+            ),
         )?;
 
         let supplied = lowered_args.len();
@@ -23466,17 +24177,14 @@ impl<'a> Lowerer<'a> {
         arity: usize,
         call_span: Span,
     ) -> DResult<Expr> {
-        let fn_ty = self.region_ty(callee.span).ok_or_else(|| {
-            bug(
-                "ipe_lower::eta_expand_partial_ctor",
-                "no inferred type for a partially-applied constructor",
-            )
-        })?;
-        let (arg_tys, ret_ty) = peel_arrow_arity(
-            fn_ty,
+        let (arg_tys, ret_ty) = self.callee_arrow(
+            callee.span,
             arity,
             "ipe_lower::eta_expand_partial_ctor",
-            "constructor type has fewer arrows than its arity",
+            (
+                "no inferred type for a partially-applied constructor",
+                "constructor type has fewer arrows than its arity",
+            ),
         )?;
 
         let supplied = lowered_args.len();
@@ -24219,6 +24927,10 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::CmdBatch
                 // `Sub.batch : List (Sub msg) -> Sub msg`
                 | KernelFn::SubBatch
+                // `Tui.Sub.onKey : (KeyEvent -> msg) -> Sub msg`
+                | KernelFn::TuiSubOnKey
+                // `Cli.Sub.onLine : (String -> msg) -> Sub msg`
+                | KernelFn::CliSubOnLine
                 // ── Server arity-1 ───────────────────────────────────────
                 // `Server.text / json / html / redirect : String -> Response`
                 | KernelFn::ServerText
@@ -24697,6 +25409,9 @@ impl<'a> Lowerer<'a> {
                 // `defaultText` / `defaultInt` — arity 3 (accessor + value + store).
                 | KernelFn::StoreDefaultText
                 | KernelFn::StoreDefaultInt
+                // `compositePrimaryKey2` — arity 3 (two accessors + store).
+                // Intercepted at lowering; this is only the defensive fallback count.
+                | KernelFn::StoreCompositePrimaryKey2
                 // `Store.mask` — arity 3 (accessor + Pred + Policy). Intercepted at
                 // lowering; this is only the defensive fallback count.
                 | KernelFn::StoreMask
@@ -24710,6 +25425,9 @@ impl<'a> Lowerer<'a> {
                 // `Store.join` — arity 4 (storeA, accA, storeB, accB), intercepted
                 // at lowering; this is only the defensive fallback count.
                 KernelFn::StoreJoin
+                // `compositePrimaryKey3` — arity 4 (three accessors + store),
+                // intercepted at lowering; this is only the defensive fallback count.
+                | KernelFn::StoreCompositePrimaryKey3
                 | KernelFn::JsonDecMap3
                 // ── Result/Maybe map3 — arity 4 ────────────────────────
                 | KernelFn::ResultMap3
@@ -25752,47 +26470,25 @@ impl<'a> Lowerer<'a> {
             .ok_or_else(|| bug("ipe_lower::ctor_arity_of", "unknown constructor"))
     }
 
-    /// Resolve a named callee (`Maybe.andMap`, `String.length`, a user
-    /// top-level function, …) to its [`Callee`], then run the T3
-    /// curried-`andMap`-payload backstop over the RESULT.
+    /// Resolve a named callee (`List.map`, `String.length`, a user top-level function, …) and gate it.
     ///
-    /// Running the curried-payload check only from INSIDE
-    /// [`Self::lower_call_uniform`]'s `VarKernel | VarTopLevel`
-    /// arm is not enough — that arm only sees a callee that is the DIRECT
-    /// callee of a `Call` AST node. A bare-value reference to `Result.andMap` /
-    /// `Maybe.andMap` — passed as a higher-order argument, `let`-bound as a
-    /// point-free alias (`myAndMap = Result.andMap`), extracted from a
-    /// record field, or re-exported through an `import … as …` alias — never
-    /// passes through a `Call` node at all; it lowers through
-    /// [`Self::lower_expr`]'s bare-value arm instead, which calls
-    /// [`Self::lower_callee_resolve`] (below) directly. That second call site
-    /// never ran the check, so `myAndMap (Ok 1) (Ok add3curried)` reached
-    /// `cargo build` as E0277 despite the previous fix.
+    /// This is the single funnel every kernel resolution passes through: the
+    /// direct-call arm of [`Self::lower_call_uniform`] and the bare-value arm
+    /// of [`Self::lower_expr`] (a kernel passed as an argument, `let`-bound
+    /// point-free, stored in a record, or re-exported through an alias) both
+    /// call it, never [`Self::lower_callee_resolve`] directly. So each literal
+    /// kernel occurrence is checked exactly once, in any syntactic position.
     ///
-    /// The fix: this wrapper is now the SINGLE funnel both callers go
-    /// through — [`Self::lower_call_uniform`]'s direct-call arm and
-    /// [`Self::lower_expr`]'s bare-value arm both call `lower_callee`
-    /// (never `lower_callee_resolve` directly) — so every literal AST
-    /// occurrence of `Result.andMap` / `Maybe.andMap`, in ANY syntactic
-    /// position, is checked exactly once, by construction, regardless of how
-    /// many more lowering arms are added later. This is a lowering-time
-    /// BACKSTOP (Tier 1) behind the primary type-checker obligation
-    /// (`ipe_types::constrain::constrain_var_kernel`'s `hof_kernel_result`
-    /// `TyBounds` tie, Tier 2 — see
-    /// `docs/adr/0001-language-semantics-and-types.md` §3.2):
-    /// Tier 2 already rejects the hazard as a type error (`IPE-T0014`)
-    /// before lowering ever runs; this backstop gives a second, independent
-    /// line of defense keyed on the ACTUAL kernel-call resolution boundary
-    /// rather than any particular AST shape. Scope note: this Tier-1
-    /// backstop covers the `andMap` kernels ONLY (its peeling logic reads
-    /// the `Con (a -> b)` payload position specific to `andMap`'s scheme);
-    /// the `map`/`map2..5`/`mapError` members of the hazard family are
-    /// covered by Tier 2 alone, whose fail-closed predicate
-    /// (`ipe_types::emitted_bound_satisfied`, rejecting both `Ty::Fun` and
-    /// bare `Ty::Var`) is the load-bearing gate for every member.
+    /// [`Self::reject_hof_callback_function_result`] runs here as the lowering
+    /// backstop behind the type checker's `hof_kernel_result` obligation
+    /// (IPE-T0014, see `docs/adr/0001-language-semantics-and-types.md` §3.2):
+    /// both derive their positions from [`KernelFn::hof_result_vars`], but the
+    /// backstop reads the solved type independently, so a fault in the
+    /// obligation's wiring cannot reopen the hazard.
     fn lower_callee(&self, callee: &canon::Expr) -> DResult<Callee> {
         let resolved = self.lower_callee_resolve(callee)?;
-        self.reject_curried_andmap_payload(&resolved, callee)?;
+        self.reject_hof_callback_function_result(&resolved, callee)?;
+        self.reject_input_sub_outside_its_surface(&resolved, callee.span)?;
         match &resolved {
             Callee::Kernel(kernel) => {
                 // Row generics are refused by the body pre-walk, which alone knows them.
@@ -26195,6 +26891,68 @@ impl<'a> Lowerer<'a> {
         for (tv, bounds) in type_params.iter_mut() {
             if let Some(obliged) = recorded.get(tv) {
                 oblige_auto_traits(bounds, *obliged);
+            }
+        }
+    }
+
+    /// Refuse a shape-owned input subscription outside the surface whose loop reads it.
+    ///
+    /// `Tui.Sub.onKey` is driven only by the `Tui` loop and `Cli.Sub.onLine` only
+    /// by the `Cli` loop; anywhere else the subscription would compile into input
+    /// no loop ever delivers. The resolver refuses the wrong surface's `Sub` import
+    /// in the entry module (IPE-N0035); this checks every reference — a helper
+    /// module's included, applied or point-free — against the surface the
+    /// demanded entry's `main` pins, at the reference's own span. A `Script`
+    /// `main` has no loop at all, so the reference is the IPE-N0033 contradiction.
+    fn reject_input_sub_outside_its_surface(&self, callee: &Callee, span: Span) -> DResult<()> {
+        let Callee::Kernel(k) = callee else {
+            return Ok(());
+        };
+        let Some(owner) = k.input_surface() else {
+            return Ok(());
+        };
+        let Some(app) = self.entry_surface() else {
+            return Ok(());
+        };
+        if owner == app {
+            return Ok(());
+        }
+        let imported = format!("Ipe.Tea.{}.Sub", owner.name()).into_boxed_str();
+        let msg = if app == AppSurface::Script {
+            NameError::ProgramImportsTeaShape { module: imported }
+        } else {
+            NameError::WrongShapeCmdSub(Box::new(ipe_diagnostics::CmdSubShapeMismatch {
+                imported,
+                imported_shape: owner.name().into(),
+                app_shape: app.name().into(),
+                expected: format!("Ipe.Tea.{}.Sub", app.name()).into_boxed_str(),
+            }))
+        };
+        Err(Diagnostic::Name { span, msg })
+    }
+
+    /// The app surface the demanded entry's `main` pins.
+    ///
+    /// Read from the head of the entry module's own `main` — never from an app
+    /// entry that merely appears in some helper module. `None` when this lowering
+    /// has no demanded-entry `main` (a merged audit lowering whose `main` belongs
+    /// to another module).
+    fn entry_surface(&self) -> Option<AppSurface> {
+        let main = self.m.defs.iter().find(|d| {
+            d.home() == self.m.name.as_slice()
+                && self.interner.resolve(d.name().value) == Some("main")
+        })?;
+        let mut node = match main {
+            canon::Def::Untyped { body, .. } | canon::Def::Typed { body, .. } => body,
+        };
+        loop {
+            match &node.value {
+                canon::Expr_::Call(callee, _) => node = callee,
+                canon::Expr_::Lambda(_, inner) | canon::Expr_::Let(_, inner) => node = inner,
+                canon::Expr_::VarKernel { id: Some(k), .. } => {
+                    return Some(k.app_entry_surface().unwrap_or(AppSurface::Script));
+                }
+                _ => return Some(AppSurface::Script),
             }
         }
     }
@@ -26834,6 +27592,12 @@ impl<'a> Lowerer<'a> {
                     ("Store", "touchOnUpdate") => Ok(Callee::Kernel(KernelFn::StoreTouchOnUpdate)),
                     ("Store", "defaultText") => Ok(Callee::Kernel(KernelFn::StoreDefaultText)),
                     ("Store", "defaultInt") => Ok(Callee::Kernel(KernelFn::StoreDefaultInt)),
+                    ("Store", "compositePrimaryKey2") => {
+                        Ok(Callee::Kernel(KernelFn::StoreCompositePrimaryKey2))
+                    }
+                    ("Store", "compositePrimaryKey3") => {
+                        Ok(Callee::Kernel(KernelFn::StoreCompositePrimaryKey3))
+                    }
                     // Row-security policy builders — intercepted at lowering.
                     ("Store", "ownerColumn") => Ok(Callee::Kernel(KernelFn::StoreOwnerColumn)),
                     ("Store", "immutable") => Ok(Callee::Kernel(KernelFn::StoreImmutable)),
@@ -26946,6 +27710,9 @@ impl<'a> Lowerer<'a> {
                     ("Sub", "every") => Ok(Callee::Kernel(KernelFn::SubEvery)),
                     ("Sub", "map") => Ok(Callee::Kernel(KernelFn::SubMap)),
                     ("Sub", "subscribeTopic") => Ok(Callee::Kernel(KernelFn::SubSubscribeTopic)),
+                    // Shape-owned terminal input subscriptions.
+                    ("TeaTuiSub", "onKey") => Ok(Callee::Kernel(KernelFn::TuiSubOnKey)),
+                    ("TeaCliSub", "onLine") => Ok(Callee::Kernel(KernelFn::CliSubOnLine)),
                     // ── Ipe.Ffi.Js ports (raw typed Ipê↔JS transport) ────────────
                     ("Js", "send") => Ok(Callee::Kernel(KernelFn::JsSend)),
                     ("Js", "subscribe") => Ok(Callee::Kernel(KernelFn::JsSubscribe)),
@@ -29787,7 +30554,77 @@ mod tests {
     use ipe_ir::{Callee, KernelFn};
     use ipe_types::{SolvedTypes, Ty};
 
-    use super::{BuiltinCtors, Lowerer, SymbolPools};
+    use super::{BuiltinCtors, EtaDemand, Lowerer, MAX_ETA_PER_SITE, MapperSpine, SymbolPools};
+
+    /// A demand of exactly [`MAX_ETA_PER_SITE`] names is held; one more is refused.
+    #[test]
+    fn eta_demand_holds_the_ceiling_and_refuses_one_past() {
+        let at_limit = EtaDemand::EMPTY.charge(MAX_ETA_PER_SITE);
+        assert!(
+            at_limit.is_some(),
+            "a demand of exactly the ceiling must be held"
+        );
+        assert_eq!(at_limit.and_then(|d| d.charge(0)), at_limit);
+        assert_eq!(at_limit.and_then(|d| d.charge(1)), None);
+        assert_eq!(EtaDemand::EMPTY.charge(MAX_ETA_PER_SITE + 1), None);
+        // Charging in pieces reaches the same ceiling as one charge.
+        let pieces = EtaDemand::EMPTY
+            .charge(1)
+            .and_then(|d| d.charge(MAX_ETA_PER_SITE - 1));
+        assert_eq!(pieces, at_limit);
+        assert_eq!(pieces.and_then(|d| d.charge(1)), None);
+        // An overflowing charge is refused, never wrapped.
+        assert_eq!(
+            EtaDemand::EMPTY
+                .charge(1)
+                .and_then(|d| d.charge(usize::MAX)),
+            None
+        );
+    }
+
+    /// The IPE-L0155 explain page states the ceiling [`MAX_ETA_PER_SITE`] enforces.
+    #[test]
+    fn eta_site_limit_explain_page_states_the_ceiling() {
+        let page = include_str!("../../diagnostics/explain/IPE-L0155.md");
+        assert!(page.contains(&format!("allows at most {MAX_ETA_PER_SITE} of these")));
+    }
+
+    /// A mapper type with fewer arrows than its scheme spine has no [`MapperSpine`].
+    #[test]
+    fn mapper_spine_refuses_a_short_solved_type() {
+        let mut i = Interner::new();
+        let int = Ty::Con {
+            module: Vec::new(),
+            name: i.intern("Int").unwrap(),
+            args: Vec::new(),
+        };
+        let unary = Ty::Fun(Box::new(int.clone()), Box::new(int.clone()));
+        let binary = Ty::Fun(Box::new(int.clone()), Box::new(unary.clone()));
+        assert_eq!(MapperSpine::peel(&int, 1), None);
+        assert_eq!(MapperSpine::peel(&unary, 2), None);
+        assert_eq!(
+            MapperSpine::peel(&binary, 2),
+            Some(MapperSpine {
+                params: vec![&int, &int],
+                ret: &int,
+            })
+        );
+        // A spine shorter than the solved arrow leaves the rest as the result.
+        assert_eq!(
+            MapperSpine::peel(&binary, 1),
+            Some(MapperSpine {
+                params: vec![&int],
+                ret: &unary,
+            })
+        );
+        assert_eq!(
+            MapperSpine::peel(&int, 0),
+            Some(MapperSpine {
+                params: Vec::new(),
+                ret: &int,
+            })
+        );
+    }
 
     /// Wrap a value in a dummy-span [`Located`] — the span is irrelevant to the
     /// counting/pinning tests that build canonical AST fragments by hand.
@@ -29988,6 +30825,164 @@ mod tests {
             untyped_type_params: BTreeMap::new(),
             msg_defaulted_vars: BTreeMap::new(),
         }
+    }
+
+    /// `Unit -> Unit -> Unit -> Unit`: a stored function element with three
+    /// arrow parameters.
+    fn three_arg_fn() -> Ty {
+        let arrow = |param: Ty, ret: Ty| Ty::Fun(Box::new(param), Box::new(ret));
+        arrow(Ty::Unit, arrow(Ty::Unit, arrow(Ty::Unit, Ty::Unit)))
+    }
+
+    /// A `List.map5` mapper over five function elements: `three_arg_fn()`
+    /// five times, returning `Unit`.
+    fn map5_fn_element_mapper() -> Ty {
+        (0..5).fold(Ty::Unit, |ret, _| {
+            Ty::Fun(Box::new(three_arg_fn()), Box::new(ret))
+        })
+    }
+
+    #[test]
+    fn eta_demand_map5_over_fn_elements_counts_holder_spine_and_demotes() {
+        let kernel = KernelFn::ListMap5;
+        let shape = kernel.scheme_shape();
+        assert!(shape.is_some(), "List.map5 carries a scheme shape");
+        let Some(shape) = shape else { return };
+        let mapper = map5_fn_element_mapper();
+        let spine = MapperSpine::peel(&mapper, super::scheme_mapper_arity(shape, 0));
+        assert!(
+            spine.is_some(),
+            "a five-arrow mapper peels along map5's spine"
+        );
+        let Some(spine) = spine else { return };
+        let names = EtaDemand::mapper_wrap_names(shape, kernel.def().arity, 0, &spine);
+        // holder + 5 wrapper params + 5 x 3 demote params
+        assert_eq!(names, 21);
+        // Past the per-site ceiling, so the wrap is refused before any draw.
+        assert_eq!(EtaDemand::EMPTY.charge(names), None);
+    }
+
+    #[test]
+    fn eta_demand_mapper_over_plain_elements_is_zero() {
+        let kernel = KernelFn::ListMap5;
+        let shape = kernel.scheme_shape();
+        assert!(shape.is_some(), "List.map5 carries a scheme shape");
+        let Some(shape) = shape else { return };
+        let mapper = (0..5).fold(Ty::Unit, |ret, _| {
+            Ty::Fun(Box::new(Ty::Unit), Box::new(ret))
+        });
+        let spine = MapperSpine::peel(&mapper, super::scheme_mapper_arity(shape, 0));
+        assert!(
+            spine.is_some(),
+            "a five-arrow mapper peels along map5's spine"
+        );
+        let Some(spine) = spine else { return };
+        let names = EtaDemand::mapper_wrap_names(shape, kernel.def().arity, 0, &spine);
+        assert_eq!(names, 0);
+    }
+
+    #[test]
+    fn mapper_spine_shorter_than_scheme_does_not_peel() {
+        let shape = KernelFn::ListMap5.scheme_shape();
+        assert!(shape.is_some(), "List.map5 carries a scheme shape");
+        let Some(shape) = shape else { return };
+        let spine = super::scheme_mapper_arity(shape, 0);
+        assert!(MapperSpine::peel(&Ty::Unit, spine).is_none());
+        assert!(MapperSpine::peel(&three_arg_fn(), spine).is_none());
+    }
+
+    #[test]
+    fn eta_budget_charges_a_map5_reference_its_wrap_demand() {
+        let mut interner = Interner::new();
+        let module = interner.intern("List").unwrap();
+        let name = interner.intern("map5").unwrap();
+        let span = Span::new(40, 49);
+        let body = Located::new(
+            span,
+            canon::Expr_::VarKernel {
+                id: Some(KernelFn::ListMap5),
+                module,
+                name,
+            },
+        );
+        let mut types = empty_solved_types();
+        let reference = Ty::Fun(Box::new(map5_fn_element_mapper()), Box::new(Ty::Unit));
+        types.regions.insert((Vec::new(), span), reference);
+        let demand = super::mapper_wrap_eta_demand(&body, &[], &types);
+        assert!(demand >= 21, "budget {demand} under the wrap's draw");
+    }
+
+    /// Whether `res` is the stored-function mapper refusal (IPE-L0134).
+    fn is_fn_element_refusal(res: &ipe_diagnostics::DResult<()>) -> bool {
+        matches!(
+            res,
+            Err(ipe_diagnostics::Diagnostic::Lower {
+                msg: ipe_diagnostics::LowerError::Unsupported(
+                    ipe_diagnostics::Feature::FunctionElementEquality
+                ),
+                ..
+            })
+        )
+    }
+
+    /// `(Unit -> Unit) -> ret`: a `List.map` mapper over a stored function
+    /// element.
+    fn fn_element_mapper(ret: Ty) -> Ty {
+        let element = Ty::Fun(Box::new(Ty::Unit), Box::new(Ty::Unit));
+        Ty::Fun(Box::new(element), Box::new(ret))
+    }
+
+    /// Run the carrier choke point on a non-lambda `List.map` mapper whose
+    /// solved type is `mapper_ty`.
+    fn retype_list_map_mapper(mapper_ty: Option<&Ty>) -> ipe_diagnostics::DResult<()> {
+        let mut outcome = Ok(());
+        with_binder_type_lowerer(|lowerer, sym| {
+            let mut args = [super::Expr::Var(sym), super::Expr::Unit];
+            outcome = lowerer
+                .retype_collection_element_param(
+                    &Callee::Kernel(KernelFn::ListMap),
+                    0,
+                    &mut args,
+                    |_| mapper_ty,
+                    EtaDemand::EMPTY,
+                    UNIT_SPAN,
+                )
+                .map(|_| ());
+        });
+        outcome
+    }
+
+    /// A non-lambda mapper with no solved type cannot be wrapped: IPE-L0134.
+    #[test]
+    fn mapper_wrap_without_solved_type_is_refused() {
+        assert!(is_fn_element_refusal(&retype_list_map_mapper(None)));
+    }
+
+    /// A solved mapper type with fewer arrows than the scheme applies cannot
+    /// be peeled: IPE-L0134.
+    #[test]
+    fn mapper_wrap_over_short_spine_is_refused() {
+        assert!(is_fn_element_refusal(&retype_list_map_mapper(Some(
+            &Ty::Unit
+        ))));
+    }
+
+    /// A bound mapper whose result type cannot be lowered is refused before
+    /// the wrapper draws an eta parameter: IPE-L0134.
+    #[test]
+    fn mapper_wrap_with_unlowerable_result_is_refused() {
+        let mapper = fn_element_mapper(Ty::Var(99));
+        assert!(is_fn_element_refusal(&retype_list_map_mapper(Some(
+            &mapper
+        ))));
+    }
+
+    /// Contrapositive: a mapper over plain elements binds no stored function
+    /// and is left untouched.
+    #[test]
+    fn mapper_over_plain_elements_is_not_wrapped() {
+        let mapper = Ty::Fun(Box::new(Ty::Unit), Box::new(Ty::Unit));
+        assert!(retype_list_map_mapper(Some(&mapper)).is_ok());
     }
 
     /// A span the binder-type tests record a free, non-polymorphic `Ty::Var` at.
@@ -30642,16 +31637,29 @@ mod tests {
             // failure modes without `panic!`/`unwrap`:
             //   * Err (missing legacy arm / transposed decl) → `None` != `Some(..)`
             //   * wrong variant returned                     → `Some(other)` != `Some(sk)`
-            let got = lowerer.lower_callee(&node).ok();
+            let got = lowerer.lower_callee_resolve(&node).ok();
             assert_eq!(
                 got,
                 Some(Callee::Kernel(sk)),
-                "lower_callee(id=None, qualifier={:?}, name={:?}) returned {got:?}; \
+                "lower_callee_resolve(id=None, qualifier={:?}, name={:?}) returned {got:?}; \
                  expected Some(Callee::Kernel(KernelFn::{sk:?})). Either the legacy \
                  arm is missing / maps to the wrong variant, or decl() returned the \
                  wrong canonical (qualifier, name) for this variant.",
                 decl.qualifier,
                 decl.name,
+            );
+
+            // No region is recorded here, so the gated funnel must refuse every
+            // higher-order kernel (no solved type proves its callback results
+            // non-functional) and pass every other kernel through unchanged.
+            let gated = lowerer.lower_callee(&node).ok();
+            let expected = sk
+                .hof_result_vars()
+                .is_empty()
+                .then_some(Callee::Kernel(sk));
+            assert_eq!(
+                gated, expected,
+                "lower_callee on KernelFn::{sk:?} with no solved type returned {gated:?}",
             );
 
             covered += 1;
@@ -32188,6 +33196,62 @@ mod tests {
         ));
         assert!(!super::ir_type_generic_in_decoder(
             &IrType::Decoder(Box::new(IrType::Int)),
+            a
+        ));
+    }
+
+    /// The `Cmd` / `Sub` `Send`-obligation walk fires only on a tvar inside one of them.
+    ///
+    /// It must reach the point-free input-subscription helper's signature
+    /// `(KeyEvent -> msg) -> Sub msg` (the `Sub` under a function's return), and
+    /// never bound a bare tvar, a tvar under another carrier, or an unrelated tvar.
+    #[test]
+    fn generic_in_tea_carrier_is_precise() {
+        use ipe_ir::IrType;
+
+        let mut interner = Interner::new();
+        let a = interner.intern("a").unwrap();
+        let b = interner.intern("b").unwrap();
+        let ga = || IrType::Generic(a);
+
+        // Fires: `Sub a` / `Cmd a` directly, nested, and as a returned function's result.
+        assert!(super::ir_type_generic_in_tea_carrier(
+            &IrType::Sub(Box::new(ga())),
+            a
+        ));
+        assert!(super::ir_type_generic_in_tea_carrier(
+            &IrType::Tuple(vec![IrType::Int, IrType::Cmd(Box::new(ga()))]),
+            a
+        ));
+        assert!(super::ir_type_generic_in_tea_carrier(
+            &IrType::List(Box::new(IrType::Sub(Box::new(ga())))),
+            a
+        ));
+        assert!(super::ir_type_generic_in_tea_carrier(
+            &IrType::Fun(
+                vec![IrType::Fun(vec![IrType::Str], Box::new(ga()))],
+                Box::new(IrType::Sub(Box::new(ga()))),
+            ),
+            a
+        ));
+
+        // Never fires: a bare tvar, a tvar only under a function or a non-TEA
+        // carrier, a `Sub` over a different tvar, or a concrete `Cmd`.
+        assert!(!super::ir_type_generic_in_tea_carrier(&ga(), a));
+        assert!(!super::ir_type_generic_in_tea_carrier(
+            &IrType::Fun(vec![IrType::Str], Box::new(ga())),
+            a
+        ));
+        assert!(!super::ir_type_generic_in_tea_carrier(
+            &IrType::Task(Box::new(ga())),
+            a
+        ));
+        assert!(!super::ir_type_generic_in_tea_carrier(
+            &IrType::Sub(Box::new(IrType::Generic(b))),
+            a
+        ));
+        assert!(!super::ir_type_generic_in_tea_carrier(
+            &IrType::Cmd(Box::new(IrType::Int)),
             a
         ));
     }

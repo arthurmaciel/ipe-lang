@@ -9,10 +9,11 @@ module Main exposing (main)
 --     get <url>    fetch <url> and show its status + body
 --     quit         exit (end-of-input also exits)
 --
--- `onLine` parses one line into a `Command` at the edge, so `update` only ever
--- folds well-formed input. A `get` command performs the request as a `Task` and
--- routes its settled `Result` back through `Fetched`, keeping the fetch off the
--- input thread. `view` prints the last outcome, then a prompt.
+-- `subscriptions` listens with `Sub.onLine onLine`; `onLine` parses one line
+-- into a `Command` at the edge, so `update` only ever folds well-formed input.
+-- A `get` command performs the request as a `Task` and routes its settled
+-- `Result` back through `Fetched`, keeping the fetch off the input thread.
+-- `view` prints the last outcome, then a prompt.
 
 import Ipe.String as String
 import Ipe.System as System
@@ -134,7 +135,7 @@ view model =
 
 subscriptions : Model -> Sub Msg
 subscriptions _model =
-    Sub.none
+    Sub.onLine onLine
 
 
 -- Parse one input line into a `Command`. The verb is the first whitespace-
@@ -176,5 +177,4 @@ main =
         , update = update
         , view = view
         , subscriptions = subscriptions
-        , onLine = onLine
         }

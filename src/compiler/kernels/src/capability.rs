@@ -885,9 +885,10 @@ pub enum ElementCapability {
     /// higher-order frontier is open. A function carrier would emit an
     /// `Arc`-vs-`Box` mismatch (`E0308`) or a `Box<dyn Fn>: Clone` failure
     /// (`E0277`), so a function-embedding element is rejected fail-closed rather
-    /// than mis-emitted. This is the SSOT for "this map/fold/filter kernel is not
-    /// Arc-safe over a function element" — a kernel joins [`Self::CloneOk`] only
-    /// once its frontier is actually closed in the lowerer.
+    /// than mis-emitted. Derived from the kernel scheme
+    /// (`mapper_frontier_open`): a stored element feeding a mapper parameter
+    /// that `mapper_param_binds_stored_element` does not name keeps the frontier
+    /// open, and a build-time assert forbids any contradicting tag.
     MapperFrontierOpen,
 }
 

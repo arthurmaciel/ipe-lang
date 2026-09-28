@@ -122,6 +122,10 @@ pub fn is_probe_form_limitation(outcome: &StageOutcome) -> bool {
 ///   importable home on disk (a shape-scoped module reached only through an app
 ///   shape, e.g. `Ipe.Cmd` / `Ipe.Sub`), so the generated `import` finds nothing.
 /// * [`IPE_N0023`] — the module path does not match the probe module name.
+/// * [`IPE_N0033`] — the symbol lives in an `Ipe.Tea.*` shape module (e.g.
+///   `Ipe.Tea.Tui.Sub`), which only a TEA app whose `main` is that shape's entry
+///   may import; the probe is a plain-`main` Program, so the compiler refuses the
+///   import itself, before the symbol is ever referenced.
 ///
 /// In each the rejection is a property of the point-free probe FORM for that
 /// symbol — the reference cannot be addressed — not a build+run gap, so the
@@ -141,11 +145,11 @@ pub fn is_probe_form_limitation(outcome: &StageOutcome) -> bool {
 /// name a probe-form limitation.
 #[must_use]
 pub fn probe_form_unaddressable_code(outcome: &StageOutcome) -> Option<ipe_diagnostics::Code> {
-    use ipe_diagnostics::{IPE_N0004, IPE_N0020, IPE_N0023};
+    use ipe_diagnostics::{IPE_N0004, IPE_N0020, IPE_N0023, IPE_N0033};
     match outcome {
         StageOutcome::Failed {
             code: Some(code), ..
-        } if *code == IPE_N0020 || *code == IPE_N0004 || *code == IPE_N0023 => Some(*code),
+        } if [IPE_N0020, IPE_N0004, IPE_N0023, IPE_N0033].contains(code) => Some(*code),
         _ => None,
     }
 }
@@ -498,7 +502,7 @@ pub fn build_and_run(source: &str, snippet: &Path) -> StageOutcome {
 
 #[cfg(test)]
 mod tests {
-    use super::{StageOutcome, is_probe_form_limitation};
+    use super::{StageOutcome, is_probe_form_limitation, probe_form_unaddressable_code};
 
     fn failed_with(code: ipe_diagnostics::Code) -> StageOutcome {
         StageOutcome::Failed {
@@ -519,6 +523,33 @@ mod tests {
             assert!(
                 is_probe_form_limitation(&failed_with(code)),
                 "{} must classify as a probe-form limitation",
+                code.as_str()
+            );
+        }
+    }
+
+    /// A Program probe importing an `Ipe.Tea.*` shape module is a probe-form refusal.
+    #[test]
+    fn program_importing_a_tea_shape_is_probe_form_unaddressable() {
+        let code = ipe_diagnostics::IPE_N0033;
+        assert_eq!(
+            probe_form_unaddressable_code(&failed_with(code)),
+            Some(code)
+        );
+    }
+
+    /// A missing member, a qualifier collision, or a cross-shape `Cmd`/`Sub` is a real defect.
+    #[test]
+    fn resolution_defects_are_not_probe_form_unaddressable() {
+        for code in [
+            ipe_diagnostics::IPE_N0005,
+            ipe_diagnostics::IPE_N0027,
+            ipe_diagnostics::IPE_N0035,
+        ] {
+            assert_eq!(
+                probe_form_unaddressable_code(&failed_with(code)),
+                None,
+                "{} must stay a hole, never a probe-form limitation",
                 code.as_str()
             );
         }
