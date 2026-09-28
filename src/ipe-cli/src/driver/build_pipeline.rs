@@ -1164,6 +1164,40 @@ pub fn attribute_post_link_error(
     }
 }
 
+/// Render each type-checker warning against the source file of its home module.
+///
+/// A [`ipe_types::HomedWarning`] always names its owning module, so the file is
+/// looked up exactly in `home_to_source`; no span-based guess is involved.
+///
+/// # Errors
+/// [`CliError::Pipeline`] carrying [`Diagnostic::CompilerBug`] (blamed on
+/// `entry`) when a warning's home names no module in `home_to_source`: the
+/// warning cannot be framed against its own file, so the build fails closed.
+pub fn render_homed_warnings(
+    home_to_source: &BTreeMap<Vec<ipe_intern::Symbol>, (PathBuf, String)>,
+    entry: &(PathBuf, String),
+    warnings: &[ipe_types::HomedWarning],
+) -> Result<Vec<String>, CliError> {
+    warnings
+        .iter()
+        .map(|warning| {
+            let (file, src) =
+                home_to_source
+                    .get(warning.home())
+                    .ok_or_else(|| CliError::Pipeline {
+                        file: entry.0.clone(),
+                        src: entry.1.clone(),
+                        diag: Box::new(Diagnostic::CompilerBug {
+                            where_: "driver.render_homed_warnings",
+                            detail: "a type-checker warning names a module with no source file"
+                                .to_owned(),
+                        }),
+                    })?;
+            Ok(render(warning.diagnostic(), &file.to_string_lossy(), src))
+        })
+        .collect()
+}
+
 /// Run the canon decoder-pipeline direction gate (IPE-N0040) over the linked
 /// program, returning the rejection in the post-link `(diag, home)` shape both
 /// the build and the type-check surfaces attribute through.
@@ -1560,9 +1594,9 @@ pub fn compile_prepared(
     // span ranges.
     //
     // When `home` is non-empty we look it up in `home_to_source` directly —
-    // O(log N) and exact.  When the home is empty (non-solver errors: constraint
-    // generation, field-access pass, exhaustiveness) we fall back to the
-    // byte-offset heuristic.
+    // O(log N) and exact (solver and exhaustiveness errors carry their owning
+    // def's home). When the home is empty (non-solver errors: constraint
+    // generation, field-access pass) we fall back to the byte-offset heuristic.
     //
     // `ipe_db::typecheck` is the memoized
     // SEAM over `ipe_types::infer_attributed`: same whole-program computation,
@@ -1573,15 +1607,11 @@ pub fn compile_prepared(
         .map_err(|(diag, home)| {
             attribute_post_link_error(linked, &home_to_source, &entry, diag, &home)
         })?;
-    // Print non-fatal warnings (e.g. IPE-T0011 RedundantCaseBranch) to stderr.
-    // These are Severity::Warning: the build continues and exit code stays 0.
-    for w in &types.warnings {
-        let span = diag_span(w);
-        let (w_file, w_src) = source_for_span(span);
-        crate::screen::chatter_styled(
-            crate::screen::Stream::Stderr,
-            &render(w, &w_file.to_string_lossy(), &w_src),
-        );
+    // Print non-fatal warnings (e.g. IPE-T0011 RedundantCaseBranch) to stderr,
+    // each framed against its home module's file. These are Severity::Warning:
+    // the build continues and exit code stays 0.
+    for rendered in render_homed_warnings(&home_to_source, &entry, &types.warnings)? {
+        crate::screen::chatter_styled(crate::screen::Stream::Stderr, &rendered);
     }
     // Attribute lower / backend diagnostics to the source file that OWNS the
     // failing span, not blindly to the entry file. After link, every module's
@@ -1590,7 +1620,7 @@ pub fn compile_prepared(
     // against the entry file at a coincidental byte offset — e.g. a State.ipe
     // IPE-L0115 shown at an unrelated Main.ipe line. `source_for_span` maps the
     // span back to its owning def's file, the same heuristic already used for
-    // constraint-gen / exhaustiveness type errors.
+    // homeless constraint-gen type errors.
     // Lowering (and emit) errors carry the owning def's `home`,
     // exactly like `typecheck` above. When `home` is non-empty we resolve the
     // source file DIRECTLY via `home_to_source` (O(log N), exact) — this is what
