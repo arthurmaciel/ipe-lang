@@ -134,7 +134,7 @@ fn toolchain_binds() -> Result<ToolchainBinds, SandboxDefect> {
             .map_err(|e| SandboxDefect::Path(JailPathError::ToolHomeRelative(e)))
     };
     toolchain_binds_from(
-        tool_home("CARGO_HOME", ".cargo")?,
+        tool_home("CARGO_HOME", ".cargo")?.as_deref(),
         tool_home("RUSTUP_HOME", ".rustup")?,
     )
 }
@@ -147,12 +147,12 @@ fn toolchain_binds() -> Result<ToolchainBinds, SandboxDefect> {
 /// sits at or above the cargo home, so binding it would expose
 /// `credentials.toml`.
 fn toolchain_binds_from(
-    cargo_home: Option<PathBuf>,
+    cargo_home: Option<&Path>,
     rustup_home: Option<PathBuf>,
 ) -> Result<ToolchainBinds, SandboxDefect> {
     let canonical = |path: &Path| CanonicalPath::resolve(path).map_err(SandboxDefect::Path);
     let mut binds = ToolchainBinds::default();
-    if let Some(cargo_home) = &cargo_home {
+    if let Some(cargo_home) = cargo_home {
         let cargo_bin = cargo_home.join("bin");
         if cargo_bin.is_dir() {
             let cargo_bin = canonical(&cargo_bin)?;
@@ -167,12 +167,12 @@ fn toolchain_binds_from(
         binds.ro_binds.push(rustup.clone());
         binds.rustup_home = Some(rustup);
     }
-    if let Some(cargo_home) = &cargo_home
+    if let Some(cargo_home) = cargo_home
         && let Some(bind) = ipe_sandbox::bind_exposing(&binds.ro_binds, cargo_home)
     {
         return Err(SandboxDefect::Path(JailPathError::ExposesCargoHome {
             bind: bind.as_path().to_path_buf(),
-            cargo_home: cargo_home.clone(),
+            cargo_home: cargo_home.to_path_buf(),
         }));
     }
     Ok(binds)
@@ -581,7 +581,7 @@ mod tests {
         let (_dir, root) = toolchain_tree();
         let cargo_home = root.join("cargo");
         for rustup in [cargo_home.clone(), root.clone()] {
-            let refused = toolchain_binds_from(Some(cargo_home.clone()), Some(rustup));
+            let refused = toolchain_binds_from(Some(&cargo_home), Some(rustup));
             assert!(matches!(
                 refused,
                 Err(SandboxDefect::Path(JailPathError::ExposesCargoHome { .. }))
@@ -593,7 +593,7 @@ mod tests {
     fn a_disjoint_rustup_home_binds_bin_and_rustup_only() {
         let (_dir, root) = toolchain_tree();
         let cargo_home = root.join("cargo");
-        let result = toolchain_binds_from(Some(cargo_home.clone()), Some(root.join("rustup")));
+        let result = toolchain_binds_from(Some(&cargo_home), Some(root.join("rustup")));
         assert!(result.is_ok(), "a disjoint layout must bind");
         let Ok(binds) = result else { return };
         let bound: Vec<&Path> = binds.ro_binds.iter().map(CanonicalPath::as_path).collect();
