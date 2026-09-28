@@ -1041,7 +1041,7 @@ fn build_generic_call(
     // A container-first kernel renders its container before the function
     // closure; clone the function's captures at their container use sites so the
     // closure's capture never reads a moved value (the string emitter's rewrite).
-    let mut docs = match swapped_container_clone_rewrite(callee, args) {
+    let mut docs = match swapped_container_clone_rewrite(callee, args, &ctx.enum_variants) {
         Some(container_rw) => {
             let [func, _] = args else {
                 return Err(Diagnostic::CompilerBug {
@@ -1240,7 +1240,7 @@ fn build_let(
     child: u16,
     generics: GenericScope,
 ) -> DResult<Doc> {
-    if let Some(inlined_body) = inlined_let_body(name, value, body) {
+    if let Some(inlined_body) = inlined_let_body(name, value, body, &ctx.enum_variants) {
         // Zero-statement block `({ inlined_body })`: the body with `name`
         // substituted by `value`, laid out as a soft group.
         let body_doc = build_doc(ctx, &inlined_body, indent, child, generics)?;
@@ -1482,7 +1482,7 @@ fn build_task_seq(
     generics: GenericScope,
 ) -> DResult<Doc> {
     let rest_captures = free_vars(rest);
-    let effect_rw = clone_targets_in_expr(effect.clone(), &rest_captures);
+    let effect_rw = clone_targets_in_expr(effect.clone(), &rest_captures, &ctx.enum_variants);
     let effect_doc = build_doc(ctx, &effect_rw, indent, child, generics)?;
     let rest_doc = build_doc(ctx, rest, indent, child, generics)?;
     // The continuation `Box::new(move |_| <brace-body>[rest])`: the closure body's
@@ -4246,7 +4246,11 @@ mod tests {
             field,
             field_ty: IrType::Str,
         };
-        let rewritten = crate::emit_expr::clone_targets_in_expr(effect, &captures);
+        let rewritten = crate::emit_expr::clone_targets_in_expr(
+            effect,
+            &captures,
+            &ipe_ir::EnumPayloadTable::new(),
+        );
         match rewritten {
             Expr::Access { record, .. } => assert!(
                 matches!(*record, Expr::Var(s) if s == row),
@@ -4267,7 +4271,11 @@ mod tests {
         let captures: std::collections::BTreeSet<ipe_intern::Symbol> =
             std::iter::once(plain).collect();
         let effect = Expr::Var(plain);
-        let rewritten = crate::emit_expr::clone_targets_in_expr(effect, &captures);
+        let rewritten = crate::emit_expr::clone_targets_in_expr(
+            effect,
+            &captures,
+            &ipe_ir::EnumPayloadTable::new(),
+        );
         assert!(
             matches!(rewritten, Expr::CloneVar(s) if s == plain),
             "a captured non-row variable must be rewritten to CloneVar"

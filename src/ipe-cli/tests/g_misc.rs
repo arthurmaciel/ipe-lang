@@ -54,6 +54,10 @@ mod golden_destructure_move_ownership;
 mod golden_email_send_composed_lowers;
 #[path = "g_misc/golden_email_send_nominal_fold_seal.rs"]
 mod golden_email_send_nominal_fold_seal;
+#[path = "g_misc/golden_enum_fn_payload_reuse_seal.rs"]
+mod golden_enum_fn_payload_reuse_seal;
+#[path = "g_misc/golden_enum_payload_nonclone_seal.rs"]
+mod golden_enum_payload_nonclone_seal;
 #[path = "g_misc/golden_ffi_kernel_alias_seal.rs"]
 mod golden_ffi_kernel_alias_seal;
 #[path = "g_misc/golden_ffi_nonclone_handle_reuse_seal.rs"]

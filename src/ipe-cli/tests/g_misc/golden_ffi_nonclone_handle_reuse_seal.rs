@@ -72,7 +72,9 @@ fn seed_nonclone_ffi_cache(project_root: &Path) -> bool {
     install_from_inspection(&cache, &doc.to_string()).is_ok()
 }
 
-fn write_project(dir: &Path, main: &str) -> bool {
+/// Write `main` as `src/Main.ipe` under a fresh `dir` whose FFI cache is seeded
+/// with the non-`Clone` `handle-demo` crate. Returns false on any I/O failure.
+pub(crate) fn write_project(dir: &Path, main: &str) -> bool {
     let src = dir.join("src");
     let _ = fs::remove_dir_all(dir);
     if fs::create_dir_all(&src).is_err() {
@@ -91,9 +93,8 @@ fn write_project(dir: &Path, main: &str) -> bool {
 /// foreign type does not support.
 #[test]
 fn nonclone_handle_reused_fails_closed_before_cargo() {
-    let Ok(runtime) = ipe::resolve_runtime() else {
-        return; // runtime unavailable in this environment — skip silently
-    };
+    let runtime =
+        ipe::resolve_runtime().expect("runtime must resolve to prove the fail-closed refusal");
 
     let tmp = crate::support::scratch_root().join("ipec_ffi_nonclone_handle_reuse");
     // `w` is bound once, then read by TWO `slot_count` calls that both discard
@@ -204,48 +205,52 @@ fn nonclone_handle_threaded_linearly_builds() {
         }
     }
 
-    // Write the `handle_demo` fixture crate and repoint the emitted manifest's
-    // registry pin at it. The emitted Cargo.toml carries `handle-demo =
-    // "=0.1.0"` (an exact crates.io pin), which fails offline and in CI shards
-    // where the crate is not published. We create the crate locally and replace
-    // the pin with a path dependency — the same provisioning pattern the
-    // `asserted_call` golden uses for its `tm` fixture.
-    if std::env::var("IPE_E2E").is_ok() {
-        let handle_demo_dir = tmp.join("handle_demo");
-        let handle_demo_src = handle_demo_dir.join("src");
-        fs::create_dir_all(&handle_demo_src).expect("create handle_demo fixture crate directory");
-        fs::write(
-            handle_demo_dir.join("Cargo.toml"),
-            "[package]\nname = \"handle-demo\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
-        )
-        .expect("write handle_demo Cargo.toml");
-        fs::write(
-            handle_demo_src.join("lib.rs"),
-            "pub struct Widget { slots: usize }\n\
-             impl Widget {\n\
-             \x20   pub fn new() -> Self { Widget { slots: 3 } }\n\
-             \x20   pub fn slot_count(&self) -> usize { self.slots }\n\
-             }\n",
-        )
-        .expect("write handle_demo src/lib.rs");
-
-        let manifest_path = out.join("Cargo.toml");
-        let manifest = fs::read_to_string(&manifest_path)
-            .expect("read emitted Cargo.toml for handle_demo path-dep repoint");
-        assert!(
-            manifest.contains("handle-demo"),
-            "emitted manifest must declare the handle-demo dependency; got:\n{manifest}"
-        );
-        let patched = manifest.replace(
-            "handle-demo = \"=0.1.0\"",
-            &format!(
-                "handle-demo = {{ path = {:?} }}",
-                handle_demo_dir.display().to_string()
-            ),
-        );
-        fs::write(&manifest_path, patched)
-            .expect("write patched Cargo.toml with handle_demo path dep");
-    }
+    provision_handle_demo(&tmp, &out);
 
     support::assert_seal_builds("ffi_nonclone_handle_thread", &out);
+}
+
+/// Under `IPE_E2E`, write the `handle_demo` fixture crate beside `project` and
+/// repoint the emitted manifest in `out` at it.
+///
+/// The emitted `Cargo.toml` carries `handle-demo = "=0.1.0"` (an exact
+/// `crates.io` pin), which fails offline and in CI shards where the crate is
+/// not published; the local path dependency stands in for it.
+pub(crate) fn provision_handle_demo(project: &Path, out: &Path) {
+    if std::env::var("IPE_E2E").is_err() {
+        return;
+    }
+    let handle_demo_dir = project.join("handle_demo");
+    let handle_demo_src = handle_demo_dir.join("src");
+    fs::create_dir_all(&handle_demo_src).expect("create handle_demo fixture crate directory");
+    fs::write(
+        handle_demo_dir.join("Cargo.toml"),
+        "[package]\nname = \"handle-demo\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+    )
+    .expect("write handle_demo Cargo.toml");
+    fs::write(
+        handle_demo_src.join("lib.rs"),
+        "pub struct Widget { slots: usize }\n\
+         impl Widget {\n\
+         \x20   pub fn new() -> Self { Widget { slots: 3 } }\n\
+         \x20   pub fn slot_count(&self) -> usize { self.slots }\n\
+         }\n",
+    )
+    .expect("write handle_demo src/lib.rs");
+
+    let manifest_path = out.join("Cargo.toml");
+    let manifest = fs::read_to_string(&manifest_path)
+        .expect("read emitted Cargo.toml for handle_demo path-dep repoint");
+    assert!(
+        manifest.contains("handle-demo"),
+        "emitted manifest must declare the handle-demo dependency; got:\n{manifest}"
+    );
+    let patched = manifest.replace(
+        "handle-demo = \"=0.1.0\"",
+        &format!(
+            "handle-demo = {{ path = {:?} }}",
+            handle_demo_dir.display().to_string()
+        ),
+    );
+    fs::write(&manifest_path, patched).expect("write patched Cargo.toml with handle_demo path dep");
 }

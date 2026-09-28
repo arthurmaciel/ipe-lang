@@ -167,7 +167,7 @@ pub fn emit_expr_at(
             // rendered Rust text — see those functions' doc comments for why
             // the old text-level passes could corrupt a string literal or a
             // record field name that happened to spell the same identifier.
-            if let Some(inlined_body) = inlined_let_body(*name, value, body) {
+            if let Some(inlined_body) = inlined_let_body(*name, value, body, &ctx.enum_variants) {
                 let inlined_s = emit_expr_at(ctx, &inlined_body, indent, child, generics)?;
                 Ok(format!("({{ {inlined_s} }})"))
             } else {
@@ -524,7 +524,8 @@ pub fn emit_expr_at(
             // A container-first kernel renders its container before the
             // function closure; clone the function's captures at their container
             // use sites so the closure's capture never reads a moved value.
-            let rewritten_container = swapped_container_clone_rewrite(callee, args);
+            let rewritten_container =
+                swapped_container_clone_rewrite(callee, args, &ctx.enum_variants);
             let mut parts = Vec::with_capacity(args.len());
             for (i, arg) in args.iter().enumerate() {
                 // Substitute the clone-rewritten container (the second Ipê arg)
@@ -660,7 +661,7 @@ pub fn emit_expr_at(
             // `IPE-L0135` gate admits it only where the move is linear (no later
             // read of that field or of the whole base) and refuses it on a
             // row-generic base, whose witness getter only borrows.
-            let moves = ipe_ir::ir_type_has_effect_carrier(field_ty);
+            let moves = ipe_ir::ir_type_has_effect_carrier(field_ty, &ctx.enum_variants);
             let base = emit_expr_at(ctx, record, indent, child, generics)?;
             // A field read on a row-generic parameter cannot name a struct field
             // (the concrete struct is unknown at emit time): it routes through the
@@ -757,7 +758,8 @@ pub fn emit_expr_at(
             let effect_s = if targets.is_empty() {
                 emit_expr_at(ctx, effect, indent, child, generics)?
             } else {
-                let effect_rw = clone_targets_in_expr((**effect).clone(), &targets);
+                let effect_rw =
+                    clone_targets_in_expr((**effect).clone(), &targets, &ctx.enum_variants);
                 emit_expr_at(ctx, &effect_rw, indent, child, generics)?
             };
             let rest_s = emit_expr_at(ctx, rest, indent, child, generics)?;
