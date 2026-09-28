@@ -999,7 +999,7 @@ mod tests {
 
     #[test]
     fn run_jail_masks_a_home_outside_home_and_keeps_the_working_tree_visible() {
-        let base_dir = crate::test_dir::TestDir::new("run-jail-homes");
+        let base_dir = crate::test_dir::TestDir::new("run-jail-homes").expect("test dir");
         let base = base_dir.path();
         let user_home = base.join("user");
         let tree = user_home.join("project");
@@ -1050,7 +1050,7 @@ mod tests {
     fn the_run_jail_chdir_and_tmpdir_are_the_bound_paths() {
         // Symlinked scratch and working tree: the payload's `--chdir` and
         // `TMPDIR` must be the paths the jail binds, never the links.
-        let base_dir = crate::test_dir::TestDir::new("run-jail-symlinks");
+        let base_dir = crate::test_dir::TestDir::new("run-jail-symlinks").expect("test dir");
         let base = base_dir.path();
         let real = base.join("real");
         let links = base.join("links");

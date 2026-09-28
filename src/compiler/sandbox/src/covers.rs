@@ -115,7 +115,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn identity_sees_an_equal_or_enclosing_dir_and_nothing_else() {
-        let tmp_dir = TestDir::new("covers-identity");
+        let tmp_dir = TestDir::new("covers-identity").expect("test dir");
         let tmp = tmp_dir.path();
         let cargo_home = tmp.join(".cargo");
         let other = tmp.join("other");
@@ -149,7 +149,7 @@ mod tests {
 
     #[test]
     fn a_bind_at_or_above_the_cargo_home_exposes_it() {
-        let tmp_dir = TestDir::new("covers-exposing");
+        let tmp_dir = TestDir::new("covers-exposing").expect("test dir");
         let tmp = tmp_dir.path();
         let cargo_home = tmp.join(".cargo");
         make_dir(&cargo_home.join("bin"));

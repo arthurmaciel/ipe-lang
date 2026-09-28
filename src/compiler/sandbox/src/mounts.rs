@@ -380,8 +380,9 @@ mod tests {
     use crate::test_dir::TestDir;
 
     /// A scratch dir holding a `bin` subdir, removed on drop.
+    #[allow(clippy::expect_used)] // test fixture: the scratch dir must exist
     fn temp_dir(label: &str) -> TestDir {
-        let dir = TestDir::new(&format!("mounts-{label}"));
+        let dir = TestDir::new(&format!("mounts-{label}")).expect("test dir");
         make_dir(&dir.path().join("bin"));
         dir
     }
