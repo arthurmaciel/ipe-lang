@@ -38,14 +38,20 @@ consumed `change_queue` row. `IPE_REVIEW_DB` is optional and defaults to
 
 ## Running
 
-From the repo root:
+There is no `package.ipe` at the repo root — this app lives in
+`tools/code-review`, so run it from there (or `cd` into it first):
 
 ```bash
-IPE_INDEX_DB="$PWD/.ipe-index/index.db" IPE_INDEX_ROOT="$PWD" ipe run
+(cd tools/code-review && IPE_INDEX_DB="$(git rev-parse --show-toplevel)/.ipe-index/index.db" IPE_INDEX_ROOT="$(git rev-parse --show-toplevel)" ipe run)
 ```
 
 `ipe run` builds and serves on <http://localhost:8000>. `ipe type-check` runs a
 fast check with no runtime, and `ipe build` compiles to a native binary.
+
+The queue view loads at most one bounded page of pending units at a time
+(`pageSize` = 100, see `src/Lib/Index.ipe`) rather than the whole
+`change_queue` table, so a large backlog stays fast; the header shows how many
+of the total queued units the current page holds.
 
 If you run from inside a compiler checkout, `ipe` may auto-discover the
 checkout's vendored runtime snapshot instead of its own version-matched one,

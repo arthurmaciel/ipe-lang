@@ -395,7 +395,7 @@ indexBridge =
         |> Task.andThen File.remove
         |> Task.onError (\_ -> Task.succeed ())
         |> Task.andThen (\_ -> seedIndex indexDb repo)
-        |> Task.andThen (\_ -> Index.loadPending |> Task.map checkUnits)
+        |> Task.andThen (\_ -> Index.loadPending |> Task.map (\r -> checkUnits r.total r.units))
         |> Task.andThen (\ok -> cleanupIndex indexDb repo |> Task.map (\_ -> ok))
 
 
@@ -528,9 +528,9 @@ setIndexEnv indexDb repo =
         |> Task.andThen (\_ -> System.setenv "IPE_INDEX_ROOT" repo)
 
 
-checkUnits : List Index.Unit -> Bool
-checkUnits units =
-    if List.length units /= 2 then
+checkUnits : Int -> List Index.Unit -> Bool
+checkUnits total units =
+    if total /= 2 || List.length units /= 2 then
         False
 
     else
@@ -630,6 +630,111 @@ removeFileIfAny path =
         |> Task.onError (\_ -> Task.succeed ())
 
 
+-- ── B3b: the page bound is a hard ceiling, not a suggestion ─────────────────
+--
+-- #2913: `pendingSql` must return AT MOST `Index.pageSize` rows no matter how
+-- many are queued, and `total` (a separate, unbounded `COUNT(*)`) must still
+-- report the true backlog size honestly. Seed strictly more than one page and
+-- assert both halves of that contract at once — a regression that drops the
+-- `LIMIT` or that miscounts `total` fails this.
+pageBoundTruncation : Task.Task Error Bool
+pageBoundTruncation =
+    let
+        base =
+            System.getenvOr "TMPDIR" "/tmp" ++ "/ipe-index-b3b-pagebound"
+
+        repo =
+            base ++ "/repo"
+
+        indexDb =
+            base ++ "/index.db"
+
+        seededTotal =
+            Index.pageSize + 50
+    in
+    Task.fromResult (Path.fromString indexDb)
+        |> Task.andThen File.remove
+        |> Task.onError (\_ -> Task.succeed ())
+        |> Task.andThen (\_ -> Task.fromResult (Path.fromString (repo ++ "/src")) |> Task.andThen File.mkdirAll)
+        |> Task.andThen (\_ -> writeFileText (repo ++ "/src/Main.ipe") fixtureMainIpe)
+        |> Task.andThen (\_ -> seedManyUnits indexDb seededTotal)
+        |> Task.andThen (\_ -> setIndexEnv indexDb repo)
+        |> Task.andThen
+            (\_ ->
+                Index.loadPending
+                    |> Task.map
+                        (\r ->
+                            List.length r.units == Index.pageSize && r.total == seededTotal
+                        )
+            )
+        |> Task.andThen
+            (\ok ->
+                Task.sequence
+                    [ removeFileIfAny indexDb
+                    , removeFileIfAny (indexDb ++ "-wal")
+                    , removeFileIfAny (indexDb ++ "-shm")
+                    , removeFileIfAny (repo ++ "/src/Main.ipe")
+                    ]
+                    |> Task.map (\_ -> ok)
+            )
+
+
+-- Seeds `n` queued units, all `new`, all pointing at the same fixture file
+-- (one file read suffices — this test's subject is the row count, not source
+-- slicing), with strictly increasing `enqueued_at` so the first page is a
+-- deterministic prefix.
+seedManyUnits : String -> Int -> Task.Task Error ()
+seedManyUnits indexDb n =
+    Db.open "sqlite" ("sqlite://" ++ indexDb ++ "?mode=rwc")
+        |> Task.andThen
+            (\conn ->
+                Db.exec conn unitsDdl []
+                    |> Task.andThen (\_ -> Db.exec conn queueDdl [])
+                    |> Task.andThen
+                        (\_ ->
+                            List.range 1 n
+                                |> List.map (seedOneUnit conn)
+                                |> Task.sequence
+                        )
+            )
+        |> Task.map (\_ -> ())
+
+
+seedOneUnit : Db -> Int -> Task.Task Error ()
+seedOneUnit conn i =
+    let
+        uid =
+            "u-page-" ++ String.fromInt i
+
+        hash =
+            "hash-" ++ String.fromInt i
+
+        sha =
+            "sha-" ++ String.fromInt i
+    in
+    Db.exec conn
+        "INSERT INTO units VALUES (?,?,?,?,?,?,?,?,?,?,?)"
+        [ SqlString uid
+        , SqlString "ipe:src/Main.ipe"
+        , SqlString "module"
+        , SqlString "Main"
+        , SqlString "Main"
+        , SqlInt 1
+        , SqlInt 1
+        , SqlString "internal"
+        , SqlNull (SqlString "")
+        , SqlString hash
+        , SqlString sha
+        ]
+        |> Task.andThen
+            (\_ ->
+                Db.exec conn
+                    "INSERT INTO change_queue VALUES (?,?,?,?,?,?)"
+                    [ SqlString uid, SqlString "new", SqlNull (SqlString ""), SqlNull (SqlString ""), SqlString sha, SqlInt i ]
+            )
+        |> Task.map (\_ -> ())
+
+
 -- ── B4: guard the path resolver ─────────────────────────────────────────────
 --
 -- A queued unit whose stored path escapes the index root (mid-path `..`
@@ -720,7 +825,7 @@ drainFlow =
         |> Task.andThen (\_ -> System.setenv "IPE_INDEX_DB" indexDb)
         |> Task.andThen (\_ -> System.setenv "IPE_INDEX_ROOT" repo)
         |> Task.andThen (\_ -> Index.loadPending)
-        |> Task.map (\units -> List.length units == 1)
+        |> Task.map (\r -> List.length r.units == 1 && r.total == 1)
         |> Task.andThen
             (\queued ->
                 if not queued then
@@ -745,7 +850,7 @@ drainFlow =
                 else
                     Index.drainUnit "u-d"
                         |> Task.andThen (\_ -> Index.loadPending)
-                        |> Task.map (\units -> List.length units == 0)
+                        |> Task.map (\r -> List.length r.units == 0 && r.total == 0)
             )
         |> Task.andThen
             (\ok ->
@@ -902,10 +1007,12 @@ changeReenqueue =
                     |> Task.andThen (\_ -> Queue.load)
             )
         |> Task.map
-            (\units ->
-                changedHead units
-                    && freshSecond units
-                    && List.length units
+            (\r ->
+                changedHead r.items
+                    && freshSecond r.items
+                    && List.length r.items
+                    == 2
+                    && r.total
                     == 2
             )
         |> Task.andThen
@@ -1188,6 +1295,46 @@ testKeys =
         ]
 
 
+-- #2913: `QueueState`'s three constructors must render three distinct texts
+-- (never letting "still loading" or "load failed" fall through to the same
+-- "No units queued yet." an empty-but-loaded queue shows), and a `QueueLoaded`
+-- that actually has units must return Nothing — proving the view takes the
+-- detailed-list branch rather than a fallback status line.
+queueStateTextsDistinct : Bool
+queueStateTextsDistinct =
+    List.all identity
+        [ Queue.queueStatusText Queue.QueueLoading == Just "Loading queue…"
+        , Queue.queueStatusText (Queue.QueueLoaded []) == Just "No units queued yet."
+        , Queue.queueStatusText (Queue.QueueFailed "boom") == Just "Queue failed to load: boom"
+        , Queue.queueStatusText Queue.QueueLoading /= Queue.queueStatusText (Queue.QueueLoaded [])
+        , Queue.queueStatusText (Queue.QueueFailed "boom") /= Queue.queueStatusText (Queue.QueueLoaded [])
+        , Queue.queueStatusText (Queue.QueueLoaded [ sampleQueuedUnit ]) == Nothing
+        ]
+
+
+sampleQueuedUnit : Queue.QueuedUnit
+sampleQueuedUnit =
+    { unit =
+        { uid = "u-sample"
+        , change = "new"
+        , oldHash = Nothing
+        , newHash = Nothing
+        , path = "ipe:src/Main.ipe"
+        , kind = "module"
+        , name = "Main"
+        , qualified = "Main"
+        , lineStart = 1
+        , lineEnd = 1
+        , facing = "internal"
+        , purpose = Nothing
+        , bodyHash = "hash-sample"
+        , updatedSha = "sha-sample"
+        , source = "main = ()\n"
+        }
+    , changed = Nothing
+    }
+
+
 report : List ( String, Bool ) -> String
 report results =
     List.map
@@ -1256,6 +1403,11 @@ main =
             )
         |> Task.andThen
             (\results ->
+                pageBoundTruncation
+                    |> Task.map (\ok -> results ++ [ ( "loadPending truncates to pageSize and reports the true total", ok ) ])
+            )
+        |> Task.andThen
+            (\results ->
                 Task.succeed
                     (results
                         ++ [ ( "links resolve internal and external", linksResolve )
@@ -1272,7 +1424,9 @@ main =
             (\results ->
                 Task.succeed
                     (results
-                        ++ [ ( "keyboard shortcuts map to the button msgs", testKeys ) ]
+                        ++ [ ( "keyboard shortcuts map to the button msgs", testKeys )
+                        , ( "queue state texts distinguish loading/empty/failed/loaded", queueStateTextsDistinct )
+                        ]
                     )
             )
         |> Task.andThen

@@ -1,4 +1,4 @@
-module Lib.Queue exposing (QueuedUnit, load)
+module Lib.Queue exposing (QueueState(..), QueuedUnit, load, queueStatusText)
 
 import Ipe.Db as Db
 import Ipe.List as List
@@ -24,12 +24,51 @@ type alias QueuedUnit =
 --   * a unit decided on an older hash resurfaced at the head, flagged with
 --     its previous review (B8 change re-enqueue);
 --   * never-seen units keep the index's enqueue order after resurfaced ones.
-load : Task.Task Error (List QueuedUnit)
+--
+-- The view's model of "how far has the queue load gotten": loading, failed
+-- with a reason, or loaded with (possibly zero) units. Kept as one sum type
+-- rather than a separate list + error field so "not loaded yet", "load
+-- failed", and "loaded and genuinely empty" are three distinct, exhaustively
+-- matched states instead of three field combinations only some of which are
+-- meaningful (the representable-but-illegal shape #2913 reports: an empty
+-- list stood in for both "still loading" and "truly empty").
+type QueueState
+    = QueueLoading
+    | QueueLoaded (List QueuedUnit)
+    | QueueFailed String
+
+
+-- The single-line status text for the three states that are not "a queue
+-- with units to show": Nothing means "the caller should render the detailed
+-- list instead" — a QueueLoaded with units. Total over QueueState, so a
+-- loading or failed queue can never fall through to the same "No units
+-- queued yet." text an empty-but-loaded queue renders.
+queueStatusText : QueueState -> Maybe String
+queueStatusText state =
+    case state of
+        QueueLoading ->
+            Just "Loading queue…"
+
+        QueueFailed err ->
+            Just ("Queue failed to load: " ++ err)
+
+        QueueLoaded units ->
+            if List.isEmpty units then
+                Just "No units queued yet."
+
+            else
+                Nothing
+
+
+-- `total` passes `Index.loadPending`'s honest whole-queue count through
+-- unchanged — `items` is only this page's units after classification.
+load : Task.Task Error { items : List QueuedUnit, total : Int }
 load =
     do
         db <- LibDb.open
-        units <- Index.loadPending
-        classify db units
+        pending <- Index.loadPending
+        items <- classify db pending.units
+        Task.succeed { items = items, total = pending.total }
 
 
 classify : Db.Db -> List Index.Unit -> Task.Task Error (List QueuedUnit)

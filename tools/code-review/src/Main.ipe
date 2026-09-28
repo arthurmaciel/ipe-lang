@@ -26,7 +26,7 @@ import Lib.Highlight as Highlight exposing (Token(..))
 import Lib.Index as Index
 import Lib.Keys as Keys exposing (KeyAction(..))
 import Lib.Links as Links exposing (Link(..))
-import Lib.Queue as Queue
+import Lib.Queue as Queue exposing (QueueState(..))
 
 
 type Page
@@ -48,14 +48,25 @@ type alias HistoryRow =
     }
 
 
+-- The queue's load state is `Queue.QueueState` (an explicit sum, not a
+-- `(list, error)` pair): "not loaded yet", "loading", and "loaded empty" are
+-- three distinct states, and a bare `queue = []` cannot tell them apart (the
+-- class of bug behind #2913 — the page renders "No units queued yet."
+-- whether the load never finished or genuinely returned zero rows). It lives
+-- in `Lib.Queue`, not here, so `tests/Main.ipe` (a separate program with its
+-- own `Main`) can exercise `queueStatusText` directly.
 type alias Model =
     { page : Page
-    , queue : List Queue.QueuedUnit
-    , queueError : Maybe String
+    , queueState : Queue.QueueState
+    , queueTotal : Int
+    , dbName : Maybe String
+    , dbSizeBytes : Maybe Int
+    , dbInfoError : Maybe String
     , decidedThisPass : Int
     , refusingUid : Maybe String
     , refuseDraft : String
     , refuseError : Maybe String
+    , decisionError : Maybe String
     , history : List HistoryRow
     , historyError : Maybe String
     , unitPage : Maybe Index.Unit
@@ -68,12 +79,16 @@ type alias Model =
 init : Web.WebReq -> ( Model, Cmd Msg )
 init req =
     ( { page = pageFor req.path
-      , queue = []
-      , queueError = Nothing
+      , queueState = Queue.QueueLoading
+      , queueTotal = 0
+      , dbName = Nothing
+      , dbSizeBytes = Nothing
+      , dbInfoError = Nothing
       , decidedThisPass = 0
       , refusingUid = Nothing
       , refuseDraft = ""
       , refuseError = Nothing
+      , decisionError = Nothing
       , history = []
       , historyError = Nothing
       , unitPage = Nothing
@@ -83,6 +98,7 @@ init req =
       }
     , Cmd.batch
         [ Cmd.perform Queue.load PendingLoaded
+        , Cmd.perform Index.dbInfo DbInfoLoaded
         , pageCmd req.path
         ]
     )
@@ -121,7 +137,8 @@ reviewDb =
 
 
 type Msg
-    = PendingLoaded (Result Error (List Queue.QueuedUnit))
+    = PendingLoaded (Result Error { items : List Queue.QueuedUnit, total : Int })
+    | DbInfoLoaded (Result Error Index.DbInfo)
     | ApproveUnit String
     | RefuseStart String
     | RefuseDraft String
@@ -141,11 +158,26 @@ update msg model =
     case msg of
         PendingLoaded result ->
             case result of
-                Ok units ->
-                    ( { model | queue = units, refusingUid = Nothing, selected = clampIndex model.selected (List.length units) }, Cmd.none )
+                Ok pending ->
+                    ( { model
+                        | queueState = Queue.QueueLoaded pending.items
+                        , queueTotal = pending.total
+                        , refusingUid = Nothing
+                        , selected = clampIndex model.selected (List.length pending.items)
+                      }
+                    , Cmd.none
+                    )
 
                 Err e ->
-                    ( { model | queue = [], queueError = Just (Error.toString e) }, Cmd.none )
+                    ( { model | queueState = Queue.QueueFailed (Error.toString e) }, Cmd.none )
+
+        DbInfoLoaded result ->
+            case result of
+                Ok info ->
+                    ( { model | dbName = Just info.name, dbSizeBytes = Just info.sizeBytes, dbInfoError = Nothing }, Cmd.none )
+
+                Err e ->
+                    ( { model | dbInfoError = Just (Error.toString e) }, Cmd.none )
 
         ApproveUnit uid ->
             ( model, saveDecision model uid Approved )
@@ -168,7 +200,7 @@ update msg model =
                     ( { model | decidedThisPass = model.decidedThisPass + 1 }, drainAndReload model uid )
 
                 Err e ->
-                    ( { model | queueError = Just ("Decision save failed: " ++ Error.toString e) }, Cmd.none )
+                    ( { model | decisionError = Just ("Decision save failed: " ++ Error.toString e) }, Cmd.none )
 
         ShowQueue ->
             ( { model | page = QueuePage }, Cmd.none )
@@ -193,10 +225,10 @@ update msg model =
                     ( { model | unitError = Just ("Unit load failed: " ++ Error.toString e) }, Cmd.none )
 
         KeyDown key ->
-            keyActionMsg (Keys.keyAction (model.refusingUid /= Nothing) (List.length model.queue) model.selected key) model
+            keyActionMsg (Keys.keyAction (model.refusingUid /= Nothing) (List.length (queueList model)) model.selected key) model
 
         SelectUnit i ->
-            ( { model | selected = clampIndex i (List.length model.queue) }, Cmd.none )
+            ( { model | selected = clampIndex i (List.length (queueList model)) }, Cmd.none )
 
 
 -- B10: every KeyAction dispatches the same Msg the matching button sends —
@@ -247,9 +279,25 @@ submitRefuse model uid =
         ( { model | refusingUid = Nothing, refuseDraft = "" }, saveDecision model uid (Refused model.refuseDraft) )
 
 
+-- The current page's queued units, or [] while loading/failed — the single
+-- read site every queue-list consumer below goes through, so "not loaded"
+-- never gets silently treated as "empty" anywhere but here.
+queueList : Model -> List Queue.QueuedUnit
+queueList model =
+    case model.queueState of
+        QueueLoaded units ->
+            units
+
+        QueueLoading ->
+            []
+
+        QueueFailed _ ->
+            []
+
+
 selectedUid : Model -> Maybe String
 selectedUid model =
-    case List.head (List.drop model.selected model.queue) of
+    case List.head (List.drop model.selected (queueList model)) of
         Just q ->
             Just q.unit.uid
 
@@ -267,7 +315,7 @@ saveDecision model uid decision =
     Cmd.perform
         (do
             db <- reviewDb
-            case bodyHashOf uid model.queue of
+            case bodyHashOf uid (queueList model) of
                 Just bodyHash ->
                     LibDb.insertDecision db uid bodyHash decision
 
@@ -283,7 +331,7 @@ saveDecision model uid decision =
 -- the unit stays visible with its badge and the next click retries.
 drainAndReload : Model -> String -> Cmd Msg
 drainAndReload model uid =
-    case bodyHashOf uid model.queue of
+    case bodyHashOf uid (queueList model) of
         Nothing ->
             Cmd.none
 
@@ -365,11 +413,45 @@ header model =
         , Border.widthEach { top = 0, right = 0, bottom = 1, left = 0 }
         ]
         [ Ui.el [ Font.size 16, Font.bold, Font.color (Ui.rgb 235 235 240) ] (Ui.text "Code review")
+        , dbInfoEl model
         , Ui.el [ Ui.width Ui.fill ] Ui.none
         , navButton (model.page == QueuePage) "Queue" ShowQueue
         , navButton (model.page == HistoryPage) "History" ShowHistory
         , progressEl model
         ]
+
+
+-- The index db's name/size and an honest "showing N of TOTAL queued" — the
+-- header fact this page's whole fix hinges on: N is `queueList model`'s
+-- length (this page only), TOTAL is `queueTotal` from a COUNT(*) that never
+-- loads more than one page of rows to answer it.
+dbInfoEl : Model -> Ui.Element Msg
+dbInfoEl model =
+    Ui.el
+        [ Font.size 11, Font.color (Ui.rgb 140 140 155) ]
+        (Ui.text (dbInfoText model))
+
+
+dbInfoText : Model -> String
+dbInfoText model =
+    case model.dbInfoError of
+        Just err ->
+            "index db: " ++ err
+
+        Nothing ->
+            case ( model.dbName, model.dbSizeBytes ) of
+                ( Just name, Just size ) ->
+                    name
+                        ++ " ("
+                        ++ Format.byteSize size
+                        ++ ") — showing "
+                        ++ String.fromInt (List.length (queueList model))
+                        ++ " of "
+                        ++ String.fromInt model.queueTotal
+                        ++ " queued"
+
+                _ ->
+                    "loading index db info…"
 
 
 navButton : Bool -> String -> Msg -> Ui.Element Msg
@@ -396,7 +478,7 @@ progressEl model =
             model.decidedThisPass
 
         n =
-            k + List.length model.queue
+            k + model.queueTotal
 
         pct =
             Format.percent k n
@@ -459,31 +541,52 @@ pageBody model =
             unitPageBody model
 
 
+-- QueueLoading/QueueFailed/QueueLoaded are rendered as three visibly distinct
+-- texts (never a bare "No units queued yet." standing in for "still loading"
+-- or "load failed") — the invariant #2913 exists to establish.
 queueBody : Model -> Ui.Element Msg
 queueBody model =
-    case model.queueError of
+    Ui.column
+        [ Ui.width Ui.fill, Ui.height Ui.fill, Ui.spacing 12 ]
+        [ decisionErrorBanner model
+        , queueStateBody model
+        ]
+
+
+decisionErrorBanner : Model -> Ui.Element Msg
+decisionErrorBanner model =
+    case model.decisionError of
         Just err ->
-            Ui.text err
+            Ui.el [ Font.size 13, Font.color (Ui.rgb 230 120 120) ] (Ui.text err)
 
         Nothing ->
-            if List.isEmpty model.queue then
-                Ui.text "No units queued yet."
+            Ui.none
 
-            else
-                Ui.row
-                    [ Ui.width Ui.fill, Ui.height Ui.fill, Ui.spacing 16 ]
-                    [ queueRail model
-                    , Ui.column
-                        [ Ui.width Ui.fill, Ui.height Ui.fill, Ui.spacing 16, Ui.scrollbars ]
-                        [ hintLine
-                        , case selectedUnit model of
-                            Just q ->
-                                unitCard model True q
 
-                            Nothing ->
-                                Ui.none
-                        ]
+-- `Queue.queueStatusText` (not a local copy) is the single source of truth
+-- for this text, so `tests/Main.ipe` pins the exact same function this view
+-- renders, not a look-alike restated in the test file.
+queueStateBody : Model -> Ui.Element Msg
+queueStateBody model =
+    case Queue.queueStatusText model.queueState of
+        Just text ->
+            Ui.text text
+
+        Nothing ->
+            Ui.row
+                [ Ui.width Ui.fill, Ui.height Ui.fill, Ui.spacing 16 ]
+                [ queueRail model
+                , Ui.column
+                    [ Ui.width Ui.fill, Ui.height Ui.fill, Ui.spacing 16, Ui.scrollbars ]
+                    [ hintLine
+                    , case selectedUnit model of
+                        Just q ->
+                            unitCard model True q
+
+                        Nothing ->
+                            Ui.none
                     ]
+                ]
 
 
 -- B10: the left rail is the keyboard-first overview — one button per queued
@@ -496,7 +599,7 @@ queueRail model =
         , Ui.spacing 4
         , Ui.scrollbars
         ]
-        (List.indexedMap (railItem model) model.queue)
+        (List.indexedMap (railItem model) (queueList model))
 
 
 railItem : Model -> Int -> Queue.QueuedUnit -> Ui.Element Msg
@@ -535,7 +638,7 @@ railItem model i q =
 
 selectedUnit : Model -> Maybe Queue.QueuedUnit
 selectedUnit model =
-    List.head (List.drop model.selected model.queue)
+    List.head (List.drop model.selected (queueList model))
 
 
 hintLine : Ui.Element Msg

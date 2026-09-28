@@ -1,4 +1,4 @@
-module Lib.Index exposing (Unit, drainUnit, indexDbUrl, loadPending, loadUnitByUid, nameFor, qualifiedUids)
+module Lib.Index exposing (DbInfo, Unit, dbInfo, drainUnit, indexDbUrl, loadPending, loadUnitByUid, nameFor, pageSize, qualifiedUids)
 
 import Ipe.Db
 import Ipe.Db.Decode
@@ -263,22 +263,66 @@ indexRoot =
     System.getenv "IPE_INDEX_ROOT"
 
 
+-- The queue page never loads more than this many rows in one pass: an index
+-- can hold tens of thousands of queued units, and reading every one of their
+-- source files in a single load is unbounded work an input (the queue size)
+-- would dictate without a ceiling. Decided units drain from `change_queue`
+-- (see `drainUnit`), so the next page naturally surfaces once this page is
+-- cleared — pagination never hides a unit permanently.
+pageSize : Int
+pageSize =
+    100
+
+
 pendingSql : String
 pendingSql =
-    "SELECT q.uid, q.change, q.old_hash, q.new_hash, u.path, u.name, u.qualified, u.kind, u.line_start, u.line_end, u.facing, u.purpose, u.body_hash, u.updated_sha FROM change_queue q JOIN units u ON u.uid = q.uid WHERE q.change IN ('new','modified') ORDER BY q.enqueued_at, q.uid"
+    "SELECT q.uid, q.change, q.old_hash, q.new_hash, u.path, u.name, u.qualified, u.kind, u.line_start, u.line_end, u.facing, u.purpose, u.body_hash, u.updated_sha FROM change_queue q JOIN units u ON u.uid = q.uid WHERE q.change IN ('new','modified') ORDER BY q.enqueued_at, q.uid LIMIT ?"
+
+
+-- The same WHERE/JOIN as `pendingSql`, without the LIMIT — a cheap COUNT(*)
+-- so the caller can report an honest "showing N of TOTAL" without ever
+-- loading TOTAL rows.
+pendingCountSql : String
+pendingCountSql =
+    "SELECT COUNT(*) AS total FROM change_queue q JOIN units u ON u.uid = q.uid WHERE q.change IN ('new','modified')"
+
+
+countDecoder : Db.Decode.Decoder Int
+countDecoder =
+    Db.Decode.succeed (\n -> n)
+        |> Db.Decode.required "total" (Db.Decode.int "total")
+
+
+pendingTotal : Task.Task Error Int
+pendingTotal =
+    do
+        url <- indexDbUrl
+        conn <- Db.open "sqlite" url
+        rows <- Db.queryDecode conn pendingCountSql [] countDecoder
+        case List.head rows of
+            Just n ->
+                Task.succeed n
+
+            Nothing ->
+                Task.succeed 0
 
 
 -- Queue units (new + modified, ordered by enqueue time), each with its
--- source slice resolved against the index root. Deleted units drop out of
--- the JOIN — they have no row to slice.
-loadPending : Task.Task Error (List Unit)
+-- source slice resolved against the index root, bounded to `pageSize` rows
+-- so an index with tens of thousands of queued units can't force an
+-- unbounded read of source files (bounded by construction). `total` is the
+-- true count across the whole queue, from `pendingTotal`, not this page's
+-- length.
+loadPending : Task.Task Error { units : List Unit, total : Int }
 loadPending =
     do
         root <- indexRoot
         url <- indexDbUrl
         conn <- Db.open "sqlite" url
-        rows <- Db.queryDecode conn pendingSql [] rowDecoder
-        loadSources root rows
+        rows <- Db.queryDecode conn pendingSql [ SqlInt pageSize ] rowDecoder
+        total <- pendingTotal
+        units <- loadSources root rows
+        Task.succeed { units = units, total = total }
 
 
 -- The review app consumes and clears explicitly: after a unit is decided,
@@ -394,6 +438,56 @@ resolvePath root stored =
 
         [] ->
             Nothing
+
+
+-- The index db's display name and on-disk size, for the queue page header.
+-- Size comes from `PRAGMA page_count` * `PRAGMA page_size` rather than
+-- reading the file's bytes, so it stays O(1) regardless of the db's size —
+-- the same bounded-by-construction concern `pageSize` addresses for rows.
+type alias DbInfo =
+    { name : String
+    , sizeBytes : Int
+    }
+
+
+pragmaPageCountSql : String
+pragmaPageCountSql =
+    "PRAGMA page_count"
+
+
+pragmaPageSizeSql : String
+pragmaPageSizeSql =
+    "PRAGMA page_size"
+
+
+pragmaDecoder : String -> Db.Decode.Decoder Int
+pragmaDecoder col =
+    Db.Decode.succeed (\n -> n)
+        |> Db.Decode.required col (Db.Decode.int col)
+
+
+firstOrFail : String -> List Int -> Task.Task Error Int
+firstOrFail label rows =
+    case List.head rows of
+        Just n ->
+            Task.succeed n
+
+        Nothing ->
+            Task.fail (Error.unexpected (label ++ " returned no row"))
+
+
+dbInfo : Task.Task Error DbInfo
+dbInfo =
+    do
+        raw <- indexDbRaw
+        url <- indexDbUrl
+        conn <- Db.open "sqlite" url
+        pageCountRows <- Db.queryDecode conn pragmaPageCountSql [] (pragmaDecoder "page_count")
+        pageSizeRows <- Db.queryDecode conn pragmaPageSizeSql [] (pragmaDecoder "page_size")
+        pageCount <- firstOrFail "page_count" pageCountRows
+        pageSizeBytes <- firstOrFail "page_size" pageSizeRows
+        path <- Task.fromResult (Path.fromString raw)
+        Task.succeed { name = Path.base path, sizeBytes = pageCount * pageSizeBytes }
 
 
 -- 1-based inclusive slice of the unit's lines.
