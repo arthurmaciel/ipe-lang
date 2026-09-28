@@ -147,7 +147,17 @@ fn server_capabilities(encoding: PositionEncoding) -> ServerCapabilities {
         })),
         document_formatting_provider: Some(OneOf::Left(true)),
         document_range_formatting_provider: Some(OneOf::Left(true)),
-        code_action_provider: Some(lsp_types::CodeActionProviderCapability::Simple(true)),
+        code_action_provider: Some(lsp_types::CodeActionProviderCapability::Options(
+            lsp_types::CodeActionOptions {
+                code_action_kinds: Some({
+                    let mut kinds = vec![lsp_types::CodeActionKind::QUICKFIX];
+                    kinds.extend(ipe_lsp_features::refactor::advertised_kinds());
+                    kinds
+                }),
+                resolve_provider: Some(false),
+                work_done_progress_options: lsp_types::WorkDoneProgressOptions::default(),
+            },
+        )),
         document_highlight_provider: Some(OneOf::Left(true)),
         workspace_symbol_provider: Some(OneOf::Left(true)),
         selection_range_provider: Some(SelectionRangeProviderCapability::Simple(true)),

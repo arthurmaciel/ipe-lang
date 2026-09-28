@@ -88,6 +88,7 @@ use std::time::{Duration, Instant};
 
 use ipe_intern::Interner;
 
+use crate::output_dir::{EmitTarget, OutputRefusal, OwnedDir, ProjectPaths};
 use crate::project;
 use crate::text;
 use crate::{CliError, write_emitted_project};
@@ -202,6 +203,11 @@ pub struct WatchOptions {
     /// a pre-compiled dependency tree instead of cold-building it; the E2E watch
     /// suite uses it to forward the CI shard's warm shared target.
     pub target_dir: Option<PathBuf>,
+    /// The proven target `out_dir` names, when the caller holds one.
+    ///
+    /// Each rebuild claims it through its proof; `None` proves `out_dir`
+    /// disjoint from the watched project before the session starts.
+    pub out_target: Option<EmitTarget>,
 }
 
 impl WatchOptions {
@@ -221,6 +227,7 @@ impl WatchOptions {
             reset_state: false,
             debugger: false,
             target_dir: None,
+            out_target: None,
         }
     }
 }
@@ -812,6 +819,11 @@ fn run_inner(
 ) -> Result<(), CliError> {
     let initial = resolve_project_sources(&opts.entry, None)?;
     let (root_dir, entry_dir) = scope_roots(&initial, &opts.entry);
+    let out_target = EmitTarget::for_path(
+        &opts.out_dir,
+        opts.out_target.clone(),
+        &ProjectPaths::discover(&opts.entry)?,
+    )?;
 
     let scope = ipe_watch::WatchScope::build(&root_dir, &entry_dir)
         .map_err(|e| CliError::Usage(crate::text::Message::relay(&e)))?;
@@ -1012,6 +1024,8 @@ fn run_inner(
     let mut generation: u64 = 0;
     let mut compile_worker: Option<thread::JoinHandle<()>> = None;
     let mut cargo_child: Option<Arc<std::sync::Mutex<Child>>> = None;
+    // The crate the in-flight cargo build compiles, proven again once it exits.
+    let mut building: Option<OwnedDir> = None;
     // Set at `CompileDone` (Green), consumed at `CargoDone` (Green) — the
     // readiness strategy is a property of the SOURCE (does it call
     // `Web.tea`?), decided once per generation right after emit, not
@@ -1494,21 +1508,24 @@ fn run_inner(
                         // no tree-shaking (the full runtime tree keeps rebuilds
                         // incremental across a session's changing reach set).
                         let write_started = Instant::now();
-                        if let Err(e) = write_emitted_project(
+                        let crate_dir = match write_emitted_project(
                             &emitted,
-                            &opts.out_dir,
+                            &out_target,
                             &opts.runtime_dir,
                             None,
                             false,
                         ) {
-                            emit_watch_line(
-                                &crate::style::TerminalSafe::sanitize(&format!(
-                                    "[ipe watch] failed to write emitted project: {e}"
-                                )),
-                                WatchRole::Failure,
-                            );
-                            continue;
-                        }
+                            Ok(dir) => dir,
+                            Err(e) => {
+                                emit_watch_line(
+                                    &crate::style::TerminalSafe::sanitize(&format!(
+                                        "[ipe watch] failed to write emitted project: {e}"
+                                    )),
+                                    WatchRole::Failure,
+                                );
+                                continue;
+                            }
+                        };
                         timings.write = Some(write_started.elapsed());
                         // This emit is about to be compiled into the new running
                         // binary, so it becomes the classifier's baseline for the
@@ -1556,13 +1573,16 @@ fn run_inner(
                         }
                         match spawn_cargo_build(
                             &opts.cargo_path,
-                            &opts.out_dir,
+                            crate_dir.path(),
                             opts.target_dir.as_deref(),
                             generation,
                             evt_tx.clone(),
                             opts.quiet,
                         ) {
-                            Ok(child) => cargo_child = Some(child),
+                            Ok(child) => {
+                                cargo_child = Some(child);
+                                building = Some(crate_dir);
+                            }
                             Err(e) => emit_watch_line(
                                 &crate::style::TerminalSafe::sanitize(&format!(
                                     "[ipe watch] cannot start cargo build: {e}"
@@ -1608,6 +1628,20 @@ fn run_inner(
                         timings.report(g);
                     }
                     CargoOutcome::Green(exe_path) => {
+                        let built = match prove_green_crate(building.take(), &opts.out_dir) {
+                            Ok(dir) => dir,
+                            Err(reason) => {
+                                emit_watch_line(
+                                    &crate::style::TerminalSafe::sanitize(&format!(
+                                        "[ipe watch] refusing the build: {reason}"
+                                    )),
+                                    WatchRole::Failure,
+                                );
+                                emit(opts, WatchEvent::CargoFailed { generation: g });
+                                timings.report(g);
+                                continue;
+                            }
+                        };
                         let restart_started = Instant::now();
                         // Deferred blue-green engagement: bind the proxy on the
                         // user's port the first time a green build is known to bind
@@ -1692,7 +1726,7 @@ fn run_inner(
                                     grace: Duration::from_millis(300),
                                 }
                             };
-                            let out_dir = opts.out_dir.clone();
+                            let crate_dir = built.path().to_path_buf();
                             let tok = hot_token.clone();
                             let cp = control_port;
                             let reset_state = opts.reset_state;
@@ -1704,7 +1738,7 @@ fn run_inner(
                                         path,
                                         &child_env(
                                             port,
-                                            &out_dir,
+                                            &crate_dir,
                                             tok.as_deref(),
                                             cp,
                                             true,
@@ -1731,7 +1765,7 @@ fn run_inner(
                             };
                             let env = child_env(
                                 opts.port,
-                                &opts.out_dir,
+                                built.path(),
                                 hot_token.as_deref(),
                                 control_port,
                                 false,
@@ -1942,6 +1976,23 @@ fn emitted_binds_http(emitted: &ipe_backend::EmittedProject) -> bool {
         || emitted_source_contains(emitted, "ipe_runtime::server::server_listen")
 }
 
+/// The crate a green build wrote, proven still the one its rebuild claimed.
+///
+/// `cargo` writes into the crate by path, so a crate replaced while it ran, or a
+/// green build with no claim on record, is refused and its binary is never
+/// started. `reported` names the output root in the refusal when no claim
+/// exists.
+fn prove_green_crate(building: Option<OwnedDir>, reported: &Path) -> Result<OwnedDir, CliError> {
+    building.map_or_else(
+        || {
+            Err(CliError::from(OutputRefusal::Replaced(
+                reported.to_path_buf(),
+            )))
+        },
+        |dir| dir.verify().map(|()| dir),
+    )
+}
+
 /// Build the child process's environment.
 ///
 /// Sets both `IPE_WEB_PORT` and `IPE_SERVER_PORT` to the SAME configured
@@ -1951,7 +2002,8 @@ fn emitted_binds_http(emitted: &ipe_backend::EmittedProject) -> bool {
 /// establishes) be driven by `--port` exactly like a Ipe.Web app is.
 ///
 /// Also provides the watch-scoped half of session continuity —
-/// default the dev session store to `file` (persisted under `out_dir`,
+/// default the dev session store to `file` (persisted beside the claimed
+/// `crate_dir` the green build was proven to write,
 /// confined to the emit tree's parent so the emit→cargo bridge's
 /// `src/`-only prune pass never touches it) unless the caller's OWN
 /// environment already configures `IPE_WEB_STORE`, in which case that
@@ -1959,7 +2011,7 @@ fn emitted_binds_http(emitted: &ipe_backend::EmittedProject) -> bool {
 /// `memory` — see `warn_if_memory_store`, called once at watch startup).
 fn child_env(
     port: u16,
-    out_dir: &Path,
+    crate_dir: &Path,
     hot_token: Option<&str>,
     control_port: Option<u16>,
     bluegreen: bool,
@@ -2013,9 +2065,9 @@ fn child_env(
         // the Model. Confined to the emit tree's parent so the `src/`-only
         // prune pass never touches it.
         env.push(("IPE_WEB_STORE".to_owned(), "file".to_owned()));
-        let store_path = out_dir
+        let store_path = crate_dir
             .parent()
-            .unwrap_or(out_dir)
+            .unwrap_or(crate_dir)
             .join(".ipe-watch-sessions.json");
         env.push((
             "IPE_WEB_STORE_PATH".to_owned(),
@@ -3207,8 +3259,8 @@ mod tests {
         RebuildTimings, WatchRole, appearance_route, apply_build_accel_env, child_env,
         choose_build_accel, compile_failed_frame, dir_has_dep_rlib, emitted_binds_http,
         emitted_is_tui, emitted_is_web, env_flag_on, first_error_line, mint_hot_token, mpsc,
-        push_control_appearance, schedule_resolve_retry, send_control_frame, spawn_command,
-        strip_ansi, watch_line, watch_status_body,
+        prove_green_crate, push_control_appearance, schedule_resolve_retry, send_control_frame,
+        spawn_command, strip_ansi, watch_line, watch_status_body,
     };
     use std::ffi::OsStr;
     use std::path::{Path, PathBuf};
@@ -3953,5 +4005,45 @@ mod tests {
                 "watch_line must not double-gutter past 4 spaces; got {rendered:?}"
             );
         }
+    }
+
+    /// Whether `refused` is a replaced-crate refusal.
+    fn refused_as_replaced(refused: &Result<crate::output_dir::OwnedDir, crate::CliError>) -> bool {
+        refused.as_ref().is_err_and(|r| {
+            matches!(
+                r,
+                crate::CliError::OutputRefused(crate::output_dir::OutputRefusal::Replaced(_))
+            )
+        })
+    }
+
+    /// A green build with no claimed crate on record fails, its binary unstarted.
+    #[test]
+    fn a_green_build_without_a_claimed_crate_is_refused() {
+        let refused = prove_green_crate(None, Path::new("/tmp/ipe-out"));
+        assert!(refused_as_replaced(&refused), "got {refused:?}");
+    }
+
+    /// A crate swapped while cargo built it fails the build, its binary unstarted.
+    #[test]
+    fn a_green_build_whose_crate_was_replaced_is_refused() {
+        let base = std::env::temp_dir().join(format!("ipe-watch-green-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).expect("scratch base");
+        let crate_path = base.join("crate");
+        let claimed = crate::output_dir::OwnedDir::claim(&crate_path).expect("claim crate");
+        std::fs::rename(&crate_path, base.join("aside")).expect("move crate aside");
+        std::fs::create_dir(&crate_path).expect("replacement at the same path");
+        let refused = prove_green_crate(Some(claimed), &crate_path);
+        assert!(refused_as_replaced(&refused), "got {refused:?}");
+
+        let fresh = base.join("fresh");
+        let held = crate::output_dir::OwnedDir::claim(&fresh).expect("claim fresh crate");
+        let proven = prove_green_crate(Some(held), &fresh);
+        assert!(
+            proven.as_ref().is_ok_and(|dir| dir.path() == fresh),
+            "an untouched crate is handed back to run, got {proven:?}"
+        );
+        let _ = std::fs::remove_dir_all(&base);
     }
 }

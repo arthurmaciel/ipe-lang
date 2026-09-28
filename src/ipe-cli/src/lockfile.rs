@@ -82,9 +82,10 @@ impl std::fmt::Display for LockRefusal {
                     &raw.escape_debug(),
                 )
             }
-            Self::NonUtf8LocalPath { package, path } => {
-                crate::text::lock_non_utf8_local_path(package, &path.display())
-            }
+            Self::NonUtf8LocalPath { package, path } => crate::text::lock_non_utf8_local_path(
+                package,
+                &path.to_string_lossy().escape_debug(),
+            ),
         })
     }
 }
@@ -925,5 +926,20 @@ mod tests {
             "{err:?}"
         );
         assert!(err.to_string().contains("not valid UTF-8"), "{err}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn non_utf8_local_path_refusal_escapes_control_characters() {
+        use std::os::unix::ffi::OsStrExt as _;
+        // A terminal escape in the refused path must not reach the rendered
+        // diagnostic raw, or it would drive the user's terminal.
+        let path = std::path::Path::new(std::ffi::OsStr::from_bytes(b"lib\x1b[2J\n\xff"));
+        let msg = LocalSource::from_path(&name("mylib"), path)
+            .unwrap_err()
+            .to_string();
+        assert!(!msg.contains('\x1b'), "{msg:?}");
+        assert!(!msg.contains("[2J\n"), "{msg:?}");
+        assert!(msg.contains("\\u{1b}[2J\\n"), "{msg:?}");
     }
 }

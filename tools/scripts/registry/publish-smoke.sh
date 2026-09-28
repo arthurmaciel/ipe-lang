@@ -442,17 +442,23 @@ neg_log "bad probe PR is #$bad_pr — polling its admission verdict (up to ${POL
 #   * the PR was CLOSED WITHOUT MERGING (rejected).
 # FAIL the leg (fail-closed) if the bad PR MERGED or its checks went all-`success`
 # (admitted) — the gate let a Tier-1-failing package through.
-# Each field is read through gh's own `--jq` (the same mechanism the existing
-# steps use) so no standalone `jq` dependency is introduced; a `null`/absent field
-# becomes the empty string via `// empty`.
+# The PR fields are read in ONE rc-checked `gh api` call (gh's own `--jq`, no
+# standalone `jq`). A failed read, or a `merged` that is not exactly `true` or
+# `false`, is an UNKNOWN verdict: no rejection signal is trusted from it, the
+# loop polls again, and the deadline turns a verdict that never becomes known
+# into a FAILURE. Every rejection signal requires `merged` to be exactly
+# `false` in the same read.
 neg_deadline=$(( $(date +%s) + POLL_SECS ))
 while :; do
-  merged="$(GH_TOKEN="$IPE_SMOKE_TOKEN" gh api \
-    "repos/$INDEX_REPO/pulls/$bad_pr" --jq '.merged // empty' 2>/dev/null || true)"
-  pr_state="$(GH_TOKEN="$IPE_SMOKE_TOKEN" gh api \
-    "repos/$INDEX_REPO/pulls/$bad_pr" --jq '.state // empty' 2>/dev/null || true)"
-  head_sha="$(GH_TOKEN="$IPE_SMOKE_TOKEN" gh api \
-    "repos/$INDEX_REPO/pulls/$bad_pr" --jq '.head.sha // empty' 2>/dev/null || true)"
+  merged=""; pr_state=""; head_sha=""
+  pr_rc=0
+  pr_row="$(GH_TOKEN="$IPE_SMOKE_TOKEN" gh api "repos/$INDEX_REPO/pulls/$bad_pr" \
+    --jq '[.merged, .state, .head.sha] | @tsv')" || pr_rc=$?
+  if [ "$pr_rc" -eq 0 ]; then
+    IFS=$'\t' read -r merged pr_state head_sha <<<"$pr_row"
+  else
+    neg_log "reading bad probe PR #$bad_pr failed (gh exit $pr_rc) — verdict unknown, polling again"
+  fi
 
   if [ "$merged" = "true" ]; then
     neg_fail "the bad probe PR #$bad_pr MERGED — a Tier-1-failing package was ADMITTED. \
@@ -461,26 +467,29 @@ The admission gate did not fail closed."
 
   # The combined commit status + count of concluded-failure check runs for the PR
   # head. Either a `failure` combined status or one failing check run is a RED
-  # admission verdict.
+  # admission verdict. A failed read leaves the signal absent (no rejection).
   combined=""
   check_fail=0
-  if [ -n "$head_sha" ]; then
+  if [ "$merged" = "false" ] && [ -n "$head_sha" ]; then
     combined="$(GH_TOKEN="$IPE_SMOKE_TOKEN" gh api \
-      "repos/$INDEX_REPO/commits/$head_sha/status" --jq '.state // empty' 2>/dev/null || true)"
+      "repos/$INDEX_REPO/commits/$head_sha/status" --jq '.state // empty')" \
+      || { neg_log "reading combined status of $head_sha failed — signal unknown"; combined=""; }
     check_fail="$(GH_TOKEN="$IPE_SMOKE_TOKEN" gh api \
       "repos/$INDEX_REPO/commits/$head_sha/check-runs" \
-      --jq '[.check_runs[] | select(.conclusion=="failure" or .conclusion=="cancelled" or .conclusion=="timed_out")] | length' \
-      2>/dev/null || echo 0)"
+      --jq '[.check_runs[] | select(.conclusion=="failure" or .conclusion=="cancelled" or .conclusion=="timed_out")] | length')" \
+      || { neg_log "reading check runs of $head_sha failed — signal unknown"; check_fail=0; }
   fi
-  [ -n "$check_fail" ] || check_fail=0
+  case "$check_fail" in ''|*[!0-9]*) check_fail=0 ;; esac
 
-  if [ "$combined" = "failure" ] || [ "$check_fail" -gt 0 ] 2>/dev/null; then
-    neg_log "REJECTED: bad probe PR #$bad_pr admission check is RED (combined=$combined, failing-checks=$check_fail) — the gate refused it."
-    break
-  fi
-  if [ "$pr_state" = "closed" ]; then
-    neg_log "REJECTED: bad probe PR #$bad_pr was CLOSED without merging — the gate refused it."
-    break
+  if [ "$merged" = "false" ]; then
+    if [ "$combined" = "failure" ] || [ "$check_fail" -gt 0 ]; then
+      neg_log "REJECTED: bad probe PR #$bad_pr admission check is RED (combined=$combined, failing-checks=$check_fail) — the gate refused it."
+      break
+    fi
+    if [ "$pr_state" = "closed" ]; then
+      neg_log "REJECTED: bad probe PR #$bad_pr was CLOSED without merging — the gate refused it."
+      break
+    fi
   fi
 
   [ "$(date +%s)" -lt "$neg_deadline" ] \

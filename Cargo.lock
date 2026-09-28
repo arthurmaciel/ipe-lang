@@ -3311,6 +3311,7 @@ dependencies = [
  "ipe_syntax",
  "ipe_types",
  "lsp-types",
+ "serde_json",
 ]
 
 [[package]]
@@ -3348,6 +3349,7 @@ version = "0.3.2"
 name = "ipe_sandbox"
 version = "0.3.2"
 dependencies = [
+ "dunce",
  "ipe_diagnostics",
  "ipe_kernels",
  "libc",
