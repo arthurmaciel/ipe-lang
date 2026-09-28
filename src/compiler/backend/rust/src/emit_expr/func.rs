@@ -296,6 +296,19 @@ pub fn emit_func_value(
     ty: &IrType,
     generics: GenericScope,
 ) -> DResult<String> {
+    // A kernel whose emit arm carries a bridge or guard is never a bare function
+    // value: the lowerer eta-expands every point-free reference to it.
+    if let Callee::Kernel(k) = callee
+        && k.requires_saturated_emit()
+    {
+        return Err(Diagnostic::CompilerBug {
+            where_: "ipe_backend_rust::emit_func_value",
+            detail: format!(
+                "{k:?} reached as a bare function value; the lowerer must eta-expand \
+                 it so its saturated emit arm fires"
+            ),
+        });
+    }
     let name = callee_name(ctx, callee)?;
     let typed = render_type(ctx, ty, generics)?;
     let ctor = if wants_arc_ctor(ty) { "Arc" } else { "Box" };
@@ -515,10 +528,16 @@ pub fn render_bounds(bounds: BoundSet, n: usize) -> String {
         traits.push("PartialEq".to_owned());
     }
     if bounds.has_show() {
-        // Ipê `toString` / `Log.*With`: the value must render. Fully qualified —
+        // `Debug.log` / `Error.toString`: the value must render. Fully qualified —
         // the trait is not in the Rust prelude. Every emitted record/ADT + every
         // scalar has a `IpeStringify` impl.
         traits.push("crate::ipe_runtime::stringify::IpeStringify".to_owned());
+    }
+    if bounds.has_interpolable() {
+        // `{{…}}` interpolation / `Log.*With`: the sealed trait implemented for
+        // exactly the closed scalar set, so `rustc` re-checks every caller's
+        // concrete type against the set the type checker admitted.
+        traits.push("crate::ipe_runtime::stringify::IpeInterpolate".to_owned());
     }
     if bounds.has_ord_total() {
         // `Ord` (total order) for a `Set` element / sorted `Dict` op; carries

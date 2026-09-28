@@ -53,13 +53,13 @@ ipe release [<path>] [<shape>] [<runtime>] [<host>]
 
 **Flags:**
 
-- `[--out <dir>]` — write the artifact to <dir> (default: release/)
-- `[--target wasm|<triple>]` — produce a browser bundle (`wasm`) or a musl-static binary for <triple> (default: x86_64-unknown-linux-musl)
+- `[--out <dir>]` — put the artifact under <dir>/release/ (default: out/ in the project)
+- `[--target <wasm|wasi|triple>]` — compile for `wasm` (a browser bundle), `wasi` (a wasm32-wasip1 module), or a musl-static native <triple>; a native triple needs --static on build and run, release is always static (default: x86_64-unknown-linux-musl); run cannot execute `wasm`, and release does not produce `wasi`
 - `[--emit-permissions <ios|macos|android>]` — read-only: print the OS-permission declarations the app's accepted web capabilities derive on the platform, and build nothing
 - `[--runtime <dir>]` — vendor the Ipê runtime source from <dir>
 - `[--bundle]` — native-bearing only: multi-file opt-out — wrapper + app + profile as siblings (app binary can be run directly, bypassing the sandbox)
 - `[--embed]` — native-bearing only: default single self-jailing binary (app + profile fused into wrapper)
-- `[--capabilities] [--plain|--json]` — print the inferred capability model for the app without building
+- `[--capabilities|--show-profile] [--plain|--json]` — print the inferred capability model for the app without building
 
 ### `ipe exec`
 
@@ -139,7 +139,7 @@ ipe verify [<path>]
 
 ### `ipe login`
 
-Authorize ipe with GitHub (device flow) and store a publish token.
+Authorize ipe with GitHub (device flow), store a publish token, and offer to set up a publish signing key.
 
 ```
 ipe login
@@ -149,6 +149,7 @@ ipe login
 
 - `[--status]` — report whether a token is stored
 - `[--logout]` — remove the stored token
+- `[--signing-key]` — generate an SSH signing key and register it on your GitHub account (opt-in)
 
 ### `ipe package`
 
@@ -198,7 +199,7 @@ Look up documentation, generate API docs (docs.json + Markdown + HTML), query th
 ipe doc [list | serve | check | <key> | <Module.Name>] [<path>]
 ```
 
-**Arguments:** Without a subcommand: generate docs.json + renderings for the project and stdlib. `<key>`: look up any entity by key — a diagnostic code (IPE-L0107), symbol (List.map), module (List), language construct (case), or CLI command (version). `list`: list all stdlib + project modules (one per line; `--list` is a deprecated alias). `serve`: build the HTML site and preview it on loopback. `check`: verify doc-comment coverage for project modules (stdlib is exempt). `<Module.Name>`: show one module's types and values with signatures (e.g. `ipe doc Ipe.List`).
+**Arguments:** Without a subcommand: generate docs.json + renderings for the project and stdlib. `<key>`: look up any entity by key — a diagnostic code (IPE-L0107), symbol (List.map), module (List), member (Ipe.Time.unixMillis), language construct (case), or CLI command (version); a key that names nothing lists the closest matches of every kind. `list`: list all stdlib + project modules (one per line; `--list` is a deprecated alias). `serve`: build the HTML site and preview it on loopback. `check`: verify doc-comment coverage for project modules (stdlib is exempt). `<Module.Name>`: show one module's types and values with signatures (e.g. `ipe doc Ipe.List`).
 
 **Flags:**
 
@@ -232,23 +233,9 @@ Run the language server over stdio.
 ipe lsp
 ```
 
-### `ipe debugger`
-
-Record a cli/worker app's TEA session and replay it as plain text.
-
-```
-ipe debugger <record <Main.ipe> | replay <log>>
-```
-
-**Arguments:** record: build the app with the time-travel debugger compiled in and run it, capturing each (msg, model) step to a bounded log (default: `<Main>.ipelog` beside the entry). replay: re-emit each recorded step as one plain line — off a TTY every control byte is stripped, so a pipe/file receives clean text only. A record/replay surface, not a live scrubber (which cannot be the cli default: it must fail-closed to plain streaming off-TTY).
-
-**Flags:**
-
-- `[--out <log>]` — record: write the session's replay log to <log> (default: `<Main>.ipelog`)
-
 ### `ipe clean`
 
-Remove the project's build-generated output (out/, target/, .ipe/).
+Remove the project's ipe-owned build output (out/, .ipe/).
 
 ```
 ipe clean
@@ -258,21 +245,6 @@ ipe clean
 
 - `[--json]` — emit the result as JSON ({"schema":"ipe.cli.clean/1","removed":[…]})
 - `[--plain]` — print one removed path per line, flush-left
-
-### `ipe migrate`
-
-Convert an interim manifest to the package.ipe record form.
-
-```
-ipe migrate config
-```
-
-**Arguments:** The migration to run. `config` rewrites the interim manifest (a `Package.named |>` package.ipe, or a legacy ipe.toml) as the record form.
-
-**Flags:**
-
-- `[--json]` — emit the migration result as JSON ({"schema":"ipe.cli.migrate/1","action":…,"path":…})
-- `[--plain]` — print a single status line flush-left, no decoration
 
 ### `ipe health`
 
@@ -330,7 +302,7 @@ ipe fix <path>
 
 **Flags:**
 
-- `[--yes]` — apply every fix without per-edit confirmation
+- `[--yes|-y]` — apply every fix without per-edit confirmation
 
 ### `ipe eject`
 
@@ -344,7 +316,7 @@ ipe eject [<path>]
 
 **Flags:**
 
-- `--out <dir>` — write the standalone project to <dir> (required)
+- `--out <dir>` — write the standalone project to <dir>, which must be absent or empty and outside out/, .ipe/ and any other ipe-owned tree (required)
 - `[--runtime <dir>]` — vendor the Ipê runtime source from <dir>
 
 ### `ipe upgrade`
@@ -397,16 +369,15 @@ ipe build [<path>] [<shape>] [<runtime>] [<host>] [<target>]
 
 **Flags:**
 
-- `[--out <dir>]` — write the emitted project to <dir>
+- `[--out <dir>]` — put build output under <dir> (default: out/ in the project)
 - `[--runtime <dir>]` — vendor the Ipê runtime from <dir>
 - `[--emit-ir]` — also emit the intermediate representation
 - `[--fix]` — apply machine-applicable fixes before building
 - `[--accept-risks]` — accept every disclosed .Unsafe escape-hatch import and proceed without prompting
 - `[--static]` — produce a statically linked binary
-- `[--target <triple|wasm|wasi>]` — cross-compile to <triple>, the browser (`wasm`), or co-located WebAssembly/WASI (`wasi`, a wasm32-wasip1 module for a Direct script)
+- `[--target <wasm|wasi|triple>]` — compile for `wasm` (a browser bundle), `wasi` (a wasm32-wasip1 module), or a musl-static native <triple>; a native triple needs --static on build and run, release is always static (default: x86_64-unknown-linux-musl); run cannot execute `wasm`, and release does not produce `wasi`
 - `[--emit-permissions <ios|macos|android>]` — read-only: print the OS-permission declarations the app's accepted web capabilities derive on the platform, and build nothing
-- `[--allocator <auto|system|dlmalloc|talc|mimalloc>]` — select the global allocator (default: auto)
-- `[--allow-slow-allocator]` — permit an allocator known to be slow for the target
+- `[--allocator <auto|system|dlmalloc|talc|mimalloc>]` — select the global allocator (default: auto); `system` is the target libc's malloc, which on musl is several times slower than the default on allocation-heavy work
 - `[--cfree]` — build without linking any C code (incompatible with allocators that require C, e.g. mimalloc)
 - `[--debugger]` — compile the in-app time-travelling debugger overlay into the built app
 - `[-q|--quiet]` — suppress progress chatter; only warnings and errors
@@ -424,15 +395,16 @@ ipe run [<path>]
 
 **Flags:**
 
-- `[--out <dir>]` — write the emitted project to <dir>
+- `[--out <dir>]` — put build output under <dir> (default: out/ in the project)
 - `[--runtime <dir>]` — vendor the Ipê runtime from <dir>
 - `[--static]` — produce a statically linked binary
-- `[--target <triple>]` — cross-compile to <triple>
-- `[--allocator <auto|system|dlmalloc|talc|mimalloc>]` — select the global allocator (default: auto)
-- `[--allow-slow-allocator]` — permit an allocator known to be slow for the target
+- `[--target <wasm|wasi|triple>]` — compile for `wasm` (a browser bundle), `wasi` (a wasm32-wasip1 module), or a musl-static native <triple>; a native triple needs --static on build and run, release is always static (default: x86_64-unknown-linux-musl); run cannot execute `wasm`, and release does not produce `wasi`
+- `[--allocator <auto|system|dlmalloc|talc|mimalloc>]` — select the global allocator (default: auto); `system` is the target libc's malloc, which on musl is several times slower than the default on allocation-heavy work
 - `[--cfree]` — build without linking any C code (incompatible with allocators that require C, e.g. mimalloc)
 - `[--accept-risks]` — accept every disclosed .Unsafe escape-hatch import and proceed without prompting
 - `[--debugger]` — compile the in-app time-travelling debugger overlay into the run app
+- `[--record]` — cli/worker apps: record the TEA session to out/session.ipelog (one plain `<msg> => <model>` line per step) and, when its Msg is encodable, a replayable out/session.ipemsgs
+- `[--replay [<log>]]` — cli/worker apps: re-fold a recorded session (default: out/session.ipemsgs) from init with no Cmd fired, printing each step and the final model; a log from a changed program is refused. A plain trace (.ipelog, the default when no typed log was recorded, e.g. a Msg carrying a Secret) is shown instead, labelled, with every control character stripped and nothing re-run
 - `[-q|--quiet]` — suppress progress chatter; only warnings and errors
 - `[--json]` — emit each diagnostic as a stable JSON object (one per line) instead of the human layout
 - `[-- <args>...]` — forward <args> to the compiled program
@@ -449,7 +421,7 @@ ipe watch [<path>]
 
 **Flags:**
 
-- `[--out <dir>]` — write the emitted project to <dir>
+- `[--out <dir>]` — put build output under <dir> (default: out/ in the project)
 - `[--runtime <dir>]` — vendor the Ipê runtime from <dir>
 - `[--port <n>]` — serve on port <n> (default: 8000)
 - `[--debugger]` — compile the in-app time-travelling debugger overlay into the served app

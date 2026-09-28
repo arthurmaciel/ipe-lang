@@ -47,7 +47,7 @@ use ipe_ir::{ModPath, Module, Program, Target};
 /// Locate the runtime source tree (`src/runtime/rust/src`) — the vendored
 /// module files whose `use crate::` closure this test checks.
 fn resolve_runtime() -> Option<PathBuf> {
-    if let Ok(dir) = std::env::var("IPE_RUNTIME_DIR") {
+    if let Ok(dir) = ipe_env::var("IPE_RUNTIME_DIR") {
         let p = PathBuf::from(dir);
         // Accept only if the dir contains actual runtime source files, not a
         // parent directory whose only child is a `src/` subdirectory.

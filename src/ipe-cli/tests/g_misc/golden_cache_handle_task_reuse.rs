@@ -44,7 +44,7 @@ fn built(root: &Path, out: &Path) -> Option<Result<(), ipe::CliError>> {
 #[test]
 fn cache_handle_task_reuse_emits() {
     let root = repo_root();
-    let out = std::env::temp_dir().join("ipec_cache_handle_task_reuse_emit");
+    let out = crate::support::scratch_root().join("ipec_cache_handle_task_reuse_emit");
     let Some(built) = built(&root, &out) else {
         return; // resolver unavailable — skip, matches the other goldens
     };
@@ -61,7 +61,7 @@ fn cache_handle_task_reuse_emits() {
 #[test]
 fn cache_handle_task_reuse_builds_and_runs() {
     let root = repo_root();
-    let out = std::env::temp_dir().join("ipec_cache_handle_task_reuse_e2e");
+    let out = crate::support::scratch_root().join("ipec_cache_handle_task_reuse_e2e");
     let Some(built) = built(&root, &out) else {
         return;
     };
@@ -70,7 +70,7 @@ fn cache_handle_task_reuse_builds_and_runs() {
         "cache_handle_task_reuse: must be accepted, got: {built:?}"
     );
 
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
     let outcome = crate::support::build_and_run_emitted("cache_handle_task_reuse", &out);

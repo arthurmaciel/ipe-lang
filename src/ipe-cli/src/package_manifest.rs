@@ -62,6 +62,7 @@ use crate::project::{
     MobileDelivery, Program, ProjectManifest, RustDep, ScreenOrientation, WasmConfig,
     is_denylisted_public_env_name,
 };
+use crate::text;
 
 /// The manifest filename read by this reader.
 pub const PACKAGE_IPE: &str = "package.ipe";
@@ -80,7 +81,7 @@ const SCHEMA_MODULE: &str = "Ipe.Package";
 ///
 /// # Errors
 /// [`CliError::Io`] if the file cannot be read; [`CliError::Pipeline`] if the
-/// source does not parse (rendered with a caret snippet); [`CliError::UsageOwned`]
+/// source does not parse (rendered with a caret snippet); [`CliError::Usage`]
 /// naming the offending `package.ipe:LINE:COL` for any non-literal, non-blessed
 /// shape or a failed field validation; [`CliError::Usage`] if the source root
 /// directory does not exist.
@@ -152,7 +153,6 @@ struct ManifestFields {
     static_build: Option<bool>,
     target: Option<String>,
     allocator: Option<crate::build_plan::AllocatorChoice>,
-    allow_slow_allocator: Option<bool>,
     c_free: Option<bool>,
     dependencies: BTreeMap<String, IpeDep>,
     rust_dependencies: BTreeMap<String, RustDep>,
@@ -171,9 +171,9 @@ impl ManifestFields {
     /// two remaining whole-manifest validations: `name` is required, and the
     /// source-root directory must exist.
     fn into_manifest(self, root: &Path) -> Result<ProjectManifest, CliError> {
-        let name = self.name.ok_or(CliError::Usage(
-            "package.ipe: missing a `name = \"…\"` field — a package must be named",
-        ))?;
+        let name = self
+            .name
+            .ok_or(CliError::Usage(text::msg::package_manifest_name_required()))?;
         let src_rel_raw = self.src_rel.as_deref().unwrap_or("src");
         let src_root_contained = crate::contained_path::ContainedRelPath::parse(root, src_rel_raw)
             .map_err(|reason| CliError::PathEscape {
@@ -183,7 +183,7 @@ impl ManifestFields {
         let src_root = src_root_contained.resolved().to_path_buf();
         if !src_root.is_dir() {
             return Err(CliError::Usage(
-                "package.ipe: the source root directory does not exist",
+                text::msg::package_manifest_src_root_missing(),
             ));
         }
         // The icon is an optional project-relative path resolved (and contained)
@@ -212,7 +212,6 @@ impl ManifestFields {
                 static_build: self.static_build,
                 target: self.target,
                 allocator: self.allocator,
-                allow_slow_allocator: self.allow_slow_allocator,
                 c_free: self.c_free,
             },
             wasm: self.wasm,
@@ -238,15 +237,17 @@ impl Reader<'_> {
         self.interner.resolve(sym).unwrap_or("")
     }
 
-    /// Render a `package.ipe:LINE:COL: <reason>` [`CliError::UsageOwned`] for the
+    /// Render a `package.ipe:LINE:COL: <reason>` [`CliError::Usage`] for the
     /// offending `span`. Line/column are 1-based, computed from the byte offset
     /// against the source; an out-of-range offset degrades to `1:1` rather than
     /// panicking (totality).
     fn reject(&self, span: Span, reason: &str) -> CliError {
         let (line, col) = line_col(self.src, span.lo);
-        CliError::UsageOwned(format!(
-            "{}:{line}:{col}: {reason}",
-            self.manifest_path.display()
+        CliError::Usage(text::msg::located_refusal(
+            &self.manifest_path.display(),
+            &line,
+            &col,
+            &reason,
         ))
     }
 
@@ -304,7 +305,7 @@ impl Reader<'_> {
         }
 
         let package = package_value.ok_or(CliError::Usage(
-            "package.ipe: no top-level `package = …` binding found",
+            text::msg::package_manifest_no_package_binding(),
         ))?;
         if !package.value.patterns.is_empty() {
             return Err(self.reject(
@@ -410,16 +411,13 @@ impl Reader<'_> {
                 "static" => fields.static_build = Some(self.expect_bool(value)?),
                 "target" => fields.target = self.read_target(value)?,
                 "allocator" => fields.allocator = Some(self.read_allocator(value)?),
-                "allowSlowAllocator" => {
-                    fields.allow_slow_allocator = Some(self.expect_bool(value)?);
-                }
                 "cFree" => fields.c_free = Some(self.expect_bool(value)?),
                 other => {
                     return Err(self.reject(
                         fname.span,
                         &format!(
                             "`{other}` is not a build field — expected one of database, static, \
-                             target, allocator, allowSlowAllocator, cFree"
+                             target, allocator, cFree"
                         ),
                     ));
                 }
@@ -1323,9 +1321,8 @@ fn line_col(src: &str, off: u32) -> (usize, usize) {
 /// The inverse of [`read_package_manifest`] over the fields the manifest carries:
 /// the emitted record re-reads to an equivalent manifest. Only non-default
 /// sections are written, so a minimal manifest serialises to a minimal record.
-/// Used by `ipe migrate config` to rewrite an interim builder manifest (or a
-/// legacy `ipe.toml`) into the record form, and available to any caller that must
-/// emit a manifest.
+/// Available to any caller that must emit a manifest; the round-trip tests below
+/// pin it to the reader.
 #[must_use]
 pub fn render_manifest_record(manifest: &ProjectManifest) -> String {
     let mut fields: Vec<String> = Vec::new();
@@ -1669,9 +1666,6 @@ fn render_build(manifest: &ProjectManifest) -> Option<String> {
     if let Some(alloc) = static_layer.allocator {
         parts.push(format!("allocator = {}", allocator_ctor_name(alloc)));
     }
-    if let Some(b) = static_layer.allow_slow_allocator {
-        parts.push(format!("allowSlowAllocator = {}", bool_ctor(b)));
-    }
     if let Some(b) = static_layer.c_free {
         parts.push(format!("cFree = {}", bool_ctor(b)));
     }
@@ -1726,7 +1720,7 @@ const fn allocator_ctor_name(alloc: crate::build_plan::AllocatorChoice) -> &'sta
 ///
 /// # Errors
 /// [`CliError::Io`] if the manifest cannot be read or written;
-/// [`CliError::Pipeline`] if the manifest does not parse; [`CliError::UsageOwned`]
+/// [`CliError::Pipeline`] if the manifest does not parse; [`CliError::Usage`]
 /// if the manifest shape is unexpected (no `package` record, a non-list
 /// `dependencies`) or the name collides with an author-written escape entry.
 pub fn upsert_index_dependency(
@@ -1761,12 +1755,12 @@ pub fn remove_manifest_dependency(manifest_path: &Path, name: &str) -> Result<()
     write_manifest_file(manifest_path, &updated)
 }
 
-/// Write `text` to `manifest_path`, mapping an IO failure to [`CliError::Io`].
+/// Write `text` to the user's `manifest_path` atomically, never truncating in place.
+///
+/// The edit is the one dependency entry the user asked to add or drop, with the
+/// rest of the file preserved, so no backup is kept.
 fn write_manifest_file(manifest_path: &Path, text: &str) -> Result<(), CliError> {
-    std::fs::write(manifest_path, text).map_err(|e| CliError::Io {
-        path: manifest_path.to_path_buf(),
-        source: e,
-    })
+    crate::rewrite_user_file(manifest_path, text, crate::RewriteKind::Lossless).map(|_| ())
 }
 
 /// The located byte span of a dependency entry inside the `dependencies` list,
@@ -1825,9 +1819,7 @@ fn edit_dependencies_list(
     };
 
     let Expr_::List(items) = &deps_expr.value else {
-        return Err(usage(
-            "package.ipe: `dependencies` must be a list literal `[ … ]` for `ipe add` to edit it",
-        ));
+        return Err(usage(text::msg::package_manifest_deps_not_list()));
     };
 
     let existing = locate_dep_entry(items, &interner, name);
@@ -1836,12 +1828,7 @@ fn edit_dependencies_list(
         // `dep "…" "…"`; an escape is author-owned and never overwritten.
         (Some(entry), Some(found)) => {
             if found.is_escape() {
-                return Err(usage_owned(format!(
-                    "package.ipe: `{name}` is already a git/path escape dependency — `ipe add` \
-                     records only an index requirement and never rewrites an author-written \
-                     `depGit`/`depGitRev`/`depPath` entry. Edit the escape by hand, or remove it \
-                     first."
-                )));
+                return Err(usage(text::msg::pkg_add_escape_dependency(&name)));
             }
             Ok(splice(text, found.entry, entry))
         }
@@ -1866,13 +1853,10 @@ fn locate_package_record<'m>(
         .values
         .iter()
         .find(|v| interner.resolve(v.value.name.value) == Some("package"))
-        .ok_or_else(|| usage("package.ipe: no top-level `package = …` binding to edit"))?;
+        .ok_or_else(|| usage(text::msg::package_manifest_no_package_binding_edit()))?;
     match &package.value.body.value {
         Expr_::Record(fields) => Ok(fields.as_slice()),
-        _ => Err(usage(
-            "package.ipe: the `package` value must be a record literal `{ … }` for `ipe add` to \
-             edit it",
-        )),
+        _ => Err(usage(text::msg::package_manifest_package_not_record())),
     }
 }
 
@@ -2030,15 +2014,11 @@ fn insert_new_dependencies_field(
         .map_or(0, |(_, v)| v.span.hi as usize)
         .min(text.len());
     let Some(rel_close) = text.get(after_last..).and_then(|s| s.find('}')) else {
-        return Err(usage(
-            "package.ipe: could not locate the `package` record's closing `}` to add a dependency",
-        ));
+        return Err(usage(text::msg::package_manifest_deps_brace_not_found()));
     };
     let close_idx = after_last + rel_close;
     let (Some(before), Some(after)) = (text.get(..close_idx), text.get(close_idx..)) else {
-        return Err(usage(
-            "package.ipe: the `package` record's closing `}` is out of range",
-        ));
+        return Err(usage(text::msg::package_manifest_deps_brace_out_of_range()));
     };
     // Align the new field to the last field's indentation. Elm-style manifests
     // indent record fields and the closing brace to a common column; reuse the
@@ -2049,14 +2029,9 @@ fn insert_new_dependencies_field(
     Ok(format!("{opener}, {field}\n{indent}{after}"))
 }
 
-/// A fixed-message manifest-write usage refusal.
-const fn usage(message: &'static str) -> CliError {
+/// A manifest-write usage refusal.
+const fn usage(message: text::Message) -> CliError {
     CliError::Usage(message)
-}
-
-/// An owned-message manifest-write usage refusal.
-const fn usage_owned(message: String) -> CliError {
-    CliError::UsageOwned(message)
 }
 
 #[cfg(test)]
@@ -2175,7 +2150,6 @@ mod tests {
              \x20       , static = True\n\
              \x20       , target = Cross \"x86_64-unknown-linux-musl\"\n\
              \x20       , allocator = Dlmalloc\n\
-             \x20       , allowSlowAllocator = False\n\
              \x20       , cFree = True\n\
              \x20       }}\n\
              \x20   }}\n"
@@ -2221,7 +2195,6 @@ mod tests {
             m.static_request.allocator,
             Some(crate::build_plan::AllocatorChoice::Dlmalloc)
         );
-        assert_eq!(m.static_request.allow_slow_allocator, Some(false));
         assert_eq!(m.static_request.c_free, Some(true));
 
         let cap_names: Vec<&str> = m.capabilities.iter().map(|c| c.as_str()).collect();
@@ -2250,14 +2223,11 @@ mod tests {
 
     // ── Rejections: totality (a clean diagnostic, never a panic) ──────────────
 
-    /// Every rejection asserts a `UsageOwned` (the reader's named-error channel)
+    /// Every rejection asserts a `Usage` (the reader's named-error channel)
     /// or a `Usage`/`Pipeline` — never a panic and never an `Ok`.
     fn assert_rejected(result: &Result<ProjectManifest, CliError>) {
         assert!(
-            matches!(
-                result,
-                Err(CliError::UsageOwned(_) | CliError::Usage(_) | CliError::Pipeline { .. })
-            ),
+            matches!(result, Err(CliError::Usage(_) | CliError::Pipeline { .. })),
             "expected a clean rejection, got {result:?}"
         );
     }
@@ -2319,7 +2289,7 @@ mod tests {
             ),
         );
         assert_rejected(&r);
-        if let Err(CliError::UsageOwned(msg)) = &r {
+        if let Err(CliError::Usage(msg)) = &r {
             assert!(
                 msg.contains("DATABASE_URL"),
                 "error names the secret: {msg}"
@@ -2644,6 +2614,18 @@ mod tests {
         assert_rejected(&r);
     }
 
+    /// A build field outside the closed set is refused, never ignored.
+    #[test]
+    fn reject_unknown_build_field() {
+        let r = read(
+            "reject_build_field",
+            &format!(
+                "{HEADER}package =\n    {{ name = \"x\", build = {{ allowSlowAllocator = True }} }}\n"
+            ),
+        );
+        assert_rejected(&r);
+    }
+
     #[test]
     fn reject_program_entry_with_lowercase_segment() {
         let m = read(
@@ -2944,7 +2926,7 @@ mod tests {
         let after = std::fs::read_to_string(&path).expect("read back");
         let _ = std::fs::remove_dir_all(&root);
         assert!(
-            matches!(err, CliError::Usage(_) | CliError::UsageOwned(_)),
+            matches!(err, CliError::Usage(_)),
             "the refusal is a usage error: {err:?}"
         );
         assert_eq!(

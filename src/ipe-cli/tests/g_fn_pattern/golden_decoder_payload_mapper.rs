@@ -62,7 +62,7 @@ fn i198_ipec_accepts_and_renders_send_only_fnonce_param() {
         return;
     };
 
-    let built = ipe::build_with_sibling_discovery(&entry, &out, &runtime);
+    let built = ipe::build_loose_file(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
         "ipe build must succeed for decoder_payload_mapper: {:?}",
@@ -97,20 +97,20 @@ fn i198_ipec_accepts_and_renders_send_only_fnonce_param() {
 /// have caught the original SEAL violation (ipe-0, cargo-fail).
 #[test]
 fn i198_cargo_builds_and_runs() {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
 
     let root = repo_root();
     let entry = entry_path(&root);
-    let out = std::env::temp_dir().join("ipec_i198_decoder_payload_mapper_e2e");
+    let out = crate::support::scratch_root().join("ipec_i198_decoder_payload_mapper_e2e");
     let _ = std::fs::remove_dir_all(&out);
 
     let runtime = ipe::resolve_runtime();
     assert!(runtime.is_ok(), "runtime must resolve for E2E");
     let Ok(runtime) = runtime else { return };
 
-    let built = ipe::build_with_sibling_discovery(&entry, &out, &runtime);
+    let built = ipe::build_loose_file(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
         "ipe build must succeed for decoder_payload_mapper: {:?}",

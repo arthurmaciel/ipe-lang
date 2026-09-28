@@ -55,13 +55,13 @@ fn css_opacity_refinement_emits() {
 /// lines match the expected values, proving clamping and NaN-guard behaviour.
 #[test]
 fn css_opacity_refinement_e2e_output_matches_expected() {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
 
     let dir = fixture_dir();
     let entry = dir.join("Main.ipe");
-    let out = std::env::temp_dir().join("ipec_css_opacity_refinement_e2e");
+    let out = crate::support::scratch_root().join("ipec_css_opacity_refinement_e2e");
     let _ = std::fs::remove_dir_all(&out);
 
     let rt = runtime();

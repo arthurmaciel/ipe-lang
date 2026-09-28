@@ -17,7 +17,7 @@ fn repo_root() -> PathBuf {
 }
 
 fn out_dir() -> PathBuf {
-    std::env::temp_dir().join("ipec_m6_middleware_csrf")
+    crate::support::scratch_root().join("ipec_m6_middleware_csrf")
 }
 
 /// Compile the fixture into `out`; `None` (skip) when the runtime cannot be
@@ -60,13 +60,13 @@ fn middleware_with_csrf_emits_wrapped_handler() {
 /// `ServerResponse.cookies` field and the `middleware_with_csrf` kernel.
 #[test]
 fn middleware_with_csrf_cargo_builds() {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
     // Emit into a PRIVATE dir this test alone owns, so the compile-only sibling
     // re-emitting into `out_dir()` in parallel cannot delete rustc's working
     // directory mid-build.
-    let out = std::env::temp_dir().join("ipec_m6_middleware_csrf_e2e");
+    let out = crate::support::scratch_root().join("ipec_m6_middleware_csrf_e2e");
     let Some(result) = compile(&out) else {
         return;
     };

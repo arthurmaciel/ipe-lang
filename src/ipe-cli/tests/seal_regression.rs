@@ -23,6 +23,9 @@ use std::path::PathBuf;
 
 use ipe::CliError;
 
+#[path = "support/mod.rs"]
+mod support;
+
 /// A runtime `false` the optimiser cannot fold, so `assert!(false_marker(), …)`
 /// reads as a deliberate unconditional failure rather than a suspicious constant
 /// condition — keeps this file free of the `clippy::panic` deny.
@@ -58,13 +61,9 @@ fn out_dir(name: &str) -> PathBuf {
 /// the positive-SEAL companion to `negative_suite::assert_rejected`.
 #[track_caller]
 fn assert_accepted(name: &str, source: &str, expected_stdout: &str) {
-    let Some(entry) = write_single(name, source) else {
-        return; // scratch unavailable — skip
-    };
+    let entry = crate::support::expect_scratch_entry(name, write_single(name, source));
     let out = out_dir(name);
-    let Ok(runtime) = ipe::resolve_runtime() else {
-        return; // runtime unavailable — skip
-    };
+    let runtime = crate::support::expect_runtime(name, ipe::resolve_runtime());
     match ipe::build(&entry, &out, &runtime) {
         Ok(()) => {}
         Err(CliError::Pipeline { diag, .. }) => {
@@ -84,7 +83,7 @@ fn assert_accepted(name: &str, source: &str, expected_stdout: &str) {
         }
     }
 
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return; // emit-only fast pass
     }
     match e2e_support::build_and_run_rust(name, &out) {
@@ -104,18 +103,26 @@ fn assert_accepted(name: &str, source: &str, expected_stdout: &str) {
     }
 }
 
-/// Emit `source` and return the emitted `src/main.rs` text, or `None` if
-/// scratch/runtime setup is unavailable (the test then skips its assertions).
-/// Used by the move-after-use SEAL tests to prove exactly WHICH reads clone —
-/// a behavioural pass alone cannot distinguish "cloned correctly" from
-/// "over-cloned", and over-cloning a single-use or `Copy` binding is an
-/// Efficiency regression the SEAL's cargo-green gate would silently accept.
-fn emit_main_rs(name: &str, source: &str) -> Option<String> {
-    let entry = write_single(name, source)?;
+/// Emit `source` and return the emitted `src/main.rs` text. Scratch setup,
+/// runtime resolution, and the build itself are all asserted to succeed —
+/// this is a well-formed fixture, so any failure here is a bug, not a
+/// reason to skip. Used by the move-after-use SEAL tests to prove exactly
+/// WHICH reads clone — a behavioural pass alone cannot distinguish "cloned
+/// correctly" from "over-cloned", and over-cloning a single-use or `Copy`
+/// binding is an Efficiency regression the SEAL's cargo-green gate would
+/// silently accept.
+fn emit_main_rs(name: &str, source: &str) -> String {
+    let entry = crate::support::expect_scratch_entry(name, write_single(name, source));
     let out = out_dir(name);
-    let runtime = ipe::resolve_runtime().ok()?;
-    ipe::build(&entry, &out, &runtime).ok()?;
-    std::fs::read_to_string(out.join("src").join("main.rs")).ok()
+    let runtime = crate::support::expect_runtime(name, ipe::resolve_runtime());
+    let built = ipe::build(&entry, &out, &runtime);
+    assert!(built.is_ok(), "{name}: build failed: {built:?}");
+    let text = std::fs::read_to_string(out.join("src").join("main.rs"));
+    assert!(
+        text.is_ok(),
+        "{name}: failed to read emitted src/main.rs: {text:?}"
+    );
+    text.unwrap_or_default()
 }
 
 /// Assert that a multi-file project is ACCEPTED by `ipe` and — under `IPE_E2E` —
@@ -128,26 +135,18 @@ fn assert_accepted_project(name: &str, files: &[(&str, &str)], expected_stdout: 
         .join(name);
     let _ = std::fs::remove_dir_all(&dir);
     let src = dir.join("src");
-    if std::fs::create_dir_all(&src).is_err() {
-        return;
-    }
+    crate::support::expect_scratch_step(name, std::fs::create_dir_all(&src));
     for (fname, contents) in files {
         let path = src.join(fname);
-        if let Some(parent) = path.parent()
-            && std::fs::create_dir_all(parent).is_err()
-        {
-            return;
+        if let Some(parent) = path.parent() {
+            crate::support::expect_scratch_step(name, std::fs::create_dir_all(parent));
         }
-        if std::fs::write(&path, contents).is_err() {
-            return;
-        }
+        crate::support::expect_scratch_step(name, std::fs::write(&path, contents));
     }
     let out = out_dir(name);
-    let Ok(runtime) = ipe::resolve_runtime() else {
-        return;
-    };
+    let runtime = crate::support::expect_runtime(name, ipe::resolve_runtime());
     let entry = src.join("Main.ipe");
-    match ipe::build_with_sibling_discovery(&entry, &out, &runtime) {
+    match ipe::build_loose_file(&entry, &out, &runtime) {
         Ok(()) => {}
         Err(CliError::Pipeline { diag, .. }) => {
             assert!(
@@ -166,7 +165,7 @@ fn assert_accepted_project(name: &str, files: &[(&str, &str)], expected_stdout: 
         }
     }
 
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
     match e2e_support::build_and_run_rust(name, &out) {
@@ -440,9 +439,7 @@ fn destructure_param_clone_is_minimal_not_over_cloned() {
         \x20       Nothing ->\n\
         \x20           sku ++ \" (no price)\"\n\
         main = Io.println (lineItem ( \"abc\", 2 ))\n";
-    let Some(emitted) = emit_main_rs("destructure_param_minimal_clone", src) else {
-        return; // scratch/runtime unavailable — skip
-    };
+    let emitted = emit_main_rs("destructure_param_minimal_clone", src);
     // Exactly one `.clone()` on `sku` — the non-final (scrutinee) read.
     let sku_clones = emitted.matches("sku.clone()").count();
     assert_eq!(
@@ -471,9 +468,7 @@ fn single_use_destructure_param_moves_without_clone() {
         shout ( word, _n ) =\n\
         \x20   String.toUpper word\n\
         main = Io.println (shout ( \"hi\", 0 ))\n";
-    let Some(emitted) = emit_main_rs("single_use_destructure_param", src) else {
-        return;
-    };
+    let emitted = emit_main_rs("single_use_destructure_param", src);
     assert!(
         !emitted.contains("word.clone()"),
         "a single-use String component was cloned — the last (only) use must \
@@ -481,4 +476,90 @@ fn single_use_destructure_param_moves_without_clone() {
     );
     // And it must still accept + run correctly.
     assert_accepted("single_use_destructure_param_run", src, "HI\n");
+}
+
+// ===========================================================================
+// Signature wildcard `any` — a parameter wildcard lowers to a generic bounded
+// by exactly its solved obligations, or to the one ground type the body pinned
+// it to; every use is held to that fact at `ipe` time.
+// ===========================================================================
+
+/// A wildcard parameter interpolated into a log field is an `IpeInterpolate`
+/// generic, so calling it at two scalar types builds and runs.
+#[test]
+fn interpolating_wildcard_param_builds_at_two_types() {
+    let src = format!(
+        "{HEAD}import Ipe.Io as Io\n\
+         import Ipe.Log as Log\n\
+         import Ipe.Task\n\
+         f : any -> Task Error ()\n\
+         f x =\n\
+         \x20   Log.warnWith \"m\" [ x ]\n\
+         main =\n\
+         \x20   Task.andThen (\\_ -> Task.andThen (\\_ -> Io.println \"ok\") (f 7)) (f \"s\")\n"
+    );
+    assert_accepted("wildcard_interpolating_two_types", &src, "ok\n");
+}
+
+/// A wildcard parameter the body pins to `Int` lowers to `i64` and builds at
+/// an `Int` use.
+#[test]
+fn body_pinned_wildcard_param_builds_at_its_pin() {
+    let src = format!(
+        "{HEAD}import Ipe.Io as Io\n\
+         h : any -> Bool\n\
+         h x =\n\
+         \x20   x + x == x\n\
+         main = Io.println (if h 0 then \"y\" else \"n\")\n"
+    );
+    assert_accepted("wildcard_body_pinned", &src, "y\n");
+}
+
+/// A body-pinned wildcard parameter exported from another module builds at an
+/// `Int` use across the module boundary.
+#[test]
+fn body_pinned_wildcard_param_builds_across_modules() {
+    let main = format!(
+        "{HEAD}import Ipe.Io as Io\n\
+         import Lib exposing (h)\n\
+         main = Io.println (if h 0 then \"y\" else \"n\")\n"
+    );
+    let lib = "module Lib exposing (h)\n\
+         h : any -> Bool\n\
+         h x =\n\
+         \x20   x + x == x\n";
+    assert_accepted_project(
+        "wildcard_body_pinned_cross_module",
+        &[("Main.ipe", &main), ("Lib.ipe", lib)],
+        "y\n",
+    );
+}
+
+/// A wildcard parameter bound as a SQL parameter stays an `Into<SqlParam>`
+/// generic, so one helper binds an `Int` and a `String`.
+#[test]
+fn sql_param_wildcard_builds_at_two_types() {
+    let src = format!(
+        "{HEAD}import Ipe.Io as Io\n\
+         import Ipe.Db\n\
+         import Ipe.Db.Unsafe\n\
+         import Ipe.Task\n\
+         insertOne : Db -> any -> Task Error Int\n\
+         insertOne conn v =\n\
+         \x20   Db.exec conn \"INSERT INTO t (v) VALUES (?)\" [ v ]\n\
+         main =\n\
+         \x20   Task.andThen\n\
+         \x20       (\\conn ->\n\
+         \x20           Db.withTransaction conn\n\
+         \x20               (\\txconn ->\n\
+         \x20                   do\n\
+         \x20                       Unsafe.unsafeExecRaw txconn \"CREATE TABLE t (v)\"\n\
+         \x20                       insertOne txconn 1\n\
+         \x20                       insertOne txconn \"s\"\n\
+         \x20                       Io.println \"ok\"\n\
+         \x20               )\n\
+         \x20       )\n\
+         \x20       (Db.open \"sqlite\" \"sqlite::memory:\")\n"
+    );
+    assert_accepted("wildcard_sql_param_two_types", &src, "ok\n");
 }

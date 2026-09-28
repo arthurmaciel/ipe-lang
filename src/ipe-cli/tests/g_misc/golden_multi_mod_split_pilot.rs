@@ -148,14 +148,14 @@ fn emits_split_spine_and_per_module_files() {
 /// `Lib.seedAndCount` are counted and printed as `seeded:2`.
 #[test]
 fn end_to_end_builds_and_prints_seeded_count() {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
 
     let fixture = fixture_dir();
     // Build OUTSIDE the workspace tree (an emitted project under the
     // workspace target/ is rejected by cargo as a non-member package).
-    let out = std::env::temp_dir().join("ipec_multi_mod_split_pilot_e2e");
+    let out = crate::support::scratch_root().join("ipec_multi_mod_split_pilot_e2e");
     let _ = std::fs::remove_dir_all(&out);
 
     let res = ipe::build_project(&fixture.join("package.ipe"), &out, &runtime());

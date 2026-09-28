@@ -34,10 +34,12 @@ pub mod diff;
 pub mod doc;
 pub mod doc_bundle;
 pub mod doc_type_search;
+pub mod env_dir;
 pub mod ffi;
 pub mod fmt;
 pub mod health;
 pub mod help;
+pub mod help_page;
 pub mod hot_classify;
 pub mod index;
 pub mod init;
@@ -45,11 +47,13 @@ pub mod io_bounded;
 pub mod lint;
 pub mod lockfile;
 pub mod login;
+pub mod loose_file;
 mod lsp;
 pub mod machine_output;
-pub mod migrate;
 pub mod native_ffi_consent;
 pub mod net;
+pub mod output_dir;
+pub mod owner_trust;
 pub mod pack;
 pub mod package_manifest;
 pub mod package_name;
@@ -57,14 +61,18 @@ pub mod pkg;
 pub mod progress;
 pub mod project;
 pub mod publish;
+pub mod published_version;
 pub mod publisher;
 pub mod registry;
 pub mod resolve;
 pub mod run_sandbox;
 pub mod runtime_embed;
 pub mod scratch;
+pub mod screen;
 pub mod signing;
+pub mod ssh_signing_key;
 pub mod style;
+pub mod text;
 pub mod toolchain;
 pub mod unsafe_ack;
 pub mod version_check;
@@ -87,25 +95,50 @@ pub(crate) use ipe_diagnostics::{
 };
 pub(crate) use ipe_intern::Interner;
 
+// The type checker's interpolable scalar set and the runtime's sealed
+// `IpeInterpolate` impl set name the same types in the same order: a drift
+// breaks this crate's build instead of reaching an emitted `cargo` E0277.
+// IPE-RUST-AUDIT:ACCEPTED (Arthur Maciel) — compile-time `const` assertion (not a runtime panic); fails the BUILD if the interpolable set drifts from the runtime's sealed impl set, the interpolation SEAL [ledger #boundary]
+#[allow(clippy::assertions_on_constants)] // the constant IS the tripwire
+const _: () = assert!(
+    names_eq(
+        &ipe_diagnostics::INTERPOLABLE_TYPES,
+        &ipe_runtime_rust::stringify::INTERPOLABLE_IPE_TYPES,
+    ),
+    "the interpolable scalar set must match the runtime's IpeInterpolate impls"
+);
+
+/// Element-wise `&str`-slice equality in a `const` context.
+const fn names_eq(a: &[&str], b: &[&str]) -> bool {
+    match (a, b) {
+        ([], []) => true,
+        ([x, a_rest @ ..], [y, b_rest @ ..]) => {
+            text::bytes_eq(x.as_bytes(), y.as_bytes()) && names_eq(a_rest, b_rest)
+        }
+        _ => false,
+    }
+}
+
 mod driver;
 
 pub use driver::{
     AdvisoryVulnerablePayload, BuildOptions, CliError, INSTALL_SH_URL, PackageSourceSet,
-    RuntimeContext, apply_fixes, bluegreen_enabled, build, build_project,
-    build_project_with_options, build_with_options, build_with_sibling_discovery,
-    build_with_sibling_discovery_with_options, code_index, compile_prepared, create_source_root,
-    emit_ir_text, explain_lookup, hot_appearance_enabled, infer_package_capabilities,
-    infer_package_capabilities_in, resolve_runtime, run_cli, run_upgrade, runtime_dep_from_env,
-    select_non_overlapping, verify_capabilities, watch_banner_enabled,
+    RuntimeContext, UPGRADE_TAG_FILE_ENV, UPGRADE_WRAPPED_ENV, apply_fixes, bluegreen_enabled,
+    build, build_loose_file, build_loose_file_with_options, build_project,
+    build_project_with_options, build_with_options, code_index, compile_prepared,
+    create_source_root, emit_ir_text, explain_lookup, hot_appearance_enabled,
+    infer_package_capabilities, infer_package_capabilities_in, resolve_runtime, run_cli,
+    run_upgrade, runtime_dep_from_env, select_non_overlapping, verify_capabilities,
+    watch_banner_enabled,
 };
 // Crate-internal driver items reached as `crate::…` by sibling modules
 // (`watch`, `pkg`, …). Kept `pub(crate)` so no originally-private helper widens
 // to public API; the block above re-exports the genuine public surface as `pub`.
 pub(crate) use driver::{
-    build_source_graph, capabilities_including_served_widgets, default_entry,
+    RewriteKind, build_source_graph, capabilities_including_served_widgets, default_entry,
     find_manifest_for_ipe_file, force_cargo_terminal_ui, io_err, lower_entry_via_graph,
-    read_progress_chunk, read_yes_no, read_yes_no_default, resolve_vendored_runtime_dir, run_build,
-    run_capabilities, run_debugger, run_eject, run_exec, run_fix, run_installer, run_package,
-    run_release, run_run, run_test, run_type_check, run_verify, run_version, run_watch,
-    typecheck_entry_via_graph, write_atomic, write_emitted_project,
+    read_progress_chunk, read_yes_no, read_yes_no_default, resolve_vendored_runtime_dir,
+    rewrite_user_file, rewrite_walked_file, run_build, run_capabilities, run_eject, run_exec,
+    run_fix, run_installer, run_package, run_release, run_run, run_test, run_type_check,
+    run_verify, run_version, run_watch, typecheck_entry_via_graph, write_emitted_project,
 };

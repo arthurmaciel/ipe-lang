@@ -865,7 +865,7 @@ pub fn emit_enum(ctx: &EmitCtx, def: &EnumDef) -> DResult<String> {
     // the SEAL breach. Emitting the derive on a serde-legal type is always
     // cargo-buildable (the `is_serde` fixpoint guarantees every leaf derivable),
     // so widening the gate to either browser shape stays fail-closed.
-    let serde_derives = if self_serde && (ctx.uses_web || ctx.uses_webview) {
+    let serde_derives = if self_serde && ctx.derives_serde() {
         ", serde::Serialize, serde::Deserialize"
     } else {
         ""
@@ -1203,7 +1203,7 @@ pub fn emit_record_struct(ctx: &EmitCtx, rec: &RecordStruct) -> DResult<String> 
     // WebView program but cargo-fails E0277 — the SEAL breach. `is_serde`
     // guarantees the derive always compiles, so unioning `uses_webview` is
     // fail-closed.
-    let serde_derives = if rec.is_serde && (ctx.uses_web || ctx.uses_webview) {
+    let serde_derives = if rec.is_serde && ctx.derives_serde() {
         ", serde::Serialize, serde::Deserialize"
     } else {
         ""
@@ -1230,7 +1230,7 @@ pub fn emit_record_struct(ctx: &EmitCtx, rec: &RecordStruct) -> DResult<String> 
             })
             .collect();
         // Every type parameter carries a `Clone` bound: the bare-variable
-        // admission in the `is_clone` fixpoint (`record_field_is_clone`) is sound
+        // admission in the `is_clone` fixpoint (`field_is_clone`) is sound
         // only under it — a record may carry a bare-`Tn` field (or a `SharedFun`
         // slot keyed on `Tn`) whose per-`Tn` clone rides this bound, exactly as
         // the sibling function-carrier enum's hand-written `impl<Tn: Clone> Clone`.

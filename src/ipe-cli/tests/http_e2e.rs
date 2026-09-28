@@ -58,7 +58,7 @@ const DEFAULT_FIXTURE_ACCEPT_TIMEOUT: Duration = Duration::from_secs(30);
 /// The override exists so the fail-fast behaviour can be proven with a short
 /// deadline in a test without a 30s wait; production runs leave it unset.
 fn fixture_accept_timeout() -> Duration {
-    std::env::var("IPE_HTTP_FIXTURE_ACCEPT_MS")
+    ipe_env::var("IPE_HTTP_FIXTURE_ACCEPT_MS")
         .ok()
         .and_then(|raw| raw.trim().parse::<u64>().ok())
         .filter(|&ms| ms > 0)
@@ -81,7 +81,8 @@ type BoxError = Box<dyn std::error::Error + Send + Sync + 'static>;
 ///
 /// Returns an error on any pipeline or Cargo build failure.
 fn compile_and_build(test_name: &str, ipe_source: &str) -> Result<PathBuf, BoxError> {
-    let ipe_dir = std::env::temp_dir().join(format!("http_e2e_{test_name}_ipe"));
+    let ipe_dir = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
+        .join(format!("http_e2e_{test_name}_ipe"));
     let _ = std::fs::remove_dir_all(&ipe_dir);
     std::fs::create_dir_all(&ipe_dir).map_err(|e| -> BoxError {
         format!("{test_name}: cannot create ipe source dir: {e}").into()
@@ -91,7 +92,8 @@ fn compile_and_build(test_name: &str, ipe_source: &str) -> Result<PathBuf, BoxEr
     std::fs::write(&entry, ipe_source)
         .map_err(|e| -> BoxError { format!("{test_name}: cannot write Main.ipe: {e}").into() })?;
 
-    let out_dir = std::env::temp_dir().join(format!("http_e2e_{test_name}_emitted"));
+    let out_dir = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
+        .join(format!("http_e2e_{test_name}_emitted"));
     let _ = std::fs::remove_dir_all(&out_dir);
 
     let runtime = ipe::resolve_runtime()
@@ -272,7 +274,7 @@ main =
 /// Propagates any pipeline, build, or process-launch failure as a test error.
 #[test]
 fn http_get_fixture() -> Result<(), BoxError> {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return Ok(());
     }
 
@@ -313,7 +315,7 @@ fn http_get_fixture() -> Result<(), BoxError> {
 /// Propagates any pipeline, build, or process-launch failure as a test error.
 #[test]
 fn http_post_fixture() -> Result<(), BoxError> {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return Ok(());
     }
 
@@ -364,7 +366,7 @@ fn http_post_fixture() -> Result<(), BoxError> {
 /// Propagates any pipeline, build, or process-launch failure as a test error.
 #[test]
 fn http_ssrf_deny_loopback() -> Result<(), BoxError> {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return Ok(());
     }
 

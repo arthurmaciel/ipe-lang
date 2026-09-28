@@ -476,6 +476,7 @@ pub const fn appearance_literal_args(k: KernelFn) -> &'static [(usize, LitKind)]
         | KernelFn::StringToInt
         | KernelFn::StringToFloat
         | KernelFn::StringFromChar
+        | KernelFn::StringFromBool
         | KernelFn::StringFromList
         | KernelFn::StringConcat
         | KernelFn::StringWords
@@ -569,7 +570,7 @@ pub const fn appearance_literal_args(k: KernelFn) -> &'static [(usize, LitKind)]
         | KernelFn::BasicsFst
         | KernelFn::BasicsSnd
         | KernelFn::BasicsModBy
-        | KernelFn::BasicsToString
+        | KernelFn::Interpolate
         | KernelFn::BasicsClamp
         | KernelFn::BasicsNegate
         | KernelFn::BasicsAbs
@@ -971,6 +972,8 @@ pub const fn appearance_literal_args(k: KernelFn) -> &'static [(usize, LitKind)]
         | KernelFn::StoreTouchOnUpdate
         | KernelFn::StoreDefaultText
         | KernelFn::StoreDefaultInt
+        | KernelFn::StoreCompositePrimaryKey2
+        | KernelFn::StoreCompositePrimaryKey3
         | KernelFn::StoreOwnerColumn
         | KernelFn::StoreImmutable
         | KernelFn::StoreMask
@@ -1004,6 +1007,8 @@ pub const fn appearance_literal_args(k: KernelFn) -> &'static [(usize, LitKind)]
         | KernelFn::SubEvery
         | KernelFn::TimeEvery
         | KernelFn::SubMap
+        | KernelFn::TuiSubOnKey
+        | KernelFn::CliSubOnLine
         | KernelFn::CmdPublish
         | KernelFn::CmdPublishNoEcho
         | KernelFn::SubSubscribeTopic
@@ -1511,6 +1516,7 @@ pub const fn appearance_literal_args(k: KernelFn) -> &'static [(usize, LitKind)]
         | KernelFn::UrlPath
         | KernelFn::UrlQuery
         | KernelFn::UrlFragment
+        | KernelFn::UrlSchemeShown
         | KernelFn::UrlBuildQuery
         | KernelFn::UrlRelativeParse
         | KernelFn::UrlRelativePath

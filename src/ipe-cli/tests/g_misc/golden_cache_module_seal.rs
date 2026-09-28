@@ -52,7 +52,7 @@ fn built(root: &Path, out: &Path) -> Option<Result<(), ipe::CliError>> {
 #[test]
 fn cache_module_seal_emits() {
     let root = repo_root();
-    let out = std::env::temp_dir().join("ipec_cache_module_seal_emit");
+    let out = crate::support::scratch_root().join("ipec_cache_module_seal_emit");
     let Some(built) = built(&root, &out) else {
         return; // resolver unavailable — skip, matches the other goldens
     };
@@ -69,7 +69,7 @@ fn cache_module_seal_emits() {
 #[test]
 fn cache_module_seal_builds_and_runs() {
     let root = repo_root();
-    let out = std::env::temp_dir().join("ipec_cache_module_seal_e2e");
+    let out = crate::support::scratch_root().join("ipec_cache_module_seal_e2e");
     let Some(built) = built(&root, &out) else {
         return;
     };
@@ -78,7 +78,7 @@ fn cache_module_seal_builds_and_runs() {
         "cache_module_seal: must be accepted, got: {built:?}"
     );
 
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
     let outcome = crate::support::build_and_run_emitted("cache_module_seal", &out);

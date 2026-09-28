@@ -45,7 +45,7 @@ fn distinct_functions_folding_to_the_same_rust_name_both_emit() {
         return; // runtime unavailable in this environment — skip silently
     };
 
-    let tmp = std::env::temp_dir().join("ipec_aud08_function_name_collision");
+    let tmp = crate::support::scratch_root().join("ipec_aud08_function_name_collision");
     let wrote = write_project(
         &tmp,
         &[
@@ -84,7 +84,7 @@ fn distinct_functions_folding_to_the_same_rust_name_both_emit() {
     // it is NOT rejected. A leftover E0428 (two Rust fns sharing one name)
     // would surface as an emit/build error, so a clean `Ok` proves the fold
     // kept the two definitions distinct.
-    let built = ipe::build_with_sibling_discovery(&entry, &out, &runtime);
+    let built = ipe::build_loose_file(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
         "two functions folding to `zui_border_rounded` must both emit under \
@@ -102,7 +102,7 @@ fn distinct_functions_with_distinct_rust_names_are_accepted() {
         return;
     };
 
-    let tmp = std::env::temp_dir().join("ipec_aud08_function_name_collision_control");
+    let tmp = crate::support::scratch_root().join("ipec_aud08_function_name_collision_control");
     let wrote = write_project(
         &tmp,
         &[
@@ -129,7 +129,7 @@ import Ipe.String
         .join("aud08_function_name_collision_control_out");
     let _ = fs::remove_dir_all(&out);
 
-    let built = ipe::build_with_sibling_discovery(&entry, &out, &runtime);
+    let built = ipe::build_loose_file(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
         "distinct, non-colliding function names must build cleanly: {:?}",

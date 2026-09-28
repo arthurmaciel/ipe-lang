@@ -66,7 +66,7 @@ fn assert_ipec_ok(fixture: &str, out_suffix: &str) {
 /// stdout (covering the wrong-output witnesses, which compile fine but print a
 /// corrupted string when the textual rewrite corrupts a shared word).
 fn assert_e2e_output(fixture: &str, expect_contains: &str) {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
     let root = repo_root();
@@ -75,7 +75,7 @@ fn assert_e2e_output(fixture: &str, expect_contains: &str) {
         .join("golden")
         .join(fixture)
         .join("Main.ipe");
-    let out = std::env::temp_dir().join(format!("ipec_{fixture}_e2e"));
+    let out = crate::support::scratch_root().join(format!("ipec_{fixture}_e2e"));
     let _ = std::fs::remove_dir_all(&out);
 
     let Ok(runtime) = ipe::resolve_runtime() else {

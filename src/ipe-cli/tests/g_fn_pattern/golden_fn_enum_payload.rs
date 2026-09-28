@@ -74,12 +74,12 @@ fn enum_payload_emits_arc_carrier_and_clone() {
 
 #[test]
 fn enum_payload_end_to_end_prints_two_hundred_seven() {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
     let root = repo_root();
     let entry = example_entry(&root);
-    let out = std::env::temp_dir().join("ipec_fn_enum_payload_dispatch_e2e");
+    let out = crate::support::scratch_root().join("ipec_fn_enum_payload_dispatch_e2e");
     let _ = std::fs::remove_dir_all(&out);
 
     let Ok(runtime) = ipe::resolve_runtime() else {

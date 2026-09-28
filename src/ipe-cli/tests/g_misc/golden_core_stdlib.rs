@@ -11,7 +11,7 @@
 //!
 //! * `Result.andThen` / `Result.mapError` reuse the container-first runtime
 //!   (`ipe_result_and_then(r, f)` / new `ipe_result_map_error(r, f)`); the
-//!   emitter reverses the Ipê `(fn, result)` order via `StdlibKernel::swaps_first_two`
+//!   emitter reverses the Ipê `(fn, result)` order per the row's `ArgOrder::ContainerFirst`
 //!   (verified here — a wrong arg order would short-circuit the WRONG channel).
 //! * `String.{containsIn,startsWithIn,endsWithIn}` are haystack-first
 //!   companions; their new runtime wrappers take Ipê order directly (NO swap).
@@ -19,10 +19,9 @@
 //!   `Math.min`/`Math.max` — a bounded super-var tied across all three argument
 //!   positions AND the result, so a non-comparable argument fails closed.
 //!
-//! `Basics.toString` (polymorphic `a -> String`, needs a `Display`/`Stringify`
-//! bound HM cannot express) and `String.toChar` (no runtime fn, ambiguous
-//! Char-vs-Maybe-Char semantics) are DELIBERATELY not wired — they stay loud
-//! IPE-L0108 holes rather than risk a miscompile.
+//! `String.toChar` (no runtime fn, ambiguous Char-vs-Maybe-Char semantics) is
+//! DELIBERATELY not wired — it stays a loud IPE-L0108 hole rather than risk a
+//! miscompile.
 //!
 //! Gated on `IPE_E2E=1`. Run:
 //! `IPE_E2E=1 cargo test -p ipe --test golden_core_stdlib`.
@@ -45,7 +44,7 @@ fn golden_dir(root: &Path, name: &str) -> PathBuf {
 fn compile_golden(name: &str) -> PathBuf {
     let root = repo_root();
     let entry = golden_dir(&root, name).join("Main.ipe");
-    let out = std::env::temp_dir().join(format!("ipec_{name}_e2e"));
+    let out = crate::support::scratch_root().join(format!("ipec_{name}_e2e"));
     let _ = std::fs::remove_dir_all(&out);
 
     let runtime = ipe::resolve_runtime();
@@ -59,7 +58,7 @@ fn compile_golden(name: &str) -> PathBuf {
 }
 
 fn e2e_enabled() -> bool {
-    std::env::var("IPE_E2E").is_ok()
+    ipe_env::var("IPE_E2E").is_ok()
 }
 
 /// The six newly-wired core-stdlib kernels compile and produce correct output.

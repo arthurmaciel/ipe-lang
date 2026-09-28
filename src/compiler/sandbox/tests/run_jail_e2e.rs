@@ -34,12 +34,13 @@
 )]
 
 use std::ffi::OsString;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::Command;
 
 use ipe_sandbox::run_jail::{
     FilesystemScope, RunJailTools, RunResourceLimits, SandboxProfile, run_jail_argv,
 };
+use ipe_sandbox::{CanonicalPath, JailMounts};
 
 /// Serialize the jailed runs: each creates a `memfd` and clears its
 /// close-on-exec flag in a `pre_exec` hook, which is a process-global fd-table
@@ -56,7 +57,7 @@ static JAIL_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 /// the tests could not pass no matter how correct the jail is, so they must skip.
 /// The [`jail_can_establish`] canary settles this once.
 fn e2e_tools() -> Option<RunJailTools> {
-    if std::env::var_os("IPE_E2E").is_none_or(|v| v != "1") {
+    if ipe_env::var_os("IPE_E2E").is_none_or(|v| v != "1") {
         return None;
     }
     let caps = ipe_sandbox::probe();
@@ -180,17 +181,15 @@ fn run_jailed_inner(
 
     let scoped = std::env::temp_dir().join(format!("ipe-e2e-{}", std::process::id()));
     std::fs::create_dir_all(&scoped).expect("scoped tmp");
-    let host_env = |k: &str| std::env::var_os(k);
-    let argv = run_jail_argv(
-        tools,
-        profile,
-        &scoped,
-        &scoped,
-        &[PathBuf::from("/usr/bin"), PathBuf::from("/bin")],
-        Some(fd),
-        &host_env,
-        payload,
-    );
+    let scoped = CanonicalPath::resolve(&scoped).expect("scoped tmp resolves");
+    let system_bins = [Path::new("/usr/bin"), Path::new("/bin")]
+        .map(|dir| CanonicalPath::resolve(dir).expect("system bin dir resolves"));
+    let mounts = JailMounts::of_invoker(scoped.clone(), scoped.clone(), system_bins.to_vec())
+        .expect("checked jail mounts");
+    // `ipe_env` matches the launcher's crate-private passthrough for every name
+    // but a home variable, and no profile in this file grants one.
+    let host_env = |k: &str| ipe_env::var_os(k);
+    let argv = run_jail_argv(tools, profile, &mounts, Some(fd), &host_env, payload);
     let (prog, rest) = argv.split_first().expect("non-empty argv");
     let mut cmd = Command::new(prog);
     cmd.args(rest);

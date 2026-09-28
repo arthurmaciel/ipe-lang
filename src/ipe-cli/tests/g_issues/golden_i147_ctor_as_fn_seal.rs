@@ -84,7 +84,7 @@ fn m3a_gate_partial_now_compiles() {
 fn a1_ctor_map_bare() {
     assert_ipec_ok("ctor_map_bare", "i147_ctor_map_bare_emit");
 
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
 
@@ -94,7 +94,7 @@ fn a1_ctor_map_bare() {
         .join("golden")
         .join("ctor_map_bare")
         .join("Main.ipe");
-    let out = std::env::temp_dir().join("ipec_i147_ctor_map_bare_e2e");
+    let out = crate::support::scratch_root().join("ipec_i147_ctor_map_bare_e2e");
     let _ = std::fs::remove_dir_all(&out);
 
     let runtime = ipe::resolve_runtime();
@@ -131,7 +131,7 @@ fn a1_ctor_map_bare() {
 fn a2_ctor_partial_multiarg_with_clone() {
     assert_ipec_ok("ctor_partial", "i147_ctor_partial_emit");
 
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
 
@@ -141,7 +141,7 @@ fn a2_ctor_partial_multiarg_with_clone() {
         .join("golden")
         .join("ctor_partial")
         .join("Main.ipe");
-    let out = std::env::temp_dir().join("ipec_i147_ctor_partial_e2e");
+    let out = crate::support::scratch_root().join("ipec_i147_ctor_partial_e2e");
     let _ = std::fs::remove_dir_all(&out);
 
     let runtime = ipe::resolve_runtime();
@@ -178,7 +178,7 @@ fn a2_ctor_partial_multiarg_with_clone() {
 fn a3_ctor_stored_in_record_field() {
     assert_ipec_ok("ctor_field", "i147_ctor_field_emit");
 
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
 
@@ -188,7 +188,7 @@ fn a3_ctor_stored_in_record_field() {
         .join("golden")
         .join("ctor_field")
         .join("Main.ipe");
-    let out = std::env::temp_dir().join("ipec_i147_ctor_field_e2e");
+    let out = crate::support::scratch_root().join("ipec_i147_ctor_field_e2e");
     let _ = std::fs::remove_dir_all(&out);
 
     let runtime = ipe::resolve_runtime();

@@ -56,14 +56,15 @@ main =
 "#;
 
 fn out_dir() -> PathBuf {
-    std::env::temp_dir().join("m7_live_lambda_view_routed_out")
+    crate::support::scratch_root().join("m7_live_lambda_view_routed_out")
 }
 
 /// Compile the fixture into `out`; `None` (skip) when the runtime cannot be
 /// resolved. `tag` names a private source dir so parallel callers never share
 /// the `Main.ipe` staging path.
 fn compile(tag: &str, out: &Path) -> Option<Result<(), ipe::CliError>> {
-    let ipe_dir = std::env::temp_dir().join(format!("m7_live_lambda_view_routed_{tag}_ipe"));
+    let ipe_dir =
+        crate::support::scratch_root().join(format!("m7_live_lambda_view_routed_{tag}_ipe"));
     let _ = std::fs::remove_dir_all(&ipe_dir);
     std::fs::create_dir_all(&ipe_dir).ok()?;
     let entry = ipe_dir.join("Main.ipe");
@@ -106,13 +107,13 @@ fn lambda_view_routed_app_emits_web_app_routed() {
 /// core: unique package name → fresh app fingerprint, warm dep target reused).
 #[test]
 fn lambda_view_routed_app_cargo_builds() {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
     // Emit into a PRIVATE dir this test alone owns, so the compile-only sibling
     // re-emitting into `out_dir()` in parallel cannot delete rustc's working
     // directory mid-build.
-    let out = std::env::temp_dir().join("m7_live_lambda_view_routed_e2e_out");
+    let out = crate::support::scratch_root().join("m7_live_lambda_view_routed_e2e_out");
     let Some(result) = compile("e2e", &out) else {
         return;
     };

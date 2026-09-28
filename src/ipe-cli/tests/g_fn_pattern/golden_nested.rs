@@ -61,13 +61,13 @@ fn emits_byte_identical_main_rs() {
 /// Regression for record + nested pattern lowering.
 #[test]
 fn end_to_end_builds_and_prints_eighty_three() {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
 
     let root = repo_root();
     let entry = example_entry(&root);
-    let out = std::env::temp_dir().join("ipec_m3b2_nested_e2e");
+    let out = crate::support::scratch_root().join("ipec_m3b2_nested_e2e");
     let _ = std::fs::remove_dir_all(&out);
 
     let runtime = ipe::resolve_runtime();

@@ -1,11 +1,12 @@
 exit: 0
 ---
 
-  Remove the project's build-generated output (out/, target/, .ipe/).
+  Ipê language - v<VERSION> - https://github.com/arthurmaciel/ipe-lang
+
+  Remove the project's ipe-owned build output (out/, .ipe/).
 
   ipe clean
 
   Options:
     [--json]   emit the result as JSON ({"schema":"ipe.cli.clean/1","removed":[…]})
     [--plain]  print one removed path per line, flush-left
-

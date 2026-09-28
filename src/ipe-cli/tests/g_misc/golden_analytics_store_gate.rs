@@ -65,12 +65,12 @@ fn analytics_store_gate_resolves_and_builds() {
 /// Gated on `IPE_E2E=1` so the default `cargo nextest` gate stays fast.
 #[test]
 fn analytics_store_gate_end_to_end() {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
 
     let root = repo_root();
-    let out = std::env::temp_dir().join("ipec_analytics_store_gate_e2e");
+    let out = crate::support::scratch_root().join("ipec_analytics_store_gate_e2e");
     let _ = std::fs::remove_dir_all(&out);
 
     let Ok(runtime) = ipe::resolve_runtime() else {

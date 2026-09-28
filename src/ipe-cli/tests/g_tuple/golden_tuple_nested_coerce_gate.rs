@@ -86,10 +86,10 @@ fn nested_tuple_str_column_builds() {
 /// arm firing. `classify (("x", 5), A)` matches the first arm → prints `5`.
 #[test]
 fn nested_tuple_str_column_cargo_builds_and_runs() {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
-    let out = std::env::temp_dir().join("ipec_tuple_nested_coerce_str_e2e");
+    let out = crate::support::scratch_root().join("ipec_tuple_nested_coerce_str_e2e");
     let _ = std::fs::remove_dir_all(&out);
 
     let Ok(runtime) = ipe::resolve_runtime() else {

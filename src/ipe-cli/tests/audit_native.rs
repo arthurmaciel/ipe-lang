@@ -28,7 +28,7 @@ mod support;
 // ===========================================================================
 
 fn temp_pkg(tag: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!(
+    let dir = crate::support::scratch_root().join(format!(
         "ipe-tier2-test-{}-{}-{}",
         std::process::id(),
         tag,
@@ -42,7 +42,11 @@ fn temp_pkg(tag: &str) -> PathBuf {
 }
 
 fn empty_index(tag: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("ipe-tier2-index-{}-{}", std::process::id(), tag));
+    let dir = crate::support::scratch_root().join(format!(
+        "ipe-tier2-index-{}-{}",
+        std::process::id(),
+        tag
+    ));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(dir.join("packages")).expect("create index packages dir");
     dir
@@ -180,11 +184,13 @@ mod real_jail {
     use ipe::audit::Check;
     use ipe::audit_native::{
         CERTIFIED_PLATFORM, JailProbeRunner, ProbeExercise, ProbeRunner, StaticReachability,
-        TightenableAxis, default_ro_binds, reconcile_native, scoped_profile,
+        TightenableAxis, ToolchainHomes, TrustedWrapper, default_ro_binds, reconcile_native,
+        scoped_profile,
     };
     use ipe_ir::Capability;
     use ipe_sandbox::build_jail::build_in_jail;
     use ipe_sandbox::run_jail::{RunJailTools, SandboxProfile};
+    use ipe_sandbox::{CanonicalPath, JailMounts};
 
     /// `build_in_jail` mutates the process-global fd table (a `memfd`) on Linux;
     /// serialize the jailed runs so parallel `--test-threads` cannot race.
@@ -221,7 +227,7 @@ mod real_jail {
     /// unused by the macOS `build_in_jail` (a present-primitive placeholder).
     #[cfg(target_os = "macos")]
     fn probe_tools() -> Option<RunJailTools> {
-        let path = std::env::var_os("PATH")?;
+        let path = ipe_env::var_os("PATH")?;
         let sandbox_exec = std::env::split_paths(&path)
             .map(|d| d.join("sandbox-exec"))
             .find(|p| p.is_file())?;
@@ -236,7 +242,7 @@ mod real_jail {
     /// unused by the FreeBSD `build_in_jail` (a present-primitive placeholder).
     #[cfg(target_os = "freebsd")]
     fn probe_tools() -> Option<RunJailTools> {
-        let path = std::env::var_os("PATH")?;
+        let path = ipe_env::var_os("PATH")?;
         let jail = std::env::split_paths(&path)
             .map(|d| d.join("jail"))
             .find(|p| p.is_file())?;
@@ -256,7 +262,7 @@ mod real_jail {
     /// `powershell.exe` the payload runs.
     #[cfg(target_os = "windows")]
     fn probe_tools() -> Option<RunJailTools> {
-        let path = std::env::var_os("PATH")?;
+        let path = ipe_env::var_os("PATH")?;
         let powershell = std::env::split_paths(&path)
             .map(|d| d.join("powershell.exe"))
             .find(|p| p.is_file())?;
@@ -271,7 +277,7 @@ mod real_jail {
     /// actually be established here (a clean-exit canary settles it once) —
     /// mirroring the sandbox crate's gate. Never a false pass.
     fn e2e_tools() -> Option<RunJailTools> {
-        if std::env::var_os("IPE_E2E").is_none_or(|v| v != "1") {
+        if ipe_env::var_os("IPE_E2E").is_none_or(|v| v != "1") {
             return None;
         }
         let tools = probe_tools()?;
@@ -308,15 +314,15 @@ mod real_jail {
             let _guard = JAIL_LOCK
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let mounts = JailMounts::of_invoker(scoped.clone(), scoped.clone(), default_ro_binds())
+                .expect("checked jail mounts");
             let outcome = build_in_jail(
                 tools,
                 &SandboxProfile::maximally_isolated(),
-                &scoped,
-                &scoped,
-                &default_ro_binds(),
+                &mounts,
                 &canary_payload(tools),
             );
-            let _ = std::fs::remove_dir_all(&scoped);
+            let _ = std::fs::remove_dir_all(scoped.as_path());
             let established = outcome.is_clean();
             if !established {
                 eprintln!("audit_native e2e: skipping — jail cannot be established ({outcome:?})");
@@ -325,14 +331,20 @@ mod real_jail {
         })
     }
 
-    fn fresh_scratch(tag: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!(
+    fn fresh_scratch(tag: &str) -> CanonicalPath {
+        let dir = crate::support::scratch_root().join(format!(
             "ipe-tier2-e2e-{tag}-{}-{:?}",
             std::process::id(),
             std::thread::current().id()
         ));
         std::fs::create_dir_all(&dir).expect("scratch");
-        dir
+        CanonicalPath::resolve(&dir).expect("canonical scratch")
+    }
+
+    /// The invoking user's toolchain, as production resolves it.
+    fn invoker_toolchain() -> ToolchainHomes {
+        ToolchainHomes::of_invoker()
+            .expect("the test environment's toolchain homes are absolute or unset")
     }
 
     fn set(caps: &[Capability]) -> BTreeSet<Capability> {
@@ -352,17 +364,16 @@ mod real_jail {
     /// Build a real jail-backed runner exercising `exercised`, holding the two
     /// scratch dirs alive for the run's duration.
     struct Harness {
-        scoped_tmp: PathBuf,
-        working_tree: PathBuf,
-        wrapper: PathBuf,
+        scoped_tmp: CanonicalPath,
+        working_tree: CanonicalPath,
+        wrapper: TrustedWrapper,
     }
 
     impl Harness {
         fn new(tag: &str) -> Self {
             let scoped_tmp = fresh_scratch(&format!("{tag}-scratch"));
             let working_tree = fresh_scratch(&format!("{tag}-worktree"));
-            let wrapper = scoped_tmp.join("untrusted-build.sh");
-            std::fs::copy(fixture_path(), &wrapper).expect("copy fixture into scratch");
+            let wrapper = TrustedWrapper::read(&fixture_path()).expect("read the probe fixture");
             Self {
                 scoped_tmp,
                 working_tree,
@@ -384,13 +395,14 @@ mod real_jail {
                 exercised,
                 ProbeExercise::WrapperProbeOnly,
             )
+            .expect("checked jail mounts")
         }
     }
 
     impl Drop for Harness {
         fn drop(&mut self) {
-            let _ = std::fs::remove_dir_all(&self.scoped_tmp);
-            let _ = std::fs::remove_dir_all(&self.working_tree);
+            let _ = std::fs::remove_dir_all(self.scoped_tmp.as_path());
+            let _ = std::fs::remove_dir_all(self.working_tree.as_path());
         }
     }
 
@@ -553,9 +565,8 @@ mod real_jail {
         tools: &'a RunJailTools,
         exercise: ProbeExercise,
     ) -> JailProbeRunner<'a> {
-        // The real build needs the toolchain reachable inside the jail (read-only).
-        let mut ro_binds = default_ro_binds();
-        ro_binds.extend(ipe::audit_native::toolchain_ro_binds());
+        // The runner binds the exercise's toolchain (read-only) itself.
+        let ro_binds = default_ro_binds();
         JailProbeRunner::new(
             tools,
             harness.wrapper.clone(),
@@ -567,6 +578,7 @@ mod real_jail {
             vec![TightenableAxis::Network, TightenableAxis::Filesystem],
             exercise,
         )
+        .expect("checked jail mounts")
     }
 
     #[test]
@@ -590,13 +602,13 @@ mod real_jail {
         // not the filesystem-axis-gated working tree — so a filesystem-withholding
         // jail (declared=[network]) can still build it. A withheld axis is withheld
         // by capability REMOVAL (net namespace), not by making the build unwritable.
-        let crate_dir = harness.scoped_tmp.join("tier2min");
+        let crate_dir = harness.scoped_tmp.as_path().join("tier2min");
         write_min_crate(&crate_dir, false);
         let _guard = JAIL_LOCK
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let exercise =
-            ProbeExercise::real_build(min_build_argv(&crate_dir)).expect("non-empty argv");
+        let exercise = ProbeExercise::real_build(min_build_argv(&crate_dir), invoker_toolchain())
+            .expect("non-empty argv");
         assert!(
             exercise.is_real_build(),
             "the certify guard needs a real build"
@@ -634,13 +646,13 @@ mod real_jail {
         let scoped = scoped_profile(&declared).expect("lower profile");
         let harness = Harness::new("reject-netbuild");
         // Build in the always-writable scratch (see the positive test).
-        let crate_dir = harness.scoped_tmp.join("tier2min");
+        let crate_dir = harness.scoped_tmp.as_path().join("tier2min");
         write_min_crate(&crate_dir, true);
         let _guard = JAIL_LOCK
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let exercise =
-            ProbeExercise::real_build(min_build_argv(&crate_dir)).expect("non-empty argv");
+        let exercise = ProbeExercise::real_build(min_build_argv(&crate_dir), invoker_toolchain())
+            .expect("non-empty argv");
         let runner = real_build_runner(&harness, &tools, exercise);
         let scan = FixedScan {
             reaches: BTreeSet::new(),
@@ -669,7 +681,7 @@ mod real_jail {
     }
 
     fn which_cargo() -> Option<PathBuf> {
-        let path = std::env::var_os("PATH")?;
+        let path = ipe_env::var_os("PATH")?;
         // `cargo` on POSIX, `cargo.exe` on Windows.
         let names: &[&str] = if cfg!(target_os = "windows") {
             &["cargo.exe", "cargo"]
@@ -715,9 +727,9 @@ mod real_jail {
     /// `$XDG_CACHE_HOME` or `~/.cache` — the write-boundary root the project
     /// pins scratch and target state under (never `/tmp`).
     fn dirs_cache_root() -> PathBuf {
-        std::env::var_os("XDG_CACHE_HOME")
+        ipe_env::var_os("XDG_CACHE_HOME")
             .map(PathBuf::from)
-            .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".cache")))
+            .or_else(|| ipe_sandbox::home::home_dir().map(|h| h.join(".cache")))
             .expect("HOME or XDG_CACHE_HOME set")
     }
 
@@ -1105,7 +1117,7 @@ mod real_jail {
     /// an un-granted native capability is a compile error naming the dep.
     #[test]
     fn build_refuses_an_ungranted_native_crossing_naming_the_dep() {
-        if std::env::var_os("IPE_E2E").is_none_or(|v| v != "1") {
+        if ipe_env::var_os("IPE_E2E").is_none_or(|v| v != "1") {
             return;
         }
         if ipe::resolve_runtime().is_err() {
@@ -1130,11 +1142,8 @@ mod real_jail {
             msg.contains("Rust.Csum"),
             "names the disclosing crate: {msg}"
         );
-        // The refusal fires before emit: no artifact is produced.
-        assert!(
-            !out.join("src").join("ffi.rs").is_file(),
-            "a refused build must emit nothing"
-        );
+        // The refusal fires before the output root is claimed: nothing is written.
+        assert!(!out.exists(), "a refused build must write nothing");
         let _ = std::fs::remove_dir_all(&base);
     }
 
@@ -1144,7 +1153,7 @@ mod real_jail {
     /// proves the gate admits a granted crossing rather than refusing everything.
     #[test]
     fn build_admits_a_granted_native_crossing_past_the_consent_gate() {
-        if std::env::var_os("IPE_E2E").is_none_or(|v| v != "1") {
+        if ipe_env::var_os("IPE_E2E").is_none_or(|v| v != "1") {
             return;
         }
         if ipe::resolve_runtime().is_err() {

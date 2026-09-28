@@ -151,7 +151,7 @@ fn changed_model_fixture(marker: &str) -> String {
 const E2E_KEEPALIVE_RESPONSE_TIMEOUT: Duration = Duration::from_secs(30);
 
 fn fresh_dirs(tag: &str) -> Result<(PathBuf, PathBuf), BoxError> {
-    let base = std::env::temp_dir().join(format!(
+    let base = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!(
         "watch_bg_{tag}_{}_{}",
         std::process::id(),
         Instant::now().elapsed().as_nanos()
@@ -359,26 +359,21 @@ fn rendered_count(body: &str) -> Option<i64> {
 /// `want`, or `timeout` elapses. Used to wait for a cold build / a cutover to
 /// land before exercising the kept-alive socket.
 fn wait_for_marker(port: u16, want: &str, timeout: Duration) -> bool {
-    let deadline = Instant::now() + timeout;
     let Ok(addr) = format!("127.0.0.1:{port}").parse() else {
         return false;
     };
-    while Instant::now() < deadline {
-        if let Ok(mut s) = TcpStream::connect_timeout(&addr, Duration::from_millis(200)) {
-            // A short per-sample read timeout: this is a polling probe; a
-            // timeout just means the server is not ready yet, so continue.
-            let _ = s.set_read_timeout(Some(Duration::from_secs(3)));
-            if get_body_keepalive(&mut s)
-                .ok()
-                .flatten()
-                .is_some_and(|b| b.contains(want))
-            {
-                return true;
-            }
-        }
-        std::thread::sleep(Duration::from_millis(100));
-    }
-    false
+    e2e_support::wait_for(timeout, || {
+        let Ok(mut s) = TcpStream::connect_timeout(&addr, Duration::from_millis(200)) else {
+            return false;
+        };
+        // A short per-sample read timeout: this is a polling probe; a
+        // timeout just means the server is not ready yet, so continue.
+        let _ = s.set_read_timeout(Some(Duration::from_secs(3)));
+        get_body_keepalive(&mut s)
+            .ok()
+            .flatten()
+            .is_some_and(|b| b.contains(want))
+    })
 }
 
 fn stop_and_join(
@@ -501,7 +496,7 @@ fn run_measurement(bluegreen: bool, port: u16, tag: &str) -> Result<(), BoxError
 #[test]
 #[ignore = "measurement harness (prints a table); run explicitly with --ignored --nocapture"]
 fn measure_direct_path_tail() -> Result<(), BoxError> {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         eprintln!("skipping (set IPE_E2E=1 to run)");
         return Ok(());
     }
@@ -511,7 +506,7 @@ fn measure_direct_path_tail() -> Result<(), BoxError> {
 #[test]
 #[ignore = "measurement harness (prints a table); run explicitly with --ignored --nocapture"]
 fn measure_bluegreen_path_tail() -> Result<(), BoxError> {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         eprintln!("skipping (set IPE_E2E=1 to run)");
         return Ok(());
     }
@@ -522,14 +517,14 @@ fn measure_bluegreen_path_tail() -> Result<(), BoxError> {
 /// browser's connection, and the same socket afterwards serves the NEW binary.
 #[test]
 fn bluegreen_rebuild_keeps_the_client_connection_alive() -> Result<(), BoxError> {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         eprintln!("skipping (set IPE_E2E=1 to run)");
         return Ok(());
     }
     let (ipe_dir, out_dir) = fresh_dirs("keepalive")?;
     write_main(&ipe_dir, &web_fixture("MARKER-V1"))?;
 
-    let port = 19171;
+    let port = 19191;
     let (join, handle) = start_watch(&ipe_dir.join("Main.ipe"), &out_dir, port, true)?;
 
     assert!(
@@ -615,14 +610,14 @@ fn wait_for_count_at_least(port: u16, cookie: &str, min: i64, timeout: Duration)
 /// breaking new-session init.
 #[test]
 fn bluegreen_rebuild_preserves_the_model_across_the_swap() -> Result<(), BoxError> {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         eprintln!("skipping (set IPE_E2E=1 to run)");
         return Ok(());
     }
     let (ipe_dir, out_dir) = fresh_dirs("handoff")?;
     write_main(&ipe_dir, &ticker_fixture("HANDOFF-V1"))?;
 
-    let port = 19173;
+    let port = 19193;
     let (join, handle) = start_watch(&ipe_dir.join("Main.ipe"), &out_dir, port, true)?;
     assert!(
         wait_for_marker(port, "HANDOFF-V1", Duration::from_mins(5)),
@@ -692,14 +687,14 @@ fn bluegreen_rebuild_preserves_the_model_across_the_swap() -> Result<(), BoxErro
 /// `init` (`score=0`), with the server healthy throughout.
 #[test]
 fn bluegreen_rebuild_resets_cleanly_on_model_type_change() -> Result<(), BoxError> {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         eprintln!("skipping (set IPE_E2E=1 to run)");
         return Ok(());
     }
     let (ipe_dir, out_dir) = fresh_dirs("reset")?;
     write_main(&ipe_dir, &ticker_fixture("RESET-V1"))?;
 
-    let port = 19174;
+    let port = 19194;
     let (join, handle) = start_watch(&ipe_dir.join("Main.ipe"), &out_dir, port, true)?;
     assert!(
         wait_for_marker(port, "RESET-V1", Duration::from_mins(5)),
@@ -799,14 +794,14 @@ fn additive_ticker_fixture(marker: &str) -> String {
 /// value, without losing either old state or the new field's default.
 #[test]
 fn bluegreen_rebuild_preserves_state_on_additive_model_change() -> Result<(), BoxError> {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         eprintln!("skipping (set IPE_E2E=1 to run)");
         return Ok(());
     }
     let (ipe_dir, out_dir) = fresh_dirs("additive")?;
     write_main(&ipe_dir, &ticker_fixture("ADDITIVE-V1"))?;
 
-    let port = 19175;
+    let port = 19195;
     let (join, handle) = start_watch(&ipe_dir.join("Main.ipe"), &out_dir, port, true)?;
     assert!(
         wait_for_marker(port, "ADDITIVE-V1", Duration::from_mins(5)),
@@ -860,14 +855,14 @@ fn bluegreen_rebuild_preserves_state_on_additive_model_change() -> Result<(), Bo
 /// direct path drops connections on restart by design).
 #[test]
 fn flag_off_direct_path_still_swaps_the_binary() -> Result<(), BoxError> {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         eprintln!("skipping (set IPE_E2E=1 to run)");
         return Ok(());
     }
     let (ipe_dir, out_dir) = fresh_dirs("flagoff")?;
     write_main(&ipe_dir, &web_fixture("OFF-V1"))?;
 
-    let port = 19172;
+    let port = 19192;
     let (join, handle) = start_watch(&ipe_dir.join("Main.ipe"), &out_dir, port, false)?;
 
     assert!(

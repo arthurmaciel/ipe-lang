@@ -15,11 +15,13 @@
 //! `--fix` (a data form must not trigger mutations — the same rule `health` uses).
 
 use std::collections::BTreeMap;
+use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
 use ipe_lint::{LintConfig, SourceModule};
 
-use crate::{CliError, cli_args, watch};
+use crate::screen::{self, Screen, Stream, Tone};
+use crate::{CliError, cli_args, text, watch};
 
 /// The `lint.ipe` file name, resolved next to a project's `package.ipe` (or in
 /// the current directory for a single-file lint).
@@ -44,7 +46,7 @@ pub(crate) struct LintArgs {
 /// be combined (same rule as `health --yes --json`).
 ///
 /// # Errors
-/// [`CliError::UsageOwned`] on an unknown flag, a second positional, or
+/// [`CliError::Usage`] on an unknown flag, a second positional, or
 /// `--fix` combined with `--json`/`--plain`.
 pub(crate) fn parse_lint_args(rest: &[String]) -> Result<LintArgs, CliError> {
     let mut entry: Option<String> = None;
@@ -61,7 +63,7 @@ pub(crate) fn parse_lint_args(rest: &[String]) -> Result<LintArgs, CliError> {
             }
             positional => {
                 if entry.is_some() {
-                    return Err(CliError::Usage("ipe lint takes at most one path"));
+                    return Err(CliError::Usage(text::msg::lint_single_path()));
                 }
                 entry = Some(positional.to_owned());
             }
@@ -69,11 +71,7 @@ pub(crate) fn parse_lint_args(rest: &[String]) -> Result<LintArgs, CliError> {
     }
     let format = format.unwrap_or_default();
     if fix && format != cli_args::OutputFormat::Human {
-        return Err(CliError::UsageOwned(
-            "ipe lint: --fix and a data form (--json/--plain) are mutually exclusive — \
-             a data form reports without mutating"
-                .to_owned(),
-        ));
+        return Err(CliError::Usage(text::msg::lint_fix_with_format()));
     }
     Ok(LintArgs { entry, fix, format })
 }
@@ -82,7 +80,7 @@ pub(crate) fn parse_lint_args(rest: &[String]) -> Result<LintArgs, CliError> {
 ///
 /// # Errors
 /// [`CliError::Usage`] on misuse; [`CliError::Io`] on a filesystem failure;
-/// [`CliError::Pipeline`] if an entry file fails to parse; [`CliError::UsageOwned`]
+/// [`CliError::Pipeline`] if an entry file fails to parse; [`CliError::Usage`]
 /// for a malformed `lint.ipe`; [`CliError::LintGateFailed`] when a surviving
 /// finding is at or above the gate severity (report path only).
 pub(crate) fn run_lint(rest: &[String]) -> Result<(), CliError> {
@@ -110,7 +108,14 @@ pub(crate) fn run_lint(rest: &[String]) -> Result<(), CliError> {
     }
 
     if args.fix {
-        return apply_and_report(&modules, &config, &paths);
+        // Fixes reach modules found by walking the project, so each rewrite must
+        // stay inside it (the manifest's directory, or a single file's own).
+        let root = resolved
+            .blame_path
+            .parent()
+            .filter(|p| !p.as_os_str().is_empty())
+            .map_or_else(|| PathBuf::from("."), Path::to_path_buf);
+        return apply_and_report(&modules, &config, &paths, &root);
     }
     report_findings(&modules, &config, &paths, args.format)
 }
@@ -128,7 +133,7 @@ fn load_config(blame_path: &Path) -> Result<LintConfig, CliError> {
     let text =
         crate::io_bounded::read_to_string_capped(&lint_ipe, crate::io_bounded::MANIFEST_READ_CAP)?;
     ipe_lint::read_lint_config(&text, &lint_ipe.display().to_string())
-        .map_err(|e| CliError::UsageOwned(e.to_string()))
+        .map_err(|e| CliError::Usage(crate::text::Message::relay(&e)))
 }
 
 /// Run the linter and print each finding; fail the gate if any survives at or
@@ -190,27 +195,26 @@ fn report_findings(
                 })
                 .collect();
             let gate_tripped = report.gate_tripped(config);
-            println!(
-                "{}",
-                json::object(&[
-                    ("schema", json::string("ipe.cli.lint/1")),
-                    ("findings", json::array(&finding_objs)),
-                    (
-                        "gate_tripped",
-                        if gate_tripped {
-                            "true".to_owned()
-                        } else {
-                            "false".to_owned()
-                        },
-                    ),
-                ])
-            );
+            let payload = json::object(&[
+                ("schema", json::string("ipe.cli.lint/1")),
+                ("findings", json::array(&finding_objs)),
+                (
+                    "gate_tripped",
+                    if gate_tripped {
+                        "true".to_owned()
+                    } else {
+                        "false".to_owned()
+                    },
+                ),
+            ]);
+            screen::emit_machine(Stream::Stdout, &format!("{payload}\n"));
             if gate_tripped {
                 return Err(CliError::LintGateFailed);
             }
         }
         Plain => {
             // One line per finding: `<severity>:<file>:<line>:<col>: <message>`.
+            let mut lines = String::new();
             for f in &report.findings {
                 let file = paths
                     .get(&f.module)
@@ -218,7 +222,8 @@ fn report_findings(
                 let source = source_of.get(f.module.as_slice()).copied().unwrap_or("");
                 let severity = config.severity_of(f.rule);
                 let (line, col) = byte_to_line_col(source, f.span.lo);
-                println!(
+                let _ = writeln!(
+                    lines,
                     "{}:{}:{}:{}: {}",
                     severity.word(),
                     file,
@@ -227,13 +232,16 @@ fn report_findings(
                     f.message
                 );
             }
+            screen::emit_machine(Stream::Stdout, &lines);
             if report.gate_tripped(config) {
                 return Err(CliError::LintGateFailed);
             }
         }
         Human => {
+            let mut out = Screen::new(Stream::Stdout);
             if report.findings.is_empty() {
-                println!("{}", crate::style::gutter("lint: no findings"));
+                out.line(Tone::Success, "lint: no findings");
+                out.emit();
                 return Ok(());
             }
 
@@ -246,29 +254,48 @@ fn report_findings(
                     .copied()
                     .unwrap_or("");
                 let severity = config.severity_of(finding.rule);
-                // `render_finding` ends with a newline; `println!` adds the blank
-                // line that separates one finding's block from the next.
-                println!(
-                    "{}",
-                    ipe_lint::render_finding(finding, &file, source, severity)
-                );
+                for (role, line) in ipe_lint::render_finding_lines(finding, &file, source, severity)
+                {
+                    match role {
+                        ipe_lint::LineRole::Blank => out.blank(),
+                        other => out.line(finding_tone(other), &line),
+                    };
+                }
+                out.blank();
             }
 
             let count = report.findings.len();
-            println!(
-                "{}",
-                crate::style::gutter(&format!(
-                    "lint: {count} finding{}",
-                    if count == 1 { "" } else { "s" }
-                ))
+            let gate_tripped = report.gate_tripped(config);
+            out.line(
+                if gate_tripped {
+                    Tone::UserError
+                } else {
+                    Tone::Text
+                },
+                &format!("lint: {count} finding{}", if count == 1 { "" } else { "s" }),
             );
+            out.emit();
 
-            if report.gate_tripped(config) {
+            if gate_tripped {
                 return Err(CliError::LintGateFailed);
             }
         }
     }
     Ok(())
+}
+
+/// The tone a rendered finding line is painted in.
+///
+/// The title rule is the finding itself (a user-side issue), the message and
+/// snippet are prose, and the teaching help is auxiliary.
+const fn finding_tone(role: ipe_lint::LineRole) -> Tone {
+    match role {
+        ipe_lint::LineRole::Title => Tone::UserError,
+        ipe_lint::LineRole::Message | ipe_lint::LineRole::Snippet | ipe_lint::LineRole::Blank => {
+            Tone::Text
+        }
+        ipe_lint::LineRole::Help => Tone::Aux,
+    }
 }
 
 /// Convert a byte offset into a 1-based `(line, col)` pair by scanning the
@@ -305,6 +332,7 @@ fn apply_and_report(
     modules: &[SourceModule],
     config: &LintConfig,
     paths: &BTreeMap<Vec<String>, PathBuf>,
+    root: &Path,
 ) -> Result<(), CliError> {
     let local_outcome = ipe_lint::apply_fixes(modules, config);
 
@@ -326,11 +354,10 @@ fn apply_and_report(
     let sig_outcome = ipe_lint::apply_sig_fixes(&modules_after_local, config);
 
     let total = local_outcome.applied + sig_outcome.applied;
+    let mut out = Screen::new(Stream::Stdout);
     if total == 0 && sig_outcome.manual_reviews.is_empty() {
-        println!(
-            "{}",
-            crate::style::gutter("lint --fix: no machine-applicable fixes")
-        );
+        out.line(Tone::Text, "lint --fix: no machine-applicable fixes");
+        out.emit();
         return Ok(());
     }
 
@@ -346,33 +373,48 @@ fn apply_and_report(
         let Some(path) = paths.get(module) else {
             continue;
         };
-        crate::write_atomic(path, rewritten)?;
-        println!(
-            "{}",
-            crate::style::gutter(&format!("lint --fix: rewrote {}", path.display()))
+        let backup =
+            match crate::rewrite_walked_file(root, path, rewritten, crate::RewriteKind::Lossy) {
+                Ok(backup) => backup,
+                Err(err) => {
+                    // Report the files already rewritten before the failure.
+                    out.emit();
+                    return Err(err);
+                }
+            };
+        out.line(
+            Tone::Text,
+            &format!("lint --fix: rewrote {}", path.display()),
         );
+        if let Some(backup) = backup {
+            out.line(
+                Tone::Text,
+                &format!("lint --fix: original kept at {}", backup.display()),
+            );
+        }
     }
 
     if total > 0 {
-        println!(
-            "{}",
-            crate::style::gutter(&format!(
+        out.line(
+            Tone::Success,
+            &format!(
                 "lint --fix: applied {} fix{}",
                 total,
                 if total == 1 { "" } else { "es" }
-            ))
+            ),
         );
     }
 
     for mr in &sig_outcome.manual_reviews {
-        println!(
-            "{}",
-            crate::style::gutter(&format!(
+        out.line(
+            Tone::UserError,
+            &format!(
                 "lint --fix: manual review needed for `{}` ({}) — {}",
                 mr.symbol_name, mr.rule, mr.reason
-            ))
+            ),
         );
     }
 
+    out.emit();
     Ok(())
 }

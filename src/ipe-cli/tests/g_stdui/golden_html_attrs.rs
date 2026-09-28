@@ -27,14 +27,14 @@ fn repo_root() -> PathBuf {
 
 #[test]
 fn html_attributes_family_renders_and_escapes() {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
 
     let root = repo_root();
     let dir = root.join("tests").join("golden").join("html_attrs");
     let entry = dir.join("Main.ipe");
-    let out = std::env::temp_dir().join("ipec_m7_html_attrs_e2e");
+    let out = crate::support::scratch_root().join("ipec_m7_html_attrs_e2e");
     let _ = std::fs::remove_dir_all(&out);
 
     let runtime = ipe::resolve_runtime().expect("runtime must resolve for E2E");

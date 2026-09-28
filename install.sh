@@ -9,6 +9,106 @@ set -eu
 
 REPO="arthurmaciel/ipe-lang"
 INSTALL_DIR="${IPE_INSTALL_DIR:-$HOME/.local/bin}"
+# Set only by `ipe upgrade`'s own wrapper — see die_no_prebuilt below.
+WRAPPED="${IPE_UPGRADE_WRAPPED:-0}"
+TAG_FILE="${IPE_UPGRADE_TAG_FILE:-}"
+
+# >>> private-scratch helpers
+# A scratch path handed to another writer (`curl -o`, the tag file `ipe upgrade`
+# reads back) is safe only while no other user can replace any component of it.
+# So scratch lives only in a directory made by `mktemp -d` under a verified base
+# and re-checked after creation: a real directory (not a symlink), owned by us,
+# no group/other bits. Windows shells (MSYS/Cygwin) only emulate POSIX owners
+# and modes, so there only the type checks apply.
+case "$(uname -s)" in
+  MINGW*|MSYS*|CYGWIN*) SCRATCH_POSIX_MODES=0 ;;
+  *) SCRATCH_POSIX_MODES=1 ;;
+esac
+
+# scratch_private_verdict MODE OWNER ME PATTERN — an entry with `ls -l` mode
+# string MODE and owner uid OWNER is private to uid ME when OWNER is ME and MODE
+# matches PATTERN.
+scratch_private_verdict() {
+  [ -n "$1" ] && [ -n "$3" ] && [ "$2" = "$3" ] || return 1
+  # shellcheck disable=SC2254  # PATTERN is a deliberate case pattern
+  case "$1" in $4) return 0 ;; esac
+  return 1
+}
+
+# scratch_entry_private PATH PATTERN — PATH is owned by the effective uid and
+# its `ls -l` mode string matches PATTERN.
+scratch_entry_private() {
+  _sp_ls="$(ls -ldn -- "$1" 2>/dev/null)" || return 1
+  read -r _sp_mode _sp_links _sp_uid _sp_rest <<SCRATCH_LS
+$_sp_ls
+SCRATCH_LS
+  scratch_private_verdict "$_sp_mode" "$_sp_uid" "$(id -u)" "$2"
+}
+
+# scratch_base_verdict MODE OWNER GROUP ME MYGID — an entry with `ls -l` mode
+# string MODE, owner uid OWNER and group gid GROUP is a trusted base component
+# for uid ME (primary gid MYGID): a directory owned by ME or root, writable by no
+# one else unless sticky. Group-writable is allowed only for ME's own directory
+# in group MYGID with no ACL, the user-private-group layout.
+scratch_base_verdict() {
+  [ -n "$4" ] || return 1
+  case "$1" in d*) ;; *) return 1 ;; esac
+  [ "$2" = "$4" ] || [ "$2" = 0 ] || return 1
+  case "$1" in d????????[tT]*) return 0 ;; esac
+  case "$1" in d???????w*) return 1 ;; esac
+  case "$1" in
+    # An ACL (`+`) can grant a named user write through the group mask.
+    d????w*+) return 1 ;;
+    d????w*) [ "$2" = "$4" ] && [ -n "$5" ] && [ "$3" = "$5" ] || return 1 ;;
+  esac
+  return 0
+}
+
+# scratch_base_entry_ok DIR ME MYGID — DIR passes scratch_base_verdict.
+scratch_base_entry_ok() {
+  _be_ls="$(ls -ldn -- "$1" 2>/dev/null)" || return 1
+  read -r _be_mode _be_links _be_uid _be_gid _be_rest <<SCRATCH_LS
+$_be_ls
+SCRATCH_LS
+  scratch_base_verdict "$_be_mode" "$_be_uid" "$_be_gid" "$2" "$3"
+}
+
+# trusted_tmp_base BASE — print BASE's physical (symlink-free) path when it and
+# every ancestor pass scratch_base_entry_ok; fail otherwise.
+trusted_tmp_base() {
+  _tb_dir="$(cd -P -- "$1" 2>/dev/null && pwd -P)" || return 1
+  [ -n "$_tb_dir" ] || return 1
+  if [ "$SCRATCH_POSIX_MODES" = 1 ]; then
+    _tb_me="$(id -u)"; _tb_grp="$(id -g)"; _tb_walk="$_tb_dir"; _tb_left=256
+    while :; do
+      scratch_base_entry_ok "$_tb_walk" "$_tb_me" "$_tb_grp" || return 1
+      case "$_tb_walk" in /|//) break ;; esac
+      _tb_left=$((_tb_left - 1))
+      [ "$_tb_left" -gt 0 ] || return 1
+      _tb_walk="$(dirname -- "$_tb_walk")"
+    done
+  fi
+  printf '%s\n' "$_tb_dir"
+}
+
+# private_dir_ok DIR — DIR is a real directory owned by us with mode 0700 bits.
+private_dir_ok() {
+  [ -d "$1" ] && [ ! -L "$1" ] || return 1
+  [ "$SCRATCH_POSIX_MODES" = 1 ] || return 0
+  scratch_entry_private "$1" 'd???------*'
+}
+
+# tag_file_ok FILE — FILE is a regular file (not a symlink) we own with no
+# group/other bits, inside a private directory whose ancestors are trusted.
+tag_file_ok() {
+  [ -f "$1" ] && [ ! -L "$1" ] || return 1
+  _tf_dir="$(dirname -- "$1")"
+  private_dir_ok "$_tf_dir" || return 1
+  trusted_tmp_base "$(dirname -- "$_tf_dir")" >/dev/null || return 1
+  [ "$SCRATCH_POSIX_MODES" = 1 ] || return 0
+  scratch_entry_private "$1" '-???------*'
+}
+# <<< private-scratch helpers
 
 # ── Palette ──────────────────────────────────────────────────────────────────
 # Mirror the CLI (style.rs): a soft Ipê-amarelo (256-colour 222) for the banner,
@@ -78,16 +178,24 @@ stage_fail() {
   STAGE_LABEL=''
 }
 
-# info — a dimmed, deeper-indented sub-note beneath a stage (a soft skip, a
-# secondary fact). Never a stage outcome itself. If a stage is still running on
-# a terminal, settle its line first (a soft skip, in dim) so the note lands on
-# its own line rather than overwriting the spinner.
-info() {
+# stage_skip — settle a running stage as a neutral soft-skip (dim bullet, TTY
+# only), with no message of its own. Use this when the caller will state the
+# actual fact separately (or not at all) — it exists so a stage can be closed
+# cleanly without forcing a restatement that the next line would duplicate.
+stage_skip() {
   if [ -n "$STAGE_LABEL" ] && [ "$IS_TTY" = 1 ]; then
     printf '\r  %s•%s %s%s%s\033[0K\n' \
       "$C_DIM" "$C_RESET" "$C_DIM" "$STAGE_LABEL" "$C_RESET" >&2
     STAGE_LABEL=''
   fi
+}
+
+# info — a dimmed, deeper-indented sub-note beneath a stage (a soft skip, a
+# secondary fact). Never a stage outcome itself. Settles any running stage
+# first (see stage_skip) so the note lands on its own line rather than
+# overwriting the spinner.
+info() {
+  stage_skip
   printf '    %s%s%s\n' "$C_DIM" "$1" "$C_RESET" >&2
 }
 
@@ -105,8 +213,20 @@ die() {
 # die_no_prebuilt TAG PLAT CPU — exits 2, a distinct code the `ipe upgrade`
 # wrapper uses to show the "still being generated" message instead of generic
 # failure text. Exit 2 (not 1) signals "no prebuilt binary" specifically.
+#
+# IPE_UPGRADE_WRAPPED=1 marks a run launched BY `ipe upgrade` (never set by a
+# direct `curl | sh`): that wrapper renders its own single failure message
+# using the real resolved tag, so this function skips its own stderr banner
+# and instead writes the tag into the private file the wrapper named in
+# IPE_UPGRADE_TAG_FILE — only when tag_file_ok verifies it is a private file in
+# a private directory. Without such a file (or when the write fails) the banner
+# below is shown as for a direct run.
 die_no_prebuilt() {
   _tag="$1"; _plat="$2"; _cpu="$3"
+  if [ "$WRAPPED" = 1 ] && [ -n "$TAG_FILE" ] && tag_file_ok "$TAG_FILE" \
+    && printf '%s\n' "$_tag" 2>/dev/null >"$TAG_FILE"; then
+    exit 2
+  fi
   printf '\n  %s%s%s No prebuilt binary for %s on %s-%s.\n' \
     "$C_BOLD" "$C_RED" "$C_RESET" "$_tag" "$_plat" "$_cpu" >&2
   printf '      Possibly the binaries for that version are still being generated.\n' >&2
@@ -152,7 +272,7 @@ esac
 
 # Published matrix (see .github/workflows/release.yml). Reject combos we don't ship.
 case "$plat-$cpu" in
-  linux-x64|linux-arm64|darwin-arm64|freebsd-x64|windows-x64) : ;;
+  linux-x64|linux-arm64|darwin-x64|darwin-arm64|freebsd-x64|windows-x64) : ;;
   *) die "No prebuilt binary for $plat-$cpu — build from source: https://github.com/$REPO" ;;
 esac
 artifact="ipe-$plat-$cpu"
@@ -205,7 +325,10 @@ if curl -fsSL -o /dev/null -I --max-time 10 "$url" 2>/dev/null; then
   have_bin=1
   stage_ok "Prebuilt binary available for $plat-$cpu."
 else
-  info "No prebuilt binary for $tag on $plat-$cpu."
+  # Settle the stage without restating the fact here — the fact is stated
+  # exactly once, either by the retry prompt just below or by die_no_prebuilt
+  # at the final gate; saying it here too was a literal duplicate.
+  stage_skip
   if [ -n "${IPE_VERSION:-}" ] && [ "$IS_TTY" = 1 ] && [ -r /dev/tty ]; then
     printf '\n    %sNo prebuilt ipe %s binary for %s-%s.%s\n' \
       "$C_BOLD" "$ver" "$plat" "$cpu" "$C_RESET" >&2
@@ -354,7 +477,12 @@ if [ "$have_bin" != 1 ]; then
 fi
 
 # ── Download the binary with a friendly progress display ─────────────────────
-tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
+scratch_base="$(trusted_tmp_base "${TMPDIR:-/tmp}")" \
+  || die "Refusing the temp directory ${TMPDIR:-/tmp}: it (or a parent) is writable or owned by another user."
+tmp="$(mktemp -d "$scratch_base/ipe-install.XXXXXX")" \
+  || die "Could not create a private temp directory under $scratch_base."
+trap 'rm -rf "$tmp"' EXIT
+private_dir_ok "$tmp" || die "The temp directory $tmp is not private to you."
 pkg="$tmp/pkg.$ext"
 
 stage_start "Downloading ipe $ver for ${plat}-${cpu}…"
@@ -654,13 +782,13 @@ resolve_shell_rc() {
 # after a move or version change. POSIX and fish both get one, so a user who
 # switches shells still has the right file to source.
 # write_managed FILE CONTENT — write CONTENT to FILE by rendering to a fresh
-# temp file inside the validated $IPE_HOME and `mv`-ing it into place. `mv`
+# exclusively-created (`mktemp`) temp file inside the validated $IPE_HOME and `mv`-ing it into place. `mv`
 # replaces a symlink at FILE rather than following it, so a final-component
 # symlink swapped in after our check cannot redirect the write outside $HOME
 # (closing the check-then-write TOCTOU that a plain `>` redirect leaves open).
 write_managed() {
   wm_dest="$1"; wm_body="$2"
-  wm_tmp="$IPE_HOME/.env.$$.tmp"
+  wm_tmp="$(mktemp "$IPE_HOME/.env.XXXXXX")" || die "Could not write $wm_dest."
   printf '%s' "$wm_body" > "$wm_tmp" || die "Could not write $wm_dest."
   mv -f "$wm_tmp" "$wm_dest" || { rm -f "$wm_tmp"; die "Could not write $wm_dest."; }
 }

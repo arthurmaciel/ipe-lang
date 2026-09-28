@@ -43,7 +43,7 @@ use std::process::{Command, Stdio};
 #[must_use]
 #[allow(dead_code)] // adopted file-by-file as tests migrate to the shared helper
 pub fn manifest_dir() -> PathBuf {
-    std::env::var_os("CARGO_MANIFEST_DIR")
+    ipe_env::var_os("CARGO_MANIFEST_DIR")
         .map_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")), PathBuf::from)
 }
 
@@ -57,8 +57,72 @@ pub fn manifest_dir() -> PathBuf {
 #[must_use]
 #[allow(dead_code)] // adopted file-by-file as tests migrate to the shared helper
 pub fn ipe_bin() -> PathBuf {
-    std::env::var_os("CARGO_BIN_EXE_ipe")
+    ipe_env::var_os("CARGO_BIN_EXE_ipe")
         .map_or_else(|| PathBuf::from(env!("CARGO_BIN_EXE_ipe")), PathBuf::from)
+}
+
+/// Per-binary scratch root for e2e output, isolated per `CARGO_TARGET_DIR` pool
+/// so two gates building from different pools never share `/tmp` and clobber
+/// each other's fixed-name output (cargo sets `CARGO_TARGET_TMPDIR` at compile
+/// time for integration test binaries, rooted inside that binary's own target
+/// dir).
+#[must_use]
+#[allow(dead_code)] // adopted file-by-file as tests migrate to the shared helper
+pub fn scratch_root() -> PathBuf {
+    PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
+}
+
+/// Unwrap a refusal/acceptance test's scratch-dir setup, failing the test loudly
+/// when it is `None` instead of letting the caller skip silently.
+///
+/// A vacuous skip here would let a rejection/acceptance test pass without ever
+/// running the pipeline — defeating the very SEAL coverage the test exists to
+/// prove. The placeholder `PathBuf` returned after the assertion is unreachable:
+/// the assertion above it already failed the test on that path.
+#[must_use]
+#[allow(dead_code)] // adopted file-by-file as refusal/acceptance tests migrate
+#[track_caller]
+pub fn expect_scratch_entry(test_name: &str, entry: Option<PathBuf>) -> PathBuf {
+    assert!(
+        entry.is_some(),
+        "{test_name}: scratch dir setup failed — a refusal/acceptance test must \
+         fail loudly, never skip silently"
+    );
+    entry.unwrap_or_default()
+}
+
+/// Unwrap a refusal/acceptance test's runtime resolution, failing the test
+/// loudly when it is `Err` instead of letting the caller skip silently.
+///
+/// See [`expect_scratch_entry`] for why a silent skip here is unacceptable; the
+/// placeholder `PathBuf` returned after the assertion is unreachable.
+#[must_use]
+#[allow(dead_code)] // adopted file-by-file as refusal/acceptance tests migrate
+#[track_caller]
+pub fn expect_runtime(test_name: &str, runtime: Result<PathBuf, ipe::CliError>) -> PathBuf {
+    assert!(
+        runtime.is_ok(),
+        "{test_name}: runtime resolution failed — a refusal/acceptance test must \
+         fail loudly, never skip silently: {:?}",
+        runtime.as_ref().err()
+    );
+    runtime.unwrap_or_default()
+}
+
+/// Assert a refusal/acceptance test's scratch-dir setup step (a directory
+/// create, file write, or symlink) succeeded, failing the test loudly instead
+/// of letting the caller skip silently on an `Err`.
+///
+/// See [`expect_scratch_entry`] for why a silent skip here is unacceptable.
+#[allow(dead_code)] // adopted file-by-file as refusal/acceptance tests migrate
+#[track_caller]
+pub fn expect_scratch_step(test_name: &str, result: std::io::Result<()>) {
+    assert!(
+        result.is_ok(),
+        "{test_name}: scratch dir setup step failed — a refusal/acceptance test \
+         must fail loudly, never skip silently: {:?}",
+        result.err()
+    );
 }
 
 /// The `ipe-lang` workspace root (two levels up from this crate's manifest).
@@ -291,7 +355,7 @@ pub fn assert_emitted_project_matches_golden_dir(emitted_out: &Path, golden_dir:
         ));
     }
 
-    if std::env::var_os("IPE_BLESS").is_some() {
+    if ipe_env::var_os("IPE_BLESS").is_some() {
         bless_golden_dir(golden_dir, &pairs, &emitted_mod_names);
         return;
     }
@@ -445,7 +509,7 @@ pub fn build_emitted(golden_name: &str, emitted_dir: &Path) -> Result<(), String
 #[track_caller]
 #[allow(dead_code)] // not every test binary exercises this helper
 pub fn assert_seal_builds(seal_name: &str, emitted_dir: &Path) {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return; // fast default gate: emit-only pass
     }
     let outcome = build_emitted(seal_name, emitted_dir);
@@ -704,7 +768,7 @@ pub fn assert_self_regression(golden_name: &str, golden_dir: &Path, ipe_stdout: 
     // instead of asserting. The counterpart to `IPE_BLESS` in the byte-diff
     // golden path, so an intentional render change is re-captured with the same
     // tooling — never hand-edited bytes.
-    if std::env::var_os("IPE_BLESS").is_some() {
+    if ipe_env::var_os("IPE_BLESS").is_some() {
         let path = golden_dir.join(e2e_support::EXPECTED_FILE);
         let wrote = std::fs::write(&path, ipe_stdout);
         assert!(

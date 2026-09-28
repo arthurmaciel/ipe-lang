@@ -147,12 +147,33 @@ fn program_using_ipe_test_resolves_and_type_checks() -> TestResult {
     Ok(())
 }
 
+/// `String.fromBool`, the typed replacement for the removed prelude
+/// `toString`, resolves through the compiled-source `Ipe.String` and
+/// type-checks. The negative leg (bare `toString` unbound) lives in canon.
+#[test]
+fn string_from_bool_type_checks() -> TestResult {
+    let (ok, stdout, stderr) = run_ipe(&[
+        "type-check",
+        &fixture("string_from_bool.ipe").to_string_lossy(),
+    ])?;
+    assert!(
+        ok,
+        "`String.fromBool` must type-check, got stderr:\n{stderr}"
+    );
+    assert!(
+        stdout.contains("type-checks"),
+        "a clean check prints a friendly success message, got:\n{stdout}"
+    );
+    Ok(())
+}
+
 /// `check` type-checks and stops: no emitted project is written next to the
 /// entry (a build would create `out/`). The entry is copied into a fresh,
 /// otherwise-empty directory so any emission would be unmistakable.
 #[test]
 fn check_writes_no_emitted_project() -> TestResult {
-    let dir = std::env::temp_dir().join(format!("ipe_check_no_emit_{}", std::process::id()));
+    let dir =
+        crate::support::scratch_root().join(format!("ipe_check_no_emit_{}", std::process::id()));
     std::fs::create_dir_all(&dir)?;
     let src = dir.join("Main.ipe");
     std::fs::copy(fixture("well_typed.ipe"), &src)?;
@@ -194,7 +215,7 @@ fn build_stderr(entry: &Path) -> Option<String> {
     let out = Command::new(support::ipe_bin())
         .args(["build", &entry.to_string_lossy()])
         .arg("--out")
-        .arg(std::env::temp_dir().join(format!("ipe_caret_build_{}", std::process::id())))
+        .arg(crate::support::scratch_root().join(format!("ipe_caret_build_{}", std::process::id())))
         .env("IPE_RUNTIME_DIR", &runtime)
         .output()
         .ok()?;
@@ -308,7 +329,7 @@ fn closed_union_catch_all_build_emits_no_crate() -> TestResult {
         // pins the non-zero exit. Skip the build-artifact assertion.
         return Ok(());
     };
-    let dir = std::env::temp_dir().join(format!(
+    let dir = crate::support::scratch_root().join(format!(
         "ipe_t0018_no_emit_{}_{}",
         std::process::id(),
         "closed_union"
@@ -326,7 +347,7 @@ fn closed_union_catch_all_build_emits_no_crate() -> TestResult {
         .output()?;
     let ok = output.status.success();
     let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
-    let main_rs_present = out_dir.join("src").join("main.rs").exists();
+    let main_rs_present = out_dir.join("rust").join("src").join("main.rs").exists();
     std::fs::remove_dir_all(&dir)?;
 
     assert!(

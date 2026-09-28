@@ -145,10 +145,13 @@ pub fn cache_new_raw<E: Send + From<String> + 'static>(cfg: CacheCfg) -> IpeTask
             use std::sync::atomic::{AtomicBool, Ordering};
             static WARNED: AtomicBool = AtomicBool::new(false);
             if !WARNED.swap(true, Ordering::Relaxed) {
-                eprintln!(
-                    "[ipe.cache] CacheCfg.maxBytes ({}) is not enforced on the Rust backend; \
-                     use maxEntries (LRU) to bound memory",
-                    cfg.maxBytes
+                crate::system::emit_runtime_log(
+                    "cache",
+                    &format!(
+                        "CacheCfg.maxBytes ({}) is not enforced on the Rust backend; use \
+                         maxEntries (LRU) to bound memory",
+                        cfg.maxBytes
+                    ),
                 );
             }
         }

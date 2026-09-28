@@ -27,12 +27,12 @@ use ipe_diagnostics::{
 
 fn goldens_dir() -> PathBuf {
     // CARGO_MANIFEST_DIR points at the crate root during tests.
-    let manifest = std::env::var("CARGO_MANIFEST_DIR").unwrap_or_else(|_| String::from("."));
+    let manifest = ipe_env::var("CARGO_MANIFEST_DIR").unwrap_or_else(|_| String::from("."));
     PathBuf::from(manifest).join("tests").join("render_goldens")
 }
 
 fn update_mode() -> bool {
-    std::env::var("UPDATE_GOLDENS").is_ok()
+    ipe_env::var("UPDATE_GOLDENS").is_ok()
 }
 
 /// Render `d` against `source`, then compare to the golden file `name.txt`.

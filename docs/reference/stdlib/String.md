@@ -8,7 +8,7 @@
 
 A `String` is immutable UTF-8 text; every function here returns a NEW string
 rather than changing its argument. The functions cluster into families:
-construction (`fromInt`, `fromChar`, `repeat`), shape (`length`, `isEmpty`),
+construction (`fromInt`, `fromFloat`, `fromBool`, `fromChar`, `repeat`), shape (`length`, `isEmpty`),
 combining (`join`, `append`, `concat`), splitting (`split`, `words`, `lines`),
 slicing (`slice`, `left`, `right`, `dropLeft`, `padLeft`), case
 (`toUpper`, `toLower`, and the locale-aware `*In` / `casefold` variants),
@@ -488,6 +488,20 @@ lines : String -> List String
 lines "line1\nline2\nline3" --> [ "line1", "line2", "line3" ]
 lines "only one" --> [ "only one" ]
 lines "" --> [ "" ]
+```
+
+## `fromBool`
+
+```ipe
+fromBool : Bool -> String
+```
+
+`fromBool b` — the canonical text of a `Bool`: lowercase `"true"` or
+`"false"`. `{{flag}}` interpolation renders a `Bool` the same way.
+
+```ipe
+fromBool True --> "true"
+fromBool False --> "false"
 ```
 
 ## `fromChar`

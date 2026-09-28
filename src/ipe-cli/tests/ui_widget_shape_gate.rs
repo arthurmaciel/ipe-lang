@@ -29,7 +29,8 @@ fn compile_with_files(
     source: &str,
     extra: &[(&str, &str)],
 ) -> Result<Result<(), ipe::CliError>, BoxError> {
-    let ipe_dir = std::env::temp_dir().join(format!("ui_widget_gate_{test_name}_ipe"));
+    let ipe_dir = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
+        .join(format!("ui_widget_gate_{test_name}_ipe"));
     let _ = std::fs::remove_dir_all(&ipe_dir);
     std::fs::create_dir_all(&ipe_dir)?;
     for (rel, contents) in extra {
@@ -42,7 +43,8 @@ fn compile_with_files(
     let entry = ipe_dir.join("Main.ipe");
     std::fs::write(&entry, source)?;
 
-    let out_dir = std::env::temp_dir().join(format!("ui_widget_gate_{test_name}_out"));
+    let out_dir = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
+        .join(format!("ui_widget_gate_{test_name}_out"));
     let _ = std::fs::remove_dir_all(&out_dir);
 
     let runtime = ipe::resolve_runtime().map_err(|e| -> BoxError { format!("{e:?}").into() })?;
@@ -71,7 +73,7 @@ import Ipe.Tea.Tui as Tui
 import Ipe.Ffi.Js.CustomElement as CustomElement
 import Ipe.Ui.Cells exposing (Screen)
 import Ipe.Tea.Terminal.Cmd
-import Ipe.Tea.Terminal.Sub
+import Ipe.Tea.Tui.Sub
 
 type alias EditorState = { text : String, line : Int }
 
@@ -98,7 +100,7 @@ view model =
 
 subscriptions : Model -> Sub Msg
 subscriptions _model =
-    Sub.none
+    Sub.onKey onKey
 
 type alias KeyEvent = { kind : String, value : String }
 
@@ -109,7 +111,7 @@ onKey _event =
 main =
     Tui.tea
         { init = init, update = update, view = view
-        , subscriptions = subscriptions, onKey = onKey
+        , subscriptions = subscriptions
         }
 "#;
 
@@ -263,6 +265,7 @@ fn web_view_with_old_ui_widget_surface_is_rejected() -> Result<(), BoxError> {
 const CLI_UI_WIDGET: &str = r#"module Main exposing (main)
 
 import Ipe.Tea.Cli as Cli
+import Ipe.Tea.Cli.Sub as Sub
 import Ipe.Ui.Cli exposing (Lines)
 import Ipe.Ffi.Js.CustomElement as CustomElement
 
@@ -291,7 +294,7 @@ view model =
 
 subscriptions : Model -> Sub Msg
 subscriptions _model =
-    Sub.none
+    Sub.onLine onLine
 
 onLine : String -> Msg
 onLine _line =
@@ -300,7 +303,7 @@ onLine _line =
 main =
     Cli.tea
         { init = init, update = update, view = view
-        , subscriptions = subscriptions, onLine = onLine
+        , subscriptions = subscriptions
         }
 "#;
 

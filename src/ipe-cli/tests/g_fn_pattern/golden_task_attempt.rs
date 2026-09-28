@@ -19,14 +19,14 @@ fn repo_root() -> PathBuf {
 
 #[test]
 fn task_attempt_ipec_cargo_and_run_zero() {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
 
     let root = repo_root();
     let dir = root.join("tests").join("golden").join("task_attempt");
     let entry = dir.join("Main.ipe");
-    let out = std::env::temp_dir().join("ipec_task_attempt_e2e");
+    let out = crate::support::scratch_root().join("ipec_task_attempt_e2e");
     let _ = std::fs::remove_dir_all(&out);
 
     let runtime = ipe::resolve_runtime();

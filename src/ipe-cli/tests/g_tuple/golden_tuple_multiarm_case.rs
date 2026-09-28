@@ -64,11 +64,11 @@ fn multi_arm_tuple_case_builds() {
 /// is `[11, 22, 33]` (length 3); `classify True False` is `2`; sum is `5`.
 #[test]
 fn multi_arm_tuple_case_cargo_builds_and_runs() {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
 
-    let out = std::env::temp_dir().join("ipec_tuple_multiarm_e2e");
+    let out = crate::support::scratch_root().join("ipec_tuple_multiarm_e2e");
     let _ = std::fs::remove_dir_all(&out);
 
     let runtime = ipe::resolve_runtime();

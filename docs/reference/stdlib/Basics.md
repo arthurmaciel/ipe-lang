@@ -10,8 +10,7 @@ Each binding routes to its runtime kernel via `Kernel.kernel`. Polymorphic
 members with ordering or numeric obligations (`clamp`, `min`, `max`,
 `negate`, `abs`, `compare`) carry the bound implicitly — the type-checker's
 `Comparable`/`Number` obligation rejects a function or record argument
-before it monomorphises. `toString` carries the `Stringify` bound;
-`sqrt` is monomorphically `Float -> Float`.
+before it monomorphises. `sqrt` is monomorphically `Float -> Float`.
 
 ## `identity`
 
@@ -101,23 +100,6 @@ clamp 0 100 42 --> 42
 clamp 0 100 (-5) --> 0
 clamp 0 100 200 --> 100
 clamp "a" "z" "m" --> "m"
-```
-
-## `toString`
-
-```ipe
-toString : a -> String
-```
-
-`toString x` — convert a `Stringify` value to its `String` representation.
-
-The result is the same text you would see in a debug output: numbers are
-decimal, `Bool` is `True`/`False`, and a `String` is returned unchanged.
-
-```ipe
-toString 42 --> "42"
-toString 3.14 --> "3.14"
-toString True --> "True"
 ```
 
 ## `modBy`

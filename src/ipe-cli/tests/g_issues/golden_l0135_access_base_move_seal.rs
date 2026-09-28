@@ -75,13 +75,9 @@ fn out_dir(name: &str) -> PathBuf {
 /// point is that emission never happens.
 #[track_caller]
 fn assert_rejected(name: &str, source: &str, expected: ipe_diagnostics::Code) {
-    let Some(entry) = write_single(name, source) else {
-        return; // scratch unavailable — skip
-    };
+    let entry = crate::support::expect_scratch_entry(name, write_single(name, source));
     let out = out_dir(name);
-    let Ok(runtime) = ipe::resolve_runtime() else {
-        return; // runtime unavailable — skip
-    };
+    let runtime = crate::support::expect_runtime(name, ipe::resolve_runtime());
     match ipe::build(&entry, &out, &runtime) {
         Err(CliError::Pipeline { diag, .. }) => assert_eq!(
             diag.code(),
@@ -105,13 +101,9 @@ fn assert_rejected(name: &str, source: &str, expected: ipe_diagnostics::Code) {
 /// that the emitted crate `cargo build`s and runs to `expected_stdout`.
 #[track_caller]
 fn assert_accepted(name: &str, source: &str, expected_stdout: &str) {
-    let Some(entry) = write_single(name, source) else {
-        return;
-    };
+    let entry = crate::support::expect_scratch_entry(name, write_single(name, source));
     let out = out_dir(name);
-    let Ok(runtime) = ipe::resolve_runtime() else {
-        return;
-    };
+    let runtime = crate::support::expect_runtime(name, ipe::resolve_runtime());
     match ipe::build(&entry, &out, &runtime) {
         Ok(()) => {}
         Err(CliError::Pipeline { diag, .. }) => {
@@ -133,7 +125,7 @@ fn assert_accepted(name: &str, source: &str, expected_stdout: &str) {
         }
     }
 
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return; // emit-only fast pass
     }
     let outcome = crate::support::build_and_run_emitted(name, &out);

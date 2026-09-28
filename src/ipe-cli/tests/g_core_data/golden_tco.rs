@@ -37,7 +37,7 @@ fn golden_dir(root: &Path, name: &str) -> PathBuf {
 fn compile_golden(name: &str, scratch: &str) -> PathBuf {
     let root = repo_root();
     let entry = golden_dir(&root, name).join("Main.ipe");
-    let out = std::env::temp_dir().join(format!("ipec_{scratch}_e2e"));
+    let out = crate::support::scratch_root().join(format!("ipec_{scratch}_e2e"));
     let _ = std::fs::remove_dir_all(&out);
 
     let runtime = ipe::resolve_runtime();
@@ -51,7 +51,7 @@ fn compile_golden(name: &str, scratch: &str) -> PathBuf {
 }
 
 fn e2e_enabled() -> bool {
-    std::env::var("IPE_E2E").is_ok()
+    ipe_env::var("IPE_E2E").is_ok()
 }
 
 /// The soundness proof — constant stack. 2,000,000 self-tail-recursive iterations

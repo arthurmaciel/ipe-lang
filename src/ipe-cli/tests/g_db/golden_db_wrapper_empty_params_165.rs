@@ -99,7 +99,7 @@ fn db_wrapper_empty_params_165_ipec_accepts_and_emits_sql_param_bound() {
         return;
     };
 
-    let built = ipe::build_with_sibling_discovery(&entry, &out, &runtime);
+    let built = ipe::build_loose_file(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
         "ipe build must succeed for db_wrapper_empty_params_165: {:?}",
@@ -146,7 +146,7 @@ fn db_wrapper_empty_params_165_ipec_accepts_and_emits_sql_param_bound() {
 /// `examples/17-ipemon`, `ipe build` itself was clean).
 #[test]
 fn db_wrapper_empty_params_165_cargo_builds_and_runs() {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
 
@@ -157,14 +157,14 @@ fn db_wrapper_empty_params_165_cargo_builds_and_runs() {
         .join("db_wrapper_empty_params_165")
         .join("src")
         .join("Main.ipe");
-    let out = std::env::temp_dir().join("ipec_db_wrapper_empty_params_165_e2e");
+    let out = crate::support::scratch_root().join("ipec_db_wrapper_empty_params_165_e2e");
     let _ = std::fs::remove_dir_all(&out);
 
     let runtime = ipe::resolve_runtime();
     assert!(runtime.is_ok(), "runtime must resolve for E2E");
     let Ok(runtime) = runtime else { return };
 
-    let built = ipe::build_with_sibling_discovery(&entry, &out, &runtime);
+    let built = ipe::build_loose_file(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
         "ipe build must succeed for db_wrapper_empty_params_165: {:?}",

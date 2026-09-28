@@ -57,11 +57,11 @@ fn var_scrutinee_tuple_case_builds() {
 /// `7 + 0 + 10 + 20 + 30 + 105 + 200 == 372`.
 #[test]
 fn var_scrutinee_tuple_case_cargo_builds_and_runs() {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
 
-    let out = std::env::temp_dir().join("ipec_tuple_var_scrut_e2e");
+    let out = crate::support::scratch_root().join("ipec_tuple_var_scrut_e2e");
     let _ = std::fs::remove_dir_all(&out);
 
     let runtime = ipe::resolve_runtime();

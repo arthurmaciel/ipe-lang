@@ -18,7 +18,7 @@ use ipe_ir::Capability;
 /// generic `CliError::Usage` "no module could be lowered".
 #[test]
 fn a_package_that_cannot_lower_surfaces_the_real_diagnostic() -> Result<(), Box<dyn Error>> {
-    let dir = std::env::temp_dir().join("ipe_capinfer_bad_entry");
+    let dir = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("ipe_capinfer_bad_entry");
     let _ = fs::remove_dir_all(&dir);
     fs::create_dir_all(dir.join("src"))?;
     fs::write(
@@ -103,8 +103,8 @@ const NETWORK_CLOCK_WITH_BROKEN_SIBLING: &[(&str, &str)] = &[
 
 /// Materialise a package (`package.ipe` + `src/<files>`) under a unique temp dir.
 fn scratch_package(tag: &str, files: &[(&str, &str)]) -> Result<PathBuf, Box<dyn Error>> {
-    let dir =
-        std::env::temp_dir().join(format!("ipe_capinfer_shared_{tag}_{}", std::process::id()));
+    let dir = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
+        .join(format!("ipe_capinfer_shared_{tag}_{}", std::process::id()));
     let _ = fs::remove_dir_all(&dir);
     fs::create_dir_all(dir.join("src"))?;
     fs::write(dir.join("package.ipe"), MANIFEST)?;
@@ -133,11 +133,12 @@ fn per_entry_union(package: &PackageSourceSet) -> BTreeSet<Capability> {
     union
 }
 
-fn assert_shared_equals_per_entry(
+/// The package's disclosed set, after pinning that the shared graph equals the
+/// per-entry union and that the public entry point agrees run after run.
+fn shared_capabilities(
     tag: &str,
     files: &[(&str, &str)],
-    must_contain: &[Capability],
-) -> Result<(), Box<dyn Error>> {
+) -> Result<BTreeSet<Capability>, Box<dyn Error>> {
     let dir = scratch_package(tag, files)?;
     let manifest = dir.join("package.ipe");
     let package = PackageSourceSet::read(&manifest)?;
@@ -151,14 +152,22 @@ fn assert_shared_equals_per_entry(
     // The public entry point agrees, run after run.
     assert_eq!(ipe::infer_package_capabilities(&manifest)?, shared);
     assert_eq!(ipe::infer_package_capabilities(&manifest)?, shared);
+    let _ = fs::remove_dir_all(&dir);
+    Ok(shared)
+}
+
+fn assert_shared_equals_per_entry(
+    tag: &str,
+    files: &[(&str, &str)],
+    must_contain: &[Capability],
+) -> Result<(), Box<dyn Error>> {
+    let shared = shared_capabilities(tag, files)?;
     for cap in must_contain {
         assert!(
             shared.contains(cap),
             "fixture `{tag}` must lower and disclose {cap:?}, got {shared:?}"
         );
     }
-
-    let _ = fs::remove_dir_all(&dir);
     Ok(())
 }
 
@@ -168,6 +177,81 @@ fn shared_graph_equals_per_entry_union_with_an_unimported_sibling() -> Result<()
         "unsafe_sibling",
         UNSAFE_AND_SIBLING_NETWORK,
         &[Capability::Unsafe, Capability::Network],
+    )
+}
+
+// ---------------------------------------------------------------------------
+// Disclosure follows reachability from the package's own code
+// ---------------------------------------------------------------------------
+
+/// `Main` imports `Ipe.Time` but calls only its pure `isLeapYear`; the
+/// clock-reading exports stay uncalled.
+const IMPORTS_TIME_CALLS_ONLY_PURE: &[(&str, &str)] = &[(
+    "Main.ipe",
+    "module Main exposing (main)\n\nimport Ipe.Io as Io\nimport Ipe.Time as Time\n\n\
+     main : Task ()\nmain =\n\
+     \x20   if Time.isLeapYear 2024 then\n\
+     \x20       Io.println \"leap\"\n\n\
+     \x20   else\n\
+     \x20       Io.println \"common\"\n",
+)];
+
+/// `Main` calls `Ipe.Time.now`, which reads the clock.
+const CALLS_TIME_NOW: &[(&str, &str)] = &[(
+    "Main.ipe",
+    "module Main exposing (main)\n\nimport Ipe.Io as Io\nimport Ipe.Task as Task\n\
+     import Ipe.Time as Time\n\n\
+     main : Task ()\nmain =\n\
+     \x20   Time.now ()\n\
+     \x20       |> Task.andThen (\\t -> Io.println (Time.timeString t))\n",
+)];
+
+/// `Main` is pure; the package module `Clock` exposes a clock read nothing in
+/// the package calls, which a consumer still can.
+const OWN_UNCALLED_CLOCK_EXPORT: &[(&str, &str)] = &[
+    (
+        "Main.ipe",
+        "module Main exposing (main)\n\nimport Ipe.Io as Io\n\n\
+         main : Task ()\nmain =\n\x20   Io.println \"ok\"\n",
+    ),
+    (
+        "Clock.ipe",
+        "module Clock exposing (stamp)\n\nimport Ipe.Error exposing (Error)\n\
+         import Ipe.Time as Time\nimport Ipe.Time.Timestamp exposing (Timestamp)\n\n\
+         stamp : Task Error Timestamp\nstamp =\n\x20   Time.now ()\n",
+    ),
+];
+
+/// An imported stdlib module whose clock-reading exports the package never
+/// calls does not disclose `clock`.
+#[test]
+fn an_unused_stdlib_export_does_not_disclose_its_capability() -> Result<(), Box<dyn Error>> {
+    let shared = shared_capabilities("time_pure_only", IMPORTS_TIME_CALLS_ONLY_PURE)?;
+    assert!(
+        !shared.contains(&Capability::Clock),
+        "an uncalled `Time.now` must not disclose `clock`, got {shared:?}"
+    );
+    assert!(
+        !shared.contains(&Capability::Unsafe),
+        "no `*.Unsafe` module is imported or reached, got {shared:?}"
+    );
+    Ok(())
+}
+
+/// Calling the same stdlib export discloses its capability.
+#[test]
+fn a_called_stdlib_export_discloses_its_capability() -> Result<(), Box<dyn Error>> {
+    assert_shared_equals_per_entry("time_now", CALLS_TIME_NOW, &[Capability::Clock])
+}
+
+/// A package module's own export is consumer-callable, so its capability is
+/// disclosed even when nothing in the package calls it (never under-disclose).
+#[test]
+fn an_uncalled_package_export_still_discloses_its_capability() -> Result<(), Box<dyn Error>> {
+    assert_shared_equals_per_entry(
+        "own_uncalled_clock",
+        OWN_UNCALLED_CLOCK_EXPORT,
+        &[Capability::Clock],
     )
 }
 
@@ -301,4 +385,78 @@ fn assert_each_module_analyzed_once(
 fn each_module_is_analyzed_once_per_package() -> Result<(), Box<dyn Error>> {
     assert_each_module_analyzed_once("once_unsafe", UNSAFE_AND_SIBLING_NETWORK, false)?;
     assert_each_module_analyzed_once("once_broken", NETWORK_CLOCK_WITH_BROKEN_SIBLING, true)
+}
+
+// ---------------------------------------------------------------------------
+// Every injected compiled-source stdlib module lowers as its own entry
+// ---------------------------------------------------------------------------
+
+/// A plain-`main` program importing `dotted`, plus a `main`-less `Probe` helper
+/// for an `Ipe.Tea.*` shape module (a plain-`main` importer of a shape is an
+/// IPE-N0033 contradiction; a `main`-less helper is exempt).
+fn importer_of(dotted: &str) -> Vec<(&'static str, String)> {
+    let is_tea_shape = dotted
+        .strip_prefix("Ipe.Tea.")
+        .is_some_and(|rest| rest.contains('.'));
+    if is_tea_shape {
+        vec![
+            (
+                "Main.ipe",
+                "module Main exposing (main)\nimport Ipe.Io as Io\nimport Probe\n\n\
+                 main : Task Error ()\nmain =\n    Io.println \"ok\"\n"
+                    .to_owned(),
+            ),
+            (
+                "Probe.ipe",
+                format!(
+                    "module Probe exposing (probe)\nimport {dotted} as M\n\n\
+                     probe : Int\nprobe =\n    0\n"
+                ),
+            ),
+        ]
+    } else {
+        vec![(
+            "Main.ipe",
+            format!(
+                "module Main exposing (main)\nimport Ipe.Io as Io\nimport {dotted} as M\n\n\
+                 main : Task Error ()\nmain =\n    Io.println \"ok\"\n"
+            ),
+        )]
+    }
+}
+
+/// Every module in `COMPILED_STD_MODULES` a package imports becomes its own
+/// capability-inference entry and lowers on its own.
+///
+/// The fold refuses a package when any entry fails, injected stdlib included,
+/// so a stdlib module that cannot lower alone would refuse every package that
+/// imports it. This pins that no such module exists.
+#[test]
+fn every_compiled_stdlib_module_lowers_as_its_own_entry() -> Result<(), Box<dyn Error>> {
+    let mut failures: Vec<String> = Vec::new();
+    for m in ipe_stdlib::COMPILED_STD_MODULES {
+        let files = importer_of(m.dotted);
+        let borrowed: Vec<(&str, &str)> = files.iter().map(|(p, s)| (*p, s.as_str())).collect();
+        let dir = scratch_package(&format!("stdlib_entry_{}", m.dotted), &borrowed)?;
+        let package = PackageSourceSet::read(&dir.join("package.ipe"))?;
+        let segments: Vec<String> = m.dotted.split('.').map(str::to_owned).collect();
+        if !package
+            .entry_module_paths()
+            .any(|entry| entry == segments.as_slice())
+        {
+            failures.push(format!("{}: not injected as an inference entry", m.dotted));
+        } else if let Err(e) =
+            ipe::infer_package_capabilities_in(&ipe_db::IpeDatabase::new(), &package)
+        {
+            failures.push(format!("{}: {e}", m.dotted));
+        }
+        let _ = fs::remove_dir_all(&dir);
+    }
+    assert!(
+        failures.is_empty(),
+        "every compiled-source stdlib module must lower as its own capability-\
+         inference entry, or every package importing it is refused:\n{}",
+        failures.join("\n"),
+    );
+    Ok(())
 }

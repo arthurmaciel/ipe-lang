@@ -8,12 +8,13 @@
 ))]
 
 use std::ffi::OsString;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use super::{
     RunJailDefect, RunJailTools, SandboxProfile, run_jail_argv, run_jail_argv_with_delivery,
 };
 use crate::seccomp;
+use crate::{CanonicalPath, JailMounts};
 
 /// Probe the host for the run-jail primitives and decide whether a jail can be
 /// built, returning the tools or the fail-closed refusal.
@@ -93,8 +94,8 @@ pub fn netns_jail_available(bwrap: &std::path::Path) -> bool {
 /// resurfacing masked secrets (e.g. `~/.ssh`) to a network-granted payload. bwrap
 /// binds a regular file at a file target, so the app can exec but never mutate it,
 /// with nothing else in its directory reachable.
-fn app_ro_binds(app: &Path) -> Vec<PathBuf> {
-    vec![app.to_path_buf()]
+fn app_ro_binds(app: &CanonicalPath) -> Vec<CanonicalPath> {
+    vec![app.clone()]
 }
 
 /// Run the emitted `app` binary inside the run jail described by `profile`,
@@ -111,7 +112,9 @@ fn app_ro_binds(app: &Path) -> Vec<PathBuf> {
 ///
 /// # Errors
 ///
-/// Any [`RunJailDefect`]; on success (Linux) it does not return.
+/// Any [`RunJailDefect`]; [`RunJailDefect::Path`] when `scoped_tmp`,
+/// `working_tree`, or `app` does not resolve, the invoker's homes are unknown,
+/// or a path would expose the cargo home. On success (Linux) it does not return.
 pub fn exec_in_run_jail(
     tools: &RunJailTools,
     profile: &SandboxProfile,
@@ -121,6 +124,14 @@ pub fn exec_in_run_jail(
     app_args: &[OsString],
 ) -> Result<std::convert::Infallible, RunJailDefect> {
     use std::os::unix::process::CommandExt as _;
+
+    // Resolve every path once: the app the payload execs and the dirs it is
+    // handed are exactly the paths the jail binds.
+    let scoped_tmp = CanonicalPath::resolve(scoped_tmp).map_err(RunJailDefect::Path)?;
+    let working_tree = CanonicalPath::resolve(working_tree).map_err(RunJailDefect::Path)?;
+    let app = CanonicalPath::resolve(app).map_err(RunJailDefect::Path)?;
+    let mounts = JailMounts::of_invoker(scoped_tmp, working_tree, app_ro_binds(&app))
+        .map_err(RunJailDefect::Path)?;
 
     // Compile the seccomp program for this profile. `None` ⇒ this architecture
     // has no filter we can emit — refuse (fail-closed), never run unfiltered.
@@ -133,18 +144,14 @@ pub fn exec_in_run_jail(
     let seccomp_fd = write_seccomp_memfd(&bytes)?;
 
     let mut payload: Vec<OsString> = Vec::with_capacity(app_args.len() + 1);
-    payload.push(app.as_os_str().to_owned());
+    payload.push(app.as_path().as_os_str().to_owned());
     payload.extend(app_args.iter().cloned());
 
-    let extra_ro_binds = app_ro_binds(app);
-
-    let host_env = |k: &str| std::env::var_os(k);
+    let host_env = crate::host_env::granted;
     let argv = run_jail_argv(
         tools,
         profile,
-        scoped_tmp,
-        working_tree,
-        &extra_ro_binds,
+        &mounts,
         Some(seccomp_fd),
         &host_env,
         &payload,
@@ -192,7 +199,10 @@ pub fn exec_in_run_jail(
 ///
 /// # Errors
 ///
-/// Any [`RunJailDefect`]; on success (Linux) it does not return.
+/// Any [`RunJailDefect`]; [`RunJailDefect::Path`] when `scoped_tmp` or
+/// `working_tree` does not resolve, the invoker's homes are unknown, or a path
+/// would expose the cargo home. On
+/// success (Linux) it does not return.
 pub fn exec_embedded_in_run_jail(
     tools: &RunJailTools,
     profile: &SandboxProfile,
@@ -202,6 +212,11 @@ pub fn exec_embedded_in_run_jail(
     app_args: &[OsString],
 ) -> Result<std::convert::Infallible, RunJailDefect> {
     use std::os::unix::process::CommandExt as _;
+
+    let scoped_tmp = CanonicalPath::resolve(scoped_tmp).map_err(RunJailDefect::Path)?;
+    let working_tree = CanonicalPath::resolve(working_tree).map_err(RunJailDefect::Path)?;
+    let mounts = JailMounts::of_invoker(scoped_tmp, working_tree, Vec::new())
+        .map_err(RunJailDefect::Path)?;
 
     let Some(program) = seccomp::subprocess_deny_program(profile.subprocess) else {
         return Err(RunJailDefect::UnsupportedPlatform {
@@ -214,19 +229,17 @@ pub fn exec_embedded_in_run_jail(
 
     // The in-jail path the app is materialised at. It sits under `scoped_tmp`,
     // the one always-writable bind, so bwrap can create it after the mounts.
-    let dest = scoped_tmp.join("ipe-app");
+    let dest = mounts.scoped_tmp().as_path().join("ipe-app");
 
     let mut payload: Vec<OsString> = Vec::with_capacity(app_args.len() + 1);
     payload.push(dest.as_os_str().to_owned());
     payload.extend(app_args.iter().cloned());
 
-    let host_env = |k: &str| std::env::var_os(k);
+    let host_env = crate::host_env::granted;
     let argv = run_jail_argv_with_delivery(
         tools,
         profile,
-        scoped_tmp,
-        working_tree,
-        &[],
+        &mounts,
         Some(seccomp_fd),
         Some((app_fd, &dest)),
         &host_env,
@@ -543,19 +556,19 @@ pub fn write_sealed_app_memfd(bytes: &[u8]) -> Result<SealedApp, RunJailDefect> 
 #[cfg(test)]
 mod tests {
     use super::app_ro_binds;
-    use std::path::{Path, PathBuf};
+    use crate::CanonicalPath;
 
     #[test]
     fn app_ro_bind_is_the_file_not_its_parent() {
         // A user-placed binary directly in home must be re-exposed as the FILE
         // itself, never as its parent directory: binding the parent would re-expose
         // all of `$HOME` (including `~/.ssh`) read-only past the `/home` mask.
-        let app = Path::new("/home/alice/myapp");
-        let binds = app_ro_binds(app);
-        assert_eq!(binds, vec![PathBuf::from("/home/alice/myapp")]);
+        let app = CanonicalPath::assumed("/home/alice/myapp");
+        let binds = app_ro_binds(&app);
+        assert_eq!(binds, vec![CanonicalPath::assumed("/home/alice/myapp")]);
         // The parent directory must NOT be bound.
         assert!(
-            !binds.contains(&PathBuf::from("/home/alice")),
+            !binds.contains(&CanonicalPath::assumed("/home/alice")),
             "the app's parent directory must not be re-exposed: {binds:?}"
         );
     }
@@ -564,12 +577,15 @@ mod tests {
     fn app_ro_bind_of_a_binary_at_home_root_does_not_expose_home() {
         // A bundle unpacked into `$HOME` itself (app parent == the masked root) must
         // still bind only the file, so the mask over `/home` is not defeated.
-        let app = Path::new("/home/bob/.local/bin/app");
-        let binds = app_ro_binds(app);
-        assert_eq!(binds, vec![PathBuf::from("/home/bob/.local/bin/app")]);
+        let app = CanonicalPath::assumed("/home/bob/.local/bin/app");
+        let binds = app_ro_binds(&app);
+        assert_eq!(
+            binds,
+            vec![CanonicalPath::assumed("/home/bob/.local/bin/app")]
+        );
         for masked in ["/home", "/home/bob", "/home/bob/.local/bin"] {
             assert!(
-                !binds.contains(&PathBuf::from(masked)),
+                !binds.contains(&CanonicalPath::assumed(masked)),
                 "no ancestor directory may be bound ({masked}): {binds:?}"
             );
         }

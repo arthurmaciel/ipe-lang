@@ -28,6 +28,8 @@ use std::time::{Duration, Instant};
 
 use ipe::watch::{WatchEvent, WatchHandle, WatchOptions};
 
+use e2e_support::wait_for;
+
 type BoxError = Box<dyn std::error::Error + Send + Sync + 'static>;
 
 /// A minimal `Web.tea` whose view carries a hoistable `Ui.padding` style value
@@ -391,7 +393,7 @@ fn web_fixture_grid(cols: &str, rows: &str) -> String {
 const E2E_HOT_SWAP_BUDGET: Duration = Duration::from_secs(90);
 
 fn fresh_dirs(tag: &str) -> Result<(PathBuf, PathBuf), BoxError> {
-    let base = std::env::temp_dir().join(format!(
+    let base = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!(
         "watch_hot_{tag}_{}_{}",
         std::process::id(),
         Instant::now().elapsed().as_nanos()
@@ -446,28 +448,9 @@ fn http_get_body(port: u16) -> Option<String> {
 }
 
 fn wait_for_serving(port: u16, timeout: Duration) -> bool {
-    let deadline = Instant::now() + timeout;
-    while Instant::now() < deadline {
-        if http_get_body(port).is_some_and(|b| b.contains("marker")) {
-            return true;
-        }
-        std::thread::sleep(Duration::from_millis(100));
-    }
-    false
-}
-
-/// Poll `cond` until it holds or `timeout` elapses; `true` if it held.
-fn wait_for(timeout: Duration, mut cond: impl FnMut() -> bool) -> bool {
-    let deadline = Instant::now() + timeout;
-    loop {
-        if cond() {
-            return true;
-        }
-        if Instant::now() >= deadline {
-            return false;
-        }
-        std::thread::sleep(Duration::from_millis(50));
-    }
+    wait_for(timeout, || {
+        http_get_body(port).is_some_and(|b| b.contains("marker"))
+    })
 }
 
 #[derive(Clone, Default)]
@@ -571,7 +554,7 @@ fn server_pid(port: u16) -> Option<u32> {
 #[test]
 #[cfg(target_os = "linux")]
 fn style_edit_hot_swaps_without_rebuild_and_structural_edit_recompiles() -> Result<(), BoxError> {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         eprintln!("skipping (set IPE_E2E=1 to run)");
         return Ok(());
     }
@@ -684,7 +667,7 @@ fn style_edit_hot_swaps_without_rebuild_and_structural_edit_recompiles() -> Resu
 // one live watch session — the length is the scenario, not incidental complexity.
 #[allow(clippy::too_many_lines)]
 fn attribute_and_text_edits_hot_swap_without_rebuild() -> Result<(), BoxError> {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         eprintln!("skipping (set IPE_E2E=1 to run)");
         return Ok(());
     }
@@ -811,7 +794,7 @@ fn attribute_and_text_edits_hot_swap_without_rebuild() -> Result<(), BoxError> {
 #[test]
 #[cfg(target_os = "linux")]
 fn numeric_weight_edit_hot_swaps_without_rebuild() -> Result<(), BoxError> {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         eprintln!("skipping (set IPE_E2E=1 to run)");
         return Ok(());
     }
@@ -908,7 +891,7 @@ fn numeric_weight_edit_hot_swaps_without_rebuild() -> Result<(), BoxError> {
 #[test]
 #[cfg(target_os = "linux")]
 fn animation_duration_edit_hot_swaps_without_rebuild() -> Result<(), BoxError> {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         eprintln!("skipping (set IPE_E2E=1 to run)");
         return Ok(());
     }
@@ -1003,7 +986,7 @@ fn animation_duration_edit_hot_swaps_without_rebuild() -> Result<(), BoxError> {
 #[test]
 #[cfg(target_os = "linux")]
 fn grid_tracks_edit_hot_swaps_without_rebuild() -> Result<(), BoxError> {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         eprintln!("skipping (set IPE_E2E=1 to run)");
         return Ok(());
     }
@@ -1097,7 +1080,7 @@ fn grid_tracks_edit_hot_swaps_without_rebuild() -> Result<(), BoxError> {
 #[test]
 #[cfg(target_os = "linux")]
 fn image_alt_edit_hot_swaps_without_rebuild() -> Result<(), BoxError> {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         eprintln!("skipping (set IPE_E2E=1 to run)");
         return Ok(());
     }
@@ -1192,7 +1175,7 @@ fn image_alt_edit_hot_swaps_without_rebuild() -> Result<(), BoxError> {
 #[test]
 #[cfg(target_os = "linux")]
 fn css_value_edit_hot_swaps_and_is_byte_identical() -> Result<(), BoxError> {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         eprintln!("skipping (set IPE_E2E=1 to run)");
         return Ok(());
     }
@@ -1294,7 +1277,7 @@ fn css_value_edit_hot_swaps_and_is_byte_identical() -> Result<(), BoxError> {
 // in one live watch session — the length is the scenario, not incidental.
 #[allow(clippy::too_many_lines)]
 fn static_html_subtree_structural_edit_hot_swaps_without_rebuild() -> Result<(), BoxError> {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         eprintln!("skipping (set IPE_E2E=1 to run)");
         return Ok(());
     }
@@ -1405,7 +1388,7 @@ fn static_html_subtree_structural_edit_hot_swaps_without_rebuild() -> Result<(),
 // in one live watch session — the length is the scenario, not incidental.
 #[allow(clippy::too_many_lines)]
 fn static_ui_subtree_structural_edit_hot_swaps_without_rebuild() -> Result<(), BoxError> {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         eprintln!("skipping (set IPE_E2E=1 to run)");
         return Ok(());
     }
@@ -1544,7 +1527,7 @@ fn web_fixture_static_ui_wrappers(text: &str, extra_child: &str) -> String {
 // the length is the scenario, not incidental.
 #[allow(clippy::too_many_lines)]
 fn static_ui_subtree_wrapper_hot_swaps_without_rebuild() -> Result<(), BoxError> {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         eprintln!("skipping (set IPE_E2E=1 to run)");
         return Ok(());
     }
@@ -1686,7 +1669,7 @@ fn web_fixture_value_hole(label: &str, extra_child: &str) -> String {
 #[cfg(target_os = "linux")]
 #[allow(clippy::too_many_lines)]
 fn value_hole_static_sibling_hot_swaps_without_rebuild() -> Result<(), BoxError> {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         eprintln!("skipping (set IPE_E2E=1 to run)");
         return Ok(());
     }
@@ -1804,7 +1787,7 @@ fn web_fixture_counter(step: u32, extra_text: &str) -> String {
 #[test]
 #[cfg(target_os = "linux")]
 fn update_arm_step_edit_hot_swaps_without_rebuild() -> Result<(), BoxError> {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         eprintln!("skipping (set IPE_E2E=1 to run)");
         return Ok(());
     }
@@ -1818,7 +1801,7 @@ fn update_arm_step_edit_hot_swaps_without_rebuild() -> Result<(), BoxError> {
     write_main(&ipe_dir, &web_fixture_counter(1, ""))?;
 
     let sink = EventSink::default();
-    let port = 19181;
+    let port = 19177;
     let (join, handle) = start_watch(&ipe_dir.join("Main.ipe"), &out_dir, port, &sink)?;
 
     assert!(
@@ -1985,7 +1968,7 @@ fn web_fixture_ticker(interval: u32, extra_text: &str) -> String {
 #[test]
 #[cfg(target_os = "linux")]
 fn non_additive_msg_change_recompiles() -> Result<(), BoxError> {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         eprintln!("skipping (set IPE_E2E=1 to run)");
         return Ok(());
     }
@@ -2047,7 +2030,7 @@ fn non_additive_msg_change_recompiles() -> Result<(), BoxError> {
 #[test]
 #[cfg(target_os = "linux")]
 fn subscriptions_interval_edit_hot_swaps_without_rebuild() -> Result<(), BoxError> {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         eprintln!("skipping (set IPE_E2E=1 to run)");
         return Ok(());
     }
@@ -2184,7 +2167,7 @@ fn web_fixture_cmd_perform() -> String {
 #[test]
 #[cfg(target_os = "linux")]
 fn cmd_perform_arm_composes_and_serves() -> Result<(), BoxError> {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         eprintln!("skipping (set IPE_E2E=1 to run)");
         return Ok(());
     }
@@ -2201,18 +2184,23 @@ fn cmd_perform_arm_composes_and_serves() -> Result<(), BoxError> {
     let port = 19184;
     let (join, handle) = start_watch(&ipe_dir.join("Main.ipe"), &out_dir, port, &sink)?;
 
+    // Poll BOTH "serving" and "Restarted recorded" together, under the SAME
+    // generous cold-build budget: the app answers HTTP the instant its
+    // readiness probe passes, slightly BEFORE the loop emits the cold
+    // build's `Restarted` event (readiness is checked synchronously, and
+    // only once it passes does the orchestrator emit `Restarted`). Chaining
+    // a separate short-lived wait after this one raced the two conditions
+    // against each other under CPU contention — a loaded host can starve the
+    // orchestrator thread between readiness and `emit()` well past a short
+    // fixed window — so polling the conjunction under one generous deadline
+    // removes that race instead of tightening it.
     assert!(
-        wait_for_serving(port, Duration::from_mins(4)),
+        wait_for(Duration::from_mins(4), || {
+            sink.count_restarted() >= 1 && http_get_body(port).is_some_and(|b| b.contains("marker"))
+        }),
         "the flag-on cold build of a Cmd.perform update arm must serve \
-         (the composed fire_cmd_wiring dispatch compiles and boots)"
-    );
-    assert!(
-        wait_for(Duration::from_secs(10), || sink.count_restarted() >= 1),
-        "the cold build must record its initial Restarted event"
-    );
-    assert!(
-        http_get_body(port).is_some_and(|b| b.contains("marker")),
-        "the composed-wiring app must serve its view"
+         (the composed fire_cmd_wiring dispatch compiles and boots) and \
+         record its initial Restarted event"
     );
 
     stop_and_join(&handle, join)

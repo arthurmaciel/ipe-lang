@@ -162,7 +162,7 @@ const SERVER_SHAPE_SOURCE: &str = "module Main exposing (main)\n\
 /// `cargo build --target wasm32-wasip1` accepts. `ipe`-accepts ⇒ cargo-builds.
 #[test]
 fn wasi_direct_floor_program_cargo_builds_for_wasip1() {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
 
@@ -247,7 +247,7 @@ fn wasi_http_shape_is_refused_fail_closed() {
 /// ⇒ cargo-builds. Gated on `IPE_E2E=1`.
 #[test]
 fn ipe_build_target_wasi_user_path_cargo_builds() {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
 
@@ -329,7 +329,7 @@ fn ipe_build_target_wasi_refuses_non_viable_shape_fail_closed() {
     );
     // Fail-closed before emit: nothing was written for the refused shape.
     assert!(
-        !out.join("Cargo.toml").exists(),
+        !out.exists(),
         "a refused WASI user build must emit no project (fail-closed before emit)",
     );
 }
@@ -347,7 +347,7 @@ fn ipe_build_target_wasi_refuses_non_viable_shape_fail_closed() {
 #[cfg(feature = "wasi_run")]
 #[test]
 fn ipe_run_target_wasi_executes_under_wasmtime() {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
 
@@ -417,7 +417,7 @@ fn ipe_run_target_wasi_refuses_non_viable_shape_fail_closed() {
         "the run-path refusal must teach the WASI/Direct rule, got: {rendered}",
     );
     assert!(
-        !out.join("Cargo.toml").exists(),
+        !out.exists(),
         "a refused WASI run must emit no project (fail-closed before emit)",
     );
 }
@@ -462,7 +462,7 @@ fn ipe_build_target_wasi_refuses_live_server_fail_closed() {
     );
     // Fail-closed before emit: nothing was written for the refused server.
     assert!(
-        !out.join("Cargo.toml").exists(),
+        !out.exists(),
         "a refused WASI server build must emit no project (fail-closed before emit)",
     );
 }
@@ -504,7 +504,7 @@ fn ipe_run_target_wasi_refuses_live_server_fail_closed() {
         "the run-path refusal must name the server-only kernel floor (IPE-N0029), got: {rendered}",
     );
     assert!(
-        !out.join("Cargo.toml").exists(),
+        !out.exists(),
         "a refused WASI server run must emit no project (fail-closed before emit)",
     );
 }
@@ -542,7 +542,7 @@ fn ipe_run_target_wasi_feature_off_is_typed_refusal() {
     );
     // Fail-closed BEFORE the (costly) wasip1 build: nothing was emitted.
     assert!(
-        !out.join("Cargo.toml").exists(),
+        !out.exists(),
         "the feature-off refusal must fire before any emit (no wasted build)",
     );
 }
@@ -579,7 +579,7 @@ fn ipe_run_target_wasi_server_feature_off_is_typed_refusal() {
     );
     // Fail-closed BEFORE any emit: nothing was written for the refused server.
     assert!(
-        !out.join("Cargo.toml").exists(),
+        !out.exists(),
         "the feature-off server run refusal must fire before any emit (no wasted build)",
     );
 }

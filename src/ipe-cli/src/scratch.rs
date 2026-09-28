@@ -1,288 +1,11 @@
-//! Unpredictable, exclusively-created scratch paths for temporary I/O.
+//! Private scratch paths for temporary I/O, re-exported from the one shared primitive.
 //!
-//! Every constructor generates a name that contains 128 bits of OS entropy (not
-//! just a PID), opens with `O_EXCL` / `DirBuilder` + exclusive-create semantics
-//! so a pre-seeded symlink or a pre-existing entry causes a retry rather than
-//! being followed, and mode-restricts the result to the owner.  The RAII wrappers
-//! remove the resource on drop, so callers do not need manual cleanup.
-//!
-//! The [`ScratchFile::file`] field exposes the *owned* [`std::fs::File`] handle
-//! so callers can read back what they wrote without re-opening by name.  Reading
-//! through the retained handle is the only way to guarantee that the bytes read
-//! are the bytes written to the same inode — a name-based re-open can be raced.
+//! [`ipe_sandbox::scratch`] owns creation and verification: a private 0700
+//! directory under a verified base, files opened `O_EXCL` + `O_NOFOLLOW`, and
+//! typed refusals. Read what an external writer wrote through
+//! [`ScratchFile::read_all`], never by re-opening the path.
 
-use std::fs::File;
-use std::io::{self, Read, Seek, SeekFrom};
-use std::path::{Path, PathBuf};
-
-/// Maximum retry attempts when an exclusive-create collision occurs.
-const MAX_RETRIES: usize = 8;
-
-/// Read 16 bytes (128 bits) of OS entropy from `/dev/urandom`.
-///
-/// Returns an error when the device cannot be read or yields fewer than 16
-/// bytes, which makes the caller fall back to failing the construction rather
-/// than silently weakening the name.
-fn read_entropy() -> io::Result<[u8; 16]> {
-    let mut buf = [0u8; 16];
-    File::open("/dev/urandom")?.read_exact(&mut buf)?;
-    Ok(buf)
-}
-
-/// Format 16 entropy bytes as a 32-character lowercase hex string.
-fn hex32(bytes: [u8; 16]) -> String {
-    use std::fmt::Write as _;
-    let mut s = String::with_capacity(32);
-    for b in bytes {
-        let _ = write!(s, "{b:02x}");
-    }
-    s
-}
-
-/// Generate one candidate name: `<prefix>-<pid>-<32 hex entropy chars>`.
-///
-/// The PID component is included so names from different processes sharing a
-/// prefix are trivially distinguishable in diagnostics, but the 128-bit entropy
-/// is what makes the name unpredictable.
-fn candidate_name(prefix: &str) -> io::Result<String> {
-    let entropy = read_entropy()?;
-    Ok(format!(
-        "{}-{}-{}",
-        prefix,
-        std::process::id(),
-        hex32(entropy)
-    ))
-}
-
-// ── ScratchDir ───────────────────────────────────────────────────────────────
-
-/// An exclusively-created, mode-0700, unpredictably-named temporary directory.
-///
-/// Constructed via [`ScratchDir::new`] (base = `temp_dir()`) or
-/// [`ScratchDir::new_under`] (caller-supplied base), both of which loop on
-/// `AlreadyExists` (bounded by [`MAX_RETRIES`]) rather than removing and
-/// recreating a pre-existing entry.  The directory is removed on drop
-/// (best-effort); call [`ScratchDir::into_path`] to transfer ownership without
-/// automatic cleanup.
-///
-/// Use [`ScratchDir::path`] for the directory itself and
-/// [`ScratchDir::child`] to build paths for files or subdirectories inside it.
-pub struct ScratchDir(PathBuf);
-
-impl ScratchDir {
-    /// Create a new exclusively-owned temporary directory under `temp_dir()`.
-    ///
-    /// `prefix` is a short, caller-chosen label that appears in the name for
-    /// diagnostics.  The name is not caller-controlled beyond this label.
-    ///
-    /// # Errors
-    ///
-    /// Returns an [`io::Error`] when entropy cannot be read or when all
-    /// [`MAX_RETRIES`] attempts fail with `AlreadyExists`.
-    pub fn new(prefix: &str) -> io::Result<Self> {
-        Self::new_under(&std::env::temp_dir(), prefix)
-    }
-
-    /// Create a new exclusively-owned temporary directory under `base`.
-    ///
-    /// The base directory is created (via `create_dir_all`) before the
-    /// exclusive child is attempted, so callers need not pre-create it.
-    /// `prefix` is a short, caller-chosen label that appears in the child
-    /// name for diagnostics; the name is not caller-controlled beyond this
-    /// label.
-    ///
-    /// # Errors
-    ///
-    /// Returns an [`io::Error`] when `base` cannot be created, when entropy
-    /// cannot be read, or when all [`MAX_RETRIES`] attempts fail with
-    /// `AlreadyExists`.
-    pub fn new_under(base: &Path, prefix: &str) -> io::Result<Self> {
-        std::fs::create_dir_all(base)?;
-        for _ in 0..MAX_RETRIES {
-            let name = candidate_name(prefix)?;
-            let path = base.join(&name);
-            match exclusive_mkdir(&path) {
-                Ok(()) => return Ok(Self(path)),
-                Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {}
-                Err(e) => return Err(e),
-            }
-        }
-        Err(io::Error::new(
-            io::ErrorKind::AlreadyExists,
-            "could not create a unique scratch directory after repeated attempts",
-        ))
-    }
-
-    /// The path of this scratch directory.
-    #[must_use]
-    pub fn path(&self) -> &Path {
-        &self.0
-    }
-
-    /// Build a path for a child entry *inside* this directory.
-    ///
-    /// The child is not created by this call; use the returned path to create
-    /// it.  Because the directory itself is mode 0700, a child created inside
-    /// it is not reachable by other users even when its own mode is broader.
-    #[must_use]
-    pub fn child(&self, name: &str) -> PathBuf {
-        self.0.join(name)
-    }
-
-    /// Consume this guard and return the directory path without removing it.
-    ///
-    /// The caller takes responsibility for cleanup.  Use this only when the
-    /// directory must outlive the guard (e.g. when passing to a manual
-    /// `remove_dir_all` at a later call site).
-    #[must_use]
-    pub fn into_path(self) -> PathBuf {
-        let path = self.0.clone();
-        std::mem::forget(self);
-        path
-    }
-}
-
-impl Drop for ScratchDir {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.0);
-    }
-}
-
-/// Create a directory exclusively — fail with `AlreadyExists` rather than
-/// following a pre-existing entry or a symlink.
-///
-/// Uses a plain `create_dir` (not `create_dir_all`) so that only the final
-/// component is created and any pre-existing entry — including a dangling
-/// symlink — produces `AlreadyExists` rather than silently succeeding.
-#[cfg(unix)]
-fn exclusive_mkdir(path: &Path) -> io::Result<()> {
-    use std::os::unix::fs::DirBuilderExt as _;
-    std::fs::DirBuilder::new()
-        .mode(0o700)
-        .recursive(false)
-        .create(path)
-}
-
-#[cfg(not(unix))]
-fn exclusive_mkdir(path: &Path) -> io::Result<()> {
-    // On non-Unix there is no portable mode bit; the directory is created with
-    // default permissions.  Exclusive creation (fail on AlreadyExists) still
-    // holds because `create_dir` (not `create_dir_all`) is used.
-    std::fs::create_dir(path)
-}
-
-// ── ScratchFile ──────────────────────────────────────────────────────────────
-
-/// An exclusively-created, mode-0600, unpredictably-named temporary file.
-///
-/// Constructed only via [`ScratchFile::create`], which opens with
-/// `O_CREAT|O_EXCL` (via `create_new`) so a pre-existing file or symlink
-/// causes a retry.  The owned [`File`] handle in [`ScratchFile::file`]
-/// outlives the path name: callers MUST read back written bytes through the
-/// handle rather than re-opening by name, so the bytes read are the bytes
-/// that were written to this specific inode — a re-open by name races.
-///
-/// The file is removed on drop (best-effort).
-pub struct ScratchFile {
-    path: PathBuf,
-    /// The open file handle.  Callers should [`Seek`] to the start before
-    /// reading if bytes were written through an external writer.
-    pub file: File,
-}
-
-impl ScratchFile {
-    /// Create a new exclusively-owned temporary file whose name is
-    /// unpredictable.
-    ///
-    /// Returns both the [`ScratchFile`] RAII guard and a clone of the owned
-    /// `File` handle (already positioned at offset 0).  Callers that let an
-    /// external writer (e.g. `curl -o`) write to [`ScratchFile::path`] should
-    /// [`rewind`](ScratchFile::rewind) the handle before reading.
-    ///
-    /// # Errors
-    ///
-    /// Returns an [`io::Error`] when entropy cannot be read or when all
-    /// [`MAX_RETRIES`] attempts fail.
-    pub fn create(prefix: &str) -> io::Result<Self> {
-        let base = std::env::temp_dir();
-        for _ in 0..MAX_RETRIES {
-            let name = candidate_name(prefix)?;
-            let path = base.join(&name);
-            match exclusive_open(&path) {
-                Ok(file) => return Ok(Self { path, file }),
-                Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {}
-                Err(e) => return Err(e),
-            }
-        }
-        Err(io::Error::new(
-            io::ErrorKind::AlreadyExists,
-            "could not create a unique scratch file after repeated attempts",
-        ))
-    }
-
-    /// The path of this scratch file.
-    ///
-    /// Prefer reading through [`ScratchFile::file`] rather than re-opening
-    /// this path, so the bytes read are the bytes on the owned inode.
-    #[must_use]
-    pub fn path(&self) -> &Path {
-        &self.path
-    }
-
-    /// Rewind the retained file handle to offset 0 so the caller can read
-    /// from the start.
-    ///
-    /// # Errors
-    ///
-    /// Propagates any `seek` error.
-    pub fn rewind(&mut self) -> io::Result<()> {
-        self.file.seek(SeekFrom::Start(0)).map(|_| ())
-    }
-
-    /// Read all bytes from the retained file handle (after rewinding to
-    /// offset 0).
-    ///
-    /// This is the *only* correct way to retrieve what an external writer
-    /// wrote to [`ScratchFile::path`]: reading through the handle avoids a
-    /// re-open-by-name race.
-    ///
-    /// # Errors
-    ///
-    /// Propagates any seek or read error.
-    pub fn read_all(&mut self) -> io::Result<Vec<u8>> {
-        self.rewind()?;
-        let mut buf = Vec::new();
-        self.file.read_to_end(&mut buf)?;
-        Ok(buf)
-    }
-}
-
-impl Drop for ScratchFile {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_file(&self.path);
-    }
-}
-
-/// Open a file exclusively at `path` with mode 0600 (owner read/write only).
-#[cfg(unix)]
-fn exclusive_open(path: &Path) -> io::Result<File> {
-    use std::os::unix::fs::OpenOptionsExt as _;
-    std::fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create_new(true)
-        .mode(0o600)
-        .open(path)
-}
-
-#[cfg(not(unix))]
-fn exclusive_open(path: &Path) -> io::Result<File> {
-    std::fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create_new(true)
-        .open(path)
-}
+pub use ipe_sandbox::scratch::{ScratchDir, ScratchFile};
 
 // ── Tests ────────────────────────────────────────────────────────────────────
 
@@ -420,38 +143,34 @@ mod tests {
             .parent()
             .map(|p| p.join("ipe-wrapper").join("src"));
 
-        let mut rs_files: Vec<std::path::PathBuf> = Vec::new();
-        collect_rs_files(&cli_src, &mut rs_files);
-        if let Some(w) = &wrapper_src {
-            collect_rs_files(w, &mut rs_files);
-        }
-
-        for path in &rs_files {
-            // The sanctioned scratch modules are the one place `temp_dir()` may
-            // be joined (behind exclusive-create + entropy).
-            if path.file_name().and_then(|n| n.to_str()) == Some("scratch.rs") {
-                continue;
+        for src_root in std::iter::once(cli_src).chain(wrapper_src) {
+            let mut rs_files: Vec<std::path::PathBuf> = Vec::new();
+            collect_rs_files(&src_root, &mut rs_files);
+            for path in &rs_files {
+                // The sanctioned scratch modules are the one place `temp_dir()`
+                // may be joined (behind exclusive-create + entropy).
+                if path.file_name().and_then(|n| n.to_str()) == Some("scratch.rs") {
+                    continue;
+                }
+                // An out-of-line test module carries no inline `#[cfg(test)]`
+                // marker for the region tracker, so a confirmed one is exempt
+                // whole; an unconfirmed one stays in scope.
+                let is_test_module = path
+                    .strip_prefix(&src_root)
+                    .is_ok_and(|rel| panic_scan::is_verified_test_path(&src_root, rel));
+                if is_test_module {
+                    continue;
+                }
+                // An unread file is unaudited, not clean.
+                let source = std::fs::read_to_string(path);
+                assert!(
+                    source.is_ok(),
+                    "cannot read {}: {source:?} — an unread file cannot be audited",
+                    path.display()
+                );
+                let Ok(source) = source else { return };
+                assert_predictable_temp_free(path, &source);
             }
-            // A `tests.rs` file — or a `mod.rs` whose immediate parent directory
-            // is `tests/` — is a `#[cfg(test)] mod tests;` unit: entirely test
-            // code, whose `temp_dir()` joins are the exempt test-helper form. The
-            // in-file test-region tracker keys on an inline `#[cfg(test)]`/`mod
-            // tests` marker, which a standalone module file does not carry, so
-            // exempt it by name (as `scratch.rs` is).
-            let file_name = path.file_name().and_then(|n| n.to_str());
-            let parent_dir_name = path
-                .parent()
-                .and_then(|p| p.file_name())
-                .and_then(|n| n.to_str());
-            if file_name == Some("tests.rs")
-                || (file_name == Some("mod.rs") && parent_dir_name == Some("tests"))
-            {
-                continue;
-            }
-            let Ok(source) = std::fs::read_to_string(path) else {
-                continue;
-            };
-            assert_predictable_temp_free(path, &source);
         }
     }
 

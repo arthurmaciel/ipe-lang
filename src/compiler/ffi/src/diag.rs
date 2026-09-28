@@ -8,6 +8,7 @@
 
 use std::fmt;
 
+use ipe_diagnostics::terminal::TerminalSafe;
 use ipe_diagnostics::{
     Code, Diagnostic as SharedDiag, FfiError, IPE_F4400, IPE_F4401, IPE_F4402, IPE_F4411,
     IPE_F4412, IPE_F4414, IPE_F4415,
@@ -84,7 +85,7 @@ pub enum Diagnostic {
     /// CLI can surface a targeted install hint instead of a raw cargo dump.
     SystemLibraryNotFound {
         /// The `pkg-config` library name that was not found (e.g. `wayland-client`).
-        system_lib: String,
+        system_lib: crate::driver::SysLibName,
         /// The Rust crate whose `build.rs` required the library (e.g. `wayland-sys`).
         crate_name: String,
         /// A short OS-aware install hint, or a generic `-dev`/`.pc` fallback.
@@ -120,38 +121,41 @@ impl From<Diagnostic> for FfiError {
     fn from(d: Diagnostic) -> Self {
         match d {
             Diagnostic::CallUnrenderable { function, defect } => Self::CallUnrenderable {
-                function,
-                detail: defect.to_string(),
+                function: function.into(),
+                detail: defect.to_string().into(),
             },
             Diagnostic::GenericNotBindable { callee, defect } => Self::GenericNotBindable {
-                callee,
-                detail: defect.to_string(),
+                callee: callee.into(),
+                detail: defect.to_string().into(),
             },
             Diagnostic::WireMalformed { context, defect } => Self::WireMalformed {
-                context,
-                detail: defect.to_string(),
+                context: context.into(),
+                detail: defect.to_string().into(),
             },
             Diagnostic::ShapeContradiction { function, flags } => Self::ShapeContradiction {
-                function,
-                flags: flags.iter().map(ToString::to_string).collect(),
+                function: function.into(),
+                flags: flags.into_iter().map(TerminalSafe::from).collect(),
             },
             Diagnostic::SourceRejected { source, defect } => Self::SourceRejected {
-                source,
-                detail: defect.to_string(),
+                source: source.into(),
+                detail: defect.to_string().into(),
             },
-            Diagnostic::ArtifactIo { path, detail } => Self::ArtifactIo { path, detail },
+            Diagnostic::ArtifactIo { path, detail } => Self::ArtifactIo {
+                path: path.into(),
+                detail: detail.into(),
+            },
             Diagnostic::AssertedRefused { path, defect } => Self::AssertedRefused {
-                path,
-                detail: defect.to_string(),
+                path: path.into(),
+                detail: defect.to_string().into(),
             },
             Diagnostic::SystemLibraryNotFound {
                 system_lib,
                 crate_name,
                 install_hint,
             } => Self::SystemLibraryNotFound {
-                system_lib,
-                crate_name,
-                install_hint,
+                system_lib: system_lib.as_str().into(),
+                crate_name: crate_name.into(),
+                install_hint: install_hint.into(),
             },
         }
     }
@@ -764,6 +768,72 @@ pub enum WireDefect {
         /// The cycle, as the chain of define-type names it closes over.
         cycle: Vec<String>,
     },
+    /// A wrapper-crate path carrying a `..` component.
+    ///
+    /// Traversal is refused lexically at decode, before any filesystem lookup,
+    /// so the root jail never has to reason about a path built to climb out.
+    WrapperPathTraversal {
+        /// The offending path.
+        got: String,
+    },
+    /// A wrapper-crate path that does not resolve to an existing directory.
+    ///
+    /// A moved or copied project whose cache still names the old location
+    /// lands here, refused at load rather than emitted as a `path` dependency
+    /// cargo cannot find.
+    WrapperPathUnresolvable {
+        /// The offending path.
+        got: String,
+        /// The filesystem error, rendered.
+        detail: String,
+    },
+    /// A wrapper-crate path whose canonical form (symlinks resolved) leaves the
+    /// project root.
+    WrapperPathOutsideRoot {
+        /// The offending path.
+        got: String,
+        /// The canonical project root it had to stay inside.
+        root: String,
+    },
+    /// A wrapper crate inside the project whose canonical directory has no
+    /// renderable `path` dependency value.
+    ///
+    /// The canonical form is not UTF-8, carries a control character, or has a
+    /// Windows prefix other than a verbatim drive letter (a UNC share, a device
+    /// namespace). Refused rather than rendered, so every path value that
+    /// reaches the emitted manifest round-trips through a TOML basic string.
+    WrapperPathUnrenderable {
+        /// The offending path.
+        got: String,
+        /// The canonical directory it resolved to, rendered lossily.
+        canonical: String,
+    },
+    /// A jailed wrapper directory whose `Cargo.toml` does not prove the crate
+    /// cargo will build.
+    ///
+    /// Refused at the jail, so a directory with no manifest, a symlinked or
+    /// oversized manifest, or a `[package] name` other than the dependency key
+    /// never reaches the emitted manifest as a `path` line cargo would reject.
+    WrapperManifest {
+        /// The offending wrapper path.
+        got: String,
+        /// What the manifest failed to prove.
+        defect: WrapperManifestDefect,
+    },
+    /// A legacy consumer manifest's dependency line outside the exact grammar
+    /// the manifest emitter renders for a registry pin.
+    LegacyDependencyLine {
+        /// The offending line.
+        got: String,
+    },
+    /// An FFI cache directory that is not `<project>/.ipe/cache/ffi/rust`.
+    ///
+    /// The project root a wrapper crate is jailed to is derived from the cache
+    /// location; a cache anywhere else has no root to jail against.
+    CacheRootUnanchored {
+        /// The cache directory met.
+        got: String,
+    },
     /// The document is not the JSON shape the wire contract declares
     /// (carries the rendered serde error as detail).
     Json {
@@ -772,102 +842,289 @@ pub enum WireDefect {
     },
 }
 
+/// A wire defect renders terminal-safe and inline, whichever field carries the untrusted bytes.
+///
+/// The text is relayed to the terminal as is, so a newline or escape in a
+/// crate's inspected value, a refusal reason, or a decode error cannot open a
+/// forged output line: every continuation line is indented.
 impl fmt::Display for WireDefect {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::UnknownCallKind { got } => write!(
+        let raw = UnsanitizedWireDefect(self).to_string();
+        write!(f, "{}", TerminalSafe::sanitize(&raw))
+    }
+}
+
+/// A [`WireDefect`]'s text before sanitisation; only its `Display` reads it.
+struct UnsanitizedWireDefect<'a>(&'a WireDefect);
+
+impl fmt::Display for UnsanitizedWireDefect<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.0 {
+            WireDefect::UnknownCallKind { got } => write!(
                 f,
                 "unknown call kind {got:?} (expected \"method\" or \"function\")"
             ),
-            Self::UnknownByKind { got } => write!(
+            WireDefect::UnknownByKind { got } => write!(
                 f,
                 "unknown receiver `by` kind {got:?} (expected \"ref\", \"refmut\", or \"value\")"
             ),
-            Self::UnknownClosureKind { got } => write!(
+            WireDefect::UnknownClosureKind { got } => write!(
                 f,
                 "unknown closure kind {got:?} (expected \"Fn\", \"FnMut\", or \"FnOnce\")"
             ),
-            Self::UnknownEffect { got } => write!(
+            WireDefect::UnknownEffect { got } => write!(
                 f,
                 "unknown effect {got:?} (expected \"pure\", \"fallible\", or \"effectful\")"
             ),
-            Self::TypeRefDiscriminator { present } => {
-                if present.is_empty() {
-                    write!(
-                        f,
-                        "TypeRef must have exactly one of `param`, `prim`, `ctor`, `closure`, `serdeValue`, or `serdeValueRef`"
-                    )
-                } else {
-                    write!(
-                        f,
-                        "TypeRef carries more than one discriminator: {}",
-                        present.join(", ")
-                    )
-                }
-            }
-            Self::InvalidIdent { got } => {
+            WireDefect::TypeRefDiscriminator { present } => wire_text::discriminators(f, present),
+            WireDefect::InvalidIdent { got } => {
                 write!(f, "{got:?} is not a legal Rust identifier")
             }
-            Self::InvalidModulePath { got } => {
+            WireDefect::InvalidModulePath { got } => {
                 write!(f, "{got:?} is not a legal Rust identifier path")
             }
-            Self::InvalidType { got } => {
+            WireDefect::InvalidType { got } => {
                 write!(
                     f,
                     "{got:?} is outside the closed FFI type grammar (paths, generics, \
                      borrows, tuples, arrays only — no statement tokens)"
                 )
             }
-            Self::InvalidPattern { got } => {
+            WireDefect::InvalidPattern { got } => {
                 write!(
                     f,
                     "{got:?} is not a legal enum-arm pattern (a variant identifier with an \
                      optional (..) or {{..}} suffix)"
                 )
             }
-            Self::InvalidSelector { got } => {
+            WireDefect::InvalidSelector { got } => {
                 write!(
                     f,
                     "{got:?} is not a legal field selector (a field identifier or a decimal \
                      tuple index)"
                 )
             }
-            Self::InvalidPkgPath { got } => {
+            WireDefect::InvalidPkgPath { got } => {
                 write!(
                     f,
                     "{got:?} is not a legal package path (it carries a control character)"
                 )
             }
-            Self::InvalidVersion { got } => {
+            WireDefect::InvalidVersion { got } => {
                 write!(
                     f,
                     "{got:?} is not a legal crate version (it must match the semver charset \
                      [0-9A-Za-z.*=<>~^,+ -])"
                 )
             }
-            Self::InvalidFeature { got } => {
+            WireDefect::InvalidFeature { got } => {
                 write!(
                     f,
                     "{got:?} is not a legal cargo feature name (it must match the charset \
                      [A-Za-z0-9_+./?:-])"
                 )
             }
-            Self::InvalidClosureSig { got, reason } => {
+            WireDefect::InvalidClosureSig { got, reason } => {
                 write!(
                     f,
                     "{got:?} is not a legal define.closure signature: {reason}"
                 )
             }
-            Self::RecursiveDefineType { name, cycle } => {
-                write!(
-                    f,
-                    "define type {name:?} is recursive ({}) — a nominal FFI type cannot \
-                     reference itself (no boxed indirection is available in the closed carrier \
-                     set); break the cycle by indirecting through a crate handle the FFI can name",
-                    cycle.join(" -> ")
-                )
+            WireDefect::RecursiveDefineType { name, cycle } => {
+                wire_text::recursive_define(f, name, cycle)
             }
-            Self::Json { detail } => write!(f, "{detail}"),
+            WireDefect::WrapperPathTraversal { got } => wire_text::path_traversal(f, got),
+            WireDefect::WrapperPathUnresolvable { got, detail } => {
+                wire_text::path_unresolvable(f, got, detail)
+            }
+            WireDefect::WrapperPathOutsideRoot { got, root } => {
+                wire_text::path_outside_root(f, got, root)
+            }
+            WireDefect::WrapperPathUnrenderable { got, canonical } => {
+                wire_text::path_unrenderable(f, got, canonical)
+            }
+            WireDefect::WrapperManifest { got, defect } => write!(
+                f,
+                "wrapper crate path {got:?} has no usable `Cargo.toml`: {}",
+                UnsanitizedManifestDefect(defect)
+            ),
+            WireDefect::LegacyDependencyLine { got } => wire_text::legacy_line(f, got),
+            WireDefect::CacheRootUnanchored { got } => wire_text::cache_unanchored(f, got),
+            WireDefect::Json { detail } => write!(f, "{detail}"),
+        }
+    }
+}
+
+/// The unsanitised text of the longer [`WireDefect`] messages, one writer per variant.
+mod wire_text {
+    use std::fmt;
+
+    pub(super) fn discriminators(f: &mut fmt::Formatter<'_>, present: &[&str]) -> fmt::Result {
+        if present.is_empty() {
+            write!(
+                f,
+                "TypeRef must have exactly one of `param`, `prim`, `ctor`, `closure`, `serdeValue`, or `serdeValueRef`"
+            )
+        } else {
+            write!(
+                f,
+                "TypeRef carries more than one discriminator: {}",
+                present.join(", ")
+            )
+        }
+    }
+
+    pub(super) fn recursive_define(
+        f: &mut fmt::Formatter<'_>,
+        name: &str,
+        cycle: &[String],
+    ) -> fmt::Result {
+        write!(
+            f,
+            "define type {name:?} is recursive ({}) — a nominal FFI type cannot \
+             reference itself (no boxed indirection is available in the closed carrier \
+             set); break the cycle by indirecting through a crate handle the FFI can name",
+            cycle.join(" -> ")
+        )
+    }
+
+    pub(super) fn path_traversal(f: &mut fmt::Formatter<'_>, got: &str) -> fmt::Result {
+        write!(
+            f,
+            "wrapper crate path {got:?} carries a `..` component — a wrapper crate \
+             must live inside the project"
+        )
+    }
+
+    pub(super) fn path_unresolvable(
+        f: &mut fmt::Formatter<'_>,
+        got: &str,
+        detail: &str,
+    ) -> fmt::Result {
+        write!(
+            f,
+            "wrapper crate path {got:?} does not resolve to a directory ({detail}); \
+             if the project moved, re-run `ipe add` for this wrapper"
+        )
+    }
+
+    pub(super) fn path_outside_root(
+        f: &mut fmt::Formatter<'_>,
+        got: &str,
+        root: &str,
+    ) -> fmt::Result {
+        write!(
+            f,
+            "wrapper crate path {got:?} resolves outside the project root {root:?} — \
+             a wrapper crate must live inside the project; re-run `ipe add` from the \
+             project that owns it"
+        )
+    }
+
+    pub(super) fn path_unrenderable(
+        f: &mut fmt::Formatter<'_>,
+        got: &str,
+        canonical: &str,
+    ) -> fmt::Result {
+        write!(
+            f,
+            "wrapper crate path {got:?} resolves to {canonical:?}, which is not a \
+             renderable `path` dependency (it must be UTF-8, free of control \
+             characters, and on a local drive); move the project or the wrapper \
+             crate to such a directory"
+        )
+    }
+
+    pub(super) fn legacy_line(f: &mut fmt::Formatter<'_>, got: &str) -> fmt::Result {
+        write!(
+            f,
+            "dependency line {got:?} is not a registry pin this compiler renders; \
+             re-run `ipe add` for this crate"
+        )
+    }
+
+    pub(super) fn cache_unanchored(f: &mut fmt::Formatter<'_>, got: &str) -> fmt::Result {
+        write!(
+            f,
+            "FFI cache {got:?} is not at `<project>/.ipe/cache/ffi/rust`, so no project \
+             root exists to jail a wrapper crate to"
+        )
+    }
+}
+
+/// Why a wrapper crate's `Cargo.toml` fails to prove the crate cargo builds.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WrapperManifestDefect {
+    /// The manifest is absent or cannot be opened or read.
+    Unreadable {
+        /// The filesystem error, rendered.
+        detail: String,
+    },
+    /// The manifest is a symlink, reparse point, or other non-regular file.
+    NotRegularFile,
+    /// The manifest exceeds the read ceiling.
+    Oversized {
+        /// The ceiling in bytes.
+        limit: u64,
+    },
+    /// The manifest is not UTF-8 TOML carrying a string `[package] name`.
+    Invalid {
+        /// The decode error, rendered.
+        detail: String,
+    },
+    /// The `[package] name` is outside the dependency-key charset.
+    PackageNameIllegal {
+        /// The name met.
+        found: String,
+    },
+    /// The `[package] name` differs from the installed package's name.
+    PackageNameMismatch {
+        /// The installed package name the dependency key is rendered from.
+        expected: String,
+        /// The `[package] name` the manifest declares.
+        found: String,
+    },
+}
+
+/// A manifest defect renders terminal-safe and inline, whichever field carries the untrusted bytes.
+impl fmt::Display for WrapperManifestDefect {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let raw = UnsanitizedManifestDefect(self).to_string();
+        write!(f, "{}", TerminalSafe::sanitize(&raw))
+    }
+}
+
+/// A [`WrapperManifestDefect`]'s text before sanitisation; only a sanitising `Display` reads it.
+struct UnsanitizedManifestDefect<'a>(&'a WrapperManifestDefect);
+
+impl fmt::Display for UnsanitizedManifestDefect<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.0 {
+            WrapperManifestDefect::Unreadable { detail } => {
+                write!(f, "it cannot be read ({detail})")
+            }
+            WrapperManifestDefect::NotRegularFile => write!(
+                f,
+                "it is a symlink or not a regular file; make it a plain file inside the \
+                 wrapper directory"
+            ),
+            WrapperManifestDefect::Oversized { limit } => {
+                write!(f, "it exceeds the {limit}-byte manifest ceiling")
+            }
+            WrapperManifestDefect::Invalid { detail } => write!(
+                f,
+                "it is not a TOML manifest with a string `[package] name` ({detail})"
+            ),
+            WrapperManifestDefect::PackageNameIllegal { found } => write!(
+                f,
+                "its `[package] name` {found:?} is not a legal dependency key \
+                 ([A-Za-z0-9_-], letter first)"
+            ),
+            WrapperManifestDefect::PackageNameMismatch { expected, found } => write!(
+                f,
+                "its `[package] name` is {found:?} but the installed crate is {expected:?}; \
+                 re-run `ipe add` for this wrapper"
+            ),
         }
     }
 }
@@ -875,6 +1132,157 @@ impl fmt::Display for WireDefect {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const FORGED: &str = "x\nerror: forged\u{1b}[2K";
+
+    fn assert_unforged(text: &str) {
+        assert!(text.contains("error: forged"), "{text}");
+        assert!(!text.contains("[2K"), "{text}");
+        assert!(
+            text.lines().all(|line| !line.starts_with("error: forged")),
+            "{text}"
+        );
+    }
+
+    /// A newline or escape in a relayed wire defect's free-text field stays on its owning line.
+    #[test]
+    fn a_wire_defect_cannot_forge_an_output_line() {
+        let defects = [
+            WireDefect::Json {
+                detail: FORGED.to_owned(),
+            },
+            WireDefect::InvalidClosureSig {
+                got: "Fn()".to_owned(),
+                reason: FORGED.to_owned(),
+            },
+            WireDefect::RecursiveDefineType {
+                name: "Tree".to_owned(),
+                cycle: vec!["Tree".to_owned(), FORGED.to_owned()],
+            },
+            WireDefect::WrapperPathUnresolvable {
+                got: "w".to_owned(),
+                detail: FORGED.to_owned(),
+            },
+            WireDefect::WrapperManifest {
+                got: "w".to_owned(),
+                defect: WrapperManifestDefect::Unreadable {
+                    detail: FORGED.to_owned(),
+                },
+            },
+            WireDefect::WrapperManifest {
+                got: "w".to_owned(),
+                defect: WrapperManifestDefect::Invalid {
+                    detail: FORGED.to_owned(),
+                },
+            },
+        ];
+        for defect in defects {
+            assert_unforged(&defect.to_string());
+        }
+    }
+
+    /// No escape byte and no line of its own for a value a defect quotes.
+    fn assert_quoted_unforged(text: &str) {
+        assert!(!text.contains('\u{1b}'), "{text}");
+        assert!(
+            text.lines().all(|line| !line.starts_with("error: forged")),
+            "{text}"
+        );
+    }
+
+    /// A wrapper-jail defect's quoted path, root, or line cannot open a forged output line.
+    #[test]
+    fn a_wrapper_jail_defect_cannot_forge_an_output_line() {
+        let defects = [
+            WireDefect::WrapperPathTraversal {
+                got: FORGED.to_owned(),
+            },
+            WireDefect::WrapperPathUnresolvable {
+                got: FORGED.to_owned(),
+                detail: FORGED.to_owned(),
+            },
+            WireDefect::WrapperPathOutsideRoot {
+                got: FORGED.to_owned(),
+                root: FORGED.to_owned(),
+            },
+            WireDefect::WrapperPathUnrenderable {
+                got: FORGED.to_owned(),
+                canonical: FORGED.to_owned(),
+            },
+            WireDefect::WrapperManifest {
+                got: FORGED.to_owned(),
+                defect: WrapperManifestDefect::PackageNameMismatch {
+                    expected: FORGED.to_owned(),
+                    found: FORGED.to_owned(),
+                },
+            },
+            WireDefect::LegacyDependencyLine {
+                got: FORGED.to_owned(),
+            },
+            WireDefect::CacheRootUnanchored {
+                got: FORGED.to_owned(),
+            },
+        ];
+        for defect in defects {
+            assert_quoted_unforged(&defect.to_string());
+        }
+    }
+
+    /// A newline or escape in a wrapper manifest defect's detail stays on its owning line.
+    #[test]
+    fn a_wrapper_manifest_defect_cannot_forge_an_output_line() {
+        for defect in [
+            WrapperManifestDefect::Unreadable {
+                detail: FORGED.to_owned(),
+            },
+            WrapperManifestDefect::Invalid {
+                detail: FORGED.to_owned(),
+            },
+        ] {
+            assert_unforged(&defect.to_string());
+        }
+        for defect in [
+            WrapperManifestDefect::PackageNameIllegal {
+                found: FORGED.to_owned(),
+            },
+            WrapperManifestDefect::PackageNameMismatch {
+                expected: FORGED.to_owned(),
+                found: FORGED.to_owned(),
+            },
+        ] {
+            assert_quoted_unforged(&defect.to_string());
+        }
+    }
+
+    /// A manifest defect nested in a wire defect is sanitised once, not indented twice.
+    #[test]
+    fn a_nested_manifest_defect_is_indented_once() {
+        let defect = WireDefect::WrapperManifest {
+            got: "w".to_owned(),
+            defect: WrapperManifestDefect::Invalid {
+                detail: "a\nb".to_owned(),
+            },
+        };
+        let text = defect.to_string();
+        assert!(text.contains("(a\n    b)"), "{text}");
+    }
+
+    /// A newline in an FFI diagnostic's name or detail stays on its owning line.
+    #[test]
+    fn an_ffi_diagnostic_cannot_forge_an_output_line() {
+        let io = Diagnostic::ArtifactIo {
+            path: FORGED.to_owned(),
+            detail: FORGED.to_owned(),
+        };
+        assert_unforged(&io.to_string());
+        let wire = Diagnostic::WireMalformed {
+            context: FORGED.to_owned(),
+            defect: WireDefect::Json {
+                detail: FORGED.to_owned(),
+            },
+        };
+        assert_unforged(&wire.to_string());
+    }
 
     #[test]
     fn each_variant_maps_to_its_taxonomy_code() {

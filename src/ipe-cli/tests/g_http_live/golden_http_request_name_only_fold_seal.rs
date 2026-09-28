@@ -72,7 +72,7 @@ fn built_main_rs(root: &Path, out: &Path) -> (Result<(), ipe::CliError>, Option<
 #[test]
 fn name_only_shape_does_not_emit_runtime_http_request_literal() {
     let root = repo_root();
-    let out = std::env::temp_dir().join("ipec_http_request_name_only_fold_seal_emit");
+    let out = crate::support::scratch_root().join("ipec_http_request_name_only_fold_seal_emit");
     let (built, main_rs) = built_main_rs(&root, &out);
     assert!(
         built.is_ok(),
@@ -100,7 +100,7 @@ fn name_only_shape_does_not_emit_runtime_http_request_literal() {
 #[test]
 fn name_only_shape_emits_a_synthesised_record_struct() {
     let root = repo_root();
-    let out = std::env::temp_dir().join("ipec_http_request_name_only_fold_seal_struct");
+    let out = crate::support::scratch_root().join("ipec_http_request_name_only_fold_seal_struct");
     let (built, main_rs) = built_main_rs(&root, &out);
     assert!(
         built.is_ok(),
@@ -134,7 +134,7 @@ fn name_only_shape_emits_a_synthesised_record_struct() {
 #[test]
 fn http_request_name_only_fold_seal_builds_and_runs() {
     let root = repo_root();
-    let out = std::env::temp_dir().join("ipec_http_request_name_only_fold_seal_e2e");
+    let out = crate::support::scratch_root().join("ipec_http_request_name_only_fold_seal_e2e");
     let Ok(runtime) = ipe::resolve_runtime() else {
         return;
     };
@@ -146,7 +146,7 @@ fn http_request_name_only_fold_seal_builds_and_runs() {
         "http_request_name_only_fold_seal: must be accepted, got: {built:?}"
     );
 
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
     let outcome = crate::support::build_and_run_emitted("http_request_name_only_fold_seal", &out);

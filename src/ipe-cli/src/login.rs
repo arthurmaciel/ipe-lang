@@ -10,6 +10,10 @@
 //! The token is written to `$XDG_CONFIG_HOME/ipe/token` (or `~/.config/ipe/token`)
 //! with `0600` permissions, never into the project tree.
 //!
+//! After login, when no commit-signing key is configured, `ipe login` offers
+//! (opt-in, interactive) to generate and register one — see
+//! [`crate::ssh_signing_key`]. `ipe login --signing-key` runs that step alone.
+//!
 //! [device authorization grant]: https://docs.github.com/apps/oauth-apps/building-oauth-apps/authorizing-oauth-apps#device-flow
 
 use std::io::Write as _;
@@ -23,9 +27,38 @@ use crate::CliError;
 /// authenticates with the client id alone (no secret), so embedding it is safe.
 const CLIENT_ID: &str = "Ov23liBpCFLSoxJvSTwO";
 
-/// The scope requested: enough to fork the public index repo and open the
-/// publish pull request, nothing more.
-const SCOPE: &str = "public_repo";
+/// What a device-flow authorization is for. Each purpose requests exactly one
+/// scope, so a grant can never be widened by composing scope strings.
+#[derive(Clone, Copy)]
+enum GrantScope {
+    /// The stored publish token: enough to fork the public index repo and open
+    /// the publish pull request, nothing more.
+    Publish,
+    /// A one-shot, never-stored token that may only add an SSH signing key to
+    /// the account.
+    RegisterSigningKey,
+}
+
+impl GrantScope {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Publish => "public_repo",
+            Self::RegisterSigningKey => "write:ssh_signing_key",
+        }
+    }
+
+    fn purpose(self) -> crate::text::Message {
+        match self {
+            Self::Publish => crate::text::msg::login_grant_purpose_publish(),
+            Self::RegisterSigningKey => {
+                crate::text::login_grant_purpose_signing_key(&self.as_str())
+            }
+        }
+    }
+}
+
+/// The one scope the signing-key-registration grant requests.
+pub(crate) const SIGNING_KEY_SCOPE: &str = GrantScope::RegisterSigningKey.as_str();
 
 /// Upper bound on the poll interval (seconds) accepted from GitHub's response.
 /// A hostile or malformed `interval` (up to `u64::MAX`) is clamped to this, so
@@ -39,11 +72,13 @@ const GRANT_TYPE: &str = "urn:ietf:params:oauth:grant-type:device_code";
 
 /// `ipe login [--status | --logout]` — obtain and store a GitHub publish token.
 ///
-/// With no flag, runs the device flow and stores the token. `--status` reports
-/// whether a token is stored; `--logout` removes it.
+/// With no flag, runs the device flow, stores the token, then offers signing-key
+/// setup when none is configured. `--status` reports whether a token is stored
+/// and which signing key publish would use; `--logout` removes the token;
+/// `--signing-key` runs only the signing-key setup.
 ///
 /// # Errors
-/// [`CliError::UsageOwned`] on an unknown flag; [`CliError::Resolve`] when the
+/// [`CliError::Usage`] on an unknown flag; [`CliError::Resolve`] when the
 /// OAuth request fails, the user does not authorize in time, or the token cannot
 /// be stored.
 pub fn run_login(rest: &[String]) -> Result<(), CliError> {
@@ -66,10 +101,17 @@ pub fn run_login(rest: &[String]) -> Result<(), CliError> {
                     "not logged in — run `ipe login` to authorize".to_owned()
                 }
             };
-            print!("{}", crate::style::frame(&crate::style::gutter(&message)));
+            let key_line = crate::ssh_signing_key::status_line(
+                ipe_env::var_os(crate::ssh_signing_key::SIGNING_KEY_ENV).as_deref(),
+                config_dir().as_deref(),
+            );
+            crate::screen::Screen::new(crate::screen::Stream::Stdout)
+                .line(crate::screen::Tone::Text, &format!("{message}\n{key_line}"))
+                .emit();
             Ok(())
         }
         Some("--logout") if rest.len() == 1 => logout(),
+        Some("--signing-key") if rest.len() == 1 => crate::ssh_signing_key::run_setup_command(),
         Some(other) if other.starts_with('-') => {
             Err(crate::cli_args::usage_unknown_flag("login", other))
         }
@@ -96,18 +138,7 @@ impl PublishToken {
     /// rejected, closing the curl-config injection path.
     #[must_use]
     pub fn parse(raw: &str) -> Option<Self> {
-        let trimmed = raw.trim();
-        if trimmed.is_empty() {
-            return None;
-        }
-        if trimmed
-            .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || b == b'_')
-        {
-            Some(Self(trimmed.to_owned()))
-        } else {
-            None
-        }
+        token_alphabet(raw).map(|t| Self(t.to_owned()))
     }
 
     /// The token bytes, safe to splice into the curl config header line.
@@ -115,6 +146,38 @@ impl PublishToken {
     pub fn as_str(&self) -> &str {
         &self.0
     }
+}
+
+/// A one-shot GitHub token granted only `write:ssh_signing_key`, used for the
+/// single signing-key registration request and then dropped.
+///
+/// A distinct type from [`PublishToken`]: it has no `Clone`, and nothing that
+/// persists or reuses a publish token accepts it, so the wider-scoped grant can
+/// never be written to disk or reach the publish path. Its bytes are wiped from
+/// memory on drop.
+pub(crate) struct KeyRegistrationToken(zeroize::Zeroizing<String>);
+
+impl KeyRegistrationToken {
+    /// Parse a raw token under the same alphabet rule as [`PublishToken`].
+    pub(crate) fn parse(raw: &str) -> Option<Self> {
+        token_alphabet(raw).map(|t| Self(zeroize::Zeroizing::new(t.to_owned())))
+    }
+
+    /// The token bytes, for the `Authorization` header only.
+    pub(crate) fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+/// The trimmed token when it is non-empty and drawn only from the GitHub token
+/// alphabet (`[A-Za-z0-9_]`); `None` otherwise.
+fn token_alphabet(raw: &str) -> Option<&str> {
+    let trimmed = raw.trim();
+    let well_formed = !trimmed.is_empty()
+        && trimmed
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'_');
+    well_formed.then_some(trimmed)
 }
 
 /// The stored publish token, if the user has run `ipe login`. `None` when no
@@ -131,33 +194,61 @@ pub fn stored_token() -> Option<PublishToken> {
 }
 
 /// Run the full device flow: request a code, prompt the user, poll for the token,
-/// store it.
+/// store it; then offer signing-key setup when none is configured.
 fn run_device_flow() -> Result<(), CliError> {
-    let device = request_device_code()?;
-
-    print!(
-        "{}",
-        crate::style::frame(&crate::style::gutter(&format!(
-            "To authorize ipe, visit:\n  {}\nand enter the code:  {}",
-            device.verification_uri.as_str(),
-            device.user_code
-        )))
-    );
-    if open_in_browser(device.verification_uri.as_str()) {
-        eprintln!("{}", crate::style::gutter("(opened your browser)"));
-    }
-    eprintln!("{}", crate::style::gutter("Waiting for authorization …"));
-
-    let token = poll_for_token(&device)?;
+    // Refuse up front where the token could not be stored owner-only, before
+    // the user approves a grant that would then be discarded.
+    require_token_store(HOST_TOKEN_STORE)?;
+    let token = authorize(GrantScope::Publish, PublishToken::parse)?;
     let path = store_token(&token)?;
-    print!(
-        "{}",
-        crate::style::frame(&crate::style::gutter(&format!(
-            "Logged in. Token stored at {}",
-            path.display()
-        )))
+    crate::screen::Screen::new(crate::screen::Stream::Stdout)
+        .line(
+            crate::screen::Tone::Text,
+            &format!("Logged in. Token stored at {}", path.display()),
+        )
+        .emit();
+    crate::ssh_signing_key::offer_after_login()
+}
+
+/// Obtain the one-shot `write:ssh_signing_key` token through its own device-flow
+/// authorization. The caller uses it for one request and drops it.
+///
+/// # Errors
+/// [`CliError::Resolve`] when the OAuth request fails or the user does not
+/// authorize in time.
+pub(crate) fn authorize_signing_key_registration() -> Result<KeyRegistrationToken, CliError> {
+    authorize(GrantScope::RegisterSigningKey, KeyRegistrationToken::parse)
+}
+
+/// One device-flow authorization for `scope`: request a code, show it, poll until
+/// the user approves, and parse the granted token into its role type `T`.
+fn authorize<T>(scope: GrantScope, parse: fn(&str) -> Option<T>) -> Result<T, CliError> {
+    let device = request_device_code(scope)?;
+
+    crate::screen::Screen::new(crate::screen::Stream::Stdout)
+        .line(
+            crate::screen::Tone::Text,
+            &crate::text::login_device_prompt(
+                &scope.purpose(),
+                &device.verification_uri.as_str(),
+                &crate::style::TerminalSafe::sanitize(&device.user_code),
+            ),
+        )
+        .emit();
+    if open_in_browser(device.verification_uri.as_str()) {
+        crate::screen::chatter(
+            crate::screen::Stream::Stderr,
+            crate::screen::Tone::Text,
+            "(opened your browser)",
+        );
+    }
+    crate::screen::chatter(
+        crate::screen::Stream::Stderr,
+        crate::screen::Tone::Text,
+        "Waiting for authorization …",
     );
-    Ok(())
+
+    poll_for_token(&device, parse)
 }
 
 /// The verification URL GitHub tells the user to open, parsed once into a value
@@ -208,20 +299,17 @@ struct DeviceGrant {
     expires_in: u64,
 }
 
-/// POST `login/device/code` and parse the device-code grant.
-fn request_device_code() -> Result<DeviceGrant, CliError> {
+/// POST `login/device/code` for `scope` and parse the device-code grant.
+fn request_device_code(scope: GrantScope) -> Result<DeviceGrant, CliError> {
     let json = post_form(
         DEVICE_CODE_URL,
-        &[("client_id", CLIENT_ID), ("scope", SCOPE)],
+        &[("client_id", CLIENT_ID), ("scope", scope.as_str())],
     )?;
     let device_code = str_field(&json, "device_code")?;
     let user_code = str_field(&json, "user_code")?;
     let verification_uri_raw = str_field(&json, "verification_uri")?;
-    let verification_uri = VerificationUri::parse(&verification_uri_raw).ok_or_else(|| {
-        login_error(
-            "GitHub returned a verification URL that is not https on github.com — refusing to open it",
-        )
-    })?;
+    let verification_uri = VerificationUri::parse(&verification_uri_raw)
+        .ok_or_else(|| login_error(&crate::text::msg::login_verification_url_refused()))?;
     // GitHub returns these as JSON numbers; default to safe values if absent.
     let interval = json
         .get("interval")
@@ -242,9 +330,9 @@ fn request_device_code() -> Result<DeviceGrant, CliError> {
 }
 
 /// Poll `login/oauth/access_token` until the user authorizes, the code expires,
-/// or GitHub reports a terminal error. The returned token is parsed into a
-/// [`PublishToken`] at this boundary, so a malformed token never travels on.
-fn poll_for_token(device: &DeviceGrant) -> Result<PublishToken, CliError> {
+/// or GitHub reports a terminal error. The returned token is parsed into its
+/// role type by `parse` at this boundary, so a malformed token never travels on.
+fn poll_for_token<T>(device: &DeviceGrant, parse: fn(&str) -> Option<T>) -> Result<T, CliError> {
     let deadline = Instant::now() + Duration::from_secs(device.expires_in);
     let mut interval = device.interval.clamp(1, MAX_POLL_INTERVAL_SECS);
     loop {
@@ -255,7 +343,7 @@ fn poll_for_token(device: &DeviceGrant) -> Result<PublishToken, CliError> {
         let now = Instant::now();
         if now >= deadline {
             return Err(login_error(
-                "the authorization code expired before you approved it — run `ipe login` again",
+                &crate::text::msg::login_code_expired_before_approval(),
             ));
         }
         let remaining = deadline.saturating_duration_since(now);
@@ -269,8 +357,8 @@ fn poll_for_token(device: &DeviceGrant) -> Result<PublishToken, CliError> {
             ],
         )?;
         if let Some(token) = json.get("access_token").and_then(serde_json::Value::as_str) {
-            return PublishToken::parse(token)
-                .ok_or_else(|| login_error("GitHub returned a token with unexpected characters"));
+            return parse(token)
+                .ok_or_else(|| login_error(&crate::text::msg::login_token_malformed()));
         }
         match json.get("error").and_then(serde_json::Value::as_str) {
             // Not authorized yet — keep waiting at the current cadence.
@@ -287,18 +375,18 @@ fn poll_for_token(device: &DeviceGrant) -> Result<PublishToken, CliError> {
                     .min(MAX_POLL_INTERVAL_SECS);
             }
             Some("access_denied") => {
-                return Err(login_error("authorization was denied on GitHub"));
+                return Err(login_error(&crate::text::msg::login_denied()));
             }
             Some("expired_token") => {
-                return Err(login_error(
-                    "the authorization code expired — run `ipe login` again",
-                ));
+                return Err(login_error(&crate::text::msg::login_code_expired()));
             }
-            Some(other) => return Err(login_error(&format!("GitHub reported `{other}`"))),
+            Some(other) => {
+                return Err(login_error(&crate::text::msg::login_github_reported(
+                    &crate::style::TerminalSafe::sanitize(other),
+                )));
+            }
             None => {
-                return Err(login_error(
-                    "GitHub's response had neither a token nor a recognised status",
-                ));
+                return Err(login_error(&crate::text::msg::login_response_unrecognised()));
             }
         }
     }
@@ -358,30 +446,23 @@ fn post_form(url: &str, fields: &[(&str, &str)]) -> Result<serde_json::Value, Cl
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .map_err(|e| {
-            login_error(&format!(
-                "could not run `curl` (needed for the GitHub OAuth request): {e}"
-            ))
-        })?;
+        .map_err(|e| login_error(&crate::text::msg::login_curl_unavailable(&e)))?;
     // Write the body to curl's stdin, then close it so curl proceeds. A write
     // failure means curl never receives the body; the wait below surfaces the
     // resulting error.
     if let Some(mut stdin) = child.stdin.take() {
         let _ = stdin.write_all(body.as_bytes());
     }
-    let output = child.wait_with_output().map_err(|e| {
-        login_error(&format!(
-            "the OAuth request to GitHub failed while waiting for curl: {e}"
-        ))
-    })?;
+    let output = child
+        .wait_with_output()
+        .map_err(|e| login_error(&crate::text::msg::login_curl_wait_failed(&e)))?;
     if !output.status.success() {
-        return Err(login_error(&format!(
-            "the OAuth request to GitHub failed: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
+        return Err(login_error(&crate::text::msg::login_request_failed(
+            &crate::style::TerminalSafe::sanitize(String::from_utf8_lossy(&output.stderr).trim()),
         )));
     }
     serde_json::from_slice(&output.stdout)
-        .map_err(|e| login_error(&format!("could not parse GitHub's response as JSON: {e}")))
+        .map_err(|e| login_error(&crate::text::msg::login_response_not_json(&e)))
 }
 
 /// The full curl argument vector for a `post_form` call. The body is NOT among
@@ -408,16 +489,19 @@ fn str_field(json: &serde_json::Value, key: &str) -> Result<String, CliError> {
     json.get(key)
         .and_then(serde_json::Value::as_str)
         .map(str::to_owned)
-        .ok_or_else(|| login_error(&format!("GitHub's response was missing `{key}`")))
+        .ok_or_else(|| login_error(&crate::text::msg::login_response_missing(&key)))
 }
 
-/// The token file path (`$XDG_CONFIG_HOME/ipe/token`, else `~/.config/ipe/token`).
-/// `None` only when neither `XDG_CONFIG_HOME` nor `HOME` is set.
+/// The ipe config directory (`$XDG_CONFIG_HOME/ipe`, else `~/.config/ipe`) that
+/// holds the publish token and the generated signing key. `None` only when
+/// neither `XDG_CONFIG_HOME` nor the home names an absolute path.
+pub(crate) fn config_dir() -> Option<PathBuf> {
+    crate::env_dir::ambient_home("XDG_CONFIG_HOME", ".config").map(|base| base.join("ipe"))
+}
+
+/// The token file path (`<config dir>/token`).
 fn token_path() -> Option<PathBuf> {
-    let base = std::env::var_os("XDG_CONFIG_HOME")
-        .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))?;
-    Some(base.join("ipe").join("token"))
+    config_dir().map(|dir| dir.join("token"))
 }
 
 /// The three distinguishable login states `--status` reports. A token file that
@@ -445,14 +529,17 @@ fn token_status() -> TokenStatus {
 ///
 /// On Unix the file is created with mode 0600 atomically before any bytes are
 /// written, so there is no window where the token is readable by other users.
-/// On non-Unix the containing profile directory is the protection layer.
+/// Off Unix the token is never stored (see [`write_token_atomic`]).
 fn store_token(token: &PublishToken) -> Result<PathBuf, CliError> {
-    let path = token_path().ok_or_else(|| {
-        login_error("could not determine a config directory (set HOME or XDG_CONFIG_HOME)")
-    })?;
+    let path =
+        token_path().ok_or_else(|| login_error(&crate::text::msg::login_config_dir_unknown()))?;
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|e| login_error(&format!("could not create {}: {e}", parent.display())))?;
+        std::fs::create_dir_all(parent).map_err(|e| {
+            login_error(&crate::text::msg::login_create_failed(
+                &parent.display(),
+                &e,
+            ))
+        })?;
     }
     write_token_atomic(&path, token.as_str())?;
     Ok(path)
@@ -468,8 +555,9 @@ fn store_token(token: &PublishToken) -> Result<PathBuf, CliError> {
 /// bytes only ever land in a 0600 inode, so there is no window in which the
 /// secret is group- or world-readable.
 ///
-/// On non-Unix: falls back to [`std::fs::write`] and relies on the containing
-/// directory for protection (same as before).
+/// Off Unix: refused. No portable owner-only file mode exists there, so the
+/// token is never written to a file other users might read; `GITHUB_TOKEN`
+/// supplies it instead.
 #[cfg(unix)]
 fn write_token_atomic(path: &std::path::Path, token: &str) -> Result<(), CliError> {
     use std::fs::OpenOptions;
@@ -489,51 +577,79 @@ fn write_token_atomic(path: &std::path::Path, token: &str) -> Result<(), CliErro
         .create_new(true)
         .mode(0o600)
         .open(&tmp_path)
-        .map_err(|e| login_error(&format!("could not create {}: {e}", tmp_path.display())))?;
+        .map_err(|e| {
+            login_error(&crate::text::msg::login_create_failed(
+                &tmp_path.display(),
+                &e,
+            ))
+        })?;
     let write_result = writeln!(file, "{token}")
         .and_then(|()| file.flush())
         .and_then(|()| file.sync_all());
     if let Err(e) = write_result {
         let _ = std::fs::remove_file(&tmp_path);
-        return Err(login_error(&format!(
-            "could not write {}: {e}",
-            tmp_path.display()
+        return Err(login_error(&crate::text::msg::login_write_failed(
+            &tmp_path.display(),
+            &e,
         )));
     }
     drop(file);
     std::fs::rename(&tmp_path, path).map_err(|e| {
         let _ = std::fs::remove_file(&tmp_path);
-        login_error(&format!(
-            "could not move the token into place at {}: {e}",
-            path.display()
-        ))
+        login_error(&crate::text::msg::login_move_failed(&path.display(), &e))
     })
 }
 
 #[cfg(not(unix))]
-fn write_token_atomic(path: &std::path::Path, token: &str) -> Result<(), CliError> {
-    std::fs::write(path, format!("{token}\n"))
-        .map_err(|e| login_error(&format!("could not write {}: {e}", path.display())))
+fn write_token_atomic(_path: &std::path::Path, _token: &str) -> Result<(), CliError> {
+    require_token_store(HOST_TOKEN_STORE)
+}
+
+/// Where the host can keep the publish token.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TokenStore {
+    /// A file created mode 0600, readable by its owner only.
+    OwnerOnlyFile,
+    /// No owner-only file mode exists, so the token is never stored.
+    Unsupported,
+}
+
+/// The token store this build's target provides.
+const HOST_TOKEN_STORE: TokenStore = if cfg!(unix) {
+    TokenStore::OwnerOnlyFile
+} else {
+    TokenStore::Unsupported
+};
+
+/// Refuse a login whose token `store` cannot keep it owner-only.
+fn require_token_store(store: TokenStore) -> Result<(), CliError> {
+    match store {
+        TokenStore::OwnerOnlyFile => Ok(()),
+        TokenStore::Unsupported => Err(login_error(
+            &crate::text::msg::login_token_store_unsupported(),
+        )),
+    }
 }
 
 /// Remove the stored token.
 fn logout() -> Result<(), CliError> {
     let Some(path) = token_path().filter(|p| p.exists()) else {
-        print!(
-            "{}",
-            crate::style::frame(&crate::style::gutter("not logged in — nothing to remove"))
-        );
+        crate::screen::Screen::new(crate::screen::Stream::Stdout)
+            .line(
+                crate::screen::Tone::Text,
+                "not logged in — nothing to remove",
+            )
+            .emit();
         return Ok(());
     };
     std::fs::remove_file(&path)
-        .map_err(|e| login_error(&format!("could not remove {}: {e}", path.display())))?;
-    print!(
-        "{}",
-        crate::style::frame(&crate::style::gutter(&format!(
-            "logged out — removed {}",
-            path.display()
-        )))
-    );
+        .map_err(|e| login_error(&crate::text::msg::login_remove_failed(&path.display(), &e)))?;
+    crate::screen::Screen::new(crate::screen::Stream::Stdout)
+        .line(
+            crate::screen::Tone::Text,
+            &format!("logged out — removed {}", path.display()),
+        )
+        .emit();
     Ok(())
 }
 
@@ -556,13 +672,50 @@ fn open_in_browser(url: &str) -> bool {
 }
 
 /// Build a login error.
-fn login_error(message: &str) -> CliError {
-    CliError::Resolve(format!("ipe login: {message}"))
+pub(crate) fn login_error(message: &crate::text::Message) -> CliError {
+    CliError::Resolve(crate::text::msg::login_error(message))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn each_grant_requests_exactly_its_one_scope() {
+        assert_eq!(GrantScope::Publish.as_str(), "public_repo");
+        assert_eq!(
+            GrantScope::RegisterSigningKey.as_str(),
+            "write:ssh_signing_key"
+        );
+    }
+
+    #[test]
+    fn owner_only_token_store_admits_login() {
+        assert!(require_token_store(TokenStore::OwnerOnlyFile).is_ok());
+    }
+
+    #[test]
+    fn unsupported_token_store_refuses_login() {
+        let refusal = require_token_store(TokenStore::Unsupported);
+        assert!(
+            matches!(
+                &refusal,
+                Err(CliError::Resolve(message))
+                    if message.contains(crate::text::msg::login_token_store_unsupported().as_str())
+            ),
+            "an unsupported token store must refuse the login: {refusal:?}"
+        );
+    }
+
+    #[test]
+    fn host_token_store_tracks_target_family() {
+        let expected = if cfg!(unix) {
+            TokenStore::OwnerOnlyFile
+        } else {
+            TokenStore::Unsupported
+        };
+        assert_eq!(HOST_TOKEN_STORE, expected);
+    }
 
     #[test]
     fn url_encode_passes_unreserved_chars_through() {
@@ -672,7 +825,7 @@ mod tests {
     #[test]
     fn unexpected_login_argument_is_a_usage_error() {
         let result = run_login(&["--bogus".to_owned()]);
-        assert!(matches!(result, Err(CliError::UsageOwned(_))));
+        assert!(matches!(result, Err(CliError::Usage(_))));
     }
 
     /// The token file must be created with mode 0600 — never group- or

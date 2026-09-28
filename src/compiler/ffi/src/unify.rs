@@ -306,7 +306,7 @@ mod tests {
                 wrapper_ident: format!("K_{name}"),
                 arity: 1,
                 sig: (*sig).to_owned(),
-                transparent_params: Vec::new(),
+                transparent_params: crate::interface::TransparentParams::None,
                 transparent_result: None,
             })
             .collect();
@@ -321,6 +321,8 @@ mod tests {
             define_types: std::collections::BTreeSet::new(),
             transparent_types: std::collections::BTreeMap::new(),
             cargo_deps: vec![],
+            package_name: None,
+            dep_idents: std::collections::BTreeMap::new(),
             bindings,
             wrapper_idents: std::collections::BTreeSet::new(),
             dep_versions: dep_versions

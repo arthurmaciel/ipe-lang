@@ -106,14 +106,14 @@ pub enum Setting {
 /// [`resolve_console_token`] simply returns `None`.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum ConsoleTokenKind {
-    /// `Console.adminToken` — the admin/metrics console auth token
-    /// (env sibling `IPE_ADMIN_TOKEN`).
+    /// `Console.adminToken` — the admin token: authorizes `/_ipe/console*`
+    /// and `/_ipe/metrics` (env sibling `IPE_ADMIN_TOKEN`).
     Admin,
     /// `Console.ingestToken` — the federation ingest-endpoint token
     /// (env sibling `IPE_INGEST_TOKEN`).
     Ingest,
-    /// `Console.metricsToken` — the metrics-scrape token
-    /// (env sibling `IPE_METRICS_TOKEN`).
+    /// `Console.metricsToken` — the metrics-scrape token: authorizes
+    /// `/_ipe/metrics` only (env sibling `IPE_METRICS_TOKEN`).
     Metrics,
 }
 
@@ -213,7 +213,7 @@ impl ConfigError {
     /// server never binds. `-> !`: this never returns, so a caller expecting a
     /// [`Secret`] uses it in value position without producing an empty secret.
     pub fn abort_startup(&self) -> ! {
-        eprintln!("configuration error: {}", self.message());
+        crate::system::write_stderr_line(&format!("configuration error: {}", self.message()));
         crate::system::system_exit(1)
     }
 }
@@ -226,8 +226,8 @@ pub fn ipe_setting_db_url(url: crate::secret::Secret) -> Setting {
     Setting::DbUrl(url)
 }
 
-/// `Console.adminToken : Secret -> Setting a`. The admin/metrics-console auth
-/// token, carried as a sealed [`Secret`]. The runtime reads the resolved secret
+/// `Console.adminToken : Secret -> Setting a`. The admin token (console and
+/// metrics), carried as a sealed [`Secret`]. The runtime reads the resolved secret
 /// (via [`resolve_console_token`]) instead of a bare `IPE_ADMIN_TOKEN` env read.
 #[cfg(feature = "secret")]
 #[must_use]
@@ -243,8 +243,8 @@ pub fn ipe_setting_console_ingest_token(token: crate::secret::Secret) -> Setting
     Setting::ConsoleToken(ConsoleTokenKind::Ingest, token)
 }
 
-/// `Console.metricsToken : Secret -> Setting a`. The metrics-scrape token,
-/// carried as a sealed [`Secret`].
+/// `Console.metricsToken : Secret -> Setting a`. The metrics-scrape token
+/// (`/_ipe/metrics` only, never the console), carried as a sealed [`Secret`].
 #[cfg(feature = "secret")]
 #[must_use]
 pub fn ipe_setting_console_metrics_token(token: crate::secret::Secret) -> Setting {

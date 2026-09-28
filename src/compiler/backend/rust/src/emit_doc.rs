@@ -57,9 +57,8 @@ use crate::EmitCtx;
 use crate::doc::{ChainOperand, Doc};
 use crate::emit_expr::{
     call_has_kernel_special_case, callee_name, clone_targets_in_expr, combine_guards,
-    emit_arm_head, emit_binding_stmts, emit_expr_at, emit_match_scrutinee, expr_value_is_non_clone,
-    free_vars, record_struct_name, scan_free_target, substitute_var,
-    swapped_container_clone_rewrite, wants_arc_ctor,
+    emit_arm_head, emit_binding_stmts, emit_expr_at, emit_match_scrutinee, free_vars,
+    inlined_let_body, record_struct_name, swapped_container_clone_rewrite, wants_arc_ctor,
 };
 use crate::emit_types::{GenericScope, render_type};
 
@@ -1042,7 +1041,7 @@ fn build_generic_call(
     // A container-first kernel renders its container before the function
     // closure; clone the function's captures at their container use sites so the
     // closure's capture never reads a moved value (the string emitter's rewrite).
-    let mut docs = match swapped_container_clone_rewrite(callee, args) {
+    let mut docs = match swapped_container_clone_rewrite(callee, args, &ctx.enum_variants) {
         Some(container_rw) => {
             let [func, _] = args else {
                 return Err(Diagnostic::CompilerBug {
@@ -1241,12 +1240,9 @@ fn build_let(
     child: u16,
     generics: GenericScope,
 ) -> DResult<Doc> {
-    let (occurrences, has_clonevar) = scan_free_target(body, name);
-    let needs_inline = occurrences > 1 && expr_value_is_non_clone(value) && !has_clonevar;
-    if needs_inline {
+    if let Some(inlined_body) = inlined_let_body(name, value, body, &ctx.enum_variants) {
         // Zero-statement block `({ inlined_body })`: the body with `name`
         // substituted by `value`, laid out as a soft group.
-        let inlined_body = substitute_var(body.clone(), name, value);
         let body_doc = build_doc(ctx, &inlined_body, indent, child, generics)?;
         return Ok(Doc::group(Doc::concat(vec![
             Doc::text("({"),
@@ -1486,7 +1482,7 @@ fn build_task_seq(
     generics: GenericScope,
 ) -> DResult<Doc> {
     let rest_captures = free_vars(rest);
-    let effect_rw = clone_targets_in_expr(effect.clone(), &rest_captures);
+    let effect_rw = clone_targets_in_expr(effect.clone(), &rest_captures, &ctx.enum_variants);
     let effect_doc = build_doc(ctx, &effect_rw, indent, child, generics)?;
     let rest_doc = build_doc(ctx, rest, indent, child, generics)?;
     // The continuation `Box::new(move |_| <brace-body>[rest])`: the closure body's
@@ -4232,14 +4228,11 @@ mod tests {
         });
     }
 
-    /// The emit-time capture-clone invariant: a row-generic value only ever
-    /// reaches emission as `Access { record: Var(row) }`. Cloning the captures of
-    /// a continuation must NOT rewrite a row-generic Access receiver to a
-    /// `CloneVar` — the witness getter borrows, so the whole-row clone is
-    /// spurious AND unroutable (the Access emitter routes `Var` alone). Rewriting
-    /// it would emit a raw struct-field read on the opaque `R{n}` generic (E0609
-    /// — the exit-0-then-cargo-fail class this seal closes). The same borrowing
-    /// receiver rule keeps a non-`Clone` record receiver bare (E0599).
+    /// An eager Access receiver stays a bare `Var` under the capture-clone rewrite.
+    ///
+    /// The field read borrows and ends before the continuation moves the
+    /// receiver, so a whole-record clone is spurious; keeping it bare also keeps
+    /// a non-`Clone` record receiver emittable (E0599).
     #[test]
     fn clone_capture_leaves_row_access_receiver_a_var() {
         let fx = fixture();
@@ -4253,11 +4246,15 @@ mod tests {
             field,
             field_ty: IrType::Str,
         };
-        let rewritten = crate::emit_expr::clone_targets_in_expr(effect, &captures);
+        let rewritten = crate::emit_expr::clone_targets_in_expr(
+            effect,
+            &captures,
+            &ipe_ir::EnumPayloadTable::new(),
+        );
         match rewritten {
             Expr::Access { record, .. } => assert!(
                 matches!(*record, Expr::Var(s) if s == row),
-                "row-generic Access receiver must stay a bare Var, not a CloneVar"
+                "eager Access receiver must stay a bare Var, not a CloneVar"
             ),
             other => panic!("expected an Access, got {other:?}"),
         }
@@ -4274,7 +4271,11 @@ mod tests {
         let captures: std::collections::BTreeSet<ipe_intern::Symbol> =
             std::iter::once(plain).collect();
         let effect = Expr::Var(plain);
-        let rewritten = crate::emit_expr::clone_targets_in_expr(effect, &captures);
+        let rewritten = crate::emit_expr::clone_targets_in_expr(
+            effect,
+            &captures,
+            &ipe_ir::EnumPayloadTable::new(),
+        );
         assert!(
             matches!(rewritten, Expr::CloneVar(s) if s == plain),
             "a captured non-row variable must be rewritten to CloneVar"

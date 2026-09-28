@@ -114,9 +114,10 @@ use ipe_intern::Interner;
 use ipe_types::{VarNamer, kernel_type_table, ty_to_doc};
 
 use crate::CliError;
-use crate::api_surface::{ModuleApi, ModulePath, PublicApi, UnionApi, extract_tree, read_tree};
+use crate::api_surface::{ModuleApi, ModulePath, PublicApi, UnionApi, extract_walked, read_tree};
 use crate::cli_args::OutputFormat;
 use crate::doc_bundle::{BundleSource, DocBundle, fuzzy_rank, is_qualified};
+use crate::text;
 
 /// The `docs.json` schema version. Bumped only on an incompatible shape change,
 /// so a consumer can refuse a document it does not understand rather than
@@ -264,9 +265,11 @@ struct ParsedFlags {
 /// here rather than carried into an unrepresentable [`DocMode`].
 ///
 /// # Errors
-/// [`CliError::Usage`] / [`CliError::UsageOwned`] naming the exact problem.
+/// [`CliError::Usage`] naming the exact problem.
 pub fn parse_doc(rest: &[String]) -> Result<DocMode, CliError> {
-    parse_doc_with(rest, &mut |msg| eprintln!("{msg}"))
+    parse_doc_with(rest, &mut |msg| {
+        crate::screen::chatter(crate::screen::Stream::Stderr, crate::screen::Tone::Aux, msg);
+    })
 }
 
 /// The stderr notice emitted when the deprecated `--list` alias is used.
@@ -308,9 +311,7 @@ fn parse_doc_with(rest: &[String], notice: &mut dyn FnMut(&str)) -> Result<DocMo
     // `--type` is mutually exclusive with all other subcommands.
     if let Some(query) = type_query {
         if has_check_examples || has_list_flag {
-            return Err(CliError::Usage(
-                "ipe doc: --type is mutually exclusive with --check-examples and --list",
-            ));
+            return Err(CliError::Usage(text::msg::doc_type_exclusive()));
         }
         // Consume remaining flags for TypeSearch (only --plain/--json allowed).
         let mut output_format: Option<OutputFormat> = None;
@@ -320,17 +321,13 @@ fn parse_doc_with(rest: &[String], notice: &mut dyn FnMut(&str)) -> Result<DocMo
                 t if t.starts_with("--type=") => {}
                 "--plain" => {
                     if output_format.is_some() {
-                        return Err(CliError::Usage(
-                            "ipe doc: --plain and --json are mutually exclusive",
-                        ));
+                        return Err(CliError::Usage(text::msg::plain_json_exclusive(&"doc")));
                     }
                     output_format = Some(OutputFormat::Plain);
                 }
                 "--json" => {
                     if output_format.is_some() {
-                        return Err(CliError::Usage(
-                            "ipe doc: --plain and --json are mutually exclusive",
-                        ));
+                        return Err(CliError::Usage(text::msg::plain_json_exclusive(&"doc")));
                     }
                     output_format = Some(OutputFormat::Json);
                 }
@@ -339,15 +336,13 @@ fn parse_doc_with(rest: &[String], notice: &mut dyn FnMut(&str)) -> Result<DocMo
                     .windows(2)
                     .any(|p| matches!(p, [f, v] if f == "--type" && v == tok)) => {}
                 flag if flag.starts_with('-') => {
-                    return Err(CliError::UsageOwned(format!(
-                        "ipe doc --type: unknown flag `{flag}`"
+                    return Err(CliError::Usage(text::msg::unknown_flag(
+                        &"doc --type",
+                        &flag,
                     )));
                 }
                 _ => {
-                    return Err(CliError::Usage(
-                        "ipe doc --type: unexpected positional argument; \
-                         use `ipe doc --type \"<type expr>\"`",
-                    ));
+                    return Err(CliError::Usage(text::msg::doc_type_unexpected_positional()));
                 }
             }
         }
@@ -445,7 +440,7 @@ fn parse_doc_with(rest: &[String], notice: &mut dyn FnMut(&str)) -> Result<DocMo
 /// consumed. Rejects any flag that does not belong to `sub`.
 ///
 /// # Errors
-/// [`CliError::Usage`] / [`CliError::UsageOwned`] for an unknown or misplaced flag.
+/// [`CliError::Usage`] for an unknown or misplaced flag.
 fn parse_doc_flags(
     it: &mut std::iter::Peekable<std::slice::Iter<'_, String>>,
     sub: &Sub,
@@ -456,84 +451,76 @@ fn parse_doc_flags(
             // Skip flags already handled by the caller.
             "--list" | "--check-examples" => {}
             "--out" | "--write-format" if !matches!(sub, Sub::Generate) => {
-                return Err(CliError::UsageOwned(format!(
-                    "ipe doc {}: {arg} is a generate-only flag; run `ipe doc` to write files",
-                    sub_name(sub)
+                return Err(CliError::Usage(text::msg::doc_generate_only_flag(
+                    &sub_name(sub),
+                    &arg,
                 )));
             }
             "--port" if !matches!(sub, Sub::Serve) => {
-                return Err(CliError::UsageOwned(format!(
-                    "ipe doc {}: --port applies only to `ipe doc serve`",
-                    sub_name(sub)
-                )));
+                return Err(CliError::Usage(text::msg::doc_port_serve_only(&sub_name(
+                    sub,
+                ))));
             }
             "--plain" | "--json" if !matches!(sub, Sub::List | Sub::Query(_) | Sub::Lookup(_)) => {
-                return Err(CliError::UsageOwned(format!(
-                    "ipe doc {}: {arg} applies only to `list`, `<module>` queries, and `<key>` lookups",
-                    sub_name(sub)
+                return Err(CliError::Usage(text::msg::doc_lookup_only_flag(
+                    &sub_name(sub),
+                    &arg,
                 )));
             }
             "--out" => {
-                let value = it
-                    .next()
-                    .cloned()
-                    .ok_or(CliError::Usage("ipe doc: --out needs a directory"))?;
+                let value = it.next().cloned().ok_or_else(|| {
+                    CliError::Usage(text::msg::flag_needs_value(&"doc", &"--out"))
+                })?;
                 if flags.out.is_some() {
-                    return Err(CliError::Usage("ipe doc: --out given more than once"));
+                    return Err(CliError::Usage(text::msg::flag_repeated(&"doc", &"--out")));
                 }
                 flags.out = Some(value);
             }
             "--write-format" => {
-                let value = it
-                    .next()
-                    .ok_or(CliError::Usage("ipe doc: --write-format needs a value"))?;
+                let value = it.next().ok_or_else(|| {
+                    CliError::Usage(text::msg::flag_needs_value(&"doc", &"--write-format"))
+                })?;
                 if flags.write_format.is_some() {
-                    return Err(CliError::Usage(
-                        "ipe doc: --write-format given more than once",
-                    ));
+                    return Err(CliError::Usage(text::msg::flag_repeated(
+                        &"doc",
+                        &"--write-format",
+                    )));
                 }
                 flags.write_format = Some(parse_write_format(value)?);
             }
             "--port" => {
                 let value = it
                     .next()
-                    .ok_or(CliError::Usage("ipe doc serve: --port needs a number"))?;
+                    .ok_or(CliError::Usage(text::msg::doc_serve_port_needs_number()))?;
                 if flags.port.is_some() {
-                    return Err(CliError::Usage(
-                        "ipe doc serve: --port given more than once",
-                    ));
+                    return Err(CliError::Usage(text::msg::flag_repeated(
+                        &"doc serve",
+                        &"--port",
+                    )));
                 }
                 flags.port = Some(parse_port(value)?);
             }
             "--plain" => {
                 if flags.output_format.is_some() {
-                    return Err(CliError::Usage(
-                        "ipe doc: --plain and --json are mutually exclusive",
-                    ));
+                    return Err(CliError::Usage(text::msg::plain_json_exclusive(&"doc")));
                 }
                 flags.output_format = Some(OutputFormat::Plain);
             }
             "--json" => {
                 if flags.output_format.is_some() {
-                    return Err(CliError::Usage(
-                        "ipe doc: --plain and --json are mutually exclusive",
-                    ));
+                    return Err(CliError::Usage(text::msg::plain_json_exclusive(&"doc")));
                 }
                 flags.output_format = Some(OutputFormat::Json);
             }
             flag if flag.starts_with('-') => {
-                return Err(CliError::UsageOwned(format!(
-                    "ipe doc: unknown flag `{flag}`"
-                )));
+                return Err(CliError::Usage(text::msg::unknown_flag(&"doc", &flag)));
             }
             positional => {
                 if matches!(sub, Sub::Query(_) | Sub::Lookup(_)) {
-                    return Err(CliError::Usage("ipe doc: expected a single <key> argument"));
+                    return Err(CliError::Usage(text::msg::doc_single_key()));
                 }
                 if flags.path.is_some() {
-                    return Err(CliError::Usage(
-                        "ipe doc: expected a single <path> argument",
-                    ));
+                    return Err(CliError::Usage(text::msg::doc_single_path()));
                 }
                 flags.path = Some(positional.to_owned());
             }
@@ -562,9 +549,7 @@ fn parse_write_format(value: &str) -> Result<WriteFormat, CliError> {
         "markdown" => Ok(WriteFormat::Markdown),
         "html" => Ok(WriteFormat::Html),
         "all" => Ok(WriteFormat::All),
-        other => Err(CliError::UsageOwned(format!(
-            "ipe doc: unknown --write-format `{other}` (want markdown | json | html | all)"
-        ))),
+        other => Err(CliError::Usage(text::msg::doc_unknown_write_format(&other))),
     }
 }
 
@@ -572,12 +557,11 @@ fn parse_write_format(value: &str) -> Result<WriteFormat, CliError> {
 /// value (and `0`, which would silently auto-select — omit `--port` for that).
 fn parse_port(value: &str) -> Result<u16, CliError> {
     match value.parse::<u16>() {
-        Ok(0) => Err(CliError::Usage(
-            "ipe doc serve: --port 0 is not a real port; omit --port to auto-select a free one",
-        )),
+        Ok(0) => Err(CliError::Usage(text::msg::port_zero(&"doc serve"))),
         Ok(p) => Ok(p),
-        Err(_) => Err(CliError::UsageOwned(format!(
-            "ipe doc serve: --port `{value}` is not a port number (1-65535)"
+        Err(_) => Err(CliError::Usage(text::msg::port_invalid(
+            &"doc serve",
+            &value,
         ))),
     }
 }
@@ -588,16 +572,14 @@ fn parse_port(value: &str) -> Result<u16, CliError> {
 // `docs/constructs/<name>.md` file is automatically available everywhere; no
 // hand-maintained table is required.
 
-/// Return `true` when `s` looks like a symbol key: it starts uppercase, contains
-/// a `.`, and the character after the first `.` is lowercase — e.g. `List.map`,
-/// `Ipe.List.map`. This distinguishes a symbol lookup from a plain module name
-/// (`Ipe.List`, `List`) which is routed to the API query instead.
+/// Return `true` when `s` looks like a member key: it contains a `.` and its last segment starts
+/// lowercase — a value of a module, e.g.
+///
+/// `List.map`, `Ipe.List.map`, `Ipe.Time.unixMillis`. This distinguishes a member lookup from a
+/// plain module name (`Ipe.List`, `List`), which is routed to the API query instead.
 fn is_symbol_key(s: &str) -> bool {
-    let Some(dot_pos) = s.find('.') else {
-        return false;
-    };
-    s.get(dot_pos + 1..)
-        .and_then(|after| after.chars().next())
+    s.rsplit_once('.')
+        .and_then(|(_, member)| member.chars().next())
         .is_some_and(|c| c.is_ascii_lowercase())
 }
 
@@ -615,7 +597,12 @@ fn build_index() -> Result<Index, CliError> {
 
     builder
         .add_stdlib()
-        .map_err(|e| CliError::UsageOwned(format!("ipe doc: stdlib index failed: {e}")))?;
+        .map_err(|e| CliError::Usage(text::msg::doc_stdlib_index_failed(&e)))?;
+    // The compiled-source stdlib modules (`Ipe.Time`, …) carry members too, so
+    // `ipe doc Ipe.Time.unixMillis` resolves like `ipe doc List.map`.
+    builder
+        .add_compiled_stdlib()
+        .map_err(|e| CliError::Usage(text::msg::doc_stdlib_index_failed(&e)))?;
 
     // Diagnostics: indexed from the compile-time embedded explain pages.
     for code in ipe_diagnostics::ALL_CODES {
@@ -761,7 +748,7 @@ fn build_doc_bundle(docs_root: &std::path::Path) -> Result<DocBundle, CliError> 
         &diagnostic_sources,
         &cli_sources,
     )
-    .map_err(|e| CliError::UsageOwned(format!("ipe doc: bundle build error: {e}")))
+    .map_err(|e| CliError::Usage(text::msg::doc_bundle_build_error(&e)))
 }
 
 /// `ipe doc kind:key` -- exact scoped bundle lookup.
@@ -781,10 +768,7 @@ fn run_bundle_lookup(key: &str, format: OutputFormat) -> Result<(), CliError> {
             Ok(())
         }
         Err(crate::doc_bundle::BundleError::UnknownKind(prefix)) => {
-            Err(CliError::UsageOwned(format!(
-                "ipe doc: `{prefix}` is not a known documentation kind\n\
-             Known kinds: module, symbol, diagnostic, construct, idiom, topic, guide, cli"
-            )))
+            Err(CliError::Usage(text::msg::doc_unknown_kind(&prefix)))
         }
         Err(crate::doc_bundle::BundleError::UnknownKey { kind, key: k }) => {
             let near: Vec<String> = bundle
@@ -793,16 +777,15 @@ fn run_bundle_lookup(key: &str, format: OutputFormat) -> Result<(), CliError> {
                 .map(|e| format!("  {}:{}", kind, e.key))
                 .collect();
             let hint = if near.is_empty() {
-                String::from("  (no entries in this kind)")
+                text::TerminalBlock::lines(["  (no entries in this kind)"])
             } else {
-                near.join("\n")
+                text::TerminalBlock::lines(near)
             };
-            Err(CliError::UsageOwned(format!(
-                "ipe doc: no `{kind}` entry for key `{k}`\n\
-                 Nearby keys:\n{hint}"
+            Err(CliError::Usage(text::msg::doc_no_entry_for_key(
+                &kind, &k, &hint,
             )))
         }
-        Err(e) => Err(CliError::UsageOwned(format!("ipe doc: {e}"))),
+        Err(e) => Err(CliError::Usage(text::msg::command_refusal(&"doc", &e))),
     }
 }
 
@@ -815,60 +798,124 @@ fn run_doc_lookup_with_fuzzy(key: &str, format: OutputFormat) -> Result<(), CliE
     // Try the legacy exact index first.
     let index = build_index()?;
     if let Some(entry) = index.resolve(key) {
-        let stdout = std::io::stdout();
+        use crate::screen::{Screen, Stream, emit_machine};
         match format {
-            OutputFormat::Plain => print!("{}", render_doc_entry_plain(entry)),
-            OutputFormat::Json => print!("{}", render_doc_entry_json(entry)),
+            OutputFormat::Plain => emit_machine(Stream::Stdout, &render_doc_entry_plain(entry)),
+            OutputFormat::Json => emit_machine(Stream::Stdout, &render_doc_entry_json(entry)),
             OutputFormat::Human => {
-                let p = crate::style::Palette::for_stream(&stdout);
-                print!(
-                    "{}",
-                    crate::style::frame(&crate::style::gutter(&render_doc_entry_human(entry, p)))
-                );
+                let mut screen = Screen::new(Stream::Stdout);
+                let body = render_doc_entry_human(entry, screen.palette());
+                screen.styled(&body).emit();
             }
         }
         return Ok(());
     }
 
-    // No exact match: try fuzzy across the bundle.
-    let docs_root = locate_docs_root();
-    let bundle = build_doc_bundle(&docs_root)?;
-    let results = fuzzy_rank(&bundle, key);
-
-    if results.is_empty() {
-        return Err(CliError::UsageOwned(format!(
-            "ipe doc: no documentation found for `{key}`\n\
-             \n\
-             Try `ipe doc list` to browse available entries."
-        )));
+    // A member of a module the index does not carry (a project module).
+    if let Some((module, member)) = resolve_member(key) {
+        render_member(&module, &member, format);
+        return Ok(());
     }
 
-    // One clear best: render it.
-    let Some(first) = results.first() else {
-        // Already checked `results.is_empty()` above; this branch is unreachable.
-        return Ok(());
-    };
-    let best_score = first.score;
-    let close: Vec<_> = results
-        .iter()
-        .take_while(|r| r.score >= best_score.saturating_sub(200))
+    // No exact match: a unique exact key of a kind the index does not carry (a
+    // topic, guide, or idiom) opens directly; anything else is a miss that
+    // lists the closest entries of every kind.
+    let docs_root = locate_docs_root();
+    let bundle = build_doc_bundle(&docs_root)?;
+    let exact: Vec<_> = fuzzy_rank(&bundle, key)
+        .into_iter()
+        .filter(|r| r.score >= crate::doc_bundle::EXACT_SCORE)
         .collect();
-
-    if let [only] = close.as_slice() {
+    if let [only] = exact.as_slice() {
         render_bundle_entry(only.entry, format);
         return Ok(());
     }
+    Err(doc_miss(key, &bundle, format))
+}
 
-    // Several close results: print a ranked disambiguation list.
-    let mut list = format!("ipe doc: `{key}` is ambiguous. Did you mean one of:\n");
-    for r in &results {
-        let _ = writeln!(
-            list,
-            "  {}:{} -- {}",
-            r.entry.kind, r.entry.key, r.entry.title
-        );
+/// The error for a query that named no entry: [`CliError::DocNotFound`] with the closest entries of
+/// any kind.
+///
+/// Under a machine format it is written as the machine error envelope instead of the human frame.
+fn doc_miss(query: &str, bundle: &DocBundle, format: OutputFormat) -> CliError {
+    let err = CliError::DocNotFound {
+        query: query.to_owned(),
+        suggestions: crate::doc_bundle::suggestions_for(bundle, query),
+    };
+    match format {
+        OutputFormat::Human => err,
+        OutputFormat::Plain | OutputFormat::Json => {
+            crate::driver::emit_machine_error(format, "doc", &err)
+        }
     }
-    Err(CliError::UsageOwned(list))
+}
+
+/// Resolve `Module.member` to the module's doc and the member's name.
+///
+/// Matches (`Ipe.Time.unixMillis`, `Main.helper`) when the module exists and
+/// exposes a value or type of that name.
+fn resolve_member(key: &str) -> Option<(ModuleDoc, String)> {
+    let (module_name, member) = key.rsplit_once('.')?;
+    let module = find_module_doc(module_name)?;
+    let exposed = module.values.iter().any(|v| v.name == member)
+        || module.unions.iter().any(|u| u.name == member);
+    exposed.then(|| (module, member.to_owned()))
+}
+
+/// Find a module's doc by name: a project module first (it shadows the
+/// standard library), then the standard library.
+fn find_module_doc(module_name: &str) -> Option<ModuleDoc> {
+    query_project_modules()
+        .into_iter()
+        .find(|m| m.name == module_name)
+        .or_else(|| query_single_stdlib_module(module_name))
+}
+
+/// Render one member of `module` per `format`: its signature (or type
+/// declaration) and its doc comment.
+fn render_member(module: &ModuleDoc, member: &str, format: OutputFormat) {
+    use crate::screen::{Screen, Stream, Tone, emit_machine};
+    let key = format!("{}.{member}", module.name);
+    let value = module.values.iter().find(|v| v.name == member);
+    let union = module.unions.iter().find(|u| u.name == member);
+    let (declaration, comment) = match (value, union) {
+        (Some(v), _) => (format!("{} : {}", v.name, v.signature), v.comment.as_str()),
+        (None, Some(u)) => (
+            format!("type {}{}", u.name, union_params(u.params)),
+            u.comment.as_str(),
+        ),
+        (None, None) => (key.clone(), ""),
+    };
+    match format {
+        OutputFormat::Plain => {
+            let mut out = declaration;
+            out.push('\n');
+            if !comment.is_empty() {
+                out.push_str(comment);
+                out.push('\n');
+            }
+            emit_machine(Stream::Stdout, &out);
+        }
+        OutputFormat::Json => {
+            let out = format!(
+                "{{\"kind\":\"symbol\",\"key\":{},\"text\":{}}}\n",
+                json_string(&key),
+                json_string(&format!("{declaration}\n{comment}")),
+            );
+            emit_machine(Stream::Stdout, &out);
+        }
+        OutputFormat::Human => {
+            let mut screen = Screen::new(Stream::Stdout);
+            screen
+                .line(Tone::Text, &format!("{key}  [symbol]"))
+                .blank()
+                .line(Tone::Success, &declaration);
+            if !comment.is_empty() {
+                screen.blank().line(Tone::Text, comment);
+            }
+            screen.emit();
+        }
+    }
 }
 
 /// `ipe doc --type "<type expr>"` — search the stdlib API by type signature.
@@ -883,7 +930,7 @@ fn run_type_search(query: &str, format: OutputFormat) -> Result<(), CliError> {
         TypeSearchError, render_type_matches_human, render_type_matches_json, type_search,
     };
 
-    let docs = build_docs(&PathBuf::from(DEFAULT_PATH))?;
+    let (docs, _) = build_docs(&PathBuf::from(DEFAULT_PATH))?;
     let hits = type_search(&docs.modules, query, 20).map_err(TypeSearchError::into_cli_error)?;
 
     let stdout = std::io::stdout();
@@ -891,26 +938,28 @@ fn run_type_search(query: &str, format: OutputFormat) -> Result<(), CliError> {
         OutputFormat::Plain | OutputFormat::Human => {
             let text = render_type_matches_human(&hits);
             if text.is_empty() {
-                return Err(CliError::UsageOwned(format!(
-                    "ipe doc --type: no symbols match `{query}`"
-                )));
+                return Err(CliError::Usage(text::msg::doc_type_no_match(&query)));
             }
             if matches!(format, OutputFormat::Human) {
                 let p = crate::style::Palette::for_stream(&stdout);
                 let header = format!(
                     "{}Type-signature matches for `{}`{}\n\n",
-                    p.bold, query, p.reset
+                    p.bold,
+                    crate::style::TerminalSafe::sanitize(query),
+                    p.reset
                 );
-                print!(
-                    "{}",
-                    crate::style::frame(&crate::style::gutter(&format!("{header}{text}")))
-                );
+                crate::screen::Screen::new(crate::screen::Stream::Stdout)
+                    .styled(&format!("{header}{text}"))
+                    .emit();
             } else {
-                print!("{text}");
+                crate::screen::emit_machine(crate::screen::Stream::Stdout, &text);
             }
         }
         OutputFormat::Json => {
-            println!("{}", render_type_matches_json(&hits));
+            crate::screen::emit_machine(
+                crate::screen::Stream::Stdout,
+                &format!("{}\n", render_type_matches_json(&hits)),
+            );
         }
     }
     Ok(())
@@ -918,26 +967,28 @@ fn run_type_search(query: &str, format: OutputFormat) -> Result<(), CliError> {
 
 /// Render a [`crate::doc_bundle::DocEntry`] per the requested output format.
 fn render_bundle_entry(entry: &crate::doc_bundle::DocEntry, format: OutputFormat) {
-    let stdout = std::io::stdout();
+    use crate::screen::{Screen, Stream, emit_machine};
     match format {
         OutputFormat::Plain => {
             let mut out = entry.body.clone();
             if !out.ends_with('\n') {
                 out.push('\n');
             }
-            print!("{out}");
+            emit_machine(Stream::Stdout, &out);
         }
         OutputFormat::Json => {
-            println!(
-                "{{\"kind\":{},\"key\":{},\"title\":{},\"body\":{}}}",
+            let out = format!(
+                "{{\"kind\":{},\"key\":{},\"title\":{},\"body\":{}}}\n",
                 json_string(entry.kind.prefix()),
                 json_string(&entry.key),
                 json_string(&entry.title),
                 json_string(&entry.body),
             );
+            emit_machine(Stream::Stdout, &out);
         }
         OutputFormat::Human => {
-            let p = crate::style::Palette::for_stream(&stdout);
+            let mut screen = Screen::new(Stream::Stdout);
+            let p = screen.palette();
             let mut out = String::new();
             let _ = writeln!(
                 out,
@@ -951,7 +1002,7 @@ fn render_bundle_entry(entry: &crate::doc_bundle::DocEntry, format: OutputFormat
                     out.push('\n');
                 }
             }
-            print!("{}", crate::style::frame(&crate::style::gutter(&out)));
+            screen.styled(&out).emit();
         }
     }
 }
@@ -1104,14 +1155,6 @@ pub enum ModuleKind {
     Stdlib,
 }
 
-/// The section label for the user's own project modules, shared by every
-/// rendering (console listing and generated HTML) so the phrasing lives once.
-const LABEL_PROJECT: &str = "Project modules";
-
-/// The section label for the bundled standard library, shared by every
-/// rendering so the phrasing lives once.
-const LABEL_STDLIB: &str = "Standard library";
-
 /// The stable machine tag a `docs.json` consumer reads to group a module.
 const fn module_kind_tag(kind: ModuleKind) -> &'static str {
     match kind {
@@ -1188,14 +1231,17 @@ struct Undocumented {
 /// Build the in-memory [`DocsJson`] for the package at `path`, including both
 /// project modules and all stdlib modules (compiled-source + kernel-backed).
 ///
-/// Project modules go through the existing `extract_tree` + `read_tree` pipeline.
+/// Project modules go through one `read_tree` walk + `extract_walked`.
 /// Compiled-source stdlib modules go through the same type-checker path.
 /// Kernel-qualifier stdlib modules use [`kernel_type_table`] for signatures.
 ///
 /// Modules are listed in name order: stdlib first (alphabetically), then project.
-fn build_docs(path: &Path) -> Result<DocsJson, CliError> {
-    let api: PublicApi = extract_tree(path).map_err(CliError::from)?;
-    let sources = read_tree(path).map_err(CliError::from)?;
+/// The API and the doc comments come from ONE walk, whose root is returned as
+/// the [`DocInputs::Tree`] the build read.
+fn build_docs(path: &Path) -> Result<(DocsJson, DocInputs), CliError> {
+    let walked = read_tree(path).map_err(CliError::from)?;
+    let api: PublicApi = extract_walked(&walked).map_err(CliError::from)?;
+    let sources = &walked.modules;
 
     // Collect project modules.
     let mut project_modules: Vec<ModuleDoc> = Vec::with_capacity(api.modules.len());
@@ -1225,11 +1271,12 @@ fn build_docs(path: &Path) -> Result<DocsJson, CliError> {
     let mut modules = project_modules;
     modules.extend(stdlib);
 
-    Ok(DocsJson {
+    let docs = DocsJson {
         version: DOCS_JSON_VERSION,
         modules,
         disclosure: package_disclosure(path)?,
-    })
+    };
+    Ok((docs, DocInputs::Tree(walked.root)))
 }
 
 /// The package's compiler-derived disclosure (control model + capability set),
@@ -1268,8 +1315,9 @@ fn package_disclosure(path: &Path) -> Result<Option<PackageDisclosure>, CliError
 ///
 /// Used by `check` — stdlib modules are exempt from the coverage gate.
 fn build_project_docs(path: &Path) -> Result<DocsJson, CliError> {
-    let api: PublicApi = extract_tree(path).map_err(CliError::from)?;
-    let sources = read_tree(path).map_err(CliError::from)?;
+    let walked = read_tree(path).map_err(CliError::from)?;
+    let api: PublicApi = extract_walked(&walked).map_err(CliError::from)?;
+    let sources = &walked.modules;
 
     let mut modules = Vec::with_capacity(api.modules.len());
     for (module_path, module_api) in &api.modules {
@@ -1516,7 +1564,7 @@ fn build_kernel_module_docs() -> Result<BTreeMap<String, ModuleDoc>, CliError> {
     // Get the full type table for all kernel functions.
     let mut interner = Interner::new();
     let type_table = kernel_type_table(&mut interner)
-        .map_err(|d| CliError::UsageOwned(format!("ipe doc: kernel type table error: {d:?}")))?;
+        .map_err(|d| CliError::Usage(text::msg::doc_kernel_table_error(&format!("{d:?}"))))?;
 
     // Group by module path and build ValueDoc for each kernel.
     let mut by_module: BTreeMap<String, Vec<ValueDoc>> = BTreeMap::new();
@@ -1566,7 +1614,8 @@ fn build_kernel_module_docs() -> Result<BTreeMap<String, ModuleDoc>, CliError> {
 /// * `--plain`: one bare module name per line, no framing.
 /// * `--json`: `{"modules":["Ipe.List","Ipe.String",…]}`.
 fn list_modules(path: &Path, format: OutputFormat) {
-    use crate::style::{GUTTER, frame};
+    use crate::screen::{Screen, Stream, emit_machine};
+    use crate::style::GUTTER;
 
     // Collect stdlib names.
     let stdlib: Vec<String> = stdlib_module_names();
@@ -1575,8 +1624,8 @@ fn list_modules(path: &Path, format: OutputFormat) {
     // so `--list` always succeeds for stdlib).
     let project: Vec<String> = read_tree(path).map_or_else(
         |_| Vec::new(),
-        |sources| {
-            let mut names: Vec<String> = sources.keys().map(|p| p.join(".")).collect();
+        |walked| {
+            let mut names: Vec<String> = walked.modules.keys().map(|p| p.join(".")).collect();
             names.sort();
             names
         },
@@ -1601,23 +1650,28 @@ fn list_modules(path: &Path, format: OutputFormat) {
             // namespace hierarchy is presented in the human listing, the
             // Markdown index, and the HTML nav (which can show pure-prefix
             // headers a plain, machine-readable list must not).
+            let mut out = String::new();
             for name in &ordered {
-                println!("{name}");
+                let _ = writeln!(out, "{name}");
             }
+            emit_machine(Stream::Stdout, &out);
         }
         OutputFormat::Json => {
             let names: Vec<&str> = ordered.iter().map(|n| n.as_str()).collect();
-            println!(
-                "{}",
-                crate::cli_args::json::object(&[(
-                    "modules",
-                    crate::cli_args::json::string_array(&names),
-                )])
-            );
+            let out = crate::cli_args::json::object(&[(
+                "modules",
+                crate::cli_args::json::string_array(&names),
+            )]);
+            emit_machine(Stream::Stdout, &format!("{out}\n"));
         }
         OutputFormat::Human => {
             let mut body = String::new();
-            let _ = writeln!(body, "{GUTTER}{LABEL_PROJECT} ({}):\n", project_names.len());
+            let _ = writeln!(
+                body,
+                "{GUTTER}{} ({}):\n",
+                crate::text::site_project_modules(),
+                project_names.len()
+            );
             if project_names.is_empty() {
                 let _ = writeln!(body, "{GUTTER}  (none)\n");
             } else {
@@ -1630,7 +1684,12 @@ fn list_modules(path: &Path, format: OutputFormat) {
                 }
                 body.push('\n');
             }
-            let _ = writeln!(body, "{GUTTER}{LABEL_STDLIB} ({}):\n", stdlib_names.len());
+            let _ = writeln!(
+                body,
+                "{GUTTER}{} ({}):\n",
+                crate::text::site_standard_library(),
+                stdlib_names.len()
+            );
             let stdlib_refs: Vec<&str> = stdlib_names.iter().map(String::as_str).collect();
             let tree = build_namespace_tree(&stdlib_refs);
             let mut tree_out = String::new();
@@ -1638,7 +1697,10 @@ fn list_modules(path: &Path, format: OutputFormat) {
             for line in tree_out.lines() {
                 let _ = writeln!(body, "{GUTTER}  {line}");
             }
-            print!("{}", frame(body.trim_end_matches('\n')));
+            // Module names come from project source: sanitise before framing.
+            Screen::new(Stream::Stdout)
+                .guttered(crate::style::TerminalSafe::sanitize(&body).as_str())
+                .emit();
         }
     }
 }
@@ -1650,10 +1712,11 @@ fn list_modules(path: &Path, format: OutputFormat) {
 fn query_project_modules() -> Vec<ModuleDoc> {
     read_tree(Path::new(DEFAULT_PATH)).map_or_else(
         |_| Vec::new(),
-        |sources| {
-            let Ok(api) = extract_tree(Path::new(DEFAULT_PATH)) else {
+        |walked| {
+            let Ok(api) = extract_walked(&walked) else {
                 return Vec::new();
             };
+            let sources = &walked.modules;
             api.modules
                 .iter()
                 .map(|(module_path, module_api)| {
@@ -1670,7 +1733,7 @@ fn query_project_modules() -> Vec<ModuleDoc> {
 
 /// Render a single [`ModuleDoc`] in human-readable guttered form.
 fn render_module_human(module: &ModuleDoc, index: &AnchorIndex) {
-    use crate::style::{GUTTER, frame};
+    use crate::style::GUTTER;
 
     let md = module.comment.as_str();
     let mut body = format!("{GUTTER}{}\n\n", module.name);
@@ -1704,7 +1767,10 @@ fn render_module_human(module: &ModuleDoc, index: &AnchorIndex) {
             let _ = writeln!(body, "{GUTTER}    {}", value.comment);
         }
     }
-    print!("{}", frame(body.trim_end_matches('\n')));
+    // Doc comments and names are project source text: sanitise before framing.
+    crate::screen::Screen::new(crate::screen::Stream::Stdout)
+        .guttered(crate::style::TerminalSafe::sanitize(&body).as_str())
+        .emit();
 }
 
 /// Query one module's API and render it per `format`.
@@ -1723,10 +1789,14 @@ fn query_module(module_name: &str, format: OutputFormat) -> Result<(), CliError>
         .or_else(|| query_single_stdlib_module(module_name));
 
     let Some(module) = found else {
-        return Err(CliError::UsageOwned(format!(
-            "ipe doc: unknown module `{module_name}` (IPE-N0004)\n\
-             Run `ipe doc list` to see all available modules."
-        )));
+        // `Module.member` (a type or an uppercase-led value path) or a miss:
+        // resolve the member, else suggest the closest entries of any kind.
+        if let Some((owner, member)) = resolve_member(module_name) {
+            render_member(&owner, &member, format);
+            return Ok(());
+        }
+        let bundle = build_doc_bundle(&locate_docs_root())?;
+        return Err(doc_miss(module_name, &bundle, format));
     };
 
     // Build a single-module DocsJson for the anchor index (cross-reference
@@ -1741,17 +1811,20 @@ fn query_module(module_name: &str, format: OutputFormat) -> Result<(), CliError>
     match format {
         OutputFormat::Plain => {
             // Flush-left: one entry per line, `name : signature`.
+            let mut out = String::new();
             for union in &module.unions {
-                println!("type {}{}", union.name, union_params(union.params));
+                let _ = writeln!(out, "type {}{}", union.name, union_params(union.params));
             }
             for value in &module.values {
-                println!("{} : {}", value.name, value.signature);
+                let _ = writeln!(out, "{} : {}", value.name, value.signature);
             }
+            crate::screen::emit_machine(crate::screen::Stream::Stdout, &out);
         }
         OutputFormat::Json => {
             let mut out = String::new();
             render_module_json(&mut out, &module, &index);
-            println!("{out}");
+            out.push('\n');
+            crate::screen::emit_machine(crate::screen::Stream::Stdout, &out);
         }
         OutputFormat::Human => {
             render_module_human(&module, &index);
@@ -2478,18 +2551,22 @@ struct SearchEntry {
 /// [`build_docs_or_stdlib`].
 fn generate(path: &Path, out: &Path, write_format: WriteFormat) -> Result<(), CliError> {
     crate::style::print_command_header();
-    let docs = build_docs_or_stdlib(path)?;
+    let (docs, inputs) = build_docs_or_stdlib(path)?;
     let docs_root = locate_docs_root();
     let bundle = build_doc_bundle(&docs_root)?;
 
     let (json_files, markdown_files, html_files) = render_site_split(&docs, &bundle, write_format);
 
-    write_format_dir(out, "json", &json_files)?;
+    // The site overwrites same-named files, so it is written only into a
+    // directory ipe owns and proven disjoint from the documented package —
+    // never over a user's own `doc/`, the package itself, or the tree it read.
+    let site = claim_site(path, &inputs, out)?;
+    write_format_dir(&site, "json", &json_files)?;
     if write_format.wants_markdown() {
-        write_format_dir(out, "markdown", &markdown_files)?;
+        write_format_dir(&site, "markdown", &markdown_files)?;
     }
     if write_format.wants_html() {
-        write_format_dir(out, "html", &html_files)?;
+        write_format_dir(&site, "html", &html_files)?;
     }
 
     // Disclose the package's compiler-derived control model + capability set — the
@@ -2500,53 +2577,83 @@ fn generate(path: &Path, out: &Path, write_format: WriteFormat) -> Result<(), Cl
         } else {
             disclosure.capabilities.join(", ")
         };
-        print!(
-            "{}",
-            crate::style::status_line(
-                true,
-                &crate::style::TerminalSafe::sanitize(&format!(
-                    "control model: {}; capabilities: {caps}",
-                    disclosure.control_model,
-                )),
-                crate::style::use_color(&std::io::stdout()),
-            )
+        crate::screen::status(
+            crate::screen::Stream::Stdout,
+            true,
+            &crate::style::TerminalSafe::sanitize(&format!(
+                "control model: {}; capabilities: {caps}",
+                disclosure.control_model,
+            )),
         );
     }
 
-    print!(
-        "{}",
-        crate::style::status_line(
-            true,
-            &crate::style::TerminalSafe::sanitize(&format!(
-                "documented {} module{} to {}",
-                docs.modules.len(),
-                if docs.modules.len() == 1 { "" } else { "s" },
-                out.display()
-            )),
-            crate::style::use_color(&std::io::stdout()),
-        )
+    crate::screen::status(
+        crate::screen::Stream::Stdout,
+        true,
+        &crate::style::TerminalSafe::sanitize(&format!(
+            "documented {} module{} to {}",
+            docs.modules.len(),
+            if docs.modules.len() == 1 { "" } else { "s" },
+            out.display()
+        )),
     );
     Ok(())
 }
 
-/// Write every file in `files` into `<base>/<subdir>/`, creating the directory
-/// when absent.
+/// Claim `out` as the site directory for the package at `path`.
+///
+/// `out` is proven disjoint from the package root, its manifest sources, and
+/// the module tree `inputs` names before it is claimed; a package directory
+/// without a manifest is its own root.
 ///
 /// # Errors
+/// [`CliError::OutputRefused`] when `out` is the package, holds it, overlaps
+/// a source tree, or is not ipe's; a manifest parse error.
+fn claim_site(
+    path: &Path,
+    inputs: &DocInputs,
+    out: &Path,
+) -> Result<crate::output_dir::OwnedDir, CliError> {
+    use crate::output_dir::{OutputRoot, ProjectPaths};
+    let project = match crate::project::manifest_in_dir(path) {
+        Some(manifest) => ProjectPaths::from_manifest(&crate::project::parse_manifest(&manifest)?),
+        None if path.is_dir() => ProjectPaths::of_file(path),
+        None => ProjectPaths::discover(path)?,
+    };
+    let project = match inputs {
+        DocInputs::Tree(tree) => project.with_sources(tree),
+        DocInputs::StdlibOnly => project,
+    };
+    OutputRoot::at(out, &project)?.claim()
+}
+
+/// The project inputs a documentation build read.
+#[derive(Debug)]
+enum DocInputs {
+    /// The module tree walked ([`crate::api_surface::WalkedTree::root`]): a file,
+    /// `src/`, or a flat directory.
+    Tree(PathBuf),
+    /// No project module was read; the site documents the stdlib alone.
+    StdlibOnly,
+}
+
+/// Write every file in `files` into `<site>/<subdir>/`.
+///
+/// Each file is an [`crate::output_dir::OwnedPath`], so a symlink planted
+/// anywhere in the owned site is refused rather than written through.
+///
+/// # Errors
+/// [`CliError::OutputRefused`] for a symlink or non-plain name on the way;
 /// [`CliError::Io`] on any filesystem failure.
 fn write_format_dir(
-    base: &Path,
+    site: &crate::output_dir::OwnedDir,
     subdir: &str,
     files: &BTreeMap<String, String>,
 ) -> Result<(), CliError> {
-    let dir = base.join(subdir);
-    std::fs::create_dir_all(&dir).map_err(|e| crate::io_err(&dir, e))?;
+    site.path_to(subdir)?.ensure_dir()?;
     for (name, contents) in files {
-        let file_path = dir.join(name);
-        if let Some(parent) = file_path.parent() {
-            std::fs::create_dir_all(parent).map_err(|e| crate::io_err(parent, e))?;
-        }
-        std::fs::write(&file_path, contents).map_err(|e| crate::io_err(&file_path, e))?;
+        site.path_to(Path::new(subdir).join(name))?
+            .write(contents.as_bytes())?;
     }
     Ok(())
 }
@@ -2562,16 +2669,20 @@ fn write_format_dir(
 /// every project module.
 ///
 /// # Errors
-/// Any non-empty [`build_docs`] failure — [`CliError::Io`], a typecheck
-/// [`CliError::Diff`], or an open-interface [`CliError::Diff`].
-fn build_docs_or_stdlib(path: &Path) -> Result<DocsJson, CliError> {
-    match build_docs(path) {
-        Ok(docs) => Ok(docs),
-        Err(CliError::Diff(crate::api_surface::DiffError::Empty { .. })) => {
-            Ok(build_stdlib_only_docs())
+/// Any non-empty [`build_docs`] failure: [`CliError::DiscoveryLimitReached`]
+/// for a real symlink cycle or a tree deeper than the discovery depth
+/// ceiling; [`CliError::Diff`] wrapping [`crate::api_surface::DiffError::Io`]
+/// for an unreadable module or source directory; [`CliError::Diff`] wrapping
+/// [`crate::api_surface::DiffError::Typecheck`] for a typecheck failure; or
+/// [`CliError::Diff`] wrapping [`crate::api_surface::DiffError::OpenInterface`]
+/// for an open interface.
+fn build_docs_or_stdlib(path: &Path) -> Result<(DocsJson, DocInputs), CliError> {
+    build_docs(path).or_else(|err| match err {
+        CliError::Diff(crate::api_surface::DiffError::Empty { .. }) => {
+            Ok((build_stdlib_only_docs(), DocInputs::StdlibOnly))
         }
-        Err(other) => Err(other),
-    }
+        other => Err(other),
+    })
 }
 
 /// Build a stdlib-only [`DocsJson`] without accessing any project on disk.
@@ -2628,12 +2739,12 @@ fn check(path: &Path) -> Result<(), CliError> {
     }
 
     if gaps.is_empty() {
-        print!(
-            "{}",
-            crate::style::frame(&crate::style::gutter(&format!(
-                "all {exposed} exposed binding(s) are documented"
-            )))
-        );
+        crate::screen::Screen::new(crate::screen::Stream::Stdout)
+            .line(
+                crate::screen::Tone::Text,
+                &format!("all {exposed} exposed binding(s) are documented"),
+            )
+            .emit();
         return Ok(());
     }
 
@@ -2649,7 +2760,9 @@ fn check(path: &Path) -> Result<(), CliError> {
         report,
         "add a `-- |` comment above each, or hide it from the module's exposing list"
     );
-    Err(CliError::DocCoverage(report))
+    Err(CliError::DocCoverage(crate::style::TerminalSafe::sanitize(
+        &report,
+    )))
 }
 
 /// One extracted doc-string example awaiting verification.
@@ -2940,13 +3053,13 @@ fn child_shared_target_dir() -> Option<std::ffi::OsString> {
         (!trimmed.is_empty() && std::path::Path::new(trimmed).is_absolute())
             .then(|| std::ffi::OsString::from(trimmed))
     }
-    if let Some(shared) = std::env::var("IPE_ORACLE_SHARED_TARGET")
+    if let Some(shared) = ipe_env::var("IPE_ORACLE_SHARED_TARGET")
         .ok()
         .and_then(|raw| non_empty_absolute(&raw))
     {
         return Some(shared);
     }
-    std::env::var("CARGO_TARGET_DIR").ok().and_then(|raw| {
+    ipe_env::var("CARGO_TARGET_DIR").ok().and_then(|raw| {
         let trimmed = raw.trim();
         (!trimmed.is_empty()).then(|| std::ffi::OsString::from(trimmed))
     })
@@ -3067,12 +3180,19 @@ fn check_examples() -> Result<(), CliError> {
             // Tier 1: type-check the example (always).
             match crate::typecheck_entry_via_graph(&snippet_path) {
                 Ok(()) => {
-                    eprintln!("  ok   {}", ex.label);
+                    crate::screen::chatter(
+                        crate::screen::Stream::Stderr,
+                        crate::screen::Tone::Success,
+                        &format!("ok   {}", ex.label),
+                    );
                     passed += 1;
                 }
                 Err(err) => {
-                    eprintln!("  FAIL {}: does not type-check", ex.label);
-                    eprintln!("       {err}");
+                    crate::screen::chatter(
+                        crate::screen::Stream::Stderr,
+                        crate::screen::Tone::UserError,
+                        &format!("FAIL {}: does not type-check\n     {err}", ex.label),
+                    );
                     failed.push(format!("{}: does not type-check", ex.label));
                     // Skip result-checking for examples that don't even type-check.
                     continue;
@@ -3082,12 +3202,16 @@ fn check_examples() -> Result<(), CliError> {
             // Tier 2: if the example has `-->` annotations AND IPE_E2E=1 is set,
             // run the example and assert its printed output.
             if !ex.expected_results.is_empty()
-                && std::env::var_os("IPE_E2E").is_some_and(|v| v == "1")
+                && ipe_env::var_os("IPE_E2E").is_some_and(|v| v == "1")
             {
                 match run_example_and_check(&snippet_path, &ex.label, &ex.expected_results) {
                     Ok(()) => {}
                     Err(msg) => {
-                        eprintln!("  FAIL {msg}");
+                        crate::screen::chatter(
+                            crate::screen::Stream::Stderr,
+                            crate::screen::Tone::UserError,
+                            &format!("FAIL {msg}"),
+                        );
                         failed.push(msg);
                     }
                 }
@@ -3095,16 +3219,21 @@ fn check_examples() -> Result<(), CliError> {
         }
     }
 
-    eprintln!();
-    eprintln!("=== doc-example gate: {passed}/{total} passed ===");
+    crate::screen::Screen::new(crate::screen::Stream::Stderr)
+        .blank()
+        .line(
+            crate::screen::Tone::Text,
+            &format!("doc-example gate: {passed}/{total} passed"),
+        )
+        .emit_chatter();
 
     if failed.is_empty() {
-        print!(
-            "{}",
-            crate::style::frame(&crate::style::gutter(&format!(
-                "all {total} doc-string example(s) type-check"
-            )))
-        );
+        crate::screen::Screen::new(crate::screen::Stream::Stdout)
+            .line(
+                crate::screen::Tone::Text,
+                &format!("all {total} doc-string example(s) type-check"),
+            )
+            .emit();
         Ok(())
     } else {
         let mut report = format!(
@@ -3119,7 +3248,9 @@ fn check_examples() -> Result<(), CliError> {
             report,
             "fix each failing example or mark it with ` ```ipe ipe:skip ` to exempt it"
         );
-        Err(CliError::DocExamplesFailed(report))
+        Err(CliError::DocExamplesFailed(
+            crate::style::TerminalSafe::sanitize(&report),
+        ))
     }
 }
 
@@ -3455,14 +3586,14 @@ fn render_markdown_index(docs: &DocsJson) -> String {
         .collect();
 
     if !project_names.is_empty() {
-        let _ = writeln!(out, "## {LABEL_PROJECT}\n");
+        let _ = writeln!(out, "## {}\n", crate::text::site_project_modules());
         let tree = build_namespace_tree(&project_names);
         render_markdown_tree(&tree, 0, &mut out);
         out.push('\n');
     }
 
     if !stdlib_names.is_empty() {
-        let _ = writeln!(out, "## {LABEL_STDLIB}\n");
+        let _ = writeln!(out, "## {}\n", crate::text::site_standard_library());
         let tree = build_namespace_tree(&stdlib_names);
         render_markdown_tree(&tree, 0, &mut out);
     }
@@ -3864,75 +3995,101 @@ enum NavSection {
 /// current page (empty string `""` for root-level pages, `"../"` for pages
 /// one directory deep). The active section is highlighted.
 fn render_header(active: NavSection, base: &str, search_script: &str) -> String {
+    use crate::text;
+
     let link = |section: NavSection, href: &str, label: &str| -> String {
         let cls = if active == section {
             " class=\"active\""
         } else {
             ""
         };
-        format!("<a href=\"{base}{href}\"{cls}>{label}</a>")
+        format!("<a href=\"{base}{href}\"{cls}>{}</a>", html_escape(label))
     };
-    let mut h = String::from(
-        "<a class=\"skip-link\" href=\"#content\">Skip to content</a>\n\
-         <nav class=\"site-header\" aria-label=\"Site\">\n",
+    let mut h = format!(
+        "<a class=\"skip-link\" href=\"#content\">{}</a>\n\
+         <nav class=\"site-header\" aria-label=\"{}\">\n",
+        html_escape(text::site_skip_link()),
+        html_escape(text::site_nav_label()),
     );
     // The full title on desktop; the mobile CSS swaps in the short form via a
     // second span — never a bare \"Ipê docs\" (issue #1874, item 20).
     let _ = writeln!(
         h,
         "<a class=\"site-title\" href=\"{base}index.html\">\
-         <span class=\"title-full\">Ip\u{ea} language documentation</span>\
-         <span class=\"title-short\">Ip\u{ea} language docs</span></a>"
+         <span class=\"title-full\">{}</span>\
+         <span class=\"title-short\">{}</span></a>",
+        html_escape(text::site_title_full()),
+        html_escape(text::site_title_short()),
     );
-    h.push_str(
+    let _ = writeln!(
+        h,
         "<button class=\"nav-toggle\" id=\"nav-toggle\" type=\"button\" \
-         aria-label=\"Menu\" aria-expanded=\"false\" aria-controls=\"nav-links\">\
+         aria-label=\"{}\" aria-expanded=\"false\" aria-controls=\"nav-links\">\
          <span class=\"nav-toggle-open\">\u{2630}</span>\
-         <span class=\"nav-toggle-close\">\u{2715}</span></button>\n",
+         <span class=\"nav-toggle-close\">\u{2715}</span></button>",
+        html_escape(text::site_menu_label()),
     );
     h.push_str("<div class=\"nav-links\" id=\"nav-links\">\n");
-    h.push_str(&link(NavSection::Guide, "guide/index.html", "Guides"));
+    h.push_str(&link(
+        NavSection::Guide,
+        "guide/index.html",
+        text::site_guides(),
+    ));
     h.push('\n');
-    h.push_str(&link(NavSection::Topic, "topic/index.html", "Topics"));
+    h.push_str(&link(
+        NavSection::Topic,
+        "topic/index.html",
+        text::site_topics(),
+    ));
     h.push('\n');
-    h.push_str(&link(NavSection::Idiom, "idiom/index.html", "Idioms"));
+    h.push_str(&link(
+        NavSection::Idiom,
+        "idiom/index.html",
+        text::site_idioms(),
+    ));
     h.push('\n');
     h.push_str(&link(
         NavSection::Construct,
         "construct/index.html",
-        "Constructs",
+        text::site_constructs(),
     ));
     h.push('\n');
     h.push_str("<span class=\"sep\" aria-hidden=\"true\">\u{2502}</span>\n");
     h.push_str(&link(
         NavSection::Reference,
         "module/index.html",
-        "Reference",
+        text::site_reference(),
     ));
     h.push('\n');
     h.push_str(&link(
         NavSection::Diagnostic,
         "diagnostic/index.html",
-        "Diagnostics",
+        text::site_diagnostics(),
     ));
     h.push('\n');
-    h.push_str(&link(NavSection::Cli, "cli/index.html", "CLI"));
+    h.push_str(&link(NavSection::Cli, "cli/index.html", text::site_cli()));
     h.push('\n');
-    h.push_str(
+    let _ = writeln!(
+        h,
         "<span class=\"search-wrap\" role=\"search\">\
          <input type=\"search\" id=\"nav-search\" class=\"nav-search\" \
-         placeholder=\"Search\u{2026}\" aria-label=\"Search documentation\" \
+         placeholder=\"{}\" aria-label=\"{}\" \
          role=\"combobox\" aria-expanded=\"false\" aria-controls=\"search-results\" \
          aria-autocomplete=\"list\" autocomplete=\"off\">\
          <ul class=\"search-results\" id=\"search-results\" role=\"listbox\" \
-         aria-label=\"Search results\"></ul>\
-         </span>\n",
+         aria-label=\"{}\"></ul>\
+         </span>",
+        html_escape(text::site_search_placeholder()),
+        html_escape(text::site_search_label()),
+        html_escape(text::site_search_results_label()),
     );
-    h.push_str(
+    let _ = writeln!(
+        h,
         "<button class=\"theme-toggle\" id=\"theme-toggle\" type=\"button\" \
-         aria-label=\"Toggle light and dark theme\" aria-pressed=\"false\">\
+         aria-label=\"{}\" aria-pressed=\"false\">\
          <span class=\"theme-icon-dark\" aria-hidden=\"true\">\u{263e}</span>\
-         <span class=\"theme-icon-light\" aria-hidden=\"true\">\u{2600}</span></button>\n",
+         <span class=\"theme-icon-light\" aria-hidden=\"true\">\u{2600}</span></button>",
+        html_escape(text::site_theme_toggle_label()),
     );
     h.push_str("</div>\n");
     h.push_str("</nav>\n");
@@ -4201,8 +4358,9 @@ fn html_page(title: &str, css_href: &str, header: &str, body: &str) -> String {
          <title>{}</title>\n<link rel=\"stylesheet\" href=\"{css_href}\">\n</head>\n\
          <body>\n{header}<main id=\"content\" class=\"page-body\">\n{body}</main>\n\
          <button id=\"scroll-top\" class=\"scroll-top\" type=\"button\" \
-         aria-label=\"Scroll to top\">\u{2191}</button>\n</body>\n</html>\n",
-        html_escape(title)
+         aria-label=\"{}\">\u{2191}</button>\n</body>\n</html>\n",
+        html_escape(title),
+        html_escape(crate::text::site_scroll_top_label()),
     )
 }
 
@@ -4347,18 +4505,32 @@ fn strip_markdown_links(text: &str) -> String {
 /// presented in the same hierarchical namespace tree used on the old landing.
 fn render_reference_index(docs: &DocsJson, search_script: &str) -> String {
     let header = render_header(NavSection::Reference, "../", search_script);
-    let mut body = String::from("<h1>Reference</h1>\n");
-    body.push_str(
-        "<input type=\"search\" id=\"filter\" class=\"filter\" \
-         placeholder=\"Filter modules\u{2026}\" aria-label=\"Filter modules\" \
+    let title = crate::text::site_reference();
+    let mut body = format!(
+        "<h1>{}</h1>\n\
+         <input type=\"search\" id=\"filter\" class=\"filter\" \
+         placeholder=\"{}\" aria-label=\"{}\" \
          autocomplete=\"off\">\n",
+        html_escape(title),
+        html_escape(crate::text::site_filter_modules()),
+        html_escape(crate::text::site_filter_modules_label()),
     );
 
-    render_html_module_section_relative(&mut body, docs, ModuleKind::Local, LABEL_PROJECT);
-    render_html_module_section_relative(&mut body, docs, ModuleKind::Stdlib, LABEL_STDLIB);
+    render_html_module_section_relative(
+        &mut body,
+        docs,
+        ModuleKind::Local,
+        crate::text::site_project_modules(),
+    );
+    render_html_module_section_relative(
+        &mut body,
+        docs,
+        ModuleKind::Stdlib,
+        crate::text::site_standard_library(),
+    );
 
     body.push_str(FILTER_SCRIPT);
-    html_page("Reference", "../style.css", &header, &body)
+    html_page(title, "../style.css", &header, &body)
 }
 
 /// Render one module section for the reference index.
@@ -4432,7 +4604,9 @@ fn render_html_tree_relative(nodes: &[NamespaceNode], out: &mut String) {
 /// page.
 fn render_diagnostic_index(bundle: &crate::doc_bundle::DocBundle, search_script: &str) -> String {
     let header = render_header(NavSection::Diagnostic, "../", search_script);
-    let mut body = String::from("<h1>Diagnostics</h1>\n");
+    let title = crate::text::site_diagnostics();
+    let mut body = format!("<h1>{}</h1>\n", html_escape(title));
+    body.push_str(&render_code_families());
     body.push_str("<ul class=\"index-entries index-table\">\n");
     let mut entries: Vec<&crate::doc_bundle::DocEntry> = bundle
         .entries_for_kind(crate::doc_bundle::DocKind::Diagnostic)
@@ -4453,7 +4627,29 @@ fn render_diagnostic_index(bundle: &crate::doc_bundle::DocBundle, search_script:
         );
     }
     body.push_str("</ul>\n");
-    html_page("Diagnostics", "../style.css", &header, &body)
+    html_page(title, "../style.css", &header, &body)
+}
+
+/// The Diagnostics page's key to the code letters.
+///
+/// Says what each `IPE-<letter>` family covers, read from the diagnostics
+/// family table ([`ipe_diagnostics::FAMILIES`]) so a new family appears here by
+/// construction.
+fn render_code_families() -> String {
+    let mut out = format!(
+        "<p class=\"code-families-intro\">{}</p>\n<dl class=\"code-families\">\n",
+        crate::text::site_code_families_intro(),
+    );
+    for row in ipe_diagnostics::FAMILIES {
+        let _ = writeln!(
+            out,
+            "<dt><code>{}</code></dt><dd>{}</dd>",
+            row.letter,
+            html_escape(row.summary),
+        );
+    }
+    out.push_str("</dl>\n");
+    out
 }
 
 /// Render the CLI index page.
@@ -4461,7 +4657,8 @@ fn render_diagnostic_index(bundle: &crate::doc_bundle::DocBundle, search_script:
 /// Lists all `Cli` entries (subcommand — summary), each linking to its page.
 fn render_cli_index(bundle: &crate::doc_bundle::DocBundle, search_script: &str) -> String {
     let header = render_header(NavSection::Cli, "../", search_script);
-    let mut body = String::from("<h1>CLI</h1>\n");
+    let title = crate::text::site_cli();
+    let mut body = format!("<h1>{}</h1>\n", html_escape(title));
     // A two-column aligned table: command in one column, summary in the next, so
     // every summary starts at the same indentation (issue #1874, item 7).
     body.push_str("<ul class=\"index-entries index-table\">\n");
@@ -4492,7 +4689,7 @@ fn render_cli_index(bundle: &crate::doc_bundle::DocBundle, search_script: &str) 
         body.push_str("</li>\n");
     }
     body.push_str("</ul>\n");
-    html_page("CLI", "../style.css", &header, &body)
+    html_page(title, "../style.css", &header, &body)
 }
 
 /// Render per-kind index pages for curated kinds (Guide, Topic, Idiom, Construct).
@@ -4507,22 +4704,22 @@ fn render_curated_kind_indexes(
     let curated = [
         (
             crate::doc_bundle::DocKind::Guide,
-            "Guides",
+            crate::text::site_guides(),
             NavSection::Guide,
         ),
         (
             crate::doc_bundle::DocKind::Topic,
-            "Topics",
+            crate::text::site_topics(),
             NavSection::Topic,
         ),
         (
             crate::doc_bundle::DocKind::Idiom,
-            "Idioms",
+            crate::text::site_idioms(),
             NavSection::Idiom,
         ),
         (
             crate::doc_bundle::DocKind::Construct,
-            "Constructs",
+            crate::text::site_constructs(),
             NavSection::Construct,
         ),
     ];
@@ -4594,7 +4791,11 @@ fn render_entry_page(
         );
     }
     if entry.body.is_empty() {
-        body.push_str("<p class=\"comment\">No further documentation yet.</p>\n");
+        let _ = writeln!(
+            body,
+            "<p class=\"comment\">{}</p>",
+            html_escape(crate::text::site_no_documentation())
+        );
     } else {
         // Entry bodies are sourced from Markdown files (explain pages, construct
         // docs, command help) — rendered through the one doc-side Markdown path
@@ -4646,13 +4847,27 @@ fn render_html_index(
     search_script: &str,
 ) -> String {
     let header = render_header(NavSection::Home, "", search_script);
-    let mut body = String::from("<h1>Documentation</h1>\n");
+    let title = crate::text::site_documentation();
+    let heading = format!("<h1>{}</h1>\n", html_escape(title));
+    let mut body = heading.clone();
 
     let curated = [
-        (crate::doc_bundle::DocKind::Guide, "Guides"),
-        (crate::doc_bundle::DocKind::Topic, "Topics"),
-        (crate::doc_bundle::DocKind::Idiom, "Idioms"),
-        (crate::doc_bundle::DocKind::Construct, "Constructs"),
+        (
+            crate::doc_bundle::DocKind::Guide,
+            crate::text::site_guides(),
+        ),
+        (
+            crate::doc_bundle::DocKind::Topic,
+            crate::text::site_topics(),
+        ),
+        (
+            crate::doc_bundle::DocKind::Idiom,
+            crate::text::site_idioms(),
+        ),
+        (
+            crate::doc_bundle::DocKind::Construct,
+            crate::text::site_constructs(),
+        ),
     ];
 
     for (kind, label) in curated {
@@ -4685,28 +4900,28 @@ fn render_html_index(
         body.push_str("</ul>\n</section>\n");
     }
 
-    if body == "<h1>Documentation</h1>\n" {
+    if body == heading {
         // No curated entries yet -- show the module index as a fallback.
-        body.push_str("<p>See <a href=\"module/index.html\">Reference</a> for the full API.</p>\n");
+        let _ = writeln!(body, "<p>{}</p>", crate::text::site_reference_fallback());
     }
 
-    html_page("Documentation", "style.css", &header, &body)
+    html_page(title, "style.css", &header, &body)
 }
 
 /// Render one module's page — its doc-comment, its exposed types and values,
 /// each entry carrying a stable `id` anchor and its cross-linked signature.
 fn render_html_module(module: &ModuleDoc, index: &AnchorIndex, search_script: &str) -> String {
     let header = render_header(NavSection::Reference, "", search_script);
-    let mut body = String::from(
-        "<nav class=\"crumb\"><a href=\"module/index.html\">&larr; Reference</a></nav>\n",
-    );
+    let mut body = String::from("<nav class=\"crumb\"><a href=\"module/index.html\">&larr; ");
+    body.push_str(&html_escape(crate::text::site_reference()));
+    body.push_str("</a></nav>\n");
     let _ = writeln!(body, "<h1>{}</h1>", html_escape(&module.name));
     if !module.comment.is_empty() {
         body.push_str(&render_comment_html(&module.comment));
     }
 
     if !module.unions.is_empty() {
-        body.push_str("<h2>Types</h2>\n");
+        let _ = writeln!(body, "<h2>{}</h2>", html_escape(crate::text::site_types()));
         for union in &module.unions {
             let _ = writeln!(
                 body,
@@ -4732,7 +4947,7 @@ fn render_html_module(module: &ModuleDoc, index: &AnchorIndex, search_script: &s
     }
 
     if !module.values.is_empty() {
-        body.push_str("<h2>Values</h2>\n");
+        let _ = writeln!(body, "<h2>{}</h2>", html_escape(crate::text::site_values()));
         for value in &module.values {
             let sig = html_signature(&signature_pieces(&value.signature_ty, index));
             let _ = writeln!(
@@ -4775,7 +4990,7 @@ fn serve(path: &Path, port: Option<u16>) -> Result<(), CliError> {
     use std::net::TcpListener;
 
     crate::style::print_command_header();
-    let docs = build_docs_or_stdlib(path)?;
+    let (docs, _) = build_docs_or_stdlib(path)?;
     let docs_root = locate_docs_root();
     let bundle = build_doc_bundle(&docs_root)?;
     let site = render_site_for_serve(&docs, &bundle);
@@ -4787,20 +5002,17 @@ fn serve(path: &Path, port: Option<u16>) -> Result<(), CliError> {
         .map_err(|e| crate::io_err(Path::new(&addr), e))?;
 
     let url = format!("http://{bound}/");
-    print!(
-        "{}",
-        crate::style::status_line(
-            true,
-            &crate::style::TerminalSafe::sanitize(&format!(
-                "serving docs at {url} (read-only, loopback; Ctrl-C to stop)"
-            )),
-            crate::style::use_color(&std::io::stdout()),
-        )
+    crate::screen::status(
+        crate::screen::Stream::Stdout,
+        true,
+        &crate::style::TerminalSafe::sanitize(&format!(
+            "serving docs at {url} (read-only, loopback; Ctrl-C to stop)"
+        )),
     );
     // A headless caller (CI, a test, a remote shell) opts out of the browser pop
     // with `IPE_DOC_NO_OPEN`; the URL is already printed, so the preview stays
     // reachable.
-    if std::env::var_os("IPE_DOC_NO_OPEN").is_none() {
+    if ipe_env::var_os("IPE_DOC_NO_OPEN").is_none() {
         open_in_browser(&url);
     }
 
@@ -4925,6 +5137,33 @@ fn open_in_browser(url: &str) {
 mod tests {
     use super::*;
 
+    /// The Diagnostics page explains every code letter, from the family table.
+    #[test]
+    fn diagnostics_page_explains_every_code_family() {
+        let page = render_diagnostic_index(&DocBundle::empty(), "");
+        for row in ipe_diagnostics::FAMILIES {
+            assert!(
+                page.contains(&format!("<dt><code>{}</code></dt>", row.letter)),
+                "family {} missing:\n{page}",
+                row.letter
+            );
+            assert!(page.contains(&html_escape(row.summary)), "{page}");
+        }
+    }
+
+    /// A member key routes to the lookup, whatever the case of the module path.
+    #[test]
+    fn a_member_key_is_a_symbol_key() {
+        assert!(is_symbol_key("Ipe.Time.unixMillis"));
+        assert!(is_symbol_key("List.map"));
+        assert!(!is_symbol_key("Ipe.List"));
+        assert!(!is_symbol_key("List"));
+        assert!(matches!(
+            parse_doc(&s(&["Ipe.Time.unixMillis"])),
+            Ok(DocMode::Lookup { .. })
+        ));
+    }
+
     fn s(v: &[&str]) -> Vec<String> {
         v.iter().map(|x| (*x).to_owned()).collect()
     }
@@ -4972,7 +5211,7 @@ mod tests {
     fn parse_rejects_unknown_write_format() {
         assert!(matches!(
             parse_doc(&s(&["--write-format", "pdf"])),
-            Err(CliError::UsageOwned(_))
+            Err(CliError::Usage(_))
         ));
     }
 
@@ -5179,7 +5418,7 @@ mod tests {
         // so it is rejected at the boundary, not silently ignored.
         assert!(matches!(
             parse_doc(&s(&["check", "--out", "x"])),
-            Err(CliError::UsageOwned(_))
+            Err(CliError::Usage(_))
         ));
     }
 
@@ -5197,7 +5436,7 @@ mod tests {
     fn rejects_unknown_flag() {
         assert!(matches!(
             parse_doc(&s(&["--bogus"])),
-            Err(CliError::UsageOwned(_))
+            Err(CliError::Usage(_))
         ));
     }
 
@@ -5455,11 +5694,21 @@ mod tests {
         let idx = render_reference_index(&docs, &search_script);
 
         // Both section labels render.
-        assert!(idx.contains(LABEL_PROJECT), "project label: {idx}");
-        assert!(idx.contains(LABEL_STDLIB), "stdlib label: {idx}");
+        assert!(
+            idx.contains(crate::text::site_project_modules()),
+            "project label: {idx}"
+        );
+        assert!(
+            idx.contains(crate::text::site_standard_library()),
+            "stdlib label: {idx}"
+        );
         // The project section precedes the standard-library section.
-        let p = idx.find(LABEL_PROJECT).expect("project label present");
-        let s = idx.find(LABEL_STDLIB).expect("stdlib label present");
+        let p = idx
+            .find(crate::text::site_project_modules())
+            .expect("project label present");
+        let s = idx
+            .find(crate::text::site_standard_library())
+            .expect("stdlib label present");
         assert!(p < s, "project section comes first: {idx}");
         // The reference index lists the module with a link to its page.
         assert!(idx.contains("App.html"), "App module linked: {idx}");
@@ -5829,9 +6078,165 @@ mod tests {
         let _ = fs::remove_dir_all(&tmp);
         let mut files = BTreeMap::new();
         files.insert("docs.json".to_owned(), "{\"v\":1}".to_owned());
-        write_format_dir(&tmp, "json", &files).expect("write_format_dir");
+        let site = crate::output_dir::OwnedDir::claim(&tmp).expect("claim site");
+        write_format_dir(&site, "json", &files).expect("write_format_dir");
         let written = tmp.join("json").join("docs.json");
         assert!(written.exists(), "docs.json written under json/");
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    /// A doc site planted with a symlinked directory or file is refused.
+    ///
+    /// The link targets survive byte-for-byte.
+    #[cfg(unix)]
+    #[test]
+    fn write_format_dir_refuses_planted_symlinks() {
+        use std::fs;
+        let tmp = std::env::temp_dir().join(format!("ipe-doc-symlink-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&tmp);
+        let victim = tmp.join("victim");
+        fs::create_dir_all(&victim).expect("victim dir");
+        fs::write(victim.join("docs.json"), "keep").expect("victim file");
+        let site = crate::output_dir::OwnedDir::claim(&tmp.join("site")).expect("claim site");
+        std::os::unix::fs::symlink(&victim, tmp.join("site").join("json")).expect("dir link");
+        fs::create_dir_all(tmp.join("site").join("html")).expect("html dir");
+        std::os::unix::fs::symlink(victim.join("docs.json"), tmp.join("site/html/index.html"))
+            .expect("file link");
+
+        let mut files = BTreeMap::new();
+        files.insert("docs.json".to_owned(), "evil".to_owned());
+        let dir_link = write_format_dir(&site, "json", &files);
+        assert!(
+            matches!(dir_link, Err(CliError::OutputRefused(_))),
+            "a symlinked json/ must be refused, got {dir_link:?}"
+        );
+        let mut html = BTreeMap::new();
+        html.insert("index.html".to_owned(), "evil".to_owned());
+        let file_link = write_format_dir(&site, "html", &html);
+        assert!(
+            matches!(file_link, Err(CliError::OutputRefused(_))),
+            "a symlinked page must be refused, got {file_link:?}"
+        );
+        assert_eq!(
+            fs::read_to_string(victim.join("docs.json")).ok().as_deref(),
+            Some("keep")
+        );
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    /// The inputs a successful project documentation build reports for `path`.
+    fn tree(path: &Path) -> DocInputs {
+        DocInputs::Tree(read_tree(path).expect("read module tree").root)
+    }
+
+    /// A site inside the module tree a documentation build read is refused.
+    ///
+    /// A manifest-less flat package is its own tree, so any site inside it is
+    /// turned away; the same site beside a `src/` tree is claimed.
+    #[test]
+    fn claim_site_refuses_an_out_inside_the_read_module_tree() {
+        use std::fs;
+        let tmp = std::env::temp_dir().join(format!("ipe-doc-tree-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&tmp);
+        let flat = tmp.join("flat");
+        fs::create_dir_all(&flat).expect("flat dir");
+        fs::write(flat.join("Main.ipe"), "module Main exposing (..)\n").expect("module");
+
+        let inputs = tree(&flat);
+        assert!(
+            matches!(&inputs, DocInputs::Tree(t) if t == &flat),
+            "a flat package's tree is the package itself, got {inputs:?}"
+        );
+        let inside = claim_site(&flat, &inputs, &flat.join("doc"));
+        assert!(
+            matches!(
+                inside,
+                Err(CliError::OutputRefused(
+                    crate::output_dir::OutputRefusal::InsideSources { .. }
+                ))
+            ),
+            "a site inside the read module tree must be refused, got {inside:?}"
+        );
+        let hint = inside
+            .as_ref()
+            .err()
+            .map(ToString::to_string)
+            .unwrap_or_default();
+        assert!(
+            hint.contains("--out <dir>"),
+            "the refusal names the way out, got {hint:?}"
+        );
+        assert!(!flat.join("doc").exists(), "nothing created on refusal");
+        let nested = claim_site(&flat, &inputs, &flat.join("sub").join("doc"));
+        assert!(
+            matches!(nested, Err(CliError::OutputRefused(_))),
+            "a deeper site inside the tree is refused too, got {nested:?}"
+        );
+
+        let pkg = tmp.join("pkg");
+        fs::create_dir_all(pkg.join("src")).expect("src dir");
+        fs::write(
+            pkg.join("src").join("Main.ipe"),
+            "module Main exposing (..)\n",
+        )
+        .expect("module");
+        let beside = claim_site(&pkg, &tree(&pkg), &pkg.join("doc"));
+        assert!(
+            beside.is_ok(),
+            "a site beside `src/` is claimed, got {beside:?}"
+        );
+        let in_src = claim_site(&pkg, &tree(&pkg), &pkg.join("src").join("doc"));
+        assert!(
+            matches!(in_src, Err(CliError::OutputRefused(_))),
+            "a site inside `src/` is refused, got {in_src:?}"
+        );
+        assert_eq!(
+            fs::read_to_string(flat.join("Main.ipe")).ok().as_deref(),
+            Some("module Main exposing (..)\n")
+        );
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    /// A doc site overlapping the documented package is refused before any write.
+    ///
+    /// The package directory, a directory holding it, and a lone entry's own
+    /// directory are each turned away; a site inside the package is claimed.
+    #[test]
+    fn claim_site_refuses_an_out_overlapping_the_package() {
+        use std::fs;
+        let tmp = std::env::temp_dir().join(format!("ipe-doc-overlap-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&tmp);
+        let pkg = tmp.join("pkg");
+        fs::create_dir_all(pkg.join("src")).expect("src dir");
+        fs::write(
+            pkg.join("src").join("Main.ipe"),
+            "module Main exposing (..)\n",
+        )
+        .expect("module");
+        fs::write(pkg.join("keep.txt"), "keep").expect("user file");
+
+        for out in [pkg.clone(), tmp.clone()] {
+            let site = claim_site(&pkg, &tree(&pkg), &out);
+            assert!(
+                matches!(site, Err(CliError::OutputRefused(_))),
+                "an out holding the package must be refused, got {site:?}"
+            );
+        }
+        let lone = tmp.join("lone");
+        fs::create_dir_all(&lone).expect("lone dir");
+        let inside = claim_site(&lone.join("Main.ipe"), &DocInputs::StdlibOnly, &lone);
+        assert!(
+            matches!(inside, Err(CliError::OutputRefused(_))),
+            "the entry's own directory must be refused, got {inside:?}"
+        );
+        assert_eq!(
+            fs::read_to_string(pkg.join("keep.txt")).ok().as_deref(),
+            Some("keep")
+        );
+        assert!(
+            claim_site(&pkg, &tree(&pkg), &pkg.join("doc")).is_ok(),
+            "a site inside the package is claimed"
+        );
         let _ = fs::remove_dir_all(&tmp);
     }
 
@@ -5871,7 +6276,12 @@ mod tests {
         let _ = fs::remove_dir_all(&tmp);
         fs::create_dir_all(&tmp).expect("create empty dir");
 
-        let docs = build_docs_or_stdlib(&tmp).expect("empty dir falls back to stdlib-only");
+        let (docs, inputs) =
+            build_docs_or_stdlib(&tmp).expect("empty dir falls back to stdlib-only");
+        assert!(
+            matches!(inputs, DocInputs::StdlibOnly),
+            "no project tree was read"
+        );
         assert!(
             docs.modules.iter().all(|m| m.kind == ModuleKind::Stdlib),
             "empty-dir fallback yields stdlib-only modules"
@@ -5894,6 +6304,46 @@ mod tests {
         assert!(
             result.is_err(),
             "a broken project surfaces its build error rather than falling back"
+        );
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    /// An unreadable `src/` is a real I/O refusal, not a symlink cycle and not
+    /// an empty-tree fallback — `ipe doc` must relay it as such.
+    #[cfg(unix)]
+    #[test]
+    fn build_docs_or_stdlib_propagates_io_error_for_unreadable_src() {
+        use std::fs;
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let tmp = std::env::temp_dir().join(format!("ipe-doc-unreadable-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&tmp);
+        let src = tmp.join("src");
+        fs::create_dir_all(&src).expect("create src/");
+
+        fs::set_permissions(&src, fs::Permissions::from_mode(0o000))
+            .expect("chmod src/ unreadable");
+
+        let result = build_docs_or_stdlib(&tmp);
+
+        // Restore before any cleanup/assert: remove_dir_all must descend into src/.
+        fs::set_permissions(&src, fs::Permissions::from_mode(0o755)).expect("restore perms");
+
+        let Err(err) = result else {
+            // Running privileged (e.g. root), a 0o000 mode never actually blocks
+            // the read — there is no refusal to observe on this run.
+            let _ = fs::remove_dir_all(&tmp);
+            return;
+        };
+        assert!(
+            matches!(
+                &err,
+                CliError::SourceRefused {
+                    path,
+                    reason: crate::io_bounded::SourceRefusal::AccessDenied,
+                } if path == &src
+            ),
+            "an unreadable src/ must surface as the typed access-denied refusal naming it, got {err:?}"
         );
         let _ = fs::remove_dir_all(&tmp);
     }

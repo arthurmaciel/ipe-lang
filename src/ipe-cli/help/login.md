@@ -1,0 +1,11 @@
+Authorize ipe with GitHub (device flow), store a publish token, and offer to set up a publish signing key.
+
+```
+ipe login
+```
+
+## Options
+
+- `[--status]` — report whether a token is stored
+- `[--logout]` — remove the stored token
+- `[--signing-key]` — generate an SSH signing key and register it on your GitHub account (opt-in)

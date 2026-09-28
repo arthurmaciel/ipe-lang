@@ -38,6 +38,7 @@ use std::path::{Path, PathBuf};
 
 use ipe_sandbox::build_jail::{CapabilityAxis, JailOutcome, build_in_jail};
 use ipe_sandbox::run_jail::{FilesystemScope, RunJailTools, SandboxProfile};
+use ipe_sandbox::{CanonicalPath, JailMounts};
 
 /// The `build_in_jail` seccomp path creates a `memfd` and clears its
 /// close-on-exec flag — a process-global fd-table mutation. Serialize the jailed
@@ -58,7 +59,7 @@ fn fixture_path() -> PathBuf {
 /// alone is insufficient (a runner may have `bwrap` but deny the namespace
 /// setup), so a `/bin/true` canary under the isolated profile decides once.
 fn e2e_tools() -> Option<RunJailTools> {
-    if std::env::var_os("IPE_E2E").is_none_or(|v| v != "1") {
+    if ipe_env::var_os("IPE_E2E").is_none_or(|v| v != "1") {
         return None;
     }
     let caps = ipe_sandbox::probe();
@@ -80,13 +81,12 @@ fn jail_can_establish(tools: &RunJailTools) -> bool {
     static CANARY: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *CANARY.get_or_init(|| {
         let scoped = fresh_scratch("canary");
+        let bound = canonical(&scoped);
         let _guard = JAIL_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let outcome = build_in_jail(
             tools,
             &SandboxProfile::maximally_isolated(),
-            &scoped,
-            &scoped,
-            &ro_binds(),
+            &mounts(&bound),
             &[OsString::from("/bin/true")],
         );
         let _ = std::fs::remove_dir_all(&scoped);
@@ -110,17 +110,26 @@ fn fresh_scratch(tag: &str) -> PathBuf {
     dir
 }
 
+/// `path` resolved to the canonical form the jail binds.
+fn canonical(path: &Path) -> CanonicalPath {
+    CanonicalPath::resolve(path).expect("canonical jail path")
+}
+
+/// The jail mounts over `bound` (scratch and working tree) plus [`ro_binds`],
+/// checked against the invoker's cargo home.
+fn mounts(bound: &CanonicalPath) -> JailMounts {
+    JailMounts::of_invoker(bound.clone(), bound.clone(), ro_binds()).expect("checked jail mounts")
+}
+
 /// The interpreters/tools the fixture needs, re-exposed read-only past the
 /// home/tmp tmpfs masks.
-fn ro_binds() -> Vec<PathBuf> {
-    [
-        PathBuf::from("/usr"),
-        PathBuf::from("/bin"),
-        PathBuf::from("/lib"),
-    ]
-    .into_iter()
-    .filter(|p| p.exists())
-    .collect()
+fn ro_binds() -> Vec<CanonicalPath> {
+    ["/usr", "/bin", "/lib"]
+        .into_iter()
+        .map(Path::new)
+        .filter(|p| p.exists())
+        .map(canonical)
+        .collect()
 }
 
 /// Run the admission fixture in `tier2` mode inside a jail scoped to `profile`,
@@ -149,7 +158,10 @@ fn run_fixture(
     //
     // The fixture lives in the repo tree, which the jail masks (only the scratch
     // mount and the ro tool binds are visible inside). Copy it into the scratch —
-    // the one writable mount — so the jailed shell can read it.
+    // the one writable mount — so the jailed shell can read it. Every path the
+    // payload names is the canonical path the jail binds.
+    let bound = canonical(scoped);
+    let scoped = bound.as_path();
     let jailed_fixture = scoped.join("untrusted-build.sh");
     std::fs::copy(fixture_path(), &jailed_fixture).expect("copy fixture into scratch");
     let payload: Vec<OsString> = vec![
@@ -162,7 +174,7 @@ fn run_fixture(
         jailed_fixture.into_os_string(),
     ];
     let _guard = JAIL_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    build_in_jail(tools, profile, scoped, scoped, &ro_binds(), &payload)
+    build_in_jail(tools, profile, &mounts(&bound), &payload)
 }
 
 /// Build a single `NAME=VALUE` argument for `env(1)`. The value is an `OsStr` so
@@ -268,14 +280,13 @@ fn a_missing_fixture_is_a_non_clean_outcome_fail_closed() {
     // be Clean — the jail establishes but the payload fails, so the outcome is a
     // non-clean BuildFailed (or the spawn refuses). Fail-closed either way.
     let scoped = fresh_scratch("missing");
+    let bound = canonical(&scoped);
     let outcome = {
         let _guard = JAIL_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         build_in_jail(
             &tools,
             &SandboxProfile::maximally_isolated(),
-            &scoped,
-            &scoped,
-            &ro_binds(),
+            &mounts(&bound),
             &[
                 OsString::from("/bin/sh"),
                 OsString::from("/nonexistent/probe.sh"),

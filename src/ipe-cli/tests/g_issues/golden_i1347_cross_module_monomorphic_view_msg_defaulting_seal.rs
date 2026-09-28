@@ -39,14 +39,14 @@ fn fixture_entry(root: &Path) -> PathBuf {
 fn i1347_cross_module_monomorphic_view_msg_defaulting_emits() {
     let root = repo_root();
     let entry = fixture_entry(&root);
-    let out =
-        std::env::temp_dir().join("ipec_i1347_cross_module_monomorphic_view_msg_defaulting_emit");
+    let out = crate::support::scratch_root()
+        .join("ipec_i1347_cross_module_monomorphic_view_msg_defaulting_emit");
     let _ = std::fs::remove_dir_all(&out);
 
     let Ok(runtime) = ipe::resolve_runtime() else {
         return; // resolver unavailable -- skip
     };
-    let built = ipe::build_with_sibling_discovery(&entry, &out, &runtime);
+    let built = ipe::build_loose_file(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
         "a cross-module message-free helper used at a single monomorphic type \
@@ -72,14 +72,14 @@ fn i1347_cross_module_monomorphic_view_msg_defaulting_emits() {
 fn i1347_cross_module_monomorphic_view_msg_defaulting_seal_builds() {
     let root = repo_root();
     let entry = fixture_entry(&root);
-    let out =
-        std::env::temp_dir().join("ipec_i1347_cross_module_monomorphic_view_msg_defaulting_e2e");
+    let out = crate::support::scratch_root()
+        .join("ipec_i1347_cross_module_monomorphic_view_msg_defaulting_e2e");
     let _ = std::fs::remove_dir_all(&out);
 
     let Ok(runtime) = ipe::resolve_runtime() else {
         return;
     };
-    let built = ipe::build_with_sibling_discovery(&entry, &out, &runtime);
+    let built = ipe::build_loose_file(&entry, &out, &runtime);
     assert!(built.is_ok(), "{GOLDEN} must be accepted, got: {built:?}");
 
     crate::support::assert_seal_builds(GOLDEN, &out);

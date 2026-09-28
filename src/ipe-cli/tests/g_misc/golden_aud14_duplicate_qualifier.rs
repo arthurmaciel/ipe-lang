@@ -40,7 +40,7 @@ fn distinct_modules_sharing_an_explicit_alias_is_rejected() {
         return; // runtime unavailable in this environment — skip silently
     };
 
-    let tmp = std::env::temp_dir().join("ipec_aud14_duplicate_qualifier");
+    let tmp = crate::support::scratch_root().join("ipec_aud14_duplicate_qualifier");
     let wrote = write_project(
         &tmp,
         &[
@@ -62,7 +62,7 @@ import Ipe.Io
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("aud14_duplicate_qualifier_out");
     let _ = fs::remove_dir_all(&out);
 
-    let built = ipe::build_with_sibling_discovery(&entry, &out, &runtime);
+    let built = ipe::build_loose_file(&entry, &out, &runtime);
     let Err(err) = built else {
         assert!(
             false_marker(),
@@ -98,7 +98,7 @@ fn same_module_reimported_under_same_alias_is_accepted() {
         return;
     };
 
-    let tmp = std::env::temp_dir().join("ipec_aud14_duplicate_qualifier_diamond");
+    let tmp = crate::support::scratch_root().join("ipec_aud14_duplicate_qualifier_diamond");
     let wrote = write_project(
         &tmp,
         &[
@@ -120,7 +120,7 @@ import Ipe.Io
         PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("aud14_duplicate_qualifier_diamond_out");
     let _ = fs::remove_dir_all(&out);
 
-    let built = ipe::build_with_sibling_discovery(&entry, &out, &runtime);
+    let built = ipe::build_loose_file(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
         "re-importing the SAME module under the same alias twice must stay accepted: {:?}",

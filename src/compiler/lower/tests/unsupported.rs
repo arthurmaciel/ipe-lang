@@ -11,7 +11,7 @@ use std::collections::BTreeMap;
 use ipe_canon::ast as canon;
 use ipe_diagnostics::{
     Code, DResult, Diagnostic, Feature, IPE_L0101, IPE_L0102, IPE_L0107, IPE_L0108, IPE_L0119,
-    Located, LowerError, Span,
+    IPE_L0154, Located, LowerError, Span,
 };
 use ipe_intern::{Interner, Symbol};
 use ipe_ir::{BoundSet, Callee, Expr, FuncId, IrType, KernelFn};
@@ -70,6 +70,7 @@ fn run_with_regions(
         poly_var_map: BTreeMap::new(),
         untyped_type_params: BTreeMap::new(),
         msg_defaulted_vars: BTreeMap::new(),
+        signature_wildcards: BTreeMap::new(),
     };
     // `lower` pairs its diagnostic with the owning def's `home`;
     // these single-module gap tests assert only on the diagnostic, so drop it.
@@ -2317,6 +2318,137 @@ fn let_bound_live_app_cfg_is_unsupported() -> DResult<()> {
         Feature::LetBoundAppCfg,
         IPE_L0119,
         arg_span,
+    );
+    Ok(())
+}
+
+/// Lower `f = <module>.<name>` as a bare kernel reference solved at `solved`.
+///
+/// The binding is annotated `Int` so its signature lowers without tripping any
+/// gate of its own; only the body's kernel reference is under test. Returns
+/// the lowering result and the reference's span.
+fn lower_bare_kernel(
+    module: &str,
+    name: &str,
+    solved: Ty,
+    i: &mut Interner,
+) -> DResult<(DResult<ipe_ir::Program>, Span)> {
+    let body_span = Span::new(90, 98);
+    let f = i.intern("f")?;
+    let module = i.intern(module)?;
+    let name = i.intern(name)?;
+    let def = canon::Def::Typed {
+        home: vec![],
+        name: Located::new(Span::new(88, 89), f),
+        free_vars: Vec::new(),
+        patterns: Vec::new(),
+        body: Located::new(
+            body_span,
+            canon::Expr_::VarKernel {
+                id: None,
+                module,
+                name,
+            },
+        ),
+        ty: con_int(i)?,
+    };
+    let mut regions = BTreeMap::new();
+    regions.insert(body_span, solved);
+    let res = run_with_regions(Vec::new(), vec![def], BTreeMap::new(), regions, i);
+    Ok((res, body_span))
+}
+
+/// `a -> b` as a solved arrow.
+fn arrow(a: Ty, b: Ty) -> Ty {
+    Ty::Fun(Box::new(a), Box::new(b))
+}
+
+/// `List elem` as a solved type.
+fn ty_list(elem: Ty, i: &mut Interner) -> DResult<Ty> {
+    Ok(Ty::Con {
+        module: Vec::new(),
+        name: i.intern("List")?,
+        args: vec![elem],
+    })
+}
+
+/// Whether `res` is the higher-order callback-result refusal.
+const fn is_hof_callback_refusal(res: &DResult<ipe_ir::Program>) -> bool {
+    matches!(
+        res,
+        Err(Diagnostic::Lower {
+            msg: LowerError::Unsupported(Feature::HofCallbackFunctionResult),
+            ..
+        })
+    )
+}
+
+/// `List.map` solved with a two-argument callback (`List.map add`) fails closed at lowering.
+///
+/// The callback's final result `b` is `Int -> Int`, which the exact-arity
+/// runtime kernel cannot build; the backstop refuses it with IPE-L0154 at the
+/// kernel reference, independently of the type checker's obligation.
+#[test]
+fn list_map_curried_callback_is_refused() -> DResult<()> {
+    let mut i = Interner::new();
+    let int = ty_int(&mut i)?;
+    let int_to_int = arrow(int.clone(), int.clone());
+    let callback = arrow(int.clone(), int_to_int.clone());
+    let solved = arrow(
+        callback,
+        arrow(ty_list(int, &mut i)?, ty_list(int_to_int, &mut i)?),
+    );
+    let (res, span) = lower_bare_kernel("List", "map", solved, &mut i)?;
+    assert_unsupported(res, Feature::HofCallbackFunctionResult, IPE_L0154, span);
+    Ok(())
+}
+
+/// `List.foldl` solved with a function-valued accumulator fails closed at lowering.
+#[test]
+fn list_foldl_function_accumulator_is_refused() -> DResult<()> {
+    let mut i = Interner::new();
+    let int = ty_int(&mut i)?;
+    let acc = arrow(int.clone(), int.clone());
+    let step = arrow(int.clone(), arrow(acc.clone(), acc.clone()));
+    let solved = arrow(step, arrow(acc.clone(), arrow(ty_list(int, &mut i)?, acc)));
+    let (res, span) = lower_bare_kernel("List", "foldl", solved, &mut i)?;
+    assert_unsupported(res, Feature::HofCallbackFunctionResult, IPE_L0154, span);
+    Ok(())
+}
+
+/// `List.map` solved with a plain-result callback passes the backstop.
+#[test]
+fn list_map_plain_callback_passes_backstop() -> DResult<()> {
+    let mut i = Interner::new();
+    let int = ty_int(&mut i)?;
+    let list_int = ty_list(int.clone(), &mut i)?;
+    let solved = arrow(arrow(int.clone(), int), arrow(list_int.clone(), list_int));
+    let (res, _span) = lower_bare_kernel("List", "map", solved, &mut i)?;
+    assert!(
+        !is_hof_callback_refusal(&res),
+        "a plain-result callback must not trip IPE-L0154: {res:?}"
+    );
+    Ok(())
+}
+
+/// `List.map2` solved with a two-argument callback passes the backstop.
+///
+/// Its callback takes both arguments at once, so the final result is a plain
+/// `Int`.
+#[test]
+fn list_map2_two_argument_callback_passes_backstop() -> DResult<()> {
+    let mut i = Interner::new();
+    let int = ty_int(&mut i)?;
+    let list_int = ty_list(int.clone(), &mut i)?;
+    let callback = arrow(int.clone(), arrow(int.clone(), int));
+    let solved = arrow(
+        callback,
+        arrow(list_int.clone(), arrow(list_int.clone(), list_int)),
+    );
+    let (res, _span) = lower_bare_kernel("List", "map2", solved, &mut i)?;
+    assert!(
+        !is_hof_callback_refusal(&res),
+        "a full-arity `map2` callback must not trip IPE-L0154: {res:?}"
     );
     Ok(())
 }

@@ -43,21 +43,21 @@ use ipe_sandbox::run_jail::SandboxProfile;
 /// a macOS runner is a skip here (the CI job asserts its presence separately as a
 /// hard, refuse-to-certify failure), never a silent green.
 fn e2e_enabled() -> bool {
-    if std::env::var_os("IPE_E2E").is_none_or(|v| v != "1") {
+    if ipe_env::var_os("IPE_E2E").is_none_or(|v| v != "1") {
         return false;
     }
     which_sandbox_exec().is_some()
 }
 
 fn which_sandbox_exec() -> Option<std::path::PathBuf> {
-    let path = std::env::var_os("PATH")?;
+    let path = ipe_env::var_os("PATH")?;
     std::env::split_paths(&path)
         .map(|dir| dir.join("sandbox-exec"))
         .find(|candidate| candidate.is_file())
 }
 
-/// Write the profile's SBPL to a scratch file and run `sandbox-exec -f <sbpl> sh
-/// -c <script>`, returning the exit code (`None` if signalled).
+/// Run `sandbox-exec -p <sbpl> sh -c <script>` under the profile's SBPL,
+/// returning the exit code (`None` if signalled).
 ///
 /// The environment is scrubbed with the SAME `macos_scrubbed_env` the production
 /// `exec_in_run_jail` launcher applies (Seatbelt cannot scrub env, so it is a
@@ -71,15 +71,9 @@ fn run_jailed_with_host(
     host: &dyn Fn(&str) -> Option<std::ffi::OsString>,
 ) -> Option<i32> {
     let sbpl = sbpl_from_profile(profile, scratch, scratch);
-    let sbpl_file = scratch.join("ipe-run-e2e.sb");
-    std::fs::write(&sbpl_file, sbpl.as_bytes()).expect("write sbpl");
     let sandbox_exec = which_sandbox_exec().expect("sandbox-exec present");
     let mut cmd = Command::new(sandbox_exec);
-    cmd.arg("-f")
-        .arg(&sbpl_file)
-        .arg("sh")
-        .arg("-c")
-        .arg(script);
+    cmd.arg("-p").arg(&sbpl).arg("sh").arg("-c").arg(script);
     cmd.env_clear();
     for (name, value) in macos_scrubbed_env(profile, scratch, host) {
         cmd.env(name, value);
@@ -88,9 +82,11 @@ fn run_jailed_with_host(
 }
 
 /// The common case: scrub against the real process environment (what a user's
-/// `ipe run` inherits), exactly as the launcher does.
+/// `ipe run` inherits). The oracle reads through `ipe_env`, which matches the
+/// launcher's crate-private passthrough for every name but a home variable; no
+/// profile in this file grants one, so the scrub is the launcher's.
 fn run_jailed(profile: &SandboxProfile, scratch: &Path, script: &str) -> Option<i32> {
-    let host = |k: &str| std::env::var_os(k);
+    let host = |k: &str| ipe_env::var_os(k);
     run_jailed_with_host(profile, scratch, script, &host)
 }
 
@@ -305,7 +301,7 @@ fn a_non_allowlisted_env_var_is_absent_under_the_run_jail_but_present_under_cont
     // env axis, so the launcher scrub drops it: the child must NOT see it.
     let host = |k: &str| match k {
         "IPE_E2E_SECRET" => Some(std::ffi::OsString::from("leak")),
-        _ => std::env::var_os(k),
+        _ => ipe_env::var_os(k),
     };
     let jailed = run_jailed_with_host(&isolated(), &scratch, SECRET_PRESENT, &host);
     // Control: with the same var in the environment, the child DOES see it —
@@ -340,7 +336,7 @@ fn an_allowlisted_env_var_is_present_under_the_run_jail() {
     // re-exports it: the child DOES see it (no false-deny of a granted name).
     let host = |k: &str| match k {
         "IPE_E2E_SECRET" => Some(std::ffi::OsString::from("allowed")),
-        _ => std::env::var_os(k),
+        _ => ipe_env::var_os(k),
     };
     let jailed = run_jailed_with_host(
         &env_granted(&["IPE_E2E_SECRET"]),

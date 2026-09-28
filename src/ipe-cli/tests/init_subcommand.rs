@@ -9,7 +9,8 @@ use std::path::PathBuf;
 
 /// A fresh, unique temp directory for one test (removed first if present).
 fn fresh_dir(tag: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("ipe_init_test_{tag}"));
+    let dir =
+        std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("ipe_init_test_{tag}"));
     let _ = fs::remove_dir_all(&dir);
     dir
 }
@@ -99,6 +100,45 @@ fn init_reconciles_existing_project_without_clobbering() {
         restored.contains("Increment") && restored.contains("Decrement"),
         "init --force must overwrite the managed file with the scaffold"
     );
+    // ...but never destroys the user's version: it is backed up first.
+    let backups: Vec<String> = fs::read_dir(target.join("src").join(".ipe-backup"))
+        .map(|entries| {
+            entries
+                .flatten()
+                .filter_map(|e| fs::read_to_string(e.path()).ok())
+                .collect()
+        })
+        .unwrap_or_default();
+    assert!(
+        backups.iter().any(|b| b == edited),
+        "init --force must back up the edited Main.ipe before overwriting it"
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// A fresh `ipe init` keeps the user's own files already in the target.
+///
+/// A fresh `ipe init` scaffolds around them and never overwrites one.
+#[test]
+fn init_keeps_existing_user_files_in_a_fresh_target() {
+    let dir = fresh_dir("keep_user_files");
+    let target = dir.join("app");
+    fs::create_dir_all(&target).expect("make target");
+    let readme = target.join("README.md");
+    fs::write(&readme, "my notes\n").expect("write user README");
+
+    let result = ipe::run_cli(&["init".to_owned(), target.to_string_lossy().into_owned()]);
+    assert!(result.is_ok(), "init must succeed: {result:?}");
+    assert_eq!(
+        fs::read_to_string(&readme).unwrap_or_default(),
+        "my notes\n",
+        "a pre-existing README must be kept byte-for-byte"
+    );
+    assert!(
+        target.join("src").join("Main.ipe").is_file(),
+        "the scaffold is still written around the kept file"
+    );
 
     let _ = fs::remove_dir_all(&dir);
 }
@@ -118,6 +158,59 @@ fn init_unknown_flag_returns_usage_error() {
         ),
         "unknown flag must yield a command-usage error, got: {result:?}"
     );
+}
+
+/// Every application shape's fresh scaffold lints clean — no unused import, no
+/// other finding at the gate severity. Driven from `InitShape::ALL` so a newly
+/// added shape's template is swept into this proof by the same
+/// exhaustiveness guard that binds it into the scaffold-build SEAL.
+#[test]
+fn init_scaffold_is_lint_clean_for_every_shape() {
+    for shape in ipe::init::InitShape::ALL {
+        let dir = fresh_dir(&format!("lint_{}", shape.label()));
+        let target = dir.join("proj");
+        let target_str = target.to_string_lossy().into_owned();
+
+        let init = ipe::run_cli(&[
+            "init".to_owned(),
+            target_str.clone(),
+            "--shape".to_owned(),
+            shape.label().to_owned(),
+        ]);
+        assert!(
+            init.is_ok(),
+            "[{}] init must succeed: {init:?}",
+            shape.label()
+        );
+
+        let linted = ipe::run_cli(&["lint".to_owned(), target_str]);
+        assert!(
+            linted.is_ok(),
+            "[{}] a fresh scaffold must lint clean, got: {linted:?}",
+            shape.label()
+        );
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+}
+
+/// The `--lib` scaffold also lints clean.
+#[test]
+fn init_lib_scaffold_is_lint_clean() {
+    let dir = fresh_dir("lint_lib");
+    let target = dir.join("libproj");
+    let target_str = target.to_string_lossy().into_owned();
+
+    let init = ipe::run_cli(&["init".to_owned(), target_str.clone(), "--lib".to_owned()]);
+    assert!(init.is_ok(), "init --lib must succeed: {init:?}");
+
+    let linted = ipe::run_cli(&["lint".to_owned(), target_str]);
+    assert!(
+        linted.is_ok(),
+        "a fresh library scaffold must lint clean, got: {linted:?}"
+    );
+
+    let _ = fs::remove_dir_all(&dir);
 }
 
 /// E2E (gated on `IPE_E2E=1`): scaffold, `ipe build`, and `cargo build` a fresh
@@ -208,7 +301,7 @@ fn assert_library_type_checks(tag: &str, init_args: &[String], entry_rel: &std::
 /// loop then forces it through the SEAL.
 #[test]
 fn init_scaffold_builds() {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
 

@@ -276,10 +276,13 @@ fn ffi_prose(msg: &FfiError) -> String {
         FfiError::WireMalformed { context, detail } => {
             format!("The inspection data for `{context}` is malformed: {detail}.")
         }
-        FfiError::ShapeContradiction { function, flags } => format!(
-            "`{function}` declares contradictory shape flags at once: {}.",
-            flags.join(" + ")
-        ),
+        FfiError::ShapeContradiction { function, flags } => {
+            let flags: Vec<String> = flags.iter().map(ToString::to_string).collect();
+            format!(
+                "`{function}` declares contradictory shape flags at once: {}.",
+                flags.join(" + ")
+            )
+        }
         FfiError::SourceRejected { source, detail } => {
             format!("The crate source `{source}` was rejected at the security gate: {detail}.")
         }
@@ -597,6 +600,10 @@ fn name_prose(msg: &NameError) -> String {
              a concrete type — e.g. `update` ignores its message and no view emits one — and a \
              running app needs one concrete model and message type."
         ),
+        NameError::InputFieldIsSubscription { entry, field, .. } => format!(
+            "`{field}` is not a `{entry}` config field — terminal input arrives through \
+             `subscriptions`, like every other event."
+        ),
         NameError::Unknown => "Something is off with a name in this code.".to_string(),
     }
 }
@@ -786,6 +793,12 @@ fn lower_prose(msg: &LowerError) -> String {
                 "`{kernel}` reads its column from a `.field` accessor, so it must \
                  be applied directly with its accessor and value — not passed \
                  around point-free or partially applied."
+            )
+        }
+        LowerError::UnsaturatedHandlerKernel { kernel } => {
+            format!(
+                "`{kernel}` has to be called with all its arguments — you can't \
+                 store it under a name or pass it around before its handler is given."
             )
         }
         LowerError::StoreSelectProjectionInvalid(defect) => match defect {
@@ -1289,7 +1302,7 @@ fn push_span_block(
 
 fn color_enabled() -> bool {
     use std::io::IsTerminal;
-    std::env::var_os("NO_COLOR").is_none() && std::io::stderr().is_terminal()
+    ipe_env::var_os("NO_COLOR").is_none() && std::io::stderr().is_terminal()
 }
 
 fn paint(color: bool, seq: &str, text: &str) -> String {
@@ -1653,6 +1666,12 @@ fn name_label(msg: &NameError) -> Option<String> {
              `update : Msg -> Model -> ( Model, Cmd Msg )`"
                 .to_string(),
         ),
+        NameError::InputFieldIsSubscription {
+            field, sub_module, ..
+        } => Some(format!(
+            "remove `{field}` from the config and subscribe instead: \
+             `import {sub_module} as Sub`, then `subscriptions _ = Sub.{field} {field}`"
+        )),
         NameError::RustNameFold { .. } | NameError::Unknown => None,
     }
 }
@@ -1711,10 +1730,20 @@ fn type_label(msg: &TypeError) -> Option<String> {
                 // ("`a` is not a non-function callback result … type").
                 Some(format!(
                     "the callback's result type {} may itself be a function — \
-                     Maybe/Result higher-order kernels (map / map2..5 / mapError / \
-                     andMap) apply their callback at one exact arity, so the \
+                     higher-order kernels (List.map / List.foldl / Maybe.map2 / \
+                     andMap / …) apply their callback at one exact arity, so the \
                      callback must return a plain (non-function) value",
                     ty_to_string(found)
+                ))
+            } else if &**class == crate::diagnostic::INTERPOLABLE_CLASS {
+                Some(format!(
+                    "{} cannot be interpolated or logged — `{{{{…}}}}` and `Log.*With` \
+                     accept only {}; convert the value first with `String.fromInt`, \
+                     `String.fromFloat`, `String.fromBool` or `String.fromChar`, or \
+                     with your own function that renders a record or custom type as a \
+                     `String`",
+                    ty_to_string(found),
+                    crate::diagnostic::INTERPOLABLE_TYPES.join(", ")
                 ))
             } else {
                 Some(format!("{} is not a {class} type", ty_to_string(found)))
@@ -1898,6 +1927,15 @@ fn lower_label(msg: &LowerError) -> String {
                  accessor and value (e.g. `{kernel} .field value`) instead of \
                  passing it point-free (say `\\x -> {kernel} .field x` if you need a \
                  function value)"
+            )
+        }
+        LowerError::UnsaturatedHandlerKernel { kernel } => {
+            format!(
+                "`{kernel}` must be applied to all its arguments here — it rebuilds its \
+                 handler for every request, so the handler must be given at the call: \
+                 write `{kernel} contentType handler` (piping the handler in with \
+                 `<|` / `|>` is fine) instead of binding `{kernel}` or a partial \
+                 application of it to a name or passing it as a value"
             )
         }
         LowerError::StoreSelectProjectionInvalid(defect) => store_select_projection_label(defect),
@@ -2272,13 +2310,41 @@ const fn feature_label(f: Feature) -> &'static str {
              function out of the collection, instead [feature: \
              function-element-equality]"
         }
+        Feature::HofCallbackFunctionResult => {
+            "a higher-order kernel (`List.map`, `List.foldl`, `Maybe.map2`, \
+             `andMap`, …) applies its callback at one exact arity, so the \
+             callback must return a plain (non-function) value; apply the \
+             missing argument inside the callback (`\\x -> add x 1`) or use \
+             the kernel whose callback takes every argument (`List.map2`) \
+             [feature: hof-callback-function-result]"
+        }
+        Feature::EtaSiteLimit => {
+            "passing stored functions to a named mapper (`List.map5 applyAll fs …`) \
+             wraps the mapper in an adapter with one parameter per mapper \
+             argument and per argument of each stored function, and one call \
+             site bounds how many it may draw; pass the mapper as a lambda that \
+             calls the stored functions directly, or store functions that take \
+             fewer arguments (a record or tuple of arguments) \
+             [feature: eta-site-limit]"
+        }
         Feature::NonCloneValueReuse => {
             "a value holding a `Task`/`Cmd`/`Sub` effect (bare, or inside a \
-             union/tuple/record payload) is used more than once — an effect \
-             value is not `Clone`, so the second consuming use has no sound copy \
-             to make; thread the value linearly (bind and use it once) or \
-             restructure so the effect flows through a single continuation \
+             union/tuple/record payload) is used more than once, or one of its \
+             fields is read after the value was consumed — an effect value is \
+             not `Clone`, so the second use has no sound copy to make; thread \
+             the value linearly (bind and use it once), read the fields you \
+             need into `let` bindings before the consuming use, or restructure \
+             so the effect flows through a single continuation \
              [feature: non-clone-value-reuse]"
+        }
+        Feature::StreamHandlerCapture => {
+            "a `Stream.stream` handler is rebuilt for every request, so each value \
+             it captures is copied into it — this capture cannot be copied (a \
+             function bound through a tuple/record destructure, a `Task`/`Cmd`/\
+             `Sub`, or a value whose type could not be determined); bind a \
+             captured function with a plain `let f = …` or take it as a parameter, \
+             and build a captured task inside the handler \
+             [feature: stream-handler-capture]"
         }
     }
 }
@@ -2628,6 +2694,38 @@ mod tests {
         assert!(
             out2.contains("String is not a Number type"),
             "generic template regressed:\n{out2}"
+        );
+    }
+
+    #[test]
+    fn interpolable_super_type_names_the_scalars_and_the_fix() {
+        let src = "module Main exposing (main)\n\nmain =\n    foo\n";
+        let d = Diagnostic::Type {
+            span: Span::new(40, 43),
+            msg: TypeError::SuperTypeUnsatisfied {
+                class: crate::diagnostic::INTERPOLABLE_CLASS.into(),
+                found: Box::new(con("Maybe")),
+            },
+        };
+        let out = render(&d, "test.ipe", src);
+        assert!(
+            out.contains("Maybe cannot be interpolated or logged"),
+            "tailored sentence missing:\n{out}"
+        );
+        for ty in crate::diagnostic::INTERPOLABLE_TYPES {
+            assert!(out.contains(ty), "accepted type `{ty}` not named:\n{out}");
+        }
+        for conv in [
+            "String.fromInt",
+            "String.fromFloat",
+            "String.fromBool",
+            "String.fromChar",
+        ] {
+            assert!(out.contains(conv), "conversion `{conv}` not named:\n{out}");
+        }
+        assert!(
+            !out.contains("is not a interpolable"),
+            "generic template must not fire for the interpolation label:\n{out}"
         );
     }
 

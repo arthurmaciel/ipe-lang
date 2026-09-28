@@ -32,14 +32,14 @@ fn fixture_dir(root: &Path) -> PathBuf {
 /// the checked-in `expected.txt` byte-for-byte.
 #[test]
 fn store_migrations_producer_runs_and_matches() {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
 
     let root = crate::support::repo_root();
     let dir = fixture_dir(&root);
     let entry = dir.join("Main.ipe");
-    let out = std::env::temp_dir().join(format!("ipec_{GOLDEN}_e2e"));
+    let out = crate::support::scratch_root().join(format!("ipec_{GOLDEN}_e2e"));
     let _ = std::fs::remove_dir_all(&out);
 
     let Ok(runtime) = ipe::resolve_runtime() else {

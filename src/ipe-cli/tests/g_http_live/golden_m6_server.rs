@@ -41,7 +41,7 @@ fn repo_root() -> PathBuf {
 /// * `server_param(…, …clone())` / `server_get_cookie(…, …clone())`
 #[test]
 fn server_request_accessor_emit_inserts_clone() {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
 
@@ -51,7 +51,7 @@ fn server_request_accessor_emit_inserts_clone() {
         .join("golden")
         .join("server_request_accessors")
         .join("Main.ipe");
-    let out = std::env::temp_dir().join("ipec_m6_server_request_accessors");
+    let out = crate::support::scratch_root().join("ipec_m6_server_request_accessors");
     let _ = std::fs::remove_dir_all(&out);
 
     let runtime = ipe::resolve_runtime();

@@ -11,6 +11,7 @@ path = "src/lib.rs"
 [dependencies]
 # Parsing `cargo build --message-format=json` to locate the emitted binary.
 serde_json = "1"
+ipe_env = { path = "../../src/compiler/env" }
 
 [lints]
 workspace = true

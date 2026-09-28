@@ -1,10 +1,10 @@
 //! errorToString polymorphic-Stringify regression suite.
 //!
 //! Root cause: hard-typing `K::ErrorToString` as monomorphic `Error -> String`
-//! in `stdlib_scheme` (without the direct-build arm that `BasicsToString` has)
+//! in `stdlib_scheme` (without the direct-build arm that `Interpolate` has)
 //! forces the solver to unify a rigid annotation var `a` with the `Error` type →
 //! IPE-T0001.  Instead `errorToString : Stringify a => a -> String` (same
-//! chokepoint as `Basics.toString`).
+//! chokepoint as `{{…}}` interpolation).
 //!
 //! The unify.rs super-super arm is extended to allow cross-rigidity merging for
 //! non-dispatch obligations (Eq, Ord, Stringify), letting `equal : a -> a ->
@@ -53,7 +53,7 @@ fn try_build(entry: &Path) -> Result<PathBuf, ipe::CliError> {
 }
 
 fn e2e_enabled() -> bool {
-    std::env::var("IPE_E2E").is_ok()
+    ipe_env::var("IPE_E2E").is_ok()
 }
 
 // ─── positive gate ────────────────────────────────────────────────────────────
@@ -86,7 +86,7 @@ fn errortostring_polymorphic_e2e() {
     }
     let root = repo_root();
     let entry = golden_entry(&root, "m_ipe_test_stringify");
-    let out = std::env::temp_dir().join("ipec_m_ipe_test_stringify_e2e");
+    let out = crate::support::scratch_root().join("ipec_m_ipe_test_stringify_e2e");
     let _ = std::fs::remove_dir_all(&out);
     let Ok(runtime) = ipe::resolve_runtime() else {
         return;
@@ -124,7 +124,7 @@ fn eqshow_e2e() {
     }
     let root = repo_root();
     let entry = golden_entry(&root, "m_errortostring_eqshow");
-    let out = std::env::temp_dir().join("ipec_m_errortostring_eqshow_e2e");
+    let out = crate::support::scratch_root().join("ipec_m_errortostring_eqshow_e2e");
     let _ = std::fs::remove_dir_all(&out);
     let Ok(runtime) = ipe::resolve_runtime() else {
         return;

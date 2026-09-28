@@ -34,7 +34,7 @@ fn built(root: &Path, out: &Path) -> Option<Result<(), ipe::CliError>> {
 #[test]
 fn cache_int_get_emits() {
     let root = repo_root();
-    let out = std::env::temp_dir().join("ipec_cache_int_get_emit");
+    let out = crate::support::scratch_root().join("ipec_cache_int_get_emit");
     let Some(built) = built(&root, &out) else {
         return;
     };
@@ -51,7 +51,7 @@ fn cache_int_get_emits() {
 #[test]
 fn cache_int_get_builds_and_runs() {
     let root = repo_root();
-    let out = std::env::temp_dir().join("ipec_cache_int_get_e2e");
+    let out = crate::support::scratch_root().join("ipec_cache_int_get_e2e");
     let Some(built) = built(&root, &out) else {
         return;
     };
@@ -60,7 +60,7 @@ fn cache_int_get_builds_and_runs() {
         "cache_int_get: must be accepted, got: {built:?}"
     );
 
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
     let outcome = crate::support::build_and_run_emitted("cache_int_get", &out);

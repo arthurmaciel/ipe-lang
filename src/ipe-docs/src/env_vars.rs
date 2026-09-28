@@ -152,14 +152,14 @@ pub static ENV_VARS: &[EnvVar] = &[
         name: "IPE_BUILD_CACHE",
         default: "on",
         purpose: "Set to `0`, `off`, or `false` to disable the incremental build cache. \
-                  Default is on; the cache directory is `<out>/.ipe-cache` unless \
+                  Default is on; the cache directory is `<out>/.ipe-cache/<per-user salt>` unless \
                   `IPE_BUILD_CACHE_DIR` is set.",
         subsystem: Subsystem::Build,
         class: Class::Tunable,
     },
     EnvVar {
         name: "IPE_BUILD_CACHE_DIR",
-        default: "unset (<out>/.ipe-cache)",
+        default: "unset (<out>/.ipe-cache/<per-user salt>)",
         purpose: "Explicit path for the incremental build cache directory. Takes effect \
                   only when the cache is enabled (`IPE_BUILD_CACHE` not `off`).",
         subsystem: Subsystem::Build,
@@ -209,21 +209,22 @@ pub static ENV_VARS: &[EnvVar] = &[
     },
     EnvVar {
         name: "IPE_INDEX_DIR",
-        default: "unset (~/.ipe/index)",
+        default: "unset ($XDG_CACHE_HOME/ipe/index, then $HOME/.cache/ipe/index)",
         purpose: "Override the root directory of the package-index checkout used by \
                   `ipe add` / `ipe install`. Points to a local mirror of the \
-                  ipe-registry index. Useful for air-gapped environments.",
+                  ipe-registry index. Useful for air-gapped environments. Must be an \
+                  absolute path.",
         subsystem: Subsystem::Build,
         class: Class::Tunable,
     },
     EnvVar {
         name: "IPE_PUBLISH_SIGNING_KEY",
         default: "unset",
-        purpose: "Path to the SSH private key used to sign a package before publishing. \
-                  When set, `ipe publish` signs the package archive and attaches the \
-                  signature; when unset, publish is refused for registries that require \
-                  signed submissions. Provide via your secret manager; never commit the \
-                  key file path alongside the key itself.",
+        purpose: "Path to the SSH private-key file `ipe package publish` signs the index \
+                  commit with (its public half must be registered as a signing key on your \
+                  GitHub account). Overrides the key `ipe login --signing-key` stored; when \
+                  set but not a readable file, publish refuses rather than fall back. \
+                  Unset with no stored key, publish refuses.",
         subsystem: Subsystem::Build,
         class: Class::Secret,
     },
@@ -346,17 +347,26 @@ pub static ENV_VARS: &[EnvVar] = &[
     EnvVar {
         name: "IPE_ADMIN_TOKEN",
         default: "unset",
-        purpose: "Bearer token granting access to the embedded developer console in \
-                  production. Provide via your secret manager; never commit. Falls back \
-                  to `IPE_CONSOLE_TOKEN`, then `IPE_METRICS_TOKEN`.",
+        purpose: "Admin token (`Bearer`, or the `Basic` password) granting access to the \
+                  embedded developer console and `/_ipe/metrics` in production or under \
+                  `IPE_CONSOLE_AUTH=token`. Provide via your secret manager; never commit. \
+                  Falls back to the in-code `Console.adminToken`, then `IPE_CONSOLE_TOKEN`. \
+                  A non-UTF-8 value refuses every admin request and keeps the console \
+                  unmounted in production.",
         subsystem: Subsystem::Console,
         class: Class::Secret,
     },
     EnvVar {
         name: "IPE_CONSOLE_AUTH",
-        default: "unset (token in production, off in dev)",
-        purpose: "Console authentication mode: `token` (bearer-token gate), `off` \
-                  (disable auth — dev only). Unset uses the production/dev heuristic.",
+        default: "unset (token in production, open in dev)",
+        purpose: "Console authentication mode: `token` (admin-token gate, enforced in \
+                  every posture, dev included), `off` (console disabled), `app` (app \
+                  callback; mounted but answers 501 on the Rust runtime). The posture \
+                  picks the default only when the variable is unset or blank; any other \
+                  value (including a non-UTF-8 one) disables the console. The effective \
+                  posture, mode, and source are logged once at startup \
+                  (`[ipe.console] auth posture=… mode=… source=env|env-invalid|posture-default`); \
+                  no token is ever logged.",
         subsystem: Subsystem::Console,
         class: Class::SecurityTunable,
     },
@@ -455,8 +465,11 @@ pub static ENV_VARS: &[EnvVar] = &[
     EnvVar {
         name: "IPE_METRICS_TOKEN",
         default: "unset",
-        purpose: "Deprecated alias for `IPE_ADMIN_TOKEN`. Prefer `IPE_ADMIN_TOKEN`. \
-                  Provide via your secret manager; never commit.",
+        purpose: "Metrics-scrape token (`Bearer`, or the `Basic` password) authorizing \
+                  `/_ipe/metrics` only, never the console; the admin token is accepted \
+                  there too. Falls back to the in-code `Console.metricsToken`. A non-UTF-8 \
+                  value refuses every metrics-token request. Provide via your secret \
+                  manager; never commit.",
         subsystem: Subsystem::Console,
         class: Class::Secret,
     },
@@ -716,9 +729,10 @@ pub static ENV_VARS: &[EnvVar] = &[
     EnvVar {
         name: "IPE_HTTP_DNS_TIMEOUT_MS",
         default: "5000 (5 s)",
-        purpose: "Deadline (ms) for the SSRF pre-send DNS resolve, run off the async \
-                  worker via spawn_blocking. Bounds worker-pool starvation from a slow \
-                  or stalling resolver on an outbound request.",
+        purpose: "Deadline (ms) for each SSRF-gate DNS resolve (HTTP, WebSocket, database, \
+                  SMTP), through the non-blocking resolver. A host still unresolved at the \
+                  deadline is refused, so a slow or stalling resolver cannot hold an \
+                  outbound dial.",
         subsystem: Subsystem::Http,
         class: Class::SecurityTunable,
     },
@@ -849,7 +863,8 @@ pub static ENV_VARS: &[EnvVar] = &[
         name: "IPE_HOME",
         default: "unset ($XDG_DATA_HOME/ipe, then $HOME/.ipe)",
         purpose: "Root directory for materialised runtime source, config, and cached \
-                  binaries. Overrides the XDG / home-directory fallback.",
+                  binaries. Overrides the XDG / home-directory fallback. Must be an \
+                  absolute path.",
         subsystem: Subsystem::Runtime,
         class: Class::Tunable,
     },
@@ -1217,8 +1232,11 @@ pub static EXCLUDED_NAMES: &[&str] = &[
     "IPE_E2E_BUILD_TIMEOUT_SECS", // golden E2E harness: emitted-crate build fail-fast cap
     "IPE_E2E_SECRET",          // macOS jail e2e test sentinel
     "IPE_E2E_STATIC",          // CI gate for static-binary e2e tests
+    "IPE_HOST_ENV_TEST_UNSET_7F3A9C21D84E", // sandbox host_env test: a name no host sets
     "IPE_HTTP_FIXTURE_ACCEPT_MS", // http_e2e harness: fixture-server accept fail-fast deadline
     "IPE_HTTP_TEST_URL",
+    "IPE_JUNCTION_AT", // Windows junction test helper: PowerShell script input
+    "IPE_JUNCTION_TO", // Windows junction test helper: PowerShell script input
     "IPE_LOAD_ENV_PROBE_VAR",
     "IPE_ORACLE_SHARED_TARGET",
     "IPE_RUN_WITH_TEST_VAR",
@@ -1262,11 +1280,22 @@ pub static EXCLUDED_NAMES: &[&str] = &[
     // `ipe watch` into the spawned child (never operator-set), like the port
     // vars above. Present only in a dev-loop (web/debugger) build.
     "IPE_CONTROL_PORT",
-    // Dev-loop-internal record-log destination — set by `ipe debugger record`
-    // on the spawned child (the operator names the log with `--out`, never this
-    // var directly). Read by the recorder dump; present only in a `debugger`
-    // build.
+    // Dev-loop-internal record-log destination — set by `ipe run --record` on
+    // the executed child (the log always lands in the ipe-owned output root; the
+    // operator never sets this var directly). Read by the recorder dump; present
+    // only in a `debugger` build.
     "IPE_DEBUGGER_RECORD",
+    // Dev-loop-internal replay-log path — set by `ipe run --replay` on the
+    // executed child (never operator-set). Read by the cli/worker loop, which
+    // replays the named typed log instead of running; present only in a
+    // `debugger` build.
+    "IPE_DEBUGGER_REPLAY",
+    // `ipe upgrade` <-> `install.sh` handshake — set by the upgrade wrapper on
+    // the installer child it spawns (never operator-set): the wrapped marker
+    // suppresses the installer's own failure banner, and the tag file carries
+    // the resolved release tag back to the wrapper.
+    "IPE_UPGRADE_TAG_FILE",
+    "IPE_UPGRADE_WRAPPED",
 ];
 
 #[cfg(test)]

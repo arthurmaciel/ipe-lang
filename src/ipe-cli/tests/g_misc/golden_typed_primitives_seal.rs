@@ -43,7 +43,7 @@ fn built(root: &Path, out: &Path) -> Option<Result<(), ipe::CliError>> {
 #[test]
 fn typed_primitives_seal_emits() {
     let root = repo_root();
-    let out = std::env::temp_dir().join("ipec_typed_primitives_seal_emit");
+    let out = crate::support::scratch_root().join("ipec_typed_primitives_seal_emit");
     let Some(built) = built(&root, &out) else {
         return; // resolver unavailable — skip, matches the other goldens
     };
@@ -59,7 +59,7 @@ fn typed_primitives_seal_emits() {
 #[test]
 fn typed_primitives_seal_builds_and_runs() {
     let root = repo_root();
-    let out = std::env::temp_dir().join("ipec_typed_primitives_seal_e2e");
+    let out = crate::support::scratch_root().join("ipec_typed_primitives_seal_e2e");
     let Some(built) = built(&root, &out) else {
         return;
     };
@@ -68,7 +68,7 @@ fn typed_primitives_seal_builds_and_runs() {
         "typed_primitives_seal: must be accepted, got: {built:?}"
     );
 
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
     let outcome = crate::support::build_and_run_emitted("typed_primitives_seal", &out);

@@ -23,8 +23,13 @@ use core::fmt::Write as _;
 ///
 /// `None` when the callee does not reverse, the call is not the two-argument
 /// `f container` shape, or `f` captures none of `container`'s free variables —
-/// the caller then emits `container` unchanged.
-pub fn swapped_container_clone_rewrite(callee: &Callee, args: &[Expr]) -> Option<Expr> {
+/// the caller then emits `container` unchanged. `payloads` is the named enums'
+/// variant payload table the rewrite's inlined-`let` decision reads.
+pub fn swapped_container_clone_rewrite(
+    callee: &Callee,
+    args: &[Expr],
+    payloads: &ipe_ir::EnumPayloadTable,
+) -> Option<Expr> {
     if !callee.evaluates_args_reversed() {
         return None;
     }
@@ -44,7 +49,7 @@ pub fn swapped_container_clone_rewrite(callee: &Callee, args: &[Expr]) -> Option
     if targets.is_empty() {
         return None;
     }
-    Some(clone_targets_in_expr(container.clone(), &targets))
+    Some(clone_targets_in_expr(container.clone(), &targets, payloads))
 }
 
 /// Whether a `Call` node hits one of the bespoke kernel special cases the
@@ -1656,6 +1661,27 @@ pub fn emit_config_ctor_call(callee: &Callee) -> Option<String> {
     Some(format!("{tag}i64"))
 }
 
+/// Fail closed unless the entry's surface is the one whose loop reads this input subscription.
+///
+/// The lowerer refuses every reference outside its surface with a
+/// source-anchored IPE-N0035; reaching here with a mismatch is a broken
+/// invariant, so it is a compiler bug — never emitted Rust whose subscription
+/// no loop reads.
+fn require_input_sub_shape(ctx: &EmitCtx, k: KernelFn) -> DResult<()> {
+    match k.input_surface() {
+        Some(owner) if owner != ctx.entry_surface => Err(Diagnostic::CompilerBug {
+            where_: "ipe_backend_rust::emit_tea_call::require_input_sub_shape",
+            detail: format!(
+                "{k:?} reads {} input but the entry is a {} app; the lowerer's \
+                 surface gate should have refused it",
+                owner.name(),
+                ctx.entry_surface.name()
+            ),
+        }),
+        _ => Ok(()),
+    }
+}
+
 #[allow(clippy::match_same_arms, clippy::too_many_lines)]
 pub fn emit_tea_call(
     ctx: &EmitCtx,
@@ -1712,34 +1738,13 @@ pub fn emit_tea_call(
             let handler_src = emit_expr_at(ctx, handler_expr, indent, child, generics)?;
             Ok(Some(format!("cmd_perform({task_s}, {handler_src})")))
         }
-        // ── Task.attempt : (Result Error a -> msg) -> Task Error a -> Cmd msg ──
-        // Elm's arg order is `(to_msg, task)`; the runtime `cmd_perform` takes
-        // `(task, to_msg)` (the exact `Cmd.perform` bridge), so the two args are
-        // emitted swapped. Reuses `cmd_perform` — no dedicated runtime symbol.
-        KernelFn::TaskAttempt => {
-            let handler_expr = arg!(0, "to_msg")?;
-            let task_e = arg!(1, "task")?;
-            let handler_src = emit_expr_at(ctx, handler_expr, indent, child, generics)?;
-            let task_s = emit_expr_at(ctx, task_e, indent, child, generics)?;
-            Ok(Some(format!("cmd_perform({task_s}, {handler_src})")))
-        }
-        // ── Arity-2: Cmd.map / Sub.map (retag a sub-component's effects) ─────────
-        // `Cmd.map : (a -> msg) -> Cmd a -> Cmd msg`  →  `cmd_map(<cmd>, <f>)`
-        // `Sub.map : (a -> msg) -> Sub a -> Sub msg`  →  `sub_map(<sub>, <f>)`
-        // The Ipê argument order is `(f, effect)`; the runtime takes
-        // `(effect, f)` (effect first so `f` infers its `A` from the effect's
-        // message type), so the two args are emitted swapped. `f` is passed
-        // through unboxed — `cmd_map`/`sub_map` are generic over `F: Fn(A) -> M`
-        // and share it via `Arc` internally, so the emitted closure value binds
-        // directly with no re-wrap.
-        KernelFn::CmdMap | KernelFn::SubMap => {
-            let handler_expr = arg!(0, "f")?;
-            let effect_e = arg!(1, "effect")?;
-            let handler_src = emit_expr_at(ctx, handler_expr, indent, child, generics)?;
-            let effect_s = emit_expr_at(ctx, effect_e, indent, child, generics)?;
-            let name = kernel_name(*k); // "cmd_map" / "sub_map"
-            Ok(Some(format!("{name}({effect_s}, {handler_src})")))
-        }
+        // `Task.attempt : (Result Error a -> msg) -> Task Error a -> Cmd msg`
+        // → `cmd_perform(<task>, <to_msg>)`; `Cmd.map`/`Sub.map :
+        // (a -> msg) -> effect a -> effect msg` → `cmd_map`/`sub_map(<effect>,
+        // <f>)`. Each is declared `ArgOrder::ContainerFirst`, so the default
+        // N-arg emitter swaps the pair and clones the function's captures at
+        // their container use sites.
+        KernelFn::TaskAttempt | KernelFn::CmdMap | KernelFn::SubMap => Ok(None),
         // ── Arity-2: tick subscriptions — standard path ──────────────────────────
         // `Sub.every : Int -> msg -> Sub msg` and
         // `Time.every : Int -> msg -> Sub msg`
@@ -1752,6 +1757,27 @@ pub fn emit_tea_call(
         // non-describable entry) it passes through the default N-arg emitter
         // (`Ok(None)`), byte-identical to the flag-off form — no boxing needed.
         KernelFn::SubEvery | KernelFn::TimeEvery => Ok(emit_sub_arm(ctx, *k, args)),
+        // ── Arity-1: shape-owned terminal input subscriptions ────────────────────
+        // `Tui.Sub.onKey : (KeyEvent -> msg) -> Sub msg`
+        //   →  `tui_sub_on_key(|kind, value| handler(KeyEvent { kind, value }))`
+        // `Cli.Sub.onLine : (String -> msg) -> Sub msg`
+        //   →  `cli_sub_on_line(handler)`
+        // Only the matching terminal loop drives these; the shape guard refuses
+        // either one anywhere else (a sub no loop reads is silently lost input).
+        KernelFn::TuiSubOnKey => {
+            require_input_sub_shape(ctx, *k)?;
+            let handler_expr = arg!(0, "to_msg")?;
+            let handler_src = emit_expr_at(ctx, handler_expr, indent, child, generics)?;
+            let bridge = crate::emit_tui::key_event_bridge(ctx, &handler_src)?;
+            Ok(Some(format!("tui_sub_on_key({bridge})")))
+        }
+        KernelFn::CliSubOnLine => {
+            require_input_sub_shape(ctx, *k)?;
+            let handler_expr = arg!(0, "to_msg")?;
+            let handler_src = emit_expr_at(ctx, handler_expr, indent, child, generics)?;
+            let bridge = crate::emit_console::line_handler_bridge(&handler_src);
+            Ok(Some(format!("cli_sub_on_line({bridge})")))
+        }
         // ── Arity-2: pub/sub subscription — standard path ────────────────────────
         // `Sub.subscribeTopic : String -> (any -> msg) -> Sub msg`
         // The runtime `sub_subscribe_topic` is in live/pubsub.rs (live-feature
@@ -1880,6 +1906,14 @@ pub fn emit_tea_call(
     }
 }
 
+// The `StreamStream` arm re-wraps argument 1: the lowerer's non-`Clone`
+// capture gate reads the same index, so a drift breaks the build.
+// IPE-RUST-AUDIT:ACCEPTED (Arthur Maciel) — compile-time `const` assertion (not a runtime panic); fails the BUILD if the re-wrapped handler index drifts from the lowerer's capture-gate index, the capture-clone SEAL invariant [ledger #boundary]
+const _: () = assert!(matches!(
+    KernelFn::StreamStream.capture_cloned_handler_arg(),
+    Some(1)
+));
+
 /// Build the capture-clone prologue for the `StreamStream` re-wrap closure.
 ///
 /// The `StreamStream` arm wraps the handler in `move |_x| (handler)(_x)` to
@@ -1896,33 +1930,20 @@ pub fn emit_tea_call(
 /// `v` the handler captures, spliced INSIDE the wrapper body: the box moves the
 /// fresh shadowing clones, the wrapper keeps its originals for the next call.
 /// Same shape as the `TaskSeq` clone-capture prologue, applied at
-/// an emit-synthesized closure. Every captured free local is `Clone`: an
-/// enclosing value (`Clone` by its carrier type), a `let`-bound handler
-/// promoted to `SharedLambda` (`Arc`, `Clone` — `StreamStream` is in
-/// `requires_sync_capture`), or a `Copy` leaf (whose `.clone()` is a bitwise
-/// copy).
+/// an emit-synthesized closure. Every captured free local is `Clone` by a
+/// lowerer guarantee, not an assumption here: `StreamStream` names this handler
+/// in `KernelFn::capture_cloned_handler_arg`, and the lowerer classifies each of
+/// its captures (`Copy` leaf, `Clone` carrier, or a pure-`Fun` binder promoted
+/// to the `Arc` carrier — `StreamStream` is in `requires_sync_capture`) and
+/// refuses a non-`Clone` one (a destructure-bound `Box<dyn Fn>`) with IPE-L0126.
 pub fn stream_handler_capture_prologue(ctx: &EmitCtx, handler: &Expr) -> DResult<String> {
-    capture_clone_prologue(ctx, [handler])
-}
-
-/// A `let <v> = <v>.clone(); …` prologue for every free local of `exprs`, each named once.
-///
-/// Spliced ahead of emitted code that `move`-captures those locals while the
-/// originals must stay available afterwards — the prologue's shadowing clones
-/// are what the captures consume.
-pub fn capture_clone_prologue<'e>(
-    ctx: &EmitCtx,
-    exprs: impl IntoIterator<Item = &'e Expr>,
-) -> DResult<String> {
     let mut captured = std::collections::BTreeSet::new();
-    for expr in exprs {
-        collect_free_vars(expr, &mut captured);
-    }
+    collect_free_vars(handler, &mut captured);
     let mut prologue = String::new();
     for sym in captured {
         let id = ctx.emit_ident(sym)?;
         write!(prologue, "let {id} = {id}.clone(); ").map_err(|_| Diagnostic::CompilerBug {
-            where_: "ipe_backend_rust::capture_clone_prologue",
+            where_: "ipe_backend_rust::stream_handler_capture_prologue",
             detail: "writing capture-clone prologue failed".to_owned(),
         })?;
     }

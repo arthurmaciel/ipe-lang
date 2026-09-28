@@ -76,13 +76,13 @@ fn css_length_color_ssot_emits_byte_identical() {
 /// end-to-end.
 #[test]
 fn css_length_color_ssot_e2e_output_matches_native_table() {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
 
     let dir = golden_dir();
     let entry = dir.join("Main.ipe");
-    let out = std::env::temp_dir().join("ipec_css_length_color_ssot_e2e");
+    let out = crate::support::scratch_root().join("ipec_css_length_color_ssot_e2e");
     let _ = std::fs::remove_dir_all(&out);
 
     let rt = runtime();

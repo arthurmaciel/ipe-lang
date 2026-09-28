@@ -38,7 +38,9 @@ a `Draft a`, so a table left unclassified cannot be read or written by mistake
 
 The record fields are the same schema payload a `Store a` carries: `codec` is
 the single source of truth (its `Shape` yields the columns and their types),
-`specs` are the DB-only facts, `pk` is the validated primary-key column,
+`specs` are the DB-only facts, `pk` is the parsed primary-key declaration
+(an `Err` once an illegal key was declared; every read and write then fails
+with it),
 `frozenTable` / `frozenColumns` hold the table name and columns as first
 constructed, `table` / `currentColumns` track the current-schema view after any
 renames, `ops` is the ordered schema-op log, and `indexes` is the ordered index
@@ -54,7 +56,7 @@ store has passed through a deliberate classification. Its record fields carry
 the same schema payload the `Draft a` held: `codec` is the single source of
 truth (its `Shape` yields the columns and their types, its encoder writes a
 row, its decoder reads one back); `specs` are the DB-only facts; `pk` is the
-validated primary-key column used by the by-key operations. `frozenTable` and
+parsed primary-key declaration whose single column the by-key operations use. `frozenTable` and
 `frozenColumns` hold the table name and columns as first constructed (the
 source for the never-drifting create entry — neither is edited by a rename).
 `table` and `currentColumns` track the current-schema view after any renames
@@ -82,6 +84,17 @@ A DB-only fact the record type cannot express: primary key, serial
 (DB-assigned) id, uniqueness, or a DB-stamped default. A typed ADT, not a
 stringly flag — an impossible spec (a flag typo, a malformed default) is
 unrepresentable.
+
+## `PrimaryKeyDecl`
+
+The table's primary key: none, one column, or several columns forming one
+table-level key. At most one key per table, so the single and composite forms
+are one closed sum rather than two independent flags. `CompositePk first
+second rest` holds the key columns in declared order (order is significant
+for the backing index) and carries at least two columns by construction — a
+one-column key is a `SinglePk`. Reached only through `primaryKeyNamed` /
+`compositePrimaryKeyNamed` (or their accessor forms), which parse the declared
+columns against the draft before recording a key.
 
 ## `IndexSpec`
 
@@ -272,6 +285,24 @@ primaryKey : (row -> t) -> Draft row -> Draft row
 Mark the accessor-named column the primary key. The lowering intercept
 extracts the column name from the accessor and calls `primaryKeyNamed`.
 
+Use it when one column identifies a row (an `id`, a `code`); the by-key
+operations (`get` / `update` / `delete` and their `*As` / `*On` forms) key on
+it. A table has one primary key: declaring a second one — another
+`primaryKey`, or a `compositePrimaryKey2` / `compositePrimaryKey3` — records a
+typed `Err` that `createSql` / `migrations` return, `secured` refuses, and
+every read and write on the resulting store fails with before any SQL runs.
+
+Example:
+
+    import Ipe.Db.Store as Store exposing (Store)
+
+    type alias Country =
+        { code : String, name : String }
+
+    countriesDraft : Store.Draft Country -> Store.Draft Country
+    countriesDraft draft =
+        Store.primaryKey .code draft
+
 ## `serial`
 
 ```ipe
@@ -359,11 +390,122 @@ Example:
     withUpdatedAt store =
         Store.touchOnUpdate .updatedAt store
 
+## `compositePrimaryKey2`
+
+```ipe
+compositePrimaryKey2 : (row -> a) -> (row -> b) -> Draft row -> Draft row
+```
+
+`compositePrimaryKey2 first second draft` — make the two accessor-named
+columns, in this order, one table-level primary key. The lowering intercept
+extracts each column name from its accessor and calls
+`compositePrimaryKeyNamed`; an accessor naming a field the row does not have
+is a type error, never a runtime one.
+
+Use it when no single column identifies a row but a pair does (a membership
+keyed by user and group, a per-day counter keyed by subject and date). Key
+order is significant: it is the column order of the backing index, so lead
+with the column most lookups filter on. For a one-column key use
+`primaryKey`; for three columns use `compositePrimaryKey3`.
+
+A composite key has no single key column, so the by-key operations (`get` /
+`update` / `delete`) return a typed `Err` on such a store — reach its rows
+with `findWhere` / `updateWhere` / `deleteWhere` naming every key column;
+`updateWhere` never writes any key column. Declaring a second primary key, or
+a key column listed twice, records a typed `Err` that every read and write on
+the store fails with.
+
+`createSql` / `migrations` do not yet render a table-level
+`PRIMARY KEY (...)` clause: for a composite key they ALWAYS return a typed
+`Err`, so the table must already exist (created outside `Ipe.Db.Store`).
+
+Example:
+
+    import Ipe.Db.Store as Store exposing (Store)
+
+    type alias Membership =
+        { userId : String, groupId : String, role : String }
+
+    membershipDraft : Store.Draft Membership -> Store.Draft Membership
+    membershipDraft draft =
+        Store.compositePrimaryKey2 .userId .groupId draft
+
+## `compositePrimaryKey3`
+
+```ipe
+compositePrimaryKey3 : (row -> a) -> (row -> b) -> (row -> c) -> Draft row -> Draft row
+```
+
+`compositePrimaryKey3 first second third draft` — make the three
+accessor-named columns, in this order, one table-level primary key. Same
+rules as `compositePrimaryKey2`: key order is significant, an accessor naming
+a missing field is a type error, the by-key operations return a typed `Err`
+on the resulting store, `updateWhere` never writes any key column, and a
+second key declaration records a typed `Err` that every read and write fails
+with. `createSql` / `migrations` ALWAYS return a typed `Err` for a composite
+key (no table-level `PRIMARY KEY (...)` clause is rendered yet), so the table
+must already exist. For more than three columns, or a raw-column
+`fromColumns` draft, use `compositePrimaryKeyNamed`.
+
+Example:
+
+    import Ipe.Db.Store as Store exposing (Store)
+
+    type alias Reading =
+        { sensor : String, day : String, hour : Int, value : Float }
+
+    readingDraft : Store.Draft Reading -> Store.Draft Reading
+    readingDraft draft =
+        Store.compositePrimaryKey3 .sensor .day .hour draft
+
 ## `primaryKeyNamed`
 
 ```ipe
 primaryKeyNamed : String -> Draft a -> Draft a
 ```
+
+`primaryKeyNamed column draft` — the string form of `primaryKey`: mark the
+named `column` the single-column primary key. The column is checked against
+the draft's columns when the DDL is built. A draft that already declares a
+primary key keeps no second one: the conflict is recorded as a typed `Err`
+that `createSql` / `migrations` return, `secured` refuses, and every read and
+write on the resulting store fails with.
+
+## `compositePrimaryKeyNamed`
+
+```ipe
+compositePrimaryKeyNamed : List String -> Draft a -> Draft a
+```
+
+`compositePrimaryKeyNamed columns draft` — the string form of
+`compositePrimaryKey2` / `compositePrimaryKey3`: make the named `columns`, in
+this order, one table-level primary key. Use it for a key of more than three
+columns or for a raw-column `fromColumns` draft.
+
+The list is parsed once, here, into a `CompositePk`; an illegal list is
+recorded as a typed `Err` that `createSql` / `migrations` return, `secured`
+refuses, and every read and write on the resulting store fails with before any
+SQL runs:
+
+* an empty list;
+* a one-column list — use `primaryKeyNamed` for a single-column key;
+* a name that is not a valid SQL identifier;
+* a name that is not a column of the draft;
+* a column listed twice;
+* a draft that already declares a primary key (single or composite).
+
+Example:
+
+    import Ipe.Db.Store as Store exposing (Store)
+
+    membershipsDraft : Result Error (Store.Draft Store.Row)
+    membershipsDraft =
+        Store.fromColumns "memberships"
+            [ Store.textColumn "user_id"
+            , Store.textColumn "group_id"
+            , Store.textColumn "role"
+            ]
+            |> Result.map (Store.compositePrimaryKeyNamed [ "user_id", "group_id" ])
 
 ## `serialNamed`
 
@@ -718,9 +860,10 @@ binds as a parameter. The SET is `row` projected through the store's codec
 `touchOnUpdate` are OMITTED so a client value can never overwrite a DB-filled
 column, and the primary key is OMITTED too — a bulk update refines existing
 rows, it never rewrites their identity (which would collapse every matching
-row onto one key). Routes through the audited `Db.updateWhere`, which
-re-validates the table and SET columns, binds every value, and refuses an
-unscoped UPDATE.
+row onto one key); for a composite key EVERY key column is omitted. A store
+whose key declaration is illegal fails with the recorded `Err` before any SQL.
+Routes through the audited `Db.updateWhere`, which re-validates the table and
+SET columns, binds every value, and refuses an unscoped UPDATE.
 
 Example:
 
@@ -1030,6 +1173,22 @@ Example:
             |> Store.orderDesc "age"
             |> Store.limit 10
             |> Store.toList conn
+
+## `where`
+
+```ipe
+where : Cond a -> Query a -> Query a
+```
+
+`where cond q` — restrict `q` to the rows matching `cond`. Applying `where`
+more than once AND-joins the predicates, so a pipeline of `where` clauses
+reads as a conjunction.
+
+Example:
+
+    Store.query store
+        |> Store.where (Store.eq .status "active")
+        |> Store.where (Store.eq .active True)
 
 ## `eq`
 

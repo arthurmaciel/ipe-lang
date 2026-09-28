@@ -16,15 +16,12 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 
-use crate::emit::{opaque_names_in, transparent_type_decl, wrapper_ipe_signature};
+use crate::emit::{
+    opaque_names_in, param_ipe_type, transparent_type_decl, wrapper_ipe_result,
+    wrapper_ipe_signature,
+};
 use crate::pkginfo::{FnInfo, PkgInfo};
 use crate::transparency::TransparentType;
-
-/// Ipê keywords that can never be a binding name in the generated module.
-const IPE_KEYWORDS: &[&str] = &[
-    "module", "import", "exposing", "type", "alias", "let", "in", "case", "of", "if", "then",
-    "else", "as", "port",
-];
 
 /// One binding included in the interface module.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -37,13 +34,100 @@ pub struct InterfaceBinding {
     pub arity: usize,
     /// The full Ipê HM signature string.
     pub sig: String,
-    /// Per-parameter transparent-type nominal, aligned with the Ipê arity —
-    /// `Some(name)` marks a position whose value the backend converts between
-    /// the Ipê record/union and the foreign struct/enum at the call seam.
-    /// Empty when no transparent type occurs anywhere in the signature.
-    pub transparent_params: Vec<Option<String>>,
+    /// Which parameters carry a transparent type the backend converts at the
+    /// call seam — proven aligned with the binding's parameters.
+    pub transparent_params: TransparentParams,
     /// The result's transparent payload, when the binding returns one.
     pub transparent_result: Option<TransparentResult>,
+}
+
+/// The transparent-type conversions a binding's parameters need.
+///
+/// Either no parameter converts, or every parameter has exactly one slot:
+/// a slot list shorter or longer than the binding's parameters would make
+/// the backend's per-position glue lookup skip (or misapply) a conversion —
+/// an E0308 downstream — so it is unrepresentable.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub enum TransparentParams {
+    /// No parameter carries a transparent type.
+    #[default]
+    None,
+    /// One slot per parameter, at least one naming a transparent type.
+    Aligned(AlignedTransparentParams),
+}
+
+/// One slot per binding parameter, at least one of them `Some`.
+///
+/// Built only by [`TransparentParams::aligned`], so its length always equals
+/// the binding's parameter count.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AlignedTransparentParams(Vec<Option<String>>);
+
+/// A transparent-parameter slot list whose length disagrees with the binding's
+/// parameter count.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TransparentParamsDrift {
+    /// How many slots the list carried.
+    pub slots: usize,
+    /// How many parameters the binding has.
+    pub arity: usize,
+}
+
+impl std::fmt::Display for TransparentParamsDrift {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "transparent-parameter slots ({}) do not align with the binding's {} parameter(s)",
+            self.slots, self.arity
+        )
+    }
+}
+
+impl TransparentParams {
+    /// Align `slots` with a binding of `arity` parameters.
+    ///
+    /// An all-`None` list (of the right length) normalizes to
+    /// [`TransparentParams::None`].
+    ///
+    /// # Errors
+    ///
+    /// [`TransparentParamsDrift`] when `slots.len() != arity`.
+    pub fn aligned(
+        slots: Vec<Option<String>>,
+        arity: usize,
+    ) -> Result<Self, TransparentParamsDrift> {
+        if slots.len() != arity {
+            return Err(TransparentParamsDrift {
+                slots: slots.len(),
+                arity,
+            });
+        }
+        Ok(if slots.iter().all(Option::is_none) {
+            Self::None
+        } else {
+            Self::Aligned(AlignedTransparentParams(slots))
+        })
+    }
+
+    /// The per-parameter slots — empty for [`TransparentParams::None`].
+    #[must_use]
+    pub fn slots(&self) -> &[Option<String>] {
+        match self {
+            Self::None => &[],
+            Self::Aligned(a) => &a.0,
+        }
+    }
+
+    /// `true` when no parameter carries a transparent type.
+    #[must_use]
+    pub const fn is_none(&self) -> bool {
+        matches!(self, Self::None)
+    }
+
+    /// The transparent nominals the parameters name.
+    pub fn names(&self) -> impl Iterator<Item = &String> {
+        self.slots().iter().flatten()
+    }
 }
 
 /// A binding result that carries a transparent foreign type: the nominal and
@@ -314,13 +398,12 @@ fn foreign_reserved_collision(f: &FnInfo) -> Option<String> {
         .find(|b| ipe_canon::is_user_type_declaration_forbidden(b))
 }
 
-/// `true` when `name` is a well-formed Ipê value identifier the generated
-/// module may bind: lowercase-led, alphanumeric/underscore, not a keyword.
+/// `true` when `name` is an Ipê value identifier the generated module may bind.
+///
+/// The name must lex as one plain identifier token (ASCII shape, not a
+/// keyword — the lexer's own table) and be lowercase-led.
 fn valid_ipe_value_name(name: &str) -> bool {
-    let mut chars = name.chars();
-    chars.next().is_some_and(|c| c.is_ascii_lowercase())
-        && chars.all(|c| c.is_alphanumeric() || c == '_')
-        && !IPE_KEYWORDS.contains(&name)
+    ipe_parse::is_identifier(name) && name.starts_with(|c: char| c.is_ascii_lowercase())
 }
 
 /// The classification's transparent set narrowed to the names this interface
@@ -379,28 +462,6 @@ fn admitted_transparent(
     out
 }
 
-/// Split an Ipê signature into its top-level ` -> ` segments, keeping any
-/// parenthesised region (a tuple, a grouped fn param) intact.
-fn split_top_level_arrows(sig: &str) -> Vec<String> {
-    let mut out: Vec<String> = Vec::new();
-    let mut depth: i64 = 0;
-    for piece in sig.split(" -> ") {
-        let opens = piece.chars().filter(|c| *c == '(').count();
-        let closes = piece.chars().filter(|c| *c == ')').count();
-        if depth > 0 {
-            if let Some(last) = out.last_mut() {
-                last.push_str(" -> ");
-                last.push_str(piece);
-            }
-        } else {
-            out.push(piece.to_owned());
-        }
-        depth += i64::try_from(opens).unwrap_or(0) - i64::try_from(closes).unwrap_or(0);
-        depth = depth.max(0);
-    }
-    out
-}
-
 /// Where the admitted transparent types sit in one binding's signature.
 ///
 /// The conversion glue covers a transparent type in exactly two positions: a
@@ -409,25 +470,28 @@ fn split_top_level_arrows(sig: &str) -> Vec<String> {
 /// container component, a `Task` payload — is refused so the binding
 /// over-drops with a recorded reason instead of emitting a seam whose two
 /// sides disagree on the representation.
+///
+/// The parameter slots are read from `f`'s parameters one by one — the same
+/// per-parameter types [`wrapper_ipe_signature`] joins — never by re-splitting
+/// the rendered signature, so a parameter type that itself contains ` -> `
+/// cannot shift the slots out of alignment.
 fn transparent_positions(
+    f: &FnInfo,
     sig: &str,
     transparent: &BTreeMap<String, TransparentType>,
-) -> Result<(Vec<Option<String>>, Option<TransparentResult>), String> {
+) -> Result<(TransparentParams, Option<TransparentResult>), String> {
     let occurs = |seg: &str| {
         seg.split(|c: char| !c.is_alphanumeric() && c != '_')
             .find(|tok| transparent.contains_key(*tok))
             .map(str::to_owned)
     };
     if transparent.is_empty() || occurs(sig).is_none() {
-        return Ok((Vec::new(), None));
+        return Ok((TransparentParams::None, None));
     }
-    let segs = split_top_level_arrows(sig);
-    let Some((result_seg, param_segs)) = segs.split_last() else {
-        return Ok((Vec::new(), None));
-    };
-    let mut params = Vec::with_capacity(param_segs.len());
-    for seg in param_segs {
-        let seg = seg.trim();
+    let mut params = Vec::with_capacity(f.params().len());
+    for param in f.params() {
+        let rendered = param_ipe_type(param);
+        let seg = rendered.trim();
         if transparent.contains_key(seg) {
             params.push(Some(seg.to_owned()));
         } else if let Some(t) = occurs(seg) {
@@ -439,7 +503,10 @@ fn transparent_positions(
             params.push(None);
         }
     }
-    let result_seg = result_seg.trim();
+    let params =
+        TransparentParams::aligned(params, f.params().len()).map_err(|drift| drift.to_string())?;
+    let rendered_result = wrapper_ipe_result(f);
+    let result_seg = rendered_result.trim();
     let result = if transparent.contains_key(result_seg) {
         Some(TransparentResult {
             type_name: result_seg.to_owned(),
@@ -673,14 +740,14 @@ pub fn crate_interface(pkg: &PkgInfo) -> CrateInterface {
         // Where the admitted transparent types sit in this signature — or a
         // recorded over-drop when one occurs in a position the conversion
         // glue does not cover (a container/tuple component, a Task payload).
-        let (transparent_params, transparent_result) = match transparent_positions(&sig, &admitted)
-        {
-            Ok(positions) => positions,
-            Err(reason) => {
-                skip(&reason, &mut skipped);
-                continue;
-            }
-        };
+        let (transparent_params, transparent_result) =
+            match transparent_positions(f, &sig, &admitted) {
+                Ok(positions) => positions,
+                Err(reason) => {
+                    skip(&reason, &mut skipped);
+                    continue;
+                }
+            };
         // The opaque foreign types the SIGNATURE would declare (`type X`) —
         // the ground truth for both the reserved-builtin collision gate and
         // the path-resolvability gate. Reading the final signature (not the
@@ -723,7 +790,7 @@ pub fn crate_interface(pkg: &PkgInfo) -> CrateInterface {
             continue;
         }
         used_opaques.extend(opaques);
-        used_transparent.extend(transparent_params.iter().flatten().cloned());
+        used_transparent.extend(transparent_params.names().cloned());
         used_transparent.extend(transparent_result.iter().map(|r| r.type_name.clone()));
         bindings.push(InterfaceBinding {
             wrapper_ident: crate::naming::wrapper_fn_ident(&kernel_name, &ref_name),
@@ -1063,7 +1130,7 @@ fn admit_struct_forwarder(ctor: &str, def: &crate::carrier::StructDef, adm: &mut
         arity: def.fields.len().max(1),
         sig: def.forwarder_ipe_sig(),
         ref_name: ctor.to_owned(),
-        transparent_params: Vec::new(),
+        transparent_params: TransparentParams::None,
         transparent_result,
     });
 }
@@ -1135,7 +1202,7 @@ fn admit_enum_forwarders(ref_name: &str, def: &crate::carrier::EnumDef, adm: &mu
             arity: v.payload.len().max(1),
             sig: v.forwarder_ipe_sig(enum_name),
             ref_name: variant_ref,
-            transparent_params: Vec::new(),
+            transparent_params: TransparentParams::None,
             transparent_result: transparent_result.clone(),
         });
         any_admitted = true;
@@ -1204,7 +1271,7 @@ fn admit_closure_forwarder(
         arity: 1,
         sig: sig.forwarder_ipe_sig(&handle),
         ref_name: ref_name.to_owned(),
-        transparent_params: Vec::new(),
+        transparent_params: TransparentParams::None,
         transparent_result: None,
     });
 }
@@ -1329,6 +1396,36 @@ pub fn render_module(
 mod tests {
     use super::*;
     use crate::pkginfo::PkgInfo;
+
+    /// Every lexer keyword is refused as a binding name — `foreign`/`do`
+    /// included — so a foreign binding can never emit an unparseable module.
+    #[test]
+    fn every_ipe_keyword_is_refused_as_a_binding_name() {
+        for kw in ipe_parse::KEYWORDS {
+            assert!(!valid_ipe_value_name(kw), "keyword {kw:?} accepted");
+        }
+    }
+
+    /// Non-ASCII names the lexer would not tokenize as one identifier are
+    /// refused; non-keywords like `alias`/`port` are admitted.
+    #[test]
+    fn binding_name_charset_is_the_lexer_ascii_set() {
+        for bad in [
+            "caf\u{e9}",
+            "\u{e9}t\u{e9}",
+            "x\u{0301}",
+            "n\u{b2}",
+            "\u{ff58}",
+            "Upper",
+            "_x",
+            "",
+        ] {
+            assert!(!valid_ipe_value_name(bad), "{bad:?} accepted");
+        }
+        for good in ["alias", "port", "where", "major_field", "x1"] {
+            assert!(valid_ipe_value_name(good), "{good:?} refused");
+        }
+    }
 
     fn pkg() -> PkgInfo {
         let doc = serde_json::json!({
@@ -1996,7 +2093,7 @@ mod tests {
         assert_eq!(iface.transparent_types.len(), 2);
         // The binding records where the conversions apply.
         let b = iface.bindings.first().expect("shift admitted");
-        assert_eq!(b.transparent_params, vec![Some("Point".to_owned())]);
+        assert_eq!(b.transparent_params.slots(), [Some("Point".to_owned())]);
         assert_eq!(
             b.transparent_result,
             Some(TransparentResult {
@@ -2081,7 +2178,7 @@ mod tests {
             .iter()
             .find(|b| b.ref_name == "shift")
             .expect("shift binds as opaque");
-        assert!(b.transparent_params.iter().all(Option::is_none));
+        assert!(b.transparent_params.is_none());
         assert!(b.transparent_result.is_none());
         assert!(
             iface
@@ -2132,15 +2229,35 @@ mod tests {
     }
 
     #[test]
-    fn top_level_arrow_split_keeps_parenthesised_groups_whole() {
+    fn misaligned_transparent_params_are_refused() {
+        let short = TransparentParams::aligned(vec![Some("Point".to_owned())], 2);
+        assert_eq!(short, Err(TransparentParamsDrift { slots: 1, arity: 2 }));
+        let long = TransparentParams::aligned(vec![None, Some("Point".to_owned())], 1);
+        assert_eq!(long, Err(TransparentParamsDrift { slots: 2, arity: 1 }));
+        // Drift is refused even when no slot converts: a length mismatch is
+        // itself evidence the slots were read against the wrong parameters.
+        let empty_drift = TransparentParams::aligned(vec![None], 2);
+        assert!(empty_drift.is_err(), "{empty_drift:?}");
+    }
+
+    #[test]
+    fn aligned_transparent_params_are_accepted() {
+        let aligned = TransparentParams::aligned(vec![None, Some("Point".to_owned())], 2);
+        assert!(
+            matches!(&aligned, Ok(TransparentParams::Aligned(_))),
+            "{aligned:?}"
+        );
+        let Ok(aligned) = aligned else { return };
+        assert_eq!(aligned.slots(), [None, Some("Point".to_owned())]);
+        assert_eq!(aligned.names().collect::<Vec<_>>(), ["Point"]);
+        // An aligned all-`None` list normalizes to `None`.
         assert_eq!(
-            split_top_level_arrows("Point -> Result Error Shade"),
-            vec!["Point".to_owned(), "Result Error Shade".to_owned()]
+            TransparentParams::aligned(vec![None, None], 2),
+            Ok(TransparentParams::None)
         );
         assert_eq!(
-            split_top_level_arrows("(Int -> Int) -> Point"),
-            vec!["(Int -> Int)".to_owned(), "Point".to_owned()]
+            TransparentParams::aligned(Vec::new(), 0),
+            Ok(TransparentParams::None)
         );
-        assert_eq!(split_top_level_arrows("()"), vec!["()".to_owned()]);
     }
 }

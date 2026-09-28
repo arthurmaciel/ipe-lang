@@ -177,12 +177,12 @@ main =
 /// Compile `source` through the ipe pipeline (no cargo). Returns `None` to
 /// skip when the embedded runtime cannot be resolved.
 fn compile_src(test_name: &str, source: &str) -> Option<Result<(), ipe::CliError>> {
-    let ipe_dir = std::env::temp_dir().join(format!("live_routed_empty_{test_name}_ipe"));
+    let ipe_dir = crate::support::scratch_root().join(format!("live_routed_empty_{test_name}_ipe"));
     let _ = std::fs::remove_dir_all(&ipe_dir);
     std::fs::create_dir_all(&ipe_dir).ok()?;
     let entry = ipe_dir.join("Main.ipe");
     std::fs::write(&entry, source).ok()?;
-    let out = std::env::temp_dir().join(format!("live_routed_empty_{test_name}_out"));
+    let out = crate::support::scratch_root().join(format!("live_routed_empty_{test_name}_out"));
     let _ = std::fs::remove_dir_all(&out);
     let Ok(runtime) = ipe::resolve_runtime() else {
         return None;
@@ -432,7 +432,7 @@ fn routed_empty_routes_well_typed_compiles_and_renders_route_page() {
 /// (E0308/E0107) still fails — so the warm deps never mask a SEAL break.
 #[test]
 fn routed_empty_routes_well_typed_cargo_builds() {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
     // Emit into a PRIVATE dir this test alone owns, so the compile-only sibling

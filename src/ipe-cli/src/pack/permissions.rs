@@ -485,7 +485,7 @@ fn android_entry_name(entry: &AndroidEntry) -> String {
 /// derives, never *introduce* one.
 ///
 /// # Errors
-/// [`CliError::UsageOwned`] carrying the `IPE-P0001` refusal when any override
+/// [`CliError::Usage`] carrying the `IPE-P0001` refusal when any override
 /// permission has no backing accepted axis.
 pub fn reconcile_override(
     accepts: &BTreeSet<Capability>,
@@ -506,22 +506,19 @@ pub fn reconcile_override(
 /// The typed, fail-closed refusal naming each override permission with no backing
 /// accepted axis, and the remedy.
 fn unbacked_permission_refusal(platform: Platform, unbacked: &[&String]) -> CliError {
-    let mut body = format!(
-        "the packaged {} manifest declares OS permission(s) the app has not accepted\n",
-        platform.as_str()
-    );
-    for name in unbacked {
-        body.push_str("  = ");
-        body.push_str(name);
-        body.push('\n');
-    }
-    body.push_str(
-        "  = an OS permission is DERIVED from the app's `accepts` set, never hand-added; a \n\
-         \x20   permission with no backing accepted web capability cannot ship. Grant the backing \n\
-         \x20   capability after review by adding the axis to `accepts = [ … ]` under \n\
-         \x20   [capabilities] in package.ipe, or remove the permission from the override.\n",
-    );
-    CliError::UsageOwned(format!("error[IPE-P0001]: {body}"))
+    CliError::Usage(crate::text::Message::lines(
+        std::iter::once(crate::text::msg::permission_consent_header(
+            &platform.as_str(),
+        ))
+        .chain(
+            unbacked
+                .iter()
+                .map(|name| crate::text::msg::consent_item(name)),
+        )
+        .chain(std::iter::once(
+            crate::text::msg::permission_consent_remedy(),
+        )),
+    ))
 }
 
 /// A structured, per-axis view of a derivation for the CLI surface — which web

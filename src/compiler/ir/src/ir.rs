@@ -580,8 +580,13 @@ impl BoundSet {
     /// wildcard `any` variable and ONLY when the body actually calls a `db_get_*`
     /// — no blast radius on genuine named type variables (`a`, `msg`).
     const IPE_ROW: u16 = 1 << 11;
-    // 1 << 12 is free — the former `DISPLAY` (`Basics.toString`) bound folded
-    // into `SHOW` (`IpeStringify`), which covers scalar AND composite arguments.
+    /// The interpolation bound: realises the type checker's
+    /// `TyBounds::interpolable` obligation (`{{…}}` / `Log.*With` attributes) as
+    /// the runtime's sealed `IpeInterpolate`, implemented for exactly the closed
+    /// scalar set `String` / `Int` / `Float` / `Bool` / `Char`. A generic that
+    /// interpolates its parameter carries this bound so every caller's concrete
+    /// type is re-checked by `rustc` against the same closed set.
+    const INTERPOLABLE: u16 = 1 << 12;
     /// The `'static` lifetime bound: a generic type-param that flows,
     /// INSIDE the function body, into a value boxed as a boxed `dyn Fn` trait
     /// object (`Box<dyn Fn(..) -> .. + Send + 'static>`, or the `Arc` +Sync
@@ -698,10 +703,17 @@ impl BoundSet {
         Self(self.0 | Self::EQ)
     }
 
-    /// This set with the `IpeStringify` (Ipê `toString` / `Log.*With`) bound.
+    /// This set with the `IpeStringify` (`Debug.log` / `Error.toString`) bound.
     #[must_use]
     pub const fn with_show(self) -> Self {
         Self(self.0 | Self::SHOW)
+    }
+
+    /// This set with the `IpeInterpolate` (`{{…}}` interpolation / `Log.*With`)
+    /// bound — see [`Self::INTERPOLABLE`].
+    #[must_use]
+    pub const fn with_interpolable(self) -> Self {
+        Self(self.0 | Self::INTERPOLABLE)
     }
 
     /// This set with the `Copy` (bit-copyable reuse) bound.
@@ -798,6 +810,12 @@ impl BoundSet {
     #[must_use]
     pub const fn has_show(self) -> bool {
         self.0 & Self::SHOW != 0
+    }
+
+    /// Whether the `IpeInterpolate` bound is set — see [`Self::INTERPOLABLE`].
+    #[must_use]
+    pub const fn has_interpolable(self) -> bool {
+        self.0 & Self::INTERPOLABLE != 0
     }
 
     /// Whether the `Copy` bound is set.
@@ -1414,7 +1432,7 @@ pub enum IrType {
     /// future `HydrationState` field-type gate consults, per
     /// `docs/adr/0005-delivery-shapes-runtimes-hosts-targets.md` §Q6 — nothing to build yet, the
     /// target does not exist). `Debug` and the Ipê-facing `IpeStringify` (the
-    /// trait backing `toString` / interpolation / `Log.*With`) are BOTH
+    /// trait backing `{{…}}` interpolation / `Log.*With`) are BOTH
     /// hand-written on the runtime type to ALWAYS render a fixed
     /// `"<redacted>"` placeholder, never the wrapped value — see
     /// `ipe_runtime::secret`'s module doc for the full design.
@@ -1442,7 +1460,7 @@ pub enum IrType {
     /// and the other opaque handles — a `Regex` is non-derivable-for-equality
     /// and not serde (a `Ipe.Web` Model field of type `Regex` is a compile-time
     /// rejection, never a silent wrong behaviour). `Debug` prints the source
-    /// pattern, backing `toString` via the runtime's `Debug`-based fallback.
+    /// pattern, backing `{{…}}` interpolation via the runtime's `Debug`-based fallback.
     Regex,
 
     /// `Ipe.Process.runWith`'s input record `{ args : List String, command :
@@ -2456,7 +2474,11 @@ pub const fn ir_type_feature_requirement(ty: &IrType) -> Option<RuntimeFeatureId
     }
 }
 
-/// Does this type's DEFAULT emitted Rust carrier implement `Clone`?
+/// Classify a type's DEFAULT emitted Rust carrier as `Clone`, non-`Clone`, or transparent.
+///
+/// A flat, non-recursive step: it never looks inside a carried element, so a
+/// held-walk leaf built on it cannot start another walk. [`carrier_is_clone`]
+/// recurses over the carried elements.
 ///
 /// The SINGLE authority both the lowerer's capture classifier and the backend's
 /// carrier choice consult, so a shape that renders a `Clone` carrier can never be
@@ -2488,15 +2510,15 @@ pub const fn ir_type_feature_requirement(ty: &IrType) -> Option<RuntimeFeatureId
 ///   sound multi-use clone under that bound).
 ///
 /// A transparent carrier (list / set / tuple / dict / result / maybe / record /
-/// enum) is `Clone` iff every element it carries is — one non-`Clone` member
-/// poisons the whole composite, matching the emitted Rust (`IpeMaybe<T>: Clone`
-/// requires `T: Clone`, etc.).
+/// enum) is [`CarrierLeaf::Carrier`]: `Clone` iff every element it carries is —
+/// one non-`Clone` member poisons the whole composite, matching the emitted Rust
+/// (`IpeMaybe<T>: Clone` requires `T: Clone`, etc.).
 ///
 /// The match is exhaustive with no wildcard: a new [`IrType`] variant must make
 /// an explicit carrier-`Clone` decision here (walker-arm rule / SEAL
 /// make-invalid-states-unrepresentable).
 #[must_use]
-pub fn carrier_is_clone(ty: &IrType) -> bool {
+pub fn carrier_leaf(ty: &IrType) -> CarrierLeaf<'_> {
     match ty {
         // Copy / Clone scalar and opaque leaves — every one implements `Clone`.
         IrType::Int
@@ -2584,7 +2606,7 @@ pub fn carrier_is_clone(ty: &IrType) -> bool {
         // and a hand-written `Clone` that bounds neither `E` nor `T`, so a
         // `Decoder` slot clones by refcount bump and never poisons its enclosing
         // composite.
-        | IrType::Decoder(_) => true,
+        | IrType::Decoder(_) => CarrierLeaf::Clone,
         // Non-`Clone` default carriers. `Fun`'s default carrier is `Box<dyn Fn>`
         // (position-typed model — the `Clone` `Arc` carrier exists only at
         // promoted binding sites, see [`fun_value_arc_promotable`]).
@@ -2603,18 +2625,103 @@ pub fn carrier_is_clone(ty: &IrType) -> bool {
         | IrType::WebApp
         | IrType::TuiApp
         | IrType::CliApp
-        | IrType::WorkerApp => false,
+        | IrType::WorkerApp => CarrierLeaf::NonClone,
         // Transparent carriers: `Clone` iff every carried element is.
-        IrType::Maybe(e) | IrType::List(e) | IrType::Set(e) => carrier_is_clone(e),
-        IrType::Result(a, b) | IrType::Dict(a, b) => carrier_is_clone(a) && carrier_is_clone(b),
-        IrType::Tuple(es) => es.iter().all(carrier_is_clone),
-        IrType::Record(fields) => fields.values().all(carrier_is_clone),
-        IrType::Enum { args, .. } => args.iter().all(carrier_is_clone),
-        // `Element<M>` / `Html<M>` and `Route<Page>` recurse on their type
+        // `Element<M>` / `Html<M>` and `Route<Page>` carry their type
         // parameter — the runtime carriers derive `Clone` over a `Clone` param.
-        IrType::Ui { msg, .. } => carrier_is_clone(msg),
-        IrType::WebRoute(page) => carrier_is_clone(page),
+        IrType::Maybe(e)
+        | IrType::List(e)
+        | IrType::Set(e)
+        | IrType::Ui { msg: e, .. }
+        | IrType::WebRoute(e) => CarrierLeaf::Carrier(Carried::One(e)),
+        IrType::Result(a, b) | IrType::Dict(a, b) => CarrierLeaf::Carrier(Carried::Pair(a, b)),
+        IrType::Tuple(es) => CarrierLeaf::Carrier(Carried::Tuple(es)),
+        IrType::Record(fields) => CarrierLeaf::Carrier(Carried::Record(fields)),
+        IrType::Enum { home, name, args } => CarrierLeaf::Carrier(Carried::Enum {
+            home,
+            name: *name,
+            args,
+        }),
     }
+}
+
+/// A type's own `Clone` verdict under [`carrier_leaf`], before any carried element is consulted.
+#[derive(Clone, Copy, Debug)]
+pub enum CarrierLeaf<'a> {
+    /// The default carrier implements `Clone` whatever it holds.
+    Clone,
+    /// The default carrier never implements `Clone`.
+    NonClone,
+    /// A transparent carrier: `Clone` iff every carried element is.
+    Carrier(Carried<'a>),
+}
+
+/// The elements a transparent carrier holds.
+#[derive(Clone, Copy, Debug)]
+pub enum Carried<'a> {
+    /// One element (`Maybe`, `List`, `Set`, `Ui` message, `WebRoute` page).
+    One(&'a IrType),
+    /// Two elements (`Result`, `Dict`).
+    Pair(&'a IrType, &'a IrType),
+    /// The elements of a tuple.
+    Tuple(&'a [IrType]),
+    /// The fields of a record.
+    Record(&'a BTreeMap<Symbol, IrType>),
+    /// A named enum: its type arguments and, through the payload table, its variant payloads.
+    Enum {
+        /// The enum's defining module.
+        home: &'a ModPath,
+        /// The enum's name.
+        name: Symbol,
+        /// The enum's type arguments.
+        args: &'a [IrType],
+    },
+}
+
+/// Does this type's DEFAULT emitted Rust carrier implement `Clone`?
+///
+/// [`carrier_leaf`] decides every non-carrier; a transparent carrier is `Clone`
+/// iff every carried element is. A named enum is `Clone` iff its type arguments
+/// are and none of its variant payloads (looked up in `payloads`, through the
+/// shared held walk) holds a leaf [`crate::payload_leaf_is_clone`] rejects — the
+/// backend's enum-`Clone` fixpoint derives no `Clone` impl for such an enum. An
+/// enum absent from `payloads` is judged by its type arguments alone.
+#[must_use]
+pub fn carrier_is_clone(ty: &IrType, payloads: &crate::EnumPayloadTable) -> bool {
+    match carrier_leaf(ty) {
+        CarrierLeaf::Clone => true,
+        CarrierLeaf::NonClone => false,
+        CarrierLeaf::Carrier(Carried::One(e)) => carrier_is_clone(e, payloads),
+        CarrierLeaf::Carrier(Carried::Pair(a, b)) => {
+            carrier_is_clone(a, payloads) && carrier_is_clone(b, payloads)
+        }
+        CarrierLeaf::Carrier(Carried::Tuple(es)) => {
+            es.iter().all(|e| carrier_is_clone(e, payloads))
+        }
+        CarrierLeaf::Carrier(Carried::Record(fields)) => {
+            fields.values().all(|f| carrier_is_clone(f, payloads))
+        }
+        CarrierLeaf::Carrier(Carried::Enum { home, name, args }) => {
+            args.iter().all(|a| carrier_is_clone(a, payloads))
+                && !crate::enum_payload_holds(home, name, payloads, &|p| {
+                    !crate::payload_leaf_is_clone(p)
+                })
+        }
+    }
+}
+
+/// Does a value of `ty` hold a `Task` / `Cmd` / `Sub` effect carrier anywhere?
+///
+/// Every effect carrier renders to a runtime value with no `Clone` impl, so a
+/// value of such a type is move-only: the lowerer's non-`Clone` reuse gate and
+/// the emitter's field-read move share this one predicate. It is one leaf test
+/// over [`crate::ir_type_holds`], so it descends the same carriers, including
+/// every named enum's variant payloads looked up in `payloads`.
+#[must_use]
+pub fn ir_type_has_effect_carrier(ty: &IrType, payloads: &crate::EnumPayloadTable) -> bool {
+    crate::ir_type_holds(ty, payloads, &|t| {
+        matches!(t, IrType::Task(_) | IrType::Cmd(_) | IrType::Sub(_))
+    })
 }
 
 /// Is a BINDING of this type eligible for the `Arc<dyn Fn>` carrier promotion
@@ -3025,13 +3132,82 @@ pub enum Callee {
 }
 
 impl Callee {
-    /// Whether a call to this callee evaluates its arguments in the REVERSE of
-    /// their IR order — a kernel whose runtime function takes them reversed
-    /// ([`ipe_kernels::StdlibKernel::swaps_first_two`]). Analyses that depend on
+    /// Whether a call to this callee evaluates its arguments in the reverse of their IR order.
+    ///
+    /// Holds exactly for a kernel whose registry row declares
+    /// [`ipe_kernels::ArgOrder::ContainerFirst`]. Analyses that depend on
     /// evaluation order visit a call's arguments reversed exactly when this holds.
     #[must_use]
     pub const fn evaluates_args_reversed(&self) -> bool {
-        matches!(self, Self::Kernel(k) if k.swaps_first_two())
+        matches!(self, Self::Kernel(k) if matches!(k.arg_order(), ipe_kernels::ArgOrder::ContainerFirst))
+    }
+
+    /// Whether the emitter renders every argument of a call to this callee in
+    /// place, in the order [`Self::args_in_eval_order`] yields.
+    ///
+    /// A user function's arguments are rendered left to right; an
+    /// argument-reversed kernel renders through the generic call tail, which
+    /// reverses them. Any other kernel or FFI emitter may reorder, hoist, or
+    /// defer an argument, so its order is unknown to an analysis.
+    #[must_use]
+    pub const fn has_known_eval_order(&self) -> bool {
+        matches!(self, Self::Func(_)) || self.evaluates_args_reversed()
+    }
+
+    /// A call's arguments in the order the emitted Rust evaluates them.
+    ///
+    /// The single ordering every evaluation-order analysis walks, so the
+    /// argument reversal is decided once ([`Self::evaluates_args_reversed`]).
+    #[must_use]
+    pub fn args_in_eval_order<'a>(&self, args: &'a [Expr]) -> EvalOrder<'a> {
+        EvalOrder {
+            args: args.iter(),
+            reversed: self.evaluates_args_reversed(),
+        }
+    }
+
+    /// Map `f` over owned call arguments in evaluation order, keeping IR order.
+    ///
+    /// The owned counterpart of [`Self::args_in_eval_order`] for a rewrite
+    /// whose state threads through the arguments in the order they run.
+    #[must_use]
+    pub fn map_args_in_eval_order(
+        &self,
+        mut args: Vec<Expr>,
+        f: impl FnMut(Expr) -> Expr,
+    ) -> Vec<Expr> {
+        let reversed = self.evaluates_args_reversed();
+        if reversed {
+            args.reverse();
+        }
+        let mut mapped: Vec<Expr> = args.into_iter().map(f).collect();
+        if reversed {
+            mapped.reverse();
+        }
+        mapped
+    }
+}
+
+/// A call's arguments in emitted evaluation order ([`Callee::args_in_eval_order`]).
+#[derive(Debug, Clone)]
+pub struct EvalOrder<'a> {
+    args: std::slice::Iter<'a, Expr>,
+    reversed: bool,
+}
+
+impl<'a> Iterator for EvalOrder<'a> {
+    type Item = &'a Expr;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.reversed {
+            self.args.next_back()
+        } else {
+            self.args.next()
+        }
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.args.size_hint()
     }
 }
 

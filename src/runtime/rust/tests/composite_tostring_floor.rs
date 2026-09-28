@@ -1,115 +1,46 @@
-//! Floor-lock for `Basics.toString` / `Debug.toString` — the whole `%v` surface.
+//! Floor-lock for the `{{expr}}` interpolation renderer: the closed scalar set.
 //!
-//! `Basics.toString` and `Debug.toString` (the `{{interp}}` stringifier) route
-//! through the total `IpeStringify` trait, the SAME path as
-//! `Basics.errorToString`:
-//!
-//! ```ignore
-//! pub fn basics_to_string<T: IpeStringify>(v: T) -> String { v.ipe_show() }
-//! pub fn debug_to_string<T:  IpeStringify>(v: T) -> String { v.ipe_show() }
-//! ```
-//!
-//! `IpeStringify` renders the debug-format (`%v`) representation totally — every scalar and
-//! every composite (record / ADT / list / map). This file pins both halves:
-//!
-//! 1. SCALARS keep their exact `%v`-format bytes (a refactor to `Debug` would quote
-//!    strings and rename this a regression).
-//! 2. COMPOSITES stringify correctly — no `Display` bound, so there is no
-//!    exit-0-then-cargo-fail hole (a composite has no `Display` impl; it DOES
-//!    have an `IpeStringify` impl, runtime-provided here and codegen-provided for
-//!    every emitted record/ADT).
-//!
-//! ## `%v`-format reference (empirically captured)
-//!
-//! | value                            | `%v` output | Notes                                            |
-//! |----------------------------------|----------------|--------------------------------------------------|
-//! | scalar Int `5`                   | `5`            |                                                  |
-//! | scalar Float `42.5`              | `42.5`         |                                                  |
-//! | scalar Bool `true`               | `true`         |                                                  |
-//! | scalar String `"hi"`             | `hi`           | UNQUOTED / identity                              |
-//! | record `{ x = 1, y = 2 }`        | `{1 2}`        | brace-wrapped, space-joined, `_fieldIndex` order |
-//! | tuple `(1, "q")`                 | `{1 q}`        | identical to a 2-field struct                    |
-//! | List `[1, 2, 3]`                 | `[1 2 3]`      | space-joined, square brackets                    |
-//! | map `{ a: 1, b: 2 }`             | `map[a:1 b:2]` | alphabetically-sorted keys                                   |
-//!
-//! A codegen-emitted ADT renders `Vname f0 f1 …` (variant name, space-joined
-//! fields) — the `../ipe` Rust backend's `IpeStringify` enum shape — verified by
-//! the `m_tostring_composite` golden's end-to-end output (`Circle 5` / `Empty`),
-//! not here (this file tests the runtime primitives, not codegen).
-//!
-//! The one residual: a bare function-typed value has no meaningful `%v` (debug-format
-//! prints a non-deterministic address); `toString` on a function is rejected at
-//! ipe type-check (the Stringify obligation's `Fun` head-rejection — see
-//! `m_tostring_fn_rejected`), so it never reaches this runtime path.
+//! `interpolate_to_string` is bounded by the sealed `IpeInterpolate`, implemented
+//! for exactly `String` / `Int` / `Float` / `Bool` / `Char`. Each scalar renders
+//! as its `String.from*` conversion, and a `String` splices verbatim (never a
+//! quoted `Debug` form). A record, custom type, `List`, `Maybe`, tuple, `Dict`
+//! or opaque runtime value has no impl, so the type checker refuses it
+//! (IPE-T0014) and it never reaches this renderer.
 
-use ipe_runtime_rust::basics::{basics_to_string, debug_to_string};
-use std::collections::HashMap;
-
-// --- Scalars (format-verified) ---
+use ipe_runtime_rust::basics::interpolate_to_string;
+use ipe_runtime_rust::string::{string_from_char, string_from_float};
 
 #[test]
-fn to_string_int_matches_go_percent_v() {
-    // `%v` of int64(5) = "5"
-    assert_eq!(basics_to_string(5i64), "5");
+fn interpolate_int() {
+    assert_eq!(interpolate_to_string(5i64), "5");
+    assert_eq!(interpolate_to_string(-12i64), "-12");
 }
 
 #[test]
-fn to_string_float_matches_go_percent_v() {
-    // `%v` of 42.5 = "42.5"
-    assert_eq!(basics_to_string(42.5f64), "42.5");
-    // `'g' format: cuts to scientific at exp >= 6
-    // and for infinities/NaN. The `IpeStringify` f64 impl reproduces this; the
-    // former `Display` path did NOT (it printed "1000000" / "inf").
-    assert_eq!(basics_to_string(1e6f64), "1e+06");
-    assert_eq!(basics_to_string(f64::INFINITY), "+Inf");
+fn interpolate_float_is_string_from_float() {
+    for f in [42.5f64, 1e6, 1e21, -0.0, 0.0001, f64::INFINITY, f64::NAN] {
+        assert_eq!(interpolate_to_string(f), string_from_float(f));
+    }
+    assert_eq!(interpolate_to_string(42.5f64), "42.5");
 }
 
 #[test]
-fn to_string_bool_true_matches_go_percent_v() {
-    // `%v` of bool = "true"/"false"
-    assert_eq!(basics_to_string(true), "true");
-    assert_eq!(basics_to_string(false), "false");
+fn interpolate_bool_is_lowercase() {
+    assert_eq!(interpolate_to_string(true), "true");
+    assert_eq!(interpolate_to_string(false), "false");
 }
 
 #[test]
-fn to_string_string_renders_unquoted_identity() {
-    // A String returns verbatim (no surrounding quotes) — NOT Debug (which
-    // would yield "\"hi\"").
-    assert_eq!(basics_to_string("hi".to_string()), "hi");
-    assert_eq!(basics_to_string("hi"), "hi");
-}
-
-// --- debug_to_string (the `{{expr}}` interpolation entry) shares the path. ---
-
-#[test]
-fn debug_to_string_scalars_match_go_percent_v() {
-    assert_eq!(debug_to_string(5i64), "5");
-    assert_eq!(debug_to_string(42.5f64), "42.5");
-    assert_eq!(debug_to_string(true), "true");
-    // String interpolates as itself — the load-bearing identity property: a
-    // `{{name}}` site must splice the raw String, never a quoted form.
-    assert_eq!(debug_to_string("hi".to_string()), "hi");
-}
-
-// --- Composites now stringify correctly (no exit-0-then-cargo-fail hole). ---
-
-#[test]
-fn to_string_list_matches_go_percent_v() {
-    // `%v` of List = "[1 2 3]"
-    assert_eq!(basics_to_string(vec![1i64, 2, 3]), "[1 2 3]");
+fn interpolate_string_is_identity() {
+    assert_eq!(interpolate_to_string("hi".to_string()), "hi");
+    assert_eq!(
+        interpolate_to_string("say \"hi\"".to_string()),
+        "say \"hi\""
+    );
 }
 
 #[test]
-fn to_string_tuple_matches_go_percent_v() {
-    // An Ipê tuple lowers to a struct — debug format is `{a b}`.
-    assert_eq!(basics_to_string((1i64, "q".to_string())), "{1 q}");
-}
-
-#[test]
-fn to_string_map_matches_go_percent_v() {
-    // `%v` of map = "map[a:1 b:2]" (keys sorted alphabetically).
-    let mut m: HashMap<String, i64> = HashMap::new();
-    m.insert("b".to_string(), 2);
-    m.insert("a".to_string(), 1);
-    assert_eq!(basics_to_string(m), "map[a:1 b:2]");
+fn interpolate_char_is_string_from_char() {
+    assert_eq!(interpolate_to_string('x'), string_from_char('x'));
+    assert_eq!(interpolate_to_string('x'), "x");
 }

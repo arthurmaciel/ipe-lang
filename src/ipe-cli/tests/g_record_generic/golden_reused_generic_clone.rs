@@ -3,7 +3,7 @@
 //! Without the fix, `ipe build` exits 0, but the emitted Rust fails `cargo build` with
 //! E0382 (`use of moved value: x`) in the body of a function whose only generic
 //! is used MORE THAN ONCE in a by-value consuming position:
-//! `dup x = toString x ++ toString x` emits `basics_to_string(x)` TWICE with no
+//! `dup x = """{{x}}{{x}}"""` emits `interpolate_to_string(x)` TWICE with no
 //! intervening `.clone()`, moving `x` on the first call.
 //!
 //! Root cause: `clone_class(IrType::Generic(_))` returned `NonClone`
@@ -66,7 +66,7 @@ fn i189_ipec_accepts_and_clones_reused_generic() {
         return;
     };
 
-    let built = ipe::build_with_sibling_discovery(&entry, &out, &runtime);
+    let built = ipe::build_loose_file(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
         "ipe build must succeed for reused_generic_clone: {:?}",
@@ -89,10 +89,11 @@ fn i189_ipec_accepts_and_clones_reused_generic() {
     );
 
     // The T5 rewrite must insert `.clone()` on the non-final use — the emitted
-    // body applies `basics_to_string` to `x.clone()` (first use) and then `x`
-    // (last use). Without the fix both were bare `basics_to_string(x)` → E0382.
+    // body applies `interpolate_to_string` to `x.clone()` (first use) and then
+    // `x` (last use). Without the fix both were bare `interpolate_to_string(x)`
+    // → E0382.
     assert!(
-        emitted.contains("basics_to_string(x.clone())"),
+        emitted.contains("interpolate_to_string(x.clone())"),
         "the reused generic param must be `.clone()`d on its non-final use \
          (#189); got emitted user source:\n{emitted}"
     );
@@ -105,21 +106,21 @@ fn i189_ipec_accepts_and_clones_reused_generic() {
 /// clean).
 #[test]
 fn i189_cargo_builds_and_runs() {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
 
     let root = repo_root();
     let entry = entry_path(&root);
     let gdir = golden_dir(&root);
-    let out = std::env::temp_dir().join("ipec_i189_reused_generic_clone_e2e");
+    let out = crate::support::scratch_root().join("ipec_i189_reused_generic_clone_e2e");
     let _ = std::fs::remove_dir_all(&out);
 
     let runtime = ipe::resolve_runtime();
     assert!(runtime.is_ok(), "runtime must resolve for E2E");
     let Ok(runtime) = runtime else { return };
 
-    let built = ipe::build_with_sibling_discovery(&entry, &out, &runtime);
+    let built = ipe::build_loose_file(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
         "ipe build must succeed for reused_generic_clone: {:?}",

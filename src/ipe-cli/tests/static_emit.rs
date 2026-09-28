@@ -125,9 +125,9 @@ fn static_emit_activates_dlmalloc_and_dynamic_rebuild_restores_baseline() {
     );
 }
 
-/// A hand-written (non-generated) `.cargo/config.toml` is never touched by
-/// the hygiene pass — only files starting with the generated marker are ours
-/// to delete.
+/// A hand-written (non-generated) `.cargo/config.toml` placed in an
+/// ipe-owned output dir is never touched by the hygiene pass — only files
+/// starting with the generated marker are ours to delete.
 #[test]
 fn dynamic_build_leaves_user_cargo_config_alone() {
     let scratch = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("static_emit_user_config");
@@ -136,13 +136,16 @@ fn dynamic_build_leaves_user_cargo_config_alone() {
     let out = scratch.join("out");
     let runtime = ipe::resolve_runtime().expect("runtime must resolve");
 
+    // The first build claims `out`; the user's config lands in the owned dir.
+    ipe::build_with_options(&entry, &out, &runtime, BuildOptions::default())
+        .expect("first dynamic build");
     let config_path = out.join(".cargo").join("config.toml");
     std::fs::create_dir_all(out.join(".cargo")).expect("mk .cargo");
     let user_config = "# hand-written by a user\n[net]\noffline = false\n";
     std::fs::write(&config_path, user_config).expect("write user config");
 
     ipe::build_with_options(&entry, &out, &runtime, BuildOptions::default())
-        .expect("dynamic build");
+        .expect("dynamic rebuild");
     let after = std::fs::read_to_string(&config_path).expect("user config must survive");
     assert_eq!(after, user_config);
 }
@@ -217,7 +220,7 @@ fn cli_refusals_are_typed_and_artifact_free() {
         "unknown allocator must refuse",
     );
     assert!(
-        matches!(&err, CliError::CommandUsage { command: "build", reason } if reason.contains("jemalloc")),
+        matches!(&err, CliError::CommandUsage { command: "build", reason } if reason.as_str().contains("jemalloc")),
         "got: {err:?}"
     );
 
@@ -250,24 +253,10 @@ fn cli_refusals_are_typed_and_artifact_free() {
         ],
         "mac static must refuse",
     );
+    // The closed `--target` vocabulary is parsed at the CLI boundary, so an
+    // unsupported triple is a command-usage refusal there, naming the value.
     assert!(
-        matches!(
-            err,
-            CliError::StaticRefusal(build_plan::Refusal::UnknownStaticTarget { .. })
-        ),
-        "wrong refusal: {err:?}"
-    );
-
-    // The musl-malloc cliff needs the two-key acknowledgment.
-    let err = refuse(
-        &["build", "NoSuch.ipe", "--static", "--allocator", "system"],
-        "system-on-musl without ack must refuse",
-    );
-    assert!(
-        matches!(
-            err,
-            CliError::StaticRefusal(build_plan::Refusal::MuslMallocCliff)
-        ),
+        matches!(&err, CliError::CommandUsage { command: "build", reason } if reason.as_str().contains("x86_64-apple-darwin")),
         "wrong refusal: {err:?}"
     );
 
@@ -386,7 +375,6 @@ fn package_ipe_rust_stages_parse_and_reject_typos() {
          \x20       { database = Sqlite\n\
          \x20       , static = True\n\
          \x20       , allocator = Dlmalloc\n\
-         \x20       , allowSlowAllocator = False\n\
          \x20       }\n\
          \x20   }\n",
     )
@@ -398,7 +386,6 @@ fn package_ipe_rust_stages_parse_and_reject_typos() {
             static_build: Some(true),
             target: None,
             allocator: Some(build_plan::AllocatorChoice::Dlmalloc),
-            allow_slow_allocator: Some(false),
             c_free: None,
         }
     );
@@ -413,7 +400,7 @@ fn package_ipe_rust_stages_parse_and_reject_typos() {
     .expect("write package.ipe");
     let err = ipe::project::parse_manifest(&manifest_path).expect_err("typo must refuse");
     assert!(
-        matches!(err, CliError::UsageOwned(_)),
+        matches!(err, CliError::Usage(_)),
         "an unknown allocator constructor is a manifest-parse refusal: {err:?}"
     );
     assert!(
@@ -555,7 +542,7 @@ fn tls_stays_rustls_with_bundled_roots_in_every_manifest_source() {
 /// static (`ldd`) and runs. Gated: `IPE_E2E_STATIC=1`.
 #[test]
 fn end_to_end_static_binary_is_static_and_runs() {
-    if std::env::var("IPE_E2E_STATIC").is_err() {
+    if ipe_env::var("IPE_E2E_STATIC").is_err() {
         return;
     }
     let root = repo_root();
@@ -634,7 +621,7 @@ fn end_to_end_static_binary_is_static_and_runs() {
 /// static binary. Gated: `IPE_E2E_STATIC=1`.
 #[test]
 fn ipe_run_static_builds_and_executes_a_static_binary() {
-    if std::env::var("IPE_E2E_STATIC").is_err() {
+    if ipe_env::var("IPE_E2E_STATIC").is_err() {
         return;
     }
     let root = repo_root();
@@ -674,11 +661,12 @@ fn ipe_run_static_builds_and_executes_a_static_binary() {
         String::from_utf8_lossy(&run.stdout)
     );
 
-    // The executed artifact must be genuinely static.
+    // The executed artifact must be genuinely static. `--out` names the output
+    // root; the emitted crate is its `rust/` area.
     let bin = target_dir
         .join("x86_64-unknown-linux-musl")
         .join("debug")
-        .join(emitted_bin_name(&out));
+        .join(emitted_bin_name(&out.join("rust")));
     let ldd = std::process::Command::new("ldd")
         .arg(&bin)
         .output()

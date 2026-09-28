@@ -55,7 +55,7 @@ fn build_run_oninput_closure() -> (PathBuf, crate::support::RunOutcome) {
         .join("golden")
         .join("stdui_oninput_closure");
     let entry = dir.join("Main.ipe");
-    let out = std::env::temp_dir().join("ipec_m7_stdui_oninput_closure_e2e");
+    let out = crate::support::scratch_root().join("ipec_m7_stdui_oninput_closure_e2e");
     let _ = std::fs::remove_dir_all(&out);
 
     let runtime = ipe::resolve_runtime();
@@ -85,7 +85,7 @@ fn build_run_oninput_closure() -> (PathBuf, crate::support::RunOutcome) {
 /// the binary must exit 0.
 #[test]
 fn oninput_closure_arc_wrap_builds_and_runs() {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
 

@@ -54,7 +54,7 @@ fn build_run_input_callback() -> crate::support::RunOutcome {
         .join("golden")
         .join("input_callback_maybe_field");
     let entry = dir.join("Main.ipe");
-    let out = std::env::temp_dir().join("ipec_m7_input_callback_maybe_field_e2e");
+    let out = crate::support::scratch_root().join("ipec_m7_input_callback_maybe_field_e2e");
     let _ = std::fs::remove_dir_all(&out);
 
     let runtime = ipe::resolve_runtime();
@@ -80,7 +80,7 @@ fn build_run_input_callback() -> crate::support::RunOutcome {
 /// (exit 0) and the binary runs (exit 0), rendering all four Input controls.
 #[test]
 fn input_callback_bare_ctor_arc_wraps_builds_and_runs() {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
 

@@ -170,10 +170,10 @@ fn a_handle_colliding_with_a_struct_nominal_is_refused_either_order() {
 /// it, the handle flows into `run` and the loop drives.
 #[test]
 fn closure_driven_loop_builds_and_runs() {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
-    let Ok(cargo) = std::env::var("CARGO") else {
+    let Ok(cargo) = ipe_env::var("CARGO") else {
         return; // no cargo on PATH in this environment — skip like the goldens
     };
 

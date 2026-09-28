@@ -102,7 +102,7 @@ fn unknown_flag_is_misuse_and_shows_help() {
         matches!(
             &result,
             Err(ipe::CliError::CommandUsage { command, reason })
-                if *command == "verify" && reason.contains("--bogus")
+                if *command == "verify" && reason.as_str().contains("--bogus")
         ),
         "expected a `verify` command-usage error naming the offending flag, got: {result:?}"
     );
@@ -113,13 +113,14 @@ fn unknown_flag_is_misuse_and_shows_help() {
 /// Ipê runtime — kept out of the default fast, offline test run.
 #[test]
 fn clean_project_passes_every_stage() -> TestResult {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         eprintln!("skipping: set IPE_E2E=1 to run the building verify E2E");
         return Ok(());
     }
     // Copy the clean entry into a fresh directory named `Main.ipe` so the build
     // stage's default entry conventions apply cleanly.
-    let dir = std::env::temp_dir().join(format!("ipe_verify_clean_{}", std::process::id()));
+    let dir =
+        crate::support::scratch_root().join(format!("ipe_verify_clean_{}", std::process::id()));
     std::fs::create_dir_all(&dir)?;
     let src = dir.join("Main.ipe");
     std::fs::copy(fixture("clean.ipe"), &src)?;
@@ -145,12 +146,13 @@ fn clean_project_passes_every_stage() -> TestResult {
 /// Gated on `IPE_E2E=1` — the test stage invokes `cargo` and needs the runtime.
 #[test]
 fn project_with_passing_tests_clears_the_test_stage() -> TestResult {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         eprintln!("skipping: set IPE_E2E=1 to run the test-stage E2E");
         return Ok(());
     }
     // Set up a project dir with Main.ipe + tests/Main.ipe (all tests pass).
-    let dir = std::env::temp_dir().join(format!("ipe_verify_tests_pass_{}", std::process::id()));
+    let dir = crate::support::scratch_root()
+        .join(format!("ipe_verify_tests_pass_{}", std::process::id()));
     std::fs::create_dir_all(dir.join("tests"))?;
     std::fs::copy(fixture("clean.ipe"), dir.join("Main.ipe"))?;
     std::fs::copy(
@@ -178,11 +180,12 @@ fn project_with_passing_tests_clears_the_test_stage() -> TestResult {
 /// Gated on `IPE_E2E=1` — the test stage invokes `cargo` and needs the runtime.
 #[test]
 fn test_stage_resolves_src_modules_from_a_sibling_tests_dir() -> TestResult {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         eprintln!("skipping: set IPE_E2E=1 to run the cross-directory test-stage E2E");
         return Ok(());
     }
-    let dir = std::env::temp_dir().join(format!("ipe_verify_src_tests_{}", std::process::id()));
+    let dir =
+        crate::support::scratch_root().join(format!("ipe_verify_src_tests_{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(dir.join("src").join("Lib"))?;
     std::fs::create_dir_all(dir.join("tests"))?;
@@ -228,11 +231,12 @@ fn test_stage_resolves_src_modules_from_a_sibling_tests_dir() -> TestResult {
 /// Gated on `IPE_E2E=1` — the test stage invokes `cargo` and needs the runtime.
 #[test]
 fn project_with_failing_tests_fails_the_test_stage() -> TestResult {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         eprintln!("skipping: set IPE_E2E=1 to run the test-stage E2E");
         return Ok(());
     }
-    let dir = std::env::temp_dir().join(format!("ipe_verify_tests_fail_{}", std::process::id()));
+    let dir = crate::support::scratch_root()
+        .join(format!("ipe_verify_tests_fail_{}", std::process::id()));
     std::fs::create_dir_all(dir.join("tests"))?;
     std::fs::copy(fixture("clean.ipe"), dir.join("Main.ipe"))?;
     std::fs::copy(

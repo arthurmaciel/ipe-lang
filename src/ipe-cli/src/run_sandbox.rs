@@ -101,7 +101,7 @@ pub const fn axis_for_driver(
 ///
 /// # Errors
 ///
-/// [`CliError::UsageOwned`] wrapping the [`RunJailDefect`] display when the
+/// [`CliError::Usage`] wrapping the [`RunJailDefect`] display when the
 /// profile cannot be lowered (an unknown database driver — fail-closed).
 pub fn build_profile(
     caps: &ResolvedCapabilities,
@@ -129,7 +129,7 @@ pub fn build_profile(
 /// build jail's strict `== "1"`, never a loose `is_some`).
 #[must_use]
 pub fn override_requested() -> bool {
-    std::env::var_os(OVERRIDE_ENV).is_some_and(|v| v == "1")
+    ipe_env::var_os(OVERRIDE_ENV).is_some_and(|v| v == "1")
 }
 
 /// Decide what to do when the jail cannot be established for a native-bearing
@@ -145,7 +145,7 @@ pub fn override_requested() -> bool {
 ///
 /// # Errors
 ///
-/// [`CliError::UsageOwned`] carrying the refusal (`IPE-F4413`) when consent is
+/// [`CliError::Usage`] carrying the refusal (`IPE-F4413`) when consent is
 /// absent.
 pub fn resolve_refusal(
     defect: &RunJailDefect,
@@ -185,8 +185,9 @@ pub fn resolve_refusal(
     // Recorded consent: warn loudly, in red, and proceed unconfined.
     // Route through the style palette so the warning honours use_color / NO_COLOR
     // and never leaks ANSI escapes into piped or redirected stderr.
-    let p = crate::style::Palette::for_stream(&std::io::stderr());
-    eprint!("{}", override_warning(p, &names.join(", ")));
+    let mut screen = crate::screen::Screen::new(crate::screen::Stream::Stderr);
+    let warning = override_warning(screen.palette(), &names.join(", "));
+    screen.guttered(&warning).emit();
     Ok(true)
 }
 
@@ -201,7 +202,7 @@ pub fn resolve_refusal(
 ///
 /// # Errors
 ///
-/// [`CliError::UsageOwned`] on any fail-closed refusal.
+/// [`CliError::Usage`] on any fail-closed refusal.
 pub fn jail_and_exec(
     profile: &SandboxProfile,
     union: &BTreeSet<Capability>,
@@ -338,14 +339,16 @@ pub fn capfloor_static_source(profile: &SandboxProfile) -> String {
 ///
 /// # Errors
 ///
-/// [`CliError::Io`] on any filesystem failure.
-pub fn write_build_artifacts(out_dir: &Path, profile: &SandboxProfile) -> Result<(), CliError> {
+/// [`CliError::OutputRefused`] when `crate_dir` was replaced since its claim or
+/// holds a symlink on the way; [`CliError::Io`] on any filesystem failure.
+pub fn write_build_artifacts(
+    crate_dir: &crate::output_dir::OwnedDir,
+    profile: &SandboxProfile,
+) -> Result<(), CliError> {
     // 1. The ipe.profile mirror.
-    let profile_path = out_dir.join("ipe.profile");
-    std::fs::write(&profile_path, profile.to_profile_string()).map_err(|e| CliError::Io {
-        path: profile_path,
-        source: e,
-    })?;
+    crate_dir
+        .path_to("ipe.profile")?
+        .write(profile.to_profile_string().as_bytes())?;
 
     // 2. Embed the capfloor into the emitted main.rs: a `#[used]` static holding
     //    the floor bytes, PLUS a `black_box` read of it at the top of `fn main`
@@ -354,17 +357,15 @@ pub fn write_build_artifacts(out_dir: &Path, profile: &SandboxProfile) -> Result
     //    removes the unreferenced data). The read keeps the bytes in `.rodata`,
     //    where `strip` cannot touch them; `ipe exec` scans them out passively.
     //    Idempotent: a re-build replaces any prior floor block + reference.
-    let main_rs = out_dir.join("src").join("main.rs");
-    let existing =
-        crate::io_bounded::read_to_string_capped(&main_rs, crate::io_bounded::SOURCE_READ_CAP)?;
+    let main_rs = crate_dir.path_to(Path::new("src").join("main.rs"))?;
+    let existing = crate::io_bounded::read_to_string_capped(
+        &main_rs.path(),
+        crate::io_bounded::SOURCE_READ_CAP,
+    )?;
     let base = strip_capfloor_block(&existing);
     let referenced = inject_floor_reference(&base)?;
     let with_floor = format!("{referenced}{}", capfloor_static_source(profile));
-    std::fs::write(&main_rs, with_floor).map_err(|e| CliError::Io {
-        path: main_rs,
-        source: e,
-    })?;
-    Ok(())
+    main_rs.write(with_floor.as_bytes())
 }
 
 /// Remove any previously-appended capfloor block AND its main-body reference, so
@@ -393,18 +394,14 @@ const FLOOR_REFERENCE: &str = "    // Retain the embedded capability floor (keep
 ///
 /// # Errors
 ///
-/// [`CliError::UsageOwned`] if the `fn main` anchor is absent (the emitted
+/// [`CliError::Usage`] if the `fn main` anchor is absent (the emitted
 /// program shape has drifted — refuse rather than emit an unreferenced floor
 /// that a linker would collect).
 fn inject_floor_reference(src: &str) -> Result<String, CliError> {
     const ANCHOR: &str = "fn main() {\n";
-    let idx = src.find(ANCHOR).ok_or_else(|| {
-        CliError::UsageOwned(
-            "ipe build: the emitted `fn main` anchor is absent, so the capability floor cannot be \
-             retained past linker GC — refusing to write an unenforceable artifact"
-                .to_owned(),
-        )
-    })?;
+    let idx = src
+        .find(ANCHOR)
+        .ok_or_else(|| CliError::Usage(crate::text::msg::run_main_anchor_absent()))?;
     let insert_at = idx + ANCHOR.len();
     let mut out = String::with_capacity(src.len() + FLOOR_REFERENCE.len());
     out.push_str(&src[..insert_at]);
@@ -440,7 +437,7 @@ pub fn artifact_is_native(binary_path: &Path) -> Result<bool, CliError> {
 ///
 /// # Errors
 ///
-/// [`CliError::UsageOwned`] on a missing/tampered profile or a profile weaker
+/// [`CliError::Usage`] on a missing/tampered profile or a profile weaker
 /// than the embedded floor (both refuse-to-run).
 pub fn load_and_verify_artifact(
     profile_path: &Path,
@@ -454,9 +451,9 @@ pub fn load_and_verify_artifact(
         crate::io_bounded::SMALL_FILE_READ_CAP,
     )?;
     let profile = run_jail::parse_profile(&profile_text).map_err(|e| {
-        CliError::UsageOwned(format!(
-            "{}: {e} — refusing to run (a profile that does not parse is not honored)",
-            RunJailDefect::ProfileWeakerThanFloor.code().as_str()
+        CliError::Usage(crate::text::msg::run_profile_unparsable(
+            &RunJailDefect::ProfileWeakerThanFloor.code().as_str(),
+            &e,
         ))
     })?;
 
@@ -468,18 +465,16 @@ pub fn load_and_verify_artifact(
         source: e,
     })?;
     let floor = run_jail::scan_capfloor(&binary).ok_or_else(|| {
-        CliError::UsageOwned(format!(
-            "{}: the binary carries no readable capability floor — refusing to run an artifact \
-             whose floor cannot be verified",
-            RunJailDefect::ProfileWeakerThanFloor.code().as_str()
+        CliError::Usage(crate::text::msg::run_floor_unreadable(
+            &RunJailDefect::ProfileWeakerThanFloor.code().as_str(),
         ))
     })?;
 
     // The profile MUST isolate at least as much as the embedded floor.
     if !profile.satisfies_capfloor(&floor) {
-        return Err(CliError::UsageOwned(
-            RunJailDefect::ProfileWeakerThanFloor.to_string(),
-        ));
+        return Err(CliError::Usage(crate::text::Message::relay(
+            &RunJailDefect::ProfileWeakerThanFloor,
+        )));
     }
     Ok(profile)
 }

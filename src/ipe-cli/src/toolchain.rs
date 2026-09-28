@@ -18,6 +18,8 @@
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
+use crate::style::TerminalSafe;
+
 /// A `cargo` executable resolved on the `PATH`.
 ///
 /// Holding one is proof the toolchain-presence check passed; the wrapped path is
@@ -76,8 +78,10 @@ pub enum Disposition {
     NotInstalled,
     /// `cargo` was found at a known install location but is not on the `PATH`,
     /// so the driver cannot invoke it. The fix is to add that directory to the
-    /// `PATH`. Carries the directory the copy was found in.
-    NotOnPath { found_in: PathBuf },
+    /// `PATH`. Carries the directory the copy was found in, as terminal-safe
+    /// display text: the message interpolates it, so a hostile directory name
+    /// cannot reach the terminal raw.
+    NotOnPath { found_in: TerminalSafe },
 }
 
 /// The typed "toolchain absent" error.
@@ -115,10 +119,9 @@ impl std::fmt::Display for ToolchainMissing {
             ),
             Disposition::NotOnPath { found_in } => write!(
                 f,
-                "{GUTTER}    Cargo is installed at {dir} but that directory is not on your PATH.\n\
+                "{GUTTER}    Cargo is installed at {found_in} but that directory is not on your PATH.\n\
                  {GUTTER}    Add it to your PATH, then try again:\n\
-                 {GUTTER}        export PATH=\"{dir}:$PATH\"",
-                dir = found_in.display()
+                 {GUTTER}        export PATH=\"{found_in}:$PATH\""
             ),
         }
     }
@@ -142,7 +145,7 @@ const CARGO_EXE: &str = "cargo";
 /// # Errors
 /// [`ToolchainMissing`] when no `cargo` executable is found on the `PATH`.
 pub fn require_cargo(intent: ToolIntent) -> Result<CargoBin, ToolchainMissing> {
-    let path_var = std::env::var_os("PATH").unwrap_or_default();
+    let path_var = ipe_env::var_os("PATH").unwrap_or_default();
     match resolve(&path_var, &known_install_dirs()) {
         Resolution::Found(path) => Ok(CargoBin(path)),
         Resolution::Missing(disposition) => Err(ToolchainMissing {
@@ -173,7 +176,7 @@ pub enum Probe {
 /// never disagree.
 #[must_use]
 pub fn probe_cargo() -> Probe {
-    let path_var = std::env::var_os("PATH").unwrap_or_default();
+    let path_var = ipe_env::var_os("PATH").unwrap_or_default();
     match resolve(&path_var, &known_install_dirs()) {
         Resolution::Found(path) => Probe::Found(path),
         Resolution::Missing(disposition) => Probe::Missing(disposition),
@@ -205,7 +208,7 @@ fn resolve(path_var: &OsString, install_dirs: &[PathBuf]) -> Resolution {
         .iter()
         .find(|dir| is_executable_file(&dir.join(CARGO_EXE)))
         .map_or(Disposition::NotInstalled, |dir| Disposition::NotOnPath {
-            found_in: dir.clone(),
+            found_in: TerminalSafe::sanitize(&dir.display().to_string()),
         });
     Resolution::Missing(disposition)
 }
@@ -216,26 +219,22 @@ fn resolve(path_var: &OsString, install_dirs: &[PathBuf]) -> Resolution {
 /// installed but its `bin` directory is not on the `PATH`" — the latter has a
 /// different fix.
 fn known_install_dirs() -> Vec<PathBuf> {
-    let mut dirs = Vec::new();
-    // The rustup default: `$CARGO_HOME/bin`, or `~/.cargo/bin` when unset.
-    if let Some(cargo_home) = std::env::var_os("CARGO_HOME") {
-        dirs.push(PathBuf::from(cargo_home).join("bin"));
-    }
-    if let Some(home) = home_dir() {
-        dirs.push(home.join(".cargo").join("bin"));
+    // The rustup default: `$CARGO_HOME/bin`, or `~/.cargo/bin` when unset. A
+    // relative `CARGO_HOME` names no directory to probe; this is a read-only
+    // hint for the "not on the `PATH`" diagnosis, so it is skipped rather than
+    // reported here.
+    let mut dirs: Vec<PathBuf> = crate::env_dir::tool_home("CARGO_HOME", ".cargo")
+        .ok()
+        .flatten()
+        .map(|cargo_home| cargo_home.join("bin"))
+        .into_iter()
+        .collect();
+    if let Some(default) = crate::env_dir::home().map(|home| home.join(".cargo").join("bin"))
+        && !dirs.contains(&default)
+    {
+        dirs.push(default);
     }
     dirs
-}
-
-/// The current user's home directory, from the platform's home variable.
-fn home_dir() -> Option<PathBuf> {
-    #[cfg(windows)]
-    let var = "USERPROFILE";
-    #[cfg(not(windows))]
-    let var = "HOME";
-    std::env::var_os(var)
-        .map(PathBuf::from)
-        .filter(|p| !p.as_os_str().is_empty())
 }
 
 /// Whether `path` is a regular file the OS would run.
@@ -313,7 +312,7 @@ mod tests {
         // Empty PATH, but the install dir holds cargo → NotOnPath naming it.
         match resolve(&OsString::from(""), &install_dirs) {
             Resolution::Missing(Disposition::NotOnPath { found_in }) => {
-                assert_eq!(found_in, probe.dir());
+                assert_eq!(found_in.as_str(), probe.dir().display().to_string());
             }
             Resolution::Missing(other) => panic!("expected NotOnPath, got {other:?}"),
             Resolution::Found(p) => panic!("expected NotOnPath, resolved {p:?}"),

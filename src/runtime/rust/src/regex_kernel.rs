@@ -42,7 +42,7 @@ fn within_input_ceiling(s: &str) -> bool {
 /// The absence is load-bearing — a `Ipe.Web` Model field of type `Regex`, a
 /// `Dict`-key use, or a serde round-trip is a compile-time rejection, never a
 /// silent wrong behaviour. `Debug` is derived (prints the source pattern),
-/// backing `toString` through the runtime's `Debug`-based stringify fallback.
+/// backing `{{…}}` interpolation through the runtime's `Debug`-based stringify fallback.
 #[derive(Clone, Debug)]
 pub struct Regex(Arc<regex::Regex>);
 

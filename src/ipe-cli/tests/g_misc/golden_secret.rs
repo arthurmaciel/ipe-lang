@@ -25,7 +25,7 @@ fn golden_dir(root: &Path, name: &str) -> PathBuf {
 }
 
 fn e2e_enabled() -> bool {
-    std::env::var("IPE_E2E").is_ok()
+    ipe_env::var("IPE_E2E").is_ok()
 }
 
 /// Compile `tests/golden/<name>/Main.ipe`, build the emitted Cargo project,
@@ -34,7 +34,7 @@ fn e2e_enabled() -> bool {
 fn compile_build_run(name: &str) -> crate::support::RunOutcome {
     let root = repo_root();
     let entry = golden_dir(&root, name).join("Main.ipe");
-    let out = std::env::temp_dir().join(format!("ipec_{name}_e2e"));
+    let out = crate::support::scratch_root().join(format!("ipec_{name}_e2e"));
     let _ = std::fs::remove_dir_all(&out);
 
     let runtime = ipe::resolve_runtime();
@@ -120,12 +120,11 @@ fn record_containing_secret_stays_clone_debug_eq() {
     );
 }
 
-/// Logging a `Secret` directly (`Log.infoWith "boot" [ aSecret ]`) is safe BY
-/// CONSTRUCTION: the attr-list element's Stringify obligation routes through
-/// `Secret`'s hand-written `IpeStringify`, which ALWAYS redacts. The marker
-/// must NEVER appear anywhere in stdout.
+/// Logging a `Secret` goes through its explicit `Secret.redacted` render (a
+/// bare `Secret` attribute is refused at type-check as not interpolable). The
+/// marker must NEVER appear anywhere in stdout.
 #[test]
-fn logging_a_secret_directly_never_leaks() {
+fn logging_a_redacted_secret_never_leaks() {
     if !e2e_enabled() {
         return;
     }
@@ -267,7 +266,7 @@ fn all_secret_goldens_compile() {
         "m_secret_io_read",
     ] {
         let entry = golden_dir(&root, name).join("Main.ipe");
-        let out = std::env::temp_dir().join(format!("ipec_{name}_compileonly"));
+        let out = crate::support::scratch_root().join(format!("ipec_{name}_compileonly"));
         let _ = std::fs::remove_dir_all(&out);
         let Ok(runtime) = ipe::resolve_runtime() else {
             return;

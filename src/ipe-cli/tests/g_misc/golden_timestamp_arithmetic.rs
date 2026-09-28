@@ -43,13 +43,13 @@ fn timestamp_arithmetic_emits() {
 /// expected round-trip values. Gated on `IPE_E2E=1`.
 #[test]
 fn timestamp_arithmetic_builds_and_runs() {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
 
     let root = repo_root();
     let entry = fixture_entry(&root);
-    let out = std::env::temp_dir().join("ipec_timestamp_arithmetic_e2e");
+    let out = crate::support::scratch_root().join("ipec_timestamp_arithmetic_e2e");
     let _ = std::fs::remove_dir_all(&out);
 
     let Ok(runtime) = ipe::resolve_runtime() else {

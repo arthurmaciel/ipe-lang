@@ -61,11 +61,11 @@ fn str_column_var_scrutinee_builds() {
 /// `scale(0.9)|other|F|T|1121` (see the fixture's arithmetic).
 #[test]
 fn str_column_var_scrutinee_cargo_builds_and_runs() {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
 
-    let out = std::env::temp_dir().join("ipec_tuple_str_col_var_scrut_e2e");
+    let out = crate::support::scratch_root().join("ipec_tuple_str_col_var_scrut_e2e");
     let _ = std::fs::remove_dir_all(&out);
 
     let Ok(runtime) = ipe::resolve_runtime() else {

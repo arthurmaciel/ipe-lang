@@ -23,6 +23,8 @@ use std::time::{Duration, Instant};
 
 use ipe::watch::{WatchEvent, WatchHandle, WatchOptions};
 
+use e2e_support::wait_for;
+
 type BoxError = Box<dyn std::error::Error + Send + Sync + 'static>;
 
 /// A minimal `Ipe.Http.Server` fixture, parameterised on the response body
@@ -68,7 +70,7 @@ fn server_fixture_hardcoded_port(body: &str) -> String {
 const BROKEN_SOURCE: &str = "module Main exposing (main)\n\nmain =\n    let x = 1\n";
 
 fn fresh_dirs(tag: &str) -> Result<(PathBuf, PathBuf), BoxError> {
-    let base = std::env::temp_dir().join(format!(
+    let base = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!(
         "watch_e2e_{tag}_{}_{}",
         std::process::id(),
         Instant::now().elapsed().as_nanos()
@@ -92,14 +94,9 @@ fn fresh_dirs(tag: &str) -> Result<(PathBuf, PathBuf), BoxError> {
 /// for CPU with every other test nextest runs in parallel. A tight deadline
 /// here fails on scheduler contention, not on a real regression.
 fn wait_for_body(port: u16, want: &str, timeout: Duration) -> bool {
-    let deadline = Instant::now() + timeout;
-    while Instant::now() < deadline {
-        if http_get_body(port).is_some_and(|body| body.contains(want)) {
-            return true;
-        }
-        std::thread::sleep(Duration::from_millis(100));
-    }
-    false
+    wait_for(timeout, || {
+        http_get_body(port).is_some_and(|body| body.contains(want))
+    })
 }
 
 fn http_get_body(port: u16) -> Option<String> {
@@ -323,7 +320,7 @@ fn pid_is_alive(pid: u32) -> bool {
 
 #[test]
 fn watch_rebuild_on_save_swaps_the_running_binary() -> Result<(), BoxError> {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         eprintln!("skipping (set IPE_E2E=1 to run)");
         return Ok(());
     }
@@ -350,7 +347,7 @@ fn watch_rebuild_on_save_swaps_the_running_binary() -> Result<(), BoxError> {
 
 #[test]
 fn watch_keeps_last_good_binary_alive_on_a_syntax_error() -> Result<(), BoxError> {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         eprintln!("skipping (set IPE_E2E=1 to run)");
         return Ok(());
     }
@@ -393,7 +390,7 @@ fn watch_keeps_last_good_binary_alive_on_a_syntax_error() -> Result<(), BoxError
 
 #[test]
 fn watch_coalesces_a_rapid_double_save_into_one_rebuild() -> Result<(), BoxError> {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         eprintln!("skipping (set IPE_E2E=1 to run)");
         return Ok(());
     }
@@ -411,11 +408,17 @@ fn watch_coalesces_a_rapid_double_save_into_one_rebuild() -> Result<(), BoxError
 
     let rebuilds_before = sink.count_rebuild_started();
 
-    // Two writes ~20ms apart — well inside the 120ms quiescence window
-    // configured in `start_watch` — must coalesce into exactly ONE
-    // rebuild cycle, and the LAST write (v3) must be what ships.
+    // Back-to-back writes, deliberately with NO intervening sleep: a
+    // `thread::sleep` only guarantees a MINIMUM wait — under CPU contention
+    // the scheduler can wake a parked thread arbitrarily late, so a fixed
+    // sleep meant to land "well inside" the 120ms quiescence window
+    // configured in `start_watch` can instead overshoot it, splitting this
+    // burst into two rebuild cycles instead of one. Never voluntarily
+    // yielding between the two writes keeps the real gap between them down
+    // to the two syscalls' own cost, which stays inside the window
+    // regardless of scheduler load. Both writes must still coalesce into
+    // exactly ONE rebuild cycle, and the LAST write (v3) must be what ships.
     write_main(&ipe_dir, &server_fixture("v2"))?;
-    std::thread::sleep(Duration::from_millis(20));
     write_main(&ipe_dir, &server_fixture("v3"))?;
 
     assert!(
@@ -446,7 +449,7 @@ fn watch_coalesces_a_rapid_double_save_into_one_rebuild() -> Result<(), BoxError
 #[cfg(target_os = "linux")]
 #[test]
 fn dropping_a_watch_handle_without_stop_still_reaps_the_supervised_child() -> Result<(), BoxError> {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         eprintln!("skipping (set IPE_E2E=1 to run)");
         return Ok(());
     }
@@ -508,7 +511,7 @@ fn dropping_a_watch_handle_without_stop_still_reaps_the_supervised_child() -> Re
 #[cfg(target_os = "linux")]
 #[test]
 fn watch_does_not_bind_a_proxy_for_a_non_http_shape() -> Result<(), BoxError> {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         eprintln!("skipping (set IPE_E2E=1 to run)");
         return Ok(());
     }
@@ -562,7 +565,7 @@ fn watch_does_not_bind_a_proxy_for_a_non_http_shape() -> Result<(), BoxError> {
 /// not by shape (a `Server.listen` main is `Shape::Script`).
 #[test]
 fn watch_proxies_a_hardcoded_port_server_on_an_internal_port() -> Result<(), BoxError> {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         eprintln!("skipping (set IPE_E2E=1 to run)");
         return Ok(());
     }
@@ -592,16 +595,4 @@ fn watch_proxies_a_hardcoded_port_server_on_an_internal_port() -> Result<(), Box
     );
 
     stop_and_join(&handle, join)
-}
-
-/// Poll `cond` until it is true or `timeout` elapses.
-fn wait_for(timeout: Duration, mut cond: impl FnMut() -> bool) -> bool {
-    let deadline = Instant::now() + timeout;
-    while Instant::now() < deadline {
-        if cond() {
-            return true;
-        }
-        std::thread::sleep(Duration::from_millis(100));
-    }
-    false
 }

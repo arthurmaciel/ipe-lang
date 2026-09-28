@@ -58,12 +58,12 @@ fn dispatch_table_emits_byte_identical_main_rs() {
 
 #[test]
 fn dispatch_table_end_to_end_prints_twenty_six() {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
     let root = repo_root();
     let entry = example_entry(&root);
-    let out = std::env::temp_dir().join("ipec_fn_record_field_dispatch_e2e");
+    let out = crate::support::scratch_root().join("ipec_fn_record_field_dispatch_e2e");
     let _ = std::fs::remove_dir_all(&out);
 
     let Ok(runtime) = ipe::resolve_runtime() else {

@@ -68,7 +68,7 @@ use crate::CliError;
 /// [`CliError::Usage`] on flag misuse; [`CliError::Io`] on a filesystem
 /// failure; [`CliError::Pipeline`] when a file cannot be parsed or the
 /// formatter's round-trip guard trips. Under `--check`, an unformatted file is
-/// reported as a non-zero exit via [`CliError::UsageOwned`] carrying the list.
+/// reported as a non-zero exit via [`CliError::Usage`] carrying the list.
 pub fn run_fmt(rest: &[String]) -> Result<(), CliError> {
     // `--help` / `-h` is a request for output, not an error — honour it before
     // the typed parse (which treats every dashed token as a flag to validate).
@@ -76,7 +76,9 @@ pub fn run_fmt(rest: &[String]) -> Result<(), CliError> {
     // what the top-level dispatcher prints for `ipe fmt --help`.
     if rest.iter().any(|a| a == "--help" || a == "-h") {
         if let Some(page) = crate::help::command("fmt", &std::io::stdout()) {
-            print!("{page}");
+            crate::screen::Screen::new(crate::screen::Stream::Stdout)
+                .guttered(&page)
+                .emit();
         }
         return Ok(());
     }
@@ -105,12 +107,14 @@ fn run_fmt_inplace(
     let root = PathBuf::from(path.unwrap_or("."));
     let files = collect_ipe_files(&root)?;
     if files.is_empty() {
-        return Err(CliError::UsageOwned(format!(
-            "fmt: no .ipe files found at {}",
-            root.display()
+        return Err(CliError::Usage(crate::text::msg::fmt_no_files(
+            &root.display(),
         )));
     }
 
+    // A file reached by walking a directory must stay inside it; only an
+    // explicitly named file may be a symlink to elsewhere.
+    let walked = !root.is_file();
     let mut unformatted: Vec<PathBuf> = Vec::new();
     for file in &files {
         let src =
@@ -121,10 +125,15 @@ fn run_fmt_inplace(
                 unformatted.push(file.clone());
             }
         } else if formatted != src {
-            crate::write_atomic(file, &formatted)?;
-            eprintln!(
-                "{}",
-                crate::style::gutter(&format!("formatted {}", file.display()))
+            if walked {
+                crate::rewrite_walked_file(&root, file, &formatted, crate::RewriteKind::Lossless)?;
+            } else {
+                crate::rewrite_user_file(file, &formatted, crate::RewriteKind::Lossless)?;
+            }
+            crate::screen::chatter(
+                crate::screen::Stream::Stderr,
+                crate::screen::Tone::Text,
+                &format!("formatted {}", file.display()),
             );
         }
     }
@@ -156,10 +165,8 @@ fn report_check(
                 .map(|p| p.display().to_string())
                 .collect();
             let refs: Vec<&str> = paths.iter().map(String::as_str).collect();
-            println!(
-                "{}",
-                json::object(&[("unformatted", json::string_array(&refs))])
-            );
+            let payload = json::object(&[("unformatted", json::string_array(&refs))]);
+            crate::screen::emit_machine(crate::screen::Stream::Stdout, &format!("{payload}\n"));
             if unformatted.is_empty() {
                 Ok(())
             } else {
@@ -167,9 +174,12 @@ fn report_check(
             }
         }
         OutputFormat::Plain => {
+            let mut lines = String::new();
             for p in unformatted {
-                println!("{}", p.display());
+                lines.push_str(&p.display().to_string());
+                lines.push('\n');
             }
+            crate::screen::emit_machine(crate::screen::Stream::Stdout, &lines);
             if unformatted.is_empty() {
                 Ok(())
             } else {
@@ -180,13 +190,11 @@ fn report_check(
             if unformatted.is_empty() {
                 return Ok(());
             }
-            let list = unformatted
-                .iter()
-                .map(|p| format!("  {}", p.display()))
-                .collect::<Vec<_>>()
-                .join("\n");
-            Err(CliError::UsageOwned(format!(
-                "the following files are not formatted (run `ipe fmt` to fix):\n{list}"
+            let list = crate::text::TerminalBlock::lines(
+                unformatted.iter().map(|p| format!("  {}", p.display())),
+            );
+            Err(CliError::Usage(crate::text::msg::fmt_unformatted_files(
+                &list,
             )))
         }
     }
@@ -207,9 +215,7 @@ fn run_fmt_stdin(check: bool) -> Result<(), CliError> {
         if formatted != src {
             // Print a unified diff for CI consumption.
             diff_eprint("<stdin>", &src, &formatted);
-            return Err(CliError::UsageOwned(
-                "stdin is not formatted (run `ipe fmt --stdin` to fix)".to_owned(),
-            ));
+            return Err(CliError::Usage(crate::text::msg::fmt_stdin_unformatted()));
         }
     } else {
         std::io::Write::write_all(&mut std::io::stdout(), formatted.as_bytes()).map_err(|e| {
@@ -276,9 +282,8 @@ fn collect_ipe_files(root: &Path) -> Result<Vec<PathBuf>, CliError> {
         return Ok(vec![root.to_path_buf()]);
     }
     if !root.is_dir() {
-        return Err(CliError::UsageOwned(format!(
-            "fmt: no such file or directory: {}",
-            root.display()
+        return Err(CliError::Usage(crate::text::msg::fmt_no_such_path(
+            &root.display(),
         )));
     }
     let mut out: Vec<PathBuf> = Vec::new();

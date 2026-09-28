@@ -105,7 +105,7 @@ pub fn classify(name: &str) -> Hermetic {
         "version" | "capabilities" | "doc" | "diff" => Hermetic::Snapshot,
 
         // Cargo / build / run / execute — heavy, environment-dependent output.
-        "build" | "run" | "release" | "test" | "verify" | "exec" | "watch" | "debugger" => {
+        "build" | "run" | "release" | "test" | "verify" | "exec" | "watch" => {
             Hermetic::Excluded("runs cargo / builds / executes — flaky transcript")
         }
 
@@ -117,8 +117,7 @@ pub fn classify(name: &str) -> Hermetic {
         // Project-tree mutators / environment probes — output depends on a
         // project or the host toolchain. `type-check` reads and compiles a
         // project tree, so its diagnostics/paths are environment-dependent.
-        "type-check" | "lint" | "fmt" | "clean" | "migrate" | "fix" | "eject" | "rust"
-        | "health" => {
+        "type-check" | "lint" | "fmt" | "clean" | "fix" | "eject" | "rust" | "health" => {
             Hermetic::Excluded("depends on a project tree / host toolchain — flaky transcript")
         }
 
@@ -150,8 +149,8 @@ pub fn volatile_path_prefixes(repo_root: &Path) -> Vec<String> {
     }
     prefixes.push(repo_root.to_string_lossy().into_owned());
     prefixes.push(std::env::temp_dir().to_string_lossy().into_owned());
-    if let Some(home) = std::env::var_os("HOME") {
-        prefixes.push(PathBuf::from(home).to_string_lossy().into_owned());
+    if let Some(home) = crate::env_dir::home() {
+        prefixes.push(home.to_string_lossy().into_owned());
     }
     prefixes.sort_by_key(|p| std::cmp::Reverse(p.len()));
     prefixes

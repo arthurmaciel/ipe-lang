@@ -51,13 +51,13 @@ fn emits_byte_identical_main_rs() {
 /// Gated on `IPE_E2E=1` so the default `cargo test` stays fast.
 #[test]
 fn end_to_end_builds_and_prints_fourteen() {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
 
     let root = repo_root();
     let entry = example_entry(&root);
-    let out = std::env::temp_dir().join("ipec_m3b3_alias_e2e");
+    let out = crate::support::scratch_root().join("ipec_m3b3_alias_e2e");
     let _ = std::fs::remove_dir_all(&out);
 
     let runtime = ipe::resolve_runtime();

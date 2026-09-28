@@ -70,7 +70,7 @@ fn c01_nested_let_fn_callee_green() {
         built.err()
     );
 
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
     let outcome = crate::support::build_and_run_emitted("nested_let_fn_callee", &out);

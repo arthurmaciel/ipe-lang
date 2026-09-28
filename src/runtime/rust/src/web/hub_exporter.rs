@@ -86,8 +86,12 @@ pub async fn enable_from_env() {
     }
     let token = crate::system::read_env_var(TOKEN_ENV).unwrap_or_default();
     if token.len() < MIN_TOKEN_BYTES {
-        eprintln!(
-            "[ipe.hub] {TOKEN_ENV} must be ≥{MIN_TOKEN_BYTES} bytes to push to {hub}; exporter disabled"
+        crate::system::emit_runtime_log(
+            "hub",
+            &format!(
+                "{TOKEN_ENV} must be ≥{MIN_TOKEN_BYTES} bytes to push to {}; exporter disabled",
+                super::push_exporter::redacted_origin(&hub)
+            ),
         );
         return;
     }
@@ -98,21 +102,14 @@ pub async fn enable_from_env() {
     // `http://localhost.evil.com`, leaking the bearer token over cleartext to an
     // attacker host. Accept https://, or http:// ONLY when the host is exactly a
     // loopback name/address.
-    let scheme_ok = match reqwest::Url::parse(&hub) {
-        Ok(u) => {
-            u.scheme() == "https"
-                || (u.scheme() == "http"
-                    && matches!(
-                        u.host_str(),
-                        Some("localhost") | Some("127.0.0.1") | Some("[::1]")
-                    ))
-        }
-        Err(_) => false,
-    };
-    if !scheme_ok {
-        eprintln!(
-            "[ipe.hub] refusing to push bearer token over non-https {HUB_ENV}={hub}; \
-             use https:// (or a localhost loopback); exporter disabled"
+    if !super::push_exporter::url_allows_cleartext_token(&hub) {
+        crate::system::emit_runtime_log(
+            "hub",
+            &format!(
+                "refusing to push bearer token over non-https {HUB_ENV}={}; \
+                 use https:// (or a localhost loopback); exporter disabled",
+                super::push_exporter::redacted_origin(&hub)
+            ),
         );
         return;
     }
@@ -131,7 +128,13 @@ pub async fn enable_from_env() {
     if SENDER.set(tx).is_err() {
         return;
     }
-    eprintln!("[ipe.hub] OTLP push → {base}/v1/{{logs,traces}} every {interval_ms}ms");
+    crate::system::emit_runtime_log(
+        "hub",
+        &format!(
+            "OTLP push → {}/v1/{{logs,traces}} every {interval_ms}ms",
+            super::push_exporter::redacted_origin(&base)
+        ),
+    );
     tokio::spawn(batcher(rx, base, token, service, interval_ms));
 }
 
@@ -284,7 +287,15 @@ async fn push_one(client: &reqwest::Client, base: &str, token: &str, batch: &Otl
     {
         Ok(r) => r.status().is_success(),
         Err(e) => {
-            eprintln!("[ipe.hub] push {url}: {e}");
+            crate::system::emit_runtime_log(
+                "hub",
+                &format!(
+                    "push {}{}: {}",
+                    super::push_exporter::redacted_origin(base),
+                    batch.path,
+                    e.without_url()
+                ),
+            );
             false
         }
     }

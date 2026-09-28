@@ -46,7 +46,7 @@ fn golden_dir(root: &Path, name: &str) -> PathBuf {
 fn assert_ipec_ok(name: &str) -> PathBuf {
     let root = repo_root();
     let entry = golden_dir(&root, name).join("Main.ipe");
-    let out = std::env::temp_dir().join(format!("ipec_{name}_e2e"));
+    let out = crate::support::scratch_root().join(format!("ipec_{name}_e2e"));
     let _ = std::fs::remove_dir_all(&out);
     let runtime = ipe::resolve_runtime();
     assert!(runtime.is_ok(), "runtime must resolve: {:?}", runtime.err());
@@ -65,7 +65,7 @@ fn assert_ipec_ok(name: &str) -> PathBuf {
 /// (proving the reused Decoder component decodes BOTH payloads correctly —
 /// not just "compiles").
 fn assert_e2e_output(name: &str) {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
     let out = assert_ipec_ok(name);

@@ -56,7 +56,7 @@ fn i195_ipec_accepts_and_renders_send_only_fnonce_payload() {
         return;
     };
 
-    let built = ipe::build_with_sibling_discovery(&entry, &out, &runtime);
+    let built = ipe::build_loose_file(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
         "ipe build must succeed for json_decode_pipeline: {:?}",
@@ -104,20 +104,20 @@ fn i195_ipec_accepts_and_renders_send_only_fnonce_payload() {
 /// the original SEAL violation (ipe-0, cargo-fail).
 #[test]
 fn i195_cargo_builds_and_runs() {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
 
     let root = repo_root();
     let entry = entry_path(&root);
-    let out = std::env::temp_dir().join("ipec_i195_json_decode_pipeline_e2e");
+    let out = crate::support::scratch_root().join("ipec_i195_json_decode_pipeline_e2e");
     let _ = std::fs::remove_dir_all(&out);
 
     let runtime = ipe::resolve_runtime();
     assert!(runtime.is_ok(), "runtime must resolve for E2E");
     let Ok(runtime) = runtime else { return };
 
-    let built = ipe::build_with_sibling_discovery(&entry, &out, &runtime);
+    let built = ipe::build_loose_file(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
         "ipe build must succeed for json_decode_pipeline: {:?}",

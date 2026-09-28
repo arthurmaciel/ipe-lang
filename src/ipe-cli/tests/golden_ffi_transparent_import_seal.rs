@@ -169,7 +169,8 @@ fn transparent_import_emits_the_conversion_seam() {
         return; // runtime unavailable in this environment — skip silently
     };
 
-    let tmp = std::env::temp_dir().join("ipec_ffi_transparent_import");
+    let tmp =
+        std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("ipec_ffi_transparent_import");
     assert!(
         write_project(&tmp),
         "must write the fixture project + FFI cache"
@@ -179,7 +180,7 @@ fn transparent_import_emits_the_conversion_seam() {
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("ffi_transparent_import_out");
     let _ = fs::remove_dir_all(&out);
 
-    if let Err(err) = ipe::build_with_sibling_discovery(&entry, &out, &runtime) {
+    if let Err(err) = ipe::build_loose_file(&entry, &out, &runtime) {
         assert!(
             false_marker(),
             "transparent-import fixture must build, got: {err}"
@@ -228,14 +229,15 @@ fn transparent_import_emits_the_conversion_seam() {
 /// from, never what the emitted code says.
 #[test]
 fn transparent_import_emitted_crate_builds_and_runs() {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
     let Ok(runtime) = ipe::resolve_runtime() else {
         return;
     };
 
-    let tmp = std::env::temp_dir().join("ipec_ffi_transparent_import_e2e");
+    let tmp = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
+        .join("ipec_ffi_transparent_import_e2e");
     assert!(
         write_project(&tmp),
         "must write the fixture project + FFI cache"
@@ -244,7 +246,7 @@ fn transparent_import_emitted_crate_builds_and_runs() {
     let entry = tmp.join("src").join("Main.ipe");
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("ffi_transparent_import_e2e_out");
     let _ = fs::remove_dir_all(&out);
-    if let Err(err) = ipe::build_with_sibling_discovery(&entry, &out, &runtime) {
+    if let Err(err) = ipe::build_loose_file(&entry, &out, &runtime) {
         assert!(
             false_marker(),
             "transparent-import fixture must build, got: {err}"
@@ -288,7 +290,7 @@ pub fn brightness(s: Shade) -> i64 {
     );
     fs::write(&manifest_path, patched).expect("patched Cargo.toml");
 
-    let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_owned());
+    let cargo = ipe_env::var("CARGO").unwrap_or_else(|_| "cargo".to_owned());
     let run = std::process::Command::new(cargo)
         .arg("run")
         .arg("--quiet")

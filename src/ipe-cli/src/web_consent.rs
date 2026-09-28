@@ -107,7 +107,7 @@ pub fn gate(
     granted: &BTreeSet<Capability>,
     provenance: &WebAxisProvenance,
 ) -> Result<(), CliError> {
-    let mut ungranted: Vec<String> = Vec::new();
+    let mut ungranted: Vec<crate::text::Message> = Vec::new();
     for cap in inferred {
         let Capability::JsPort(axis) = cap else {
             continue;
@@ -123,15 +123,13 @@ pub fn gate(
                     .map(String::as_str)
                     .collect::<Vec<_>>()
                     .join(", ");
-                ungranted.push(format!("`{wire}` disclosed by {via}"));
+                ungranted.push(crate::text::web_consent_disclosure(&wire, &via));
             }
             None => {
                 // Fail-closed: the axis is inferred (a reachable module discloses
                 // it through the link-fold) but no scanned source attributes it —
                 // refuse stating exactly that, rather than dropping the axis.
-                ungranted.push(format!(
-                    "`{wire}` disclosed by a module the build could not attribute"
-                ));
+                ungranted.push(crate::text::web_consent_disclosure_unattributed(&wire));
             }
         }
     }
@@ -143,20 +141,16 @@ pub fn gate(
 
 /// The typed, fail-closed refusal naming each ungranted web axis, its disclosing
 /// module(s), and the remedy.
-fn refusal(ungranted: &[String]) -> CliError {
-    let mut body =
-        String::from("this program reaches a browser web capability the app has not granted\n");
-    for item in ungranted {
-        body.push_str("  = ");
-        body.push_str(item);
-        body.push('\n');
-    }
-    body.push_str(
-        "  = a web capability is granted ONLY by the top-level app's package.ipe; a dependency \n\
-         \x20   discloses but cannot self-authorise. Grant it after review by adding the axis to \n\
-         \x20   `accept = [ … ]` under [capabilities] in package.ipe, or drop the dependency.\n",
-    );
-    CliError::UsageOwned(format!("error[IPE-S0002]: {body}"))
+fn refusal(ungranted: &[crate::text::Message]) -> CliError {
+    CliError::Usage(crate::text::Message::lines(
+        std::iter::once(crate::text::msg::web_consent_header())
+            .chain(
+                ungranted
+                    .iter()
+                    .map(|item| crate::text::msg::consent_item(item)),
+            )
+            .chain(std::iter::once(crate::text::msg::web_consent_remedy())),
+    ))
 }
 
 #[cfg(test)]
@@ -208,6 +202,20 @@ mod tests {
         let prov = WebAxisProvenance::default();
         let inferred = caps(&[Capability::Network, Capability::Filesystem]);
         gate(&inferred, &BTreeSet::new(), &prov).expect("no web axis, no gate");
+    }
+
+    /// A hostile discloser name cannot carry an escape sequence or open a line.
+    #[test]
+    fn a_hostile_discloser_name_renders_inert() {
+        let module = "Dep\u{1b}]0;title\u{7}\n\u{1b}[2Kerror: forged";
+        let prov = WebAxisProvenance::from_sources([(module, CLIPBOARD_DEP)]);
+        let inferred = caps(&[Capability::JsPort(WebCapability::Clipboard)]);
+        let err =
+            gate(&inferred, &BTreeSet::new(), &prov).expect_err("an ungranted axis is refused");
+        let msg = err.to_string();
+        assert!(!msg.contains('\u{1b}'), "{msg:?}");
+        assert!(!msg.contains('\u{7}'), "{msg:?}");
+        assert!(!msg.lines().any(|l| l.starts_with("error:")), "{msg:?}");
     }
 
     #[test]

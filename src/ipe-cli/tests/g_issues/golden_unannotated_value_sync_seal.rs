@@ -54,13 +54,13 @@ fn generics_of<'a>(emitted: &'a str, ipe_name: &str) -> Option<&'a str> {
 fn unannotated_value_sync_bounds_emitted() {
     let root = crate::support::repo_root();
     let entry = fixture_entry(&root);
-    let out = std::env::temp_dir().join(format!("ipec_{GOLDEN}_emit"));
+    let out = crate::support::scratch_root().join(format!("ipec_{GOLDEN}_emit"));
     let _ = std::fs::remove_dir_all(&out);
 
     let Ok(runtime) = ipe::resolve_runtime() else {
         return;
     };
-    let built = ipe::build_with_sibling_discovery(&entry, &out, &runtime);
+    let built = ipe::build_loose_file(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
         "{GOLDEN}: ipe build must accept the program, got: {built:?}"
@@ -82,13 +82,13 @@ fn unannotated_value_sync_bounds_emitted() {
 fn unannotated_value_sync_seal_builds() {
     let root = crate::support::repo_root();
     let entry = fixture_entry(&root);
-    let out = std::env::temp_dir().join(format!("ipec_{GOLDEN}_e2e"));
+    let out = crate::support::scratch_root().join(format!("ipec_{GOLDEN}_e2e"));
     let _ = std::fs::remove_dir_all(&out);
 
     let Ok(runtime) = ipe::resolve_runtime() else {
         return;
     };
-    let built = ipe::build_with_sibling_discovery(&entry, &out, &runtime);
+    let built = ipe::build_loose_file(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
         "{GOLDEN}: ipe build must accept the program, got: {built:?}"

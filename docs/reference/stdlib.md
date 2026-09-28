@@ -122,7 +122,6 @@ Each module listed below links to a detail page with the full documentation and 
 - [Test](#test)
 - [Time](#time)
 - [Time.Timestamp](#timetimestamp)
-- [ToString](#tostring)
 - [Trace](#trace)
 - [Tuple](#tuple)
 - [Ui](#ui)
@@ -195,7 +194,6 @@ Ipe.Basics — the implicit prelude (Tier-A auto-import, compiled source).
 | `fst` | `fst pair` — the first component of a 2-tuple. |
 | `snd` | `snd pair` — the second component of a 2-tuple. |
 | `clamp` | `clamp lo hi x` — constrain `x` to the range `[lo, hi]`. |
-| `toString` | `toString x` — convert a `Stringify` value to its `String` representation. |
 | `modBy` | `modBy divisor dividend` — the modulo remainder, with the sign of the |
 | `negate` | `negate x` — arithmetic negation. |
 | `abs` | `abs x` — absolute value. |
@@ -1452,9 +1450,10 @@ Ipe.Db.Dsn — a typed, opaque database connection descriptor
 | `Driver` | The closed set of drivers the runtime can describe — exactly the two the |
 | `TlsMode` | The transport-security posture. `Require` is the secure default when a DSN |
 | `parse` | `parse raw` — THE seal from a full DSN URL string. Returns `Err` on any |
-| `build` | `build parts` — THE seal from typed parts, running the SAME validators as |
+| `build` | `build parts` — THE seal from typed parts, enforcing the invariants `parse` |
 | `driver` | `driver dsn` — the descriptor's driver. |
 | `host` | `host dsn` — the host component (`""` for a file-backed sqlite descriptor). |
+| `port` | `port dsn` — the network port as a validated `Ipe.Net.Port`, or `Nothing` |
 | `database` | `database dsn` — the database name (or file path, for sqlite). |
 | `user` | `user dsn` — the connection user (`""` when none). |
 | `tls` | `tls dsn` — the descriptor's transport posture. |
@@ -1474,6 +1473,7 @@ Ipe.Db.Store — typed, injection-safe persistence over the audited `Ipe.Db`.
 | `Store` | One classified, queryable table whose schema, reads, and writes derive from |
 | `Column` | One typed column: its (validated) name and its abstract type for the |
 | `ColumnSpec` | A DB-only fact the record type cannot express: primary key, serial |
+| `PrimaryKeyDecl` | The table's primary key: none, one column, or several columns forming one |
 | `IndexSpec` | A declarative performance index over one or more of the store's columns. |
 | `Row` | A row read back from the database: every column keyed by its name, values |
 | `validSqlIdent` | `validSqlIdent name` — accept `name` as a (possibly dotted) SQL identifier, |
@@ -1494,7 +1494,10 @@ Ipe.Db.Store — typed, injection-safe persistence over the audited `Ipe.Db`.
 | `defaultText` | `defaultText accessor value store` — give the accessor-named column a |
 | `defaultInt` | `defaultInt accessor value store` — give the accessor-named column a |
 | `touchOnUpdate` | Mark the accessor-named column a DB-stamped updated-at column. Like |
-| `primaryKeyNamed` | (no summary) |
+| `compositePrimaryKey2` | `compositePrimaryKey2 first second draft` — make the two accessor-named |
+| `compositePrimaryKey3` | `compositePrimaryKey3 first second third draft` — make the three |
+| `primaryKeyNamed` | `primaryKeyNamed column draft` — the string form of `primaryKey`: mark the |
+| `compositePrimaryKeyNamed` | `compositePrimaryKeyNamed columns draft` — the string form of |
 | `serialNamed` | (no summary) |
 | `uniqueNamed` | (no summary) |
 | `defaultNowNamed` | (no summary) |
@@ -1532,6 +1535,7 @@ Ipe.Db.Store — typed, injection-safe persistence over the audited `Ipe.Db`.
 | `CompareOp` | A comparison operator carried by a query leaf. A typed ADT, not a stringly |
 | `Query` | A filtered, ordered, paginated read over a `Store a`, decoded through the |
 | `query` | `query store` — begin a read over `store` with no filter, ordering, or |
+| `where` | `where cond q` — restrict `q` to the rows matching `cond`. Applying `where` |
 | `eq` | `eq accessor value` — the rows where the record column named by the field |
 | `eqBy` | `eqBy codec accessor value` — the accessor-typed equality leaf for an ENUM |
 | `neq` | `neq accessor value` — the rows where the column named by `accessor` is |
@@ -1639,6 +1643,7 @@ Ipe.Db.Store.Unsafe — the raw, string-named query leaves and column-spec
 | `notNull` | `notNull col` — the rows where `col` is not SQL `NULL`. |
 | `inList` | `inList col values` — the rows where `col` is one of `values`; each value |
 | `primaryKey` | `primaryKey col draft` — mark the string-named `col` the primary key. |
+| `compositePrimaryKey` | `compositePrimaryKey cols draft` — make the string-named `cols`, in order, |
 | `serial` | `serial col draft` — mark the string-named `col` DB-assigned (serial), so |
 | `unique` | `unique col draft` — mark the string-named `col` unique. |
 | `defaultNow` | `defaultNow col draft` — mark the string-named `col` DB-stamped with the |
@@ -2258,10 +2263,10 @@ Ipe.Log — structured observability kernels.
 | `debug` | Emit a debug-severity log line. |
 | `warn` | Emit a warn-severity log line. |
 | `error` | Emit an error-severity log line. |
-| `infoWith` | Emit an info-severity log line with a list of typed context values. |
-| `debugWith` | Emit a debug-severity log line with a list of typed context values. |
-| `warnWith` | Emit a warn-severity log line with a list of typed context values. |
-| `errorWith` | Emit an error-severity log line with a list of typed context values. |
+| `infoWith` | Emit an info-severity log line with a list of scalar context values |
+| `debugWith` | Emit a debug-severity log line with a list of scalar context values |
+| `warnWith` | Emit a warn-severity log line with a list of scalar context values |
+| `errorWith` | Emit an error-severity log line with a list of scalar context values |
 | `level` | Set the minimum log severity for the application.  Takes a `LogLevel` |
 
 ## Markdown
@@ -2659,6 +2664,7 @@ Ipe.Set — unordered collection of unique elements.
 | `isUrl` | `isUrl s` — `True` when `s` looks like a valid URL. |
 | `words` | `words s` — split `s` into words on whitespace boundaries. |
 | `lines` | `lines s` — split `s` into lines on newline boundaries. |
+| `fromBool` | `fromBool b` — the canonical text of a `Bool`: lowercase `"true"` or |
 | `fromChar` | `fromChar c` — a one-character string from a `Char`. |
 | `toList` | `toList s` — convert `s` to a list of characters. |
 | `fromList` | `fromList chars` — build a `String` from a list of characters. |
@@ -2799,19 +2805,6 @@ Ipe.Time.Timestamp — an opaque instant in time (Layer 3 Ipe source).
 | `toUnixMillis` | `toUnixMillis t` — recover the raw millisecond value for runtime kernels. |
 | `add` | `add span t` — shift instant `t` forward by `span`.  A negative span |
 | `diff` | `diff a b` — the `Duration` from instant `b` to instant `a`.  The result |
-
-## ToString
-
-[Full reference](stdlib/ToString.md)
-
-Ipe.ToString — naming-consistency surface.
-
-| Export | Summary |
-|--------|----------|
-| `fromInt` | (no summary) |
-| `fromFloat` | (no summary) |
-| `fromBool` | (no summary) |
-| `fromTime` | `fromTime t` — a human-readable local-time rendering of `t`. A thin alias |
 
 ## Trace
 
@@ -3230,6 +3223,7 @@ Ipe.Url — typed, validated URLs.
 | `toString` | `toString url` — recover the serialized URL string. |
 | `scheme` | `scheme url` — the URL's scheme (`"https"`, `"http"`, …), always present. |
 | `host` | `host url` — the host component, or `Nothing` for a hostless scheme |
+| `port` | `port url` — the port with the scheme's known default applied |
 | `path` | `path url` — the path component. |
 | `query` | `query url` — the raw query string (without the leading `?`), or `Nothing`. |
 | `fragment` | `fragment url` — the fragment (without the leading `#`), or `Nothing`. |

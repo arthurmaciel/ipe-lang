@@ -62,7 +62,7 @@ fn server_fixture(body: &str) -> String {
 const RED_BUILD_SOURCE: &str = "module Main exposing (main)\n\nmain = definitelyNotBound\n";
 
 fn fresh_dirs(tag: &str) -> Result<(PathBuf, PathBuf), BoxError> {
-    let base = std::env::temp_dir().join(format!(
+    let base = crate::support::scratch_root().join(format!(
         "watch_sigterm_{tag}_{}_{}",
         std::process::id(),
         Instant::now().elapsed().as_nanos()
@@ -91,7 +91,7 @@ fn fresh_dirs(tag: &str) -> Result<(PathBuf, PathBuf), BoxError> {
 /// build; the shared target's object cache is all that matters here.
 #[cfg(target_os = "linux")]
 fn warm_server_fixture_deps() -> Result<(), BoxError> {
-    let warm_dir = std::env::temp_dir().join(format!(
+    let warm_dir = crate::support::scratch_root().join(format!(
         "watch_sigterm_warm_{}_{}",
         std::process::id(),
         Instant::now().elapsed().as_nanos()
@@ -169,14 +169,9 @@ fn http_get_body(port: u16) -> Option<String> {
 }
 
 fn wait_for_body(port: u16, want: &str, timeout: Duration) -> bool {
-    let deadline = Instant::now() + timeout;
-    while Instant::now() < deadline {
-        if http_get_body(port).is_some_and(|body| body.contains(want)) {
-            return true;
-        }
-        std::thread::sleep(Duration::from_millis(100));
-    }
-    false
+    e2e_support::wait_for(timeout, || {
+        http_get_body(port).is_some_and(|body| body.contains(want))
+    })
 }
 
 /// PID-only SIGTERM via `kill(1)` — never a process-group signal.
@@ -352,7 +347,7 @@ fn wait_for_exit(
 #[test]
 fn watch_shuts_down_the_supervised_child_on_sigterm_to_only_the_ipe_process() -> Result<(), BoxError>
 {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         eprintln!("skipping (set IPE_E2E=1 to run)");
         return Ok(());
     }
@@ -366,7 +361,7 @@ fn watch_shuts_down_the_supervised_child_on_sigterm_to_only_the_ipe_process() ->
     std::fs::write(ipe_dir.join("Main.ipe"), server_fixture("v1"))
         .map_err(|e| -> BoxError { format!("write Main.ipe: {e}").into() })?;
 
-    let port = 19157;
+    let port = 19159;
     let mut ipe_proc = spawn_ipe_watch(&ipe_dir.join("Main.ipe"), &out_dir, port, false)?;
 
     if !wait_for_body(port, "v1", WATCH_SERVE_BUDGET) {
@@ -496,7 +491,7 @@ fn spawn_never_installs_a_sigterm_forwarder() -> Result<(), BoxError> {
 #[test]
 fn double_sigterm_after_forwarder_consumed_is_silently_absorbed_use_sigkill() -> Result<(), BoxError>
 {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         eprintln!("skipping (set IPE_E2E=1 to run)");
         return Ok(());
     }

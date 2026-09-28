@@ -163,7 +163,8 @@ fn rust_fn_resolves_without_import_rust_ffi() {
         \x20               Err _ -> Io.println \"err double\"\n\
         \x20       Err _ -> Io.println \"err shift\"\n";
 
-    let tmp = std::env::temp_dir().join("ipec_ffi_rust_fn_no_ffi_import");
+    let tmp = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
+        .join("ipec_ffi_rust_fn_no_ffi_import");
     assert!(
         write_project(&tmp, main_no_ffi_import),
         "must write the fixture project + FFI cache"
@@ -173,7 +174,7 @@ fn rust_fn_resolves_without_import_rust_ffi() {
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("ffi_rust_fn_no_ffi_import_out");
     let _ = fs::remove_dir_all(&out);
 
-    if let Err(err) = ipe::build_with_sibling_discovery(&entry, &out, &runtime) {
+    if let Err(err) = ipe::build_loose_file(&entry, &out, &runtime) {
         assert!(
             false_marker(),
             "Rust.fn must build with only `import Ipe.Ffi.Rust as Rust` (no `import Rust.Ffi`): {err}"
@@ -200,7 +201,7 @@ fn rust_fn_emits_the_shared_exact_carrier_shim() {
         return; // runtime unavailable in this environment — skip silently
     };
 
-    let tmp = std::env::temp_dir().join("ipec_ffi_rust_fn");
+    let tmp = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("ipec_ffi_rust_fn");
     assert!(
         write_project(&tmp, MAIN_IPE),
         "must write the fixture project + FFI cache"
@@ -210,7 +211,7 @@ fn rust_fn_emits_the_shared_exact_carrier_shim() {
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("ffi_rust_fn_out");
     let _ = fs::remove_dir_all(&out);
 
-    if let Err(err) = ipe::build_with_sibling_discovery(&entry, &out, &runtime) {
+    if let Err(err) = ipe::build_loose_file(&entry, &out, &runtime) {
         assert!(false_marker(), "rust-fn fixture must build, got: {err}");
         return;
     }
@@ -272,12 +273,13 @@ fn a_clamp_requiring_rust_fn_is_refused() {
         \x20   case clamped 1 of\n\
         \x20       Ok _ -> Io.println \"ok\"\n\
         \x20       Err _ -> Io.println \"err\"\n";
-    let tmp = std::env::temp_dir().join("ipec_ffi_rust_fn_clamp_refusal");
+    let tmp = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
+        .join("ipec_ffi_rust_fn_clamp_refusal");
     assert!(write_project(&tmp, main), "must write the fixture project");
     let entry = tmp.join("src").join("Main.ipe");
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("ffi_rust_fn_clamp_out");
     let _ = fs::remove_dir_all(&out);
-    let err = ipe::build_with_sibling_discovery(&entry, &out, &runtime)
+    let err = ipe::build_loose_file(&entry, &out, &runtime)
         .expect_err("a clamp-requiring native binding must be refused");
     let msg = err.to_string();
     assert!(
@@ -305,12 +307,13 @@ fn a_malformed_rust_fn_is_refused() {
         \x20   case shifted 1 of\n\
         \x20       Ok _ -> Io.println \"ok\"\n\
         \x20       Err _ -> Io.println \"err\"\n";
-    let tmp = std::env::temp_dir().join("ipec_ffi_rust_fn_malformed");
+    let tmp =
+        std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("ipec_ffi_rust_fn_malformed");
     assert!(write_project(&tmp, main), "must write the fixture project");
     let entry = tmp.join("src").join("Main.ipe");
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("ffi_rust_fn_malformed_out");
     let _ = fs::remove_dir_all(&out);
-    let err = ipe::build_with_sibling_discovery(&entry, &out, &runtime)
+    let err = ipe::build_loose_file(&entry, &out, &runtime)
         .expect_err("a one-literal Rust.fn must be refused");
     let msg = err.to_string();
     assert!(
@@ -338,12 +341,13 @@ fn a_rust_fn_on_an_uninstalled_crate_is_refused() {
         \x20   case ghost 1 of\n\
         \x20       Ok _ -> Io.println \"ok\"\n\
         \x20       Err _ -> Io.println \"err\"\n";
-    let tmp = std::env::temp_dir().join("ipec_ffi_rust_fn_uninstalled");
+    let tmp =
+        std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("ipec_ffi_rust_fn_uninstalled");
     assert!(write_project(&tmp, main), "must write the fixture project");
     let entry = tmp.join("src").join("Main.ipe");
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("ffi_rust_fn_uninstalled_out");
     let _ = fs::remove_dir_all(&out);
-    let err = ipe::build_with_sibling_discovery(&entry, &out, &runtime)
+    let err = ipe::build_loose_file(&entry, &out, &runtime)
         .expect_err("a Rust.fn on an uninstalled crate must be refused");
     let msg = err.to_string();
     assert!(
@@ -360,14 +364,14 @@ fn a_rust_fn_on_an_uninstalled_crate_is_refused() {
 /// spelling, since both compile to the same forwarder + shim.
 #[test]
 fn rust_fn_emitted_crate_builds_and_runs() {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
     let Ok(runtime) = ipe::resolve_runtime() else {
         return;
     };
 
-    let tmp = std::env::temp_dir().join("ipec_ffi_rust_fn_e2e");
+    let tmp = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("ipec_ffi_rust_fn_e2e");
     assert!(
         write_project(&tmp, MAIN_IPE),
         "must write the fixture project + FFI cache"
@@ -376,7 +380,7 @@ fn rust_fn_emitted_crate_builds_and_runs() {
     let entry = tmp.join("src").join("Main.ipe");
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("ffi_rust_fn_e2e_out");
     let _ = fs::remove_dir_all(&out);
-    if let Err(err) = ipe::build_with_sibling_discovery(&entry, &out, &runtime) {
+    if let Err(err) = ipe::build_loose_file(&entry, &out, &runtime) {
         assert!(false_marker(), "rust-fn fixture must build, got: {err}");
         return;
     }
@@ -413,7 +417,7 @@ pub fn boom(n: i64) -> i64 {
     );
     fs::write(&manifest_path, patched).expect("patched Cargo.toml");
 
-    let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_owned());
+    let cargo = ipe_env::var("CARGO").unwrap_or_else(|_| "cargo".to_owned());
     let run = std::process::Command::new(cargo)
         .arg("run")
         .arg("--quiet")

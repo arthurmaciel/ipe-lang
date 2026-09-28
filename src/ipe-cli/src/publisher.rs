@@ -25,6 +25,7 @@
 use std::fmt;
 
 use crate::CliError;
+use crate::text;
 
 /// The GitHub login-length ceiling (GitHub caps usernames at 39 characters).
 const MAX_LOGIN_LEN: usize = 39;
@@ -54,13 +55,11 @@ pub enum LoginRefusal {
 impl fmt::Display for LoginRefusal {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Empty => f.write_str("it is empty"),
-            Self::TooLong => write!(f, "it is longer than {MAX_LOGIN_LEN} characters"),
-            Self::ForbiddenByte => {
-                f.write_str("it holds a character other than an ASCII letter, digit, or hyphen")
-            }
-            Self::EdgeHyphen => f.write_str("it starts or ends with a hyphen"),
-            Self::DoubleHyphen => f.write_str("it holds consecutive hyphens"),
+            Self::Empty => f.write_str(text::login_empty()),
+            Self::TooLong => f.write_str(&text::login_too_long(&MAX_LOGIN_LEN)),
+            Self::ForbiddenByte => f.write_str(text::login_forbidden_byte()),
+            Self::EdgeHyphen => f.write_str(text::login_edge_hyphen()),
+            Self::DoubleHyphen => f.write_str(text::login_double_hyphen()),
         }
     }
 }
@@ -195,12 +194,13 @@ impl AttestedActor {
     /// Parse an attested GitHub login.
     ///
     /// # Errors
-    /// [`CliError::UsageOwned`] when the value is not a GitHub login; the value is
+    /// [`CliError::Usage`] when the value is not a GitHub login; the value is
     /// echoed Debug-escaped, so no control byte reaches the terminal.
     pub fn parse(raw: &str) -> Result<Self, CliError> {
         check_login_shape(raw).map_err(|refusal| {
-            CliError::UsageOwned(format!(
-                "ipe package audit-entry: --attested-actor {raw:?} is not a GitHub login: {refusal}"
+            CliError::Usage(text::msg::attested_actor_not_login(
+                &format!("{raw:?}"),
+                &refusal,
             ))
         })?;
         Ok(Self(raw.to_owned()))
@@ -227,19 +227,14 @@ pub enum BlessingRefusal {
 impl fmt::Display for BlessingRefusal {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::NoProvenIdentity => f.write_str(
-                "no authenticated or attested publisher identity was presented, and a \
-                 self-declared `publisher` is never trusted",
-            ),
-            Self::IdentityMismatch { proven, claimed } => write!(
-                f,
-                "the proven identity `{proven}` does not match the claimed publisher `{claimed}`"
-            ),
-            Self::NotBlessed { proven } => write!(
-                f,
-                "the proven identity `{proven}` is not the first-party publisher `{}`",
-                ipe_kernels::BLESSED_PUBLISHER
-            ),
+            Self::NoProvenIdentity => f.write_str(text::blessing_no_proven_identity()),
+            Self::IdentityMismatch { proven, claimed } => {
+                f.write_str(&text::blessing_identity_mismatch(proven, claimed))
+            }
+            Self::NotBlessed { proven } => f.write_str(&text::blessing_not_blessed(
+                proven,
+                &ipe_kernels::BLESSED_PUBLISHER,
+            )),
         }
     }
 }
@@ -457,10 +452,10 @@ mod tests {
         let hostile = "\x1b[2Jevil\nforged line";
         let refused = AttestedActor::parse(hostile);
         assert!(
-            matches!(refused, Err(CliError::UsageOwned(_))),
+            matches!(refused, Err(CliError::Usage(_))),
             "a control-byte login must be refused"
         );
-        let Err(CliError::UsageOwned(msg)) = refused else {
+        let Err(CliError::Usage(msg)) = refused else {
             return;
         };
         assert!(!msg.contains('\x1b') && !msg.contains('\n'), "{msg:?}");

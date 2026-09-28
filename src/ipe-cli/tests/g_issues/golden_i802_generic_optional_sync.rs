@@ -50,7 +50,7 @@ fn generic_optional_sync_emits_byte_identical() {
         .join("golden")
         .join(GOLDEN)
         .join("main.rs");
-    let out = std::env::temp_dir().join("ipec_i802_generic_optional_sync_emit");
+    let out = crate::support::scratch_root().join("ipec_i802_generic_optional_sync_emit");
     let _ = std::fs::remove_dir_all(&out);
 
     let Ok(runtime) = ipe::resolve_runtime() else {
@@ -77,7 +77,7 @@ fn generic_optional_sync_emits_byte_identical() {
 fn generic_optional_sync_builds_and_runs() {
     let root = repo_root();
     let entry = fixture_entry(&root);
-    let out = std::env::temp_dir().join("ipec_i802_generic_optional_sync_e2e");
+    let out = crate::support::scratch_root().join("ipec_i802_generic_optional_sync_e2e");
     let _ = std::fs::remove_dir_all(&out);
 
     let Ok(runtime) = ipe::resolve_runtime() else {
@@ -86,7 +86,7 @@ fn generic_optional_sync_builds_and_runs() {
     let built = ipe::build(&entry, &out, &runtime);
     assert!(built.is_ok(), "{GOLDEN} must be accepted, got: {built:?}");
 
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
     let outcome = crate::support::build_and_run_emitted(GOLDEN, &out);

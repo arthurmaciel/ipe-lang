@@ -35,6 +35,7 @@ use std::ffi::OsString;
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::path::{Path, PathBuf};
 
+use crate::JailMounts;
 #[cfg(all(
     target_os = "linux",
     any(target_arch = "x86_64", target_arch = "aarch64")
@@ -289,6 +290,26 @@ impl SafeMountPath {
 
 // ── the returning build-jail entry ───────────────────────────────────────────
 
+/// Confirm every jail path still resolves to itself and exposes no cargo home.
+///
+/// The caller resolved each path once and handed the same values to the
+/// payload; a path swapped for a symlink since then is refused rather than
+/// bound at a spelling the payload was not told about.
+#[cfg(any(
+    all(
+        target_os = "linux",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    ),
+    target_os = "macos",
+    target_os = "windows",
+    target_os = "freebsd"
+))]
+fn recheck_mounts(mounts: &JailMounts) -> Result<(), JailOutcome> {
+    mounts.recheck().map_err(|e| JailOutcome::Unavailable {
+        defect: RunJailDefect::Path(e),
+    })
+}
+
 /// Run `payload` inside a jail lowered from `profile`, wait for it, and return
 /// the decoded [`JailOutcome`].
 ///
@@ -300,7 +321,8 @@ impl SafeMountPath {
 /// be at run time.
 ///
 /// A jail that cannot be established (unsupported platform, a seccomp program
-/// that cannot be compiled for this architecture, a spawn failure) yields
+/// that cannot be compiled for this architecture, a jail path that moved or
+/// would expose the cargo home, a spawn failure) yields
 /// [`JailOutcome::Unavailable`] — the untrusted payload is never run unconfined
 /// on any path.
 ///
@@ -318,11 +340,12 @@ impl SafeMountPath {
 pub fn build_in_jail(
     tools: &RunJailTools,
     profile: &SandboxProfile,
-    scoped_tmp: &Path,
-    working_tree: &Path,
-    extra_ro_binds: &[PathBuf],
+    mounts: &JailMounts,
     payload: &[OsString],
 ) -> JailOutcome {
+    if let Err(outcome) = recheck_mounts(mounts) {
+        return outcome;
+    }
     let Some(program) = seccomp::subprocess_deny_program(profile.subprocess) else {
         return JailOutcome::Unavailable {
             defect: RunJailDefect::UnsupportedPlatform {
@@ -343,13 +366,11 @@ pub fn build_in_jail(
     // per call in the long-lived audit/CI process.
     let seccomp_owned = unsafe { OwnedFd::from_raw_fd(seccomp_fd) };
 
-    let host_env = |k: &str| std::env::var_os(k);
+    let host_env = crate::host_env::granted;
     let argv = run_jail_argv(
         tools,
         profile,
-        scoped_tmp,
-        working_tree,
-        extra_ro_binds,
+        mounts,
         Some(seccomp_owned.as_raw_fd()),
         &host_env,
         payload,
@@ -369,20 +390,20 @@ pub fn build_in_jail(
 /// wait for it, and return the decoded [`JailOutcome`] (macOS).
 ///
 /// The macOS counterpart to the `Linux` [`build_in_jail`]: it lowers the
-/// SAME [`SandboxProfile`] to a Seatbelt SBPL profile ([`sbpl_from_profile`]),
-/// writes it to a scratch-local file, and spawns
-/// `sandbox-exec -f <profile> <payload>`, so a build observed under Tier-2 is
-/// confined exactly as the shipped artifact will be at run time (single source
-/// of the confining profile).
+/// SAME [`SandboxProfile`] to a Seatbelt SBPL profile ([`sbpl_from_profile`])
+/// and spawns `sandbox-exec -p <profile> <payload>`, so a build observed under
+/// Tier-2 is confined exactly as the shipped artifact will be at run time
+/// (single source of the confining profile). The profile travels in argv, never
+/// through a file the payload could rewrite.
 ///
-/// `scoped_tmp` is the one always-writable scratch; `working_tree` is writable
-/// only when the profile grants the filesystem axis. `extra_ro_binds` is unused
-/// on macOS (Seatbelt filters an existing view of the real filesystem rather
-/// than constructing a bind mount namespace); it is accepted so the entry has
-/// the same signature on every platform.
+/// The mounts' scratch is the one always-writable directory; the working tree
+/// is writable only when the profile grants the filesystem axis. The read-only
+/// binds are unused on macOS (Seatbelt filters an existing view of the real
+/// filesystem rather than constructing a bind mount namespace).
 ///
-/// A jail that cannot be established (no `sandbox-exec`, an SBPL profile that
-/// cannot be written, a spawn failure) yields [`JailOutcome::Unavailable`] — the
+/// A jail that cannot be established (no `sandbox-exec`, a jail path that moved
+/// or would expose the cargo home, a spawn failure) yields
+/// [`JailOutcome::Unavailable`] — the
 /// untrusted payload is never run unconfined on any path. Fail-closed.
 ///
 /// The macOS jail's actual deny behaviour is verified by the `macos-latest` CI
@@ -399,11 +420,13 @@ pub fn build_in_jail(
 pub fn build_in_jail(
     _tools: &RunJailTools,
     profile: &SandboxProfile,
-    scoped_tmp: &Path,
-    working_tree: &Path,
-    _extra_ro_binds: &[PathBuf],
+    mounts: &JailMounts,
     payload: &[OsString],
 ) -> JailOutcome {
+    if let Err(outcome) = recheck_mounts(mounts) {
+        return outcome;
+    }
+    let scoped_tmp = mounts.scoped_tmp().as_path();
     // `sandbox-exec` is the mandatory macOS jail primitive. Absent ⇒ refuse; the
     // untrusted payload is never run unconfined.
     let Some(sandbox_exec) = find_in_path("sandbox-exec") else {
@@ -414,36 +437,31 @@ pub fn build_in_jail(
         };
     };
 
-    // The SBPL profile is written into the always-writable scratch so it never
-    // races or persists on a shared temp path, and is removed after the run.
-    let sbpl = sbpl_from_profile(profile, scoped_tmp, working_tree);
-    let profile_file = scoped_tmp.join("ipe-tier2.sb");
-    if let Err(e) = std::fs::write(&profile_file, sbpl.as_bytes()) {
-        return JailOutcome::Unavailable {
-            defect: RunJailDefect::Spawn {
-                detail: format!("could not write the SBPL profile: {e}"),
-            },
-        };
-    }
-
-    // argv: sandbox-exec -f <profile> <payload…>. No shell token anywhere — the
-    // payload is a direct argv, so the quoting/injection class does not exist.
+    // argv: sandbox-exec -p <profile> <payload…>. The profile is an argument,
+    // so the payload has no file to rewrite before a later run applies it. No
+    // shell token anywhere — the payload is a direct argv, so the
+    // quoting/injection class does not exist.
+    let sbpl = match checked_sbpl(profile, mounts) {
+        Ok(sbpl) => sbpl,
+        Err(e) => {
+            return JailOutcome::Unavailable {
+                defect: RunJailDefect::Path(e),
+            };
+        }
+    };
     let mut argv: Vec<OsString> = Vec::with_capacity(payload.len() + 3);
     argv.push(sandbox_exec.into_os_string());
-    argv.push("-f".into());
-    argv.push(profile_file.clone().into_os_string());
+    argv.push("-p".into());
+    argv.push(sbpl.into());
     argv.extend(payload.iter().cloned());
 
     // Enforce the `env` axis in the launcher (Seatbelt cannot scrub env),
     // mirroring the run jail and the Linux build jail's bwrap `--clearenv`, so a
     // Tier-2 build is confined on the env axis exactly as the shipped app is.
-    let host_env = |k: &str| std::env::var_os(k);
+    let host_env = crate::host_env::granted;
     let scrubbed_env = macos_scrubbed_env(profile, scoped_tmp, &host_env);
 
-    let outcome = spawn_and_decode(&argv, Some(&scrubbed_env));
-    // Best-effort cleanup; a leftover profile in the scratch is inert.
-    let _ = std::fs::remove_file(&profile_file);
-    outcome
+    spawn_and_decode(&argv, Some(&scrubbed_env))
 }
 
 /// Run `payload` inside a Windows Job Object + AppContainer jail lowered from
@@ -466,9 +484,9 @@ pub fn build_in_jail(
 /// with a silently-unconfined filesystem axis (the probe lives inside
 /// `windows_jail::run_confined`, ahead of `CreateProcessW`).
 ///
-/// `extra_ro_binds` is unused on Windows (AppContainer filters an existing view of
-/// the real filesystem rather than constructing a bind-mount namespace); it is
-/// accepted so the entry has the same signature on every platform.
+/// The mounts' read-only binds are unused on Windows (AppContainer filters an
+/// existing view of the real filesystem rather than constructing a bind-mount
+/// namespace); the scratch and working tree are rechecked before the launch.
 ///
 /// A jail that cannot be established (a Job Object / token / capability SID / ACL
 /// / attribute list / `CreateProcessW` that cannot be built, or a non-ACL scratch
@@ -491,11 +509,12 @@ pub fn build_in_jail(
 pub fn build_in_jail(
     _tools: &RunJailTools,
     profile: &SandboxProfile,
-    scoped_tmp: &Path,
-    working_tree: &Path,
-    _extra_ro_binds: &[PathBuf],
+    mounts: &JailMounts,
     payload: &[OsString],
 ) -> JailOutcome {
+    if let Err(outcome) = recheck_mounts(mounts) {
+        return outcome;
+    }
     // The Windows jail RETURNS the child's exit code (Windows has no `exec`-
     // replace), which decodes through the SAME `JailOutcome::decode` the Linux
     // and macOS arms use: `0` is the sole `Clean` branch; a per-axis code names
@@ -503,7 +522,12 @@ pub fn build_in_jail(
     // established (a missing primitive, a non-ACL scratch volume gated by the
     // pre-spawn `FILE_PERSISTENT_ACLS` probe, a failed `CreateProcessW`) is a
     // `RunJailDefect` → `Unavailable`; the untrusted build never runs unconfined.
-    match crate::run_jail::build_windows_jailed(profile, scoped_tmp, working_tree, payload) {
+    match crate::run_jail::build_windows_jailed(
+        profile,
+        mounts.scoped_tmp().as_path(),
+        mounts.working_tree().as_path(),
+        payload,
+    ) {
         Ok(code) => JailOutcome::decode(Some(win_exit_to_i32(code))),
         Err(defect) => JailOutcome::Unavailable { defect },
     }
@@ -572,9 +596,9 @@ const fn win_exit_to_i32(code: u32) -> i32 {
 /// - **env** — scrubbed in the launcher (a jail does not scrub the inherited
 ///   environment), via the SAME allowlist the macOS/Windows arms use.
 ///
-/// `extra_ro_binds` is unused on FreeBSD (the jail chroots an existing view of the
-/// real filesystem rather than building a bind-mount namespace); it is accepted so
-/// the entry has the same signature on every platform.
+/// The mounts' read-only binds are unused on FreeBSD (the jail chroots an existing
+/// view of the real filesystem rather than building a bind-mount namespace); the
+/// scratch and working tree are rechecked before the jail is built.
 ///
 /// A jail that cannot be established (`jail` absent, a scratch that cannot be
 /// created/chowned, a `jail(8)` invocation that fails to enter the jail) yields
@@ -596,12 +620,18 @@ const fn win_exit_to_i32(code: u32) -> i32 {
 pub fn build_in_jail(
     _tools: &RunJailTools,
     profile: &SandboxProfile,
-    scoped_tmp: &Path,
-    working_tree: &Path,
-    _extra_ro_binds: &[PathBuf],
+    mounts: &JailMounts,
     payload: &[OsString],
 ) -> JailOutcome {
-    freebsd_jail::build_in_jail(profile, scoped_tmp, working_tree, payload)
+    if let Err(outcome) = recheck_mounts(mounts) {
+        return outcome;
+    }
+    freebsd_jail::build_in_jail(
+        profile,
+        mounts.scoped_tmp().as_path(),
+        mounts.working_tree().as_path(),
+        payload,
+    )
 }
 
 /// Off Linux (x86_64/aarch64), macOS, Windows, and FreeBSD the returning build jail is a
@@ -622,9 +652,7 @@ pub fn build_in_jail(
 pub fn build_in_jail(
     _tools: &RunJailTools,
     _profile: &SandboxProfile,
-    _scoped_tmp: &Path,
-    _working_tree: &Path,
-    _extra_ro_binds: &[PathBuf],
+    _mounts: &JailMounts,
     _payload: &[OsString],
 ) -> JailOutcome {
     JailOutcome::Unavailable {
@@ -800,6 +828,44 @@ const BRING_UP_MACH_SERVICES: &[&str] = &[
     "com.apple.trustd",
 ];
 
+/// The fixed system/toolchain trees the Seatbelt profile allows reading.
+///
+/// The profile masks nothing beneath them, so [`checked_sbpl`] refuses a cargo home
+/// at or under any of them before a profile is rendered.
+#[cfg(any(target_os = "macos", test))]
+pub const MACOS_READ_ROOTS: [&str; 11] = [
+    "/usr",
+    "/bin",
+    "/sbin",
+    "/System",
+    "/Library",
+    "/Applications",
+    "/opt",
+    "/dev",
+    "/private/etc",
+    "/private/var/db",
+    "/private/var/folders",
+];
+
+/// Render the Seatbelt profile for `mounts`, refusing first when a fixed read
+/// root would expose the cargo home.
+///
+/// # Errors
+/// [`crate::JailPathError::ExposesCargoHome`] when a [`MACOS_READ_ROOTS`] entry
+/// equals or contains the cargo home.
+#[cfg(any(target_os = "macos", test))]
+pub fn checked_sbpl(
+    profile: &SandboxProfile,
+    mounts: &JailMounts,
+) -> Result<String, crate::JailPathError> {
+    mounts.refuse_fixed_exposing(&MACOS_READ_ROOTS)?;
+    Ok(sbpl_from_profile(
+        profile,
+        mounts.scoped_tmp().as_path(),
+        mounts.working_tree().as_path(),
+    ))
+}
+
 #[cfg(any(target_os = "macos", test))]
 #[must_use]
 pub fn sbpl_from_profile(
@@ -916,10 +982,10 @@ pub fn sbpl_from_profile(
     // axis under a withholding profile.
     //
     // The scratch (`scoped_tmp`) is the ONLY unconditional write allow. The
-    // launcher writes only into it (the `.sb` profile file) and points `TMPDIR`
-    // at it (`macos_scrubbed_env`), so a well-behaved child's temp writes land
-    // there. No broader system-temp tree is allowed: `scoped_tmp` itself lives
-    // under the per-user temp tree (`/private/var/folders/…` — `$TMPDIR`
+    // launcher points `TMPDIR` at it (`macos_scrubbed_env`), so a well-behaved
+    // child's temp writes land there; the launcher itself stages nothing there
+    // (the profile travels in argv). No broader system-temp tree is allowed:
+    // `scoped_tmp` itself lives under the per-user temp tree (`/private/var/folders/…` — `$TMPDIR`
     // resolved through the `/var → /private/var` symlink), so a blanket allow
     // over that tree would re-permit every sibling of the scratch, defeating the
     // differential confinement — an out-of-scratch write next to the scratch
@@ -967,23 +1033,11 @@ pub fn sbpl_from_profile(
     // none live under the invoking user's home. `/private/var/db`/`/private/etc`
     // hold the system databases (dyld cache, timezone, resolver config) the loader
     // and libc read; user secrets are not here.
-    for root in [
-        "/usr",
-        "/bin",
-        "/sbin",
-        "/System",
-        "/Library",
-        "/Applications",
-        "/opt",
-        "/dev",
-        "/private/etc",
-        "/private/var/db",
-        "/private/var/folders",
-    ] {
+    for root in MACOS_READ_ROOTS {
         let _ = writeln!(s, "(allow file-read* (subpath \"{root}\"))");
     }
-    // The scratch is always readable (the launcher writes the profile and the
-    // child's temp files there); the working tree is the source being built, so it
+    // The scratch is always readable (the child's temp files live there); the
+    // working tree is the source being built, so it
     // is readable whether or not the filesystem axis grants WRITE access. Both are
     // rendered in symlink-resolved form so the allow matches the kernel-resolved
     // read, exactly like the write allows above.
@@ -1000,7 +1054,7 @@ pub fn sbpl_from_profile(
     s.push('\n');
 
     // Subprocess: deny NEW-process creation unless the profile grants it. On
-    // macOS `sandbox-exec -f <profile> <app>` applies the profile and THEN
+    // macOS `sandbox-exec -p <profile> <app>` applies the profile and THEN
     // `execve`s <app> in place (no fork) — so a `(deny process-exec*)` here would
     // catch that mandatory initial exec and the app would never start. Denying
     // `process-fork` alone is the correct lowering: every way to create a NEW
@@ -1118,10 +1172,31 @@ pub fn macos_scrubbed_env(
 /// resolver is shared.
 #[cfg(any(target_os = "macos", target_os = "freebsd"))]
 pub(crate) fn find_in_path(bin: &str) -> Option<PathBuf> {
-    let path = std::env::var_os("PATH")?;
+    let path = ipe_env::var_os("PATH")?;
     std::env::split_paths(&path)
         .map(|dir| dir.join(bin))
         .find(|candidate| candidate.is_file())
+}
+
+/// The user-private root for per-run FreeBSD jail scratch dirs, under `home`.
+///
+/// PURE over the parsed home so the refusal is unit-testable on any host. The
+/// scratch must live under a user-private root: with no absolute home it
+/// refuses rather than fall back to a world-writable `/tmp` (a cross-user
+/// symlink-plant vector at an intermediate ancestor under a root-run jail) or
+/// a relative path (resolved against whatever the working directory is).
+#[cfg(any(target_os = "freebsd", test))]
+pub(crate) fn freebsd_jail_cache_root(home: Option<PathBuf>) -> Result<PathBuf, RunJailDefect> {
+    let tail = Path::new(".cache").join("ipe").join("jail");
+    let Some(home) = home else {
+        return Err(RunJailDefect::MountFailed {
+            target: tail,
+            detail: "HOME is unset or not an absolute path; refusing a jail scratch root \
+                     outside the user-private home"
+                .to_owned(),
+        });
+    };
+    Ok(home.join(tail))
 }
 
 /// The FreeBSD jail's network-axis parameters for the given grant.
@@ -1164,10 +1239,6 @@ mod freebsd_jail {
     use crate::run_jail::{FilesystemScope, RunJailDefect, SandboxProfile};
     use std::ffi::OsString;
     use std::path::{Path, PathBuf};
-    // `getuid(3)` is used in the exclusive jail-dir ownership check. It is
-    // infallible and always safe to call.
-    #[allow(unused_imports)]
-    use libc;
 
     /// The unprivileged user the jailed payload runs as. A second, defence-in-depth
     /// layer under the read-only jail root: even the writable scratch is owned by
@@ -1283,7 +1354,7 @@ mod freebsd_jail {
 
         // Env scrub in the launcher (the jail does not scrub the inherited env),
         // via the SAME allowlist the macOS/Windows arms use — one env list.
-        let host_env = |k: &str| std::env::var_os(k);
+        let host_env = crate::host_env::granted;
         let scrubbed = macos_scrubbed_env(profile, scoped_tmp.as_path(), &host_env);
 
         // Apply the rctl process-cap rule (withheld subprocess only) BEFORE the
@@ -1813,19 +1884,9 @@ mod freebsd_jail {
     /// Rooted under the invoking user's home cache (`~/.cache/ipe/jail/`) rather
     /// than the world-writable `/tmp`. A user-private directory is not accessible
     /// to other local users, removing the class of pre-plant / symlink-swap attacks
-    /// that world-writable `/tmp` enables. Falls back to `$TMPDIR` or `/tmp` only
-    /// when the home directory is genuinely unavailable, which is recorded in the
-    /// returned path so the caller can detect and refuse if required.
+    /// that world-writable `/tmp` enables. An unset or relative home is refused.
     fn private_cache_root() -> Result<PathBuf, RunJailDefect> {
-        // The jail scratch must live under a user-private root. `$HOME` is that
-        // root; when it is unset we refuse rather than fall back to a
-        // world-writable `/tmp`, which under a root-run jail is a cross-user
-        // symlink-plant vector at an intermediate ancestor.
-        let home = std::env::var_os("HOME").ok_or_else(|| RunJailDefect::MountFailed {
-            target: PathBuf::from(".cache/ipe/jail"),
-            detail: "HOME is unset; refusing a world-writable jail scratch root".to_owned(),
-        })?;
-        Ok(PathBuf::from(home).join(".cache").join("ipe").join("jail"))
+        super::freebsd_jail_cache_root(crate::home::home_dir())
     }
 
     /// Create a per-run directory EXCLUSIVELY under `parent`, using a random
@@ -1897,13 +1958,8 @@ mod freebsd_jail {
         // current uid. `symlink_metadata` does NOT follow symlinks, so a symlink
         // planted between `create_dir` and here is caught as a non-directory
         // entry and refused.
-        let current_uid = {
-            // SAFETY: `getuid(3)` is always safe and always succeeds.
-            #[allow(unsafe_code)]
-            unsafe {
-                libc::getuid()
-            }
-        };
+        // The effective uid owns what this process creates.
+        let current_uid = rustix::process::geteuid().as_raw();
         for ancestor in [parent, leaf.as_path()] {
             let meta =
                 std::fs::symlink_metadata(ancestor).map_err(|e| RunJailDefect::MountFailed {
@@ -2183,6 +2239,40 @@ mod tests {
             filesystem,
             ..SandboxProfile::maximally_isolated()
         }
+    }
+
+    fn sbpl_mounts(cargo_home: &str) -> Result<JailMounts, crate::JailPathError> {
+        JailMounts::checked_against(
+            crate::CanonicalPath::assumed("/work/scratch"),
+            crate::CanonicalPath::assumed("/work/tree"),
+            Vec::new(),
+            crate::HomeMasks::unmasked(),
+            Path::new(cargo_home),
+        )
+    }
+
+    #[test]
+    fn checked_sbpl_refuses_a_cargo_home_under_a_fixed_read_root() {
+        let p = SandboxProfile::maximally_isolated();
+        for cargo_home in ["/usr/local/cargo", "/opt/cargo", "/usr", "/Library/cargo"] {
+            let mounts = sbpl_mounts(cargo_home).expect("no mount covers the cargo home");
+            assert!(
+                matches!(
+                    checked_sbpl(&p, &mounts),
+                    Err(crate::JailPathError::ExposesCargoHome { .. })
+                ),
+                "a Seatbelt read root covering {cargo_home} is refused"
+            );
+        }
+        let mounts = sbpl_mounts("/nonexistent-ipe-user/.cargo").expect("disjoint cargo home");
+        let sbpl = checked_sbpl(&p, &mounts).expect("no read root covers the cargo home");
+        for root in MACOS_READ_ROOTS {
+            assert!(
+                sbpl.contains(&format!("(allow file-read* (subpath \"{root}\"))")),
+                "read root {root} is allowed: {sbpl}"
+            );
+        }
+        assert!(!sbpl.contains("/nonexistent-ipe-user"), "{sbpl}");
     }
 
     #[test]
@@ -2739,6 +2829,27 @@ mod tests {
         // the resulting exec failure as a non-clean outcome, never a silent Clean.
         let args = jail_command_args(&[]);
         assert_eq!(args, vec![std::ffi::OsString::from("command=")]);
+    }
+
+    #[test]
+    fn the_freebsd_jail_cache_root_lives_under_the_absolute_home() {
+        let got = freebsd_jail_cache_root(Some(PathBuf::from("/home/u")));
+        assert_eq!(got, Ok(PathBuf::from("/home/u/.cache/ipe/jail")));
+    }
+
+    #[test]
+    fn the_freebsd_jail_cache_root_refuses_an_unset_or_relative_home() {
+        // A relative home never reaches the root: the accessor parses it to
+        // `None`, which the root refuses rather than resolving it against the
+        // working directory or falling back to a world-writable `/tmp`.
+        for raw in [None, Some(""), Some("home/u"), Some("./home")] {
+            let home = crate::home::home_dir_from(raw.map(OsString::from));
+            let got = freebsd_jail_cache_root(home);
+            assert!(
+                matches!(got, Err(RunJailDefect::MountFailed { .. })),
+                "{raw:?}: {got:?}"
+            );
+        }
     }
 
     #[test]

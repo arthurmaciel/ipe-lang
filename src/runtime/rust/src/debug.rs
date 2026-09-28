@@ -3,9 +3,9 @@
 //! `Debug.log label value` prints `"<label>: <value>"` to stderr as a side
 //! effect and returns `value` UNCHANGED, so it can be spliced into any
 //! expression without altering its result. The value is stringified through the
-//! same total `IpeStringify` path `Basics.toString` / `{{expr}}` interpolation
-//! uses, so any Ipê-representable value renders (a `String` unquoted, scalars
-//! like  `%v`, records/ADTs via their codegen-emitted impl).
+//! same total `IpeStringify` path `{{expr}}` interpolation uses, so any
+//! Ipê-representable value renders (a `String` unquoted, scalars like `%v`,
+//! records/ADTs via their codegen-emitted impl).
 //!
 //! This is the ONE deliberate impure escape hatch in the language — NOT a
 //! `Task`. `ipe release` rejects any `Debug.*` use at compile time (IPE-L0140),
@@ -13,17 +13,28 @@
 
 use crate::stringify::IpeStringify;
 
+/// Build the scrubbed `"<label>: <value>"` line `debug_log` writes. Both
+/// `label` and the stringified `value` are routed through
+/// `system::scrub_log_controls` — `value` renders through the same
+/// `IpeStringify` path any downstream driver, remote request, or file could
+/// have shaped, so an ESC/CR/LF/bidi-control sequence in either can neither
+/// forge extra terminal lines nor reorder/hide the ones already there. Split
+/// out from `debug_log` so the scrub can be asserted directly, without
+/// capturing the real stderr side effect.
+fn debug_log_line<T: IpeStringify>(label: &str, value: &T) -> String {
+    let label = crate::system::scrub_log_controls(label);
+    let shown = value.ipe_show();
+    let shown = crate::system::scrub_log_controls(&shown);
+    format!("{label}: {shown}")
+}
+
 /// `Debug.log : String -> a -> a`. Writes `"<label>: <value>"` + a newline to
-/// stderr (fallibly, dropping a broken-pipe error rather than panicking — the
-/// same discipline `log.rs`'s line writers use), then returns `value`
+/// stderr (fallibly, through `system::write_stderr_line`, so a broken pipe
+/// never panics), then returns `value`
 /// unchanged.
 #[must_use]
 pub fn debug_log<T: IpeStringify>(label: String, value: T) -> T {
-    use std::io::Write as _;
-    let line = format!("{label}: {}", value.ipe_show());
-    // A closed downstream pipe surfaces as an `EPIPE` write error (Rust ignores
-    // SIGPIPE by default); drop it so a well-typed `Debug.log` never aborts.
-    let _ = writeln!(std::io::stderr().lock(), "{line}");
+    crate::system::write_stderr_line(&debug_log_line(&label, &value));
     value
 }
 
@@ -35,9 +46,30 @@ pub fn debug_log<T: IpeStringify>(label: String, value: T) -> T {
 /// compile time from the call-site source span; it is never computed at
 /// runtime.  `note` is the developer-supplied string argument.
 pub fn debug_todo<A>(location: String, note: String) -> A {
-    use std::io::Write as _;
-    let msg = format!("TODO at {location}: {note}");
-    // Broken-pipe suppression: same discipline as `debug_log`.
-    let _ = writeln!(std::io::stderr().lock(), "{msg}");
+    crate::system::write_stderr_line(&format!("TODO at {location}: {note}"));
     crate::system::system_exit(1)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::debug_log_line;
+
+    /// Both the label and the value can carry attacker-influenced text (a
+    /// spliced-in driver error, a request field, a trace value) — pin that
+    /// neither an ESC sequence, a bare CR/LF, nor a bidi-reorder control
+    /// survives into the line handed to `write_stderr_line`.
+    #[test]
+    fn scrubs_esc_cr_lf_and_bidi_controls_from_label_and_value() {
+        let label = "label\r\n\x1b[2J".to_string();
+        let value = "value\u{2066}\u{202e}bidi".to_string();
+        let line = debug_log_line(&label, &value);
+        assert!(
+            !line.chars().any(|c| c == '\x1b' || c == '\r' || c == '\n'),
+            "ESC/CR/LF survived scrubbing: {line:?}"
+        );
+        assert!(
+            !line.contains('\u{2066}') && !line.contains('\u{202e}'),
+            "a bidi control survived scrubbing: {line:?}"
+        );
+    }
 }

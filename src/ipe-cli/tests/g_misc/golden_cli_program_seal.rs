@@ -1,13 +1,13 @@
 //! Seal — `Cli.tea` app-entry kernel, end to end.
 //!
-//! Regression for the L0107-exemption gap found at reconcile time: the
-//! `Cli.tea` cfg record carries five function-typed fields
-//! (init/update/view/subscriptions/onLine), so without `KernelFn::TerminalAppLines`
-//! in the app-entry cfg intercept (`lower.rs`) EVERY real call tripped
-//! `IPE-L0107: function value in a record field` and the `emit_console` path was
-//! unreachable dead code.  This test pins the full pipeline:
-//! constrain scheme (closed 5-field cfg, `RowTail::Closed`) → lower
-//! app-entry intercept → `emit_console_call` → `ipe_runtime::console_app`.
+//! The `Cli.tea` cfg record carries four function-typed fields
+//! (init/update/view/subscriptions), so without `KernelFn::TerminalAppLines`
+//! in the app-entry cfg intercept (`lower.rs`) EVERY real call would trip
+//! `IPE-L0107: function value in a record field` and the `emit_console` path
+//! would be unreachable.  This test pins the full pipeline:
+//! constrain scheme (closed 4-field cfg, `RowTail::Closed`) → lower
+//! app-entry intercept → `emit_console_call` → `ipe_runtime::console_app`, with
+//! line input subscribed through `Cli.Sub.onLine` → `cli_sub_on_line`.
 //!
 //! Asserts ipe-0 ∧ cargo-0 ∧ run-0.  The runtime prints `view model` once at
 //! start; the harness runs the binary with stdin at EOF (`Command::output`
@@ -28,14 +28,14 @@ fn repo_root() -> PathBuf {
 
 #[test]
 fn console_app_ipec_cargo_and_run_zero() {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
 
     let root = repo_root();
     let dir = root.join("tests").join("golden").join("console_app_seal");
     let entry = dir.join("Main.ipe");
-    let out = std::env::temp_dir().join("ipec_i111_console_app_seal_e2e");
+    let out = crate::support::scratch_root().join("ipec_i111_console_app_seal_e2e");
     let _ = std::fs::remove_dir_all(&out);
 
     let runtime = ipe::resolve_runtime();

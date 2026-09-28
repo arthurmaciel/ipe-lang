@@ -167,6 +167,7 @@ fn unify_step(
 
     let ca = uf.content(ra)?;
     let cb = uf.content(rb)?;
+    let a_is_structure = matches!(ca, Content::Structure(_));
     match (ca, cb) {
         // A flex adopts the other side's structure (occurs-checked).
         (Content::Flex, structure @ Content::Structure(_)) => {
@@ -189,6 +190,12 @@ fn unify_step(
             };
             if pins {
                 uf.union(ra, rb, structure)
+            } else if !rigid && bounds.has_interpolable() {
+                // An interpolation hole names the capability the value lacks
+                // (IPE-T0014), not a bare shape mismatch against no written type.
+                let structure_var = if a_is_structure { ra } else { rb };
+                let ty = zonk(uf, budget, structure_var)?;
+                Err(crate::super_unsatisfied(interner, bounds, &ty, span))
             } else {
                 Err(mismatch(uf, budget, interner, span, ra, rb))
             }

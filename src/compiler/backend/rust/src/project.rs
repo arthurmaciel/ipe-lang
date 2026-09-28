@@ -19,7 +19,6 @@ use std::fmt::Write as _;
 
 use ipe_backend::{EmittedProject, RelPath};
 use ipe_diagnostics::{DResult, Diagnostic};
-use ipe_intern::Symbol;
 use ipe_ir::{IrType, ModPath, Program};
 
 use crate::EmitCtx;
@@ -170,6 +169,9 @@ sha2 = "0.10"
 md-5 = "0.10"
 subtle = "2"
 zeroize = "1"
+# Pinned exact to match `src/runtime/rust/Cargo.toml`'s own `wasm-bindgen` pin
+# (the canonical spelling — see the `wasm_bindgen_version_matches_the_runtime_pin`
+# test below, which fails the build the instant this drifts from it).
 wasm-bindgen = "=0.2.126"
 wasm-bindgen-futures = "0.4"
 js-sys = "0.3"
@@ -764,7 +766,7 @@ const RUNTIME_MOD_RS_HTTP_CLIENT_APPEND: &str = "pub mod http_client;\npub use h
 ///
 /// `ssrf.rs` parses URLs with the `url` crate (unconditional base dep) and is
 /// reqwest-free. Its validators are consumed by the `http_client`, `ws_client`,
-/// and `db` modules (the latter calls `VettedDial::for_host` in `build_pool` and
+/// and `db` modules (the latter calls `VettedDial` in `VettedPool::connect` and
 /// `external_conn.rs` uses it unconditionally).
 ///
 /// Declared `pub` so that in the vendored emit model — where all runtime modules
@@ -2042,10 +2044,12 @@ fn dep_model_cargo_toml(ctx: &EmitCtx) -> DResult<String> {
     // seal types (its Model bound is only `Clone + Send`, but the widget seam
     // still routes through `ui_widget_`'s serde bounds). Gating solely on
     // `uses_web` leaves a WebView-widget manifest serde-free while its `main.rs`
-    // names `serde::` by path — an ipe-accept-then-cargo-fail (E0433). A non-browser
-    // program emits no serde derive, so its manifest stays serde-free. Inserted
-    // right after the runtime dependency line, inside `[dependencies]`.
-    if ctx.uses_web || ctx.uses_webview {
+    // names `serde::` by path — an ipe-accept-then-cargo-fail (E0433). A
+    // `--debugger` build derives serde for the typed session log too. Every other
+    // program emits no serde derive, so its manifest stays serde-free. The gate is
+    // the derive sites' own `derives_serde`. Inserted right after the runtime
+    // dependency line, inside `[dependencies]`.
+    if ctx.derives_serde() {
         manifest = insert_app_serde_dependency(&manifest)?;
     }
     Ok(manifest)
@@ -2466,7 +2470,7 @@ const MOD_APPENDS: &[ModAppend] = &[
         append: RUNTIME_MOD_RS_HTTP_STREAM_APPEND,
     },
     ModAppend {
-        gate: |ctx| ctx.reaches_http_client() || ctx.uses_websocket || ctx.uses_db,
+        gate: |ctx| ctx.reaches_ssrf(),
         append: RUNTIME_MOD_RS_SSRF_APPEND,
     },
     // `db_dsn` after `ssrf`/`url` (`external_conn.rs` reaches both).
@@ -3099,6 +3103,16 @@ fn assemble_project_files(
     } else {
         cargo_toml
     };
+    // SSRF gate: `ssrf.rs` resolves hosts through `tokio::net::lookup_host`, so
+    // the crate that declares the module (the same `reaches_ssrf` gate as its
+    // `mod.rs` append) declares tokio's `"net"` feature itself rather than
+    // relying on a transport crate to enable it. Runs after every step that
+    // anchors on an exact `tokio` line, so none of their anchors sees this edit.
+    let cargo_toml = if ctx.reaches_ssrf() {
+        ssrf_cargo_toml(&cargo_toml)?
+    } else {
+        cargo_toml
+    };
     // Foreign-crate FFI: append the bound crates' pinned [dependencies] lines
     // (exact versions + effective feature sets, pre-merged by the driver).
     let cargo_toml = if ctx.uses_ffi {
@@ -3187,67 +3201,28 @@ fn assemble_project_files(
     })
 }
 
-/// Return `true` when `ty` (or any type it structurally contains) is a
-/// server-surface or non-serde opaque type that must not appear as a field in
-/// a `HydrationState` record.
+/// Return `true` when a value of type `ty` holds a server-surface or non-serde
+/// opaque component that must not appear as a field in a `HydrationState` record.
 ///
 /// The gate is an **allowlist**: only data-only, serialisable `IrType`s pass.
 /// Function types, runtime handles, secret/SQL-fragment/crypto opaques, UI
-/// element types, and TEA-runtime opaques all fail.
+/// element types, and TEA-runtime opaques all fail. One leaf over the shared
+/// held-value walk ([`ipe_ir::ir_type_holds`]): every transparent carrier and
+/// every named enum's type arguments and variant payloads (from `payloads`) are
+/// descended there, cyclic ADTs included.
+fn ir_type_contains_non_serde(ty: &IrType, payloads: &ipe_ir::EnumPayloadTable) -> bool {
+    ipe_ir::ir_type_holds(ty, payloads, &is_non_serde_leaf)
+}
+
+/// Is `ty` itself a non-serde component, before the walk descends into it?
 ///
-/// `program` is used to resolve named user `Enum`/`Record` ADTs so the walk
-/// descends into their variant field types, not only their type arguments.
-/// `visited` prevents infinite loops on cyclic ADTs (`type Tree = Node (List
-/// Tree)`): a `(home, name)` pair entered in `visited` is treated as
-/// non-poisoning (serde-OK so far) for that cycle edge — the rest of the walk
-/// decides the final verdict.
-fn ir_type_contains_non_serde(ty: &IrType, program: &Program) -> bool {
-    ir_type_contains_non_serde_inner(ty, program, &mut BTreeSet::new())
-}
-
-/// Resolve a named `Enum` ADT and decide whether any of its variant field
-/// types — or any of its applied type args — is non-serde. A cyclic back-edge
-/// (`type Tree = Node (List Tree)`) is treated as serde-OK for that edge; the
-/// non-cyclic paths decide the verdict, so recursion always terminates.
-fn enum_contains_non_serde(
-    home: &ModPath,
-    name: Symbol,
-    args: &[IrType],
-    program: &Program,
-    visited: &mut BTreeSet<(ModPath, Symbol)>,
-) -> bool {
-    let args_non_serde = |visited: &mut BTreeSet<(ModPath, Symbol)>| {
-        args.iter()
-            .any(|a| ir_type_contains_non_serde_inner(a, program, visited))
-    };
-    // A back-edge onto an ADT already on the stack: only its type args can add
-    // new information (the variant fields are being walked by the outer frame).
-    if !visited.insert((home.clone(), name)) {
-        return args_non_serde(visited);
-    }
-    let def = program.modules.iter().find_map(|m| {
-        m.types.iter().find_map(|td| {
-            let ipe_ir::TypeDef::Enum(def) = td;
-            (def.home == *home && def.name == name).then_some(def)
-        })
-    });
-    let variant_fields_poisoned = def.is_some_and(|def| {
-        def.variants
-            .iter()
-            .flat_map(|v| v.fields.iter())
-            .any(|f| ir_type_contains_non_serde_inner(f, program, visited))
-    });
-    visited.remove(&(home.clone(), name));
-    variant_fields_poisoned || args_non_serde(visited)
-}
-
-fn ir_type_contains_non_serde_inner(
-    ty: &IrType,
-    program: &Program,
-    visited: &mut BTreeSet<(ModPath, Symbol)>,
-) -> bool {
+/// Exhaustive with no wildcard: a new [`IrType`] variant must be classified
+/// here. Carriers the walk descends (`Maybe`, `List`, `Set`, `Result`, `Dict`,
+/// tuple, record, named enum) are not non-serde themselves; their components
+/// decide.
+const fn is_non_serde_leaf(ty: &IrType) -> bool {
     match ty {
-        // ── Primitive data types — serialisable, no recursion needed ─────
+        // ── Primitive data types — serialisable ──────────────────────────
         IrType::Int
         | IrType::Float
         | IrType::Bool
@@ -3269,32 +3244,16 @@ fn ir_type_contains_non_serde_inner(
         | IrType::Generic(_)
         // A row variable's serde-representability rides its witness bound set,
         // exactly as a plain generic's rides its `T: Serialize` bound.
-        | IrType::RowGeneric(_) => false,
-
-        // ── Serialisable container types — recurse into inner types ───────
-        IrType::Maybe(inner) | IrType::List(inner) | IrType::Set(inner) => {
-            ir_type_contains_non_serde_inner(inner, program, visited)
-        }
-        IrType::Result(a, b) => {
-            ir_type_contains_non_serde_inner(a, program, visited)
-                || ir_type_contains_non_serde_inner(b, program, visited)
-        }
-        IrType::Dict(k, v) => {
-            ir_type_contains_non_serde_inner(k, program, visited)
-                || ir_type_contains_non_serde_inner(v, program, visited)
-        }
-        IrType::Tuple(elems) => elems
-            .iter()
-            .any(|e| ir_type_contains_non_serde_inner(e, program, visited)),
-        IrType::Record(fields) => fields
-            .values()
-            .any(|f| ir_type_contains_non_serde_inner(f, program, visited)),
-
-        // ── Named user ADT — resolve to its `EnumDef` and recurse into its
-        //    variant field types + type args (guarded against cyclic ADTs).
-        IrType::Enum { home, name, args } => {
-            enum_contains_non_serde(home, *name, args, program, visited)
-        }
+        | IrType::RowGeneric(_)
+        // ── Serialisable carriers — their components decide ──────────────
+        | IrType::Maybe(_)
+        | IrType::List(_)
+        | IrType::Set(_)
+        | IrType::Result(_, _)
+        | IrType::Dict(_, _)
+        | IrType::Tuple(_)
+        | IrType::Record(_)
+        | IrType::Enum { .. } => false,
 
         // ── Never serialisable ────────────────────────────────────────────
         // Function types, UI element types, and the non-serde server-surface
@@ -3420,7 +3379,7 @@ fn check_hydration_state_fields(ctx: &EmitCtx, program: &Program) -> DResult<()>
     // Resolve the target type to the field types the `hydrate` export will
     // serialise, then reject any non-serde leaf.
     for field_ty in hydration_target_field_types(target_ty, program) {
-        if ir_type_contains_non_serde(field_ty, program) {
+        if ir_type_contains_non_serde(field_ty, &ctx.enum_variants) {
             return Err(Diagnostic::CompilerBug {
                 where_: "ipe_backend_rust::project::check_hydration_state_fields",
                 detail: format!(
@@ -3870,6 +3829,54 @@ fn db_cargo_toml(base: &str, driver: crate::DbDriver) -> DResult<String> {
     result.push_str(&sqlx_line);
     result.push_str(step1.get(anchor_pos..).unwrap_or(""));
     Ok(result)
+}
+
+/// Add tokio's `"net"` feature to the manifest's `tokio` dependency line.
+///
+/// The `ssrf` runtime module resolves hosts through `tokio::net::lookup_host`.
+/// Idempotent: a line that already lists `"net"` (the server or live surface
+/// added it) is returned unchanged.
+///
+/// # Errors
+///
+/// Returns [`Diagnostic::CompilerBug`] when the manifest has no `tokio`
+/// dependency line with a feature list — a golden-drift invariant violation.
+fn ssrf_cargo_toml(base: &str) -> DResult<String> {
+    const NET: &str = "\"net\"";
+    let tokio_prefix = format!(
+        "{} = {{ version = \"{}\", features = [",
+        crate_specs::TOKIO.name,
+        crate_specs::TOKIO.version,
+    );
+    let bug = || Diagnostic::CompilerBug {
+        where_: "ipe_backend_rust::project::ssrf_cargo_toml",
+        detail: format!(
+            "Cargo.toml anchor {tokio_prefix:?} not found — golden drifted; the ssrf \
+             runtime module requires tokio \"net\""
+        ),
+    };
+    let list_start = base
+        .find(&tokio_prefix)
+        .map(|at| at + tokio_prefix.len())
+        .ok_or_else(bug)?;
+    let list_end = base
+        .get(list_start..)
+        .and_then(|rest| rest.find(']'))
+        .map(|len| list_start + len)
+        .ok_or_else(bug)?;
+    if base
+        .get(list_start..list_end)
+        .ok_or_else(bug)?
+        .contains(NET)
+    {
+        return Ok(base.to_owned());
+    }
+    let mut out = String::with_capacity(base.len() + NET.len() + 2);
+    out.push_str(base.get(..list_end).ok_or_else(bug)?);
+    out.push_str(", ");
+    out.push_str(NET);
+    out.push_str(base.get(list_end..).ok_or_else(bug)?);
+    Ok(out)
 }
 
 /// Build the server-enabled `Cargo.toml` from the given base manifest by:
@@ -5588,8 +5595,8 @@ mod tests {
         WASM_ABSENT_MODULE_PATHS, WASM_CARGO_TOML, WASM_PRESENT_OVERRIDES,
         async_runtime_cargo_toml, crypto_core_heavy_cargo_toml, db_cargo_toml,
         insert_wasi_linker_config, jwt_cargo_toml, runtime_bindings, server_cargo_toml,
-        shake_ffi_by_fn_ident, wasm_present_modules, wasm_runtime_bindings, web_cargo_toml,
-        wrapper_call_paths,
+        shake_ffi_by_fn_ident, ssrf_cargo_toml, wasm_present_modules, wasm_runtime_bindings,
+        web_cargo_toml, wrapper_call_paths,
     };
     use crate::DbDriver;
     use crate::crate_specs;
@@ -5634,6 +5641,94 @@ mod tests {
                  (efficiency knob; drop it and the guard fails)"
             );
         }
+    }
+
+    /// The `tokio = { … }` dependency line of `manifest`.
+    fn tokio_line(manifest: &str) -> Option<&str> {
+        let prefix = format!("{} = {{", crate_specs::TOKIO.name);
+        manifest.lines().find(|l| l.starts_with(&prefix))
+    }
+
+    /// The quoted value immediately after the first occurrence of `anchor` in
+    /// `haystack`.
+    ///
+    /// Strips a leading `=` pin marker so an exact-pinned `"=X.Y.Z"` and a bare
+    /// `"X.Y.Z"` compare equal. `None` when `anchor` never opens a quoted value.
+    fn pinned_dependency_version<'a>(haystack: &'a str, anchor: &str) -> Option<&'a str> {
+        let (_, after_anchor) = haystack.split_once(anchor)?;
+        let (version, _) = after_anchor.split_once('"')?;
+        Some(version.trim_start_matches('='))
+    }
+
+    /// SSOT guard: the `wasm-bindgen` version is hand-spelled in four places.
+    ///
+    /// None of them can `include!`/import a Cargo dependency version from
+    /// another — two are real `Cargo.toml` dependency tables Cargo itself
+    /// parses at a different time than this compiler builds, and the CLI's
+    /// copy is a string literal in a separate crate's binary.
+    /// `src/runtime/rust/Cargo.toml` is the canonical spelling (the one pin
+    /// Cargo enforces for the runtime crate itself); this test fails the
+    /// instant any of the other three drifts from it.
+    #[test]
+    fn wasm_bindgen_version_matches_the_runtime_pin() {
+        const RUNTIME_CARGO_TOML: &str = include_str!("../../../../../src/runtime/rust/Cargo.toml");
+        const CLI_COMMANDS_RS: &str = include_str!("../../../../ipe-cli/src/driver/commands.rs");
+
+        let runtime_pin =
+            pinned_dependency_version(RUNTIME_CARGO_TOML, "wasm-bindgen = { version = \"")
+                .expect("src/runtime/rust/Cargo.toml must pin an exact wasm-bindgen version");
+        let dep_template_pin = pinned_dependency_version(CARGO_WASM_DEP_TOML, "wasm-bindgen = \"")
+            .expect("templates/Cargo.wasm-dep.toml must pin an exact wasm-bindgen version");
+        let monolithic_pin = pinned_dependency_version(WASM_CARGO_TOML, "wasm-bindgen = \"")
+            .expect("project.rs's WASM_CARGO_TOML must pin an exact wasm-bindgen version");
+        let cli_pin = pinned_dependency_version(CLI_COMMANDS_RS, "WASM_BINDGEN_VERSION: &str = \"")
+            .expect("ipe-cli must declare a WASM_BINDGEN_VERSION constant");
+
+        assert_eq!(
+            dep_template_pin, runtime_pin,
+            "templates/Cargo.wasm-dep.toml's wasm-bindgen pin has drifted from \
+             src/runtime/rust/Cargo.toml's"
+        );
+        assert_eq!(
+            monolithic_pin, runtime_pin,
+            "project.rs's WASM_CARGO_TOML wasm-bindgen pin has drifted from \
+             src/runtime/rust/Cargo.toml's"
+        );
+        assert_eq!(
+            cli_pin, runtime_pin,
+            "ipe-cli's WASM_BINDGEN_VERSION has drifted from \
+             src/runtime/rust/Cargo.toml's wasm-bindgen pin"
+        );
+    }
+
+    /// `ssrf_cargo_toml` adds tokio `"net"` to a line lacking it (the db-only
+    /// manifest), leaves a line that has it unchanged, and refuses a manifest
+    /// with no `tokio` line rather than silently shipping one without it.
+    #[test]
+    fn ssrf_toml_declares_tokio_net_exactly_once() {
+        let db = db_cargo_toml(
+            &async_runtime_cargo_toml(CARGO_TOML).expect("async base"),
+            DbDriver::Sqlite,
+        )
+        .expect("db manifest");
+        assert!(
+            tokio_line(&db).is_some_and(|l| !l.contains(r#""net""#)),
+            "the db-only base line must lack \"net\" for this test to bite: {db}"
+        );
+        let with_net = ssrf_cargo_toml(&db).expect("ssrf manifest");
+        let line = tokio_line(&with_net).unwrap_or_default();
+        assert_eq!(line.matches(r#""net""#).count(), 1, "{line}");
+        assert_eq!(
+            ssrf_cargo_toml(&with_net).expect("idempotent"),
+            with_net,
+            "a line already listing \"net\" must be unchanged"
+        );
+        let server = server_cargo_toml(&db).expect("server manifest");
+        assert_eq!(ssrf_cargo_toml(&server).expect("server + ssrf"), server);
+        assert!(
+            ssrf_cargo_toml(CARGO_TOML).is_err(),
+            "a manifest with no tokio line must be refused"
+        );
     }
 
     /// Helper: extract the `default = [...]` line from a manifest string.
@@ -6541,5 +6636,88 @@ mod escape_toml_basic_tests {
         let template = "name = \"ipe-app\"\n[dependencies]\n";
         let result = apply_cargo_name(template, &SafeTomlString::escape("my-app"));
         assert_eq!(result, "name = \"my-app\"\n[dependencies]\n");
+    }
+}
+
+#[cfg(test)]
+mod non_serde_tests {
+    use ipe_diagnostics::DResult;
+    use ipe_intern::Interner;
+    use ipe_ir::{EnumDef, EnumPayloadTable, IrType, ModPath, Variant, enum_payload_table};
+
+    use super::ir_type_contains_non_serde;
+
+    #[test]
+    fn enum_payload_non_serde_field_is_rejected() -> DResult<()> {
+        let mut interner = Interner::new();
+        let home = ModPath(vec![interner.intern("Main")?]);
+        let vault = interner.intern("Vault")?;
+        let sealed = interner.intern("Sealed")?;
+        let tree = interner.intern("Tree")?;
+        let node = interner.intern("Node")?;
+        // type Vault = Sealed Secret
+        // type Tree = Node Int (List Tree)
+        let table = enum_payload_table(&[
+            EnumDef {
+                name: vault,
+                home: home.clone(),
+                type_params: Vec::new(),
+                variants: vec![Variant {
+                    name: sealed,
+                    fields: vec![IrType::Secret],
+                }],
+            },
+            EnumDef {
+                name: tree,
+                home: home.clone(),
+                type_params: Vec::new(),
+                variants: vec![Variant {
+                    name: node,
+                    fields: vec![
+                        IrType::Int,
+                        IrType::List(Box::new(IrType::Enum {
+                            home: home.clone(),
+                            name: tree,
+                            args: Vec::new(),
+                        })),
+                    ],
+                }],
+            },
+        ]);
+        let vault_ty = IrType::Enum {
+            home: home.clone(),
+            name: vault,
+            args: Vec::new(),
+        };
+        let tree_ty = IrType::Enum {
+            home,
+            name: tree,
+            args: Vec::new(),
+        };
+        assert!(ir_type_contains_non_serde(&vault_ty, &table));
+        assert!(ir_type_contains_non_serde(
+            &IrType::Maybe(Box::new(vault_ty)),
+            &table
+        ));
+        // A cyclic data-only ADT terminates and passes.
+        assert!(!ir_type_contains_non_serde(&tree_ty, &table));
+        Ok(())
+    }
+
+    #[test]
+    fn data_leaves_pass_and_opaque_leaves_fail() {
+        let table = EnumPayloadTable::new();
+        assert!(!ir_type_contains_non_serde(
+            &IrType::Dict(Box::new(IrType::Str), Box::new(IrType::Int)),
+            &table
+        ));
+        assert!(ir_type_contains_non_serde(
+            &IrType::Tuple(vec![IrType::Int, IrType::Db]),
+            &table
+        ));
+        assert!(ir_type_contains_non_serde(
+            &IrType::Fun(vec![IrType::Int], Box::new(IrType::Int)),
+            &table
+        ));
     }
 }

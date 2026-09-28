@@ -38,7 +38,7 @@ fn repo_root() -> PathBuf {
 /// move `s`, making the branches' reuse E0382.
 #[test]
 fn f1_multiuse_let_clone() {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
 
@@ -48,7 +48,7 @@ fn f1_multiuse_let_clone() {
         .join("golden")
         .join("multiuse_let_clone")
         .join("Main.ipe");
-    let out = std::env::temp_dir().join("ipec_i104_multiuse_let_clone_e2e");
+    let out = crate::support::scratch_root().join("ipec_i104_multiuse_let_clone_e2e");
     let _ = std::fs::remove_dir_all(&out);
 
     let runtime = ipe::resolve_runtime();
@@ -82,7 +82,7 @@ fn f1_multiuse_let_clone() {
 /// `++ "[" ++ prefix ++ "]"` is E0382.
 #[test]
 fn f2_closure_capture_reuse() {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
 
@@ -92,7 +92,7 @@ fn f2_closure_capture_reuse() {
         .join("golden")
         .join("closure_capture_reuse")
         .join("Main.ipe");
-    let out = std::env::temp_dir().join("ipec_i112_closure_capture_reuse_e2e");
+    let out = crate::support::scratch_root().join("ipec_i112_closure_capture_reuse_e2e");
     let _ = std::fs::remove_dir_all(&out);
 
     let runtime = ipe::resolve_runtime();

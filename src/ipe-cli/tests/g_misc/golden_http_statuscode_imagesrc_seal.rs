@@ -51,7 +51,7 @@ fn built_imagesrc(root: &Path, out: &Path) -> Option<Result<(), ipe::CliError>> 
 #[test]
 fn statuscode_seal_emits() {
     let root = repo_root();
-    let out = std::env::temp_dir().join("ipec_statuscode_seal_emit");
+    let out = crate::support::scratch_root().join("ipec_statuscode_seal_emit");
     let Some(built) = built_statuscode(&root, &out) else {
         return;
     };
@@ -66,7 +66,7 @@ fn statuscode_seal_emits() {
 #[test]
 fn statuscode_seal_builds_and_runs() {
     let root = repo_root();
-    let out = std::env::temp_dir().join("ipec_statuscode_seal_e2e");
+    let out = crate::support::scratch_root().join("ipec_statuscode_seal_e2e");
     let Some(built) = built_statuscode(&root, &out) else {
         return;
     };
@@ -75,7 +75,7 @@ fn statuscode_seal_builds_and_runs() {
         "statuscode_seal: must be accepted, got: {built:?}"
     );
 
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
     let outcome = crate::support::build_and_run_emitted("statuscode_seal", &out);
@@ -85,11 +85,11 @@ fn statuscode_seal_builds_and_runs() {
         "statuscode_seal: emitted crate must build and exit 0; stdout:\n{}",
         outcome.stdout
     );
-    let expected = "code=200 ok=True\n\
-                    code=301 redirect=True\n\
-                    code=404 client=True\n\
-                    code=500 server=True\n\
-                    neg=False";
+    let expected = "code=200 ok=true\n\
+                    code=301 redirect=true\n\
+                    code=404 client=true\n\
+                    code=500 server=true\n\
+                    neg=false";
     assert_eq!(
         outcome.stdout.trim(),
         expected,
@@ -105,7 +105,7 @@ fn statuscode_seal_builds_and_runs() {
 #[test]
 fn imagesrc_seal_emits() {
     let root = repo_root();
-    let out = std::env::temp_dir().join("ipec_imagesrc_seal_emit");
+    let out = crate::support::scratch_root().join("ipec_imagesrc_seal_emit");
     let Some(built) = built_imagesrc(&root, &out) else {
         return;
     };
@@ -122,7 +122,7 @@ fn imagesrc_seal_emits() {
 #[test]
 fn imagesrc_seal_builds_and_runs() {
     let root = repo_root();
-    let out = std::env::temp_dir().join("ipec_imagesrc_seal_e2e");
+    let out = crate::support::scratch_root().join("ipec_imagesrc_seal_e2e");
     let Some(built) = built_imagesrc(&root, &out) else {
         return;
     };
@@ -131,7 +131,7 @@ fn imagesrc_seal_builds_and_runs() {
         "imagesrc_seal: must be accepted, got: {built:?}"
     );
 
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
     let outcome = crate::support::build_and_run_emitted("imagesrc_seal", &out);

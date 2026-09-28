@@ -60,8 +60,7 @@ pub fn console_bin_path() -> Option<std::path::PathBuf> {
     // caches the console binary under the SAME version — so both agree on the
     // `~/.cache/ipe/rust-console/<ver>/ipe-console` path.
     let ver = option_env!("IPE_VERSION").unwrap_or("dev");
-    let home = crate::system::read_env_var("HOME").ok()?;
-    let pb = std::path::Path::new(&home)
+    let pb = crate::system::home_dir()?
         .join(".cache/ipe/rust-console")
         .join(ver)
         .join("ipe-console");
@@ -119,14 +118,20 @@ pub fn spawn_console(child_port: u16, store: &str, child_collects: bool) -> Opti
             if let Ok(mut g) = CHILD.lock() {
                 *g = Some(child);
             }
-            eprintln!(
-                "[ipe.console] spawned console child on :{child_port} (bin {})",
-                bin.display()
+            crate::system::emit_runtime_log(
+                "console",
+                &format!(
+                    "spawned console child on :{child_port} (bin {})",
+                    bin.display()
+                ),
             );
             Some(())
         }
         Err(e) => {
-            eprintln!("[ipe.console] spawn failed ({e}); falling back to in-process console");
+            crate::system::emit_runtime_log(
+                "console",
+                &format!("spawn failed ({e}); falling back to in-process console"),
+            );
             None
         }
     }
@@ -281,12 +286,14 @@ async fn proxy_entry(req: axum::extract::Request) -> axum::response::Response {
     // Per-request auth, defense-in-depth. The PRIMARY enforcement is the
     // outermost `observability::track` middleware, which routes every
     // `/_ipe/console*` request through `console::gate_blocked` (production →
-    // Bearer admin token required; dev open) BEFORE it reaches this handler — so
+    // admin credential required; dev open) BEFORE it reaches this handler — so
     // the proxied path is already gated. This second call to the SAME gate keeps
     // the sensitive console surface protected even if a future router change ever
     // mounts the proxy outside that middleware. `gate_allows()` (mount-time) is
     // orthogonal: it decides whether to mount at all, not who may reach it.
-    if let Some(blocked) = super::console::gate_blocked(req.headers()) {
+    if let Some(blocked) =
+        super::console::gate_blocked(super::console::Surface::Console, req.headers())
+    {
         return blocked;
     }
     match PROXY.get() {
@@ -406,8 +413,11 @@ pub async fn ensure_console_proxy() -> bool {
         return false;
     }
     if !wait_ready(port, READY_TIMEOUT).await {
-        eprintln!(
-            "[ipe.console] child not ready within {READY_TIMEOUT:?}; falling back to in-process console"
+        crate::system::emit_runtime_log(
+            "console",
+            &format!(
+                "child not ready within {READY_TIMEOUT:?}; falling back to in-process console"
+            ),
         );
         shutdown_console();
         return false;
@@ -451,7 +461,10 @@ pub async fn ensure_console_proxy() -> bool {
         .is_err()
     {
         // Already initialised once (shouldn't happen — one Web server per process).
-        eprintln!("[ipe.console] proxy already initialised; keeping the first mount");
+        crate::system::emit_runtime_log(
+            "console",
+            "proxy already initialised; keeping the first mount",
+        );
     }
     // NOTE: child teardown on shutdown is now owned by the ONE coherent
     // graceful-shutdown path in `web::web_shutdown_signal` (it calls
@@ -460,7 +473,10 @@ pub async fn ensure_console_proxy() -> bool {
     // would race, and that hook's `std::process::exit(130)` would defeat the
     // exit-0-on-clean-shutdown contract. The PR_SET_PDEATHSIG + kill_on_drop on
     // the child remain the defense-in-depth floor for non-graceful parent death.
-    eprintln!("[ipe.console] reverse-proxy ready at {CONSOLE_BASE}/* → 127.0.0.1:{port}");
+    crate::system::emit_runtime_log(
+        "console",
+        &format!("reverse-proxy ready at {CONSOLE_BASE}/* → 127.0.0.1:{port}"),
+    );
     true
 }
 

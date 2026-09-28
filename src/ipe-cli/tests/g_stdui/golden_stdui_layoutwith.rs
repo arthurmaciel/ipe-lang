@@ -47,7 +47,7 @@ fn build_run_layoutwith() -> (PathBuf, crate::support::RunOutcome) {
     let root = repo_root();
     let dir = root.join("tests").join("golden").join("stdui_layoutwith");
     let entry = dir.join("Main.ipe");
-    let out = std::env::temp_dir().join("ipec_m7_stdui_layoutwith_e2e");
+    let out = crate::support::scratch_root().join("ipec_m7_stdui_layoutwith_e2e");
     let _ = std::fs::remove_dir_all(&out);
 
     let runtime = ipe::resolve_runtime();
@@ -77,7 +77,7 @@ fn build_run_layoutwith() -> (PathBuf, crate::support::RunOutcome) {
 /// Divergence golden — the expected value is ipe's own correct output.
 #[test]
 fn layoutwith_inline_cfg_applies_wrapper_and_root_attrs() {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
 

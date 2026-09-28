@@ -22,6 +22,7 @@ pub mod bindings;
 pub mod call;
 pub mod capability_scan;
 pub mod carrier;
+pub mod crate_refs;
 pub mod diag;
 pub mod driver;
 pub mod emit;

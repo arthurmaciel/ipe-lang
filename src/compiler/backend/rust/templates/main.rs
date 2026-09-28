@@ -78,16 +78,16 @@ pub fn log_warn(msg: String) -> IpeTask<()> {
 pub fn log_error(msg: String) -> IpeTask<()> {
     ipe_runtime::log::log_error(msg)
 }
-pub fn log_info_with<A: IpeStringify>(msg: String, attrs: Vec<A>) -> IpeTask<()> {
+pub fn log_info_with<A: IpeInterpolate>(msg: String, attrs: Vec<A>) -> IpeTask<()> {
     ipe_runtime::log::log_info_with(msg, attrs)
 }
-pub fn log_error_with<A: IpeStringify>(msg: String, attrs: Vec<A>) -> IpeTask<()> {
+pub fn log_error_with<A: IpeInterpolate>(msg: String, attrs: Vec<A>) -> IpeTask<()> {
     ipe_runtime::log::log_error_with(msg, attrs)
 }
-pub fn log_debug_with<A: IpeStringify>(msg: String, attrs: Vec<A>) -> IpeTask<()> {
+pub fn log_debug_with<A: IpeInterpolate>(msg: String, attrs: Vec<A>) -> IpeTask<()> {
     ipe_runtime::log::log_debug_with(msg, attrs)
 }
-pub fn log_warn_with<A: IpeStringify>(msg: String, attrs: Vec<A>) -> IpeTask<()> {
+pub fn log_warn_with<A: IpeInterpolate>(msg: String, attrs: Vec<A>) -> IpeTask<()> {
     ipe_runtime::log::log_warn_with(msg, attrs)
 }
 // ── System (env) kernels ───────────────────────────────────────────────────

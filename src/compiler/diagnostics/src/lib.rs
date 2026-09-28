@@ -8,6 +8,7 @@ mod diagnostic;
 pub mod path_check;
 mod render;
 mod span;
+pub mod terminal;
 
 // Re-export the whole taxonomy with a glob so no downstream-nameable code can be
 // omitted by a hand-synced list: every `IPE_*` constant, `ALL_CODES`, `Code`,
@@ -19,10 +20,10 @@ pub use diagnostic::{
     AliasExpansionKind, AppShape, Applicability, CaseDefect, CmdSubShapeMismatch,
     CodecAutoRejection, ConsentError, Construct, DResult, Diagnostic, Expected, ExpectedSet,
     ExposingDefect, Feature, FfiError, GenericAppEntryReach, HOF_KERNEL_RESULT_CLASS, HeaderDefect,
-    HelpLine, Hint, IfDefect, LetDefect, LowerError, MainRetName, ModelLeaf, ModulePlacementReason,
-    ModulePlacementRejection, NameError, ParseError, RustNameFoldKind, SandboxError, SealRejection,
-    SortedNames, SpanRole, StoreEqAccessorDefect, StoreSelectProjectionDefect, Suggestion,
-    TokenKind, TyDoc, TypeDeclDefect, TypeError,
+    HelpLine, Hint, INTERPOLABLE_CLASS, INTERPOLABLE_TYPES, IfDefect, LetDefect, LowerError,
+    MainRetName, ModelLeaf, ModulePlacementReason, ModulePlacementRejection, NameError, ParseError,
+    RustNameFoldKind, SandboxError, SealRejection, SortedNames, SpanRole, StoreEqAccessorDefect,
+    StoreSelectProjectionDefect, Suggestion, TokenKind, TyDoc, TypeDeclDefect, TypeError,
 };
 pub use render::{DOC_HINT_CMD, plain_message, render, render_json, render_ty};
 pub use span::{Located, Span};
@@ -30,6 +31,67 @@ pub use span::{Located, Span};
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A newline or escape in any FFI or sandbox field never opens a forged output line.
+    #[test]
+    fn ffi_and_sandbox_fields_cannot_forge_an_output_line() {
+        const FORGED: &str = "x\nerror: forged\u{1b}[2K";
+        let hostile = || terminal::TerminalSafe::from(FORGED);
+        let diagnostics = [
+            FfiError::CallUnrenderable {
+                function: hostile(),
+                detail: hostile(),
+            },
+            FfiError::GenericNotBindable {
+                callee: hostile(),
+                detail: hostile(),
+            },
+            FfiError::WireMalformed {
+                context: hostile(),
+                detail: hostile(),
+            },
+            FfiError::ShapeContradiction {
+                function: hostile(),
+                flags: vec![hostile(), hostile()],
+            },
+            FfiError::SourceRejected {
+                source: hostile(),
+                detail: hostile(),
+            },
+            FfiError::ArtifactIo {
+                path: hostile(),
+                detail: hostile(),
+            },
+            FfiError::AssertedRefused {
+                path: hostile(),
+                detail: hostile(),
+            },
+            FfiError::SystemLibraryNotFound {
+                system_lib: hostile(),
+                crate_name: hostile(),
+                install_hint: hostile(),
+            },
+        ]
+        .map(|msg| Diagnostic::Ffi { msg })
+        .into_iter()
+        .chain([
+            Diagnostic::Sandbox {
+                msg: SandboxError::BuildJail { detail: hostile() },
+            },
+            Diagnostic::Sandbox {
+                msg: SandboxError::RunJail { detail: hostile() },
+            },
+        ]);
+        for diagnostic in diagnostics {
+            let text = render(&diagnostic, "", "");
+            assert!(text.contains("error: forged"), "{text}");
+            assert!(!text.contains("[2K"), "{text}");
+            assert!(
+                text.lines().all(|line| !line.starts_with("error: forged")),
+                "{text}"
+            );
+        }
+    }
 
     // Build a sample `Diagnostic` for Ffi, Sandbox, Consent, and `CompilerBug`
     // families.  Returns `None` for Parse/Name/Type/Lower codes; those families

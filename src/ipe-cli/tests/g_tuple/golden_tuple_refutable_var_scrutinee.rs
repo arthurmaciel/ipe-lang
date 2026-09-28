@@ -70,11 +70,11 @@ fn refutable_var_scrutinee_builds() {
 /// = 2 + 3 + 42 + 0 = 47.
 #[test]
 fn refutable_var_scrutinee_cargo_builds_and_runs() {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
 
-    let out = std::env::temp_dir().join("ipec_tuple_refutable_var_scrut_e2e");
+    let out = crate::support::scratch_root().join("ipec_tuple_refutable_var_scrut_e2e");
     let _ = std::fs::remove_dir_all(&out);
 
     let runtime = ipe::resolve_runtime();

@@ -61,7 +61,7 @@ fn assert_ipec_bounds_fn_not_struct(fixture: &str) {
         return;
     };
 
-    let built = ipe::build_with_sibling_discovery(&entry, &out, &runtime);
+    let built = ipe::build_loose_file(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
         "ipe build must succeed for {fixture}: {:?}",
@@ -95,13 +95,13 @@ fn assert_ipec_bounds_fn_not_struct(fixture: &str) {
 /// cargo-0 ∧ run-0 for the emitted project — the only check that would have
 /// caught the E0277 regression. Gated on `IPE_E2E=1`.
 fn assert_cargo_builds_and_runs(fixture: &str) {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
 
     let root = repo_root();
     let entry = entry_path(&root, fixture);
-    let out = std::env::temp_dir().join(format!("ipec_{fixture}_e2e"));
+    let out = crate::support::scratch_root().join(format!("ipec_{fixture}_e2e"));
     let _ = std::fs::remove_dir_all(&out);
 
     let Ok(runtime) = ipe::resolve_runtime() else {
@@ -109,7 +109,7 @@ fn assert_cargo_builds_and_runs(fixture: &str) {
         return;
     };
 
-    let built = ipe::build_with_sibling_discovery(&entry, &out, &runtime);
+    let built = ipe::build_loose_file(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
         "ipe build must succeed for {fixture}: {:?}",

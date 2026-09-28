@@ -32,7 +32,7 @@ fn compile_golden(name: &str) -> PathBuf {
         .join("golden")
         .join(name)
         .join("Main.ipe");
-    let out = std::env::temp_dir().join(format!("ipec_{name}_e2e"));
+    let out = crate::support::scratch_root().join(format!("ipec_{name}_e2e"));
     let _ = std::fs::remove_dir_all(&out);
 
     let runtime = ipe::resolve_runtime();
@@ -49,7 +49,7 @@ fn compile_golden(name: &str) -> PathBuf {
 /// inputs: `[-1, 2, 0, 5, -3, 10]` → `["2", "5", "10"]` → `"2,5,10"`
 #[test]
 fn filter_map_keeps_just_results() {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
     let dir = compile_golden("filter_map_seal");
@@ -71,7 +71,7 @@ fn filter_map_keeps_just_results() {
 /// [Charlie/30, Alice/25, Bob/25] → [Alice/25, Bob/25, Charlie/30] → "Alice,Bob,Charlie"
 #[test]
 fn sort_by_stable_by_age() {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
     let dir = compile_golden("sort_by_seal");
@@ -93,7 +93,7 @@ fn sort_by_stable_by_age() {
 /// `[3,1,3,2,1,3,2]` yields `[3,1,2]`; `["a","b","a","c","b"]` yields `["a","b","c"]`.
 #[test]
 fn unique_keeps_first_occurrence_order() {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
     let dir = compile_golden("unique_seal");

@@ -70,25 +70,25 @@
 //!
 //! `cargo build` cancellation (never overlapping cargo builds) uses the
 //! portable equivalent for a plain OS process: the
-//! orchestrator holds the `Child` handle directly and calls `.kill()` on a
-//! superseding batch; a dedicated per-build "waiter" thread blocks on
-//! `.wait()` and reports completion (or, if killed, a status the
-//! orchestrator recognises as "superseded, not a real failure") through the
+//! orchestrator holds the `Child` handle directly and supersedes it (records
+//! the kill, then `.kill()`s) on a superseding batch; a dedicated per-build
+//! "waiter" thread polls for exit and reports completion (or, when the
+//! orchestrator recorded the kill, "superseded, not a real failure") through the
 //! SAME unified event channel, tagged with a generation counter so a stale
 //! completion from an already-superseded cycle is silently ignored rather
 //! than raced against the new one.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command};
 use std::sync::mpsc;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, PoisonError, RwLock};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use ipe_intern::Interner;
-
+use crate::output_dir::{EmitTarget, OutputRefusal, OwnedDir, ProjectPaths};
 use crate::project;
+use crate::text;
 use crate::{CliError, write_emitted_project};
 
 /// A lifecycle notification from a running watch session.
@@ -201,6 +201,11 @@ pub struct WatchOptions {
     /// a pre-compiled dependency tree instead of cold-building it; the E2E watch
     /// suite uses it to forward the CI shard's warm shared target.
     pub target_dir: Option<PathBuf>,
+    /// The proven target `out_dir` names, when the caller holds one.
+    ///
+    /// Each rebuild claims it through its proof; `None` proves `out_dir`
+    /// disjoint from the watched project before the session starts.
+    pub out_target: Option<EmitTarget>,
 }
 
 impl WatchOptions {
@@ -220,6 +225,7 @@ impl WatchOptions {
             reset_state: false,
             debugger: false,
             target_dir: None,
+            out_target: None,
         }
     }
 }
@@ -230,7 +236,10 @@ fn emit(opts: &WatchOptions, event: WatchEvent) {
     }
 }
 
-/// Render a watch lifecycle line with 2-space gutter and optional colour.
+/// Render a watch lifecycle line with a deterministic 4-space gutter (two
+/// [`crate::style::GUTTER`] widths — one level deeper than the CLI's own
+/// top-level banner/status indent, matching the runtime child's own
+/// `[ipe.http.server]`/`[ipe.live]` startup-line indent) and optional colour.
 /// `role` selects the semantic colour: `Info`, `Success`, or `Failure`.
 #[derive(Clone, Copy)]
 enum WatchRole {
@@ -253,7 +262,7 @@ enum WatchRole {
 /// is guaranteed absorbed.
 pub const SIGTERM_TEARDOWN_MARKER: &str = "[ipe watch] SIGTERM received; shutting down";
 
-/// `text` is already-sanitised [`TerminalSafe`], mirroring [`crate::style::error_banner`]:
+/// `text` is already-sanitised [`TerminalSafe`], mirroring [`crate::screen::error_screen`]:
 /// the line's own gutter/colour escapes are the only control bytes the output may
 /// carry. Callers construct it via [`crate::style::TerminalSafe::sanitize`] at the
 /// message boundary, so an unsanitised watch message is unrepresentable here.
@@ -272,12 +281,28 @@ fn watch_line(text: &crate::style::TerminalSafe, role: WatchRole) -> String {
             p.reset,
         ),
     };
+    // The indent is literal GUTTER text placed BEFORE any colour escape, on
+    // every role alike, so it is deterministic regardless of colour state and
+    // so `screen::guttered_once`'s `starts_with(GUTTER)` check recognises it
+    // and never adds a second gutter on top (the prior colour-first
+    // construction on the `Info`/`Success` arms defeated that check, so those
+    // two roles rendered at 4 spaces with colour on but only 2 with colour
+    // off — this makes all three roles a fixed 4 spaces either way).
+    let indent = format!("{}{}", crate::style::GUTTER, crate::style::GUTTER);
     let prefix = if glyph.is_empty() {
-        format!("{colour}{}{reset}", crate::style::GUTTER)
+        format!("{indent}{colour}{reset}")
     } else {
-        format!("{}{colour}{glyph}{reset} ", crate::style::GUTTER)
+        format!("{indent}{colour}{glyph}{reset} ")
     };
     format!("{prefix}{text}")
+}
+
+/// Write one [`watch_line`] to stderr as progress chatter.
+fn emit_watch_line(text: &crate::style::TerminalSafe, role: WatchRole) {
+    crate::screen::chatter_styled(
+        crate::screen::Stream::Stderr,
+        &format!("{}\n", watch_line(text, role)),
+    );
 }
 
 /// Per-phase wall-clock timing for ONE rebuild cycle, printed to stderr as a
@@ -328,7 +353,7 @@ impl RebuildTimings {
     /// of exactly `1` enables the breakdown, anything else (unset included)
     /// leaves it off.
     fn start(settle: Option<Duration>) -> Self {
-        let enabled = std::env::var("IPE_WATCH_TIMING").as_deref() == Ok("1");
+        let enabled = ipe_env::var("IPE_WATCH_TIMING").as_deref() == Ok("1");
         Self {
             enabled,
             cycle_start: enabled.then(Instant::now),
@@ -394,7 +419,9 @@ impl RebuildTimings {
             total.as_secs_f64() * 1000.0,
             residual.as_secs_f64() * 1000.0,
         );
-        eprint!("\n{}\n", crate::style::gutter(&body));
+        crate::screen::Screen::new(crate::screen::Stream::Stderr)
+            .line(crate::screen::Tone::Aux, &body)
+            .emit();
     }
 }
 
@@ -414,29 +441,69 @@ pub(crate) struct ResolvedProject {
     pub(crate) entry_path: Vec<String>,
     pub(crate) blame_path: PathBuf,
     pub(crate) db_driver: ipe_backend_rust::DbDriver,
-    /// The `[wasm] publicEnv` allowlist (empty for the no-manifest / sibling-
-    /// discovery path — there is no manifest to declare one).
+    /// The `[wasm] publicEnv` allowlist (empty for the no-manifest loose-file
+    /// path — there is no manifest to declare one).
     pub(crate) wasm_public_env: Vec<String>,
     /// The sanitized Cargo package name for the emitted crate (from `package.ipe`
     /// name via [`ipe_backend_rust::sanitize_cargo_name`]). Empty string
     /// when no manifest is present (sibling-discovery path uses `"ipe-app"`).
     pub(crate) cargo_name: String,
+    /// What the confined watcher observes for this snapshot.
+    pub(crate) scope: ScopeSpec,
+}
+
+/// The inputs a [`ipe_watch::WatchScope`] is built from, per project shape.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ScopeSpec {
+    /// A manifest project: the manifest's directory, watched recursively.
+    Package {
+        /// The manifest's directory.
+        root: PathBuf,
+        /// Every module file the bounded module discovery found.
+        source_files: Vec<PathBuf>,
+    },
+    /// A loose file: the entry and the sibling module files its import closure probes.
+    LooseFile {
+        /// The entry `.ipe` file as given on the command line.
+        entry: PathBuf,
+        /// Every probed module file, relative to the entry's directory.
+        module_files: Vec<PathBuf>,
+    },
+}
+
+impl ScopeSpec {
+    /// Build the confined scope this spec describes.
+    ///
+    /// # Errors
+    /// [`ipe_watch::ScopeError`] when the root is missing or the scope is too large.
+    fn build(&self) -> Result<ipe_watch::WatchScope, ipe_watch::ScopeError> {
+        match self {
+            Self::Package { root, source_files } => {
+                ipe_watch::WatchScope::build(root, root, source_files)
+            }
+            Self::LooseFile {
+                entry,
+                module_files,
+            } => ipe_watch::WatchScope::loose_file(entry, module_files),
+        }
+    }
 }
 
 /// Resolve `entry` (a `.ipe` file or a project directory) into a fresh
 /// [`ResolvedProject`] by re-reading every relevant file from disk. Mirrors
 /// `run_build`'s dispatch: directory → `package.ipe` inside it; `.ipe` → walk
-/// up for a manifest, else sibling discovery.
+/// up for a manifest, else the loose-file import closure
+/// ([`crate::loose_file::resolve_loose_file`]).
 ///
 /// `entry_text_override`, when given, shadows the entry `.ipe` file's disk
-/// bytes in the no-manifest branch — the LSP hands the unsaved editor
-/// buffer here so module-path discovery follows what the author sees, not
-/// stale disk state. `ipe watch` always passes `None` (disk is its truth).
+/// bytes in the no-manifest branch. `ipe watch` always passes `None` (disk
+/// is its truth).
 ///
 /// # Errors
 /// [`CliError::Io`] on any filesystem failure; [`CliError::Pipeline`] if the
-/// entry file itself fails to parse (needed only to learn its declared
-/// module path in the no-manifest case).
+/// entry file itself fails to parse (needed only to learn its imports in the
+/// no-manifest case); [`CliError::DiscoveryLimitReached`] when a loose
+/// file's import closure is too large.
 pub(crate) fn resolve_project_sources(
     entry: &Path,
     entry_text_override: Option<&str>,
@@ -444,17 +511,15 @@ pub(crate) fn resolve_project_sources(
     let manifest_path = if entry.is_dir() {
         match project::manifest_in_dir(entry) {
             Some(manifest) => Some(manifest),
-            None if project::migration_pending(entry) => {
-                return Err(CliError::Usage(project::MIGRATE_CONFIG_HINT));
+            None if project::has_only_legacy_toml(entry) => {
+                return Err(CliError::Usage(text::msg::legacy_toml_hint()));
             }
             None => {
-                return Err(CliError::Usage(
-                    "directory supplied but no package.ipe found inside it",
-                ));
+                return Err(CliError::Usage(text::msg::watch_dir_no_manifest()));
             }
         }
     } else {
-        crate::find_manifest_for_ipe_file(entry)
+        crate::find_manifest_for_ipe_file(entry)?
     };
 
     if let Some(manifest_path) = manifest_path {
@@ -462,11 +527,8 @@ pub(crate) fn resolve_project_sources(
         let discovered = project::discover_modules(&manifest.src_root)?;
         let mut sources: BTreeMap<Vec<String>, (PathBuf, String)> = BTreeMap::new();
         for m in &discovered {
-            let src = crate::io_bounded::read_to_string_capped(
-                &m.path,
-                crate::io_bounded::SOURCE_READ_CAP,
-            )?;
-            sources.insert(m.module_path.clone(), (m.path.clone(), src));
+            let src = crate::io_bounded::read_walked_source(m.path())?;
+            sources.insert(m.module_path().to_vec(), (m.path().to_path_buf(), src));
         }
         let cargo_name = ipe_backend_rust::sanitize_cargo_name(&manifest.name);
         // The entry defaults to `["Main"]`; a `programs` manifest routes its
@@ -474,6 +536,10 @@ pub(crate) fn resolve_project_sources(
         // multi-program selection is a reported residual — see
         // `misc/docs/package-programs-design.md`.
         let entry_path = manifest.resolved_entry()?;
+        let package_root = manifest_path
+            .parent()
+            .map_or_else(|| PathBuf::from("."), Path::to_path_buf);
+        let source_files = discovered.iter().map(|m| m.path().to_path_buf()).collect();
         return Ok(ResolvedProject {
             sources,
             discovered,
@@ -482,91 +548,93 @@ pub(crate) fn resolve_project_sources(
             db_driver: manifest.driver,
             wasm_public_env: manifest.wasm.public_env,
             cargo_name,
+            scope: ScopeSpec::Package {
+                root: package_root,
+                source_files,
+            },
         });
     }
 
-    // No manifest: sibling discovery, mirroring `build_with_sibling_discovery`.
-    let source = match entry_text_override {
-        Some(text) => text.to_owned(),
-        None => {
-            crate::io_bounded::read_to_string_capped(entry, crate::io_bounded::SOURCE_READ_CAP)?
-        }
-    };
-    let mut name_interner = Interner::new();
-    let parsed = ipe_parse::parse_module(&source, &mut name_interner).map_err(|diag| {
-        CliError::Pipeline {
-            file: entry.to_path_buf(),
-            src: source.clone(),
-            diag: Box::new(diag),
-        }
-    })?;
-    let entry_module_path: Vec<String> = parsed
-        .name
-        .value
-        .iter()
-        .map(|s| name_interner.resolve(*s).unwrap_or_default().to_owned())
-        .collect();
-    let src_root = entry
-        .parent()
-        .filter(|p| p.is_dir())
-        .unwrap_or_else(|| Path::new("."));
-    let mut discovered = project::discover_modules(src_root)?;
-    if !discovered
-        .iter()
-        .any(|m| m.module_path == entry_module_path)
-    {
-        discovered.push(project::DiscoveredModule {
-            path: entry.to_path_buf(),
-            module_path: entry_module_path.clone(),
-        });
-    }
-    let mut sources: BTreeMap<Vec<String>, (PathBuf, String)> = BTreeMap::new();
-    for m in &discovered {
-        if m.module_path == entry_module_path {
-            sources.insert(
-                entry_module_path.clone(),
-                (entry.to_path_buf(), source.clone()),
-            );
-        } else {
-            let src = crate::io_bounded::read_to_string_capped(
-                &m.path,
-                crate::io_bounded::SOURCE_READ_CAP,
-            )?;
-            sources.insert(m.module_path.clone(), (m.path.clone(), src));
-        }
-    }
+    // No manifest: the loose-file closure, the same one `ipe build` compiles.
+    let loaded = crate::loose_file::resolve_loose_file(
+        entry,
+        entry_text_override,
+        crate::loose_file::LooseFileLimits::DEFAULT,
+    )?;
     Ok(ResolvedProject {
-        sources,
-        discovered,
-        entry_path: entry_module_path,
+        sources: loaded.sources,
+        discovered: loaded.discovered,
+        entry_path: loaded.entry_module,
         blame_path: entry.to_path_buf(),
         db_driver: ipe_backend_rust::DbDriver::Sqlite,
         wasm_public_env: Vec::new(),
         cargo_name: String::new(),
+        scope: ScopeSpec::LooseFile {
+            entry: entry.to_path_buf(),
+            module_files: loaded.probed_files,
+        },
     })
 }
 
-/// The project root + entry directory a [`ipe_watch::WatchScope`] confines
-/// itself to, derived from one resolved snapshot.
-fn scope_roots(resolved: &ResolvedProject, entry: &Path) -> (PathBuf, PathBuf) {
-    // The manifest's directory when a `package.ipe` is the blame path;
-    // otherwise the blame path IS the entry file, so its parent is the source
-    // root — matching `build_with_sibling_discovery`.
-    if resolved.blame_path.file_name().and_then(|n| n.to_str())
-        == Some(crate::package_manifest::PACKAGE_IPE)
-    {
-        let root = resolved
-            .blame_path
-            .parent()
-            .map_or_else(|| PathBuf::from("."), Path::to_path_buf);
-        (root.clone(), root)
-    } else {
-        let dir = entry
-            .parent()
-            .filter(|p| p.is_dir())
-            .map_or_else(|| PathBuf::from("."), Path::to_path_buf);
-        (dir.clone(), dir)
+/// The directories a scope hands the OS-level watcher.
+fn watched_roots(scope: &ipe_watch::WatchScope) -> BTreeSet<PathBuf> {
+    scope
+        .roots_to_watch()
+        .iter()
+        .map(|watched| watched.as_path().to_path_buf())
+        .collect()
+}
+
+/// Rebuild a loose-file scope from a fresh snapshot so the watcher follows the current import closure.
+///
+/// Directories the new closure needs are watched before the swap and
+/// directories it dropped are unwatched after it; a package scope is
+/// recursive and never changes. A scope that fails to build keeps the
+/// previous one in force, and a directory that fails to watch is logged.
+/// Returns whether a directory was added: an event inside it between the
+/// snapshot's read and the watch taking effect went unobserved, so the
+/// caller resolves once more.
+///
+/// The scope lock is never held across a watcher call, since the watcher's
+/// event thread takes the same lock.
+fn rescope(
+    watcher: &mut notify::RecommendedWatcher,
+    shared: &RwLock<ipe_watch::WatchScope>,
+    spec: &ScopeSpec,
+) -> bool {
+    if matches!(spec, ScopeSpec::Package { .. }) {
+        return false;
     }
+    let next = match spec.build() {
+        Ok(next) => next,
+        Err(e) => {
+            emit_watch_line(
+                &crate::style::TerminalSafe::sanitize(text::Message::relay(&e).as_str()),
+                WatchRole::Failure,
+            );
+            return false;
+        }
+    };
+    let previous = watched_roots(&shared.read().unwrap_or_else(PoisonError::into_inner));
+    let current = watched_roots(&next);
+    let mode = next.recursive_mode();
+    let mut added = false;
+    for dir in current.difference(&previous) {
+        match notify::Watcher::watch(watcher, dir, mode) {
+            Ok(()) => added = true,
+            Err(e) => emit_watch_line(
+                &crate::style::TerminalSafe::sanitize(
+                    text::msg::watch_path_failed(&dir.display(), &e).as_str(),
+                ),
+                WatchRole::Failure,
+            ),
+        }
+    }
+    *shared.write().unwrap_or_else(PoisonError::into_inner) = next;
+    for dir in previous.difference(&current) {
+        let _ = notify::Watcher::unwatch(watcher, dir);
+    }
+    added
 }
 
 /// One event on the orchestrator's unified channel. Carries a `generation`
@@ -764,6 +832,25 @@ enum CargoOutcome {
     Killed,
 }
 
+/// An in-flight `cargo build` child plus whether the orchestrator killed it.
+///
+/// "Killed by us" is recorded at the kill site rather than inferred from the
+/// exit status: an exit status cannot tell our kill apart from a crash, an
+/// out-of-memory kill, or (off unix) an ordinary compile error, and treating
+/// any of those as superseded would silently drop a real failure.
+struct CargoChild {
+    child: Child,
+    superseded: bool,
+}
+
+impl CargoChild {
+    /// Record that the orchestrator is ending this build, then kill it.
+    fn supersede(&mut self) {
+        self.superseded = true;
+        let _ = self.child.kill();
+    }
+}
+
 /// Run `ipe watch` until the process receives a shutdown signal (Ctrl-C) or
 /// every event source disconnects.
 ///
@@ -791,27 +878,33 @@ fn run_inner(
     external_stop: Option<mpsc::Receiver<()>>,
 ) -> Result<(), CliError> {
     let initial = resolve_project_sources(&opts.entry, None)?;
-    let (root_dir, entry_dir) = scope_roots(&initial, &opts.entry);
+    let out_target = EmitTarget::for_path(
+        &opts.out_dir,
+        opts.out_target.clone(),
+        &ProjectPaths::discover(&opts.entry)?,
+    )?;
 
-    let scope = ipe_watch::WatchScope::build(&root_dir, &entry_dir)
-        .map_err(|e| CliError::UsageOwned(e.to_string()))?;
+    let scope = initial
+        .scope
+        .build()
+        .map_err(|e| CliError::Usage(crate::text::Message::relay(&e)))?;
     if !opts.quiet {
-        eprintln!(
-            "{}",
-            watch_line(
-                &crate::style::TerminalSafe::sanitize(&format!(
-                    "[ipe watch] watching {} ({} source files)",
-                    scope.root().display(),
-                    scope.file_count()
-                )),
-                WatchRole::Info
-            )
+        emit_watch_line(
+            &crate::style::TerminalSafe::sanitize(&format!(
+                "[ipe watch] watching {} ({} source files)",
+                scope.root().display(),
+                scope.file_count()
+            )),
+            WatchRole::Info,
         );
     }
 
     let (raw_tx, raw_rx) = mpsc::channel::<PathBuf>();
+    let recursive_mode = scope.recursive_mode();
+    let initial_roots = watched_roots(&scope);
+    let shared_scope = Arc::new(RwLock::new(scope));
     let mut watcher = {
-        let scope = scope.clone();
+        let scope = Arc::clone(&shared_scope);
         notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
             let Ok(event) = res else { return };
             // Reject non-mutating ACCESS events (open/read/execute) and the
@@ -873,22 +966,18 @@ fn run_inner(
             {
                 return;
             }
+            let scope = scope.read().unwrap_or_else(PoisonError::into_inner);
             for path in event.paths {
                 if scope.is_relevant(&path) {
                     let _ = raw_tx.send(path);
                 }
             }
         })
-        .map_err(|e| CliError::UsageOwned(format!("watch: cannot start filesystem watcher: {e}")))?
+        .map_err(|e| CliError::Usage(text::msg::watch_start_failed(&e)))?
     };
-    for w in scope.roots_to_watch() {
-        notify::Watcher::watch(&mut watcher, w.as_path(), notify::RecursiveMode::Recursive)
-            .map_err(|e| {
-                CliError::UsageOwned(format!(
-                    "watch: cannot watch {}: {e}",
-                    w.as_path().display()
-                ))
-            })?;
+    for dir in &initial_roots {
+        notify::Watcher::watch(&mut watcher, dir, recursive_mode)
+            .map_err(|e| CliError::Usage(text::msg::watch_path_failed(&dir.display(), &e)))?;
     }
 
     warn_if_memory_store();
@@ -946,23 +1035,17 @@ fn run_inner(
                 // test) can wait for this line as an explicit ack rather than
                 // guessing a delay. Not `--quiet`-gated: a shutdown-on-signal
                 // notice is a load-bearing operational fact, not chatter.
-                eprintln!(
-                    "{}",
-                    watch_line(
-                        &crate::style::TerminalSafe::sanitize(SIGTERM_TEARDOWN_MARKER),
-                        WatchRole::Info,
-                    )
+                emit_watch_line(
+                    &crate::style::TerminalSafe::sanitize(SIGTERM_TEARDOWN_MARKER),
+                    WatchRole::Info,
                 );
                 let _ = evt_tx.send(OrchestratorEvent::Shutdown);
             }) {
-                eprintln!(
-                    "{}",
-                    watch_line(
-                        &crate::style::TerminalSafe::sanitize(&format!(
-                            "[ipe watch] warning: could not install SIGTERM handler: {e}"
-                        )),
-                        WatchRole::Info
-                    )
+                emit_watch_line(
+                    &crate::style::TerminalSafe::sanitize(&format!(
+                        "[ipe watch] warning: could not install SIGTERM handler: {e}"
+                    )),
+                    WatchRole::Info,
                 );
             }
         }
@@ -1003,7 +1086,9 @@ fn run_inner(
     let mut supervisor = ipe_watch::SupervisorState::fresh();
     let mut generation: u64 = 0;
     let mut compile_worker: Option<thread::JoinHandle<()>> = None;
-    let mut cargo_child: Option<Arc<std::sync::Mutex<Child>>> = None;
+    let mut cargo_child: Option<Arc<std::sync::Mutex<CargoChild>>> = None;
+    // The crate the in-flight cargo build compiles, proven again once it exits.
+    let mut building: Option<OwnedDir> = None;
     // Set at `CompileDone` (Green), consumed at `CargoDone` (Green) — the
     // readiness strategy is a property of the SOURCE (does it call
     // `Web.tea`?), decided once per generation right after emit, not
@@ -1107,21 +1192,22 @@ fn run_inner(
                 // `spawn_cargo_build`) observes the exit via its own poll
                 // and reports `CargoOutcome::Killed`, so this arm never
                 // blocks the orchestrator.
-                if let Some(child) = cargo_child.take()
-                    && let Ok(mut child) = child.lock()
-                {
-                    let _ = child.kill();
+                if let Some(child) = cargo_child.take() {
+                    // A poisoned lock still guards a live child to kill — the
+                    // kill must not be skipped just because some other thread
+                    // panicked while briefly holding the lock.
+                    child
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .supersede();
                 }
 
                 let resolved = match resolve_project_sources(&opts.entry, None) {
                     Ok(r) => r,
                     Err(e) => {
-                        eprintln!(
-                            "{}",
-                            watch_line(
-                                &crate::style::TerminalSafe::sanitize(&format!("[ipe watch] {e}")),
-                                WatchRole::Failure
-                            )
+                        emit_watch_line(
+                            &crate::style::TerminalSafe::sanitize(&format!("[ipe watch] {e}")),
+                            WatchRole::Failure,
                         );
                         // This cycle's `generation` bump and cargo-kill
                         // already happened above, so without a scheduled
@@ -1131,6 +1217,9 @@ fn run_inner(
                         continue;
                     }
                 };
+                if rescope(&mut watcher, &shared_scope, &resolved.scope) {
+                    schedule_resolve_retry(&evt_tx);
+                }
 
                 let mut sources = resolved.sources;
                 let mut discovered = resolved.discovered;
@@ -1144,14 +1233,11 @@ fn run_inner(
                 let ffi_prep = match crate::ffi::prepare_ffi(&mut sources, &resolved.blame_path) {
                     Ok(p) => p,
                     Err(e) => {
-                        eprintln!(
-                            "{}",
-                            watch_line(
-                                &crate::style::TerminalSafe::sanitize(&format!(
-                                    "[ipe watch] FFI catalog error: {e}"
-                                )),
-                                WatchRole::Failure
-                            )
+                        emit_watch_line(
+                            &crate::style::TerminalSafe::sanitize(&format!(
+                                "[ipe watch] FFI catalog error: {e}"
+                            )),
+                            WatchRole::Failure,
                         );
                         continue;
                     }
@@ -1302,8 +1388,9 @@ fn run_inner(
                         // report sits inset, not just the header), a blank line
                         // below to set it off from the next watch line. Light
                         // yellow, not red — the last-good binary stays up.
-                        let p = crate::style::Palette::for_stream(&std::io::stderr());
-                        eprint!("\n{}\n", compile_failed_frame(&msg, p));
+                        let mut screen = crate::screen::Screen::new(crate::screen::Stream::Stderr);
+                        let frame = compile_failed_frame(&msg, screen.palette());
+                        screen.guttered(&frame).emit();
                         emit(opts, WatchEvent::CompileFailed { generation: g });
                         if let (Some(tok), Some(app_port)) = (
                             hot_token.as_deref(),
@@ -1491,24 +1578,24 @@ fn run_inner(
                         // no tree-shaking (the full runtime tree keeps rebuilds
                         // incremental across a session's changing reach set).
                         let write_started = Instant::now();
-                        if let Err(e) = write_emitted_project(
+                        let crate_dir = match write_emitted_project(
                             &emitted,
-                            &opts.out_dir,
+                            &out_target,
                             &opts.runtime_dir,
                             None,
                             false,
                         ) {
-                            eprintln!(
-                                "{}",
-                                watch_line(
+                            Ok(dir) => dir,
+                            Err(e) => {
+                                emit_watch_line(
                                     &crate::style::TerminalSafe::sanitize(&format!(
                                         "[ipe watch] failed to write emitted project: {e}"
                                     )),
-                                    WatchRole::Failure
-                                )
-                            );
-                            continue;
-                        }
+                                    WatchRole::Failure,
+                                );
+                                continue;
+                            }
+                        };
                         timings.write = Some(write_started.elapsed());
                         // This emit is about to be compiled into the new running
                         // binary, so it becomes the classifier's baseline for the
@@ -1528,25 +1615,19 @@ fn run_inner(
                         // milliseconds by the time this line prints.
                         if !opts.quiet {
                             if generation == 1 {
-                                eprintln!(
-                                    "{}",
-                                    watch_line(
-                                        &crate::style::TerminalSafe::sanitize(
-                                            "[ipe watch] building (first run — compiling \
-                                         dependencies, this is the slow one)…"
-                                        ),
-                                        WatchRole::Info
-                                    )
+                                emit_watch_line(
+                                    &crate::style::TerminalSafe::sanitize(
+                                        "[ipe watch] building (first run — compiling \
+                                         dependencies, this is the slow one)…",
+                                    ),
+                                    WatchRole::Info,
                                 );
                             } else {
-                                eprintln!(
-                                    "{}",
-                                    watch_line(
-                                        &crate::style::TerminalSafe::sanitize(
-                                            "[ipe watch] change detected — rebuilding…"
-                                        ),
-                                        WatchRole::Info
-                                    )
+                                emit_watch_line(
+                                    &crate::style::TerminalSafe::sanitize(
+                                        "[ipe watch] change detected — rebuilding…",
+                                    ),
+                                    WatchRole::Info,
                                 );
                             }
                         }
@@ -1562,21 +1643,21 @@ fn run_inner(
                         }
                         match spawn_cargo_build(
                             &opts.cargo_path,
-                            &opts.out_dir,
+                            crate_dir.path(),
                             opts.target_dir.as_deref(),
                             generation,
                             evt_tx.clone(),
                             opts.quiet,
                         ) {
-                            Ok(child) => cargo_child = Some(child),
-                            Err(e) => eprintln!(
-                                "{}",
-                                watch_line(
-                                    &crate::style::TerminalSafe::sanitize(&format!(
-                                        "[ipe watch] cannot start cargo build: {e}"
-                                    )),
-                                    WatchRole::Failure
-                                )
+                            Ok(child) => {
+                                cargo_child = Some(child);
+                                building = Some(crate_dir);
+                            }
+                            Err(e) => emit_watch_line(
+                                &crate::style::TerminalSafe::sanitize(&format!(
+                                    "[ipe watch] cannot start cargo build: {e}"
+                                )),
+                                WatchRole::Failure,
                             ),
                         }
                     }
@@ -1598,15 +1679,12 @@ fn run_inner(
                         emit(opts, WatchEvent::CargoKilled { generation: g });
                     }
                     CargoOutcome::Red(msg) => {
-                        eprintln!(
-                            "{}",
-                            watch_line(
-                                &crate::style::TerminalSafe::sanitize(&format!(
-                                    "[ipe watch] cargo build failed (last-good binary stays \
+                        emit_watch_line(
+                            &crate::style::TerminalSafe::sanitize(&format!(
+                                "[ipe watch] cargo build failed (last-good binary stays \
                                      up):\n{msg}"
-                                )),
-                                WatchRole::Failure
-                            )
+                            )),
+                            WatchRole::Failure,
                         );
                         emit(opts, WatchEvent::CargoFailed { generation: g });
                         if let (Some(tok), Some(app_port)) = (
@@ -1620,6 +1698,20 @@ fn run_inner(
                         timings.report(g);
                     }
                     CargoOutcome::Green(exe_path) => {
+                        let built = match prove_green_crate(building.take(), &opts.out_dir) {
+                            Ok(dir) => dir,
+                            Err(reason) => {
+                                emit_watch_line(
+                                    &crate::style::TerminalSafe::sanitize(&format!(
+                                        "[ipe watch] refusing the build: {reason}"
+                                    )),
+                                    WatchRole::Failure,
+                                );
+                                emit(opts, WatchEvent::CargoFailed { generation: g });
+                                timings.report(g);
+                                continue;
+                            }
+                        };
                         let restart_started = Instant::now();
                         // Deferred blue-green engagement: bind the proxy on the
                         // user's port the first time a green build is known to bind
@@ -1628,22 +1720,16 @@ fn run_inner(
                         // asked for that port and it is unavailable.
                         if proxy.is_none() && opts.bluegreen && current_binds_http {
                             let bound = ipe_watch::DevProxy::bind(opts.port).map_err(|e| {
-                                CliError::UsageOwned(format!(
-                                    "watch: cannot bind the blue-green proxy on port {}: {e}",
-                                    opts.port
-                                ))
+                                CliError::Usage(text::msg::watch_proxy_bind_failed(&opts.port, &e))
                             })?;
                             if !opts.quiet {
-                                eprintln!(
-                                    "{}",
-                                    watch_line(
-                                        &crate::style::TerminalSafe::sanitize(&format!(
-                                            "[ipe watch] blue-green proxy holding port {} \
+                                emit_watch_line(
+                                    &crate::style::TerminalSafe::sanitize(&format!(
+                                        "[ipe watch] blue-green proxy holding port {} \
                                              (rebuilds cut over with no dropped connection)",
-                                            opts.port
-                                        )),
-                                        WatchRole::Info
-                                    )
+                                        opts.port
+                                    )),
+                                    WatchRole::Info,
                                 );
                             }
                             proxy = Some(bound);
@@ -1661,15 +1747,12 @@ fn run_inner(
                             let internal_port = match free_loopback_port() {
                                 Ok(p) => p,
                                 Err(e) => {
-                                    eprintln!(
-                                        "{}",
-                                        watch_line(
-                                            &crate::style::TerminalSafe::sanitize(&format!(
-                                                "[ipe watch] cannot allocate an internal port for \
+                                    emit_watch_line(
+                                        &crate::style::TerminalSafe::sanitize(&format!(
+                                            "[ipe watch] cannot allocate an internal port for \
                                                  the blue-green cutover: {e}"
-                                            )),
-                                            WatchRole::Failure
-                                        )
+                                        )),
+                                        WatchRole::Failure,
                                     );
                                     // The green binary is already built, but the
                                     // cutover can't proceed without an internal
@@ -1713,7 +1796,7 @@ fn run_inner(
                                     grace: Duration::from_millis(300),
                                 }
                             };
-                            let out_dir = opts.out_dir.clone();
+                            let crate_dir = built.path().to_path_buf();
                             let tok = hot_token.clone();
                             let cp = control_port;
                             let reset_state = opts.reset_state;
@@ -1725,7 +1808,7 @@ fn run_inner(
                                         path,
                                         &child_env(
                                             port,
-                                            &out_dir,
+                                            &crate_dir,
                                             tok.as_deref(),
                                             cp,
                                             true,
@@ -1752,7 +1835,7 @@ fn run_inner(
                             };
                             let env = child_env(
                                 opts.port,
-                                &opts.out_dir,
+                                built.path(),
                                 hot_token.as_deref(),
                                 control_port,
                                 false,
@@ -1791,7 +1874,9 @@ fn run_inner(
                             && !url_announced
                             && outcome_is_running(&outcome)
                         {
-                            eprint!("{}", open_url_block(opts.port));
+                            crate::screen::Screen::new(crate::screen::Stream::Stderr)
+                                .guttered(&open_url_block(opts.port))
+                                .emit();
                             url_announced = true;
                         }
                         emit(
@@ -1829,10 +1914,14 @@ fn run_inner(
     // SIGTERM ceiling as a direct result.
     drop(watcher);
 
-    if let Some(child) = cargo_child.take()
-        && let Ok(mut child) = child.lock()
-    {
-        let _ = child.kill();
+    if let Some(child) = cargo_child.take() {
+        // A poisoned lock still guards a live child to kill — the kill must
+        // not be skipped just because some other thread panicked while
+        // briefly holding the lock.
+        child
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .supersede();
     }
     supervisor.shutdown(opts.restart_timeouts);
     // Stop the front proxy AFTER the supervised child is down: it held the
@@ -1961,6 +2050,23 @@ fn emitted_binds_http(emitted: &ipe_backend::EmittedProject) -> bool {
         || emitted_source_contains(emitted, "ipe_runtime::server::server_listen")
 }
 
+/// The crate a green build wrote, proven still the one its rebuild claimed.
+///
+/// `cargo` writes into the crate by path, so a crate replaced while it ran, or a
+/// green build with no claim on record, is refused and its binary is never
+/// started. `reported` names the output root in the refusal when no claim
+/// exists.
+fn prove_green_crate(building: Option<OwnedDir>, reported: &Path) -> Result<OwnedDir, CliError> {
+    building.map_or_else(
+        || {
+            Err(CliError::from(OutputRefusal::Replaced(
+                reported.to_path_buf(),
+            )))
+        },
+        |dir| dir.verify().map(|()| dir),
+    )
+}
+
 /// Build the child process's environment.
 ///
 /// Sets both `IPE_WEB_PORT` and `IPE_SERVER_PORT` to the SAME configured
@@ -1970,7 +2076,8 @@ fn emitted_binds_http(emitted: &ipe_backend::EmittedProject) -> bool {
 /// establishes) be driven by `--port` exactly like a Ipe.Web app is.
 ///
 /// Also provides the watch-scoped half of session continuity —
-/// default the dev session store to `file` (persisted under `out_dir`,
+/// default the dev session store to `file` (persisted beside the claimed
+/// `crate_dir` the green build was proven to write,
 /// confined to the emit tree's parent so the emit→cargo bridge's
 /// `src/`-only prune pass never touches it) unless the caller's OWN
 /// environment already configures `IPE_WEB_STORE`, in which case that
@@ -1978,7 +2085,7 @@ fn emitted_binds_http(emitted: &ipe_backend::EmittedProject) -> bool {
 /// `memory` — see `warn_if_memory_store`, called once at watch startup).
 fn child_env(
     port: u16,
-    out_dir: &Path,
+    crate_dir: &Path,
     hot_token: Option<&str>,
     control_port: Option<u16>,
     bluegreen: bool,
@@ -2022,7 +2129,7 @@ fn child_env(
         // setting anything.
         env.push(("IPE_WATCH_HOT_APPEARANCE".to_owned(), "1".to_owned()));
     }
-    if std::env::var("IPE_WEB_STORE").is_err() {
+    if ipe_env::var("IPE_WEB_STORE").is_err() {
         // `file`, not `sqlite`: a plain `Web.tea` reaches no DB kernel, so the
         // emitted crate carries no `db` feature and the sqlite store compiles
         // out (it would silently degrade to an in-memory store that does NOT
@@ -2032,9 +2139,9 @@ fn child_env(
         // the Model. Confined to the emit tree's parent so the `src/`-only
         // prune pass never touches it.
         env.push(("IPE_WEB_STORE".to_owned(), "file".to_owned()));
-        let store_path = out_dir
+        let store_path = crate_dir
             .parent()
-            .unwrap_or(out_dir)
+            .unwrap_or(crate_dir)
             .join(".ipe-watch-sessions.json");
         env.push((
             "IPE_WEB_STORE_PATH".to_owned(),
@@ -2045,7 +2152,7 @@ fn child_env(
     // the browser's fast-reconnect window past its default to cover it: the page
     // reconnects a fast-retry tick after the new server binds instead of waiting
     // out an exponential-backoff interval. The caller's own value wins.
-    if std::env::var("IPE_WEB_RETRY_FAST_WINDOW_MS").is_err() {
+    if ipe_env::var("IPE_WEB_RETRY_FAST_WINDOW_MS").is_err() {
         env.push(("IPE_WEB_RETRY_FAST_WINDOW_MS".to_owned(), "8000".to_owned()));
     }
     env
@@ -2086,29 +2193,23 @@ fn push_appearance_patches(
         .to_string();
         if !matches!(post_hot_appearance(port, token, &body), Ok(true)) {
             if !quiet {
-                eprintln!(
-                    "{}",
-                    watch_line(
-                        &crate::style::TerminalSafe::sanitize(
-                            "[ipe watch] appearance hot-swap push failed — falling back to a \
-                         full rebuild"
-                        ),
-                        WatchRole::Info
-                    )
+                emit_watch_line(
+                    &crate::style::TerminalSafe::sanitize(
+                        "[ipe watch] appearance hot-swap push failed — falling back to a \
+                         full rebuild",
+                    ),
+                    WatchRole::Info,
                 );
             }
             return false;
         }
     }
     if !quiet {
-        eprintln!(
-            "{}",
-            watch_line(
-                &crate::style::TerminalSafe::sanitize(
-                    "[ipe watch] appearance edit hot-swapped (no rebuild)"
-                ),
-                WatchRole::Info
-            )
+        emit_watch_line(
+            &crate::style::TerminalSafe::sanitize(
+                "[ipe watch] appearance edit hot-swapped (no rebuild)",
+            ),
+            WatchRole::Info,
         );
     }
     true
@@ -2259,29 +2360,23 @@ fn push_control_appearance(
         );
         if !applied {
             if !quiet {
-                eprintln!(
-                    "{}",
-                    watch_line(
-                        &crate::style::TerminalSafe::sanitize(
-                            "[ipe watch] tui appearance hot-swap failed — falling back to a \
-                             full rebuild"
-                        ),
-                        WatchRole::Info
-                    )
+                emit_watch_line(
+                    &crate::style::TerminalSafe::sanitize(
+                        "[ipe watch] tui appearance hot-swap failed — falling back to a \
+                             full rebuild",
+                    ),
+                    WatchRole::Info,
                 );
             }
             return false;
         }
     }
     if !quiet && !patches.is_empty() {
-        eprintln!(
-            "{}",
-            watch_line(
-                &crate::style::TerminalSafe::sanitize(
-                    "[ipe watch] tui appearance edit hot-swapped (no rebuild)"
-                ),
-                WatchRole::Info
-            )
+        emit_watch_line(
+            &crate::style::TerminalSafe::sanitize(
+                "[ipe watch] tui appearance edit hot-swapped (no rebuild)",
+            ),
+            WatchRole::Info,
         );
     }
     true
@@ -2306,29 +2401,23 @@ fn push_transition_patches(
         .to_string();
         if !matches!(post_hot_transition(port, token, &body), Ok(true)) {
             if !quiet {
-                eprintln!(
-                    "{}",
-                    watch_line(
-                        &crate::style::TerminalSafe::sanitize(
-                            "[ipe watch] transition hot-swap push failed — falling back to a \
-                         full rebuild"
-                        ),
-                        WatchRole::Info
-                    )
+                emit_watch_line(
+                    &crate::style::TerminalSafe::sanitize(
+                        "[ipe watch] transition hot-swap push failed — falling back to a \
+                         full rebuild",
+                    ),
+                    WatchRole::Info,
                 );
             }
             return false;
         }
     }
     if !quiet && !patches.is_empty() {
-        eprintln!(
-            "{}",
-            watch_line(
-                &crate::style::TerminalSafe::sanitize(
-                    "[ipe watch] update-arm edit hot-swapped (no rebuild)"
-                ),
-                WatchRole::Info
-            )
+        emit_watch_line(
+            &crate::style::TerminalSafe::sanitize(
+                "[ipe watch] update-arm edit hot-swapped (no rebuild)",
+            ),
+            WatchRole::Info,
         );
     }
     true
@@ -2383,29 +2472,23 @@ fn push_msg_set_patches(
         .to_string();
         if !matches!(post_hot_msg(port, token, &body), Ok(true)) {
             if !quiet {
-                eprintln!(
-                    "{}",
-                    watch_line(
-                        &crate::style::TerminalSafe::sanitize(
-                            "[ipe watch] Msg-set hot-swap push failed — falling back to a \
-                         full rebuild"
-                        ),
-                        WatchRole::Info
-                    )
+                emit_watch_line(
+                    &crate::style::TerminalSafe::sanitize(
+                        "[ipe watch] Msg-set hot-swap push failed — falling back to a \
+                         full rebuild",
+                    ),
+                    WatchRole::Info,
                 );
             }
             return false;
         }
     }
     if !quiet && !patches.is_empty() {
-        eprintln!(
-            "{}",
-            watch_line(
-                &crate::style::TerminalSafe::sanitize(
-                    "[ipe watch] added Msg variant hot-swapped (no rebuild)"
-                ),
-                WatchRole::Info
-            )
+        emit_watch_line(
+            &crate::style::TerminalSafe::sanitize(
+                "[ipe watch] added Msg variant hot-swapped (no rebuild)",
+            ),
+            WatchRole::Info,
         );
     }
     true
@@ -2430,29 +2513,23 @@ fn push_sub_patches(
         .to_string();
         if !matches!(post_hot_subs(port, token, &body), Ok(true)) {
             if !quiet {
-                eprintln!(
-                    "{}",
-                    watch_line(
-                        &crate::style::TerminalSafe::sanitize(
-                            "[ipe watch] subscription hot-swap push failed — falling back to a \
-                         full rebuild"
-                        ),
-                        WatchRole::Info
-                    )
+                emit_watch_line(
+                    &crate::style::TerminalSafe::sanitize(
+                        "[ipe watch] subscription hot-swap push failed — falling back to a \
+                         full rebuild",
+                    ),
+                    WatchRole::Info,
                 );
             }
             return false;
         }
     }
     if !quiet && !patches.is_empty() {
-        eprintln!(
-            "{}",
-            watch_line(
-                &crate::style::TerminalSafe::sanitize(
-                    "[ipe watch] subscriptions edit hot-swapped (no rebuild)"
-                ),
-                WatchRole::Info
-            )
+        emit_watch_line(
+            &crate::style::TerminalSafe::sanitize(
+                "[ipe watch] subscriptions edit hot-swapped (no rebuild)",
+            ),
+            WatchRole::Info,
         );
     }
     true
@@ -2542,29 +2619,23 @@ fn push_init_patches(
         .to_string();
         if !matches!(post_hot_init(port, token, &body), Ok(true)) {
             if !quiet {
-                eprintln!(
-                    "{}",
-                    watch_line(
-                        &crate::style::TerminalSafe::sanitize(
-                            "[ipe watch] init hot-swap push failed — falling back to a \
-                         full rebuild"
-                        ),
-                        WatchRole::Info
-                    )
+                emit_watch_line(
+                    &crate::style::TerminalSafe::sanitize(
+                        "[ipe watch] init hot-swap push failed — falling back to a \
+                         full rebuild",
+                    ),
+                    WatchRole::Info,
                 );
             }
             return false;
         }
     }
     if !quiet && !patches.is_empty() {
-        eprintln!(
-            "{}",
-            watch_line(
-                &crate::style::TerminalSafe::sanitize(
-                    "[ipe watch] init edit hot-swapped for new sessions (no rebuild)"
-                ),
-                WatchRole::Info
-            )
+        emit_watch_line(
+            &crate::style::TerminalSafe::sanitize(
+                "[ipe watch] init edit hot-swapped for new sessions (no rebuild)",
+            ),
+            WatchRole::Info,
         );
     }
     true
@@ -2625,29 +2696,23 @@ fn push_wiring_patches(
         .to_string();
         if !matches!(post_hot_wiring(port, token, &body), Ok(true)) {
             if !quiet {
-                eprintln!(
-                    "{}",
-                    watch_line(
-                        &crate::style::TerminalSafe::sanitize(
-                            "[ipe watch] wiring hot-swap push failed — falling back to a \
-                         full rebuild"
-                        ),
-                        WatchRole::Info
-                    )
+                emit_watch_line(
+                    &crate::style::TerminalSafe::sanitize(
+                        "[ipe watch] wiring hot-swap push failed — falling back to a \
+                         full rebuild",
+                    ),
+                    WatchRole::Info,
                 );
             }
             return false;
         }
     }
     if !quiet && !patches.is_empty() {
-        eprintln!(
-            "{}",
-            watch_line(
-                &crate::style::TerminalSafe::sanitize(
-                    "[ipe watch] update-arm Cmd wiring hot-swapped (no rebuild)"
-                ),
-                WatchRole::Info
-            )
+        emit_watch_line(
+            &crate::style::TerminalSafe::sanitize(
+                "[ipe watch] update-arm Cmd wiring hot-swapped (no rebuild)",
+            ),
+            WatchRole::Info,
         );
     }
     true
@@ -2845,17 +2910,14 @@ fn post_to_watch_status(port: u16, token: &str, body: &str) -> std::io::Result<(
 /// plain function (not `Result`) so call sites don't need to thread an
 /// unused error channel.
 fn warn_if_memory_store() {
-    if std::env::var("IPE_WEB_STORE").as_deref() == Ok("memory") {
-        eprintln!(
-            "{}",
-            watch_line(
-                &crate::style::TerminalSafe::sanitize(
-                    "[ipe watch] warning: IPE_WEB_STORE=memory is set — session state will NOT \
+    if ipe_env::var("IPE_WEB_STORE").as_deref() == Ok("memory") {
+        emit_watch_line(
+            &crate::style::TerminalSafe::sanitize(
+                "[ipe watch] warning: IPE_WEB_STORE=memory is set — session state will NOT \
                  survive a watch-triggered restart. Unset it (watch defaults to a file-backed \
-                 store) or set IPE_WEB_STORE=file explicitly to keep your session across rebuilds."
-                ),
-                WatchRole::Info
-            )
+                 store) or set IPE_WEB_STORE=file explicitly to keep your session across rebuilds.",
+            ),
+            WatchRole::Info,
         );
     }
 }
@@ -2890,55 +2952,43 @@ fn report_restart_outcome(outcome: &ipe_watch::RestartOutcome, quiet: bool) {
     match outcome {
         ipe_watch::RestartOutcome::Spawned => {
             if !quiet {
-                eprintln!(
-                    "{}",
-                    watch_line(
-                        &crate::style::TerminalSafe::sanitize("[ipe watch] app started"),
-                        WatchRole::Success
-                    )
+                emit_watch_line(
+                    &crate::style::TerminalSafe::sanitize("[ipe watch] app started"),
+                    WatchRole::Success,
                 );
             }
         }
         ipe_watch::RestartOutcome::UnchangedBinary => {}
         ipe_watch::RestartOutcome::Restarted => {
             if !quiet {
-                eprintln!(
-                    "{}",
-                    watch_line(
-                        &crate::style::TerminalSafe::sanitize("[ipe watch] app reloaded"),
-                        WatchRole::Success
-                    )
+                emit_watch_line(
+                    &crate::style::TerminalSafe::sanitize("[ipe watch] app reloaded"),
+                    WatchRole::Success,
                 );
             }
         }
-        ipe_watch::RestartOutcome::RespawnedLastGood { broken } => eprintln!(
-            "{}",
-            watch_line(
-                &crate::style::TerminalSafe::sanitize(&format!(
-                    "[ipe watch] new binary failed its readiness probe ({}); kept the previous \
+        ipe_watch::RestartOutcome::RespawnedLastGood { broken } => emit_watch_line(
+            &crate::style::TerminalSafe::sanitize(&format!(
+                "[ipe watch] new binary failed its readiness probe ({}); kept the previous \
                      last-good binary running instead",
-                    broken.display()
-                )),
-                WatchRole::Failure
-            )
+                broken.display()
+            )),
+            WatchRole::Failure,
         ),
         ipe_watch::RestartOutcome::NothingRunning {
             broken,
             last_good_error,
         } => {
-            eprintln!(
-                "{}",
-                watch_line(
-                    &crate::style::TerminalSafe::sanitize(&format!(
-                        "[ipe watch] new binary failed its readiness probe ({}); no previous \
+            emit_watch_line(
+                &crate::style::TerminalSafe::sanitize(&format!(
+                    "[ipe watch] new binary failed its readiness probe ({}); no previous \
                          last-good binary could be brought up{}",
-                        broken.display(),
-                        last_good_error
-                            .as_ref()
-                            .map_or_else(String::new, |e| format!(" ({e})"))
-                    )),
-                    WatchRole::Failure
-                )
+                    broken.display(),
+                    last_good_error
+                        .as_ref()
+                        .map_or_else(String::new, |e| format!(" ({e})"))
+                )),
+                WatchRole::Failure,
             );
         }
     }
@@ -3003,7 +3053,7 @@ enum BuildAccel {
 fn watch_target_dir(out_dir: &Path, override_dir: Option<&Path>) -> PathBuf {
     override_dir.map_or_else(
         || {
-            std::env::var_os("CARGO_TARGET_DIR")
+            ipe_env::var_os("CARGO_TARGET_DIR")
                 .map_or_else(|| out_dir.join("target"), PathBuf::from)
         },
         Path::to_path_buf,
@@ -3037,7 +3087,7 @@ fn target_is_warm(out_dir: &Path, override_dir: Option<&Path>) -> bool {
 /// optional: absent, a cold build simply falls back to the warm/incremental path
 /// — correct, only slower for the first compile.
 fn find_sccache() -> Option<PathBuf> {
-    let path = std::env::var_os("PATH")?;
+    let path = ipe_env::var_os("PATH")?;
     std::env::split_paths(&path)
         .flat_map(|dir| [dir.join("sccache"), dir.join("sccache.exe")])
         .find(|p| p.is_file())
@@ -3091,7 +3141,7 @@ fn apply_build_accel_env(cmd: &mut Command, accel: &BuildAccel) {
 /// Read a boolean opt-out/opt-in env gate: true when the variable is set to any
 /// value other than empty or `0`.
 fn env_flag_on(name: &str) -> bool {
-    std::env::var(name).is_ok_and(|v| !v.is_empty() && v != "0")
+    ipe_env::var(name).is_ok_and(|v| !v.is_empty() && v != "0")
 }
 
 /// waiter thread that reports completion (or "killed — superseded")
@@ -3118,7 +3168,7 @@ fn spawn_cargo_build(
     generation: u64,
     evt_tx: mpsc::Sender<OrchestratorEvent>,
     quiet: bool,
-) -> std::io::Result<Arc<std::sync::Mutex<Child>>> {
+) -> std::io::Result<Arc<std::sync::Mutex<CargoChild>>> {
     let mut cmd = Command::new(cargo_path);
     cmd.arg("build")
         .arg("--message-format=json")
@@ -3149,7 +3199,10 @@ fn spawn_cargo_build(
     // child before it can exit.
     let stdout = child.stdout.take();
     let stderr = child.stderr.take();
-    let shared = Arc::new(std::sync::Mutex::new(child));
+    let shared = Arc::new(std::sync::Mutex::new(CargoChild {
+        child,
+        superseded: false,
+    }));
     let shared_for_waiter = Arc::clone(&shared);
 
     let stdout_reader = thread::spawn(move || read_all(stdout));
@@ -3160,12 +3213,23 @@ fn spawn_cargo_build(
 
     thread::spawn(move || {
         let status = loop {
-            let polled = shared_for_waiter
-                .lock()
-                .ok()
-                .and_then(|mut c| c.try_wait().ok().flatten());
-            if let Some(status) = polled {
-                break Some(status);
+            match shared_for_waiter.lock() {
+                // A poisoned lock means the orchestrator thread panicked while
+                // holding it; the exit status can no longer be observed, so
+                // stop polling rather than spin forever.
+                Err(_) => break None,
+                Ok(mut guard) => {
+                    let superseded = guard.superseded;
+                    let polled = guard.child.try_wait();
+                    drop(guard);
+                    match polled {
+                        Ok(Some(status)) => break Some((status, superseded)),
+                        Ok(None) => {}
+                        // A persistent `try_wait` error can never resolve by
+                        // retrying, so stop rather than poll forever.
+                        Err(_) => break None,
+                    }
+                }
             }
             thread::sleep(Duration::from_millis(30));
         };
@@ -3173,7 +3237,7 @@ fn spawn_cargo_build(
         let err_buf = stderr_reader.join().unwrap_or_default();
         let outcome = match status {
             None => CargoOutcome::Red("cargo build: could not observe exit status".to_owned()),
-            Some(status) if status.success() => find_executable_path(&out_buf).map_or_else(
+            Some((status, _)) if status.success() => find_executable_path(&out_buf).map_or_else(
                 || {
                     CargoOutcome::Red(
                         "cargo build succeeded but produced no executable artifact".to_owned(),
@@ -3181,13 +3245,8 @@ fn spawn_cargo_build(
                 },
                 CargoOutcome::Green,
             ),
-            Some(status) => {
-                if is_killed_status(status) {
-                    CargoOutcome::Killed
-                } else {
-                    CargoOutcome::Red(err_buf)
-                }
-            }
+            Some((_, true)) => CargoOutcome::Killed,
+            Some((_, false)) => CargoOutcome::Red(err_buf),
         };
         let _ = evt_tx.send(OrchestratorEvent::CargoDone {
             generation,
@@ -3216,7 +3275,7 @@ fn read_all(pipe: Option<impl std::io::Read>) -> String {
 /// [`crate::read_progress_chunk`] so carriage-return progress-bar frames flow
 /// through without buffering until the next newline.
 fn relay_and_capture_stderr(pipe: Option<impl std::io::Read>) -> String {
-    use std::io::{BufReader, Write as _};
+    use std::io::BufReader;
     let mut captured = String::new();
     let Some(reader) = pipe else { return captured };
     let mut reader = BufReader::new(reader);
@@ -3226,31 +3285,19 @@ fn relay_and_capture_stderr(pipe: Option<impl std::io::Read>) -> String {
         match crate::read_progress_chunk(&mut reader, &mut chunk) {
             Ok(0) | Err(_) => break,
             Ok(_) => {
-                eprint!("{chunk}");
-                let _ = std::io::stderr().flush();
+                // Indented one shared column off the edge (see
+                // `screen::indent_relay_chunk`, the same routine `commands.rs`
+                // uses for `ipe build`'s identical relay) — `captured` keeps
+                // the raw, unindented chunk for the failure diagnostic.
+                crate::screen::emit_machine(
+                    crate::screen::Stream::Stderr,
+                    &crate::screen::indent_relay_chunk(&chunk),
+                );
                 captured.push_str(&chunk);
             }
         }
     }
     captured
-}
-
-/// Whether a non-success exit status looks like "killed by us" (a signal
-/// termination on unix, matching `Child::kill`'s SIGKILL) rather than a
-/// genuine compile error — used to route a superseded build to
-/// `CargoOutcome::Killed` (silently dropped) instead of
-/// `CargoOutcome::Red` (reported as a failure INV-3 must preserve
-/// last-good against).
-fn is_killed_status(status: std::process::ExitStatus) -> bool {
-    #[cfg(unix)]
-    {
-        use std::os::unix::process::ExitStatusExt as _;
-        status.signal().is_some()
-    }
-    #[cfg(not(unix))]
-    {
-        !status.success()
-    }
 }
 
 /// Parse `cargo build --message-format=json`'s stdout for the produced
@@ -3274,10 +3321,12 @@ fn find_executable_path(cargo_json_stdout: &str) -> Option<PathBuf> {
 mod tests {
     use super::{
         AppearanceRoute, BuildAccel, Command, Duration, OrchestratorEvent, RESOLVE_RETRY_DELAY,
-        RebuildTimings, appearance_route, apply_build_accel_env, child_env, choose_build_accel,
-        compile_failed_frame, dir_has_dep_rlib, emitted_binds_http, emitted_is_tui, emitted_is_web,
-        env_flag_on, first_error_line, mint_hot_token, mpsc, push_control_appearance,
-        schedule_resolve_retry, send_control_frame, spawn_command, strip_ansi, watch_status_body,
+        RebuildTimings, ResolvedProject, ScopeSpec, WatchRole, appearance_route,
+        apply_build_accel_env, child_env, choose_build_accel, compile_failed_frame,
+        dir_has_dep_rlib, emitted_binds_http, emitted_is_tui, emitted_is_web, env_flag_on,
+        first_error_line, mint_hot_token, mpsc, prove_green_crate, push_control_appearance,
+        resolve_project_sources, schedule_resolve_retry, send_control_frame, spawn_command,
+        strip_ansi, watch_line, watch_status_body,
     };
     use std::ffi::OsStr;
     use std::path::{Path, PathBuf};
@@ -3356,7 +3405,7 @@ mod tests {
     #[test]
     fn multi_module_tui_entry_is_detected_outside_main_rs() {
         let p = emitted_with_module_entry(
-            "pub fn ipe_main() -> _ { ipe_runtime::tea::TuiApp(ipe_runtime::tui::tui_app_ui(a,b,c,d,e)) }",
+            "pub fn ipe_main() -> _ { ipe_runtime::tea::TuiApp(ipe_runtime::tui::tui_app_ui(a,b,c,d)) }",
         );
         assert!(
             emitted_is_tui(&p),
@@ -3423,7 +3472,7 @@ mod tests {
     #[test]
     fn tui_app_emit_is_tui_not_web_or_http() {
         let p = emitted_with_main(
-            "fn main() { ipe_runtime::tea::TuiApp(ipe_runtime::tui::tui_app_ui(a,b,c,d,e)); }",
+            "fn main() { ipe_runtime::tea::TuiApp(ipe_runtime::tui::tui_app_ui(a,b,c,d)); }",
         );
         assert!(emitted_is_tui(&p), "tui_app_ui must classify as tui");
         assert!(!emitted_is_web(&p), "a tui app is not a web project");
@@ -3437,7 +3486,7 @@ mod tests {
     #[test]
     fn cli_app_emit_is_neither_tui_nor_web() {
         let p = emitted_with_main(
-            "fn main() { ipe_runtime::tea::CliApp(ipe_runtime::console_app(a,b,c,d,e)); }",
+            "fn main() { ipe_runtime::tea::CliApp(ipe_runtime::console_app(a,b,c,d)); }",
         );
         let (is_tui, is_web) = (emitted_is_tui(&p), emitted_is_web(&p));
         assert!(!is_tui, "a cli app is not a tui app");
@@ -3999,5 +4048,224 @@ mod tests {
             "token must be lowercase hex"
         );
         assert_ne!(a, b, "two mints must not collide");
+    }
+
+    /// A fresh scratch directory unique to this test run.
+    fn loose_scratch(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "ipe_loose_watch_{tag}_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |d| d.as_nanos())
+        ));
+        std::fs::create_dir_all(&dir).expect("create scratch dir");
+        dir
+    }
+
+    /// Watch resolves a loose file to its import closure, beside an unreadable directory.
+    ///
+    /// A rebuild re-resolves from disk, so an import added to the entry pulls
+    /// the newly named sibling in, while an unimported sibling stays out.
+    #[cfg(unix)]
+    #[test]
+    fn watch_loose_file_resolves_the_import_closure_and_follows_a_new_import() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = loose_scratch("closure");
+        let entry = dir.join("Main.ipe");
+        std::fs::write(&entry, "module Main exposing (main)\n\nmain = 1\n").expect("write entry");
+        std::fs::write(
+            dir.join("Helper.ipe"),
+            "module Helper exposing (h)\n\nh = 1\n",
+        )
+        .expect("write helper");
+        std::fs::write(
+            dir.join("Stray.ipe"),
+            "module Stray exposing (s)\n\ns = ???\n",
+        )
+        .expect("write stray");
+        let locked = dir.join("locked");
+        std::fs::create_dir_all(&locked).expect("create locked dir");
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000))
+            .expect("chmod 000");
+
+        let before = resolve_project_sources(&entry, None);
+        std::fs::write(
+            &entry,
+            "module Main exposing (main)\n\nimport Helper\n\nmain = Helper.h\n",
+        )
+        .expect("rewrite entry");
+        let after = resolve_project_sources(&entry, None);
+        let after_scope = after.as_ref().map(|resolved| resolved.scope.build());
+        let canon_dir = std::fs::canonicalize(&dir);
+        let _ = std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755));
+        let _ = std::fs::remove_dir_all(&dir);
+
+        let canon_dir = canon_dir.expect("scratch dir canonicalises");
+        let after_scope = after_scope
+            .expect("loose file re-resolves")
+            .expect("the watch scope builds beside an unreadable directory");
+        let watched: Vec<&Path> = after_scope
+            .roots_to_watch()
+            .iter()
+            .map(ipe_watch::WatchedPath::as_path)
+            .collect();
+        assert_eq!(watched, vec![canon_dir.as_path()], "no directory is walked");
+        assert!(matches!(
+            after_scope.recursive_mode(),
+            notify::RecursiveMode::NonRecursive
+        ));
+        assert!(after_scope.is_relevant(&canon_dir.join("Helper.ipe")));
+        assert!(!after_scope.is_relevant(&canon_dir.join("Stray.ipe")));
+
+        let modules = |resolved: &ResolvedProject| -> Vec<Vec<String>> {
+            resolved.sources.keys().cloned().collect()
+        };
+        let before = before.expect("loose file resolves");
+        let after = after.expect("loose file re-resolves");
+        assert_eq!(modules(&before), vec![vec!["Main".to_owned()]]);
+        assert_eq!(
+            modules(&after),
+            vec![vec!["Helper".to_owned()], vec!["Main".to_owned()]],
+            "the re-resolve picks up the newly imported sibling only"
+        );
+        assert_eq!(after.entry_path, vec!["Main".to_owned()]);
+        assert_eq!(
+            after.scope,
+            ScopeSpec::LooseFile {
+                entry: entry.clone(),
+                module_files: vec![PathBuf::from("Helper.ipe")],
+            }
+        );
+        assert_eq!(after.blame_path, entry);
+    }
+
+    /// Write an executable fake `cargo` running `body` into a fresh directory
+    /// named after `name`, returning the script path.
+    #[cfg(unix)]
+    fn fake_cargo(name: &str, body: &str) -> PathBuf {
+        use std::os::unix::fs::PermissionsExt as _;
+        let dir = std::env::temp_dir().join(format!(
+            "ipe_watch_fake_cargo_{name}_{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).expect("create fake cargo dir");
+        let path = dir.join("cargo");
+        std::fs::write(&path, format!("#!/bin/sh\n{body}\n")).expect("write fake cargo");
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755))
+            .expect("make fake cargo executable");
+        path
+    }
+
+    /// Spawn `cargo` through the watch build path and return the outcome its
+    /// waiter reports, after `before_exit` has run against the live child.
+    #[cfg(unix)]
+    fn cargo_outcome(
+        cargo: &Path,
+        before_exit: impl FnOnce(&std::sync::Mutex<super::CargoChild>),
+    ) -> Option<super::CargoOutcome> {
+        let out_dir = cargo.parent().expect("fake cargo has a parent dir");
+        let (tx, rx) = mpsc::channel();
+        let child =
+            super::spawn_cargo_build(cargo, out_dir, Some(&out_dir.join("target")), 1, tx, true)
+                .expect("spawn fake cargo");
+        before_exit(child.as_ref());
+        let event = rx.recv_timeout(Duration::from_secs(30));
+        let _ = std::fs::remove_dir_all(out_dir);
+        match event {
+            Ok(OrchestratorEvent::CargoDone { outcome, .. }) => Some(outcome),
+            _ => None,
+        }
+    }
+
+    /// A build that dies by a signal nobody in the orchestrator sent (a crash,
+    /// an out-of-memory kill) is a real failure, never a silent supersede.
+    #[cfg(unix)]
+    #[test]
+    fn unrequested_signal_death_is_a_failure() {
+        let cargo = fake_cargo("signal", "kill -9 $$");
+        let outcome = cargo_outcome(&cargo, |_| {});
+        assert!(
+            matches!(outcome, Some(super::CargoOutcome::Red(_))),
+            "a signal death the orchestrator did not request must report Red"
+        );
+    }
+
+    /// A build the orchestrator supersedes reports `Killed`, so the stale
+    /// cycle is dropped rather than shown as a failure.
+    #[cfg(unix)]
+    #[test]
+    fn superseded_build_reports_killed() {
+        let cargo = fake_cargo("supersede", "exec sleep 30");
+        let outcome = cargo_outcome(&cargo, |child| {
+            child.lock().expect("cargo child lock").supersede();
+        });
+        assert!(
+            matches!(outcome, Some(super::CargoOutcome::Killed)),
+            "a superseded build must report Killed"
+        );
+    }
+
+    /// `watch_line` must render every role at a fixed 4-space indent (two
+    /// `GUTTER` widths) regardless of colour state. Before this fix, `Info`
+    /// and `Success` placed the colour escape BEFORE the literal gutter text,
+    /// which defeated `screen::guttered_once`'s `starts_with(GUTTER)` check
+    /// and caused it to add a second gutter on top — 4 spaces with colour on,
+    /// only 2 with colour off. Stripping ANSI here isolates the indent from
+    /// that downstream (and separately-tested) double-gutter guard.
+    #[test]
+    fn watch_line_indent_is_four_spaces_regardless_of_role_or_colour() {
+        let text = crate::style::TerminalSafe::sanitize("app started");
+        for role in [WatchRole::Info, WatchRole::Success, WatchRole::Failure] {
+            let rendered = strip_ansi(&watch_line(&text, role));
+            assert!(
+                rendered.starts_with("    "),
+                "watch_line must start with a 4-space gutter for every role; got {rendered:?}"
+            );
+            assert!(
+                !rendered.starts_with("     "),
+                "watch_line must not double-gutter past 4 spaces; got {rendered:?}"
+            );
+        }
+    }
+
+    /// Whether `refused` is a replaced-crate refusal.
+    fn refused_as_replaced(refused: &Result<crate::output_dir::OwnedDir, crate::CliError>) -> bool {
+        refused.as_ref().is_err_and(|r| {
+            matches!(
+                r,
+                crate::CliError::OutputRefused(crate::output_dir::OutputRefusal::Replaced(_))
+            )
+        })
+    }
+
+    /// A green build with no claimed crate on record fails, its binary unstarted.
+    #[test]
+    fn a_green_build_without_a_claimed_crate_is_refused() {
+        let refused = prove_green_crate(None, Path::new("/tmp/ipe-out"));
+        assert!(refused_as_replaced(&refused), "got {refused:?}");
+    }
+
+    /// A crate swapped while cargo built it fails the build, its binary unstarted.
+    #[test]
+    fn a_green_build_whose_crate_was_replaced_is_refused() {
+        let base = std::env::temp_dir().join(format!("ipe-watch-green-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).expect("scratch base");
+        let crate_path = base.join("crate");
+        let claimed = crate::output_dir::OwnedDir::claim(&crate_path).expect("claim crate");
+        std::fs::rename(&crate_path, base.join("aside")).expect("move crate aside");
+        std::fs::create_dir(&crate_path).expect("replacement at the same path");
+        let refused = prove_green_crate(Some(claimed), &crate_path);
+        assert!(refused_as_replaced(&refused), "got {refused:?}");
+
+        let fresh = base.join("fresh");
+        let held = crate::output_dir::OwnedDir::claim(&fresh).expect("claim fresh crate");
+        let proven = prove_green_crate(Some(held), &fresh);
+        assert!(
+            proven.as_ref().is_ok_and(|dir| dir.path() == fresh),
+            "an untouched crate is handed back to run, got {proven:?}"
+        );
+        let _ = std::fs::remove_dir_all(&base);
     }
 }

@@ -38,15 +38,15 @@ Every `IPE_*` variable the runtime, CLI, and compiler read. The table is grouped
 | `IPE_ALLOC` | unset (system allocator) | Select the memory allocator: `mimalloc`, `jemalloc`, or `system`. Mirrors `--allocator`; env wins over `package.ipe [rust] allocator`. | `Tunable` |
 | `IPE_BIN` | unset | Path to the `ipe` binary used by the build driver when invoking itself recursively. Set automatically by the wrapper; operator override is rarely needed. | `Tunable` |
 | `IPE_BUILD_AT` | unknown | Build timestamp baked in by CI (`option_env!`). Surfaced at `GET /_ipe/buildinfo`. Not read at runtime via `env::var`. | `Tunable` |
-| `IPE_BUILD_CACHE` | on | Set to `0`, `off`, or `false` to disable the incremental build cache. Default is on; the cache directory is `<out>/.ipe-cache` unless `IPE_BUILD_CACHE_DIR` is set. | `Tunable` |
-| `IPE_BUILD_CACHE_DIR` | unset (<out>/.ipe-cache) | Explicit path for the incremental build cache directory. Takes effect only when the cache is enabled (`IPE_BUILD_CACHE` not `off`). | `Tunable` |
+| `IPE_BUILD_CACHE` | on | Set to `0`, `off`, or `false` to disable the incremental build cache. Default is on; the cache directory is `<out>/.ipe-cache/<per-user salt>` unless `IPE_BUILD_CACHE_DIR` is set. | `Tunable` |
+| `IPE_BUILD_CACHE_DIR` | unset (<out>/.ipe-cache/<per-user salt>) | Explicit path for the incremental build cache directory. Takes effect only when the cache is enabled (`IPE_BUILD_CACHE` not `off`). | `Tunable` |
 | `IPE_BUILD_COMMIT` | dev | Git commit SHA baked in by CI (`option_env!`). Surfaced at `GET /_ipe/buildinfo`. Not read at runtime via `env::var`. | `Tunable` |
 | `IPE_CFREE` | unset (false) | Set to `1` or `true` to build without linking any C code. Mirrors `--cfree`; incompatible with allocators that require C (e.g. mimalloc). | `Tunable` |
 | `IPE_EMBED_APP` | unset | Path to the compiled app binary embedded into a wrapper binary. Set by the build driver; not intended for operator use. | `Tunable` |
 | `IPE_EMBED_PROFILE` | unset | Build profile string embedded into a wrapper binary alongside `IPE_EMBED_APP`. Set by the build driver. | `Tunable` |
 | `IPE_EMIT_PACKAGE_NAME` | unset (`ipe-app`) | Overrides the emitted crate's package name for a single-file build (validated through the package-name sanitizer). Set by the coverage probe to give each emitted build a unique crate identity; not intended for operator use. | `Tunable` |
-| `IPE_INDEX_DIR` | unset (~/.ipe/index) | Override the root directory of the package-index checkout used by `ipe add` / `ipe install`. Points to a local mirror of the ipe-registry index. Useful for air-gapped environments. | `Tunable` |
-| `IPE_PUBLISH_SIGNING_KEY` | unset | Path to the SSH private key used to sign a package before publishing. When set, `ipe publish` signs the package archive and attaches the signature; when unset, publish is refused for registries that require signed submissions. Provide via your secret manager; never commit the key file path alongside the key itself. | `Secret` |
+| `IPE_INDEX_DIR` | unset ($XDG_CACHE_HOME/ipe/index, then $HOME/.cache/ipe/index) | Override the root directory of the package-index checkout used by `ipe add` / `ipe install`. Points to a local mirror of the ipe-registry index. Useful for air-gapped environments. Must be an absolute path. | `Tunable` |
+| `IPE_PUBLISH_SIGNING_KEY` | unset | Path to the SSH private-key file `ipe package publish` signs the index commit with (its public half must be registered as a signing key on your GitHub account). Overrides the key `ipe login --signing-key` stored; when set but not a readable file, publish refuses rather than fall back. Unset with no stored key, publish refuses. | `Secret` |
 | `IPE_REGISTRY_URL` | https://arthurmaciel.github.io/ipe-registry | Base URL of the registry's static Pages read API (per-package JSON mirror + advisory index). `ipe add` and `ipe package audit` read it as a fast-path, falling back to the `IPE_INDEX_DIR` git checkout on any network failure or malformed response. Set to empty to disable the HTTP fast-path (air-gapped): resolution then reads the checkout directly. The pinned rev + sha256 stay the trust root either way. | `Tunable` |
 | `IPE_STATIC` | unset (dynamic build) | Set to `1` or `true` to request a fully-static (musl) binary. Mirrors `--static`; env wins over `package.ipe [rust] static`. | `Tunable` |
 | `IPE_TARGET` | unset (native) | Cross-compilation target triple, e.g. `wasm32-unknown-unknown` or `aarch64-unknown-linux-musl`. Set to `wasm` as a shorthand for `wasm32-unknown-unknown`. | `Tunable` |
@@ -63,8 +63,8 @@ Every `IPE_*` variable the runtime, CLI, and compiler read. The table is grouped
 
 | Variable | Default | Effect | Class |
 |----------|---------|--------|-------|
-| `IPE_ADMIN_TOKEN` | unset | Bearer token granting access to the embedded developer console in production. Provide via your secret manager; never commit. Falls back to `IPE_CONSOLE_TOKEN`, then `IPE_METRICS_TOKEN`. | `Secret` |
-| `IPE_CONSOLE_AUTH` | unset (token in production, off in dev) | Console authentication mode: `token` (bearer-token gate), `off` (disable auth — dev only). Unset uses the production/dev heuristic. | `SecurityTunable` |
+| `IPE_ADMIN_TOKEN` | unset | Admin token (`Bearer`, or the `Basic` password) granting access to the embedded developer console and `/_ipe/metrics` in production or under `IPE_CONSOLE_AUTH=token`. Provide via your secret manager; never commit. Falls back to the in-code `Console.adminToken`, then `IPE_CONSOLE_TOKEN`. A non-UTF-8 value refuses every admin request and keeps the console unmounted in production. | `Secret` |
+| `IPE_CONSOLE_AUTH` | unset (token in production, open in dev) | Console authentication mode: `token` (admin-token gate, enforced in every posture, dev included), `off` (console disabled), `app` (app callback; mounted but answers 501 on the Rust runtime). The posture picks the default only when the variable is unset or blank; any other value (including a non-UTF-8 one) disables the console. The effective posture, mode, and source are logged once at startup (`[ipe.console] auth posture=… mode=… source=env\|env-invalid\|posture-default`); no token is ever logged. | `SecurityTunable` |
 | `IPE_CONSOLE_BATCH_INTERVAL_MS` | 2000 | Flush cadence (ms) for telemetry batches shipped to the Hub. Reduce for lower latency at the cost of more HTTP round-trips. | `Tunable` |
 | `IPE_CONSOLE_BIN` | unset (~/.cache/ipe/rust-console/<version>/ipe-console) | Explicit path to the `ipe-console` binary. Overrides the default cache location resolved from `IPE_VERSION`. | `Tunable` |
 | `IPE_CONSOLE_DB_PATH` | unset (per-process temp file) | Path to the SQLite database the console uses to store telemetry (logs, spans). Set automatically when embedding the console; operator override selects a persistent path. | `Tunable` |
@@ -76,7 +76,7 @@ Every `IPE_*` variable the runtime, CLI, and compiler read. The table is grouped
 | `IPE_CONSOLE_URL` | unset (auto-detected sub-path) | Explicit URL at which the developer console is reachable. Overrides the auto-detected `/_ipe/console` path for proxied deployments. | `Tunable` |
 | `IPE_DEV_BANNER` | unset (on in development) | Set to `off` or `0` to suppress the development-mode banner injected into HTML responses. The banner is never shown in production. | `Tunable` |
 | `IPE_INGEST_TOKEN` | unset | Bearer token the parent ingest gate checks on `X-Ipê-Ingest-Token`. Required when a sub-app pushes telemetry to a parent app's `/_ipe/ingest` endpoint. Provide via your secret manager. | `Secret` |
-| `IPE_METRICS_TOKEN` | unset | Deprecated alias for `IPE_ADMIN_TOKEN`. Prefer `IPE_ADMIN_TOKEN`. Provide via your secret manager; never commit. | `Secret` |
+| `IPE_METRICS_TOKEN` | unset | Metrics-scrape token (`Bearer`, or the `Basic` password) authorizing `/_ipe/metrics` only, never the console; the admin token is accepted there too. Falls back to the in-code `Console.metricsToken`. A non-UTF-8 value refuses every metrics-token request. Provide via your secret manager; never commit. | `Secret` |
 
 ## Compiler
 
@@ -162,7 +162,7 @@ Every `IPE_*` variable the runtime, CLI, and compiler read. The table is grouped
 |----------|---------|--------|-------|
 | `IPE_HTTP_BIND` | unset (loopback in dev, all-interfaces in release) | Override the host address the HTTP server binds. Takes precedence over the `Host.bind` setting and the build-profile default. The conservative loopback default keeps a dev server off the LAN. | `SecurityTunable` |
 | `IPE_HTTP_DENY_PRIVATE` | unset (auto: on in production, off in dev) | Set to `1`, `on`, or `true` to block all outbound HTTP / SMTP / database connections to RFC-1918 private, loopback, and link-local addresses, closing the SSRF attack surface. In production the guard is on by default; set to `0` to disable explicitly in dev. | `SecurityTunable` |
-| `IPE_HTTP_DNS_TIMEOUT_MS` | 5000 (5 s) | Deadline (ms) for the SSRF pre-send DNS resolve, run off the async worker via spawn_blocking. Bounds worker-pool starvation from a slow or stalling resolver on an outbound request. | `SecurityTunable` |
+| `IPE_HTTP_DNS_TIMEOUT_MS` | 5000 (5 s) | Deadline (ms) for each SSRF-gate DNS resolve (HTTP, WebSocket, database, SMTP), through the non-blocking resolver. A host still unresolved at the deadline is refused, so a slow or stalling resolver cannot hold an outbound dial. | `SecurityTunable` |
 | `IPE_HTTP_MAX_BODY_BYTES` | 33554432 (32 MiB) | Maximum request-body size (bytes) for outbound `Http.*` calls. Prevents OOM from unexpectedly large responses. | `Tunable` |
 | `IPE_HTTP_MAX_INFLIGHT` | 1024 | Global cap on simultaneously in-flight HTTP requests at the `Server.listen` front door. Bounds task/worker fan-out; requests beyond the cap are backpressured and, with the request timeout outermost, shed as a timeout rather than queued unboundedly. | `SecurityTunable` |
 | `IPE_HTTP_REQUEST_TIMEOUT` | 30 (seconds) | Per-request deadline (seconds) at the `Server.listen` front door. A request — headers or body — that does not complete within the window is dropped with 408, closing the slowloris hold-open vector. | `SecurityTunable` |
@@ -186,7 +186,7 @@ Every `IPE_*` variable the runtime, CLI, and compiler read. The table is grouped
 | Variable | Default | Effect | Class |
 |----------|---------|--------|-------|
 | `IPE_ALLOW_UNSANDBOXED` | unset (false) | When `bwrap` confinement is unavailable, set to `1` to allow `ipe run` to proceed unconfined instead of refusing. Widens the trust boundary. Never set in CI or production. | `SecurityTunable` |
-| `IPE_HOME` | unset ($XDG_DATA_HOME/ipe, then $HOME/.ipe) | Root directory for materialised runtime source, config, and cached binaries. Overrides the XDG / home-directory fallback. | `Tunable` |
+| `IPE_HOME` | unset ($XDG_DATA_HOME/ipe, then $HOME/.ipe) | Root directory for materialised runtime source, config, and cached binaries. Overrides the XDG / home-directory fallback. Must be an absolute path. | `Tunable` |
 | `IPE_RUNTIME_DIR` | unset (embedded / in-repo) | Explicit path to the runtime crate source directory. Overrides the embedded fallback. Used in tests and in-repo development. | `Tunable` |
 | `IPE_RUNTIME_VENDORED` | unset (false) | Set to `1` to declare that the runtime is vendored (already present on disk) and skip materialization. Used during packaging. | `Tunable` |
 

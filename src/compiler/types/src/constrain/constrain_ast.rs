@@ -1,7 +1,7 @@
 use super::{
     BTreeMap, Builder, DResult, Diagnostic, Feature, FlatType, LowerError, PendingInstantiation,
     RouteWitnessCheck, RoutedWebCheck, STAGE, SchemeApp, SchemeKey, Span, StdlibKernel, Symbol, Ty,
-    TyBounds, TypeError, VarId, canon, canon_type_to_doc, from_canon,
+    TyBounds, TypeError, VarId, WildcardEntry, canon, canon_type_to_doc, from_canon,
 };
 
 /// The role a pinned kernel-obligation slot plays in its kernel's scheme.
@@ -19,8 +19,10 @@ pub enum ObligationKind {
     SetMapResult,
     /// `Db.*` params-list element carrying the SQL-bind-parameter bound.
     SqlParam,
-    /// `Log.*With` / `Debug.log` stringified value (Show).
+    /// `Debug.log` stringified value (Show).
     Show,
+    /// `Log.*With` attribute-list element (the closed interpolable scalar set).
+    Interpolable,
     /// `Web.tea` / `Web.embed` Model var (routed-Web page-field check).
     WebModel,
     /// `Web.tea` / `Web.embed` notFound var (routed-Web page-field check).
@@ -64,10 +66,10 @@ pub const OBLIGATION_SLOTS: &[(StdlibKernel, u32, ObligationKind)] = {
         (K::DbQueryDecode, 1, O::SqlParam),
         (K::DbConnQueryDecode, 1, O::SqlParam),
         // `Log.*With` list element / `Debug.log` value — Show, raw var 0.
-        (K::LogInfoWith, 0, O::Show),
-        (K::LogDebugWith, 0, O::Show),
-        (K::LogWarnWith, 0, O::Show),
-        (K::LogErrorWith, 0, O::Show),
+        (K::LogInfoWith, 0, O::Interpolable),
+        (K::LogDebugWith, 0, O::Interpolable),
+        (K::LogWarnWith, 0, O::Interpolable),
+        (K::LogErrorWith, 0, O::Interpolable),
         (K::DebugLog, 0, O::Show),
         // `Web.tea` / `Web.embed` — Model var 0, notFound var 2.
         (K::WebApp, 0, O::WebModel),
@@ -111,7 +113,7 @@ impl Builder<'_> {
                 // (body pins `a` to `Int`) and `f : a -> b; f x = x` (body
                 // conflates `a` and `b`) are both mismatches rather than silently
                 // accepted. Per-call-site uses instead instantiate the binding's
-                // type as fresh *flex* variables (see [`Self::instantiate`]).
+                // type as fresh *flex* variables (see [`Self::instantiate_tracked`]).
                 // ── Handler alias expansion (T0004 fix) ───────────────
                 // `Handler` is the stdlib alias `Request -> Task Error Response`
                 // (Ipe.Http.Server).  A binding annotated as `Handler` with one
@@ -166,6 +168,8 @@ impl Builder<'_> {
                     }
                 };
                 let mut rigid_vars = BTreeMap::new();
+                let mut wildcards = Vec::new();
+                let mut param_counts = Vec::with_capacity(patterns.len());
                 let mut local = BTreeMap::new();
                 let mut cursor: &canon::Type = handler_expansion.as_ref().unwrap_or(ty);
                 for pat in patterns {
@@ -179,7 +183,14 @@ impl Builder<'_> {
                         _ => return Err(self.too_many_parameters(name, ty)),
                     };
                     let arg = self.normalize_annotation_ty(from_canon(arg_ty), name.span)?;
-                    let arg_var = self.instantiate_rigid(&arg, &mut rigid_vars)?;
+                    let before = wildcards.len();
+                    let arg_var = self.instantiate_logging_wildcards(
+                        &arg,
+                        &mut rigid_vars,
+                        true,
+                        &mut wildcards,
+                    )?;
+                    param_counts.push(wildcards.len().saturating_sub(before));
                     self.constrain_pattern(&mut local, pat, arg_var)?;
                     // Record the param pattern's region so the lowerer can read the
                     // solved param type (record-param field-set completion, IPE-T0015
@@ -190,7 +201,12 @@ impl Builder<'_> {
                     cursor = rest;
                 }
                 let ret_ty = self.normalize_annotation_ty(from_canon(cursor), name.span)?;
-                let ret_var = self.instantiate_rigid(&ret_ty, &mut rigid_vars)?;
+                let ret_var = self.instantiate_logging_wildcards(
+                    &ret_ty,
+                    &mut rigid_vars,
+                    true,
+                    &mut wildcards,
+                )?;
                 let body_var = self.constrain_expr(&local, body)?;
                 // A typed binding's body expects its annotation return type —
                 // the strongest completion signal: `f : Color; f = ⟨|⟩` offers
@@ -225,6 +241,13 @@ impl Builder<'_> {
                 }
                 self.typed_rigids
                     .push(((self.current_home.clone(), name.value), var_rigids));
+                if !wildcards.is_empty() {
+                    self.typed_wildcards.push(WildcardEntry {
+                        key: (self.current_home.clone(), name.value),
+                        wildcards,
+                        param_counts,
+                    });
+                }
                 Ok(())
             }
             canon::Def::Untyped {
@@ -320,11 +343,12 @@ impl Builder<'_> {
     ) -> DResult<VarId> {
         let key = (module.to_vec(), name);
         if let Some(ty) = self.top_level.get(&key).cloned() {
-            let (var, vars) = self.instantiate_tracked(&ty)?;
+            let (var, vars, wildcards) = self.instantiate_tracked(&ty)?;
             self.scheme_apps.push(SchemeApp {
                 home: module.to_vec(),
                 name,
                 vars,
+                wildcards,
                 span,
             });
             // A reference to a wildcard-`any`-return binding: record this use's
@@ -406,45 +430,34 @@ impl Builder<'_> {
             .map(|(_, slot, _)| *slot)
     }
 
-    /// The raw scheme-var id of the CALLBACK-RESULT slot of a `Maybe`/`Result`
-    /// higher-order kernel — the variable that must not itself instantiate to
-    /// a function ([`TyBounds::hof_kernel_result`]).
+    /// Tie each callback final-result variable of kernel `k` to a function-refusing variable.
     ///
-    /// Slot ids follow each kernel's scheme (its [`ipe_kernels::TyShape`]) and are
-    /// asserted against those schemes by
-    /// `hof_result_slots_match_scheme_shapes` (this module's tests): `map`'s
-    /// `(a -> b)` result `b` is `var(1)`; `mapError`'s `(e -> f)` result `f`
-    /// is `var(1)`; `mapN`'s `(a -> … -> v)` final result `v` is `var(N)`;
-    /// `andMap`'s payload `Con (a -> b)` result `b` is `var(1)`.
-    ///
-    /// Deliberately EXCLUDED, with reasons:
-    /// * `MaybeAndThen` / `ResultAndThen` / `ResultTraverse` — their callback
-    ///   results are `Con`-headed in the scheme itself (`a -> Maybe b`, `a ->
-    ///   Result e b`), so a curried callback is already a plain type mismatch
-    ///   (`Fun` vs `Con`); there is no bare var for an arrow to escape into.
-    /// * `MaybeWithDefault` / `ResultWithDefault` / `MaybeCombine` /
-    ///   `ResultCombine` — no callback is applied by the kernel; a
-    ///   function-valued payload flows through by value in its (consistently
-    ///   flattened) representation, which is sound.
-    /// * `Task` / `Cmd` / `Sub` / `Decoder` kernels — out of scope:
-    ///   their heads are exempted from the ctor-payload region gate
-    ///   (`is_opaque_boxed_wrapper`), so any curried-callback
-    ///   hazard there is tracked separately (the
-    ///   `Decoder` family in particular must NOT be gated — its runtime has
-    ///   genuine `curry1..curry10` currying support the applicative decoder
-    ///   pipeline depends on).
-    pub const fn hof_result_slot_for(k: StdlibKernel) -> Option<u32> {
-        use StdlibKernel as K;
-        match k {
-            K::MaybeMap | K::ResultMap | K::ResultMapError | K::MaybeAndMap | K::ResultAndMap => {
-                Some(1)
-            }
-            K::MaybeMap2 | K::ResultMap2 => Some(2),
-            K::MaybeMap3 | K::ResultMap3 => Some(3),
-            K::MaybeMap4 | K::ResultMap4 => Some(4),
-            K::MaybeMap5 | K::ResultMap5 => Some(5),
-            _ => None,
+    /// A higher-order kernel applies its callback at an exact arity, while the
+    /// IR flattens a curried function into one multi-parameter `Fun`, so a
+    /// callback whose final result is itself an arrow has no sound lowering.
+    /// [`StdlibKernel::hof_result_vars`] names those variables from the
+    /// kernel's scheme shape; each is tied to a fresh super-typed variable
+    /// carrying [`TyBounds::hof_kernel_result`]. The obligation rides the
+    /// union-find variable minted for this kernel reference, so it holds
+    /// through every aliasing of the reference: piped, `let`-bound,
+    /// re-exported, passed as an argument, or stored in a record. A classified
+    /// variable absent from the instantiated scheme is a registry drift and
+    /// fails closed.
+    fn tie_hof_results(
+        &mut self,
+        k: StdlibKernel,
+        vars: &BTreeMap<u32, VarId>,
+        span: Span,
+    ) -> DResult<()> {
+        for raw in k.hof_result_vars().vars() {
+            let result_var = *vars.get(&u32::from(raw)).ok_or(Diagnostic::Lower {
+                span,
+                msg: LowerError::Unsupported(Feature::Kernels),
+            })?;
+            let s = self.super_var(TyBounds::hof_kernel_result(), span)?;
+            self.eq(span, result_var, s);
         }
+        Ok(())
     }
 
     /// The type of a kernel reference (`Math.min`, `Set.insert`, …).
@@ -600,18 +613,24 @@ impl Builder<'_> {
                 let list_s2 = self.list_var(s)?;
                 return self.structure(FlatType::Fun(list_s, list_s2));
             }
-            // `Basics.toString : a -> String`. The argument carries the
-            // STRINGIFY obligation (a bounded super-var → Rust `IpeStringify`):
-            // a scalar / record / ADT satisfies it, a bare function (or a value
-            // nesting one) fails CLOSED at type-check rather than emitting an
-            // unbounded `basics_to_string::<T>` that `cargo` rejects. Direct-build
-            // (not stdlib_scheme + tie): only the argument position is bounded.
-            // This is the shared lever for the whole Stringify-bounded family
-            // (Log.*With / Debug.toString) — wire those the same way.
-            if matches!(
-                k,
-                StdlibKernel::BasicsToString | StdlibKernel::ErrorToString
-            ) {
+            // `{{expr}}` interpolation (`Interpolate : a -> String`). The
+            // argument carries the INTERPOLABLE obligation (a bounded super-var
+            // → the sealed Rust `IpeInterpolate`): only the closed scalar set
+            // `String` / `Int` / `Float` / `Bool` / `Char` satisfies it; a
+            // record, ADT, container, opaque runtime type or function fails
+            // CLOSED at type-check (IPE-T0014) rather than reaching a Debug
+            // rendering or an unbounded `interpolate_to_string::<T>` that
+            // `cargo` rejects. Direct-build (not stdlib_scheme + tie): only the
+            // argument position is bounded.
+            if matches!(k, StdlibKernel::Interpolate) {
+                let s = self.super_var(TyBounds::interpolable(), span)?;
+                let string_ty = self.string_var()?;
+                return self.structure(FlatType::Fun(s, string_ty));
+            }
+            // `Error.toString`. The argument carries the STRINGIFY obligation
+            // (a bounded super-var → Rust `IpeStringify`): a bare function (or a
+            // value nesting one) fails CLOSED at type-check.
+            if matches!(k, StdlibKernel::ErrorToString) {
                 let s = self.super_var(TyBounds::show(), span)?;
                 let string_ty = self.string_var()?;
                 return self.structure(FlatType::Fun(s, string_ty));
@@ -626,7 +645,8 @@ impl Builder<'_> {
                     span,
                     msg: LowerError::Unsupported(Feature::Kernels),
                 })?;
-                let (var, vars) = self.instantiate_tracked(&ty)?;
+                let (var, vars, _) = self.instantiate_tracked(&ty)?;
+                self.tie_hof_results(k, &vars, span)?;
                 // The key qualifier (`Set`/`Dict`/`Cache` in `key_obligation_for`)
                 // selects the WHOLE module. The key/element is raw scheme-var 0 by
                 // construction across every kernel in it — the convention the
@@ -706,7 +726,8 @@ impl Builder<'_> {
                     span,
                     msg: LowerError::Unsupported(Feature::Kernels),
                 })?;
-                let (var, vars) = self.instantiate_tracked(&ty)?;
+                let (var, vars, _) = self.instantiate_tracked(&ty)?;
+                self.tie_hof_results(k, &vars, span)?;
                 let params_var = *vars.get(&raw_idx).ok_or(Diagnostic::Lower {
                     span,
                     msg: LowerError::Unsupported(Feature::Kernels),
@@ -715,43 +736,13 @@ impl Builder<'_> {
                 self.eq(span, params_var, s);
                 return Ok(var);
             }
-            // Higher-order-kernel callback-result obligation
-            // (primary/Tier-2 mechanism — see
-            // `docs/adr/0001-language-semantics-and-types.md`).
-            // Every `Maybe`/`Result` higher-order kernel FULLY APPLIES its
-            // callback at runtime (`FnOnce(..) -> R` with an exact arity),
-            // while the IR flattens a curried Ipê function into one
-            // multi-parameter `Fun` — so a callback with residual arity (its
-            // final result var instantiates to another arrow) has no sound
-            // lowering and would reach `cargo build` as E0277/E0308. Tie the
-            // callback's final-result raw scheme-var (see
-            // [`Self::hof_result_slot_for`]) to a fresh super-typed variable
-            // carrying the `hof_kernel_result` obligation — same
-            // `stdlib_scheme` + tie shape as the Dict/Set key obligation
-            // above, so this is a genuine TYPE-LEVEL check that survives
-            // arbitrary Ipê-level aliasing (direct call, piped, `let`-bound,
-            // bare-value re-export, higher-order argument, record-field
-            // extraction, import alias) by construction — the obligation is
-            // attached to the union-find variable `constrain_var_kernel`
-            // mints for THIS kernel reference, not to any particular AST
-            // shape a later use might take.
-            if let Some(slot) = Self::hof_result_slot_for(k) {
-                let ty = self.resolve_scheme(SchemeKey(k)).ok_or(Diagnostic::Lower {
-                    span,
-                    msg: LowerError::Unsupported(Feature::Kernels),
-                })?;
-                let (var, vars) = self.instantiate_tracked(&ty)?;
-                if let Some(&callback_result_var) = vars.get(&slot) {
-                    let s = self.super_var(TyBounds::hof_kernel_result(), span)?;
-                    self.eq(span, callback_result_var, s);
-                }
-                return Ok(var);
-            }
             // `Log.*With : String -> List a -> Task Error ()` — the attr-list
-            // ELEMENT `a` carries the STRINGIFY obligation. Same
-            // `stdlib_scheme` + tie shape as Dict/Set: instantiate the base
-            // scheme and tie its list-element `var(0)` to a Show super-var, so a
-            // non-showable element (a function) fails closed at type-check.
+            // ELEMENT `a` carries the INTERPOLABLE obligation (the same closed
+            // scalar set as `{{…}}`). Same `stdlib_scheme` + tie shape as
+            // Dict/Set: instantiate the base scheme and tie its list-element
+            // `var(0)` to an interpolable super-var, so a record, ADT,
+            // container, opaque runtime type (a `Secret`, a `Request`) or
+            // function element fails closed at type-check.
             if matches!(
                 k,
                 StdlibKernel::LogInfoWith
@@ -763,25 +754,26 @@ impl Builder<'_> {
                     span,
                     msg: LowerError::Unsupported(Feature::Kernels),
                 })?;
-                let (var, vars) = self.instantiate_tracked(&ty)?;
-                let slot =
-                    Self::obligation_slot(k, ObligationKind::Show).ok_or(Diagnostic::Lower {
+                let (var, vars, _) = self.instantiate_tracked(&ty)?;
+                self.tie_hof_results(k, &vars, span)?;
+                let slot = Self::obligation_slot(k, ObligationKind::Interpolable).ok_or(
+                    Diagnostic::Lower {
                         span,
                         msg: LowerError::Unsupported(Feature::Kernels),
-                    })?;
+                    },
+                )?;
                 let elem_var = *vars.get(&slot).ok_or(Diagnostic::Lower {
                     span,
                     msg: LowerError::Unsupported(Feature::Kernels),
                 })?;
-                let s = self.super_var(TyBounds::show(), span)?;
+                let s = self.super_var(TyBounds::interpolable(), span)?;
                 self.eq(span, elem_var, s);
                 return Ok(var);
             }
             // `Debug.log : String -> a -> a` — the value `a` (shared by the
             // argument and result, raw scheme-var 0) carries the STRINGIFY
-            // obligation (the runtime stringifies it through the same
-            // `IpeStringify` path as `Basics.toString`). Same `stdlib_scheme` +
-            // tie shape as `Log.*With`: tying the ONE super-var to both
+            // obligation (the runtime stringifies it through `IpeStringify`).
+            // Same `stdlib_scheme` + tie shape as `Log.*With`: tying the ONE super-var to both
             // positions keeps `Debug.log Int 5` (concrete, satisfies `show`)
             // accepted while a bare-function value fails closed — no spurious
             // IPE-L0108 for a well-typed showable value.
@@ -790,7 +782,8 @@ impl Builder<'_> {
                     span,
                     msg: LowerError::Unsupported(Feature::Kernels),
                 })?;
-                let (var, vars) = self.instantiate_tracked(&ty)?;
+                let (var, vars, _) = self.instantiate_tracked(&ty)?;
+                self.tie_hof_results(k, &vars, span)?;
                 let slot =
                     Self::obligation_slot(k, ObligationKind::Show).ok_or(Diagnostic::Lower {
                         span,
@@ -822,7 +815,8 @@ impl Builder<'_> {
                     span,
                     msg: LowerError::Unsupported(Feature::Kernels),
                 })?;
-                let (var, vars) = self.instantiate_tracked(&ty)?;
+                let (var, vars, _) = self.instantiate_tracked(&ty)?;
+                self.tie_hof_results(k, &vars, span)?;
                 let model_slot = Self::obligation_slot(k, ObligationKind::WebModel).ok_or(
                     Diagnostic::Lower {
                         span,
@@ -867,7 +861,8 @@ impl Builder<'_> {
                     span,
                     msg: LowerError::Unsupported(Feature::Kernels),
                 })?;
-                let (var, vars) = self.instantiate_tracked(&ty)?;
+                let (var, vars, _) = self.instantiate_tracked(&ty)?;
+                self.tie_hof_results(k, &vars, span)?;
                 let page_slot =
                     Self::obligation_slot(k, ObligationKind::WebPage).ok_or(Diagnostic::Lower {
                         span,
@@ -912,7 +907,11 @@ impl Builder<'_> {
         // the two paths can never resolve to different types.
         let registry = id.and_then(|k| self.resolve_scheme(SchemeKey(k)));
         let ty = Self::kernel_scheme_or_unsupported(registry, None, span)?;
-        self.instantiate(&ty)
+        let (var, vars, _) = self.instantiate_tracked(&ty)?;
+        if let Some(k) = id {
+            self.tie_hof_results(k, &vars, span)?;
+        }
+        Ok(var)
     }
 
     /// Combine the parse-once registry scheme (`id` path) with the legacy

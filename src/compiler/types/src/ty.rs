@@ -21,10 +21,9 @@
 //!
 //! At the solver level, [`FlatType::EmptyRecord`] is the closed-tail sentinel
 //! (mirrors `EmptyRecord1`); an open tail is a plain [`Content::Flex`] variable.
-//! The only open records currently are the `Web.tea` / `Tui.tea` kernel cfg
-//! records, which absorb optional fields
-//! (`head` / `consoleAuth` / `guard` / `status` / `onKey` …) without forcing
-//! every app to enumerate empty optionals.
+//! The only open record currently is the `Web.tea` kernel cfg record, which
+//! absorbs optional fields (`head` / `consoleAuth` / `guard` / `status` …)
+//! without forcing every app to enumerate empty optionals.
 
 use std::collections::BTreeMap;
 
@@ -58,7 +57,7 @@ pub enum Ty {
     ///    sufficiently large compiled program.
     ///
     /// A `Ty` containing a tagged (solver-space) `Var` must never be fed to
-    /// `instantiate_in`/`instantiate_tracked`/`instantiate_rigid` — those
+    /// `instantiate_in`/`instantiate_tracked`/`instantiate_logging_wildcards` — those
     /// only handle annotation-space ids. No current consumer needs to
     /// recover the underlying [`crate::unionfind::VarId`] from a tagged raw
     /// (`crate::doc::ty_to_doc`'s `VarNamer` treats it as an opaque key);
@@ -205,21 +204,22 @@ impl TyBounds {
     const SHOW: u16 = 1 << 7;
     /// The append obligation (`++` → `Appendable a ⊇ { String, List a }`).
     const APPEND: u16 = 1 << 8;
-    /// The higher-order-kernel callback-result obligation: this variable is
-    /// the final RESULT of
-    /// a callback arrow that a `Maybe`/`Result` higher-order kernel FULLY
-    /// APPLIES at runtime — `b` in `map`'s `(a -> b)`, `v` in `map2..5`'s
-    /// `(a -> … -> v)`, `f` in `mapError`'s `(e -> f)`, and `b` in `andMap`'s
-    /// payload `Con (a -> b)`. It must not itself be a function: every such
-    /// runtime kernel takes an exact-arity `FnOnce(..) -> R` closure, while
-    /// the IR FLATTENS a curried Ipê function into one multi-parameter `Fun`
-    /// — so a callback with residual arity (its result is another arrow) has
-    /// no sound lowering and would reach `cargo build` as E0277/E0308. The
-    /// 4th-attempt version of this bit covered ONLY `andMap`; the identical
-    /// hazard through `Result.map add` (2-arity callback) was its 13th
-    /// bypass shape. `andThen` / `traverse` need no bit — their callback
-    /// results are `Con`-headed in the scheme itself, so a curried callback
-    /// is already a plain type mismatch. Deliberately SHALLOW on structure
+    /// The higher-order-kernel callback-result obligation.
+    ///
+    /// This variable is the final RESULT of a callback arrow that a
+    /// higher-order kernel FULLY APPLIES at runtime — `b` in `List.map`'s
+    /// `(a -> b)`, the accumulator in `foldl`'s `(a -> b -> b)`, `v` in
+    /// `map2..5`'s `(a -> … -> v)`, and `b` in `andMap`'s payload
+    /// `Con (a -> b)`. `StdlibKernel::hof_result_vars` derives the set from
+    /// each kernel's scheme shape. It must not itself be a function: every
+    /// such runtime kernel takes an exact-arity closure, while the IR
+    /// FLATTENS a curried Ipê function into one multi-parameter `Fun` — so a
+    /// callback with residual arity (its result is another arrow) has no
+    /// sound lowering and would reach `cargo build` as E0593/E0277/E0308.
+    /// A callback whose result is `Con`-headed in the scheme (`andThen`,
+    /// `traverse`) needs no bit: a curried callback there is already a plain
+    /// type mismatch. `Task`/`Cmd`/`Sub`/`Decoder` kernels box their
+    /// callbacks and are exempt. Deliberately SHALLOW on structure
     /// (only the head, never nested — see [`Self::has_hof_kernel_result`]):
     /// a collection-of-functions payload is a different, already-gated
     /// hazard. Fails CLOSED on a bare variable, exactly like every sibling
@@ -239,6 +239,14 @@ impl TyBounds {
     /// `List a` argument) — see the `sql_param` arm of the numeric-defaulting
     /// loop in `crate::lib`.
     const SQL_PARAM: u16 = 1 << 10;
+    /// The interpolation obligation: this variable is rendered by `{{…}}`
+    /// string interpolation or passed as a `Log.*With` attribute. Satisfied by
+    /// exactly the closed scalar set in `crate::super_bounds::INTERPOLABLE`
+    /// (`String`, `Int`, `Float`, `Bool`, `Char`); the backend realises it as
+    /// the sealed runtime trait `IpeInterpolate`, implemented for those five
+    /// types only. Defaulted to `String` when a call-site instantiation is
+    /// left completely unconstrained (an empty `Log.*With` attribute list).
+    const INTERPOLABLE: u16 = 1 << 11;
 
     /// No obligation — a structurally-parametric variable.
     pub const EMPTY: Self = Self(0);
@@ -286,8 +294,8 @@ impl TyBounds {
     pub const fn dict_key() -> Self {
         Self(Self::DICT_KEY)
     }
-    /// The stringify obligation (`toString` / `Log.*With` attrs / `Debug.toString`
-    /// → Rust `IpeStringify`). Satisfied by every NON-FUNCTION type — every scalar
+    /// The stringify obligation (`Debug.log` / `Error.toString` → Rust
+    /// `IpeStringify`). Satisfied by every NON-FUNCTION type — every scalar
     /// primitive plus every codegen-emitted record/ADT gets a `IpeStringify` impl;
     /// a bare function does not. Same head/deep discipline as [`Self::eq`]: a
     /// function at the head (or nested) fails closed at type-check rather than
@@ -313,6 +321,11 @@ impl TyBounds {
     #[must_use]
     pub const fn sql_param() -> Self {
         Self(Self::SQL_PARAM)
+    }
+    /// The interpolation obligation — see [`Self::INTERPOLABLE`].
+    #[must_use]
+    pub const fn interpolable() -> Self {
+        Self(Self::INTERPOLABLE)
     }
 
     /// Whether this set carries no obligation at all.
@@ -372,6 +385,12 @@ impl TyBounds {
     pub const fn has_sql_param(self) -> bool {
         self.0 & Self::SQL_PARAM != 0
     }
+    /// Whether the interpolation obligation is set — see
+    /// [`Self::INTERPOLABLE`].
+    #[must_use]
+    pub const fn has_interpolable(self) -> bool {
+        self.0 & Self::INTERPOLABLE != 0
+    }
     /// Whether this variable carries a Ipê `comparable`-key obligation — used as
     /// a `Set` element or a `Dict` key. Both are satisfied by exactly the Ipê
     /// `comparable` scalar primitives at type-check; the per-container Rust
@@ -411,6 +430,7 @@ impl TyBounds {
         Self(Self::APPEND),
         Self(Self::HOF_KERNEL_RESULT),
         Self(Self::SQL_PARAM),
+        Self(Self::INTERPOLABLE),
     ];
 
     /// The OR of every real obligation flag — the SSOT the completeness link
@@ -429,7 +449,8 @@ impl TyBounds {
         | Self::SHOW
         | Self::APPEND
         | Self::HOF_KERNEL_RESULT
-        | Self::SQL_PARAM;
+        | Self::SQL_PARAM
+        | Self::INTERPOLABLE;
 
     /// The OR-fold of every entry in [`Self::ALL_BITS`] — a `const fn` so the
     /// completeness link below is a compile-time check, not a skippable test.

@@ -33,7 +33,8 @@ type BoxError = Box<dyn std::error::Error + Send + Sync + 'static>;
 /// Emit `ipe_source` for shape `name` and `cargo build` the emitted crate.
 /// Returns `Ok(())` iff `ipe` exits 0 AND the emitted crate builds — THE SEAL.
 fn emit_and_build(name: &str, ipe_source: &str) -> Result<(), BoxError> {
-    let src_dir = std::env::temp_dir().join(format!("seal_modset_{name}_ipe"));
+    let src_dir = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
+        .join(format!("seal_modset_{name}_ipe"));
     let _ = std::fs::remove_dir_all(&src_dir);
     std::fs::create_dir_all(&src_dir)
         .map_err(|e| -> BoxError { format!("{name}: cannot create src dir: {e}").into() })?;
@@ -42,7 +43,8 @@ fn emit_and_build(name: &str, ipe_source: &str) -> Result<(), BoxError> {
     std::fs::write(&entry, ipe_source)
         .map_err(|e| -> BoxError { format!("{name}: cannot write Main.ipe: {e}").into() })?;
 
-    let out_dir = std::env::temp_dir().join(format!("seal_modset_{name}_emitted"));
+    let out_dir = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
+        .join(format!("seal_modset_{name}_emitted"));
     let _ = std::fs::remove_dir_all(&out_dir);
 
     let runtime = ipe::resolve_runtime()
@@ -68,7 +70,8 @@ fn emit_and_build(name: &str, ipe_source: &str) -> Result<(), BoxError> {
 /// items, causing E0425/E0412 at `cargo build` despite `ipe` exit 0 — a SEAL
 /// breach that the default dep-model tests cannot catch.
 fn emit_and_build_vendored(name: &str, ipe_source: &str) -> Result<(), BoxError> {
-    let src_dir = std::env::temp_dir().join(format!("seal_modset_{name}_ipe"));
+    let src_dir = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
+        .join(format!("seal_modset_{name}_ipe"));
     let _ = std::fs::remove_dir_all(&src_dir);
     std::fs::create_dir_all(&src_dir)
         .map_err(|e| -> BoxError { format!("{name}: cannot create src dir: {e}").into() })?;
@@ -77,7 +80,8 @@ fn emit_and_build_vendored(name: &str, ipe_source: &str) -> Result<(), BoxError>
     std::fs::write(&entry, ipe_source)
         .map_err(|e| -> BoxError { format!("{name}: cannot write Main.ipe: {e}").into() })?;
 
-    let out_dir = std::env::temp_dir().join(format!("seal_modset_{name}_emitted"));
+    let out_dir = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
+        .join(format!("seal_modset_{name}_emitted"));
     let _ = std::fs::remove_dir_all(&out_dir);
 
     let runtime = ipe::resolve_runtime()
@@ -99,7 +103,7 @@ fn emit_and_build_vendored(name: &str, ipe_source: &str) -> Result<(), BoxError>
 
 /// True unless `IPE_E2E` is set — the per-shape `cargo build`s are expensive.
 fn skip() -> bool {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         eprintln!("seal_modset: set IPE_E2E=1 to run (each shape does a cargo build)");
         return true;
     }
@@ -126,18 +130,18 @@ const CLI_APP_LINES: &str = "module Main exposing (main)\n\
     import Ipe.Tea.Cli as Cli\n\
     import Ipe.Ui.Cli as Ui\n\
     import Ipe.Tea.Terminal.Cmd\n\
-    import Ipe.Tea.Terminal.Sub\n\
+    import Ipe.Tea.Cli.Sub\n\
     type Msg = Line String\n\
     type alias Model = { count : Int }\n\
     init _unit = ( { count = 0 }, Cmd.none )\n\
     update msg model = case msg of\n\
     \x20   Line _ -> ( { model | count = model.count + 1 }, Cmd.none )\n\
     view _model = Ui.text \"ok\"\n\
-    subscriptions _model = Sub.none\n\
+    subscriptions _model = Sub.onLine onLine\n\
     onLine s = Line s\n\
     main = Cli.tea\n\
     \x20   { init = init, update = update, view = view\n\
-    \x20   , subscriptions = subscriptions, onLine = onLine }\n";
+    \x20   , subscriptions = subscriptions }\n";
 
 /// Minimal Web TEA app that fires `Cmd.publish` from `update`. `cmd_publish`
 /// lives in `web::pubsub`; the Web shape must append the `web` runtime module
@@ -227,7 +231,7 @@ const AUTHED_ROUTE: &str = include_str!(concat!(
 ///
 /// Under the vendored emit model the emitted `ipe_runtime/mod.rs` is a trimmed
 /// subset of the full runtime `mod.rs`. The runtime `db.rs` calls
-/// `crate::ssrf::VettedDial::for_host` in its `build_pool` function
+/// `crate::ssrf::VettedDial` in `VettedPool::connect`
 /// unconditionally (production code, not test-only), and `external_conn.rs` calls
 /// `crate::dsn::{Dsn, DsnDriver}` and `crate::ssrf::VettedDial`. Without `ssrf`,
 /// `dsn`, and `external_conn` appended to the vendored `mod.rs` whenever `uses_db`
@@ -354,7 +358,7 @@ fn authed_route_vendored_builds() {
 
 /// Under the vendored emit model an authed-route + Db-store program
 /// (`Server.getAuthed` + `Store.allAs`) must cargo-build. The runtime `db.rs`
-/// calls `crate::ssrf::VettedDial::for_host` in `build_pool` (production, not
+/// calls `crate::ssrf::VettedDial` in `VettedPool::connect` (production, not
 /// test-only); `external_conn.rs` calls `crate::dsn::{Dsn, DsnDriver}` and
 /// `crate::ssrf::VettedDial`. Without `ssrf`, `dsn`, and `external_conn`
 /// appended to the vendored `mod.rs` under `uses_db`, the emitted crate fails
@@ -479,11 +483,11 @@ const TUI_APP: &str = "module Main exposing (main)\n\
     view : Model -> Screen Msg\n\
     view _model = Cells.text \"hello\"\n\
     subscriptions : Model -> Sub Msg\n\
-    subscriptions _model = Sub.none\n\
+    subscriptions _model = Sub.onKey onKey\n\
     onKey : KeyEvent -> Msg\n\
     onKey _event = NoOp\n\
     main = Tui.tea { init = init, update = update, view = view\n\
-    \x20            , subscriptions = subscriptions, onKey = onKey }\n";
+    \x20            , subscriptions = subscriptions }\n";
 
 /// Under the vendored emit model a `Tui.tea` program must cargo-build.
 ///

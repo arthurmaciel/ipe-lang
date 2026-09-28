@@ -1,10 +1,9 @@
-//! Multi-module project manifest parsing, module discovery, import graph, and
-//! topological sort.
+//! Multi-module project manifest parsing, module discovery, import graph, and topological sort.
 //!
 //! `package.ipe` is the sole project manifest the toolchain discovers and
 //! builds. A legacy `ipe.toml` is not accepted as a project manifest;
-//! [`migration_pending`] detects that case so callers can surface
-//! [`MIGRATE_CONFIG_HINT`] instead of a silent fallback.
+//! [`has_only_legacy_toml`] detects that case so callers can surface
+//! [`text::legacy_toml_hint`] instead of a silent fallback.
 //!
 //! # Discovery
 //!
@@ -31,6 +30,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::CliError;
+use crate::text;
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -61,7 +61,7 @@ pub struct ProjectManifest {
     /// documented default in `AGENTS.md`'s `package.ipe` schema table.
     pub driver: ipe_backend_rust::DbDriver,
     /// The `[rust]` static-build request layer (`static` / `target` /
-    /// `allocator` / `allowSlowAllocator` / `cFree`) — the lowest-precedence layer
+    /// `allocator` / `cFree`) — the lowest-precedence layer
     /// (CLI > env > `package.ipe`) of `crate::build_plan::resolve`'s input.
     /// Every field defaults to unset when the section (or key) is absent.
     /// Malformed values (a bad bool, an unknown allocator) are refused at
@@ -211,7 +211,7 @@ impl ProjectManifest {
     /// chosen and how many were declared.
     ///
     /// # Errors
-    /// [`CliError::UsageOwned`] when a program's entry file does not map to a
+    /// [`CliError::Usage`] when a program's entry file does not map to a
     /// valid module path (a non-module path segment).
     pub fn resolved_entry(&self) -> Result<Vec<String>, CliError> {
         let Some(program) = self.default_program() else {
@@ -314,7 +314,7 @@ impl EntryShape {
 /// no segments at all is a manifest error, never a silently-dropped entry.
 ///
 /// # Errors
-/// [`CliError::UsageOwned`] naming the offending entry file.
+/// [`CliError::Usage`] naming the offending entry file.
 fn entry_file_to_module_path(entry: &str) -> Result<Vec<String>, CliError> {
     let rel = Path::new(entry);
     let without_ext = rel.with_extension("");
@@ -325,21 +325,19 @@ fn entry_file_to_module_path(entry: &str) -> Result<Vec<String>, CliError> {
             _ => None,
         };
         let seg = seg.ok_or_else(|| {
-            CliError::UsageOwned(format!(
-                "package.ipe: program entry {entry:?} is not a valid entry file"
-            ))
+            CliError::Usage(text::msg::manifest_entry_invalid(&format!("{entry:?}")))
         })?;
         if !is_module_segment(seg) {
-            return Err(CliError::UsageOwned(format!(
-                "package.ipe: program entry {entry:?} has a path segment {seg:?} that is not a \
-                 valid module name (segments must match [A-Z][A-Za-z0-9_]*)"
+            return Err(CliError::Usage(text::msg::manifest_entry_segment_invalid(
+                &format!("{entry:?}"),
+                &format!("{seg:?}"),
             )));
         }
         segments.push(seg.to_owned());
     }
     if segments.is_empty() {
-        return Err(CliError::UsageOwned(format!(
-            "package.ipe: program entry {entry:?} names no module"
+        return Err(CliError::Usage(text::msg::manifest_entry_no_module(
+            &format!("{entry:?}"),
         )));
     }
     Ok(segments)
@@ -437,12 +435,105 @@ pub fn is_denylisted_public_env_name(name: &str) -> bool {
 }
 
 /// A discovered Ipê source file with its resolved module path.
+///
+/// Fields are private: [`DiscoveredModule::user`] and the stdlib injection are
+/// the only mints, so a module's [`ModuleProvenance`] always matches how it
+/// entered the graph.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct DiscoveredModule {
-    /// Absolute path to the `.ipe` source file.
-    pub path: PathBuf,
+    path: PathBuf,
+    module_path: Vec<String>,
+    provenance: ModuleProvenance,
+}
+
+impl DiscoveredModule {
+    /// A user-authored module; its [`EntryRole`] derives from `module_path`.
+    #[must_use]
+    pub fn user(path: PathBuf, module_path: Vec<String>) -> Self {
+        let role = EntryRole::of_module_path(&module_path);
+        Self {
+            path,
+            module_path,
+            provenance: ModuleProvenance::User(role),
+        }
+    }
+
+    /// A compiled-source stdlib module taken from the embed table.
+    ///
+    /// Crate-private: a module minted here is trusted to declare into the
+    /// reserved `Ipe.*` namespace (see [`embedded_stdlib_modules`]).
+    #[must_use]
+    pub(crate) const fn embedded_stdlib(path: PathBuf, module_path: Vec<String>) -> Self {
+        Self {
+            path,
+            module_path,
+            provenance: ModuleProvenance::EmbeddedStdlib,
+        }
+    }
+
+    /// Path to the `.ipe` source file (synthetic for an embedded stdlib module).
+    #[must_use]
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
     /// Module path segments, e.g. `Lib/Utils.ipe` → `["Lib", "Utils"]`.
-    pub module_path: Vec<String>,
+    #[must_use]
+    pub fn module_path(&self) -> &[String] {
+        &self.module_path
+    }
+
+    /// Where the module's source comes from, fixed when it entered the graph.
+    #[must_use]
+    pub const fn provenance(&self) -> ModuleProvenance {
+        self.provenance
+    }
+
+    /// The source file path and module path, consuming the record.
+    #[must_use]
+    pub fn into_paths(self) -> (PathBuf, Vec<String>) {
+        (self.path, self.module_path)
+    }
+}
+
+/// The provenance of a [`DiscoveredModule`] in the source graph.
+///
+/// Only a user module carries an [`EntryRole`]: an injected stdlib module is
+/// never a package's `Main`, so that combination has no representation. The
+/// canonicaliser's trust tag (`ipe_db::ModuleOrigin`) for a stdlib module is
+/// derived from this record by [`embedded_stdlib_modules`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum ModuleProvenance {
+    /// A module the package author wrote, discovered under the source root.
+    User(EntryRole),
+    /// A compiled-source stdlib module taken from `ipe`'s embed table.
+    ///
+    /// Only [`inject_compiled_std_closure`] (and API extraction of a stdlib
+    /// module) mints this provenance, and injection only for a module it
+    /// actually inserted, so a user file squatting on a stdlib path stays
+    /// [`ModuleProvenance::User`].
+    EmbeddedStdlib,
+}
+
+/// The role a user module plays when lowered as its own entry.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum EntryRole {
+    /// A module whose last path segment is `Main` — the program entry.
+    Main,
+    /// Any other user module.
+    Library,
+}
+
+impl EntryRole {
+    /// The role implied by a module path.
+    #[must_use]
+    pub fn of_module_path(module_path: &[String]) -> Self {
+        if module_path.last().is_some_and(|last| last == "Main") {
+            Self::Main
+        } else {
+            Self::Library
+        }
+    }
 }
 
 /// An import edge: the importing module's path and the imported module's path.
@@ -508,15 +599,11 @@ pub(crate) fn is_rust_wrapper_header(line: &str) -> bool {
 /// The filename of the legacy TOML manifest (`ipe.toml`).
 pub const IPE_TOML: &str = "ipe.toml";
 
-/// The diagnostic for a directory that carries a legacy `ipe.toml` but no `package.ipe`.
-pub const MIGRATE_CONFIG_HINT: &str = "no package.ipe in this directory (found a legacy ipe.toml — package.ipe is the project \
-     manifest the toolchain reads)";
-
 /// Locate a project's `package.ipe` manifest inside `dir`.
 ///
 /// `package.ipe` is the sole project manifest the toolchain discovers. A bare
-/// `ipe.toml` is not a manifest — [`migration_pending`] detects that case so a
-/// caller can surface [`MIGRATE_CONFIG_HINT`] instead of a silent fallback.
+/// `ipe.toml` is not a manifest — [`has_only_legacy_toml`] detects that case so a
+/// caller can surface [`text::legacy_toml_hint`] instead of a silent fallback.
 ///
 /// Returns the `package.ipe` path when the directory carries one, else `None`.
 #[must_use]
@@ -528,25 +615,26 @@ pub fn manifest_in_dir(dir: &Path) -> Option<PathBuf> {
     None
 }
 
-/// Whether `dir` carries a legacy `ipe.toml` but no `package.ipe` — the case
-/// where a caller should report [`MIGRATE_CONFIG_HINT`] rather than treat the
-/// directory as manifest-free.
+/// Whether `dir` carries a legacy `ipe.toml` but no `package.ipe`.
+///
+/// The case where a caller should report [`text::legacy_toml_hint`] rather than
+/// treat the directory as manifest-free.
 #[must_use]
-pub fn migration_pending(dir: &Path) -> bool {
+pub fn has_only_legacy_toml(dir: &Path) -> bool {
     !dir.join(crate::package_manifest::PACKAGE_IPE).is_file() && dir.join(IPE_TOML).is_file()
 }
 
 /// Parse a project `package.ipe` manifest into a [`ProjectManifest`].
 ///
 /// `package.ipe` is read syntactically (never evaluated) by the Ipê-native
-/// reader. A path to a legacy `ipe.toml` is rejected with [`MIGRATE_CONFIG_HINT`].
+/// reader. A path to a legacy `ipe.toml` is rejected with [`text::legacy_toml_hint`].
 ///
 /// # Errors
 /// [`CliError::Io`] if the file cannot be read; [`CliError::Usage`] /
-/// [`CliError::UsageOwned`] for a malformed or invalid manifest (an unsupported
+/// [`CliError::Usage`] for a malformed or invalid manifest (an unsupported
 /// driver, a bad version or dependency, an unknown capability, a denylisted
 /// `publicEnv` name, a missing source root); [`CliError::Pipeline`] when the
-/// source does not parse; and [`CliError::UsageOwned`] when the path is not a
+/// source does not parse; and [`CliError::Usage`] when the path is not a
 /// `package.ipe`.
 pub fn parse_manifest(manifest_path: &Path) -> Result<ProjectManifest, CliError> {
     if manifest_path.file_name().and_then(|n| n.to_str())
@@ -554,9 +642,9 @@ pub fn parse_manifest(manifest_path: &Path) -> Result<ProjectManifest, CliError>
     {
         return crate::package_manifest::parse_package_manifest(manifest_path);
     }
-    Err(CliError::UsageOwned(format!(
-        "{}: not a package.ipe manifest. {MIGRATE_CONFIG_HINT}",
-        manifest_path.display()
+    Err(CliError::Usage(text::msg::manifest_not_package_ipe(
+        &manifest_path.display(),
+        &text::legacy_toml_hint(),
     )))
 }
 
@@ -570,22 +658,46 @@ pub fn parse_manifest(manifest_path: &Path) -> Result<ProjectManifest, CliError>
 /// tree is refused rather than spinning indefinitely.
 const MAX_DISCOVERY_DEPTH: usize = 64;
 
+/// The most `.ipe` modules the module-discovery walk collects.
+///
+/// The same bound `ipe watch` holds its watched source files to, so the one
+/// walk that feeds both a build and a watch session refuses a pathological
+/// tree once, with one limit.
+pub const MAX_DISCOVERED_MODULES: usize = ipe_watch::MAX_WATCHED_FILES;
+
+/// The most directory entries the module-discovery walk examines.
+///
+/// Bounds a walk through a huge tree that holds few modules (a vendored
+/// dependency directory under the source root).
+pub const MAX_DISCOVERY_ENTRIES: usize = 1_000_000;
+
 /// Walk `src_root` recursively, collecting every `*.ipe` file as a
 /// [`DiscoveredModule`].
 ///
 /// Files whose path contains a non-module-segment (e.g. lowercase first char
 /// or characters outside `[A-Za-z0-9_]`) are silently skipped — they may be
-/// build artefacts or editor swap files.
+/// build artefacts or editor swap files. Symlinks are never followed: a
+/// symlinked file or directory is skipped, and each module found is read
+/// later by [`crate::io_bounded::read_walked_source`], which refuses a final
+/// symlink swapped in since.
 ///
-/// The walk carries a canonicalised visited-set to detect symlink cycles and a
-/// depth ceiling to bound pathologically deep trees. Both conditions produce a
-/// typed [`CliError::DiscoveryLimitReached`] rather than an infinite loop or
-/// stack overflow.
+/// The walk carries a canonicalised visited-set to detect symlink cycles, a
+/// depth ceiling to bound pathologically deep trees, and ceilings on the
+/// modules collected and the entries examined. Each produces a typed
+/// [`CliError::DiscoveryLimitReached`] rather than an unbounded walk.
 ///
 /// # Errors
-/// [`CliError::Io`] if the directory cannot be read.
-/// [`CliError::DiscoveryLimitReached`] on a symlink cycle or a tree deeper
-/// than [`MAX_DISCOVERY_DEPTH`].
+/// [`CliError::SourceRefused`] with [`SourceRefusal::AccessDenied`] when a
+/// directory under `src_root` may not be listed, or with
+/// [`SourceRefusal::NotRegularFile`] when a module path names a FIFO,
+/// device or socket.
+/// [`CliError::Io`] if a directory cannot otherwise be read.
+/// [`CliError::DiscoveryLimitReached`] on a symlink cycle, a tree deeper
+/// than [`MAX_DISCOVERY_DEPTH`], more than [`MAX_DISCOVERED_MODULES`]
+/// modules or more than [`MAX_DISCOVERY_ENTRIES`] entries.
+///
+/// [`SourceRefusal::AccessDenied`]: crate::io_bounded::SourceRefusal::AccessDenied
+/// [`SourceRefusal::NotRegularFile`]: crate::io_bounded::SourceRefusal::NotRegularFile
 pub fn discover_modules(src_root: &Path) -> Result<Vec<DiscoveredModule>, CliError> {
     use std::collections::HashSet;
 
@@ -594,6 +706,7 @@ pub fn discover_modules(src_root: &Path) -> Result<Vec<DiscoveredModule>, CliErr
     let mut stack: VecDeque<(PathBuf, usize)> = VecDeque::new();
     // Visited set of canonicalised paths breaks symlink cycles.
     let mut visited: HashSet<PathBuf> = HashSet::new();
+    let mut examined = 0usize;
 
     stack.push_back((src_root.to_path_buf(), 0));
 
@@ -623,28 +736,47 @@ pub fn discover_modules(src_root: &Path) -> Result<Vec<DiscoveredModule>, CliErr
             });
         }
 
-        let entries = fs::read_dir(&dir).map_err(|e| CliError::Io {
-            path: dir.clone(),
-            source: e,
-        })?;
+        let entries = fs::read_dir(&dir).map_err(|e| crate::io_bounded::access_error(&dir, e))?;
         for entry in entries {
-            let entry = entry.map_err(|e| CliError::Io {
-                path: dir.clone(),
-                source: e,
-            })?;
+            let entry = entry.map_err(|e| crate::io_bounded::access_error(&dir, e))?;
+            examined = examined.saturating_add(1);
+            if examined > MAX_DISCOVERY_ENTRIES {
+                return Err(CliError::DiscoveryLimitReached {
+                    detail: format!(
+                        "source tree holds more than {MAX_DISCOVERY_ENTRIES} entries at `{}`",
+                        dir.display()
+                    ),
+                });
+            }
             let path = entry.path();
-            let file_type = entry.file_type().map_err(|e| CliError::Io {
-                path: path.clone(),
-                source: e,
-            })?;
+            let file_type = entry
+                .file_type()
+                .map_err(|e| crate::io_bounded::access_error(&path, e))?;
             if file_type.is_dir() {
                 stack.push_back((path, depth + 1));
-            } else if file_type.is_file()
-                && path.extension().and_then(|e| e.to_str()) == Some("ipe")
-                && let Some(m) = file_to_module(src_root, &path)
-            {
-                result.push(m);
+                continue;
             }
+            if file_type.is_symlink() || path.extension().and_then(|e| e.to_str()) != Some("ipe") {
+                continue;
+            }
+            let Some(m) = file_to_module(src_root, &path) else {
+                continue;
+            };
+            if !file_type.is_file() {
+                return Err(crate::io_bounded::source_refused(
+                    &path,
+                    crate::io_bounded::SourceRefusal::NotRegularFile,
+                ));
+            }
+            if result.len() >= MAX_DISCOVERED_MODULES {
+                return Err(CliError::DiscoveryLimitReached {
+                    detail: format!(
+                        "source tree holds more than {MAX_DISCOVERED_MODULES} modules at `{}`",
+                        dir.display()
+                    ),
+                });
+            }
+            result.push(m);
         }
     }
 
@@ -670,15 +802,12 @@ fn file_to_module(src_root: &Path, path: &Path) -> Option<DiscoveredModule> {
     if segments.is_empty() {
         return None;
     }
-    Some(DiscoveredModule {
-        path: path.to_path_buf(),
-        module_path: segments,
-    })
+    Some(DiscoveredModule::user(path.to_path_buf(), segments))
 }
 
 /// A Ipê module path segment must start with an ASCII uppercase letter and
 /// contain only ASCII alphanumerics and `_`.
-fn is_module_segment(s: &str) -> bool {
+pub(crate) fn is_module_segment(s: &str) -> bool {
     let mut chars = s.chars();
     match chars.next() {
         Some(c) if c.is_ascii_uppercase() => chars.all(|c| c.is_ascii_alphanumeric() || c == '_'),
@@ -740,13 +869,14 @@ where
 /// source entry + [`DiscoveredModule`] so the EXISTING topo → dep-first
 /// canonicalise → link path handles it unchanged.
 ///
-/// Returns the set of module paths that were **actually injected from the embed
-/// table** — the driver's unforgeable record of which modules are trusted
-/// `EmbeddedStdlib` source. A path is added to this set ONLY when a NEW synthetic
-/// entry is inserted; if `sources` already holds the key (a user file squatting
-/// on `Ipe.Palette`, or an earlier injection), injection is skipped and the path
-/// is NOT tagged trusted. So a hostile `src/Std/Palette.ipe` is canonicalised as
-/// `ModuleOrigin::User` and stays IPE-N0025-rejected.
+/// Returns [`embedded_stdlib_modules`] of the resulting `discovered` — the
+/// driver's record of which modules are trusted `EmbeddedStdlib` source,
+/// derived from the provenance records rather than kept beside them. A record
+/// is minted ONLY when a NEW synthetic entry is inserted; if `sources` already
+/// holds the key (a user file squatting on `Ipe.Palette`, or an earlier
+/// injection), injection is skipped and the path is NOT tagged trusted. So a
+/// hostile `src/Std/Palette.ipe` is canonicalised as `ModuleOrigin::User` and
+/// stays IPE-N0025-rejected.
 ///
 /// Efficiency (design §7): the worklist is seeded only from imports that match a
 /// compiled-source module, so a build that imports none does zero work.
@@ -755,18 +885,42 @@ pub fn inject_compiled_std_closure(
     discovered: &mut Vec<DiscoveredModule>,
 ) -> BTreeSet<Vec<String>> {
     // One shared closure + squat-guard lives in `ipe_stdlib` (the SSOT both the
-    // native and wasm frontends call); the native driver additionally records a
-    // `DiscoveredModule` per injected node via the callback.
+    // native and wasm frontends call); the native driver records a
+    // `DiscoveredModule` per injected node via the callback and derives the
+    // trusted set from those records.
     ipe_stdlib::inject_compiled_std_closure(
         sources,
         extract_imports_from_source,
         |module_path, synth_path| {
-            discovered.push(DiscoveredModule {
-                path: synth_path.to_path_buf(),
-                module_path: module_path.to_vec(),
-            });
+            discovered.push(DiscoveredModule::embedded_stdlib(
+                synth_path.to_path_buf(),
+                module_path.to_vec(),
+            ));
         },
-    )
+    );
+    embedded_stdlib_modules(discovered)
+}
+
+/// The module paths trusted as embedded stdlib source.
+///
+/// A path is trusted only when some record for it has
+/// [`ModuleProvenance::EmbeddedStdlib`] AND no record claims it as
+/// [`ModuleProvenance::User`]: a user claimant on the same path fails closed
+/// to untrusted, so a squat never inherits the stdlib's reserved-namespace
+/// exemption.
+#[must_use]
+pub fn embedded_stdlib_modules(discovered: &[DiscoveredModule]) -> BTreeSet<Vec<String>> {
+    let user_claimed: BTreeSet<&[String]> = discovered
+        .iter()
+        .filter(|m| matches!(m.provenance, ModuleProvenance::User(_)))
+        .map(DiscoveredModule::module_path)
+        .collect();
+    discovered
+        .iter()
+        .filter(|m| m.provenance == ModuleProvenance::EmbeddedStdlib)
+        .filter(|m| !user_claimed.contains(m.module_path()))
+        .map(|m| m.module_path.clone())
+        .collect()
 }
 
 // ---------------------------------------------------------------------------
@@ -842,14 +996,11 @@ import String
     #[test]
     fn topological_order_two_modules() {
         let modules = vec![
-            DiscoveredModule {
-                path: PathBuf::from("src/Main.ipe"),
-                module_path: vec!["Main".to_owned()],
-            },
-            DiscoveredModule {
-                path: PathBuf::from("src/Lib/Utils.ipe"),
-                module_path: vec!["Lib".to_owned(), "Utils".to_owned()],
-            },
+            DiscoveredModule::user(PathBuf::from("src/Main.ipe"), vec!["Main".to_owned()]),
+            DiscoveredModule::user(
+                PathBuf::from("src/Lib/Utils.ipe"),
+                vec!["Lib".to_owned(), "Utils".to_owned()],
+            ),
         ];
         let order = topological_order(&modules, &["Main".to_owned()], |path| {
             if path == ["Main".to_owned()] {
@@ -886,10 +1037,10 @@ import String
                     .to_owned(),
             ),
         );
-        let mut discovered = vec![DiscoveredModule {
-            path: PathBuf::from("src/Main.ipe"),
-            module_path: vec!["Main".to_owned()],
-        }];
+        let mut discovered = vec![DiscoveredModule::user(
+            PathBuf::from("src/Main.ipe"),
+            vec!["Main".to_owned()],
+        )];
 
         let injected = super::inject_compiled_std_closure(&mut sources, &mut discovered);
 
@@ -913,10 +1064,10 @@ import String
                 "module Main exposing (main)\nmain = 0\n".to_owned(),
             ),
         );
-        let mut discovered = vec![DiscoveredModule {
-            path: PathBuf::from("src/Main.ipe"),
-            module_path: vec!["Main".to_owned()],
-        }];
+        let mut discovered = vec![DiscoveredModule::user(
+            PathBuf::from("src/Main.ipe"),
+            vec!["Main".to_owned()],
+        )];
 
         let injected = super::inject_compiled_std_closure(&mut sources, &mut discovered);
         assert!(
@@ -949,14 +1100,8 @@ import String
             ),
         );
         let mut discovered = vec![
-            DiscoveredModule {
-                path: PathBuf::from("src/Main.ipe"),
-                module_path: vec!["Main".to_owned()],
-            },
-            DiscoveredModule {
-                path: PathBuf::from("src/Std/Palette.ipe"),
-                module_path: palette.clone(),
-            },
+            DiscoveredModule::user(PathBuf::from("src/Main.ipe"), vec!["Main".to_owned()]),
+            DiscoveredModule::user(PathBuf::from("src/Std/Palette.ipe"), palette.clone()),
         ];
 
         let injected = super::inject_compiled_std_closure(&mut sources, &mut discovered);
@@ -973,16 +1118,115 @@ import String
     }
 
     #[test]
+    fn injected_trust_set_is_derived_from_provenance_records() {
+        // SSOT: the returned trusted set is exactly the embedded-stdlib records
+        // pushed into `discovered`, never a second hand-kept record.
+        let mut sources: BTreeMap<Vec<String>, (PathBuf, String)> = BTreeMap::new();
+        sources.insert(
+            vec!["Main".to_owned()],
+            (
+                PathBuf::from("src/Main.ipe"),
+                "module Main exposing (main)\nimport Ipe.Palette exposing (..)\nmain = 0\n"
+                    .to_owned(),
+            ),
+        );
+        let mut discovered = vec![DiscoveredModule::user(
+            PathBuf::from("src/Main.ipe"),
+            vec!["Main".to_owned()],
+        )];
+
+        let injected = super::inject_compiled_std_closure(&mut sources, &mut discovered);
+
+        let from_records: BTreeSet<Vec<String>> = discovered
+            .iter()
+            .filter(|m| m.provenance() == ModuleProvenance::EmbeddedStdlib)
+            .map(|m| m.module_path().to_vec())
+            .collect();
+        assert!(!injected.is_empty(), "Ipe.Palette closure injected");
+        assert_eq!(injected, from_records);
+        assert_eq!(injected, embedded_stdlib_modules(&discovered));
+    }
+
+    #[test]
+    fn user_squat_record_keeps_user_provenance() {
+        // A user file on a stdlib path gets no embedded record at all, so its
+        // provenance stays User and it ranks as a user entry.
+        let palette = vec!["Ipe".to_owned(), "Palette".to_owned()];
+        let mut sources: BTreeMap<Vec<String>, (PathBuf, String)> = BTreeMap::new();
+        sources.insert(
+            vec!["Main".to_owned()],
+            (
+                PathBuf::from("src/Main.ipe"),
+                "module Main exposing (main)\nimport Ipe.Palette exposing (..)\nmain = 0\n"
+                    .to_owned(),
+            ),
+        );
+        sources.insert(
+            palette.clone(),
+            (
+                PathBuf::from("src/Std/Palette.ipe"),
+                "module Ipe.Palette exposing (..)\ntoHex = 0\n".to_owned(),
+            ),
+        );
+        let mut discovered = vec![
+            DiscoveredModule::user(PathBuf::from("src/Main.ipe"), vec!["Main".to_owned()]),
+            DiscoveredModule::user(PathBuf::from("src/Std/Palette.ipe"), palette.clone()),
+        ];
+
+        super::inject_compiled_std_closure(&mut sources, &mut discovered);
+
+        let claims: Vec<ModuleProvenance> = discovered
+            .iter()
+            .filter(|m| m.module_path() == palette.as_slice())
+            .map(DiscoveredModule::provenance)
+            .collect();
+        assert_eq!(
+            claims,
+            vec![ModuleProvenance::User(EntryRole::Library)],
+            "the squat keeps its single User record"
+        );
+    }
+
+    #[test]
+    fn user_claimant_revokes_embedded_stdlib_trust() {
+        // SECURITY (fail closed): an embedded record does not confer trust on
+        // a path a user record also claims, whatever the record order.
+        let palette = vec!["Ipe".to_owned(), "Palette".to_owned()];
+        let embedded =
+            DiscoveredModule::embedded_stdlib(PathBuf::from("<embedded-stdlib>"), palette.clone());
+        let squat = DiscoveredModule::user(PathBuf::from("src/Std/Palette.ipe"), palette.clone());
+
+        for records in [
+            vec![embedded.clone(), squat.clone()],
+            vec![squat, embedded.clone()],
+        ] {
+            assert!(
+                !embedded_stdlib_modules(&records).contains(&palette),
+                "a user-claimed path must not be trusted"
+            );
+        }
+        assert!(
+            embedded_stdlib_modules(std::slice::from_ref(&embedded)).contains(&palette),
+            "an unclaimed embedded record is trusted"
+        );
+    }
+
+    #[test]
+    fn user_module_role_derives_from_its_path() {
+        let main = DiscoveredModule::user(PathBuf::from("src/Main.ipe"), vec!["Main".to_owned()]);
+        let lib = DiscoveredModule::user(
+            PathBuf::from("src/Lib/Main2.ipe"),
+            vec!["Lib".to_owned(), "Main2".to_owned()],
+        );
+        assert_eq!(main.provenance(), ModuleProvenance::User(EntryRole::Main));
+        assert_eq!(lib.provenance(), ModuleProvenance::User(EntryRole::Library));
+    }
+
+    #[test]
     fn topological_order_detects_cycle() {
         let modules = vec![
-            DiscoveredModule {
-                path: PathBuf::from("src/A.ipe"),
-                module_path: vec!["A".to_owned()],
-            },
-            DiscoveredModule {
-                path: PathBuf::from("src/B.ipe"),
-                module_path: vec!["B".to_owned()],
-            },
+            DiscoveredModule::user(PathBuf::from("src/A.ipe"), vec!["A".to_owned()]),
+            DiscoveredModule::user(PathBuf::from("src/B.ipe"), vec!["B".to_owned()]),
         ];
         let result = topological_order(&modules, &["A".to_owned()], |path| {
             if path == ["A".to_owned()] {
@@ -1178,8 +1422,8 @@ import String
             "package.ipe is the discovered manifest; a co-located ipe.toml is ignored"
         );
         assert!(
-            !migration_pending(&root),
-            "a package.ipe present means no migration is pending"
+            !has_only_legacy_toml(&root),
+            "a package.ipe present means the legacy-toml hint does not apply"
         );
         let m = parse_manifest(&manifest).expect("package.ipe reads");
         assert_eq!(m.name, "from-package");
@@ -1187,15 +1431,15 @@ import String
     }
 
     #[test]
-    fn ipe_toml_only_is_not_discovered_and_signals_migration() {
+    fn ipe_toml_only_is_not_discovered_and_gets_the_legacy_hint() {
         let root = discovery_dir("toml_only", None, Some("[project]\nname = \"from-toml\"\n"));
         assert!(
             manifest_in_dir(&root).is_none(),
             "a bare ipe.toml is not a project manifest"
         );
         assert!(
-            migration_pending(&root),
-            "an ipe.toml with no package.ipe signals a pending migration"
+            has_only_legacy_toml(&root),
+            "an ipe.toml with no package.ipe gets the legacy-toml hint"
         );
         let _ = fs::remove_dir_all(&root);
     }
@@ -1208,8 +1452,8 @@ import String
             "an empty project has no manifest"
         );
         assert!(
-            !migration_pending(&root),
-            "an empty project has nothing to migrate"
+            !has_only_legacy_toml(&root),
+            "an empty project gets no legacy-toml hint"
         );
         let _ = fs::remove_dir_all(&root);
     }
@@ -1277,6 +1521,181 @@ import String
             err.to_string().contains("legacy ipe.toml"),
             "the refusal must mention legacy ipe.toml: {err}"
         );
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    // ── Module discovery refusals ─────────────────────────────────────────────
+
+    /// An empty source root unique to this test process.
+    #[allow(clippy::expect_used)] // test fixture: an unwritable temp dir IS the failure
+    fn walk_root(name: &str) -> PathBuf {
+        let root = std::env::temp_dir().join(format!("ipe_walk_{name}_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).expect("create source root");
+        root
+    }
+
+    /// Whether `result` is the typed refusal for `reason`.
+    fn is_refused<T>(
+        result: &Result<T, CliError>,
+        reason: crate::io_bounded::SourceRefusal,
+    ) -> bool {
+        matches!(result, Err(CliError::SourceRefused { reason: got, .. }) if *got == reason)
+    }
+
+    /// A FIFO named as a module is refused by the walk, and by the walked read, without blocking.
+    #[cfg(unix)]
+    #[test]
+    #[allow(clippy::expect_used)] // test fixture: a failed write or `mkfifo` IS the failure
+    fn fifo_module_is_refused_without_blocking() {
+        let root = walk_root("fifo");
+        fs::write(root.join("Main.ipe"), "module Main exposing (..)\n").expect("write Main");
+        let fifo = root.join("Pipe.ipe");
+        let made = std::process::Command::new("mkfifo")
+            .arg(&fifo)
+            .status()
+            .expect("run mkfifo");
+        assert!(made.success(), "mkfifo creates the fixture");
+        let walked = discover_modules(&root);
+        let read = crate::io_bounded::read_walked_source(&fifo);
+        let _ = fs::remove_dir_all(&root);
+        for refused in [
+            is_refused(&walked, crate::io_bounded::SourceRefusal::NotRegularFile),
+            is_refused(&read, crate::io_bounded::SourceRefusal::NotRegularFile),
+        ] {
+            assert!(
+                refused,
+                "a FIFO module is not a regular file: {walked:?} / {read:?}"
+            );
+        }
+    }
+
+    /// A FIFO whose name is no module path is skipped, like any other non-module file.
+    #[cfg(unix)]
+    #[test]
+    #[allow(clippy::expect_used)] // test fixture: a failed write or `mkfifo` IS the failure
+    fn fifo_outside_the_module_namespace_is_skipped() {
+        let root = walk_root("fifo_skip");
+        fs::write(root.join("Main.ipe"), "module Main exposing (..)\n").expect("write Main");
+        let made = std::process::Command::new("mkfifo")
+            .arg(root.join("scratch.ipe"))
+            .status()
+            .expect("run mkfifo");
+        assert!(made.success(), "mkfifo creates the fixture");
+        let walked = discover_modules(&root);
+        let _ = fs::remove_dir_all(&root);
+        let modules: Option<Vec<Vec<String>>> = walked
+            .ok()
+            .map(|found| found.into_iter().map(|m| m.module_path).collect());
+        assert_eq!(modules, Some(vec![vec!["Main".to_owned()]]));
+    }
+
+    /// A directory under the source root the process may not list is refused as access denied.
+    ///
+    /// Skipped when the process can list it anyway (running as root).
+    #[cfg(unix)]
+    #[test]
+    #[allow(clippy::expect_used)] // test fixture: an unwritable scratch dir IS the failure
+    fn unreadable_module_directory_is_refused_as_access_denied() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let root = walk_root("noread");
+        let locked = root.join("Locked");
+        fs::create_dir_all(&locked).expect("create Locked/");
+        fs::write(
+            locked.join("Hidden.ipe"),
+            "module Locked.Hidden exposing (..)\n",
+        )
+        .expect("write Hidden");
+        fs::set_permissions(&locked, fs::Permissions::from_mode(0o000))
+            .expect("drop the directory's permissions");
+        let privileged = fs::read_dir(&locked).is_ok();
+        let walked = discover_modules(&root);
+        let _ = fs::set_permissions(&locked, fs::Permissions::from_mode(0o755));
+        let _ = fs::remove_dir_all(&root);
+        if privileged {
+            return;
+        }
+        assert!(
+            is_refused(&walked, crate::io_bounded::SourceRefusal::AccessDenied),
+            "an unlistable module directory must be refused as access denied, got: {walked:?}"
+        );
+    }
+
+    /// A module file without the read bit is refused by the walked read as access denied.
+    ///
+    /// Skipped when the process can read it anyway (running as root).
+    #[cfg(unix)]
+    #[test]
+    #[allow(clippy::expect_used)] // test fixture: an unwritable scratch dir IS the failure
+    fn unreadable_module_file_is_refused_as_access_denied() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let root = walk_root("noread_file");
+        let module = root.join("Main.ipe");
+        fs::write(&module, "module Main exposing (..)\n").expect("write Main");
+        fs::set_permissions(&module, fs::Permissions::from_mode(0o000)).expect("drop the read bit");
+        let privileged = fs::File::open(&module).is_ok();
+        let walked = discover_modules(&root);
+        let read = crate::io_bounded::read_walked_source(&module);
+        let _ = fs::remove_dir_all(&root);
+        if privileged {
+            return;
+        }
+        assert!(walked.is_ok(), "the walk lists the file: {walked:?}");
+        assert!(
+            is_refused(&read, crate::io_bounded::SourceRefusal::AccessDenied),
+            "an unreadable module must be refused as access denied, got: {read:?}"
+        );
+    }
+
+    // ── Symlink non-descent ─────────────────────────────────────────────────
+
+    /// `discover_modules` classifies each entry with
+    /// [`std::fs::DirEntry::file_type`], which reports the entry's own type
+    /// without following a symlink (`lstat`, not `stat`). A symlinked
+    /// directory is therefore neither `is_dir()` nor `is_file()` to the walk
+    /// and is never pushed onto the descent stack, so a link cycle through it
+    /// is unrepresentable: its modules go undiscovered rather than being
+    /// walked into.
+    #[cfg(unix)]
+    #[test]
+    fn discover_modules_does_not_descend_a_symlinked_directory() {
+        let root =
+            std::env::temp_dir().join(format!("ipe_discover_symlink_skip_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        let src = root.join("src");
+        fs::create_dir_all(&src).expect("create src/");
+        fs::write(
+            src.join("Local.ipe"),
+            "module Local exposing (x)\n\nx = 0\n",
+        )
+        .expect("write Local.ipe");
+
+        // `External` sits outside src/ and holds a module that would only be
+        // found if the walk followed the symlink into it.
+        let external = root.join("External");
+        fs::create_dir_all(&external).expect("create External/");
+        fs::write(
+            external.join("Util.ipe"),
+            "module Util exposing (x)\n\nx = 0\n",
+        )
+        .expect("write External/Util.ipe");
+        std::os::unix::fs::symlink(&external, src.join("Link")).expect("plant Link -> External");
+
+        let discovered =
+            discover_modules(&src).expect("a symlinked directory is skipped, not a cycle");
+        assert!(
+            discovered
+                .iter()
+                .all(|m| m.module_path.last().map(String::as_str) != Some("Util")),
+            "the module behind the symlink must not be discovered: {discovered:?}"
+        );
+        assert!(
+            discovered
+                .iter()
+                .any(|m| m.module_path.last().map(String::as_str) == Some("Local")),
+            "the ordinary top-level module must still be discovered: {discovered:?}"
+        );
+
         let _ = fs::remove_dir_all(&root);
     }
 }

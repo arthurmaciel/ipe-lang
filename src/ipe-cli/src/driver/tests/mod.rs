@@ -1,9 +1,18 @@
 use super::*;
+use crate::io_bounded::SourceRefusal;
+use crate::output_dir::{EmitTarget, OutputRefusal, ProjectPaths};
 use crate::{
     ALL_CODES, Applicability, BTreeMap, Diagnostic, Path, PathBuf, Suggestion, cli_args, fs,
     project, style,
 };
 use ipe_diagnostics::{NameError, Span};
+
+/// An emit target at `out`, proven disjoint from a project directory beside it.
+fn emit_target(out: &Path) -> EmitTarget {
+    let project = out.with_extension("project");
+    fs::create_dir_all(&project).expect("project dir");
+    EmitTarget::at(out, &ProjectPaths::of_file(&project.join("Main.ipe"))).expect("prove out")
+}
 
 #[test]
 fn widget_tag_collision_from_distinct_paths_is_refused() {
@@ -124,7 +133,7 @@ fn io_other_kind_stays_readable_without_errno() {
 #[test]
 fn unknown_command_screen_is_fully_guttered() {
     let err = CliError::UnknownCommand {
-        attempted: "frobnicate".to_owned(),
+        attempted: style::TerminalSafe::sanitize("frobnicate"),
     };
     let rendered = err.to_string();
     // The advice line and the help header both carry the shared gutter — no
@@ -216,12 +225,13 @@ fn emitted_build_failure_reports_missing_feature() {
     let err = CliError::EmittedBuildFailed {
         what: "the emitted program",
         code: 101,
-        stderr: "package `ipe-app` depends on `ipe-runtime-rust` with feature `regex` \
-             but `ipe-runtime-rust` does not have that feature."
-            .to_owned(),
+        stderr: style::TerminalSafe::sanitize(
+            "package `ipe-app` depends on `ipe-runtime-rust` with feature `regex` \
+             but `ipe-runtime-rust` does not have that feature.",
+        ),
         runtime: Some(RuntimeContext {
-            root: PathBuf::from("/tmp/rt"),
-            version: "0.1.34".to_owned(),
+            root: style::TerminalSafe::sanitize("/tmp/rt"),
+            version: style::TerminalSafe::sanitize("0.1.34"),
         }),
     };
     let rendered = err.to_string();
@@ -245,7 +255,7 @@ fn emitted_build_failure_reports_unattributed_as_compiler_bug() {
     let err = CliError::EmittedBuildFailed {
         what: "the emitted program",
         code: 101,
-        stderr: "error[E0425]: cannot find value `x` in this scope".to_owned(),
+        stderr: style::TerminalSafe::sanitize("error[E0425]: cannot find value `x` in this scope"),
         runtime: None,
     };
     let rendered = err.to_string();
@@ -349,7 +359,7 @@ fn explain_unknown_code_display_is_deterministic() {
 
 #[test]
 fn explain_output_ends_with_trailing_newline() {
-    // `ipe explain <CODE>` does `print!("{page}")`, so the page itself must
+    // `ipe explain <CODE>` writes the page as is, so the page itself must
     // end with a newline to avoid a missing newline at the shell prompt.
     let page = explain_lookup("IPE-T0001").expect("known code must resolve");
     assert!(
@@ -554,7 +564,7 @@ fn generic_record_program_builds_and_prints_forty_two() {
          unwrap r =\n    r.value\n\n\
          main = Io.println (String.fromInt (unwrap (wrap 42)))\n";
 
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
 
@@ -609,6 +619,7 @@ fn false_marker() -> bool {
 
 /// Creates a temp directory with a nested `src/Main.ipe` and a `package.ipe`
 /// at the project root, confirming the upward walk finds the manifest.
+#[cfg(unix)]
 #[test]
 fn find_manifest_walks_up_to_project_root() {
     let tmp = std::env::temp_dir().join("ipec_find_manifest_test");
@@ -624,11 +635,34 @@ fn find_manifest_walks_up_to_project_root() {
     let main_ipe = src.join("Main.ipe");
     fs::write(&main_ipe, "module Main exposing (main)\nmain = 0\n").expect("write Main.ipe");
 
-    let found = find_manifest_for_ipe_file(&main_ipe);
+    let found = find_manifest_for_ipe_file(&main_ipe).expect("owned manifest is trusted");
     assert_eq!(
         found.as_deref(),
         Some(manifest.as_path()),
         "upward walk must find package.ipe at project root"
+    );
+    let _ = fs::remove_dir_all(&tmp);
+}
+
+/// Off Unix a manifest found above a file entry cannot be owner-checked, so
+/// the walk refuses it, naming the explicit-directory fix — the fail-closed
+/// twin of `find_manifest_walks_up_to_project_root`.
+#[cfg(not(unix))]
+#[test]
+fn find_manifest_refuses_an_unverifiable_manifest() {
+    let tmp = std::env::temp_dir().join("ipec_find_manifest_unverifiable_test");
+    let _ = fs::remove_dir_all(&tmp);
+    let src = tmp.join("src");
+    fs::create_dir_all(&src).expect("create src/");
+    let manifest = tmp.join("package.ipe");
+    fs::write(&manifest, "module Package exposing (package)\n").expect("write package.ipe");
+    let main_ipe = src.join("Main.ipe");
+    fs::write(&main_ipe, "module Main exposing (main)\nmain = 0\n").expect("write Main.ipe");
+
+    let refused = find_manifest_for_ipe_file(&main_ipe);
+    assert!(
+        matches!(&refused, Err(crate::CliError::Usage(msg)) if *msg == crate::text::msg::manifest_unverifiable(&manifest.display())),
+        "{refused:?}"
     );
     let _ = fs::remove_dir_all(&tmp);
 }
@@ -834,7 +868,7 @@ fn emit_web_app_source(hot_appearance: bool, tag: &str) -> Option<String> {
         hot_appearance,
         ..BuildOptions::from_env()
     };
-    let built = build_with_sibling_discovery_with_options(&entry, &out, &runtime, options);
+    let built = build_loose_file_with_options(&entry, &out, &runtime, options);
     assert!(built.is_ok(), "web app must compile ({tag}): {built:?}");
     // Walk `out/src` and concatenate every emitted `.rs` file: the view body
     // (and thus any hoisted `__ipe_lit` table) lands in a per-module file
@@ -911,14 +945,14 @@ fn find_manifest_returns_none_when_absent() {
     // on all systems, so we only assert non-panicking behaviour and that
     // the returned path (if Some) is a real file.
     let found = find_manifest_for_ipe_file(&ipe);
-    if let Some(ref p) = found {
+    if let Ok(Some(ref p)) = found {
         assert!(p.is_file(), "if Some, the manifest must exist on disk");
     }
     let _ = fs::remove_dir_all(&tmp);
 }
 
 /// Two-module program: `Main.ipe` calls a helper in sibling `Lib.ipe`.
-/// `build_with_sibling_discovery` must compile both without IPE-N0020.
+/// `build_loose_file` must compile both without IPE-N0020.
 #[test]
 fn sibling_discovery_compiles_two_module_program() {
     let runtime = resolve_runtime();
@@ -949,7 +983,7 @@ fn sibling_discovery_compiles_two_module_program() {
     .expect("write Main.ipe");
 
     let out = tmp.join("out");
-    let result = build_with_sibling_discovery(&src.join("Main.ipe"), &out, &runtime);
+    let result = build_loose_file(&src.join("Main.ipe"), &out, &runtime);
     assert!(
         result.is_ok(),
         "two-module program must compile via sibling discovery: {:?}",
@@ -997,7 +1031,12 @@ fn test_stage_build_resolves_src_modules_from_tests_dir() {
     .expect("write tests/Main.ipe");
 
     let out = tmp.join("out");
-    let result = build_test_with_project_sources(&src, &tests.join("Main.ipe"), &out, &runtime);
+    let result = build_test_into(
+        &src,
+        &tests.join("Main.ipe"),
+        OutTarget::Path(&out),
+        &runtime,
+    );
     assert!(
         result.is_ok(),
         "the test stage must resolve src/ modules from tests/ (no IPE-N0020): {:?}",
@@ -1087,7 +1126,7 @@ fn infer_error_in_dep_module_names_dep_file() {
     // Runtime is never accessed: a type error fires at infer, before lower/emit.
     let dummy_runtime = std::env::temp_dir();
     let out = tmp.join("out");
-    let result = build_with_sibling_discovery(&main_path, &out, &dummy_runtime);
+    let result = build_loose_file(&main_path, &out, &dummy_runtime);
 
     // Must fail — the program has a type error in Helper.
     assert!(
@@ -1192,7 +1231,7 @@ fn home_discriminant_cross_module_type_error_names_correct_file() {
 
     let dummy_runtime = std::env::temp_dir();
     let out = tmp.join("out");
-    let result = build_with_sibling_discovery(&src.join("Main.ipe"), &out, &dummy_runtime);
+    let result = build_loose_file(&src.join("Main.ipe"), &out, &dummy_runtime);
 
     // Must fail — type error in Lib.
     assert!(
@@ -1263,6 +1302,7 @@ fn find_single_cache_entry(cache_root: &Path) -> Option<PathBuf> {
 /// the SAME cache dir; if the driver reads and trusts the cache, the
 /// second build's `Cargo.toml` carries the sentinel verbatim. If it
 /// silently recompiled instead, the sentinel is gone.
+#[cfg(unix)] // a cache hit needs a file identity check
 #[test]
 fn on_disk_cache_hit_serves_a_tampered_entry_verbatim() {
     const SENTINEL: &str = "# CACHE-HIT-SENTINEL\n";
@@ -1273,6 +1313,7 @@ fn on_disk_cache_hit_serves_a_tampered_entry_verbatim() {
 
     let tmp = std::env::temp_dir().join(format!("ipe-cache-e2e-{}", std::process::id()));
     let cache_dir = tmp.join("cache");
+    let cache_site = crate::cache::CacheSite::Explicit(cache_dir.clone());
     let out_a = tmp.join("out-a");
     let out_b = tmp.join("out-b");
     let _ = fs::remove_dir_all(&tmp);
@@ -1286,20 +1327,20 @@ fn on_disk_cache_hit_serves_a_tampered_entry_verbatim() {
             "module Main exposing (main)\n\nimport Ipe.Io as Io\nimport Ipe.String as String\n\nmain : Task Error ()\nmain =\n    Io.println (String.fromInt 1)\n".to_owned(),
         ),
     );
-    let discovered = vec![project::DiscoveredModule {
-        path: PathBuf::from("<cache-e2e>/Main.ipe"),
-        module_path: entry_path.clone(),
-    }];
+    let discovered = vec![project::DiscoveredModule::user(
+        PathBuf::from("<cache-e2e>/Main.ipe"),
+        entry_path.clone(),
+    )];
 
     let (result_a, outcome_a) = compile_modules_observed(
         sources.clone(),
         discovered.clone(),
         &entry_path,
-        &out_a,
+        &emit_target(&out_a),
         &runtime,
         Path::new("<cache-e2e>"),
         ipe_backend_rust::DbDriver::Sqlite,
-        Some(&cache_dir),
+        Some(&cache_site),
         BuildOptions::default(),
     );
     assert!(
@@ -1329,11 +1370,11 @@ fn on_disk_cache_hit_serves_a_tampered_entry_verbatim() {
         sources,
         discovered,
         &entry_path,
-        &out_b,
+        &emit_target(&out_b),
         &runtime,
         Path::new("<cache-e2e>"),
         ipe_backend_rust::DbDriver::Sqlite,
-        Some(&cache_dir),
+        Some(&cache_site),
         BuildOptions::default(),
     );
     assert!(
@@ -1356,6 +1397,186 @@ fn on_disk_cache_hit_serves_a_tampered_entry_verbatim() {
     );
 
     let _ = fs::remove_dir_all(&tmp);
+}
+
+/// A cold build into a fresh output dir whose cache sits inside it — the
+/// default `<out>/.ipe-cache/<salt>` layout — succeeds and leaves the dir
+/// ipe-owned: the cache is stored only after the emit has claimed the dir,
+/// never creating it unmarked first. A rebuild into the same dir then hits.
+#[cfg(unix)] // a cache hit needs a file identity check
+#[test]
+fn cold_build_with_the_cache_inside_a_fresh_output_dir_claims_it() {
+    let Ok(runtime) = resolve_runtime() else {
+        return;
+    };
+
+    let tmp = std::env::temp_dir().join(format!("ipe-cache-in-out-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&tmp);
+    let out = tmp.join("out");
+    let cache_dir = out.join(".ipe-cache").join("salt");
+    let cache_site = crate::cache::CacheSite::InOutput {
+        out_dir: out.clone(),
+        salt: "salt".to_owned(),
+    };
+
+    let entry_path = vec!["Main".to_owned()];
+    let mut sources: BTreeMap<Vec<String>, (PathBuf, String)> = BTreeMap::new();
+    sources.insert(
+        entry_path.clone(),
+        (
+            PathBuf::from("<cache-in-out>/Main.ipe"),
+            "module Main exposing (main)\n\nimport Ipe.Io as Io\n\nmain : Task Error ()\nmain =\n    Io.println \"hi\"\n".to_owned(),
+        ),
+    );
+    let discovered = vec![project::DiscoveredModule::user(
+        PathBuf::from("<cache-in-out>/Main.ipe"),
+        entry_path.clone(),
+    )];
+
+    let build = || {
+        compile_modules_observed(
+            sources.clone(),
+            discovered.clone(),
+            &entry_path,
+            &emit_target(&out),
+            &runtime,
+            Path::new("<cache-in-out>"),
+            ipe_backend_rust::DbDriver::Sqlite,
+            Some(&cache_site),
+            BuildOptions::default(),
+        )
+    };
+
+    let (cold, cold_outcome) = build();
+    assert!(
+        cold.is_ok(),
+        "a cold build into a fresh dir must succeed: {cold:?}"
+    );
+    assert_eq!(cold_outcome, CacheOutcome::Miss);
+    assert!(
+        crate::output_dir::has_marker(&out).unwrap_or(false),
+        "the fresh output dir must be claimed (marked) by the build"
+    );
+    assert!(
+        find_single_cache_entry(&cache_dir).is_some(),
+        "the cold build must still store its cache entry inside the claimed dir"
+    );
+
+    let (warm, warm_outcome) = build();
+    assert!(
+        warm.is_ok(),
+        "a rebuild into the same dir must succeed: {warm:?}"
+    );
+    assert_eq!(warm_outcome, CacheOutcome::Hit);
+
+    let _ = fs::remove_dir_all(&tmp);
+}
+
+/// Which level of a marked `out/` carries the planted cache link.
+#[cfg(unix)]
+#[derive(Clone, Copy)]
+enum PlantedCacheLink {
+    /// `out/.ipe-cache` itself.
+    CacheDir,
+    /// `out/.ipe-cache/<salt>`.
+    Salt,
+}
+
+/// Build twice into a marked `out/` whose cache path crosses a planted link.
+///
+/// Both builds succeed uncached: the cache is advisory, so skipping it is the
+/// fail-closed outcome that still ships the Rust built from the sources, while
+/// refusing the build would add nothing (no entry is read or written through the
+/// link either way). The link target stays empty.
+#[cfg(unix)]
+fn build_through_planted_cache_link(tag: &str, planted: PlantedCacheLink) {
+    // A refusal test that skips proves nothing, so a missing runtime fails it.
+    let runtime = resolve_runtime();
+    assert!(runtime.is_ok(), "runtime must resolve: {runtime:?}");
+    let Ok(runtime) = runtime else { return };
+
+    let tmp = std::env::temp_dir().join(format!("ipe-cache-link-{tag}-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&tmp);
+    let out = tmp.join("out");
+    let elsewhere = tmp.join("elsewhere");
+    fs::create_dir_all(&elsewhere).expect("create the link target");
+    crate::output_dir::OwnedDir::claim(&out).expect("mark out/ as ipe's");
+    let cache = out.join(crate::cache::CACHE_DIR_NAME);
+    match planted {
+        PlantedCacheLink::CacheDir => {
+            std::os::unix::fs::symlink(&elsewhere, &cache).expect("plant .ipe-cache link");
+        }
+        PlantedCacheLink::Salt => {
+            fs::create_dir_all(&cache).expect("mkdir .ipe-cache");
+            std::os::unix::fs::symlink(&elsewhere, cache.join("salt")).expect("plant salt link");
+        }
+    }
+    let cache_site = crate::cache::CacheSite::InOutput {
+        out_dir: out.clone(),
+        salt: "salt".to_owned(),
+    };
+
+    let entry_path = vec!["Main".to_owned()];
+    let mut sources: BTreeMap<Vec<String>, (PathBuf, String)> = BTreeMap::new();
+    sources.insert(
+        entry_path.clone(),
+        (
+            PathBuf::from("<cache-link>/Main.ipe"),
+            "module Main exposing (main)\n\nimport Ipe.Io as Io\n\nmain : Task Error ()\nmain =\n    Io.println \"hi\"\n".to_owned(),
+        ),
+    );
+    let discovered = vec![project::DiscoveredModule::user(
+        PathBuf::from("<cache-link>/Main.ipe"),
+        entry_path.clone(),
+    )];
+    let build = || {
+        compile_modules_observed(
+            sources.clone(),
+            discovered.clone(),
+            &entry_path,
+            &emit_target(&out),
+            &runtime,
+            Path::new("<cache-link>"),
+            ipe_backend_rust::DbDriver::Sqlite,
+            Some(&cache_site),
+            BuildOptions::default(),
+        )
+    };
+
+    for round in ["cold", "rebuild"] {
+        let (result, outcome) = build();
+        assert!(
+            result.is_ok(),
+            "the {round} build proceeds without the cache: {result:?}"
+        );
+        assert_eq!(
+            outcome,
+            CacheOutcome::Miss,
+            "the {round} build never uses a cache behind the link"
+        );
+        assert!(
+            fs::read_dir(&elsewhere).is_ok_and(|mut entries| entries.next().is_none()),
+            "the {round} build wrote nothing through the planted link"
+        );
+    }
+    assert!(
+        out.join("Cargo.toml").is_file(),
+        "the product is still emitted"
+    );
+
+    let _ = fs::remove_dir_all(&tmp);
+}
+
+#[cfg(unix)]
+#[test]
+fn build_never_writes_through_a_planted_ipe_cache_link() {
+    build_through_planted_cache_link("dir", PlantedCacheLink::CacheDir);
+}
+
+#[cfg(unix)]
+#[test]
+fn build_never_writes_through_a_planted_salt_link() {
+    build_through_planted_cache_link("salt", PlantedCacheLink::Salt);
 }
 
 /// Walk `cache_root/<epoch>/*.ir.json` and return the single
@@ -1393,6 +1614,7 @@ fn find_single_ir_cache_entry(cache_root: &Path) -> Option<PathBuf> {
 /// at all, so the SAME lowered `Program` is still exactly reusable. This
 /// is the concrete case the IR tier exists to cover that the
 /// `EmittedProject` tier structurally cannot.
+#[cfg(unix)] // a cache hit needs a file identity check
 #[test]
 fn ir_cache_hit_reuses_lowered_program_across_a_db_driver_only_edit() {
     let Ok(runtime) = resolve_runtime() else {
@@ -1400,6 +1622,7 @@ fn ir_cache_hit_reuses_lowered_program_across_a_db_driver_only_edit() {
     };
     let tmp = std::env::temp_dir().join(format!("ipec-ir-cache-driver-{}", std::process::id()));
     let cache_dir = tmp.join("cache");
+    let cache_site = crate::cache::CacheSite::Explicit(cache_dir.clone());
     let out_a = tmp.join("out-a");
     let out_b = tmp.join("out-b");
     let _ = fs::remove_dir_all(&tmp);
@@ -1413,20 +1636,20 @@ fn ir_cache_hit_reuses_lowered_program_across_a_db_driver_only_edit() {
             "module Main exposing (main)\n\nimport Ipe.Io as Io\nimport Ipe.String as String\n\nmain : Task Error ()\nmain =\n    Io.println (String.fromInt 1)\n".to_owned(),
         ),
     );
-    let discovered = vec![project::DiscoveredModule {
-        path: PathBuf::from("<p>/Main.ipe"),
-        module_path: entry_path.clone(),
-    }];
+    let discovered = vec![project::DiscoveredModule::user(
+        PathBuf::from("<p>/Main.ipe"),
+        entry_path.clone(),
+    )];
 
     let (result_a, outcome_a) = compile_modules_observed(
         sources.clone(),
         discovered.clone(),
         &entry_path,
-        &out_a,
+        &emit_target(&out_a),
         &runtime,
         Path::new("<p>"),
         ipe_backend_rust::DbDriver::Sqlite,
-        Some(&cache_dir),
+        Some(&cache_site),
         BuildOptions::default(),
     );
     assert!(
@@ -1451,11 +1674,11 @@ fn ir_cache_hit_reuses_lowered_program_across_a_db_driver_only_edit() {
         sources,
         discovered,
         &entry_path,
-        &out_b,
+        &emit_target(&out_b),
         &runtime,
         Path::new("<p>"),
         ipe_backend_rust::DbDriver::Postgres,
-        Some(&cache_dir),
+        Some(&cache_site),
         BuildOptions::default(),
     );
     assert!(
@@ -1483,6 +1706,7 @@ fn ir_cache_hit_reuses_lowered_program_across_a_db_driver_only_edit() {
 /// the SENTINEL VALUE reaches the materialised `main.rs` — proof the
 /// driver actually reads, relocates, and RE-EMITS the on-disk IR entry
 /// rather than silently recompiling or ignoring the tamper.
+#[cfg(unix)] // a cache hit needs a file identity check
 #[test]
 fn on_disk_ir_cache_hit_serves_a_tampered_entry_verbatim() {
     let Ok(runtime) = resolve_runtime() else {
@@ -1490,6 +1714,7 @@ fn on_disk_ir_cache_hit_serves_a_tampered_entry_verbatim() {
     };
     let tmp = std::env::temp_dir().join(format!("ipec-ir-cache-tamper-{}", std::process::id()));
     let cache_dir = tmp.join("cache");
+    let cache_site = crate::cache::CacheSite::Explicit(cache_dir.clone());
     let out_a = tmp.join("out-a");
     let out_b = tmp.join("out-b");
     let _ = fs::remove_dir_all(&tmp);
@@ -1503,20 +1728,20 @@ fn on_disk_ir_cache_hit_serves_a_tampered_entry_verbatim() {
             "module Main exposing (main)\n\nimport Ipe.Io as Io\nimport Ipe.String as String\n\nmain : Task Error ()\nmain =\n    Io.println (String.fromInt 1)\n".to_owned(),
         ),
     );
-    let discovered = vec![project::DiscoveredModule {
-        path: PathBuf::from("<p>/Main.ipe"),
-        module_path: entry_path.clone(),
-    }];
+    let discovered = vec![project::DiscoveredModule::user(
+        PathBuf::from("<p>/Main.ipe"),
+        entry_path.clone(),
+    )];
 
     let (result_a, outcome_a) = compile_modules_observed(
         sources.clone(),
         discovered.clone(),
         &entry_path,
-        &out_a,
+        &emit_target(&out_a),
         &runtime,
         Path::new("<p>"),
         ipe_backend_rust::DbDriver::Sqlite,
-        Some(&cache_dir),
+        Some(&cache_site),
         BuildOptions::default(),
     );
     assert!(
@@ -1547,11 +1772,11 @@ fn on_disk_ir_cache_hit_serves_a_tampered_entry_verbatim() {
         sources,
         discovered,
         &entry_path,
-        &out_b,
+        &emit_target(&out_b),
         &runtime,
         Path::new("<p>"),
         ipe_backend_rust::DbDriver::Postgres,
-        Some(&cache_dir),
+        Some(&cache_site),
         BuildOptions::default(),
     );
     assert!(
@@ -1571,6 +1796,93 @@ fn on_disk_ir_cache_hit_serves_a_tampered_entry_verbatim() {
     );
 
     let _ = fs::remove_dir_all(&tmp);
+}
+
+/// A production IR-cache hit on a `Debug.*` program blames the in-memory entry text.
+///
+/// The IR tier's key omits the production flag, so a development build
+/// seeds it and a release build of the same source hits it, then refuses
+/// with IPE-L0140. The refusal renders against the entry source the build
+/// already holds, never a fresh read of `blame_path`, whose disk bytes here
+/// differ.
+#[cfg(unix)] // a cache hit needs a file identity check
+#[test]
+fn production_ir_cache_hit_blames_the_in_memory_entry_source() {
+    let Ok(runtime) = resolve_runtime() else {
+        return;
+    };
+    let tmp = std::env::temp_dir().join(format!("ipec-ir-cache-blame-{}", std::process::id()));
+    let cache_dir = tmp.join("cache");
+    let cache_site = crate::cache::CacheSite::Explicit(cache_dir);
+    let _ = fs::remove_dir_all(&tmp);
+    fs::create_dir_all(&tmp).expect("create scratch dir");
+    let blame_path = tmp.join("package.ipe");
+    fs::write(&blame_path, "on-disk bytes the refusal must not show\n").expect("write blame file");
+
+    let entry_path = vec!["Main".to_owned()];
+    let entry_file = tmp.join("Main.ipe");
+    let entry_text = "module Main exposing (main)\n\nimport Ipe.Io as Io\nimport Ipe.Debug as Debug\n\nshout : String -> String\nshout s =\n    Debug.log \"shout\" s\n\nmain : Task Error ()\nmain =\n    Io.println (shout \"hi\")\n";
+    let mut sources: BTreeMap<Vec<String>, (PathBuf, String)> = BTreeMap::new();
+    sources.insert(
+        entry_path.clone(),
+        (entry_file.clone(), entry_text.to_owned()),
+    );
+    let discovered = vec![project::DiscoveredModule::user(
+        entry_file.clone(),
+        entry_path.clone(),
+    )];
+
+    let (dev, dev_outcome) = compile_modules_observed(
+        sources.clone(),
+        discovered.clone(),
+        &entry_path,
+        &emit_target(&tmp.join("out-dev")),
+        &runtime,
+        &blame_path,
+        ipe_backend_rust::DbDriver::Sqlite,
+        Some(&cache_site),
+        BuildOptions::default(),
+    );
+    let (release, release_outcome) = compile_modules_observed(
+        sources,
+        discovered,
+        &entry_path,
+        &emit_target(&tmp.join("out-release")),
+        &runtime,
+        &blame_path,
+        ipe_backend_rust::DbDriver::Sqlite,
+        Some(&cache_site),
+        BuildOptions {
+            production: true,
+            ..BuildOptions::default()
+        },
+    );
+    let _ = fs::remove_dir_all(&tmp);
+
+    assert!(
+        dev.is_ok(),
+        "the development build succeeds: {:?}",
+        dev.err()
+    );
+    assert_eq!(dev_outcome, CacheOutcome::Miss);
+    assert_eq!(
+        release_outcome,
+        CacheOutcome::IrHit,
+        "the release build must take the IR-cache fast path under test"
+    );
+    assert!(
+        matches!(release, Err(CliError::Pipeline { .. })),
+        "the release build must refuse with a pipeline diagnostic: {release:?}"
+    );
+    let Err(CliError::Pipeline { file, src, diag }) = release else {
+        return;
+    };
+    assert_eq!(diag.code().as_str(), "IPE-L0140");
+    assert_eq!(file, entry_file, "the refusal blames the entry module");
+    assert_eq!(
+        src, entry_text,
+        "the refusal renders the in-memory entry text, not a disk re-read"
+    );
 }
 
 /// A cache disabled via `cache_dir: None` never touches disk for
@@ -1593,16 +1905,16 @@ fn cache_dir_none_disables_caching_entirely() {
             "module Main exposing (main)\n\nimport Ipe.Io as Io\nimport Ipe.String as String\n\nmain : Task Error ()\nmain =\n    Io.println (String.fromInt 1)\n".to_owned(),
         ),
     );
-    let discovered = vec![project::DiscoveredModule {
-        path: PathBuf::from("<cache-e2e>/Main.ipe"),
-        module_path: entry_path.clone(),
-    }];
+    let discovered = vec![project::DiscoveredModule::user(
+        PathBuf::from("<cache-e2e>/Main.ipe"),
+        entry_path.clone(),
+    )];
 
     let (result, outcome) = compile_modules_observed(
         sources,
         discovered,
         &entry_path,
-        &out_dir,
+        &emit_target(&out_dir),
         &runtime,
         Path::new("<cache-e2e>"),
         ipe_backend_rust::DbDriver::Sqlite,
@@ -1979,7 +2291,7 @@ fn build_refuses_a_pure_library_with_a_clean_message() {
         &tmp.join("package.ipe"),
         &out,
         Path::new("."),
-        BuildOptions::from_env(),
+        &BuildOptions::from_env(),
     );
     assert!(
         matches!(&result, Err(CliError::Usage(msg)) if msg.contains("library package")),
@@ -2030,7 +2342,7 @@ fn parse_audit_entry_args_requires_entry_file() {
     );
 }
 
-/// `parse_audit_entry_args` — unknown flag yields `UsageOwned`.
+/// `parse_audit_entry_args` — unknown flag yields `Usage`.
 #[test]
 fn parse_audit_entry_args_rejects_unknown_flag() {
     let args: Vec<String> = ["packages/foo.toml", "--unknown"]
@@ -2039,23 +2351,27 @@ fn parse_audit_entry_args_rejects_unknown_flag() {
         .collect();
     let err = parse_audit_entry_args(&args).unwrap_err();
     assert!(
-        matches!(err, CliError::UsageOwned(_)),
-        "unknown flag must be a UsageOwned error: {err:?}"
+        matches!(err, CliError::Usage(_)),
+        "unknown flag must be a Usage error: {err:?}"
     );
 }
 
-/// `parse_audit_entry_args` — `--index` without a value yields `Usage`.
+/// `parse_audit_entry_args` — a value-taking flag without its value yields the
+/// catalog's `flag-needs-value` refusal, the one shape every such flag shares.
 #[test]
-fn parse_audit_entry_args_rejects_index_without_value() {
-    let args: Vec<String> = ["packages/foo.toml", "--index"]
-        .iter()
-        .map(ToString::to_string)
-        .collect();
-    let err = parse_audit_entry_args(&args).unwrap_err();
-    assert!(
-        matches!(err, CliError::Usage(_)),
-        "--index without value must be a Usage error: {err:?}"
-    );
+fn parse_audit_entry_args_rejects_a_flag_without_its_value() {
+    for flag in ["--index", "--attested-actor"] {
+        let args: Vec<String> = ["packages/foo.toml", flag]
+            .iter()
+            .map(ToString::to_string)
+            .collect();
+        let err = parse_audit_entry_args(&args).unwrap_err();
+        let expected = crate::text::flag_needs_value(&"package audit-entry", &flag);
+        assert!(
+            matches!(&err, CliError::Usage(message) if *message == expected),
+            "{flag} without value must be the flag-needs-value refusal: {err:?}"
+        );
+    }
 }
 
 /// `parse_audit_entry_args` — two positionals yields `Usage`.
@@ -2182,8 +2498,8 @@ fn audit_entry_rejects_when_all_versions_are_already_in_baseline() {
     .collect();
     let err = run_audit_entry(&args).unwrap_err();
     assert!(
-        matches!(err, CliError::UsageOwned(_)),
-        "no new versions must be a UsageOwned error: {err:?}"
+        matches!(err, CliError::Usage(_)),
+        "no new versions must be a Usage error: {err:?}"
     );
     let _ = std::fs::remove_dir_all(&submitted_root);
     let _ = std::fs::remove_dir_all(&baseline_root);
@@ -2234,8 +2550,8 @@ fn audit_entry_rejects_rewriting_a_published_version() {
     .collect();
     let err = run_audit_entry(&args).unwrap_err();
     assert!(
-        matches!(&err, CliError::UsageOwned(msg) if msg.contains("immutable")),
-        "rewriting a published version must be a UsageOwned reject naming immutability: {err:?}"
+        matches!(&err, CliError::Usage(msg) if msg.contains("immutable")),
+        "rewriting a published version must be a Usage reject naming immutability: {err:?}"
     );
     let _ = std::fs::remove_dir_all(&submitted_root);
     let _ = std::fs::remove_dir_all(&baseline_root);
@@ -2361,11 +2677,15 @@ fn unsafe_scan_manifest_project_fails_closed_on_unreadable_module() {
     let _ = fs::set_permissions(&unreadable, fs::Permissions::from_mode(0o644));
     let _ = fs::remove_dir_all(&dir);
 
-    // Must be `Err(CliError::Io)` naming the unreadable path — never an
-    // `Ok` partial scan and never a different error variant.
+    // Must be the typed access-denied refusal naming the unreadable path —
+    // never an `Ok` partial scan and never a different error variant.
     assert!(
-        matches!(&result, Err(CliError::Io { path, .. }) if path == &unreadable),
-        "expected Err(CliError::Io) naming {unreadable:?}, got: {result:?}"
+        matches!(
+            &result,
+            Err(CliError::SourceRefused { path, reason: SourceRefusal::AccessDenied })
+                if path == &unreadable
+        ),
+        "expected Err(CliError::SourceRefused(AccessDenied)) naming {unreadable:?}, got: {result:?}"
     );
 }
 
@@ -2421,11 +2741,122 @@ fn unsafe_scan_single_file_fallback_fails_closed_on_unreadable_entry() {
     let _ = fs::set_permissions(&entry, fs::Permissions::from_mode(0o644));
     let _ = fs::remove_dir_all(&dir);
 
-    // Must be `Err(CliError::Io)` naming the unreadable entry — never an
-    // `Ok` empty scan and never a different error variant.
+    // Must be the typed access-denied refusal naming the unreadable entry —
+    // never an `Ok` empty scan and never a different error variant.
     assert!(
-        matches!(&result, Err(CliError::Io { path, .. }) if path == &entry),
-        "expected Err(CliError::Io) naming {entry:?}, got: {result:?}"
+        matches!(
+            &result,
+            Err(CliError::SourceRefused { path, reason: SourceRefusal::AccessDenied })
+                if path == &entry
+        ),
+        "expected Err(CliError::SourceRefused(AccessDenied)) naming {entry:?}, got: {result:?}"
+    );
+}
+
+/// An unreadable imported module fails both consent scans closed.
+///
+/// Neither scan may judge the entry alone when a module it imports cannot be
+/// read — that module's `.Unsafe`/native imports would go unseen.
+#[cfg(unix)]
+#[test]
+fn consent_scans_fail_closed_on_unreadable_imported_module() {
+    use std::fs;
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = unsafe_scan_test_dir("sibling-fail");
+    let entry = dir.join("Main.ipe");
+    fs::write(
+        &entry,
+        "module Main exposing (main)\n\nimport Helper\n\nmain = Helper.h\n",
+    )
+    .expect("write entry");
+    let helper = dir.join("Helper.ipe");
+    fs::write(&helper, "module Helper exposing (h)\n\nh = 1\n").expect("write Helper");
+    fs::set_permissions(&helper, fs::Permissions::from_mode(0o000)).expect("chmod 000");
+
+    let unsafe_scan = user_sources_for_unsafe_scan(None, &entry);
+    let web_scan = named_sources_for_web_scan(None, &entry);
+
+    let _ = fs::set_permissions(&helper, fs::Permissions::from_mode(0o644));
+    let _ = fs::remove_dir_all(&dir);
+
+    assert!(
+        matches!(
+            &unsafe_scan,
+            Err(CliError::SourceRefused { path, reason: SourceRefusal::AccessDenied })
+                if path.ends_with("Helper.ipe")
+        ),
+        "unsafe scan must refuse the unreadable module by name, got: {unsafe_scan:?}"
+    );
+    assert!(
+        matches!(
+            &web_scan,
+            Err(CliError::SourceRefused { path, reason: SourceRefusal::AccessDenied })
+                if path.ends_with("Helper.ipe")
+        ),
+        "web scan must refuse the unreadable module by name, got: {web_scan:?}"
+    );
+}
+
+/// A closure one module past the loose-file limit fails both consent scans closed.
+#[test]
+fn consent_scans_fail_closed_on_closure_past_the_module_limit() {
+    use std::fmt::Write as _;
+    use std::fs;
+
+    let dir = unsafe_scan_test_dir("closure-limit");
+    let count = crate::loose_file::MAX_LOOSE_FILE_MODULES + 1;
+    let mut entry_text = String::from("module Main exposing (main)\n\n");
+    for i in 0..count {
+        let _ = writeln!(entry_text, "import M{i}");
+        fs::write(
+            dir.join(format!("M{i}.ipe")),
+            format!("module M{i} exposing ()\n"),
+        )
+        .expect("write module");
+    }
+    entry_text.push_str("\nmain = 1\n");
+    let entry = dir.join("Main.ipe");
+    fs::write(&entry, &entry_text).expect("write entry");
+
+    let unsafe_scan = user_sources_for_unsafe_scan(None, &entry);
+    let web_scan = named_sources_for_web_scan(None, &entry);
+    let _ = fs::remove_dir_all(&dir);
+
+    assert!(
+        matches!(&unsafe_scan, Err(CliError::DiscoveryLimitReached { .. })),
+        "unsafe scan must refuse the over-limit closure, got: {unsafe_scan:?}"
+    );
+    assert!(
+        matches!(&web_scan, Err(CliError::DiscoveryLimitReached { .. })),
+        "web scan must refuse the over-limit closure, got: {web_scan:?}"
+    );
+}
+
+/// An entry that does not parse is scanned alone, keyed by its own path.
+///
+/// It has no import closure to follow; the build reports the parse error.
+#[test]
+fn consent_scans_read_an_unparseable_entry_alone() {
+    use std::fs;
+
+    let dir = unsafe_scan_test_dir("unparseable");
+    let entry = dir.join("Main.ipe");
+    let text = "module Main exposing (\nimport Ipe.Unsafe\n";
+    fs::write(&entry, text).expect("write entry");
+
+    let unsafe_scan = user_sources_for_unsafe_scan(None, &entry);
+    let web_scan = named_sources_for_web_scan(None, &entry);
+    let _ = fs::remove_dir_all(&dir);
+
+    assert!(
+        matches!(&unsafe_scan, Ok(sources) if sources.as_slice() == [text]),
+        "unsafe scan must see the entry text, got: {unsafe_scan:?}"
+    );
+    let expected = vec![(entry.display().to_string(), text.to_owned())];
+    assert!(
+        matches!(&web_scan, Ok(named) if named == &expected),
+        "web scan must see the entry text keyed by its path, got: {web_scan:?}"
     );
 }
 
@@ -2601,7 +3032,7 @@ fn obligation_error_blames_owning_module_not_narrower_padded_sibling() {
 
     let dummy_runtime = std::env::temp_dir();
     let out = tmp.join("out");
-    let result = build_with_sibling_discovery(&src.join("Main.ipe"), &out, &dummy_runtime);
+    let result = build_loose_file(&src.join("Main.ipe"), &out, &dummy_runtime);
 
     assert!(
         result.is_err(),
@@ -2693,95 +3124,612 @@ fn artifact_size_bytes_surfaces_a_missing_artifact_as_a_typed_error() {
     );
 }
 
-// ── `ipe debugger` — record/replay refusals ────────────────────────────────
+// ── `ipe run --record` / `--replay` — refusals ─────────────────────────────
 
-// A bare `ipe debugger` (no subcommand) is a usage error naming the two forms,
-// never a silent no-op.
+// Recording and replay are refused, before any build, for every shape without
+// a cli/worker update loop — never a run that silently writes no log, nor a
+// replay that silently runs the app live.
 #[test]
-fn debugger_without_subcommand_is_usage_error() {
-    let err = run_debugger(&[]).expect_err("a bare `ipe debugger` must be a usage error");
-    assert!(
-        matches!(err, CliError::Usage(_) | CliError::UsageOwned(_)),
-        "expected a usage error, got: {err:?}"
-    );
+fn session_is_refused_for_shapes_without_a_session() {
+    for flag in ["--record", "--replay"] {
+        for shape in [
+            crate::delivery::Shape::Script,
+            crate::delivery::Shape::Tui,
+            crate::delivery::Shape::Web,
+        ] {
+            let result = gate_session(flag, shape, CompileTarget::Native);
+            assert!(
+                matches!(&result, Err(CliError::Usage(msg)) if msg.contains(flag)),
+                "{flag} on {shape:?} must be refused, got: {result:?}"
+            );
+        }
+    }
 }
 
-// An unknown subcommand is refused, naming the accepted set.
+// A cli app run under `--target wasi` executes in wasmtime, where the recorder
+// is not wired: refused rather than recording nothing or replaying live.
 #[test]
-fn debugger_unknown_subcommand_is_refused() {
-    let err = run_debugger(&["scrub".to_owned()])
-        .expect_err("an unknown debugger subcommand must be refused");
+fn session_is_refused_for_a_wasi_run() {
+    for flag in ["--record", "--replay"] {
+        let result = gate_session(flag, crate::delivery::Shape::Cli, CompileTarget::WasmWasi);
+        assert!(
+            matches!(&result, Err(CliError::Usage(msg)) if msg.contains("wasi")),
+            "{flag} with --target wasi must be refused, got: {result:?}"
+        );
+    }
+}
+
+// A native cli or worker app has a recordable session: the shape gate admits it.
+#[test]
+fn session_is_admitted_for_a_native_cli_or_worker_app() {
+    for shape in [crate::delivery::Shape::Cli, crate::delivery::Shape::Worker] {
+        let result = gate_session("--record", shape, CompileTarget::Native);
+        assert!(
+            result.is_ok(),
+            "{shape:?} must be admitted, got: {result:?}"
+        );
+    }
+}
+
+// A native-bearing program runs jailed, where the log is unreachable: refused
+// whether the crossing is inferred or only declared, and a pure program passes.
+#[test]
+fn session_is_refused_for_a_native_bearing_program() {
+    use crate::run_sandbox::ResolvedCapabilities;
+    use ipe_ir::Capability;
+    use std::collections::BTreeSet;
+    let native: BTreeSet<Capability> = std::iter::once(Capability::NativeFfi).collect();
+    let raw: BTreeSet<Capability> = std::iter::once(Capability::FfiRaw).collect();
+    let bearing = [
+        ResolvedCapabilities {
+            inferred: native.clone(),
+            declared: BTreeSet::new(),
+        },
+        ResolvedCapabilities {
+            inferred: BTreeSet::new(),
+            declared: native,
+        },
+        ResolvedCapabilities {
+            inferred: raw,
+            declared: BTreeSet::new(),
+        },
+    ];
+    for flag in ["--record", "--replay"] {
+        for resolved in &bearing {
+            let result = gate_session_capabilities(flag, resolved);
+            assert!(
+                matches!(&result, Err(CliError::Usage(msg)) if msg.contains("native-bearing")),
+                "{flag} on a native-bearing program must be refused, got: {result:?}"
+            );
+        }
+        let pure = ResolvedCapabilities {
+            inferred: BTreeSet::new(),
+            declared: BTreeSet::new(),
+        };
+        let result = gate_session_capabilities(flag, &pure);
+        assert!(
+            result.is_ok(),
+            "{flag} on a pure program must pass: {result:?}"
+        );
+    }
+}
+
+// A replay whose log does not exist is refused before any build, naming the
+// path and the way to record one.
+#[test]
+fn replay_of_a_missing_log_is_refused_before_building() {
+    let dir = std::env::temp_dir().join(format!("ipe_replay_missing_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    for absent in ["absent.ipemsgs", "absent.ipelog"] {
+        let result = replay_plan(dir.join(absent));
+        assert!(
+            matches!(&result, Err(CliError::Usage(msg)) if msg.contains("--record")),
+            "a missing replay log must be refused: {result:?}"
+        );
+    }
+}
+
+// The default replay log is the typed sibling of the trace `--record` writes.
+#[test]
+fn default_replay_log_is_the_typed_sibling_of_the_trace() {
+    assert_eq!(typed_log_file(), Path::new("session.ipemsgs"));
+}
+
+/// A fresh scratch directory for a session-log test.
+fn session_scratch(tag: &str) -> PathBuf {
+    let dir = std::env::temp_dir().join(format!("ipe_session_{tag}_{}", std::process::id()));
+    let _ = fs::remove_dir_all(&dir);
+    assert!(fs::create_dir_all(&dir).is_ok(), "make scratch dir");
+    dir
+}
+
+// A named `.ipelog` is shown as a trace; any other named log is folded.
+#[test]
+fn named_replay_log_is_shown_when_it_is_a_trace() {
+    let dir = session_scratch("named");
+    let trace = dir.join("bug.ipelog");
+    let typed = dir.join("bug.ipemsgs");
+    assert!(fs::write(&trace, "Add(1) => 1\n").is_ok(), "write trace");
+    assert!(fs::write(&typed, "{}").is_ok(), "write typed log");
+    let shown = replay_plan(trace.clone());
     assert!(
-        matches!(&err, CliError::UsageOwned(_)),
-        "expected a UsageOwned error, got: {err:?}"
+        matches!(&shown, Ok(SessionPlan::ShowTrace(p)) if *p == trace),
+        "a named trace must be shown: {shown:?}"
     );
-    let CliError::UsageOwned(msg) = &err else {
+    let folded = replay_plan(typed.clone());
+    assert!(
+        matches!(&folded, Ok(SessionPlan::Run(SessionEnv::Replay(p))) if *p == typed),
+        "a named typed log must be folded: {folded:?}"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+// With no path, `--replay` folds the typed log, falls back to showing the
+// trace when only the trace exists (a trace-only session), and refuses when
+// neither was recorded.
+#[test]
+fn default_replay_prefers_the_typed_log_then_the_trace() {
+    let dir = session_scratch("default");
+    let entry = dir.join("proj").join("Main.ipe");
+    assert!(
+        fs::create_dir_all(dir.join("proj")).is_ok(),
+        "make project dir"
+    );
+    assert!(
+        fs::write(&entry, "module Main exposing (main)\n").is_ok(),
+        "write entry"
+    );
+    let out = dir.join("out");
+    let output_result = resolve_output_root(Some(&out.to_string_lossy()), &entry, None);
+    assert!(output_result.is_ok(), "out must resolve: {output_result:?}");
+    let Ok(output) = output_result else { return };
+    let replay = cli_args::SessionMode::Replay(None);
+
+    let none = resolve_session_plan(&replay, &output);
+    assert!(
+        matches!(&none, Err(CliError::Usage(msg)) if msg.contains("--record")),
+        "no recorded session must be refused: {none:?}"
+    );
+
+    let trace = out.join(RECORD_LOG_FILE);
+    assert!(fs::write(&trace, "Add(1) => 1\n").is_ok(), "write trace");
+    let shown = resolve_session_plan(&replay, &output);
+    assert!(
+        matches!(&shown, Ok(SessionPlan::ShowTrace(p)) if p.ends_with(RECORD_LOG_FILE)),
+        "a lone trace must be shown: {shown:?}"
+    );
+
+    assert!(
+        fs::write(out.join(typed_log_file()), "{}").is_ok(),
+        "write typed log"
+    );
+    let folded = resolve_session_plan(&replay, &output);
+    assert!(
+        matches!(&folded, Ok(SessionPlan::Run(SessionEnv::Replay(p))) if p.ends_with(typed_log_file())),
+        "the typed log must win over the trace: {folded:?}"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+// A planted trace carrying terminal escapes (a screen clear, an OSC 8
+// hyperlink, C1 controls, DEL, tabs) is shown with every control character
+// removed, one step per line under a label that says it is not a replay.
+#[test]
+fn shown_trace_strips_every_control_character() {
+    let dir = session_scratch("laced");
+    let trace = dir.join("planted\x1b[31m.ipelog");
+    let laced = "\x1b[2JAdd(1) => 1\n\
+                 Say(\x1b]8;;https://evil.example\x07link\x1b]8;;\x1b\\) => 2\r\n\
+                 \u{9b}2J\u{9d}0;title\u{9c}Add(\u{85}3\t\u{7f}) => 5\n\
+                 \x1b[H\x1b[2J\n";
+    assert!(fs::write(&trace, laced).is_ok(), "write planted trace");
+    let shown = load_session_trace(&trace);
+    assert!(
+        shown.is_ok(),
+        "a UTF-8 trace under the cap must show: {shown:?}"
+    );
+    let Ok(out) = shown else { return };
+    assert!(
+        !out.chars().any(|c| c.is_control() && c != '\n'),
+        "the shown trace must carry no control character: {out:?}"
+    );
+    let lines: Vec<&str> = out.lines().collect();
+    assert_eq!(lines.len(), 4, "label + one line per step: {out:?}");
+    assert!(
+        lines.first().is_some_and(|l| l.contains("not a replay")),
+        "the trace must be labelled as not a replay: {out:?}"
+    );
+    assert_eq!(lines.get(1).copied(), Some("Add(1) => 1"));
+    assert_eq!(lines.get(2).copied(), Some("Say(link) => 2"));
+    assert!(
+        lines.get(3).is_some_and(|l| l.ends_with("Add(3) => 5")),
+        "{out:?}"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+// A trace over the cap is refused typed, before anything is rendered.
+#[test]
+fn shown_trace_over_the_cap_is_refused() {
+    let dir = session_scratch("oversized");
+    let trace = dir.join("big.ipelog");
+    let over = usize::try_from(crate::io_bounded::SESSION_TRACE_READ_CAP + 1).unwrap_or(usize::MAX);
+    assert!(
+        fs::write(&trace, vec![b'a'; over]).is_ok(),
+        "write big trace"
+    );
+    let shown = load_session_trace(&trace);
+    assert!(
+        matches!(shown, Err(CliError::FileTooLarge { .. })),
+        "an oversized trace must be refused: {shown:?}"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+// A non-UTF-8 trace is refused typed, never a panic and never lossy output.
+#[test]
+fn shown_trace_not_utf8_is_refused() {
+    let dir = session_scratch("not_utf8");
+    let trace = dir.join("bin.ipelog");
+    assert!(
+        fs::write(&trace, [b'A', 0xff, 0xfe, b'\n']).is_ok(),
+        "write binary trace"
+    );
+    let shown = load_session_trace(&trace);
+    assert!(
+        matches!(&shown, Err(CliError::Io { source, .. })
+            if source.kind() == std::io::ErrorKind::InvalidData),
+        "a non-UTF-8 trace must be refused: {shown:?}"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+// -----------------------------------------------------------------------
+// User files are never overwritten or deleted by the build pipeline
+// -----------------------------------------------------------------------
+
+fn user_project(tag: &str) -> PathBuf {
+    let dir = std::env::temp_dir().join(format!("ipe_user_files_{tag}_{}", std::process::id()));
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(dir.join("src")).expect("make src");
+    fs::write(
+        dir.join("src").join("Main.ipe"),
+        "module Main exposing (main)\n",
+    )
+    .expect("write Main.ipe");
+    fs::write(dir.join("Cargo.toml"), "# the user's own manifest\n").expect("write Cargo.toml");
+    dir
+}
+
+/// Emitting into a directory that holds the user's files is refused untouched.
+///
+/// This is `ipe build --out .`: nothing is written or pruned, and the user's
+/// `src/` and `Cargo.toml` survive byte-for-byte.
+#[test]
+fn emitting_into_a_user_directory_is_refused_untouched() {
+    let dir = user_project("emit");
+    let emitted = ipe_backend::EmittedProject {
+        files: BTreeMap::new(),
+        cargo_toml: "[package]\nname = \"ipe-app\"\n".to_owned(),
+        uses_webview: false,
+    };
+    let elsewhere = dir.with_extension("project");
+    fs::create_dir_all(&elsewhere).expect("project dir");
+    let result = EmitTarget::at(&dir, &ProjectPaths::of_file(&elsewhere.join("Main.ipe")))
+        .and_then(|target| {
+            write_emitted_project(&emitted, &target, &dir.join("no-runtime"), None, false)
+        });
+    assert!(
+        matches!(result, Err(CliError::OutputRefused(_))),
+        "emitting into a user directory must be refused, got {result:?}"
+    );
+    let _ = fs::remove_dir_all(&elsewhere);
+    assert_eq!(
+        fs::read_to_string(dir.join("src").join("Main.ipe")).unwrap_or_default(),
+        "module Main exposing (main)\n",
+        "the user's source must survive"
+    );
+    assert_eq!(
+        fs::read_to_string(dir.join("Cargo.toml")).unwrap_or_default(),
+        "# the user's own manifest\n",
+        "the user's Cargo.toml must survive"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// A lossy rewrite backs the original up before the atomic replace.
+///
+/// This covers `ipe fix` and `lint --fix`; a backup name is never reused.
+#[test]
+fn lossy_rewrite_backs_up_the_original() {
+    let dir = user_project("lossy");
+    let main = dir.join("src").join("Main.ipe");
+    let first = rewrite_user_file(
+        &main,
+        "module Main exposing (main)\n-- v2\n",
+        RewriteKind::Lossy,
+    )
+    .expect("rewrite");
+    let second = rewrite_user_file(
+        &main,
+        "module Main exposing (main)\n-- v3\n",
+        RewriteKind::Lossy,
+    )
+    .expect("rewrite again");
+    let (Some(first), Some(second)) = (first, second) else {
+        assert!(false_marker(), "a lossy rewrite must report its backup");
         return;
     };
-    assert!(
-        msg.contains("scrub") && msg.contains("record") && msg.contains("replay"),
-        "the refusal must name the offending token and the accepted set; got: {msg:?}"
+    assert_ne!(first, second, "each rewrite keeps its own backup");
+    assert_eq!(
+        fs::read_to_string(&first).unwrap_or_default(),
+        "module Main exposing (main)\n"
     );
+    assert_eq!(
+        fs::read_to_string(&second).unwrap_or_default(),
+        "module Main exposing (main)\n-- v2\n"
+    );
+    assert_eq!(
+        fs::read_to_string(&main).unwrap_or_default(),
+        "module Main exposing (main)\n-- v3\n"
+    );
+    let lossless = rewrite_user_file(
+        &main,
+        "module Main exposing (main)\n",
+        RewriteKind::Lossless,
+    )
+    .expect("lossless rewrite");
+    assert!(lossless.is_none(), "a lossless rewrite takes no backup");
+    let _ = fs::remove_dir_all(&dir);
 }
 
-// `record` with no entry is refused before any build starts (fail-closed on a
-// missing positional).
+/// A symlinked source file is rewritten at its real location.
+///
+/// That is the file the user edits; the link is kept, not replaced by a
+/// detached copy.
+#[cfg(unix)]
 #[test]
-fn debugger_record_without_entry_is_refused() {
-    let err =
-        run_debugger(&["record".to_owned()]).expect_err("`record` with no entry must be refused");
+fn rewrite_follows_a_symlinked_source_to_the_real_file() {
+    let dir = user_project("symlink");
+    let real = dir.join("real.ipe");
+    fs::write(&real, "module Main exposing (main)\n").expect("write real");
+    let link = dir.join("src").join("Link.ipe");
+    std::os::unix::fs::symlink(&real, &link).expect("make link");
+    rewrite_user_file(
+        &link,
+        "module Main exposing (main)\n-- new\n",
+        RewriteKind::Lossless,
+    )
+    .expect("rewrite through link");
     assert!(
-        matches!(err, CliError::Usage(_) | CliError::UsageOwned(_)),
-        "expected a usage error, got: {err:?}"
+        fs::symlink_metadata(&link).is_ok_and(|m| m.file_type().is_symlink()),
+        "the link stays a link"
     );
+    assert_eq!(
+        fs::read_to_string(&real).unwrap_or_default(),
+        "module Main exposing (main)\n-- new\n"
+    );
+    let _ = fs::remove_dir_all(&dir);
 }
 
-// `record` rejects a second `--out` value rather than silently last-writing.
+/// The atomic writer's temp file is created exclusively.
+///
+/// A symlink planted at the temp name is never written through.
+#[cfg(unix)]
 #[test]
-fn debugger_record_rejects_duplicate_out() {
-    let err = run_debugger(&[
-        "record".to_owned(),
-        "Main.ipe".to_owned(),
-        "--out".to_owned(),
-        "a.log".to_owned(),
-        "--out".to_owned(),
-        "b.log".to_owned(),
-    ])
-    .expect_err("a second --out must be refused");
+fn atomic_write_never_writes_through_a_planted_temp_symlink() {
+    let dir = user_project("tmp_symlink");
+    let victim = dir.join("victim.txt");
+    fs::write(&victim, "keep").expect("write victim");
+    let tmp = dir.join("planted.tmp");
+    std::os::unix::fs::symlink(&victim, &tmp).expect("plant link");
+    let result = write_and_rename(&tmp, &dir.join("target.txt"), "payload");
     assert!(
-        matches!(err, CliError::Usage(_) | CliError::UsageOwned(_)),
-        "expected a usage error, got: {err:?}"
+        matches!(result, Err(CliError::Io { .. })),
+        "an existing temp path must be refused, got {result:?}"
     );
+    assert_eq!(fs::read_to_string(&victim).unwrap_or_default(), "keep");
+    let _ = fs::remove_dir_all(&dir);
 }
 
-// `replay` requires exactly one <log> positional — zero or two is refused.
+/// An emit target that is, or holds, the project is refused before any write.
+///
+/// This is `write_emitted_project` reached without a caller-proven target: the
+/// bare path is proven against the project, and the project directory keeps
+/// exactly its own files.
 #[test]
-fn debugger_replay_wrong_arity_is_refused() {
+fn an_emit_target_overlapping_the_project_is_refused() {
+    let base = std::env::temp_dir().join(format!("ipe_emit_overlap_{}", std::process::id()));
+    let _ = fs::remove_dir_all(&base);
+    let project_dir = base.join("app");
+    fs::create_dir_all(&project_dir).expect("project dir");
+    fs::write(
+        project_dir.join("Main.ipe"),
+        "module Main exposing (main)\n",
+    )
+    .expect("module");
+    let project = ProjectPaths::of_file(&project_dir.join("Main.ipe"));
+
+    let root = EmitTarget::at(&project_dir, &project);
     assert!(
         matches!(
-            run_debugger(&["replay".to_owned()]),
-            Err(CliError::Usage(_) | CliError::UsageOwned(_))
+            root,
+            Err(CliError::OutputRefused(OutputRefusal::ProjectRoot(_)))
         ),
-        "`replay` with no log must be refused"
+        "the project directory must be refused, got {root:?}"
+    );
+    let holder = EmitTarget::at(&base, &project);
+    assert!(
+        matches!(
+            holder,
+            Err(CliError::OutputRefused(
+                OutputRefusal::ContainsProject { .. }
+            ))
+        ),
+        "a directory holding the project must be refused, got {holder:?}"
+    );
+    let runtime = base.join("no-runtime");
+    for out in [project_dir.clone(), base.clone()] {
+        let built = build_loose_file(&project_dir.join("Main.ipe"), &out, &runtime);
+        assert!(
+            matches!(built, Err(CliError::OutputRefused(_))),
+            "a bare out overlapping the project must be refused, got {built:?}"
+        );
+    }
+    let entries = fs::read_dir(&project_dir).map_or(0, Iterator::count);
+    assert_eq!(
+        entries, 1,
+        "the project directory keeps exactly its own file"
+    );
+    let _ = fs::remove_dir_all(&base);
+}
+
+/// A claimed emit target replaced after its claim is refused, never written.
+///
+/// A plain directory planted at the claimed path has another identity, so the
+/// write fails closed and the planted directory stays empty.
+#[test]
+fn a_replaced_claimed_target_is_refused_untouched() {
+    let base = std::env::temp_dir().join(format!("ipe_emit_replaced_{}", std::process::id()));
+    let _ = fs::remove_dir_all(&base);
+    let out = base.join("out");
+    let claimed = emit_target(&out).claim().expect("claim out");
+    fs::rename(&out, base.join("moved")).expect("move the claimed dir away");
+    fs::create_dir_all(&out).expect("plant a directory at the claimed path");
+    let emitted = ipe_backend::EmittedProject {
+        files: BTreeMap::new(),
+        cargo_toml: "[package]\nname = \"ipe-app\"\n".to_owned(),
+        uses_webview: false,
+    };
+    let result = write_emitted_project(
+        &emitted,
+        &EmitTarget::Claimed(claimed),
+        &base.join("no-runtime"),
+        None,
+        false,
     );
     assert!(
         matches!(
-            run_debugger(&["replay".to_owned(), "a.log".to_owned(), "b.log".to_owned()]),
-            Err(CliError::Usage(_) | CliError::UsageOwned(_))
+            result,
+            Err(CliError::OutputRefused(OutputRefusal::Replaced(_)))
         ),
-        "`replay` with two logs must be refused"
+        "a replaced target must be refused, got {result:?}"
     );
+    let entries = fs::read_dir(&out).map_or(usize::MAX, Iterator::count);
+    assert_eq!(entries, 0, "the planted directory stays empty");
+    let _ = fs::remove_dir_all(&base);
 }
 
-// `replay` on a missing log surfaces a typed Io error, never a panic.
+/// A marked crate dir planted with symlinks is refused by the emit.
+///
+/// A cloned repository can force-add such a dir with a symlinked `src/` or a
+/// symlinked file; the write + prune refuse both, and the link targets survive
+/// byte-for-byte.
+#[cfg(unix)]
 #[test]
-fn debugger_replay_missing_log_is_typed_io_error() {
-    let missing =
-        std::env::temp_dir().join(format!("ipe-replay-absent-{}.ipelog", std::process::id()));
-    let err = run_debugger(&["replay".to_owned(), missing.display().to_string()])
-        .expect_err("a missing replay log must be a typed error");
-    assert!(
-        matches!(err, CliError::Io { .. }),
-        "expected a typed Io error for a missing log, got: {err:?}"
+fn emitting_into_a_marked_dir_with_planted_links_is_refused() {
+    let base = std::env::temp_dir().join(format!("ipe_planted_emit_{}", std::process::id()));
+    let _ = fs::remove_dir_all(&base);
+    let victim = base.join("victim");
+    fs::create_dir_all(&victim).expect("victim dir");
+    fs::write(victim.join("precious.ipe"), "keep").expect("victim file");
+    let emitted = ipe_backend::EmittedProject {
+        files: BTreeMap::new(),
+        cargo_toml: "[package]\nname = \"ipe-app\"\n".to_owned(),
+        uses_webview: false,
+    };
+
+    // A symlinked `src/`: pruning it would mass-delete the target.
+    let dir_link = base.join("out-a");
+    crate::output_dir::OwnedDir::claim(&dir_link).expect("claim");
+    std::os::unix::fs::symlink(&victim, dir_link.join("src")).expect("dir link");
+    let result = write_emitted_project(
+        &emitted,
+        &emit_target(&dir_link),
+        &base.join("no-runtime"),
+        None,
+        false,
     );
+    assert!(
+        matches!(result, Err(CliError::OutputRefused(_))),
+        "a symlinked src/ must be refused, got {result:?}"
+    );
+
+    // A symlinked final file: writing it would overwrite the target.
+    let file_link = base.join("out-b");
+    crate::output_dir::OwnedDir::claim(&file_link).expect("claim");
+    std::os::unix::fs::symlink(victim.join("precious.ipe"), file_link.join("Cargo.toml"))
+        .expect("file link");
+    let result = write_emitted_project(
+        &emitted,
+        &emit_target(&file_link),
+        &base.join("no-runtime"),
+        None,
+        false,
+    );
+    assert!(
+        matches!(result, Err(CliError::OutputRefused(_))),
+        "a symlinked Cargo.toml must be refused, got {result:?}"
+    );
+
+    assert_eq!(
+        fs::read_to_string(victim.join("precious.ipe")).unwrap_or_default(),
+        "keep",
+        "the link target survives byte-for-byte"
+    );
+    let _ = fs::remove_dir_all(&base);
+}
+
+/// A backup keeps the original's permission bits.
+///
+/// An owner-only source never gets a more readable copy.
+#[cfg(unix)]
+#[test]
+fn backup_preserves_a_private_files_mode() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let dir = user_project("private_backup");
+    let main = dir.join("src").join("Main.ipe");
+    fs::set_permissions(&main, fs::Permissions::from_mode(0o600)).expect("chmod 600");
+    let backup = rewrite_user_file(
+        &main,
+        "module Main exposing (main)\n-- v2\n",
+        RewriteKind::Lossy,
+    )
+    .expect("rewrite");
+    let Some(backup) = backup else {
+        assert!(false_marker(), "a lossy rewrite must report its backup");
+        return;
+    };
+    let mode = fs::metadata(&backup).map_or(0, |m| m.permissions().mode() & 0o777);
+    assert_eq!(mode, 0o600, "the backup must stay owner-only");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// A directory walk refuses to rewrite a file that resolves outside the project.
+///
+/// An explicitly named file may still be followed.
+#[cfg(unix)]
+#[test]
+fn walked_rewrite_refuses_a_file_outside_the_project() {
+    let dir = user_project("walk_escape");
+    let outside = dir.with_extension("outside.ipe");
+    fs::write(&outside, "module Other\n").expect("outside file");
+    let link = dir.join("src").join("Other.ipe");
+    std::os::unix::fs::symlink(&outside, &link).expect("link");
+    let result = rewrite_walked_file(
+        &dir,
+        &link,
+        "module Other\n-- evil\n",
+        RewriteKind::Lossless,
+    );
+    assert!(
+        matches!(result, Err(CliError::OutputRefused(_))),
+        "a walked file escaping the project must be refused, got {result:?}"
+    );
+    assert_eq!(
+        fs::read_to_string(&outside).unwrap_or_default(),
+        "module Other\n"
+    );
+    let _ = fs::remove_file(&outside);
+    let _ = fs::remove_dir_all(&dir);
 }

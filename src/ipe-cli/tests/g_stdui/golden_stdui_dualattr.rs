@@ -52,7 +52,7 @@ fn build_run_dualattr() -> (PathBuf, crate::support::RunOutcome) {
     let root = repo_root();
     let dir = root.join("tests").join("golden").join("stdui_dualattr");
     let entry = dir.join("Main.ipe");
-    let out = std::env::temp_dir().join("ipec_m7_stdui_dualattr_e2e");
+    let out = crate::support::scratch_root().join("ipec_m7_stdui_dualattr_e2e");
     let _ = std::fs::remove_dir_all(&out);
 
     let runtime = ipe::resolve_runtime();
@@ -82,7 +82,7 @@ fn build_run_dualattr() -> (PathBuf, crate::support::RunOutcome) {
 /// Divergence golden — the expected value is ipe's own correct output.
 #[test]
 fn dualattr_stdui_attributes_and_html_node_bridge_render_correctly() {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
 

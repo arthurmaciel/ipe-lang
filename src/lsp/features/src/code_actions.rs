@@ -27,11 +27,16 @@
 //! - `IPE-T0020` (`WebView` `view` returns `Html` instead of `View`): "Wrap in
 //!   `Ui.html`" — inserts `Ui.html (` before and `)` after the expression at the
 //!   diagnostic span.
-//! - `lint/unused-imports` (the `unused-imports` lint): "Remove unused import" —
-//!   deletes the whole `import` declaration, including any `as Alias` /
-//!   `exposing (…)` continuation lines. The lint has already proved no
-//!   introduced name is used (it is conservative), so the deletion is
-//!   behavior-preserving.
+//! - `lint/<rule>` (any lint finding whose rule declares
+//!   [`ipe_lint::Fixability::Fixable`] and attaches a [`ipe_lint::Fix`] to the
+//!   finding): the fix's own `describe` text, title-cased — a single
+//!   text-range replacement applied verbatim. This arm is generic: it decodes
+//!   the fix from the diagnostic's `data` payload (see
+//!   `diagnostics::collect_lint`), so a newly fixable rule needs no change
+//!   here — only its `Fix` in the rule and its `Fixability::Fixable` in the
+//!   registry. A rule whose `Fixability` is `NotFixable`, or whose fix is a
+//!   cross-module [`ipe_lint::SigFix`] (no per-finding LSP scope), carries no
+//!   `data` and so offers no action.
 //!
 //! **Not offered — `IPE-N0048` (two definitions fold to one Rust name):** this
 //! diagnostic is raised at IR-level name mangling and carries NO source spans
@@ -111,6 +116,15 @@ pub fn code_actions(
         let Some(NumberOrString::String(code)) = &diag.code else {
             continue;
         };
+        if code.starts_with("lint/") {
+            // Every fixable lint rule reaches its LSP quick-fix through this one
+            // generic path — decoding the `Fix` a rule attached to its finding's
+            // `data`, never a per-rule arm below.
+            if let Some(action) = lint_fix_action(diag, uri, text, encoding) {
+                actions.push(CodeActionOrCommand::CodeAction(action));
+            }
+            continue;
+        }
         match code.as_str() {
             "IPE-L0106" => {
                 // A top-level function with no type signature — insert its
@@ -134,7 +148,7 @@ pub fn code_actions(
                 // A shape-scoped `Cmd` / `Sub` imported from the wrong shape —
                 // repoint the offending import to the app's own shape. The
                 // diagnostic names both the wrong (`Ipe.Tea.Web.Cmd`) and correct
-                // (`Ipe.Tea.Terminal.Cmd`) module paths.
+                // (`Ipe.Tea.Cli.Cmd`) module paths.
                 if let Some(action) = repoint_shape_import_action(diag, uri, text, encoding) {
                     actions.push(CodeActionOrCommand::CodeAction(action));
                 }
@@ -164,15 +178,6 @@ pub fn code_actions(
                 // WebView `view` returns `Html` instead of `View Web msg` —
                 // wrap the expression at the diagnostic span in `Ui.html ( … )`.
                 if let Some(action) = wrap_in_ui_html_action(diag, uri, text, encoding) {
-                    actions.push(CodeActionOrCommand::CodeAction(action));
-                }
-            }
-            "lint/unused-imports" => {
-                // The `unused-imports` lint proved no introduced name is used —
-                // offer to delete the whole `import` line (behavior-preserving).
-                if let Some(action) =
-                    remove_unused_import_action(view, module, uri, diag, text, encoding)
-                {
                     actions.push(CodeActionOrCommand::CodeAction(action));
                 }
             }
@@ -621,68 +626,44 @@ fn wrap_in_ui_html_action(
     })
 }
 
-/// Quick-fix for `lint/unused-imports`: delete the whole unused `import`
-/// declaration.
+/// Quick-fix for any `lint/<rule>` diagnostic.
 ///
-/// The `unused-imports` lint has already proved that no name the import
-/// introduces is referenced anywhere in the module (it is conservative — a
-/// wildcard `exposing (..)` or any use suppresses it), so deleting the whole
-/// declaration is behavior-preserving.
+/// Decodes the `Fix` a rule attached to its finding via `data` (see
+/// `diagnostics::collect_lint`'s `"fix"` payload: `describe`, byte offsets
+/// `lo`/`hi`, and `replacement`) and turns it into a single-hunk `TextEdit`.
+/// This is the whole of the generic mechanism the module doc promises: a rule
+/// that ships a [`ipe_lint::Fix`] gets an LSP quick-fix for free, with no
+/// per-rule code in this file.
 ///
-/// The lint anchors its diagnostic on the `import` keyword token, but an
-/// `import` declaration may span several physical lines — its `as Alias` and
-/// `exposing (…)` clauses can each start a continuation line. Deleting only the
-/// keyword's line would strand the continuation and turn a compiling module
-/// into a parse error. The fix therefore locates the offending `Import` node in
-/// the parse tree, computes the declaration's true byte extent (keyword through
-/// the end of its last clause), and deletes the whole-line span that covers it —
-/// so no fragment of the declaration is left behind.
-///
-/// Fail-closed: the action is offered only when the diagnostic's start byte
-/// falls on the `import` keyword of a real parsed `Import`. A mis-ranged
-/// diagnostic, or one that does not land on an import, yields no action.
-fn remove_unused_import_action(
-    view: DbView<'_>,
-    module: &[String],
-    uri: &Url,
+/// Fail-closed: a diagnostic with no `data`, a malformed `fix` payload, or a
+/// span that is out of range or lands off a UTF-8 char boundary yields no
+/// action rather than guessing or slicing unsafely.
+fn lint_fix_action(
     diag: &Diagnostic,
+    uri: &Url,
     text: &str,
     encoding: PositionEncoding,
 ) -> Option<CodeAction> {
-    let DbView { db, root, .. } = view;
-    let files = root.files(db);
-    let &file = files.get(module)?;
-    let parsed = ipe_db::parse(db, file).clone().ok()?;
+    let data = diag.data.as_ref()?;
+    let fix = data.get("fix")?;
+    let describe = fix.get("describe")?.as_str()?;
+    let lo = usize::try_from(fix.get("lo")?.as_u64()?).ok()?;
+    let hi = usize::try_from(fix.get("hi")?.as_u64()?).ok()?;
+    let replacement = fix.get("replacement")?.as_str()?;
+    if lo > hi || hi > text.len() || !text.is_char_boundary(lo) || !text.is_char_boundary(hi) {
+        return None;
+    }
 
-    // The diagnostic anchors on the `import` keyword token. Match its start byte
-    // against the `import_kw` span of a parsed import — the byte the lint used.
-    let diag_byte = u32::try_from(position_to_byte(text, diag.range.start, encoding)).ok()?;
-    let import = parsed
-        .imports
-        .iter()
-        .find(|imp| imp.import_kw.lo <= diag_byte && diag_byte < imp.import_kw.hi)?;
-
-    // Whole-line span covering the import's full extent: from the start of the
-    // line the keyword sits on through the end of the line its last clause ends
-    // on. The clause end is scanned from the source with `import_clause_end`,
-    // which handles `as Alias` / `exposing (…)` continuation lines the AST spans
-    // alone do not reach.
-    let clause_end = import_clause_end(text, import);
-    let start_line = offset_to_position(text, import.import_kw.lo as usize, encoding).line as usize;
-    let end_line = offset_to_position(text, clause_end, encoding).line as usize;
-    let (start_byte, _) = line_byte_range(text, start_line);
-    let (_, end_byte) = line_byte_range(text, end_line);
-
-    let start = offset_to_position(text, start_byte, encoding);
-    let end = offset_to_position(text, end_byte, encoding);
+    let start = offset_to_position(text, lo, encoding);
+    let end = offset_to_position(text, hi, encoding);
     let edit = TextEdit {
         range: Range { start, end },
-        new_text: String::new(),
+        new_text: replacement.to_owned(),
     };
     let mut changes: HashMap<Url, Vec<TextEdit>> = HashMap::new();
     changes.insert(uri.clone(), vec![edit]);
     Some(CodeAction {
-        title: "Remove unused import".to_owned(),
+        title: capitalize_first(describe),
         kind: Some(CodeActionKind::QUICKFIX),
         diagnostics: Some(vec![diag.clone()]),
         edit: Some(WorkspaceEdit {
@@ -697,86 +678,14 @@ fn remove_unused_import_action(
     })
 }
 
-/// The byte offset just past the end of an `import` declaration's last clause.
-///
-/// The parser records spans for the `import` keyword and the dotted module
-/// name, but the `as Alias` identifier and the `exposing (…)` clause carry no
-/// span that reaches their end — and each may sit on a continuation line below
-/// the keyword. This walks the source from just past the module name, following
-/// the import grammar tail (`[as Ident] [exposing ( … )]`), so the returned
-/// offset covers the whole declaration however it is wrapped across lines. The
-/// `exposing` list is consumed through its balanced closing paren, so even a
-/// list broken across several lines is covered in full.
-///
-/// The walk is bounded by the remaining source length and only ever advances,
-/// so it terminates. It never indexes: every read goes through `get`, so a
-/// malformed tail yields the best offset reached rather than a panic.
-fn import_clause_end(text: &str, import: &ipe_syntax::Import) -> usize {
-    // Start just past the module name — the grammar tail (`as`, `exposing`)
-    // begins there. The keyword span is a floor for a name-less malformed tail.
-    let mut pos = import.import_kw.hi.max(import.name.span.hi) as usize;
-
-    // Advance `pos` past `count` UTF-8 characters that satisfy `pred`, stopping
-    // at the first that does not (or at end of input). Char-boundary safe.
-    let skip_while = |src: &str, from: usize, pred: &dyn Fn(char) -> bool| -> usize {
-        let rest = src.get(from..).unwrap_or("");
-        let mut consumed = 0usize;
-        for ch in rest.chars() {
-            if pred(ch) {
-                consumed += ch.len_utf8();
-            } else {
-                break;
-            }
-        }
-        from + consumed
-    };
-    // True when the source from `at` begins with `kw` followed by a
-    // non-identifier boundary (so `as` does not match inside `assets`).
-    let starts_kw = |src: &str, at: usize, kw: &str| -> bool {
-        let rest = src.get(at..).unwrap_or("");
-        rest.strip_prefix(kw).is_some_and(|after| {
-            after
-                .chars()
-                .next()
-                .is_none_or(|c| !c.is_alphanumeric() && c != '_')
-        })
-    };
-    let is_ident = |c: char| c.is_alphanumeric() || c == '_';
-
-    // Optional `as Alias` (a single, dot-free identifier).
-    let after_ws = skip_while(text, pos, &char::is_whitespace);
-    if starts_kw(text, after_ws, "as") {
-        let alias_start = skip_while(text, after_ws + "as".len(), &char::is_whitespace);
-        let alias_end = skip_while(text, alias_start, &is_ident);
-        pos = pos.max(alias_end);
-    }
-
-    // Optional `exposing ( … )` — consume through the balanced closing paren so
-    // a wrapped list (`exposing (\n  a,\n  b\n)`) is covered in full.
-    let after_ws = skip_while(text, pos, &char::is_whitespace);
-    if starts_kw(text, after_ws, "exposing") {
-        let after_kw = skip_while(text, after_ws + "exposing".len(), &char::is_whitespace);
-        if text.get(after_kw..).unwrap_or("").starts_with('(') {
-            let mut depth = 0i32;
-            let mut cursor = after_kw;
-            for ch in text.get(after_kw..).unwrap_or("").chars() {
-                cursor += ch.len_utf8();
-                match ch {
-                    '(' => depth += 1,
-                    ')' => {
-                        depth -= 1;
-                        if depth == 0 {
-                            pos = pos.max(cursor);
-                            break;
-                        }
-                    }
-                    _ => {}
-                }
-            }
-        }
-    }
-
-    pos.min(text.len())
+/// Capitalize the first character of `s`, leaving the rest untouched — turns a
+/// `Fix::describe` phrase (`"remove unused import"`) into a title-case action
+/// title (`"Remove unused import"`).
+fn capitalize_first(s: &str) -> String {
+    let mut chars = s.chars();
+    chars.next().map_or_else(String::new, |first| {
+        first.to_uppercase().collect::<String>() + chars.as_str()
+    })
 }
 
 /// Extract the expected module name from an IPE-N0023 `plain_message`.

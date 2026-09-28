@@ -45,7 +45,7 @@ fn i222_match_arm_ipec_accepts_and_relays() {
         return;
     };
 
-    let built = ipe::build_with_sibling_discovery(&entry, &out, &runtime);
+    let built = ipe::build_loose_file(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
         "ipe build must succeed for match_arm_clone_relay: {:?}",
@@ -67,20 +67,20 @@ fn i222_match_arm_ipec_accepts_and_relays() {
 /// cargo-0 ∧ run-correct: gated on `IPE_E2E=1` — THE SEAL.
 #[test]
 fn i222_match_arm_cargo_builds_and_runs() {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
 
     let root = repo_root();
     let entry = entry_path(&root);
-    let out = std::env::temp_dir().join("ipec_i222_match_arm_clone_relay_e2e");
+    let out = crate::support::scratch_root().join("ipec_i222_match_arm_clone_relay_e2e");
     let _ = std::fs::remove_dir_all(&out);
 
     let Ok(runtime) = ipe::resolve_runtime() else {
         return;
     };
 
-    let built = ipe::build_with_sibling_discovery(&entry, &out, &runtime);
+    let built = ipe::build_loose_file(&entry, &out, &runtime);
     assert!(built.is_ok(), "ipe build must succeed: {:?}", built.err());
 
     let outcome = crate::support::build_and_run_emitted("match_arm_clone_relay", &out);

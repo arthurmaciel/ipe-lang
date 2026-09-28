@@ -260,8 +260,9 @@ impl AspectCheck<StdlibSymbol> for ComposesColumn {
 ///   process to run. Derived from the module path via
 ///   [`probe::browser_web_axis`].
 /// * A symbol whose point-free reference program cannot even NAME-RESOLVE (a
-///   shape-scoped module with no standalone importable home, or a kernel-homed
-///   symbol the compiled module does not expose under that name) is a probe-FORM
+///   shape-scoped module with no standalone importable home, an `Ipe.Tea.*` shape
+///   module a plain-`main` Program may not import, or a kernel-homed symbol the
+///   compiled module does not expose under that name) is a probe-FORM
 ///   limitation, not a build+run gap. Derived from the name-resolution rejection
 ///   code via [`probe::probe_form_unaddressable_code`], caught by the cheap
 ///   pre-lower before any cargo build. (A qualified-import qualifier collision no
@@ -341,7 +342,8 @@ impl AspectCheck<StdlibSymbol> for BuildRunColumn {
             };
         }
         // A point-free reference the name resolver cannot even ADDRESS (a
-        // shape-scoped module with no standalone home, or a kernel member the
+        // shape-scoped module with no standalone home, an `Ipe.Tea.*` shape module
+        // the Program probe may not import, or a kernel member the
         // compiled module does not expose under that name) is a probe-form
         // limitation, not a build+run gap — caught before any build.
         if let Some(code) = probe::probe_form_unaddressable_code(&lowered) {
@@ -349,8 +351,9 @@ impl AspectCheck<StdlibSymbol> for BuildRunColumn {
                 reason: format!(
                     "{}.{}: the point-free reference program does not name-resolve \
                      ({}) — the probe form cannot address this symbol (a \
-                     shape-scoped module with no standalone home, or a kernel member \
-                     not exposed under this name), not a build+run gap",
+                     shape-scoped module with no standalone home, an `Ipe.Tea.*` \
+                     shape module a plain-`main` Program may not import, or a kernel \
+                     member not exposed under this name), not a build+run gap",
                     sym.module.join("."),
                     sym.name,
                     code.as_str()
@@ -515,7 +518,7 @@ fn scan_runtime_symbols() -> Option<BTreeSet<String>> {
 /// Locate the runtime crate's `src` directory via `IPE_RUNTIME_DIR` or an
 /// ancestor walk to `src/runtime/rust/src`.
 fn runtime_crate_src() -> Option<PathBuf> {
-    if let Ok(dir) = std::env::var("IPE_RUNTIME_DIR") {
+    if let Ok(dir) = ipe_env::var("IPE_RUNTIME_DIR") {
         let p = PathBuf::from(dir);
         if p.join("mod.rs").is_file() || p.join("lib.rs").is_file() {
             return Some(p);

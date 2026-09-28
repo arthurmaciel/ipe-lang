@@ -1,7 +1,10 @@
-use super::{CliError, diag_span, io_err, write_atomic};
+use super::{CliError, diag_span, io_err};
+#[cfg(not(unix))]
+use crate::output_dir::OutputRefusal;
+use crate::output_dir::{EmitTarget, OwnedDir, OwnedPath, ProjectPaths};
 use crate::{
     BTreeMap, BTreeSet, Diagnostic, Interner, Path, PathBuf, build_plan, cache, contained_path,
-    ffi, fs, project, render, runtime_embed,
+    ffi, fs, project, render, runtime_embed, text,
 };
 
 /// Options modifying a build beyond plain source compilation — some (the
@@ -109,6 +112,28 @@ pub struct BuildOptions {
     pub webview_window: Option<ipe_backend_rust::WebViewWindow>,
 }
 
+/// Where a build writes its emitted crate.
+///
+/// A bare path is proven disjoint from the build's own project before the
+/// build writes anything; a proven target carries its proof already.
+#[derive(Debug, Clone, Copy)]
+pub enum OutTarget<'a> {
+    /// A target proven by the caller (a CLI output area, a claimed directory).
+    Proven(&'a EmitTarget),
+    /// A bare path, proven against the project being built.
+    Path(&'a Path),
+}
+
+impl OutTarget<'_> {
+    /// The proven target, proving a bare path against `project`.
+    fn prove(self, project: &ProjectPaths) -> Result<EmitTarget, CliError> {
+        match self {
+            Self::Proven(target) => Ok(target.clone()),
+            Self::Path(out_dir) => EmitTarget::at(out_dir, project),
+        }
+    }
+}
+
 /// Select the emit model from the environment.
 ///
 /// The dependency model is the DEFAULT; `IPE_RUNTIME_VENDORED=1` opts back into
@@ -119,7 +144,7 @@ pub struct BuildOptions {
 /// env-derived default.
 #[must_use]
 pub fn runtime_dep_from_env() -> bool {
-    !std::env::var("IPE_RUNTIME_VENDORED").is_ok_and(|v| v == "1")
+    !ipe_env::var("IPE_RUNTIME_VENDORED").is_ok_and(|v| v == "1")
 }
 
 /// The emitted-crate package name for a no-manifest (single-file) build, read
@@ -138,7 +163,7 @@ pub fn runtime_dep_from_env() -> bool {
 /// default — this lever changes nothing for a normal build.
 #[must_use]
 pub fn single_file_cargo_name_from_env() -> String {
-    std::env::var("IPE_EMIT_PACKAGE_NAME")
+    ipe_env::var("IPE_EMIT_PACKAGE_NAME")
         .ok()
         .map(|name| ipe_backend_rust::sanitize_cargo_name(&name))
         .unwrap_or_default()
@@ -174,8 +199,8 @@ fn canonical_project_dir(manifest_path: &Path) -> PathBuf {
 #[must_use]
 pub fn hot_appearance_enabled() -> bool {
     hot_appearance_from_env(
-        std::env::var("IPE_WATCH_NO_HOT_APPEARANCE").ok().as_deref(),
-        std::env::var("IPE_WATCH_HOT_APPEARANCE").ok().as_deref(),
+        ipe_env::var("IPE_WATCH_NO_HOT_APPEARANCE").ok().as_deref(),
+        ipe_env::var("IPE_WATCH_HOT_APPEARANCE").ok().as_deref(),
     )
 }
 
@@ -200,7 +225,7 @@ pub fn hot_appearance_from_env(no_var: Option<&str>, hot_var: Option<&str>) -> b
 /// error whenever the banner is on, even with appearance hot-swap off.
 #[must_use]
 pub fn watch_banner_enabled() -> bool {
-    std::env::var("IPE_WEB_BANNER").map_or(true, |v| {
+    ipe_env::var("IPE_WEB_BANNER").map_or(true, |v| {
         let v = v.trim().to_ascii_lowercase();
         !(v == "off" || v == "0" || v == "false")
     })
@@ -220,8 +245,8 @@ pub fn watch_banner_enabled() -> bool {
 #[must_use]
 pub fn bluegreen_enabled() -> bool {
     bluegreen_from_env_values(
-        std::env::var("IPE_WATCH_NO_BLUEGREEN").ok().as_deref(),
-        std::env::var("IPE_WATCH_BLUEGREEN").ok().as_deref(),
+        ipe_env::var("IPE_WATCH_NO_BLUEGREEN").ok().as_deref(),
+        ipe_env::var("IPE_WATCH_BLUEGREEN").ok().as_deref(),
     )
 }
 
@@ -248,7 +273,7 @@ impl BuildOptions {
     /// The default build options with the emit model resolved from the
     /// environment (dependency-model by default; vendored under
     /// `IPE_RUNTIME_VENDORED=1`). The zero-configuration entrypoints
-    /// ([`build`], [`build_with_sibling_discovery`], [`build_project`]) seed
+    /// ([`build`], [`build_loose_file`], [`build_project`]) seed
     /// this so a library caller gets the same default emit model a `ipe build`
     /// invocation does, rather than the raw `Default` (which is vendored — the
     /// fallback shape).
@@ -283,6 +308,21 @@ pub fn build_with_options(
     runtime_dir: &Path,
     options: BuildOptions,
 ) -> Result<(), CliError> {
+    build_with_options_into(entry, OutTarget::Path(out_dir), runtime_dir, options).map(drop)
+}
+
+/// [`build_with_options`] into `out`, returning the claimed crate directory.
+///
+/// # Errors
+/// As [`build_with_options`], plus [`CliError::OutputRefused`] when `out`
+/// overlaps the entry's directory.
+pub fn build_with_options_into(
+    entry: &Path,
+    out: OutTarget<'_>,
+    runtime_dir: &Path,
+    options: BuildOptions,
+) -> Result<OwnedDir, CliError> {
+    let target = out.prove(&ProjectPaths::of_file(entry))?;
     let source =
         crate::io_bounded::read_to_string_capped(entry, crate::io_bounded::SOURCE_READ_CAP)?;
 
@@ -311,10 +351,10 @@ pub fn build_with_options(
 
     let mut sources: BTreeMap<Vec<String>, (PathBuf, String)> = BTreeMap::new();
     sources.insert(entry_path.clone(), (entry.to_path_buf(), source.clone()));
-    let discovered = vec![project::DiscoveredModule {
-        path: entry.to_path_buf(),
-        module_path: entry_path.clone(),
-    }];
+    let discovered = vec![project::DiscoveredModule::user(
+        entry.to_path_buf(),
+        entry_path.clone(),
+    )];
 
     // No manifest on the single-file path — default to sqlite, matching the
     // documented `package.ipe` default for a project that has no database
@@ -323,7 +363,7 @@ pub fn build_with_options(
         sources,
         discovered,
         &entry_path,
-        out_dir,
+        &target,
         runtime_dir,
         entry,
         ipe_backend_rust::DbDriver::Sqlite,
@@ -331,55 +371,65 @@ pub fn build_with_options(
     )
 }
 
-/// Build a `.ipe` entry file and all sibling modules discovered in the same
-/// source directory.
+/// Build a loose `.ipe` entry file plus the sibling modules it imports.
 ///
-/// When no manifest is present, the entry file's parent directory is used
-/// as the source root. Every `*.ipe` file found there is loaded and compiled
-/// together — fixing IPE-N0020 for multi-file projects built via the
+/// When no manifest is present, an import `A.B` resolves to `A/B.ipe` under
+/// the entry file's directory, so a multi-file program builds via the
 /// file-path shorthand (`ipe build src/Main.ipe`).
 ///
-/// This is the faithful port of Haskell's `Graph.discoverModulesMulti
-/// (sourceRoot : ...) entryPath` call in `Ipe.Build.Compile.hs`: it probes
-/// the source root recursively and follows imports across sibling files before
-/// running the shared `compile_modules` core.
+/// The module set is the entry plus the sibling modules its imports reach,
+/// resolved by [`crate::loose_file::resolve_loose_file`] (see
+/// [`collect_entry_and_siblings`]); the entry's directory is never listed.
 ///
-/// When the source directory contains only the entry file this function is
-/// byte-identical to `build` (single-module pipeline is the identity over
-/// `link`).
+/// When the entry imports no sibling this function is byte-identical to
+/// `build` (single-module pipeline is the identity over `link`).
 ///
 /// # Errors
 /// [`CliError::Pipeline`] when the compiler rejects the program.
 /// [`CliError::Io`] on any filesystem failure.
-pub fn build_with_sibling_discovery(
-    entry: &Path,
-    out_dir: &Path,
-    runtime_dir: &Path,
-) -> Result<(), CliError> {
-    build_with_sibling_discovery_with_options(entry, out_dir, runtime_dir, BuildOptions::from_env())
+/// [`CliError::DiscoveryLimitReached`] when the import closure exceeds
+/// [`crate::loose_file::LooseFileLimits::DEFAULT`].
+pub fn build_loose_file(entry: &Path, out_dir: &Path, runtime_dir: &Path) -> Result<(), CliError> {
+    build_loose_file_with_options(entry, out_dir, runtime_dir, BuildOptions::from_env())
 }
 
-/// [`build_with_sibling_discovery`] with explicit [`BuildOptions`] (the
+/// [`build_loose_file`] with explicit [`BuildOptions`] (the
 /// static-plan-aware variant).
 ///
 /// # Errors
-/// As [`build_with_sibling_discovery`], plus [`CliError::StaticRefusal`]
+/// As [`build_loose_file`], plus [`CliError::StaticRefusal`]
 /// when the emitted app shape cannot be static.
-pub fn build_with_sibling_discovery_with_options(
+pub fn build_loose_file_with_options(
     entry: &Path,
     out_dir: &Path,
     runtime_dir: &Path,
     options: BuildOptions,
 ) -> Result<(), CliError> {
+    build_loose_file_into(entry, OutTarget::Path(out_dir), runtime_dir, options).map(drop)
+}
+
+/// [`build_loose_file_with_options`] into `out`, returning the
+/// claimed crate directory.
+///
+/// # Errors
+/// As [`build_loose_file`], plus [`CliError::OutputRefused`] when
+/// `out` overlaps the entry's directory.
+pub fn build_loose_file_into(
+    entry: &Path,
+    out: OutTarget<'_>,
+    runtime_dir: &Path,
+    options: BuildOptions,
+) -> Result<OwnedDir, CliError> {
+    let target = out.prove(&ProjectPaths::of_file(entry))?;
     let collected = collect_entry_and_siblings(entry)?;
 
-    // No manifest on this path either (sibling discovery is the "no manifest
+    // No manifest on this path either (the loose-file closure is the "no manifest
     // found" fallback) — default to sqlite, same rationale as `build`.
     compile_modules(
         collected.sources,
         collected.discovered,
         &collected.entry_module_path,
-        out_dir,
+        &target,
         runtime_dir,
         entry,
         ipe_backend_rust::DbDriver::Sqlite,
@@ -389,33 +439,38 @@ pub fn build_with_sibling_discovery_with_options(
 
 /// Build `ipe verify`'s test entry against the project's `src/` sources.
 ///
-/// Unlike [`build_with_sibling_discovery`], which roots discovery at the
-/// entry's own directory, this roots the code under test at `project_src_root`
+/// Unlike [`build_loose_file`], which follows the entry's
+/// imports within its own directory, this roots the code under test at `project_src_root`
 /// (the `src/` tree) and additionally discovers the test entry's own directory
 /// (the `tests/` tree) — so a `tests/Main.ipe` that imports `Lib.Foo` from
 /// `src/Lib/Foo.ipe` resolves. See [`collect_test_sources`] for the source-set
 /// model.
 ///
+/// Returns the claimed crate directory.
+///
 /// # Errors
 /// [`CliError::Pipeline`] when the compiler rejects the program; [`CliError::Io`]
 /// on any filesystem failure; [`CliError::StaticRefusal`] when the emitted app
-/// shape cannot be static.
-pub fn build_test_with_project_sources(
+/// shape cannot be static; [`CliError::OutputRefused`] when `out` overlaps the
+/// test entry's directory or `project_src_root`.
+pub fn build_test_into(
     project_src_root: &Path,
     test_entry: &Path,
-    out_dir: &Path,
+    out: OutTarget<'_>,
     runtime_dir: &Path,
-) -> Result<(), CliError> {
+) -> Result<OwnedDir, CliError> {
+    let project = ProjectPaths::of_file(test_entry).with_sources(project_src_root);
+    let target = out.prove(&project)?;
     let collected = collect_test_sources(project_src_root, test_entry)?;
 
     // No manifest driver is threaded here (the test stage mirrors the sibling
     // build's "no manifest" fallback) — default to sqlite, same rationale as
-    // `build_with_sibling_discovery`.
+    // `build_loose_file`.
     compile_modules(
         collected.sources,
         collected.discovered,
         &collected.entry_module_path,
-        out_dir,
+        &target,
         runtime_dir,
         test_entry,
         ipe_backend_rust::DbDriver::Sqlite,
@@ -423,51 +478,42 @@ pub fn build_test_with_project_sources(
     )
 }
 
-/// The entry file and every sibling `.ipe` module discovered in its source
-/// directory, ready to feed the shared compile core.
+/// A loose entry plus the sibling modules its imports reach, ready to feed the shared compile core.
 pub struct CollectedSources {
     pub(crate) sources: BTreeMap<Vec<String>, (PathBuf, String)>,
     pub(crate) discovered: Vec<project::DiscoveredModule>,
     pub(crate) entry_module_path: Vec<String>,
 }
 
-/// Collect the entry module plus every sibling `.ipe` file in its source
-/// directory, reading each source once.
+/// Collect a loose entry plus the transitive closure of sibling modules it imports.
 ///
 /// This is the file-path shorthand's source-collection step, shared by the
-/// build path ([`build_with_sibling_discovery_with_options`]) and the
+/// build path ([`build_loose_file_with_options`]) and the
 /// single-entry analysis paths ([`lower_entry_via_graph`], [`emit_ir_text`]) so all
-/// three see the SAME module set — a program that imports a compiled-source
-/// stdlib module resolves identically whether it is built or merely analysed.
-/// It is the equivalent of `Graph.discoverModulesMulti [srcRoot] entryPath` in
-/// `Ipe.Build.Compile.hs`; the compiled-source stdlib closure is injected
-/// downstream (in [`compile_modules_observed`] / [`lower_entry_via_graph`]),
-/// not here, so the injection routine stays single-sourced.
+/// three see the SAME module set. It delegates to
+/// [`crate::loose_file::resolve_loose_file`] — the one loose-file resolver
+/// `ipe watch` and `ipe lsp` also use — so every surface compiles the same
+/// bounded closure: one probed path per import, regular files contained in
+/// the entry's directory only, within
+/// [`crate::loose_file::LooseFileLimits::DEFAULT`], and no directory
+/// listing. The compiled-source stdlib closure is injected downstream (in
+/// [`compile_modules_observed`] / [`lower_entry_via_graph`]), not here, so
+/// the injection routine stays single-sourced.
 ///
 /// # Errors
-/// [`CliError::Pipeline`] when the entry does not parse; [`CliError::Io`] on
-/// any filesystem failure reading a discovered module.
+/// [`CliError::Pipeline`] when the entry does not parse; [`CliError::Io`] when
+/// the entry or an imported sibling cannot be read;
+/// [`CliError::DiscoveryLimitReached`] when the import closure is too large.
 pub fn collect_entry_and_siblings(entry: &Path) -> Result<CollectedSources, CliError> {
-    let source =
-        crate::io_bounded::read_to_string_capped(entry, crate::io_bounded::SOURCE_READ_CAP)?;
-    let entry_module_path = parse_entry_module_path(entry, &source)?;
-
-    // Source root: the directory containing the entry file.
-    let src_root = entry
-        .parent()
-        .filter(|p| p.is_dir())
-        .unwrap_or_else(|| Path::new("."));
-
-    // Discover ALL .ipe files in the source root (recursively).
-    let mut discovered = project::discover_modules(src_root)?;
-    ensure_entry_present(&mut discovered, entry, &entry_module_path);
-
-    let sources = read_discovered_sources(&discovered, entry, &entry_module_path, &source)?;
-
+    let loaded = crate::loose_file::resolve_loose_file(
+        entry,
+        None,
+        crate::loose_file::LooseFileLimits::DEFAULT,
+    )?;
     Ok(CollectedSources {
-        sources,
-        discovered,
-        entry_module_path,
+        sources: loaded.sources,
+        discovered: loaded.discovered,
+        entry_module_path: loaded.entry_module,
     })
 }
 
@@ -512,10 +558,12 @@ pub fn collect_test_sources(
     // module of the same path (code under test wins), and the test entry is
     // always added last so it is never masked.
     let mut discovered = project::discover_modules(project_src_root)?;
-    let src_paths: std::collections::BTreeSet<Vec<String>> =
-        discovered.iter().map(|m| m.module_path.clone()).collect();
+    let src_paths: std::collections::BTreeSet<Vec<String>> = discovered
+        .iter()
+        .map(|m| m.module_path().to_vec())
+        .collect();
     for m in project::discover_modules(tests_root)? {
-        if !src_paths.contains(&m.module_path) {
+        if !src_paths.contains(m.module_path()) {
             discovered.push(m);
         }
     }
@@ -562,12 +610,12 @@ pub fn ensure_entry_present(
 ) {
     if !discovered
         .iter()
-        .any(|m| m.module_path == entry_module_path)
+        .any(|m| m.module_path() == entry_module_path)
     {
-        discovered.push(project::DiscoveredModule {
-            path: entry.to_path_buf(),
-            module_path: entry_module_path.to_vec(),
-        });
+        discovered.push(project::DiscoveredModule::user(
+            entry.to_path_buf(),
+            entry_module_path.to_vec(),
+        ));
     }
 }
 
@@ -585,17 +633,14 @@ pub fn read_discovered_sources(
 ) -> Result<BTreeMap<Vec<String>, (PathBuf, String)>, CliError> {
     let mut sources: BTreeMap<Vec<String>, (PathBuf, String)> = BTreeMap::new();
     for m in discovered {
-        if m.module_path == entry_module_path {
+        if m.module_path() == entry_module_path {
             sources.insert(
                 entry_module_path.to_vec(),
                 (entry.to_path_buf(), entry_source.to_owned()),
             );
         } else {
-            let src = crate::io_bounded::read_to_string_capped(
-                &m.path,
-                crate::io_bounded::SOURCE_READ_CAP,
-            )?;
-            sources.insert(m.module_path.clone(), (m.path.clone(), src));
+            let src = crate::io_bounded::read_walked_source(m.path())?;
+            sources.insert(m.module_path().to_vec(), (m.path().to_path_buf(), src));
         }
     }
     Ok(sources)
@@ -607,14 +652,28 @@ pub fn read_discovered_sources(
 ///
 /// When given a file entry, the driver locates the project root (where
 /// `package.ipe` lives) before building, so the full module graph is compiled
-/// instead of just the single entry file.
-pub fn find_manifest_for_ipe_file(ipe_file: &Path) -> Option<PathBuf> {
-    let mut dir = ipe_file.parent()?;
+/// instead of just the single entry file. The user never named the manifest
+/// this finds, so it is obeyed only once it passes the owner rule
+/// ([`crate::owner_trust::admit_discovered_manifest`]).
+///
+/// # Errors
+///
+/// [`CliError::Usage`] when the nearest manifest is a link, or another user
+/// owns it or could write or replace it; [`CliError::Io`] when it cannot be
+/// inspected.
+pub fn find_manifest_for_ipe_file(ipe_file: &Path) -> Result<Option<PathBuf>, CliError> {
+    let Some(mut dir) = ipe_file.parent() else {
+        return Ok(None);
+    };
     loop {
         if let Some(manifest) = project::manifest_in_dir(dir) {
-            return Some(manifest);
+            crate::owner_trust::admit_discovered_manifest(&manifest)?;
+            return Ok(Some(manifest));
         }
-        dir = dir.parent()?;
+        let Some(up) = dir.parent() else {
+            return Ok(None);
+        };
+        dir = up;
     }
 }
 
@@ -655,22 +714,22 @@ pub fn compile_modules(
     sources: BTreeMap<Vec<String>, (PathBuf, String)>,
     discovered: Vec<project::DiscoveredModule>,
     entry_path: &[String],
-    out_dir: &Path,
+    target: &EmitTarget,
     runtime_dir: &Path,
     blame_path: &Path,
     db_driver: ipe_backend_rust::DbDriver,
     options: BuildOptions,
-) -> Result<(), CliError> {
-    let cache_dir = cache::env_cache_dir(out_dir);
+) -> Result<OwnedDir, CliError> {
+    let cache_site = cache::env_cache_dir(&target.path()?);
     compile_modules_observed(
         sources,
         discovered,
         entry_path,
-        out_dir,
+        target,
         runtime_dir,
         blame_path,
         db_driver,
-        cache_dir.as_deref(),
+        cache_site.as_ref(),
         options,
     )
     .0
@@ -709,13 +768,13 @@ pub fn compile_modules_observed(
     mut sources: BTreeMap<Vec<String>, (PathBuf, String)>,
     mut discovered: Vec<project::DiscoveredModule>,
     entry_path: &[String],
-    out_dir: &Path,
+    target: &EmitTarget,
     runtime_dir: &Path,
     blame_path: &Path,
     db_driver: ipe_backend_rust::DbDriver,
-    cache_dir: Option<&Path>,
+    cache_site: Option<&cache::CacheSite>,
     options: BuildOptions,
-) -> (Result<(), CliError>, CacheOutcome) {
+) -> (Result<OwnedDir, CliError>, CacheOutcome) {
     // Inject the transitive compiled-source stdlib closure. `injected` is the
     // driver's unforgeable record of which module paths are trusted stdlib
     // source — the ONLY inputs that earn `ModuleOrigin::EmbeddedStdlib` below.
@@ -756,10 +815,10 @@ pub fn compile_modules_observed(
     // The dependency-model flag also changes emit shape without changing the
     // Ipê sources, so a cache keyed only on sources must not serve a
     // cross-model artifact: disable the caches when the dep model is active.
-    let cache_dir = if ffi_emit.is_some() || runtime_dep.is_some() {
+    let cache_site = if ffi_emit.is_some() || runtime_dep.is_some() {
         None
     } else {
-        cache_dir
+        cache_site
     };
 
     // The on-disk build cache. `epoch` folds in BOTH the running
@@ -774,18 +833,19 @@ pub fn compile_modules_observed(
         options.target,
         &options.wasm_public_env,
         options.production,
+        options.debugger,
         options.hot_appearance,
         options.webview_host,
         options.webview_window.as_ref(),
     );
-    let epoch = cache_dir.and_then(|_| cache::derive_epoch());
-    if let (Some(root), Some(epoch)) = (cache_dir, epoch.as_deref())
-        && let Some(emitted) = cache::try_load(root, epoch, &cache_key)
+    let epoch = cache_site.and_then(|_| cache::derive_epoch());
+    if let (Some(site), Some(epoch)) = (cache_site, epoch.as_deref())
+        && let Some(emitted) = cache::try_load(site, epoch, &cache_key)
     {
         return (
             write_emitted_project(
                 &emitted,
-                out_dir,
+                target,
                 runtime_dir,
                 options.static_plan.as_ref(),
                 options.tree_shake_vendored,
@@ -802,11 +862,11 @@ pub fn compile_modules_observed(
     // pipeline run uses. The `ir_key` deliberately excludes `db_driver`
     // (`compute_ir_key`'s own doc explains why), so this tier can still hit
     // when the `EmittedProject` tier just missed on a `db_driver`-only edit.
-    if let (Some(root), Some(epoch)) = (cache_dir, epoch.as_deref()) {
+    if let (Some(site), Some(epoch)) = (cache_site, epoch.as_deref()) {
         let ir_key = cache::compute_ir_key(&sources, &injected, entry_path, options.target);
         let fresh_interner: std::sync::Arc<std::sync::Mutex<ipe_intern::Interner>> =
             std::sync::Arc::new(std::sync::Mutex::new(ipe_intern::Interner::new()));
-        if let Some(program) = cache::try_load_ir(root, epoch, &ir_key, &fresh_interner) {
+        if let Some(program) = cache::try_load_ir(site, epoch, &ir_key, &fresh_interner) {
             use ipe_backend::Backend as _;
             // Production gate on the IR-cache fast path: this path bypasses
             // `emit_project` (the DB layer where the gate normally runs), so a
@@ -820,10 +880,10 @@ pub fn compile_modules_observed(
                         kernel: "Debug.*".into(),
                     },
                 };
-                let src = std::fs::read_to_string(blame_path).unwrap_or_default();
+                let (file, src) = entry_blame_source(&sources, entry_path, blame_path);
                 return (
                     Err(CliError::Pipeline {
-                        file: blame_path.to_path_buf(),
+                        file,
                         src,
                         diag: Box::new(diag),
                     }),
@@ -848,20 +908,22 @@ pub fn compile_modules_observed(
                     .emit(&program)
             };
             if let Ok(emitted) = emit_result {
-                // Warm the (cheaper-to-hit) EmittedProject tier for the
-                // next build too — advisory, best-effort, same as every
-                // other cache-write in this module.
-                cache::store(root, epoch, &cache_key, &emitted);
-                return (
-                    write_emitted_project(
-                        &emitted,
-                        out_dir,
-                        runtime_dir,
-                        options.static_plan.as_ref(),
-                        options.tree_shake_vendored,
-                    ),
-                    CacheOutcome::IrHit,
+                let written = write_emitted_project(
+                    &emitted,
+                    target,
+                    runtime_dir,
+                    options.static_plan.as_ref(),
+                    options.tree_shake_vendored,
                 );
+                // Warm the (cheaper-to-hit) EmittedProject tier for the
+                // next build too — advisory, best-effort, and rooted in the
+                // claim the write returned.
+                if let Ok(claimed) = &written
+                    && let Some(root) = site.root(claimed)
+                {
+                    cache::store(&root, epoch, &cache_key, &emitted);
+                }
+                return (written, CacheOutcome::IrHit);
             }
             // A relocated Program that fails to emit is never a build
             // failure from this fast path — fall through to the full
@@ -908,8 +970,22 @@ pub fn compile_modules_observed(
         Err(e) => return (Err(e), CacheOutcome::Miss),
     };
 
-    if let (Some(root), Some(epoch)) = (cache_dir, epoch.as_deref()) {
-        cache::store(root, epoch, &cache_key, &emitted);
+    let written = write_emitted_project(
+        &emitted,
+        target,
+        runtime_dir,
+        options.static_plan.as_ref(),
+        options.tree_shake_vendored,
+    );
+
+    // A writable cache root comes only from the claim the write above
+    // returned, so the default in-output cache is never written before
+    // the target is proven ipe's.
+    if let Ok(claimed) = &written
+        && let (Some(site), Some(epoch)) = (cache_site, epoch.as_deref())
+        && let Some(root) = site.root(claimed)
+    {
+        cache::store(&root, epoch, &cache_key, &emitted);
         // Also store the lowered `Program` at the IR tier.
         // `ipe_db::lower_program` is a PURE MEMO HIT here — it already ran
         // (transitively, via `compile_prepared`'s `emit_project` demand
@@ -923,7 +999,7 @@ pub fn compile_modules_observed(
         {
             let ir_key = cache::compute_ir_key(&sources, &injected, entry_path, options.target);
             cache::store_ir(
-                root,
+                &root,
                 epoch,
                 &ir_key,
                 program,
@@ -932,16 +1008,7 @@ pub fn compile_modules_observed(
         }
     }
 
-    (
-        write_emitted_project(
-            &emitted,
-            out_dir,
-            runtime_dir,
-            options.static_plan.as_ref(),
-            options.tree_shake_vendored,
-        ),
-        CacheOutcome::Miss,
-    )
+    (written, CacheOutcome::Miss)
 }
 
 /// Create the salsa inputs for one build: a [`ipe_db::SourceFile`] per module
@@ -1148,12 +1215,12 @@ pub fn attribute_canon_errors(
     for mod_path in topo.iter() {
         let Some((path, src)) = sources.get(mod_path) else {
             return Err(CliError::Usage(
-                "internal: module in topo order not in source map",
+                text::msg::internal_module_not_in_source_map(),
             ));
         };
         let Some(file_handle) = source_root.files(db).get(mod_path).copied() else {
             return Err(CliError::Usage(
-                "internal: module in topo order not in source map",
+                text::msg::internal_module_not_in_source_map(),
             ));
         };
         ipe_db::canonicalize(db, source_root, file_handle)
@@ -1214,6 +1281,22 @@ pub fn record_widget_tag_origin(
     }
 }
 
+/// The entry module's path and text, which an entry-blamed diagnostic renders against.
+///
+/// The text comes from the source map the build already read under its
+/// bounds, never from a second disk read. An entry absent from `sources`
+/// yields `blame_path` with empty text.
+fn entry_blame_source(
+    sources: &BTreeMap<Vec<String>, (PathBuf, String)>,
+    entry_path: &[String],
+    blame_path: &Path,
+) -> (PathBuf, String) {
+    sources.get(entry_path).map_or_else(
+        || (blame_path.to_path_buf(), String::new()),
+        |(path, text)| (path.clone(), text.clone()),
+    )
+}
+
 /// The in-memory compile core over an already-populated database.
 ///
 /// topo order → per-module canonicalisation (memoized, blame-attributed) →
@@ -1250,7 +1333,9 @@ pub fn compile_prepared(
     let shared_interner = ipe_db::Db::interner(db).clone();
 
     let Some(entry_file) = source_root.files(db).get(entry_path).copied() else {
-        return Err(CliError::Usage("internal: entry module not in source map"));
+        return Err(CliError::Usage(
+            text::msg::internal_entry_not_in_source_map(),
+        ));
     };
 
     // Canonicalise each module in dep-first order, attributing a canon error
@@ -1263,13 +1348,7 @@ pub fn compile_prepared(
     // Link → infer → lower → emit on the merged module. Blame link/lower/emit
     // errors on the entry file; infer errors and warnings are attributed to the
     // dep module that owns the failing span.
-    let entry_src_path = sources
-        .get(entry_path)
-        .map_or_else(|| blame_path.to_path_buf(), |(p, _)| p.clone());
-    let entry_src = sources
-        .get(entry_path)
-        .map(|(_, s)| s.clone())
-        .unwrap_or_default();
+    let (entry_src_path, entry_src) = entry_blame_source(sources, entry_path, blame_path);
     let pipeline_err = |diag: ipe_diagnostics::Diagnostic| CliError::Pipeline {
         file: entry_src_path.clone(),
         src: entry_src.clone(),
@@ -1499,7 +1578,10 @@ pub fn compile_prepared(
     for w in &types.warnings {
         let span = diag_span(w);
         let (w_file, w_src) = source_for_span(span);
-        eprintln!("{}", render(w, &w_file.to_string_lossy(), &w_src));
+        crate::screen::chatter_styled(
+            crate::screen::Stream::Stderr,
+            &render(w, &w_file.to_string_lossy(), &w_src),
+        );
     }
     // Attribute lower / backend diagnostics to the source file that OWNS the
     // failing span, not blindly to the entry file. After link, every module's
@@ -1799,14 +1881,14 @@ pub fn rust_raw_str_literal(s: &str) -> String {
     format!("r{fence}\"{s}\"{fence}")
 }
 
-/// Write an emitted project to `out_dir`, vendoring the runtime module tree
+/// Write an emitted project to `target`, vendoring the runtime module tree
 /// from `runtime_dir`.
 ///
 /// The emit→cargo bridge (design doc H7/H8):
 /// assembles the COMPLETE intended project (`build_emit_manifest`) — the
 /// vendored runtime tree, `Cargo.toml`, and every backend-emitted file — then
 /// [`reconcile_emitted_project`] writes only what changed (content-gated,
-/// atomic tmp-then-rename) and deletes anything under `out_dir/src` the
+/// atomic tmp-then-rename) and deletes anything under the target's `src` the
 /// manifest no longer names (manifest-driven prune). On an unchanged rebuild
 /// this writes NOTHING; `cargo` therefore sees no mtime churn and does not
 /// invalidate its own build cache. This is a pure driver-boundary filesystem
@@ -1820,17 +1902,24 @@ pub fn rust_raw_str_literal(s: &str) -> String {
 /// non-static build removes a stale generated config so `+crt-static` can
 /// never leak from an earlier static build into later ones.
 ///
+/// Returns the claimed target, the only source of a writable in-output
+/// build-cache root. An area target is claimed with its root's disjointness
+/// from the project proven again; a claimed target is proven still the
+/// directory it claimed.
+///
 /// # Errors
 /// [`CliError::Io`] on any filesystem failure; [`CliError::StaticRefusal`]
 /// for a webview shape under a static plan; [`CliError::Pipeline`] on a
-/// backend-invariant breach (manifest anchor drift).
+/// backend-invariant breach (manifest anchor drift);
+/// [`CliError::OutputRefused`] when the target cannot be claimed or was
+/// replaced since it was claimed.
 pub fn write_emitted_project(
     emitted: &ipe_backend::EmittedProject,
-    out_dir: &Path,
+    target: &EmitTarget,
     runtime_dir: &Path,
     static_plan: Option<&ipe_backend_rust::static_build::StaticPlan>,
     tree_shake_vendored: bool,
-) -> Result<(), CliError> {
+) -> Result<OwnedDir, CliError> {
     use ipe_backend_rust::static_build;
 
     let mut manifest = build_emit_manifest(emitted, runtime_dir, tree_shake_vendored)?;
@@ -1849,11 +1938,14 @@ pub fn write_emitted_project(
             static_build::cargo_config(plan),
         );
     }
-    reconcile_emitted_project(&manifest, out_dir)?;
+    // The reconcile below prunes and overwrites, so it runs only in a directory
+    // proven ipe-owned and disjoint from the project.
+    let crate_dir = target.claim()?;
+    reconcile_emitted_project(&manifest, &crate_dir)?;
     if static_plan.is_none() {
-        remove_stale_static_config(out_dir)?;
+        remove_stale_static_config(&crate_dir)?;
     }
-    Ok(())
+    Ok(crate_dir)
 }
 
 /// Map a backend-invariant [`Diagnostic`] (a `CompilerBug` from manifest
@@ -1867,34 +1959,33 @@ pub fn backend_invariant_err(diag: Diagnostic) -> CliError {
     }
 }
 
-/// Remove a stale GENERATED `.cargo/config.toml` from the project root — and
-/// only a generated one: the file is deleted solely when it starts with
-/// [`ipe_backend_rust::static_build::CARGO_CONFIG_MARKER`], so a config a
-/// user placed there by hand is never touched. Needed because the
-/// reconciler's prune pass is scoped to `out_dir/src` and cannot own
-/// root-level files.
-pub fn remove_stale_static_config(out_dir: &Path) -> Result<(), CliError> {
-    let path = out_dir.join(".cargo").join("config.toml");
+/// Remove a stale generated `.cargo/config.toml` from the emitted crate.
+///
+/// Only a generated one goes: the file is deleted solely when it starts with
+/// [`ipe_backend_rust::static_build::CARGO_CONFIG_MARKER`]. Needed because the
+/// reconciler's prune pass is scoped to `src/` and cannot own root-level files.
+///
+/// # Errors
+/// [`CliError::OutputRefused`] for a symlink on the way; [`CliError::Io`] on a
+/// filesystem failure.
+pub fn remove_stale_static_config(crate_dir: &OwnedDir) -> Result<(), CliError> {
+    let config = crate_dir.path_to(Path::new(".cargo").join("config.toml"))?;
+    let path = config.path();
     match fs::read_to_string(&path) {
         Ok(text) if text.starts_with(ipe_backend_rust::static_build::CARGO_CONFIG_MARKER) => {
-            match fs::remove_file(&path) {
-                Ok(()) => Ok(()),
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-                Err(e) => Err(io_err(&path, e)),
-            }
+            config.remove()
         }
         _ => Ok(()),
     }
 }
 
-/// Assemble the complete intended on-disk project, relative to `out_dir`:
-/// every path this build produces, mapped to its exact text.
+/// Assemble the complete intended on-disk project, relative to `out_dir`.
+///
+/// Every path this build produces, mapped to its exact text.
 ///
 /// Every file this driver ever writes is UTF-8 Rust/TOML source, so `String`
-/// (not raw bytes) is the honest content type — it lets this function reuse
-/// the existing [`write_atomic`] helper unchanged (see
-/// [`reconcile_emitted_project`]) instead of a parallel byte-oriented atomic
-/// writer.
+/// (not raw bytes) is the honest content type (see
+/// [`reconcile_emitted_project`]).
 ///
 /// Three sources, in the same precedence `write_emitted_project` has always
 /// used ("vendor first, emit second" — the backend's trimmed
@@ -2056,71 +2147,109 @@ pub fn collect_dir_text(
     Ok(())
 }
 
-/// Reconcile `out_dir` against `manifest`: write only files whose content
-/// differs from what is already on disk (content-gated — H8, avoids spurious
-/// `cargo` rebuilds from an identical-byte rewrite bumping mtime) via
-/// [`write_atomic`]'s existing tmp-then-rename, then DELETE every file under
-/// `out_dir/src` that is NOT a manifest key (manifest-driven prune — H7,
-/// makes an orphaned/stale `.rs` left over from a deleted module or a
-/// runtime-tree removal structurally impossible: `manifest` is authoritative).
+/// Reconcile the owned crate directory against `manifest`.
 ///
-/// Scope discipline: the prune walk is confined to `out_dir/src` and never
-/// touches the project root — `Cargo.lock`, a `target/` build-cache
-/// directory, or any other file `cargo` itself manages there must never be
-/// touched by this pass.
+/// Only files whose content differs from what is on disk are written
+/// (content-gated, so an unchanged rebuild bumps no mtime and `cargo` keeps its
+/// cache), each through [`OwnedPath::write`]'s temp-then-rename. Then every
+/// file under `src/` that is NOT a manifest key is deleted (manifest-driven
+/// prune: a stale `.rs` from a deleted module cannot survive).
+///
+/// Scope discipline: the prune walk is confined to `src/` and never touches the
+/// crate root — `Cargo.lock`, a `target/` build-cache directory, or any other
+/// file `cargo` itself manages there. Every path is an [`OwnedPath`], so a
+/// symlink planted anywhere in the owned tree is refused, never followed.
 ///
 /// # Errors
-/// [`CliError::Io`] on any filesystem failure.
+/// [`CliError::OutputRefused`] for a symlink on the way; [`CliError::Io`] on
+/// any filesystem failure.
 pub fn reconcile_emitted_project(
     manifest: &BTreeMap<PathBuf, String>,
-    out_dir: &Path,
+    crate_dir: &OwnedDir,
 ) -> Result<(), CliError> {
     for (rel, contents) in manifest {
-        let path = out_dir.join(rel);
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent).map_err(|e| io_err(parent, e))?;
-        }
-        write_if_changed(&path, contents)?;
+        write_if_changed(&crate_dir.path_to(rel)?, contents)?;
     }
-    prune_orphaned_files(&out_dir.join("src"), manifest, out_dir)
+    prune_orphaned_files(crate_dir, manifest)
 }
 
-/// Write `contents` to `path` only when the existing content differs (or the
-/// file is absent) — the content-gate `write_atomic` alone does not provide
-/// (it always writes). Delegating the actual write to [`write_atomic`] reuses
-/// its established tmp-then-rename + cleanup-on-failure behaviour rather than
-/// a second, parallel atomic-write implementation.
-pub fn write_if_changed(path: &Path, contents: &str) -> Result<(), CliError> {
-    // A differing byte length is sufficient proof of differing content, so skip
-    // the whole-file read on the common size-changed case; equal-length files
-    // fall through to the exact byte compare that preserves the no-op mtime
-    // guarantee (avoids spurious cargo rebuilds from identical rewrites).
-    if fs::metadata(path).is_ok_and(|meta| meta.len() == contents.len() as u64)
-        && fs::read_to_string(path).is_ok_and(|existing| existing == contents)
-    {
+/// Write `contents` to `target` only when the existing content differs.
+///
+/// A differing byte length proves a difference without reading; an equal length
+/// falls through to the exact compare, which keeps an identical rewrite a no-op.
+///
+/// # Errors
+/// As [`OwnedPath::write`].
+pub fn write_if_changed(target: &OwnedPath, contents: &str) -> Result<(), CliError> {
+    if target.holds(contents.as_bytes())? {
         return Ok(());
     }
-    write_atomic(path, contents)
+    target.write(contents.as_bytes())
 }
 
-/// Delete every FILE under `dir` whose path relative to `out_dir` is not a
-/// key of `manifest`. Recurses into subdirectories but never removes a
-/// directory itself (leaving empty directories behind is harmless — `cargo`
-/// does not care — and staying file-only keeps this pass's blast radius
-/// minimal).
+/// Delete every file under the crate's `src/` that is not a key of `manifest`.
+///
+/// The walk starts at an [`OwnedPath`] (a symlinked `src/` is refused) and
+/// classifies entries without following links, so a symlink inside the tree is
+/// removed as the link it is, never traversed. On Unix each level is listed and
+/// unlinked through its held handle ([`OwnedPath::prune_files`]), so a level
+/// swapped for a link mid-walk is refused, never followed. Directories are kept (empty ones are harmless to `cargo`), which
+/// keeps the pass's blast radius minimal.
+///
+/// # Errors
+/// [`CliError::OutputRefused`] when `src/` is a symlink, or with
+/// [`OutputRefusal::TooDeep`] when the tree nests deeper than
+/// [`MAX_PRUNE_DEPTH`]; [`CliError::Io`] on a filesystem failure.
 pub fn prune_orphaned_files(
+    crate_dir: &OwnedDir,
+    manifest: &BTreeMap<PathBuf, String>,
+) -> Result<(), CliError> {
+    let src = crate_dir.path_to("src")?;
+    prune_src(&src, manifest, crate_dir)
+}
+
+/// Prune `src` through held directory handles.
+#[cfg(unix)]
+fn prune_src(
+    src: &OwnedPath,
+    manifest: &BTreeMap<PathBuf, String>,
+    _crate_dir: &OwnedDir,
+) -> Result<(), CliError> {
+    src.prune_files(|rel| manifest.contains_key(rel), MAX_PRUNE_DEPTH)
+}
+
+/// Prune `src` level by level.
+#[cfg(not(unix))]
+fn prune_src(
+    src: &OwnedPath,
+    manifest: &BTreeMap<PathBuf, String>,
+    crate_dir: &OwnedDir,
+) -> Result<(), CliError> {
+    prune_dir(&src.path(), manifest, crate_dir, 0)
+}
+
+/// Deepest directory nesting under the crate's `src/` that
+/// [`prune_orphaned_files`] descends.
+pub const MAX_PRUNE_DEPTH: usize = 128;
+
+/// One level of [`prune_orphaned_files`], at nesting `depth` below `src/`;
+/// `dir` was reached without following a link.
+#[cfg(not(unix))]
+fn prune_dir(
     dir: &Path,
     manifest: &BTreeMap<PathBuf, String>,
-    out_dir: &Path,
+    crate_dir: &OwnedDir,
+    depth: usize,
 ) -> Result<(), CliError> {
-    if !dir.is_dir() {
-        return Ok(());
+    if depth > MAX_PRUNE_DEPTH {
+        return Err(OutputRefusal::TooDeep {
+            path: dir.to_path_buf(),
+            limit: MAX_PRUNE_DEPTH,
+        }
+        .into());
     }
-    // A directory that vanishes between the `is_dir()` check above and this
-    // read (a concurrent external cleanup — see `write_atomic`'s doc for the
-    // shared-scratch-directory scenario this guards) trivially has nothing
-    // left to prune; treat `NotFound` as success rather than failing the
-    // whole build over a race that already resolved itself.
+    // A directory that is absent, or vanishes before this read (a concurrent
+    // external cleanup), trivially has nothing left to prune.
     let entries = match fs::read_dir(dir) {
         Ok(entries) => entries,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
@@ -2143,25 +2272,17 @@ pub fn prune_orphaned_files(
             Err(e) => return Err(io_err(&path, e)),
         };
         if file_type.is_dir() {
-            prune_orphaned_files(&path, manifest, out_dir)?;
+            prune_dir(&path, manifest, crate_dir, depth.saturating_add(1))?;
         } else {
-            // `path` was built from `dir`, itself built from `out_dir` by
-            // construction (the initial call passes `out_dir.join("src")`,
-            // and every recursive call passes a child of that) — the
-            // `strip_prefix` can only fail if `out_dir` itself is relative
-            // and the working directory changed mid-walk; skip rather than
-            // fail the whole build over a diagnostic-only path label.
-            let Ok(rel) = path.strip_prefix(out_dir) else {
+            // `path` was built from `dir`, itself a child of the crate
+            // directory by construction, so `strip_prefix` fails only when that
+            // path is relative and the working directory changed mid-walk.
+            let Ok(rel) = path.strip_prefix(crate_dir.path()) else {
                 continue;
             };
-            if !manifest.contains_key(rel)
-                && let Err(e) = fs::remove_file(&path)
-                && e.kind() != std::io::ErrorKind::NotFound
-            {
-                // A concurrent deleter reaching `path` first (see above) is
-                // NOT a failure to prune it — the goal ("this orphan is gone")
-                // is already satisfied.
-                return Err(io_err(&path, e));
+            // An orphan a concurrent deleter already removed counts as pruned.
+            if !manifest.contains_key(rel) {
+                crate_dir.unlink(rel)?;
             }
         }
     }
@@ -2196,7 +2317,7 @@ pub fn build_project(
         manifest_path,
         out_dir,
         runtime_dir,
-        BuildOptions::from_env(),
+        &BuildOptions::from_env(),
     )
 }
 
@@ -2206,27 +2327,41 @@ pub fn build_project(
 /// # Errors
 /// As [`build_project`], plus [`CliError::StaticRefusal`] when the emitted
 /// app shape cannot be static.
-// `options` is reconstructed (struct-update syntax) with the parsed
-// manifest's `[wasm] publicEnv` allowlist before threading onward — a
-// genuine consuming use clippy's by-value heuristic doesn't credit; taking
-// `&BuildOptions` here would ripple a lifetime through every call site for
-// no benefit (every caller already owns a fresh `BuildOptions`).
-#[allow(clippy::needless_pass_by_value)]
 pub fn build_project_with_options(
     manifest_path: &Path,
     out_dir: &Path,
     runtime_dir: &Path,
-    options: BuildOptions,
+    options: &BuildOptions,
 ) -> Result<(), CliError> {
+    build_project_into(
+        manifest_path,
+        OutTarget::Path(out_dir),
+        runtime_dir,
+        options,
+    )
+    .map(drop)
+}
+
+/// [`build_project_with_options`] into `out`, returning the claimed crate
+/// directory.
+///
+/// # Errors
+/// As [`build_project`], plus [`CliError::OutputRefused`] when `out` overlaps
+/// the project or its sources.
+pub fn build_project_into(
+    manifest_path: &Path,
+    out: OutTarget<'_>,
+    runtime_dir: &Path,
+    options: &BuildOptions,
+) -> Result<OwnedDir, CliError> {
     let manifest = project::parse_manifest(manifest_path)?;
     let discovered = project::discover_modules(&manifest.src_root)?;
 
     // For each module, read its source and extract imports.
     let mut sources: BTreeMap<Vec<String>, (PathBuf, String)> = BTreeMap::new();
     for m in &discovered {
-        let src =
-            crate::io_bounded::read_to_string_capped(&m.path, crate::io_bounded::SOURCE_READ_CAP)?;
-        sources.insert(m.module_path.clone(), (m.path.clone(), src));
+        let src = crate::io_bounded::read_walked_source(m.path())?;
+        sources.insert(m.module_path().to_vec(), (m.path().to_path_buf(), src));
     }
 
     // A library package (declares `exposedModules`, has no runnable entry —
@@ -2239,11 +2374,7 @@ pub fn build_project_with_options(
         && !manifest.exposed_modules.is_empty()
         && !sources.contains_key(&entry_path)
     {
-        return Err(CliError::Usage(
-            "this is a library package (it declares `exposedModules` and no runnable program) — \
-             there is no entry to build. Use `ipe type-check` to verify its public surface, or \
-             add a `Package.programs [ … ]` stage to declare a runnable entry",
-        ));
+        return Err(CliError::Usage(text::msg::library_package_no_entry()));
     }
     // The emit epilogue's fixed `fn main` calls `ipe_main`, which the backend
     // names only for a `main` in module `Main`. A `programs`-declared entry in a
@@ -2252,12 +2383,8 @@ pub fn build_project_with_options(
     // so emitting a non-`Main` program entry would miscompile. Refuse cleanly and
     // point at the working analysis path rather than emit a broken crate.
     if entry_path != ["Main".to_owned()] {
-        return Err(CliError::UsageOwned(format!(
-            "program entry module `{}` is not yet buildable — a declared `programs` entry outside \
-             module `Main` type-checks (`ipe type-check`) but native emission still assumes a \
-             `Main` entry. Name the entry file `Main.ipe`, or track the multi-program emit \
-             follow-up",
-            entry_path.join(".")
+        return Err(CliError::Usage(text::msg::build_entry_not_main(
+            &entry_path.join("."),
         )));
     }
 
@@ -2292,16 +2419,17 @@ pub fn build_project_with_options(
         wasm_hydrate_mode: manifest.wasm.mode.as_deref() == Some("hydrate"),
         cargo_name,
         webview_window,
-        ..options
+        ..*options
     };
 
     // The manifest is the blame location for an import cycle (no single file
     // owns it); post-link errors are blamed on the entry file inside the core.
+    let target = out.prove(&ProjectPaths::from_manifest(&manifest))?;
     compile_modules(
         sources,
         discovered,
         &entry_path,
-        out_dir,
+        &target,
         runtime_dir,
         manifest_path,
         manifest.driver,
@@ -2323,7 +2451,7 @@ pub fn build_project_with_options(
 /// Returns [`CliError::RuntimeNotFound`] when no candidate directory exists, or
 /// [`CliError::Io`] if the current directory cannot be read.
 pub fn resolve_runtime() -> Result<PathBuf, CliError> {
-    if let Ok(dir) = std::env::var("IPE_RUNTIME_DIR") {
+    if let Ok(dir) = ipe_env::var("IPE_RUNTIME_DIR") {
         let path = PathBuf::from(dir);
         if path.is_dir() {
             return Ok(path);
@@ -2384,7 +2512,56 @@ pub fn resolve_vendored_runtime_dir(
 
 #[cfg(test)]
 mod tests {
+    use std::fmt::Write as _;
+
     use super::*;
+    use crate::output_dir::OutputRefusal;
+
+    /// A `src/` tree nested past [`MAX_PRUNE_DEPTH`] is refused with a typed
+    /// refusal, while one exactly at the ceiling is pruned.
+    #[test]
+    fn prune_refuses_a_tree_deeper_than_the_ceiling() {
+        let dir = std::env::temp_dir().join(format!("ipe_prune_depth_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        let owned = OwnedDir::claim(&dir).expect("claim temp dir");
+        let manifest = BTreeMap::new();
+
+        let mut at_ceiling = dir.join("src");
+        for _ in 0..MAX_PRUNE_DEPTH {
+            at_ceiling.push("d");
+        }
+        fs::create_dir_all(&at_ceiling).expect("make tree at the ceiling");
+        fs::write(at_ceiling.join("orphan.rs"), "").expect("write orphan");
+        let pruned = prune_orphaned_files(&owned, &manifest);
+        assert!(
+            pruned.is_ok(),
+            "a tree at the ceiling is pruned, got {pruned:?}"
+        );
+        assert!(
+            !at_ceiling.join("orphan.rs").exists(),
+            "the orphan at the ceiling is removed"
+        );
+
+        let past = at_ceiling.join("d");
+        fs::create_dir_all(&past).expect("make tree past the ceiling");
+        fs::write(past.join("orphan.rs"), "").expect("write orphan");
+        let refused = prune_orphaned_files(&owned, &manifest);
+        assert!(
+            matches!(
+                refused,
+                Err(CliError::OutputRefused(OutputRefusal::TooDeep {
+                    limit: MAX_PRUNE_DEPTH,
+                    ..
+                }))
+            ),
+            "a tree past the ceiling is refused, got {refused:?}"
+        );
+        assert!(
+            past.join("orphan.rs").is_file(),
+            "nothing past the ceiling is touched"
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
 
     /// A same-length, same-content file is left untouched (no rewrite, mtime
     /// preserved) while a differing-length file is rewritten — the two branches
@@ -2398,16 +2575,16 @@ mod tests {
                 .duration_since(std::time::UNIX_EPOCH)
                 .map_or(0, |d| d.as_nanos())
         ));
-        std::fs::create_dir_all(&dir).expect("create temp dir");
+        let owned = OwnedDir::claim(&dir).expect("claim temp dir");
 
         // Same content: the write is skipped, so mtime does not advance.
-        let same = dir.join("same.txt");
+        let same = owned.path_to("same.txt").expect("owned path");
         write_if_changed(&same, "hello").expect("initial write");
-        let mtime_before = fs::metadata(&same)
+        let mtime_before = fs::metadata(same.path())
             .and_then(|m| m.modified())
             .expect("mtime");
         write_if_changed(&same, "hello").expect("no-op write");
-        let mtime_after = fs::metadata(&same)
+        let mtime_after = fs::metadata(same.path())
             .and_then(|m| m.modified())
             .expect("mtime");
         assert_eq!(
@@ -2416,26 +2593,151 @@ mod tests {
         );
 
         // Differing length: content is overwritten.
-        let changed = dir.join("changed.txt");
+        let changed = owned.path_to("changed.txt").expect("owned path");
         write_if_changed(&changed, "abc").expect("initial write");
         write_if_changed(&changed, "abcdef").expect("length-changed write");
         assert_eq!(
-            fs::read_to_string(&changed).expect("read back"),
+            fs::read_to_string(changed.path()).expect("read back"),
             "abcdef",
             "a differing-length write must land"
         );
 
         // Same length, different bytes: still rewritten (falls through to the
         // exact compare, which reports a difference).
-        let flip = dir.join("flip.txt");
+        let flip = owned.path_to("flip.txt").expect("owned path");
         write_if_changed(&flip, "aaa").expect("initial write");
         write_if_changed(&flip, "bbb").expect("same-length differing write");
         assert_eq!(
-            fs::read_to_string(&flip).expect("read back"),
+            fs::read_to_string(flip.path()).expect("read back"),
             "bbb",
             "a same-length differing-byte write must land"
         );
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A fresh scratch directory unique to this test run.
+    fn loose_scratch(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "ipe_loose_build_{tag}_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |d| d.as_nanos())
+        ));
+        fs::create_dir_all(&dir).expect("create scratch dir");
+        dir
+    }
+
+    fn collected_modules(collected: &CollectedSources) -> Vec<Vec<String>> {
+        collected.sources.keys().cloned().collect()
+    }
+
+    /// A loose build compiles the import closure only, beside an unreadable directory.
+    ///
+    /// An unimported sibling and a `chmod 000` directory next to the entry are
+    /// never touched.
+    #[cfg(unix)]
+    #[test]
+    fn loose_build_loads_the_import_closure_beside_an_unreadable_dir() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = loose_scratch("closure");
+        let entry = dir.join("Main.ipe");
+        fs::write(
+            &entry,
+            "module Main exposing (main)\n\nimport Helper\n\nmain = Helper.h\n",
+        )
+        .expect("write entry");
+        fs::write(
+            dir.join("Helper.ipe"),
+            "module Helper exposing (h)\n\nh = 1\n",
+        )
+        .expect("write helper");
+        fs::write(
+            dir.join("Stray.ipe"),
+            "module Stray exposing (s)\n\ns = ???\n",
+        )
+        .expect("write stray");
+        let locked = dir.join("locked");
+        fs::create_dir_all(&locked).expect("create locked dir");
+        fs::write(
+            locked.join("Hidden.ipe"),
+            "module Hidden exposing (x)\n\nx = 1\n",
+        )
+        .expect("write hidden");
+        fs::set_permissions(&locked, fs::Permissions::from_mode(0o000)).expect("chmod 000");
+
+        let collected = collect_entry_and_siblings(&entry);
+        let _ = fs::set_permissions(&locked, fs::Permissions::from_mode(0o755));
+        let _ = fs::remove_dir_all(&dir);
+        let collected = collected.expect("closure loads beside an unreadable dir");
+        assert_eq!(
+            collected_modules(&collected),
+            vec![vec!["Helper".to_owned()], vec!["Main".to_owned()]],
+            "only Main and the Helper it imports are compiled"
+        );
+        assert_eq!(collected.entry_module_path, vec!["Main".to_owned()]);
+    }
+
+    /// A loose build whose import closure passes the module ceiling is refused.
+    #[test]
+    fn loose_build_past_the_module_limit_is_refused() {
+        let dir = loose_scratch("limit");
+        let count = crate::loose_file::MAX_LOOSE_FILE_MODULES;
+        let imports = (0..count).fold(String::new(), |mut acc, i| {
+            let _ = writeln!(acc, "import M{i}");
+            acc
+        });
+        let entry = dir.join("Main.ipe");
+        fs::write(
+            &entry,
+            format!("module Main exposing (main)\n\n{imports}\nmain = 1\n"),
+        )
+        .expect("write entry");
+        for i in 0..count {
+            fs::write(
+                dir.join(format!("M{i}.ipe")),
+                format!("module M{i} exposing (v)\n\nv = 1\n"),
+            )
+            .expect("write sibling");
+        }
+
+        let collected = collect_entry_and_siblings(&entry);
+        let _ = fs::remove_dir_all(&dir);
+        assert!(
+            matches!(collected, Err(CliError::DiscoveryLimitReached { .. })),
+            "the entry plus {count} imported siblings exceeds the ceiling"
+        );
+    }
+
+    /// A loose build never follows a sibling symlink that points outside the entry's directory.
+    #[cfg(unix)]
+    #[test]
+    fn loose_build_does_not_follow_an_escaping_symlink() {
+        let outside = loose_scratch("escape-outside");
+        fs::write(
+            outside.join("Out.ipe"),
+            "module Out exposing (o)\n\no = 1\n",
+        )
+        .expect("write outside module");
+        let dir = loose_scratch("escape");
+        let entry = dir.join("Main.ipe");
+        fs::write(
+            &entry,
+            "module Main exposing (main)\n\nimport Out\n\nmain = Out.o\n",
+        )
+        .expect("write entry");
+        std::os::unix::fs::symlink(outside.join("Out.ipe"), dir.join("Out.ipe"))
+            .expect("plant symlink");
+
+        let collected = collect_entry_and_siblings(&entry);
+        let _ = fs::remove_dir_all(&dir);
+        let _ = fs::remove_dir_all(&outside);
+        let collected = collected.expect("entry still loads");
+        assert_eq!(
+            collected_modules(&collected),
+            vec![vec!["Main".to_owned()]],
+            "the escaping symlink is left for the compiler to report as unresolved"
+        );
     }
 }

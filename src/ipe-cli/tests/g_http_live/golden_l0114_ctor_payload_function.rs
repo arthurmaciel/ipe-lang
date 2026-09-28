@@ -11,9 +11,10 @@
 //! * T1/T2 — a function value DIRECTLY in `Ok`/`Just`/a user union's payload
 //!   (declared or laundered through a type variable) is now ACCEPTED.
 //! * T3 Tier 2 (primary) — `ipe_types::constrain::constrain_var_kernel` ties
-//!   the callback-result scheme-var of EVERY `Maybe`/`Result` higher-order
-//!   kernel (`map`, `map2..5`, `mapError`, `andMap` — 13 kernels, pinned by
-//!   `hof_result_slots_match_scheme_shapes` in `ipe_types`) to a
+//!   the callback-result scheme-var of EVERY pure higher-order kernel
+//!   (`Maybe`/`Result` `map`, `map2..5`, `mapError`, `andMap`, and the
+//!   collection HOFs — derived by `StdlibKernel::hof_result_vars`, checked by
+//!   `hof_result_vars_match_scheme_shapes` in `ipe_types`) to a
 //!   `TyBounds::hof_kernel_result()` obligation, checked at type-check time
 //!   (`ipe_types::infer`) BEFORE lowering ever runs. The obligation covers the
 //!   whole kernel set (a `Result.map` bypass otherwise slips through) and fails
@@ -32,17 +33,17 @@
 //!   the `SchemeApp`/`check_scheme_applications` pass, re-verified at each of
 //!   the forwarder's own external call sites — surfacing the friendlier,
 //!   specifically-labelled `IPE-T0014` (`SuperTypeUnsatisfied`,
-//!   "non-function callback result (Maybe/Result higher-order kernel)").
+//!   "non-function callback result (higher-order kernel)").
 //!   Both are clean Ipê diagnostics, never a cargo-fail;
 //!   which one you see depends only on whether `andMap` was called directly
 //!   or through a forwarder, confirmed empirically below (not merely
 //!   predicted by the design doc, which anticipated IPE-T0014 as the sole
 //!   Tier-2 code for every shape).
-//! * T3 Tier 1 (backstop) — `reject_curried_andmap_payload`, re-anchored
-//!   INSIDE `lower_callee` itself (the single funnel every kernel/top-level
-//!   reference resolves through), rather than the `Call`-node arm the three
-//!   reverted attempts used. Never observed firing in this pass's testing
-//!   (Tier 2 always catches the hazard first) — kept as defense-in-depth.
+//! * T3 Tier 1 (backstop) — `reject_hof_callback_function_result`
+//!   (`IPE-L0154`), inside `lower_callee` itself (the single funnel every
+//!   kernel/top-level reference resolves through). It reads the kernel
+//!   reference's solved type against `StdlibKernel::hof_result_vars`, so it
+//!   holds independently of Tier 2's wiring; Tier 2 catches the hazard first.
 //! * T4 — `reject_fn_value_reuse` (`IPE-L0127`), wired at all FIVE call sites
 //!   a fn-carrying binding can originate from: typed/untyped Def params,
 //!   let-bindings, match-arm bindings, AND lambda params (the lambda-param
@@ -53,7 +54,7 @@
 //! Every shape the incident history found (or the revised design's fixture
 //! matrix names) gets its own red (still correctly rejected) fixture, each
 //! going through `assert_hof_curried_rejected` (accepts IPE-T0001 /
-//! IPE-T0014 / IPE-L0114 — see that helper's doc comment):
+//! IPE-T0014 / IPE-L0154 — see that helper's doc comment):
 //!
 //! | Shape | Fixture | Observed code |
 //! |---|---|---|
@@ -110,10 +111,7 @@ fn built_code(root: &Path, name: &str) -> (Result<(), CliError>, PathBuf) {
     let entry = fixture_entry(root, name);
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("{name}_emit"));
     let _ = std::fs::remove_dir_all(&out);
-    let runtime = ipe::resolve_runtime();
-    let Ok(runtime) = runtime else {
-        return (Ok(()), out); // resolver unavailable in this environment — skip below
-    };
+    let runtime = crate::support::expect_runtime(name, ipe::resolve_runtime());
     (ipe::build(&entry, &out, &runtime), out)
 }
 
@@ -125,16 +123,13 @@ fn built_code(root: &Path, name: &str) -> (Result<(), CliError>, PathBuf) {
 #[test]
 fn result_and_map_fn_payload_accepted() {
     let root = repo_root();
-    if ipe::resolve_runtime().is_err() {
-        return;
-    }
     let (built, out) = built_code(&root, "result_and_map_fn_payload");
     assert!(
         built.is_ok(),
         "Ok f |> Result.andMap must be accepted: {built:?}"
     );
 
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
     let outcome = crate::support::build_and_run_emitted("result_and_map_fn_payload", &out);
@@ -152,16 +147,13 @@ fn result_and_map_fn_payload_accepted() {
 #[test]
 fn maybe_and_map_fn_payload_accepted() {
     let root = repo_root();
-    if ipe::resolve_runtime().is_err() {
-        return;
-    }
     let (built, out) = built_code(&root, "maybe_and_map_fn_payload");
     assert!(
         built.is_ok(),
         "Just f |> Maybe.andMap must be accepted: {built:?}"
     );
 
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
     let outcome = crate::support::build_and_run_emitted("maybe_and_map_fn_payload", &out);
@@ -192,16 +184,13 @@ fn maybe_and_map_fn_payload_accepted() {
 #[test]
 fn let_bound_fn_payload_accepted() {
     let root = repo_root();
-    if ipe::resolve_runtime().is_err() {
-        return;
-    }
     let (built, out) = built_code(&root, "let_bound_fn_payload");
     assert!(
         built.is_ok(),
         "let f = Ok (\\x -> …) crossing a fn boundary must be accepted: {built:?}"
     );
 
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
     let outcome = crate::support::build_and_run_emitted("let_bound_fn_payload", &out);
@@ -220,16 +209,13 @@ fn let_bound_fn_payload_accepted() {
 #[test]
 fn let_bound_maybe_fn_payload_accepted() {
     let root = repo_root();
-    if ipe::resolve_runtime().is_err() {
-        return;
-    }
     let (built, out) = built_code(&root, "let_bound_maybe_fn_payload");
     assert!(
         built.is_ok(),
         "let f = Just (\\x -> …) crossing a fn boundary must be accepted: {built:?}"
     );
 
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
     let outcome = crate::support::build_and_run_emitted("let_bound_maybe_fn_payload", &out);
@@ -248,16 +234,13 @@ fn let_bound_maybe_fn_payload_accepted() {
 #[test]
 fn ctor_decl_fn_payload_accepted() {
     let root = repo_root();
-    if ipe::resolve_runtime().is_err() {
-        return;
-    }
     let (built, out) = built_code(&root, "ctor_decl_fn_payload");
     assert!(
         built.is_ok(),
         "declared fn-typed ctor payload must be accepted: {built:?}"
     );
 
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
     let outcome = crate::support::build_and_run_emitted("ctor_decl_fn_payload", &out);
@@ -276,16 +259,13 @@ fn ctor_decl_fn_payload_accepted() {
 #[test]
 fn fn_extracted_called_twice_accepted() {
     let root = repo_root();
-    if ipe::resolve_runtime().is_err() {
-        return;
-    }
     let (built, out) = built_code(&root, "fn_extracted_called_twice");
     assert!(
         built.is_ok(),
         "calling an extracted fn twice must be accepted: {built:?}"
     );
 
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
     let outcome = crate::support::build_and_run_emitted("fn_extracted_called_twice", &out);
@@ -324,16 +304,10 @@ fn fn_extracted_called_twice_accepted() {
 ///   directly — see `and_map_curried_forwarder_is_ipe_t0014` below for the
 ///   fixture that exercises this path with the friendly "single-argument
 ///   function" message.
-/// * `IPE-L0114` — the Tier-1 lowering backstop, acceptable defense-in-depth
-///   outcome if Tier 2's wiring ever has a bug (never observed in this
-///   pass's testing, but kept as an accepted outcome so a future Tier-2
-///   regression fails LOUD with a wrong-tier note rather than silently
-///   passing this assertion).
+/// * `IPE-L0154` — the Tier-1 lowering backstop, the accepted
+///   defense-in-depth outcome should Tier 2's wiring ever miss a shape.
 fn assert_hof_curried_rejected(name: &str) {
     let root = repo_root();
-    if ipe::resolve_runtime().is_err() {
-        return;
-    }
     let (built, _out) = built_code(&root, name);
     let code = match &built {
         Err(CliError::Pipeline { diag, .. }) => Some(diag.code()),
@@ -342,11 +316,11 @@ fn assert_hof_curried_rejected(name: &str) {
     assert!(
         code == Some(ipe_diagnostics::IPE_T0001)
             || code == Some(ipe_diagnostics::IPE_T0014)
-            || code == Some(ipe_diagnostics::IPE_L0114),
+            || code == Some(ipe_diagnostics::IPE_L0154),
         "{name}: curried higher-order-kernel callback must be rejected with IPE-T0001 (Tier 2, \
          eager pin — the expected outcome for a DIRECT `andMap` call), IPE-T0014 \
          (Tier 2, deferred — reached only through a generic forwarder), or \
-         IPE-L0114 (Tier 1 backstop), got: {built:?}"
+         IPE-L0154 (Tier 1 backstop), got: {built:?}"
     );
 }
 
@@ -413,17 +387,15 @@ fn and_map_record_field_extraction_stays_gated() {
 #[test]
 fn and_map_cross_module_annotated_wrapper_accepted() {
     let root = repo_root();
-    if ipe::resolve_runtime().is_err() {
-        return;
-    }
     let entry = fixture_src_entry(&root, "and_map_cross_module_wrapper_accepted");
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
         .join("l0114_and_map_cross_module_wrapper_accepted_emit");
     let _ = std::fs::remove_dir_all(&out);
-    let Ok(runtime) = ipe::resolve_runtime() else {
-        return;
-    };
-    let built = ipe::build_with_sibling_discovery(&entry, &out, &runtime);
+    let runtime = crate::support::expect_runtime(
+        "and_map_cross_module_wrapper_accepted",
+        ipe::resolve_runtime(),
+    );
+    let built = ipe::build_loose_file(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
         "an annotated andMap wrapper reused cross-module at two arity-1-safe \
@@ -442,17 +414,15 @@ fn and_map_cross_module_annotated_wrapper_accepted() {
 #[test]
 fn and_map_forwarder_curried_is_ipe_t0014() {
     let root = repo_root();
-    if ipe::resolve_runtime().is_err() {
-        return;
-    }
     let entry = fixture_src_entry(&root, "and_map_forwarder_curried_is_t0014");
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
         .join("l0114_and_map_forwarder_curried_is_t0014_emit");
     let _ = std::fs::remove_dir_all(&out);
-    let Ok(runtime) = ipe::resolve_runtime() else {
-        return;
-    };
-    let built = ipe::build_with_sibling_discovery(&entry, &out, &runtime);
+    let runtime = crate::support::expect_runtime(
+        "and_map_forwarder_curried_is_t0014",
+        ipe::resolve_runtime(),
+    );
+    let built = ipe::build_loose_file(&entry, &out, &runtime);
     let code = match &built {
         Err(CliError::Pipeline { diag, .. }) => Some(diag.code()),
         _ => None,
@@ -477,9 +447,6 @@ fn and_map_forwarder_curried_is_ipe_t0014() {
 #[test]
 fn lambda_param_reuse_gated() {
     let root = repo_root();
-    if ipe::resolve_runtime().is_err() {
-        return;
-    }
     let (built, _out) = built_code(&root, "lambda_param_reuse_gated");
     let code = match &built {
         Err(CliError::Pipeline { diag, .. }) => Some(diag.code()),
@@ -498,16 +465,13 @@ fn lambda_param_reuse_gated() {
 #[test]
 fn lambda_param_call_twice_accepted() {
     let root = repo_root();
-    if ipe::resolve_runtime().is_err() {
-        return;
-    }
     let (built, out) = built_code(&root, "lambda_param_call_twice_accepted");
     assert!(
         built.is_ok(),
         "calling a lambda param twice must be accepted: {built:?}"
     );
 
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
     let outcome = crate::support::build_and_run_emitted("lambda_param_call_twice_accepted", &out);
@@ -528,9 +492,6 @@ fn lambda_param_call_twice_accepted() {
 #[test]
 fn fn_carrier_reuse_gated() {
     let root = repo_root();
-    if ipe::resolve_runtime().is_err() {
-        return;
-    }
     let (built, _out) = built_code(&root, "fn_carrier_reuse_gated");
     let code = match &built {
         Err(CliError::Pipeline { diag, .. }) => Some(diag.code()),
@@ -551,9 +512,6 @@ fn fn_carrier_reuse_gated() {
 /// concrete `Fun` found at a forwarder's own external call site).
 fn assert_rejected_t0014(name: &str) {
     let root = repo_root();
-    if ipe::resolve_runtime().is_err() {
-        return;
-    }
     let (built, _out) = built_code(&root, name);
     let code = match &built {
         Err(CliError::Pipeline { diag, .. }) => Some(diag.code()),
@@ -572,13 +530,10 @@ fn assert_rejected_t0014(name: &str) {
 /// whose absence let attempts 1-4 ship exit-0-then-cargo-fail bugs.
 fn assert_accepted_runs(name: &str, expected_stdout: &str) {
     let root = repo_root();
-    if ipe::resolve_runtime().is_err() {
-        return;
-    }
     let (built, out) = built_code(&root, name);
     assert!(built.is_ok(), "{name}: must be accepted, got: {built:?}");
 
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
     let outcome = crate::support::build_and_run_emitted(name, &out);
@@ -659,17 +614,15 @@ fn and_map_untyped_double_forwarder_arity1_accepted() {
 #[test]
 fn and_map_cross_module_untyped_forwarder_curried_rejected() {
     let root = repo_root();
-    if ipe::resolve_runtime().is_err() {
-        return;
-    }
     let entry = fixture_src_entry(&root, "and_map_cross_module_untyped_forwarder_curried");
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
         .join("l0114_and_map_cross_module_untyped_forwarder_curried_emit");
     let _ = std::fs::remove_dir_all(&out);
-    let Ok(runtime) = ipe::resolve_runtime() else {
-        return;
-    };
-    let built = ipe::build_with_sibling_discovery(&entry, &out, &runtime);
+    let runtime = crate::support::expect_runtime(
+        "and_map_cross_module_untyped_forwarder_curried",
+        ipe::resolve_runtime(),
+    );
+    let built = ipe::build_loose_file(&entry, &out, &runtime);
     let code = match &built {
         Err(CliError::Pipeline { diag, .. }) => Some(diag.code()),
         _ => None,
@@ -765,7 +718,7 @@ fn map_annotated_forwarder_arity1_accepted() {
 /// plain type mismatch), and a callback legitimately returning `Ok fn`
 /// (arity-1 inner lambda) is sound end-to-end: the extracted function
 /// computes 42. Guards against a future over-eager extension of
-/// `hof_result_slot_for` to structurally-protected kernels.
+/// `StdlibKernel::hof_result_vars` to structurally-protected kernels.
 #[test]
 fn and_then_fn_payload_accepted() {
     assert_accepted_runs("and_then_fn_payload_accepted", "42");
@@ -797,9 +750,6 @@ fn dict_fn_dispatch_accepted() {
 #[test]
 fn list_fn_member_stays_gated() {
     let root = repo_root();
-    if ipe::resolve_runtime().is_err() {
-        return;
-    }
     let (built, _out) = built_code(&root, "list_fn_member_gated");
     let code = match &built {
         Err(CliError::Pipeline { diag, .. }) => Some(diag.code()),

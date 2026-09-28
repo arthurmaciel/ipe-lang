@@ -14,7 +14,7 @@ mod wire;
 
 use std::collections::BTreeMap;
 
-use wire::{WireFunction, WireParam, WirePkgInfo};
+use wire::{WireConstant, WireFunction, WireParam, WirePkgInfo, WireTransitiveDep};
 
 use crate::call::Call;
 use crate::carrier::{Carrier, ClosureSig, EnumDef, StructDef};
@@ -377,7 +377,14 @@ pub struct TransitiveDep {
 pub struct PackageName(String);
 
 impl PackageName {
-    fn parse(s: &str) -> Result<Self, crate::diag::WireDefect> {
+    /// Validate and wrap a Cargo package name.
+    ///
+    /// # Errors
+    ///
+    /// [`crate::diag::WireDefect::InvalidIdent`] when the string is empty, does
+    /// not start with an ASCII letter, or contains anything outside
+    /// `[A-Za-z0-9_-]`.
+    pub fn parse(s: &str) -> Result<Self, crate::diag::WireDefect> {
         let legal = !s.is_empty()
             && s.chars()
                 .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
@@ -436,7 +443,13 @@ pub(crate) const fn version_char_is_legal(c: char) -> bool {
 }
 
 impl CrateVersion {
-    fn parse(s: &str) -> Result<Self, crate::diag::WireDefect> {
+    /// Validate and wrap a crate version (possibly empty).
+    ///
+    /// # Errors
+    ///
+    /// [`crate::diag::WireDefect::InvalidVersion`] when the text carries a
+    /// character outside the semver-value charset.
+    pub fn parse(s: &str) -> Result<Self, crate::diag::WireDefect> {
         let legal = s.chars().all(version_char_is_legal);
         if legal {
             Ok(Self(s.to_owned()))
@@ -492,47 +505,290 @@ impl PkgPath {
     }
 }
 
-/// A validated absolute filesystem path to an author-supplied wrapper crate.
+/// A decode-validated filesystem path to an author-supplied wrapper crate.
 ///
-/// This is the ONLY value by which a wrapper location reaches a TOML value
-/// position of the emitted app crate's `Cargo.toml`: [`crate::driver::cargo_dep_lines`]
-/// renders `<name> = {{ path = "<WrapperCratePath>" }}` from it. A raw,
-/// unvalidated path could carry a `"`-and-newline payload that closes the TOML
-/// string and injects arbitrary manifest content. Gating here at the decode
-/// boundary — the charset admits real absolute paths (`[A-Za-z0-9._/-]`, plus a
-/// space for a directory name) while excluding every TOML-breaking character
-/// (quote, bracket, brace, backslash, control) — makes an injection-bearing
-/// wrapper path unrepresentable past decode. Empty ⇒ the package did not come
-/// from a wrapper crate (an ordinary crates.io / git inspection).
+/// Never empty: a package with no wrapper is [`PkgSource::Registry`], not an
+/// empty path. A control character is refused (no path the inspector reports
+/// carries one), and a `..` component (split on `/` or `\`) is refused
+/// outright, so no lexical traversal survives decode. Every other character a
+/// real directory name can hold (`+`, a quote, non-ASCII letters) is admitted:
+/// the `path` dependency value is rendered as an escaped TOML basic string, so
+/// no character here reaches the emitted manifest raw. The path is NOT yet
+/// proven to sit inside the project: only [`WrapperCratePath::jail`] yields the
+/// [`JailedWrapperDir`] a `path` dependency line is rendered from.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WrapperCratePath(String);
 
+/// The read ceiling for a wrapper crate's `Cargo.toml`, in bytes.
+pub const WRAPPER_MANIFEST_LIMIT: u64 = 1024 * 1024;
+
 impl WrapperCratePath {
-    fn parse(s: &str) -> Result<Self, crate::diag::WireDefect> {
-        if s.is_empty() {
-            return Ok(Self(String::new()));
+    /// Validate and wrap a wrapper-crate path.
+    ///
+    /// # Errors
+    ///
+    /// [`WireDefect::InvalidPkgPath`] when the path is empty or carries a
+    /// control character; [`WireDefect::WrapperPathTraversal`] when a
+    /// component is `..`.
+    pub fn parse(s: &str) -> Result<Self, WireDefect> {
+        if s.is_empty() || s.chars().any(char::is_control) {
+            return Err(WireDefect::InvalidPkgPath { got: s.to_owned() });
         }
-        let legal = s
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '/' | '-' | ' '));
-        if legal {
-            Ok(Self(s.to_owned()))
-        } else {
-            Err(crate::diag::WireDefect::InvalidPkgPath { got: s.to_owned() })
+        if s.split(['/', '\\']).any(|seg| seg == "..") {
+            return Err(WireDefect::WrapperPathTraversal { got: s.to_owned() });
         }
+        Ok(Self(s.to_owned()))
     }
 
-    /// The validated wrapper-crate path (empty for a non-wrapper package).
+    /// The decode-validated (not yet root-jailed) wrapper-crate path.
     #[must_use]
     pub fn as_str(&self) -> &str {
         &self.0
     }
 
-    /// Whether the package came from an author-supplied wrapper crate.
-    #[must_use]
-    pub const fn is_empty(&self) -> bool {
-        self.0.is_empty()
+    /// Prove the wrapper crate sits inside `project_root` and is the crate cargo builds.
+    ///
+    /// The proof is taken at load time, when the installed crate is read back
+    /// for a build: both sides are canonicalized, so a symlink (at any
+    /// component) that leads out of the project, an absolute path elsewhere,
+    /// and a stale absolute path left by a moved or copied project are all
+    /// refused. A relative path resolves against the project root. The
+    /// canonical form must be UTF-8 without control characters; on Windows its
+    /// verbatim drive prefix (`\\?\C:`) is converted to the plain drive form
+    /// only when the plain form canonicalizes back to the same directory. The
+    /// directory's `Cargo.toml` is then read (a regular file, never followed
+    /// through a symlink, at most [`WRAPPER_MANIFEST_LIMIT`] bytes) and its
+    /// `[package] name` parsed into the [`PackageName`] the dependency key is
+    /// rendered from.
+    ///
+    /// # Errors
+    ///
+    /// [`WireDefect::WrapperPathUnresolvable`] when the root or the wrapper
+    /// directory does not resolve to an existing directory;
+    /// [`WireDefect::WrapperPathOutsideRoot`] when the resolved directory
+    /// leaves the root; [`WireDefect::WrapperPathUnrenderable`] when the
+    /// canonical directory has no plain UTF-8 form;
+    /// [`WireDefect::WrapperManifest`] when its `Cargo.toml` is missing,
+    /// unreadable, not a regular file, oversized, or lacks a legal
+    /// `[package] name`.
+    pub fn jail(&self, project_root: &std::path::Path) -> Result<JailedWrapperDir, WireDefect> {
+        let unresolvable = |detail: String| WireDefect::WrapperPathUnresolvable {
+            got: self.0.clone(),
+            detail,
+        };
+        let root = std::fs::canonicalize(project_root).map_err(|e| unresolvable(e.to_string()))?;
+        let resolved =
+            std::fs::canonicalize(root.join(&self.0)).map_err(|e| unresolvable(e.to_string()))?;
+        if !resolved.starts_with(&root) {
+            return Err(WireDefect::WrapperPathOutsideRoot {
+                got: self.0.clone(),
+                root: root.to_string_lossy().into_owned(),
+            });
+        }
+        let metadata = std::fs::metadata(&resolved).map_err(|e| unresolvable(e.to_string()))?;
+        if !metadata.is_dir() {
+            return Err(unresolvable("not a directory".to_owned()));
+        }
+        let path =
+            plain_path_text(&resolved).ok_or_else(|| WireDefect::WrapperPathUnrenderable {
+                got: self.0.clone(),
+                canonical: resolved.to_string_lossy().into_owned(),
+            })?;
+        let package =
+            read_wrapper_package(&resolved).map_err(|defect| WireDefect::WrapperManifest {
+                got: self.0.clone(),
+                defect,
+            })?;
+        Ok(JailedWrapperDir { path, package })
     }
+}
+
+/// The plain UTF-8 text of a canonical directory, if it has one.
+///
+/// A path with no prefix is taken as is. A Windows verbatim drive prefix
+/// (`\\?\C:`) becomes the plain drive form, accepted only when that plain
+/// form canonicalizes back to the same directory (a component a plain path
+/// cannot name, such as a trailing dot, fails the proof). Every other prefix
+/// (a UNC share, a device namespace), a non-UTF-8 path, and a path carrying a
+/// control character yield `None`.
+fn plain_path_text(resolved: &std::path::Path) -> Option<String> {
+    use std::path::{Component, Prefix};
+    let mut components = resolved.components();
+    let plain = match components.clone().next() {
+        Some(Component::Prefix(prefix)) => {
+            let Prefix::VerbatimDisk(letter) = prefix.kind() else {
+                return None;
+            };
+            components.next();
+            let mut plain = std::path::PathBuf::from(format!("{}:\\", char::from(letter)));
+            plain.extend(components.filter(|c| !matches!(c, Component::RootDir)));
+            let same = std::fs::canonicalize(&plain).is_ok_and(|back| back == resolved);
+            if !same {
+                return None;
+            }
+            plain
+        }
+        _ => resolved.to_path_buf(),
+    };
+    let text = plain.to_str()?;
+    if text.chars().any(char::is_control) {
+        return None;
+    }
+    Some(text.to_owned())
+}
+
+/// The `[package]` table of a wrapper crate's `Cargo.toml`, as far as the jail reads it.
+#[derive(serde::Deserialize)]
+struct WrapperCargoManifest {
+    package: WrapperCargoPackage,
+}
+
+/// The `[package] name` of a wrapper crate's `Cargo.toml`.
+#[derive(serde::Deserialize)]
+struct WrapperCargoPackage {
+    name: String,
+}
+
+/// Read and parse the `[package] name` of the `Cargo.toml` in `dir`.
+///
+/// The manifest is opened without following a symlink at its final
+/// component, must be a regular file, and is read up to
+/// [`WRAPPER_MANIFEST_LIMIT`] bytes; one byte more is refused as oversized.
+fn read_wrapper_package(
+    dir: &std::path::Path,
+) -> Result<PackageName, crate::diag::WrapperManifestDefect> {
+    use crate::diag::WrapperManifestDefect as Defect;
+    use std::io::Read as _;
+    let unreadable = |e: std::io::Error| Defect::Unreadable {
+        detail: e.to_string(),
+    };
+    let file = open_manifest_no_follow(&dir.join("Cargo.toml"))?;
+    let metadata = file.metadata().map_err(unreadable)?;
+    if !metadata.is_file() {
+        return Err(Defect::NotRegularFile);
+    }
+    let oversized = Defect::Oversized {
+        limit: WRAPPER_MANIFEST_LIMIT,
+    };
+    if metadata.len() > WRAPPER_MANIFEST_LIMIT {
+        return Err(oversized);
+    }
+    let mut bytes = Vec::new();
+    file.take(WRAPPER_MANIFEST_LIMIT.saturating_add(1))
+        .read_to_end(&mut bytes)
+        .map_err(unreadable)?;
+    if !u64::try_from(bytes.len()).is_ok_and(|n| n <= WRAPPER_MANIFEST_LIMIT) {
+        return Err(oversized);
+    }
+    let text = String::from_utf8(bytes).map_err(|e| Defect::Invalid {
+        detail: e.to_string(),
+    })?;
+    let manifest: WrapperCargoManifest = toml::from_str(&text).map_err(|e| Defect::Invalid {
+        detail: e.message().to_owned(),
+    })?;
+    let found = manifest.package.name;
+    PackageName::parse(&found).map_err(|_| Defect::PackageNameIllegal { found })
+}
+
+/// Open `path` read-only without following a symlink at its final component.
+///
+/// `O_NONBLOCK` keeps a FIFO planted in place of the manifest from blocking
+/// the open; the caller's regular-file check then refuses it.
+#[cfg(unix)]
+fn open_manifest_no_follow(
+    path: &std::path::Path,
+) -> Result<std::fs::File, crate::diag::WrapperManifestDefect> {
+    use crate::diag::WrapperManifestDefect as Defect;
+    use rustix::fs::{Mode, OFlags};
+    let flags = OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::CLOEXEC;
+    rustix::fs::open(path, flags, Mode::empty())
+        .map(std::fs::File::from)
+        .map_err(|errno| {
+            let is_link = std::fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_symlink());
+            if is_link {
+                Defect::NotRegularFile
+            } else {
+                Defect::Unreadable {
+                    detail: std::io::Error::from(errno).to_string(),
+                }
+            }
+        })
+}
+
+/// Open `path` read-only, refusing a reparse point at its final component.
+#[cfg(windows)]
+fn open_manifest_no_follow(
+    path: &std::path::Path,
+) -> Result<std::fs::File, crate::diag::WrapperManifestDefect> {
+    use crate::diag::WrapperManifestDefect as Defect;
+    use std::os::windows::fs::{MetadataExt as _, OpenOptionsExt as _};
+    /// `FILE_FLAG_OPEN_REPARSE_POINT`: opens a reparse point itself, never its target.
+    const OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+    /// `FILE_ATTRIBUTE_REPARSE_POINT`.
+    const ATTR_REPARSE_POINT: u32 = 0x400;
+    let unreadable = |e: std::io::Error| Defect::Unreadable {
+        detail: e.to_string(),
+    };
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(OPEN_REPARSE_POINT)
+        .open(path)
+        .map_err(unreadable)?;
+    let attributes = file.metadata().map_err(unreadable)?.file_attributes();
+    if attributes & ATTR_REPARSE_POINT == 0 {
+        Ok(file)
+    } else {
+        Err(Defect::NotRegularFile)
+    }
+}
+
+/// Refuse: this platform has no symlink-refusing open.
+#[cfg(not(any(unix, windows)))]
+fn open_manifest_no_follow(
+    _path: &std::path::Path,
+) -> Result<std::fs::File, crate::diag::WrapperManifestDefect> {
+    Err(crate::diag::WrapperManifestDefect::Unreadable {
+        detail: "this platform has no symlink-refusing open".to_owned(),
+    })
+}
+
+/// A wrapper-crate directory proven, at load, to be the crate cargo builds.
+///
+/// The only value a `path = "…"` dependency line is rendered from. It holds
+/// the plain canonical absolute path (inside the project root) and the
+/// `[package] name` its `Cargo.toml` declares, so the dependency key and the
+/// crate cargo finds at the path cannot disagree.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct JailedWrapperDir {
+    path: String,
+    package: PackageName,
+}
+
+impl JailedWrapperDir {
+    /// The plain canonical absolute wrapper directory.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.path
+    }
+
+    /// The `[package] name` the wrapper's `Cargo.toml` declares.
+    #[must_use]
+    pub const fn package(&self) -> &PackageName {
+        &self.package
+    }
+}
+
+/// Where an inspected package's Rust code comes from.
+///
+/// Decided once at decode, so every consumer matches exhaustively: no empty
+/// path can be mistaken for a registry pin, and no registry package can carry
+/// a local path.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PkgSource {
+    /// An ordinary crates.io / git inspection, pinned by exact version.
+    Registry,
+    /// An author-supplied local wrapper crate, bound by `path`.
+    Wrapper(WrapperCratePath),
 }
 
 /// A validated Cargo feature name.
@@ -548,7 +804,7 @@ impl WrapperCratePath {
 /// Cargo's dependency-feature syntax (`dep:foo`, `foo/bar`, `dep?/feat`) while
 /// excluding every TOML-breaking character (quote, bracket, brace, backslash,
 /// control), so a name can never escape its string.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct FeatureName(String);
 
 impl FeatureName {
@@ -639,11 +895,10 @@ pub struct PkgInfo {
     /// no binding references it yet. Every path passed the `::seg::…::Seg`
     /// shape gate at decode (a malformed entry is dropped, never emitted raw).
     declared_opaques: std::collections::BTreeMap<String, String>,
-    /// The absolute path to the author-supplied wrapper crate this package was
-    /// inspected from, or empty for an ordinary crates.io / git inspection. When
-    /// set, the emitted app crate depends on the wrapper by `path` rather than a
-    /// registry pin (see [`crate::driver::cargo_dep_lines`]).
-    wrapper_path: WrapperCratePath,
+    /// Where the package's Rust code comes from: a registry pin, or an
+    /// author-supplied wrapper crate the emitted app crate depends on by `path`
+    /// (see [`crate::driver::cargo_dep_lines`]).
+    source: PkgSource,
     dropped: Vec<Diagnostic>,
 }
 
@@ -766,11 +1021,10 @@ impl PkgInfo {
         &self.declared_opaques
     }
 
-    /// The absolute wrapper-crate path this package was inspected from, or empty
-    /// for an ordinary crates.io / git inspection.
+    /// Where the package's Rust code comes from.
     #[must_use]
-    pub const fn wrapper_path(&self) -> &WrapperCratePath {
-        &self.wrapper_path
+    pub const fn source(&self) -> &PkgSource {
+        &self.source
     }
 
     /// The bindings dropped by the validating conversion, with the reason
@@ -1262,126 +1516,169 @@ fn drop_recursive_define_defs(fns: &mut Vec<FnInfo>, dropped: &mut Vec<Diagnosti
     fns.retain(|f| define_def_name(f.shape()).is_none_or(|n| !recursive.contains(n.as_str())));
 }
 
+/// Parse `w`'s three identity fields (package path, crate name, declared
+/// version), tagging every failure with the same `WireMalformed` context.
+fn decode_identity(w: &WirePkgInfo) -> Result<(PkgPath, PackageName, CrateVersion), Diagnostic> {
+    let pkg_path = PkgPath::parse(&w.pkg).map_err(|defect| Diagnostic::WireMalformed {
+        context: "package inspection document".to_owned(),
+        defect,
+    })?;
+    let name = PackageName::parse(&w.name).map_err(|defect| Diagnostic::WireMalformed {
+        context: format!("crate `{}`", w.name),
+        defect,
+    })?;
+    let version = CrateVersion::parse(&w.version).map_err(|defect| Diagnostic::WireMalformed {
+        context: format!("crate `{}`", w.name),
+        defect,
+    })?;
+    Ok((pkg_path, name, version))
+}
+
+/// Decode every wire function, collapse duplicate wrapper-reference names,
+/// and drop any def caught in a recursive define-type cycle. A defective or
+/// over-dropped binding is recorded in the returned diagnostics rather than
+/// failing the whole package.
+fn decode_functions(functions: Vec<WireFunction>) -> (Vec<FnInfo>, Vec<Diagnostic>) {
+    let mut fns = Vec::with_capacity(functions.len());
+    let mut dropped = Vec::new();
+    for wf in functions {
+        match FnInfo::try_from(wf) {
+            Ok(f) => fns.push(f),
+            // Over-drop: the one defective binding is refused and
+            // recorded; every other binding in the package survives.
+            Err(d) => dropped.push(d),
+        }
+    }
+    // Collapse duplicate wrapper-reference names at the decode boundary
+    // (first wins) so all three emitters see the same deduped list by
+    // construction — a real `to_string` colliding with the synthetic
+    // Display bridge is one entry, never a duplicate Rust item.
+    let mut seen_refs = std::collections::BTreeSet::new();
+    fns.retain(|f| seen_refs.insert(f.wrapper_ref_name()));
+    // A directly- or mutually-recursive define type has no boxed
+    // indirection in the closed carrier set, so emitting it would be an
+    // infinitely-sized Rust type (`error[E0072]`). Refuse every def on a
+    // cycle here — the def-bearing binding is dropped, and the emitter's
+    // survivor fixpoint fans the over-drop out to every reference of it.
+    drop_recursive_define_defs(&mut fns, &mut dropped);
+    (fns, dropped)
+}
+
+/// Decode the reported transitive dependencies, dropping the inspector's own
+/// synthetic probe scaffold (never a real registry dependency).
+fn decode_transitive_deps(deps: Vec<WireTransitiveDep>) -> Result<Vec<TransitiveDep>, Diagnostic> {
+    let mut transitive_deps = Vec::with_capacity(deps.len());
+    for dep in deps {
+        // The inspector's own probe scaffold registers as a workspace
+        // member during introspection; it is a synthetic non-registry
+        // package, not a real dependency, so it never becomes a typed
+        // `TransitiveDep` (its `_ipe_ffi_probe_…` name is not even a legal
+        // `PackageName`). Dropping it here keeps a non-dependency
+        // unrepresentable past decode.
+        if dep.name.starts_with("_ipe_ffi_probe") {
+            continue;
+        }
+        let ident = RustIdent::parse(&dep.ident).map_err(|defect| Diagnostic::WireMalformed {
+            context: format!("transitive dep `{}`", dep.name),
+            defect,
+        })?;
+        let name = PackageName::parse(&dep.name).map_err(|defect| Diagnostic::WireMalformed {
+            context: format!("transitive dep `{}`", dep.name),
+            defect,
+        })?;
+        let version =
+            CrateVersion::parse(&dep.version).map_err(|defect| Diagnostic::WireMalformed {
+                context: format!("transitive dep `{}`", dep.name),
+                defect,
+            })?;
+        transitive_deps.push(TransitiveDep {
+            ident,
+            name,
+            version,
+        });
+    }
+    Ok(transitive_deps)
+}
+
+/// Foreign-type identity entries: keep only well-shaped `::seg::…::Seg` keys
+/// and `seg::…::Seg` values (every segment a legal Rust ident). A malformed
+/// entry is dropped — identity metadata only ever ENABLES nominal
+/// unification, so absence is the safe default.
+fn decode_foreign_type_ids(
+    ids: std::collections::BTreeMap<String, String>,
+) -> std::collections::BTreeMap<String, String> {
+    ids.into_iter()
+        .filter(|(k, v)| {
+            k.strip_prefix("::").is_some_and(is_rust_path_shaped) && is_rust_path_shaped(v)
+        })
+        .collect()
+}
+
+/// Each feature is spliced into a `features = [ … ]` array of the emitted
+/// `Cargo.toml`; gate it at the boundary so an injection-bearing feature
+/// fails the WHOLE package here rather than reaching the emitter.
+fn decode_features(
+    features: Vec<String>,
+    crate_name: &str,
+) -> Result<Vec<FeatureName>, Diagnostic> {
+    let mut out = Vec::with_capacity(features.len());
+    for f in features {
+        out.push(
+            FeatureName::parse(&f).map_err(|defect| Diagnostic::WireMalformed {
+                context: format!("crate `{crate_name}`"),
+                defect,
+            })?,
+        );
+    }
+    Ok(out)
+}
+
+/// The wrapper path is spliced into a `path = "…"` TOML value of the emitted
+/// manifest; gate it at the boundary so an injection-bearing path fails the
+/// WHOLE package here rather than reaching the emitter.
+fn decode_source(wrapper_path: &str, crate_name: &str) -> Result<PkgSource, Diagnostic> {
+    if wrapper_path.is_empty() {
+        Ok(PkgSource::Registry)
+    } else {
+        Ok(PkgSource::Wrapper(
+            WrapperCratePath::parse(wrapper_path).map_err(|defect| Diagnostic::WireMalformed {
+                context: format!("crate `{crate_name}`"),
+                defect,
+            })?,
+        ))
+    }
+}
+
+/// Inspected constants: keep only a well-shaped crate-relative path
+/// (`seg::…::SEG`, every segment a legal Rust ident) with a non-empty
+/// recorded type. A malformed entry is dropped — absence only disables a
+/// `.const` cross-check (fail-closed), never admits an unverified read.
+fn decode_consts(constants: Vec<WireConstant>) -> Vec<ConstInfo> {
+    constants
+        .into_iter()
+        .filter(|c| !c.path.is_empty() && !c.ty.is_empty() && is_rust_path_shaped(&c.path))
+        .map(|c| ConstInfo {
+            path: c.path,
+            ty: c.ty,
+        })
+        .collect()
+}
+
 impl TryFrom<WirePkgInfo> for PkgInfo {
     type Error = Diagnostic;
 
     fn try_from(w: WirePkgInfo) -> Result<Self, Diagnostic> {
-        let pkg_path = PkgPath::parse(&w.pkg).map_err(|defect| Diagnostic::WireMalformed {
-            context: "package inspection document".to_owned(),
-            defect,
-        })?;
-        let name = PackageName::parse(&w.name).map_err(|defect| Diagnostic::WireMalformed {
-            context: format!("crate `{}`", w.name),
-            defect,
-        })?;
-        let version =
-            CrateVersion::parse(&w.version).map_err(|defect| Diagnostic::WireMalformed {
-                context: format!("crate `{}`", w.name),
-                defect,
-            })?;
-        let mut fns = Vec::with_capacity(w.functions.len());
-        let mut dropped = Vec::new();
-        for wf in w.functions {
-            match FnInfo::try_from(wf) {
-                Ok(f) => fns.push(f),
-                // Over-drop: the one defective binding is refused and
-                // recorded; every other binding in the package survives.
-                Err(d) => dropped.push(d),
-            }
-        }
-        // Collapse duplicate wrapper-reference names at the decode boundary
-        // (first wins) so all three emitters see the same deduped list by
-        // construction — a real `to_string` colliding with the synthetic
-        // Display bridge is one entry, never a duplicate Rust item.
-        let mut seen_refs = std::collections::BTreeSet::new();
-        fns.retain(|f| seen_refs.insert(f.wrapper_ref_name()));
-        // A directly- or mutually-recursive define type has no boxed
-        // indirection in the closed carrier set, so emitting it would be an
-        // infinitely-sized Rust type (`error[E0072]`). Refuse every def on a
-        // cycle here — the def-bearing binding is dropped, and the emitter's
-        // survivor fixpoint fans the over-drop out to every reference of it.
-        drop_recursive_define_defs(&mut fns, &mut dropped);
-        let mut transitive_deps = Vec::with_capacity(w.transitive_deps.len());
-        for dep in w.transitive_deps {
-            // The inspector's own probe scaffold registers as a workspace
-            // member during introspection; it is a synthetic non-registry
-            // package, not a real dependency, so it never becomes a typed
-            // `TransitiveDep` (its `_ipe_ffi_probe_…` name is not even a legal
-            // `PackageName`). Dropping it here keeps a non-dependency
-            // unrepresentable past decode.
-            if dep.name.starts_with("_ipe_ffi_probe") {
-                continue;
-            }
-            let ident =
-                RustIdent::parse(&dep.ident).map_err(|defect| Diagnostic::WireMalformed {
-                    context: format!("transitive dep `{}`", dep.name),
-                    defect,
-                })?;
-            let name =
-                PackageName::parse(&dep.name).map_err(|defect| Diagnostic::WireMalformed {
-                    context: format!("transitive dep `{}`", dep.name),
-                    defect,
-                })?;
-            let version =
-                CrateVersion::parse(&dep.version).map_err(|defect| Diagnostic::WireMalformed {
-                    context: format!("transitive dep `{}`", dep.name),
-                    defect,
-                })?;
-            transitive_deps.push(TransitiveDep {
-                ident,
-                name,
-                version,
-            });
-        }
-        // Foreign-type identity entries: keep only well-shaped `::seg::…::Seg`
-        // keys and `seg::…::Seg` values (every segment a legal Rust ident).
-        // A malformed entry is dropped — identity metadata only ever ENABLES
-        // nominal unification, so absence is the safe default.
-        let foreign_type_ids = w
-            .foreign_type_ids
-            .into_iter()
-            .filter(|(k, v)| {
-                k.strip_prefix("::").is_some_and(is_rust_path_shaped) && is_rust_path_shaped(v)
-            })
-            .collect();
+        let (pkg_path, name, version) = decode_identity(&w)?;
+        let (fns, dropped) = decode_functions(w.functions);
+        let transitive_deps = decode_transitive_deps(w.transitive_deps)?;
+        let foreign_type_ids = decode_foreign_type_ids(w.foreign_type_ids);
         let declared_opaques = decode_declared_opaques(w.declared_opaques, &w.name)?;
-        // Each feature is spliced into a `features = [ … ]` array of the
-        // emitted `Cargo.toml`; gate it at the boundary so an injection-bearing
-        // feature fails the WHOLE package here rather than reaching the emitter.
-        let mut features = Vec::with_capacity(w.features.len());
-        for f in w.features {
-            features.push(
-                FeatureName::parse(&f).map_err(|defect| Diagnostic::WireMalformed {
-                    context: format!("crate `{}`", w.name),
-                    defect,
-                })?,
-            );
-        }
-        // The wrapper path is spliced into a `path = "…"` TOML value of the
-        // emitted manifest; gate it at the boundary so an injection-bearing
-        // path fails the WHOLE package here rather than reaching the emitter.
-        let wrapper_path = WrapperCratePath::parse(&w.wrapper_path).map_err(|defect| {
-            Diagnostic::WireMalformed {
-                context: format!("crate `{}`", w.name),
-                defect,
-            }
-        })?;
+        let features = decode_features(w.features, &w.name)?;
+        let source = decode_source(&w.wrapper_path, &w.name)?;
         // The representation axis: classification failure of one entry is an
         // opaque fallback recorded in the catalog, never a package failure.
         let foreign_types = crate::transparency::ForeignTypeCatalog::classify(&w.types);
-        // Inspected constants: keep only a well-shaped crate-relative path
-        // (`seg::…::SEG`, every segment a legal Rust ident) with a non-empty
-        // recorded type. A malformed entry is dropped — absence only disables a
-        // `.const` cross-check (fail-closed), never admits an unverified read.
-        let consts = w
-            .constants
-            .into_iter()
-            .filter(|c| !c.path.is_empty() && !c.ty.is_empty() && is_rust_path_shaped(&c.path))
-            .map(|c| ConstInfo {
-                path: c.path,
-                ty: c.ty,
-            })
-            .collect();
+        let consts = decode_consts(w.constants);
         Ok(Self {
             pkg_path,
             name,
@@ -1396,7 +1693,7 @@ impl TryFrom<WirePkgInfo> for PkgInfo {
             foreign_type_ids,
             foreign_types,
             declared_opaques,
-            wrapper_path,
+            source,
             dropped,
         })
     }
@@ -2181,7 +2478,7 @@ mod tests {
     }
 
     // The same gate guards a TRANSITIVE dependency's version — the transitive
-    // path is the one `render_dep_line` reaches for every non-primary crate.
+    // path is the one `CargoDep::render` reaches for every non-primary crate.
     #[test]
     fn an_injection_bearing_transitive_version_fails_the_whole_package() {
         let v = json!({

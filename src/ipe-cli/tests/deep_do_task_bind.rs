@@ -97,7 +97,7 @@ fn deep_do_task_bind_emit_is_linear() {
 fn deep_do_task_bind_e2e_seal() {
     const N: usize = 20;
 
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
     let Ok(runtime) = ipe::resolve_runtime() else {

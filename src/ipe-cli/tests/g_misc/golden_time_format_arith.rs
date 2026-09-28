@@ -41,13 +41,13 @@ fn time_format_arith_accepted_by_ipe() {
 /// Gated on `IPE_E2E=1` so the default `cargo test` stays fast.
 #[test]
 fn time_format_arith_builds_and_runs() {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
 
     let root = repo_root();
     let entry = entry(&root);
-    let out = std::env::temp_dir().join("ipec_time_format_arith_e2e");
+    let out = crate::support::scratch_root().join("ipec_time_format_arith_e2e");
     let _ = std::fs::remove_dir_all(&out);
 
     let runtime = ipe::resolve_runtime();

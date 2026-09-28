@@ -1,6 +1,7 @@
 //! Typed tables for super-type prim-set membership.
 //!
-//! Each primitive obligation (Number, Ord, `ComparableKey`, `SqlParam`, Append) is
+//! Each primitive obligation (Number, Ord, `ComparableKey`, `SqlParam`, Append,
+//! Interpolable) is
 //! declared once here. Call sites in `unify`, `lib` (emitted-bound gate), and
 //! `lib` (concrete-pin gate) all read from this table via [`prim_satisfies`]
 //! instead of restating the literal `matches!` arms independently.
@@ -57,6 +58,11 @@ pub const SQL_PARAM: &[&str] = &["Int", "Float", "String", "Bool", "SqlValue"];
 /// structurally at the call sites; only the bare-scalar membership lives here.
 pub const APPEND_PRIM: &[&str] = &["String"];
 
+/// Prim names that satisfy the interpolation constraint (`{{…}}` / `Log.*With`
+/// attributes) — exactly [`ipe_diagnostics::INTERPOLABLE_TYPES`], the closed
+/// scalar set the runtime's sealed `IpeInterpolate` trait is implemented for.
+pub const INTERPOLABLE: &[&str] = &ipe_diagnostics::INTERPOLABLE_TYPES;
+
 /// Whether primitive name `prim` satisfies super-type bound `bound` at
 /// call-site `site`.
 ///
@@ -95,6 +101,12 @@ pub fn prim_satisfies_sql_param(prim: Option<&str>) -> bool {
 #[inline]
 pub fn prim_satisfies_append_prim(prim: Option<&str>) -> bool {
     prim.is_some_and(|p| APPEND_PRIM.contains(&p))
+}
+
+#[must_use]
+#[inline]
+pub fn prim_satisfies_interpolable(prim: Option<&str>) -> bool {
+    prim.is_some_and(|p| INTERPOLABLE.contains(&p))
 }
 
 #[cfg(test)]
@@ -164,6 +176,32 @@ mod tests {
                 prim_satisfies_append_prim(Some(p)),
                 expected,
                 "APPEND_PRIM mismatch for {p}"
+            );
+        }
+
+        // INTERPOLABLE
+        for p in ALL_PRIMS {
+            let expected = INTERPOLABLE.contains(p);
+            assert_eq!(
+                prim_satisfies_interpolable(Some(p)),
+                expected,
+                "INTERPOLABLE mismatch for {p}"
+            );
+        }
+        assert!(!prim_satisfies_interpolable(None));
+    }
+
+    /// The interpolation set is exactly the five scalars — `Unit` and
+    /// `SqlValue` (and every non-bare-prim type) are refused.
+    #[test]
+    fn interpolable_is_exactly_the_five_scalars() {
+        for p in ["String", "Int", "Float", "Bool", "Char"] {
+            assert!(prim_satisfies_interpolable(Some(p)), "{p} must interpolate");
+        }
+        for p in ["Unit", "SqlValue", "List", "Maybe", "Secret", "Request"] {
+            assert!(
+                !prim_satisfies_interpolable(Some(p)),
+                "{p} must not interpolate"
             );
         }
     }

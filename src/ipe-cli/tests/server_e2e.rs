@@ -79,7 +79,8 @@ main =
 ///
 /// Returns an error on any pipeline or Cargo build failure.
 fn compile_and_build(test_name: &str, ipe_source: &str) -> Result<PathBuf, BoxError> {
-    let ipe_dir = std::env::temp_dir().join(format!("server_e2e_{test_name}_ipe"));
+    let ipe_dir = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
+        .join(format!("server_e2e_{test_name}_ipe"));
     let _ = std::fs::remove_dir_all(&ipe_dir);
     std::fs::create_dir_all(&ipe_dir).map_err(|e| -> BoxError {
         format!("{test_name}: cannot create ipe source dir: {e}").into()
@@ -89,7 +90,8 @@ fn compile_and_build(test_name: &str, ipe_source: &str) -> Result<PathBuf, BoxEr
     std::fs::write(&entry, ipe_source)
         .map_err(|e| -> BoxError { format!("{test_name}: cannot write Main.ipe: {e}").into() })?;
 
-    let out_dir = std::env::temp_dir().join(format!("server_e2e_{test_name}_emitted"));
+    let out_dir = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
+        .join(format!("server_e2e_{test_name}_emitted"));
     let _ = std::fs::remove_dir_all(&out_dir);
 
     let runtime = ipe::resolve_runtime()
@@ -518,7 +520,7 @@ fn http_post(
 /// Propagates any pipeline, build, spawn, or HTTP error as a test error.
 #[test]
 fn server_get_root() -> Result<(), BoxError> {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return Ok(());
     }
 
@@ -548,7 +550,7 @@ fn server_get_root() -> Result<(), BoxError> {
 /// Propagates any pipeline, build, spawn, or HTTP error as a test error.
 #[test]
 fn server_get_param() -> Result<(), BoxError> {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return Ok(());
     }
 
@@ -580,7 +582,7 @@ fn server_get_param() -> Result<(), BoxError> {
 /// Propagates any pipeline, build, spawn, or HTTP error as a test error.
 #[test]
 fn post_body_echo() -> Result<(), BoxError> {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return Ok(());
     }
 
@@ -612,7 +614,7 @@ fn post_body_echo() -> Result<(), BoxError> {
 /// Propagates any pipeline, build, spawn, or HTTP error as a test error.
 #[test]
 fn request_introspection() -> Result<(), BoxError> {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return Ok(());
     }
 
@@ -652,7 +654,7 @@ fn request_introspection() -> Result<(), BoxError> {
 /// Propagates any pipeline or Cargo build failure as a test error.
 #[test]
 fn server_and_db_compose() -> Result<(), BoxError> {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return Ok(());
     }
 
@@ -678,7 +680,7 @@ fn server_and_db_compose() -> Result<(), BoxError> {
 /// Propagates any pipeline, build, spawn, or HTTP error as a test error.
 #[test]
 fn csrf_forged_post_without_token_rejected() -> Result<(), BoxError> {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return Ok(());
     }
     let test_name = "csrf_forged_post_without_token_rejected";
@@ -713,7 +715,7 @@ fn csrf_forged_post_without_token_rejected() -> Result<(), BoxError> {
 /// Propagates any pipeline, build, spawn, or HTTP error as a test error.
 #[test]
 fn csrf_post_with_cookie_but_mismatched_header_rejected() -> Result<(), BoxError> {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return Ok(());
     }
     let test_name = "csrf_post_with_cookie_but_mismatched_header_rejected";
@@ -782,7 +784,7 @@ fn csrf_post_with_cookie_but_mismatched_header_rejected() -> Result<(), BoxError
 /// Propagates any pipeline, build, spawn, or HTTP error as a test error.
 #[test]
 fn csrf_legit_post_with_matching_token_allowed() -> Result<(), BoxError> {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return Ok(());
     }
     let test_name = "csrf_legit_post_with_matching_token_allowed";
@@ -851,7 +853,7 @@ fn csrf_legit_post_with_matching_token_allowed() -> Result<(), BoxError> {
 /// Propagates any pipeline, build, spawn, or HTTP error as a test error.
 #[test]
 fn csrf_cookie_secure_behind_trusted_tls_proxy() -> Result<(), BoxError> {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return Ok(());
     }
     let test_name = "csrf_cookie_secure_behind_trusted_tls_proxy";
@@ -897,7 +899,7 @@ fn csrf_cookie_secure_behind_trusted_tls_proxy() -> Result<(), BoxError> {
 /// Propagates any pipeline, build, spawn, or HTTP error as a test error.
 #[test]
 fn csrf_cookie_not_secure_when_request_not_tls_detected() -> Result<(), BoxError> {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return Ok(());
     }
     let test_name = "csrf_cookie_not_secure_when_request_not_tls_detected";
@@ -954,7 +956,7 @@ fn csrf_cookie_not_secure_when_request_not_tls_detected() -> Result<(), BoxError
 /// Propagates any pipeline, build, spawn, or HTTP error as a test error.
 #[test]
 fn csrf_cookie_secure_when_env_production_regardless_of_tls_signal() -> Result<(), BoxError> {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return Ok(());
     }
     let test_name = "csrf_cookie_secure_when_env_production_regardless_of_tls_signal";
@@ -1071,7 +1073,7 @@ main =
 /// Propagates any pipeline, build, spawn, or HTTP error as a test error.
 #[test]
 fn server_mounts_web_app_and_api_on_one_port() -> Result<(), BoxError> {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return Ok(());
     }
     let test_name = "server_mounts_web_app_and_api_on_one_port";
@@ -1137,7 +1139,7 @@ main =
 /// Propagates any pipeline, build, spawn, or HTTP error as a test error.
 #[test]
 fn server_honours_ipe_server_port_over_a_hardcoded_literal() -> Result<(), BoxError> {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return Ok(());
     }
     let test_name = "server_honours_ipe_server_port_over_a_hardcoded_literal";
