@@ -240,8 +240,9 @@ pub fn scan_identifier_words(src: &str) -> Option<std::collections::BTreeSet<Str
     Some(words)
 }
 
-/// The bounds of the identifier-like run touching `byte`: back through
-/// whatever `is_ident_continue` bytes are already typed before `byte`,
+/// The bounds of the identifier-like run touching `byte`.
+///
+/// It extends back through whatever `is_ident_continue` bytes are already typed before `byte`,
 /// forward through whatever `is_ident_continue` bytes a mid-word cursor
 /// leaves untyped after it.
 ///
@@ -276,8 +277,9 @@ pub fn scan_word_span(src: &str, byte: u32) -> WordSpan {
     }
 }
 
-/// A `Qualifier.member` completion trigger touching `byte` in `src`: the
-/// dotted qualifier immediately before the trigger dot (`Font`, `F`, or the
+/// A `Qualifier.member` completion trigger touching `byte` in `src`.
+///
+/// It holds the dotted qualifier immediately before the trigger dot (`Font`, `F`, or the
 /// full `Ipe.Ui.Font`), and the member-name run right after it — the typed
 /// prefix plus, for a mid-word cursor, whatever untyped remainder follows.
 ///
