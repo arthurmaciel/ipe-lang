@@ -406,6 +406,21 @@ mod unix {
         );
         let _ = std::fs::remove_dir_all(&root);
     }
+
+    #[test]
+    fn an_untrusted_ancestor_manifest_refuses_the_project_root() {
+        let (root, manifest) = project("manifest-project-root", 0o755, 0o666);
+        let src = root.join("src");
+        std::fs::create_dir_all(&src).expect("create src");
+        let entry = src.join("Main.ipe");
+        std::fs::write(&entry, "module Main exposing (main)\nmain = 0\n").expect("write entry");
+        let refused = crate::loose_file::ProjectRoot::of(None, &entry);
+        assert!(
+            matches!(&refused, Err(CliError::Usage(msg)) if *msg == text::msg::manifest_untrusted(&manifest.display())),
+            "{refused:?}"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
 }
 
 /// The unverifiable-host refusals, driven on every platform.

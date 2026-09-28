@@ -428,9 +428,8 @@ fn merge_cargo_dep(
             unpinned_transitives.insert(key);
             Ok(())
         }
-        (MergedSource::Wrapper(_), MergedSource::Wrapper(_))
-        | (MergedSource::Registry(_), MergedSource::Wrapper(_))
-        | (MergedSource::Wrapper(_), MergedSource::Registry(_)) => {
+        (MergedSource::Wrapper(_), MergedSource::Wrapper(_) | MergedSource::Registry(_))
+        | (MergedSource::Registry(_), MergedSource::Wrapper(_)) => {
             Err(CliError::Usage(text::msg::ffi_dependency_source_conflict(
                 &key,
                 &prev.source.describe(),
@@ -1005,10 +1004,6 @@ fn run_inspector_job(job: &InspectorJob, allow_build_scripts: bool) -> Result<St
     let _ = std::fs::remove_dir_all(&scoped_tmp);
     result
 }
-
-/// The toolchain jail binds, grouped so the chunked driver can clone them once
-/// per phase without repeating the tuple destructure.
-type ToolchainBinds = (Vec<PathBuf>, Vec<PathBuf>, Option<PathBuf>);
 
 /// The historical two-phase single-crate flow: fetch (network on, no foreign
 /// code) then introspect (no egress, foreign code runs) over one scratch.

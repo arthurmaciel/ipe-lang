@@ -62,17 +62,21 @@ impl ProjectRoot {
     ///
     /// A workspace folder holding a manifest wins; otherwise the manifest
     /// walk-up from the file decides (it probes one `package.ipe` path per
-    /// ancestor and lists no directory).
-    #[must_use]
-    pub fn of(workspace_root: Option<&Path>, file: &Path) -> Self {
-        workspace_root
-            .filter(|root| project::manifest_in_dir(root).is_some())
-            .map(Path::to_path_buf)
-            .or_else(|| {
-                crate::find_manifest_for_ipe_file(file)
-                    .and_then(|manifest| manifest.parent().map(Path::to_path_buf))
-            })
-            .map_or_else(|| Self::LooseFile(file.to_path_buf()), Self::Package)
+    /// ancestor and lists no directory). A discovered manifest is obeyed only
+    /// once it passes the owner rule, so an untrusted one refuses the file
+    /// rather than demoting it to a loose file.
+    ///
+    /// # Errors
+    ///
+    /// The refusal of [`crate::find_manifest_for_ipe_file`] when the nearest
+    /// manifest is a link, foreign-owned, or writable by another user.
+    pub fn of(workspace_root: Option<&Path>, file: &Path) -> Result<Self, CliError> {
+        if let Some(root) = workspace_root.filter(|root| project::manifest_in_dir(root).is_some()) {
+            return Ok(Self::Package(root.to_path_buf()));
+        }
+        Ok(crate::find_manifest_for_ipe_file(file)?
+            .and_then(|manifest| manifest.parent().map(Path::to_path_buf))
+            .map_or_else(|| Self::LooseFile(file.to_path_buf()), Self::Package))
     }
 }
 
@@ -798,8 +802,8 @@ mod tests {
         let from_walk_up = ProjectRoot::of(None, &entry);
         let from_workspace = ProjectRoot::of(Some(&dir), &entry);
         let _ = fs::remove_dir_all(&dir);
-        assert_eq!(from_walk_up, ProjectRoot::Package(dir.clone()));
-        assert_eq!(from_workspace, ProjectRoot::Package(dir));
+        assert_eq!(from_walk_up.ok(), Some(ProjectRoot::Package(dir.clone())));
+        assert_eq!(from_workspace.ok(), Some(ProjectRoot::Package(dir)));
     }
 
     #[test]
@@ -810,7 +814,7 @@ mod tests {
 
         let root = ProjectRoot::of(Some(&dir), &entry);
         let _ = fs::remove_dir_all(&dir);
-        assert_eq!(root, ProjectRoot::LooseFile(entry));
+        assert_eq!(root.ok(), Some(ProjectRoot::LooseFile(entry)));
     }
 
     #[test]

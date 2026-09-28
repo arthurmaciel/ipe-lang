@@ -72,7 +72,7 @@ impl ProjectLoader for DriverLoader {
         open_file: &Path,
         open_text: Option<&str>,
     ) -> Result<LoadedProject, LoadError> {
-        let root = ProjectRoot::of(workspace_root, open_file);
+        let root = ProjectRoot::of(workspace_root, open_file).map_err(|e| load_error(&e))?;
         let UserSources {
             mut sources,
             mut discovered,

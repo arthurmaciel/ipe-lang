@@ -31,7 +31,7 @@ impl ProvenOutPath {
 
     /// The proven absolute path, owned.
     #[must_use]
-    pub const fn into_path_buf(self) -> PathBuf {
+    pub fn into_path_buf(self) -> PathBuf {
         self.0
     }
 
