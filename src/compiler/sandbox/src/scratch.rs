@@ -1,28 +1,50 @@
 //! Private scratch directories and files, the one primitive every temporary write goes through.
 //!
 //! A scratch path is handed to external writers (`curl -o`, `sh`, the jail) that
-//! re-resolve it by name, so it is only safe while no other user can replace any
-//! component of it. Every constructor therefore establishes:
+//! re-resolve it by name, so it is only safe while no other user can read,
+//! predict, or replace any component of it. Every constructor therefore
+//! establishes:
 //!
-//! - the base is canonicalised and every ancestor is a real directory owned by
-//!   the effective user or root, writable by no one else unless sticky;
-//! - the private directory is created exclusively (mode 0700, 128-bit entropy
-//!   name) and re-verified with `symlink_metadata`: a real directory, owned by
-//!   the effective user, no group/other permission bits;
+//! - the base is resolved and proven trusted: on Unix it is canonicalised and
+//!   every ancestor is a real directory owned by the effective user or root,
+//!   writable by no one else unless sticky; elsewhere, where the standard
+//!   library offers no owner-only creation, it must resolve inside the current
+//!   user's profile directory, which the OS keeps private to that user;
+//! - entries are created under the resolved base, never the given path, so a
+//!   link on the given path re-pointed after the check cannot redirect them;
+//! - the private directory name carries 128 bits of OS CSPRNG entropy (an
+//!   unavailable CSPRNG fails the creation, never weakens the name); it is
+//!   created exclusively (mode 0700), a collision retries with a fresh name a
+//!   bounded number of times, and it is re-verified with `symlink_metadata`: a
+//!   real directory, owned by the effective user, no group/other permission bits;
 //! - a scratch file is created inside such a directory with `O_EXCL` +
-//!   `O_NOFOLLOW` + mode 0600, and its handle is verified with `fstat`.
+//!   `O_NOFOLLOW` + mode 0600, and its handle is verified with `fstat`; read it
+//!   back through the retained handle, never by re-opening the name.
 //!
 //! A check that fails refuses with [`io::ErrorKind::PermissionDenied`] carrying
-//! a [`ScratchError`]; nothing is created under an untrusted base and nothing is
-//! written through a planted link.
+//! a [`ScratchError`] or a [`ScratchRootRefusal`]; nothing is created under an
+//! untrusted base and nothing is written through a planted link.
 
+use std::ffi::OsStr;
 use std::fmt;
 use std::fs::File;
 use std::io::{self, Read, Seek, SeekFrom};
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
-/// Maximum retry attempts when an exclusive-create collision occurs.
-const MAX_RETRIES: usize = 8;
+/// Attempts at a fresh name before creation gives up.
+const MAX_ATTEMPTS: usize = 8;
+
+/// Bytes of OS CSPRNG entropy in every scratch name (128 bits).
+const ENTROPY_BYTES: usize = 16;
+
+/// Longest caller label kept in a scratch name.
+const MAX_LABEL_CHARS: usize = 64;
+
+/// The label used when a caller label confines to nothing.
+const FALLBACK_LABEL: &str = "scratch";
+
+/// The variable naming the current user's profile directory on Windows.
+pub const PROFILE_VAR: &str = "USERPROFILE";
 
 /// Why a scratch location was refused.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -37,8 +59,6 @@ pub enum ScratchRefusal {
     WritableByOthers,
     /// A private entry grants group or other permission bits.
     NotPrivate,
-    /// The caller-supplied name prefix is empty or contains a path separator.
-    InvalidPrefix,
 }
 
 impl fmt::Display for ScratchRefusal {
@@ -49,7 +69,6 @@ impl fmt::Display for ScratchRefusal {
             Self::ForeignOwner => "owned by another user",
             Self::WritableByOthers => "writable by other users without the sticky bit",
             Self::NotPrivate => "grants group or other permissions",
-            Self::InvalidPrefix => "scratch prefix is empty or contains a path separator",
         })
     }
 }
@@ -88,6 +107,79 @@ fn refused(path: &Path, refusal: ScratchRefusal) -> io::Error {
         },
     )
 }
+
+/// Why a scratch root cannot be proven private to the current user.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ScratchRootRefusal {
+    /// No absolute profile directory is set, so no root can be proven private.
+    NoProfile,
+    /// A path could not be resolved to its canonical form.
+    Unresolvable {
+        /// The path that failed to resolve.
+        path: PathBuf,
+        /// The rendered OS error.
+        detail: String,
+    },
+    /// The root resolves outside the profile directory.
+    OutsideProfile {
+        /// The canonical scratch root.
+        root: PathBuf,
+        /// The canonical profile directory.
+        profile: PathBuf,
+    },
+}
+
+/// The remedy every root refusal names.
+const FIX: &str = "set TEMP and TMP to a directory inside your user profile, \
+                   such as %LOCALAPPDATA%\\Temp (the Windows default)";
+
+impl fmt::Display for ScratchRootRefusal {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::NoProfile => write!(
+                f,
+                "refusing to create scratch files: {PROFILE_VAR} does not name an absolute \
+                 directory, so the scratch location cannot be proven private to you; {FIX}"
+            ),
+            Self::Unresolvable { path, detail } => write!(
+                f,
+                "refusing to create scratch files: cannot resolve {} ({detail}), so it cannot \
+                 be proven private to you; {FIX}",
+                path.display()
+            ),
+            Self::OutsideProfile { root, profile } => write!(
+                f,
+                "refusing to create scratch files under {}: it lies outside your user profile \
+                 ({}), so other local users may read or modify what is written there; {FIX}",
+                root.display(),
+                profile.display()
+            ),
+        }
+    }
+}
+
+impl std::error::Error for ScratchRootRefusal {}
+
+impl From<ScratchRootRefusal> for io::Error {
+    fn from(refusal: ScratchRootRefusal) -> Self {
+        Self::new(io::ErrorKind::PermissionDenied, refusal)
+    }
+}
+
+/// Every one of the [`MAX_ATTEMPTS`] fresh names already existed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NamesExhausted;
+
+impl fmt::Display for NamesExhausted {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "could not create a unique scratch entry after {MAX_ATTEMPTS} attempts"
+        )
+    }
+}
+
+impl std::error::Error for NamesExhausted {}
 
 /// The ownership and permission facts a verdict needs about one filesystem entry.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -168,8 +260,13 @@ pub const fn private_verdict(
 ) -> Result<(), ScratchRefusal> {
     match (entry.kind, kind) {
         (EntryKind::Directory, EntryKind::Directory) | (EntryKind::File, EntryKind::File) => {}
-        (_, EntryKind::File) => return Err(ScratchRefusal::NotARegularFile),
-        _ => return Err(ScratchRefusal::NotADirectory),
+        (EntryKind::Directory | EntryKind::File | EntryKind::Other, EntryKind::File) => {
+            return Err(ScratchRefusal::NotARegularFile);
+        }
+        (
+            EntryKind::Directory | EntryKind::File | EntryKind::Other,
+            EntryKind::Directory | EntryKind::Other,
+        ) => return Err(ScratchRefusal::NotADirectory),
     }
     if entry.owner != who.euid {
         return Err(ScratchRefusal::ForeignOwner);
@@ -180,19 +277,65 @@ pub const fn private_verdict(
     Ok(())
 }
 
-/// Whether `prefix` is usable as a single path component label.
+/// Decide whether a canonical scratch root lies inside a canonical profile.
+///
+/// Both paths are expected canonical (absolute, links resolved). Anything that
+/// is not provably inside is refused: a profile that is relative, holds a `..`
+/// segment, or names a bare filesystem root (which would make every path
+/// "private"); a root that is relative, holds a `..` segment, or lies outside
+/// the profile, compared component-wise so `/home/al` never contains
+/// `/home/alice`.
 ///
 /// # Errors
-/// [`ScratchRefusal::InvalidPrefix`] when it is empty or contains a separator or NUL.
-fn prefix_verdict(prefix: &str) -> Result<(), ScratchRefusal> {
-    if prefix.is_empty()
-        || prefix
-            .chars()
-            .any(|c| std::path::is_separator(c) || c == '\0')
-    {
-        return Err(ScratchRefusal::InvalidPrefix);
+/// Returns the [`ScratchRootRefusal`] that the root fails.
+pub fn root_within_profile(root: &Path, profile: &Path) -> Result<(), ScratchRootRefusal> {
+    let has_parent_dir = |p: &Path| p.components().any(|c| matches!(c, Component::ParentDir));
+    let names_a_directory = profile
+        .components()
+        .any(|c| matches!(c, Component::Normal(_)));
+    if !profile.is_absolute() || has_parent_dir(profile) || !names_a_directory {
+        return Err(ScratchRootRefusal::NoProfile);
     }
-    Ok(())
+    if root.is_absolute() && !has_parent_dir(root) && root.starts_with(profile) {
+        Ok(())
+    } else {
+        Err(ScratchRootRefusal::OutsideProfile {
+            root: root.to_path_buf(),
+            profile: profile.to_path_buf(),
+        })
+    }
+}
+
+/// Resolve `root` and `profile`, require the root inside the profile, and return the resolved root.
+///
+/// `profile` is the raw value of [`PROFILE_VAR`]; an unset, empty, or relative
+/// value proves nothing and is refused. Resolution follows every link, so a
+/// link inside the profile that points outside it is refused too. Entries must
+/// be created under the returned path, not under `root`, so that a link on
+/// `root` re-pointed after the check cannot redirect the creation.
+///
+/// # Errors
+/// Returns a [`ScratchRootRefusal`] when either path cannot be resolved or the
+/// resolved root lies outside the resolved profile.
+pub fn verify_root_within_profile(
+    root: &Path,
+    profile: Option<&OsStr>,
+) -> Result<PathBuf, ScratchRootRefusal> {
+    let profile = profile
+        .map(Path::new)
+        .filter(|p| p.is_absolute())
+        .ok_or(ScratchRootRefusal::NoProfile)?;
+    let root = canonical(root)?;
+    root_within_profile(&root, &canonical(profile)?)?;
+    Ok(root)
+}
+
+/// The canonical form of `path`, or the refusal naming why it has none.
+fn canonical(path: &Path) -> Result<PathBuf, ScratchRootRefusal> {
+    std::fs::canonicalize(path).map_err(|e| ScratchRootRefusal::Unresolvable {
+        path: path.to_path_buf(),
+        detail: e.to_string(),
+    })
 }
 
 #[cfg(unix)]
@@ -251,15 +394,23 @@ fn trusted_base(base: &Path) -> io::Result<PathBuf> {
     Ok(canonical)
 }
 
-/// Resolve `base` to the directory private entries are created under.
+/// Resolve `base` to the directory private entries are created under, proven inside the user's profile.
 ///
-/// Non-unix hosts carry no POSIX owner or mode bits; the base is created and used
-/// as given (a canonical Windows path is a verbatim `\\?\` path not every consumer
-/// accepts).
+/// Non-unix hosts carry no POSIX owner or mode bits, so an entry inherits its
+/// parent's access control. The nearest existing ancestor of `base` is proven
+/// inside the profile before any missing component is created, and `base`
+/// itself is proven again once it exists; the resolved path is returned.
 #[cfg(not(unix))]
 fn trusted_base(base: &Path) -> io::Result<PathBuf> {
+    let home = crate::home::home_dir();
+    let profile = home.as_deref().map(Path::as_os_str);
+    let existing = base
+        .ancestors()
+        .find(|a| !a.as_os_str().is_empty() && a.exists())
+        .unwrap_or(base);
+    verify_root_within_profile(existing, profile)?;
     std::fs::create_dir_all(base)?;
-    Ok(base.to_path_buf())
+    verify_root_within_profile(base, profile).map_err(io::Error::from)
 }
 
 /// Verify that `path` is a private directory of the effective user.
@@ -298,45 +449,68 @@ fn verify_private(path: &Path, meta: &std::fs::Metadata, kind: EntryKind) -> io:
     ))
 }
 
-/// Read 16 bytes (128 bits) of OS entropy.
-#[cfg(unix)]
-fn read_entropy() -> io::Result<[u8; 16]> {
-    let mut buf = [0u8; 16];
-    File::open("/dev/urandom")?.read_exact(&mut buf)?;
-    Ok(buf)
-}
-
-/// Read 16 bytes of per-process randomised hash state as the name entropy.
+/// Confine a caller label to one bounded, non-empty path component.
 ///
-/// Non-unix hosts have no `/dev/urandom`; `RandomState` is seeded from the OS
-/// generator. A guessed name only costs a retry: creation is exclusive either way.
-#[cfg(not(unix))]
-#[allow(clippy::unnecessary_wraps)] // one signature with the fallible unix reader
-fn read_entropy() -> io::Result<[u8; 16]> {
-    use std::hash::{BuildHasher as _, Hasher as _};
-    let nanos = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0u128, |d| d.as_nanos());
-    let half = |salt: u8| {
-        let mut h = std::collections::hash_map::RandomState::new().build_hasher();
-        h.write_u128(nanos);
-        h.write_u32(std::process::id());
-        h.write_u8(salt);
-        h.finish()
-    };
-    Ok(((u128::from(half(1)) << 64) | u128::from(half(0))).to_le_bytes())
+/// ASCII alphanumerics, `-` and `_` are kept, every other character becomes `_`,
+/// and at most [`MAX_LABEL_CHARS`] characters survive, so a label can never add
+/// a path component, name `.`/`..`, or reach an alternate data stream.
+fn confined_label(label: &str) -> String {
+    let confined: String = label
+        .chars()
+        .take(MAX_LABEL_CHARS)
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    if confined.is_empty() {
+        FALLBACK_LABEL.to_owned()
+    } else {
+        confined
+    }
 }
 
-/// One candidate name: `<prefix>-<pid>-<32 hex entropy chars>`.
-fn candidate_name(prefix: &str) -> io::Result<String> {
+/// `<label>-<pid>-<32 hex chars>`, the hex drawn from `fill`.
+fn scratch_name(
+    label: &str,
+    fill: &mut impl FnMut(&mut [u8]) -> Result<(), getrandom::Error>,
+) -> io::Result<String> {
     use std::fmt::Write as _;
-    let mut name = format!("{prefix}-{}-", std::process::id());
-    for b in read_entropy()? {
-        let _ = write!(name, "{b:02x}");
+    let mut entropy = [0u8; ENTROPY_BYTES];
+    fill(&mut entropy)?;
+    let mut name = confined_label(label);
+    let _ = write!(name, "-{}-", std::process::id());
+    for byte in entropy {
+        let _ = write!(name, "{byte:02x}");
     }
     Ok(name)
 }
 
+/// Create an entry under the trusted `base` with `create`, retrying a collision with a fresh name.
+///
+/// At most [`MAX_ATTEMPTS`] names are tried; `fill` supplies each name's entropy
+/// and its failure fails the creation before any entry is attempted.
+fn create_unique<T>(
+    base: &Path,
+    label: &str,
+    mut fill: impl FnMut(&mut [u8]) -> Result<(), getrandom::Error>,
+    mut create: impl FnMut(&Path) -> io::Result<T>,
+) -> io::Result<(PathBuf, T)> {
+    for _ in 0..MAX_ATTEMPTS {
+        let path = base.join(scratch_name(label, &mut fill)?);
+        match create(&path) {
+            Ok(entry) => return Ok((path, entry)),
+            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {}
+            Err(e) => return Err(e),
+        }
+    }
+    Err(io::Error::new(io::ErrorKind::AlreadyExists, NamesExhausted))
+}
+
+/// Create the directory `path` exclusively with mode 0700; only the final component is created.
 #[cfg(unix)]
 fn exclusive_mkdir(path: &Path) -> io::Result<()> {
     use std::os::unix::fs::DirBuilderExt as _;
@@ -346,6 +520,7 @@ fn exclusive_mkdir(path: &Path) -> io::Result<()> {
         .create(path)
 }
 
+/// Create the directory `path` exclusively, inheriting the proven-private parent's access control.
 #[cfg(not(unix))]
 fn exclusive_mkdir(path: &Path) -> io::Result<()> {
     std::fs::create_dir(path)
@@ -364,6 +539,7 @@ fn exclusive_open(path: &Path) -> io::Result<File> {
         .open(path)
 }
 
+/// Open a new file at `path` exclusively, inheriting the proven-private parent's access control.
 #[cfg(not(unix))]
 fn exclusive_open(path: &Path) -> io::Result<File> {
     std::fs::OpenOptions::new()
@@ -388,38 +564,29 @@ impl ScratchDir {
     ///
     /// # Errors
     /// See [`ScratchDir::new_under`].
-    pub fn new(prefix: &str) -> io::Result<Self> {
-        Self::new_under(&std::env::temp_dir(), prefix)
+    pub fn new(label: &str) -> io::Result<Self> {
+        Self::new_under(&std::env::temp_dir(), label)
     }
 
-    /// Create a private directory under `base`, creating `base` when absent.
+    /// Create a private directory directly under the resolved `base`, creating `base` when absent.
     ///
-    /// `prefix` is a diagnostic label for the name; the rest of the name is
-    /// 128 bits of entropy.
+    /// The name is `<label>-<pid>-<32 hex CSPRNG chars>`; `label` is a diagnostic
+    /// tag only, confined to one bounded component (ASCII alphanumerics, `-` and
+    /// `_`; others become `_`; at most 64 characters).
     ///
     /// # Errors
-    /// `InvalidInput` for an unusable prefix; `PermissionDenied` with a
-    /// [`ScratchError`] when `base` (or an ancestor) or the created directory fails
-    /// verification; `AlreadyExists` when every attempt collides; any other I/O error.
-    pub fn new_under(base: &Path, prefix: &str) -> io::Result<Self> {
-        prefix_verdict(prefix).map_err(|r| io::Error::new(io::ErrorKind::InvalidInput, r))?;
+    /// `PermissionDenied` with a [`ScratchError`] when `base` (or an ancestor) or
+    /// the created directory fails verification, or with a [`ScratchRootRefusal`]
+    /// when a non-unix `base` cannot be proven inside the user's profile; the
+    /// `getrandom` error when the OS CSPRNG is unavailable; `AlreadyExists`
+    /// carrying [`NamesExhausted`] when every fresh name collided; any other I/O
+    /// error.
+    pub fn new_under(base: &Path, label: &str) -> io::Result<Self> {
         let base = trusted_base(base)?;
-        for _ in 0..MAX_RETRIES {
-            let path = base.join(candidate_name(prefix)?);
-            match exclusive_mkdir(&path) {
-                Ok(()) => {
-                    // A refused entry is not ours to remove.
-                    verify_private_dir(&path)?;
-                    return Ok(Self(path));
-                }
-                Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {}
-                Err(e) => return Err(e),
-            }
-        }
-        Err(io::Error::new(
-            io::ErrorKind::AlreadyExists,
-            "could not create a unique scratch directory after repeated attempts",
-        ))
+        let (path, ()) = create_unique(&base, label, getrandom::fill, exclusive_mkdir)?;
+        // A refused entry is not ours to remove.
+        verify_private_dir(&path)?;
+        Ok(Self(path))
     }
 
     /// The path of this scratch directory.
@@ -474,14 +641,17 @@ pub struct ScratchFile {
 }
 
 impl ScratchFile {
-    /// Create a private file named `prefix` inside a fresh private directory under the OS temp root.
+    /// Create a private file inside a fresh private directory under the OS temp root.
+    ///
+    /// Both the directory and the file are named from `label` as in
+    /// [`ScratchDir::new_under`]; the file is the confined label itself.
     ///
     /// # Errors
     /// See [`ScratchDir::new_under`]; also `PermissionDenied` with a
     /// [`ScratchError`] when the opened handle is not a private regular file of the
     /// effective user, and any open error (a planted symlink fails `O_NOFOLLOW`).
-    pub fn create(prefix: &str) -> io::Result<Self> {
-        Self::create_in(ScratchDir::new(prefix)?, prefix)
+    pub fn create(label: &str) -> io::Result<Self> {
+        Self::create_in(ScratchDir::new(label)?, &confined_label(label))
     }
 
     /// Create the file `name` inside the private directory `dir`, taking ownership of it.
@@ -542,6 +712,34 @@ mod tests {
             owner,
             group,
             mode,
+        }
+    }
+
+    /// A fresh directory tree unique to this test, removed on drop.
+    struct Tree(PathBuf);
+
+    impl Tree {
+        fn new(tag: &str) -> io::Result<Self> {
+            let nanos = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |d| d.as_nanos());
+            let root = std::env::temp_dir().join(format!(
+                "ipe-private-scratch-{tag}-{}-{nanos}",
+                std::process::id()
+            ));
+            std::fs::create_dir_all(root.join("profile").join("temp"))?;
+            std::fs::create_dir_all(root.join("shared"))?;
+            Ok(Self(root))
+        }
+
+        fn profile(&self) -> PathBuf {
+            self.0.join("profile")
+        }
+    }
+
+    impl Drop for Tree {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
         }
     }
 
@@ -623,17 +821,305 @@ mod tests {
     }
 
     #[test]
-    fn prefix_with_a_separator_is_refused() -> io::Result<()> {
-        let root = ScratchDir::new("ipe-scratch-prefix")?;
-        for bad in ["", "a/b", "../x"] {
-            let err = ScratchDir::new_under(root.path(), bad).err();
+    fn root_inside_or_equal_to_profile_is_accepted() {
+        let profile = Path::new("/home/alice");
+        assert_eq!(
+            root_within_profile(Path::new("/home/alice/AppData/Local/Temp"), profile),
+            Ok(())
+        );
+        assert_eq!(root_within_profile(profile, profile), Ok(()));
+    }
+
+    #[test]
+    fn root_outside_profile_is_refused() {
+        let refused = root_within_profile(Path::new("/tmp"), Path::new("/home/alice"));
+        assert!(matches!(
+            refused,
+            Err(ScratchRootRefusal::OutsideProfile { .. })
+        ));
+    }
+
+    #[test]
+    fn sibling_sharing_a_name_prefix_is_refused() {
+        let refused =
+            root_within_profile(Path::new("/home/alice-shared"), Path::new("/home/alice"));
+        assert!(matches!(
+            refused,
+            Err(ScratchRootRefusal::OutsideProfile { .. })
+        ));
+    }
+
+    #[test]
+    fn parent_dir_escape_is_refused() {
+        let refused =
+            root_within_profile(Path::new("/home/alice/../bob"), Path::new("/home/alice"));
+        assert!(matches!(
+            refused,
+            Err(ScratchRootRefusal::OutsideProfile { .. })
+        ));
+    }
+
+    #[test]
+    fn relative_root_is_refused() {
+        let refused = root_within_profile(Path::new("alice/temp"), Path::new("/home/alice"));
+        assert!(matches!(
+            refused,
+            Err(ScratchRootRefusal::OutsideProfile { .. })
+        ));
+    }
+
+    #[test]
+    fn relative_profile_proves_nothing() {
+        assert_eq!(
+            root_within_profile(Path::new("/home/alice/temp"), Path::new("alice")),
+            Err(ScratchRootRefusal::NoProfile)
+        );
+    }
+
+    #[test]
+    fn filesystem_root_profile_proves_nothing() {
+        assert_eq!(
+            root_within_profile(Path::new("/tmp"), Path::new("/")),
+            Err(ScratchRootRefusal::NoProfile)
+        );
+    }
+
+    #[test]
+    fn unset_empty_or_relative_profile_variable_is_refused() -> io::Result<()> {
+        let tree = Tree::new("noprofile")?;
+        let root = tree.profile().join("temp");
+        for profile in [
+            None,
+            Some(OsStr::new("")),
+            Some(OsStr::new("relative/profile")),
+        ] {
             assert_eq!(
-                err.as_ref().map(io::Error::kind),
-                Some(io::ErrorKind::InvalidInput),
-                "prefix {bad:?} must be refused"
+                verify_root_within_profile(&root, profile),
+                Err(ScratchRootRefusal::NoProfile)
             );
         }
-        assert_eq!(std::fs::read_dir(root.path())?.count(), 0);
+        Ok(())
+    }
+
+    #[test]
+    fn resolved_root_inside_profile_is_accepted() -> io::Result<()> {
+        let tree = Tree::new("inside")?;
+        let profile = tree.profile();
+        let resolved = std::fs::canonicalize(profile.join("temp"))?;
+        assert_eq!(
+            verify_root_within_profile(&profile.join("temp"), Some(profile.as_os_str())),
+            Ok(resolved)
+        );
+        Ok(())
+    }
+
+    /// The accepted root is returned resolved, so creation lands under the
+    /// checked location even when the given path runs through a link.
+    #[cfg(unix)]
+    #[test]
+    fn accepted_root_is_returned_resolved() -> io::Result<()> {
+        let tree = Tree::new("resolved")?;
+        let profile = tree.profile();
+        let link = profile.join("temp-link");
+        std::os::unix::fs::symlink(profile.join("temp"), &link)?;
+        let resolved = verify_root_within_profile(&link, Some(profile.as_os_str()));
+        assert_eq!(resolved, Ok(std::fs::canonicalize(profile.join("temp"))?));
+        Ok(())
+    }
+
+    #[test]
+    fn shared_root_outside_profile_is_refused() -> io::Result<()> {
+        let tree = Tree::new("shared")?;
+        let profile = tree.profile();
+        let refused = verify_root_within_profile(&tree.0.join("shared"), Some(profile.as_os_str()));
+        assert!(matches!(
+            refused,
+            Err(ScratchRootRefusal::OutsideProfile { .. })
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn dot_dot_path_leaving_profile_is_refused() -> io::Result<()> {
+        let tree = Tree::new("dotdot")?;
+        let profile = tree.profile();
+        let escaping = profile.join("temp").join("..").join("..").join("shared");
+        let refused = verify_root_within_profile(&escaping, Some(profile.as_os_str()));
+        assert!(matches!(
+            refused,
+            Err(ScratchRootRefusal::OutsideProfile { .. })
+        ));
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn link_inside_profile_pointing_outside_is_refused() -> io::Result<()> {
+        let tree = Tree::new("link")?;
+        let profile = tree.profile();
+        let link = profile.join("temp-link");
+        std::os::unix::fs::symlink(tree.0.join("shared"), &link)?;
+        let refused = verify_root_within_profile(&link, Some(profile.as_os_str()));
+        assert!(matches!(
+            refused,
+            Err(ScratchRootRefusal::OutsideProfile { .. })
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn missing_root_is_refused() -> io::Result<()> {
+        let tree = Tree::new("missing")?;
+        let profile = tree.profile();
+        let refused =
+            verify_root_within_profile(&profile.join("absent"), Some(profile.as_os_str()));
+        assert!(matches!(
+            refused,
+            Err(ScratchRootRefusal::Unresolvable { .. })
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn every_root_refusal_names_the_fix_and_denies_permission() {
+        let refusals = [
+            ScratchRootRefusal::NoProfile,
+            ScratchRootRefusal::Unresolvable {
+                path: PathBuf::from("/x"),
+                detail: "not found".to_owned(),
+            },
+            ScratchRootRefusal::OutsideProfile {
+                root: PathBuf::from("/tmp"),
+                profile: PathBuf::from("/home/alice"),
+            },
+        ];
+        for refusal in refusals {
+            assert!(
+                refusal.to_string().contains("set TEMP and TMP"),
+                "{refusal}"
+            );
+            assert_eq!(
+                io::Error::from(refusal).kind(),
+                io::ErrorKind::PermissionDenied
+            );
+        }
+    }
+
+    /// A base outside the user's profile is refused before anything is created.
+    #[cfg(windows)]
+    #[test]
+    fn windows_base_outside_profile_is_refused() {
+        let system_root = ipe_env::var_os("SystemRoot");
+        assert!(system_root.is_some(), "SystemRoot must be set on Windows");
+        let Some(system_root) = system_root else {
+            return;
+        };
+        let refused = ScratchDir::new_under(Path::new(&system_root), "ipe-test");
+        assert_eq!(
+            refused.map(drop).map_err(|e| e.kind()),
+            Err(io::ErrorKind::PermissionDenied)
+        );
+    }
+
+    /// An unavailable CSPRNG fails the creation before any entry is attempted;
+    /// no weaker name is ever produced.
+    #[test]
+    fn entropy_failure_fails_closed() -> io::Result<()> {
+        let tree = Tree::new("entropy")?;
+        let mut attempts = 0usize;
+        let result = create_unique(
+            &tree.0,
+            "ipe-test",
+            |_: &mut [u8]| Err(getrandom::Error::UNSUPPORTED),
+            |p: &Path| {
+                attempts += 1;
+                exclusive_mkdir(p)
+            },
+        );
+        assert!(result.is_err());
+        assert_eq!(attempts, 0);
+        assert_eq!(
+            std::fs::read_dir(&tree.0)?.count(),
+            2,
+            "only the fixture tree"
+        );
+        Ok(())
+    }
+
+    /// Fixed entropy collides on every attempt after the first entry, and the
+    /// retry loop stops at its bound with `AlreadyExists`.
+    #[test]
+    fn collisions_stop_at_the_attempt_bound() -> io::Result<()> {
+        let tree = Tree::new("collide")?;
+        let zeros = |buf: &mut [u8]| {
+            buf.fill(0);
+            Ok::<(), getrandom::Error>(())
+        };
+        create_unique(&tree.0, "ipe-test", zeros, exclusive_mkdir)?;
+        let mut attempts = 0usize;
+        let second = create_unique(&tree.0, "ipe-test", zeros, |p: &Path| {
+            attempts += 1;
+            exclusive_mkdir(p)
+        });
+        assert!(second.is_err(), "every name collides");
+        let Err(err) = second else {
+            return Ok(());
+        };
+        assert_eq!(err.kind(), io::ErrorKind::AlreadyExists);
+        assert!(err.to_string().contains("unique scratch entry"), "{err}");
+        assert_eq!(attempts, MAX_ATTEMPTS);
+        Ok(())
+    }
+
+    /// A hostile label cannot add a path component, reach an alternate data
+    /// stream, or grow the name without bound.
+    #[test]
+    fn label_is_confined_to_one_bounded_component() -> io::Result<()> {
+        let mut fill = |buf: &mut [u8]| {
+            buf.fill(0xab);
+            Ok::<(), getrandom::Error>(())
+        };
+        let hostile = format!("../../etc/x:y\\z{}", "a".repeat(500));
+        let name = scratch_name(&hostile, &mut fill)?;
+        assert!(
+            name.chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_'),
+            "{name}"
+        );
+        assert!(name.starts_with("______etc_x_y_z"), "{name}");
+        assert!(name.ends_with(&"ab".repeat(ENTROPY_BYTES)), "{name}");
+        assert!(name.len() <= MAX_LABEL_CHARS + 2 + 10 + 2 * ENTROPY_BYTES);
+        Ok(())
+    }
+
+    /// Every hostile or empty label yields exactly one entry directly under the resolved base.
+    #[test]
+    fn hostile_label_creates_one_entry_directly_under_the_base() -> io::Result<()> {
+        let root = ScratchDir::new("ipe-scratch-label")?;
+        let base = std::fs::canonicalize(root.path())?;
+        let mut kept = Vec::new();
+        for bad in ["", "a/b", "../x", "a\0b", ".", ".."] {
+            let sd = ScratchDir::new_under(root.path(), bad)?;
+            assert_eq!(sd.path().parent(), Some(base.as_path()), "label {bad:?}");
+            kept.push(sd);
+        }
+        let sf = ScratchFile::create("../x")?;
+        assert_eq!(sf.path().parent(), Some(sf.dir().path()));
+        assert_eq!(std::fs::read_dir(root.path())?.count(), kept.len());
+        Ok(())
+    }
+
+    #[test]
+    fn unique_entries_differ_and_live_under_base() -> io::Result<()> {
+        let tree = Tree::new("unique")?;
+        let base = std::fs::canonicalize(&tree.0)?;
+        let a = ScratchDir::new_under(&tree.0, "ipe-test")?;
+        let b = ScratchDir::new_under(&tree.0, "ipe-test")?;
+        let c = ScratchFile::create_in(ScratchDir::new_under(&tree.0, "ipe-test")?, "f")?;
+        assert_ne!(a.path(), b.path());
+        for entry in [a.path(), b.path(), c.dir().path()] {
+            assert_eq!(entry.parent(), Some(base.as_path()));
+        }
         Ok(())
     }
 
@@ -664,6 +1150,7 @@ mod tests {
     #[cfg(unix)]
     mod unix {
         use super::super::*;
+        use super::Tree;
         use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
 
         fn set_mode(path: &Path, mode: u32) -> io::Result<()> {
@@ -686,6 +1173,26 @@ mod tests {
             let meta = std::fs::symlink_metadata(sf.path())?;
             assert!(meta.file_type().is_file());
             assert_eq!(meta.mode() & 0o777, 0o600);
+            Ok(())
+        }
+
+        /// Entries are owner-only and their exclusive creators refuse an existing name.
+        #[test]
+        fn unix_entries_are_owner_only() -> io::Result<()> {
+            let tree = Tree::new("mode")?;
+            let dir = ScratchDir::new_under(&tree.0, "ipe-test")?;
+            let file = ScratchFile::create_in(ScratchDir::new_under(&tree.0, "ipe-test")?, "f")?;
+            let mode = |p: &Path| std::fs::metadata(p).map(|m| m.permissions().mode() & 0o777);
+            assert_eq!(mode(dir.path())? & 0o077, 0);
+            assert_eq!(mode(file.path())? & 0o077, 0);
+            assert_eq!(
+                exclusive_mkdir(dir.path()).map_err(|e| e.kind()),
+                Err(io::ErrorKind::AlreadyExists)
+            );
+            assert_eq!(
+                exclusive_open(file.path()).map(drop).map_err(|e| e.kind()),
+                Err(io::ErrorKind::AlreadyExists)
+            );
             Ok(())
         }
 
