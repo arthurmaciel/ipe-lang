@@ -1772,26 +1772,26 @@ jobs:
           IPE="$PWD/target/release/ipe"
           OUT="${{ runner.temp }}/geo-clipboard-emitted"
           "$IPE" build examples/shapes/web/geo-clipboard/package.ipe --out "$OUT"
-          bash "$GITHUB_WORKSPACE/.github/ci/github-env.sh" IPE_GEO_CLIPBOARD_EMITTED "$OUT/rust"
+          bash "$GITHUB_WORKSPACE/.github/ci/github-env.sh" CI_JOB_GEO_CLIPBOARD_EMITTED "$OUT/rust"
       - name: Cargo-build emitted project
         env:
           CARGO_TARGET_DIR: ${{ github.workspace }}/.cache/browser-e2e-target
         run: |
           set -euo pipefail
-          cd "$IPE_GEO_CLIPBOARD_EMITTED"
+          cd "$CI_JOB_GEO_CLIPBOARD_EMITTED"
           cargo build --release
           # CARGO_TARGET_DIR is redirected to a shared cache dir above, so the
           # release artifacts land there — never the emitted project's ./target.
           BIN="$(find "$CARGO_TARGET_DIR/release" -maxdepth 1 -type f -perm /111 ! -name '*.d' | head -1)"
-          bash "$GITHUB_WORKSPACE/.github/ci/github-env.sh" GEO_CLIPBOARD_BIN "$BIN"
+          bash "$GITHUB_WORKSPACE/.github/ci/github-env.sh" CI_JOB_GEO_CLIPBOARD_BIN "$BIN"
       - name: Spawn geo-clipboard server
         run: |
           set -euo pipefail
           IPE_WEB_PORT="$IPE_GEO_CLIPBOARD_PORT" \
           IPE_CSRF=off \
           IPE_CONSOLE_EMBED=off \
-          "$GEO_CLIPBOARD_BIN" &
-          bash "$GITHUB_WORKSPACE/.github/ci/github-env.sh" GEO_SERVER_PID "$!"
+          "$CI_JOB_GEO_CLIPBOARD_BIN" &
+          bash "$GITHUB_WORKSPACE/.github/ci/github-env.sh" CI_JOB_GEO_SERVER_PID "$!"
           ready=""
           for i in $(seq 1 40); do
             if curl -sf "http://127.0.0.1:$IPE_GEO_CLIPBOARD_PORT/" >/dev/null 2>&1; then
@@ -1811,7 +1811,7 @@ jobs:
         run: npx playwright test --config playwright.config.mjs
       - name: Kill server
         if: always()
-        run: kill "$GEO_SERVER_PID" 2>/dev/null || true
+        run: kill "$CI_JOB_GEO_SERVER_PID" 2>/dev/null || true
       - name: Upload screenshots
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7

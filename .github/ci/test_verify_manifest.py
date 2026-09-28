@@ -787,7 +787,7 @@ class TestSccacheWiringClosure(unittest.TestCase):
             "steps:\n  - run: cargo build\n",
             top="defaults:\n  run:\n    shell: env SCCACHE_GHA_ENABLED=true bash {0}\n",
         )
-        self.assertRefused("ci.yml defaults.run.shell")
+        self.assertRefused("ci.yml: workflow-level defaults.run.shell")
 
     def test_cargo_config_flag_is_refused(self) -> None:
         self.ci("steps:\n  - name: Build\n    run: cargo --config build.rustc-wrapper='\"sccache\"' build\n")
@@ -1000,12 +1000,12 @@ class TestSccacheWiringClosure(unittest.TestCase):
             "container": (
                 {},
                 f"container:\n  image: rust\n  env:\n    K: RUSTC_WRAPPER\nsteps:\n  - {write}",
-                "job 'clippy' container env.K",
+                "job 'clippy' container.env.K",
             ),
             "service": (
                 {},
                 f"services:\n  db:\n    image: pg\n    env:\n      K: SCCACHE_DIR\nsteps:\n  - {write}",
-                "job 'clippy' service 'db' env.K",
+                "job 'clippy' services.db.env.K",
             ),
         }
         for scope, (kw, body, needle) in cases.items():
@@ -1241,6 +1241,7 @@ class TestSccacheWiringClosure(unittest.TestCase):
 
 
 _HELPER_CALL = 'bash "$GITHUB_WORKSPACE/.github/ci/github-env.sh"'
+_REQS = '"$GITHUB_WORKSPACE/.github/ci/requirements.txt"'
 _PINNED_SHA = "0123456789abcdef0123456789abcdef01234567"
 _DIGEST = "sha256:" + "ab" * 32
 
@@ -1284,7 +1285,7 @@ class TestPinnedInputsAndEnvFileWrites(unittest.TestCase):
                 self.assertRefused("step 'W' run:", "written only through")
 
     def test_env_file_benign_allowlisted_key_value_is_still_refused_raw(self) -> None:
-        self.ci("steps:\n  - name: W\n    run: echo \"BIN_NAME=ipe\" >> \"$GITHUB_ENV\"\n")
+        self.ci("steps:\n  - name: W\n    run: echo \"CI_JOB_BIN_NAME=ipe\" >> \"$GITHUB_ENV\"\n")
         self.assertRefused("step 'W' run:", "'GITHUB_ENV'")
 
     def test_legacy_command_switch_in_env_is_refused(self) -> None:
@@ -1304,10 +1305,140 @@ class TestPinnedInputsAndEnvFileWrites(unittest.TestCase):
         self.ci("steps:\n  - uses: ./.github/actions/w\n")
         self.assertRefused("./.github/actions/w/action.yml", "written only through")
 
+    # ---- runner command files: every spelling, every string scalar -------
+
+    def test_runner_file_spellings_are_refused(self) -> None:
+        cases = {
+            "github.env expression": "echo x >> ${{ github.env }}",
+            "github.path expression": "echo /tmp >> ${{ github.path }}",
+            "upper-case context": "echo x >> ${{ GITHUB.ENV }}",
+            "spaced access": "echo x >> ${{ github . env }}",
+            "bracket index": "echo x >> ${{ github['env'] }}",
+            "assembled index": "echo x >> ${{ github[format('{0}', 'env')] }}",
+            "whole context": "echo '${{ toJSON(github) }}'",
+            "filter": "echo '${{ github.* }}'",
+            "whole env context": "echo '${{ toJSON(env) }}'",
+            "env context name": "echo x >> ${{ env.GITHUB_ENV }}",
+            "state file": 'echo a=b >> "$GITHUB_STATE"',
+            "state property": "echo a=b >> ${{ github.state }}",
+            "output property": "echo a=b >> ${{ github.output }}",
+            "summary property": "echo a=b >> ${{ github.step_summary }}",
+            "output rewritten": 'echo a=b >> "${GITHUB_OUTPUT/OUTPUT/ENV}"',
+            "output reassigned": 'GITHUB_OUTPUT=$GITHUB_ENV; echo a=b >> "$GITHUB_OUTPUT"',
+            "output overwritten": 'echo a=b > "$GITHUB_OUTPUT"',
+            "output suffix": 'echo a=b >> "$GITHUB_OUTPUTX"',
+            "lower-case output": 'echo a=b >> "$github_output"',
+            "pwsh output other param": "Set-Content -Path $env:GITHUB_OUTPUT a=b",
+            "legacy save-state": 'echo "::save-state name=a::b"',
+            "legacy set-output": 'echo "::set-output name=a::b"',
+            "state command file": "echo a >> /x/_temp/_runner_file_commands/save_state_1",
+        }
+        for name, run in cases.items():
+            with self.subTest(name):
+                self.ci(f"steps:\n  - name: W\n    run: {run!r}\n")
+                self.assertRefused("step 'W' run:", "written only")
+
+    def test_runner_file_spelling_in_if_is_refused(self) -> None:
+        for cond in ("github.env != ''", "${{ github.path }}", "GITHUB['ENV']", "toJSON(github)"):
+            with self.subTest(cond=cond):
+                self.ci(f"steps:\n  - name: W\n    if: {cond!r}\n    run: x\n")
+                self.assertRefused("step 'W' if:", "written only")
+
+    def test_runner_file_spelling_in_any_string_scalar_is_refused(self) -> None:
+        for name, body, needle in (
+            ("step name", "steps:\n  - name: '${{ github.env }}'\n    run: x\n", "name:"),
+            ("nested with", f"steps:\n  - uses: a/b@{_PINNED_SHA}\n    with:\n      c: ${{{{ github.path }}}}\n",
+             "with.c"),
+            ("with key", f"steps:\n  - uses: a/b@{_PINNED_SHA}\n    with:\n      GITHUB_ENV: x\n", "with.GITHUB_ENV"),
+            ("step env key", "steps:\n  - env:\n      GITHUB_OUTPUT: /x\n    run: x\n", "env.GITHUB_OUTPUT"),
+            ("step env value", "steps:\n  - env:\n      A: ${{ github.env }}\n    run: x\n", "env.A"),
+            ("job matrix", "strategy:\n  matrix:\n    f: ['${{ github.env }}']\nsteps:\n  - run: x\n",
+             "strategy.matrix.f[0]"),
+            ("job env key", "env:\n  GITHUB_PATH: /x\nsteps:\n  - run: x\n", "env.GITHUB_PATH"),
+            ("job if", "if: github.env\nsteps:\n  - run: x\n", "if:"),
+        ):
+            with self.subTest(name):
+                self.ci(body)
+                self.assertRefused(needle, "written only")
+
+    def test_runner_file_spelling_at_workflow_level_is_refused(self) -> None:
+        self.fx.workflow(
+            "ci.yml",
+            "name: ci\non:\n  workflow_dispatch:\n    inputs:\n      t:\n        default: '${{ github.env }}'\n"
+            "jobs:\n  clippy:\n    runs-on: ubuntu-latest\n    steps:\n      - run: x\n",
+        )
+        self.assertRefused("ci.yml: workflow-level", "written only")
+        self.ci("steps:\n  - run: x\n", top="env:\n  GITHUB_ENV: /x\n")
+        self.assertRefused("ci.yml: workflow-level", "env.GITHUB_ENV", "written only")
+
+    def test_runner_file_spelling_in_local_action_metadata_is_refused(self) -> None:
+        self.fx.composite(
+            "w",
+            "inputs:\n  t:\n    default: '${{ github.env }}'\n"
+            "runs:\n  using: composite\n  steps:\n    - shell: bash\n      run: echo ok\n",
+        )
+        self.ci("steps:\n  - uses: ./.github/actions/w\n")
+        self.assertRefused("./.github/actions/w/action.yml", "inputs.t.default", "written only")
+
+    def test_helper_call_outside_a_step_run_is_refused(self) -> None:
+        call = f"{_HELPER_CALL} CI_JOB_BIN_NAME x"
+        for name, body in (
+            ("with", f"steps:\n  - uses: a/b@{_PINNED_SHA}\n    with:\n      c: {call!r}\n"),
+            ("step env", f"steps:\n  - env:\n      A: {call!r}\n    run: x\n"),
+            ("job env", f"env:\n  A: {call!r}\nsteps:\n  - run: x\n"),
+            ("step name", f"steps:\n  - name: {call!r}\n    run: x\n"),
+        ):
+            with self.subTest(name):
+                self.ci(body)
+                self.assertRefused("outside its one canonical call")
+
+    def test_sanctioned_runner_file_and_context_uses_pass(self) -> None:
+        self.ci(
+            "steps:\n"
+            "  - name: A\n    run: echo \"a=b\" >> \"$GITHUB_OUTPUT\"\n"
+            "  - name: B\n    run: echo x >> \"${GITHUB_STEP_SUMMARY}\"\n"
+            "  - name: C\n    run: echo x >> $GITHUB_STEP_SUMMARY\n"
+            "  - name: D\n    shell: pwsh\n    run: '\"a=b\" | Out-File -FilePath $env:GITHUB_OUTPUT -Append'\n"
+            "  - name: E\n    run: cd \"${{ github.workspace }}\" && echo \"${{ env.CI_JOB_BIN_NAME }}\"\n"
+            "  - name: F\n    if: github.actor != 'github-actions' && github.event_name != 'env'\n    run: x\n"
+            "  - name: G\n    run: ls \"$GITHUB_WORKSPACE\" \"${GITHUB_WORKSPACE}/x\"\n"
+        )
+        self.assertEqual(self.fx.errors(), [])
+
+    def test_github_workspace_write_is_refused(self) -> None:
+        for name, body in (
+            ("assignment", "steps:\n  - name: W\n    run: GITHUB_WORKSPACE=/x\n"),
+            ("reference assignment", "steps:\n  - name: W\n    run: '$GITHUB_WORKSPACE=/x'\n"),
+            ("export", "steps:\n  - name: W\n    run: export GITHUB_WORKSPACE\n"),
+            ("default expansion", "steps:\n  - name: W\n    run: 'echo ${GITHUB_WORKSPACE:=/x}'\n"),
+            ("lower case", "steps:\n  - name: W\n    run: github_workspace=/x\n"),
+            ("pwsh", "steps:\n  - name: W\n    shell: pwsh\n    run: \"$env:GITHUB_WORKSPACE = 'x'\"\n"),
+            ("step env key", "steps:\n  - name: W\n    env:\n      GITHUB_WORKSPACE: /x\n    run: x\n"),
+            ("job env key", "env:\n  GITHUB_WORKSPACE: /x\nsteps:\n  - name: W\n    run: x\n"),
+        ):
+            with self.subTest(name):
+                self.ci(body)
+                self.assertRefused("other than as a plain read")
+
+    def test_string_scalar_nesting_past_the_limit_is_refused(self) -> None:
+        errors: list[str] = []
+        deep: object = "x"
+        for _ in range(verify_manifest.STRING_SCALAR_DEPTH_LIMIT + 1):
+            deep = [deep]
+        verify_manifest._string_scalars({"k": deep}, "loc", errors)
+        self.assertTrue(any("nests deeper than" in e for e in errors), errors)
+        errors.clear()
+        shallow: object = "x"
+        for _ in range(verify_manifest.STRING_SCALAR_DEPTH_LIMIT - 2):
+            shallow = [shallow]
+        self.assertIn(("k" + "[0]" * (verify_manifest.STRING_SCALAR_DEPTH_LIMIT - 2), "x", False),
+                      verify_manifest._string_scalars({"k": shallow}, "loc", errors))
+        self.assertEqual(errors, [])
+
     # ---- the helper: one canonical call, bare allowlisted key ------------
 
     def test_canonical_helper_call_with_allowlisted_key_passes(self) -> None:
-        self.ci(f"steps:\n  - name: W\n    run: 'X=ipe; {_HELPER_CALL} BIN_NAME \"$X\"'\n")
+        self.ci(f"steps:\n  - name: W\n    run: 'X=ipe; {_HELPER_CALL} CI_JOB_BIN_NAME \"$X\"'\n")
         self.assertEqual(self.fx.errors(), [])
 
     def test_helper_call_with_non_allowlisted_key_is_refused(self) -> None:
@@ -1316,14 +1447,14 @@ class TestPinnedInputsAndEnvFileWrites(unittest.TestCase):
 
     def test_helper_call_outside_canonical_form_is_refused(self) -> None:
         for name, run in {
-            "variable key": f'W=BIN_NAME; {_HELPER_CALL} "$W" x',
-            "quoted key": f'{_HELPER_CALL} "BIN_NAME" x',
-            "concatenated key": f"{_HELPER_CALL} BIN_\"\"NAME x",
-            "relative path": "bash .github/ci/github-env.sh BIN_NAME x",
-            "sourced": 'source "$GITHUB_WORKSPACE/.github/ci/github-env.sh" BIN_NAME x',
-            "other interpreter": 'sh "$GITHUB_WORKSPACE/.github/ci/github-env.sh" BIN_NAME x',
+            "variable key": f'W=CI_JOB_BIN_NAME; {_HELPER_CALL} "$W" x',
+            "quoted key": f'{_HELPER_CALL} "CI_JOB_BIN_NAME" x',
+            "concatenated key": f"{_HELPER_CALL} CI_JOB_BIN_\"\"NAME x",
+            "relative path": "bash .github/ci/github-env.sh CI_JOB_BIN_NAME x",
+            "sourced": 'source "$GITHUB_WORKSPACE/.github/ci/github-env.sh" CI_JOB_BIN_NAME x',
+            "other interpreter": 'sh "$GITHUB_WORKSPACE/.github/ci/github-env.sh" CI_JOB_BIN_NAME x',
             "copied helper": 'cp .github/ci/github-env.sh /tmp/w.sh',
-            "no value": f"{_HELPER_CALL} BIN_NAME ",
+            "no value": f"{_HELPER_CALL} CI_JOB_BIN_NAME ",
         }.items():
             with self.subTest(name):
                 self.ci(f"steps:\n  - name: W\n    run: {run!r}\n")
@@ -1335,20 +1466,27 @@ class TestPinnedInputsAndEnvFileWrites(unittest.TestCase):
         for key in ("PATH", "RUSTC_WRAPPER", "SCCACHE_DIR", "LD_PRELOAD", "BASH_ENV", "NODE_OPTIONS",
                     "GITHUB_TOKEN", "RUNNER_TEMP", "CARGO_HOME", "lower_case", "A-B"):
             with self.subTest(key=key):
-                self.allowlist(f"# header\nBIN_NAME\n{key}\n")
+                self.allowlist(f"# header\nCI_JOB_BIN_NAME\n{key}\n")
                 self.ci("steps:\n  - run: cargo build\n")
                 self.assertRefused("github-env-allowlist.txt:3:", repr(key))
 
+    def test_allowlist_refuses_keys_outside_the_job_shape(self) -> None:
+        for key in ("BIN_NAME", "CI_JOB_", "CI_JOB_lower", "ci_job_x", "CI_JOBX", "X_CI_JOB_Y", "CI_JOB_A-B"):
+            with self.subTest(key=key):
+                self.allowlist(f"CI_JOB_BIN_NAME\n{key}\n")
+                self.ci("steps:\n  - run: cargo build\n")
+                self.assertRefused("github-env-allowlist.txt:2:", repr(key))
+
     def test_allowlist_duplicate_key_is_refused(self) -> None:
-        self.allowlist("BIN_NAME\nBIN_NAME\n")
+        self.allowlist("CI_JOB_BIN_NAME\nCI_JOB_BIN_NAME\n")
         self.ci("steps:\n  - run: cargo build\n")
         self.assertRefused("github-env-allowlist.txt:2:", "listed twice")
 
     def test_missing_allowlist_fails_closed(self) -> None:
         os.remove(os.path.join(self.fx.root, "ci", "github-env-allowlist.txt"))
-        self.ci(f"steps:\n  - name: W\n    run: '{_HELPER_CALL} BIN_NAME x'\n")
+        self.ci(f"steps:\n  - name: W\n    run: '{_HELPER_CALL} CI_JOB_BIN_NAME x'\n")
         errors = self.assertRefused("github-env-allowlist.txt", "cannot be read")
-        self.assertTrue(any("'BIN_NAME'" in e and "not in" in e for e in errors), errors)
+        self.assertTrue(any("'CI_JOB_BIN_NAME'" in e and "not in" in e for e in errors), errors)
 
     # ---- `uses:` pinned by content ---------------------------------------
 
@@ -1439,10 +1577,42 @@ class TestPinnedInputsAndEnvFileWrites(unittest.TestCase):
         self.ci("steps:\n  - name: P\n    run: |\n      pip \\\n        install pyyaml\n")
         self.assertRefused("step 'P' run:", "outside the hash-checked shape")
 
+    def test_pip_install_outside_the_one_requirements_file_is_refused(self) -> None:
+        base = "pip install --require-hashes --only-binary :all:"
+        for name, (run, needle) in {
+            "same file twice": (f"{base} -r {_REQS} -r {_REQS}", "2 times, not exactly once"),
+            "second file": (f"{base} -r {_REQS} -r other.txt", "'other.txt' is not"),
+            "other file": (f"{base} -r r.txt", "'r.txt' is not"),
+            "relative canonical file": (f"{base} -r .github/ci/requirements.txt", "is not"),
+            "bare package": (f"{base} -r {_REQS} pyyaml", "'pyyaml' is outside"),
+            "editable": (f"{base} -r {_REQS} -e .", "'-e' is outside"),
+            "url": (f"{base} -r {_REQS} https://x/p.whl", "'https://x/p.whl' is outside"),
+            "url requirements": (f"{base} -r https://x/r.txt", "'https://x/r.txt' is not"),
+            "no requirements": (base, "lacks"),
+        }.items():
+            with self.subTest(name):
+                self.ci(f"steps:\n  - name: P\n    run: {run!r}\n")
+                self.assertRefused("step 'P' run:", needle)
+
+    def test_every_pip_spelling_is_seen(self) -> None:
+        for run in (
+            "python3 -m pip install pyyaml",
+            "python3 -mpip install pyyaml",
+            f"python3 -mpip install --require-hashes --only-binary :all: -r {_REQS}",
+            "python3 -m  pip install pyyaml",
+            "pip3.12 install pyyaml",
+            "pipx run pyyaml",
+            "easy_install pyyaml",
+            "EASY_INSTALL pyyaml",
+        ):
+            with self.subTest(run=run):
+                self.ci(f"steps:\n  - name: P\n    run: {run!r}\n")
+                self.assertRefused("step 'P' run:")
+
     def test_canonical_hashed_pip_install_passes(self) -> None:
         for run in (
-            "python3 -m pip install --quiet --require-hashes --only-binary :all: -r .github/ci/requirements.txt",
-            "pip install --only-binary=:all: --require-hashes --requirement r.txt",
+            f"python3 -m pip install --quiet --require-hashes --only-binary :all: -r {_REQS}",
+            f"pip install --only-binary=:all: --require-hashes --requirement {_REQS}",
             "pip --version",
         ):
             with self.subTest(run=run):
@@ -1472,19 +1642,22 @@ class TestGithubEnvHelper(unittest.TestCase):
             return f.read()
 
     def test_allowlisted_key_is_written(self) -> None:
-        self.assertEqual(self.run_helper("BIN_NAME", "ipe"), 0)
-        self.assertEqual(self.written(), "BIN_NAME=ipe\n")
+        self.assertEqual(self.run_helper("CI_JOB_BIN_NAME", "ipe"), 0)
+        self.assertEqual(self.written(), "CI_JOB_BIN_NAME=ipe\n")
 
     def test_refusals_write_nothing(self) -> None:
         for args in (
             ("OTHER_KEY", "x"),
+            ("CI_JOB_OTHER", "x"),
+            ("CI_JOB_", "x"),
             ("RUSTC_WRAPPER", "sccache"),
-            ("bin_name", "x"),
+            ("ci_job_bin_name", "x"),
+            ("BIN_NAME", "x"),
             ("# Keys", "x"),
-            ("BIN_NAME", "ipe\nRUSTC_WRAPPER=evil"),
-            ("BIN_NAME", "ipe\r"),
-            ("BIN_NAME",),
-            ("BIN_NAME", "a", "b"),
+            ("CI_JOB_BIN_NAME", "ipe\nRUSTC_WRAPPER=evil"),
+            ("CI_JOB_BIN_NAME", "ipe\r"),
+            ("CI_JOB_BIN_NAME",),
+            ("CI_JOB_BIN_NAME", "a", "b"),
         ):
             with self.subTest(args=args):
                 self.assertNotEqual(self.run_helper(*args), 0)

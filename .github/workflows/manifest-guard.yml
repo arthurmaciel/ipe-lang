@@ -34,7 +34,7 @@ jobs:
           python-version: "3.13"
 
       - name: Install PyYAML
-        run: 'python3 -m pip install --quiet --require-hashes --only-binary :all: -r .github/ci/requirements.txt'
+        run: 'python3 -m pip install --quiet --require-hashes --only-binary :all: -r "$GITHUB_WORKSPACE/.github/ci/requirements.txt"'
 
       - name: Every produced check has exactly one declared disposition
         run: python3 .github/ci/verify-manifest.py
