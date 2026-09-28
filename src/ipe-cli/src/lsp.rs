@@ -13,7 +13,7 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use ipe_lsp_server::{LoadError, LoadedFile, LoadedProject, ProjectLoader};
+use ipe_lsp_server::{LimitSource, LoadError, LoadedFile, LoadedProject, ProjectLoader};
 
 use crate::loose_file::{LooseFileLimits, ProjectRoot, resolve_loose_file};
 use crate::{CliError, project, text, watch};
@@ -56,19 +56,32 @@ fn resolve_user_sources(
     }
 }
 
+/// What can lift a limit hit while resolving the user modules of `root`.
+///
+/// A loose file's closure is walked from the open buffer, so an edit that
+/// drops an import can bring it back under its limits; a package's layout
+/// comes from disk alone, so no edit to the buffer changes it.
+const fn user_sources_limit(root: &ProjectRoot) -> LimitSource {
+    match root {
+        ProjectRoot::Package(_) => LimitSource::Filesystem,
+        ProjectRoot::LooseFile(_) => LimitSource::Buffer,
+    }
+}
+
 /// Type a driver failure as the server's load error, keeping its rendered text.
 ///
 /// The match names every [`CliError`] variant with no fallback arm, so a new
 /// variant cannot reach the editor until someone decides whether it degrades
-/// the load (single-file fallback, retried per edit) or refuses it.
-fn load_error(err: &CliError) -> LoadError {
+/// the load (single-file fallback, retried per edit) or refuses it. A limit
+/// carries `lifted_by`, what the failing step counted.
+fn load_error(err: &CliError, lifted_by: LimitSource) -> LoadError {
     use crate::owner_trust::TrustSubject;
     let detail = err.to_string();
     match err {
         CliError::Io { .. } => LoadError::Io(detail),
         CliError::SourceRefused { .. } => LoadError::Refused(detail),
         CliError::FileTooLarge { .. } | CliError::DiscoveryLimitReached { .. } => {
-            LoadError::Limit(detail)
+            LoadError::Limit { lifted_by, detail }
         }
         CliError::TrustRefused(refusal) => match refusal.subject() {
             TrustSubject::Ffi => LoadError::FfiUntrusted(detail),
@@ -131,20 +144,22 @@ impl ProjectLoader for DriverLoader {
         open_file: &Path,
         open_text: Option<&str>,
     ) -> Result<LoadedProject, LoadError> {
-        let root = ProjectRoot::of(workspace_root, open_file).map_err(|e| load_error(&e))?;
+        let root = ProjectRoot::of(workspace_root, open_file)
+            .map_err(|e| load_error(&e, LimitSource::Filesystem))?;
         let UserSources {
             mut sources,
             mut discovered,
             entry_module,
             blame_path,
-        } = resolve_user_sources(&root, open_text).map_err(|e| load_error(&e))?;
+        } = resolve_user_sources(&root, open_text)
+            .map_err(|e| load_error(&e, user_sources_limit(&root)))?;
         let injected = project::inject_compiled_std_closure(&mut sources, &mut discovered);
         // Load the FFI catalog and inject installed-crate interface modules so
         // the LSP sees `Rust.<Crate>` bindings exactly as `ipe build` does. A
         // missing/empty catalog is fine (no crates installed); a tampered
         // cache is surfaced as a `LoadError`.
         let ffi_injected = crate::ffi::prepare_ffi(&mut sources, &blame_path)
-            .map_err(|e| load_error(&e))?
+            .map_err(|e| load_error(&e, LimitSource::Filesystem))?
             .injected;
         let files = sources
             .into_iter()
@@ -245,19 +260,23 @@ mod tests {
         let too_deep = CliError::DiscoveryLimitReached {
             detail: "64".to_owned(),
         };
-        assert_eq!(load_error(&io), LoadError::Io(io.to_string()));
+        let filesystem = LimitSource::Filesystem;
+        assert_eq!(load_error(&io, filesystem), LoadError::Io(io.to_string()));
         assert_eq!(
-            load_error(&refused),
+            load_error(&refused, filesystem),
             LoadError::Refused(refused.to_string())
         );
-        assert_eq!(
-            load_error(&too_large),
-            LoadError::Limit(too_large.to_string())
-        );
-        assert_eq!(
-            load_error(&too_deep),
-            LoadError::Limit(too_deep.to_string())
-        );
+        for lifted_by in [LimitSource::Buffer, LimitSource::Filesystem] {
+            for limit in [&too_large, &too_deep] {
+                assert_eq!(
+                    load_error(limit, lifted_by),
+                    LoadError::Limit {
+                        lifted_by,
+                        detail: limit.to_string()
+                    }
+                );
+            }
+        }
         for pipeline in [
             CliError::Usage(text::msg::lsp_takes_no_arguments()),
             CliError::RuntimeNotFound,
@@ -265,7 +284,7 @@ mod tests {
             CliError::LintGateFailed,
         ] {
             assert_eq!(
-                load_error(&pipeline),
+                load_error(&pipeline, filesystem),
                 LoadError::Pipeline(pipeline.to_string()),
                 "{pipeline:?}"
             );
@@ -288,7 +307,7 @@ mod tests {
             } else {
                 LoadError::FfiUntrusted(detail)
             };
-            let got = load_error(&err);
+            let got = load_error(&err, LimitSource::Filesystem);
             assert_eq!(got, expected, "{err:?}");
             assert_eq!(
                 got.disposition(),
@@ -305,10 +324,43 @@ mod tests {
                 path: PathBuf::from("/p/Pipe.ipe"),
                 reason,
             };
-            let got = load_error(&err);
+            let got = load_error(&err, LimitSource::Filesystem);
             assert!(matches!(got, LoadError::Refused(_)), "{got:?}");
             assert_eq!(got.disposition(), ipe_lsp_server::LoadDisposition::Degrade);
         }
+    }
+
+    /// A loose file's limits count its open buffer, so the load degrades and an edit lifts it.
+    #[test]
+    #[allow(clippy::expect_used)] // test fixture: a failed write IS the failure
+    fn a_loose_file_closure_limit_degrades_and_an_edit_lifts_it() {
+        let dir = scratch_dir("closure-limit");
+        let main = dir.join("Main.ipe");
+        let small = "module Main exposing (main)\n\nmain = 0\n";
+        fs::write(&main, small).expect("write Main.ipe");
+        let imports: String = (0..=crate::loose_file::MAX_LOOSE_FILE_PROBES)
+            .map(|index| format!("import M{index}\n"))
+            .collect();
+        let oversized = format!("module Main exposing (main)\n\n{imports}\nmain = 0\n");
+        let over = DriverLoader.load(None, &main, Some(&oversized));
+        let under = DriverLoader.load(None, &main, Some(small));
+        let _ = fs::remove_dir_all(&dir);
+        let err = over.err();
+        assert!(
+            matches!(
+                err,
+                Some(LoadError::Limit {
+                    lifted_by: LimitSource::Buffer,
+                    ..
+                })
+            ),
+            "{err:?}"
+        );
+        assert_eq!(
+            err.as_ref().map(LoadError::disposition),
+            Some(ipe_lsp_server::LoadDisposition::Degrade)
+        );
+        assert!(under.is_ok(), "{:?}", under.err());
     }
 
     /// Make every component of `root/rel` a directory only its owner may write.

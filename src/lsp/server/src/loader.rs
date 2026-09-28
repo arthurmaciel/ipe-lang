@@ -52,22 +52,42 @@ pub enum LoadError {
     /// can fix or stop importing, so the server degrades around it.
     Refused(String),
     /// A bounded read or walk hit its ceiling.
-    Limit(String),
+    Limit {
+        /// What the ceiling counted, and so what can bring the load back under it.
+        lifted_by: LimitSource,
+        /// The driver's rendered detail.
+        detail: String,
+    },
     /// The FFI artifact cache failed its trust check.
     FfiUntrusted(String),
     /// The discovered package manifest failed its trust check.
     ManifestUntrusted(String),
 }
 
+/// What a load ceiling counted, which decides whether an edit can lift it.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum LimitSource {
+    /// The ceiling counted the open buffer (a loose file's import closure).
+    ///
+    /// Editing the buffer (dropping imports, shrinking it) can bring the
+    /// load back under the ceiling.
+    Buffer,
+    /// The ceiling counted the filesystem alone (the manifest walk, a package's tree).
+    ///
+    /// No edit to the buffer changes what the ceiling counted.
+    Filesystem,
+}
+
 /// How the server answers a [`LoadError`].
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum LoadDisposition {
-    /// Serve the open buffer as a single-file layout and retry on the next edit.
+    /// Serve the open buffer as a single-file fallback layout.
     Degrade,
-    /// Serve no fallback layout and never retry per keystroke.
+    /// Serve no fallback layout; only a layout from an earlier trusted load stays.
     ///
-    /// Editing the buffer cannot lift a ceiling or restore trust, so a
-    /// per-keystroke retry would only re-run the refused load.
+    /// The failure is one no edit to the buffer can lift (a filesystem
+    /// ceiling, a trust refusal), so a fallback would show analysis the
+    /// compiler refuses to give.
     Refuse,
 }
 
@@ -76,10 +96,19 @@ impl LoadError {
     #[must_use]
     pub const fn disposition(&self) -> LoadDisposition {
         match self {
-            Self::Pipeline(_) | Self::Io(_) | Self::Refused(_) => LoadDisposition::Degrade,
-            Self::Limit(_) | Self::FfiUntrusted(_) | Self::ManifestUntrusted(_) => {
-                LoadDisposition::Refuse
+            Self::Pipeline(_)
+            | Self::Io(_)
+            | Self::Refused(_)
+            | Self::Limit {
+                lifted_by: LimitSource::Buffer,
+                ..
+            } => LoadDisposition::Degrade,
+            Self::Limit {
+                lifted_by: LimitSource::Filesystem,
+                ..
             }
+            | Self::FfiUntrusted(_)
+            | Self::ManifestUntrusted(_) => LoadDisposition::Refuse,
         }
     }
 }
@@ -90,7 +119,7 @@ impl fmt::Display for LoadError {
             Self::Pipeline(detail)
             | Self::Io(detail)
             | Self::Refused(detail)
-            | Self::Limit(detail)
+            | Self::Limit { detail, .. }
             | Self::FfiUntrusted(detail)
             | Self::ManifestUntrusted(detail) => f.write_str(detail),
         }
