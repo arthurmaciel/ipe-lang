@@ -4127,6 +4127,11 @@ mod tests {
         };
         let before = before.expect("loose file resolves");
         let after = after.expect("loose file re-resolves");
+        assert_eq!(
+            after_scope.file_count(),
+            after.sources.len(),
+            "the watch count is the build's read set"
+        );
         assert_eq!(modules(&before), vec![vec!["Main".to_owned()]]);
         assert_eq!(
             modules(&after),

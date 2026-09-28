@@ -527,7 +527,10 @@ trait WalkDir: Sized {
 /// segment or the file is absent, a segment is not a directory (also when
 /// it stops being one between its lookup and its open), or a name is found
 /// only because the filesystem ignores case (a case-sensitive one would not
-/// find it either).
+/// find it either). A `Symlink` or `NotRegular` kind is refused as soon as
+/// it is decided, before the spelling check runs — conservative on a
+/// case-insensitive filesystem, where a wrongly-spelled symlink or FIFO is
+/// still refused rather than passed through as absent.
 ///
 /// # Errors
 /// [`CliError::SourceRefused`], naming `probed`, with
@@ -1634,6 +1637,64 @@ mod tests {
         assert!(
             is_refused(&loaded, io_bounded::SourceRefusal::AccessDenied),
             "a sibling read from an exec-only directory is refused as access denied"
+        );
+    }
+
+    /// An entry in an exec-only directory whose only import names a stdlib
+    /// module loads through the by-path fallback.
+    ///
+    /// No sibling file exists to probe, so the walk's `unopened` branch
+    /// finds nothing at the import's first segment and leaves it to the
+    /// compiler — the unopened directory handle is never a refusal. Skipped
+    /// when running as root.
+    #[cfg(unix)]
+    #[test]
+    #[allow(clippy::expect_used)] // test fixture setup, and a load failure, are both the regression under test
+    fn entry_in_an_exec_only_directory_with_only_stdlib_imports_loads() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let dir = scratch_dir("exec-only-stdlib-entry");
+        let entry = dir.join("Main.ipe");
+        write(
+            &entry,
+            "module Main exposing (main)\n\nimport Ipe.Io as Io\n\nmain = Io.println \"hi\"\n",
+        );
+        fs::set_permissions(&dir, fs::Permissions::from_mode(0o311)).expect("drop the read bit");
+        let privileged = fs::read_dir(&dir).is_ok();
+        let loaded = resolve_loose_file(&entry, None, LooseFileLimits::DEFAULT);
+        let _ = fs::set_permissions(&dir, fs::Permissions::from_mode(0o755));
+        let _ = fs::remove_dir_all(&dir);
+        if privileged {
+            return;
+        }
+        let loaded = loaded.expect("the entry loads by path, its only import unresolved on disk");
+        assert_eq!(user_modules(&loaded), vec![module(&["Main"])]);
+    }
+
+    /// A FIFO entry in an exec-only directory is refused before the by-path
+    /// fallback ever opens it.
+    ///
+    /// `read_user_named`'s own regular-file check runs on a `stat`, which
+    /// needs only the exec bit on the directory to reach the entry by name.
+    /// Skipped when running as root.
+    #[cfg(unix)]
+    #[test]
+    #[allow(clippy::expect_used)] // test fixture: an unchangeable mode IS the failure
+    fn fifo_entry_in_an_exec_only_directory_is_refused_as_not_regular_file() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let dir = scratch_dir("exec-only-fifo-entry");
+        let entry = dir.join("Main.ipe");
+        make_fifo(&entry);
+        fs::set_permissions(&dir, fs::Permissions::from_mode(0o311)).expect("drop the read bit");
+        let privileged = fs::read_dir(&dir).is_ok();
+        let loaded = resolve_loose_file(&entry, None, LooseFileLimits::DEFAULT);
+        let _ = fs::set_permissions(&dir, fs::Permissions::from_mode(0o755));
+        let _ = fs::remove_dir_all(&dir);
+        if privileged {
+            return;
+        }
+        assert!(
+            is_refused(&loaded, io_bounded::SourceRefusal::NotRegularFile),
+            "a FIFO entry in an exec-only directory is refused as not a regular file"
         );
     }
 
