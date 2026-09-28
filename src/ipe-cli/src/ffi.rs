@@ -14,14 +14,14 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
-use ipe_ffi::driver::{CrateName, CrateSpec, FfiCache, InstalledCrate, VersionPin};
+use ipe_ffi::driver::{CargoDep, CrateName, CrateSpec, FfiCache, InstalledCrate, VersionPin};
 use ipe_ffi::pkginfo::FeatureName;
 
 use crate::CliError;
 use crate::text;
 
 /// The project-relative FFI cache directory.
-const CACHE_REL: &str = ".ipe/cache/ffi/rust";
+const CACHE_REL: &str = ipe_ffi::driver::FFI_CACHE_REL;
 
 /// The project manifest that bounds the upward cache-discovery walk.
 const PROJECT_MANIFEST: &str = "package.ipe";
@@ -142,9 +142,11 @@ pub fn inject_interfaces(
 /// the combined `src/ffi.rs` (one `pub mod <slug>` per crate).
 ///
 /// # Errors
-/// [`CliError::Usage`] when two installed crates pin the SAME
-/// dependency name to different lines — an unbuildable `Cargo.toml` refused
-/// here rather than discovered by `cargo`.
+/// [`CliError::Usage`] when two installed crates pin the SAME direct
+/// dependency to different versions, or bind one dependency name to two
+/// different sources (a registry pin and a wrapper path, or two wrapper
+/// paths) — an unbuildable `Cargo.toml` refused here rather than discovered by
+/// `cargo`.
 pub fn assemble_emit(
     catalog: &[InstalledCrate],
 ) -> Result<Option<ipe_backend_rust::FfiEmit>, CliError> {
@@ -170,7 +172,7 @@ pub fn assemble_emit(
     // resolves the transitive graph of the direct pins itself and legitimately links
     // both majors of a build-dep. Such a dep is dropped from the emitted `[dependencies]`
     // (recorded as unpinned) rather than exact-pinned to one arbitrary version.
-    let mut dep_by_name: BTreeMap<String, (String, BTreeSet<String>)> = BTreeMap::new();
+    let mut dep_by_name: BTreeMap<String, MergedDep> = BTreeMap::new();
     let mut unpinned_transitives: BTreeSet<String> = BTreeSet::new();
     let mut bindings_source = String::from(
         "//! Foreign-crate FFI wrappers — one module per installed crate.\n\
@@ -201,36 +203,13 @@ pub fn assemble_emit(
             }
             foreign_types.insert(key, format!("crate::ffi::{}::{name}", c.slug));
         }
-        for line in &c.cargo_deps {
-            let Some((name, version, features)) = parse_dep_line(line) else {
-                return Err(CliError::Usage(text::msg::ffi_dependency_line_unparsable(
-                    &c.slug, &line,
-                )));
-            };
-            if unpinned_transitives.contains(&name) {
-                continue;
-            }
-            match dep_by_name.get_mut(&name) {
-                Some((prev_version, _)) if *prev_version != version => {
-                    if direct_crate_names.contains(&name) {
-                        return Err(CliError::Usage(text::msg::ffi_dependency_pin_conflict(
-                            &name,
-                            &prev_version,
-                            &version,
-                        )));
-                    }
-                    // Transitive dep resolved to different versions in different member
-                    // jails — defer to Cargo's own transitive resolution.
-                    dep_by_name.remove(&name);
-                    unpinned_transitives.insert(name);
-                }
-                Some((_, prev_features)) => {
-                    prev_features.extend(features);
-                }
-                None => {
-                    dep_by_name.insert(name, (version, features));
-                }
-            }
+        for dep in &c.cargo_deps {
+            merge_cargo_dep(
+                dep,
+                &direct_crate_names,
+                &mut dep_by_name,
+                &mut unpinned_transitives,
+            )?;
         }
         // Writing into a String is infallible.
         let _ = write!(
@@ -241,8 +220,8 @@ pub fn assemble_emit(
         );
     }
     let dep_lines: Vec<String> = dep_by_name
-        .into_iter()
-        .map(|(name, (version, features))| render_merged_dep_line(&name, &version, &features))
+        .into_values()
+        .map(|merged| merged.into_cargo_dep().render())
         .collect();
     Ok(Some(ipe_backend_rust::FfiEmit {
         foreign_types,
@@ -267,7 +246,7 @@ fn assemble_wrapper_glue(
     wrapper_glue: &mut BTreeMap<String, ipe_backend_rust::FfiWrapperGlue>,
 ) -> Result<(), CliError> {
     for b in &c.bindings {
-        if b.transparent_params.iter().all(Option::is_none) && b.transparent_result.is_none() {
+        if b.transparent_params.is_none() && b.transparent_result.is_none() {
             continue;
         }
         let glue_ty = |name: &str| -> Result<ipe_backend_rust::FfiGlueType, CliError> {
@@ -280,8 +259,8 @@ fn assemble_wrapper_glue(
             })?;
             Ok(glue_type_of(&c.module_name, &c.slug, t))
         };
-        let mut params = Vec::with_capacity(b.transparent_params.len());
-        for p in &b.transparent_params {
+        let mut params = Vec::with_capacity(b.transparent_params.slots().len());
+        for p in b.transparent_params.slots() {
             params.push(match p {
                 None => None,
                 Some(name) => Some(glue_ty(name)?),
@@ -358,68 +337,126 @@ fn glue_type_of(
     }
 }
 
-/// Parse a generated dep line into `(name, version, features)`. Two shapes are
-/// produced by `cargo_dep_lines`:
-///   `name = "=X.Y.Z"`
-///   `name = { version = "=X.Y.Z", features = ["a", "b"] }`
-/// The version is returned WITHOUT the leading `=`. Returns `None` if neither
-/// shape matches (a malformed line the caller refuses).
-fn parse_dep_line(line: &str) -> Option<(String, String, BTreeSet<String>)> {
-    let (name, rest) = line.split_once('=')?;
-    let name = name.trim().to_owned();
-    let rest = rest.trim();
-    if let Some(inner) = rest.strip_prefix('{').and_then(|s| s.strip_suffix('}')) {
-        // Inline table: pull `version = "=X"` and `features = [...]`.
-        let version = extract_quoted_after(inner, "version")?
-            .trim_start_matches('=')
-            .to_owned();
-        let features = inner
-            .split_once("features")
-            .and_then(|(_, after)| after.split_once('['))
-            .and_then(|(_, list)| list.split_once(']'))
-            .map(|(list, _)| {
-                list.split(',')
-                    .map(|f| f.trim().trim_matches('"').to_owned())
-                    .filter(|f| !f.is_empty())
-                    .collect::<BTreeSet<String>>()
-            })
-            .unwrap_or_default();
-        Some((name, version, features))
-    } else {
-        // Bare: `"=X.Y.Z"`.
-        let version = rest
-            .trim()
-            .trim_matches('"')
-            .trim_start_matches('=')
-            .to_owned();
-        if version.is_empty() {
-            return None;
+/// The source one merged `[dependencies]` entry binds.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum MergedSource {
+    /// A registry crate pinned to one exact version.
+    Registry(ipe_ffi::pkginfo::CrateVersion),
+    /// A wrapper crate bound by its jailed directory.
+    Wrapper(ipe_ffi::pkginfo::JailedWrapperDir),
+}
+
+impl MergedSource {
+    /// The source as it appears in a conflict message.
+    fn describe(&self) -> String {
+        match self {
+            Self::Registry(version) => format!("version ={}", version.as_str()),
+            Self::Wrapper(dir) => format!("path {}", dir.as_str()),
         }
-        Some((name, version, BTreeSet::new()))
     }
 }
 
-/// Extract the first double-quoted string that follows `key` in `s`
-/// (`key = "value"` → `Some("value")`).
-fn extract_quoted_after(s: &str, key: &str) -> Option<String> {
-    let after = s.split_once(key)?.1;
-    let after = after.split_once('"')?.1;
-    let (value, _) = after.split_once('"')?;
-    Some(value.to_owned())
+/// One merged `[dependencies]` entry: its key, source, and the union of every
+/// member's requested features (Cargo unifies features additively).
+struct MergedDep {
+    name: ipe_ffi::pkginfo::PackageName,
+    source: MergedSource,
+    features: BTreeSet<FeatureName>,
 }
 
-/// Render the merged dep line, matching `render_dep_line`'s two shapes so the
-/// emitted `Cargo.toml` is byte-identical to the single-crate case when there
-/// are no extra features.
-fn render_merged_dep_line(name: &str, version: &str, features: &BTreeSet<String>) -> String {
-    if features.is_empty() {
-        format!("{name} = \"={version}\"")
-    } else {
-        let quoted: Vec<String> = features.iter().map(|f| format!("\"{f}\"")).collect();
-        format!(
-            "{name} = {{ version = \"={version}\", features = [{}] }}",
-            quoted.join(", ")
-        )
+impl MergedDep {
+    /// Split a typed entry into its merge parts.
+    fn of(dep: &CargoDep) -> Self {
+        let (source, features) = match dep {
+            CargoDep::Registry {
+                version, features, ..
+            } => (MergedSource::Registry(version.clone()), features),
+            CargoDep::Wrapper { dir, features } => (MergedSource::Wrapper(dir.clone()), features),
+        };
+        Self {
+            name: dep.name().clone(),
+            source,
+            features: features.iter().cloned().collect(),
+        }
+    }
+
+    /// The typed entry, features in sorted order, for the single renderer.
+    fn into_cargo_dep(self) -> CargoDep {
+        let features = self.features.into_iter().collect();
+        match self.source {
+            MergedSource::Registry(version) => CargoDep::Registry {
+                name: self.name,
+                version,
+                features,
+            },
+            MergedSource::Wrapper(dir) => CargoDep::Wrapper { dir, features },
+        }
+    }
+}
+
+/// Merge one member's typed dependency into the manifest-wide set.
+///
+/// Same source: features union. Two registry versions of a DIRECT FFI crate:
+/// refused. Two registry versions of a TRANSITIVE dep: dropped and recorded as
+/// unpinned, left to Cargo's own resolution. Any disagreement involving a
+/// wrapper path (a registry pin against a path, two different paths, or a path
+/// named like a dropped transitive): refused, since exactly one source can
+/// back a dependency key.
+///
+/// # Errors
+/// [`CliError::Usage`] on a direct version conflict or a source conflict.
+fn merge_cargo_dep(
+    dep: &CargoDep,
+    direct_crate_names: &BTreeSet<String>,
+    dep_by_name: &mut BTreeMap<String, MergedDep>,
+    unpinned_transitives: &mut BTreeSet<String>,
+) -> Result<(), CliError> {
+    let incoming = MergedDep::of(dep);
+    let key = incoming.name.as_str().to_owned();
+    if unpinned_transitives.contains(&key) {
+        return match incoming.source {
+            MergedSource::Registry(_) => Ok(()),
+            MergedSource::Wrapper(_) => {
+                Err(CliError::Usage(text::msg::ffi_dependency_source_conflict(
+                    &key,
+                    &"an unpinned registry dependency",
+                    &incoming.source.describe(),
+                )))
+            }
+        };
+    }
+    let Some(prev) = dep_by_name.get_mut(&key) else {
+        dep_by_name.insert(key, incoming);
+        return Ok(());
+    };
+    if prev.source == incoming.source {
+        prev.features.extend(incoming.features);
+        return Ok(());
+    }
+    match (&prev.source, &incoming.source) {
+        (MergedSource::Registry(a), MergedSource::Registry(b)) => {
+            if direct_crate_names.contains(&key) {
+                return Err(CliError::Usage(text::msg::ffi_dependency_pin_conflict(
+                    &key,
+                    &a.as_str(),
+                    &b.as_str(),
+                )));
+            }
+            // Transitive dep resolved to different versions in different member
+            // jails — defer to Cargo's own transitive resolution.
+            dep_by_name.remove(&key);
+            unpinned_transitives.insert(key);
+            Ok(())
+        }
+        (MergedSource::Wrapper(_), MergedSource::Wrapper(_))
+        | (MergedSource::Registry(_), MergedSource::Wrapper(_))
+        | (MergedSource::Wrapper(_), MergedSource::Registry(_)) => {
+            Err(CliError::Usage(text::msg::ffi_dependency_source_conflict(
+                &key,
+                &prev.source.describe(),
+                &incoming.source.describe(),
+            )))
+        }
     }
 }
 
@@ -1286,31 +1323,29 @@ fn install_wrapper(
     let manifest =
         ipe_ffi::wrapper::WrapperManifest::parse(&raw.path, &raw.expose, &raw.capabilities)
             .map_err(|diag| CliError::Usage(crate::text::Message::relay(&diag)))?;
-    // Resolve the package-jailed relative path to an absolute directory under
-    // the project root. Canonicalization also confirms the wrapper crate
-    // actually exists before any jailed build.
+    // Resolve the package-jailed relative path under the cache's project root
+    // through the SAME jail the build-time load re-proves: canonicalization
+    // resolves symlinks (so a checked-in symlink cannot lead out of the
+    // project), confirms the wrapper directory and its `Cargo.toml` exist
+    // before any jailed build, and reads the crate's `[package] name`.
     let rel = manifest.path().as_str();
-    let abs = std::fs::canonicalize(rel)
-        .map_err(|e| CliError::Usage(text::msg::ffi_install_wrapper_crate(&rel, &e)))?;
-    // The lexical `..`/absolute jail on the relative path is not enough:
-    // canonicalization resolves symlinks, so a checked-in symlink under the
-    // package could still point the resolved directory outside the project. Bind
-    // the resolved path back inside the project root — a wrapper that escapes it
-    // is refused before any jailed build.
-    let project_root = std::fs::canonicalize(".")
-        .map_err(|e| CliError::Usage(text::msg::ffi_install_project_root(&e)))?;
-    if !abs.starts_with(&project_root) {
-        return Err(CliError::Usage(
-            text::msg::ffi_install_wrapper_outside_root(&rel, &abs.display()),
-        ));
-    }
-    let abs_str = abs
-        .to_str()
-        .ok_or_else(|| CliError::Usage(text::msg::ffi_install_wrapper_not_utf8(&rel)))?
-        .to_owned();
-    // The wrapper crate's Cargo package name is the inspection slug. Derive it
-    // from the directory name, gated through the crate-name charset.
-    let krate = CrateName::parse(abs.file_name().and_then(|n| n.to_str()).unwrap_or(rel))
+    let relay =
+        |diag: &ipe_ffi::diag::Diagnostic| CliError::Usage(crate::text::Message::relay(diag));
+    let project_root = cache.project_root().map_err(|diag| relay(&diag))?;
+    let jailed = ipe_ffi::pkginfo::WrapperCratePath::parse(rel)
+        .and_then(|path| path.jail(project_root))
+        .map_err(|defect| {
+            relay(&ipe_ffi::diag::Diagnostic::WireMalformed {
+                context: format!("wrapper crate `{rel}`"),
+                defect,
+            })
+        })?;
+    let abs_str = jailed.as_str().to_owned();
+    let abs = PathBuf::from(&abs_str);
+    // The inspection slug is the `[package] name` the jail read from the
+    // wrapper's own `Cargo.toml`, so the installed package name, the
+    // dependency key, and the crate cargo finds at the path are one name.
+    let krate = CrateName::parse(jailed.package().as_str())
         .map_err(|diag| CliError::Usage(crate::text::Message::relay(&diag)))?;
 
     // The capability gate runs BEFORE the trust prompt and any jailed compile: a
@@ -4010,7 +4045,7 @@ version = \"1\"
             dep_versions: BTreeMap::new(),
             inspected_free_fns: BTreeMap::new(),
             inspected_consts: BTreeMap::new(),
-            cargo_deps: vec![line.to_owned()],
+            cargo_deps: vec![CargoDep::parse_registry_line(line).expect("registry line")],
             wrapper_idents: BTreeSet::new(),
         };
         // Two crates agreeing on a shared dep line dedupe to one.
@@ -4045,7 +4080,7 @@ version = \"1\"
             dep_versions: BTreeMap::new(),
             inspected_free_fns: BTreeMap::new(),
             inspected_consts: BTreeMap::new(),
-            cargo_deps: vec![line.to_owned()],
+            cargo_deps: vec![CargoDep::parse_registry_line(line).expect("registry line")],
             wrapper_idents: BTreeSet::new(),
         };
         let e = assemble_emit(&[
@@ -4087,7 +4122,10 @@ version = \"1\"
             dep_versions: BTreeMap::new(),
             inspected_free_fns: BTreeMap::new(),
             inspected_consts: BTreeMap::new(),
-            cargo_deps: lines.into_iter().map(str::to_owned).collect(),
+            cargo_deps: lines
+                .into_iter()
+                .map(|line| CargoDep::parse_registry_line(line).expect("registry line"))
+                .collect(),
             wrapper_idents: BTreeSet::new(),
         };
         let e = assemble_emit(&[
@@ -4115,6 +4153,170 @@ version = \"1\"
         assert!(
             clash.is_err(),
             "a direct-crate version conflict still refuses"
+        );
+    }
+
+    /// A bare installed crate carrying only the given typed dependencies.
+    fn crate_with_deps(slug: &str, cargo_deps: Vec<CargoDep>) -> InstalledCrate {
+        InstalledCrate {
+            slug: slug.to_owned(),
+            module_name: format!("Rust.{slug}"),
+            kernel_name: format!("Rust_{slug}"),
+            interface_source: String::new(),
+            bindings_source: String::new(),
+            opaque_types: BTreeMap::new(),
+            opaque_type_ids: BTreeMap::new(),
+            define_types: BTreeSet::new(),
+            transparent_types: BTreeMap::new(),
+            bindings: Vec::new(),
+            dep_versions: BTreeMap::new(),
+            inspected_free_fns: BTreeMap::new(),
+            inspected_consts: BTreeMap::new(),
+            cargo_deps,
+            wrapper_idents: BTreeSet::new(),
+        }
+    }
+
+    /// A scratch project with `wrappers/<name>` crates all named `engine_wrap`,
+    /// jailed into typed wrapper entries; returns the project root and the entries.
+    fn jailed_wrappers(tag: &str, dirs: &[&str]) -> (PathBuf, Vec<CargoDep>) {
+        let project =
+            std::env::temp_dir().join(format!("ipe-cli-wrap-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&project);
+        let deps = dirs
+            .iter()
+            .map(|dir| {
+                let rel = format!("wrappers/{dir}");
+                std::fs::create_dir_all(project.join(&rel)).expect("scratch wrapper dir");
+                std::fs::write(
+                    project.join(&rel).join("Cargo.toml"),
+                    "[package]\nname = \"engine_wrap\"\nversion = \"0.1.0\"\n",
+                )
+                .expect("scratch wrapper manifest");
+                let jailed = ipe_ffi::pkginfo::WrapperCratePath::parse(&rel)
+                    .and_then(|path| path.jail(&project))
+                    .expect("jails inside the scratch root");
+                CargoDep::Wrapper {
+                    dir: jailed,
+                    features: Vec::new(),
+                }
+            })
+            .collect();
+        (project, deps)
+    }
+
+    /// The source description a wrapper entry carries in a conflict message.
+    fn wrapper_source(deps: &[CargoDep], at: usize) -> String {
+        let Some(CargoDep::Wrapper { dir, .. }) = deps.get(at) else {
+            return String::new();
+        };
+        format!("path {}", dir.as_str())
+    }
+
+    /// The exact source-conflict refusal for the `engine_wrap` key.
+    fn source_conflict(first: &str, second: &str) -> String {
+        text::msg::ffi_dependency_source_conflict(&"engine_wrap", &first, &second).to_string()
+    }
+
+    /// The conflict message renders both sources on their own lines.
+    #[test]
+    fn the_source_conflict_message_names_both_sources() {
+        assert_eq!(
+            source_conflict("version =1.0.0", "path /p/engine"),
+            "installed FFI crates bind dependency `engine_wrap` to two different sources:\n  \
+             version =1.0.0\n  path /p/engine"
+        );
+    }
+
+    /// A wrapper crate flows through `assemble_emit` as its typed entry and
+    /// renders the one canonical `path` line; two members naming the same
+    /// wrapper directory dedupe to it.
+    #[test]
+    fn a_wrapper_crate_renders_its_path_line_through_assemble_emit() {
+        let (project, deps) = jailed_wrappers("ok", &["engine"]);
+        let canonical = std::fs::canonicalize(project.join("wrappers/engine"))
+            .expect("wrapper dir canonicalizes");
+        let r = assemble_emit(&[
+            crate_with_deps("engine_wrap", deps.clone()),
+            crate_with_deps("other", deps),
+        ]);
+        let _ = std::fs::remove_dir_all(&project);
+        let emit = r.expect("a wrapper crate assembles").expect("emit present");
+        assert_eq!(
+            emit.dep_lines,
+            vec![format!(
+                "engine_wrap = {{ path = \"{}\" }}",
+                canonical.display()
+            )]
+        );
+    }
+
+    /// One dependency key bound to a registry pin by one member and a wrapper
+    /// path by another is refused, in either order.
+    #[test]
+    fn a_registry_pin_against_a_wrapper_path_is_refused() {
+        let (project, wrapper) = jailed_wrappers("mixed", &["engine"]);
+        let path = wrapper_source(&wrapper, 0);
+        let registry =
+            vec![CargoDep::parse_registry_line("engine_wrap = \"=1.0.0\"").expect("registry line")];
+        let forward = assemble_emit(&[
+            crate_with_deps("a", registry.clone()),
+            crate_with_deps("b", wrapper.clone()),
+        ]);
+        let backward = assemble_emit(&[
+            crate_with_deps("a", wrapper),
+            crate_with_deps("b", registry),
+        ]);
+        let _ = std::fs::remove_dir_all(&project);
+        for (r, expected) in [
+            (forward, source_conflict("version =1.0.0", &path)),
+            (backward, source_conflict(&path, "version =1.0.0")),
+        ] {
+            assert!(
+                matches!(&r, Err(CliError::Usage(m)) if m.to_string() == expected),
+                "{r:?}"
+            );
+        }
+    }
+
+    /// One dependency key bound to two different wrapper directories is refused.
+    #[test]
+    fn two_wrapper_paths_for_one_dependency_are_refused() {
+        let (project, deps) = jailed_wrappers("two", &["engine", "engine2"]);
+        let r = assemble_emit(&[
+            crate_with_deps("a", deps.iter().take(1).cloned().collect()),
+            crate_with_deps("b", deps.iter().skip(1).cloned().collect()),
+        ]);
+        let _ = std::fs::remove_dir_all(&project);
+        let expected = source_conflict(&wrapper_source(&deps, 0), &wrapper_source(&deps, 1));
+        assert!(
+            matches!(&r, Err(CliError::Usage(m)) if m.to_string() == expected),
+            "{r:?}"
+        );
+    }
+
+    /// A wrapper path under a key a transitive version conflict already left
+    /// to Cargo is refused, never silently dropped.
+    #[test]
+    fn a_wrapper_path_under_an_unpinned_transitive_is_refused() {
+        let (project, wrapper) = jailed_wrappers("unpinned", &["engine"]);
+        let pin = |v: &str| {
+            CargoDep::parse_registry_line(&format!("engine_wrap = \"={v}\""))
+                .expect("registry line")
+        };
+        let r = assemble_emit(&[
+            crate_with_deps("a", vec![pin("1.0.0")]),
+            crate_with_deps("b", vec![pin("2.0.0")]),
+            crate_with_deps("c", wrapper.clone()),
+        ]);
+        let _ = std::fs::remove_dir_all(&project);
+        let expected = source_conflict(
+            "an unpinned registry dependency",
+            &wrapper_source(&wrapper, 0),
+        );
+        assert!(
+            matches!(&r, Err(CliError::Usage(m)) if m.to_string() == expected),
+            "{r:?}"
         );
     }
 
@@ -4432,7 +4634,7 @@ version = \"1\"
             wrapper_ident: "Rust_demo_counter_new".to_owned(),
             arity: 1,
             sig: "Int -> Counter".to_owned(),
-            transparent_params: Vec::new(),
+            transparent_params: ipe_ffi::interface::TransparentParams::None,
             transparent_result: Some(ipe_ffi::interface::TransparentResult {
                 type_name: "Counter".to_owned(),
                 in_result: false,

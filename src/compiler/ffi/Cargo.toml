@@ -24,6 +24,17 @@ serde_json = "1"
 # lines is still found. `span-locations` supplies the 1-based line a diagnostic
 # points at.
 proc-macro2 = { version = "1", features = ["span-locations"] }
+# A wrapper crate's `Cargo.toml` is parsed STRUCTURALLY at the root jail, so the
+# `[dependencies]` key the emitted manifest binds is proven equal to the Cargo
+# package name before cargo ever sees it. Same `toml` version the CLI and the
+# runtime already pin, so no new crate enters the vetted dependency graph.
+toml = "0.8"
+
+# The wrapper manifest is opened with `O_NOFOLLOW | O_NONBLOCK`, so a symlinked
+# or FIFO `Cargo.toml` is refused rather than followed or blocked on. rustix is
+# already in the dependency graph (the CLI's `statvfs` and cache reads).
+[target.'cfg(unix)'.dependencies]
+rustix = { version = "0.38", features = ["fs"] }
 
 [lints]
 workspace = true

@@ -306,7 +306,7 @@ mod tests {
                 wrapper_ident: format!("K_{name}"),
                 arity: 1,
                 sig: (*sig).to_owned(),
-                transparent_params: Vec::new(),
+                transparent_params: crate::interface::TransparentParams::None,
                 transparent_result: None,
             })
             .collect();

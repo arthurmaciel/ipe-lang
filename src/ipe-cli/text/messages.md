@@ -1190,9 +1190,11 @@ module `{module}` clashes with the installed FFI crate `{krate}` — the `Rust.*
 
 installed FFI crate `{krate}` defines a `[rust.define.*]` type `{name}` whose name also names an inspected opaque type of the crate — the two are different Rust types that would collide on one nominal; rename the define type
 
-## ffi-dependency-line-unparsable
+## ffi-dependency-source-conflict
 
-installed FFI crate `{krate}` emitted an unparsable dependency line: {line}
+installed FFI crates bind dependency `{name}` to two different sources:
+  {first}
+  {second}
 
 ## ffi-dependency-pin-conflict
 
@@ -1232,22 +1234,6 @@ ipe install: manifest write failed: {detail}
 ## ffi-install-manifest-chunk-write-failed
 
 ipe install: manifest chunk write failed: {detail}
-
-## ffi-install-wrapper-crate
-
-ipe install: wrapper crate `{path}`: {detail}
-
-## ffi-install-project-root
-
-ipe install: project root: {detail}
-
-## ffi-install-wrapper-outside-root
-
-ipe install: wrapper crate `{path}` resolves to {resolved} — outside the project root
-
-## ffi-install-wrapper-not-utf8
-
-ipe install: wrapper crate path `{path}` is not UTF-8
 
 ## ffi-regen-invalid-json
 

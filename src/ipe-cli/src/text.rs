@@ -1062,8 +1062,8 @@ messages! {
     ffi_module_clash(module, krate) = "ffi-module-clash";
     /// An FFI define type collides with an inspected opaque type.
     ffi_define_opaque_collision(krate, name) = "ffi-define-opaque-collision";
-    /// An installed FFI crate emitted a malformed dependency line.
-    ffi_dependency_line_unparsable(krate, line) = "ffi-dependency-line-unparsable";
+    /// Installed FFI crates bind one dependency name to two different sources.
+    ffi_dependency_source_conflict(name, first, second) = "ffi-dependency-source-conflict";
     /// Installed FFI crates pin one dependency to two versions.
     ffi_dependency_pin_conflict(name, first, second) = "ffi-dependency-pin-conflict";
     /// An FFI binding marks a type transparent without its shape.
@@ -1082,14 +1082,6 @@ messages! {
     ffi_install_manifest_write_failed(detail) = "ffi-install-manifest-write-failed";
     /// `ipe install` could not write a manifest chunk.
     ffi_install_manifest_chunk_write_failed(detail) = "ffi-install-manifest-chunk-write-failed";
-    /// `ipe install` could not resolve a wrapper crate path.
-    ffi_install_wrapper_crate(path, detail) = "ffi-install-wrapper-crate";
-    /// `ipe install` could not resolve the project root.
-    ffi_install_project_root(detail) = "ffi-install-project-root";
-    /// An `ipe install` wrapper crate resolves outside the project root.
-    ffi_install_wrapper_outside_root(path, resolved) = "ffi-install-wrapper-outside-root";
-    /// An `ipe install` wrapper crate path is not UTF-8.
-    ffi_install_wrapper_not_utf8(path) = "ffi-install-wrapper-not-utf8";
     /// FFI regeneration read malformed inspector JSON.
     ffi_regen_invalid_json(detail) = "ffi-regen-invalid-json";
     /// FFI regeneration read inspector output of an unexpected shape.
