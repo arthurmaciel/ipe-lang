@@ -3353,6 +3353,7 @@ dependencies = [
  "ipe_diagnostics",
  "ipe_kernels",
  "libc",
+ "rustix 0.38.44",
  "serde",
  "windows-sys 0.61.2",
 ]
