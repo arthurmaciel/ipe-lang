@@ -40,7 +40,7 @@ fn build_source(name: &str, src: &str) -> Result<(), Option<ipe_diagnostics::Cod
         return Err(None);
     };
     match ipe::build(&entry, &out, &runtime) {
-        Ok(_) => Ok(()),
+        Ok(()) => Ok(()),
         Err(ipe::CliError::Pipeline { diag, .. }) => Err(Some(diag.code())),
         Err(_) => Err(None),
     }
