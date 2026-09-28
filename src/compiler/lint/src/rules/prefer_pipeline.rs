@@ -177,8 +177,13 @@ impl<'a> Chain<'a> {
             forward.push_str(" |> ");
             forward.push_str(prefix);
         }
+        // An atomic subject stays the innermost call's plain argument.
         let mut backward = prefixes.join(" <| ");
-        backward.push_str(" <| ");
+        backward.push_str(if subject_kind == SubjectKind::Atomic {
+            " "
+        } else {
+            " <| "
+        });
         backward.push_str(&back_subject);
 
         // Replace the call's own text (callee through last argument), leaving

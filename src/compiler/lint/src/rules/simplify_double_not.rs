@@ -25,6 +25,30 @@ fn not_arg<'a>(ctx: &Ctx, expr: &'a Expr) -> Option<&'a Expr> {
     (ctx.text(*name) == "not").then_some(arg)
 }
 
+/// `text` with every paren pair that encloses all of it removed: an argument's
+/// span includes its source parens, which the bare replacement no longer needs.
+fn without_enclosing_parens(mut text: &str) -> &str {
+    while let Some(body) = text.strip_prefix('(').and_then(|t| t.strip_suffix(')')) {
+        let mut depth = 0_usize;
+        let balanced = body.chars().all(|c| {
+            match c {
+                '(' => depth += 1,
+                ')' => match depth.checked_sub(1) {
+                    Some(d) => depth = d,
+                    None => return false,
+                },
+                _ => {}
+            }
+            true
+        });
+        if !balanced || depth != 0 {
+            break;
+        }
+        text = body.trim();
+    }
+    text
+}
+
 pub fn check(ctx: &Ctx) -> Vec<Finding> {
     let mut findings = Vec::new();
     visit_exprs(ctx, &mut |expr| {
@@ -34,7 +58,7 @@ pub fn check(ctx: &Ctx) -> Vec<Finding> {
         let Some(inner) = not_arg(ctx, outer_arg) else {
             return;
         };
-        let simpler = ctx.slice(inner.span).trim();
+        let simpler = without_enclosing_parens(ctx.slice(inner.span).trim());
         findings.push(ctx.advisory(
             "simplify-double-not",
             expr.span,

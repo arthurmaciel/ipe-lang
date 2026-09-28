@@ -55,9 +55,7 @@ mod wrapper_consistency;
 mod wrapper_consistency_cross;
 
 #[cfg(test)]
-mod simplify_tests;
-#[cfg(test)]
-mod style_tests;
+mod tests;
 
 use ipe_diagnostics::{Located, Span};
 use ipe_intern::{Interner, Symbol};
