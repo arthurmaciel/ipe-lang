@@ -208,8 +208,9 @@ pub fn completions(
 }
 
 /// `Qualifier.member` completion candidates for a trigger touching `byte` in
-/// `module`'s source — scoped to exactly that qualifier's exposed members
-/// (#3031 / #2861): a bare `Q.`, a partial `Q.mem`, or a full dotted
+/// `module`'s source, scoped to exactly that qualifier's exposed members.
+///
+/// A bare `Q.`, a partial `Q.mem`, or a full dotted
 /// `A.B.Q.` must offer ONLY `Q`'s exports, never the module's whole
 /// in-scope list, and must keep working when the surrounding buffer does
 /// not lex at all — the trigger itself (a dangling `Font.`) is unlexable
@@ -655,9 +656,8 @@ const fn con_head(ty: &Ty) -> Option<(&[Symbol], Symbol)> {
 /// Scope every item's edit to `[word_start, word_end)` in `source` so
 /// accepting it REPLACES that whole identifier run — both what is already
 /// typed before the cursor AND, for a mid-word cursor, whatever untyped
-/// remainder follows — rather than merely inserting at the cursor (#3031's
-/// replace-not-append requirement: at `Font.bol`, picking `bold` must give
-/// `Font.bold`, never `Font.bolbold`).
+/// remainder follows — rather than merely inserting at the cursor: at
+/// `Font.bol`, picking `bold` must give `Font.bold`, never `Font.bolbold`.
 ///
 /// The one edit-construction step both [`completions`] and
 /// [`qualified_completions`] route every item through, so no completion
@@ -1075,11 +1075,11 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // Qualified completion (#3031 / #2861): `Q.`, `Q.partial`, aliases, full
+    // Qualified completion: `Q.`, `Q.partial`, aliases, full
     // dotted paths, unknown qualifiers, ctors/types, and unparseable buffers.
     // -----------------------------------------------------------------------
 
-    /// #2861 shape 1: a bare `Font.` offers ONLY `Font`'s exposed members —
+    /// Shape 1: a bare `Font.` offers ONLY `Font`'s exposed members —
     /// never the bare-keywords-only regression, never the whole scope.
     #[test]
     fn bare_qualifier_dot_offers_only_that_modules_members() {
@@ -1115,7 +1115,7 @@ mod tests {
         );
     }
 
-    /// #2861 shape 2: a partial `Font.b` scopes to members whose name starts
+    /// Shape 2: a partial `Font.b` scopes to members whose name starts
     /// with `b` — not "every in-scope name" (the pre-fix regression).
     #[test]
     fn partial_qualifier_member_filters_to_matching_prefix() {
@@ -1149,7 +1149,7 @@ mod tests {
         );
     }
 
-    /// #2861 shape 3: qualifier resolution reads the source text directly, so
+    /// Shape 3: qualifier resolution reads the source text directly, so
     /// it still works on a buffer whose trailing `Font.` makes the WHOLE file
     /// unlexable (and a further-broken tail makes it doubly so) — the "last
     /// good parse" robustness requirement.

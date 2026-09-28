@@ -683,10 +683,9 @@ fn lint_fix_action(
 /// title (`"Remove unused import"`).
 fn capitalize_first(s: &str) -> String {
     let mut chars = s.chars();
-    match chars.next() {
-        Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
-        None => String::new(),
-    }
+    chars.next().map_or_else(String::new, |first| {
+        first.to_uppercase().collect::<String>() + chars.as_str()
+    })
 }
 
 /// Extract the expected module name from an IPE-N0023 `plain_message`.
