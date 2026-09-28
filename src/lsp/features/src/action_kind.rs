@@ -29,7 +29,7 @@ pub fn retain_offered(actions: &mut Vec<CodeActionOrCommand>, only: Option<&[Cod
         CodeActionOrCommand::CodeAction(a) => a
             .kind
             .as_ref()
-            .map_or(only.is_none(), |kind| offered(only, kind)),
+            .map_or_else(|| only.is_none(), |kind| offered(only, kind)),
         CodeActionOrCommand::Command(_) => only.is_none(),
     });
 }
