@@ -33,6 +33,7 @@
     clippy::map_unwrap_or
 )]
 
+use std::collections::BTreeSet;
 use std::ffi::OsString;
 use std::path::Path;
 use std::process::Command;
@@ -40,6 +41,7 @@ use std::process::Command;
 use ipe_sandbox::run_jail::{
     FilesystemScope, RunJailTools, RunResourceLimits, SandboxProfile, run_jail_argv,
 };
+use ipe_sandbox::scratch::{ANCHOR_VAR, ScratchDir, prove_anchor_dir};
 use ipe_sandbox::{CanonicalPath, JailMounts};
 
 /// Serialize the jailed runs: each creates a `memfd` and clears its
@@ -119,11 +121,27 @@ fn canary_established(outcome: &Outcome) -> bool {
 }
 
 /// The result of one jailed spawn: the payload's exit code (`None` if it was
-/// signalled) and `bwrap`'s stderr. The assertions only read `code`; the canary
-/// reads `stderr` to name an establishment failure.
+/// signalled), its stdout, `bwrap`'s stderr, and the anchor the launch named.
+/// Most assertions only read `code`; the canary reads `stderr` to name an
+/// establishment failure.
 struct Outcome {
     code: Option<i32>,
+    stdout: String,
     stderr: String,
+    /// The encoded scratch anchor the launch named, when it was anchored.
+    anchor: Option<String>,
+    /// Descriptors this harness already held without close-on-exec before the
+    /// launch, which the spawn inherits by the harness's own choice.
+    harness_inheritable: BTreeSet<u32>,
+}
+
+/// How one jailed spawn is launched.
+#[derive(Clone, Copy)]
+struct Launch {
+    /// Pipe `bwrap`'s stderr (the canary) rather than inherit it.
+    capture_stderr: bool,
+    /// Prove the scoped scratch and name it to the payload, as the launcher does.
+    anchored: bool,
 }
 
 /// Compile the seccomp program for a profile and place it on an inheritable fd,
@@ -135,7 +153,16 @@ struct Outcome {
 fn run_jailed(tools: &RunJailTools, profile: &SandboxProfile, payload: &[OsString]) -> Option<i32> {
     // The assertions inherit stderr (a diagnostic when one fails); only the
     // canary captures it.
-    run_jailed_inner(tools, profile, payload, false).code
+    run_jailed_inner(
+        tools,
+        profile,
+        payload,
+        Launch {
+            capture_stderr: false,
+            anchored: false,
+        },
+    )
+    .code
 }
 
 /// Like [`run_jailed`], but captures `bwrap`'s stderr so an establishment
@@ -145,17 +172,49 @@ fn run_jailed_capturing(
     profile: &SandboxProfile,
     payload: &[OsString],
 ) -> Outcome {
-    run_jailed_inner(tools, profile, payload, true)
+    run_jailed_inner(
+        tools,
+        profile,
+        payload,
+        Launch {
+            capture_stderr: true,
+            anchored: false,
+        },
+    )
 }
 
-/// Shared spawn core. `capture_stderr` selects whether `bwrap`'s stderr is piped
-/// (canary) or inherited (assertions). Panics (fails the test) if the spawn
-/// itself could not be launched.
+/// The descriptors this process holds open without close-on-exec.
+///
+/// Read from `/proc/self/fdinfo`, whose octal `flags:` field carries
+/// `O_CLOEXEC` (`0o2000000`); an fd whose flags cannot be read is not counted,
+/// so the allowance never excuses a descriptor it could not inspect.
+fn inheritable_fds() -> BTreeSet<u32> {
+    const O_CLOEXEC: u32 = 0o2_000_000;
+    std::fs::read_dir("/proc/self/fd")
+        .expect("list own fds")
+        .filter_map(|entry| entry.ok()?.file_name().to_str()?.parse::<u32>().ok())
+        .filter(|&fd| {
+            std::fs::read_to_string(format!("/proc/self/fdinfo/{fd}"))
+                .ok()
+                .and_then(|info| {
+                    info.lines()
+                        .find_map(|line| line.strip_prefix("flags:"))
+                        .and_then(|raw| u32::from_str_radix(raw.trim(), 8).ok())
+                })
+                .is_some_and(|flags| flags & O_CLOEXEC == 0)
+        })
+        .collect()
+}
+
+/// Shared spawn core. `launch` selects whether `bwrap`'s stderr is piped
+/// (canary) or inherited (assertions), and whether the scoped scratch is named
+/// to the payload as its anchor. Panics (fails the test) if the spawn itself
+/// could not be launched.
 fn run_jailed_inner(
     tools: &RunJailTools,
     profile: &SandboxProfile,
     payload: &[OsString],
-    capture_stderr: bool,
+    launch: Launch,
 ) -> Outcome {
     use std::os::unix::io::FromRawFd as _;
     use std::os::unix::process::CommandExt as _;
@@ -163,6 +222,7 @@ fn run_jailed_inner(
     // Hold the global lock across the whole spawn — the memfd + cloexec-clear is
     // a process-wide fd-table mutation.
     let _guard = JAIL_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let harness_inheritable = inheritable_fds();
 
     let program = ipe_sandbox::seccomp::subprocess_deny_program(profile.subprocess)
         .expect("x86_64 seccomp program");
@@ -179,13 +239,18 @@ fn run_jailed_inner(
     }
     unsafe { lseek(fd, 0, 0) };
 
-    let scoped = std::env::temp_dir().join(format!("ipe-e2e-{}", std::process::id()));
-    std::fs::create_dir_all(&scoped).expect("scoped tmp");
-    let scoped = CanonicalPath::resolve(&scoped).expect("scoped tmp resolves");
+    let scratch = ScratchDir::new("ipe-e2e").expect("scoped tmp");
+    let scoped = CanonicalPath::resolve(scratch.path()).expect("scoped tmp resolves");
     let system_bins = [Path::new("/usr/bin"), Path::new("/bin")]
         .map(|dir| CanonicalPath::resolve(dir).expect("system bin dir resolves"));
-    let mounts = JailMounts::of_invoker(scoped.clone(), scoped.clone(), system_bins.to_vec())
+    let anchor = launch
+        .anchored
+        .then(|| prove_anchor_dir(scoped.as_path()).expect("scoped tmp proves private"));
+    let mut mounts = JailMounts::of_invoker(scoped.clone(), scoped.clone(), system_bins.to_vec())
         .expect("checked jail mounts");
+    if let Some(anchor) = anchor {
+        mounts = mounts.with_scratch_anchor(anchor);
+    }
     // `ipe_env` matches the launcher's crate-private passthrough for every name
     // but a home variable, and no profile in this file grants one.
     let host_env = |k: &str| ipe_env::var_os(k);
@@ -193,7 +258,7 @@ fn run_jailed_inner(
     let (prog, rest) = argv.split_first().expect("non-empty argv");
     let mut cmd = Command::new(prog);
     cmd.args(rest);
-    if capture_stderr {
+    if launch.capture_stderr {
         cmd.stderr(std::process::Stdio::piped());
     }
     let fd_copy = fd;
@@ -214,10 +279,13 @@ fn run_jailed_inner(
     let out = cmd.output().expect("spawn jailed process");
     // Reap the memfd.
     drop(unsafe { std::fs::File::from_raw_fd(fd) });
-    let _ = std::fs::remove_dir_all(&scoped);
+    drop(scratch);
     Outcome {
         code: out.status.code(),
+        stdout: String::from_utf8_lossy(&out.stdout).into_owned(),
         stderr: String::from_utf8_lossy(&out.stderr).into_owned(),
+        anchor: anchor.map(|a| a.encode().to_string_lossy().into_owned()),
+        harness_inheritable,
     }
 }
 
@@ -363,7 +431,10 @@ fn canary_gates_skip_on_any_establishment_failure() {
     let established = |code| {
         canary_established(&Outcome {
             code,
+            stdout: String::new(),
             stderr: String::new(),
+            anchor: None,
+            harness_inheritable: BTreeSet::new(),
         })
     };
     // The one success shape: the no-op payload booted and exited cleanly.
@@ -379,4 +450,63 @@ fn canary_gates_skip_on_any_establishment_failure() {
         "a non-zero bwrap setup exit is a skip"
     );
     assert!(!established(None), "a signalled process is a skip");
+}
+
+/// An anchored launch names the scratch by node alone: the payload sees the
+/// anchor variable, and the only descriptors it inherits beyond the standard
+/// streams are the seccomp and app memfds (or ones the harness itself left
+/// inheritable), never a host-opened directory or file.
+#[test]
+fn anchored_launch_hands_the_payload_no_descriptor_but_the_memfds() {
+    let Some(tools) = e2e_tools() else { return };
+    let anchored = Launch {
+        capture_stderr: false,
+        anchored: true,
+    };
+    let env = run_jailed_inner(
+        &tools,
+        &isolated(),
+        &[OsString::from("/usr/bin/env")],
+        anchored,
+    );
+    assert_eq!(env.code, Some(0), "{}", env.stderr);
+    let anchor = env.anchor.expect("anchored launch names an anchor");
+    let named = format!("{ANCHOR_VAR}={anchor}");
+    assert!(
+        env.stdout.lines().any(|line| line == named),
+        "{}",
+        env.stdout
+    );
+
+    let payload: Vec<OsString> = ["/bin/ls", "-l", "/proc/self/fd"]
+        .iter()
+        .map(OsString::from)
+        .collect();
+    let listed = run_jailed_inner(&tools, &isolated(), &payload, anchored);
+    assert_eq!(listed.code, Some(0), "{}", listed.stderr);
+    let fds: Vec<(u32, &str)> = listed
+        .stdout
+        .lines()
+        .filter_map(|line| {
+            let (left, target) = line.split_once(" -> ")?;
+            let fd = left.split_whitespace().last()?.parse::<u32>().ok()?;
+            Some((fd, target))
+        })
+        .collect();
+    assert!(
+        (0..3).all(|stream| fds.iter().any(|&(fd, _)| fd == stream)),
+        "{}",
+        listed.stdout
+    );
+    for (fd, target) in fds {
+        let allowed = fd < 3
+            || target.starts_with("/memfd:")
+            || (target.starts_with("/proc/") && target.ends_with("/fd"))
+            || listed.harness_inheritable.contains(&fd);
+        assert!(
+            allowed,
+            "fd {fd} -> {target} crossed into the jail\n{}",
+            listed.stdout
+        );
+    }
 }

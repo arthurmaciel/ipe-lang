@@ -199,7 +199,8 @@ libc = "0.2"
 # meaning on non-unix targets, where the kernel returns an honest unsupported
 # `Err`. `fs` backs `open`ing the replica side; `std` re-exports `OwnedFd`.
 # `process` supplies the effective uid/gid the private-scratch ownership checks
-# compare against.
+# compare against; `fs`'s `statx` reports whether a jail's scratch anchor is a
+# mount root.
 rustix = { version = "1", features = ["pty", "termios", "fs", "process", "std"] }
 
 # tokio is native-only. Every tokio code path in this crate is already

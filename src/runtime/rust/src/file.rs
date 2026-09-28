@@ -409,10 +409,51 @@ fn profile_dir() -> Option<std::ffi::OsString> {
     super::system::read_env_var_os(super::scratch::PROFILE_VAR)
 }
 
-/// The raw inherited scratch anchor a jail launcher hands down (see [`super::scratch::ScratchAnchor`]).
+/// The scratch anchor claim a jail launcher names, judged by the core only through a `JailAnchorProof`.
 #[cfg(not(target_family = "wasm"))]
-fn scratch_anchor() -> Option<std::ffi::OsString> {
+fn scratch_anchor() -> Option<super::scratch::AnchorClaim> {
     super::system::read_env_var_os(super::scratch::ANCHOR_VAR)
+        .map(|raw| super::scratch::AnchorClaim { raw, mount_root })
+}
+
+/// Whether the directory at `path` is a mount root, as `statx` reports it.
+///
+/// A kernel that does not report the attribute (older than 5.8), a failed
+/// lookup, or a missing inode number is [`super::scratch::MountRoot::Unknown`],
+/// which the core treats as no proof.
+#[cfg(any(target_os = "linux", target_os = "android"))]
+fn mount_root(path: &std::path::Path) -> super::scratch::MountRoot {
+    use super::scratch::{MountRoot, NodeId};
+    use rustix::fs::{AtFlags, StatxAttributes, StatxFlags};
+    let Ok(stat) = rustix::fs::statx(
+        rustix::fs::CWD,
+        path,
+        AtFlags::NO_AUTOMOUNT | AtFlags::SYMLINK_NOFOLLOW,
+        StatxFlags::INO,
+    ) else {
+        return MountRoot::Unknown;
+    };
+    let reported = stat
+        .stx_attributes_mask
+        .contains(StatxAttributes::MOUNT_ROOT)
+        && StatxFlags::from_bits_retain(stat.stx_mask).contains(StatxFlags::INO);
+    if !reported {
+        return MountRoot::Unknown;
+    }
+    if stat.stx_attributes.contains(StatxAttributes::MOUNT_ROOT) {
+        MountRoot::Root(NodeId {
+            dev: rustix::fs::makedev(stat.stx_dev_major, stat.stx_dev_minor),
+            ino: stat.stx_ino,
+        })
+    } else {
+        MountRoot::NotRoot
+    }
+}
+
+/// No mount-root report off Linux, so no anchor is ever proven there.
+#[cfg(not(any(target_os = "linux", target_os = "android", target_family = "wasm")))]
+const fn mount_root(_path: &std::path::Path) -> super::scratch::MountRoot {
+    super::scratch::MountRoot::Unknown
 }
 
 /// The refusal on a target with no filesystem to hold scratch.
@@ -464,13 +505,34 @@ pub(crate) fn private_temp_dir_under(
 pub(crate) fn exclusive_temp_file(
     label: &str,
 ) -> std::io::Result<(std::path::PathBuf, std::fs::File)> {
-    super::scratch::create_exclusive_file(
-        &std::env::temp_dir(),
-        label,
-        os_entropy,
-        profile_dir,
-        scratch_anchor,
-    )
+    exclusive_file_in(&std::env::temp_dir(), label)
+}
+
+/// Create a private, unpredictably named file directly under `base` through the shared scratch core.
+///
+/// A same-directory temp for an atomic replace: renamed over its target, it
+/// never crosses a filesystem, and its name cannot be predicted or pre-planted.
+///
+/// # Errors
+/// As [`super::scratch::create_exclusive_file`].
+#[cfg(not(target_family = "wasm"))]
+pub(crate) fn exclusive_file_in(
+    base: &std::path::Path,
+    label: &str,
+) -> std::io::Result<(std::path::PathBuf, std::fs::File)> {
+    super::scratch::create_exclusive_file(base, label, os_entropy, profile_dir, scratch_anchor)
+}
+
+/// Refuse a private file: wasm has no filesystem to hold one.
+///
+/// # Errors
+/// Always `Unsupported`.
+#[cfg(target_family = "wasm")]
+pub(crate) fn exclusive_file_in(
+    _base: &std::path::Path,
+    _label: &str,
+) -> std::io::Result<(std::path::PathBuf, std::fs::File)> {
+    Err(no_scratch())
 }
 
 /// Refuse a temp file: wasm has no filesystem to hold scratch.

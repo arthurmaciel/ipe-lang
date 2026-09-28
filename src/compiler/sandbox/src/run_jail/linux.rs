@@ -105,6 +105,8 @@ fn app_ro_binds(app: &CanonicalPath) -> Vec<CanonicalPath> {
 /// it on an inheritable file descriptor, builds the `bwrap` argv referencing
 /// that fd, and `exec`s it. The seccomp fd is deliberately left WITHOUT the
 /// close-on-exec flag so `bwrap` inherits it; every other fd stays cloexec.
+/// The scoped scratch is proven on the host and named to the payload through
+/// [`crate::scratch::ANCHOR_VAR`] by node alone, never by an open descriptor.
 ///
 /// On a non-Linux target this is a compile-time refusal shape — the whole body
 /// is `cfg(target_os = "linux")`; other targets return
@@ -132,9 +134,9 @@ pub fn exec_in_run_jail(
     let app = CanonicalPath::resolve(app).map_err(RunJailDefect::Path)?;
     let mounts = JailMounts::of_invoker(scoped_tmp, working_tree, app_ro_binds(&app))
         .map_err(RunJailDefect::Path)?;
-    // Held until `exec` replaces this process, so its descriptor is inherited.
-    let scratch = hold_scratch_anchor(mounts.scoped_tmp())?;
-    let mounts = mounts.with_scratch_anchor(scratch.anchor());
+    // Named by node only: no descriptor for it crosses into the jail.
+    let anchor = prove_scratch_anchor(mounts.scoped_tmp())?;
+    let mounts = mounts.with_scratch_anchor(anchor);
 
     // Compile the seccomp program for this profile. `None` ⇒ this architecture
     // has no filter we can emit — refuse (fail-closed), never run unfiltered.
@@ -220,9 +222,9 @@ pub fn exec_embedded_in_run_jail(
     let working_tree = CanonicalPath::resolve(working_tree).map_err(RunJailDefect::Path)?;
     let mounts = JailMounts::of_invoker(scoped_tmp, working_tree, Vec::new())
         .map_err(RunJailDefect::Path)?;
-    // Held until `exec` replaces this process, so its descriptor is inherited.
-    let scratch = hold_scratch_anchor(mounts.scoped_tmp())?;
-    let mounts = mounts.with_scratch_anchor(scratch.anchor());
+    // Named by node only: no descriptor for it crosses into the jail.
+    let anchor = prove_scratch_anchor(mounts.scoped_tmp())?;
+    let mounts = mounts.with_scratch_anchor(anchor);
 
     let Some(program) = seccomp::subprocess_deny_program(profile.subprocess) else {
         return Err(RunJailDefect::UnsupportedPlatform {
@@ -280,17 +282,20 @@ pub fn exec_embedded_in_run_jail(
     })
 }
 
-/// Prove `scoped_tmp` on the host and hold it open for the payload to inherit.
+/// Prove `scoped_tmp` on the host, where owners are real, and name its node for the payload.
+///
+/// Nothing is opened: the anchor is a `dev:ino` claim the jailed runtime
+/// honours only on its own `JailAnchorProof`.
 ///
 /// # Errors
 /// [`RunJailDefect::ScratchAnchor`] when the directory is not provably private.
-fn hold_scratch_anchor(
+fn prove_scratch_anchor(
     scoped_tmp: &CanonicalPath,
-) -> Result<crate::scratch::HeldScratchAnchor, RunJailDefect> {
-    crate::scratch::HeldScratchAnchor::hold(scoped_tmp.as_path()).map_err(|e| {
+) -> Result<crate::scratch::ScratchAnchor, RunJailDefect> {
+    crate::scratch::prove_anchor_dir(scoped_tmp.as_path()).map_err(|refusal| {
         RunJailDefect::ScratchAnchor {
             dir: scoped_tmp.as_path().to_path_buf(),
-            detail: e.to_string(),
+            refusal,
         }
     })
 }

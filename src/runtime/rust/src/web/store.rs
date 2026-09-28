@@ -330,44 +330,36 @@ impl<Model, Msg> FileStore<Model, Msg> {
     /// Atomically rewrite the on-disk map from `disk`. Best-effort: a write
     /// failure (e.g. a transient FS error) leaves the in-memory map as the
     /// source of truth for this process and is never fatal — the next mutation
-    /// retries the whole map. Writes to a sibling temp file then renames, so a
-    /// crash mid-write never leaves a truncated map a later `new` would fail to
-    /// parse (and thus silently drop every session).
+    /// retries the whole map. Writes to a temp file in the map's own directory
+    /// then renames, so a crash mid-write never leaves a truncated map a later
+    /// `new` would fail to parse (and thus silently drop every session).
     ///
-    /// On unix the temp file is created `0600` (owner-only) BEFORE any bytes are
-    /// written, so the checkpoint map — which may hold Model secrets — is never
-    /// world-readable, not even momentarily. The rename carries the mode to the
-    /// final path (rename preserves the inode's permissions).
+    /// The temp file comes from the shared scratch core: an unpredictable name
+    /// opened `O_EXCL` + `O_NOFOLLOW` with mode 0600 under a directory proven
+    /// trusted, so the checkpoint map (which may hold Model secrets) is never
+    /// readable by another user, never written through a planted link, and never
+    /// swapped by another user before the rename. A directory that cannot be
+    /// proven trusted is not written to at all.
     fn persist(&self, disk: &HashMap<String, (String, i64)>) {
         use std::io::Write as _;
         let Ok(json) = serde_json::to_string(disk) else {
             return;
         };
-        let tmp = self.path.with_extension("tmp");
-        // The temp file is created exclusively: a leftover temp (or a symlink
-        // planted at its name) is removed as the entry it is, never opened, so
-        // the map can never be written through a link.
-        let _ = std::fs::remove_file(&tmp);
-        let mut opts = std::fs::OpenOptions::new();
-        opts.write(true).create_new(true);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::OpenOptionsExt as _;
-            opts.mode(0o600);
-        }
-        let Ok(mut file) = opts.open(&tmp) else {
+        let dir = self
+            .path
+            .parent()
+            .filter(|p| !p.as_os_str().is_empty())
+            .unwrap_or_else(|| std::path::Path::new("."));
+        let Ok((tmp, mut file)) = crate::file::exclusive_file_in(dir, "ipe-store") else {
             return;
         };
-        // Belt and braces: pin the mode on the open handle before any secret
-        // is written.
-        #[cfg(unix)]
+        let written = file.write_all(json.as_bytes()).and_then(|()| file.flush());
+        drop(file);
+        if written
+            .and_then(|()| std::fs::rename(&tmp, &self.path))
+            .is_err()
         {
-            use std::os::unix::fs::PermissionsExt as _;
-            let _ = file.set_permissions(std::fs::Permissions::from_mode(0o600));
-        }
-        if file.write_all(json.as_bytes()).is_ok() && file.flush().is_ok() {
-            drop(file);
-            let _ = std::fs::rename(&tmp, &self.path);
+            let _ = std::fs::remove_file(&tmp);
         }
     }
 }

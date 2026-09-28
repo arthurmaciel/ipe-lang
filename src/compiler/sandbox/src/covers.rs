@@ -173,18 +173,19 @@ impl JailMounts {
         &self.homes
     }
 
-    /// These mounts with `anchor` handed to the payload as its inherited scratch anchor.
+    /// These mounts with `anchor` named to the payload as its scratch anchor.
     ///
-    /// `anchor` must stand for [`Self::scoped_tmp`], held open by the caller
-    /// until the jail is exec'd; the payload re-judges what the descriptor holds,
-    /// so a stale or wrong anchor only leaves its full ancestor walk in force.
+    /// `anchor` must stand for [`Self::scoped_tmp`], proven on the host by
+    /// `prove_anchor_dir`. Only its node crosses into the jail, never a
+    /// descriptor; the payload honours it only on its own `JailAnchorProof`, so
+    /// a stale or wrong anchor only leaves its full ancestor walk in force.
     #[must_use]
     pub const fn with_scratch_anchor(mut self, anchor: ScratchAnchor) -> Self {
         self.scratch_anchor = Some(anchor);
         self
     }
 
-    /// The inherited scratch anchor handed to the payload, if any.
+    /// The scratch anchor named to the payload, if any.
     #[must_use]
     pub const fn scratch_anchor(&self) -> Option<ScratchAnchor> {
         self.scratch_anchor

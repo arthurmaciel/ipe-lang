@@ -114,11 +114,17 @@ fn write_blob(dest: &RecordDest, blob: &str) {
     }
 }
 
-/// Replace `path` with `bytes` through an exclusively created sibling temp file.
+/// Replace `path` with `bytes` through a private temp file in its own directory.
 ///
-/// The temp file is created with `create_new` (never opening an existing file or
-/// symlink) and renamed over `path`, so the dump never writes through a symlink
-/// planted at the destination; a symlinked destination is refused outright.
+/// The temp file comes from the shared scratch core (an unpredictable name
+/// opened `O_EXCL` + `O_NOFOLLOW`, mode 0600, under a directory proven
+/// trusted) and is renamed over `path`, so the dump never writes through a
+/// planted symlink and no other user can pre-plant or swap the temp; a
+/// symlinked destination is refused outright.
+///
+/// # Errors
+/// `InvalidInput` for a symlinked destination; the scratch-core refusal when
+/// the directory is not provably trusted; any write or rename error.
 fn replace_file(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
     if std::fs::symlink_metadata(path).is_ok_and(|meta| meta.file_type().is_symlink()) {
         return Err(std::io::Error::from(std::io::ErrorKind::InvalidInput));
@@ -127,27 +133,14 @@ fn replace_file(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
         .parent()
         .filter(|p| !p.as_os_str().is_empty())
         .unwrap_or_else(|| std::path::Path::new("."));
-    let name = path
-        .file_name()
-        .map_or_else(String::new, |n| n.to_string_lossy().into_owned());
-    let tmp = parent.join(format!(".{name}.ipe-tmp.{}", std::process::id()));
-    let written = std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&tmp)
-        .and_then(|mut file| {
-            file.write_all(bytes)?;
-            file.flush()
-        });
-    if let Err(e) = written {
-        if e.kind() != std::io::ErrorKind::AlreadyExists {
+    let (tmp, mut file) = crate::file::exclusive_file_in(parent, "ipe-record")?;
+    let written = file.write_all(bytes).and_then(|()| file.flush());
+    drop(file);
+    written
+        .and_then(|()| std::fs::rename(&tmp, path))
+        .inspect_err(|_| {
             let _ = std::fs::remove_file(&tmp);
-        }
-        return Err(e);
-    }
-    std::fs::rename(&tmp, path).inspect_err(|_| {
-        let _ = std::fs::remove_file(&tmp);
-    })
+        })
 }
 
 /// Write the typed log for `buf` beside the trace at `trace`.

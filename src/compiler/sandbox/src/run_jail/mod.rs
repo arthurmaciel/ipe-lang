@@ -367,14 +367,14 @@ pub enum RunJailDefect {
     /// A path the jail would mount or hand to the payload could not be
     /// resolved, or a home it must mask is unknown.
     Path(JailPathError),
-    /// The scoped scratch directory could not be proven private and held open
-    /// as the payload's inherited scratch anchor. Fail-closed: the payload never
-    /// runs with a scratch its launcher could not prove.
+    /// The scoped scratch directory could not be proven private to name it as
+    /// the payload's scratch anchor. Fail-closed: the payload never runs with a
+    /// scratch its launcher could not prove.
     ScratchAnchor {
         /// The scoped scratch directory.
         dir: PathBuf,
-        /// The rendered OS error or refusal.
-        detail: String,
+        /// Why the proof failed.
+        refusal: crate::scratch::AnchorProofError,
     },
 }
 
@@ -414,9 +414,9 @@ impl From<RunJailDefect> for SandboxError {
                     .to_owned()
             }
             RunJailDefect::Path(e) => e.to_string(),
-            RunJailDefect::ScratchAnchor { dir, detail } => format!(
-                "could not prove the jail scratch directory {} private and hand it to the app \
-                 ({detail}); refusing to run the app with an unproven scratch",
+            RunJailDefect::ScratchAnchor { dir, refusal } => format!(
+                "could not prove the jail scratch directory {} private to name it to the app \
+                 ({refusal}); refusing to run the app with an unproven scratch",
                 dir.display()
             ),
         };
@@ -782,7 +782,10 @@ mod tests {
             },
             RunJailDefect::ScratchAnchor {
                 dir: PathBuf::from(FORGED),
-                detail: FORGED.to_owned(),
+                refusal: crate::scratch::AnchorProofError::Lookup {
+                    path: PathBuf::from(FORGED),
+                    kind: std::io::ErrorKind::NotFound,
+                },
             },
         ];
         for defect in defects {
@@ -1320,7 +1323,7 @@ mod tests {
             env_allowlist: vec![ANCHOR_VAR.to_owned()],
             ..SandboxProfile::maximally_isolated()
         };
-        let host = |k: &str| (k == ANCHOR_VAR).then(|| OsString::from("9:9:9"));
+        let host = |k: &str| (k == ANCHOR_VAR).then(|| OsString::from("9:9"));
         let render = |mounts: &JailMounts| {
             run_jail_argv(&tools(), &p, mounts, None, &host, &[OsString::from("app")])
                 .iter()
@@ -1329,17 +1332,17 @@ mod tests {
                 .join(" ")
         };
         let anchored = render(
-            &work_mounts().with_scratch_anchor(ScratchAnchor::new(5, NodeId { dev: 7, ino: 42 })),
+            &work_mounts().with_scratch_anchor(ScratchAnchor::new(NodeId { dev: 7, ino: 42 })),
         );
-        let forged = format!("--setenv {ANCHOR_VAR} 9:9:9");
-        let proven = format!("--setenv {ANCHOR_VAR} 5:7:42");
+        let forged = format!("--setenv {ANCHOR_VAR} 9:9");
+        let proven = format!("--setenv {ANCHOR_VAR} 7:42");
         let forged_at = anchored.find(&forged);
         let proven_at = anchored.rfind(&proven);
         assert!(
             matches!((forged_at, proven_at), (Some(f), Some(a)) if f < a),
             "{anchored}"
         );
-        // Without a held anchor the launcher sets none of its own.
+        // Without a proven anchor the launcher sets none of its own.
         let bare = render(&work_mounts());
         assert!(!bare.contains(&proven), "{bare}");
     }

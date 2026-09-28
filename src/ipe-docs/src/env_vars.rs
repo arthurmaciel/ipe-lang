@@ -1291,9 +1291,14 @@ pub static EXCLUDED_NAMES: &[&str] = &[
     // `debugger` build.
     "IPE_DEBUGGER_REPLAY",
     // Run-jail-internal scratch anchor — set by the run jail on the jailed child
-    // (never operator-set): names the inherited descriptor of the host-proven
-    // scratch directory. A value not proven through the descriptor it names is
-    // ignored, so it can only narrow trust.
+    // after the env allowlist (never operator-set, never re-exported from the
+    // host): `<dev>:<ino>` of the host-proven scratch directory, no descriptor.
+    // It WIDENS trust: the jailed runtime's scratch walk stops at the named
+    // ancestor instead of proving the ones above it. Honoured only by the
+    // runtime, and only when the named node is a mount root, the process is in
+    // a non-initial user namespace, and the node is a private directory of the
+    // effective user; otherwise the full walk stays in force and a refusal
+    // names why the anchor was not honoured. The compiler never reads it.
     "IPE_SCRATCH_ANCHOR",
     // `ipe upgrade` <-> `install.sh` handshake — set by the upgrade wrapper on
     // the installer child it spawns (never operator-set): the wrapped marker
