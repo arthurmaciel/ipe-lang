@@ -88,13 +88,16 @@ Checks performed
      holds no string literal and never abuts a shell variable name; no shell
      function or alias is defined; and pip is matched on quote-removed words
      (`shell_lex`). The integrity of `.github/ci/**` itself rests on an
-     ordering rule: a step naming the tree runs only after steps of a closed
-     pre-tool shape (a content-pinned checkout or setup-python with a closed
-     `with:`, the canonical pip install, a `.github/ci` tool), on a literal
-     GitHub-hosted runner (a fresh machine per job) with no container,
-     services, working directory, or interpreter-steering `env:`. A
-     quote-removed scan refusing writes into the tree is defence in depth
-     under that rule, not its proof.
+     ordering rule: a step naming the tree is itself a closed pre-tool shape
+     and runs only after steps of one (a content-pinned checkout or
+     setup-python with a closed `with:` and no `env:`, the canonical pip
+     install with no `env:`, a typed `ToolRun` of a file that exists under
+     `.github/ci`), on a literal GitHub-hosted Ubuntu runner (a fresh
+     machine per job) with no container or services, and with every `env:`
+     key at workflow, job, and tool-step scope drawn from one allowlist
+     (`TOOL_ENV_ALLOWLIST`). No `working-directory` anywhere names
+     `.github`. A quote-removed scan refusing writes into the tree is
+     defence in depth under that rule, not its proof.
 
 Pure stdlib + PyYAML (already a CI dependency).  No network.
 """
@@ -106,6 +109,7 @@ import fnmatch
 import glob
 import json
 import os
+import enum
 import posixpath
 import re
 import sys
@@ -758,9 +762,11 @@ class StepPolicy:
 
     `env_allowlist` holds the keys `ci/github-env.sh` may write; it is empty
     when the allowlist cannot be established, so every helper call is refused.
+    `repo_top` is the checkout root a `working-directory:` resolves from.
     """
 
     env_allowlist: frozenset[str]
+    repo_top: str
 
 
 def _github_env_key_refusal(key: str) -> str | None:
@@ -1397,11 +1403,13 @@ def _refuse_wiring_text(text: str, loc: str, what: str, errors: list[str]) -> No
         errors.append(expr_error)
 
 
-def _audit_defaults(container: dict, loc: str, errors: list[str]) -> None:
-    """Shape of `defaults.run.shell` at workflow or job scope.
+def _audit_defaults(container: dict, loc: str, repo_top: str, errors: list[str]) -> None:
+    """Shape of `defaults.run.shell` and `defaults.run.working-directory` at
+    workflow or job scope.
 
-    It wraps every `run:` step, so its text is scanned with the scope's other
-    scalars; a shape this check cannot read is refused.
+    The shell wraps every `run:` step, so its text is scanned with the scope's
+    other scalars; a working directory is refused as a step's is
+    (`_refuse_working_directory`); a shape this check cannot read is refused.
     """
     if "defaults" not in container:
         return
@@ -1417,6 +1425,7 @@ def _audit_defaults(container: dict, loc: str, errors: list[str]) -> None:
         return
     if "shell" in r:
         _refuse_step_shell(r["shell"], loc, "defaults.run.shell", errors)
+    _refuse_working_directory(r, loc, "defaults.run.working-directory", repo_top, errors)
 
 
 def _refuse_step_shell(shell: object, loc: str, what: str, errors: list[str]) -> None:
@@ -1446,17 +1455,21 @@ def _audit_step(st: Step, loc: str, policy: StepPolicy, errors: list[str]) -> No
         _refuse_shape(loc, "run:", "a string", st.raw["run"], errors)
     if "shell" in st.raw:
         _refuse_step_shell(st.raw["shell"], loc, "shell:", errors)
+    _refuse_working_directory(st.raw, loc, "working-directory:", policy.repo_top, errors)
     if "with" in st.raw and not isinstance(st.raw["with"], dict):
         _refuse_shape(loc, "with:", "a mapping", st.raw["with"], errors)
     _audit_scalars(st.raw, loc, policy, errors, step=True)
 
 
-# The steps a job may run before it runs `.github/ci/**` (the ordering rule
-# of check 7): each is a closed shape whose effect on the runner is fixed —
-# a checkout or interpreter setup by content-pinned action with a closed
-# `with:`, the canonical hash-checked pip install, or a `.github/ci` tool
-# itself. Any other step is arbitrary code (a free-form `run:`, an action, a
-# build script) that may rewrite the tree or the job's environment first.
+# The steps a job may run up to and including its last step naming
+# `.github/ci/**` (the ordering rule of check 7): each is a closed shape whose
+# effect on the runner is fixed — a checkout or interpreter setup by
+# content-pinned action with a closed `with:` and no `env:`, the canonical
+# hash-checked pip install with no `env:`, or a pure run of one tool file under
+# `.github/ci` (`ToolRun`) with allowlisted `env:` (`ToolEnvKey`). Any other
+# step is arbitrary code (a free-form `run:`, an action, a build script) that
+# may rewrite the tree or the job's environment, so it may neither name the
+# tree nor precede a step that does.
 PINNED_CHECKOUT_USES = frozenset({
     "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
     "actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09",
@@ -1464,85 +1477,215 @@ PINNED_CHECKOUT_USES = frozenset({
 CHECKOUT_WITH_KEYS = frozenset({"fetch-depth", "persist-credentials", "sparse-checkout", "sparse-checkout-cone-mode"})
 PINNED_SETUP_PYTHON_USES = frozenset({"actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065"})
 SETUP_PYTHON_WITH_KEYS = frozenset({"python-version"})
-PURE_TOOL_RUN_RE = re.compile(
-    r"\s*(?:(?:python3|bash)\s+)?\.github/ci/[A-Za-z0-9_-]+\.(?:py|sh)(?:\s+-{1,2}[A-Za-z0-9-]+)*\s*"
-)
 PRE_TOOL_STEP_KEYS = frozenset({
     "name", "id", "if", "env", "run", "uses", "with", "continue-on-error", "timeout-minutes", "shell",
 })
-# A GitHub-hosted runner label: every job gets a fresh virtual machine, so no
-# earlier job's writes survive into this one. A self-hosted runner keeps its
-# disk across jobs; an expression label is chosen at run time.
-GITHUB_HOSTED_RUNNER_RE = re.compile(
-    r"(?:ubuntu|windows|macos)-(?:latest|\d+(?:\.\d+)?)(?:-arm|-arm64|-large|-xlarge)?"
-)
-TREE_TOKEN_SPLIT_RE = re.compile(r"[\s'\"`;&|()<>=$\\]+")
+# A tool job runs on a GitHub-hosted Ubuntu label: a fresh virtual machine per
+# job (no earlier job's writes survive into it) whose default shell is bash, the
+# only shell a `ToolRun` is read as. A self-hosted runner keeps its disk across
+# jobs; an expression label is chosen at run time; a Windows or macOS label
+# changes the shell and path rules the tool words are read under.
+UBUNTU_HOSTED_RUNNER_RE = re.compile(r"ubuntu-(?:latest|\d+(?:\.\d+)?)(?:-arm|-arm64)?")
+# Raw-text words: split at quotes and shell metacharacters after every `\` is
+# read as `/`, so a Windows-separated path is seen as the path it names.
+TREE_TOKEN_SPLIT_RE = re.compile(r"[\s'\"`;&|()<>=$]+")
 
 
-# The `env:` prefixes that steer what a `.github/ci` tool runs under: the
-# helper's refused prefixes save the Rust toolchain's, since no tool in the
-# tree runs cargo, rustc, or rustup (their wiring keys are refused everywhere
-# by rule (b) regardless).
-TOOL_ENV_REFUSED_PREFIXES = tuple(
-    p for p in GITHUB_ENV_KEY_REFUSED_PREFIXES if p not in ("CARGO", "RUST")
-)
+class Interp(enum.Enum):
+    """How a `ToolRun` starts its tool: `python3 <tool>.py`, `bash <tool>.sh`,
+    or `<tool>.sh` executed directly (its shebang)."""
+
+    PYTHON3 = "python3"
+    BASH = "bash"
+    DIRECT = ""
 
 
-def _tool_env_key_refusal(key: str) -> bool:
-    """Whether an `env:` key could steer the runner, a loader, or an
-    interpreter a `.github/ci` tool runs under."""
-    k = key.upper()
-    return k in GITHUB_ENV_KEY_EXACT_REFUSED or k.startswith(TOOL_ENV_REFUSED_PREFIXES)
+TOOL_SUFFIX = {Interp.PYTHON3: ".py", Interp.BASH: ".sh", Interp.DIRECT: ".sh"}
+TREE_FILE_RE = re.compile(r"\.github/ci/([A-Za-z0-9_-]+\.(?:py|sh))")
+TOOL_FLAG_RE = re.compile(r"--?[A-Za-z0-9][A-Za-z0-9-]*")
+TOOL_RUN_WORD_RE = re.compile(r"[A-Za-z0-9_./-]+")
+
+
+@dataclass(frozen=True)
+class TreeFile:
+    """A regular file directly under `.github/ci`, present on disk (not a
+    symlink); `name` is its file name."""
+
+    name: str
+
+    @staticmethod
+    def parse(word: str, root: str) -> TreeFile | None:
+        m = TREE_FILE_RE.fullmatch(word)
+        if m is None:
+            return None
+        path = os.path.join(root, "ci", m.group(1))
+        if os.path.islink(path) or not os.path.isfile(path):
+            return None
+        return TreeFile(m.group(1))
+
+
+@dataclass(frozen=True)
+class ToolRun:
+    """A `run:` that is exactly one tool invocation: an interpreter, one
+    `TreeFile` whose suffix fits it, and bare literal flags. The whole text
+    is one line of plain words — no quote, expansion, `${{ }}`, redirection,
+    separator, or here-document — so the shell runs exactly those words."""
+
+    interp: Interp
+    tool: TreeFile
+    flags: tuple[str, ...]
+
+    @staticmethod
+    def parse(run: str, root: str) -> ToolRun | None:
+        text = run.strip()
+        words = text.split()
+        if not words or "\n" in text or not all(TOOL_RUN_WORD_RE.fullmatch(w) for w in words):
+            return None
+        cmds = shell_lex.split_commands(text)
+        if len(cmds) != 1:
+            return None
+        cmd = cmds[0]
+        if cmd.writes or cmd.heredoc or cmd.herestring or cmd.pipe_source is not None or cmd.words != words:
+            return None
+        interp = {"python3": Interp.PYTHON3, "bash": Interp.BASH}.get(words[0], Interp.DIRECT)
+        rest = words if interp is Interp.DIRECT else words[1:]
+        if not rest:
+            return None
+        tool = TreeFile.parse(rest[0], root)
+        if tool is None or not tool.name.endswith(TOOL_SUFFIX[interp]):
+            return None
+        flags = tuple(rest[1:])
+        if not all(TOOL_FLAG_RE.fullmatch(f) for f in flags):
+            return None
+        return ToolRun(interp, tool, flags)
+
+
+class EnvScope(enum.Enum):
+    WORKFLOW = "workflow"
+    JOB = "job"
+    STEP = "step"
+
+
+_EVERY_SCOPE = frozenset(EnvScope)
+# The one allowlist of `env:` keys a tool job may carry, with the scopes each
+# is admitted at: data a tool reads, never a key that steers the runner, a
+# loader, or an interpreter. `CARGO_*` is workflow-wide build output styling
+# for the workflow's cargo jobs; no tool runs cargo.
+TOOL_ENV_ALLOWLIST: dict[str, frozenset[EnvScope]] = {
+    "EVENT_NAME": _EVERY_SCOPE,
+    "HEAD_REPO": _EVERY_SCOPE,
+    "PR_HEAD_SHA": _EVERY_SCOPE,
+    "REPO": _EVERY_SCOPE,
+    "GH_TOKEN": _EVERY_SCOPE,
+    "HEAD_SHA": _EVERY_SCOPE,
+    "CARGO_TERM_COLOR": frozenset({EnvScope.WORKFLOW}),
+    "CARGO_INCREMENTAL": frozenset({EnvScope.WORKFLOW}),
+}
+
+
+@dataclass(frozen=True)
+class ToolEnvKey:
+    """An `env:` key admitted in a tool job at `scope` (`TOOL_ENV_ALLOWLIST`),
+    byte-exact."""
+
+    key: str
+    scope: EnvScope
+
+    @staticmethod
+    def parse(key: object, scope: EnvScope) -> ToolEnvKey | None:
+        if isinstance(key, str) and scope in TOOL_ENV_ALLOWLIST.get(key, frozenset()):
+            return ToolEnvKey(key, scope)
+        return None
+
+
+def _unadmitted_env_keys(container: dict, scope: EnvScope) -> list[str]:
+    """The `env:` keys of `container` that are not `ToolEnvKey`s at `scope`
+    (an `env:` that is not a mapping is reported whole)."""
+    env = container.get("env", {})
+    if not isinstance(env, dict):
+        return [f"<env: {type(env).__name__}>"]
+    return sorted(str(k) for k in env if ToolEnvKey.parse(k, scope) is None)
+
+
+def _github_component(part: str) -> bool:
+    """Whether one path component could name `.github`: a glob with at least
+    one literal character past its leading dot (`.*` alone is any dot name,
+    most often a regular expression), case-folded, with the trailing dots and
+    spaces Windows drops set aside; a `~` (a Windows short name) counts."""
+    part = part.casefold().rstrip(". ") or part
+    literal = re.sub(r"\[[^]]*]|[*?]", "", part)
+    return "~" in part or (part.startswith(".") and len(literal) > 1 and fnmatch.fnmatchcase(".github", part))
 
 
 def _names_tree(word: str) -> bool:
-    """Whether `word` names a path under `.github/ci`: after brace
-    expansion, a component matching `.github` (a glob with at least one
-    literal character past its leading dot — `.*` alone is any dot name,
-    most often a regular expression) followed by one matching `ci`. A word
-    whose brace expansion is too large to enumerate is taken to name it."""
+    """Whether `word` names a path under `.github/ci`: after brace expansion
+    and with every `\\` read as `/`, a component that could name `.github`
+    (`_github_component`) followed by one matching `ci`. A word whose brace
+    expansion is too large to enumerate is taken to name it."""
     alternatives = _brace_alternatives(word)
     if alternatives is None:
         return True
     for alt in alternatives:
-        parts = posixpath.normpath(alt.casefold()).split("/")
+        parts = posixpath.normpath(alt.replace("\\", "/").casefold()).split("/")
         for part, nxt in zip(parts, parts[1:]):
-            literal = re.sub(r"\[[^]]*]|[*?]", "", part)
-            if (
-                part.startswith(".") and len(literal) > 1
-                and fnmatch.fnmatchcase(".github", part) and fnmatch.fnmatchcase("ci", nxt)
-            ):
+            if _github_component(part) and fnmatch.fnmatchcase("ci", nxt):
                 return True
     return False
 
 
-def _refused_env_keys(container: dict) -> list[str]:
-    env = container.get("env", {})
-    return sorted(str(k) for k in env if _tool_env_key_refusal(str(k))) if isinstance(env, dict) else []
+def _working_directory_refusal(value: object, repo_top: str) -> str | None:
+    """Why a `working-directory:` value is refused, or None: it must be a
+    plain path assembled at no run time, with no component (as written, or
+    as resolved on disk through symlinks) that could name `.github`."""
+    if not isinstance(value, str):
+        return f"is not a string ({type(value).__name__})"
+    if "$" in value or "`" in value:
+        return "is assembled at run time"
+    path = value.replace("\\", "/")
+    if any(_github_component(p) for p in posixpath.normpath(path).split("/")):
+        return "has a .github component"
+    top = os.path.realpath(repo_top)
+    real = os.path.relpath(os.path.realpath(os.path.join(top, path)), top)
+    if any(_github_component(p) for p in real.replace(os.sep, "/").split("/")):
+        return "resolves on disk to a .github component"
+    return None
 
 
-def _pre_tool_shape(st: Step) -> str | None:
+def _refuse_working_directory(container: dict, loc: str, what: str, repo_top: str, errors: list[str]) -> None:
+    """A `working-directory` naming `.github` makes a relative `ci/...` path a
+    tree reference no word spells; refused at every scope, in every job."""
+    if "working-directory" not in container:
+        return
+    why = _working_directory_refusal(container["working-directory"], repo_top)
+    if why is not None:
+        errors.append(
+            f"{loc} {what} {container['working-directory']!r} {why} — a relative path "
+            f"under it could reach {PROTECTED_TREE}/ unnamed; refused"
+        )
+
+
+def _pre_tool_shape(st: Step, root: str) -> str | None:
     """Which closed pre-tool shape `st` is, or None: a step whose effect on
     the runner is fixed and cannot rewrite `.github/ci/**` or steer the
     interpreters the tools run under."""
     raw = st.raw
     if not set(raw) <= PRE_TOOL_STEP_KEYS or raw.get("shell", "bash") != "bash":
         return None
-    if not isinstance(raw.get("env", {}), dict) or _refused_env_keys(raw):
-        return None
     uses, run, with_ = raw.get("uses"), raw.get("run"), raw.get("with", {})
     if not isinstance(with_, dict):
         return None
     if isinstance(uses, str) and run is None:
+        if "env" in raw:
+            return None
         if uses in PINNED_CHECKOUT_USES and set(with_) <= CHECKOUT_WITH_KEYS:
             return "pinned checkout"
         if uses in PINNED_SETUP_PYTHON_USES and set(with_) <= SETUP_PYTHON_WITH_KEYS:
             return "pinned setup-python"
         return None
-    if isinstance(run, str) and uses is None and not with_:
+    if isinstance(run, str) and uses is None and "with" not in raw:
         if run.strip() == CANONICAL_PIP_INSTALL:
-            return "canonical pip install"
-        if PURE_TOOL_RUN_RE.fullmatch(run):
+            return None if "env" in raw else "canonical pip install"
+        if ToolRun.parse(run, root) is not None and not _unadmitted_env_keys(raw, EnvScope.STEP):
             return ".github/ci tool"
     return None
 
@@ -1551,13 +1694,13 @@ def _tree_reference(node: object, run: str | None, loc: str) -> str | None:
     """The first word in any string of `node` (keys included) that could
     name `.github/ci/**`, or None. In the step's own `run:` the canonical
     helper call is set aside (see `check_workflow_steps`). Words are taken
-    both quote-removed (`shell_lex`) and as raw text split at quotes and
-    shell metacharacters, so neither spelling hides a reference. Shape
-    errors are reported by the step audits, not here."""
+    both quote-removed (`shell_lex`) and as raw text with every `\\` read as
+    `/`, split at quotes and shell metacharacters, so neither spelling hides
+    a reference. Shape errors are reported by the step audits, not here."""
     for label, text, _ in _string_scalars(node, loc, []):
         if label == "run:" and text is run:
             text = GITHUB_ENV_HELPER_CALL_RE.sub(" ", text)
-        words = TREE_TOKEN_SPLIT_RE.split(text)
+        words = TREE_TOKEN_SPLIT_RE.split(text.replace("\\", "/"))
         for part in _shell_texts(text):
             for cmd in shell_lex.split_commands(part):
                 words.extend(cmd.words)
@@ -1568,14 +1711,24 @@ def _tree_reference(node: object, run: str | None, loc: str) -> str | None:
     return None
 
 
-def _check_tool_job(wf: SccacheWorkflow, job: WorkflowJob, steps: list[Step], jloc: str, errors: list[str]) -> None:
+CLOSED_SHAPES_NOTE = (
+    "the closed pre-tool shapes (pinned checkout or setup-python with no env, the "
+    "canonical pip install with no env, a pure .github/ci tool run with allowlisted env)"
+)
+
+
+def _check_tool_job(
+    wf: SccacheWorkflow, job: WorkflowJob, steps: list[Step], jloc: str, root: str, errors: list[str]
+) -> None:
     """The ordering rule of check 7 for one job: a step naming
-    `.github/ci/**` runs only while every step before it is a closed
-    pre-tool shape (`_pre_tool_shape`), in a job whose runner is fresh and
-    whose paths resolve from the workspace root."""
+    `.github/ci/**` is itself a closed pre-tool shape (`_pre_tool_shape`)
+    and runs only while every step before it is one too, in a job whose
+    runner is a fresh Ubuntu machine, whose paths resolve from the workspace
+    root, and whose every `env:` key is a `ToolEnvKey`."""
     tainted: Step | None = None
     referenced = False
     for st in steps:
+        shape = _pre_tool_shape(st, root)
         hit = _tree_reference(st.raw, st.run, jloc)
         if hit is not None:
             referenced = True
@@ -1583,30 +1736,30 @@ def _check_tool_job(wf: SccacheWorkflow, job: WorkflowJob, steps: list[Step], jl
             if tainted is not None:
                 errors.append(
                     f"{stloc} names {hit!r} after step {tainted.label!r}, which is outside "
-                    "the closed pre-tool shapes (pinned checkout, pinned setup-python, the "
-                    "canonical pip install, a .github/ci tool) — an earlier step could have "
-                    f"rewritten {PROTECTED_TREE}/ or the job's environment; refused"
+                    f"{CLOSED_SHAPES_NOTE} — an earlier step could have rewritten "
+                    f"{PROTECTED_TREE}/ or the job's environment; refused"
                 )
-            if "working-directory" in st.raw:
+            if shape is None:
+                detail = []
+                if "working-directory" in st.raw:
+                    detail.append("under a working-directory:")
+                bad = _unadmitted_env_keys(st.raw, EnvScope.STEP)
+                if bad:
+                    detail.append(f"with env {bad}")
+                note = f" ({', '.join(detail)})" if detail else ""
                 errors.append(
-                    f"{stloc} names {hit!r} under a working-directory: — its relative "
-                    f"paths would resolve outside the workspace's {PROTECTED_TREE}/; refused"
+                    f"{stloc} names {hit!r} but is not itself one of {CLOSED_SHAPES_NOTE}{note} "
+                    f"— only those may name {PROTECTED_TREE}/; refused"
                 )
-            bad = _refused_env_keys(st.raw)
-            if bad:
-                errors.append(
-                    f"{stloc} names {hit!r} with env {bad} — it would steer the runner, a "
-                    "loader, or an interpreter the tool runs under; refused"
-                )
-        if tainted is None and _pre_tool_shape(st) is None:
+        if tainted is None and shape is None:
             tainted = st
     if not referenced:
         return
     runs_on = job.raw.get("runs-on")
-    if not isinstance(runs_on, str) or not GITHUB_HOSTED_RUNNER_RE.fullmatch(runs_on):
+    if not isinstance(runs_on, str) or not UBUNTU_HOSTED_RUNNER_RE.fullmatch(runs_on):
         errors.append(
             f"{jloc} runs {PROTECTED_TREE}/ on runs-on {runs_on!r}, not one literal "
-            "GitHub-hosted label (a fresh virtual machine per job); refused"
+            "GitHub-hosted Ubuntu label (a fresh virtual machine per job, bash by default); refused"
         )
     for key in ("container", "services"):
         if key in job.raw:
@@ -1614,19 +1767,24 @@ def _check_tool_job(wf: SccacheWorkflow, job: WorkflowJob, steps: list[Step], jl
                 f"{jloc} runs {PROTECTED_TREE}/ with a job {key}: — its filesystem and "
                 "processes outlive this job's steps; refused"
             )
-    for scope, raw in (("workflow", wf.doc), ("job", job.raw)):
+    for scope, raw in ((EnvScope.WORKFLOW, wf.doc), (EnvScope.JOB, job.raw)):
         d = raw.get("defaults")
         r = d.get("run") if isinstance(d, dict) else None
         if isinstance(r, dict) and "working-directory" in r:
             errors.append(
-                f"{jloc} runs {PROTECTED_TREE}/ under a {scope} defaults.run.working-directory "
+                f"{jloc} runs {PROTECTED_TREE}/ under a {scope.value} defaults.run.working-directory "
                 "— its relative paths would resolve outside the workspace; refused"
             )
-        bad = _refused_env_keys(raw)
+        if isinstance(r, dict) and r.get("shell", "bash") != "bash":
+            errors.append(
+                f"{jloc} runs {PROTECTED_TREE}/ under a {scope.value} defaults.run.shell "
+                f"{r.get('shell')!r} — a tool run is read as bash; refused"
+            )
+        bad = _unadmitted_env_keys(raw, scope)
         if bad:
             errors.append(
-                f"{jloc} runs {PROTECTED_TREE}/ with {scope} env {bad} — it would steer "
-                "the runner, a loader, or an interpreter the tool runs under; refused"
+                f"{jloc} runs {PROTECTED_TREE}/ with {scope.value} env {bad}, outside the "
+                "tool env allowlist (TOOL_ENV_ALLOWLIST); refused"
             )
 
 
@@ -1942,13 +2100,24 @@ def check_workflow_steps(errors: list[str], root: str = REPO_ROOT) -> None:
       (h) a `shell:` or `defaults.run.shell` other than bash, pwsh, or
           powershell, bare (any other value is a command template);
       (i) the ordering rule (`_check_tool_job`): a step naming
-          `.github/ci/**` after any step outside the closed pre-tool shapes
-          (`_pre_tool_shape`) — any other step may rewrite the tree or the
-          job's environment first, so the tools' trust is monotone taint,
-          not a list of write spellings; in a job that runs it, a runs-on
-          other than one literal GitHub-hosted label, a `container:` or
-          `services:`, a `working-directory` at step or defaults scope, or
-          an interpreter/loader/runner `env:` key at any scope. The canonical
+          `.github/ci/**` that is not itself a closed pre-tool shape
+          (`_pre_tool_shape`), or that runs after any step outside them —
+          any other step may rewrite the tree or the job's environment
+          first, so the tools' trust is monotone taint, not a list of write
+          spellings. Every shape is an allowlist: a tool step is one
+          `ToolRun` (`python3`/`bash`/direct, one `TreeFile` present on
+          disk, bare flags; no `${{ }}`, operator, redirection, or second
+          line); an action or pip step carries no `env:`; every workflow,
+          job, and tool-step `env:` key is a `ToolEnvKey` of
+          `TOOL_ENV_ALLOWLIST` for its scope. In a job that runs the tree, a
+          runs-on other than one literal GitHub-hosted Ubuntu label, a
+          `container:` or `services:`, a `working-directory` at step or
+          defaults scope, or a `defaults.run.shell` other than bash is
+          refused. In every job, a `working-directory` (step, composite
+          step, or defaults) assembled at run time or with a `.github`
+          component, as written (`\\` read as `/`) or resolved on disk, is
+          refused: a relative `ci/...` under it names the tree unspelled.
+          The raw-text scan reads `\\` as `/`. The canonical
           `ci/github-env.sh` call is not a reference: a step after a
           non-closed step already runs arbitrary code with the env file
           open, so the helper grants it nothing, and the helper is not a
@@ -1992,10 +2161,13 @@ def check_workflow_steps(errors: list[str], root: str = REPO_ROOT) -> None:
         alias written in the same `run:` (a `PATH` entry, `BASH_ENV`, a
         sourced file);
       - under (i), a runner that carries a GitHub-hosted label but is not
-        one (a self-hosted runner registered as `ubuntu-latest`), and a
-        tool reference after a non-closed step spelled so no word names the
-        tree (`${d}hub/ci`, a relative path after `cd`, a pure-wildcard
-        `.*/ci`);
+        one: the label test assumes the repository registers no self-hosted
+        runner (it registers none; one labelled `ubuntu-latest` would keep
+        its disk across jobs); a step that runs the tree spelled so no word
+        names it (`${d}hub/ci`, a relative path after `cd .github`, a
+        pure-wildcard `.*/ci`) is not seen as a tool step, so its verdict is
+        not one this rule vouches for; and a symlink to the tree created at
+        run time by a step outside the tool job;
       - in the defence-in-depth write scan beneath (i) (these are closed
         only because (i) refuses the tool after any such step): a path the
         words do not spell (`d=.git; ${d}hub/ci`, a relative path after
@@ -2012,7 +2184,7 @@ def check_workflow_steps(errors: list[str], root: str = REPO_ROOT) -> None:
     Those are review-gated, not machine-gated.
     """
     start = len(errors)
-    policy = StepPolicy(load_github_env_allowlist(errors, root))
+    policy = StepPolicy(load_github_env_allowlist(errors, root), os.path.dirname(os.path.abspath(root)))
     actions = LocalActions(root, policy, errors)
     _check_sccache_composite(actions, errors)
 
@@ -2039,12 +2211,12 @@ def check_workflow_steps(errors: list[str], root: str = REPO_ROOT) -> None:
     for wf in _load_sccache_workflows(root, errors):
         wloc = f"{wf.fname}: workflow-level"
         _refuse_env_keys(_scoped_env(wf.doc, f"{wloc} env", errors), wloc, errors)
-        _audit_defaults(wf.doc, wf.fname, errors)
+        _audit_defaults(wf.doc, wf.fname, policy.repo_top, errors)
         _audit_scalars({k: v for k, v in wf.doc.items() if k != "jobs"}, wloc, policy, errors, step=False)
         for job in wf.jobs:
             jloc = f"{wf.fname}: job {job.job_id!r}"
             _refuse_env_keys(_scoped_env(job.raw, f"{jloc} env", errors), jloc, errors)
-            _audit_defaults(job.raw, jloc, errors)
+            _audit_defaults(job.raw, jloc, policy.repo_top, errors)
             _audit_scalars({k: v for k, v in job.raw.items() if k != "steps"}, jloc, policy, errors, step=False)
             for scope_name, scope_raw in _job_sub_env_scopes(job.raw, jloc, errors):
                 sloc = f"{jloc} {scope_name}"
@@ -2065,7 +2237,7 @@ def check_workflow_steps(errors: list[str], root: str = REPO_ROOT) -> None:
                     reaches = True
                     if via is None and action.id != SCCACHE_COMPOSITE_ID:
                         via = action.display
-            _check_tool_job(wf, job, steps, jloc, errors)
+            _check_tool_job(wf, job, steps, jloc, root, errors)
             if reaches:
                 hit = sorted({st.name for st in steps if st.name is not None} & deterministic_steps)
                 if hit:

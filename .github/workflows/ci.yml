@@ -1687,15 +1687,21 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
-          sparse-checkout: .github/ci/deterministic-checks.json
+          sparse-checkout: |
+            .github/ci/deterministic-checks.json
+            .github/ci/deterministic_checks_output.py
           sparse-checkout-cone-mode: false
+
+      - name: Publish the deterministic check pairs
+        id: ssot
+        run: python3 .github/ci/deterministic_checks_output.py
 
       - name: Cancel the run when a deterministic check step is red
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           RUN_ID: ${{ github.run_id }}
-          SSOT: .github/ci/deterministic-checks.json
+          CHECKS: ${{ steps.ssot.outputs.checks }}
         run: |
           set -uo pipefail
           failed="$(gh api "repos/$REPO/actions/runs/$RUN_ID/jobs" --paginate \
@@ -1706,9 +1712,9 @@ jobs:
           # Data-only exact match: a failed job is a deterministic red iff its
           # (name, failed step) pair is in the SSOT. Output is exactly `true`
           # or `false`; anything else (a jq error included) means no cancel.
-          verdict="$(printf '%s\n' "$failed" | jq -rs --slurpfile ssot "$SSOT" '
+          verdict="$(printf '%s\n' "$failed" | jq -rs --argjson ssot "$CHECKS" '
             [ .[] | . as $job
-              | any($ssot[0].checks[]; .context == $job.name and (.step as $s | any($job.steps[]; . == $s)))
+              | any($ssot[]; .context == $job.name and (.step as $s | any($job.steps[]; . == $s)))
             ] | any')" || verdict=error
           if [ "$verdict" != "true" ]; then
             echo "no failed job on run $RUN_ID failed at a deterministic check step (verdict: $verdict) — not cancelling."
