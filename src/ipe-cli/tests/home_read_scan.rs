@@ -14,8 +14,9 @@
 //!
 //! The root `clippy.toml` denies `std::env::{var, var_os, vars, vars_os}`, so
 //! the audited readers are the only raw readers. This scan pins that set
-//! independently: it refuses a literal home read in production sources, the
-//! private home-name constant outside its module, a raw `std::env` read or
+//! independently: it refuses a literal home read in production sources, a
+//! home-dir crate (`home`, `dirs`, `directories`, `etcetera`, …) as a
+//! manifest dependency or a source path, the private home-name constant outside its module, a raw `std::env` read or
 //! whole-environment iterator outside the audited files, the escape-hatch
 //! allow outside the pinned allow files, the jail passthrough outside the
 //! sandbox crate and its pinned caller, and a `/proc/*/environ` read.
@@ -58,30 +59,136 @@ const RAW_PASSTHROUGH_PATHS: &[&str] = &["host_env::granted", "host_env::{", "ho
 /// The module that owns the private home-name constant.
 const HOME_MODULE: &str = "src/compiler/sandbox/src/home.rs";
 
-/// Whitespace-free spellings of a raw home read.
-const RAW_HOME_READS: &[&str] = &[
-    "var(\"HOME\")",
-    "var_os(\"HOME\")",
-    "var(\"USERPROFILE\")",
-    "var_os(\"USERPROFILE\")",
-    "env::home_dir",
-    "dirs::home_dir",
+/// Whitespace-free call openers that read an environment variable named by a
+/// literal, `{}` standing for the name.
+///
+/// Covers `std::env::var`/`var_os` and every wrapper ending in `var`,
+/// `env!`/`option_env!`, and libc's `getenv` over a string, C-string, or
+/// NUL-terminated byte literal.
+const LITERAL_READ_SHAPES: &[&str] = &[
+    "var(\"{}\"",
+    "var_os(\"{}\"",
+    "env!(\"{}\"",
+    "getenv(\"{}\"",
+    "getenv(\"{}\\0\"",
+    "getenv(c\"{}\"",
+    "getenv(b\"{}\\0\"",
 ];
+
+/// Whitespace-free spellings of the deprecated `std` home reader.
+const STD_HOME_READS: &[&str] = &["env::home_dir"];
+
+/// Crates whose API resolves the invoking user's home or a directory beneath
+/// it, by Cargo package name.
+const HOME_DIR_CRATES: &[&str] = &[
+    "home",
+    "dirs",
+    "dirs-next",
+    "dirs-sys",
+    "dirs-sys-next",
+    "directories",
+    "directories-next",
+    "etcetera",
+];
+
+/// The whitespace-free literal home reads: every `LITERAL_READ_SHAPES` opener
+/// over every `ipe_env::HOME_NAMES` name.
+fn literal_home_reads() -> Vec<String> {
+    LITERAL_READ_SHAPES
+        .iter()
+        .flat_map(|shape| {
+            ipe_env::HOME_NAMES
+                .iter()
+                .map(move |name| shape.replace("{}", name))
+        })
+        .collect()
+}
+
+/// The raw home reads `src` contains, whitespace and line breaks ignored.
+///
+/// A hit is a literal home read, the `std` home reader, or a crate-root path
+/// into a home-dir crate.
+fn raw_home_reads(src: &str) -> Vec<String> {
+    let flat: String = src.chars().filter(|c| !c.is_whitespace()).collect();
+    let mut hits: Vec<String> = literal_home_reads()
+        .into_iter()
+        .chain(STD_HOME_READS.iter().map(|s| (*s).to_owned()))
+        .filter(|needle| flat.contains(needle.as_str()))
+        .collect();
+    hits.extend(home_crate_paths(src));
+    hits
+}
+
+/// The home-dir crate paths `src`'s code reaches from a crate root.
+///
+/// `crate::home::` or `ipe_sandbox::home::` is a sub-path, not the crate; a
+/// crate-rooted `home::` or `::home::` is refused, and so, failing closed, is
+/// one inside a group import (`{home::`).
+fn home_crate_paths(src: &str) -> Vec<String> {
+    let code = code_words(src);
+    HOME_DIR_CRATES
+        .iter()
+        .map(|krate| format!("{}::", krate.replace('-', "_")))
+        .filter(|needle| {
+            code.match_indices(needle.as_str())
+                .any(|(at, _)| is_crate_root_path(&code, at))
+        })
+        .collect()
+}
+
+/// Whether the path segment at byte offset `at` of `code` starts at a crate root.
+///
+/// It must be neither glued to an identifier nor preceded by `<ident>::`.
+fn is_crate_root_path(code: &str, at: usize) -> bool {
+    if ident_before(code, at) {
+        return false;
+    }
+    let head = code.get(..at).map_or("", str::trim_end);
+    head.strip_suffix("::").is_none_or(|parent| {
+        !parent
+            .trim_end()
+            .chars()
+            .next_back()
+            .is_some_and(is_ident_char)
+    })
+}
+
+/// The home-dir crates `manifest` depends on.
+///
+/// A dependency key in either spelling (`dirs-next`, `dirs_next`), a
+/// `[…dependencies.<crate>]` table, or a `package = "<crate>"` rename counts.
+fn home_crate_deps(manifest: &str) -> Vec<&'static str> {
+    let lines: Vec<String> = manifest
+        .lines()
+        .map(|line| {
+            line.split_once('#')
+                .map_or(line, |(code, _)| code)
+                .chars()
+                .filter(|c| !c.is_whitespace())
+                .collect()
+        })
+        .collect();
+    HOME_DIR_CRATES
+        .iter()
+        .copied()
+        .filter(|krate| {
+            let snake = krate.replace('-', "_");
+            [*krate, snake.as_str()].into_iter().any(|name| {
+                lines.iter().any(|line| {
+                    line.strip_prefix(name)
+                        .is_some_and(|rest| rest.starts_with(['=', '.']))
+                        || line.contains(&format!("dependencies.{name}]"))
+                        || line.contains(&format!("package=\"{name}\""))
+                })
+            })
+        })
+        .collect()
+}
 
 /// Whitespace-free code spellings that reach the raw environment readers:
 /// a path to `var`/`var_os`/`vars`/`vars_os`, a glob or group import of
 /// `std::env` that would let them be called unqualified, or libc's `getenv`.
 const RAW_ENV_PATHS: &[&str] = &["env::var", "std::env::{", "std::env::*", "libc::getenv"];
-
-/// The raw home reads `src` contains, whitespace and line breaks ignored.
-fn raw_home_reads(src: &str) -> Vec<&'static str> {
-    let flat: String = src.chars().filter(|c| !c.is_whitespace()).collect();
-    RAW_HOME_READS
-        .iter()
-        .copied()
-        .filter(|needle| flat.contains(needle))
-        .collect()
-}
 
 /// Whether `c` can continue a Rust identifier.
 fn is_ident_char(c: char) -> bool {
@@ -332,6 +439,98 @@ fn workspace_sources(with_tests: bool) -> Vec<(String, String)> {
         .collect()
 }
 
+/// Recursively collect every `Cargo.toml` under `dir` into `out`, build output
+/// and hidden directories skipped.
+fn collect_manifests(dir: &Path, out: &mut Vec<PathBuf>) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.filter_map(Result::ok) {
+        let path = entry.path();
+        if path.is_dir() {
+            let skipped = path
+                .file_name()
+                .is_some_and(|n| n == "target" || n.to_string_lossy().starts_with('.'));
+            if !skipped {
+                collect_manifests(&path, out);
+            }
+        } else if path.file_name().is_some_and(|n| n == "Cargo.toml") {
+            out.push(path);
+        }
+    }
+}
+
+/// The workspace root manifest and every `Cargo.toml` under `src/`, `tools/`,
+/// and `examples/`, keyed by its workspace-relative path.
+fn workspace_manifests() -> Vec<(String, String)> {
+    let root = workspace();
+    let mut files = vec![root.join("Cargo.toml")];
+    for top in ["src", "tools", "examples"] {
+        collect_manifests(&root.join(top), &mut files);
+    }
+    files
+        .into_iter()
+        .filter_map(|path| {
+            let rel = path
+                .strip_prefix(&root)
+                .unwrap_or(&path)
+                .to_string_lossy()
+                .replace('\\', "/");
+            std::fs::read_to_string(&path).ok().map(|text| (rel, text))
+        })
+        .collect()
+}
+
+#[test]
+fn no_manifest_depends_on_a_home_dir_crate() {
+    let manifests = workspace_manifests();
+    assert!(
+        manifests.iter().any(|(rel, _)| rel == "Cargo.toml"),
+        "the scan found no root manifest; the walk root is wrong"
+    );
+    let offenders: Vec<_> = manifests
+        .iter()
+        .map(|(rel, text)| (rel, home_crate_deps(text)))
+        .filter(|(_, hits)| !hits.is_empty())
+        .collect();
+    assert!(
+        offenders.is_empty(),
+        "a home-dir crate resolves the host home outside the validated \
+         accessors; use `ipe_sandbox::home::home_dir`: {offenders:?}"
+    );
+}
+
+#[test]
+fn a_planted_home_dir_crate_dependency_is_detected() {
+    for manifest in [
+        "[dependencies]\nhome = \"0.5\"",
+        "[dependencies]\ndirs = { version = \"6\" }",
+        "[dev-dependencies]\ndirs-next = \"2\"",
+        "[dependencies]\ndirs_sys = \"0.5\"",
+        "[dependencies]\ndirectories.workspace = true",
+        "[workspace.dependencies]\ndirectories-next = \"2\"",
+        "[target.'cfg(unix)'.dependencies]\n  etcetera = \"0.8\"",
+        "[dependencies.dirs-sys-next]\nversion = \"0.1\"",
+        "[dependencies]\nhd = { package = \"home\", version = \"0.5\" }",
+    ] {
+        assert!(
+            !home_crate_deps(manifest).is_empty(),
+            "the scan missed a home-dir crate dependency: {manifest:?}"
+        );
+    }
+    for manifest in [
+        "[package]\nhomepage = \"https://example.org\"",
+        "[dependencies]\ndirsx = \"1\"",
+        "# home = \"0.5\"",
+        "[dependencies]\nipe_env = { path = \"../compiler/env\" }",
+    ] {
+        assert!(
+            home_crate_deps(manifest).is_empty(),
+            "the scan flagged a non-home-dir manifest line: {manifest:?}"
+        );
+    }
+}
+
 #[test]
 fn no_production_source_reads_the_home_directly() {
     let files = workspace_sources(false);
@@ -506,12 +705,51 @@ fn a_planted_raw_home_read_is_detected() {
         "#[allow(deprecated)] let h = std::env::home_dir();",
         "use std::env::home_dir;",
         "let h = dirs::home_dir();",
+        "const H: Option<&str> = option_env!(\"HOME\");",
+        "const H: &str = env!(\"HOME\");",
+        "const H: &str = env!(\n    \"USERPROFILE\",\n    \"needs a home\",\n);",
+        "let h = option_env!(\"HOMEDRIVE\");",
+        "let h = std::env::var_os(\"HOMEPATH\");",
+        "let h = unsafe { libc::getenv(c\"HOME\".as_ptr()) };",
+        "let h = unsafe { getenv(\"USERPROFILE\\0\".as_ptr().cast()) };",
+        "let h = unsafe { libc::getenv(b\"HOME\\0\".as_ptr().cast()) };",
+        "let h = home::home_dir();",
+        "let c = home::cargo_home();",
+        "use home::env::home_dir_with_env;",
+        "let h = ::home::home_dir();",
+        "let c = dirs::config_dir();",
+        "let c = dirs::cache_dir();",
+        "let d = dirs::data_dir();",
+        "let d = dirs::data_local_dir();",
+        "let s = dirs::state_dir();",
+        "use dirs::{config_local_dir, runtime_dir};",
+        "let h = dirs_next::home_dir();",
+        "let c = dirs_next::config_dir();",
+        "let h = dirs_sys::home_dir();",
+        "let b = directories::BaseDirs::new();",
+        "let p = directories_next::ProjectDirs::from(q, o, a);",
+        "let s = etcetera::choose_base_strategy();",
+        "use etcetera::{BaseStrategy, choose_base_strategy};",
+        "use ipe_sandbox::{home::home_dir};",
     ];
     for src in planted {
         assert!(
             !raw_home_reads(src).is_empty(),
             "the scan missed a raw home read: {src:?}"
         );
+    }
+}
+
+#[test]
+fn every_home_name_is_a_literal_home_read() {
+    let needles = literal_home_reads();
+    for name in ipe_env::HOME_NAMES {
+        for shape in LITERAL_READ_SHAPES {
+            assert!(
+                needles.contains(&shape.replace("{}", name)),
+                "`{shape}` over `{name}` is not scanned"
+            );
+        }
     }
 }
 
@@ -575,6 +813,12 @@ fn a_home_write_and_a_neighbouring_key_are_not_home_reads() {
         "let h = crate::env_dir::home();",
         "cmd.env(\"HOME\", scratch);",
         "let v = std::env::var_os(\"HOMEBREW_PREFIX\");",
+        "let h = crate::home::home_dir();",
+        "let h = super :: home::home_dir();",
+        "let h = my_home::root();",
+        "let h = homedir::root();",
+        "let s = \"dirs::home_dir()\";",
+        "// dirs::home_dir() would read the host home",
     ];
     for src in clean {
         assert!(

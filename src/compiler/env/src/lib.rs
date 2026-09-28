@@ -22,7 +22,7 @@ use std::ffi::{OsStr, OsString};
 /// environment names fold case through a Unicode upcase table, so `Home`, or a
 /// spelling whose `ı` / `ſ` / `İ` folds onto an ASCII letter, can read the same
 /// value as `HOME` there.
-const HOME_NAMES: [&str; 4] = ["HOME", "USERPROFILE", "HOMEDRIVE", "HOMEPATH"];
+pub const HOME_NAMES: [&str; 4] = ["HOME", "USERPROFILE", "HOMEDRIVE", "HOMEPATH"];
 
 /// `c` folded onto the ASCII letter its uppercase or lowercase mapping starts
 /// with, or `c` itself when neither mapping reaches ASCII.
