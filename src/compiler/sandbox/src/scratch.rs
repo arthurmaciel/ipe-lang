@@ -1021,6 +1021,26 @@ mod tests {
         );
     }
 
+    /// A missing base outside the user's profile is refused without creating
+    /// any of its ancestors.
+    #[cfg(windows)]
+    #[test]
+    fn windows_missing_base_outside_profile_creates_nothing() {
+        let system_root = ipe_env::var_os("SystemRoot");
+        assert!(system_root.is_some(), "SystemRoot must be set on Windows");
+        let Some(system_root) = system_root else {
+            return;
+        };
+        let missing =
+            Path::new(&system_root).join(format!("ipe-missing-scratch-{}", std::process::id()));
+        let refused = ScratchDir::new_under(&missing.join("inner"), "ipe-test");
+        assert_eq!(
+            refused.map(drop).map_err(|e| e.kind()),
+            Err(io::ErrorKind::PermissionDenied)
+        );
+        assert!(!missing.exists(), "a refused base must not be created");
+    }
+
     /// An unavailable CSPRNG fails the creation before any entry is attempted;
     /// no weaker name is ever produced.
     #[test]
