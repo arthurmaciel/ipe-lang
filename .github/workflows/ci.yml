@@ -234,8 +234,10 @@ jobs:
   # otherwise surface only at release. Type-checks the CLI and its tests for
   # Windows on every code change, then runs the owned-tree suites (output
   # directory, clean, cache), whose link and junction refusals only a Windows
-  # filesystem can exercise, and the owner-trust refusals (FFI cache and
-  # discovered manifest), which are the discovery rule only off Unix.
+  # filesystem can exercise, the owner-trust refusals (FFI cache and
+  # discovered manifest), which are the discovery rule only off Unix, and the
+  # secret-file refusals, which are the only outcome off Unix (no token, key or
+  # salt file is ever created there).
   windows-check:
     runs-on: windows-latest
     needs: changes
@@ -249,9 +251,12 @@ jobs:
       - uses: taiki-e/install-action@nextest
       - run: >-
           cargo nextest run --locked -p ipe --lib -E
-          'test(/^(output_dir|clean|cache|owner_trust)::/)
+          'test(/^(output_dir|clean|cache|owner_trust|secret_file)::/)
           | test(=ffi::tests::owned_project_cache_is_refused_when_unverifiable)
-          | test(=driver::tests::find_manifest_refuses_an_unverifiable_manifest)'
+          | test(=driver::tests::find_manifest_refuses_an_unverifiable_manifest)
+          | test(=login::tests::an_unsupported_token_store_writes_no_token)
+          | test(=ssh_signing_key::tests::an_unsupported_secret_store_generates_no_key)
+          | test(=ssh_signing_key::tests::an_unsupported_secret_store_stages_no_key_file)'
       - run: cargo nextest run --locked -p ipe_sandbox --lib -E 'test(/^home::tests::/)'
 
   # No compiler-internal jargon or raw Rust types leak into user-facing text

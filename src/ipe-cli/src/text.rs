@@ -1275,6 +1275,24 @@ messages! {
     login_remove_failed(path, detail) = "login-remove-failed";
     /// The token cannot be stored owner-only on this platform.
     login_token_store_unsupported = "login-token-store-unsupported";
+    /// A token file or its directory is not private to the invoking user.
+    login_secret_not_owner_only(path) = "login-secret-not-owner-only";
+    /// A token file's name is held by something other than a regular file.
+    login_secret_not_regular_file(path) = "login-secret-not-regular-file";
+    /// `ipe login --status`: a well-formed token is stored.
+    login_status_logged_in(path) = "login-status-logged-in";
+    /// `ipe login --status`: the token file exists but does not parse.
+    login_status_corrupt(path) = "login-status-corrupt";
+    /// `ipe login --status`: the token file is not private to the invoking user.
+    login_status_exposed(path) = "login-status-exposed";
+    /// `ipe login --status`: no token is stored.
+    login_status_not_logged_in = "login-status-not-logged-in";
+    /// `ipe login` stored the token.
+    login_stored(path) = "login-stored";
+    /// `ipe login --logout` found no token to remove.
+    login_logout_nothing = "login-logout-nothing";
+    /// `ipe login --logout` removed the token.
+    login_logout_removed(path) = "login-logout-removed";
     /// The device-flow prompt: what the grant is for, where to go, and the code.
     login_device_prompt(purpose, url, code: &crate::style::TerminalSafe) = "login-device-prompt";
     /// What the publish-token grant is for.
@@ -1287,6 +1305,10 @@ messages! {
     signing_key_status_env_unusable(env) = "signing-key-status-env-unusable";
     /// `ipe login --status`: the signing key `ipe login` generated.
     signing_key_status_stored(path: &crate::style::TerminalSafe) = "signing-key-status-stored";
+    /// `ipe login --status`: the stored signing key is not private to the invoking user.
+    signing_key_status_stored_exposed(path: &crate::style::TerminalSafe, settings) = "signing-key-status-stored-exposed";
+    /// `ipe login --status`: something other than a usable key file holds the stored key's name.
+    signing_key_status_stored_unusable(path: &crate::style::TerminalSafe) = "signing-key-status-stored-unusable";
     /// `ipe login --status`: no signing key is configured.
     signing_key_status_none = "signing-key-status-none";
     /// Signing-key setup found a usable key already configured.
@@ -1305,6 +1327,13 @@ messages! {
     signing_key_needs_terminal = "signing-key-needs-terminal";
     /// No config directory could be determined for the signing key.
     signing_key_no_config_dir = "signing-key-no-config-dir";
+    /// This host cannot keep the signing key's private half owner-only.
+    signing_key_store_unsupported(env) = "signing-key-store-unsupported";
+    /// A signing-key file or its directory is not private to the invoking user.
+    signing_key_not_owner_only(path: &crate::style::TerminalSafe, env) = "signing-key-not-owner-only";
+    /// The stored key is already registered on GitHub but is not private to the
+    /// invoking user; it must be revoked, never silently replaced.
+    signing_key_stored_exposed(path: &crate::style::TerminalSafe, settings) = "signing-key-stored-exposed";
     /// A non-key entry occupies a signing-key file name.
     signing_key_occupied(path: &crate::style::TerminalSafe) = "signing-key-occupied";
     /// The config directory cannot hold the hard links key storage relies on.

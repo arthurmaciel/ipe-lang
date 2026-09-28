@@ -1315,7 +1315,7 @@ fn unused_import_fix_spans_block_comment_between_clauses() {
 #[test]
 fn prefer_pipeline_quick_fix_rewrites_the_nested_call() {
     let db = IpeDatabase::new();
-    let src = "module Main exposing (report)\n\n\nreport records =\n    List.map fmt (List.filter live records)\n";
+    let src = "module Main exposing (report)\n\n\nreport records =\n    String.concat (List.map fmt (List.filter live records))\n";
     let entry = file(&db, &["Main"], src);
     let root = root_of(&db, &[(&["Main"], entry)]);
 
@@ -1351,7 +1351,7 @@ fn prefer_pipeline_quick_fix_rewrites_the_nested_call() {
 
     let fixed = apply_edit(src, edit);
     assert!(
-        fixed.contains("records |> List.filter live |> List.map fmt"),
+        fixed.contains("records |> List.filter live |> List.map fmt |> String.concat"),
         "the rewrite is the author's own text re-threaded: {fixed:?}"
     );
     let mut interner = db.interner().lock();

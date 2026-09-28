@@ -16,6 +16,7 @@ pub mod free_vars;
 mod held;
 mod ir;
 pub mod let_inline;
+mod pairing;
 mod pretty;
 pub mod record_shapes;
 pub mod seq_clone;
@@ -33,6 +34,7 @@ pub use ir::{
     ir_type_has_effect_carrier, ir_type_is_derivable, ir_type_is_serde, is_dispatch_free,
     is_irrefutable,
 };
+pub use pairing::{PairedChildren, paired_children};
 pub use pretty::{MAX_IR_RENDER_DEPTH, pretty};
 
 /// The compilation target (kernel-availability axis) — re-exported so

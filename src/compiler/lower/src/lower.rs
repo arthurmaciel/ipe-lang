@@ -31,7 +31,9 @@ use ipe_ir::{
     RuntimeModule, TypeDef, UiCtor, UiPlain, Variant, fun_value_arc_promotable,
     ir_type_has_effect_carrier, ir_type_holds, ir_type_is_serde, is_dispatch_free, is_irrefutable,
 };
-use ipe_types::{RowTail, SignatureWildcards, SolvedTypes, Ty, TyBounds, ty_is_ground};
+use ipe_types::{
+    EmittedHeads, RowTail, SignatureWildcards, SolvedTypes, Ty, TyBounds, ty_is_ground,
+};
 
 mod capture_rewrite;
 mod clone_class;
@@ -322,39 +324,53 @@ fn app_entry_name(kernel: KernelFn) -> Box<str> {
     format!("{}.{}", def.qualifier, def.name).into_boxed_str()
 }
 
+/// The built-in constructor table and interner a kernel scheme shape is read against.
+#[derive(Clone, Copy)]
+struct SchemeHeads<'h> {
+    builtins: &'h ipe_types::Builtins,
+    interner: &'h Interner,
+}
+
 /// The solved type scheme variable `var` is instantiated to, found by walking `shape` alongside `solved`.
 ///
 /// Aligns exactly the positions [`ipe_kernels::shape_aligns_var`] counts — an
 /// arrow side, a constructor argument, a tuple element; a record field is keyed
-/// by an interned symbol the shape cannot name, so it is skipped. `None` when
-/// no aligned occurrence exists or the two trees disagree in structure. The
-/// walk is bounded by the `'static` shape's depth.
+/// by an interned symbol the shape cannot name, so it is skipped. A constructor
+/// aligns only when its full head (tag and home) is the solved one, by the rule
+/// unification applies, and its arity agrees. `None` when no aligned occurrence
+/// exists or the two trees disagree in structure. The walk is bounded by the
+/// `'static` shape's depth.
 fn scheme_var_instance<'t>(
     shape: &ipe_kernels::TyShape,
     solved: &'t Ty,
     var: u8,
+    heads: SchemeHeads<'_>,
 ) -> Option<&'t Ty> {
     use ipe_kernels::TyShape;
+    let first_instance = |mut pairs: ipe_types::ArgPairs<'_, 't, TyShape, Ty>| {
+        pairs.find_map(|(item, solved_item)| scheme_var_instance(item, solved_item, var, heads))
+    };
     match (shape, solved) {
         (TyShape::Var(v), _) => (*v == var).then_some(solved),
         (TyShape::Fun(arg, res), Ty::Fun(solved_arg, solved_res)) => {
-            scheme_var_instance(arg, solved_arg, var)
-                .or_else(|| scheme_var_instance(res, solved_res, var))
+            scheme_var_instance(arg, solved_arg, var, heads)
+                .or_else(|| scheme_var_instance(res, solved_res, var, heads))
         }
-        (
-            TyShape::Con(_, items),
-            Ty::Con {
-                args: solved_items, ..
-            },
-        )
-        | (TyShape::Tuple(items), Ty::Tuple(solved_items))
-            if items.len() == solved_items.len() =>
-        {
-            items
-                .iter()
-                .zip(solved_items)
-                .find_map(|(item, solved_item)| scheme_var_instance(item, solved_item, var))
+        (TyShape::Con(tag, items), Ty::Con { module, name, args }) => {
+            ipe_types::HeadIdentity::Unified(heads.interner)
+                .paired_args(
+                    heads.builtins.builtin_con_head(*tag, items),
+                    ipe_types::ConHead {
+                        home: module,
+                        name: *name,
+                        args: args.as_slice(),
+                    },
+                )
+                .and_then(first_instance)
         }
+        (TyShape::Tuple(items), Ty::Tuple(solved_items)) => (items.len() == solved_items.len())
+            .then(|| items.iter().zip(solved_items.as_slice()))
+            .and_then(first_instance),
         _ => None,
     }
 }
@@ -5229,52 +5245,25 @@ fn collect_tail_call_callees(expr: &Expr, out: &mut Vec<FuncId>) {
 /// types share a shape and differ only in their tvar names. Wherever `callee_g`
 /// appears bare in `callee_ret`, the caller's tvar at the mirrored position in
 /// `caller_ret` is the one that must carry `callee_g`'s bound. A structural
-/// walk over the shared shape collects those caller tvars. Any positional
-/// mismatch (a shape the two do not share) simply yields nothing — the pass then
-/// adds no bound, which is safe.
+/// walk over the shared shape collects those caller tvars. A constructor pairs
+/// only with the same constructor (an enum by home and name, a `Ui` carrier by
+/// ctor), never by arity alone. Any positional mismatch (a shape the two do not
+/// share) simply yields nothing — the pass then adds no bound, which is safe.
 fn aligned_caller_tvars(sig_ret: &IrType, target_g: Symbol, site_ret: &IrType) -> Vec<Symbol> {
     let mut out = Vec::new();
     align_ret_tvars(sig_ret, target_g, site_ret, &mut out);
     out
 }
 
+/// Collect into `out` the `site` tvars mirroring `target` in `sig`, over the shape both share.
+///
+/// A mismatch adds nothing; instance propagation (`instance_slot_tvars` /
+/// `align_param_slot`) is the fail-closed net for any tvar missed here.
 fn align_ret_tvars(sig: &IrType, target: Symbol, site: &IrType, out: &mut Vec<Symbol>) {
     match (sig, site) {
         (IrType::Generic(sig_tv), IrType::Generic(site_tv)) => {
             if *sig_tv == target {
                 out.push(*site_tv);
-            }
-        }
-        // The boxed effect / handle / view carriers each wrap a payload tvar
-        // (`Task a`, `Cmd msg`, `Sub msg`, `Decoder a`, `WebRoute page`, and a
-        // `Ui`'s `msg`); a combinator forwarding one in tail position must pass
-        // the callee's return-tvar bounds down to the payload the caller returns.
-        (IrType::List(a), IrType::List(b))
-        | (IrType::Maybe(a), IrType::Maybe(b))
-        | (IrType::Set(a), IrType::Set(b))
-        | (IrType::Task(a), IrType::Task(b))
-        | (IrType::Cmd(a), IrType::Cmd(b))
-        | (IrType::Sub(a), IrType::Sub(b))
-        | (IrType::Decoder(a), IrType::Decoder(b))
-        | (IrType::WebRoute(a), IrType::WebRoute(b))
-        | (IrType::Ui { msg: a, .. }, IrType::Ui { msg: b, .. }) => {
-            align_ret_tvars(a, target, b, out);
-        }
-        (IrType::Result(a1, a2), IrType::Result(b1, b2))
-        | (IrType::Dict(a1, a2), IrType::Dict(b1, b2))
-        | (
-            IrType::CustomElement { down: a1, up: a2 },
-            IrType::CustomElement { down: b1, up: b2 },
-        ) => {
-            align_ret_tvars(a1, target, b1, out);
-            align_ret_tvars(a2, target, b2, out);
-        }
-        (IrType::Tuple(a), IrType::Tuple(b))
-        | (IrType::Enum { args: a, .. }, IrType::Enum { args: b, .. })
-            if a.len() == b.len() =>
-        {
-            for (ca, cb) in a.iter().zip(b.iter()) {
-                align_ret_tvars(ca, target, cb, out);
             }
         }
         (IrType::Record(a), IrType::Record(b)) => {
@@ -5284,20 +5273,14 @@ fn align_ret_tvars(sig: &IrType, target: Symbol, site: &IrType, out: &mut Vec<Sy
                 }
             }
         }
-        // A `Parser a` is a transparent `State -> PStep a` function alias, so a
-        // composed combinator's return tvar sits under a function type. Aligning
-        // through the parameters and return of a function shape reaches it.
-        (IrType::Fun(pa, ra), IrType::Fun(pb, rb))
-        | (IrType::SharedFun(pa, ra), IrType::SharedFun(pb, rb))
-        | (IrType::FnOnceChain(pa, ra), IrType::FnOnceChain(pb, rb))
-            if pa.len() == pb.len() =>
-        {
-            for (ca, cb) in pa.iter().zip(pb.iter()) {
+        // Every other shared shape (a payload carrier such as `Task a` or a
+        // `Ui`'s `msg`, a tuple, an enum, a function such as the transparent
+        // `Parser a` alias) pairs its children under one head identity.
+        _ => {
+            for (ca, cb) in ipe_ir::paired_children(sig, site).into_iter().flatten() {
                 align_ret_tvars(ca, target, cb, out);
             }
-            align_ret_tvars(ra, target, rb, out);
         }
-        _ => {}
     }
 }
 
@@ -5616,57 +5599,19 @@ fn align_param_slot(
     }
     let mut slot = |a: &IrType, b: &IrType| align_param_slot(a, target, b, caller_tvars, out);
     match (sig, site) {
-        (IrType::List(a), IrType::List(b))
-        | (IrType::Maybe(a), IrType::Maybe(b))
-        | (IrType::Set(a), IrType::Set(b))
-        | (IrType::Task(a), IrType::Task(b))
-        | (IrType::Cmd(a), IrType::Cmd(b))
-        | (IrType::Sub(a), IrType::Sub(b))
-        | (IrType::Decoder(a), IrType::Decoder(b))
-        | (IrType::WebRoute(a), IrType::WebRoute(b)) => slot(a, b),
-        (
-            IrType::Ui {
-                ctor: sig_ctor,
-                msg: a,
-            },
-            IrType::Ui {
-                ctor: site_ctor,
-                msg: b,
-            },
-        ) if sig_ctor == site_ctor => slot(a, b),
-        (IrType::Result(a1, a2), IrType::Result(b1, b2))
-        | (IrType::Dict(a1, a2), IrType::Dict(b1, b2))
-        | (
-            IrType::CustomElement { down: a1, up: a2 },
-            IrType::CustomElement { down: b1, up: b2 },
-        ) => slot(a1, b1) && slot(a2, b2),
-        (IrType::Tuple(a), IrType::Tuple(b)) => {
-            a.len() == b.len() && a.iter().zip(b).all(|(ca, cb)| slot(ca, cb))
-        }
-        (
-            IrType::Enum {
-                home: sig_home,
-                name: sig_name,
-                args: a,
-            },
-            IrType::Enum {
-                home: site_home,
-                name: site_name,
-                args: b,
-            },
-        ) if sig_home == site_home && sig_name == site_name => {
-            a.len() == b.len() && a.iter().zip(b).all(|(ca, cb)| slot(ca, cb))
-        }
         (IrType::Record(a), IrType::Record(b)) => a
             .iter()
             .all(|(field, ca)| b.get(field).is_some_and(|cb| slot(ca, cb))),
         // The three function carriers share one arrow shape; which box the
-        // argument arrives in does not move the generic's slot.
+        // argument arrives in does not move the generic's slot, so this arm
+        // pairs across carriers where `paired_children` (one Rust type per
+        // carrier) would not.
         (
             IrType::Fun(pa, ra) | IrType::SharedFun(pa, ra) | IrType::FnOnceChain(pa, ra),
             IrType::Fun(pb, rb) | IrType::SharedFun(pb, rb) | IrType::FnOnceChain(pb, rb),
         ) => pa.len() == pb.len() && pa.iter().zip(pb).all(|(ca, cb)| slot(ca, cb)) && slot(ra, rb),
-        _ => false,
+        _ => ipe_ir::paired_children(sig, site)
+            .is_some_and(|mut pairs| pairs.all(|(ca, cb)| slot(ca, cb))),
     }
 }
 
@@ -11031,6 +10976,10 @@ pub struct BuiltinCtors {
     pub redirect_policy: Symbol,
     pub no_redirects: Symbol,
     pub follow_redirects: Symbol,
+    /// The type checker's built-in symbol table, so a kernel scheme's
+    /// [`ipe_kernels::BuiltinTag`] resolves to the same constructor head
+    /// inference minted.
+    pub kernel_types: ipe_types::Builtins,
 }
 
 /// The parameter-pattern count of a single top-level binding — the number of
@@ -12348,6 +12297,34 @@ struct SolvedWildcards<'s> {
     sig: &'s SignatureWildcards,
     /// The binding's bounds table row; wildcard `i` is keyed `any#<i>`.
     bounds: Option<&'s BTreeMap<Symbol, TyBounds>>,
+}
+
+/// The type lowering is the one definition of whether two homes of a constructor emit one type.
+///
+/// Struct-template coverage asks this rather than comparing homes, so it says
+/// "covered" exactly when [`Lowerer::ir_type_from_ty`] emits one type for both
+/// spellings. A spelling the lowering refuses is never "the same", so an
+/// unlowerable head fails closed as not covered.
+impl EmittedHeads for Lowerer<'_> {
+    fn same_emitted_type(
+        &self,
+        a_home: &[Symbol],
+        b_home: &[Symbol],
+        name: Symbol,
+        args: &[Ty],
+    ) -> bool {
+        let emitted = |home: &[Symbol]| {
+            self.ir_type_from_ty(
+                &Ty::Con {
+                    module: home.to_vec(),
+                    name,
+                    args: args.to_vec(),
+                },
+                Span::DUMMY,
+            )
+        };
+        matches!((emitted(a_home), emitted(b_home)), (Ok(a), Ok(b)) if a == b)
+    }
 }
 
 impl<'a> Lowerer<'a> {
@@ -20606,7 +20583,7 @@ impl<'a> Lowerer<'a> {
             .types
             .env
             .values()
-            .any(|ty| ty_contains_record_key_set(ty, lit_fields))
+            .any(|ty| ty_contains_record_key_set(ty, lit_fields, self))
         {
             return true;
         }
@@ -20615,7 +20592,7 @@ impl<'a> Lowerer<'a> {
             u.ctors.iter().any(|ctor| {
                 ctor.args
                     .iter()
-                    .any(|arg| canon_type_contains_record_key_set(arg, lit_fields))
+                    .any(|arg| canon_type_contains_record_key_set(arg, lit_fields, self))
             })
         })
     }
@@ -20675,7 +20652,7 @@ impl<'a> Lowerer<'a> {
                 break;
             };
             if let Some(arg_ty) = self.region_ty(arg.span) {
-                match_signature_template(param_tpl, arg_ty, &mut subst);
+                match_signature_template(param_tpl, arg_ty, &mut subst, self.interner);
             }
             cur = rest.as_ref();
         }
@@ -20844,7 +20821,7 @@ impl<'a> Lowerer<'a> {
             return Ok(());
         };
         let mut subst: BTreeMap<u32, Ty> = BTreeMap::new();
-        match_signature_template(declared, reified, &mut subst);
+        match_signature_template(declared, reified, &mut subst, self.interner);
         if subst
             .values()
             .any(|bound| generic_binding_breaks_clone(self.interner, bound))
@@ -21571,9 +21548,13 @@ impl<'a> Lowerer<'a> {
         else {
             return Err(unsupported(callee.span, Feature::HofCallbackFunctionResult));
         };
+        let heads = SchemeHeads {
+            builtins: &self.builtins.kernel_types,
+            interner: self.interner,
+        };
         if results.vars().any(|var| {
             matches!(
-                scheme_var_instance(shape, solved, var),
+                scheme_var_instance(shape, solved, var, heads),
                 None | Some(Ty::Fun(..))
             )
         }) {
@@ -26986,6 +26967,10 @@ impl<'a> Lowerer<'a> {
         // A missing region type yields no parameters and no instantiations, so
         // every listed entry falls to the fail-closed arm below.
         let arg_tys: Vec<&Ty> = solved.map(arrow_params).unwrap_or_default();
+        let heads = SchemeHeads {
+            builtins: &self.builtins.kernel_types,
+            interner: self.interner,
+        };
         let obliged_tys =
             captured
                 .iter()
@@ -26993,7 +26978,7 @@ impl<'a> Lowerer<'a> {
                 .chain(scheme_vars.iter().map(|&var| {
                     solved
                         .zip(kernel.scheme_shape())
-                        .and_then(|(ty, shape)| scheme_var_instance(shape, ty, var))
+                        .and_then(|(ty, shape)| scheme_var_instance(shape, ty, var, heads))
                 }));
         let mut obliged: BTreeSet<Symbol> = BTreeSet::new();
         for obliged_ty in obliged_tys {
@@ -31004,6 +30989,7 @@ mod tests {
             redirect_policy,
             no_redirects,
             follow_redirects,
+            kernel_types: ipe_types::Builtins::new(interner).unwrap(),
         }
     }
 
@@ -33594,6 +33580,7 @@ mod tests {
     /// under-bounded caller — an exit-0-then-cargo-fail E0277 for a combinator
     /// boxing a `Sync` closure over a payload tvar under one of these carriers.
     #[test]
+    #[allow(clippy::too_many_lines)] // One inline fixture per boxed carrier; splitting scatters the table.
     fn result_position_align_descends_boxed_carriers() {
         use ipe_ir::{IrType, UiCtor};
 
@@ -33670,6 +33657,51 @@ mod tests {
                 &IrType::List(Box::new(IrType::Generic(site_tv))),
             )
             .is_empty()
+        );
+
+        // Identity, not arity: an enum pairs only with the same home and name,
+        // a `Ui` carrier only with the same ctor. A distinct constructor of
+        // equal arity aligns nothing, while the same one still aligns.
+        let home = ipe_ir::ModPath(vec![interner.intern("Main").unwrap()]);
+        let pair = interner.intern("Pair").unwrap();
+        let swap = interner.intern("Swap").unwrap();
+        let enum_of = |name: ipe_intern::Symbol, first: ipe_intern::Symbol| IrType::Enum {
+            home: home.clone(),
+            name,
+            args: vec![IrType::Generic(first), IrType::Int],
+        };
+        assert_eq!(
+            super::aligned_caller_tvars(&enum_of(pair, sig_tv), sig_tv, &enum_of(pair, site_tv)),
+            vec![site_tv]
+        );
+        assert!(
+            super::aligned_caller_tvars(&enum_of(pair, sig_tv), sig_tv, &enum_of(swap, site_tv))
+                .is_empty(),
+            "a same-arity enum of another name must not inherit the bound"
+        );
+        let other_home = IrType::Enum {
+            home: ipe_ir::ModPath(vec![interner.intern("Lib").unwrap()]),
+            name: pair,
+            args: vec![IrType::Generic(site_tv), IrType::Int],
+        };
+        assert!(
+            super::aligned_caller_tvars(&enum_of(pair, sig_tv), sig_tv, &other_home).is_empty(),
+            "a same-name enum of another home must not inherit the bound"
+        );
+        assert!(
+            super::aligned_caller_tvars(
+                &IrType::Ui {
+                    ctor: UiCtor::Html,
+                    msg: Box::new(IrType::Generic(sig_tv)),
+                },
+                sig_tv,
+                &IrType::Ui {
+                    ctor: UiCtor::Cells,
+                    msg: Box::new(IrType::Generic(site_tv)),
+                },
+            )
+            .is_empty(),
+            "a `Ui` carrier of another ctor must not inherit the bound"
         );
     }
 
@@ -35559,37 +35591,70 @@ mod tests {
         assert!(fused.tuple_elem_rebind_sites >= 1, "tuple rebind seen");
     }
 
-    /// `scheme_var_instance` reads a scheme variable's instantiation off the solved kernel type.
+    /// Solved `Input.checkbox` types over built-in heads, keyed by the checker's own table.
     ///
-    /// `Input.checkbox`'s `msg` (var 0) is found through the attribute list and
-    /// the `Element msg` result; the cfg record is skipped. A solved type whose
-    /// structure disagrees with the scheme yields `None`, the fail-closed arm.
-    #[test]
-    fn scheme_var_instance_aligns_input_msg() {
-        const fn con(name: ipe_intern::Symbol, args: Vec<Ty>) -> Ty {
+    /// `checkbox_ty(attrs, result, result_arg)` builds
+    /// `attrs -> {} -> result Web result_arg`, and `attr_list(list, arg)` builds
+    /// `list (Attribute arg)`, so a test can swap either constructor head for
+    /// another of equal arity.
+    struct CheckboxFixture {
+        interner: Interner,
+        builtins: ipe_types::Builtins,
+        ipe_root: ipe_intern::Symbol,
+    }
+
+    impl CheckboxFixture {
+        fn new() -> Self {
+            let mut interner = Interner::new();
+            #[allow(clippy::expect_used)] // a fresh interner holds every built-in name
+            let builtins = ipe_types::Builtins::new(&mut interner).expect("intern built-ins");
+            #[allow(clippy::expect_used)] // a fresh interner accepts the stdlib root
+            let ipe_root = interner.intern("Ipe").expect("intern stdlib root");
+            Self {
+                interner,
+                builtins,
+                ipe_root,
+            }
+        }
+
+        fn heads(&self) -> super::SchemeHeads<'_> {
+            super::SchemeHeads {
+                builtins: &self.builtins,
+                interner: &self.interner,
+            }
+        }
+
+        fn con(&self, tag: ipe_kernels::BuiltinTag, args: Vec<Ty>) -> Ty {
             Ty::Con {
-                module: vec![],
-                name,
+                module: self.builtins.builtin_con_module(tag).to_vec(),
+                name: self.builtins.builtin_symbol(tag),
                 args,
             }
         }
-        let mut interner = Interner::new();
-        let mut intern = |name: &str| interner.intern(name).expect("intern constructor name");
-        let (msg_sym, list, attribute, view, web) = (
-            intern("Msg"),
-            intern("List"),
-            intern("Attribute"),
-            intern("View"),
-            intern("Web"),
-        );
-        let msg = con(msg_sym, vec![]);
-        let attrs = con(list, vec![con(attribute, vec![msg.clone()])]);
-        let element = con(view, vec![con(web, vec![]), msg.clone()]);
-        let cfg = Ty::Record(BTreeMap::new(), ipe_types::RowTail::Closed);
-        let solved = Ty::Fun(
-            Box::new(attrs),
-            Box::new(Ty::Fun(Box::new(cfg), Box::new(element))),
-        );
+
+        fn checkbox_ty(
+            &self,
+            attr_list: Ty,
+            result: ipe_kernels::BuiltinTag,
+            result_arg: Ty,
+        ) -> Ty {
+            let web = self.con(ipe_kernels::BuiltinTag::ProgramShapeWeb, vec![]);
+            let element = self.con(result, vec![web, result_arg]);
+            let cfg = Ty::Record(BTreeMap::new(), ipe_types::RowTail::Closed);
+            Ty::Fun(
+                Box::new(attr_list),
+                Box::new(Ty::Fun(Box::new(cfg), Box::new(element))),
+            )
+        }
+
+        fn attr_list(&self, list: ipe_kernels::BuiltinTag, attr_arg: Ty) -> Ty {
+            let attr = self.con(ipe_kernels::BuiltinTag::UiAttribute, vec![attr_arg]);
+            self.con(list, vec![attr])
+        }
+    }
+
+    /// `Input.checkbox`'s scheme shape, whose `msg` (var 0) the lowerer obliges `Sync`.
+    fn checkbox_shape() -> Option<&'static ipe_kernels::TyShape> {
         assert_eq!(
             KernelFn::InputCheckbox.sync_obliged_scheme_vars(),
             &[0],
@@ -35597,9 +35662,354 @@ mod tests {
         );
         let shape = KernelFn::InputCheckbox.scheme_shape();
         assert!(shape.is_some(), "Input.checkbox must carry a scheme shape");
-        let Some(shape) = shape else { return };
-        assert_eq!(super::scheme_var_instance(shape, &solved, 0), Some(&msg));
-        assert_eq!(super::scheme_var_instance(shape, &msg, 0), None);
+        shape
+    }
+
+    /// `scheme_var_instance` reads a scheme variable's instantiation off the solved kernel type.
+    ///
+    /// `Input.checkbox`'s `msg` (var 0) is found through the attribute list and
+    /// the `View Web msg` result; the cfg record is skipped. An `Ipe`-rooted home
+    /// on a builtin head is the stdlib spelling unification accepts, so it still
+    /// aligns. A solved type whose structure disagrees with the scheme yields
+    /// `None`, the fail-closed arm.
+    #[test]
+    fn scheme_var_instance_aligns_input_msg() {
+        use ipe_kernels::BuiltinTag;
+        let fx = CheckboxFixture::new();
+        let Some(shape) = checkbox_shape() else {
+            return;
+        };
+        let msg = fx.con(BuiltinTag::Int, vec![]);
+        let solved = fx.checkbox_ty(
+            fx.attr_list(BuiltinTag::List, msg.clone()),
+            BuiltinTag::View,
+            msg.clone(),
+        );
+        assert_eq!(
+            super::scheme_var_instance(shape, &solved, 0, fx.heads()),
+            Some(&msg)
+        );
+        assert_eq!(super::scheme_var_instance(shape, &msg, 0, fx.heads()), None);
+
+        let ipe_rooted_list = Ty::Con {
+            module: vec![fx.ipe_root, fx.builtins.builtin_symbol(BuiltinTag::List)],
+            name: fx.builtins.builtin_symbol(BuiltinTag::List),
+            args: vec![fx.con(BuiltinTag::UiAttribute, vec![msg.clone()])],
+        };
+        let solved = fx.checkbox_ty(ipe_rooted_list, BuiltinTag::View, msg.clone());
+        assert_eq!(
+            super::scheme_var_instance(shape, &solved, 0, fx.heads()),
+            Some(&msg)
+        );
+    }
+
+    /// A constructor of the scheme's arity but a different tag never aligns a scheme variable.
+    ///
+    /// `Set` stands where the scheme says `List`, and `Element` where it says
+    /// `View` — each of equal arity. An arity-only walk would read `other` off
+    /// the swapped head; the head comparison skips it, reading `msg` off the
+    /// true `View` result, or refusing outright (`None`, which obliges every
+    /// generic) when no correctly-headed occurrence remains.
+    #[test]
+    fn scheme_var_instance_refuses_distinct_constructor_of_equal_arity() {
+        use ipe_kernels::BuiltinTag;
+        let fx = CheckboxFixture::new();
+        let Some(shape) = checkbox_shape() else {
+            return;
+        };
+        let msg = fx.con(BuiltinTag::Int, vec![]);
+        let other = fx.con(BuiltinTag::String, vec![]);
+
+        let swapped_list = fx.checkbox_ty(
+            fx.attr_list(BuiltinTag::Set, other.clone()),
+            BuiltinTag::View,
+            msg.clone(),
+        );
+        assert_eq!(
+            super::scheme_var_instance(shape, &swapped_list, 0, fx.heads()),
+            Some(&msg),
+            "a Set in the List position must not bind msg"
+        );
+
+        let swapped_both = fx.checkbox_ty(
+            fx.attr_list(BuiltinTag::Set, other.clone()),
+            BuiltinTag::UiElement,
+            other,
+        );
+        assert_eq!(
+            super::scheme_var_instance(shape, &swapped_both, 0, fx.heads()),
+            None,
+            "no correctly-headed occurrence remains"
+        );
+    }
+
+    /// A user-homed type sharing a builtin tag's name never aligns that tag's scheme variable.
+    ///
+    /// `WebRoute` is a builtin name user code may declare, so `Main.WebRoute a`
+    /// is a distinct constructor from the empty-home builtin `WebRoute a`, and
+    /// the walk refuses it. A reserved name (`List`) never carries a user home:
+    /// canon refuses its declaration.
+    #[test]
+    fn scheme_var_instance_refuses_user_home_on_builtin_name() {
+        use ipe_kernels::{BuiltinTag, TyShape};
+        const ROUTE_OF_VAR: TyShape = TyShape::Con(BuiltinTag::WebRoute, &[TyShape::Var(0)]);
+        let mut fx = CheckboxFixture::new();
+        #[allow(clippy::expect_used)] // a fresh interner accepts a user module name
+        let main = fx.interner.intern("Main").expect("intern user home");
+        let msg = fx.con(BuiltinTag::Int, vec![]);
+        let builtin_route = fx.con(BuiltinTag::WebRoute, vec![msg.clone()]);
+        assert_eq!(
+            super::scheme_var_instance(&ROUTE_OF_VAR, &builtin_route, 0, fx.heads()),
+            Some(&msg)
+        );
+        let user_route = Ty::Con {
+            module: vec![main],
+            name: fx.builtins.builtin_symbol(BuiltinTag::WebRoute),
+            args: vec![msg],
+        };
+        assert_eq!(
+            super::scheme_var_instance(&ROUTE_OF_VAR, &user_route, 0, fx.heads()),
+            None,
+            "Main.WebRoute is not the builtin WebRoute"
+        );
+    }
+
+    /// A tuple of another length never aligns the scheme's tuple elements.
+    #[test]
+    fn scheme_var_instance_refuses_tuple_length_mismatch() {
+        use ipe_kernels::TyShape;
+        const PAIR_OF_VAR: TyShape = TyShape::Tuple(&[TyShape::Var(0), TyShape::Unit]);
+        let fx = CheckboxFixture::new();
+        let msg = fx.con(ipe_kernels::BuiltinTag::Int, vec![]);
+        let pair = Ty::Tuple(vec![msg.clone(), Ty::Unit]);
+        assert_eq!(
+            super::scheme_var_instance(&PAIR_OF_VAR, &pair, 0, fx.heads()),
+            Some(&msg)
+        );
+        let triple = Ty::Tuple(vec![msg, Ty::Unit, Ty::Unit]);
+        assert_eq!(
+            super::scheme_var_instance(&PAIR_OF_VAR, &triple, 0, fx.heads()),
+            None,
+            "a triple must not align a pair's elements"
+        );
+    }
+
+    /// A one-constructor union over `vars`, for coverage probes.
+    fn covers_fixture_union(
+        home: Vec<Symbol>,
+        name: Symbol,
+        vars: Vec<Symbol>,
+        ctor: Symbol,
+    ) -> canon::Union {
+        let args: Vec<canon::Type> = vars.iter().map(|v| canon::Type::Var(*v)).collect();
+        canon::Union {
+            home,
+            name,
+            vars,
+            ctors: vec![canon::Ctor {
+                name: ctor,
+                index: 0,
+                arity: args.len(),
+                args,
+                span: Span::DUMMY,
+            }],
+        }
+    }
+
+    /// A lowerer over `module` with empty symbol pools, for coverage probes.
+    fn covers_fixture_lowerer<'a>(
+        module: &'a canon::Module,
+        types: &'a SolvedTypes,
+        interner: &'a Interner,
+        builtins: &'a BuiltinCtors,
+    ) -> super::Lowerer<'a> {
+        super::Lowerer::new(
+            module,
+            types,
+            interner,
+            super::SymbolPools {
+                eta_params: vec![],
+                cap_params: vec![],
+                param_binders: vec![],
+                any_param_binders: vec![],
+                projection_decode_binders: vec![],
+                destructure_thunk_binders: vec![],
+                nested_cons_binders: vec![],
+                nested_strlit_binders: vec![],
+                tuple_elem_binders: vec![],
+            },
+            builtins,
+            "",
+            "",
+        )
+    }
+
+    /// A same-named, same-arity constructor of another home never covers a struct template.
+    ///
+    /// Coverage holds exactly when both heads lower to one emitted type: a
+    /// signature record whose function field returns `Lib.T` lowers to a struct
+    /// a `Main.T` literal does not fit, so coverage refuses it and the gate
+    /// rejects the literal with IPE-L0107. A `[Ipe,Css]Color` union and the
+    /// empty-home `Color` builtin likewise emit distinct types and never cover.
+    #[test]
+    fn covers_as_template_refuses_same_name_of_another_home() {
+        use super::ty_templates::{canon_covers_as_template, ty_covers_as_template};
+        let mut interner = Interner::new();
+        let builtins = build_test_builtin_ctors(&mut interner);
+        #[allow(clippy::expect_used)] // a fresh interner accepts these names
+        let [main, lib, t, run, a, mk_t, ipe, css, color, red] = [
+            "Main", "Lib", "T", "run", "a", "MkT", "Ipe", "Css", "Color", "Red",
+        ]
+        .map(|name| interner.intern(name).expect("intern name"));
+        let module = canon::Module {
+            imports_unsafe_submodule: false,
+            imported_web_capabilities: std::collections::BTreeSet::new(),
+            name: vec![main],
+            unions: vec![
+                covers_fixture_union(vec![main], t, vec![a], mk_t),
+                covers_fixture_union(vec![lib], t, vec![a], mk_t),
+                covers_fixture_union(vec![ipe, css], color, vec![], red),
+            ],
+            defs: vec![],
+        };
+        let types = empty_solved_types();
+        let lowerer = covers_fixture_lowerer(&module, &types, &interner, &builtins);
+        let con = |home, arg| Ty::Con {
+            module: vec![home],
+            name: t,
+            args: vec![arg],
+        };
+        let run_record = |ret: Ty| {
+            Ty::Record(
+                BTreeMap::from([(run, Ty::Fun(Box::new(Ty::Unit), Box::new(ret)))]),
+                ipe_types::RowTail::Closed,
+            )
+        };
+        assert!(ty_covers_as_template(
+            &con(main, Ty::Var(0)),
+            &con(main, Ty::Unit),
+            &lowerer
+        ));
+        assert!(!ty_covers_as_template(
+            &con(lib, Ty::Var(0)),
+            &con(main, Ty::Unit),
+            &lowerer
+        ));
+        assert!(ty_covers_as_template(
+            &run_record(con(main, Ty::Unit)),
+            &run_record(con(main, Ty::Unit)),
+            &lowerer
+        ));
+        assert!(
+            !ty_covers_as_template(
+                &run_record(con(lib, Ty::Unit)),
+                &run_record(con(main, Ty::Unit)),
+                &lowerer
+            ),
+            "a Lib.T field must not cover a Main.T literal"
+        );
+        let canon_con = |home| canon::Type::Con {
+            home: vec![home],
+            name: t,
+            args: vec![canon::Type::Unit],
+        };
+        assert!(canon_covers_as_template(
+            &canon_con(main),
+            &con(main, Ty::Unit),
+            &lowerer
+        ));
+        assert!(!canon_covers_as_template(
+            &canon_con(lib),
+            &con(main, Ty::Unit),
+            &lowerer
+        ));
+        let css_color = Ty::Con {
+            module: vec![ipe, css],
+            name: color,
+            args: vec![],
+        };
+        let kernel_color = Ty::Con {
+            module: vec![],
+            name: color,
+            args: vec![],
+        };
+        assert!(
+            !ty_covers_as_template(&css_color, &kernel_color, &lowerer),
+            "an Ipe.Css Color union must not cover the Ipe.Ui Color builtin"
+        );
+        assert!(
+            !canon_covers_as_template(
+                &canon::Type::Con {
+                    home: vec![ipe, css],
+                    name: color,
+                    args: vec![],
+                },
+                &kernel_color,
+                &lowerer
+            ),
+            "the canon mirror refuses the Ipe.Css Color union too"
+        );
+    }
+
+    /// A reserved builtin spelled under its stdlib home covers its empty-home kernel spelling.
+    ///
+    /// The lowering maps `HttpMethod` to one emitted type whatever its home, so
+    /// a signature template naming `Ipe.Http.HttpMethod` fits a literal whose
+    /// solved type carries the kernel's empty home; refusing it would reject a
+    /// well-typed program with IPE-L0107.
+    #[test]
+    fn covers_as_template_accepts_builtin_under_its_stdlib_home() {
+        use super::ty_templates::{canon_covers_as_template, ty_covers_as_template};
+        let mut interner = Interner::new();
+        let builtins = build_test_builtin_ctors(&mut interner);
+        #[allow(clippy::expect_used)] // a fresh interner accepts these names
+        let [ipe, http, method, run] = ["Ipe", "Http", "HttpMethod", "run"]
+            .map(|name| interner.intern(name).expect("intern name"));
+        let module = canon::Module {
+            imports_unsafe_submodule: false,
+            imported_web_capabilities: std::collections::BTreeSet::new(),
+            name: vec![],
+            unions: vec![],
+            defs: vec![],
+        };
+        let types = empty_solved_types();
+        let lowerer = covers_fixture_lowerer(&module, &types, &interner, &builtins);
+        let method_at = |home: Vec<Symbol>| Ty::Con {
+            module: home,
+            name: method,
+            args: vec![],
+        };
+        let run_record = |ret: Ty| {
+            Ty::Record(
+                BTreeMap::from([(run, Ty::Fun(Box::new(Ty::Unit), Box::new(ret)))]),
+                ipe_types::RowTail::Closed,
+            )
+        };
+        assert!(ty_covers_as_template(
+            &method_at(vec![ipe, http]),
+            &method_at(vec![]),
+            &lowerer
+        ));
+        assert!(
+            ty_covers_as_template(
+                &run_record(method_at(vec![ipe, http])),
+                &run_record(method_at(vec![])),
+                &lowerer
+            ),
+            "an Ipe.Http.HttpMethod field covers a kernel HttpMethod literal"
+        );
+        assert!(
+            canon_covers_as_template(
+                &canon::Type::Con {
+                    home: vec![ipe, http],
+                    name: method,
+                    args: vec![],
+                },
+                &method_at(vec![]),
+                &lowerer
+            ),
+            "the canon mirror covers the kernel HttpMethod too"
+        );
     }
 
     /// `aligned_param_tvars` reads a callee generic's instantiation behind a function arrow.
