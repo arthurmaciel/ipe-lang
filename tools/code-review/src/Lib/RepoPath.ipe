@@ -85,9 +85,9 @@ rootRefusal raw problem =
 
 
 -- A stored `tag:relative` path joined under the root. The first `:`-segment is
--- the repo tag; the rest is the relative path. Refused: no tag, an empty or
--- absolute relative path, any `..` segment, a path `Ipe.Path` rejects, and a
--- join that does not land strictly below the root.
+-- the repo tag; the rest is the relative path. Refused: no tag or an empty
+-- one, an empty or absolute relative path, any `..` segment, a path `Ipe.Path`
+-- rejects, and a join that does not land strictly below the root.
 resolve : Root -> String -> Result PathError Path
 resolve root stored =
     case String.split ":" stored of
@@ -97,8 +97,12 @@ resolve root stored =
         _ :: [] ->
             Err (MissingTag stored)
 
-        _ :: rest ->
-            resolveRelative root stored (String.join ":" rest)
+        tag :: rest ->
+            if tag == "" then
+                Err (MissingTag stored)
+
+            else
+                resolveRelative root stored (String.join ":" rest)
 
 
 resolveRelative : Root -> String -> String -> Result PathError Path

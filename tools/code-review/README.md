@@ -36,7 +36,8 @@ reading files outside the repo:
 
 A relative path in any of the three resolves against the working directory. A
 file path containing `?`, `#` or `%` is refused — pass such a location as a
-percent-encoded `sqlite://` URL. Every stored `tag:relative` path must name a
+percent-encoded `sqlite://` URL. A `sqlite://` URL must carry no `?` query and
+must name a database: the app appends the open mode itself. Every stored `tag:relative` path must name a
 file strictly under `IPE_INDEX_ROOT`: an empty, absolute, or `..`-bearing stored
 path is refused with an error naming it.
 

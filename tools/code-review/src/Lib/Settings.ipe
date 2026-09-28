@@ -1,4 +1,4 @@
-module Lib.Settings exposing (DbLocation, IndexSettings, indexReadUrl, indexSettings, indexWriteUrl, reviewDb, reviewUrl)
+module Lib.Settings exposing (DbLocation, IndexSettings, indexReadUrl, indexSettings, indexWriteUrl, parseDbLocation, reviewDb, reviewUrl)
 
 import Ipe.Error as Error
 import Ipe.Path as Path exposing (Path)
@@ -9,8 +9,10 @@ import Lib.RepoPath as RepoPath exposing (Root)
 
 
 -- Where a SQLite database lives: an absolute file path, or a `sqlite://` URL
--- taken verbatim. A relative file path is made absolute when parsed, so the
--- location never depends on how the driver resolves a relative name.
+-- with no query. A relative file path is made absolute when parsed, so the
+-- location never depends on how the driver resolves a relative name. Neither
+-- form carries a query, so the open mode each URL builder appends is the only
+-- one the driver reads.
 type DbLocation
     = DbFile Path
     | DbUrl String
@@ -44,16 +46,24 @@ reviewDb =
     parseDbLocation "IPE_REVIEW_DB" (System.getenvOr "IPE_REVIEW_DB" "review.db")
 
 
--- A `sqlite://` URL is kept verbatim. A file path is refused when blank or
--- when it carries `?`, `#` or `%` (each changes meaning inside a URL), and is
--- otherwise made absolute.
+-- A `sqlite://` URL is kept verbatim when it names a database and carries no
+-- query: a query can set its own `mode`, and the open mode is the app's to
+-- choose. A file path is refused when blank or when it carries `?`, `#` or `%`
+-- (each changes meaning inside a URL), and is otherwise made absolute.
 parseDbLocation : String -> String -> Task.Task Error DbLocation
 parseDbLocation var raw =
     if String.trim raw == "" then
         Task.fail (Error.invalidInput (dbRefusal var raw "is empty"))
 
     else if String.startsWith "sqlite://" raw then
-        Task.succeed (DbUrl raw)
+        if String.contains "?" raw then
+            Task.fail (Error.invalidInput (dbRefusal var raw "is a `sqlite://` URL with a query; the app sets the open mode, so drop the query"))
+
+        else if String.dropLeft (String.length "sqlite://") raw == "" then
+            Task.fail (Error.invalidInput (dbRefusal var raw "is a `sqlite://` URL naming no database"))
+
+        else
+            Task.succeed (DbUrl raw)
 
     else if String.contains "://" raw then
         Task.fail (Error.invalidInput (dbRefusal var raw "is a URL that is not `sqlite://`"))
@@ -72,20 +82,31 @@ dbRefusal var raw problem =
     String.concat [ var, "=\"", raw, "\" ", problem, "; set it to a SQLite file path or a `sqlite://` URL" ]
 
 
--- The index opened read-only (`mode=ro`), so listing can never create or
--- modify it. A URL that already carries a query is used as given.
-indexReadUrl : DbLocation -> String
-indexReadUrl loc =
+-- The URL for `loc` opened in SQLite `mode`. A file path is percent-encoded
+-- (`%` then `?`), so a working directory holding either character still names
+-- the same file instead of starting a query or decoding to another name.
+urlWithMode : String -> DbLocation -> String
+urlWithMode mode loc =
     case loc of
         DbFile path ->
-            "sqlite://" ++ Path.toString path ++ "?mode=ro"
+            "sqlite://" ++ encodeFilePath (Path.toString path) ++ "?mode=" ++ mode
 
         DbUrl url ->
-            if String.contains "?" url then
-                url
+            url ++ "?mode=" ++ mode
 
-            else
-                url ++ "?mode=ro"
+
+encodeFilePath : String -> String
+encodeFilePath path =
+    path
+        |> String.replace "%" "%25"
+        |> String.replace "?" "%3F"
+
+
+-- The index opened read-only (`mode=ro`), so listing can never create or
+-- modify it.
+indexReadUrl : DbLocation -> String
+indexReadUrl loc =
+    urlWithMode "ro" loc
 
 
 -- The index opened read-write (`mode=rw`) for the drain step. `rw` never
@@ -93,20 +114,10 @@ indexReadUrl loc =
 -- new database.
 indexWriteUrl : DbLocation -> String
 indexWriteUrl loc =
-    case loc of
-        DbFile path ->
-            "sqlite://" ++ Path.toString path ++ "?mode=rw"
-
-        DbUrl url ->
-            String.replace "mode=ro" "mode=rw" url
+    urlWithMode "rw" loc
 
 
 -- The review database, created on first open (`mode=rwc`) — the app owns it.
 reviewUrl : DbLocation -> String
 reviewUrl loc =
-    case loc of
-        DbFile path ->
-            "sqlite://" ++ Path.toString path ++ "?mode=rwc"
-
-        DbUrl url ->
-            url
+    urlWithMode "rwc" loc

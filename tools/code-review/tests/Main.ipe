@@ -785,8 +785,13 @@ storedPathRefusals =
                 , refusedAs "empty" (RepoPath.resolve root "ipe:")
                 , refusedAs "missing-tag" (RepoPath.resolve root "src/Main.ipe")
                 , refusedAs "missing-tag" (RepoPath.resolve root "")
-                , refused (RepoPath.resolve root "ipe:.")
+                , refusedAs "missing-tag" (RepoPath.resolve root ":src/Main.ipe")
+                , refusedAs "not-under-root" (RepoPath.resolve root "ipe:.")
+                , refusedAs "not-under-root" (RepoPath.resolve root "ipe:./")
+                , refusedAs "absolute" (RepoPath.resolve root "ipe://etc/passwd")
+                , refusedAs "invalid" (RepoPath.resolve root "ipe:a\0b")
                 , resolvesTo (base ++ "/src/Main.ipe") (RepoPath.resolve root "ipe:src/Main.ipe")
+                , resolvesTo (base ++ "/src/Main.ipe") (RepoPath.resolve root "ipe:./src//Main.ipe/")
                 , resolvesTo (base ++ "/a:b") (RepoPath.resolve root "ipe:a:b")
                 ]
             )
@@ -856,7 +861,31 @@ badIndexDbRefused =
         query <- settingsRefused "index.db?mode=rwc"
         fragment <- settingsRefused "index.db#x"
         percent <- settingsRefused "index%2e.db"
-        Task.succeed (blank && otherScheme && query && fragment && percent)
+        urlQuery <- settingsRefused "sqlite:///tmp/index.db?mode=rwc"
+        urlOtherQuery <- settingsRefused "sqlite:///tmp/index.db?cache=shared"
+        urlEmpty <- settingsRefused "sqlite://"
+        Task.succeed (blank && otherScheme && query && fragment && percent && urlQuery && urlOtherQuery && urlEmpty)
+
+
+-- Every open URL carries exactly the app's mode, for a file path and a
+-- `sqlite://` URL alike.
+dbUrlsCarryAppMode : Task.Task Error Bool
+dbUrlsCarryAppMode =
+    do
+        file <- Settings.parseDbLocation "IPE_INDEX_DB" "/tmp/a&b/index.db"
+        url <- Settings.parseDbLocation "IPE_INDEX_DB" "sqlite:///tmp/index%3F.db"
+        Task.succeed
+            (Settings.indexReadUrl file
+                == "sqlite:///tmp/a&b/index.db?mode=ro"
+                && Settings.indexWriteUrl file
+                == "sqlite:///tmp/a&b/index.db?mode=rw"
+                && Settings.reviewUrl file
+                == "sqlite:///tmp/a&b/index.db?mode=rwc"
+                && Settings.indexReadUrl url
+                == "sqlite:///tmp/index%3F.db?mode=ro"
+                && Settings.indexWriteUrl url
+                == "sqlite:///tmp/index%3F.db?mode=rw"
+            )
 
 
 -- The index bridge with `IPE_INDEX_ROOT` given relative to the working
@@ -1452,6 +1481,11 @@ main =
             (\results ->
                 badIndexDbRefused
                     |> Task.map (\ok -> results ++ [ ( "unusable index db locations refused", ok ) ])
+            )
+        |> Task.andThen
+            (\results ->
+                dbUrlsCarryAppMode
+                    |> Task.map (\ok -> results ++ [ ( "db urls carry only the app's open mode", ok ) ])
             )
         |> Task.andThen
             (\results ->
