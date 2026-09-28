@@ -103,9 +103,23 @@ pub fn pin_any_in_ty(
 /// so `SolvedTypes::poly_var_map` can build the lowerer's generic-variable lookup.
 pub type PolyVarEntry = ((Vec<Symbol>, Symbol), BTreeMap<Symbol, VarId>);
 
-/// A typed binding's `(home, name)` with the fresh flex of each wildcard `any`
-/// occurrence of its own signature, in signature order.
-pub type WildcardEntry = ((Vec<Symbol>, Symbol), Vec<VarId>);
+/// The wildcard `any` occurrences of one typed binding's own checked signature.
+///
+/// `wildcards` lists the fresh flex of each occurrence in signature order
+/// (parameters left to right, then the return), each walked pre-order by
+/// [`Builder::instantiate_in`]. `param_counts` splits that list by parameter:
+/// the lowerer mints one generic per parameter occurrence and pairs them by
+/// index, so the per-parameter counts are what it asserts agreement against.
+#[derive(Clone, Debug)]
+pub struct WildcardEntry {
+    /// The binding's `(home, name)`.
+    pub key: (Vec<Symbol>, Symbol),
+    /// The fresh flex of each wildcard occurrence, in signature order.
+    pub wildcards: Vec<VarId>,
+    /// How many leading entries of `wildcards` each parameter contributes, in
+    /// parameter order; the return's occurrences follow.
+    pub param_counts: Vec<usize>,
+}
 
 /// Maximum number of nodes [`zonk`] reads back from a single type before
 /// declaring it pathologically deep. The occurs check in unification rules out

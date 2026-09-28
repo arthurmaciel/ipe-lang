@@ -1,7 +1,7 @@
 use super::{
     BTreeMap, Builder, DResult, Diagnostic, Feature, FlatType, LowerError, PendingInstantiation,
     RouteWitnessCheck, RoutedWebCheck, STAGE, SchemeApp, SchemeKey, Span, StdlibKernel, Symbol, Ty,
-    TyBounds, TypeError, VarId, canon, canon_type_to_doc, from_canon,
+    TyBounds, TypeError, VarId, WildcardEntry, canon, canon_type_to_doc, from_canon,
 };
 
 /// The role a pinned kernel-obligation slot plays in its kernel's scheme.
@@ -169,6 +169,7 @@ impl Builder<'_> {
                 };
                 let mut rigid_vars = BTreeMap::new();
                 let mut wildcards = Vec::new();
+                let mut param_counts = Vec::with_capacity(patterns.len());
                 let mut local = BTreeMap::new();
                 let mut cursor: &canon::Type = handler_expansion.as_ref().unwrap_or(ty);
                 for pat in patterns {
@@ -182,12 +183,14 @@ impl Builder<'_> {
                         _ => return Err(self.too_many_parameters(name, ty)),
                     };
                     let arg = self.normalize_annotation_ty(from_canon(arg_ty), name.span)?;
+                    let before = wildcards.len();
                     let arg_var = self.instantiate_logging_wildcards(
                         &arg,
                         &mut rigid_vars,
                         true,
                         &mut wildcards,
                     )?;
+                    param_counts.push(wildcards.len().saturating_sub(before));
                     self.constrain_pattern(&mut local, pat, arg_var)?;
                     // Record the param pattern's region so the lowerer can read the
                     // solved param type (record-param field-set completion, IPE-T0015
@@ -239,8 +242,11 @@ impl Builder<'_> {
                 self.typed_rigids
                     .push(((self.current_home.clone(), name.value), var_rigids));
                 if !wildcards.is_empty() {
-                    self.typed_wildcards
-                        .push(((self.current_home.clone(), name.value), wildcards));
+                    self.typed_wildcards.push(WildcardEntry {
+                        key: (self.current_home.clone(), name.value),
+                        wildcards,
+                        param_counts,
+                    });
                 }
                 Ok(())
             }

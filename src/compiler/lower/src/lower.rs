@@ -31,7 +31,7 @@ use ipe_ir::{
     RuntimeModule, TypeDef, UiCtor, UiPlain, Variant, fun_value_arc_promotable,
     ir_type_has_effect_carrier, ir_type_holds, ir_type_is_serde, is_dispatch_free, is_irrefutable,
 };
-use ipe_types::{RowTail, SolvedTypes, Ty, TyBounds};
+use ipe_types::{RowTail, SignatureWildcards, SolvedTypes, Ty, TyBounds};
 
 mod capture_rewrite;
 mod clone_class;
@@ -12316,7 +12316,7 @@ pub struct SymbolPools {
     pub tuple_elem_binders: Vec<Symbol>,
 }
 
-/// `(params, prologue, ret, any_syms_minted, row_params)` —
+/// `(params, prologue, ret, any_syms_minted, row_params, wildcard_bounds)` —
 /// [`Lowerer::split_typed_sig`]'s return shape, named so the signature stays
 /// under clippy's type-complexity ceiling. `any_syms_minted` (AUD-01 seal fix)
 /// lists every fresh symbol handed out by [`Lowerer::fresh_any_param_symbol`]
@@ -12326,13 +12326,29 @@ pub struct SymbolPools {
 /// Rust generic. `row_params` carries one [`RowParam`] per row-polymorphic
 /// argument-position record annotation the signature erased to an
 /// [`IrType::RowGeneric`]; the caller records them on the emitted [`Func`].
+/// `wildcard_bounds` maps each minted parameter wildcard symbol to the solved
+/// obligations of the signature wildcard it stands for ([`WildcardBounds`]).
 type TypedSigParts = (
     Vec<IrParam>,
     Vec<ParamPrologue>,
     IrType,
     Vec<Symbol>,
     Vec<RowParam>,
+    WildcardBounds,
 );
+
+/// Minted wildcard `any` symbol → the solved obligations of its occurrence.
+type WildcardBounds = BTreeMap<Symbol, TyBounds>;
+
+/// The solved facts of one typed binding's signature wildcards, as
+/// [`Lowerer::split_typed_sig`] consumes them.
+#[derive(Clone, Copy)]
+struct SolvedWildcards<'s> {
+    /// Per-parameter occurrence counts and the body's ground pins.
+    sig: &'s SignatureWildcards,
+    /// The binding's bounds table row; wildcard `i` is keyed `any#<i>`.
+    bounds: Option<&'s BTreeMap<Symbol, TyBounds>>,
+}
 
 impl<'a> Lowerer<'a> {
     #[allow(clippy::too_many_lines)] // Error/ErrorKind ADT seeding pushes it over 100
@@ -12723,71 +12739,72 @@ impl<'a> Lowerer<'a> {
     /// The top-level bare-`any` case is the same structural form, so the walk
     /// handles both uniformly — `split_typed_sig` no longer needs a separate
     /// outer-only check.
-    #[allow(clippy::too_many_lines)] // exhaustive per-IrType-variant arms; every arm is structurally required
     fn freshen_any_generics(&self, ty: IrType, minted: &mut Vec<Symbol>) -> DResult<IrType> {
-        match ty {
-            IrType::Generic(sym) if self.interner.resolve(sym) == Some("any") => {
-                let fresh = self.fresh_any_param_symbol()?;
-                minted.push(fresh);
-                Ok(IrType::Generic(fresh))
+        Self::map_ir_generics(ty, &mut |sym| {
+            if self.interner.resolve(sym) != Some("any") {
+                return Ok(None);
             }
-            IrType::List(elem) => Ok(IrType::List(Box::new(
-                self.freshen_any_generics(*elem, minted)?,
-            ))),
+            let fresh = self.fresh_any_param_symbol()?;
+            minted.push(fresh);
+            Ok(Some(IrType::Generic(fresh)))
+        })
+    }
+
+    /// Rebuild `ty`, replacing each `IrType::Generic(s)` for which `f` returns a
+    /// type.
+    ///
+    /// Visits generics pre-order — container slots left to right, record fields
+    /// in key order, a function's parameters before its result — the order the
+    /// checker numbers wildcard `any` occurrences in.
+    #[allow(clippy::too_many_lines)] // exhaustive per-IrType-variant arms; every arm is structurally required
+    fn map_ir_generics<F>(ty: IrType, f: &mut F) -> DResult<IrType>
+    where
+        F: FnMut(Symbol) -> DResult<Option<IrType>>,
+    {
+        match ty {
+            IrType::Generic(sym) => Ok(f(sym)?.unwrap_or(IrType::Generic(sym))),
+            IrType::List(elem) => Ok(IrType::List(Box::new(Self::map_ir_generics(*elem, f)?))),
             IrType::Dict(k, v) => Ok(IrType::Dict(
-                Box::new(self.freshen_any_generics(*k, minted)?),
-                Box::new(self.freshen_any_generics(*v, minted)?),
+                Box::new(Self::map_ir_generics(*k, f)?),
+                Box::new(Self::map_ir_generics(*v, f)?),
             )),
-            IrType::Set(elem) => Ok(IrType::Set(Box::new(
-                self.freshen_any_generics(*elem, minted)?,
-            ))),
-            IrType::Maybe(inner) => Ok(IrType::Maybe(Box::new(
-                self.freshen_any_generics(*inner, minted)?,
-            ))),
+            IrType::Set(elem) => Ok(IrType::Set(Box::new(Self::map_ir_generics(*elem, f)?))),
+            IrType::Maybe(inner) => Ok(IrType::Maybe(Box::new(Self::map_ir_generics(*inner, f)?))),
             IrType::Result(e, a) => Ok(IrType::Result(
-                Box::new(self.freshen_any_generics(*e, minted)?),
-                Box::new(self.freshen_any_generics(*a, minted)?),
+                Box::new(Self::map_ir_generics(*e, f)?),
+                Box::new(Self::map_ir_generics(*a, f)?),
             )),
-            IrType::Task(inner) => Ok(IrType::Task(Box::new(
-                self.freshen_any_generics(*inner, minted)?,
-            ))),
+            IrType::Task(inner) => Ok(IrType::Task(Box::new(Self::map_ir_generics(*inner, f)?))),
             IrType::Tuple(elems) => {
                 let mut out = Vec::with_capacity(elems.len());
                 for e in elems {
-                    out.push(self.freshen_any_generics(e, minted)?);
+                    out.push(Self::map_ir_generics(e, f)?);
                 }
                 Ok(IrType::Tuple(out))
             }
             IrType::Record(fields) => {
                 let mut out = BTreeMap::new();
                 for (k, v) in fields {
-                    out.insert(k, self.freshen_any_generics(v, minted)?);
+                    out.insert(k, Self::map_ir_generics(v, f)?);
                 }
                 Ok(IrType::Record(out))
             }
             IrType::Fun(params, ret) => {
                 let mut out = Vec::with_capacity(params.len());
                 for p in params {
-                    out.push(self.freshen_any_generics(p, minted)?);
+                    out.push(Self::map_ir_generics(p, f)?);
                 }
-                Ok(IrType::Fun(
-                    out,
-                    Box::new(self.freshen_any_generics(*ret, minted)?),
-                ))
+                Ok(IrType::Fun(out, Box::new(Self::map_ir_generics(*ret, f)?)))
             }
-            IrType::Decoder(inner) => Ok(IrType::Decoder(Box::new(
-                self.freshen_any_generics(*inner, minted)?,
-            ))),
-            IrType::Cmd(inner) => Ok(IrType::Cmd(Box::new(
-                self.freshen_any_generics(*inner, minted)?,
-            ))),
-            IrType::Sub(inner) => Ok(IrType::Sub(Box::new(
-                self.freshen_any_generics(*inner, minted)?,
-            ))),
+            IrType::Decoder(inner) => {
+                Ok(IrType::Decoder(Box::new(Self::map_ir_generics(*inner, f)?)))
+            }
+            IrType::Cmd(inner) => Ok(IrType::Cmd(Box::new(Self::map_ir_generics(*inner, f)?))),
+            IrType::Sub(inner) => Ok(IrType::Sub(Box::new(Self::map_ir_generics(*inner, f)?))),
             IrType::Enum { home, name, args } => {
                 let mut out = Vec::with_capacity(args.len());
                 for a in args {
-                    out.push(self.freshen_any_generics(a, minted)?);
+                    out.push(Self::map_ir_generics(a, f)?);
                 }
                 Ok(IrType::Enum {
                     home,
@@ -12802,48 +12819,47 @@ impl<'a> Lowerer<'a> {
             // generic where two are required (SEAL break, E0308).
             IrType::Ui { ctor, msg } => Ok(IrType::Ui {
                 ctor,
-                msg: Box::new(self.freshen_any_generics(*msg, minted)?),
+                msg: Box::new(Self::map_ir_generics(*msg, f)?),
             }),
             // `WebRoute page` is parametric on its page type, which can itself
             // embed a nested `any` — freshen it for the same reason as `Ui`.
-            IrType::WebRoute(page) => Ok(IrType::WebRoute(Box::new(
-                self.freshen_any_generics(*page, minted)?,
-            ))),
+            IrType::WebRoute(page) => {
+                Ok(IrType::WebRoute(Box::new(Self::map_ir_generics(*page, f)?)))
+            }
             // The widget handle's seal types are canon-proven monomorphic (no
             // type variable survives the N0039 seal gate), so `any` never
             // appears; freshen both slots anyway to keep the walk total and
             // future-proof.
             IrType::CustomElement { down, up } => Ok(IrType::CustomElement {
-                down: Box::new(self.freshen_any_generics(*down, minted)?),
-                up: Box::new(self.freshen_any_generics(*up, minted)?),
+                down: Box::new(Self::map_ir_generics(*down, f)?),
+                up: Box::new(Self::map_ir_generics(*up, f)?),
             }),
             // `SharedFun` and `FnOnceChain` carry the same param/ret structure
             // as `Fun` and can hold nested `any` generics — freshen each slot.
             IrType::SharedFun(params, ret) => {
                 let mut out = Vec::with_capacity(params.len());
                 for p in params {
-                    out.push(self.freshen_any_generics(p, minted)?);
+                    out.push(Self::map_ir_generics(p, f)?);
                 }
                 Ok(IrType::SharedFun(
                     out,
-                    Box::new(self.freshen_any_generics(*ret, minted)?),
+                    Box::new(Self::map_ir_generics(*ret, f)?),
                 ))
             }
             IrType::FnOnceChain(params, ret) => {
                 let mut out = Vec::with_capacity(params.len());
                 for p in params {
-                    out.push(self.freshen_any_generics(p, minted)?);
+                    out.push(Self::map_ir_generics(p, f)?);
                 }
                 Ok(IrType::FnOnceChain(
                     out,
-                    Box::new(self.freshen_any_generics(*ret, minted)?),
+                    Box::new(Self::map_ir_generics(*ret, f)?),
                 ))
             }
-            // Leaf types — monomorphic, never contain a `Generic`. Listed
-            // exhaustively (no wildcard) so adding a new container variant
-            // without a freshen arm is a compile error.
-            IrType::Generic(_)
-            | IrType::RowGeneric(_)
+            // Leaf types — never contain a `Generic`. Listed exhaustively (no
+            // wildcard) so adding a new container variant without a walk arm is
+            // a compile error.
+            IrType::RowGeneric(_)
             | IrType::Int
             | IrType::Float
             | IrType::Bool
@@ -16275,41 +16291,55 @@ impl<'a> Lowerer<'a> {
                 // unannotated path). Only whole-annotation aliases are unfolded
                 // here; a `Handler` in argument position (`withCors : … -> Handler
                 // -> Handler`) still lowers via `split_typed_sig` unchanged.
-                let (mut params, prologue, ret, mut any_syms_minted, mut row_params) =
-                    if !patterns.is_empty() && self.annotation_is_function_alias(ty) {
-                        let solved_ty = self
-                            .types
-                            .env
-                            .get(&(def.home().to_vec(), name))
-                            .ok_or_else(|| {
-                                bug(
-                                    "ipe_lower::lower_def",
-                                    "no inferred type for function-alias binding",
-                                )
-                            })?;
-                        // The solved-type path never encounters a bare `any`-wildcard
-                        // Generic (a solved type is either concrete or a free
-                        // `Ty::Var`, never carrying the annotation-only `any` marker)
-                        // — nothing minted here.
-                        let (p, pr, r) =
-                            self.split_unannotated_sig(solved_ty, patterns, sig_span)?;
-                        (p, pr, r, Vec::new(), Vec::new())
-                    } else {
-                        // A row-polymorphic record annotation in a SUPPORTED position
-                        // (a top-level argument-position open row of one or more
-                        // closed-typed fields) erases to a witness-bounded
-                        // `IrType::RowGeneric` in `split_typed_sig` and monomorphises
-                        // per call-site shape in the backend. Every UNSUPPORTED
-                        // open-row form — return position, nested under a
-                        // container/record, or a field type embedding a further open
-                        // row — has no emission yet, so it is failed closed here
-                        // (IPE-L0131) rather than emitting Rust that misses the A7
-                        // exact-key struct registry.
-                        if canon_sig_has_unsupported_open_row(ty) {
-                            return Err(unsupported(sig_span, Feature::RowPolyRecordAnnotation));
-                        }
-                        self.split_typed_sig(ty, patterns, free_vars, sig_span)?
-                    };
+                let (
+                    mut params,
+                    prologue,
+                    ret,
+                    mut any_syms_minted,
+                    mut row_params,
+                    wildcard_bounds,
+                ) = if !patterns.is_empty() && self.annotation_is_function_alias(ty) {
+                    let solved_ty = self
+                        .types
+                        .env
+                        .get(&(def.home().to_vec(), name))
+                        .ok_or_else(|| {
+                            bug(
+                                "ipe_lower::lower_def",
+                                "no inferred type for function-alias binding",
+                            )
+                        })?;
+                    // The solved-type path never encounters a bare `any`-wildcard
+                    // Generic (a solved type is either concrete or a free
+                    // `Ty::Var`, never carrying the annotation-only `any` marker)
+                    // — nothing minted here.
+                    let (p, pr, r) = self.split_unannotated_sig(solved_ty, patterns, sig_span)?;
+                    (p, pr, r, Vec::new(), Vec::new(), BTreeMap::new())
+                } else {
+                    // A row-polymorphic record annotation in a SUPPORTED position
+                    // (a top-level argument-position open row of one or more
+                    // closed-typed fields) erases to a witness-bounded
+                    // `IrType::RowGeneric` in `split_typed_sig` and monomorphises
+                    // per call-site shape in the backend. Every UNSUPPORTED
+                    // open-row form — return position, nested under a
+                    // container/record, or a field type embedding a further open
+                    // row — has no emission yet, so it is failed closed here
+                    // (IPE-L0131) rather than emitting Rust that misses the A7
+                    // exact-key struct registry.
+                    if canon_sig_has_unsupported_open_row(ty) {
+                        return Err(unsupported(sig_span, Feature::RowPolyRecordAnnotation));
+                    }
+                    let key = (def.home().to_vec(), name);
+                    let solved =
+                        self.types
+                            .signature_wildcards
+                            .get(&key)
+                            .map(|sig| SolvedWildcards {
+                                sig,
+                                bounds: self.types.bounds.get(&key),
+                            });
+                    self.split_typed_sig(ty, patterns, free_vars, sig_span, solved)?
+                };
                 // Unconstrained UI-msg defaulting: the type checker records
                 // (`msg_defaulted_vars`) each annotation variable whose only role
                 // is a UI message slot that no use pinned to a concrete `Msg` --
@@ -16758,14 +16788,23 @@ impl<'a> Lowerer<'a> {
                 // each would silently drop out of `type_params` while still
                 // being referenced in the emitted signature — an undeclared
                 // Rust generic, worse than the bug this fix closes. Each is
-                // trivially unbounded (`bounds_for` returns `UNBOUNDED` on a
-                // missing `var_bounds` entry, which every fresh symbol has).
+                // unbounded unless it stands for a solved signature wildcard.
+                // A minted parameter wildcard carries its occurrence's solved
+                // `any#<i>` obligations (`wildcard_bounds`), exactly as a named
+                // variable carries its own — so `f x = Log.infoWith "m" [x]`
+                // emits `T: IpeInterpolate` and satisfies the kernel it calls.
                 let type_params: Vec<(Symbol, BoundSet)> = free_vars
                     .iter()
                     .copied()
                     .filter(|v| used_generics.contains(v))
                     .chain(any_syms_minted.iter().copied())
-                    .map(|v| (v, Self::bounds_for(var_bounds, v)))
+                    .map(|v| {
+                        let set = wildcard_bounds.get(&v).map_or_else(
+                            || Self::bounds_for(var_bounds, v),
+                            |b| Self::bound_set_of(*b),
+                        );
+                        (v, set)
+                    })
                     .collect();
                 // Move-ownership discipline for CloneOk / bare-Generic params
                 // (T5) — the ONE entry point every binder kind
@@ -17007,9 +17046,14 @@ impl<'a> Lowerer<'a> {
     /// bounds) is unbounded — a bare `T{n}`, byte-identical to a
     /// structurally-parametric generic.
     fn bounds_for(var_bounds: Option<&BTreeMap<Symbol, TyBounds>>, var: Symbol) -> BoundSet {
-        let Some(b) = var_bounds.and_then(|m| m.get(&var)).copied() else {
-            return BoundSet::UNBOUNDED;
-        };
+        var_bounds
+            .and_then(|m| m.get(&var))
+            .copied()
+            .map_or(BoundSet::UNBOUNDED, Self::bound_set_of)
+    }
+
+    /// The Rust bound set one solved obligation set emits ([`Self::bounds_for`]).
+    fn bound_set_of(b: TyBounds) -> BoundSet {
         if b.is_empty() {
             return BoundSet::UNBOUNDED;
         }
@@ -17145,18 +17189,25 @@ impl<'a> Lowerer<'a> {
         )
     }
 
+    #[allow(clippy::too_many_lines)] // one arrow walk; the wildcard pairing is a second pass over its output
     fn split_typed_sig(
         &self,
         ty: &canon::Type,
         patterns: &[canon::Pattern],
         generics: &[Symbol],
         sig_span: Span,
+        solved: Option<SolvedWildcards<'_>>,
     ) -> DResult<TypedSigParts> {
         let mut cur = ty;
         let mut params = Vec::with_capacity(patterns.len());
         let mut prologue = Vec::new();
         let mut any_syms_minted = Vec::new();
         let mut row_params = Vec::new();
+        // Each parameter's freshened type and the wildcard symbols it minted,
+        // in parameter order — paired with the solved signature wildcards
+        // before any parameter is lowered, so a pinned wildcard's concrete type
+        // reaches the destructure prologue too.
+        let mut freshened: Vec<(IrType, Vec<Symbol>)> = Vec::with_capacity(patterns.len());
         for pat in patterns {
             let canon::Type::Lambda(arg, rest) = cur else {
                 // More parameter patterns than the annotation has arrows. The
@@ -17223,7 +17274,17 @@ impl<'a> Lowerer<'a> {
             // `Generic` by its index in `Func::type_params`, not by spelling, so
             // a distinctly-named symbol per occurrence gives the correct
             // independent-polymorphism semantics.
-            ir_ty = self.freshen_any_generics(ir_ty, &mut any_syms_minted)?;
+            let mut minted_here = Vec::new();
+            ir_ty = self.freshen_any_generics(ir_ty, &mut minted_here)?;
+            freshened.push((ir_ty, minted_here));
+            cur = rest.as_ref();
+        }
+        let wildcard_bounds = match solved {
+            Some(solved) => self.apply_solved_wildcards(&mut freshened, solved, sig_span)?,
+            None => BTreeMap::new(),
+        };
+        for (pat, (ir_ty, minted_here)) in patterns.iter().zip(freshened) {
+            any_syms_minted.extend(minted_here);
             // One shared path for every parameter shape (see `lower_param`): a
             // plain-var param contributes its name directly; a tuple / record /
             // alias / wildcard param takes a fresh synthetic binder and (for the
@@ -17233,7 +17294,6 @@ impl<'a> Lowerer<'a> {
             if let Some(p) = maybe_prologue {
                 prologue.push(p);
             }
-            cur = rest.as_ref();
         }
         // The trailing type is what remains after every parameter pattern has
         // consumed one arrow. Normally, if it still embeds an open row it is an
@@ -17261,7 +17321,93 @@ impl<'a> Lowerer<'a> {
             self.ir_type_from_canon(cur, generics)?
         };
         // The trailing type is the return type.
-        Ok((params, prologue, ret_ir, any_syms_minted, row_params))
+        Ok((
+            params,
+            prologue,
+            ret_ir,
+            any_syms_minted,
+            row_params,
+            wildcard_bounds,
+        ))
+    }
+
+    /// Pair each parameter's minted wildcard symbols with the solved signature
+    /// wildcards they stand for.
+    ///
+    /// The checker numbers a binding's wildcard occurrences parameter by
+    /// parameter, each walked pre-order (the order `freshen_any_generics` mints
+    /// in), and records per-parameter counts. Mint `k` of the signature is
+    /// therefore wildcard `k`: its `any#<k>` obligations become the generic's
+    /// bounds (returned), and a nested wildcard the body pinned to one ground
+    /// type is replaced by that concrete type (its symbol leaves the minted
+    /// list). A bare-parameter wildcard is left to the solved-region
+    /// concretization in `lower_def`, which owns its row-accessor and
+    /// structural-record exceptions.
+    ///
+    /// Fails closed when the pairing cannot be proven: a per-parameter count
+    /// that disagrees with the checker's while any parameter wildcard carries a
+    /// fact, or one parameter holding several wildcards whose facts differ (its
+    /// correctness would then rest on the intra-parameter order alone).
+    fn apply_solved_wildcards(
+        &self,
+        freshened: &mut [(IrType, Vec<Symbol>)],
+        solved: SolvedWildcards<'_>,
+        sig_span: Span,
+    ) -> DResult<WildcardBounds> {
+        let mut index_bounds: BTreeMap<usize, TyBounds> = BTreeMap::new();
+        for (sym, b) in solved.bounds.into_iter().flatten() {
+            if let Some(i) = ipe_types::wildcard_bound_index(self.interner, *sym)
+                && !b.is_empty()
+            {
+                index_bounds.insert(i, *b);
+            }
+        }
+        let param_total: usize = solved.sig.param_counts.iter().sum();
+        let has_param_fact =
+            !solved.sig.pins.is_empty() || index_bounds.range(..param_total).next().is_some();
+        if !has_param_fact {
+            return Ok(BTreeMap::new());
+        }
+        let counts_agree = freshened.len() == solved.sig.param_counts.len()
+            && freshened
+                .iter()
+                .zip(&solved.sig.param_counts)
+                .all(|((_, minted), n)| minted.len() == *n);
+        if !counts_agree {
+            return Err(unsupported(sig_span, Feature::Polymorphism));
+        }
+        let mut out = BTreeMap::new();
+        let mut offset = 0usize;
+        for (ir_ty, minted) in freshened.iter_mut() {
+            let end = offset.saturating_add(minted.len());
+            let facts: Vec<(Option<&TyBounds>, Option<&Ty>)> = (offset..end)
+                .map(|i| (index_bounds.get(&i), solved.sig.pins.get(&i)))
+                .collect();
+            if facts.windows(2).any(|w| w.first() != w.last()) {
+                return Err(unsupported(sig_span, Feature::Polymorphism));
+            }
+            let bare = matches!(ir_ty, IrType::Generic(s) if minted.first() == Some(s));
+            let mut pinned: BTreeSet<Symbol> = BTreeSet::new();
+            for (sym, (bounds, pin)) in minted.iter().zip(facts) {
+                if let Some(b) = bounds {
+                    out.insert(*sym, *b);
+                }
+                if let Some(pin) = pin
+                    && !bare
+                {
+                    let concrete = self.ir_type_from_ty(pin, sig_span)?;
+                    let target = *sym;
+                    let taken = std::mem::replace(ir_ty, IrType::Unit);
+                    *ir_ty = Self::map_ir_generics(taken, &mut |s| {
+                        Ok((s == target).then(|| concrete.clone()))
+                    })?;
+                    pinned.insert(target);
+                }
+            }
+            offset = end;
+            minted.retain(|s| !pinned.contains(s));
+        }
+        Ok(out)
     }
 
     /// Lower ONE binding-position parameter pattern (a function-def head param or
@@ -30865,6 +31011,7 @@ mod tests {
             poly_var_map: BTreeMap::new(),
             untyped_type_params: BTreeMap::new(),
             msg_defaulted_vars: BTreeMap::new(),
+            signature_wildcards: BTreeMap::new(),
         }
     }
 
