@@ -47,7 +47,11 @@ Two pieces make an editor understand Ipê:
 Completion is type-directed: where the context expects a type (a function
 argument, a typed binding's body, a branch, a list element), candidates of that
 type come first and the type's constructors are surfaced. Every suggestion comes
-from the type-checker `ipe build` runs.
+from the type-checker `ipe build` runs. After a qualifier (`Font.`, an alias
+`F.`, or a full dotted path `Ipe.Ui.Font.`), completion is scoped to exactly
+that module's exposed members — never the whole in-scope list — and accepting
+an item replaces whatever member name is already typed rather than appending to
+it.
 
 ## Helix
 

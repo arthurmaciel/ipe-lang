@@ -472,15 +472,37 @@ fn completion_result(state: &State, params: &serde_json::Value) -> FeatureOutcom
     let Ok(ctx) = position_ctx(state, &position.text_document.uri, position.position) else {
         return FeatureOutcome::NoResult;
     };
-    let items = ipe_lsp_features::completion::completions(
+    // A `Qualifier.member` trigger (`Font.`, `F.bol`, `Ipe.Ui.Font.`) is
+    // answered from that qualifier's own exports only — never the global
+    // list — and closes even for an unknown qualifier (`Some(vec![])`, not a
+    // fallback to the unqualified path). Only a byte that is not on such a
+    // trigger at all falls through to whole-scope completion.
+    let items = ipe_lsp_features::completion::qualified_completions(
         &state.db,
         ctx.root,
         ctx.entry_file,
         &ctx.module,
         ctx.byte,
+        state.encoding,
         state.docs(),
-    );
-    FeatureOutcome::payload(items)
+    )
+    .unwrap_or_else(|| {
+        ipe_lsp_features::completion::completions(
+            &state.db,
+            ctx.root,
+            ctx.entry_file,
+            &ctx.module,
+            ctx.byte,
+            state.encoding,
+            state.docs(),
+        )
+    });
+    FeatureOutcome::payload(lsp_types::CompletionResponse::List(
+        lsp_types::CompletionList {
+            is_incomplete: false,
+            items,
+        },
+    ))
 }
 
 /// `textDocument/definition` — jump to the defining site of the name under
