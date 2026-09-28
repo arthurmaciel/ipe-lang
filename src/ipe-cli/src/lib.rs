@@ -69,6 +69,7 @@ pub mod run_sandbox;
 pub mod runtime_embed;
 pub mod scratch;
 pub mod screen;
+pub mod secret_file;
 pub mod signing;
 pub mod ssh_signing_key;
 pub mod style;

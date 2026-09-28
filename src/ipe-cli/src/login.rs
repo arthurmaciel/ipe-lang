@@ -22,6 +22,7 @@ use std::process::Command;
 use std::time::{Duration, Instant};
 
 use crate::CliError;
+use crate::secret_file::{HOST_SECRET_STORE, SecretFileError, SecretStore};
 
 /// The Ipê CLI's GitHub OAuth App client id. Public by design — the device flow
 /// authenticates with the client id alone (no secret), so embedding it is safe.
@@ -189,7 +190,7 @@ pub fn stored_token() -> Option<PublishToken> {
 fn run_device_flow() -> Result<(), CliError> {
     // Refuse up front where the token could not be stored owner-only, before
     // the user approves a grant that would then be discarded.
-    require_token_store(HOST_TOKEN_STORE)?;
+    require_token_store(HOST_SECRET_STORE)?;
     let token = authorize(GrantScope::Publish, PublishToken::parse)?;
     let path = store_token(&token)?;
     crate::screen::Screen::new(crate::screen::Stream::Stdout)
@@ -531,9 +532,9 @@ fn status_report(status: &TokenStatus, key_line: crate::text::Message) -> crate:
 
 /// Write the token with owner-only permissions, creating the config dir.
 ///
-/// On Unix the file is created with mode 0600 atomically before any bytes are
-/// written, so there is no window where the token is readable by other users.
-/// Off Unix the token is never stored (see [`write_token_atomic`]).
+/// The token only ever lands in a file created owner-only before any byte is
+/// written; where the host cannot create one, it is never stored (see
+/// [`write_token_atomic`]).
 fn store_token(token: &PublishToken) -> Result<PathBuf, CliError> {
     let path =
         token_path().ok_or_else(|| login_error(&crate::text::msg::login_config_dir_unknown()))?;
@@ -545,48 +546,40 @@ fn store_token(token: &PublishToken) -> Result<PathBuf, CliError> {
             ))
         })?;
     }
-    write_token_atomic(&path, token.as_str())?;
+    write_token_atomic(HOST_SECRET_STORE, &path, token.as_str())?;
     Ok(path)
 }
 
 /// Write `token` to `path` crash-atomically with owner-only permissions.
 ///
-/// On Unix: writes the token into a fresh mode-0600 temp file in the SAME
-/// directory (created with `O_CREAT | O_EXCL` so a pre-seeded name is refused,
-/// not followed), flushes it, then `rename(2)`s it over `path`. The rename is
-/// atomic within the directory, so a crash at any point leaves either the old
-/// token or the complete new one — never a truncated or empty file. The token
-/// bytes only ever land in a 0600 inode, so there is no window in which the
-/// secret is group- or world-readable.
+/// The token goes into a fresh temp file in the SAME directory, created
+/// exclusively and owner-only by [`crate::secret_file::create_new`] (a
+/// pre-seeded name is refused, not followed), is flushed, then `rename(2)`d
+/// over `path`. The rename is atomic within the directory, so a crash at any
+/// point leaves either the old token or the complete new one — never a
+/// truncated or empty file. The token bytes only ever land in an owner-only
+/// inode, so there is no window in which the secret is readable by others.
 ///
-/// Off Unix: refused. No portable owner-only file mode exists there, so the
-/// token is never written to a file other users might read; `GITHUB_TOKEN`
-/// supplies it instead.
-#[cfg(unix)]
-fn write_token_atomic(path: &std::path::Path, token: &str) -> Result<(), CliError> {
-    use std::fs::OpenOptions;
-    use std::os::unix::fs::OpenOptionsExt as _;
-
+/// A `store` that cannot keep the file owner-only refuses before anything is
+/// created; `GITHUB_TOKEN` supplies the token there instead.
+fn write_token_atomic(
+    store: SecretStore,
+    path: &std::path::Path,
+    token: &str,
+) -> Result<(), CliError> {
     let dir = path.parent().unwrap_or_else(|| std::path::Path::new("."));
     let tmp_path = dir.join(format!(
         ".{}.{}.tmp",
         path.file_name().and_then(|n| n.to_str()).unwrap_or("token"),
         std::process::id()
     ));
-    // O_EXCL: refuse an existing name (a stale temp or a planted symlink) rather
-    // than truncate/follow it. Mode 0600 from creation, so the secret never
-    // touches a looser-mode inode.
-    let mut file = OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .mode(0o600)
-        .open(&tmp_path)
-        .map_err(|e| {
-            login_error(&crate::text::msg::login_create_failed(
-                &tmp_path.display(),
-                &e,
-            ))
-        })?;
+    let mut file = crate::secret_file::create_new(store, &tmp_path).map_err(|e| match e {
+        SecretFileError::Unsupported => token_store_unsupported(),
+        SecretFileError::Io(e) => login_error(&crate::text::msg::login_create_failed(
+            &tmp_path.display(),
+            &e,
+        )),
+    })?;
     let write_result = writeln!(file, "{token}")
         .and_then(|()| file.flush())
         .and_then(|()| file.sync_all());
@@ -604,35 +597,14 @@ fn write_token_atomic(path: &std::path::Path, token: &str) -> Result<(), CliErro
     })
 }
 
-#[cfg(not(unix))]
-fn write_token_atomic(_path: &std::path::Path, _token: &str) -> Result<(), CliError> {
-    require_token_store(HOST_TOKEN_STORE)
-}
-
-/// Where the host can keep the publish token.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum TokenStore {
-    /// A file created mode 0600, readable by its owner only.
-    OwnerOnlyFile,
-    /// No owner-only file mode exists, so the token is never stored.
-    Unsupported,
-}
-
-/// The token store this build's target provides.
-const HOST_TOKEN_STORE: TokenStore = if cfg!(unix) {
-    TokenStore::OwnerOnlyFile
-} else {
-    TokenStore::Unsupported
-};
-
 /// Refuse a login whose token `store` cannot keep it owner-only.
-fn require_token_store(store: TokenStore) -> Result<(), CliError> {
-    match store {
-        TokenStore::OwnerOnlyFile => Ok(()),
-        TokenStore::Unsupported => Err(login_error(
-            &crate::text::msg::login_token_store_unsupported(),
-        )),
-    }
+fn require_token_store(store: SecretStore) -> Result<(), CliError> {
+    crate::secret_file::require(store).map_err(|_| token_store_unsupported())
+}
+
+/// The refusal for a host that cannot store the token owner-only.
+fn token_store_unsupported() -> CliError {
+    login_error(&crate::text::msg::login_token_store_unsupported())
 }
 
 /// Remove the stored token.
@@ -695,12 +667,12 @@ mod tests {
 
     #[test]
     fn owner_only_token_store_admits_login() {
-        assert!(require_token_store(TokenStore::OwnerOnlyFile).is_ok());
+        assert!(require_token_store(SecretStore::OwnerOnlyFile).is_ok());
     }
 
     #[test]
     fn unsupported_token_store_refuses_login() {
-        let refusal = require_token_store(TokenStore::Unsupported);
+        let refusal = require_token_store(SecretStore::Unsupported);
         assert!(
             matches!(
                 &refusal,
@@ -756,13 +728,36 @@ mod tests {
     }
 
     #[test]
-    fn host_token_store_tracks_target_family() {
-        let expected = if cfg!(unix) {
-            TokenStore::OwnerOnlyFile
-        } else {
-            TokenStore::Unsupported
-        };
-        assert_eq!(HOST_TOKEN_STORE, expected);
+    fn an_unsupported_token_store_writes_no_token() {
+        let dir = std::env::temp_dir().join(format!(
+            "ipe-login-unsupported-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("create test dir");
+        let path = dir.join("token");
+
+        let refusal = write_token_atomic(SecretStore::Unsupported, &path, "ghp_refused_token");
+
+        assert!(
+            matches!(
+                &refusal,
+                Err(CliError::Resolve(message))
+                    if message.contains(crate::text::msg::login_token_store_unsupported().as_str())
+            ),
+            "an unsupported token store must refuse the write: {refusal:?}"
+        );
+        let entries: Vec<_> = std::fs::read_dir(&dir)
+            .expect("readdir")
+            .filter_map(Result::ok)
+            .map(|e| e.file_name())
+            .collect();
+        assert!(
+            entries.is_empty(),
+            "a refused token write must create no file: {entries:?}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -892,7 +887,8 @@ mod tests {
         std::fs::create_dir_all(&dir).expect("create test dir");
         let path = dir.join("token");
 
-        write_token_atomic(&path, "test-token").expect("write_token_atomic succeeds");
+        write_token_atomic(HOST_SECRET_STORE, &path, "test-token")
+            .expect("write_token_atomic succeeds");
 
         let meta = std::fs::metadata(&path).expect("file exists");
         let mode = meta.permissions().mode() & 0o777;
@@ -935,7 +931,8 @@ mod tests {
         std::fs::write(&path, "old\n").expect("plant file");
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).expect("chmod 644");
 
-        write_token_atomic(&path, "new-token").expect("write_token_atomic succeeds");
+        write_token_atomic(HOST_SECRET_STORE, &path, "new-token")
+            .expect("write_token_atomic succeeds");
 
         let mode = std::fs::metadata(&path)
             .expect("file exists")
@@ -1025,7 +1022,7 @@ mod tests {
         std::fs::create_dir_all(&dir).expect("create test dir");
         let path = dir.join("token");
 
-        write_token_atomic(&path, "ghp_atomic_token").expect("write succeeds");
+        write_token_atomic(HOST_SECRET_STORE, &path, "ghp_atomic_token").expect("write succeeds");
 
         assert_eq!(
             std::fs::read_to_string(&path).expect("token readable"),

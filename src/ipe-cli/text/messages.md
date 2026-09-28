@@ -1560,6 +1560,10 @@ No commit-signing key is configured; `ipe package publish` needs one. Run `ipe l
 
 could not determine a config directory for the signing key (set HOME or XDG_CONFIG_HOME)
 
+## signing-key-store-unsupported
+
+cannot store a signing key on this platform: its private key file cannot be made readable by you alone — no key was generated; set {env} to a signing key you keep private instead
+
 ## signing-key-occupied
 
 {path} already exists but is not a usable signing key — move it aside and run `ipe login --signing-key` again

@@ -773,9 +773,10 @@ const SALT_BYTES: usize = 32;
 
 /// The per-user secret naming the default cache partition, created on first use.
 ///
-/// Stored as hex in `$IPE_HOME/build-cache-salt` (owner-only). A symlink or a
-/// malformed file there yields `None` (the default cache is then disabled),
-/// never a salt an attacker could have chosen.
+/// Stored as hex in `$IPE_HOME/build-cache-salt`, created owner-only. A symlink
+/// or a malformed file there, or a host that cannot create the file owner-only,
+/// yields `None` (the default cache is then disabled), never a salt another
+/// user could read or an attacker could have chosen.
 fn user_cache_salt() -> Option<String> {
     use std::io::{Read as _, Write as _};
     let home = crate::runtime_embed::ipe_home().ok()?;
@@ -802,20 +803,17 @@ fn user_cache_salt() -> Option<String> {
     getrandom::fill(&mut bytes).ok()?;
     let salt = hex::encode(bytes);
     fs::create_dir_all(&home).ok()?;
-    let mut options = fs::OpenOptions::new();
-    options.write(true).create_new(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt as _;
-        options.mode(0o600);
-    }
-    match options.open(&path) {
+    match crate::secret_file::create_new(crate::secret_file::HOST_SECRET_STORE, &path) {
         Ok(mut file) => {
             file.write_all(salt.as_bytes()).ok()?;
             Some(salt)
         }
         // A concurrent first build won the race: use the salt it wrote.
-        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => read(&path),
+        Err(crate::secret_file::SecretFileError::Io(e))
+            if e.kind() == std::io::ErrorKind::AlreadyExists =>
+        {
+            read(&path)
+        }
         Err(_) => None,
     }
 }

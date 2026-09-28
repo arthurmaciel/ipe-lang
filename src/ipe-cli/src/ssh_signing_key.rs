@@ -29,6 +29,7 @@ use zeroize::Zeroizing;
 
 use crate::CliError;
 use crate::login::KeyRegistrationToken;
+use crate::secret_file::{HOST_SECRET_STORE, SecretFileError, SecretStore};
 
 /// The environment variable naming the SSH signing key's private-key file.
 pub const SIGNING_KEY_ENV: &str = "IPE_PUBLISH_SIGNING_KEY";
@@ -354,6 +355,8 @@ impl SetupOutcome {
 enum SetupError {
     /// Neither `XDG_CONFIG_HOME` nor `HOME` is set.
     NoConfigDir,
+    /// This host cannot keep the private key in a file readable by its owner alone.
+    StoreUnsupported,
     /// Something already occupies a key file name.
     Occupied(PathBuf),
     /// The config dir cannot hold hard links, which storing the key relies on.
@@ -383,6 +386,7 @@ impl SetupError {
         use crate::text::msg;
         match self {
             Self::NoConfigDir => msg::signing_key_no_config_dir(),
+            Self::StoreUnsupported => msg::signing_key_store_unsupported(&SIGNING_KEY_ENV),
             Self::Occupied(path) => msg::signing_key_occupied(&shown_path(path)),
             Self::LinkUnsupported { dir, source } => msg::signing_key_link_unsupported(
                 &shown_path(dir),
@@ -448,13 +452,19 @@ struct StagedKeyPair {
 }
 
 impl StagedKeyPair {
-    /// Write `pair` beside `files` under unique temporary names: the private
-    /// half exclusively created with mode `0600`, the public half `0644`.
+    /// Write `pair` beside `files` under unique temporary names.
+    ///
+    /// The private half is created through `store`, owner-only before any byte
+    /// lands in it; the public half is created `0644`.
     ///
     /// Also proves the directory supports the hard links [`Self::commit`] makes,
     /// so a filesystem without them fails here — before anything is registered
     /// on GitHub — rather than after, which would orphan a registered key.
-    fn write(files: &KeyFiles, pair: &GeneratedKeyPair) -> Result<Self, SetupError> {
+    fn write(
+        store: SecretStore,
+        files: &KeyFiles,
+        pair: &GeneratedKeyPair,
+    ) -> Result<Self, SetupError> {
         let mut suffix = [0u8; 8];
         getrandom::fill(&mut suffix).map_err(|_| SetupError::KeyGeneration)?;
         let suffix = format!("{}.{}", std::process::id(), hex::encode(suffix));
@@ -462,10 +472,22 @@ impl StagedKeyPair {
             private_tmp: temp_name(&files.private, &suffix),
             public_tmp: temp_name(&files.public, &suffix),
         };
-        write_new_file(&staged.private_tmp, 0o600, pair.private_pem.as_bytes())?;
-        write_new_file(
+        let private =
+            crate::secret_file::create_new(store, &staged.private_tmp).map_err(|e| match e {
+                SecretFileError::Unsupported => SetupError::StoreUnsupported,
+                SecretFileError::Io(source) => SetupError::Io {
+                    path: staged.private_tmp.clone(),
+                    source,
+                },
+            })?;
+        fill_new_file(&staged.private_tmp, private, pair.private_pem.as_bytes())?;
+        let public = create_public_file(&staged.public_tmp).map_err(|source| SetupError::Io {
+            path: staged.public_tmp.clone(),
+            source,
+        })?;
+        fill_new_file(
             &staged.public_tmp,
-            0o644,
+            public,
             format!("{}\n", pair.public.as_str()).as_bytes(),
         )?;
         probe_hard_link(
@@ -525,38 +547,33 @@ fn temp_name(path: &Path, suffix: &str) -> PathBuf {
     path.with_file_name(format!(".{name}.{suffix}.tmp"))
 }
 
-/// Create `path` exclusively (an existing name or symlink is refused, never
-/// followed) with `mode` set at creation, then write and sync `contents`. A
-/// partially written file is removed.
-fn write_new_file(path: &Path, mode: u32, contents: &[u8]) -> Result<(), SetupError> {
-    let io_error = |source| SetupError::Io {
-        path: path.to_path_buf(),
-        source,
-    };
-    let mut file = exclusive_create(path, mode).map_err(io_error)?;
+/// Write and sync `contents` into the freshly created `file` at `path`.
+///
+/// A partially written file is removed.
+fn fill_new_file(path: &Path, mut file: File, contents: &[u8]) -> Result<(), SetupError> {
     let written = file.write_all(contents).and_then(|()| file.sync_all());
     drop(file);
     written.map_err(|source| {
         let _ = std::fs::remove_file(path);
-        io_error(source)
+        SetupError::Io {
+            path: path.to_path_buf(),
+            source,
+        }
     })
 }
 
-#[cfg(unix)]
-fn exclusive_create(path: &Path, mode: u32) -> std::io::Result<File> {
-    use std::os::unix::fs::OpenOptionsExt as _;
-    OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .mode(mode)
-        .open(path)
-}
-
-/// Create `path` exclusively; `mode` is ignored, since this platform has no Unix
-/// permission bits — the file inherits the directory's default access control.
-#[cfg(not(unix))]
-fn exclusive_create(path: &Path, _mode: u32) -> std::io::Result<File> {
-    OpenOptions::new().write(true).create_new(true).open(path)
+/// Create the public half's file `path` exclusively, world-readable.
+///
+/// An existing name or symlink is refused, never followed.
+fn create_public_file(path: &Path) -> std::io::Result<File> {
+    let mut options = OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        options.mode(0o644);
+    }
+    options.open(path)
 }
 
 /// Create the config dir (owner-only when newly created on Unix).
@@ -587,6 +604,7 @@ fn consent_question(files: &KeyFiles) -> crate::text::Message {
 /// The setup step: skip when a key is configured, otherwise ask, generate,
 /// stage, register, and commit — removing the staged key on any failure.
 fn set_up<C: Consent, R: SigningKeyRegistrar>(
+    store: SecretStore,
     env_value: Option<&OsStr>,
     config_dir: Option<&Path>,
     consent: &mut C,
@@ -599,6 +617,7 @@ fn set_up<C: Consent, R: SigningKeyRegistrar>(
         KeyLookup::EnvUnusable => return Ok(SetupOutcome::EnvUnusable),
         KeyLookup::Missing => config_dir.ok_or(SetupError::NoConfigDir)?,
     };
+    crate::secret_file::require(store).map_err(|_| SetupError::StoreUnsupported)?;
     let files = KeyFiles::in_dir(dir);
     files.ensure_free()?;
     if !consent.confirm(&consent_question(&files)) {
@@ -606,7 +625,7 @@ fn set_up<C: Consent, R: SigningKeyRegistrar>(
     }
     let pair = GeneratedKeyPair::generate().ok_or(SetupError::KeyGeneration)?;
     create_config_dir(dir)?;
-    let staged = StagedKeyPair::write(&files, &pair)?;
+    let staged = StagedKeyPair::write(store, &files, &pair)?;
     registrar
         .register(&pair.public, KEY_TITLE)
         .map_err(SetupError::Registration)?;
@@ -707,6 +726,7 @@ fn is_interactive() -> bool {
 /// Run the setup against the real terminal and GitHub, printing the outcome.
 fn run_interactive(env_value: Option<&OsStr>, config_dir: Option<&Path>) -> Result<(), CliError> {
     let outcome = set_up(
+        HOST_SECRET_STORE,
         env_value,
         config_dir,
         &mut TerminalConsent,
@@ -902,8 +922,14 @@ mod tests {
             asked: 0,
         };
         let mut registrar = FakeRegistrar::new(&dir, false);
-        let outcome =
-            set_up(None, Some(dir.as_path()), &mut consent, &mut registrar).expect("declined");
+        let outcome = set_up(
+            HOST_SECRET_STORE,
+            None,
+            Some(dir.as_path()),
+            &mut consent,
+            &mut registrar,
+        )
+        .expect("declined");
         assert_eq!(outcome, SetupOutcome::Declined);
         assert_eq!(consent.asked, 1);
         assert_eq!(registrar.calls, 0, "nothing is registered after a decline");
@@ -923,7 +949,13 @@ mod tests {
             asked: 0,
         };
         let mut registrar = FakeRegistrar::new(&dir, true);
-        let result = set_up(None, Some(dir.as_path()), &mut consent, &mut registrar);
+        let result = set_up(
+            HOST_SECRET_STORE,
+            None,
+            Some(dir.as_path()),
+            &mut consent,
+            &mut registrar,
+        );
         assert!(matches!(
             result,
             Err(SetupError::Registration(RegistrationError::Refused {
@@ -953,8 +985,14 @@ mod tests {
             asked: 0,
         };
         let mut registrar = FakeRegistrar::new(&dir, false);
-        let outcome =
-            set_up(None, Some(dir.as_path()), &mut consent, &mut registrar).expect("registered");
+        let outcome = set_up(
+            HOST_SECRET_STORE,
+            None,
+            Some(dir.as_path()),
+            &mut consent,
+            &mut registrar,
+        )
+        .expect("registered");
         let private = dir.join(PRIVATE_KEY_FILE);
         assert_eq!(
             outcome,
@@ -1004,8 +1042,14 @@ mod tests {
             asked: 0,
         };
         let mut registrar = FakeRegistrar::new(&dir, false);
-        let outcome =
-            set_up(None, Some(dir.as_path()), &mut consent, &mut registrar).expect("skip");
+        let outcome = set_up(
+            HOST_SECRET_STORE,
+            None,
+            Some(dir.as_path()),
+            &mut consent,
+            &mut registrar,
+        )
+        .expect("skip");
         assert!(matches!(outcome, SetupOutcome::AlreadyConfigured(_)));
         assert_eq!(consent.asked, 0, "no prompt when a key is configured");
         assert_eq!(registrar.calls, 0);
@@ -1033,7 +1077,13 @@ mod tests {
             asked: 0,
         };
         let mut registrar = FakeRegistrar::new(&dir, false);
-        let result = set_up(None, Some(dir.as_path()), &mut consent, &mut registrar);
+        let result = set_up(
+            HOST_SECRET_STORE,
+            None,
+            Some(dir.as_path()),
+            &mut consent,
+            &mut registrar,
+        );
         assert!(matches!(result, Err(SetupError::Occupied(_))));
         assert_eq!(consent.asked, 0);
         assert_eq!(
@@ -1054,7 +1104,13 @@ mod tests {
         };
         let mut registrar = FakeRegistrar::new(&dir, false);
         registrar.plant_on_register = Some(planted);
-        let result = set_up(None, Some(dir.as_path()), &mut consent, &mut registrar);
+        let result = set_up(
+            HOST_SECRET_STORE,
+            None,
+            Some(dir.as_path()),
+            &mut consent,
+            &mut registrar,
+        );
         assert_eq!(registrar.calls, 1);
         assert!(
             matches!(&result, Err(SetupError::Commit { path, .. }) if *path == dir.join(planted)),
@@ -1092,7 +1148,13 @@ mod tests {
             asked: 0,
         };
         let mut registrar = FakeRegistrar::new(&dir, false);
-        let result = set_up(None, Some(dir.as_path()), &mut consent, &mut registrar);
+        let result = set_up(
+            HOST_SECRET_STORE,
+            None,
+            Some(dir.as_path()),
+            &mut consent,
+            &mut registrar,
+        );
         assert!(
             matches!(&result, Err(SetupError::Occupied(path)) if *path == dir.join(PUBLIC_KEY_FILE)),
             "expected Occupied(signing_key.pub), got {result:?}"
@@ -1115,7 +1177,7 @@ mod tests {
             asked: 0,
         };
         let mut registrar = FakeRegistrar::new(&dir, false);
-        let result = set_up(None, None, &mut consent, &mut registrar);
+        let result = set_up(HOST_SECRET_STORE, None, None, &mut consent, &mut registrar);
         assert!(
             matches!(result, Err(SetupError::NoConfigDir)),
             "expected NoConfigDir, got {result:?}"
@@ -1192,6 +1254,31 @@ mod tests {
     }
 
     #[test]
+    fn an_unsupported_secret_store_generates_no_key() {
+        let dir = test_dir("store-unsupported");
+        let mut consent = Answer {
+            yes: true,
+            asked: 0,
+        };
+        let mut registrar = FakeRegistrar::new(&dir, false);
+        let result = set_up(
+            SecretStore::Unsupported,
+            None,
+            Some(dir.as_path()),
+            &mut consent,
+            &mut registrar,
+        );
+        assert!(
+            matches!(result, Err(SetupError::StoreUnsupported)),
+            "an unsupported store must refuse, got {result:?}"
+        );
+        assert_eq!(consent.asked, 0, "nothing is asked before the refusal");
+        assert_eq!(registrar.calls, 0, "nothing is registered");
+        assert!(dir_entries(&dir).is_empty(), "no key file is written");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn a_set_env_var_suppresses_the_offer() {
         let dir = test_dir("env-set");
         let mut consent = Answer {
@@ -1200,6 +1287,7 @@ mod tests {
         };
         let mut registrar = FakeRegistrar::new(&dir, false);
         let outcome = set_up(
+            HOST_SECRET_STORE,
             Some(OsStr::new("/nonexistent/ipe/key")),
             Some(dir.as_path()),
             &mut consent,

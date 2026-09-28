@@ -1317,6 +1317,8 @@ messages! {
     signing_key_needs_terminal = "signing-key-needs-terminal";
     /// No config directory could be determined for the signing key.
     signing_key_no_config_dir = "signing-key-no-config-dir";
+    /// This host cannot keep the signing key's private half owner-only.
+    signing_key_store_unsupported(env) = "signing-key-store-unsupported";
     /// A non-key entry occupies a signing-key file name.
     signing_key_occupied(path: &crate::style::TerminalSafe) = "signing-key-occupied";
     /// The config directory cannot hold the hard links key storage relies on.
