@@ -347,8 +347,7 @@ fn find_case_or_if(expr: &Expr, byte: u32) -> Option<&Expr> {
             elems.iter().find_map(|e| find_case_or_if(e, byte))
         }
         Expr_::Record(fields) => fields.iter().find_map(|(_, v)| find_case_or_if(v, byte)),
-        Expr_::Update(base, updates) => find_case_or_if(base, byte)
-            .or_else(|| updates.iter().find_map(|(_, v)| find_case_or_if(v, byte))),
+        Expr_::Update(_, updates) => updates.iter().find_map(|(_, v)| find_case_or_if(v, byte)),
         Expr_::Access(inner, _) => find_case_or_if(inner, byte),
         Expr_::VarLocal(_)
         | Expr_::VarQual(_, _)
