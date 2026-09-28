@@ -121,85 +121,99 @@ pub const RULES: &[RuleInfo] = &[
         name: "multiline-lambda-arg",
         summary: "a lambda spanning several lines passed inline as a call argument instead of bound by name",
         default_severity: Severity::Warn,
-        fixable: false,
+        fixability: Fixability::NotFixable(
+            "naming the lambda is a judgment call only the author can make well",
+        ),
     },
     RuleInfo {
         name: "no-bool-literal-compare",
         summary: "an `==` / `/=` comparison against a `True` / `False` literal",
         default_severity: Severity::Warn,
-        fixable: false,
+        fixability: Fixability::NotFixable(
+            "the substitution can drop a comment or misjudge precedence inside the compared expression, which the rule does not check",
+        ),
     },
     RuleInfo {
         name: "no-redundant-bool-if",
         summary: "an `if` whose branches are both `Bool` literals, restating its condition",
         default_severity: Severity::Warn,
-        fixable: false,
+        fixability: Fixability::NotFixable(
+            "the substitution can drop a comment or misjudge precedence inside a branch, which the rule does not check",
+        ),
     },
     RuleInfo {
         name: "no-simple-let-body",
         summary: "a `let` whose body only returns the name its last binding introduces",
         default_severity: Severity::Warn,
-        fixable: false,
+        fixability: Fixability::NotFixable(
+            "the substitution can drop a comment attached to the binding or its body, which the rule does not check",
+        ),
     },
     RuleInfo {
         name: "simplify-double-not",
         summary: "`not (not x)`, which restates `x`",
         default_severity: Severity::Warn,
-        fixable: true,
+        fixability: Fixability::Fixable,
     },
     RuleInfo {
         name: "simplify-map-identity",
         summary: "`List.map identity xs`, which restates `xs`",
         default_severity: Severity::Warn,
-        fixable: true,
+        fixability: Fixability::Fixable,
     },
     RuleInfo {
         name: "simplify-cons-append",
         summary: "`[ a ] ++ xs`, which restates `a :: xs`",
         default_severity: Severity::Warn,
-        fixable: true,
+        fixability: Fixability::Fixable,
     },
     RuleInfo {
         name: "no-redundant-cons",
         summary: "consing onto a list literal, which restates a longer list literal",
         default_severity: Severity::Warn,
-        fixable: true,
+        fixability: Fixability::Fixable,
     },
     RuleInfo {
         name: "no-redundant-concat",
         summary: "`List.concat` / `String.concat` of a single-element list, which restates that element",
         default_severity: Severity::Warn,
-        fixable: true,
+        fixability: Fixability::Fixable,
     },
     RuleInfo {
         name: "no-missing-type-annotation",
         summary: "a top-level declaration with no `: T` signature",
         default_severity: Severity::Allow,
-        fixable: false,
+        fixability: Fixability::NotFixable(
+            "the fix is the inferred type signature, which this syntax-only rule has no type information to produce",
+        ),
     },
     RuleInfo {
         name: "no-exposing-everything",
         summary: "a `module M exposing (..)` header, which exports every top-level declaration",
         default_severity: Severity::Warn,
-        fixable: false,
+        fixability: Fixability::NotFixable(
+            "the explicit list a rewrite would write is the module's resolved export surface, which is canonicalisation's knowledge, not the parser's — and choosing what to hide is the author's decision the rule exists to prompt",
+        ),
     },
     RuleInfo {
         name: "no-importing-everything",
         summary: "an `import M exposing (..)`, which brings every exported name into unqualified scope",
         default_severity: Severity::Warn,
-        fixable: false,
+        fixability: Fixability::NotFixable(
+            "the explicit list a rewrite would write needs the dependency's resolved export surface, which is canonicalisation's knowledge, not the parser's",
+        ),
     },
     RuleInfo {
         name: "no-unused-parameters",
         summary: "a function or lambda parameter the body never reads",
         default_severity: Severity::Warn,
-        fixable: true,
+        fixability: Fixability::Fixable,
     },
     RuleInfo {
         name: "no-unused-patterns",
         summary: "a variable a `case` arm, `let` destructure or `do` bind never reads",
         default_severity: Severity::Warn,
-        fixable: true,
+        fixability: Fixability::Fixable,
     },
 ];
 
