@@ -5102,7 +5102,7 @@ fn path_to_dot_string(interner: &Interner, path: &[Symbol]) -> Box<str> {
 /// reference resolving IDENTICALLY in expression and type-annotation position —
 /// both consult the qualifier maps — mirroring the dotted-canonical stdlib
 /// handling (`Ipe.Db.Decode` → `Db.Decode`).
-fn import_qualifiers(
+pub fn import_qualifiers(
     alias: Option<Symbol>,
     dep_path: &[Symbol],
     interner: &mut Interner,

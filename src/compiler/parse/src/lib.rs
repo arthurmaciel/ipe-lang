@@ -240,6 +240,118 @@ pub fn scan_identifier_words(src: &str) -> Option<std::collections::BTreeSet<Str
     Some(words)
 }
 
+/// The bounds of the identifier-like run touching `byte`: back through
+/// whatever `is_ident_continue` bytes are already typed before `byte`,
+/// forward through whatever `is_ident_continue` bytes a mid-word cursor
+/// leaves untyped after it.
+///
+/// Pure ASCII byte scanning — no lexing, no parsing — so it is total on any
+/// buffer, including one the lexer cannot tokenize at all. `start == end ==
+/// byte.min(src.len())` means the cursor touches no identifier (e.g. right
+/// after a fresh `.` with nothing typed yet).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WordSpan {
+    pub start: u32,
+    pub end: u32,
+}
+
+/// Scan the identifier run touching `byte` in `src`. See [`WordSpan`].
+#[must_use]
+pub fn scan_word_span(src: &str, byte: u32) -> WordSpan {
+    let bytes = src.as_bytes();
+    let at = (byte as usize).min(bytes.len());
+    let is_continue = |i: usize| bytes.get(i).is_some_and(|&b| is_ident_continue(b as char));
+
+    let mut start = at;
+    while start > 0 && is_continue(start - 1) {
+        start -= 1;
+    }
+    let mut end = at;
+    while is_continue(end) {
+        end += 1;
+    }
+    WordSpan {
+        start: u32::try_from(start).unwrap_or(byte),
+        end: u32::try_from(end).unwrap_or(byte),
+    }
+}
+
+/// A `Qualifier.member` completion trigger touching `byte` in `src`: the
+/// dotted qualifier immediately before the trigger dot (`Font`, `F`, or the
+/// full `Ipe.Ui.Font`), and the member-name run right after it — the typed
+/// prefix plus, for a mid-word cursor, whatever untyped remainder follows.
+///
+/// `None` when `byte` is not on such a trigger at all: the byte immediately
+/// before the member run is not `.`, or nothing shaped like a dotted
+/// identifier path sits before that dot.
+///
+/// Pure ASCII byte scanning over the raw source text, same as
+/// [`scan_word_span`] (which supplies the member run) — no lexing, no
+/// parsing — so it is total on any buffer, including one with a syntax or
+/// lex error at the trigger site itself (a dangling `Font.` is itself
+/// unlexable: a bare trailing dot after a complete identifier is a
+/// `StrayDot` lex error, so the real lexer can never be used here).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct QualifierPrefix {
+    pub qualifier: String,
+    pub member_prefix: String,
+    pub member_start: u32,
+    pub member_end: u32,
+}
+
+/// Scan the `Qualifier.member` trigger touching `byte` in `src`. See
+/// [`QualifierPrefix`].
+#[must_use]
+pub fn scan_qualifier_prefix(src: &str, byte: u32) -> Option<QualifierPrefix> {
+    let bytes = src.as_bytes();
+    let is_continue = |i: usize| bytes.get(i).is_some_and(|&b| is_ident_continue(b as char));
+    let is_start = |i: usize| bytes.get(i).is_some_and(|&b| is_ident_start(b as char));
+    let is_dot = |i: usize| bytes.get(i) == Some(&b'.');
+
+    let word = scan_word_span(src, byte);
+    let member_start = word.start as usize;
+    let at = (byte as usize).min(bytes.len());
+
+    if member_start == 0 || !is_dot(member_start - 1) {
+        return None;
+    }
+    let dot_at = member_start - 1;
+
+    // Walk the dotted qualifier backward: one or more `Ident` segments
+    // joined by single dots, each starting with an ident-start byte.
+    let mut seg_end = dot_at;
+    let mut segments: Vec<(usize, usize)> = Vec::new();
+    loop {
+        let mut seg_start = seg_end;
+        while seg_start > 0 && is_continue(seg_start - 1) {
+            seg_start -= 1;
+        }
+        if seg_start == seg_end || !is_start(seg_start) {
+            return None;
+        }
+        segments.push((seg_start, seg_end));
+        if seg_start == 0 || !is_dot(seg_start - 1) {
+            break;
+        }
+        seg_end = seg_start - 1;
+    }
+    segments.reverse();
+
+    let qualifier = segments
+        .iter()
+        .map(|&(s, e)| src.get(s..e).unwrap_or(""))
+        .collect::<Vec<_>>()
+        .join(".");
+    let member_prefix = src.get(member_start..at).unwrap_or("").to_owned();
+
+    Some(QualifierPrefix {
+        qualifier,
+        member_prefix,
+        member_start: word.start,
+        member_end: word.end,
+    })
+}
+
 #[cfg(test)]
 // Triple-string lexer tests use `toks[0]` after asserting `toks.len() == 1`.
 // The index is provably in-bounds at that point; suppressing the lint is
@@ -3530,5 +3642,81 @@ main = 1\n";
             "IPE-P0001",
             "a second consecutive doc-comment must fail with unexpected-token, not panic"
         );
+    }
+
+    #[test]
+    fn word_span_bare_dot_is_empty_at_cursor() {
+        let src = "Font.";
+        let byte = u32::try_from(src.len()).unwrap();
+        let w = scan_word_span(src, byte);
+        assert_eq!(w.start, byte);
+        assert_eq!(w.end, byte);
+    }
+
+    #[test]
+    fn word_span_mid_word_covers_whole_identifier() {
+        let src = "Font.bol";
+        // Cursor between "bo" and "l" — `scan_word_span` must reach past it
+        // to the end of "bol", not stop at the cursor.
+        let byte = u32::try_from(src.find("bo").unwrap() + 2).unwrap();
+        let w = scan_word_span(src, byte);
+        assert_eq!(&src[w.start as usize..w.end as usize], "bol");
+    }
+
+    #[test]
+    fn qualifier_prefix_bare_dot() {
+        let src = "Font.";
+        let byte = u32::try_from(src.len()).unwrap();
+        let q = scan_qualifier_prefix(src, byte).expect("bare `Font.` is a qualifier trigger");
+        assert_eq!(q.qualifier, "Font");
+        assert_eq!(q.member_prefix, "");
+        assert_eq!(q.member_start, byte);
+        assert_eq!(q.member_end, byte);
+    }
+
+    #[test]
+    fn qualifier_prefix_partial_member() {
+        let src = "Font.bol";
+        let byte = u32::try_from(src.len()).unwrap();
+        let q = scan_qualifier_prefix(src, byte).expect("`Font.bol` is a qualifier trigger");
+        assert_eq!(q.qualifier, "Font");
+        assert_eq!(q.member_prefix, "bol");
+        assert_eq!(q.member_end, byte);
+    }
+
+    #[test]
+    fn qualifier_prefix_mid_word_member_end_extends_past_cursor() {
+        let src = "Font.bol";
+        let byte = u32::try_from(src.find("bo").unwrap() + 2).unwrap();
+        let q = scan_qualifier_prefix(src, byte).expect("mid-word `Font.bo|l` is a trigger");
+        assert_eq!(q.qualifier, "Font");
+        assert_eq!(q.member_prefix, "bo");
+        assert_eq!(&src[q.member_start as usize..q.member_end as usize], "bol");
+    }
+
+    #[test]
+    fn qualifier_prefix_multi_segment_dotted_path() {
+        let src = "Ipe.Ui.Font.bol";
+        let byte = u32::try_from(src.len()).unwrap();
+        let q = scan_qualifier_prefix(src, byte).expect("full dotted path is a qualifier");
+        assert_eq!(q.qualifier, "Ipe.Ui.Font");
+        assert_eq!(q.member_prefix, "bol");
+    }
+
+    #[test]
+    fn qualifier_prefix_no_dot_is_none() {
+        let src = "bol";
+        let byte = u32::try_from(src.len()).unwrap();
+        assert!(scan_qualifier_prefix(src, byte).is_none());
+    }
+
+    #[test]
+    fn qualifier_prefix_unlexable_trailing_dot_still_scans() {
+        // A bare trailing `Font.` is itself unlexable (`StrayDot`); confirm the
+        // scanner works precisely where the real lexer cannot be used at all.
+        let src = "Font.";
+        assert!(lexer::lex(src).is_err(), "test fixture assumption drifted");
+        let byte = u32::try_from(src.len()).unwrap();
+        assert!(scan_qualifier_prefix(src, byte).is_some());
     }
 }
