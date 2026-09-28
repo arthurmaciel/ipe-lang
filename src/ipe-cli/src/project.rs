@@ -656,7 +656,7 @@ pub fn parse_manifest(manifest_path: &Path) -> Result<ProjectManifest, CliError>
 /// returning a typed [`CliError::DiscoveryLimitReached`] error. A legitimate
 /// Ipê source tree is never this deep; an adversarial or accidentally unbounded
 /// tree is refused rather than spinning indefinitely.
-const MAX_DISCOVERY_DEPTH: usize = 64;
+pub const MAX_DISCOVERY_DEPTH: usize = 64;
 
 /// The most `.ipe` modules the module-discovery walk collects.
 ///

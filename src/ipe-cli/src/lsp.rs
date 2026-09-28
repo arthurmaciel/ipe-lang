@@ -363,6 +363,44 @@ mod tests {
         assert!(under.is_ok(), "{:?}", under.err());
     }
 
+    /// A package's discovery limit counts the filesystem, so the load refuses and the buffer cannot lift it.
+    #[test]
+    #[allow(clippy::expect_used)] // test fixture: a failed write or mkdir IS the failure
+    fn a_package_discovery_limit_refuses_the_load() {
+        let dir = scratch_dir("package-limit");
+        fs::write(
+            dir.join("package.ipe"),
+            "module Package exposing (package)\n\npackage =\n    { name = \"deep\" }\n",
+        )
+        .expect("write package.ipe");
+        let src = dir.join("src");
+        let main = src.join("Main.ipe");
+        let text = "module Main exposing (main)\n\nmain = 0\n";
+        let nested = (0..=crate::project::MAX_DISCOVERY_DEPTH)
+            .fold(src.clone(), |parent, index| {
+                parent.join(format!("D{index}"))
+            });
+        fs::create_dir_all(&nested).expect("create nested source tree");
+        fs::write(&main, text).expect("write Main.ipe");
+        let loaded = DriverLoader.load(Some(&dir), &main, Some(text));
+        let _ = fs::remove_dir_all(&dir);
+        let err = loaded.err();
+        assert!(
+            matches!(
+                err,
+                Some(LoadError::Limit {
+                    lifted_by: LimitSource::Filesystem,
+                    ..
+                })
+            ),
+            "{err:?}"
+        );
+        assert_eq!(
+            err.as_ref().map(LoadError::disposition),
+            Some(ipe_lsp_server::LoadDisposition::Refuse)
+        );
+    }
+
     /// Make every component of `root/rel` a directory only its owner may write.
     #[allow(clippy::expect_used)] // test fixture: a failed mkdir IS the failure
     fn private_chain(root: &Path, rel: &str) -> PathBuf {
