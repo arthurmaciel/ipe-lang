@@ -1695,27 +1695,116 @@ pub fn extract_imports_from_source(source: &str) -> Vec<Vec<String>> {
 /// Best-effort line scan (`import <path>` at line start), used ONLY when the
 /// source does not lex — see [`extract_imports_from_source`].
 fn line_scan_imports(source: &str) -> Vec<Vec<String>> {
-    let mut imports: Vec<Vec<String>> = Vec::new();
+    scan_import_spellings(source)
+        .into_iter()
+        .map(|spelling| spelling.path)
+        .collect()
+}
+
+/// One `import <path>[ as <alias>]` header line: the dotted path plus its
+/// optional alias, exactly as written — no `exposing(...)` clause is parsed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ImportSpelling {
+    pub path: Vec<String>,
+    pub alias: Option<String>,
+}
+
+/// Best-effort line scan of every `import <path>[ as <alias>]` header line in
+/// `source`, capturing the alias the [`extract_imports_from_source`] path
+/// scan drops.
+///
+/// Pure text scanning (`str::lines`/`split`, no lexing), so it is total on
+/// any buffer — including one that does not lex at all, such as a buffer
+/// with a completion trigger's dangling `Font.` at the cursor. A qualifier
+/// resolver reads this alongside `ipe_canon::import_qualifiers` to learn
+/// which import a typed qualifier spelling names, without re-implementing
+/// canon's own alias/full-path rule.
+#[must_use]
+pub fn scan_import_spellings(source: &str) -> Vec<ImportSpelling> {
+    let mut imports = Vec::new();
     for line in source.lines() {
         let trimmed = line.trim();
         let Some(after_import) = trimmed.strip_prefix("import ") else {
             continue;
         };
-        // Take the token after `import `, stopping at `as`, `exposing`, or
-        // whitespace.
         let rest = after_import.trim_start();
-        let module_str = rest
-            .split(|c: char| c.is_whitespace() || c == '(')
-            .next()
-            .unwrap_or("");
-        // Remove a trailing `as` keyword if it bled in (shouldn't happen but
-        // defensive).
-        let module_str = module_str.strip_suffix(" as").map_or(module_str, str::trim);
-        let module_str = module_str.trim_end_matches(" as");
-        let parts: Vec<String> = module_str.split('.').map(str::to_owned).collect();
-        if parts.first().is_some_and(|s| !s.is_empty()) {
-            imports.push(parts);
+        let Some(path_end) = rest.find(|c: char| c.is_whitespace() || c == '(') else {
+            let path: Vec<String> = rest.split('.').map(str::to_owned).collect();
+            if path.first().is_some_and(|s| !s.is_empty()) {
+                imports.push(ImportSpelling { path, alias: None });
+            }
+            continue;
+        };
+        let path_str = rest.get(..path_end).unwrap_or("");
+        let path: Vec<String> = path_str.split('.').map(str::to_owned).collect();
+        if path.first().is_none_or(String::is_empty) {
+            continue;
         }
+        let after_path = rest.get(path_end..).unwrap_or("").trim_start();
+        let alias = after_path.strip_prefix("as ").and_then(|rest| {
+            let alias_str = rest
+                .trim_start()
+                .split(|c: char| c.is_whitespace() || c == '(')
+                .next()
+                .unwrap_or("");
+            (!alias_str.is_empty()).then(|| alias_str.to_owned())
+        });
+        imports.push(ImportSpelling { path, alias });
     }
     imports
+}
+
+#[cfg(test)]
+mod import_spelling_tests {
+    use super::{ImportSpelling, scan_import_spellings};
+
+    #[test]
+    fn bare_import_has_no_alias() {
+        let src = "module Main exposing (main)\nimport Ipe.Ui.Font\nmain = 1\n";
+        assert_eq!(
+            scan_import_spellings(src),
+            vec![ImportSpelling {
+                path: vec!["Ipe".to_owned(), "Ui".to_owned(), "Font".to_owned()],
+                alias: None,
+            }]
+        );
+    }
+
+    #[test]
+    fn aliased_import_captures_alias() {
+        let src = "module Main exposing (main)\nimport Ipe.Ui.Font as F\nmain = 1\n";
+        assert_eq!(
+            scan_import_spellings(src),
+            vec![ImportSpelling {
+                path: vec!["Ipe".to_owned(), "Ui".to_owned(), "Font".to_owned()],
+                alias: Some("F".to_owned()),
+            }]
+        );
+    }
+
+    #[test]
+    fn import_with_exposing_after_path_has_no_alias() {
+        let src = "module Main exposing (main)\nimport Ipe.Ui.Font exposing (bold)\nmain = 1\n";
+        assert_eq!(
+            scan_import_spellings(src),
+            vec![ImportSpelling {
+                path: vec!["Ipe".to_owned(), "Ui".to_owned(), "Font".to_owned()],
+                alias: None,
+            }]
+        );
+    }
+
+    #[test]
+    fn aliased_import_on_an_otherwise_unlexable_buffer_still_scans() {
+        // The buffer's own trailing completion trigger (`Font.`) is a lex
+        // error; the import header line above it must still scan.
+        let src = "module Main exposing (main)\nimport Ipe.Ui.Font as F\nmain = F.\n";
+        assert_eq!(
+            scan_import_spellings(src),
+            vec![ImportSpelling {
+                path: vec!["Ipe".to_owned(), "Ui".to_owned(), "Font".to_owned()],
+                alias: Some("F".to_owned()),
+            }]
+        );
+    }
 }

@@ -47,7 +47,11 @@ Two pieces make an editor understand Ipê:
 Completion is type-directed: where the context expects a type (a function
 argument, a typed binding's body, a branch, a list element), candidates of that
 type come first and the type's constructors are surfaced. Every suggestion comes
-from the type-checker `ipe build` runs.
+from the type-checker `ipe build` runs. After a qualifier (`Font.`, an alias
+`F.`, or a full dotted path `Ipe.Ui.Font.`), completion is scoped to exactly
+that module's exposed members — never the whole in-scope list — and accepting
+an item replaces whatever member name is already typed rather than appending to
+it.
 
 ## Helix
 
@@ -122,10 +126,15 @@ only from its UI. `editors/zed/configure.sh` assembles the extension —
 2. Choose `~/.local/share/ipe/zed-ipe`.
 
 Zed then compiles the grammar (pinned to a commit in `extension.toml`) and the
-extension's small Rust part (with `rustup`), highlights `.ipe` files, and starts
-`ipe lsp` from your `PATH`. Trust the project when Zed asks — language servers
-stay off in untrusted folders. `settings.json` needs no Ipê entries; the script
-never edits it and only warns about keys an older version merged in.
+extension's small Rust part — a `cargo build --target wasm32-wasip2`, Zed's own
+extension-compile target — highlights `.ipe` files, and starts `ipe lsp` from
+your `PATH`. This needs a **rustup-managed** Rust toolchain (a distro-packaged
+`rustc` can't add targets); `configure.sh` adds `wasm32-wasip2` up front so a
+missing target surfaces as a clear message instead of Zed's opaque "compiling
+Rust extension" failure, but you can add it yourself first with
+`rustup target add wasm32-wasip2`. Trust the project when Zed asks — language
+servers stay off in untrusted folders. `settings.json` needs no Ipê entries;
+the script never edits it and only warns about keys an older version merged in.
 
 Keys (Zed defaults): completion as you type, `F12` go to definition,
 `ctrl-.` code actions; format on save uses `ipe lsp`.

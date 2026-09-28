@@ -1,0 +1,21 @@
+name: Install and wire sccache
+description: >-
+  Install sccache and point rustc at it, in one step, so the wrapper can
+  never exist in a job without the binary that backs it. This is the ONLY
+  place `mozilla-actions/sccache-action` may run and the ONLY place
+  RUSTC_WRAPPER/SCCACHE_GHA_ENABLED may be set — `ci/verify-manifest.py`
+  refuses both anywhere else. A job whose deterministic check step must stay
+  network-free (ci/deterministic-checks.json) must not use this action:
+  sccache's GitHub Actions cache backend does network I/O.
+
+runs:
+  using: composite
+  steps:
+    - uses: mozilla-actions/sccache-action@v0.0.9
+
+    - name: Wire rustc through sccache
+      shell: bash
+      run: |
+        set -euo pipefail
+        echo "RUSTC_WRAPPER=sccache" >> "$GITHUB_ENV"
+        echo "SCCACHE_GHA_ENABLED=true" >> "$GITHUB_ENV"

@@ -10,6 +10,7 @@
   "diagnostic-tone",
   "doc-string example gate",
   "e2e-all",
+  "editors-configure",
   "env-docs-drift",
   "explain-page example gate (ADR 0059)",
   "first-party check floor (ipe type-check only)",
