@@ -4635,9 +4635,8 @@ where
 
     // The console + metrics auth gate applies whether or not a console is
     // mounted, so its effective posture/mode/source is always logged once.
-    eprintln!(
-        "{}",
-        crate::telemetry::ConsoleAuthResolution::from_env().startup_line()
+    crate::system::write_stderr_line(
+        &crate::telemetry::ConsoleAuthResolution::from_env().startup_line(),
     );
 
     // When `http_client` is active and the pre-built console binary is
