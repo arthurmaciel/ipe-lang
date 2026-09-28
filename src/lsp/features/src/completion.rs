@@ -786,12 +786,10 @@ mod tests {
     /// item [`scope_items_to_word`] touches must carry one.
     fn edit_of(item: &lsp_types::CompletionItem) -> &lsp_types::TextEdit {
         match &item.text_edit {
-            Some(lsp_types::CompletionTextEdit::Edit(edit)) => edit,
-            other => panic!(
-                "item {:?} has no plain Edit text_edit: {other:?}",
-                item.label
-            ),
+            Some(lsp_types::CompletionTextEdit::Edit(edit)) => Some(edit),
+            _ => None,
         }
+        .expect("every scoped item carries a plain Edit text_edit")
     }
 
     /// A cursor at byte 0 is in no expecting context → scope-only behavior

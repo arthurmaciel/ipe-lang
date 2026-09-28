@@ -424,7 +424,7 @@ mod tests {
             .and_then(|c| c.get(uri))
             .expect("action carries a workspace edit for this uri");
         assert_eq!(edits.len(), 1, "each rewrite is a single-hunk edit");
-        let edit = &edits[0];
+        let edit = edits.first().expect("one edit");
         let start = super::position_to_offset(text, edit.range.start, PositionEncoding::Utf8);
         let end = super::position_to_offset(text, edit.range.end, PositionEncoding::Utf8);
         format!(
