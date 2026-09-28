@@ -2111,6 +2111,36 @@ pub fn bundle_wasm(crate_dir: &OwnedDir) -> Result<(), CliError> {
         via_env.filter(|p| p.is_file()).unwrap_or(via_crate)
     };
 
+    bundle_wasm_pkg(
+        crate_dir,
+        &wasm_path,
+        &WasmTools {
+            bindgen: Path::new("wasm-bindgen"),
+            opt: Path::new("wasm-opt"),
+        },
+    )
+}
+
+/// The post-link wasm tools `bundle_wasm` runs, by program path.
+struct WasmTools<'a> {
+    /// The `wasm-bindgen` CLI.
+    bindgen: &'a Path,
+    /// The optional `wasm-opt` size pass.
+    opt: &'a Path,
+}
+
+/// Bundle the linked `wasm_path` into the owned crate's `www/pkg/` with `tools`.
+///
+/// # Errors
+/// [`CliError::Usage`] when `wasm-bindgen` fails; [`CliError::OutputRefused`]
+/// when `crate_dir` was replaced before or while either tool ran;
+/// [`CliError::Io`] on a filesystem or spawn failure.
+fn bundle_wasm_pkg(
+    crate_dir: &OwnedDir,
+    wasm_path: &Path,
+    tools: &WasmTools<'_>,
+) -> Result<(), CliError> {
+    let out_dir = crate_dir.path();
     // `wasm-bindgen` and `wasm-opt` write into `www/pkg/` by path, so it is
     // rebuilt empty under the owned crate: a symlink at any level is refused and
     // nothing planted inside it can redirect their writes. Each tool's writes
@@ -2125,7 +2155,7 @@ pub fn bundle_wasm(crate_dir: &OwnedDir) -> Result<(), CliError> {
         crate_dir.path_to(&pkg_rel).map(drop)
     };
 
-    let wb_status = std::process::Command::new("wasm-bindgen")
+    let wb_status = std::process::Command::new(tools.bindgen)
         .args([
             wasm_path.to_string_lossy().as_ref(),
             "--target",
@@ -2136,7 +2166,7 @@ pub fn bundle_wasm(crate_dir: &OwnedDir) -> Result<(), CliError> {
         ])
         .status()
         .map_err(|e| CliError::Io {
-            path: wasm_path.clone(),
+            path: wasm_path.to_path_buf(),
             source: e,
         })?;
     if !wb_status.success() {
@@ -2152,7 +2182,7 @@ pub fn bundle_wasm(crate_dir: &OwnedDir) -> Result<(), CliError> {
     // (`Command::new` returns `Err` when the tool is missing).
     let bg_wasm = pkg_dir.join("ipe_app_bg.wasm");
     if bg_wasm.is_file()
-        && let Ok(status) = std::process::Command::new("wasm-opt")
+        && let Ok(status) = std::process::Command::new(tools.opt)
             .args([
                 bg_wasm.to_string_lossy().as_ref(),
                 "-Oz",
@@ -3882,5 +3912,165 @@ mod capability_resolution_once_tests {
             );
             assert_eq!(body.matches(RESOLVE_CALL).count(), 0, "{entry_point}");
         }
+    }
+}
+
+#[cfg(all(test, unix))]
+mod held_crate_tests {
+    //! A tool that writes into a claimed crate by path is proven, once it exits,
+    //! to have written into that same crate: a crate directory swapped while
+    //! `cargo`, `wasm-bindgen` or `wasm-opt` ran fails the build closed, and no
+    //! output of the swapped run is handed back.
+
+    use std::os::unix::fs::PermissionsExt as _;
+    use std::path::{Path, PathBuf};
+
+    use super::{WasmTools, build_emitted_project_capturing_stdout, bundle_wasm_pkg};
+    use crate::CliError;
+    use crate::output_dir::{OutputRefusal, OwnedDir};
+
+    /// A fresh scratch base for `tag`, holding a claimed `crate/`.
+    fn scratch(tag: &str) -> (PathBuf, OwnedDir) {
+        let base =
+            std::env::temp_dir().join(format!("ipe-held-crate-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).expect("scratch base");
+        let crate_dir = OwnedDir::claim(&base.join("crate")).expect("claim crate");
+        (base, crate_dir)
+    }
+
+    /// An executable `sh` stub `name` under `base` that runs `body`.
+    fn stub(base: &Path, name: &str, body: &str) -> PathBuf {
+        let path = base.join(name);
+        std::fs::write(&path, format!("#!/bin/sh\n{body}\n")).expect("write stub");
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755))
+            .expect("stub executable");
+        path
+    }
+
+    /// The shell step that moves the crate aside and makes a fresh one at its path.
+    fn swap(crate_dir: &OwnedDir) -> String {
+        let p = crate_dir.path().display();
+        format!("mv '{p}' '{p}.aside' && mkdir '{p}'")
+    }
+
+    /// Whether `result` is the replaced-crate refusal.
+    fn replaced<T>(result: &Result<T, CliError>) -> bool {
+        matches!(
+            result,
+            Err(CliError::OutputRefused(OutputRefusal::Replaced(_)))
+        )
+    }
+
+    /// A stub `cargo` that locks, builds, and prints one artifact line after `during`.
+    fn cargo_stub(base: &Path, during: &str) -> PathBuf {
+        stub(
+            base,
+            "cargo",
+            &format!(
+                "[ \"$1\" = generate-lockfile ] && exit 0\n{during}\n\
+                 echo '{{\"reason\":\"compiler-artifact\",\"executable\":\"/x\"}}'"
+            ),
+        )
+    }
+
+    /// A crate replaced while `cargo` built it is refused, its artifact stream dropped.
+    #[test]
+    fn a_crate_replaced_during_the_cargo_build_is_refused() {
+        let (base, crate_dir) = scratch("cargo-swap");
+        let cargo = cargo_stub(&base, &swap(&crate_dir));
+        let built = build_emitted_project_capturing_stdout(
+            &mut std::process::Command::new(&cargo),
+            "the emitted program",
+            None,
+            &crate_dir,
+        );
+        assert!(
+            replaced(&built),
+            "a swapped crate must fail closed with no executable, got {built:?}"
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// The same build over an untouched crate hands its artifact stream back.
+    #[test]
+    fn an_untouched_crate_build_returns_its_artifact_stream() {
+        let (base, crate_dir) = scratch("cargo-ok");
+        let cargo = cargo_stub(&base, "true");
+        let built = build_emitted_project_capturing_stdout(
+            &mut std::process::Command::new(&cargo),
+            "the emitted program",
+            None,
+            &crate_dir,
+        );
+        assert!(
+            built
+                .as_ref()
+                .is_ok_and(|out| out.contains("compiler-artifact")),
+            "an untouched crate builds, got {built:?}"
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// Run [`bundle_wasm_pkg`] over `crate_dir` with stub tools running the given bodies.
+    fn bundle_with(
+        base: &Path,
+        crate_dir: &OwnedDir,
+        bindgen: &str,
+        opt: &str,
+    ) -> Result<(), CliError> {
+        let bindgen = stub(base, "wasm-bindgen", bindgen);
+        let opt = stub(base, "wasm-opt", opt);
+        bundle_wasm_pkg(
+            crate_dir,
+            &base.join("ipe_app.wasm"),
+            &WasmTools {
+                bindgen: &bindgen,
+                opt: &opt,
+            },
+        )
+    }
+
+    /// The `wasm-bindgen` stub body that writes the bundle into its `--out-dir`.
+    const WRITE_BUNDLE: &str = "touch \"$6/ipe_app_bg.wasm\"";
+
+    /// A crate replaced while `wasm-bindgen` wrote the bundle is refused.
+    #[test]
+    fn a_crate_replaced_during_wasm_bindgen_is_refused() {
+        let (base, crate_dir) = scratch("bindgen-swap");
+        let bundled = bundle_with(&base, &crate_dir, &swap(&crate_dir), "exit 0");
+        assert!(replaced(&bundled), "got {bundled:?}");
+        assert!(
+            !crate_dir.path().join("www").exists(),
+            "nothing is written into the replacement"
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// A crate replaced while `wasm-opt` rewrote the bundle is refused.
+    #[test]
+    fn a_crate_replaced_during_wasm_opt_is_refused() {
+        let (base, crate_dir) = scratch("opt-swap");
+        let bundled = bundle_with(&base, &crate_dir, WRITE_BUNDLE, &swap(&crate_dir));
+        assert!(replaced(&bundled), "got {bundled:?}");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// Both tools over an untouched crate leave the bundle in its `www/pkg/`.
+    #[test]
+    fn an_untouched_crate_bundles_into_its_pkg() {
+        let (base, crate_dir) = scratch("wasm-ok");
+        let bundled = bundle_with(&base, &crate_dir, WRITE_BUNDLE, "exit 0");
+        assert!(
+            bundled.is_ok(),
+            "an untouched crate bundles, got {bundled:?}"
+        );
+        let bundle = crate_dir
+            .path()
+            .join("www")
+            .join("pkg")
+            .join("ipe_app_bg.wasm");
+        assert!(bundle.is_file(), "the bundle lands in the owned crate");
+        let _ = std::fs::remove_dir_all(&base);
     }
 }
