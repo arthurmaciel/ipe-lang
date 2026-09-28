@@ -2788,7 +2788,7 @@ mod tests {
         fn a_rustup_home_at_or_above_the_cargo_home_is_refused() {
             let tree = tree();
             let cargo = tree.link.join("cargo");
-            for rustup in [cargo.clone(), tree.link.clone()] {
+            for rustup in [cargo.clone(), tree.link] {
                 let refused = ToolchainHomes::from_homes(Some(cargo.clone()), Some(rustup), None);
                 assert!(
                     matches!(
