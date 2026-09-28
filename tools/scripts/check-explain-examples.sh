@@ -113,6 +113,14 @@ for md_file in "$CONSTRUCTS_DIR"/*.md "$TOPICS_DIR"/*.md; do
     page="$(basename "$md_file" .md)"
     block_idx=0
 
+    # The block records land in a file with the extractor's exit status
+    # checked: read from a process substitution, an extractor that died
+    # part-way would read as a page with fewer (or no) blocks to check.
+    records="$TMPWORK/records"
+    if ! process_file "$md_file" >"$records"; then
+        echo "ERROR: could not extract the ipe blocks of $md_file" >&2
+        exit 2
+    fi
     while IFS=$'\t' read -r marker encoded_code; do
         # Decode: restore literal \n in code.
         code="${encoded_code//\\n/$'\n'}"
@@ -175,7 +183,7 @@ for md_file in "$CONSTRUCTS_DIR"/*.md "$TOPICS_DIR"/*.md; do
             fi
         fi
 
-    done < <(process_file "$md_file")
+    done <"$records"
 done
 
 echo

@@ -172,42 +172,84 @@ _require_set_scalar() {
     }
 }
 
-# Env vars whose presence lets a matcher's own behaviour be rewritten from
-# outside (rg reads RIPGREP_CONFIG_PATH; grep reads GREP_OPTIONS). Named ONCE
-# here so the unset loop and the presence check in _require_scrubbed_env below
-# can never drift out of sync on which names they cover.
-_REQUIRE_TOOL_SCRUB_VARS=(RIPGREP_CONFIG_PATH GREP_OPTIONS)
+# _require_drop_var <name>: unset <name> in every dynamic scope that binds it
+# — a caller's `local` shadows the global, so one `unset` only reveals the
+# next binding — bounded by the call-stack depth plus the global scope.
+# `unset -n` removes a nameref binding itself (a plain `unset` would follow
+# the alias to its target and leave the exported name in place); `declare -p`
+# reports the name's own binding rather than chasing an alias. Returns 1 when
+# a binding survives (readonly).
+_require_drop_var() {
+    local -i __dv_left=$((${#FUNCNAME[@]} + 1))
+    while declare -p "$1" >/dev/null 2>&1; do
+        [ "$__dv_left" -gt 0 ] || return 1
+        unset -n "$1" 2>/dev/null || true
+        unset -v "$1" 2>/dev/null || true
+        __dv_left=$((__dv_left - 1))
+    done
+}
 
-# _require_scrubbed_env <caller> <description>: in a matcher's subshell, drop
-# every var in _REQUIRE_TOOL_SCRUB_VARS; exit 2 when one survives (a readonly
-# variable, or a readonly nameref alias to one), since a matcher running under
-# it could report a forged rc.
-_require_scrubbed_env() {
-    local __se_v
-    for __se_v in "${_REQUIRE_TOOL_SCRUB_VARS[@]}"; do
-        # `declare -n NAME=target; export NAME` leaves NAME a nameref ALIAS:
-        # a plain `unset NAME` (no -n) follows the alias and unsets its
-        # TARGET, leaving NAME's own binding — and its export attribute —
-        # intact; and `${NAME+x}` / `[[ -v NAME ]]` likewise resolve through
-        # the alias, so they report the (now-gone) target's presence, not
-        # NAME's own. The net effect: NAME stays exported into the matcher's
-        # env while the old check reads it as scrubbed. `unset -n` removes
-        # the nameref BINDING itself (a documented no-op when NAME is not a
-        # nameref, so safe to run unconditionally); `unset -v` then drops
-        # NAME as a plain variable for the non-nameref case. `declare -p` is
-        # the presence check that reports NAME's own local declaration
-        # rather than chasing an alias — never `${NAME+x}` / `[[ -v NAME ]]`.
-        unset -n "$__se_v" 2>/dev/null
-        unset -v "$__se_v" 2>/dev/null
+# _require_contract_env <caller> <description> <basename>: in the subshell
+# that is about to exec an allowlisted command, rewrite the environment to
+# that command's contract — drop every variable through which the command
+# reads outside configuration, pin the ones its output depends on — and exit
+# 2 when the result differs from the contract. Per contract:
+# - rg: RIPGREP_CONFIG_PATH (an options file: `--invert-match`, `--pre`).
+# - grep: GREP_OPTIONS (injected options).
+# - git: every `GIT_*` (`GIT_CONFIG_COUNT`/`KEY_n`/`VALUE_n` and
+#   `GIT_CONFIG_PARAMETERS` inject config such as a `core.fsmonitor` hook
+#   command; `GIT_INDEX_FILE`, `GIT_DIR`, `GIT_WORK_TREE` swap the tracked
+#   set), then `GIT_CONFIG_NOSYSTEM=1` and `GIT_CONFIG_GLOBAL=/dev/null` so
+#   only the repository's own config is read, and _capture_nul_rc adds
+#   `-c core.fsmonitor=false` over that.
+# - sort: LC_ALL=C (byte order, independent of the caller's locale).
+# - find: no variable rewrites what `-type f -name … -print0` emits.
+_require_contract_env() {
+    local __ce_caller="$1" __ce_desc="$2" __ce_v
+    local -a __ce_drop=() __ce_bad=()
+    case "$3" in
+        rg) __ce_drop=(RIPGREP_CONFIG_PATH) ;;
+        grep) __ce_drop=(GREP_OPTIONS) ;;
+        git)
+            # `compgen -v` lists every binding, a nameref included; its
+            # names are identifiers, so the unquoted split is exact.
+            # shellcheck disable=SC2207
+            __ce_drop=($(compgen -v GIT_ || true))
+            ;;
+        sort|find) ;;
+        *) echo "$__ce_caller: internal: no environment contract for '$3'" >&2; exit 2 ;;
+    esac
+    for __ce_v in "${__ce_drop[@]}"; do
+        _require_drop_var "$__ce_v" || __ce_bad+=("$__ce_v")
     done
-    local -a __se_bad=()
-    for __se_v in "${_REQUIRE_TOOL_SCRUB_VARS[@]}"; do
-        declare -p "$__se_v" >/dev/null 2>&1 && __se_bad+=("$__se_v")
-    done
-    if [ "${#__se_bad[@]}" -gt 0 ]; then
-        echo "$1: $2: could not scrub ${_REQUIRE_TOOL_SCRUB_VARS[*]} (readonly?) — refusing to run the matcher under them" >&2
-        exit 2
-    fi
+    _require_env_refuse "$__ce_caller" "$__ce_desc" "$3" "${__ce_bad[@]}"
+    case "$3" in
+        git)
+            export GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null 2>/dev/null || true
+            [ "${GIT_CONFIG_NOSYSTEM-}" = 1 ] || __ce_bad+=(GIT_CONFIG_NOSYSTEM)
+            [ "${GIT_CONFIG_GLOBAL-}" = /dev/null ] || __ce_bad+=(GIT_CONFIG_GLOBAL)
+            for __ce_v in $(compgen -v GIT_ || true); do
+                case "$__ce_v" in
+                    GIT_CONFIG_NOSYSTEM|GIT_CONFIG_GLOBAL) ;;
+                    *) __ce_bad+=("$__ce_v") ;;
+                esac
+            done
+            ;;
+        sort)
+            export LC_ALL=C 2>/dev/null || true
+            [ "${LC_ALL-}" = C ] || __ce_bad+=(LC_ALL)
+            ;;
+    esac
+    _require_env_refuse "$__ce_caller" "$__ce_desc" "$3" "${__ce_bad[@]}"
+}
+
+# _require_env_refuse <caller> <description> <command> [<var>...]: exit 2
+# naming each <var> — the variables that survived the contract rewrite.
+_require_env_refuse() {
+    [ "$#" -gt 3 ] || return 0
+    local __er_caller="$1" __er_desc="$2" __er_cmd="$3"; shift 3
+    echo "$__er_caller: $__er_desc: could not scrub $* — refusing to run $__er_cmd under a variable that rewrites its result" >&2
+    exit 2
 }
 
 # match_or_fail <description> -- <command...>: run an rg-shaped command
@@ -223,7 +265,7 @@ match_or_fail() {
     [ "${1:-}" = "--" ] && shift
     _require_known_command match_or_fail "$__mf_desc" matcher "$@"
     local __mf_rc=0
-    (_require_scrubbed_env match_or_fail "$__mf_desc"; exec "$@") || __mf_rc=$?
+    (_require_contract_env match_or_fail "$__mf_desc" "${1##*/}"; exec "$@") || __mf_rc=$?
     case "$(rg_status "$__mf_rc")" in
         match) return 0 ;;
         no-match) return 1 ;;
@@ -246,7 +288,7 @@ match_capture() {
     [ "${1:-}" = "--" ] && shift
     _require_known_command match_capture "$__mc_desc" matcher "$@"
     local __mc_out __mc_rc=0
-    __mc_out="$(_require_scrubbed_env match_capture "$__mc_desc"; exec "$@")" || __mc_rc=$?
+    __mc_out="$(_require_contract_env match_capture "$__mc_desc" "${1##*/}"; exec "$@")" || __mc_rc=$?
     case "$(rg_status "$__mc_rc")" in
         match)    _require_set_scalar "$__mc_var" "$__mc_out"; return 0 ;;
         no-match) _require_set_scalar "$__mc_var" "$__mc_out"; return 1 ;;
@@ -265,27 +307,37 @@ match_capture() {
 # `find`, `sort`).
 capture_nul() {
     _require_out_name capture_nul "${1:-}" array
-    _capture_nul_into "$@"
+    _capture_nul_rc "$@" || exit 2
 }
 
-# _capture_nul_into: capture_nul without the output-name check, for the lib's
-# own `__`-prefixed targets.
-_capture_nul_into() {
+# _capture_nul_rc <var> <description> -- <command...>: capture_nul without the
+# output-name check, for the lib's own targets; returns 2 (message printed)
+# instead of exiting, so a caller can release its own temp files first. The
+# producer is the ONLY writer of the staged file and runs as one exec'd
+# process (no pipe, no process substitution), so its own exit code is the
+# whole verdict on the bytes loaded.
+_capture_nul_rc() {
     local __cn_var="$1" __cn_desc="$2"; shift 2
     [ "${1:-}" = "--" ] && shift
     _require_known_command capture_nul "$__cn_desc" producer "$@"
     local __cn_tmp __cn_rc=0
-    __cn_tmp="$(mktemp)" || { echo "capture_nul: $__cn_desc: mktemp failed" >&2; exit 2; }
-    "$@" >"$__cn_tmp" || __cn_rc=$?
+    __cn_tmp="$(mktemp)" || { echo "capture_nul: $__cn_desc: mktemp failed" >&2; return 2; }
+    (
+        _require_contract_env capture_nul "$__cn_desc" "${1##*/}"
+        case "${1##*/}" in
+            git) set -- "$1" -c core.fsmonitor=false "${@:2}" ;;
+        esac
+        exec "$@"
+    ) >"$__cn_tmp" || __cn_rc=$?
     if [ "$__cn_rc" -ne 0 ]; then
         rm -f "$__cn_tmp"
         echo "capture_nul: $__cn_desc: producer exited $__cn_rc — refusing a possibly partial set" >&2
-        exit 2
+        return 2
     fi
     mapfile -d '' -t "$__cn_var" <"$__cn_tmp" || {
         rm -f "$__cn_tmp"
         echo "capture_nul: $__cn_desc: could not load the set into '$__cn_var'" >&2
-        exit 2
+        return 2
     }
     rm -f "$__cn_tmp"
 }
@@ -293,15 +345,23 @@ _capture_nul_into() {
 # enumerate_files <array-var> <glob> <root...>: load every regular file named
 # <glob> under the roots into <array-var>, byte-order sorted and NUL-safe.
 # Hard-exits 2 when no root is given, a root is not a directory, find or sort
-# exits non-zero (an unreadable subtree), or the set is empty — a scan over a
-# missing, partial, or empty file set must never read as a clean scan.
+# exits non-zero (an unreadable subtree), the set is empty, or the sorted set
+# is not exactly a permutation of the found one — a scan over a missing,
+# partial, forged, or empty file set must never read as a clean scan.
 enumerate_files() {
     _require_out_name enumerate_files "${1:-}" array
     _enumerate_files_into "$@"
 }
 
 # _enumerate_files_into: enumerate_files without the output-name check, for
-# the lib's own `__`-prefixed targets.
+# the lib's own `__`-prefixed targets. Every stage is a checked write into a
+# lib-owned file or array — the found set goes to a staged file through the
+# builtin printf, sort reads that file itself (its exit code covers the read)
+# and is captured straight into the target — and the result is then proven a
+# permutation of the found set: equal record count, and every sorted record
+# consumes one occurrence of itself from the found multiset. A truncated,
+# dropped, or substituted record therefore fails the proof whatever exit code
+# sort reported.
 _enumerate_files_into() {
     local __ef_var="$1" __ef_glob="$2"; shift 2
     if [ "$#" -eq 0 ]; then
@@ -316,34 +376,48 @@ _enumerate_files_into() {
         fi
     done
     local -a __ef_found=()
-    _capture_nul_into __ef_found "find '$__ef_glob' under $*" -- \
-        find "$@" -type f -name "$__ef_glob" -print0
+    _capture_nul_rc __ef_found "find '$__ef_glob' under $*" -- \
+        find "$@" -type f -name "$__ef_glob" -print0 || exit 2
     if [ "${#__ef_found[@]}" -eq 0 ]; then
         echo "enumerate_files: no file matching '$__ef_glob' under $* — nothing to scan" >&2
         exit 2
     fi
-    # The set reaches sort through a pipe, never a staged file: a pipe write
-    # fails only once sort has gone, which sort's own exit reports, and no
-    # temp file is left behind on sort's exit-2 path. But a SIGKILLed writer
-    # gives sort a clean early EOF, not a write error — sort then sorts
-    # whatever prefix it read and exits 0, so the exit code alone can't tell
-    # a truncated read from a complete one. `sort -z` (no `-u`) conserves the
-    # record COUNT, so capturing into a lib-local array first and comparing
-    # its length against the found set's catches that silent truncation
-    # before the (still count-checked) copy into the caller's array.
-    local -a __ef_sorted=()
-    local -x LC_ALL=C
-    _capture_nul_into __ef_sorted "sort '$__ef_glob' set" -- \
-        sort -z < <(printf '%s\0' "${__ef_found[@]}")
-    if [ "${#__ef_sorted[@]}" -ne "${#__ef_found[@]}" ]; then
-        echo "enumerate_files: sort returned ${#__ef_sorted[@]} record(s) for '$__ef_glob' under $* but ${#__ef_found[@]} were found — refusing a possibly truncated set (e.g. a killed writer)" >&2
+    # Refuse an off-contract `sort` before the staged file exists, so no
+    # refusal path leaves it behind.
+    _require_known_command enumerate_files "sort '$__ef_glob' set" producer sort -z
+    local __ef_tmp
+    __ef_tmp="$(mktemp)" || { echo "enumerate_files: mktemp failed" >&2; exit 2; }
+    if ! printf '%s\0' "${__ef_found[@]}" >"$__ef_tmp"; then
+        rm -f "$__ef_tmp"
+        echo "enumerate_files: could not stage the '$__ef_glob' set for sort" >&2
         exit 2
     fi
-    mapfile -d '' -t "$__ef_var" < <(printf '%s\0' "${__ef_sorted[@]}") || {
-        echo "enumerate_files: could not write the sorted '$__ef_glob' set into '$__ef_var'" >&2
+    _capture_nul_rc "$__ef_var" "sort '$__ef_glob' set" -- sort -z -- "$__ef_tmp" \
+        || { rm -f "$__ef_tmp"; exit 2; }
+    rm -f "$__ef_tmp"
+    local -n __ef_out="$__ef_var"
+    if [ "${#__ef_out[@]}" -ne "${#__ef_found[@]}" ]; then
+        echo "enumerate_files: sort returned ${#__ef_out[@]} record(s) for '$__ef_glob' under $* but ${#__ef_found[@]} were found — refusing a possibly truncated set" >&2
         exit 2
-    }
+    fi
+    # Keys carry a `k` prefix so no record ("", "@", "*") can collide with an
+    # associative subscript bash treats specially.
+    local -A __ef_left=()
+    local __ef_f __ef_n
+    for __ef_f in "${__ef_found[@]}"; do
+        __ef_n="${__ef_left["k$__ef_f"]:-0}"
+        __ef_left["k$__ef_f"]=$((__ef_n + 1))
+    done
+    for __ef_f in "${__ef_out[@]}"; do
+        __ef_n="${__ef_left["k$__ef_f"]:-0}"
+        if [ "$__ef_n" -le 0 ]; then
+            echo "enumerate_files: sort returned a record that is not one of the found '$__ef_glob' files under $* — refusing a truncated or forged set" >&2
+            exit 2
+        fi
+        __ef_left["k$__ef_f"]=$((__ef_n - 1))
+    done
 }
+
 
 # require_scan_root <dir> <glob>: exit 2 when <dir> does not exist, find
 # cannot walk it, or it has no file matching <glob> anywhere under it — a

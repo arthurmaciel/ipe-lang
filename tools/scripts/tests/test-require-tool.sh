@@ -58,7 +58,7 @@ stub m1 rg 'exit 1'
 stub m2 rg 'exit 2'
 stub mprint rg 'printf "$@"'
 stub p128 git 'printf "a\\0"; exit 128'
-stub pprint git 'shift; printf "$@"'
+stub pprint git 'while [ "$#" -gt 0 ] && [ "$1" != ls-files ]; do shift; done; shift; printf "$@"'
 m0="$fixture_dir/m0/rg"
 m1="$fixture_dir/m1/rg"
 m2="$fixture_dir/m2/rg"
@@ -413,28 +413,46 @@ for helper in "capture_nul v t -- '$pprint' ls-files 'a\\0'" \
         "$(cause_of "$out" "is a scalar, but this helper writes an array")" named
 done
 
-# ── env scrub: a matcher never runs under a config variable it cannot drop ──
-for helper in "match_or_fail t -- '$m0'" "match_capture v t -- '$mprint' hit"; do
-    for var in RIPGREP_CONFIG_PATH GREP_OPTIONS; do
+# ── env scrub: a matcher never runs under a config variable it cannot drop,
+# and the refusal names exactly the variable that survived ─────────────────
+stub g0 grep 'exit 0'
+g0="$fixture_dir/g0/grep"
+for pair in "RIPGREP_CONFIG_PATH:$m0:$mprint:GREP_OPTIONS" "GREP_OPTIONS:$g0:$g0:RIPGREP_CONFIG_PATH"; do
+    IFS=: read -r var mcmd ccmd other <<<"$pair"
+    for helper in "match_or_fail t -- '$mcmd'" "match_capture v t -- '$ccmd' hit"; do
         rc=0
         out="$(bash -c "source '$lib'; readonly $var=cfg; export $var; $helper" 2>&1)" || rc=$?
-        check "${helper%% *}: readonly $var exits 2" "$rc" 2
-        check "${helper%% *}: readonly $var is the reported cause" \
-            "$(cause_of "$out" "could not scrub")" named
+        check "${helper%% *} (${mcmd##*/}): readonly $var exits 2" "$rc" 2
+        check "${helper%% *} (${mcmd##*/}): readonly $var is the reported cause" \
+            "$(cause_of "$out" "could not scrub $var —")" named
+        check "${helper%% *} (${mcmd##*/}): the refusal names only the surviving variable" \
+            "$(case "$out" in *"$other"*|*readonly?*) echo "$out" ;; *) echo only ;; esac)" only
+        # A nameref alias is scrubbed too; a readonly nameref binding (which
+        # unset -n cannot remove) is refused.
+        rc=0
+        out="$(bash -c "source '$lib'; export $var=zz; declare -rn $var=zz; $helper" 2>&1)" || rc=$?
+        check "${helper%% *} (${mcmd##*/}): readonly nameref $var exits 2" "$rc" 2
+        check "${helper%% *} (${mcmd##*/}): readonly nameref $var is the reported cause" \
+            "$(cause_of "$out" "could not scrub $var —")" named
     done
 done
 
-# ── env scrub: a nameref alias to the config var is scrubbed too, and a ────
-# ── readonly nameref binding (which unset -n cannot remove) is refused ─────
-for helper in "match_or_fail t -- '$m0'" "match_capture v t -- '$mprint' hit"; do
-    for var in RIPGREP_CONFIG_PATH GREP_OPTIONS; do
-        rc=0
-        out="$(bash -c "source '$lib'; export $var=zz; declare -rn $var=zz; $helper" 2>&1)" || rc=$?
-        check "${helper%% *}: readonly nameref $var exits 2" "$rc" 2
-        check "${helper%% *}: readonly nameref $var is the reported cause" \
-            "$(cause_of "$out" "could not scrub")" named
-    done
-done
+# ── env scrub: a caller's exported local shadowing an exported global is
+# dropped in every scope, never falsely refused nor left in effect ─────────
+printf -- '--invert-match\n' > "$fixture_dir/rgrc-shadow"
+rc=0
+out="$(RIPGREP_CONFIG_PATH="$fixture_dir/rgrc-shadow" bash -c "source '$lib'; f() { local -x RIPGREP_CONFIG_PATH='$fixture_dir/rgrc-shadow'; match_or_fail t -- rg -q zzz_no_such_text '$lib'; }; f" 2>&1)" || rc=$?
+check "match_or_fail: a local -x RIPGREP_CONFIG_PATH over an exported global is scrubbed (no-match, 1)" "$rc:$out" "1:"
+rc=0
+out="$(bash -c "source '$lib'; f() { local -x RIPGREP_CONFIG_PATH=x; g; }; g() { local -x RIPGREP_CONFIG_PATH=y; match_or_fail t -- '$m0'; }; export RIPGREP_CONFIG_PATH=z; f" 2>&1)" || rc=$?
+check "match_or_fail: three stacked RIPGREP_CONFIG_PATH bindings are all dropped (match, 0)" "$rc:$out" "0:"
+
+# ── env scrub: sort runs under LC_ALL=C or not at all ──────────────────────
+rc=0
+out="$(bash -c "source '$lib'; readonly LC_ALL=en_US.UTF-8; enumerate_files v '*.ipe' '$fixture_dir/enum'" 2>&1)" || rc=$?
+check "enumerate_files: a readonly non-C LC_ALL exits 2" "$rc" 2
+check "enumerate_files: the unpinnable LC_ALL is the reported cause" \
+    "$(cause_of "$out" "could not scrub LC_ALL —")" named
 
 # ── enumerate_files: a failing sort leaves no staged temp file behind ───────
 sort_tmpdir="$(mktemp -d)"
@@ -449,20 +467,36 @@ check "enumerate_files: failing sort exits 2" "$rc" 2
 check "enumerate_files: failing sort leaves no temp file" "$(ls -A "$sort_tmpdir")" ""
 rm -rf "$sort_tmpdir"
 
-# ── enumerate_files: a sort that silently drops a record (rc 0, e.g. its ───
-# ── process-substitution writer got killed) is refused, not trusted ────────
-trunc_stub="$fixture_dir/sort-truncate-bin"
-mkdir -p "$trunc_stub"
-cat > "$trunc_stub/sort" <<'STUB'
-#!/bin/sh
-/usr/bin/sort "$@" | head -z -n 1
-STUB
-chmod +x "$trunc_stub/sort"
-rc=0
-out="$(PATH="$trunc_stub:$PATH" bash -c "source '$lib'; enumerate_files v '*.ipe' '$fixture_dir/enum'" 2>&1)" || rc=$?
-check "enumerate_files: truncated sort output exits 2" "$rc" 2
-check "enumerate_files: truncated sort output is the reported cause" \
-    "$(cause_of "$out" "refusing a possibly truncated set")" named
+# ── enumerate_files: a sort result that is not exactly a permutation of the
+# found set is refused whatever sort's exit code — a dropped record, a record
+# truncated mid-way, a substituted or duplicated record, and a writer killed
+# while emitting the final record ──────────────────────────────────────────
+real_sort="$(type -P sort)"
+sort_case() { # sort_case <name> <sh body using $S for the real sort> <cause> <what>
+    local d="$fixture_dir/sort-$1-bin"
+    mkdir -p "$d"
+    printf '#!/bin/sh\nS=%s\n%s\n' "$real_sort" "$2" > "$d/sort"
+    chmod +x "$d/sort"
+    local rc=0 out
+    out="$(PATH="$d:$PATH" bash -c "source '$lib'; enumerate_files v '*.ipe' '$fixture_dir/enum'" 2>&1)" || rc=$?
+    check "enumerate_files: $4 exits 2" "$rc" 2
+    check "enumerate_files: $4 is the reported cause" "$(cause_of "$out" "$3")" named
+}
+# shellcheck disable=SC2016  # $S / $$ expand inside the stub
+sort_case drop '"$S" "$@" | head -z -n 1' "refusing a possibly truncated set" \
+    "a dropped record (rc 0)"
+# shellcheck disable=SC2016
+sort_case midrec '"$S" "$@" | head -c -3' "not one of the found" \
+    "a final record truncated mid-way (rc 0)"
+# shellcheck disable=SC2016
+sort_case forged '"$S" "$@" | tail -z -n +2; printf "/etc/passwd\0"' "not one of the found" \
+    "a substituted record (rc 0)"
+# shellcheck disable=SC2016
+sort_case dup 'f="$("$S" "$@" | head -z -n 1 | tr -d "\0")"; printf "%s\0%s\0" "$f" "$f"' \
+    "not one of the found" "a duplicated record standing in for another (rc 0)"
+# shellcheck disable=SC2016
+sort_case killed '"$S" "$@" | head -c -3; kill -9 $$' "producer exited 137" \
+    "a writer killed during the final record"
 
 # ── live caller smoke: examples.sh's scalar capture runs on a clean tree ────
 rc=0
@@ -520,6 +554,49 @@ printf 'blob\n' > "$fixture_dir/repo-ext/lib.rlib"
 rc=0
 (cd "$fixture_dir/repo-ext" && bash "$guard") >/dev/null 2>&1 || rc=$?
 check "artifact-guard: a tracked .rlib fails (exit 1)" "$rc" 1
+
+# ── git contract env: config injection and a swapped index are neutralised,
+# an unscrubbable GIT_* is refused ─────────────────────────────────────────
+new_repo "$fixture_dir/repo-env"
+printf '#!/bin/sh\ntouch "%s"\n' "$fixture_dir/fsmonitor-ran" > "$fixture_dir/fsmonitor-hook"
+chmod +x "$fixture_dir/fsmonitor-hook"
+tracked_list() { # run capture_nul git ls-files in repo-env under extra shell setup $1
+    (cd "$fixture_dir/repo-env" && bash -c "source '$lib'; $1 capture_nul t d -- git ls-files -z; printf '%s|' \"\${t[@]}\"" 2>&1)
+}
+rm -f "$fixture_dir/fsmonitor-ran"
+got="$(tracked_list "export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.fsmonitor GIT_CONFIG_VALUE_0='$fixture_dir/fsmonitor-hook';")"
+check "capture_nul git: GIT_CONFIG_COUNT core.fsmonitor still yields the real tracked set" "$got" "README|"
+check "capture_nul git: GIT_CONFIG_COUNT core.fsmonitor never runs the hook" \
+    "$([ -e "$fixture_dir/fsmonitor-ran" ] && echo ran || echo not-run)" not-run
+rm -f "$fixture_dir/fsmonitor-ran"
+got="$(tracked_list "export GIT_CONFIG_PARAMETERS=\"'core.fsmonitor'='$fixture_dir/fsmonitor-hook'\";")"
+check "capture_nul git: GIT_CONFIG_PARAMETERS core.fsmonitor never runs the hook" \
+    "$([ -e "$fixture_dir/fsmonitor-ran" ] && echo ran || echo not-run):$got" "not-run:README|"
+rm -f "$fixture_dir/fsmonitor-ran"
+printf '[core]\n\tfsmonitor = %s\n' "$fixture_dir/fsmonitor-hook" > "$fixture_dir/global-gitconfig"
+got="$(tracked_list "export HOME='$fixture_dir' XDG_CONFIG_HOME='$fixture_dir'; cp '$fixture_dir/global-gitconfig' '$fixture_dir/.gitconfig';")"
+"$real_git" -C "$fixture_dir/repo-env" config core.fsmonitor "$fixture_dir/fsmonitor-hook"
+got2="$(tracked_list "")"
+"$real_git" -C "$fixture_dir/repo-env" config --unset core.fsmonitor
+rm -f "$fixture_dir/.gitconfig"
+check "capture_nul git: a global or repo-local core.fsmonitor never runs the hook" \
+    "$([ -e "$fixture_dir/fsmonitor-ran" ] && echo ran || echo not-run):$got:$got2" "not-run:README|:README|"
+printf 'forged\n' > "$fixture_dir/repo-env/forged"
+GIT_INDEX_FILE="$fixture_dir/forged-index" "$real_git" -C "$fixture_dir/repo-env" add forged
+rm -f "$fixture_dir/repo-env/forged"
+got="$(tracked_list "export GIT_INDEX_FILE='$fixture_dir/forged-index';")"
+check "capture_nul git: an exported GIT_INDEX_FILE cannot swap in a forged tracked set" "$got" "README|"
+got="$(tracked_list "f() { local -x GIT_INDEX_FILE='$fixture_dir/forged-index'; capture_nul t d -- git ls-files -z; printf '%s|' \"\${t[@]}\"; exit; }; f;")"
+check "capture_nul git: a local -x GIT_INDEX_FILE cannot swap in a forged tracked set" "$got" "README|"
+for pre in "readonly GIT_INDEX_FILE='$fixture_dir/forged-index'; export GIT_INDEX_FILE" \
+           "readonly GIT_CONFIG_GLOBAL='$fixture_dir/global-gitconfig'; export GIT_CONFIG_GLOBAL"; do
+    var="${pre#readonly }"; var="${var%%=*}"
+    rc=0
+    out="$(cd "$fixture_dir/repo-env" && bash -c "source '$lib'; $pre; capture_nul t d -- git ls-files -z" 2>&1)" || rc=$?
+    check "capture_nul git: readonly $var exits 2" "$rc" 2
+    check "capture_nul git: readonly $var is the reported cause" \
+        "$(cause_of "$out" "could not scrub $var —")" named
+done
 
 # ── examples.sh: an rg error while classifying is a hard failure ─────────────
 ex_lib="$repo_root/tools/scripts/lib/examples.sh"

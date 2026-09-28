@@ -15,6 +15,7 @@
 #
 # Provides (all FUNCTIONS — call them, don't read arrays):
 #   all_examples            → every candidate example dir, one per line (no trailing /).
+#   all_examples_into <arr> → the same set, loaded into array <arr>.
 #   is_out_of_scope <dir>   → exit 0 IFF Go-FFI (imports an unresolvable Go-pkg module).
 #   is_web_example  <dir>   → exit 0 IFF Ipe.Web / Ipe.Http.Server (browser-drivable).
 #   example_shape   <dir>   → wasm|tui|webview|fyne|web|program
@@ -35,14 +36,22 @@ require_tool rg find sort perl
 # The `examples/wasm/*` glob is load-bearing: those dirs are non-numbered, so
 # without it they fall out of every sweep set and a stale shape rename rots them
 # silently.
-all_examples() {
-  local d globs=(examples/[0-9]*/ examples/wasm/*/ examples/rust/*/ examples/ffi/*/ examples/shapes/*/*/)
-  for d in "${globs[@]}"; do
-    [ -d "$d" ] || continue
-    d="${d%/}"
-    [ -f "$d/src/Main.ipe" ] || continue
-    printf '%s\n' "$d"
+all_examples_into() {
+  _require_out_name all_examples_into "${1:-}" array
+  local -n __ae_out="$1"
+  __ae_out=()
+  local __ae_d __ae_globs=(examples/[0-9]*/ examples/wasm/*/ examples/rust/*/ examples/ffi/*/ examples/shapes/*/*/)
+  for __ae_d in "${__ae_globs[@]}"; do
+    [ -d "$__ae_d" ] || continue
+    __ae_d="${__ae_d%/}"
+    [ -f "$__ae_d/src/Main.ipe" ] || continue
+    __ae_out+=("$__ae_d")
   done
+}
+all_examples() {
+  local -a dirs=()
+  all_examples_into dirs
+  [ "${#dirs[@]}" -eq 0 ] || printf '%s\n' "${dirs[@]}"
 }
 
 # ── _build_stdlib_index: ONE-TIME in-memory index of stdlib module paths ──────
@@ -249,11 +258,14 @@ example_shape() {
 # ── build_set: all_examples minus Go-FFI (unresolvable-import examples) ──────
 build_set() {
   if [ -n "${_IPE_BUILD_SET+x}" ]; then printf '%s' "$_IPE_BUILD_SET"; return 0; fi
-  local d out=""
-  while IFS= read -r d; do
+  # The set is built into an array in this shell, never read from a process
+  # substitution whose writer's death would read as a clean end of the set.
+  local d out="" dirs=()
+  all_examples_into dirs
+  for d in "${dirs[@]}"; do
     is_out_of_scope "$d" && continue
     out+="$d"$'\n'
-  done < <(all_examples)
+  done
   _IPE_BUILD_SET="$out"
   printf '%s' "$out"
 }
