@@ -218,7 +218,11 @@ fn rewrite(expr: Expr, target: Symbol, eager: bool, payloads: &EnumPayloadTable)
             if params.iter().any(|(s, _)| *s == target) {
                 return Expr::Lambda { params, ret, body };
             }
-            rewrite_closure(target, *body, payloads, |body| Expr::Lambda { params, ret, body })
+            rewrite_closure(target, *body, payloads, |body| Expr::Lambda {
+                params,
+                ret,
+                body,
+            })
         }
         Expr::SharedLambda { params, ret, body } => {
             if params.iter().any(|(s, _)| *s == target) {
@@ -558,7 +562,10 @@ mod tests {
             ret: IrType::Int,
             body: Box::new(borrowed()),
         };
-        assert_eq!(clone_free_target(shadowing(), w, &EnumPayloadTable::new()), shadowing());
+        assert_eq!(
+            clone_free_target(shadowing(), w, &EnumPayloadTable::new()),
+            shadowing()
+        );
         assert_eq!(
             clone_free_target(thunk(Expr::Int(1)), w, &EnumPayloadTable::new()),
             thunk(Expr::Int(1))
