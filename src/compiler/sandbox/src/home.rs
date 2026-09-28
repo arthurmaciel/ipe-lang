@@ -13,35 +13,34 @@
 use std::ffi::OsString;
 use std::path::PathBuf;
 
+/// The runtime's home-variable name and value parser, spliced in verbatim.
+///
+/// The one source lives in the runtime tree because the runtime is vendored
+/// into emitted apps and cannot depend on the compiler.
+mod home_core {
+    include!("../../../runtime/rust/src/home_core.rs");
+}
+
+pub use home_core::WINDOWS_HOME_VAR;
+
 /// The invoking user's home directory, when the environment names an absolute one.
 #[must_use]
 #[allow(clippy::disallowed_methods)] // the sole home reader: parsed absolute-or-nothing below
 pub fn home_dir() -> Option<PathBuf> {
-    /// The platform variable naming the invoking user's home directory.
-    #[cfg(windows)]
-    const HOME_VAR: &str = "USERPROFILE";
-    /// The platform variable naming the invoking user's home directory.
-    #[cfg(not(windows))]
-    const HOME_VAR: &str = "HOME";
-    home_dir_from(std::env::var_os(HOME_VAR))
+    home_dir_from(std::env::var_os(home_core::HOME_VAR))
 }
 
 /// Parse a raw home value: `Some` only for a valid-UTF-8, non-empty absolute
 /// path.
 ///
-/// `None` for unset, empty, relative, `.`, `~`, or non-UTF-8 — the last case
-/// converges this `OsString`-typed parser with `ipe_runtime_rust`'s
-/// `system::home_dir_from`, which is `Option<String>`-typed and so can never
-/// represent a non-UTF-8 raw value in the first place. Without this explicit
-/// check the two parsers would disagree on a non-UTF-8-but-absolute `HOME`:
-/// the runtime would see no home while the sandbox resolved one — two
-/// components trusting different homes for the same process is a sandbox-
-/// escape shape, not a cosmetic mismatch.
+/// A non-UTF-8 value is refused before the shared runtime parser
+/// `home_core::home_from_str` sees it, matching the runtime reader, whose
+/// `std::env::var` read already fails on non-UTF-8. Both components thus
+/// accept exactly the same values; they run in separate processes, so this is
+/// agreement on one environment fact, not a shared-process escape.
 #[must_use]
 pub fn home_dir_from(raw: Option<OsString>) -> Option<PathBuf> {
-    raw.and_then(|s| s.into_string().ok())
-        .map(PathBuf::from)
-        .filter(|p| p.is_absolute())
+    home_core::home_from_str(raw.and_then(|s| s.into_string().ok()))
 }
 
 /// A tool-home variable (`CARGO_HOME`, `RUSTUP_HOME`) set to a relative path.
@@ -100,14 +99,12 @@ mod tests {
     use super::*;
 
     // Shared with `ipe_runtime_rust::system`'s `home_dir_tests`: the same
-    // `(raw, expected)` rows drive both crates' `home_dir_from`, so a row on
-    // which the two parsers disagree fails here or there rather than staying
-    // silently unpinned.
-    include!("../tests/data/home_cases.rs");
+    // `(raw, expected)` rows drive both crates' home readers.
+    include!("../../../runtime/rust/tests/data/home_cases.rs");
 
     #[test]
     fn every_home_parse_case_matches_the_shared_table() {
-        for (raw, expected) in HOME_PARSE_CASES {
+        for (raw, expected) in HOME_PARSE_CASES.iter().chain(HOME_PARSE_PLATFORM_CASES) {
             assert_eq!(
                 home_dir_from(raw.map(OsString::from)),
                 expected.map(PathBuf::from),
@@ -116,16 +113,29 @@ mod tests {
         }
     }
 
-    /// A non-UTF-8 raw value is refused even when byte-for-byte absolute:
-    /// pins the fix in `home_dir_from`'s doc comment above, and is the row
-    /// `ipe_runtime_rust::system`'s parser cannot even pose (its `raw` is
-    /// `Option<String>`, a type non-UTF-8 bytes can never inhabit).
+    /// A non-UTF-8 raw value is refused even when byte-for-byte absolute.
     #[cfg(unix)]
     #[test]
     fn a_non_utf8_home_value_is_refused() {
         use std::os::unix::ffi::OsStrExt as _;
         let raw = std::ffi::OsStr::from_bytes(b"/home/\xff").to_os_string();
         assert_eq!(home_dir_from(Some(raw)), None);
+    }
+
+    /// The shared home variable is `USERPROFILE` on Windows and `HOME` elsewhere.
+    #[test]
+    fn the_home_variable_is_the_platform_convention() {
+        let expected = if cfg!(windows) { "USERPROFILE" } else { "HOME" };
+        assert_eq!(home_core::HOME_VAR, expected);
+        assert_eq!(WINDOWS_HOME_VAR, "USERPROFILE");
+    }
+
+    /// Every shared home name is one `ipe_env` refuses to read.
+    #[test]
+    fn every_shared_home_name_is_refused_by_ipe_env() {
+        for name in [home_core::HOME_VAR, WINDOWS_HOME_VAR] {
+            assert!(ipe_env::HOME_NAMES.contains(&name), "{name}");
+        }
     }
 
     #[cfg(not(windows))]

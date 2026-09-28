@@ -16,7 +16,7 @@
 //! the audited readers are the only raw readers. This scan pins that set
 //! independently: it refuses a literal home read in production sources, a
 //! home-dir crate (`home`, `dirs`, `directories`, `etcetera`, …) as a
-//! manifest dependency or a source path, the private home-name constant outside its module, a raw `std::env` read or
+//! manifest dependency or a source path, a shared home-name constant outside its pinned files, a raw `std::env` read or
 //! whole-environment iterator outside the audited files, the escape-hatch
 //! allow outside the pinned allow files, the jail passthrough outside the
 //! sandbox crate and its pinned caller, and a `/proc/*/environ` read.
@@ -60,8 +60,17 @@ const JAIL_ENV_FN: &str = "granted_env";
 /// `host_env::granted`: its path, or a group or glob import of its module.
 const RAW_PASSTHROUGH_PATHS: &[&str] = &["host_env::granted", "host_env::{", "host_env::*"];
 
-/// The module that owns the private home-name constant.
-const HOME_MODULE: &str = "src/compiler/sandbox/src/home.rs";
+/// The files that may name the shared home-name constants: their one source
+/// (`home_core`), the two home accessors, and the Windows scratch-root check.
+const HOME_VAR_FILES: &[&str] = &[
+    "src/runtime/rust/src/home_core.rs",
+    "src/compiler/sandbox/src/home.rs",
+    "src/runtime/rust/src/system.rs",
+    "src/compiler/sandbox/src/scratch.rs",
+];
+
+/// The shared home-name constants, defined once in `home_core`.
+const HOME_VAR_NAMES: &[&str] = &["HOME_VAR", "WINDOWS_HOME_VAR"];
 
 /// Whitespace-free call openers that read an environment variable named by a
 /// literal, `{}` standing for the name.
@@ -369,9 +378,9 @@ fn names_ident(src: &str, ident: &str) -> bool {
         .any(|(at, m)| !ident_before(&code, at) && !ident_after(&code, at + m.len()))
 }
 
-/// Whether `src`'s code names the private home-name constant.
+/// Whether `src`'s code names a shared home-name constant.
 fn names_home_var(src: &str) -> bool {
-    names_ident(src, "HOME_VAR")
+    HOME_VAR_NAMES.iter().any(|name| names_ident(src, name))
 }
 
 /// Whether `src`'s code reaches the raw passthrough `host_env::granted`: a
@@ -589,13 +598,14 @@ fn the_home_name_constant_stays_in_its_module() {
     let files = workspace_sources(true);
     let offenders: Vec<_> = files
         .iter()
-        .filter(|(rel, text)| rel != HOME_MODULE && names_home_var(text))
+        .filter(|(rel, text)| !HOME_VAR_FILES.contains(&rel.as_str()) && names_home_var(text))
         .map(|(rel, _)| rel)
         .collect();
     assert!(
         offenders.is_empty(),
-        "`HOME_VAR` named outside `{HOME_MODULE}`; read the home through \
-         `ipe_sandbox::home::home_dir`: {offenders:?}"
+        "a home-name constant named outside {HOME_VAR_FILES:?}; read the home through \
+         `ipe_sandbox::home::home_dir` (compiler) or `system::home_dir` (runtime): \
+         {offenders:?}"
     );
 }
 
@@ -702,6 +712,7 @@ fn every_pinned_file_exists() {
         .iter()
         .chain(ENV_ALLOW_FILES)
         .chain(JAIL_ENV_CALLERS)
+        .chain(HOME_VAR_FILES)
     {
         assert!(
             root.join(rel).is_file(),
@@ -790,6 +801,7 @@ fn a_planted_environment_bypass_is_detected() {
         );
     }
     assert!(names_home_var("let h = home::HOME_VAR;"));
+    assert!(names_home_var("let h = home::WINDOWS_HOME_VAR;"));
     assert!(allows_disallowed_methods(
         "#[allow(clippy::disallowed_methods)]\nfn f() {}"
     ));
@@ -889,24 +901,21 @@ mod lexical {
     /// Functions and constants allowed to spell a home variable name.
     const LITERAL_ALLOWED: &[Allowed] = &[
         Allowed {
-            file: "src/compiler/sandbox/src/home.rs",
-            func: "home_dir",
-            reason: "the compiler-side home accessor; parses the value to an absolute path",
+            file: "src/runtime/rust/src/home_core.rs",
+            func: "HOME_VAR",
+            reason: "the one platform home-name constant, shared by both home accessors; \
+                     reads nothing",
         },
         Allowed {
-            file: "src/runtime/rust/src/system.rs",
-            func: "home_dir",
-            reason: "the runtime home accessor; parses the value to an absolute path",
+            file: "src/runtime/rust/src/home_core.rs",
+            func: "WINDOWS_HOME_VAR",
+            reason: "the one Windows home-name constant, shared by both home accessors; \
+                     reads nothing",
         },
         Allowed {
             file: "src/compiler/env/src/lib.rs",
             func: "HOME_NAMES",
             reason: "the home names the audited reader refuses; reads nothing",
-        },
-        Allowed {
-            file: "src/compiler/sandbox/src/scratch.rs",
-            func: "PROFILE_VAR",
-            reason: "names the profile variable in a refusal message; the read is `home::home_dir`",
         },
         Allowed {
             file: "src/ipe-cli/src/audit_native.rs",
