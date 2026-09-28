@@ -80,7 +80,7 @@ impl HomeMasks {
 
 /// One path a jail re-exposes at the same location inside the jail.
 #[derive(Debug, Clone, Copy)]
-pub(crate) enum Bind<'a> {
+pub enum Bind<'a> {
     /// `--ro-bind`: visible, never writable.
     ReadOnly(&'a Path),
     /// `--bind`: visible and writable.
@@ -120,7 +120,7 @@ fn depth(path: &Path) -> usize {
 /// mask therefore always precedes that mask's `--tmpfs`, which hides what the
 /// bind would have exposed there. Binds keep their relative order within one
 /// mask. Every path is emitted in canonical form, the form bwrap mounts at.
-pub(crate) fn push_mounts(argv: &mut Vec<OsString>, homes: &HomeMasks, binds: &[Bind<'_>]) {
+pub fn push_mounts(argv: &mut Vec<OsString>, homes: &HomeMasks, binds: &[Bind<'_>]) {
     let mut masks: Vec<PathBuf> = STATIC_MASKS
         .iter()
         .map(|mask| canonical_or_given(Path::new(mask)))
