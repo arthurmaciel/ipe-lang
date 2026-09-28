@@ -178,7 +178,14 @@ pub enum Privacy {
 /// An `import` declaration.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Import {
-    /// Span of the `import` keyword token.
+    /// Span of the whole declaration: from `import` through the end of its
+    /// last clause (the alias or the `exposing (..)` list, whichever is
+    /// last), including a multi-line `exposing` list. This is the single
+    /// source both the unused-import diagnostic and its "remove" code
+    /// action read from — neither re-derives the extent independently.
+    pub span: Span,
+    /// Span of the `import` keyword token alone (for keyword-only uses,
+    /// e.g. syntax highlighting).
     pub import_kw: Span,
     /// Dotted module-name segments, e.g. `Ipe.String`.
     pub name: Located<Vec<Symbol>>,

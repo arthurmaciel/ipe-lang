@@ -1566,6 +1566,34 @@ mod tests {
         );
     }
 
+    /// The `unused-imports` diagnostic span covers the whole declaration — from
+    /// `import` through the closing `)` of a multi-line `exposing (…)` clause —
+    /// not just the `import` keyword. This is what lets the LSP "remove unused
+    /// import" action be offered from a cursor anywhere on the declaration, not
+    /// only when it sits on the keyword.
+    #[test]
+    fn unused_import_span_covers_multiline_exposing_clause() {
+        let src = concat!(
+            "module Main exposing (main)\n\n",
+            "import Ipe.Url\n",
+            "    exposing (fromString, toString)\n\n",
+            "main = \"hello\"\n",
+        );
+        let report = run(&[module(src)], &LintConfig::default());
+        let finding = report
+            .findings
+            .iter()
+            .find(|f| f.rule == "unused-imports")
+            .expect("the multi-line import must be flagged as unused");
+        let closing_paren = src.find(')').expect("exposing clause has a closing paren");
+        assert!(
+            finding.span.hi as usize > closing_paren,
+            "the diagnostic span must reach past the exposing clause's closing \
+             paren (at byte {closing_paren}), got span.hi = {}",
+            finding.span.hi
+        );
+    }
+
     /// A wildcard `exposing (..)` import is conservatively NOT flagged even if
     /// no name from it appears in the source (we cannot know the full export
     /// surface at the parse level).

@@ -1029,6 +1029,82 @@ fn unused_imports_quick_fix_removes_a_multiline_as_import() {
     );
 }
 
+/// #2862: the remove-unused-import action must be offered for a request range
+/// that overlaps ANY part of the import's span — not only when it sits on the
+/// `import` keyword. Here the diagnostic (matching what the lint now reports)
+/// covers the whole declaration, and the request range lands on the
+/// `exposing (…)` continuation line, away from the keyword.
+#[test]
+fn unused_imports_quick_fix_offered_from_exposing_continuation_line() {
+    let db = IpeDatabase::new();
+    let src = "module Main exposing (main)\n\nimport Foo\n    exposing (bar, baz)\n\nmain : Int\nmain = 1\n";
+    let foo = file(
+        &db,
+        &["Foo"],
+        "module Foo exposing (bar, baz)\n\nbar = 1\n\nbaz = 2\n",
+    );
+    let entry = file(&db, &["Main"], src);
+    let root = root_of(&db, &[(&["Foo"], foo), (&["Main"], entry)]);
+
+    // The diagnostic now spans the whole declaration: line 2 (`import Foo`)
+    // through line 3 (`    exposing (bar, baz)`).
+    let lsp_diag = lsp_types::Diagnostic {
+        range: Range {
+            start: lsp_types::Position {
+                line: 2,
+                character: 0,
+            },
+            end: lsp_types::Position {
+                line: 3,
+                character: 20,
+            },
+        },
+        code: Some(lsp_types::NumberOrString::String(
+            "lint/unused-imports".to_owned(),
+        )),
+        source: Some("ipe-lint".to_owned()),
+        message: "unused import".to_owned(),
+        ..lsp_types::Diagnostic::default()
+    };
+    let uri = Url::from_file_path("/fake/Main.ipe").expect("uri");
+    // The REQUEST range — where the cursor/selection sits — is on the
+    // continuation line, not the `import` keyword line.
+    let request_range = Range {
+        start: lsp_types::Position {
+            line: 3,
+            character: 4,
+        },
+        end: lsp_types::Position {
+            line: 3,
+            character: 4,
+        },
+    };
+    let actions = code_actions(
+        DbView {
+            db: &db,
+            root,
+            entry,
+        },
+        &["Main".to_owned()],
+        &uri,
+        request_range,
+        std::slice::from_ref(&lsp_diag),
+        src,
+        PositionEncoding::Utf16,
+    );
+    let action = actions
+        .into_iter()
+        .find_map(|a| match a {
+            CodeActionOrCommand::CodeAction(ca) => Some(ca),
+            CodeActionOrCommand::Command(_) => None,
+        })
+        .expect(
+            "a cursor on the exposing continuation line must still offer the \
+             remove action",
+        );
+    assert_eq!(action.title, "Remove unused import");
+}
+
 #[test]
 fn edit_converges_error_then_clean() {
     let mut db = IpeDatabase::new();
