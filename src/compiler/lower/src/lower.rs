@@ -345,14 +345,8 @@ fn scheme_var_instance<'t>(
     heads: SchemeHeads<'_>,
 ) -> Option<&'t Ty> {
     use ipe_kernels::TyShape;
-    let align = |items: &[TyShape], solved_items: &'t [Ty]| {
-        if items.len() != solved_items.len() {
-            return None;
-        }
-        items
-            .iter()
-            .zip(solved_items)
-            .find_map(|(item, solved_item)| scheme_var_instance(item, solved_item, var, heads))
+    let first_instance = |mut pairs: ipe_types::ArgPairs<'_, 't, TyShape, Ty>| {
+        pairs.find_map(|(item, solved_item)| scheme_var_instance(item, solved_item, var, heads))
     };
     match (shape, solved) {
         (TyShape::Var(v), _) => (*v == var).then_some(solved),
@@ -360,14 +354,21 @@ fn scheme_var_instance<'t>(
             scheme_var_instance(arg, solved_arg, var, heads)
                 .or_else(|| scheme_var_instance(res, solved_res, var, heads))
         }
-        (TyShape::Con(tag, items), Ty::Con { module, name, args })
-            if heads
-                .builtins
-                .con_head_is(*tag, module, *name, heads.interner) =>
-        {
-            align(items, args)
+        (TyShape::Con(tag, items), Ty::Con { module, name, args }) => {
+            ipe_types::HeadIdentity::Unified(heads.interner)
+                .paired_args(
+                    heads.builtins.builtin_con_head(*tag, *items),
+                    ipe_types::ConHead {
+                        home: module,
+                        name: *name,
+                        args: args.as_slice(),
+                    },
+                )
+                .and_then(first_instance)
         }
-        (TyShape::Tuple(items), Ty::Tuple(solved_items)) => align(items, solved_items),
+        (TyShape::Tuple(items), Ty::Tuple(solved_items)) => (items.len() == solved_items.len())
+            .then(|| items.iter().zip(solved_items.as_slice()))
+            .and_then(first_instance),
         _ => None,
     }
 }
@@ -35790,6 +35791,57 @@ mod tests {
             super::scheme_var_instance(shape, &swapped_both, 0, fx.heads()),
             None,
             "no correctly-headed occurrence remains"
+        );
+    }
+
+    /// A user-homed type sharing a builtin tag's name never aligns that tag's scheme variable.
+    ///
+    /// `WebRoute` is a builtin name user code may declare, so `Main.WebRoute a`
+    /// is a distinct constructor from the empty-home builtin `WebRoute a`, and
+    /// the walk refuses it. A reserved name (`List`) never carries a user home:
+    /// canon refuses its declaration.
+    #[test]
+    fn scheme_var_instance_refuses_user_home_on_builtin_name() {
+        use ipe_kernels::{BuiltinTag, TyShape};
+        const ROUTE_OF_VAR: TyShape = TyShape::Con(BuiltinTag::WebRoute, &[TyShape::Var(0)]);
+        let mut fx = CheckboxFixture::new();
+        #[allow(clippy::expect_used)] // a fresh interner accepts a user module name
+        let main = fx.interner.intern("Main").expect("intern user home");
+        let msg = fx.con(BuiltinTag::Int, vec![]);
+        let builtin_route = fx.con(BuiltinTag::WebRoute, vec![msg.clone()]);
+        assert_eq!(
+            super::scheme_var_instance(&ROUTE_OF_VAR, &builtin_route, 0, fx.heads()),
+            Some(&msg)
+        );
+        let user_route = Ty::Con {
+            module: vec![main],
+            name: fx.builtins.builtin_symbol(BuiltinTag::WebRoute),
+            args: vec![msg],
+        };
+        assert_eq!(
+            super::scheme_var_instance(&ROUTE_OF_VAR, &user_route, 0, fx.heads()),
+            None,
+            "Main.WebRoute is not the builtin WebRoute"
+        );
+    }
+
+    /// A tuple of another length never aligns the scheme's tuple elements.
+    #[test]
+    fn scheme_var_instance_refuses_tuple_length_mismatch() {
+        use ipe_kernels::TyShape;
+        const PAIR_OF_VAR: TyShape = TyShape::Tuple(&[TyShape::Var(0), TyShape::Unit]);
+        let fx = CheckboxFixture::new();
+        let msg = fx.con(ipe_kernels::BuiltinTag::Int, vec![]);
+        let pair = Ty::Tuple(vec![msg.clone(), Ty::Unit]);
+        assert_eq!(
+            super::scheme_var_instance(&PAIR_OF_VAR, &pair, 0, fx.heads()),
+            Some(&msg)
+        );
+        let triple = Ty::Tuple(vec![msg, Ty::Unit, Ty::Unit]);
+        assert_eq!(
+            super::scheme_var_instance(&PAIR_OF_VAR, &triple, 0, fx.heads()),
+            None,
+            "a triple must not align a pair's elements"
         );
     }
 

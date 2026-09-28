@@ -28,6 +28,7 @@
 mod constrain;
 mod doc;
 mod exhaust;
+mod pairing;
 mod solve;
 pub(crate) mod super_bounds;
 mod ty;
@@ -46,6 +47,7 @@ use ipe_intern::{Interner, Symbol};
 
 pub use constrain::{Builtins, kernel_type_table, resolve_scheme};
 pub use doc::{VarNamer, canon_type_to_doc, letters, ty_to_doc};
+pub use pairing::{ArgPairs, ConHead, HeadIdentity, TyPairs, paired_ty_children};
 pub use solve::{BUDGET_ENV, Budget, DEFAULT_SOLVER_BUDGET};
 pub use ty::{
     RETRY_POLICY_FIELDS, RowTail, Ty, TyBounds, is_solver_var, tag_solver_var, untag_solver_var,

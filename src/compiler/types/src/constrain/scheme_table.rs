@@ -1,10 +1,8 @@
-use ipe_intern::Interner;
-
 use super::{
     BTreeMap, Builder, BuiltinTag, Builtins, FieldTag, RowTail, RowTailShape, SchemeKey,
     SchemeSlot, Symbol, Ty, TyShape,
 };
-use crate::unify::con_heads_compatible;
+use crate::pairing::ConHead;
 
 impl Builder<'_> {
     /// Resolve a [`SchemeKey`] carried on a [`ipe_kernels::KernelDef`] to its
@@ -349,26 +347,17 @@ impl Builtins {
         }
     }
 
-    /// Whether the solved constructor head `module.name` is the type constructor `tag` names.
+    /// The constructor head `tag` names, applied to `args`.
     ///
-    /// Identity is decided by the head rule unification applies
-    /// ([`con_heads_compatible`]): the names agree and the homes agree, or one
-    /// side is the empty builtin home and the other a stdlib / reserved spelling
-    /// of that builtin. Two distinct constructors of equal arity never match.
+    /// Carries the tag's home and symbol, so a walk pairing a kernel scheme
+    /// shape against a solved type compares heads through
+    /// [`crate::HeadIdentity::paired_args`], never by arity alone.
     #[must_use]
-    pub fn con_head_is(
-        &self,
-        tag: BuiltinTag,
-        module: &[Symbol],
-        name: Symbol,
-        interner: &Interner,
-    ) -> bool {
-        con_heads_compatible(
-            self.builtin_con_module(tag),
-            self.builtin_symbol(tag),
-            module,
-            name,
-            interner,
-        )
+    pub fn builtin_con_head<'a, T>(&'a self, tag: BuiltinTag, args: &'a [T]) -> ConHead<'a, T> {
+        ConHead {
+            home: self.builtin_con_module(tag),
+            name: self.builtin_symbol(tag),
+            args,
+        }
     }
 }
