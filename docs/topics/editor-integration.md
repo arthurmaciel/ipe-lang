@@ -38,8 +38,9 @@ Two pieces make an editor understand Ipê:
 
 - **`ipe lsp`** — semantics over stdio: type-directed completion,
   go-to-definition, find-references, rename, formatting, code actions (add a
-  missing annotation or import, remove an unused import, …), semantic tokens,
-  signature help, inlay hints and diagnostics.
+  missing annotation or import, remove an unused import, …, plus the
+  whole-document `source.organizeImports` and `source.fixAll`), semantic
+  tokens, signature help, inlay hints and diagnostics.
 - **`tree-sitter-ipe`** — syntax highlighting from the grammar in
   `editors/tree-sitter-ipe/` (Helix, Neovim, Zed). Emacs highlights through
   `ipe-mode`'s own font-lock rules.

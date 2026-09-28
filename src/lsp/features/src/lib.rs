@@ -28,6 +28,7 @@ pub mod rename;
 pub mod selection_range;
 pub mod semantic_tokens;
 pub mod signature_help;
+pub mod source_actions;
 pub mod symbols;
 
 pub use offset::PositionEncoding;

@@ -1182,6 +1182,22 @@ fn code_action_result(state: &State, params: &serde_json::Value) -> FeatureOutco
         text,
         state.encoding,
     ));
+    // `source.organizeImports` / `source.fixAll` — whole-document, not
+    // range-scoped; honor `context.only` so a plain diagnostic-hover request
+    // isn't clogged with whole-file rewrite computations.
+    let lint_config = state
+        .workspace_root
+        .as_deref()
+        .map(load_lint_config)
+        .unwrap_or_default();
+    actions.extend(ipe_lsp_features::source_actions::source_actions(
+        &module,
+        &params.text_document.uri,
+        text,
+        &lint_config,
+        params.context.only.as_deref(),
+        state.encoding,
+    ));
     FeatureOutcome::payload(actions)
 }
 
