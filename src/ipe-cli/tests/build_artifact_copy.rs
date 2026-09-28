@@ -76,7 +76,7 @@ fn build_into_shared_target(
 /// produced in the shared target.
 #[test]
 fn build_copies_the_artifact_into_project_out_bin() -> Result<(), BoxError> {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         eprintln!("skipping (set IPE_E2E=1 to run)");
         return Ok(());
     }
@@ -125,7 +125,7 @@ fn build_copies_the_artifact_into_project_out_bin() -> Result<(), BoxError> {
 /// (it was copied within A's build), never silently replaced by B's.
 #[test]
 fn a_second_same_named_project_does_not_clobber_the_first_out_bin() -> Result<(), BoxError> {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         eprintln!("skipping (set IPE_E2E=1 to run)");
         return Ok(());
     }

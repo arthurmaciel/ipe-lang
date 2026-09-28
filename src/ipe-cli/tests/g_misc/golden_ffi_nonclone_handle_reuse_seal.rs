@@ -210,7 +210,7 @@ fn nonclone_handle_threaded_linearly_builds() {
     // where the crate is not published. We create the crate locally and replace
     // the pin with a path dependency — the same provisioning pattern the
     // `asserted_call` golden uses for its `tm` fixture.
-    if std::env::var("IPE_E2E").is_ok() {
+    if ipe_env::var("IPE_E2E").is_ok() {
         let handle_demo_dir = tmp.join("handle_demo");
         let handle_demo_src = handle_demo_dir.join("src");
         fs::create_dir_all(&handle_demo_src).expect("create handle_demo fixture crate directory");

@@ -347,7 +347,7 @@ fn wait_for_exit(
 #[test]
 fn watch_shuts_down_the_supervised_child_on_sigterm_to_only_the_ipe_process() -> Result<(), BoxError>
 {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         eprintln!("skipping (set IPE_E2E=1 to run)");
         return Ok(());
     }
@@ -491,7 +491,7 @@ fn spawn_never_installs_a_sigterm_forwarder() -> Result<(), BoxError> {
 #[test]
 fn double_sigterm_after_forwarder_consumed_is_silently_absorbed_use_sigkill() -> Result<(), BoxError>
 {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         eprintln!("skipping (set IPE_E2E=1 to run)");
         return Ok(());
     }

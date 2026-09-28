@@ -331,10 +331,10 @@ fn a_resolvable_define_type_chain_all_survives() {
 /// build and round-trip.
 #[test]
 fn opaque_field_and_payload_build_and_run() {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
-    let Ok(cargo) = std::env::var("CARGO") else {
+    let Ok(cargo) = ipe_env::var("CARGO") else {
         return; // no cargo on PATH in this environment — skip like the goldens
     };
 

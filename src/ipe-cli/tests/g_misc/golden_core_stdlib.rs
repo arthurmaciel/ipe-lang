@@ -59,7 +59,7 @@ fn compile_golden(name: &str) -> PathBuf {
 }
 
 fn e2e_enabled() -> bool {
-    std::env::var("IPE_E2E").is_ok()
+    ipe_env::var("IPE_E2E").is_ok()
 }
 
 /// The six newly-wired core-stdlib kernels compile and produce correct output.

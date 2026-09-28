@@ -37,6 +37,9 @@ use std::path::{Component, Path, PathBuf};
 use crate::{CliError, io_err, text};
 
 pub(crate) mod held;
+mod proven;
+
+use proven::{ProvenOutPath, prove_parent_steps};
 
 /// The file whose presence marks a directory as ipe-owned.
 pub const OWNERSHIP_MARKER: &str = ".ipe-output";
@@ -256,11 +259,16 @@ impl OwnedDir {
     /// - Anything else — a symlink, a file, a non-empty unmarked directory — is
     ///   refused and left untouched.
     ///
+    /// `path` is made absolute first, every `..` resolved only out of a proven
+    /// plain directory, so no platform ever reads a `..` its own way during the
+    /// claim.
+    ///
     /// # Errors
-    /// [`CliError::OutputRefused`] on a refusal; [`CliError::Io`] on a
+    /// [`CliError::OutputRefused`] on a refusal, an unproven `..`
+    /// ([`OutputRefusal::ParentTraversal`]) included; [`CliError::Io`] on a
     /// filesystem failure.
     pub fn claim(path: &Path) -> Result<Self, CliError> {
-        claim_owned(path)
+        claim_owned(prove_parent_steps(path)?)
     }
 
     /// The owned directory's path.
@@ -356,10 +364,10 @@ impl OwnedDir {
 }
 
 /// Claim `path` through held directory handles.
-fn claim_owned(path: &Path) -> Result<OwnedDir, CliError> {
-    let dir = claim_held(path)?;
+fn claim_owned(path: ProvenOutPath) -> Result<OwnedDir, CliError> {
+    let dir = claim_held(&path)?;
     Ok(OwnedDir {
-        path: path.to_path_buf(),
+        path: path.into_path_buf(),
         id: dir.id()?,
     })
 }
@@ -368,20 +376,20 @@ fn claim_owned(path: &Path) -> Result<OwnedDir, CliError> {
 ///
 /// Each directory ipe creates or adopts is opened relative to its held parent
 /// without following a link, and is marked or adopted through that handle. An
-/// existing ancestor is left as it is. The recursion is bounded by the path's
-/// component count.
-fn claim_held(path: &Path) -> Result<held::HeldDir, CliError> {
-    if let Some(dir) = held::HeldDir::open(path)? {
+/// existing ancestor is left as it is. The path carries no `..` or `.`, so each
+/// parent opened is the lexical one on every platform. The recursion is bounded
+/// by the path's component count.
+fn claim_held(path: &ProvenOutPath) -> Result<held::HeldDir, CliError> {
+    if let Some(dir) = held::HeldDir::open(path.as_path())? {
         dir.adopt()?;
         return Ok(dir);
     }
-    let Some(name) = path.file_name() else {
-        return Err(OutputRefusal::ParentTraversal(path.to_path_buf()).into());
+    let (Some(name), Some(parent_path)) = (path.as_path().file_name(), path.parent()) else {
+        return Err(OutputRefusal::ParentTraversal(path.as_path().to_path_buf()).into());
     };
-    let parent_path = path.parent().unwrap_or_else(|| Path::new(""));
-    let parent = match held::HeldDir::open_following(parent_path)? {
+    let parent = match held::HeldDir::open_following(parent_path.as_path())? {
         Some(parent) => parent,
-        None => claim_held(parent_path)?,
+        None => claim_held(&parent_path)?,
     };
     claim_in(&parent, name)
 }
@@ -933,9 +941,64 @@ impl OutputRoot {
             held::level_held(dir.path());
         }
         Ok(OwnedDir {
-            path: checked.absolute.0,
+            path: checked.absolute.into_path_buf(),
             id: dir.id()?,
         })
+    }
+
+    /// A product area to claim later, when its product is written.
+    #[must_use]
+    pub fn area(&self, areas: &'static [OutputArea]) -> AreaClaim {
+        AreaClaim {
+            root: self.clone(),
+            areas,
+        }
+    }
+}
+
+/// A product area of an [`OutputRoot`], claimed only when its product is written.
+///
+/// It carries the root's disjointness proof to the writer, so the claim proves
+/// it again on a held handle rather than trusting a path computed earlier: a
+/// level swapped in between cannot redirect the write.
+#[derive(Debug, Clone)]
+pub struct AreaClaim {
+    /// The proven root the area sits under.
+    root: OutputRoot,
+    /// The (possibly nested) area below the root.
+    areas: &'static [OutputArea],
+}
+
+impl AreaClaim {
+    /// The area's path, checked as [`OutputRoot::area_path`] does.
+    ///
+    /// # Errors
+    /// As [`OutputRoot::area_path`].
+    pub fn path(&self) -> Result<PathBuf, CliError> {
+        self.root.area_path(self.areas)
+    }
+
+    /// Claim the area for writing now.
+    ///
+    /// # Errors
+    /// As [`OutputRoot::claim_area`].
+    pub fn claim(&self) -> Result<OwnedDir, CliError> {
+        self.root.claim_area(self.areas)
+    }
+
+    /// Claim the area for writing now, refusing unless it is the directory at `expected`.
+    ///
+    /// A writer handed both a path and the area it names writes nowhere when
+    /// the two disagree.
+    ///
+    /// # Errors
+    /// As [`AreaClaim::claim`]; [`OutputRefusal::Replaced`] when the area is
+    /// not at `expected`.
+    pub fn claim_at(&self, expected: &Path) -> Result<OwnedDir, CliError> {
+        if self.path()? != expected {
+            return Err(OutputRefusal::Replaced(expected.to_path_buf()).into());
+        }
+        self.claim()
     }
 }
 
@@ -1017,7 +1080,7 @@ impl HandoverRoot {
         }
         dir.adopt()?;
         Ok(HandoverDir(OwnedDir {
-            path: checked.absolute.0,
+            path: checked.absolute.into_path_buf(),
             id: dir.id()?,
         }))
     }
@@ -1175,129 +1238,6 @@ struct Anchor {
     tail: Vec<std::ffi::OsString>,
 }
 
-/// An absolute output path with no `..` or `.` component.
-///
-/// Built only by [`prove_parent_steps_from`], the one place a requested path is
-/// made absolute: a relative request is walked on from the working directory,
-/// component by component, and each `..` is resolved there, lexically, once
-/// the level it climbs out of is proven an existing directory that is not a
-/// link. No `Path::join`/`push` ever sees a requested `..` or `.` (onto a
-/// Windows verbatim `\\?\` base it collapses them unproven), and no later walk
-/// meets a `..` for a platform to interpret its own way (Windows collapses
-/// `..` lexically, POSIX follows the real parent).
-#[derive(Debug, Clone)]
-struct ProvenOutPath(PathBuf);
-
-impl ProvenOutPath {
-    fn as_path(&self) -> &Path {
-        &self.0
-    }
-}
-
-/// Make `raw` absolute against the working directory, resolving every `..`.
-///
-/// As [`prove_parent_steps_from`] with the working directory, read only for a
-/// relative `raw`.
-///
-/// # Errors
-/// As [`prove_parent_steps_from`]; [`CliError::Io`] when the working
-/// directory cannot be read.
-fn prove_parent_steps(raw: &Path) -> Result<ProvenOutPath, CliError> {
-    if raw.is_absolute() {
-        return prove_parent_steps_from(raw, Path::new(""));
-    }
-    let cwd = std::env::current_dir().map_err(|e| io_err(Path::new("."), e))?;
-    prove_parent_steps_from(raw, &cwd)
-}
-
-/// Make `raw` absolute against `cwd`, resolving every `..` out of a proven plain directory.
-///
-/// The components of `cwd` (all of it for a relative `raw`, only its drive
-/// for a Windows rooted `\x`, none for an absolute `raw`) and of `raw` are
-/// walked as one sequence; nothing is joined before the walk, so every `..`
-/// the user wrote reaches the proof whatever form `cwd` takes. A `..` is
-/// honoured only when the level it climbs out of exists as a directory that
-/// is not a link, reached through the already resolved levels above it; the
-/// level is then popped. Out of such a level the lexical and the real parent
-/// are the same directory, so the result names on every platform what POSIX
-/// would. A `..` over a missing level, a file, a link, or the root is
-/// refused. Bounded by the component count.
-///
-/// # Errors
-/// [`OutputRefusal::ParentTraversal`] for an unproven `..`;
-/// [`OutputRefusal::Unplaceable`] for a path that does not name one absolute
-/// place: a Windows drive-relative `C:x`, a rooted `\x` against a working
-/// directory with no drive, or a component that is not one plain name where
-/// it lands (a `/` inside a verbatim `\\?\` component, an `a:b` that Windows
-/// reads as a drive); [`CliError::Io`] when a level cannot be inspected.
-fn prove_parent_steps_from(raw: &Path, cwd: &Path) -> Result<ProvenOutPath, CliError> {
-    let traversal = || -> CliError { OutputRefusal::ParentTraversal(raw.to_path_buf()).into() };
-    let unplaceable = || -> CliError { OutputRefusal::Unplaceable(raw.to_path_buf()).into() };
-    let base = if raw.is_absolute() {
-        Path::new("")
-    } else {
-        match raw.components().next() {
-            Some(Component::Prefix(_)) => return Err(unplaceable()),
-            Some(Component::RootDir) => drive_of(cwd).ok_or_else(unplaceable)?,
-            Some(Component::CurDir | Component::ParentDir | Component::Normal(_)) | None => cwd,
-        }
-    };
-    let mut proven = PathBuf::new();
-    for component in base.components().chain(raw.components()) {
-        match component {
-            Component::Prefix(_) | Component::RootDir => proven.push(component),
-            Component::CurDir => {}
-            Component::Normal(name) => {
-                if !is_one_name(name) {
-                    return Err(unplaceable());
-                }
-                proven.push(name);
-            }
-            Component::ParentDir => {
-                if proven.file_name().is_none() {
-                    return Err(traversal());
-                }
-                match held::HeldDir::open(&proven) {
-                    Ok(Some(_)) => {}
-                    Ok(None) | Err(CliError::OutputRefused(_)) => return Err(traversal()),
-                    Err(e) => return Err(e),
-                }
-                if !proven.pop() {
-                    return Err(traversal());
-                }
-            }
-        }
-    }
-    if !proven.is_absolute() {
-        return Err(unplaceable());
-    }
-    Ok(ProvenOutPath(proven))
-}
-
-/// The drive prefix of `cwd`, the base of a Windows rooted `\x`.
-fn drive_of(cwd: &Path) -> Option<&Path> {
-    match cwd.components().next() {
-        Some(prefix @ Component::Prefix(_)) => Some(Path::new(prefix.as_os_str())),
-        Some(
-            Component::RootDir | Component::CurDir | Component::ParentDir | Component::Normal(_),
-        )
-        | None => None,
-    }
-}
-
-/// Whether `name` reads back as exactly itself, one plain component.
-///
-/// A name that reads as more — a `/` split by a non-verbatim parse, an `a:b`
-/// Windows takes for a drive prefix that would replace the path it is pushed
-/// onto — does not extend that path by one level.
-fn is_one_name(name: &std::ffi::OsStr) -> bool {
-    let mut parts = Path::new(name).components();
-    match (parts.next(), parts.next()) {
-        (Some(Component::Normal(only)), None) => only == name,
-        _ => false,
-    }
-}
-
 /// Hold the deepest existing level of `proven`, whose final component is never a link.
 ///
 /// The missing tail holds plain names only (a [`ProvenOutPath`] has no `..`).
@@ -1444,6 +1384,9 @@ fn resolve_through_existing(path: &Path) -> Option<PathBuf> {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(windows)]
+    use super::proven::drive_of;
+    use super::proven::prove_parent_steps_from;
     #[cfg(windows)]
     use super::test_links::junction_in_place;
     use super::test_links::plant_link;
@@ -3356,6 +3299,97 @@ mod tests {
         assert!(
             std::fs::symlink_metadata(&level).is_err(),
             "the swapped-in link itself is pruned"
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// A direct claim proves its `..` steps too: a `..` out of a link or a
+    /// missing level is refused before anything is created.
+    #[test]
+    fn a_direct_claim_refuses_an_unproven_dot_dot() {
+        let base = scratch("claim-dotdot");
+        let victim = base.join("victim").join("inner");
+        std::fs::create_dir_all(&victim).expect("make victim");
+        plant_link(&victim, &base.join("link"));
+        for segments in [&["link", "..", "x"][..], &["missing", "..", "x"][..]] {
+            let raw = spelled(&base, segments);
+            let result = OwnedDir::claim(&raw);
+            assert!(
+                matches!(refused(&result), Some(OutputRefusal::ParentTraversal(_))),
+                "claim of {} must be refused, got {result:?}",
+                raw.display()
+            );
+        }
+        assert!(
+            !base.join("x").exists(),
+            "nothing created at the lexical target"
+        );
+        assert!(
+            !base.join("victim").join("x").exists(),
+            "nothing created at the real target"
+        );
+        assert!(!base.join("missing").exists(), "no missing level created");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// An area claimed at the path it names succeeds and is marked.
+    #[test]
+    fn an_area_claim_at_its_own_path_succeeds() {
+        let base = scratch("area-claim-at");
+        let proj = project(&base);
+        let out = OutputRoot::resolve(None, &proj).expect("default out");
+        let area = out.area(&[OutputArea::Rust]);
+        let path = area.path().expect("area path");
+        assert!(!path.exists(), "naming the area creates nothing");
+        let claimed = area.claim_at(&path).expect("claim at its own path");
+        assert_eq!(claimed.path(), path);
+        assert!(
+            has_marker(&path).expect("area marker"),
+            "the area is marked"
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// An area claimed at a path other than the one it names is refused
+    /// before anything is created.
+    #[test]
+    fn an_area_claim_at_another_path_is_refused() {
+        let base = scratch("area-claim-mismatch");
+        let proj = project(&base);
+        let out = OutputRoot::resolve(None, &proj).expect("default out");
+        let area = out.area(&[OutputArea::Rust]);
+        let elsewhere = base.join("elsewhere");
+        let result = area.claim_at(&elsewhere);
+        assert!(
+            matches!(refused(&result), Some(OutputRefusal::Replaced(_))),
+            "a mismatched area claim must be refused, got {result:?}"
+        );
+        assert!(!elsewhere.exists(), "the mismatched path is not created");
+        assert!(!out.path().exists(), "the root is not created");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// An area named before one of its levels is swapped for a link into the
+    /// project is refused when claimed; the project files survive.
+    #[test]
+    fn an_area_swapped_after_naming_is_refused_at_claim() {
+        let base = scratch("area-swapped");
+        let proj = project(&base);
+        let out = OutputRoot::resolve(None, &proj).expect("default out");
+        let area = out.area(&[OutputArea::Rust]);
+        let path = area.path().expect("area path");
+        out.claim().expect("claim root");
+        let sources = proj.root.join("src");
+        plant_link(&sources, &path);
+        let result = area.claim_at(&path);
+        assert!(
+            refused(&result).is_some(),
+            "a swapped area must be refused, got {result:?}"
+        );
+        assert!(user_files_survive(&proj.root));
+        assert!(
+            !sources.join(OWNERSHIP_MARKER).exists(),
+            "no marker written through the link"
         );
         let _ = std::fs::remove_dir_all(&base);
     }

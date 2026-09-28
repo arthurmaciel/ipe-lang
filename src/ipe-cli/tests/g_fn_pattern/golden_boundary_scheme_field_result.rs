@@ -132,7 +132,7 @@ fn class1_field_result_ipec_accepts_and_emits_concrete_getter() {
 /// `ipe_types` unit test in the prior attempt passed despite the bug).
 #[test]
 fn class1_field_result_cargo_builds_and_runs() {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
 

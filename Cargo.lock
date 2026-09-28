@@ -1658,6 +1658,7 @@ checksum = "d0881ea181b1df73ff77ffaaf9c7544ecc11e82fba9b5f27b262a3c73a332555"
 name = "e2e-support"
 version = "0.3.1"
 dependencies = [
+ "ipe_env",
  "serde_json",
 ]
 
@@ -2990,6 +2991,7 @@ dependencies = [
  "ipe_db",
  "ipe_diagnostics",
  "ipe_docs",
+ "ipe_env",
  "ipe_ffi",
  "ipe_fmt",
  "ipe_intern",
@@ -3027,6 +3029,7 @@ dependencies = [
 name = "ipe-ffi-inspector"
 version = "0.2.0"
 dependencies = [
+ "ipe_env",
  "serde",
  "serde_json",
  "tempfile",
@@ -3151,6 +3154,7 @@ dependencies = [
  "ipe-runtime-rust",
  "ipe_backend",
  "ipe_diagnostics",
+ "ipe_env",
  "ipe_intern",
  "ipe_ir",
  "ipe_kernels",
@@ -3198,6 +3202,7 @@ dependencies = [
 name = "ipe_diagnostics"
 version = "0.3.1"
 dependencies = [
+ "ipe_env",
  "ipe_path_core",
  "unicode-width",
 ]
@@ -3216,11 +3221,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "ipe_env"
+version = "0.3.0"
+
+[[package]]
 name = "ipe_ffi"
 version = "0.3.1"
 dependencies = [
  "ipe_canon",
  "ipe_diagnostics",
+ "ipe_env",
  "ipe_intern",
  "ipe_kernels",
  "ipe_parse",
@@ -3352,6 +3362,7 @@ version = "0.3.1"
 dependencies = [
  "getrandom 0.3.4",
  "ipe_diagnostics",
+ "ipe_env",
  "ipe_kernels",
  "libc",
  "serde",
@@ -3383,6 +3394,7 @@ version = "0.3.1"
 dependencies = [
  "ipe_canon",
  "ipe_diagnostics",
+ "ipe_env",
  "ipe_intern",
  "ipe_kernels",
  "ipe_parse",
@@ -3402,6 +3414,7 @@ dependencies = [
 name = "ipe_wrapper"
 version = "0.3.1"
 dependencies = [
+ "ipe_env",
  "ipe_kernels",
  "ipe_sandbox",
 ]
@@ -4819,6 +4832,7 @@ checksum = "b4596b6d070b27117e987119b4dac604f3c58cfb0b191112e24771b2faeac1a6"
 name = "playground-jail-runner"
 version = "0.3.1"
 dependencies = [
+ "ipe_env",
  "ipe_sandbox",
  "serde",
  "serde_json",

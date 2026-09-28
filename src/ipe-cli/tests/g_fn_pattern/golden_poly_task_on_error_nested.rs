@@ -98,7 +98,7 @@ fn poly_task_on_error_nested_green() {
          shape); got:\n{main_rs}"
     );
 
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
     let outcome = crate::support::build_and_run_emitted("poly_task_on_error_nested", &out);

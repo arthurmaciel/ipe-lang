@@ -56,7 +56,7 @@ fn interp_int_literal_compiles() {
 /// The emitted binary prints the interpolated literals (`54`, `51`).
 #[test]
 fn interp_int_literal_runs() {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
     let entry = golden_entry("m_interp_int_literal");

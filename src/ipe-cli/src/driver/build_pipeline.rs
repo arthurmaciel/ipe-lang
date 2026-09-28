@@ -110,6 +110,11 @@ pub struct BuildOptions {
     /// when [`Self::webview_host`]. Filled in `build_project_with_options` once
     /// the manifest is parsed; `None` selects the built-in fallback window.
     pub webview_window: Option<ipe_backend_rust::WebViewWindow>,
+    /// The output area the emitted crate is written to, when the build writes
+    /// into a CLI output root. The emit claims it through the root's proof, so
+    /// a level swapped after the path was computed cannot redirect the write.
+    /// `None` claims the `out_dir` path itself.
+    pub out_area: Option<crate::output_dir::AreaClaim>,
 }
 
 /// Select the emit model from the environment.
@@ -122,7 +127,7 @@ pub struct BuildOptions {
 /// env-derived default.
 #[must_use]
 pub fn runtime_dep_from_env() -> bool {
-    !std::env::var("IPE_RUNTIME_VENDORED").is_ok_and(|v| v == "1")
+    !ipe_env::var("IPE_RUNTIME_VENDORED").is_ok_and(|v| v == "1")
 }
 
 /// The emitted-crate package name for a no-manifest (single-file) build, read
@@ -141,7 +146,7 @@ pub fn runtime_dep_from_env() -> bool {
 /// default — this lever changes nothing for a normal build.
 #[must_use]
 pub fn single_file_cargo_name_from_env() -> String {
-    std::env::var("IPE_EMIT_PACKAGE_NAME")
+    ipe_env::var("IPE_EMIT_PACKAGE_NAME")
         .ok()
         .map(|name| ipe_backend_rust::sanitize_cargo_name(&name))
         .unwrap_or_default()
@@ -177,8 +182,8 @@ fn canonical_project_dir(manifest_path: &Path) -> PathBuf {
 #[must_use]
 pub fn hot_appearance_enabled() -> bool {
     hot_appearance_from_env(
-        std::env::var("IPE_WATCH_NO_HOT_APPEARANCE").ok().as_deref(),
-        std::env::var("IPE_WATCH_HOT_APPEARANCE").ok().as_deref(),
+        ipe_env::var("IPE_WATCH_NO_HOT_APPEARANCE").ok().as_deref(),
+        ipe_env::var("IPE_WATCH_HOT_APPEARANCE").ok().as_deref(),
     )
 }
 
@@ -203,7 +208,7 @@ pub fn hot_appearance_from_env(no_var: Option<&str>, hot_var: Option<&str>) -> b
 /// error whenever the banner is on, even with appearance hot-swap off.
 #[must_use]
 pub fn watch_banner_enabled() -> bool {
-    std::env::var("IPE_WEB_BANNER").map_or(true, |v| {
+    ipe_env::var("IPE_WEB_BANNER").map_or(true, |v| {
         let v = v.trim().to_ascii_lowercase();
         !(v == "off" || v == "0" || v == "false")
     })
@@ -223,8 +228,8 @@ pub fn watch_banner_enabled() -> bool {
 #[must_use]
 pub fn bluegreen_enabled() -> bool {
     bluegreen_from_env_values(
-        std::env::var("IPE_WATCH_NO_BLUEGREEN").ok().as_deref(),
-        std::env::var("IPE_WATCH_BLUEGREEN").ok().as_deref(),
+        ipe_env::var("IPE_WATCH_NO_BLUEGREEN").ok().as_deref(),
+        ipe_env::var("IPE_WATCH_BLUEGREEN").ok().as_deref(),
     )
 }
 
@@ -774,6 +779,7 @@ pub fn compile_modules_observed(
             write_emitted_project(
                 &emitted,
                 out_dir,
+                options.out_area.as_ref(),
                 runtime_dir,
                 options.static_plan.as_ref(),
                 options.tree_shake_vendored,
@@ -840,6 +846,7 @@ pub fn compile_modules_observed(
                 let written = write_emitted_project(
                     &emitted,
                     out_dir,
+                    options.out_area.as_ref(),
                     runtime_dir,
                     options.static_plan.as_ref(),
                     options.tree_shake_vendored,
@@ -902,6 +909,7 @@ pub fn compile_modules_observed(
     let written = write_emitted_project(
         &emitted,
         out_dir,
+        options.out_area.as_ref(),
         runtime_dir,
         options.static_plan.as_ref(),
         options.tree_shake_vendored,
@@ -1832,15 +1840,19 @@ pub fn rust_raw_str_literal(s: &str) -> String {
 /// never leak from an earlier static build into later ones.
 ///
 /// Returns the claimed `out_dir`, the only source of a writable in-output
-/// build-cache root.
+/// build-cache root. With `out_area`, `out_dir` is claimed as that area of its
+/// output root, the root's disjointness from the project proven again.
 ///
 /// # Errors
 /// [`CliError::Io`] on any filesystem failure; [`CliError::StaticRefusal`]
 /// for a webview shape under a static plan; [`CliError::Pipeline`] on a
-/// backend-invariant breach (manifest anchor drift).
+/// backend-invariant breach (manifest anchor drift);
+/// [`CliError::OutputRefused`] when `out_dir` cannot be claimed or is not the
+/// directory `out_area` names.
 pub fn write_emitted_project(
     emitted: &ipe_backend::EmittedProject,
     out_dir: &Path,
+    out_area: Option<&crate::output_dir::AreaClaim>,
     runtime_dir: &Path,
     static_plan: Option<&ipe_backend_rust::static_build::StaticPlan>,
     tree_shake_vendored: bool,
@@ -1865,7 +1877,10 @@ pub fn write_emitted_project(
     }
     // The reconcile below prunes and overwrites, so it runs only in a directory
     // proven ipe-owned — a user tree passed as `out_dir` is refused untouched.
-    let crate_dir = crate::output_dir::OwnedDir::claim(out_dir)?;
+    let crate_dir = match out_area {
+        Some(area) => area.claim_at(out_dir)?,
+        None => OwnedDir::claim(out_dir)?,
+    };
     reconcile_emitted_project(&manifest, &crate_dir)?;
     if static_plan.is_none() {
         remove_stale_static_config(&crate_dir)?;
@@ -2360,7 +2375,7 @@ pub fn build_project_with_options(
 /// Returns [`CliError::RuntimeNotFound`] when no candidate directory exists, or
 /// [`CliError::Io`] if the current directory cannot be read.
 pub fn resolve_runtime() -> Result<PathBuf, CliError> {
-    if let Ok(dir) = std::env::var("IPE_RUNTIME_DIR") {
+    if let Ok(dir) = ipe_env::var("IPE_RUNTIME_DIR") {
         let path = PathBuf::from(dir);
         if path.is_dir() {
             return Ok(path);

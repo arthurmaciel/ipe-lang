@@ -1299,7 +1299,7 @@ fn push_span_block(
 
 fn color_enabled() -> bool {
     use std::io::IsTerminal;
-    std::env::var_os("NO_COLOR").is_none() && std::io::stderr().is_terminal()
+    ipe_env::var_os("NO_COLOR").is_none() && std::io::stderr().is_terminal()
 }
 
 fn paint(color: bool, seq: &str, text: &str) -> String {

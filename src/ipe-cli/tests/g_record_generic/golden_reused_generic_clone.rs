@@ -105,7 +105,7 @@ fn i189_ipec_accepts_and_clones_reused_generic() {
 /// clean).
 #[test]
 fn i189_cargo_builds_and_runs() {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
 

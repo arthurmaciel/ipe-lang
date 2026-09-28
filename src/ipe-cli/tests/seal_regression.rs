@@ -83,7 +83,7 @@ fn assert_accepted(name: &str, source: &str, expected_stdout: &str) {
         }
     }
 
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return; // emit-only fast pass
     }
     match e2e_support::build_and_run_rust(name, &out) {
@@ -165,7 +165,7 @@ fn assert_accepted_project(name: &str, files: &[(&str, &str)], expected_stdout: 
         }
     }
 
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
     match e2e_support::build_and_run_rust(name, &out) {

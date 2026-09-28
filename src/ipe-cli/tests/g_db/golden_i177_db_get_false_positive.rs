@@ -81,7 +81,7 @@ fn assert_ipec_accepts_without_ipe_row(fixture: &str) {
 /// cargo-0 ∧ run-0 for the emitted DB-less project — the only check that would
 /// have caught the original E0433. Gated on `IPE_E2E=1`.
 fn assert_cargo_builds_and_runs(fixture: &str, expected_stdout: &str) {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
 

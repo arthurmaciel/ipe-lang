@@ -81,7 +81,7 @@ fn i218_clone_relay_ipec_accepts() {
 /// cargo-0 ∧ run-correct: gated on `IPE_E2E=1` — THE SEAL.
 #[test]
 fn i218_clone_relay_cargo_builds_and_runs() {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
 

@@ -93,7 +93,7 @@ fn i186_ipec_accepts_and_bounds_fn_display() {
 /// have caught the original SEAL violation (E0277, `ipe build` clean).
 #[test]
 fn i186_cargo_builds_and_runs() {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
 

@@ -115,7 +115,7 @@ fn assert_ipec_unifies_to_arc(fixture: &str) {
 /// E0308/E0507) and renders the form. Gated on `IPE_E2E=1` — the only check that
 /// would have caught the original SEAL violation (E0308, `ipe build` clean).
 fn assert_cargo_builds_and_runs(fixture: &str) {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
 

@@ -129,7 +129,7 @@ pub fn build_profile(
 /// build jail's strict `== "1"`, never a loose `is_some`).
 #[must_use]
 pub fn override_requested() -> bool {
-    std::env::var_os(OVERRIDE_ENV).is_some_and(|v| v == "1")
+    ipe_env::var_os(OVERRIDE_ENV).is_some_and(|v| v == "1")
 }
 
 /// Decide what to do when the jail cannot be established for a native-bearing
@@ -339,10 +339,12 @@ pub fn capfloor_static_source(profile: &SandboxProfile) -> String {
 ///
 /// # Errors
 ///
-/// [`CliError::OutputRefused`] when `out_dir` is not ipe-owned or holds a
-/// symlink on the way; [`CliError::Io`] on any filesystem failure.
-pub fn write_build_artifacts(out_dir: &Path, profile: &SandboxProfile) -> Result<(), CliError> {
-    let crate_dir = crate::output_dir::OwnedDir::claim(out_dir)?;
+/// [`CliError::OutputRefused`] when `crate_dir` was replaced since its claim or
+/// holds a symlink on the way; [`CliError::Io`] on any filesystem failure.
+pub fn write_build_artifacts(
+    crate_dir: &crate::output_dir::OwnedDir,
+    profile: &SandboxProfile,
+) -> Result<(), CliError> {
     // 1. The ipe.profile mirror.
     crate_dir
         .path_to("ipe.profile")?

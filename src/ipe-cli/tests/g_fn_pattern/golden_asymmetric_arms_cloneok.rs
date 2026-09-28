@@ -149,7 +149,7 @@ fn i193_idempotent() {
 /// and prints the correct formatted strings.  Gated on `IPE_E2E=1`.
 #[test]
 fn i193_cargo_builds_and_runs() {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
 

@@ -56,7 +56,7 @@ fn stdlib_parser_composed_combinators_lower() {
 /// command or fail to run at all.
 #[test]
 fn stdlib_parser_composed_combinators_run() {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("stdlib_parser_composed_e2e");

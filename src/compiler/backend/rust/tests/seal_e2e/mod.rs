@@ -22,7 +22,7 @@ use ipe_diagnostics::{DResult, Diagnostic};
 /// bare dev environment without a runtime checkout does not break the test suite.
 #[allow(dead_code)]
 pub fn resolve_runtime() -> Option<PathBuf> {
-    if let Ok(dir) = std::env::var("IPE_RUNTIME_DIR") {
+    if let Ok(dir) = ipe_env::var("IPE_RUNTIME_DIR") {
         let p = PathBuf::from(dir);
         if p.is_dir() {
             return Some(p);

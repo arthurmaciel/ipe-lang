@@ -76,7 +76,7 @@ fn css_source_builds_and_injects_leaf_kernels() {
 /// no `</style>`, `<script>`, `javascript:`, `expression(`, or `alert` survives.
 #[test]
 fn css_e2e_neutralises_injection() {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("css_source_e2e");

@@ -187,7 +187,7 @@ fn bare_attribute_and_element_arity_fill() {
 /// arity-filled return.
 #[test]
 fn bare_html_view_cargo_builds() {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
     let Some(out) = emit_and_assert_bare_html_view("html_view_build") else {

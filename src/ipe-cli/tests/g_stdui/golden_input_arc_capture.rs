@@ -100,7 +100,7 @@ fn i191_ipec_accepts_and_hoists_capture_clone() {
 /// have caught the original SEAL violation (E0382, `ipe build` clean).
 #[test]
 fn i191_cargo_builds_and_runs() {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
 

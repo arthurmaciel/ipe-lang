@@ -61,7 +61,7 @@ fn color_project_builds_with_no_ui_import() {
 /// whole seam from `Ipe.Color` source to a running binary.
 #[test]
 fn color_e2e_runs_and_prints_hex_and_css() {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("color_e2e_run");

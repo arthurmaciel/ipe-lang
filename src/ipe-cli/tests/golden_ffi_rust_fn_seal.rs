@@ -364,7 +364,7 @@ fn a_rust_fn_on_an_uninstalled_crate_is_refused() {
 /// spelling, since both compile to the same forwarder + shim.
 #[test]
 fn rust_fn_emitted_crate_builds_and_runs() {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
     let Ok(runtime) = ipe::resolve_runtime() else {
@@ -417,7 +417,7 @@ pub fn boom(n: i64) -> i64 {
     );
     fs::write(&manifest_path, patched).expect("patched Cargo.toml");
 
-    let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_owned());
+    let cargo = ipe_env::var("CARGO").unwrap_or_else(|_| "cargo".to_owned());
     let run = std::process::Command::new(cargo)
         .arg("run")
         .arg("--quiet")

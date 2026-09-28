@@ -200,6 +200,10 @@ pub struct WatchOptions {
     /// a pre-compiled dependency tree instead of cold-building it; the E2E watch
     /// suite uses it to forward the CI shard's warm shared target.
     pub target_dir: Option<PathBuf>,
+    /// The output area `out_dir` names, when it sits in a CLI output root.
+    /// Each rebuild claims it through the root's proof; `None` claims the
+    /// `out_dir` path itself.
+    pub out_area: Option<crate::output_dir::AreaClaim>,
 }
 
 impl WatchOptions {
@@ -219,6 +223,7 @@ impl WatchOptions {
             reset_state: false,
             debugger: false,
             target_dir: None,
+            out_area: None,
         }
     }
 }
@@ -335,7 +340,7 @@ impl RebuildTimings {
     /// of exactly `1` enables the breakdown, anything else (unset included)
     /// leaves it off.
     fn start(settle: Option<Duration>) -> Self {
-        let enabled = std::env::var("IPE_WATCH_TIMING").as_deref() == Ok("1");
+        let enabled = ipe_env::var("IPE_WATCH_TIMING").as_deref() == Ok("1");
         Self {
             enabled,
             cycle_start: enabled.then(Instant::now),
@@ -1532,6 +1537,7 @@ fn run_inner(
                         if let Err(e) = write_emitted_project(
                             &emitted,
                             &opts.out_dir,
+                            opts.out_area.as_ref(),
                             &opts.runtime_dir,
                             None,
                             false,
@@ -2038,7 +2044,7 @@ fn child_env(
         // setting anything.
         env.push(("IPE_WATCH_HOT_APPEARANCE".to_owned(), "1".to_owned()));
     }
-    if std::env::var("IPE_WEB_STORE").is_err() {
+    if ipe_env::var("IPE_WEB_STORE").is_err() {
         // `file`, not `sqlite`: a plain `Web.tea` reaches no DB kernel, so the
         // emitted crate carries no `db` feature and the sqlite store compiles
         // out (it would silently degrade to an in-memory store that does NOT
@@ -2061,7 +2067,7 @@ fn child_env(
     // the browser's fast-reconnect window past its default to cover it: the page
     // reconnects a fast-retry tick after the new server binds instead of waiting
     // out an exponential-backoff interval. The caller's own value wins.
-    if std::env::var("IPE_WEB_RETRY_FAST_WINDOW_MS").is_err() {
+    if ipe_env::var("IPE_WEB_RETRY_FAST_WINDOW_MS").is_err() {
         env.push(("IPE_WEB_RETRY_FAST_WINDOW_MS".to_owned(), "8000".to_owned()));
     }
     env
@@ -2819,7 +2825,7 @@ fn post_to_watch_status(port: u16, token: &str, body: &str) -> std::io::Result<(
 /// plain function (not `Result`) so call sites don't need to thread an
 /// unused error channel.
 fn warn_if_memory_store() {
-    if std::env::var("IPE_WEB_STORE").as_deref() == Ok("memory") {
+    if ipe_env::var("IPE_WEB_STORE").as_deref() == Ok("memory") {
         emit_watch_line(
             &crate::style::TerminalSafe::sanitize(
                 "[ipe watch] warning: IPE_WEB_STORE=memory is set — session state will NOT \
@@ -2962,7 +2968,7 @@ enum BuildAccel {
 fn watch_target_dir(out_dir: &Path, override_dir: Option<&Path>) -> PathBuf {
     override_dir.map_or_else(
         || {
-            std::env::var_os("CARGO_TARGET_DIR")
+            ipe_env::var_os("CARGO_TARGET_DIR")
                 .map_or_else(|| out_dir.join("target"), PathBuf::from)
         },
         Path::to_path_buf,
@@ -2996,7 +3002,7 @@ fn target_is_warm(out_dir: &Path, override_dir: Option<&Path>) -> bool {
 /// optional: absent, a cold build simply falls back to the warm/incremental path
 /// — correct, only slower for the first compile.
 fn find_sccache() -> Option<PathBuf> {
-    let path = std::env::var_os("PATH")?;
+    let path = ipe_env::var_os("PATH")?;
     std::env::split_paths(&path)
         .flat_map(|dir| [dir.join("sccache"), dir.join("sccache.exe")])
         .find(|p| p.is_file())
@@ -3050,7 +3056,7 @@ fn apply_build_accel_env(cmd: &mut Command, accel: &BuildAccel) {
 /// Read a boolean opt-out/opt-in env gate: true when the variable is set to any
 /// value other than empty or `0`.
 fn env_flag_on(name: &str) -> bool {
-    std::env::var(name).is_ok_and(|v| !v.is_empty() && v != "0")
+    ipe_env::var(name).is_ok_and(|v| !v.is_empty() && v != "0")
 }
 
 /// waiter thread that reports completion (or "killed — superseded")

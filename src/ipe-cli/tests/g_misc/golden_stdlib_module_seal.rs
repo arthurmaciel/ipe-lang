@@ -40,7 +40,7 @@ fn write_project(dir: &Path, main: &str) -> bool {
 }
 
 fn e2e_enabled() -> bool {
-    std::env::var("IPE_E2E").is_ok()
+    ipe_env::var("IPE_E2E").is_ok()
 }
 
 /// Compile `main` (a full `Main.ipe` program) through the ipe frontend into an

@@ -459,7 +459,7 @@ fn build_and_assert(
     slot: &str,
     expected: &str,
 ) -> DResult<()> {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return Ok(());
     }
     let Some(runtime) = seal_e2e::resolve_runtime() else {

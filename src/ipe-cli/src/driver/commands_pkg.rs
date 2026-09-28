@@ -1,10 +1,11 @@
 use super::{
-    CliError, attribute_canon_errors, attribute_post_link_error, build_emitted_project,
-    build_loose_file, build_project, build_source_graph, build_test_with_project_sources,
-    capabilities_including_served_widgets, cargo_target_directory, classify_entry_shape,
-    create_source_root, default_entry, discover_manifest, emit_machine_error, emitted_bin_filename,
-    force_cargo_terminal_ui, home_to_source_map, program_constructs_a_widget, resolve_runtime,
-    resolve_vendored_runtime_dir, run_build, runtime_context_for_message, typecheck_entry_via_graph,
+    BuildOptions, CliError, attribute_canon_errors, attribute_post_link_error,
+    build_emitted_project, build_loose_file, build_project_with_options, build_source_graph,
+    build_test_with_project_sources, capabilities_including_served_widgets, cargo_target_directory,
+    classify_entry_shape, create_source_root, default_entry, discover_manifest, emit_machine_error,
+    emitted_bin_filename, force_cargo_terminal_ui, home_to_source_map, program_constructs_a_widget,
+    resolve_runtime, resolve_vendored_runtime_dir, run_build, runtime_context_for_message,
+    typecheck_entry_via_graph,
 };
 use crate::output_dir::{OutputArea, OutputRoot, OwnedDir, ProjectPaths};
 use crate::publisher::{AttestedActor, BlessedPublisher};
@@ -373,9 +374,18 @@ impl<'a> BundleAssembler<'a> {
         // system webview as a dynamic dependency, so this is a plain
         // (non-static) native build.
         let output = OutputRoot::resolve(None, &ProjectPaths::from_manifest(manifest))?;
-        let build_dir = output.area_path(&[OutputArea::Rust])?;
+        let rust_area = output.area(&[OutputArea::Rust]);
+        let build_dir = rust_area.path()?;
         let runtime_dir = resolve_vendored_runtime_dir(None, false)?;
-        build_project(self.manifest_path, &build_dir, &runtime_dir)?;
+        build_project_with_options(
+            self.manifest_path,
+            &build_dir,
+            &runtime_dir,
+            BuildOptions {
+                out_area: Some(rust_area),
+                ..BuildOptions::from_env()
+            },
+        )?;
 
         let cargo_bin = toolchain::require_cargo(toolchain::ToolIntent::Build)?;
         let mut cargo = std::process::Command::new(cargo_bin.path());
@@ -458,7 +468,8 @@ impl<'a> BundleAssembler<'a> {
         build_wasm_for_mobile(self.manifest_path, output.path(), self.profile)?;
         // The SPA is read from the owned crate; a symlinked `www/` is refused so
         // the shell can never pick up files from outside the build output.
-        let www_dir = OwnedDir::claim(&output.area_path(self.profile.crate_areas())?)?
+        let www_dir = output
+            .claim_area(self.profile.crate_areas())?
             .path_to("www")?
             .path();
         let bundle = pack::mobile::SpaBundle::from_www_dir(&www_dir)

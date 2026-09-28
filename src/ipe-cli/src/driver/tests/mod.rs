@@ -555,7 +555,7 @@ fn generic_record_program_builds_and_prints_forty_two() {
          unwrap r =\n    r.value\n\n\
          main = Io.println (String.fromInt (unwrap (wrap 42)))\n";
 
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
 
@@ -3359,7 +3359,7 @@ fn emitting_into_a_user_directory_is_refused_untouched() {
         cargo_toml: "[package]\nname = \"ipe-app\"\n".to_owned(),
         uses_webview: false,
     };
-    let result = write_emitted_project(&emitted, &dir, &dir.join("no-runtime"), None, false);
+    let result = write_emitted_project(&emitted, &dir, None, &dir.join("no-runtime"), None, false);
     assert!(
         matches!(result, Err(CliError::OutputRefused(_))),
         "emitting into a user directory must be refused, got {result:?}"
@@ -3495,7 +3495,14 @@ fn emitting_into_a_marked_dir_with_planted_links_is_refused() {
     let dir_link = base.join("out-a");
     crate::output_dir::OwnedDir::claim(&dir_link).expect("claim");
     std::os::unix::fs::symlink(&victim, dir_link.join("src")).expect("dir link");
-    let result = write_emitted_project(&emitted, &dir_link, &base.join("no-runtime"), None, false);
+    let result = write_emitted_project(
+        &emitted,
+        &dir_link,
+        None,
+        &base.join("no-runtime"),
+        None,
+        false,
+    );
     assert!(
         matches!(result, Err(CliError::OutputRefused(_))),
         "a symlinked src/ must be refused, got {result:?}"
@@ -3506,7 +3513,14 @@ fn emitting_into_a_marked_dir_with_planted_links_is_refused() {
     crate::output_dir::OwnedDir::claim(&file_link).expect("claim");
     std::os::unix::fs::symlink(victim.join("precious.ipe"), file_link.join("Cargo.toml"))
         .expect("file link");
-    let result = write_emitted_project(&emitted, &file_link, &base.join("no-runtime"), None, false);
+    let result = write_emitted_project(
+        &emitted,
+        &file_link,
+        None,
+        &base.join("no-runtime"),
+        None,
+        false,
+    );
     assert!(
         matches!(result, Err(CliError::OutputRefused(_))),
         "a symlinked Cargo.toml must be refused, got {result:?}"

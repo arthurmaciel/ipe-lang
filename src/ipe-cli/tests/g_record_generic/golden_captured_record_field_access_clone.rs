@@ -90,7 +90,7 @@ fn captured_record_field_access_is_cloned_not_moved() {
 /// violation (E0507, `ipe build` clean).
 #[test]
 fn captured_record_cargo_builds_and_runs() {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
 

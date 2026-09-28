@@ -651,7 +651,7 @@ fn inspector_binary() -> Result<PathBuf, CliError> {
             return Ok(sibling);
         }
     }
-    if let Some(paths) = std::env::var_os("PATH") {
+    if let Some(paths) = ipe_env::var_os("PATH") {
         for dir in std::env::split_paths(&paths) {
             let candidate = dir.join("ipe-ffi-inspector");
             if candidate.is_file() {
@@ -678,11 +678,31 @@ fn make_scratch_dir(krate: &str) -> Result<PathBuf, CliError> {
         .map_err(|e| CliError::Usage(text::msg::ffi_add_scratch_dir(&e)))
 }
 
-/// Read-only jail binds for the toolchain, deliberately NARROW: never the
-/// `~/.cargo` parent (which carries `credentials.toml`, the crates.io API
-/// token). Only `~/.cargo/bin` (the proxy binaries) and `~/.rustup` are
-/// exposed. Returns `(toolchain_ro_binds, path_prepend, rustup_home)`.
-fn toolchain_binds(inspector: &Path) -> (Vec<PathBuf>, Vec<PathBuf>, Option<PathBuf>) {
+/// The toolchain's jail binds: `(toolchain_ro_binds, path_prepend, rustup_home)`.
+type ToolchainBinds = (Vec<PathBuf>, Vec<PathBuf>, Option<PathBuf>);
+
+/// Read-only jail binds for the toolchain, deliberately NARROW.
+///
+/// Never the cargo home itself (which carries `credentials.toml`, the
+/// crates.io API token): only `$CARGO_HOME/bin` (the proxy binaries) and the
+/// rustup home are exposed. Both homes resolve exactly as the tools resolve
+/// them (`CARGO_HOME`/`RUSTUP_HOME`, else under the user's home).
+///
+/// # Errors
+/// [`CliError::EnvDirNotAbsolute`] when `CARGO_HOME` or `RUSTUP_HOME` is set
+/// to a relative path.
+fn toolchain_binds(inspector: &Path) -> Result<ToolchainBinds, CliError> {
+    let cargo_home = crate::env_dir::tool_home("CARGO_HOME", ".cargo")?;
+    let rustup_home = crate::env_dir::tool_home("RUSTUP_HOME", ".rustup")?;
+    Ok(toolchain_binds_from(inspector, cargo_home, rustup_home))
+}
+
+/// The toolchain binds over already-resolved tool homes.
+fn toolchain_binds_from(
+    inspector: &Path,
+    cargo_home: Option<PathBuf>,
+    rustup_home: Option<PathBuf>,
+) -> ToolchainBinds {
     let mut toolchain_ro_binds = Vec::new();
     // The inspector binary may live under a masked mount ($HOME target dirs) —
     // re-bind its directory read-only.
@@ -690,20 +710,17 @@ fn toolchain_binds(inspector: &Path) -> (Vec<PathBuf>, Vec<PathBuf>, Option<Path
         toolchain_ro_binds.push(dir.to_path_buf());
     }
     let mut path_prepend = Vec::new();
-    let mut rustup_home = None;
-    if let Some(home) = crate::env_dir::home() {
-        let cargo_bin = home.join(".cargo/bin");
-        if cargo_bin.is_dir() {
-            path_prepend.push(cargo_bin.clone());
-            // Bind ONLY the bin dir — NEVER the ~/.cargo parent, so
-            // credentials.toml stays outside the jail.
-            toolchain_ro_binds.push(cargo_bin);
-        }
-        let rustup = home.join(".rustup");
-        if rustup.is_dir() {
-            toolchain_ro_binds.push(rustup.clone());
-            rustup_home = Some(rustup);
-        }
+    if let Some(cargo_bin) = cargo_home.map(|home| home.join("bin"))
+        && cargo_bin.is_dir()
+    {
+        path_prepend.push(cargo_bin.clone());
+        // Bind ONLY the bin dir — NEVER the cargo home itself, so
+        // credentials.toml stays outside the jail.
+        toolchain_ro_binds.push(cargo_bin);
+    }
+    let rustup_home = rustup_home.filter(|rustup| rustup.is_dir());
+    if let Some(rustup) = &rustup_home {
+        toolchain_ro_binds.push(rustup.clone());
     }
     (toolchain_ro_binds, path_prepend, rustup_home)
 }
@@ -715,7 +732,7 @@ fn toolchain_binds(inspector: &Path) -> (Vec<PathBuf>, Vec<PathBuf>, Option<Path
 fn jail_limits() -> ipe_sandbox::ResourceLimits {
     let mut limits = ipe_sandbox::ResourceLimits::default();
     let with_override = |var: &str, slot: &mut u64, scale: u64| {
-        if let Ok(raw) = std::env::var(var) {
+        if let Ok(raw) = ipe_env::var(var) {
             if let Ok(v) = raw.parse::<u64>().map(|v| v.saturating_mul(scale))
                 && v > 0
             {
@@ -978,7 +995,7 @@ fn run_inspector_job(job: &InspectorJob, allow_build_scripts: bool) -> Result<St
     }
 
     let scoped_tmp = make_scratch_dir(scratch_hint)?;
-    let binds = toolchain_binds(&inspector);
+    let binds = toolchain_binds(&inspector)?;
     let result = match job {
         // A single crate — or a single local wrapper crate — is one
         // populate-free bind over the historical two phases (fetch,
@@ -3996,7 +4013,7 @@ version = \"1\"
         // HOME must be set for the sanctioned path; the test crate always has
         // one. The scratch dir lives under ~/.cache/ipe/ffi-scratch/, never
         // /tmp.
-        let Some(home) = std::env::var_os("HOME").map(PathBuf::from) else {
+        let Some(home) = crate::env_dir::home() else {
             return;
         };
         let scratch = make_scratch_dir("semver").expect("first create succeeds");
@@ -4018,8 +4035,24 @@ version = \"1\"
 
     #[test]
     fn toolchain_binds_never_include_the_cargo_parent_or_credentials() {
+        let tmp = std::env::temp_dir().join(format!("ipe-t1-toolbinds-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        let cargo_home = tmp.join(".cargo");
+        let rustup_home = tmp.join(".rustup");
+        std::fs::create_dir_all(cargo_home.join("bin")).expect("mk cargo bin");
+        std::fs::create_dir_all(&rustup_home).expect("mk rustup home");
+        std::fs::write(cargo_home.join("credentials.toml"), "").expect("credentials");
         let inspector = PathBuf::from("/opt/ipe/bin/ipe-ffi-inspector");
-        let (binds, _path, _rustup) = toolchain_binds(&inspector);
+        let (binds, path, rustup) = toolchain_binds_from(
+            &inspector,
+            Some(cargo_home.clone()),
+            Some(rustup_home.clone()),
+        );
+        assert!(binds.contains(&cargo_home.join("bin")), "{binds:?}");
+        assert!(!binds.contains(&cargo_home), "{binds:?}");
+        assert_eq!(path, vec![cargo_home.join("bin")]);
+        assert_eq!(rustup, Some(rustup_home));
+        let _ = std::fs::remove_dir_all(&tmp);
         for b in &binds {
             let s = b.to_string_lossy();
             assert!(

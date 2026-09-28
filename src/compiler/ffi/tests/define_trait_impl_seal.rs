@@ -173,10 +173,10 @@ fn a_marked_borrowed_return_method_over_drops() {
 /// hand-written trait impl.
 #[test]
 fn the_marker_surfaces_the_type_and_the_emitted_crate_builds_and_runs() {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
-    let Ok(cargo) = std::env::var("CARGO") else {
+    let Ok(cargo) = ipe_env::var("CARGO") else {
         return; // no cargo on PATH in this environment — skip like the goldens
     };
 
@@ -367,7 +367,7 @@ fn inspect_marked_wrapper(
 /// `IPE_FFI_INSPECTOR` override, else beside this test binary in the target
 /// `deps` dir's parent (`.../release/ipe-ffi-inspector`).
 fn locate_inspector() -> Option<std::path::PathBuf> {
-    if let Ok(p) = std::env::var("IPE_FFI_INSPECTOR") {
+    if let Ok(p) = ipe_env::var("IPE_FFI_INSPECTOR") {
         let p = std::path::PathBuf::from(p);
         if p.is_file() {
             return Some(p);

@@ -65,7 +65,7 @@ fn assert_ipe_derive_succeeds(name: &str) {
 /// cargo-0 ∧ run-0 for the emitted project, and stdout matches the oracle. Gated
 /// on `IPE_E2E=1`.
 fn assert_runs_and_matches_oracle(name: &str) {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
 

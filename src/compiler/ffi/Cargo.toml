@@ -36,5 +36,8 @@ toml = "0.8"
 [target.'cfg(unix)'.dependencies]
 rustix = { version = "0.38", features = ["fs"] }
 
+[dev-dependencies]
+ipe_env = { path = "../env" }
+
 [lints]
 workspace = true

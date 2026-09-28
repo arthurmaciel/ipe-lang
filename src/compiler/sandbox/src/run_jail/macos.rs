@@ -108,7 +108,7 @@ pub fn exec_in_run_jail(
     // profile's allowlisted names, mirroring the Linux jail's `--clearenv`. The
     // scrub is the SAME `macos_scrubbed_env` the e2e proves, so what confines the
     // env at run time and what the test asserts cannot drift.
-    let host_env = |k: &str| std::env::var_os(k);
+    let host_env = crate::host_env::granted;
     cmd.env_clear();
     for (name, value) in crate::build_jail::macos_scrubbed_env(profile, scoped_tmp, &host_env) {
         cmd.env(name, value);

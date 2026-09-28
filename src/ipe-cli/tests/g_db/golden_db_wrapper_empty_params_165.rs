@@ -146,7 +146,7 @@ fn db_wrapper_empty_params_165_ipec_accepts_and_emits_sql_param_bound() {
 /// `examples/17-ipemon`, `ipe build` itself was clean).
 #[test]
 fn db_wrapper_empty_params_165_cargo_builds_and_runs() {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
 
