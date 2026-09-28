@@ -15,6 +15,9 @@ serde = { version = "1", features = ["derive"] }
 # shelling out or reading a non-authoritative file.
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
+# The effective uid/gid the private-scratch ownership checks compare against,
+# obtained without `unsafe`.
+rustix = { version = "0.38", features = ["fs", "process"] }
 
 # The Windows run-jail arm builds its confinement primitives directly through the
 # Win32 kernel API (Job Object, AppContainer lowbox token, capability SIDs, ACLs,
