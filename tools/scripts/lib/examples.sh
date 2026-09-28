@@ -210,8 +210,22 @@ _shape_match() { # $1=src dir  $2=regex
   # error.
   local -a src_files=()
   enumerate_files src_files '*.ipe' "$1"
+  # perl opens each file itself and dies on an open or read failure: its
+  # implicit `<>` loop only warns on an unreadable file and still exits 0,
+  # which would hand the matcher a partial text.
   local text rc=0
-  text="$(perl -0777 -pe 's/\{-.*?-\}//gs; s/--[^\n]*//g' -- "${src_files[@]}")" || rc=$?
+  # shellcheck disable=SC2016  # perl source, expanded by perl, not the shell
+  text="$(perl -e '
+    for my $f (@ARGV) {
+      open my $fh, "<", $f or die "_shape_match: cannot open $f: $!\n";
+      local $/;
+      my $src = <$fh>;
+      defined $src or die "_shape_match: cannot read $f: $!\n";
+      close $fh or die "_shape_match: cannot close $f: $!\n";
+      $src =~ s/\{-.*?-\}//gs;
+      $src =~ s/--[^\n]*//g;
+      print $src;
+    }' -- "${src_files[@]}")" || rc=$?
   if [ "$rc" -ne 0 ]; then
     echo "_shape_match: perl comment strip over $1 exited $rc" >&2
     exit 2

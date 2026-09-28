@@ -43,7 +43,17 @@ for d in /usr/local/bin /usr/bin /bin; do
 done
 
 fixture_dir="$(mktemp -d)"
-trap 'rm -rf "$rg_free_path" "$fixture_dir"' EXIT
+trap 'chmod -R u+rwX "$fixture_dir" 2>/dev/null; rm -rf "$rg_free_path" "$fixture_dir"' EXIT
+
+# The helpers run only external executables, so the cases name them by path.
+ext_true="$(type -P true)"
+ext_false="$(type -P false)"
+ext_printf="$(type -P printf)"
+exit2="$fixture_dir/exit2"
+printf '#!/usr/bin/env bash\nexit 2\n' > "$exit2"
+partial128="$fixture_dir/partial128"
+printf '#!/usr/bin/env bash\nprintf "a\\0"\nexit 128\n' > "$partial128"
+chmod +x "$exit2" "$partial128"
 
 # ── require_tool: a missing tool exits 2, a present one exits 0 ─────────────
 rc=0
@@ -66,17 +76,17 @@ check "rg_status 127 (command not found) -> error" "$got" error
 
 # ── match_or_fail: mirrors rg_status through a real command's exit code ─────
 rc=0
-bash -c "source '$lib'; match_or_fail t -- false" >/dev/null 2>&1
+bash -c "source '$lib'; match_or_fail t -- '$ext_false'" >/dev/null 2>&1
 rc=$?
 check "match_or_fail: exit 1 (no match) returns 1, doesn't hard-fail" "$rc" 1
 
 rc=0
-bash -c "source '$lib'; match_or_fail t -- true" >/dev/null 2>&1
+bash -c "source '$lib'; match_or_fail t -- '$ext_true'" >/dev/null 2>&1
 rc=$?
 check "match_or_fail: exit 0 (match) returns 0" "$rc" 0
 
 rc=0
-bash -c "source '$lib'; match_or_fail t -- bash -c 'exit 2'" >/dev/null 2>&1
+bash -c "source '$lib'; match_or_fail t -- '$exit2'" >/dev/null 2>&1
 rc=$?
 check "match_or_fail: exit 2 (rg error) hard-exits 2" "$rc" 2
 
@@ -147,38 +157,30 @@ bash -c "source '$lib'; require_scan_root '$goldens_fixture' '*.txt'" >/dev/null
 check "require_scan_root exits 0 when the dir has a matching file" "$rc" 0
 
 # ── match_capture: mirrors match_or_fail, plus captures the matched text ───
-got="$(bash -c "source '$lib'; match_capture v t -- printf 'a\nb\n'; printf '%s' \"\$v\"")"
+got="$(bash -c "source '$lib'; match_capture v t -- '$ext_printf' 'a\nb\n'; printf '%s' \"\$v\"")"
 check "match_capture: match captures the command's stdout" "$got" "$(printf 'a\nb')"
 
 rc=0
-bash -c "source '$lib'; match_capture v t -- false" >/dev/null 2>&1
+bash -c "source '$lib'; match_capture v t -- '$ext_false'" >/dev/null 2>&1
 rc=$?
 check "match_capture: exit 1 (no match) returns 1, doesn't hard-fail" "$rc" 1
 
 rc=0
-bash -c "source '$lib'; match_capture v t -- true" >/dev/null 2>&1
+bash -c "source '$lib'; match_capture v t -- '$ext_true'" >/dev/null 2>&1
 rc=$?
 check "match_capture: exit 0 (match) returns 0" "$rc" 0
 
 rc=0
-bash -c "source '$lib'; match_capture v t -- bash -c 'exit 2'" >/dev/null 2>&1
+bash -c "source '$lib'; match_capture v t -- '$exit2'" >/dev/null 2>&1
 rc=$?
 check "match_capture: exit 2 hard-exits 2" "$rc" 2
 
-# ── direct-command rule: a shell function (which can hide a pipeline's failing
-# first stage behind a later stage's "no match") is refused outright ────────
-for helper in "match_or_fail t" "match_capture v t" "capture_nul v t"; do
-    rc=0
-    bash -c "source '$lib'; wrapped() { false | true; }; $helper -- wrapped" >/dev/null 2>&1 || rc=$?
-    check "${helper%% *}: refuses a shell-function command (exit 2)" "$rc" 2
-done
-
 # ── capture_nul / enumerate_files: producer failure or empty set exits 2 ────
 rc=0
-bash -c "source '$lib'; capture_nul v t -- bash -c 'printf \"a\\0\"; exit 128'" >/dev/null 2>&1 || rc=$?
+bash -c "source '$lib'; capture_nul v t -- '$partial128'" >/dev/null 2>&1 || rc=$?
 check "capture_nul: a producer exiting 128 after partial output hard-exits 2" "$rc" 2
 
-got="$(bash -c "source '$lib'; capture_nul v t -- printf 'a b\\0c\\0'; printf '%s|' \"\${v[@]}\"")"
+got="$(bash -c "source '$lib'; capture_nul v t -- '$ext_printf' 'a b\\0c\\0'; printf '%s|' \"\${v[@]}\"")"
 check "capture_nul: loads NUL-delimited records intact" "$got" "a b|c|"
 
 mkdir -p "$fixture_dir/enum/sub" "$fixture_dir/enum-empty"
@@ -194,6 +196,85 @@ check "enumerate_files: an empty set exits 2" "$rc" 2
 rc=0
 bash -c "source '$lib'; enumerate_files v '*.ipe' '$fixture_dir/enum' '$fixture_dir/nope'" >/dev/null 2>&1 || rc=$?
 check "enumerate_files: any missing root exits 2" "$rc" 2
+
+# ── output-name collisions: a caller name equal to a former helper local
+# still receives the value (every helper local is `__`-prefixed) ────────────
+for name in rc d desc var tmp out; do
+    got="$(bash -c "source '$lib'; capture_nul $name d -- '$ext_printf' 'a\\0'; printf '%s' \"\${#${name}[@]}\"" 2>&1)"
+    check "capture_nul: output named '$name' receives the set" "$got" 1
+    got="$(bash -c "source '$lib'; match_capture $name d -- '$ext_printf' hit; printf '%s' \"\$$name\"" 2>&1)"
+    check "match_capture: output named '$name' receives the text" "$got" hit
+done
+for name in glob root found sorted tmp out var r; do
+    got="$(bash -c "source '$lib'; enumerate_files $name '*.ipe' '$fixture_dir/enum'; printf '%s' \"\${#${name}[@]}\"" 2>&1)"
+    check "enumerate_files: output named '$name' receives the set" "$got" 2
+done
+
+# ── output-name refusals: the reserved `__` prefix and a non-identifier are
+# refused (exit 2) by every helper that writes a caller variable ───────────
+reserved_names="__cn_var __cn_desc __cn_tmp __cn_rc __mc_var __mc_desc __mc_out __mc_rc
+    __ef_var __ef_glob __ef_root __ef_found __ef_tmp __ef_sorted __ef_out __rsr_files
+    __dc_kind __mf_desc __mf_rc __x"
+for name in $reserved_names; do
+    for call in "capture_nul $name t -- '$ext_printf' 'a\\0'" \
+                "match_capture $name t -- '$ext_printf' hit" \
+                "enumerate_files $name '*.ipe' '$fixture_dir/enum'"; do
+        rc=0
+        out="$(bash -c "source '$lib'; $call" 2>&1)" || rc=$?
+        check "${call%% *}: reserved output '$name' exits 2" "$rc" 2
+        check "${call%% *}: reserved output '$name' is the reported cause" \
+            "$(cause_of "$out" "output variable '$name' uses the reserved '__' prefix")" named
+    done
+done
+for name in "''" 1x a-b 'a[0]' "'x y'"; do
+    for helper in "capture_nul $name t -- '$ext_printf' 'a\\0'" \
+                  "match_capture $name t -- '$ext_printf' hit" \
+                  "enumerate_files $name '*.ipe' '$fixture_dir/enum'"; do
+        rc=0
+        out="$(bash -c "source '$lib'; $helper" 2>&1)" || rc=$?
+        check "${helper%% *}: invalid output $name exits 2" "$rc" 2
+        check "${helper%% *}: invalid output $name is the reported cause" \
+            "$(cause_of "$out" "is not a valid shell identifier")" named
+    done
+done
+
+# ── direct-command refusals: builtins (eval, source, ., command, builtin,
+# exec, false), keywords, aliases, shells, and launchers can each run a
+# masked pipeline, so every helper refuses them (exit 2) ──────────────────
+for helper in "match_or_fail t" "match_capture v t" "capture_nul v t"; do
+    for cmd in "eval 'false | rg foo'" "source /dev/null" ". /dev/null" \
+               "command rg foo" "builtin echo" "exec rg foo" "false"; do
+        rc=0
+        out="$(bash -c "source '$lib'; $helper -- $cmd" 2>&1)" || rc=$?
+        check "${helper%% *}: refuses builtin '${cmd%% *}' (exit 2)" "$rc" 2
+        check "${helper%% *}: builtin '${cmd%% *}' is the reported cause" \
+            "$(cause_of "$out" "'${cmd%% *}' is builtin")" named
+    done
+    rc=0
+    out="$(bash -c "source '$lib'; $helper -- time rg foo" 2>&1)" || rc=$?
+    check "${helper%% *}: refuses a keyword (exit 2)" "$rc" 2
+    check "${helper%% *}: the keyword is the reported cause" \
+        "$(cause_of "$out" "'time' is keyword")" named
+    rc=0
+    out="$(bash -c "source '$lib'; shopt -s expand_aliases; alias al='false | true'
+$helper -- al" 2>&1)" || rc=$?
+    check "${helper%% *}: refuses an alias (exit 2)" "$rc" 2
+    check "${helper%% *}: the alias is the reported cause" \
+        "$(cause_of "$out" "'al' is alias")" named
+    rc=0
+    out="$(bash -c "source '$lib'; wrapped() { false | true; }; $helper -- wrapped" 2>&1)" || rc=$?
+    check "${helper%% *}: refuses a shell function (exit 2)" "$rc" 2
+    check "${helper%% *}: the function is the reported cause" \
+        "$(cause_of "$out" "'wrapped' is function")" named
+    for cmd in "bash -c 'false | rg foo'" "sh -c 'false | rg foo'" \
+               "$(type -P bash) -c 'false | rg foo'" "env rg foo" "xargs rg"; do
+        rc=0
+        out="$(bash -c "source '$lib'; $helper -- $cmd" 2>&1)" || rc=$?
+        check "${helper%% *}: refuses launcher '${cmd%% *}' (exit 2)" "$rc" 2
+        check "${helper%% *}: launcher '${cmd%% *}' is the reported cause" \
+            "$(cause_of "$out" "runs another command line")" named
+    done
+done
 
 # ── stub producers: a PATH dir whose tool exits with a chosen error code ─────
 real_git="$(command -v git)"
@@ -262,6 +343,21 @@ check "needs_ffi_install: rg exiting 2 hard-exits 2, never reads as no-FFI" "$rc
 check "needs_ffi_install: the rg error is the reported cause" \
     "$(cause_of "$out" "command exited 2")" named
 
+# ── examples.sh: an unreadable source file fails the shape scan closed ─────
+shape_ex="$fixture_dir/shape-example"
+mkdir -p "$shape_ex/src"
+printf 'module Main exposing (main)\nimport Ipe.Tea.Tui\n' > "$shape_ex/src/Main.ipe"
+got="$(bash -c "source '$ex_lib'; example_shape '$shape_ex'" 2>&1)"
+check "example_shape: a readable Tui source classifies as tui" "$got" tui
+printf 'module Hidden exposing (x)\n' > "$shape_ex/src/Hidden.ipe"
+chmod 000 "$shape_ex/src/Hidden.ipe"
+rc=0
+out="$(bash -c "source '$ex_lib'; example_shape '$shape_ex'" 2>&1)" || rc=$?
+check "example_shape: an unreadable source file exits 2, never a partial scan" "$rc" 2
+check "example_shape: the unreadable file is the reported cause" \
+    "$(cause_of "$out" "cannot open $shape_ex/src/Hidden.ipe")" named
+chmod 644 "$shape_ex/src/Hidden.ipe"
+
 # ── first-party floor: producer error and empty set both exit 2 ──────────────
 floor="$repo_root/tools/scripts/first-party-check-floor.sh"
 floor_repo="$fixture_dir/floor-repo"
@@ -299,7 +395,8 @@ check "parity-check: the empty root is the reported cause" \
     "$(cause_of "$out" "nothing to scan")" named
 
 # ── structural: no fail-closed helper call site in the tree passes a shell
-# function as its command (the runtime refusal's static twin) ─────────────
+# function, an eval/source/exec-style builtin, or a `sh -c` line as its
+# command (the runtime refusal's static twin) ─────────────────────────────
 sh_files=()
 (cd "$repo_root" && git ls-files -z -- '*.sh' > "$fixture_dir/sh-files") \
     || { echo "FAIL: git ls-files over *.sh failed" >&2; fail=1; }
@@ -315,18 +412,22 @@ scan_pl='
         for my $line (split /\n/, $src) {
             next if $line =~ /^\s*#/;
             $defined{$1} = 1 if $line =~ /^\s*(?:function\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*\(\)\s*\{/;
-            while ($line =~ /\b(match_or_fail|match_capture|capture_nul)\b[^#]*?\s--\s+([^\s;|&)]+)/g) {
-                push @calls, [$f, $1, $2];
+            while ($line =~ /\b(match_or_fail|match_capture|capture_nul)\b[^#]*?\s--\s+([^\s;|&)]+)(?:\s+(\S+))?/g) {
+                push @calls, [$f, $1, $2, $3 // ""];
             }
         }
     }
+    my %opaque = map { $_ => 1 } qw(eval source . command builtin exec env xargs);
     for my $c (@calls) {
-        print "$c->[0]: $c->[1] -- $c->[2]\n" if $defined{$c->[2]};
+        my ($f, $h, $cmd, $next) = @$c;
+        (my $base = $cmd) =~ s{.*/}{};
+        my $shell_c = $base =~ /^(?:ba|da|z|k|mk)?sh$/ && $next =~ /^-[A-Za-z]*c/;
+        print "$f: $h -- $cmd\n" if $defined{$cmd} || $opaque{$cmd} || $shell_c;
     }
 '
 offenders="$(cd "$repo_root" && perl -e "$scan_pl" "${sh_files[@]}")" \
     || { echo "FAIL: structural call-site scan errored" >&2; fail=1; }
-check "no match_or_fail/match_capture/capture_nul call site passes a shell function" "$offenders" ""
+check "no match_or_fail/match_capture/capture_nul call site passes an opaque command" "$offenders" ""
 # The scan must fire on the shape it exists to forbid.
 bad_sh="$fixture_dir/bad-gate.sh"
 cat > "$bad_sh" <<'EOF'
@@ -337,6 +438,17 @@ EOF
 got="$(perl -e "$scan_pl" "$bad_sh")" || got="scan errored"
 check "structural scan flags a function-wrapped pipeline call site" \
     "$(cause_of "$got" "match_capture -- _git_scan")" named
+for shape in "eval 'false | rg foo'" "bash -c 'false | rg foo'" "sh -c 'false | rg foo'" \
+             "/bin/bash -ec 'false | rg foo'" "source ./gate.sh" ". ./gate.sh" \
+             "command rg foo" "builtin echo" "exec rg foo"; do
+    printf 'match_or_fail "t" -- %s\n' "$shape" > "$bad_sh"
+    got="$(perl -e "$scan_pl" "$bad_sh")" || got="scan errored"
+    check "structural scan flags a '${shape%% *}' call site" \
+        "$(cause_of "$got" "match_or_fail -- ${shape%% *}")" named
+done
+printf 'match_or_fail "t" -- rg -q foo bar\n' > "$bad_sh"
+got="$(perl -e "$scan_pl" "$bad_sh")" || got="scan errored"
+check "structural scan passes a direct rg call site" "$got" ""
 
 if [ "$fail" -ne 0 ]; then
     echo "test-require-tool: FAILED" >&2
