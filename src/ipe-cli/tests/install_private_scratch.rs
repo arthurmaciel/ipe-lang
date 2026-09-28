@@ -4,7 +4,9 @@
 //! property in shell between the `private-scratch helpers` markers. These tests
 //! extract that block and drive every refusal: a symlinked or group/world
 //! accessible directory, a non-sticky world-writable base, and a tag file that
-//! is a planted symlink (whose target must stay untouched).
+//! is a planted symlink (whose target must stay untouched). The pure verdicts
+//! are driven with synthetic `ls -l` facts, so the foreign-owner and
+//! foreign-group refusals need no second account.
 #![cfg(unix)]
 
 use std::io;
@@ -44,6 +46,19 @@ fn helper_accepts(function: &str, arg: &Path) -> io::Result<bool> {
         .arg(script)
         .arg("sh")
         .arg(arg)
+        .stdout(std::process::Stdio::null())
+        .status()?;
+    Ok(status.success())
+}
+
+/// Whether `sh` running the helper `function` on the literal `args` succeeds.
+fn verdict_accepts(function: &str, args: &[&str]) -> io::Result<bool> {
+    let script = format!("{}\n{function} \"$@\"\n", helpers()?);
+    let status = Command::new("sh")
+        .arg("-c")
+        .arg(script)
+        .arg("sh")
+        .args(args)
         .stdout(std::process::Stdio::null())
         .status()?;
     Ok(status.success())
@@ -159,5 +174,134 @@ fn the_installer_routes_its_scratch_through_the_helpers() -> io::Result<()> {
         !script.contains("mktemp -d)"),
         "install.sh must not create an unverified `mktemp -d` scratch dir"
     );
+    Ok(())
+}
+
+/// The uid and primary gid the synthetic facts are judged against.
+const ME: &str = "1000";
+const MY_GID: &str = "1000";
+
+#[test]
+fn scratch_base_verdict_accepts_only_trusted_components() -> io::Result<()> {
+    for (mode, owner, group) in [
+        ("drwx------", ME, MY_GID),
+        ("drwxr-xr-x", "0", "0"),
+        ("drwxr-xr-x.", "0", "0"),
+        ("drwxrwxrwt", "0", "0"),
+        ("drwxrwxrwT", "0", "0"),
+        ("drwxrwxr-x", ME, MY_GID),
+    ] {
+        assert!(
+            verdict_accepts("scratch_base_verdict", &[mode, owner, group, ME, MY_GID])?,
+            "{mode} {owner}:{group} must be accepted"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn scratch_base_verdict_refuses_every_untrusted_component() -> io::Result<()> {
+    for (mode, owner, group, why) in [
+        ("drwxr-xr-x", "1001", "1001", "a foreign owner"),
+        (
+            "drwxrwxr-x",
+            "0",
+            MY_GID,
+            "a group-writable root-owned directory",
+        ),
+        (
+            "drwxrwxr-x",
+            ME,
+            "1001",
+            "a group-writable directory in a foreign group",
+        ),
+        (
+            "drwxrwxr-x+",
+            ME,
+            MY_GID,
+            "an own-group-writable directory carrying an ACL",
+        ),
+        (
+            "drwxrwxrwx",
+            ME,
+            MY_GID,
+            "a non-sticky world-writable directory",
+        ),
+        (
+            "drwxrwxrwx",
+            "0",
+            "0",
+            "a non-sticky world-writable root directory",
+        ),
+        ("-rw-------", ME, MY_GID, "a regular file"),
+        ("lrwxrwxrwx", ME, MY_GID, "a symlink"),
+        ("", ME, MY_GID, "an empty mode"),
+    ] {
+        assert!(
+            !verdict_accepts("scratch_base_verdict", &[mode, owner, group, ME, MY_GID])?,
+            "{why} ({mode} {owner}:{group}) must be refused"
+        );
+    }
+    assert!(
+        !verdict_accepts("scratch_base_verdict", &["drwx------", "", "", "", ""])?,
+        "an unknown identity must be refused"
+    );
+    Ok(())
+}
+
+#[test]
+fn scratch_private_verdict_refuses_foreign_or_open_entries() -> io::Result<()> {
+    const DIR: &str = "d???------*";
+    const FILE: &str = "-???------*";
+    assert!(verdict_accepts(
+        "scratch_private_verdict",
+        &["drwx------", ME, ME, DIR]
+    )?);
+    assert!(verdict_accepts(
+        "scratch_private_verdict",
+        &["drwx------.", ME, ME, DIR]
+    )?);
+    assert!(verdict_accepts(
+        "scratch_private_verdict",
+        &["-rw-------", ME, ME, FILE]
+    )?);
+    for (mode, owner, pattern, why) in [
+        ("drwx------", "1001", DIR, "a foreign-owned directory"),
+        ("drwxr-x---", ME, DIR, "a group-readable directory"),
+        ("drwx-----x", ME, DIR, "an other-searchable directory"),
+        (
+            "-rw-------",
+            ME,
+            DIR,
+            "a file where a directory is required",
+        ),
+        (
+            "drwx------",
+            ME,
+            FILE,
+            "a directory where a file is required",
+        ),
+        ("-rw-r--r--", ME, FILE, "a group/other-readable file"),
+        ("-rw-------", "1001", FILE, "a foreign-owned file"),
+    ] {
+        assert!(
+            !verdict_accepts("scratch_private_verdict", &[mode, owner, ME, pattern])?,
+            "{why} ({mode} {owner}) must be refused"
+        );
+    }
+    assert!(
+        !verdict_accepts("scratch_private_verdict", &["drwx------", "", "", DIR])?,
+        "an unknown identity must be refused"
+    );
+    Ok(())
+}
+
+#[test]
+fn trusted_tmp_base_refuses_a_non_directory_or_missing_base() -> io::Result<()> {
+    let r = root("install-nondir")?;
+    let file = r.child("file");
+    std::fs::write(&file, b"")?;
+    assert!(!helper_accepts("trusted_tmp_base", &file)?);
+    assert!(!helper_accepts("trusted_tmp_base", &r.child("missing"))?);
     Ok(())
 }

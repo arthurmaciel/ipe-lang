@@ -25,6 +25,16 @@ case "$(uname -s)" in
   *) SCRATCH_POSIX_MODES=1 ;;
 esac
 
+# scratch_private_verdict MODE OWNER ME PATTERN — an entry with `ls -l` mode
+# string MODE and owner uid OWNER is private to uid ME when OWNER is ME and MODE
+# matches PATTERN.
+scratch_private_verdict() {
+  [ -n "$1" ] && [ -n "$3" ] && [ "$2" = "$3" ] || return 1
+  # shellcheck disable=SC2254  # PATTERN is a deliberate case pattern
+  case "$1" in $4) return 0 ;; esac
+  return 1
+}
+
 # scratch_entry_private PATH PATTERN — PATH is owned by the effective uid and
 # its `ls -l` mode string matches PATTERN.
 scratch_entry_private() {
@@ -32,28 +42,35 @@ scratch_entry_private() {
   read -r _sp_mode _sp_links _sp_uid _sp_rest <<SCRATCH_LS
 $_sp_ls
 SCRATCH_LS
-  [ "$_sp_uid" = "$(id -u)" ] || return 1
-  # shellcheck disable=SC2254  # PATTERN is a deliberate case pattern
-  case "$_sp_mode" in $2) return 0 ;; esac
-  return 1
+  scratch_private_verdict "$_sp_mode" "$_sp_uid" "$(id -u)" "$2"
 }
 
-# scratch_base_entry_ok DIR UID GID — DIR is a directory owned by UID or root,
-# writable by no one else unless sticky (group-writable is allowed for UID's own
-# directory in its own group GID, the user-private-group layout).
+# scratch_base_verdict MODE OWNER GROUP ME MYGID — an entry with `ls -l` mode
+# string MODE, owner uid OWNER and group gid GROUP is a trusted base component
+# for uid ME (primary gid MYGID): a directory owned by ME or root, writable by no
+# one else unless sticky. Group-writable is allowed only for ME's own directory
+# in group MYGID with no ACL, the user-private-group layout.
+scratch_base_verdict() {
+  [ -n "$4" ] || return 1
+  case "$1" in d*) ;; *) return 1 ;; esac
+  [ "$2" = "$4" ] || [ "$2" = 0 ] || return 1
+  case "$1" in d????????[tT]*) return 0 ;; esac
+  case "$1" in d???????w*) return 1 ;; esac
+  case "$1" in
+    # An ACL (`+`) can grant a named user write through the group mask.
+    d????w*+) return 1 ;;
+    d????w*) [ "$2" = "$4" ] && [ -n "$5" ] && [ "$3" = "$5" ] || return 1 ;;
+  esac
+  return 0
+}
+
+# scratch_base_entry_ok DIR ME MYGID — DIR passes scratch_base_verdict.
 scratch_base_entry_ok() {
   _be_ls="$(ls -ldn -- "$1" 2>/dev/null)" || return 1
   read -r _be_mode _be_links _be_uid _be_gid _be_rest <<SCRATCH_LS
 $_be_ls
 SCRATCH_LS
-  case "$_be_mode" in d*) ;; *) return 1 ;; esac
-  [ "$_be_uid" = "$2" ] || [ "$_be_uid" = 0 ] || return 1
-  case "$_be_mode" in d????????[tT]*) return 0 ;; esac
-  case "$_be_mode" in d???????w*) return 1 ;; esac
-  case "$_be_mode" in
-    d????w*) [ "$_be_uid" = "$2" ] && [ "$_be_gid" = "$3" ] || return 1 ;;
-  esac
-  return 0
+  scratch_base_verdict "$_be_mode" "$_be_uid" "$_be_gid" "$2" "$3"
 }
 
 # trusted_tmp_base BASE — print BASE's physical (symlink-free) path when it and

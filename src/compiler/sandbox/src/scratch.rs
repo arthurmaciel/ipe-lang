@@ -235,7 +235,13 @@ mod platform {
 /// requires [`base_verdict`] of every ancestor.
 #[cfg(unix)]
 fn trusted_base(base: &Path) -> io::Result<PathBuf> {
-    std::fs::create_dir_all(base)?;
+    use std::os::unix::fs::DirBuilderExt as _;
+    // Components this call creates are private, so they pass `base_verdict`
+    // without the owner-group exception.
+    std::fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(base)?;
     let canonical = std::fs::canonicalize(base)?;
     let who = platform::identity();
     for dir in canonical.ancestors() {
@@ -741,6 +747,25 @@ mod tests {
             set_mode(&base, 0o1777)?;
             let sd = ScratchDir::new_under(&base, "ipe-under")?;
             sd.verify()?;
+            Ok(())
+        }
+
+        #[test]
+        fn missing_base_components_are_created_private() -> io::Result<()> {
+            let root = ScratchDir::new("ipe-scratch-mkbase")?;
+            let outer = root.child("outer");
+            let base = outer.join("inner");
+            let sd = ScratchDir::new_under(&base, "ipe-under")?;
+            sd.verify()?;
+            for created in [&outer, &base] {
+                let mode = std::fs::symlink_metadata(created)?.permissions().mode();
+                assert_eq!(
+                    mode & 0o7777,
+                    0o700,
+                    "{} must be created 0700",
+                    created.display()
+                );
+            }
             Ok(())
         }
 

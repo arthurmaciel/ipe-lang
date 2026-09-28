@@ -10,13 +10,11 @@ ipe_diagnostics = { path = "../diagnostics" }
 ipe_kernels = { path = "../kernels" }
 serde = { version = "1", features = ["derive"] }
 
-# Used on Unix (FreeBSD, macOS, Linux) for `getuid(3)` in the exclusive jail-dir
-# ownership verification — the only way to obtain the current uid without
-# shelling out or reading a non-authoritative file.
+# `O_NOFOLLOW` for the private-scratch exclusive file open.
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
-# The effective uid/gid the private-scratch ownership checks compare against,
-# obtained without `unsafe`.
+# The effective uid/gid the private-scratch and jail-dir ownership checks compare
+# against, obtained without `unsafe`.
 rustix = { version = "0.38", features = ["fs", "process"] }
 
 # The Windows run-jail arm builds its confinement primitives directly through the
