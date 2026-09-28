@@ -3,3 +3,9 @@
 # so exempt test code here.
 allow-unwrap-in-tests = true
 allow-expect-in-tests = true
+
+# The home directory is read only through `system::home_dir` (overlay-aware,
+# absolute or nothing).
+disallowed-methods = [
+    { path = "std::env::home_dir", reason = "an unvalidated home; read it through `system::home_dir`" },
+]

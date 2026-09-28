@@ -184,11 +184,13 @@ mod real_jail {
     use ipe::audit::Check;
     use ipe::audit_native::{
         CERTIFIED_PLATFORM, JailProbeRunner, ProbeExercise, ProbeRunner, StaticReachability,
-        TightenableAxis, default_ro_binds, reconcile_native, scoped_profile,
+        TightenableAxis, ToolchainHomes, TrustedWrapper, default_ro_binds, reconcile_native,
+        scoped_profile,
     };
     use ipe_ir::Capability;
     use ipe_sandbox::build_jail::build_in_jail;
     use ipe_sandbox::run_jail::{RunJailTools, SandboxProfile};
+    use ipe_sandbox::{CanonicalPath, JailMounts};
 
     /// `build_in_jail` mutates the process-global fd table (a `memfd`) on Linux;
     /// serialize the jailed runs so parallel `--test-threads` cannot race.
@@ -312,15 +314,15 @@ mod real_jail {
             let _guard = JAIL_LOCK
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let mounts = JailMounts::of_invoker(scoped.clone(), scoped.clone(), default_ro_binds())
+                .expect("checked jail mounts");
             let outcome = build_in_jail(
                 tools,
                 &SandboxProfile::maximally_isolated(),
-                &scoped,
-                &scoped,
-                &default_ro_binds(),
+                &mounts,
                 &canary_payload(tools),
             );
-            let _ = std::fs::remove_dir_all(&scoped);
+            let _ = std::fs::remove_dir_all(scoped.as_path());
             let established = outcome.is_clean();
             if !established {
                 eprintln!("audit_native e2e: skipping — jail cannot be established ({outcome:?})");
@@ -329,14 +331,20 @@ mod real_jail {
         })
     }
 
-    fn fresh_scratch(tag: &str) -> PathBuf {
+    fn fresh_scratch(tag: &str) -> CanonicalPath {
         let dir = crate::support::scratch_root().join(format!(
             "ipe-tier2-e2e-{tag}-{}-{:?}",
             std::process::id(),
             std::thread::current().id()
         ));
         std::fs::create_dir_all(&dir).expect("scratch");
-        dir
+        CanonicalPath::resolve(&dir).expect("canonical scratch")
+    }
+
+    /// The invoking user's toolchain, as production resolves it.
+    fn invoker_toolchain() -> ToolchainHomes {
+        ToolchainHomes::of_invoker()
+            .expect("the test environment's toolchain homes are absolute or unset")
     }
 
     fn set(caps: &[Capability]) -> BTreeSet<Capability> {
@@ -356,17 +364,16 @@ mod real_jail {
     /// Build a real jail-backed runner exercising `exercised`, holding the two
     /// scratch dirs alive for the run's duration.
     struct Harness {
-        scoped_tmp: PathBuf,
-        working_tree: PathBuf,
-        wrapper: PathBuf,
+        scoped_tmp: CanonicalPath,
+        working_tree: CanonicalPath,
+        wrapper: TrustedWrapper,
     }
 
     impl Harness {
         fn new(tag: &str) -> Self {
             let scoped_tmp = fresh_scratch(&format!("{tag}-scratch"));
             let working_tree = fresh_scratch(&format!("{tag}-worktree"));
-            let wrapper = scoped_tmp.join("untrusted-build.sh");
-            std::fs::copy(fixture_path(), &wrapper).expect("copy fixture into scratch");
+            let wrapper = TrustedWrapper::read(&fixture_path()).expect("read the probe fixture");
             Self {
                 scoped_tmp,
                 working_tree,
@@ -388,13 +395,14 @@ mod real_jail {
                 exercised,
                 ProbeExercise::WrapperProbeOnly,
             )
+            .expect("checked jail mounts")
         }
     }
 
     impl Drop for Harness {
         fn drop(&mut self) {
-            let _ = std::fs::remove_dir_all(&self.scoped_tmp);
-            let _ = std::fs::remove_dir_all(&self.working_tree);
+            let _ = std::fs::remove_dir_all(self.scoped_tmp.as_path());
+            let _ = std::fs::remove_dir_all(self.working_tree.as_path());
         }
     }
 
@@ -557,12 +565,8 @@ mod real_jail {
         tools: &'a RunJailTools,
         exercise: ProbeExercise,
     ) -> JailProbeRunner<'a> {
-        // The real build needs the toolchain reachable inside the jail (read-only).
-        let mut ro_binds = default_ro_binds();
-        ro_binds.extend(
-            ipe::audit_native::toolchain_ro_binds()
-                .expect("the test environment's toolchain homes are absolute or unset"),
-        );
+        // The runner binds the exercise's toolchain (read-only) itself.
+        let ro_binds = default_ro_binds();
         JailProbeRunner::new(
             tools,
             harness.wrapper.clone(),
@@ -574,6 +578,7 @@ mod real_jail {
             vec![TightenableAxis::Network, TightenableAxis::Filesystem],
             exercise,
         )
+        .expect("checked jail mounts")
     }
 
     #[test]
@@ -597,13 +602,13 @@ mod real_jail {
         // not the filesystem-axis-gated working tree — so a filesystem-withholding
         // jail (declared=[network]) can still build it. A withheld axis is withheld
         // by capability REMOVAL (net namespace), not by making the build unwritable.
-        let crate_dir = harness.scoped_tmp.join("tier2min");
+        let crate_dir = harness.scoped_tmp.as_path().join("tier2min");
         write_min_crate(&crate_dir, false);
         let _guard = JAIL_LOCK
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let exercise =
-            ProbeExercise::real_build(min_build_argv(&crate_dir)).expect("non-empty argv");
+        let exercise = ProbeExercise::real_build(min_build_argv(&crate_dir), invoker_toolchain())
+            .expect("non-empty argv");
         assert!(
             exercise.is_real_build(),
             "the certify guard needs a real build"
@@ -641,13 +646,13 @@ mod real_jail {
         let scoped = scoped_profile(&declared).expect("lower profile");
         let harness = Harness::new("reject-netbuild");
         // Build in the always-writable scratch (see the positive test).
-        let crate_dir = harness.scoped_tmp.join("tier2min");
+        let crate_dir = harness.scoped_tmp.as_path().join("tier2min");
         write_min_crate(&crate_dir, true);
         let _guard = JAIL_LOCK
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let exercise =
-            ProbeExercise::real_build(min_build_argv(&crate_dir)).expect("non-empty argv");
+        let exercise = ProbeExercise::real_build(min_build_argv(&crate_dir), invoker_toolchain())
+            .expect("non-empty argv");
         let runner = real_build_runner(&harness, &tools, exercise);
         let scan = FixedScan {
             reaches: BTreeSet::new(),

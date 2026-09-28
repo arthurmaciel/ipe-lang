@@ -740,7 +740,7 @@ fn unknown_command_screen_is_fully_guttered() {
     let r = run(&["frobnicate"]);
     assert!(!r.ok, "an unknown command must exit non-zero");
     let header = format!(
-        "\n  {}\n",
+        "\n  {}\n\n",
         ipe::style::header_line(env!("CARGO_PKG_VERSION"))
     );
     assert!(

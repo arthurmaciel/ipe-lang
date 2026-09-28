@@ -23,6 +23,7 @@ pub mod inlay_hints;
 pub mod links;
 pub mod navigation;
 pub mod offset;
+pub mod refactor;
 pub mod rename;
 pub mod selection_range;
 pub mod semantic_tokens;

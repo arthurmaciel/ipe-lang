@@ -25,7 +25,8 @@ import re
 import subprocess
 import sys
 
-import yaml
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import strict_yaml  # noqa: E402  # the shared strict loader, SSOT for every YAML load below
 
 REPO = os.environ["REPO"]
 HEAD_SHA = os.environ["HEAD_SHA"]
@@ -43,7 +44,7 @@ def gh(*args: str) -> str:
 
 
 def load_manifest() -> dict[str, dict]:
-    doc = yaml.safe_load(open(MANIFEST))
+    doc = strict_yaml.safe_load(open(MANIFEST))
     by_ctx: dict[str, dict] = {}
     for e in doc["checks"]:
         by_ctx[e["context"]] = e

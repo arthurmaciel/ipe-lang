@@ -2,4 +2,5 @@ exit: 0
 ---
 
   Ipê language - v<VERSION> - https://github.com/arthurmaciel/ipe-lang
+
   ipe <VERSION>

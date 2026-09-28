@@ -579,12 +579,12 @@ fn report_stripped_value(value: &str, reason: CssStripReason, origin: CssValueOr
     if should_report_stripped(origin) {
         // A bounded, single-line preview so a huge value cannot flood the log.
         let preview: String = value.chars().take(120).collect();
-        eprintln!(
+        crate::system::write_stderr_line(&format!(
             "ipe: dropped an unsafe developer-authored CSS value {preview:?} — it {} \
              (nothing was emitted for it). Fix the literal or move the dynamic part \
              into your Model.",
             reason.describe()
-        );
+        ));
     }
 }
 

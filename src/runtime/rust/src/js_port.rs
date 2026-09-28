@@ -511,10 +511,10 @@ mod native {
                     }
                 }
                 Err(e) => {
-                    eprintln!(
+                    crate::system::write_stderr_line(&format!(
                         "[ipe-runtime BUG] js_send: payload of type {} failed serialisation ({e}); frame dropped — please report",
                         std::any::type_name::<T>()
-                    );
+                    ));
                 }
             }
             0
@@ -837,10 +837,10 @@ mod native {
                     }
                 }
                 Err(e) => {
-                    eprintln!(
+                    crate::system::write_stderr_line(&format!(
                         "[ipe-runtime BUG] js_send_to_session: cmd of type {} failed serialisation ({e}); frame dropped — please report",
                         std::any::type_name::<T>()
-                    );
+                    ));
                 }
             }
             0

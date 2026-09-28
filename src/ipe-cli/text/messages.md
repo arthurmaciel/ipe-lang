@@ -874,7 +874,7 @@ Every code reads <code>IPE-</code>, a family letter, and four digits. The letter
 
 ## output-inside-sources
 
-{out} is inside the source root {sources} — build output must stay out of your sources
+{out} is inside the source root {sources} — build output must stay out of your sources; pass `--out <dir>` naming a directory outside them
 
 ## output-unresolved-sources
 
@@ -1233,6 +1233,18 @@ internal: asserted calls validated against an empty FFI catalog
 ## ffi-add-scratch-dir
 
 ipe add: scratch dir: {detail}
+
+## ffi-toolchain-bind-exposes-cargo-home
+
+ipe add: refusing to bind `{bind}` into the jail: it contains the cargo home `{cargo_home}` and its `credentials.toml` — set RUSTUP_HOME and CARGO_HOME to disjoint directories
+
+## ffi-cargo-home-unresolved
+
+ipe add: cannot locate the cargo home, so the jail cannot keep its `credentials.toml` hidden — set CARGO_HOME or HOME to an absolute path
+
+## ffi-jail-path-refused
+
+ipe add: {detail} — set HOME, CARGO_HOME, and RUSTUP_HOME to absolute paths
 
 ## ffi-install-manifest-write-failed
 

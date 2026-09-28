@@ -84,8 +84,15 @@ fn find_references_returns_empty_on_cyclic_graph() {
 #[test]
 fn completions_returns_empty_on_cyclic_graph() {
     let (db, root, entry_a, _b) = cyclic_project();
-    let items =
-        ipe_lsp_features::completion::completions(&db, root, entry_a, &["A".to_owned()], 0, None);
+    let items = ipe_lsp_features::completion::completions(
+        &db,
+        root,
+        entry_a,
+        &["A".to_owned()],
+        0,
+        ipe_lsp_features::offset::PositionEncoding::Utf16,
+        None,
+    );
     let _ = items;
 }
 

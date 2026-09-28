@@ -18,7 +18,7 @@ use std::collections::HashSet;
 use ipe_intern::Symbol;
 use ipe_syntax::{Expr, Expr_, LetBinding, Pattern_};
 
-use crate::finding::Finding;
+use crate::finding::{Finding, Fix};
 use crate::rules::Ctx;
 
 pub fn check(ctx: &Ctx) -> Vec<Finding> {
@@ -110,7 +110,7 @@ fn check_let(ctx: &Ctx, bindings: &[LetBinding], body: &Expr, out: &mut Vec<Find
         collect_used(body, &mut used);
 
         if !used.contains(name_sym) {
-            out.push(ctx.advisory(
+            out.push(ctx.with_fix(
                 "unused-bindings",
                 binding.pat.span,
                 format!("`{name}` is bound but never used"),
@@ -119,6 +119,11 @@ fn check_let(ctx: &Ctx, bindings: &[LetBinding], body: &Expr, out: &mut Vec<Find
                         .to_owned(),
                     "suppress: `-- ipe-lint: allow unused-bindings`".to_owned(),
                 ],
+                Fix {
+                    describe: "prefix the binding with `_`".to_owned(),
+                    span: binding.pat.span,
+                    replacement: format!("_{name}"),
+                },
             ));
         }
         walk_expr(ctx, &binding.body, out);
