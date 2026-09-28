@@ -122,7 +122,6 @@ Each module listed below links to a detail page with the full documentation and 
 - [Test](#test)
 - [Time](#time)
 - [Time.Timestamp](#timetimestamp)
-- [ToString](#tostring)
 - [Trace](#trace)
 - [Tuple](#tuple)
 - [Ui](#ui)
@@ -195,7 +194,6 @@ Ipe.Basics — the implicit prelude (Tier-A auto-import, compiled source).
 | `fst` | `fst pair` — the first component of a 2-tuple. |
 | `snd` | `snd pair` — the second component of a 2-tuple. |
 | `clamp` | `clamp lo hi x` — constrain `x` to the range `[lo, hi]`. |
-| `toString` | `toString x` — convert a `Stringify` value to its `String` representation. |
 | `modBy` | `modBy divisor dividend` — the modulo remainder, with the sign of the |
 | `negate` | `negate x` — arithmetic negation. |
 | `abs` | `abs x` — absolute value. |
@@ -2265,10 +2263,10 @@ Ipe.Log — structured observability kernels.
 | `debug` | Emit a debug-severity log line. |
 | `warn` | Emit a warn-severity log line. |
 | `error` | Emit an error-severity log line. |
-| `infoWith` | Emit an info-severity log line with a list of typed context values. |
-| `debugWith` | Emit a debug-severity log line with a list of typed context values. |
-| `warnWith` | Emit a warn-severity log line with a list of typed context values. |
-| `errorWith` | Emit an error-severity log line with a list of typed context values. |
+| `infoWith` | Emit an info-severity log line with a list of scalar context values |
+| `debugWith` | Emit a debug-severity log line with a list of scalar context values |
+| `warnWith` | Emit a warn-severity log line with a list of scalar context values |
+| `errorWith` | Emit an error-severity log line with a list of scalar context values |
 | `level` | Set the minimum log severity for the application.  Takes a `LogLevel` |
 
 ## Markdown
@@ -2666,6 +2664,7 @@ Ipe.Set — unordered collection of unique elements.
 | `isUrl` | `isUrl s` — `True` when `s` looks like a valid URL. |
 | `words` | `words s` — split `s` into words on whitespace boundaries. |
 | `lines` | `lines s` — split `s` into lines on newline boundaries. |
+| `fromBool` | `fromBool b` — the canonical text of a `Bool`: lowercase `"true"` or |
 | `fromChar` | `fromChar c` — a one-character string from a `Char`. |
 | `toList` | `toList s` — convert `s` to a list of characters. |
 | `fromList` | `fromList chars` — build a `String` from a list of characters. |
@@ -2806,19 +2805,6 @@ Ipe.Time.Timestamp — an opaque instant in time (Layer 3 Ipe source).
 | `toUnixMillis` | `toUnixMillis t` — recover the raw millisecond value for runtime kernels. |
 | `add` | `add span t` — shift instant `t` forward by `span`.  A negative span |
 | `diff` | `diff a b` — the `Duration` from instant `b` to instant `a`.  The result |
-
-## ToString
-
-[Full reference](stdlib/ToString.md)
-
-Ipe.ToString — naming-consistency surface.
-
-| Export | Summary |
-|--------|----------|
-| `fromInt` | (no summary) |
-| `fromFloat` | (no summary) |
-| `fromBool` | (no summary) |
-| `fromTime` | `fromTime t` — a human-readable local-time rendering of `t`. A thin alias |
 
 ## Trace
 

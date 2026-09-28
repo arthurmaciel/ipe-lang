@@ -414,7 +414,7 @@ fn emits_super_typed_bound_clauses() -> DResult<()> {
 /// default `cargo test` stays fast and offline.
 #[test]
 fn end_to_end_builds_and_prints_forty_two() -> DResult<()> {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return Ok(());
     }
     let Some(runtime) = seal_e2e::resolve_runtime() else {

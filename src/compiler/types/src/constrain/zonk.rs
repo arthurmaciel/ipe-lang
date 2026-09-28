@@ -903,6 +903,9 @@ impl<'a> Builder<'a> {
             typed_rigids: Vec::new(),
             scheme_apps: Vec::new(),
             super_vars: Vec::new(),
+            signature_wildcards: Vec::new(),
+            typed_wildcards: Vec::new(),
+            wildcard_log: None,
             pending_instantiations: Vec::new(),
             // Empty: this minimal builder reads the scheme table directly; an
             // empty cache is an all-miss cache, so `resolve_scheme` still

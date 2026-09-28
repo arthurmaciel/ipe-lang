@@ -76,7 +76,7 @@ fn build_run_msg() -> (PathBuf, crate::support::RunOutcome) {
 /// Divergence golden — the expected value is ipe's own correct output.
 #[test]
 fn ui_layout_turbofish_uses_enclosing_msg_type() {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
 

@@ -253,10 +253,8 @@ mod engine {
         // present in the host environment. An absent allowlisted var is simply
         // not passed (never an empty-string surprise), and a var outside the
         // allowlist is never visible — the same subset the native jail scrubs to.
-        for name in &profile.env_allowlist {
-            if let Some(value) = std::env::var_os(name) {
-                builder.env(name, value.to_string_lossy());
-            }
+        for (name, value) in ipe_sandbox::host_env::granted_env(profile) {
+            builder.env(name, value.to_string_lossy());
         }
 
         // filesystem: the scoped scratch is the guest's `.` (always writable, the

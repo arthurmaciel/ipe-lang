@@ -84,10 +84,10 @@ fn owned_tuple_admits_and_opaque_tuple_over_drops() {
 /// per-component coercion cargo-builds and the widened tuple round-trips.
 #[test]
 fn assembled_tuple_wrapper_builds_and_runs() {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
-    let Ok(cargo) = std::env::var("CARGO") else {
+    let Ok(cargo) = ipe_env::var("CARGO") else {
         return; // no cargo on PATH in this environment — skip like the goldens
     };
 

@@ -58,7 +58,7 @@ fn backoff_strategy_adt_builds_and_runs() {
         "backoff_strategy_adt: must be accepted; got: {built:?}"
     );
 
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
 

@@ -103,7 +103,7 @@ fn retry_policy_field_access_ice_builds_and_runs() {
         "RetryPolicy field access fixture must be accepted; got: {result:?}"
     );
 
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
 

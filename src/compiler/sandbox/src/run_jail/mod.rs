@@ -399,7 +399,9 @@ impl From<RunJailDefect> for SandboxError {
             }
             RunJailDefect::Path(e) => e.to_string(),
         };
-        Self::RunJail { detail }
+        Self::RunJail {
+            detail: detail.into(),
+        }
     }
 }
 
@@ -744,6 +746,30 @@ pub fn exec_embedded_in_run_jail(
 mod tests {
     use super::*;
     use crate::{CanonicalPath, HomeMasks};
+
+    /// A newline or escape in a run-jail defect's OS error or mount target stays on its owning line.
+    #[test]
+    fn a_run_jail_defect_cannot_forge_an_output_line() {
+        const FORGED: &str = "x\nerror: forged\u{1b}[2K";
+        let defects = [
+            RunJailDefect::Spawn {
+                detail: FORGED.to_owned(),
+            },
+            RunJailDefect::MountFailed {
+                target: PathBuf::from(FORGED),
+                detail: FORGED.to_owned(),
+            },
+        ];
+        for defect in defects {
+            let text = defect.to_string();
+            assert!(text.contains("error: forged"), "{text}");
+            assert!(!text.contains("[2K"), "{text}");
+            assert!(
+                text.lines().all(|line| !line.starts_with("error: forged")),
+                "{text}"
+            );
+        }
+    }
 
     fn set(caps: &[Capability]) -> BTreeSet<Capability> {
         caps.iter().copied().collect()

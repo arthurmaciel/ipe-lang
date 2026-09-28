@@ -836,7 +836,12 @@ mod tests {
         })
         .to_string();
         let pkg = PkgInfo::decode_json(&doc).expect("decodes");
-        crate::driver::installed_crate_from_pkg("semver".to_owned(), &pkg).expect("installs")
+        crate::driver::installed_crate_from_pkg(
+            "semver".to_owned(),
+            &pkg,
+            &crate::driver::FfiCache::at_project_root(std::path::Path::new(".")),
+        )
+        .expect("installs")
     }
 
     fn validated_const(ty: &str, path: &str) -> Result<ConstSpec, Diagnostic> {

@@ -41,9 +41,7 @@ fn compile_files(
     let _ = std::fs::remove_dir_all(&out_dir);
 
     let runtime = ipe::resolve_runtime().map_err(|e| -> BoxError { format!("{e:?}").into() })?;
-    Ok(ipe::build_with_sibling_discovery(
-        &entry, &out_dir, &runtime,
-    ))
+    Ok(ipe::build_loose_file(&entry, &out_dir, &runtime))
 }
 
 fn assert_accepted(test_name: &str, source: &str) -> Result<(), BoxError> {
@@ -557,7 +555,7 @@ fn assert_builds_files(test_name: &str, files: &[(&str, &str)]) -> Result<(), Bo
     if let Err(e) = compile_files(test_name, files)? {
         return Err(format!("{test_name}: expected ipe success, got {e:?}").into());
     }
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return Ok(());
     }
     let out_dir = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR"))

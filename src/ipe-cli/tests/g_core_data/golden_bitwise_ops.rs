@@ -37,7 +37,7 @@ fn compile_golden(name: &str) -> PathBuf {
 }
 
 fn e2e_enabled() -> bool {
-    std::env::var("IPE_E2E").is_ok()
+    ipe_env::var("IPE_E2E").is_ok()
 }
 
 #[test]

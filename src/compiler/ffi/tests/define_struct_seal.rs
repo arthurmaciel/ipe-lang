@@ -110,10 +110,10 @@ fn unsound_define_structs_emit_no_wrapper() {
 /// must compile and the constructor must build a real value.
 #[test]
 fn define_struct_builds_and_runs() {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
-    let Ok(cargo) = std::env::var("CARGO") else {
+    let Ok(cargo) = ipe_env::var("CARGO") else {
         return; // no cargo on PATH in this environment — skip like the goldens
     };
 

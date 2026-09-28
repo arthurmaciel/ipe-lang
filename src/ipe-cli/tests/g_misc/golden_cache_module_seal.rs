@@ -78,7 +78,7 @@ fn cache_module_seal_builds_and_runs() {
         "cache_module_seal: must be accepted, got: {built:?}"
     );
 
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
     let outcome = crate::support::build_and_run_emitted("cache_module_seal", &out);

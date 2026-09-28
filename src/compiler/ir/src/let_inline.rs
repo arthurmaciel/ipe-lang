@@ -9,7 +9,7 @@
 
 use ipe_intern::Symbol;
 
-use crate::{Expr, IrType, Pat};
+use crate::{EnumPayloadTable, Expr, IrType, Pat, ir_type_holds};
 
 /// Does the emitter inline `let name = value in body` — re-evaluating `value`
 /// at each free use of `name` instead of binding it once?
@@ -17,10 +17,17 @@ use crate::{Expr, IrType, Pat};
 /// True exactly when `value` is move-only ([`expr_value_is_non_clone`]),
 /// `body` reads `name` more than once, and no capture-clone of `name` exists
 /// (a `CloneVar` leaf cannot be substituted; see [`scan_free_target`]).
+/// `payloads` is the named enums' variant payload table the move-only test
+/// descends.
 #[must_use]
-pub fn let_value_is_inlined(name: Symbol, value: &Expr, body: &Expr) -> bool {
+pub fn let_value_is_inlined(
+    name: Symbol,
+    value: &Expr,
+    body: &Expr,
+    payloads: &EnumPayloadTable,
+) -> bool {
     let (occurrences, has_clonevar) = scan_free_target(body, name);
-    occurrences > 1 && expr_value_is_non_clone(value) && !has_clonevar
+    occurrences > 1 && expr_value_is_non_clone(value, payloads) && !has_clonevar
 }
 
 /// The body the emitter evaluates for `let name = value in body`.
@@ -28,8 +35,14 @@ pub fn let_value_is_inlined(name: Symbol, value: &Expr, body: &Expr) -> bool {
 /// It is `body` with `value` substituted for `name` when [`let_value_is_inlined`] holds, `None`
 /// when the plain `let` form (value evaluated once, before `body`) is emitted.
 #[must_use]
-pub fn inlined_let_body(name: Symbol, value: &Expr, body: &Expr) -> Option<Expr> {
-    let_value_is_inlined(name, value, body).then(|| substitute_var(body.clone(), name, value))
+pub fn inlined_let_body(
+    name: Symbol,
+    value: &Expr,
+    body: &Expr,
+    payloads: &EnumPayloadTable,
+) -> Option<Expr> {
+    let_value_is_inlined(name, value, body, payloads)
+        .then(|| substitute_var(body.clone(), name, value))
 }
 
 /// Returns `true` if the expression produces a value that Rust will MOVE on
@@ -41,6 +54,10 @@ pub fn inlined_let_body(name: Symbol, value: &Expr, body: &Expr) -> Option<Expr>
 /// `Clone` impl because polling a future to completion consumes it.  Ipê's
 /// pure semantics guarantee re-evaluation is always correct, so the emitter
 /// can safely inline the value expression at every use site.
+///
+/// The element type is walked through every held component, including tuple,
+/// record, and named-enum variant payloads (`payloads`), so a list of
+/// `(Task a, Int)` or of an enum wrapping a task is caught too.
 ///
 /// Plain `Clone`/`Copy` values (integers, booleans, strings, records, enums)
 /// do NOT trigger this path — their `let` bindings are preserved so the
@@ -55,26 +72,28 @@ pub fn inlined_let_body(name: Symbol, value: &Expr, body: &Expr) -> Option<Expr>
 /// binding) is NOT detected here — that needs a real type-of-expression
 /// recovery pass this backend does not have; filed as a residual gap rather
 /// than guessed at (see AUD-04 follow-up in backlog.md).
-pub fn expr_value_is_non_clone(expr: &Expr) -> bool {
+#[must_use]
+pub fn expr_value_is_non_clone(expr: &Expr, payloads: &EnumPayloadTable) -> bool {
     match expr {
-        // A list whose element is a task (or contains one) — Vec<IpeTask<A>>
+        // A list whose element is a task (or holds one) — Vec<IpeTask<A>>
         // is move-only.
-        Expr::List { elem, .. } => ir_type_contains_task(elem),
-        Expr::Tuple(items) => items.iter().any(expr_value_is_non_clone),
-        Expr::Record { fields, .. } => fields.iter().any(|(_, e)| expr_value_is_non_clone(e)),
+        Expr::List { elem, .. } => ir_type_contains_task(elem, payloads),
+        Expr::Tuple(items) => items.iter().any(|e| expr_value_is_non_clone(e, payloads)),
+        Expr::Record { fields, .. } => fields
+            .iter()
+            .any(|(_, e)| expr_value_is_non_clone(e, payloads)),
         _ => false,
     }
 }
 
-/// Returns `true` if `ty` is or structurally contains `IrType::Task`.
+/// Does a value of type `ty` hold an `IrType::Task`?
+///
+/// Walks every held component ([`ir_type_holds`]): transparent carriers,
+/// tuples, records, and named-enum type arguments and variant payloads from
+/// `payloads`.
 #[must_use]
-pub fn ir_type_contains_task(ty: &IrType) -> bool {
-    match ty {
-        IrType::Task(_) => true,
-        IrType::Maybe(inner) | IrType::List(inner) => ir_type_contains_task(inner),
-        IrType::Result(e, a) => ir_type_contains_task(e) || ir_type_contains_task(a),
-        _ => false,
-    }
+pub fn ir_type_contains_task(ty: &IrType, payloads: &EnumPayloadTable) -> bool {
+    ir_type_holds(ty, payloads, &|t| matches!(t, IrType::Task(_)))
 }
 
 /// Shadow check used by [`scan_free_target`] / [`substitute_var`] (and the

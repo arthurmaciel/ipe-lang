@@ -45,7 +45,10 @@ html = """<div class="card">
 
 Single `{` literal. Interpolation exprs = identifiers, field access
 (`{{record.field}}`), qualified names (`{{String.fromInt n}}`), or
-function calls.
+function calls. The value must be a `String`, `Int`, `Float`, `Bool` or
+`Char` (rendered as its `String.from*`); a record, custom type, `List`,
+`Maybe`, tuple or opaque value (`Request`, `Secret`) is refused (IPE-T0014) —
+interpolate its fields. `Log.*With` attrs obey the same rule.
 
 Escape w/ backslash: `\{{` emits literal `{{` (no interpolation). Use to
 ship Mustache/Handlebars/shell-script placeholders downstream without Ipê
@@ -176,8 +179,8 @@ mentions "deploy"/"production"/"Cloud Run"/"Kubernetes":
 
 * Confirm `ENV=production` will be set on runtime.
 * Confirm `IPE_AUTH_TOKEN_SECRET` ≥32 bytes.
-* Confirm `IPE_CONSOLE_AUTH` set (`token` or `app`) — production + unset
-  refuses to mount `/_ipe/console`.
+* Confirm `IPE_ADMIN_TOKEN` set (optionally with `IPE_CONSOLE_AUTH=token`) —
+  production without an admin token does not mount `/_ipe/console`.
 * Confirm session store NOT `memory` when >1 replica.
 
 Production-grade = survives restart, scales horizontally w/o losing state,
@@ -355,8 +358,8 @@ app code.
 
 | Module | Path | Key functions |
 |---|---|---|
-| `Basics` | `Ipe.Basics` (Tier A — ambient, no import; see Auto-import) | identity, always, not, toString, modBy, clamp, fst, snd, compare, negate, abs, sqrt, min, max |
-| `String` | `Ipe.String` | length, reverse, append, split, join, contains/containsIn, startsWith/startsWithIn, endsWith/endsWithIn (haystack-first In-suffixed), toInt, fromInt, toFloat, fromFloat, toUpper, toLower, trim/trimStart/trimEnd, replace, slice, dropLeft, dropRight (Elm-shaped rune-based), isEmpty, fromChar, toList, fromList, repeat, padLeft, padRight, casefold, equalFold, isEmail, isUrl, words, lines, concat |
+| `Basics` | `Ipe.Basics` (Tier A — ambient, no import; see Auto-import) | identity, always, not, modBy, clamp, fst, snd, compare, negate, abs, sqrt, min, max |
+| `String` | `Ipe.String` | length, reverse, append, split, join, contains/containsIn, startsWith/startsWithIn, endsWith/endsWithIn (haystack-first In-suffixed), toInt, fromInt, toFloat, fromFloat, toUpper, toLower, trim/trimStart/trimEnd, replace, slice, dropLeft, dropRight (Elm-shaped rune-based), isEmpty, fromBool, fromChar, toList, fromList, repeat, padLeft, padRight, casefold, equalFold, isEmail, isUrl, words, lines, concat |
 | `List` | `Ipe.List` | map, filter, foldl, foldr, length, head, tail, take, drop, append, concat, concatMap, reverse, member, any, all, range, zip, find, isEmpty, indexedMap, cons + reverseHelp/indexedMapHelp |
 | `Dict` | `Ipe.Dict` (kernel) | empty, insert, get, remove, member, keys, values, toList, fromList, map, foldl, union |
 | `Set` | `Ipe.Set` (kernel) | empty, insert, remove, member, union, diff, intersect, fromList, toList, size |
@@ -415,7 +418,6 @@ app code.
 | `Compression` | `Ipe.Compression` | `gzip`/`gunzip` (RFC 1952) + `zstdCompress`/`zstdDecompress` (RFC 8478). Operates on `String` (Bytes alias). |
 | `Csv` | `Ipe.Csv` | `parse`/`parseWithDelimiter` (returns `Csv = { header, rows }`), `encode`/`encodeWithDelimiter` (RFC 4180 quoting), `parseStreamFromFile`. |
 | `Config` | `Ipe.Config` | Typed TOML/YAML/JSON decoders mirroring `Ipe.Json.Decode`'s shape — `string`/`int`/`float`/`bool`/`nullable`/`field`/`at`/`list`/`succeed`/`fail`/`map`/`andThen`. `decodeToml`/`decodeYaml`/`decodeJson` + `loadFromFile`. |
-| `ToString` | `Ipe.ToString` | `fromInt`/`fromFloat`/`fromBool`/`fromTime` route to canonical kernels — default to `ToString.fromInt n` over memorising per-type kernels. |
 
 **Outbound dial rule** (`Http`, `WebSocket` client): a URL with `\` anywhere, or `@` in its path or fragment, is refused — write `@` as `%40`; an `@` in the query is allowed, but an error for that URL then withholds the host.
 

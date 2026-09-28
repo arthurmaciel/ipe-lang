@@ -777,9 +777,9 @@ fn run_bundle_lookup(key: &str, format: OutputFormat) -> Result<(), CliError> {
                 .map(|e| format!("  {}:{}", kind, e.key))
                 .collect();
             let hint = if near.is_empty() {
-                String::from("  (no entries in this kind)")
+                text::TerminalBlock::lines(["  (no entries in this kind)"])
             } else {
-                near.join("\n")
+                text::TerminalBlock::lines(near)
             };
             Err(CliError::Usage(text::msg::doc_no_entry_for_key(
                 &kind, &k, &hint,
@@ -3053,13 +3053,13 @@ fn child_shared_target_dir() -> Option<std::ffi::OsString> {
         (!trimmed.is_empty() && std::path::Path::new(trimmed).is_absolute())
             .then(|| std::ffi::OsString::from(trimmed))
     }
-    if let Some(shared) = std::env::var("IPE_ORACLE_SHARED_TARGET")
+    if let Some(shared) = ipe_env::var("IPE_ORACLE_SHARED_TARGET")
         .ok()
         .and_then(|raw| non_empty_absolute(&raw))
     {
         return Some(shared);
     }
-    std::env::var("CARGO_TARGET_DIR").ok().and_then(|raw| {
+    ipe_env::var("CARGO_TARGET_DIR").ok().and_then(|raw| {
         let trimmed = raw.trim();
         (!trimmed.is_empty()).then(|| std::ffi::OsString::from(trimmed))
     })
@@ -3202,7 +3202,7 @@ fn check_examples() -> Result<(), CliError> {
             // Tier 2: if the example has `-->` annotations AND IPE_E2E=1 is set,
             // run the example and assert its printed output.
             if !ex.expected_results.is_empty()
-                && std::env::var_os("IPE_E2E").is_some_and(|v| v == "1")
+                && ipe_env::var_os("IPE_E2E").is_some_and(|v| v == "1")
             {
                 match run_example_and_check(&snippet_path, &ex.label, &ex.expected_results) {
                     Ok(()) => {}
@@ -5012,7 +5012,7 @@ fn serve(path: &Path, port: Option<u16>) -> Result<(), CliError> {
     // A headless caller (CI, a test, a remote shell) opts out of the browser pop
     // with `IPE_DOC_NO_OPEN`; the URL is already printed, so the preview stays
     // reachable.
-    if std::env::var_os("IPE_DOC_NO_OPEN").is_none() {
+    if ipe_env::var_os("IPE_DOC_NO_OPEN").is_none() {
         open_in_browser(&url);
     }
 
@@ -6337,10 +6337,13 @@ mod tests {
         };
         assert!(
             matches!(
-                err,
-                CliError::Diff(crate::api_surface::DiffError::Io { .. })
+                &err,
+                CliError::SourceRefused {
+                    path,
+                    reason: crate::io_bounded::SourceRefusal::AccessDenied,
+                } if path == &src
             ),
-            "an unreadable src/ must surface as a Diff(Io) discovery error, got {err:?}"
+            "an unreadable src/ must surface as the typed access-denied refusal naming it, got {err:?}"
         );
         let _ = fs::remove_dir_all(&tmp);
     }

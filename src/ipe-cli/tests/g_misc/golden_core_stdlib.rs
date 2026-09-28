@@ -19,10 +19,9 @@
 //!   `Math.min`/`Math.max` — a bounded super-var tied across all three argument
 //!   positions AND the result, so a non-comparable argument fails closed.
 //!
-//! `Basics.toString` (polymorphic `a -> String`, needs a `Display`/`Stringify`
-//! bound HM cannot express) and `String.toChar` (no runtime fn, ambiguous
-//! Char-vs-Maybe-Char semantics) are DELIBERATELY not wired — they stay loud
-//! IPE-L0108 holes rather than risk a miscompile.
+//! `String.toChar` (no runtime fn, ambiguous Char-vs-Maybe-Char semantics) is
+//! DELIBERATELY not wired — it stays a loud IPE-L0108 hole rather than risk a
+//! miscompile.
 //!
 //! Gated on `IPE_E2E=1`. Run:
 //! `IPE_E2E=1 cargo test -p ipe --test golden_core_stdlib`.
@@ -59,7 +58,7 @@ fn compile_golden(name: &str) -> PathBuf {
 }
 
 fn e2e_enabled() -> bool {
-    std::env::var("IPE_E2E").is_ok()
+    ipe_env::var("IPE_E2E").is_ok()
 }
 
 /// The six newly-wired core-stdlib kernels compile and produce correct output.

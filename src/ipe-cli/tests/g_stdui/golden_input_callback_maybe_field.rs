@@ -80,7 +80,7 @@ fn build_run_input_callback() -> crate::support::RunOutcome {
 /// (exit 0) and the binary runs (exit 0), rendering all four Input controls.
 #[test]
 fn input_callback_bare_ctor_arc_wraps_builds_and_runs() {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
 

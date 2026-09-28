@@ -58,7 +58,7 @@ fn unit_pattern_ipec_accepts_and_lowers() {
 /// Gated on `IPE_E2E=1`.
 #[test]
 fn unit_pattern_cargo_builds_and_runs() {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
 

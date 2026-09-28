@@ -2,7 +2,7 @@
 --
 -- A `String` is immutable UTF-8 text; every function here returns a NEW string
 -- rather than changing its argument. The functions cluster into families:
--- construction (`fromInt`, `fromChar`, `repeat`), shape (`length`, `isEmpty`),
+-- construction (`fromInt`, `fromFloat`, `fromBool`, `fromChar`, `repeat`), shape (`length`, `isEmpty`),
 -- combining (`join`, `append`, `concat`), splitting (`split`, `words`, `lines`),
 -- slicing (`slice`, `left`, `right`, `dropLeft`, `padLeft`), case
 -- (`toUpper`, `toLower`, and the locale-aware `*In` / `casefold` variants),
@@ -27,7 +27,7 @@ module Ipe.String exposing
     , casefold, equalFold
     , isEmail, isUrl
     , words, lines
-    , fromChar, toList, fromList
+    , fromBool, fromChar, toList, fromList
     , repeat, padLeft, padRight
     , left, right, cons, uncons, pad, indexes
     , map, filter, foldl, foldr, any, all
@@ -61,6 +61,18 @@ fromFloat (-0.5) --> "-0.5"
 -}
 fromFloat : Float -> String
 fromFloat = Kernel.kernel "String_fromFloat"
+
+
+{-| `fromBool b` — the canonical text of a `Bool`: lowercase `"true"` or
+`"false"`. `{{flag}}` interpolation renders a `Bool` the same way.
+
+```ipe
+fromBool True --> "true"
+fromBool False --> "false"
+```
+-}
+fromBool : Bool -> String
+fromBool = Kernel.kernel "String_fromBool"
 
 
 {-| `fromChar c` — a one-character string from a `Char`.

@@ -227,7 +227,7 @@ where
         let mut tree = view(model);
         assign_ipe_ids(&mut tree, "r");
         style_inject::apply_style_injections(&mut tree);
-        println!("{}", render_page(&render_html(&tree)));
+        crate::system::write_stdout_line(&render_page(&render_html(&tree)));
         IpeResult::Ok(())
     })
 }
@@ -1679,7 +1679,7 @@ where
     wait_for_term_or_int().await;
 
     // Print to stdout. The leading newline keeps the `^C` echo on its own line.
-    println!("\nIpe.Web shutting down…");
+    crate::system::write_stdout_line("\nIpe.Web shutting down…");
 
     // Flip readyz → draining so orchestrators stop routing new traffic while
     // in-flight requests finish.
@@ -4362,7 +4362,7 @@ where
     // Bind-address line (stderr) — carries the resolved host:port.
     crate::system::emit_runtime_log("web", &format!("listening on http://{addr}"));
     // User-facing line on stdout.
-    println!("Ipe.Web listening on :{port}");
+    crate::system::write_stdout_line(&format!("Ipe.Web listening on :{port}"));
     // Graceful shutdown: trap SIGINT/SIGTERM,
     // print the shutdown line, drain in-flight requests, and return cleanly so
     // the IpeTask resolves Ok → the generated entry exits 0 (NOT 130). A
@@ -4632,6 +4632,12 @@ where
             "/_ipe/observability/ingest",
             post(console::ingest).layer(axum::extract::DefaultBodyLimit::max(web_max_body_bytes())),
         );
+
+    // The console + metrics auth gate applies whether or not a console is
+    // mounted, so its effective posture/mode/source is always logged once.
+    crate::system::write_stderr_line(
+        &crate::telemetry::ConsoleAuthResolution::from_env().startup_line(),
+    );
 
     // When `http_client` is active and the pre-built console binary is
     // present, the proxy replaces the in-process console: a child process is

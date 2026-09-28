@@ -554,7 +554,7 @@ fn server_pid(port: u16) -> Option<u32> {
 #[test]
 #[cfg(target_os = "linux")]
 fn style_edit_hot_swaps_without_rebuild_and_structural_edit_recompiles() -> Result<(), BoxError> {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         eprintln!("skipping (set IPE_E2E=1 to run)");
         return Ok(());
     }
@@ -667,7 +667,7 @@ fn style_edit_hot_swaps_without_rebuild_and_structural_edit_recompiles() -> Resu
 // one live watch session — the length is the scenario, not incidental complexity.
 #[allow(clippy::too_many_lines)]
 fn attribute_and_text_edits_hot_swap_without_rebuild() -> Result<(), BoxError> {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         eprintln!("skipping (set IPE_E2E=1 to run)");
         return Ok(());
     }
@@ -794,7 +794,7 @@ fn attribute_and_text_edits_hot_swap_without_rebuild() -> Result<(), BoxError> {
 #[test]
 #[cfg(target_os = "linux")]
 fn numeric_weight_edit_hot_swaps_without_rebuild() -> Result<(), BoxError> {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         eprintln!("skipping (set IPE_E2E=1 to run)");
         return Ok(());
     }
@@ -891,7 +891,7 @@ fn numeric_weight_edit_hot_swaps_without_rebuild() -> Result<(), BoxError> {
 #[test]
 #[cfg(target_os = "linux")]
 fn animation_duration_edit_hot_swaps_without_rebuild() -> Result<(), BoxError> {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         eprintln!("skipping (set IPE_E2E=1 to run)");
         return Ok(());
     }
@@ -986,7 +986,7 @@ fn animation_duration_edit_hot_swaps_without_rebuild() -> Result<(), BoxError> {
 #[test]
 #[cfg(target_os = "linux")]
 fn grid_tracks_edit_hot_swaps_without_rebuild() -> Result<(), BoxError> {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         eprintln!("skipping (set IPE_E2E=1 to run)");
         return Ok(());
     }
@@ -1080,7 +1080,7 @@ fn grid_tracks_edit_hot_swaps_without_rebuild() -> Result<(), BoxError> {
 #[test]
 #[cfg(target_os = "linux")]
 fn image_alt_edit_hot_swaps_without_rebuild() -> Result<(), BoxError> {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         eprintln!("skipping (set IPE_E2E=1 to run)");
         return Ok(());
     }
@@ -1175,7 +1175,7 @@ fn image_alt_edit_hot_swaps_without_rebuild() -> Result<(), BoxError> {
 #[test]
 #[cfg(target_os = "linux")]
 fn css_value_edit_hot_swaps_and_is_byte_identical() -> Result<(), BoxError> {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         eprintln!("skipping (set IPE_E2E=1 to run)");
         return Ok(());
     }
@@ -1277,7 +1277,7 @@ fn css_value_edit_hot_swaps_and_is_byte_identical() -> Result<(), BoxError> {
 // in one live watch session — the length is the scenario, not incidental.
 #[allow(clippy::too_many_lines)]
 fn static_html_subtree_structural_edit_hot_swaps_without_rebuild() -> Result<(), BoxError> {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         eprintln!("skipping (set IPE_E2E=1 to run)");
         return Ok(());
     }
@@ -1388,7 +1388,7 @@ fn static_html_subtree_structural_edit_hot_swaps_without_rebuild() -> Result<(),
 // in one live watch session — the length is the scenario, not incidental.
 #[allow(clippy::too_many_lines)]
 fn static_ui_subtree_structural_edit_hot_swaps_without_rebuild() -> Result<(), BoxError> {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         eprintln!("skipping (set IPE_E2E=1 to run)");
         return Ok(());
     }
@@ -1527,7 +1527,7 @@ fn web_fixture_static_ui_wrappers(text: &str, extra_child: &str) -> String {
 // the length is the scenario, not incidental.
 #[allow(clippy::too_many_lines)]
 fn static_ui_subtree_wrapper_hot_swaps_without_rebuild() -> Result<(), BoxError> {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         eprintln!("skipping (set IPE_E2E=1 to run)");
         return Ok(());
     }
@@ -1669,7 +1669,7 @@ fn web_fixture_value_hole(label: &str, extra_child: &str) -> String {
 #[cfg(target_os = "linux")]
 #[allow(clippy::too_many_lines)]
 fn value_hole_static_sibling_hot_swaps_without_rebuild() -> Result<(), BoxError> {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         eprintln!("skipping (set IPE_E2E=1 to run)");
         return Ok(());
     }
@@ -1787,7 +1787,7 @@ fn web_fixture_counter(step: u32, extra_text: &str) -> String {
 #[test]
 #[cfg(target_os = "linux")]
 fn update_arm_step_edit_hot_swaps_without_rebuild() -> Result<(), BoxError> {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         eprintln!("skipping (set IPE_E2E=1 to run)");
         return Ok(());
     }
@@ -1968,7 +1968,7 @@ fn web_fixture_ticker(interval: u32, extra_text: &str) -> String {
 #[test]
 #[cfg(target_os = "linux")]
 fn non_additive_msg_change_recompiles() -> Result<(), BoxError> {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         eprintln!("skipping (set IPE_E2E=1 to run)");
         return Ok(());
     }
@@ -2030,7 +2030,7 @@ fn non_additive_msg_change_recompiles() -> Result<(), BoxError> {
 #[test]
 #[cfg(target_os = "linux")]
 fn subscriptions_interval_edit_hot_swaps_without_rebuild() -> Result<(), BoxError> {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         eprintln!("skipping (set IPE_E2E=1 to run)");
         return Ok(());
     }
@@ -2167,7 +2167,7 @@ fn web_fixture_cmd_perform() -> String {
 #[test]
 #[cfg(target_os = "linux")]
 fn cmd_perform_arm_composes_and_serves() -> Result<(), BoxError> {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         eprintln!("skipping (set IPE_E2E=1 to run)");
         return Ok(());
     }

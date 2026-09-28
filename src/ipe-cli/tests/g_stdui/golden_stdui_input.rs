@@ -23,7 +23,7 @@ fn repo_root() -> PathBuf {
 
 #[test]
 fn ui_input_and_describe_ipec_and_cargo_zero() {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
 

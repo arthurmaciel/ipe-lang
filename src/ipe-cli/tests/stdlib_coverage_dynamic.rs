@@ -20,7 +20,7 @@ use ipe::coverage::surface::StdlibSurface;
 
 /// Whether the heavy end-to-end path is enabled.
 fn e2e_enabled() -> bool {
-    std::env::var("IPE_E2E").is_ok()
+    ipe_env::var("IPE_E2E").is_ok()
 }
 
 /// The bounded worker count for the parallel build+run sweep.
@@ -33,7 +33,7 @@ fn e2e_enabled() -> bool {
 /// machine's available parallelism capped at 8 — high enough to fit the deadline,
 /// bounded so a shared build host is not swamped.
 fn build_run_jobs() -> usize {
-    if let Ok(raw) = std::env::var("IPE_COVERAGE_BUILD_JOBS")
+    if let Ok(raw) = ipe_env::var("IPE_COVERAGE_BUILD_JOBS")
         && let Ok(n) = raw.trim().parse::<usize>()
         && n >= 1
     {

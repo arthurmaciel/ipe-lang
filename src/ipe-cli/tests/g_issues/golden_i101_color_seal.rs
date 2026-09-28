@@ -65,7 +65,7 @@ fn emitted_program_source(out: &Path) -> String {
 /// `Color` in the same module still lowers to `UiPlain::Color`.
 #[test]
 fn user_color_via_hof_resolves_to_own_enum() {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
 
@@ -134,7 +134,7 @@ fn user_color_via_hof_resolves_to_own_enum() {
 /// path) agrees with the annotated (canon) path — was IPE-I0001.
 #[test]
 fn user_color_in_record_field_agrees_across_paths() {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
 

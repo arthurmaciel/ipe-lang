@@ -131,7 +131,7 @@ fn mixed_arm_task_run_elision_builds_and_runs() {
         "mixed_arm_task_run_elision: must be accepted, got: {built:?}"
     );
 
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
     let outcome = crate::support::build_and_run_emitted("mixed_arm_task_run_elision", &out);

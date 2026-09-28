@@ -15,7 +15,7 @@ use std::collections::BTreeSet;
 
 use ipe_diagnostics::{DResult, Feature, Span};
 use ipe_intern::{Interner, Symbol};
-use ipe_ir::{Expr, IrType, ModPath, Pat};
+use ipe_ir::{EnumPayloadTable, Expr, IrType, ModPath, Pat, enum_payload_holds};
 
 use super::capture_rewrite::force_shared_capture_clones;
 
@@ -52,14 +52,19 @@ pub(super) fn enum_home_is_ffi_foreign(interner: &Interner, home: &ModPath) -> b
         .is_some_and(|s| s == "Rust")
 }
 
-/// The clone-classification context: the interner plus the `Rust.*`-home
-/// unions that are TRANSPARENT FFI imports. A transparent union lowers to a
-/// real app enum (deriving `Clone` like any user enum); only the REMAINING
-/// `Rust.*`-home enums are opaque handles onto real foreign types.
+/// The clone-classification context.
+///
+/// Carries the interner, the `Rust.*`-home unions that are TRANSPARENT FFI
+/// imports, and the program's enum payload table. A transparent union lowers
+/// to a real app enum (deriving `Clone` like any user enum); only the
+/// REMAINING `Rust.*`-home enums are opaque handles onto real foreign types.
+/// The payload table lets a user enum's class see the value types its
+/// variants hold — the same table the backend's enum-`Clone` fixpoint reads.
 #[derive(Clone, Copy)]
 pub(super) struct CloneEnv<'a> {
     pub(super) interner: &'a Interner,
     pub(super) transparent_ffi: &'a BTreeSet<(ModPath, Symbol)>,
+    pub(super) payloads: &'a EnumPayloadTable,
 }
 
 /// Is `(home, name)` an OPAQUE FFI foreign handle — a `Rust.*`-home enum that
@@ -67,6 +72,28 @@ pub(super) struct CloneEnv<'a> {
 pub(super) fn enum_is_opaque_ffi_handle(env: CloneEnv<'_>, home: &ModPath, name: Symbol) -> bool {
     enum_home_is_ffi_foreign(env.interner, home)
         && !env.transparent_ffi.contains(&(home.clone(), name))
+}
+
+/// Is `t` a leaf whose presence in an enum payload makes the enum non-`Clone`?
+///
+/// Leaves defer to [`ipe_ir::payload_leaf_is_clone`] — the one leaf rule the
+/// backend's enum-`Clone` fixpoint applies to payload fields — plus opaque FFI
+/// handles. Transparent carriers answer `false` because the payload walk
+/// descends into them itself.
+fn payload_leaf_is_nonclone(env: CloneEnv<'_>, t: &IrType) -> bool {
+    match t {
+        IrType::Enum { home, name, .. } => enum_is_opaque_ffi_handle(env, home, *name),
+        IrType::Maybe(_)
+        | IrType::List(_)
+        | IrType::Set(_)
+        | IrType::Result(_, _)
+        | IrType::Dict(_, _)
+        | IrType::Tuple(_)
+        | IrType::Record(_)
+        | IrType::Ui { .. }
+        | IrType::WebRoute(_) => false,
+        other => !ipe_ir::payload_leaf_is_clone(other),
+    }
 }
 
 pub(super) fn clone_class(env: CloneEnv<'_>, t: &IrType) -> CloneClass {
@@ -217,17 +244,7 @@ pub(super) fn clone_class(env: CloneEnv<'_>, t: &IrType) -> CloneClass {
         // wrapper `Copy` — bare capture would move it on first closure call → E0525.
         // Floor to CloneOk so the rewrite inserts `.clone()` per call.
         IrType::Record(fields) => clone_class_named_composite(env, fields.values()),
-        // An FFI foreign-interface opaque handle (a `Rust.*` home with no
-        // transparent import) is the real foreign Rust type; its `Clone`-ness
-        // is the foreign crate's decision, not Ipe's, so it is NonClone here —
-        // a duplicating `.clone()` on a non-`Clone` foreign type (e.g.
-        // `bevy_ecs::World`) would be cargo E0599 after `ipe` exit 0 (a SEAL
-        // break). A TRANSPARENT import lowers to a real app enum and takes the
-        // ordinary named-composite class below, like any user enum.
-        IrType::Enum { home, name, .. } if enum_is_opaque_ffi_handle(env, home, *name) => {
-            CloneClass::NonClone
-        }
-        IrType::Enum { args, .. } => clone_class_named_composite(env, args.iter()),
+        IrType::Enum { home, name, args } => enum_clone_class(env, home, *name, args),
         // Ui{msg} / WebRoute(page) — recurse on the message/page type-param.
         // Both emit named runtime structs (`Html<M>`, `Route<P>`, …) that derive
         // `Clone` but never `Copy`, so a `Copy` parameter floors to `CloneOk`.
@@ -396,6 +413,34 @@ fn clone_class_composite<'a>(
 /// on first call, causing E0525 on any subsequent call.  Flooring to `CloneOk`
 /// ensures the rewrite inserts `.clone()` per call — safe because the wrapper
 /// derives `Clone`.
+/// Clone class of a named user enum.
+///
+/// `NonClone` when the enum is an FFI foreign-interface opaque handle (a
+/// `Rust.*` home with no transparent import: the real foreign Rust type, whose
+/// `Clone`-ness is the foreign crate's decision), or when a variant payload
+/// holds a non-`Clone` value (a `Task`, a boxed fn, an opaque FFI handle), so
+/// the backend's enum-`Clone` fixpoint gives it no `Clone` impl. Either way a
+/// duplicating `.clone()` would be cargo E0599 after `ipe` exit 0 (a SEAL
+/// break). Otherwise its type arguments decide, floored to `CloneOk` like any
+/// named composite; a TRANSPARENT FFI import lowers to a real app enum and
+/// lands here too.
+fn enum_clone_class(
+    env: CloneEnv<'_>,
+    home: &ModPath,
+    name: Symbol,
+    args: &[IrType],
+) -> CloneClass {
+    if enum_is_opaque_ffi_handle(env, home, name)
+        || enum_payload_holds(home, name, env.payloads, &|p| {
+            payload_leaf_is_nonclone(env, p)
+        })
+    {
+        CloneClass::NonClone
+    } else {
+        clone_class_named_composite(env, args.iter())
+    }
+}
+
 fn clone_class_named_composite<'a>(
     env: CloneEnv<'_>,
     parts: impl Iterator<Item = &'a IrType>,
@@ -953,7 +998,7 @@ pub(super) fn reject_nonclone_value_reuse(
     body: &Expr,
     span: Span,
 ) -> DResult<()> {
-    if !super::ir_type_has_effect_carrier(ir_ty)
+    if !super::ir_type_has_effect_carrier(ir_ty, env.payloads)
         || !matches!(clone_class(env, ir_ty), CloneClass::NonClone)
     {
         return Ok(());
@@ -961,7 +1006,7 @@ pub(super) fn reject_nonclone_value_reuse(
     // A sequenced task or argument-reversed kernel whose first-evaluated operand
     // the emitter must rewrite to `sym.clone()` (so the continuation can still
     // capture `sym`) has no `Clone` impl to call.
-    if ipe_ir::seq_clone::seq_rewrite_clones_symbol(sym, body) {
+    if ipe_ir::seq_clone::seq_rewrite_clones_symbol(sym, body, env.payloads) {
         return Err(super::unsupported(span, Feature::NonCloneValueReuse));
     }
     // A by-value pattern binder of a `Copy` record field copies it, so a
@@ -1366,7 +1411,7 @@ mod handler_capture_tests {
     use std::collections::BTreeSet;
 
     use ipe_intern::Interner;
-    use ipe_ir::IrType;
+    use ipe_ir::{EnumPayloadTable, IrType};
 
     use super::{CloneEnv, HandlerCapture, classify_handler_capture};
 
@@ -1379,9 +1424,11 @@ mod handler_capture_tests {
     fn unresolved_capture_is_refused() {
         let interner = Interner::new();
         let ffi = BTreeSet::new();
+        let payloads = EnumPayloadTable::new();
         let env = CloneEnv {
             interner: &interner,
             transparent_ffi: &ffi,
+            payloads: &payloads,
         };
         for promotable in [false, true] {
             let class = classify_handler_capture(env, None, promotable);
@@ -1395,9 +1442,11 @@ mod handler_capture_tests {
     fn fun_capture_needs_promotable_binder() {
         let interner = Interner::new();
         let ffi = BTreeSet::new();
+        let payloads = EnumPayloadTable::new();
         let env = CloneEnv {
             interner: &interner,
             transparent_ffi: &ffi,
+            payloads: &payloads,
         };
         let ty = fun_ty();
         assert_eq!(
@@ -1414,9 +1463,11 @@ mod handler_capture_tests {
     fn copy_and_clone_captures_are_admitted() {
         let interner = Interner::new();
         let ffi = BTreeSet::new();
+        let payloads = EnumPayloadTable::new();
         let env = CloneEnv {
             interner: &interner,
             transparent_ffi: &ffi,
+            payloads: &payloads,
         };
         assert!(classify_handler_capture(env, Some(&IrType::Int), false).admitted());
         assert!(classify_handler_capture(env, Some(&IrType::Str), false).admitted());

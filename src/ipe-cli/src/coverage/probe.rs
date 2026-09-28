@@ -351,7 +351,7 @@ const EMIT_PACKAGE_NAME: &str = "IPE_EMIT_PACKAGE_NAME";
 /// # Errors
 /// The rendered failure when neither source yields a path.
 fn ipe_binary() -> Result<std::path::PathBuf, String> {
-    if let Some(p) = std::env::var_os("CARGO_BIN_EXE_ipe") {
+    if let Some(p) = ipe_env::var_os("CARGO_BIN_EXE_ipe") {
         return Ok(std::path::PathBuf::from(p));
     }
     std::env::current_exe().map_err(|e| format!("could not locate the ipe binary: {e}"))
@@ -365,7 +365,7 @@ fn ipe_binary() -> Result<std::path::PathBuf, String> {
 /// This is the same fail-safe the golden harness applies: a relative or empty
 /// value never silently pins the build to a surprising target.
 fn shared_dep_target() -> Option<String> {
-    let raw = std::env::var(ORACLE_SHARED_TARGET).ok()?;
+    let raw = ipe_env::var(ORACLE_SHARED_TARGET).ok()?;
     let trimmed = raw.trim();
     if trimmed.is_empty() || !Path::new(trimmed).is_absolute() {
         return None;

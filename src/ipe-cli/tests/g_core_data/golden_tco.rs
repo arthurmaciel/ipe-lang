@@ -51,7 +51,7 @@ fn compile_golden(name: &str, scratch: &str) -> PathBuf {
 }
 
 fn e2e_enabled() -> bool {
-    std::env::var("IPE_E2E").is_ok()
+    ipe_env::var("IPE_E2E").is_ok()
 }
 
 /// The soundness proof — constant stack. 2,000,000 self-tail-recursive iterations

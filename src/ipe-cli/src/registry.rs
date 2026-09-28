@@ -51,7 +51,7 @@ const JSON_ACCEPT: &str = "application/json";
 /// with no network attempt.
 #[must_use]
 pub fn registry_base_url() -> String {
-    std::env::var(REGISTRY_URL_ENV).map_or_else(
+    ipe_env::var(REGISTRY_URL_ENV).map_or_else(
         |_| DEFAULT_REGISTRY_URL.to_owned(),
         |value| value.trim_end_matches('/').to_owned(),
     )

@@ -181,6 +181,7 @@ fn source_display_name_default_is_qualifier_dot_name() {
     use StdlibKernel::*;
     let exceptions = [
         ResultOkDefault,
+        Interpolate,
         DbExecRaw,
         DbQuery,
         DbGetString,

@@ -162,7 +162,7 @@ const SERVER_SHAPE_SOURCE: &str = "module Main exposing (main)\n\
 /// `cargo build --target wasm32-wasip1` accepts. `ipe`-accepts ⇒ cargo-builds.
 #[test]
 fn wasi_direct_floor_program_cargo_builds_for_wasip1() {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
 
@@ -247,7 +247,7 @@ fn wasi_http_shape_is_refused_fail_closed() {
 /// ⇒ cargo-builds. Gated on `IPE_E2E=1`.
 #[test]
 fn ipe_build_target_wasi_user_path_cargo_builds() {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
 
@@ -347,7 +347,7 @@ fn ipe_build_target_wasi_refuses_non_viable_shape_fail_closed() {
 #[cfg(feature = "wasi_run")]
 #[test]
 fn ipe_run_target_wasi_executes_under_wasmtime() {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
 

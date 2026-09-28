@@ -320,7 +320,7 @@ fn pid_is_alive(pid: u32) -> bool {
 
 #[test]
 fn watch_rebuild_on_save_swaps_the_running_binary() -> Result<(), BoxError> {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         eprintln!("skipping (set IPE_E2E=1 to run)");
         return Ok(());
     }
@@ -347,7 +347,7 @@ fn watch_rebuild_on_save_swaps_the_running_binary() -> Result<(), BoxError> {
 
 #[test]
 fn watch_keeps_last_good_binary_alive_on_a_syntax_error() -> Result<(), BoxError> {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         eprintln!("skipping (set IPE_E2E=1 to run)");
         return Ok(());
     }
@@ -390,7 +390,7 @@ fn watch_keeps_last_good_binary_alive_on_a_syntax_error() -> Result<(), BoxError
 
 #[test]
 fn watch_coalesces_a_rapid_double_save_into_one_rebuild() -> Result<(), BoxError> {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         eprintln!("skipping (set IPE_E2E=1 to run)");
         return Ok(());
     }
@@ -449,7 +449,7 @@ fn watch_coalesces_a_rapid_double_save_into_one_rebuild() -> Result<(), BoxError
 #[cfg(target_os = "linux")]
 #[test]
 fn dropping_a_watch_handle_without_stop_still_reaps_the_supervised_child() -> Result<(), BoxError> {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         eprintln!("skipping (set IPE_E2E=1 to run)");
         return Ok(());
     }
@@ -511,7 +511,7 @@ fn dropping_a_watch_handle_without_stop_still_reaps_the_supervised_child() -> Re
 #[cfg(target_os = "linux")]
 #[test]
 fn watch_does_not_bind_a_proxy_for_a_non_http_shape() -> Result<(), BoxError> {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         eprintln!("skipping (set IPE_E2E=1 to run)");
         return Ok(());
     }
@@ -565,7 +565,7 @@ fn watch_does_not_bind_a_proxy_for_a_non_http_shape() -> Result<(), BoxError> {
 /// not by shape (a `Server.listen` main is `Shape::Script`).
 #[test]
 fn watch_proxies_a_hardcoded_port_server_on_an_internal_port() -> Result<(), BoxError> {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         eprintln!("skipping (set IPE_E2E=1 to run)");
         return Ok(());
     }

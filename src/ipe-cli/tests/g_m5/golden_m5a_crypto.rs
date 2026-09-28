@@ -56,7 +56,7 @@ fn golden_dir(root: &Path, name: &str) -> PathBuf {
 /// run it, and assert its stdout matches the cached oracle.  Gated on
 /// `IPE_E2E=1`.
 fn assert_runs_and_matches_oracle(name: &str) {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
 

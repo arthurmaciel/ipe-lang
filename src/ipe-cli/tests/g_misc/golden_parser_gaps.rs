@@ -80,7 +80,7 @@ fn runtime() -> PathBuf {
 // ---------------------------------------------------------------------------
 
 fn assert_single_oracle(name: &str) {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
     let dir = golden_dir(name);
@@ -117,7 +117,7 @@ fn blockcomment_builds_and_matches_oracle() {
 
 #[test]
 fn qualtype_project_builds_and_prints_42() {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
     let name = "mm_qualtype";
@@ -148,7 +148,7 @@ fn qualtype_project_builds_and_prints_42() {
 
 #[test]
 fn intdiv_by_zero_aborts_exit_101() {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
     let name = "intdiv_divzero";

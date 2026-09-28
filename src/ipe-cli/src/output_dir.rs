@@ -184,6 +184,11 @@ pub enum OutputRefusal {
     /// A cloud-sync folder, a mount point, or a deduplicated directory may
     /// lead anywhere, so ipe refuses to act inside one.
     ReparsePoint(PathBuf),
+    /// An entry another program holds open, so ipe cannot remove or replace it.
+    ///
+    /// On Windows an editor, a file indexer, or antivirus holding a file or
+    /// directory without delete sharing blocks its removal until released.
+    InUse(PathBuf),
 }
 
 impl std::fmt::Display for OutputRefusal {
@@ -221,6 +226,7 @@ impl std::fmt::Display for OutputRefusal {
             Self::Replaced(p) => text::output_replaced(&p.display()),
             Self::TooDeep { path, limit } => text::output_too_deep(&path.display(), limit),
             Self::ReparsePoint(p) => text::output_reparse_point(&p.display()),
+            Self::InUse(p) => text::output_in_use(&p.display()),
         };
         f.write_str(&message)
     }
@@ -1494,6 +1500,31 @@ mod tests {
     use super::test_links::junction_in_place;
     use super::test_links::plant_link;
     use super::*;
+
+    /// A hostile path in any refusal cannot carry an escape sequence or open a line.
+    #[test]
+    fn a_hostile_path_in_a_refusal_renders_inert() {
+        let hostile = PathBuf::from("out\u{1b}]0;title\u{7}\n\u{1b}[2Kerror: forged");
+        let refusals = [
+            OutputRefusal::Symlink(hostile.clone()),
+            OutputRefusal::NotIpeOwned(hostile.clone()),
+            OutputRefusal::ContainsProject {
+                out: hostile.clone(),
+                project: hostile.clone(),
+            },
+            OutputRefusal::OutsideProject {
+                path: hostile.clone(),
+                root: hostile.clone(),
+            },
+            OutputRefusal::ParentTraversal(hostile),
+        ];
+        for refusal in refusals {
+            let shown = refusal.to_string();
+            assert!(!shown.contains('\u{1b}'), "{shown:?}");
+            assert!(!shown.contains('\u{7}'), "{shown:?}");
+            assert!(!shown.lines().any(|l| l.starts_with("error:")), "{shown:?}");
+        }
+    }
 
     fn scratch(tag: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("ipe_output_dir_{tag}_{}", std::process::id()));

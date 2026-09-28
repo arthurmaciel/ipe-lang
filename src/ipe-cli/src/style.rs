@@ -259,7 +259,7 @@ impl Palette {
 /// is unset (per <https://no-color.org>).
 #[must_use]
 pub fn use_color(stream: &impl IsTerminal) -> bool {
-    stream.is_terminal() && std::env::var_os("NO_COLOR").is_none()
+    stream.is_terminal() && ipe_env::var_os("NO_COLOR").is_none()
 }
 
 /// Build the sandbox-override warning line for stderr.

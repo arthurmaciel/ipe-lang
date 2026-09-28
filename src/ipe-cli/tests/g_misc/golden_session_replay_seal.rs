@@ -48,7 +48,7 @@ fn run_with(exe: &str, var: &str, value: &Path, stdin: &[u8]) -> Option<(Option<
 
 #[test]
 fn record_then_replay_is_deterministic_and_refuses_bad_logs() {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
 

@@ -82,7 +82,7 @@ fn build_run_dualattr() -> (PathBuf, crate::support::RunOutcome) {
 /// Divergence golden — the expected value is ipe's own correct output.
 #[test]
 fn dualattr_stdui_attributes_and_html_node_bridge_render_correctly() {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
 

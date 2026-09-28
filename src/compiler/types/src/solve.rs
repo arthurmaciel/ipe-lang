@@ -82,7 +82,7 @@ impl Budget {
     /// build — the budget is a guard rail, not a feature.
     #[must_use]
     pub fn from_env() -> Self {
-        std::env::var(BUDGET_ENV).map_or_else(
+        ipe_env::var(BUDGET_ENV).map_or_else(
             |_| Self::new(DEFAULT_SOLVER_BUDGET),
             |raw| match raw.trim().parse::<u64>() {
                 Ok(0) => Self::unbounded(),

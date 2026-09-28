@@ -708,7 +708,8 @@ fn read_without_links(base: &Path, parts: &[&str]) -> Option<Vec<u8>> {
         seen = Some(meta);
     }
     let seen = seen.filter(fs::Metadata::is_file)?;
-    let mut file = open_entry(&path)?;
+    let mut file =
+        crate::io_bounded::open_regular(&path, crate::io_bounded::FinalLink::Refuse).ok()?;
     let opened = file.metadata().ok()?;
     if !same_file(&seen, &opened) {
         return None;
@@ -716,33 +717,6 @@ fn read_without_links(base: &Path, parts: &[&str]) -> Option<Vec<u8>> {
     let mut bytes = Vec::new();
     file.read_to_end(&mut bytes).ok()?;
     Some(bytes)
-}
-
-/// Open `path` read-only, refusing a final symlink and never blocking on a FIFO.
-#[cfg(unix)]
-fn open_entry(path: &Path) -> Option<fs::File> {
-    use rustix::fs::{Mode, OFlags};
-    let flags = OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::CLOEXEC;
-    rustix::fs::open(path, flags, Mode::empty())
-        .ok()
-        .map(fs::File::from)
-}
-
-/// Open `path` read-only, refusing a reparse point at its final component.
-#[cfg(windows)]
-fn open_entry(path: &Path) -> Option<fs::File> {
-    use std::os::windows::fs::{MetadataExt as _, OpenOptionsExt as _};
-    /// `FILE_FLAG_OPEN_REPARSE_POINT`: opens a reparse point itself, never its target.
-    const OPEN_REPARSE_POINT: u32 = 0x0020_0000;
-    /// `FILE_ATTRIBUTE_REPARSE_POINT`.
-    const ATTR_REPARSE_POINT: u32 = 0x400;
-    let file = fs::OpenOptions::new()
-        .read(true)
-        .custom_flags(OPEN_REPARSE_POINT)
-        .open(path)
-        .ok()?;
-    let attributes = file.metadata().ok()?.file_attributes();
-    (attributes & ATTR_REPARSE_POINT == 0).then_some(file)
 }
 
 /// Whether two metadata records name the same file.
@@ -773,12 +747,12 @@ const fn same_file(_: &fs::Metadata, _: &fs::Metadata) -> bool {
 #[must_use]
 pub fn env_cache_dir(out_dir: &Path) -> Option<CacheSite> {
     if matches!(
-        std::env::var("IPE_BUILD_CACHE").as_deref(),
+        ipe_env::var("IPE_BUILD_CACHE").as_deref(),
         Ok("0" | "off" | "false")
     ) {
         return None;
     }
-    if let Ok(dir) = std::env::var("IPE_BUILD_CACHE_DIR") {
+    if let Ok(dir) = ipe_env::var("IPE_BUILD_CACHE_DIR") {
         return Some(CacheSite::Explicit(PathBuf::from(dir)));
     }
     default_cache_site(out_dir)

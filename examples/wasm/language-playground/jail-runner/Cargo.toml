@@ -16,10 +16,11 @@ path = "src/main.rs"
 [dependencies]
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-tempfile = "3"
+ipe_env = { path = "../../../../src/compiler/env" }
 ipe_sandbox = { path = "../../../../src/compiler/sandbox" }
 
 [dev-dependencies]
+tempfile = "3"
 ipe_sandbox = { path = "../../../../src/compiler/sandbox" }
 
 [lints]

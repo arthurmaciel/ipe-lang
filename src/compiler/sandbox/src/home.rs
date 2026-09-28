@@ -6,13 +6,15 @@
 //! toolchain binds live, so it is parsed once here: an unset, empty, or
 //! relative value names no directory. A relative home would silently resolve
 //! against the working directory, redirecting writes to wherever the process
-//! happens to run.
+//! happens to run. `ipe_env` refuses every home name, so this module's raw
+//! read is the only way a compiler-side crate reaches the value.
 
 use std::ffi::OsString;
 use std::path::PathBuf;
 
 /// The invoking user's home directory, when the environment names an absolute one.
 #[must_use]
+#[allow(clippy::disallowed_methods)] // the sole home reader: parsed absolute-or-nothing below
 pub fn home_dir() -> Option<PathBuf> {
     /// The platform variable naming the invoking user's home directory.
     #[cfg(windows)]
@@ -52,7 +54,7 @@ impl std::error::Error for RelativeToolHome {}
 /// # Errors
 /// [`RelativeToolHome`] when `var` is set, non-empty, and relative.
 pub fn tool_home(var: &'static str, fallback: &str) -> Result<Option<PathBuf>, RelativeToolHome> {
-    tool_home_from(var, std::env::var_os(var), home_dir(), fallback)
+    tool_home_from(var, ipe_env::var_os(var), home_dir(), fallback)
 }
 
 /// Resolve a tool home from the raw variable value and the resolved home.

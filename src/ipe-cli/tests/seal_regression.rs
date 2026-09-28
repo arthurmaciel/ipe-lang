@@ -83,7 +83,7 @@ fn assert_accepted(name: &str, source: &str, expected_stdout: &str) {
         }
     }
 
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return; // emit-only fast pass
     }
     match e2e_support::build_and_run_rust(name, &out) {
@@ -146,7 +146,7 @@ fn assert_accepted_project(name: &str, files: &[(&str, &str)], expected_stdout: 
     let out = out_dir(name);
     let runtime = crate::support::expect_runtime(name, ipe::resolve_runtime());
     let entry = src.join("Main.ipe");
-    match ipe::build_with_sibling_discovery(&entry, &out, &runtime) {
+    match ipe::build_loose_file(&entry, &out, &runtime) {
         Ok(()) => {}
         Err(CliError::Pipeline { diag, .. }) => {
             assert!(
@@ -165,7 +165,7 @@ fn assert_accepted_project(name: &str, files: &[(&str, &str)], expected_stdout: 
         }
     }
 
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
     match e2e_support::build_and_run_rust(name, &out) {
@@ -476,4 +476,90 @@ fn single_use_destructure_param_moves_without_clone() {
     );
     // And it must still accept + run correctly.
     assert_accepted("single_use_destructure_param_run", src, "HI\n");
+}
+
+// ===========================================================================
+// Signature wildcard `any` — a parameter wildcard lowers to a generic bounded
+// by exactly its solved obligations, or to the one ground type the body pinned
+// it to; every use is held to that fact at `ipe` time.
+// ===========================================================================
+
+/// A wildcard parameter interpolated into a log field is an `IpeInterpolate`
+/// generic, so calling it at two scalar types builds and runs.
+#[test]
+fn interpolating_wildcard_param_builds_at_two_types() {
+    let src = format!(
+        "{HEAD}import Ipe.Io as Io\n\
+         import Ipe.Log as Log\n\
+         import Ipe.Task\n\
+         f : any -> Task Error ()\n\
+         f x =\n\
+         \x20   Log.warnWith \"m\" [ x ]\n\
+         main =\n\
+         \x20   Task.andThen (\\_ -> Task.andThen (\\_ -> Io.println \"ok\") (f 7)) (f \"s\")\n"
+    );
+    assert_accepted("wildcard_interpolating_two_types", &src, "ok\n");
+}
+
+/// A wildcard parameter the body pins to `Int` lowers to `i64` and builds at
+/// an `Int` use.
+#[test]
+fn body_pinned_wildcard_param_builds_at_its_pin() {
+    let src = format!(
+        "{HEAD}import Ipe.Io as Io\n\
+         h : any -> Bool\n\
+         h x =\n\
+         \x20   x + x == x\n\
+         main = Io.println (if h 0 then \"y\" else \"n\")\n"
+    );
+    assert_accepted("wildcard_body_pinned", &src, "y\n");
+}
+
+/// A body-pinned wildcard parameter exported from another module builds at an
+/// `Int` use across the module boundary.
+#[test]
+fn body_pinned_wildcard_param_builds_across_modules() {
+    let main = format!(
+        "{HEAD}import Ipe.Io as Io\n\
+         import Lib exposing (h)\n\
+         main = Io.println (if h 0 then \"y\" else \"n\")\n"
+    );
+    let lib = "module Lib exposing (h)\n\
+         h : any -> Bool\n\
+         h x =\n\
+         \x20   x + x == x\n";
+    assert_accepted_project(
+        "wildcard_body_pinned_cross_module",
+        &[("Main.ipe", &main), ("Lib.ipe", lib)],
+        "y\n",
+    );
+}
+
+/// A wildcard parameter bound as a SQL parameter stays an `Into<SqlParam>`
+/// generic, so one helper binds an `Int` and a `String`.
+#[test]
+fn sql_param_wildcard_builds_at_two_types() {
+    let src = format!(
+        "{HEAD}import Ipe.Io as Io\n\
+         import Ipe.Db\n\
+         import Ipe.Db.Unsafe\n\
+         import Ipe.Task\n\
+         insertOne : Db -> any -> Task Error Int\n\
+         insertOne conn v =\n\
+         \x20   Db.exec conn \"INSERT INTO t (v) VALUES (?)\" [ v ]\n\
+         main =\n\
+         \x20   Task.andThen\n\
+         \x20       (\\conn ->\n\
+         \x20           Db.withTransaction conn\n\
+         \x20               (\\txconn ->\n\
+         \x20                   do\n\
+         \x20                       Unsafe.unsafeExecRaw txconn \"CREATE TABLE t (v)\"\n\
+         \x20                       insertOne txconn 1\n\
+         \x20                       insertOne txconn \"s\"\n\
+         \x20                       Io.println \"ok\"\n\
+         \x20               )\n\
+         \x20       )\n\
+         \x20       (Db.open \"sqlite\" \"sqlite::memory:\")\n"
+    );
+    assert_accepted("wildcard_sql_param_two_types", &src, "ok\n");
 }

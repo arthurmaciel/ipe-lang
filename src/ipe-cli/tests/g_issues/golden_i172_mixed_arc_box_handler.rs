@@ -76,7 +76,7 @@ fn assert_ipec_unifies_to_arc(fixture: &str) {
         return;
     };
 
-    let built = ipe::build_with_sibling_discovery(&entry, &out, &runtime);
+    let built = ipe::build_loose_file(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
         "ipe build must succeed for {fixture}: {:?}",
@@ -115,7 +115,7 @@ fn assert_ipec_unifies_to_arc(fixture: &str) {
 /// E0308/E0507) and renders the form. Gated on `IPE_E2E=1` — the only check that
 /// would have caught the original SEAL violation (E0308, `ipe build` clean).
 fn assert_cargo_builds_and_runs(fixture: &str) {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
 
@@ -128,7 +128,7 @@ fn assert_cargo_builds_and_runs(fixture: &str) {
     assert!(runtime.is_ok(), "runtime must resolve for E2E");
     let Ok(runtime) = runtime else { return };
 
-    let built = ipe::build_with_sibling_discovery(&entry, &out, &runtime);
+    let built = ipe::build_loose_file(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
         "ipe build must succeed for {fixture}: {:?}",

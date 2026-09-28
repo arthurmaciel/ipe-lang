@@ -248,7 +248,7 @@ fn http_get(port: u16, path: &str) -> std::io::Result<String> {
 /// captured `:param` delivered through `match_routes` into `UserPage`.
 #[test]
 fn param_route_solo_cargo_builds_and_delivers_param() {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
     // Emit into a PRIVATE dir this test alone owns, so the compile-only sibling
