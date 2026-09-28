@@ -1,4 +1,5 @@
 use super::*;
+use crate::io_bounded::SourceRefusal;
 use crate::{
     ALL_CODES, Applicability, BTreeMap, Diagnostic, Path, PathBuf, Suggestion, cli_args, fs,
     project, style,
@@ -2759,12 +2760,20 @@ fn consent_scans_fail_closed_on_unreadable_imported_module() {
     let _ = fs::remove_dir_all(&dir);
 
     assert!(
-        matches!(&unsafe_scan, Err(CliError::Io { path, .. }) if path.ends_with("Helper.ipe")),
-        "unsafe scan must name the unreadable module, got: {unsafe_scan:?}"
+        matches!(
+            &unsafe_scan,
+            Err(CliError::SourceRefused { path, reason: SourceRefusal::AccessDenied })
+                if path.ends_with("Helper.ipe")
+        ),
+        "unsafe scan must refuse the unreadable module by name, got: {unsafe_scan:?}"
     );
     assert!(
-        matches!(&web_scan, Err(CliError::Io { path, .. }) if path.ends_with("Helper.ipe")),
-        "web scan must name the unreadable module, got: {web_scan:?}"
+        matches!(
+            &web_scan,
+            Err(CliError::SourceRefused { path, reason: SourceRefusal::AccessDenied })
+                if path.ends_with("Helper.ipe")
+        ),
+        "web scan must refuse the unreadable module by name, got: {web_scan:?}"
     );
 }
 
