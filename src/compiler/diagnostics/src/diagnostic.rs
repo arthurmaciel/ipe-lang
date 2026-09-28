@@ -960,9 +960,11 @@ pub enum AliasExpansionKind {
 pub const HOF_KERNEL_RESULT_CLASS: &str = "non-function callback result (higher-order kernel)";
 
 /// The closed set of Ipê types that `{{…}}` interpolation and `Log.*With`
-/// attributes accept — the single table the type gate
-/// (`ipe_types::super_bounds::INTERPOLABLE`), the diagnostic sentence, and the
-/// runtime's sealed `IpeInterpolate` impl set are all checked against.
+/// attributes accept.
+///
+/// The single table the type gate (`ipe_types::super_bounds::INTERPOLABLE`),
+/// the diagnostic sentence, and the runtime's sealed `IpeInterpolate` impl set
+/// are all checked against.
 pub const INTERPOLABLE_TYPES: [&str; 5] = ["String", "Int", "Float", "Bool", "Char"];
 
 /// Class label for the interpolation obligation.
