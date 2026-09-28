@@ -6159,19 +6159,19 @@ mod tests {
     // ── Signature wildcard `any`: bounds and pins held at every use ─────────
 
     /// A logging helper whose parameter is a signature wildcard.
-    const LOG_ANY: &str = r##"import Ipe.Log as Log
+    const LOG_ANY: &str = r#"import Ipe.Log as Log
 
 f : any -> Task Error ()
 f x =
     Log.infoWith "m" [ x ]
-"##;
+"#;
 
     /// A helper whose body pins its wildcard parameter to `Int` by numeric
     /// defaulting.
-    const PIN_INT: &str = r##"h : any -> Bool
+    const PIN_INT: &str = r"h : any -> Bool
 h x =
     x + x == x
-"##;
+";
 
     /// A runtime `false` the optimiser cannot fold, so `assert!(false_marker(), …)`
     /// reads as a deliberate unconditional failure (no `panic!`).

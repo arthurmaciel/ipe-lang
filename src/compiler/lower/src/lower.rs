@@ -17053,7 +17053,7 @@ impl<'a> Lowerer<'a> {
     }
 
     /// The Rust bound set one solved obligation set emits ([`Self::bounds_for`]).
-    fn bound_set_of(b: TyBounds) -> BoundSet {
+    const fn bound_set_of(b: TyBounds) -> BoundSet {
         if b.is_empty() {
             return BoundSet::UNBOUNDED;
         }
