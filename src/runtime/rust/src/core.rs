@@ -1253,7 +1253,13 @@ const EPRINT_GUTTER: &str = "  ";
 /// Format a task-error message as styled text. Each line is guttered; the first
 /// line is prefixed with the failure glyph. ANSI colour is applied only when
 /// `use_color` is true.
+///
+/// The message can carry untrusted text (a peer's error body, a decoded
+/// field), so each line passes through
+/// [`scrub_log_controls`](crate::system::scrub_log_controls): the only escape
+/// codes that reach stderr are this function's own colour codes.
 pub(crate) fn format_task_error(msg: &str, use_color: bool) -> String {
+    use crate::system::scrub_log_controls;
     let (red, reset) = if use_color {
         ("\x1b[31m", "\x1b[0m")
     } else {
@@ -1262,8 +1268,10 @@ pub(crate) fn format_task_error(msg: &str, use_color: bool) -> String {
     let mut out = String::new();
     let mut lines = msg.lines();
     if let Some(first) = lines.next() {
+        let first = scrub_log_controls(first);
         out.push_str(&format!("{EPRINT_GUTTER}{red}✗{reset} {first}\n"));
         for rest in lines {
+            let rest = scrub_log_controls(rest);
             out.push_str(&format!("{EPRINT_GUTTER}  {rest}\n"));
         }
     }
@@ -1932,5 +1940,26 @@ mod eprint_tests {
     fn eprint_task_error_empty_message_produces_no_output() {
         let out = format_task_error("", false);
         assert!(out.is_empty(), "empty message → no output");
+    }
+
+    /// Untrusted control text in the message cannot drive the terminal or
+    /// forge a line: ESC, a bare CR, U+2028, and bidi controls are escaped on
+    /// every line, while the gutter, glyph, and line split stay intact.
+    #[test]
+    fn eprint_task_error_scrubs_controls_in_every_line() {
+        let msg = "bad \x1b[2Jpeer\rforged\u{2028}x\nnext \u{202e}rev\u{2066}\x07";
+        let out = format_task_error(msg, false);
+        assert_eq!(
+            out,
+            "  ✗ bad \\u{1b}[2Jpeer\\rforged\\u{2028}x\n    next \\u{202e}rev\\u{2066}\\u{7}\n"
+        );
+        assert!(!out.contains('\x1b'), "no escape survives in plain mode");
+    }
+
+    /// In colour mode the only escapes are the glyph's own red/reset pair.
+    #[test]
+    fn eprint_task_error_colour_mode_keeps_only_its_own_escapes() {
+        let out = format_task_error("\x1b[31mfake\x1b[0m", true);
+        assert_eq!(out, "  \x1b[31m✗\x1b[0m \\u{1b}[31mfake\\u{1b}[0m\n");
     }
 }
