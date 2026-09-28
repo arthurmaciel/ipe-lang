@@ -152,7 +152,7 @@ esac
 
 # Published matrix (see .github/workflows/release.yml). Reject combos we don't ship.
 case "$plat-$cpu" in
-  linux-x64|linux-arm64|darwin-arm64|freebsd-x64|windows-x64) : ;;
+  linux-x64|linux-arm64|darwin-x64|darwin-arm64|freebsd-x64|windows-x64) : ;;
   *) die "No prebuilt binary for $plat-$cpu — build from source: https://github.com/$REPO" ;;
 esac
 artifact="ipe-$plat-$cpu"

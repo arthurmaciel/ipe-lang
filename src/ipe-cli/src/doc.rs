@@ -2625,8 +2625,13 @@ fn write_format_dir(
 /// every project module.
 ///
 /// # Errors
-/// Any non-empty [`build_docs`] failure — [`CliError::Io`], a typecheck
-/// [`CliError::Diff`], or an open-interface [`CliError::Diff`].
+/// Any non-empty [`build_docs`] failure: [`CliError::DiscoveryLimitReached`]
+/// for a real symlink cycle or a tree deeper than the discovery depth
+/// ceiling; [`CliError::Diff`] wrapping [`crate::api_surface::DiffError::Io`]
+/// for an unreadable module or source directory; [`CliError::Diff`] wrapping
+/// [`crate::api_surface::DiffError::Typecheck`] for a typecheck failure; or
+/// [`CliError::Diff`] wrapping [`crate::api_surface::DiffError::OpenInterface`]
+/// for an open interface.
 fn build_docs_or_stdlib(path: &Path) -> Result<DocsJson, CliError> {
     match build_docs(path) {
         Ok(docs) => Ok(docs),
@@ -6135,6 +6140,43 @@ mod tests {
         assert!(
             result.is_err(),
             "a broken project surfaces its build error rather than falling back"
+        );
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    /// An unreadable `src/` is a real I/O refusal, not a symlink cycle and not
+    /// an empty-tree fallback — `ipe doc` must relay it as such.
+    #[cfg(unix)]
+    #[test]
+    fn build_docs_or_stdlib_propagates_io_error_for_unreadable_src() {
+        use std::fs;
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let tmp = std::env::temp_dir().join(format!("ipe-doc-unreadable-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&tmp);
+        let src = tmp.join("src");
+        fs::create_dir_all(&src).expect("create src/");
+
+        fs::set_permissions(&src, fs::Permissions::from_mode(0o000))
+            .expect("chmod src/ unreadable");
+
+        let result = build_docs_or_stdlib(&tmp);
+
+        // Restore before any cleanup/assert: remove_dir_all must descend into src/.
+        fs::set_permissions(&src, fs::Permissions::from_mode(0o755)).expect("restore perms");
+
+        let Err(err) = result else {
+            // Running privileged (e.g. root), a 0o000 mode never actually blocks
+            // the read — there is no refusal to observe on this run.
+            let _ = fs::remove_dir_all(&tmp);
+            return;
+        };
+        assert!(
+            matches!(
+                err,
+                CliError::Diff(crate::api_surface::DiffError::Io { .. })
+            ),
+            "an unreadable src/ must surface as a Diff(Io) discovery error, got {err:?}"
         );
         let _ = fs::remove_dir_all(&tmp);
     }

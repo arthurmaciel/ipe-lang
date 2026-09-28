@@ -1648,4 +1648,56 @@ import String
             "an unreadable module must be refused as access denied, got: {read:?}"
         );
     }
+
+    // ── Symlink non-descent ─────────────────────────────────────────────────
+
+    /// `discover_modules` classifies each entry with
+    /// [`std::fs::DirEntry::file_type`], which reports the entry's own type
+    /// without following a symlink (`lstat`, not `stat`). A symlinked
+    /// directory is therefore neither `is_dir()` nor `is_file()` to the walk
+    /// and is never pushed onto the descent stack, so a link cycle through it
+    /// is unrepresentable: its modules go undiscovered rather than being
+    /// walked into.
+    #[cfg(unix)]
+    #[test]
+    fn discover_modules_does_not_descend_a_symlinked_directory() {
+        let root =
+            std::env::temp_dir().join(format!("ipe_discover_symlink_skip_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        let src = root.join("src");
+        fs::create_dir_all(&src).expect("create src/");
+        fs::write(
+            src.join("Local.ipe"),
+            "module Local exposing (x)\n\nx = 0\n",
+        )
+        .expect("write Local.ipe");
+
+        // `External` sits outside src/ and holds a module that would only be
+        // found if the walk followed the symlink into it.
+        let external = root.join("External");
+        fs::create_dir_all(&external).expect("create External/");
+        fs::write(
+            external.join("Util.ipe"),
+            "module Util exposing (x)\n\nx = 0\n",
+        )
+        .expect("write External/Util.ipe");
+        std::os::unix::fs::symlink(&external, src.join("Link")).expect("plant Link -> External");
+
+        let discovered =
+            discover_modules(&src).expect("a symlinked directory is skipped, not a cycle");
+        assert!(
+            discovered
+                .iter()
+                .all(|m| m.module_path.last().map(String::as_str) != Some("Util")),
+            "the module behind the symlink must not be discovered: {discovered:?}"
+        );
+        assert!(
+            discovered
+                .iter()
+                .any(|m| m.module_path.last().map(String::as_str) == Some("Local")),
+            "the ordinary top-level module must still be discovered: {discovered:?}"
+        );
+
+        let _ = fs::remove_dir_all(&root);
+    }
 }
