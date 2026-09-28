@@ -109,6 +109,10 @@ pub struct LooseFileSources {
     /// A probed file that does not exist yet is listed too, so a watcher
     /// sees it appear.
     pub probed_files: Vec<PathBuf>,
+    /// Every sibling file the closure loaded, relative to the entry's directory.
+    ///
+    /// With the entry, these are exactly the files the build reads.
+    pub loaded_files: Vec<PathBuf>,
 }
 
 /// The outcome of reading one vetted sibling: its path and text.
@@ -173,6 +177,7 @@ pub fn resolve_loose_file(
     let mut total_bytes = source_bytes(&entry_source);
     let mut probed: BTreeSet<Vec<String>> = BTreeSet::from([entry_module.clone()]);
     let mut probed_files = Vec::new();
+    let mut loaded_files = Vec::new();
     let mut sources: BTreeMap<Vec<String>, (PathBuf, String)> = BTreeMap::new();
     sources.insert(entry_module.clone(), (entry.to_path_buf(), entry_source));
 
@@ -196,7 +201,7 @@ pub fn resolve_loose_file(
         let Some(relative) = module_file(&module) else {
             continue;
         };
-        probed_files.push(relative);
+        probed_files.push(relative.clone());
         let vetted = source_dir
             .as_ref()
             .map(|dir| dir.vet(&module, &mut spelling))
@@ -221,6 +226,7 @@ pub fn resolve_loose_file(
             pending.extend(imported_modules(&parsed, &interner));
         }
         sources.insert(module, (path, source));
+        loaded_files.push(relative);
     }
 
     let discovered = sources
@@ -232,6 +238,7 @@ pub fn resolve_loose_file(
         discovered,
         entry_module,
         probed_files,
+        loaded_files,
     })
 }
 
@@ -912,6 +919,16 @@ mod tests {
             ]
         );
         assert_eq!(loaded.discovered.len(), 3);
+        let mut loaded_files = loaded.loaded_files;
+        loaded_files.sort();
+        assert_eq!(
+            loaded_files,
+            vec![
+                PathBuf::from("Helper.ipe"),
+                Path::new("Lib").join("Util.ipe")
+            ],
+            "only the siblings read are loaded, the missing stdlib one excluded"
+        );
         let mut probed_files = loaded.probed_files;
         probed_files.sort();
         assert_eq!(

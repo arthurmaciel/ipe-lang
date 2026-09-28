@@ -468,6 +468,8 @@ pub(crate) enum ScopeSpec {
         entry: PathBuf,
         /// Every probed module file, relative to the entry's directory.
         module_files: Vec<PathBuf>,
+        /// Every module file the build loaded, relative to the entry's directory.
+        loaded_files: Vec<PathBuf>,
     },
 }
 
@@ -484,7 +486,8 @@ impl ScopeSpec {
             Self::LooseFile {
                 entry,
                 module_files,
-            } => ipe_watch::WatchScope::loose_file(entry, module_files),
+                loaded_files,
+            } => ipe_watch::WatchScope::loose_file(entry, module_files, loaded_files),
         }
     }
 }
@@ -572,6 +575,7 @@ pub(crate) fn resolve_project_sources(
         scope: ScopeSpec::LooseFile {
             entry: entry.to_path_buf(),
             module_files: loaded.probed_files,
+            loaded_files: loaded.loaded_files,
         },
     })
 }
@@ -4135,9 +4139,56 @@ mod tests {
             ScopeSpec::LooseFile {
                 entry: entry.clone(),
                 module_files: vec![PathBuf::from("Helper.ipe")],
+                loaded_files: vec![PathBuf::from("Helper.ipe")],
             }
         );
         assert_eq!(after.blame_path, entry);
+    }
+
+    /// The watch banner's file count is the set of files the build reads.
+    ///
+    /// A probed file on disk that the closure never loads (a module no
+    /// import reaches) is not counted.
+    #[test]
+    fn watch_loose_file_count_equals_the_build_read_set() {
+        let dir = loose_scratch("count");
+        let entry = dir.join("Main.ipe");
+        std::fs::write(
+            &entry,
+            "module Main exposing (main)\n\nimport Helper\nimport Lib.Util\n\nmain = Helper.h\n",
+        )
+        .expect("write entry");
+        std::fs::write(
+            dir.join("Helper.ipe"),
+            "module Helper exposing (h)\n\nh = 1\n",
+        )
+        .expect("write helper");
+        std::fs::create_dir_all(dir.join("Lib")).expect("create Lib");
+        std::fs::write(
+            dir.join("Lib").join("Util.ipe"),
+            "module Lib.Util exposing (u)\n\nu = 1\n",
+        )
+        .expect("write util");
+        std::fs::write(
+            dir.join("Stray.ipe"),
+            "module Stray exposing (s)\n\ns = 1\n",
+        )
+        .expect("write stray");
+
+        let resolved = resolve_project_sources(&entry, None);
+        let scope = resolved.as_ref().map(|resolved| resolved.scope.build());
+        let _ = std::fs::remove_dir_all(&dir);
+
+        let resolved = resolved.expect("loose file resolves");
+        let scope = scope
+            .expect("loose file resolves")
+            .expect("the watch scope builds");
+        assert_eq!(resolved.sources.len(), 3, "Main, Helper and Lib.Util");
+        assert_eq!(
+            scope.file_count(),
+            resolved.sources.len(),
+            "the watch count is the build's read set"
+        );
     }
 
     /// Write an executable fake `cargo` running `body` into a fresh directory
