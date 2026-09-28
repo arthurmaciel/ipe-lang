@@ -67,6 +67,8 @@ pub enum SourceRefusal {
     NotRegularFile,
     /// The process may not open the path, or search a directory leading to it.
     AccessDenied,
+    /// The path, or a directory leading to it, is a symlink the no-follow walk refuses.
+    Symlink,
 }
 
 /// Whether [`open_regular`] follows a symlink in the path's final component.

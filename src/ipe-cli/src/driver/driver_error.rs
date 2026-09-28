@@ -886,6 +886,7 @@ impl std::fmt::Display for CliError {
                     io_bounded::SourceRefusal::AccessDenied => {
                         text::cli_source_access_denied(&path)
                     }
+                    io_bounded::SourceRefusal::Symlink => text::cli_source_symlink(&path),
                 })
             }
             Self::PathEscape { raw, reason } => {
