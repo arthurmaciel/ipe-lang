@@ -14,7 +14,7 @@ use super::{
     RunJailDefect, RunJailTools, SandboxProfile, run_jail_argv, run_jail_argv_with_delivery,
 };
 use crate::seccomp;
-use crate::{CanonicalPath, HomeMasks};
+use crate::{CanonicalPath, JailMounts};
 
 /// Probe the host for the run-jail primitives and decide whether a jail can be
 /// built, returning the tools or the fail-closed refusal.
@@ -113,8 +113,8 @@ fn app_ro_binds(app: &CanonicalPath) -> Vec<CanonicalPath> {
 /// # Errors
 ///
 /// Any [`RunJailDefect`]; [`RunJailDefect::Path`] when `scoped_tmp`,
-/// `working_tree`, or `app` does not resolve, or the invoker's homes are
-/// unknown. On success (Linux) it does not return.
+/// `working_tree`, or `app` does not resolve, the invoker's homes are unknown,
+/// or a path would expose the cargo home. On success (Linux) it does not return.
 pub fn exec_in_run_jail(
     tools: &RunJailTools,
     profile: &SandboxProfile,
@@ -130,7 +130,8 @@ pub fn exec_in_run_jail(
     let scoped_tmp = CanonicalPath::resolve(scoped_tmp).map_err(RunJailDefect::Path)?;
     let working_tree = CanonicalPath::resolve(working_tree).map_err(RunJailDefect::Path)?;
     let app = CanonicalPath::resolve(app).map_err(RunJailDefect::Path)?;
-    let homes = HomeMasks::of_invoker().map_err(RunJailDefect::Path)?;
+    let mounts = JailMounts::of_invoker(scoped_tmp, working_tree, app_ro_binds(&app))
+        .map_err(RunJailDefect::Path)?;
 
     // Compile the seccomp program for this profile. `None` ⇒ this architecture
     // has no filter we can emit — refuse (fail-closed), never run unfiltered.
@@ -146,16 +147,11 @@ pub fn exec_in_run_jail(
     payload.push(app.as_path().as_os_str().to_owned());
     payload.extend(app_args.iter().cloned());
 
-    let extra_ro_binds = app_ro_binds(&app);
-
     let host_env = |k: &str| std::env::var_os(k);
     let argv = run_jail_argv(
         tools,
         profile,
-        &scoped_tmp,
-        &working_tree,
-        &extra_ro_binds,
-        &homes,
+        &mounts,
         Some(seccomp_fd),
         &host_env,
         &payload,
@@ -204,7 +200,8 @@ pub fn exec_in_run_jail(
 /// # Errors
 ///
 /// Any [`RunJailDefect`]; [`RunJailDefect::Path`] when `scoped_tmp` or
-/// `working_tree` does not resolve, or the invoker's homes are unknown. On
+/// `working_tree` does not resolve, the invoker's homes are unknown, or a path
+/// would expose the cargo home. On
 /// success (Linux) it does not return.
 pub fn exec_embedded_in_run_jail(
     tools: &RunJailTools,
@@ -218,7 +215,8 @@ pub fn exec_embedded_in_run_jail(
 
     let scoped_tmp = CanonicalPath::resolve(scoped_tmp).map_err(RunJailDefect::Path)?;
     let working_tree = CanonicalPath::resolve(working_tree).map_err(RunJailDefect::Path)?;
-    let homes = HomeMasks::of_invoker().map_err(RunJailDefect::Path)?;
+    let mounts = JailMounts::of_invoker(scoped_tmp, working_tree, Vec::new())
+        .map_err(RunJailDefect::Path)?;
 
     let Some(program) = seccomp::subprocess_deny_program(profile.subprocess) else {
         return Err(RunJailDefect::UnsupportedPlatform {
@@ -231,7 +229,7 @@ pub fn exec_embedded_in_run_jail(
 
     // The in-jail path the app is materialised at. It sits under `scoped_tmp`,
     // the one always-writable bind, so bwrap can create it after the mounts.
-    let dest = scoped_tmp.as_path().join("ipe-app");
+    let dest = mounts.scoped_tmp().as_path().join("ipe-app");
 
     let mut payload: Vec<OsString> = Vec::with_capacity(app_args.len() + 1);
     payload.push(dest.as_os_str().to_owned());
@@ -241,10 +239,7 @@ pub fn exec_embedded_in_run_jail(
     let argv = run_jail_argv_with_delivery(
         tools,
         profile,
-        &scoped_tmp,
-        &working_tree,
-        &[],
-        &homes,
+        &mounts,
         Some(seccomp_fd),
         Some((app_fd, &dest)),
         &host_env,
