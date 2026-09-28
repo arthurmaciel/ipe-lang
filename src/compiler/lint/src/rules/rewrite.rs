@@ -175,7 +175,7 @@ fn module_path<'a>(ctx: &'a Ctx<'_>, import: &Import) -> Vec<&'a str> {
 }
 
 /// True for the stdlib root segment, in either spelling.
-fn is_stdlib_root(segment: &str) -> bool {
+pub fn is_stdlib_root(segment: &str) -> bool {
     segment == "Ipe" || segment == "Ipê"
 }
 

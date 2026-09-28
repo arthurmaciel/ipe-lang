@@ -21,7 +21,7 @@
 //! | `NoUnused.Imports`, `NoUnused.Variables` (let bindings) | covered: `unused-imports`, `unused-bindings` |
 //! | `NoDebug.Log`, `NoDebug.TodoOrToString` | rejected: the compiler already refuses `Debug.*` in a release build (IPE-L0140) |
 //! | `NoSinglePatternCase` | rejected: `let` does not destructure, so a one-arm `case` is the only destructuring form |
-//! | `NoExposingEverything`, `NoImportingEverything` | rejected: `import X exposing (..)` is idiomatic in every example's `package.ipe` manifest — a blanket rule misfires across the whole example corpus with no `package.ipe`-shaped allowance to except it |
+//! | `NoExposingEverything`, `NoImportingEverything` | ported: `no-exposing-everything`, `no-importing-everything` (the manifest DSL import `Ipe.Package` is exempt) |
 //! | `NoMissingTypeAnnotation` | ported: `no-missing-type-annotation`, `Allow` by default (opt in via `lint.ipe`) |
 //! | `Simplify` (`[a] ++ xs` → `a :: xs`) | ported: `simplify-cons-append` |
 //! | `Simplify` (`List.map identity xs` → `xs`) | ported: `simplify-map-identity` |
@@ -37,6 +37,8 @@ mod adjacent_bools;
 mod multiline_lambda_arg;
 mod no_bool_literal_compare;
 mod no_empty_icon_button_label;
+mod no_exposing_everything;
+mod no_importing_everything;
 mod no_missing_type_annotation;
 mod no_redundant_bool_if;
 mod no_redundant_concat;
@@ -158,6 +160,8 @@ pub fn run_all(ctx: &Ctx) -> Vec<Finding> {
     findings.extend(no_redundant_cons::check(ctx));
     findings.extend(no_redundant_concat::check(ctx));
     findings.extend(no_missing_type_annotation::check(ctx));
+    findings.extend(no_exposing_everything::check(ctx));
+    findings.extend(no_importing_everything::check(ctx));
     findings
 }
 

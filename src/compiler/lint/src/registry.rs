@@ -152,6 +152,18 @@ pub const RULES: &[RuleInfo] = &[
         default_severity: Severity::Allow,
         fixable: false,
     },
+    RuleInfo {
+        name: "no-exposing-everything",
+        summary: "a `module M exposing (..)` header, which exports every top-level declaration",
+        default_severity: Severity::Warn,
+        fixable: false,
+    },
+    RuleInfo {
+        name: "no-importing-everything",
+        summary: "an `import M exposing (..)`, which brings every exported name into unqualified scope",
+        default_severity: Severity::Warn,
+        fixable: false,
+    },
 ];
 
 /// The metadata for `name`, or `None` when no such rule ships.

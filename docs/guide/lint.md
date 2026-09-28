@@ -56,6 +56,8 @@ still drive the ecosystem toward "invalid states unrepresentable".
 | `no-redundant-cons` | Consing onto a list literal: `x :: [ a, b ]` → `[ x, a, b ]`. | ✅ `--fix` |
 | `no-redundant-concat` | Flattening a single-element list of lists (or strings): `List.concat [ xs ]` → `xs`. | ✅ `--fix` |
 | `no-missing-type-annotation` | A top-level declaration with no `: T` signature. `Allow` by default — opt in via `lint.ipe` (`Lint.warn "no-missing-type-annotation"`). | advisory |
+| `no-exposing-everything` | A `module M exposing (..)` header: every top-level declaration, internal helpers included, joins the public API. List the exports instead. | advisory |
+| `no-importing-everything` | An `import M exposing (..)`: every exported name lands in unqualified scope, so a bare name's origin is hidden and a later export can collide. The manifest's `import Ipe.Package exposing (..)` is exempt. | advisory |
 
 An **advisory** rule reports and teaches but never rewrites your code: its remedy
 is a decision — an exported signature to change and thread through every call
