@@ -1617,17 +1617,16 @@ fn run_inner(
                         timings.report(g);
                     }
                     CargoOutcome::Green(exe_path) => {
-                        let built = match prove_green_crate(building.take(), g, &opts.out_dir) {
+                        let built = match prove_green_crate(building.take(), &opts.out_dir) {
                             Ok(dir) => dir,
-                            Err(refused) => {
+                            Err(reason) => {
                                 emit_watch_line(
                                     &crate::style::TerminalSafe::sanitize(&format!(
-                                        "[ipe watch] refusing the build: {}",
-                                        refused.reason
+                                        "[ipe watch] refusing the build: {reason}"
                                     )),
                                     WatchRole::Failure,
                                 );
-                                emit(opts, refused.event);
+                                emit(opts, WatchEvent::CargoFailed { generation: g });
                                 timings.report(g);
                                 continue;
                             }
@@ -1966,38 +1965,21 @@ fn emitted_binds_http(emitted: &ipe_backend::EmittedProject) -> bool {
         || emitted_source_contains(emitted, "ipe_runtime::server::server_listen")
 }
 
-/// A green build refused before its binary starts.
-#[derive(Debug)]
-struct RefusedGreen {
-    /// Why the crate is not the one this rebuild claimed.
-    reason: CliError,
-    /// The lifecycle event the refusal reports: the build failed.
-    event: WatchEvent,
-}
-
-/// The crate generation `g`'s green build wrote, proven still the one it claimed.
+/// The crate a green build wrote, proven still the one its rebuild claimed.
 ///
 /// `cargo` writes into the crate by path, so a crate replaced while it ran, or a
-/// green build with no claim on record, is refused as
-/// [`WatchEvent::CargoFailed`] and its binary is never started. `reported`
-/// names the output root in the refusal when no claim exists.
-fn prove_green_crate(
-    building: Option<OwnedDir>,
-    g: u64,
-    reported: &Path,
-) -> Result<OwnedDir, RefusedGreen> {
-    let proven = building.map_or_else(
+/// green build with no claim on record, is refused and its binary is never
+/// started. `reported` names the output root in the refusal when no claim
+/// exists.
+fn prove_green_crate(building: Option<OwnedDir>, reported: &Path) -> Result<OwnedDir, CliError> {
+    building.map_or_else(
         || {
             Err(CliError::from(OutputRefusal::Replaced(
                 reported.to_path_buf(),
             )))
         },
         |dir| dir.verify().map(|()| dir),
-    );
-    proven.map_err(|reason| RefusedGreen {
-        reason,
-        event: WatchEvent::CargoFailed { generation: g },
-    })
+    )
 }
 
 /// Build the child process's environment.
@@ -3984,24 +3966,21 @@ mod tests {
         assert_ne!(a, b, "two mints must not collide");
     }
 
-    /// Whether `refused` is generation `g`'s replaced-crate build failure.
-    fn refused_as_failed(
-        refused: &Result<crate::output_dir::OwnedDir, super::RefusedGreen>,
-        g: u64,
-    ) -> bool {
+    /// Whether `refused` is a replaced-crate refusal.
+    fn refused_as_replaced(refused: &Result<crate::output_dir::OwnedDir, crate::CliError>) -> bool {
         refused.as_ref().is_err_and(|r| {
             matches!(
-                r.reason,
+                r,
                 crate::CliError::OutputRefused(crate::output_dir::OutputRefusal::Replaced(_))
-            ) && matches!(r.event, super::WatchEvent::CargoFailed { generation } if generation == g)
+            )
         })
     }
 
     /// A green build with no claimed crate on record fails, its binary unstarted.
     #[test]
     fn a_green_build_without_a_claimed_crate_is_refused() {
-        let refused = prove_green_crate(None, 7, Path::new("/tmp/ipe-out"));
-        assert!(refused_as_failed(&refused, 7), "got {refused:?}");
+        let refused = prove_green_crate(None, Path::new("/tmp/ipe-out"));
+        assert!(refused_as_replaced(&refused), "got {refused:?}");
     }
 
     /// A crate swapped while cargo built it fails the build, its binary unstarted.
@@ -4014,12 +3993,12 @@ mod tests {
         let claimed = crate::output_dir::OwnedDir::claim(&crate_path).expect("claim crate");
         std::fs::rename(&crate_path, base.join("aside")).expect("move crate aside");
         std::fs::create_dir(&crate_path).expect("replacement at the same path");
-        let refused = prove_green_crate(Some(claimed), 3, &crate_path);
-        assert!(refused_as_failed(&refused, 3), "got {refused:?}");
+        let refused = prove_green_crate(Some(claimed), &crate_path);
+        assert!(refused_as_replaced(&refused), "got {refused:?}");
 
         let fresh = base.join("fresh");
         let held = crate::output_dir::OwnedDir::claim(&fresh).expect("claim fresh crate");
-        let proven = prove_green_crate(Some(held), 4, &fresh);
+        let proven = prove_green_crate(Some(held), &fresh);
         assert!(
             proven.as_ref().is_ok_and(|dir| dir.path() == fresh),
             "an untouched crate is handed back to run, got {proven:?}"

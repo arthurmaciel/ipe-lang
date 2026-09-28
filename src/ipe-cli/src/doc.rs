@@ -114,9 +114,7 @@ use ipe_intern::Interner;
 use ipe_types::{VarNamer, kernel_type_table, ty_to_doc};
 
 use crate::CliError;
-use crate::api_surface::{
-    ModuleApi, ModulePath, PublicApi, UnionApi, extract_tree, read_tree, tree_walk_root,
-};
+use crate::api_surface::{ModuleApi, ModulePath, PublicApi, UnionApi, extract_walked, read_tree};
 use crate::cli_args::OutputFormat;
 use crate::doc_bundle::{BundleSource, DocBundle, fuzzy_rank, is_qualified};
 use crate::text;
@@ -932,7 +930,7 @@ fn run_type_search(query: &str, format: OutputFormat) -> Result<(), CliError> {
         TypeSearchError, render_type_matches_human, render_type_matches_json, type_search,
     };
 
-    let docs = build_docs(&PathBuf::from(DEFAULT_PATH))?;
+    let (docs, _) = build_docs(&PathBuf::from(DEFAULT_PATH))?;
     let hits = type_search(&docs.modules, query, 20).map_err(TypeSearchError::into_cli_error)?;
 
     let stdout = std::io::stdout();
@@ -1233,14 +1231,17 @@ struct Undocumented {
 /// Build the in-memory [`DocsJson`] for the package at `path`, including both
 /// project modules and all stdlib modules (compiled-source + kernel-backed).
 ///
-/// Project modules go through the existing `extract_tree` + `read_tree` pipeline.
+/// Project modules go through one `read_tree` walk + `extract_walked`.
 /// Compiled-source stdlib modules go through the same type-checker path.
 /// Kernel-qualifier stdlib modules use [`kernel_type_table`] for signatures.
 ///
 /// Modules are listed in name order: stdlib first (alphabetically), then project.
-fn build_docs(path: &Path) -> Result<DocsJson, CliError> {
-    let api: PublicApi = extract_tree(path).map_err(CliError::from)?;
-    let sources = read_tree(path).map_err(CliError::from)?;
+/// The API and the doc comments come from ONE walk, whose root is returned as
+/// the [`DocInputs::Tree`] the build read.
+fn build_docs(path: &Path) -> Result<(DocsJson, DocInputs), CliError> {
+    let walked = read_tree(path).map_err(CliError::from)?;
+    let api: PublicApi = extract_walked(&walked).map_err(CliError::from)?;
+    let sources = &walked.modules;
 
     // Collect project modules.
     let mut project_modules: Vec<ModuleDoc> = Vec::with_capacity(api.modules.len());
@@ -1270,11 +1271,12 @@ fn build_docs(path: &Path) -> Result<DocsJson, CliError> {
     let mut modules = project_modules;
     modules.extend(stdlib);
 
-    Ok(DocsJson {
+    let docs = DocsJson {
         version: DOCS_JSON_VERSION,
         modules,
         disclosure: package_disclosure(path)?,
-    })
+    };
+    Ok((docs, DocInputs::Tree(walked.root)))
 }
 
 /// The package's compiler-derived disclosure (control model + capability set),
@@ -1313,8 +1315,9 @@ fn package_disclosure(path: &Path) -> Result<Option<PackageDisclosure>, CliError
 ///
 /// Used by `check` — stdlib modules are exempt from the coverage gate.
 fn build_project_docs(path: &Path) -> Result<DocsJson, CliError> {
-    let api: PublicApi = extract_tree(path).map_err(CliError::from)?;
-    let sources = read_tree(path).map_err(CliError::from)?;
+    let walked = read_tree(path).map_err(CliError::from)?;
+    let api: PublicApi = extract_walked(&walked).map_err(CliError::from)?;
+    let sources = &walked.modules;
 
     let mut modules = Vec::with_capacity(api.modules.len());
     for (module_path, module_api) in &api.modules {
@@ -1621,8 +1624,8 @@ fn list_modules(path: &Path, format: OutputFormat) {
     // so `--list` always succeeds for stdlib).
     let project: Vec<String> = read_tree(path).map_or_else(
         |_| Vec::new(),
-        |sources| {
-            let mut names: Vec<String> = sources.keys().map(|p| p.join(".")).collect();
+        |walked| {
+            let mut names: Vec<String> = walked.modules.keys().map(|p| p.join(".")).collect();
             names.sort();
             names
         },
@@ -1709,10 +1712,11 @@ fn list_modules(path: &Path, format: OutputFormat) {
 fn query_project_modules() -> Vec<ModuleDoc> {
     read_tree(Path::new(DEFAULT_PATH)).map_or_else(
         |_| Vec::new(),
-        |sources| {
-            let Ok(api) = extract_tree(Path::new(DEFAULT_PATH)) else {
+        |walked| {
+            let Ok(api) = extract_walked(&walked) else {
                 return Vec::new();
             };
+            let sources = &walked.modules;
             api.modules
                 .iter()
                 .map(|(module_path, module_api)| {
@@ -2626,7 +2630,8 @@ fn claim_site(
 /// The project inputs a documentation build read.
 #[derive(Debug)]
 enum DocInputs {
-    /// The module tree walked ([`tree_walk_root`]): a file, `src/`, or a flat directory.
+    /// The module tree walked ([`crate::api_surface::WalkedTree::root`]): a file,
+    /// `src/`, or a flat directory.
     Tree(PathBuf),
     /// No project module was read; the site documents the stdlib alone.
     StdlibOnly,
@@ -2667,13 +2672,12 @@ fn write_format_dir(
 /// Any non-empty [`build_docs`] failure — [`CliError::Io`], a typecheck
 /// [`CliError::Diff`], or an open-interface [`CliError::Diff`].
 fn build_docs_or_stdlib(path: &Path) -> Result<(DocsJson, DocInputs), CliError> {
-    match build_docs(path) {
-        Ok(docs) => Ok((docs, DocInputs::Tree(tree_walk_root(path)))),
-        Err(CliError::Diff(crate::api_surface::DiffError::Empty { .. })) => {
+    build_docs(path).or_else(|err| match err {
+        CliError::Diff(crate::api_surface::DiffError::Empty { .. }) => {
             Ok((build_stdlib_only_docs(), DocInputs::StdlibOnly))
         }
-        Err(other) => Err(other),
-    }
+        other => Err(other),
+    })
 }
 
 /// Build a stdlib-only [`DocsJson`] without accessing any project on disk.
@@ -6117,7 +6121,7 @@ mod tests {
 
     /// The inputs a successful project documentation build reports for `path`.
     fn tree(path: &Path) -> DocInputs {
-        DocInputs::Tree(tree_walk_root(path))
+        DocInputs::Tree(read_tree(path).expect("read module tree").root)
     }
 
     /// A site inside the module tree a documentation build read is refused.
@@ -6147,6 +6151,15 @@ mod tests {
                 ))
             ),
             "a site inside the read module tree must be refused, got {inside:?}"
+        );
+        let hint = inside
+            .as_ref()
+            .err()
+            .map(ToString::to_string)
+            .unwrap_or_default();
+        assert!(
+            hint.contains("--out <dir>"),
+            "the refusal names the way out, got {hint:?}"
         );
         assert!(!flat.join("doc").exists(), "nothing created on refusal");
         let nested = claim_site(&flat, &inputs, &flat.join("sub").join("doc"));

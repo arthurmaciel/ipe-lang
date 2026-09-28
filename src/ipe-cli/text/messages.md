@@ -874,7 +874,7 @@ Every code reads <code>IPE-</code>, a family letter, and four digits. The letter
 
 ## output-inside-sources
 
-{out} is inside the source root {sources} — build output must stay out of your sources
+{out} is inside the source root {sources} — build output must stay out of your sources; pass `--out <dir>` naming a directory outside them
 
 ## output-unresolved-sources
 
