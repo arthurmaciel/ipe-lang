@@ -135,10 +135,11 @@ mod imp {
         static WARNED: Once = Once::new();
         if !matches!(cmd, IpeCmd::None) {
             WARNED.call_once(|| {
-                eprintln!(
-                    "[ipe.webview] warn: a non-`Cmd.none` command was returned but \
-                     Ipe.WebView v0.1's synchronous event loop does not run \
-                     Cmd.perform/Sub.every yet — the effect was dropped."
+                crate::system::emit_runtime_log(
+                    "webview",
+                    "warn: a non-`Cmd.none` command was returned but Ipe.WebView v0.1's \
+                     synchronous event loop does not run Cmd.perform/Sub.every yet — the \
+                     effect was dropped.",
                 );
             });
         }

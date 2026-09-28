@@ -8,14 +8,7 @@
 use super::*;
 use std::time::Instant;
 
-/// Scrub control characters (CR/LF, ESC, other C0/C1) from a trace string before
-/// it is written to the stderr trace log. `Trace.attr` / `event` / `span` names
-/// and values are app/user-supplied, so an attacker-influenced value could
-/// otherwise inject forged log records (CR/LF) or terminal escape sequences into
-/// the operator's console. Reuses the crate-wide plain-log scrubber.
-fn scrub(s: &str) -> String {
-    crate::core::scrub_log_controls(s)
-}
+use crate::system::scrub_log_controls as scrub;
 
 fn trace_enabled() -> bool {
     crate::system::read_env_var("IPE_TRACE")
@@ -32,7 +25,7 @@ pub fn trace_span<E: Send + 'static, A: Send + 'static>(
         let on = trace_enabled();
         let start = Instant::now();
         if on {
-            eprintln!("[trace] span start {}", scrub(&name));
+            crate::system::write_stderr_line(&format!("[trace] span start {}", scrub(&name)));
         }
         let result = task.await;
         let elapsed = start.elapsed();
@@ -42,12 +35,12 @@ pub fn trace_span<E: Send + 'static, A: Send + 'static>(
         super::telemetry::record_span(&name, elapsed.as_micros() as u64, ok);
         if on {
             let outcome = if ok { "ok" } else { "err" };
-            eprintln!(
+            crate::system::write_stderr_line(&format!(
                 "[trace] span end {} ({} ms, {})",
                 scrub(&name),
                 elapsed.as_millis(),
                 outcome
-            );
+            ));
         }
         result
     })
@@ -57,7 +50,7 @@ pub fn trace_span<E: Send + 'static, A: Send + 'static>(
 pub fn trace_event<E: Send + 'static>(name: String) -> IpeTask<E, ()> {
     Box::pin(async move {
         if trace_enabled() {
-            eprintln!("[trace] event {}", scrub(&name));
+            crate::system::write_stderr_line(&format!("[trace] event {}", scrub(&name)));
         }
         ok_res(())
     })
@@ -68,7 +61,11 @@ pub fn trace_event<E: Send + 'static>(name: String) -> IpeTask<E, ()> {
 pub fn trace_attr<E: Send + 'static>(key: String, value: String) -> IpeTask<E, ()> {
     Box::pin(async move {
         if trace_enabled() {
-            eprintln!("[trace] attr ipe.trace.{} = {}", scrub(&key), scrub(&value));
+            crate::system::write_stderr_line(&format!(
+                "[trace] attr ipe.trace.{} = {}",
+                scrub(&key),
+                scrub(&value)
+            ));
         }
         ok_res(())
     })
@@ -81,7 +78,7 @@ mod tests {
     #[test]
     fn scrub_strips_log_and_terminal_injection() {
         // A trace value carrying CRLF + an ANSI escape must not survive into the
-        // emitted line — control chars become spaces so it can neither forge a
+        // emitted line — control chars are escaped so it can neither forge a
         // log record nor inject a terminal control sequence.
         let evil = "ok\r\n[error] forged record\x1b[2J\x07";
         let cleaned = scrub(evil);
@@ -89,7 +86,7 @@ mod tests {
         assert!(!cleaned.contains('\n'));
         assert!(!cleaned.contains('\x1b'));
         assert!(!cleaned.contains('\x07'));
-        // Printable content is preserved (only controls are replaced).
+        // Printable content is preserved (only controls are escaped).
         assert!(cleaned.contains("forged record"));
         assert!(cleaned.starts_with("ok"));
     }

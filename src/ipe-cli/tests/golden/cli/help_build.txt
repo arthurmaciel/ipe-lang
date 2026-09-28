@@ -2,6 +2,7 @@ exit: 0
 ---
 
   Ipê language - v<VERSION> - https://github.com/arthurmaciel/ipe-lang
+
   Compile a program to a native or WebAssembly artifact.
 
   ipe build [<path>] [<shape>] [<runtime>] [<host>] [<target>]

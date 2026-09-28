@@ -1304,14 +1304,7 @@ pub fn server_listen<E: From<String> + Send + 'static>(
             }
             Err(e) => return IpeResult::Err(format!("Server.listen: bind {}: {}", addr, e).into()),
         };
-        {
-            use std::io::IsTerminal;
-            let msg = format!("[ipe.http.server] listening on http://{addr}");
-            eprintln!(
-                "{}",
-                crate::system::gutter_line(&msg, std::io::stderr().is_terminal())
-            );
-        }
+        crate::system::emit_runtime_log("http.server", &format!("listening on http://{addr}"));
         // with_connect_info so each request carries the peer SocketAddr —
         // populates ServerRequest.remoteAddr (also used by per-IP rate limiting).
         let svc = app.into_make_service_with_connect_info::<std::net::SocketAddr>();
@@ -2201,12 +2194,15 @@ where
                 IpeResult::Ok(r) => r.status,
                 IpeResult::Err(_) => 500,
             };
-            eprintln!(
-                "[ipe.http] {} {} {} {}ms",
-                method,
-                path,
-                status,
-                start.elapsed().as_millis()
+            crate::system::emit_runtime_log(
+                "http",
+                &format!(
+                    "{} {} {} {}ms",
+                    method,
+                    path,
+                    status,
+                    start.elapsed().as_millis()
+                ),
             );
             result
         })

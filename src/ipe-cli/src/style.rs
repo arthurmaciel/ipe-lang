@@ -77,6 +77,17 @@ pub fn gutter(text: &str) -> String {
     out
 }
 
+/// The single extra column relayed child (cargo) output is shifted by.
+///
+/// Cargo's own progress bar and diagnostics already carry their own internal
+/// alignment; this is not a full [`GUTTER`] (that would fight cargo's column
+/// math) but one shared space so the relay sits off the terminal edge instead
+/// of flush against it. One space, defined once, so `ipe build`'s and `ipe
+/// watch`'s cargo relays can never drift apart — the exact bug this constant
+/// closes: two independent call sites hand-rolling the same "no indent at
+/// all" default.
+pub const RELAY_INDENT: &str = " ";
+
 /// Frame a human block with exactly one leading and one trailing newline.
 ///
 /// A command's output opens and closes with a blank edge — a consistent
@@ -272,9 +283,10 @@ pub fn sandbox_override_warning(p: &Palette, override_env: &str, axes: &str) -> 
 
 /// The product header that opens every human screen.
 ///
-/// A leading blank line, then `Ipê language - vN.N.N - <repo>` in the gutter —
-/// the name light yellow, the version light green, the URL dim gray. Never
-/// shown under `--plain`, `--json`, or `--quiet`.
+/// A leading blank line, then `Ipê language - vN.N.N - <repo>` in the gutter,
+/// then a trailing blank line so the banner is set off from whatever chatter
+/// follows it — the name light yellow, the version light green, the URL dim
+/// gray. Never shown under `--plain`, `--json`, or `--quiet`.
 ///
 /// Coloured when `use_color` is true; plain otherwise. [`crate::screen`] owns
 /// when it is printed (once per process).
@@ -283,7 +295,7 @@ pub fn command_header(use_color: bool) -> String {
     let version = env!("CARGO_PKG_VERSION");
     let p = Palette::select(use_color);
     format!(
-        "\n{GUTTER}{y}Ipê language{r} - {g}v{version}{r} - {d}{REPO_URL}{r}\n",
+        "\n{GUTTER}{y}Ipê language{r} - {g}v{version}{r} - {d}{REPO_URL}{r}\n\n",
         y = p.bright_yellow,
         g = p.green,
         d = p.dim,
@@ -430,7 +442,7 @@ mod tests {
         );
         assert_eq!(
             command_header(false),
-            format!("\n  Ipê language - v{version} - {REPO_URL}\n")
+            format!("\n  Ipê language - v{version} - {REPO_URL}\n\n")
         );
     }
 

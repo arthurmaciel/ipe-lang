@@ -803,8 +803,9 @@ fn run_cmd<Msg: Send + 'static>(cmd: IpeCmd<Msg>, tx: &Sender<Msg>, sid: &str) {
                 // Bounded send: drop the Msg and warn if the session queue is
                 // full (a stalled driver or a burst of fast Perform tasks).
                 if tx.send(m).await.is_err() {
-                    eprintln!(
-                        "[ipe.live] run_cmd: session msg channel closed; dropping Perform result"
+                    crate::system::emit_runtime_log(
+                        "live",
+                        "run_cmd: session msg channel closed; dropping Perform result",
                     );
                 }
             });
@@ -1728,7 +1729,7 @@ where
     // again while the drain is in progress. Spawned (not awaited).
     tokio::spawn(async {
         wait_for_term_or_int().await;
-        eprintln!("Ipe.Web: forcing exit (second signal)");
+        crate::system::write_stderr_line("Ipe.Web: forcing exit (second signal)");
         #[cfg(feature = "http_client")]
         console_proxy::shutdown_console();
         flush_exporters().await;
@@ -2214,7 +2215,7 @@ where
 /// is logged once here too, so an operator sees it even without hitting a path.
 #[cfg(feature = "web")]
 fn fail_closed_router(message: String) -> axum::Router {
-    eprintln!("[ipe.live] mounted web app disabled: {message}");
+    crate::system::emit_runtime_log("live", &format!("mounted web app disabled: {message}"));
     axum::Router::new().fallback(move || {
         let message = message.clone();
         async move {
@@ -3024,9 +3025,11 @@ mod handlers {
             // return 429 so the client can back off (choosing 429 over silent
             // drop so the browser retry loop fires).
             if let Err(e) = tx.try_send(m) {
-                eprintln!(
-                    "[ipe.live] event_handler: session msg queue full or closed; dropping event ({})",
-                    e
+                crate::system::emit_runtime_log(
+                    "live",
+                    &format!(
+                        "event_handler: session msg queue full or closed; dropping event ({e})"
+                    ),
                 );
                 return (StatusCode::TOO_MANY_REQUESTS, "event queue full").into_response();
             }
@@ -4357,14 +4360,7 @@ where
         Err(e) => return IpeResult::Err(format!("Web.tea: bind {addr}: {e}").into()),
     };
     // Bind-address line (stderr) — carries the resolved host:port.
-    {
-        use std::io::IsTerminal;
-        let msg = format!("[ipe.web] listening on http://{addr}");
-        eprintln!(
-            "{}",
-            crate::system::gutter_line(&msg, std::io::stderr().is_terminal())
-        );
-    }
+    crate::system::emit_runtime_log("web", &format!("listening on http://{addr}"));
     // User-facing line on stdout.
     println!("Ipe.Web listening on :{port}");
     // Graceful shutdown: trap SIGINT/SIGTERM,
@@ -4664,10 +4660,13 @@ where
         }
     };
     if !proxy_active && console::gate_allows() {
-        eprintln!("{}", store::memory_store_log_line(web_ttl()));
-        eprintln!(
-            "[ipe.console] inline console mounted as Ipe.Web sub-app at /_ipe/console mode={}",
-            console::console_auth_mode_label()
+        store::emit_memory_store_log(web_ttl());
+        crate::system::emit_runtime_log(
+            "console",
+            &format!(
+                "inline console mounted as Ipe.Web sub-app at /_ipe/console mode={}",
+                console::console_auth_mode_label()
+            ),
         );
         router = router
             .route("/_ipe/console", get(console::console_html))
