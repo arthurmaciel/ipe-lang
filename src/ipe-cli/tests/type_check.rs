@@ -167,6 +167,46 @@ fn string_from_bool_type_checks() -> TestResult {
     Ok(())
 }
 
+/// A signature wildcard the body solves to a structure that still leaves part
+/// of the type open has no sound lowering, so `type-check` refuses it with
+/// IPE-T0021: a bare `any` passed to `List.length`, a `List any` passed to
+/// `List.concat`, and a tuple `any` holding a field-read record.
+#[test]
+fn wildcard_with_a_partial_solved_structure_is_refused() -> TestResult {
+    for name in [
+        "wildcard_list_length.ipe",
+        "wildcard_nested_concat.ipe",
+        "wildcard_tuple_open_record.ipe",
+    ] {
+        let (ok, _, stderr) = run_ipe(&["type-check", &fixture(name).to_string_lossy()])?;
+        assert!(!ok, "{name} must be refused");
+        assert!(
+            stderr.contains("IPE-T0021"),
+            "{name} must be refused as IPE-T0021, got:\n{stderr}"
+        );
+    }
+    Ok(())
+}
+
+/// The acceptance side: a wildcard the body pins to one ground type through
+/// the stdlib, and a bare record wildcard it field-reads, both type-check.
+#[test]
+fn wildcard_pinned_through_the_stdlib_type_checks() -> TestResult {
+    let (ok, stdout, stderr) = run_ipe(&[
+        "type-check",
+        &fixture("wildcard_pinned_ok.ipe").to_string_lossy(),
+    ])?;
+    assert!(
+        ok,
+        "pinned and row-record wildcards must type-check, got stderr:\n{stderr}"
+    );
+    assert!(
+        stdout.contains("type-checks"),
+        "a clean check prints a friendly success message, got:\n{stdout}"
+    );
+    Ok(())
+}
+
 /// `check` type-checks and stops: no emitted project is written next to the
 /// entry (a build would create `out/`). The entry is copied into a fresh,
 /// otherwise-empty directory so any emission would be unmistakable.

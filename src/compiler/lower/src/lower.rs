@@ -31,7 +31,7 @@ use ipe_ir::{
     RuntimeModule, TypeDef, UiCtor, UiPlain, Variant, fun_value_arc_promotable,
     ir_type_has_effect_carrier, ir_type_holds, ir_type_is_serde, is_dispatch_free, is_irrefutable,
 };
-use ipe_types::{RowTail, SignatureWildcards, SolvedTypes, Ty, TyBounds};
+use ipe_types::{RowTail, SignatureWildcards, SolvedTypes, Ty, TyBounds, ty_is_ground};
 
 mod capture_rewrite;
 mod clone_class;
@@ -16598,7 +16598,16 @@ impl<'a> Lowerer<'a> {
                         else {
                             continue;
                         };
-                        if ty_contains_var(region_ty) {
+                        // A top-level record region is a structural row identity
+                        // (handled below) whose row tail is its extensibility,
+                        // not an unknown; every other region is concretized only
+                        // when ground — the same predicate that pins the wildcard
+                        // during inference, so the two never disagree.
+                        let determined = match region_ty {
+                            Ty::Record(..) => !ty_contains_var(region_ty),
+                            _ => ty_is_ground(region_ty),
+                        };
+                        if !determined {
                             continue;
                         }
                         // A parameter flowing into a `Db.get*` ROW accessor keeps
