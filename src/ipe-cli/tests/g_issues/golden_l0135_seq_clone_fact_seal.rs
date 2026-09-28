@@ -18,6 +18,12 @@
 //! signature is refused by the nested-row gate (IPE-L0131) before any clone
 //! decision is reached.
 //!
+//! A move-only field read inside a re-callable closure is refused with
+//! IPE-L0126: the `Fn` closure holds its capture by reference on each call.
+//! A function-carrying row field has no `Clone`, so its signature is refused
+//! with IPE-L0135. A server handler renders as `Arc<dyn Fn>`, so a `Maybe`
+//! over one clones like any `Clone` field.
+//!
 //! A function decoded by a `Json.Decode` mapper is consume-once: calling it
 //! twice, or capturing it in a closure, is refused with IPE-L0127 at ipe time
 //! rather than emitting a second move of a `Box<dyn FnOnce>` (E0382 / E0507).
@@ -33,6 +39,12 @@
 //! | `seq_closure_and_field_read` | statement closure + field reads, reused in rest | builds + prints three lines |
 //! | `row_param_seq_reuse` | row param read by a statement kernel, reused in rest | builds + prints `ADA`, `Ada!` |
 //! | `row_list_signature_seq_reuse` | `List { r \| name : String }` param, same reuse | fail-closed IPE-L0131 |
+//! | `app_field_in_recallable_closure` | handle field read inside a re-callable closure | fail-closed IPE-L0126 |
+//! | `row_fun_field_signature` | row param with a function field | fail-closed IPE-L0135 |
+//! | `row_maybe_fun_field_signature` | row param with a `Maybe` function field | fail-closed IPE-L0135 |
+//! | `fn_field_moved_then_record_read` | `Maybe` function field moved, then whole record read | fail-closed IPE-L0127 |
+//! | `fun_field_applied_then_record_read` | function field called in place, then whole record read | builds + prints `13` |
+//! | `maybe_handler_field_in_closure` | `Maybe` server-handler field read in a closure | builds + prints `2` |
 //!
 //! ```text
 //! # gate check only (fast):
@@ -458,5 +470,215 @@ fn row_list_signature_seq_reuse_fails_closed() {
         "row_list_signature_seq_reuse",
         ROW_LIST_SIGNATURE_SEQ_REUSE,
         ipe_diagnostics::IPE_L0131,
+    );
+}
+
+/// A handle field read inside a re-callable closure argument.
+///
+/// The closure holds its capture of `site` by reference on each call, so
+/// moving the handle field out of it has no sound emission.
+const APP_FIELD_IN_RECALLABLE_CLOSURE: &str = r#"
+twice : (String -> String) -> String
+twice f =
+    f "a" ++ f "b"
+
+
+serve : Site -> Task Error ()
+serve site =
+    Io.println (twice (\s -> describe s site.app))
+"#;
+
+/// A row parameter whose known field is a function (`Box<dyn Fn>`, no `Clone`).
+///
+/// The witness getter only borrows the field, so the signature is refused.
+const ROW_FUN_FIELD_SIGNATURE: &str = r#"module Main exposing (main)
+
+import Ipe.Io as Io
+
+
+nameOf : { r | name : String, step : Int -> Int } -> String
+nameOf p =
+    p.name
+
+
+main =
+    Io.println (nameOf { name = "Ada", step = \x -> x + 1 })
+"#;
+
+/// A row parameter whose known field is a `Maybe` over a function.
+///
+/// The payload is a `Box<dyn Fn>`, so the field has no `Clone` either.
+const ROW_MAYBE_FUN_FIELD_SIGNATURE: &str = r#"module Main exposing (main)
+
+import Ipe.Io as Io
+
+
+nameOf : { r | name : String, step : Maybe (Int -> Int) } -> String
+nameOf p =
+    p.name
+
+
+main =
+    Io.println (nameOf { name = "Ada", step = Just (\x -> x + 1) })
+"#;
+
+/// A record carrying a `Maybe` over a function has no `Clone`.
+///
+/// Its function field is moved out, then the whole record is read again.
+const FN_FIELD_MOVED_THEN_RECORD_READ: &str = r"module Main exposing (main)
+
+import Ipe.Io as Io
+import Ipe.String as String
+
+
+type alias Holder =
+    { pick : Maybe (Int -> Int), n : Int }
+
+
+applyOr : Maybe (Int -> Int) -> Int
+applyOr m =
+    case m of
+        Just g ->
+            g 1
+
+        Nothing ->
+            0
+
+
+size : Holder -> Int
+size h =
+    h.n
+
+
+run : Holder -> Int
+run h =
+    applyOr h.pick + size h
+
+
+main =
+    Io.println (String.fromInt (run { pick = Just (\x -> x + 1), n = 2 }))
+";
+
+/// A function field called in place, then the whole record read.
+///
+/// A record-direct function field takes the `Arc` carrier, so the record
+/// clones. Prints `13`.
+const FUN_FIELD_APPLIED_THEN_RECORD_READ: &str = r"module Main exposing (main)
+
+import Ipe.Io as Io
+import Ipe.String as String
+
+
+type alias Counter =
+    { step : Int -> Int, n : Int }
+
+
+total : Counter -> Int
+total c =
+    c.n
+
+
+run : Counter -> Int
+run c =
+    c.step 1 + total c
+
+
+main =
+    Io.println (String.fromInt (run { step = \x -> x + 10, n = 2 }))
+";
+
+/// A `Maybe` over a server-handler field read inside a re-callable closure.
+///
+/// A server handler renders as `Arc<dyn Fn>`, so the `Maybe` clones and the
+/// closure reads a clone of the field. Prints `2`.
+const MAYBE_HANDLER_FIELD_IN_CLOSURE: &str = r#"module Main exposing (main)
+
+import Ipe.Http.Server as Server
+import Ipe.Io as Io
+import Ipe.List as List
+import Ipe.String as String
+import Ipe.Task as Task exposing (Task)
+
+
+type alias Routes =
+    { fallback : Maybe (Server.Request -> Task Error Server.Response), name : String }
+
+
+handle : Server.Request -> Task Error Server.Response
+handle _req =
+    Task.succeed (Server.text "ok")
+
+
+hasFallback : Maybe (Server.Request -> Task Error Server.Response) -> Bool
+hasFallback m =
+    case m of
+        Just _ ->
+            True
+
+        Nothing ->
+            False
+
+
+countFallbacks : Routes -> List Int -> Int
+countFallbacks r xs =
+    List.length (List.filter (\_ -> hasFallback r.fallback) xs)
+
+
+main : Task Error ()
+main =
+    Io.println (String.fromInt (countFallbacks { fallback = Just handle, name = "x" } [ 1, 2 ]))
+"#;
+
+#[test]
+fn app_field_in_recallable_closure_fails_closed() {
+    assert_rejected(
+        "app_field_in_recallable_closure",
+        &format!("{APP_HANDLE_PRELUDE}{APP_FIELD_IN_RECALLABLE_CLOSURE}"),
+        ipe_diagnostics::IPE_L0126,
+    );
+}
+
+#[test]
+fn row_fun_field_signature_fails_closed() {
+    assert_rejected(
+        "row_fun_field_signature",
+        ROW_FUN_FIELD_SIGNATURE,
+        ipe_diagnostics::IPE_L0135,
+    );
+}
+
+#[test]
+fn row_maybe_fun_field_signature_fails_closed() {
+    assert_rejected(
+        "row_maybe_fun_field_signature",
+        ROW_MAYBE_FUN_FIELD_SIGNATURE,
+        ipe_diagnostics::IPE_L0135,
+    );
+}
+
+#[test]
+fn fn_field_moved_then_record_read_fails_closed() {
+    assert_rejected(
+        "fn_field_moved_then_record_read",
+        FN_FIELD_MOVED_THEN_RECORD_READ,
+        ipe_diagnostics::IPE_L0127,
+    );
+}
+
+#[test]
+fn fun_field_applied_then_record_read_round_trips() {
+    let _ = assert_accepted(
+        "fun_field_applied_then_record_read",
+        FUN_FIELD_APPLIED_THEN_RECORD_READ,
+        "13",
+    );
+}
+
+#[test]
+fn maybe_handler_field_in_closure_round_trips() {
+    let _ = assert_accepted(
+        "maybe_handler_field_in_closure",
+        MAYBE_HANDLER_FIELD_IN_CLOSURE,
+        "2",
     );
 }
