@@ -10,6 +10,13 @@ Entries below the header are maintained by
 section is generated from Conventional Commit messages and prepended when the
 standing release pull request is merged.
 
+## [0.3.2](https://github.com/arthurmaciel/ipe-lang/compare/ipe-v0.3.1...ipe-v0.3.2) (2026-09-28)
+
+
+### Bug Fixes
+
+* batch G — Web.embed cfg, FFI transitive pins, symlinked source dirs ([#3022](https://github.com/arthurmaciel/ipe-lang/issues/3022)) ([3728a8f](https://github.com/arthurmaciel/ipe-lang/commit/3728a8fdda7ff6d3cc4898ad324b99bcca176cd3))
+
 ## [0.3.1](https://github.com/arthurmaciel/ipe-lang/compare/ipe-v0.3.0...ipe-v0.3.1) (2026-09-28)
 
 
