@@ -170,13 +170,15 @@ fn string_from_bool_type_checks() -> TestResult {
 /// A signature wildcard the body solves to a structure that still leaves part
 /// of the type open has no sound lowering, so `type-check` refuses it with
 /// IPE-T0021: a bare `any` passed to `List.length`, a `List any` passed to
-/// `List.concat`, and a tuple `any` holding a field-read record.
+/// `List.concat`, a tuple `any` holding a field-read record, and a bare record
+/// `any` whose field-read `List` element is left open.
 #[test]
 fn wildcard_with_a_partial_solved_structure_is_refused() -> TestResult {
     for name in [
         "wildcard_list_length.ipe",
         "wildcard_nested_concat.ipe",
         "wildcard_tuple_open_record.ipe",
+        "wildcard_record_list_field.ipe",
     ] {
         let (ok, _, stderr) = run_ipe(&["type-check", &fixture(name).to_string_lossy()])?;
         assert!(!ok, "{name} must be refused");

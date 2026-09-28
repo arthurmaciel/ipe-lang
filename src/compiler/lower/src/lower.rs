@@ -16600,11 +16600,12 @@ impl<'a> Lowerer<'a> {
                         };
                         // A top-level record region is a structural row identity
                         // (handled below) whose row tail is its extensibility,
-                        // not an unknown; every other region is concretized only
-                        // when ground — the same predicate that pins the wildcard
-                        // during inference, so the two never disagree.
+                        // not an unknown, so only its fields must be ground; every
+                        // other region is concretized only when ground. Inference
+                        // already refused every wildcard these predicates would
+                        // leave undetermined (`ty_is_ground`).
                         let determined = match region_ty {
-                            Ty::Record(..) => !ty_contains_var(region_ty),
+                            Ty::Record(fields, _) => fields.values().all(ty_is_ground),
                             _ => ty_is_ground(region_ty),
                         };
                         if !determined {

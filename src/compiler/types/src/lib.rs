@@ -937,15 +937,11 @@ fn infer_core(
                     }
                     WildcardFact::Free | WildcardFact::RowRecord => {
                         let root = lift!(uf.find(*wildcard));
-                        match free_roots.get(&root) {
-                            Some(&earlier) => {
-                                Some(WildcardDependence::SharedWith { parameter: earlier })
-                            }
-                            None => {
-                                free_roots.insert(root, parameter);
-                                None
-                            }
+                        let earlier = free_roots.get(&root).copied();
+                        if earlier.is_none() {
+                            free_roots.insert(root, parameter);
                         }
+                        earlier.map(|parameter| WildcardDependence::SharedWith { parameter })
                     }
                     WildcardFact::Dependent(dependence) => Some(dependence),
                 };
@@ -1569,11 +1565,14 @@ fn check_wildcard_pins(
     Ok(())
 }
 
-/// Whether a solved type is ground: no type variable and no open record row.
+/// Whether a resolved type is ground: no type variable and no open record row.
 ///
-/// This is the one predicate for "the type is fully known": a wildcard pin
-/// must satisfy it, and the lowerer concretizes a wildcard parameter's region
-/// only when it holds.
+/// This is the read-back form of "the type is fully known": the lowerer
+/// concretizes a wildcard parameter's region only when it holds. Inference
+/// classifies a wildcard with `solved_is_ground` instead, which also sees
+/// the open rows [`zonk`] reads back as closed; every type it admits is one
+/// this admits, so the lowerer never concretizes a wildcard inference left
+/// unpinned.
 #[must_use]
 pub fn ty_is_ground(ty: &Ty) -> bool {
     match ty {
@@ -1586,14 +1585,57 @@ pub fn ty_is_ground(ty: &Ty) -> bool {
     }
 }
 
+/// Whether every solver node reachable from `roots` is known: no type
+/// variable, and every record extension ends in the closed-row sentinel.
+///
+/// Read on the union-find, not on a zonked [`Ty`]: [`zonk`] presents every
+/// record as closed, so an open row a field read left behind is invisible
+/// after read-back. A type this admits zonks to one [`ty_is_ground`] admits.
+///
+/// # Errors
+/// A union-find invariant violation, or [`TypeError::StepBudgetExceeded`]
+/// once the shared budget is spent.
+fn solved_is_ground(
+    uf: &mut UnionFind<Content>,
+    budget: &mut Budget,
+    roots: impl IntoIterator<Item = VarId>,
+) -> DResult<bool> {
+    let mut work: Vec<VarId> = roots.into_iter().collect();
+    let mut seen: BTreeSet<VarId> = BTreeSet::new();
+    while let Some(var) = work.pop() {
+        budget.tick()?;
+        let root = uf.find(var)?;
+        if !seen.insert(root) {
+            continue;
+        }
+        match uf.root_content(root)? {
+            Content::Flex | Content::Rigid | Content::Super { .. } => return Ok(false),
+            Content::Structure(FlatType::Unit | FlatType::EmptyRecord) => {}
+            Content::Structure(FlatType::Fun(arg, result)) => {
+                work.push(*arg);
+                work.push(*result);
+            }
+            Content::Structure(FlatType::Con { args, .. }) => work.extend(args.iter().copied()),
+            Content::Structure(FlatType::Tuple(elems)) => work.extend(elems.iter().copied()),
+            Content::Structure(FlatType::Record(fields, ext)) => {
+                work.extend(fields.values().copied());
+                work.push(*ext);
+            }
+        }
+    }
+    Ok(true)
+}
+
 /// What a parameter wildcard's solved root makes of it.
 enum WildcardFact {
     /// An unsolved non-rigid variable: the wildcard stays its own generic.
     Free,
-    /// A bare `any` parameter solved to a record: it lowers to a structural
-    /// row generic admitting wider caller records.
+    /// A bare `any` parameter solved to a record whose every field is ground:
+    /// it lowers to a structural row generic admitting wider caller records.
+    /// A field holding an unknown leaves the lowerer no concrete field type,
+    /// so such a record is a partial structure instead.
     RowRecord,
-    /// One ground type the lowerer emits concretely ([`ty_is_ground`]).
+    /// One ground type the lowerer emits concretely ([`solved_is_ground`]).
     Pinned(Ty),
     /// A root no lowering keeps independent; the binding is refused.
     Dependent(WildcardDependence),
@@ -1623,11 +1665,19 @@ fn classify_param_wildcard(
                 name,
             }))
         }
-        Content::Structure(_) => {
+        Content::Structure(flat) => {
+            // A bare record's row tail is its extensibility, so only its fields
+            // must be ground; anywhere else an open row is an unknown.
+            let ground = if bare && let FlatType::Record(fields, _) = &flat {
+                if solved_is_ground(uf, budget, fields.values().copied())? {
+                    return Ok(WildcardFact::RowRecord);
+                }
+                false
+            } else {
+                solved_is_ground(uf, budget, [wildcard])?
+            };
             let ty = zonk(uf, budget, wildcard)?;
-            if bare && matches!(ty, Ty::Record(..)) {
-                Ok(WildcardFact::RowRecord)
-            } else if ty_is_ground(&ty) {
+            if ground {
                 Ok(WildcardFact::Pinned(ty))
             } else {
                 let mut namer = VarNamer::new();
@@ -6651,8 +6701,9 @@ h x =
     }
 
     /// A wildcard the body solves to a structure that still holds a free
-    /// variable or an open record row — bare, nested in `List any`, or a record
-    /// nested in a tuple — has no single lowering, so the binding is refused.
+    /// variable or an open record row — bare, nested in `List any`, a record
+    /// nested in a tuple, or a bare record whose field is not ground — has no
+    /// single lowering, so the binding is refused.
     #[test]
     fn wildcard_solved_to_a_partial_structure_is_refused() {
         for (what, def, parameter) in [
@@ -6675,6 +6726,16 @@ h x =
                 "a nested record read through a tuple after a concrete parameter",
                 "f : Int -> any -> Int\nf n p =\n    case p of\n        ( a, r ) ->\n            n + a + r.x\n",
                 2,
+            ),
+            (
+                "a bare record whose field holds a tuple with an open slot",
+                "f : any -> Int\nf p =\n    case p.pair of\n        ( a, _ ) ->\n            a + 1\n",
+                1,
+            ),
+            (
+                "a bare record whose field is an open record",
+                "f : any -> Int\nf p =\n    p.inner.y + 1\n",
+                1,
             ),
         ] {
             let src = format!("{M2C_HDR}{def}\nmain =\n    0\n");
