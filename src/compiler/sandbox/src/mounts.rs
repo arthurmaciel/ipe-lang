@@ -313,7 +313,7 @@ pub fn push_mounts(argv: &mut Vec<OsString>, homes: &HomeMasks, binds: &[Bind<'_
     masks.sort_by(|a, b| depth(a).cmp(&depth(b)).then_with(|| a.cmp(b)));
     masks.dedup();
     let mut unique: Vec<Bind<'_>> = Vec::with_capacity(binds.len());
-    let mut first_at = std::collections::HashMap::new();
+    let mut first_at: std::collections::HashMap<_, usize> = std::collections::HashMap::new();
     for bind in binds {
         match first_at.get(bind.path()).and_then(|at| unique.get_mut(*at)) {
             Some(kept) => *kept = kept.narrowed(*bind),
