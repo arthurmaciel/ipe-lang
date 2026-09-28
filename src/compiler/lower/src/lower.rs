@@ -8734,10 +8734,10 @@ fn reachable_from_seeds<'a>(
 /// consumers — the emitted-binary prune and the package capability audit —
 /// seed from this one list, so a backend-synthesised call can never be kept by
 /// one and missed by the other.
-fn backend_invoked_roots<'a>(
-    funcs: impl Iterator<Item = &'a Func> + Clone,
-    interner: &Interner,
-) -> Vec<FuncId> {
+fn backend_invoked_roots<'a, I>(funcs: &I, interner: &Interner) -> Vec<FuncId>
+where
+    I: Iterator<Item = &'a Func> + Clone,
+{
     let mut roots: Vec<FuncId> = funcs
         .clone()
         .filter(|f| interner.resolve(f.name) == Some(ipe_ir::HYDRATION_PROJECTION_NAME))
@@ -9497,7 +9497,7 @@ pub fn capabilities_reached_from(
         .filter(|f| is_root_home(&f.home))
         .map(|f| f.id)
         .collect();
-    seeds.extend(backend_invoked_roots(funcs.clone(), interner));
+    seeds.extend(backend_invoked_roots(&funcs, interner));
     let ids = reachable_from_seeds(funcs.clone(), seeds);
     let live = funcs.filter(|f| ids.contains(&f.id));
     ReachedCapabilities {
@@ -14918,7 +14918,7 @@ impl<'a> Lowerer<'a> {
         }
         // Externally-invoked roots besides `main` that dead-function elimination
         // must keep (see [`backend_invoked_roots`]).
-        let export_roots = backend_invoked_roots(funcs.iter(), self.interner);
+        let export_roots = backend_invoked_roots(&funcs.iter(), self.interner);
 
         // Cross-call type-parameter-bound propagation. The per-function
         // `apply_kernel_type_param_bounds` pass infers bounds from each body in

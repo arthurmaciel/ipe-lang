@@ -1230,36 +1230,44 @@ fn load_installed_crate(cache_root: &Path, slug: String) -> Result<InstalledCrat
                             // Absent slots mean no parameter converts; present
                             // slots must align with the binding's arity, or the
                             // backend would skip (or misapply) a conversion.
-                            let transparent_params = match b
+                            // A slot is a transparent type name or `null`; any
+                            // other JSON value is malformed, never read as "no
+                            // conversion".
+                            let transparent_params = b
                                 .get("transparentParams")
                                 .and_then(serde_json::Value::as_array)
-                            {
-                                None => Ok(crate::interface::TransparentParams::None),
-                                // A slot is a transparent type name or `null`;
-                                // any other JSON value is malformed, never read
-                                // as "no conversion".
-                                Some(ps) => ps
-                                    .iter()
-                                    .enumerate()
-                                    .map(|(i, p)| match p {
-                                        serde_json::Value::Null => Ok(None),
-                                        serde_json::Value::String(s) => Ok(Some(s.clone())),
-                                        serde_json::Value::Bool(_)
-                                        | serde_json::Value::Number(_)
-                                        | serde_json::Value::Array(_)
-                                        | serde_json::Value::Object(_) => Err(malformed(format!(
-                                            "binding `{ref_name}`: transparentParams[{i}] is \
-                                             neither a type name nor null"
-                                        ))),
-                                    })
-                                    .collect::<Result<Vec<_>, Diagnostic>>()
-                                    .and_then(|slots| {
-                                        crate::interface::TransparentParams::aligned(slots, arity)
-                                            .map_err(|drift| {
-                                                malformed(format!("binding `{ref_name}`: {drift}"))
+                                .map_or_else(
+                                    || Ok(crate::interface::TransparentParams::None),
+                                    |ps| {
+                                        ps.iter()
+                                            .enumerate()
+                                            .map(|(i, p)| match p {
+                                                serde_json::Value::Null => Ok(None),
+                                                serde_json::Value::String(s) => Ok(Some(s.clone())),
+                                                serde_json::Value::Bool(_)
+                                                | serde_json::Value::Number(_)
+                                                | serde_json::Value::Array(_)
+                                                | serde_json::Value::Object(_) => {
+                                                    Err(malformed(format!(
+                                                        "binding `{ref_name}`: \
+                                                         transparentParams[{i}] is neither a \
+                                                         type name nor null"
+                                                    )))
+                                                }
                                             })
-                                    }),
-                            };
+                                            .collect::<Result<Vec<_>, Diagnostic>>()
+                                            .and_then(|slots| {
+                                                crate::interface::TransparentParams::aligned(
+                                                    slots, arity,
+                                                )
+                                                .map_err(|drift| {
+                                                    malformed(format!(
+                                                        "binding `{ref_name}`: {drift}"
+                                                    ))
+                                                })
+                                            })
+                                    },
+                                );
                             let transparent_result = b.get("transparentResult").and_then(|r| {
                                 Some(crate::interface::TransparentResult {
                                     type_name: r
