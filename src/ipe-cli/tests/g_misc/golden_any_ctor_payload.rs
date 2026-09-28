@@ -81,7 +81,7 @@ fn any_ctor_payload_ipec_and_cargo_zero() {
 
     // Cargo build seal: the emitted Rust must compile.
     // Gated on IPE_E2E so the default test run stays fast.
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
     let outcome = crate::support::build_and_run_emitted("any_ctor_payload", &out);
@@ -137,14 +137,14 @@ fn ctor_span_attr_dep_module() {
         return;
     };
 
-    let result = ipe::build_with_sibling_discovery(&entry, &out, &runtime);
+    let result = ipe::build_loose_file(&entry, &out, &runtime);
     assert!(
         result.is_ok(),
         "a dep-module enum wrapping a `List (Int -> Int)` must lower and build: {:?}",
         result.err()
     );
 
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
     let outcome = crate::support::build_and_run_emitted("ctor_span_attr", &out);

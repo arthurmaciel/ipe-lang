@@ -56,7 +56,7 @@ static JAIL_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 /// the tests could not pass no matter how correct the jail is, so they must skip.
 /// The [`jail_can_establish`] canary settles this once.
 fn e2e_tools() -> Option<RunJailTools> {
-    if std::env::var_os("IPE_E2E").is_none_or(|v| v != "1") {
+    if ipe_env::var_os("IPE_E2E").is_none_or(|v| v != "1") {
         return None;
     }
     let caps = ipe_sandbox::probe();
@@ -180,7 +180,9 @@ fn run_jailed_inner(
 
     let scoped = std::env::temp_dir().join(format!("ipe-e2e-{}", std::process::id()));
     std::fs::create_dir_all(&scoped).expect("scoped tmp");
-    let host_env = |k: &str| std::env::var_os(k);
+    // `ipe_env` matches the launcher's crate-private passthrough for every name
+    // but a home variable, and no profile in this file grants one.
+    let host_env = |k: &str| ipe_env::var_os(k);
     let argv = run_jail_argv(
         tools,
         profile,

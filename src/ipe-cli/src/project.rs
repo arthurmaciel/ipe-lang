@@ -658,22 +658,46 @@ pub fn parse_manifest(manifest_path: &Path) -> Result<ProjectManifest, CliError>
 /// tree is refused rather than spinning indefinitely.
 const MAX_DISCOVERY_DEPTH: usize = 64;
 
+/// The most `.ipe` modules the module-discovery walk collects.
+///
+/// The same bound `ipe watch` holds its watched source files to, so the one
+/// walk that feeds both a build and a watch session refuses a pathological
+/// tree once, with one limit.
+pub const MAX_DISCOVERED_MODULES: usize = ipe_watch::MAX_WATCHED_FILES;
+
+/// The most directory entries the module-discovery walk examines.
+///
+/// Bounds a walk through a huge tree that holds few modules (a vendored
+/// dependency directory under the source root).
+pub const MAX_DISCOVERY_ENTRIES: usize = 1_000_000;
+
 /// Walk `src_root` recursively, collecting every `*.ipe` file as a
 /// [`DiscoveredModule`].
 ///
 /// Files whose path contains a non-module-segment (e.g. lowercase first char
 /// or characters outside `[A-Za-z0-9_]`) are silently skipped — they may be
-/// build artefacts or editor swap files.
+/// build artefacts or editor swap files. Symlinks are never followed: a
+/// symlinked file or directory is skipped, and each module found is read
+/// later by [`crate::io_bounded::read_walked_source`], which refuses a final
+/// symlink swapped in since.
 ///
-/// The walk carries a canonicalised visited-set to detect symlink cycles and a
-/// depth ceiling to bound pathologically deep trees. Both conditions produce a
-/// typed [`CliError::DiscoveryLimitReached`] rather than an infinite loop or
-/// stack overflow.
+/// The walk carries a canonicalised visited-set to detect symlink cycles, a
+/// depth ceiling to bound pathologically deep trees, and ceilings on the
+/// modules collected and the entries examined. Each produces a typed
+/// [`CliError::DiscoveryLimitReached`] rather than an unbounded walk.
 ///
 /// # Errors
-/// [`CliError::Io`] if the directory cannot be read.
-/// [`CliError::DiscoveryLimitReached`] on a symlink cycle or a tree deeper
-/// than [`MAX_DISCOVERY_DEPTH`].
+/// [`CliError::SourceRefused`] with [`SourceRefusal::AccessDenied`] when a
+/// directory under `src_root` may not be listed, or with
+/// [`SourceRefusal::NotRegularFile`] when a module path names a FIFO,
+/// device or socket.
+/// [`CliError::Io`] if a directory cannot otherwise be read.
+/// [`CliError::DiscoveryLimitReached`] on a symlink cycle, a tree deeper
+/// than [`MAX_DISCOVERY_DEPTH`], more than [`MAX_DISCOVERED_MODULES`]
+/// modules or more than [`MAX_DISCOVERY_ENTRIES`] entries.
+///
+/// [`SourceRefusal::AccessDenied`]: crate::io_bounded::SourceRefusal::AccessDenied
+/// [`SourceRefusal::NotRegularFile`]: crate::io_bounded::SourceRefusal::NotRegularFile
 pub fn discover_modules(src_root: &Path) -> Result<Vec<DiscoveredModule>, CliError> {
     use std::collections::HashSet;
 
@@ -682,6 +706,7 @@ pub fn discover_modules(src_root: &Path) -> Result<Vec<DiscoveredModule>, CliErr
     let mut stack: VecDeque<(PathBuf, usize)> = VecDeque::new();
     // Visited set of canonicalised paths breaks symlink cycles.
     let mut visited: HashSet<PathBuf> = HashSet::new();
+    let mut examined = 0usize;
 
     stack.push_back((src_root.to_path_buf(), 0));
 
@@ -711,28 +736,47 @@ pub fn discover_modules(src_root: &Path) -> Result<Vec<DiscoveredModule>, CliErr
             });
         }
 
-        let entries = fs::read_dir(&dir).map_err(|e| CliError::Io {
-            path: dir.clone(),
-            source: e,
-        })?;
+        let entries = fs::read_dir(&dir).map_err(|e| crate::io_bounded::access_error(&dir, e))?;
         for entry in entries {
-            let entry = entry.map_err(|e| CliError::Io {
-                path: dir.clone(),
-                source: e,
-            })?;
+            let entry = entry.map_err(|e| crate::io_bounded::access_error(&dir, e))?;
+            examined = examined.saturating_add(1);
+            if examined > MAX_DISCOVERY_ENTRIES {
+                return Err(CliError::DiscoveryLimitReached {
+                    detail: format!(
+                        "source tree holds more than {MAX_DISCOVERY_ENTRIES} entries at `{}`",
+                        dir.display()
+                    ),
+                });
+            }
             let path = entry.path();
-            let file_type = entry.file_type().map_err(|e| CliError::Io {
-                path: path.clone(),
-                source: e,
-            })?;
+            let file_type = entry
+                .file_type()
+                .map_err(|e| crate::io_bounded::access_error(&path, e))?;
             if file_type.is_dir() {
                 stack.push_back((path, depth + 1));
-            } else if file_type.is_file()
-                && path.extension().and_then(|e| e.to_str()) == Some("ipe")
-                && let Some(m) = file_to_module(src_root, &path)
-            {
-                result.push(m);
+                continue;
             }
+            if file_type.is_symlink() || path.extension().and_then(|e| e.to_str()) != Some("ipe") {
+                continue;
+            }
+            let Some(m) = file_to_module(src_root, &path) else {
+                continue;
+            };
+            if !file_type.is_file() {
+                return Err(crate::io_bounded::source_refused(
+                    &path,
+                    crate::io_bounded::SourceRefusal::NotRegularFile,
+                ));
+            }
+            if result.len() >= MAX_DISCOVERED_MODULES {
+                return Err(CliError::DiscoveryLimitReached {
+                    detail: format!(
+                        "source tree holds more than {MAX_DISCOVERED_MODULES} modules at `{}`",
+                        dir.display()
+                    ),
+                });
+            }
+            result.push(m);
         }
     }
 
@@ -763,7 +807,7 @@ fn file_to_module(src_root: &Path, path: &Path) -> Option<DiscoveredModule> {
 
 /// A Ipê module path segment must start with an ASCII uppercase letter and
 /// contain only ASCII alphanumerics and `_`.
-fn is_module_segment(s: &str) -> bool {
+pub(crate) fn is_module_segment(s: &str) -> bool {
     let mut chars = s.chars();
     match chars.next() {
         Some(c) if c.is_ascii_uppercase() => chars.all(|c| c.is_ascii_alphanumeric() || c == '_'),
@@ -1478,5 +1522,130 @@ import String
             "the refusal must mention legacy ipe.toml: {err}"
         );
         let _ = fs::remove_dir_all(&root);
+    }
+
+    // ── Module discovery refusals ─────────────────────────────────────────────
+
+    /// An empty source root unique to this test process.
+    #[allow(clippy::expect_used)] // test fixture: an unwritable temp dir IS the failure
+    fn walk_root(name: &str) -> PathBuf {
+        let root = std::env::temp_dir().join(format!("ipe_walk_{name}_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).expect("create source root");
+        root
+    }
+
+    /// Whether `result` is the typed refusal for `reason`.
+    fn is_refused<T>(
+        result: &Result<T, CliError>,
+        reason: crate::io_bounded::SourceRefusal,
+    ) -> bool {
+        matches!(result, Err(CliError::SourceRefused { reason: got, .. }) if *got == reason)
+    }
+
+    /// A FIFO named as a module is refused by the walk, and by the walked read, without blocking.
+    #[cfg(unix)]
+    #[test]
+    #[allow(clippy::expect_used)] // test fixture: a failed write or `mkfifo` IS the failure
+    fn fifo_module_is_refused_without_blocking() {
+        let root = walk_root("fifo");
+        fs::write(root.join("Main.ipe"), "module Main exposing (..)\n").expect("write Main");
+        let fifo = root.join("Pipe.ipe");
+        let made = std::process::Command::new("mkfifo")
+            .arg(&fifo)
+            .status()
+            .expect("run mkfifo");
+        assert!(made.success(), "mkfifo creates the fixture");
+        let walked = discover_modules(&root);
+        let read = crate::io_bounded::read_walked_source(&fifo);
+        let _ = fs::remove_dir_all(&root);
+        for refused in [
+            is_refused(&walked, crate::io_bounded::SourceRefusal::NotRegularFile),
+            is_refused(&read, crate::io_bounded::SourceRefusal::NotRegularFile),
+        ] {
+            assert!(
+                refused,
+                "a FIFO module is not a regular file: {walked:?} / {read:?}"
+            );
+        }
+    }
+
+    /// A FIFO whose name is no module path is skipped, like any other non-module file.
+    #[cfg(unix)]
+    #[test]
+    #[allow(clippy::expect_used)] // test fixture: a failed write or `mkfifo` IS the failure
+    fn fifo_outside_the_module_namespace_is_skipped() {
+        let root = walk_root("fifo_skip");
+        fs::write(root.join("Main.ipe"), "module Main exposing (..)\n").expect("write Main");
+        let made = std::process::Command::new("mkfifo")
+            .arg(root.join("scratch.ipe"))
+            .status()
+            .expect("run mkfifo");
+        assert!(made.success(), "mkfifo creates the fixture");
+        let walked = discover_modules(&root);
+        let _ = fs::remove_dir_all(&root);
+        let modules: Option<Vec<Vec<String>>> = walked
+            .ok()
+            .map(|found| found.into_iter().map(|m| m.module_path).collect());
+        assert_eq!(modules, Some(vec![vec!["Main".to_owned()]]));
+    }
+
+    /// A directory under the source root the process may not list is refused as access denied.
+    ///
+    /// Skipped when the process can list it anyway (running as root).
+    #[cfg(unix)]
+    #[test]
+    #[allow(clippy::expect_used)] // test fixture: an unwritable scratch dir IS the failure
+    fn unreadable_module_directory_is_refused_as_access_denied() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let root = walk_root("noread");
+        let locked = root.join("Locked");
+        fs::create_dir_all(&locked).expect("create Locked/");
+        fs::write(
+            locked.join("Hidden.ipe"),
+            "module Locked.Hidden exposing (..)\n",
+        )
+        .expect("write Hidden");
+        fs::set_permissions(&locked, fs::Permissions::from_mode(0o000))
+            .expect("drop the directory's permissions");
+        let privileged = fs::read_dir(&locked).is_ok();
+        let walked = discover_modules(&root);
+        let _ = fs::set_permissions(&locked, fs::Permissions::from_mode(0o755));
+        let _ = fs::remove_dir_all(&root);
+        if privileged {
+            eprintln!("skipped: running as root, directory permissions are not enforced");
+            return;
+        }
+        assert!(
+            is_refused(&walked, crate::io_bounded::SourceRefusal::AccessDenied),
+            "an unlistable module directory must be refused as access denied, got: {walked:?}"
+        );
+    }
+
+    /// A module file without the read bit is refused by the walked read as access denied.
+    ///
+    /// Skipped when the process can read it anyway (running as root).
+    #[cfg(unix)]
+    #[test]
+    #[allow(clippy::expect_used)] // test fixture: an unwritable scratch dir IS the failure
+    fn unreadable_module_file_is_refused_as_access_denied() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let root = walk_root("noread_file");
+        let module = root.join("Main.ipe");
+        fs::write(&module, "module Main exposing (..)\n").expect("write Main");
+        fs::set_permissions(&module, fs::Permissions::from_mode(0o000)).expect("drop the read bit");
+        let privileged = fs::File::open(&module).is_ok();
+        let walked = discover_modules(&root);
+        let read = crate::io_bounded::read_walked_source(&module);
+        let _ = fs::remove_dir_all(&root);
+        if privileged {
+            eprintln!("skipped: running as root, the read bit is not enforced");
+            return;
+        }
+        assert!(walked.is_ok(), "the walk lists the file: {walked:?}");
+        assert!(
+            is_refused(&read, crate::io_bounded::SourceRefusal::AccessDenied),
+            "an unreadable module must be refused as access denied, got: {read:?}"
+        );
     }
 }

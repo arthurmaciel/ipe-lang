@@ -139,7 +139,7 @@ pub fn lookup(env_value: Option<&OsStr>, config_dir: Option<&Path>) -> KeyLookup
 #[must_use]
 pub fn configured() -> Option<PrivateKeyPath> {
     lookup(
-        std::env::var_os(SIGNING_KEY_ENV).as_deref(),
+        ipe_env::var_os(SIGNING_KEY_ENV).as_deref(),
         crate::login::config_dir().as_deref(),
     )
     .usable()
@@ -726,7 +726,7 @@ fn run_interactive(env_value: Option<&OsStr>, config_dir: Option<&Path>) -> Resu
 /// [`CliError::Resolve`] when the user opted in and setup failed; no partial key
 /// is left behind.
 pub(crate) fn offer_after_login() -> Result<(), CliError> {
-    let env_value = std::env::var_os(SIGNING_KEY_ENV);
+    let env_value = ipe_env::var_os(SIGNING_KEY_ENV);
     let config_dir = crate::login::config_dir();
     if is_interactive() {
         return run_interactive(env_value.as_deref(), config_dir.as_deref());
@@ -754,7 +754,7 @@ pub(crate) fn run_setup_command() -> Result<(), CliError> {
         ));
     }
     run_interactive(
-        std::env::var_os(SIGNING_KEY_ENV).as_deref(),
+        ipe_env::var_os(SIGNING_KEY_ENV).as_deref(),
         crate::login::config_dir().as_deref(),
     )
 }

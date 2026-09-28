@@ -1,9 +1,13 @@
 //! The confined watcher's typed scope (INV-4, H18).
 //!
-//! `ipe watch` must observe only a strict, typed allowlist: `package.ipe`, the
-//! entry point's directory (recursive source-extension walk), and `tests/`
-//! if present — never `target/`, `.git/`, `node_modules/`, or any generated
-//! output directory, whose churn would self-trigger a rebuild loop.
+//! `ipe watch` must observe only a strict, typed allowlist. For a package:
+//! `package.ipe`, the entry point's directory (watched recursively), and
+//! `tests/` if present — never `target/`, `.git/`, `node_modules/`, or any
+//! generated output directory, whose churn would self-trigger a rebuild loop.
+//! For a loose file: the entry's import closure only — its directory and the
+//! closure's module directories, each watched non-recursively. No directory
+//! is walked here: the source files a scope counts are the ones the caller's
+//! own bounded module discovery found.
 //!
 //! The two hazards this module forecloses (design doc H18):
 //! - a symlink resolving OUTSIDE the project root must never be watched
@@ -17,7 +21,8 @@
 //! outside the root is simply not representable as a `WatchedPath` (parse,
 //! don't validate).
 
-use std::path::{Path, PathBuf};
+use std::collections::BTreeSet;
+use std::path::{Component, Path, PathBuf};
 
 /// The source-extension this project's `.ipe` modules use. Kept as a single
 /// named constant so a future rename only touches one place.
@@ -164,15 +169,31 @@ pub struct WatchScope {
     /// tmp-write + rename, so a new file under a watched DIRECTORY is
     /// observed even though its own inode never existed before the rename.
     roots_to_watch: Vec<WatchedPath>,
-    /// The canonical root-level `tests/` directory, when one exists —
-    /// scoped so the "any extension is relevant under `tests/`" rule only
-    /// ever matches THIS directory, never an unrelated `tests` component
-    /// nested elsewhere in the tree (e.g. a supervised app's own
-    /// `examples/foo/tests/`).
-    tests_root: Option<PathBuf>,
+    /// Which files under the watched roots are relevant.
+    mode: ScopeMode,
     /// Total distinct `.ipe` source files discovered at scope-build time —
     /// the `DoS`-guard count (H18: "bound watched-file count").
     file_count: usize,
+}
+
+/// How a [`WatchScope`] watches its roots and judges an event path.
+#[derive(Debug, Clone)]
+enum ScopeMode {
+    /// A package: every root is watched recursively, and any source file under it is relevant.
+    Package {
+        /// The canonical root-level `tests/` directory, when one exists.
+        ///
+        /// Scoped so the "any extension is relevant under `tests/`" rule
+        /// only ever matches THIS directory, never an unrelated `tests`
+        /// component nested elsewhere in the tree (e.g. a supervised app's
+        /// own `examples/foo/tests/`).
+        tests_root: Option<PathBuf>,
+    },
+    /// A loose file: every root is watched non-recursively, and only the closure's paths are relevant.
+    LooseFile {
+        /// The entry, every probed module file, and every directory leading to one, under the root.
+        relevant: BTreeSet<PathBuf>,
+    },
 }
 
 /// Bound on the number of `.ipe` files a single watch session will track.
@@ -196,11 +217,6 @@ pub enum ScopeError {
     EntryDirEscapesRoot(PathBuf),
     /// The discovered `.ipe` file count exceeds [`MAX_WATCHED_FILES`].
     TooManyFiles { found: usize, max: usize },
-    /// A filesystem error occurred while walking a watched directory.
-    Io {
-        path: PathBuf,
-        source: std::io::Error,
-    },
 }
 
 /// Paths render quoted and escaped: a directory name is attacker-chosen when a
@@ -218,9 +234,6 @@ impl std::fmt::Display for ScopeError {
                 "watch: {found} source files exceed the watch bound of {max}; refusing to watch \
                  (this is usually a mis-pointed project root, not a real project)"
             ),
-            Self::Io { path, source } => {
-                write!(f, "watch: io error walking {path:?}: {source}")
-            }
         }
     }
 }
@@ -228,15 +241,25 @@ impl std::fmt::Display for ScopeError {
 impl std::error::Error for ScopeError {}
 
 impl WatchScope {
-    /// Build the confined scope for a project rooted at `root`, whose entry
-    /// module lives under `entry_dir` (already known to be `root` or a
-    /// descendant of it — the caller is the CLI's own `--entry` resolution,
-    /// which has already located the file). `has_tests` records whether a
-    /// `tests/` directory exists directly under `root`.
+    /// Build the confined scope for a package rooted at `root`, whose entry module lives under `entry_dir`.
+    ///
+    /// `entry_dir` is `root` or a descendant of it (the caller's own entry
+    /// resolution has already located the file). `source_files` are the
+    /// package's module files as the caller's bounded module discovery found
+    /// them; no directory is walked here. Only distinct `.ipe` sources count
+    /// toward [`MAX_WATCHED_FILES`] — `package.ipe` and any path under an
+    /// excluded directory below the root never do.
     ///
     /// # Errors
-    /// See [`ScopeError`].
-    pub fn build(root: &Path, entry_dir: &Path) -> Result<Self, ScopeError> {
+    /// [`ScopeError::RootNotFound`] when `root` does not canonicalise;
+    /// [`ScopeError::EntryDirEscapesRoot`] when `entry_dir` is not confined
+    /// to it; [`ScopeError::TooManyFiles`] when the counted sources exceed
+    /// [`MAX_WATCHED_FILES`].
+    pub fn build(
+        root: &Path,
+        entry_dir: &Path,
+        source_files: &[PathBuf],
+    ) -> Result<Self, ScopeError> {
         let canon_root = std::fs::canonicalize(root)
             .map_err(|_| ScopeError::RootNotFound(root.to_path_buf()))?;
 
@@ -268,26 +291,111 @@ impl WatchScope {
             roots_to_watch.push(w);
         }
 
-        // Discover + count every `.ipe` file under the watched roots now, so
-        // a pathological tree is refused at startup rather than degrading
-        // the watcher into an unbounded event source later.
-        let mut file_count = 0usize;
-        for w in &roots_to_watch {
-            count_source_files(&canon_root, w.as_path(), &mut file_count)?;
-            if file_count > MAX_WATCHED_FILES {
-                return Err(ScopeError::TooManyFiles {
-                    found: file_count,
-                    max: MAX_WATCHED_FILES,
-                });
-            }
+        // Refused at startup, so a pathological tree never degrades the
+        // watcher into an unbounded event source later.
+        let file_count = source_files
+            .iter()
+            .filter(|path| {
+                is_source_file(path)
+                    && !is_manifest_file(path)
+                    && !under_excluded_dir_below(&canon_root, path)
+            })
+            .collect::<BTreeSet<_>>()
+            .len();
+        if file_count > MAX_WATCHED_FILES {
+            return Err(ScopeError::TooManyFiles {
+                found: file_count,
+                max: MAX_WATCHED_FILES,
+            });
         }
 
         Ok(Self {
             root: canon_root,
             roots_to_watch,
-            tests_root,
+            mode: ScopeMode::Package { tests_root },
             file_count,
         })
+    }
+
+    /// Build the scope for a loose file: its directory and the directories its closure's modules live in.
+    ///
+    /// `module_files` are the sibling paths the entry's import closure
+    /// probes, relative to the entry's directory (`A/B.ipe` for module
+    /// `A.B`), whether or not they exist yet. No directory is walked or
+    /// listed: the entry's directory and each real (non-symlink) directory
+    /// leading to a module file are watched non-recursively, and only the
+    /// entry, the module files, those directories and a `package.ipe` beside
+    /// the entry are relevant. A path in `module_files` that is absolute or
+    /// holds a `..` or root component is ignored.
+    ///
+    /// # Errors
+    /// [`ScopeError::RootNotFound`] when the entry's directory does not
+    /// canonicalise or the entry has no file name;
+    /// [`ScopeError::TooManyFiles`] when the relevant paths exceed
+    /// [`MAX_WATCHED_FILES`].
+    pub fn loose_file(entry: &Path, module_files: &[PathBuf]) -> Result<Self, ScopeError> {
+        let entry_dir = entry
+            .parent()
+            .filter(|dir| !dir.as_os_str().is_empty())
+            .unwrap_or_else(|| Path::new("."));
+        let canon_root = std::fs::canonicalize(entry_dir)
+            .map_err(|_| ScopeError::RootNotFound(entry_dir.to_path_buf()))?;
+        let entry_name = entry
+            .file_name()
+            .ok_or_else(|| ScopeError::RootNotFound(entry.to_path_buf()))?;
+        let root_watch = WatchedPath::confine(&canon_root, &canon_root)
+            .ok_or_else(|| ScopeError::RootNotFound(entry_dir.to_path_buf()))?;
+
+        let mut relevant =
+            BTreeSet::from([canon_root.join(entry_name), canon_root.join(MANIFEST_FILE)]);
+        let mut roots_to_watch = vec![root_watch];
+        let mut watched_dirs = BTreeSet::from([canon_root.clone()]);
+        for module_file in module_files {
+            let Some(components) = normal_components(module_file) else {
+                continue;
+            };
+            let mut path = canon_root.clone();
+            let mut parent_watched = true;
+            for component in components {
+                parent_watched = parent_watched && watched_dirs.contains(&path);
+                path.push(component);
+                relevant.insert(path.clone());
+                if relevant.len() > MAX_WATCHED_FILES {
+                    return Err(ScopeError::TooManyFiles {
+                        found: relevant.len(),
+                        max: MAX_WATCHED_FILES,
+                    });
+                }
+                if !parent_watched || watched_dirs.contains(&path) || !is_real_dir(&path) {
+                    continue;
+                }
+                if let Some(watch) = WatchedPath::confine(&canon_root, &path) {
+                    watched_dirs.insert(path.clone());
+                    roots_to_watch.push(watch);
+                }
+            }
+        }
+
+        let file_count = relevant
+            .iter()
+            .filter(|path| is_source_file(path) && !is_manifest_file(path))
+            .filter(|path| std::fs::symlink_metadata(path).is_ok_and(|meta| meta.is_file()))
+            .count();
+        Ok(Self {
+            root: canon_root,
+            roots_to_watch,
+            mode: ScopeMode::LooseFile { relevant },
+            file_count,
+        })
+    }
+
+    /// How deep the OS-level watcher observes each of [`Self::roots_to_watch`].
+    #[must_use]
+    pub const fn recursive_mode(&self) -> notify::RecursiveMode {
+        match self.mode {
+            ScopeMode::Package { .. } => notify::RecursiveMode::Recursive,
+            ScopeMode::LooseFile { .. } => notify::RecursiveMode::NonRecursive,
+        }
     }
 
     #[must_use]
@@ -319,8 +427,20 @@ impl WatchScope {
     /// constructors ([`WatchedPath::confine`] and
     /// [`WatchedPath::confine_deleted`]), so there is exactly one confinement
     /// gate — no ad-hoc `canonicalize`/`starts_with` duplication that could drift.
+    ///
+    /// A loose-file scope accepts only the exact paths it was built from,
+    /// matched as the event spells them or as they canonicalise.
     #[must_use]
     pub fn is_relevant(&self, path: &Path) -> bool {
+        let tests_root = match &self.mode {
+            ScopeMode::Package { tests_root } => tests_root.as_deref(),
+            ScopeMode::LooseFile { relevant } => {
+                return relevant.contains(path)
+                    || WatchedPath::confine(&self.root, path)
+                        .or_else(|| WatchedPath::confine_deleted(&self.root, path))
+                        .is_some_and(|confined| relevant.contains(confined.as_path()));
+            }
+        };
         // Cheap pre-filter on the raw event path (no syscall), so an
         // excluded-dir storm is dropped before canonicalisation.
         if under_excluded_dir_below(&self.root, path) {
@@ -336,8 +456,28 @@ impl WatchScope {
         if confined.under_excluded_dir() {
             return false;
         }
-        is_watchable_leaf(self.tests_root.as_deref(), confined.as_path())
+        is_watchable_leaf(tests_root, confined.as_path())
     }
+}
+
+/// The components of a relative path, when every one is a plain name (no root, prefix, `.` or `..`).
+fn normal_components(path: &Path) -> Option<Vec<&std::ffi::OsStr>> {
+    let components: Option<Vec<_>> = path
+        .components()
+        .map(|component| match component {
+            Component::Normal(name) => Some(name),
+            Component::Prefix(_)
+            | Component::RootDir
+            | Component::CurDir
+            | Component::ParentDir => None,
+        })
+        .collect();
+    components.filter(|components| !components.is_empty())
+}
+
+/// Whether `path` is a directory itself, not a symlink to one.
+fn is_real_dir(path: &Path) -> bool {
+    std::fs::symlink_metadata(path).is_ok_and(|meta| meta.file_type().is_dir())
 }
 
 /// Whether a (canonicalised, in-root, non-excluded) leaf path is one of the
@@ -379,53 +519,6 @@ fn is_manifest_file(path: &Path) -> bool {
     path.file_name().and_then(|n| n.to_str()) == Some(MANIFEST_FILE)
 }
 
-/// Recursively count `.ipe` files under `dir`, accumulating into `count` —
-/// ONLY `.ipe` files count toward the [`MAX_WATCHED_FILES`] `DoS` guard, so
-/// a directory full of non-source assets (golden fixtures, logs a
-/// supervised app writes under `tests/`) cannot exhaust the bound on its
-/// own. Bails out (returning early, count left at its last valid value) the
-/// moment `count` exceeds [`MAX_WATCHED_FILES`] — the caller re-checks and
-/// converts that into a hard [`ScopeError::TooManyFiles`], so a pathological
-/// tree cannot make this walk itself unbounded.
-fn count_source_files(root: &Path, dir: &Path, count: &mut usize) -> Result<(), ScopeError> {
-    if dir.is_file() {
-        if is_source_file(dir) && !is_manifest_file(dir) {
-            *count += 1;
-        }
-        return Ok(());
-    }
-    if !dir.is_dir() {
-        return Ok(());
-    }
-    let entries = std::fs::read_dir(dir).map_err(|source| ScopeError::Io {
-        path: dir.to_path_buf(),
-        source,
-    })?;
-    for entry in entries {
-        let entry = entry.map_err(|source| ScopeError::Io {
-            path: dir.to_path_buf(),
-            source,
-        })?;
-        let path = entry.path();
-        if under_excluded_dir_below(root, &path) {
-            continue;
-        }
-        let file_type = entry.file_type().map_err(|source| ScopeError::Io {
-            path: path.clone(),
-            source,
-        })?;
-        if file_type.is_dir() {
-            count_source_files(root, &path, count)?;
-        } else if is_source_file(&path) && !is_manifest_file(&path) {
-            *count += 1;
-        }
-        if *count > MAX_WATCHED_FILES {
-            return Ok(());
-        }
-    }
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -437,11 +530,7 @@ mod tests {
         let forged = PathBuf::from("x\nerror: forged\u{1b}[2K");
         let errors = [
             ScopeError::RootNotFound(forged.clone()),
-            ScopeError::EntryDirEscapesRoot(forged.clone()),
-            ScopeError::Io {
-                path: forged,
-                source: std::io::Error::other("walk failed"),
-            },
+            ScopeError::EntryDirEscapesRoot(forged),
         ];
         for error in errors {
             let text = error.to_string();
@@ -513,7 +602,7 @@ mod tests {
         fs::create_dir_all(&target).unwrap();
         fs::write(target.join("build.rs"), "junk").unwrap();
 
-        let scope = WatchScope::build(&root, &src).unwrap();
+        let scope = WatchScope::build(&root, &src, &[src.join("Main.ipe")]).unwrap();
         // Only Main.ipe counted — target/debug/build.rs must be excluded.
         assert_eq!(scope.file_count(), 1);
         assert!(!scope.is_relevant(&target.join("build.rs")));
@@ -543,16 +632,26 @@ mod tests {
         (root, src)
     }
 
+    /// The project's `src/Main.ipe` and its excluded-directory decoys.
+    fn with_decoys(root: &Path, src: &Path) -> Vec<PathBuf> {
+        vec![
+            src.join("Main.ipe"),
+            root.join("target").join("x.ipe"),
+            root.join("out").join("x.ipe"),
+        ]
+    }
+
     fn assert_watched_despite_ancestors(tag: &str, ancestors: &[&str]) {
         let (root, src) = project_under(tag, ancestors);
-        let scope = WatchScope::build(&root, &root).unwrap();
+        let sources = with_decoys(&root, &src);
+        let scope = WatchScope::build(&root, &root, &sources).unwrap();
         // Only src/Main.ipe: the root's own `target/`/`out/` stay excluded.
         assert_eq!(scope.file_count(), 1, "ancestors {ancestors:?}");
         assert!(scope.is_relevant(&src.join("Main.ipe")));
         assert!(!scope.is_relevant(&root.join("target").join("x.ipe")));
         assert!(!scope.is_relevant(&root.join("out").join("x.ipe")));
 
-        let nested = WatchScope::build(&root, &src).unwrap();
+        let nested = WatchScope::build(&root, &src, &sources).unwrap();
         assert_eq!(nested.file_count(), 1, "ancestors {ancestors:?}");
         assert!(nested.is_relevant(&src.join("Main.ipe")));
     }
@@ -574,8 +673,8 @@ mod tests {
 
     #[test]
     fn root_level_excluded_dirs_are_never_counted_or_relevant() {
-        let (root, _src) = project_under("root_excl", &[]);
-        let scope = WatchScope::build(&root, &root).unwrap();
+        let (root, src) = project_under("root_excl", &[]);
+        let scope = WatchScope::build(&root, &root, &with_decoys(&root, &src)).unwrap();
         assert_eq!(scope.file_count(), 1);
         for excluded in ["target", "out"] {
             let deep = root.join(excluded).join("nested");
@@ -592,7 +691,7 @@ mod tests {
         #[cfg(unix)]
         {
             std::os::unix::fs::symlink(root.join("target").join("x.ipe"), &link).unwrap();
-            let scope = WatchScope::build(&root, &root).unwrap();
+            let scope = WatchScope::build(&root, &root, &[]).unwrap();
             // Raw path is `src/Linked.ipe`; canonical is `target/x.ipe`.
             assert!(!scope.is_relevant(&link));
         }
@@ -611,7 +710,7 @@ mod tests {
     fn scope_build_refuses_entry_dir_outside_root() {
         let root = tmp_dir("scope_escape_root");
         let outside = tmp_dir("scope_escape_outside");
-        let err = WatchScope::build(&root, &outside);
+        let err = WatchScope::build(&root, &outside, &[]);
         assert!(matches!(err, Err(ScopeError::EntryDirEscapesRoot(_))));
     }
 
@@ -632,7 +731,7 @@ mod tests {
         .unwrap();
         fs::write(src.join("notes.txt"), "hi").unwrap();
 
-        let scope = WatchScope::build(&root, &src).unwrap();
+        let scope = WatchScope::build(&root, &src, &[]).unwrap();
         assert!(scope.is_relevant(&root.join("package.ipe")));
         assert!(!scope.is_relevant(&src.join("notes.txt")));
     }
@@ -644,7 +743,7 @@ mod tests {
         fs::create_dir_all(&src).unwrap();
         let f = src.join("Gone.ipe");
         fs::write(&f, "module Gone exposing (x)\nx = 1\n").unwrap();
-        let scope = WatchScope::build(&root, &src).unwrap();
+        let scope = WatchScope::build(&root, &src, &[]).unwrap();
         fs::remove_file(&f).unwrap();
         // The path no longer exists on disk, yet it's still recognisably a
         // `.ipe` file under the (still-existing) src/ directory — must
@@ -675,7 +774,7 @@ mod tests {
         let artifact = nested_tests.join("output.log");
         fs::write(&artifact, "run 1\n").unwrap();
 
-        let scope = WatchScope::build(&root, &src).unwrap();
+        let scope = WatchScope::build(&root, &src, &[]).unwrap();
         assert!(
             !scope.is_relevant(&artifact),
             "a nested `tests` path component must not make a non-.ipe file watch-relevant"
@@ -700,7 +799,7 @@ mod tests {
         let fixture = tests_dir.join("golden.txt");
         fs::write(&fixture, "expected\n").unwrap();
 
-        let scope = WatchScope::build(&root, &src).unwrap();
+        let scope = WatchScope::build(&root, &src, &[]).unwrap();
         assert!(
             scope.is_relevant(&fixture),
             "a non-.ipe file directly under the root-level tests/ must stay relevant"
@@ -732,7 +831,8 @@ mod tests {
             fs::write(tests_dir.join(format!("artifact_{i}.log")), "x").unwrap();
         }
 
-        let scope = WatchScope::build(&root, &src).unwrap();
+        let sources = [src.join("Main.ipe"), root.join("package.ipe")];
+        let scope = WatchScope::build(&root, &src, &sources).unwrap();
         assert_eq!(
             scope.file_count(),
             1,
@@ -769,7 +869,7 @@ mod tests {
         .unwrap();
 
         let other_root = tmp_dir("is_rel_del_outside_other");
-        let scope = WatchScope::build(&root, &src).unwrap();
+        let scope = WatchScope::build(&root, &src, &[]).unwrap();
         // Path under other_root — parent canonicalises outside scope.root.
         let outside_path = other_root.join("Secret.ipe");
         assert!(
@@ -789,7 +889,7 @@ mod tests {
         let file = src.join("Main.ipe");
         fs::write(&file, "module Main exposing (main)\nmain = 1\n").unwrap();
 
-        let scope = WatchScope::build(&root, &src).unwrap();
+        let scope = WatchScope::build(&root, &src, &[]).unwrap();
         assert!(
             scope.is_relevant(&file),
             "in-root .ipe file must be relevant"
@@ -803,5 +903,151 @@ mod tests {
             "confined path must be inside the root: {:?}",
             confined.as_path()
         );
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn loose_file_scope_never_descends_into_unrelated_directories() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tmp_dir("loose_no_descend");
+        let entry = dir.join("Main.ipe");
+        fs::write(&entry, "module Main exposing (main)\nmain = 1\n").unwrap();
+        let lib = dir.join("Lib");
+        fs::create_dir_all(&lib).unwrap();
+        fs::write(
+            lib.join("Util.ipe"),
+            "module Lib.Util exposing (x)\nx = 1\n",
+        )
+        .unwrap();
+        let mut deep = dir.join("deep");
+        for level in 0..64 {
+            deep.push(format!("d{level}"));
+        }
+        fs::create_dir_all(&deep).unwrap();
+        fs::write(deep.join("notes.txt"), "not a source").unwrap();
+        fs::write(
+            deep.join("Hidden.ipe"),
+            "module Hidden exposing (x)\nx = 1\n",
+        )
+        .unwrap();
+        let locked = dir.join("locked");
+        fs::create_dir_all(&locked).unwrap();
+        fs::set_permissions(&locked, fs::Permissions::from_mode(0o000)).unwrap();
+
+        let module_files = [PathBuf::from("Lib/Util.ipe"), PathBuf::from("Ipe/Io.ipe")];
+        let scope = WatchScope::loose_file(&entry, &module_files);
+        fs::set_permissions(&locked, fs::Permissions::from_mode(0o755)).unwrap();
+
+        assert!(
+            scope.is_ok(),
+            "a loose-file scope must build beside an unreadable directory: {scope:?}"
+        );
+        let Ok(scope) = scope else { return };
+        let canon_dir = fs::canonicalize(&dir).unwrap();
+        let canon_lib = canon_dir.join("Lib");
+        let watched: Vec<&Path> = scope
+            .roots_to_watch()
+            .iter()
+            .map(WatchedPath::as_path)
+            .collect();
+        assert_eq!(watched, vec![canon_dir.as_path(), canon_lib.as_path()]);
+        assert!(matches!(
+            scope.recursive_mode(),
+            notify::RecursiveMode::NonRecursive
+        ));
+        assert_eq!(scope.file_count(), 2, "the entry and Lib/Util.ipe only");
+        assert!(scope.is_relevant(&entry));
+        assert!(scope.is_relevant(&lib.join("Util.ipe")));
+        assert!(
+            scope.is_relevant(&canon_dir.join("Ipe")),
+            "a missing module dir is followed once created"
+        );
+        assert!(scope.is_relevant(&canon_dir.join("Ipe").join("Io.ipe")));
+        assert!(scope.is_relevant(&canon_dir.join("package.ipe")));
+        assert!(!scope.is_relevant(&deep.join("Hidden.ipe")));
+        assert!(!scope.is_relevant(&dir.join("Other.ipe")));
+        assert!(!scope.is_relevant(&locked));
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn loose_file_scope_never_watches_a_symlinked_module_dir() {
+        let dir = tmp_dir("loose_symlink_dir");
+        let outside = tmp_dir("loose_symlink_outside");
+        fs::write(
+            outside.join("Util.ipe"),
+            "module Lib.Util exposing (x)\nx = 1\n",
+        )
+        .unwrap();
+        let entry = dir.join("Main.ipe");
+        fs::write(&entry, "module Main exposing (main)\nmain = 1\n").unwrap();
+        std::os::unix::fs::symlink(&outside, dir.join("Lib")).unwrap();
+
+        let scope = WatchScope::loose_file(&entry, &[PathBuf::from("Lib/Util.ipe")]).unwrap();
+        let canon_dir = fs::canonicalize(&dir).unwrap();
+        let watched: Vec<&Path> = scope
+            .roots_to_watch()
+            .iter()
+            .map(WatchedPath::as_path)
+            .collect();
+        assert_eq!(watched, vec![canon_dir.as_path()]);
+        assert_eq!(scope.file_count(), 1, "the symlinked module is not counted");
+        assert!(!scope.is_relevant(&outside.join("Util.ipe")));
+    }
+
+    #[test]
+    fn loose_file_scope_ignores_escaping_module_paths() {
+        let dir = tmp_dir("loose_escape");
+        let entry = dir.join("Main.ipe");
+        fs::write(&entry, "module Main exposing (main)\nmain = 1\n").unwrap();
+        let module_files = [PathBuf::from("../Escape.ipe"), PathBuf::from("/etc/passwd")];
+        let scope = WatchScope::loose_file(&entry, &module_files).unwrap();
+        assert_eq!(scope.roots_to_watch().len(), 1);
+        assert!(!scope.is_relevant(Path::new("/etc/passwd")));
+        assert!(!scope.is_relevant(&dir.join("..").join("Escape.ipe")));
+    }
+
+    #[test]
+    fn package_scope_watches_recursively() {
+        let root = tmp_dir("package_recursive");
+        let src = root.join("src");
+        fs::create_dir_all(&src).unwrap();
+        let scope = WatchScope::build(&root, &src, &[]).unwrap();
+        assert!(matches!(
+            scope.recursive_mode(),
+            notify::RecursiveMode::Recursive
+        ));
+    }
+
+    /// More distinct sources than [`MAX_WATCHED_FILES`] refuse the scope.
+    #[test]
+    fn scope_build_refuses_too_many_sources() {
+        let root = tmp_dir("too_many");
+        let src = root.join("src");
+        fs::create_dir_all(&src).unwrap();
+        let sources: Vec<PathBuf> = (0..=MAX_WATCHED_FILES)
+            .map(|i| src.join(format!("M{i}.ipe")))
+            .collect();
+        let refused = WatchScope::build(&root, &src, &sources);
+        assert!(matches!(
+            refused,
+            Err(ScopeError::TooManyFiles { found, max: MAX_WATCHED_FILES })
+                if found == MAX_WATCHED_FILES + 1
+        ));
+        let (_, at_bound_sources) = sources.split_first().unwrap();
+        let at_bound = WatchScope::build(&root, &src, at_bound_sources);
+        assert!(at_bound.is_ok_and(|scope| scope.file_count() == MAX_WATCHED_FILES));
+    }
+
+    /// A source listed twice counts once.
+    #[test]
+    fn scope_build_counts_distinct_sources() {
+        let root = tmp_dir("distinct");
+        let src = root.join("src");
+        fs::create_dir_all(&src).unwrap();
+        let main = src.join("Main.ipe");
+        let scope = WatchScope::build(&root, &src, &[main.clone(), main]).unwrap();
+        assert_eq!(scope.file_count(), 1);
     }
 }

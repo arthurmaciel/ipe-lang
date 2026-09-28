@@ -1,7 +1,7 @@
 use super::{
     BuildOptions, BundleHost, BundleProfile, CliError, RuntimeContext, apply_fixes_cmd,
     attribute_canon_errors, attribute_post_link_error, bluegreen_enabled,
-    build_project_with_options, build_with_sibling_discovery_with_options, bundle_delivery,
+    build_loose_file_with_options, build_project_with_options, bundle_delivery,
     collect_entry_and_siblings, create_source_root, emit_machine_error, emit_permissions,
     find_manifest_for_ipe_file, gate_decoder_pipelines, home_to_source_map, io_err,
     render_capabilities, resolve_analysis_entry, resolve_vendored_runtime_dir, run_version,
@@ -297,9 +297,11 @@ pub fn run_watch(rest: &[String]) -> Result<(), CliError> {
     let cargo_bin = toolchain::require_cargo(toolchain::ToolIntent::Watch)?;
 
     let output = resolve_output_root(args.out.as_deref(), Path::new(&entry), None)?;
-    let out_dir = output.area_path(&[OutputArea::Rust])?;
+    let rust_area = output.area(&[OutputArea::Rust]);
+    let out_dir = rust_area.path()?;
 
     let mut opts = watch::WatchOptions::new(PathBuf::from(entry), out_dir, runtime_dir);
+    opts.out_area = Some(rust_area);
     opts.port = args.port;
     opts.cargo_path = cargo_bin.path().to_path_buf();
     opts.quiet = args.quiet;
@@ -531,7 +533,7 @@ pub fn resolve_compile_target(
         cli_args::WasmKind::Wasi => return CompileTarget::WasmWasi,
         cli_args::WasmKind::None => {}
     }
-    match std::env::var("IPE_TARGET").ok().as_deref() {
+    match ipe_env::var("IPE_TARGET").ok().as_deref() {
         Some("wasm") => return CompileTarget::WasmClient,
         Some("wasi") => return CompileTarget::WasmWasi,
         _ => {}
@@ -759,6 +761,12 @@ pub fn run_build_body(rest: &[String]) -> Result<BuildSuccess, CliError> {
         Some(toolchain::require_cargo(toolchain::ToolIntent::Build)?)
     };
 
+    // Resolved only now, after every refusal above; nothing is created until the
+    // emit writes its crate.
+    let output = resolve_output_root(out.as_deref(), &entry_path, manifest_parsed.as_ref())?;
+    let rust_area = output.area(&[OutputArea::Rust]);
+    let out_dir = rust_area.path()?;
+
     let options = BuildOptions {
         static_plan,
         target: compile_target.ir_target(),
@@ -787,31 +795,20 @@ pub fn run_build_body(rest: &[String]) -> Result<BuildSuccess, CliError> {
         // Filled from the manifest `delivery.desktop` in
         // build_project_with_options once the manifest is parsed.
         webview_window: None,
+        out_area: Some(rust_area.clone()),
     };
-
-    // Resolved only now, after every refusal above; nothing is created until the
-    // emit writes its crate.
-    let output = resolve_output_root(out.as_deref(), &entry_path, manifest_parsed.as_ref())?;
-    let out_dir = output.area_path(&[OutputArea::Rust])?;
 
     // No manifest found: compile entry + all sibling .ipe files in the same
     // directory. Byte-identical to `build` when the directory holds only the
     // entry file (regression-covered by the golden suite).
     manifest.as_ref().map_or_else(
-        || {
-            build_with_sibling_discovery_with_options(
-                &entry_path,
-                &out_dir,
-                &runtime_dir,
-                options.clone(),
-            )
-        },
+        || build_loose_file_with_options(&entry_path, &out_dir, &runtime_dir, options.clone()),
         |m| build_project_with_options(m, &out_dir, &runtime_dir, options.clone()),
     )?;
 
     let native_artifact = match compile_target {
         CompileTarget::WasmClient => {
-            bundle_wasm(&out_dir)?;
+            bundle_wasm(&rust_area.claim()?)?;
             None
         }
         CompileTarget::WasmWasi => {
@@ -890,8 +887,9 @@ pub fn compile_and_finalize_native_build(
         Some(bin) => bin,
         None => toolchain::require_cargo(toolchain::ToolIntent::Build)?,
     };
-    let rust_area = output.area_path(&[OutputArea::Rust])?;
-    let out_dir = rust_area.as_path();
+    let rust_area = output.area(&[OutputArea::Rust]);
+    let rust_path = rust_area.path()?;
+    let out_dir = rust_path.as_path();
     let mut cargo = std::process::Command::new(cargo_bin.path());
     cargo.arg("build").current_dir(out_dir);
     if quiet {
@@ -933,7 +931,7 @@ pub fn compile_and_finalize_native_build(
     let resolved = consented.resolved();
     if run_sandbox::is_native_bearing(&resolved.union()) {
         let profile = run_sandbox::build_profile(resolved, driver)?;
-        run_sandbox::write_build_artifacts(out_dir, &profile)?;
+        run_sandbox::write_build_artifacts(&rust_area.claim()?, &profile)?;
     }
     Ok(artifact)
 }
@@ -1089,14 +1087,7 @@ pub fn run_eject(rest: &[String]) -> Result<(), CliError> {
     }
 
     manifest.as_ref().map_or_else(
-        || {
-            build_with_sibling_discovery_with_options(
-                &entry_path,
-                &out_dir,
-                &runtime_dir,
-                options.clone(),
-            )
-        },
+        || build_loose_file_with_options(&entry_path, &out_dir, &runtime_dir, options.clone()),
         |m| build_project_with_options(m, &out_dir, &runtime_dir, options.clone()),
     )?;
     // From here on the tree is the user's: ipe drops its ownership marker so no
@@ -1245,7 +1236,8 @@ pub fn run_release(rest: &[String]) -> Result<(), CliError> {
         // Browser/wasm production path.
         let output =
             resolve_output_root(args.out.as_deref(), &entry_path, manifest_parsed.as_ref())?;
-        let out_dir = output.area_path(&[OutputArea::Release, OutputArea::Rust])?;
+        let rust_area = output.area(&[OutputArea::Release, OutputArea::Rust]);
+        let out_dir = rust_area.path()?;
         let runtime_dep = runtime_dep_from_env();
         let runtime_dir = resolve_vendored_runtime_dir(args.runtime, !runtime_dep)?;
 
@@ -1287,19 +1279,13 @@ pub fn run_release(rest: &[String]) -> Result<(), CliError> {
             // where the classified shape is known (build_project_with_options).
             webview_host: false,
             webview_window: None,
+            out_area: Some(rust_area.clone()),
         };
         manifest.as_ref().map_or_else(
-            || {
-                build_with_sibling_discovery_with_options(
-                    &entry_path,
-                    &out_dir,
-                    &runtime_dir,
-                    options.clone(),
-                )
-            },
+            || build_loose_file_with_options(&entry_path, &out_dir, &runtime_dir, options.clone()),
             |m| build_project_with_options(m, &out_dir, &runtime_dir, options.clone()),
         )?;
-        bundle_wasm(&out_dir)?;
+        bundle_wasm(&rust_area.claim()?)?;
         if show_progress {
             crate::screen::chatter(
                 crate::screen::Stream::Stderr,
@@ -1343,7 +1329,8 @@ pub fn run_release(rest: &[String]) -> Result<(), CliError> {
         // Pure-native path: emit and build a plain release binary.
         let output =
             resolve_output_root(args.out.as_deref(), &entry_path, manifest_parsed.as_ref())?;
-        let out_dir = output.area_path(&[OutputArea::Release, OutputArea::Rust])?;
+        let rust_area = output.area(&[OutputArea::Release, OutputArea::Rust]);
+        let out_dir = rust_area.path()?;
 
         if show_progress {
             crate::screen::chatter(
@@ -1371,17 +1358,11 @@ pub fn run_release(rest: &[String]) -> Result<(), CliError> {
             production: true,
             runtime_dep: runtime_dep_from_env(),
             tree_shake_vendored: false,
+            out_area: Some(rust_area),
             ..BuildOptions::default()
         };
         manifest.as_ref().map_or_else(
-            || {
-                build_with_sibling_discovery_with_options(
-                    &entry_path,
-                    &out_dir,
-                    &runtime_dir,
-                    options.clone(),
-                )
-            },
+            || build_loose_file_with_options(&entry_path, &out_dir, &runtime_dir, options.clone()),
             |m| build_project_with_options(m, &out_dir, &runtime_dir, options.clone()),
         )?;
 
@@ -1450,7 +1431,8 @@ pub fn run_release(rest: &[String]) -> Result<(), CliError> {
     let cargo_bin = toolchain::require_cargo(toolchain::ToolIntent::Build)?;
 
     // Step 1: emit + build the app binary (static, musl, production).
-    let app_out = output.area_path(&[OutputArea::Release, OutputArea::App])?;
+    let app_area = output.area(&[OutputArea::Release, OutputArea::App]);
+    let app_out = app_area.path()?;
     let app_static_plan = Some(ipe_backend_rust::static_build::StaticPlan {
         triple,
         c_profile: ipe_backend_rust::static_build::CProfile::WithLibc {
@@ -1463,17 +1445,11 @@ pub fn run_release(rest: &[String]) -> Result<(), CliError> {
         production: true,
         runtime_dep: runtime_dep_from_env(),
         tree_shake_vendored: false,
+        out_area: Some(app_area.clone()),
         ..BuildOptions::default()
     };
     manifest.as_ref().map_or_else(
-        || {
-            build_with_sibling_discovery_with_options(
-                &entry_path,
-                &app_out,
-                &runtime_dir,
-                options.clone(),
-            )
-        },
+        || build_loose_file_with_options(&entry_path, &app_out, &runtime_dir, options.clone()),
         |m| build_project_with_options(m, &app_out, &runtime_dir, options.clone()),
     )?;
 
@@ -1488,7 +1464,7 @@ pub fn run_release(rest: &[String]) -> Result<(), CliError> {
 
     // Write the capability enforcement artifacts (ipe.profile + embedded floor).
     let profile = run_sandbox::build_profile(resolved, driver)?;
-    run_sandbox::write_build_artifacts(&app_out, &profile)?;
+    run_sandbox::write_build_artifacts(&app_area.claim()?, &profile)?;
 
     // Locate the compiled app binary. The target dir may be a global
     // `CARGO_TARGET_DIR` (set by the user or the agent lane), so we resolve
@@ -2016,13 +1992,16 @@ const WASM_BINDGEN_VERSION: &str = "0.2.126";
 /// 2. `wasm-bindgen` CLI — emits the JS glue + `www/pkg/ipe_app_bg.wasm`
 /// 3. `wasm-opt -Oz` — optional; silently skipped when not on PATH
 ///
-/// Writes the final `www/pkg/` tree into `out_dir/www/pkg/`. On success the
-/// directory at `out_dir/www/` is a self-contained static SPA ready to serve.
+/// Writes the final `www/pkg/` tree into `<crate_dir>/www/pkg/`. On success
+/// the directory at `<crate_dir>/www/` is a self-contained static SPA ready to
+/// serve.
 ///
 /// # Errors
 /// [`CliError::EmittedBuildFailed`] when the wasm `cargo build` fails;
-/// [`CliError::Usage`] when `wasm-bindgen` fails.
-pub fn bundle_wasm(out_dir: &Path) -> Result<(), CliError> {
+/// [`CliError::Usage`] when `wasm-bindgen` fails;
+/// [`CliError::OutputRefused`] when `crate_dir` was replaced since its claim.
+pub fn bundle_wasm(crate_dir: &OwnedDir) -> Result<(), CliError> {
+    let out_dir = crate_dir.path();
     // Fail closed before the cross-compile: a missing toolchain becomes a clear
     // root-cause message rather than an opaque OS spawn error.
     let cargo_bin = toolchain::require_cargo(toolchain::ToolIntent::BundleWasm)?;
@@ -2051,7 +2030,7 @@ pub fn bundle_wasm(out_dir: &Path) -> Result<(), CliError> {
     // per-project fallback the emitted manifest's `[workspace]` detachment
     // would use).
     let wasm_path = {
-        let via_env = std::env::var_os("CARGO_TARGET_DIR").map(|d| {
+        let via_env = ipe_env::var_os("CARGO_TARGET_DIR").map(|d| {
             std::path::PathBuf::from(d)
                 .join("wasm32-unknown-unknown")
                 .join("release")
@@ -2068,7 +2047,7 @@ pub fn bundle_wasm(out_dir: &Path) -> Result<(), CliError> {
     // `wasm-bindgen` and `wasm-opt` write into `www/pkg/` by path, so it is
     // rebuilt empty under the owned crate: a symlink at any level is refused and
     // nothing planted inside it can redirect their writes.
-    let pkg = OwnedDir::claim(out_dir)?.path_to(Path::new("www").join("pkg"))?;
+    let pkg = crate_dir.path_to(Path::new("www").join("pkg"))?;
     pkg.remove()?;
     pkg.ensure_dir()?;
     let pkg_dir = pkg.path();
@@ -2682,6 +2661,8 @@ pub fn run_run_with_args(args: cli_args::RunArgs) -> Result<(), CliError> {
         Some(toolchain::require_cargo(toolchain::ToolIntent::Run)?)
     };
 
+    let rust_area = output.area(&[OutputArea::Rust]);
+
     // `ipe run` is a DEVELOPMENT execution, so `Debug.*` is allowed
     // (production = false).
     let options = BuildOptions {
@@ -2709,20 +2690,14 @@ pub fn run_run_with_args(args: cli_args::RunArgs) -> Result<(), CliError> {
         // Filled from the manifest `delivery.desktop` in
         // build_project_with_options once the manifest is parsed.
         webview_window: None,
+        out_area: Some(rust_area.clone()),
     };
 
     // Nothing is created in the Rust area until the emit writes its crate.
-    let out_dir = output.area_path(&[OutputArea::Rust])?;
+    let out_dir = rust_area.path()?;
 
     manifest.as_ref().map_or_else(
-        || {
-            build_with_sibling_discovery_with_options(
-                &entry_path,
-                &out_dir,
-                &runtime_dir,
-                options.clone(),
-            )
-        },
+        || build_loose_file_with_options(&entry_path, &out_dir, &runtime_dir, options.clone()),
         |m| build_project_with_options(m, &out_dir, &runtime_dir, options.clone()),
     )?;
 
@@ -2735,7 +2710,7 @@ pub fn run_run_with_args(args: cli_args::RunArgs) -> Result<(), CliError> {
     //     from the SAME declared capability floor the native run jail reads.
     //   * Native — fall through to the cargo build + jailed exec below.
     match compile_target {
-        CompileTarget::WasmClient => return bundle_wasm(&out_dir),
+        CompileTarget::WasmClient => return bundle_wasm(&rust_area.claim()?),
         CompileTarget::WasmWasi => {
             // The `wasi_run` feature gate already fired before emit (above), so
             // reaching here means the embedded engine is linked. Build the module
@@ -3483,7 +3458,8 @@ pub fn build_source_graph(entry: &Path) -> Result<SourceGraph, CliError> {
 /// acknowledgment gate never operates on a partial source set.
 ///
 /// # Errors
-/// [`CliError::Io`] when any discovered module cannot be read.
+/// [`CliError::Io`] when any discovered module cannot be read; for a single
+/// file, every [`loose_file_scan_sources`] error.
 pub fn user_sources_for_unsafe_scan(
     manifest: Option<&Path>,
     entry: &Path,
@@ -3494,26 +3470,35 @@ pub fn user_sources_for_unsafe_scan(
     {
         return discovered
             .iter()
-            .map(|d| {
-                crate::io_bounded::read_to_string_capped(
-                    d.path(),
-                    crate::io_bounded::SOURCE_READ_CAP,
-                )
-            })
+            .map(|d| crate::io_bounded::read_walked_source(d.path()))
             .collect::<Result<Vec<_>, _>>();
     }
     // Single file (or a manifest that failed to parse — the build will surface
     // that error itself): the entry and its siblings.
+    loose_file_scan_sources(entry).map(|named| named.into_iter().map(|(_, src)| src).collect())
+}
+
+/// The loose-file closure's `(dotted-module-name, source)` pairs for a consent scan.
+///
+/// An entry that does not parse has no import closure to follow, so the scan
+/// sees the entry's own text, keyed by its path; the build reports the parse
+/// error itself. Every other failure — an unreadable entry or module, a file
+/// or closure past its limit — propagates, so no gate judges a partial
+/// source set.
+///
+/// # Errors
+/// Every [`collect_entry_and_siblings`] error except the entry's own parse failure.
+fn loose_file_scan_sources(entry: &Path) -> Result<Vec<(String, String)>, CliError> {
     match collect_entry_and_siblings(entry) {
         Ok(collected) => Ok(collected
             .sources
-            .into_values()
-            .map(|(_, src)| src)
+            .into_iter()
+            .map(|(path, (_, src))| (path.join("."), src))
             .collect()),
-        Err(_) => {
-            crate::io_bounded::read_to_string_capped(entry, crate::io_bounded::SOURCE_READ_CAP)
-                .map(|src| vec![src])
+        Err(CliError::Pipeline { file, src, .. }) if file.as_path() == entry => {
+            Ok(vec![(entry.display().to_string(), src)])
         }
+        Err(other) => Err(other),
     }
 }
 
@@ -3699,8 +3684,8 @@ fn gate_native_ffi_consent(
 
 /// Collect `(dotted-module-name, source)` pairs spanning the app entry and its
 /// siblings (and, when a manifest is present, every discovered package module),
-/// for the web-axis provenance scan. Falls back to the bare entry when sibling
-/// discovery fails, exactly as the `.Unsafe` scan does.
+/// for the web-axis provenance scan. Discovery failures propagate, exactly as
+/// in the `.Unsafe` scan; see [`loose_file_scan_sources`].
 pub fn named_sources_for_web_scan(
     manifest_path: Option<&Path>,
     entry: &Path,
@@ -3711,25 +3696,12 @@ pub fn named_sources_for_web_scan(
         let discovered = project::discover_modules(&manifest.src_root)?;
         let mut out = Vec::with_capacity(discovered.len());
         for m in &discovered {
-            let src = crate::io_bounded::read_to_string_capped(
-                m.path(),
-                crate::io_bounded::SOURCE_READ_CAP,
-            )?;
+            let src = crate::io_bounded::read_walked_source(m.path())?;
             out.push((m.module_path().join("."), src));
         }
         return Ok(out);
     }
-    match collect_entry_and_siblings(entry) {
-        Ok(collected) => Ok(collected
-            .sources
-            .into_iter()
-            .map(|(path, (_, src))| (path.join("."), src))
-            .collect()),
-        Err(_) => {
-            crate::io_bounded::read_to_string_capped(entry, crate::io_bounded::SOURCE_READ_CAP)
-                .map(|src| vec![(entry.display().to_string(), src)])
-        }
-    }
+    loose_file_scan_sources(entry)
 }
 
 /// Type-check a single `.ipe` entry through the SAME injection-aware

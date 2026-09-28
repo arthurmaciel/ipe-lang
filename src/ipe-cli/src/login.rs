@@ -102,7 +102,7 @@ pub fn run_login(rest: &[String]) -> Result<(), CliError> {
                 }
             };
             let key_line = crate::ssh_signing_key::status_line(
-                std::env::var_os(crate::ssh_signing_key::SIGNING_KEY_ENV).as_deref(),
+                ipe_env::var_os(crate::ssh_signing_key::SIGNING_KEY_ENV).as_deref(),
                 config_dir().as_deref(),
             );
             crate::screen::Screen::new(crate::screen::Stream::Stdout)

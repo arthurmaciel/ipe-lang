@@ -172,7 +172,10 @@ fn parse_run_args(args: &[String]) -> Result<RunArgs, String> {
         index += 1;
     }
     let project_dir = project_dir.ok_or_else(|| "missing <project-dir> argument".to_owned())?;
-    let warm_dir = warm_dir.unwrap_or_else(resolve_warm_dir);
+    let warm_dir = match warm_dir {
+        Some(dir) => dir,
+        None => resolve_warm_dir()?,
+    };
     Ok(RunArgs {
         project_dir,
         wall_secs,
@@ -208,7 +211,14 @@ fn cmd_prewarm(args: &[String]) -> i32 {
         }
         index += 1;
     }
-    let warm_dir = warm_dir.unwrap_or_else(resolve_warm_dir);
+    let warm_dir = match warm_dir.map_or_else(resolve_warm_dir, Ok) {
+        Ok(dir) => dir,
+        Err(message) => {
+            eprintln!("{message}");
+            usage();
+            return 2;
+        }
+    };
     let outcome = prewarm(&warm_dir);
     print_json(&outcome);
     0
@@ -249,12 +259,20 @@ fn cleanup_project(project_dir: &Path) {
     let _ = std::fs::remove_dir_all(project_dir);
 }
 
-fn resolve_warm_dir() -> PathBuf {
-    if let Some(value) = std::env::var_os(WARM_DIR_ENV) {
-        return PathBuf::from(value);
+/// The warm cache: `$IPE_PLAYGROUND_WARM_DIR`, else `DEFAULT_WARM_DIR` under an absolute home.
+///
+/// An unset, empty, or relative home names no directory (it would resolve the
+/// cache against the working directory), so the fallback is refused rather
+/// than guessed.
+fn resolve_warm_dir() -> Result<PathBuf, String> {
+    if let Some(value) = ipe_env::var_os(WARM_DIR_ENV) {
+        return Ok(PathBuf::from(value));
     }
-    let home = std::env::var_os("HOME").unwrap_or_default();
-    PathBuf::from(home).join(DEFAULT_WARM_DIR)
+    ipe_sandbox::home::home_dir()
+        .map(|home| home.join(DEFAULT_WARM_DIR))
+        .ok_or_else(|| {
+            format!("no absolute home directory; pass --warm <dir> or set {WARM_DIR_ENV}")
+        })
 }
 
 /// The jailed pipeline. Returns the JSON outcome; never panics.

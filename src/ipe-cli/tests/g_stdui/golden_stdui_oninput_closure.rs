@@ -85,7 +85,7 @@ fn build_run_oninput_closure() -> (PathBuf, crate::support::RunOutcome) {
 /// the binary must exit 0.
 #[test]
 fn oninput_closure_arc_wrap_builds_and_runs() {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
 

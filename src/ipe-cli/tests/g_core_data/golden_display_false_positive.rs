@@ -48,7 +48,7 @@ fn i186_false_positive_ipec_no_spurious_display() {
         return;
     };
 
-    let built = ipe::build_with_sibling_discovery(&entry, &out, &runtime);
+    let built = ipe::build_loose_file(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
         "ipe build must succeed for display_false_positive: {:?}",
@@ -81,7 +81,7 @@ fn i186_false_positive_ipec_no_spurious_display() {
 /// Gated on `IPE_E2E=1`.
 #[test]
 fn i186_false_positive_cargo_builds_and_runs() {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
 
@@ -95,7 +95,7 @@ fn i186_false_positive_cargo_builds_and_runs() {
         return;
     };
 
-    let built = ipe::build_with_sibling_discovery(&entry, &out, &runtime);
+    let built = ipe::build_loose_file(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
         "ipe build must succeed for display_false_positive: {:?}",

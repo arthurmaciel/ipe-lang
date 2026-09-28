@@ -64,7 +64,7 @@ fn captured_record_field_access_is_cloned_not_moved() {
         return;
     };
 
-    let built = ipe::build_with_sibling_discovery(&entry, &out, &runtime);
+    let built = ipe::build_loose_file(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
         "ipe build must succeed for captured_record_field_access_clone: {:?}",
@@ -90,7 +90,7 @@ fn captured_record_field_access_is_cloned_not_moved() {
 /// violation (E0507, `ipe build` clean).
 #[test]
 fn captured_record_cargo_builds_and_runs() {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
 
@@ -104,7 +104,7 @@ fn captured_record_cargo_builds_and_runs() {
     assert!(runtime.is_ok(), "runtime must resolve for E2E");
     let Ok(runtime) = runtime else { return };
 
-    let built = ipe::build_with_sibling_discovery(&entry, &out, &runtime);
+    let built = ipe::build_loose_file(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
         "ipe build must succeed for captured_record_field_access_clone: {:?}",

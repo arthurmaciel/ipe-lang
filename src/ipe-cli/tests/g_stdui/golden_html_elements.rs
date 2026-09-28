@@ -28,7 +28,7 @@ fn repo_root() -> PathBuf {
 
 #[test]
 fn html_element_family_renders_correct_tags() {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
 

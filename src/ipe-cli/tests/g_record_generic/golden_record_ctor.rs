@@ -32,7 +32,7 @@ const EXPECTED_STDOUT: &str = "7/hi\n1,2\n4\n99n\n60\nok\n";
 
 #[test]
 fn record_ctor_end_to_end_field_order() {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
     let root = repo_root();
@@ -166,7 +166,7 @@ fn seal_fn_field_alias_emits_no_struct() {
 /// cargo-success is the seal violation.
 #[test]
 fn seal_fn_field_alias_builds_and_runs() {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
     let root = repo_root();
@@ -247,7 +247,7 @@ fn seal_opaque_field_alias_emits_no_struct() {
 /// without a matching cargo-success (E0277/E0369/E0599 over `Decoder`).
 #[test]
 fn seal_opaque_field_alias_builds_and_runs() {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
     let root = repo_root();
@@ -308,7 +308,7 @@ fn seal_opaque_field_used_as_ctor_fails_closed() {
 
 #[test]
 fn record_ctor_cross_module_end_to_end() {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
     let root = repo_root();

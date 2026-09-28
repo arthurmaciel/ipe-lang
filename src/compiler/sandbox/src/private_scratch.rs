@@ -224,7 +224,8 @@ fn private_base(base: &Path) -> Result<PathBuf, ScratchRootRefusal> {
 /// proven inside the user's profile.
 #[cfg(not(unix))]
 fn private_base(base: &Path) -> Result<PathBuf, ScratchRootRefusal> {
-    verify_root_within_profile(base, std::env::var_os(PROFILE_VAR).as_deref())
+    let profile = crate::home::home_dir();
+    verify_root_within_profile(base, profile.as_deref().map(Path::as_os_str))
 }
 
 /// Create an entry under the proven-private `base` with `create`, retrying a
@@ -530,7 +531,7 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn windows_base_outside_profile_is_refused() {
-        let system_root = std::env::var_os("SystemRoot").expect("SystemRoot");
+        let system_root = ipe_env::var_os("SystemRoot").expect("SystemRoot");
         let refused = create_unique_dir(Path::new(&system_root), "ipe-test");
         assert_eq!(
             refused.map_err(|e| e.kind()),

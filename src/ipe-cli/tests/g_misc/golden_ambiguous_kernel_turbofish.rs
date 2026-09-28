@@ -61,7 +61,7 @@ fn ambiguous_kernel_turbofish_compiles() {
 /// (`List.length []`, `Dict.keys Dict.empty`, `Set.toList Set.empty`).
 #[test]
 fn ambiguous_kernel_turbofish_builds_and_runs() {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
     let entry = golden_entry(FIXTURE);

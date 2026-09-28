@@ -176,7 +176,7 @@ impl ConfigTarget {
 /// # Errors
 /// See [`cargo_config_path_from`].
 fn cargo_config_path() -> Result<PathBuf, CliError> {
-    cargo_config_path_from(std::env::var_os("CARGO_HOME"), crate::env_dir::home())
+    cargo_config_path_from(ipe_env::var_os("CARGO_HOME"), crate::env_dir::home())
 }
 
 /// Resolve the Cargo config path from the raw `CARGO_HOME` value and the home.
@@ -1156,7 +1156,7 @@ const fn host_target_triple() -> &'static str {
 
 /// Resolve `name` on `PATH` to its absolute executable path, or `None`.
 fn which_on_path(name: &str) -> Option<PathBuf> {
-    let path_var = std::env::var_os("PATH")?;
+    let path_var = ipe_env::var_os("PATH")?;
     let exe = exe_name(name);
     std::env::split_paths(&path_var)
         .map(|dir| dir.join(&exe))

@@ -117,7 +117,7 @@ fn accepted_out(name: &str, entry: &Path) -> Option<PathBuf> {
 /// Under `IPE_E2E`, `cargo build` + run the crate in `out` and check its stdout.
 #[track_caller]
 fn assert_runs(name: &str, out: &Path, expected_stdout: &str) {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return; // emit-only fast pass
     }
     let outcome = crate::support::build_and_run_emitted(name, out);

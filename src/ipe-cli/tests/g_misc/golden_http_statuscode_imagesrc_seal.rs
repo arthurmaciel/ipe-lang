@@ -75,7 +75,7 @@ fn statuscode_seal_builds_and_runs() {
         "statuscode_seal: must be accepted, got: {built:?}"
     );
 
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
     let outcome = crate::support::build_and_run_emitted("statuscode_seal", &out);
@@ -131,7 +131,7 @@ fn imagesrc_seal_builds_and_runs() {
         "imagesrc_seal: must be accepted, got: {built:?}"
     );
 
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
     let outcome = crate::support::build_and_run_emitted("imagesrc_seal", &out);

@@ -65,7 +65,7 @@ fn assert_ipec_ok(name: &str) -> PathBuf {
 /// (proving the reused Decoder component decodes BOTH payloads correctly —
 /// not just "compiles").
 fn assert_e2e_output(name: &str) {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
     let out = assert_ipec_ok(name);

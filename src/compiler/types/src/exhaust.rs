@@ -119,7 +119,7 @@ impl ExhaustBudget {
     /// A fresh per-`case` budget resolved from the environment (unset → default;
     /// `0` → unbounded; `N` → absolute; malformed → default).
     fn from_env() -> Self {
-        std::env::var(EXHAUST_BUDGET_ENV).map_or_else(
+        ipe_env::var(EXHAUST_BUDGET_ENV).map_or_else(
             |_| Self::with_limit(DEFAULT_EXHAUST_BUDGET),
             |raw| match raw.trim().parse::<u64>() {
                 Ok(0) => Self::unbounded(),

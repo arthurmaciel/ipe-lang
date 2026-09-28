@@ -129,7 +129,7 @@ fn nonclone_handle_reused_fails_closed_before_cargo() {
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("ffi_nonclone_handle_reuse_out");
     let _ = fs::remove_dir_all(&out);
 
-    let built = ipe::build_with_sibling_discovery(&entry, &out, &runtime);
+    let built = ipe::build_loose_file(&entry, &out, &runtime);
     let Err(err) = built else {
         assert!(
             false_marker(),
@@ -194,7 +194,7 @@ fn nonclone_handle_threaded_linearly_builds() {
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("ffi_nonclone_handle_thread_out");
     let _ = fs::remove_dir_all(&out);
 
-    match ipe::build_with_sibling_discovery(&entry, &out, &runtime) {
+    match ipe::build_loose_file(&entry, &out, &runtime) {
         Ok(()) => {}
         Err(err) => {
             assert!(
@@ -217,7 +217,7 @@ fn nonclone_handle_threaded_linearly_builds() {
 /// `crates.io` pin), which fails offline and in CI shards where the crate is
 /// not published; the local path dependency stands in for it.
 pub(crate) fn provision_handle_demo(project: &Path, out: &Path) {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
     let handle_demo_dir = project.join("handle_demo");

@@ -65,7 +65,7 @@ fn fncarrier_record_generic_clone_ipec_accepts_and_impls_clone() {
         return;
     };
 
-    let built = ipe::build_with_sibling_discovery(&entry, &out, &runtime);
+    let built = ipe::build_loose_file(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
         "ipe build must succeed for fncarrier_record_generic_clone: {:?}",
@@ -99,7 +99,7 @@ fn fncarrier_record_generic_clone_ipec_accepts_and_impls_clone() {
 /// SEAL violation (ipe-0 then `RecReadSeed<T1> does not implement Clone`).
 #[test]
 fn fncarrier_record_generic_clone_cargo_builds_and_runs() {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
 
@@ -113,7 +113,7 @@ fn fncarrier_record_generic_clone_cargo_builds_and_runs() {
     assert!(runtime.is_ok(), "runtime must resolve for E2E");
     let Ok(runtime) = runtime else { return };
 
-    let built = ipe::build_with_sibling_discovery(&entry, &out, &runtime);
+    let built = ipe::build_loose_file(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
         "ipe build must succeed for fncarrier_record_generic_clone: {:?}",

@@ -44,7 +44,7 @@ fn i224_destructure_ipec_accepts_and_clones_reused_component() {
         return;
     };
 
-    let built = ipe::build_with_sibling_discovery(&entry, &out, &runtime);
+    let built = ipe::build_loose_file(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
         "ipe build must succeed for destructure_move_ownership: {:?}",
@@ -67,7 +67,7 @@ fn i224_destructure_ipec_accepts_and_clones_reused_component() {
 /// cargo-0 ∧ run-correct: gated on `IPE_E2E=1` — THE SEAL.
 #[test]
 fn i224_destructure_cargo_builds_and_runs() {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
 
@@ -80,7 +80,7 @@ fn i224_destructure_cargo_builds_and_runs() {
         return;
     };
 
-    let built = ipe::build_with_sibling_discovery(&entry, &out, &runtime);
+    let built = ipe::build_loose_file(&entry, &out, &runtime);
     assert!(built.is_ok(), "ipe build must succeed: {:?}", built.err());
 
     let outcome = crate::support::build_and_run_emitted("destructure_move_ownership", &out);

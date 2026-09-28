@@ -66,7 +66,7 @@ fn assert_byte_identical(name: &str) {
 /// staleness-gated `crate::support::assert_go_parity` — NO live oracle run in this path.
 /// Gated on `IPE_E2E=1` so the default `cargo test` stays fast.
 fn assert_runs_and_matches_oracle(name: &str) {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
 

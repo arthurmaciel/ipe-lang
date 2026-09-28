@@ -70,7 +70,7 @@ fn refutable_var_scrutinee_builds() {
 /// = 2 + 3 + 42 + 0 = 47.
 #[test]
 fn refutable_var_scrutinee_cargo_builds_and_runs() {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
 

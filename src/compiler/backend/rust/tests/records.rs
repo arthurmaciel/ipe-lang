@@ -457,7 +457,7 @@ fn distinct_shapes_sharing_a_field_set_emit_two_structs() -> DResult<()> {
 /// disambiguated emit is sound Rust. Gated on `IPE_E2E=1` (offline by default).
 #[test]
 fn end_to_end_distinct_shapes_cargo_check() -> DResult<()> {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return Ok(());
     }
 
@@ -565,7 +565,7 @@ fn end_to_end_distinct_shapes_cargo_check() -> DResult<()> {
 /// `IPE_E2E=1` so the default `cargo test` stays fast and offline.
 #[test]
 fn end_to_end_builds_and_prints_five() -> DResult<()> {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return Ok(());
     }
     let Some(runtime) = seal_e2e::resolve_runtime() else {

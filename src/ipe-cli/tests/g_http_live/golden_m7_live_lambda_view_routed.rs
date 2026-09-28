@@ -107,7 +107,7 @@ fn lambda_view_routed_app_emits_web_app_routed() {
 /// core: unique package name → fresh app fingerprint, warm dep target reused).
 #[test]
 fn lambda_view_routed_app_cargo_builds() {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
     // Emit into a PRIVATE dir this test alone owns, so the compile-only sibling

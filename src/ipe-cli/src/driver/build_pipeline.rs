@@ -110,6 +110,11 @@ pub struct BuildOptions {
     /// when [`Self::webview_host`]. Filled in `build_project_with_options` once
     /// the manifest is parsed; `None` selects the built-in fallback window.
     pub webview_window: Option<ipe_backend_rust::WebViewWindow>,
+    /// The output area the emitted crate is written to, when the build writes
+    /// into a CLI output root. The emit claims it through the root's proof, so
+    /// a level swapped after the path was computed cannot redirect the write.
+    /// `None` claims the `out_dir` path itself.
+    pub out_area: Option<crate::output_dir::AreaClaim>,
 }
 
 /// Select the emit model from the environment.
@@ -122,7 +127,7 @@ pub struct BuildOptions {
 /// env-derived default.
 #[must_use]
 pub fn runtime_dep_from_env() -> bool {
-    !std::env::var("IPE_RUNTIME_VENDORED").is_ok_and(|v| v == "1")
+    !ipe_env::var("IPE_RUNTIME_VENDORED").is_ok_and(|v| v == "1")
 }
 
 /// The emitted-crate package name for a no-manifest (single-file) build, read
@@ -141,7 +146,7 @@ pub fn runtime_dep_from_env() -> bool {
 /// default — this lever changes nothing for a normal build.
 #[must_use]
 pub fn single_file_cargo_name_from_env() -> String {
-    std::env::var("IPE_EMIT_PACKAGE_NAME")
+    ipe_env::var("IPE_EMIT_PACKAGE_NAME")
         .ok()
         .map(|name| ipe_backend_rust::sanitize_cargo_name(&name))
         .unwrap_or_default()
@@ -177,8 +182,8 @@ fn canonical_project_dir(manifest_path: &Path) -> PathBuf {
 #[must_use]
 pub fn hot_appearance_enabled() -> bool {
     hot_appearance_from_env(
-        std::env::var("IPE_WATCH_NO_HOT_APPEARANCE").ok().as_deref(),
-        std::env::var("IPE_WATCH_HOT_APPEARANCE").ok().as_deref(),
+        ipe_env::var("IPE_WATCH_NO_HOT_APPEARANCE").ok().as_deref(),
+        ipe_env::var("IPE_WATCH_HOT_APPEARANCE").ok().as_deref(),
     )
 }
 
@@ -203,7 +208,7 @@ pub fn hot_appearance_from_env(no_var: Option<&str>, hot_var: Option<&str>) -> b
 /// error whenever the banner is on, even with appearance hot-swap off.
 #[must_use]
 pub fn watch_banner_enabled() -> bool {
-    std::env::var("IPE_WEB_BANNER").map_or(true, |v| {
+    ipe_env::var("IPE_WEB_BANNER").map_or(true, |v| {
         let v = v.trim().to_ascii_lowercase();
         !(v == "off" || v == "0" || v == "false")
     })
@@ -223,8 +228,8 @@ pub fn watch_banner_enabled() -> bool {
 #[must_use]
 pub fn bluegreen_enabled() -> bool {
     bluegreen_from_env_values(
-        std::env::var("IPE_WATCH_NO_BLUEGREEN").ok().as_deref(),
-        std::env::var("IPE_WATCH_BLUEGREEN").ok().as_deref(),
+        ipe_env::var("IPE_WATCH_NO_BLUEGREEN").ok().as_deref(),
+        ipe_env::var("IPE_WATCH_BLUEGREEN").ok().as_deref(),
     )
 }
 
@@ -251,7 +256,7 @@ impl BuildOptions {
     /// The default build options with the emit model resolved from the
     /// environment (dependency-model by default; vendored under
     /// `IPE_RUNTIME_VENDORED=1`). The zero-configuration entrypoints
-    /// ([`build`], [`build_with_sibling_discovery`], [`build_project`]) seed
+    /// ([`build`], [`build_loose_file`], [`build_project`]) seed
     /// this so a library caller gets the same default emit model a `ipe build`
     /// invocation does, rather than the raw `Default` (which is vendored — the
     /// fallback shape).
@@ -334,41 +339,35 @@ pub fn build_with_options(
     )
 }
 
-/// Build a `.ipe` entry file and all sibling modules discovered in the same
-/// source directory.
+/// Build a loose `.ipe` entry file plus the sibling modules it imports.
 ///
-/// When no manifest is present, the entry file's parent directory is used
-/// as the source root. Every `*.ipe` file found there is loaded and compiled
-/// together — fixing IPE-N0020 for multi-file projects built via the
+/// When no manifest is present, an import `A.B` resolves to `A/B.ipe` under
+/// the entry file's directory, so a multi-file program builds via the
 /// file-path shorthand (`ipe build src/Main.ipe`).
 ///
-/// This is the faithful port of Haskell's `Graph.discoverModulesMulti
-/// (sourceRoot : ...) entryPath` call in `Ipe.Build.Compile.hs`: it probes
-/// the source root recursively and follows imports across sibling files before
-/// running the shared `compile_modules` core.
+/// The module set is the entry plus the sibling modules its imports reach,
+/// resolved by [`crate::loose_file::resolve_loose_file`] (see
+/// [`collect_entry_and_siblings`]); the entry's directory is never listed.
 ///
-/// When the source directory contains only the entry file this function is
-/// byte-identical to `build` (single-module pipeline is the identity over
-/// `link`).
+/// When the entry imports no sibling this function is byte-identical to
+/// `build` (single-module pipeline is the identity over `link`).
 ///
 /// # Errors
 /// [`CliError::Pipeline`] when the compiler rejects the program.
 /// [`CliError::Io`] on any filesystem failure.
-pub fn build_with_sibling_discovery(
-    entry: &Path,
-    out_dir: &Path,
-    runtime_dir: &Path,
-) -> Result<(), CliError> {
-    build_with_sibling_discovery_with_options(entry, out_dir, runtime_dir, BuildOptions::from_env())
+/// [`CliError::DiscoveryLimitReached`] when the import closure exceeds
+/// [`crate::loose_file::LooseFileLimits::DEFAULT`].
+pub fn build_loose_file(entry: &Path, out_dir: &Path, runtime_dir: &Path) -> Result<(), CliError> {
+    build_loose_file_with_options(entry, out_dir, runtime_dir, BuildOptions::from_env())
 }
 
-/// [`build_with_sibling_discovery`] with explicit [`BuildOptions`] (the
+/// [`build_loose_file`] with explicit [`BuildOptions`] (the
 /// static-plan-aware variant).
 ///
 /// # Errors
-/// As [`build_with_sibling_discovery`], plus [`CliError::StaticRefusal`]
+/// As [`build_loose_file`], plus [`CliError::StaticRefusal`]
 /// when the emitted app shape cannot be static.
-pub fn build_with_sibling_discovery_with_options(
+pub fn build_loose_file_with_options(
     entry: &Path,
     out_dir: &Path,
     runtime_dir: &Path,
@@ -376,7 +375,7 @@ pub fn build_with_sibling_discovery_with_options(
 ) -> Result<(), CliError> {
     let collected = collect_entry_and_siblings(entry)?;
 
-    // No manifest on this path either (sibling discovery is the "no manifest
+    // No manifest on this path either (the loose-file closure is the "no manifest
     // found" fallback) — default to sqlite, same rationale as `build`.
     compile_modules(
         collected.sources,
@@ -392,8 +391,8 @@ pub fn build_with_sibling_discovery_with_options(
 
 /// Build `ipe verify`'s test entry against the project's `src/` sources.
 ///
-/// Unlike [`build_with_sibling_discovery`], which roots discovery at the
-/// entry's own directory, this roots the code under test at `project_src_root`
+/// Unlike [`build_loose_file`], which follows the entry's
+/// imports within its own directory, this roots the code under test at `project_src_root`
 /// (the `src/` tree) and additionally discovers the test entry's own directory
 /// (the `tests/` tree) — so a `tests/Main.ipe` that imports `Lib.Foo` from
 /// `src/Lib/Foo.ipe` resolves. See [`collect_test_sources`] for the source-set
@@ -413,7 +412,7 @@ pub fn build_test_with_project_sources(
 
     // No manifest driver is threaded here (the test stage mirrors the sibling
     // build's "no manifest" fallback) — default to sqlite, same rationale as
-    // `build_with_sibling_discovery`.
+    // `build_loose_file`.
     compile_modules(
         collected.sources,
         collected.discovered,
@@ -426,51 +425,42 @@ pub fn build_test_with_project_sources(
     )
 }
 
-/// The entry file and every sibling `.ipe` module discovered in its source
-/// directory, ready to feed the shared compile core.
+/// A loose entry plus the sibling modules its imports reach, ready to feed the shared compile core.
 pub struct CollectedSources {
     pub(crate) sources: BTreeMap<Vec<String>, (PathBuf, String)>,
     pub(crate) discovered: Vec<project::DiscoveredModule>,
     pub(crate) entry_module_path: Vec<String>,
 }
 
-/// Collect the entry module plus every sibling `.ipe` file in its source
-/// directory, reading each source once.
+/// Collect a loose entry plus the transitive closure of sibling modules it imports.
 ///
 /// This is the file-path shorthand's source-collection step, shared by the
-/// build path ([`build_with_sibling_discovery_with_options`]) and the
+/// build path ([`build_loose_file_with_options`]) and the
 /// single-entry analysis paths ([`lower_entry_via_graph`], [`emit_ir_text`]) so all
-/// three see the SAME module set — a program that imports a compiled-source
-/// stdlib module resolves identically whether it is built or merely analysed.
-/// It is the equivalent of `Graph.discoverModulesMulti [srcRoot] entryPath` in
-/// `Ipe.Build.Compile.hs`; the compiled-source stdlib closure is injected
-/// downstream (in [`compile_modules_observed`] / [`lower_entry_via_graph`]),
-/// not here, so the injection routine stays single-sourced.
+/// three see the SAME module set. It delegates to
+/// [`crate::loose_file::resolve_loose_file`] — the one loose-file resolver
+/// `ipe watch` and `ipe lsp` also use — so every surface compiles the same
+/// bounded closure: one probed path per import, regular files contained in
+/// the entry's directory only, within
+/// [`crate::loose_file::LooseFileLimits::DEFAULT`], and no directory
+/// listing. The compiled-source stdlib closure is injected downstream (in
+/// [`compile_modules_observed`] / [`lower_entry_via_graph`]), not here, so
+/// the injection routine stays single-sourced.
 ///
 /// # Errors
-/// [`CliError::Pipeline`] when the entry does not parse; [`CliError::Io`] on
-/// any filesystem failure reading a discovered module.
+/// [`CliError::Pipeline`] when the entry does not parse; [`CliError::Io`] when
+/// the entry or an imported sibling cannot be read;
+/// [`CliError::DiscoveryLimitReached`] when the import closure is too large.
 pub fn collect_entry_and_siblings(entry: &Path) -> Result<CollectedSources, CliError> {
-    let source =
-        crate::io_bounded::read_to_string_capped(entry, crate::io_bounded::SOURCE_READ_CAP)?;
-    let entry_module_path = parse_entry_module_path(entry, &source)?;
-
-    // Source root: the directory containing the entry file.
-    let src_root = entry
-        .parent()
-        .filter(|p| p.is_dir())
-        .unwrap_or_else(|| Path::new("."));
-
-    // Discover ALL .ipe files in the source root (recursively).
-    let mut discovered = project::discover_modules(src_root)?;
-    ensure_entry_present(&mut discovered, entry, &entry_module_path);
-
-    let sources = read_discovered_sources(&discovered, entry, &entry_module_path, &source)?;
-
+    let loaded = crate::loose_file::resolve_loose_file(
+        entry,
+        None,
+        crate::loose_file::LooseFileLimits::DEFAULT,
+    )?;
     Ok(CollectedSources {
-        sources,
-        discovered,
-        entry_module_path,
+        sources: loaded.sources,
+        discovered: loaded.discovered,
+        entry_module_path: loaded.entry_module,
     })
 }
 
@@ -596,10 +586,7 @@ pub fn read_discovered_sources(
                 (entry.to_path_buf(), entry_source.to_owned()),
             );
         } else {
-            let src = crate::io_bounded::read_to_string_capped(
-                m.path(),
-                crate::io_bounded::SOURCE_READ_CAP,
-            )?;
+            let src = crate::io_bounded::read_walked_source(m.path())?;
             sources.insert(m.module_path().to_vec(), (m.path().to_path_buf(), src));
         }
     }
@@ -806,6 +793,7 @@ pub fn compile_modules_observed(
             write_emitted_project(
                 &emitted,
                 out_dir,
+                options.out_area.as_ref(),
                 runtime_dir,
                 options.static_plan.as_ref(),
                 options.tree_shake_vendored,
@@ -841,10 +829,10 @@ pub fn compile_modules_observed(
                         kernel: "Debug.*".into(),
                     },
                 };
-                let src = std::fs::read_to_string(blame_path).unwrap_or_default();
+                let (file, src) = entry_blame_source(&sources, entry_path, blame_path);
                 return (
                     Err(CliError::Pipeline {
-                        file: blame_path.to_path_buf(),
+                        file,
                         src,
                         diag: Box::new(diag),
                     }),
@@ -872,6 +860,7 @@ pub fn compile_modules_observed(
                 let written = write_emitted_project(
                     &emitted,
                     out_dir,
+                    options.out_area.as_ref(),
                     runtime_dir,
                     options.static_plan.as_ref(),
                     options.tree_shake_vendored,
@@ -934,6 +923,7 @@ pub fn compile_modules_observed(
     let written = write_emitted_project(
         &emitted,
         out_dir,
+        options.out_area.as_ref(),
         runtime_dir,
         options.static_plan.as_ref(),
         options.tree_shake_vendored,
@@ -1242,6 +1232,22 @@ pub fn record_widget_tag_origin(
     }
 }
 
+/// The entry module's path and text, which an entry-blamed diagnostic renders against.
+///
+/// The text comes from the source map the build already read under its
+/// bounds, never from a second disk read. An entry absent from `sources`
+/// yields `blame_path` with empty text.
+fn entry_blame_source(
+    sources: &BTreeMap<Vec<String>, (PathBuf, String)>,
+    entry_path: &[String],
+    blame_path: &Path,
+) -> (PathBuf, String) {
+    sources.get(entry_path).map_or_else(
+        || (blame_path.to_path_buf(), String::new()),
+        |(path, text)| (path.clone(), text.clone()),
+    )
+}
+
 /// The in-memory compile core over an already-populated database.
 ///
 /// topo order → per-module canonicalisation (memoized, blame-attributed) →
@@ -1293,13 +1299,7 @@ pub fn compile_prepared(
     // Link → infer → lower → emit on the merged module. Blame link/lower/emit
     // errors on the entry file; infer errors and warnings are attributed to the
     // dep module that owns the failing span.
-    let entry_src_path = sources
-        .get(entry_path)
-        .map_or_else(|| blame_path.to_path_buf(), |(p, _)| p.clone());
-    let entry_src = sources
-        .get(entry_path)
-        .map(|(_, s)| s.clone())
-        .unwrap_or_default();
+    let (entry_src_path, entry_src) = entry_blame_source(sources, entry_path, blame_path);
     let pipeline_err = |diag: ipe_diagnostics::Diagnostic| CliError::Pipeline {
         file: entry_src_path.clone(),
         src: entry_src.clone(),
@@ -1854,15 +1854,19 @@ pub fn rust_raw_str_literal(s: &str) -> String {
 /// never leak from an earlier static build into later ones.
 ///
 /// Returns the claimed `out_dir`, the only source of a writable in-output
-/// build-cache root.
+/// build-cache root. With `out_area`, `out_dir` is claimed as that area of its
+/// output root, the root's disjointness from the project proven again.
 ///
 /// # Errors
 /// [`CliError::Io`] on any filesystem failure; [`CliError::StaticRefusal`]
 /// for a webview shape under a static plan; [`CliError::Pipeline`] on a
-/// backend-invariant breach (manifest anchor drift).
+/// backend-invariant breach (manifest anchor drift);
+/// [`CliError::OutputRefused`] when `out_dir` cannot be claimed or is not the
+/// directory `out_area` names.
 pub fn write_emitted_project(
     emitted: &ipe_backend::EmittedProject,
     out_dir: &Path,
+    out_area: Option<&crate::output_dir::AreaClaim>,
     runtime_dir: &Path,
     static_plan: Option<&ipe_backend_rust::static_build::StaticPlan>,
     tree_shake_vendored: bool,
@@ -1887,7 +1891,10 @@ pub fn write_emitted_project(
     }
     // The reconcile below prunes and overwrites, so it runs only in a directory
     // proven ipe-owned — a user tree passed as `out_dir` is refused untouched.
-    let crate_dir = crate::output_dir::OwnedDir::claim(out_dir)?;
+    let crate_dir = match out_area {
+        Some(area) => area.claim_at(out_dir)?,
+        None => OwnedDir::claim(out_dir)?,
+    };
     reconcile_emitted_project(&manifest, &crate_dir)?;
     if static_plan.is_none() {
         remove_stale_static_config(&crate_dir)?;
@@ -2292,8 +2299,7 @@ pub fn build_project_with_options(
     // For each module, read its source and extract imports.
     let mut sources: BTreeMap<Vec<String>, (PathBuf, String)> = BTreeMap::new();
     for m in &discovered {
-        let src =
-            crate::io_bounded::read_to_string_capped(m.path(), crate::io_bounded::SOURCE_READ_CAP)?;
+        let src = crate::io_bounded::read_walked_source(m.path())?;
         sources.insert(m.module_path().to_vec(), (m.path().to_path_buf(), src));
     }
 
@@ -2383,7 +2389,7 @@ pub fn build_project_with_options(
 /// Returns [`CliError::RuntimeNotFound`] when no candidate directory exists, or
 /// [`CliError::Io`] if the current directory cannot be read.
 pub fn resolve_runtime() -> Result<PathBuf, CliError> {
-    if let Ok(dir) = std::env::var("IPE_RUNTIME_DIR") {
+    if let Ok(dir) = ipe_env::var("IPE_RUNTIME_DIR") {
         let path = PathBuf::from(dir);
         if path.is_dir() {
             return Ok(path);
@@ -2544,5 +2550,127 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A fresh scratch directory unique to this test run.
+    fn loose_scratch(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "ipe_loose_build_{tag}_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |d| d.as_nanos())
+        ));
+        fs::create_dir_all(&dir).expect("create scratch dir");
+        dir
+    }
+
+    fn collected_modules(collected: &CollectedSources) -> Vec<Vec<String>> {
+        collected.sources.keys().cloned().collect()
+    }
+
+    /// A loose build compiles the import closure only, beside an unreadable directory.
+    ///
+    /// An unimported sibling and a `chmod 000` directory next to the entry are
+    /// never touched.
+    #[cfg(unix)]
+    #[test]
+    fn loose_build_loads_the_import_closure_beside_an_unreadable_dir() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = loose_scratch("closure");
+        let entry = dir.join("Main.ipe");
+        fs::write(
+            &entry,
+            "module Main exposing (main)\n\nimport Helper\n\nmain = Helper.h\n",
+        )
+        .expect("write entry");
+        fs::write(
+            dir.join("Helper.ipe"),
+            "module Helper exposing (h)\n\nh = 1\n",
+        )
+        .expect("write helper");
+        fs::write(
+            dir.join("Stray.ipe"),
+            "module Stray exposing (s)\n\ns = ???\n",
+        )
+        .expect("write stray");
+        let locked = dir.join("locked");
+        fs::create_dir_all(&locked).expect("create locked dir");
+        fs::write(
+            locked.join("Hidden.ipe"),
+            "module Hidden exposing (x)\n\nx = 1\n",
+        )
+        .expect("write hidden");
+        fs::set_permissions(&locked, fs::Permissions::from_mode(0o000)).expect("chmod 000");
+
+        let collected = collect_entry_and_siblings(&entry);
+        let _ = fs::set_permissions(&locked, fs::Permissions::from_mode(0o755));
+        let _ = fs::remove_dir_all(&dir);
+        let collected = collected.expect("closure loads beside an unreadable dir");
+        assert_eq!(
+            collected_modules(&collected),
+            vec![vec!["Helper".to_owned()], vec!["Main".to_owned()]],
+            "only Main and the Helper it imports are compiled"
+        );
+        assert_eq!(collected.entry_module_path, vec!["Main".to_owned()]);
+    }
+
+    /// A loose build whose import closure passes the module ceiling is refused.
+    #[test]
+    fn loose_build_past_the_module_limit_is_refused() {
+        let dir = loose_scratch("limit");
+        let count = crate::loose_file::MAX_LOOSE_FILE_MODULES;
+        let imports: String = (0..count).map(|i| format!("import M{i}\n")).collect();
+        let entry = dir.join("Main.ipe");
+        fs::write(
+            &entry,
+            format!("module Main exposing (main)\n\n{imports}\nmain = 1\n"),
+        )
+        .expect("write entry");
+        for i in 0..count {
+            fs::write(
+                dir.join(format!("M{i}.ipe")),
+                format!("module M{i} exposing (v)\n\nv = 1\n"),
+            )
+            .expect("write sibling");
+        }
+
+        let collected = collect_entry_and_siblings(&entry);
+        let _ = fs::remove_dir_all(&dir);
+        assert!(
+            matches!(collected, Err(CliError::DiscoveryLimitReached { .. })),
+            "the entry plus {count} imported siblings exceeds the ceiling"
+        );
+    }
+
+    /// A loose build never follows a sibling symlink that points outside the entry's directory.
+    #[cfg(unix)]
+    #[test]
+    fn loose_build_does_not_follow_an_escaping_symlink() {
+        let outside = loose_scratch("escape-outside");
+        fs::write(
+            outside.join("Out.ipe"),
+            "module Out exposing (o)\n\no = 1\n",
+        )
+        .expect("write outside module");
+        let dir = loose_scratch("escape");
+        let entry = dir.join("Main.ipe");
+        fs::write(
+            &entry,
+            "module Main exposing (main)\n\nimport Out\n\nmain = Out.o\n",
+        )
+        .expect("write entry");
+        std::os::unix::fs::symlink(outside.join("Out.ipe"), dir.join("Out.ipe"))
+            .expect("plant symlink");
+
+        let collected = collect_entry_and_siblings(&entry);
+        let _ = fs::remove_dir_all(&dir);
+        let _ = fs::remove_dir_all(&outside);
+        let collected = collected.expect("entry still loads");
+        assert_eq!(
+            collected_modules(&collected),
+            vec![vec!["Main".to_owned()]],
+            "the escaping symlink is left for the compiler to report as unresolved"
+        );
     }
 }

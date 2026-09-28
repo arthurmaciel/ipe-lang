@@ -78,15 +78,13 @@
 //! completion from an already-superseded cycle is silently ignored rather
 //! than raced against the new one.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command};
 use std::sync::mpsc;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, PoisonError, RwLock};
 use std::thread;
 use std::time::{Duration, Instant};
-
-use ipe_intern::Interner;
 
 use crate::project;
 use crate::text;
@@ -202,6 +200,10 @@ pub struct WatchOptions {
     /// a pre-compiled dependency tree instead of cold-building it; the E2E watch
     /// suite uses it to forward the CI shard's warm shared target.
     pub target_dir: Option<PathBuf>,
+    /// The output area `out_dir` names, when it sits in a CLI output root.
+    /// Each rebuild claims it through the root's proof; `None` claims the
+    /// `out_dir` path itself.
+    pub out_area: Option<crate::output_dir::AreaClaim>,
 }
 
 impl WatchOptions {
@@ -221,6 +223,7 @@ impl WatchOptions {
             reset_state: false,
             debugger: false,
             target_dir: None,
+            out_area: None,
         }
     }
 }
@@ -337,7 +340,7 @@ impl RebuildTimings {
     /// of exactly `1` enables the breakdown, anything else (unset included)
     /// leaves it off.
     fn start(settle: Option<Duration>) -> Self {
-        let enabled = std::env::var("IPE_WATCH_TIMING").as_deref() == Ok("1");
+        let enabled = ipe_env::var("IPE_WATCH_TIMING").as_deref() == Ok("1");
         Self {
             enabled,
             cycle_start: enabled.then(Instant::now),
@@ -425,29 +428,69 @@ pub(crate) struct ResolvedProject {
     pub(crate) entry_path: Vec<String>,
     pub(crate) blame_path: PathBuf,
     pub(crate) db_driver: ipe_backend_rust::DbDriver,
-    /// The `[wasm] publicEnv` allowlist (empty for the no-manifest / sibling-
-    /// discovery path — there is no manifest to declare one).
+    /// The `[wasm] publicEnv` allowlist (empty for the no-manifest loose-file
+    /// path — there is no manifest to declare one).
     pub(crate) wasm_public_env: Vec<String>,
     /// The sanitized Cargo package name for the emitted crate (from `package.ipe`
     /// name via [`ipe_backend_rust::sanitize_cargo_name`]). Empty string
     /// when no manifest is present (sibling-discovery path uses `"ipe-app"`).
     pub(crate) cargo_name: String,
+    /// What the confined watcher observes for this snapshot.
+    pub(crate) scope: ScopeSpec,
+}
+
+/// The inputs a [`ipe_watch::WatchScope`] is built from, per project shape.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ScopeSpec {
+    /// A manifest project: the manifest's directory, watched recursively.
+    Package {
+        /// The manifest's directory.
+        root: PathBuf,
+        /// Every module file the bounded module discovery found.
+        source_files: Vec<PathBuf>,
+    },
+    /// A loose file: the entry and the sibling module files its import closure probes.
+    LooseFile {
+        /// The entry `.ipe` file as given on the command line.
+        entry: PathBuf,
+        /// Every probed module file, relative to the entry's directory.
+        module_files: Vec<PathBuf>,
+    },
+}
+
+impl ScopeSpec {
+    /// Build the confined scope this spec describes.
+    ///
+    /// # Errors
+    /// [`ipe_watch::ScopeError`] when the root is missing or the scope is too large.
+    fn build(&self) -> Result<ipe_watch::WatchScope, ipe_watch::ScopeError> {
+        match self {
+            Self::Package { root, source_files } => {
+                ipe_watch::WatchScope::build(root, root, source_files)
+            }
+            Self::LooseFile {
+                entry,
+                module_files,
+            } => ipe_watch::WatchScope::loose_file(entry, module_files),
+        }
+    }
 }
 
 /// Resolve `entry` (a `.ipe` file or a project directory) into a fresh
 /// [`ResolvedProject`] by re-reading every relevant file from disk. Mirrors
 /// `run_build`'s dispatch: directory → `package.ipe` inside it; `.ipe` → walk
-/// up for a manifest, else sibling discovery.
+/// up for a manifest, else the loose-file import closure
+/// ([`crate::loose_file::resolve_loose_file`]).
 ///
 /// `entry_text_override`, when given, shadows the entry `.ipe` file's disk
-/// bytes in the no-manifest branch — the LSP hands the unsaved editor
-/// buffer here so module-path discovery follows what the author sees, not
-/// stale disk state. `ipe watch` always passes `None` (disk is its truth).
+/// bytes in the no-manifest branch. `ipe watch` always passes `None` (disk
+/// is its truth).
 ///
 /// # Errors
 /// [`CliError::Io`] on any filesystem failure; [`CliError::Pipeline`] if the
-/// entry file itself fails to parse (needed only to learn its declared
-/// module path in the no-manifest case).
+/// entry file itself fails to parse (needed only to learn its imports in the
+/// no-manifest case); [`CliError::DiscoveryLimitReached`] when a loose
+/// file's import closure is too large.
 pub(crate) fn resolve_project_sources(
     entry: &Path,
     entry_text_override: Option<&str>,
@@ -471,10 +514,7 @@ pub(crate) fn resolve_project_sources(
         let discovered = project::discover_modules(&manifest.src_root)?;
         let mut sources: BTreeMap<Vec<String>, (PathBuf, String)> = BTreeMap::new();
         for m in &discovered {
-            let src = crate::io_bounded::read_to_string_capped(
-                m.path(),
-                crate::io_bounded::SOURCE_READ_CAP,
-            )?;
+            let src = crate::io_bounded::read_walked_source(m.path())?;
             sources.insert(m.module_path().to_vec(), (m.path().to_path_buf(), src));
         }
         let cargo_name = ipe_backend_rust::sanitize_cargo_name(&manifest.name);
@@ -483,6 +523,10 @@ pub(crate) fn resolve_project_sources(
         // multi-program selection is a reported residual — see
         // `misc/docs/package-programs-design.md`.
         let entry_path = manifest.resolved_entry()?;
+        let package_root = manifest_path
+            .parent()
+            .map_or_else(|| PathBuf::from("."), Path::to_path_buf);
+        let source_files = discovered.iter().map(|m| m.path().to_path_buf()).collect();
         return Ok(ResolvedProject {
             sources,
             discovered,
@@ -491,91 +535,93 @@ pub(crate) fn resolve_project_sources(
             db_driver: manifest.driver,
             wasm_public_env: manifest.wasm.public_env,
             cargo_name,
+            scope: ScopeSpec::Package {
+                root: package_root,
+                source_files,
+            },
         });
     }
 
-    // No manifest: sibling discovery, mirroring `build_with_sibling_discovery`.
-    let source = match entry_text_override {
-        Some(text) => text.to_owned(),
-        None => {
-            crate::io_bounded::read_to_string_capped(entry, crate::io_bounded::SOURCE_READ_CAP)?
-        }
-    };
-    let mut name_interner = Interner::new();
-    let parsed = ipe_parse::parse_module(&source, &mut name_interner).map_err(|diag| {
-        CliError::Pipeline {
-            file: entry.to_path_buf(),
-            src: source.clone(),
-            diag: Box::new(diag),
-        }
-    })?;
-    let entry_module_path: Vec<String> = parsed
-        .name
-        .value
-        .iter()
-        .map(|s| name_interner.resolve(*s).unwrap_or_default().to_owned())
-        .collect();
-    let src_root = entry
-        .parent()
-        .filter(|p| p.is_dir())
-        .unwrap_or_else(|| Path::new("."));
-    let mut discovered = project::discover_modules(src_root)?;
-    if !discovered
-        .iter()
-        .any(|m| m.module_path() == entry_module_path)
-    {
-        discovered.push(project::DiscoveredModule::user(
-            entry.to_path_buf(),
-            entry_module_path.clone(),
-        ));
-    }
-    let mut sources: BTreeMap<Vec<String>, (PathBuf, String)> = BTreeMap::new();
-    for m in &discovered {
-        if m.module_path() == entry_module_path {
-            sources.insert(
-                entry_module_path.clone(),
-                (entry.to_path_buf(), source.clone()),
-            );
-        } else {
-            let src = crate::io_bounded::read_to_string_capped(
-                m.path(),
-                crate::io_bounded::SOURCE_READ_CAP,
-            )?;
-            sources.insert(m.module_path().to_vec(), (m.path().to_path_buf(), src));
-        }
-    }
+    // No manifest: the loose-file closure, the same one `ipe build` compiles.
+    let loaded = crate::loose_file::resolve_loose_file(
+        entry,
+        entry_text_override,
+        crate::loose_file::LooseFileLimits::DEFAULT,
+    )?;
     Ok(ResolvedProject {
-        sources,
-        discovered,
-        entry_path: entry_module_path,
+        sources: loaded.sources,
+        discovered: loaded.discovered,
+        entry_path: loaded.entry_module,
         blame_path: entry.to_path_buf(),
         db_driver: ipe_backend_rust::DbDriver::Sqlite,
         wasm_public_env: Vec::new(),
         cargo_name: String::new(),
+        scope: ScopeSpec::LooseFile {
+            entry: entry.to_path_buf(),
+            module_files: loaded.probed_files,
+        },
     })
 }
 
-/// The project root + entry directory a [`ipe_watch::WatchScope`] confines
-/// itself to, derived from one resolved snapshot.
-fn scope_roots(resolved: &ResolvedProject, entry: &Path) -> (PathBuf, PathBuf) {
-    // The manifest's directory when a `package.ipe` is the blame path;
-    // otherwise the blame path IS the entry file, so its parent is the source
-    // root — matching `build_with_sibling_discovery`.
-    if resolved.blame_path.file_name().and_then(|n| n.to_str())
-        == Some(crate::package_manifest::PACKAGE_IPE)
-    {
-        let root = resolved
-            .blame_path
-            .parent()
-            .map_or_else(|| PathBuf::from("."), Path::to_path_buf);
-        (root.clone(), root)
-    } else {
-        let dir = entry
-            .parent()
-            .filter(|p| p.is_dir())
-            .map_or_else(|| PathBuf::from("."), Path::to_path_buf);
-        (dir.clone(), dir)
+/// The directories a scope hands the OS-level watcher.
+fn watched_roots(scope: &ipe_watch::WatchScope) -> BTreeSet<PathBuf> {
+    scope
+        .roots_to_watch()
+        .iter()
+        .map(|watched| watched.as_path().to_path_buf())
+        .collect()
+}
+
+/// Rebuild a loose-file scope from a fresh snapshot so the watcher follows the current import closure.
+///
+/// Directories the new closure needs are watched before the swap and
+/// directories it dropped are unwatched after it; a package scope is
+/// recursive and never changes. A scope that fails to build keeps the
+/// previous one in force, and a directory that fails to watch is logged.
+/// Returns whether a directory was added: an event inside it between the
+/// snapshot's read and the watch taking effect went unobserved, so the
+/// caller resolves once more.
+///
+/// The scope lock is never held across a watcher call, since the watcher's
+/// event thread takes the same lock.
+fn rescope(
+    watcher: &mut notify::RecommendedWatcher,
+    shared: &RwLock<ipe_watch::WatchScope>,
+    spec: &ScopeSpec,
+) -> bool {
+    if matches!(spec, ScopeSpec::Package { .. }) {
+        return false;
     }
+    let next = match spec.build() {
+        Ok(next) => next,
+        Err(e) => {
+            emit_watch_line(
+                &crate::style::TerminalSafe::sanitize(text::Message::relay(&e).as_str()),
+                WatchRole::Failure,
+            );
+            return false;
+        }
+    };
+    let previous = watched_roots(&shared.read().unwrap_or_else(PoisonError::into_inner));
+    let current = watched_roots(&next);
+    let mode = next.recursive_mode();
+    let mut added = false;
+    for dir in current.difference(&previous) {
+        match notify::Watcher::watch(watcher, dir, mode) {
+            Ok(()) => added = true,
+            Err(e) => emit_watch_line(
+                &crate::style::TerminalSafe::sanitize(
+                    text::msg::watch_path_failed(&dir.display(), &e).as_str(),
+                ),
+                WatchRole::Failure,
+            ),
+        }
+    }
+    *shared.write().unwrap_or_else(PoisonError::into_inner) = next;
+    for dir in previous.difference(&current) {
+        let _ = notify::Watcher::unwatch(watcher, dir);
+    }
+    added
 }
 
 /// One event on the orchestrator's unified channel. Carries a `generation`
@@ -819,9 +865,9 @@ fn run_inner(
     external_stop: Option<mpsc::Receiver<()>>,
 ) -> Result<(), CliError> {
     let initial = resolve_project_sources(&opts.entry, None)?;
-    let (root_dir, entry_dir) = scope_roots(&initial, &opts.entry);
-
-    let scope = ipe_watch::WatchScope::build(&root_dir, &entry_dir)
+    let scope = initial
+        .scope
+        .build()
         .map_err(|e| CliError::Usage(crate::text::Message::relay(&e)))?;
     if !opts.quiet {
         emit_watch_line(
@@ -835,8 +881,11 @@ fn run_inner(
     }
 
     let (raw_tx, raw_rx) = mpsc::channel::<PathBuf>();
+    let recursive_mode = scope.recursive_mode();
+    let initial_roots = watched_roots(&scope);
+    let shared_scope = Arc::new(RwLock::new(scope));
     let mut watcher = {
-        let scope = scope.clone();
+        let scope = Arc::clone(&shared_scope);
         notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
             let Ok(event) = res else { return };
             // Reject non-mutating ACCESS events (open/read/execute) and the
@@ -898,6 +947,7 @@ fn run_inner(
             {
                 return;
             }
+            let scope = scope.read().unwrap_or_else(PoisonError::into_inner);
             for path in event.paths {
                 if scope.is_relevant(&path) {
                     let _ = raw_tx.send(path);
@@ -906,11 +956,9 @@ fn run_inner(
         })
         .map_err(|e| CliError::Usage(text::msg::watch_start_failed(&e)))?
     };
-    for w in scope.roots_to_watch() {
-        notify::Watcher::watch(&mut watcher, w.as_path(), notify::RecursiveMode::Recursive)
-            .map_err(|e| {
-                CliError::Usage(text::msg::watch_path_failed(&w.as_path().display(), &e))
-            })?;
+    for dir in &initial_roots {
+        notify::Watcher::watch(&mut watcher, dir, recursive_mode)
+            .map_err(|e| CliError::Usage(text::msg::watch_path_failed(&dir.display(), &e)))?;
     }
 
     warn_if_memory_store();
@@ -1148,6 +1196,9 @@ fn run_inner(
                         continue;
                     }
                 };
+                if rescope(&mut watcher, &shared_scope, &resolved.scope) {
+                    schedule_resolve_retry(&evt_tx);
+                }
 
                 let mut sources = resolved.sources;
                 let mut discovered = resolved.discovered;
@@ -1509,6 +1560,7 @@ fn run_inner(
                         if let Err(e) = write_emitted_project(
                             &emitted,
                             &opts.out_dir,
+                            opts.out_area.as_ref(),
                             &opts.runtime_dir,
                             None,
                             false,
@@ -2019,7 +2071,7 @@ fn child_env(
         // setting anything.
         env.push(("IPE_WATCH_HOT_APPEARANCE".to_owned(), "1".to_owned()));
     }
-    if std::env::var("IPE_WEB_STORE").is_err() {
+    if ipe_env::var("IPE_WEB_STORE").is_err() {
         // `file`, not `sqlite`: a plain `Web.tea` reaches no DB kernel, so the
         // emitted crate carries no `db` feature and the sqlite store compiles
         // out (it would silently degrade to an in-memory store that does NOT
@@ -2042,7 +2094,7 @@ fn child_env(
     // the browser's fast-reconnect window past its default to cover it: the page
     // reconnects a fast-retry tick after the new server binds instead of waiting
     // out an exponential-backoff interval. The caller's own value wins.
-    if std::env::var("IPE_WEB_RETRY_FAST_WINDOW_MS").is_err() {
+    if ipe_env::var("IPE_WEB_RETRY_FAST_WINDOW_MS").is_err() {
         env.push(("IPE_WEB_RETRY_FAST_WINDOW_MS".to_owned(), "8000".to_owned()));
     }
     env
@@ -2800,7 +2852,7 @@ fn post_to_watch_status(port: u16, token: &str, body: &str) -> std::io::Result<(
 /// plain function (not `Result`) so call sites don't need to thread an
 /// unused error channel.
 fn warn_if_memory_store() {
-    if std::env::var("IPE_WEB_STORE").as_deref() == Ok("memory") {
+    if ipe_env::var("IPE_WEB_STORE").as_deref() == Ok("memory") {
         emit_watch_line(
             &crate::style::TerminalSafe::sanitize(
                 "[ipe watch] warning: IPE_WEB_STORE=memory is set — session state will NOT \
@@ -2943,7 +2995,7 @@ enum BuildAccel {
 fn watch_target_dir(out_dir: &Path, override_dir: Option<&Path>) -> PathBuf {
     override_dir.map_or_else(
         || {
-            std::env::var_os("CARGO_TARGET_DIR")
+            ipe_env::var_os("CARGO_TARGET_DIR")
                 .map_or_else(|| out_dir.join("target"), PathBuf::from)
         },
         Path::to_path_buf,
@@ -2977,7 +3029,7 @@ fn target_is_warm(out_dir: &Path, override_dir: Option<&Path>) -> bool {
 /// optional: absent, a cold build simply falls back to the warm/incremental path
 /// — correct, only slower for the first compile.
 fn find_sccache() -> Option<PathBuf> {
-    let path = std::env::var_os("PATH")?;
+    let path = ipe_env::var_os("PATH")?;
     std::env::split_paths(&path)
         .flat_map(|dir| [dir.join("sccache"), dir.join("sccache.exe")])
         .find(|p| p.is_file())
@@ -3031,7 +3083,7 @@ fn apply_build_accel_env(cmd: &mut Command, accel: &BuildAccel) {
 /// Read a boolean opt-out/opt-in env gate: true when the variable is set to any
 /// value other than empty or `0`.
 fn env_flag_on(name: &str) -> bool {
-    std::env::var(name).is_ok_and(|v| !v.is_empty() && v != "0")
+    ipe_env::var(name).is_ok_and(|v| !v.is_empty() && v != "0")
 }
 
 /// waiter thread that reports completion (or "killed — superseded")
@@ -3204,10 +3256,11 @@ fn find_executable_path(cargo_json_stdout: &str) -> Option<PathBuf> {
 mod tests {
     use super::{
         AppearanceRoute, BuildAccel, Command, Duration, OrchestratorEvent, RESOLVE_RETRY_DELAY,
-        RebuildTimings, appearance_route, apply_build_accel_env, child_env, choose_build_accel,
-        compile_failed_frame, dir_has_dep_rlib, emitted_binds_http, emitted_is_tui, emitted_is_web,
-        env_flag_on, first_error_line, mint_hot_token, mpsc, push_control_appearance,
-        schedule_resolve_retry, send_control_frame, spawn_command, strip_ansi, watch_status_body,
+        RebuildTimings, ResolvedProject, ScopeSpec, appearance_route, apply_build_accel_env,
+        child_env, choose_build_accel, compile_failed_frame, dir_has_dep_rlib, emitted_binds_http,
+        emitted_is_tui, emitted_is_web, env_flag_on, first_error_line, mint_hot_token, mpsc,
+        push_control_appearance, resolve_project_sources, schedule_resolve_retry,
+        send_control_frame, spawn_command, strip_ansi, watch_status_body,
     };
     use std::ffi::OsStr;
     use std::path::{Path, PathBuf};
@@ -3929,6 +3982,96 @@ mod tests {
             "token must be lowercase hex"
         );
         assert_ne!(a, b, "two mints must not collide");
+    }
+
+    /// A fresh scratch directory unique to this test run.
+    fn loose_scratch(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "ipe_loose_watch_{tag}_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |d| d.as_nanos())
+        ));
+        std::fs::create_dir_all(&dir).expect("create scratch dir");
+        dir
+    }
+
+    /// Watch resolves a loose file to its import closure, beside an unreadable directory.
+    ///
+    /// A rebuild re-resolves from disk, so an import added to the entry pulls
+    /// the newly named sibling in, while an unimported sibling stays out.
+    #[cfg(unix)]
+    #[test]
+    fn watch_loose_file_resolves_the_import_closure_and_follows_a_new_import() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = loose_scratch("closure");
+        let entry = dir.join("Main.ipe");
+        std::fs::write(&entry, "module Main exposing (main)\n\nmain = 1\n").expect("write entry");
+        std::fs::write(
+            dir.join("Helper.ipe"),
+            "module Helper exposing (h)\n\nh = 1\n",
+        )
+        .expect("write helper");
+        std::fs::write(
+            dir.join("Stray.ipe"),
+            "module Stray exposing (s)\n\ns = ???\n",
+        )
+        .expect("write stray");
+        let locked = dir.join("locked");
+        std::fs::create_dir_all(&locked).expect("create locked dir");
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000))
+            .expect("chmod 000");
+
+        let before = resolve_project_sources(&entry, None);
+        std::fs::write(
+            &entry,
+            "module Main exposing (main)\n\nimport Helper\n\nmain = Helper.h\n",
+        )
+        .expect("rewrite entry");
+        let after = resolve_project_sources(&entry, None);
+        let after_scope = after.as_ref().map(|resolved| resolved.scope.build());
+        let canon_dir = std::fs::canonicalize(&dir);
+        let _ = std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755));
+        let _ = std::fs::remove_dir_all(&dir);
+
+        let canon_dir = canon_dir.expect("scratch dir canonicalises");
+        let after_scope = after_scope
+            .expect("loose file re-resolves")
+            .expect("the watch scope builds beside an unreadable directory");
+        let watched: Vec<&Path> = after_scope
+            .roots_to_watch()
+            .iter()
+            .map(ipe_watch::WatchedPath::as_path)
+            .collect();
+        assert_eq!(watched, vec![canon_dir.as_path()], "no directory is walked");
+        assert!(matches!(
+            after_scope.recursive_mode(),
+            notify::RecursiveMode::NonRecursive
+        ));
+        assert!(after_scope.is_relevant(&canon_dir.join("Helper.ipe")));
+        assert!(!after_scope.is_relevant(&canon_dir.join("Stray.ipe")));
+
+        let modules = |resolved: &ResolvedProject| -> Vec<Vec<String>> {
+            resolved.sources.keys().cloned().collect()
+        };
+        let before = before.expect("loose file resolves");
+        let after = after.expect("loose file re-resolves");
+        assert_eq!(modules(&before), vec![vec!["Main".to_owned()]]);
+        assert_eq!(
+            modules(&after),
+            vec![vec!["Helper".to_owned()], vec!["Main".to_owned()]],
+            "the re-resolve picks up the newly imported sibling only"
+        );
+        assert_eq!(after.entry_path, vec!["Main".to_owned()]);
+        assert_eq!(
+            after.scope,
+            ScopeSpec::LooseFile {
+                entry: entry.clone(),
+                module_files: vec![PathBuf::from("Helper.ipe")],
+            }
+        );
+        assert_eq!(after.blame_path, entry);
     }
 
     /// Write an executable fake `cargo` running `body` into a fresh directory

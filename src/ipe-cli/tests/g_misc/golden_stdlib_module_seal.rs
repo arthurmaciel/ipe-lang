@@ -40,7 +40,7 @@ fn write_project(dir: &Path, main: &str) -> bool {
 }
 
 fn e2e_enabled() -> bool {
-    std::env::var("IPE_E2E").is_ok()
+    ipe_env::var("IPE_E2E").is_ok()
 }
 
 /// Compile `main` (a full `Main.ipe` program) through the ipe frontend into an
@@ -77,7 +77,7 @@ fn compile_module_probe(slug: &str, main: &str) -> Option<PathBuf> {
         .join(format!("stdlib_seal_{slug}_{pid}_{uid}_out"));
     let _ = fs::remove_dir_all(&out);
 
-    let built = ipe::build_with_sibling_discovery(&entry, &out, &runtime);
+    let built = ipe::build_loose_file(&entry, &out, &runtime);
     if let Err(e) = built {
         assert!(
             false_marker(),
@@ -530,7 +530,7 @@ fn pubsub_topic_type_mismatch_is_rejected() {
     let entry = tmp.join("src").join("Main.ipe");
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("pubsub_mismatch_{uid}_out"));
     let _ = fs::remove_dir_all(&out);
-    let res = ipe::build_with_sibling_discovery(&entry, &out, &runtime);
+    let res = ipe::build_loose_file(&entry, &out, &runtime);
     assert!(
         res.is_err(),
         "mismatched Topic types (Int vs String) must be rejected; got Ok(_)"

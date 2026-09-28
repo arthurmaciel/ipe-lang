@@ -60,7 +60,7 @@ fn middleware_with_csrf_emits_wrapped_handler() {
 /// `ServerResponse.cookies` field and the `middleware_with_csrf` kernel.
 #[test]
 fn middleware_with_csrf_cargo_builds() {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
     // Emit into a PRIVATE dir this test alone owns, so the compile-only sibling

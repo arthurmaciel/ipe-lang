@@ -55,7 +55,7 @@ fn i186_ipec_accepts_and_bounds_fn_display() {
         return;
     };
 
-    let built = ipe::build_with_sibling_discovery(&entry, &out, &runtime);
+    let built = ipe::build_loose_file(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
         "ipe build must succeed for display_bound: {:?}",
@@ -93,7 +93,7 @@ fn i186_ipec_accepts_and_bounds_fn_display() {
 /// have caught the original SEAL violation (E0277, `ipe build` clean).
 #[test]
 fn i186_cargo_builds_and_runs() {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
 
@@ -106,7 +106,7 @@ fn i186_cargo_builds_and_runs() {
     assert!(runtime.is_ok(), "runtime must resolve for E2E");
     let Ok(runtime) = runtime else { return };
 
-    let built = ipe::build_with_sibling_discovery(&entry, &out, &runtime);
+    let built = ipe::build_loose_file(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
         "ipe build must succeed for display_bound: {:?}",

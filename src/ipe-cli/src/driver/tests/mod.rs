@@ -555,7 +555,7 @@ fn generic_record_program_builds_and_prints_forty_two() {
          unwrap r =\n    r.value\n\n\
          main = Io.println (String.fromInt (unwrap (wrap 42)))\n";
 
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
 
@@ -859,7 +859,7 @@ fn emit_web_app_source(hot_appearance: bool, tag: &str) -> Option<String> {
         hot_appearance,
         ..BuildOptions::from_env()
     };
-    let built = build_with_sibling_discovery_with_options(&entry, &out, &runtime, options);
+    let built = build_loose_file_with_options(&entry, &out, &runtime, options);
     assert!(built.is_ok(), "web app must compile ({tag}): {built:?}");
     // Walk `out/src` and concatenate every emitted `.rs` file: the view body
     // (and thus any hoisted `__ipe_lit` table) lands in a per-module file
@@ -943,7 +943,7 @@ fn find_manifest_returns_none_when_absent() {
 }
 
 /// Two-module program: `Main.ipe` calls a helper in sibling `Lib.ipe`.
-/// `build_with_sibling_discovery` must compile both without IPE-N0020.
+/// `build_loose_file` must compile both without IPE-N0020.
 #[test]
 fn sibling_discovery_compiles_two_module_program() {
     let runtime = resolve_runtime();
@@ -974,7 +974,7 @@ fn sibling_discovery_compiles_two_module_program() {
     .expect("write Main.ipe");
 
     let out = tmp.join("out");
-    let result = build_with_sibling_discovery(&src.join("Main.ipe"), &out, &runtime);
+    let result = build_loose_file(&src.join("Main.ipe"), &out, &runtime);
     assert!(
         result.is_ok(),
         "two-module program must compile via sibling discovery: {:?}",
@@ -1112,7 +1112,7 @@ fn infer_error_in_dep_module_names_dep_file() {
     // Runtime is never accessed: a type error fires at infer, before lower/emit.
     let dummy_runtime = std::env::temp_dir();
     let out = tmp.join("out");
-    let result = build_with_sibling_discovery(&main_path, &out, &dummy_runtime);
+    let result = build_loose_file(&main_path, &out, &dummy_runtime);
 
     // Must fail — the program has a type error in Helper.
     assert!(
@@ -1217,7 +1217,7 @@ fn home_discriminant_cross_module_type_error_names_correct_file() {
 
     let dummy_runtime = std::env::temp_dir();
     let out = tmp.join("out");
-    let result = build_with_sibling_discovery(&src.join("Main.ipe"), &out, &dummy_runtime);
+    let result = build_loose_file(&src.join("Main.ipe"), &out, &dummy_runtime);
 
     // Must fail — type error in Lib.
     assert!(
@@ -1782,6 +1782,93 @@ fn on_disk_ir_cache_hit_serves_a_tampered_entry_verbatim() {
     );
 
     let _ = fs::remove_dir_all(&tmp);
+}
+
+/// A production IR-cache hit on a `Debug.*` program blames the in-memory entry text.
+///
+/// The IR tier's key omits the production flag, so a development build
+/// seeds it and a release build of the same source hits it, then refuses
+/// with IPE-L0140. The refusal renders against the entry source the build
+/// already holds, never a fresh read of `blame_path`, whose disk bytes here
+/// differ.
+#[cfg(unix)] // a cache hit needs a file identity check
+#[test]
+fn production_ir_cache_hit_blames_the_in_memory_entry_source() {
+    let Ok(runtime) = resolve_runtime() else {
+        return;
+    };
+    let tmp = std::env::temp_dir().join(format!("ipec-ir-cache-blame-{}", std::process::id()));
+    let cache_dir = tmp.join("cache");
+    let cache_site = crate::cache::CacheSite::Explicit(cache_dir.clone());
+    let _ = fs::remove_dir_all(&tmp);
+    fs::create_dir_all(&tmp).expect("create scratch dir");
+    let blame_path = tmp.join("package.ipe");
+    fs::write(&blame_path, "on-disk bytes the refusal must not show\n").expect("write blame file");
+
+    let entry_path = vec!["Main".to_owned()];
+    let entry_file = tmp.join("Main.ipe");
+    let entry_text = "module Main exposing (main)\n\nimport Ipe.Io as Io\nimport Ipe.Debug as Debug\n\nshout : String -> String\nshout s =\n    Debug.log \"shout\" s\n\nmain : Task Error ()\nmain =\n    Io.println (shout \"hi\")\n";
+    let mut sources: BTreeMap<Vec<String>, (PathBuf, String)> = BTreeMap::new();
+    sources.insert(
+        entry_path.clone(),
+        (entry_file.clone(), entry_text.to_owned()),
+    );
+    let discovered = vec![project::DiscoveredModule::user(
+        entry_file.clone(),
+        entry_path.clone(),
+    )];
+
+    let (dev, dev_outcome) = compile_modules_observed(
+        sources.clone(),
+        discovered.clone(),
+        &entry_path,
+        &tmp.join("out-dev"),
+        &runtime,
+        &blame_path,
+        ipe_backend_rust::DbDriver::Sqlite,
+        Some(&cache_site),
+        BuildOptions::default(),
+    );
+    let (release, release_outcome) = compile_modules_observed(
+        sources,
+        discovered,
+        &entry_path,
+        &tmp.join("out-release"),
+        &runtime,
+        &blame_path,
+        ipe_backend_rust::DbDriver::Sqlite,
+        Some(&cache_site),
+        BuildOptions {
+            production: true,
+            ..BuildOptions::default()
+        },
+    );
+    let _ = fs::remove_dir_all(&tmp);
+
+    assert!(
+        dev.is_ok(),
+        "the development build succeeds: {:?}",
+        dev.err()
+    );
+    assert_eq!(dev_outcome, CacheOutcome::Miss);
+    assert_eq!(
+        release_outcome,
+        CacheOutcome::IrHit,
+        "the release build must take the IR-cache fast path under test"
+    );
+    assert!(
+        matches!(release, Err(CliError::Pipeline { .. })),
+        "the release build must refuse with a pipeline diagnostic: {release:?}"
+    );
+    let Err(CliError::Pipeline { file, src, diag }) = release else {
+        return;
+    };
+    assert_eq!(diag.code().as_str(), "IPE-L0140");
+    assert_eq!(file, entry_file, "the refusal blames the entry module");
+    assert_eq!(
+        src, entry_text,
+        "the refusal renders the in-memory entry text, not a disk re-read"
+    );
 }
 
 /// A cache disabled via `cache_dir: None` never touches disk for
@@ -2644,6 +2731,105 @@ fn unsafe_scan_single_file_fallback_fails_closed_on_unreadable_entry() {
     );
 }
 
+/// An unreadable imported module fails both consent scans closed.
+///
+/// Neither scan may judge the entry alone when a module it imports cannot be
+/// read — that module's `.Unsafe`/native imports would go unseen.
+#[cfg(unix)]
+#[test]
+fn consent_scans_fail_closed_on_unreadable_imported_module() {
+    use std::fs;
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = unsafe_scan_test_dir("sibling-fail");
+    let entry = dir.join("Main.ipe");
+    fs::write(
+        &entry,
+        "module Main exposing (main)\n\nimport Helper\n\nmain = Helper.h\n",
+    )
+    .expect("write entry");
+    let helper = dir.join("Helper.ipe");
+    fs::write(&helper, "module Helper exposing (h)\n\nh = 1\n").expect("write Helper");
+    fs::set_permissions(&helper, fs::Permissions::from_mode(0o000)).expect("chmod 000");
+
+    let unsafe_scan = user_sources_for_unsafe_scan(None, &entry);
+    let web_scan = named_sources_for_web_scan(None, &entry);
+
+    let _ = fs::set_permissions(&helper, fs::Permissions::from_mode(0o644));
+    let _ = fs::remove_dir_all(&dir);
+
+    assert!(
+        matches!(&unsafe_scan, Err(CliError::Io { path, .. }) if path.ends_with("Helper.ipe")),
+        "unsafe scan must name the unreadable module, got: {unsafe_scan:?}"
+    );
+    assert!(
+        matches!(&web_scan, Err(CliError::Io { path, .. }) if path.ends_with("Helper.ipe")),
+        "web scan must name the unreadable module, got: {web_scan:?}"
+    );
+}
+
+/// A closure one module past the loose-file limit fails both consent scans closed.
+#[test]
+fn consent_scans_fail_closed_on_closure_past_the_module_limit() {
+    use std::fmt::Write as _;
+    use std::fs;
+
+    let dir = unsafe_scan_test_dir("closure-limit");
+    let count = crate::loose_file::MAX_LOOSE_FILE_MODULES + 1;
+    let mut entry_text = String::from("module Main exposing (main)\n\n");
+    for i in 0..count {
+        let _ = writeln!(entry_text, "import M{i}");
+        fs::write(
+            dir.join(format!("M{i}.ipe")),
+            format!("module M{i} exposing ()\n"),
+        )
+        .expect("write module");
+    }
+    entry_text.push_str("\nmain = 1\n");
+    let entry = dir.join("Main.ipe");
+    fs::write(&entry, &entry_text).expect("write entry");
+
+    let unsafe_scan = user_sources_for_unsafe_scan(None, &entry);
+    let web_scan = named_sources_for_web_scan(None, &entry);
+    let _ = fs::remove_dir_all(&dir);
+
+    assert!(
+        matches!(&unsafe_scan, Err(CliError::DiscoveryLimitReached { .. })),
+        "unsafe scan must refuse the over-limit closure, got: {unsafe_scan:?}"
+    );
+    assert!(
+        matches!(&web_scan, Err(CliError::DiscoveryLimitReached { .. })),
+        "web scan must refuse the over-limit closure, got: {web_scan:?}"
+    );
+}
+
+/// An entry that does not parse is scanned alone, keyed by its own path.
+///
+/// It has no import closure to follow; the build reports the parse error.
+#[test]
+fn consent_scans_read_an_unparseable_entry_alone() {
+    use std::fs;
+
+    let dir = unsafe_scan_test_dir("unparseable");
+    let entry = dir.join("Main.ipe");
+    let text = "module Main exposing (\nimport Ipe.Unsafe\n";
+    fs::write(&entry, text).expect("write entry");
+
+    let unsafe_scan = user_sources_for_unsafe_scan(None, &entry);
+    let web_scan = named_sources_for_web_scan(None, &entry);
+    let _ = fs::remove_dir_all(&dir);
+
+    assert!(
+        matches!(&unsafe_scan, Ok(sources) if sources.as_slice() == [text]),
+        "unsafe scan must see the entry text, got: {unsafe_scan:?}"
+    );
+    let expected = vec![(entry.display().to_string(), text.to_owned())];
+    assert!(
+        matches!(&web_scan, Ok(named) if named == &expected),
+        "web scan must see the entry text keyed by its path, got: {web_scan:?}"
+    );
+}
+
 #[test]
 fn check_exit_code_is_git_style() {
     use crate::version_check::UpgradeAction::*;
@@ -2816,7 +3002,7 @@ fn obligation_error_blames_owning_module_not_narrower_padded_sibling() {
 
     let dummy_runtime = std::env::temp_dir();
     let out = tmp.join("out");
-    let result = build_with_sibling_discovery(&src.join("Main.ipe"), &out, &dummy_runtime);
+    let result = build_loose_file(&src.join("Main.ipe"), &out, &dummy_runtime);
 
     assert!(
         result.is_err(),
@@ -3197,7 +3383,7 @@ fn emitting_into_a_user_directory_is_refused_untouched() {
         cargo_toml: "[package]\nname = \"ipe-app\"\n".to_owned(),
         uses_webview: false,
     };
-    let result = write_emitted_project(&emitted, &dir, &dir.join("no-runtime"), None, false);
+    let result = write_emitted_project(&emitted, &dir, None, &dir.join("no-runtime"), None, false);
     assert!(
         matches!(result, Err(CliError::OutputRefused(_))),
         "emitting into a user directory must be refused, got {result:?}"
@@ -3333,7 +3519,14 @@ fn emitting_into_a_marked_dir_with_planted_links_is_refused() {
     let dir_link = base.join("out-a");
     crate::output_dir::OwnedDir::claim(&dir_link).expect("claim");
     std::os::unix::fs::symlink(&victim, dir_link.join("src")).expect("dir link");
-    let result = write_emitted_project(&emitted, &dir_link, &base.join("no-runtime"), None, false);
+    let result = write_emitted_project(
+        &emitted,
+        &dir_link,
+        None,
+        &base.join("no-runtime"),
+        None,
+        false,
+    );
     assert!(
         matches!(result, Err(CliError::OutputRefused(_))),
         "a symlinked src/ must be refused, got {result:?}"
@@ -3344,7 +3537,14 @@ fn emitting_into_a_marked_dir_with_planted_links_is_refused() {
     crate::output_dir::OwnedDir::claim(&file_link).expect("claim");
     std::os::unix::fs::symlink(victim.join("precious.ipe"), file_link.join("Cargo.toml"))
         .expect("file link");
-    let result = write_emitted_project(&emitted, &file_link, &base.join("no-runtime"), None, false);
+    let result = write_emitted_project(
+        &emitted,
+        &file_link,
+        None,
+        &base.join("no-runtime"),
+        None,
+        false,
+    );
     assert!(
         matches!(result, Err(CliError::OutputRefused(_))),
         "a symlinked Cargo.toml must be refused, got {result:?}"

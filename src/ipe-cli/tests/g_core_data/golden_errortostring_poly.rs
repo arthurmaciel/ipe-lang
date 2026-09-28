@@ -53,7 +53,7 @@ fn try_build(entry: &Path) -> Result<PathBuf, ipe::CliError> {
 }
 
 fn e2e_enabled() -> bool {
-    std::env::var("IPE_E2E").is_ok()
+    ipe_env::var("IPE_E2E").is_ok()
 }
 
 // ─── positive gate ────────────────────────────────────────────────────────────

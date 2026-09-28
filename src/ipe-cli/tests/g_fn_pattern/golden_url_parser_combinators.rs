@@ -21,7 +21,7 @@ fn repo_root() -> PathBuf {
 
 #[test]
 fn url_parser_combinators_ipec_cargo_and_run_zero() {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
 

@@ -52,7 +52,7 @@ const DEFAULT_EMITTED_BUILD_IDLE_SECS: u64 = 180;
 /// non-numeric, zero) uses the default — an unreadable override must never
 /// silently disable the guard.
 fn duration_env_or(var: &str, default_secs: u64) -> Duration {
-    let secs = std::env::var(var)
+    let secs = ipe_env::var(var)
         .ok()
         .and_then(|raw| raw.trim().parse::<u64>().ok())
         .filter(|&s| s > 0)
@@ -344,8 +344,8 @@ pub fn child_shared_target(
 /// target onto a spawned `ipe`/`cargo` child.
 #[must_use]
 pub fn child_shared_target_from_env() -> Option<String> {
-    let shared = std::env::var("IPE_ORACLE_SHARED_TARGET").ok();
-    let ambient = std::env::var("CARGO_TARGET_DIR").ok();
+    let shared = ipe_env::var("IPE_ORACLE_SHARED_TARGET").ok();
+    let ambient = ipe_env::var("CARGO_TARGET_DIR").ok();
     child_shared_target(shared.as_deref(), ambient.as_deref())
 }
 
@@ -375,7 +375,7 @@ pub fn child_shared_target_from_env() -> Option<String> {
 fn build_emitted_binary(golden_name: &str, emitted_dir: &Path) -> Result<String, String> {
     let unique_pkg = rewrite_package_name(emitted_dir, golden_name)?;
 
-    let shared = std::env::var("IPE_ORACLE_SHARED_TARGET").ok();
+    let shared = ipe_env::var("IPE_ORACLE_SHARED_TARGET").ok();
     let target = resolve_emitted_target(shared.as_deref());
 
     // Hermetic resolve: pin the emitted crate's whole dependency graph into a

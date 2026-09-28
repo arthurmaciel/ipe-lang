@@ -83,7 +83,7 @@ fn assert_accepted(name: &str, source: &str, expected_stdout: &str) {
         }
     }
 
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return; // emit-only fast pass
     }
     match e2e_support::build_and_run_rust(name, &out) {
@@ -146,7 +146,7 @@ fn assert_accepted_project(name: &str, files: &[(&str, &str)], expected_stdout: 
     let out = out_dir(name);
     let runtime = crate::support::expect_runtime(name, ipe::resolve_runtime());
     let entry = src.join("Main.ipe");
-    match ipe::build_with_sibling_discovery(&entry, &out, &runtime) {
+    match ipe::build_loose_file(&entry, &out, &runtime) {
         Ok(()) => {}
         Err(CliError::Pipeline { diag, .. }) => {
             assert!(
@@ -165,7 +165,7 @@ fn assert_accepted_project(name: &str, files: &[(&str, &str)], expected_stdout: 
         }
     }
 
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
     match e2e_support::build_and_run_rust(name, &out) {

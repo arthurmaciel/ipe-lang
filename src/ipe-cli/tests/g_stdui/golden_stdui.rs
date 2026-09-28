@@ -77,7 +77,7 @@ fn build_run_m7() -> (PathBuf, crate::support::RunOutcome) {
 /// value is ipec's own correct output, not the golden oracle.
 #[test]
 fn stdui_layout_column_el_text_renders_html() {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
 

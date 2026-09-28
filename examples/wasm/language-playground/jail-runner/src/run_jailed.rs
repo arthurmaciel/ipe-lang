@@ -122,7 +122,7 @@ impl RunCaps {
 /// crates.io token), which must stay outside the jail.
 fn toolchain_binds() -> ToolchainBinds {
     let mut binds = ToolchainBinds::default();
-    if let Some(home) = std::env::var_os("HOME").map(PathBuf::from) {
+    if let Some(home) = ipe_sandbox::home::home_dir() {
         let cargo_bin = home.join(".cargo/bin");
         if cargo_bin.is_dir() {
             binds.path_prepend.push(cargo_bin.clone());

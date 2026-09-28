@@ -79,7 +79,7 @@ fn project_builds_and_emits_all_three_surfaces() {
 /// seed-fixed, so this pins the reproducibility contract.
 #[test]
 fn e2e_runs_and_prints_deterministic_line() {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("elm_coverage_additions_e2e");

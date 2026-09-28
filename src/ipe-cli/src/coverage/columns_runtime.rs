@@ -518,7 +518,7 @@ fn scan_runtime_symbols() -> Option<BTreeSet<String>> {
 /// Locate the runtime crate's `src` directory via `IPE_RUNTIME_DIR` or an
 /// ancestor walk to `src/runtime/rust/src`.
 fn runtime_crate_src() -> Option<PathBuf> {
-    if let Ok(dir) = std::env::var("IPE_RUNTIME_DIR") {
+    if let Ok(dir) = ipe_env::var("IPE_RUNTIME_DIR") {
         let p = PathBuf::from(dir);
         if p.join("mod.rs").is_file() || p.join("lib.rs").is_file() {
             return Some(p);

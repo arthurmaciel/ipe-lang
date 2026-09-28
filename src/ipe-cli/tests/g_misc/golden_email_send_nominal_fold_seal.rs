@@ -143,7 +143,7 @@ fn email_send_nominal_fold_seal_builds() {
         "email_send_nominal_fold_seal: must be accepted (ipe-0), got: {built:?}"
     );
 
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
     // The `email.send` kernel is network-effectful (no deterministic stdout

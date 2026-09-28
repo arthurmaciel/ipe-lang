@@ -77,7 +77,7 @@ fn assert_ipec_gate(fixture: &str, out_suffix: &str, expected: ipe_diagnostics::
 /// Expected output: "green,green,green".
 #[test]
 fn c01_enum_capture_fix1() {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
 
@@ -124,7 +124,7 @@ fn c01_enum_capture_fix1() {
 /// Expected output: "1,5 2,5 3,5".
 #[test]
 fn c02_record_capture_fix1() {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
 
@@ -172,7 +172,7 @@ fn c02_record_capture_fix1() {
 /// Expected output: "hello! hello?".
 #[test]
 fn c13_complex_arg_hoist_t4() {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
 
@@ -245,7 +245,7 @@ fn c14_nested_lambda_noncopy_promoted_accepts() {
         built.err()
     );
 
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
     let outcome = crate::support::build_and_run_emitted("nested_lambda_noncopy", &out);
@@ -330,7 +330,7 @@ fn c06_stream_string_capture_seal() {
         built.err()
     );
 
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
     // Build-only: the fixture is a listening server, so it cannot run-to-exit.

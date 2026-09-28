@@ -343,7 +343,7 @@ pub fn build_in_jail(
     // per call in the long-lived audit/CI process.
     let seccomp_owned = unsafe { OwnedFd::from_raw_fd(seccomp_fd) };
 
-    let host_env = |k: &str| std::env::var_os(k);
+    let host_env = crate::host_env::granted;
     let argv = run_jail_argv(
         tools,
         profile,
@@ -437,7 +437,7 @@ pub fn build_in_jail(
     // Enforce the `env` axis in the launcher (Seatbelt cannot scrub env),
     // mirroring the run jail and the Linux build jail's bwrap `--clearenv`, so a
     // Tier-2 build is confined on the env axis exactly as the shipped app is.
-    let host_env = |k: &str| std::env::var_os(k);
+    let host_env = crate::host_env::granted;
     let scrubbed_env = macos_scrubbed_env(profile, scoped_tmp, &host_env);
 
     let outcome = spawn_and_decode(&argv, Some(&scrubbed_env));
@@ -1118,10 +1118,31 @@ pub fn macos_scrubbed_env(
 /// resolver is shared.
 #[cfg(any(target_os = "macos", target_os = "freebsd"))]
 pub(crate) fn find_in_path(bin: &str) -> Option<PathBuf> {
-    let path = std::env::var_os("PATH")?;
+    let path = ipe_env::var_os("PATH")?;
     std::env::split_paths(&path)
         .map(|dir| dir.join(bin))
         .find(|candidate| candidate.is_file())
+}
+
+/// The user-private root for per-run FreeBSD jail scratch dirs, under `home`.
+///
+/// PURE over the parsed home so the refusal is unit-testable on any host. The
+/// scratch must live under a user-private root: with no absolute home it
+/// refuses rather than fall back to a world-writable `/tmp` (a cross-user
+/// symlink-plant vector at an intermediate ancestor under a root-run jail) or
+/// a relative path (resolved against whatever the working directory is).
+#[cfg(any(target_os = "freebsd", test))]
+pub(crate) fn freebsd_jail_cache_root(home: Option<PathBuf>) -> Result<PathBuf, RunJailDefect> {
+    let tail = Path::new(".cache").join("ipe").join("jail");
+    let Some(home) = home else {
+        return Err(RunJailDefect::MountFailed {
+            target: tail,
+            detail: "HOME is unset or not an absolute path; refusing a jail scratch root \
+                     outside the user-private home"
+                .to_owned(),
+        });
+    };
+    Ok(home.join(tail))
 }
 
 /// The FreeBSD jail's network-axis parameters for the given grant.
@@ -1283,7 +1304,7 @@ mod freebsd_jail {
 
         // Env scrub in the launcher (the jail does not scrub the inherited env),
         // via the SAME allowlist the macOS/Windows arms use — one env list.
-        let host_env = |k: &str| std::env::var_os(k);
+        let host_env = crate::host_env::granted;
         let scrubbed = macos_scrubbed_env(profile, scoped_tmp.as_path(), &host_env);
 
         // Apply the rctl process-cap rule (withheld subprocess only) BEFORE the
@@ -1813,19 +1834,9 @@ mod freebsd_jail {
     /// Rooted under the invoking user's home cache (`~/.cache/ipe/jail/`) rather
     /// than the world-writable `/tmp`. A user-private directory is not accessible
     /// to other local users, removing the class of pre-plant / symlink-swap attacks
-    /// that world-writable `/tmp` enables. Falls back to `$TMPDIR` or `/tmp` only
-    /// when the home directory is genuinely unavailable, which is recorded in the
-    /// returned path so the caller can detect and refuse if required.
+    /// that world-writable `/tmp` enables. An unset or relative home is refused.
     fn private_cache_root() -> Result<PathBuf, RunJailDefect> {
-        // The jail scratch must live under a user-private root. `$HOME` is that
-        // root; when it is unset we refuse rather than fall back to a
-        // world-writable `/tmp`, which under a root-run jail is a cross-user
-        // symlink-plant vector at an intermediate ancestor.
-        let home = std::env::var_os("HOME").ok_or_else(|| RunJailDefect::MountFailed {
-            target: PathBuf::from(".cache/ipe/jail"),
-            detail: "HOME is unset; refusing a world-writable jail scratch root".to_owned(),
-        })?;
-        Ok(PathBuf::from(home).join(".cache").join("ipe").join("jail"))
+        super::freebsd_jail_cache_root(crate::home::home_dir())
     }
 
     /// Create a per-run directory EXCLUSIVELY under `parent`, using a random
@@ -2739,6 +2750,27 @@ mod tests {
         // the resulting exec failure as a non-clean outcome, never a silent Clean.
         let args = jail_command_args(&[]);
         assert_eq!(args, vec![std::ffi::OsString::from("command=")]);
+    }
+
+    #[test]
+    fn the_freebsd_jail_cache_root_lives_under_the_absolute_home() {
+        let got = freebsd_jail_cache_root(Some(PathBuf::from("/home/u")));
+        assert_eq!(got, Ok(PathBuf::from("/home/u/.cache/ipe/jail")));
+    }
+
+    #[test]
+    fn the_freebsd_jail_cache_root_refuses_an_unset_or_relative_home() {
+        // A relative home never reaches the root: the accessor parses it to
+        // `None`, which the root refuses rather than resolving it against the
+        // working directory or falling back to a world-writable `/tmp`.
+        for raw in [None, Some(""), Some("home/u"), Some("./home")] {
+            let home = crate::home::home_dir_from(raw.map(OsString::from));
+            let got = freebsd_jail_cache_root(home);
+            assert!(
+                matches!(got, Err(RunJailDefect::MountFailed { .. })),
+                "{raw:?}: {got:?}"
+            );
+        }
     }
 
     #[test]

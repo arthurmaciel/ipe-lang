@@ -253,7 +253,7 @@ pub fn resolve_and_remove(project_root: &Path, name: &str) -> Result<(), CliErro
 /// # Errors
 /// [`CliError::CacheHomeUnknown`] when neither names an absolute path.
 pub fn default_cache_base() -> Result<PathBuf, CliError> {
-    cache_base_from(std::env::var_os("XDG_CACHE_HOME"), crate::env_dir::home())
+    cache_base_from(ipe_env::var_os("XDG_CACHE_HOME"), crate::env_dir::home())
 }
 
 /// Resolve the cache base from the raw `XDG_CACHE_HOME` value and the home.
@@ -284,7 +284,7 @@ pub fn default_index_root() -> Result<PathBuf, CliError> {
 /// - [`CliError::CacheHomeUnknown`] when `IPE_INDEX_DIR` is unset and no per-user
 ///   cache base can be resolved.
 pub fn index_root() -> Result<PathBuf, CliError> {
-    index_root_from(std::env::var_os(INDEX_DIR_ENV))
+    index_root_from(ipe_env::var_os(INDEX_DIR_ENV))
 }
 
 /// Resolve the index root from the raw `IPE_INDEX_DIR` value.

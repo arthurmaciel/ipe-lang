@@ -913,7 +913,7 @@ fn commit_and_push_steps(
 /// carrying a quote, newline, or other non-alphabet byte selects the browser
 /// path rather than reaching curl's `--config` mini-language.
 fn publish_token() -> Option<crate::login::PublishToken> {
-    std::env::var("GITHUB_TOKEN")
+    ipe_env::var("GITHUB_TOKEN")
         .ok()
         .and_then(|t| crate::login::PublishToken::parse(&t))
         .or_else(crate::login::stored_token)

@@ -52,7 +52,7 @@ fn interp_indented_compiles() {
 /// interpolations resolve.
 #[test]
 fn interp_indented_runs() {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
     let entry = golden_entry("m_interp_indented");

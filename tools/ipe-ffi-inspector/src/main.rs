@@ -70,8 +70,8 @@ fn main() -> ExitCode {
     // `IPE_FFI_XC_{SAVE,LOAD}` env fallbacks reach an inspector spawned by the
     // driver; the sandbox jail clears the environment, so a jailed run only
     // sees the flags the driver passes on argv.
-    let mut xc_save: Option<String> = std::env::var("IPE_FFI_XC_SAVE").ok();
-    let mut xc_load: Option<String> = std::env::var("IPE_FFI_XC_LOAD").ok();
+    let mut xc_save: Option<String> = ipe_env::var("IPE_FFI_XC_SAVE").ok();
+    let mut xc_load: Option<String> = ipe_env::var("IPE_FFI_XC_LOAD").ok();
 
     let mut i = 0;
     while i < raw_args.len() {
@@ -690,7 +690,7 @@ fn run_rustdoc_source(
     // decision, never ours). The jail scrubs the environment, so sandboxed
     // runs always take the self-deleting tempdir.
     let (probe_root, _tempdir_guard): (std::path::PathBuf, Option<tempfile::TempDir>) =
-        if let Some(root) = std::env::var_os("IPE_FFI_PROBE_DIR") {
+        if let Some(root) = ipe_env::var_os("IPE_FFI_PROBE_DIR") {
             let d = std::path::Path::new(&root).join(&safe_name);
             std::fs::create_dir_all(&d).map_err(|e| format!("probe dir: {e}"))?;
             (d, None)
@@ -2340,7 +2340,7 @@ fn parse_rustdoc(doc: &serde_json::Value, crate_name: &str, version: &str) -> Pk
                 .unwrap_or_default();
             let self_rust = for_val.map(rustdoc_type_to_rust_str).unwrap_or_default();
 
-            if std::env::var("IPE_FFI_DBG").is_ok() {
+            if ipe_env::var("IPE_FFI_DBG").is_ok() {
                 eprintln!("[DBG0] impl block: self_ipe={self_ipe:?} self_rust={self_ipe:?}");
             }
             if self_ipe.is_empty() {
@@ -2404,7 +2404,7 @@ fn parse_rustdoc(doc: &serde_json::Value, crate_name: &str, version: &str) -> Pk
             };
             let struct_generics = for_val.and_then(|v| struct_generics_of(v, index));
 
-            if std::env::var("IPE_FFI_DBG").is_ok() {
+            if ipe_env::var("IPE_FFI_DBG").is_ok() {
                 eprintln!(
                     "[DBG0b] about to walk items: self_ipe={self_ipe:?} is_inherent={is_inherent_impl} items_count={}",
                     impl_data["items"].as_array().map_or(0, std::vec::Vec::len)
@@ -2415,7 +2415,7 @@ fn parse_rustdoc(doc: &serde_json::Value, crate_name: &str, version: &str) -> Pk
             if let Some(items) = impl_data["items"].as_array() {
                 for method_id in items {
                     let id = item_id_to_str(method_id);
-                    if std::env::var("IPE_FFI_DBG").is_ok() {
+                    if ipe_env::var("IPE_FFI_DBG").is_ok() {
                         eprintln!(
                             "[DBG1] impl method id={id:?} self_ipe={self_ipe:?} is_inherent={is_inherent_impl}"
                         );
@@ -2579,7 +2579,7 @@ fn parse_rustdoc(doc: &serde_json::Value, crate_name: &str, version: &str) -> Pk
                             // parse_fn_item's `recv.m()` method-call form) closes
                             // that gap. A non-trait inherent non-generic method
                             // stays on parse_fn_item (no qualifier needed).
-                            if std::env::var("IPE_FFI_DBG").is_ok() {
+                            if ipe_env::var("IPE_FFI_DBG").is_ok() {
                                 eprintln!(
                                     "[DBG2] method={method_name:?} self_ipe={self_ipe:?} self_rust={self_rust:?} is_inherent={is_inherent_impl} generic_bearing={generic_bearing} trait_self_concrete={trait_self_concrete}"
                                 );
@@ -2643,7 +2643,7 @@ fn parse_rustdoc(doc: &serde_json::Value, crate_name: &str, version: &str) -> Pk
                                 &aliases,
                                 Some((&self_ipe, &self_rust)),
                             );
-                            if std::env::var("IPE_FFI_DBG").is_ok() {
+                            if ipe_env::var("IPE_FFI_DBG").is_ok() {
                                 eprintln!(
                                     "[DBG] parse_fn_item({:?}, self_ipe={:?}, self_rust={:?}) => {:?}",
                                     method_name,
@@ -2955,7 +2955,7 @@ fn parse_rustdoc(doc: &serde_json::Value, crate_name: &str, version: &str) -> Pk
     // `ipe_ffi_generics.rs` synthesizes those wrappers differently (UFCS).
     functions.retain(|f| {
         let keep = f.method_name == "to_string" || f.generic.is_some() || fn_types_nameable(f);
-        if !keep && std::env::var("IPE_FFI_DBG").is_ok() {
+        if !keep && ipe_env::var("IPE_FFI_DBG").is_ok() {
             eprintln!(
                 "[DBG-NAMEABLE-DROP] name={:?} recv={:?} params={:?} results={:?}",
                 f.name,
@@ -6506,7 +6506,7 @@ fn std_trait_tag(trait_node: &serde_json::Value) -> Option<&'static str> {
         let key = item_id_to_str(id);
         // (1) Confirmed std by resolved canonical path.
         if let Some(tag) = STD_TRAIT_BY_ID.with(|m| m.borrow().get(&key).copied()) {
-            if std::env::var("IPE_FFI_DBG").is_ok() {
+            if ipe_env::var("IPE_FFI_DBG").is_ok() {
                 eprintln!(
                     "[STD_TRAIT_TAG] id={key:?} path={:?} → STD_TRAIT_BY_ID hit",
                     trait_node.get("path")
@@ -6518,7 +6518,7 @@ fn std_trait_tag(trait_node: &serde_json::Value) -> Option<&'static str> {
         let in_local_type_ids = LOCAL_TYPE_IDS.with(|s| s.borrow().contains(&key));
         let in_reachable_paths = REACHABLE_PATHS.with(|c| c.borrow().contains_key(&key));
         let is_local = in_local_type_ids || in_reachable_paths;
-        if std::env::var("IPE_FFI_DBG").is_ok() {
+        if ipe_env::var("IPE_FFI_DBG").is_ok() {
             eprintln!(
                 "[STD_TRAIT_TAG] id={key:?} path={:?} in_local_type_ids={in_local_type_ids} in_reachable_paths={in_reachable_paths}",
                 trait_node.get("path")
@@ -10524,7 +10524,7 @@ fn try_parametric_stub(
     // `AsRef<str>+AsRef<Path>` conflict → None → also drops.
     //
     // Constraint 7 (no panic/index/unwrap): uses .get()/if let/match throughout.
-    if std::env::var("IPE_FFI_DBG").is_ok() {
+    if ipe_env::var("IPE_FFI_DBG").is_ok() {
         eprintln!(
             "[MONO-PRE] method={method_name:?} tyvars={:?} all_bounds_keys={:?}",
             tyvars,

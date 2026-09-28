@@ -21,6 +21,7 @@ sha2 = "0.10"
 ryu = "1"
 
 [dev-dependencies]
+ipe_env = { path = "../../env" }
 # The const-fold conformance test calls the REAL runtime string builders
 # (`string_from_int` / `string_from_float` / `string_join`) directly and asserts
 # they are byte-identical to `const_fold`'s reproductions — the dev == prod

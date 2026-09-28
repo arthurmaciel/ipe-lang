@@ -75,7 +75,7 @@ fn build_run_onclick() -> (PathBuf, crate::support::RunOutcome) {
 /// bottom-up from the event payload — no turbofish fallback to `()`.
 #[test]
 fn onclick_in_non_view_fn_propagates_m_bottom_up() {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
 

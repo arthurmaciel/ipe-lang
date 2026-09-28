@@ -432,7 +432,7 @@ fn routed_empty_routes_well_typed_compiles_and_renders_route_page() {
 /// (E0308/E0107) still fails — so the warm deps never mask a SEAL break.
 #[test]
 fn routed_empty_routes_well_typed_cargo_builds() {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
     // Emit into a PRIVATE dir this test alone owns, so the compile-only sibling

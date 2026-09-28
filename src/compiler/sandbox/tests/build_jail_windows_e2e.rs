@@ -28,7 +28,7 @@ use ipe_sandbox::run_jail::{FilesystemScope, RunJailTools, SandboxProfile};
 /// Skip unless `IPE_E2E=1`. Absent, these tests do nothing (the CI job asserts
 /// the primitives separately as a hard, refuse-to-certify failure).
 fn e2e_enabled() -> bool {
-    std::env::var_os("IPE_E2E").is_some_and(|v| v == "1")
+    ipe_env::var_os("IPE_E2E").is_some_and(|v| v == "1")
 }
 
 /// A per-test scratch under the process temp dir (NTFS on the hosted image, so
@@ -41,7 +41,7 @@ fn scratch_dir(tag: &str) -> PathBuf {
 }
 
 fn powershell() -> PathBuf {
-    if let Some(path) = std::env::var_os("PATH") {
+    if let Some(path) = ipe_env::var_os("PATH") {
         for dir in std::env::split_paths(&path) {
             let candidate = dir.join("powershell.exe");
             if candidate.is_file() {
@@ -49,7 +49,7 @@ fn powershell() -> PathBuf {
             }
         }
     }
-    let root = std::env::var_os("SystemRoot").unwrap_or_else(|| OsString::from("C:\\Windows"));
+    let root = ipe_env::var_os("SystemRoot").unwrap_or_else(|| OsString::from("C:\\Windows"));
     PathBuf::from(root).join("System32\\WindowsPowerShell\\v1.0\\powershell.exe")
 }
 
