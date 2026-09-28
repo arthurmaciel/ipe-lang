@@ -25,6 +25,7 @@ import sys
 import tempfile
 import textwrap
 import unittest
+from unittest import mock
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 MODULE_PATH = os.path.join(HERE, "verify-manifest.py")
@@ -52,7 +53,10 @@ def _write(path: str, content: str) -> None:
 
 
 # The `.github/ci/` tools a fixture holds: a tool run names a file that exists.
-FIXTURE_TOOLS = ("verify-manifest.py", "artifact-guard.sh", "github-env.sh", "strict_yaml.py", "release_only.py")
+FIXTURE_TOOLS = (
+    "verify-manifest.py", "artifact-guard.sh", "github-env.sh", "strict_yaml.py", "release_only.py",
+    "deterministic_checks_output.py",
+)
 
 
 class SccacheFixture:
@@ -2257,6 +2261,150 @@ class TestToolOrderingAndClosedShells(unittest.TestCase):
         ):
             self.job_refused(pre + _run("Verify", _TOOL), "step 'Verify'", "after step 'Pre'")
 
+    # ---- a verdict-bearing job cannot be masked ---------------------------
+
+    _OUTPUT = "python3 .github/ci/deterministic_checks_output.py"
+    _ADVISORY = "python3 .github/ci/release_only.py"
+    _JOB_MASKS = (
+        ("if: always()\n", "if:"),
+        ("if: false\n", "if:"),
+        ("if: ${{ github.event_name == 'push' }}\n", "if:"),
+        ("continue-on-error: true\n", "continue-on-error:"),
+        ("continue-on-error: ${{ true }}\n", "continue-on-error:"),
+    )
+
+    def test_job_level_masking_on_a_verdict_job_is_refused(self) -> None:
+        for job, key in self._JOB_MASKS:
+            self.job_refused(
+                f"- uses: {_CHECKOUT}\n" + _run("Verify", _TOOL),
+                f"with a job {key}", "verify-manifest.py", "reports success", job=job,
+            )
+
+    def test_job_level_masking_on_an_advisory_job_is_refused(self) -> None:
+        # Its outputs steer other jobs' `if:`; a skipped job leaves them unset.
+        for job, key in self._JOB_MASKS:
+            self.job_refused(
+                f"- uses: {_CHECKOUT}\n" + _run("Classify", self._ADVISORY, "continue-on-error: true\n"),
+                f"with a job {key}", job=job,
+            )
+
+    def test_job_level_if_with_an_output_and_a_verdict_tool_is_refused(self) -> None:
+        self.job_refused(
+            f"- uses: {_CHECKOUT}\n" + _run("Emit", self._OUTPUT) + _run("Verify", _TOOL),
+            "with a job if:", "verify-manifest.py", job="if: always()\n",
+        )
+
+    def test_output_tool_terminal_job_admits_a_job_if(self) -> None:
+        for job in ("if: github.event_name == 'pull_request'\n", "if: ${{ failure() }}\n"):
+            self.job_accepted(
+                f"- uses: {_CHECKOUT}\n  with:\n    sparse-checkout: .github/ci\n"
+                + _run("Emit", self._OUTPUT) + _run("Act", "echo acting"),
+                job=job,
+            )
+
+    def test_output_tool_job_refuses_continue_on_error(self) -> None:
+        for job in ("continue-on-error: true\n", "continue-on-error: ${{ true }}\n"):
+            self.job_refused(
+                f"- uses: {_CHECKOUT}\n" + _run("Emit", self._OUTPUT),
+                "with a job continue-on-error:", job=job,
+            )
+
+    def test_output_tool_step_admits_no_step_masking(self) -> None:
+        for extra in ("if: always()\n", "continue-on-error: true\n"):
+            self.job_refused(
+                f"- uses: {_CHECKOUT}\n" + _run("Emit", self._OUTPUT, extra),
+                "step 'Emit' names", "but is not itself one of",
+            )
+
+    def test_masked_output_job_that_another_job_needs_is_refused(self) -> None:
+        self.fx.workflow(
+            "t.yml",
+            "name: t\non: push\njobs:\n"
+            "  t:\n    runs-on: ubuntu-latest\n    if: always()\n    steps:\n"
+            f"      - uses: {_CHECKOUT}\n"
+            f"      - name: Emit\n        run: {self._OUTPUT}\n"
+            "  u:\n    runs-on: ubuntu-latest\n    needs: [t]\n    steps:\n"
+            "      - name: Echo\n        run: echo hi\n",
+        )
+        self.assertRefused("job 't'", "job(s) ['u'] need it", "skips its dependents")
+
+    # ---- the tool job's shape: closed keys, a literal budget --------------
+
+    def test_tool_job_key_outside_the_allowlist_is_refused(self) -> None:
+        for job, key in (
+            ("strategy:\n  matrix:\n    x: [1, 2]\n", "strategy"),
+            ("strategy:\n  fail-fast: false\n", "strategy"),
+            ("concurrency: t\n", "concurrency"),
+            ("environment: prod\n", "environment"),
+        ):
+            self.job_refused(
+                f"- uses: {_CHECKOUT}\n" + _run("Verify", _TOOL),
+                f"with a job {key}:", "outside the tool job keys", job=job,
+            )
+
+    def test_tool_job_timeout_must_be_a_positive_integer_literal(self) -> None:
+        for value in ("0", "-1", "${{ 0 }}", "${{ 30 }}", "true", "1.5", "'5'"):
+            self.job_refused(
+                f"- uses: {_CHECKOUT}\n" + _run("Verify", _TOOL),
+                "with a job timeout-minutes:", "not a positive integer literal",
+                job=f"timeout-minutes: {value}\n",
+            )
+        self.job_accepted(f"- uses: {_CHECKOUT}\n" + _run("Verify", _TOOL), job="timeout-minutes: 10\n")
+
+    def test_step_timeout_must_be_a_positive_integer_literal(self) -> None:
+        for value in ("0", "${{ 0 }}", "true", "'5'"):
+            extra = f"timeout-minutes: {value}\n"
+            self.job_refused(
+                f"- uses: {_CHECKOUT}\n" + _run("Verify", _TOOL, extra),
+                "step 'Verify' names", "timeout-minutes", "not a positive integer literal",
+            )
+            self.job_refused(
+                f"- name: Pre\n  uses: {_CHECKOUT}\n  {extra}" + _run("Verify", _TOOL),
+                "step 'Verify'", "after step 'Pre'",
+            )
+        self.job_accepted(
+            f"- uses: {_CHECKOUT}\n  timeout-minutes: 5\n" + _run("Verify", _TOOL, "timeout-minutes: 10\n")
+        )
+
+    def test_unicode_digit_runner_label_is_refused(self) -> None:
+        for runs_on in ("ubuntu-\u0662\u0664", "ubuntu-24.\u0660\u0664", "ubuntu-\uff12\uff14"):
+            self.assertIsNone(verify_manifest.RunnerLabel.parse(runs_on))
+            self.job_refused(
+                f"- uses: {_CHECKOUT}\n" + _run("Verify", _TOOL),
+                "not one literal GitHub-hosted Ubuntu label", runs_on=runs_on,
+            )
+        for runs_on in ("ubuntu-latest", "ubuntu-24.04", "ubuntu-22.04-arm", "ubuntu-24.04-arm64"):
+            self.job_accepted(f"- uses: {_CHECKOUT}\n" + _run("Verify", _TOOL), runs_on=runs_on)
+
+    def test_role_masking_is_exhaustive_and_verdicts_admit_none(self) -> None:
+        vm = verify_manifest
+        self.assertEqual(set(vm.ROLE_MASKING), set(vm.ToolRole))
+        for masking in vm.ROLE_MASKING.values():
+            self.assertLessEqual(masking.step | masking.job, vm.MASKING_KEYS)
+            self.assertNotIn("if", masking.step)
+            self.assertNotIn("continue-on-error", masking.job)
+        verdict = vm.ROLE_MASKING[vm.ToolRole.VERDICT]
+        self.assertEqual(verdict.step | verdict.job, frozenset())
+        self.assertEqual(vm.TOOL_ROLES.get("verify-manifest.py", vm.ToolRole.VERDICT), vm.ToolRole.VERDICT)
+
+    def test_live_masked_tool_jobs_parse_as_output_jobs(self) -> None:
+        vm = verify_manifest
+        errors: list[str] = []
+        wfs = {wf.fname: wf for wf in vm._load_sccache_workflows(vm.REPO_ROOT, errors)}
+        self.assertEqual(errors, [])
+        for fname, job_id, masking in (
+            ("ci.yml", "cancel-on-cheap-red", {"if"}),
+            ("rerun-failed-once.yml", "rerun", {"if"}),
+            ("ci.yml", "changes", set()),
+        ):
+            with self.subTest(job=job_id):
+                wf = wfs[fname]
+                job = next(j for j in wf.jobs if j.job_id == job_id)
+                jloc = f"{fname}: job {job_id!r}"
+                parsed = vm.ToolJob.parse(wf, job, vm._typed_steps(job.raw, jloc, errors), jloc, vm.REPO_ROOT)
+                self.assertIsInstance(parsed, vm.ToolJob, parsed)
+                self.assertEqual(parsed.masking, masking)
+
     # ---- a closed shape's with: is literal --------------------------------
 
     def test_expression_in_a_closed_with_is_refused(self) -> None:
@@ -2455,6 +2603,49 @@ class TestGithubEnvHelper(unittest.TestCase):
             with self.subTest(args=args):
                 self.assertNotEqual(self.run_helper(*args), 0)
                 self.assertEqual(self.written(), "")
+
+
+class TestDeterministicSetMasking(unittest.TestCase):
+    """A deterministic check step runs unmasked, and its job's failure is
+    never ignored (a job-level `if:` only skips, which never fires the
+    cancel)."""
+
+    def errors_for(self, job_extra: str, step_extra: str = "") -> list[str]:
+        vm = verify_manifest
+        with tempfile.TemporaryDirectory() as tmp:
+            _write(
+                os.path.join(tmp, "workflows", "ci.yml"),
+                "name: ci\non: push\njobs:\n"
+                "  clippy:\n    runs-on: ubuntu-latest\n" + textwrap.indent(job_extra, "    ")
+                + "    steps:\n      - name: Run clippy\n        run: cargo clippy\n"
+                + textwrap.indent(step_extra, "        "),
+            )
+            jobs = [
+                vm.Job("ci.yml", "clippy", ["clippy"], []),
+                vm.Job("ci.yml", vm.CANCEL_WATCHER_JOB_ID, ["cancel"], ["clippy"]),
+            ]
+            errors: list[str] = []
+            with mock.patch.object(vm, "REPO_ROOT", tmp), mock.patch.object(
+                vm, "load_deterministic_checks", lambda errs: [("clippy", "Run clippy")]
+            ):
+                vm.check_deterministic_set(jobs, errors)
+            return errors
+
+    def test_unmasked_check_and_a_path_filter_if_pass(self) -> None:
+        self.assertEqual(self.errors_for(""), [])
+        self.assertEqual(self.errors_for("if: needs.changes.outputs.code == 'true'\n"), [])
+
+    def test_job_level_continue_on_error_is_refused(self) -> None:
+        for value in ("true", "${{ true }}", "false"):
+            with self.subTest(value=value):
+                errors = self.errors_for(f"continue-on-error: {value}\n")
+                self.assertTrue(any("job-level `continue-on-error:`" in e for e in errors), errors)
+
+    def test_masked_check_step_is_refused(self) -> None:
+        for extra in ("if: always()\n", "continue-on-error: true\n"):
+            with self.subTest(extra=extra):
+                errors = self.errors_for("", extra)
+                self.assertTrue(any("must run unconditionally" in e for e in errors), errors)
 
 
 if __name__ == "__main__":

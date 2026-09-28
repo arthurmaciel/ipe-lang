@@ -93,11 +93,16 @@ Checks performed
      setup-python with a closed literal `with:` and no `env:`, the canonical
      pip install with no `env:`, a typed `ToolRun` of a file that exists
      under `.github/ci`, its words split only on bash's blanks
-     `shell_lex.BLANKS`; none with `if:` or `continue-on-error:` save an
-     `ADVISORY_TOOLS` run), on a literal GitHub-hosted Ubuntu runner (a fresh
-     machine per job) with no container or services, and with every `env:`
-     key at workflow, job, and tool-step scope drawn from one allowlist
-     (`TOOL_ENV_ALLOWLIST`). No `working-directory` anywhere names
+     `shell_lex.BLANKS`; any `timeout-minutes` a positive integer literal).
+     The job is parsed once into a `ToolJob`: a literal GitHub-hosted Ubuntu
+     runner (a fresh machine per job), job keys from one closed allowlist
+     (`TOOL_JOB_KEYS`: no container, services, strategy, concurrency, or
+     environment), every `env:` key at workflow, job, and tool-step scope
+     drawn from one allowlist (`TOOL_ENV_ALLOWLIST`), and a masking key
+     (`MASKING_KEYS`: `if:`, `continue-on-error:`) on a step or on the job
+     only where every tool's `ToolRole` admits it (`ROLE_MASKING`): a
+     verdict tool admits none, an advisory tool's step a literal
+     `continue-on-error: true`, an output tool's terminal job an `if:`. No `working-directory` anywhere names
      `.github`. A quote-removed scan refusing writes into the tree is
      defence in depth under that rule, not its proof.
 
@@ -595,10 +600,18 @@ def check_deterministic_set(jobs: list[Job], errors: list[str]) -> None:
                 f"one step named {step!r} (found {len(named)})"
             )
             continue
-        if "if" in named[0] or "continue-on-error" in named[0]:
+        if MASKING_KEYS.intersection(named[0]):
             errors.append(
                 f"{DETERMINISTIC_CHECKS_FILE}: step {step!r} of job {job_id!r} "
                 "must run unconditionally: no `if:` and no `continue-on-error:`"
+            )
+        # A job-level `if:` is admitted: a path-filtered skip never fires the
+        # cancel, the conservative outcome for the watcher. A failure-ignored
+        # job would hand the watcher a red step under a green job.
+        if "continue-on-error" in raw_job:
+            errors.append(
+                f"{DETERMINISTIC_CHECKS_FILE}: job {job_id!r} has a job-level "
+                "`continue-on-error:`; a deterministic check's failure must fail its job"
             )
 
     needed = set(watcher.needs)
@@ -1479,23 +1492,125 @@ PINNED_CHECKOUT_USES = frozenset({
 CHECKOUT_WITH_KEYS = frozenset({"fetch-depth", "persist-credentials", "sparse-checkout", "sparse-checkout-cone-mode"})
 PINNED_SETUP_PYTHON_USES = frozenset({"actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065"})
 SETUP_PYTHON_WITH_KEYS = frozenset({"python-version"})
-# The keys a closed shape may carry. Neither `if:` nor `continue-on-error:` is
-# one: on the tool step either masks its verdict (a skipped or failure-ignored
-# check reports green); on a setup step a skip or an ignored failure leaves the
+# The keys that can turn a red step or job green: a skipped step or job, and a
+# failure-ignored one, both report success (GitHub counts a skipped required
+# check as passing). On a setup step a skip or an ignored failure leaves the
 # tool under the runner's own interpreter and packages, or over a partial
-# checkout, a state the tool is not proven to fail red on.
+# checkout, a state the tool is not proven to fail red on. Every site that
+# vouches for a verdict reads masking through this one set.
+MASKING_KEYS = frozenset({"if", "continue-on-error"})
+# The keys a closed shape may carry, masking keys excepted: those are admitted
+# only per `ToolRole` (`ROLE_MASKING`).
 PRE_TOOL_STEP_KEYS = frozenset({"name", "id", "env", "run", "uses", "with", "timeout-minutes", "shell"})
-# The tools whose step may carry `continue-on-error: true`, the literal: each
-# one's only effect is a step output that a crash leaves unset, and every
-# consumer reads an unset output as the conservative default (`release_only`
-# unset runs every tier). A verdict-bearing tool is never listed.
-ADVISORY_TOOLS = frozenset({"release_only.py"})
+# The job keys a tool job may carry, masking keys excepted (admitted per
+# `ToolRole`). Closed: `container:`/`services:` outlive the job's steps;
+# `strategy:` expands legs (and a per-leg `continue-on-error`) from a matrix
+# that may be chosen at run time and renames the job's status contexts;
+# `concurrency:` lets another run cancel the job; `environment:` injects
+# variables and secrets the tool env allowlist never sees; `uses:` runs a
+# reusable workflow outside this check. None is needed by a tool job.
+TOOL_JOB_KEYS = frozenset({"name", "runs-on", "steps", "needs", "permissions", "outputs", "env", "defaults", "timeout-minutes"})
 # A tool job runs on a GitHub-hosted Ubuntu label: a fresh virtual machine per
 # job (no earlier job's writes survive into it) whose default shell is bash, the
 # only shell a `ToolRun` is read as. A self-hosted runner keeps its disk across
 # jobs; an expression label is chosen at run time; a Windows or macOS label
-# changes the shell and path rules the tool words are read under.
-UBUNTU_HOSTED_RUNNER_RE = re.compile(r"ubuntu-(?:latest|\d+(?:\.\d+)?)(?:-arm|-arm64)?")
+# changes the shell and path rules the tool words are read under. Digits are
+# ASCII only (`\d` would admit any Unicode decimal digit).
+UBUNTU_HOSTED_RUNNER_RE = re.compile(r"ubuntu-(?:latest|[0-9]+(?:\.[0-9]+)?)(?:-arm|-arm64)?")
+
+
+class ToolRole(enum.Enum):
+    """What a tool's run means to the checks that read its job.
+
+    VERDICT: its exit status is a check verdict. ADVISORY: its only effect is
+    a step output that a crash leaves unset, read by every consumer as the
+    conservative default (`release_only` unset runs every tier). OUTPUT: it
+    publishes an SSOT to later steps of its own job, a terminal job no other
+    job needs, so skipping the job only withholds an action (a cancel, a
+    rerun) and never a verdict.
+    """
+
+    VERDICT = "verdict"
+    ADVISORY = "advisory"
+    OUTPUT = "output"
+
+
+# The tools that are not verdicts; every other tool file is a VERDICT, so a new
+# tool is verdict-bearing until it is listed here.
+TOOL_ROLES: dict[str, ToolRole] = {
+    "release_only.py": ToolRole.ADVISORY,
+    "deterministic_checks_output.py": ToolRole.OUTPUT,
+}
+
+
+@dataclass(frozen=True)
+class RoleMasking:
+    """The masking keys a role admits on its tool step and on its job."""
+
+    step: frozenset[str]
+    job: frozenset[str]
+
+
+# Exhaustive over `ToolRole` (asserted by the test suite). A VERDICT admits no
+# masking key anywhere. An ADVISORY step admits `continue-on-error: true`
+# (its crash leaves the output unset) but its job admits none: the job's
+# outputs steer other jobs' `if:`, so skipping or failure-ignoring the job
+# would skip a verdict job downstream. An OUTPUT job admits `if:` (it is
+# terminal: see `ToolJob`).
+ROLE_MASKING: dict[ToolRole, RoleMasking] = {
+    ToolRole.VERDICT: RoleMasking(frozenset(), frozenset()),
+    ToolRole.ADVISORY: RoleMasking(frozenset({"continue-on-error"}), frozenset()),
+    ToolRole.OUTPUT: RoleMasking(frozenset(), frozenset({"if"})),
+}
+
+
+def _masking_value_admitted(key: str, value: object) -> bool:
+    """Whether an admitted masking key carries an admitted value: a
+    `continue-on-error` only as the literal `true` (an expression is chosen at
+    run time); an `if:` as any string (GitHub reads it as an expression)."""
+    if key == "continue-on-error":
+        return value is True
+    return key == "if" and isinstance(value, str)
+
+
+@dataclass(frozen=True)
+class Timeout:
+    """A `timeout-minutes:` value: a positive integer literal.
+
+    Zero, a bool, a float, a string, and a `${{ }}` expression are refused:
+    each is either chosen at run time or not a budget the job can meet.
+    """
+
+    minutes: int
+
+    @staticmethod
+    def parse(value: object) -> Timeout | None:
+        if type(value) is int and value > 0:
+            return Timeout(value)
+        return None
+
+
+def _optional_timeout(raw: dict) -> Timeout | None | str:
+    """The `timeout-minutes:` of `raw`: absent is None, a `Timeout`, or the
+    refusal text for a present value that is not one."""
+    if "timeout-minutes" not in raw:
+        return None
+    t = Timeout.parse(raw["timeout-minutes"])
+    return t if t is not None else f"timeout-minutes: {raw['timeout-minutes']!r} is not a positive integer literal"
+
+
+@dataclass(frozen=True)
+class RunnerLabel:
+    """A `runs-on:` that is one literal GitHub-hosted Ubuntu label
+    (`UBUNTU_HOSTED_RUNNER_RE`)."""
+
+    label: str
+
+    @staticmethod
+    def parse(value: object) -> RunnerLabel | None:
+        if isinstance(value, str) and UBUNTU_HOSTED_RUNNER_RE.fullmatch(value):
+            return RunnerLabel(value)
+        return None
 # Raw-text words: split at quotes and shell metacharacters after every `\` is
 # read as `/`, so a Windows-separated path is seen as the path it names. This
 # detection scan splits on every whitespace character, a superset of
@@ -1725,36 +1840,73 @@ def _refuse_working_directory(container: dict, loc: str, what: str, repo_top: st
         )
 
 
-def _pre_tool_shape(st: Step, root: str) -> str | None:
-    """Which closed pre-tool shape `st` is, or None: a step whose effect on
-    the runner is fixed and cannot rewrite `.github/ci/**` or steer the
-    interpreters the tools run under."""
+class PreToolKind(enum.Enum):
+    """Which closed setup shape a `PreToolStep` is."""
+
+    CHECKOUT = "pinned checkout"
+    SETUP_PYTHON = "pinned setup-python"
+    PIP_INSTALL = "canonical pip install"
+
+
+@dataclass(frozen=True)
+class PreToolStep:
+    """A closed setup step: a pinned checkout or setup-python with a literal
+    `with:` and no `env:`, or the canonical pip install with no `env:`; no
+    masking key, and a `Timeout` if any."""
+
+    kind: PreToolKind
+    timeout: Timeout | None
+
+
+@dataclass(frozen=True)
+class ToolStep:
+    """A pure run of one `.github/ci` tool (`ToolRun`) with allowlisted
+    `env:`, its `ToolRole`, a `Timeout` if any, and only the masking keys its
+    role admits on a step (`ROLE_MASKING`), each with an admitted value."""
+
+    run: ToolRun
+    role: ToolRole
+    timeout: Timeout | None
+    masking: frozenset[str]
+
+
+ClosedStep = PreToolStep | ToolStep
+
+
+def parse_closed_step(st: Step, root: str) -> ClosedStep | None:
+    """`st` as a closed shape, or None: a step whose effect on the runner is
+    fixed and cannot rewrite `.github/ci/**` or steer the interpreters the
+    tools run under, and whose failure cannot be masked unless its role says
+    the failure carries no verdict."""
     raw = st.raw
-    keys = set(raw) - {"continue-on-error"}
-    if not keys <= PRE_TOOL_STEP_KEYS or raw.get("shell", "bash") != "bash":
+    masking = frozenset(raw) & MASKING_KEYS
+    if not set(raw) - masking <= PRE_TOOL_STEP_KEYS or raw.get("shell", "bash") != "bash":
+        return None
+    timeout = _optional_timeout(raw)
+    if isinstance(timeout, str):
         return None
     uses, run, with_ = raw.get("uses"), raw.get("run"), raw.get("with", {})
     if not isinstance(with_, dict):
         return None
     if isinstance(uses, str) and run is None:
-        if "env" in raw or "continue-on-error" in raw or not _literal_with(with_):
+        if masking or "env" in raw or not _literal_with(with_):
             return None
         if uses in PINNED_CHECKOUT_USES and set(with_) <= CHECKOUT_WITH_KEYS:
-            return "pinned checkout"
+            return PreToolStep(PreToolKind.CHECKOUT, timeout)
         if uses in PINNED_SETUP_PYTHON_USES and set(with_) <= SETUP_PYTHON_WITH_KEYS:
-            return "pinned setup-python"
+            return PreToolStep(PreToolKind.SETUP_PYTHON, timeout)
         return None
     if isinstance(run, str) and uses is None and "with" not in raw:
         if shell_lex.trim(run) == CANONICAL_PIP_INSTALL:
-            return None if "env" in raw or "continue-on-error" in raw else "canonical pip install"
+            return None if masking or "env" in raw else PreToolStep(PreToolKind.PIP_INSTALL, timeout)
         tool = ToolRun.parse(run, root)
         if tool is None or _unadmitted_env_keys(raw, EnvScope.STEP):
             return None
-        if "continue-on-error" in raw and not (
-            raw["continue-on-error"] is True and tool.tool.name in ADVISORY_TOOLS
-        ):
+        role = TOOL_ROLES.get(tool.tool.name, ToolRole.VERDICT)
+        admitted = ROLE_MASKING[role].step
+        if not all(k in admitted and _masking_value_admitted(k, raw[k]) for k in masking):
             return None
-        return ".github/ci tool"
+        return ToolStep(tool, role, timeout, masking)
     return None
 
 
@@ -1797,82 +1949,173 @@ def _tree_reference(node: object, run: str | None, loc: str) -> str | None:
 CLOSED_SHAPES_NOTE = (
     "the closed pre-tool shapes (pinned checkout or setup-python with a literal with: and "
     "no env, the canonical pip install with no env, a pure .github/ci tool run with "
-    "allowlisted env; none with if: or continue-on-error:)"
+    "allowlisted env; any timeout-minutes: a positive integer literal; no if:, and "
+    "continue-on-error: true only on an advisory tool)"
 )
+
+
+def _step_refusal_detail(st: Step) -> list[str]:
+    """Why a tree-naming step is not a `ClosedStep`, as far as a single key
+    says (the shape itself is named by `CLOSED_SHAPES_NOTE`)."""
+    detail = []
+    if "working-directory" in st.raw:
+        detail.append("under a working-directory:")
+    for key in sorted(MASKING_KEYS & set(st.raw)):
+        detail.append(f"with {key}: (its verdict could be masked)")
+    timeout = _optional_timeout(st.raw)
+    if isinstance(timeout, str):
+        detail.append(f"with {timeout}")
+    bad = _unadmitted_env_keys(st.raw, EnvScope.STEP)
+    if bad:
+        detail.append(f"with env {bad}")
+    return detail
+
+
+def _needs_of(raw: dict) -> list[str]:
+    needs = raw.get("needs") or []
+    return [str(n) for n in ([needs] if isinstance(needs, str) else needs if isinstance(needs, list) else [needs])]
+
+
+@dataclass(frozen=True)
+class ToolJob:
+    """A job that names `.github/ci/**`, parsed once.
+
+    `steps` are the job's steps up to and including its last one naming the
+    tree, every one a `ClosedStep`; `runner` a `RunnerLabel`; `timeout` a
+    `Timeout` if any; every job key in `TOOL_JOB_KEYS` save `masking`, the
+    job-level masking keys, which every `ToolStep`'s role must admit on a job
+    (`ROLE_MASKING`; a job with no `ToolStep` admits none). A job carrying
+    one is terminal: no job needs it, since a skipped job skips its
+    dependents and each of them then reports success.
+    """
+
+    runner: RunnerLabel
+    timeout: Timeout | None
+    steps: tuple[ClosedStep, ...]
+    masking: frozenset[str]
+
+    @staticmethod
+    def parse(
+        wf: SccacheWorkflow, job: WorkflowJob, steps: list[Step], jloc: str, root: str
+    ) -> ToolJob | list[str] | None:
+        """The job as a `ToolJob`, its refusals, or None when no step names
+        the tree (the job is then not a tool job)."""
+        refusals: list[str] = []
+        closed: list[ClosedStep] = []
+        prefix: list[ClosedStep] = []
+        tainted: Step | None = None
+        referenced = False
+        for st in steps:
+            shape = parse_closed_step(st, root)
+            if shape is not None and tainted is None:
+                closed.append(shape)
+            hit = _tree_reference(st.raw, st.run, jloc)
+            if hit is not None:
+                referenced = True
+                prefix = list(closed)
+                stloc = f"{jloc} step {st.label!r}"
+                if tainted is not None:
+                    refusals.append(
+                        f"{stloc} names {hit!r} after step {tainted.label!r}, which is outside "
+                        f"{CLOSED_SHAPES_NOTE} — an earlier step could have rewritten "
+                        f"{PROTECTED_TREE}/ or the job's environment; refused"
+                    )
+                if shape is None:
+                    detail = _step_refusal_detail(st)
+                    note = f" ({', '.join(detail)})" if detail else ""
+                    refusals.append(
+                        f"{stloc} names {hit!r} but is not itself one of {CLOSED_SHAPES_NOTE}{note} "
+                        f"— only those may name {PROTECTED_TREE}/; refused"
+                    )
+            if tainted is None and shape is None:
+                tainted = st
+        if not referenced:
+            return None
+        raw = job.raw
+        runs_on = raw.get("runs-on")
+        runner = RunnerLabel.parse(runs_on)
+        if runner is None:
+            refusals.append(
+                f"{jloc} runs {PROTECTED_TREE}/ on runs-on {runs_on!r}, not one literal "
+                "GitHub-hosted Ubuntu label (a fresh virtual machine per job, bash by default); refused"
+            )
+        for key in sorted(str(k) for k in raw):
+            if key in TOOL_JOB_KEYS or key in MASKING_KEYS:
+                continue
+            if key in ("container", "services"):
+                refusals.append(
+                    f"{jloc} runs {PROTECTED_TREE}/ with a job {key}: — its filesystem and "
+                    "processes outlive this job's steps; refused"
+                )
+            else:
+                refusals.append(
+                    f"{jloc} runs {PROTECTED_TREE}/ with a job {key}:, outside the tool job keys "
+                    "(TOOL_JOB_KEYS) — it could expand, cancel, re-scope, or re-home the job "
+                    "outside this check; refused"
+                )
+        timeout = _optional_timeout(raw)
+        if isinstance(timeout, str):
+            refusals.append(f"{jloc} runs {PROTECTED_TREE}/ with a job {timeout}; refused")
+            timeout = None
+        masking = frozenset(raw) & MASKING_KEYS
+        tools = [s for s in prefix if isinstance(s, ToolStep)]
+        admitted = frozenset(MASKING_KEYS)
+        for t in tools:
+            admitted &= ROLE_MASKING[t.role].job
+        if not tools:
+            admitted = frozenset()
+        for key in sorted(masking):
+            if key in admitted and _masking_value_admitted(key, raw[key]):
+                continue
+            verdicts = sorted({t.run.tool.name for t in tools if not ROLE_MASKING[t.role].job >= {key}})
+            refusals.append(
+                f"{jloc} runs {PROTECTED_TREE}/ with a job {key}: {raw[key]!r} — a skipped or "
+                "failure-ignored job reports success to required checks (and skips the jobs "
+                f"that need it), so it may mask the verdict of {verdicts or 'its steps'}; "
+                "only an output tool's terminal job admits a job if:; refused"
+            )
+        if masking:
+            dependents = sorted(j.job_id for j in wf.jobs if job.job_id in _needs_of(j.raw))
+            if dependents:
+                refusals.append(
+                    f"{jloc} runs {PROTECTED_TREE}/ with a job {'/'.join(sorted(masking))}: but "
+                    f"job(s) {dependents} need it — a skipped job skips its dependents, which "
+                    "then report success; refused"
+                )
+        for scope, container in ((EnvScope.WORKFLOW, wf.doc), (EnvScope.JOB, raw)):
+            d = container.get("defaults")
+            r = d.get("run") if isinstance(d, dict) else None
+            if isinstance(r, dict) and "working-directory" in r:
+                refusals.append(
+                    f"{jloc} runs {PROTECTED_TREE}/ under a {scope.value} defaults.run.working-directory "
+                    "— its relative paths would resolve outside the workspace; refused"
+                )
+            if isinstance(r, dict) and r.get("shell", "bash") != "bash":
+                refusals.append(
+                    f"{jloc} runs {PROTECTED_TREE}/ under a {scope.value} defaults.run.shell "
+                    f"{r.get('shell')!r} — a tool run is read as bash; refused"
+                )
+            bad = _unadmitted_env_keys(container, scope)
+            if bad:
+                refusals.append(
+                    f"{jloc} runs {PROTECTED_TREE}/ with {scope.value} env {bad}, outside the "
+                    "tool env allowlist (TOOL_ENV_ALLOWLIST); refused"
+                )
+        if refusals or runner is None:
+            return refusals
+        return ToolJob(runner, timeout, tuple(prefix), masking)
 
 
 def _check_tool_job(
     wf: SccacheWorkflow, job: WorkflowJob, steps: list[Step], jloc: str, root: str, errors: list[str]
 ) -> None:
-    """The ordering rule of check 7 for one job: a step naming
-    `.github/ci/**` is itself a closed pre-tool shape (`_pre_tool_shape`)
-    and runs only while every step before it is one too, in a job whose
-    runner is a fresh Ubuntu machine, whose paths resolve from the workspace
-    root, and whose every `env:` key is a `ToolEnvKey`."""
-    tainted: Step | None = None
-    referenced = False
-    for st in steps:
-        shape = _pre_tool_shape(st, root)
-        hit = _tree_reference(st.raw, st.run, jloc)
-        if hit is not None:
-            referenced = True
-            stloc = f"{jloc} step {st.label!r}"
-            if tainted is not None:
-                errors.append(
-                    f"{stloc} names {hit!r} after step {tainted.label!r}, which is outside "
-                    f"{CLOSED_SHAPES_NOTE} — an earlier step could have rewritten "
-                    f"{PROTECTED_TREE}/ or the job's environment; refused"
-                )
-            if shape is None:
-                detail = []
-                if "working-directory" in st.raw:
-                    detail.append("under a working-directory:")
-                for key in ("if", "continue-on-error"):
-                    if key in st.raw:
-                        detail.append(f"with {key}: (its verdict could be masked)")
-                bad = _unadmitted_env_keys(st.raw, EnvScope.STEP)
-                if bad:
-                    detail.append(f"with env {bad}")
-                note = f" ({', '.join(detail)})" if detail else ""
-                errors.append(
-                    f"{stloc} names {hit!r} but is not itself one of {CLOSED_SHAPES_NOTE}{note} "
-                    f"— only those may name {PROTECTED_TREE}/; refused"
-                )
-        if tainted is None and shape is None:
-            tainted = st
-    if not referenced:
-        return
-    runs_on = job.raw.get("runs-on")
-    if not isinstance(runs_on, str) or not UBUNTU_HOSTED_RUNNER_RE.fullmatch(runs_on):
-        errors.append(
-            f"{jloc} runs {PROTECTED_TREE}/ on runs-on {runs_on!r}, not one literal "
-            "GitHub-hosted Ubuntu label (a fresh virtual machine per job, bash by default); refused"
-        )
-    for key in ("container", "services"):
-        if key in job.raw:
-            errors.append(
-                f"{jloc} runs {PROTECTED_TREE}/ with a job {key}: — its filesystem and "
-                "processes outlive this job's steps; refused"
-            )
-    for scope, raw in ((EnvScope.WORKFLOW, wf.doc), (EnvScope.JOB, job.raw)):
-        d = raw.get("defaults")
-        r = d.get("run") if isinstance(d, dict) else None
-        if isinstance(r, dict) and "working-directory" in r:
-            errors.append(
-                f"{jloc} runs {PROTECTED_TREE}/ under a {scope.value} defaults.run.working-directory "
-                "— its relative paths would resolve outside the workspace; refused"
-            )
-        if isinstance(r, dict) and r.get("shell", "bash") != "bash":
-            errors.append(
-                f"{jloc} runs {PROTECTED_TREE}/ under a {scope.value} defaults.run.shell "
-                f"{r.get('shell')!r} — a tool run is read as bash; refused"
-            )
-        bad = _unadmitted_env_keys(raw, scope)
-        if bad:
-            errors.append(
-                f"{jloc} runs {PROTECTED_TREE}/ with {scope.value} env {bad}, outside the "
-                "tool env allowlist (TOOL_ENV_ALLOWLIST); refused"
-            )
+    """The ordering rule of check 7 for one job: a job naming `.github/ci/**`
+    must parse as a `ToolJob` (closed steps up to its last tree reference, a
+    fresh hosted Ubuntu runner, workspace-root paths, allowlisted env and job
+    keys, and masking only where every tool's role admits it)."""
+    parsed = ToolJob.parse(wf, job, steps, jloc, root)
+    if isinstance(parsed, list):
+        errors.extend(parsed)
 
 
 @dataclass(frozen=True)
@@ -2187,8 +2430,8 @@ def check_workflow_steps(errors: list[str], root: str = REPO_ROOT) -> None:
       (h) a `shell:` or `defaults.run.shell` other than bash, pwsh, or
           powershell, bare (any other value is a command template);
       (i) the ordering rule (`_check_tool_job`): a step naming
-          `.github/ci/**` that is not itself a closed pre-tool shape
-          (`_pre_tool_shape`), or that runs after any step outside them —
+          `.github/ci/**` that is not itself a `ClosedStep`
+          (`parse_closed_step`), or that runs after any step outside them —
           any other step may rewrite the tree or the job's environment
           first, so the tools' trust is monotone taint, not a list of write
           spellings. Every shape is an allowlist: a tool step is one
@@ -2196,11 +2439,14 @@ def check_workflow_steps(errors: list[str], root: str = REPO_ROOT) -> None:
           disk, bare flags; no `${{ }}`, operator, redirection, or second
           line); an action or pip step carries no `env:`; every workflow,
           job, and tool-step `env:` key is a `ToolEnvKey` of
-          `TOOL_ENV_ALLOWLIST` for its scope. In a job that runs the tree, a
-          runs-on other than one literal GitHub-hosted Ubuntu label, a
-          `container:` or `services:`, a `working-directory` at step or
-          defaults scope, or a `defaults.run.shell` other than bash is
-          refused. In every job, a `working-directory` (step, composite
+          `TOOL_ENV_ALLOWLIST` for its scope. A job that runs the tree must
+          parse as a `ToolJob`: a runs-on other than one literal
+          GitHub-hosted Ubuntu label (`RunnerLabel`), a job key outside
+          `TOOL_JOB_KEYS`, a `timeout-minutes` that is not a positive integer
+          literal (`Timeout`), a masking key its tools' roles do not admit,
+          a job `if:` on a job another job needs, a `working-directory` at
+          step or defaults scope, or a `defaults.run.shell` other than bash
+          is refused. In every job, a `working-directory` (step, composite
           step, or defaults) assembled at run time or with a `.github`
           component, as written (`\\` read as `/`) or resolved on disk, is
           refused: a relative `ci/...` under it names the tree unspelled.
