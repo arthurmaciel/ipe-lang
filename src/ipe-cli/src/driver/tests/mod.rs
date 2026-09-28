@@ -1769,7 +1769,6 @@ fn on_disk_ir_cache_hit_serves_a_tampered_entry_verbatim() {
 /// differ.
 #[cfg(unix)] // a cache hit needs a file identity check
 #[test]
-#[allow(clippy::expect_used)] // a missing scratch write is a harness failure, not the behaviour under test
 fn production_ir_cache_hit_blames_the_in_memory_entry_source() {
     let Ok(runtime) = resolve_runtime() else {
         return;

@@ -591,7 +591,7 @@ fn rescope(
         Ok(next) => next,
         Err(e) => {
             emit_watch_line(
-                &crate::style::TerminalSafe::sanitize(&format!("[ipe watch] {e}")),
+                &crate::style::TerminalSafe::sanitize(text::Message::relay(&e).as_str()),
                 WatchRole::Failure,
             );
             return false;

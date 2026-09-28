@@ -78,13 +78,15 @@ pub enum FinalLink {
 /// file never blocks it and a terminal never becomes the controlling one;
 /// the file type is then checked on the opened handle (`fstat`), so no swap
 /// after a path check can hand the reader a non-regular file. A socket
-/// (which `open` refuses with `ENXIO`) is refused the same way.
+/// (which `open` refuses with `ENXIO`) is refused the same way. On Windows
+/// a final reparse point under [`FinalLink::Refuse`] is refused on the opened
+/// handle's attributes, never by a path check made before the open.
 ///
 /// # Errors
 ///
 /// - [`CliError::SourceRefused`] with [`SourceRefusal::NotRegularFile`] when
 ///   the opened file is not a regular file, or its final component is a
-///   symlink under [`FinalLink::Refuse`].
+///   symlink (on Windows, any reparse point) under [`FinalLink::Refuse`].
 /// - [`CliError::SourceRefused`] with [`SourceRefusal::AccessDenied`] when
 ///   the open is denied permission.
 /// - [`CliError::Io`] for any other open or `fstat` failure.
@@ -175,16 +177,42 @@ fn open_nonblocking(path: &Path, final_link: FinalLink) -> Result<File, CliError
         .map_err(|errno| open_error(path, errno.into()))
 }
 
-/// Open `path` read-only, refusing a final symlink first under [`FinalLink::Refuse`].
+/// Open `path` read-only, refusing a final reparse point on the opened handle under [`FinalLink::Refuse`].
 ///
-/// Off unix a FIFO can still block the open; the handle check still refuses it.
-#[cfg(not(unix))]
+/// Under [`FinalLink::Refuse`] the open carries `FILE_FLAG_OPEN_REPARSE_POINT`,
+/// so a final reparse point of any tag (symlink, junction, or other) is
+/// opened itself rather than its target, and the handle's attributes then
+/// refuse it: no swap between a path check and the open can slip one past.
+/// Under [`FinalLink::Follow`] the open resolves reparse points, as for any
+/// user-named path.
+#[cfg(windows)]
 fn open_nonblocking(path: &Path, final_link: FinalLink) -> Result<File, CliError> {
-    let is_link = std::fs::symlink_metadata(path).is_ok_and(|meta| meta.file_type().is_symlink());
-    if final_link == FinalLink::Refuse && is_link {
-        return Err(source_refused(path, SourceRefusal::NotRegularFile));
+    use std::os::windows::fs::{MetadataExt as _, OpenOptionsExt as _};
+    /// `FILE_FLAG_OPEN_REPARSE_POINT`: opens a reparse point itself, never its target.
+    const OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+    /// `FILE_ATTRIBUTE_REPARSE_POINT`.
+    const ATTR_REPARSE_POINT: u32 = 0x400;
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true);
+    if final_link == FinalLink::Refuse {
+        options.custom_flags(OPEN_REPARSE_POINT);
     }
-    File::open(path).map_err(|source| open_error(path, source))
+    let file = options
+        .open(path)
+        .map_err(|source| open_error(path, source))?;
+    if final_link == FinalLink::Refuse {
+        let attributes = file
+            .metadata()
+            .map_err(|source| CliError::Io {
+                path: path.to_path_buf(),
+                source,
+            })?
+            .file_attributes();
+        if attributes & ATTR_REPARSE_POINT != 0 {
+            return Err(source_refused(path, SourceRefusal::NotRegularFile));
+        }
+    }
+    Ok(file)
 }
 
 // ── Capped reader ─────────────────────────────────────────────────────────────
@@ -410,6 +438,64 @@ mod tests {
                 })
             ),
             "a walked path refuses a final symlink, got: {walked:?}"
+        );
+    }
+
+    /// A walked source whose final component is a file symlink is refused on the handle; a named one is followed.
+    ///
+    /// Skipped when the process may not create a symlink (no privilege, no developer mode).
+    #[cfg(windows)]
+    #[test]
+    fn walked_source_refuses_a_final_reparse_point_that_a_named_path_follows() {
+        let dir = scratch_dir("reparse");
+        let target = dir.join("Real.ipe");
+        let link = dir.join("Link.ipe");
+        std::fs::write(&target, "module Real exposing (..)\n").expect("write target");
+        if let Err(e) = std::os::windows::fs::symlink_file(&target, &link) {
+            let _ = std::fs::remove_dir_all(&dir);
+            eprintln!("skipped: cannot create a file symlink here: {e}");
+            return;
+        }
+        let followed = read_to_string_capped(&link, SOURCE_READ_CAP);
+        let walked = read_walked_source(&link);
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(
+            followed.is_ok(),
+            "a named path follows its reparse point: {followed:?}"
+        );
+        assert!(
+            matches!(
+                walked,
+                Err(CliError::SourceRefused {
+                    reason: SourceRefusal::NotRegularFile,
+                    ..
+                })
+            ),
+            "a walked path refuses a final reparse point, got: {walked:?}"
+        );
+    }
+
+    /// A walked path whose final component is a junction is refused, never read through.
+    #[cfg(windows)]
+    #[test]
+    fn walked_source_refuses_a_final_junction() {
+        let dir = scratch_dir("junction");
+        let victim = dir.join("victim");
+        let junction = dir.join("Main.ipe");
+        std::fs::create_dir_all(&victim).expect("make victim");
+        std::fs::create_dir_all(&junction).expect("make junction dir");
+        crate::output_dir::test_links::junction_in_place(&junction, &victim);
+        let walked = read_walked_source(&junction);
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(
+            matches!(
+                walked,
+                Err(CliError::SourceRefused {
+                    reason: SourceRefusal::NotRegularFile,
+                    ..
+                })
+            ),
+            "a walked path refuses a final junction, got: {walked:?}"
         );
     }
 
