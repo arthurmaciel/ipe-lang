@@ -1460,6 +1460,30 @@ could not remove {path}: {detail}
 
 cannot store the token on this platform: its file cannot be made readable by you alone — set `GITHUB_TOKEN` instead
 
+## login-status-logged-in
+
+logged in — token stored at {path}
+
+## login-status-corrupt
+
+token file at {path} is unreadable or malformed — run `ipe login` to re-authorize
+
+## login-status-not-logged-in
+
+not logged in — run `ipe login` to authorize
+
+## login-stored
+
+Logged in. Token stored at {path}
+
+## login-logout-nothing
+
+not logged in — nothing to remove
+
+## login-logout-removed
+
+logged out — removed {path}
+
 ## login-device-prompt
 
 {purpose}, visit:

@@ -1275,6 +1275,18 @@ messages! {
     login_remove_failed(path, detail) = "login-remove-failed";
     /// The token cannot be stored owner-only on this platform.
     login_token_store_unsupported = "login-token-store-unsupported";
+    /// `ipe login --status`: a well-formed token is stored.
+    login_status_logged_in(path) = "login-status-logged-in";
+    /// `ipe login --status`: the token file exists but does not parse.
+    login_status_corrupt(path) = "login-status-corrupt";
+    /// `ipe login --status`: no token is stored.
+    login_status_not_logged_in = "login-status-not-logged-in";
+    /// `ipe login` stored the token.
+    login_stored(path) = "login-stored";
+    /// `ipe login --logout` found no token to remove.
+    login_logout_nothing = "login-logout-nothing";
+    /// `ipe login --logout` removed the token.
+    login_logout_removed(path) = "login-logout-removed";
     /// The device-flow prompt: what the grant is for, where to go, and the code.
     login_device_prompt(purpose, url, code: &crate::style::TerminalSafe) = "login-device-prompt";
     /// What the publish-token grant is for.
