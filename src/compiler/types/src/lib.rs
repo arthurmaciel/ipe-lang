@@ -5458,40 +5458,40 @@ mod tests {
         );
     }
 
-    /// Regression for AUD-06 (seal): `Auth.signToken` claims pinned to
-    /// `Dict String String`, not flexible `var(0)`. `var(0)` unified with
-    /// anything (a record literal included), so ipe accepted a program the
-    /// generated project's `HashMap<String,String>`-pinned wrapper could not
-    /// build (exit-0-then-cargo-fail). A `Dict.fromList [...]` literal claims
-    /// argument must still type-check clean; a record literal must now be
-    /// REJECTED at type-check (IPE-T0001-class), not silently accepted.
+    /// Seal: `Auth.signToken` claims are pinned to `Dict String String`, not a
+    /// flexible variable that would unify with a record literal and accept a
+    /// program the emitted `HashMap<String,String>`-pinned wrapper cannot
+    /// build. A `Dict String String` claims argument type-checks clean; a
+    /// record literal is refused at type-check.
     #[test]
     fn auth_sign_token_claims_pinned_to_dict_string_string() {
-        // `signToken`'s first argument is `Secret`, not `String` —
-        // seal via `Secret.fromString` (auto-qualified prelude module, no
-        // import needed, same as `Uuid.v4`).
-        let ok_src = "module Main exposing (main)\n\
+        // Both kernels resolve through their explicit imports and `Dict` is a
+        // builtin type, so both fixtures canonicalise without the compiled
+        // stdlib and the refusal is inference's own.
+        let ok_src = "module Main exposing (sign)\n\n\
              import Ipe.Auth as Auth\n\
-             main =\n    Auth.signToken (Secret.fromString \"s\") (Dict.fromList [(\"sub\", \"x\")]) 3600\n";
-        let Some((m, mut i)) = canon_src(ok_src) else {
-            return;
-        };
+             import Ipe.Secret as Secret\n\n\
+             sign : Dict String String -> Result Error String\n\
+             sign claims =\n    Auth.signToken (Secret.fromString \"s\") claims 3600\n";
+        let (m, mut i) = canon_src(ok_src).expect("the Dict-claims fixture must canonicalise");
+        let solved = infer(&m, &mut i);
         assert!(
-            infer(&m, &mut i).is_ok(),
-            "Auth.signToken with a Dict String String claims literal must type-check clean"
+            solved.is_ok(),
+            "Auth.signToken with Dict String String claims must type-check clean: {solved:?}"
         );
 
-        let bad_src = "module Main exposing (main)\n\
+        let bad_src = "module Main exposing (bad)\n\n\
              import Ipe.Auth as Auth\n\
-             main =\n    Auth.signToken (Secret.fromString \"s\") { sub = \"x\" } 3600\n";
-        let Some((m2, mut i2)) = canon_src(bad_src) else {
-            return;
-        };
+             import Ipe.Secret as Secret\n\n\
+             bad : Result Error String\n\
+             bad =\n    Auth.signToken (Secret.fromString \"s\") { sub = \"x\" } 3600\n";
+        let (m2, mut i2) = canon_src(bad_src).expect("the record-claims fixture must canonicalise");
+        let solved = infer(&m2, &mut i2);
         assert!(
-            infer(&m2, &mut i2).is_err(),
-            "Auth.signToken with a RECORD literal claims argument must now be \
-             REJECTED (pre-fix: var(0) unified with anything, accepting a \
-             shape the emitted HashMap<String,String>-pinned wrapper cannot build)"
+            matches!(solved, Err(Diagnostic::Type { .. })),
+            "Auth.signToken with a RECORD claims argument must be REJECTED at type-check \
+             (a flexible claims variable would accept a shape the emitted \
+             HashMap<String,String>-pinned wrapper cannot build): {solved:?}"
         );
     }
 
@@ -6158,12 +6158,12 @@ mod tests {
 
     // ── Signature wildcard `any`: bounds and pins held at every use ─────────
 
-    /// A logging helper whose parameter is a signature wildcard.
-    const LOG_ANY: &str = r#"import Ipe.Log as Log
-
-f : any -> Task Error ()
+    /// A helper whose signature-wildcard parameter is interpolated: the
+    /// `{{…}}` kernel lays the same interpolation obligation on the wildcard
+    /// a `Log.*With` attribute element does, with no module import.
+    const INTERP_ANY: &str = r#"f : any -> String
 f x =
-    Log.infoWith "m" [ x ]
+    """<{{x}}>"""
 "#;
 
     /// A helper whose body pins its wildcard parameter to `Int` by numeric
@@ -6172,12 +6172,6 @@ f x =
 h x =
     x + x == x
 ";
-
-    /// A runtime `false` the optimiser cannot fold, so `assert!(false_marker(), …)`
-    /// reads as a deliberate unconditional failure (no `panic!`).
-    const fn false_marker() -> bool {
-        std::hint::black_box(false)
-    }
 
     /// The result of one module's scoped solve ([`infer_module`]).
     type ScopedResult = Result<ModuleInference, (Diagnostic, Vec<Symbol>)>;
@@ -6241,12 +6235,47 @@ h x =
             .map(|(_, w)| w)
     }
 
+    /// `true` iff the scoped solve closed the first module's interface and
+    /// refused the second with a type diagnostic `refused` accepts.
+    fn scoped_refuses_importer(
+        results: &[ScopedResult],
+        refused: impl Fn(&TypeError) -> bool,
+    ) -> bool {
+        matches!(
+            results.first(),
+            Some(Ok(ModuleInference {
+                interface: InterfaceStatus::Closed(_),
+                ..
+            }))
+        ) && matches!(
+            results.get(1),
+            Some(Err((Diagnostic::Type { msg, .. }, _))) if refused(msg)
+        )
+    }
+
+    /// `true` iff `msg` is the interpolation IPE-T0014 refusal.
+    fn is_not_interpolable(msg: &TypeError) -> bool {
+        matches!(
+            msg,
+            TypeError::SuperTypeUnsatisfied { class, .. }
+                if &**class == ipe_diagnostics::INTERPOLABLE_CLASS
+        )
+    }
+
+    /// `true` iff `sig` pins wildcard 0 to the nullary primitive `prim`.
+    fn pins_wildcard_zero_to(sig: Option<&SignatureWildcards>, i: &Interner, prim: &str) -> bool {
+        sig.and_then(|w| w.pins.get(&0)).is_some_and(|t| {
+            matches!(t, Ty::Con { name, args, .. }
+                if args.is_empty() && i.resolve(*name) == Some(prim))
+        })
+    }
+
     /// A record or a function value passed through an interpolating wildcard
     /// is refused at the use site, exactly as a direct `{{…}}` of it is.
     #[test]
     fn interpolating_wildcard_refuses_a_record_or_function_argument() {
         for (what, arg) in [("a record", "{ x = 1 }"), ("a function", "(\\n -> n)")] {
-            let src = format!("{M2C_HDR}{LOG_ANY}\nmain =\n    f {arg}\n");
+            let src = format!("{M2C_HDR}{INTERP_ANY}\nmain =\n    f {arg}\n");
             let (solved, _i, _m) = infer_src(&src);
             assert!(
                 refused_as_not_interpolable(&solved),
@@ -6260,42 +6289,20 @@ h x =
     /// per-module solve over the helper's interface alike.
     #[test]
     fn interpolating_wildcard_refuses_a_record_or_function_across_modules() {
-        let lib_src = format!("module Lib exposing (f)\n\n{LOG_ANY}");
+        let lib_src = format!("module Lib exposing (f)\n\n{INTERP_ANY}");
         for (what, arg) in [("a record", "{ x = 1 }"), ("a function", "(\\n -> n)")] {
             let main_src = format!("{M2C_HDR}import Lib exposing (f)\n\nmain =\n    f {arg}\n");
             let modules = [("Lib", lib_src.as_str()), ("Main", main_src.as_str())];
-            let Some((m, mut i)) = link_modules(&modules) else {
-                assert!(false_marker(), "{what}: fixture must link");
-                return;
-            };
+            let (m, mut i) = link_modules(&modules).expect("the two-module fixture must link");
             let solved = infer(&m, &mut i);
             assert!(
                 refused_as_not_interpolable(&solved),
                 "{what} through an imported interpolating `any` must be refused: {solved:?}"
             );
-            let Some(results) = infer_scoped(&modules) else {
-                assert!(false_marker(), "{what}: fixture must canonicalise");
-                return;
-            };
+            let results = infer_scoped(&modules).expect("the two-module fixture must canonicalise");
             assert!(
-                matches!(
-                    results.first(),
-                    Some(Ok(ModuleInference {
-                        interface: InterfaceStatus::Closed(_),
-                        ..
-                    }))
-                ),
-                "the typed helper module must close its interface: {results:?}"
-            );
-            assert!(
-                matches!(
-                    results.get(1),
-                    Some(Err((Diagnostic::Type {
-                        msg: TypeError::SuperTypeUnsatisfied { class, .. },
-                        ..
-                    }, _))) if &**class == ipe_diagnostics::INTERPOLABLE_CLASS
-                ),
-                "{what}: the scoped solve must refuse it too: {results:?}"
+                scoped_refuses_importer(&results, is_not_interpolable),
+                "{what}: the scoped solve must close the helper and refuse the use: {results:?}"
             );
         }
     }
@@ -6305,29 +6312,16 @@ h x =
     /// fact the lowerer bounds the emitted generic on.
     #[test]
     fn interpolating_wildcard_records_its_bound_and_accepts_a_scalar() {
-        let src = format!("{M2C_HDR}{LOG_ANY}\nmain =\n    f \"s\"\n");
+        let src = format!("{M2C_HDR}{INTERP_ANY}\nmain =\n    f \"s\"\n");
         let (solved, mut i, _m) = infer_src(&src);
-        let Ok(solved) = solved else {
-            assert!(false_marker(), "`f \"s\"` must type-check: {solved:?}");
-            return;
-        };
-        let Ok(f_sym) = i.intern("f") else {
-            assert!(false_marker(), "intern `f`");
-            return;
-        };
+        let solved = solved.expect("`f \"s\"` must type-check");
+        let f_sym = i.intern("f").expect("intern `f`");
         let bounds = solved
             .bounds
             .iter()
             .find(|((_, n), _)| *n == f_sym)
-            .map(|(_, b)| b);
-        let Some(bounds) = bounds else {
-            assert!(
-                false_marker(),
-                "`f` must record a bound: {:?}",
-                solved.bounds
-            );
-            return;
-        };
+            .map(|(_, b)| b)
+            .expect("`f` must record a bound");
         let wildcard_bounds: Vec<(Option<usize>, TyBounds)> = bounds
             .iter()
             .map(|(k, b)| (wildcard_bound_index(&i, *k), *b))
@@ -6349,7 +6343,7 @@ h x =
     #[test]
     fn wildcard_forwarded_into_an_interpolating_wildcard_is_refused() {
         let src = format!(
-            "{M2C_HDR}{LOG_ANY}\ng : any -> Task Error ()\ng y =\n    f y\n\nmain =\n    g \"s\"\n"
+            "{M2C_HDR}{INTERP_ANY}\ng : any -> String\ng y =\n    f y\n\nmain =\n    g \"s\"\n"
         );
         let (solved, _i, _m) = infer_src(&src);
         assert!(
@@ -6359,7 +6353,7 @@ h x =
     }
 
     /// A function value meeting an interpolation obligation inside one body —
-    /// a `Log.*With` element beside a wildcard, or an untyped top-level
+    /// a list element beside an interpolated wildcard, or an untyped top-level
     /// function value under `{{…}}` — is refused where the two unify.
     #[test]
     fn interpolation_obligation_refuses_a_function_during_unification() {
@@ -6367,8 +6361,8 @@ h x =
             (
                 "a list element beside a wildcard",
                 format!(
-                    "{M2C_HDR}import Ipe.Log as Log\n\n\
-                     f : any -> Task Error ()\nf x =\n    Log.infoWith \"m\" [ x, (\\n -> n) ]\n\n\
+                    "{M2C_HDR}f : any -> String\nf x =\n    \
+                     let ys = [ x, (\\n -> n) ] in \"\"\"<{{{{x}}}}>\"\"\"\n\n\
                      main =\n    f \"s\"\n"
                 ),
             ),
@@ -6397,29 +6391,34 @@ h x =
         );
         let good = format!("{M2C_HDR}{PIN_INT}\nmain =\n    h 0\n");
         let (solved, mut i, _m) = infer_src(&good);
-        let Ok(solved) = solved else {
-            assert!(false_marker(), "`h 0` must type-check: {solved:?}");
-            return;
-        };
+        let solved = solved.expect("`h 0` must type-check");
         let sig = signature_wildcards_of(&solved, &mut i, "h").cloned();
-        let pinned_int = sig.as_ref().and_then(|w| w.pins.get(&0)).is_some_and(|t| {
-            matches!(t, Ty::Con { name, args, .. }
-                if args.is_empty() && i.resolve(*name) == Some("Int"))
-        });
-        assert!(pinned_int, "`h` must pin wildcard 0 to `Int`: {sig:?}");
+        assert!(
+            pins_wildcard_zero_to(sig.as_ref(), &i, "Int"),
+            "`h` must pin wildcard 0 to `Int`: {sig:?}"
+        );
     }
 
-    /// A wildcard a kernel call pins to `String` refuses an `Int` use.
+    /// A wildcard a concretely-typed operation pins to `String` (`++` against
+    /// a `String` literal — the same unification a `String`-typed kernel
+    /// argument performs) refuses an `Int` use, while a `String` use is
+    /// accepted and the pin is recorded.
     #[test]
-    fn kernel_pinned_wildcard_refuses_another_type() {
-        let src = format!(
-            "{M2C_HDR}import Ipe.String\n\n\
-             f : any -> Int\nf x =\n    String.length x\n\nmain =\n    f 3\n"
-        );
-        let (solved, _i, _m) = infer_src(&src);
+    fn concretely_pinned_wildcard_refuses_another_type() {
+        const PIN_STRING: &str = "f : any -> String\nf x =\n    x ++ \"!\"\n";
+        let bad = format!("{M2C_HDR}{PIN_STRING}\nmain =\n    f 3\n");
+        let (solved, _i, _m) = infer_src(&bad);
         assert!(
             refused_as_mismatch(&solved),
             "`f 3` against a `String`-pinned wildcard must be refused: {solved:?}"
+        );
+        let good = format!("{M2C_HDR}{PIN_STRING}\nmain =\n    f \"s\"\n");
+        let (solved, mut i, _m) = infer_src(&good);
+        let solved = solved.expect("`f \"s\"` must type-check");
+        let sig = signature_wildcards_of(&solved, &mut i, "f").cloned();
+        assert!(
+            pins_wildcard_zero_to(sig.as_ref(), &i, "String"),
+            "`f` must pin wildcard 0 to `String`: {sig:?}"
         );
     }
 
@@ -6430,19 +6429,13 @@ h x =
         let lib_src = format!("module Lib exposing (h)\n\n{PIN_INT}");
         let main_src = format!("{M2C_HDR}import Lib exposing (h)\n\nmain =\n    h 1.5\n");
         let modules = [("Lib", lib_src.as_str()), ("Main", main_src.as_str())];
-        let Some((m, mut i)) = link_modules(&modules) else {
-            assert!(false_marker(), "fixture must link");
-            return;
-        };
+        let (m, mut i) = link_modules(&modules).expect("the two-module fixture must link");
         let solved = infer(&m, &mut i);
         assert!(
             refused_as_mismatch(&solved),
             "an imported `Int`-pinned wildcard used at `Float` must be refused: {solved:?}"
         );
-        let Some(results) = infer_scoped(&modules) else {
-            assert!(false_marker(), "fixture must canonicalise");
-            return;
-        };
+        let results = infer_scoped(&modules).expect("the two-module fixture must canonicalise");
         let lib_pins = match results.first() {
             Some(Ok(ModuleInference {
                 interface: InterfaceStatus::Closed(iface),
@@ -6459,16 +6452,10 @@ h x =
             "the helper's interface must carry its pin: {results:?}"
         );
         assert!(
-            matches!(
-                results.get(1),
-                Some(Err((
-                    Diagnostic::Type {
-                        msg: TypeError::TypeMismatch { .. },
-                        ..
-                    },
-                    _
-                )))
-            ),
+            scoped_refuses_importer(&results, |msg| matches!(
+                msg,
+                TypeError::TypeMismatch { .. }
+            )),
             "the scoped solve must refuse the mismatched use too: {results:?}"
         );
     }
@@ -6477,18 +6464,13 @@ h x =
     /// bind-parameter obligation, so one helper binds an `Int` and a `String`.
     #[test]
     fn sql_param_wildcard_is_used_at_two_types() {
-        let src = format!(
-            "{M2C_HDR}import Ipe.Db as Db\nimport Ipe.Task as Task\n\n\
+        let src = "module Main exposing (useBoth)\n\nimport Ipe.Db as Db\n\n\
              insertOne : Db -> any -> Task Error Int\n\
              insertOne conn v =\n    Db.exec conn \"INSERT INTO t (v) VALUES (?)\" [ v ]\n\n\
-             main =\n    Task.andThen\n        (\\conn -> Task.andThen (\\_ -> insertOne conn \"s\") (insertOne conn 1))\n        \
-             (Db.open \"sqlite\" \"sqlite::memory:\")\n"
-        );
-        let (solved, mut i, _m) = infer_src(&src);
-        let Ok(solved) = solved else {
-            assert!(false_marker(), "two-type use must type-check: {solved:?}");
-            return;
-        };
+             useBoth : Db -> List (Task Error Int)\n\
+             useBoth conn =\n    [ insertOne conn \"s\", insertOne conn 1 ]\n";
+        let (solved, mut i, _m) = infer_src(src);
+        let solved = solved.expect("the two-type use must type-check");
         let sig = signature_wildcards_of(&solved, &mut i, "insertOne");
         assert!(
             matches!(sig, Some(w) if w.param_counts == [0, 1] && w.pins.is_empty()),
