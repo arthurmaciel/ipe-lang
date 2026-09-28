@@ -58,7 +58,7 @@ const DEFAULT_FIXTURE_ACCEPT_TIMEOUT: Duration = Duration::from_secs(30);
 /// The override exists so the fail-fast behaviour can be proven with a short
 /// deadline in a test without a 30s wait; production runs leave it unset.
 fn fixture_accept_timeout() -> Duration {
-    std::env::var("IPE_HTTP_FIXTURE_ACCEPT_MS")
+    ipe_env::var("IPE_HTTP_FIXTURE_ACCEPT_MS")
         .ok()
         .and_then(|raw| raw.trim().parse::<u64>().ok())
         .filter(|&ms| ms > 0)
@@ -274,7 +274,7 @@ main =
 /// Propagates any pipeline, build, or process-launch failure as a test error.
 #[test]
 fn http_get_fixture() -> Result<(), BoxError> {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return Ok(());
     }
 
@@ -315,7 +315,7 @@ fn http_get_fixture() -> Result<(), BoxError> {
 /// Propagates any pipeline, build, or process-launch failure as a test error.
 #[test]
 fn http_post_fixture() -> Result<(), BoxError> {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return Ok(());
     }
 
@@ -366,7 +366,7 @@ fn http_post_fixture() -> Result<(), BoxError> {
 /// Propagates any pipeline, build, or process-launch failure as a test error.
 #[test]
 fn http_ssrf_deny_loopback() -> Result<(), BoxError> {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return Ok(());
     }
 

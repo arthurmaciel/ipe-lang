@@ -1499,7 +1499,6 @@ impl Env {
             ("identity", basics, "identity"),
             ("always", basics, "always"),
             ("not", basics, "not"),
-            ("toString", basics, "toString"),
             ("modBy", basics, "modBy"),
             ("clamp", basics, "clamp"),
             ("fst", basics, "fst"),

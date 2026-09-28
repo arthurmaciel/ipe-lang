@@ -12,9 +12,15 @@
 //!
 //! A CLI error carries its text as a [`Message`], which only this module builds
 //! (through the functions under [`msg`]), so an error spelled as a Rust literal
-//! is a type error. A placeholder whose value is untrusted — raw user input,
-//! fetched content, a child process's output — is declared `&TerminalSafe`, so
-//! the value is sanitised before it can reach the message, whatever prints it.
+//! is a type error. A message with placeholders is returned only as a
+//! [`Message`], never as a bare `String`, so every filled text a caller holds
+//! has passed both the per-value and the whole-text sanitising. Every
+//! placeholder value is sanitised on its own and written inline, so a line
+//! break inside it is indented as a continuation and cannot open a line the
+//! message never wrote; only a [`TerminalBlock`] places lines at column 0. A
+//! placeholder whose value is untrusted — raw user input, fetched content, a
+//! child process's output — is also declared `&TerminalSafe`, so the value is
+//! sanitised where it is parsed.
 
 use std::borrow::Cow;
 use std::fmt::{self, Write as _};
@@ -287,7 +293,7 @@ const fn strip_prefix<'a>(mut hay: &'a [u8], mut prefix: &[u8]) -> Option<&'a [u
 }
 
 /// Whether `a` and `b` hold the same bytes.
-const fn bytes_eq(a: &[u8], b: &[u8]) -> bool {
+pub(crate) const fn bytes_eq(a: &[u8], b: &[u8]) -> bool {
     a.len() == b.len() && strip_prefix(a, b).is_some()
 }
 
@@ -399,14 +405,96 @@ const fn has_placeholder(body: &[u8], name: &[u8]) -> bool {
     false
 }
 
+/// A value a catalog placeholder takes, and the role that fixes how it is written.
+///
+/// Every value is inline except a [`TerminalBlock`]: it is sanitised on its
+/// own and each line after its first is indented by the continuation indent,
+/// so a line break inside it cannot open a line the message never wrote. Only
+/// a [`TerminalBlock`] places lines at column 0, and only its constructor
+/// decides where they break.
+pub trait Placeholder {
+    /// Append the value to `out` in its role's terminal-safe form.
+    fn place(&self, out: &mut String);
+}
+
+/// Append `value` inline: sanitised, with continuation lines indented.
+fn place_inline(value: &(impl fmt::Display + ?Sized), out: &mut String) {
+    let mut shown = String::new();
+    // A `Display` that errs leaves what it wrote so far; the message is
+    // still filled rather than aborted.
+    let _ = write!(shown, "{value}");
+    let _ = write!(out, "{}", crate::style::TerminalSafe::sanitize(&shown));
+}
+
+impl Placeholder for &(dyn fmt::Display + '_) {
+    fn place(&self, out: &mut String) {
+        place_inline(*self, out);
+    }
+}
+
+impl Placeholder for &crate::style::TerminalSafe {
+    fn place(&self, out: &mut String) {
+        place_inline(*self, out);
+    }
+}
+
+impl Placeholder for &crate::package_name::PackageName {
+    fn place(&self, out: &mut String) {
+        place_inline(*self, out);
+    }
+}
+
+impl Placeholder for &Message {
+    fn place(&self, out: &mut String) {
+        place_inline(*self, out);
+    }
+}
+
+impl Placeholder for &TerminalBlock {
+    fn place(&self, out: &mut String) {
+        out.push_str(&self.0);
+    }
+}
+
+/// Lines a message shows at column 0, such as a list of files.
+///
+/// Only [`TerminalBlock::lines`] builds one, and it alone puts a line break
+/// between the lines it is given. Each line is sanitised and written inline,
+/// so a line break carried inside a line's own value is indented as a
+/// continuation and cannot start a line of its own.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TerminalBlock(String);
+
+impl TerminalBlock {
+    /// One block line per item, each sanitised and kept to its own line.
+    #[must_use]
+    pub fn lines<I>(lines: I) -> Self
+    where
+        I: IntoIterator,
+        I::Item: fmt::Display,
+    {
+        let mut out = String::new();
+        let mut first = true;
+        for line in lines {
+            if !first {
+                out.push('\n');
+            }
+            first = false;
+            place_inline(&line, &mut out);
+        }
+        Self(out)
+    }
+}
+
 /// Fill `template`'s `{name}` placeholders from `args`.
 ///
-/// Each value is sanitised on its own before it is inserted, so an escape
-/// sequence a value opens (an unterminated OSC, say) ends at the value's
-/// boundary and cannot swallow the catalog text after it. Brace text that
-/// names no argument is kept as written.
+/// Each value is written by its [`Placeholder`] role: sanitised on its own,
+/// so an escape sequence a value opens (an unterminated OSC, say) ends at the
+/// value's boundary and cannot swallow the catalog text after it, and inline
+/// unless it is a [`TerminalBlock`]. Brace text that names no argument is kept
+/// as written.
 #[must_use]
-pub fn fill(template: &str, args: &[(&str, &dyn fmt::Display)]) -> String {
+pub fn fill(template: &str, args: &[(&str, &dyn Placeholder)]) -> String {
     let mut out = String::with_capacity(template.len());
     let mut rest = template;
     while let Some(open) = rest.find('{') {
@@ -423,19 +511,15 @@ pub fn fill(template: &str, args: &[(&str, &dyn fmt::Display)]) -> String {
             rest = after;
             continue;
         };
-        let mut shown = String::new();
-        // A `Display` that errs leaves what it wrote so far; the message is
-        // still filled rather than aborted.
-        let _ = write!(shown, "{value}");
-        out.push_str(crate::style::TerminalSafe::sanitize(&shown).as_str());
+        value.place(&mut out);
         rest = after.get(close.saturating_add(1)..).unwrap_or("");
     }
     out.push_str(rest);
     out
 }
 
-/// A message parameter as the `&dyn Display` that [`fill`] takes.
-const fn shown(value: &dyn fmt::Display) -> &dyn fmt::Display {
+/// A message parameter as the `&dyn Placeholder` that [`fill`] takes.
+const fn shown(value: &dyn Placeholder) -> &dyn Placeholder {
     value
 }
 
@@ -448,7 +532,8 @@ macro_rules! param_ty {
 /// Declare one catalog message as a function.
 ///
 /// A message without placeholders is its `&'static str` text; one with
-/// placeholders takes one value per placeholder and returns the filled text.
+/// placeholders takes one value per placeholder and returns the filled text as
+/// a [`Message`], so a filled text exists only in its sanitised form.
 /// Either way the text is a `const` resolved by [`checked_section`] at build
 /// time, and a `const` assertion that it is non-empty pins the declaration to
 /// its section: the build fails when the section is missing, repeated, or
@@ -471,14 +556,14 @@ macro_rules! message_fn {
     ($(#[$meta:meta])* $name:ident($($param:ident $(: $pty:ty)?),+) = $key:literal) => {
         $(#[$meta])*
         #[must_use]
-        pub fn $name($($param: param_ty!($($pty)?)),+) -> String {
+        pub fn $name($($param: param_ty!($($pty)?)),+) -> Message {
             const TEXT: &str = checked_section($key, &[$(stringify!($param)),+]);
             // IPE-RUST-AUDIT:ACCEPTED (Arthur Maciel) — compile-time `const` assertion (not a runtime panic); fails the BUILD if this declaration drifts from its `text/messages.md` section, the catalog SEAL [ledger #boundary]
             const _: () = assert!(
                 !TEXT.is_empty(),
                 concat!("message `", $key, "` disagrees with text/messages.md")
             );
-            fill(TEXT, &[$((stringify!($param), shown($param))),+])
+            Message::filled(&fill(TEXT, &[$((stringify!($param), shown(&$param))),+]))
         }
     };
 }
@@ -496,7 +581,7 @@ macro_rules! message_value_fn {
         $(#[$meta])*
         #[must_use]
         pub fn $name($($param: param_ty!($($pty)?)),+) -> Message {
-            Message::filled(&super::$name($($param),+))
+            super::$name($($param),+)
         }
     };
 }
@@ -626,6 +711,12 @@ messages! {
     init_shape_needs_value = "init-shape-needs-value";
     /// A directory carries a legacy `ipe.toml` but no `package.ipe`.
     legacy_toml_hint = "legacy-toml-hint";
+    /// A `package.ipe` above the entry file is foreign-owned or writable by another user.
+    manifest_untrusted(path) = "manifest-untrusted";
+    /// A `package.ipe` above the entry file is a symbolic link.
+    manifest_symlink(path) = "manifest-symlink";
+    /// A `package.ipe` above the entry file cannot be owner-checked on this platform.
+    manifest_unverifiable(path) = "manifest-unverifiable";
     /// `build`/`run`/`watch` found no entry and none could be discovered.
     no_entry = "no-entry";
     /// The entry module was not found in the source map (an internal invariant).
@@ -816,6 +907,10 @@ messages! {
     cli_lint_gate_failed = "cli-lint-gate-failed";
     /// A file exceeded the per-surface read ceiling.
     cli_file_too_large(path, max) = "cli-file-too-large";
+    /// A source path named a FIFO, device, socket or other non-regular file.
+    cli_source_not_regular_file(path) = "cli-source-not-regular-file";
+    /// A source file or directory could not be opened for lack of permission.
+    cli_source_access_denied(path) = "cli-source-access-denied";
     /// A manifest path escaped the project directory.
     cli_path_escape(raw, reason) = "cli-path-escape";
     /// A build-output location was refused.
@@ -989,7 +1084,7 @@ messages! {
     /// `ipe fmt` found no `.ipe` files.
     fmt_no_files(root) = "fmt-no-files";
     /// `ipe fmt --check` found unformatted files.
-    fmt_unformatted_files(list) = "fmt-unformatted-files";
+    fmt_unformatted_files(list: &crate::text::TerminalBlock) = "fmt-unformatted-files";
     /// `ipe fmt --stdin --check` found the input unformatted.
     fmt_stdin_unformatted = "fmt-stdin-unformatted";
     /// `ipe fmt` was given a missing path.
@@ -1047,7 +1142,7 @@ messages! {
     /// An `ipe doc <kind>:<key>` query named an unknown kind.
     doc_unknown_kind(prefix) = "doc-unknown-kind";
     /// An `ipe doc <kind>:<key>` query named no entry of that kind.
-    doc_no_entry_for_key(kind, key, nearby) = "doc-no-entry-for-key";
+    doc_no_entry_for_key(kind, key, nearby: &crate::text::TerminalBlock) = "doc-no-entry-for-key";
     /// `ipe doc --type` matched no symbol.
     doc_type_no_match(query) = "doc-type-no-match";
     /// The kernel type table could not be read for `ipe doc`.
@@ -1056,14 +1151,22 @@ messages! {
     doc_type_invalid_query(query, detail) = "doc-type-invalid-query";
     /// `ipe doc --type` matched no symbol, with a hint to broaden the query.
     doc_type_no_match_hint(query) = "doc-type-no-match-hint";
-    /// The FFI cache is not owned by the user or is world-writable.
+    /// An FFI cache entry is not owned by the user or another user can write it.
     ffi_cache_untrusted(path) = "ffi-cache-untrusted";
+    /// The FFI cache's ownership cannot be verified on this platform.
+    ffi_cache_unverifiable(path) = "ffi-cache-unverifiable";
+    /// An FFI cache component or artifact is a symbolic link.
+    ffi_cache_symlink(path) = "ffi-cache-symlink";
+    /// An FFI cache artifact is not a regular file.
+    ffi_cache_not_regular(path) = "ffi-cache-not-regular";
+    /// An FFI cache directory lists more entries than the loader admits.
+    ffi_cache_too_many_entries(path, max) = "ffi-cache-too-many-entries";
     /// A project module clashes with an installed FFI crate.
     ffi_module_clash(module, krate) = "ffi-module-clash";
     /// An FFI define type collides with an inspected opaque type.
     ffi_define_opaque_collision(krate, name) = "ffi-define-opaque-collision";
-    /// An installed FFI crate emitted a malformed dependency line.
-    ffi_dependency_line_unparsable(krate, line) = "ffi-dependency-line-unparsable";
+    /// Installed FFI crates bind one dependency name to two different sources.
+    ffi_dependency_source_conflict(name, first, second) = "ffi-dependency-source-conflict";
     /// Installed FFI crates pin one dependency to two versions.
     ffi_dependency_pin_conflict(name, first, second) = "ffi-dependency-pin-conflict";
     /// Emitted FFI code names a dependency left out of the manifest.
@@ -1092,14 +1195,6 @@ messages! {
     ffi_install_manifest_write_failed(detail) = "ffi-install-manifest-write-failed";
     /// `ipe install` could not write a manifest chunk.
     ffi_install_manifest_chunk_write_failed(detail) = "ffi-install-manifest-chunk-write-failed";
-    /// `ipe install` could not resolve a wrapper crate path.
-    ffi_install_wrapper_crate(path, detail) = "ffi-install-wrapper-crate";
-    /// `ipe install` could not resolve the project root.
-    ffi_install_project_root(detail) = "ffi-install-project-root";
-    /// An `ipe install` wrapper crate resolves outside the project root.
-    ffi_install_wrapper_outside_root(path, resolved) = "ffi-install-wrapper-outside-root";
-    /// An `ipe install` wrapper crate path is not UTF-8.
-    ffi_install_wrapper_not_utf8(path) = "ffi-install-wrapper-not-utf8";
     /// FFI regeneration read malformed inspector JSON.
     ffi_regen_invalid_json(detail) = "ffi-regen-invalid-json";
     /// FFI regeneration read inspector output of an unexpected shape.
@@ -1178,6 +1273,8 @@ messages! {
     login_move_failed(path, detail) = "login-move-failed";
     /// The token file could not be removed.
     login_remove_failed(path, detail) = "login-remove-failed";
+    /// The token cannot be stored owner-only on this platform.
+    login_token_store_unsupported = "login-token-store-unsupported";
     /// The device-flow prompt: what the grant is for, where to go, and the code.
     login_device_prompt(purpose, url, code: &crate::style::TerminalSafe) = "login-device-prompt";
     /// What the publish-token grant is for.
@@ -1354,6 +1451,8 @@ messages! {
     output_too_deep(path, limit) = "output-too-deep";
     /// A path on or under a Windows reparse point.
     output_reparse_point(path) = "output-reparse-point";
+    /// An entry another program holds open, so ipe cannot remove or replace it.
+    output_in_use(path) = "output-in-use";
     /// A GitHub login with nothing before its optional `[bot]` suffix.
     login_empty = "login-empty";
     /// A GitHub login past the length ceiling.
@@ -1483,7 +1582,7 @@ mod tests {
         let pkg = crate::package_name::PackageName::parse("pkg").expect("fixture name parses");
         let hostile =
             crate::style::TerminalSafe::sanitize("x\u{1b}[31my\u{7}z\u{9b}\u{1b}]0;t\u{7}");
-        let table: [(String, &str); 8] = [
+        let table: [(Message, &str); 8] = [
             (
                 index_rev_not_immutable(&pkg, &hostile),
                 "package `pkg`: recorded `rev` is not an immutable commit SHA (expected 40 lowercase hex chars), got: xyz — re-run `ipe add` to record an immutable pin",
@@ -1689,9 +1788,72 @@ mod tests {
         assert!(every_placeholder_is_a_param(b"{Nope} {} {", &[]));
     }
 
+    /// A line break inside an inline value is indented, never a line of its own.
+    #[test]
+    fn an_inline_value_cannot_open_an_output_line() {
+        let forged = "x\nerror: forged\u{1b}[2K";
+        let filled = command_refusal(&"build", &forged);
+        assert_eq!(filled, "ipe build: x\n    error: forged");
+        assert!(
+            !filled.lines().any(|l| l.starts_with("error:")),
+            "{filled:?}"
+        );
+        let safe = crate::style::TerminalSafe::sanitize(forged);
+        let filled = trust_config_malformed(&safe);
+        assert!(
+            !filled.lines().any(|l| l.starts_with("error:")),
+            "{filled:?}"
+        );
+        let message = msg::command_refusal(&"build", &forged);
+        let relayed = command_refusal(&"run", &message);
+        assert!(
+            !relayed.lines().any(|l| l.starts_with("error:")),
+            "{relayed:?}"
+        );
+    }
+
+    /// A block places its own lines at column 0 and indents a break inside one.
+    #[test]
+    fn a_block_line_cannot_open_an_output_line() {
+        let block = TerminalBlock::lines(["  a.ipe", "  b.ipe\nerror: forged\u{1b}]0;t\u{7}"]);
+        let filled = fmt_unformatted_files(&block);
+        assert!(
+            filled.ends_with(":\n  a.ipe\n  b.ipe\n    error: forged"),
+            "{filled:?}"
+        );
+        assert!(
+            !filled.lines().any(|l| l.starts_with("error:")),
+            "{filled:?}"
+        );
+        assert!(!filled.contains('\u{1b}'), "{filled:?}");
+        let near = TerminalBlock::lines(["  fn:map", "  fn:x\rerror: forged"]);
+        let filled = doc_no_entry_for_key(&"fn", &"mapp", &near);
+        assert!(
+            filled.ends_with("Nearby keys:\n  fn:map\n  fn:xerror: forged"),
+            "{filled:?}"
+        );
+    }
+
+    /// A text function with placeholders hands back a sanitised [`Message`], never a raw string.
+    #[test]
+    fn a_filled_text_function_returns_a_terminal_safe_message() {
+        let hostile = "out\u{1b}]0;title\u{7}\n\u{1b}[2Kerror: forged\u{9b}31m";
+        let message: Message = output_symlink(&hostile);
+        assert!(!message.contains('\u{1b}'), "{message:?}");
+        assert!(!message.contains('\u{7}'), "{message:?}");
+        assert!(!message.contains('\u{9b}'), "{message:?}");
+        assert!(
+            !message.lines().any(|l| l.starts_with("error:")),
+            "{message:?}"
+        );
+        assert_eq!(message, msg::output_symlink(&hostile));
+    }
+
     #[test]
     fn fill_replaces_named_placeholders_and_keeps_other_braces() {
-        let args: [(&str, &dyn fmt::Display); 2] = [("x", &1), ("y", &"two")];
+        let one: &dyn fmt::Display = &1;
+        let two: &dyn fmt::Display = &"two";
+        let args: [(&str, &dyn Placeholder); 2] = [("x", &one), ("y", &two)];
         assert_eq!(fill("a {x} b {y} {z} {", &args), "a 1 b two {z} {");
         assert_eq!(
             unknown_flag(&"build", &"--nope"),

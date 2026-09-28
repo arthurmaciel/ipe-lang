@@ -57,7 +57,7 @@ pub enum Ty {
     ///    sufficiently large compiled program.
     ///
     /// A `Ty` containing a tagged (solver-space) `Var` must never be fed to
-    /// `instantiate_in`/`instantiate_tracked`/`instantiate_rigid` — those
+    /// `instantiate_in`/`instantiate_tracked`/`instantiate_logging_wildcards` — those
     /// only handle annotation-space ids. No current consumer needs to
     /// recover the underlying [`crate::unionfind::VarId`] from a tagged raw
     /// (`crate::doc::ty_to_doc`'s `VarNamer` treats it as an opaque key);
@@ -239,6 +239,14 @@ impl TyBounds {
     /// `List a` argument) — see the `sql_param` arm of the numeric-defaulting
     /// loop in `crate::lib`.
     const SQL_PARAM: u16 = 1 << 10;
+    /// The interpolation obligation: this variable is rendered by `{{…}}`
+    /// string interpolation or passed as a `Log.*With` attribute. Satisfied by
+    /// exactly the closed scalar set in `crate::super_bounds::INTERPOLABLE`
+    /// (`String`, `Int`, `Float`, `Bool`, `Char`); the backend realises it as
+    /// the sealed runtime trait `IpeInterpolate`, implemented for those five
+    /// types only. Defaulted to `String` when a call-site instantiation is
+    /// left completely unconstrained (an empty `Log.*With` attribute list).
+    const INTERPOLABLE: u16 = 1 << 11;
 
     /// No obligation — a structurally-parametric variable.
     pub const EMPTY: Self = Self(0);
@@ -286,8 +294,8 @@ impl TyBounds {
     pub const fn dict_key() -> Self {
         Self(Self::DICT_KEY)
     }
-    /// The stringify obligation (`toString` / `Log.*With` attrs / `Debug.toString`
-    /// → Rust `IpeStringify`). Satisfied by every NON-FUNCTION type — every scalar
+    /// The stringify obligation (`Debug.log` / `Error.toString` → Rust
+    /// `IpeStringify`). Satisfied by every NON-FUNCTION type — every scalar
     /// primitive plus every codegen-emitted record/ADT gets a `IpeStringify` impl;
     /// a bare function does not. Same head/deep discipline as [`Self::eq`]: a
     /// function at the head (or nested) fails closed at type-check rather than
@@ -313,6 +321,11 @@ impl TyBounds {
     #[must_use]
     pub const fn sql_param() -> Self {
         Self(Self::SQL_PARAM)
+    }
+    /// The interpolation obligation — see [`Self::INTERPOLABLE`].
+    #[must_use]
+    pub const fn interpolable() -> Self {
+        Self(Self::INTERPOLABLE)
     }
 
     /// Whether this set carries no obligation at all.
@@ -372,6 +385,12 @@ impl TyBounds {
     pub const fn has_sql_param(self) -> bool {
         self.0 & Self::SQL_PARAM != 0
     }
+    /// Whether the interpolation obligation is set — see
+    /// [`Self::INTERPOLABLE`].
+    #[must_use]
+    pub const fn has_interpolable(self) -> bool {
+        self.0 & Self::INTERPOLABLE != 0
+    }
     /// Whether this variable carries a Ipê `comparable`-key obligation — used as
     /// a `Set` element or a `Dict` key. Both are satisfied by exactly the Ipê
     /// `comparable` scalar primitives at type-check; the per-container Rust
@@ -411,6 +430,7 @@ impl TyBounds {
         Self(Self::APPEND),
         Self(Self::HOF_KERNEL_RESULT),
         Self(Self::SQL_PARAM),
+        Self(Self::INTERPOLABLE),
     ];
 
     /// The OR of every real obligation flag — the SSOT the completeness link
@@ -429,7 +449,8 @@ impl TyBounds {
         | Self::SHOW
         | Self::APPEND
         | Self::HOF_KERNEL_RESULT
-        | Self::SQL_PARAM;
+        | Self::SQL_PARAM
+        | Self::INTERPOLABLE;
 
     /// The OR-fold of every entry in [`Self::ALL_BITS`] — a `const fn` so the
     /// completeness link below is a compile-time check, not a skippable test.

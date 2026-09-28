@@ -1,4 +1,5 @@
 use super::*;
+use crate::io_bounded::SourceRefusal;
 use crate::output_dir::{EmitTarget, OutputRefusal, ProjectPaths};
 use crate::{
     ALL_CODES, Applicability, BTreeMap, Diagnostic, Path, PathBuf, Suggestion, cli_args, fs,
@@ -563,7 +564,7 @@ fn generic_record_program_builds_and_prints_forty_two() {
          unwrap r =\n    r.value\n\n\
          main = Io.println (String.fromInt (unwrap (wrap 42)))\n";
 
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
 
@@ -618,6 +619,7 @@ fn false_marker() -> bool {
 
 /// Creates a temp directory with a nested `src/Main.ipe` and a `package.ipe`
 /// at the project root, confirming the upward walk finds the manifest.
+#[cfg(unix)]
 #[test]
 fn find_manifest_walks_up_to_project_root() {
     let tmp = std::env::temp_dir().join("ipec_find_manifest_test");
@@ -633,11 +635,34 @@ fn find_manifest_walks_up_to_project_root() {
     let main_ipe = src.join("Main.ipe");
     fs::write(&main_ipe, "module Main exposing (main)\nmain = 0\n").expect("write Main.ipe");
 
-    let found = find_manifest_for_ipe_file(&main_ipe);
+    let found = find_manifest_for_ipe_file(&main_ipe).expect("owned manifest is trusted");
     assert_eq!(
         found.as_deref(),
         Some(manifest.as_path()),
         "upward walk must find package.ipe at project root"
+    );
+    let _ = fs::remove_dir_all(&tmp);
+}
+
+/// Off Unix a manifest found above a file entry cannot be owner-checked, so
+/// the walk refuses it, naming the explicit-directory fix — the fail-closed
+/// twin of `find_manifest_walks_up_to_project_root`.
+#[cfg(not(unix))]
+#[test]
+fn find_manifest_refuses_an_unverifiable_manifest() {
+    let tmp = std::env::temp_dir().join("ipec_find_manifest_unverifiable_test");
+    let _ = fs::remove_dir_all(&tmp);
+    let src = tmp.join("src");
+    fs::create_dir_all(&src).expect("create src/");
+    let manifest = tmp.join("package.ipe");
+    fs::write(&manifest, "module Package exposing (package)\n").expect("write package.ipe");
+    let main_ipe = src.join("Main.ipe");
+    fs::write(&main_ipe, "module Main exposing (main)\nmain = 0\n").expect("write Main.ipe");
+
+    let refused = find_manifest_for_ipe_file(&main_ipe);
+    assert!(
+        matches!(&refused, Err(crate::CliError::Usage(msg)) if *msg == crate::text::msg::manifest_unverifiable(&manifest.display())),
+        "{refused:?}"
     );
     let _ = fs::remove_dir_all(&tmp);
 }
@@ -843,7 +868,7 @@ fn emit_web_app_source(hot_appearance: bool, tag: &str) -> Option<String> {
         hot_appearance,
         ..BuildOptions::from_env()
     };
-    let built = build_with_sibling_discovery_with_options(&entry, &out, &runtime, options);
+    let built = build_loose_file_with_options(&entry, &out, &runtime, options);
     assert!(built.is_ok(), "web app must compile ({tag}): {built:?}");
     // Walk `out/src` and concatenate every emitted `.rs` file: the view body
     // (and thus any hoisted `__ipe_lit` table) lands in a per-module file
@@ -920,14 +945,14 @@ fn find_manifest_returns_none_when_absent() {
     // on all systems, so we only assert non-panicking behaviour and that
     // the returned path (if Some) is a real file.
     let found = find_manifest_for_ipe_file(&ipe);
-    if let Some(ref p) = found {
+    if let Ok(Some(ref p)) = found {
         assert!(p.is_file(), "if Some, the manifest must exist on disk");
     }
     let _ = fs::remove_dir_all(&tmp);
 }
 
 /// Two-module program: `Main.ipe` calls a helper in sibling `Lib.ipe`.
-/// `build_with_sibling_discovery` must compile both without IPE-N0020.
+/// `build_loose_file` must compile both without IPE-N0020.
 #[test]
 fn sibling_discovery_compiles_two_module_program() {
     let runtime = resolve_runtime();
@@ -958,7 +983,7 @@ fn sibling_discovery_compiles_two_module_program() {
     .expect("write Main.ipe");
 
     let out = tmp.join("out");
-    let result = build_with_sibling_discovery(&src.join("Main.ipe"), &out, &runtime);
+    let result = build_loose_file(&src.join("Main.ipe"), &out, &runtime);
     assert!(
         result.is_ok(),
         "two-module program must compile via sibling discovery: {:?}",
@@ -1101,7 +1126,7 @@ fn infer_error_in_dep_module_names_dep_file() {
     // Runtime is never accessed: a type error fires at infer, before lower/emit.
     let dummy_runtime = std::env::temp_dir();
     let out = tmp.join("out");
-    let result = build_with_sibling_discovery(&main_path, &out, &dummy_runtime);
+    let result = build_loose_file(&main_path, &out, &dummy_runtime);
 
     // Must fail — the program has a type error in Helper.
     assert!(
@@ -1206,7 +1231,7 @@ fn home_discriminant_cross_module_type_error_names_correct_file() {
 
     let dummy_runtime = std::env::temp_dir();
     let out = tmp.join("out");
-    let result = build_with_sibling_discovery(&src.join("Main.ipe"), &out, &dummy_runtime);
+    let result = build_loose_file(&src.join("Main.ipe"), &out, &dummy_runtime);
 
     // Must fail — type error in Lib.
     assert!(
@@ -1771,6 +1796,93 @@ fn on_disk_ir_cache_hit_serves_a_tampered_entry_verbatim() {
     );
 
     let _ = fs::remove_dir_all(&tmp);
+}
+
+/// A production IR-cache hit on a `Debug.*` program blames the in-memory entry text.
+///
+/// The IR tier's key omits the production flag, so a development build
+/// seeds it and a release build of the same source hits it, then refuses
+/// with IPE-L0140. The refusal renders against the entry source the build
+/// already holds, never a fresh read of `blame_path`, whose disk bytes here
+/// differ.
+#[cfg(unix)] // a cache hit needs a file identity check
+#[test]
+fn production_ir_cache_hit_blames_the_in_memory_entry_source() {
+    let Ok(runtime) = resolve_runtime() else {
+        return;
+    };
+    let tmp = std::env::temp_dir().join(format!("ipec-ir-cache-blame-{}", std::process::id()));
+    let cache_dir = tmp.join("cache");
+    let cache_site = crate::cache::CacheSite::Explicit(cache_dir);
+    let _ = fs::remove_dir_all(&tmp);
+    fs::create_dir_all(&tmp).expect("create scratch dir");
+    let blame_path = tmp.join("package.ipe");
+    fs::write(&blame_path, "on-disk bytes the refusal must not show\n").expect("write blame file");
+
+    let entry_path = vec!["Main".to_owned()];
+    let entry_file = tmp.join("Main.ipe");
+    let entry_text = "module Main exposing (main)\n\nimport Ipe.Io as Io\nimport Ipe.Debug as Debug\n\nshout : String -> String\nshout s =\n    Debug.log \"shout\" s\n\nmain : Task Error ()\nmain =\n    Io.println (shout \"hi\")\n";
+    let mut sources: BTreeMap<Vec<String>, (PathBuf, String)> = BTreeMap::new();
+    sources.insert(
+        entry_path.clone(),
+        (entry_file.clone(), entry_text.to_owned()),
+    );
+    let discovered = vec![project::DiscoveredModule::user(
+        entry_file.clone(),
+        entry_path.clone(),
+    )];
+
+    let (dev, dev_outcome) = compile_modules_observed(
+        sources.clone(),
+        discovered.clone(),
+        &entry_path,
+        &emit_target(&tmp.join("out-dev")),
+        &runtime,
+        &blame_path,
+        ipe_backend_rust::DbDriver::Sqlite,
+        Some(&cache_site),
+        BuildOptions::default(),
+    );
+    let (release, release_outcome) = compile_modules_observed(
+        sources,
+        discovered,
+        &entry_path,
+        &emit_target(&tmp.join("out-release")),
+        &runtime,
+        &blame_path,
+        ipe_backend_rust::DbDriver::Sqlite,
+        Some(&cache_site),
+        BuildOptions {
+            production: true,
+            ..BuildOptions::default()
+        },
+    );
+    let _ = fs::remove_dir_all(&tmp);
+
+    assert!(
+        dev.is_ok(),
+        "the development build succeeds: {:?}",
+        dev.err()
+    );
+    assert_eq!(dev_outcome, CacheOutcome::Miss);
+    assert_eq!(
+        release_outcome,
+        CacheOutcome::IrHit,
+        "the release build must take the IR-cache fast path under test"
+    );
+    assert!(
+        matches!(release, Err(CliError::Pipeline { .. })),
+        "the release build must refuse with a pipeline diagnostic: {release:?}"
+    );
+    let Err(CliError::Pipeline { file, src, diag }) = release else {
+        return;
+    };
+    assert_eq!(diag.code().as_str(), "IPE-L0140");
+    assert_eq!(file, entry_file, "the refusal blames the entry module");
+    assert_eq!(
+        src, entry_text,
+        "the refusal renders the in-memory entry text, not a disk re-read"
+    );
 }
 
 /// A cache disabled via `cache_dir: None` never touches disk for
@@ -2565,11 +2677,15 @@ fn unsafe_scan_manifest_project_fails_closed_on_unreadable_module() {
     let _ = fs::set_permissions(&unreadable, fs::Permissions::from_mode(0o644));
     let _ = fs::remove_dir_all(&dir);
 
-    // Must be `Err(CliError::Io)` naming the unreadable path — never an
-    // `Ok` partial scan and never a different error variant.
+    // Must be the typed access-denied refusal naming the unreadable path —
+    // never an `Ok` partial scan and never a different error variant.
     assert!(
-        matches!(&result, Err(CliError::Io { path, .. }) if path == &unreadable),
-        "expected Err(CliError::Io) naming {unreadable:?}, got: {result:?}"
+        matches!(
+            &result,
+            Err(CliError::SourceRefused { path, reason: SourceRefusal::AccessDenied })
+                if path == &unreadable
+        ),
+        "expected Err(CliError::SourceRefused(AccessDenied)) naming {unreadable:?}, got: {result:?}"
     );
 }
 
@@ -2625,11 +2741,122 @@ fn unsafe_scan_single_file_fallback_fails_closed_on_unreadable_entry() {
     let _ = fs::set_permissions(&entry, fs::Permissions::from_mode(0o644));
     let _ = fs::remove_dir_all(&dir);
 
-    // Must be `Err(CliError::Io)` naming the unreadable entry — never an
-    // `Ok` empty scan and never a different error variant.
+    // Must be the typed access-denied refusal naming the unreadable entry —
+    // never an `Ok` empty scan and never a different error variant.
     assert!(
-        matches!(&result, Err(CliError::Io { path, .. }) if path == &entry),
-        "expected Err(CliError::Io) naming {entry:?}, got: {result:?}"
+        matches!(
+            &result,
+            Err(CliError::SourceRefused { path, reason: SourceRefusal::AccessDenied })
+                if path == &entry
+        ),
+        "expected Err(CliError::SourceRefused(AccessDenied)) naming {entry:?}, got: {result:?}"
+    );
+}
+
+/// An unreadable imported module fails both consent scans closed.
+///
+/// Neither scan may judge the entry alone when a module it imports cannot be
+/// read — that module's `.Unsafe`/native imports would go unseen.
+#[cfg(unix)]
+#[test]
+fn consent_scans_fail_closed_on_unreadable_imported_module() {
+    use std::fs;
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = unsafe_scan_test_dir("sibling-fail");
+    let entry = dir.join("Main.ipe");
+    fs::write(
+        &entry,
+        "module Main exposing (main)\n\nimport Helper\n\nmain = Helper.h\n",
+    )
+    .expect("write entry");
+    let helper = dir.join("Helper.ipe");
+    fs::write(&helper, "module Helper exposing (h)\n\nh = 1\n").expect("write Helper");
+    fs::set_permissions(&helper, fs::Permissions::from_mode(0o000)).expect("chmod 000");
+
+    let unsafe_scan = user_sources_for_unsafe_scan(None, &entry);
+    let web_scan = named_sources_for_web_scan(None, &entry);
+
+    let _ = fs::set_permissions(&helper, fs::Permissions::from_mode(0o644));
+    let _ = fs::remove_dir_all(&dir);
+
+    assert!(
+        matches!(
+            &unsafe_scan,
+            Err(CliError::SourceRefused { path, reason: SourceRefusal::AccessDenied })
+                if path.ends_with("Helper.ipe")
+        ),
+        "unsafe scan must refuse the unreadable module by name, got: {unsafe_scan:?}"
+    );
+    assert!(
+        matches!(
+            &web_scan,
+            Err(CliError::SourceRefused { path, reason: SourceRefusal::AccessDenied })
+                if path.ends_with("Helper.ipe")
+        ),
+        "web scan must refuse the unreadable module by name, got: {web_scan:?}"
+    );
+}
+
+/// A closure one module past the loose-file limit fails both consent scans closed.
+#[test]
+fn consent_scans_fail_closed_on_closure_past_the_module_limit() {
+    use std::fmt::Write as _;
+    use std::fs;
+
+    let dir = unsafe_scan_test_dir("closure-limit");
+    let count = crate::loose_file::MAX_LOOSE_FILE_MODULES + 1;
+    let mut entry_text = String::from("module Main exposing (main)\n\n");
+    for i in 0..count {
+        let _ = writeln!(entry_text, "import M{i}");
+        fs::write(
+            dir.join(format!("M{i}.ipe")),
+            format!("module M{i} exposing ()\n"),
+        )
+        .expect("write module");
+    }
+    entry_text.push_str("\nmain = 1\n");
+    let entry = dir.join("Main.ipe");
+    fs::write(&entry, &entry_text).expect("write entry");
+
+    let unsafe_scan = user_sources_for_unsafe_scan(None, &entry);
+    let web_scan = named_sources_for_web_scan(None, &entry);
+    let _ = fs::remove_dir_all(&dir);
+
+    assert!(
+        matches!(&unsafe_scan, Err(CliError::DiscoveryLimitReached { .. })),
+        "unsafe scan must refuse the over-limit closure, got: {unsafe_scan:?}"
+    );
+    assert!(
+        matches!(&web_scan, Err(CliError::DiscoveryLimitReached { .. })),
+        "web scan must refuse the over-limit closure, got: {web_scan:?}"
+    );
+}
+
+/// An entry that does not parse is scanned alone, keyed by its own path.
+///
+/// It has no import closure to follow; the build reports the parse error.
+#[test]
+fn consent_scans_read_an_unparseable_entry_alone() {
+    use std::fs;
+
+    let dir = unsafe_scan_test_dir("unparseable");
+    let entry = dir.join("Main.ipe");
+    let text = "module Main exposing (\nimport Ipe.Unsafe\n";
+    fs::write(&entry, text).expect("write entry");
+
+    let unsafe_scan = user_sources_for_unsafe_scan(None, &entry);
+    let web_scan = named_sources_for_web_scan(None, &entry);
+    let _ = fs::remove_dir_all(&dir);
+
+    assert!(
+        matches!(&unsafe_scan, Ok(sources) if sources.as_slice() == [text]),
+        "unsafe scan must see the entry text, got: {unsafe_scan:?}"
+    );
+    let expected = vec![(entry.display().to_string(), text.to_owned())];
+    assert!(
+        matches!(&web_scan, Ok(named) if named == &expected),
+        "web scan must see the entry text keyed by its path, got: {web_scan:?}"
     );
 }
 
@@ -2805,7 +3032,7 @@ fn obligation_error_blames_owning_module_not_narrower_padded_sibling() {
 
     let dummy_runtime = std::env::temp_dir();
     let out = tmp.join("out");
-    let result = build_with_sibling_discovery(&src.join("Main.ipe"), &out, &dummy_runtime);
+    let result = build_loose_file(&src.join("Main.ipe"), &out, &dummy_runtime);
 
     assert!(
         result.is_err(),
@@ -3343,7 +3570,7 @@ fn an_emit_target_overlapping_the_project_is_refused() {
     );
     let runtime = base.join("no-runtime");
     for out in [project_dir.clone(), base.clone()] {
-        let built = build_with_sibling_discovery(&project_dir.join("Main.ipe"), &out, &runtime);
+        let built = build_loose_file(&project_dir.join("Main.ipe"), &out, &runtime);
         assert!(
             matches!(built, Err(CliError::OutputRefused(_))),
             "a bare out overlapping the project must be refused, got {built:?}"

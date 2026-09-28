@@ -66,7 +66,7 @@ fn emitted_program_source(out: &Path) -> String {
 /// parameter, not the shadow (shadow reads stay bare).
 #[test]
 fn f1_firstclass_curried_and_shadow() {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
 
@@ -126,7 +126,7 @@ fn f1_firstclass_curried_and_shadow() {
 /// T6 adapter: `\eta_0 -> (main_handler())(eta_0)`.
 #[test]
 fn f2_firstclass_arity0() {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
 
@@ -167,7 +167,7 @@ fn f2_firstclass_arity0() {
 /// verify it is re-callable (`Fn`, not `FnOnce`).
 #[test]
 fn f3_partial_noncopy() {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
 
@@ -215,7 +215,7 @@ fn f3_partial_noncopy() {
 /// capture (lambda was already lowered with the parameter's `prefix`).
 #[test]
 fn f4_lambda_capture_noncopy_and_f11_shadow() {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
 
@@ -262,7 +262,7 @@ fn f4_lambda_capture_noncopy_and_f11_shadow() {
 /// Must be GREEN before and after the fix — byte-stable.
 #[test]
 fn f5_capture_fn_called_control() {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
 
@@ -336,7 +336,7 @@ fn f6_capture_fn_forwarded_promoted_accepts() {
         built.err()
     );
 
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
     let outcome = crate::support::build_and_run_emitted("capture_fn_forwarded", &out);
@@ -351,7 +351,7 @@ fn f6_capture_fn_forwarded_promoted_accepts() {
 /// T6 eta-adapter inside `curry2`'s bound — E0593 without the arity-exact fix.
 #[test]
 fn f7_succeed_curried() {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
 
@@ -393,7 +393,7 @@ fn f7_succeed_curried() {
 /// Both `let g = mk3` and `apply3 mk3` are tested.
 #[test]
 fn f8_curried_three_arrows() {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
 
@@ -442,7 +442,7 @@ fn f8_curried_three_arrows() {
 /// `CloneVar(field)` so the thunk is `Fn` and both decodes succeed.
 #[test]
 fn f9_decoder_thunk_capture() {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
 
@@ -490,7 +490,7 @@ fn f9_decoder_thunk_capture() {
 /// at the caller by the bound, never a silent cargo-fail. Prints `hello,42`.
 #[test]
 fn f10_generic_curried_capture_builds_and_runs() {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
     let root = repo_root();
@@ -539,7 +539,7 @@ fn f10_generic_curried_capture_builds_and_runs() {
 /// (`expected trait 'Fn', found trait 'FnOnce'`).
 #[test]
 fn f11_pipeline_custom_curried() {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
 

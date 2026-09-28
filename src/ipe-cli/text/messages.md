@@ -208,6 +208,18 @@ directory supplied but no package.ipe found inside it
 
 no package.ipe in this directory (found a legacy ipe.toml — package.ipe is the project manifest the toolchain reads)
 
+## manifest-untrusted
+
+refusing to use the project manifest `{path}` found above the entry file: it is not owned by the current user, or another user can write or replace it. Fix its ownership/permissions, or pass the project directory explicitly
+
+## manifest-symlink
+
+refusing to use the project manifest `{path}` found above the entry file: it is a symbolic link. Replace it with the file itself, or pass the project directory explicitly
+
+## manifest-unverifiable
+
+refusing to use the project manifest `{path}` found above the entry file: its ownership cannot be verified on this platform. Pass the project directory instead of the file (for example `ipe build path/to/project`), whose `package.ipe` is then used as named
+
 ## no-entry
 
 nothing to build here — pass a source file or run inside a project (a package.ipe, or a src/Main.ipe)
@@ -615,6 +627,14 @@ lint: findings remain at or above the gate severity (see above)
 
 {path}: file exceeds the {max}-byte read ceiling — refusing to allocate an unbounded buffer
 
+## cli-source-not-regular-file
+
+{path}: not a regular file — ipe reads source only from regular files, never a FIFO, device, socket, directory or a symlink met while walking modules; point ipe at a regular `.ipe` file
+
+## cli-source-access-denied
+
+{path}: permission denied — grant read access to the file (and read and search access to its directory) to compile it
+
 ## cli-path-escape
 
 manifest path {raw} was rejected: {reason}
@@ -924,6 +944,10 @@ the source root {path} cannot be resolved — ipe cannot prove the output stays 
 
 {path} is or lies under a reparse point (a OneDrive folder, a mount point, or a deduplicated directory) — ipe cannot prove where it leads; point --out at a directory outside it
 
+## output-in-use
+
+{path} is held open by another program (an editor, a file indexer, or antivirus) — close it there or let that program finish, then run the command again
+
 # Publisher identity
 
 ## login-empty
@@ -1180,7 +1204,23 @@ Try a broader query or `ipe doc list` to browse modules.
 
 ## ffi-cache-untrusted
 
-refusing to load the FFI cache at `{path}`: it is not owned by the current user or is world-writable — its `_bindings.rs` compiles unsandboxed into your crate. Fix its ownership/permissions or remove it
+refusing to load the FFI cache at `{path}`: it is not owned by the current user, or another user can write to it — its `_bindings.rs` compiles unsandboxed into your crate. Fix its ownership/permissions or remove it
+
+## ffi-cache-unverifiable
+
+refusing to load the FFI cache at `{path}`: its ownership cannot be verified on this platform — its `_bindings.rs` compiles unsandboxed into your crate. Remove it
+
+## ffi-cache-symlink
+
+refusing to load the FFI cache: `{path}` is a symbolic link, which could redirect the cache to files another user controls. Replace it with a real directory or file, or remove it
+
+## ffi-cache-not-regular
+
+refusing to load the FFI cache: `{path}` is not a regular file. Remove it and re-run `ipe rust add` for the crate
+
+## ffi-cache-too-many-entries
+
+refusing to load the FFI cache at `{path}`: it holds more than {max} entries. Remove the entries that are not installed crates' artifacts
 
 ## ffi-module-clash
 
@@ -1190,9 +1230,11 @@ module `{module}` clashes with the installed FFI crate `{krate}` — the `Rust.*
 
 installed FFI crate `{krate}` defines a `[rust.define.*]` type `{name}` whose name also names an inspected opaque type of the crate — the two are different Rust types that would collide on one nominal; rename the define type
 
-## ffi-dependency-line-unparsable
+## ffi-dependency-source-conflict
 
-installed FFI crate `{krate}` emitted an unparsable dependency line: {line}
+installed FFI crates bind dependency `{name}` to two different sources:
+  {first}
+  {second}
 
 ## ffi-dependency-pin-conflict
 
@@ -1253,22 +1295,6 @@ ipe install: manifest write failed: {detail}
 ## ffi-install-manifest-chunk-write-failed
 
 ipe install: manifest chunk write failed: {detail}
-
-## ffi-install-wrapper-crate
-
-ipe install: wrapper crate `{path}`: {detail}
-
-## ffi-install-project-root
-
-ipe install: project root: {detail}
-
-## ffi-install-wrapper-outside-root
-
-ipe install: wrapper crate `{path}` resolves to {resolved} — outside the project root
-
-## ffi-install-wrapper-not-utf8
-
-ipe install: wrapper crate path `{path}` is not UTF-8
 
 ## ffi-regen-invalid-json
 
@@ -1429,6 +1455,10 @@ could not move the token into place at {path}: {detail}
 ## login-remove-failed
 
 could not remove {path}: {detail}
+
+## login-token-store-unsupported
+
+cannot store the token on this platform: its file cannot be made readable by you alone — set `GITHUB_TOKEN` instead
 
 ## login-device-prompt
 

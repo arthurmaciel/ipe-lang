@@ -404,7 +404,7 @@ fn is_delivery_word(token: &str) -> bool {
 /// without touching the real filesystem.
 fn shadowing_note(word: &str, exists: impl FnOnce(&str) -> bool) -> Option<String> {
     if is_delivery_word(word) && exists(word) {
-        Some(text::delivery_word_shadows_path(&word))
+        Some(text::delivery_word_shadows_path(&word).into())
     } else {
         None
     }

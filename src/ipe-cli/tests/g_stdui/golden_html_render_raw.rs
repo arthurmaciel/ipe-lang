@@ -30,7 +30,7 @@ fn repo_root() -> PathBuf {
 
 #[test]
 fn html_render_escapes_text_and_emits_raw_and_script() {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
 

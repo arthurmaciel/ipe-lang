@@ -4,8 +4,7 @@
 -- members with ordering or numeric obligations (`clamp`, `min`, `max`,
 -- `negate`, `abs`, `compare`) carry the bound implicitly — the type-checker's
 -- `Comparable`/`Number` obligation rejects a function or record argument
--- before it monomorphises. `toString` carries the `Stringify` bound;
--- `sqrt` is monomorphically `Float -> Float`.
+-- before it monomorphises. `sqrt` is monomorphically `Float -> Float`.
 module Ipe.Basics exposing
     ( identity
     , always
@@ -13,7 +12,6 @@ module Ipe.Basics exposing
     , fst
     , snd
     , clamp
-    , toString
     , modBy
     , negate
     , abs
@@ -103,21 +101,6 @@ clamp "a" "z" "m" --> "m"
 -}
 clamp : a -> a -> a -> a
 clamp = Kernel.kernel "Basics_clamp"
-
-
-{-| `toString x` — convert a `Stringify` value to its `String` representation.
-
-The result is the same text you would see in a debug output: numbers are
-decimal, `Bool` is `True`/`False`, and a `String` is returned unchanged.
-
-```ipe
-toString 42 --> "42"
-toString 3.14 --> "3.14"
-toString True --> "True"
-```
--}
-toString : a -> String
-toString = Kernel.kernel "Basics_toString"
 
 
 {-| `modBy divisor dividend` — the modulo remainder, with the sign of the

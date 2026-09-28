@@ -1086,7 +1086,9 @@ pub fn suggestion_lines(suggestions: &[DocSuggestion]) -> Vec<String> {
         .iter()
         .map(|s| {
             let key = format!("{:width$}", s.key);
-            crate::text::cli_doc_suggestion_line(&key, &s.title, &s.kind)
+            String::from(crate::text::cli_doc_suggestion_line(
+                &key, &s.title, &s.kind,
+            ))
         })
         .collect()
 }

@@ -148,7 +148,7 @@ pub fn gate(
         return Ok(());
     }
 
-    let mut disclosures: Vec<String> = Vec::new();
+    let mut disclosures: Vec<crate::text::Message> = Vec::new();
     for (krate, modules) in provenance.crossings() {
         let via = modules
             .iter()
@@ -161,14 +161,14 @@ pub fn gate(
         // Fail-closed: the axis is inferred (a reachable module crosses into
         // native code through the link-fold) but no scanned source attributes it
         // to a crate — refuse stating exactly that, rather than dropping the axis.
-        disclosures.push(crate::text::native_ffi_crossing_unattributed().to_owned());
+        disclosures.push(crate::text::msg::native_ffi_crossing_unattributed());
     }
     Err(refusal(&disclosures))
 }
 
 /// The typed, fail-closed refusal naming each ungranted native crossing, its
 /// disclosing crate/module(s), and the remedy.
-fn refusal(disclosures: &[String]) -> CliError {
+fn refusal(disclosures: &[crate::text::Message]) -> CliError {
     CliError::Usage(crate::text::Message::lines(
         std::iter::once(crate::text::msg::native_ffi_consent_header())
             .chain(
@@ -198,6 +198,20 @@ mod tests {
         let prov = NativeCrossingProvenance::default();
         let inferred = caps(&[Capability::Network, Capability::Filesystem]);
         gate(&inferred, &BTreeSet::new(), &prov).expect("no native crossing, no gate");
+    }
+
+    /// A hostile discloser name cannot carry an escape sequence or open a line.
+    #[test]
+    fn a_hostile_discloser_name_renders_inert() {
+        let module = "Dep\u{1b}]0;title\u{7}\n\u{1b}[2Kerror: forged";
+        let prov = NativeCrossingProvenance::from_sources([(module, CSUM_DEP)]);
+        let inferred = caps(&[Capability::NativeFfi]);
+        let err =
+            gate(&inferred, &BTreeSet::new(), &prov).expect_err("an ungranted crossing is refused");
+        let msg = err.to_string();
+        assert!(!msg.contains('\u{1b}'), "{msg:?}");
+        assert!(!msg.contains('\u{7}'), "{msg:?}");
+        assert!(!msg.lines().any(|l| l.starts_with("error:")), "{msg:?}");
     }
 
     #[test]

@@ -48,7 +48,7 @@ fn assert_rejected_as_user_kernel_alias(sub_dir: &str, out_dir: &str, main: &str
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(out_dir);
     let _ = fs::remove_dir_all(&out);
 
-    let built = ipe::build_with_sibling_discovery(&entry, &out, &runtime);
+    let built = ipe::build_loose_file(&entry, &out, &runtime);
     let is_user_kernel_alias = matches!(
         &built,
         Err(ipe::CliError::Pipeline { diag, .. })

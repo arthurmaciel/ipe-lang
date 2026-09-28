@@ -44,7 +44,7 @@ fn i193_nonclone_fn_once_per_arm_rejected() {
         return;
     };
 
-    let built = ipe::build_with_sibling_discovery(&entry, &out, &runtime);
+    let built = ipe::build_loose_file(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
         "per-arm fn-value uses must SUM to 2 and Arc-promote the param \
@@ -59,7 +59,7 @@ fn i193_nonclone_fn_once_per_arm_rejected() {
          skips the promotion and re-opens the per-arm double-move E0382)"
     );
 
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
     let outcome = crate::support::build_and_run_emitted("nonclone_fn_once_per_arm", &out);

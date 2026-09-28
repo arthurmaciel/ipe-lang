@@ -110,7 +110,7 @@ fn no_by_value_alias_uses_at_subpattern() {
 /// owned and live.
 #[test]
 fn end_to_end_builds_and_prints_the_concatenation() {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
     let root = repo_root();

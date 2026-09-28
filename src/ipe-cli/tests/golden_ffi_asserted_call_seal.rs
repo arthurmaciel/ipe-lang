@@ -152,7 +152,7 @@ fn asserted_call_emits_the_exact_carrier_shim() {
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("ffi_asserted_call_out");
     let _ = fs::remove_dir_all(&out);
 
-    if let Err(err) = ipe::build_with_sibling_discovery(&entry, &out, &runtime) {
+    if let Err(err) = ipe::build_loose_file(&entry, &out, &runtime) {
         assert!(
             false_marker(),
             "asserted-call fixture must build, got: {err}"
@@ -226,7 +226,7 @@ fn a_clamp_requiring_assertion_is_refused() {
     let entry = tmp.join("src").join("Main.ipe");
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("ffi_asserted_clamp_out");
     let _ = fs::remove_dir_all(&out);
-    let err = ipe::build_with_sibling_discovery(&entry, &out, &runtime)
+    let err = ipe::build_loose_file(&entry, &out, &runtime)
         .expect_err("a clamp-requiring assertion must be refused");
     let msg = err.to_string();
     assert!(
@@ -256,7 +256,7 @@ fn a_misplaced_asserted_call_is_refused() {
     let entry = tmp.join("src").join("Main.ipe");
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("ffi_asserted_misplaced_out");
     let _ = fs::remove_dir_all(&out);
-    let err = ipe::build_with_sibling_discovery(&entry, &out, &runtime)
+    let err = ipe::build_loose_file(&entry, &out, &runtime)
         .expect_err("a misplaced asserted call must be refused");
     let msg = err.to_string();
     assert!(
@@ -352,7 +352,7 @@ fn analysis_entrypoints_accept_an_asserted_program() {
 /// crate — surfacing as a typed `Err`, proven by the printed branch.
 #[test]
 fn asserted_call_emitted_crate_builds_and_runs() {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
     let Ok(runtime) = ipe::resolve_runtime() else {
@@ -369,7 +369,7 @@ fn asserted_call_emitted_crate_builds_and_runs() {
     let entry = tmp.join("src").join("Main.ipe");
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("ffi_asserted_call_e2e_out");
     let _ = fs::remove_dir_all(&out);
-    if let Err(err) = ipe::build_with_sibling_discovery(&entry, &out, &runtime) {
+    if let Err(err) = ipe::build_loose_file(&entry, &out, &runtime) {
         assert!(
             false_marker(),
             "asserted-call fixture must build, got: {err}"
@@ -413,7 +413,7 @@ pub fn boom(n: i64) -> i64 {
     );
     fs::write(&manifest_path, patched).expect("patched Cargo.toml");
 
-    let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_owned());
+    let cargo = ipe_env::var("CARGO").unwrap_or_else(|_| "cargo".to_owned());
     let run = std::process::Command::new(cargo)
         .arg("run")
         .arg("--quiet")
@@ -473,7 +473,7 @@ fn const_read_emits_a_bare_infallible_shim() {
     let entry = tmp.join("src").join("Main.ipe");
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("ffi_const_read_out");
     let _ = fs::remove_dir_all(&out);
-    if let Err(err) = ipe::build_with_sibling_discovery(&entry, &out, &runtime) {
+    if let Err(err) = ipe::build_loose_file(&entry, &out, &runtime) {
         assert!(false_marker(), "const fixture must build, got: {err}");
         return;
     }
@@ -520,7 +520,7 @@ fn a_result_typed_const_is_refused() {
     let entry = tmp.join("src").join("Main.ipe");
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("ffi_const_result_refused_out");
     let _ = fs::remove_dir_all(&out);
-    let err = ipe::build_with_sibling_discovery(&entry, &out, &runtime)
+    let err = ipe::build_loose_file(&entry, &out, &runtime)
         .expect_err("a Result-typed .const must be refused");
     assert!(
         err.to_string().contains("bare scalar"),
@@ -534,7 +534,7 @@ fn a_result_typed_const_is_refused() {
 /// REAL foreign crate exposing the constants and runs, reading both values.
 #[test]
 fn const_read_emitted_crate_builds_and_runs() {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
     let Ok(runtime) = ipe::resolve_runtime() else {
@@ -550,7 +550,7 @@ fn const_read_emitted_crate_builds_and_runs() {
     let entry = tmp.join("src").join("Main.ipe");
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("ffi_const_read_e2e_out");
     let _ = fs::remove_dir_all(&out);
-    if let Err(err) = ipe::build_with_sibling_discovery(&entry, &out, &runtime) {
+    if let Err(err) = ipe::build_loose_file(&entry, &out, &runtime) {
         assert!(false_marker(), "const fixture must build, got: {err}");
         return;
     }
@@ -577,7 +577,7 @@ fn const_read_emitted_crate_builds_and_runs() {
     );
     fs::write(&manifest_path, patched).expect("patched Cargo.toml");
 
-    let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_owned());
+    let cargo = ipe_env::var("CARGO").unwrap_or_else(|_| "cargo".to_owned());
     let run = std::process::Command::new(cargo)
         .arg("run")
         .arg("--quiet")

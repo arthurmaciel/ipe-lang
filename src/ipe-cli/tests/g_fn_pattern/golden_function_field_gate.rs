@@ -74,7 +74,7 @@ fn rejects_cleanly_or_builds_and_runs_never_silent_cargo_fail() {
     // With proper support (an eager `Box<dyn Fn>` coercion), the emitted crate
     // MUST build and run with the semantically-correct output. Gated on IPE_E2E
     // so default runs stay fast.
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
     let outcome = crate::support::build_and_run_emitted("function_field_gate", &out);

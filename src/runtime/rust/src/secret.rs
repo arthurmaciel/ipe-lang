@@ -27,15 +27,15 @@
 //! * `Debug` — hand-written, ALWAYS returns the fixed redacted placeholder,
 //!   regardless of the wrapped value.
 //! * `IpeStringify` — hand-written, ALWAYS returns the same redacted
-//!   placeholder. This is the trait that backs `toString` / string
-//!   interpolation / `Log.*With`'s attr-list stringification
-//!   (`ipe_runtime::stringify::IpeStringify`), so logging a `Secret` directly
-//!   is safe by construction — the caller does not need to remember to call
-//!   `Secret.redacted` first.
+//!   placeholder. This is the trait that backs `Error.toString` / `Debug.log`
+//!   (`ipe_runtime::stringify::IpeStringify`), so a `Secret` nested in a
+//!   debug-rendered value never leaks.
+//! * NO `IpeInterpolate` — a `Secret` is not an interpolable scalar, so
+//!   `{{secret}}` and a `Secret` `Log.*With` attribute are refused at
+//!   type-check; the explicit render is `Secret.redacted`.
 //! * NO `Display`, NO `Hash`, NO `Ord`, NO `serde::Serialize` /
 //!   `serde::Deserialize`. Never implementing these is itself part of the
-//!   security property: `Basics.toString` / `Debug.toString` (the two kernels
-//!   that route through `std::fmt::Display`, `basics.rs`) and any
+//!   security property: any `std::fmt::Display`-based formatting and any
 //!   `HashMap`/`BTreeMap` key use, and any serde round-trip, are Rust type
 //!   errors at codegen time — a fail-CLOSED outcome, never a silent leak.
 //!   NOT serde ALSO means `Secret` is unconditionally Model-inadmissible for

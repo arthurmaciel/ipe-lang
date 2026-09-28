@@ -284,10 +284,7 @@ impl std::fmt::Display for WarmDirError {
 }
 
 fn resolve_warm_dir() -> Result<PathBuf, WarmDirError> {
-    resolve_warm_dir_from(
-        std::env::var_os(WARM_DIR_ENV),
-        ipe_sandbox::home::home_dir(),
-    )
+    resolve_warm_dir_from(ipe_env::var_os(WARM_DIR_ENV), ipe_sandbox::home::home_dir())
 }
 
 /// Resolve the warm-cache directory, refusing any cwd-relative spelling.

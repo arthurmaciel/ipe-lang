@@ -64,7 +64,7 @@ fn composed_combinators_lower() {
 /// pair or fail to run at all.
 #[test]
 fn composed_combinators_run_deterministically() {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("composed_hof_combinators_e2e");

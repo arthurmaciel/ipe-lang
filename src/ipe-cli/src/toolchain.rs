@@ -145,7 +145,7 @@ const CARGO_EXE: &str = "cargo";
 /// # Errors
 /// [`ToolchainMissing`] when no `cargo` executable is found on the `PATH`.
 pub fn require_cargo(intent: ToolIntent) -> Result<CargoBin, ToolchainMissing> {
-    let path_var = std::env::var_os("PATH").unwrap_or_default();
+    let path_var = ipe_env::var_os("PATH").unwrap_or_default();
     match resolve(&path_var, &known_install_dirs()) {
         Resolution::Found(path) => Ok(CargoBin(path)),
         Resolution::Missing(disposition) => Err(ToolchainMissing {
@@ -176,7 +176,7 @@ pub enum Probe {
 /// never disagree.
 #[must_use]
 pub fn probe_cargo() -> Probe {
-    let path_var = std::env::var_os("PATH").unwrap_or_default();
+    let path_var = ipe_env::var_os("PATH").unwrap_or_default();
     match resolve(&path_var, &known_install_dirs()) {
         Resolution::Found(path) => Probe::Found(path),
         Resolution::Missing(disposition) => Probe::Missing(disposition),

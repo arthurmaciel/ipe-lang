@@ -286,12 +286,14 @@ async fn proxy_entry(req: axum::extract::Request) -> axum::response::Response {
     // Per-request auth, defense-in-depth. The PRIMARY enforcement is the
     // outermost `observability::track` middleware, which routes every
     // `/_ipe/console*` request through `console::gate_blocked` (production →
-    // Bearer admin token required; dev open) BEFORE it reaches this handler — so
+    // admin credential required; dev open) BEFORE it reaches this handler — so
     // the proxied path is already gated. This second call to the SAME gate keeps
     // the sensitive console surface protected even if a future router change ever
     // mounts the proxy outside that middleware. `gate_allows()` (mount-time) is
     // orthogonal: it decides whether to mount at all, not who may reach it.
-    if let Some(blocked) = super::console::gate_blocked(req.headers()) {
+    if let Some(blocked) =
+        super::console::gate_blocked(super::console::Surface::Console, req.headers())
+    {
         return blocked;
     }
     match PROXY.get() {

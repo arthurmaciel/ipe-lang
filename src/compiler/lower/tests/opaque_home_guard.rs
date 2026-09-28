@@ -138,6 +138,7 @@ fn lower_leaf_param_ty(leaf: &str, leaf_home: &[Symbol], declare_union: bool) ->
         poly_var_map: BTreeMap::new(),
         untyped_type_params: BTreeMap::new(),
         msg_defaulted_vars: BTreeMap::new(),
+        signature_wildcards: BTreeMap::new(),
     };
 
     let program = match lower(&m, &types, &mut i, "", "") {

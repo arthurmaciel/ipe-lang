@@ -125,7 +125,7 @@ fn animation_module_resolves_and_emits_kernel() {
 /// Now supported (see `animation_module_resolves_and_emits_kernel`).
 #[test]
 fn animation_e2e_builds_and_renders_shorthand() {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
     let (emit, res) = build_animation_project("e2e");

@@ -337,7 +337,7 @@ OK, but compare with Go
 warning[IPE-L0124]: `Web.tea` routes list is non-empty but Model has no `page` field
    --> src/View.ipe:123:48
     |
-123 |             , statTile "7-day avg" (ToString.fromInt weekAvg ++ "%")
+123 |             , statTile "7-day avg" (String.fromInt weekAvg ++ "%")
     |                                                ^^^^^^^^ 1 route(s) declared but the Model has no `page` field — routing is disabled and the routes are ignored
     |
     = note: the `routes` list has 1 route(s) but the Model has no `page` field, so routing is disabled and every URL serves the same app. The routed-page field must be named exactly `page` (of the `Page` ADT whose constructors appear as route destinations). Rename the field to `page`, or remove the `routes` list if routing is not needed.

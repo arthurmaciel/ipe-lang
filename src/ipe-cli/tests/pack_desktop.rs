@@ -175,7 +175,7 @@ fn claim_dist(dist: &std::path::Path, project: &std::path::Path) -> ipe::output_
 /// deliverable (the bundle around a binary) on this box.
 #[test]
 fn linux_bundle_is_materialised_end_to_end() {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
 

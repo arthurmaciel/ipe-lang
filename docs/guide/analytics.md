@@ -16,9 +16,9 @@ Three knots.
   un-consented session emits nothing by default.
 - **PII is a distinct type, never a bare `String`.** A `PPii` prop wraps a sealed
   value whose only serialisation path produces `"[redacted]"` unconditionally.
-  There is no reveal on this module's surface — `Basics.toString`, string
-  interpolation, `Debug.log`, and the JSON encode path all render the redacted
-  sentinel, never the plaintext. The store never sees PII: the props are redacted
+  There is no reveal on this module's surface — string interpolation,
+  `Debug.log`, and the JSON encode path all render the redacted sentinel, never
+  the plaintext. The store never sees PII: the props are redacted
   *before* the line reaches any sink.
 - **Money is lossless.** A `PMoney` prop encodes as an exact decimal string plus
   a currency code (`{"amount":"…","currency":"…"}`), never a floating-point

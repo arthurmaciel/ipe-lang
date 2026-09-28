@@ -256,25 +256,14 @@ pub fn basics_error_to_string<T: crate::stringify::IpeStringify>(v: T) -> String
 // `ipe_runtime::error::IpeError` ADT, not a bare `String`. `Error.toString`
 // reuses `basics_error_to_string` above.
 
-/// Ipê `Debug.toString` — the `{{expr}}` string-interpolation stringifier.
-/// Backed by the total `IpeStringify` trait: a `String` interpolates as itself
-/// (no surrounding quotes); other values use their display form. Identical to
-/// [`basics_to_string`] — the interpolation canonicaliser lowers `{{expr}}` to
-/// the same `Basics.toString` kernel.
-pub fn debug_to_string<T: crate::stringify::IpeStringify>(v: T) -> String {
-    v.ipe_show()
-}
-
-/// Ipê `Basics.toString : a -> String` — universal display stringifier.
-/// Backed by the total `IpeStringify` trait (the same path as
-/// [`basics_error_to_string`]): a `String` renders unquoted, a scalar renders
-/// as its display form, and records / ADTs / lists / maps use space-separated
-/// layout. Every scalar and every codegen-emitted record/ADT implements
-/// `IpeStringify`, so the bound is satisfiable at all call sites — there is no
-/// exit-0-then-cargo-fail composite hole (a `Display` bound would leave one,
-/// since composites have no `Display` impl).
-pub fn basics_to_string<T: crate::stringify::IpeStringify>(v: T) -> String {
-    v.ipe_show()
+/// The `{{expr}}` string-interpolation renderer (internal kernel `Interpolate`).
+///
+/// Bounded by the sealed `IpeInterpolate`, implemented for exactly `String` /
+/// `Int` / `Float` / `Bool` / `Char`: a `String` interpolates as itself and each
+/// other scalar as its `String.from*` conversion. Any other type is refused at
+/// type-check, and has no impl here to fall back on.
+pub fn interpolate_to_string<T: crate::stringify::IpeInterpolate>(v: T) -> String {
+    v.ipe_interpolate()
 }
 
 #[cfg(test)]
@@ -426,21 +415,25 @@ mod tests {
         assert_eq!(basics_always(7i64, "discarded"), 7);
     }
 
-    // Basics.toString: unquoted strings, clean scalars.
+    // Interpolation renderer: unquoted strings, clean scalars.
     #[test]
-    fn test_to_string_int() {
-        assert_eq!(basics_to_string(42i64), "42");
+    fn test_interpolate_int() {
+        assert_eq!(interpolate_to_string(42i64), "42");
     }
     #[test]
-    fn test_to_string_bool() {
-        assert_eq!(basics_to_string(true), "true");
+    fn test_interpolate_bool() {
+        assert_eq!(interpolate_to_string(true), "true");
     }
     #[test]
-    fn test_to_string_string_unquoted() {
-        assert_eq!(basics_to_string("hi".to_string()), "hi");
+    fn test_interpolate_string_unquoted() {
+        assert_eq!(interpolate_to_string("hi".to_string()), "hi");
     }
     #[test]
-    fn test_to_string_float() {
-        assert_eq!(basics_to_string(42.5f64), "42.5");
+    fn test_interpolate_float() {
+        assert_eq!(interpolate_to_string(42.5f64), "42.5");
+    }
+    #[test]
+    fn test_interpolate_char() {
+        assert_eq!(interpolate_to_string('x'), "x");
     }
 }

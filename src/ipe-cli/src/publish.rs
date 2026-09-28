@@ -913,7 +913,7 @@ fn commit_and_push_steps(
 /// carrying a quote, newline, or other non-alphabet byte selects the browser
 /// path rather than reaching curl's `--config` mini-language.
 fn publish_token() -> Option<crate::login::PublishToken> {
-    std::env::var("GITHUB_TOKEN")
+    ipe_env::var("GITHUB_TOKEN")
         .ok()
         .and_then(|t| crate::login::PublishToken::parse(&t))
         .or_else(crate::login::stored_token)
@@ -1310,6 +1310,26 @@ fn run_git_capture(root: &Path, args: &[&str]) -> Result<Option<String>, CliErro
 mod tests {
     use super::*;
     use crate::published_version::VersionRefusal;
+
+    /// A hostile source root or revision cannot carry an escape sequence or open a line.
+    #[test]
+    fn a_hostile_refusal_value_renders_inert() {
+        let hostile = "src\u{1b}]0;title\u{7}\n\u{1b}[2Kerror: forged";
+        let refusals = [
+            Refusal::DirtyTree {
+                source_root: PathBuf::from(hostile),
+            },
+            Refusal::UnpushedHead {
+                rev: hostile.to_owned(),
+            },
+        ];
+        for refusal in refusals {
+            let shown = refusal.to_string();
+            assert!(!shown.contains('\u{1b}'), "{shown:?}");
+            assert!(!shown.contains('\u{7}'), "{shown:?}");
+            assert!(!shown.lines().any(|l| l.starts_with("error:")), "{shown:?}");
+        }
+    }
     use ipe_ir::Capability;
     use std::collections::BTreeSet;
 
