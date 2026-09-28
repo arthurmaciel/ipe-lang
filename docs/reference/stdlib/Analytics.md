@@ -17,8 +17,8 @@ three security properties enforced by the type system:
   2. PII is a distinct type, never a bare `String`. `Pii` wraps an opaque
      `Secret`; the `Secret` field's runtime `IpeStringify` and `Debug` impls
      always return the fixed redacted placeholder regardless of the wrapped
-     value — `Basics.toString`, string interpolation, and `Debug.log` are
-     all fail-closed by construction. The only JSON serialization path for a
+     value — string interpolation and `Debug.log` are both
+     fail-closed by construction. The only JSON serialization path for a
      `PPii` prop value produces `"[redacted]"` unconditionally.
 
   3. Money is lossless. A `PMoney` prop value encodes as a JSON object
