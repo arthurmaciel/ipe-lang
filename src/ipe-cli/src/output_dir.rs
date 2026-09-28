@@ -1449,6 +1449,31 @@ mod tests {
     use super::test_links::plant_link;
     use super::*;
 
+    /// A hostile path in any refusal cannot carry an escape sequence or open a line.
+    #[test]
+    fn a_hostile_path_in_a_refusal_renders_inert() {
+        let hostile = PathBuf::from("out\u{1b}]0;title\u{7}\n\u{1b}[2Kerror: forged");
+        let refusals = [
+            OutputRefusal::Symlink(hostile.clone()),
+            OutputRefusal::NotIpeOwned(hostile.clone()),
+            OutputRefusal::ContainsProject {
+                out: hostile.clone(),
+                project: hostile.clone(),
+            },
+            OutputRefusal::OutsideProject {
+                path: hostile.clone(),
+                root: hostile.clone(),
+            },
+            OutputRefusal::ParentTraversal(hostile),
+        ];
+        for refusal in refusals {
+            let shown = refusal.to_string();
+            assert!(!shown.contains('\u{1b}'), "{shown:?}");
+            assert!(!shown.contains('\u{7}'), "{shown:?}");
+            assert!(!shown.lines().any(|l| l.starts_with("error:")), "{shown:?}");
+        }
+    }
+
     fn scratch(tag: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("ipe_output_dir_{tag}_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);

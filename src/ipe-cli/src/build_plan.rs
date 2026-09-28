@@ -184,8 +184,8 @@ impl fmt::Display for Refusal {
             Self::AllocatorRequiresStatic { got } => {
                 text::allocator_requires_static(&format_args!("{got:?}"))
             }
-            Self::TalcRequiresArenaDesign => text::talc_requires_arena_design().to_owned(),
-            Self::WebviewStatic => text::webview_static().to_owned(),
+            Self::TalcRequiresArenaDesign => text::msg::talc_requires_arena_design(),
+            Self::WebviewStatic => text::msg::webview_static(),
             Self::TargetNotInstalled { triple } => text::target_not_installed(triple),
             Self::MuslCCompilerMissing { triple } => {
                 text::musl_c_compiler_missing(triple, &triple.replace('-', "_"))
@@ -196,7 +196,7 @@ impl fmt::Display for Refusal {
             Self::AllocatorRequiresC { got } => {
                 text::libc_allocator_requires_c(&format_args!("{got:?}"))
             }
-            Self::CfreeNotYetWired => text::cfree_not_yet_wired().to_owned(),
+            Self::CfreeNotYetWired => text::msg::cfree_not_yet_wired(),
             Self::InvalidBool { source, got } => {
                 text::invalid_bool(source, &format_args!("{got:?}"))
             }

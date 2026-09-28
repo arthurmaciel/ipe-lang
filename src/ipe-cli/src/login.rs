@@ -47,9 +47,9 @@ impl GrantScope {
         }
     }
 
-    fn purpose(self) -> String {
+    fn purpose(self) -> crate::text::Message {
         match self {
-            Self::Publish => crate::text::login_grant_purpose_publish().to_owned(),
+            Self::Publish => crate::text::msg::login_grant_purpose_publish(),
             Self::RegisterSigningKey => {
                 crate::text::login_grant_purpose_signing_key(&self.as_str())
             }

@@ -8,31 +8,42 @@
 use std::fmt;
 use std::ops::RangeInclusive;
 
-/// Format characters that reorder, hide, or break the visible text without
-/// being control bytes.
+/// Characters that reorder, hide, or break the visible text without being control bytes.
 ///
-/// The bidirectional marks, embeddings, overrides, and isolates; the Unicode
-/// line and paragraph separators; and the invisible format characters (soft
-/// hyphen, zero-width space and joiners, word joiner and invisible operators,
-/// deprecated format controls, byte-order mark, interlinear annotation
-/// controls, and the tag block).
+/// Exactly the Unicode `Cf` (format) category plus the two `Zl`/`Zp` line and
+/// paragraph separators: the bidirectional marks, embeddings, overrides, and
+/// isolates; the zero-width space, joiners, and word joiner; the invisible
+/// operators and deprecated format controls; the byte-order mark; the
+/// prepended-number and annotation marks of Arabic, Syriac, Kaithi, Egyptian
+/// hieroglyphs, shorthand, and musical notation; and the tag block, denied
+/// whole so a tag assigned later is already covered.
 ///
 /// A value carrying one could make the terminal show text in an order other
 /// than the bytes', open a line the CLI never wrote, or hide characters that
 /// change what a name means, so [`TerminalSafe`] drops each of them. No
-/// CLI message relies on a zero-width joiner, so it is dropped too.
+/// CLI message relies on a zero-width joiner, so it is dropped too. A test
+/// checks the table against the Unicode general-category data.
 pub const DENIED_FORMAT_CHARS: &[RangeInclusive<char>] = &[
     '\u{00AD}'..='\u{00AD}',   // SOFT HYPHEN
+    '\u{0600}'..='\u{0605}',   // ARABIC NUMBER SIGN .. NUMBER MARK ABOVE
     '\u{061C}'..='\u{061C}',   // ARABIC LETTER MARK
-    '\u{200B}'..='\u{200D}',   // ZERO WIDTH SPACE, NON-JOINER, JOINER
-    '\u{200E}'..='\u{200F}',   // LEFT-TO-RIGHT / RIGHT-TO-LEFT MARK
+    '\u{06DD}'..='\u{06DD}',   // ARABIC END OF AYAH
+    '\u{070F}'..='\u{070F}',   // SYRIAC ABBREVIATION MARK
+    '\u{0890}'..='\u{0891}',   // ARABIC POUND / PIASTRE MARK ABOVE
+    '\u{08E2}'..='\u{08E2}',   // ARABIC DISPUTED END OF AYAH
+    '\u{180E}'..='\u{180E}',   // MONGOLIAN VOWEL SEPARATOR
+    '\u{200B}'..='\u{200F}',   // ZERO WIDTH SPACE, NON-JOINER, JOINER, LRM, RLM
     '\u{2028}'..='\u{2029}',   // LINE / PARAGRAPH SEPARATOR
     '\u{202A}'..='\u{202E}',   // bidi EMBEDDINGs, POP, OVERRIDEs
     '\u{2060}'..='\u{2064}',   // WORD JOINER, invisible operators
-    '\u{2066}'..='\u{2069}',   // bidi ISOLATEs, POP DIRECTIONAL ISOLATE
-    '\u{206A}'..='\u{206F}',   // deprecated format controls
+    '\u{2066}'..='\u{206F}',   // bidi ISOLATEs, deprecated format controls
     '\u{FEFF}'..='\u{FEFF}',   // ZERO WIDTH NO-BREAK SPACE (BOM)
     '\u{FFF9}'..='\u{FFFB}',   // INTERLINEAR ANNOTATION controls
+    '\u{110BD}'..='\u{110BD}', // KAITHI NUMBER SIGN
+    '\u{110CD}'..='\u{110CD}', // KAITHI NUMBER SIGN ABOVE
+    '\u{13430}'..='\u{1343F}', // EGYPTIAN HIEROGLYPH format controls
+    '\u{1BCA0}'..='\u{1BCA3}', // SHORTHAND FORMAT controls
+    '\u{1D173}'..='\u{1D17A}', // MUSICAL SYMBOL BEGIN/END controls
     '\u{E0000}'..='\u{E007F}', // TAG block
 ];
 
@@ -124,6 +135,20 @@ impl TerminalSafe {
     #[must_use]
     pub fn as_str(&self) -> &str {
         &self.0
+    }
+}
+
+/// Sanitise a borrowed string; see [`TerminalSafe::sanitize`].
+impl From<&str> for TerminalSafe {
+    fn from(raw: &str) -> Self {
+        Self::sanitize(raw)
+    }
+}
+
+/// Sanitise an owned string; see [`TerminalSafe::sanitize`].
+impl From<String> for TerminalSafe {
+    fn from(raw: String) -> Self {
+        Self::sanitize(&raw)
     }
 }
 
@@ -220,6 +245,42 @@ mod tests {
         assert_eq!(spoof.as_str(), "invoicefdp.exe");
         let hidden = TerminalSafe::sanitize("req\u{200B}west\u{00AD}\u{FEFF}\u{E0041}\u{2060}");
         assert_eq!(hidden.as_str(), "reqwest");
+    }
+
+    /// The table denies every `Cf`, `Zl`, and `Zp` character and nothing a
+    /// user could see: each denied character is one of those categories or
+    /// still unassigned.
+    #[test]
+    fn denied_format_chars_match_the_unicode_format_category() {
+        use unicode_general_category::{GeneralCategory, get_general_category};
+        for c in char::MIN..=char::MAX {
+            let category = get_general_category(c);
+            let invisible = matches!(
+                category,
+                GeneralCategory::Format
+                    | GeneralCategory::LineSeparator
+                    | GeneralCategory::ParagraphSeparator
+            );
+            if invisible {
+                assert!(
+                    is_denied_format_char(c),
+                    "{c:?} ({category:?}) is not denied"
+                );
+            }
+            if is_denied_format_char(c) {
+                assert!(
+                    invisible || matches!(category, GeneralCategory::Unassigned),
+                    "{c:?} ({category:?}) is denied but visible"
+                );
+            }
+        }
+    }
+
+    /// Format characters outside the common bidi and zero-width set are dropped too.
+    #[test]
+    fn terminal_safe_strips_the_rarer_format_chars() {
+        let hidden = "a\u{180E}\u{0600}\u{06DD}\u{070F}\u{08E2}\u{110BD}\u{110CD}\u{13430}\u{1BCA0}\u{1D173}b";
+        assert_eq!(TerminalSafe::sanitize(hidden).as_str(), "ab");
     }
 
     /// Printable neighbours of the denied ranges pass through untouched.

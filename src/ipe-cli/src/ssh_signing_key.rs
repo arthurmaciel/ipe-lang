@@ -146,7 +146,10 @@ pub fn configured() -> Option<PrivateKeyPath> {
 }
 
 /// One line for `ipe login --status` naming the key publish would sign with.
-pub(crate) fn status_line(env_value: Option<&OsStr>, config_dir: Option<&Path>) -> String {
+pub(crate) fn status_line(
+    env_value: Option<&OsStr>,
+    config_dir: Option<&Path>,
+) -> crate::text::Message {
     match lookup(env_value, config_dir) {
         KeyLookup::Env(path) => {
             crate::text::signing_key_status_env(&shown_path(path.as_path()), &SIGNING_KEY_ENV)
@@ -155,7 +158,7 @@ pub(crate) fn status_line(env_value: Option<&OsStr>, config_dir: Option<&Path>) 
         KeyLookup::Stored(path) => {
             crate::text::signing_key_status_stored(&shown_path(path.as_path()))
         }
-        KeyLookup::Missing => crate::text::signing_key_status_none().to_owned(),
+        KeyLookup::Missing => crate::text::msg::signing_key_status_none(),
     }
 }
 
@@ -331,7 +334,7 @@ enum SetupOutcome {
 }
 
 impl SetupOutcome {
-    fn message(&self) -> String {
+    fn message(&self) -> crate::text::Message {
         match self {
             Self::AlreadyConfigured(path) => {
                 crate::text::signing_key_already_configured(&shown_path(path.as_path()))
@@ -573,7 +576,7 @@ fn create_config_dir(dir: &Path) -> Result<(), SetupError> {
 
 /// The consent question: what will be generated, where it is stored, and the
 /// extra scope the one-shot registration authorization asks for.
-fn consent_question(files: &KeyFiles) -> String {
+fn consent_question(files: &KeyFiles) -> crate::text::Message {
     crate::text::signing_key_consent_question(
         &shown_path(&files.private),
         &crate::login::SIGNING_KEY_SCOPE,

@@ -8,5 +8,9 @@ license.workspace = true
 ipe_path_core = { path = "../path-core" }
 unicode-width = "0.1"
 
+[dev-dependencies]
+# The Unicode general-category data the format-character deny table is checked against.
+unicode-general-category = "1"
+
 [lints]
 workspace = true
