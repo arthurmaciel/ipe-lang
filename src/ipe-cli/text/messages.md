@@ -1460,6 +1460,10 @@ could not remove {path}: {detail}
 
 cannot store the token on this platform: its file cannot be made readable by you alone — set `GITHUB_TOKEN` instead
 
+## login-secret-not-owner-only
+
+{path} is not private to you (another local user could read or replace it, or its filesystem ignores permission bits) — the token was not stored; make it owner-only (`chmod go-rwx`) on a filesystem that keeps permissions, or set `GITHUB_TOKEN` instead
+
 ## login-status-logged-in
 
 logged in — token stored at {path}
@@ -1467,6 +1471,10 @@ logged in — token stored at {path}
 ## login-status-corrupt
 
 token file at {path} is unreadable or malformed — run `ipe login` to re-authorize
+
+## login-status-exposed
+
+token file at {path} is not private to you — publish will not use it; treat the token as exposed: revoke it in GitHub settings, then run `ipe login --logout` and `ipe login`
 
 ## login-status-not-logged-in
 
@@ -1563,6 +1571,10 @@ could not determine a config directory for the signing key (set HOME or XDG_CONF
 ## signing-key-store-unsupported
 
 cannot store a signing key on this platform: its private key file cannot be made readable by you alone — no key was generated; set {env} to a signing key you keep private instead
+
+## signing-key-not-owner-only
+
+{path} is not private to you (another local user could read or replace it, or its filesystem ignores permission bits) — no signing key was registered; set {env} to a signing key you keep private instead
 
 ## signing-key-occupied
 

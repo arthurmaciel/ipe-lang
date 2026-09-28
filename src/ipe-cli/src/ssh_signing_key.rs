@@ -359,6 +359,8 @@ enum SetupError {
     StoreUnsupported,
     /// Something already occupies a key file name.
     Occupied(PathBuf),
+    /// A key file or the config dir is not private to the invoking user.
+    NotOwnerOnly(PathBuf),
     /// The config dir cannot hold hard links, which storing the key relies on.
     LinkUnsupported {
         dir: PathBuf,
@@ -388,6 +390,9 @@ impl SetupError {
             Self::NoConfigDir => msg::signing_key_no_config_dir(),
             Self::StoreUnsupported => msg::signing_key_store_unsupported(&SIGNING_KEY_ENV),
             Self::Occupied(path) => msg::signing_key_occupied(&shown_path(path)),
+            Self::NotOwnerOnly(path) => {
+                msg::signing_key_not_owner_only(&shown_path(path), &SIGNING_KEY_ENV)
+            }
             Self::LinkUnsupported { dir, source } => msg::signing_key_link_unsupported(
                 &shown_path(dir),
                 &shown_io(source),
@@ -465,21 +470,16 @@ impl StagedKeyPair {
         files: &KeyFiles,
         pair: &GeneratedKeyPair,
     ) -> Result<Self, SetupError> {
-        let mut suffix = [0u8; 8];
-        getrandom::fill(&mut suffix).map_err(|_| SetupError::KeyGeneration)?;
-        let suffix = format!("{}.{}", std::process::id(), hex::encode(suffix));
+        crate::secret_file::require(store).map_err(|_| SetupError::StoreUnsupported)?;
+        let suffix =
+            crate::secret_file::TempSuffix::fresh().map_err(|_| SetupError::KeyGeneration)?;
+        let (private, private_tmp) =
+            crate::secret_file::create_temp_beside(store, &files.private, &suffix)
+                .map_err(|e| secret_file_error(e, &suffix.beside(&files.private)))?;
         let staged = Self {
-            private_tmp: temp_name(&files.private, &suffix),
-            public_tmp: temp_name(&files.public, &suffix),
+            private_tmp,
+            public_tmp: suffix.beside(&files.public),
         };
-        let private =
-            crate::secret_file::create_new(store, &staged.private_tmp).map_err(|e| match e {
-                SecretFileError::Unsupported => SetupError::StoreUnsupported,
-                SecretFileError::Io(source) => SetupError::Io {
-                    path: staged.private_tmp.clone(),
-                    source,
-                },
-            })?;
         fill_new_file(&staged.private_tmp, private, pair.private_pem.as_bytes())?;
         let public = create_public_file(&staged.public_tmp).map_err(|source| SetupError::Io {
             path: staged.public_tmp.clone(),
@@ -538,13 +538,18 @@ fn probe_hard_link(source: &Path, probe: &Path) -> Result<(), SetupError> {
     })
 }
 
-/// `.<name>.<suffix>.tmp` beside `path`.
-fn temp_name(path: &Path, suffix: &str) -> PathBuf {
-    let name = path
-        .file_name()
-        .and_then(OsStr::to_str)
-        .unwrap_or(PRIVATE_KEY_FILE);
-    path.with_file_name(format!(".{name}.{suffix}.tmp"))
+/// The setup failure for a secret-file step on `path` that failed with `error`.
+fn secret_file_error(error: SecretFileError, path: &Path) -> SetupError {
+    match error {
+        SecretFileError::Unsupported => SetupError::StoreUnsupported,
+        SecretFileError::Io(source) => SetupError::Io {
+            path: path.to_path_buf(),
+            source,
+        },
+        SecretFileError::NotOwnerOnly(shown) | SecretFileError::NotRegularFile(shown) => {
+            SetupError::NotOwnerOnly(shown)
+        }
+    }
 }
 
 /// Write and sync `contents` into the freshly created `file` at `path`.
@@ -576,19 +581,9 @@ fn create_public_file(path: &Path) -> std::io::Result<File> {
     options.open(path)
 }
 
-/// Create the config dir (owner-only when newly created on Unix).
-fn create_config_dir(dir: &Path) -> Result<(), SetupError> {
-    let mut builder = std::fs::DirBuilder::new();
-    builder.recursive(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::DirBuilderExt as _;
-        builder.mode(0o700);
-    }
-    builder.create(dir).map_err(|source| SetupError::Io {
-        path: dir.to_path_buf(),
-        source,
-    })
+/// Create the config dir owner-only through `store`, refusing one another user can write.
+fn create_config_dir(store: SecretStore, dir: &Path) -> Result<(), SetupError> {
+    crate::secret_file::create_owner_dir(store, dir).map_err(|e| secret_file_error(e, dir))
 }
 
 /// The consent question: what will be generated, where it is stored, and the
@@ -624,7 +619,7 @@ fn set_up<C: Consent, R: SigningKeyRegistrar>(
         return Ok(SetupOutcome::Declined);
     }
     let pair = GeneratedKeyPair::generate().ok_or(SetupError::KeyGeneration)?;
-    create_config_dir(dir)?;
+    create_config_dir(store, dir)?;
     let staged = StagedKeyPair::write(store, &files, &pair)?;
     registrar
         .register(&pair.public, KEY_TITLE)
@@ -1275,6 +1270,54 @@ mod tests {
         assert_eq!(consent.asked, 0, "nothing is asked before the refusal");
         assert_eq!(registrar.calls, 0, "nothing is registered");
         assert!(dir_entries(&dir).is_empty(), "no key file is written");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn an_unsupported_secret_store_stages_no_key_file() {
+        let dir = test_dir("stage-unsupported");
+        let pair = GeneratedKeyPair::from_seed(&RFC8032_SEED, 7).expect("encodes");
+        let staged = StagedKeyPair::write(SecretStore::Unsupported, &KeyFiles::in_dir(&dir), &pair);
+        assert!(
+            matches!(staged, Err(SetupError::StoreUnsupported)),
+            "an unsupported store must refuse staging, got {:?}",
+            staged.as_ref().err()
+        );
+        drop(staged);
+        assert!(dir_entries(&dir).is_empty(), "no staged file is written");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_config_dir_another_user_can_write_registers_no_key() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let dir = test_dir("dir-exposed");
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o777))
+            .expect("chmod world-writable");
+        let mut consent = Answer {
+            yes: true,
+            asked: 0,
+        };
+        let mut registrar = FakeRegistrar::new(&dir, false);
+        let result = set_up(
+            HOST_SECRET_STORE,
+            None,
+            Some(dir.as_path()),
+            &mut consent,
+            &mut registrar,
+        );
+        assert!(
+            matches!(&result, Err(SetupError::NotOwnerOnly(p)) if *p == dir),
+            "a world-writable config dir must be refused, got {result:?}"
+        );
+        assert_eq!(registrar.calls, 0, "nothing is registered");
+        assert!(dir_entries(&dir).is_empty(), "no key file is written");
+        let rendered = result.err().map(|e| e.to_string());
+        assert!(
+            rendered.is_some_and(|text| text.contains(SIGNING_KEY_ENV)),
+            "the refusal names the environment-variable way out"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 

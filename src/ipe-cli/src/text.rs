@@ -1275,10 +1275,14 @@ messages! {
     login_remove_failed(path, detail) = "login-remove-failed";
     /// The token cannot be stored owner-only on this platform.
     login_token_store_unsupported = "login-token-store-unsupported";
+    /// A token file or its directory is not private to the invoking user.
+    login_secret_not_owner_only(path) = "login-secret-not-owner-only";
     /// `ipe login --status`: a well-formed token is stored.
     login_status_logged_in(path) = "login-status-logged-in";
     /// `ipe login --status`: the token file exists but does not parse.
     login_status_corrupt(path) = "login-status-corrupt";
+    /// `ipe login --status`: the token file is not private to the invoking user.
+    login_status_exposed(path) = "login-status-exposed";
     /// `ipe login --status`: no token is stored.
     login_status_not_logged_in = "login-status-not-logged-in";
     /// `ipe login` stored the token.
@@ -1319,6 +1323,8 @@ messages! {
     signing_key_no_config_dir = "signing-key-no-config-dir";
     /// This host cannot keep the signing key's private half owner-only.
     signing_key_store_unsupported(env) = "signing-key-store-unsupported";
+    /// A signing-key file or its directory is not private to the invoking user.
+    signing_key_not_owner_only(path: &crate::style::TerminalSafe, env) = "signing-key-not-owner-only";
     /// A non-key entry occupies a signing-key file name.
     signing_key_occupied(path: &crate::style::TerminalSafe) = "signing-key-occupied";
     /// The config directory cannot hold the hard links key storage relies on.
