@@ -3,3 +3,4 @@
 mod exposing;
 mod simplify;
 mod style;
+mod unused_patterns;

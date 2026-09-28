@@ -51,9 +51,9 @@ pub fn check(ctx: &Ctx) -> Vec<Finding> {
             // binding's patterns, falling back to generic field names when the
             // pattern is not a plain variable (wildcard, destructure).
             let first = first_pair_start.unwrap_or(0);
-            let field_a = nth_param_name(ctx, value, first)
+            let field_a = rules::param_name(ctx, value, first)
                 .map_or_else(|| format!("flag{first}"), str::to_owned);
-            let field_b = nth_param_name(ctx, value, first + 1)
+            let field_b = rules::param_name(ctx, value, first + 1)
                 .map_or_else(|| format!("flag{}", first + 1), str::to_owned);
             let sig_fix = SigFix {
                 symbol_module: ctx.module.to_vec(),
@@ -87,18 +87,4 @@ pub fn check(ctx: &Ctx) -> Vec<Finding> {
         }
     }
     findings
-}
-
-/// The name of the `idx`-th parameter of `value`, when that parameter is a plain
-/// variable pattern. A wildcard or destructuring pattern yields `None`.
-fn nth_param_name<'a>(
-    ctx: &'a Ctx,
-    value: &ipe_diagnostics::Located<ipe_syntax::Value>,
-    idx: usize,
-) -> Option<&'a str> {
-    use ipe_syntax::Pattern_;
-    match value.value.patterns.get(idx).map(|p| &p.value) {
-        Some(Pattern_::PVar(sym)) => Some(ctx.text(*sym)),
-        _ => None,
-    }
 }

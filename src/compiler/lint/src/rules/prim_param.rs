@@ -167,7 +167,7 @@ pub fn check(ctx: &Ctx) -> Vec<Finding> {
         // without a plain-variable pattern (a wildcard, a destructure) carries no
         // name to match on and is skipped.
         for (idx, param_ty) in params.iter().enumerate() {
-            let Some(param_name) = nth_param_name(ctx, value, idx) else {
+            let Some(param_name) = rules::param_name(ctx, value, idx) else {
                 continue;
             };
             let Some(bare) = rules::con_head_name(ctx, param_ty) else {
@@ -276,18 +276,4 @@ fn head_noun(tokens: &[String]) -> Option<&str> {
         .rev()
         .find(|t| !t.bytes().all(|b| b.is_ascii_digit()))
         .map(String::as_str)
-}
-
-/// The name of the `idx`-th parameter of `value`, when that parameter is a plain
-/// variable pattern. A wildcard or destructuring pattern yields `None`.
-fn nth_param_name<'a>(
-    ctx: &'a Ctx,
-    value: &ipe_diagnostics::Located<ipe_syntax::Value>,
-    idx: usize,
-) -> Option<&'a str> {
-    use ipe_syntax::Pattern_;
-    match value.value.patterns.get(idx).map(|p| &p.value) {
-        Some(Pattern_::PVar(sym)) => Some(ctx.text(*sym)),
-        _ => None,
-    }
 }

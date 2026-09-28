@@ -164,6 +164,18 @@ pub const RULES: &[RuleInfo] = &[
         default_severity: Severity::Warn,
         fixable: false,
     },
+    RuleInfo {
+        name: "no-unused-parameters",
+        summary: "a function or lambda parameter the body never reads",
+        default_severity: Severity::Warn,
+        fixable: true,
+    },
+    RuleInfo {
+        name: "no-unused-patterns",
+        summary: "a variable a `case` arm, `let` destructure or `do` bind never reads",
+        default_severity: Severity::Warn,
+        fixable: true,
+    },
 ];
 
 /// The metadata for `name`, or `None` when no such rule ships.

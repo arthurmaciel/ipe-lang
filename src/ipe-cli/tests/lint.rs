@@ -159,7 +159,7 @@ fn inline_suppression_silences_a_site() -> TestResult {
     let path = dir.join("Main.ipe");
     std::fs::write(
         &path,
-        "module Main exposing (render)\n\n-- ipe-lint: allow adjacent-bools\nrender : Bool -> Bool -> String\nrender a b =\n    \"x\"\n",
+        "module Main exposing (render)\n\n-- ipe-lint: allow adjacent-bools\nrender : Bool -> Bool -> String\nrender a b =\n    if a && b then \"x\" else \"y\"\n",
     )?;
     let (_ok, stdout, _e) = run_ipe(&["lint", &path.to_string_lossy()])?;
     assert!(

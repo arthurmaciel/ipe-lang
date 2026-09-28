@@ -47,7 +47,7 @@ pub fn check(ctx: &Ctx) -> Vec<Finding> {
         let binding = ctx.text(value.value.name.value);
         let (params, _ret) = rules::flatten_arrow(&ann.value);
         for (idx, param_ty) in params.iter().enumerate() {
-            let Some(param_name) = nth_param_name(ctx, value, idx) else {
+            let Some(param_name) = rules::param_name(ctx, value, idx) else {
                 continue;
             };
             let Some(head) = rules::con_head_name(ctx, param_ty) else {
@@ -103,16 +103,4 @@ pub fn check(ctx: &Ctx) -> Vec<Finding> {
         }
     }
     findings
-}
-
-fn nth_param_name<'a>(
-    ctx: &'a Ctx,
-    value: &ipe_diagnostics::Located<ipe_syntax::Value>,
-    idx: usize,
-) -> Option<&'a str> {
-    use ipe_syntax::Pattern_;
-    match value.value.patterns.get(idx).map(|p| &p.value) {
-        Some(Pattern_::PVar(sym)) => Some(ctx.text(*sym)),
-        _ => None,
-    }
 }

@@ -28,7 +28,7 @@
 //! | `Simplify` (`not (not x)` → `x`) | ported: `simplify-double-not` |
 //! | `NoRedundantConcat` | ported: `no-redundant-concat` |
 //! | `NoRedundantCons` | ported: `no-redundant-cons` |
-//! | `NoUnused.Parameters`, `NoUnused.Patterns` | remaining: needs a general recursive pattern-variable collector (`unused-bindings` only walks flat `PVar` `let` binders); a parameter conventionally kept for interface clarity also risks false positives |
+//! | `NoUnused.Parameters`, `NoUnused.Patterns` | ported: `no-unused-parameters`, `no-unused-patterns` (a `_`-prefixed name is intentionally unused; interpolated names count as reads) |
 //! | `NoPrematureLetComputation` | remaining: needs a branch-usage analysis |
 //! | `NoRecursiveUpdate`, `NoMissingSubscriptionsCall` | remaining: needs TEA-shape knowledge per app kind |
 //! | `NoUnused.Exports`, `NoUnused.CustomTypeConstructors`, `NoUnused.Dependencies` | remaining: whole-project passes (cross-module engine) |
@@ -45,6 +45,7 @@ mod no_redundant_concat;
 mod no_redundant_cons;
 mod no_silent_outline_none;
 mod no_simple_let_body;
+mod no_unused_patterns;
 mod prefer_pipeline;
 mod prim_param;
 mod rewrite;
@@ -54,6 +55,7 @@ mod simplify_map_identity;
 mod unsafe_convention;
 mod unused_bindings;
 mod unused_imports;
+mod uses;
 mod wrapper_consistency;
 mod wrapper_consistency_cross;
 
@@ -62,7 +64,7 @@ mod tests;
 
 use ipe_diagnostics::{Located, Span};
 use ipe_intern::{Interner, Symbol};
-use ipe_syntax::{Expr, Expr_, Module, TypeAnnotation, Value};
+use ipe_syntax::{Expr, Expr_, Module, Pattern_, TypeAnnotation, Value};
 
 use crate::finding::{Finding, SigFix};
 
@@ -162,6 +164,7 @@ pub fn run_all(ctx: &Ctx) -> Vec<Finding> {
     findings.extend(no_missing_type_annotation::check(ctx));
     findings.extend(no_exposing_everything::check(ctx));
     findings.extend(no_importing_everything::check(ctx));
+    findings.extend(no_unused_patterns::check(ctx));
     findings
 }
 
@@ -328,6 +331,23 @@ pub fn con_head_name<'a>(ctx: &'a Ctx, ann: &TypeAnnotation) -> Option<&'a str> 
     match ann {
         TypeAnnotation::TType(_qualifier, segments, args) if args.is_empty() => {
             segments.last().map(|s| ctx.text(*s))
+        }
+        _ => None,
+    }
+}
+
+/// The name the author gave the `idx`-th parameter of `value`.
+///
+/// Only a plain variable pattern has one; a wildcard or a destructure yields
+/// `None`. A leading `_` marks the parameter intentionally unused, not renamed,
+/// so `_port` names `port`: the `no-unused-parameters` fix keeps every
+/// name-reading rule's verdict.
+pub fn param_name<'a>(ctx: &'a Ctx, value: &Located<Value>, idx: usize) -> Option<&'a str> {
+    match value.value.patterns.get(idx).map(|p| &p.value) {
+        Some(Pattern_::PVar(sym)) => {
+            let name = ctx.text(*sym);
+            let name = name.strip_prefix('_').unwrap_or(name);
+            (!name.is_empty()).then_some(name)
         }
         _ => None,
     }
