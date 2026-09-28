@@ -117,13 +117,21 @@ impl Layout {
 
 /// The layout the server analyzes, as the latest load verdict allows.
 ///
-/// A refused load can only reach [`Served::None`] or keep a
+/// A refused load can only reach [`Served::Refused`] or keep a
 /// [`Served::Trusted`] layout, so no fallback outlives a refusal.
 enum Served {
-    /// No layout: nothing loaded yet, or the load was refused.
-    None,
+    /// No layout: nothing loaded yet, or a degraded load had no buffer to serve.
+    Unloaded,
     /// The single-file layout of a degraded load.
     Fallback(Layout),
+    /// No layout: the load was refused for a cause no buffer edit lifts.
+    ///
+    /// Only an open, save, close, or watched-file event re-runs the load,
+    /// the watched-file event anchored at the refused path.
+    Refused {
+        /// The path whose load was refused.
+        anchor: PathBuf,
+    },
     /// The layout of a successful load.
     Trusted(Layout),
 }
@@ -132,17 +140,30 @@ impl Served {
     /// The layout being analyzed, if any.
     const fn layout(&self) -> Option<&Layout> {
         match self {
-            Self::None => None,
+            Self::Unloaded | Self::Refused { .. } => None,
             Self::Fallback(layout) | Self::Trusted(layout) => Some(layout),
         }
     }
 
     /// Whether an edit to the buffer re-runs the load.
     ///
-    /// Only a trusted layout is settled; with none or a fallback the edit
-    /// may be the one that lets the load succeed.
+    /// Only an unloaded or degraded state retries: the edit may be the one
+    /// that lets the load succeed. A trusted layout is settled, and a refusal
+    /// counted nothing the buffer holds, so re-running it per keystroke would
+    /// repeat the refused filesystem work for the same verdict.
     const fn retries_on_edit(&self) -> bool {
-        !matches!(self, Self::Trusted(_))
+        matches!(self, Self::Unloaded | Self::Fallback(_))
+    }
+
+    /// The path a watched-file event re-runs the load from, if any.
+    fn watched_file_anchor(&self) -> Option<PathBuf> {
+        match self {
+            Self::Unloaded => None,
+            Self::Refused { anchor } => Some(anchor.clone()),
+            Self::Fallback(layout) | Self::Trusted(layout) => {
+                layout.module_of_path.keys().next().cloned()
+            }
+        }
     }
 }
 
@@ -212,7 +233,7 @@ impl State {
             db: ipe_db::IpeDatabase::new(),
             root: None,
             overlays: BTreeMap::new(),
-            served: Served::None,
+            served: Served::Unloaded,
             generation: 0,
             worker: None,
             worker_cancel: None,
@@ -831,7 +852,7 @@ fn handle_notification(
                 apply_content_change(text, change, encoding);
             }
             if state.served.retries_on_edit() {
-                // No trusted layout yet; the edit may have fixed the very
+                // Unloaded or degraded; the edit may have fixed the very
                 // defect (a module header, an oversized import closure) that
                 // blocked the load.
                 ensure_project_fresh(state, loader, &path);
@@ -871,11 +892,7 @@ fn handle_notification(
             recompute(state, diag_tx);
         }
         DidChangeWatchedFiles::METHOD => {
-            let anchor = state
-                .served
-                .layout()
-                .and_then(|layout| layout.module_of_path.keys().next().cloned());
-            if let Some(anchor) = anchor {
+            if let Some(anchor) = state.served.watched_file_anchor() {
                 ensure_project_fresh(state, loader, &anchor);
                 sync_inputs(state);
                 recompute(state, diag_tx);
@@ -898,7 +915,7 @@ fn ensure_project(state: &mut State, loader: &dyn ProjectLoader, path: &Path) {
 fn ensure_project_fresh(state: &mut State, loader: &dyn ProjectLoader, path: &Path) {
     let open_text = state.overlays.get(path).map(String::as_str);
     let verdict = loader.load(state.workspace_root.as_deref(), path, open_text);
-    let previous = std::mem::replace(&mut state.served, Served::None);
+    let previous = std::mem::replace(&mut state.served, Served::Unloaded);
     state.served = match verdict {
         Ok(project) => Served::Trusted(Layout::of(project)),
         Err(err) => match (err.disposition(), previous) {
@@ -910,19 +927,24 @@ fn ensure_project_fresh(state: &mut State, loader: &dyn ProjectLoader, path: &Pa
                 eprintln!("[ipe lsp] project load failed, keeping the last good layout: {err}");
                 Served::Trusted(layout)
             }
-            (LoadDisposition::Refuse, Served::None | Served::Fallback(_)) => {
+            (
+                LoadDisposition::Refuse,
+                Served::Unloaded | Served::Fallback(_) | Served::Refused { .. },
+            ) => {
                 eprintln!("[ipe lsp] project load refused: {err}");
-                Served::None
+                Served::Refused {
+                    anchor: path.to_path_buf(),
+                }
             }
             (LoadDisposition::Degrade, Served::Fallback(layout)) => {
                 eprintln!("[ipe lsp] project load failed: {err}");
                 Served::Fallback(layout)
             }
-            (LoadDisposition::Degrade, Served::None) => {
+            (LoadDisposition::Degrade, Served::Unloaded | Served::Refused { .. }) => {
                 eprintln!("[ipe lsp] project load failed: {err}");
                 // Degrade to a single-file layout so parse diagnostics still
                 // flow for the open buffer; retried on the next edit.
-                state.overlays.get(path).map_or(Served::None, |text| {
+                state.overlays.get(path).map_or(Served::Unloaded, |text| {
                     Served::Fallback(single_file_layout(path, text.clone()))
                 })
             }
@@ -1524,17 +1546,17 @@ fn publish(state: &mut State, connection: &Connection, batch: DiagnosticsBatch) 
 mod tests {
     use std::collections::BTreeMap;
     use std::sync::Arc;
-    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::time::Duration;
 
     use crossbeam_channel::RecvTimeoutError;
 
     use super::{
-        Connection, DiagnosticsBatch, DidChangeTextDocument, FeatureOutcome, Layout, LoadedFile,
-        LoadedProject, Message, ModuleOrigin, Notification, Path, PathBuf, PositionEncoding,
-        ProjectLoader, PublishDiagnostics, PublishDiagnosticsParams, Served, State,
-        TextDocumentContentChangeEvent, Url, ensure_project_fresh, handle_notification, normalize,
-        publish, recompute, sync_inputs,
+        Connection, DiagnosticsBatch, DidChangeTextDocument, DidChangeWatchedFiles, FeatureOutcome,
+        Layout, LoadedFile, LoadedProject, Message, ModuleOrigin, Notification, Path, PathBuf,
+        PositionEncoding, ProjectLoader, PublishDiagnostics, PublishDiagnosticsParams, Served,
+        State, TextDocumentContentChangeEvent, Url, ensure_project_fresh, handle_notification,
+        normalize, publish, recompute, sync_inputs,
     };
     use crate::loader::{LimitSource, LoadDisposition, LoadError};
     use lsp_types::notification::Notification as _;
@@ -1670,14 +1692,147 @@ mod tests {
                 .insert(main_path.clone(), MAIN_TEXT.to_owned());
             ensure_project_fresh(&mut state, &FailingLoader(refusal), &main_path);
             assert!(
-                matches!(state.served, Served::None),
-                "a refusal must adopt no layout"
+                matches!(&state.served, Served::Refused { anchor } if *anchor == main_path),
+                "a refusal must adopt no layout and anchor at the refused path"
             );
             assert!(
-                state.served.retries_on_edit(),
-                "with nothing served, an edit must retry the load"
+                state.served.layout().is_none(),
+                "a refusal serves no layout"
+            );
+            assert!(
+                !state.served.retries_on_edit(),
+                "a refusal no edit can lift must not re-run the load per keystroke"
+            );
+            assert_eq!(
+                state.served.watched_file_anchor(),
+                Some(main_path.clone()),
+                "a watched-file event must re-run the refused load"
             );
         }
+    }
+
+    /// A loader that counts its loads and refuses on a filesystem ceiling while armed.
+    struct CountingRefusalLoader {
+        loads: AtomicUsize,
+        refusing: AtomicBool,
+    }
+
+    impl CountingRefusalLoader {
+        const fn refusing() -> Self {
+            Self {
+                loads: AtomicUsize::new(0),
+                refusing: AtomicBool::new(true),
+            }
+        }
+
+        fn loads(&self) -> usize {
+            self.loads.load(Ordering::SeqCst)
+        }
+    }
+
+    impl ProjectLoader for CountingRefusalLoader {
+        fn load(
+            &self,
+            _workspace_root: Option<&Path>,
+            open_file: &Path,
+            open_text: Option<&str>,
+        ) -> Result<LoadedProject, LoadError> {
+            self.loads.fetch_add(1, Ordering::SeqCst);
+            if self.refusing.load(Ordering::SeqCst) {
+                return Err(LoadError::Limit {
+                    lifted_by: LimitSource::Filesystem,
+                    detail: "manifest walk ceiling".to_owned(),
+                });
+            }
+            let mut files = BTreeMap::new();
+            files.insert(
+                vec!["Main".to_owned()],
+                LoadedFile {
+                    path: open_file.to_path_buf(),
+                    text: open_text.unwrap_or(MAIN_TEXT).to_owned(),
+                    origin: ModuleOrigin::User,
+                },
+            );
+            Ok(LoadedProject {
+                files,
+                entry_module: vec!["Main".to_owned()],
+            })
+        }
+    }
+
+    /// Deliver an empty `workspace/didChangeWatchedFiles` notification.
+    fn did_change_watched_files(
+        state: &mut State,
+        loader: &dyn ProjectLoader,
+        diag_tx: &crossbeam_channel::Sender<DiagnosticsBatch>,
+    ) {
+        let params = lsp_types::DidChangeWatchedFilesParams { changes: vec![] };
+        let note = Notification::new(DidChangeWatchedFiles::METHOD.to_owned(), params);
+        handle_notification(state, loader, &note, diag_tx);
+    }
+
+    #[test]
+    fn a_refused_load_is_not_rerun_by_a_keystroke() {
+        let main_path = normalize(Path::new("/lsp-refuse-keystroke-test/Main.ipe"));
+        let loader = CountingRefusalLoader::refusing();
+        let (diag_tx, _diag_rx) = crossbeam_channel::unbounded::<DiagnosticsBatch>();
+        let mut state = State::new(None, PositionEncoding::Utf16);
+        state
+            .overlays
+            .insert(main_path.clone(), MAIN_TEXT.to_owned());
+        ensure_project_fresh(&mut state, &loader, &main_path);
+        assert_eq!(loader.loads(), 1, "the refused load ran once");
+        for _ in 0..3 {
+            did_change(&mut state, &loader, &main_path, MAIN_TEXT, &diag_tx);
+        }
+        assert_eq!(
+            loader.loads(),
+            1,
+            "a keystroke must not re-run a load refused on the filesystem"
+        );
+        assert!(
+            matches!(state.served, Served::Refused { .. }),
+            "the refusal stands until a filesystem event"
+        );
+    }
+
+    #[test]
+    fn a_refused_load_is_rerun_by_a_watched_file_event() {
+        let main_path = normalize(Path::new("/lsp-refuse-watched-test/Main.ipe"));
+        let loader = CountingRefusalLoader::refusing();
+        let (diag_tx, _diag_rx) = crossbeam_channel::unbounded::<DiagnosticsBatch>();
+        let mut state = State::new(None, PositionEncoding::Utf16);
+        state
+            .overlays
+            .insert(main_path.clone(), MAIN_TEXT.to_owned());
+        ensure_project_fresh(&mut state, &loader, &main_path);
+        did_change_watched_files(&mut state, &loader, &diag_tx);
+        assert_eq!(
+            loader.loads(),
+            2,
+            "a watched-file event must re-run the refused load"
+        );
+        assert!(
+            matches!(state.served, Served::Refused { .. }),
+            "an unchanged filesystem refuses again"
+        );
+        loader.refusing.store(false, Ordering::SeqCst);
+        did_change_watched_files(&mut state, &loader, &diag_tx);
+        assert_eq!(loader.loads(), 3);
+        assert!(
+            matches!(state.served, Served::Trusted(_)),
+            "the filesystem change that lifts the ceiling must be served"
+        );
+    }
+
+    #[test]
+    fn nothing_loaded_gives_a_watched_file_event_no_anchor() {
+        let loader = CountingRefusalLoader::refusing();
+        let (diag_tx, _diag_rx) = crossbeam_channel::unbounded::<DiagnosticsBatch>();
+        let mut state = State::new(None, PositionEncoding::Utf16);
+        did_change_watched_files(&mut state, &loader, &diag_tx);
+        assert_eq!(loader.loads(), 0, "no anchor, no load");
+        assert!(matches!(state.served, Served::Unloaded));
     }
 
     #[test]
@@ -1830,7 +1985,7 @@ mod tests {
 
     #[test]
     #[allow(clippy::expect_used)] // test fixture: an absolute path always has a file URI
-    fn degrade_then_refuse_serves_nothing_and_the_next_edit_retries() {
+    fn degrade_then_refuse_serves_nothing_until_a_watched_file_event() {
         let main_path = normalize(Path::new("/lsp-degrade-refuse-test/Main.ipe"));
         let main_uri = Url::from_file_path(&main_path).expect("main uri");
         let loader = BufferCeilingLoader::new(MAIN_TEXT.len());
@@ -1848,7 +2003,7 @@ mod tests {
         loader.refuse_next.store(true, Ordering::SeqCst);
         did_change(&mut state, &loader, &main_path, &oversized_main(), &diag_tx);
         assert!(
-            matches!(state.served, Served::None),
+            matches!(state.served, Served::Refused { .. }),
             "a refusal must drop the fallback, not keep serving it"
         );
         assert!(
@@ -1869,8 +2024,18 @@ mod tests {
 
         did_change(&mut state, &loader, &main_path, MAIN_TEXT, &diag_tx);
         assert!(
+            matches!(state.served, Served::Refused { .. }),
+            "an edit must not re-run a load refused on the filesystem"
+        );
+        assert!(
+            state.locate(&main_uri).is_none(),
+            "the refusal still serves nothing"
+        );
+
+        did_change_watched_files(&mut state, &loader, &diag_tx);
+        assert!(
             matches!(state.served, Served::Trusted(_)),
-            "the next edit must retry the load and serve its layout"
+            "a watched-file event must retry the load and serve its layout"
         );
         assert!(
             state.locate(&main_uri).is_some(),
