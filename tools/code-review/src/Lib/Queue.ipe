@@ -1,10 +1,16 @@
-module Lib.Queue exposing (QueuedUnit, load)
+module Lib.Queue exposing (QueuePage, QueueState(..), QueuedUnit, loadPage, pageHeaderText, queueStatusText, stateFromResult)
 
 import Ipe.Db as Db
+import Ipe.Error as Error
 import Ipe.List as List
+import Ipe.Maybe as Maybe
+import Ipe.Result as Result exposing (Result(..))
+import Ipe.String as String
 import Ipe.Task as Task
 import Lib.Db as LibDb
+import Lib.Format as Format
 import Lib.Index as Index
+import Lib.Settings as Settings
 
 
 -- A pending unit plus its resurfacing state. `changed` is Just the previous
@@ -16,7 +22,74 @@ type alias QueuedUnit =
     }
 
 
--- The queue as the review app sees it, one pass over both databases:
+-- One loaded page of the queue. `total` counts the whole queue (never this
+-- page's length); `next` is the cursor of the following page, Nothing on the
+-- last page.
+type alias QueuePage =
+    { units : List QueuedUnit
+    , total : Int
+    , dbName : String
+    , dbBytes : Int
+    , next : Maybe Index.Cursor
+    }
+
+
+-- The queue view's state. An empty queue is only `Loaded` with `total == 0`,
+-- so a load in flight or a failed load can never render as empty.
+type QueueState
+    = Loading
+    | Loaded QueuePage
+    | Failed Error
+
+
+stateFromResult : Result Error QueuePage -> QueueState
+stateFromResult result =
+    case result of
+        Ok page ->
+            Loaded page
+
+        Err e ->
+            Failed e
+
+
+-- The one-line text for a state that has no unit list to show; Nothing for a
+-- loaded page that holds units.
+queueStatusText : QueueState -> Maybe String
+queueStatusText state =
+    case state of
+        Loading ->
+            Just "Loading queue…"
+
+        Failed e ->
+            Just ("Queue failed to load: " ++ Error.toString e)
+
+        Loaded page ->
+            if page.total == 0 then
+                Just "No units queued."
+
+            else if List.isEmpty page.units then
+                Just "No units to review on this page."
+
+            else
+                Nothing
+
+
+-- The queue header: database name, size, and how many of the queued units
+-- this page shows.
+pageHeaderText : QueuePage -> String
+pageHeaderText page =
+    String.concat
+        [ page.dbName
+        , " · "
+        , Format.byteSize page.dbBytes
+        , " · showing "
+        , String.fromInt (List.length page.units)
+        , " of "
+        , String.fromInt page.total
+        ]
+
+
+-- One page of the queue at `cursor`, as the review app sees it:
 --
 --   * a unit whose exact (uid, body_hash) pair was already decided is
 --     hidden — the first review of a pair is final and the drain loop
@@ -24,12 +97,40 @@ type alias QueuedUnit =
 --   * a unit decided on an older hash resurfaced at the head, flagged with
 --     its previous review;
 --   * never-seen units keep the index's enqueue order after resurfaced ones.
-load : Task.Task Error (List QueuedUnit)
-load =
+--
+-- Only one page of the queue is classified per load, so the resurfaced-first
+-- order holds within the page.
+--
+-- The page also carries the whole-queue count and the database size.
+loadPage : Index.Cursor -> Task.Task Error QueuePage
+loadPage cursor =
     do
+        settings <- Settings.indexSettings
         db <- LibDb.open
-        units <- Index.loadPending
-        classify db units
+        rows <- Index.loadPendingPage cursor
+        total <- Index.countPending
+        bytes <- Index.dbBytes
+        units <- classify db (List.map (\r -> r.unit) rows)
+        Task.succeed
+            { units = units
+            , total = total
+            , dbName = Settings.dbFileName settings.db
+            , dbBytes = bytes
+            , next = nextCursor rows
+            }
+
+
+-- A full page may have rows after it; a short page is the last one.
+nextCursor : List Index.PendingRow -> Maybe Index.Cursor
+nextCursor rows =
+    if List.length rows < Index.pageSize then
+        Nothing
+
+    else
+        rows
+            |> List.reverse
+            |> List.head
+            |> Maybe.map (\r -> Index.After { enqueuedAt = r.enqueuedAt, uid = r.unit.uid })
 
 
 classify : Db.Db -> List Index.Unit -> Task.Task Error (List QueuedUnit)

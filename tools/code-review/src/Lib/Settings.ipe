@@ -1,4 +1,4 @@
-module Lib.Settings exposing (DbLocation, IndexSettings, encodeFilePath, indexReadUrl, indexSettings, indexWriteUrl, parseDbLocation, reviewDb, reviewUrl)
+module Lib.Settings exposing (DbLocation, IndexSettings, dbFileName, encodeFilePath, indexReadUrl, indexSettings, indexWriteUrl, parseDbLocation, reviewDb, reviewUrl)
 
 import Ipe.Encoding as Encoding
 import Ipe.Error as Error
@@ -123,6 +123,14 @@ toDbFile var path =
 dbRefusal : String -> String -> String
 dbRefusal var problem =
     String.concat [ var, " ", problem, "; set it to a SQLite file path or a `sqlite://` URL" ]
+
+
+-- The database file's name without its directory, for display.
+dbFileName : DbLocation -> String
+dbFileName loc =
+    case loc of
+        DbFile path ->
+            Path.base path
 
 
 -- The URL for `loc` opened in SQLite `mode`. The path is percent-encoded
