@@ -190,11 +190,9 @@ fn report_check(
             if unformatted.is_empty() {
                 return Ok(());
             }
-            let list = unformatted
-                .iter()
-                .map(|p| format!("  {}", p.display()))
-                .collect::<Vec<_>>()
-                .join("\n");
+            let list = crate::text::TerminalBlock::lines(
+                unformatted.iter().map(|p| format!("  {}", p.display())),
+            );
             Err(CliError::Usage(crate::text::msg::fmt_unformatted_files(
                 &list,
             )))

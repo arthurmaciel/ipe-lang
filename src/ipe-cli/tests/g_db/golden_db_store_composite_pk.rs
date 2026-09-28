@@ -29,7 +29,7 @@ fn golden_dir(root: &Path, golden: &str) -> PathBuf {
 
 /// Build and run `golden` under `IPE_E2E=1`, asserting its stdout matches the oracle.
 fn assert_golden_e2e(golden: &str) {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
     let root = repo_root();

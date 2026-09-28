@@ -64,7 +64,7 @@ fn retry_policy_exact_shape_user_record_builds_and_runs() {
         "retry_policy_exact_shape_user_record: must be accepted; got: {built:?}"
     );
 
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
 

@@ -59,7 +59,7 @@ fn emits_byte_identical_main_rs() {
 /// Regression for same-top-constructor nested discrimination.
 #[test]
 fn end_to_end_builds_and_prints_fifty_two() {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
 

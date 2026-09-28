@@ -366,7 +366,7 @@ pub fn build_in_jail(
     // per call in the long-lived audit/CI process.
     let seccomp_owned = unsafe { OwnedFd::from_raw_fd(seccomp_fd) };
 
-    let host_env = |k: &str| std::env::var_os(k);
+    let host_env = crate::host_env::granted;
     let argv = run_jail_argv(
         tools,
         profile,
@@ -458,7 +458,7 @@ pub fn build_in_jail(
     // Enforce the `env` axis in the launcher (Seatbelt cannot scrub env),
     // mirroring the run jail and the Linux build jail's bwrap `--clearenv`, so a
     // Tier-2 build is confined on the env axis exactly as the shipped app is.
-    let host_env = |k: &str| std::env::var_os(k);
+    let host_env = crate::host_env::granted;
     let scrubbed_env = macos_scrubbed_env(profile, scoped_tmp, &host_env);
 
     spawn_and_decode(&argv, Some(&scrubbed_env))
@@ -1172,7 +1172,7 @@ pub fn macos_scrubbed_env(
 /// resolver is shared.
 #[cfg(any(target_os = "macos", target_os = "freebsd"))]
 pub(crate) fn find_in_path(bin: &str) -> Option<PathBuf> {
-    let path = std::env::var_os("PATH")?;
+    let path = ipe_env::var_os("PATH")?;
     std::env::split_paths(&path)
         .map(|dir| dir.join(bin))
         .find(|candidate| candidate.is_file())
@@ -1354,7 +1354,7 @@ mod freebsd_jail {
 
         // Env scrub in the launcher (the jail does not scrub the inherited env),
         // via the SAME allowlist the macOS/Windows arms use — one env list.
-        let host_env = |k: &str| std::env::var_os(k);
+        let host_env = crate::host_env::granted;
         let scrubbed = macos_scrubbed_env(profile, scoped_tmp.as_path(), &host_env);
 
         // Apply the rctl process-cap rule (withheld subprocess only) BEFORE the

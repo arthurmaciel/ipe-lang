@@ -41,7 +41,7 @@ fn timestamp_seal_emits() {
 /// Gated on `IPE_E2E=1`.
 #[test]
 fn timestamp_seal_builds_and_runs() {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
 

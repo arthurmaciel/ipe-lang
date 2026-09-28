@@ -35,7 +35,7 @@ fn assert_emits_golden(name: &str) {
 
 /// Build and run `name`'s emitted project and check its stdout, behind `IPE_E2E=1`.
 fn assert_runs_golden(name: &str) {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
 

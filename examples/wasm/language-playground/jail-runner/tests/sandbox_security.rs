@@ -33,7 +33,7 @@ use playground_jail_runner::run_jailed::{
 };
 
 fn e2e_enabled() -> bool {
-    std::env::var("IPE_PLAYGROUND_E2E").is_ok()
+    ipe_env::var("IPE_PLAYGROUND_E2E").is_ok()
 }
 
 /// Returns the bwrap path when the netns jail can be established on this host,
@@ -45,7 +45,7 @@ fn jail_or_skip(test: &str) -> Option<std::path::PathBuf> {
     // refuse to skip: a required jail proof that silently skips would pass green
     // having verified nothing. A missing jail primitive here is a hard failure,
     // not a skip. Locally, without the flag, skipping stays a dev convenience.
-    let require = std::env::var("IPE_PLAYGROUND_E2E").is_ok();
+    let require = ipe_env::var("IPE_PLAYGROUND_E2E").is_ok();
     let Some(bwrap) = ipe_sandbox::probe().bwrap else {
         assert!(
             !require,
@@ -81,10 +81,10 @@ fn repo_root() -> PathBuf {
 }
 
 fn ipe_bin() -> PathBuf {
-    if let Ok(p) = std::env::var("IPE_BIN") {
+    if let Ok(p) = ipe_env::var("IPE_BIN") {
         return PathBuf::from(p);
     }
-    let target = std::env::var_os("CARGO_TARGET_DIR")
+    let target = ipe_env::var_os("CARGO_TARGET_DIR")
         .map_or_else(|| repo_root().join("target"), PathBuf::from);
     target.join("debug").join("ipe")
 }
@@ -229,7 +229,7 @@ fn warm_and_seed(crate_dir: &Path) {
 /// A shared warm-cache root reused across tests (so the dependency closure builds
 /// once). Under the sanctioned cache root by default.
 fn warm_root() -> PathBuf {
-    std::env::var_os("IPE_PLAYGROUND_WARM_TARGET").map_or_else(
+    ipe_env::var_os("IPE_PLAYGROUND_WARM_TARGET").map_or_else(
         || std::env::temp_dir().join("ipe-playground-test-warm"),
         PathBuf::from,
     )

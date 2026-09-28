@@ -129,7 +129,7 @@ pub fn build_profile(
 /// build jail's strict `== "1"`, never a loose `is_some`).
 #[must_use]
 pub fn override_requested() -> bool {
-    std::env::var_os(OVERRIDE_ENV).is_some_and(|v| v == "1")
+    ipe_env::var_os(OVERRIDE_ENV).is_some_and(|v| v == "1")
 }
 
 /// Decide what to do when the jail cannot be established for a native-bearing

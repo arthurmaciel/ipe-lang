@@ -162,6 +162,30 @@ pub struct SolvedTypes {
     /// genuine msg-polymorphism is preserved. Empty for a binding with no such
     /// variable (the common case), so the lowerer behaves exactly as before.
     pub msg_defaulted_vars: BTreeMap<(Vec<Symbol>, Symbol), BTreeSet<Symbol>>,
+    /// The solved wildcard `any` facts of each typed binding whose own
+    /// signature has at least one wildcard, keyed by `(home, def_name)`. The
+    /// wildcards' body obligations live in [`Self::bounds`] under the
+    /// `any#<i>` keys ([`wildcard_bound_index`]); this carries the rest the
+    /// lowerer needs to lower wildcard `i` exactly as the checker did.
+    pub signature_wildcards: BTreeMap<(Vec<Symbol>, Symbol), SignatureWildcards>,
+}
+
+/// The solved wildcard `any` facts of one typed binding's own signature.
+///
+/// Index `i` names the binding's `i`-th wildcard occurrence in signature order
+/// (parameters left to right, each walked pre-order, then the return) — the
+/// same order every use site instantiates ([`TypedScheme::wildcard_pins`]) and
+/// the bounds table's `any#<i>` keys count.
+#[derive(Clone, PartialEq, Eq, Debug, Default)]
+pub struct SignatureWildcards {
+    /// Wildcard occurrences each parameter contributes, in parameter order.
+    /// The lowerer mints its per-occurrence generics per parameter and asserts
+    /// these counts before pairing its `k`-th mint with wildcard `k`.
+    pub param_counts: Vec<usize>,
+    /// Parameter wildcard index → the ground type the body pinned it to
+    /// ([`ty_is_pinnable`]). A pinned wildcard lowers to that concrete type, so
+    /// every use must instantiate it at exactly that type.
+    pub pins: BTreeMap<usize, Ty>,
 }
 
 /// Infer the types of a canonical module.
@@ -216,6 +240,10 @@ pub struct TypedScheme {
     /// Annotation variable symbol → the obligations the binding's body
     /// imposed on it (empty map for an obligation-free binding).
     pub bounds: BTreeMap<Symbol, TyBounds>,
+    /// Parameter wildcard index → the ground type the binding's body pinned it
+    /// to ([`SignatureWildcards::pins`]); a dependent module's use must pass
+    /// exactly that type.
+    pub wildcard_pins: BTreeMap<usize, Ty>,
 }
 
 /// The typed cross-module interface of one module.
@@ -272,6 +300,9 @@ pub struct ModuleInference {
 /// Per-binding super-type obligations, keyed `(home, name)` — the shape of
 /// [`SolvedTypes::bounds`].
 type BoundsTable = BTreeMap<(Vec<Symbol>, Symbol), BTreeMap<Symbol, TyBounds>>;
+
+/// Per-binding wildcard pins, keyed like [`BoundsTable`].
+type PinTable = BTreeMap<(Vec<Symbol>, Symbol), BTreeMap<usize, Ty>>;
 
 /// The dependency seeds of a scoped per-module solve, threaded through the
 /// shared inference core.
@@ -395,7 +426,7 @@ fn infer_core(
             .collect()
     });
     // The user enums whose definition embeds a function payload — consulted by
-    // every concrete equality / stringify obligation so a `==` / `toString` on a
+    // every concrete equality / stringify obligation so a `==` / `{{…}}` on a
     // function-carrying enum fails closed (the payload arrow is invisible in a
     // `Ty::Con`'s applied type arguments; see [`fn_embedding_enums`]).
     let fn_enums = fn_embedding_enums(&m.unions, &dep_unions);
@@ -602,6 +633,25 @@ fn infer_core(
     // generated `Into<SqlParam>` impl (`ipe_backend_rust::project`), so an
     // empty params list becomes a concretely-typed empty `Vec<SqlValue>`.
     let sqlvalue_sym = lift!(interner.intern("SqlValue"));
+    // Interpolation defaulting: the element variable of a `Log.*With`
+    // attribute list the program never pinned (an empty `[]` literal). Left
+    // un-defaulted, the lowerer's wildcard-`any` convention would resolve it to
+    // `IrType::Json`, which the sealed runtime `IpeInterpolate` trait does not
+    // cover; `String` is in the closed interpolable set, so the empty list
+    // becomes a concretely-typed `Vec<String>`.
+    let string_sym = lift!(interner.intern("String"));
+    // A typed binding's own wildcard `any` is a generic parameter (see
+    // `Generated::signature_wildcards`): neither the SQL-parameter nor the
+    // interpolation default pins its root; the lowerer bounds that generic on
+    // its recorded `any#<i>` obligation instead. The numeric default still
+    // pins it: a literal merges into the wildcard's flex, and a generic `T`
+    // cannot hold an `Int` literal.
+    let generic_roots: BTreeSet<VarId> = generated
+        .signature_wildcards
+        .iter()
+        .map(|w| uf.find(*w))
+        .collect::<Result<_, _>>()
+        .map_err(|d| (d, Vec::new()))?;
     for (v, orig_bounds, span, home) in &generated.super_vars {
         let root = lift!(uf.find(*v));
         match lift!(uf.content(root)) {
@@ -638,7 +688,7 @@ fn infer_core(
             Content::Super {
                 rigid: false,
                 bounds,
-            } if bounds.has_sql_param() => {
+            } if bounds.has_sql_param() && !generic_roots.contains(&root) => {
                 let sqlvalue_ty = Ty::Con {
                     module: Vec::new(),
                     name: sqlvalue_sym,
@@ -655,6 +705,32 @@ fn infer_core(
                     Content::Structure(FlatType::Con {
                         module: Vec::new(),
                         name: sqlvalue_sym,
+                        args: Vec::new(),
+                    }),
+                ));
+            }
+            // An unpinned interpolation flex defaults to `String` — see the
+            // doc comment above `string_sym`.
+            Content::Super {
+                rigid: false,
+                bounds,
+            } if bounds.has_interpolable() && !generic_roots.contains(&root) => {
+                let string_ty = Ty::Con {
+                    module: Vec::new(),
+                    name: string_sym,
+                    args: Vec::new(),
+                };
+                if !concrete_super_ok(interner, bounds, &string_ty, &enum_embeds_fn) {
+                    return Err((
+                        super_unsatisfied(interner, bounds, &string_ty, *span),
+                        home.clone(),
+                    ));
+                }
+                lift!(uf.set_content(
+                    root,
+                    Content::Structure(FlatType::Con {
+                        module: Vec::new(),
+                        name: string_sym,
                         args: Vec::new(),
                     }),
                 ));
@@ -806,6 +882,44 @@ fn infer_core(
         if !rep_to_sym.is_empty() {
             poly_var_map.insert((home.clone(), *def_name), rep_to_sym);
         }
+    }
+    // A wildcard `any` the body obligated is a bounded generic parameter too:
+    // record it under `any#<i>` (never a writable type-variable name) so each
+    // use site — same module or, through the interface, a dependent one — checks
+    // its own `i`-th wildcard. It stays out of `poly_var_map`: a wildcard is no
+    // named type parameter of the enclosing function.
+    //
+    // A parameter wildcard the body pinned to one ground type (`h x = x + x ==
+    // x` defaults it to `Int`; `f x = String.length x` pins `String`) is no
+    // generic at all: record the pin so the lowerer emits that concrete type and
+    // every use site is held to it ([`check_wildcard_pins`]).
+    let mut signature_wildcards: BTreeMap<(Vec<Symbol>, Symbol), SignatureWildcards> =
+        BTreeMap::new();
+    for entry in &generated.typed_wildcards {
+        let param_wildcards: usize = entry.param_counts.iter().sum();
+        let mut pins = BTreeMap::new();
+        for (i, wildcard) in entry.wildcards.iter().enumerate() {
+            match lift!(uf.content(*wildcard)) {
+                Content::Super { bounds: b, .. } if !b.is_empty() => {
+                    let sym = lift!(interner.intern(&wildcard_bound_key(i)));
+                    bounds.entry(entry.key.clone()).or_default().insert(sym, b);
+                }
+                Content::Structure(_) if i < param_wildcards => {
+                    let ty = lift!(zonk(&mut uf, budget, *wildcard));
+                    if ty_is_pinnable(&ty) {
+                        pins.insert(i, ty);
+                    }
+                }
+                _ => {}
+            }
+        }
+        signature_wildcards.insert(
+            entry.key.clone(),
+            SignatureWildcards {
+                param_counts: entry.param_counts.clone(),
+                pins,
+            },
+        );
     }
 
     // Fold each Boundary-Scheme-Promoted untyped def's quantified vars into
@@ -963,6 +1077,29 @@ fn infer_core(
         &generated.scheme_apps,
         &enum_embeds_fn
     ));
+    // A pinned parameter wildcard lowers to its one ground type: hold every use
+    // — same module, or a dependent one through the interface — to it.
+    let mut pins_for_apps: PinTable = signature_wildcards
+        .iter()
+        .filter(|(_, w)| !w.pins.is_empty())
+        .map(|(key, w)| (key.clone(), w.pins.clone()))
+        .collect();
+    if let Some(ctx) = scoped {
+        for (path, iface) in ctx.deps {
+            for (name, scheme) in &iface.values {
+                if !scheme.wildcard_pins.is_empty() {
+                    pins_for_apps.insert((path.clone(), *name), scheme.wildcard_pins.clone());
+                }
+            }
+        }
+    }
+    lift!(check_wildcard_pins(
+        &mut uf,
+        budget,
+        interner,
+        &pins_for_apps,
+        &generated.scheme_apps
+    ));
 
     // Scoped solve only: assemble the module's typed interface — exported
     // typed bindings carry their normalized annotation scheme + recorded
@@ -984,6 +1121,10 @@ fn infer_core(
                     TypedScheme {
                         ty: (**ty).clone(),
                         bounds: bounds.get(&key).cloned().unwrap_or_default(),
+                        wildcard_pins: signature_wildcards
+                            .get(&key)
+                            .map(|w| w.pins.clone())
+                            .unwrap_or_default(),
                     },
                 );
             } else if let Some(ty) = reified_untyped.get(name) {
@@ -992,6 +1133,7 @@ fn infer_core(
                     TypedScheme {
                         ty: ty.clone(),
                         bounds: BTreeMap::new(),
+                        wildcard_pins: BTreeMap::new(),
                     },
                 );
             }
@@ -1049,6 +1191,7 @@ fn infer_core(
             poly_var_map,
             untyped_type_params,
             msg_defaulted_vars,
+            signature_wildcards,
         },
         interface,
     ))
@@ -1265,8 +1408,25 @@ fn check_scheme_applications(
             continue;
         };
         for (var_sym, b) in var_bounds {
-            let Some(fresh) = app.vars.get(&var_sym.as_raw()) else {
-                continue;
+            let fresh = match wildcard_bound_index(interner, *var_sym) {
+                Some(i) => match app.wildcards.get(i) {
+                    Some(fresh) => fresh,
+                    // The definition and its use instantiate one signature, so
+                    // their wildcard counts agree; a drift must not pass unchecked.
+                    None => {
+                        return Err(Diagnostic::CompilerBug {
+                            where_: "ipe_types::check_scheme_applications",
+                            detail: format!(
+                                "use site has {} wildcard(s), binding obligates wildcard {i}",
+                                app.wildcards.len()
+                            ),
+                        });
+                    }
+                },
+                None => match app.vars.get(&var_sym.as_raw()) {
+                    Some(fresh) => fresh,
+                    None => continue,
+                },
             };
             let ty = zonk(uf, budget, *fresh)?;
             if !emitted_bound_satisfied(interner, *b, &ty, &enum_embeds_fn) {
@@ -1275,6 +1435,91 @@ fn check_scheme_applications(
         }
     }
     Ok(())
+}
+
+/// The bounds-table key of a typed binding's `i`-th wildcard `any` obligation.
+/// `#` is no identifier character, so no annotation variable can collide.
+fn wildcard_bound_key(i: usize) -> String {
+    format!("{WILDCARD_BOUND_PREFIX}{i}")
+}
+
+const WILDCARD_BOUND_PREFIX: &str = "any#";
+
+/// The wildcard index a bounds-table key names, when it is one.
+///
+/// A typed binding's `i`-th wildcard `any` obligation is keyed `any#<i>` in
+/// [`SolvedTypes::bounds`]; every other key is an annotation variable.
+#[must_use]
+pub fn wildcard_bound_index(interner: &Interner, sym: Symbol) -> Option<usize> {
+    interner
+        .resolve(sym)?
+        .strip_prefix(WILDCARD_BOUND_PREFIX)?
+        .parse()
+        .ok()
+}
+
+/// Reject a use that instantiates a pinned parameter wildcard at another type.
+///
+/// A wildcard `any` parameter the body pinned to one ground type lowers to that
+/// concrete Rust type, not a generic, while each use instantiates its own fresh
+/// copy of the wildcard. Without this check `h 1.5` against a body that pinned
+/// `Int` would pass here and fail `cargo` with a type mismatch. A use whose
+/// wildcard stays non-ground (it flows into the caller's own generic) is
+/// rejected too: it cannot be shown to be the pinned type.
+fn check_wildcard_pins(
+    uf: &mut UnionFind<Content>,
+    budget: &mut Budget,
+    interner: &Interner,
+    pins: &PinTable,
+    apps: &[SchemeApp],
+) -> DResult<()> {
+    for app in apps {
+        let Some(binding_pins) = pins.get(&(app.home.clone(), app.name)) else {
+            continue;
+        };
+        for (i, pinned) in binding_pins {
+            // The definition and its use instantiate one signature, so their
+            // wildcard counts agree; a drift must not pass unchecked.
+            let Some(fresh) = app.wildcards.get(*i) else {
+                return Err(Diagnostic::CompilerBug {
+                    where_: "ipe_types::check_wildcard_pins",
+                    detail: format!(
+                        "use site has {} wildcard(s), binding pins wildcard {i}",
+                        app.wildcards.len()
+                    ),
+                });
+            };
+            let found = zonk(uf, budget, *fresh)?;
+            if found != *pinned {
+                let mut namer = VarNamer::new();
+                return Err(Diagnostic::Type {
+                    span: app.span,
+                    msg: TypeError::TypeMismatch {
+                        expected: Box::new(ty_to_doc(pinned, interner, &mut namer)?),
+                        found: Box::new(ty_to_doc(&found, interner, &mut namer)?),
+                        definition: None,
+                        path: Box::new([]),
+                    },
+                });
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Whether a solved wildcard type is a pin the lowerer emits concretely.
+///
+/// It must be ground (no type variable), and free of records: a record-typed
+/// wildcard lowers to a structural row generic that admits wider caller
+/// records, so it is no single pinned type.
+fn ty_is_pinnable(ty: &Ty) -> bool {
+    match ty {
+        Ty::Var(_) | Ty::Record(..) => false,
+        Ty::Unit => true,
+        Ty::Fun(a, b) => ty_is_pinnable(a) && ty_is_pinnable(b),
+        Ty::Con { args, .. } => args.iter().all(ty_is_pinnable),
+        Ty::Tuple(elems) => elems.iter().all(ty_is_pinnable),
+    }
 }
 
 /// Whether a concrete type satisfies the Rust bound a super-typed *generic*
@@ -1371,17 +1616,22 @@ fn super_bounds_satisfied(
     // runtime has a `From<T> for SqlParam` impl for — the bare scalars
     // `ipe_runtime::db` binds directly, plus the `SqlValue` ADT itself.
     let sql_param_ok = super_bounds::prim_satisfies_sql_param(prim);
+    // Interpolation obligation (`{{…}}` / `Log.*With` attributes): exactly the
+    // closed scalar set the runtime's sealed `IpeInterpolate` trait covers. A
+    // bare variable (`prim == None`) fails closed like every sibling.
+    let interpolable_ok = super_bounds::prim_satisfies_interpolable(prim);
     (!bounds.has_number() || number_ok)
         && (!bounds.has_ord() || ord_ok)
         && (!bounds.has_eq() || ty_is_equatable(ty, enum_embeds_fn))
         && (!bounds.has_comparable_key() || key_ok)
-        // Stringify (`toString` / `Log.*With`): showable iff it contains no
-        // function anywhere — the SAME "no function nested" rule as equatable,
-        // since every non-function type derives `IpeStringify`.
+        // Stringify (`Debug.log` / `Error.toString`): showable iff it contains
+        // no function anywhere — the SAME "no function nested" rule as
+        // equatable, since every non-function type derives `IpeStringify`.
         && (!bounds.has_show() || ty_is_equatable(ty, enum_embeds_fn))
         && (!bounds.has_append() || appendable_ok)
         && (!bounds.has_hof_kernel_result() || not_curried_ok)
         && (!bounds.has_sql_param() || sql_param_ok)
+        && (!bounds.has_interpolable() || interpolable_ok)
 }
 
 /// Whether a resolved concrete type satisfies super-type obligations `bounds`
@@ -1434,7 +1684,7 @@ fn canon_type_embeds_lambda(t: &canon::Type) -> bool {
 /// arrow is invisible in a `Ty::Con`'s type arguments (which carry only applied
 /// type parameters), so the structural [`ty_is_equatable`] walk cannot see it
 /// without this out-of-band definition lookup. Consulted at every concrete
-/// equality / stringify obligation so a `==` / `toString` on a function-carrying
+/// equality / stringify obligation so a `==` / `{{…}}` on a function-carrying
 /// enum fails closed (IPE-T0014) instead of emitting Rust that does not build.
 fn fn_embedding_enums(
     module_unions: &[canon::Union],
@@ -1475,7 +1725,12 @@ fn ty_is_equatable(ty: &Ty, enum_embeds_fn: &impl Fn(&[Symbol], Symbol) -> bool)
 
 /// Build the [`TypeError::SuperTypeUnsatisfied`] (IPE-T0014) for a super-typed
 /// binding used at a type that does not meet its obligations.
-fn super_unsatisfied(interner: &Interner, bounds: TyBounds, ty: &Ty, span: Span) -> Diagnostic {
+pub(crate) fn super_unsatisfied(
+    interner: &Interner,
+    bounds: TyBounds,
+    ty: &Ty,
+    span: Span,
+) -> Diagnostic {
     // Name every super-type the variable owes, in a fixed order, joined with
     // `+` (`Number + Equatable` when a variable is both added and compared for
     // equality). A bound set always carries at least one obligation at a call
@@ -1511,7 +1766,12 @@ fn super_unsatisfied(interner: &Interner, bounds: TyBounds, ty: &Ty, span: Span)
         // sentence off this exact label.
         classes.push(ipe_diagnostics::HOF_KERNEL_RESULT_CLASS);
     }
-    let class = if classes.is_empty() {
+    // The interpolation obligation's closed scalar set is a subset of every
+    // sibling class's domain, so it alone names the failure; the shared label
+    // keys the renderer's tailored sentence (accepted scalars + the fix).
+    let class = if bounds.has_interpolable() {
+        ipe_diagnostics::INTERPOLABLE_CLASS.to_owned()
+    } else if classes.is_empty() {
         "Equatable".to_owned()
     } else {
         classes.join(" + ")
@@ -5198,40 +5458,40 @@ mod tests {
         );
     }
 
-    /// Regression for AUD-06 (seal): `Auth.signToken` claims pinned to
-    /// `Dict String String`, not flexible `var(0)`. `var(0)` unified with
-    /// anything (a record literal included), so ipe accepted a program the
-    /// generated project's `HashMap<String,String>`-pinned wrapper could not
-    /// build (exit-0-then-cargo-fail). A `Dict.fromList [...]` literal claims
-    /// argument must still type-check clean; a record literal must now be
-    /// REJECTED at type-check (IPE-T0001-class), not silently accepted.
+    /// Seal: `Auth.signToken` claims are pinned to `Dict String String`, not a
+    /// flexible variable that would unify with a record literal and accept a
+    /// program the emitted `HashMap<String,String>`-pinned wrapper cannot
+    /// build. A `Dict String String` claims argument type-checks clean; a
+    /// record literal is refused at type-check.
     #[test]
     fn auth_sign_token_claims_pinned_to_dict_string_string() {
-        // `signToken`'s first argument is `Secret`, not `String` —
-        // seal via `Secret.fromString` (auto-qualified prelude module, no
-        // import needed, same as `Uuid.v4`).
-        let ok_src = "module Main exposing (main)\n\
+        // Both kernels resolve through their explicit imports and `Dict` is a
+        // builtin type, so both fixtures canonicalise without the compiled
+        // stdlib and the refusal is inference's own.
+        let ok_src = "module Main exposing (sign)\n\n\
              import Ipe.Auth as Auth\n\
-             main =\n    Auth.signToken (Secret.fromString \"s\") (Dict.fromList [(\"sub\", \"x\")]) 3600\n";
-        let Some((m, mut i)) = canon_src(ok_src) else {
-            return;
-        };
+             import Ipe.Secret as Secret\n\n\
+             sign : Dict String String -> Result Error String\n\
+             sign claims =\n    Auth.signToken (Secret.fromString \"s\") claims 3600\n";
+        let (m, mut i) = canon_src(ok_src).expect("the Dict-claims fixture must canonicalise");
+        let solved = infer(&m, &mut i);
         assert!(
-            infer(&m, &mut i).is_ok(),
-            "Auth.signToken with a Dict String String claims literal must type-check clean"
+            solved.is_ok(),
+            "Auth.signToken with Dict String String claims must type-check clean: {solved:?}"
         );
 
-        let bad_src = "module Main exposing (main)\n\
+        let bad_src = "module Main exposing (bad)\n\n\
              import Ipe.Auth as Auth\n\
-             main =\n    Auth.signToken (Secret.fromString \"s\") { sub = \"x\" } 3600\n";
-        let Some((m2, mut i2)) = canon_src(bad_src) else {
-            return;
-        };
+             import Ipe.Secret as Secret\n\n\
+             bad : Result Error String\n\
+             bad =\n    Auth.signToken (Secret.fromString \"s\") { sub = \"x\" } 3600\n";
+        let (m2, mut i2) = canon_src(bad_src).expect("the record-claims fixture must canonicalise");
+        let solved = infer(&m2, &mut i2);
         assert!(
-            infer(&m2, &mut i2).is_err(),
-            "Auth.signToken with a RECORD literal claims argument must now be \
-             REJECTED (pre-fix: var(0) unified with anything, accepting a \
-             shape the emitted HashMap<String,String>-pinned wrapper cannot build)"
+            matches!(solved, Err(Diagnostic::Type { .. })),
+            "Auth.signToken with a RECORD claims argument must be REJECTED at type-check \
+             (a flexible claims variable would accept a shape the emitted \
+             HashMap<String,String>-pinned wrapper cannot build): {solved:?}"
         );
     }
 
@@ -5756,15 +6016,15 @@ mod tests {
 
     /// A `Show`-bounded generic instantiated to a FUNCTION must be REJECTED by
     /// the shared use-site gate. The obligation models `describe : a -> String`
-    /// with `describe x = Basics.toString x` — a `Stringify` obligation on `a` —
-    /// instantiated to `someFn : Int -> Int`. Before the gate carried the `Show`
-    /// clause, `ipe` accepted this and the backend emitted
-    /// `fn describe<T0: IpeStringify>(..)` fed a closure — an E0277 at `cargo`.
+    /// with `describe x = Debug.log "x" x` — a `Stringify` obligation on `a` —
+    /// instantiated to `someFn : Int -> Int`. Without the gate's `Show` clause
+    /// the backend would emit `fn describe<T0: IpeStringify>(..)` fed a
+    /// closure — an E0277 at `cargo`.
     ///
     /// Driven directly against `super_bounds_satisfied` (like
     /// [`every_bound_bit_rejects_a_function_at_both_sites`]) rather than through
     /// a stdlib call: the single-module inference harness canonicalises `Main`
-    /// with no stdlib in scope, so a qualified `Basics.toString` dies at
+    /// with no stdlib in scope, so a qualified stdlib call dies at
     /// `UnknownModule` before any Show obligation is recorded — a refusal that
     /// never reaches this gate and holds green even with the `Show` clause
     /// deleted (vacuous). This construction exercises the `has_show()` conjunct
@@ -5829,6 +6089,434 @@ mod tests {
                 "a Stringify-satisfying non-function type (Int) must be accepted \
                  at {site:?}"
             );
+        }
+    }
+
+    /// `true` iff inference refused the program with the interpolation
+    /// IPE-T0014 — a canonicalisation error or any other refusal is `false`, so
+    /// a test asserting this cannot pass vacuously.
+    fn refused_as_not_interpolable(solved: &DResult<SolvedTypes>) -> bool {
+        matches!(
+            solved,
+            Err(Diagnostic::Type {
+                msg: TypeError::SuperTypeUnsatisfied { class, .. },
+                ..
+            }) if &**class == ipe_diagnostics::INTERPOLABLE_CLASS
+        )
+    }
+
+    /// Every non-scalar value interpolated with `{{…}}` is refused at type-check
+    /// (IPE-T0014): a record, a custom type, a `Maybe Int` and a `List String`.
+    /// None of them reaches a Debug rendering or an unbounded Rust generic.
+    #[test]
+    fn interpolating_a_non_scalar_is_refused() {
+        for (what, decls) in [
+            ("a record", "v =\n    { x = 1 }\n"),
+            ("a custom type", "type Color = Red | Blue\n\nv =\n    Red\n"),
+            ("a Maybe Int", "v =\n    Just 1\n"),
+            ("a List String", "v =\n    [ \"a\" ]\n"),
+        ] {
+            let src = format!("{M2C_HDR}{decls}\nmain =\n    \"\"\"v={{{{v}}}}\"\"\"\n");
+            let (solved, _i, _m) = infer_src(&src);
+            assert!(
+                refused_as_not_interpolable(&solved),
+                "interpolating {what} must be refused as not interpolable: {solved:?}"
+            );
+        }
+    }
+
+    /// A generic that interpolates its argument carries the interpolation
+    /// obligation to every caller: instantiating it at a record is refused at
+    /// the use site, exactly as a direct `{{record}}` is.
+    #[test]
+    fn interpolating_generic_used_at_a_record_is_refused() {
+        let src = format!(
+            "{M2C_HDR}describe : a -> String\ndescribe x =\n    \"\"\"<{{{{x}}}}>\"\"\"\n\n\
+             main =\n    describe {{ x = 1 }}\n"
+        );
+        let (solved, _i, _m) = infer_src(&src);
+        assert!(
+            refused_as_not_interpolable(&solved),
+            "an interpolating generic used at a record must be refused: {solved:?}"
+        );
+    }
+
+    /// The acceptance side: each of the five interpolable scalars type-checks.
+    #[test]
+    fn interpolating_each_scalar_is_accepted() {
+        let src = format!(
+            "{M2C_HDR}s =\n    \"text\"\n\nn =\n    1\n\nf =\n    1.5\n\nb =\n    True\n\n\
+             c =\n    'x'\n\n\
+             main =\n    \"\"\"{{{{s}}}} {{{{n}}}} {{{{f}}}} {{{{b}}}} {{{{c}}}}\"\"\"\n"
+        );
+        let (solved, _i, _m) = infer_src(&src);
+        assert!(
+            solved.is_ok(),
+            "String, Int, Float, Bool and Char must all interpolate: {solved:?}"
+        );
+    }
+
+    // ── Signature wildcard `any`: bounds and pins held at every use ─────────
+
+    /// A helper whose signature-wildcard parameter is interpolated: the
+    /// `{{…}}` kernel lays the same interpolation obligation on the wildcard
+    /// a `Log.*With` attribute element does, with no module import.
+    const INTERP_ANY: &str = r#"f : any -> String
+f x =
+    """<{{x}}>"""
+"#;
+
+    /// A helper whose body pins its wildcard parameter to `Int` by numeric
+    /// defaulting.
+    const PIN_INT: &str = r"h : any -> Bool
+h x =
+    x + x == x
+";
+
+    /// The result of one module's scoped solve ([`infer_module`]).
+    type ScopedResult = Result<ModuleInference, (Diagnostic, Vec<Symbol>)>;
+
+    /// Scoped-solve each module over its predecessors' closed interfaces.
+    ///
+    /// Entries are dependency-first `(dotted module path, source)` pairs, as
+    /// in [`link_modules`]; a module whose interface is closed is offered to
+    /// the later ones. Returns every module's result in order, or `None` when
+    /// one fails to parse or canonicalise.
+    fn infer_scoped(modules_src: &[(&str, &str)]) -> Option<Vec<ScopedResult>> {
+        let mut i = Interner::new();
+        let mut exports_by_path: BTreeMap<Vec<Symbol>, ModuleExports> = BTreeMap::new();
+        let mut interfaces: BTreeMap<Vec<Symbol>, Arc<TypedInterface>> = BTreeMap::new();
+        let mut results = Vec::new();
+        for (path_str, src) in modules_src {
+            let path: Vec<Symbol> = path_str
+                .split('.')
+                .map(|seg| i.intern(seg))
+                .collect::<DResult<Vec<Symbol>>>()
+                .ok()?;
+            let parsed = ipe_parse::parse_module(src, &mut i).ok()?;
+            let (cm, exports) =
+                ipe_canon::canonicalise_module(&parsed, &path, &exports_by_path, &mut i).ok()?;
+            let result = infer_module(&cm, &exports, &interfaces, &mut i);
+            if let Ok(ModuleInference {
+                interface: InterfaceStatus::Closed(iface),
+                ..
+            }) = &result
+            {
+                interfaces.insert(path.clone(), Arc::new(iface.clone()));
+            }
+            exports_by_path.insert(path, exports);
+            results.push(result);
+        }
+        Some(results)
+    }
+
+    /// `true` iff inference refused the program with a type mismatch.
+    fn refused_as_mismatch(solved: &DResult<SolvedTypes>) -> bool {
+        matches!(
+            solved,
+            Err(Diagnostic::Type {
+                msg: TypeError::TypeMismatch { .. },
+                ..
+            })
+        )
+    }
+
+    /// The solved wildcard facts `solved` recorded for the binding `name`.
+    fn signature_wildcards_of<'s>(
+        solved: &'s SolvedTypes,
+        i: &mut Interner,
+        name: &str,
+    ) -> Option<&'s SignatureWildcards> {
+        let sym = i.intern(name).ok()?;
+        solved
+            .signature_wildcards
+            .iter()
+            .find(|((_, n), _)| *n == sym)
+            .map(|(_, w)| w)
+    }
+
+    /// `true` iff the scoped solve closed the first module's interface and
+    /// refused the second with a type diagnostic `refused` accepts.
+    fn scoped_refuses_importer(
+        results: &[ScopedResult],
+        refused: impl Fn(&TypeError) -> bool,
+    ) -> bool {
+        matches!(
+            results.first(),
+            Some(Ok(ModuleInference {
+                interface: InterfaceStatus::Closed(_),
+                ..
+            }))
+        ) && matches!(
+            results.get(1),
+            Some(Err((Diagnostic::Type { msg, .. }, _))) if refused(msg)
+        )
+    }
+
+    /// `true` iff `msg` is the interpolation IPE-T0014 refusal.
+    fn is_not_interpolable(msg: &TypeError) -> bool {
+        matches!(
+            msg,
+            TypeError::SuperTypeUnsatisfied { class, .. }
+                if &**class == ipe_diagnostics::INTERPOLABLE_CLASS
+        )
+    }
+
+    /// `true` iff `sig` pins wildcard 0 to the nullary primitive `prim`.
+    fn pins_wildcard_zero_to(sig: Option<&SignatureWildcards>, i: &Interner, prim: &str) -> bool {
+        sig.and_then(|w| w.pins.get(&0)).is_some_and(|t| {
+            matches!(t, Ty::Con { name, args, .. }
+                if args.is_empty() && i.resolve(*name) == Some(prim))
+        })
+    }
+
+    /// A record or a function value passed through an interpolating wildcard
+    /// is refused at the use site, exactly as a direct `{{…}}` of it is.
+    #[test]
+    fn interpolating_wildcard_refuses_a_record_or_function_argument() {
+        for (what, arg) in [("a record", "{ x = 1 }"), ("a function", "(\\n -> n)")] {
+            let src = format!("{M2C_HDR}{INTERP_ANY}\nmain =\n    f {arg}\n");
+            let (solved, _i, _m) = infer_src(&src);
+            assert!(
+                refused_as_not_interpolable(&solved),
+                "{what} through an interpolating `any` must be refused: {solved:?}"
+            );
+        }
+    }
+
+    /// The same refusal holds when the wildcard helper lives in another
+    /// module — through the linked whole-program solve and through the scoped
+    /// per-module solve over the helper's interface alike.
+    #[test]
+    fn interpolating_wildcard_refuses_a_record_or_function_across_modules() {
+        let lib_src = format!("module Lib exposing (f)\n\n{INTERP_ANY}");
+        for (what, arg) in [("a record", "{ x = 1 }"), ("a function", "(\\n -> n)")] {
+            let main_src = format!("{M2C_HDR}import Lib exposing (f)\n\nmain =\n    f {arg}\n");
+            let modules = [("Lib", lib_src.as_str()), ("Main", main_src.as_str())];
+            let (m, mut i) = link_modules(&modules).expect("the two-module fixture must link");
+            let solved = infer(&m, &mut i);
+            assert!(
+                refused_as_not_interpolable(&solved),
+                "{what} through an imported interpolating `any` must be refused: {solved:?}"
+            );
+            let results = infer_scoped(&modules).expect("the two-module fixture must canonicalise");
+            assert!(
+                scoped_refuses_importer(&results, is_not_interpolable),
+                "{what}: the scoped solve must close the helper and refuse the use: {results:?}"
+            );
+        }
+    }
+
+    /// The acceptance side: a scalar passes, and the helper records its
+    /// wildcard's interpolation obligation under `any#0` with no pin — the
+    /// fact the lowerer bounds the emitted generic on.
+    #[test]
+    fn interpolating_wildcard_records_its_bound_and_accepts_a_scalar() {
+        let src = format!("{M2C_HDR}{INTERP_ANY}\nmain =\n    f \"s\"\n");
+        let (solved, mut i, _m) = infer_src(&src);
+        let solved = solved.expect("`f \"s\"` must type-check");
+        let f_sym = i.intern("f").expect("intern `f`");
+        let bounds = solved
+            .bounds
+            .iter()
+            .find(|((_, n), _)| *n == f_sym)
+            .map(|(_, b)| b)
+            .expect("`f` must record a bound");
+        let wildcard_bounds: Vec<(Option<usize>, TyBounds)> = bounds
+            .iter()
+            .map(|(k, b)| (wildcard_bound_index(&i, *k), *b))
+            .collect();
+        assert!(
+            matches!(wildcard_bounds.as_slice(), [(Some(0), b)] if b.has_interpolable()),
+            "`f` must bound exactly wildcard 0 as interpolable: {wildcard_bounds:?}"
+        );
+        let sig = signature_wildcards_of(&solved, &mut i, "f");
+        assert!(
+            matches!(sig, Some(w) if w.param_counts == [1] && w.pins.is_empty()),
+            "`f` has one unpinned parameter wildcard: {sig:?}"
+        );
+    }
+
+    /// A wildcard forwarded into an interpolating wildcard carries no proof it
+    /// is interpolable at the forwarding site, so the forwarding use is
+    /// refused rather than emitted against an unbounded generic.
+    #[test]
+    fn wildcard_forwarded_into_an_interpolating_wildcard_is_refused() {
+        let src = format!(
+            "{M2C_HDR}{INTERP_ANY}\ng : any -> String\ng y =\n    f y\n\nmain =\n    g \"s\"\n"
+        );
+        let (solved, _i, _m) = infer_src(&src);
+        assert!(
+            refused_as_not_interpolable(&solved),
+            "forwarding one `any` into an interpolating `any` must be refused: {solved:?}"
+        );
+    }
+
+    /// A function value meeting an interpolation obligation inside one body —
+    /// a list element beside an interpolated wildcard, or an untyped top-level
+    /// function value under `{{…}}` — is refused where the two unify.
+    #[test]
+    fn interpolation_obligation_refuses_a_function_during_unification() {
+        for (what, src) in [
+            (
+                "a list element beside a wildcard",
+                format!(
+                    "{M2C_HDR}f : any -> String\nf x =\n    \
+                     let ys = [ x, (\\n -> n) ] in \"\"\"<{{{{x}}}}>\"\"\"\n\n\
+                     main =\n    f \"s\"\n"
+                ),
+            ),
+            (
+                "an untyped function value",
+                format!("{M2C_HDR}v =\n    \\n -> n\n\nmain =\n    \"\"\"v={{{{v}}}}\"\"\"\n"),
+            ),
+        ] {
+            let (solved, _i, _m) = infer_src(&src);
+            assert!(
+                refused_as_not_interpolable(&solved),
+                "{what} under an interpolation obligation must be refused: {solved:?}"
+            );
+        }
+    }
+
+    /// A wildcard the body pins to `Int` lowers to `Int`, so a `Float` use is
+    /// refused while an `Int` use is accepted and the pin is recorded.
+    #[test]
+    fn body_pinned_wildcard_holds_every_use_to_its_pin() {
+        let bad = format!("{M2C_HDR}{PIN_INT}\nmain =\n    h 1.5\n");
+        let (solved, _i, _m) = infer_src(&bad);
+        assert!(
+            refused_as_mismatch(&solved),
+            "`h 1.5` against an `Int`-pinned wildcard must be refused: {solved:?}"
+        );
+        let good = format!("{M2C_HDR}{PIN_INT}\nmain =\n    h 0\n");
+        let (solved, mut i, _m) = infer_src(&good);
+        let solved = solved.expect("`h 0` must type-check");
+        let sig = signature_wildcards_of(&solved, &mut i, "h").cloned();
+        assert!(
+            pins_wildcard_zero_to(sig.as_ref(), &i, "Int"),
+            "`h` must pin wildcard 0 to `Int`: {sig:?}"
+        );
+    }
+
+    /// A wildcard a concretely-typed operation pins to `String` (`++` against
+    /// a `String` literal — the same unification a `String`-typed kernel
+    /// argument performs) refuses an `Int` use, while a `String` use is
+    /// accepted and the pin is recorded.
+    #[test]
+    fn concretely_pinned_wildcard_refuses_another_type() {
+        const PIN_STRING: &str = "f : any -> String\nf x =\n    x ++ \"!\"\n";
+        let bad = format!("{M2C_HDR}{PIN_STRING}\nmain =\n    f 3\n");
+        let (solved, _i, _m) = infer_src(&bad);
+        assert!(
+            refused_as_mismatch(&solved),
+            "`f 3` against a `String`-pinned wildcard must be refused: {solved:?}"
+        );
+        let good = format!("{M2C_HDR}{PIN_STRING}\nmain =\n    f \"s\"\n");
+        let (solved, mut i, _m) = infer_src(&good);
+        let solved = solved.expect("`f \"s\"` must type-check");
+        let sig = signature_wildcards_of(&solved, &mut i, "f").cloned();
+        assert!(
+            pins_wildcard_zero_to(sig.as_ref(), &i, "String"),
+            "`f` must pin wildcard 0 to `String`: {sig:?}"
+        );
+    }
+
+    /// A pinned wildcard in another module holds the importer's use to the pin,
+    /// through the linked solve and through the interface in the scoped solve.
+    #[test]
+    fn body_pinned_wildcard_is_held_across_modules() {
+        let lib_src = format!("module Lib exposing (h)\n\n{PIN_INT}");
+        let main_src = format!("{M2C_HDR}import Lib exposing (h)\n\nmain =\n    h 1.5\n");
+        let modules = [("Lib", lib_src.as_str()), ("Main", main_src.as_str())];
+        let (m, mut i) = link_modules(&modules).expect("the two-module fixture must link");
+        let solved = infer(&m, &mut i);
+        assert!(
+            refused_as_mismatch(&solved),
+            "an imported `Int`-pinned wildcard used at `Float` must be refused: {solved:?}"
+        );
+        let results = infer_scoped(&modules).expect("the two-module fixture must canonicalise");
+        let lib_pins = match results.first() {
+            Some(Ok(ModuleInference {
+                interface: InterfaceStatus::Closed(iface),
+                ..
+            })) => iface
+                .values
+                .values()
+                .map(|scheme| scheme.wildcard_pins.len())
+                .sum::<usize>(),
+            _ => 0,
+        };
+        assert_eq!(
+            lib_pins, 1,
+            "the helper's interface must carry its pin: {results:?}"
+        );
+        assert!(
+            scoped_refuses_importer(&results, |msg| matches!(
+                msg,
+                TypeError::TypeMismatch { .. }
+            )),
+            "the scoped solve must refuse the mismatched use too: {results:?}"
+        );
+    }
+
+    /// A SQL-parameter wildcard is no pin: it stays a generic bounded on the
+    /// bind-parameter obligation, so one helper binds an `Int` and a `String`.
+    #[test]
+    fn sql_param_wildcard_is_used_at_two_types() {
+        let src = "module Main exposing (useBoth)\n\nimport Ipe.Db as Db\n\n\
+             insertOne : Db -> any -> Task Error Int\n\
+             insertOne conn v =\n    Db.exec conn \"INSERT INTO t (v) VALUES (?)\" [ v ]\n\n\
+             useBoth : Db -> List (Task Error Int)\n\
+             useBoth conn =\n    [ insertOne conn \"s\", insertOne conn 1 ]\n";
+        let (solved, mut i, _m) = infer_src(src);
+        let solved = solved.expect("the two-type use must type-check");
+        let sig = signature_wildcards_of(&solved, &mut i, "insertOne");
+        assert!(
+            matches!(sig, Some(w) if w.param_counts == [0, 1] && w.pins.is_empty()),
+            "`insertOne`'s wildcard must stay unpinned: {sig:?}"
+        );
+        assert!(
+            sole_bound(&solved, &mut i, "insertOne").is_some_and(TyBounds::has_sql_param),
+            "`insertOne`'s wildcard must carry the SQL-parameter obligation"
+        );
+    }
+
+    /// The gate itself: the interpolation obligation admits exactly the scalar
+    /// primitives, and refuses `Unit`, a `List Int` and a bare variable at both
+    /// use sites.
+    #[test]
+    fn interpolable_gate_admits_only_the_scalars() {
+        let mut i = Interner::new();
+        let mut prim = |name: &str, args: Vec<Ty>| Ty::Con {
+            module: Vec::new(),
+            name: i.intern(name).expect("intern a primitive name"),
+            args,
+        };
+        let int_ty = prim("Int", Vec::new());
+        let string_ty = prim("String", Vec::new());
+        let char_ty = prim("Char", Vec::new());
+        let unit_ty = prim("Unit", Vec::new());
+        let list_int = prim("List", vec![int_ty.clone()]);
+        let var_ty = Ty::Var(0);
+        let no_fn_enums = |_home: &[Symbol], _name: Symbol| false;
+        let bounds = TyBounds::interpolable();
+        for site in [
+            super_bounds::BoundSite::EmittedGeneric,
+            super_bounds::BoundSite::ConcretePin,
+        ] {
+            for ok in [&int_ty, &string_ty, &char_ty] {
+                assert!(
+                    super_bounds_satisfied(&i, bounds, ok, site, &no_fn_enums),
+                    "{ok:?} must be interpolable at {site:?}"
+                );
+            }
+            for bad in [&unit_ty, &list_int, &var_ty] {
+                assert!(
+                    !super_bounds_satisfied(&i, bounds, bad, site, &no_fn_enums),
+                    "{bad:?} must not be interpolable at {site:?}"
+                );
+            }
         }
     }
 }

@@ -8,7 +8,12 @@ description = "Isolation jail for compiling/inspecting untrusted foreign crates:
 [dependencies]
 ipe_diagnostics = { path = "../diagnostics" }
 ipe_kernels = { path = "../kernels" }
+ipe_env = { path = "../env" }
 serde = { version = "1", features = ["derive"] }
+# Scratch names draw 128 bits from each target's real CSPRNG (`getrandom(2)`,
+# `BCryptGenRandom`) with no weaker fallback. `std` supplies the
+# `getrandom::Error` -> `io::Error` conversion.
+getrandom = { version = "0.3", features = ["std"] }
 
 # `O_NOFOLLOW` for the private-scratch exclusive file open.
 [target.'cfg(unix)'.dependencies]

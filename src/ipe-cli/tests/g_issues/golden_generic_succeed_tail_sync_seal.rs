@@ -77,7 +77,7 @@ fn generic_succeed_capture_sync_bounds_emitted() {
 /// THE SEAL: under `IPE_E2E=1` the emitted crate must build and print every decoded value.
 #[test]
 fn generic_succeed_tail_sync_seal_runs() {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
 

@@ -84,7 +84,7 @@ fn m3a_gate_partial_now_compiles() {
 fn a1_ctor_map_bare() {
     assert_ipec_ok("ctor_map_bare", "i147_ctor_map_bare_emit");
 
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
 
@@ -131,7 +131,7 @@ fn a1_ctor_map_bare() {
 fn a2_ctor_partial_multiarg_with_clone() {
     assert_ipec_ok("ctor_partial", "i147_ctor_partial_emit");
 
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
 
@@ -178,7 +178,7 @@ fn a2_ctor_partial_multiarg_with_clone() {
 fn a3_ctor_stored_in_record_field() {
     assert_ipec_ok("ctor_field", "i147_ctor_field_emit");
 
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
 

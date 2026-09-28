@@ -2,7 +2,8 @@ use super::{nearest_command, nearest_group_member};
 use crate::style::TerminalSafe;
 use crate::{
     Diagnostic, Path, PathBuf, Write, api_surface, audit, build_plan, contained_path, delivery,
-    help, machine_output, output_dir, publish, render, render_json, style, text, toolchain,
+    help, io_bounded, machine_output, output_dir, publish, render, render_json, style, text,
+    toolchain,
 };
 
 /// The runtime crate an emitted project linked against: its root and declared
@@ -340,6 +341,18 @@ pub enum CliError {
         /// The ceiling (bytes) that was enforced.
         max: u64,
     },
+    /// A source path was refused before any of it was read.
+    ///
+    /// It named a non-regular file (a FIFO, device or socket, which could
+    /// block the read or never end) or a file or directory the process may
+    /// not open. Raised by [`io_bounded::open_regular`] and the no-follow
+    /// module walks built on it.
+    SourceRefused {
+        /// The refused path, as the caller spelled it.
+        path: PathBuf,
+        /// Why the path was refused.
+        reason: io_bounded::SourceRefusal,
+    },
     /// A manifest `sourceRoot` (or equivalent dependency path) was rejected by
     /// [`contained_path::ContainedRelPath::parse`] because it escapes the
     /// project directory. Carries the specific [`contained_path::PathEscape`]
@@ -551,6 +564,7 @@ impl CliError {
             Self::EjectUnsupported { .. } => "eject-unsupported",
             Self::DiagnosticJsonEmitted => "diagnostic-json-emitted",
             Self::FileTooLarge { .. } => "file-too-large",
+            Self::SourceRefused { .. } => "source-refused",
             Self::PathEscape { .. } => "path-escape",
             Self::OutputRefused(_) => "output-refused",
             Self::DiscoveryLimitReached { .. } => "discovery-limit-reached",
@@ -623,6 +637,7 @@ impl CliError {
             | Self::EjectUnsupported { .. }
             | Self::DiagnosticJsonEmitted
             | Self::FileTooLarge { .. }
+            | Self::SourceRefused { .. }
             | Self::PathEscape { .. }
             | Self::OutputRefused(_)
             | Self::DiscoveryLimitReached { .. }
@@ -849,6 +864,17 @@ impl std::fmt::Display for CliError {
                 let path = path.display();
                 f.write_str(&text::cli_file_too_large(&path, max))
             }
+            Self::SourceRefused { path, reason } => {
+                let path = path.display();
+                f.write_str(&match reason {
+                    io_bounded::SourceRefusal::NotRegularFile => {
+                        text::cli_source_not_regular_file(&path)
+                    }
+                    io_bounded::SourceRefusal::AccessDenied => {
+                        text::cli_source_access_denied(&path)
+                    }
+                })
+            }
             Self::PathEscape { raw, reason } => {
                 let raw = format!("{raw:?}");
                 f.write_str(&text::cli_path_escape(&raw, reason))
@@ -861,7 +887,7 @@ impl std::fmt::Display for CliError {
                 let fixed_in = p
                     .fixed_in
                     .as_ref()
-                    .map(|v| text::cli_advisory_fixed_in(v))
+                    .map(|v| String::from(text::cli_advisory_fixed_in(v)))
                     .unwrap_or_default();
                 f.write_str(&text::cli_advisory_vulnerable(
                     &p.package,
@@ -1034,11 +1060,11 @@ pub fn fmt_emitted_build_failed(
         // not the user's source: a calm, actionable message with no bug-report
         // invitation.
         EmittedBuildCause::RegistryUnreachable => {
-            let detail = if trimmed.is_empty() {
+            let detail = String::from(if trimmed.is_empty() {
                 text::cli_cargo_fetch_failed(code, what)
             } else {
                 text::cli_cargo_fetch_failed_detail(code, what, &trimmed)
-            };
+            });
             let d = Diagnostic::RegistryUnreachable { detail };
             f.write_str(&render(&d, "", ""))
         }
@@ -1047,11 +1073,11 @@ pub fn fmt_emitted_build_failed(
         // embeds the full cargo stderr, so a report carries everything needed to
         // reproduce the miscompile.
         EmittedBuildCause::Miscompile => {
-            let detail = if trimmed.is_empty() {
+            let detail = String::from(if trimmed.is_empty() {
                 text::cli_cargo_compile_failed(code, what)
             } else {
                 text::cli_cargo_compile_failed_detail(code, what, &trimmed)
-            };
+            });
             let ice = Diagnostic::CompilerBug {
                 where_: "emit.cargo_build",
                 detail,

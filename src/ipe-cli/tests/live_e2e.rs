@@ -640,7 +640,7 @@ fn extract_hid_for_open_tag(html: &str, tag: &str) -> Option<String> {
 /// Propagates any pipeline, build, spawn, or HTTP error as a test error.
 #[test]
 fn live_get_root_contains_initial_count() -> Result<(), BoxError> {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return Ok(());
     }
 
@@ -686,7 +686,7 @@ fn live_get_root_contains_initial_count() -> Result<(), BoxError> {
 /// Propagates any pipeline or Cargo build failure as a test error.
 #[test]
 fn live_counter_build_only() -> Result<(), BoxError> {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return Ok(());
     }
 
@@ -708,7 +708,7 @@ fn live_counter_build_only() -> Result<(), BoxError> {
 /// Propagates any pipeline or Cargo build failure as a test error.
 #[test]
 fn live_html_helper_record_build_only() -> Result<(), BoxError> {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return Ok(());
     }
 
@@ -728,7 +728,7 @@ fn live_html_helper_record_build_only() -> Result<(), BoxError> {
 /// Propagates any pipeline or Cargo build failure as a test error.
 #[test]
 fn live_lambda_subscriptions_build_only() -> Result<(), BoxError> {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return Ok(());
     }
 
@@ -768,7 +768,7 @@ fn live_lambda_subscriptions_build_only() -> Result<(), BoxError> {
 /// Propagates any pipeline, build, spawn, HTTP, or assertion error.
 #[test]
 fn live_onclick_increments_counter() -> Result<(), BoxError> {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return Ok(());
     }
 
@@ -918,7 +918,7 @@ fn http_read_sse_until_patch(
 /// Propagates any pipeline, build, spawn, HTTP, or assertion error.
 #[test]
 fn live_sse_resync_body_carries_event_hids() -> Result<(), BoxError> {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return Ok(());
     }
 
@@ -972,7 +972,7 @@ fn live_sse_resync_body_carries_event_hids() -> Result<(), BoxError> {
 /// Propagates any pipeline or Cargo build failure as a test error.
 #[test]
 fn live_routed_app_build_only() -> Result<(), BoxError> {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return Ok(());
     }
 
@@ -1083,7 +1083,7 @@ main =
 
 #[test]
 fn live_pubsub_cmd_publish_and_sub_subscribe_topic_build_only() -> Result<(), BoxError> {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return Ok(());
     }
 
@@ -1176,7 +1176,7 @@ main =
 
 #[test]
 fn live_pubsub_publish_polymorphic_record_payload_build_only() -> Result<(), BoxError> {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return Ok(());
     }
 
@@ -1273,7 +1273,7 @@ main =
 /// Propagates any pipeline or Cargo build failure as a test error.
 #[test]
 fn live_onsubmit_typed_record_build_only() -> Result<(), BoxError> {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return Ok(());
     }
 
@@ -1307,7 +1307,7 @@ fn live_onsubmit_typed_record_build_only() -> Result<(), BoxError> {
 /// Propagates any pipeline, build, spawn, HTTP, or assertion error.
 #[test]
 fn live_onsubmit_typed_record_dispatches_decoded_payload() -> Result<(), BoxError> {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return Ok(());
     }
 
@@ -1481,7 +1481,7 @@ main =
 /// Propagates any pipeline or Cargo build failure as a test error.
 #[test]
 fn live_onsubmit_bare_msg_build_only() -> Result<(), BoxError> {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return Ok(());
     }
 
@@ -1518,7 +1518,7 @@ fn live_onsubmit_bare_msg_build_only() -> Result<(), BoxError> {
 /// Propagates any pipeline, build, spawn, HTTP, or assertion error.
 #[test]
 fn live_onsubmit_bare_msg_dispatches_fixed_msg() -> Result<(), BoxError> {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return Ok(());
     }
 
@@ -1788,7 +1788,7 @@ main =
 /// Propagates any pipeline or Cargo build failure as a test error.
 #[test]
 fn live_onsubmit_record_literal_build_only() -> Result<(), BoxError> {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return Ok(());
     }
 
@@ -1807,7 +1807,7 @@ fn live_onsubmit_record_literal_build_only() -> Result<(), BoxError> {
 /// Propagates any pipeline or Cargo build failure as a test error.
 #[test]
 fn live_onsubmit_tuple_literal_build_only() -> Result<(), BoxError> {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return Ok(());
     }
 
@@ -1826,7 +1826,7 @@ fn live_onsubmit_tuple_literal_build_only() -> Result<(), BoxError> {
 /// Propagates any pipeline or Cargo build failure as a test error.
 #[test]
 fn live_onsubmit_list_literal_build_only() -> Result<(), BoxError> {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return Ok(());
     }
 
@@ -1942,7 +1942,7 @@ main =
 /// Propagates any pipeline or Cargo build failure as a test error.
 #[test]
 fn live_onsubmit_var_bound_msg_build_only() -> Result<(), BoxError> {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return Ok(());
     }
 
@@ -1966,7 +1966,7 @@ fn live_onsubmit_var_bound_msg_build_only() -> Result<(), BoxError> {
 /// Propagates any pipeline, Cargo build, server-spawn, or HTTP error.
 #[test]
 fn live_onsubmit_var_bound_msg_dispatches_fixed_msg() -> Result<(), BoxError> {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return Ok(());
     }
 
@@ -2199,7 +2199,7 @@ main =
 /// Propagates any pipeline or Cargo build failure as a test error.
 #[test]
 fn live_onsubmit_let_bound_handler_build_only() -> Result<(), BoxError> {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return Ok(());
     }
 
@@ -2220,7 +2220,7 @@ fn live_onsubmit_let_bound_handler_build_only() -> Result<(), BoxError> {
 /// Propagates any pipeline or Cargo build failure as a test error.
 #[test]
 fn live_onsubmit_let_alias_chain_build_only() -> Result<(), BoxError> {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return Ok(());
     }
 
@@ -2333,7 +2333,7 @@ main =
 /// Propagates any pipeline, spawn, or HTTP failure as a test error.
 #[test]
 fn live_unrouted_get_does_not_wipe_form_handlers() -> Result<(), BoxError> {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return Ok(());
     }
 
@@ -2461,7 +2461,7 @@ main =
 /// Propagates any pipeline or Cargo build failure as a test error.
 #[test]
 fn live_generic_decoder_helper_build_only() -> Result<(), BoxError> {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return Ok(());
     }
 
@@ -2506,7 +2506,7 @@ fn geo_clipboard_manifest() -> PathBuf {
     // (src/ipe-cli/), two levels above the workspace root where
     // examples/shapes/web/geo-clipboard/ lives.
     let manifest_dir =
-        PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap_or_else(|_| ".".into()));
+        PathBuf::from(ipe_env::var("CARGO_MANIFEST_DIR").unwrap_or_else(|_| ".".into()));
     manifest_dir
         .join("../..")
         .join("examples/shapes/web/geo-clipboard/package.ipe")
@@ -2564,7 +2564,7 @@ fn compile_and_build_geo_clipboard() -> Result<PathBuf, BoxError> {
 /// Propagates any pipeline or Cargo build failure as a test error.
 #[test]
 fn geo_clipboard_browser_build_only() -> Result<(), BoxError> {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return Ok(());
     }
 
@@ -2592,7 +2592,7 @@ fn geo_clipboard_browser_build_only() -> Result<(), BoxError> {
 /// Propagates any pipeline, build, spawn, or HTTP error as a test error.
 #[test]
 fn geo_clipboard_browser_initial_page() -> Result<(), BoxError> {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return Ok(());
     }
 
@@ -2653,7 +2653,7 @@ fn geo_clipboard_browser_initial_page() -> Result<(), BoxError> {
 /// relative to `CARGO_MANIFEST_DIR` (the `ipe-cli` crate root).
 fn gamepad_watch_manifest() -> PathBuf {
     let manifest_dir =
-        PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap_or_else(|_| ".".into()));
+        PathBuf::from(ipe_env::var("CARGO_MANIFEST_DIR").unwrap_or_else(|_| ".".into()));
     manifest_dir
         .join("../..")
         .join("examples/shapes/web/gamepad-watch/package.ipe")
@@ -2710,7 +2710,7 @@ fn compile_and_build_gamepad_watch() -> Result<PathBuf, BoxError> {
 /// Propagates any pipeline or Cargo build failure as a test error.
 #[test]
 fn gamepad_watch_browser_build_only() -> Result<(), BoxError> {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return Ok(());
     }
 
@@ -2732,7 +2732,7 @@ fn gamepad_watch_browser_build_only() -> Result<(), BoxError> {
 /// relative to `CARGO_MANIFEST_DIR` (the `ipe-cli` crate root).
 fn recorder_stream_manifest() -> PathBuf {
     let manifest_dir =
-        PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap_or_else(|_| ".".into()));
+        PathBuf::from(ipe_env::var("CARGO_MANIFEST_DIR").unwrap_or_else(|_| ".".into()));
     manifest_dir
         .join("../..")
         .join("examples/shapes/web/recorder-stream/package.ipe")
@@ -2790,7 +2790,7 @@ fn compile_and_build_recorder_stream() -> Result<PathBuf, BoxError> {
 /// Propagates any pipeline or Cargo build failure as a test error.
 #[test]
 fn recorder_stream_browser_build_only() -> Result<(), BoxError> {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return Ok(());
     }
 
@@ -2813,7 +2813,7 @@ fn recorder_stream_browser_build_only() -> Result<(), BoxError> {
 /// `CARGO_MANIFEST_DIR` (the `ipe-cli` crate root).
 fn web_authn_manifest() -> PathBuf {
     let manifest_dir =
-        PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap_or_else(|_| ".".into()));
+        PathBuf::from(ipe_env::var("CARGO_MANIFEST_DIR").unwrap_or_else(|_| ".".into()));
     manifest_dir
         .join("../..")
         .join("examples/shapes/web/web-authn/package.ipe")
@@ -2870,7 +2870,7 @@ fn compile_and_build_web_authn() -> Result<PathBuf, BoxError> {
 /// Propagates any pipeline or Cargo build failure as a test error.
 #[test]
 fn web_authn_browser_build_only() -> Result<(), BoxError> {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return Ok(());
     }
 

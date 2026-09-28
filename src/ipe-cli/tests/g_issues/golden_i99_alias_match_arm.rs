@@ -50,7 +50,7 @@ fn i99_alias_tuple_match_arm_is_ipec_ok() {
 /// gone and the values are correct (not just "compiles").
 #[test]
 fn i99_alias_tuple_match_arm_builds_and_runs() {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
     let root = repo_root();
@@ -98,7 +98,7 @@ fn i99_alias_over_self_edge_is_ipec_ok() {
 /// aliased whole (`w`) — proving the E0308 box mismatch is gone.
 #[test]
 fn i99_alias_over_self_edge_builds_and_runs() {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
     let root = repo_root();

@@ -524,7 +524,7 @@ mod windows_jail {
         let job = create_job(profile)?;
 
         // 5. The scrubbed environment block (never inherit the launcher's).
-        let host_env = |k: &str| std::env::var_os(k);
+        let host_env = crate::host_env::granted;
         let env_block = env_block_utf16(profile, scoped_tmp, &host_env);
 
         // 6. CreateProcess suspended, with the AppContainer security-capabilities

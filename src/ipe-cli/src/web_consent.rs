@@ -107,7 +107,7 @@ pub fn gate(
     granted: &BTreeSet<Capability>,
     provenance: &WebAxisProvenance,
 ) -> Result<(), CliError> {
-    let mut ungranted: Vec<String> = Vec::new();
+    let mut ungranted: Vec<crate::text::Message> = Vec::new();
     for cap in inferred {
         let Capability::JsPort(axis) = cap else {
             continue;
@@ -141,7 +141,7 @@ pub fn gate(
 
 /// The typed, fail-closed refusal naming each ungranted web axis, its disclosing
 /// module(s), and the remedy.
-fn refusal(ungranted: &[String]) -> CliError {
+fn refusal(ungranted: &[crate::text::Message]) -> CliError {
     CliError::Usage(crate::text::Message::lines(
         std::iter::once(crate::text::msg::web_consent_header())
             .chain(
@@ -202,6 +202,20 @@ mod tests {
         let prov = WebAxisProvenance::default();
         let inferred = caps(&[Capability::Network, Capability::Filesystem]);
         gate(&inferred, &BTreeSet::new(), &prov).expect("no web axis, no gate");
+    }
+
+    /// A hostile discloser name cannot carry an escape sequence or open a line.
+    #[test]
+    fn a_hostile_discloser_name_renders_inert() {
+        let module = "Dep\u{1b}]0;title\u{7}\n\u{1b}[2Kerror: forged";
+        let prov = WebAxisProvenance::from_sources([(module, CLIPBOARD_DEP)]);
+        let inferred = caps(&[Capability::JsPort(WebCapability::Clipboard)]);
+        let err =
+            gate(&inferred, &BTreeSet::new(), &prov).expect_err("an ungranted axis is refused");
+        let msg = err.to_string();
+        assert!(!msg.contains('\u{1b}'), "{msg:?}");
+        assert!(!msg.contains('\u{7}'), "{msg:?}");
+        assert!(!msg.lines().any(|l| l.starts_with("error:")), "{msg:?}");
     }
 
     #[test]

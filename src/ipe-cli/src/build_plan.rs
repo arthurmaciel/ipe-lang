@@ -95,16 +95,16 @@ impl StaticRequestLayer {
 /// [`Refusal::InvalidBool`] / [`Refusal::UnknownAllocator`] — a set-but-
 /// malformed variable is refused, never silently ignored.
 pub fn env_layer() -> Result<StaticRequestLayer, Refusal> {
-    let static_build = match std::env::var("IPE_STATIC") {
+    let static_build = match ipe_env::var("IPE_STATIC") {
         Ok(v) => Some(parse_bool("IPE_STATIC", &v)?),
         Err(_) => None,
     };
-    let target = std::env::var("IPE_TARGET").ok();
-    let allocator = match std::env::var("IPE_ALLOC") {
+    let target = ipe_env::var("IPE_TARGET").ok();
+    let allocator = match ipe_env::var("IPE_ALLOC") {
         Ok(v) => Some(AllocatorChoice::parse(&v)?),
         Err(_) => None,
     };
-    let c_free = match std::env::var("IPE_CFREE") {
+    let c_free = match ipe_env::var("IPE_CFREE") {
         Ok(v) => Some(parse_bool("IPE_CFREE", &v)?),
         Err(_) => None,
     };
@@ -184,8 +184,8 @@ impl fmt::Display for Refusal {
             Self::AllocatorRequiresStatic { got } => {
                 text::allocator_requires_static(&format_args!("{got:?}"))
             }
-            Self::TalcRequiresArenaDesign => text::talc_requires_arena_design().to_owned(),
-            Self::WebviewStatic => text::webview_static().to_owned(),
+            Self::TalcRequiresArenaDesign => text::msg::talc_requires_arena_design(),
+            Self::WebviewStatic => text::msg::webview_static(),
             Self::TargetNotInstalled { triple } => text::target_not_installed(triple),
             Self::MuslCCompilerMissing { triple } => {
                 text::musl_c_compiler_missing(triple, &triple.replace('-', "_"))
@@ -196,7 +196,7 @@ impl fmt::Display for Refusal {
             Self::AllocatorRequiresC { got } => {
                 text::libc_allocator_requires_c(&format_args!("{got:?}"))
             }
-            Self::CfreeNotYetWired => text::cfree_not_yet_wired().to_owned(),
+            Self::CfreeNotYetWired => text::msg::cfree_not_yet_wired(),
             Self::InvalidBool { source, got } => {
                 text::invalid_bool(source, &format_args!("{got:?}"))
             }
@@ -299,9 +299,9 @@ pub fn resolve(merged: &StaticRequestLayer) -> Result<Option<StaticPlan>, Refusa
 /// [`Refusal::TargetNotInstalled`] / [`Refusal::MuslCCompilerMissing`].
 pub fn preflight(plan: &StaticPlan) -> Result<(), Refusal> {
     let installed = rustup_installed_targets();
-    let cc_present = std::env::var_os(format!("CC_{}", plan.triple.as_str().replace('-', "_")))
+    let cc_present = ipe_env::var_os(format!("CC_{}", plan.triple.as_str().replace('-', "_")))
         .is_some()
-        || std::env::var_os("TARGET_CC").is_some()
+        || ipe_env::var_os("TARGET_CC").is_some()
         || plan
             .triple
             .cc_candidates()
@@ -355,7 +355,7 @@ fn rustup_installed_targets() -> Option<Vec<String>> {
 
 /// Whether an executable named `name` exists on `PATH`.
 fn binary_on_path(name: &str) -> bool {
-    std::env::var_os("PATH")
+    ipe_env::var_os("PATH")
         .is_some_and(|path| std::env::split_paths(&path).any(|dir| dir.join(name).is_file()))
 }
 

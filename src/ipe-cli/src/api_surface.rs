@@ -185,7 +185,8 @@ pub struct WalkedTree {
 /// [`DiffError::Empty`] when the tree carries no `.ipe` modules.
 pub fn read_tree(root: &Path) -> Result<WalkedTree, DiffError> {
     let walked = tree_walk_root(root);
-    let discovered = if walked.is_dir() {
+    let walked_dir = walked.is_dir();
+    let discovered = if walked_dir {
         project::discover_modules(&walked)?
     } else {
         // A single `.ipe` file is its own module; name it by its stem.
@@ -202,8 +203,11 @@ pub fn read_tree(root: &Path) -> Result<WalkedTree, DiffError> {
 
     let mut sources = BTreeMap::new();
     for m in discovered {
-        let src =
-            crate::io_bounded::read_to_string_capped(m.path(), crate::io_bounded::SOURCE_READ_CAP)?;
+        let src = if walked_dir {
+            crate::io_bounded::read_walked_source(m.path())?
+        } else {
+            crate::io_bounded::read_to_string_capped(m.path(), crate::io_bounded::SOURCE_READ_CAP)?
+        };
         let (path, module_path) = m.into_paths();
         sources.insert(module_path, (path, src));
     }

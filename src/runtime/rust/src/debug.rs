@@ -3,9 +3,9 @@
 //! `Debug.log label value` prints `"<label>: <value>"` to stderr as a side
 //! effect and returns `value` UNCHANGED, so it can be spliced into any
 //! expression without altering its result. The value is stringified through the
-//! same total `IpeStringify` path `Basics.toString` / `{{expr}}` interpolation
-//! uses, so any Ipê-representable value renders (a `String` unquoted, scalars
-//! like  `%v`, records/ADTs via their codegen-emitted impl).
+//! same total `IpeStringify` path `{{expr}}` interpolation uses, so any
+//! Ipê-representable value renders (a `String` unquoted, scalars like `%v`,
+//! records/ADTs via their codegen-emitted impl).
 //!
 //! This is the ONE deliberate impure escape hatch in the language — NOT a
 //! `Task`. `ipe release` rejects any `Debug.*` use at compile time (IPE-L0140),

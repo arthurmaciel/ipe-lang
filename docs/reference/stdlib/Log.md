@@ -8,7 +8,10 @@ Ipe.Log — structured observability kernels.
 
 Four severity levels — `debug` / `info` / `warn` / `error` — write a
 single-line message to the structured log.  The `*With` variants attach
-an ordered list of typed context values alongside the message.
+an ordered list of context values alongside the message.  Each value must
+be a `String`, `Int`, `Float`, `Bool` or `Char` (all of one type per list);
+anything else is refused at type-check (IPE-T0014) — convert it first
+(`String.fromInt`, `Error.toString`, `Secret.redacted`, a record's fields).
 
 `Log.level` is the runtime-config front door for the minimum log
 severity.  It takes a `LogLevel` constructor from `Ipe.Level`
@@ -57,7 +60,8 @@ Emit an error-severity log line.
 infoWith : String -> List a -> Task Error ()
 ```
 
-Emit an info-severity log line with a list of typed context values.
+Emit an info-severity log line with a list of scalar context values
+(`String` / `Int` / `Float` / `Bool` / `Char`).
 
 ## `debugWith`
 
@@ -65,7 +69,8 @@ Emit an info-severity log line with a list of typed context values.
 debugWith : String -> List a -> Task Error ()
 ```
 
-Emit a debug-severity log line with a list of typed context values.
+Emit a debug-severity log line with a list of scalar context values
+(`String` / `Int` / `Float` / `Bool` / `Char`).
 
 ## `warnWith`
 
@@ -73,7 +78,8 @@ Emit a debug-severity log line with a list of typed context values.
 warnWith : String -> List a -> Task Error ()
 ```
 
-Emit a warn-severity log line with a list of typed context values.
+Emit a warn-severity log line with a list of scalar context values
+(`String` / `Int` / `Float` / `Bool` / `Char`).
 
 ## `errorWith`
 
@@ -81,7 +87,8 @@ Emit a warn-severity log line with a list of typed context values.
 errorWith : String -> List a -> Task Error ()
 ```
 
-Emit an error-severity log line with a list of typed context values.
+Emit an error-severity log line with a list of scalar context values
+(`String` / `Int` / `Float` / `Bool` / `Char`).
 
 ## `level`
 

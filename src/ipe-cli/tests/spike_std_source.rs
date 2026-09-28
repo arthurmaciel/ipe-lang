@@ -127,7 +127,7 @@ fn hostile_std_squat_is_ipe_n0025() {
 /// from Std-source to a running binary, matching the reference value.
 #[test]
 fn spike_e2e_runs_and_prints_hex() {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("spike_std_source_e2e");

@@ -66,7 +66,7 @@ fn redirect_builders_compile_and_run() {
          API-layer scheme narrowing).\n--- src/main.rs ---\n{emitted}"
     );
 
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
 

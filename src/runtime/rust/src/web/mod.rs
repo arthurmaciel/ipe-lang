@@ -4633,6 +4633,12 @@ where
             post(console::ingest).layer(axum::extract::DefaultBodyLimit::max(web_max_body_bytes())),
         );
 
+    // The console + metrics auth gate applies whether or not a console is
+    // mounted, so its effective posture/mode/source is always logged once.
+    crate::system::write_stderr_line(
+        &crate::telemetry::ConsoleAuthResolution::from_env().startup_line(),
+    );
+
     // When `http_client` is active and the pre-built console binary is
     // present, the proxy replaces the in-process console: a child process is
     // spawned and all `/_ipe/console/*` traffic is forwarded to it via

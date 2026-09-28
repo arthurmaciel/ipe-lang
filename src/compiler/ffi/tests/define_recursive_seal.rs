@@ -199,10 +199,10 @@ fn non_recursive_chain_pkg() -> PkgInfo {
 /// their SEAL proof is the emit-nothing assertions above.
 #[test]
 fn a_non_recursive_chain_builds_and_runs() {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
-    let Ok(cargo) = std::env::var("CARGO") else {
+    let Ok(cargo) = ipe_env::var("CARGO") else {
         return; // no cargo on PATH in this environment — skip like the goldens
     };
 

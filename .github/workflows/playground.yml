@@ -54,6 +54,7 @@ jobs:
               - 'examples/wasm/language-playground/**'
               - 'src/wasm/**'
               - 'src/compiler/sandbox/**'
+              - 'src/compiler/env/**'
               - '.github/workflows/playground.yml'
 
   # Build the wasm bundle and the jail-runner binary. This is the primary rot

@@ -124,7 +124,7 @@ fn transition_module_resolves_and_emits_kernel() {
 /// rendering the CSS `transition:` shorthand — the seal, end to end.
 #[test]
 fn transition_e2e_builds_and_renders_shorthand() {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
     let (emit, res) = build_transition_project("e2e");

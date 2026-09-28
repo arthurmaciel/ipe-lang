@@ -7,6 +7,7 @@ license.workspace = true
 [dependencies]
 ipe_intern = { path = "../intern" }
 ipe_diagnostics = { path = "../diagnostics" }
+ipe_env = { path = "../env" }
 ipe_canon = { path = "../canon" }
 # Leaf crate (deps: ipe_intern + ipe_diagnostics only) → clean down-edge, no
 # cycle. Needed to name `StdlibKernel` in the parse-once kernel-scheme registry

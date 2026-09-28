@@ -135,7 +135,7 @@ fn csv_record_nominal_fold_seal_builds_and_runs() {
         "csv_record_nominal_fold_seal: must be accepted, got: {built:?}"
     );
 
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
     let outcome = crate::support::build_and_run_emitted("csv_record_nominal_fold_seal", &out);

@@ -22,7 +22,7 @@ fn repo_root() -> PathBuf {
 
 #[test]
 fn region_all_members_ipec_and_cargo_zero() {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
 

@@ -147,6 +147,26 @@ fn program_using_ipe_test_resolves_and_type_checks() -> TestResult {
     Ok(())
 }
 
+/// `String.fromBool`, the typed replacement for the removed prelude
+/// `toString`, resolves through the compiled-source `Ipe.String` and
+/// type-checks. The negative leg (bare `toString` unbound) lives in canon.
+#[test]
+fn string_from_bool_type_checks() -> TestResult {
+    let (ok, stdout, stderr) = run_ipe(&[
+        "type-check",
+        &fixture("string_from_bool.ipe").to_string_lossy(),
+    ])?;
+    assert!(
+        ok,
+        "`String.fromBool` must type-check, got stderr:\n{stderr}"
+    );
+    assert!(
+        stdout.contains("type-checks"),
+        "a clean check prints a friendly success message, got:\n{stdout}"
+    );
+    Ok(())
+}
+
 /// `check` type-checks and stops: no emitted project is written next to the
 /// entry (a build would create `out/`). The entry is copied into a fresh,
 /// otherwise-empty directory so any emission would be unmistakable.

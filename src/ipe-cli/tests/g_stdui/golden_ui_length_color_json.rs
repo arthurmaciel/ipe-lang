@@ -37,7 +37,7 @@ fn repo_root() -> PathBuf {
 /// the compact JSON line. Gated on `IPE_E2E=1`.
 #[test]
 fn ui_length_color_and_json_value_render_end_to_end() {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
 

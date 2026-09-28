@@ -237,7 +237,7 @@ fn is_missing_linux_webview_system_libs(err: &str) -> bool {
 ///   `webview` module line.
 #[test]
 fn webview_counter_build_only() -> Result<(), BoxError> {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return Ok(());
     }
 
@@ -267,7 +267,7 @@ fn webview_counter_build_only() -> Result<(), BoxError> {
 /// a served `Web` build; a clean `cargo build` is the proof.
 #[test]
 fn webview_ui_widget_seal_builds() -> Result<(), BoxError> {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return Ok(());
     }
 
@@ -302,7 +302,7 @@ fn webview_ui_widget_seal_builds() -> Result<(), BoxError> {
 /// skipped and why.
 #[test]
 fn webview_counter_tier_b() -> Result<(), BoxError> {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return Ok(());
     }
 

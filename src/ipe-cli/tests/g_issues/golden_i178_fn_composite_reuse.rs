@@ -59,7 +59,7 @@ fn assert_byte_identical(name: &str) {
 }
 
 fn assert_e2e_prints(name: &str, want_stdout: &str) {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
     let root = repo_root();

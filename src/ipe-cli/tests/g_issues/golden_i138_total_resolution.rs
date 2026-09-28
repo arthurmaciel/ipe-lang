@@ -60,7 +60,7 @@ fn try_build(name: &str) -> Result<(), String> {
         eprintln!("SKIP {name}: runtime not available");
         return Ok(());
     };
-    ipe::build_with_sibling_discovery(&entry, &out, &runtime).map_err(|e| e.to_string())
+    ipe::build_loose_file(&entry, &out, &runtime).map_err(|e| e.to_string())
 }
 
 // ---------------------------------------------------------------------------

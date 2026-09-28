@@ -46,7 +46,7 @@ fn i1347_cross_module_monomorphic_view_msg_defaulting_emits() {
     let Ok(runtime) = ipe::resolve_runtime() else {
         return; // resolver unavailable -- skip
     };
-    let built = ipe::build_with_sibling_discovery(&entry, &out, &runtime);
+    let built = ipe::build_loose_file(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
         "a cross-module message-free helper used at a single monomorphic type \
@@ -79,7 +79,7 @@ fn i1347_cross_module_monomorphic_view_msg_defaulting_seal_builds() {
     let Ok(runtime) = ipe::resolve_runtime() else {
         return;
     };
-    let built = ipe::build_with_sibling_discovery(&entry, &out, &runtime);
+    let built = ipe::build_loose_file(&entry, &out, &runtime);
     assert!(built.is_ok(), "{GOLDEN} must be accepted, got: {built:?}");
 
     crate::support::assert_seal_builds(GOLDEN, &out);

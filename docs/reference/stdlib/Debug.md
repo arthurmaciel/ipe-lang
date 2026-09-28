@@ -17,8 +17,8 @@ Use `ipe build` or `ipe run` during development.
         Debug.log "subtotal" subtotal + tax
 
 `log label value` prints `"label: value"` to stderr and returns `value`
-unchanged. The value is stringified through the same polymorphic path as
-`Basics.toString` / `{{expr}}` interpolation, so any value renders.
+unchanged. The value is rendered by the total debug stringifier (the one
+behind `Error.toString`), so any non-function value renders.
 
 ## `todo`
 
@@ -61,8 +61,8 @@ log : String -> a -> a
 ```
 
 `log label value` — print `"label: value"` to stderr, return `value`.
-The value is stringified through the same polymorphic path as
-`Basics.toString` / `{{expr}}` interpolation, so any value renders.
+The value is rendered by the total debug stringifier (the one behind
+`Error.toString`), so any non-function value renders.
 
 ## `todo`
 

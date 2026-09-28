@@ -58,7 +58,7 @@ fn dispatch_table_emits_byte_identical_main_rs() {
 
 #[test]
 fn dispatch_table_end_to_end_prints_twenty_six() {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
     let root = repo_root();

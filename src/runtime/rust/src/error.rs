@@ -327,10 +327,10 @@ pub fn ipe_error_kind_name(kind: IpeErrorKind) -> String {
 }
 
 // `Error.toString` routes through the shared Stringify-bounded mechanism
-// (any `Show`-obligated type, not an Error-specific kernel — see
-// `crates/ipe_types/src/constrain.rs`'s `BasicsToString | ErrorToString`
-// special case). Without this impl the autoref-specialization fallback would
-// render via `#[derive(Debug)]` (`Error(Io, IpeErrorInfo { message: ".." })`)
+// (any `Show`-obligated type, not an Error-specific kernel — see the
+// `Interpolate | ErrorToString` direct-build arm in `ipe_types`' constrain).
+// Without this impl the autoref-specialization fallback would render via
+// `#[derive(Debug)]` (`Error(Io, IpeErrorInfo { message: ".." })`)
 // instead of the reference design's `"<Kind>: <message>"` format.
 impl crate::stringify::IpeStringify for IpeError {
     fn ipe_show(&self) -> String {

@@ -31,7 +31,7 @@ const SRC: &str = "module Main exposing (main)\n\nimport Ipe.Io\n\nmain = Io.pri
 /// The `ipe` binary under test. Under a nextest archive on another host the
 /// baked path may not resolve; callers skip when it is absent.
 fn ipe_bin() -> std::path::PathBuf {
-    std::env::var_os("CARGO_BIN_EXE_ipe").map_or_else(
+    ipe_env::var_os("CARGO_BIN_EXE_ipe").map_or_else(
         || std::path::PathBuf::from(env!("CARGO_BIN_EXE_ipe")),
         std::path::PathBuf::from,
     )
@@ -91,7 +91,7 @@ fn cargo_build_into_shared(out_dir: &Path, shared_target: &Path) -> (bool, Strin
 /// masks a broken app.
 #[test]
 fn probe_shared_target_never_masks_a_broken_emit() {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
     let ipe = ipe_bin();

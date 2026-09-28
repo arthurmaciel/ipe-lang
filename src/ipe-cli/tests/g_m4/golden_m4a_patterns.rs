@@ -63,7 +63,7 @@ fn assert_byte_identical(name: &str) {
 /// stdout matches the golden's CACHED golden oracle via the staleness-gated
 /// `crate::support::assert_go_parity` — NO live oracle run. Gated on `IPE_E2E=1`.
 fn assert_runs_and_matches_oracle(name: &str) {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
 

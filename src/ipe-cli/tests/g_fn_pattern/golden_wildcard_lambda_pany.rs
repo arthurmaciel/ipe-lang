@@ -36,7 +36,7 @@ fn repo_root() -> PathBuf {
 
 #[test]
 fn wildcard_lambda_pany_ipec_cargo_and_run_zero() {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
 

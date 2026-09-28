@@ -408,7 +408,7 @@ fn monomorphic_record_stays_byte_identical() -> DResult<()> {
 /// `cargo build`, run, and assert the program prints `42` — the expected value/// backend produces. Gated on `IPE_E2E=1` so the default `cargo test` stays fast.
 #[test]
 fn end_to_end_builds_and_prints_forty_two() -> DResult<()> {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return Ok(());
     }
     let Some(runtime) = seal_e2e::resolve_runtime() else {

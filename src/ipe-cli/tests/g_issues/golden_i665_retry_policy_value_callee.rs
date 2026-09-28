@@ -84,7 +84,7 @@ fn retry_policy_value_callee_builds_and_runs() {
         "retry_policy_value_callee: must be accepted, got: {built:?}"
     );
 
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
     let outcome = crate::support::build_and_run_emitted("retry_policy_value_callee", &out);
