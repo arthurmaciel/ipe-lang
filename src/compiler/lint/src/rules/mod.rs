@@ -21,7 +21,7 @@ use ipe_diagnostics::{Located, Span};
 use ipe_intern::{Interner, Symbol};
 use ipe_syntax::{Module, TypeAnnotation, Value};
 
-use crate::finding::{Finding, SigFix};
+use crate::finding::{Finding, Fix, SigFix};
 
 /// The read-only context every rule shares for one module: its path, its source
 /// text (for span-based `--fix` slicing), the interner that parsed it, and the
@@ -59,6 +59,26 @@ impl Ctx<'_> {
             message,
             help,
             fix: None,
+            sig_fix: None,
+        }
+    }
+
+    /// A finding that carries a local, single-module text-edit fix.
+    pub fn with_fix(
+        &self,
+        rule: &'static str,
+        span: Span,
+        message: String,
+        help: Vec<String>,
+        fix: Fix,
+    ) -> Finding {
+        Finding {
+            rule,
+            module: self.module.to_vec(),
+            span,
+            message,
+            help,
+            fix: Some(fix),
             sig_fix: None,
         }
     }

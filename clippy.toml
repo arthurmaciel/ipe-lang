@@ -13,4 +13,5 @@ disallowed-methods = [
     { path = "std::process::abort", reason = "abrupt termination that skips Drop; return a Result to the CLI boundary" },
     { path = "std::panic::panic_any", reason = "a panic; return a Result or emit a diagnostic" },
     { path = "core::hint::unreachable_unchecked", reason = "UB; model the invariant in a type instead" },
+    { path = "std::env::home_dir", reason = "an unvalidated home; read it through `ipe_sandbox::home::home_dir` (absolute or nothing)" },
 ]

@@ -17,6 +17,7 @@ ipe_docs = { path = "../../ipe-docs" }
 ipe_lint = { path = "../../compiler/lint" }
 ipe_fmt = { path = "../../ipe-fmt" }
 lsp-types = "0.95"
+serde_json = "1"
 
 [lints]
 workspace = true

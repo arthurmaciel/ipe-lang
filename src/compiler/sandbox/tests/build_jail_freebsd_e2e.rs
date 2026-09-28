@@ -21,6 +21,7 @@
 use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 
+use ipe_sandbox::CanonicalPath;
 use ipe_sandbox::build_jail::{CapabilityAxis, JailOutcome, build_in_jail};
 use ipe_sandbox::run_jail::{FilesystemScope, RunJailTools, SandboxProfile};
 
@@ -88,7 +89,10 @@ fn run_fixture(
     escape_path: &str,
 ) -> JailOutcome {
     // The fixture must be readable+executable by the unprivileged jail user; copy
-    // it into the scratch, which `build_in_jail` chowns to that user.
+    // it into the scratch, which `build_in_jail` chowns to that user. Every path
+    // the payload names is the canonical path the jail binds.
+    let canonical = CanonicalPath::resolve(scoped).expect("canonical scratch");
+    let scoped = canonical.as_path();
     let jailed_fixture = scoped.join("untrusted-build.sh");
     std::fs::copy(fixture_path(), &jailed_fixture).expect("copy fixture into scratch");
     let payload: Vec<OsString> = vec![
@@ -100,7 +104,14 @@ fn run_fixture(
         OsString::from("/bin/sh"),
         jailed_fixture.into_os_string(),
     ];
-    build_in_jail(&inert_tools(), profile, scoped, scoped, &[], &payload)
+    build_in_jail(
+        &inert_tools(),
+        profile,
+        &canonical,
+        &canonical,
+        &[],
+        &payload,
+    )
 }
 
 #[test]
