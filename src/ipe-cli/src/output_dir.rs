@@ -1044,7 +1044,9 @@ pub enum EmitTarget {
 impl EmitTarget {
     /// The output root at `out_dir` as a target, proven disjoint from `project`.
     ///
-    /// Nothing is created until the project is written.
+    /// An existing empty directory at `out_dir` is adopted (marked) now, as
+    /// [`OutputRoot::resolve`] does; nothing else is created until the project
+    /// is written.
     ///
     /// # Errors
     /// As [`OutputRoot::resolve`].
