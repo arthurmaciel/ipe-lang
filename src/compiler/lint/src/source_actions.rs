@@ -65,11 +65,13 @@ impl BlockEdit {
 /// when any declaration shares a line with other code or holds a comment,
 /// when anything but whitespace lies between declarations, when a name does
 /// not resolve, when the rewritten module fails to re-parse to the same
-/// declarations and the kept imports' bound names, or when an independent
-/// re-derivation on the output cannot prove that the drop removed
-/// only what the dropped imports bound and that none of it is still
-/// referenced. `None` also means there is nothing to change. Line endings
-/// follow the block's own (`\r\n` or `\n`).
+/// declarations and the kept imports' bound names, or when a re-derivation
+/// on the output cannot prove that the drop removed only what the dropped
+/// imports bound and that none of it is still referenced. That proof is
+/// independent of the drop *decision* but reuses the `unused-imports` usage
+/// walk, so a reference the walk cannot see escapes both alike. `None` also
+/// means there is nothing to change. Line endings follow the block's own
+/// (`\r\n` or `\n`).
 #[must_use]
 pub fn organize_imports(module: &SourceModule, config: &LintConfig) -> Option<BlockEdit> {
     let report = std::cell::OnceCell::new();
@@ -152,7 +154,9 @@ fn organize_imports_dropping(
 /// of whose names `output` still references.
 ///
 /// Re-derived from the two parse trees, independently of whatever decided
-/// the drop:
+/// the drop — but the reference check below runs the same `unused-imports`
+/// usage walk the production decision does, and the output body is the
+/// input body, so a use the walk misses is missed by both (common mode):
 /// - no binding is gained: the output's import bindings are a subset of the
 ///   original's;
 /// - every binding lost is one a dropped import supplied (a binding also

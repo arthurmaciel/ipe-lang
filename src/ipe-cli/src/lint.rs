@@ -120,29 +120,30 @@ pub(crate) fn run_lint(rest: &[String]) -> Result<(), CliError> {
 /// manifest or entry file), returning defaults when none exists.
 ///
 /// The read goes through [`ipe_lint::load_lint_config`], the one bounded,
-/// open-once reader the language server shares, so a FIFO, directory, or
-/// oversized `lint.ipe` is refused rather than waited on or ignored.
+/// open-once reader the language server shares. `lint.ipe` is found by
+/// convention, not named by the user, so a symlink, FIFO, device, or
+/// directory at that name is [`CliError::SourceRefused`] and an oversized
+/// one [`CliError::FileTooLarge`] — never followed, waited on, or ignored.
 fn load_config(blame_path: &Path) -> Result<LintConfig, CliError> {
     use ipe_lint::{LintConfigLoadError, WorkspaceReadError};
+
+    use crate::io_bounded::{SourceRefusal, access_error, source_refused};
 
     let dir = blame_path
         .parent()
         .map_or_else(|| PathBuf::from("."), Path::to_path_buf);
     let path = dir.join(LINT_IPE);
-    let io = |source: std::io::Error| CliError::Io {
-        path: path.clone(),
-        source,
-    };
     ipe_lint::load_lint_config(&dir).map_err(|e| match e {
-        LintConfigLoadError::Read(WorkspaceReadError::Unreadable(source)) => io(source),
-        LintConfigLoadError::Read(WorkspaceReadError::NotAFile) => io(std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
-            "not a regular file",
-        )),
-        LintConfigLoadError::Read(WorkspaceReadError::NotUtf8) => io(std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            "not valid UTF-8",
-        )),
+        LintConfigLoadError::Read(WorkspaceReadError::Unreadable(source)) => {
+            access_error(&path, source)
+        }
+        LintConfigLoadError::Read(WorkspaceReadError::NotAFile) => {
+            source_refused(&path, SourceRefusal::NotRegularFile)
+        }
+        LintConfigLoadError::Read(WorkspaceReadError::NotUtf8) => CliError::Io {
+            path: path.clone(),
+            source: std::io::Error::new(std::io::ErrorKind::InvalidData, "not valid UTF-8"),
+        },
         LintConfigLoadError::Read(WorkspaceReadError::TooLarge { max }) => CliError::FileTooLarge {
             path: path.clone(),
             max,

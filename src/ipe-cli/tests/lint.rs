@@ -218,6 +218,65 @@ fn unknown_rule_in_config_fails_closed() -> TestResult {
     Ok(())
 }
 
+/// A scratch project with a lint-clean `Main` and a manifest, but no `lint.ipe`.
+fn project_without_lint_config(tag: &str) -> Result<PathBuf, Box<dyn Error>> {
+    let dir = scratch(tag)?;
+    std::fs::create_dir_all(dir.join("src"))?;
+    std::fs::write(
+        dir.join("src/Main.ipe"),
+        "module Main exposing (main)\n\nmain = 0\n",
+    )?;
+    std::fs::write(
+        dir.join("package.ipe"),
+        "module Package exposing (package)\n\npackage = { name = \"refused\" }\n",
+    )?;
+    Ok(dir)
+}
+
+/// Run `ipe lint <dir>` and require the typed not-a-regular-file refusal for its `lint.ipe`.
+#[cfg(unix)]
+fn assert_lint_config_refused(dir: &std::path::Path) -> Result<String, Box<dyn Error>> {
+    let (ok, _stdout, stderr) = run_ipe(&["lint", &dir.to_string_lossy()])?;
+    assert!(!ok, "a non-regular lint.ipe must fail closed:\n{stderr}");
+    assert!(
+        stderr.contains("lint.ipe") && stderr.contains("not a regular file"),
+        "the refusal names lint.ipe as not a regular file:\n{stderr}"
+    );
+    Ok(stderr)
+}
+
+#[test]
+fn a_directory_lint_config_is_refused() -> TestResult {
+    let dir = project_without_lint_config("cfgdir")?;
+    std::fs::create_dir_all(dir.join("lint.ipe"))?;
+    #[cfg(unix)]
+    assert_lint_config_refused(&dir)?;
+    #[cfg(not(unix))]
+    {
+        let (ok, _stdout, stderr) = run_ipe(&["lint", &dir.to_string_lossy()])?;
+        assert!(!ok, "a directory lint.ipe must fail closed:\n{stderr}");
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
+fn a_symlinked_lint_config_is_refused_not_followed() -> TestResult {
+    let dir = project_without_lint_config("cfglink")?;
+    let outside = scratch("cfglink_target")?.join("lint.ipe");
+    std::fs::write(
+        &outside,
+        "module Lint exposing (lint)\n\nlint = Lint.config |> Lint.deny \"out-of-root-marker\"\n",
+    )?;
+    std::os::unix::fs::symlink(&outside, dir.join("lint.ipe"))?;
+    let stderr = assert_lint_config_refused(&dir)?;
+    assert!(
+        !stderr.contains("out-of-root-marker"),
+        "the link target is never read:\n{stderr}"
+    );
+    Ok(())
+}
+
 /// Human `ipe lint <file>` output is the one screen frame.
 ///
 /// The product header, then every line in the two-space gutter; `NO_COLOR` output carries no colour.

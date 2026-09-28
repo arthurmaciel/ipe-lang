@@ -1006,10 +1006,7 @@ fn recompute(state: &mut State, diag_tx: &Sender<DiagnosticsBatch>) {
             .as_deref()
             .map_or_else(ipe_lint::LintConfig::default, |root| {
                 ipe_lint::load_lint_config(root).unwrap_or_else(|e| {
-                    eprintln!(
-                        "[ipe lsp] {}: {e}; linting with the default configuration",
-                        ipe_lint::LINT_CONFIG_FILE
-                    );
+                    eprintln!("[ipe lsp] {e}; linting with the default configuration");
                     ipe_lint::LintConfig::default()
                 })
             });
@@ -1224,10 +1221,7 @@ fn code_action_result(state: &State, params: &serde_json::Value) -> FeatureOutco
                     state.encoding,
                 ));
             }
-            Err(e) => eprintln!(
-                "[ipe lsp] {}: {e}; no source actions offered",
-                ipe_lint::LINT_CONFIG_FILE
-            ),
+            Err(e) => eprintln!("[ipe lsp] {e}; no source actions offered"),
         }
     }
     FeatureOutcome::payload(actions)

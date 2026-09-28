@@ -3293,7 +3293,7 @@ dependencies = [
  "ipe_intern",
  "ipe_parse",
  "ipe_syntax",
- "libc",
+ "rustix 0.38.44",
 ]
 
 [[package]]

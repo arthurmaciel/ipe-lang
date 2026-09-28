@@ -1,15 +1,22 @@
 //! The one bounded reader for an untrusted workspace file, and the `lint.ipe`
 //! loader built on it.
 //!
-//! A workspace file is attacker-shaped: it may be swapped for a FIFO, a
-//! directory, a device, or a multi-GiB blob between any two path lookups. So
-//! the path is resolved exactly once — [`read_workspace_file`] opens it, then
-//! proves the *opened handle* (never the path again) is a regular file, then
-//! reads at most `max + 1` bytes. On Unix the open is `O_NONBLOCK`, so opening
-//! a FIFO with no writer returns at once and the handle check refuses it
-//! instead of the caller blocking forever. Symlinks are followed: the handle
-//! check applies to whatever the link resolved to, which is the file the read
-//! actually consumes.
+//! A workspace file is found by convention, not named by the user, and a
+//! cloned repository is attacker-shaped: the name may be a symlink to a
+//! device or to a file outside the workspace, a FIFO, a directory, or a
+//! multi-GiB blob, swapped between any two path lookups. So the path is
+//! resolved exactly once — [`read_workspace_file`] opens it without
+//! following a final symlink, then proves the *opened handle* (never the
+//! path again) is a regular file, then reads at most `max + 1` bytes.
+//!
+//! On Unix the open is `O_RDONLY | O_NONBLOCK | O_NOCTTY | O_NOFOLLOW |
+//! O_CLOEXEC`: a FIFO with no writer returns at once, a terminal never
+//! becomes the controlling one, and a final symlink fails the open (`ELOOP`)
+//! before any device behind it is touched. On Windows the open carries
+//! `FILE_FLAG_OPEN_REPARSE_POINT`, so a final reparse point is opened itself
+//! and refused on the handle's attributes. This is the same open as the
+//! CLI's `io_bounded::open_regular(path, FinalLink::Refuse)`; the two must
+//! stay at parity.
 
 use std::io::Read as _;
 use std::path::Path;
@@ -48,19 +55,19 @@ impl std::error::Error for WorkspaceReadError {}
 
 /// Open `path` once and read it as text, bounded by `max` bytes.
 ///
-/// `Ok(None)` when nothing exists at `path`. The regular-file proof is taken
-/// on the opened handle, so no swap between check and read is possible; the
-/// read never buffers more than `max + 1` bytes. A file exactly at the cap is
-/// accepted; one byte over is refused.
+/// `Ok(None)` when nothing exists at `path`. A final symlink is refused,
+/// never followed. The regular-file proof is taken on the opened handle, so
+/// no swap between check and read is possible; the read never buffers more
+/// than `max + 1` bytes. A file exactly at the cap is accepted; one byte
+/// over is refused.
 ///
 /// # Errors
-/// [`WorkspaceReadError`] when the handle is not a regular file, the open or
-/// read fails, the content is over `max`, or it is not UTF-8.
+/// [`WorkspaceReadError`] when the final component is a symlink or the
+/// handle is not a regular file, the open or read fails, the content is
+/// over `max`, or it is not UTF-8.
 pub fn read_workspace_file(path: &Path, max: u64) -> Result<Option<String>, WorkspaceReadError> {
-    let file = match open_nonblocking(path) {
-        Ok(file) => file,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(e) => return Err(WorkspaceReadError::Unreadable(e)),
+    let Some(file) = open_no_follow(path)? else {
+        return Ok(None);
     };
     let meta = file.metadata().map_err(WorkspaceReadError::Unreadable)?;
     if !meta.is_file() {
@@ -78,21 +85,66 @@ pub fn read_workspace_file(path: &Path, max: u64) -> Result<Option<String>, Work
         .map_err(|_| WorkspaceReadError::NotUtf8)
 }
 
-/// Open `path` read-only without blocking on a FIFO that has no writer.
+/// Open `path` read-only: no blocking, no controlling terminal, no final-symlink follow.
+///
+/// `Ok(None)` when nothing exists at `path`. `ELOOP` (a final symlink under
+/// `O_NOFOLLOW`, dangling or not) and `ENXIO` (a socket, or a device with
+/// nothing behind it) are [`WorkspaceReadError::NotAFile`].
 #[cfg(unix)]
-fn open_nonblocking(path: &Path) -> std::io::Result<std::fs::File> {
-    use std::os::unix::fs::OpenOptionsExt as _;
-    std::fs::OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_NONBLOCK)
-        .open(path)
+fn open_no_follow(path: &Path) -> Result<Option<std::fs::File>, WorkspaceReadError> {
+    use rustix::fs::{Mode, OFlags};
+    use rustix::io::Errno;
+    let flags =
+        OFlags::RDONLY | OFlags::NONBLOCK | OFlags::NOCTTY | OFlags::NOFOLLOW | OFlags::CLOEXEC;
+    match rustix::fs::open(path, flags, Mode::empty()) {
+        Ok(fd) => Ok(Some(std::fs::File::from(fd))),
+        Err(Errno::NOENT) => Ok(None),
+        Err(Errno::LOOP | Errno::NXIO) => Err(WorkspaceReadError::NotAFile),
+        Err(errno) => Err(WorkspaceReadError::Unreadable(errno.into())),
+    }
 }
 
-/// Open `path` read-only. A workspace path cannot name a Windows named pipe
-/// (those live only under `\\.\pipe\`), so a plain open cannot block.
-#[cfg(not(unix))]
-fn open_nonblocking(path: &Path) -> std::io::Result<std::fs::File> {
-    std::fs::File::open(path)
+/// Open `path` read-only, refusing a final reparse point on the opened handle.
+///
+/// `Ok(None)` when nothing exists at `path`. The open carries
+/// `FILE_FLAG_OPEN_REPARSE_POINT`, so a final reparse point of any tag
+/// (symlink, junction, or other) is opened itself rather than its target,
+/// and its handle attributes refuse it. A workspace path cannot name a
+/// Windows named pipe (those live only under `\\.\pipe\`), so the open
+/// cannot block.
+#[cfg(windows)]
+fn open_no_follow(path: &Path) -> Result<Option<std::fs::File>, WorkspaceReadError> {
+    use std::os::windows::fs::{MetadataExt as _, OpenOptionsExt as _};
+    /// `FILE_FLAG_OPEN_REPARSE_POINT`: opens a reparse point itself, never its target.
+    const OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+    /// `FILE_ATTRIBUTE_REPARSE_POINT`.
+    const ATTR_REPARSE_POINT: u32 = 0x400;
+    let file = match std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(OPEN_REPARSE_POINT)
+        .open(path)
+    {
+        Ok(file) => file,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(WorkspaceReadError::Unreadable(e)),
+    };
+    let attributes = file
+        .metadata()
+        .map_err(WorkspaceReadError::Unreadable)?
+        .file_attributes();
+    if attributes & ATTR_REPARSE_POINT != 0 {
+        return Err(WorkspaceReadError::NotAFile);
+    }
+    Ok(Some(file))
+}
+
+/// Refuse every workspace read where no final-link-refusing open exists.
+///
+/// Without `O_NOFOLLOW` or reparse-point handles a convention-found file
+/// cannot be opened without following a link, so none is read: fail closed.
+#[cfg(not(any(unix, windows)))]
+fn open_no_follow(_path: &Path) -> Result<Option<std::fs::File>, WorkspaceReadError> {
+    Err(WorkspaceReadError::NotAFile)
 }
 
 /// Why [`load_lint_config`] yielded no configuration.
@@ -118,8 +170,9 @@ impl std::error::Error for LintConfigLoadError {}
 /// Load the [`LintConfig`] from the `lint.ipe` in `dir`.
 ///
 /// An absent file is the default configuration. Every other outcome goes
-/// through [`read_workspace_file`] with [`LINT_CONFIG_MAX_BYTES`], so a FIFO,
-/// a directory, or an oversized file is refused, never waited on or buffered.
+/// through [`read_workspace_file`] with [`LINT_CONFIG_MAX_BYTES`], so a
+/// symlink, FIFO, device, directory, or oversized file is refused, never
+/// followed, waited on, or buffered.
 ///
 /// # Errors
 /// [`LintConfigLoadError`] when the file cannot be read within bounds or does
@@ -250,6 +303,52 @@ mod tests {
         assert!(matches!(
             load_promptly(dir),
             Some(Err(LintConfigLoadError::Read(WorkspaceReadError::NotAFile)))
+        ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_symlink_to_a_regular_file_is_refused_not_followed() {
+        let dir = scratch("regular-link");
+        let target = dir.join("elsewhere.ipe");
+        assert!(std::fs::write(&target, "").is_ok());
+        assert!(std::os::unix::fs::symlink(&target, dir.join(LINT_CONFIG_FILE)).is_ok());
+        assert!(matches!(
+            load_lint_config(&dir),
+            Err(LintConfigLoadError::Read(WorkspaceReadError::NotAFile))
+        ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_dangling_symlink_is_refused_not_absent() {
+        let dir = scratch("dangling-link");
+        assert!(
+            std::os::unix::fs::symlink(dir.join("missing"), dir.join(LINT_CONFIG_FILE)).is_ok()
+        );
+        assert!(matches!(
+            load_lint_config(&dir),
+            Err(LintConfigLoadError::Read(WorkspaceReadError::NotAFile))
+        ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_symlink_to_a_device_is_refused() {
+        let dir = scratch("device-link");
+        assert!(std::os::unix::fs::symlink("/dev/null", dir.join(LINT_CONFIG_FILE)).is_ok());
+        assert!(matches!(
+            load_lint_config(&dir),
+            Err(LintConfigLoadError::Read(WorkspaceReadError::NotAFile))
+        ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_device_named_directly_is_refused() {
+        assert!(matches!(
+            read_workspace_file(std::path::Path::new("/dev/null"), 16),
+            Err(WorkspaceReadError::NotAFile)
         ));
     }
 
