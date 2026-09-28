@@ -38,10 +38,13 @@ rg_status() {
     esac
 }
 
-# _require_out_name <caller> <name>: exit 2 unless <name> is a safe target for
-# a helper's write. Positive rule: a lowercase identifier starting with a
-# letter, either unset or declared by the caller with no attribute beyond
-# indexed-array. That excludes, by construction:
+# _require_out_name <caller> <name> <scalar|array>: exit 2 unless <name> is a
+# safe target for a helper's write of that shape. Positive rule: a lowercase
+# identifier starting with a letter, either unset or declared by the caller
+# with exactly the shape the helper writes — a plain scalar (`declare --`) for
+# a scalar write, an indexed array (`declare -a`) for an array write, since a
+# scalar write into an array keeps its stale elements. That excludes, by
+# construction:
 # - every helper local (all carry a `__<tag>_` prefix), which would capture a
 #   write under bash's dynamic scope and drop it on return;
 # - `_` and every bash special or environment variable (`BASH_VERSINFO`,
@@ -56,8 +59,14 @@ _require_out_name() {
     fi
     local __on_decl
     __on_decl="$(declare -p -- "$2" 2>/dev/null)" || return 0
-    if ! [[ "$__on_decl" =~ ^declare\ -a?\  ]]; then
-        echo "$1: output variable '$2' carries attributes (${__on_decl%% "$2"*}) — pass an unset name or a plain/array one" >&2
+    local __on_want
+    case "$3" in
+        scalar) __on_want='declare -- ' ;;
+        array) __on_want='declare -a ' ;;
+        *) echo "$1: internal: unknown output shape '$3'" >&2; exit 2 ;;
+    esac
+    if [ "${__on_decl:0:${#__on_want}}" != "$__on_want" ]; then
+        echo "$1: output variable '$2' carries attributes (${__on_decl%% "$2"*}) — pass an unset name or a $3 one (${__on_want% })" >&2
         exit 2
     fi
 }
@@ -145,6 +154,18 @@ _require_set_scalar() {
     }
 }
 
+# _require_scrubbed_env <caller> <description>: in a matcher's subshell, drop
+# the config variables that let the environment rewrite a matcher's behaviour
+# (`RIPGREP_CONFIG_PATH` can inject `--pre`); exit 2 when one survives (a
+# readonly variable), since a matcher running under it could report a forged rc.
+_require_scrubbed_env() {
+    unset RIPGREP_CONFIG_PATH GREP_OPTIONS 2>/dev/null
+    if [ -n "${RIPGREP_CONFIG_PATH+x}" ] || [ -n "${GREP_OPTIONS+x}" ]; then
+        echo "$1: $2: could not scrub RIPGREP_CONFIG_PATH/GREP_OPTIONS (readonly?) — refusing to run the matcher under them" >&2
+        exit 2
+    fi
+}
+
 # match_or_fail <description> -- <command...>: run an rg-shaped command
 # (stdout/stderr pass through unredirected, so matches stay visible), classify
 # its exit code with rg_status, and hard-exit 2 on anything but 0/1. Returns 0
@@ -158,7 +179,7 @@ match_or_fail() {
     [ "${1:-}" = "--" ] && shift
     _require_known_command match_or_fail "$__mf_desc" matcher "$@"
     local __mf_rc=0
-    (unset RIPGREP_CONFIG_PATH GREP_OPTIONS; exec "$@") || __mf_rc=$?
+    (_require_scrubbed_env match_or_fail "$__mf_desc"; exec "$@") || __mf_rc=$?
     case "$(rg_status "$__mf_rc")" in
         match) return 0 ;;
         no-match) return 1 ;;
@@ -176,12 +197,12 @@ match_or_fail() {
 # never a pipeline, nor a function wrapping one: capture the producer first
 # (checked), then match on a herestring.
 match_capture() {
-    _require_out_name match_capture "${1:-}"
+    _require_out_name match_capture "${1:-}" scalar
     local __mc_var="$1" __mc_desc="$2"; shift 2
     [ "${1:-}" = "--" ] && shift
     _require_known_command match_capture "$__mc_desc" matcher "$@"
     local __mc_out __mc_rc=0
-    __mc_out="$(unset RIPGREP_CONFIG_PATH GREP_OPTIONS; exec "$@")" || __mc_rc=$?
+    __mc_out="$(_require_scrubbed_env match_capture "$__mc_desc"; exec "$@")" || __mc_rc=$?
     case "$(rg_status "$__mc_rc")" in
         match)    _require_set_scalar "$__mc_var" "$__mc_out"; return 0 ;;
         no-match) _require_set_scalar "$__mc_var" "$__mc_out"; return 1 ;;
@@ -199,7 +220,7 @@ match_capture() {
 # in for the whole one. The command must be an allowlisted producer (`git`,
 # `find`, `sort`).
 capture_nul() {
-    _require_out_name capture_nul "${1:-}"
+    _require_out_name capture_nul "${1:-}" array
     _capture_nul_into "$@"
 }
 
@@ -231,7 +252,7 @@ _capture_nul_into() {
 # exits non-zero (an unreadable subtree), or the set is empty — a scan over a
 # missing, partial, or empty file set must never read as a clean scan.
 enumerate_files() {
-    _require_out_name enumerate_files "${1:-}"
+    _require_out_name enumerate_files "${1:-}" array
     _enumerate_files_into "$@"
 }
 
@@ -257,12 +278,12 @@ _enumerate_files_into() {
         echo "enumerate_files: no file matching '$__ef_glob' under $* — nothing to scan" >&2
         exit 2
     fi
-    local __ef_tmp
-    __ef_tmp="$(mktemp)" || { echo "enumerate_files: mktemp failed" >&2; exit 2; }
-    printf '%s\0' "${__ef_found[@]}" >"$__ef_tmp"
+    # The set reaches sort through a pipe, never a staged file: a pipe write
+    # fails only once sort has gone, which sort's own exit reports, and no
+    # temp file is left behind on sort's exit-2 path.
     local -x LC_ALL=C
-    _capture_nul_into "$__ef_var" "sort '$__ef_glob' set" -- sort -z "$__ef_tmp"
-    rm -f "$__ef_tmp"
+    _capture_nul_into "$__ef_var" "sort '$__ef_glob' set" -- \
+        sort -z < <(printf '%s\0' "${__ef_found[@]}")
 }
 
 # require_scan_root <dir> <glob>: exit 2 when <dir> does not exist, find

@@ -394,6 +394,54 @@ for pre_name in "declare -a v;v" "local_v"; do
     check "capture_nul: plain target '$pre_name' receives the set" "$got" 2
 done
 
+# ── output-target shape: each writer accepts exactly the shape it writes ───
+got="$(bash -c "source '$lib'; v=''; match_capture v t -- '$mprint' hit; printf '%s' \"\$v\"" 2>&1)"
+check "match_capture: pre-declared plain scalar receives the text" "$got" hit
+got="$(bash -c "source '$lib'; f() { local v=''; match_capture v t -- '$mprint' hit; printf '%s' \"\$v\"; }; f" 2>&1)"
+check "match_capture: caller-local plain scalar receives the text" "$got" hit
+rc=0
+out="$(bash -c "source '$lib'; v=(a b c); match_capture v t -- '$mprint' hit" 2>&1)" || rc=$?
+check "match_capture: array target exits 2 (a scalar write keeps stale elements)" "$rc" 2
+check "match_capture: array target is the reported cause" \
+    "$(cause_of "$out" "output variable 'v' carries attributes")" named
+for helper in "capture_nul v t -- '$pprint' ls-files 'a\\0'" \
+              "enumerate_files v '*.ipe' '$fixture_dir/enum'"; do
+    rc=0
+    out="$(bash -c "source '$lib'; v=x; $helper" 2>&1)" || rc=$?
+    check "${helper%% *}: plain scalar target exits 2" "$rc" 2
+    check "${helper%% *}: plain scalar target is the reported cause" \
+        "$(cause_of "$out" "output variable 'v' carries attributes")" named
+done
+
+# ── env scrub: a matcher never runs under a config variable it cannot drop ──
+for helper in "match_or_fail t -- '$m0'" "match_capture v t -- '$mprint' hit"; do
+    for var in RIPGREP_CONFIG_PATH GREP_OPTIONS; do
+        rc=0
+        out="$(bash -c "source '$lib'; readonly $var=cfg; export $var; $helper" 2>&1)" || rc=$?
+        check "${helper%% *}: readonly $var exits 2" "$rc" 2
+        check "${helper%% *}: readonly $var is the reported cause" \
+            "$(cause_of "$out" "could not scrub")" named
+    done
+done
+
+# ── enumerate_files: a failing sort leaves no staged temp file behind ───────
+sort_tmpdir="$(mktemp -d)"
+sort_stub="$fixture_dir/sort-fail-bin"
+mkdir -p "$sort_stub"
+printf '#!/bin/sh\nexit 3\n' > "$sort_stub/sort"
+chmod +x "$sort_stub/sort"
+rc=0
+TMPDIR="$sort_tmpdir" PATH="$sort_stub:$PATH" \
+    bash -c "source '$lib'; enumerate_files v '*.ipe' '$fixture_dir/enum'" >/dev/null 2>&1 || rc=$?
+check "enumerate_files: failing sort exits 2" "$rc" 2
+check "enumerate_files: failing sort leaves no temp file" "$(ls -A "$sort_tmpdir")" ""
+rm -rf "$sort_tmpdir"
+
+# ── live caller smoke: examples.sh's scalar capture runs on a clean tree ────
+rc=0
+out="$(bash -c "source '$repo_root/tools/scripts/lib/examples.sh'; is_out_of_scope '$repo_root/examples/shapes/script/log-severities'" 2>&1)" || rc=$?
+check "examples.sh: is_out_of_scope classifies an in-scope example (rc 1, no hard exit)" "$rc:$out" "1:"
+
 # ── stub producers: a PATH dir whose tool exits with a chosen error code ─────
 real_git="$(command -v git)"
 stub_bin="$fixture_dir/stub-bin"
