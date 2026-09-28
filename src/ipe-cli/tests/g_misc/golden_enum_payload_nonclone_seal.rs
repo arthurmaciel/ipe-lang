@@ -145,14 +145,24 @@ fn emitted_app_rs(out: &Path) -> String {
     acc
 }
 
+/// `line` without a leading Rust visibility (`pub`, `pub(crate)`, `pub(in …)`).
+fn strip_visibility(line: &str) -> &str {
+    let Some(rest) = line.strip_prefix("pub") else {
+        return line;
+    };
+    let rest = rest
+        .strip_prefix('(')
+        .and_then(|scoped| scoped.split_once(')'))
+        .map_or(rest, |(_, after)| after);
+    rest.strip_prefix(' ').unwrap_or(line)
+}
+
 /// The attribute lines directly above the `enum <name>` declaration.
 fn attributes_above_enum(emitted: &str, name: &str) -> Option<Vec<String>> {
     let lines: Vec<&str> = emitted.lines().collect();
     let decl = format!("enum {name}");
     let at = lines.iter().position(|l| {
-        let t = l.trim_start();
-        t.strip_prefix("pub ")
-            .unwrap_or(t)
+        strip_visibility(l.trim_start())
             .strip_prefix(&decl)
             .is_some_and(|rest| rest.starts_with([' ', '<', '{']))
     })?;

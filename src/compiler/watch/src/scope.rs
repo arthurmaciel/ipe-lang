@@ -380,6 +380,7 @@ impl WatchScope {
         let file_count = relevant
             .iter()
             .filter(|path| is_source_file(path) && !is_manifest_file(path))
+            .filter(|path| path.parent().is_some_and(|dir| watched_dirs.contains(dir)))
             .filter(|path| std::fs::symlink_metadata(path).is_ok_and(|meta| meta.is_file()))
             .count();
         Ok(Self {

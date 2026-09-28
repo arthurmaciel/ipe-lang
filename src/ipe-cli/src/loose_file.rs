@@ -1078,7 +1078,6 @@ mod tests {
         let _ = fs::set_permissions(&locked, fs::Permissions::from_mode(0o755));
         let _ = fs::remove_dir_all(&dir);
         if privileged {
-            eprintln!("skipped: running as root, directory permissions are not enforced");
             return;
         }
         assert!(
@@ -1112,7 +1111,6 @@ mod tests {
         let _ = fs::set_permissions(&dir, fs::Permissions::from_mode(0o755));
         let _ = fs::remove_dir_all(&dir);
         if privileged {
-            eprintln!("skipped: running as root, directory permissions are not enforced");
             return;
         }
         assert!(

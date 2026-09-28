@@ -258,7 +258,8 @@ fn skip_block_comment(chars: &[char], start: usize) -> usize {
 
 /// The whitespace-free code of `src`: comments dropped, and every string and
 /// character literal collapsed to an empty `""`, so a path spelled only inside
-/// a literal or comment is never mistaken for a call.
+/// a literal or comment is never mistaken for a call. A gap between two
+/// identifiers stays one space, so `use std` never glues into `usestd`.
 fn code_only(src: &str) -> String {
     code_text(src, false)
 }
@@ -270,10 +271,12 @@ fn code_words(src: &str) -> String {
 }
 
 /// The code of `src` with comments dropped and literals collapsed to `""`;
-/// whitespace kept as spaces when `spaced`, else dropped.
+/// whitespace kept as spaces when `spaced`, else dropped except as one space
+/// between two identifier characters.
 fn code_text(src: &str, spaced: bool) -> String {
     let chars: Vec<char> = src.chars().collect();
     let mut out = String::new();
+    let mut gap = false;
     let mut i = 0;
     while let Some(&c) = chars.get(i) {
         let next = chars.get(i + 1).copied();
@@ -284,8 +287,10 @@ fn code_text(src: &str, spaced: bool) -> String {
                 .skip(i)
                 .position(|&ch| ch == '\n')
                 .map_or(chars.len(), |off| i + off);
+            gap = true;
         } else if c == '/' && next == Some('*') {
             i = skip_block_comment(&chars, i);
+            gap = true;
         } else if let Some(end) = (!prev_ident && (c == 'r' || (c == 'b' && next == Some('r'))))
             .then(|| skip_raw(&chars, if c == 'b' { i + 1 } else { i }))
             .flatten()
@@ -305,9 +310,15 @@ fn code_text(src: &str, spaced: bool) -> String {
             i += 3;
         } else {
             if !c.is_whitespace() {
+                if gap && is_ident_char(c) && out.chars().next_back().is_some_and(is_ident_char) {
+                    out.push(' ');
+                }
+                gap = false;
                 out.push(c);
             } else if spaced {
                 out.push(' ');
+            } else {
+                gap = true;
             }
             i += 1;
         }

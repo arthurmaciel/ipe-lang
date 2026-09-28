@@ -457,9 +457,8 @@ mod tests {
         let target = dir.join("Real.ipe");
         let link = dir.join("Link.ipe");
         std::fs::write(&target, "module Real exposing (..)\n").expect("write target");
-        if let Err(e) = std::os::windows::fs::symlink_file(&target, &link) {
+        if std::os::windows::fs::symlink_file(&target, &link).is_err() {
             let _ = std::fs::remove_dir_all(&dir);
-            eprintln!("skipped: cannot create a file symlink here: {e}");
             return;
         }
         let followed = read_to_string_capped(&link, SOURCE_READ_CAP);
@@ -522,7 +521,6 @@ mod tests {
         let result = read_to_string_capped(&file, SOURCE_READ_CAP);
         let _ = std::fs::remove_dir_all(&dir);
         if privileged {
-            eprintln!("skipped: running as root, the read bit is not enforced");
             return;
         }
         assert!(

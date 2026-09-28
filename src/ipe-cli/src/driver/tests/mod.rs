@@ -2664,11 +2664,15 @@ fn unsafe_scan_manifest_project_fails_closed_on_unreadable_module() {
     let _ = fs::set_permissions(&unreadable, fs::Permissions::from_mode(0o644));
     let _ = fs::remove_dir_all(&dir);
 
-    // Must be `Err(CliError::Io)` naming the unreadable path — never an
-    // `Ok` partial scan and never a different error variant.
+    // Must be the typed access-denied refusal naming the unreadable path —
+    // never an `Ok` partial scan and never a different error variant.
     assert!(
-        matches!(&result, Err(CliError::Io { path, .. }) if path == &unreadable),
-        "expected Err(CliError::Io) naming {unreadable:?}, got: {result:?}"
+        matches!(
+            &result,
+            Err(CliError::SourceRefused { path, reason: SourceRefusal::AccessDenied })
+                if path == &unreadable
+        ),
+        "expected Err(CliError::SourceRefused(AccessDenied)) naming {unreadable:?}, got: {result:?}"
     );
 }
 
@@ -2724,11 +2728,15 @@ fn unsafe_scan_single_file_fallback_fails_closed_on_unreadable_entry() {
     let _ = fs::set_permissions(&entry, fs::Permissions::from_mode(0o644));
     let _ = fs::remove_dir_all(&dir);
 
-    // Must be `Err(CliError::Io)` naming the unreadable entry — never an
-    // `Ok` empty scan and never a different error variant.
+    // Must be the typed access-denied refusal naming the unreadable entry —
+    // never an `Ok` empty scan and never a different error variant.
     assert!(
-        matches!(&result, Err(CliError::Io { path, .. }) if path == &entry),
-        "expected Err(CliError::Io) naming {entry:?}, got: {result:?}"
+        matches!(
+            &result,
+            Err(CliError::SourceRefused { path, reason: SourceRefusal::AccessDenied })
+                if path == &entry
+        ),
+        "expected Err(CliError::SourceRefused(AccessDenied)) naming {entry:?}, got: {result:?}"
     );
 }
 

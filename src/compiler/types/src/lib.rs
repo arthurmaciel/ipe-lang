@@ -609,6 +609,15 @@ fn infer_core(
     // cover; `String` is in the closed interpolable set, so the empty list
     // becomes a concretely-typed `Vec<String>`.
     let string_sym = lift!(interner.intern("String"));
+    // A typed binding's own wildcard `any` is a generic parameter (see
+    // `Generated::signature_wildcards`): the interpolation default never pins
+    // its root; the lowerer bounds that generic on `IpeInterpolate` instead.
+    let generic_roots: BTreeSet<VarId> = generated
+        .signature_wildcards
+        .iter()
+        .map(|w| uf.find(*w))
+        .collect::<Result<_, _>>()
+        .map_err(|d| (d, Vec::new()))?;
     for (v, orig_bounds, span, home) in &generated.super_vars {
         let root = lift!(uf.find(*v));
         match lift!(uf.content(root)) {
@@ -671,7 +680,7 @@ fn infer_core(
             Content::Super {
                 rigid: false,
                 bounds,
-            } if bounds.has_interpolable() => {
+            } if bounds.has_interpolable() && !generic_roots.contains(&root) => {
                 let string_ty = Ty::Con {
                     module: Vec::new(),
                     name: string_sym,
@@ -838,6 +847,21 @@ fn infer_core(
         }
         if !rep_to_sym.is_empty() {
             poly_var_map.insert((home.clone(), *def_name), rep_to_sym);
+        }
+    }
+    // A wildcard `any` the body obligated is a bounded generic parameter too:
+    // record it under `any#<i>` (never a writable type-variable name) so each
+    // use site — same module or, through the interface, a dependent one — checks
+    // its own `i`-th wildcard. It stays out of `poly_var_map`: a wildcard is no
+    // named type parameter of the enclosing function.
+    for (key, wildcards) in &generated.typed_wildcards {
+        for (i, wildcard) in wildcards.iter().enumerate() {
+            if let Content::Super { bounds: b, .. } = lift!(uf.content(*wildcard))
+                && !b.is_empty()
+            {
+                let sym = lift!(interner.intern(&wildcard_bound_key(i)));
+                bounds.entry(key.clone()).or_default().insert(sym, b);
+            }
         }
     }
 
@@ -1298,8 +1322,25 @@ fn check_scheme_applications(
             continue;
         };
         for (var_sym, b) in var_bounds {
-            let Some(fresh) = app.vars.get(&var_sym.as_raw()) else {
-                continue;
+            let fresh = match wildcard_bound_index(interner, *var_sym) {
+                Some(i) => match app.wildcards.get(i) {
+                    Some(fresh) => fresh,
+                    // The definition and its use instantiate one signature, so
+                    // their wildcard counts agree; a drift must not pass unchecked.
+                    None => {
+                        return Err(Diagnostic::CompilerBug {
+                            where_: "ipe_types::check_scheme_applications",
+                            detail: format!(
+                                "use site has {} wildcard(s), binding obligates wildcard {i}",
+                                app.wildcards.len()
+                            ),
+                        });
+                    }
+                },
+                None => match app.vars.get(&var_sym.as_raw()) {
+                    Some(fresh) => fresh,
+                    None => continue,
+                },
             };
             let ty = zonk(uf, budget, *fresh)?;
             if !emitted_bound_satisfied(interner, *b, &ty, &enum_embeds_fn) {
@@ -1308,6 +1349,24 @@ fn check_scheme_applications(
         }
     }
     Ok(())
+}
+
+/// The bounds-table key of a typed binding's `i`-th wildcard `any` obligation.
+/// `#` is no identifier character, so no annotation variable can collide.
+fn wildcard_bound_key(i: usize) -> String {
+    format!("{WILDCARD_BOUND_PREFIX}{i}")
+}
+
+const WILDCARD_BOUND_PREFIX: &str = "any#";
+
+/// The wildcard index a bounds-table key names, when it is one
+/// ([`wildcard_bound_key`]).
+fn wildcard_bound_index(interner: &Interner, sym: Symbol) -> Option<usize> {
+    interner
+        .resolve(sym)?
+        .strip_prefix(WILDCARD_BOUND_PREFIX)?
+        .parse()
+        .ok()
 }
 
 /// Whether a concrete type satisfies the Rust bound a super-typed *generic*
@@ -1513,7 +1572,12 @@ fn ty_is_equatable(ty: &Ty, enum_embeds_fn: &impl Fn(&[Symbol], Symbol) -> bool)
 
 /// Build the [`TypeError::SuperTypeUnsatisfied`] (IPE-T0014) for a super-typed
 /// binding used at a type that does not meet its obligations.
-fn super_unsatisfied(interner: &Interner, bounds: TyBounds, ty: &Ty, span: Span) -> Diagnostic {
+pub(crate) fn super_unsatisfied(
+    interner: &Interner,
+    bounds: TyBounds,
+    ty: &Ty,
+    span: Span,
+) -> Diagnostic {
     // Name every super-type the variable owes, in a fixed order, joined with
     // `+` (`Number + Equatable` when a variable is both added and compared for
     // equality). A bound set always carries at least one obligation at a call

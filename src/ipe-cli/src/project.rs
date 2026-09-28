@@ -1613,7 +1613,6 @@ import String
         let _ = fs::set_permissions(&locked, fs::Permissions::from_mode(0o755));
         let _ = fs::remove_dir_all(&root);
         if privileged {
-            eprintln!("skipped: running as root, directory permissions are not enforced");
             return;
         }
         assert!(
@@ -1639,7 +1638,6 @@ import String
         let read = crate::io_bounded::read_walked_source(&module);
         let _ = fs::remove_dir_all(&root);
         if privileged {
-            eprintln!("skipped: running as root, the read bit is not enforced");
             return;
         }
         assert!(walked.is_ok(), "the walk lists the file: {walked:?}");

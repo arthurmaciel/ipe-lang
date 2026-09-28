@@ -168,6 +168,7 @@ impl Builder<'_> {
                     }
                 };
                 let mut rigid_vars = BTreeMap::new();
+                let mut wildcards = Vec::new();
                 let mut local = BTreeMap::new();
                 let mut cursor: &canon::Type = handler_expansion.as_ref().unwrap_or(ty);
                 for pat in patterns {
@@ -181,7 +182,12 @@ impl Builder<'_> {
                         _ => return Err(self.too_many_parameters(name, ty)),
                     };
                     let arg = self.normalize_annotation_ty(from_canon(arg_ty), name.span)?;
-                    let arg_var = self.instantiate_rigid(&arg, &mut rigid_vars)?;
+                    let arg_var = self.instantiate_logging_wildcards(
+                        &arg,
+                        &mut rigid_vars,
+                        true,
+                        &mut wildcards,
+                    )?;
                     self.constrain_pattern(&mut local, pat, arg_var)?;
                     // Record the param pattern's region so the lowerer can read the
                     // solved param type (record-param field-set completion, IPE-T0015
@@ -192,7 +198,12 @@ impl Builder<'_> {
                     cursor = rest;
                 }
                 let ret_ty = self.normalize_annotation_ty(from_canon(cursor), name.span)?;
-                let ret_var = self.instantiate_rigid(&ret_ty, &mut rigid_vars)?;
+                let ret_var = self.instantiate_logging_wildcards(
+                    &ret_ty,
+                    &mut rigid_vars,
+                    true,
+                    &mut wildcards,
+                )?;
                 let body_var = self.constrain_expr(&local, body)?;
                 // A typed binding's body expects its annotation return type —
                 // the strongest completion signal: `f : Color; f = ⟨|⟩` offers
@@ -227,6 +238,10 @@ impl Builder<'_> {
                 }
                 self.typed_rigids
                     .push(((self.current_home.clone(), name.value), var_rigids));
+                if !wildcards.is_empty() {
+                    self.typed_wildcards
+                        .push(((self.current_home.clone(), name.value), wildcards));
+                }
                 Ok(())
             }
             canon::Def::Untyped {
@@ -322,11 +337,12 @@ impl Builder<'_> {
     ) -> DResult<VarId> {
         let key = (module.to_vec(), name);
         if let Some(ty) = self.top_level.get(&key).cloned() {
-            let (var, vars) = self.instantiate_tracked(&ty)?;
+            let (var, vars, wildcards) = self.instantiate_tracked(&ty)?;
             self.scheme_apps.push(SchemeApp {
                 home: module.to_vec(),
                 name,
                 vars,
+                wildcards,
                 span,
             });
             // A reference to a wildcard-`any`-return binding: record this use's
@@ -623,7 +639,7 @@ impl Builder<'_> {
                     span,
                     msg: LowerError::Unsupported(Feature::Kernels),
                 })?;
-                let (var, vars) = self.instantiate_tracked(&ty)?;
+                let (var, vars, _) = self.instantiate_tracked(&ty)?;
                 self.tie_hof_results(k, &vars, span)?;
                 // The key qualifier (`Set`/`Dict`/`Cache` in `key_obligation_for`)
                 // selects the WHOLE module. The key/element is raw scheme-var 0 by
@@ -704,7 +720,7 @@ impl Builder<'_> {
                     span,
                     msg: LowerError::Unsupported(Feature::Kernels),
                 })?;
-                let (var, vars) = self.instantiate_tracked(&ty)?;
+                let (var, vars, _) = self.instantiate_tracked(&ty)?;
                 self.tie_hof_results(k, &vars, span)?;
                 let params_var = *vars.get(&raw_idx).ok_or(Diagnostic::Lower {
                     span,
@@ -732,7 +748,7 @@ impl Builder<'_> {
                     span,
                     msg: LowerError::Unsupported(Feature::Kernels),
                 })?;
-                let (var, vars) = self.instantiate_tracked(&ty)?;
+                let (var, vars, _) = self.instantiate_tracked(&ty)?;
                 self.tie_hof_results(k, &vars, span)?;
                 let slot = Self::obligation_slot(k, ObligationKind::Interpolable).ok_or(
                     Diagnostic::Lower {
@@ -760,7 +776,7 @@ impl Builder<'_> {
                     span,
                     msg: LowerError::Unsupported(Feature::Kernels),
                 })?;
-                let (var, vars) = self.instantiate_tracked(&ty)?;
+                let (var, vars, _) = self.instantiate_tracked(&ty)?;
                 self.tie_hof_results(k, &vars, span)?;
                 let slot =
                     Self::obligation_slot(k, ObligationKind::Show).ok_or(Diagnostic::Lower {
@@ -793,7 +809,7 @@ impl Builder<'_> {
                     span,
                     msg: LowerError::Unsupported(Feature::Kernels),
                 })?;
-                let (var, vars) = self.instantiate_tracked(&ty)?;
+                let (var, vars, _) = self.instantiate_tracked(&ty)?;
                 self.tie_hof_results(k, &vars, span)?;
                 let model_slot = Self::obligation_slot(k, ObligationKind::WebModel).ok_or(
                     Diagnostic::Lower {
@@ -839,7 +855,7 @@ impl Builder<'_> {
                     span,
                     msg: LowerError::Unsupported(Feature::Kernels),
                 })?;
-                let (var, vars) = self.instantiate_tracked(&ty)?;
+                let (var, vars, _) = self.instantiate_tracked(&ty)?;
                 self.tie_hof_results(k, &vars, span)?;
                 let page_slot =
                     Self::obligation_slot(k, ObligationKind::WebPage).ok_or(Diagnostic::Lower {
@@ -885,7 +901,7 @@ impl Builder<'_> {
         // the two paths can never resolve to different types.
         let registry = id.and_then(|k| self.resolve_scheme(SchemeKey(k)));
         let ty = Self::kernel_scheme_or_unsupported(registry, None, span)?;
-        let (var, vars) = self.instantiate_tracked(&ty)?;
+        let (var, vars, _) = self.instantiate_tracked(&ty)?;
         if let Some(k) = id {
             self.tie_hof_results(k, &vars, span)?;
         }

@@ -57,7 +57,7 @@ pub enum Ty {
     ///    sufficiently large compiled program.
     ///
     /// A `Ty` containing a tagged (solver-space) `Var` must never be fed to
-    /// `instantiate_in`/`instantiate_tracked`/`instantiate_rigid` — those
+    /// `instantiate_in`/`instantiate_tracked`/`instantiate_logging_wildcards` — those
     /// only handle annotation-space ids. No current consumer needs to
     /// recover the underlying [`crate::unionfind::VarId`] from a tagged raw
     /// (`crate::doc::ty_to_doc`'s `VarNamer` treats it as an opaque key);

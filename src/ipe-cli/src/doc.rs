@@ -6173,10 +6173,13 @@ mod tests {
         };
         assert!(
             matches!(
-                err,
-                CliError::Diff(crate::api_surface::DiffError::Io { .. })
+                &err,
+                CliError::SourceRefused {
+                    path,
+                    reason: crate::io_bounded::SourceRefusal::AccessDenied,
+                } if path == &src
             ),
-            "an unreadable src/ must surface as a Diff(Io) discovery error, got {err:?}"
+            "an unreadable src/ must surface as the typed access-denied refusal naming it, got {err:?}"
         );
         let _ = fs::remove_dir_all(&tmp);
     }

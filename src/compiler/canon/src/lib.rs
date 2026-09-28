@@ -608,8 +608,10 @@ mod tests {
         ));
     }
 
-    /// The prelude has no generic stringifier: a bare `toString` is unbound,
-    /// while the typed conversion that replaces it resolves.
+    /// The prelude has no generic stringifier: a bare `toString` is unbound.
+    /// Its typed replacement `String.fromBool` lives in the compiled-source
+    /// `Ipe.String`, which canon alone cannot see; `type_check::string_from_bool_type_checks`
+    /// pins that it resolves through the real stdlib.
     #[test]
     fn bare_to_string_is_not_in_the_prelude() {
         let err = canon_err("module Main exposing (main)\n\nmain = toString 42\n");
@@ -623,10 +625,6 @@ mod tests {
             ),
             "`toString` must be unbound, got {err:?}"
         );
-        let ok = canon_err(
-            "module Main exposing (main)\nimport Ipe.String as String\n\nmain = String.fromBool True\n",
-        );
-        assert!(ok.is_none(), "`String.fromBool` must resolve, got {ok:?}");
     }
 
     /// The interpolation renderer is internal: its kernel name has no surface
