@@ -63,13 +63,17 @@ pub(crate) fn home_dir() -> Option<std::path::PathBuf> {
     home_dir_from_var(read_env_var(super::home_core::HOME_VAR))
 }
 
-/// Parse a home read: `Some` only for a set, valid-UTF-8, absolute value.
+/// Parse a home read: `Some` only for a valid `HomeDir`.
 ///
-/// An unset or non-UTF-8 variable names no directory; a set value goes through
-/// the shared [`super::home_core::home_from_str`].
+/// Bridges the overlay's `String` result to the shared
+/// [`super::home_core::HomeDir::parse`], which owns every decision about what
+/// counts as a home directory (UTF-8, absolute, and, on Windows, not a
+/// verbatim/device-namespace prefix) — this function makes none of them
+/// itself.
 #[cfg(all(feature = "web-core", feature = "http_client"))]
 fn home_dir_from_var(raw: Result<String, std::env::VarError>) -> Option<std::path::PathBuf> {
-    super::home_core::home_from_str(raw.ok())
+    super::home_core::HomeDir::parse(raw.ok().map(std::ffi::OsString::from))
+        .map(super::home_core::HomeDir::into_path)
 }
 
 /// Render a runtime status line (e.g. the HTTP `listening on` banner, or an

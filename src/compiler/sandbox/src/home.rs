@@ -30,17 +30,18 @@ pub fn home_dir() -> Option<PathBuf> {
     home_dir_from(std::env::var_os(home_core::HOME_VAR))
 }
 
-/// Parse a raw home value: `Some` only for a valid-UTF-8, non-empty absolute
-/// path.
+/// Parse a raw home value: `Some` only for a valid `HomeDir`.
 ///
-/// A non-UTF-8 value is refused before the shared runtime parser
-/// `home_core::home_from_str` sees it, matching the runtime reader, whose
-/// `std::env::var` read already fails on non-UTF-8. Both components thus
-/// accept exactly the same values; they run in separate processes, so this is
-/// agreement on one environment fact, not a shared-process escape.
+/// Delegates entirely to the shared [`home_core::HomeDir::parse`] — the UTF-8
+/// decode, the absolute check, and the Windows verbatim/device-prefix refusal
+/// all live there, so this function makes no parsing decision of its own. The
+/// runtime reader (`system::home_dir_from_var`) delegates to the same
+/// constructor; both components thus accept exactly the same values, though
+/// they run in separate processes, so this is agreement on one environment
+/// fact, not a shared-process escape.
 #[must_use]
 pub fn home_dir_from(raw: Option<OsString>) -> Option<PathBuf> {
-    home_core::home_from_str(raw.and_then(|s| s.into_string().ok()))
+    home_core::HomeDir::parse(raw).map(home_core::HomeDir::into_path)
 }
 
 /// A tool-home variable (`CARGO_HOME`, `RUSTUP_HOME`) set to a relative path.

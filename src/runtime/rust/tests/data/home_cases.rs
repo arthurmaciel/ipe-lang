@@ -45,4 +45,9 @@ const HOME_PARSE_PLATFORM_CASES: &[(Option<&str>, Option<&str>)] = &[
     (Some(r"\Users\u"), None),
     (Some(r"C:Users\u"), None),
     (Some("/home/u"), None),
+    // Verbatim / device-namespace prefixes: `Path::is_absolute` accepts them,
+    // but they name a raw device or an unparsed literal path, not a directory.
+    (Some(r"\\?\C:\Users\u"), None),
+    (Some(r"\\.\pipe\x"), None),
+    (Some(r"\\?\UNC\srv\s"), None),
 ];
