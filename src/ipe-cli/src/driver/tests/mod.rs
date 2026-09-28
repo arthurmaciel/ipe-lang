@@ -708,6 +708,69 @@ fn find_manifest_stops_at_a_git_file() {
     assert!(matches!(found, Ok(None)), "{found:?}");
 }
 
+/// A `.hg` or `.jj` root, as a directory or a file, is a ceiling like `.git`.
+#[test]
+fn find_manifest_stops_at_every_vcs_marker() {
+    for marker in [".hg", ".jj"] {
+        for as_dir in [true, false] {
+            let tag = format!("marker{marker}_{as_dir}");
+            let (tmp, main_ipe) = manifest_walk_tree(&tag, "proj");
+            fs::write(
+                tmp.join("package.ipe"),
+                "module Package exposing (package)\n",
+            )
+            .expect("write planted package.ipe");
+            let marker_path = tmp.join("proj").join(marker);
+            if as_dir {
+                fs::create_dir_all(&marker_path).expect("create marker dir");
+            } else {
+                fs::write(&marker_path, "").expect("write marker file");
+            }
+            let found = find_manifest_for_ipe_file(&main_ipe);
+            let _ = fs::remove_dir_all(&tmp);
+            assert!(
+                matches!(found, Ok(None)),
+                "{marker} dir={as_dir}: {found:?}"
+            );
+        }
+    }
+}
+
+/// A home reached through a symlink stops the walk whichever spelling either side uses.
+#[cfg(unix)]
+#[test]
+fn find_manifest_stops_at_a_symlinked_home() {
+    let (tmp, _) = manifest_walk_tree("symlinked_home", "real_home");
+    fs::write(
+        tmp.join("package.ipe"),
+        "module Package exposing (package)\n",
+    )
+    .expect("write planted package.ipe");
+    let real_home = tmp.join("real_home");
+    let link_home = tmp.join("link_home");
+    std::os::unix::fs::symlink(&real_home, &link_home).expect("symlink home");
+    let via_real = real_home.join("src").join("Main.ipe");
+    let via_link = link_home.join("src").join("Main.ipe");
+    let link_ceiling = CanonicalCeiling::of(&link_home);
+    let real_ceiling = CanonicalCeiling::of(&real_home);
+    let real_under_link =
+        find_manifest_bounded(&via_real, Some(&link_ceiling), MAX_MANIFEST_WALK_DEPTH);
+    let link_under_real =
+        find_manifest_bounded(&via_link, Some(&real_ceiling), MAX_MANIFEST_WALK_DEPTH);
+    let unbounded = find_manifest_bounded(&via_link, None, MAX_MANIFEST_WALK_DEPTH);
+    let _ = fs::remove_dir_all(&tmp);
+    assert_eq!(
+        link_ceiling, real_ceiling,
+        "both spellings resolve to one ceiling"
+    );
+    assert!(matches!(real_under_link, Ok(None)), "{real_under_link:?}");
+    assert!(matches!(link_under_real, Ok(None)), "{link_under_real:?}");
+    assert!(
+        !matches!(unbounded, Ok(None)),
+        "without the ceiling the planted manifest is reached: {unbounded:?}"
+    );
+}
+
 /// A manifest in the version-control root directory itself is still the project's.
 #[cfg(unix)]
 #[test]
@@ -733,7 +796,7 @@ fn find_manifest_ignores_a_manifest_above_home() {
         "module Package exposing (package)\n",
     )
     .expect("write planted package.ipe");
-    let home = tmp.join("home");
+    let home = CanonicalCeiling::of(&tmp.join("home"));
     let found = find_manifest_bounded(&main_ipe, Some(&home), MAX_MANIFEST_WALK_DEPTH);
     let _ = fs::remove_dir_all(&tmp);
     assert!(matches!(found, Ok(None)), "{found:?}");

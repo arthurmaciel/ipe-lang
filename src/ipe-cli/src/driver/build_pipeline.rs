@@ -652,6 +652,30 @@ pub const MAX_MANIFEST_WALK_DEPTH: usize = 64;
 /// Entries whose presence marks a directory as a version-control root.
 const VCS_ROOT_MARKERS: [&str; 3] = [".git", ".hg", ".jj"];
 
+/// A manifest-walk ceiling held as its canonical path, so any alias of it stops the walk.
+///
+/// Built once from a directory such as the user's home: a home reached
+/// through a symlink (`/home/u` naming `/var/home/u`) is the same ceiling
+/// whichever spelling the walk passes through.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct CanonicalCeiling(PathBuf);
+
+impl CanonicalCeiling {
+    /// The ceiling at `dir`'s canonical path, or at `dir` as given when it cannot be resolved.
+    ///
+    /// An unresolvable directory still bounds the walk by its spelling, so a
+    /// failed resolve never removes the ceiling.
+    #[must_use]
+    pub fn of(dir: &Path) -> Self {
+        Self(std::fs::canonicalize(dir).unwrap_or_else(|_| dir.to_path_buf()))
+    }
+
+    /// Whether the directory spelled `lexical`, canonically `canonical`, is this ceiling.
+    fn is(&self, lexical: &Path, canonical: Option<&Path>) -> bool {
+        self.0 == lexical || canonical.is_some_and(|dir| self.0 == dir)
+    }
+}
+
 /// Walk up from a `.ipe` file's parent to the nearest `package.ipe`.
 ///
 /// When given a file entry, the driver locates the project root (where
@@ -669,11 +693,8 @@ const VCS_ROOT_MARKERS: [&str; 3] = [".git", ".hg", ".jj"];
 ///
 /// As [`find_manifest_bounded`].
 pub fn find_manifest_for_ipe_file(ipe_file: &Path) -> Result<Option<PathBuf>, CliError> {
-    find_manifest_bounded(
-        ipe_file,
-        crate::env_dir::home().as_deref(),
-        MAX_MANIFEST_WALK_DEPTH,
-    )
+    let home = crate::env_dir::home().map(|home| CanonicalCeiling::of(&home));
+    find_manifest_bounded(ipe_file, home.as_ref(), MAX_MANIFEST_WALK_DEPTH)
 }
 
 /// Walk up from `ipe_file`'s parent to the nearest `package.ipe`, below a ceiling.
@@ -683,6 +704,12 @@ pub fn find_manifest_for_ipe_file(ipe_file: &Path) -> Result<Option<PathBuf>, Cl
 /// `home`, or is the filesystem root. At most `max_depth` directories are
 /// examined.
 ///
+/// Manifests and markers are probed on the path as given, so a found
+/// manifest keeps the spelling the caller used. The `home` ceiling is also
+/// matched against the canonical form of each directory, resolved once at
+/// the walk start and stepped up in lockstep, so a home reached through a
+/// symlink still stops the walk.
+///
 /// # Errors
 ///
 /// [`CliError::TrustRefused`] when the nearest manifest is a link, or another
@@ -691,10 +718,12 @@ pub fn find_manifest_for_ipe_file(ipe_file: &Path) -> Result<Option<PathBuf>, Cl
 /// directories pass with neither a manifest nor a ceiling.
 pub fn find_manifest_bounded(
     ipe_file: &Path,
-    home: Option<&Path>,
+    home: Option<&CanonicalCeiling>,
     max_depth: usize,
 ) -> Result<Option<PathBuf>, CliError> {
     let mut dir = ipe_file.parent();
+    let canonical_start = dir.and_then(|start| std::fs::canonicalize(start).ok());
+    let mut canonical_dir = canonical_start.as_deref();
     for _ in 0..max_depth {
         let Some(here) = dir else {
             return Ok(None);
@@ -703,7 +732,7 @@ pub fn find_manifest_bounded(
             crate::owner_trust::admit_discovered_manifest(&manifest)?;
             return Ok(Some(manifest));
         }
-        let at_ceiling = home == Some(here)
+        let at_ceiling = home.is_some_and(|ceiling| ceiling.is(here, canonical_dir))
             || VCS_ROOT_MARKERS
                 .iter()
                 .any(|marker| here.join(marker).symlink_metadata().is_ok());
@@ -711,6 +740,7 @@ pub fn find_manifest_bounded(
             return Ok(None);
         }
         dir = here.parent();
+        canonical_dir = canonical_dir.and_then(Path::parent);
     }
     if dir.is_none() {
         return Ok(None);
