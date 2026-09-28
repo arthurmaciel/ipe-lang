@@ -646,9 +646,13 @@ pub fn read_discovered_sources(
     Ok(sources)
 }
 
-/// Walk up the directory tree from a `.ipe` file's parent, looking for a
-/// `package.ipe` manifest. Returns the manifest path if found, or `None` when
-/// the walk reaches the filesystem root.
+/// The most directories [`find_manifest_for_ipe_file`] examines on its way up.
+pub const MAX_MANIFEST_WALK_DEPTH: usize = 64;
+
+/// Entries whose presence marks a directory as a version-control root.
+const VCS_ROOT_MARKERS: [&str; 3] = [".git", ".hg", ".jj"];
+
+/// Walk up from a `.ipe` file's parent to the nearest `package.ipe`.
 ///
 /// When given a file entry, the driver locates the project root (where
 /// `package.ipe` lives) before building, so the full module graph is compiled
@@ -656,25 +660,67 @@ pub fn read_discovered_sources(
 /// this finds, so it is obeyed only once it passes the owner rule
 /// ([`crate::owner_trust::admit_discovered_manifest`]).
 ///
+/// The walk stops at a ceiling: the first version-control root or the user's
+/// home directory. A manifest in the ceiling directory itself is still found;
+/// one above it lies outside the user's tree and is never consulted, so
+/// `None` (a loose file) is returned instead. See [`find_manifest_bounded`].
+///
 /// # Errors
 ///
-/// [`CliError::Usage`] when the nearest manifest is a link, or another user
-/// owns it or could write or replace it; [`CliError::Io`] when it cannot be
-/// inspected.
+/// As [`find_manifest_bounded`].
 pub fn find_manifest_for_ipe_file(ipe_file: &Path) -> Result<Option<PathBuf>, CliError> {
-    let Some(mut dir) = ipe_file.parent() else {
-        return Ok(None);
-    };
-    loop {
-        if let Some(manifest) = project::manifest_in_dir(dir) {
+    find_manifest_bounded(
+        ipe_file,
+        crate::env_dir::home().as_deref(),
+        MAX_MANIFEST_WALK_DEPTH,
+    )
+}
+
+/// Walk up from `ipe_file`'s parent to the nearest `package.ipe`, below a ceiling.
+///
+/// At each directory a manifest is looked for first; the walk then ends with
+/// `None` when that directory holds a version-control root marker, is
+/// `home`, or is the filesystem root. At most `max_depth` directories are
+/// examined.
+///
+/// # Errors
+///
+/// [`CliError::TrustRefused`] when the nearest manifest is a link, or another
+/// user owns it or could write or replace it; [`CliError::Io`] when it cannot
+/// be inspected; [`CliError::DiscoveryLimitReached`] when `max_depth`
+/// directories pass with neither a manifest nor a ceiling.
+pub fn find_manifest_bounded(
+    ipe_file: &Path,
+    home: Option<&Path>,
+    max_depth: usize,
+) -> Result<Option<PathBuf>, CliError> {
+    let mut dir = ipe_file.parent();
+    for _ in 0..max_depth {
+        let Some(here) = dir else {
+            return Ok(None);
+        };
+        if let Some(manifest) = project::manifest_in_dir(here) {
             crate::owner_trust::admit_discovered_manifest(&manifest)?;
             return Ok(Some(manifest));
         }
-        let Some(up) = dir.parent() else {
+        let at_ceiling = home == Some(here)
+            || VCS_ROOT_MARKERS
+                .iter()
+                .any(|marker| here.join(marker).symlink_metadata().is_ok());
+        if at_ceiling {
             return Ok(None);
-        };
-        dir = up;
+        }
+        dir = here.parent();
     }
+    if dir.is_none() {
+        return Ok(None);
+    }
+    Err(CliError::DiscoveryLimitReached {
+        detail: format!(
+            "the search for `package.ipe` above `{}` passed the {max_depth}-directory ceiling",
+            ipe_file.display()
+        ),
+    })
 }
 
 /// Whether [`compile_modules_observed`] served an on-disk build-cache

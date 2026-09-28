@@ -667,6 +667,105 @@ fn find_manifest_refuses_an_unverifiable_manifest() {
     let _ = fs::remove_dir_all(&tmp);
 }
 
+/// A fresh scratch tree for one manifest-walk test, holding `src/Main.ipe` under `project`.
+fn manifest_walk_tree(tag: &str, project: &str) -> (PathBuf, PathBuf) {
+    let tmp = std::env::temp_dir().join(format!("ipec_manifest_walk_{tag}_{}", std::process::id()));
+    let _ = fs::remove_dir_all(&tmp);
+    let src = tmp.join(project).join("src");
+    fs::create_dir_all(&src).expect("create src/");
+    let main_ipe = src.join("Main.ipe");
+    fs::write(&main_ipe, "module Main exposing (main)\nmain = 0\n").expect("write Main.ipe");
+    (tmp, main_ipe)
+}
+
+/// A `package.ipe` planted above the project's version-control root is never consulted.
+#[test]
+fn find_manifest_ignores_a_manifest_above_the_vcs_root() {
+    let (tmp, main_ipe) = manifest_walk_tree("above_vcs", "proj");
+    fs::write(
+        tmp.join("package.ipe"),
+        "module Package exposing (package)\n",
+    )
+    .expect("write planted package.ipe");
+    fs::create_dir_all(tmp.join("proj").join(".git")).expect("create .git/");
+    let found = find_manifest_for_ipe_file(&main_ipe);
+    let _ = fs::remove_dir_all(&tmp);
+    assert!(matches!(found, Ok(None)), "{found:?}");
+}
+
+/// A `.git` file (a worktree or submodule checkout) is a ceiling too.
+#[test]
+fn find_manifest_stops_at_a_git_file() {
+    let (tmp, main_ipe) = manifest_walk_tree("git_file", "proj");
+    fs::write(
+        tmp.join("package.ipe"),
+        "module Package exposing (package)\n",
+    )
+    .expect("write planted package.ipe");
+    fs::write(tmp.join("proj").join(".git"), "gitdir: elsewhere\n").expect("write .git");
+    let found = find_manifest_for_ipe_file(&main_ipe);
+    let _ = fs::remove_dir_all(&tmp);
+    assert!(matches!(found, Ok(None)), "{found:?}");
+}
+
+/// A manifest in the version-control root directory itself is still the project's.
+#[cfg(unix)]
+#[test]
+fn find_manifest_finds_the_manifest_at_the_vcs_root() {
+    let (tmp, main_ipe) = manifest_walk_tree("at_vcs", "proj");
+    let manifest = tmp.join("proj").join("package.ipe");
+    fs::write(&manifest, "module Package exposing (package)\n").expect("write package.ipe");
+    fs::create_dir_all(tmp.join("proj").join(".git")).expect("create .git/");
+    let found = find_manifest_for_ipe_file(&main_ipe);
+    let _ = fs::remove_dir_all(&tmp);
+    assert!(
+        matches!(&found, Ok(Some(path)) if *path == manifest),
+        "{found:?}"
+    );
+}
+
+/// A `package.ipe` above the user's home directory is never consulted.
+#[test]
+fn find_manifest_ignores_a_manifest_above_home() {
+    let (tmp, main_ipe) = manifest_walk_tree("above_home", "home");
+    fs::write(
+        tmp.join("package.ipe"),
+        "module Package exposing (package)\n",
+    )
+    .expect("write planted package.ipe");
+    let home = tmp.join("home");
+    let found = find_manifest_bounded(&main_ipe, Some(&home), MAX_MANIFEST_WALK_DEPTH);
+    let _ = fs::remove_dir_all(&tmp);
+    assert!(matches!(found, Ok(None)), "{found:?}");
+}
+
+/// A walk that passes the depth cap with no manifest and no ceiling is refused, not unbounded.
+#[test]
+fn find_manifest_refuses_a_walk_past_the_depth_cap() {
+    let (tmp, main_ipe) = manifest_walk_tree("depth_cap", "a/b");
+    let refused = find_manifest_bounded(&main_ipe, None, 2);
+    let _ = fs::remove_dir_all(&tmp);
+    assert!(
+        matches!(&refused, Err(CliError::DiscoveryLimitReached { .. })),
+        "{refused:?}"
+    );
+}
+
+/// A manifest in the last directory the cap allows is still found.
+#[cfg(unix)]
+#[test]
+fn find_manifest_finds_a_manifest_at_the_depth_cap() {
+    let (tmp, main_ipe) = manifest_walk_tree("at_depth_cap", "a/b");
+    let manifest = tmp.join("a").join("b").join("package.ipe");
+    fs::write(&manifest, "module Package exposing (package)\n").expect("write package.ipe");
+    let found = find_manifest_bounded(&main_ipe, None, 2);
+    let _ = fs::remove_dir_all(&tmp);
+    assert!(
+        matches!(&found, Ok(Some(path)) if *path == manifest),
+        "{found:?}"
+    );
+}
+
 // -----------------------------------------------------------------------
 // Regression: PAnything (wildcard lambda param with unconstrained Ty::Var)
 // -----------------------------------------------------------------------
