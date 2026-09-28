@@ -1,0 +1,32 @@
+# SSOT: the cheap, fully deterministic "Build & test" gates — same input,
+# same PR state, same result every time; no matrix flake, no external
+# service, no timing dependence. One context (job `name:`, or job id when
+# unset) per line, exactly as it appears in `ci/check-manifest.yml` and as
+# `gh api .../jobs` reports it.
+#
+# Consumed by:
+#   - `.github/workflows/ci.yml`'s `cancel-on-cheap-red` job, via its
+#     `needs:` list (checked against this file by `ci/verify-manifest.py`,
+#     run in `manifest-guard.yml` — the two representations can never drift).
+#   - `.github/workflows/rerun-failed-once.yml`, which skips the automatic
+#     retry when every failed job on a run is in this set: a deterministic
+#     gate fails the same way on a rerun, so retrying it only burns runners.
+#
+# Adding a job here makes its failure both a cancel trigger and a no-rerun
+# verdict — include only a job that cannot flake and cannot pass on a second,
+# identical attempt.
+artifact-guard
+capabilities-docs-drift
+cli-docs-drift
+cli-transcripts-drift
+clippy
+diagnostic-tone
+doc-string example gate
+env-docs-drift
+explain-page example gate (ADR 0059)
+fmt
+manifest-lock-consistency
+markdown-parity
+quick-check
+requirements-docs-drift
+stdlib-docs-drift

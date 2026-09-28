@@ -27,6 +27,10 @@ Checks performed
      vice-versa.  Run with `--ruleset FILE` (a JSON dump of the ruleset's
      required contexts) to make mismatches fatal; without it the manifest is the
      SSOT and the check is skipped with a note.
+  5. The `cancel-on-cheap-red` job's `needs:` (ci.yml) and the checked-in
+     `ci/deterministic-jobs.txt` (consumed by rerun-failed-once.yml's
+     no-rerun-on-deterministic-red filter) name the exact same job set — the
+     two representations of the one SSOT fact can never silently diverge.
 
 Pure stdlib + PyYAML (already a CI dependency).  No network.
 """
@@ -49,6 +53,9 @@ except ImportError:  # pragma: no cover - CI always has PyYAML
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 WORKFLOW_GLOB = os.path.join(REPO_ROOT, "workflows", "*.yml")
 MANIFEST = os.path.join(REPO_ROOT, "ci", "check-manifest.yml")
+DETERMINISTIC_JOBS_FILE = os.path.join(REPO_ROOT, "ci", "deterministic-jobs.txt")
+CANCEL_WATCHER_WORKFLOW = "ci.yml"
+CANCEL_WATCHER_JOB_ID = "cancel-on-cheap-red"
 
 VALID_DISPOSITIONS = {"gate", "gate-external", "nightly-gate", "informational", "delete"}
 # Workflows whose jobs are release/automation plumbing, never PR/promotion
@@ -136,6 +143,58 @@ def produced_contexts(jobs: list[Job]) -> dict[str, list[str]]:
         for ctx in job.contexts:
             contexts.setdefault(ctx, []).append(job.workflow)
     return contexts
+
+
+def check_deterministic_set(jobs: list[Job], errors: list[str]) -> None:
+    """The `cancel-on-cheap-red` watcher's `needs:` must equal the checked-in
+    `ci/deterministic-jobs.txt` list — the one SSOT fact behind both ci.yml's
+    watcher and rerun-failed-once.yml's no-rerun-on-deterministic-red filter.
+    """
+    try:
+        with open(DETERMINISTIC_JOBS_FILE) as f:
+            listed = {
+                line.strip()
+                for line in f
+                if line.strip() and not line.strip().startswith("#")
+            }
+    except OSError as e:
+        errors.append(f"cannot read {DETERMINISTIC_JOBS_FILE}: {e}")
+        return
+
+    by_job_id = {
+        j.job_id: j for j in jobs if j.workflow == CANCEL_WATCHER_WORKFLOW
+    }
+    watcher = by_job_id.get(CANCEL_WATCHER_JOB_ID)
+    if watcher is None:
+        errors.append(
+            f"{CANCEL_WATCHER_WORKFLOW} has no {CANCEL_WATCHER_JOB_ID!r} job — "
+            f"{DETERMINISTIC_JOBS_FILE} has no watcher to check against"
+        )
+        return
+
+    needed_contexts: set[str] = set()
+    for dep_id in watcher.needs:
+        dep = by_job_id.get(dep_id)
+        if dep is None:
+            errors.append(
+                f"{CANCEL_WATCHER_WORKFLOW}: {CANCEL_WATCHER_JOB_ID!r} needs "
+                f"unknown job {dep_id!r}"
+            )
+            continue
+        needed_contexts.update(dep.contexts)
+
+    missing = listed - needed_contexts
+    extra = needed_contexts - listed
+    if missing:
+        errors.append(
+            f"{DETERMINISTIC_JOBS_FILE} lists {sorted(missing)} but "
+            f"{CANCEL_WATCHER_JOB_ID!r} does not `needs:` them"
+        )
+    if extra:
+        errors.append(
+            f"{CANCEL_WATCHER_JOB_ID!r} needs {sorted(extra)} but they are "
+            f"missing from {DETERMINISTIC_JOBS_FILE}"
+        )
 
 
 def load_manifest() -> dict:
@@ -229,6 +288,9 @@ def main() -> int:
             f"produced context {ctx!r} (from {wfs[0]}) has NO disposition in "
             "ci/check-manifest.yml — every check must be classified"
         )
+
+    # ---- 5. cancel-on-cheap-red needs: == ci/deterministic-jobs.txt ----
+    check_deterministic_set(jobs, errors)
 
     # ---- 3. fail-closed dependency surfacing ----
     def surfaced_dispositions(job: Job) -> set[str]:

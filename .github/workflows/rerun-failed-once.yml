@@ -27,11 +27,67 @@ jobs:
   rerun:
     runs-on: ubuntu-latest
     # Only a first-attempt FAILURE is eligible for the single automatic rerun.
+    # A CANCELLED run (the cancel-on-cheap-red watcher's doing, or a manual
+    # cancel) is excluded here too: its conclusion is `cancelled`, never
+    # `failure`, so it was already never eligible for this rerun.
     if: >-
       github.event.workflow_run.conclusion == 'failure' &&
       github.event.workflow_run.run_attempt == 1
     steps:
+      # No `ref:` override — this checks out the default branch (the ref that
+      # triggered THIS workflow_run event), never the completed run's own
+      # head. A fork PR's head content must never gate a decision made by a
+      # workflow holding write access.
+      - uses: actions/checkout@v7
+
+      - name: Skip the rerun when every failed job is a deterministic gate
+        id: gate
+        env:
+          GH_TOKEN: ${{ secrets.PROMOTE_TOKEN || secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+        run: |
+          set -euo pipefail
+
+          # A deterministic gate fails the same way on a rerun — retrying it
+          # only burns runners for a verdict that cannot change. Default to
+          # the original behaviour (rerun) whenever the classification itself
+          # is inconclusive; only a positive, fully-read match skips it.
+          rerun=true
+
+          failed_jobs="$(gh api "repos/$REPO/actions/runs/$RUN_ID/jobs" --paginate \
+            --jq '.jobs[] | select(.conclusion == "failure") | .name')" || {
+            echo "could not list run $RUN_ID's jobs — keeping the default rerun." >&2
+            echo "rerun=$rerun" >> "$GITHUB_OUTPUT"
+            exit 0
+          }
+
+          if [ -n "$failed_jobs" ]; then
+            deterministic="$(grep -vE '^[[:space:]]*(#|$)' .github/ci/deterministic-jobs.txt)" || {
+              echo "could not read ci/deterministic-jobs.txt — keeping the default rerun." >&2
+              echo "rerun=$rerun" >> "$GITHUB_OUTPUT"
+              exit 0
+            }
+            all_deterministic=true
+            while IFS= read -r job; do
+              [ -z "$job" ] && continue
+              if ! grep -qxF "$job" <<<"$deterministic"; then
+                echo "non-deterministic failed job: $job" >&2
+                all_deterministic=false
+              fi
+            done <<<"$failed_jobs"
+            if [ "$all_deterministic" = true ]; then
+              echo "every failed job on run $RUN_ID is a deterministic gate — no automatic retry is issued." >&2
+              rerun=false
+            fi
+          else
+            echo "run $RUN_ID reports overall failure but no job-level failure was found — keeping the default rerun." >&2
+          fi
+
+          echo "rerun=$rerun" >> "$GITHUB_OUTPUT"
+
       - name: Re-run the failed jobs once
+        if: steps.gate.outputs.rerun == 'true'
         env:
           GH_TOKEN: ${{ secrets.PROMOTE_TOKEN || secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}

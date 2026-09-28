@@ -114,6 +114,22 @@ checks:
     disposition: gate
     producer: ci.yml
 
+  # ── Cancel-on-cheap-red watcher — informational (never a merge gate) ──────
+  # Normally SKIPPED (its `needs:` all succeed and `failure()` is false), so it
+  # may not be a `gate`: requiring a check that is skipped on every green run
+  # buys nothing (GitHub already counts a skip as passing) and only adds
+  # noise to the required set. Its `needs:` list is checked against
+  # `ci/deterministic-jobs.txt` by `ci/verify-manifest.py`, so the two can
+  # never drift apart.
+  - context: cancel-on-cheap-red
+    disposition: informational
+    producer: ci.yml
+    owner: ci
+    note: >-
+      PR-only watcher that cancels a run once a deterministic cheap gate goes
+      red, so the heavy tier stops consuming runners; see the comment above
+      the job in ci.yml.
+
   # ── Panic-scan / cargo-deny / playground / admission (per-change gates) ────
   - context: panic-scan
     disposition: gate
