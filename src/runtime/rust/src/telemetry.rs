@@ -205,7 +205,7 @@ impl Posture {
             match raw {
                 RawEnv::NotUnicode => return Self::Production,
                 RawEnv::Absent => {}
-                RawEnv::Value(value) if value.is_empty() => {}
+                RawEnv::Value("") => {}
                 RawEnv::Value(value) => {
                     let dev = ["dev", "development", "local"]
                         .iter()
