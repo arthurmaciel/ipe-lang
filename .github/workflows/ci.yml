@@ -35,11 +35,14 @@ name: Build & test
 #
 # Job-level `if:` keys on the `changes` paths-filter output (all authors) for the
 # correctness/soundness gates and on github.event_name for the nightly infra/
-# flaky-env jobs. E2E is sharded across runners; the workflow-level
-# RUSTC_WRAPPER/SCCACHE_GHA_ENABLED env (below) routes every job that installs
-# `mozilla-actions/sccache-action` through sccache's GitHub Actions cache
-# backend, so builds warm across runs. The ASAN/TSAN sanitizer jobs opt out
-# (instrumented `-Zbuild-std` compiles use `Swatinem/rust-cache` instead).
+# flaky-env jobs. E2E is sharded across runners; a job that wants sccache adds
+# `uses: ./.github/actions/sccache` (installs the binary and wires
+# RUSTC_WRAPPER/SCCACHE_GHA_ENABLED itself — no workflow-level env, so a job
+# without that step never inherits a wrapper it never installed). The
+# ASAN/TSAN sanitizer jobs (instrumented `-Zbuild-std` compiles) and every job
+# owning a deterministic check step (ci/deterministic-checks.json — sccache's
+# GitHub Actions cache backend does network I/O) skip it and use
+# `Swatinem/rust-cache` alone.
 
 on:
   push:
@@ -73,16 +76,6 @@ concurrency:
 env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: "0"
-  # Wires every `mozilla-actions/sccache-action` step below to actually route
-  # rustc through sccache's GitHub Actions cache backend — installing the
-  # binary alone does nothing without both vars. A job that itself invokes
-  # cargo/rustc but never runs the action (no sccache binary on PATH) MUST
-  # override RUSTC_WRAPPER to "" in its own `env:`, or every such invocation
-  # fails; a job that never invokes cargo/rustc at all just carries the unused
-  # var harmlessly. `ci/verify-manifest.py` enforces that every job pairs the
-  # action with this wiring and vice versa.
-  RUSTC_WRAPPER: sccache
-  SCCACHE_GHA_ENABLED: "true"
 
 jobs:
   # Path filters. On a PR each filter's output gates whether its dependent jobs
@@ -224,7 +217,6 @@ jobs:
       - uses: ./.github/actions/rust-toolchain-pinned
         with:
           components: clippy
-      - uses: mozilla-actions/sccache-action@v0.0.9
       - uses: Swatinem/rust-cache@v2
       - name: Fetch crates
         run: cargo fetch
@@ -244,7 +236,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/rust-toolchain-pinned
-      - uses: mozilla-actions/sccache-action@v0.0.9
+      - uses: ./.github/actions/sccache
       - uses: Swatinem/rust-cache@v2
       - run: cargo check --locked -p ipe --all-targets
       - uses: taiki-e/install-action@nextest
@@ -286,7 +278,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/rust-toolchain-pinned
       - uses: rui314/setup-mold@v1
-      - uses: mozilla-actions/sccache-action@v0.0.9
+      - uses: ./.github/actions/sccache
       - uses: Swatinem/rust-cache@v2
       - name: Build ipe
         run: cargo build --release -p ipe
@@ -312,7 +304,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/rust-toolchain-pinned
       - uses: rui314/setup-mold@v1
-      - uses: mozilla-actions/sccache-action@v0.0.9
+      - uses: ./.github/actions/sccache
       - uses: Swatinem/rust-cache@v2
       - name: Build ipe
         run: cargo build --release -p ipe
@@ -347,7 +339,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/rust-toolchain-pinned
       - uses: rui314/setup-mold@v1
-      - uses: mozilla-actions/sccache-action@v0.0.9
+      - uses: ./.github/actions/sccache
       - uses: Swatinem/rust-cache@v2
       - uses: taiki-e/install-action@nextest
       # The fixtures shell out to `git init/commit/push`; give the runner an
@@ -371,7 +363,6 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/rust-toolchain-pinned
-      - uses: mozilla-actions/sccache-action@v0.0.9
       - uses: Swatinem/rust-cache@v2
       - name: Fetch crates
         run: cargo fetch
@@ -400,7 +391,7 @@ jobs:
       - uses: ./.github/actions/rust-toolchain-pinned
         with:
           components: clippy
-      - uses: mozilla-actions/sccache-action@v0.0.9
+      - uses: ./.github/actions/sccache
       - uses: Swatinem/rust-cache@v2
       # db WITHOUT web — the load-bearing invariant.
       - run: cargo clippy -p ipe-runtime-rust --no-default-features --features db --all-targets -- -D warnings
@@ -429,7 +420,7 @@ jobs:
       - uses: ./.github/actions/rust-toolchain-pinned
         with:
           targets: wasm32-unknown-unknown, wasm32-wasip1
-      - uses: mozilla-actions/sccache-action@v0.0.9
+      - uses: ./.github/actions/sccache
       - uses: Swatinem/rust-cache@v2
       - run: cargo build -p ipe-runtime-rust --target wasm32-unknown-unknown
       - run: cargo build -p ipe-runtime-rust --target wasm32-unknown-unknown --features json
@@ -480,7 +471,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/rust-toolchain-pinned
       - uses: rui314/setup-mold@v1
-      - uses: mozilla-actions/sccache-action@v0.0.9
+      - uses: ./.github/actions/sccache
       - uses: Swatinem/rust-cache@v2
       - uses: taiki-e/install-action@nextest
       # Compile every test binary ONCE into a self-contained archive.
@@ -575,7 +566,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/rust-toolchain-pinned
       - uses: rui314/setup-mold@v1
-      - uses: mozilla-actions/sccache-action@v0.0.9
+      - uses: ./.github/actions/sccache
       # Cache the shared emitted-crate target too (keyed on this job), so the
       # runtime + its deps stay warm across runs and later emitted builds are
       # incremental. The default workspace target is cached by the entry above.
@@ -636,7 +627,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/rust-toolchain-pinned
       - uses: rui314/setup-mold@v1
-      - uses: mozilla-actions/sccache-action@v0.0.9
+      - uses: ./.github/actions/sccache
       - uses: Swatinem/rust-cache@v2
         with:
           cache-directories: ${{ github.workspace }}/.cache/shapes-shared-target
@@ -709,7 +700,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/rust-toolchain-pinned
       - uses: rui314/setup-mold@v1
-      - uses: mozilla-actions/sccache-action@v0.0.9
+      - uses: ./.github/actions/sccache
       - uses: Swatinem/rust-cache@v2
       # ripgrep — scripts/lib/examples.sh's classification helpers require it.
       - name: Install ripgrep
@@ -747,7 +738,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/rust-toolchain-pinned
-      - uses: mozilla-actions/sccache-action@v0.0.9
+      - uses: ./.github/actions/sccache
       - uses: Swatinem/rust-cache@v2
       - uses: taiki-e/install-action@nextest
       - run: cargo nextest run -p ipe-runtime-rust --features full --profile ci
@@ -811,11 +802,6 @@ jobs:
       RUSTFLAGS: -Zsanitizer=address
       RUSTDOCFLAGS: -Zsanitizer=address
       ASAN_OPTIONS: detect_leaks=1:abort_on_error=1
-      # No `sccache-action` step here (instrumented `-Zbuild-std` uses
-      # `Swatinem/rust-cache` instead) — override the workflow-level wrapper to
-      # empty (cargo treats an empty RUSTC_WRAPPER as unset) so rustc is not
-      # pointed at a binary this job never installs.
-      RUSTC_WRAPPER: ""
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@nightly
@@ -878,11 +864,6 @@ jobs:
       RUSTDOCFLAGS: -Zsanitizer=thread
       # TSAN's own reports; `halt_on_error=1` fails on the first race.
       TSAN_OPTIONS: halt_on_error=1
-      # No `sccache-action` step here (instrumented `-Zbuild-std` uses
-      # `Swatinem/rust-cache` instead) — override the workflow-level wrapper to
-      # empty (cargo treats an empty RUSTC_WRAPPER as unset) so rustc is not
-      # pointed at a binary this job never installs.
-      RUSTC_WRAPPER: ""
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@nightly
@@ -978,7 +959,6 @@ jobs:
       - uses: actions/download-artifact@v7
         with:
           name: nextest-archive
-      - uses: mozilla-actions/sccache-action@v0.0.9
       # Cache the shared emitted-crate target across runs so the runtime dep tree
       # (axum/tokio/sqlx/serde) stays warm and each shard's goldens link
       # incrementally instead of cold-building it. Keyed per shard by rust-cache.
@@ -1157,7 +1137,6 @@ jobs:
       - uses: actions/download-artifact@v7
         with:
           name: nextest-archive
-      - uses: mozilla-actions/sccache-action@v0.0.9
       - uses: Swatinem/rust-cache@v2
         with:
           cache-directories: ${{ github.workspace }}/.cache/oracle-shared-target
@@ -1275,7 +1254,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/rust-toolchain-pinned
       - uses: rui314/setup-mold@v1
-      - uses: mozilla-actions/sccache-action@v0.0.9
+      - uses: ./.github/actions/sccache
       - uses: Swatinem/rust-cache@v2
       - uses: taiki-e/install-action@nextest
       - name: Run seal_modset under the vendored emit model
@@ -1319,7 +1298,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/rust-toolchain-pinned
-      - uses: mozilla-actions/sccache-action@v0.0.9
+      - uses: ./.github/actions/sccache
       - uses: Swatinem/rust-cache@v2
       - uses: taiki-e/install-action@nextest
 
@@ -1409,7 +1388,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/rust-toolchain-pinned
-      - uses: mozilla-actions/sccache-action@v0.0.9
+      - uses: ./.github/actions/sccache
       - uses: Swatinem/rust-cache@v2
       - uses: taiki-e/install-action@nextest
 
@@ -1457,7 +1436,6 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/rust-toolchain-pinned
-      - uses: mozilla-actions/sccache-action@v0.0.9
       - uses: Swatinem/rust-cache@v2
       - name: Regenerate docs/reference/stdlib.md and docs/reference/stdlib/
         run: cargo run -p ipe_docs --bin gen-stdlib-docs -- --repo-root "${{ github.workspace }}"
@@ -1480,7 +1458,6 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/rust-toolchain-pinned
-      - uses: mozilla-actions/sccache-action@v0.0.9
       - uses: Swatinem/rust-cache@v2
       - name: Regenerate docs/reference/env.md
         run: cargo run -p ipe_docs --bin gen-env-docs -- --repo-root "${{ github.workspace }}"
@@ -1503,7 +1480,6 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/rust-toolchain-pinned
-      - uses: mozilla-actions/sccache-action@v0.0.9
       - uses: Swatinem/rust-cache@v2
       - name: Regenerate docs/reference/capabilities.md
         run: cargo run -p ipe_docs --bin gen-capabilities-docs -- --repo-root "${{ github.workspace }}"
@@ -1526,7 +1502,6 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/rust-toolchain-pinned
-      - uses: mozilla-actions/sccache-action@v0.0.9
       - uses: Swatinem/rust-cache@v2
       - name: Regenerate docs/reference/cli.md
         run: cargo run -p ipe --bin gen-cli-docs -- --repo-root "${{ github.workspace }}"
@@ -1550,7 +1525,6 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/rust-toolchain-pinned
-      - uses: mozilla-actions/sccache-action@v0.0.9
       - uses: Swatinem/rust-cache@v2
       - name: Regenerate docs/reference/requirements.md
         run: cargo run -p ipe_docs --bin gen-requirements-docs -- --repo-root "${{ github.workspace }}"
@@ -1577,7 +1551,6 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/rust-toolchain-pinned
-      - uses: mozilla-actions/sccache-action@v0.0.9
       - uses: Swatinem/rust-cache@v2
       - name: Regenerate the CLI transcript goldens
         run: cargo run -p regen-cli-transcripts -- --repo-root "${{ github.workspace }}"
@@ -1606,7 +1579,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/rust-toolchain-pinned
-      - uses: mozilla-actions/sccache-action@v0.0.9
+      - uses: ./.github/actions/sccache
       - uses: Swatinem/rust-cache@v2
       - name: Regenerate the Markdown parity snapshot via an ipe run
         run: tools/scripts/regen-markdown-parity.sh
@@ -1734,7 +1707,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/rust-toolchain-pinned
       - uses: rui314/setup-mold@v1
-      - uses: mozilla-actions/sccache-action@v0.0.9
+      - uses: ./.github/actions/sccache
       - uses: Swatinem/rust-cache@v2
         with:
           cache-directories: ${{ github.workspace }}/.cache/browser-e2e-target

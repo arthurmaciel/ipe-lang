@@ -33,14 +33,21 @@ Checks performed
      no surrounding whitespace, no duplicate job), its job set equals the
      watcher's `needs:`, and each pair's step is a `name:` of that job's steps
      in ci.yml.
-  6. sccache wiring: a job that runs `mozilla-actions/sccache-action` must set
-     both RUSTC_WRAPPER=sccache and SCCACHE_GHA_ENABLED=true (workflow-level
-     `env:` merged with the job's own), else the action only installs a binary
-     nobody uses; conversely a job whose OWN `env:` sets that wiring without
-     the action step would point rustc at a wrapper binary it never installed
-     (a workflow-level block inherited by a non-building job is exempt — it is
-     unused there by design, not a drift). Checked across every workflow, not
-     just the non-plumbing ones `workflow_jobs()` covers for status contexts.
+  6. sccache wiring: the ONLY sanctioned way a job gets sccache is
+     `uses: ./.github/actions/sccache`, a composite action that installs
+     `mozilla-actions/sccache-action` and writes RUSTC_WRAPPER/
+     SCCACHE_GHA_ENABLED to `$GITHUB_ENV` itself, so the wrapper can never
+     exist in a job without the binary that backs it. This refuses: a raw
+     `mozilla-actions/sccache-action` reference anywhere else (case-folded);
+     a workflow-, job-, or step-level `env:` key RUSTC_WRAPPER/
+     SCCACHE_GHA_ENABLED (case-folded) outside the composite; a `run:` step
+     writing RUSTC_WRAPPER/SCCACHE_* into `$GITHUB_ENV` outside the
+     composite; and a job that uses the composite while also owning a step
+     named in `ci/deterministic-checks.json` (sccache's GitHub Actions cache
+     backend does network I/O a deterministic check must never risk). It
+     also validates the composite action itself installs the action and
+     writes both vars. Checked across every workflow, not just the
+     non-plumbing ones `workflow_jobs()` covers for status contexts.
 
 Pure stdlib + PyYAML (already a CI dependency).  No network.
 """
@@ -53,6 +60,7 @@ import json
 import os
 import re
 import sys
+from dataclasses import dataclass
 
 try:
     import yaml
@@ -68,10 +76,19 @@ CANCEL_WATCHER_WORKFLOW = "ci.yml"
 CANCEL_WATCHER_JOB_ID = "cancel-on-cheap-red"
 
 SCCACHE_ACTION_PREFIX = "mozilla-actions/sccache-action@"
+SCCACHE_COMPOSITE_USES = "./.github/actions/sccache"
+SCCACHE_COMPOSITE_REL_PATH = os.path.join("actions", "sccache", "action.yml")
 SCCACHE_WRAPPER_VAR = "RUSTC_WRAPPER"
-SCCACHE_WRAPPER_VALUE = "sccache"
 SCCACHE_GHA_VAR = "SCCACHE_GHA_ENABLED"
-SCCACHE_GHA_VALUE = "true"
+SCCACHE_ENV_KEYS = {SCCACHE_WRAPPER_VAR.casefold(), SCCACHE_GHA_VAR.casefold()}
+# Matches a shell line that assigns RUSTC_WRAPPER/SCCACHE_* and, anywhere in
+# the same script, redirects into $GITHUB_ENV — the one write the composite
+# action itself is allowed to perform.
+SCCACHE_GITHUB_ENV_WRITE_RE = re.compile(
+    r"(RUSTC_WRAPPER|SCCACHE_[A-Z0-9_]*)\s*=.*GITHUB_ENV"
+    r"|GITHUB_ENV.*(RUSTC_WRAPPER|SCCACHE_[A-Z0-9_]*)\s*=",
+    re.IGNORECASE | re.DOTALL,
+)
 
 VALID_DISPOSITIONS = {"gate", "gate-external", "nightly-gate", "informational", "delete"}
 # Workflows whose jobs are release/automation plumbing, never PR/promotion
@@ -294,71 +311,210 @@ def check_deterministic_set(jobs: list[Job], errors: list[str]) -> None:
         )
 
 
-def check_sccache_wiring(errors: list[str]) -> None:
-    """A job that installs sccache via `mozilla-actions/sccache-action` must
-    carry the RUSTC_WRAPPER/SCCACHE_GHA_ENABLED wiring (workflow-level `env:`
-    merged with the job's own) — else the action only installs a binary
-    nobody points rustc at, and the cache stays cold.  Checked over EVERY
-    workflow, not just the non-plumbing ones `workflow_jobs()` covers for
-    status contexts — a plumbing workflow can add the action without ever
-    producing a gated context.
-
-    The reverse direction is checked too, but only against a job's OWN
-    `env:` block, not the merged one: a workflow-level wiring block is by
-    design inherited by jobs that never invoke rustc (a path filter, a
-    fmt/lint script, an aggregator `needs:` gate) — there the var sits
-    unused and harmless, and flagging every such job would make the
-    workflow-level-`env:` wiring approach itself unusable.  A job that
-    instead sets the wiring in its OWN block without the action step is a
-    self-contained misconfiguration: it deliberately opts in and forgot to
-    install the binary, which fails the job's own cargo/rustc invocations
-    outright (cargo hard-errors when RUSTC_WRAPPER names a binary it cannot
-    find), so that always deserves a refusal.
+@dataclass(frozen=True)
+class Step:
+    """One workflow (or composite action) step, typed just enough for the
+    sccache-wiring checks: `uses:`/`name:`/`env:`/`run:` are read nowhere
+    else in this module via raw `.get()`.
     """
-    for path in sorted(glob.glob(WORKFLOW_GLOB)):
+
+    raw: dict
+
+    @property
+    def name(self) -> str | None:
+        n = self.raw.get("name")
+        return n if isinstance(n, str) else None
+
+    @property
+    def uses(self) -> str | None:
+        u = self.raw.get("uses")
+        return u if isinstance(u, str) else None
+
+    @property
+    def uses_folded(self) -> str:
+        return (self.uses or "").casefold()
+
+    @property
+    def env(self) -> dict:
+        e = self.raw.get("env")
+        return e if isinstance(e, dict) else {}
+
+    @property
+    def run(self) -> str | None:
+        r = self.raw.get("run")
+        return r if isinstance(r, str) else None
+
+
+@dataclass(frozen=True)
+class WorkflowJob:
+    job_id: str
+    raw: dict
+
+    @property
+    def env(self) -> dict:
+        e = self.raw.get("env")
+        return e if isinstance(e, dict) else {}
+
+    @property
+    def steps(self) -> list[Step]:
+        return [Step(st) for st in (self.raw.get("steps") or []) if isinstance(st, dict)]
+
+
+@dataclass(frozen=True)
+class SccacheWorkflow:
+    fname: str
+    doc: dict
+
+    @property
+    def env(self) -> dict:
+        e = self.doc.get("env")
+        return e if isinstance(e, dict) else {}
+
+    @property
+    def jobs(self) -> list[WorkflowJob]:
+        return [
+            WorkflowJob(str(jid), j)
+            for jid, j in (self.doc.get("jobs") or {}).items()
+            if isinstance(j, dict)
+        ]
+
+
+def _load_sccache_workflows(root: str, errors: list[str]) -> list[SccacheWorkflow]:
+    out: list[SccacheWorkflow] = []
+    for path in sorted(glob.glob(os.path.join(root, "workflows", "*.yml"))):
         fname = os.path.basename(path)
         try:
-            doc = yaml.safe_load(open(path))
+            with open(path) as f:
+                doc = yaml.safe_load(f)
         except yaml.YAMLError as e:
             errors.append(f"{fname} is not valid YAML: {e}")
             continue
-        if not isinstance(doc, dict):
-            continue
-        wf_env = doc.get("env") or {}
-        for job_id, job in (doc.get("jobs") or {}).items():
-            if not isinstance(job, dict):
-                continue
-            job_env = job.get("env") or {}
+        if isinstance(doc, dict):
+            out.append(SccacheWorkflow(fname, doc))
+    return out
 
-            def is_wired(env: dict) -> bool:
-                return (
-                    str(env.get(SCCACHE_WRAPPER_VAR)) == SCCACHE_WRAPPER_VALUE
-                    and str(env.get(SCCACHE_GHA_VAR)) == SCCACHE_GHA_VALUE
-                )
 
-            effective_wired = is_wired({**wf_env, **job_env})
-            job_own_wired = is_wired(job_env)
-            steps = job.get("steps") or []
-            has_action = any(
-                isinstance(st, dict)
-                and str(st.get("uses", "")).startswith(SCCACHE_ACTION_PREFIX)
-                for st in steps
+def _env_keys_folded(env: dict) -> set[str]:
+    return {str(k).casefold() for k in env}
+
+
+def _deterministic_step_names(root: str) -> set[str]:
+    """Step names ci/deterministic-checks.json lists, read fresh — the SSOT,
+    never hardcoded here.  A missing/malformed file yields no names; check 5
+    (`check_deterministic_set`) is what holds the file itself accountable.
+    """
+    try:
+        with open(os.path.join(root, "ci", "deterministic-checks.json")) as f:
+            doc = json.load(f)
+    except (OSError, ValueError):
+        return set()
+    checks = doc.get("checks") if isinstance(doc, dict) else None
+    if not isinstance(checks, list):
+        return set()
+    return {e["step"] for e in checks if isinstance(e, dict) and isinstance(e.get("step"), str)}
+
+
+def _check_sccache_composite(root: str, errors: list[str]) -> None:
+    """The composite action is the one sanctioned place `sccache-action` may
+    run and `$GITHUB_ENV` may be written — verify it actually does both, so a
+    job trusting `uses: ./.github/actions/sccache` gets a real wrapper.
+    """
+    path = os.path.join(root, SCCACHE_COMPOSITE_REL_PATH)
+    if not os.path.isfile(path):
+        errors.append(f"{path} does not exist — no composite action to wire sccache through")
+        return
+    try:
+        with open(path) as f:
+            doc = yaml.safe_load(f)
+    except yaml.YAMLError as e:
+        errors.append(f"{path} is not valid YAML: {e}")
+        return
+    if not isinstance(doc, dict):
+        errors.append(f"{path}: empty or non-mapping document")
+        return
+    runs = doc.get("runs") or {}
+    if runs.get("using") != "composite":
+        errors.append(f"{path}: `runs.using` must be 'composite'")
+    steps = [Step(st) for st in (runs.get("steps") or []) if isinstance(st, dict)]
+    if not any(st.uses_folded.startswith(SCCACHE_ACTION_PREFIX.casefold()) for st in steps):
+        errors.append(f"{path}: no step installs {SCCACHE_ACTION_PREFIX}...")
+    if not any(st.run and SCCACHE_GITHUB_ENV_WRITE_RE.search(st.run) for st in steps):
+        errors.append(
+            f"{path}: no step writes {SCCACHE_WRAPPER_VAR}/{SCCACHE_GHA_VAR} to "
+            "$GITHUB_ENV — installing the binary alone never wires rustc to it"
+        )
+
+
+def check_sccache_wiring(errors: list[str], root: str = REPO_ROOT) -> None:
+    """The only sanctioned way a job gets sccache is `uses:
+    ./.github/actions/sccache` (see `_check_sccache_composite`) — a wrapper
+    can then never exist in a job without the binary that backs it, by
+    construction. This refuses every other way RUSTC_WRAPPER/
+    SCCACHE_GHA_ENABLED could reach a job:
+      (a) a raw `mozilla-actions/sccache-action` reference in a workflow
+          (case-folded `uses:` match — the composite is the only legal site);
+      (b) a workflow-, job-, or step-level `env:` key RUSTC_WRAPPER or
+          SCCACHE_GHA_ENABLED (case-folded key);
+      (c) a `run:` step assigning RUSTC_WRAPPER/SCCACHE_* and redirecting
+          into $GITHUB_ENV;
+      (d) a job that uses the composite while also owning a step named in
+          `ci/deterministic-checks.json` — sccache's GitHub Actions cache
+          backend does network I/O, which a deterministic (must-be-network-
+          free) check step must never risk.
+    Checked over EVERY workflow, not just the non-plumbing ones
+    `workflow_jobs()` covers for status contexts — a plumbing workflow can
+    wire sccache without ever producing a gated context.
+    """
+    _check_sccache_composite(root, errors)
+    deterministic_steps = _deterministic_step_names(root)
+
+    for wf in _load_sccache_workflows(root, errors):
+        for key in _env_keys_folded(wf.env) & SCCACHE_ENV_KEYS:
+            errors.append(
+                f"{wf.fname}: workflow-level env sets {key!r} — sccache wiring "
+                f"must come only from {SCCACHE_COMPOSITE_USES}, never inherited env"
             )
-            if has_action and not effective_wired:
+        for job in wf.jobs:
+            for key in _env_keys_folded(job.env) & SCCACHE_ENV_KEYS:
                 errors.append(
-                    f"{fname}: job {job_id!r} runs {SCCACHE_ACTION_PREFIX}... but "
-                    f"does not set both {SCCACHE_WRAPPER_VAR}={SCCACHE_WRAPPER_VALUE!r} "
-                    f"and {SCCACHE_GHA_VAR}={SCCACHE_GHA_VALUE!r} (workflow-level "
-                    "env: merged with the job's own) — sccache installs but rustc "
-                    "never uses it, so the cache is inert"
+                    f"{wf.fname}: job {job.job_id!r} env sets {key!r} — sccache "
+                    f"wiring must come only from {SCCACHE_COMPOSITE_USES}, never "
+                    "a hand-set env:"
                 )
-            if job_own_wired and not has_action:
-                errors.append(
-                    f"{fname}: job {job_id!r} sets {SCCACHE_WRAPPER_VAR}="
-                    f"{SCCACHE_WRAPPER_VALUE!r} in its own env: but has no "
-                    f"{SCCACHE_ACTION_PREFIX}... step — rustc is pointed at a "
-                    "wrapper binary this job never installs"
-                )
+            uses_composite = False
+            for st in job.steps:
+                label = st.name or st.uses or "<unnamed>"
+                if st.uses is not None and st.uses_folded.startswith(SCCACHE_ACTION_PREFIX.casefold()):
+                    errors.append(
+                        f"{wf.fname}: job {job.job_id!r} step {label!r} runs the "
+                        f"raw {SCCACHE_ACTION_PREFIX}... action directly — use "
+                        f"{SCCACHE_COMPOSITE_USES} instead, the one place it may run"
+                    )
+                if st.uses == SCCACHE_COMPOSITE_USES:
+                    uses_composite = True
+                for key in _env_keys_folded(st.env) & SCCACHE_ENV_KEYS:
+                    errors.append(
+                        f"{wf.fname}: job {job.job_id!r} step {label!r} env sets "
+                        f"{key!r} — sccache wiring must come only from "
+                        f"{SCCACHE_COMPOSITE_USES}, never a hand-set env:"
+                    )
+                if st.run and SCCACHE_GITHUB_ENV_WRITE_RE.search(st.run):
+                    errors.append(
+                        f"{wf.fname}: job {job.job_id!r} step {label!r} writes "
+                        f"{SCCACHE_WRAPPER_VAR}/{SCCACHE_GHA_VAR}-shaped output into "
+                        f"$GITHUB_ENV outside {SCCACHE_COMPOSITE_USES} — the "
+                        "composite is the one sanctioned setter"
+                    )
+            if uses_composite:
+                own_names = {st.name for st in job.steps if st.name is not None}
+                hit = sorted(own_names & deterministic_steps)
+                if hit:
+                    errors.append(
+                        f"{wf.fname}: job {job.job_id!r} uses {SCCACHE_COMPOSITE_USES} "
+                        f"but also owns deterministic check step(s) {hit} — sccache's "
+                        "GitHub Actions cache backend does network I/O inside a step "
+                        "that must be network-free (ci/deterministic-checks.json)"
+                    )
 
 
 def load_manifest() -> dict:

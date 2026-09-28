@@ -38,6 +38,9 @@ jobs:
       - name: Every produced check has exactly one declared disposition
         run: python3 .github/ci/verify-manifest.py
 
+      - name: Prove the sccache-wiring refusals (unit tests)
+        run: python3 .github/ci/test_verify_manifest.py -v
+
       - name: The derived required-set is in sync with the manifest
         run: |
           python3 - <<'PY'
