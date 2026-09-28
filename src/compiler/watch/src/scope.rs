@@ -222,6 +222,7 @@ pub enum ScopeError {
 /// Paths render quoted and escaped: a directory name is attacker-chosen when a
 /// checkout is, and a newline or escape in it must not open a forged output line.
 impl std::fmt::Display for ScopeError {
+    #[allow(clippy::unnecessary_debug_formatting)] // `Debug` escapes attacker-chosen path bytes.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::RootNotFound(p) => write!(f, "watch: project root not found: {p:?}"),
