@@ -33,6 +33,14 @@ Checks performed
      no surrounding whitespace, no duplicate job), its job set equals the
      watcher's `needs:`, and each pair's step is a `name:` of that job's steps
      in ci.yml.
+  6. sccache wiring: a job that runs `mozilla-actions/sccache-action` must set
+     both RUSTC_WRAPPER=sccache and SCCACHE_GHA_ENABLED=true (workflow-level
+     `env:` merged with the job's own), else the action only installs a binary
+     nobody uses; conversely a job whose OWN `env:` sets that wiring without
+     the action step would point rustc at a wrapper binary it never installed
+     (a workflow-level block inherited by a non-building job is exempt — it is
+     unused there by design, not a drift). Checked across every workflow, not
+     just the non-plumbing ones `workflow_jobs()` covers for status contexts.
 
 Pure stdlib + PyYAML (already a CI dependency).  No network.
 """
@@ -58,6 +66,12 @@ MANIFEST = os.path.join(REPO_ROOT, "ci", "check-manifest.yml")
 DETERMINISTIC_CHECKS_FILE = os.path.join(REPO_ROOT, "ci", "deterministic-checks.json")
 CANCEL_WATCHER_WORKFLOW = "ci.yml"
 CANCEL_WATCHER_JOB_ID = "cancel-on-cheap-red"
+
+SCCACHE_ACTION_PREFIX = "mozilla-actions/sccache-action@"
+SCCACHE_WRAPPER_VAR = "RUSTC_WRAPPER"
+SCCACHE_WRAPPER_VALUE = "sccache"
+SCCACHE_GHA_VAR = "SCCACHE_GHA_ENABLED"
+SCCACHE_GHA_VALUE = "true"
 
 VALID_DISPOSITIONS = {"gate", "gate-external", "nightly-gate", "informational", "delete"}
 # Workflows whose jobs are release/automation plumbing, never PR/promotion
@@ -280,6 +294,73 @@ def check_deterministic_set(jobs: list[Job], errors: list[str]) -> None:
         )
 
 
+def check_sccache_wiring(errors: list[str]) -> None:
+    """A job that installs sccache via `mozilla-actions/sccache-action` must
+    carry the RUSTC_WRAPPER/SCCACHE_GHA_ENABLED wiring (workflow-level `env:`
+    merged with the job's own) — else the action only installs a binary
+    nobody points rustc at, and the cache stays cold.  Checked over EVERY
+    workflow, not just the non-plumbing ones `workflow_jobs()` covers for
+    status contexts — a plumbing workflow can add the action without ever
+    producing a gated context.
+
+    The reverse direction is checked too, but only against a job's OWN
+    `env:` block, not the merged one: a workflow-level wiring block is by
+    design inherited by jobs that never invoke rustc (a path filter, a
+    fmt/lint script, an aggregator `needs:` gate) — there the var sits
+    unused and harmless, and flagging every such job would make the
+    workflow-level-`env:` wiring approach itself unusable.  A job that
+    instead sets the wiring in its OWN block without the action step is a
+    self-contained misconfiguration: it deliberately opts in and forgot to
+    install the binary, which fails the job's own cargo/rustc invocations
+    outright (cargo hard-errors when RUSTC_WRAPPER names a binary it cannot
+    find), so that always deserves a refusal.
+    """
+    for path in sorted(glob.glob(WORKFLOW_GLOB)):
+        fname = os.path.basename(path)
+        try:
+            doc = yaml.safe_load(open(path))
+        except yaml.YAMLError as e:
+            errors.append(f"{fname} is not valid YAML: {e}")
+            continue
+        if not isinstance(doc, dict):
+            continue
+        wf_env = doc.get("env") or {}
+        for job_id, job in (doc.get("jobs") or {}).items():
+            if not isinstance(job, dict):
+                continue
+            job_env = job.get("env") or {}
+
+            def is_wired(env: dict) -> bool:
+                return (
+                    str(env.get(SCCACHE_WRAPPER_VAR)) == SCCACHE_WRAPPER_VALUE
+                    and str(env.get(SCCACHE_GHA_VAR)) == SCCACHE_GHA_VALUE
+                )
+
+            effective_wired = is_wired({**wf_env, **job_env})
+            job_own_wired = is_wired(job_env)
+            steps = job.get("steps") or []
+            has_action = any(
+                isinstance(st, dict)
+                and str(st.get("uses", "")).startswith(SCCACHE_ACTION_PREFIX)
+                for st in steps
+            )
+            if has_action and not effective_wired:
+                errors.append(
+                    f"{fname}: job {job_id!r} runs {SCCACHE_ACTION_PREFIX}... but "
+                    f"does not set both {SCCACHE_WRAPPER_VAR}={SCCACHE_WRAPPER_VALUE!r} "
+                    f"and {SCCACHE_GHA_VAR}={SCCACHE_GHA_VALUE!r} (workflow-level "
+                    "env: merged with the job's own) — sccache installs but rustc "
+                    "never uses it, so the cache is inert"
+                )
+            if job_own_wired and not has_action:
+                errors.append(
+                    f"{fname}: job {job_id!r} sets {SCCACHE_WRAPPER_VAR}="
+                    f"{SCCACHE_WRAPPER_VALUE!r} in its own env: but has no "
+                    f"{SCCACHE_ACTION_PREFIX}... step — rustc is pointed at a "
+                    "wrapper binary this job never installs"
+                )
+
+
 def load_manifest() -> dict:
     doc = yaml.safe_load(open(MANIFEST))
     if not isinstance(doc, dict) or "checks" not in doc:
@@ -374,6 +455,9 @@ def main() -> int:
 
     # ---- 5. ci/deterministic-checks.json vs the watcher + ci.yml steps ----
     check_deterministic_set(jobs, errors)
+
+    # ---- 6. sccache wiring: action <-> RUSTC_WRAPPER/SCCACHE_GHA_ENABLED ----
+    check_sccache_wiring(errors)
 
     # ---- 3. fail-closed dependency surfacing ----
     def surfaced_dispositions(job: Job) -> set[str]:

@@ -35,8 +35,11 @@ name: Build & test
 #
 # Job-level `if:` keys on the `changes` paths-filter output (all authors) for the
 # correctness/soundness gates and on github.event_name for the nightly infra/
-# flaky-env jobs. E2E is sharded across runners; sccache (GHA backend) keeps
-# builds warm across runs.
+# flaky-env jobs. E2E is sharded across runners; the workflow-level
+# RUSTC_WRAPPER/SCCACHE_GHA_ENABLED env (below) routes every job that installs
+# `mozilla-actions/sccache-action` through sccache's GitHub Actions cache
+# backend, so builds warm across runs. The ASAN/TSAN sanitizer jobs opt out
+# (instrumented `-Zbuild-std` compiles use `Swatinem/rust-cache` instead).
 
 on:
   push:
@@ -70,6 +73,16 @@ concurrency:
 env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: "0"
+  # Wires every `mozilla-actions/sccache-action` step below to actually route
+  # rustc through sccache's GitHub Actions cache backend — installing the
+  # binary alone does nothing without both vars. A job that itself invokes
+  # cargo/rustc but never runs the action (no sccache binary on PATH) MUST
+  # override RUSTC_WRAPPER to "" in its own `env:`, or every such invocation
+  # fails; a job that never invokes cargo/rustc at all just carries the unused
+  # var harmlessly. `ci/verify-manifest.py` enforces that every job pairs the
+  # action with this wiring and vice versa.
+  RUSTC_WRAPPER: sccache
+  SCCACHE_GHA_ENABLED: "true"
 
 jobs:
   # Path filters. On a PR each filter's output gates whether its dependent jobs
@@ -798,6 +811,11 @@ jobs:
       RUSTFLAGS: -Zsanitizer=address
       RUSTDOCFLAGS: -Zsanitizer=address
       ASAN_OPTIONS: detect_leaks=1:abort_on_error=1
+      # No `sccache-action` step here (instrumented `-Zbuild-std` uses
+      # `Swatinem/rust-cache` instead) — override the workflow-level wrapper to
+      # empty (cargo treats an empty RUSTC_WRAPPER as unset) so rustc is not
+      # pointed at a binary this job never installs.
+      RUSTC_WRAPPER: ""
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@nightly
@@ -860,6 +878,11 @@ jobs:
       RUSTDOCFLAGS: -Zsanitizer=thread
       # TSAN's own reports; `halt_on_error=1` fails on the first race.
       TSAN_OPTIONS: halt_on_error=1
+      # No `sccache-action` step here (instrumented `-Zbuild-std` uses
+      # `Swatinem/rust-cache` instead) — override the workflow-level wrapper to
+      # empty (cargo treats an empty RUSTC_WRAPPER as unset) so rustc is not
+      # pointed at a binary this job never installs.
+      RUSTC_WRAPPER: ""
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@nightly
