@@ -1,13 +1,13 @@
 use super::{
-    CliError, attribute_canon_errors, attribute_post_link_error, build_emitted_project,
-    build_project, build_source_graph, build_test_with_project_sources,
-    build_with_sibling_discovery, capabilities_including_served_widgets, cargo_target_directory,
-    classify_entry_shape, create_source_root, default_entry, discover_manifest, emit_machine_error,
-    emitted_bin_filename, force_cargo_terminal_ui, home_to_source_map, resolve_runtime,
-    resolve_vendored_runtime_dir, run_build, runtime_context_for_message,
-    typecheck_entry_via_graph,
+    BuildOptions, CliError, OutTarget, attribute_canon_errors, attribute_post_link_error,
+    build_emitted_project, build_project_into, build_source_graph, build_test_into,
+    build_with_sibling_discovery_into, capabilities_including_served_widgets,
+    cargo_target_directory, classify_entry_shape, create_source_root, default_entry,
+    discover_manifest, emit_machine_error, emitted_bin_filename, force_cargo_terminal_ui,
+    home_to_source_map, resolve_runtime, resolve_vendored_runtime_dir, run_build,
+    runtime_context_for_message, typecheck_entry_via_graph,
 };
-use crate::output_dir::{OutputArea, OutputRoot, OwnedDir, ProjectPaths};
+use crate::output_dir::{EmitTarget, OutputArea, OutputRoot, OwnedDir, ProjectPaths};
 use crate::publisher::{AttestedActor, BlessedPublisher};
 use crate::{
     Applicability, BTreeMap, Diagnostic, HelpLine, Interner, Path, PathBuf, Suggestion, Write,
@@ -374,26 +374,31 @@ impl<'a> BundleAssembler<'a> {
         // system webview as a dynamic dependency, so this is a plain
         // (non-static) native build.
         let output = OutputRoot::resolve(None, &ProjectPaths::from_manifest(manifest))?;
-        let build_dir = output.area_path(&[OutputArea::Rust])?;
+        let rust_target = EmitTarget::Area(output.area(&[OutputArea::Rust]));
         let runtime_dir = resolve_vendored_runtime_dir(None, false)?;
-        build_project(self.manifest_path, &build_dir, &runtime_dir)?;
+        let crate_dir = build_project_into(
+            self.manifest_path,
+            OutTarget::Proven(&rust_target),
+            &runtime_dir,
+            &BuildOptions::from_env(),
+        )?;
 
         let cargo_bin = toolchain::require_cargo(toolchain::ToolIntent::Build)?;
         let mut cargo = std::process::Command::new(cargo_bin.path());
-        cargo.arg("build").current_dir(&build_dir);
+        cargo.arg("build");
         // A `release web desktop` bundle carries an optimised binary; the
         // `build` dev bundle carries a plain debug one.
         if self.profile.cargo_release() {
             cargo.arg("--release");
         }
         force_cargo_terminal_ui(&mut cargo);
-        build_emitted_project(&mut cargo, "the desktop app", None, &build_dir)?;
+        build_emitted_project(&mut cargo, "the desktop app", None, &crate_dir)?;
 
         // Locate the compiled binary via cargo metadata (the target dir may be
         // a global CARGO_TARGET_DIR), then materialise (Linux) or describe
         // (macOS/Windows).
-        let target_dir = cargo_target_directory(&build_dir)?;
-        let bin_name = emitted_bin_filename(&build_dir);
+        let target_dir = cargo_target_directory(crate_dir.path())?;
+        let bin_name = emitted_bin_filename(crate_dir.path());
         let binary = target_dir
             .join(self.profile.target_subdir())
             .join(&bin_name);
@@ -459,7 +464,8 @@ impl<'a> BundleAssembler<'a> {
         build_wasm_for_mobile(self.manifest_path, output.path(), self.profile)?;
         // The SPA is read from the owned crate; a symlinked `www/` is refused so
         // the shell can never pick up files from outside the build output.
-        let www_dir = OwnedDir::claim(&output.area_path(self.profile.crate_areas())?)?
+        let www_dir = output
+            .claim_area(self.profile.crate_areas())?
             .path_to("www")?
             .path();
         let bundle = pack::mobile::SpaBundle::from_www_dir(&www_dir)
@@ -1360,20 +1366,21 @@ pub fn build_and_run_test_entry(
     cargo_bin: &Path,
     stdio: TestStdio,
 ) -> Result<TestOutcome, CliError> {
-    if project_src_root.is_dir() {
-        build_test_with_project_sources(project_src_root, test_entry, out_dir, runtime_dir)?;
+    let out = OutTarget::Path(out_dir);
+    let crate_dir = if project_src_root.is_dir() {
+        build_test_into(project_src_root, test_entry, out, runtime_dir)?
     } else {
-        build_with_sibling_discovery(test_entry, out_dir, runtime_dir)?;
-    }
+        build_with_sibling_discovery_into(test_entry, out, runtime_dir, BuildOptions::from_env())?
+    };
 
     // Compile the emitted Rust project.
     let mut cargo = std::process::Command::new(cargo_bin);
-    cargo.arg("build").current_dir(out_dir);
+    cargo.arg("build");
     build_emitted_project(
         &mut cargo,
         "the emitted test runner",
         runtime_context_for_message(),
-        out_dir,
+        &crate_dir,
     )?;
 
     // Locate the compiled binary via `cargo metadata` so a user-level

@@ -22,6 +22,7 @@
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
+use ipe_sandbox::CanonicalPath;
 use ipe_sandbox::build_jail::{CapabilityAxis, JailOutcome, build_in_jail};
 use ipe_sandbox::run_jail::{FilesystemScope, RunJailTools, SandboxProfile};
 
@@ -87,11 +88,12 @@ fn ps_payload(script: &str) -> Vec<OsString> {
 }
 
 fn run(profile: &SandboxProfile, scratch: &Path, script: &str) -> JailOutcome {
+    let scratch = CanonicalPath::resolve(scratch).expect("canonical scratch");
     build_in_jail(
         &inert_tools(),
         profile,
-        scratch,
-        scratch,
+        &scratch,
+        &scratch,
         &[],
         &ps_payload(script),
     )

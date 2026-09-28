@@ -35,6 +35,7 @@ use std::ffi::OsString;
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::path::{Path, PathBuf};
 
+use crate::CanonicalPath;
 #[cfg(all(
     target_os = "linux",
     any(target_arch = "x86_64", target_arch = "aarch64")
@@ -289,6 +290,27 @@ impl SafeMountPath {
 
 // ── the returning build-jail entry ───────────────────────────────────────────
 
+/// Confirm every jail path still resolves to itself, then resolve the
+/// invoker's home masks.
+///
+/// The caller resolved each path once and handed the same values to the
+/// payload; a path swapped for a symlink since then is refused rather than
+/// bound at a spelling the payload was not told about.
+#[cfg(all(
+    target_os = "linux",
+    any(target_arch = "x86_64", target_arch = "aarch64")
+))]
+fn recheck_jail_paths(
+    scoped_tmp: &CanonicalPath,
+    working_tree: &CanonicalPath,
+    extra_ro_binds: &[CanonicalPath],
+) -> Result<crate::HomeMasks, crate::JailPathError> {
+    for path in [scoped_tmp, working_tree].into_iter().chain(extra_ro_binds) {
+        path.recheck()?;
+    }
+    crate::HomeMasks::of_invoker()
+}
+
 /// Run `payload` inside a jail lowered from `profile`, wait for it, and return
 /// the decoded [`JailOutcome`].
 ///
@@ -300,7 +322,8 @@ impl SafeMountPath {
 /// be at run time.
 ///
 /// A jail that cannot be established (unsupported platform, a seccomp program
-/// that cannot be compiled for this architecture, a spawn failure) yields
+/// that cannot be compiled for this architecture, a jail path that does not
+/// resolve, an unknown invoker home, a spawn failure) yields
 /// [`JailOutcome::Unavailable`] — the untrusted payload is never run unconfined
 /// on any path.
 ///
@@ -318,11 +341,19 @@ impl SafeMountPath {
 pub fn build_in_jail(
     tools: &RunJailTools,
     profile: &SandboxProfile,
-    scoped_tmp: &Path,
-    working_tree: &Path,
-    extra_ro_binds: &[PathBuf],
+    scoped_tmp: &CanonicalPath,
+    working_tree: &CanonicalPath,
+    extra_ro_binds: &[CanonicalPath],
     payload: &[OsString],
 ) -> JailOutcome {
+    let homes = match recheck_jail_paths(scoped_tmp, working_tree, extra_ro_binds) {
+        Ok(homes) => homes,
+        Err(e) => {
+            return JailOutcome::Unavailable {
+                defect: RunJailDefect::Path(e),
+            };
+        }
+    };
     let Some(program) = seccomp::subprocess_deny_program(profile.subprocess) else {
         return JailOutcome::Unavailable {
             defect: RunJailDefect::UnsupportedPlatform {
@@ -350,6 +381,7 @@ pub fn build_in_jail(
         scoped_tmp,
         working_tree,
         extra_ro_binds,
+        &homes,
         Some(seccomp_owned.as_raw_fd()),
         &host_env,
         payload,
@@ -399,11 +431,12 @@ pub fn build_in_jail(
 pub fn build_in_jail(
     _tools: &RunJailTools,
     profile: &SandboxProfile,
-    scoped_tmp: &Path,
-    working_tree: &Path,
-    _extra_ro_binds: &[PathBuf],
+    scoped_tmp: &CanonicalPath,
+    working_tree: &CanonicalPath,
+    _extra_ro_binds: &[CanonicalPath],
     payload: &[OsString],
 ) -> JailOutcome {
+    let (scoped_tmp, working_tree) = (scoped_tmp.as_path(), working_tree.as_path());
     // `sandbox-exec` is the mandatory macOS jail primitive. Absent ⇒ refuse; the
     // untrusted payload is never run unconfined.
     let Some(sandbox_exec) = find_in_path("sandbox-exec") else {
@@ -491,9 +524,9 @@ pub fn build_in_jail(
 pub fn build_in_jail(
     _tools: &RunJailTools,
     profile: &SandboxProfile,
-    scoped_tmp: &Path,
-    working_tree: &Path,
-    _extra_ro_binds: &[PathBuf],
+    scoped_tmp: &CanonicalPath,
+    working_tree: &CanonicalPath,
+    _extra_ro_binds: &[CanonicalPath],
     payload: &[OsString],
 ) -> JailOutcome {
     // The Windows jail RETURNS the child's exit code (Windows has no `exec`-
@@ -503,7 +536,12 @@ pub fn build_in_jail(
     // established (a missing primitive, a non-ACL scratch volume gated by the
     // pre-spawn `FILE_PERSISTENT_ACLS` probe, a failed `CreateProcessW`) is a
     // `RunJailDefect` → `Unavailable`; the untrusted build never runs unconfined.
-    match crate::run_jail::build_windows_jailed(profile, scoped_tmp, working_tree, payload) {
+    match crate::run_jail::build_windows_jailed(
+        profile,
+        scoped_tmp.as_path(),
+        working_tree.as_path(),
+        payload,
+    ) {
         Ok(code) => JailOutcome::decode(Some(win_exit_to_i32(code))),
         Err(defect) => JailOutcome::Unavailable { defect },
     }
@@ -596,12 +634,17 @@ const fn win_exit_to_i32(code: u32) -> i32 {
 pub fn build_in_jail(
     _tools: &RunJailTools,
     profile: &SandboxProfile,
-    scoped_tmp: &Path,
-    working_tree: &Path,
-    _extra_ro_binds: &[PathBuf],
+    scoped_tmp: &CanonicalPath,
+    working_tree: &CanonicalPath,
+    _extra_ro_binds: &[CanonicalPath],
     payload: &[OsString],
 ) -> JailOutcome {
-    freebsd_jail::build_in_jail(profile, scoped_tmp, working_tree, payload)
+    freebsd_jail::build_in_jail(
+        profile,
+        scoped_tmp.as_path(),
+        working_tree.as_path(),
+        payload,
+    )
 }
 
 /// Off Linux (x86_64/aarch64), macOS, Windows, and FreeBSD the returning build jail is a
@@ -622,9 +665,9 @@ pub fn build_in_jail(
 pub fn build_in_jail(
     _tools: &RunJailTools,
     _profile: &SandboxProfile,
-    _scoped_tmp: &Path,
-    _working_tree: &Path,
-    _extra_ro_binds: &[PathBuf],
+    _scoped_tmp: &CanonicalPath,
+    _working_tree: &CanonicalPath,
+    _extra_ro_binds: &[CanonicalPath],
     _payload: &[OsString],
 ) -> JailOutcome {
     JailOutcome::Unavailable {
@@ -1122,6 +1165,27 @@ pub(crate) fn find_in_path(bin: &str) -> Option<PathBuf> {
     std::env::split_paths(&path)
         .map(|dir| dir.join(bin))
         .find(|candidate| candidate.is_file())
+}
+
+/// The user-private root for per-run FreeBSD jail scratch dirs, under `home`.
+///
+/// PURE over the parsed home so the refusal is unit-testable on any host. The
+/// scratch must live under a user-private root: with no absolute home it
+/// refuses rather than fall back to a world-writable `/tmp` (a cross-user
+/// symlink-plant vector at an intermediate ancestor under a root-run jail) or
+/// a relative path (resolved against whatever the working directory is).
+#[cfg(any(target_os = "freebsd", test))]
+pub(crate) fn freebsd_jail_cache_root(home: Option<PathBuf>) -> Result<PathBuf, RunJailDefect> {
+    let tail = Path::new(".cache").join("ipe").join("jail");
+    let Some(home) = home else {
+        return Err(RunJailDefect::MountFailed {
+            target: tail,
+            detail: "HOME is unset or not an absolute path; refusing a jail scratch root \
+                     outside the user-private home"
+                .to_owned(),
+        });
+    };
+    Ok(home.join(tail))
 }
 
 /// The FreeBSD jail's network-axis parameters for the given grant.
@@ -1813,19 +1877,9 @@ mod freebsd_jail {
     /// Rooted under the invoking user's home cache (`~/.cache/ipe/jail/`) rather
     /// than the world-writable `/tmp`. A user-private directory is not accessible
     /// to other local users, removing the class of pre-plant / symlink-swap attacks
-    /// that world-writable `/tmp` enables. Falls back to `$TMPDIR` or `/tmp` only
-    /// when the home directory is genuinely unavailable, which is recorded in the
-    /// returned path so the caller can detect and refuse if required.
+    /// that world-writable `/tmp` enables. An unset or relative home is refused.
     fn private_cache_root() -> Result<PathBuf, RunJailDefect> {
-        // The jail scratch must live under a user-private root. `$HOME` is that
-        // root; when it is unset we refuse rather than fall back to a
-        // world-writable `/tmp`, which under a root-run jail is a cross-user
-        // symlink-plant vector at an intermediate ancestor.
-        let home = std::env::var_os("HOME").ok_or_else(|| RunJailDefect::MountFailed {
-            target: PathBuf::from(".cache/ipe/jail"),
-            detail: "HOME is unset; refusing a world-writable jail scratch root".to_owned(),
-        })?;
-        Ok(PathBuf::from(home).join(".cache").join("ipe").join("jail"))
+        super::freebsd_jail_cache_root(crate::home::home_dir())
     }
 
     /// Create a per-run directory EXCLUSIVELY under `parent`, using a random
@@ -2739,6 +2793,27 @@ mod tests {
         // the resulting exec failure as a non-clean outcome, never a silent Clean.
         let args = jail_command_args(&[]);
         assert_eq!(args, vec![std::ffi::OsString::from("command=")]);
+    }
+
+    #[test]
+    fn the_freebsd_jail_cache_root_lives_under_the_absolute_home() {
+        let got = freebsd_jail_cache_root(Some(PathBuf::from("/home/u")));
+        assert_eq!(got, Ok(PathBuf::from("/home/u/.cache/ipe/jail")));
+    }
+
+    #[test]
+    fn the_freebsd_jail_cache_root_refuses_an_unset_or_relative_home() {
+        // A relative home never reaches the root: the accessor parses it to
+        // `None`, which the root refuses rather than resolving it against the
+        // working directory or falling back to a world-writable `/tmp`.
+        for raw in [None, Some(""), Some("home/u"), Some("./home")] {
+            let home = crate::home::home_dir_from(raw.map(OsString::from));
+            let got = freebsd_jail_cache_root(home);
+            assert!(
+                matches!(got, Err(RunJailDefect::MountFailed { .. })),
+                "{raw:?}: {got:?}"
+            );
+        }
     }
 
     #[test]

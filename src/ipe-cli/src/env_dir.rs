@@ -21,23 +21,12 @@ pub fn absolute(raw: Option<OsString>) -> Option<PathBuf> {
     raw.map(PathBuf::from).filter(|p| p.is_absolute())
 }
 
-/// The directory the environment variable `var` names, when it is absolute.
-#[must_use]
-pub fn absolute_var(var: &str) -> Option<PathBuf> {
-    absolute(std::env::var_os(var))
-}
-
-/// The platform variable naming the invoking user's home directory.
-#[cfg(windows)]
-const HOME_VAR: &str = "USERPROFILE";
-/// The platform variable naming the invoking user's home directory.
-#[cfg(not(windows))]
-const HOME_VAR: &str = "HOME";
-
 /// The invoking user's home directory, when it is absolute.
+///
+/// Delegates to the one compiler-side home accessor, [`ipe_sandbox::home::home_dir`].
 #[must_use]
 pub fn home() -> Option<PathBuf> {
-    absolute_var(HOME_VAR)
+    ipe_sandbox::home::home_dir()
 }
 
 /// An ambient base directory: `var` when absolute, else `<home>/<fallback>`.
@@ -74,6 +63,8 @@ pub fn tool_home(var: &'static str, fallback: &str) -> Result<Option<PathBuf>, C
 
 /// Resolve a tool home from the raw variable value and the resolved home.
 ///
+/// Delegates to the one tool-home parser, [`ipe_sandbox::home::tool_home_from`].
+///
 /// # Errors
 /// [`CliError::EnvDirNotAbsolute`] when `raw` is non-empty and relative.
 pub fn tool_home_from(
@@ -82,10 +73,8 @@ pub fn tool_home_from(
     home: Option<PathBuf>,
     fallback: &str,
 ) -> Result<Option<PathBuf>, CliError> {
-    raw.filter(|raw| !raw.is_empty()).map_or_else(
-        || Ok(home_default(home, fallback)),
-        |raw| explicit_override(var, Some(raw)),
-    )
+    ipe_sandbox::home::tool_home_from(var, raw, home, fallback)
+        .map_err(|relative| CliError::EnvDirNotAbsolute { var: relative.var })
 }
 
 /// `<home>/<fallback>`, when the home is absolute.

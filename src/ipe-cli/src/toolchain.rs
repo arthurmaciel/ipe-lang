@@ -219,13 +219,20 @@ fn resolve(path_var: &OsString, install_dirs: &[PathBuf]) -> Resolution {
 /// installed but its `bin` directory is not on the `PATH`" — the latter has a
 /// different fix.
 fn known_install_dirs() -> Vec<PathBuf> {
-    let mut dirs = Vec::new();
-    // The rustup default: `$CARGO_HOME/bin`, or `~/.cargo/bin` when unset.
-    if let Some(cargo_home) = crate::env_dir::absolute_var("CARGO_HOME") {
-        dirs.push(cargo_home.join("bin"));
-    }
-    if let Some(home) = crate::env_dir::home() {
-        dirs.push(home.join(".cargo").join("bin"));
+    // The rustup default: `$CARGO_HOME/bin`, or `~/.cargo/bin` when unset. A
+    // relative `CARGO_HOME` names no directory to probe; this is a read-only
+    // hint for the "not on the `PATH`" diagnosis, so it is skipped rather than
+    // reported here.
+    let mut dirs: Vec<PathBuf> = crate::env_dir::tool_home("CARGO_HOME", ".cargo")
+        .ok()
+        .flatten()
+        .map(|cargo_home| cargo_home.join("bin"))
+        .into_iter()
+        .collect();
+    if let Some(default) = crate::env_dir::home().map(|home| home.join(".cargo").join("bin"))
+        && !dirs.contains(&default)
+    {
+        dirs.push(default);
     }
     dirs
 }
