@@ -26,8 +26,11 @@ use std::path::{Path, PathBuf};
 
 use ipe_diagnostics::{Code, Diagnostic as SharedDiag, IPE_F4410, SandboxError};
 
+pub use mounts::{HomeMasks, MaskedDir};
+
 pub mod build_jail;
 pub mod home;
+mod mounts;
 pub mod run_jail;
 pub mod seccomp;
 
@@ -253,11 +256,14 @@ pub struct JailSpec {
     pub registry_cache: Option<PathBuf>,
     /// The pinned nightly toolchain name exported as `RUSTUP_TOOLCHAIN`.
     pub toolchain: Option<String>,
-    /// Toolchain directories re-bound read-only AFTER the `/home` tmpfs mask
-    /// (a rustup install lives under the invoking user's home, which the
-    /// tmpfs would otherwise hide). Read-only: the payload can execute the
-    /// toolchain but never mutate it.
+    /// Toolchain directories re-bound read-only through the home masks (a
+    /// rustup install lives under the invoking user's home, which the masks
+    /// would otherwise hide). Read-only: the payload can execute the toolchain
+    /// but never mutate it.
     pub toolchain_ro_binds: Vec<PathBuf>,
+    /// The invoker's homes, masked wherever they live; below them only the
+    /// binds of this spec stay visible.
+    pub homes: HomeMasks,
     /// Directories prepended to the jail's `PATH` (toolchain `bin` dirs).
     pub path_prepend: Vec<PathBuf>,
     /// The rustup root exported as `RUSTUP_HOME` (the env is scrubbed, so the
@@ -321,24 +327,17 @@ pub fn bwrap_argv(
     // — which cargo hits when wiring child stdio.
     argv.push("--dev".into());
     argv.push("/dev".into());
-    for tmpfs in ["/home", "/root", "/tmp"] {
-        argv.push("--tmpfs".into());
-        argv.push(tmpfs.into());
-    }
-    if let Some(cache) = &spec.registry_cache {
-        argv.push("--ro-bind".into());
-        argv.push(cache.clone().into());
-        argv.push(cache.clone().into());
-    }
-    // Re-expose the toolchain through the tmpfs mask, read-only.
-    for dir in &spec.toolchain_ro_binds {
-        argv.push("--ro-bind".into());
-        argv.push(dir.clone().into());
-        argv.push(dir.clone().into());
-    }
-    argv.push("--bind".into());
-    argv.push(spec.scoped_tmp.clone().into());
-    argv.push(spec.scoped_tmp.clone().into());
+    // Mask the homes and `/tmp`, then re-expose the crate sources and the
+    // toolchain read-only and the scoped tempdir writable.
+    let mut binds: Vec<mounts::Bind<'_>> = Vec::new();
+    binds.extend(spec.registry_cache.as_deref().map(mounts::Bind::ReadOnly));
+    binds.extend(
+        spec.toolchain_ro_binds
+            .iter()
+            .map(|dir| mounts::Bind::ReadOnly(dir.as_path())),
+    );
+    binds.push(mounts::Bind::ReadWrite(&spec.scoped_tmp));
+    mounts::push_mounts(&mut argv, &spec.homes, &binds);
     argv.push("--chdir".into());
     argv.push(spec.scoped_tmp.clone().into());
     let cargo_home = spec.scoped_tmp.join("cargo-home");
@@ -704,6 +703,7 @@ mod tests {
             toolchain_ro_binds: Vec::new(),
             path_prepend: Vec::new(),
             rustup_home: None,
+            homes: HomeMasks::default(),
             limits: ResourceLimits::default(),
         }
     }
@@ -773,6 +773,44 @@ mod tests {
         );
         assert!(joined.ends_with("-- ipe-ffi-inspector semver"), "{joined}");
         assert!(!joined.contains("sh -c"), "{joined}");
+    }
+
+    #[test]
+    fn jail_argv_masks_the_invoker_homes_and_rebinds_only_the_toolchain() {
+        let base =
+            std::env::temp_dir().join(format!("ipe-sandbox-jail-homes-{}", std::process::id()));
+        let cargo_home = base.join("cargo");
+        let user_home = base.join("user");
+        std::fs::create_dir_all(cargo_home.join("bin")).expect("cargo home");
+        std::fs::create_dir_all(&user_home).expect("user home");
+        let cargo_home = std::fs::canonicalize(&cargo_home).expect("canonical cargo home");
+        let user_home = std::fs::canonicalize(&user_home).expect("canonical user home");
+        let bin = cargo_home.join("bin");
+        let jail = JailSpec {
+            // A whole-cargo-home bind must not survive the mask.
+            toolchain_ro_binds: vec![bin.clone(), cargo_home.clone()],
+            homes: HomeMasks::new(
+                MaskedDir::resolve(&user_home),
+                MaskedDir::resolve(&cargo_home),
+            ),
+            ..spec()
+        };
+        let argv = rendered_argv(&jail);
+        assert_eq!(mounts::bind_after_covered_mask(&argv), None, "{argv:?}");
+        let at = |window: &[&str]| {
+            argv.windows(window.len())
+                .position(|w| w.iter().zip(window).all(|(a, b)| a == b))
+        };
+        let cargo = cargo_home.to_string_lossy().into_owned();
+        let user = user_home.to_string_lossy().into_owned();
+        let bin = bin.to_string_lossy().into_owned();
+        let mask = at(&["--tmpfs", &cargo]).expect("cargo home masked");
+        let rebind = at(&["--ro-bind", &bin, &bin]).expect("cargo bin re-bound");
+        assert!(rebind > mask, "{argv:?}");
+        assert!(
+            at(&["--tmpfs", &user]).is_some(),
+            "user home masked: {argv:?}"
+        );
     }
 
     #[test]

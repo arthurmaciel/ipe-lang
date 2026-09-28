@@ -39,6 +39,8 @@ use std::path::{Path, PathBuf};
 use ipe_diagnostics::{Code, Diagnostic as SharedDiag, IPE_F4413, SandboxError};
 use ipe_kernels::Capability;
 
+use crate::HomeMasks;
+
 /// Stamp `$item` with the `#[cfg(...)]` for the targets that HAVE a real run
 /// jail compiled into [`exec_in_run_jail`], and the negation on a matching `no:`
 /// item — the ONE place the supported-target set is written as a predicate.
@@ -132,7 +134,8 @@ pub struct RunJailTools {
 ///
 /// `scoped_tmp` is the one writable tempdir (used both as the `Isolated`
 /// filesystem's sole writable mount and as `TMPDIR`). `working_tree` is bound
-/// read-write only under [`FilesystemScope::WorkingTreeReadWrite`].
+/// read-write only under [`FilesystemScope::WorkingTreeReadWrite`]. `homes` are
+/// masked wherever they live; below them only the binds stay visible.
 /// `seccomp_fd` is the file-descriptor number the caller has arranged to carry
 /// the compiled seccomp program (passed to `bwrap --seccomp <fd>`); `None` means
 /// no filter is attached (the caller must have refused already if a filter was
@@ -142,7 +145,7 @@ pub struct RunJailTools {
 /// (`PATH`, `TMPDIR`, `LANG`) plus the profile's `env_allowlist` re-enter. There
 /// is NO shell token anywhere in the result.
 // Every argument is a distinct, load-bearing jail input (tools, profile, the two
-// mount roots, the extra binds, the seccomp fd, the env lookup, the payload);
+// mount roots, the extra binds, the home masks, the seccomp fd, the env lookup, the payload);
 // bundling them into a struct would only move the same fields behind one more
 // indirection without reducing the surface. The pure-builder shape is
 // deliberately explicit, matching the sibling `bwrap_argv`.
@@ -154,6 +157,7 @@ pub fn run_jail_argv(
     scoped_tmp: &Path,
     working_tree: &Path,
     extra_ro_binds: &[PathBuf],
+    homes: &HomeMasks,
     seccomp_fd: Option<i32>,
     host_env: &dyn Fn(&str) -> Option<OsString>,
     payload: &[OsString],
@@ -164,6 +168,7 @@ pub fn run_jail_argv(
         scoped_tmp,
         working_tree,
         extra_ro_binds,
+        homes,
         seccomp_fd,
         None,
         host_env,
@@ -189,6 +194,7 @@ pub fn run_jail_argv_with_delivery(
     scoped_tmp: &Path,
     working_tree: &Path,
     extra_ro_binds: &[PathBuf],
+    homes: &HomeMasks,
     seccomp_fd: Option<i32>,
     app_delivery: Option<(i32, &Path)>,
     host_env: &dyn Fn(&str) -> Option<OsString>,
@@ -240,40 +246,31 @@ pub fn run_jail_argv_with_delivery(
     // permissions inside the user namespace).
     argv.push("--dev".into());
     argv.push("/dev".into());
-    // Mask the home/tmp trees.
-    for tmpfs in ["/home", "/root", "/tmp"] {
-        argv.push("--tmpfs".into());
-        argv.push(tmpfs.into());
+    // Mask the homes and `/tmp` wherever they live, then re-expose through the
+    // masks: the extra paths read-only, the scoped tempdir writable, and the
+    // working tree writable only when the filesystem axis is granted. The
+    // emitted app binary commonly lives under `$HOME` (e.g. a
+    // `CARGO_TARGET_DIR` in `~/.cache`); the caller binds the app FILE itself,
+    // never its parent directory.
+    let mut binds: Vec<crate::mounts::Bind<'_>> = extra_ro_binds
+        .iter()
+        .map(|path| crate::mounts::Bind::ReadOnly(path.as_path()))
+        .collect();
+    binds.push(crate::mounts::Bind::ReadWrite(scoped_tmp));
+    let working_tree_rw = profile.filesystem == FilesystemScope::WorkingTreeReadWrite;
+    if working_tree_rw {
+        binds.push(crate::mounts::Bind::ReadWrite(working_tree));
     }
-
-    // Re-expose paths the tmpfs masks would otherwise hide, read-only. The
-    // emitted app binary commonly lives under `$HOME` (e.g. a `CARGO_TARGET_DIR`
-    // in `~/.cache`), which the `--tmpfs /home` mask hides. Each entry is bound at
-    // the SAME path, read-only: the payload can execute but never mutate it. The
-    // caller binds the app FILE itself, never its parent directory — binding a
-    // directory that equals or contains a masked root would re-expose that tree
-    // and defeat the mask.
-    for path in extra_ro_binds {
-        argv.push("--ro-bind".into());
-        argv.push(path.clone().into());
-        argv.push(path.clone().into());
-    }
-
-    // The one writable mount (always), and the working tree read-write only
-    // when the filesystem axis is granted.
-    argv.push("--bind".into());
-    argv.push(scoped_tmp.into());
-    argv.push(scoped_tmp.into());
-    if profile.filesystem == FilesystemScope::WorkingTreeReadWrite {
-        argv.push("--bind".into());
-        argv.push(working_tree.into());
-        argv.push(working_tree.into());
-        argv.push("--chdir".into());
-        argv.push(working_tree.into());
-    } else {
-        argv.push("--chdir".into());
-        argv.push(scoped_tmp.into());
-    }
+    crate::mounts::push_mounts(&mut argv, homes, &binds);
+    argv.push("--chdir".into());
+    argv.push(
+        if working_tree_rw {
+            working_tree
+        } else {
+            scoped_tmp
+        }
+        .into(),
+    );
 
     // The seccomp filter (subprocess denial + baseline denials). Attached via a
     // pre-arranged fd. `no_new_privs` is set by bubblewrap by default (it always
@@ -983,6 +980,7 @@ mod tests {
             Path::new("/work/tmp-1"),
             Path::new("/work/tree"),
             &[],
+            &HomeMasks::default(),
             seccomp_fd,
             &no_env,
             &[OsString::from("/work/tree/target/debug/ipe-app")],
@@ -990,6 +988,51 @@ mod tests {
         .into_iter()
         .map(|a| a.to_string_lossy().into_owned())
         .collect()
+    }
+
+    #[test]
+    fn run_jail_masks_a_home_outside_home_and_keeps_the_working_tree_visible() {
+        let base = std::env::temp_dir().join(format!("ipe-run-jail-homes-{}", std::process::id()));
+        let user_home = base.join("user");
+        let tree = user_home.join("project");
+        std::fs::create_dir_all(&tree).expect("working tree");
+        let user_home = std::fs::canonicalize(&user_home).expect("canonical home");
+        let tree = std::fs::canonicalize(&tree).expect("canonical tree");
+        let profile = SandboxProfile {
+            filesystem: FilesystemScope::WorkingTreeReadWrite,
+            ..SandboxProfile::maximally_isolated()
+        };
+        let no_env = |_: &str| None;
+        let argv: Vec<String> = run_jail_argv(
+            &tools(),
+            &profile,
+            Path::new("/work/tmp-1"),
+            &tree,
+            // A bind of the whole home must not survive its mask.
+            std::slice::from_ref(&user_home),
+            &HomeMasks::new(crate::MaskedDir::resolve(&user_home), None),
+            None,
+            &no_env,
+            &[OsString::from("app")],
+        )
+        .into_iter()
+        .map(|a| a.to_string_lossy().into_owned())
+        .collect();
+        assert_eq!(
+            crate::mounts::bind_after_covered_mask(&argv),
+            None,
+            "{argv:?}"
+        );
+        let at = |window: &[&str]| {
+            argv.windows(window.len())
+                .position(|w| w.iter().zip(window).all(|(a, b)| a == b))
+        };
+        let home = user_home.to_string_lossy().into_owned();
+        let tree = tree.to_string_lossy().into_owned();
+        let mask = at(&["--tmpfs", &home]).expect("home masked");
+        let bind = at(&["--bind", &tree, &tree]).expect("working tree bound");
+        let chdir = at(&["--chdir", &tree]).expect("chdir into the tree");
+        assert!(mask < bind && bind < chdir, "{argv:?}");
     }
 
     #[test]
@@ -1037,6 +1080,7 @@ mod tests {
             Path::new("/work/tmp-1"),
             Path::new("/work/tree"),
             &[],
+            &HomeMasks::default(),
             Some(10),
             Some((7, dest)),
             &no_env,
@@ -1131,6 +1175,7 @@ mod tests {
             Path::new("/work/tmp-1"),
             Path::new("/work/tree"),
             &[],
+            &HomeMasks::default(),
             None,
             &host,
             &[OsString::from("app")],

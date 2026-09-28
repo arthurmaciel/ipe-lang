@@ -13,6 +13,7 @@ use std::path::{Path, PathBuf};
 use super::{
     RunJailDefect, RunJailTools, SandboxProfile, run_jail_argv, run_jail_argv_with_delivery,
 };
+use crate::HomeMasks;
 use crate::seccomp;
 
 /// Probe the host for the run-jail primitives and decide whether a jail can be
@@ -145,6 +146,7 @@ pub fn exec_in_run_jail(
         scoped_tmp,
         working_tree,
         &extra_ro_binds,
+        &HomeMasks::of_invoker(),
         Some(seccomp_fd),
         &host_env,
         &payload,
@@ -227,6 +229,7 @@ pub fn exec_embedded_in_run_jail(
         scoped_tmp,
         working_tree,
         &[],
+        &HomeMasks::of_invoker(),
         Some(seccomp_fd),
         Some((app_fd, &dest)),
         &host_env,

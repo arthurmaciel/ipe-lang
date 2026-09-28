@@ -641,6 +641,19 @@ fn make_scratch_dir(krate: &str) -> Result<PathBuf, CliError> {
         .map_err(|e| CliError::Usage(text::msg::ffi_add_scratch_dir(&e)))
 }
 
+/// The toolchain side of one jail: what it re-binds and which homes it masks.
+#[derive(Debug)]
+struct ToolchainBinds {
+    /// Directories re-bound read-only through the home masks.
+    ro_binds: Vec<PathBuf>,
+    /// Directories prepended to the jailed `PATH`.
+    path_prepend: Vec<PathBuf>,
+    /// The rustup home exported into the jail.
+    rustup_home: Option<PathBuf>,
+    /// The user and cargo homes, masked wherever they live.
+    homes: ipe_sandbox::HomeMasks,
+}
+
 /// Read-only jail binds for the toolchain, deliberately NARROW.
 ///
 /// Never the cargo home itself (which carries `credentials.toml`, the
@@ -651,25 +664,35 @@ fn make_scratch_dir(krate: &str) -> Result<PathBuf, CliError> {
 /// # Errors
 /// - [`CliError::EnvDirNotAbsolute`] when `CARGO_HOME` or `RUSTUP_HOME` is set
 ///   to a relative path.
-/// - [`CliError::Usage`] when a bind would expose the cargo home (see
-///   [`toolchain_binds_from`]).
+/// - [`CliError::Usage`] when the cargo home is unknown or a bind would expose
+///   it (see [`toolchain_binds_from`]).
 fn toolchain_binds(inspector: &Path) -> Result<ToolchainBinds, CliError> {
     let cargo_home = crate::env_dir::tool_home("CARGO_HOME", ".cargo")?;
     let rustup_home = crate::env_dir::tool_home("RUSTUP_HOME", ".rustup")?;
-    toolchain_binds_from(inspector, cargo_home.as_deref(), rustup_home)
+    toolchain_binds_from(
+        inspector,
+        cargo_home.as_deref(),
+        rustup_home,
+        crate::env_dir::home().as_deref(),
+    )
 }
 
 /// The toolchain binds over already-resolved tool homes.
 ///
 /// # Errors
-/// [`CliError::Usage`] when any read-only bind equals or contains the cargo
-/// home (a rustup home at or above it, or an inspector directory above it):
-/// binding it would expose `credentials.toml` inside the jail.
+/// [`CliError::Usage`] when the cargo home is unknown (neither `CARGO_HOME`
+/// nor an absolute `HOME`), so no check could keep it out of the jail; or when
+/// any read-only bind equals or contains the cargo home (a rustup home at or
+/// above it, or an inspector directory above it): binding it would expose
+/// `credentials.toml` inside the jail.
 fn toolchain_binds_from(
     inspector: &Path,
     cargo_home: Option<&Path>,
     rustup_home: Option<PathBuf>,
+    user_home: Option<&Path>,
 ) -> Result<ToolchainBinds, CliError> {
+    let cargo_home =
+        cargo_home.ok_or_else(|| CliError::Usage(text::msg::ffi_cargo_home_unresolved()))?;
     let mut toolchain_ro_binds = Vec::new();
     // The inspector binary may live under a masked mount ($HOME target dirs) —
     // re-bind its directory read-only.
@@ -677,9 +700,8 @@ fn toolchain_binds_from(
         toolchain_ro_binds.push(dir.to_path_buf());
     }
     let mut path_prepend = Vec::new();
-    if let Some(cargo_bin) = cargo_home.map(|home| home.join("bin"))
-        && cargo_bin.is_dir()
-    {
+    let cargo_bin = cargo_home.join("bin");
+    if cargo_bin.is_dir() {
         path_prepend.push(cargo_bin.clone());
         // Bind ONLY the bin dir — NEVER the cargo home itself, so
         // credentials.toml stays outside the jail.
@@ -689,10 +711,9 @@ fn toolchain_binds_from(
     if let Some(rustup) = &rustup_home {
         toolchain_ro_binds.push(rustup.clone());
     }
-    if let Some(cargo_home) = cargo_home
-        && let Some(bind) = toolchain_ro_binds
-            .iter()
-            .find(|bind| path_covers(bind, cargo_home))
+    if let Some(bind) = toolchain_ro_binds
+        .iter()
+        .find(|bind| path_covers(bind, cargo_home))
     {
         return Err(CliError::Usage(
             text::msg::ffi_toolchain_bind_exposes_cargo_home(
@@ -701,15 +722,56 @@ fn toolchain_binds_from(
             ),
         ));
     }
-    Ok((toolchain_ro_binds, path_prepend, rustup_home))
+    let homes = ipe_sandbox::HomeMasks::new(
+        user_home.and_then(ipe_sandbox::MaskedDir::resolve),
+        ipe_sandbox::MaskedDir::resolve(cargo_home),
+    );
+    Ok(ToolchainBinds {
+        ro_binds: toolchain_ro_binds,
+        path_prepend,
+        rustup_home,
+        homes,
+    })
 }
 
 /// Whether binding `outer` makes `inner` visible: `inner` equals or lies under
-/// `outer`, judged both lexically and with symlinks resolved. Either judgement
-/// finding containment is enough.
+/// `outer`, judged lexically, with symlinks resolved, and by directory
+/// identity. Any judgement finding containment is enough.
 fn path_covers(outer: &Path, inner: &Path) -> bool {
     lexical_normal(inner).starts_with(lexical_normal(outer))
         || resolved(inner).starts_with(resolved(outer))
+        || covers_by_identity(outer, inner)
+}
+
+/// Whether some ancestor of `inner` (itself included) is the directory
+/// `outer`, compared by `(dev, ino)` — which also catches a bind-mount alias
+/// no path comparison sees. `link(2)` refuses directories, so one `(dev, ino)`
+/// names exactly one directory and no hardlinked alias exists.
+///
+/// An `outer` that does not exist exposes nothing; a missing ancestor of
+/// `inner` cannot be `outer`. Any other metadata error counts as covered.
+#[cfg(unix)]
+fn covers_by_identity(outer: &Path, inner: &Path) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    let identity = |path: &Path| std::fs::metadata(path).map(|meta| (meta.dev(), meta.ino()));
+    let outer_id = match identity(outer) {
+        Ok(id) => id,
+        Err(e) => return e.kind() != std::io::ErrorKind::NotFound,
+    };
+    inner
+        .ancestors()
+        .filter(|ancestor| !ancestor.as_os_str().is_empty())
+        .any(|ancestor| match identity(ancestor) {
+            Ok(id) => id == outer_id,
+            Err(e) => e.kind() != std::io::ErrorKind::NotFound,
+        })
+}
+
+/// Directory identity has no portable form off unix; the lexical and resolved
+/// judgements of [`path_covers`] stand alone there.
+#[cfg(not(unix))]
+const fn covers_by_identity(_outer: &Path, _inner: &Path) -> bool {
+    false
 }
 
 /// `path` without `.` components, each `..` removing the component before it
@@ -788,9 +850,7 @@ fn run_phase(
     caps: &ipe_sandbox::Capabilities,
     network: ipe_sandbox::NetworkPolicy,
     scoped_tmp: &Path,
-    toolchain_ro_binds: Vec<PathBuf>,
-    path_prepend: Vec<PathBuf>,
-    rustup_home: Option<PathBuf>,
+    binds: &ToolchainBinds,
     payload: &[OsString],
 ) -> Result<ipe_sandbox::JailedOutput, CliError> {
     let io_err = |detail: String| {
@@ -804,9 +864,10 @@ fn run_phase(
         scoped_tmp: scoped_tmp.to_path_buf(),
         registry_cache: None,
         toolchain: None,
-        toolchain_ro_binds,
-        path_prepend,
-        rustup_home,
+        toolchain_ro_binds: binds.ro_binds.clone(),
+        homes: binds.homes.clone(),
+        path_prepend: binds.path_prepend.clone(),
+        rustup_home: binds.rustup_home.clone(),
         limits: jail_limits(),
     };
     ipe_sandbox::run_in_bwrap_jail(caps, &spec, payload)
@@ -1049,10 +1110,6 @@ fn run_inspector_job(job: &InspectorJob, allow_build_scripts: bool) -> Result<St
     result
 }
 
-/// The toolchain jail binds, grouped so the chunked driver can clone them once
-/// per phase without repeating the tuple destructure.
-type ToolchainBinds = (Vec<PathBuf>, Vec<PathBuf>, Option<PathBuf>);
-
 /// The historical two-phase single-crate flow: fetch (network on, no foreign
 /// code) then introspect (no egress, foreign code runs) over one scratch.
 fn run_single_bwrap(
@@ -1069,25 +1126,20 @@ fn run_single_bwrap(
             &crate::style::TerminalSafe::sanitize(&detail),
         ))
     };
-    let (toolchain_ro_binds, path_prepend, rustup_home) = binds;
     let with_payload =
         |fetch_only: bool| inspector_payload(inspector, job, None, allow_build_scripts, fetch_only);
     run_phase(
         caps,
         ipe_sandbox::NetworkPolicy::FetchOnly,
         scoped_tmp,
-        toolchain_ro_binds.clone(),
-        path_prepend.clone(),
-        rustup_home.clone(),
+        binds,
         &with_payload(true),
     )?;
     let out = run_phase(
         caps,
         ipe_sandbox::NetworkPolicy::Denied,
         scoped_tmp,
-        toolchain_ro_binds.clone(),
-        path_prepend.clone(),
-        rustup_home.clone(),
+        binds,
         &with_payload(false),
     )?;
     if out.status != Some(0) {
@@ -1147,14 +1199,11 @@ fn run_introspect_chunk(
             &crate::style::TerminalSafe::sanitize(&detail),
         ))
     };
-    let (toolchain_ro_binds, path_prepend, rustup_home) = binds;
     let out = run_phase(
         caps,
         ipe_sandbox::NetworkPolicy::Denied,
         scoped_tmp,
-        toolchain_ro_binds.clone(),
-        path_prepend.clone(),
-        rustup_home.clone(),
+        binds,
         payload,
     )?;
     if out.status != Some(0) {
@@ -1200,7 +1249,6 @@ fn run_manifest_bwrap_chunked(
             &crate::style::TerminalSafe::sanitize(&detail),
         ))
     };
-    let (toolchain_ro_binds, path_prepend, rustup_home) = binds;
 
     // Stage 1 — fetch every crate in one network-on run (no foreign code).
     let full_manifest = write_inspector_manifest(scoped_tmp, entries)?;
@@ -1216,9 +1264,7 @@ fn run_manifest_bwrap_chunked(
         caps,
         ipe_sandbox::NetworkPolicy::FetchOnly,
         scoped_tmp,
-        toolchain_ro_binds.clone(),
-        path_prepend.clone(),
-        rustup_home.clone(),
+        binds,
         &fetch_payload,
     )?;
 
@@ -4080,12 +4126,21 @@ version = \"1\"
             Path::new(TEST_INSPECTOR),
             Some(&cargo_home),
             Some(rustup_home.clone()),
+            None,
         );
+        let masked = ipe_sandbox::MaskedDir::resolve(&cargo_home);
         let _ = std::fs::remove_dir_all(&tmp);
         assert!(got.is_ok(), "disjoint homes must be accepted: {got:?}");
-        let Ok((binds, path, rustup)) = got else {
+        let Ok(ToolchainBinds {
+            ro_binds: binds,
+            path_prepend: path,
+            rustup_home: rustup,
+            homes,
+        }) = got
+        else {
             return;
         };
+        assert_eq!(homes, ipe_sandbox::HomeMasks::new(None, masked));
         assert!(binds.contains(&cargo_home.join("bin")), "{binds:?}");
         assert!(!binds.contains(&cargo_home), "{binds:?}");
         assert!(
@@ -4097,8 +4152,13 @@ version = \"1\"
     }
 
     /// `toolchain_binds_from` over `(cargo_home, rustup_home)` must refuse.
-    fn assert_toolchain_refused(cargo_home: PathBuf, rustup_home: PathBuf, inspector: &Path) {
-        let got = toolchain_binds_from(inspector, Some(&cargo_home), Some(rustup_home));
+    fn assert_toolchain_refused(cargo_home: &Path, rustup_home: &Path, inspector: &Path) {
+        let got = toolchain_binds_from(
+            inspector,
+            Some(cargo_home),
+            Some(rustup_home.to_path_buf()),
+            None,
+        );
         assert!(
             matches!(&got, Err(CliError::Usage(m)) if m.contains("credentials.toml")),
             "a bind exposing the cargo home must be refused: {got:?}"
@@ -4110,7 +4170,7 @@ version = \"1\"
         let tmp = toolbinds_root("equal");
         let home = tmp.join("toolchain");
         plant_cargo_home(&home);
-        assert_toolchain_refused(home.clone(), home, Path::new(TEST_INSPECTOR));
+        assert_toolchain_refused(&home, &home, Path::new(TEST_INSPECTOR));
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
@@ -4120,7 +4180,7 @@ version = \"1\"
         let rustup_home = tmp.join("rustup");
         let cargo_home = rustup_home.join("cargo");
         plant_cargo_home(&cargo_home);
-        assert_toolchain_refused(cargo_home, rustup_home, Path::new(TEST_INSPECTOR));
+        assert_toolchain_refused(&cargo_home, &rustup_home, Path::new(TEST_INSPECTOR));
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
@@ -4133,22 +4193,22 @@ version = \"1\"
         std::fs::create_dir_all(&rustup_dir).expect("mk rustup home");
         // `<tmp>/.rustup/..` names `<tmp>`, the cargo home's parent.
         assert_toolchain_refused(
-            cargo_home.clone(),
-            rustup_dir.join(".."),
+            &cargo_home,
+            &rustup_dir.join(".."),
             Path::new(TEST_INSPECTOR),
         );
         // `<tmp>/.cargo/bin/../` names the cargo home itself.
         let mut spelled = cargo_home.join("bin").join("..").into_os_string();
         spelled.push("/");
         assert_toolchain_refused(
-            cargo_home,
-            PathBuf::from(spelled),
+            &cargo_home,
+            &PathBuf::from(spelled),
             Path::new(TEST_INSPECTOR),
         );
         // The cargo home spelled with `..` against a plain rustup home above it.
         assert_toolchain_refused(
-            rustup_dir.join("..").join(".cargo"),
-            tmp.clone(),
+            &rustup_dir.join("..").join(".cargo"),
+            &tmp,
             Path::new(TEST_INSPECTOR),
         );
         let _ = std::fs::remove_dir_all(&tmp);
@@ -4162,7 +4222,7 @@ version = \"1\"
         plant_cargo_home(&cargo_home);
         let link = tmp.join("rustup-link");
         std::os::unix::fs::symlink(&cargo_home, &link).expect("symlink");
-        assert_toolchain_refused(cargo_home, link, Path::new(TEST_INSPECTOR));
+        assert_toolchain_refused(&cargo_home, &link, Path::new(TEST_INSPECTOR));
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
@@ -4173,7 +4233,7 @@ version = \"1\"
         let rustup_home = tmp.join("elsewhere").join(".rustup");
         plant_cargo_home(&cargo_home);
         std::fs::create_dir_all(&rustup_home).expect("mk rustup home");
-        assert_toolchain_refused(cargo_home, rustup_home, &tmp.join("ipe-ffi-inspector"));
+        assert_toolchain_refused(&cargo_home, &rustup_home, &tmp.join("ipe-ffi-inspector"));
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
@@ -4188,12 +4248,69 @@ version = \"1\"
             Path::new(TEST_INSPECTOR),
             Some(&cargo_home),
             Some(rustup_home),
+            None,
         );
         let _ = std::fs::remove_dir_all(&tmp);
         assert!(
-            matches!(&got, Ok((binds, _, _)) if !binds.contains(&cargo_home)),
+            matches!(&got, Ok(binds) if !binds.ro_binds.contains(&cargo_home)),
             "a rustup home below the cargo home does not expose it: {got:?}"
         );
+    }
+
+    #[test]
+    fn toolchain_binds_refuse_an_unknown_cargo_home() {
+        let got = toolchain_binds_from(Path::new(TEST_INSPECTOR), None, None, None);
+        assert!(
+            matches!(&got, Err(CliError::Usage(m)) if m.contains("cannot locate the cargo home")),
+            "no cargo home means no exposure check, so the jail must be refused: {got:?}"
+        );
+    }
+
+    #[test]
+    fn toolchain_binds_mask_the_user_and_cargo_homes() {
+        let tmp = toolbinds_root("homes");
+        let user_home = tmp.join("user");
+        let cargo_home = tmp.join("elsewhere").join(".cargo");
+        plant_cargo_home(&cargo_home);
+        std::fs::create_dir_all(&user_home).expect("mk user home");
+        let got = toolchain_binds_from(
+            Path::new(TEST_INSPECTOR),
+            Some(&cargo_home),
+            None,
+            Some(&user_home),
+        );
+        let want = ipe_sandbox::HomeMasks::new(
+            ipe_sandbox::MaskedDir::resolve(&user_home),
+            ipe_sandbox::MaskedDir::resolve(&cargo_home),
+        );
+        let _ = std::fs::remove_dir_all(&tmp);
+        assert!(
+            matches!(&got, Ok(binds) if binds.homes == want),
+            "both homes must be masked: {got:?}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn identity_sees_an_equal_or_enclosing_dir_and_nothing_else() {
+        let tmp = toolbinds_root("identity");
+        let cargo_home = tmp.join(".cargo");
+        let other = tmp.join("other");
+        plant_cargo_home(&cargo_home);
+        std::fs::create_dir_all(&other).expect("mk other");
+        let equal = covers_by_identity(&cargo_home, &cargo_home);
+        let enclosing = covers_by_identity(&tmp, &cargo_home);
+        let below = covers_by_identity(&cargo_home.join("bin"), &cargo_home);
+        let disjoint = covers_by_identity(&other, &cargo_home);
+        let missing_outer = covers_by_identity(&tmp.join("absent"), &cargo_home);
+        let missing_inner = covers_by_identity(&other, &cargo_home.join("absent"));
+        let _ = std::fs::remove_dir_all(&tmp);
+        assert!(equal, "the directory itself is covered");
+        assert!(enclosing, "an enclosing directory covers it");
+        assert!(!below, "a directory below does not cover it");
+        assert!(!disjoint, "a disjoint directory does not cover it");
+        assert!(!missing_outer, "a missing bind exposes nothing");
+        assert!(!missing_inner, "a missing tail cannot be the bind");
     }
 
     #[test]

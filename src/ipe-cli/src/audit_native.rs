@@ -1462,12 +1462,13 @@ pub const fn default_ro_binds() -> Vec<PathBuf> {
 
 /// The read-only toolchain binds a real `cargo build` needs inside the jail.
 ///
-/// The Cargo home (`~/.cargo` or `$CARGO_HOME` — the `cargo`/`rustc` shims and the
-/// registry cache of pre-fetched crate sources) and the Rustup home (`~/.rustup`
-/// or `$RUSTUP_HOME` — the actual toolchain binaries the shims resolve to). Bound
-/// READ-ONLY: the jail's own scratch-local target dir is the only writable output,
-/// so binding the toolchain read-only cannot let the untrusted build escape. Only
-/// existing paths are bound.
+/// From the Cargo home (`~/.cargo` or `$CARGO_HOME`) only its `bin`, `registry` and `git`
+/// subdirectories — the `cargo`/`rustc` shims and the pre-fetched crate sources —
+/// never the home itself, whose `credentials.toml` holds the registry token; and
+/// the Rustup home (`~/.rustup` or `$RUSTUP_HOME` — the actual toolchain binaries
+/// the shims resolve to). Bound READ-ONLY: the jail's own scratch-local target dir
+/// is the only writable output, so binding the toolchain read-only cannot let the
+/// untrusted build escape. Only existing paths are bound.
 ///
 /// These are ADDED to [`default_ro_binds`] on the real-build path only; the
 /// wrapper-probe-only control fixture needs no toolchain, so its bind set is
@@ -1486,15 +1487,27 @@ pub const fn default_ro_binds() -> Vec<PathBuf> {
     target_os = "freebsd"
 ))]
 pub fn toolchain_ro_binds() -> Result<Vec<PathBuf>, CliError> {
-    Ok([
-        crate::env_dir::tool_home("CARGO_HOME", ".cargo")?,
-        crate::env_dir::tool_home("RUSTUP_HOME", ".rustup")?,
-    ]
-    .into_iter()
-    .flatten()
-    .filter(|p| p.exists())
-    .collect())
+    let cargo_home = crate::env_dir::tool_home("CARGO_HOME", ".cargo")?;
+    let rustup_home = crate::env_dir::tool_home("RUSTUP_HOME", ".rustup")?;
+    Ok(cargo_home
+        .iter()
+        .flat_map(|home| CARGO_HOME_TOOL_DIRS.iter().map(|dir| home.join(dir)))
+        .chain(rustup_home)
+        .filter(|p| p.exists())
+        .collect())
 }
+
+/// The Cargo home subdirectories a jailed build reads: the tool shims and the
+/// crate-source caches. Never `credentials.toml` or `config.toml`.
+#[cfg(any(
+    all(
+        target_os = "linux",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    ),
+    target_os = "macos",
+    target_os = "freebsd"
+))]
+const CARGO_HOME_TOOL_DIRS: [&str; 3] = ["bin", "registry", "git"];
 
 /// Windows: the jail reads no read-only tool binds, so the toolchain bind set is
 /// empty.

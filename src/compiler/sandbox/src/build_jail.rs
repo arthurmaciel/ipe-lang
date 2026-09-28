@@ -350,6 +350,7 @@ pub fn build_in_jail(
         scoped_tmp,
         working_tree,
         extra_ro_binds,
+        &crate::HomeMasks::of_invoker(),
         Some(seccomp_owned.as_raw_fd()),
         &host_env,
         payload,

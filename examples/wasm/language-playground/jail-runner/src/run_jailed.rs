@@ -24,7 +24,7 @@
 //! | Control    | Enforcer (via [`ipe_sandbox`])                               |
 //! |------------|--------------------------------------------------------------|
 //! | Network    | `NetworkPolicy::Denied` → bwrap `--unshare-net` (no egress)   |
-//! | Filesystem | `--ro-bind / /` + `--tmpfs /home /root /tmp` + one `--bind`   |
+//! | Filesystem | `--ro-bind / /` + `--tmpfs` every home, `/tmp` + one `--bind` |
 //! | Memory     | `prlimit --as`                                               |
 //! | CPU        | `prlimit --cpu`                                              |
 //! | Fork/proc  | `prlimit --nproc`                                            |
@@ -35,8 +35,8 @@ use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
 use ipe_sandbox::{
-    Capabilities, JailSpec, NetworkPolicy, ResourceLimits, SandboxDefect, missing_caps, probe,
-    run_in_bwrap_jail, run_in_bwrap_jail_deny_subprocess,
+    Capabilities, HomeMasks, JailSpec, NetworkPolicy, ResourceLimits, SandboxDefect, missing_caps,
+    probe, run_in_bwrap_jail, run_in_bwrap_jail_deny_subprocess,
 };
 
 /// Resource caps for one playground build+run.
@@ -234,6 +234,7 @@ fn run_phase(
         toolchain_ro_binds: binds.ro_binds,
         path_prepend: binds.path_prepend,
         rustup_home: binds.rustup_home,
+        homes: HomeMasks::of_invoker(),
         limits: run_caps.to_limits(),
     };
     let out = match subprocess {

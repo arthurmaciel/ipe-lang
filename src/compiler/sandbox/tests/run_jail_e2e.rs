@@ -37,6 +37,7 @@ use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use ipe_sandbox::HomeMasks;
 use ipe_sandbox::run_jail::{
     FilesystemScope, RunJailTools, RunResourceLimits, SandboxProfile, run_jail_argv,
 };
@@ -187,6 +188,7 @@ fn run_jailed_inner(
         &scoped,
         &scoped,
         &[PathBuf::from("/usr/bin"), PathBuf::from("/bin")],
+        &HomeMasks::of_invoker(),
         Some(fd),
         &host_env,
         payload,

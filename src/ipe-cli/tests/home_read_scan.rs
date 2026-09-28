@@ -15,7 +15,9 @@
 //! - the std/`dirs` home helpers and whole-environment iteration;
 //! - an environment read whose key is neither a literal nor a `SCREAMING_CASE`
 //!   constant (whose own literal the first rule sees), and a reader passed or
-//!   imported as a value.
+//!   imported as a value;
+//! - an alias of the `env` module (`use std::env as e`, `env::{self as e}`),
+//!   under which a read would no longer spell `env::`.
 //!
 //! Each exception names one function in one file with its reason
 //! ([`LITERAL_ALLOWED`], [`DYNAMIC_KEY_ALLOWED`]); the rest of that file is
@@ -399,6 +401,73 @@ fn item_end(code: &[u8], from: usize) -> usize {
     code.len()
 }
 
+/// Keywords that open an item or statement ending at its body or its `;`.
+const ITEM_KEYWORDS: &[&str] = &[
+    "fn",
+    "mod",
+    "impl",
+    "struct",
+    "enum",
+    "union",
+    "use",
+    "const",
+    "static",
+    "type",
+    "trait",
+    "unsafe",
+    "async",
+    "extern",
+    "macro_rules",
+    "let",
+];
+
+/// The end of the attributed element starting at `from`.
+///
+/// An item or `let` ends as [`item_end`] says. Anything else — an enum
+/// variant, a struct field, a match arm, an expression — also ends at a
+/// top-level `,` or just before an unmatched `}`, so the skip never runs past
+/// the list the element sits in. A `,` inside an unbracketed generic ends such
+/// an element early, which only leaves more code scanned.
+fn attributed_end(code: &[u8], from: usize) -> usize {
+    let mut p = skip_ws(code, from);
+    if token_at(code, p, "pub") {
+        p = skip_ws(code, p + 3);
+        if at(code, p) == b'(' {
+            p = skip_ws(code, close_of(code, p));
+        }
+    }
+    if ITEM_KEYWORDS.iter().any(|word| token_at(code, p, word)) {
+        return item_end(code, from);
+    }
+    let mut k = from;
+    while k < code.len() {
+        match at(code, k) {
+            b'(' | b'[' => k = close_of(code, k),
+            b'{' => return close_of(code, k),
+            b';' | b',' => return k + 1,
+            b'}' => return k,
+            _ => k += 1,
+        }
+    }
+    code.len()
+}
+
+/// The `{` of the innermost brace block enclosing offset `k`, if any.
+fn enclosing_open(code: &[u8], k: usize) -> Option<usize> {
+    let mut depth = 0usize;
+    for j in (0..k).rev() {
+        match at(code, j) {
+            b'}' => depth += 1,
+            b'{' => match depth.checked_sub(1) {
+                Some(outer) => depth = outer,
+                None => return Some(j),
+            },
+            _ => {}
+        }
+    }
+    None
+}
+
 /// The index just past whitespace starting at `k`.
 fn skip_ws(code: &[u8], mut k: usize) -> usize {
     while at(code, k).is_ascii_whitespace() {
@@ -436,8 +505,9 @@ fn tokens_at(code: &[u8], k: usize, words: &[&str]) -> Option<usize> {
     Some(p)
 }
 
-/// The byte ranges of items under an exact `#[cfg(test)]` (attribute included),
-/// and the rest of the file after an inner `#![cfg(test)]`.
+/// The byte ranges of elements under an exact `#[cfg(test)]` (attribute
+/// included), and of the block an inner `#![cfg(test)]` sits in — the rest of
+/// the file at the top level, else the rest of its enclosing `{ .. }`.
 fn test_item_ranges(code: &[u8]) -> Vec<Range<usize>> {
     let mut out = Vec::new();
     let mut k = 0;
@@ -447,8 +517,14 @@ fn test_item_ranges(code: &[u8]) -> Vec<Range<usize>> {
             continue;
         }
         if tokens_at(code, k + 1, &["!", "[", "cfg", "(", "test", ")", "]"]).is_some() {
-            out.push(k..code.len());
-            break;
+            let Some(open) = enclosing_open(code, k) else {
+                out.push(k..code.len());
+                break;
+            };
+            let end = close_of(code, open).max(k + 1);
+            out.push(k..end);
+            k = end;
+            continue;
         }
         let Some(mut p) = tokens_at(code, k + 1, &["[", "cfg", "(", "test", ")", "]"]) else {
             k += 1;
@@ -458,7 +534,7 @@ fn test_item_ranges(code: &[u8]) -> Vec<Range<usize>> {
         while at(code, p) == b'#' {
             p = skip_ws(code, close_of(code, skip_ws(code, p + 1)));
         }
-        let end = item_end(code, p);
+        let end = attributed_end(code, p).max(k + 1);
         out.push(k..end);
         k = end;
     }
@@ -492,6 +568,7 @@ struct Hit {
 }
 
 /// The 1-based line of byte offset `offset` in `code`.
+#[allow(clippy::naive_bytecount)] // test-only line count, no dep
 fn line_of(code: &[u8], offset: usize) -> usize {
     code.get(..offset)
         .map_or(0, |pre| pre.iter().filter(|b| **b == b'\n').count())
@@ -554,10 +631,10 @@ fn is_env_reader(code: &[u8], k: usize, name: &str) -> bool {
                 s
             };
             let prev_word = code.get(prev_start..prev_end).unwrap_or(&[]);
-            match owner {
-                Some(owner) => owner == b"system",
-                None => before(code, prev_end) != b'.' && prev_word != b"fn",
-            }
+            owner.map_or_else(
+                || before(code, prev_end) != b'.' && prev_word != b"fn",
+                |owner| owner == b"system",
+            )
         }
     }
 }
@@ -621,12 +698,30 @@ fn raw_home_reads(src: &str, literal_ok: &[&str], dynamic_ok: &[&str]) -> Vec<Hi
             let group = code.get(open - 1..close_of(&code, open - 1)).unwrap_or(&[]);
             let imports_reader =
                 (0..group.len()).any(|g| ["var", "var_os"].iter().any(|w| token_at(group, g, w)));
+            let aliases_module = (0..group.len()).any(|g| {
+                token_at(group, g, "self") && token_at(group, skip_ws(group, g + 4), "as")
+            });
             if imports_reader {
                 hits.push(Hit {
                     line: line_of(&code, k),
                     what: "`env::{..}` imports a reader".to_owned(),
                 });
             }
+            if aliases_module && !in_any(&dynamic_exempt, k) {
+                hits.push(Hit {
+                    line: line_of(&code, k),
+                    what: "`env::{self as ..}` aliases the module".to_owned(),
+                });
+            }
+        }
+        if token_at(&code, k, "env")
+            && token_at(&code, skip_ws(&code, k + 3), "as")
+            && !in_any(&dynamic_exempt, k)
+        {
+            hits.push(Hit {
+                line: line_of(&code, k),
+                what: "`env as ..` aliases the module".to_owned(),
+            });
         }
         for reader in ["var", "var_os", "read_env_var", "read_env_var_os"] {
             if !token_at(&code, k, reader) || !is_env_reader(&code, k, reader) {
@@ -781,6 +876,12 @@ fn a_planted_raw_home_read_is_detected() {
         "fn f(p: &Profile) { let _ = std::env::var(&p.key); }",
         "fn f() { let _ = crate::system::read_env_var(&format!(\"{}\", k)); }",
         "#[cfg(any(test, feature = \"x\"))]\nfn f() { let _ = std::env::var(\"HOME\"); }",
+        "use std::env as e; fn f(k: &str) { let _ = e::var(k); }",
+        "pub use std::env as e;",
+        "use std::{env as e, fs};",
+        "use std::env::{self as e};",
+        "use std::env::{self as e, args};",
+        "use std::{env::{self as e}};",
     ];
     for src in planted_reads {
         assert!(
@@ -810,6 +911,9 @@ fn the_validated_accessors_and_unrelated_forms_are_not_flagged() {
         "let q = '\"'; let b = b'\"'; let v = std::env::var(\"PATH\");",
         "fn f<'a>(x: &'a str) -> &'a str { x }",
         "let s = r#\"a \"quoted\" HOME\"#;",
+        "use std::env::{self, args};",
+        "use std::{env, fs as f};",
+        "let environment = env; let x = y as u8;",
     ];
     for src in clean {
         assert_eq!(
@@ -833,6 +937,52 @@ fn test_items_are_skipped_but_production_code_beside_them_is_not() {
     );
     let inner = "#![cfg(test)]\nfn t() { let _ = std::env::var(\"HOME\"); }\n";
     assert_eq!(planted(inner), Vec::new());
+}
+
+/// The single literal-`HOME` hit on `line`.
+fn home_literal_at(line: usize) -> Vec<Hit> {
+    vec![Hit {
+        line,
+        what: "literal \"HOME\"".to_owned(),
+    }]
+}
+
+#[test]
+fn a_test_variant_field_or_arm_skips_only_itself() {
+    let variant = "enum E {\n    #[cfg(test)]\n    T,\n    P,\n}\n\
+                   fn prod() { let _ = std::env::var(\"HOME\"); }\n";
+    assert_eq!(planted(variant), home_literal_at(6));
+    let last_variant = "enum E {\n    P,\n    #[cfg(test)]\n    T\n}\n\
+                        fn prod() { let _ = std::env::var(\"HOME\"); }\n";
+    assert_eq!(planted(last_variant), home_literal_at(6));
+    let field = "struct S {\n    #[cfg(test)]\n    pub t: Vec<u8>,\n    p: u8,\n}\n\
+                 fn prod() { let _ = std::env::var(\"HOME\"); }\n";
+    assert_eq!(planted(field), home_literal_at(6));
+    let arm = "fn prod(x: u8) {\n    match x {\n        #[cfg(test)]\n        0 => (),\n\
+               _ => { let _ = std::env::var(\"HOME\"); }\n    }\n}\n";
+    assert_eq!(planted(arm), home_literal_at(5));
+    let test_arm = "fn prod(x: u8) {\n    match x {\n        #[cfg(test)]\n\
+                    0 => { let _ = std::env::var(\"HOME\"); }\n        _ => (),\n    }\n}\n";
+    assert_eq!(planted(test_arm), Vec::new());
+}
+
+#[test]
+fn an_inner_test_cfg_in_an_inline_module_skips_only_that_module() {
+    let src = "mod t {\n    #![cfg(test)]\n    fn t() { let _ = std::env::var(\"HOME\"); }\n}\n\
+               fn prod() { let _ = std::env::var(\"HOME\"); }\n";
+    assert_eq!(planted(src), home_literal_at(5));
+}
+
+#[test]
+fn an_env_alias_is_exempt_only_in_an_allowlisted_function() {
+    let src = "fn reader() { use std::env as e; }\nfn stray() { use std::env as e; }\n";
+    assert_eq!(
+        raw_home_reads(src, &[], &["reader"]),
+        vec![Hit {
+            line: 2,
+            what: "`env as ..` aliases the module".to_owned(),
+        }]
+    );
 }
 
 #[test]
