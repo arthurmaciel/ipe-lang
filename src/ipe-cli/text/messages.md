@@ -924,6 +924,10 @@ the source root {path} cannot be resolved — ipe cannot prove the output stays 
 
 {path} is or lies under a reparse point (a OneDrive folder, a mount point, or a deduplicated directory) — ipe cannot prove where it leads; point --out at a directory outside it
 
+## output-in-use
+
+{path} is held open by another program (an editor, a file indexer, or antivirus) — close it there or let that program finish, then run the command again
+
 # Publisher identity
 
 ## login-empty

@@ -181,6 +181,11 @@ pub enum OutputRefusal {
     /// A cloud-sync folder, a mount point, or a deduplicated directory may
     /// lead anywhere, so ipe refuses to act inside one.
     ReparsePoint(PathBuf),
+    /// An entry another program holds open, so ipe cannot remove or replace it.
+    ///
+    /// On Windows an editor, a file indexer, or antivirus holding a file or
+    /// directory without delete sharing blocks its removal until released.
+    InUse(PathBuf),
 }
 
 impl std::fmt::Display for OutputRefusal {
@@ -218,6 +223,7 @@ impl std::fmt::Display for OutputRefusal {
             Self::Replaced(p) => text::output_replaced(&p.display()),
             Self::TooDeep { path, limit } => text::output_too_deep(&path.display(), limit),
             Self::ReparsePoint(p) => text::output_reparse_point(&p.display()),
+            Self::InUse(p) => text::output_in_use(&p.display()),
         };
         f.write_str(&message)
     }

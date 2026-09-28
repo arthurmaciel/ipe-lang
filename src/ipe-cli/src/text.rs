@@ -1336,6 +1336,8 @@ messages! {
     output_too_deep(path, limit) = "output-too-deep";
     /// A path on or under a Windows reparse point.
     output_reparse_point(path) = "output-reparse-point";
+    /// An entry another program holds open, so ipe cannot remove or replace it.
+    output_in_use(path) = "output-in-use";
     /// A GitHub login with nothing before its optional `[bot]` suffix.
     login_empty = "login-empty";
     /// A GitHub login past the length ceiling.
