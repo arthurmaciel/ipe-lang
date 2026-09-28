@@ -904,7 +904,7 @@ mod lexical {
             reason: "the home names the audited reader refuses; reads nothing",
         },
         Allowed {
-            file: "src/compiler/sandbox/src/private_scratch.rs",
+            file: "src/compiler/sandbox/src/scratch.rs",
             func: "PROFILE_VAR",
             reason: "names the profile variable in a refusal message; the read is `home::home_dir`",
         },

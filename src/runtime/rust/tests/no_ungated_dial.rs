@@ -29,15 +29,15 @@
 //! token too.
 
 use proc_macro2::{TokenStream, TokenTree};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use syn::ext::IdentExt;
 use syn::punctuated::Punctuated;
 use syn::visit::{self, Visit};
 use syn::{
     Arm, Attribute, Block, Expr, ExprAssign, ExprCall, ExprMethodCall, ExprPath, Field, FieldValue,
     ForeignItem, ForeignItemFn, Ident, ImplItem, ImplItemFn, Item, ItemFn, ItemImpl, ItemUse,
-    Local, Macro, Meta, Pat, PatIdent, Stmt, Token, TraitItem, TraitItemFn, Type, TypeParam,
-    UseTree, Variant,
+    Local, Macro, Pat, PatIdent, Stmt, Token, TraitItem, TraitItemFn, Type, TypeParam, UseTree,
+    Variant,
 };
 
 // ---------------------------------------------------------------------------
@@ -162,62 +162,11 @@ fn name_of(id: &Ident) -> String {
     id.unraw().to_string()
 }
 
-// ---------------------------------------------------------------------------
-// `#[cfg(...)]` classification.
-// ---------------------------------------------------------------------------
-
-/// Whether `predicate` can hold only when `test` is set.
-///
-/// `all(…)` needs every member, so one test-only member suffices; `any(…)` is
-/// test-only only when every member is. `not(…)`, `feature = "test"`, and any
-/// other shape are not proven test-only, so the node they gate is scanned.
-fn test_only(predicate: &Meta) -> bool {
-    match predicate {
-        Meta::Path(path) => path.is_ident("test"),
-        Meta::List(list) => {
-            let members = list
-                .parse_args_with(Punctuated::<Meta, Token![,]>::parse_terminated)
-                .ok();
-            if list.path.is_ident("all") {
-                members.is_some_and(|m| m.iter().any(test_only))
-            } else if list.path.is_ident("any") {
-                members.is_some_and(|m| !m.is_empty() && m.iter().all(test_only))
-            } else {
-                false
-            }
-        }
-        _ => false,
-    }
-}
-
-/// Whether one of `attrs` is a `#[cfg(…)]` that holds only under `test`.
-fn cfg_test_only(attrs: &[Attribute]) -> bool {
-    attrs.iter().any(|attr| {
-        attr.path().is_ident("cfg") && attr.parse_args::<Meta>().is_ok_and(|p| test_only(&p))
-    })
-}
-
-/// The outer attributes of `item`.
-fn item_attrs(item: &Item) -> &[Attribute] {
-    match item {
-        Item::Const(i) => &i.attrs,
-        Item::Enum(i) => &i.attrs,
-        Item::ExternCrate(i) => &i.attrs,
-        Item::Fn(i) => &i.attrs,
-        Item::ForeignMod(i) => &i.attrs,
-        Item::Impl(i) => &i.attrs,
-        Item::Macro(i) => &i.attrs,
-        Item::Mod(i) => &i.attrs,
-        Item::Static(i) => &i.attrs,
-        Item::Struct(i) => &i.attrs,
-        Item::Trait(i) => &i.attrs,
-        Item::TraitAlias(i) => &i.attrs,
-        Item::Type(i) => &i.attrs,
-        Item::Union(i) => &i.attrs,
-        Item::Use(i) => &i.attrs,
-        _ => &[],
-    }
-}
+// `#[cfg(...)]` classification lives in `support/cfg_scan.rs`, shared with the
+// print-macro scan.
+#[path = "support/cfg_scan.rs"]
+mod cfg_scan;
+use cfg_scan::{cfg_test_only, expr_attrs, impl_item_attrs, item_attrs, trait_item_attrs};
 
 /// The name `item` defines, when it defines one.
 fn item_name(item: &Item) -> Option<String> {
@@ -237,64 +186,6 @@ fn item_name(item: &Item) -> Option<String> {
         Item::Type(i) => Some(name_of(&i.ident)),
         Item::Union(i) => Some(name_of(&i.ident)),
         _ => None,
-    }
-}
-
-/// The outer attributes of `item`.
-fn impl_item_attrs(item: &ImplItem) -> &[Attribute] {
-    match item {
-        ImplItem::Const(i) => &i.attrs,
-        ImplItem::Fn(i) => &i.attrs,
-        ImplItem::Type(i) => &i.attrs,
-        ImplItem::Macro(i) => &i.attrs,
-        _ => &[],
-    }
-}
-
-/// The outer attributes of `item`.
-fn trait_item_attrs(item: &TraitItem) -> &[Attribute] {
-    match item {
-        TraitItem::Const(i) => &i.attrs,
-        TraitItem::Fn(i) => &i.attrs,
-        TraitItem::Type(i) => &i.attrs,
-        TraitItem::Macro(i) => &i.attrs,
-        _ => &[],
-    }
-}
-
-/// The outer attributes of `expr`, for every expression kind that can carry one.
-///
-/// An expression kind missing here keeps its attributes unread, so a
-/// `#[cfg(test)]` on it is not honoured and the expression stays scanned.
-fn expr_attrs(expr: &Expr) -> &[Attribute] {
-    match expr {
-        Expr::Array(e) => &e.attrs,
-        Expr::Assign(e) => &e.attrs,
-        Expr::Async(e) => &e.attrs,
-        Expr::Await(e) => &e.attrs,
-        Expr::Binary(e) => &e.attrs,
-        Expr::Block(e) => &e.attrs,
-        Expr::Call(e) => &e.attrs,
-        Expr::Closure(e) => &e.attrs,
-        Expr::Field(e) => &e.attrs,
-        Expr::ForLoop(e) => &e.attrs,
-        Expr::If(e) => &e.attrs,
-        Expr::Lit(e) => &e.attrs,
-        Expr::Loop(e) => &e.attrs,
-        Expr::Macro(e) => &e.attrs,
-        Expr::Match(e) => &e.attrs,
-        Expr::MethodCall(e) => &e.attrs,
-        Expr::Paren(e) => &e.attrs,
-        Expr::Path(e) => &e.attrs,
-        Expr::Reference(e) => &e.attrs,
-        Expr::Return(e) => &e.attrs,
-        Expr::Struct(e) => &e.attrs,
-        Expr::Try(e) => &e.attrs,
-        Expr::Tuple(e) => &e.attrs,
-        Expr::Unary(e) => &e.attrs,
-        Expr::Unsafe(e) => &e.attrs,
-        Expr::While(e) => &e.attrs,
-        _ => &[],
     }
 }
 
@@ -1951,61 +1842,11 @@ fn email_smtp_transport_is_guarded() {
 // The dial scans over the whole runtime source tree.
 // ---------------------------------------------------------------------------
 
-/// The most directory entries the source walk reads before it fails.
-const MAX_SOURCE_ENTRIES: usize = 8192;
-
-/// Every `.rs` file under `root`, as its `/`-separated path relative to `root`
-/// and its contents, sorted by path.
-///
-/// A symbolic link is refused rather than followed or skipped, so every file
-/// the build can read is one the walk read.
-#[allow(clippy::expect_used)] // an unreadable source must fail the scan, never be skipped
-fn rust_sources(root: &Path) -> Vec<(String, String)> {
-    let mut dirs: Vec<PathBuf> = vec![root.to_path_buf()];
-    let mut files: Vec<PathBuf> = Vec::new();
-    let mut entries = 0usize;
-    while let Some(dir) = dirs.pop() {
-        for entry in std::fs::read_dir(&dir).expect("read a source directory") {
-            let entry = entry.expect("read a source directory entry");
-            entries = entries.saturating_add(1);
-            assert!(
-                entries <= MAX_SOURCE_ENTRIES,
-                "more than {MAX_SOURCE_ENTRIES} entries under {}",
-                root.display()
-            );
-            let kind = entry.file_type().expect("read a source entry's type");
-            let path = entry.path();
-            assert!(
-                !kind.is_symlink(),
-                "{}: a symbolic link in the source tree is not scanned",
-                path.display()
-            );
-            if kind.is_dir() {
-                dirs.push(path);
-            } else if path.extension().is_some_and(|ext| ext == "rs") {
-                files.push(path);
-            }
-        }
-    }
-    let mut sources: Vec<(String, String)> = files
-        .iter()
-        .map(|path| {
-            let name = path
-                .strip_prefix(root)
-                .expect("a walked file lies under the root")
-                .components()
-                .map(|c| c.as_os_str().to_string_lossy().into_owned())
-                .collect::<Vec<_>>()
-                .join("/");
-            (
-                name,
-                std::fs::read_to_string(path).expect("read a source file"),
-            )
-        })
-        .collect();
-    sources.sort();
-    sources
-}
+// The source walk lives in `support/source_tree.rs`, shared with the
+// print-macro scan.
+#[path = "support/source_tree.rs"]
+mod source_tree;
+use source_tree::rust_sources;
 
 /// Every source file under `src/` passes every dial rule, and every allowed
 /// dial names a file the walk read.

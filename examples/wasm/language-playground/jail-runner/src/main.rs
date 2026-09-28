@@ -549,7 +549,7 @@ fn prewarm(warm_dir: &Path) -> Outcome {
         ));
     }
 
-    let scratch = match tempfile::tempdir() {
+    let scratch = match ipe_sandbox::scratch::ScratchDir::new("ipe-playground-prewarm") {
         Ok(scratch) => scratch,
         Err(error) => return Outcome::failure(format!("failed to create scratch dir: {error}")),
     };

@@ -145,10 +145,36 @@ pub(crate) fn scrub_log_controls(s: &str) -> std::borrow::Cow<'_, str> {
 /// when the write fails, and because Rust ignores SIGPIPE a hung-up reader
 /// (`app 2>&1 | head`) surfaces as `EPIPE`. The single runtime stderr line
 /// sink — `log.rs`, `debug.rs`, the tagged emitter below and every other
-/// runtime diagnostic line route through it, so no stderr write can abort.
+/// runtime diagnostic line route through it, so no stderr write can abort. Its
+/// stdout sibling is [`write_stdout_line`]; callers are responsible for
+/// scrubbing (via [`scrub_log_controls`]) any untrusted text before it reaches
+/// either.
 pub(crate) fn write_stderr_line(line: &str) {
     use std::io::Write as _;
     let _ = writeln!(std::io::stderr().lock(), "{line}");
+}
+
+/// Write one line to stdout fallibly, dropping the error — the stdout mirror
+/// of [`write_stderr_line`], for the identical `println!`-panics-on-`EPIPE`
+/// reason. The single runtime stdout line sink: `log.rs` and every other
+/// runtime stdout write (server status lines, CLI-op summaries) route through
+/// it instead of a raw `println!`/`print!`, so a closed downstream pipe
+/// (`ipe-app | head`) can never abort the process;
+/// `tests/no_panicking_print_macro.rs` refuses any production print macro.
+/// Always compiled, like its stderr sibling, so no feature combination can
+/// leave a caller without it; only `log`, `db` and the served `web` surface
+/// call it.
+#[cfg_attr(
+    not(any(
+        feature = "log",
+        feature = "db",
+        all(feature = "web-core", feature = "server")
+    )),
+    allow(dead_code) // no stdout-writing module in this feature set
+)]
+pub(crate) fn write_stdout_line(line: &str) {
+    use std::io::Write as _;
+    let _ = writeln!(std::io::stdout().lock(), "{line}");
 }
 
 /// Build a `"[<stamp> ][ipe.<tag>] <msg>"` line with `msg` scrubbed. Private:
@@ -1351,30 +1377,6 @@ mod runtime_log_emitter_tests {
         assert!(has_hand_rolled_tag(&format!(
             "\u{e9}eprintln!(\"[ipe.x] {multibyte}\")"
         )));
-    }
-
-    /// `eprintln!`/`eprint!` panic on a failed write (EPIPE); every runtime
-    /// stderr line goes through `system::write_stderr_line` instead.
-    #[test]
-    fn no_runtime_module_uses_a_panicking_stderr_macro() {
-        let src_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
-        let mut files = Vec::new();
-        collect_rs_files(&src_dir, &mut files);
-        let violations: Vec<String> = files
-            .iter()
-            .filter(|path| {
-                let content = std::fs::read_to_string(path)
-                    .unwrap_or_else(|e| panic!("could not read {}: {e}", path.display()));
-                content.contains("eprintln!(") || content.contains("eprint!(")
-            })
-            .map(|path| path.display().to_string())
-            .collect();
-        assert!(
-            violations.is_empty(),
-            "`eprintln!`/`eprint!` panics on a broken pipe — use \
-             `crate::system::write_stderr_line` (or `emit_runtime_log`) instead:\n{}",
-            violations.join("\n")
-        );
     }
 
     #[test]
