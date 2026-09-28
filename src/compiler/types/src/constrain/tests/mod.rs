@@ -1184,6 +1184,8 @@ mod registry_phase_c_tests {
             K::StoreTouchOnUpdate,
             K::StoreDefaultText,
             K::StoreDefaultInt,
+            K::StoreCompositePrimaryKey2,
+            K::StoreCompositePrimaryKey3,
             // Row-security policy builders (Ipê-new).
             K::StoreOwnerColumn,
             K::StoreImmutable,
@@ -1320,6 +1322,12 @@ mod registry_phase_c_tests {
             // `emit_tea_call`.
             K::CmdMap,
             K::SubMap,
+            // ── TEA: shape-owned terminal input subscriptions (2) ─────
+            // Ipê-new: `Tui.Sub.onKey : (KeyEvent -> msg) -> Sub msg` and
+            // `Cli.Sub.onLine : (String -> msg) -> Sub msg`. Runtime
+            // `tui_sub_on_key` / `cli_sub_on_line`, emit arm in `emit_tea_call`.
+            K::TuiSubOnKey,
+            K::CliSubOnLine,
             // ── Task combinators map2..5 + attempt (Ipê-new) ───────
             // `map2..5` combine independent tasks; `attempt` bridges a Task into
             // a Cmd (emit arm in `emit_tea_call`, runtime `cmd_perform`).
@@ -1922,21 +1930,56 @@ mod registry_phase_c_tests {
         }
     }
 
-    /// The [`Builder::hof_result_slot_for`] table
-    /// cannot drift from the kernel scheme shapes ([`Builder::resolve_scheme`]):
-    /// for every table entry, the slot's raw var must be exactly the FINAL RESULT
-    /// of the kernel's callback arrow (the arrow the runtime kernel fully
-    /// applies). A drifted slot would tie the obligation to the WRONG scheme
-    /// variable — silently unsound (the hazard var escapes unchecked while an
-    /// innocent var gets over-constrained) — which is precisely the failure
-    /// class this item was reverted for four times.
+    /// The HOF callback-result classifier agrees with every resolved kernel scheme.
+    ///
+    /// [`StdlibKernel::hof_result_vars`] reads the kernel's `TyShape`; this
+    /// oracle re-derives the same set from the scheme [`Builder::resolve_scheme`]
+    /// resolves, walking the first `arity` parameters for callbacks whose final
+    /// result is a bare variable. A kernel the oracle finds callbacks in but the
+    /// classifier leaves unobliged must carry a stated exemption: a non-`Pure`
+    /// class, or an applied result that is an opaque boxed wrapper. A classifier
+    /// that drifted from the schemes would tie the obligation to the wrong
+    /// variable, letting the hazard variable escape unchecked.
     #[test]
-    fn hof_result_slots_match_scheme_shapes() {
+    fn hof_result_vars_match_scheme_shapes() {
+        use ipe_kernels::{KernelClass, TyShape, applied_result};
+        use std::collections::BTreeSet;
+
         fn arrow_final(mut t: &Ty) -> &Ty {
             while let Ty::Fun(_, r) = t {
                 t = r;
             }
             t
+        }
+        fn collect(t: &Ty, found: &mut BTreeSet<u32>) {
+            match t {
+                Ty::Fun(..) => {
+                    if let Ty::Var(v) = arrow_final(t) {
+                        found.insert(*v);
+                    }
+                }
+                Ty::Con { args, .. } | Ty::Tuple(args) => {
+                    for a in args {
+                        collect(a, found);
+                    }
+                }
+                Ty::Record(fields, _) => {
+                    for f in fields.values() {
+                        collect(f, found);
+                    }
+                }
+                Ty::Var(_) | Ty::Unit => {}
+            }
+        }
+        fn oracle(scheme: &Ty, arity: u8) -> BTreeSet<u32> {
+            let mut found = BTreeSet::new();
+            let mut cur = scheme;
+            for _ in 0..arity {
+                let Ty::Fun(param, rest) = cur else { break };
+                collect(param, &mut found);
+                cur = rest;
+            }
+            found
         }
 
         let mut interner = Interner::new();
@@ -1944,70 +1987,96 @@ mod registry_phase_c_tests {
         let mut uf = UnionFind::<Content>::new();
         let builder = Builder::for_scheme_table(&mut uf, &interner, builtins);
 
-        let mut covered = 0;
         for &k in StdlibKernel::ALL {
-            let Some(slot) = Builder::hof_result_slot_for(k) else {
+            let classified: BTreeSet<u32> = k.hof_result_vars().vars().map(u32::from).collect();
+            let Some(shape) = k.scheme_shape() else {
+                assert!(classified.is_empty(), "{k:?}: unschemed yet obliged");
                 continue;
             };
-            covered += 1;
-            let scheme = builder.resolve_scheme(k.def().scheme);
-            assert!(
-                scheme.is_some(),
-                "{k:?} carries a hof_kernel_result obligation and must be schemed",
-            );
-            let Some(scheme) = scheme else { continue };
-
-            // Locate the callback arrow: for the map family it is the
-            // scheme's FIRST parameter; for `andMap` it is the unique arrow
-            // inside the SECOND parameter's `Con` payload
-            // (`Con (a -> b)` in `Maybe (a -> b)` / `Result e (a -> b)`).
-            let cb: Option<&Ty> = match k {
-                StdlibKernel::MaybeAndMap | StdlibKernel::ResultAndMap => {
-                    if let Ty::Fun(_, rest) = &scheme
-                        && let Ty::Fun(second, _) = rest.as_ref()
-                        && let Ty::Con { args, .. } = second.as_ref()
-                    {
-                        args.iter().find(|a| matches!(a, Ty::Fun(_, _)))
-                    } else {
-                        None
-                    }
-                }
-                _ => {
-                    if let Ty::Fun(first, _) = &scheme {
-                        Some(first.as_ref())
-                    } else {
-                        None
-                    }
-                }
+            // An unresolvable kernel fails closed at every reference.
+            let Some(scheme) = builder.resolve_scheme(k.def().scheme) else {
+                continue;
             };
+            let decl = k.decl();
+            let derived = oracle(&scheme, decl.arity);
+            if classified == derived {
+                continue;
+            }
             assert!(
-                matches!(cb, Some(Ty::Fun(_, _))),
-                "{k:?}: could not locate the callback arrow in its scheme — \
-                 the scheme shape changed; re-derive hof_result_slot_for",
+                classified.is_empty(),
+                "{k:?}: classifier {classified:?} disagrees with the scheme's \
+                 callback results {derived:?}",
             );
-            let Some(cb) = cb else { continue };
-            assert_eq!(
-                arrow_final(cb),
-                &Ty::Var(slot),
-                "{k:?}: hof_result_slot_for says raw var {slot} but the \
-                 callback arrow's final result is a different type — the \
-                 obligation would bind the WRONG variable",
+            let boxed = matches!(
+                applied_result(shape, decl.arity),
+                Some(TyShape::Con(tag, _)) if tag.is_opaque_boxed_wrapper()
+            );
+            let pure = matches!(decl.class, KernelClass::Pure);
+            assert!(
+                boxed || !pure,
+                "{k:?}: callbacks return {derived:?} but carry no \
+                 hof_kernel_result obligation and no stated exemption",
             );
         }
-        // Freeze the covered set's size so silently dropping a kernel from
-        // the table (obligation removed → hazard reopened) fails loudly.
-        assert_eq!(
-            covered, 13,
-            "hof_result_slot_for must cover exactly the 13 Maybe/Result \
-             higher-order kernels (map ×2, map2..5 ×8, mapError ×1, andMap \
-             ×2); adding/removing a member must update this pin AND the \
-             fixtures",
-        );
+    }
+
+    /// Obliged kernels sit at their callback's final-result variable; exempt ones stay empty.
+    ///
+    /// Pins the `Maybe`/`Result` family and the collection HOFs, and the
+    /// boxed-wrapper and handler-class exemptions.
+    #[test]
+    fn hof_result_vars_pins_and_exemptions() {
+        let mut interner = Interner::new();
+        let builtins = make_builder(&mut interner);
+        let mut uf = UnionFind::<Content>::new();
+        let builder = Builder::for_scheme_table(&mut uf, &interner, builtins);
+
+        let pins: &[(StdlibKernel, &[u8])] = &[
+            (StdlibKernel::MaybeMap, &[1]),
+            (StdlibKernel::ResultMap, &[1]),
+            (StdlibKernel::ResultMapError, &[1]),
+            (StdlibKernel::MaybeAndMap, &[1]),
+            (StdlibKernel::ResultAndMap, &[1]),
+            (StdlibKernel::MaybeMap2, &[2]),
+            (StdlibKernel::ResultMap2, &[2]),
+            (StdlibKernel::MaybeMap3, &[3]),
+            (StdlibKernel::ResultMap3, &[3]),
+            (StdlibKernel::MaybeMap4, &[4]),
+            (StdlibKernel::ResultMap4, &[4]),
+            (StdlibKernel::MaybeMap5, &[5]),
+            (StdlibKernel::ResultMap5, &[5]),
+            (StdlibKernel::ListMap, &[1]),
+            (StdlibKernel::ListFoldl, &[1]),
+            (StdlibKernel::DictMap, &[2]),
+            (StdlibKernel::StringFoldl, &[0]),
+        ];
+        for &(k, want) in pins {
+            assert!(
+                builder.resolve_scheme(k.def().scheme).is_some(),
+                "{k:?}: an obliged kernel must resolve",
+            );
+            let got: Vec<u8> = k.hof_result_vars().vars().collect();
+            assert_eq!(got, want, "{k:?}: callback-result obligation moved");
+        }
+
+        // Exemptions: boxed wrappers defer their callbacks; handler classes
+        // and structured callback results carry no bare result variable.
+        for k in [
+            StdlibKernel::TaskMap,
+            StdlibKernel::CmdMap,
+            StdlibKernel::SubMap,
+            StdlibKernel::JsonDecMap,
+            StdlibKernel::JsonDecMap2,
+            StdlibKernel::UiOnInput,
+            StdlibKernel::MaybeAndThen,
+        ] {
+            assert!(k.hof_result_vars().is_empty(), "{k:?} must stay exempt");
+        }
     }
 
     /// Every pinned kernel-obligation slot's scheme literally contains its
     /// `Ty::Var(slot)` — the coherence tripwire mirroring
-    /// `hof_result_slots_match_scheme_shapes` for the shape-(B) obligations
+    /// `hof_result_vars_match_scheme_shapes` for the shape-(B) obligations
     /// (Dict/Set/Cache key, `Set.map` result, `Db.*` SQL-param, `Log.*With`/
     /// `Debug.log` Show, `Web.tea`/`Web.embed` Model+notFound, `Web.route`
     /// page+builder). The `constrain_var_kernel` tie sites now fail closed on a

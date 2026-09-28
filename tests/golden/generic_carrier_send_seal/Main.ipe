@@ -18,7 +18,7 @@ import Ipe.Tea.Cli as Cli
 import Ipe.Ui.Cli as Ui
 import Ipe.Ui.Cli exposing (Lines)
 import Ipe.Tea.Terminal.Cmd as Cmd
-import Ipe.Tea.Terminal.Sub as Sub
+import Ipe.Tea.Cli.Sub as Sub
 import Ipe.String as String
 import Ipe.Task as Task
 
@@ -85,7 +85,7 @@ view model =
 
 subscriptions : Model -> Sub Msg
 subscriptions _model =
-    subMapped 2 Ticked
+    Sub.batch [ subMapped 2 Ticked, Sub.onLine onLine ]
 
 
 onLine : String -> Msg
@@ -99,5 +99,4 @@ main =
         , update = update
         , view = view
         , subscriptions = subscriptions
-        , onLine = onLine
         }

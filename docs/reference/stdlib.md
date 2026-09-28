@@ -1475,6 +1475,7 @@ Ipe.Db.Store — typed, injection-safe persistence over the audited `Ipe.Db`.
 | `Store` | One classified, queryable table whose schema, reads, and writes derive from |
 | `Column` | One typed column: its (validated) name and its abstract type for the |
 | `ColumnSpec` | A DB-only fact the record type cannot express: primary key, serial |
+| `PrimaryKeyDecl` | The table's primary key: none, one column, or several columns forming one |
 | `IndexSpec` | A declarative performance index over one or more of the store's columns. |
 | `Row` | A row read back from the database: every column keyed by its name, values |
 | `validSqlIdent` | `validSqlIdent name` — accept `name` as a (possibly dotted) SQL identifier, |
@@ -1495,7 +1496,10 @@ Ipe.Db.Store — typed, injection-safe persistence over the audited `Ipe.Db`.
 | `defaultText` | `defaultText accessor value store` — give the accessor-named column a |
 | `defaultInt` | `defaultInt accessor value store` — give the accessor-named column a |
 | `touchOnUpdate` | Mark the accessor-named column a DB-stamped updated-at column. Like |
-| `primaryKeyNamed` | (no summary) |
+| `compositePrimaryKey2` | `compositePrimaryKey2 first second draft` — make the two accessor-named |
+| `compositePrimaryKey3` | `compositePrimaryKey3 first second third draft` — make the three |
+| `primaryKeyNamed` | `primaryKeyNamed column draft` — the string form of `primaryKey`: mark the |
+| `compositePrimaryKeyNamed` | `compositePrimaryKeyNamed columns draft` — the string form of |
 | `serialNamed` | (no summary) |
 | `uniqueNamed` | (no summary) |
 | `defaultNowNamed` | (no summary) |
@@ -1641,6 +1645,7 @@ Ipe.Db.Store.Unsafe — the raw, string-named query leaves and column-spec
 | `notNull` | `notNull col` — the rows where `col` is not SQL `NULL`. |
 | `inList` | `inList col values` — the rows where `col` is one of `values`; each value |
 | `primaryKey` | `primaryKey col draft` — mark the string-named `col` the primary key. |
+| `compositePrimaryKey` | `compositePrimaryKey cols draft` — make the string-named `cols`, in order, |
 | `serial` | `serial col draft` — mark the string-named `col` DB-assigned (serial), so |
 | `unique` | `unique col draft` — mark the string-named `col` unique. |
 | `defaultNow` | `defaultNow col draft` — mark the string-named `col` DB-stamped with the |

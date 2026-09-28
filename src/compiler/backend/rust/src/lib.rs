@@ -1267,6 +1267,12 @@ pub(crate) struct EmitCtx<'a> {
     /// `Ui.cells` with IPE-L0153 (a terminal cell grid has no string
     /// denotation in a line-oriented Cli view).
     pub(crate) uses_console: bool,
+    /// The app surface the program's entry `main` pins, read from its return type.
+    ///
+    /// Unlike the `uses_*` usage flags (set by ANY module that names an app
+    /// entry), this is the one surface whose loop actually runs, so a shape-owned
+    /// kernel is checked against it.
+    pub(crate) entry_surface: ipe_ir::AppSurface,
     /// `true` when the program uses at least one `Ipe.WebView` app-entry kernel.
     /// When set, the emitted project gains the `"webview"` Cargo feature
     /// (which transitively pulls `"live"`) and the main entry is switched to
@@ -2110,6 +2116,7 @@ impl<'a> EmitCtx<'a> {
         // (`RUNTIME_MOD_RS_WEBVIEW_CORE_APPEND`) and the `web-core`/`webview` Cargo
         // features; a program that reaches BOTH keeps the full `web` module.
         let uses_webview = webview_host || program.modules.iter().any(|m| m.uses_webview);
+        let entry_surface = entry_app_surface(program, uses_webview);
         let (uses_ui, uses_web, uses_tui, uses_console) = (
             program.modules.iter().any(|m| m.uses_ui),
             program.modules.iter().any(|m| m.uses_web),
@@ -2265,6 +2272,7 @@ impl<'a> EmitCtx<'a> {
             uses_web,
             uses_tui,
             uses_console,
+            entry_surface,
             uses_webview,
             webview_window,
             uses_css,
@@ -4477,6 +4485,26 @@ fn collect_generics(ty: &IrType, out: &mut Vec<Symbol>) {
         }
         // `Ui { ctor, msg }` may carry generic parameters through `msg`.
         IrType::Ui { msg, .. } => collect_generics(msg, out),
+    }
+}
+
+/// The app surface the program's entry `main` pins, from its lowered return type.
+///
+/// A `WebApp` leaf under a webview host is the `WebView` surface; an entry that
+/// returns no app leaf (or a program with no entry) is a `Script`.
+fn entry_app_surface(program: &Program, webview: bool) -> ipe_ir::AppSurface {
+    use ipe_ir::AppSurface;
+    let entry_ret = program.modules.iter().find_map(|m| {
+        let entry = m.entry?;
+        m.funcs.iter().find(|f| f.id == entry).map(|f| &f.ret)
+    });
+    match entry_ret {
+        Some(IrType::WebApp) if webview => AppSurface::WebView,
+        Some(IrType::WebApp) => AppSurface::Web,
+        Some(IrType::TuiApp) => AppSurface::Tui,
+        Some(IrType::CliApp) => AppSurface::Cli,
+        Some(IrType::WorkerApp) => AppSurface::Worker,
+        _ => AppSurface::Script,
     }
 }
 

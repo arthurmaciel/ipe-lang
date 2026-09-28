@@ -58,6 +58,29 @@ impl IpeStringify for IpeDbStoreColumnSpec {
     }
 }
 #[derive(Clone, Debug, PartialEq)]
+pub(crate) enum IpeDbStorePrimaryKeyDecl {
+    NoPk,
+    SinglePk(String),
+    CompositePk(String, String, Vec<String>),
+}
+impl IpeStringify for IpeDbStorePrimaryKeyDecl {
+    fn ipe_show(&self) -> String {
+        match self {
+            IpeDbStorePrimaryKeyDecl::NoPk => "NoPk".to_string(),
+            IpeDbStorePrimaryKeyDecl::SinglePk(p0) => format!(
+                "SinglePk {}",
+                (&ipe_runtime::stringify::Wrap(p0)).dispatch()
+            ),
+            IpeDbStorePrimaryKeyDecl::CompositePk(p0, p1, p2) => format!(
+                "CompositePk {} {} {}",
+                (&ipe_runtime::stringify::Wrap(p0)).dispatch(),
+                (&ipe_runtime::stringify::Wrap(p1)).dispatch(),
+                (&ipe_runtime::stringify::Wrap(p2)).dispatch()
+            ),
+        }
+    }
+}
+#[derive(Clone, Debug, PartialEq)]
 pub(crate) enum IpeDbStoreIndexSpec {
     Index(Vec<String>),
     IndexNamed(String, Vec<String>),
@@ -424,7 +447,7 @@ pub(crate) fn user_ipe_db_store_build_store<T1: Clone>(
                         frozenTable: table.clone(),
                         indexes: Vec::<IpeDbStoreIndexSpec>::new(),
                         ops: Vec::<IpeDbStoreSchemaOp>::new(),
-                        pk: IpeMaybe::Nothing,
+                        pk: IpeResult::Ok(IpeDbStorePrimaryKeyDecl::NoPk),
                         specs: Vec::<IpeDbStoreColumnSpec>::new(),
                         table: table,
                     },
@@ -490,6 +513,15 @@ pub(crate) fn user_ipe_db_store_public<T1: Clone>(
                 },
             )
         }
+    }
+}
+pub(crate) fn user_ipe_db_store_key_decl_fault(
+    pk: IpeResult<ipe_runtime::error::IpeError, IpeDbStorePrimaryKeyDecl>,
+) -> IpeMaybe<ipe_runtime::error::IpeError> {
+    let _ipe_recursion_guard = crate::recursion_guard();
+    match pk {
+        IpeResult::Err(e) => IpeMaybe::Just(e),
+        IpeResult::Ok(_) => IpeMaybe::Nothing,
     }
 }
 pub(crate) fn user_ipe_db_store_declared_column(
@@ -1612,6 +1644,18 @@ pub(crate) fn user_ipe_db_store_secured<T1: Clone>(
 ) -> IpeResult<ipe_runtime::error::IpeError, IpeDbStoreSecured<T1>> {
     let _ipe_recursion_guard = crate::recursion_guard();
     match draft.clone() {
+        IpeDbStoreDraft::Draft(r) => match crate::user_ipe_db_store_key_decl_fault((r).pk.clone()) {
+            IpeMaybe::Just(e) => IpeResult::Err(e),
+            IpeMaybe::Nothing => crate::user_ipe_db_store_secured_legal_key(policy, draft),
+        },
+    }
+}
+pub(crate) fn user_ipe_db_store_secured_legal_key<T1: Clone>(
+    policy: IpeDbStorePolicy,
+    draft: IpeDbStoreDraft<T1>,
+) -> IpeResult<ipe_runtime::error::IpeError, IpeDbStoreSecured<T1>> {
+    let _ipe_recursion_guard = crate::recursion_guard();
+    match draft.clone() {
         IpeDbStoreDraft::Draft(r) => match crate::user_ipe_db_store_first_unknown_policy_column(IpeDbStoreColumnView::ColumnView((r.clone()).frozenColumns.clone(), (r.clone()).currentColumns.clone()), crate::user_ipe_db_store_policy_columns(policy.clone()))
         {
             IpeMaybe::Just(bad) => {
@@ -1851,8 +1895,12 @@ pub(crate) fn user_ipe_db_store_masked_read<T1: 'static + Send + Sync + Clone>(
 ) -> IpeTask<Vec<T1>> {
     let _ipe_recursion_guard = crate::recursion_guard();
     match store.clone() {
-        IpeDbStoreStore::Store(r) => match (r.clone()).codec.clone() {
-            IpeCodecCodec::Codec(codecR) => db_find_where_masked(conn.clone(), (r.clone()).table.clone(), list_map2({ let __ipe_fn: Box<dyn Fn(IpeDbStoreColumn, IpeDbStoreColumn) -> ipe_runtime::db::SqlFragment + Send + Sync + 'static> = Box::new(move |declared: IpeDbStoreColumn, current: IpeDbStoreColumn| -> ipe_runtime::db::SqlFragment { crate::user_ipe_db_store_projection_term(principal.clone(), store.clone(), policy.clone(), crate::user_ipe_db_store_column_name(declared), crate::user_ipe_db_store_column_name(current)) }); __ipe_fn }, (r.clone()).frozenColumns.clone(), (r).currentColumns.clone()), whereFrag, ((codecR).mkDec.clone())(Rec_ {  })),
+        IpeDbStoreStore::Store(r) => match crate::user_ipe_db_store_key_decl_fault((r.clone()).pk.clone())
+        {
+            IpeMaybe::Just(e) => task_fail(e),
+            IpeMaybe::Nothing => match (r.clone()).codec.clone() {
+                IpeCodecCodec::Codec(codecR) => db_find_where_masked(conn.clone(), (r.clone()).table.clone(), list_map2({ let __ipe_fn: Box<dyn Fn(IpeDbStoreColumn, IpeDbStoreColumn) -> ipe_runtime::db::SqlFragment + Send + Sync + 'static> = Box::new(move |declared: IpeDbStoreColumn, current: IpeDbStoreColumn| -> ipe_runtime::db::SqlFragment { crate::user_ipe_db_store_projection_term(principal.clone(), store.clone(), policy.clone(), crate::user_ipe_db_store_column_name(declared), crate::user_ipe_db_store_column_name(current)) }); __ipe_fn }, (r.clone()).frozenColumns.clone(), (r).currentColumns.clone()), whereFrag, ((codecR).mkDec.clone())(Rec_ {  })),
+            },
         },
     }
 }
