@@ -16,12 +16,13 @@ const ACCESSOR_FILES: &[&str] = &[
     "src/runtime/rust/src/system.rs",
 ];
 
-/// Whitespace-free spellings of a raw home read.
+/// Whitespace-free prefixes of a raw home read. Each ends at the key's closing
+/// quote, not the call's `)`, so a trailing-comma argument list still matches.
 const RAW_HOME_READS: &[&str] = &[
-    "var(\"HOME\")",
-    "var_os(\"HOME\")",
-    "var(\"USERPROFILE\")",
-    "var_os(\"USERPROFILE\")",
+    "var(\"HOME\"",
+    "var_os(\"HOME\"",
+    "var(\"USERPROFILE\"",
+    "var_os(\"USERPROFILE\"",
     "env::home_dir",
     "dirs::home_dir",
 ];

@@ -453,31 +453,13 @@ pub fn build_with_sibling_discovery_into(
 /// `src/Lib/Foo.ipe` resolves. See [`collect_test_sources`] for the source-set
 /// model.
 ///
+/// Returns the claimed crate directory.
+///
 /// # Errors
 /// [`CliError::Pipeline`] when the compiler rejects the program; [`CliError::Io`]
 /// on any filesystem failure; [`CliError::StaticRefusal`] when the emitted app
-/// shape cannot be static.
-pub fn build_test_with_project_sources(
-    project_src_root: &Path,
-    test_entry: &Path,
-    out_dir: &Path,
-    runtime_dir: &Path,
-) -> Result<(), CliError> {
-    build_test_into(
-        project_src_root,
-        test_entry,
-        OutTarget::Path(out_dir),
-        runtime_dir,
-    )
-    .map(drop)
-}
-
-/// [`build_test_with_project_sources`] into `out`, returning the claimed crate
-/// directory.
-///
-/// # Errors
-/// As [`build_test_with_project_sources`], plus [`CliError::OutputRefused`]
-/// when `out` overlaps the test entry's directory or `project_src_root`.
+/// shape cannot be static; [`CliError::OutputRefused`] when `out` overlaps the
+/// test entry's directory or `project_src_root`.
 pub fn build_test_into(
     project_src_root: &Path,
     test_entry: &Path,

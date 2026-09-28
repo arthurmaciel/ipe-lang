@@ -155,6 +155,7 @@ fn materialise_refuses_planted_symlinks() {
 }
 
 /// Claim `dist` as an output root proven disjoint from the project at `project`.
+#[allow(clippy::expect_used)] // test helper: a refused claim IS the failure
 fn claim_dist(dist: &std::path::Path, project: &std::path::Path) -> ipe::output_dir::OwnedDir {
     std::fs::create_dir_all(project).expect("project dir");
     let root =

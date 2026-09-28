@@ -641,9 +641,6 @@ fn make_scratch_dir(krate: &str) -> Result<PathBuf, CliError> {
         .map_err(|e| CliError::Usage(text::msg::ffi_add_scratch_dir(&e)))
 }
 
-/// The toolchain's jail binds: `(toolchain_ro_binds, path_prepend, rustup_home)`.
-type ToolchainBinds = (Vec<PathBuf>, Vec<PathBuf>, Option<PathBuf>);
-
 /// Read-only jail binds for the toolchain, deliberately NARROW.
 ///
 /// Never the cargo home itself (which carries `credentials.toml`, the

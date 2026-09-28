@@ -819,12 +819,14 @@ pub fn run_build_body(rest: &[String]) -> Result<BuildSuccess, CliError> {
         CompileTarget::Native => Some(compile_and_finalize_native_build(
             &output,
             &crate_dir,
-            native_cargo,
-            static_plan,
-            runtime_dep,
+            NativeBuild {
+                cargo: native_cargo,
+                static_plan,
+                runtime_dep,
+                quiet: args.quiet,
+            },
             manifest.as_deref(),
             &consented,
-            args.quiet,
         )?),
     };
 
@@ -869,6 +871,18 @@ fn emit_into(
     }
 }
 
+/// How [`compile_and_finalize_native_build`] runs `cargo build`.
+pub struct NativeBuild {
+    /// The resolved `cargo`; `None` re-resolves it.
+    pub cargo: Option<toolchain::CargoBin>,
+    /// The static-link target, when the build is static.
+    pub static_plan: Option<ipe_backend_rust::static_build::StaticPlan>,
+    /// Whether the emitted crate depends on the runtime.
+    pub runtime_dep: bool,
+    /// Pass `-q` to cargo instead of its terminal UI.
+    pub quiet: bool,
+}
+
 /// Compile the just-emitted native crate and write its runtime-enforcement
 /// artifacts. Split out of [`run_build`] so each stays a readable unit.
 ///
@@ -897,13 +911,16 @@ fn emit_into(
 pub fn compile_and_finalize_native_build(
     output: &OutputRoot,
     crate_dir: &OwnedDir,
-    native_cargo: Option<toolchain::CargoBin>,
-    static_plan: Option<ipe_backend_rust::static_build::StaticPlan>,
-    runtime_dep: bool,
+    build: NativeBuild,
     manifest: Option<&Path>,
     consented: &ConsentedCapabilities,
-    quiet: bool,
 ) -> Result<PathBuf, CliError> {
+    let NativeBuild {
+        cargo: native_cargo,
+        static_plan,
+        runtime_dep,
+        quiet,
+    } = build;
     // `native_cargo` is `Some` on every native path (the caller's wasm branch
     // returns before here); the fallback re-resolves rather than unwrapping so
     // the toolchain error stays typed even if that invariant ever changes.
@@ -3915,7 +3932,8 @@ mod capability_resolution_once_tests {
     }
 }
 
-#[cfg(all(test, unix))]
+#[cfg(test)]
+#[cfg(unix)]
 mod held_crate_tests {
     //! A tool that writes into a claimed crate by path is proven, once it exits,
     //! to have written into that same crate: a crate directory swapped while
@@ -3955,7 +3973,7 @@ mod held_crate_tests {
     }
 
     /// Whether `result` is the replaced-crate refusal.
-    fn replaced<T>(result: &Result<T, CliError>) -> bool {
+    const fn replaced<T>(result: &Result<T, CliError>) -> bool {
         matches!(
             result,
             Err(CliError::OutputRefused(OutputRefusal::Replaced(_)))

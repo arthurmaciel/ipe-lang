@@ -31,7 +31,7 @@ impl ProvenOutPath {
 
     /// The proven absolute path, owned.
     #[must_use]
-    pub const fn into_path_buf(self) -> PathBuf {
+    pub fn into_path_buf(self) -> PathBuf {
         self.0
     }
 
@@ -44,7 +44,7 @@ impl ProvenOutPath {
     pub fn parent(&self) -> Option<Self> {
         self.0
             .file_name()
-            .and(self.0.parent())
+            .and_then(|_| self.0.parent())
             .map(|parent| Self(parent.to_path_buf()))
     }
 }

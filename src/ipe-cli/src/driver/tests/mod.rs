@@ -1006,7 +1006,12 @@ fn test_stage_build_resolves_src_modules_from_tests_dir() {
     .expect("write tests/Main.ipe");
 
     let out = tmp.join("out");
-    let result = build_test_with_project_sources(&src, &tests.join("Main.ipe"), &out, &runtime);
+    let result = build_test_into(
+        &src,
+        &tests.join("Main.ipe"),
+        OutTarget::Path(&out),
+        &runtime,
+    );
     assert!(
         result.is_ok(),
         "the test stage must resolve src/ modules from tests/ (no IPE-N0020): {:?}",
