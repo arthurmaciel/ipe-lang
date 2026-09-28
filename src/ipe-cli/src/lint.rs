@@ -18,14 +18,10 @@ use std::collections::BTreeMap;
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
-use ipe_lint::{LintConfig, SourceModule};
+use ipe_lint::{LINT_CONFIG_FILE as LINT_IPE, LintConfig, SourceModule};
 
 use crate::screen::{self, Screen, Stream, Tone};
 use crate::{CliError, cli_args, text, watch};
-
-/// The `lint.ipe` file name, resolved next to a project's `package.ipe` (or in
-/// the current directory for a single-file lint).
-const LINT_IPE: &str = "lint.ipe";
 
 /// Parsed `ipe lint` arguments.
 pub(crate) struct LintArgs {
@@ -131,7 +127,7 @@ fn load_config(blame_path: &Path) -> Result<LintConfig, CliError> {
         return Ok(LintConfig::default());
     }
     let text =
-        crate::io_bounded::read_to_string_capped(&lint_ipe, crate::io_bounded::MANIFEST_READ_CAP)?;
+        crate::io_bounded::read_to_string_capped(&lint_ipe, ipe_lint::LINT_CONFIG_MAX_BYTES)?;
     ipe_lint::read_lint_config(&text, &lint_ipe.display().to_string())
         .map_err(|e| CliError::Usage(crate::text::Message::relay(&e)))
 }

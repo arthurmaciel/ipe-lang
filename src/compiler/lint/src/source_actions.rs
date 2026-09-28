@@ -124,6 +124,43 @@ pub fn organize_imports(module: &SourceModule, config: &LintConfig) -> Option<Bl
     (same_decls && same_bindings).then_some(edit)
 }
 
+/// The smallest whole-line edit turning `before` into `after`.
+///
+/// The common prefix and suffix are left untouched; the changed middle is
+/// widened to whole lines, so the range never splits a character or a `\r\n`
+/// pair. `None` when the texts are equal.
+#[must_use]
+pub fn minimal_edit(before: &str, after: &str) -> Option<BlockEdit> {
+    if before == after {
+        return None;
+    }
+    let prefix = before
+        .bytes()
+        .zip(after.bytes())
+        .take_while(|(a, b)| a == b)
+        .count();
+    let room = before.len().min(after.len()).saturating_sub(prefix);
+    let suffix = before
+        .bytes()
+        .rev()
+        .zip(after.bytes().rev())
+        .take(room)
+        .take_while(|(a, b)| a == b)
+        .count();
+    let lo = crate::rules::unused_imports::line_start(before, prefix);
+    let mut hi = before.len().saturating_sub(suffix);
+    if hi > 0 && before.as_bytes().get(hi.saturating_sub(1)) != Some(&b'\n') {
+        hi = crate::rules::unused_imports::line_end(before, hi);
+    }
+    let kept_tail = before.len().saturating_sub(hi);
+    let after_hi = after.len().checked_sub(kept_tail)?;
+    Some(BlockEdit {
+        lo,
+        hi,
+        replacement: after.get(lo..after_hi)?.to_owned(),
+    })
+}
+
 /// Apply every machine-applicable fix across `modules`, up to
 /// [`FIX_ALL_MAX_ROUNDS`] re-lint rounds, and return `target`'s final text.
 ///
@@ -706,6 +743,47 @@ mod tests {
             &LintConfig::default(),
         );
         assert!(out.is_none(), "{out:?}");
+    }
+
+    #[test]
+    fn minimal_edit_is_whole_changed_lines() {
+        let before = "a\nbb\ncc\nd\n";
+        let after = "a\nbX\ncc\nd\n";
+        let edit = minimal_edit(before, after);
+        assert!(
+            matches!(&edit, Some(e) if before.get(e.lo..e.hi) == Some("bb\n") && e.replacement == "bX\n"),
+            "{edit:?}"
+        );
+        assert_eq!(edit.and_then(|e| e.apply(before)).as_deref(), Some(after));
+    }
+
+    #[test]
+    fn minimal_edit_never_splits_crlf_or_a_char() {
+        let before = "a\r\n\u{e9}\r\nz\r\n";
+        let after = "a\r\n\u{e8}\r\nz\r\n";
+        let edit = minimal_edit(before, after);
+        assert!(
+            matches!(&edit, Some(e) if before.get(e.lo..e.hi) == Some("\u{e9}\r\n")),
+            "{edit:?}"
+        );
+        assert_eq!(edit.and_then(|e| e.apply(before)).as_deref(), Some(after));
+    }
+
+    #[test]
+    fn minimal_edit_handles_pure_insertion_and_deletion() {
+        for (before, after) in [
+            ("a\nb\n", "a\nx\nb\n"),
+            ("a\nx\nb\n", "a\nb\n"),
+            ("a", "ab"),
+        ] {
+            let edit = minimal_edit(before, after);
+            assert_eq!(
+                edit.and_then(|e| e.apply(before)).as_deref(),
+                Some(after),
+                "{before:?} -> {after:?}"
+            );
+        }
+        assert!(minimal_edit("same\n", "same\n").is_none());
     }
 
     #[test]

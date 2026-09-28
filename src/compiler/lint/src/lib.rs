@@ -28,13 +28,16 @@ use std::collections::BTreeMap;
 
 use ipe_intern::Interner;
 
-pub use config::{ConfigError, LintConfig, Suppressions, read_lint_config};
+pub use config::{
+    ConfigError, LINT_CONFIG_FILE, LINT_CONFIG_MAX_BYTES, LintConfig, Suppressions,
+    read_lint_config,
+};
 pub use finding::{Finding, Fix, Severity, SigFix};
 pub use registry::{Fixability, RULES, RuleInfo, is_known, lookup};
 pub use render::{LineRole, render_finding, render_finding_lines};
 pub use rules::unused_imports::RULE as UNUSED_IMPORTS;
 pub use source_actions::{
-    BlockEdit, FIX_ALL_MAX_ROUNDS, fix_all, fix_all_bounded, organize_imports,
+    BlockEdit, FIX_ALL_MAX_ROUNDS, fix_all, fix_all_bounded, minimal_edit, organize_imports,
 };
 
 /// One module handed to the linter: its dotted path and its source text.
