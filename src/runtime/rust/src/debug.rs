@@ -38,6 +38,18 @@ pub fn debug_log<T: IpeStringify>(label: String, value: T) -> T {
     value
 }
 
+/// `Debug.todo : String -> a`. Prints `"TODO at <file>:<line>: <note>"` to
+/// stderr then exits with a non-zero code.  Returns `!` (the never type),
+/// which coerces to any `A` at the call site — no Rust `panic!` is used.
+///
+/// `location` is a `"<file>:<line>"` string injected by the lowerer at
+/// compile time from the call-site source span; it is never computed at
+/// runtime.  `note` is the developer-supplied string argument.
+pub fn debug_todo<A>(location: String, note: String) -> A {
+    crate::system::write_stderr_line(&format!("TODO at {location}: {note}"));
+    crate::system::system_exit(1)
+}
+
 #[cfg(test)]
 mod tests {
     use super::debug_log_line;
@@ -60,16 +72,4 @@ mod tests {
             "a bidi control survived scrubbing: {line:?}"
         );
     }
-}
-
-/// `Debug.todo : String -> a`. Prints `"TODO at <file>:<line>: <note>"` to
-/// stderr then exits with a non-zero code.  Returns `!` (the never type),
-/// which coerces to any `A` at the call site — no Rust `panic!` is used.
-///
-/// `location` is a `"<file>:<line>"` string injected by the lowerer at
-/// compile time from the call-site source span; it is never computed at
-/// runtime.  `note` is the developer-supplied string argument.
-pub fn debug_todo<A>(location: String, note: String) -> A {
-    crate::system::write_stderr_line(&format!("TODO at {location}: {note}"));
-    crate::system::system_exit(1)
 }
