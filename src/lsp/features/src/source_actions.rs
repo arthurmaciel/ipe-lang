@@ -1,21 +1,26 @@
 //! `source.organizeImports` / `source.fixAll`: whole-document code actions.
 //!
-//! Both are thin adapters over `ipe_lint`'s own rewrites: this crate computes
-//! no usage or fixability analysis of its own, only turning the crate's
-//! already-typed [`ipe_lint::organize_imports`] / [`ipe_lint::fix_all`]
-//! rewrite into an LSP [`WorkspaceEdit`] spanning the whole document.
+//! Both are thin adapters over `ipe_lint`'s own proven rewrites: this crate
+//! computes no usage or fixability analysis of its own, only turning
+//! [`ipe_lint::organize_imports`]'s block edit, or the [`ipe_lint::minimal_edit`]
+//! of [`ipe_lint::fix_all`]'s result, into an LSP [`WorkspaceEdit`].
 
 use std::collections::HashMap;
 
 use ipe_diagnostics::Span;
-use ipe_lint::{LintConfig, SourceModule};
-use lsp_types::{CodeAction, CodeActionKind, CodeActionOrCommand, TextEdit, Url, WorkspaceEdit};
+use ipe_lint::{BlockEdit, LintConfig, SourceModule};
+use lsp_types::{
+    CodeAction, CodeActionKind, CodeActionOrCommand, DocumentChanges, OneOf,
+    OptionalVersionedTextDocumentIdentifier, TextDocumentEdit, TextEdit, Url, WorkspaceEdit,
+};
 
+use crate::action_kind::offered;
 use crate::offset::{PositionEncoding, span_to_range};
 
-/// The `source.*` kinds this crate can produce — parallels
-/// [`crate::refactor::advertised_kinds`]'s role for the server's capability
-/// advertisement.
+/// The `source.*` kinds this crate can produce.
+///
+/// Parallels [`crate::refactor::advertised_kinds`]'s role for the server's
+/// capability advertisement.
 #[must_use]
 pub fn advertised_kinds() -> Vec<CodeActionKind> {
     vec![
@@ -24,52 +29,73 @@ pub fn advertised_kinds() -> Vec<CodeActionKind> {
     ]
 }
 
-/// Compute the `source.organizeImports` / `source.fixAll` actions for one
-/// document, filtered to the kinds `only` allows. `only: None` returns both —
-/// the client asking for every kind, per the LSP default when a request
-/// carries no `context.only`.
+/// Whether `only` names any kind [`source_actions`] can produce.
+#[must_use]
+pub fn requested(only: Option<&[CodeActionKind]>) -> bool {
+    advertised_kinds().iter().any(|kind| offered(only, kind))
+}
+
+/// The open document a source action edits.
+#[derive(Clone, Copy, Debug)]
+pub struct Document<'a> {
+    /// The document's URI.
+    pub uri: &'a Url,
+    /// The document's current text.
+    pub text: &'a str,
+    /// The document version the edit applies to.
+    ///
+    /// Set only when the client accepts versioned `documentChanges` and the
+    /// document is open; the edit is then refused by a client whose copy moved on.
+    pub version: Option<i32>,
+}
+
+/// Compute the `source.organizeImports` / `source.fixAll` actions for one document.
 ///
-/// Each action is a single whole-document [`TextEdit`]: the entire text
-/// `ipe_lint`'s own rewrite produced, verbatim. No action is offered when the
-/// rewrite is a no-op (nothing to organize, nothing left to fix) — an edit is
-/// offered only when there is a real edit to make.
+/// A kind is computed only when `only` names it or a parent kind
+/// ([`crate::action_kind::offered`]); a request without `only` gets none. Each
+/// action is one minimal [`TextEdit`] over the lines that change, versioned
+/// when [`Document::version`] is set. No action is offered when the rewrite is
+/// refused or a no-op.
 #[must_use]
 pub fn source_actions(
     module: &[String],
-    uri: &Url,
-    text: &str,
+    doc: Document<'_>,
     config: &LintConfig,
     only: Option<&[CodeActionKind]>,
     encoding: PositionEncoding,
 ) -> Vec<CodeActionOrCommand> {
+    let mut actions = Vec::new();
+    let wants_organize = offered(only, &CodeActionKind::SOURCE_ORGANIZE_IMPORTS);
+    let wants_fix_all = offered(only, &CodeActionKind::SOURCE_FIX_ALL);
+    if !wants_organize && !wants_fix_all {
+        return actions;
+    }
     let source = SourceModule {
         module: module.to_vec(),
-        source: text.to_owned(),
+        source: doc.text.to_owned(),
     };
-    let mut actions = Vec::new();
 
-    if wants(only, CodeActionKind::SOURCE_ORGANIZE_IMPORTS.as_str()) {
-        let rewritten = ipe_lint::organize_imports(&source, config);
-        push_if_changed(
+    if wants_organize && let Some(edit) = ipe_lint::organize_imports(&source, config) {
+        push_edit(
             &mut actions,
             "Organize imports",
             CodeActionKind::SOURCE_ORGANIZE_IMPORTS,
-            uri,
-            text,
-            &rewritten,
+            doc,
+            &edit,
             encoding,
         );
     }
 
-    if wants(only, CodeActionKind::SOURCE_FIX_ALL.as_str()) {
-        let rewritten = ipe_lint::fix_all(std::slice::from_ref(&source), module, config);
-        push_if_changed(
+    if wants_fix_all
+        && let Some(edit) = ipe_lint::fix_all(std::slice::from_ref(&source), module, config)
+            .and_then(|after| ipe_lint::minimal_edit(doc.text, &after))
+    {
+        push_edit(
             &mut actions,
             "Fix all auto-fixable lint findings",
             CodeActionKind::SOURCE_FIX_ALL,
-            uri,
-            text,
-            &rewritten,
+            doc,
+            &edit,
             encoding,
         );
     }
@@ -77,55 +103,44 @@ pub fn source_actions(
     actions
 }
 
-/// Whether a client that asked for `only` (or asked for everything, when
-/// `only` is `None`) should be offered `kind`.
-fn wants(only: Option<&[CodeActionKind]>, kind: &str) -> bool {
-    match only {
-        None => true,
-        Some(kinds) => kinds.iter().any(|k| kind_matches(k.as_str(), kind)),
-    }
-}
-
-/// Whether `kind` satisfies a client's requested `requested` kind: an exact
-/// match, or `kind` nested under `requested` (`source` matches
-/// `source.fixAll`), per the LSP code-action-kind hierarchy.
-fn kind_matches(requested: &str, kind: &str) -> bool {
-    kind == requested
-        || kind
-            .strip_prefix(requested)
-            .is_some_and(|rest| rest.starts_with('.'))
-}
-
-fn push_if_changed(
+fn push_edit(
     actions: &mut Vec<CodeActionOrCommand>,
     title: &str,
     kind: CodeActionKind,
-    uri: &Url,
-    before: &str,
-    after: &str,
+    doc: Document<'_>,
+    edit: &BlockEdit,
     encoding: PositionEncoding,
 ) {
-    if before == after {
-        return;
-    }
-    let Ok(hi) = u32::try_from(before.len()) else {
+    let (Ok(lo), Ok(hi)) = (u32::try_from(edit.lo), u32::try_from(edit.hi)) else {
         return;
     };
-    let edit = TextEdit {
-        range: span_to_range(before, Span { lo: 0, hi }, encoding),
-        new_text: after.to_owned(),
+    let text_edit = TextEdit {
+        range: span_to_range(doc.text, Span { lo, hi }, encoding),
+        new_text: edit.replacement.clone(),
     };
-    let mut changes: HashMap<Url, Vec<TextEdit>> = HashMap::new();
-    changes.insert(uri.clone(), vec![edit]);
+    let workspace_edit = doc.version.map_or_else(
+        || WorkspaceEdit {
+            changes: Some(HashMap::from([(doc.uri.clone(), vec![text_edit.clone()])])),
+            document_changes: None,
+            change_annotations: None,
+        },
+        |version| WorkspaceEdit {
+            changes: None,
+            document_changes: Some(DocumentChanges::Edits(vec![TextDocumentEdit {
+                text_document: OptionalVersionedTextDocumentIdentifier {
+                    uri: doc.uri.clone(),
+                    version: Some(version),
+                },
+                edits: vec![OneOf::Left(text_edit.clone())],
+            }])),
+            change_annotations: None,
+        },
+    );
     actions.push(CodeActionOrCommand::CodeAction(CodeAction {
         title: title.to_owned(),
         kind: Some(kind),
         diagnostics: None,
-        edit: Some(WorkspaceEdit {
-            changes: Some(changes),
-            document_changes: None,
-            change_annotations: None,
-        }),
+        edit: Some(workspace_edit),
         command: None,
         is_preferred: None,
         disabled: None,
@@ -137,66 +152,122 @@ fn push_if_changed(
 mod tests {
     use super::*;
 
-    fn uri() -> Url {
-        Url::parse("file:///Main.ipe").expect("valid test uri")
+    const UNSORTED: &str = "module Main exposing (main)\n\nimport Zeta\nimport Alpha\n\nmain =\n    (Zeta.a, Alpha.b)\n";
+
+    fn actions_for(
+        text: &str,
+        version: Option<i32>,
+        only: Option<&[CodeActionKind]>,
+    ) -> Vec<CodeActionOrCommand> {
+        let Ok(uri) = Url::parse("file:///Main.ipe") else {
+            return Vec::new();
+        };
+        source_actions(
+            &["Main".to_owned()],
+            Document {
+                uri: &uri,
+                text,
+                version,
+            },
+            &LintConfig::default(),
+            only,
+            PositionEncoding::Utf16,
+        )
+    }
+
+    fn has_kind(actions: &[CodeActionOrCommand], kind: &CodeActionKind) -> bool {
+        actions.iter().any(|a| {
+            matches!(a, CodeActionOrCommand::CodeAction(action) if action.kind.as_ref() == Some(kind))
+        })
     }
 
     #[test]
-    fn organize_imports_kind_is_offered_by_default() {
-        let text = "module Main exposing (main)\n\nimport Zeta\nimport Alpha\n\nmain =\n    (Zeta.a, Alpha.b)\n";
-        let actions = source_actions(
-            &["Main".to_owned()],
-            &uri(),
-            text,
-            &LintConfig::default(),
-            None,
-            PositionEncoding::Utf16,
-        );
+    fn organize_imports_is_offered_when_requested() {
+        let only = [CodeActionKind::SOURCE_ORGANIZE_IMPORTS];
+        let actions = actions_for(UNSORTED, None, Some(&only));
         assert!(
-            actions.iter().any(|a| matches!(a,
-                CodeActionOrCommand::CodeAction(action)
-                    if action.kind == Some(CodeActionKind::SOURCE_ORGANIZE_IMPORTS)
-            )),
+            has_kind(&actions, &CodeActionKind::SOURCE_ORGANIZE_IMPORTS),
             "organizeImports offered when imports are out of order, got {actions:?}"
         );
     }
 
     #[test]
+    fn no_source_action_without_only() {
+        let actions = actions_for(UNSORTED, None, None);
+        assert!(actions.is_empty(), "{actions:?}");
+        assert!(!requested(None));
+        assert!(!requested(Some(&[CodeActionKind::QUICKFIX])));
+        assert!(requested(Some(&[CodeActionKind::SOURCE])));
+    }
+
+    #[test]
     fn only_filters_out_the_unrequested_kind() {
-        let text = "module Main exposing (main)\n\nimport Zeta\nimport Alpha\n\nmain =\n    (Zeta.a, Alpha.b)\n";
         let only = [CodeActionKind::SOURCE_FIX_ALL];
-        let actions = source_actions(
-            &["Main".to_owned()],
-            &uri(),
-            text,
-            &LintConfig::default(),
-            Some(&only),
-            PositionEncoding::Utf16,
-        );
+        let actions = actions_for(UNSORTED, None, Some(&only));
         assert!(
-            !actions.iter().any(|a| matches!(a,
-                CodeActionOrCommand::CodeAction(action)
-                    if action.kind == Some(CodeActionKind::SOURCE_ORGANIZE_IMPORTS)
-            )),
+            !has_kind(&actions, &CodeActionKind::SOURCE_ORGANIZE_IMPORTS),
             "only: [source.fixAll] must not also return organizeImports, got {actions:?}"
         );
     }
 
     #[test]
     fn no_op_rewrite_offers_no_action() {
-        // Already sorted, nothing unused — organize_imports is a no-op.
         let text = "module Main exposing (main)\n\nimport Alpha\nimport Zeta\n\nmain =\n    (Zeta.a, Alpha.b)\n";
-        let actions = source_actions(
-            &["Main".to_owned()],
-            &uri(),
-            text,
-            &LintConfig::default(),
-            Some(&[CodeActionKind::SOURCE_ORGANIZE_IMPORTS]),
-            PositionEncoding::Utf16,
-        );
+        let only = [CodeActionKind::SOURCE_ORGANIZE_IMPORTS];
+        let actions = actions_for(text, None, Some(&only));
         assert!(
             actions.is_empty(),
             "a no-op rewrite offers no edit, got {actions:?}"
+        );
+    }
+
+    #[test]
+    fn refused_rewrite_offers_no_action() {
+        let text = "module Main exposing (main)\n\nimport Zeta\n-- note\nimport Alpha\n\nmain =\n    (Zeta.a, Alpha.b)\n";
+        let only = [CodeActionKind::SOURCE];
+        let actions = actions_for(text, None, Some(&only));
+        assert!(
+            !has_kind(&actions, &CodeActionKind::SOURCE_ORGANIZE_IMPORTS),
+            "{actions:?}"
+        );
+    }
+
+    #[test]
+    fn the_edit_covers_only_the_import_lines() {
+        let only = [CodeActionKind::SOURCE_ORGANIZE_IMPORTS];
+        let actions = actions_for(UNSORTED, None, Some(&only));
+        let edits: Vec<&TextEdit> = actions
+            .iter()
+            .filter_map(|a| match a {
+                CodeActionOrCommand::CodeAction(action) => action.edit.as_ref(),
+                CodeActionOrCommand::Command(_) => None,
+            })
+            .filter_map(|e| e.changes.as_ref())
+            .flat_map(|c| c.values().flatten())
+            .collect();
+        assert!(
+            matches!(edits.as_slice(), [e] if e.range.start.line == 2
+                && e.range.start.character == 0
+                && e.range.end.line == 4
+                && e.range.end.character == 0
+                && e.new_text == "import Alpha\nimport Zeta\n"),
+            "{edits:?}"
+        );
+    }
+
+    #[test]
+    fn a_known_version_yields_versioned_document_changes() {
+        let only = [CodeActionKind::SOURCE_ORGANIZE_IMPORTS];
+        let actions = actions_for(UNSORTED, Some(7), Some(&only));
+        let versioned = |e: &WorkspaceEdit| {
+            e.changes.is_none()
+                && matches!(&e.document_changes, Some(DocumentChanges::Edits(edits))
+                    if matches!(edits.as_slice(), [edit] if edit.text_document.version == Some(7)))
+        };
+        assert!(
+            matches!(actions.as_slice(), [CodeActionOrCommand::CodeAction(action)]
+                if action.edit.as_ref().is_some_and(versioned)),
+            "{actions:?}"
         );
     }
 }

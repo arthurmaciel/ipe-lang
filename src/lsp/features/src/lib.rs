@@ -10,6 +10,7 @@
 //! touches `std::fs`, `std::env`, or the clock — file text enters through
 //! the `SourceFile` inputs the driver (the LSP server crate) sets.
 
+pub mod action_kind;
 pub mod code_actions;
 pub mod completion;
 pub mod db_access;
