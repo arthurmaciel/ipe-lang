@@ -3,11 +3,12 @@
 //! Every compiler-side read of the platform home variable (`HOME`, or
 //! `USERPROFILE` on Windows) goes through [`home_dir`]. The value is attacker-
 //! reachable environment input that decides where caches, scratch roots, and
-//! toolchain binds live, so it is parsed once here: an unset, empty, or
-//! relative value names no directory. A relative home would silently resolve
-//! against the working directory, redirecting writes to wherever the process
-//! happens to run. `ipe_env` refuses every home name, so this module's raw
-//! read is the only way a compiler-side crate reaches the value.
+//! toolchain binds live, so it is parsed once here: an unset, empty,
+//! relative, or non-UTF-8 value names no directory. A relative home would
+//! silently resolve against the working directory, redirecting writes to
+//! wherever the process happens to run. `ipe_env` refuses every home name, so
+//! this module's raw read is the only way a compiler-side crate reaches the
+//! value.
 
 use std::ffi::OsString;
 use std::path::PathBuf;
@@ -25,10 +26,22 @@ pub fn home_dir() -> Option<PathBuf> {
     home_dir_from(std::env::var_os(HOME_VAR))
 }
 
-/// Parse a raw home value: `Some` only for a non-empty absolute path.
+/// Parse a raw home value: `Some` only for a valid-UTF-8, non-empty absolute
+/// path.
+///
+/// `None` for unset, empty, relative, `.`, `~`, or non-UTF-8 — the last case
+/// converges this `OsString`-typed parser with `ipe_runtime_rust`'s
+/// `system::home_dir_from`, which is `Option<String>`-typed and so can never
+/// represent a non-UTF-8 raw value in the first place. Without this explicit
+/// check the two parsers would disagree on a non-UTF-8-but-absolute `HOME`:
+/// the runtime would see no home while the sandbox resolved one — two
+/// components trusting different homes for the same process is a sandbox-
+/// escape shape, not a cosmetic mismatch.
 #[must_use]
 pub fn home_dir_from(raw: Option<OsString>) -> Option<PathBuf> {
-    raw.map(PathBuf::from).filter(|p| p.is_absolute())
+    raw.and_then(|s| s.into_string().ok())
+        .map(PathBuf::from)
+        .filter(|p| p.is_absolute())
 }
 
 /// A tool-home variable (`CARGO_HOME`, `RUSTUP_HOME`) set to a relative path.
@@ -86,21 +99,33 @@ pub fn tool_home_from(
 mod tests {
     use super::*;
 
-    #[test]
-    fn an_absolute_home_is_accepted() {
-        #[cfg(not(windows))]
-        let abs = "/home/u";
-        #[cfg(windows)]
-        let abs = r"C:\Users\u";
-        assert_eq!(home_dir_from(Some(abs.into())), Some(PathBuf::from(abs)));
-    }
+    // Shared with `ipe_runtime_rust::system`'s `home_dir_tests`: the same
+    // `(raw, expected)` rows drive both crates' `home_dir_from`, so a row on
+    // which the two parsers disagree fails here or there rather than staying
+    // silently unpinned.
+    include!("../tests/data/home_cases.rs");
 
     #[test]
-    fn an_unset_empty_or_relative_home_names_no_directory() {
-        assert_eq!(home_dir_from(None), None);
-        for raw in ["", ".", "home/u", "./home", "../home", "~"] {
-            assert_eq!(home_dir_from(Some(raw.into())), None, "{raw:?}");
+    fn every_home_parse_case_matches_the_shared_table() {
+        for (raw, expected) in HOME_PARSE_CASES {
+            assert_eq!(
+                home_dir_from(raw.map(OsString::from)),
+                expected.map(PathBuf::from),
+                "{raw:?}"
+            );
         }
+    }
+
+    /// A non-UTF-8 raw value is refused even when byte-for-byte absolute:
+    /// pins the fix in `home_dir_from`'s doc comment above, and is the row
+    /// `ipe_runtime_rust::system`'s parser cannot even pose (its `raw` is
+    /// `Option<String>`, a type non-UTF-8 bytes can never inhabit).
+    #[cfg(unix)]
+    #[test]
+    fn a_non_utf8_home_value_is_refused() {
+        use std::os::unix::ffi::OsStrExt as _;
+        let raw = std::ffi::OsStr::from_bytes(b"/home/\xff").to_os_string();
+        assert_eq!(home_dir_from(Some(raw)), None);
     }
 
     #[cfg(not(windows))]

@@ -1470,20 +1470,33 @@ mod scrub_log_controls_tests {
 mod home_dir_tests {
     use super::home_dir_from;
 
-    #[test]
-    fn an_absolute_home_is_accepted() {
-        assert_eq!(
-            home_dir_from(Some("/home/u".to_owned())),
-            Some(std::path::PathBuf::from("/home/u"))
-        );
-    }
+    // Shared with `ipe_sandbox::home`'s `tests` module: the same
+    // `(raw, expected)` rows drive both crates' `home_dir_from`, so a row on
+    // which the two parsers disagree fails here or there rather than staying
+    // silently unpinned.
+    include!("../../../compiler/sandbox/tests/data/home_cases.rs");
 
     #[test]
-    fn an_unset_empty_or_relative_home_names_no_directory() {
-        assert_eq!(home_dir_from(None), None);
-        for raw in ["", ".", "home/u", "./home", "../home", "~"] {
-            assert_eq!(home_dir_from(Some(raw.to_owned())), None, "{raw:?}");
+    fn every_home_parse_case_matches_the_shared_table() {
+        for (raw, expected) in HOME_PARSE_CASES {
+            assert_eq!(
+                home_dir_from(raw.map(str::to_owned)),
+                expected.map(std::path::PathBuf::from),
+                "{raw:?}"
+            );
         }
+    }
+
+    /// A non-UTF-8 raw value can never reach this parser at all: `raw` is
+    /// `Option<String>`, and `String::from_utf8` — what `read_env_var`'s
+    /// underlying `std::env::var` performs internally — already rejects it.
+    /// Mirrors `ipe_sandbox::home::home_dir_from`'s explicit non-UTF-8
+    /// refusal, which that `OsString`-typed parser must check at runtime
+    /// because its input type can hold non-UTF-8 bytes.
+    #[cfg(unix)]
+    #[test]
+    fn a_non_utf8_home_value_is_unrepresentable_here() {
+        assert!(String::from_utf8(b"/home/\xff".to_vec()).is_err());
     }
 }
 
