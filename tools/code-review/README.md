@@ -63,6 +63,8 @@ IPE_INDEX_DB=../../.ipe-index/index.db IPE_INDEX_ROOT=../.. ipe run
 `ipe run` builds and serves on <http://localhost:8000>. `ipe type-check` runs a
 fast check with no runtime, and `ipe build` compiles to a native binary.
 
+The queue view loads one page of at most 200 units (`pageSize` in `src/Lib/Index.ipe`).
+
 If you run from inside a compiler checkout, `ipe` may auto-discover the
 checkout's vendored runtime snapshot instead of its own version-matched one,
 failing the build with a version skew. Point the build at the installed
