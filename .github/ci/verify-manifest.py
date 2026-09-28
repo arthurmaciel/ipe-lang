@@ -2094,10 +2094,11 @@ class ToolJob:
                     "then report success; refused"
                 )
         job_needs = _needs_of(raw)
-        if job_needs and any(t.role is ToolRole.VERDICT for t in tools):
+        if job_needs and any(not ROLE_MASKING[t.role].job for t in tools):
             refusals.append(
-                f"{jloc} runs {PROTECTED_TREE}/ with needs: {job_needs!r} — a verdict tool's "
-                "job may depend on nothing: GitHub skips a job whose need is itself skipped, "
+                f"{jloc} runs {PROTECTED_TREE}/ with needs: {job_needs!r} — a job whose tool "
+                "admits no job masking (a verdict, or an advisory that steers other jobs) "
+                "may depend on nothing: GitHub skips a job whose need is itself skipped, "
                 "directly or through that need's own needs, the instant ANY job in the chain "
                 "carries an if: (of any value), and a skipped required check reports success; "
                 "refused"
@@ -2465,7 +2466,7 @@ def check_workflow_steps(errors: list[str], root: str = REPO_ROOT) -> None:
           `TOOL_JOB_KEYS`, a `timeout-minutes` that is not a positive integer
           literal (`Timeout`), a masking key its tools' roles do not admit,
           a job `if:` on a job another job needs, a `needs:` on a job with a
-          VERDICT step (a skipped ancestor, anywhere up the `needs:` chain,
+          VERDICT or ADVISORY step (a skipped ancestor, anywhere up the `needs:` chain,
           skips it too, and a skipped required check reports success), a
           `working-directory` at step or defaults scope, or a
           `defaults.run.shell` other than bash is refused. In every job, a

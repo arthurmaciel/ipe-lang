@@ -2356,6 +2356,18 @@ class TestToolOrderingAndClosedShells(unittest.TestCase):
         )
         self.assertRefused("job 't'", "with needs", "['s']")
 
+    def test_advisory_job_needing_a_skipped_job_is_refused(self) -> None:
+        self.fx.workflow(
+            "t.yml",
+            "name: t\non: push\njobs:\n"
+            "  s:\n    runs-on: ubuntu-latest\n    if: false\n    steps:\n"
+            "      - name: Echo\n        run: echo hi\n"
+            "  t:\n    runs-on: ubuntu-latest\n    needs: [s]\n    steps:\n"
+            f"      - uses: {_CHECKOUT}\n"
+            "      - name: Classify\n        run: python3 .github/ci/release_only.py\n",
+        )
+        self.assertRefused("job 't'", "with needs", "['s']")
+
     # A VERDICT job admits no `needs:` at all (see `ToolJob`'s docstring),
     # so there is no positive control here: any non-empty `needs:` on such a
     # job is refused regardless of whether its ancestor chain carries an
