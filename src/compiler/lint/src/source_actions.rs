@@ -1,159 +1,330 @@
 //! Whole-file source actions: `organize_imports` and `fix_all`.
 //!
-//! Both compose the SSOT the rest of the crate already produces — the
-//! `unused-imports` [`crate::Finding`] and the registered [`crate::Fix`]
-//! values from [`crate::apply_fixes`] — and never re-derive usage or
-//! fixability themselves. `organize_imports` reads the shape of surviving
-//! `import` declarations straight off the parsed AST and renders it back
-//! out sorted and merged; `fix_all` is a bounded repeat of the crate's own
-//! single-round fix application, re-linting between rounds.
+//! Both compose what the rest of the crate already produces — the
+//! `unused-imports` [`crate::Finding`] and the registered [`crate::Fix`] values
+//! from [`crate::apply_fixes`] — and never re-derive usage or fixability
+//! themselves. Every edit is proven before it is offered: the output is
+//! re-parsed and checked against the input, and any doubt (a parse failure, an
+//! unresolvable name, trivia inside the import block, a missing module) yields
+//! no edit at all.
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet};
 
-use ipe_diagnostics::Span;
 use ipe_intern::{Interner, Symbol};
-use ipe_syntax::{Exposed, Exposing, Import, Privacy as AstPrivacy};
+use ipe_syntax::{Exposed, Exposing, Import, Module, Privacy as AstPrivacy};
 
-use crate::rules::unused_imports::{import_clause_end, line_end, line_start};
+use crate::rules::unused_imports::{RULE as UNUSED_IMPORTS, import_qualifier_texts, removal_range};
 use crate::{LintConfig, SourceModule, apply_fixes, run};
 
-/// The round ceiling for [`fix_all`]: a fix can only unlock a further fix on
-/// the *next* re-lint (e.g. `prefer-pipeline` flattens one nesting level per
-/// round), so full convergence on deeply-shaped input can take several
-/// rounds. This is the soundness floor against input shaped to defeat
-/// convergence (arbitrarily deep nesting), not a tuning knob.
+/// The round ceiling for [`fix_all`].
+///
+/// A fix can only unlock a further fix on the *next* re-lint (e.g.
+/// `prefer-pipeline` flattens one nesting level per round), so full
+/// convergence on deeply-shaped input can take several rounds. This is the
+/// soundness floor against input shaped to defeat convergence (arbitrarily
+/// deep nesting), not a tuning knob.
 pub const FIX_ALL_MAX_ROUNDS: usize = 8;
+
+/// A minimal edit to one module: replace bytes `lo..hi` with `replacement`.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct BlockEdit {
+    /// Start byte of the replaced range.
+    pub lo: usize,
+    /// End byte (exclusive) of the replaced range.
+    pub hi: usize,
+    /// The text that supplants `lo..hi`.
+    pub replacement: String,
+}
+
+impl BlockEdit {
+    /// The module text with this edit applied, or `None` when the range does
+    /// not lie on char boundaries of `source`.
+    #[must_use]
+    pub fn apply(&self, source: &str) -> Option<String> {
+        let head = source.get(..self.lo)?;
+        let tail = source.get(self.hi..)?;
+        Some(format!("{head}{}{tail}", self.replacement))
+    }
+}
 
 /// Sort, merge, and prune the `import` block of one module.
 ///
 /// An import flagged `unused-imports` — matched back to its AST node by the
-/// finding's own identity key, the `import_kw` span — is dropped wholesale;
-/// this is the only usage signal consulted, and it is never recomputed here.
-/// Surviving imports of the same dotted module path and `as` alias are
-/// merged into one declaration, their `exposing` lists unioned (privacy
-/// only ever widens: `Public` beats `PublicCtors` beats `Private`, so a
-/// merge never narrows what a duplicate had already exposed) and sorted by
-/// name; the merged declarations are sorted by module path, then alias.
-/// A name exposed only by a wholly-unused duplicate vanishes with it — this
-/// is how an unused *exposed name* is pruned, without any per-name usage
-/// analysis of its own. An empty merged `exposing` list is rendered as a
-/// bare `import Foo` (never `exposing ()` — the parser's own reading of an
-/// absent clause), which keeps a second run a no-op.
+/// finding's identity key, the `import_kw` span — is dropped wholesale; this
+/// is the only usage signal consulted. Surviving imports of the same dotted
+/// module path and `as` alias are merged into one declaration, their
+/// `exposing` lists unioned (privacy only ever widens: `Public` beats
+/// `PublicCtors` beats `Private`) and sorted by name; the merged declarations
+/// are sorted by module path, then alias. An empty merged `exposing` list is
+/// rendered as a bare `import Foo`, which keeps a second run a no-op.
 ///
-/// When the import block holds anything besides import lines and blank
-/// lines (most commonly a comment) the rewrite is refused and the source is
-/// returned unchanged: absent proof the region is safe to replace
-/// wholesale, no edit is offered.
+/// The edit covers exactly the import block, located from the parser-recorded
+/// declaration spans. It is refused (`None`) when the module does not parse,
+/// when any declaration shares a line with other code or holds a comment,
+/// when anything but whitespace lies between declarations, when a name does
+/// not resolve, or when the rewritten module fails to re-parse to the same
+/// declarations and the same bound import names. `None` also means there is
+/// nothing to change. Line endings follow the block's own (`\r\n` or `\n`).
 #[must_use]
-pub fn organize_imports(module: &SourceModule, config: &LintConfig) -> String {
+pub fn organize_imports(module: &SourceModule, config: &LintConfig) -> Option<BlockEdit> {
+    let source = module.source.as_str();
     let mut interner = Interner::new();
-    let Ok(ast) = ipe_parse::parse_module(&module.source, &mut interner) else {
-        return module.source.clone();
-    };
-    let Some(first) = ast.imports.first() else {
-        return module.source.clone();
-    };
-    let Some(last) = ast.imports.last() else {
-        return module.source.clone();
-    };
+    let ast = ipe_parse::parse_module(source, &mut interner).ok()?;
+
+    let mut extents = ast
+        .imports
+        .iter()
+        .map(|imp| removal_range(source, imp))
+        .collect::<Option<Vec<_>>>()?;
+    extents.sort_unstable();
+    let (lo, _) = *extents.first()?;
+    let mut hi = lo;
+    for (start, end) in &extents {
+        let gap = source.get(hi..*start)?;
+        if *start < hi || !gap.chars().all(char::is_whitespace) {
+            return None;
+        }
+        hi = *end;
+    }
+    let original = source.get(lo..hi)?;
 
     let report = run(std::slice::from_ref(module), config);
-    let unused: HashSet<Span> = report
-        .findings
-        .iter()
-        .filter(|f| f.rule == "unused-imports" && f.module == module.module)
-        .map(|f| f.span)
-        .collect();
-    let kept: Vec<&Import> = ast
-        .imports
-        .iter()
-        .filter(|imp| !unused.contains(&imp.import_kw))
-        .collect();
-
-    let block_lo = line_start(&module.source, first.import_kw.lo as usize);
-    let block_hi = line_end(&module.source, import_clause_end(&module.source, last));
-
-    let mut owned: Vec<(usize, usize)> = ast
-        .imports
-        .iter()
-        .map(|imp| {
-            (
-                line_start(&module.source, imp.import_kw.lo as usize),
-                line_end(&module.source, import_clause_end(&module.source, imp)),
-            )
+    let is_unused = |imp: &Import| {
+        report.findings.iter().any(|f| {
+            f.rule == UNUSED_IMPORTS && f.module == module.module && f.span.lo == imp.import_kw.lo
         })
-        .collect();
-    owned.sort_unstable();
+    };
+    let kept: Vec<&Import> = ast.imports.iter().filter(|imp| !is_unused(imp)).collect();
 
-    // Refuse unless the block is exactly import declarations plus blank
-    // lines: every gap between (and around) them must be whitespace-only.
-    let mut cursor = block_lo;
-    for (lo, hi) in &owned {
-        let gap = module.source.get(cursor..*lo).unwrap_or("");
-        if *lo < cursor || !gap.chars().all(char::is_whitespace) {
-            return module.source.clone();
-        }
-        cursor = *hi;
+    let newline = if original.contains("\r\n") {
+        "\r\n"
+    } else {
+        "\n"
+    };
+    let mut replacement = render_import_block(&kept, &interner, newline)?;
+    if !original.ends_with('\n') {
+        let trimmed = replacement.trim_end_matches(['\r', '\n']).len();
+        replacement.truncate(trimmed);
     }
-    if cursor != block_hi {
-        return module.source.clone();
+    if replacement == original {
+        return None;
     }
 
-    let rendered = render_import_block(&kept, &interner);
-    let mut out = String::new();
-    out.push_str(module.source.get(..block_lo).unwrap_or(""));
-    out.push_str(&rendered);
-    out.push_str(module.source.get(block_hi..).unwrap_or(""));
-    out
+    let edit = BlockEdit {
+        lo,
+        hi,
+        replacement,
+    };
+    let output = edit.apply(source)?;
+    let mut out_interner = Interner::new();
+    let out_ast = ipe_parse::parse_module(&output, &mut out_interner).ok()?;
+    let same_decls = decl_names(&ast, &interner)? == decl_names(&out_ast, &out_interner)?;
+    let out_imports: Vec<&Import> = out_ast.imports.iter().collect();
+    let same_bindings = bindings(&kept, &interner)? == bindings(&out_imports, &out_interner)?;
+    (same_decls && same_bindings).then_some(edit)
 }
 
 /// Apply every machine-applicable fix across `modules`, up to
 /// [`FIX_ALL_MAX_ROUNDS`] re-lint rounds, and return `target`'s final text.
+///
+/// `None` when `target` is not among `modules` or nothing changed.
 #[must_use]
-pub fn fix_all(modules: &[SourceModule], target: &[String], config: &LintConfig) -> String {
+pub fn fix_all(modules: &[SourceModule], target: &[String], config: &LintConfig) -> Option<String> {
     fix_all_bounded(modules, target, config, FIX_ALL_MAX_ROUNDS)
 }
 
-/// [`fix_all`] with an explicit round ceiling. Production always pins
-/// [`FIX_ALL_MAX_ROUNDS`] via [`fix_all`]; a caller proving the bound itself
-/// (a test) passes a small one directly, so the refusal is driven by the
-/// same code path rather than a hand-verified convergence depth.
+/// [`fix_all`] with an explicit round ceiling.
 ///
-/// Each round is [`crate::apply_fixes`] itself — non-overlapping fixes from
-/// a fresh lint pass — so an unfixable finding is, by construction, never
-/// touched: it carries no [`crate::Fix`] for any round to apply.
+/// Production always pins [`FIX_ALL_MAX_ROUNDS`] via [`fix_all`]; a test
+/// proving the bound passes a small one, so the refusal runs through the same
+/// code path.
+///
+/// Each round is [`crate::apply_fixes`] itself, so an unfixable finding is
+/// never touched. A round is kept only when every module it rewrote still
+/// parses, no rule reports more findings than before, and the resulting text
+/// is one no earlier round produced; otherwise the loop stops at the last good
+/// text. `None` when `target` is not among `modules` or nothing changed.
 #[must_use]
 pub fn fix_all_bounded(
     modules: &[SourceModule],
     target: &[String],
     config: &LintConfig,
     max_rounds: usize,
-) -> String {
+) -> Option<String> {
+    let original = modules.iter().find(|m| m.module == target)?;
     let mut current: Vec<SourceModule> = modules.to_vec();
+    let mut counts = rule_counts(&current, config);
+    let mut seen: BTreeSet<Vec<String>> = BTreeSet::new();
+    seen.insert(current.iter().map(|m| m.source.clone()).collect());
     for _ in 0..max_rounds {
         let outcome = apply_fixes(&current, config);
         if outcome.applied == 0 {
             break;
         }
-        for m in &mut current {
+        let mut next = current.clone();
+        for m in &mut next {
             if let Some(text) = outcome.rewritten.get(&m.module) {
                 m.source.clone_from(text);
             }
         }
+        let all_parse = next
+            .iter()
+            .filter(|m| outcome.rewritten.contains_key(&m.module))
+            .all(|m| ipe_parse::parse_module(&m.source, &mut Interner::new()).is_ok());
+        if !all_parse {
+            break;
+        }
+        let next_counts = rule_counts(&next, config);
+        let regressed = next_counts
+            .iter()
+            .any(|(rule, n)| counts.get(rule).is_none_or(|before| n > before));
+        if regressed || !seen.insert(next.iter().map(|m| m.source.clone()).collect()) {
+            break;
+        }
+        current = next;
+        counts = next_counts;
     }
     current
-        .iter()
+        .into_iter()
         .find(|m| m.module == target)
-        .map_or_else(String::new, |m| m.source.clone())
+        .map(|m| m.source)
+        .filter(|text| *text != original.source)
 }
 
-/// A ctor-name set, or a value/opaque-type marker — the crate-owned
-/// [`AstPrivacy`] widened rather than copied, so a merge only ever grows it.
+/// Findings per rule across `modules`.
+fn rule_counts(modules: &[SourceModule], config: &LintConfig) -> BTreeMap<&'static str, usize> {
+    let mut counts = BTreeMap::new();
+    for finding in run(modules, config).findings {
+        *counts.entry(finding.rule).or_insert(0usize) += 1;
+    }
+    counts
+}
+
+/// The names of every non-import declaration, per kind, in source order.
+type DeclNames = [Vec<String>; 4];
+
+/// [`DeclNames`] of `ast`, or `None` when a name does not resolve.
+fn decl_names(ast: &Module, interner: &Interner) -> Option<DeclNames> {
+    let names = |syms: Vec<Symbol>| -> Option<Vec<String>> {
+        syms.into_iter().map(|s| resolve(interner, s)).collect()
+    };
+    Some([
+        names(ast.values.iter().map(|v| v.value.name.value).collect())?,
+        names(ast.unions.iter().map(|u| u.value.name.value).collect())?,
+        names(ast.aliases.iter().map(|a| a.value.name.value).collect())?,
+        names(ast.foreigns.iter().map(|f| f.value.name.value).collect())?,
+    ])
+}
+
+/// A (dotted module path, `as` alias) import key.
+type ImportKey = (String, Option<String>);
+
+/// One name an import set binds.
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Debug)]
+enum Binding {
+    /// A module qualifier spelling.
+    Qualifier(String),
+    /// `exposing (..)`: every export of the module.
+    Wildcard(ImportKey),
+    /// An exposed value.
+    Value(ImportKey, String),
+    /// An exposed type name.
+    Type(ImportKey, String),
+    /// `Type(..)`: every constructor of the type.
+    AllCtors(ImportKey, String),
+    /// One listed constructor.
+    Ctor(ImportKey, String, String),
+}
+
+/// The normalized binding set of `imports`.
+///
+/// A wildcard absorbs every other exposed entry of its key and `Type(..)`
+/// absorbs its listed constructors, so two import sets binding the same names
+/// compare equal however they are spelled. `None` when a name does not
+/// resolve.
+fn bindings(imports: &[&Import], interner: &Interner) -> Option<BTreeSet<Binding>> {
+    let mut set = BTreeSet::new();
+    for imp in imports {
+        for text in import_qualifier_texts(interner, imp)? {
+            set.insert(Binding::Qualifier(text));
+        }
+        let key = import_key(imp, interner)?;
+        let Exposing::List(items) = &imp.exposing.value else {
+            set.insert(Binding::Wildcard(key));
+            continue;
+        };
+        for item in items {
+            match &item.value {
+                Exposed::Value(s) => {
+                    set.insert(Binding::Value(key.clone(), resolve(interner, *s)?));
+                }
+                Exposed::Type(s, privacy) => {
+                    let ty = resolve(interner, *s)?;
+                    match privacy {
+                        AstPrivacy::Private => {}
+                        AstPrivacy::Public => {
+                            set.insert(Binding::AllCtors(key.clone(), ty.clone()));
+                        }
+                        AstPrivacy::PublicCtors(ctors) => {
+                            for c in ctors {
+                                let ctor = resolve(interner, *c)?;
+                                set.insert(Binding::Ctor(key.clone(), ty.clone(), ctor));
+                            }
+                        }
+                    }
+                    set.insert(Binding::Type(key.clone(), ty));
+                }
+            }
+        }
+    }
+    let wildcards: BTreeSet<ImportKey> = set
+        .iter()
+        .filter_map(|b| match b {
+            Binding::Wildcard(k) => Some(k.clone()),
+            _ => None,
+        })
+        .collect();
+    let all_ctors: BTreeSet<(ImportKey, String)> = set
+        .iter()
+        .filter_map(|b| match b {
+            Binding::AllCtors(k, ty) => Some((k.clone(), ty.clone())),
+            _ => None,
+        })
+        .collect();
+    set.retain(|b| match b {
+        Binding::Qualifier(_) | Binding::Wildcard(_) => true,
+        Binding::Value(k, _) | Binding::Type(k, _) | Binding::AllCtors(k, _) => {
+            !wildcards.contains(k)
+        }
+        Binding::Ctor(k, ty, _) => {
+            !wildcards.contains(k) && !all_ctors.contains(&(k.clone(), ty.clone()))
+        }
+    });
+    Some(set)
+}
+
+/// The [`ImportKey`] of `imp`, or `None` when a name does not resolve.
+fn import_key(imp: &Import, interner: &Interner) -> Option<ImportKey> {
+    let path = imp
+        .name
+        .value
+        .iter()
+        .map(|s| resolve(interner, *s))
+        .collect::<Option<Vec<_>>>()?
+        .join(".");
+    let alias = match imp.alias {
+        Some(a) => Some(resolve(interner, a)?),
+        None => None,
+    };
+    Some((path, alias))
+}
+
+/// A ctor-name set, or a value/opaque-type marker, widened by a merge.
 #[derive(Clone, PartialEq, Eq)]
 enum MergedPrivacy {
     Public,
     PrivateOpaque,
-    Ctors(std::collections::BTreeSet<String>),
+    Ctors(BTreeSet<String>),
 }
 
 /// One merged `exposing` entry: a plain value name, or a type name with its
@@ -163,25 +334,34 @@ enum ExposedKind {
     Type(MergedPrivacy),
 }
 
-/// A merged `exposing` clause: `exposing (..)` absorbs everything, else the
-/// deduplicated, alphabetically-ordered (by the `BTreeMap` key) item set.
+/// The name-and-kind key of a merged `exposing` entry; `true` marks a type.
+type ExposedKey = (String, bool);
+
+/// A merged `exposing` clause.
+///
+/// `exposing (..)` absorbs everything; otherwise the deduplicated item set,
+/// ordered by name.
 enum MergedExposing {
     All,
-    List(BTreeMap<(String, bool), ExposedKind>),
+    List(BTreeMap<ExposedKey, ExposedKind>),
 }
 
-fn resolve(interner: &Interner, sym: Symbol) -> String {
-    interner.resolve(sym).unwrap_or_default().to_owned()
+/// The text of `sym`, or `None` when the interner does not hold it.
+fn resolve(interner: &Interner, sym: Symbol) -> Option<String> {
+    interner.resolve(sym).map(str::to_owned)
 }
 
-fn render_privacy(privacy: &AstPrivacy, interner: &Interner) -> MergedPrivacy {
-    match privacy {
+fn merged_privacy(privacy: &AstPrivacy, interner: &Interner) -> Option<MergedPrivacy> {
+    Some(match privacy {
         AstPrivacy::Public => MergedPrivacy::Public,
         AstPrivacy::Private => MergedPrivacy::PrivateOpaque,
-        AstPrivacy::PublicCtors(ctors) => {
-            MergedPrivacy::Ctors(ctors.iter().map(|s| resolve(interner, *s)).collect())
-        }
-    }
+        AstPrivacy::PublicCtors(ctors) => MergedPrivacy::Ctors(
+            ctors
+                .iter()
+                .map(|s| resolve(interner, *s))
+                .collect::<Option<_>>()?,
+        ),
+    })
 }
 
 fn widen_privacy(a: MergedPrivacy, b: MergedPrivacy) -> MergedPrivacy {
@@ -199,26 +379,27 @@ fn widen_privacy(a: MergedPrivacy, b: MergedPrivacy) -> MergedPrivacy {
     }
 }
 
-fn merge_exposing(entry: &mut MergedExposing, exposing: &Exposing, interner: &Interner) {
-    if matches!(entry, MergedExposing::All) {
-        return;
-    }
+fn merge_exposing(
+    entry: &mut MergedExposing,
+    exposing: &Exposing,
+    interner: &Interner,
+) -> Option<()> {
     let Exposing::List(items) = exposing else {
         *entry = MergedExposing::All;
-        return;
+        return Some(());
     };
     let MergedExposing::List(map) = entry else {
-        return;
+        return Some(());
     };
     for item in items {
         match &item.value {
             Exposed::Value(sym) => {
-                map.entry((resolve(interner, *sym), false))
+                map.entry((resolve(interner, *sym)?, false))
                     .or_insert(ExposedKind::Value);
             }
             Exposed::Type(sym, privacy) => {
-                let rendered = render_privacy(privacy, interner);
-                match map.entry((resolve(interner, *sym), true)) {
+                let rendered = merged_privacy(privacy, interner)?;
+                match map.entry((resolve(interner, *sym)?, true)) {
                     std::collections::btree_map::Entry::Vacant(v) => {
                         v.insert(ExposedKind::Type(rendered));
                     }
@@ -232,14 +413,14 @@ fn merge_exposing(entry: &mut MergedExposing, exposing: &Exposing, interner: &In
             }
         }
     }
+    Some(())
 }
 
-fn render_exposed(key: &(String, bool), kind: &ExposedKind) -> String {
+fn render_exposed(key: &ExposedKey, kind: &ExposedKind) -> String {
     let (name, _) = key;
     match kind {
-        ExposedKind::Value => name.clone(),
+        ExposedKind::Value | ExposedKind::Type(MergedPrivacy::PrivateOpaque) => name.clone(),
         ExposedKind::Type(MergedPrivacy::Public) => format!("{name}(..)"),
-        ExposedKind::Type(MergedPrivacy::PrivateOpaque) => name.clone(),
         ExposedKind::Type(MergedPrivacy::Ctors(ctors)) => {
             let names: Vec<&str> = ctors.iter().map(String::as_str).collect();
             format!("{name}({})", names.join(", "))
@@ -247,7 +428,7 @@ fn render_exposed(key: &(String, bool), kind: &ExposedKind) -> String {
     }
 }
 
-fn render_import_line(key: &(String, Option<String>), exposing: &MergedExposing) -> String {
+fn render_import_line(key: &ImportKey, exposing: &MergedExposing, newline: &str) -> String {
     let (path, alias) = key;
     let mut line = format!("import {path}");
     if let Some(a) = alias {
@@ -264,33 +445,26 @@ fn render_import_line(key: &(String, Option<String>), exposing: &MergedExposing)
             line.push(')');
         }
     }
-    line.push('\n');
+    line.push_str(newline);
     line
 }
 
 /// Render surviving imports as sorted, merged source text: one line per
-/// distinct (module path, alias), grouped in the `BTreeMap`'s own order.
-fn render_import_block(imports: &[&Import], interner: &Interner) -> String {
-    let mut groups: BTreeMap<(String, Option<String>), MergedExposing> = BTreeMap::new();
+/// distinct [`ImportKey`], in key order. `None` when a name does not resolve.
+fn render_import_block(imports: &[&Import], interner: &Interner, newline: &str) -> Option<String> {
+    let mut groups: BTreeMap<ImportKey, MergedExposing> = BTreeMap::new();
     for imp in imports {
-        let path = imp
-            .name
-            .value
-            .iter()
-            .map(|s| resolve(interner, *s))
-            .collect::<Vec<_>>()
-            .join(".");
-        let alias = imp.alias.map(|s| resolve(interner, s));
         let entry = groups
-            .entry((path, alias))
+            .entry(import_key(imp, interner)?)
             .or_insert_with(|| MergedExposing::List(BTreeMap::new()));
-        merge_exposing(entry, &imp.exposing.value, interner);
+        merge_exposing(entry, &imp.exposing.value, interner)?;
     }
-    let mut out = String::new();
-    for (key, exposing) in &groups {
-        out.push_str(&render_import_line(key, exposing));
-    }
-    out
+    Some(
+        groups
+            .iter()
+            .map(|(key, exposing)| render_import_line(key, exposing, newline))
+            .collect(),
+    )
 }
 
 #[cfg(test)]
@@ -308,19 +482,46 @@ mod tests {
         vec!["Main".to_owned()]
     }
 
+    /// The organized module text, or the input when no edit is offered.
+    fn organized(src: &str) -> String {
+        organize_imports(&module(src), &LintConfig::default())
+            .and_then(|edit| edit.apply(src))
+            .unwrap_or_else(|| src.to_owned())
+    }
+
+    /// The fixed module text, or the input when nothing changed.
+    fn fixed(src: &str, rounds: usize) -> String {
+        fix_all_bounded(&[module(src)], &target(), &LintConfig::default(), rounds)
+            .unwrap_or_else(|| src.to_owned())
+    }
+
     #[test]
     fn organize_imports_sorts_by_module_path() {
         let src = "module Main exposing (main)\n\nimport Zeta\nimport Alpha\n\nmain =\n    (Zeta.a, Alpha.b)\n";
-        let out = organize_imports(&module(src), &LintConfig::default());
-        let alpha_at = out.find("import Alpha").expect("Alpha import kept");
-        let zeta_at = out.find("import Zeta").expect("Zeta import kept");
-        assert!(alpha_at < zeta_at, "sorted output, got:\n{out}");
+        let out = organized(src);
+        let alpha_at = out.find("import Alpha");
+        let zeta_at = out.find("import Zeta");
+        assert!(
+            matches!((alpha_at, zeta_at), (Some(a), Some(z)) if a < z),
+            "sorted output, got:\n{out}"
+        );
+    }
+
+    #[test]
+    fn organize_imports_edits_only_the_import_block() {
+        let src = "module Main exposing (main)\n\nimport Zeta\nimport Alpha\n\nmain =\n    (Zeta.a, Alpha.b)\n";
+        let edit = organize_imports(&module(src), &LintConfig::default());
+        assert!(
+            matches!(&edit, Some(e) if src.get(e.lo..e.hi) == Some("import Zeta\nimport Alpha\n")
+                && e.replacement == "import Alpha\nimport Zeta\n"),
+            "{edit:?}"
+        );
     }
 
     #[test]
     fn organize_imports_merges_duplicate_imports_and_sorts_exposing() {
         let src = "module Main exposing (main)\n\nimport Data exposing (b)\nimport Data exposing (a)\n\nmain =\n    (a, b)\n";
-        let out = organize_imports(&module(src), &LintConfig::default());
+        let out = organized(src);
         assert_eq!(
             out.matches("import Data").count(),
             1,
@@ -335,7 +536,7 @@ mod tests {
     #[test]
     fn organize_imports_removes_a_wholly_unused_import() {
         let src = "module Main exposing (main)\n\nimport Data exposing (a)\nimport Unused\n\nmain =\n    a\n";
-        let out = organize_imports(&module(src), &LintConfig::default());
+        let out = organized(src);
         assert!(
             !out.contains("Unused"),
             "unused import dropped, got:\n{out}"
@@ -348,10 +549,10 @@ mod tests {
 
     #[test]
     fn organize_imports_keeps_as_alias() {
-        let src = "module Main exposing (main)\n\nimport Data as D exposing (a)\n\nmain =\n    (D.x, a)\n";
-        let out = organize_imports(&module(src), &LintConfig::default());
+        let src = "module Main exposing (main)\n\nimport Zeta\nimport Data as D exposing (a)\n\nmain =\n    (D.x, a, Zeta.z)\n";
+        let out = organized(src);
         assert!(
-            out.contains("import Data as D exposing (a)"),
+            out.contains("import Data as D exposing (a)\nimport Zeta\n"),
             "alias survives the rewrite, got:\n{out}"
         );
     }
@@ -359,15 +560,16 @@ mod tests {
     #[test]
     fn organize_imports_is_idempotent() {
         let src = "module Main exposing (main)\n\nimport Zeta\nimport Data exposing (b)\nimport Data exposing (a)\nimport Unused\n\nmain =\n    (Zeta.z, a, b)\n";
-        let first = organize_imports(&module(src), &LintConfig::default());
+        let first = organized(src);
+        assert_ne!(first, src, "the first pass rewrites");
         let second = organize_imports(&module(&first), &LintConfig::default());
-        assert_eq!(first, second, "a second pass is a no-op");
+        assert!(second.is_none(), "a second pass offers nothing: {second:?}");
     }
 
     #[test]
     fn organize_imports_keeps_an_import_used_only_in_a_type_annotation() {
-        let src = "module Main exposing (main)\n\nimport Types exposing (Config)\n\nmain : Config -> Config\nmain x =\n    x\n";
-        let out = organize_imports(&module(src), &LintConfig::default());
+        let src = "module Main exposing (main)\n\nimport Zeta\nimport Types exposing (Config)\n\nmain : Config -> Config\nmain x =\n    Zeta.id x\n";
+        let out = organized(src);
         assert!(
             out.contains("import Types exposing (Config)"),
             "a type-annotation-only reference counts as used, got:\n{out}"
@@ -375,9 +577,72 @@ mod tests {
     }
 
     #[test]
+    fn organize_imports_preserves_crlf() {
+        let src = "module Main exposing (main)\r\n\r\nimport Zeta\r\nimport Alpha\r\n\r\nmain =\r\n    (Zeta.a, Alpha.b)\r\n";
+        let out = organized(src);
+        assert!(
+            out.contains("import Alpha\r\nimport Zeta\r\n"),
+            "CRLF line endings kept, got:\n{out:?}"
+        );
+    }
+
+    #[test]
+    fn organize_imports_refuses_a_comment_in_the_block() {
+        let src = "module Main exposing (main)\n\nimport Zeta\n-- keep this note\nimport Alpha\n\nmain =\n    (Zeta.a, Alpha.b)\n";
+        let edit = organize_imports(&module(src), &LintConfig::default());
+        assert!(edit.is_none(), "{edit:?}");
+    }
+
+    #[test]
+    fn organize_imports_refuses_a_comment_inside_a_declaration() {
+        let src = "module Main exposing (main)\n\nimport Zeta\nimport Alpha {- why -} exposing (b)\n\nmain =\n    (Zeta.a, b)\n";
+        let edit = organize_imports(&module(src), &LintConfig::default());
+        assert!(edit.is_none(), "{edit:?}");
+    }
+
+    #[test]
+    fn organize_imports_is_a_no_op_on_a_parse_failure() {
+        let src = "module Main exposing (main)\n\nimport Zeta\nimport Alpha\n\nmain = (\n";
+        let edit = organize_imports(&module(src), &LintConfig::default());
+        assert!(edit.is_none(), "{edit:?}");
+    }
+
+    #[test]
+    fn organize_imports_refuses_a_declaration_sharing_a_line() {
+        let src =
+            "module Main exposing (main)\n\nimport Zeta\nimport Alpha main = (Zeta.a, Alpha.b)\n";
+        let edit = organize_imports(&module(src), &LintConfig::default());
+        assert!(edit.is_none(), "{edit:?}");
+    }
+
+    #[test]
+    fn organize_imports_refuses_a_header_sharing_a_line() {
+        let src = "module Main exposing (main) import Zeta\nimport Alpha\n\nmain =\n    (Zeta.a, Alpha.b)\n";
+        let edit = organize_imports(&module(src), &LintConfig::default());
+        assert!(edit.is_none(), "{edit:?}");
+    }
+
+    #[test]
+    fn organize_imports_keeps_a_dotted_qualifier_import() {
+        let src = "module Main exposing (main)\n\nimport Zeta\nimport App.Utils\n\nmain =\n    (Zeta.a, App.Utils.f)\n";
+        let out = organized(src);
+        assert!(out.contains("import App.Utils\n"), "got:\n{out}");
+    }
+
+    #[test]
+    fn organize_imports_keeps_a_ctor_only_import() {
+        let src = "module Main exposing (area)\n\nimport Zeta\nimport Geo exposing (Shape(Circle))\n\narea s =\n    case s of\n        Circle r ->\n            Zeta.f r\n";
+        let out = organized(src);
+        assert!(
+            out.contains("import Geo exposing (Shape(Circle))\n"),
+            "got:\n{out}"
+        );
+    }
+
+    #[test]
     fn fix_all_applies_several_findings_in_one_file() {
         let src = "module Main exposing (main)\n\nimport Unused\n\nmain =\n    List.map fmt (List.filter live records)\n";
-        let out = fix_all(&[module(src)], &target(), &LintConfig::default());
+        let out = fixed(src, FIX_ALL_MAX_ROUNDS);
         assert!(!out.contains("Unused"), "unused import fixed, got:\n{out}");
         assert!(
             out.contains("|>"),
@@ -391,9 +656,8 @@ mod tests {
         // `|>` chain, which leaves the inner pair nested as that chain's first
         // operand — a second round is needed to flatten it too.
         let src = "module Main exposing (main)\n\nmain =\n    List.map fmt (List.map g (List.map h (List.map i xs)))\n";
-        let modules = [module(src)];
 
-        let partial = fix_all_bounded(&modules, &target(), &LintConfig::default(), 1);
+        let partial = fixed(src, 1);
         let residual = run(&[module(&partial)], &LintConfig::default());
         assert!(
             residual
@@ -403,12 +667,7 @@ mod tests {
             "one round only partially flattens a 4-deep nest, got:\n{partial}"
         );
 
-        let full = fix_all_bounded(
-            &modules,
-            &target(),
-            &LintConfig::default(),
-            FIX_ALL_MAX_ROUNDS,
-        );
+        let full = fixed(src, FIX_ALL_MAX_ROUNDS);
         let converged = run(&[module(&full)], &LintConfig::default());
         assert!(
             !converged
@@ -423,11 +682,11 @@ mod tests {
     fn fix_all_leaves_an_unfixable_finding_unapplied() {
         let src = "module Main exposing (main)\n\nmain =\n    unsafeDoIt\n";
         let out = fix_all(&[module(src)], &target(), &LintConfig::default());
-        assert_eq!(
-            out, src,
-            "unsafe-convention carries no fix, source is untouched"
+        assert!(
+            out.is_none(),
+            "unsafe-convention carries no fix, nothing changes: {out:?}"
         );
-        let report = run(&[module(&out)], &LintConfig::default());
+        let report = run(&[module(src)], &LintConfig::default());
         assert!(
             report
                 .findings
@@ -436,5 +695,23 @@ mod tests {
             "the unfixable finding still stands, got {:?}",
             report.findings
         );
+    }
+
+    #[test]
+    fn fix_all_is_none_for_a_missing_module() {
+        let src = "module Main exposing (main)\n\nimport Unused\n\nmain =\n    1\n";
+        let out = fix_all(
+            &[module(src)],
+            &["Other".to_owned()],
+            &LintConfig::default(),
+        );
+        assert!(out.is_none(), "{out:?}");
+    }
+
+    #[test]
+    fn fix_all_is_a_no_op_on_a_parse_failure() {
+        let src = "module Main exposing (main)\n\nimport Unused\n\nmain = (\n";
+        let out = fix_all(&[module(src)], &target(), &LintConfig::default());
+        assert!(out.is_none(), "{out:?}");
     }
 }

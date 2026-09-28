@@ -32,7 +32,10 @@ pub use config::{ConfigError, LintConfig, Suppressions, read_lint_config};
 pub use finding::{Finding, Fix, Severity, SigFix};
 pub use registry::{Fixability, RULES, RuleInfo, is_known, lookup};
 pub use render::{LineRole, render_finding, render_finding_lines};
-pub use source_actions::{FIX_ALL_MAX_ROUNDS, fix_all, fix_all_bounded, organize_imports};
+pub use rules::unused_imports::RULE as UNUSED_IMPORTS;
+pub use source_actions::{
+    BlockEdit, FIX_ALL_MAX_ROUNDS, fix_all, fix_all_bounded, organize_imports,
+};
 
 /// One module handed to the linter: its dotted path and its source text.
 #[derive(Clone, Debug)]
@@ -1546,7 +1549,10 @@ mod tests {
         );
         let report = run(&[module(src)], &LintConfig::default());
         assert!(
-            report.findings.iter().any(|f| f.rule == "unused-imports"),
+            report
+                .findings
+                .iter()
+                .any(|f| f.rule == crate::rules::unused_imports::RULE),
             "an import whose qualifier is never used must be flagged, got {:?}",
             report.findings
         );
@@ -1562,7 +1568,10 @@ mod tests {
         );
         let report = run(&[module(src)], &LintConfig::default());
         assert!(
-            !report.findings.iter().any(|f| f.rule == "unused-imports"),
+            !report
+                .findings
+                .iter()
+                .any(|f| f.rule == crate::rules::unused_imports::RULE),
             "an import used via its qualifier must not be flagged, got {:?}",
             report.findings
         );
@@ -1580,9 +1589,123 @@ mod tests {
         );
         let report = run(&[module(src)], &LintConfig::default());
         assert!(
-            !report.findings.iter().any(|f| f.rule == "unused-imports"),
+            !report
+                .findings
+                .iter()
+                .any(|f| f.rule == crate::rules::unused_imports::RULE),
             "a wildcard import must never be flagged as unused, got {:?}",
             report.findings
+        );
+    }
+
+    /// The `unused-imports` findings for one `Main` module.
+    fn unused_imports(src: &str) -> Vec<Finding> {
+        run(&[module(src)], &LintConfig::default())
+            .findings
+            .into_iter()
+            .filter(|f| f.rule == crate::rules::unused_imports::RULE)
+            .collect()
+    }
+
+    /// A multi-segment qualifier (`App.Utils.f`) is a use of `import App.Utils`.
+    #[test]
+    fn dotted_qualifier_is_a_use() {
+        let src = "module Main exposing (main)\n\nimport App.Utils\n\nmain = App.Utils.f 1\n";
+        let found = unused_imports(src);
+        assert!(found.is_empty(), "{found:?}");
+    }
+
+    /// A dotted qualifier in type position is a use too.
+    #[test]
+    fn dotted_type_qualifier_is_a_use() {
+        let src =
+            "module Main exposing (main)\n\nimport App.Utils\n\nmain : App.Utils.T\nmain = 1\n";
+        let found = unused_imports(src);
+        assert!(found.is_empty(), "{found:?}");
+    }
+
+    /// The canonical stdlib qualifier (`Db.Decode`) is a use of `import Ipe.Db.Decode`.
+    #[test]
+    fn stdlib_canonical_qualifier_is_a_use() {
+        let src = "module Main exposing (main)\n\nimport Ipe.Db.Decode\n\nmain = Db.Decode.int\n";
+        let found = unused_imports(src);
+        assert!(found.is_empty(), "{found:?}");
+    }
+
+    /// A listed constructor matched in a `case` pattern is a use of its import.
+    #[test]
+    fn listed_ctor_in_case_pattern_is_a_use() {
+        let src = "module Main exposing (area)\n\nimport Geo exposing (Shape(Circle))\n\narea s =\n    case s of\n        Circle r ->\n            r\n";
+        let found = unused_imports(src);
+        assert!(found.is_empty(), "{found:?}");
+    }
+
+    /// A listed constructor applied as a value is a use of its import.
+    #[test]
+    fn listed_ctor_as_value_is_a_use() {
+        let src = "module Main exposing (main)\n\nimport Geo exposing (Shape(Circle))\n\nmain = Circle 1\n";
+        let found = unused_imports(src);
+        assert!(found.is_empty(), "{found:?}");
+    }
+
+    /// A listed constructor matched in a top-level argument pattern is a use.
+    #[test]
+    fn listed_ctor_in_argument_pattern_is_a_use() {
+        let src = "module Main exposing (area)\n\nimport Geo exposing (Shape(Circle))\n\narea (Circle r) = r\n";
+        let found = unused_imports(src);
+        assert!(found.is_empty(), "{found:?}");
+    }
+
+    /// An exposed `Type(..)` is kept: its constructor set is unknown here.
+    #[test]
+    fn public_ctors_import_is_kept() {
+        let src = "module Main exposing (main)\n\nimport Geo exposing (Shape(..))\n\nmain = 1\n";
+        let found = unused_imports(src);
+        assert!(found.is_empty(), "{found:?}");
+    }
+
+    /// An interpolating triple-quoted string hides references: nothing is flagged.
+    #[test]
+    fn interpolation_keeps_every_import() {
+        let src =
+            "module Main exposing (main)\n\nimport App.Fmt\n\nmain = \"\"\"{{Fmt.show 1}}\"\"\"\n";
+        let found = unused_imports(src);
+        assert!(found.is_empty(), "{found:?}");
+    }
+
+    /// A clean unused import carries a fix spanning exactly its own line.
+    #[test]
+    fn clean_unused_import_fix_is_its_line() {
+        let src = "module Main exposing (main)\n\nimport Unused\n\nmain = 1\n";
+        let found = unused_imports(src);
+        assert!(
+            matches!(found.as_slice(), [f] if f.fix.as_ref().is_some_and(|fix| {
+                src.get(fix.span.lo as usize..fix.span.hi as usize) == Some("import Unused\n")
+            })),
+            "{found:?}"
+        );
+    }
+
+    /// A comment inside the declaration leaves the removal unproven: no fix.
+    #[test]
+    fn comment_inside_import_refuses_the_fix() {
+        let src =
+            "module Main exposing (main)\n\nimport Unused {- note -} exposing (x)\n\nmain = 1\n";
+        let found = unused_imports(src);
+        assert!(
+            matches!(found.as_slice(), [f] if f.fix.is_none()),
+            "{found:?}"
+        );
+    }
+
+    /// A trailing comment on the import's line would be deleted with it: no fix.
+    #[test]
+    fn trailing_comment_refuses_the_fix() {
+        let src = "module Main exposing (main)\n\nimport Unused -- keep me\n\nmain = 1\n";
+        let found = unused_imports(src);
+        assert!(
+            matches!(found.as_slice(), [f] if f.fix.is_none()),
+            "{found:?}"
         );
     }
 
