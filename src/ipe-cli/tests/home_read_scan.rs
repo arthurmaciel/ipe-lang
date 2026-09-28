@@ -8,14 +8,17 @@
 //! compiler side and `system::home_dir` in the standalone runtime. Every other
 //! compiler-side variable is read through `ipe_env`, which refuses each home
 //! name however it is spelled or computed, and a jail's granted variables are
-//! forwarded verbatim by `ipe_sandbox::host_env::granted`.
+//! forwarded verbatim by the sandbox-private `ipe_sandbox::host_env::granted`,
+//! reachable from outside the sandbox crate only as `granted_env` over a
+//! profile's own allowlist, from the one pinned WASI launcher.
 //!
 //! The root `clippy.toml` denies `std::env::{var, var_os, vars, vars_os}`, so
 //! the audited readers are the only raw readers. This scan pins that set
 //! independently: it refuses a literal home read in production sources, the
 //! private home-name constant outside its module, a raw `std::env` read or
-//! whole-environment iterator outside the audited files, and the escape-hatch
-//! allow outside the pinned allow files.
+//! whole-environment iterator outside the audited files, the escape-hatch
+//! allow outside the pinned allow files, the jail passthrough outside the
+//! sandbox crate and its pinned caller, and a `/proc/*/environ` read.
 
 use std::path::{Path, PathBuf};
 
@@ -37,6 +40,21 @@ const ENV_ALLOW_FILES: &[&str] = &[
 /// accessor, so the compiler-side env rules do not apply beneath it.
 const RUNTIME_ROOT: &str = "src/runtime/rust/";
 
+/// The sandbox crate's sources: the only callers of the crate-private raw
+/// passthrough `host_env::granted`.
+const SANDBOX_SRC: &str = "src/compiler/sandbox/src/";
+
+/// Workspace-relative files outside the sandbox crate that may forward a
+/// profile's granted variables through `host_env::granted_env`.
+const JAIL_ENV_CALLERS: &[&str] = &["src/ipe-cli/src/wasi_run.rs"];
+
+/// The profile-scoped passthrough's name.
+const JAIL_ENV_FN: &str = "granted_env";
+
+/// Whitespace-free code spellings that reach the raw passthrough
+/// `host_env::granted`: its path, or a group or glob import of its module.
+const RAW_PASSTHROUGH_PATHS: &[&str] = &["host_env::granted", "host_env::{", "host_env::*"];
+
 /// The module that owns the private home-name constant.
 const HOME_MODULE: &str = "src/compiler/sandbox/src/home.rs";
 
@@ -51,9 +69,9 @@ const RAW_HOME_READS: &[&str] = &[
 ];
 
 /// Whitespace-free code spellings that reach the raw environment readers:
-/// a path to `var`/`var_os`/`vars`/`vars_os`, or a glob or group import of
-/// `std::env` that would let them be called unqualified.
-const RAW_ENV_PATHS: &[&str] = &["env::var", "std::env::{", "std::env::*"];
+/// a path to `var`/`var_os`/`vars`/`vars_os`, a glob or group import of
+/// `std::env` that would let them be called unqualified, or libc's `getenv`.
+const RAW_ENV_PATHS: &[&str] = &["env::var", "std::env::{", "std::env::*", "libc::getenv"];
 
 /// The raw home reads `src` contains, whitespace and line breaks ignored.
 fn raw_home_reads(src: &str) -> Vec<&'static str> {
@@ -135,6 +153,18 @@ fn skip_block_comment(chars: &[char], start: usize) -> usize {
 /// character literal collapsed to an empty `""`, so a path spelled only inside
 /// a literal or comment is never mistaken for a call.
 fn code_only(src: &str) -> String {
+    code_text(src, false)
+}
+
+/// [`code_only`], but each whitespace character kept as one space, so two
+/// adjacent identifiers (`granted_env as g`) stay two words.
+fn code_words(src: &str) -> String {
+    code_text(src, true)
+}
+
+/// The code of `src` with comments dropped and literals collapsed to `""`;
+/// whitespace kept as spaces when `spaced`, else dropped.
+fn code_text(src: &str, spaced: bool) -> String {
     let chars: Vec<char> = src.chars().collect();
     let mut out = String::new();
     let mut i = 0;
@@ -169,6 +199,8 @@ fn code_only(src: &str) -> String {
         } else {
             if !c.is_whitespace() {
                 out.push(c);
+            } else if spaced {
+                out.push(' ');
             }
             i += 1;
         }
@@ -207,11 +239,41 @@ fn raw_env_reads(src: &str) -> Vec<&'static str> {
         .collect()
 }
 
+/// Whether `src`'s code names the identifier `ident` (not as part of a longer
+/// identifier).
+fn names_ident(src: &str, ident: &str) -> bool {
+    let code = code_words(src);
+    code.match_indices(ident)
+        .any(|(at, m)| !ident_before(&code, at) && !ident_after(&code, at + m.len()))
+}
+
 /// Whether `src`'s code names the private home-name constant.
 fn names_home_var(src: &str) -> bool {
+    names_ident(src, "HOME_VAR")
+}
+
+/// Whether `src`'s code reaches the raw passthrough `host_env::granted`: a
+/// path to it, or a group or glob import of its module. Only a direct
+/// `host_env::granted_env(..)` call is the profile-scoped form; any other
+/// continuation (an alias included) is refused.
+fn reaches_raw_passthrough(src: &str) -> bool {
     let code = code_only(src);
-    code.match_indices("HOME_VAR")
-        .any(|(at, m)| !ident_before(&code, at) && !ident_after(&code, at + m.len()))
+    RAW_PASSTHROUGH_PATHS.iter().any(|needle| {
+        code.match_indices(needle).any(|(at, m)| {
+            let scoped = code
+                .get(at + m.len()..)
+                .is_some_and(|tail| tail.starts_with("_env("));
+            !ident_before(&code, at) && (needle.ends_with(['{', '*']) || !scoped)
+        })
+    })
+}
+
+/// Whether `src` names a procfs environment file (`/proc/self/environ`, a
+/// `join("environ")`): literals included, line comments not.
+fn reads_proc_environ(src: &str) -> bool {
+    src.lines()
+        .map(|line| line.split_once("//").map_or(line, |(code, _)| code))
+        .any(|line| line.contains("environ\""))
 }
 
 /// Whether `src`'s code carries the `disallowed_methods` escape hatch.
@@ -342,9 +404,91 @@ fn the_env_escape_hatch_is_pinned_to_the_audited_readers() {
 }
 
 #[test]
+fn the_jail_passthrough_stays_in_the_sandbox() {
+    let files = workspace_sources(true);
+    let offenders: Vec<_> = files
+        .iter()
+        .filter(|(rel, text)| {
+            !rel.starts_with(SANDBOX_SRC)
+                && (reaches_raw_passthrough(text)
+                    || (!JAIL_ENV_CALLERS.contains(&rel.as_str())
+                        && names_ident(text, JAIL_ENV_FN)))
+        })
+        .map(|(rel, _)| rel)
+        .collect();
+    assert!(
+        offenders.is_empty(),
+        "the jail env passthrough used outside the sandbox crate and its pinned \
+         callers; read named keys through `ipe_env`: {offenders:?}"
+    );
+}
+
+#[test]
+fn no_production_source_reads_a_procfs_environment() {
+    let files = workspace_sources(false);
+    let offenders: Vec<_> = files
+        .iter()
+        .filter(|(rel, text)| !rel.starts_with(RUNTIME_ROOT) && reads_proc_environ(text))
+        .map(|(rel, _)| rel)
+        .collect();
+    assert!(
+        offenders.is_empty(),
+        "a `/proc/*/environ` read hands out the whole environment, home \
+         included; read named keys through `ipe_env`: {offenders:?}"
+    );
+}
+
+#[test]
+fn a_planted_passthrough_or_procfs_bypass_is_detected() {
+    for src in [
+        "let h = ipe_sandbox::host_env::granted(\"HOME\");",
+        "let h = host_env::granted(k);",
+        "use ipe_sandbox::host_env::{granted};",
+        "use ipe_sandbox::host_env::*;",
+        "use ipe_sandbox::host_env::granted as g;",
+        "use ipe_sandbox::host_env::granted_env as g;",
+    ] {
+        assert!(
+            reaches_raw_passthrough(src),
+            "the scan missed a raw passthrough: {src:?}"
+        );
+    }
+    for src in [
+        "let e = ipe_sandbox::host_env::granted_env(&p);",
+        "use ipe_sandbox::host_env::granted_env as g;",
+        "use ipe_sandbox::{host_env::granted_env};",
+    ] {
+        assert!(
+            names_ident(src, JAIL_ENV_FN),
+            "the scan missed a jail env passthrough: {src:?}"
+        );
+    }
+    for src in [
+        "let e = std::fs::read(\"/proc/self/environ\");",
+        "let e = std::fs::read(Path::new(\"/proc/1\").join(\"environ\"));",
+    ] {
+        assert!(
+            reads_proc_environ(src),
+            "the scan missed a procfs environment read: {src:?}"
+        );
+    }
+    assert!(!raw_env_reads("let h = unsafe { libc::getenv(k) };").is_empty());
+    assert!(!reaches_raw_passthrough(
+        "let e = ipe_sandbox::host_env::granted_env(&p);"
+    ));
+    assert!(!names_ident("let e = granted_envs;", JAIL_ENV_FN));
+    assert!(!reads_proc_environ("// read /proc/self/environ\"x\""));
+    assert!(!reads_proc_environ("let e = \"the environment\";"));
+}
+
+#[test]
 fn every_pinned_file_exists() {
     let root = workspace();
-    for rel in ACCESSOR_FILES.iter().chain(ENV_ALLOW_FILES) {
+    for rel in ACCESSOR_FILES
+        .iter()
+        .chain(ENV_ALLOW_FILES)
+        .chain(JAIL_ENV_CALLERS)
+    {
         assert!(
             root.join(rel).is_file(),
             "pinned file `{rel}` is gone; drop it from the list"
@@ -404,7 +548,6 @@ fn the_audited_readers_and_non_reads_are_not_flagged() {
         "let h = ipe_sandbox::home::home_dir();",
         "let v = ipe_env::var_os(\"HOMEBREW_PREFIX\");",
         "let v = ipe_env::var(key).ok();",
-        "let v = ipe_sandbox::host_env::granted(name);",
         "cmd.env(\"HOME\", scratch);",
         "let s = \"std::env::var_os(\\\"HOME\\\")\";",
         "let s = r#\"::std::env::var(\"IPE\")\"#;",

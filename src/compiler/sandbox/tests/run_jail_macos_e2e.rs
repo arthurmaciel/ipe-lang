@@ -88,7 +88,9 @@ fn run_jailed_with_host(
 }
 
 /// The common case: scrub against the real process environment (what a user's
-/// `ipe run` inherits), exactly as the launcher does.
+/// `ipe run` inherits). The oracle reads through `ipe_env`, which matches the
+/// launcher's crate-private passthrough for every name but a home variable; no
+/// profile in this file grants one, so the scrub is the launcher's.
 fn run_jailed(profile: &SandboxProfile, scratch: &Path, script: &str) -> Option<i32> {
     let host = |k: &str| ipe_env::var_os(k);
     run_jailed_with_host(profile, scratch, script, &host)

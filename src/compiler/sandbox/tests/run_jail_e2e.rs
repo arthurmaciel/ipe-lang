@@ -180,6 +180,8 @@ fn run_jailed_inner(
 
     let scoped = std::env::temp_dir().join(format!("ipe-e2e-{}", std::process::id()));
     std::fs::create_dir_all(&scoped).expect("scoped tmp");
+    // `ipe_env` matches the launcher's crate-private passthrough for every name
+    // but a home variable, and no profile in this file grants one.
     let host_env = |k: &str| ipe_env::var_os(k);
     let argv = run_jail_argv(
         tools,

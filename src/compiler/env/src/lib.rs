@@ -18,15 +18,34 @@ use std::ffi::{OsStr, OsString};
 
 /// Variables that name (a part of) the invoking user's home directory.
 ///
-/// Compared ASCII case-insensitively: Windows environment names are
-/// case-insensitive, so `Home` reads the same value as `HOME` there.
+/// Compared case-insensitively under every Unicode case mapping: Windows
+/// environment names fold case through a Unicode upcase table, so `Home`, or a
+/// spelling whose `ı` / `ſ` / `İ` folds onto an ASCII letter, can read the same
+/// value as `HOME` there.
 const HOME_NAMES: [&str; 4] = ["HOME", "USERPROFILE", "HOMEDRIVE", "HOMEPATH"];
 
+/// `c` folded onto the ASCII letter its uppercase or lowercase mapping starts
+/// with, or `c` itself when neither mapping reaches ASCII.
+fn ascii_fold(c: char) -> char {
+    c.to_uppercase()
+        .next()
+        .filter(char::is_ascii_alphabetic)
+        .or_else(|| c.to_lowercase().next().filter(char::is_ascii_alphabetic))
+        .unwrap_or(c)
+}
+
 /// Whether `key` names a home variable this crate refuses to read.
+///
+/// Fails closed: a key is refused when its per-character ASCII fold or its full
+/// Unicode uppercase equals a home name, ASCII case ignored.
 #[must_use]
 pub fn is_home_key(key: &OsStr) -> bool {
-    key.to_str()
-        .is_some_and(|k| HOME_NAMES.iter().any(|h| h.eq_ignore_ascii_case(k)))
+    let key = key.to_string_lossy();
+    let folded: String = key.chars().map(ascii_fold).collect();
+    let upper = key.to_uppercase();
+    HOME_NAMES
+        .iter()
+        .any(|h| h.eq_ignore_ascii_case(&folded) || h.eq_ignore_ascii_case(&upper))
 }
 
 /// The UTF-8 value of `key`, as `std::env::var` — `NotPresent` for a home key.
@@ -70,6 +89,21 @@ mod tests {
             "HOMEDRIVE",
             "HOMEPATH",
             "homepath",
+        ] {
+            assert!(is_home_key(OsStr::new(key)), "{key:?}");
+            assert_eq!(var_os(key), None, "{key:?}");
+            assert_eq!(var(key), Err(VarError::NotPresent), "{key:?}");
+        }
+    }
+
+    #[test]
+    fn a_unicode_spelling_that_folds_onto_a_home_key_is_refused() {
+        for key in [
+            "USERPROF\u{0131}LE", // dotless i uppercases to `I`
+            "u\u{017F}erprofile", // long s uppercases to `S`
+            "U\u{017F}ERPROF\u{0131}LE",
+            "HOMEDR\u{0130}VE", // dotted capital I lowercases to `i`
+            "homedr\u{0131}ve",
         ] {
             assert!(is_home_key(OsStr::new(key)), "{key:?}");
             assert_eq!(var_os(key), None, "{key:?}");
