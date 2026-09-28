@@ -69,13 +69,17 @@ pub fn check(ctx: &Ctx) -> Vec<Finding> {
 /// bound is still referenced. `imports` resolve through `import_interner`,
 /// `ast` through `interner`; the two may differ, so names compare as text.
 /// Fail-closed: an opaque module, an unresolvable symbol, a wildcard, or an
-/// exposed `Type(..)` all count as referenced.
+/// exposed `Type(..)` all count as referenced. An empty `imports` binds
+/// nothing, so it is never referenced — even in an opaque module.
 pub fn any_referenced(
     ast: &Module,
     interner: &Interner,
     imports: &[&Import],
     import_interner: &Interner,
 ) -> bool {
+    if imports.is_empty() {
+        return false;
+    }
     let uses = Uses::of_module(ast);
     if uses.opaque {
         return true;

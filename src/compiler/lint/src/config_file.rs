@@ -184,11 +184,15 @@ impl std::error::Error for LintConfigLoadError {}
 /// not parse as a configuration.
 pub fn load_lint_config(dir: &Path) -> Result<LintConfig, LintConfigLoadError> {
     let path = dir.join(LINT_CONFIG_FILE);
-    match read_workspace_file(&path, LINT_CONFIG_MAX_BYTES).map_err(LintConfigLoadError::Read)? {
-        None => Ok(LintConfig::default()),
-        Some(text) => crate::config::read_lint_config(&text, &path.display().to_string())
-            .map_err(LintConfigLoadError::Invalid),
-    }
+    read_workspace_file(&path, LINT_CONFIG_MAX_BYTES)
+        .map_err(LintConfigLoadError::Read)?
+        .map_or_else(
+            || Ok(LintConfig::default()),
+            |text| {
+                crate::config::read_lint_config(&text, &path.display().to_string())
+                    .map_err(LintConfigLoadError::Invalid)
+            },
+        )
 }
 
 #[cfg(test)]
