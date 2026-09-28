@@ -2749,7 +2749,10 @@ mod tests {
         ];
         let got = detect_missing_system_lib(&errors).expect("must detect");
         assert_eq!(got.system_lib.as_str(), "wayland-client");
-        assert_eq!(got.crate_name, "wayland-sys");
+        assert_eq!(
+            got.crate_name.as_ref().map(CrateName::as_str),
+            Some("wayland-sys")
+        );
     }
 
     #[test]

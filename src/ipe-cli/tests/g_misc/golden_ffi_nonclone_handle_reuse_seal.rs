@@ -74,7 +74,7 @@ fn seed_nonclone_ffi_cache(project_root: &Path) -> bool {
 
 /// Write `main` as `src/Main.ipe` under a fresh `dir` whose FFI cache is seeded
 /// with the non-`Clone` `handle-demo` crate. Returns false on any I/O failure.
-pub(crate) fn write_project(dir: &Path, main: &str) -> bool {
+pub fn write_project(dir: &Path, main: &str) -> bool {
     let src = dir.join("src");
     let _ = fs::remove_dir_all(dir);
     if fs::create_dir_all(&src).is_err() {
@@ -216,7 +216,8 @@ fn nonclone_handle_threaded_linearly_builds() {
 /// The emitted `Cargo.toml` carries `handle-demo = "=0.1.0"` (an exact
 /// `crates.io` pin), which fails offline and in CI shards where the crate is
 /// not published; the local path dependency stands in for it.
-pub(crate) fn provision_handle_demo(project: &Path, out: &Path) {
+#[allow(clippy::expect_used)] // fixture-setup failure must fail the seal test loudly
+pub fn provision_handle_demo(project: &Path, out: &Path) {
     if ipe_env::var("IPE_E2E").is_err() {
         return;
     }

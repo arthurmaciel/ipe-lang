@@ -874,7 +874,7 @@ mod tests {
         let mut interner = Interner::new();
         let home = ModPath(vec![interner.intern("Main")?]);
         let ping = interner.intern("Ping")?;
-        let pong = interner.intern("Pong")?;
+        let reply = interner.intern("Pong")?;
         let go = interner.intern("Go")?;
         let back = interner.intern("Back")?;
         let named = |name| IrType::Enum {
@@ -891,25 +891,25 @@ mod tests {
                 type_params: Vec::new(),
                 variants: vec![Variant {
                     name: go,
-                    fields: vec![IrType::Task(Box::new(named(pong)))],
+                    fields: vec![IrType::Task(Box::new(named(reply)))],
                 }],
             },
             EnumDef {
-                name: pong,
+                name: reply,
                 home: home.clone(),
                 type_params: Vec::new(),
                 variants: vec![Variant {
                     name: back,
                     fields: vec![
                         IrType::Cmd(Box::new(named(ping))),
-                        IrType::Sub(Box::new(named(pong))),
+                        IrType::Sub(Box::new(named(reply))),
                         IrType::Maybe(Box::new(int_to_int())),
                     ],
                 }],
             },
         ]);
         assert!(ir_contains_fun(&named(ping), &table));
-        assert!(ir_contains_fun(&named(pong), &table));
+        assert!(ir_contains_fun(&named(reply), &table));
         // The same cycle with no function anywhere answers `false` and stops.
         let data_only = enum_payload_table(&[
             EnumDef {
@@ -918,24 +918,24 @@ mod tests {
                 type_params: Vec::new(),
                 variants: vec![Variant {
                     name: go,
-                    fields: vec![IrType::Task(Box::new(named(pong)))],
+                    fields: vec![IrType::Task(Box::new(named(reply)))],
                 }],
             },
             EnumDef {
-                name: pong,
+                name: reply,
                 home: home.clone(),
                 type_params: Vec::new(),
                 variants: vec![Variant {
                     name: back,
                     fields: vec![
                         IrType::Cmd(Box::new(named(ping))),
-                        IrType::Sub(Box::new(named(pong))),
+                        IrType::Sub(Box::new(named(reply))),
                     ],
                 }],
             },
         ]);
         assert!(!ir_contains_fun(&named(ping), &data_only));
-        assert!(!ir_contains_fun(&named(pong), &data_only));
+        assert!(!ir_contains_fun(&named(reply), &data_only));
         Ok(())
     }
 }

@@ -467,7 +467,7 @@ mod tests {
         // type Stream = Next Int (Task Error Stream) | Emit (Int -> Int)
         let with_fun = enum_payload_table(&[EnumDef {
             name: stream,
-            home: home.clone(),
+            home,
             type_params: Vec::new(),
             variants: vec![
                 Variant {
@@ -494,11 +494,11 @@ mod tests {
         let mut interner = Interner::new();
         let home = ModPath(vec![interner.intern("Main")?]);
         let ping = interner.intern("Ping")?;
-        let pong = interner.intern("Pong")?;
+        let reply = interner.intern("Pong")?;
         let go = interner.intern("Go")?;
         let back = interner.intern("Back")?;
         let ping_ty = named(&home, ping, Vec::new());
-        let pong_ty = named(&home, pong, Vec::new());
+        let reply_ty = named(&home, reply, Vec::new());
         // type Ping = Go (Task Error Pong)
         // type Pong = Back (Cmd Ping) (Sub Pong)
         let table = enum_payload_table(&[
@@ -508,18 +508,18 @@ mod tests {
                 type_params: Vec::new(),
                 variants: vec![Variant {
                     name: go,
-                    fields: vec![IrType::Task(Box::new(pong_ty.clone()))],
+                    fields: vec![IrType::Task(Box::new(reply_ty.clone()))],
                 }],
             },
             EnumDef {
-                name: pong,
-                home: home.clone(),
+                name: reply,
+                home,
                 type_params: Vec::new(),
                 variants: vec![Variant {
                     name: back,
                     fields: vec![
                         IrType::Cmd(Box::new(ping_ty.clone())),
-                        IrType::Sub(Box::new(pong_ty.clone())),
+                        IrType::Sub(Box::new(reply_ty.clone())),
                     ],
                 }],
             },
@@ -531,7 +531,7 @@ mod tests {
             &is_fun
         ));
         assert!(!ir_type_reaches(
-            &pong_ty,
+            &reply_ty,
             &table,
             Reach::HeldOrYielded,
             &is_fun

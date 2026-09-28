@@ -33,6 +33,7 @@ const fn false_marker() -> bool {
 /// `name`, returning the entry path. Panics on scratch-setup failure — a
 /// swallowed setup error here would let a refusal test pass vacuously without
 /// ever exercising the fail-closed path.
+#[allow(clippy::expect_used)] // a swallowed scratch-setup error would let a refusal test pass vacuously
 fn write_single(name: &str, source: &str) -> PathBuf {
     let dir = crate::support::scratch_root()
         .join("ipec_enum_payload_nonclone")
@@ -57,6 +58,7 @@ fn out_dir(name: &str) -> PathBuf {
 
 /// Assert `ipe` rejects the build of `entry` with the typed `expected` code.
 #[track_caller]
+#[allow(clippy::expect_used)] // a missing runtime must fail the refusal test, never skip it
 fn assert_rejected(name: &str, entry: &Path, expected: ipe_diagnostics::Code) {
     // Unlike an accepted-build test, a refusal test proves nothing if it skips
     // silently here — a missing runtime would let the fail-closed assertion
