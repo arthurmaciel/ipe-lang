@@ -234,12 +234,29 @@ def check_deterministic_set(jobs: list[Job], errors: list[str]) -> None:
             )
             continue
         listed_ids.add(job_id)
-        steps = (raw_jobs.get(job_id) or {}).get("steps") or []
-        step_names = [st.get("name") for st in steps if isinstance(st, dict)]
-        if step_names.count(step) != 1:
+        raw_job = raw_jobs.get(job_id) or {}
+        if "strategy" in raw_job:
+            errors.append(
+                f"{DETERMINISTIC_CHECKS_FILE}: job {job_id!r} has a `strategy:`; "
+                "a deterministic check must be a single unexpanded job"
+            )
+        if "${{" in ctx or "${{" in step:
+            errors.append(
+                f"{DETERMINISTIC_CHECKS_FILE}: {ctx!r}/{step!r} contains an "
+                "expression; consumers match literal names only"
+            )
+        steps = raw_job.get("steps") or []
+        named = [st for st in steps if isinstance(st, dict) and st.get("name") == step]
+        if len(named) != 1:
             errors.append(
                 f"{DETERMINISTIC_CHECKS_FILE}: job {job_id!r} must have exactly "
-                f"one step named {step!r} (found {step_names.count(step)})"
+                f"one step named {step!r} (found {len(named)})"
+            )
+            continue
+        if "if" in named[0] or "continue-on-error" in named[0]:
+            errors.append(
+                f"{DETERMINISTIC_CHECKS_FILE}: step {step!r} of job {job_id!r} "
+                "must run unconditionally: no `if:` and no `continue-on-error:`"
             )
 
     needed = set(watcher.needs)
