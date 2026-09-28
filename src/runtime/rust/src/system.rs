@@ -159,7 +159,8 @@ pub(crate) fn write_stderr_line(line: &str) {
 /// reason. The single runtime stdout line sink: `log.rs` and every other
 /// runtime stdout write (server status lines, CLI-op summaries) route through
 /// it instead of a raw `println!`/`print!`, so a closed downstream pipe
-/// (`ipe-app | head`) can never abort the process.
+/// (`ipe-app | head`) can never abort the process;
+/// `tests/no_panicking_print_macro.rs` refuses any production print macro.
 pub(crate) fn write_stdout_line(line: &str) {
     use std::io::Write as _;
     let _ = writeln!(std::io::stdout().lock(), "{line}");
@@ -1365,145 +1366,6 @@ mod runtime_log_emitter_tests {
         assert!(has_hand_rolled_tag(&format!(
             "\u{e9}eprintln!(\"[ipe.x] {multibyte}\")"
         )));
-    }
-
-    /// True when `content` invokes one of the four panicking print macros
-    /// (`println!`, `print!`, `eprintln!`, `eprint!` — each panics on a failed
-    /// write, i.e. on `EPIPE`) as a call, not merely as text inside a string
-    /// or doc comment. Shared by the production-file scan below and by
-    /// `system_rs_production_code_never_bypasses_the_stdio_emitters`, which
-    /// scans this file's own non-test source.
-    fn contains_panicking_print_macro(content: &str) -> bool {
-        ["println!(", "print!(", "eprintln!(", "eprint!("]
-            .iter()
-            .any(|needle| content.contains(needle))
-    }
-
-    /// Strip every top-level `#[cfg(test)]\nmod <name> { .. }` block from
-    /// `content`, so a crate-wide print-macro scan sees only production code
-    /// — without reimplementing a Rust parser. Under this crate's mandatory
-    /// `cargo fmt` a top-level `mod { .. }` always closes with a bare `}` at
-    /// column 0, and nothing else inside its body sits at column 0, so a
-    /// line-based skip from the `#[cfg(test)]` line to the next bare `}` line
-    /// safely brackets the block. On a pathological line inside the block
-    /// (e.g. a raw string that happens to contain a standalone `}` line) this
-    /// can only skip LESS than the true block, never more — the scan then
-    /// gets stricter, not blinder, so it can produce an extra false alarm but
-    /// never hide a real production violation.
-    fn strip_cfg_test_modules(content: &str) -> String {
-        let mut out = String::with_capacity(content.len());
-        let mut lines = content.lines().peekable();
-        while let Some(line) = lines.next() {
-            if line == "#[cfg(test)]" && lines.peek().is_some_and(|next| next.starts_with("mod ")) {
-                lines.next(); // consume the `mod <name> {` line itself
-                for skip in lines.by_ref() {
-                    if skip == "}" {
-                        break;
-                    }
-                }
-                continue;
-            }
-            out.push_str(line);
-            out.push('\n');
-        }
-        out
-    }
-
-    /// `println!`/`print!`/`eprintln!`/`eprint!` panic on a failed write
-    /// (`EPIPE`); every runtime stdout/stderr line goes through
-    /// `system::write_stdout_line`/`write_stderr_line` (or the tagged
-    /// `emit_runtime_log*` emitters) instead. Scanned with test modules
-    /// stripped, so a legitimate test-only debug `println!` inside a
-    /// `#[cfg(test)] mod { .. }` (e.g. `web/style_inject.rs`'s render-proof
-    /// dump) is not mistaken for a production write site.
-    #[test]
-    fn no_runtime_module_uses_a_panicking_print_macro() {
-        let src_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
-        let mut files = Vec::new();
-        collect_rs_files(&src_dir, &mut files);
-        let violations: Vec<String> = files
-            .iter()
-            .filter(|path| {
-                let content = std::fs::read_to_string(path)
-                    .unwrap_or_else(|e| panic!("could not read {}: {e}", path.display()));
-                contains_panicking_print_macro(&strip_cfg_test_modules(&content))
-            })
-            .map(|path| path.display().to_string())
-            .collect();
-        assert!(
-            violations.is_empty(),
-            "`println!`/`print!`/`eprintln!`/`eprint!` panics on a broken pipe — use \
-             `crate::system::write_stdout_line`/`write_stderr_line` (or `emit_runtime_log`) \
-             instead:\n{}",
-            violations.join("\n")
-        );
-    }
-
-    /// Refusal test for the scanner itself: a planted `println!(` call must be
-    /// caught, pinning that `no_runtime_module_uses_a_panicking_print_macro`
-    /// cannot silently stop scanning for it.
-    #[test]
-    fn panic_macro_scan_catches_a_planted_println() {
-        assert!(contains_panicking_print_macro(
-            "fn f() { println!(\"hi\"); }"
-        ));
-        assert!(contains_panicking_print_macro("fn f() { print!(\"hi\"); }"));
-        assert!(contains_panicking_print_macro(
-            "fn f() { eprintln!(\"hi\"); }"
-        ));
-        assert!(contains_panicking_print_macro(
-            "fn f() { eprint!(\"hi\"); }"
-        ));
-        assert!(!contains_panicking_print_macro(
-            "fn f() { crate::system::write_stdout_line(\"hi\"); }"
-        ));
-    }
-
-    /// This file's own production code (every `#[cfg(test)] mod { .. }` block
-    /// stripped via [`strip_cfg_test_modules`]), with `//`-comment-only lines
-    /// also stripped so the scanner's own doc comments and this very scan's
-    /// string-literal needles don't self-trigger a false positive. `system.rs`
-    /// is the one file the scan above deliberately skips (it houses the
-    /// sanctioned emitters), so this closes that gap: its production code
-    /// must still never bypass `write_stdout_line`/`write_stderr_line` with a
-    /// raw print macro.
-    fn system_rs_production_code() -> String {
-        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/system.rs");
-        let content = std::fs::read_to_string(&path)
-            .unwrap_or_else(|e| panic!("could not read {}: {e}", path.display()));
-        strip_cfg_test_modules(&content)
-            .lines()
-            .filter(|line| !line.trim_start().starts_with("//"))
-            .collect::<Vec<_>>()
-            .join("\n")
-    }
-
-    /// Refusal test for the stripper itself: content outside a
-    /// `#[cfg(test)] mod { .. }` block must survive, and a planted `println!`
-    /// strictly inside such a block must be removed — pinning that
-    /// `no_runtime_module_uses_a_panicking_print_macro` cannot be fooled by a
-    /// legitimate test-only debug print.
-    #[test]
-    fn strip_cfg_test_modules_removes_only_the_test_block() {
-        let src = "fn production() {}\n\n#[cfg(test)]\nmod tests {\n    fn t() { println!(\"hi\"); }\n}\n\nfn more_production() {}\n";
-        let stripped = strip_cfg_test_modules(src);
-        assert!(stripped.contains("fn production() {}"));
-        assert!(stripped.contains("fn more_production() {}"));
-        assert!(!contains_panicking_print_macro(&stripped));
-    }
-
-    #[test]
-    fn system_rs_production_code_never_bypasses_the_stdio_emitters() {
-        let production = system_rs_production_code();
-        assert!(
-            !production.is_empty(),
-            "sanity: expected non-empty production code before the first #[cfg(test)] module"
-        );
-        assert!(
-            !contains_panicking_print_macro(&production),
-            "system.rs production code must route through write_stdout_line/write_stderr_line, \
-             not a raw print macro"
-        );
     }
 
     #[test]
