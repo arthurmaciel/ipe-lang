@@ -174,10 +174,11 @@ pub fn assemble_emit(
             body = c.bindings_source
         );
     }
-    let dep_lines: Vec<String> = merge_catalog_deps(catalog)?
+    let merged = merge_catalog_deps(catalog)?;
+    let dep_lines: Vec<String> = merged
         .declared
-        .into_values()
-        .map(|merged| merged.into_cargo_dep().render())
+        .values()
+        .map(|dep| dep.to_cargo_dep().render())
         .collect();
     let emit = ipe_backend_rust::FfiEmit {
         foreign_types,
@@ -186,7 +187,7 @@ pub fn assemble_emit(
         interface_modules: catalog.iter().map(|c| c.module_name.clone()).collect(),
         wrapper_glue,
     };
-    seal_dependency_references(catalog, &emit)?;
+    seal_dependency_references(catalog, &merged, &emit)?;
     Ok(Some(emit))
 }
 
@@ -297,9 +298,9 @@ impl<'a> DeferrableDeps<'a> {
 /// or the merge's own refusal when the table cannot be built.
 fn seal_dependency_references(
     catalog: &[InstalledCrate],
+    merged: &MergedDeps,
     emit: &ipe_backend_rust::FfiEmit,
 ) -> Result<(), DependencyRefusal> {
-    let merged = merge_catalog_deps(catalog)?;
     let all_idents = || catalog.iter().flat_map(|c| &c.dep_idents);
     let declared_idents: BTreeSet<&str> = all_idents()
         .filter(|(name, _)| merged.declared.contains_key(*name))
@@ -503,15 +504,18 @@ impl MergedDep {
     }
 
     /// The typed entry, features in sorted order, for the single renderer.
-    fn into_cargo_dep(self) -> CargoDep {
-        let features = self.features.into_iter().collect();
-        match self.source {
+    fn to_cargo_dep(&self) -> CargoDep {
+        let features = self.features.iter().cloned().collect();
+        match &self.source {
             MergedSource::Registry(version) => CargoDep::Registry {
-                name: self.name,
-                version,
+                name: self.name.clone(),
+                version: version.clone(),
                 features,
             },
-            MergedSource::Wrapper(dir) => CargoDep::Wrapper { dir, features },
+            MergedSource::Wrapper(dir) => CargoDep::Wrapper {
+                dir: dir.clone(),
+                features,
+            },
         }
     }
 }
@@ -729,7 +733,7 @@ fn append_asserted_shims(
         emit.bindings_source
             .push_str(&ipe_ffi::asserted::emit_const_shims(consts));
     }
-    seal_dependency_references(catalog, emit)
+    seal_dependency_references(catalog, &merge_catalog_deps(catalog)?, emit)
 }
 
 /// Scan every project source module for asserted-call sites
@@ -3728,6 +3732,14 @@ pub(crate) fn rust_wrapper_header_accepted_by_ffi_reader(line: &str) -> bool {
 mod tests {
     use super::*;
 
+    /// Seal `emit` against the table `catalog` merges to.
+    fn seal(
+        catalog: &[InstalledCrate],
+        emit: &ipe_backend_rust::FfiEmit,
+    ) -> Result<(), DependencyRefusal> {
+        seal_dependency_references(catalog, &merge_catalog_deps(catalog)?, emit)
+    }
+
     #[test]
     fn jail_for_host_tracks_the_compiled_in_run_jail() {
         // The admit hand-off must equal the run-jail's own compiled-in confined
@@ -4469,16 +4481,16 @@ version = \"1\"
                     interface_modules: Vec::new(),
                     wrapper_glue: BTreeMap::new(),
                 });
-        assert!(seal_dependency_references(&catalog, &emit).is_ok());
+        assert!(seal(&catalog, &emit).is_ok());
         // A shim appended after assembly naming a declared root stays sound.
         emit.bindings_source
             .push_str("\npub fn f() -> ::a::T { ::b::g() }");
-        assert!(seal_dependency_references(&catalog, &emit).is_ok());
+        assert!(seal(&catalog, &emit).is_ok());
         // One naming the dropped root is refused with the typed reason.
         emit.bindings_source
             .push_str("\npub fn h() -> syn::Ident { todo() }");
         assert_eq!(
-            seal_dependency_references(&catalog, &emit),
+            seal(&catalog, &emit),
             Err(DependencyRefusal::DroppedTransitive {
                 package: "syn".to_owned(),
                 ident: "syn".to_owned(),
@@ -4590,10 +4602,7 @@ version = \"1\"
                 result: None,
             },
         );
-        assert_eq!(
-            seal_dependency_references(&catalog, &emit),
-            Err(syn_dropped_at("ipe_a_span"))
-        );
+        assert_eq!(seal(&catalog, &emit), Err(syn_dropped_at("ipe_a_span")));
     }
 
     #[test]
