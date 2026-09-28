@@ -661,7 +661,7 @@ fn find_manifest_refuses_an_unverifiable_manifest() {
 
     let refused = find_manifest_for_ipe_file(&main_ipe);
     assert!(
-        matches!(&refused, Err(crate::CliError::Usage(msg)) if *msg == crate::text::msg::manifest_unverifiable(&manifest.display())),
+        matches!(&refused, Err(crate::CliError::TrustRefused(t)) if t.message() == crate::text::msg::manifest_unverifiable(&manifest.display())),
         "{refused:?}"
     );
     let _ = fs::remove_dir_all(&tmp);
