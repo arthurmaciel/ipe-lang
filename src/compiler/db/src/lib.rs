@@ -1737,7 +1737,7 @@ pub fn scan_import_spellings(source: &str) -> Vec<ImportSpelling> {
         };
         let path_str = rest.get(..path_end).unwrap_or("");
         let path: Vec<String> = path_str.split('.').map(str::to_owned).collect();
-        if path.first().is_none_or(|s| s.is_empty()) {
+        if path.first().is_none_or(String::is_empty) {
             continue;
         }
         let after_path = rest.get(path_end..).unwrap_or("").trim_start();
