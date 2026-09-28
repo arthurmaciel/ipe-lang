@@ -63,8 +63,8 @@ Every `IPE_*` variable the runtime, CLI, and compiler read. The table is grouped
 
 | Variable | Default | Effect | Class |
 |----------|---------|--------|-------|
-| `IPE_ADMIN_TOKEN` | unset | Bearer token granting access to the embedded developer console in production. Provide via your secret manager; never commit. Falls back to `IPE_CONSOLE_TOKEN`, then `IPE_METRICS_TOKEN`. | `Secret` |
-| `IPE_CONSOLE_AUTH` | unset (token in production, off in dev) | Console authentication mode: `token` (bearer-token gate), `off` (disable auth — dev only). Unset uses the production/dev heuristic. | `SecurityTunable` |
+| `IPE_ADMIN_TOKEN` | unset | Admin token (`Bearer`, or the `Basic` password) granting access to the embedded developer console and `/_ipe/metrics` in production or under `IPE_CONSOLE_AUTH=token`. Provide via your secret manager; never commit. Falls back to the in-code `Console.adminToken`, then `IPE_CONSOLE_TOKEN`. A non-UTF-8 value refuses every admin request and keeps the console unmounted in production. | `Secret` |
+| `IPE_CONSOLE_AUTH` | unset (token in production, open in dev) | Console authentication mode: `token` (admin-token gate, enforced in every posture, dev included), `off` (console disabled), `app` (app callback; mounted but answers 501 on the Rust runtime). The posture picks the default only when the variable is unset or blank; any other value (including a non-UTF-8 one) disables the console. The effective posture, mode, and source are logged once at startup (`[ipe.console] auth posture=… mode=… source=env\|env-invalid\|posture-default`); no token is ever logged. | `SecurityTunable` |
 | `IPE_CONSOLE_BATCH_INTERVAL_MS` | 2000 | Flush cadence (ms) for telemetry batches shipped to the Hub. Reduce for lower latency at the cost of more HTTP round-trips. | `Tunable` |
 | `IPE_CONSOLE_BIN` | unset (~/.cache/ipe/rust-console/<version>/ipe-console) | Explicit path to the `ipe-console` binary. Overrides the default cache location resolved from `IPE_VERSION`. | `Tunable` |
 | `IPE_CONSOLE_DB_PATH` | unset (per-process temp file) | Path to the SQLite database the console uses to store telemetry (logs, spans). Set automatically when embedding the console; operator override selects a persistent path. | `Tunable` |
@@ -76,7 +76,7 @@ Every `IPE_*` variable the runtime, CLI, and compiler read. The table is grouped
 | `IPE_CONSOLE_URL` | unset (auto-detected sub-path) | Explicit URL at which the developer console is reachable. Overrides the auto-detected `/_ipe/console` path for proxied deployments. | `Tunable` |
 | `IPE_DEV_BANNER` | unset (on in development) | Set to `off` or `0` to suppress the development-mode banner injected into HTML responses. The banner is never shown in production. | `Tunable` |
 | `IPE_INGEST_TOKEN` | unset | Bearer token the parent ingest gate checks on `X-Ipê-Ingest-Token`. Required when a sub-app pushes telemetry to a parent app's `/_ipe/ingest` endpoint. Provide via your secret manager. | `Secret` |
-| `IPE_METRICS_TOKEN` | unset | Deprecated alias for `IPE_ADMIN_TOKEN`. Prefer `IPE_ADMIN_TOKEN`. Provide via your secret manager; never commit. | `Secret` |
+| `IPE_METRICS_TOKEN` | unset | Metrics-scrape token (`Bearer`, or the `Basic` password) authorizing `/_ipe/metrics` only, never the console; the admin token is accepted there too. Falls back to the in-code `Console.metricsToken`. A non-UTF-8 value refuses every metrics-token request. Provide via your secret manager; never commit. | `Secret` |
 
 ## Compiler
 
