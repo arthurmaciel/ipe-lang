@@ -786,11 +786,12 @@ pub struct ProjectPaths {
     ///
     /// The `package.ipe` directory, or a single-file entry's directory.
     root: PathBuf,
-    /// The recursive source root of a manifest project.
+    /// The recursive source trees the output must stay clear of.
     ///
-    /// A single-file build reads only its own directory's files, so it has
-    /// none.
-    sources: Option<PathBuf>,
+    /// A manifest project's source root, plus any further tree a command reads
+    /// ([`Self::with_sources`]). A single-file build reads only its own
+    /// directory's files, so it starts with none.
+    sources: Vec<PathBuf>,
     /// Where the default `out/` goes.
     ///
     /// The project root of a manifest project, the working directory for a
@@ -804,7 +805,7 @@ impl ProjectPaths {
     pub fn from_manifest(manifest: &crate::project::ProjectManifest) -> Self {
         Self {
             root: manifest.root.clone(),
-            sources: Some(manifest.src_root.clone()),
+            sources: vec![manifest.src_root.clone()],
             default_base: manifest.root.clone(),
         }
     }
@@ -838,18 +839,16 @@ impl ProjectPaths {
         };
         Self {
             root,
-            sources: None,
+            sources: Vec::new(),
             default_base: PathBuf::from("."),
         }
     }
 
-    /// The same paths, with `sources` as the recursive source root to stay clear of.
+    /// The same paths, with `sources` as one more recursive source tree to stay clear of.
     #[must_use]
-    pub fn with_sources(self, sources: &Path) -> Self {
-        Self {
-            sources: Some(sources.to_path_buf()),
-            ..self
-        }
+    pub fn with_sources(mut self, sources: &Path) -> Self {
+        self.sources.push(sources.to_path_buf());
+        self
     }
 }
 
@@ -1426,7 +1425,7 @@ fn check_disjoint(raw: &Path, project: &ProjectPaths) -> Result<Disjoint, CliErr
         }
         .into());
     }
-    if let Some(sources) = &project.sources {
+    for sources in &project.sources {
         let sources = std::fs::canonicalize(sources)
             .map_err(|_| OutputRefusal::UnresolvedSources(sources.clone()))?;
         if starts_with(&resolved, &sources) || starts_with(&sources, &resolved) {
@@ -1531,7 +1530,7 @@ mod tests {
         std::fs::write(root.join("src").join("Main.ipe"), "module Main\n").expect("write main");
         ProjectPaths {
             root: root.clone(),
-            sources: Some(root.join("src")),
+            sources: vec![root.join("src")],
             default_base: root.clone(),
         }
     }

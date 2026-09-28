@@ -114,7 +114,9 @@ use ipe_intern::Interner;
 use ipe_types::{VarNamer, kernel_type_table, ty_to_doc};
 
 use crate::CliError;
-use crate::api_surface::{ModuleApi, ModulePath, PublicApi, UnionApi, extract_tree, read_tree};
+use crate::api_surface::{
+    ModuleApi, ModulePath, PublicApi, UnionApi, extract_tree, read_tree, tree_walk_root,
+};
 use crate::cli_args::OutputFormat;
 use crate::doc_bundle::{BundleSource, DocBundle, fuzzy_rank, is_qualified};
 use crate::text;
@@ -2545,7 +2547,7 @@ struct SearchEntry {
 /// [`build_docs_or_stdlib`].
 fn generate(path: &Path, out: &Path, write_format: WriteFormat) -> Result<(), CliError> {
     crate::style::print_command_header();
-    let docs = build_docs_or_stdlib(path)?;
+    let (docs, inputs) = build_docs_or_stdlib(path)?;
     let docs_root = locate_docs_root();
     let bundle = build_doc_bundle(&docs_root)?;
 
@@ -2553,8 +2555,8 @@ fn generate(path: &Path, out: &Path, write_format: WriteFormat) -> Result<(), Cl
 
     // The site overwrites same-named files, so it is written only into a
     // directory ipe owns and proven disjoint from the documented package —
-    // never over a user's own `doc/`, the package itself, or its sources.
-    let site = claim_site(path, out)?;
+    // never over a user's own `doc/`, the package itself, or the tree it read.
+    let site = claim_site(path, &inputs, out)?;
     write_format_dir(&site, "json", &json_files)?;
     if write_format.wants_markdown() {
         write_format_dir(&site, "markdown", &markdown_files)?;
@@ -2596,20 +2598,38 @@ fn generate(path: &Path, out: &Path, write_format: WriteFormat) -> Result<(), Cl
 
 /// Claim `out` as the site directory for the package at `path`.
 ///
-/// `out` is proven disjoint from the package root and its sources before it is
-/// claimed; a package directory without a manifest is its own root.
+/// `out` is proven disjoint from the package root, its manifest sources, and
+/// the module tree `inputs` names before it is claimed; a package directory
+/// without a manifest is its own root.
 ///
 /// # Errors
 /// [`CliError::OutputRefused`] when `out` is the package, holds it, overlaps
-/// its sources, or is not ipe's; a manifest parse error.
-fn claim_site(path: &Path, out: &Path) -> Result<crate::output_dir::OwnedDir, CliError> {
+/// a source tree, or is not ipe's; a manifest parse error.
+fn claim_site(
+    path: &Path,
+    inputs: &DocInputs,
+    out: &Path,
+) -> Result<crate::output_dir::OwnedDir, CliError> {
     use crate::output_dir::{OutputRoot, ProjectPaths};
     let project = match crate::project::manifest_in_dir(path) {
         Some(manifest) => ProjectPaths::from_manifest(&crate::project::parse_manifest(&manifest)?),
         None if path.is_dir() => ProjectPaths::of_file(path),
         None => ProjectPaths::discover(path)?,
     };
+    let project = match inputs {
+        DocInputs::Tree(tree) => project.with_sources(tree),
+        DocInputs::StdlibOnly => project,
+    };
     OutputRoot::at(out, &project)?.claim()
+}
+
+/// The project inputs a documentation build read.
+#[derive(Debug)]
+enum DocInputs {
+    /// The module tree walked ([`tree_walk_root`]): a file, `src/`, or a flat directory.
+    Tree(PathBuf),
+    /// No project module was read; the site documents the stdlib alone.
+    StdlibOnly,
 }
 
 /// Write every file in `files` into `<site>/<subdir>/`.
@@ -2646,11 +2666,11 @@ fn write_format_dir(
 /// # Errors
 /// Any non-empty [`build_docs`] failure — [`CliError::Io`], a typecheck
 /// [`CliError::Diff`], or an open-interface [`CliError::Diff`].
-fn build_docs_or_stdlib(path: &Path) -> Result<DocsJson, CliError> {
+fn build_docs_or_stdlib(path: &Path) -> Result<(DocsJson, DocInputs), CliError> {
     match build_docs(path) {
-        Ok(docs) => Ok(docs),
+        Ok(docs) => Ok((docs, DocInputs::Tree(tree_walk_root(path)))),
         Err(CliError::Diff(crate::api_surface::DiffError::Empty { .. })) => {
-            Ok(build_stdlib_only_docs())
+            Ok((build_stdlib_only_docs(), DocInputs::StdlibOnly))
         }
         Err(other) => Err(other),
     }
@@ -4961,7 +4981,7 @@ fn serve(path: &Path, port: Option<u16>) -> Result<(), CliError> {
     use std::net::TcpListener;
 
     crate::style::print_command_header();
-    let docs = build_docs_or_stdlib(path)?;
+    let (docs, _) = build_docs_or_stdlib(path)?;
     let docs_root = locate_docs_root();
     let bundle = build_doc_bundle(&docs_root)?;
     let site = render_site_for_serve(&docs, &bundle);
@@ -6095,6 +6115,70 @@ mod tests {
         let _ = fs::remove_dir_all(&tmp);
     }
 
+    /// The inputs a successful project documentation build reports for `path`.
+    fn tree(path: &Path) -> DocInputs {
+        DocInputs::Tree(tree_walk_root(path))
+    }
+
+    /// A site inside the module tree a documentation build read is refused.
+    ///
+    /// A manifest-less flat package is its own tree, so any site inside it is
+    /// turned away; the same site beside a `src/` tree is claimed.
+    #[test]
+    fn claim_site_refuses_an_out_inside_the_read_module_tree() {
+        use std::fs;
+        let tmp = std::env::temp_dir().join(format!("ipe-doc-tree-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&tmp);
+        let flat = tmp.join("flat");
+        fs::create_dir_all(&flat).expect("flat dir");
+        fs::write(flat.join("Main.ipe"), "module Main exposing (..)\n").expect("module");
+
+        let inputs = tree(&flat);
+        assert!(
+            matches!(&inputs, DocInputs::Tree(t) if t == &flat),
+            "a flat package's tree is the package itself, got {inputs:?}"
+        );
+        let inside = claim_site(&flat, &inputs, &flat.join("doc"));
+        assert!(
+            matches!(
+                inside,
+                Err(CliError::OutputRefused(
+                    crate::output_dir::OutputRefusal::InsideSources { .. }
+                ))
+            ),
+            "a site inside the read module tree must be refused, got {inside:?}"
+        );
+        assert!(!flat.join("doc").exists(), "nothing created on refusal");
+        let nested = claim_site(&flat, &inputs, &flat.join("sub").join("doc"));
+        assert!(
+            matches!(nested, Err(CliError::OutputRefused(_))),
+            "a deeper site inside the tree is refused too, got {nested:?}"
+        );
+
+        let pkg = tmp.join("pkg");
+        fs::create_dir_all(pkg.join("src")).expect("src dir");
+        fs::write(
+            pkg.join("src").join("Main.ipe"),
+            "module Main exposing (..)\n",
+        )
+        .expect("module");
+        let beside = claim_site(&pkg, &tree(&pkg), &pkg.join("doc"));
+        assert!(
+            beside.is_ok(),
+            "a site beside `src/` is claimed, got {beside:?}"
+        );
+        let in_src = claim_site(&pkg, &tree(&pkg), &pkg.join("src").join("doc"));
+        assert!(
+            matches!(in_src, Err(CliError::OutputRefused(_))),
+            "a site inside `src/` is refused, got {in_src:?}"
+        );
+        assert_eq!(
+            fs::read_to_string(flat.join("Main.ipe")).ok().as_deref(),
+            Some("module Main exposing (..)\n")
+        );
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
     /// A doc site overlapping the documented package is refused before any write.
     ///
     /// The package directory, a directory holding it, and a lone entry's own
@@ -6114,7 +6198,7 @@ mod tests {
         fs::write(pkg.join("keep.txt"), "keep").expect("user file");
 
         for out in [pkg.clone(), tmp.clone()] {
-            let site = claim_site(&pkg, &out);
+            let site = claim_site(&pkg, &tree(&pkg), &out);
             assert!(
                 matches!(site, Err(CliError::OutputRefused(_))),
                 "an out holding the package must be refused, got {site:?}"
@@ -6122,7 +6206,7 @@ mod tests {
         }
         let lone = tmp.join("lone");
         fs::create_dir_all(&lone).expect("lone dir");
-        let inside = claim_site(&lone.join("Main.ipe"), &lone);
+        let inside = claim_site(&lone.join("Main.ipe"), &DocInputs::StdlibOnly, &lone);
         assert!(
             matches!(inside, Err(CliError::OutputRefused(_))),
             "the entry's own directory must be refused, got {inside:?}"
@@ -6132,7 +6216,7 @@ mod tests {
             Some("keep")
         );
         assert!(
-            claim_site(&pkg, &pkg.join("doc")).is_ok(),
+            claim_site(&pkg, &tree(&pkg), &pkg.join("doc")).is_ok(),
             "a site inside the package is claimed"
         );
         let _ = fs::remove_dir_all(&tmp);
@@ -6174,7 +6258,12 @@ mod tests {
         let _ = fs::remove_dir_all(&tmp);
         fs::create_dir_all(&tmp).expect("create empty dir");
 
-        let docs = build_docs_or_stdlib(&tmp).expect("empty dir falls back to stdlib-only");
+        let (docs, inputs) =
+            build_docs_or_stdlib(&tmp).expect("empty dir falls back to stdlib-only");
+        assert!(
+            matches!(inputs, DocInputs::StdlibOnly),
+            "no project tree was read"
+        );
         assert!(
             docs.modules.iter().all(|m| m.kind == ModuleKind::Stdlib),
             "empty-dir fallback yields stdlib-only modules"

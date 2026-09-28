@@ -144,6 +144,22 @@ impl From<crate::diff::FloorOverflow> for DiffError {
     }
 }
 
+/// The tree [`read_tree`] reads for `root`: the file itself, `root/src`, or `root`.
+///
+/// A conventional package keeps modules under `src/`; a directory without one
+/// (a flat fixture tree) is walked from `root` itself. Public so a command that
+/// writes beside the tree (`ipe doc`'s site) proves itself clear of exactly the
+/// tree read.
+#[must_use]
+pub fn tree_walk_root(root: &Path) -> PathBuf {
+    let candidate = root.join("src");
+    if root.is_dir() && candidate.is_dir() {
+        candidate
+    } else {
+        root.to_path_buf()
+    }
+}
+
 /// Read every `.ipe` module under a package source tree into `(path, source)`
 /// pairs keyed by module path.
 ///
@@ -160,17 +176,7 @@ impl From<crate::diff::FloorOverflow> for DiffError {
 /// [`DiffError::Empty`] when the tree carries no `.ipe` modules.
 pub fn read_tree(root: &Path) -> Result<BTreeMap<ModulePath, (PathBuf, String)>, DiffError> {
     let discovered = if root.is_dir() {
-        // A conventional package keeps modules under `src/`; fall back to the
-        // root itself when there is no `src/` (a flat fixture tree).
-        let src_root = {
-            let candidate = root.join("src");
-            if candidate.is_dir() {
-                candidate
-            } else {
-                root.to_path_buf()
-            }
-        };
-        project::discover_modules(&src_root)?
+        project::discover_modules(&tree_walk_root(root))?
     } else {
         // A single `.ipe` file is its own module; name it by its stem.
         let stem = root
