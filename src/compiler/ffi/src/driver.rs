@@ -1098,7 +1098,7 @@ pub struct InspectedConstFact {
 /// # Errors
 ///
 /// As [`load_catalog_from`].
-#[cfg(any(test, feature = "test-support"))]
+#[cfg(any(test, feature = "testing"))]
 pub fn load_catalog(cache_root: &Path) -> Result<Vec<InstalledCrate>, Diagnostic> {
     if !cache_root.is_dir() {
         return Ok(Vec::new());
@@ -1134,10 +1134,10 @@ pub trait CacheSource {
 }
 
 /// A cache read by path, following links, for a directory the caller owns outright.
-#[cfg(any(test, feature = "test-support"))]
+#[cfg(any(test, feature = "testing"))]
 struct PathCacheSource<'a>(&'a Path);
 
-#[cfg(any(test, feature = "test-support"))]
+#[cfg(any(test, feature = "testing"))]
 impl CacheSource for PathCacheSource<'_> {
     type Error = Diagnostic;
 
