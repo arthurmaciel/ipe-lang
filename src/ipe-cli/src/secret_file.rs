@@ -393,7 +393,7 @@ mod tests {
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_default();
         assert!(
-            name.starts_with(".token.") && name.ends_with(".tmp"),
+            name.starts_with(".token.") && temp.extension() == Some(std::ffi::OsStr::new("tmp")),
             "unexpected temp name {name}"
         );
         assert!(

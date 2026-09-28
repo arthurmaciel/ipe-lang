@@ -1202,7 +1202,7 @@ mod tests {
         );
         assert_eq!(StoredToken::probe(Some(path.clone())), StoredToken::Absent);
         assert!(matches!(
-            token_status_of(StoredToken::probe(Some(path.clone()))),
+            token_status_of(StoredToken::probe(Some(path))),
             TokenStatus::NotLoggedIn
         ));
         assert!(matches!(logout_at(StoredToken::Absent), Ok(None)));
