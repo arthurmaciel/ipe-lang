@@ -47,3 +47,11 @@ runs:
         toolchain: ${{ steps.channel.outputs.channel }}
         components: ${{ inputs.components }}
         targets: ${{ inputs.targets }}
+
+    # rustup syncs rust-toolchain.toml's declared components and targets on the
+    # first toolchain call. Doing it here keeps that network fetch inside
+    # installation, so a check step never downloads and a CDN flake can never
+    # be classified as a deterministic check failure.
+    - name: Materialise the rust-toolchain.toml components and targets
+      shell: bash
+      run: rustc --version
