@@ -76,9 +76,10 @@ const DYNAMIC_KEY_ALLOWED: &[Allowed] = &[
         reason: "callers pass `XDG_*` literals, which the literal rule scans",
     },
     Allowed {
-        file: "src/ipe-cli/src/env_dir.rs",
+        file: "src/compiler/sandbox/src/home.rs",
         func: "tool_home",
-        reason: "callers pass `CARGO_HOME`/`RUSTUP_HOME` literals, which the literal rule scans",
+        reason: "the one tool-home reader; callers pass `CARGO_HOME`/`RUSTUP_HOME` literals, \
+                 which the literal rule scans",
     },
     Allowed {
         file: "src/ipe-cli/src/wasi_run.rs",

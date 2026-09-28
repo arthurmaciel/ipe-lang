@@ -55,10 +55,13 @@ pub fn ambient_home_from(
 /// directory; a set, non-empty, relative value is refused instead. An empty
 /// value counts as unset, as the tool treats it.
 ///
+/// Delegates to the one tool-home reader, [`ipe_sandbox::home::tool_home`].
+///
 /// # Errors
 /// [`CliError::EnvDirNotAbsolute`] when `var` is set, non-empty, and relative.
 pub fn tool_home(var: &'static str, fallback: &str) -> Result<Option<PathBuf>, CliError> {
-    tool_home_from(var, std::env::var_os(var), home(), fallback)
+    ipe_sandbox::home::tool_home(var, fallback)
+        .map_err(|relative| CliError::EnvDirNotAbsolute { var: relative.var })
 }
 
 /// Resolve a tool home from the raw variable value and the resolved home.

@@ -780,6 +780,9 @@ mod tests {
     const FONT_MODULE: &str = "module Font exposing (bold, italic, size)\n\nbold : Int\nbold = 1\n\nitalic : Int\nitalic = 2\n\nsize : Int\nsize = 3\n";
     const SHAPE_MODULE: &str =
         "module Shape exposing (Shape(..))\n\ntype Shape = Circle | Rect Int\n";
+    /// `FONT_MODULE` declared at the multi-segment path `Acme.Ui.Font` — a file
+    /// must declare the module name its path implies.
+    const DOTTED_FONT_MODULE: &str = "module Acme.Ui.Font exposing (bold, italic, size)\n\nbold : Int\nbold = 1\n\nitalic : Int\nitalic = 2\n\nsize : Int\nsize = 3\n";
 
     /// Extract the `Edit` variant of a completion item's `text_edit`, panicking
     /// (test-only) with the item's label if it carries no edit at all — every
@@ -1220,23 +1223,24 @@ mod tests {
         );
     }
 
-    /// A full dotted path (`Ipe.Ui.Font.`-shaped) resolves the same import as
+    /// A full dotted path (`Acme.Ui.Font.`-shaped) resolves the same import as
     /// its bare last-segment spelling (`Font.`) — canon's own bare-import
     /// qualifier rule yields both spellings for a multi-segment path.
     #[test]
     fn full_dotted_path_and_last_segment_both_resolve_the_same_import() {
         const SRC: &str =
-            "module Main exposing (main)\n\nimport Ipe.Ui.Font\n\nmain = Ipe.Ui.Font.b\n";
+            "module Main exposing (main)\n\nimport Acme.Ui.Font\n\nmain = Acme.Ui.Font.b\n";
         const SRC_SHORT: &str =
-            "module Main exposing (main)\n\nimport Ipe.Ui.Font\n\nmain = Font.b\n";
+            "module Main exposing (main)\n\nimport Acme.Ui.Font\n\nmain = Font.b\n";
         let db = IpeDatabase::new();
-        let font = file(&db, &["Ipe", "Ui", "Font"], FONT_MODULE);
+        let font = file(&db, &["Acme", "Ui", "Font"], DOTTED_FONT_MODULE);
         let entry = file(&db, &["Main"], SRC);
-        let root = root_of(&db, &[(&["Ipe", "Ui", "Font"], font), (&["Main"], entry)]);
+        let root = root_of(&db, &[(&["Acme", "Ui", "Font"], font), (&["Main"], entry)]);
 
-        let byte =
-            u32::try_from(SRC.find("Ipe.Ui.Font.b").expect("has trigger") + "Ipe.Ui.Font.b".len())
-                .expect("offset fits u32");
+        let byte = u32::try_from(
+            SRC.find("Acme.Ui.Font.b").expect("has trigger") + "Acme.Ui.Font.b".len(),
+        )
+        .expect("offset fits u32");
         let items = qualified_completions(
             &db,
             root,
@@ -1251,11 +1255,11 @@ mod tests {
         assert!(labels.contains(&"bold"), "bold missing: {labels:?}");
 
         let db2 = IpeDatabase::new();
-        let font2 = file(&db2, &["Ipe", "Ui", "Font"], FONT_MODULE);
+        let font2 = file(&db2, &["Acme", "Ui", "Font"], DOTTED_FONT_MODULE);
         let entry2 = file(&db2, &["Main"], SRC_SHORT);
         let root2 = root_of(
             &db2,
-            &[(&["Ipe", "Ui", "Font"], font2), (&["Main"], entry2)],
+            &[(&["Acme", "Ui", "Font"], font2), (&["Main"], entry2)],
         );
         let byte2 = u32::try_from(SRC_SHORT.find("Font.b").expect("has trigger") + "Font.b".len())
             .expect("offset fits u32");
@@ -1520,7 +1524,7 @@ mod tests {
         let entry = file(&db, &["Main"], SRC);
         let root = root_of(&db, &[(&["Helper"], helper), (&["Main"], entry)]);
 
-        let byte = u32::try_from(SRC.find("thr").expect("has trigger") + "thr".len())
+        let byte = u32::try_from(SRC.find("= thr").expect("has trigger") + "= thr".len())
             .expect("offset fits u32");
         let items = completions(
             &db,
