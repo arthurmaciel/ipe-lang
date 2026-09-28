@@ -248,6 +248,12 @@ jobs:
     if: needs.changes.outputs.code == 'true' || github.event_name != 'pull_request'
     steps:
       - uses: actions/checkout@v7
+      # ripgrep — tools/scripts/lint-diagnostic-tone.sh requires it (fails
+      # closed via require_tool when absent instead of passing vacuously).
+      - name: Install ripgrep
+        run: sudo apt-get update && sudo apt-get install -y ripgrep
+      - name: Gate self-test (require-tool fail-closed)
+        run: bash tools/scripts/tests/test-require-tool.sh
       - name: Lint diagnostic tone
         run: bash tools/scripts/lint-diagnostic-tone.sh
 

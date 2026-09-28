@@ -12,8 +12,13 @@
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-goldens_dir="$repo_root/src/compiler/diagnostics/tests/render_goldens"
-explain_dir="$repo_root/src/compiler/diagnostics/explain"
+# Overridable so tools/scripts/tests/test-require-tool.sh can point the gate
+# at a fixture dir and prove it actually fails on a known violation.
+goldens_dir="${GOLDENS_DIR:-$repo_root/src/compiler/diagnostics/tests/render_goldens}"
+explain_dir="${EXPLAIN_DIR:-$repo_root/src/compiler/diagnostics/explain}"
+
+source "$repo_root/tools/scripts/lib/require-tool.sh"
+require_tool rg
 
 # Internal jargon banned in ANY user-facing text (goldens + explain).
 # Word-boundary, case-insensitive — these tokens are distinctive enough that no
@@ -46,12 +51,15 @@ violations=0
 # scan DIR PATTERN GLOB CASE WORD — print each match as file:line:term and set
 # the violations flag on any hit. CASE is "-i" (case-insensitive) or ""
 # (sensitive); WORD is "-w" (whole-word) or "" (pattern carries its own anchors).
+# Uses match_or_fail so an rg error (a bad pattern, a permission error, or rg
+# itself missing) hard-fails the gate instead of reading as "no match".
 scan() {
     local dir="$1" pattern="$2" glob="$3" case_flag="${4:-}" word_flag="${5:-}"
     [ -d "$dir" ] || return 0
     # rg: -o print only the matched term, --no-heading + -n for file:line, -H to
     # always print the filename.
-    if rg -o -n -H --no-heading ${case_flag:+"$case_flag"} ${word_flag:+"$word_flag"} \
+    if match_or_fail "$dir ($pattern)" -- \
+        rg -o -n -H --no-heading ${case_flag:+"$case_flag"} ${word_flag:+"$word_flag"} \
         -e "$pattern" "$dir" --glob "$glob"; then
         violations=1
     fi

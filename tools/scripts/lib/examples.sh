@@ -21,6 +21,13 @@
 #   build_set               → all_examples − Go-FFI (the BUILD sweep set).
 #   run_set / perf_set      → == build_set.
 
+# The shape/scope classifiers below decide with rg. Require it up front so a
+# missing rg fails loud here rather than silently misclassifying an example
+# (rg absent -> every `rg -q` reads as "no match" -> an example is dropped
+# from or kept in a set on a false signal instead of a hard error).
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/require-tool.sh"
+require_tool rg
+
 # ── all_examples: every candidate dir on disk, trailing slash stripped ───────
 # The first-party dirs: numbered legacy examples, wasm, rust, ffi, and the
 # per-shape demos under examples/shapes/*/*.
