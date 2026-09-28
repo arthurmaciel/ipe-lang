@@ -32785,6 +32785,123 @@ mod tests {
         assert!(nonclone_read_after_move(env, w, &wrap_task, &unordered));
     }
 
+    /// A move of a non-`Clone` capture out of a re-callable closure fails closed with IPE-L0126.
+    ///
+    /// A borrow inside the closure, a shadowing parameter, and the one
+    /// consume-once lambda slot stay accepted by this gate.
+    #[test]
+    fn nonclone_move_out_of_recallable_closure_fails_closed() {
+        use ipe_diagnostics::Feature;
+        use ipe_intern::Symbol;
+        use ipe_ir::{CallPin, Callee, Expr, FuncId, IrType, KernelFn, ModPath, OnFormKind};
+
+        use super::{
+            CloneEnv, nonclone_moves_out_of_recallable_closure, reject_nonclone_value_reuse,
+            unsupported,
+        };
+
+        let mut interner = Interner::new();
+        let main = interner.intern("Main").expect("intern");
+        let wrap = interner.intern("Wrap").expect("intern");
+        let w = interner.intern("w").expect("intern");
+        let tag = interner.intern("tag").expect("intern");
+        let app = interner.intern("app").expect("intern");
+        let span = Span::DUMMY;
+        let transparent = BTreeSet::new();
+        let env = CloneEnv {
+            interner: &interner,
+            transparent_ffi: &transparent,
+            payloads: &ipe_ir::EnumPayloadTable::new(),
+        };
+        let wrap_task = IrType::Enum {
+            home: ModPath(vec![main]),
+            name: wrap,
+            args: vec![IrType::Task(Box::new(IrType::Int))],
+        };
+        let app_record =
+            IrType::Record(BTreeMap::from([(app, IrType::WebApp), (tag, IrType::Int)]));
+        let lambda = |body: Expr| Expr::Lambda {
+            params: vec![],
+            ret: IrType::Int,
+            body: Box::new(body),
+        };
+        let call = |callee: Callee, args: Vec<Expr>| Expr::Call {
+            callee,
+            args,
+            pin: CallPin::None,
+            on_form: OnFormKind::NotForm,
+        };
+        let user_call = |args: Vec<Expr>| call(Callee::Func(FuncId::from_raw(0)), args);
+        let access = |field: Symbol, field_ty: IrType| Expr::Access {
+            record: Box::new(Expr::Var(w)),
+            field,
+            field_ty,
+        };
+        let moves =
+            |ty: &IrType, body: &Expr| nonclone_moves_out_of_recallable_closure(env, w, ty, body);
+
+        // `\_ -> g w`: a whole move out of a re-callable closure — refused.
+        let whole = lambda(user_call(vec![Expr::Var(w)]));
+        assert!(moves(&wrap_task, &whole));
+        let err = reject_nonclone_value_reuse(env, w, &wrap_task, &whole, span)
+            .expect_err("a whole move out of a re-callable closure must be rejected");
+        assert_eq!(err, unsupported(span, Feature::NonCloneCapture));
+
+        // `\_ -> g w.app`: a move-only field read out of the capture — refused.
+        let field_move = lambda(user_call(vec![access(app, IrType::WebApp)]));
+        assert!(moves(&app_record, &field_move));
+        let err = reject_nonclone_value_reuse(env, w, &app_record, &field_move, span)
+            .expect_err("a move-only field read out of a re-callable closure must be rejected");
+        assert_eq!(err, unsupported(span, Feature::NonCloneCapture));
+
+        // `\_ -> g w.tag`: a `Copy` field read borrows the capture — accepted.
+        let field_borrow = lambda(user_call(vec![access(tag, IrType::Int)]));
+        assert!(!moves(&app_record, &field_borrow));
+        assert!(reject_nonclone_value_reuse(env, w, &app_record, &field_borrow, span).is_ok());
+
+        // `\w -> g w`: the parameter shadows the binding — not a capture.
+        let shadowed = Expr::Lambda {
+            params: vec![(w, IrType::Int)],
+            ret: IrType::Int,
+            body: Box::new(user_call(vec![Expr::Var(w)])),
+        };
+        assert!(!moves(&wrap_task, &shadowed));
+
+        // `\_ -> \_ -> g w`: the inner capture moves out of the outer closure — refused.
+        let nested = lambda(lambda(user_call(vec![Expr::Var(w)])));
+        assert!(moves(&wrap_task, &nested));
+
+        // The `Task.andThen` continuation is consume-once: a move inside it is
+        // legal, while a re-callable closure nested inside it still is not.
+        let and_then = |cont: Expr| {
+            call(
+                Callee::Kernel(KernelFn::TaskAndThen),
+                vec![cont, user_call(vec![Expr::Int(0)])],
+            )
+        };
+        assert!(Callee::Kernel(KernelFn::TaskAndThen).lambda_arg_runs_once(0));
+        assert!(!Callee::Kernel(KernelFn::TaskAndThen).lambda_arg_runs_once(1));
+        assert!(!Callee::Kernel(KernelFn::MaybeMap).lambda_arg_runs_once(0));
+        assert!(!moves(
+            &wrap_task,
+            &and_then(lambda(user_call(vec![Expr::Var(w)])))
+        ));
+        assert!(moves(
+            &wrap_task,
+            &and_then(lambda(lambda(user_call(vec![Expr::Var(w)]))))
+        ));
+
+        // A lambda in a re-callable kernel slot is refused like any other.
+        let mapped = call(
+            Callee::Kernel(KernelFn::MaybeMap),
+            vec![lambda(user_call(vec![Expr::Var(w)])), user_call(vec![])],
+        );
+        assert!(moves(&wrap_task, &mapped));
+
+        // A move outside any closure is not this gate's concern.
+        assert!(!moves(&wrap_task, &user_call(vec![Expr::Var(w)])));
+    }
+
     /// A sequenced task whose capture-clone rewrite would clone a non-Clone
     /// effect carrier fails closed with IPE-L0135; an eager borrow stays accepted.
     #[test]
