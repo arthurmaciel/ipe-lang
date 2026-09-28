@@ -176,7 +176,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - run: .github/ci/artifact-guard.sh
+      - name: Reject committed build artifacts
+        run: .github/ci/artifact-guard.sh
 
   # Cargo.lock must agree with the version Cargo.toml declares. Fail-closed
   # backstop to the release-please sync-cargo-lock job: a version-desynced tree
@@ -186,7 +187,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - run: .github/ci/manifest-lock-consistency.sh
+      - name: Check Cargo.lock agrees with Cargo.toml versions
+        run: .github/ci/manifest-lock-consistency.sh
 
   fmt:
     runs-on: ubuntu-latest
@@ -195,7 +197,8 @@ jobs:
       - uses: ./.github/actions/rust-toolchain-pinned
         with:
           components: rustfmt
-      - run: cargo fmt --all -- --check
+      - name: Check formatting
+        run: cargo fmt --all -- --check
 
   clippy:
     runs-on: ubuntu-latest
@@ -210,7 +213,10 @@ jobs:
           components: clippy
       - uses: mozilla-actions/sccache-action@v0.0.9
       - uses: Swatinem/rust-cache@v2
-      - run: cargo clippy --all-targets --workspace -- -D warnings
+      - name: Fetch crates
+        run: cargo fetch
+      - name: Run clippy
+        run: cargo clippy --offline --all-targets --workspace -- -D warnings
 
   # The CLI's Windows-only code (held output-directory handles, reparse-point
   # refusal) never compiles on a Linux runner, so a cfg(windows) break would
@@ -242,7 +248,8 @@ jobs:
     if: needs.changes.outputs.code == 'true' || github.event_name != 'pull_request'
     steps:
       - uses: actions/checkout@v7
-      - run: bash tools/scripts/lint-diagnostic-tone.sh
+      - name: Lint diagnostic tone
+        run: bash tools/scripts/lint-diagnostic-tone.sh
 
   # Doctest-style gate: every unmarked ```ipe block in src/compiler/diagnostics/explain/*.md
   # must type-check. A page that teaches broken syntax is worse than no page (ADR 0059).
@@ -353,7 +360,10 @@ jobs:
       - uses: ./.github/actions/rust-toolchain-pinned
       - uses: mozilla-actions/sccache-action@v0.0.9
       - uses: Swatinem/rust-cache@v2
-      - run: cargo check --workspace
+      - name: Fetch crates
+        run: cargo fetch
+      - name: Check the workspace compiles
+        run: cargo check --offline --workspace
 
   # Guards the ipe-runtime-rust feature graph against silent coupling. The
   # workspace jobs above build the runtime with its DEFAULT features (`[]`), so
@@ -1584,23 +1594,34 @@ jobs:
   # benefit from letting the expensive matrix tier (e2e, seal-slice, asan/tsan,
   # the tier-2 jail proofs, browser-e2e, registry-admission, …) run to
   # completion — none of it can change the merge decision. This job watches
-  # only the cheap, fully deterministic gates and, the instant any of them
-  # goes red, cancels the whole run so the heavy tier stops burning runners.
+  # the cheap deterministic gates and cancels the rest of the run once one of
+  # them is red AT ITS CHECK STEP.
+  #
+  # Latency: a job starts only after EVERY `needs:` entry has finished, so the
+  # cancel lands when the slowest member finishes (the docs-drift jobs:
+  # quick-check, then a debug `cargo run` regenerate), not when the first red
+  # appears. Members that need a release build are deliberately left out so
+  # that bound stays a few minutes rather than the length of a release build.
+  #
+  # Classification is per FAILED STEP, not per job: every member also runs
+  # network-bound setup (checkout, toolchain install, sccache, rust-cache, the
+  # crate fetch), and `failure()` is also true when an ANCESTOR outside the set
+  # failed (e.g. `changes`, a network-bound paths-filter, whose failure skips
+  # its dependants). Neither is a deterministic red. The step below lists the
+  # run's failed jobs with their failed steps and cancels only when some
+  # failed job's failed step is that job's check step in
+  # `.github/ci/deterministic-checks.json`. Any API or parse error means no
+  # cancel: the run then completes normally.
   #
   # PR-only by construction (`github.event_name == 'pull_request'`): a push or
-  # scheduled run is never cancelled. `failure()` over `needs:` is false for a
-  # legitimately SKIPPED dependency (e.g. a docs-only PR's path-gated jobs),
-  # so a vacuous skip never trips the watcher — only a literal `failure`
-  # does. A fork PR's run carries a read-only token that cannot cancel
-  # anything, so this job is skipped outright on a fork PR rather than
-  # attempted and denied, leaving that run to complete normally.
+  # scheduled run is never cancelled. A fork PR's run carries a read-only
+  # token that cannot cancel anything, so this job is skipped outright on a
+  # fork PR rather than attempted and denied.
   #
-  # The watched job set is the checked-in `.github/ci/deterministic-jobs.txt`,
-  # shared with `rerun-failed-once.yml`'s no-rerun-on-deterministic-red filter;
-  # `ci/verify-manifest.py` (run in `manifest-guard.yml`) fails the build if
-  # this job's `needs:` and that file ever disagree. Never add a job here (or
-  # to that file) that can flake or that a rerun could turn green — that
-  # would suppress a legitimate automatic retry.
+  # `.github/ci/deterministic-checks.json` is the SSOT of (job, check step)
+  # pairs, shared with `rerun-failed-once.yml`; `ci/verify-manifest.py` (run in
+  # `manifest-guard.yml`) fails the build if this job's `needs:` differs from
+  # that file's job set or a listed step name is not in the job's steps.
   cancel-on-cheap-red:
     runs-on: ubuntu-latest
     needs:
@@ -1610,31 +1631,52 @@ jobs:
       - artifact-guard
       - manifest-lock-consistency
       - diagnostic-tone
-      - explain-examples
-      - doc-examples
       - stdlib-docs-drift
       - env-docs-drift
       - capabilities-docs-drift
       - cli-docs-drift
       - requirements-docs-drift
       - cli-transcripts-drift
-      - markdown-parity
     if: >-
       failure() &&
       github.event_name == 'pull_request' &&
       github.event.pull_request.head.repo.full_name == github.repository
     permissions:
       actions: write
+      contents: read
     steps:
-      - name: Cancel the run — a deterministic cheap gate is already red
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          sparse-checkout: .github/ci/deterministic-checks.json
+          sparse-checkout-cone-mode: false
+
+      - name: Cancel the run when a deterministic check step is red
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           RUN_ID: ${{ github.run_id }}
+          SSOT: .github/ci/deterministic-checks.json
         run: |
-          set -euo pipefail
-          echo "a deterministic cheap gate failed on PR run $RUN_ID — cancelling the rest of the run so the heavy tier stops consuming runners."
-          gh run cancel "$RUN_ID" --repo "$REPO"
+          set -uo pipefail
+          failed="$(gh api "repos/$REPO/actions/runs/$RUN_ID/jobs" --paginate \
+            --jq '.jobs[] | select(.conclusion == "failure") | {name, steps: [.steps[] | select(.conclusion == "failure") | .name]}')" || {
+            echo "::warning::could not list run $RUN_ID's jobs — not cancelling."
+            exit 0
+          }
+          # Data-only exact match: a failed job is a deterministic red iff its
+          # (name, failed step) pair is in the SSOT. Output is exactly `true`
+          # or `false`; anything else (a jq error included) means no cancel.
+          verdict="$(printf '%s\n' "$failed" | jq -rs --slurpfile ssot "$SSOT" '
+            [ .[] | . as $job
+              | any($ssot[0].checks[]; .context == $job.name and (.step as $s | any($job.steps[]; . == $s)))
+            ] | any')" || verdict=error
+          if [ "$verdict" != "true" ]; then
+            echo "no failed job on run $RUN_ID failed at a deterministic check step (verdict: $verdict) — not cancelling."
+            exit 0
+          fi
+          echo "a deterministic check step failed on PR run $RUN_ID — cancelling the rest of the run so the heavy tier stops consuming runners."
+          gh run cancel "$RUN_ID" --repo "$REPO" || echo "::warning::gh run cancel failed for run $RUN_ID."
 
   # Headless-browser behaviour gate for Ipe.Browser.Geolocation +
   # Ipe.Browser.Clipboard — the three flows a raw TcpStream HTTP test cannot

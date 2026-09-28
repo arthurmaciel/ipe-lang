@@ -27,10 +27,12 @@ Checks performed
      vice-versa.  Run with `--ruleset FILE` (a JSON dump of the ruleset's
      required contexts) to make mismatches fatal; without it the manifest is the
      SSOT and the check is skipped with a note.
-  5. The `cancel-on-cheap-red` job's `needs:` (ci.yml) and the checked-in
-     `ci/deterministic-jobs.txt` (consumed by rerun-failed-once.yml's
-     no-rerun-on-deterministic-red filter) name the exact same job set — the
-     two representations of the one SSOT fact can never silently diverge.
+  5. `ci/deterministic-checks.json` — the SSOT of (job, check step) pairs
+     consumed by ci.yml's `cancel-on-cheap-red` watcher and
+     rerun-failed-once.yml — is well-formed (exact keys, non-empty strings with
+     no surrounding whitespace, no duplicate job), its job set equals the
+     watcher's `needs:`, and each pair's step is a `name:` of that job's steps
+     in ci.yml.
 
 Pure stdlib + PyYAML (already a CI dependency).  No network.
 """
@@ -53,7 +55,7 @@ except ImportError:  # pragma: no cover - CI always has PyYAML
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 WORKFLOW_GLOB = os.path.join(REPO_ROOT, "workflows", "*.yml")
 MANIFEST = os.path.join(REPO_ROOT, "ci", "check-manifest.yml")
-DETERMINISTIC_JOBS_FILE = os.path.join(REPO_ROOT, "ci", "deterministic-jobs.txt")
+DETERMINISTIC_CHECKS_FILE = os.path.join(REPO_ROOT, "ci", "deterministic-checks.json")
 CANCEL_WATCHER_WORKFLOW = "ci.yml"
 CANCEL_WATCHER_JOB_ID = "cancel-on-cheap-red"
 
@@ -145,20 +147,59 @@ def produced_contexts(jobs: list[Job]) -> dict[str, list[str]]:
     return contexts
 
 
-def check_deterministic_set(jobs: list[Job], errors: list[str]) -> None:
-    """The `cancel-on-cheap-red` watcher's `needs:` must equal the checked-in
-    `ci/deterministic-jobs.txt` list — the one SSOT fact behind both ci.yml's
-    watcher and rerun-failed-once.yml's no-rerun-on-deterministic-red filter.
+def load_deterministic_checks(errors: list[str]) -> list[tuple[str, str]] | None:
+    """Parse `ci/deterministic-checks.json` into (context, step) pairs, or
+    record why it is malformed.  Strict: the shell consumers match these
+    strings byte-exactly, so anything a consumer could misread is rejected.
     """
+    where = DETERMINISTIC_CHECKS_FILE
     try:
-        with open(DETERMINISTIC_JOBS_FILE) as f:
-            listed = {
-                line.strip()
-                for line in f
-                if line.strip() and not line.strip().startswith("#")
-            }
-    except OSError as e:
-        errors.append(f"cannot read {DETERMINISTIC_JOBS_FILE}: {e}")
+        with open(where) as f:
+            doc = json.load(f)
+    except (OSError, ValueError) as e:
+        errors.append(f"cannot read {where}: {e}")
+        return None
+    if not isinstance(doc, dict) or set(doc) != {"about", "checks"}:
+        errors.append(f"{where}: top level must be an object with exactly the keys 'about' and 'checks'")
+        return None
+    checks = doc["checks"]
+    if not isinstance(checks, list) or not checks:
+        errors.append(f"{where}: 'checks' must be a non-empty list")
+        return None
+    pairs: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    for i, entry in enumerate(checks):
+        if not isinstance(entry, dict) or set(entry) != {"context", "step"}:
+            errors.append(f"{where}: checks[{i}] must be an object with exactly the keys 'context' and 'step'")
+            continue
+        ctx, step = entry["context"], entry["step"]
+        bad = False
+        for key, val in (("context", ctx), ("step", step)):
+            if not isinstance(val, str) or not val or val != val.strip() or "\n" in val:
+                errors.append(
+                    f"{where}: checks[{i}].{key} = {val!r} must be a non-empty "
+                    "single-line string with no leading/trailing whitespace"
+                )
+                bad = True
+        if bad:
+            continue
+        if ctx in seen:
+            errors.append(f"{where}: context {ctx!r} is listed more than once")
+            continue
+        seen.add(ctx)
+        pairs.append((ctx, step))
+    return pairs
+
+
+def check_deterministic_set(jobs: list[Job], errors: list[str]) -> None:
+    """`ci/deterministic-checks.json` is the one SSOT behind ci.yml's
+    `cancel-on-cheap-red` watcher and rerun-failed-once.yml's retry skip.
+    Its job set must equal the watcher's `needs:`, and each pair's step must
+    be a literal `name:` of that job's steps — a renamed or unnamed check step
+    would otherwise never match and silently disable both consumers.
+    """
+    pairs = load_deterministic_checks(errors)
+    if pairs is None:
         return
 
     by_job_id = {
@@ -168,32 +209,57 @@ def check_deterministic_set(jobs: list[Job], errors: list[str]) -> None:
     if watcher is None:
         errors.append(
             f"{CANCEL_WATCHER_WORKFLOW} has no {CANCEL_WATCHER_JOB_ID!r} job — "
-            f"{DETERMINISTIC_JOBS_FILE} has no watcher to check against"
+            f"{DETERMINISTIC_CHECKS_FILE} has no watcher to check against"
         )
         return
 
-    needed_contexts: set[str] = set()
-    for dep_id in watcher.needs:
-        dep = by_job_id.get(dep_id)
-        if dep is None:
+    raw_jobs = yaml.safe_load(
+        open(os.path.join(REPO_ROOT, "workflows", CANCEL_WATCHER_WORKFLOW))
+    ).get("jobs") or {}
+
+    # context -> job id, over single-context (non-matrix) jobs of ci.yml only:
+    # a matrix leg's context cannot be tied to one check step unambiguously.
+    ctx_to_job: dict[str, str] = {}
+    for j in by_job_id.values():
+        if len(j.contexts) == 1:
+            ctx_to_job[j.contexts[0]] = j.job_id
+
+    listed_ids: set[str] = set()
+    for ctx, step in pairs:
+        job_id = ctx_to_job.get(ctx)
+        if job_id is None:
             errors.append(
-                f"{CANCEL_WATCHER_WORKFLOW}: {CANCEL_WATCHER_JOB_ID!r} needs "
-                f"unknown job {dep_id!r}"
+                f"{DETERMINISTIC_CHECKS_FILE}: context {ctx!r} is not the "
+                f"context of a single-context job in {CANCEL_WATCHER_WORKFLOW}"
             )
             continue
-        needed_contexts.update(dep.contexts)
+        listed_ids.add(job_id)
+        steps = (raw_jobs.get(job_id) or {}).get("steps") or []
+        step_names = [st.get("name") for st in steps if isinstance(st, dict)]
+        if step_names.count(step) != 1:
+            errors.append(
+                f"{DETERMINISTIC_CHECKS_FILE}: job {job_id!r} must have exactly "
+                f"one step named {step!r} (found {step_names.count(step)})"
+            )
 
-    missing = listed - needed_contexts
-    extra = needed_contexts - listed
+    needed = set(watcher.needs)
+    unknown = needed - set(by_job_id)
+    if unknown:
+        errors.append(
+            f"{CANCEL_WATCHER_WORKFLOW}: {CANCEL_WATCHER_JOB_ID!r} needs "
+            f"unknown job(s) {sorted(unknown)}"
+        )
+    missing = listed_ids - needed
+    extra = needed - listed_ids - unknown
     if missing:
         errors.append(
-            f"{DETERMINISTIC_JOBS_FILE} lists {sorted(missing)} but "
+            f"{DETERMINISTIC_CHECKS_FILE} lists job(s) {sorted(missing)} but "
             f"{CANCEL_WATCHER_JOB_ID!r} does not `needs:` them"
         )
     if extra:
         errors.append(
             f"{CANCEL_WATCHER_JOB_ID!r} needs {sorted(extra)} but they are "
-            f"missing from {DETERMINISTIC_JOBS_FILE}"
+            f"missing from {DETERMINISTIC_CHECKS_FILE}"
         )
 
 
@@ -289,7 +355,7 @@ def main() -> int:
             "ci/check-manifest.yml — every check must be classified"
         )
 
-    # ---- 5. cancel-on-cheap-red needs: == ci/deterministic-jobs.txt ----
+    # ---- 5. ci/deterministic-checks.json vs the watcher + ci.yml steps ----
     check_deterministic_set(jobs, errors)
 
     # ---- 3. fail-closed dependency surfacing ----
