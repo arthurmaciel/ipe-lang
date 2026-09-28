@@ -2330,7 +2330,7 @@ pub fn build_project(
         manifest_path,
         out_dir,
         runtime_dir,
-        BuildOptions::from_env(),
+        &BuildOptions::from_env(),
     )
 }
 
@@ -2340,17 +2340,11 @@ pub fn build_project(
 /// # Errors
 /// As [`build_project`], plus [`CliError::StaticRefusal`] when the emitted
 /// app shape cannot be static.
-// `options` is reconstructed (struct-update syntax) with the parsed
-// manifest's `[wasm] publicEnv` allowlist before threading onward — a
-// genuine consuming use clippy's by-value heuristic doesn't credit; taking
-// `&BuildOptions` here would ripple a lifetime through every call site for
-// no benefit (every caller already owns a fresh `BuildOptions`).
-#[allow(clippy::needless_pass_by_value)]
 pub fn build_project_with_options(
     manifest_path: &Path,
     out_dir: &Path,
     runtime_dir: &Path,
-    options: BuildOptions,
+    options: &BuildOptions,
 ) -> Result<(), CliError> {
     build_project_into(
         manifest_path,
@@ -2367,12 +2361,11 @@ pub fn build_project_with_options(
 /// # Errors
 /// As [`build_project`], plus [`CliError::OutputRefused`] when `out` overlaps
 /// the project or its sources.
-#[allow(clippy::needless_pass_by_value)] // `options` is rebuilt by struct update below.
 pub fn build_project_into(
     manifest_path: &Path,
     out: OutTarget<'_>,
     runtime_dir: &Path,
-    options: BuildOptions,
+    options: &BuildOptions,
 ) -> Result<OwnedDir, CliError> {
     let manifest = project::parse_manifest(manifest_path)?;
     let discovered = project::discover_modules(&manifest.src_root)?;
@@ -2440,7 +2433,7 @@ pub fn build_project_into(
         wasm_hydrate_mode: manifest.wasm.mode.as_deref() == Some("hydrate"),
         cargo_name,
         webview_window,
-        ..options
+        ..*options
     };
 
     // The manifest is the blame location for an import cycle (no single file

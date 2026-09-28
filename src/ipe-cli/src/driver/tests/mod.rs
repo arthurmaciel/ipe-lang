@@ -2174,7 +2174,7 @@ fn build_refuses_a_pure_library_with_a_clean_message() {
         &tmp.join("package.ipe"),
         &out,
         Path::new("."),
-        BuildOptions::from_env(),
+        &BuildOptions::from_env(),
     );
     assert!(
         matches!(&result, Err(CliError::Usage(msg)) if msg.contains("library package")),

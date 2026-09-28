@@ -864,7 +864,7 @@ fn emit_into(
 ) -> Result<OwnedDir, CliError> {
     let out = OutTarget::Proven(target);
     match manifest {
-        Some(m) => build_project_into(m, out, runtime_dir, options),
+        Some(m) => build_project_into(m, out, runtime_dir, &options),
         None => build_with_sibling_discovery_into(entry_path, out, runtime_dir, options),
     }
 }

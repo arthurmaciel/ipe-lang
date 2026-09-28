@@ -380,7 +380,7 @@ impl<'a> BundleAssembler<'a> {
             self.manifest_path,
             OutTarget::Proven(&rust_target),
             &runtime_dir,
-            BuildOptions::from_env(),
+            &BuildOptions::from_env(),
         )?;
 
         let cargo_bin = toolchain::require_cargo(toolchain::ToolIntent::Build)?;
