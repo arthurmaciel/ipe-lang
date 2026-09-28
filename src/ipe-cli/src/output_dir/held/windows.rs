@@ -1,15 +1,20 @@
 //! Windows directory primitives: handle-relative opens, and path acts under a pin.
 //!
-//! Every open, classification, create, and removal names one entry relative to
-//! the held directory handle (`NtCreateFile` with a root directory, through
-//! `cap-primitives`), with `FILE_FLAG_OPEN_REPARSE_POINT` so a reparse point at
-//! the entry is refused or removed as itself, never traversed. A reparse point
-//! set on the held directory afterwards does not redirect those acts: they start
-//! from the directory object the handle holds, not from a path.
+//! Every open, classification, create, and file removal names one entry
+//! relative to the held directory handle (`NtCreateFile` with a root directory,
+//! through `cap-primitives`), with `FILE_FLAG_OPEN_REPARSE_POINT` so a reparse
+//! point at the entry is refused or removed as itself, never traversed. A
+//! reparse point set on the held directory afterwards does not redirect those
+//! acts: they start from the directory object the handle holds, not from a path.
+//! A handle-relative delete never admits a directory: it opens without backup
+//! semantics, which makes the open fail on any directory.
 //!
-//! Creating a subdirectory, renaming, and listing have no handle-relative form
-//! without raw system calls, so they name the entry by the held directory's
-//! proven real path. Each runs under a [`Pin`]: a sentinel file created through
+//! Creating a subdirectory, removing one, renaming, and listing have no
+//! handle-relative form without raw system calls, so they name the entry by the
+//! held directory's proven real path. A directory is removed only by
+//! `RemoveDirectoryW`, which removes nothing but an empty directory or a
+//! directory reparse point as itself — a file or a populated tree swapped in at
+//! the name is refused. Each runs under a [`Pin`]: a sentinel file created through
 //! the handle and held open without delete sharing. NTFS sets a reparse point on
 //! an empty directory only, and the sentinel cannot be removed while held, so
 //! for the act's duration the held directory cannot turn into a junction; the
@@ -49,6 +54,10 @@ const ATTR_REPARSE_POINT: u32 = 0x400;
 const ATTR_HIDDEN_TEMPORARY: u32 = 0x2 | 0x100;
 /// `ERROR_REPARSE_POINT_ENCOUNTERED`: the typed refusal of a reparse point.
 const ERROR_REPARSE_POINT_ENCOUNTERED: i32 = 4395;
+/// `ERROR_SHARING_VIOLATION`: another open handle denies the access asked for.
+const ERROR_SHARING_VIOLATION: i32 = 32;
+/// `ERROR_LOCK_VIOLATION`: another process has locked a region of the file.
+const ERROR_LOCK_VIOLATION: i32 = 33;
 /// The name prefix of a pin sentinel; entries carrying it are never listed.
 const PIN_PREFIX: &str = ".ipe-pin-";
 /// How many sentinel names a pin tries before giving up.
@@ -105,6 +114,18 @@ pub fn is_reparse_refusal(error: &io::Error) -> bool {
     error.raw_os_error() == Some(ERROR_REPARSE_POINT_ENCOUNTERED)
 }
 
+/// Whether `error` reports an entry another program holds open or locked.
+///
+/// An editor, a file indexer, or antivirus holding an entry without delete
+/// sharing makes a removal or a rename over it fail this way until it lets go.
+#[must_use]
+pub fn is_in_use(error: &io::Error) -> bool {
+    matches!(
+        error.raw_os_error(),
+        Some(ERROR_SHARING_VIOLATION | ERROR_LOCK_VIOLATION)
+    )
+}
+
 /// Check that `file` holds a plain directory, never a reparse point.
 fn require_plain_dir(file: &File) -> io::Result<()> {
     let attributes = file.metadata()?.file_attributes();
@@ -137,20 +158,16 @@ fn stat_options() -> OpenOptions {
     options
 }
 
-/// Options removing the opened entry when the handle closes, never following a reparse point.
+/// Options removing the opened non-directory when the handle closes, never following a reparse point.
 ///
-/// Without `directories`, the open fails on a directory.
-fn delete_options(directories: bool) -> OpenOptions {
-    let flags = if directories {
-        DELETE_ON_CLOSE | OPEN_REPARSE_POINT | BACKUP_SEMANTICS
-    } else {
-        DELETE_ON_CLOSE | OPEN_REPARSE_POINT
-    };
+/// Without backup semantics the open carries `FILE_NON_DIRECTORY_FILE`, so it
+/// fails on any directory: a handle-relative delete can never remove one.
+fn delete_options() -> OpenOptions {
     let mut options = OpenOptions::new();
     options
         .access_mode(0)
         .share_mode(SHARE_NO_DELETE)
-        .custom_flags(flags);
+        .custom_flags(DELETE_ON_CLOSE | OPEN_REPARSE_POINT);
     options
 }
 
@@ -403,39 +420,52 @@ impl Dir {
     /// A directory junction or directory link is removed as the link it is; a
     /// plain directory is refused. A non-directory is removed through an open
     /// that fails on any directory, so a directory swapped in after the check is
-    /// never removed; a directory reparse point is removed through an open that
-    /// admits directories, so an empty directory swapped in for it in that
-    /// window is removed in its place.
+    /// never removed; a directory reparse point is removed by
+    /// [`Dir::remove_directory`], so a file or a populated tree swapped in for
+    /// it is never removed either.
     pub fn unlink(&self, name: &OsStr) -> io::Result<()> {
         let attributes = self
             .attributes(name)?
             .ok_or_else(|| io::Error::from(io::ErrorKind::NotFound))?;
         if attributes & ATTR_DIRECTORY == 0 {
-            drop(self.open_at(name, &delete_options(false))?);
+            drop(self.open_at(name, &delete_options())?);
             Ok(())
         } else if attributes & ATTR_REPARSE_POINT != 0 {
-            drop(self.open_at(name, &delete_options(true))?);
-            Ok(())
+            self.remove_directory(name)
         } else {
             Err(io::ErrorKind::IsADirectory.into())
         }
     }
 
-    /// Remove the empty subdirectory `name`.
+    /// Remove the empty subdirectory `name`, refusing anything else found there.
     ///
-    /// The removal is requested on the handle and takes effect when it closes;
-    /// a non-empty directory survives the close, which a second open detects
-    /// and reports as [`io::ErrorKind::DirectoryNotEmpty`].
+    /// A reparse point is refused ([`is_reparse_refusal`]) and a non-directory
+    /// with [`io::ErrorKind::NotADirectory`] before any removal; the removal
+    /// itself fails on a non-empty directory
+    /// ([`io::ErrorKind::DirectoryNotEmpty`]) and on a file swapped in after the
+    /// check, so it can only ever remove an empty directory.
     pub fn rmdir(&self, name: &OsStr) -> io::Result<()> {
-        let doomed = self.open_at(name, &delete_options(true))?;
-        let id = id_of(&doomed)?;
-        drop(doomed);
-        match self.open_at(name, &stat_options()) {
-            Ok(survivor) if id_of(&survivor)? == id => Err(io::ErrorKind::DirectoryNotEmpty.into()),
-            Ok(_) => Ok(()),
-            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(()),
-            Err(e) => Err(e),
+        let attributes = self
+            .attributes(name)?
+            .ok_or_else(|| io::Error::from(io::ErrorKind::NotFound))?;
+        if attributes & ATTR_REPARSE_POINT != 0 {
+            Err(reparse_point())
+        } else if attributes & ATTR_DIRECTORY == 0 {
+            Err(io::ErrorKind::NotADirectory.into())
+        } else {
+            self.remove_directory(name)
         }
+    }
+
+    /// Remove the entry `name` with `RemoveDirectoryW`, under a pin.
+    ///
+    /// `RemoveDirectoryW` opens the entry as a directory without following a
+    /// reparse point: it removes an empty directory, or a directory reparse
+    /// point as itself, and fails on a file and on a non-empty directory.
+    fn remove_directory(&self, name: &OsStr) -> io::Result<()> {
+        let path = self.entry(name)?;
+        let _pin = self.pin()?;
+        std::fs::remove_dir(path)
     }
 
     /// The names of this directory's entries, pin sentinels excluded.
@@ -578,6 +608,54 @@ mod tests {
         assert!(dir.as_path().join("full").join("keep.txt").is_file());
         held.rmdir(OsStr::new("empty")).unwrap();
         assert!(!dir.as_path().join("empty").exists());
+    }
+
+    #[test]
+    fn rmdir_refuses_a_regular_file_and_leaves_it() {
+        let dir = scratch("rmdir_file");
+        std::fs::write(dir.as_path().join("file.txt"), b"keep").unwrap();
+        let held = open_following(dir.as_path()).unwrap();
+        let refused = held.rmdir(OsStr::new("file.txt"));
+        assert!(
+            matches!(&refused, Err(e) if e.kind() == io::ErrorKind::NotADirectory),
+            "{refused:?}"
+        );
+        assert_eq!(
+            std::fs::read(dir.as_path().join("file.txt"))
+                .ok()
+                .as_deref(),
+            Some(&b"keep"[..])
+        );
+    }
+
+    #[test]
+    fn remove_directory_never_removes_a_file() {
+        let dir = scratch("remove_directory_file");
+        std::fs::write(dir.as_path().join("file.txt"), b"keep").unwrap();
+        let held = open_following(dir.as_path()).unwrap();
+        let refused = held.remove_directory(OsStr::new("file.txt"));
+        assert!(refused.is_err(), "{refused:?}");
+        assert!(dir.as_path().join("file.txt").is_file());
+    }
+
+    #[test]
+    fn rmdir_of_a_directory_held_open_elsewhere_is_reported_in_use() {
+        use std::os::windows::fs::OpenOptionsExt as _;
+        let dir = scratch("rmdir_in_use");
+        std::fs::create_dir(dir.as_path().join("busy")).unwrap();
+        let other = std::fs::OpenOptions::new()
+            .read(true)
+            .share_mode(SHARE_NO_DELETE)
+            .custom_flags(BACKUP_SEMANTICS)
+            .open(dir.as_path().join("busy"))
+            .unwrap();
+        let held = open_following(dir.as_path()).unwrap();
+        let refused = held.rmdir(OsStr::new("busy"));
+        assert!(matches!(&refused, Err(e) if is_in_use(e)), "{refused:?}");
+        assert!(dir.as_path().join("busy").is_dir());
+        drop(other);
+        held.rmdir(OsStr::new("busy")).unwrap();
+        assert!(!dir.as_path().join("busy").exists());
     }
 
     #[test]

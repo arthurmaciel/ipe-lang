@@ -296,6 +296,19 @@ pub fn emit_func_value(
     ty: &IrType,
     generics: GenericScope,
 ) -> DResult<String> {
+    // A kernel whose emit arm carries a bridge or guard is never a bare function
+    // value: the lowerer eta-expands every point-free reference to it.
+    if let Callee::Kernel(k) = callee
+        && k.requires_saturated_emit()
+    {
+        return Err(Diagnostic::CompilerBug {
+            where_: "ipe_backend_rust::emit_func_value",
+            detail: format!(
+                "{k:?} reached as a bare function value; the lowerer must eta-expand \
+                 it so its saturated emit arm fires"
+            ),
+        });
+    }
     let name = callee_name(ctx, callee)?;
     let typed = render_type(ctx, ty, generics)?;
     let ctor = if wants_arc_ctor(ty) { "Arc" } else { "Box" };

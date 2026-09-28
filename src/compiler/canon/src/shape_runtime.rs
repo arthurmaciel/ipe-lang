@@ -21,7 +21,8 @@
 //! machinery, `Ipe.Ui.*` / `Ipe.Html` view libraries) are governed by the
 //! dedicated shape gates (IPE-N0033 / N0035 / N0045 and the lowering shape
 //! gates), which already encode the shape-fold rules (`Tui`/`Cli` share the
-//! terminal family, `WebView` folds onto `Web`); this table classifies them as
+//! terminal view family and `Ipe.Tea.Terminal.{Cmd,Sub}` but each own their
+//! `Sub`, `WebView` folds onto `Web`); this table classifies them as
 //! [`ModuleClass::Pure`] rather than re-gate them with a second, fold-unaware
 //! rule.
 //!
@@ -227,10 +228,10 @@ pub fn classify(path: &str) -> ModuleClass {
     // Division of labour: the SHAPE-RENDER surfaces — the `Ipe.Tea.*` TEA
     // app/Cmd/Sub machinery and the shape view libraries (`Ipe.Ui.*` cells,
     // `Ipe.Html`) — are governed by the dedicated shape gates that already know
-    // the shape-fold rules (`Tui`/`Cli` share the terminal family, `WebView`
-    // folds onto `Web`): the resolver's Program/TEA gate (IPE-N0033), the
-    // cross-shape `Cmd`/`Sub` gate (IPE-N0035), the runtime-branched-`main` gate
-    // (IPE-N0045), and the lowering shape gates for the raw view leaves
+    // the shape-fold rules (`Tui`/`Cli` share the terminal view family but each
+    // own their `Sub`, `WebView` folds onto `Web`): the resolver's Program/TEA
+    // gate (IPE-N0033), the cross-shape `Cmd`/`Sub` gate (IPE-N0035), the
+    // runtime-branched-`main` gate (IPE-N0045), and the lowering shape gates for the raw view leaves
     // (IPE-L0132 / IPE-L0153 / IPE-L0147). This table therefore classifies those
     // as [`ModuleClass::Pure`] here to avoid double-gating them with a second,
     // fold-unaware rule. What this table uniquely owns is the placement families

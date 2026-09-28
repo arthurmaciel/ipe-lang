@@ -47,8 +47,8 @@ use std::time::Duration;
 // request-dispatch loop. That depends on `IPE_CONSOLE_AUTH=app` (the row-poly
 // `consoleAuth` callback that mints a per-session `Identity` with `claims`),
 // which is not yet implemented in this Rust runtime —
-// `src/runtime/rust/src/live/console.rs`'s `ConsoleAuthMode::App` arm is
-// explicitly stubbed, and `hub_current_identity` (below) is hardcoded to the
+// `ConsoleAuthMode::App` (`src/runtime/rust/src/telemetry.rs`) is refused
+// with 501 by `gate_decision` in `src/runtime/rust/src/web/console.rs`, and `hub_current_identity` (below) is hardcoded to the
 // empty identity for the same reason. Until that lands, `with_tenant_prefix`
 // is called by tests only — every live request runs with an empty tenant
 // prefix, i.e. unscoped (matches the pre-existing, pre-this-fix behaviour;

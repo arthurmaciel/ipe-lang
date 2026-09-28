@@ -1373,8 +1373,8 @@ fn super_bounds_satisfied(
                     && args.len() == 1
                     && interner.resolve(*name) == Some("List")
         );
-    // The higher-order-kernel callback-result obligation (`map` /
-    // `map2..5` / `mapError` / `andMap` over `Maybe`/`Result` — see
+    // The higher-order-kernel callback-result obligation (every callback
+    // final result a pure higher-order kernel applies — see
     // `TyBounds::HOF_KERNEL_RESULT`). Deliberately SHALLOW on structure —
     // only the HEAD is checked (`Ty::Fun` directly, not nested anywhere) —
     // unlike `ty_is_equatable`'s deep walk:
@@ -1540,8 +1540,8 @@ fn super_unsatisfied(interner: &Interner, bounds: TyBounds, ty: &Ty, span: Span)
     // The higher-order-kernel callback-result obligation. Named
     // distinctly from the other classes (it is not a Ipê super-type a user
     // annotates against — it is an internal arity restriction on the
-    // callback-result slot of `Maybe`/`Result`'s `map`/`map2..5`/`mapError`/
-    // `andMap` kernels): the callback's final result must not itself be a
+    // callback-result slot of a higher-order kernel such as `List.map`,
+    // `List.foldl`, or `Maybe.map2`): the callback's final result must not itself be a
     // function, because the runtime kernel applies the callback at one exact
     // arity while the IR flattens curried functions.
     if bounds.has_hof_kernel_result() {

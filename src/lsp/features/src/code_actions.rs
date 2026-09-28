@@ -134,7 +134,7 @@ pub fn code_actions(
                 // A shape-scoped `Cmd` / `Sub` imported from the wrong shape —
                 // repoint the offending import to the app's own shape. The
                 // diagnostic names both the wrong (`Ipe.Tea.Web.Cmd`) and correct
-                // (`Ipe.Tea.Terminal.Cmd`) module paths.
+                // (`Ipe.Tea.Cli.Cmd`) module paths.
                 if let Some(action) = repoint_shape_import_action(diag, uri, text, encoding) {
                     actions.push(CodeActionOrCommand::CodeAction(action));
                 }

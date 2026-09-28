@@ -113,7 +113,7 @@ impl Builder<'_> {
                 // (body pins `a` to `Int`) and `f : a -> b; f x = x` (body
                 // conflates `a` and `b`) are both mismatches rather than silently
                 // accepted. Per-call-site uses instead instantiate the binding's
-                // type as fresh *flex* variables (see [`Self::instantiate`]).
+                // type as fresh *flex* variables (see [`Self::instantiate_tracked`]).
                 // ── Handler alias expansion (T0004 fix) ───────────────
                 // `Handler` is the stdlib alias `Request -> Task Error Response`
                 // (Ipe.Http.Server).  A binding annotated as `Handler` with one
@@ -408,45 +408,34 @@ impl Builder<'_> {
             .map(|(_, slot, _)| *slot)
     }
 
-    /// The raw scheme-var id of the CALLBACK-RESULT slot of a `Maybe`/`Result`
-    /// higher-order kernel — the variable that must not itself instantiate to
-    /// a function ([`TyBounds::hof_kernel_result`]).
+    /// Tie each callback final-result variable of kernel `k` to a function-refusing variable.
     ///
-    /// Slot ids follow each kernel's scheme (its [`ipe_kernels::TyShape`]) and are
-    /// asserted against those schemes by
-    /// `hof_result_slots_match_scheme_shapes` (this module's tests): `map`'s
-    /// `(a -> b)` result `b` is `var(1)`; `mapError`'s `(e -> f)` result `f`
-    /// is `var(1)`; `mapN`'s `(a -> … -> v)` final result `v` is `var(N)`;
-    /// `andMap`'s payload `Con (a -> b)` result `b` is `var(1)`.
-    ///
-    /// Deliberately EXCLUDED, with reasons:
-    /// * `MaybeAndThen` / `ResultAndThen` / `ResultTraverse` — their callback
-    ///   results are `Con`-headed in the scheme itself (`a -> Maybe b`, `a ->
-    ///   Result e b`), so a curried callback is already a plain type mismatch
-    ///   (`Fun` vs `Con`); there is no bare var for an arrow to escape into.
-    /// * `MaybeWithDefault` / `ResultWithDefault` / `MaybeCombine` /
-    ///   `ResultCombine` — no callback is applied by the kernel; a
-    ///   function-valued payload flows through by value in its (consistently
-    ///   flattened) representation, which is sound.
-    /// * `Task` / `Cmd` / `Sub` / `Decoder` kernels — out of scope:
-    ///   their heads are exempted from the ctor-payload region gate
-    ///   (`is_opaque_boxed_wrapper`), so any curried-callback
-    ///   hazard there is tracked separately (the
-    ///   `Decoder` family in particular must NOT be gated — its runtime has
-    ///   genuine `curry1..curry10` currying support the applicative decoder
-    ///   pipeline depends on).
-    pub const fn hof_result_slot_for(k: StdlibKernel) -> Option<u32> {
-        use StdlibKernel as K;
-        match k {
-            K::MaybeMap | K::ResultMap | K::ResultMapError | K::MaybeAndMap | K::ResultAndMap => {
-                Some(1)
-            }
-            K::MaybeMap2 | K::ResultMap2 => Some(2),
-            K::MaybeMap3 | K::ResultMap3 => Some(3),
-            K::MaybeMap4 | K::ResultMap4 => Some(4),
-            K::MaybeMap5 | K::ResultMap5 => Some(5),
-            _ => None,
+    /// A higher-order kernel applies its callback at an exact arity, while the
+    /// IR flattens a curried function into one multi-parameter `Fun`, so a
+    /// callback whose final result is itself an arrow has no sound lowering.
+    /// [`StdlibKernel::hof_result_vars`] names those variables from the
+    /// kernel's scheme shape; each is tied to a fresh super-typed variable
+    /// carrying [`TyBounds::hof_kernel_result`]. The obligation rides the
+    /// union-find variable minted for this kernel reference, so it holds
+    /// through every aliasing of the reference: piped, `let`-bound,
+    /// re-exported, passed as an argument, or stored in a record. A classified
+    /// variable absent from the instantiated scheme is a registry drift and
+    /// fails closed.
+    fn tie_hof_results(
+        &mut self,
+        k: StdlibKernel,
+        vars: &BTreeMap<u32, VarId>,
+        span: Span,
+    ) -> DResult<()> {
+        for raw in k.hof_result_vars().vars() {
+            let result_var = *vars.get(&u32::from(raw)).ok_or(Diagnostic::Lower {
+                span,
+                msg: LowerError::Unsupported(Feature::Kernels),
+            })?;
+            let s = self.super_var(TyBounds::hof_kernel_result(), span)?;
+            self.eq(span, result_var, s);
         }
+        Ok(())
     }
 
     /// The type of a kernel reference (`Math.min`, `Set.insert`, …).
@@ -635,6 +624,7 @@ impl Builder<'_> {
                     msg: LowerError::Unsupported(Feature::Kernels),
                 })?;
                 let (var, vars) = self.instantiate_tracked(&ty)?;
+                self.tie_hof_results(k, &vars, span)?;
                 // The key qualifier (`Set`/`Dict`/`Cache` in `key_obligation_for`)
                 // selects the WHOLE module. The key/element is raw scheme-var 0 by
                 // construction across every kernel in it — the convention the
@@ -715,44 +705,13 @@ impl Builder<'_> {
                     msg: LowerError::Unsupported(Feature::Kernels),
                 })?;
                 let (var, vars) = self.instantiate_tracked(&ty)?;
+                self.tie_hof_results(k, &vars, span)?;
                 let params_var = *vars.get(&raw_idx).ok_or(Diagnostic::Lower {
                     span,
                     msg: LowerError::Unsupported(Feature::Kernels),
                 })?;
                 let s = self.super_var(TyBounds::sql_param(), span)?;
                 self.eq(span, params_var, s);
-                return Ok(var);
-            }
-            // Higher-order-kernel callback-result obligation
-            // (primary/Tier-2 mechanism — see
-            // `docs/adr/0001-language-semantics-and-types.md`).
-            // Every `Maybe`/`Result` higher-order kernel FULLY APPLIES its
-            // callback at runtime (`FnOnce(..) -> R` with an exact arity),
-            // while the IR flattens a curried Ipê function into one
-            // multi-parameter `Fun` — so a callback with residual arity (its
-            // final result var instantiates to another arrow) has no sound
-            // lowering and would reach `cargo build` as E0277/E0308. Tie the
-            // callback's final-result raw scheme-var (see
-            // [`Self::hof_result_slot_for`]) to a fresh super-typed variable
-            // carrying the `hof_kernel_result` obligation — same
-            // `stdlib_scheme` + tie shape as the Dict/Set key obligation
-            // above, so this is a genuine TYPE-LEVEL check that survives
-            // arbitrary Ipê-level aliasing (direct call, piped, `let`-bound,
-            // bare-value re-export, higher-order argument, record-field
-            // extraction, import alias) by construction — the obligation is
-            // attached to the union-find variable `constrain_var_kernel`
-            // mints for THIS kernel reference, not to any particular AST
-            // shape a later use might take.
-            if let Some(slot) = Self::hof_result_slot_for(k) {
-                let ty = self.resolve_scheme(SchemeKey(k)).ok_or(Diagnostic::Lower {
-                    span,
-                    msg: LowerError::Unsupported(Feature::Kernels),
-                })?;
-                let (var, vars) = self.instantiate_tracked(&ty)?;
-                if let Some(&callback_result_var) = vars.get(&slot) {
-                    let s = self.super_var(TyBounds::hof_kernel_result(), span)?;
-                    self.eq(span, callback_result_var, s);
-                }
                 return Ok(var);
             }
             // `Log.*With : String -> List a -> Task Error ()` — the attr-list
@@ -774,6 +733,7 @@ impl Builder<'_> {
                     msg: LowerError::Unsupported(Feature::Kernels),
                 })?;
                 let (var, vars) = self.instantiate_tracked(&ty)?;
+                self.tie_hof_results(k, &vars, span)?;
                 let slot = Self::obligation_slot(k, ObligationKind::Interpolable).ok_or(
                     Diagnostic::Lower {
                         span,
@@ -801,6 +761,7 @@ impl Builder<'_> {
                     msg: LowerError::Unsupported(Feature::Kernels),
                 })?;
                 let (var, vars) = self.instantiate_tracked(&ty)?;
+                self.tie_hof_results(k, &vars, span)?;
                 let slot =
                     Self::obligation_slot(k, ObligationKind::Show).ok_or(Diagnostic::Lower {
                         span,
@@ -833,6 +794,7 @@ impl Builder<'_> {
                     msg: LowerError::Unsupported(Feature::Kernels),
                 })?;
                 let (var, vars) = self.instantiate_tracked(&ty)?;
+                self.tie_hof_results(k, &vars, span)?;
                 let model_slot = Self::obligation_slot(k, ObligationKind::WebModel).ok_or(
                     Diagnostic::Lower {
                         span,
@@ -878,6 +840,7 @@ impl Builder<'_> {
                     msg: LowerError::Unsupported(Feature::Kernels),
                 })?;
                 let (var, vars) = self.instantiate_tracked(&ty)?;
+                self.tie_hof_results(k, &vars, span)?;
                 let page_slot =
                     Self::obligation_slot(k, ObligationKind::WebPage).ok_or(Diagnostic::Lower {
                         span,
@@ -922,7 +885,11 @@ impl Builder<'_> {
         // the two paths can never resolve to different types.
         let registry = id.and_then(|k| self.resolve_scheme(SchemeKey(k)));
         let ty = Self::kernel_scheme_or_unsupported(registry, None, span)?;
-        self.instantiate(&ty)
+        let (var, vars) = self.instantiate_tracked(&ty)?;
+        if let Some(k) = id {
+            self.tie_hof_results(k, &vars, span)?;
+        }
+        Ok(var)
     }
 
     /// Combine the parse-once registry scheme (`id` path) with the legacy
