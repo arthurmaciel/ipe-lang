@@ -5093,8 +5093,9 @@ fn path_to_dot_string(interner: &Interner, path: &[Symbol]) -> Box<str> {
         .into()
 }
 
-/// The qualifier symbols under which a dep import becomes reachable. An explicit
-/// `as Alias` names exactly one, on purpose. A BARE `import Rls.Owner` names TWO:
+/// The qualifier symbols under which a dep import becomes reachable.
+///
+/// An explicit `as Alias` names exactly one, on purpose. A BARE `import Rls.Owner` names TWO:
 /// the last path segment (`Owner` — Elm convention, `import Lib.Utils` makes
 /// `Utils.foo` available) AND the full dotted path (`Rls.Owner`), the qualifier
 /// the parser produces from `Rls.Owner.member` / `Rls.Owner.Doc` which no
@@ -5102,6 +5103,9 @@ fn path_to_dot_string(interner: &Interner, path: &[Symbol]) -> Box<str> {
 /// reference resolving IDENTICALLY in expression and type-annotation position —
 /// both consult the qualifier maps — mirroring the dotted-canonical stdlib
 /// handling (`Ipe.Db.Decode` → `Db.Decode`).
+///
+/// # Errors
+/// Propagates the interner's error when the dotted qualifier cannot be interned.
 pub fn import_qualifiers(
     alias: Option<Symbol>,
     dep_path: &[Symbol],
