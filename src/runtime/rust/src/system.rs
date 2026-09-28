@@ -52,22 +52,28 @@ pub(crate) fn read_env_var(key: &str) -> Result<String, std::env::VarError> {
     }
 }
 
-/// The invoking user's home directory: the one runtime reader of `HOME`.
+/// The invoking user's home directory: the one runtime home reader.
 ///
-/// Overlay-aware like [`read_env_var`]. An unset, empty, or relative value names
-/// no directory — a relative home would resolve against whatever the working
-/// directory happens to be. Gated to the only feature set whose module reads it
-/// (the console proxy's cached-binary lookup).
+/// Reads the shared platform variable [`super::home_core::HOME_VAR`]
+/// (`USERPROFILE` on Windows, `HOME` elsewhere), overlay-aware like
+/// [`read_env_var`]. Gated to the only feature set whose module reads it (the
+/// console proxy's cached-binary lookup).
 #[cfg(all(feature = "web-core", feature = "http_client"))]
 pub(crate) fn home_dir() -> Option<std::path::PathBuf> {
-    home_dir_from(read_env_var("HOME").ok())
+    home_dir_from_var(read_env_var(super::home_core::HOME_VAR))
 }
 
-/// Parse a raw home value: `Some` only for a non-empty absolute path.
+/// Parse a home read: `Some` only for a valid `HomeDir`.
+///
+/// Bridges the overlay's `String` result to the shared
+/// [`super::home_core::HomeDir::parse`], which owns every decision about what
+/// counts as a home directory (UTF-8, absolute, and, on Windows, not a
+/// verbatim/device-namespace prefix) — this function makes none of them
+/// itself.
 #[cfg(all(feature = "web-core", feature = "http_client"))]
-fn home_dir_from(raw: Option<String>) -> Option<std::path::PathBuf> {
-    raw.map(std::path::PathBuf::from)
-        .filter(|path| path.is_absolute())
+fn home_dir_from_var(raw: Result<String, std::env::VarError>) -> Option<std::path::PathBuf> {
+    super::home_core::HomeDir::parse(raw.ok().map(std::ffi::OsString::from))
+        .map(super::home_core::HomeDir::into_path)
 }
 
 /// Render a runtime status line (e.g. the HTTP `listening on` banner, or an
@@ -1468,22 +1474,30 @@ mod scrub_log_controls_tests {
 
 #[cfg(all(test, feature = "web-core", feature = "http_client"))]
 mod home_dir_tests {
-    use super::home_dir_from;
+    use super::home_dir_from_var;
+    use std::env::VarError;
+
+    // Shared with `ipe_sandbox::home`'s `tests` module: the same
+    // `(raw, expected)` rows drive both crates' home readers.
+    include!("../tests/data/home_cases.rs");
 
     #[test]
-    fn an_absolute_home_is_accepted() {
-        assert_eq!(
-            home_dir_from(Some("/home/u".to_owned())),
-            Some(std::path::PathBuf::from("/home/u"))
-        );
+    fn every_home_parse_case_matches_the_shared_table() {
+        for (raw, expected) in HOME_PARSE_CASES.iter().chain(HOME_PARSE_PLATFORM_CASES) {
+            assert_eq!(
+                home_dir_from_var(raw.map(str::to_owned).ok_or(VarError::NotPresent)),
+                expected.map(std::path::PathBuf::from),
+                "{raw:?}"
+            );
+        }
     }
 
+    #[cfg(unix)]
     #[test]
-    fn an_unset_empty_or_relative_home_names_no_directory() {
-        assert_eq!(home_dir_from(None), None);
-        for raw in ["", ".", "home/u", "./home", "../home", "~"] {
-            assert_eq!(home_dir_from(Some(raw.to_owned())), None, "{raw:?}");
-        }
+    fn a_non_utf8_home_value_is_refused() {
+        use std::os::unix::ffi::OsStringExt as _;
+        let raw = std::ffi::OsString::from_vec(b"/home/\xff".to_vec());
+        assert_eq!(home_dir_from_var(Err(VarError::NotUnicode(raw))), None);
     }
 }
 

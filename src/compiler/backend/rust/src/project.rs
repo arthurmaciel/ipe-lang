@@ -261,6 +261,7 @@ pub mod list;
 pub mod log;
 pub mod math;
 pub mod money;
+pub mod home_core;
 pub mod path_core;
 pub mod path;
 pub mod random;
