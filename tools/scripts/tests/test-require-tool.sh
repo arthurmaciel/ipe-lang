@@ -403,14 +403,14 @@ rc=0
 out="$(bash -c "source '$lib'; v=(a b c); match_capture v t -- '$mprint' hit" 2>&1)" || rc=$?
 check "match_capture: array target exits 2 (a scalar write keeps stale elements)" "$rc" 2
 check "match_capture: array target is the reported cause" \
-    "$(cause_of "$out" "output variable 'v' carries attributes")" named
+    "$(cause_of "$out" "is an array, but this helper writes a scalar")" named
 for helper in "capture_nul v t -- '$pprint' ls-files 'a\\0'" \
               "enumerate_files v '*.ipe' '$fixture_dir/enum'"; do
     rc=0
     out="$(bash -c "source '$lib'; v=x; $helper" 2>&1)" || rc=$?
     check "${helper%% *}: plain scalar target exits 2" "$rc" 2
     check "${helper%% *}: plain scalar target is the reported cause" \
-        "$(cause_of "$out" "output variable 'v' carries attributes")" named
+        "$(cause_of "$out" "is a scalar, but this helper writes an array")" named
 done
 
 # ── env scrub: a matcher never runs under a config variable it cannot drop ──
@@ -420,6 +420,18 @@ for helper in "match_or_fail t -- '$m0'" "match_capture v t -- '$mprint' hit"; d
         out="$(bash -c "source '$lib'; readonly $var=cfg; export $var; $helper" 2>&1)" || rc=$?
         check "${helper%% *}: readonly $var exits 2" "$rc" 2
         check "${helper%% *}: readonly $var is the reported cause" \
+            "$(cause_of "$out" "could not scrub")" named
+    done
+done
+
+# ── env scrub: a nameref alias to the config var is scrubbed too, and a ────
+# ── readonly nameref binding (which unset -n cannot remove) is refused ─────
+for helper in "match_or_fail t -- '$m0'" "match_capture v t -- '$mprint' hit"; do
+    for var in RIPGREP_CONFIG_PATH GREP_OPTIONS; do
+        rc=0
+        out="$(bash -c "source '$lib'; export $var=zz; declare -rn $var=zz; $helper" 2>&1)" || rc=$?
+        check "${helper%% *}: readonly nameref $var exits 2" "$rc" 2
+        check "${helper%% *}: readonly nameref $var is the reported cause" \
             "$(cause_of "$out" "could not scrub")" named
     done
 done
@@ -436,6 +448,21 @@ TMPDIR="$sort_tmpdir" PATH="$sort_stub:$PATH" \
 check "enumerate_files: failing sort exits 2" "$rc" 2
 check "enumerate_files: failing sort leaves no temp file" "$(ls -A "$sort_tmpdir")" ""
 rm -rf "$sort_tmpdir"
+
+# ── enumerate_files: a sort that silently drops a record (rc 0, e.g. its ───
+# ── process-substitution writer got killed) is refused, not trusted ────────
+trunc_stub="$fixture_dir/sort-truncate-bin"
+mkdir -p "$trunc_stub"
+cat > "$trunc_stub/sort" <<'STUB'
+#!/bin/sh
+/usr/bin/sort "$@" | head -z -n 1
+STUB
+chmod +x "$trunc_stub/sort"
+rc=0
+out="$(PATH="$trunc_stub:$PATH" bash -c "source '$lib'; enumerate_files v '*.ipe' '$fixture_dir/enum'" 2>&1)" || rc=$?
+check "enumerate_files: truncated sort output exits 2" "$rc" 2
+check "enumerate_files: truncated sort output is the reported cause" \
+    "$(cause_of "$out" "refusing a possibly truncated set")" named
 
 # ── live caller smoke: examples.sh's scalar capture runs on a clean tree ────
 rc=0

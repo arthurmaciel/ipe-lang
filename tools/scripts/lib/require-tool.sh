@@ -65,10 +65,28 @@ _require_out_name() {
         array) __on_want='declare -a ' ;;
         *) echo "$1: internal: unknown output shape '$3'" >&2; exit 2 ;;
     esac
-    if [ "${__on_decl:0:${#__on_want}}" != "$__on_want" ]; then
-        echo "$1: output variable '$2' carries attributes (${__on_decl%% "$2"*}) — pass an unset name or a $3 one (${__on_want% })" >&2
-        exit 2
+    if [ "${__on_decl:0:${#__on_want}}" = "$__on_want" ]; then
+        return 0
     fi
+    # A plain scalar-vs-array cross (the common typo) gets a message naming
+    # the shape mismatch directly; anything else (readonly, nameref,
+    # integer, associative, …) keeps the generic attribute dump, since
+    # calling e.g. a readonly array merely "an array" would hide the actual
+    # blocker (its readonly-ness, not its shape).
+    local __on_flags="${__on_decl#declare }"
+    __on_flags="${__on_flags%% *}"
+    case "$3:$__on_flags" in
+        scalar:-a)
+            echo "$1: output variable '$2' is an array, but this helper writes a scalar — pass an unset name or a plain scalar one" >&2
+            ;;
+        array:--)
+            echo "$1: output variable '$2' is a scalar, but this helper writes an array — pass an unset name or a plain array (declare -a) one" >&2
+            ;;
+        *)
+            echo "$1: output variable '$2' carries attributes (${__on_decl%% "$2"*}) — pass an unset name or a $3 one (${__on_want% })" >&2
+            ;;
+    esac
+    exit 2
 }
 
 # Known exit contracts. A helper classifies an exit code only for a command
@@ -154,14 +172,40 @@ _require_set_scalar() {
     }
 }
 
+# Env vars whose presence lets a matcher's own behaviour be rewritten from
+# outside (rg reads RIPGREP_CONFIG_PATH; grep reads GREP_OPTIONS). Named ONCE
+# here so the unset loop and the presence check in _require_scrubbed_env below
+# can never drift out of sync on which names they cover.
+_REQUIRE_TOOL_SCRUB_VARS=(RIPGREP_CONFIG_PATH GREP_OPTIONS)
+
 # _require_scrubbed_env <caller> <description>: in a matcher's subshell, drop
-# the config variables that let the environment rewrite a matcher's behaviour
-# (`RIPGREP_CONFIG_PATH` can inject `--pre`); exit 2 when one survives (a
-# readonly variable), since a matcher running under it could report a forged rc.
+# every var in _REQUIRE_TOOL_SCRUB_VARS; exit 2 when one survives (a readonly
+# variable, or a readonly nameref alias to one), since a matcher running under
+# it could report a forged rc.
 _require_scrubbed_env() {
-    unset RIPGREP_CONFIG_PATH GREP_OPTIONS 2>/dev/null
-    if [ -n "${RIPGREP_CONFIG_PATH+x}" ] || [ -n "${GREP_OPTIONS+x}" ]; then
-        echo "$1: $2: could not scrub RIPGREP_CONFIG_PATH/GREP_OPTIONS (readonly?) — refusing to run the matcher under them" >&2
+    local __se_v
+    for __se_v in "${_REQUIRE_TOOL_SCRUB_VARS[@]}"; do
+        # `declare -n NAME=target; export NAME` leaves NAME a nameref ALIAS:
+        # a plain `unset NAME` (no -n) follows the alias and unsets its
+        # TARGET, leaving NAME's own binding — and its export attribute —
+        # intact; and `${NAME+x}` / `[[ -v NAME ]]` likewise resolve through
+        # the alias, so they report the (now-gone) target's presence, not
+        # NAME's own. The net effect: NAME stays exported into the matcher's
+        # env while the old check reads it as scrubbed. `unset -n` removes
+        # the nameref BINDING itself (a documented no-op when NAME is not a
+        # nameref, so safe to run unconditionally); `unset -v` then drops
+        # NAME as a plain variable for the non-nameref case. `declare -p` is
+        # the presence check that reports NAME's own local declaration
+        # rather than chasing an alias — never `${NAME+x}` / `[[ -v NAME ]]`.
+        unset -n "$__se_v" 2>/dev/null
+        unset -v "$__se_v" 2>/dev/null
+    done
+    local -a __se_bad=()
+    for __se_v in "${_REQUIRE_TOOL_SCRUB_VARS[@]}"; do
+        declare -p "$__se_v" >/dev/null 2>&1 && __se_bad+=("$__se_v")
+    done
+    if [ "${#__se_bad[@]}" -gt 0 ]; then
+        echo "$1: $2: could not scrub ${_REQUIRE_TOOL_SCRUB_VARS[*]} (readonly?) — refusing to run the matcher under them" >&2
         exit 2
     fi
 }
@@ -280,10 +324,25 @@ _enumerate_files_into() {
     fi
     # The set reaches sort through a pipe, never a staged file: a pipe write
     # fails only once sort has gone, which sort's own exit reports, and no
-    # temp file is left behind on sort's exit-2 path.
+    # temp file is left behind on sort's exit-2 path. But a SIGKILLed writer
+    # gives sort a clean early EOF, not a write error — sort then sorts
+    # whatever prefix it read and exits 0, so the exit code alone can't tell
+    # a truncated read from a complete one. `sort -z` (no `-u`) conserves the
+    # record COUNT, so capturing into a lib-local array first and comparing
+    # its length against the found set's catches that silent truncation
+    # before the (still count-checked) copy into the caller's array.
+    local -a __ef_sorted=()
     local -x LC_ALL=C
-    _capture_nul_into "$__ef_var" "sort '$__ef_glob' set" -- \
+    _capture_nul_into __ef_sorted "sort '$__ef_glob' set" -- \
         sort -z < <(printf '%s\0' "${__ef_found[@]}")
+    if [ "${#__ef_sorted[@]}" -ne "${#__ef_found[@]}" ]; then
+        echo "enumerate_files: sort returned ${#__ef_sorted[@]} record(s) for '$__ef_glob' under $* but ${#__ef_found[@]} were found — refusing a possibly truncated set (e.g. a killed writer)" >&2
+        exit 2
+    fi
+    mapfile -d '' -t "$__ef_var" < <(printf '%s\0' "${__ef_sorted[@]}") || {
+        echo "enumerate_files: could not write the sorted '$__ef_glob' set into '$__ef_var'" >&2
+        exit 2
+    }
 }
 
 # require_scan_root <dir> <glob>: exit 2 when <dir> does not exist, find
