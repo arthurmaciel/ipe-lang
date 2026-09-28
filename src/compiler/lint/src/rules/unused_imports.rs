@@ -433,12 +433,13 @@ impl Uses {
 
 /// The byte offset of the start of the line containing byte offset `at`.
 ///
-/// `at` is clamped to `text.len()`; the scan is a plain `rfind`, so the result
-/// is always a char boundary.
+/// `at` is clamped to `text.len()` and need not be a char boundary: the scan is
+/// over bytes for the ASCII `\n`, so the result is always a char boundary.
 pub fn line_start(text: &str, at: usize) -> usize {
     let at = at.min(text.len());
-    text.get(..at)
-        .and_then(|s| s.rfind('\n'))
+    text.as_bytes()
+        .get(..at)
+        .and_then(|s| s.iter().rposition(|&b| b == b'\n'))
         .map_or(0, |i| i + 1)
 }
 
@@ -449,8 +450,9 @@ pub fn line_start(text: &str, at: usize) -> usize {
 /// last line.
 pub fn line_end(text: &str, at: usize) -> usize {
     let at = at.min(text.len());
-    text.get(at..)
-        .and_then(|s| s.find('\n'))
+    text.as_bytes()
+        .get(at..)
+        .and_then(|s| s.iter().position(|&b| b == b'\n'))
         .map_or(text.len(), |i| at + i + 1)
 }
 
