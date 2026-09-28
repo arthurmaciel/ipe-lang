@@ -32,6 +32,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use cap_primitives::fs::{OpenOptions, OpenOptionsExt as _};
 
+use super::super::win32_name;
 use super::{DirId, EntryKind};
 
 /// `FILE_FLAG_BACKUP_SEMANTICS`: allows opening a directory handle.
@@ -62,40 +63,6 @@ const ERROR_LOCK_VIOLATION: i32 = 33;
 const PIN_PREFIX: &str = ".ipe-pin-";
 /// How many sentinel names a pin tries before giving up.
 const PIN_ATTEMPTS: u32 = 8;
-/// Device names Windows reserves in every directory, whatever the extension.
-const RESERVED_DEVICE_NAMES: [&str; 30] = [
-    "CON",
-    "PRN",
-    "AUX",
-    "NUL",
-    "COM0",
-    "COM1",
-    "COM2",
-    "COM3",
-    "COM4",
-    "COM5",
-    "COM6",
-    "COM7",
-    "COM8",
-    "COM9",
-    "COM\u{b9}",
-    "COM\u{b2}",
-    "COM\u{b3}",
-    "LPT0",
-    "LPT1",
-    "LPT2",
-    "LPT3",
-    "LPT4",
-    "LPT5",
-    "LPT6",
-    "LPT7",
-    "LPT8",
-    "LPT9",
-    "LPT\u{b9}",
-    "LPT\u{b2}",
-    "LPT\u{b3}",
-];
-
 /// A held directory handle and the reparse-free path proven to name it.
 #[derive(Debug)]
 pub struct Dir {
@@ -249,22 +216,8 @@ pub fn is_plain_name(name: &OsStr) -> bool {
     !text.is_empty()
         && text != "."
         && text != ".."
-        && !text.chars().any(|c| {
-            c.is_control() || matches!(c, '\\' | '/' | ':' | '*' | '?' | '"' | '<' | '>' | '|')
-        })
-        && !is_reserved_device_name(&text)
-}
-
-/// Whether `text` names a reserved device: its stem before the first inner `.`, trailing spaces trimmed.
-fn is_reserved_device_name(text: &str) -> bool {
-    let stem = text
-        .char_indices()
-        .skip(1)
-        .find(|&(_, c)| c == '.')
-        .and_then(|(at, _)| text.get(..at))
-        .unwrap_or(text);
-    let stem = stem.trim_end().to_uppercase();
-    RESERVED_DEVICE_NAMES.contains(&stem.as_str())
+        && !win32_name::has_forbidden_char(&text)
+        && !win32_name::is_reserved_device_name(&text)
 }
 
 /// The error refusing `name` as not a plain entry name.
