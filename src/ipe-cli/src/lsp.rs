@@ -338,9 +338,10 @@ mod tests {
         let main = dir.join("Main.ipe");
         let small = "module Main exposing (main)\n\nmain = 0\n";
         fs::write(&main, small).expect("write Main.ipe");
-        let imports: String = (0..=crate::loose_file::MAX_LOOSE_FILE_PROBES)
-            .map(|index| format!("import M{index}\n"))
-            .collect();
+        let imports = (0..=crate::loose_file::MAX_LOOSE_FILE_PROBES)
+            .map(|index| format!("import M{index}"))
+            .collect::<Vec<_>>()
+            .join("\n");
         let oversized = format!("module Main exposing (main)\n\n{imports}\nmain = 0\n");
         let over = DriverLoader.load(None, &main, Some(&oversized));
         let under = DriverLoader.load(None, &main, Some(small));
@@ -377,9 +378,7 @@ mod tests {
         let main = src.join("Main.ipe");
         let text = "module Main exposing (main)\n\nmain = 0\n";
         let nested = (0..=crate::project::MAX_DISCOVERY_DEPTH)
-            .fold(src.clone(), |parent, index| {
-                parent.join(format!("D{index}"))
-            });
+            .fold(src, |parent, index| parent.join(format!("D{index}")));
         fs::create_dir_all(&nested).expect("create nested source tree");
         fs::write(&main, text).expect("write Main.ipe");
         let loaded = DriverLoader.load(Some(&dir), &main, Some(text));
