@@ -122,7 +122,8 @@ type SiblingRead = Result<(PathBuf, String), CliError>;
 /// the entry or a probed module otherwise cannot be read;
 /// [`CliError::FileTooLarge`] when one file passes
 /// [`io_bounded::SOURCE_READ_CAP`]; [`CliError::DiscoveryLimitReached`] when
-/// the import closure exceeds `limits`.
+/// the import closure exceeds `limits`; [`CliError::DeviceNamedModule`] when
+/// an import's module path names a Windows reserved device.
 pub fn resolve_loose_file(
     entry: &Path,
     entry_text: Option<&str>,
@@ -168,6 +169,10 @@ pub fn resolve_loose_file(
             ));
         }
         probed.insert(module.clone());
+        if let project::ModulePathShape::DeviceNamed(segment) = project::module_path_shape(&module)
+        {
+            return Err(device_named_import(entry, &module, segment));
+        }
         let Some(relative) = module_file(&module) else {
             continue;
         };
@@ -260,18 +265,32 @@ fn entry_directory(entry: &Path) -> &Path {
 
 /// The file module `A.B` lives in, `A/B.ipe`, relative to the entry's directory.
 ///
-/// `None` unless the path is non-empty and every segment is a module
-/// segment, so no `..`, separator or empty component can reach the path.
+/// `None` unless [`project::module_path_shape`] finds a module path, so no
+/// `..`, separator, empty component or device name can reach the path.
 fn module_file(module: &[String]) -> Option<PathBuf> {
+    (project::module_path_shape(module) == project::ModulePathShape::Module)
+        .then(|| spelled_file(module))
+        .flatten()
+}
+
+/// `A/B.ipe` for `A.B`, segments unchecked; `None` for the empty path.
+fn spelled_file(module: &[String]) -> Option<PathBuf> {
     let (file_segment, dir_segments) = module.split_last()?;
-    module
-        .iter()
-        .all(|segment| project::is_module_segment(segment))
-        .then(|| {
-            let mut path: PathBuf = dir_segments.iter().collect();
-            path.push(format!("{file_segment}.ipe"));
-            path
-        })
+    let mut path: PathBuf = dir_segments.iter().collect();
+    path.push(format!("{file_segment}.ipe"));
+    Some(path)
+}
+
+/// The refusal for an import whose well-formed module path names a Windows device.
+///
+/// The import is refused on every platform, as package discovery refuses
+/// such a file, so one loose file maps to one module set everywhere.
+fn device_named_import(entry: &Path, module: &[String], segment: &str) -> CliError {
+    let dir = entry_directory(entry);
+    CliError::DeviceNamedModule {
+        path: spelled_file(module).map_or_else(|| dir.to_path_buf(), |file| dir.join(file)),
+        segment: segment.to_owned(),
+    }
 }
 
 /// The entry's directory, resolved once before any sibling is probed.
@@ -696,6 +715,60 @@ mod tests {
             matches!(past_limit, Err(CliError::DiscoveryLimitReached { .. })),
             "a closure naming one module past the probe limit is refused"
         );
+    }
+
+    /// The device-named segment a load was refused for, if that is the refusal.
+    fn device_segment<T>(result: &Result<T, CliError>) -> Option<&str> {
+        match result {
+            Err(CliError::DeviceNamedModule { segment, .. }) => Some(segment),
+            _ => None,
+        }
+    }
+
+    #[test]
+    fn a_device_named_import_is_refused_even_without_a_file() {
+        let dir = scratch_dir("device-import");
+        let bare = dir.join("Bare.ipe");
+        write(
+            &bare,
+            "module Bare exposing (main)\n\nimport Aux\n\nmain = Aux.a\n",
+        );
+        let nested = dir.join("Nested.ipe");
+        write(
+            &nested,
+            "module Nested exposing (main)\n\nimport Lib.Com1\n\nmain = Com1.a\n",
+        );
+        let control = dir.join("Control.ipe");
+        write(
+            &control,
+            "module Control exposing (main)\n\nimport Auxiliary\n\nmain = Auxiliary.a\n",
+        );
+
+        let bare_result = resolve_loose_file(&bare, None, LooseFileLimits::DEFAULT);
+        let nested_result = resolve_loose_file(&nested, None, LooseFileLimits::DEFAULT);
+        let control_result = resolve_loose_file(&control, None, LooseFileLimits::DEFAULT);
+        let _ = fs::remove_dir_all(&dir);
+        assert_eq!(device_segment(&bare_result), Some("Aux"));
+        assert_eq!(device_segment(&nested_result), Some("Com1"));
+        assert!(
+            control_result.is_ok(),
+            "a segment that only starts with a device name is an ordinary module"
+        );
+    }
+
+    #[test]
+    fn a_device_named_import_is_refused_even_when_the_file_exists() {
+        let dir = scratch_dir("device-import-file");
+        let entry = dir.join("Main.ipe");
+        write(
+            &entry,
+            "module Main exposing (main)\n\nimport Nul\n\nmain = Nul.a\n",
+        );
+        write(&dir.join("Nul.ipe"), "module Nul exposing (a)\n\na = 1\n");
+
+        let result = resolve_loose_file(&entry, None, LooseFileLimits::DEFAULT);
+        let _ = fs::remove_dir_all(&dir);
+        assert_eq!(device_segment(&result), Some("Nul"));
     }
 
     #[cfg(unix)]

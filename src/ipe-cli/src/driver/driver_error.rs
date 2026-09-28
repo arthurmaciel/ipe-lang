@@ -376,6 +376,17 @@ pub enum CliError {
         /// path at which a symlink cycle was detected.
         detail: String,
     },
+    /// A discovered source file's module path uses a Windows reserved device name.
+    ///
+    /// `Aux.ipe` opens the `AUX` device on Windows, so the same tree would
+    /// map to a different module set per platform; it is refused, never
+    /// silently skipped.
+    DeviceNamedModule {
+        /// The refused source file.
+        path: PathBuf,
+        /// The device-named segment (`Aux`, `Con`, `Com1`, ...).
+        segment: String,
+    },
     /// `ipe upgrade` (or `ipe health`) could not reach the release feed. This
     /// is a transient, non-zero operational result — not a command misuse — so
     /// it exits with no `--help` page and renders its own message. Carries
@@ -568,6 +579,7 @@ impl CliError {
             Self::PathEscape { .. } => "path-escape",
             Self::OutputRefused(_) => "output-refused",
             Self::DiscoveryLimitReached { .. } => "discovery-limit-reached",
+            Self::DeviceNamedModule { .. } => "device-named-module",
             Self::UpgradeFeedUnreachable => "upgrade-feed-unreachable",
             Self::UpgradeCheckExit { .. } => "upgrade-check-exit",
             Self::AdvisoryVulnerable(_) => "advisory-vulnerable",
@@ -641,6 +653,7 @@ impl CliError {
             | Self::PathEscape { .. }
             | Self::OutputRefused(_)
             | Self::DiscoveryLimitReached { .. }
+            | Self::DeviceNamedModule { .. }
             | Self::UpgradeFeedUnreachable
             | Self::UpgradeCheckExit { .. }
             | Self::AdvisoryVulnerable(_)
@@ -882,6 +895,9 @@ impl std::fmt::Display for CliError {
             Self::OutputRefused(refusal) => f.write_str(&text::cli_output_refused(refusal)),
             Self::DiscoveryLimitReached { detail } => {
                 f.write_str(&text::cli_discovery_limit_reached(detail))
+            }
+            Self::DeviceNamedModule { path, segment } => {
+                f.write_str(&text::cli_device_named_module(&path.display(), segment))
             }
             Self::AdvisoryVulnerable(p) => {
                 let fixed_in = p
