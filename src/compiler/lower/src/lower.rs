@@ -357,7 +357,7 @@ fn scheme_var_instance<'t>(
         (TyShape::Con(tag, items), Ty::Con { module, name, args }) => {
             ipe_types::HeadIdentity::Unified(heads.interner)
                 .paired_args(
-                    heads.builtins.builtin_con_head(*tag, *items),
+                    heads.builtins.builtin_con_head(*tag, items),
                     ipe_types::ConHead {
                         home: module,
                         name: *name,
@@ -21536,9 +21536,13 @@ impl<'a> Lowerer<'a> {
         else {
             return Err(unsupported(callee.span, Feature::HofCallbackFunctionResult));
         };
+        let heads = SchemeHeads {
+            builtins: &self.builtins.kernel_types,
+            interner: self.interner,
+        };
         if results.vars().any(|var| {
             matches!(
-                scheme_var_instance(shape, solved, var),
+                scheme_var_instance(shape, solved, var, heads),
                 None | Some(Ty::Fun(..))
             )
         }) {
@@ -33564,6 +33568,7 @@ mod tests {
     /// under-bounded caller — an exit-0-then-cargo-fail E0277 for a combinator
     /// boxing a `Sync` closure over a payload tvar under one of these carriers.
     #[test]
+    #[allow(clippy::too_many_lines)] // One inline fixture per boxed carrier; splitting scatters the table.
     fn result_position_align_descends_boxed_carriers() {
         use ipe_ir::{IrType, UiCtor};
 

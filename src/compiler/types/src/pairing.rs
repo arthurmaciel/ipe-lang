@@ -62,7 +62,7 @@ impl core::fmt::Debug for HeadIdentity<'_> {
 }
 
 /// A constructor head and its argument list, in any type representation.
-#[derive(Clone, Copy, Debug)]
+#[derive(Debug)]
 pub struct ConHead<'a, T> {
     /// The defining module path; empty for a builtin.
     pub home: &'a [Symbol],
@@ -71,6 +71,16 @@ pub struct ConHead<'a, T> {
     /// The applied arguments.
     pub args: &'a [T],
 }
+
+// Every field is a borrow or a `Symbol`, so a head copies whatever `T` is; a
+// derive would demand `T: Copy`.
+impl<T> Clone for ConHead<'_, T> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<T> Copy for ConHead<'_, T> {}
 
 /// The pairwise arguments of two constructor applications of one head.
 pub type ArgPairs<'x, 'y, X, Y> = Zip<slice::Iter<'x, X>, slice::Iter<'y, Y>>;

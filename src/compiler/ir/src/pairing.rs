@@ -72,51 +72,51 @@ pub fn paired_children<'a>(a: &'a IrType, b: &'a IrType) -> Option<PairedChildre
     };
     match a {
         IrType::List(x) => match b {
-            IrType::List(y) => payload(&**x, &**y),
+            IrType::List(y) => payload(x, y),
             _ => None,
         },
         IrType::Maybe(x) => match b {
-            IrType::Maybe(y) => payload(&**x, &**y),
+            IrType::Maybe(y) => payload(x, y),
             _ => None,
         },
         IrType::Set(x) => match b {
-            IrType::Set(y) => payload(&**x, &**y),
+            IrType::Set(y) => payload(x, y),
             _ => None,
         },
         IrType::Task(x) => match b {
-            IrType::Task(y) => payload(&**x, &**y),
+            IrType::Task(y) => payload(x, y),
             _ => None,
         },
         IrType::Cmd(x) => match b {
-            IrType::Cmd(y) => payload(&**x, &**y),
+            IrType::Cmd(y) => payload(x, y),
             _ => None,
         },
         IrType::Sub(x) => match b {
-            IrType::Sub(y) => payload(&**x, &**y),
+            IrType::Sub(y) => payload(x, y),
             _ => None,
         },
         IrType::Decoder(x) => match b {
-            IrType::Decoder(y) => payload(&**x, &**y),
+            IrType::Decoder(y) => payload(x, y),
             _ => None,
         },
         IrType::WebRoute(x) => match b {
-            IrType::WebRoute(y) => payload(&**x, &**y),
+            IrType::WebRoute(y) => payload(x, y),
             _ => None,
         },
         IrType::Ui { ctor: cx, msg: x } => match b {
-            IrType::Ui { ctor: cy, msg: y } if cx == cy => payload(&**x, &**y),
+            IrType::Ui { ctor: cy, msg: y } if cx == cy => payload(x, y),
             _ => None,
         },
         IrType::Result(x1, x2) => match b {
-            IrType::Result(y1, y2) => two_slots(&**x1, &**x2, &**y1, &**y2),
+            IrType::Result(y1, y2) => two_slots(x1, x2, y1, y2),
             _ => None,
         },
         IrType::Dict(x1, x2) => match b {
-            IrType::Dict(y1, y2) => two_slots(&**x1, &**x2, &**y1, &**y2),
+            IrType::Dict(y1, y2) => two_slots(x1, x2, y1, y2),
             _ => None,
         },
         IrType::CustomElement { down: x1, up: x2 } => match b {
-            IrType::CustomElement { down: y1, up: y2 } => two_slots(&**x1, &**x2, &**y1, &**y2),
+            IrType::CustomElement { down: y1, up: y2 } => two_slots(x1, x2, y1, y2),
             _ => None,
         },
         IrType::Tuple(x) => match b {
