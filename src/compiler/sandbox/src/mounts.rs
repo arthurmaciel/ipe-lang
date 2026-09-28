@@ -159,7 +159,7 @@ pub fn push_mounts(argv: &mut Vec<OsString>, homes: &HomeMasks, binds: &[Bind<'_
 /// Test oracle: the first bind that follows a `--tmpfs` it equals or contains
 /// (which would re-expose the masked tree), as `(mask, bind)`.
 #[cfg(test)]
-pub(crate) fn bind_after_covered_mask(argv: &[String]) -> Option<(String, String)> {
+pub fn bind_after_covered_mask(argv: &[String]) -> Option<(String, String)> {
     let mut masks: Vec<&str> = Vec::new();
     let mut ops = argv.iter().map(String::as_str);
     while let Some(op) = ops.next() {
