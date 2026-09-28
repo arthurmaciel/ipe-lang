@@ -6210,7 +6210,7 @@ fn reject_fn_value_reuse(
 /// callee position IS a consume: a second read on one path is a use after move,
 /// and a read inside a closure moves the box out of that closure's environment.
 /// Both live and precomputed binder paths route through here.
-fn reject_fn_once_reuse_for_count(
+const fn reject_fn_once_reuse_for_count(
     ir_ty: &IrType,
     var_uses: usize,
     captured: bool,
@@ -6530,12 +6530,20 @@ struct NonCloneMoveState<'a> {
     hazard: bool,
     /// Parts moved out by a by-value pattern match or a move-only field read.
     partial: PartialMove,
-    /// The walk is inside a re-callable closure that captured the binding.
-    in_recallable: bool,
-    /// A position moved the captured binding out of a re-callable closure.
-    recallable_move: bool,
-    /// A closure body read its own capture of the binding after moving it.
-    closure_hazard: bool,
+    /// Whether the walk is inside a re-callable closure that captured the binding.
+    capture: CaptureContext,
+    /// A closure position rustc refuses: a move out of a re-callable capture
+    /// (`E0507`), or a closure body reading its own capture after moving it (`E0382`).
+    closure_refused: bool,
+}
+
+/// How the binding is held at the current position of [`nonclone_move_walk`].
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum CaptureContext {
+    /// Owned by the scope, or by a closure body that runs at most once.
+    Owned,
+    /// Borrowed on each call of a re-callable `Fn` closure.
+    Recallable,
 }
 
 impl<'a> NonCloneMoveState<'a> {
@@ -6547,9 +6555,8 @@ impl<'a> NonCloneMoveState<'a> {
             consumed: false,
             hazard: false,
             partial: PartialMove::Intact,
-            in_recallable: false,
-            recallable_move: false,
-            closure_hazard: false,
+            capture: CaptureContext::Owned,
+            closure_refused: false,
         }
     }
 
@@ -6558,8 +6565,8 @@ impl<'a> NonCloneMoveState<'a> {
     /// Inside a re-callable closure the binding is a by-reference capture, so
     /// any move out of it is recorded for refusal (rustc `E0507`).
     const fn move_out_of_capture(&mut self) {
-        if self.in_recallable {
-            self.recallable_move = true;
+        if matches!(self.capture, CaptureContext::Recallable) {
+            self.closure_refused = true;
         }
     }
 
@@ -6604,8 +6611,7 @@ impl<'a> NonCloneMoveState<'a> {
     fn merge(&mut self, branch: Self) {
         self.hazard |= branch.hazard;
         self.consumed |= branch.consumed;
-        self.recallable_move |= branch.recallable_move;
-        self.closure_hazard |= branch.closure_hazard;
+        self.closure_refused |= branch.closure_refused;
         self.partial = std::mem::take(&mut self.partial).union(branch.partial);
     }
 
@@ -6620,9 +6626,12 @@ impl<'a> NonCloneMoveState<'a> {
             consumed: false,
             hazard: false,
             partial: PartialMove::Intact,
-            in_recallable: self.in_recallable || recallable,
-            recallable_move: false,
-            closure_hazard: false,
+            capture: if recallable {
+                CaptureContext::Recallable
+            } else {
+                self.capture
+            },
+            closure_refused: false,
         }
     }
 
@@ -6633,8 +6642,7 @@ impl<'a> NonCloneMoveState<'a> {
     /// (rustc `E0382` inside the closure, whether it runs once or re-callably),
     /// both surface to the enclosing binding's refusal.
     const fn absorb_closure(&mut self, body: &Self) {
-        self.recallable_move |= body.recallable_move;
-        self.closure_hazard |= body.hazard || body.closure_hazard;
+        self.closure_refused |= body.closure_refused || body.hazard;
     }
 }
 
@@ -6658,7 +6666,7 @@ fn nonclone_closure_move_refused(
     let copy_fields = copy_record_fields(env, ir_ty);
     let mut state = NonCloneMoveState::new(&copy_fields, env.payloads);
     nonclone_move_walk(sym, expr, &mut state);
-    state.recallable_move || state.closure_hazard
+    state.closure_refused
 }
 
 /// A lambda literal capturing `sym`, walked for [`nonclone_move_walk`].
