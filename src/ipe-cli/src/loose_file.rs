@@ -6,9 +6,11 @@
 //! set is the entry plus the transitive closure of the sibling modules its
 //! imports name: each import walks exactly one path down from the entry's
 //! directory, holding a directory handle at every level, refusing every
-//! symlink and reading only the regular file the walk opened; the closure is
-//! capped by [`LooseFileLimits`]. No unrelated file is ever opened, so a
-//! loose file in `/tmp` or `$HOME` reads nothing unrelated to it. A
+//! symlink, deciding every kind before anything is opened, and reading only
+//! the regular file the walk opened; the entry itself is read beneath the
+//! same directory handle. The closure is capped by [`LooseFileLimits`]. No
+//! unrelated file is ever opened, so a loose file in `/tmp` or `$HOME` reads
+//! nothing unrelated to it. A
 //! directory is listed only when a probed name's case-swapped spelling also
 //! resolves — always on a case-insensitive filesystem — and only to compare
 //! its entry names against the probed name's exact spelling, so one file
@@ -121,8 +123,9 @@ type SiblingRead = Result<(PathBuf, String), CliError>;
 /// Load a loose file plus the transitive closure of sibling modules it imports.
 ///
 /// An import `A.B` resolves to `<dir>/A/B.ipe`, where `<dir>` is the entry's
-/// directory; only that one path is probed. On unix the probe walks `A` then
-/// `B.ipe` from a `<dir>` handle opened once, holding a handle at every
+/// directory; only that one path is probed. On unix `<dir>` is opened once,
+/// before anything is read: the entry is read beneath it, and the probe
+/// walks `A` then `B.ipe` from it, holding a handle at every
 /// level: each name is looked up without following a link, checked for its
 /// exact on-disk spelling, and opened beneath the very handle it was looked
 /// up in, and the file is read from the handle the walk opened. The name
@@ -152,13 +155,14 @@ pub fn resolve_loose_file(
     entry_text: Option<&str>,
     limits: LooseFileLimits,
 ) -> Result<LooseFileSources, CliError> {
+    let source_dir = SourceDir::open(entry_directory(entry));
     let entry_source = match entry_text {
         Some(text) if source_bytes(text) > limits.bytes => {
             return Err(bytes_past_budget(entry, limits));
         }
         Some(text) => text.to_owned(),
         None => charge_budget(
-            io_bounded::read_to_string_capped(entry, budget_cap(limits.bytes)),
+            source_dir.read_entry(entry, budget_cap(limits.bytes)),
             entry,
             limits.bytes,
             limits,
@@ -181,7 +185,6 @@ pub fn resolve_loose_file(
     let mut sources: BTreeMap<Vec<String>, (PathBuf, String)> = BTreeMap::new();
     sources.insert(entry_module.clone(), (entry.to_path_buf(), entry_source));
 
-    let source_dir = SourceDir::open(entry_directory(entry));
     let mut spelling = Spelling::new(entry, limits.listed_names);
     while let Some(module) = pending.pop() {
         if probed.contains(&module) {
@@ -202,11 +205,7 @@ pub fn resolve_loose_file(
             continue;
         };
         probed_files.push(relative.clone());
-        let vetted = source_dir
-            .as_ref()
-            .map(|dir| dir.vet(&module, &mut spelling))
-            .transpose()?;
-        let Some(sibling) = vetted.flatten() else {
+        let Some(sibling) = source_dir.vet(&module, &mut spelling)? else {
             continue;
         };
         if sources.len() >= limits.modules {
@@ -320,42 +319,66 @@ fn device_named_import(entry: &Path, module: &[String], segment: &str) -> CliErr
     }
 }
 
-/// The entry's directory, opened once before any sibling is probed.
+/// The entry's directory, opened once before the entry or any sibling is read.
 struct SourceDir<'e> {
     /// The directory as the entry path spells it, so diagnostics name files as the user wrote them.
     spelled: &'e Path,
-    /// The handle every sibling walk starts from, opened `O_NOFOLLOW`.
+    /// The handle the entry is read from and every sibling walk starts at.
     ///
-    /// An open failure is kept rather than raised: it surfaces only when an
-    /// import names something on disk, so an entry importing nothing on
-    /// disk loads from a directory it may not list.
+    /// The user named this directory, so a link in its path is followed,
+    /// once, by this open; nothing below it is. An open failure is kept
+    /// rather than raised: it surfaces only when an import names something
+    /// on disk, so an entry importing nothing on disk loads from a
+    /// directory it may not list.
     #[cfg(unix)]
     root: Result<HeldDir, rustix::io::Errno>,
-    /// The canonical directory every sibling walk starts from.
+    /// The canonical directory every sibling walk starts from; `None` when it does not canonicalize.
     #[cfg(not(unix))]
-    root: PathDir,
+    root: Option<PathDir>,
 }
 
 impl<'e> SourceDir<'e> {
-    /// Open `spelled`, or `None` when it does not canonicalize (no sibling can be read then).
-    fn open(spelled: &'e Path) -> Option<Self> {
-        let canonical = fs::canonicalize(spelled).ok()?;
+    /// Open `spelled` as the directory the load reads from.
+    fn open(spelled: &'e Path) -> Self {
         #[cfg(unix)]
-        let root = rustix::fs::open(
-            canonical.as_path(),
-            held_dir_flags(),
-            rustix::fs::Mode::empty(),
-        )
-        .map(HeldDir);
+        let root = {
+            use rustix::fs::OFlags;
+            rustix::fs::open(
+                spelled,
+                OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC,
+                rustix::fs::Mode::empty(),
+            )
+            .map(HeldDir)
+        };
         #[cfg(not(unix))]
-        let root = PathDir(canonical);
-        Some(Self { spelled, root })
+        let root = fs::canonicalize(spelled).ok().map(PathDir);
+        Self { spelled, root }
+    }
+
+    /// Read the entry file, at most `cap` bytes, beneath this directory's handle.
+    ///
+    /// The entry is the user-named file, so a final link is followed; its
+    /// kind is checked before it is opened and again on the opened handle.
+    /// When this directory's handle did not open (an exec-only directory),
+    /// or off unix, the entry is read by its path under the same checks.
+    ///
+    /// # Errors
+    /// [`CliError::SourceRefused`] when the entry is not a regular file or
+    /// may not be opened; [`CliError::Io`] when it otherwise cannot be read;
+    /// [`CliError::FileTooLarge`] past `cap`.
+    fn read_entry(&self, entry: &Path, cap: u64) -> Result<String, CliError> {
+        #[cfg(unix)]
+        if let (Ok(root), Some(name)) = (&self.root, entry.file_name()) {
+            return root.read_named(name, entry, cap);
+        }
+        read_user_named(entry, cap)
     }
 
     /// The opened sibling file for `module`, walked down by [`walk`].
     ///
     /// `Ok(None)` — the import is left to the compiler — when the module
-    /// path is malformed or [`walk`] finds nothing to open.
+    /// path is malformed, [`walk`] finds nothing to open, or (off unix) the
+    /// directory does not canonicalize.
     ///
     /// # Errors
     /// Any error of [`walk`]; [`CliError::SourceRefused`] when the import
@@ -376,7 +399,9 @@ impl<'e> SourceDir<'e> {
             Err(errno) => return self.unopened(&relative, &path, *errno),
         };
         #[cfg(not(unix))]
-        let root = &self.root;
+        let Some(root) = &self.root else {
+            return Ok(None);
+        };
         Ok(walk(root, module, &path, spelling)?.map(|file| VettedSibling { file, path }))
     }
 
@@ -410,15 +435,47 @@ fn is_absent(error: &io::Error) -> bool {
     )
 }
 
-/// What a no-follow lookup finds at one name in a walked directory.
+/// Read the user-named `entry` by its path, at most `cap` bytes, refusing a non-regular file before opening it.
+///
+/// The type is checked again on the opened handle, so a swap after the
+/// first check is refused too.
+///
+/// # Errors
+/// As [`SourceDir::read_entry`].
+fn read_user_named(entry: &Path, cap: u64) -> Result<String, CliError> {
+    let meta = fs::metadata(entry).map_err(|error| io_bounded::open_error(entry, error))?;
+    if !meta.is_file() {
+        return Err(io_bounded::source_refused(
+            entry,
+            io_bounded::SourceRefusal::NotRegularFile,
+        ));
+    }
+    io_bounded::read_to_string_capped(entry, cap)
+}
+
+/// What a no-follow lookup finds at one name in a walked directory, decided before anything is opened.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum EntryKind {
     /// A real directory.
     Directory,
     /// A symbolic link, never followed.
     Symlink,
-    /// Any other file: a regular file, or one the open refuses by its type.
-    Other,
+    /// A regular file, the one kind a module file may be opened as.
+    Regular,
+    /// A FIFO, socket, device or unknown kind, refused without being opened.
+    NotRegular,
+}
+
+/// Why descending into a subdirectory opened nothing.
+enum DescendFailure {
+    /// The name is a symlink, refused by the no-follow open.
+    Symlink,
+    /// The name no longer exists.
+    Absent,
+    /// The name is not a directory; what it is must be looked up again.
+    NotDirectory,
+    /// Any other failure, as its typed error (boxed, so the failure stays narrow).
+    Failed(Box<CliError>),
 }
 
 /// One directory of a loose file's import walk.
@@ -443,12 +500,15 @@ trait WalkDir: Sized {
     /// The subdirectory `name`, opened beneath this one without following a link.
     ///
     /// # Errors
-    /// [`CliError::SourceRefused`], naming `probed`, when `name` is a
-    /// symlink or may not be opened; [`CliError::Io`] when the open
-    /// otherwise fails.
-    fn descend(&self, name: &str, probed: &Path) -> Result<Self, CliError>;
+    /// The [`DescendFailure`] saying why nothing was opened; a denied open
+    /// is [`DescendFailure::Failed`] with [`CliError::SourceRefused`], naming
+    /// `probed`.
+    fn descend(&self, name: &str, probed: &Path) -> Result<Self, DescendFailure>;
 
     /// The regular file `name`, opened beneath this one without following a link.
+    ///
+    /// Called only once [`Self::entry_kind`] found `name` to be
+    /// [`EntryKind::Regular`]; the opened handle's type is checked again.
     ///
     /// # Errors
     /// [`CliError::SourceRefused`], naming `probed`, when `name` is a
@@ -459,21 +519,24 @@ trait WalkDir: Sized {
 
 /// Walk `module` down from `root`, one directory per segment, and open its file.
 ///
-/// Every segment is looked up without following a link, checked for its
-/// exact on-disk spelling, and then opened beneath the directory it was
-/// looked up in, so the name checked is the name opened. `Ok(None)` — the
-/// import is left to the compiler — when a segment or the file is absent,
-/// a segment is not a directory, or a name is found only because the
-/// filesystem ignores case (a case-sensitive one would not find it either).
+/// Every segment is looked up without following a link, its kind decided
+/// before anything is opened, checked for its exact on-disk spelling, and
+/// then opened beneath the directory it was looked up in, so the name
+/// checked is the name opened. Only a [`EntryKind::Regular`] file is ever
+/// opened. `Ok(None)` — the import is left to the compiler — when a
+/// segment or the file is absent, a segment is not a directory (also when
+/// it stops being one between its lookup and its open), or a name is found
+/// only because the filesystem ignores case (a case-sensitive one would not
+/// find it either).
 ///
 /// # Errors
 /// [`CliError::SourceRefused`], naming `probed`, with
 /// [`io_bounded::SourceRefusal::Symlink`] when a segment or the file is a
 /// symlink, with [`io_bounded::SourceRefusal::NotRegularFile`] when the file
-/// is a directory, FIFO, device or socket, and with
-/// [`io_bounded::SourceRefusal::AccessDenied`] when a lookup is denied; any
-/// error of [`Spelling::is_exact`]; [`CliError::Io`] when a lookup or open
-/// otherwise fails.
+/// is a directory, FIFO, device or socket (refused before any open), and
+/// with [`io_bounded::SourceRefusal::AccessDenied`] when a lookup is denied;
+/// any error of [`Spelling::is_exact`]; [`CliError::Io`] when a lookup or
+/// open otherwise fails.
 fn walk<D: WalkDir>(
     root: &D,
     module: &[String],
@@ -489,14 +552,28 @@ fn walk<D: WalkDir>(
     for segment in dir_segments {
         let dir = descended.as_ref().unwrap_or(root);
         match dir.entry_kind(segment, probed)? {
-            None | Some(EntryKind::Other) => return Ok(None),
+            None | Some(EntryKind::Regular | EntryKind::NotRegular) => return Ok(None),
             Some(EntryKind::Symlink) => return Err(symlink()),
             Some(EntryKind::Directory) => {}
         }
         if !spelling.is_exact(dir, &key, segment, probed)? {
             return Ok(None);
         }
-        let next = dir.descend(segment, probed)?;
+        let next = match dir.descend(segment, probed) {
+            Ok(next) => next,
+            Err(DescendFailure::Symlink) => return Err(symlink()),
+            Err(DescendFailure::Absent) => return Ok(None),
+            Err(DescendFailure::NotDirectory) => {
+                return match dir.entry_kind(segment, probed)? {
+                    Some(EntryKind::Symlink) => Err(symlink()),
+                    None
+                    | Some(EntryKind::Directory | EntryKind::Regular | EntryKind::NotRegular) => {
+                        Ok(None)
+                    }
+                };
+            }
+            Err(DescendFailure::Failed(error)) => return Err(*error),
+        };
         key.push(segment);
         descended = Some(next);
     }
@@ -505,13 +582,13 @@ fn walk<D: WalkDir>(
     match dir.entry_kind(&file_name, probed)? {
         None => return Ok(None),
         Some(EntryKind::Symlink) => return Err(symlink()),
-        Some(EntryKind::Directory) => {
+        Some(EntryKind::Directory | EntryKind::NotRegular) => {
             return Err(io_bounded::source_refused(
                 probed,
                 io_bounded::SourceRefusal::NotRegularFile,
             ));
         }
-        Some(EntryKind::Other) => {}
+        Some(EntryKind::Regular) => {}
     }
     if !spelling.is_exact(dir, &key, &file_name, probed)? {
         return Ok(None);
@@ -541,12 +618,12 @@ impl WalkDir for HeldDir {
             Ok(stat) => Ok(Some(match FileType::from_raw_mode(stat.st_mode) {
                 FileType::Directory => EntryKind::Directory,
                 FileType::Symlink => EntryKind::Symlink,
-                FileType::RegularFile
-                | FileType::Fifo
+                FileType::RegularFile => EntryKind::Regular,
+                FileType::Fifo
                 | FileType::Socket
                 | FileType::CharacterDevice
                 | FileType::BlockDevice
-                | FileType::Unknown => EntryKind::Other,
+                | FileType::Unknown => EntryKind::NotRegular,
             })),
             Err(errno) if errno == Errno::NOENT || errno == Errno::NOTDIR => Ok(None),
             Err(errno) => Err(io_bounded::access_error(probed, errno.into())),
@@ -570,20 +647,23 @@ impl WalkDir for HeldDir {
         Ok(Some(names))
     }
 
-    /// A symlink swapped in after the lookup is refused as a symlink.
+    /// A symlink swapped in after the lookup is reported as a symlink.
     ///
-    /// The open then fails with `ELOOP` or, with `O_DIRECTORY`, `ENOTDIR`;
-    /// an `ENOTDIR` is re-checked so a link is never reported as I/O.
-    fn descend(&self, name: &str, probed: &Path) -> Result<Self, CliError> {
+    /// The open then fails with the platform's no-follow errno or, with
+    /// `O_DIRECTORY`, `ENOTDIR`; the walk re-checks an `ENOTDIR`.
+    fn descend(&self, name: &str, probed: &Path) -> Result<Self, DescendFailure> {
+        use rustix::io::Errno;
         rustix::fs::openat(&self.0, name, held_dir_flags(), rustix::fs::Mode::empty())
             .map(Self)
             .map_err(|errno| {
-                if errno == rustix::io::Errno::NOTDIR
-                    && matches!(self.entry_kind(name, probed), Ok(Some(EntryKind::Symlink)))
-                {
-                    held_open_error(probed, rustix::io::Errno::LOOP)
+                if names_a_nofollow_link(errno) {
+                    DescendFailure::Symlink
+                } else if errno == Errno::NOTDIR {
+                    DescendFailure::NotDirectory
+                } else if errno == Errno::NOENT {
+                    DescendFailure::Absent
                 } else {
-                    held_open_error(probed, errno)
+                    DescendFailure::Failed(Box::new(held_open_error(probed, errno)))
                 }
             })
     }
@@ -599,10 +679,56 @@ impl WalkDir for HeldDir {
     }
 }
 
-/// The typed error for a no-follow open beneath a held directory; `ELOOP` means a symlink.
+#[cfg(unix)]
+impl HeldDir {
+    /// The user-named entry `name` in this directory, read once its kind is proven regular.
+    ///
+    /// The final link is followed (the user named the entry), but its target
+    /// is typed by `stat` before the open, so a FIFO or device is never
+    /// opened, and the opened handle's type is checked again.
+    ///
+    /// # Errors
+    /// [`CliError::SourceRefused`], naming `path`, when the entry is not a
+    /// regular file or may not be opened; [`CliError::Io`] when the stat,
+    /// open or read otherwise fails or the entry exceeds `cap`.
+    fn read_named(&self, name: &OsStr, path: &Path, cap: u64) -> Result<String, CliError> {
+        use rustix::fs::{AtFlags, FileType, OFlags};
+        let stat = rustix::fs::statat(&self.0, name, AtFlags::empty())
+            .map_err(|errno| io_bounded::open_error(path, errno.into()))?;
+        if !matches!(FileType::from_raw_mode(stat.st_mode), FileType::RegularFile) {
+            return Err(io_bounded::source_refused(
+                path,
+                io_bounded::SourceRefusal::NotRegularFile,
+            ));
+        }
+        let flags = OFlags::RDONLY | OFlags::NONBLOCK | OFlags::NOCTTY | OFlags::CLOEXEC;
+        let fd = rustix::fs::openat(&self.0, name, flags, rustix::fs::Mode::empty())
+            .map_err(|errno| io_bounded::open_error(path, errno.into()))?;
+        let file = io_bounded::regular_file(fs::File::from(fd), path)?;
+        io_bounded::read_opened_capped(file, path, cap)
+    }
+}
+
+/// Whether `errno` from an `O_NOFOLLOW` open means the final component is a symlink.
+///
+/// Linux and macOS say `ELOOP`; FreeBSD says `EMLINK` and NetBSD `EFTYPE`.
+#[cfg(unix)]
+fn names_a_nofollow_link(errno: rustix::io::Errno) -> bool {
+    #[cfg(target_os = "freebsd")]
+    if errno == rustix::io::Errno::MLINK {
+        return true;
+    }
+    #[cfg(target_os = "netbsd")]
+    if errno == rustix::io::Errno::FTYPE {
+        return true;
+    }
+    errno == rustix::io::Errno::LOOP
+}
+
+/// The typed error for a no-follow open beneath a held directory; a no-follow errno means a symlink.
 #[cfg(unix)]
 fn held_open_error(probed: &Path, errno: rustix::io::Errno) -> CliError {
-    if errno == rustix::io::Errno::LOOP {
+    if names_a_nofollow_link(errno) {
         io_bounded::source_refused(probed, io_bounded::SourceRefusal::Symlink)
     } else {
         io_bounded::open_error(probed, errno.into())
@@ -625,8 +751,10 @@ impl WalkDir for PathDir {
                     EntryKind::Symlink
                 } else if kind.is_dir() {
                     EntryKind::Directory
+                } else if kind.is_file() {
+                    EntryKind::Regular
                 } else {
-                    EntryKind::Other
+                    EntryKind::NotRegular
                 }))
             }
             Err(error) if is_absent(&error) => Ok(None),
@@ -645,8 +773,18 @@ impl WalkDir for PathDir {
         Ok(Some(names))
     }
 
-    fn descend(&self, name: &str, _probed: &Path) -> Result<Self, CliError> {
-        Ok(Self(self.0.join(name)))
+    /// The lookup is repeated, so a swap already done since the walk's lookup is caught.
+    fn descend(&self, name: &str, probed: &Path) -> Result<Self, DescendFailure> {
+        let path = self.0.join(name);
+        match fs::symlink_metadata(&path) {
+            Ok(meta) if meta.file_type().is_symlink() => Err(DescendFailure::Symlink),
+            Ok(meta) if meta.is_dir() => Ok(Self(path)),
+            Ok(_) => Err(DescendFailure::NotDirectory),
+            Err(error) if is_absent(&error) => Err(DescendFailure::Absent),
+            Err(error) => Err(DescendFailure::Failed(Box::new(io_bounded::access_error(
+                probed, error,
+            )))),
+        }
     }
 
     fn open_file(&self, name: &str, _probed: &Path) -> Result<fs::File, CliError> {
@@ -782,7 +920,7 @@ fn module_segments(symbols: &[Symbol], interner: &Interner) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use std::cell::Cell;
-    use std::collections::BTreeMap;
+    use std::collections::{BTreeMap, BTreeSet};
     use std::ffi::OsString;
     use std::fs;
     use std::io;
@@ -791,8 +929,8 @@ mod tests {
     #[cfg(unix)]
     use super::HeldDir;
     use super::{
-        CliError, EntryKind, LooseFileLimits, LooseFileSources, ProjectRoot, SourceDir, Spelling,
-        WalkDir, io_bounded, resolve_loose_file, swap_ascii_case, walk,
+        CliError, DescendFailure, EntryKind, LooseFileLimits, LooseFileSources, ProjectRoot,
+        SourceDir, Spelling, WalkDir, io_bounded, resolve_loose_file, swap_ascii_case, walk,
     };
 
     /// A fresh, canonical scratch directory unique to `name` and this process.
@@ -828,21 +966,19 @@ mod tests {
         }
     }
 
-    /// What the resolver's walk finds for `module` under `dir`; `None` when `dir` does not open.
-    fn vet(dir: &Path, module: &[String]) -> Option<Result<Option<PathBuf>, CliError>> {
-        let source_dir = SourceDir::open(dir)?;
+    /// What the resolver's walk finds for `module` under `dir`.
+    fn vet(dir: &Path, module: &[String]) -> Result<Option<PathBuf>, CliError> {
+        let source_dir = SourceDir::open(dir);
         let entry = dir.join("Main.ipe");
         let mut spelling = Spelling::new(&entry, LooseFileLimits::DEFAULT.listed_names);
-        Some(
-            source_dir
-                .vet(module, &mut spelling)
-                .map(|sibling| sibling.map(|vetted| vetted.path)),
-        )
+        source_dir
+            .vet(module, &mut spelling)
+            .map(|sibling| sibling.map(|vetted| vetted.path))
     }
 
     /// The path the resolver's walk opens for `module` under `dir`, if any.
     fn vetted_path(dir: &Path, module: &[String]) -> Option<PathBuf> {
-        vet(dir, module)?.ok().flatten()
+        vet(dir, module).ok().flatten()
     }
 
     #[test]
@@ -1290,7 +1426,7 @@ mod tests {
             "the file behind the symlinked parent is a regular file"
         );
         assert!(
-            walked.is_some_and(|walked| is_refused(&walked, io_bounded::SourceRefusal::Symlink)),
+            is_refused(&walked, io_bounded::SourceRefusal::Symlink),
             "the no-follow walk refuses the symlinked directory"
         );
     }
@@ -1352,7 +1488,7 @@ mod tests {
         let symlink = io_bounded::SourceRefusal::Symlink;
         assert!(is_refused(&file, symlink), "a file symlink is never opened");
         assert!(
-            is_refused(&descended, symlink),
+            matches!(descended, Err(DescendFailure::Symlink)),
             "a directory symlink is never descended"
         );
         assert!(real.is_ok(), "a real directory is descended");
@@ -1410,7 +1546,7 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
         let not_regular = io_bounded::SourceRefusal::NotRegularFile;
         assert!(
-            walked.is_some_and(|walked| is_refused(&walked, not_regular)),
+            is_refused(&walked, not_regular),
             "the walk refuses a FIFO without reading it"
         );
         assert!(
@@ -1573,6 +1709,14 @@ mod tests {
         failure: Option<io::ErrorKind>,
         /// How many times a directory was listed.
         listings: Cell<usize>,
+        /// Every on-disk path that is a FIFO, device or socket rather than a regular file.
+        not_regular: BTreeSet<PathBuf>,
+        /// How many times a file was opened.
+        opens: Cell<usize>,
+        /// A directory swapped for another kind, or removed, the moment it is descended into.
+        swap: Option<(PathBuf, Option<EntryKind>)>,
+        /// Whether [`Self::swap`] has happened.
+        swapped: Cell<bool>,
     }
 
     impl FakeFs {
@@ -1590,6 +1734,10 @@ mod tests {
                 ignores_case,
                 failure: None,
                 listings: Cell::new(0),
+                not_regular: BTreeSet::new(),
+                opens: Cell::new(0),
+                swap: None,
+                swapped: Cell::new(false),
             }
         }
 
@@ -1630,11 +1778,20 @@ mod tests {
         type Opened = PathBuf;
 
         fn entry_kind(&self, name: &str, _probed: &Path) -> Result<Option<EntryKind>, CliError> {
-            Ok(self.resolve(name).map(|path| {
+            let path = self.resolve(name);
+            if let (Some(path), Some((swapped, kind))) = (&path, &self.fs.swap)
+                && self.fs.swapped.get()
+                && path == swapped
+            {
+                return Ok(*kind);
+            }
+            Ok(path.map(|path| {
                 if self.fs.dirs.contains_key(&path) {
                     EntryKind::Directory
+                } else if self.fs.not_regular.contains(&path) {
+                    EntryKind::NotRegular
                 } else {
-                    EntryKind::Other
+                    EntryKind::Regular
                 }
             }))
         }
@@ -1648,14 +1805,22 @@ mod tests {
             Ok((names.len() <= limit).then_some(names))
         }
 
-        fn descend(&self, name: &str, _probed: &Path) -> Result<Self, CliError> {
-            Ok(Self {
-                fs: self.fs,
-                path: self.resolve(name).unwrap_or_default(),
-            })
+        fn descend(&self, name: &str, _probed: &Path) -> Result<Self, DescendFailure> {
+            let path = self.resolve(name).unwrap_or_default();
+            if self
+                .fs
+                .swap
+                .as_ref()
+                .is_some_and(|(swapped, _)| *swapped == path)
+            {
+                self.fs.swapped.set(true);
+                return Err(DescendFailure::NotDirectory);
+            }
+            Ok(Self { fs: self.fs, path })
         }
 
         fn open_file(&self, name: &str, _probed: &Path) -> Result<PathBuf, CliError> {
+            self.fs.opens.set(self.fs.opens.get() + 1);
             Ok(self.resolve(name).unwrap_or_default())
         }
     }
@@ -1674,6 +1839,72 @@ mod tests {
             Path::new("probed"),
             &mut spelling,
         )
+    }
+
+    /// A FIFO, device or socket module file is refused before anything is opened.
+    #[test]
+    fn a_not_regular_file_is_refused_without_an_open() {
+        let mut fs = FakeFs::new(false, &[("", &["Pipe.ipe", "Plain.ipe"])]);
+        fs.not_regular.insert(PathBuf::from("Pipe.ipe"));
+        let limit = LooseFileLimits::DEFAULT.listed_names;
+        let refused = fake_walk(&fs, &["Pipe"], limit);
+        assert!(is_refused(
+            &refused,
+            io_bounded::SourceRefusal::NotRegularFile
+        ));
+        assert_eq!(fs.opens.get(), 0, "a non-regular file is never opened");
+        let plain = fake_walk(&fs, &["Plain"], limit);
+        assert_eq!(plain.ok().flatten(), Some(PathBuf::from("Plain.ipe")));
+        assert_eq!(fs.opens.get(), 1, "a regular file is opened once");
+    }
+
+    /// A non-regular entry where a directory segment belongs is left to the compiler.
+    #[test]
+    fn a_not_regular_directory_segment_is_left_to_the_compiler() {
+        let mut fs = FakeFs::new(false, &[("", &["Pipe"])]);
+        fs.not_regular.insert(PathBuf::from("Pipe"));
+        let walked = fake_walk(&fs, &["Pipe", "B"], LooseFileLimits::DEFAULT.listed_names);
+        assert!(matches!(walked, Ok(None)));
+        assert_eq!(fs.opens.get(), 0);
+    }
+
+    /// The walk of `A.B` when `A` becomes `kind` between its lookup and its open.
+    ///
+    /// Yields the walk, whether the open of `A` was reached, and the file opens.
+    fn walk_swapped(kind: Option<EntryKind>) -> SwappedWalk {
+        let mut fs = FakeFs::new(false, &[("", &["A"]), ("A", &["B.ipe"])]);
+        fs.swap = Some((PathBuf::from("A"), kind));
+        let walked = fake_walk(&fs, &["A", "B"], LooseFileLimits::DEFAULT.listed_names);
+        (walked, fs.swapped.get(), fs.opens.get())
+    }
+
+    /// What [`walk_swapped`] yields.
+    type SwappedWalk = (Result<Option<PathBuf>, CliError>, bool, usize);
+
+    /// A directory segment that stops being one before it is opened reads as the static case.
+    #[test]
+    fn a_segment_swapped_before_its_open_agrees_with_the_static_case() {
+        for kind in [
+            None,
+            Some(EntryKind::Regular),
+            Some(EntryKind::NotRegular),
+            Some(EntryKind::Directory),
+        ] {
+            let (walked, descended, opens) = walk_swapped(kind);
+            assert!(descended, "the walk reached the open of `A`");
+            assert!(
+                matches!(walked, Ok(None)),
+                "a segment swapped to {kind:?} is left to the compiler"
+            );
+            assert_eq!(opens, 0);
+        }
+        let (walked, descended, opens) = walk_swapped(Some(EntryKind::Symlink));
+        assert!(descended, "the walk reached the open of `A`");
+        assert!(
+            is_refused(&walked, io_bounded::SourceRefusal::Symlink),
+            "a segment swapped to a symlink is refused as one"
+        );
+        assert_eq!(opens, 0);
     }
 
     #[test]
