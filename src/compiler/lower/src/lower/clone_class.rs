@@ -244,29 +244,7 @@ pub(super) fn clone_class(env: CloneEnv<'_>, t: &IrType) -> CloneClass {
         // wrapper `Copy` — bare capture would move it on first closure call → E0525.
         // Floor to CloneOk so the rewrite inserts `.clone()` per call.
         IrType::Record(fields) => clone_class_named_composite(env, fields.values()),
-        // An FFI foreign-interface opaque handle (a `Rust.*` home with no
-        // transparent import) is the real foreign Rust type; its `Clone`-ness
-        // is the foreign crate's decision, not Ipe's, so it is NonClone here —
-        // a duplicating `.clone()` on a non-`Clone` foreign type (e.g.
-        // `bevy_ecs::World`) would be cargo E0599 after `ipe` exit 0 (a SEAL
-        // break). A TRANSPARENT import lowers to a real app enum and takes the
-        // ordinary named-composite class below, like any user enum.
-        IrType::Enum { home, name, .. } if enum_is_opaque_ffi_handle(env, home, *name) => {
-            CloneClass::NonClone
-        }
-        // A user enum whose variant payloads hold a non-`Clone` value (a
-        // `Task`, a boxed fn, an opaque FFI handle) gets no `Clone` impl from
-        // the backend's enum-`Clone` fixpoint, so it is NonClone here too —
-        // otherwise a `.clone()` inserted on it is cargo E0599 after `ipe`
-        // exit 0.
-        IrType::Enum { home, name, .. }
-            if enum_payload_holds(home, *name, env.payloads, &|p| {
-                payload_leaf_is_nonclone(env, p)
-            }) =>
-        {
-            CloneClass::NonClone
-        }
-        IrType::Enum { args, .. } => clone_class_named_composite(env, args.iter()),
+        IrType::Enum { home, name, args } => enum_clone_class(env, home, *name, args),
         // Ui{msg} / WebRoute(page) — recurse on the message/page type-param.
         // Both emit named runtime structs (`Html<M>`, `Route<P>`, …) that derive
         // `Clone` but never `Copy`, so a `Copy` parameter floors to `CloneOk`.
@@ -435,6 +413,34 @@ fn clone_class_composite<'a>(
 /// on first call, causing E0525 on any subsequent call.  Flooring to `CloneOk`
 /// ensures the rewrite inserts `.clone()` per call — safe because the wrapper
 /// derives `Clone`.
+/// Clone class of a named user enum.
+///
+/// `NonClone` when the enum is an FFI foreign-interface opaque handle (a
+/// `Rust.*` home with no transparent import: the real foreign Rust type, whose
+/// `Clone`-ness is the foreign crate's decision), or when a variant payload
+/// holds a non-`Clone` value (a `Task`, a boxed fn, an opaque FFI handle), so
+/// the backend's enum-`Clone` fixpoint gives it no `Clone` impl. Either way a
+/// duplicating `.clone()` would be cargo E0599 after `ipe` exit 0 (a SEAL
+/// break). Otherwise its type arguments decide, floored to `CloneOk` like any
+/// named composite; a TRANSPARENT FFI import lowers to a real app enum and
+/// lands here too.
+fn enum_clone_class(
+    env: CloneEnv<'_>,
+    home: &ModPath,
+    name: Symbol,
+    args: &[IrType],
+) -> CloneClass {
+    if enum_is_opaque_ffi_handle(env, home, name)
+        || enum_payload_holds(home, name, env.payloads, &|p| {
+            payload_leaf_is_nonclone(env, p)
+        })
+    {
+        CloneClass::NonClone
+    } else {
+        clone_class_named_composite(env, args.iter())
+    }
+}
+
 fn clone_class_named_composite<'a>(
     env: CloneEnv<'_>,
     parts: impl Iterator<Item = &'a IrType>,
