@@ -2474,6 +2474,41 @@ pub const fn ir_type_feature_requirement(ty: &IrType) -> Option<RuntimeFeatureId
     }
 }
 
+/// A runtime callback slot whose [`IrType::Fun`] shape renders as a `Clone` `Arc<dyn Fn>`.
+///
+/// The one authority for which function shapes the backend renders as the
+/// runtime's reference-counted callback carriers instead of the default
+/// `Box<dyn Fn>`: the backend's type renderer and constructor choice and the
+/// ownership classifiers ([`carrier_leaf`], the lowerer's clone classes) all read
+/// [`arc_callback_shape`], so a shape rendered `Arc` is never judged move-only.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ArcCallbackShape {
+    /// `Request -> Task Error Response`, rendered as the runtime's `ServerHandler<E>` alias.
+    ServerHandler,
+    /// A `WsServerCfg` callback, rendered `Arc<dyn Fn(..) -> IpeTask<()> + Send + Sync>`.
+    ///
+    /// The shapes are `onConnect` / `onClose` (`WebSocketServer -> Task ()`),
+    /// `onMessage` (`WebSocketServer -> String -> Task ()`) and `onError`
+    /// (`WebSocketServer -> Error -> Task ()`).
+    WsCallback,
+}
+
+/// The runtime `Arc` callback slot a function of `params -> ret` fills, if any.
+#[must_use]
+pub fn arc_callback_shape(params: &[IrType], ret: &IrType) -> Option<ArcCallbackShape> {
+    let IrType::Task(out) = ret else {
+        return None;
+    };
+    match (params, out.as_ref()) {
+        ([IrType::ServerRequest], IrType::ServerResponse) => Some(ArcCallbackShape::ServerHandler),
+        (
+            [IrType::WebSocketServer] | [IrType::WebSocketServer, IrType::Str | IrType::Error],
+            IrType::Unit,
+        ) => Some(ArcCallbackShape::WsCallback),
+        _ => None,
+    }
+}
+
 /// Classify a type's DEFAULT emitted Rust carrier as `Clone`, non-`Clone`, or transparent.
 ///
 /// A flat, non-recursive step: it never looks inside a carried element, so a
@@ -2498,7 +2533,8 @@ pub const fn ir_type_feature_requirement(ty: &IrType) -> Option<RuntimeFeatureId
 /// authority.
 ///
 /// The `false` set is the default carriers that do NOT implement `Clone`:
-/// * [`IrType::Fun`] — the default `Box<dyn Fn>` first-class carrier (see above).
+/// * [`IrType::Fun`] — the default `Box<dyn Fn>` first-class carrier (see above),
+///   except an [`arc_callback_shape`], which renders the `Clone` `Arc` carrier.
 /// * [`IrType::FnOnceChain`] — a curried `Box<dyn FnOnce>` tower, consume-once by
 ///   type (the decode/db-decode pipeline `next_decoder` slots require it); a
 ///   `FnOnce` cannot be re-called, so it is never `Clone`.
@@ -2520,6 +2556,8 @@ pub const fn ir_type_feature_requirement(ty: &IrType) -> Option<RuntimeFeatureId
 #[must_use]
 pub fn carrier_leaf(ty: &IrType) -> CarrierLeaf<'_> {
     match ty {
+        // A runtime callback slot renders `Arc<dyn Fn>`, which is `Clone`.
+        IrType::Fun(params, ret) if arc_callback_shape(params, ret).is_some() => CarrierLeaf::Clone,
         // Copy / Clone scalar and opaque leaves — every one implements `Clone`.
         IrType::Int
         | IrType::Float
@@ -4070,8 +4108,18 @@ mod tests {
         let payloads = crate::EnumPayloadTable::new();
         let fun = || IrType::Fun(vec![IrType::Int], Box::new(IrType::Int));
         let record = |t: IrType| IrType::Record(BTreeMap::from([(f, t), (n, IrType::Int)]));
+        let handler = || {
+            IrType::Fun(
+                vec![IrType::ServerRequest],
+                Box::new(IrType::Task(Box::new(IrType::ServerResponse))),
+            )
+        };
+        let ws = |params: Vec<IrType>| {
+            IrType::Fun(params, Box::new(IrType::Task(Box::new(IrType::Unit))))
+        };
         for ty in [
             fun(),
+            ws(vec![IrType::Int]),
             IrType::FnOnceChain(vec![IrType::Int], Box::new(IrType::Int)),
             IrType::WebApp,
             IrType::Task(Box::new(IrType::Int)),
@@ -4087,9 +4135,19 @@ mod tests {
             IrType::Int,
             IrType::Generic(n),
             record(IrType::Str),
+            handler(),
+            IrType::Maybe(Box::new(handler())),
+            record(handler()),
+            ws(vec![IrType::WebSocketServer]),
+            ws(vec![IrType::WebSocketServer, IrType::Str]),
         ] {
             assert!(!ir_type_is_move_only(&ty, &payloads), "{ty:?}");
         }
+        assert_eq!(
+            arc_callback_shape(&[IrType::ServerRequest], &IrType::ServerResponse),
+            None,
+            "a non-`Task` return is not a runtime callback slot"
+        );
         assert!(!ir_type_has_effect_carrier(&record(fun()), &payloads));
         Ok(())
     }

@@ -262,10 +262,10 @@ pub fn emit_apply(
 /// `"ServerHandler<IpeError>"` — NOT the expanded `"Arc<dyn Fn…>"` — so a
 /// `starts_with("Arc<")` string test silently misclassifies every handler shape
 /// as `Box` and reintroduces the E0308 seal break for inline
-/// `Server.post path (\req -> …)` handler lambdas (the regression this shared
-/// helper closes). The param patterns are kept in LOCK-STEP with `render_type`'s
-/// WS/ServerHandler Arc arms (`emit_types.rs`) — a shape rendered as `Arc<…>`
-/// there but boxed with `Box::new` here (or vice-versa) is an E0308. Both
+/// `Server.post path (\req -> …)` handler lambdas. The shapes come from
+/// [`ipe_ir::arc_callback_shape`], the same predicate `render_type`'s
+/// WS/ServerHandler Arc arms (`emit_types.rs`) read, so a shape rendered as
+/// `Arc<…>` there is always built with `Arc::new` here. Both
 /// `emit_func_value` and `emit_lambda` route through here so the two emit paths
 /// can never drift.
 pub fn wants_arc_ctor(ty: &IrType) -> bool {
@@ -275,18 +275,7 @@ pub fn wants_arc_ctor(ty: &IrType) -> bool {
     if matches!(ty, IrType::SharedFun(_, _)) {
         return true;
     }
-    matches!(ty,
-        IrType::Fun(params, ret)
-            if (matches!(params.as_slice(), [IrType::ServerRequest])
-                && matches!(ret.as_ref(), IrType::Task(inner)
-                    if matches!(inner.as_ref(), IrType::ServerResponse)))
-               || (matches!(
-                    params.as_slice(),
-                    [IrType::WebSocketServer]
-                        | [IrType::WebSocketServer, IrType::Str | IrType::Error]
-                ) && matches!(ret.as_ref(), IrType::Task(inner)
-                    if matches!(inner.as_ref(), IrType::Unit)))
-    )
+    matches!(ty, IrType::Fun(params, ret) if ipe_ir::arc_callback_shape(params, ret).is_some())
 }
 
 #[inline(never)]

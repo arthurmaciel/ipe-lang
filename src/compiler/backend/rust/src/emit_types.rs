@@ -569,8 +569,8 @@ pub fn render_type(ctx: &EmitCtx, ty: &IrType, generics: GenericScope) -> DResul
         // the runtime), not as a generic `Box<dyn Fn + Send + 'static>`.  This
         // arm MUST appear before the generic `Fun` arm so it takes priority.
         IrType::Fun(params, ret)
-            if matches!(params.as_slice(), [IrType::ServerRequest])
-                && matches!(ret.as_ref(), IrType::Task(inner) if matches!(inner.as_ref(), IrType::ServerResponse)) =>
+            if ipe_ir::arc_callback_shape(params, ret)
+                == Some(ipe_ir::ArcCallbackShape::ServerHandler) =>
         {
             "ServerHandler<IpeError>".to_owned()
         }
@@ -582,16 +582,14 @@ pub fn render_type(ctx: &EmitCtx, ty: &IrType, generics: GenericScope) -> DResul
         // `onError`'s second param is the error type, NOT String — its runtime
         // setter `ws_server_with_on_error` takes `Arc<dyn Fn(WsHandle, E) -> …>`,
         // so it MUST render as `Arc<…>` here (and box with `Arc::new` in
-        // `wants_arc_ctor`, whose pattern is kept in lock-step). Omitting the
+        // `wants_arc_ctor`; both read `ipe_ir::arc_callback_shape`). Omitting the
         // `[WebSocketServer, Error]` shape rendered it as the generic `Box<dyn Fn>`
         // below and passed a `Box` into that `Arc` param → ipe-0-then-cargo-fail
         // E0308 for any `onError` callback.
         // This arm MUST appear before the generic `Fun` arm so it takes priority.
         IrType::Fun(params, ret)
-            if matches!(
-                params.as_slice(),
-                [IrType::WebSocketServer] | [IrType::WebSocketServer, IrType::Str | IrType::Error]
-            ) && matches!(ret.as_ref(), IrType::Task(inner) if matches!(inner.as_ref(), IrType::Unit)) =>
+            if ipe_ir::arc_callback_shape(params, ret)
+                == Some(ipe_ir::ArcCallbackShape::WsCallback) =>
         {
             let mut parts = Vec::with_capacity(params.len());
             for param in params {

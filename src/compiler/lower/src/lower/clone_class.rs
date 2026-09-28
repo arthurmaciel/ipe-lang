@@ -228,6 +228,11 @@ fn clone_class_in(env: CloneEnv<'_>, t: &IrType, rows: RowVars) -> CloneClass {
         // with a hand-written unconditional `Clone`, so a `Decoder` slot is
         // `CloneOk` and never poisons its enclosing composite.
         | IrType::Decoder(_) => CloneClass::CloneOk,
+        // A runtime callback slot renders the `Clone` `Arc<dyn Fn>` carrier,
+        // the same shape set `ipe_ir::carrier_leaf` admits.
+        IrType::Fun(params, ret) if ipe_ir::arc_callback_shape(params, ret).is_some() => {
+            CloneClass::CloneOk
+        }
         // Non-Clone: function-typed, task, Cmd, Sub.
         // Also Generic(_) until T5 (which injects `T: Clone`).
         IrType::Fun(_, _)
