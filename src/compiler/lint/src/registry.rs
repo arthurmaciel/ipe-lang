@@ -71,7 +71,7 @@ pub const RULES: &[RuleInfo] = &[
     },
     RuleInfo {
         name: "prefer-pipeline",
-        summary: "a nested call chain that reads clearer left-to-right as a |> pipeline",
+        summary: "a call chain nested two paren levels deep that reads clearer as a `|>` or `<|` pipe chain",
         default_severity: Severity::Warn,
         fixability: Fixability::Fixable,
     },
@@ -115,6 +115,86 @@ pub const RULES: &[RuleInfo] = &[
         default_severity: Severity::Warn,
         fixability: Fixability::NotFixable(
             "the fix is the accessible label text, which only the author knows",
+        ),
+    },
+    RuleInfo {
+        name: "multiline-lambda-arg",
+        summary: "a lambda spanning several lines passed inline as a call argument instead of bound by name",
+        default_severity: Severity::Warn,
+        fixability: Fixability::NotFixable(
+            "naming the lambda means choosing a binding name and placement, which only the author can judge",
+        ),
+    },
+    RuleInfo {
+        name: "no-bool-literal-compare",
+        summary: "an `==` / `/=` comparison against a `True` / `False` literal",
+        default_severity: Severity::Warn,
+        fixability: Fixability::NotFixable(
+            "the finding marks the comparison span; this rule emits no rewrite, so the edit is manual",
+        ),
+    },
+    RuleInfo {
+        name: "no-redundant-bool-if",
+        summary: "an `if` whose branches are both `Bool` literals, restating its condition",
+        default_severity: Severity::Warn,
+        fixability: Fixability::NotFixable(
+            "the finding marks the `if` span; this rule emits no rewrite, so the edit is manual",
+        ),
+    },
+    RuleInfo {
+        name: "no-simple-let-body",
+        summary: "a `let` whose body only returns the name its last binding introduces",
+        default_severity: Severity::Warn,
+        fixability: Fixability::NotFixable(
+            "inlining the last binding can reorder or duplicate its evaluation context, which the author must confirm",
+        ),
+    },
+    RuleInfo {
+        name: "simplify-double-not",
+        summary: "`not (not x)`, which restates `x`",
+        default_severity: Severity::Warn,
+        fixability: Fixability::NotFixable(
+            "the finding marks the expression span; this rule emits no rewrite, so the edit is manual",
+        ),
+    },
+    RuleInfo {
+        name: "simplify-map-identity",
+        summary: "`List.map identity xs`, which restates `xs`",
+        default_severity: Severity::Warn,
+        fixability: Fixability::NotFixable(
+            "the finding marks the call span; this rule emits no rewrite, so the edit is manual",
+        ),
+    },
+    RuleInfo {
+        name: "simplify-cons-append",
+        summary: "`[ a ] ++ xs`, which restates `a :: xs`",
+        default_severity: Severity::Warn,
+        fixability: Fixability::NotFixable(
+            "the finding marks the expression span; this rule emits no rewrite, so the edit is manual",
+        ),
+    },
+    RuleInfo {
+        name: "no-redundant-cons",
+        summary: "consing onto a list literal, which restates a longer list literal",
+        default_severity: Severity::Warn,
+        fixability: Fixability::NotFixable(
+            "the finding marks the expression span; this rule emits no rewrite, so the edit is manual",
+        ),
+    },
+    RuleInfo {
+        name: "no-redundant-concat",
+        summary: "`List.concat` / `String.concat` of a single-element list, which restates that element",
+        default_severity: Severity::Warn,
+        fixability: Fixability::NotFixable(
+            "the finding marks the call span; this rule emits no rewrite, so the edit is manual",
+        ),
+    },
+    RuleInfo {
+        name: "no-missing-type-annotation",
+        summary: "a top-level declaration with no `: T` signature",
+        default_severity: Severity::Allow,
+        fixability: Fixability::NotFixable(
+            "writing the signature needs the inferred type rendered as source, which this rule does not produce",
         ),
     },
 ];

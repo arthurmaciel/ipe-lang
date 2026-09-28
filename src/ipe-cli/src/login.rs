@@ -22,6 +22,7 @@ use std::process::Command;
 use std::time::{Duration, Instant};
 
 use crate::CliError;
+use crate::secret_file::{HOST_SECRET_STORE, SecretFileError, SecretStore};
 
 /// The Ipê CLI's GitHub OAuth App client id. Public by design — the device flow
 /// authenticates with the client id alone (no secret), so embedding it is safe.
@@ -89,24 +90,15 @@ pub fn run_login(rest: &[String]) -> Result<(), CliError> {
             // well-formed token. A token file that exists but does not parse is
             // reported distinctly, never as "logged in" — the two views of the
             // credential state must agree.
-            let message = match token_status() {
-                TokenStatus::LoggedIn(path) => {
-                    format!("logged in — token stored at {}", path.display())
-                }
-                TokenStatus::Corrupt(path) => format!(
-                    "token file at {} is unreadable or malformed — run `ipe login` to re-authorize",
-                    path.display()
-                ),
-                TokenStatus::NotLoggedIn => {
-                    "not logged in — run `ipe login` to authorize".to_owned()
-                }
-            };
             let key_line = crate::ssh_signing_key::status_line(
                 ipe_env::var_os(crate::ssh_signing_key::SIGNING_KEY_ENV).as_deref(),
                 config_dir().as_deref(),
             );
             crate::screen::Screen::new(crate::screen::Stream::Stdout)
-                .line(crate::screen::Tone::Text, &format!("{message}\n{key_line}"))
+                .line(
+                    crate::screen::Tone::Text,
+                    &status_report(&token_status(), key_line),
+                )
                 .emit();
             Ok(())
         }
@@ -180,17 +172,36 @@ fn token_alphabet(raw: &str) -> Option<&str> {
     well_formed.then_some(trimmed)
 }
 
-/// The stored publish token, if the user has run `ipe login`. `None` when no
-/// token file exists, it cannot be read, or its contents are not a well-formed
-/// token. Consumed by the publish headless path.
+/// The stored publish token, if the user has run `ipe login`.
+///
+/// `None` when no token file exists, it is not proven private to the invoking
+/// user, it cannot be read, or its contents are not a well-formed token.
+/// Consumed by the publish headless path.
 #[must_use]
 pub fn stored_token() -> Option<PublishToken> {
-    let raw = crate::io_bounded::read_to_string_capped(
-        &token_path()?,
-        crate::io_bounded::SMALL_FILE_READ_CAP,
-    )
-    .ok()?;
+    let raw = read_stored_token(&token_path()?).ok()?;
     PublishToken::parse(&raw)
+}
+
+/// Why a stored token file yielded no text.
+#[derive(Debug)]
+enum TokenReadRefusal {
+    /// The file is not private to the invoking user.
+    Exposed,
+    /// The file is absent, not a regular file, or unreadable.
+    Unreadable,
+}
+
+/// Read the token file at `path` through a handle proven owner-only.
+fn read_stored_token(path: &std::path::Path) -> Result<String, TokenReadRefusal> {
+    let file = crate::secret_file::open_existing(HOST_SECRET_STORE, path).map_err(|e| match e {
+        SecretFileError::NotOwnerOnly(_) => TokenReadRefusal::Exposed,
+        SecretFileError::Unsupported
+        | SecretFileError::Io(_)
+        | SecretFileError::NotRegularFile(_) => TokenReadRefusal::Unreadable,
+    })?;
+    crate::io_bounded::read_opened_capped(file, path, crate::io_bounded::SMALL_FILE_READ_CAP)
+        .map_err(|_| TokenReadRefusal::Unreadable)
 }
 
 /// Run the full device flow: request a code, prompt the user, poll for the token,
@@ -198,13 +209,13 @@ pub fn stored_token() -> Option<PublishToken> {
 fn run_device_flow() -> Result<(), CliError> {
     // Refuse up front where the token could not be stored owner-only, before
     // the user approves a grant that would then be discarded.
-    require_token_store(HOST_TOKEN_STORE)?;
+    require_token_store(HOST_SECRET_STORE)?;
     let token = authorize(GrantScope::Publish, PublishToken::parse)?;
     let path = store_token(&token)?;
     crate::screen::Screen::new(crate::screen::Stream::Stdout)
         .line(
             crate::screen::Tone::Text,
-            &format!("Logged in. Token stored at {}", path.display()),
+            &crate::text::msg::login_stored(&path.display()),
         )
         .emit();
     crate::ssh_signing_key::offer_after_login()
@@ -507,82 +518,128 @@ fn token_path() -> Option<PathBuf> {
 /// The three distinguishable login states `--status` reports. A token file that
 /// exists but does not parse is `Corrupt`, never conflated with `LoggedIn`, so
 /// `--status` and the publish path (which requires a parseable token) agree.
+///
+/// A token file another local user could read or replace is `Exposed`: the
+/// publish path refuses it, and the token must be treated as leaked.
 enum TokenStatus {
     LoggedIn(PathBuf),
     Corrupt(PathBuf),
+    Exposed(PathBuf),
     NotLoggedIn,
 }
 
-/// Classify the stored-token state through the SAME parse the publish path uses,
-/// so `--status` never reports "logged in" on a token `publish` would reject.
+/// Classify the stored-token state through the SAME read and parse the publish path uses.
+///
+/// `--status` thus never reports "logged in" on a token `publish` would reject.
 fn token_status() -> TokenStatus {
-    let Some(path) = token_path().filter(|p| p.is_file()) else {
+    token_status_of(StoredToken::probe(token_path()))
+}
+
+/// The occupant of the token file's name, probed once without following a final link.
+///
+/// `--status` and `--logout` both match on it, so an entry one reports (a
+/// dangling symlink included) is the entry the other removes.
+#[derive(Debug, PartialEq, Eq)]
+enum StoredToken {
+    /// Something, of any file type, holds the name.
+    Present(PathBuf),
+    /// No config dir is known, or nothing holds the name.
+    Absent,
+}
+
+impl StoredToken {
+    /// Probe the token file name `path`; any answer but "not found" counts as present.
+    fn probe(path: Option<PathBuf>) -> Self {
+        path.filter(
+            |p| !matches!(p.symlink_metadata(), Err(e) if e.kind() == std::io::ErrorKind::NotFound),
+        )
+        .map_or(Self::Absent, Self::Present)
+    }
+}
+
+/// Classify `stored` through the SAME read and parse the publish path uses.
+fn token_status_of(stored: StoredToken) -> TokenStatus {
+    let StoredToken::Present(path) = stored else {
         return TokenStatus::NotLoggedIn;
     };
-    match crate::io_bounded::read_to_string_capped(&path, crate::io_bounded::SMALL_FILE_READ_CAP) {
+    match read_stored_token(&path) {
         Ok(raw) if PublishToken::parse(&raw).is_some() => TokenStatus::LoggedIn(path),
-        _ => TokenStatus::Corrupt(path),
+        Err(TokenReadRefusal::Exposed) => TokenStatus::Exposed(path),
+        Ok(_) | Err(TokenReadRefusal::Unreadable) => TokenStatus::Corrupt(path),
     }
+}
+
+/// The `--status` report: the token state, then the signing-key line.
+///
+/// Each path is a catalog placeholder, so a line break inside it is indented
+/// as a continuation and cannot open an output line of its own.
+fn status_report(status: &TokenStatus, key_line: crate::text::Message) -> crate::text::Message {
+    let token_line = match status {
+        TokenStatus::LoggedIn(path) => crate::text::msg::login_status_logged_in(&path.display()),
+        TokenStatus::Corrupt(path) => crate::text::msg::login_status_corrupt(&path.display()),
+        TokenStatus::Exposed(path) => crate::text::msg::login_status_exposed(&path.display()),
+        TokenStatus::NotLoggedIn => crate::text::msg::login_status_not_logged_in(),
+    };
+    crate::text::Message::lines([token_line, key_line])
 }
 
 /// Write the token with owner-only permissions, creating the config dir.
 ///
-/// On Unix the file is created with mode 0600 atomically before any bytes are
-/// written, so there is no window where the token is readable by other users.
-/// Off Unix the token is never stored (see [`write_token_atomic`]).
+/// The token only ever lands in a file created owner-only before any byte is
+/// written; where the host cannot create one, it is never stored (see
+/// [`write_token_atomic`]).
 fn store_token(token: &PublishToken) -> Result<PathBuf, CliError> {
     let path =
         token_path().ok_or_else(|| login_error(&crate::text::msg::login_config_dir_unknown()))?;
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| {
-            login_error(&crate::text::msg::login_create_failed(
-                &parent.display(),
-                &e,
-            ))
-        })?;
+        crate::secret_file::create_owner_dir(HOST_SECRET_STORE, parent)
+            .map_err(|e| secret_file_refusal(e, parent))?;
     }
-    write_token_atomic(&path, token.as_str())?;
+    write_token_atomic(HOST_SECRET_STORE, &path, token.as_str())?;
     Ok(path)
+}
+
+/// The login refusal for a secret-file step on `path` that failed with `error`.
+fn secret_file_refusal(error: SecretFileError, path: &std::path::Path) -> CliError {
+    match error {
+        SecretFileError::Unsupported => token_store_unsupported(),
+        SecretFileError::Io(e) => {
+            login_error(&crate::text::msg::login_create_failed(&path.display(), &e))
+        }
+        SecretFileError::NotOwnerOnly(shown) => login_error(
+            &crate::text::msg::login_secret_not_owner_only(&shown.display()),
+        ),
+        SecretFileError::NotRegularFile(shown) => login_error(
+            &crate::text::msg::login_secret_not_regular_file(&shown.display()),
+        ),
+    }
 }
 
 /// Write `token` to `path` crash-atomically with owner-only permissions.
 ///
-/// On Unix: writes the token into a fresh mode-0600 temp file in the SAME
-/// directory (created with `O_CREAT | O_EXCL` so a pre-seeded name is refused,
-/// not followed), flushes it, then `rename(2)`s it over `path`. The rename is
-/// atomic within the directory, so a crash at any point leaves either the old
-/// token or the complete new one — never a truncated or empty file. The token
-/// bytes only ever land in a 0600 inode, so there is no window in which the
-/// secret is group- or world-readable.
+/// The token goes into a fresh, randomly named temp file in the SAME
+/// directory, created exclusively and proven owner-only by
+/// [`crate::secret_file::create_temp_beside`] (a pre-seeded name is refused,
+/// not followed), is flushed, then `rename(2)`d
+/// over `path`. The rename is atomic within the directory, so a crash at any
+/// point leaves either the old token or the complete new one — never a
+/// truncated or empty file. The token bytes only ever land in an owner-only
+/// inode, so there is no window in which the secret is readable by others.
 ///
-/// Off Unix: refused. No portable owner-only file mode exists there, so the
-/// token is never written to a file other users might read; `GITHUB_TOKEN`
-/// supplies it instead.
-#[cfg(unix)]
-fn write_token_atomic(path: &std::path::Path, token: &str) -> Result<(), CliError> {
-    use std::fs::OpenOptions;
-    use std::os::unix::fs::OpenOptionsExt as _;
-
-    let dir = path.parent().unwrap_or_else(|| std::path::Path::new("."));
-    let tmp_path = dir.join(format!(
-        ".{}.{}.tmp",
-        path.file_name().and_then(|n| n.to_str()).unwrap_or("token"),
-        std::process::id()
-    ));
-    // O_EXCL: refuse an existing name (a stale temp or a planted symlink) rather
-    // than truncate/follow it. Mode 0600 from creation, so the secret never
-    // touches a looser-mode inode.
-    let mut file = OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .mode(0o600)
-        .open(&tmp_path)
-        .map_err(|e| {
-            login_error(&crate::text::msg::login_create_failed(
-                &tmp_path.display(),
-                &e,
-            ))
-        })?;
+/// A `store` that cannot keep the file owner-only refuses before anything is
+/// created; `GITHUB_TOKEN` supplies the token there instead.
+fn write_token_atomic(
+    store: SecretStore,
+    path: &std::path::Path,
+    token: &str,
+) -> Result<(), CliError> {
+    require_token_store(store)?;
+    let suffix = crate::secret_file::TempSuffix::fresh().map_err(|e| {
+        let dir = path.parent().unwrap_or_else(|| std::path::Path::new("."));
+        login_error(&crate::text::msg::login_create_failed(&dir.display(), &e))
+    })?;
+    let (mut file, tmp_path) = crate::secret_file::create_temp_beside(store, path, &suffix)
+        .map_err(|e| secret_file_refusal(e, &suffix.beside(path)))?;
     let write_result = writeln!(file, "{token}")
         .and_then(|()| file.flush())
         .and_then(|()| file.sync_all());
@@ -600,57 +657,36 @@ fn write_token_atomic(path: &std::path::Path, token: &str) -> Result<(), CliErro
     })
 }
 
-#[cfg(not(unix))]
-fn write_token_atomic(_path: &std::path::Path, _token: &str) -> Result<(), CliError> {
-    require_token_store(HOST_TOKEN_STORE)
-}
-
-/// Where the host can keep the publish token.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum TokenStore {
-    /// A file created mode 0600, readable by its owner only.
-    OwnerOnlyFile,
-    /// No owner-only file mode exists, so the token is never stored.
-    Unsupported,
-}
-
-/// The token store this build's target provides.
-const HOST_TOKEN_STORE: TokenStore = if cfg!(unix) {
-    TokenStore::OwnerOnlyFile
-} else {
-    TokenStore::Unsupported
-};
-
 /// Refuse a login whose token `store` cannot keep it owner-only.
-fn require_token_store(store: TokenStore) -> Result<(), CliError> {
-    match store {
-        TokenStore::OwnerOnlyFile => Ok(()),
-        TokenStore::Unsupported => Err(login_error(
-            &crate::text::msg::login_token_store_unsupported(),
-        )),
-    }
+fn require_token_store(store: SecretStore) -> Result<(), CliError> {
+    crate::secret_file::require(store).map_err(|_| token_store_unsupported())
+}
+
+/// The refusal for a host that cannot store the token owner-only.
+fn token_store_unsupported() -> CliError {
+    login_error(&crate::text::msg::login_token_store_unsupported())
 }
 
 /// Remove the stored token.
 fn logout() -> Result<(), CliError> {
-    let Some(path) = token_path().filter(|p| p.exists()) else {
-        crate::screen::Screen::new(crate::screen::Stream::Stdout)
-            .line(
-                crate::screen::Tone::Text,
-                "not logged in — nothing to remove",
-            )
-            .emit();
-        return Ok(());
+    let line = logout_at(StoredToken::probe(token_path()))?
+        .map_or_else(crate::text::msg::login_logout_nothing, |path| {
+            crate::text::msg::login_logout_removed(&path.display())
+        });
+    crate::screen::Screen::new(crate::screen::Stream::Stdout)
+        .line(crate::screen::Tone::Text, &line)
+        .emit();
+    Ok(())
+}
+
+/// Remove the entry `stored` names, without following a final link; `None` when there is none.
+fn logout_at(stored: StoredToken) -> Result<Option<PathBuf>, CliError> {
+    let StoredToken::Present(path) = stored else {
+        return Ok(None);
     };
     std::fs::remove_file(&path)
         .map_err(|e| login_error(&crate::text::msg::login_remove_failed(&path.display(), &e)))?;
-    crate::screen::Screen::new(crate::screen::Stream::Stdout)
-        .line(
-            crate::screen::Tone::Text,
-            &format!("logged out — removed {}", path.display()),
-        )
-        .emit();
-    Ok(())
+    Ok(Some(path))
 }
 
 /// Best-effort browser open (same contract as publish's opener).
@@ -691,12 +727,12 @@ mod tests {
 
     #[test]
     fn owner_only_token_store_admits_login() {
-        assert!(require_token_store(TokenStore::OwnerOnlyFile).is_ok());
+        assert!(require_token_store(SecretStore::OwnerOnlyFile).is_ok());
     }
 
     #[test]
     fn unsupported_token_store_refuses_login() {
-        let refusal = require_token_store(TokenStore::Unsupported);
+        let refusal = require_token_store(SecretStore::Unsupported);
         assert!(
             matches!(
                 &refusal,
@@ -707,14 +743,82 @@ mod tests {
         );
     }
 
+    /// A config path carrying a line feed, a carriage return, and an escape.
+    fn hostile_path() -> PathBuf {
+        PathBuf::from("/home/u/.config/ipe\nipe login: forged success\r\u{1b}[2K/token")
+    }
+
+    /// Whether `text` opens exactly `own_lines` column-0 lines and carries no CR or escape.
+    fn only_own_lines(text: &str, own_lines: usize) -> bool {
+        text.lines()
+            .filter(|line| !line.starts_with(ipe_diagnostics::terminal::CONTINUATION_INDENT))
+            .count()
+            == own_lines
+            && !text.contains('\r')
+            && !text.contains('\u{1b}')
+    }
+
     #[test]
-    fn host_token_store_tracks_target_family() {
-        let expected = if cfg!(unix) {
-            TokenStore::OwnerOnlyFile
-        } else {
-            TokenStore::Unsupported
-        };
-        assert_eq!(HOST_TOKEN_STORE, expected);
+    fn a_hostile_token_path_cannot_forge_a_status_line() {
+        for status in [
+            TokenStatus::LoggedIn(hostile_path()),
+            TokenStatus::Corrupt(hostile_path()),
+            TokenStatus::Exposed(hostile_path()),
+            TokenStatus::NotLoggedIn,
+        ] {
+            let report = status_report(&status, crate::text::msg::signing_key_status_none());
+            assert!(
+                only_own_lines(&report, 2),
+                "the path must stay inside its own status line: {report:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_hostile_token_path_cannot_forge_a_login_or_logout_line() {
+        let path = hostile_path();
+        for shown in [
+            crate::text::msg::login_stored(&path.display()),
+            crate::text::msg::login_logout_removed(&path.display()),
+        ] {
+            assert!(
+                only_own_lines(&shown, 1),
+                "the path must stay inside its own line: {shown:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_unsupported_token_store_writes_no_token() {
+        let dir = std::env::temp_dir().join(format!(
+            "ipe-login-unsupported-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("create test dir");
+        let path = dir.join("token");
+
+        let refusal = write_token_atomic(SecretStore::Unsupported, &path, "ghp_refused_token");
+
+        assert!(
+            matches!(
+                &refusal,
+                Err(CliError::Resolve(message))
+                    if message.contains(crate::text::msg::login_token_store_unsupported().as_str())
+            ),
+            "an unsupported token store must refuse the write: {refusal:?}"
+        );
+        let entries: Vec<_> = std::fs::read_dir(&dir)
+            .expect("readdir")
+            .filter_map(Result::ok)
+            .map(|e| e.file_name())
+            .collect();
+        assert!(
+            entries.is_empty(),
+            "a refused token write must create no file: {entries:?}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -844,7 +948,8 @@ mod tests {
         std::fs::create_dir_all(&dir).expect("create test dir");
         let path = dir.join("token");
 
-        write_token_atomic(&path, "test-token").expect("write_token_atomic succeeds");
+        write_token_atomic(HOST_SECRET_STORE, &path, "test-token")
+            .expect("write_token_atomic succeeds");
 
         let meta = std::fs::metadata(&path).expect("file exists");
         let mode = meta.permissions().mode() & 0o777;
@@ -887,7 +992,8 @@ mod tests {
         std::fs::write(&path, "old\n").expect("plant file");
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).expect("chmod 644");
 
-        write_token_atomic(&path, "new-token").expect("write_token_atomic succeeds");
+        write_token_atomic(HOST_SECRET_STORE, &path, "new-token")
+            .expect("write_token_atomic succeeds");
 
         let mode = std::fs::metadata(&path)
             .expect("file exists")
@@ -977,7 +1083,7 @@ mod tests {
         std::fs::create_dir_all(&dir).expect("create test dir");
         let path = dir.join("token");
 
-        write_token_atomic(&path, "ghp_atomic_token").expect("write succeeds");
+        write_token_atomic(HOST_SECRET_STORE, &path, "ghp_atomic_token").expect("write succeeds");
 
         assert_eq!(
             std::fs::read_to_string(&path).expect("token readable"),
@@ -1001,6 +1107,106 @@ mod tests {
             "no .tmp file should remain after rename"
         );
 
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A stored token another local user could read is refused, never used.
+    #[cfg(unix)]
+    #[test]
+    fn an_exposed_stored_token_is_refused_and_an_owner_only_one_is_read() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let dir = std::env::temp_dir().join(format!(
+            "ipe-login-exposed-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("create test dir");
+        let path = dir.join("token");
+        write_token_atomic(HOST_SECRET_STORE, &path, "ghp_private_token").expect("write succeeds");
+
+        let read = read_stored_token(&path);
+        assert!(
+            matches!(&read, Ok(raw) if PublishToken::parse(raw).is_some()),
+            "an owner-only token must be read: {read:?}"
+        );
+
+        for mode in [0o644, 0o640] {
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(mode))
+                .expect("chmod token");
+            let read = read_stored_token(&path);
+            assert!(
+                matches!(read, Err(TokenReadRefusal::Exposed)),
+                "a mode-{mode:o} token must be refused as exposed: {read:?}"
+            );
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_secret_file_not_private_to_the_user_is_a_typed_login_refusal() {
+        let path = std::path::Path::new("/tmp/ipe/token");
+        let refusal = secret_file_refusal(SecretFileError::NotOwnerOnly(path.to_path_buf()), path);
+        let expected = crate::text::msg::login_secret_not_owner_only(&path.display());
+        assert!(
+            matches!(&refusal, CliError::Resolve(message) if message.contains(expected.as_str())),
+            "a non-private secret file must name the owner-only refusal: {refusal:?}"
+        );
+    }
+
+    #[test]
+    fn a_secret_name_held_by_a_non_regular_file_is_its_own_refusal() {
+        let path = std::path::Path::new("/tmp/ipe/token");
+        let refusal =
+            secret_file_refusal(SecretFileError::NotRegularFile(path.to_path_buf()), path);
+        let expected = crate::text::msg::login_secret_not_regular_file(&path.display());
+        assert!(
+            matches!(&refusal, CliError::Resolve(message) if message.contains(expected.as_str())),
+            "a non-regular secret file must name its own refusal: {refusal:?}"
+        );
+    }
+
+    /// A dangling symlink at the token name is reported by `--status` and removed by `--logout`.
+    #[cfg(unix)]
+    #[test]
+    fn a_dangling_token_symlink_is_reported_and_removed_alike() {
+        let dir = std::env::temp_dir().join(format!(
+            "ipe-login-dangling-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("create test dir");
+        let path = dir.join("token");
+        std::os::unix::fs::symlink(dir.join("missing-target"), &path).expect("plant symlink");
+
+        assert_eq!(
+            StoredToken::probe(Some(path.clone())),
+            StoredToken::Present(path.clone()),
+            "a dangling symlink holds the token name"
+        );
+        let status = token_status_of(StoredToken::probe(Some(path.clone())));
+        assert!(
+            matches!(&status, TokenStatus::Corrupt(p) if *p == path),
+            "--status reports the dangling symlink, never follows it"
+        );
+        let removed = logout_at(StoredToken::probe(Some(path.clone())));
+        assert!(
+            matches!(&removed, Ok(Some(p)) if *p == path),
+            "--logout removes the entry --status reported: {removed:?}"
+        );
+        assert!(
+            path.symlink_metadata().is_err(),
+            "the symlink itself is gone"
+        );
+        assert_eq!(StoredToken::probe(Some(path.clone())), StoredToken::Absent);
+        assert!(matches!(
+            token_status_of(StoredToken::probe(Some(path))),
+            TokenStatus::NotLoggedIn
+        ));
+        assert!(matches!(logout_at(StoredToken::Absent), Ok(None)));
+        assert_eq!(StoredToken::probe(None), StoredToken::Absent);
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

@@ -183,6 +183,51 @@ fn scan_comments(src: &str) -> Vec<Comment> {
     out
 }
 
+/// Strip a leading run of `(`, whitespace, and comments (line or nestable
+/// block) from `text`, mirroring the lexer's `skip_trivia` shapes.
+///
+/// Used to look past a `do` block's opening parens for its keyword even when
+/// a comment sits between them — the same trivia a comment-free `(  do …)`
+/// already tolerates via whitespace alone.
+fn skip_paren_trivia(mut text: &str) -> &str {
+    loop {
+        let stripped = text.trim_start_matches(|c: char| c == '(' || c.is_whitespace());
+        if let Some(rest) = stripped.strip_prefix("--") {
+            let line_end = rest.find('\n').map_or(rest.len(), |i| i + 1);
+            text = rest.get(line_end..).unwrap_or_default();
+            continue;
+        }
+        if let Some(rest) = stripped.strip_prefix("{-") {
+            text = skip_block_comment_body(rest);
+            continue;
+        }
+        return stripped;
+    }
+}
+
+/// Skip a nestable block comment's body, already past its opening `{-`, and
+/// return what follows the matching `-}` (or the input's end, if unterminated
+/// — malformed input the parser will itself refuse, so any position is safe).
+fn skip_block_comment_body(mut rest: &str) -> &str {
+    let mut depth = 1u32;
+    while depth > 0 {
+        if let Some(after) = rest.strip_prefix("{-") {
+            depth += 1;
+            rest = after;
+        } else if let Some(after) = rest.strip_prefix("-}") {
+            depth -= 1;
+            rest = after;
+        } else {
+            let mut chars = rest.chars();
+            if chars.next().is_none() {
+                break;
+            }
+            rest = chars.as_str();
+        }
+    }
+    rest
+}
+
 // ---------------------------------------------------------------------------
 // The formatter entry point
 // ---------------------------------------------------------------------------
@@ -1050,7 +1095,10 @@ impl Printer<'_> {
     /// `None` when `span` is not a `do` block's. The `do` desugar stamps the
     /// outermost node of its chain with the keyword's own span; a
     /// parenthesised group re-stamps its inner node with the group's span, so
-    /// `(do …)` is recognised by its leading keyword.
+    /// `(do …)` is recognised by its leading keyword — skipping over any
+    /// opening parens, whitespace, and comments in between, since a comment
+    /// (`( -- note\n do …)`) is as legal there as blank space and must not
+    /// hide the keyword.
     /// Always `None` without source: the equivalence guard compares the
     /// desugared form directly.
     fn do_keyword_end(&self, span: ipe_diagnostics::Span) -> Option<usize> {
@@ -1063,7 +1111,7 @@ impl Printer<'_> {
             return None;
         }
         let inner = text.strip_prefix('(')?;
-        let rest = inner.trim_start_matches(|c: char| c == '(' || c.is_whitespace());
+        let rest = skip_paren_trivia(inner);
         let after = rest.strip_prefix("do")?;
         after
             .starts_with(char::is_whitespace)
@@ -2359,6 +2407,79 @@ mod tests {
         assert!(
             matches!(format_source(&src), Err(FmtError::Parse { .. })),
             "`let _ =` outside a do must stay a parse error"
+        );
+    }
+
+    /// #3034: a comment between a `do` block's opening paren and its `do`
+    /// keyword used to hide the keyword from `do_keyword_end`'s text match,
+    /// falling through to the raw printer and emitting an illegal bare
+    /// wildcard `let` for the block's run statement — `IPE-I0001
+    /// MalformedLet(BareWildcardBinding)`. `do_keyword_end` now skips
+    /// comments (like parens and whitespace) while looking for the keyword.
+    #[test]
+    fn do_comment_before_keyword_in_parens_round_trips() {
+        let src = do_module(
+            "    Cmd.perform\n        ( -- comment before do\n        do\n            db <- reviewDb\n            recordDrain db\n            loadQueue\n        )\n        PendingLoaded\n",
+        );
+        let out = assert_do_round_trips(&src);
+        assert!(
+            out.contains("-- comment before do"),
+            "comment before `do` keyword was dropped:\n{out}"
+        );
+    }
+
+    /// A block comment between a `do` block's opening paren and its `do`
+    /// keyword is tolerated the same way a line comment is.
+    #[test]
+    fn do_block_comment_before_keyword_in_parens_round_trips() {
+        let src = do_module(
+            "    Cmd.perform\n        ( {- note -}\n        do\n            db <- reviewDb\n            loadQueue\n        )\n        PendingLoaded\n",
+        );
+        let out = assert_do_round_trips(&src);
+        assert!(
+            out.contains("{- note -}"),
+            "block comment before `do` keyword was dropped:\n{out}"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Let-binding pattern forms — the class-closing round-trip
+    // -----------------------------------------------------------------------
+
+    /// Every let-binding pattern form the parser accepts round-trips through
+    /// the printer: a plain name, a tuple destructure, a record destructure, a
+    /// parenthesised constructor destructure, and a wildcard nested inside a
+    /// larger pattern. A bare whole-pattern `_` binder stays refused (see
+    /// `bare_wildcard_let_outside_do_is_refused`) — nested is the only legal
+    /// wildcard shape in `let` position, so it is exercised here instead.
+    #[test]
+    fn let_binding_pattern_forms_round_trip() {
+        let cases = [
+            "v =\n            1\n",
+            "( a, b ) =\n            pair\n",
+            "{ a, b } =\n            rec\n",
+            "(Just v) =\n            maybeVal\n",
+            "( a, _ ) =\n            pair\n",
+        ];
+        for binder in cases {
+            let src = do_module(&format!("    let\n        {binder}    in\n    2\n"));
+            let out = format_source(&src).expect("let-binding pattern form round-trips");
+            let twice = format_source(&out).expect("second pass formats");
+            assert_eq!(out, twice, "not idempotent for:\n{src}\noutput:\n{out}");
+        }
+    }
+
+    /// There is no `name : Type` annotation line inside a `let` block — unlike
+    /// a top-level definition, a `let` binding carries no separate annotation
+    /// slot in the grammar, so this stays a parse error rather than a
+    /// let-binding pattern form the printer must round-trip.
+    #[test]
+    fn annotated_let_binding_is_refused() {
+        let src =
+            do_module("    let\n        v : Int\n        v =\n            1\n    in\n    v\n");
+        assert!(
+            matches!(format_source(&src), Err(FmtError::Parse { .. })),
+            "a `name : T` line inside `let` is not grammar; it must stay a parse error"
         );
     }
 }
