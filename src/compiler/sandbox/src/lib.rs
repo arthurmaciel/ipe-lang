@@ -26,7 +26,7 @@ use std::path::{Path, PathBuf};
 
 use ipe_diagnostics::{Code, Diagnostic as SharedDiag, IPE_F4410, SandboxError};
 
-pub use covers::{bind_exposing, path_covers};
+pub use covers::{JailMounts, bind_exposing, path_covers};
 pub use mounts::{CanonicalPath, HomeMasks, JailPathError, MaskedDir};
 
 pub mod build_jail;

@@ -184,12 +184,13 @@ mod real_jail {
     use ipe::audit::Check;
     use ipe::audit_native::{
         CERTIFIED_PLATFORM, JailProbeRunner, ProbeExercise, ProbeRunner, StaticReachability,
-        TightenableAxis, ToolchainHomes, default_ro_binds, reconcile_native, scoped_profile,
+        TightenableAxis, ToolchainHomes, TrustedWrapper, default_ro_binds, reconcile_native,
+        scoped_profile,
     };
     use ipe_ir::Capability;
-    use ipe_sandbox::CanonicalPath;
     use ipe_sandbox::build_jail::build_in_jail;
     use ipe_sandbox::run_jail::{RunJailTools, SandboxProfile};
+    use ipe_sandbox::{CanonicalPath, JailMounts};
 
     /// `build_in_jail` mutates the process-global fd table (a `memfd`) on Linux;
     /// serialize the jailed runs so parallel `--test-threads` cannot race.
@@ -313,12 +314,12 @@ mod real_jail {
             let _guard = JAIL_LOCK
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let mounts = JailMounts::of_invoker(scoped.clone(), scoped.clone(), default_ro_binds())
+                .expect("checked jail mounts");
             let outcome = build_in_jail(
                 tools,
                 &SandboxProfile::maximally_isolated(),
-                &scoped,
-                &scoped,
-                &default_ro_binds(),
+                &mounts,
                 &canary_payload(tools),
             );
             let _ = std::fs::remove_dir_all(scoped.as_path());
@@ -365,16 +366,14 @@ mod real_jail {
     struct Harness {
         scoped_tmp: CanonicalPath,
         working_tree: CanonicalPath,
-        wrapper: CanonicalPath,
+        wrapper: TrustedWrapper,
     }
 
     impl Harness {
         fn new(tag: &str) -> Self {
             let scoped_tmp = fresh_scratch(&format!("{tag}-scratch"));
             let working_tree = fresh_scratch(&format!("{tag}-worktree"));
-            let wrapper = scoped_tmp.as_path().join("untrusted-build.sh");
-            std::fs::copy(fixture_path(), &wrapper).expect("copy fixture into scratch");
-            let wrapper = CanonicalPath::resolve(&wrapper).expect("canonical wrapper");
+            let wrapper = TrustedWrapper::read(&fixture_path()).expect("read the probe fixture");
             Self {
                 scoped_tmp,
                 working_tree,
@@ -396,6 +395,7 @@ mod real_jail {
                 exercised,
                 ProbeExercise::WrapperProbeOnly,
             )
+            .expect("checked jail mounts")
         }
     }
 
@@ -578,6 +578,7 @@ mod real_jail {
             vec![TightenableAxis::Network, TightenableAxis::Filesystem],
             exercise,
         )
+        .expect("checked jail mounts")
     }
 
     #[test]

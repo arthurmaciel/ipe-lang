@@ -22,9 +22,9 @@
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
-use ipe_sandbox::CanonicalPath;
 use ipe_sandbox::build_jail::{CapabilityAxis, JailOutcome, build_in_jail};
 use ipe_sandbox::run_jail::{FilesystemScope, RunJailTools, SandboxProfile};
+use ipe_sandbox::{CanonicalPath, JailMounts};
 
 /// Skip unless `IPE_E2E=1`. Absent, these tests do nothing (the CI job asserts
 /// the primitives separately as a hard, refuse-to-certify failure).
@@ -89,14 +89,9 @@ fn ps_payload(script: &str) -> Vec<OsString> {
 
 fn run(profile: &SandboxProfile, scratch: &Path, script: &str) -> JailOutcome {
     let scratch = CanonicalPath::resolve(scratch).expect("canonical scratch");
-    build_in_jail(
-        &inert_tools(),
-        profile,
-        &scratch,
-        &scratch,
-        &[],
-        &ps_payload(script),
-    )
+    let mounts =
+        JailMounts::of_invoker(scratch.clone(), scratch, Vec::new()).expect("checked jail mounts");
+    build_in_jail(&inert_tools(), profile, &mounts, &ps_payload(script))
 }
 
 // ── the red canary: a withheld-network socket decodes to Denied { network } ───

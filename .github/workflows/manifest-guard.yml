@@ -42,11 +42,16 @@ jobs:
       - name: Prove the sccache-wiring refusals (unit tests)
         run: python3 .github/ci/test_verify_manifest.py -v
 
+      - name: Prove the strict-YAML loader refusals (unit tests)
+        run: python3 .github/ci/test_strict_yaml.py -v
+
       - name: The derived required-set is in sync with the manifest
         run: |
           python3 - <<'PY'
-          import json, sys, yaml
-          man = yaml.safe_load(open(".github/ci/check-manifest.yml"))
+          import json, sys
+          sys.path.insert(0, ".github/ci")
+          import strict_yaml
+          man = strict_yaml.safe_load(open(".github/ci/check-manifest.yml"))
           # The required set is every externally-required gate: in-CI `gate` plus
           # required-set.json must equal both, matching .github/ci/verify-manifest.py.
           required = sorted(e["context"] for e in man["checks"] if e["disposition"] in ("gate"))
