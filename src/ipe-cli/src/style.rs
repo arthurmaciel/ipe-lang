@@ -77,6 +77,17 @@ pub fn gutter(text: &str) -> String {
     out
 }
 
+/// The single extra column relayed child (cargo) output is shifted by.
+///
+/// Cargo's own progress bar and diagnostics already carry their own internal
+/// alignment; this is not a full [`GUTTER`] (that would fight cargo's column
+/// math) but one shared space so the relay sits off the terminal edge instead
+/// of flush against it. One space, defined once, so `ipe build`'s and `ipe
+/// watch`'s cargo relays can never drift apart — the exact bug this constant
+/// closes: two independent call sites hand-rolling the same "no indent at
+/// all" default.
+pub const RELAY_INDENT: &str = " ";
+
 /// Frame a human block with exactly one leading and one trailing newline.
 ///
 /// A command's output opens and closes with a blank edge — a consistent
@@ -272,9 +283,10 @@ pub fn sandbox_override_warning(p: &Palette, override_env: &str, axes: &str) -> 
 
 /// The product header that opens every human screen.
 ///
-/// A leading blank line, then `Ipê language - vN.N.N - <repo>` in the gutter —
-/// the name light yellow, the version light green, the URL dim gray. Never
-/// shown under `--plain`, `--json`, or `--quiet`.
+/// A leading blank line, then `Ipê language - vN.N.N - <repo>` in the gutter,
+/// then a trailing blank line so the banner is set off from whatever chatter
+/// follows it — the name light yellow, the version light green, the URL dim
+/// gray. Never shown under `--plain`, `--json`, or `--quiet`.
 ///
 /// Coloured when `use_color` is true; plain otherwise. [`crate::screen`] owns
 /// when it is printed (once per process).
@@ -283,7 +295,7 @@ pub fn command_header(use_color: bool) -> String {
     let version = env!("CARGO_PKG_VERSION");
     let p = Palette::select(use_color);
     format!(
-        "\n{GUTTER}{y}Ipê language{r} - {g}v{version}{r} - {d}{REPO_URL}{r}\n",
+        "\n{GUTTER}{y}Ipê language{r} - {g}v{version}{r} - {d}{REPO_URL}{r}\n\n",
         y = p.bright_yellow,
         g = p.green,
         d = p.dim,
@@ -299,92 +311,10 @@ pub fn print_command_header() {
     crate::screen::emit_header(crate::screen::Stream::Stderr);
 }
 
-/// Text that has been proven safe to write to a terminal.
-///
-/// No ANSI escape sequences, no C0/C1 control bytes, no `DEL`, only printable
-/// characters plus the two layout whitespaces (`\n`, `\t`) the gutter and
-/// terminal handle safely.
-///
-/// The error sink writes an arbitrary error message — a filename, a compiler
-/// excerpt, any embedded text — to stderr. On a terminal, a crafted message
-/// laced with ANSI escapes or control bytes could move the cursor, recolour or
-/// erase lines, or hide text, turning a diagnostic into a spoofing/injection
-/// surface. `TerminalSafe` is the typed boundary: construct it ONCE from the
-/// untrusted string, and every downstream renderer takes a `TerminalSafe`
-/// rather than a bare `&str`, so the unsanitised form is unrepresentable past
-/// the sink. Parse, don't validate.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct TerminalSafe(String);
-
-impl TerminalSafe {
-    /// Sanitise `raw` into terminal-safe text: drop every ANSI escape sequence
-    /// (a lone `ESC`, a CSI `ESC [ … final`, or an OSC `ESC ] … BEL/ST`) whole,
-    /// and drop every remaining
-    /// control byte below `0x20` and the `DEL` (`0x7f`), keeping only `\n` and
-    /// `\t` — the whitespace the gutter and line layout rely on. Printable text
-    /// passes through untouched.
-    #[must_use]
-    pub fn sanitize(raw: &str) -> Self {
-        let mut out = String::with_capacity(raw.len());
-        let mut chars = raw.chars();
-        while let Some(c) = chars.next() {
-            if c == '\u{1b}' {
-                // An escape introduces a control sequence. A CSI (`ESC [`) runs
-                // until a final byte in 0x40..=0x7e; any other escape consumes
-                // just its single following byte. Either way the escape and its
-                // sequence are dropped whole.
-                match chars.clone().next() {
-                    Some('[') => {
-                        // CSI (`ESC [`) runs until a final byte in 0x40..=0x7e.
-                        chars.next();
-                        for seq in chars.by_ref() {
-                            if ('\u{40}'..='\u{7e}').contains(&seq) {
-                                break;
-                            }
-                        }
-                    }
-                    Some(']') => {
-                        // OSC (`ESC ]`) runs until BEL (0x07) or ST (`ESC \`).
-                        chars.next();
-                        while let Some(seq) = chars.next() {
-                            if seq == '\u{7}' {
-                                break;
-                            }
-                            if seq == '\u{1b}' {
-                                if chars.clone().next() == Some('\\') {
-                                    chars.next();
-                                }
-                                break;
-                            }
-                        }
-                    }
-                    _ => {
-                        chars.next();
-                    }
-                }
-                continue;
-            }
-            // Keep the two layout whitespaces and any printable character; drop
-            // every other control byte (C0 below 0x20, and DEL 0x7f).
-            if c == '\n' || c == '\t' || !c.is_control() {
-                out.push(c);
-            }
-        }
-        Self(out)
-    }
-
-    /// The sanitised text.
-    #[must_use]
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-}
-
-impl std::fmt::Display for TerminalSafe {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.0)
-    }
-}
+/// The terminal-safe text boundary, defined once in the lowest shared crate so
+/// a compiler stage that builds a user-facing refusal sanitises with the same
+/// rules the CLI applies to every message it prints.
+pub use ipe_diagnostics::terminal::TerminalSafe;
 
 /// A framed, guttered status line: a leading success/failure glyph, then the
 /// message. `ok` picks the green check or the red cross; `color` toggles ANSI.
@@ -512,7 +442,7 @@ mod tests {
         );
         assert_eq!(
             command_header(false),
-            format!("\n  Ipê language - v{version} - {REPO_URL}\n")
+            format!("\n  Ipê language - v{version} - {REPO_URL}\n\n")
         );
     }
 
@@ -522,25 +452,6 @@ mod tests {
             report_bugs_footer(),
             format!("{REPORT_BUGS_PHRASE}{REPO_URL}/issues.")
         );
-    }
-
-    /// A hostile error message laced with ANSI escapes and control bytes is
-    /// stripped to printable text plus layout whitespace: the banner it renders
-    /// carries no escape the message injected, so a crafted filename or compiler
-    /// excerpt cannot rewrite the terminal.
-    #[test]
-    fn terminal_safe_strips_ansi_and_control_bytes() {
-        let hostile = "\u{1b}[31mred\u{1b}[0m\u{1b}]0;title\u{7}\rmoved\u{8}\u{7f}done\ttab\nline";
-        let safe = TerminalSafe::sanitize(hostile);
-        let s = safe.as_str();
-        assert!(!s.contains('\u{1b}'), "no ESC survives: {s:?}");
-        assert!(!s.contains('\r'), "carriage return dropped: {s:?}");
-        assert!(!s.contains('\u{7}'), "bell dropped: {s:?}");
-        assert!(!s.contains('\u{8}'), "backspace dropped: {s:?}");
-        assert!(!s.contains('\u{7f}'), "DEL dropped: {s:?}");
-        // The CSI colour codes are removed whole, leaving only the visible text;
-        // layout whitespace (tab, newline) is preserved.
-        assert_eq!(s, "redmoveddone\ttab\nline");
     }
 
     #[test]

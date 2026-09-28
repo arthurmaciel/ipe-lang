@@ -92,6 +92,11 @@ pub enum DiffError {
     OpenInterface { module: ModulePath },
     /// The tree carries no `.ipe` modules to compare.
     Empty { path: PathBuf },
+    /// Reading the source tree was refused for a typed reason other than I/O.
+    ///
+    /// A discovery limit or a refused source keeps its own cause, so it never
+    /// reads as an empty tree or a bare I/O failure.
+    Source(Box<crate::CliError>),
     /// The required bump overflows a version component of the predecessor.
     FloorOverflow(crate::diff::FloorOverflow),
 }
@@ -117,11 +122,21 @@ impl std::fmt::Display for DiffError {
                 write!(f, "no Ipê modules found under {}", path.display())
             }
             Self::FloorOverflow(overflow) => write!(f, "{overflow}"),
+            Self::Source(refusal) => write!(f, "{refusal}"),
         }
     }
 }
 
 impl std::error::Error for DiffError {}
+
+impl From<crate::CliError> for DiffError {
+    fn from(err: crate::CliError) -> Self {
+        match err {
+            crate::CliError::Io { path, source } => Self::Io { path, source },
+            other => Self::Source(Box::new(other)),
+        }
+    }
+}
 
 impl From<crate::diff::FloorOverflow> for DiffError {
     fn from(overflow: crate::diff::FloorOverflow) -> Self {
@@ -129,8 +144,33 @@ impl From<crate::diff::FloorOverflow> for DiffError {
     }
 }
 
-/// Read every `.ipe` module under a package source tree into `(path, source)`
-/// pairs keyed by module path.
+/// The tree [`read_tree`] reads for `root`: the file itself, `root/src`, or `root`.
+///
+/// A conventional package keeps modules under `src/`; a directory without one
+/// (a flat fixture tree) is walked from `root` itself. The one decision point
+/// for the walked root: [`WalkedTree::root`] carries its answer to callers.
+fn tree_walk_root(root: &Path) -> PathBuf {
+    let candidate = root.join("src");
+    if root.is_dir() && candidate.is_dir() {
+        candidate
+    } else {
+        root.to_path_buf()
+    }
+}
+
+/// The modules [`read_tree`] read, with the tree root it walked to find them.
+#[derive(Debug)]
+pub struct WalkedTree {
+    /// The root actually walked: the `.ipe` file, `src/`, or a flat directory.
+    ///
+    /// A command that writes beside the tree (`ipe doc`'s site) proves itself
+    /// clear of exactly this root, never a second resolution of it.
+    pub root: PathBuf,
+    /// Every module read, as `(path, source)` keyed by module path.
+    pub modules: BTreeMap<ModulePath, (PathBuf, String)>,
+}
+
+/// Read every `.ipe` module under a package source tree, with the root walked.
 ///
 /// `root` may be a directory (walked for `*.ipe`) or a single `.ipe` file
 /// (taken as a one-module `Main`-shaped package).
@@ -140,23 +180,13 @@ impl From<crate::diff::FloorOverflow> for DiffError {
 /// single-file fallback — rather than a divergent second copy.
 ///
 /// # Errors
-/// [`DiffError::Io`] on a read failure and [`DiffError::Empty`] when the tree
-/// carries no `.ipe` modules.
-pub fn read_tree(root: &Path) -> Result<BTreeMap<ModulePath, (PathBuf, String)>, DiffError> {
-    let discovered = if root.is_dir() {
-        // A conventional package keeps modules under `src/`; fall back to the
-        // root itself when there is no `src/` (a flat fixture tree).
-        let src_root = {
-            let candidate = root.join("src");
-            if candidate.is_dir() {
-                candidate
-            } else {
-                root.to_path_buf()
-            }
-        };
-        project::discover_modules(&src_root).map_err(|_| DiffError::Empty {
-            path: root.to_path_buf(),
-        })?
+/// [`DiffError::Io`] on a read failure, [`DiffError::Source`] when discovery or
+/// a source read is refused for any other typed reason, and
+/// [`DiffError::Empty`] when the tree carries no `.ipe` modules.
+pub fn read_tree(root: &Path) -> Result<WalkedTree, DiffError> {
+    let walked = tree_walk_root(root);
+    let discovered = if walked.is_dir() {
+        project::discover_modules(&walked)?
     } else {
         // A single `.ipe` file is its own module; name it by its stem.
         let stem = root
@@ -164,31 +194,28 @@ pub fn read_tree(root: &Path) -> Result<BTreeMap<ModulePath, (PathBuf, String)>,
             .and_then(|s| s.to_str())
             .unwrap_or("Main")
             .to_owned();
-        vec![project::DiscoveredModule {
-            path: root.to_path_buf(),
-            module_path: vec![stem],
-        }]
+        vec![project::DiscoveredModule::user(
+            root.to_path_buf(),
+            vec![stem],
+        )]
     };
 
     let mut sources = BTreeMap::new();
     for m in discovered {
         let src =
-            crate::io_bounded::read_to_string_capped(&m.path, crate::io_bounded::SOURCE_READ_CAP)
-                .map_err(|e| match e {
-                crate::CliError::Io { path, source } => DiffError::Io { path, source },
-                other => DiffError::Io {
-                    path: m.path.clone(),
-                    source: std::io::Error::other(other.to_string()),
-                },
-            })?;
-        sources.insert(m.module_path, (m.path, src));
+            crate::io_bounded::read_to_string_capped(m.path(), crate::io_bounded::SOURCE_READ_CAP)?;
+        let (path, module_path) = m.into_paths();
+        sources.insert(module_path, (path, src));
     }
     if sources.is_empty() {
         return Err(DiffError::Empty {
             path: root.to_path_buf(),
         });
     }
-    Ok(sources)
+    Ok(WalkedTree {
+        root: walked,
+        modules: sources,
+    })
 }
 
 /// Render a generalized scheme's [`Ty`] into its resolved [`TyDoc`].
@@ -401,16 +428,24 @@ fn canon_type_arg(
 /// [`DiffError`] on a read failure, a typecheck failure, an open interface, or an
 /// empty tree.
 pub fn extract_tree(root: &Path) -> Result<PublicApi, DiffError> {
-    let sources = read_tree(root)?;
+    extract_walked(&read_tree(root)?)
+}
+
+/// Extract the public API surface of an already-read module tree.
+///
+/// Typechecks exactly the sources `tree` holds, so a caller that also reads
+/// those sources (`ipe doc`'s comments) sees the same tree the API came from.
+///
+/// # Errors
+/// [`DiffError`] on a typecheck failure or an open interface.
+pub fn extract_walked(tree: &WalkedTree) -> Result<PublicApi, DiffError> {
+    let sources = &tree.modules;
 
     let db = ipe_db::IpeDatabase::new();
     let mut prepared: BTreeMap<Vec<String>, (PathBuf, String)> = sources.clone();
     let mut discovered: Vec<project::DiscoveredModule> = sources
         .iter()
-        .map(|(p, (path, _))| project::DiscoveredModule {
-            path: path.clone(),
-            module_path: p.clone(),
-        })
+        .map(|(p, (path, _))| project::DiscoveredModule::user(path.clone(), p.clone()))
         .collect();
     let injected = project::inject_compiled_std_closure(&mut prepared, &mut discovered);
     let source_root = crate::create_source_root(&db, &prepared, &injected, &BTreeSet::new());
@@ -440,15 +475,15 @@ pub fn extract_stdlib_module(segments: &[String], source: &str) -> Result<Public
     let synth_path = PathBuf::from("<embedded-stdlib>").join(segments.join("."));
     prepared.insert(segments.to_vec(), (synth_path.clone(), source.to_owned()));
 
-    let mut discovered = vec![project::DiscoveredModule {
-        path: synth_path,
-        module_path: segments.to_vec(),
-    }];
+    let mut discovered = vec![project::DiscoveredModule::embedded_stdlib(
+        synth_path,
+        segments.to_vec(),
+    )];
 
-    // Inject the module's compiled-source import closure, then mark the target
-    // itself as embedded stdlib so it may declare into the reserved namespace.
-    let mut injected = project::inject_compiled_std_closure(&mut prepared, &mut discovered);
-    injected.insert(segments.to_vec());
+    // Inject the module's compiled-source import closure. The target's own
+    // `embedded_stdlib` record makes it trusted alongside its dependencies, so it
+    // may declare into the reserved namespace.
+    let injected = project::inject_compiled_std_closure(&mut prepared, &mut discovered);
 
     let source_root = crate::create_source_root(&db, &prepared, &injected, &BTreeSet::new());
 
@@ -517,4 +552,34 @@ fn extract_from_db(
         return Err(DiffError::OpenInterface { module: Vec::new() });
     }
     Ok(PublicApi { modules })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A discovery refusal keeps its typed cause: it never reads as an empty
+    /// tree, and it reaches the CLI as the refusal itself.
+    #[test]
+    fn a_refused_discovery_is_not_an_empty_tree() {
+        let root =
+            std::env::temp_dir().join(format!("ipe-api-surface-deep-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let deep = (0..70).fold(root.join("src"), |dir, _| dir.join("d"));
+        std::fs::create_dir_all(&deep).expect("mk deep tree");
+        let result = read_tree(&root);
+        let _ = std::fs::remove_dir_all(&root);
+        assert!(
+            matches!(&result, Err(DiffError::Source(refusal))
+                if matches!(**refusal, crate::CliError::DiscoveryLimitReached { .. })),
+            "{result:?}"
+        );
+        let Err(err) = result else {
+            return;
+        };
+        assert!(matches!(
+            crate::CliError::from(err),
+            crate::CliError::DiscoveryLimitReached { .. }
+        ));
+    }
 }

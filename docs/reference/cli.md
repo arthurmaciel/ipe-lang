@@ -139,7 +139,7 @@ ipe verify [<path>]
 
 ### `ipe login`
 
-Authorize ipe with GitHub (device flow) and store a publish token.
+Authorize ipe with GitHub (device flow), store a publish token, and offer to set up a publish signing key.
 
 ```
 ipe login
@@ -149,6 +149,7 @@ ipe login
 
 - `[--status]` — report whether a token is stored
 - `[--logout]` — remove the stored token
+- `[--signing-key]` — generate an SSH signing key and register it on your GitHub account (opt-in)
 
 ### `ipe package`
 

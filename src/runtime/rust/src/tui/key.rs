@@ -1,7 +1,7 @@
 //! Ipe.Tui — raw-byte key decoder.
 //!
 //! Pure: decodes one keypress from a raw terminal byte buffer into a
-//! `(TuiKey, consumed)` pair so `onKey` sees typed `kind` / `value` strings.
+//! `(TuiKey, consumed)` pair so a `Tui.Sub.onKey` handler sees typed `kind` / `value` strings.
 //! No terminal I/O here — the `tui_app` loop reads raw stdin bytes and feeds
 //! them in. Total: every access is bounds-checked (`.get`), never panics.
 

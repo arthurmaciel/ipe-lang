@@ -10,6 +10,76 @@ Entries below the header are maintained by
 section is generated from Conventional Commit messages and prepended when the
 standing release pull request is merged.
 
+## [0.3.2](https://github.com/arthurmaciel/ipe-lang/compare/ipe-v0.3.1...ipe-v0.3.2) (2026-09-28)
+
+
+### Bug Fixes
+
+* batch G — Web.embed cfg, FFI transitive pins, symlinked source dirs ([#3022](https://github.com/arthurmaciel/ipe-lang/issues/3022)) ([3728a8f](https://github.com/arthurmaciel/ipe-lang/commit/3728a8fdda7ff6d3cc4898ad324b99bcca176cd3))
+
+## [0.3.1](https://github.com/arthurmaciel/ipe-lang/compare/ipe-v0.3.0...ipe-v0.3.1) (2026-09-28)
+
+
+### Bug Fixes
+
+* **backend:** guard wasm-bindgen version against SSOT drift ([#2872](https://github.com/arthurmaciel/ipe-lang/issues/2872)) ([03db61d](https://github.com/arthurmaciel/ipe-lang/commit/03db61dd9beff34db0f646f56fe28811d507aba8))
+* **backend:** own keyword strings in mangle injectivity test ([d4d9fea](https://github.com/arthurmaciel/ipe-lang/commit/d4d9fea0d6d1b1a248c1a972de99bd1c5e03da5b))
+* batch A2 (lowering, emit, cli residuals) ([ebb3ca5](https://github.com/arthurmaciel/ipe-lang/commit/ebb3ca5e18f56863e34a2cf3da1dd91dbec6757c))
+* **cli:** a refused source tree keeps its typed cause in DiffError ([#2948](https://github.com/arthurmaciel/ipe-lang/issues/2948)) ([ee1cbae](https://github.com/arthurmaciel/ipe-lang/commit/ee1cbaeb4669647a123bd361a14091778dd83e94))
+* **cli:** every Message text is terminal-safe by construction ([#2908](https://github.com/arthurmaciel/ipe-lang/issues/2908)) ([5513788](https://github.com/arthurmaciel/ipe-lang/commit/5513788f166bb7f5f0a91466009047aff7f2c309))
+* **cli:** release held .ipe handle before Windows clean rmdir ([#2989](https://github.com/arthurmaciel/ipe-lang/issues/2989)) ([7f7dae9](https://github.com/arthurmaciel/ipe-lang/commit/7f7dae945e81419718a76cfa8a61a8e1dcba3fa3))
+* **cli:** route signing-key and login phrases through the message catalog ([d3eebb7](https://github.com/arthurmaciel/ipe-lang/commit/d3eebb7713d9ffb9ed31e3c74dc8be73fa3ca955))
+* **cli:** route signing-key output through ipe::screen ([583ecd5](https://github.com/arthurmaciel/ipe-lang/commit/583ecd5055b61cbc13cd7d16da9810e57100283b))
+* **cli:** sanitise each message value at its boundary; deny bidi format chars; plain build-scripts banner ([ae3581a](https://github.com/arthurmaciel/ipe-lang/commit/ae3581a1e3128622f389d184e51d5eea7958b0bc))
+* **cli:** show the rejected package name escaped ([d6e5374](https://github.com/arthurmaciel/ipe-lang/commit/d6e5374a4a04b77b346038ba9ed6121037a1eeaa))
+* **cli:** terminal-safe messages, typed source reads, fail-closed FFI consent (batch G) ([983fdc4](https://github.com/arthurmaciel/ipe-lang/commit/983fdc4047b73db4df308f6ae0427c18d566de91))
+* **cli:** terminal-safe untrusted parts of relayed refusals ([041c72d](https://github.com/arthurmaciel/ipe-lang/commit/041c72d075092c9f23418b8a5bb9caf1913efe43))
+* **compiler:** consolidate Rust reserved-keyword lists into ipe_intern SSOT ([20583d1](https://github.com/arthurmaciel/ipe-lang/commit/20583d15042eba007ed1e4258a30e7dc7608fc5e))
+* **compiler:** drop weak keyword union from Rust keyword SSOT; refuse lone _ asserted segment ([d0b322a](https://github.com/arthurmaciel/ipe-lang/commit/d0b322a90e1aa81341cefd46e88058c9c2020780))
+* **compiler:** single Rust + Ipê keyword SSOT ([fbbdcb0](https://github.com/arthurmaciel/ipe-lang/commit/fbbdcb0f5a74373947cd5a896644b9c526963ad1))
+* **coverage:** classify an Ipe.Tea shape import (IPE-N0033) as a probe-form limitation ([e1ec50e](https://github.com/arthurmaciel/ipe-lang/commit/e1ec50e6b85ad0c40cb88b33dba483dda72bfefb))
+* **e2e-support:** shared bounded wait_for, fix idle-window flake ([82bed2a](https://github.com/arthurmaciel/ipe-lang/commit/82bed2a28eb6145616841363061764412f35e6de))
+* **env-dir:** refuse a relative tool home instead of falling back to ~/.cargo ([7524a21](https://github.com/arthurmaciel/ipe-lang/commit/7524a212cff0fe58c1b781eef9bede1412713539))
+* **ffi-inspector:** consent-scan the final injected manifest via ConsentedManifest token ([eb0d353](https://github.com/arthurmaciel/ipe-lang/commit/eb0d35352bf21b29fdcf4f675f3868c7b8215f04))
+* **ffi-inspector:** fail closed on cargo metadata errors ([6c1650a](https://github.com/arthurmaciel/ipe-lang/commit/6c1650af913b83d249f7984f5a5c7a2564e6a886)), closes [#2971](https://github.com/arthurmaciel/ipe-lang/issues/2971)
+* **index:** pass the typed package name as str to the version refusal ([723aa32](https://github.com/arthurmaciel/ipe-lang/commit/723aa321da5212bc6e88219dad71ee03022b752d))
+* **init:** drop unused Task import in cli template, per-shape post-init hint ([58d3262](https://github.com/arthurmaciel/ipe-lang/commit/58d3262187dc8b14897b078f74afcf2146b6d306))
+* **init:** scaffolded README.md is also shape-specific ([6fc89ff](https://github.com/arthurmaciel/ipe-lang/commit/6fc89ffd025f1d768c371dd252d96b92ffff205b))
+* **integration:** batchA2 clippy reds (ScaffoldKind, test names) + regen phantom goldens ([a7e8326](https://github.com/arthurmaciel/ipe-lang/commit/a7e8326e46576c1f0e6e5fe416440d78e061ef06))
+* **integration:** batchC clippy reds — DiscoveredModule ctor, const pattern, method paths ([348a2c2](https://github.com/arthurmaciel/ipe-lang/commit/348a2c22af55c78ae3a9c025fa294b41e3ec64a4))
+* **integration:** batchC test-code clippy (cmp_owned, # Panics doc, redundant clone) ([0527fa1](https://github.com/arthurmaciel/ipe-lang/commit/0527fa1757f0cc2cf1d45ee630691b658c458868))
+* **integration:** exclude IPE_JUNCTION_AT/TO (Windows test helper) from env-var drift gate ([1c03eac](https://github.com/arthurmaciel/ipe-lang/commit/1c03eac2898a009b67eb86bb4388beac3343413e))
+* **login:** borrow the login message; drop a redundant test clone ([a30bcbc](https://github.com/arthurmaciel/ipe-lang/commit/a30bcbc39bea89b7de16ab851a651c3d052754ae))
+* **lower,emit:** propagate Send/Sync bounds across generic app entries ([0a18e8b](https://github.com/arthurmaciel/ipe-lang/commit/0a18e8b8d8032d3aa90c8ac69a12d4e08354ea64))
+* **lower:** a nested string-literal arm pattern moves the part it matches ([6ea76e9](https://github.com/arthurmaciel/ipe-lang/commit/6ea76e98296561dfee695aab9ec298a84e5e5946))
+* **lower:** classify Stream.stream handler captures before clone decisions ([#2938](https://github.com/arthurmaciel/ipe-lang/issues/2938)) ([49bb08d](https://github.com/arthurmaciel/ipe-lang/commit/49bb08da137f959d34284002007766c93ea2c289))
+* **lower:** copy-only destructure/match of a non-Clone value is not a consume ([7ce7c9a](https://github.com/arthurmaciel/ipe-lang/commit/7ce7c9adad7a9a67358535b2794c86ef09c30db1))
+* **lower:** derive Arc element-param retype from kernel scheme shapes ([48a2d07](https://github.com/arthurmaciel/ipe-lang/commit/48a2d079fddece9ddc49b65beeb37425b3452dbf))
+* **lower:** derive mapper-frontier capability from the kernel scheme ([5bb84cd](https://github.com/arthurmaciel/ipe-lang/commit/5bb84cda6e7fbe6bb1d37ee6395683444b49a783))
+* **lower:** drop unused EtaDemand::names, name the IrArrow shape; T0014 page names T0001 for a visible function result ([88cf714](https://github.com/arthurmaciel/ipe-lang/commit/88cf71428d4d12c8220b2a7b4db8f75c68a8d824))
+* **lower:** fail the HOF callback-result backstop closed without a solved proof ([f6d3f5e](https://github.com/arthurmaciel/ipe-lang/commit/f6d3f5e0901d1cc31c96cb0f81f81b6dba1214e8))
+* **lower:** make a pinned phantom binder type classification-only and refuse a phantom Program shape as IPE-L0102 ([3a70b0b](https://github.com/arthurmaciel/ipe-lang/commit/3a70b0b9a7930c9b11bcb31b9fc3ae28ccbacceb))
+* **lower:** merge lane/2998-mapper-ret; one EtaDemand budgets every eta name drawn at a call site ([7afd303](https://github.com/arthurmaciel/ipe-lang/commit/7afd3035552cb41875aec975d2c514b7d0a17774))
+* **lower:** pattern binder of a Copy record field copies, not moves (IPE-L0135) ([4a4ad94](https://github.com/arthurmaciel/ipe-lang/commit/4a4ad942916482b9a64c2f94365a3677fd343199))
+* **lower:** peel the mapper spine before the wrap so an untyped or short mapper is unrepresentable there ([5301c7a](https://github.com/arthurmaciel/ipe-lang/commit/5301c7a3964cdea081222bc45e147ec88c92faae)), closes [#3016](https://github.com/arthurmaciel/ipe-lang/issues/3016)
+* **lower:** resolve param-prologue binders under the def's generics; pin phantom binder type vars ([ca97a3f](https://github.com/arthurmaciel/ipe-lang/commit/ca97a3f6b3e788426eb30baa7d67d77f0b0b3532))
+* **lower:** route every higher-order kernel mapper through one Arc carrier choke point ([ab6b62a](https://github.com/arthurmaciel/ipe-lang/commit/ab6b62a128c40520e59c82923622364bdfe3953b))
+* **lower:** scope current_poly_tvars with a closure guard so no early exit leaks a def's generics ([dcb1bc3](https://github.com/arthurmaciel/ipe-lang/commit/dcb1bc3f2aab57395baeb56d6454592020734245))
+* **lower:** shim Arc-flipped List-HOF element reads so stored fns reach Fn-bound params ([c81fdaf](https://github.com/arthurmaciel/ipe-lang/commit/c81fdaf2d10a7bc627b3067dfb042831f595e95e))
+* **lower:** size the eta pool from the mapper-wrap demand the wrapper draws ([b4ffd9e](https://github.com/arthurmaciel/ipe-lang/commit/b4ffd9ea79d4124ff06869024435dec868a81ca8)), closes [#3015](https://github.com/arthurmaciel/ipe-lang/issues/3015)
+* **lower:** typed per-site eta ceiling for mapper adapters (IPE-L0155) ([18f3a7c](https://github.com/arthurmaciel/ipe-lang/commit/18f3a7c7c5edd0c532a42e12a80a742a94cc1ef4))
+* **lower:** walk an argument-reversed kernel's args in evaluation order in the non-Clone move gate ([4395ffe](https://github.com/arthurmaciel/ipe-lang/commit/4395ffe9c7ef16a50fa60881248c682f385d5713))
+* **panic-scan:** one fail-closed test-path predicate ([#2996](https://github.com/arthurmaciel/ipe-lang/issues/2996)) ([bc6f4ca](https://github.com/arthurmaciel/ipe-lang/commit/bc6f4ca753b621540e9409df4eb6842aef5ff90b))
+* **parse:** mark ident-class predicates must_use ([2a7afd2](https://github.com/arthurmaciel/ipe-lang/commit/2a7afd2c534fa154a57687571cd0f266c8980b70))
+* **parse:** single keyword + identifier SSOT for ffi, rename, LSP, docs ([#2972](https://github.com/arthurmaciel/ipe-lang/issues/2972)) ([4809ff1](https://github.com/arthurmaciel/ipe-lang/commit/4809ff1bb3c22baea588bfdd71e59498dd8fbe37))
+* **repo:** normalize every text file to LF on all platforms ([530ca12](https://github.com/arthurmaciel/ipe-lang/commit/530ca12015826e8ef2c3fd0fdec378a9ec1733e9))
+* **resolve:** resolve the cache base through the platform home ([63fa3df](https://github.com/arthurmaciel/ipe-lang/commit/63fa3df0ccdd7c6c2c57167ad75006109b739e4b))
+* **runtime:** match PinnedRelay method visibility to VettedAddr ([#2911](https://github.com/arthurmaciel/ipe-lang/issues/2911)) ([06d94ac](https://github.com/arthurmaciel/ipe-lang/commit/06d94accff141568dd482ac26537e54a6115cd2c))
+* **tests:** composite-pk golden secures through the exported readOnly never policy ([d1af448](https://github.com/arthurmaciel/ipe-lang/commit/d1af4482834fa700107e2b84ac1c13bf1f2db9c2))
+* **tests:** migrate stale onKey/onLine config-field fixtures to Sub ([b1ffcc2](https://github.com/arthurmaciel/ipe-lang/commit/b1ffcc2cfc3ced5bb10c1fde63dd98cf1c97d9ae))
+* **tests:** stored-fn mapper fixtures use accepted surface and reach the gate they pin ([8c1e214](https://github.com/arthurmaciel/ipe-lang/commit/8c1e2148d29a5640cc87a3ec3b3a9eb8b15eb0fc))
+* **types:** oblige every pure higher-order kernel callback result ([92c45e4](https://github.com/arthurmaciel/ipe-lang/commit/92c45e44ba9470511e23f01874b1f890bb7e203e)), closes [#2998](https://github.com/arthurmaciel/ipe-lang/issues/2998)
+
 ## [0.3.0](https://github.com/arthurmaciel/ipe-lang/compare/ipe-v0.2.6...ipe-v0.3.0) (2026-09-27)
 
 

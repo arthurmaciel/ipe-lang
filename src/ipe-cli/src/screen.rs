@@ -5,6 +5,7 @@
 //! ```text
 //!
 //!   Ipê language - vN.N.N - https://github.com/arthurmaciel/ipe-lang
+//!
 //!   <content, indented by the two-space gutter>
 //!
 //! ```
@@ -152,6 +153,28 @@ pub fn emit_header(stream: Stream) {
 /// never framed, never coloured.
 pub fn emit_machine(stream: Stream, text: &str) {
     stream.write(text);
+}
+
+/// Prefix one relayed child-process chunk — one line, or one `\r`-terminated
+/// progress-bar redraw — with [`style::RELAY_INDENT`] before it reaches the
+/// terminal.
+///
+/// This is the single routine both `ipe build`'s and `ipe watch`'s cargo relay
+/// loops call on every chunk `read_progress_chunk` hands them, so the relayed
+/// Cargo diagnostics and progress bar sit one column off the edge instead of
+/// flush against it — one shared indent for the one shared relay pattern,
+/// rather than two call sites independently choosing "no indent at all".
+/// Cargo's `\r` redraw and a plain `\n` line are treated alike: either
+/// terminator means the chunk opened a fresh terminal row, so either gets
+/// exactly one leading indent. A chunk that is only its own terminator (an
+/// otherwise-blank line) is left untouched, matching [`style::gutter`]'s "a
+/// blank line stays blank" rule.
+#[must_use]
+pub fn indent_relay_chunk(chunk: &str) -> String {
+    if chunk.trim_end_matches(['\n', '\r']).is_empty() {
+        return chunk.to_string();
+    }
+    format!("{}{chunk}", style::RELAY_INDENT)
 }
 
 /// A human screen under construction: guttered, toned lines bound to one
@@ -446,7 +469,7 @@ mod tests {
         assert_eq!(
             s.render(Header::Shown),
             format!(
-                "\n  Ipê language - v{version} - {}\n  hello\n  world\n",
+                "\n  Ipê language - v{version} - {}\n\n  hello\n  world\n",
                 style::REPO_URL
             )
         );
@@ -515,7 +538,7 @@ mod tests {
         assert_eq!(
             s.render_chatter(Header::Shown),
             format!(
-                "\n  Ipê language - v{version} - {}\n  • building Main.ipe\n",
+                "\n  Ipê language - v{version} - {}\n\n  • building Main.ipe\n",
                 style::REPO_URL
             )
         );
@@ -548,7 +571,10 @@ mod tests {
 
     #[test]
     fn a_user_error_is_orange_and_an_internal_error_light_red() {
-        let usage = CliError::Usage("nothing to build here");
+        let usage = CliError::Usage(crate::text::msg::command_refusal(
+            &"build",
+            &"nothing to build here",
+        ));
         let out = error_screen(&usage, true)
             .map(|s| s.render(Header::Omitted))
             .unwrap_or_default();
@@ -584,7 +610,10 @@ mod tests {
         let out = screen_of(&offline);
         assert!(!out.contains(REPORT_BUGS_PHRASE), "{out:?}");
 
-        let out = screen_of(&CliError::Usage("nothing to build here"));
+        let out = screen_of(&CliError::Usage(crate::text::msg::command_refusal(
+            &"build",
+            &"nothing to build here",
+        )));
         assert!(!out.contains(REPORT_BUGS_PHRASE), "{out:?}");
     }
 
@@ -708,8 +737,9 @@ mod tests {
     fn a_manifest_value_cannot_inject_escapes_into_the_help_screen() {
         let err = crate::driver::with_help_on_misuse(
             "build",
-            Err(CliError::UsageOwned(format!(
-                "unknown manifest value `{HOSTILE}`"
+            Err(CliError::Usage(crate::text::msg::command_refusal(
+                &"build",
+                &format!("unknown manifest value `{HOSTILE}`"),
             ))),
         )
         .err();
@@ -759,7 +789,10 @@ mod tests {
 
     #[test]
     fn machine_json_escapes_the_sanitised_message_exactly_once() {
-        let err = CliError::UsageOwned(format!("bad value `a\"b\\c` {HOSTILE}"));
+        let err = CliError::Usage(crate::text::msg::command_refusal(
+            &"build",
+            &format!("bad value `a\"b\\c` {HOSTILE}"),
+        ));
         let line = crate::machine_output::machine_error(
             crate::cli_args::OutputFormat::Json,
             "build",
@@ -774,6 +807,29 @@ mod tests {
                     .and_then(serde_json::Value::as_str)
                     .map(str::to_owned)
             });
-        assert_eq!(message.as_deref(), Some("bad value `a\"b\\c` foo"));
+        assert_eq!(
+            message.as_deref(),
+            Some("ipe build: bad value `a\"b\\c` foo")
+        );
+    }
+
+    /// `indent_relay_chunk` is the single routine `ipe build` and `ipe watch`
+    /// both call on every relayed cargo stderr chunk. Pin its two terminator
+    /// shapes (`\n`-ended lines and `\r`-ended progress-bar redraws) plus the
+    /// blank-line exemption, so neither relay site can drift back to "no
+    /// indent at all" without this test catching it.
+    #[test]
+    fn indent_relay_chunk_adds_one_column_to_either_terminator() {
+        assert_eq!(
+            indent_relay_chunk("Compiling foo v0.1.0\n"),
+            format!("{}Compiling foo v0.1.0\n", style::RELAY_INDENT)
+        );
+        assert_eq!(
+            indent_relay_chunk("Building [=====>    ] 42%\r"),
+            format!("{}Building [=====>    ] 42%\r", style::RELAY_INDENT)
+        );
+        // A chunk that is only a terminator (a blank line) stays blank, never
+        // gaining a lone trailing indent space.
+        assert_eq!(indent_relay_chunk("\n"), "\n");
     }
 }

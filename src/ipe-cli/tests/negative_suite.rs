@@ -11,8 +11,11 @@
 //! lowering / not-yet-supported (`IPE-L*`), plus the target/secret gates.
 //!
 //! Compile-only: every fixture is ill-formed, so there is nothing to run — no
-//! oracle / `IPE_E2E` gate. Each test returns early when the embedded runtime
-//! cannot be located (the pipeline needs the compiled stdlib source).
+//! oracle / `IPE_E2E` gate. Each test fails loudly (never skips) when the
+//! embedded runtime or scratch dir is unavailable (the pipeline needs the
+//! compiled stdlib source).
+
+mod support;
 
 use std::fmt::Write as _;
 use std::path::PathBuf;
@@ -30,8 +33,8 @@ const fn false_marker() -> bool {
 
 /// Write `source` as a single-file `Main.ipe` under a fresh scratch dir keyed
 /// by `name`, returning the entry path (or `None` if scratch setup fails — the
-/// caller then skips). The scratch dir lives in the test crate's
-/// `CARGO_TARGET_TMPDIR`, never the repo tree.
+/// caller must fail loudly, never skip). The scratch dir lives in the test
+/// crate's `CARGO_TARGET_TMPDIR`, never the repo tree.
 fn write_entry(name: &str, source: &str) -> Option<PathBuf> {
     let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
         .join("negsuite")
@@ -53,21 +56,15 @@ enum Outcome {
     /// Compilation SUCCEEDED (a potential SEAL hole for a malformed input) or
     /// failed for a non-pipeline reason (I/O, usage). Carries a description.
     Accepted(String),
-    /// Runtime / scratch unavailable — the caller skips.
-    Skip,
 }
 
 fn compile(name: &str, source: &str, target: Target) -> Outcome {
-    let Some(entry) = write_entry(name, source) else {
-        return Outcome::Skip;
-    };
+    let entry = crate::support::expect_scratch_entry(name, write_entry(name, source));
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
         .join("negsuite-out")
         .join(name);
     let _ = std::fs::remove_dir_all(&out);
-    let Ok(runtime) = ipe::resolve_runtime() else {
-        return Outcome::Skip;
-    };
+    let runtime = crate::support::expect_runtime(name, ipe::resolve_runtime());
     let options = BuildOptions {
         target,
         ..BuildOptions::default()
@@ -82,16 +79,12 @@ fn compile(name: &str, source: &str, target: Target) -> Outcome {
 /// Like [`compile`] but with the production flag set — simulates `ipe release`
 /// so the `Debug.*` gate (IPE-L0140) fires without spawning a real release build.
 fn compile_production(name: &str, source: &str) -> Outcome {
-    let Some(entry) = write_entry(name, source) else {
-        return Outcome::Skip;
-    };
+    let entry = crate::support::expect_scratch_entry(name, write_entry(name, source));
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
         .join("negsuite-prod-out")
         .join(name);
     let _ = std::fs::remove_dir_all(&out);
-    let Ok(runtime) = ipe::resolve_runtime() else {
-        return Outcome::Skip;
-    };
+    let runtime = crate::support::expect_runtime(name, ipe::resolve_runtime());
     let options = BuildOptions {
         production: true,
         ..BuildOptions::default()
@@ -109,7 +102,6 @@ fn compile_production(name: &str, source: &str) -> Outcome {
 #[track_caller]
 fn assert_rejected_production(name: &str, source: &str, expected: &str) {
     match compile_production(name, source) {
-        Outcome::Skip => {}
         Outcome::Rejected(got) => assert_eq!(
             got, expected,
             "{name}: expected {expected}, got {got} — rejected for the WRONG reason"
@@ -128,21 +120,15 @@ fn compile_project(name: &str, files: &[(&str, &str)]) -> Outcome {
         .join(name);
     let _ = std::fs::remove_dir_all(&dir);
     let src = dir.join("src");
-    if std::fs::create_dir_all(&src).is_err() {
-        return Outcome::Skip;
-    }
+    crate::support::expect_scratch_step(name, std::fs::create_dir_all(&src));
     for (fname, contents) in files {
-        if std::fs::write(src.join(fname), contents).is_err() {
-            return Outcome::Skip;
-        }
+        crate::support::expect_scratch_step(name, std::fs::write(src.join(fname), contents));
     }
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
         .join("negsuite-proj-out")
         .join(name);
     let _ = std::fs::remove_dir_all(&out);
-    let Ok(runtime) = ipe::resolve_runtime() else {
-        return Outcome::Skip;
-    };
+    let runtime = crate::support::expect_runtime(name, ipe::resolve_runtime());
     let entry = src.join("Main.ipe");
     match ipe::build_with_sibling_discovery(&entry, &out, &runtime) {
         Ok(()) => Outcome::Accepted("compiled successfully (exit 0)".to_owned()),
@@ -169,7 +155,6 @@ fn fail_accepted(name: &str, expected: &str, how: &str) {
 #[track_caller]
 fn assert_rejected_on(name: &str, source: &str, expected: &str, target: Target) {
     match compile(name, source, target) {
-        Outcome::Skip => {}
         Outcome::Rejected(got) => assert_eq!(
             got, expected,
             "{name}: expected {expected}, got {got} — a rejection for the WRONG reason"
@@ -197,7 +182,6 @@ fn assert_rejected_wasm(name: &str, source: &str, expected: &str) {
 #[track_caller]
 fn assert_compiles(name: &str, source: &str) {
     match compile(name, source, Target::Native) {
-        Outcome::Skip => {}
         Outcome::Accepted(how) if how.starts_with("compiled successfully") => {}
         Outcome::Accepted(how) => assert!(
             false_marker(),
@@ -1017,31 +1001,21 @@ fn compile_with_files(name: &str, source: &str, extra: &[(&str, &str)]) -> Outco
         .join("negsuite-ce")
         .join(name);
     let _ = std::fs::remove_dir_all(&dir);
-    if std::fs::create_dir_all(&dir).is_err() {
-        return Outcome::Skip;
-    }
+    crate::support::expect_scratch_step(name, std::fs::create_dir_all(&dir));
     for (rel, contents) in extra {
         let path = dir.join(rel);
-        if let Some(parent) = path.parent()
-            && std::fs::create_dir_all(parent).is_err()
-        {
-            return Outcome::Skip;
+        if let Some(parent) = path.parent() {
+            crate::support::expect_scratch_step(name, std::fs::create_dir_all(parent));
         }
-        if std::fs::write(&path, contents).is_err() {
-            return Outcome::Skip;
-        }
+        crate::support::expect_scratch_step(name, std::fs::write(&path, contents));
     }
     let entry = dir.join("Main.ipe");
-    if std::fs::write(&entry, source).is_err() {
-        return Outcome::Skip;
-    }
+    crate::support::expect_scratch_step(name, std::fs::write(&entry, source));
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
         .join("negsuite-ce-out")
         .join(name);
     let _ = std::fs::remove_dir_all(&out);
-    let Ok(runtime) = ipe::resolve_runtime() else {
-        return Outcome::Skip;
-    };
+    let runtime = crate::support::expect_runtime(name, ipe::resolve_runtime());
     match ipe::build_with_options(&entry, &out, &runtime, BuildOptions::default()) {
         Ok(()) => Outcome::Accepted("compiled successfully (exit 0)".to_owned()),
         Err(CliError::Pipeline { diag, .. }) => Outcome::Rejected(diag.code().as_str()),
@@ -1053,7 +1027,6 @@ fn compile_with_files(name: &str, source: &str, extra: &[(&str, &str)]) -> Outco
 #[track_caller]
 fn assert_rejected_with_files(name: &str, source: &str, extra: &[(&str, &str)], expected: &str) {
     match compile_with_files(name, source, extra) {
-        Outcome::Skip => {}
         Outcome::Rejected(got) => assert_eq!(
             got, expected,
             "{name}: expected {expected}, got {got} — a rejection for the WRONG reason"
@@ -1158,7 +1131,6 @@ fn custom_element_ctor_present_file_lowers_and_compiles() {
         )],
     );
     match outcome {
-        Outcome::Skip => {}
         Outcome::Accepted(how) if how.starts_with("compiled successfully") => {}
         other => assert!(
             false_marker(),
@@ -1278,25 +1250,26 @@ fn custom_element_ctor_windows_rooted_path_rejected_at_canon() {
 fn custom_element_ctor_symlink_escape_rejected_at_build_gate() {
     use std::path::PathBuf;
 
+    let name = "custom_element_symlink_escape";
     let base = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("negsuite-ce-symlink");
     let _ = std::fs::remove_dir_all(&base);
     let project = base.join("project");
     let outside = base.join("outside");
     // The out-of-project directory and a real file inside it (the escape target).
-    if std::fs::create_dir_all(&outside).is_err()
-        || std::fs::write(
+    crate::support::expect_scratch_step(name, std::fs::create_dir_all(&outside));
+    crate::support::expect_scratch_step(
+        name,
+        std::fs::write(
             outside.join("evil.js"),
             "export function mount(host, emit) { return {}; }\n",
-        )
-        .is_err()
-        || std::fs::create_dir_all(&project).is_err()
-    {
-        return; // scratch unavailable — skip, like the shared harness
-    }
+        ),
+    );
+    crate::support::expect_scratch_step(name, std::fs::create_dir_all(&project));
     // In-tree `js` is a SYMLINK to the outside directory.
-    if std::os::unix::fs::symlink(&outside, project.join("js")).is_err() {
-        return;
-    }
+    crate::support::expect_scratch_step(
+        name,
+        std::os::unix::fs::symlink(&outside, project.join("js")),
+    );
     let src = format!(
         "{HEAD}import Ipe.Ffi.Js.CustomElement as CustomElement\n\
          editor : CustomElement Int String\n\
@@ -1304,14 +1277,10 @@ fn custom_element_ctor_symlink_escape_rejected_at_build_gate() {
          main = 1\n"
     );
     let entry = project.join("Main.ipe");
-    if std::fs::write(&entry, &src).is_err() {
-        return;
-    }
+    crate::support::expect_scratch_step(name, std::fs::write(&entry, &src));
     let out = base.join("out");
     let _ = std::fs::remove_dir_all(&out);
-    let Ok(runtime) = ipe::resolve_runtime() else {
-        return;
-    };
+    let runtime = crate::support::expect_runtime(name, ipe::resolve_runtime());
     let outcome = match ipe::build_with_options(&entry, &out, &runtime, BuildOptions::default()) {
         Ok(()) => Outcome::Accepted("compiled successfully (exit 0)".to_owned()),
         Err(CliError::Pipeline { diag, .. }) => Outcome::Rejected(diag.code().as_str()),
@@ -1319,7 +1288,6 @@ fn custom_element_ctor_symlink_escape_rejected_at_build_gate() {
     };
     let _ = std::fs::remove_dir_all(&base);
     match outcome {
-        Outcome::Skip => {}
         Outcome::Rejected(got) => assert_eq!(
             got, "IPE-N0044",
             "custom_element_symlink_escape: expected IPE-N0044 (containment), got {got}"
@@ -1376,7 +1344,6 @@ fn custom_element_widget_program_ipe_accepts() {
         )],
     );
     match outcome {
-        Outcome::Skip => {}
         Outcome::Accepted(how) if how.starts_with("compiled successfully") => {}
         other => assert!(
             false_marker(),
@@ -1405,7 +1372,6 @@ fn canon_duplicate_qualifier() {
             ),
         ],
     ) {
-        Outcome::Skip => {}
         Outcome::Rejected(got) => assert_eq!(
             got, "IPE-N0027",
             "canon_dup_qualifier: expected IPE-N0027, got {got} — WRONG reason"
@@ -1662,6 +1628,165 @@ fn type_mismatch_int_plus_string() {
 fn type_signature_body_mismatch() {
     let src = format!("{HEAD}main : Int\nmain =\n    \"not an int\"\n");
     assert_rejected("type_sig_mismatch", &src, "IPE-T0001");
+}
+
+/// A higher-order kernel program: `Main` printing the length of `expr`.
+fn hof_program(expr: &str) -> String {
+    format!(
+        "{HEAD}import Ipe.Io as Io\n\
+         import Ipe.List\n\
+         import Ipe.String as String\n\
+         add : Int -> Int -> Int\n\
+         add a b =\n    a + b\n\
+         main : Task Error ()\n\
+         main =\n    Io.println (String.fromInt (List.length ({expr})))\n"
+    )
+}
+
+/// `List.map add xs`: each element would be the partial application `Int -> Int`,
+/// which the exact-arity runtime kernel cannot build — the callback-result
+/// obligation (`hof_kernel_result`) refuses it at type time.
+#[test]
+fn type_list_map_curried_callback_refused() {
+    let src = hof_program("List.map add [ 1, 2, 3 ]");
+    assert_rejected("type_list_map_curried_callback", &src, "IPE-T0001");
+}
+
+/// A curried lambda callback (`\n -> \x -> x + n`) is the same hazard spelled inline.
+#[test]
+fn type_list_map_curried_lambda_refused() {
+    let src = hof_program("List.map (\\n -> \\x -> x + n) [ 1, 2, 3 ]");
+    assert_rejected("type_list_map_curried_lambda", &src, "IPE-T0001");
+}
+
+/// A fold whose accumulator is a function returns an arrow from its step callback.
+#[test]
+fn type_list_foldl_function_accumulator_refused() {
+    let src = hof_program(
+        "List.map (List.foldl (\\x f -> \\y -> f y + x) (\\y -> y) [ 1, 2 ]) [ 1, 2, 3 ]",
+    );
+    assert_rejected("type_list_foldl_function_accumulator", &src, "IPE-T0001");
+}
+
+/// Contrapositive: a plain-result callback (`\x -> x + 1`) still compiles.
+#[test]
+fn type_list_map_plain_callback_compiles() {
+    let src = hof_program("List.map (\\x -> x + 1) [ 1, 2, 3 ]");
+    assert_compiles("type_list_map_plain_callback", &src);
+}
+
+/// Contrapositive: `List.map2 add` passes both arguments at once and compiles.
+#[test]
+fn type_list_map2_full_arity_callback_compiles() {
+    let src = hof_program("List.map2 add [ 1, 2, 3 ] [ 10, 20, 30 ]");
+    assert_compiles("type_list_map2_full_arity_callback", &src);
+}
+
+/// A `List.map5` program over stored functions: four of arity `first`, the last of arity `last`.
+///
+/// `applyAll` calls every stored function; `mapper` is the mapper expression
+/// passed to `List.map5` (`applyAll` itself, or a lambda).
+fn eta_site_program(first: usize, last: usize, mapper: &str) -> String {
+    let arrow = |arity: usize| vec!["Int"; arity + 1].join(" -> ");
+    let def = |name: &str, arity: usize| {
+        let params: Vec<String> = (0..arity).map(|i| format!("a{i}")).collect();
+        format!(
+            "{name} : {}\n{name} {} =\n    a0\n",
+            arrow(arity),
+            params.join(" ")
+        )
+    };
+    let call = |f: &str, arity: usize| format!("{f} {}", vec!["1"; arity].join(" "));
+    let body = ["p", "q", "r", "s"]
+        .into_iter()
+        .map(|f| call(f, first))
+        .chain(std::iter::once(call("t", last)))
+        .collect::<Vec<_>>()
+        .join(" + ");
+    let (a, b) = (arrow(first), arrow(last));
+    format!(
+        "{HEAD}import Ipe.Io as Io\n\
+         import Ipe.List\n\
+         import Ipe.String as String\n\
+         {}{}\
+         applyAll : ({a}) -> ({a}) -> ({a}) -> ({a}) -> ({b}) -> Int\n\
+         applyAll p q r s t =\n    {body}\n\
+         useFirst : ({a}) -> Int\n\
+         useFirst g =\n    {}\n\
+         useLast : ({b}) -> Int\n\
+         useLast g =\n    {}\n\
+         main : Task Error ()\n\
+         main =\n    Io.println (String.fromInt (List.length \
+         (List.map5 ({mapper}) [ fa ] [ fa ] [ fa ] [ fa ] [ fb ])))\n",
+        def("fa", first),
+        def("fb", last),
+        call("g", first),
+        call("g", last),
+    )
+}
+
+/// At the per-site eta ceiling: the named-mapper adapter draws 1 + 5 + 5 * 2 = 16 names.
+#[test]
+fn lower_named_mapper_at_eta_site_limit_compiles() {
+    let src = eta_site_program(2, 2, "applyAll");
+    assert_compiles("lower_named_mapper_at_eta_site_limit", &src);
+}
+
+/// One past the ceiling: 1 + 5 + 4 * 2 + 3 = 17 names is refused, never drawn.
+#[test]
+fn lower_named_mapper_past_eta_site_limit_refused() {
+    let src = eta_site_program(2, 3, "applyAll");
+    assert_rejected("lower_named_mapper_past_eta_site_limit", &src, "IPE-L0155");
+}
+
+/// Far past the ceiling (1 + 5 + 5 * 16 = 86 names) is the same typed refusal, not an internal error.
+#[test]
+fn lower_named_mapper_far_past_eta_site_limit_refused() {
+    let src = eta_site_program(16, 16, "applyAll");
+    assert_rejected(
+        "lower_named_mapper_far_past_eta_site_limit",
+        &src,
+        "IPE-L0155",
+    );
+}
+
+/// A lambda mapper passing its stored functions on at the ceiling: 4 * 3 + 4 = 16 names.
+#[test]
+fn lower_lambda_mapper_at_eta_site_limit_compiles() {
+    let src = eta_site_program(3, 4, "\\p q r s t -> applyAll p q r s t");
+    assert_compiles("lower_lambda_mapper_at_eta_site_limit", &src);
+}
+
+/// One past the ceiling for a lambda mapper: 4 * 3 + 5 = 17 names is refused.
+#[test]
+fn lower_lambda_mapper_past_eta_site_limit_refused() {
+    let src = eta_site_program(3, 5, "\\p q r s t -> applyAll p q r s t");
+    assert_rejected("lower_lambda_mapper_past_eta_site_limit", &src, "IPE-L0155");
+}
+
+/// Past the ceiling, a lambda mapper that only calls a stored function draws no names for it.
+///
+/// `p` is passed on (3 names), so the 16-argument `t` would reach 19; `t` is
+/// only called, so it needs no adapter and the site stays at 3.
+#[test]
+fn lower_lambda_mapper_calling_wide_stored_function_compiles() {
+    let src = eta_site_program(
+        3,
+        16,
+        "\\p q r s t -> useFirst p + t 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1",
+    );
+    assert_compiles("lower_lambda_mapper_calling_wide_stored_function", &src);
+}
+
+/// The same lambda passing the wide stored function on needs 3 + 16 = 19 names and is refused.
+#[test]
+fn lower_lambda_mapper_passing_wide_stored_function_refused() {
+    let src = eta_site_program(3, 16, "\\p q r s t -> useFirst p + useLast t");
+    assert_rejected(
+        "lower_lambda_mapper_passing_wide_stored_function",
+        &src,
+        "IPE-L0155",
+    );
 }
 
 /// A `case` that does not cover every constructor is non-exhaustive.
@@ -2071,12 +2196,13 @@ fn lower_float_set_element() {
     assert_rejected("lower_float_set_elem", &src, "IPE-L0117");
 }
 
-// A `List`/`Dict` value CAN store a function on the `Arc<dyn Fn>` carrier, but a
-// higher-order kernel whose mapper/comparator carrier the lowerer does NOT align
-// to that stored `Arc` cannot pass the function to its closure — it would emit an
-// `Arc`-vs-`Box` mismatch. Each such open-frontier kernel over a
-// function-carrying collection must fail closed at `ipe` time with IPE-L0134,
-// never `ipe`-accept then `cargo`-fail (THE SEAL).
+// A `List` element / `Dict` value CAN store a function on the `Arc<dyn Fn>`
+// carrier. A higher-order kernel whose every stored-element mapper parameter the
+// lowerer re-carriers to that `Arc` (derived from the kernel scheme) is sound
+// over it and must compile; a kernel that compares/orders its element, or feeds
+// a stored element into a parameter the lowerer cannot re-carrier (`Dict.update`'s
+// `Maybe v`, every `Set` higher-order kernel), must fail closed at `ipe` time
+// with IPE-L0134 — never `ipe`-accept then `cargo`-fail (THE SEAL).
 
 /// `List.member` over a `List (Int -> Int)`: the element is a stored function,
 /// which is `Clone` but not `PartialEq` — membership needs `==` on the element,
@@ -2095,85 +2221,212 @@ fn lower_list_member_over_function_element_gated() {
     assert_rejected("lower_list_member_fn_elem", &src, "IPE-L0134");
 }
 
-/// `Dict.map` over a `Dict String (Int -> Int)`: the value is a stored function,
-/// and `dict_map`'s runtime `V: Clone` bound plus the un-aligned mapper closure
-/// carrier make it unsound — fail closed with IPE-L0134.
+/// `Dict.map` over a `Dict String (Int -> Int)`: the mapper's value parameter
+/// binds the stored function and is re-carriered to `Arc` — accepted.
 #[test]
-fn lower_dict_map_over_function_value_gated() {
+fn lower_dict_map_over_function_value_compiles() {
     let src = format!(
         "{HEAD}import Ipe.Dict as Dict\n\
+         import Ipe.Io as Io\n\
+         import Ipe.List\n\
+         import Ipe.String as String\n\
          table : Dict String (Int -> Int)\n\
          table =\n    Dict.fromList [ ( \"inc\", \\n -> n + 1 ) ]\n\
-         main =\n\
-         \x20   let mapped = Dict.map (\\_ f -> f) table\n\
-         \x20   in\n\
-         \x20   mapped\n"
+         main : Task Error ()\n\
+         main =\n    Io.println (String.fromInt (List.foldl (\\x acc -> x + acc) 0 (Dict.values (Dict.map (\\_ f -> f 1) table))))\n"
     );
-    assert_rejected("lower_dict_map_fn_value", &src, "IPE-L0134");
+    assert_compiles("lower_dict_map_fn_value", &src);
 }
 
-/// `Dict.foldl` over a function-valued dict: the fold closure receives the
-/// stored function on the un-aligned `Box` carrier — fail closed with IPE-L0134.
+/// `Dict.foldl` over a function-valued dict: the fold closure's value
+/// parameter binds the stored function on `Arc` — accepted.
 #[test]
-fn lower_dict_foldl_over_function_value_gated() {
+fn lower_dict_foldl_over_function_value_compiles() {
     let src = format!(
         "{HEAD}import Ipe.Dict as Dict\n\
+         import Ipe.Io as Io\n\
+         import Ipe.List\n\
+         import Ipe.String as String\n\
          table : Dict String (Int -> Int)\n\
          table =\n    Dict.fromList [ ( \"inc\", \\n -> n + 1 ) ]\n\
-         main =\n\
-         \x20   let result = Dict.foldl (\\_ f acc -> f acc) 0 table\n\
-         \x20   in\n\
-         \x20   result\n"
+         main : Task Error ()\n\
+         main =\n    Io.println (String.fromInt (Dict.foldl (\\_ f acc -> f acc) 0 table))\n"
     );
-    assert_rejected("lower_dict_foldl_fn_value", &src, "IPE-L0134");
+    assert_compiles("lower_dict_foldl_fn_value", &src);
 }
 
-/// `Dict.filter` over a function-valued dict: `dict_filter`'s `V: Clone` bound
-/// plus the un-aligned predicate carrier make it unsound — fail closed.
+/// `Dict.filter` over a function-valued dict: the predicate's value parameter
+/// binds the stored function on `Arc` — accepted.
 #[test]
-fn lower_dict_filter_over_function_value_gated() {
+fn lower_dict_filter_over_function_value_compiles() {
     let src = format!(
         "{HEAD}import Ipe.Dict as Dict\n\
+         import Ipe.Io as Io\n\
+         import Ipe.List\n\
+         import Ipe.String as String\n\
          table : Dict String (Int -> Int)\n\
          table =\n    Dict.fromList [ ( \"inc\", \\n -> n + 1 ) ]\n\
-         main =\n\
-         \x20   let filtered = Dict.filter (\\_ _ -> True) table\n\
-         \x20   in\n\
-         \x20   filtered\n"
+         main : Task Error ()\n\
+         main =\n    Io.println (String.fromInt (Dict.size (Dict.filter (\\_ f -> f 0 > 0) table)))\n"
     );
-    assert_rejected("lower_dict_filter_fn_value", &src, "IPE-L0134");
+    assert_compiles("lower_dict_filter_fn_value", &src);
 }
 
-/// `Dict.partition` over a function-valued dict: same open-frontier class —
-/// fail closed with IPE-L0134.
+/// `Dict.partition` over a function-valued dict: same re-carriered value
+/// parameter — accepted.
 #[test]
-fn lower_dict_partition_over_function_value_gated() {
+fn lower_dict_partition_over_function_value_compiles() {
     let src = format!(
         "{HEAD}import Ipe.Dict as Dict\n\
+         import Ipe.Io as Io\n\
+         import Ipe.List\n\
+         import Ipe.String as String\n\
          table : Dict String (Int -> Int)\n\
          table =\n    Dict.fromList [ ( \"inc\", \\n -> n + 1 ) ]\n\
-         main =\n\
-         \x20   let (trueTable, falseTable) = Dict.partition (\\_ _ -> True) table\n\
-         \x20   in\n\
-         \x20   trueTable\n"
+         kept : Dict String (Int -> Int)\n\
+         kept =\n    case Dict.partition (\\_ f -> f 0 > 0) table of\n        ( yes, _ ) ->\n            yes\n\
+         main : Task Error ()\n\
+         main =\n    Io.println (String.fromInt (Dict.size kept))\n"
     );
-    assert_rejected("lower_dict_partition_fn_value", &src, "IPE-L0134");
+    assert_compiles("lower_dict_partition_fn_value", &src);
 }
 
-/// `List.sortBy` over a `List (Int -> Int)`: the key extractor receives the
-/// stored function on the un-aligned carrier — fail closed with IPE-L0134.
+/// `List.sortBy` over a `List (Int -> Int)`: the key extractor's parameter
+/// binds the stored function on `Arc` — accepted.
 #[test]
-fn lower_list_sort_by_over_function_element_gated() {
+fn lower_list_sort_by_over_function_element_compiles() {
     let src = format!(
-        "{HEAD}import Ipe.List\n\
+        "{HEAD}import Ipe.Io as Io\n\
+         import Ipe.List\n\
+         import Ipe.String as String\n\
          steps : List (Int -> Int)\n\
          steps =\n    [ \\n -> n + 1, \\n -> n * 2 ]\n\
-         main =\n\
-         \x20   let sorted = List.sortBy (\\f -> f 0) steps\n\
-         \x20   in\n\
-         \x20   sorted\n"
+         main : Task Error ()\n\
+         main =\n    Io.println (String.fromInt (List.foldl (\\f acc -> f acc) 0 (List.sortBy (\\f -> f 0) steps)))\n"
     );
-    assert_rejected("lower_list_sort_by_fn_elem", &src, "IPE-L0134");
+    assert_compiles("lower_list_sort_by_fn_elem", &src);
+}
+
+/// `List.map5` with a named mapper over five `List (Int -> Int -> Int -> Int)`:
+/// the mapper wrap would draw 21 eta symbols (holder, five parameters, five
+/// three-parameter demote adapters), past the per-site ceiling, so it is
+/// refused with IPE-L0155 before any symbol is drawn.
+#[test]
+fn lower_list_map5_named_mapper_over_function_elements_refused() {
+    let src = format!(
+        "{HEAD}import Ipe.Io as Io\n\
+         import Ipe.List\n\
+         import Ipe.String as String\n\
+         steps : List (Int -> Int -> Int -> Int)\n\
+         steps =\n    [ \\a b c -> a + b + c ]\n\
+         pick : (Int -> Int -> Int -> Int) -> (Int -> Int -> Int -> Int) -> (Int -> Int -> Int -> Int) -> (Int -> Int -> Int -> Int) -> (Int -> Int -> Int -> Int) -> Int\n\
+         pick _ _ _ _ _ =\n    0\n\
+         results : List Int\n\
+         results =\n    List.map5 pick steps steps steps steps steps\n\
+         count : Int\n\
+         count =\n    List.length results\n\
+         label : String\n\
+         label =\n    String.fromInt count\n\
+         main : Task Error ()\n\
+         main =\n    Io.println label\n"
+    );
+    assert_rejected("lower_list_map5_named_fn_elem", &src, "IPE-L0155");
+}
+
+/// A point-free `List.map2 pick fs` over stored functions of `arity`
+/// arguments: the supplied named mapper's wrap (1 + 2 + `arity` names) and the
+/// residual `ys` parameter (1 name) are charged to the one call site.
+fn partial_map2_program(arity: usize) -> String {
+    let arrow = vec!["Int"; arity + 1].join(" -> ");
+    let params: Vec<String> = (0..arity).map(|i| format!("a{i}")).collect();
+    format!(
+        "{HEAD}import Ipe.Io as Io\n\
+         import Ipe.List\n\
+         import Ipe.String as String\n\
+         wide : {arrow}\n\
+         wide {} =\n    a0\n\
+         fs : List ({arrow})\n\
+         fs =\n    [ wide ]\n\
+         pick : ({arrow}) -> Int -> Int\n\
+         pick _ n =\n    n\n\
+         partial : List Int -> List Int\n\
+         partial =\n    List.map2 pick fs\n\
+         main : Task Error ()\n\
+         main =\n    Io.println (String.fromInt (List.length (partial [ 1 ])))\n",
+        params.join(" ")
+    )
+}
+
+/// At the per-site eta ceiling: 1 + 2 + 12 wrap names plus 1 residual = 16.
+#[test]
+fn lower_partial_map2_wrap_and_residual_at_eta_site_limit_compiles() {
+    let src = partial_map2_program(12);
+    assert_compiles("lower_partial_map2_at_eta_site_limit", &src);
+}
+
+/// One past the ceiling: the wrap alone (1 + 2 + 13 = 16) fits, but the
+/// residual parameter drawn at the same site makes 17, refused.
+#[test]
+fn lower_partial_map2_wrap_and_residual_past_eta_site_limit_refused() {
+    let src = partial_map2_program(13);
+    assert_rejected("lower_partial_map2_past_eta_site_limit", &src, "IPE-L0155");
+}
+
+/// `Dict.update` over a function-valued dict: its updater reads the stored
+/// value wrapped in `Maybe`, a parameter the lowerer does not re-carrier —
+/// the frontier stays open, so it must fail closed with IPE-L0134.
+#[test]
+fn lower_dict_update_over_function_value_gated() {
+    let src = format!(
+        "{HEAD}import Ipe.Dict as Dict\n\
+         import Ipe.Io as Io\n\
+         import Ipe.List\n\
+         import Ipe.String as String\n\
+         table : Dict String (Int -> Int)\n\
+         table =\n    Dict.fromList [ ( \"inc\", \\n -> n + 1 ) ]\n\
+         main : Task Error ()\n\
+         main =\n    Io.println (String.fromInt (Dict.size (Dict.update \"inc\" (\\m -> m) table)))\n"
+    );
+    assert_rejected("lower_dict_update_fn_value", &src, "IPE-L0134");
+}
+
+/// A PARTIAL `Dict.update` over a function-valued dict, bound point-free:
+/// the collection arrives only through the residual closure, so the gate reads
+/// the callee's solved arrow, and the open frontier still fails closed with
+/// IPE-L0134. Every top-level def is lowered, referenced from `main` or not.
+#[test]
+fn lower_dict_update_partial_over_function_value_gated() {
+    let src = format!(
+        "{HEAD}import Ipe.Dict as Dict\n\
+         import Ipe.Io as Io\n\
+         import Ipe.List\n\
+         import Ipe.String as String\n\
+         table : Dict String (Int -> Int)\n\
+         table =\n    Dict.fromList [ ( \"inc\", \\n -> n + 1 ) ]\n\
+         upd : Dict String (Int -> Int) -> Dict String (Int -> Int)\n\
+         upd =\n    Dict.update \"inc\" (\\m -> m)\n\
+         main : Task Error ()\n\
+         main =\n    Io.println (String.fromInt (Dict.size table))\n"
+    );
+    assert_rejected("lower_dict_update_partial_fn_value", &src, "IPE-L0134");
+}
+
+/// A `Set` element is `Ord`-bound, so it never holds a function and no `Set`
+/// mapper parameter binds a stored function: `Set.foldl` threading a
+/// `List (Int -> Int)` accumulator compiles.
+#[test]
+fn lower_set_foldl_with_function_accumulator_compiles() {
+    let src = format!(
+        "{HEAD}import Ipe.Io as Io\n\
+         import Ipe.List\n\
+         import Ipe.Set as Set\n\
+         import Ipe.String as String\n\
+         steps : List (Int -> Int)\n\
+         steps =\n    [ \\n -> n + 1, \\n -> n * 2 ]\n\
+         main : Task Error ()\n\
+         main =\n    Io.println (String.fromInt (List.length (Set.foldl (\\_ acc -> acc) steps (Set.fromList [ 1, 2 ]))))\n"
+    );
+    assert_compiles("lower_set_foldl_fn_acc", &src);
 }
 
 /// A generic union `Wrap a` at a non-`Clone` concrete payload (`Task Error Int`)
@@ -2519,7 +2772,6 @@ fn release_accepts_dead_debug_explain() {
          main =\n    Io.println \"ok\"\n"
     );
     match compile_production("release_accepts_dead_debug_explain", &src) {
-        Outcome::Skip => {}
         Outcome::Accepted(how) if how.starts_with("compiled successfully") => {}
         Outcome::Accepted(how) => assert!(
             false_marker(),
@@ -3136,21 +3388,20 @@ update _msg model = ( model, Cmd.none )
 view : Model -> Screen Msg
 view _model = Cells.text "hello"
 subscriptions : Model -> Sub Msg
-subscriptions _model = Sub.none
+subscriptions _model = Sub.onKey onKey
 onKey : KeyEvent -> Msg
 onKey _event = NoOp
 main =
     Tui.tea
         { init = init, update = update, view = view
-        , subscriptions = subscriptions, onKey = onKey
+        , subscriptions = subscriptions
         }
 appOf step render toMsg =
     Tui.tea
         { init = \_ -> ( initialModel, Cmd.none )
         , update = step
         , view = render
-        , subscriptions = \_ -> Sub.none
-        , onKey = toMsg
+        , subscriptions = \_ -> Sub.onKey toMsg
         }
 "#;
     assert_rejected("generic_msg_tui_tea", src, "IPE-N0051");
@@ -3176,21 +3427,20 @@ update _msg model = ( model, Cmd.none )
 view : Model -> Lines Msg
 view _model = Ui.text "ok"
 subscriptions : Model -> Sub Msg
-subscriptions _model = Sub.none
+subscriptions _model = Sub.onLine onLine
 onLine : String -> Msg
 onLine s = Line s
 main =
     Cli.tea
         { init = init, update = update, view = view
-        , subscriptions = subscriptions, onLine = onLine
+        , subscriptions = subscriptions
         }
 appOf step render toMsg =
     Cli.tea
         { init = \_ -> ( initialModel, Cmd.none )
         , update = step
         , view = render
-        , subscriptions = \_ -> Sub.none
-        , onLine = toMsg
+        , subscriptions = \_ -> Sub.onLine toMsg
         }
 "#;
     assert_rejected("generic_msg_cli_tea", src, "IPE-N0051");

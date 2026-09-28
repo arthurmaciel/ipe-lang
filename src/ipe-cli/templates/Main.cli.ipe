@@ -2,7 +2,6 @@ module Main exposing (main)
 
 import Ipe.String as String
 import Ipe.System as System
-import Ipe.Task as Task
 import Ipe.Tea.Cli exposing (tea)
 import Ipe.Tea.Cli.Cmd as Cmd
 import Ipe.Tea.Cli.Sub as Sub
@@ -53,7 +52,7 @@ view model =
 
 subscriptions : Model -> Sub Msg
 subscriptions _model =
-    Sub.none
+    Sub.onLine onLine
 
 
 onLine : String -> Msg
@@ -75,5 +74,4 @@ main =
         , update = update
         , view = view
         , subscriptions = subscriptions
-        , onLine = onLine
         }

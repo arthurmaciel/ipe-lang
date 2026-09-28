@@ -1,5 +1,7 @@
 use super::{CliError, diag_span, io_err};
-use crate::output_dir::{OwnedDir, OwnedPath};
+#[cfg(not(unix))]
+use crate::output_dir::OutputRefusal;
+use crate::output_dir::{EmitTarget, OwnedDir, OwnedPath, ProjectPaths};
 use crate::{
     BTreeMap, BTreeSet, Diagnostic, Interner, Path, PathBuf, build_plan, cache, contained_path,
     ffi, fs, project, render, runtime_embed, text,
@@ -108,6 +110,28 @@ pub struct BuildOptions {
     /// when [`Self::webview_host`]. Filled in `build_project_with_options` once
     /// the manifest is parsed; `None` selects the built-in fallback window.
     pub webview_window: Option<ipe_backend_rust::WebViewWindow>,
+}
+
+/// Where a build writes its emitted crate.
+///
+/// A bare path is proven disjoint from the build's own project before the
+/// build writes anything; a proven target carries its proof already.
+#[derive(Debug, Clone, Copy)]
+pub enum OutTarget<'a> {
+    /// A target proven by the caller (a CLI output area, a claimed directory).
+    Proven(&'a EmitTarget),
+    /// A bare path, proven against the project being built.
+    Path(&'a Path),
+}
+
+impl OutTarget<'_> {
+    /// The proven target, proving a bare path against `project`.
+    fn prove(self, project: &ProjectPaths) -> Result<EmitTarget, CliError> {
+        match self {
+            Self::Proven(target) => Ok(target.clone()),
+            Self::Path(out_dir) => EmitTarget::at(out_dir, project),
+        }
+    }
 }
 
 /// Select the emit model from the environment.
@@ -284,6 +308,21 @@ pub fn build_with_options(
     runtime_dir: &Path,
     options: BuildOptions,
 ) -> Result<(), CliError> {
+    build_with_options_into(entry, OutTarget::Path(out_dir), runtime_dir, options).map(drop)
+}
+
+/// [`build_with_options`] into `out`, returning the claimed crate directory.
+///
+/// # Errors
+/// As [`build_with_options`], plus [`CliError::OutputRefused`] when `out`
+/// overlaps the entry's directory.
+pub fn build_with_options_into(
+    entry: &Path,
+    out: OutTarget<'_>,
+    runtime_dir: &Path,
+    options: BuildOptions,
+) -> Result<OwnedDir, CliError> {
+    let target = out.prove(&ProjectPaths::of_file(entry))?;
     let source =
         crate::io_bounded::read_to_string_capped(entry, crate::io_bounded::SOURCE_READ_CAP)?;
 
@@ -312,10 +351,10 @@ pub fn build_with_options(
 
     let mut sources: BTreeMap<Vec<String>, (PathBuf, String)> = BTreeMap::new();
     sources.insert(entry_path.clone(), (entry.to_path_buf(), source.clone()));
-    let discovered = vec![project::DiscoveredModule {
-        path: entry.to_path_buf(),
-        module_path: entry_path.clone(),
-    }];
+    let discovered = vec![project::DiscoveredModule::user(
+        entry.to_path_buf(),
+        entry_path.clone(),
+    )];
 
     // No manifest on the single-file path — default to sqlite, matching the
     // documented `package.ipe` default for a project that has no database
@@ -324,7 +363,7 @@ pub fn build_with_options(
         sources,
         discovered,
         &entry_path,
-        out_dir,
+        &target,
         runtime_dir,
         entry,
         ipe_backend_rust::DbDriver::Sqlite,
@@ -372,6 +411,23 @@ pub fn build_with_sibling_discovery_with_options(
     runtime_dir: &Path,
     options: BuildOptions,
 ) -> Result<(), CliError> {
+    build_with_sibling_discovery_into(entry, OutTarget::Path(out_dir), runtime_dir, options)
+        .map(drop)
+}
+
+/// [`build_with_sibling_discovery_with_options`] into `out`, returning the
+/// claimed crate directory.
+///
+/// # Errors
+/// As [`build_with_sibling_discovery`], plus [`CliError::OutputRefused`] when
+/// `out` overlaps the entry's directory.
+pub fn build_with_sibling_discovery_into(
+    entry: &Path,
+    out: OutTarget<'_>,
+    runtime_dir: &Path,
+    options: BuildOptions,
+) -> Result<OwnedDir, CliError> {
+    let target = out.prove(&ProjectPaths::of_file(entry))?;
     let collected = collect_entry_and_siblings(entry)?;
 
     // No manifest on this path either (sibling discovery is the "no manifest
@@ -380,7 +436,7 @@ pub fn build_with_sibling_discovery_with_options(
         collected.sources,
         collected.discovered,
         &collected.entry_module_path,
-        out_dir,
+        &target,
         runtime_dir,
         entry,
         ipe_backend_rust::DbDriver::Sqlite,
@@ -397,16 +453,21 @@ pub fn build_with_sibling_discovery_with_options(
 /// `src/Lib/Foo.ipe` resolves. See [`collect_test_sources`] for the source-set
 /// model.
 ///
+/// Returns the claimed crate directory.
+///
 /// # Errors
 /// [`CliError::Pipeline`] when the compiler rejects the program; [`CliError::Io`]
 /// on any filesystem failure; [`CliError::StaticRefusal`] when the emitted app
-/// shape cannot be static.
-pub fn build_test_with_project_sources(
+/// shape cannot be static; [`CliError::OutputRefused`] when `out` overlaps the
+/// test entry's directory or `project_src_root`.
+pub fn build_test_into(
     project_src_root: &Path,
     test_entry: &Path,
-    out_dir: &Path,
+    out: OutTarget<'_>,
     runtime_dir: &Path,
-) -> Result<(), CliError> {
+) -> Result<OwnedDir, CliError> {
+    let project = ProjectPaths::of_file(test_entry).with_sources(project_src_root);
+    let target = out.prove(&project)?;
     let collected = collect_test_sources(project_src_root, test_entry)?;
 
     // No manifest driver is threaded here (the test stage mirrors the sibling
@@ -416,7 +477,7 @@ pub fn build_test_with_project_sources(
         collected.sources,
         collected.discovered,
         &collected.entry_module_path,
-        out_dir,
+        &target,
         runtime_dir,
         test_entry,
         ipe_backend_rust::DbDriver::Sqlite,
@@ -513,10 +574,12 @@ pub fn collect_test_sources(
     // module of the same path (code under test wins), and the test entry is
     // always added last so it is never masked.
     let mut discovered = project::discover_modules(project_src_root)?;
-    let src_paths: std::collections::BTreeSet<Vec<String>> =
-        discovered.iter().map(|m| m.module_path.clone()).collect();
+    let src_paths: std::collections::BTreeSet<Vec<String>> = discovered
+        .iter()
+        .map(|m| m.module_path().to_vec())
+        .collect();
     for m in project::discover_modules(tests_root)? {
-        if !src_paths.contains(&m.module_path) {
+        if !src_paths.contains(m.module_path()) {
             discovered.push(m);
         }
     }
@@ -563,12 +626,12 @@ pub fn ensure_entry_present(
 ) {
     if !discovered
         .iter()
-        .any(|m| m.module_path == entry_module_path)
+        .any(|m| m.module_path() == entry_module_path)
     {
-        discovered.push(project::DiscoveredModule {
-            path: entry.to_path_buf(),
-            module_path: entry_module_path.to_vec(),
-        });
+        discovered.push(project::DiscoveredModule::user(
+            entry.to_path_buf(),
+            entry_module_path.to_vec(),
+        ));
     }
 }
 
@@ -586,17 +649,17 @@ pub fn read_discovered_sources(
 ) -> Result<BTreeMap<Vec<String>, (PathBuf, String)>, CliError> {
     let mut sources: BTreeMap<Vec<String>, (PathBuf, String)> = BTreeMap::new();
     for m in discovered {
-        if m.module_path == entry_module_path {
+        if m.module_path() == entry_module_path {
             sources.insert(
                 entry_module_path.to_vec(),
                 (entry.to_path_buf(), entry_source.to_owned()),
             );
         } else {
             let src = crate::io_bounded::read_to_string_capped(
-                &m.path,
+                m.path(),
                 crate::io_bounded::SOURCE_READ_CAP,
             )?;
-            sources.insert(m.module_path.clone(), (m.path.clone(), src));
+            sources.insert(m.module_path().to_vec(), (m.path().to_path_buf(), src));
         }
     }
     Ok(sources)
@@ -656,18 +719,18 @@ pub fn compile_modules(
     sources: BTreeMap<Vec<String>, (PathBuf, String)>,
     discovered: Vec<project::DiscoveredModule>,
     entry_path: &[String],
-    out_dir: &Path,
+    target: &EmitTarget,
     runtime_dir: &Path,
     blame_path: &Path,
     db_driver: ipe_backend_rust::DbDriver,
     options: BuildOptions,
-) -> Result<(), CliError> {
-    let cache_site = cache::env_cache_dir(out_dir);
+) -> Result<OwnedDir, CliError> {
+    let cache_site = cache::env_cache_dir(&target.path()?);
     compile_modules_observed(
         sources,
         discovered,
         entry_path,
-        out_dir,
+        target,
         runtime_dir,
         blame_path,
         db_driver,
@@ -710,13 +773,13 @@ pub fn compile_modules_observed(
     mut sources: BTreeMap<Vec<String>, (PathBuf, String)>,
     mut discovered: Vec<project::DiscoveredModule>,
     entry_path: &[String],
-    out_dir: &Path,
+    target: &EmitTarget,
     runtime_dir: &Path,
     blame_path: &Path,
     db_driver: ipe_backend_rust::DbDriver,
     cache_site: Option<&cache::CacheSite>,
     options: BuildOptions,
-) -> (Result<(), CliError>, CacheOutcome) {
+) -> (Result<OwnedDir, CliError>, CacheOutcome) {
     // Inject the transitive compiled-source stdlib closure. `injected` is the
     // driver's unforgeable record of which module paths are trusted stdlib
     // source — the ONLY inputs that earn `ModuleOrigin::EmbeddedStdlib` below.
@@ -787,12 +850,11 @@ pub fn compile_modules_observed(
         return (
             write_emitted_project(
                 &emitted,
-                out_dir,
+                target,
                 runtime_dir,
                 options.static_plan.as_ref(),
                 options.tree_shake_vendored,
-            )
-            .map(drop),
+            ),
             CacheOutcome::Hit,
         );
     }
@@ -853,7 +915,7 @@ pub fn compile_modules_observed(
             if let Ok(emitted) = emit_result {
                 let written = write_emitted_project(
                     &emitted,
-                    out_dir,
+                    target,
                     runtime_dir,
                     options.static_plan.as_ref(),
                     options.tree_shake_vendored,
@@ -866,7 +928,7 @@ pub fn compile_modules_observed(
                 {
                     cache::store(&root, epoch, &cache_key, &emitted);
                 }
-                return (written.map(drop), CacheOutcome::IrHit);
+                return (written, CacheOutcome::IrHit);
             }
             // A relocated Program that fails to emit is never a build
             // failure from this fast path — fall through to the full
@@ -915,7 +977,7 @@ pub fn compile_modules_observed(
 
     let written = write_emitted_project(
         &emitted,
-        out_dir,
+        target,
         runtime_dir,
         options.static_plan.as_ref(),
         options.tree_shake_vendored,
@@ -923,7 +985,7 @@ pub fn compile_modules_observed(
 
     // A writable cache root comes only from the claim the write above
     // returned, so the default in-output cache is never written before
-    // `out_dir` is proven ipe's.
+    // the target is proven ipe's.
     if let Ok(claimed) = &written
         && let (Some(site), Some(epoch)) = (cache_site, epoch.as_deref())
         && let Some(root) = site.root(claimed)
@@ -951,7 +1013,7 @@ pub fn compile_modules_observed(
         }
     }
 
-    (written.map(drop), CacheOutcome::Miss)
+    (written, CacheOutcome::Miss)
 }
 
 /// Create the salsa inputs for one build: a [`ipe_db::SourceFile`] per module
@@ -1157,10 +1219,14 @@ pub fn attribute_canon_errors(
         })?;
     for mod_path in topo.iter() {
         let Some((path, src)) = sources.get(mod_path) else {
-            return Err(CliError::Usage(text::internal_module_not_in_source_map()));
+            return Err(CliError::Usage(
+                text::msg::internal_module_not_in_source_map(),
+            ));
         };
         let Some(file_handle) = source_root.files(db).get(mod_path).copied() else {
-            return Err(CliError::Usage(text::internal_module_not_in_source_map()));
+            return Err(CliError::Usage(
+                text::msg::internal_module_not_in_source_map(),
+            ));
         };
         ipe_db::canonicalize(db, source_root, file_handle)
             .clone()
@@ -1256,7 +1322,9 @@ pub fn compile_prepared(
     let shared_interner = ipe_db::Db::interner(db).clone();
 
     let Some(entry_file) = source_root.files(db).get(entry_path).copied() else {
-        return Err(CliError::Usage(text::internal_entry_not_in_source_map()));
+        return Err(CliError::Usage(
+            text::msg::internal_entry_not_in_source_map(),
+        ));
     };
 
     // Canonicalise each module in dep-first order, attributing a canon error
@@ -1808,14 +1876,14 @@ pub fn rust_raw_str_literal(s: &str) -> String {
     format!("r{fence}\"{s}\"{fence}")
 }
 
-/// Write an emitted project to `out_dir`, vendoring the runtime module tree
+/// Write an emitted project to `target`, vendoring the runtime module tree
 /// from `runtime_dir`.
 ///
 /// The emit→cargo bridge (design doc H7/H8):
 /// assembles the COMPLETE intended project (`build_emit_manifest`) — the
 /// vendored runtime tree, `Cargo.toml`, and every backend-emitted file — then
 /// [`reconcile_emitted_project`] writes only what changed (content-gated,
-/// atomic tmp-then-rename) and deletes anything under `out_dir/src` the
+/// atomic tmp-then-rename) and deletes anything under the target's `src` the
 /// manifest no longer names (manifest-driven prune). On an unchanged rebuild
 /// this writes NOTHING; `cargo` therefore sees no mtime churn and does not
 /// invalidate its own build cache. This is a pure driver-boundary filesystem
@@ -1829,16 +1897,20 @@ pub fn rust_raw_str_literal(s: &str) -> String {
 /// non-static build removes a stale generated config so `+crt-static` can
 /// never leak from an earlier static build into later ones.
 ///
-/// Returns the claimed `out_dir`, the only source of a writable in-output
-/// build-cache root.
+/// Returns the claimed target, the only source of a writable in-output
+/// build-cache root. An area target is claimed with its root's disjointness
+/// from the project proven again; a claimed target is proven still the
+/// directory it claimed.
 ///
 /// # Errors
 /// [`CliError::Io`] on any filesystem failure; [`CliError::StaticRefusal`]
 /// for a webview shape under a static plan; [`CliError::Pipeline`] on a
-/// backend-invariant breach (manifest anchor drift).
+/// backend-invariant breach (manifest anchor drift);
+/// [`CliError::OutputRefused`] when the target cannot be claimed or was
+/// replaced since it was claimed.
 pub fn write_emitted_project(
     emitted: &ipe_backend::EmittedProject,
-    out_dir: &Path,
+    target: &EmitTarget,
     runtime_dir: &Path,
     static_plan: Option<&ipe_backend_rust::static_build::StaticPlan>,
     tree_shake_vendored: bool,
@@ -1862,8 +1934,8 @@ pub fn write_emitted_project(
         );
     }
     // The reconcile below prunes and overwrites, so it runs only in a directory
-    // proven ipe-owned — a user tree passed as `out_dir` is refused untouched.
-    let crate_dir = crate::output_dir::OwnedDir::claim(out_dir)?;
+    // proven ipe-owned and disjoint from the project.
+    let crate_dir = target.claim()?;
     reconcile_emitted_project(&manifest, &crate_dir)?;
     if static_plan.is_none() {
         remove_stale_static_config(&crate_dir)?;
@@ -2104,11 +2176,7 @@ pub fn reconcile_emitted_project(
 /// # Errors
 /// As [`OwnedPath::write`].
 pub fn write_if_changed(target: &OwnedPath, contents: &str) -> Result<(), CliError> {
-    let path = target.path();
-    if fs::symlink_metadata(&path)
-        .is_ok_and(|meta| meta.is_file() && meta.len() == contents.len() as u64)
-        && fs::read_to_string(&path).is_ok_and(|existing| existing == contents)
-    {
+    if target.holds(contents.as_bytes())? {
         return Ok(());
     }
     target.write(contents.as_bytes())
@@ -2118,26 +2186,63 @@ pub fn write_if_changed(target: &OwnedPath, contents: &str) -> Result<(), CliErr
 ///
 /// The walk starts at an [`OwnedPath`] (a symlinked `src/` is refused) and
 /// classifies entries without following links, so a symlink inside the tree is
-/// removed as the link it is, never traversed. Directories are kept (empty ones
-/// are harmless to `cargo`), which keeps the pass's blast radius minimal.
+/// removed as the link it is, never traversed. On Unix each level is listed and
+/// unlinked through its held handle ([`OwnedPath::prune_files`]), so a level
+/// swapped for a link mid-walk is refused, never followed. Directories are kept (empty ones are harmless to `cargo`), which
+/// keeps the pass's blast radius minimal.
 ///
 /// # Errors
-/// [`CliError::OutputRefused`] when `src/` is a symlink; [`CliError::Io`] on a
-/// filesystem failure.
+/// [`CliError::OutputRefused`] when `src/` is a symlink, or with
+/// [`OutputRefusal::TooDeep`] when the tree nests deeper than
+/// [`MAX_PRUNE_DEPTH`]; [`CliError::Io`] on a filesystem failure.
 pub fn prune_orphaned_files(
     crate_dir: &OwnedDir,
     manifest: &BTreeMap<PathBuf, String>,
 ) -> Result<(), CliError> {
     let src = crate_dir.path_to("src")?;
-    prune_dir(&src.path(), manifest, crate_dir.path())
+    prune_src(&src, manifest, crate_dir)
 }
 
-/// One level of [`prune_orphaned_files`]; `dir` was reached without following a link.
+/// Prune `src` through held directory handles.
+#[cfg(unix)]
+fn prune_src(
+    src: &OwnedPath,
+    manifest: &BTreeMap<PathBuf, String>,
+    _crate_dir: &OwnedDir,
+) -> Result<(), CliError> {
+    src.prune_files(|rel| manifest.contains_key(rel), MAX_PRUNE_DEPTH)
+}
+
+/// Prune `src` level by level.
+#[cfg(not(unix))]
+fn prune_src(
+    src: &OwnedPath,
+    manifest: &BTreeMap<PathBuf, String>,
+    crate_dir: &OwnedDir,
+) -> Result<(), CliError> {
+    prune_dir(&src.path(), manifest, crate_dir, 0)
+}
+
+/// Deepest directory nesting under the crate's `src/` that
+/// [`prune_orphaned_files`] descends.
+pub const MAX_PRUNE_DEPTH: usize = 128;
+
+/// One level of [`prune_orphaned_files`], at nesting `depth` below `src/`;
+/// `dir` was reached without following a link.
+#[cfg(not(unix))]
 fn prune_dir(
     dir: &Path,
     manifest: &BTreeMap<PathBuf, String>,
-    out_dir: &Path,
+    crate_dir: &OwnedDir,
+    depth: usize,
 ) -> Result<(), CliError> {
+    if depth > MAX_PRUNE_DEPTH {
+        return Err(OutputRefusal::TooDeep {
+            path: dir.to_path_buf(),
+            limit: MAX_PRUNE_DEPTH,
+        }
+        .into());
+    }
     // A directory that is absent, or vanishes before this read (a concurrent
     // external cleanup), trivially has nothing left to prune.
     let entries = match fs::read_dir(dir) {
@@ -2162,25 +2267,17 @@ fn prune_dir(
             Err(e) => return Err(io_err(&path, e)),
         };
         if file_type.is_dir() {
-            prune_dir(&path, manifest, out_dir)?;
+            prune_dir(&path, manifest, crate_dir, depth.saturating_add(1))?;
         } else {
-            // `path` was built from `dir`, itself built from `out_dir` by
-            // construction (the initial call passes `out_dir.join("src")`,
-            // and every recursive call passes a child of that) — the
-            // `strip_prefix` can only fail if `out_dir` itself is relative
-            // and the working directory changed mid-walk; skip rather than
-            // fail the whole build over a diagnostic-only path label.
-            let Ok(rel) = path.strip_prefix(out_dir) else {
+            // `path` was built from `dir`, itself a child of the crate
+            // directory by construction, so `strip_prefix` fails only when that
+            // path is relative and the working directory changed mid-walk.
+            let Ok(rel) = path.strip_prefix(crate_dir.path()) else {
                 continue;
             };
-            if !manifest.contains_key(rel)
-                && let Err(e) = fs::remove_file(&path)
-                && e.kind() != std::io::ErrorKind::NotFound
-            {
-                // A concurrent deleter reaching `path` first (see above) is
-                // NOT a failure to prune it — the goal ("this orphan is gone")
-                // is already satisfied.
-                return Err(io_err(&path, e));
+            // An orphan a concurrent deleter already removed counts as pruned.
+            if !manifest.contains_key(rel) {
+                crate_dir.unlink(rel)?;
             }
         }
     }
@@ -2215,7 +2312,7 @@ pub fn build_project(
         manifest_path,
         out_dir,
         runtime_dir,
-        BuildOptions::from_env(),
+        &BuildOptions::from_env(),
     )
 }
 
@@ -2225,18 +2322,33 @@ pub fn build_project(
 /// # Errors
 /// As [`build_project`], plus [`CliError::StaticRefusal`] when the emitted
 /// app shape cannot be static.
-// `options` is reconstructed (struct-update syntax) with the parsed
-// manifest's `[wasm] publicEnv` allowlist before threading onward — a
-// genuine consuming use clippy's by-value heuristic doesn't credit; taking
-// `&BuildOptions` here would ripple a lifetime through every call site for
-// no benefit (every caller already owns a fresh `BuildOptions`).
-#[allow(clippy::needless_pass_by_value)]
 pub fn build_project_with_options(
     manifest_path: &Path,
     out_dir: &Path,
     runtime_dir: &Path,
-    options: BuildOptions,
+    options: &BuildOptions,
 ) -> Result<(), CliError> {
+    build_project_into(
+        manifest_path,
+        OutTarget::Path(out_dir),
+        runtime_dir,
+        options,
+    )
+    .map(drop)
+}
+
+/// [`build_project_with_options`] into `out`, returning the claimed crate
+/// directory.
+///
+/// # Errors
+/// As [`build_project`], plus [`CliError::OutputRefused`] when `out` overlaps
+/// the project or its sources.
+pub fn build_project_into(
+    manifest_path: &Path,
+    out: OutTarget<'_>,
+    runtime_dir: &Path,
+    options: &BuildOptions,
+) -> Result<OwnedDir, CliError> {
     let manifest = project::parse_manifest(manifest_path)?;
     let discovered = project::discover_modules(&manifest.src_root)?;
 
@@ -2244,8 +2356,8 @@ pub fn build_project_with_options(
     let mut sources: BTreeMap<Vec<String>, (PathBuf, String)> = BTreeMap::new();
     for m in &discovered {
         let src =
-            crate::io_bounded::read_to_string_capped(&m.path, crate::io_bounded::SOURCE_READ_CAP)?;
-        sources.insert(m.module_path.clone(), (m.path.clone(), src));
+            crate::io_bounded::read_to_string_capped(m.path(), crate::io_bounded::SOURCE_READ_CAP)?;
+        sources.insert(m.module_path().to_vec(), (m.path().to_path_buf(), src));
     }
 
     // A library package (declares `exposedModules`, has no runnable entry —
@@ -2258,7 +2370,7 @@ pub fn build_project_with_options(
         && !manifest.exposed_modules.is_empty()
         && !sources.contains_key(&entry_path)
     {
-        return Err(CliError::Usage(text::library_package_no_entry()));
+        return Err(CliError::Usage(text::msg::library_package_no_entry()));
     }
     // The emit epilogue's fixed `fn main` calls `ipe_main`, which the backend
     // names only for a `main` in module `Main`. A `programs`-declared entry in a
@@ -2267,7 +2379,7 @@ pub fn build_project_with_options(
     // so emitting a non-`Main` program entry would miscompile. Refuse cleanly and
     // point at the working analysis path rather than emit a broken crate.
     if entry_path != ["Main".to_owned()] {
-        return Err(CliError::UsageOwned(text::build_entry_not_main(
+        return Err(CliError::Usage(text::msg::build_entry_not_main(
             &entry_path.join("."),
         )));
     }
@@ -2303,16 +2415,17 @@ pub fn build_project_with_options(
         wasm_hydrate_mode: manifest.wasm.mode.as_deref() == Some("hydrate"),
         cargo_name,
         webview_window,
-        ..options
+        ..*options
     };
 
     // The manifest is the blame location for an import cycle (no single file
     // owns it); post-link errors are blamed on the entry file inside the core.
+    let target = out.prove(&ProjectPaths::from_manifest(&manifest))?;
     compile_modules(
         sources,
         discovered,
         &entry_path,
-        out_dir,
+        &target,
         runtime_dir,
         manifest_path,
         manifest.driver,
@@ -2396,6 +2509,53 @@ pub fn resolve_vendored_runtime_dir(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::output_dir::OutputRefusal;
+
+    /// A `src/` tree nested past [`MAX_PRUNE_DEPTH`] is refused with a typed
+    /// refusal, while one exactly at the ceiling is pruned.
+    #[test]
+    fn prune_refuses_a_tree_deeper_than_the_ceiling() {
+        let dir = std::env::temp_dir().join(format!("ipe_prune_depth_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        let owned = OwnedDir::claim(&dir).expect("claim temp dir");
+        let manifest = BTreeMap::new();
+
+        let mut at_ceiling = dir.join("src");
+        for _ in 0..MAX_PRUNE_DEPTH {
+            at_ceiling.push("d");
+        }
+        fs::create_dir_all(&at_ceiling).expect("make tree at the ceiling");
+        fs::write(at_ceiling.join("orphan.rs"), "").expect("write orphan");
+        let pruned = prune_orphaned_files(&owned, &manifest);
+        assert!(
+            pruned.is_ok(),
+            "a tree at the ceiling is pruned, got {pruned:?}"
+        );
+        assert!(
+            !at_ceiling.join("orphan.rs").exists(),
+            "the orphan at the ceiling is removed"
+        );
+
+        let past = at_ceiling.join("d");
+        fs::create_dir_all(&past).expect("make tree past the ceiling");
+        fs::write(past.join("orphan.rs"), "").expect("write orphan");
+        let refused = prune_orphaned_files(&owned, &manifest);
+        assert!(
+            matches!(
+                refused,
+                Err(CliError::OutputRefused(OutputRefusal::TooDeep {
+                    limit: MAX_PRUNE_DEPTH,
+                    ..
+                }))
+            ),
+            "a tree past the ceiling is refused, got {refused:?}"
+        );
+        assert!(
+            past.join("orphan.rs").is_file(),
+            "nothing past the ceiling is touched"
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
 
     /// A same-length, same-content file is left untouched (no rewrite, mtime
     /// preserved) while a differing-length file is rewritten — the two branches

@@ -321,6 +321,8 @@ mod tests {
             define_types: std::collections::BTreeSet::new(),
             transparent_types: std::collections::BTreeMap::new(),
             cargo_deps: vec![],
+            package_name: None,
+            dep_idents: std::collections::BTreeMap::new(),
             bindings,
             wrapper_idents: std::collections::BTreeSet::new(),
             dep_versions: dep_versions

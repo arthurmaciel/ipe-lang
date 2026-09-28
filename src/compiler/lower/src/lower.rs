@@ -23,11 +23,13 @@ use ipe_diagnostics::{
     NameError, Span, StoreEqAccessorDefect, StoreSelectProjectionDefect,
 };
 use ipe_intern::{Interner, Symbol};
+use ipe_ir::free_vars::{pat_bound_symbols, pat_moves_nested_part, pat_moves_scrutinee};
+use ipe_ir::let_inline::{inlined_let_body, let_value_is_inlined};
 use ipe_ir::{
-    Arm, BinOp, BoundSet, CallPin, Callee, Capability, EnumDef, Expr, Func, FuncId, IrType,
-    KernelFn, Match, ModPath, Module, OnFormKind, Pat, Program, RowParam, RuntimeModule, TypeDef,
-    UiCtor, UiPlain, Variant, fun_value_arc_promotable, ir_type_is_serde, is_dispatch_free,
-    is_irrefutable,
+    AppSurface, Arm, BinOp, BoundSet, CallPin, Callee, Capability, EnumDef, Expr, Func, FuncId,
+    IrType, KernelFn, Match, ModPath, Module, OnFormKind, Pat, Program, RowParam, RuntimeModule,
+    TypeDef, UiCtor, UiPlain, Variant, fun_value_arc_promotable, ir_type_has_effect_carrier,
+    ir_type_is_serde, is_dispatch_free, is_irrefutable,
 };
 use ipe_types::{RowTail, SolvedTypes, Ty, TyBounds};
 
@@ -40,9 +42,9 @@ mod ty_templates;
 
 use capture_rewrite::force_shared_capture_clones;
 use clone_class::{
-    CloneClass, CloneEnv, classify_capture_clone, clone_class, enum_is_opaque_ffi_handle,
-    param_is_multiuse_clonable, reject_nonclone_value_reuse, rewrite_captured_clones,
-    rewrite_multiuse_clones,
+    CloneClass, CloneEnv, HandlerCapture, classify_capture_clone, classify_handler_capture,
+    clone_class, enum_is_opaque_ffi_handle, param_is_multiuse_clonable,
+    reject_nonclone_value_reuse, rewrite_captured_clones, rewrite_multiuse_clones,
 };
 use generic_syms::{collect_ir_generic_syms, default_generics_to_unit};
 #[cfg(test)]
@@ -77,10 +79,45 @@ use ty_templates::{
 /// IR type.
 type IrParam = (Symbol, IrType);
 
+/// A lowered function arrow: its parameter types and its return type.
+type IrArrow = (Vec<IrType>, IrType);
+
 /// A tuple-parameter destructure-prologue entry: the synthetic binder name the
 /// parameter was given, paired with the irrefutable tuple [`Pat`] that opens it
 /// at the top of the function body (`let <Pat> = <synthetic>`).
 type ParamPrologue = (Symbol, Pat);
+
+/// An unannotated function's lowered parameters, return type, and body.
+type UnannotatedFnParts = (Vec<IrParam>, IrType, Expr);
+
+/// A used binder's type as the ownership disciplines see it.
+///
+/// Only `Resolved` is the type the binder is emitted at. `Phantom` holds the
+/// defaulted stand-in for a variable the solver left unconstrained: it is fit
+/// to classify clone/move behaviour, never to spell a type or carrier into
+/// emitted code, so [`Self::emittable`] withholds it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum BinderType {
+    Resolved(IrType),
+    Phantom(IrType),
+}
+
+impl BinderType {
+    /// The type the ownership classification reads.
+    const fn classified(&self) -> &IrType {
+        match self {
+            Self::Resolved(ty) | Self::Phantom(ty) => ty,
+        }
+    }
+
+    /// The type fit for emission; `None` for a phantom stand-in.
+    const fn emittable(&self) -> Option<&IrType> {
+        match self {
+            Self::Resolved(ty) => Some(ty),
+            Self::Phantom(_) => None,
+        }
+    }
+}
 
 /// A top-level binding's fully-qualified key: its `(module, name)`.
 type TopLevelKey = (Vec<Symbol>, Symbol);
@@ -172,6 +209,96 @@ fn arrow_params(fn_ty: &Ty) -> Vec<&Ty> {
         cur = rest.as_ref();
     }
     params
+}
+
+/// The parameter count of the mapper at kernel position `arg` of scheme
+/// `shape`: the length of that argument's own arrow spine (0 for a non-arrow).
+const fn scheme_mapper_arity(shape: &ipe_kernels::TyShape, arg: usize) -> usize {
+    let Some(mapper) = ipe_kernels::spine_arg(shape, arg) else {
+        return 0;
+    };
+    let mut count = 0;
+    while ipe_kernels::spine_arg(mapper, count).is_some() {
+        count = count.saturating_add(1);
+    }
+    count
+}
+
+/// A mapper's solved type split along its scheme spine: one type per mapper parameter, then the result.
+///
+/// Built only by [`MapperSpine::peel`], so a mapper whose solved type is
+/// shorter than its scheme spine has no representation past the choke point.
+#[derive(Debug, PartialEq, Eq)]
+pub struct MapperSpine<'t> {
+    params: Vec<&'t Ty>,
+    ret: &'t Ty,
+}
+
+impl<'t> MapperSpine<'t> {
+    /// Split `spine` parameter types off `mapper_ty`; `None` when it has fewer arrows.
+    #[must_use]
+    pub fn peel(mapper_ty: &'t Ty, spine: usize) -> Option<Self> {
+        let mut params = Vec::with_capacity(spine);
+        let mut tail = mapper_ty;
+        for _ in 0..spine {
+            let Ty::Fun(head, rest) = tail else {
+                return None;
+            };
+            params.push(&**head);
+            tail = &**rest;
+        }
+        Some(Self { params, ret: tail })
+    }
+
+    /// The mapper parameter types, in order.
+    #[must_use]
+    pub fn params(&self) -> &[&'t Ty] {
+        &self.params
+    }
+
+    /// The mapper result type after every spine parameter.
+    #[must_use]
+    pub const fn ret(&self) -> &'t Ty {
+        self.ret
+    }
+}
+
+/// Whether a reference to `kernel` at solved type `ty` hands some mapper a
+/// FUNCTION-typed parameter that binds a stored element — the instance whose
+/// mapper must pass the carrier choke point
+/// (`Lowerer::retype_collection_element_param`).
+fn kernel_ref_binds_fn_element(kernel: KernelFn, ty: &Ty) -> bool {
+    let Some(shape) = kernel.scheme_shape() else {
+        return false;
+    };
+    let arity = kernel.def().arity;
+    arrow_params(ty)
+        .iter()
+        .take(usize::from(arity))
+        .enumerate()
+        .any(|(arg, mapper_ty)| {
+            arrow_params(mapper_ty)
+                .iter()
+                .take(scheme_mapper_arity(shape, arg))
+                .enumerate()
+                .any(|(param, param_ty)| {
+                    mapper_param_binds_fn_element(shape, arity, arg, param, param_ty)
+                })
+        })
+}
+
+/// Whether parameter `param` (solved type `ty`) of the mapper at kernel
+/// position `arg` receives a stored FUNCTION element — the parameter the
+/// carrier choke point re-carries to `Arc`.
+const fn mapper_param_binds_fn_element(
+    shape: &ipe_kernels::TyShape,
+    arity: u8,
+    arg: usize,
+    param: usize,
+    ty: &Ty,
+) -> bool {
+    matches!(ty, Ty::Fun(..))
+        && ipe_kernels::mapper_param_binds_stored_element(shape, arity, arg, param)
 }
 
 /// Whether `t` still holds a type variable anywhere, an open record row tail included.
@@ -1210,6 +1337,69 @@ fn canon_collect_pat_binds(pat: &canon::Pattern, bound: &mut BTreeSet<Symbol>) {
             }
         }
     }
+}
+
+/// Carrier kind a binder gives each name it introduces, for the capture classifiers.
+///
+/// Names are keyed by symbol, so every binder decides its own names for its
+/// scope: the innermost binder of a name wins over any outer one.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum BinderCarrier {
+    /// The binder site runs the `Arc<dyn Fn>` promotion pass for a pure-`Fun` name.
+    Promotable,
+    /// The binder has no carrier promotion; it hides any outer promotable name.
+    Shadowing,
+}
+
+/// The names one binder introduces, each with its [`BinderCarrier`].
+type BinderScope = BTreeMap<Symbol, BinderCarrier>;
+
+/// Every name `pat` binds, as [`BinderCarrier::Shadowing`].
+fn shadowing_binder_scope(pat: &canon::Pattern) -> BinderScope {
+    let mut bound = BTreeSet::new();
+    canon_collect_pat_binds(pat, &mut bound);
+    bound
+        .into_iter()
+        .map(|sym| (sym, BinderCarrier::Shadowing))
+        .collect()
+}
+
+/// Scope of a def or lambda parameter list.
+///
+/// A name bound inside a destructuring parameter shadows; each lowered param
+/// symbol (a plain-var name or a synthetic destructure binder) is promotable
+/// unless a destructuring parameter binds the same name, so a clash fails
+/// closed.
+fn param_binder_scope<'a>(
+    param_syms: impl IntoIterator<Item = Symbol>,
+    patterns: impl IntoIterator<Item = &'a canon::Pattern>,
+) -> BinderScope {
+    let mut scope = BinderScope::new();
+    for pat in patterns {
+        if !matches!(pat.value, canon::Pattern_::PVar(_)) {
+            scope.extend(shadowing_binder_scope(pat));
+        }
+    }
+    for sym in param_syms {
+        scope.entry(sym).or_insert(BinderCarrier::Promotable);
+    }
+    scope
+}
+
+/// Scope of one `let` binding: a plain name is promotable, a destructure shadows.
+fn let_binding_scope(binding: &canon::LetBinding) -> BinderScope {
+    match &binding.pat.value {
+        canon::Pattern_::PVar(name) => BinderScope::from([(*name, BinderCarrier::Promotable)]),
+        _ => shadowing_binder_scope(&binding.pat),
+    }
+}
+
+/// Scope of a `case` arm: every pattern binder is promotable at the arm site.
+fn arm_binder_scope(arm_syms: &[Symbol]) -> BinderScope {
+    arm_syms
+        .iter()
+        .map(|&sym| (sym, BinderCarrier::Promotable))
+        .collect()
 }
 
 /// Walk `expr` collecting `VarLocal` symbols free relative to `bound`.
@@ -3170,32 +3360,54 @@ fn ir_type_generic_in_send_carrier(ty: &IrType, tv: Symbol) -> bool {
 /// structural-walk shape of [`body_boxes_generic_callback`] (the `'static`
 /// callback obligation) rather than the kernel-on-param matchers.
 fn ir_type_generic_in_decoder(ty: &IrType, tv: Symbol) -> bool {
+    ir_type_generic_in_carrier(ty, tv, |t| matches!(t, IrType::Decoder(_)))
+}
+
+/// Does the type variable `tv` appear INSIDE a `Cmd` / `Sub` payload anywhere in `ty`?
+///
+/// A `Cmd msg` / `Sub msg` holds its message producers as `Send + 'static`
+/// boxed closures (`cmd_perform`, `sub_map`, the terminal input handlers of
+/// `tui_sub_on_key` / `cli_sub_on_line`), and every TEA loop runs its `msg` on
+/// that same bound. A generic helper whose signature carries a `Cmd tv` /
+/// `Sub tv` — `keys : (KeyEvent -> msg) -> Sub msg`, point-free
+/// (`keys = Sub.onKey`) or capturing a bare `msg` (`keys m = Sub.onKey (\_ ->
+/// m)`) — therefore needs `tv: Send + 'static`, or the emitted body fails
+/// `cargo build` (E0310 / E0277). Every concrete message a loop accepts already
+/// satisfies the bound, so it never rejects a caller.
+fn ir_type_generic_in_tea_carrier(ty: &IrType, tv: Symbol) -> bool {
+    ir_type_generic_in_carrier(ty, tv, |t| matches!(t, IrType::Cmd(_) | IrType::Sub(_)))
+}
+
+/// Does the type variable `tv` appear inside a node `is_carrier` selects, anywhere in `ty`?
+///
+/// The carrier node itself is the obligation when it mentions `tv`; every other
+/// compound type is walked through, so a nested carrier (`Task Error (Decoder
+/// tv)`, `List (Sub tv)`, a function returning `Sub tv`) is found too.
+fn ir_type_generic_in_carrier(ty: &IrType, tv: Symbol, is_carrier: fn(&IrType) -> bool) -> bool {
+    if is_carrier(ty) {
+        return ir_type_mentions_generic(ty, tv);
+    }
+    let walk = |t: &IrType| ir_type_generic_in_carrier(t, tv, is_carrier);
     match ty {
-        // A `Decoder` payload that mentions `tv` is the obligation itself.
-        IrType::Decoder(inner) => ir_type_mentions_generic(inner, tv),
-        // Recurse through every compound carrier; a `Decoder` may be nested
-        // (e.g. `Task Error (Decoder tv)`, `List (Decoder tv)`).
         IrType::Task(inner)
         | IrType::Maybe(inner)
         | IrType::List(inner)
+        | IrType::Decoder(inner)
         | IrType::Cmd(inner)
         | IrType::Sub(inner)
         | IrType::Set(inner)
         | IrType::WebRoute(inner)
-        | IrType::Ui { msg: inner, .. } => ir_type_generic_in_decoder(inner, tv),
+        | IrType::Ui { msg: inner, .. } => walk(inner),
         IrType::Result(a, b) | IrType::Dict(a, b) | IrType::CustomElement { down: a, up: b } => {
-            ir_type_generic_in_decoder(a, tv) || ir_type_generic_in_decoder(b, tv)
+            walk(a) || walk(b)
         }
-        IrType::Tuple(items) => items.iter().any(|t| ir_type_generic_in_decoder(t, tv)),
-        IrType::Enum { args, .. } => args.iter().any(|t| ir_type_generic_in_decoder(t, tv)),
-        IrType::Record(fields) => fields.values().any(|t| ir_type_generic_in_decoder(t, tv)),
+        IrType::Tuple(items) => items.iter().any(walk),
+        IrType::Enum { args, .. } => args.iter().any(walk),
+        IrType::Record(fields) => fields.values().any(walk),
         IrType::Fun(params, ret)
         | IrType::SharedFun(params, ret)
-        | IrType::FnOnceChain(params, ret) => {
-            params.iter().any(|t| ir_type_generic_in_decoder(t, tv))
-                || ir_type_generic_in_decoder(ret, tv)
-        }
-        // Nullary leaves + the non-parametric `UiPlain` carry no `Decoder`.
+        | IrType::FnOnceChain(params, ret) => params.iter().any(walk) || walk(ret),
+        // Nullary leaves + the non-parametric `UiPlain` carry no payload.
         IrType::Generic(_)
         | IrType::Int
         | IrType::Float
@@ -4065,6 +4277,28 @@ fn body_move_closure_captures_generic(tv: Symbol, expr: &Expr) -> bool {
     }
 }
 
+/// Bound every tvar the signature carries inside a `Cmd` / `Sub` with `Send + 'static`.
+///
+/// The runtime stores a message producer as a `Send + 'static` boxed closure,
+/// so a generic helper over `Cmd msg` / `Sub msg` needs `msg: Send + 'static`
+/// whatever its arity — a point-free value binding (`keys = Sub.onKey`)
+/// included. See [`ir_type_generic_in_tea_carrier`].
+fn apply_tea_carrier_bounds(
+    type_params: &mut [(Symbol, BoundSet)],
+    params: &[(Symbol, IrType)],
+    ret: &IrType,
+) {
+    for (tv, bounds) in type_params.iter_mut() {
+        if params
+            .iter()
+            .any(|(_, ty)| ir_type_generic_in_tea_carrier(ty, *tv))
+            || ir_type_generic_in_tea_carrier(ret, *tv)
+        {
+            *bounds = bounds.with_send();
+        }
+    }
+}
+
 /// GENERAL type-param-bound propagation for the emitted signature.
 ///
 /// Two families of obligation land here. Most are kernel-on-param
@@ -4110,6 +4344,7 @@ fn apply_kernel_type_param_bounds(
     ret: &IrType,
     body: &Expr,
 ) {
+    apply_tea_carrier_bounds(type_params, params, ret);
     // IpeRow: a `Db.get*(field, &row)` accessor whose ROW arg (index 1)
     // is the tracked param. Wildcard-`any`-only: a genuine named tvar never
     // legitimately flows into a row accessor, and restricting to wildcards keeps
@@ -5654,20 +5889,26 @@ fn fn_value_move_walk(sym: Symbol, expr: &Expr, state: &mut FnValueMoveState) {
         }
         // A kernel whose runtime takes its arguments reversed evaluates them
         // last-to-first.
-        Expr::Call { callee, args, .. } if callee.evaluates_args_reversed() => {
-            for a in args.iter().rev() {
+        Expr::Call { callee, args, .. } => {
+            for a in callee.args_in_eval_order(args) {
                 fn_value_move_walk(sym, a, state);
             }
         }
-        Expr::Call { args, .. } | Expr::Ctor { args, .. } | Expr::TailRecur { args } => {
+        Expr::Ctor { args, .. } | Expr::TailRecur { args } => {
             for a in args {
                 fn_value_move_walk(sym, a, state);
             }
         }
+        // An inlined `let` evaluates its value at each use site of `name`, not
+        // at the binding (see [`ipe_ir::let_inline::inlined_let_body`]).
         Expr::Let { name, value, body } => {
-            fn_value_move_walk(sym, value, state);
-            if *name != sym {
-                fn_value_move_walk(sym, body, state);
+            if let Some(inlined) = inlined_let_body(*name, value, body) {
+                fn_value_move_walk(sym, &inlined, state);
+            } else {
+                fn_value_move_walk(sym, value, state);
+                if *name != sym {
+                    fn_value_move_walk(sym, body, state);
+                }
             }
         }
         Expr::Destructure {
@@ -5777,7 +6018,9 @@ fn branch_merge(sym: Symbol, pre: FnValueMoveState, branches: &[&Expr]) -> FnVal
 /// scope it is visible over. Every binder kind — def param, lambda param, `let`
 /// name, match-arm pattern var, destructure component — routes through this
 /// single entry point rather than open-coding its own count/clone/relay
-/// dispatch, so a binder kind cannot silently ship without the discipline.
+/// dispatch, so a binder kind cannot silently ship without the discipline. The
+/// `ir_ty` a non-def binder passes comes from `Lowerer::binder_ir_type`, which
+/// refuses a used binder whose type does not resolve rather than skipping it.
 ///
 /// **Invariant established here — every move-closure boundary owns what it
 /// captures.** A Rust `move` closure takes each free variable by value at
@@ -5807,8 +6050,13 @@ fn branch_merge(sym: Symbol, pre: FnValueMoveState, branches: &[&Expr]) -> FnVal
 /// so it fails closed on reuse via [`reject_fn_value_reuse`] (self-guarding on
 /// non-fn-carrying / `CloneOk` types, so calling it for every ineligible binder
 /// is safe — a `CopyLeaf` scalar or wildcard binder is a no-op).
+///
+/// Every non-clonable binder, whatever its [`BindingSite`], runs the
+/// non-`Clone` effect-carrier reuse gate ([`reject_nonclone_value_reuse`]);
+/// only a `let` the emitter inlines (no Rust binder exists) is exempt.
 fn apply_move_ownership(
     env: CloneEnv<'_>,
+    site: BindingSite<'_>,
     sym: Symbol,
     ir_ty: &IrType,
     scope: Expr,
@@ -5818,6 +6066,7 @@ fn apply_move_ownership(
         let mut remaining = count_var_uses(sym, &scope);
         Ok(rewrite_multiuse_clones(sym, &mut remaining, scope))
     } else {
+        reject_nonclone_binding_reuse(env, site, sym, ir_ty, &scope, span)?;
         reject_foreign_handle_reuse(env, sym, ir_ty, &scope, span)?;
         reject_fn_value_reuse(env, sym, ir_ty, &scope, span)?;
         Ok(scope)
@@ -5830,6 +6079,7 @@ fn apply_move_ownership(
 /// (`rewrite_multiuse_clones`) remain — they are unavoidable.
 fn apply_move_ownership_precomputed(
     env: CloneEnv<'_>,
+    site: BindingSite<'_>,
     sym: Symbol,
     ir_ty: &IrType,
     scope: Expr,
@@ -5840,9 +6090,51 @@ fn apply_move_ownership_precomputed(
         let mut remaining = accum.var_uses;
         Ok(rewrite_multiuse_clones(sym, &mut remaining, scope))
     } else {
+        reject_nonclone_binding_reuse(env, site, sym, ir_ty, &scope, span)?;
         reject_foreign_handle_reuse_for_count(env, ir_ty, accum.var_uses, span)?;
         reject_fn_value_reuse_for_count(env, ir_ty, accum.fn_value_uses, span)?;
         Ok(scope)
+    }
+}
+
+/// Where a binder that [`apply_move_ownership`] disciplines is introduced.
+///
+/// The site decides whether a Rust binder exists at all: a `let` whose value
+/// the emitter inlines at each use site has none, every other site has one.
+#[derive(Clone, Copy)]
+enum BindingSite<'a> {
+    /// A binder that always exists in the emitted Rust.
+    ///
+    /// A function or lambda parameter, a match-arm binder, or a destructured
+    /// component.
+    Materialized,
+    /// A `let` binder whose bound value is `value`.
+    Let {
+        /// The bound value, consulted for the emitter's let-inlining decision.
+        value: &'a Expr,
+    },
+}
+
+/// Run the non-`Clone` effect-carrier reuse gate for one binder.
+///
+/// An inlined `let` is skipped: its value is substituted at each use site, so
+/// no binder is moved, and every enclosing binder's walk sees the inlined form.
+fn reject_nonclone_binding_reuse(
+    env: CloneEnv<'_>,
+    site: BindingSite<'_>,
+    sym: Symbol,
+    ir_ty: &IrType,
+    scope: &Expr,
+    span: Span,
+) -> DResult<()> {
+    let inlined = matches!(
+        site,
+        BindingSite::Let { value } if let_value_is_inlined(sym, value, scope)
+    );
+    if inlined {
+        Ok(())
+    } else {
+        reject_nonclone_value_reuse(env, sym, ir_ty, scope, span)
     }
 }
 
@@ -5908,19 +6200,28 @@ fn reject_fn_value_reuse(
 /// so a bare `sym` update base IS a genuine consume (1). A compound base
 /// (`{ (mk sym) | .. }`) also moves `sym` and counts via the full recursive
 /// scan.
+///
+/// `Expr::Destructure` value / `Expr::Match` scrutinee: a bare `sym` is matched
+/// by value in place (`let <pat> = sym;`, `match sym { .. }`), so it is a
+/// consume only when a by-value slot moves a part out, as decided by
+/// [`PartialMove::of_pattern`] — the same classifier [`nonclone_read_after_move`]
+/// uses. A slot over a field in `copy_fields` copies it; a wildcard binds
+/// nothing; a nested string literal is matched through a hidden by-value slot
+/// and moves its part. A `Match` counts one consume when ANY arm's pattern
+/// moves a part.
 #[allow(clippy::too_many_lines)] // exhaustive IR match; every arm is structurally required
-fn count_value_consumes(sym: Symbol, expr: &Expr) -> usize {
+fn count_value_consumes(sym: Symbol, copy_fields: &BTreeSet<Symbol>, expr: &Expr) -> usize {
     match expr {
         Expr::Var(s) | Expr::CloneVar(s) => usize::from(*s == sym),
         Expr::Lambda { body, .. } | Expr::SharedLambda { body, .. } => {
             usize::from(lambda_body_refs_sym(sym, body))
         }
         Expr::Let { name, value, body } => {
-            let in_value = count_value_consumes(sym, value);
+            let in_value = count_value_consumes(sym, copy_fields, value);
             let in_body = if *name == sym {
                 0
             } else {
-                count_value_consumes(sym, body)
+                count_value_consumes(sym, copy_fields, body)
             };
             in_value + in_body
         }
@@ -5929,20 +6230,36 @@ fn count_value_consumes(sym: Symbol, expr: &Expr) -> usize {
             value,
             body,
         } => {
-            let in_value = count_value_consumes(sym, value);
+            let in_value = if is_bare_sym(sym, value) {
+                usize::from(PartialMove::of_pattern(binder, copy_fields).any())
+            } else {
+                count_value_consumes(sym, copy_fields, value)
+            };
             let in_body = if pat_binds_symbol(binder, sym) {
                 0
             } else {
-                count_value_consumes(sym, body)
+                count_value_consumes(sym, copy_fields, body)
             };
             in_value + in_body
         }
         Expr::If { cond, then_, else_ } => {
-            count_value_consumes(sym, cond)
-                + count_value_consumes(sym, then_).max(count_value_consumes(sym, else_))
+            count_value_consumes(sym, copy_fields, cond)
+                + count_value_consumes(sym, copy_fields, then_).max(count_value_consumes(
+                    sym,
+                    copy_fields,
+                    else_,
+                ))
         }
         Expr::Match(m) => {
-            let in_scrut = count_value_consumes(sym, m.scrutinee());
+            let in_scrut = if is_bare_sym(sym, m.scrutinee()) {
+                usize::from(
+                    m.arms()
+                        .iter()
+                        .any(|arm| PartialMove::of_pattern(&arm.pat, copy_fields).any()),
+                )
+            } else {
+                count_value_consumes(sym, copy_fields, m.scrutinee())
+            };
             let arm_max: usize = m
                 .arms()
                 .iter()
@@ -5953,8 +6270,8 @@ fn count_value_consumes(sym: Symbol, expr: &Expr) -> usize {
                         let in_guard = arm
                             .guard
                             .as_ref()
-                            .map_or(0, |g| count_value_consumes(sym, g));
-                        in_guard + count_value_consumes(sym, &arm.body)
+                            .map_or(0, |g| count_value_consumes(sym, copy_fields, g));
+                        in_guard + count_value_consumes(sym, copy_fields, &arm.body)
                     }
                 })
                 .max()
@@ -5962,58 +6279,71 @@ fn count_value_consumes(sym: Symbol, expr: &Expr) -> usize {
             in_scrut + arm_max
         }
         Expr::BinOp { lhs, rhs, .. } => {
-            count_value_consumes(sym, lhs) + count_value_consumes(sym, rhs)
+            count_value_consumes(sym, copy_fields, lhs)
+                + count_value_consumes(sym, copy_fields, rhs)
         }
-        Expr::Call { args, .. } => args.iter().map(|a| count_value_consumes(sym, a)).sum(),
+        Expr::Call { args, .. } => args
+            .iter()
+            .map(|a| count_value_consumes(sym, copy_fields, a))
+            .sum(),
         Expr::Apply { func, args } => {
-            count_value_consumes(sym, func)
+            count_value_consumes(sym, copy_fields, func)
                 + args
                     .iter()
-                    .map(|a| count_value_consumes(sym, a))
+                    .map(|a| count_value_consumes(sym, copy_fields, a))
                     .sum::<usize>()
         }
-        Expr::Tuple(items) | Expr::List { items, .. } => {
-            items.iter().map(|e| count_value_consumes(sym, e)).sum()
-        }
+        Expr::Tuple(items) | Expr::List { items, .. } => items
+            .iter()
+            .map(|e| count_value_consumes(sym, copy_fields, e))
+            .sum(),
         Expr::Cons { head, tail } => {
-            count_value_consumes(sym, head) + count_value_consumes(sym, tail)
+            count_value_consumes(sym, copy_fields, head)
+                + count_value_consumes(sym, copy_fields, tail)
         }
         Expr::ListIndexClone { list, .. } | Expr::ListLenCheck { list, .. } => {
-            count_value_consumes(sym, list)
+            count_value_consumes(sym, copy_fields, list)
         }
         // A `Record` field is a consuming position.
         Expr::Record { fields, .. } => fields
             .iter()
-            .map(|(_, e)| count_value_consumes(sym, e))
+            .map(|(_, e)| count_value_consumes(sym, copy_fields, e))
             .sum(),
         // An `Update` base emits `let mut __ipe_rec = <base>;`, which MOVES
         // the base, so a bare `sym` base is a genuine consume (counted in
         // full). A compound base (`{ (mk sym) | .. }`) also moves `sym` into
         // its sub-expression and counts via the recursive scan.
         Expr::Update { record, fields } => {
-            count_value_consumes(sym, record)
+            count_value_consumes(sym, copy_fields, record)
                 + fields
                     .iter()
-                    .map(|(_, e)| count_value_consumes(sym, e))
+                    .map(|(_, e)| count_value_consumes(sym, copy_fields, e))
                     .sum::<usize>()
         }
-        Expr::Ctor { args, .. } => args.iter().map(|a| count_value_consumes(sym, a)).sum(),
+        Expr::Ctor { args, .. } => args
+            .iter()
+            .map(|a| count_value_consumes(sym, copy_fields, a))
+            .sum(),
         Expr::TaskSeq { effect, rest } => {
-            count_value_consumes(sym, effect) + count_value_consumes(sym, rest)
+            count_value_consumes(sym, copy_fields, effect)
+                + count_value_consumes(sym, copy_fields, rest)
         }
         Expr::TailLoop { params, body } => {
             if params.iter().any(|(s, _)| *s == sym) {
                 0
             } else {
-                count_value_consumes(sym, body)
+                count_value_consumes(sym, copy_fields, body)
             }
         }
-        Expr::TailRecur { args } => args.iter().map(|a| count_value_consumes(sym, a)).sum(),
+        Expr::TailRecur { args } => args
+            .iter()
+            .map(|a| count_value_consumes(sym, copy_fields, a))
+            .sum(),
         // `Access` reads a field off a BORROW of the record base, so a bare
         // `sym` base is not consumed (left to the `IPE-L0120` admissibility
         // gate). A COMPOUND base (`(mk sym).field`) moves `sym` into its
         // sub-expression — a genuine consume the base scan below counts.
-        Expr::Access { record, .. } => base_move_consumes(sym, record),
+        Expr::Access { record, .. } => base_move_consumes(sym, copy_fields, record),
         Expr::Int(_)
         | Expr::Bool(_)
         | Expr::Float(_)
@@ -6038,11 +6368,398 @@ fn count_value_consumes(sym: Symbol, expr: &Expr) -> usize {
 /// `let mut __ipe_rec = <base>;` MOVES the base unconditionally, so a bare
 /// `sym` update base counts as 1 via the standard recursive scan in
 /// [`count_value_consumes`].
-fn base_move_consumes(sym: Symbol, record: &Expr) -> usize {
+fn base_move_consumes(sym: Symbol, copy_fields: &BTreeSet<Symbol>, record: &Expr) -> usize {
     if matches!(record, Expr::Var(s) | Expr::CloneVar(s) if *s == sym) {
         0
     } else {
-        count_value_consumes(sym, record)
+        count_value_consumes(sym, copy_fields, record)
+    }
+}
+
+/// Which parts of the non-`Clone` binding a pattern match has moved out.
+///
+/// A `match sym { .. }` / `let <pat> = sym;` binds by value, so every by-value
+/// slot of the pattern — a named binder or the hidden slot a nested string
+/// literal is matched through — moves its part out of `sym` (a partial move),
+/// except a slot over a `Copy` record field, which copies it. A later read of
+/// a moved part, or of `sym` as a whole, observes a moved value (E0382); a read
+/// of an untouched or copied record field stays sound.
+#[derive(Clone, Default, PartialEq, Eq)]
+enum PartialMove {
+    /// No pattern has moved any part of the binding.
+    #[default]
+    Intact,
+    /// These top-level record fields were moved out by a record pattern.
+    Fields(BTreeSet<Symbol>),
+    /// Some part the walk cannot name by field (a constructor payload, a tuple
+    /// element, the whole value bound to a variable) was moved out.
+    Opaque,
+}
+
+impl PartialMove {
+    /// The parts `pat` moves out of a by-value scrutinee.
+    ///
+    /// The by-value slots are the ones the emitter creates
+    /// ([`pat_moves_scrutinee`]); a slot over a record field in `copy_fields`
+    /// copies the field rather than moving it.
+    fn of_pattern(pat: &Pat, copy_fields: &BTreeSet<Symbol>) -> Self {
+        if !pat_moves_scrutinee(pat) {
+            return Self::Intact;
+        }
+        match pat {
+            Pat::Record(fields) => {
+                let moved: BTreeSet<Symbol> = fields
+                    .iter()
+                    .filter(|(f, p)| pat_moves_nested_part(p) && !copy_fields.contains(f))
+                    .map(|(f, _)| *f)
+                    .collect();
+                if moved.is_empty() {
+                    Self::Intact
+                } else {
+                    Self::Fields(moved)
+                }
+            }
+            _ => Self::Opaque,
+        }
+    }
+
+    /// The union of two partial-move records.
+    fn union(self, other: Self) -> Self {
+        match (self, other) {
+            (Self::Opaque, _) | (_, Self::Opaque) => Self::Opaque,
+            (Self::Intact, x) | (x, Self::Intact) => x,
+            (Self::Fields(mut a), Self::Fields(b)) => {
+                a.extend(b);
+                Self::Fields(a)
+            }
+        }
+    }
+
+    /// Has any part been moved out?
+    const fn any(&self) -> bool {
+        !matches!(self, Self::Intact)
+    }
+
+    /// Has the top-level record field `field` (possibly) been moved out?
+    fn covers(&self, field: Symbol) -> bool {
+        match self {
+            Self::Intact => false,
+            Self::Fields(fs) => fs.contains(&field),
+            Self::Opaque => true,
+        }
+    }
+}
+
+/// The top-level record fields of a binding of type `ir_ty` whose Rust type is `Copy`.
+///
+/// Decided by [`clone_class`] (`CopyLeaf`), the same classifier the rest of the
+/// non-`Clone` gate consults. A binding that is not a record, or a field whose
+/// type does not classify as `Copy`, contributes nothing — a pattern binder
+/// over it is treated as a move (fail closed).
+fn copy_record_fields(env: CloneEnv<'_>, ir_ty: &IrType) -> BTreeSet<Symbol> {
+    match ir_ty {
+        IrType::Record(fields) => fields
+            .iter()
+            .filter(|(_, ty)| matches!(clone_class(env, ty), CloneClass::CopyLeaf))
+            .map(|(f, _)| *f)
+            .collect(),
+        _ => BTreeSet::new(),
+    }
+}
+
+/// Evaluation-order state of [`nonclone_move_walk`] for one non-`Clone` binding.
+#[derive(Clone)]
+struct NonCloneMoveState<'a> {
+    /// The binding's `Copy` record fields; a pattern binder copies these out.
+    copy_fields: &'a BTreeSet<Symbol>,
+    /// A position has moved the whole binding.
+    consumed: bool,
+    /// A read observed a moved (or partially moved) value.
+    hazard: bool,
+    /// Parts moved out by a by-value pattern match or a move-only field read.
+    partial: PartialMove,
+}
+
+impl<'a> NonCloneMoveState<'a> {
+    /// The state before any position of the scope has run.
+    const fn new(copy_fields: &'a BTreeSet<Symbol>) -> Self {
+        Self {
+            copy_fields,
+            consumed: false,
+            hazard: false,
+            partial: PartialMove::Intact,
+        }
+    }
+
+    /// A read of the whole binding; `moves` marks a consuming position.
+    const fn read_whole(&mut self, moves: bool) {
+        if self.consumed || self.partial.any() {
+            self.hazard = true;
+        }
+        if moves {
+            self.consumed = true;
+        }
+    }
+
+    /// A borrowing read of the top-level record field `field`.
+    fn read_field(&mut self, field: Symbol) {
+        if self.consumed || self.partial.covers(field) {
+            self.hazard = true;
+        }
+    }
+
+    /// A moving read of the top-level record field `field`.
+    ///
+    /// A move-only field leaves the binding partially moved: a later read of
+    /// that field, or of the whole binding, observes the moved part.
+    fn move_field(&mut self, field: Symbol) {
+        self.read_field(field);
+        self.partial =
+            std::mem::take(&mut self.partial).union(PartialMove::Fields(BTreeSet::from([field])));
+    }
+
+    /// A by-value pattern match of the binding against `pat`.
+    fn match_pattern(&mut self, pat: &Pat) {
+        self.partial =
+            std::mem::take(&mut self.partial).union(PartialMove::of_pattern(pat, self.copy_fields));
+    }
+
+    /// Fold one branch outcome into a conservative post-branch state.
+    fn merge(&mut self, branch: Self) {
+        self.hazard |= branch.hazard;
+        self.consumed |= branch.consumed;
+        self.partial = std::mem::take(&mut self.partial).union(branch.partial);
+    }
+}
+
+/// Is the non-`Clone` binding `sym` read, in emitted evaluation order, AFTER a
+/// position of `expr` has already moved it, wholly or in part?
+///
+/// [`count_value_consumes`] counts a bare field read (`sym.field`) as a borrow,
+/// not a consume — sound only while `sym` is still owned. Once an earlier
+/// position moves `sym` (a bare argument, a lambda capture, an update base), a
+/// later field read, length probe, or index clone of `sym` observes a moved
+/// value (E0382). This walk models the emitted order to catch that
+/// consume-then-borrow shape, while a borrow-then-consume in a known
+/// left-to-right position stays accepted.
+///
+/// A `Match` scrutinee or `Destructure` value of bare `sym` is matched by
+/// value: each by-value slot of the pattern (a binder, or the hidden slot of a
+/// nested string literal) moves its part out. A later read of a moved
+/// record field, or of `sym` whole, is the same hazard; a read of a field the
+/// pattern left untouched stays accepted.
+///
+/// A binder of a record field whose type in `ir_ty` proves `Copy` copies the
+/// field instead of moving it, so a later read of that field stays accepted.
+///
+/// A user-function call and an argument-reversed kernel call evaluate their
+/// arguments in place, in [`ipe_ir::Callee::args_in_eval_order`]. Any other
+/// kernel or FFI call has no single evaluation order: its bespoke emitters
+/// may reorder or hoist arguments. Its arguments are therefore order-unknown —
+/// a move of `sym` in one argument combined with any mention of `sym` in a
+/// sibling argument is a hazard, whichever order the emitter picks.
+fn nonclone_read_after_move(env: CloneEnv<'_>, sym: Symbol, ir_ty: &IrType, expr: &Expr) -> bool {
+    let copy_fields = copy_record_fields(env, ir_ty);
+    let mut state = NonCloneMoveState::new(&copy_fields);
+    nonclone_move_walk(sym, expr, &mut state);
+    state.hazard
+}
+
+/// Walk `expr` in emitted evaluation order for [`nonclone_read_after_move`].
+///
+/// A bare `sym` as an `Access` base is a field borrow — a move of that field
+/// when its type embeds an effect carrier; as a list length probe
+/// or index clone base it is a whole borrow; as a `Match` scrutinee or a
+/// `Destructure` value it is a whole borrow followed by the pattern's partial
+/// move. Every other occurrence of `sym` moves it. `Update` field values run
+/// before the base move (`emit_update` binds them to temporaries first).
+/// Branch alternatives each continue from the pre-branch state and merge
+/// conservatively.
+#[allow(clippy::too_many_lines)] // exhaustive IR match; every arm is structurally required
+fn nonclone_move_walk(sym: Symbol, expr: &Expr, state: &mut NonCloneMoveState<'_>) {
+    match expr {
+        Expr::Var(s) | Expr::CloneVar(s) => {
+            if *s == sym {
+                state.read_whole(true);
+            }
+        }
+        Expr::Lambda { body, .. } | Expr::SharedLambda { body, .. } => {
+            if lambda_body_refs_sym(sym, body) {
+                state.read_whole(true);
+            }
+        }
+        Expr::Access {
+            record,
+            field,
+            field_ty,
+        } => {
+            if is_bare_sym(sym, record) {
+                if ir_type_has_effect_carrier(field_ty) {
+                    state.move_field(*field);
+                } else {
+                    state.read_field(*field);
+                }
+            } else {
+                nonclone_move_walk(sym, record, state);
+            }
+        }
+        Expr::ListIndexClone { list, .. } | Expr::ListLenCheck { list, .. } => {
+            nonclone_borrow_base(sym, list, state);
+        }
+        Expr::Update { record, fields } => {
+            for (_, e) in fields {
+                nonclone_move_walk(sym, e, state);
+            }
+            nonclone_move_walk(sym, record, state);
+        }
+        // A user function evaluates its arguments in place left to right; an
+        // argument-reversed kernel evaluates its container before its function.
+        Expr::Call { callee, args, .. } if callee.has_known_eval_order() => {
+            for a in callee.args_in_eval_order(args) {
+                nonclone_move_walk(sym, a, state);
+            }
+        }
+        Expr::Ctor { args, .. } | Expr::TailRecur { args } => {
+            for a in args {
+                nonclone_move_walk(sym, a, state);
+            }
+        }
+        Expr::Call { args, .. } => nonclone_unordered_args(sym, args, state),
+        Expr::Apply { func, args } => {
+            nonclone_move_walk(sym, func, state);
+            for a in args {
+                nonclone_move_walk(sym, a, state);
+            }
+        }
+        // An inlined `let` evaluates its value at each use site of `name`, not
+        // at the binding: `let xs = [f w.tag] in g (consume w) xs xs` emits
+        // `g(consume(w), vec![f(w.tag)], ..)`, a read of `w` after its move.
+        Expr::Let { name, value, body } => {
+            if let Some(inlined) = inlined_let_body(*name, value, body) {
+                nonclone_move_walk(sym, &inlined, state);
+            } else {
+                nonclone_move_walk(sym, value, state);
+                if *name != sym {
+                    nonclone_move_walk(sym, body, state);
+                }
+            }
+        }
+        Expr::Destructure {
+            binder,
+            value,
+            body,
+        } => {
+            nonclone_borrow_base(sym, value, state);
+            if is_bare_sym(sym, value) {
+                state.match_pattern(binder);
+            }
+            if !pat_binds_symbol(binder, sym) {
+                nonclone_move_walk(sym, body, state);
+            }
+        }
+        Expr::If { cond, then_, else_ } => {
+            nonclone_move_walk(sym, cond, state);
+            let pre = state.clone();
+            for branch in [then_.as_ref(), else_.as_ref()] {
+                let mut s = pre.clone();
+                nonclone_move_walk(sym, branch, &mut s);
+                state.merge(s);
+            }
+        }
+        Expr::Match(m) => {
+            nonclone_borrow_base(sym, m.scrutinee(), state);
+            let scrutinizes_sym = is_bare_sym(sym, m.scrutinee());
+            let pre = state.clone();
+            for arm in m.arms() {
+                let mut s = pre.clone();
+                if scrutinizes_sym {
+                    s.match_pattern(&arm.pat);
+                }
+                if !pat_binds_symbol(&arm.pat, sym) {
+                    if let Some(guard) = &arm.guard {
+                        nonclone_move_walk(sym, guard, &mut s);
+                    }
+                    nonclone_move_walk(sym, &arm.body, &mut s);
+                }
+                state.merge(s);
+            }
+        }
+        Expr::BinOp { lhs, rhs, .. } => {
+            nonclone_move_walk(sym, lhs, state);
+            nonclone_move_walk(sym, rhs, state);
+        }
+        Expr::Tuple(items) | Expr::List { items, .. } => {
+            for e in items {
+                nonclone_move_walk(sym, e, state);
+            }
+        }
+        Expr::Cons { head, tail } => {
+            nonclone_move_walk(sym, head, state);
+            nonclone_move_walk(sym, tail, state);
+        }
+        Expr::Record { fields, .. } => {
+            for (_, e) in fields {
+                nonclone_move_walk(sym, e, state);
+            }
+        }
+        Expr::TaskSeq { effect, rest } => {
+            nonclone_move_walk(sym, effect, state);
+            nonclone_move_walk(sym, rest, state);
+        }
+        Expr::TailLoop { params, body } => {
+            if !params.iter().any(|(s, _)| *s == sym) {
+                nonclone_move_walk(sym, body, state);
+            }
+        }
+        Expr::Int(_)
+        | Expr::Bool(_)
+        | Expr::Float(_)
+        | Expr::Str(_)
+        | Expr::PathLit(_)
+        | Expr::CustomElementRef { .. }
+        | Expr::Char(_)
+        | Expr::Unit
+        | Expr::FuncValue { .. } => {}
+    }
+}
+
+/// Is `expr` the bare binding `sym` itself?
+fn is_bare_sym(sym: Symbol, expr: &Expr) -> bool {
+    matches!(expr, Expr::Var(s) | Expr::CloneVar(s) if *s == sym)
+}
+
+/// A borrowing base position: a bare `sym` is a non-moving whole read.
+///
+/// Any other base is walked as an ordinary (possibly moving) sub-expression.
+fn nonclone_borrow_base(sym: Symbol, base: &Expr, state: &mut NonCloneMoveState<'_>) {
+    if is_bare_sym(sym, base) {
+        state.read_whole(false);
+    } else {
+        nonclone_move_walk(sym, base, state);
+    }
+}
+
+/// Order-unknown arguments of a kernel or FFI call.
+///
+/// Each argument is walked from the shared pre-call state. A hazard inside an
+/// argument propagates; an argument that moves `sym` (wholly or in part) while
+/// a sibling argument also mentions `sym` is a hazard in whichever order the
+/// emitter evaluates them.
+fn nonclone_unordered_args(sym: Symbol, args: &[Expr], state: &mut NonCloneMoveState<'_>) {
+    let pre = state.clone();
+    let mut mentioning = 0usize;
+    let mut moved = false;
+    for a in args {
+        let mut s = pre.clone();
+        nonclone_move_walk(sym, a, &mut s);
+        moved |= (s.consumed && !pre.consumed) || s.partial != pre.partial;
+        state.merge(s);
+        if count_var_uses(sym, a) > 0 {
+            mentioning = mentioning.saturating_add(1);
+        }
+    }
+    if moved && mentioning > 1 {
+        state.hazard = true;
     }
 }
 
@@ -6263,53 +6980,6 @@ fn count_var_uses_update_aware(sym: Symbol, expr: &Expr) -> usize {
         | Expr::Char(_)
         | Expr::Unit
         | Expr::FuncValue { .. } => 0,
-    }
-}
-
-/// Fail-closed gate for a non-linear use of a non-`Clone` effect-carrier value.
-///
-/// A `Task`/`Cmd`/`Sub` renders to an opaque boxed future that is never `Clone`,
-/// so a binding embedding one — bare, or inside a `Maybe`/`Result`/tuple/record/
-/// user-union payload — has no sound duplicating rewrite. A generic user union
-/// derives `Clone where T: Clone` and instantiating `T` to such a payload makes
-/// that bound unsatisfiable, so a second value-consuming use double-moves in the
-/// emitted Rust (cargo E0382/E0277) AFTER `ipe` reported exit 0 — a SEAL break.
-/// Reject it with a typed diagnostic instead. A single (linear) use needs no
-/// clone and is left as a bare move.
-///
-/// Sibling to [`reject_foreign_handle_reuse`] (an FFI foreign handle) and
-/// [`reject_fn_value_reuse`] (an embedded function value): the same
-/// non-`Clone`-reuse gate for the effect-carrier payload those two do not cover.
-/// A bare/composite `Generic`/`RowGeneric` is out of scope — its emitted
-/// `T: Clone` / `R: … + Clone` witness bound makes an inserted `.clone()` sound,
-/// so it routes through the multi-use clone rewrite, never here.
-///
-/// Two rejection conditions:
-/// - Two or more genuine moves (`count_value_consumes > 1`): double-move in emitted Rust.
-/// - One genuine move via a bare `Var` record-update base AND any other use of `sym`
-///   (even a borrow-only `Access` read): the update emits `let mut __ipe_rec = sym;`
-///   which moves `sym`; any subsequent read is a use-after-move (E0382).
-///
-/// PARAM-scoped: invoked only from [`apply_param_move_ownership`], never for a
-/// `let`/`Destructure` binding. A `let`-bound effect value IS rescued — the
-/// backend's `Expr::Let` multi-use pass inlines the value expression at each use
-/// site (`scan_free_target` / `substitute_var`), reconstructing an independent
-/// value per use (issue approach (a)). A PARAM's value arrives from the caller,
-/// is not a reconstructible expression, and so cannot be inlined — its
-/// non-linear reuse has no sound rewrite and is the case this gate rejects.
-fn ir_type_has_effect_carrier(ty: &IrType) -> bool {
-    match ty {
-        IrType::Task(_) | IrType::Cmd(_) | IrType::Sub(_) => true,
-        IrType::Maybe(e) | IrType::List(e) | IrType::Set(e) => ir_type_has_effect_carrier(e),
-        IrType::Result(a, b) | IrType::Dict(a, b) => {
-            ir_type_has_effect_carrier(a) || ir_type_has_effect_carrier(b)
-        }
-        IrType::Tuple(es) => es.iter().any(ir_type_has_effect_carrier),
-        IrType::Record(fields) => fields.values().any(ir_type_has_effect_carrier),
-        IrType::Enum { args, .. } => args.iter().any(ir_type_has_effect_carrier),
-        IrType::Ui { msg, .. } => ir_type_has_effect_carrier(msg),
-        IrType::WebRoute(page) => ir_type_has_effect_carrier(page),
-        _ => false,
     }
 }
 
@@ -6867,7 +7537,6 @@ fn eta_shared_rebind(
 /// [`fn_value_read_flags`], so trigger and rewrite cover the same read set).
 /// Shadow discipline mirrors [`count_fn_value_uses`]; enumerated exhaustively
 /// (no `_` catch-all).
-#[allow(clippy::too_many_lines)]
 fn shim_fn_value_reads(
     sym: Symbol,
     param_tys: &[IrType],
@@ -6876,7 +7545,47 @@ fn shim_fn_value_reads(
     builtin_ctors: &[Symbol],
     expr: Expr,
 ) -> DResult<Expr> {
-    shim_fn_value_reads_at(sym, param_tys, ret, eta_pool, builtin_ctors, expr, false)
+    shim_fn_value_reads_tracked(sym, param_tys, ret, eta_pool, builtin_ctors, expr)
+        .map(|(expr, _)| expr)
+}
+
+/// [`shim_fn_value_reads`], also reporting whether any read was rewritten.
+///
+/// `false` means `expr` came back unchanged, so the caller draws no eta block.
+fn shim_fn_value_reads_tracked(
+    sym: Symbol,
+    param_tys: &[IrType],
+    ret: &IrType,
+    eta_pool: &[Symbol],
+    builtin_ctors: &[Symbol],
+    expr: Expr,
+) -> DResult<(Expr, bool)> {
+    let site = ShimSite {
+        sym,
+        param_tys,
+        ret,
+        eta_pool,
+        builtin_ctors,
+        rewrote: Cell::new(false),
+    };
+    let expr = shim_fn_value_reads_at(&site, expr, false)?;
+    Ok((expr, site.rewrote.get()))
+}
+
+/// The fixed inputs of one [`shim_fn_value_reads`] walk, plus whether it rewrote a read.
+struct ShimSite<'a> {
+    /// The re-carriered function binder whose value reads are shimmed.
+    sym: Symbol,
+    /// The binder's parameter types.
+    param_tys: &'a [IrType],
+    /// The binder's return type.
+    ret: &'a IrType,
+    /// The eta names a shim closure binds its parameters to.
+    eta_pool: &'a [Symbol],
+    /// The built-in runtime constructors whose payload keeps the `Box` carrier.
+    builtin_ctors: &'a [Symbol],
+    /// Set once any read of `sym` is rewritten.
+    rewrote: Cell<bool>,
 }
 
 /// Worker for [`shim_fn_value_reads`], threading `in_storage`: `true` while the
@@ -6888,39 +7597,31 @@ fn shim_fn_value_reads(
 /// empty-tail turbofish; every other position (a direct call arg, a return, a
 /// binding value) keeps the `Box` carrier ([`fn_read_shim`]) and resets the flag.
 #[allow(clippy::too_many_lines)]
-fn shim_fn_value_reads_at(
-    sym: Symbol,
-    param_tys: &[IrType],
-    ret: &IrType,
-    eta_pool: &[Symbol],
-    builtin_ctors: &[Symbol],
-    expr: Expr,
-    in_storage: bool,
-) -> DResult<Expr> {
+fn shim_fn_value_reads_at(site: &ShimSite<'_>, expr: Expr, in_storage: bool) -> DResult<Expr> {
+    let sym = site.sym;
     // Most positions are NOT storage-element positions: recursing through them
     // resets the flag. Only the storable-element arms below re-enter with it set.
-    let recurse =
-        |e: Expr| shim_fn_value_reads_at(sym, param_tys, ret, eta_pool, builtin_ctors, e, false);
+    let recurse = |e: Expr| shim_fn_value_reads_at(site, e, false);
     let recurse_all = |items: Vec<Expr>| {
         items
             .into_iter()
-            .map(|e| shim_fn_value_reads_at(sym, param_tys, ret, eta_pool, builtin_ctors, e, false))
+            .map(|e| shim_fn_value_reads_at(site, e, false))
             .collect::<DResult<Vec<Expr>>>()
     };
-    let recurse_storage =
-        |e: Expr| shim_fn_value_reads_at(sym, param_tys, ret, eta_pool, builtin_ctors, e, true);
+    let recurse_storage = |e: Expr| shim_fn_value_reads_at(site, e, true);
     let recurse_all_storage = |items: Vec<Expr>| {
         items
             .into_iter()
-            .map(|e| shim_fn_value_reads_at(sym, param_tys, ret, eta_pool, builtin_ctors, e, true))
+            .map(|e| shim_fn_value_reads_at(site, e, true))
             .collect::<DResult<Vec<Expr>>>()
     };
     match expr {
         Expr::Var(s) | Expr::CloneVar(s) if s == sym => {
+            site.rewrote.set(true);
             if in_storage {
-                fn_read_shim_shared(sym, param_tys, ret, eta_pool)
+                fn_read_shim_shared(sym, site.param_tys, site.ret, site.eta_pool)
             } else {
-                fn_read_shim(sym, param_tys, ret, eta_pool)
+                fn_read_shim(sym, site.param_tys, site.ret, site.eta_pool)
             }
         }
         Expr::Var(_)
@@ -7034,14 +7735,12 @@ fn shim_fn_value_reads_at(
             })
         }
         Expr::Match(m) => Ok(Expr::Match(m.try_map_bodies(
-            |scrutinee| {
-                shim_fn_value_reads(sym, param_tys, ret, eta_pool, builtin_ctors, scrutinee)
-            },
+            |scrutinee| shim_fn_value_reads_at(site, scrutinee, false),
             |pat, body, guard| {
                 let body = if pat_binds_symbol(pat, sym) {
                     body
                 } else {
-                    shim_fn_value_reads(sym, param_tys, ret, eta_pool, builtin_ctors, body)?
+                    shim_fn_value_reads_at(site, body, false)?
                 };
                 Ok((body, guard))
             },
@@ -7076,7 +7775,7 @@ fn shim_fn_value_reads_at(
             variant,
             args,
         } => {
-            let args = if builtin_ctors.contains(&variant) {
+            let args = if site.builtin_ctors.contains(&variant) {
                 recurse_all(args)?
             } else {
                 recurse_all_storage(args)?
@@ -9019,6 +9718,31 @@ fn reject_point_free_store_kernel(callee: &Callee, span: Span) -> DResult<()> {
     Ok(())
 }
 
+/// Fail-closed SEAL gate for a partial or point-free capture-cloned handler kernel (`Stream.stream`).
+///
+/// The backend re-wraps the handler argument with a per-call `.clone()` of
+/// every free local. In a partial application (eta-expanded) or a point-free
+/// reify, the handler is the synthesized closure's own parameter — a bare
+/// `Box<dyn Fn>` with no `Clone` (E0599) and no `Sync` (E0277) — and the
+/// handler-capture gate never sees the handler's captures. Refuse with
+/// IPE-L0152 (the kernel is legal only saturated — a distinct fact from the
+/// non-`Clone` capture refusal, IPE-L0126); a piped `<|` / `|>` spine is
+/// flattened to the saturated call first, so only a genuinely unsaturated use
+/// reaches here. A no-op (`Ok`) for every other callee.
+fn reject_unsaturated_handler_kernel(callee: &Callee, span: Span) -> DResult<()> {
+    if let Callee::Kernel(k) = callee
+        && k.capture_cloned_handler_arg().is_some()
+    {
+        let d = k.decl();
+        let kernel = format!("{}.{}", d.qualifier, d.name).into_boxed_str();
+        return Err(Diagnostic::Lower {
+            span,
+            msg: LowerError::UnsaturatedHandlerKernel { kernel },
+        });
+    }
+    Ok(())
+}
+
 /// Fail-closed SECURITY gate: `Secret.fromString` is legal ONLY as a saturated
 /// one-argument call. The committed-literal ban (IPE-L0150) inspects the
 /// ARGUMENT of a direct `Secret.fromString "…"` call — but that check is
@@ -9492,8 +10216,8 @@ fn rewrite_var_free_occurrences(
 /// (spec §2.2) — a Decoder nested inside e.g. `Maybe (Decoder a)` is out of
 /// today's realistic reach (Decoders aren't optional in practice) but the
 /// predicate stays structurally total rather than special-cased to Tuple/
-/// Record only, matching `ir_type_contains_task`'s existing shape in the
-/// Rust backend (AUD-04).
+/// Record only, matching `ipe_ir::let_inline::ir_type_contains_task`'s
+/// existing shape (AUD-04).
 fn ir_type_contains_decoder(ty: &IrType) -> bool {
     match ty {
         IrType::Decoder(_) => true,
@@ -9502,49 +10226,6 @@ fn ir_type_contains_decoder(ty: &IrType) -> bool {
         IrType::Maybe(inner) | IrType::List(inner) => ir_type_contains_decoder(inner),
         IrType::Result(e, a) => ir_type_contains_decoder(e) || ir_type_contains_decoder(a),
         _ => false,
-    }
-}
-
-/// Collect every symbol `pat` binds (recursively) into `out`. Local twin
-/// of `ipe_backend_rust::pat_bound_symbols` (same shape, same crate-
-/// boundary rationale — `ipe_lower` and `ipe_backend_rust` each keep their
-/// own copy rather than share one, since IR flows one-way lower → backend).
-fn pat_bound_symbols(pat: &Pat, out: &mut BTreeSet<Symbol>) {
-    match pat {
-        Pat::Var(s) => {
-            out.insert(*s);
-        }
-        Pat::Wildcard | Pat::Int(_) | Pat::Bool(_) | Pat::Char(_) | Pat::Str(_) => {}
-        Pat::Alias(inner, s) => {
-            out.insert(*s);
-            pat_bound_symbols(inner, out);
-        }
-        Pat::Ctor { args, .. } | Pat::Tuple(args) => {
-            for p in args {
-                pat_bound_symbols(p, out);
-            }
-        }
-        Pat::Record(fields) => {
-            for (_, p) in fields {
-                pat_bound_symbols(p, out);
-            }
-        }
-        Pat::Slice { prefix, rest } => {
-            for p in prefix {
-                pat_bound_symbols(p, out);
-            }
-            if let Some(p) = rest {
-                pat_bound_symbols(p, out);
-            }
-        }
-        // Every alternative of an or-pattern binds the same names, so the first
-        // alternative's binders are the whole set — collecting one avoids
-        // duplicating a name once per alternative.
-        Pat::Or(alts) => {
-            if let Some(first) = alts.first() {
-                pat_bound_symbols(first, out);
-            }
-        }
     }
 }
 
@@ -9862,8 +10543,11 @@ pub struct Lowerer<'a> {
     /// pattern (`Codec f -> …`) be forwarded into a higher-order function
     /// instead of only called in place. A non-`Fun` binder registered here is a
     /// no-op — the classifier's `fun_value_arc_promotable` filter decides which
-    /// binders actually promote. Scoped save/restore per registering scope;
-    /// interior mutability so the lowering walk stays over a shared `&self`.
+    /// binders actually promote. EVERY binder scope decides its own names via
+    /// [`Self::with_binders`]: a promotable binder adds them, a non-promoting
+    /// one (a destructure) removes them, so the innermost binder of a name wins
+    /// and a shadowing destructure never inherits an outer name's promotion.
+    /// Interior mutability so the lowering walk stays over a shared `&self`.
     promotable_fn_binders: std::cell::RefCell<BTreeSet<Symbol>>,
     /// Fail-close signal: pure-`Fun` captures the classifier routed AWAY from
     /// IPE-L0126 on the promise that the symbol's binder site will decide the
@@ -10004,28 +10688,37 @@ fn normalize_record_fun_carriers(ty: IrType) -> IrType {
                 .collect();
             IrType::Record(flipped)
         }
-        // A COLLECTION element position (`List`/`Set` element, `Dict` value) and a
-        // `Tuple` component: a function stored there is carried on `Arc` too, so
-        // flip a bare `Fun` element after recursing. `flip_fun_in_storage_element`
-        // is the O(1) element analogue of the record-field flip above; `recur`
-        // first descends so a nested composite's own fields/elements are flipped
-        // identically. A `Dict` KEY is not a storage-carrier position a function
-        // can legitimately occupy (a function is neither `Ord` nor `Hash`), so its
-        // recursion never surfaces a storable `Fun` — leaving the flip on the
-        // VALUE alone.
-        //
-        // A `Maybe`/`Result` payload is NOT flipped: its runtime enum
-        // (`IpeMaybe`/`IpeResult`) has a fn payload consumed by the `andMap`/`map`
-        // kernels as an owned `FnOnce` (`Box`), so it stays on the `Box` carrier —
-        // recurse into a nested composite under the payload without flipping the
-        // payload arrow itself.
-        IrType::Maybe(e) => IrType::Maybe(Box::new(recur(*e))),
-        IrType::List(e) => IrType::List(Box::new(flip_fun_in_storage_element(recur(*e)))),
-        IrType::Set(e) => IrType::Set(Box::new(flip_fun_in_storage_element(recur(*e)))),
-        IrType::Result(a, b) => IrType::Result(Box::new(recur(*a)), Box::new(recur(*b))),
+        // A builtin constructor slot flips a bare `Fun` to `Arc` exactly when the
+        // kernel registry names it a storage slot ([`ipe_kernels::storage_slot`]:
+        // a `List`/`Set` element, a `Dict` value) — the one fact the scheme-side
+        // mapper derivation also reads, so the emitted carrier and the binding
+        // derivation cannot drift. `recur` first descends so a nested composite's
+        // own fields/elements are flipped identically. A `Dict` key and a
+        // `Maybe`/`Result` payload are not storage slots: the runtime enum
+        // (`IpeMaybe`/`IpeResult`) consumes a fn payload as an owned `FnOnce`
+        // (`Box`), and a function is never a key (neither `Ord` nor `Hash`).
+        IrType::Maybe(e) => IrType::Maybe(Box::new(flip_in_slot(
+            ipe_kernels::BuiltinTag::Maybe,
+            0,
+            recur(*e),
+        ))),
+        IrType::List(e) => IrType::List(Box::new(flip_in_slot(
+            ipe_kernels::BuiltinTag::List,
+            0,
+            recur(*e),
+        ))),
+        IrType::Set(e) => IrType::Set(Box::new(flip_in_slot(
+            ipe_kernels::BuiltinTag::Set,
+            0,
+            recur(*e),
+        ))),
+        IrType::Result(a, b) => IrType::Result(
+            Box::new(flip_in_slot(ipe_kernels::BuiltinTag::Result, 0, recur(*a))),
+            Box::new(flip_in_slot(ipe_kernels::BuiltinTag::Result, 1, recur(*b))),
+        ),
         IrType::Dict(a, b) => IrType::Dict(
-            Box::new(recur(*a)),
-            Box::new(flip_fun_in_storage_element(recur(*b))),
+            Box::new(flip_in_slot(ipe_kernels::BuiltinTag::Dict, 0, recur(*a))),
+            Box::new(flip_in_slot(ipe_kernels::BuiltinTag::Dict, 1, recur(*b))),
         ),
         IrType::Tuple(es) => IrType::Tuple(
             es.into_iter()
@@ -10047,6 +10740,17 @@ fn normalize_record_fun_carriers(ty: IrType) -> IrType {
             IrType::SharedFun(ps.into_iter().map(recur).collect(), Box::new(recur(*r)))
         }
         other => other,
+    }
+}
+
+/// Flip `elem` to the storage carrier ([`flip_fun_in_storage_element`]) iff
+/// argument `slot` of the builtin constructor `tag` is a storage slot
+/// ([`ipe_kernels::storage_slot`]); any other slot keeps its carrier.
+fn flip_in_slot(tag: ipe_kernels::BuiltinTag, slot: usize, elem: IrType) -> IrType {
+    if ipe_kernels::storage_slot(tag, slot) {
+        flip_fun_in_storage_element(elem)
+    } else {
+        elem
     }
 }
 
@@ -10318,10 +11022,6 @@ pub fn max_ctor_arity_per_module(m: &canon::Module) -> usize {
 #[cfg(test)]
 #[must_use]
 pub fn max_live_eta_params(m: &canon::Module) -> usize {
-    /// The widest eta block any single call / fn-typed-let site can draw:
-    /// a residual arrow up to the widest callable arity, matching the eta / cap
-    /// pool floor in [`crate::lower`].
-    const MAX_ETA_PER_SITE: usize = 16;
     // A first-class / partial constructor eta-expands over its remaining payload
     // positions, whose count is uncapped at the language surface — so its per-site
     // charge is the widest ctor arity, not the `MAX_ETA_PER_SITE` floor a
@@ -11154,7 +11854,84 @@ const fn top_col_needs_slice(pat: &canon::Pattern) -> bool {
 
 /// The widest eta block any single call / fn-typed-`let` site can draw — the
 /// residual-arrow floor shared with the eta / cap pool sizing.
-const MAX_ETA_PER_SITE: usize = 16;
+pub const MAX_ETA_PER_SITE: usize = 16;
+
+/// The eta names one call site has drawn, proven within [`MAX_ETA_PER_SITE`].
+///
+/// The pool sizing ([`count_body_pool_sites`]) charges every call site exactly
+/// `MAX_ETA_PER_SITE` names, so a site that drew more would overrun a pool
+/// sized to that charge. [`EtaDemand::charge`] is the only way to grow a
+/// demand and refuses past the ceiling, so every held demand fits its
+/// site's charge and the refusal is a typed IPE-L0155, never a pool overrun.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct EtaDemand(usize);
+
+impl EtaDemand {
+    /// A call site that has drawn no eta names yet.
+    pub const EMPTY: Self = Self(0);
+
+    /// This demand grown by `names`; `None` past [`MAX_ETA_PER_SITE`].
+    #[must_use]
+    pub const fn charge(self, names: usize) -> Option<Self> {
+        match self.0.checked_add(names) {
+            Some(total) if total <= MAX_ETA_PER_SITE => Some(Self(total)),
+            _ => None,
+        }
+    }
+
+    /// The names one mapper wrap ([`Lowerer::wrap_mapper_value`]) at kernel
+    /// position `arg` draws: none when no spine parameter binds a stored
+    /// function element (the mapper is left untouched); otherwise the holder,
+    /// one wrapper parameter per spine slot, and one demote-adapter parameter
+    /// per arrow parameter of each bound function.
+    #[must_use]
+    pub fn mapper_wrap_names(
+        shape: &ipe_kernels::TyShape,
+        arity: u8,
+        arg: usize,
+        spine: &MapperSpine<'_>,
+    ) -> usize {
+        let mut bound = spine
+            .params()
+            .iter()
+            .enumerate()
+            .filter(|(param, ty)| mapper_param_binds_fn_element(shape, arity, arg, *param, ty))
+            .peekable();
+        if bound.peek().is_none() {
+            return 0;
+        }
+        let demote = bound.fold(0_usize, |acc, (_, ty)| {
+            acc.saturating_add(arrow_params(ty).len())
+        });
+        spine
+            .params()
+            .len()
+            .saturating_add(1)
+            .saturating_add(demote)
+    }
+
+    /// The names wrapping every mapper argument of `kernel` draws, given the
+    /// solved type of the argument at each kernel position (`None` when
+    /// unknown, which the wrapper refuses before drawing).
+    #[must_use]
+    pub fn kernel_mapper_names<'t>(
+        kernel: KernelFn,
+        arg_tys: impl IntoIterator<Item = Option<&'t Ty>>,
+    ) -> usize {
+        let Some(shape) = kernel.scheme_shape() else {
+            return 0;
+        };
+        let arity = kernel.def().arity;
+        arg_tys
+            .into_iter()
+            .enumerate()
+            .filter_map(|(arg, ty)| {
+                let spine = MapperSpine::peel(ty?, scheme_mapper_arity(shape, arg))?;
+                Some(Self::mapper_wrap_names(shape, arity, arg, &spine))
+            })
+            .fold(0, usize::saturating_add)
+    }
+}
 
 /// One exhaustive per-expression walk accumulating every body-derived pool
 /// counter at once. Each arm charges its own counters, then folds the
@@ -11317,6 +12094,105 @@ pub fn module_symbol_pool_counts(m: &canon::Module, interner: &Interner) -> Pool
         counts.tuple_elem_rebind_sites += body_counts.tuple_elem_rebind_sites;
     }
     counts
+}
+
+/// The widest per-def total of eta symbols mapper wraps can draw
+/// ([`EtaDemand::kernel_mapper_names`]), for the eta pool to reserve on top of
+/// [`module_symbol_pool_counts`]' per-site charges.
+#[must_use]
+pub fn max_mapper_wrap_eta_demand(m: &canon::Module, types: &SolvedTypes) -> usize {
+    m.defs
+        .iter()
+        .map(|d| {
+            let body = match d {
+                canon::Def::Typed { body, .. } | canon::Def::Untyped { body, .. } => body,
+            };
+            mapper_wrap_eta_demand(body, d.home(), types)
+        })
+        .max()
+        .unwrap_or(0)
+}
+
+/// The eta symbols every mapper wrap in `body` can draw, summed.
+///
+/// A wrap reads its mapper's type from the kernel reference's solved arrow
+/// (a partial or bare reference) or from the argument's own region (a
+/// saturated call); both are charged, so the sum covers whichever the
+/// lowering reads. The walk is an explicit work stack over the canonical
+/// tree, whose size the parser's limits already bound.
+fn mapper_wrap_eta_demand(body: &canon::Expr, home: &[Symbol], types: &SolvedTypes) -> usize {
+    let region = |span: Span| types.regions.get(&(home.to_vec(), span));
+    let mut total: usize = 0;
+    let mut work: Vec<&canon::Expr> = vec![body];
+    while let Some(e) = work.pop() {
+        match &e.value {
+            canon::Expr_::VarKernel {
+                id: Some(kernel), ..
+            } => {
+                if let Some(ty) = region(e.span) {
+                    let at_ref = EtaDemand::kernel_mapper_names(
+                        *kernel,
+                        arrow_params(ty).into_iter().map(Some),
+                    );
+                    total = total.saturating_add(at_ref);
+                }
+            }
+            canon::Expr_::Lambda(_, inner) | canon::Expr_::Access(inner, _) => work.push(inner),
+            canon::Expr_::Call(callee, args) => {
+                if let canon::Expr_::VarKernel {
+                    id: Some(kernel), ..
+                } = &callee.value
+                {
+                    let at_args = EtaDemand::kernel_mapper_names(
+                        *kernel,
+                        args.iter().map(|a| region(a.span)),
+                    );
+                    total = total.saturating_add(at_args);
+                }
+                work.extend(args.iter().rev());
+                work.push(callee);
+            }
+            canon::Expr_::ForeignCall { args, .. }
+            | canon::Expr_::Tuple(args)
+            | canon::Expr_::List(args) => work.extend(args.iter().rev()),
+            canon::Expr_::Binop { lhs, rhs, .. } | canon::Expr_::Cons(lhs, rhs) => {
+                work.push(rhs);
+                work.push(lhs);
+            }
+            canon::Expr_::Case(scrutinee, branches) => {
+                work.extend(branches.iter().rev().map(|b| &b.body));
+                work.push(scrutinee);
+            }
+            canon::Expr_::Let(bindings, inner) => {
+                work.push(inner);
+                work.extend(bindings.iter().rev().map(|b| &b.body));
+            }
+            canon::Expr_::If(branches, else_expr) => {
+                work.push(else_expr);
+                for (cond, then) in branches.iter().rev() {
+                    work.push(then);
+                    work.push(cond);
+                }
+            }
+            canon::Expr_::Record(fields) => work.extend(fields.iter().rev().map(|(_, v)| v)),
+            canon::Expr_::Update(base, fields) => {
+                work.extend(fields.iter().rev().map(|(_, v)| v));
+                work.push(base);
+            }
+            canon::Expr_::VarKernel { id: None, .. }
+            | canon::Expr_::VarLocal(_)
+            | canon::Expr_::VarTopLevel { .. }
+            | canon::Expr_::VarCtor { .. }
+            | canon::Expr_::Int(_)
+            | canon::Expr_::Float(_)
+            | canon::Expr_::Str(_)
+            | canon::Expr_::PathLit(_)
+            | canon::Expr_::CustomElementCtor(_)
+            | canon::Expr_::Char(_)
+            | canon::Expr_::Unit => {}
+        }
+    }
+    total
 }
 
 /// Every pre-minted, collision-free synthetic-symbol pool [`Lowerer::new`]
@@ -12029,21 +12905,34 @@ impl<'a> Lowerer<'a> {
         self.types.regions.get(&(home, span))
     }
 
-    /// Locate a user-declared constructor by its spelling, returning its enum's
-    /// nominal identity `(home, type name)` and the constructor's own symbol.
-    /// Used by the `Store.eq` / `Store.eqBy` intercept to synthesise the
-    /// `Ipe.Db.Store` `Cond` / `CompareOp` constructions the query leaf lowers
-    /// to. Scans `enum_variants` (the true per-union variant sets), so a match
-    /// carries the exact `(home, ty, variant)` triple `Expr::Ctor` needs; `None`
-    /// when no union declares a constructor of that name.
-    fn find_user_ctor(&self, ctor_name: &str) -> Option<(ModPath, Symbol, Symbol)> {
+    /// The `Ipe.Db.Store` module home, or `None` when the program does not link
+    /// that module (one of its segments was never interned).
+    ///
+    /// `Ipe.*` is a reserved namespace, so no user module can claim this home.
+    fn store_home(&self) -> Option<Vec<Symbol>> {
+        ["Ipe", "Db", "Store"]
+            .iter()
+            .map(|segment| self.interner.lookup(segment))
+            .collect()
+    }
+
+    /// Locate an `Ipe.Db.Store` constructor by its spelling.
+    ///
+    /// Returns its enum's nominal identity `(home, type name)` and the
+    /// constructor's own symbol, used by the `Store.eq` / `Store.eqBy`
+    /// intercept to synthesise the `Cond` / `CompareOp` constructions the query
+    /// leaf lowers to. Only unions declared in the `Ipe.Db.Store` home are
+    /// scanned, so a same-named user constructor is never mistaken for the
+    /// Store one; `None` when that module declares no constructor of that name.
+    fn find_store_ctor(&self, ctor_name: &str) -> Option<(ModPath, Symbol, Symbol)> {
+        let home = self.store_home()?;
         let want = self.interner.lookup(ctor_name)?;
-        for ((home, ty), variants) in &self.enum_variants {
-            if variants.contains(&want) {
-                return Some((home.clone(), *ty, want));
-            }
-        }
-        None
+        self.enum_variants
+            .iter()
+            .find_map(|((variant_home, ty), variants)| {
+                (variant_home.0 == home && variants.contains(&want)).then_some(*ty)
+            })
+            .map(|ty| (ModPath(home), ty, want))
     }
 
     /// The `(home, Cond, Compare, CompareOp, OpEq)` identities the `Store.eq` /
@@ -12053,14 +12942,14 @@ impl<'a> Lowerer<'a> {
     /// invariant (the kernel could not have resolved without it).
     fn store_cond_ids(&self) -> DResult<StoreCondIds> {
         let (cond_home, cond_ty, compare_variant) =
-            self.find_user_ctor("Compare").ok_or_else(|| {
+            self.find_store_ctor("Compare").ok_or_else(|| {
                 bug(
                     "ipe_lower::store_cond_ids",
                     "Ipe.Db.Store `Compare` constructor not found",
                 )
             })?;
         let (_op_home, compareop_ty, opeq_variant) =
-            self.find_user_ctor("OpEq").ok_or_else(|| {
+            self.find_store_ctor("OpEq").ok_or_else(|| {
                 bug(
                     "ipe_lower::store_cond_ids",
                     "Ipe.Db.Store `OpEq` constructor not found",
@@ -12248,7 +13137,7 @@ impl<'a> Lowerer<'a> {
         let (column, _field_ty) = self.accessor_column(acc)?;
         let lowered_codec = self.lower_expr(codec)?;
         let lowered_value = self.lower_expr(value)?;
-        let id = self.eq_by_named_func_id()?;
+        let id = self.store_named_func_id("eqByNamed")?;
         Ok(Expr::Call {
             callee: Callee::Func(id),
             args: vec![Expr::Str(column), lowered_codec, lowered_value],
@@ -12275,54 +13164,32 @@ impl<'a> Lowerer<'a> {
         })
     }
 
-    /// The `FuncId` of the `Ipe.Db.Store` `eqByNamed` helper. Found by its
-    /// spelling among the linked module's top-level bindings (the same
-    /// `func_ids` a `VarTopLevel` resolves through); a miss means the program
-    /// called `Store.eqBy` without linking `Ipe.Db.Store`, a violated invariant.
-    fn eq_by_named_func_id(&self) -> DResult<FuncId> {
-        let want = self.interner.lookup("eqByNamed").ok_or_else(|| {
-            bug(
-                "ipe_lower::eq_by_named_func_id",
-                "`eqByNamed` is not interned — Ipe.Db.Store not linked",
-            )
-        })?;
-        self.func_ids
-            .iter()
-            .find_map(|((_home, name), id)| (*name == want).then_some(*id))
-            .ok_or_else(|| {
-                bug(
-                    "ipe_lower::eq_by_named_func_id",
-                    "Ipe.Db.Store `eqByNamed` helper not found",
-                )
-            })
-    }
-
-    /// Look up the `FuncId` of a named `Ipe.Db.Store` helper by its spelling
-    /// (e.g. `"neqByNamed"`, `"inListNamed"`). A miss is a violated invariant —
-    /// the program used a Store kernel without linking `Ipe.Db.Store`.
+    /// Look up the `FuncId` of a named `Ipe.Db.Store` helper by its exact identity.
+    ///
+    /// Keyed on `(Ipe.Db.Store, helper)` (e.g. `"neqByNamed"`), so a same-named
+    /// top-level function in any other module can never stand in for the Store
+    /// helper. A miss is a violated invariant — the program used a Store kernel
+    /// without linking `Ipe.Db.Store`.
     fn store_named_func_id(&self, helper: &str) -> DResult<FuncId> {
-        let want = self.interner.lookup(helper).ok_or_else(|| {
-            bug(
+        let (Some(home), Some(want)) = (self.store_home(), self.interner.lookup(helper)) else {
+            return Err(bug(
                 "ipe_lower::store_named_func_id",
                 "Store helper name not interned — Ipe.Db.Store not linked",
+            ));
+        };
+        self.func_ids.get(&(home, want)).copied().ok_or_else(|| {
+            bug(
+                "ipe_lower::store_named_func_id",
+                "Ipe.Db.Store named helper not found",
             )
-        })?;
-        self.func_ids
-            .iter()
-            .find_map(|((_home, name), id)| (*name == want).then_some(*id))
-            .ok_or_else(|| {
-                bug(
-                    "ipe_lower::store_named_func_id",
-                    "Ipe.Db.Store named helper not found",
-                )
-            })
+        })
     }
 
     /// Look up a `CompareOp` variant symbol by its constructor name. The variant
     /// must be declared in `Ipe.Db.Store` (it is — the `CompareOp` union lives
     /// there). A miss is a violated invariant.
     fn compare_op_ctor(&self, ctor_name: &str) -> DResult<(ModPath, Symbol, Symbol)> {
-        self.find_user_ctor(ctor_name).ok_or_else(|| {
+        self.find_store_ctor(ctor_name).ok_or_else(|| {
             bug(
                 "ipe_lower::compare_op_ctor",
                 "Ipe.Db.Store CompareOp constructor not found",
@@ -12955,7 +13822,14 @@ impl<'a> Lowerer<'a> {
                     StoreSelectProjectionDefect::LiteralTypeUnsupported { ty: ty_label },
                 ));
             };
-            let lowered = self.lower_expr(value_expr)?;
+            // The projection lambda's row binders have no carrier promotion:
+            // they shadow any outer promotable name over the lowered value.
+            let row_scope: BinderScope = binders
+                .into_iter()
+                .flatten()
+                .map(|sym| (sym, BinderCarrier::Shadowing))
+                .collect();
+            let lowered = self.with_binders(&row_scope, || self.lower_expr(value_expr))?;
             return Ok(ProjectedColumn {
                 source: ProjectionSource::Literal { lowered },
                 kind,
@@ -13282,8 +14156,8 @@ impl<'a> Lowerer<'a> {
 
     /// Does `id` resolve to the `Ipe.Db.Store` top-level binding named `helper`?
     /// Used to recognise a `Store.selectToList` / `Store.selectToMaybe` call in
-    /// the intercept dispatch. Both names are unique to `Ipe.Db.Store`, so the
-    /// bare-name lookup cannot alias another module's binding.
+    /// the intercept dispatch; the lookup is keyed on the module home, so a
+    /// same-named binding in another module never matches.
     fn is_store_func(&self, id: FuncId, helper: &str) -> bool {
         self.store_named_func_id(helper) == Ok(id)
     }
@@ -13499,6 +14373,41 @@ impl<'a> Lowerer<'a> {
         Ok(Expr::Call {
             callee: Callee::Func(id),
             args: vec![Expr::Str(column), lowered_store],
+            pin: CallPin::None,
+            on_form: OnFormKind::NotForm,
+        })
+    }
+
+    /// Dispatch a `Store.compositePrimaryKey2` / `Store.compositePrimaryKey3`
+    /// call intercepted at lowering.
+    ///
+    /// Every argument but the last is a key-column accessor (`.field`); each
+    /// names a validated column. The names go, in declaration order, as one
+    /// `List String` to the `compositePrimaryKeyNamed` stdlib helper, which
+    /// refuses a duplicate or conflicting key.
+    fn lower_store_composite_pk(&self, args: &[canon::Expr]) -> DResult<Expr> {
+        let Some((store, accessors)) = args.split_last() else {
+            return Err(bug(
+                "ipe_lower::lower_store_composite_pk",
+                "Store composite-key kernel with no arguments",
+            ));
+        };
+        let items = accessors
+            .iter()
+            .map(|acc| {
+                self.accessor_column(acc)
+                    .map(|(column, _)| Expr::Str(column))
+            })
+            .collect::<DResult<Vec<_>>>()?;
+        let lowered_store = self.lower_expr(store)?;
+        let columns = Expr::List {
+            elem: IrType::Str,
+            items,
+        };
+        let id = self.store_named_func_id("compositePrimaryKeyNamed")?;
+        Ok(Expr::Call {
+            callee: Callee::Func(id),
+            args: vec![columns, lowered_store],
             pin: CallPin::None,
             on_form: OnFormKind::NotForm,
         })
@@ -15441,28 +16350,22 @@ impl<'a> Lowerer<'a> {
                 // msg UV → any_sym mapping so the subsequent `ir_type_from_ty`
                 // call produces `IrType::Generic(any_sym)` instead of Unit.
                 let poly_key = (def.home().to_vec(), name);
-                let saved_poly_tvars = {
-                    let mut poly = self
-                        .types
-                        .poly_var_map
-                        .get(&poly_key)
-                        .cloned()
-                        .unwrap_or_default();
-                    if let Some((uv_rep, any_sym)) = any_ui_msg_injection {
-                        poly.insert(uv_rep, any_sym);
-                    }
-                    // Withhold every UI-msg-defaulted variable so the body's msg
-                    // slots for it lower to `Unit` (via `ir_type_from_ty_ui_msg`'s
-                    // free-var arm), agreeing with the `Unit`-defaulted return
-                    // above at every occurrence.
-                    if !default_to_unit.is_empty() {
-                        poly.retain(|_, sym| !default_to_unit.contains(sym));
-                    }
-                    let mut slot = self.current_poly_tvars.borrow_mut();
-                    let saved = slot.clone();
-                    *slot = poly;
-                    saved
-                };
+                let mut poly = self
+                    .types
+                    .poly_var_map
+                    .get(&poly_key)
+                    .cloned()
+                    .unwrap_or_default();
+                if let Some((uv_rep, any_sym)) = any_ui_msg_injection {
+                    poly.insert(uv_rep, any_sym);
+                }
+                // Withhold every UI-msg-defaulted variable so the body's msg
+                // slots for it lower to `Unit` (via `ir_type_from_ty_ui_msg`'s
+                // free-var arm), agreeing with the `Unit`-defaulted return
+                // above at every occurrence.
+                if !default_to_unit.is_empty() {
+                    poly.retain(|_, sym| !default_to_unit.contains(sym));
+                }
                 // Wildcard-`any` return-type fix: `view : Model -> any` makes
                 // `any` appear in `free_vars` (the canon free-var collector treats
                 // it uniformly alongside genuine type parameters).  But `any` is NOT
@@ -15475,7 +16378,7 @@ impl<'a> Lowerer<'a> {
                 // parameter and a `-> T1` return type that the body cannot satisfy
                 // (E0308).
                 //
-                // This block runs AFTER the poly_tvars installation above so that
+                // The resolution runs INSIDE the poly_tvars scope below so that
                 // `ir_type_from_ty(body_ty)` — specifically its
                 // `ir_type_from_ty_ui_msg` sub-call for UI msg slots — already
                 // sees the Bug-29-injected mapping and produces
@@ -15509,68 +16412,76 @@ impl<'a> Lowerer<'a> {
                     }
                     _ => false,
                 };
-                let mut ret = if ret_is_any_wildcard {
-                    // The body's region type is the concrete return type.
-                    let body_ty = self
-                        .types
-                        .regions
-                        .get(&(def.home().to_vec(), body.span))
-                        .ok_or_else(|| {
-                            bug(
-                                "ipe_lower::lower_def",
-                                "no region type for body of `any`-annotated binding",
-                            )
-                        })?;
-                    self.ir_type_from_ty(body_ty, sig_span)?
-                } else {
-                    // A nested `any` in return position (e.g. `foo : X -> List any`)
-                    // is not covered by the bare-wildcard region substitution above.
-                    // Freshen every `Generic("any")` node in the return type so each
-                    // occurrence becomes a distinct fresh symbol — the same treatment
-                    // `split_typed_sig` applies to param-position `any`s.
-                    //
-                    // A wildcard `any` promises one concrete type per position. Each
-                    // `any` freshens to its own distinct symbol, so a return `any` and a
-                    // param `any` never denote the same type — the only thing that can
-                    // determine a return `any` is the body pinning it to a concrete
-                    // value, handled by the region substitution above. Reaching here with
-                    // a freshened return `any` means the body did not pin it: it would
-                    // surface as a type parameter appearing only in the result, which no
-                    // call site can fix. Reject it rather than emit Rust no caller can
-                    // satisfy.
-                    let mut ret_any_mints: Vec<Symbol> = Vec::new();
-                    let freshened_ret = self.freshen_any_generics(ret, &mut ret_any_mints)?;
-                    if !ret_any_mints.is_empty() {
-                        return Err(Diagnostic::Lower {
-                            span: sig_span,
-                            msg: LowerError::UndeterminableReturnAny,
-                        });
-                    }
-                    any_syms_minted.extend(ret_any_mints);
-                    freshened_ret
-                };
-                // A tuple-destructuring parameter binds its synthetic name to the
-                // tuple, then the body opens it with a `Destructure`. Fold the
-                // prologue OUTERMOST-first (reverse) so the first parameter's
-                // destructure is the outermost binding, matching source order.
-                // Save/set/restore fn_is_async so nested lambdas/defs see the
-                // correct async context for their own scope.
-                let prev_async = self.fn_is_async.get();
-                self.fn_is_async.set(matches!(ret, IrType::Task(_)));
-                // Params are promotable fn binders for the body's capture
-                // classifier (an inner lambda capturing a pure-`Fun` param
-                // defers to the param loop below instead of IPE-L0126).
-                let param_syms: Vec<Symbol> = params.iter().map(|(s, _)| *s).collect();
-                let mut row_vars = BTreeSet::new();
-                canon_sig_collect_arg_row_vars(ty, &mut row_vars);
-                let body_result = self
-                    .reject_generic_app_entries_in(body, &row_vars)
-                    .and_then(|()| {
-                        self.with_promotable_fn_binders(param_syms, || self.lower_expr(body))
-                    });
-                *self.current_poly_tvars.borrow_mut() = saved_poly_tvars;
-                self.fn_is_async.set(prev_async);
-                let mut lowered_body = self.fold_param_prologues(prologue, body_result?, body)?;
+                // Everything that resolves a `Ty` against the def's generics —
+                // the return, the body, the parameter prologues — runs inside
+                // one scope, so an early exit cannot leak the map.
+                let scoped = self.with_poly_tvars(Some(poly), || -> DResult<(IrType, Expr)> {
+                    let ret = if ret_is_any_wildcard {
+                        // The body's region type is the concrete return type.
+                        let body_ty = self
+                            .types
+                            .regions
+                            .get(&(def.home().to_vec(), body.span))
+                            .ok_or_else(|| {
+                                bug(
+                                    "ipe_lower::lower_def",
+                                    "no region type for body of `any`-annotated binding",
+                                )
+                            })?;
+                        self.ir_type_from_ty(body_ty, sig_span)?
+                    } else {
+                        // A nested `any` in return position (e.g. `foo : X -> List any`)
+                        // is not covered by the bare-wildcard region substitution above.
+                        // Freshen every `Generic("any")` node in the return type so each
+                        // occurrence becomes a distinct fresh symbol — the same treatment
+                        // `split_typed_sig` applies to param-position `any`s.
+                        //
+                        // A wildcard `any` promises one concrete type per position. Each
+                        // `any` freshens to its own distinct symbol, so a return `any` and a
+                        // param `any` never denote the same type — the only thing that can
+                        // determine a return `any` is the body pinning it to a concrete
+                        // value, handled by the region substitution above. Reaching here with
+                        // a freshened return `any` means the body did not pin it: it would
+                        // surface as a type parameter appearing only in the result, which no
+                        // call site can fix. Reject it rather than emit Rust no caller can
+                        // satisfy.
+                        let mut ret_any_mints: Vec<Symbol> = Vec::new();
+                        let freshened_ret = self.freshen_any_generics(ret, &mut ret_any_mints)?;
+                        if !ret_any_mints.is_empty() {
+                            return Err(Diagnostic::Lower {
+                                span: sig_span,
+                                msg: LowerError::UndeterminableReturnAny,
+                            });
+                        }
+                        any_syms_minted.extend(ret_any_mints);
+                        freshened_ret
+                    };
+                    // A tuple-destructuring parameter binds its synthetic name to the
+                    // tuple, then the body opens it with a `Destructure`. Fold the
+                    // prologue OUTERMOST-first (reverse) so the first parameter's
+                    // destructure is the outermost binding, matching source order.
+                    // Save/set/restore fn_is_async so nested lambdas/defs see the
+                    // correct async context for their own scope.
+                    let prev_async = self.fn_is_async.get();
+                    self.fn_is_async.set(matches!(ret, IrType::Task(_)));
+                    // Params are promotable fn binders for the body's capture
+                    // classifier (an inner lambda capturing a pure-`Fun` param
+                    // defers to the param loop below instead of IPE-L0126); a name
+                    // bound inside a destructuring param shadows instead.
+                    let param_scope = param_binder_scope(params.iter().map(|(s, _)| *s), patterns);
+                    let mut row_vars = BTreeSet::new();
+                    canon_sig_collect_arg_row_vars(ty, &mut row_vars);
+                    let body_result = self
+                        .reject_generic_app_entries_in(body, &row_vars)
+                        .and_then(|()| self.with_binders(&param_scope, || self.lower_expr(body)));
+                    self.fn_is_async.set(prev_async);
+                    // The prologue binders' types mention the def's own generics, so
+                    // they resolve before those generics go out of scope.
+                    let folded =
+                        body_result.and_then(|b| self.fold_param_prologues(prologue, b, body))?;
+                    Ok((ret, folded))
+                });
+                let (mut ret, mut lowered_body) = scoped?;
                 // Param-position wildcard-`any` region substitution — the SEAL
                 // dual of the return substitution above. A bare-`any` parameter
                 // freshens to `IrType::Generic(any_sym)` in `split_typed_sig`.
@@ -15725,6 +16636,16 @@ impl<'a> Lowerer<'a> {
                 // closes both the annotation path and the wildcard-erasure path
                 // with a single check.
                 if !row_params.is_empty() {
+                    // A row field is read only through its witness getter, which
+                    // borrows; a move-only effect-carrier field (`Task` / `Cmd` /
+                    // `Sub`, or a type embedding one) has no `Clone` to turn that
+                    // borrow into a value, so the signature fails closed here.
+                    if row_params
+                        .iter()
+                        .any(|rp| rp.fields.values().any(ir_type_has_effect_carrier))
+                    {
+                        return Err(unsupported(sig_span, Feature::NonCloneValueReuse));
+                    }
                     let row_syms: BTreeSet<Symbol> = params
                         .iter()
                         .filter(|(_, ty)| matches!(ty, IrType::RowGeneric(_)))
@@ -15896,20 +16817,13 @@ impl<'a> Lowerer<'a> {
                 let poly_key = (def.home().to_vec(), name);
                 let quantified_syms = self.types.untyped_type_params.get(&poly_key);
                 let is_generalized = quantified_syms.is_some_and(|v| !v.is_empty());
-                let saved_poly_tvars = if is_generalized {
-                    let poly = self
-                        .types
+                let scope_poly = is_generalized.then(|| {
+                    self.types
                         .poly_var_map
                         .get(&poly_key)
                         .cloned()
-                        .unwrap_or_default();
-                    let mut slot = self.current_poly_tvars.borrow_mut();
-                    let saved = slot.clone();
-                    *slot = poly;
-                    Some(saved)
-                } else {
-                    None
-                };
+                        .unwrap_or_default()
+                });
                 let var_bounds = self.types.bounds.get(&poly_key);
                 // `used_generics` structural-appearance filter, ported from the
                 // Typed arm (Bug-28/Bug-29 invariant): a var only belongs in
@@ -15957,32 +16871,29 @@ impl<'a> Lowerer<'a> {
                     // unsound `any`-shaped parameters — fail-closed by design
                     // (Divergence D1: an ambiguous instantiation the reference
                     // erasure-accepts is rejected here, strictly safer).
-                    let split_result = self.split_unannotated_sig(solved_ty, patterns, sig_span);
-                    let (params, prologue, ret) = match split_result {
-                        Ok(v) => v,
-                        Err(e) => {
-                            if let Some(saved) = saved_poly_tvars {
-                                *self.current_poly_tvars.borrow_mut() = saved;
-                            }
-                            return Err(e);
-                        }
-                    };
-                    // Save/set/restore fn_is_async (same rationale as Typed path).
-                    let prev_async = self.fn_is_async.get();
-                    self.fn_is_async.set(matches!(ret, IrType::Task(_)));
-                    // Same promotable-fn-binder registration as the Typed path.
-                    let param_syms: Vec<Symbol> = params.iter().map(|(s, _)| *s).collect();
-                    let body_result = self
-                        .reject_generic_app_entries_in(body, &BTreeSet::new())
-                        .and_then(|()| {
-                            self.with_promotable_fn_binders(param_syms, || self.lower_expr(body))
+                    let scoped =
+                        self.with_poly_tvars(scope_poly, || -> DResult<UnannotatedFnParts> {
+                            let (params, prologue, ret) =
+                                self.split_unannotated_sig(solved_ty, patterns, sig_span)?;
+                            // Save/set/restore fn_is_async (same rationale as Typed path).
+                            let prev_async = self.fn_is_async.get();
+                            self.fn_is_async.set(matches!(ret, IrType::Task(_)));
+                            // Same binder-scope registration as the Typed path.
+                            let param_scope =
+                                param_binder_scope(params.iter().map(|(s, _)| *s), patterns);
+                            let body_result = self
+                                .reject_generic_app_entries_in(body, &BTreeSet::new())
+                                .and_then(|()| {
+                                    self.with_binders(&param_scope, || self.lower_expr(body))
+                                });
+                            self.fn_is_async.set(prev_async);
+                            // Prologue binders resolve under the def's generics, as in
+                            // the Typed path.
+                            let folded = body_result
+                                .and_then(|b| self.fold_param_prologues(prologue, b, body))?;
+                            Ok((params, ret, folded))
                         });
-                    self.fn_is_async.set(prev_async);
-                    if let Some(saved) = saved_poly_tvars {
-                        *self.current_poly_tvars.borrow_mut() = saved;
-                    }
-                    let mut lowered_body =
-                        self.fold_param_prologues(prologue, body_result?, body)?;
+                    let (params, ret, mut lowered_body) = scoped?;
                     // Same move-ownership discipline as the Typed path above —
                     // one `apply_param_move_ownership` per param (see that call
                     // site and the fn doc for the collapsed-branch rationale).
@@ -16011,33 +16922,25 @@ impl<'a> Lowerer<'a> {
                         body: lowered_body,
                     });
                 }
-                let ret_result = self.ir_type_from_ty(solved_ty, sig_span);
-                let ret = match ret_result {
-                    Ok(v) => v,
-                    Err(e) => {
-                        if let Some(saved) = saved_poly_tvars {
-                            *self.current_poly_tvars.borrow_mut() = saved;
-                        }
-                        return Err(e);
-                    }
-                };
-                // Save/set/restore fn_is_async for the 0-param (value-binding) path.
-                let prev_async = self.fn_is_async.get();
-                self.fn_is_async.set(matches!(ret, IrType::Task(_)));
-                let lowered_body = self
-                    .reject_generic_app_entries_in(body, &BTreeSet::new())
-                    .and_then(|()| self.lower_expr(body));
-                self.fn_is_async.set(prev_async);
-                if let Some(saved) = saved_poly_tvars {
-                    *self.current_poly_tvars.borrow_mut() = saved;
-                }
-                let lowered_body = lowered_body?;
+                let (ret, lowered_body) =
+                    self.with_poly_tvars(scope_poly, || -> DResult<(IrType, Expr)> {
+                        let ret = self.ir_type_from_ty(solved_ty, sig_span)?;
+                        // Save/set/restore fn_is_async for the 0-param (value-binding) path.
+                        let prev_async = self.fn_is_async.get();
+                        self.fn_is_async.set(matches!(ret, IrType::Task(_)));
+                        let lowered_body = self
+                            .reject_generic_app_entries_in(body, &BTreeSet::new())
+                            .and_then(|()| self.lower_expr(body));
+                        self.fn_is_async.set(prev_async);
+                        Ok((ret, lowered_body?))
+                    })?;
                 // Zero-param generalized value bindings (no value restriction,
                 // e.g. `empty = []` used at two element types cross-module)
                 // take the identical `params: []` path the backend already
                 // emits for zero-arg fn calls — no shared mutable cell, no
                 // memoization to break.
-                let type_params = compute_type_params(quantified_syms, var_bounds, &[], &ret);
+                let mut type_params = compute_type_params(quantified_syms, var_bounds, &[], &ret);
+                apply_tea_carrier_bounds(&mut type_params, &[], &ret);
                 Ok(DefParts {
                     type_params,
                     wildcard_any_syms: BTreeSet::new(),
@@ -16916,6 +17819,11 @@ impl<'a> Lowerer<'a> {
                             format!("Program carrier with unknown shape tag `{other}`"),
                         )),
                     },
+                    // A shape-generic annotation (`Program shape msg`) names no
+                    // single app leaf to emit; this arm carries no span.
+                    Some(canon::Type::Var(_)) => {
+                        Err(unsupported(Span::DUMMY, Feature::Polymorphism))
+                    }
                     _ => Err(bug(
                         "ipe_lower::ir_type_from_annotation",
                         "Program carrier annotation without a shape tag",
@@ -17327,20 +18235,153 @@ impl<'a> Lowerer<'a> {
         }
     }
 
+    /// Resolve the IR type the ownership disciplines check a binder at.
+    ///
+    /// `type_span` is the span whose solved type is the binder's type (its
+    /// first use site, or a `let`'s bound value); `None` means the binder has
+    /// no use in the scope the discipline governs, the one case with nothing
+    /// to check. Every other outcome is fail-closed: a span the solver
+    /// recorded no type for is a compiler bug, and a type that does not lower
+    /// refuses with its own typed diagnostic. No discipline (non-`Clone`
+    /// reuse, `CloneOk` multi-use, fn-value, foreign-handle, capture-clone)
+    /// is skipped for a used binder whose type is unknown.
+    ///
+    /// A phantom type variable (free, and not a generic of the enclosing
+    /// definition) is classified as `String`, a `CloneOk` leaf: the solver
+    /// left it unconstrained, so the emitted type there is a defaulted `Clone`
+    /// type the disciplines may clone but never move twice. Such a type is a
+    /// [`BinderType::Phantom`], fit for classification only — never for
+    /// emission. A phantom whose position fixes the emitted carrier (under a
+    /// function arrow, or a `Program` shape tag) is not defaulted and refuses
+    /// (IPE-L0102).
+    fn binder_ir_type(&self, type_span: Option<Span>) -> DResult<Option<BinderType>> {
+        let Some(span) = type_span else {
+            return Ok(None);
+        };
+        let ty = self.region_ty(span).ok_or_else(|| {
+            bug(
+                "ipe_lower::binder_ir_type",
+                "a used binder has no solved region type at its type span",
+            )
+        })?;
+        let carrier = self.interner.lookup("String").map(|name| Ty::Con {
+            module: Vec::new(),
+            name,
+            args: Vec::new(),
+        });
+        let mut pinned = false;
+        let pinned_ty = carrier
+            .as_ref()
+            .and_then(|c| self.pin_phantom_vars(ty, c, false, &mut pinned));
+        match pinned_ty {
+            Some(p) if pinned => self
+                .ir_type_from_ty(&p, span)
+                .map(|t| Some(BinderType::Phantom(t))),
+            _ => self
+                .ir_type_from_ty(ty, span)
+                .map(|t| Some(BinderType::Resolved(t))),
+        }
+    }
+
+    /// Copy `ty` with each phantom type variable replaced by `carrier`.
+    ///
+    /// Sets `pinned` when a phantom was replaced. `no_default` marks a
+    /// position whose type fixes the emitted carrier: a function arrow's
+    /// operands, and a `Program` shape tag. A phantom there makes the whole
+    /// copy `None`, so type lowering sees it unpinned and refuses it.
+    fn pin_phantom_vars(
+        &self,
+        ty: &Ty,
+        carrier: &Ty,
+        no_default: bool,
+        pinned: &mut bool,
+    ) -> Option<Ty> {
+        match ty {
+            Ty::Var(v) if self.poly_tvar_symbol(*v).is_none() => {
+                if no_default {
+                    return None;
+                }
+                *pinned = true;
+                Some(carrier.clone())
+            }
+            Ty::Var(_) | Ty::Unit => Some(ty.clone()),
+            Ty::Fun(arg, res) => Some(Ty::Fun(
+                Box::new(self.pin_phantom_vars(arg, carrier, true, pinned)?),
+                Box::new(self.pin_phantom_vars(res, carrier, true, pinned)?),
+            )),
+            Ty::Con { module, name, args } => {
+                let shape_tagged =
+                    module.is_empty() && self.interner.resolve(*name) == Some("Program");
+                Some(Ty::Con {
+                    module: module.clone(),
+                    name: *name,
+                    args: args
+                        .iter()
+                        .enumerate()
+                        .map(|(i, a)| {
+                            let tag_slot = shape_tagged && i == 0;
+                            self.pin_phantom_vars(a, carrier, no_default || tag_slot, pinned)
+                        })
+                        .collect::<Option<Vec<_>>>()?,
+                })
+            }
+            Ty::Tuple(elems) => Some(Ty::Tuple(
+                elems
+                    .iter()
+                    .map(|e| self.pin_phantom_vars(e, carrier, no_default, pinned))
+                    .collect::<Option<Vec<_>>>()?,
+            )),
+            Ty::Record(fields, tail) => Some(Ty::Record(
+                fields
+                    .iter()
+                    .map(|(k, f)| {
+                        self.pin_phantom_vars(f, carrier, no_default, pinned)
+                            .map(|f| (*k, f))
+                    })
+                    .collect::<Option<BTreeMap<_, _>>>()?,
+                tail.clone(),
+            )),
+        }
+    }
+
+    /// Resolve the IR type of a binder known to be used at `use_span`.
+    ///
+    /// Same fail-closed contract as [`Self::binder_ir_type`], for the sites
+    /// (captures, first-use lookups) where the use is already established.
+    fn used_binder_ir_type(&self, use_span: Span) -> DResult<BinderType> {
+        self.binder_ir_type(Some(use_span))?.ok_or_else(|| {
+            bug(
+                "ipe_lower::used_binder_ir_type",
+                "a used binder resolved as unused",
+            )
+        })
+    }
+
     /// Collect the captured local variables for a closure body (T3).
     ///
     /// Walks `canon_body` collecting every `VarLocal` free relative to
     /// `lambda_param_pats` (all flattened param patterns of the enclosing
-    /// closure). For each captured symbol, looks up its use-site region type
-    /// via [`Self::ir_type_from_ty`] to classify it by [`clone_class`].
-    /// Returns `(symbol, ir_type_option)` pairs; `None` means the region type
-    /// was unavailable (treated as bare / copy by the caller — safe default,
-    /// no `CloneVar` inserted, no IPE-L0125).
+    /// closure), paired with its IR type resolved at its first use site through
+    /// [`Self::binder_ir_type`]. A capture is a use, so a capture whose type
+    /// does not resolve refuses rather than going unclassified.
     fn captured_locals(
         &self,
         lambda_param_pats: &[&canon::Pattern],
         canon_body: &canon::Expr,
-    ) -> Vec<(Symbol, Option<IrType>)> {
+    ) -> DResult<Vec<(Symbol, BinderType)>> {
+        Ok(self
+            .captured_locals_at(lambda_param_pats, canon_body)?
+            .into_iter()
+            .map(|(sym, _, ty)| (sym, ty))
+            .collect())
+    }
+
+    /// [`Self::captured_locals`] with each capture's use-site span, for a diagnostic at the capture.
+    fn captured_locals_at(
+        &self,
+        lambda_param_pats: &[&canon::Pattern],
+        canon_body: &canon::Expr,
+    ) -> DResult<Vec<(Symbol, Span, BinderType)>> {
         let mut outer_bound = BTreeSet::new();
         for &p in lambda_param_pats {
             canon_collect_pat_binds(p, &mut outer_bound);
@@ -17348,12 +18389,7 @@ impl<'a> Lowerer<'a> {
         let mut free: BTreeMap<Symbol, Span> = BTreeMap::new();
         canon_collect_free_locals(&mut free, &outer_bound, canon_body);
         free.into_iter()
-            .map(|(sym, span)| {
-                let ty = self
-                    .region_ty(span)
-                    .and_then(|ty| self.ir_type_from_ty(ty, span).ok());
-                (sym, ty)
-            })
+            .map(|(sym, span)| Ok((sym, span, self.used_binder_ir_type(span)?)))
             .collect()
     }
 
@@ -17378,17 +18414,17 @@ impl<'a> Lowerer<'a> {
         span: Span,
         body: Expr,
     ) -> DResult<Expr> {
-        let captures = self.captured_locals(all_param_pats, cur_body);
+        let captures = self.captured_locals(all_param_pats, cur_body)?;
         let mut clone_set: BTreeSet<Symbol> = BTreeSet::new();
         let mut noncl_set: BTreeSet<Symbol> = BTreeSet::new();
-        for (sym, ir_ty) in captures {
-            if ir_ty.as_ref().is_some_and(fun_value_arc_promotable)
-                && self.promotable_fn_binders.borrow().contains(&sym)
+        for (sym, binder_ty) in captures {
+            let ir_ty = binder_ty.classified();
+            if fun_value_arc_promotable(ir_ty) && self.promotable_fn_binders.borrow().contains(&sym)
             {
                 self.deferred_fun_captures.borrow_mut().insert(sym, span);
                 continue;
             }
-            match classify_capture_clone(self.clone_env(), ir_ty.as_ref()) {
+            match classify_capture_clone(self.clone_env(), ir_ty) {
                 Some(true) => {
                     clone_set.insert(sym);
                 }
@@ -17401,22 +18437,99 @@ impl<'a> Lowerer<'a> {
         rewrite_captured_clones(&clone_set, &noncl_set, span, body, 0)
     }
 
-    /// Run `f` with `syms` registered as promotable fn binders (see the
-    /// `promotable_fn_binders` field doc), restoring the previous registration
-    /// afterwards so nested scopes compose and shadowing resolves to the
-    /// innermost registering binder.
-    fn with_promotable_fn_binders<T>(&self, syms: Vec<Symbol>, f: impl FnOnce() -> T) -> T {
-        if syms.is_empty() {
+    /// Run `f` with `poly` installed as the enclosing def's generic type-variable map.
+    ///
+    /// The previous map is restored once `f` returns, whatever path `f` exits
+    /// by, so a definition's generics can never stay in scope for the next
+    /// definition. `None` leaves the current map untouched.
+    fn with_poly_tvars<T>(&self, poly: Option<BTreeMap<u32, Symbol>>, f: impl FnOnce() -> T) -> T {
+        let Some(poly) = poly else {
             return f();
-        }
-        let saved = {
-            let mut set = self.promotable_fn_binders.borrow_mut();
-            let saved = set.clone();
-            set.extend(syms);
-            saved
         };
+        let saved = self.current_poly_tvars.replace(poly);
         let out = f();
-        *self.promotable_fn_binders.borrow_mut() = saved;
+        self.current_poly_tvars.replace(saved);
+        out
+    }
+
+    /// Refuse a non-`Clone` capture of a kernel handler the backend re-wraps with capture clones.
+    ///
+    /// The backend rebuilds the handler at `KernelFn::capture_cloned_handler_arg`
+    /// inside a fresh `move` closure and shadows each free local with
+    /// `.clone()`. Every capture is classified by [`classify_handler_capture`]:
+    /// a `Copy` leaf, a `Clone` carrier, or a promotable pure-`Fun` binder (its
+    /// binder site promotes it to the `Arc` carrier; recorded as a deferred
+    /// capture, so a binder that cannot promote re-raises IPE-L0126) pass. A
+    /// non-`Clone` capture (a destructure-bound `Box<dyn Fn>`, a task, a
+    /// decoder) fails closed with IPE-L0126 at the capture instead of a
+    /// cargo-time E0599; a capture whose type does not resolve is refused by
+    /// [`Self::used_binder_ir_type`] before classification. The saturated call is the
+    /// only shape that reaches the handler: a piped spine is flattened in
+    /// [`Self::lower_call`] and a partial or point-free use is refused by
+    /// [`reject_unsaturated_handler_kernel`].
+    fn reject_nonclone_handler_capture(
+        &self,
+        callee: &Callee,
+        args: &[canon::Expr],
+    ) -> DResult<()> {
+        let Callee::Kernel(kernel) = callee else {
+            return Ok(());
+        };
+        let Some(handler) = kernel
+            .capture_cloned_handler_arg()
+            .and_then(|i| args.get(i))
+        else {
+            return Ok(());
+        };
+        for (sym, capture_span, binder_ty) in self.captured_locals_at(&[], handler)? {
+            let promotable = self.promotable_fn_binders.borrow().contains(&sym);
+            let class = classify_handler_capture(
+                self.clone_env(),
+                Some(binder_ty.classified()),
+                promotable,
+            );
+            if !class.admitted() {
+                return Err(unsupported(capture_span, Feature::StreamHandlerCapture));
+            }
+            if class == HandlerCapture::ArcCarrier {
+                self.deferred_fun_captures
+                    .borrow_mut()
+                    .entry(sym)
+                    .or_insert(capture_span);
+            }
+        }
+        Ok(())
+    }
+
+    /// Install `scope` into `promotable_fn_binders` and return the displaced state.
+    ///
+    /// A promotable name is added and a shadowing name removed, so the
+    /// innermost binder of a name decides its carrier. Installing the returned
+    /// scope undoes this installation exactly.
+    fn install_binders(&self, scope: &BinderScope) -> BinderScope {
+        let mut set = self.promotable_fn_binders.borrow_mut();
+        scope
+            .iter()
+            .map(|(&sym, &carrier)| {
+                let was_promotable = match carrier {
+                    BinderCarrier::Promotable => !set.insert(sym),
+                    BinderCarrier::Shadowing => set.remove(&sym),
+                };
+                let prior = if was_promotable {
+                    BinderCarrier::Promotable
+                } else {
+                    BinderCarrier::Shadowing
+                };
+                (sym, prior)
+            })
+            .collect()
+    }
+
+    /// Run `f` with `scope` installed, then restore the enclosing binder state.
+    fn with_binders<T>(&self, scope: &BinderScope, f: impl FnOnce() -> T) -> T {
+        let prior = self.install_binders(scope);
+        let out = f();
+        self.install_binders(&prior);
         out
     }
 
@@ -17482,17 +18595,64 @@ impl<'a> Lowerer<'a> {
                     body: Box::new(disciplined),
                 });
             }
-            reject_nonclone_value_reuse(self.clone_env(), sym, ir_ty, &body, span)?;
-            return apply_move_ownership(self.clone_env(), sym, ir_ty, body, span);
+            return apply_move_ownership(
+                self.clone_env(),
+                BindingSite::Materialized,
+                sym,
+                ir_ty,
+                body,
+                span,
+            );
         }
+        self.apply_non_fun_param_move_ownership(sym, ir_ty, deferred_capture, body, span)
+    }
+
+    /// Move-ownership for a param-like binder that takes no fn-value carrier.
+    ///
+    /// `deferred_capture` is the binder's consumed deferred fn-capture signal:
+    /// a capture site that saw `sym` as a pure `Fun` while the binder cannot
+    /// take the `Arc` carrier re-raises the fail-close rather than leak an
+    /// unsound bare `Box` capture.
+    fn apply_non_fun_param_move_ownership(
+        &self,
+        sym: Symbol,
+        ir_ty: &IrType,
+        deferred_capture: Option<Span>,
+        body: Expr,
+        span: Span,
+    ) -> DResult<Expr> {
         if let Some(capture_span) = deferred_capture {
-            // A capture site saw `sym` as a pure `Fun`, the param's own type
-            // disagrees — re-raise the fail-close rather than leak an unsound
-            // bare `Box` capture.
             return Err(unsupported(capture_span, Feature::NonCloneCapture));
         }
-        reject_nonclone_value_reuse(self.clone_env(), sym, ir_ty, &body, span)?;
-        apply_move_ownership(self.clone_env(), sym, ir_ty, body, span)
+        apply_move_ownership(
+            self.clone_env(),
+            BindingSite::Materialized,
+            sym,
+            ir_ty,
+            body,
+            span,
+        )
+    }
+
+    /// Move-ownership for a pattern binder whose type [`Self::binder_ir_type`] resolved.
+    ///
+    /// A resolved type takes the param entry point, fn-value carrier
+    /// included. A phantom type is classification-only, so it never feeds
+    /// the carrier rewrite that spells a type into emitted code.
+    fn apply_binder_move_ownership(
+        &self,
+        sym: Symbol,
+        binder_ty: &BinderType,
+        body: Expr,
+        span: Span,
+    ) -> DResult<Expr> {
+        match binder_ty {
+            BinderType::Resolved(ir_ty) => self.apply_param_move_ownership(sym, ir_ty, body, span),
+            BinderType::Phantom(ir_ty) => {
+                let deferred_capture = self.deferred_fun_captures.borrow_mut().remove(&sym);
+                self.apply_non_fun_param_move_ownership(sym, ir_ty, deferred_capture, body, span)
+            }
+        }
     }
 
     /// Fold the tuple/record destructuring `prologue` of a function's parameters
@@ -17508,8 +18668,9 @@ impl<'a> Lowerer<'a> {
     /// discipline cannot see. Route each component through the ONE shared
     /// [`apply_move_ownership`] entry point, resolving each component's IR type
     /// from its first use-site span in the (canon) `body` — the identical rule
-    /// `build_destructure_or_decoder_thunk` uses for a body-level destructure. An
-    /// unused component has no use-site span and is left bare.
+    /// `build_destructure_or_decoder_thunk` uses for a body-level destructure,
+    /// through the fail-closed [`Self::binder_ir_type`] resolver. Only an unused
+    /// component (no use-site span) is left bare.
     fn fold_param_prologues(
         &self,
         prologue: Vec<ParamPrologue>,
@@ -17522,14 +18683,13 @@ impl<'a> Lowerer<'a> {
             let mut bound: BTreeSet<Symbol> = BTreeSet::new();
             pat_bound_symbols(&binder_pat, &mut bound);
             for sym in &bound {
-                if let Some(span) = find_first_varlocal_span(*sym, body)
-                    && let Some(ty) = self.region_ty(span)
-                    && let Ok(comp_ir_ty) = self.ir_type_from_ty(ty, span)
-                {
+                let use_span = find_first_varlocal_span(*sym, body);
+                if let (Some(span), Some(comp_ir_ty)) = (use_span, self.binder_ir_type(use_span)?) {
                     lowered_body = apply_move_ownership(
                         self.clone_env(),
+                        BindingSite::Materialized,
                         *sym,
-                        &comp_ir_ty,
+                        comp_ir_ty.classified(),
                         lowered_body,
                         span,
                     )?;
@@ -17688,9 +18848,13 @@ impl<'a> Lowerer<'a> {
         // Register this lambda's own params as promotable fn binders while the
         // body is lowered, so an INNER lambda capturing one of them routes to
         // the deferral (the param loop below promotes the carrier) instead of
-        // fail-closing IPE-L0126.
-        let param_syms: Vec<Symbol> = ir_params.iter().map(|(s, _)| *s).collect();
-        let mut body = self.with_promotable_fn_binders(param_syms, || self.lower_expr(cur_body))?;
+        // fail-closing IPE-L0126; a name bound inside a destructuring param
+        // shadows instead.
+        let param_scope = param_binder_scope(
+            ir_params.iter().map(|(s, _)| *s),
+            all_param_pats.iter().copied(),
+        );
+        let mut body = self.with_binders(&param_scope, || self.lower_expr(cur_body))?;
         self.fn_is_async.set(prev_async);
         // Apply the computed function-value body to the flatten-invariant pad
         // parameters (no-op for the ordinary fully-flattened lambda).
@@ -17704,18 +18868,11 @@ impl<'a> Lowerer<'a> {
         // by this closure and replace CloneOk reads with `.clone()`, emitting
         // IPE-L0125 for NonClone captures outside callee position.
         body = self.rewrite_lambda_captures(&all_param_pats, cur_body, span, body)?;
-        // Fold each destructuring param's `Destructure` around the body,
-        // OUTERMOST-first (reverse of source order) so the first parameter's
-        // destructure is the outermost binding — identical to the def-head
-        // prologue folding in `lower_def`. (Lambdas are not TCO'd, so there is no
-        // TailLoop interaction here.)
-        for (binder_sym, binder_pat) in prologue.into_iter().rev() {
-            body = Expr::Destructure {
-                binder: binder_pat,
-                value: Box::new(Expr::Var(binder_sym)),
-                body: Box::new(body),
-            };
-        }
+        // Fold each destructuring param's `Destructure` around the body through
+        // the same shared fold as the def-head params, so every bound component
+        // runs the move-ownership discipline. (Lambdas are not TCO'd, so there is
+        // no TailLoop interaction here.)
+        body = self.fold_param_prologues(prologue, body, cur_body)?;
         // Move-ownership discipline for LAMBDA params — the exact analogue of
         // the def-head param rewrite in `lower_def`, through the ONE shared
         // entry point: `apply_param_move_ownership` promotes a pure-`Fun` param
@@ -18496,24 +19653,25 @@ impl<'a> Lowerer<'a> {
                 // shape's existing opaque app leaf as the IR erase target; the
                 // `msg` arg is dropped. Home-guarded so a user `type Program = …`
                 // keyed under its own home falls through to its own enum.
-                "Program" if module.is_empty() && matches!(args.first(), Some(Ty::Con { .. })) => {
-                    match args.first() {
-                        Some(Ty::Con { name: tag, .. }) => match self.resolve(*tag)? {
-                            "Web" => Ok(IrType::WebApp),
-                            "Tui" => Ok(IrType::TuiApp),
-                            "Cli" => Ok(IrType::CliApp),
-                            "Worker" => Ok(IrType::WorkerApp),
-                            other => Err(bug(
-                                "ipe_lower::ir_type_from_ty",
-                                format!("Program carrier with unknown shape tag `{other}`"),
-                            )),
-                        },
-                        _ => Err(bug(
+                // A shape tag the solver left a variable names no single app
+                // leaf to emit: refused as IPE-L0102, like any unresolved type.
+                "Program" if module.is_empty() => match args.first() {
+                    Some(Ty::Con { name: tag, .. }) => match self.resolve(*tag)? {
+                        "Web" => Ok(IrType::WebApp),
+                        "Tui" => Ok(IrType::TuiApp),
+                        "Cli" => Ok(IrType::CliApp),
+                        "Worker" => Ok(IrType::WorkerApp),
+                        other => Err(bug(
                             "ipe_lower::ir_type_from_ty",
-                            "Program carrier without a settled shape tag",
+                            format!("Program carrier with unknown shape tag `{other}`"),
                         )),
-                    }
-                }
+                    },
+                    Some(Ty::Var(_)) => Err(unsupported(span, Feature::Polymorphism)),
+                    _ => Err(bug(
+                        "ipe_lower::ir_type_from_ty",
+                        "Program carrier without a settled shape tag",
+                    )),
+                },
                 // `WebRoute page` — the route descriptor produced by
                 // `Web.route`, parametric on the page type it builds.
                 // The solver's `WebRoute` Con always carries exactly one
@@ -19131,7 +20289,7 @@ impl<'a> Lowerer<'a> {
 
     /// Element-capability soundness gate: reject a `List`/`Dict`/`Set` kernel
     /// that cannot represent a function-carrying element when any of its
-    /// collection arguments carries one.
+    /// collection parameters carries one.
     ///
     /// A `List` element / `Dict`-value function is a storable value on the
     /// `Clone` `Arc<dyn Fn>` carrier, so the region gate admits it — but that
@@ -19140,15 +20298,22 @@ impl<'a> Lowerer<'a> {
     /// So a kernel that compares/orders its element, OR a higher-order kernel
     /// whose mapper frontier is still open, would emit Rust `cargo` rejects. The
     /// registry's [`StdlibKernel::element_capability`] records which kernels
-    /// forbid a function element and why (equality, ordering, or open frontier) —
-    /// an explicit exhaustive SSOT fact, coherence-tested; this gate consults it
-    /// and fails closed with IPE-L0134 at `ipe` time. A kernel whose element
-    /// capability is `CloneOk` (pure structural, or a frontier-closed
-    /// map/fold/filter) is sound over a function element and left through. A
-    /// non-collection kernel carries no element capability and is a no-op here.
+    /// forbid a function element and why (equality and ordering stated, the
+    /// open mapper frontier derived from the scheme and build-time checked);
+    /// this gate consults it and fails closed with IPE-L0134 at `ipe` time. A
+    /// kernel whose element capability is `CloneOk` (pure structural, or a
+    /// frontier-closed map/fold/filter) is sound over a function element and
+    /// left through. A non-collection kernel carries no element capability and
+    /// is a no-op here.
+    ///
+    /// Every parameter of the callee's solved arrow (`callee_span`) is
+    /// inspected, not only the supplied `args`: a partial application
+    /// (`Dict.update k g`) or a point-free reference supplies the collection
+    /// later, so reading the arguments alone would let it through open.
     fn reject_fn_element_for_capability_kernel(
         &self,
         resolved: &Callee,
+        callee_span: Span,
         args: &[canon::Expr],
     ) -> DResult<()> {
         let Callee::Kernel(k) = resolved else {
@@ -19170,6 +20335,13 @@ impl<'a> Lowerer<'a> {
             {
                 return Err(unsupported(arg.span, Feature::FunctionElementEquality));
             }
+        }
+        if let Some(fn_ty) = self.region_ty(callee_span)
+            && arrow_params(fn_ty)
+                .into_iter()
+                .any(|param| collection_storable_element_carries_function(self.interner, param))
+        {
+            return Err(unsupported(callee_span, Feature::FunctionElementEquality));
         }
         Ok(())
     }
@@ -19956,6 +21128,10 @@ impl<'a> Lowerer<'a> {
                 // never-defined symbol (E0425). See
                 // [`reject_point_free_store_kernel`].
                 reject_point_free_store_kernel(&callee, e.span)?;
+                reject_unsaturated_handler_kernel(&callee, e.span)?;
+                // A point-free collection kernel receives its collection later,
+                // so the element-capability gate reads the reference's arrow.
+                self.reject_fn_element_for_capability_kernel(&callee, e.span, &[])?;
                 // Fail-closed SECURITY gate: an un-applied `Secret.fromString`
                 // reference (point-free, let-bound, passed as a value) routes
                 // around the committed-literal seal gate (IPE-L0150), which reads
@@ -19964,6 +21140,30 @@ impl<'a> Lowerer<'a> {
                 // whose argument the literal gate sees. See
                 // [`reject_unapplied_secret_from_string`].
                 reject_unapplied_secret_from_string(&callee, e.span)?;
+                // A kernel whose emit arm carries a bridge or a guard is emitted
+                // only as a saturated call: eta-expand the point-free reference
+                // (`List.map Sub.onKey hs`, `let on = Sub.onKey`) into
+                // `\x -> kernel x`, so that arm fires on every path. See
+                // `StdlibKernel::requires_saturated_emit`.
+                //
+                // A higher-order kernel whose mapper binds a stored FUNCTION
+                // element at this instance takes the same eta route, so its
+                // mapper eta parameter reaches the carrier choke point
+                // ([`Self::retype_collection_element_param`]) exactly as a
+                // saturated call's mapper does.
+                if let Callee::Kernel(k) = &callee
+                    && (k.requires_saturated_emit() || kernel_ref_binds_fn_element(*k, ty))
+                {
+                    let arity = self.callee_arity(&callee)?;
+                    return self.eta_expand_partial(
+                        e,
+                        callee,
+                        Vec::new(),
+                        arity,
+                        EtaDemand::EMPTY,
+                        e.span,
+                    );
+                }
                 // For kernel callees use the JSON-aware type resolver so that
                 // a `Value = any = Ty::Var` in the argument / return position
                 // of a JSON kernel (e.g. `JsonEnc.string : String -> Value`)
@@ -20141,83 +21341,48 @@ impl<'a> Lowerer<'a> {
         )
     }
 
-    /// T3 (Tier 1 backstop — see [`Self::lower_callee`]'s doc comment):
-    /// `Maybe.andMap` / `Result.andMap` resolved to a CURRIED (arity ≥ 2)
-    /// payload function.
+    /// Refuse a higher-order kernel reference whose solved callback final result is a function.
     ///
-    /// `andMap : Maybe (a -> b) -> Maybe a -> Maybe b` (`Result e (a -> b) ->
-    /// Result e a -> Result e b`) is arity-1 per application: it fully
-    /// applies the wrapped function to exactly one argument. When the
-    /// wrapped function is itself curried (`\a b -> …`, IR-flattened to one
-    /// multi-parameter `Fun`), `a` instantiates to the first parameter and
-    /// `b` to the REMAINING curried tail — itself a `Ty::Fun`. This
-    /// reference's own solved type then has `Maybe b` / `Result e b` as its
-    /// tail with `b` a function: the applicative chain has not reached a
-    /// fully-applied value, and finishing it needs a nested-closure
-    /// (`curryN`-style) lowering this Stage does not implement (Stage 2,
-    /// tracked separately — see
-    /// `docs/adr/0002-codegen-soundness-and-the-seal.md` §3). Fail closed
-    /// here rather than let an unfinished chain reach a use site with no
-    /// sound lowering.
+    /// Every runtime higher-order kernel takes an exact-arity closure, while
+    /// the IR flattens a curried callback into one multi-parameter `Fun`, so a
+    /// callback whose final result is another arrow (`List.map add`, a
+    /// curried `andMap` payload, a function-valued fold accumulator) has no
+    /// sound lowering. [`KernelFn::hof_result_vars`] names the scheme
+    /// variables each callback returns; each is aligned with the reference's
+    /// own solved type ([`scheme_var_instance`]) and a `Ty::Fun` there fails
+    /// closed with IPE-L0154.
     ///
-    /// `andMap`'s OWN solved type at `callee`'s span
-    /// (`self.region_ty(callee.span)`) is already the FULLY unified
-    /// signature for every use, because HM solving is global across the
-    /// whole binding: a `let`-bound partial application's LATER use still
-    /// constrains the same type variables through the let-binding's own
-    /// type, so `Result.andMap`'s reference type already reflects
-    /// `b = Int -> Int -> Int` by the time lowering runs (solving completes
-    /// before lowering starts). So this check does not need to look at any
-    /// ARGUMENT EXPRESSIONS, nor at how this reference is being used — it
-    /// peels `andMap`'s fixed arity (2) off ITS OWN reference type and
-    /// inspects the trailing payload position of the result (`b` in
-    /// `Maybe b` / `Result e b`) for a residual `Ty::Fun`, catching the
-    /// curried-payload hazard under every syntactic spelling and every
-    /// aliasing hop between the kernel reference and its eventual use.
-    ///
-    /// Only fires for the two `andMap` kernels; every other resolved callee
-    /// is untouched (`Ok(())` fast path). Kept as defense-in-depth behind the
-    /// primary Tier-2 type-checker obligation (see [`Self::lower_callee`]'s
-    /// doc comment) — a bug in the Tier-2 wiring should not silently reopen
-    /// this hazard.
-    fn reject_curried_andmap_payload(
+    /// The reference's solved type is the fully unified signature for every
+    /// use, since solving completes before lowering, so no argument or use
+    /// site needs inspecting: every syntactic spelling and aliasing hop is
+    /// covered. The type checker's `hof_kernel_result` obligation (IPE-T0014)
+    /// is the primary gate; this is its independent backstop. A reference
+    /// with no recorded solved type, or whose solved type does not align with
+    /// the scheme at a classified variable, carries no proof of safety and is
+    /// refused too.
+    fn reject_hof_callback_function_result(
         &self,
         resolved: &Callee,
         callee: &canon::Expr,
     ) -> DResult<()> {
-        if !matches!(
-            resolved,
-            Callee::Kernel(KernelFn::MaybeAndMap | KernelFn::ResultAndMap)
-        ) {
+        let Callee::Kernel(kernel) = resolved else {
+            return Ok(());
+        };
+        let results = kernel.hof_result_vars();
+        if results.is_empty() {
             return Ok(());
         }
-        // `andMap`'s own reference type: `Con a -> Con (a -> b) -> Con b`
-        // (Maybe/Result-headed). Peel exactly its fixed arity (2 arrows) to
-        // reach the final `Con b` return — independent of how many arguments
-        // any particular AST node happens to supply at this reference.
-        let Some(ty) = self.region_ty(callee.span) else {
-            return Ok(());
+        let (Some(shape), Some(solved)) = (kernel.scheme_shape(), self.region_ty(callee.span))
+        else {
+            return Err(unsupported(callee.span, Feature::HofCallbackFunctionResult));
         };
-        let Ty::Fun(_, after_first_arrow) = ty else {
-            return Ok(());
-        };
-        let Ty::Fun(_, call_ret) = after_first_arrow.as_ref() else {
-            return Ok(());
-        };
-        // `call_ret` is `Maybe b` / `Result e b` — the payload position is
-        // the LAST type argument of that `Con`. The curried signal is
-        // whether `b` is ITSELF an arrow (arity ≥ 2 flattened into one
-        // `IrType::Fun`, which `maybe_and_map`/`result_and_map`'s
-        // `F: FnOnce(A) -> B` cannot represent when `B` is a function — no
-        // `Box<dyn Fn(A0,A1)->R>` implements `FnOnce(A0) -> (A1 -> R)`).
-        let Ty::Con { args: ret_args, .. } = call_ret.as_ref() else {
-            return Ok(());
-        };
-        let Some(b) = ret_args.last() else {
-            return Ok(());
-        };
-        if matches!(b, Ty::Fun(_, _)) {
-            return Err(unsupported(callee.span, Feature::CtorPayloadFunction));
+        if results.vars().any(|var| {
+            matches!(
+                scheme_var_instance(shape, solved, var),
+                None | Some(Ty::Fun(..))
+            )
+        }) {
+            return Err(unsupported(callee.span, Feature::HofCallbackFunctionResult));
         }
         Ok(())
     }
@@ -20497,21 +21662,24 @@ impl<'a> Lowerer<'a> {
         // `ir_type_from_ty` conversion) is gated here on its own region type.
         self.reject_float_keyed_collection(call_span)?;
 
-        // Flatten a curried call spine ONLY when its head is an accessor-intercept
-        // placeholder kernel used with a piped final argument
-        // (`base |> Store.mask .col pred` desugars to
-        // `Call(Call(Store.mask, [.col, pred]), [base])`): the accessor intercept
-        // keys on a bare `VarKernel` callee saturated to ALL its arguments, so the
-        // nested spine must collapse to `Call(Store.mask, [.col, pred, base])`,
-        // else the kernel is seen only partially applied, reified point-free, and
-        // rejected (IPE-L0146). Restricted to that head on purpose: a GENERAL
+        // Flatten a curried call spine ONLY when its head is a kernel whose
+        // gate must observe the SATURATED call: an accessor-intercept
+        // placeholder (`base |> Store.mask .col pred` desugars to
+        // `Call(Call(Store.mask, [.col, pred]), [base])`; the accessor intercept
+        // keys on a bare `VarKernel` callee saturated to ALL its arguments, else
+        // the kernel is reified point-free and rejected, IPE-L0146), or a
+        // capture-cloned handler kernel (`Stream.stream ct <| h` / `h |>
+        // Stream.stream ct`; the handler-capture gate reads the handler argument
+        // of the saturated call, else the partial is refused, IPE-L0152). The
+        // collapsed spine is exactly the direct saturated call the programmer
+        // could have written. Restricted to those heads on purpose: a GENERAL
         // flatten reshapes the call tree the downstream multi-use / last-use
         // ownership pass reads to decide moves vs clones, mis-placing a move where
         // a later use still needs the value (E0382). Every non-accessor spine is
         // left intact, so ordinary currying (`m |> Maybe.andThen f`) lowers
         // exactly as before.
         if let canon::Expr_::Call(inner_callee, inner_args) = &callee.value
-            && self.spine_head_is_accessor_intercept_placeholder(inner_callee)
+            && self.spine_head_needs_saturated_call(inner_callee)
         {
             let mut merged = inner_args.clone();
             merged.extend_from_slice(args);
@@ -20527,19 +21695,23 @@ impl<'a> Lowerer<'a> {
         }
     }
 
-    /// Whether the head of a (possibly curried) call spine resolves to an
-    /// accessor-intercept placeholder kernel (`Store.mask`, `Store.eq`, …). Gates
-    /// the spine-flatten in [`Self::lower_call`] to exactly the kernels whose
-    /// saturated accessor intercept must observe every argument — never a general
+    /// Whether a (possibly curried) call spine's head kernel must be lowered as one saturated call.
+    ///
+    /// True for an accessor-intercept placeholder (`Store.mask`, `Store.eq`, …)
+    /// and a capture-cloned handler kernel (`Stream.stream`). Gates the
+    /// spine-flatten in [`Self::lower_call`] to exactly the kernels whose
+    /// saturated-call gate must observe every argument — never a general
     /// currying reshape (which would disturb the ownership/last-use pass).
-    fn spine_head_is_accessor_intercept_placeholder(&self, callee: &canon::Expr) -> bool {
+    fn spine_head_needs_saturated_call(&self, callee: &canon::Expr) -> bool {
         let mut head = callee;
         while let canon::Expr_::Call(inner, _) = &head.value {
             head = inner;
         }
         matches!(
             self.lower_callee(head),
-            Ok(Callee::Kernel(k)) if k.is_accessor_intercept_placeholder()
+            Ok(Callee::Kernel(k))
+                if k.is_accessor_intercept_placeholder()
+                    || k.capture_cloned_handler_arg().is_some()
         )
     }
 
@@ -20607,12 +21779,11 @@ impl<'a> Lowerer<'a> {
                 // ── Tui.tea / Cli.tea cfg literal (L0107 exemption) ──
                 //
                 // Same pattern as `Web.tea`: intercept the single cfg-record arg
-                // BEFORE the uniform `lower_expr` path so function-typed fields
-                // (init/update/view/subscriptions/onKey) do not trip IPE-L0107.
-                // Cli.tea — 5-field cfg (init/update/view/
-                //   subscriptions/onLine), all function-typed; without this arm
-                //   every real `Cli.tea` call would trip IPE-L0107 and the
-                //   emit_console path could never fire.
+                // BEFORE the uniform `lower_expr` path so the function-typed
+                // fields (init/update/view/subscriptions) do not trip IPE-L0107;
+                // without this arm every real `Tui.tea` / `Cli.tea` call would
+                // trip IPE-L0107 and the emit_tui / emit_console path could
+                // never fire.
                 // A non-literal cfg (let-bound, piped, etc.) is rejected here with
                 // IPE-L0119 at the argument span — fail-closed, never an ICE.
                 Callee::Kernel(
@@ -20892,6 +22063,13 @@ impl<'a> Lowerer<'a> {
                     | KernelFn::StoreTouchOnUpdate,
                 ) if args.len() == 2 => {
                     return Ok(Intercepted::Done(self.lower_store_spec(&peek, args)?));
+                }
+                // Composite primary keys — one accessor per key column + store.
+                Callee::Kernel(KernelFn::StoreCompositePrimaryKey2) if args.len() == 3 => {
+                    return Ok(Intercepted::Done(self.lower_store_composite_pk(args)?));
+                }
+                Callee::Kernel(KernelFn::StoreCompositePrimaryKey3) if args.len() == 4 => {
+                    return Ok(Intercepted::Done(self.lower_store_composite_pk(args)?));
                 }
                 // `defaultText` / `defaultInt` — arity 3 (accessor + value + store).
                 Callee::Kernel(KernelFn::StoreDefaultText | KernelFn::StoreDefaultInt)
@@ -21431,64 +22609,291 @@ impl<'a> Lowerer<'a> {
         }
     }
 
-    /// Re-type a `List` higher-order kernel's mapper closure ELEMENT parameter
-    /// from the direct `Fun` carrier ([`IrType::Fun`], `Box`) to the storage
-    /// `SharedFun` carrier ([`IrType::SharedFun`], `Arc`) when the collection it
-    /// operates over is a stored `List` of functions.
+    /// Align every mapper argument of a higher-order kernel with the carrier of
+    /// the STORED element it binds: the single choke point every route by which
+    /// a kernel receives a mapper passes through — a saturated, partial, or
+    /// over-applied call ([`Self::lower_call_uniform`], before the arity split)
+    /// and the eta parameters of a point-free reference
+    /// ([`Self::eta_expand_partial`]).
     ///
-    /// A `List (Int -> Int)` element is carried on `Arc<dyn Fn>` (the
-    /// element-carrier flip). When such a list flows into `List.map`/`foldl`/… the
-    /// runtime kernel monomorphises its element type `T0` to `Arc<dyn Fn>`, so the
-    /// mapper closure's element parameter must be `Arc<dyn Fn>` too — but
-    /// [`Self::lower_lambda`] stamps a function-typed parameter as the direct
-    /// `Fun` (`Box`) carrier, which is the `Arc`-vs-`Box` frontier
-    /// (design §8 risk 1). Aligning the closure's element parameter carrier with
-    /// the list's element carrier here closes the frontier at the producer's own
-    /// mapper, so no read-out adapter is needed.
+    /// A function stored in a `List` element, a `Dict` value, a tuple
+    /// component, or a record field is carried on `Arc<dyn Fn>`. When such a
+    /// collection flows into `List.map`/`Dict.foldl`/`List.map2`/… the runtime
+    /// kernel monomorphises its element type to `Arc<dyn Fn>`, so the mapper's
+    /// parameter fed that element must accept `Arc<dyn Fn>` too, while a lowered
+    /// function-typed parameter or value sits on the direct `Fun` (`Box`)
+    /// carrier: the `Arc`-vs-`Box` frontier (`E0277`/`E0308`).
     ///
-    /// The mapper is the FIRST argument and the list is the LAST; the element
-    /// parameter is closure-param index 0 for the whole family except
-    /// `indexedMap`, whose element is param index 1 (the leading `Int` index is
-    /// the first). Only fires when the list arg's solved element is a function;
-    /// otherwise a no-op, so a non-function-element list is byte-identical.
-    fn retype_collection_element_param(
+    /// Which parameter binds which element is derived from the kernel's scheme
+    /// alone ([`ipe_kernels::mapper_param_binds_stored_element`]), so every
+    /// schemed higher-order kernel is covered with no list to drift. `first` is
+    /// the kernel position of `lowered_args[0]`; `arg_ty` yields the solved type
+    /// of the argument at a kernel position.
+    ///
+    /// - An inline lambda has its bound function-typed parameters re-typed in
+    ///   place ([`Self::flip_mapper_lambda_params`]).
+    /// - Any other mapper expression (a top-level function, a local binding, an
+    ///   eta parameter, a computed function) is eta-wrapped
+    ///   ([`Self::wrap_mapper_value`]): the wrapper takes the element on `Arc`
+    ///   and demotes it to `Box` before calling the original.
+    ///
+    /// A mapper whose solved type is unavailable, or carries fewer arrows than
+    /// the scheme applies it to, fails closed with IPE-L0134 where a bound
+    /// parameter needs it: only a peeled [`MapperSpine`] reaches the wrapper. A
+    /// mapper with no function-typed bound parameter is left untouched
+    /// (byte-identical).
+    ///
+    /// `site` is the eta demand the enclosing call site has already drawn;
+    /// every block drawn here is charged on top of it ([`EtaDemand`]) and the
+    /// grown demand returned, and a site past [`MAX_ETA_PER_SITE`] fails
+    /// closed with IPE-L0155.
+    fn retype_collection_element_param<'t>(
         &self,
         resolved: &Callee,
-        canon_args: &[canon::Expr],
+        first: usize,
         lowered_args: &mut [Expr],
-    ) {
-        let elem_param_index = match resolved {
-            Callee::Kernel(
-                KernelFn::ListMap
-                | KernelFn::ListFilter
-                | KernelFn::ListFoldl
-                | KernelFn::ListFoldr
-                | KernelFn::ListConcatMap
-                | KernelFn::ListFilterMap
-                | KernelFn::ListAny
-                | KernelFn::ListAll
-                | KernelFn::ListFind,
-            ) => 0,
-            Callee::Kernel(KernelFn::ListIndexedMap) => 1,
-            _ => return,
+        arg_ty: impl Fn(usize) -> Option<&'t Ty>,
+        site: EtaDemand,
+        span: Span,
+    ) -> DResult<EtaDemand> {
+        let Callee::Kernel(kernel) = resolved else {
+            return Ok(site);
         };
-        // The list is the last argument; consult its solved element carrier.
-        let Some(list_arg) = canon_args.last() else {
-            return;
+        let Some(shape) = kernel.scheme_shape() else {
+            return Ok(site);
         };
-        let list_stores_fn = self
-            .region_ty(list_arg.span)
-            .is_some_and(|ty| collection_storable_element_carries_function(self.interner, ty));
-        if !list_stores_fn {
-            return;
+        let arity = kernel.def().arity;
+        let mut site = site;
+        for (offset, lowered) in lowered_args.iter_mut().enumerate() {
+            let arg = first.saturating_add(offset);
+            if let Expr::Lambda { params, body, .. } | Expr::SharedLambda { params, body, .. } =
+                lowered
+            {
+                site =
+                    self.flip_mapper_lambda_params(shape, arity, arg, params, body, site, span)?;
+                continue;
+            }
+            let binding = scheme_mapper_arity(shape, arg);
+            if !(0..binding).any(|param| {
+                ipe_kernels::mapper_param_binds_stored_element(shape, arity, arg, param)
+            }) {
+                continue;
+            }
+            let Some(spine) = arg_ty(arg).and_then(|ty| MapperSpine::peel(ty, binding)) else {
+                return Err(unsupported(span, Feature::FunctionElementEquality));
+            };
+            site = self.wrap_mapper_value(shape, arity, arg, &spine, lowered, site, span)?;
         }
-        if let Some(Expr::Lambda { params, .. } | Expr::SharedLambda { params, .. }) =
-            lowered_args.first_mut()
-            && let Some((_, ty)) = params.get_mut(elem_param_index)
-            && let IrType::Fun(fn_params, ret) = ty
-        {
-            *ty = IrType::SharedFun(fn_params.clone(), ret.clone());
+        Ok(site)
+    }
+
+    /// Flip each function-typed parameter of the lambda mapper at kernel
+    /// position `arg` that binds a stored element from the `Box` to the `Arc`
+    /// carrier.
+    ///
+    /// A parameter whose lowered type is not a bare function keeps its
+    /// carrier: a composite (`Maybe (a -> b)`, a tuple, a record) is already
+    /// normalized by its own type, and a non-function element never flips.
+    ///
+    /// The mapper body was lowered while the parameter was still on the `Box`
+    /// carrier, so the flip also reconciles the body's reads with the new
+    /// `Arc` carrier — the same discipline [`Self::apply_param_move_ownership`]
+    /// applies to an `Arc`-rebound param: a direct callee read stays (an `Arc`
+    /// is callable by auto-deref), every other read re-dispatches through a fresh
+    /// closure on the carrier its position expects ([`shim_fn_value_reads`]). An
+    /// `Arc<dyn Fn>` does not itself implement `Fn`, so without the shim a value
+    /// read flowing into a generic `F: Fn` / `impl Fn` parameter (a point-free
+    /// `List.map Sub.onLine [..]`, a `\p -> List.filter p xs`) is
+    /// `ipe`-accept-then-`cargo`-fail (`E0277`). A body with no non-callee read
+    /// is left untouched (byte-identical, no eta draw).
+    ///
+    /// Each shim block is charged to `site` only when the body needs it, and
+    /// the grown demand is returned; a needed block past [`MAX_ETA_PER_SITE`]
+    /// fails closed with IPE-L0155.
+    #[allow(clippy::too_many_arguments)] // the site demand and span thread through the one choke point
+    fn flip_mapper_lambda_params(
+        &self,
+        shape: &ipe_kernels::TyShape,
+        arity: u8,
+        arg: usize,
+        params: &mut [(Symbol, IrType)],
+        body: &mut Expr,
+        site: EtaDemand,
+        span: Span,
+    ) -> DResult<EtaDemand> {
+        let mut site = site;
+        for (param, (sym, ty)) in params.iter_mut().enumerate() {
+            let IrType::Fun(fn_params, ret) = ty else {
+                continue;
+            };
+            if !ipe_kernels::mapper_param_binds_stored_element(shape, arity, arg, param) {
+                continue;
+            }
+            let (sym, fn_params, ret) = (*sym, fn_params.clone(), (**ret).clone());
+            *ty = IrType::SharedFun(fn_params.clone(), Box::new(ret.clone()));
+            let original = std::mem::replace(body, Expr::Unit);
+            let Some(charged) = site.charge(fn_params.len()) else {
+                // Past the ceiling the walk gets no eta names: its only failure
+                // is a shim drawing one, so any rewrite (or failure) means the
+                // block is needed and refused; an unrewritten body draws none.
+                let (unchanged, rewrote) = shim_fn_value_reads_tracked(
+                    sym,
+                    &fn_params,
+                    &ret,
+                    &[],
+                    &self.builtin_runtime_ctors(),
+                    original,
+                )
+                .map_err(|_| unsupported(span, Feature::EtaSiteLimit))?;
+                if rewrote {
+                    return Err(unsupported(span, Feature::EtaSiteLimit));
+                }
+                *body = unchanged;
+                continue;
+            };
+            let (shimmed, rewrote) = shim_fn_value_reads_tracked(
+                sym,
+                &fn_params,
+                &ret,
+                self.eta_slice(),
+                &self.builtin_runtime_ctors(),
+                original,
+            )?;
+            *body = if rewrote {
+                let mut remaining = count_var_uses(sym, &shimmed);
+                let disciplined = rewrite_multiuse_clones(sym, &mut remaining, shimmed);
+                // Reserve the shim's eta block so a sibling site does not reuse it.
+                self.advance_eta(fn_params.len());
+                site = charged;
+                force_shared_capture_clones(sym, disciplined)
+            } else {
+                shimmed
+            };
         }
+        Ok(site)
+    }
+
+    /// Eta-wrap the non-lambda mapper `lowered` (solved type split as `spine`) at
+    /// kernel position `arg` so each function-typed parameter that binds a
+    /// stored element receives it on the `Arc` carrier.
+    ///
+    /// ```text
+    /// List.map2 applyTo fs xs
+    /// ─────────────────────────────────────────────────────────────────────
+    /// list_map2(move |eta_1: Arc<dyn Fn(i64) -> i64>, eta_2: i64| -> i64 {
+    ///     (apply_to)(Box::new(move |eta_3: i64| -> i64 { (eta_1)(eta_3) }), eta_2)
+    /// }, fs, xs)
+    /// ```
+    ///
+    /// The wrapper's parameters follow the scheme mapper's spine, typed from
+    /// the solved spine: a bound function-typed parameter is re-carried to
+    /// [`IrType::SharedFun`] and demoted back to `Box` at the call
+    /// ([`Self::demote_shared_fn_read`]); every other parameter is forwarded
+    /// as-is. A top-level function reference is called in place; any other
+    /// mapper (a local, an eta parameter, a computed function) is bound once by
+    /// a `let` outside the wrapper and moved in, so its ownership (a move or a
+    /// clone) is decided where it stood and the wrapper stays re-callable
+    /// (`Fn`).
+    ///
+    /// The wrapper draws one holder name, one name per spine parameter, and
+    /// one per argument of each demoted parameter. That whole demand is
+    /// charged to `site` before the first draw and the grown demand returned;
+    /// a demand past [`MAX_ETA_PER_SITE`] fails closed with IPE-L0155. A
+    /// parameter type that cannot be lowered fails closed with IPE-L0134.
+    #[allow(clippy::too_many_arguments)] // the site demand and span thread through the one choke point
+    fn wrap_mapper_value(
+        &self,
+        shape: &ipe_kernels::TyShape,
+        arity: u8,
+        arg: usize,
+        spine: &MapperSpine<'_>,
+        lowered: &mut Expr,
+        site: EtaDemand,
+        span: Span,
+    ) -> DResult<EtaDemand> {
+        let refuse = || unsupported(span, Feature::FunctionElementEquality);
+        let names = EtaDemand::mapper_wrap_names(shape, arity, arg, spine);
+        if names == 0 {
+            return Ok(site);
+        }
+        let bound =
+            |param: usize, ty: &Ty| mapper_param_binds_fn_element(shape, arity, arg, param, ty);
+        let ret = self
+            .ir_type_from_ty(spine.ret(), span)
+            .map_err(|_| refuse())?;
+        // Every parameter's carrier, decided before any eta name is drawn so the
+        // whole demand is charged up front.
+        let mut carriers: Vec<(IrType, Option<IrArrow>)> = Vec::with_capacity(spine.params().len());
+        for (param, ty) in spine.params().iter().enumerate() {
+            let ir = self.ir_type_from_ty(ty, span).map_err(|_| refuse())?;
+            if bound(param, ty) {
+                // `bound` holds only for a `Ty::Fun`, which lowers to `IrType::Fun` or errors.
+                let IrType::Fun(fn_params, fn_ret) = ir else {
+                    return Err(bug(
+                        "ipe_lower::wrap_mapper_value",
+                        "a bound function-typed mapper parameter lowered off the `Fun` carrier",
+                    ));
+                };
+                carriers.push((
+                    IrType::SharedFun(fn_params.clone(), fn_ret.clone()),
+                    Some((fn_params, *fn_ret)),
+                ));
+            } else {
+                carriers.push((ir, None));
+            }
+        }
+        let block = spine.params().len().saturating_add(1);
+        let site = site
+            .charge(names)
+            .ok_or_else(|| unsupported(span, Feature::EtaSiteLimit))?;
+        let drawn_from = self.eta_base.get();
+        let holder = self.eta_sym(0)?;
+        let mut wrapper_params: Vec<(Symbol, IrType)> = Vec::with_capacity(carriers.len());
+        let mut demote: Vec<Option<IrArrow>> = Vec::with_capacity(carriers.len());
+        for (param, (carrier, adapter)) in carriers.into_iter().enumerate() {
+            wrapper_params.push((self.eta_sym(param.saturating_add(1))?, carrier));
+            demote.push(adapter);
+        }
+        // Reserve the holder and the wrapper's params before the demote
+        // adapters below draw their own eta blocks.
+        self.advance_eta(block);
+        let mut call_args: Vec<Expr> = Vec::with_capacity(wrapper_params.len());
+        for ((sym, _), carrier) in wrapper_params.iter().zip(demote) {
+            call_args.push(match carrier {
+                Some((fn_params, fn_ret)) => {
+                    self.demote_shared_fn_read(Expr::Var(*sym), &fn_params, &fn_ret)?
+                }
+                None => Expr::Var(*sym),
+            });
+        }
+        if self.eta_base.get().saturating_sub(drawn_from) != names {
+            return Err(bug(
+                "ipe_lower::wrap_mapper_value",
+                "mapper wrap drew a different eta count than its budgeted EtaDemand",
+            ));
+        }
+        let original = std::mem::replace(lowered, Expr::Unit);
+        let (callee, held) = match original {
+            leaf @ Expr::FuncValue { .. } => (leaf, None),
+            other => (Expr::Var(holder), Some(other)),
+        };
+        let wrapper = Expr::Lambda {
+            params: wrapper_params,
+            ret,
+            body: Box::new(Expr::Apply {
+                func: Box::new(callee),
+                args: call_args,
+            }),
+        };
+        *lowered = match held {
+            Some(value) => Expr::Let {
+                name: holder,
+                value: Box::new(value),
+                body: Box::new(wrapper),
+            },
+            None => wrapper,
+        };
+        Ok(site)
     }
 
     /// Re-carrier the function-typed VALUE argument of a `Dict` constructor
@@ -21651,8 +23056,22 @@ impl<'a> Lowerer<'a> {
                 // function-carrying element — an equality/ordering compare or an
                 // open mapper frontier (fail-closed IPE-L0134 at `ipe` time; see
                 // the method doc).
-                self.reject_fn_element_for_capability_kernel(&resolved, args)?;
+                self.reject_fn_element_for_capability_kernel(&resolved, callee.span, args)?;
+                self.reject_nonclone_handler_capture(&resolved, args)?;
                 let arity = self.callee_arity(&resolved)?;
+                // Close the `Arc`-vs-`Box` frontier at a higher-order kernel's
+                // mapper over stored functions, once, ahead of the arity split,
+                // so the saturated, partial, and over-applied shapes share one
+                // choke point (see method doc).
+                let mut lowered_args = lowered_args;
+                let site = self.retype_collection_element_param(
+                    &resolved,
+                    0,
+                    &mut lowered_args,
+                    |arg| args.get(arg).and_then(|a| self.region_ty(a.span)),
+                    EtaDemand::EMPTY,
+                    call_span,
+                )?;
                 match args.len().cmp(&arity) {
                     std::cmp::Ordering::Equal => {
                         // pin a polymorphic kernel's genuinely-free result
@@ -21672,9 +23091,6 @@ impl<'a> Lowerer<'a> {
                         let mut lowered_args = lowered_args;
                         Self::retype_result_map_error_handler(&resolved, &mut lowered_args);
                         Self::retype_decoder_payload_mapper(&resolved, &mut lowered_args);
-                        // Close the `Arc`-vs-`Box` frontier at a `List` HOF
-                        // mapper over a stored list of functions (see method doc).
-                        self.retype_collection_element_param(&resolved, args, &mut lowered_args);
                         // Close the same frontier at a `Dict.singleton`/`insert`
                         // whose function VALUE argument is stored on the `Arc`
                         // carrier (see method doc).
@@ -21721,9 +23137,14 @@ impl<'a> Lowerer<'a> {
                             on_form,
                         })
                     }
-                    std::cmp::Ordering::Less => {
-                        self.eta_expand_partial(callee, resolved, lowered_args, arity, call_span)
-                    }
+                    std::cmp::Ordering::Less => self.eta_expand_partial(
+                        callee,
+                        resolved,
+                        lowered_args,
+                        arity,
+                        site,
+                        call_span,
+                    ),
                     std::cmp::Ordering::Greater => {
                         self.saturate_over(callee, resolved, lowered_args, arity, call_span)
                     }
@@ -22261,6 +23682,100 @@ impl<'a> Lowerer<'a> {
         })
     }
 
+    /// The parameter types and return type of the `arity`-arrow callee at `span`.
+    ///
+    /// Reads the solved region type and peels exactly `arity` arrows. A missing
+    /// region type or a short arrow is unreachable for well-typed input and
+    /// surfaces as a [`Diagnostic::CompilerBug`] naming `site` with the matching
+    /// `(no_type, short_arrow)` detail.
+    fn callee_arrow(
+        &self,
+        span: Span,
+        arity: usize,
+        site: &'static str,
+        (no_type, short_arrow): (&'static str, &'static str),
+    ) -> DResult<(Vec<&Ty>, &Ty)> {
+        let fn_ty = self.region_ty(span).ok_or_else(|| bug(site, no_type))?;
+        peel_arrow_arity(fn_ty, arity, site, short_arrow)
+    }
+
+    /// The clone class of each of the first `supplied` argument slots of a
+    /// partially-applied callee, or `None` for a genuinely indeterminate slot.
+    fn supplied_slot_classes(
+        &self,
+        arg_tys: &[&Ty],
+        supplied: usize,
+        call_span: Span,
+    ) -> Vec<Option<CloneClass>> {
+        arg_tys
+            .iter()
+            .take(supplied)
+            .map(|slot_ty| {
+                match self.ir_type_from_ty(slot_ty, call_span) {
+                    // A bare `Generic` slot clones, not moves: every emitted
+                    // generic carries an unconditional `T: Clone`
+                    // (`render_fn_generics`), so a supplied generic arg captured by
+                    // the re-callable `Fn` residual clones per call. SSOT with
+                    // `param_is_multiuse_clonable` / `classify_capture_clone`;
+                    // without it a threaded generic is moved out of the `Fn` env
+                    // (E0507).
+                    Ok(IrType::Generic(_)) => Some(CloneClass::CloneOk),
+                    Ok(ir_ty) => Some(clone_class(self.clone_env(), &ir_ty)),
+                    // T7b: ir_type_from_ty failed, but the slot's top-level type
+                    // IS a function arrow.  The failure is from a nested Ty::Var
+                    // (e.g. the polymorphic result type `a` in `Task Error a`).
+                    // A Fun slot is always NonClone — forwarding is safe.
+                    Err(_) if matches!(slot_ty, Ty::Fun(_, _)) => Some(CloneClass::NonClone),
+                    // Genuinely indeterminate slot — conservative None.
+                    Err(_) => None,
+                }
+            })
+            .collect()
+    }
+
+    /// The fresh binder and IR type of each missing argument slot
+    /// `supplied..arity` of a partially-applied callee.
+    fn eta_missing_params(
+        &self,
+        resolved: &Callee,
+        arg_tys: &[&Ty],
+        supplied: usize,
+        arity: usize,
+        call_span: Span,
+    ) -> DResult<Vec<(Symbol, IrType)>> {
+        let mut params: Vec<(Symbol, IrType)> = Vec::with_capacity(arity - supplied);
+        for (offset, arg_ty) in arg_tys.get(supplied..).unwrap_or(&[]).iter().enumerate() {
+            // Draw slot `offset` from the current position of the per-def monotonic
+            // eta cursor; `advance_eta` below reserves the whole block so a
+            // subsequently-lowered nested eta-lambda never reuses these names.
+            let sym = self.eta_sym(offset)?;
+            // Use the JSON-friendly variant so that a free `Ty::Var` in the
+            // missing-arg slot — the common case for diverging / always-failing
+            // tasks passed to `Task.andThen` or `Cmd.perform` where the result
+            // type `a` is never constrained — maps to `IrType::Json` (`JsonVal`)
+            // instead of raising IPE-L0102.  The eta-param is only a closure
+            // binder forwarded verbatim to the full kernel call; its concrete
+            // Rust type is unified by the compiler from the call site, so
+            // `JsonVal` is a sound stand-in for any unconstrained `Ty::Var`.
+            //
+            // (`f7_succeed_curried`): EXCEPT the `next_decoder` slot
+            // (the kernel's LAST argument) of the five JsonDec.Pipeline /
+            // Db.Decode curried-combinator kernels — that one slot needs the
+            // curried `FnOnce`-chain shape, never the flattened `Fun` this
+            // JSON-friendly path would otherwise produce. See
+            // `ir_type_from_ty_pipeline_decoder`'s doc comment.
+            let ir = if Self::is_pipeline_next_decoder_kernel(resolved)
+                && supplied + offset == arity - 1
+            {
+                self.ir_type_from_ty_pipeline_decoder(arg_ty, call_span)?
+            } else {
+                self.ir_type_from_ty_json(arg_ty, call_span)?
+            };
+            params.push((sym, ir));
+        }
+        Ok(params)
+    }
+
     /// Eta-expand a partial application `f a0 … a_{k-1}` (with `k < arity`) into a
     /// boxed closure `\eta_k … eta_{arity-1} -> f(a0, …, a_{k-1}, eta_k, …)` — a
     /// first-class function value of the residual arrow type. The supplied
@@ -22278,6 +23793,7 @@ impl<'a> Lowerer<'a> {
         resolved: Callee,
         lowered_args: Vec<Expr>,
         arity: usize,
+        site: EtaDemand,
         call_span: Span,
     ) -> DResult<Expr> {
         // Fail-closed SEAL gate: eta-expanding a PARTIAL application of an
@@ -22285,22 +23801,19 @@ impl<'a> Lowerer<'a> {
         // never-defined symbol — reject instead. See
         // [`reject_point_free_store_kernel`].
         reject_point_free_store_kernel(&resolved, call_span)?;
-        let fn_ty = self.region_ty(callee.span).ok_or_else(|| {
-            bug(
-                "ipe_lower::eta_expand_partial",
-                "no inferred type for a partially-applied callee",
-            )
-        })?;
-        let (arg_tys, ret_ty) = peel_arrow_arity(
-            fn_ty,
+        reject_unsaturated_handler_kernel(&resolved, call_span)?;
+        let (arg_tys, ret_ty) = self.callee_arrow(
+            callee.span,
             arity,
             "ipe_lower::eta_expand_partial",
-            "callee type has fewer arrows than its arity",
+            (
+                "no inferred type for a partially-applied callee",
+                "callee type has fewer arrows than its arity",
+            ),
         )?;
 
         let supplied = lowered_args.len();
         // The missing parameters are argument positions `supplied..arity`.
-        let mut params: Vec<(Symbol, IrType)> = Vec::with_capacity(arity - supplied);
         let mut call_args = lowered_args;
         // T4: the supplied args are captured inside the emitted closure.
         // A non-Copy CloneOk arg (e.g. a String-typed var) must be cloned on
@@ -22325,32 +23838,8 @@ impl<'a> Lowerer<'a> {
         // Any other failed slot stays `None` → fail-close below (T7 original).
         let mut hoisted: Vec<(Symbol, Expr)> = Vec::new();
         let mut cap_cursor = 0usize;
-        // ir_type_from_ty needs `&mut self`, so classify every supplied slot
-        // BEFORE the iter_mut borrow of call_args.
-        let slot_classes: Vec<Option<CloneClass>> = arg_tys
-            .iter()
-            .take(supplied)
-            .map(|slot_ty| {
-                match self.ir_type_from_ty(slot_ty, call_span) {
-                    // A bare `Generic` slot clones, not moves: every emitted
-                    // generic carries an unconditional `T: Clone`
-                    // (`render_fn_generics`), so a supplied generic arg captured by
-                    // the re-callable `Fn` residual clones per call. SSOT with
-                    // `param_is_multiuse_clonable` / `classify_capture_clone`;
-                    // without it a threaded generic is moved out of the `Fn` env
-                    // (E0507).
-                    Ok(IrType::Generic(_)) => Some(CloneClass::CloneOk),
-                    Ok(ir_ty) => Some(clone_class(self.clone_env(), &ir_ty)),
-                    // T7b: ir_type_from_ty failed, but the slot's top-level type
-                    // IS a function arrow.  The failure is from a nested Ty::Var
-                    // (e.g. the polymorphic result type `a` in `Task Error a`).
-                    // A Fun slot is always NonClone — forwarding is safe.
-                    Err(_) if matches!(slot_ty, Ty::Fun(_, _)) => Some(CloneClass::NonClone),
-                    // Genuinely indeterminate slot — conservative None.
-                    Err(_) => None,
-                }
-            })
-            .collect();
+        // Classify every supplied slot BEFORE the iter_mut borrow of call_args.
+        let slot_classes = self.supplied_slot_classes(&arg_tys, supplied, call_span);
         for (arg, cls) in call_args.iter_mut().zip(slot_classes) {
             if let Expr::Var(sym) = *arg {
                 match cls {
@@ -22413,37 +23902,35 @@ impl<'a> Lowerer<'a> {
                 }
             }
         }
-        for (offset, arg_ty) in arg_tys.get(supplied..).unwrap_or(&[]).iter().enumerate() {
-            // Draw slot `offset` from the current position of the per-def monotonic
-            // eta cursor; `advance_eta` below reserves the whole block so a
-            // subsequently-lowered nested eta-lambda never reuses these names.
-            let sym = self.eta_sym(offset)?;
-            // Use the JSON-friendly variant so that a free `Ty::Var` in the
-            // missing-arg slot — the common case for diverging / always-failing
-            // tasks passed to `Task.andThen` or `Cmd.perform` where the result
-            // type `a` is never constrained — maps to `IrType::Json` (`JsonVal`)
-            // instead of raising IPE-L0102.  The eta-param is only a closure
-            // binder forwarded verbatim to the full kernel call; its concrete
-            // Rust type is unified by the compiler from the call site, so
-            // `JsonVal` is a sound stand-in for any unconstrained `Ty::Var`.
-            //
-            // (`f7_succeed_curried`): EXCEPT the `next_decoder` slot
-            // (the kernel's LAST argument) of the five JsonDec.Pipeline /
-            // Db.Decode curried-combinator kernels — that one slot needs the
-            // curried `FnOnce`-chain shape, never the flattened `Fun` this
-            // JSON-friendly path would otherwise produce. See
-            // `ir_type_from_ty_pipeline_decoder`'s doc comment.
-            let ir = if Self::is_pipeline_next_decoder_kernel(&resolved)
-                && supplied + offset == arity - 1
-            {
-                self.ir_type_from_ty_pipeline_decoder(arg_ty, call_span)?
-            } else {
-                self.ir_type_from_ty_json(arg_ty, call_span)?
-            };
-            params.push((sym, ir));
-            call_args.push(Expr::Var(sym));
-        }
+        let params = self.eta_missing_params(&resolved, &arg_tys, supplied, arity, call_span)?;
+        call_args.extend(params.iter().map(|&(sym, _)| Expr::Var(sym)));
         self.advance_eta(arity.saturating_sub(supplied));
+        // A missing mapper position is an eta parameter the residual call
+        // forwards to the kernel: it binds the same stored element a supplied
+        // mapper does, so it passes the same choke point (a point-free
+        // `let m = List.map2 in m f fs xs`). Supplied positions already passed it
+        // in [`Self::lower_call_uniform`], whose wraps `site` already holds; the
+        // residual block just drawn is charged on top of them, and only a
+        // mapping kernel draws further.
+        if let Some(missing) = call_args.get_mut(supplied..) {
+            match site.charge(arity.saturating_sub(supplied)) {
+                Some(site) => {
+                    self.retype_collection_element_param(
+                        &resolved,
+                        supplied,
+                        missing,
+                        |arg| arg_tys.get(arg).copied(),
+                        site,
+                        call_span,
+                    )?;
+                }
+                None if matches!(&resolved, Callee::Kernel(kernel) if kernel.scheme_shape().is_some()) =>
+                {
+                    return Err(unsupported(call_span, Feature::EtaSiteLimit));
+                }
+                None => {}
+            }
+        }
         // T8: use the JSON-friendly variant for the lambda return
         // type for the same reason the eta-params (above) use it: when
         // `ret_ty` is `Task a` (a 1-arg Task) and `a` is a free `Ty::Var`
@@ -22541,17 +24028,14 @@ impl<'a> Lowerer<'a> {
         arity: usize,
         call_span: Span,
     ) -> DResult<Expr> {
-        let fn_ty = self.region_ty(callee.span).ok_or_else(|| {
-            bug(
-                "ipe_lower::eta_expand_value_partial",
-                "no inferred type for a partially-applied function value",
-            )
-        })?;
-        let (arg_tys, ret_ty) = peel_arrow_arity(
-            fn_ty,
+        let (arg_tys, ret_ty) = self.callee_arrow(
+            callee.span,
             arity,
             "ipe_lower::eta_expand_value_partial",
-            "value callee type has fewer arrows than its arrow-arity",
+            (
+                "no inferred type for a partially-applied function value",
+                "value callee type has fewer arrows than its arrow-arity",
+            ),
         )?;
 
         let supplied = lowered_args.len();
@@ -22693,17 +24177,14 @@ impl<'a> Lowerer<'a> {
         arity: usize,
         call_span: Span,
     ) -> DResult<Expr> {
-        let fn_ty = self.region_ty(callee.span).ok_or_else(|| {
-            bug(
-                "ipe_lower::eta_expand_partial_ctor",
-                "no inferred type for a partially-applied constructor",
-            )
-        })?;
-        let (arg_tys, ret_ty) = peel_arrow_arity(
-            fn_ty,
+        let (arg_tys, ret_ty) = self.callee_arrow(
+            callee.span,
             arity,
             "ipe_lower::eta_expand_partial_ctor",
-            "constructor type has fewer arrows than its arity",
+            (
+                "no inferred type for a partially-applied constructor",
+                "constructor type has fewer arrows than its arity",
+            ),
         )?;
 
         let supplied = lowered_args.len();
@@ -23446,6 +24927,10 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::CmdBatch
                 // `Sub.batch : List (Sub msg) -> Sub msg`
                 | KernelFn::SubBatch
+                // `Tui.Sub.onKey : (KeyEvent -> msg) -> Sub msg`
+                | KernelFn::TuiSubOnKey
+                // `Cli.Sub.onLine : (String -> msg) -> Sub msg`
+                | KernelFn::CliSubOnLine
                 // ── Server arity-1 ───────────────────────────────────────
                 // `Server.text / json / html / redirect : String -> Response`
                 | KernelFn::ServerText
@@ -23924,6 +25409,9 @@ impl<'a> Lowerer<'a> {
                 // `defaultText` / `defaultInt` — arity 3 (accessor + value + store).
                 | KernelFn::StoreDefaultText
                 | KernelFn::StoreDefaultInt
+                // `compositePrimaryKey2` — arity 3 (two accessors + store).
+                // Intercepted at lowering; this is only the defensive fallback count.
+                | KernelFn::StoreCompositePrimaryKey2
                 // `Store.mask` — arity 3 (accessor + Pred + Policy). Intercepted at
                 // lowering; this is only the defensive fallback count.
                 | KernelFn::StoreMask
@@ -23937,6 +25425,9 @@ impl<'a> Lowerer<'a> {
                 // `Store.join` — arity 4 (storeA, accA, storeB, accB), intercepted
                 // at lowering; this is only the defensive fallback count.
                 KernelFn::StoreJoin
+                // `compositePrimaryKey3` — arity 4 (three accessors + store),
+                // intercepted at lowering; this is only the defensive fallback count.
+                | KernelFn::StoreCompositePrimaryKey3
                 | KernelFn::JsonDecMap3
                 // ── Result/Maybe map3 — arity 4 ────────────────────────
                 | KernelFn::ResultMap3
@@ -24979,47 +26470,25 @@ impl<'a> Lowerer<'a> {
             .ok_or_else(|| bug("ipe_lower::ctor_arity_of", "unknown constructor"))
     }
 
-    /// Resolve a named callee (`Maybe.andMap`, `String.length`, a user
-    /// top-level function, …) to its [`Callee`], then run the T3
-    /// curried-`andMap`-payload backstop over the RESULT.
+    /// Resolve a named callee (`List.map`, `String.length`, a user top-level function, …) and gate it.
     ///
-    /// Running the curried-payload check only from INSIDE
-    /// [`Self::lower_call_uniform`]'s `VarKernel | VarTopLevel`
-    /// arm is not enough — that arm only sees a callee that is the DIRECT
-    /// callee of a `Call` AST node. A bare-value reference to `Result.andMap` /
-    /// `Maybe.andMap` — passed as a higher-order argument, `let`-bound as a
-    /// point-free alias (`myAndMap = Result.andMap`), extracted from a
-    /// record field, or re-exported through an `import … as …` alias — never
-    /// passes through a `Call` node at all; it lowers through
-    /// [`Self::lower_expr`]'s bare-value arm instead, which calls
-    /// [`Self::lower_callee_resolve`] (below) directly. That second call site
-    /// never ran the check, so `myAndMap (Ok 1) (Ok add3curried)` reached
-    /// `cargo build` as E0277 despite the previous fix.
+    /// This is the single funnel every kernel resolution passes through: the
+    /// direct-call arm of [`Self::lower_call_uniform`] and the bare-value arm
+    /// of [`Self::lower_expr`] (a kernel passed as an argument, `let`-bound
+    /// point-free, stored in a record, or re-exported through an alias) both
+    /// call it, never [`Self::lower_callee_resolve`] directly. So each literal
+    /// kernel occurrence is checked exactly once, in any syntactic position.
     ///
-    /// The fix: this wrapper is now the SINGLE funnel both callers go
-    /// through — [`Self::lower_call_uniform`]'s direct-call arm and
-    /// [`Self::lower_expr`]'s bare-value arm both call `lower_callee`
-    /// (never `lower_callee_resolve` directly) — so every literal AST
-    /// occurrence of `Result.andMap` / `Maybe.andMap`, in ANY syntactic
-    /// position, is checked exactly once, by construction, regardless of how
-    /// many more lowering arms are added later. This is a lowering-time
-    /// BACKSTOP (Tier 1) behind the primary type-checker obligation
-    /// (`ipe_types::constrain::constrain_var_kernel`'s `hof_kernel_result`
-    /// `TyBounds` tie, Tier 2 — see
-    /// `docs/adr/0001-language-semantics-and-types.md` §3.2):
-    /// Tier 2 already rejects the hazard as a type error (`IPE-T0014`)
-    /// before lowering ever runs; this backstop gives a second, independent
-    /// line of defense keyed on the ACTUAL kernel-call resolution boundary
-    /// rather than any particular AST shape. Scope note: this Tier-1
-    /// backstop covers the `andMap` kernels ONLY (its peeling logic reads
-    /// the `Con (a -> b)` payload position specific to `andMap`'s scheme);
-    /// the `map`/`map2..5`/`mapError` members of the hazard family are
-    /// covered by Tier 2 alone, whose fail-closed predicate
-    /// (`ipe_types::emitted_bound_satisfied`, rejecting both `Ty::Fun` and
-    /// bare `Ty::Var`) is the load-bearing gate for every member.
+    /// [`Self::reject_hof_callback_function_result`] runs here as the lowering
+    /// backstop behind the type checker's `hof_kernel_result` obligation
+    /// (IPE-T0014, see `docs/adr/0001-language-semantics-and-types.md` §3.2):
+    /// both derive their positions from [`KernelFn::hof_result_vars`], but the
+    /// backstop reads the solved type independently, so a fault in the
+    /// obligation's wiring cannot reopen the hazard.
     fn lower_callee(&self, callee: &canon::Expr) -> DResult<Callee> {
         let resolved = self.lower_callee_resolve(callee)?;
-        self.reject_curried_andmap_payload(&resolved, callee)?;
+        self.reject_hof_callback_function_result(&resolved, callee)?;
+        self.reject_input_sub_outside_its_surface(&resolved, callee.span)?;
         match &resolved {
             Callee::Kernel(kernel) => {
                 // Row generics are refused by the body pre-walk, which alone knows them.
@@ -25422,6 +26891,68 @@ impl<'a> Lowerer<'a> {
         for (tv, bounds) in type_params.iter_mut() {
             if let Some(obliged) = recorded.get(tv) {
                 oblige_auto_traits(bounds, *obliged);
+            }
+        }
+    }
+
+    /// Refuse a shape-owned input subscription outside the surface whose loop reads it.
+    ///
+    /// `Tui.Sub.onKey` is driven only by the `Tui` loop and `Cli.Sub.onLine` only
+    /// by the `Cli` loop; anywhere else the subscription would compile into input
+    /// no loop ever delivers. The resolver refuses the wrong surface's `Sub` import
+    /// in the entry module (IPE-N0035); this checks every reference — a helper
+    /// module's included, applied or point-free — against the surface the
+    /// demanded entry's `main` pins, at the reference's own span. A `Script`
+    /// `main` has no loop at all, so the reference is the IPE-N0033 contradiction.
+    fn reject_input_sub_outside_its_surface(&self, callee: &Callee, span: Span) -> DResult<()> {
+        let Callee::Kernel(k) = callee else {
+            return Ok(());
+        };
+        let Some(owner) = k.input_surface() else {
+            return Ok(());
+        };
+        let Some(app) = self.entry_surface() else {
+            return Ok(());
+        };
+        if owner == app {
+            return Ok(());
+        }
+        let imported = format!("Ipe.Tea.{}.Sub", owner.name()).into_boxed_str();
+        let msg = if app == AppSurface::Script {
+            NameError::ProgramImportsTeaShape { module: imported }
+        } else {
+            NameError::WrongShapeCmdSub(Box::new(ipe_diagnostics::CmdSubShapeMismatch {
+                imported,
+                imported_shape: owner.name().into(),
+                app_shape: app.name().into(),
+                expected: format!("Ipe.Tea.{}.Sub", app.name()).into_boxed_str(),
+            }))
+        };
+        Err(Diagnostic::Name { span, msg })
+    }
+
+    /// The app surface the demanded entry's `main` pins.
+    ///
+    /// Read from the head of the entry module's own `main` — never from an app
+    /// entry that merely appears in some helper module. `None` when this lowering
+    /// has no demanded-entry `main` (a merged audit lowering whose `main` belongs
+    /// to another module).
+    fn entry_surface(&self) -> Option<AppSurface> {
+        let main = self.m.defs.iter().find(|d| {
+            d.home() == self.m.name.as_slice()
+                && self.interner.resolve(d.name().value) == Some("main")
+        })?;
+        let mut node = match main {
+            canon::Def::Untyped { body, .. } | canon::Def::Typed { body, .. } => body,
+        };
+        loop {
+            match &node.value {
+                canon::Expr_::Call(callee, _) => node = callee,
+                canon::Expr_::Lambda(_, inner) | canon::Expr_::Let(_, inner) => node = inner,
+                canon::Expr_::VarKernel { id: Some(k), .. } => {
+                    return Some(k.app_entry_surface().unwrap_or(AppSurface::Script));
+                }
+                _ => return Some(AppSurface::Script),
             }
         }
     }
@@ -26061,6 +27592,12 @@ impl<'a> Lowerer<'a> {
                     ("Store", "touchOnUpdate") => Ok(Callee::Kernel(KernelFn::StoreTouchOnUpdate)),
                     ("Store", "defaultText") => Ok(Callee::Kernel(KernelFn::StoreDefaultText)),
                     ("Store", "defaultInt") => Ok(Callee::Kernel(KernelFn::StoreDefaultInt)),
+                    ("Store", "compositePrimaryKey2") => {
+                        Ok(Callee::Kernel(KernelFn::StoreCompositePrimaryKey2))
+                    }
+                    ("Store", "compositePrimaryKey3") => {
+                        Ok(Callee::Kernel(KernelFn::StoreCompositePrimaryKey3))
+                    }
                     // Row-security policy builders — intercepted at lowering.
                     ("Store", "ownerColumn") => Ok(Callee::Kernel(KernelFn::StoreOwnerColumn)),
                     ("Store", "immutable") => Ok(Callee::Kernel(KernelFn::StoreImmutable)),
@@ -26173,6 +27710,9 @@ impl<'a> Lowerer<'a> {
                     ("Sub", "every") => Ok(Callee::Kernel(KernelFn::SubEvery)),
                     ("Sub", "map") => Ok(Callee::Kernel(KernelFn::SubMap)),
                     ("Sub", "subscribeTopic") => Ok(Callee::Kernel(KernelFn::SubSubscribeTopic)),
+                    // Shape-owned terminal input subscriptions.
+                    ("TeaTuiSub", "onKey") => Ok(Callee::Kernel(KernelFn::TuiSubOnKey)),
+                    ("TeaCliSub", "onLine") => Ok(Callee::Kernel(KernelFn::CliSubOnLine)),
                     // ── Ipe.Ffi.Js ports (raw typed Ipê↔JS transport) ────────────
                     ("Js", "send") => Ok(Callee::Kernel(KernelFn::JsSend)),
                     ("Js", "subscribe") => Ok(Callee::Kernel(KernelFn::JsSubscribe)),
@@ -27481,23 +29021,23 @@ impl<'a> Lowerer<'a> {
             // scope the binder is visible over (`canon_scope` = the let/case
             // body plus, for a `let`, the values of subsequent siblings), then
             // apply the lean multi-use/relay rewrite (or the fail-closed T4 gate
-            // for fn-value reuse). Unused components have no use-site span →
-            // skipped (byte-identical); a Decoder-containing value still takes
-            // the thunk path below.
+            // for fn-value reuse). The component type resolves through the
+            // fail-closed `binder_ir_type`: only an unused component (no use-site
+            // span) is left bare; a Decoder-containing value still takes the
+            // thunk path below.
             let mut bound: BTreeSet<Symbol> = BTreeSet::new();
             pat_bound_symbols(&binder, &mut bound);
             let mut disciplined_body = body;
             for sym in &bound {
-                if let Some(span) = canon_scope
+                let use_span = canon_scope
                     .iter()
-                    .find_map(|e| find_first_varlocal_span(*sym, e))
-                    && let Some(ty) = self.region_ty(span)
-                    && let Ok(comp_ir_ty) = self.ir_type_from_ty(ty, span)
-                {
+                    .find_map(|e| find_first_varlocal_span(*sym, e));
+                if let (Some(span), Some(comp_ir_ty)) = (use_span, self.binder_ir_type(use_span)?) {
                     disciplined_body = apply_move_ownership(
                         self.clone_env(),
+                        BindingSite::Materialized,
                         *sym,
-                        &comp_ir_ty,
+                        comp_ir_ty.classified(),
                         disciplined_body,
                         span,
                     )?;
@@ -27514,11 +29054,11 @@ impl<'a> Lowerer<'a> {
         // params, so every free VarLocal in `canon_value` is an outer capture,
         // classified by the shared `classify_capture_clone` rule.
         let thunk_body = {
-            let captures = self.captured_locals(&[], canon_value);
+            let captures = self.captured_locals(&[], canon_value)?;
             let mut clone_set: BTreeSet<Symbol> = BTreeSet::new();
             let mut noncl_set: BTreeSet<Symbol> = BTreeSet::new();
-            for (sym, ir_ty) in captures {
-                match classify_capture_clone(self.clone_env(), ir_ty.as_ref()) {
+            for (sym, binder_ty) in captures {
+                match classify_capture_clone(self.clone_env(), binder_ty.classified()) {
                     Some(true) => {
                         clone_set.insert(sym);
                     }
@@ -27581,11 +29121,12 @@ impl<'a> Lowerer<'a> {
         // E0382 (use of moved value) in emitted Rust where each
         // `Var(name)` lowers to a bare identifier that moves the value.
         //
-        // `types.regions` is keyed by `(home, span)`;
-        // `region_ty` builds the composite key from current_home.
-        let ty_opt = self
-            .region_ty(b.body.span)
-            .and_then(|ty| self.ir_type_from_ty(ty, b.body.span).ok());
+        // The binder's type is its bound value's solved type, resolved through
+        // the fail-closed `binder_ir_type`: `None` only when `name` has no read
+        // in the scope `acc`, so a used binding never skips the discipline.
+        let name_is_used =
+            precomputed.map_or_else(|| count_var_uses(name, &acc), |a| a.var_uses) > 0;
+        let ty_opt = self.binder_ir_type(name_is_used.then_some(b.body.span))?;
         // Pure-`Fun` bindings may take the `Arc<dyn Fn>` carrier promotion
         // (`fun_value_arc_promotable` — the single ipe_ir authority). The
         // NEW promotion triggers are computed on the LOWERED scope `acc`, so
@@ -27606,13 +29147,16 @@ impl<'a> Lowerer<'a> {
         // `needs_shared_capture` / `flows_into_sync_kernel_call` triggers
         // keep their exact existing treatment (no shim / no multi-use pass)
         // so their byte-pinned output is unchanged.
-        let fun_shape: Option<(Vec<IrType>, IrType)> = match &ty_opt {
-            Some(ir_ty) if fun_value_arc_promotable(ir_ty) => match ir_ty {
-                IrType::Fun(ps, r) => Some((ps.clone(), (**r).clone())),
+        // Only a resolved type spells a carrier into emitted code; a phantom
+        // type is classification-only.
+        let fun_shape: Option<(Vec<IrType>, IrType)> =
+            match ty_opt.as_ref().and_then(BinderType::emittable) {
+                Some(ir_ty) if fun_value_arc_promotable(ir_ty) => match ir_ty {
+                    IrType::Fun(ps, r) => Some((ps.clone(), (**r).clone())),
+                    _ => None,
+                },
                 _ => None,
-            },
-            _ => None,
-        };
+            };
         // The eta block width this binder's shim / sibling-promote / rebind paths
         // draw (one arrow's worth); reserved on the monotonic cursor at the end so
         // a sibling binding in the same def never reuses these names.
@@ -27672,7 +29216,7 @@ impl<'a> Lowerer<'a> {
                 rewrite_multiuse_clones(name, &mut remaining, shimmed)
             }
             _ => {
-                if let Some(ref ir_ty) = ty_opt {
+                if let Some(ir_ty) = ty_opt.as_ref().map(BinderType::classified) {
                     // The ONE shared move-ownership entry point (see
                     // `apply_move_ownership`): the lean
                     // `rewrite_multiuse_clones` (`remaining = n`, correct for
@@ -27686,6 +29230,7 @@ impl<'a> Lowerer<'a> {
                     if let Some(a) = precomputed {
                         apply_move_ownership_precomputed(
                             self.clone_env(),
+                            BindingSite::Let { value: &value },
                             name,
                             ir_ty,
                             acc,
@@ -27693,7 +29238,14 @@ impl<'a> Lowerer<'a> {
                             a,
                         )?
                     } else {
-                        apply_move_ownership(self.clone_env(), name, ir_ty, acc, b.body.span)?
+                        apply_move_ownership(
+                            self.clone_env(),
+                            BindingSite::Let { value: &value },
+                            name,
+                            ir_ty,
+                            acc,
+                            b.body.span,
+                        )?
                     }
                 } else {
                     acc
@@ -27811,14 +29363,14 @@ impl<'a> Lowerer<'a> {
         // capture of one routes to the binder-site promotion in `lower_let_pvar`
         // (decided on the LOWERED scope, eta-synthesized closures included)
         // instead of fail-closing IPE-L0126 at the capture. Destructure-bound
-        // names are deliberately NOT registered — their binder has no carrier
-        // promotion, so their fn captures keep today's honest fail-close.
-        let names: Vec<Symbol> = bindings
+        // names have no carrier promotion, so they SHADOW any outer promotable
+        // name and their fn captures keep the honest fail-close. Scopes install
+        // in source order; each binding's displaced state is kept so
+        // `lower_let_inner` can show every value only its predecessors (`let*`).
+        let saved = self.promotable_fn_binders.borrow().clone();
+        let binder_priors: Vec<BinderScope> = bindings
             .iter()
-            .filter_map(|b| match &b.pat.value {
-                canon::Pattern_::PVar(name) => Some(*name),
-                _ => None,
-            })
+            .map(|b| self.install_binders(&let_binding_scope(b)))
             .collect();
         // Register point-free aliases (`let w = wrap`) so the point-free
         // generic-slot gate can recover a top-level callee's declared template.
@@ -27829,11 +29381,13 @@ impl<'a> Lowerer<'a> {
         // its resolved key, or `None` when the value is not a top-level fn ref —
         // so a rebinding `let w = 5` of an outer alias `w` shadows it CLEARED
         // rather than leaving the stale outer alias visible.
-        self.with_promotable_fn_binders(names, || {
-            self.with_toplevel_fn_aliases(bindings, || {
-                self.with_local_string_literals(bindings, || self.lower_let_inner(bindings, body))
+        let lowered = self.with_toplevel_fn_aliases(bindings, || {
+            self.with_local_string_literals(bindings, || {
+                self.lower_let_inner(bindings, body, &binder_priors)
             })
-        })
+        });
+        *self.promotable_fn_binders.borrow_mut() = saved;
+        lowered
     }
 
     /// Register every `PVar` binding of `bindings` whose body folds to a
@@ -28001,7 +29555,7 @@ impl<'a> Lowerer<'a> {
 
     /// Register every `PVar` binding of `bindings` as a point-free alias over
     /// the closure `f`, restoring the previous map after — the point-free twin of
-    /// [`Self::with_promotable_fn_binders`]. Bindings install in source order,
+    /// [`Self::with_binders`]. Bindings install in source order,
     /// each value resolved against the map with its predecessors already present
     /// (canon `let` is sequential, so `let v = w` must see the earlier
     /// `w = wrap`). A binding whose value is not a top-level fn ref registers as
@@ -28039,7 +29593,17 @@ impl<'a> Lowerer<'a> {
         out
     }
 
-    fn lower_let_inner(&self, bindings: &[canon::LetBinding], body: &canon::Expr) -> DResult<Expr> {
+    /// Lower a `let` group whose binder scopes `lower_let` already installed.
+    ///
+    /// `binder_priors[i]` is the state binding `i`'s scope displaced; it is
+    /// re-installed before binding `i`'s value lowers, so walking the group in
+    /// reverse shows each value exactly its predecessors' binders.
+    fn lower_let_inner(
+        &self,
+        bindings: &[canon::LetBinding],
+        body: &canon::Expr,
+        binder_priors: &[BinderScope],
+    ) -> DResult<Expr> {
         let lowered_body = self.lower_expr(body)?;
 
         // Seed the accumulator with each PVar symbol's counts over the
@@ -28084,6 +29648,9 @@ impl<'a> Lowerer<'a> {
             // starting one past it. Used by the destructure move-ownership pass
             // to find each component symbol's first use-site type.
             let b_src_idx = bindings.len() - 1 - rev_i;
+            if let Some(prior) = binder_priors.get(b_src_idx) {
+                self.install_binders(prior);
+            }
             let value = self.lower_expr(&b.body)?;
             // Snapshot the lowered value for accumulator updates.  `value`
             // is moved into the match arm; a clone is needed for the update
@@ -28206,7 +29773,11 @@ impl<'a> Lowerer<'a> {
                 // catch-all — `case buildPair () of (d1, d2) -> …` reusing a
                 // Decoder-typed component is the identical E0382 gap.
                 let binder = self.lower_binder_pat(&first.pat, scrut)?;
-                let body = self.lower_expr(&first.body)?;
+                // The destructured names have no carrier promotion: they shadow
+                // any outer promotable name over the arm body.
+                let body = self.with_binders(&shadowing_binder_scope(&first.pat), || {
+                    self.lower_expr(&first.body)
+                })?;
                 // Scope = the single arm body — where the destructured
                 // components are read (see pass in the thunk builder).
                 return self.build_destructure_or_decoder_thunk(
@@ -28271,17 +29842,17 @@ impl<'a> Lowerer<'a> {
                             let shared_before = self.shared_fn_reads.borrow().clone();
                             self.register_shared_fn_arm_binders(scrut, &scrutinee, &br.pat);
                             let mut arm_body = self
-                                .with_promotable_fn_binders(arm_syms.clone(), || {
+                                .with_binders(&arm_binder_scope(&arm_syms), || {
                                     self.lower_expr(&br.body)
                                 })?;
                             *self.shared_fn_reads.borrow_mut() = shared_before;
                             for sym in arm_syms {
-                                if let Some(span) = find_first_varlocal_span(sym, &br.body)
-                                    && let Some(ty) = self.region_ty(span)
-                                    && let Ok(ir_ty) = self.ir_type_from_ty(ty, span)
+                                let use_span = find_first_varlocal_span(sym, &br.body);
+                                if let (Some(span), Some(ir_ty)) =
+                                    (use_span, self.binder_ir_type(use_span)?)
                                 {
                                     arm_body = self
-                                        .apply_param_move_ownership(sym, &ir_ty, arm_body, span)?;
+                                        .apply_binder_move_ownership(sym, &ir_ty, arm_body, span)?;
                                 }
                             }
                             Ok(Arm {
@@ -28375,8 +29946,8 @@ impl<'a> Lowerer<'a> {
                 // ([`Self::demote_shared_fn_read`]). Scoped to this arm.
                 let shared_before = self.shared_fn_reads.borrow().clone();
                 self.register_shared_fn_arm_binders(scrut, &scrutinee, &br.pat);
-                let mut arm_body = self
-                    .with_promotable_fn_binders(arm_syms.clone(), || self.lower_expr(&br.body))?;
+                let mut arm_body =
+                    self.with_binders(&arm_binder_scope(&arm_syms), || self.lower_expr(&br.body))?;
                 *self.shared_fn_reads.borrow_mut() = shared_before;
 
                 // Move-ownership discipline for arm-bound variables — each
@@ -28397,18 +29968,13 @@ impl<'a> Lowerer<'a> {
                 // would otherwise move it out of the enclosing `Fn` env →
                 // E0507). `apply_move_ownership`'s `rewrite_multiuse_clones`
                 // (`remaining = n`) installs that relay via its Lambda arm at
-                // `n == 1` and stays lean (bare last-use at depth 0). Unused
-                // pattern vars have no use-site span → `find_first_varlocal_span`
-                // returns `None` → skipped, byte-identical to before.
-                // `ir_type_from_ty` can legitimately fail for
-                // unsupported / not-yet-modelled types — treat any error as
-                // "skip the discipline for this symbol" (documented `Unknown`
-                // residual, same as before).
+                // `n == 1` and stays lean (bare last-use at depth 0). Only an
+                // unused pattern var (no use-site span) is left bare; a used one
+                // resolves through the fail-closed `binder_ir_type`, so a type
+                // that does not lower refuses instead of skipping the discipline.
                 for sym in arm_syms {
-                    if let Some(span) = find_first_varlocal_span(sym, &br.body)
-                        && let Some(ty) = self.region_ty(span)
-                        && let Ok(ir_ty) = self.ir_type_from_ty(ty, span)
-                    {
+                    let use_span = find_first_varlocal_span(sym, &br.body);
+                    if let (Some(span), Some(ir_ty)) = (use_span, self.binder_ir_type(use_span)?) {
                         // The param-side entry point: a pure-`Fun` arm binder
                         // whose reads exceed a bare `Box` carrier (a capture the
                         // classifier deferred, or a forward at closure depth ≥ 1)
@@ -28416,7 +29982,7 @@ impl<'a> Lowerer<'a> {
                         // consuming its `deferred_fun_captures` signal; every
                         // other shape falls through to `apply_move_ownership`
                         // unchanged (byte-identical to before for non-fn binders).
-                        arm_body = self.apply_param_move_ownership(sym, &ir_ty, arm_body, span)?;
+                        arm_body = self.apply_binder_move_ownership(sym, &ir_ty, arm_body, span)?;
                     }
                 }
 
@@ -28988,7 +30554,77 @@ mod tests {
     use ipe_ir::{Callee, KernelFn};
     use ipe_types::{SolvedTypes, Ty};
 
-    use super::{BuiltinCtors, Lowerer, SymbolPools};
+    use super::{BuiltinCtors, EtaDemand, Lowerer, MAX_ETA_PER_SITE, MapperSpine, SymbolPools};
+
+    /// A demand of exactly [`MAX_ETA_PER_SITE`] names is held; one more is refused.
+    #[test]
+    fn eta_demand_holds_the_ceiling_and_refuses_one_past() {
+        let at_limit = EtaDemand::EMPTY.charge(MAX_ETA_PER_SITE);
+        assert!(
+            at_limit.is_some(),
+            "a demand of exactly the ceiling must be held"
+        );
+        assert_eq!(at_limit.and_then(|d| d.charge(0)), at_limit);
+        assert_eq!(at_limit.and_then(|d| d.charge(1)), None);
+        assert_eq!(EtaDemand::EMPTY.charge(MAX_ETA_PER_SITE + 1), None);
+        // Charging in pieces reaches the same ceiling as one charge.
+        let pieces = EtaDemand::EMPTY
+            .charge(1)
+            .and_then(|d| d.charge(MAX_ETA_PER_SITE - 1));
+        assert_eq!(pieces, at_limit);
+        assert_eq!(pieces.and_then(|d| d.charge(1)), None);
+        // An overflowing charge is refused, never wrapped.
+        assert_eq!(
+            EtaDemand::EMPTY
+                .charge(1)
+                .and_then(|d| d.charge(usize::MAX)),
+            None
+        );
+    }
+
+    /// The IPE-L0155 explain page states the ceiling [`MAX_ETA_PER_SITE`] enforces.
+    #[test]
+    fn eta_site_limit_explain_page_states_the_ceiling() {
+        let page = include_str!("../../diagnostics/explain/IPE-L0155.md");
+        assert!(page.contains(&format!("allows at most {MAX_ETA_PER_SITE} of these")));
+    }
+
+    /// A mapper type with fewer arrows than its scheme spine has no [`MapperSpine`].
+    #[test]
+    fn mapper_spine_refuses_a_short_solved_type() {
+        let mut i = Interner::new();
+        let int = Ty::Con {
+            module: Vec::new(),
+            name: i.intern("Int").unwrap(),
+            args: Vec::new(),
+        };
+        let unary = Ty::Fun(Box::new(int.clone()), Box::new(int.clone()));
+        let binary = Ty::Fun(Box::new(int.clone()), Box::new(unary.clone()));
+        assert_eq!(MapperSpine::peel(&int, 1), None);
+        assert_eq!(MapperSpine::peel(&unary, 2), None);
+        assert_eq!(
+            MapperSpine::peel(&binary, 2),
+            Some(MapperSpine {
+                params: vec![&int, &int],
+                ret: &int,
+            })
+        );
+        // A spine shorter than the solved arrow leaves the rest as the result.
+        assert_eq!(
+            MapperSpine::peel(&binary, 1),
+            Some(MapperSpine {
+                params: vec![&int],
+                ret: &unary,
+            })
+        );
+        assert_eq!(
+            MapperSpine::peel(&int, 0),
+            Some(MapperSpine {
+                params: Vec::new(),
+                ret: &int,
+            })
+        );
+    }
 
     /// Wrap a value in a dummy-span [`Located`] — the span is irrelevant to the
     /// counting/pinning tests that build canonical AST fragments by hand.
@@ -29189,6 +30825,394 @@ mod tests {
             untyped_type_params: BTreeMap::new(),
             msg_defaulted_vars: BTreeMap::new(),
         }
+    }
+
+    /// `Unit -> Unit -> Unit -> Unit`: a stored function element with three
+    /// arrow parameters.
+    fn three_arg_fn() -> Ty {
+        let arrow = |param: Ty, ret: Ty| Ty::Fun(Box::new(param), Box::new(ret));
+        arrow(Ty::Unit, arrow(Ty::Unit, arrow(Ty::Unit, Ty::Unit)))
+    }
+
+    /// A `List.map5` mapper over five function elements: `three_arg_fn()`
+    /// five times, returning `Unit`.
+    fn map5_fn_element_mapper() -> Ty {
+        (0..5).fold(Ty::Unit, |ret, _| {
+            Ty::Fun(Box::new(three_arg_fn()), Box::new(ret))
+        })
+    }
+
+    #[test]
+    fn eta_demand_map5_over_fn_elements_counts_holder_spine_and_demotes() {
+        let kernel = KernelFn::ListMap5;
+        let shape = kernel.scheme_shape();
+        assert!(shape.is_some(), "List.map5 carries a scheme shape");
+        let Some(shape) = shape else { return };
+        let mapper = map5_fn_element_mapper();
+        let spine = MapperSpine::peel(&mapper, super::scheme_mapper_arity(shape, 0));
+        assert!(
+            spine.is_some(),
+            "a five-arrow mapper peels along map5's spine"
+        );
+        let Some(spine) = spine else { return };
+        let names = EtaDemand::mapper_wrap_names(shape, kernel.def().arity, 0, &spine);
+        // holder + 5 wrapper params + 5 x 3 demote params
+        assert_eq!(names, 21);
+        // Past the per-site ceiling, so the wrap is refused before any draw.
+        assert_eq!(EtaDemand::EMPTY.charge(names), None);
+    }
+
+    #[test]
+    fn eta_demand_mapper_over_plain_elements_is_zero() {
+        let kernel = KernelFn::ListMap5;
+        let shape = kernel.scheme_shape();
+        assert!(shape.is_some(), "List.map5 carries a scheme shape");
+        let Some(shape) = shape else { return };
+        let mapper = (0..5).fold(Ty::Unit, |ret, _| {
+            Ty::Fun(Box::new(Ty::Unit), Box::new(ret))
+        });
+        let spine = MapperSpine::peel(&mapper, super::scheme_mapper_arity(shape, 0));
+        assert!(
+            spine.is_some(),
+            "a five-arrow mapper peels along map5's spine"
+        );
+        let Some(spine) = spine else { return };
+        let names = EtaDemand::mapper_wrap_names(shape, kernel.def().arity, 0, &spine);
+        assert_eq!(names, 0);
+    }
+
+    #[test]
+    fn mapper_spine_shorter_than_scheme_does_not_peel() {
+        let shape = KernelFn::ListMap5.scheme_shape();
+        assert!(shape.is_some(), "List.map5 carries a scheme shape");
+        let Some(shape) = shape else { return };
+        let spine = super::scheme_mapper_arity(shape, 0);
+        assert!(MapperSpine::peel(&Ty::Unit, spine).is_none());
+        assert!(MapperSpine::peel(&three_arg_fn(), spine).is_none());
+    }
+
+    #[test]
+    fn eta_budget_charges_a_map5_reference_its_wrap_demand() {
+        let mut interner = Interner::new();
+        let module = interner.intern("List").unwrap();
+        let name = interner.intern("map5").unwrap();
+        let span = Span::new(40, 49);
+        let body = Located::new(
+            span,
+            canon::Expr_::VarKernel {
+                id: Some(KernelFn::ListMap5),
+                module,
+                name,
+            },
+        );
+        let mut types = empty_solved_types();
+        let reference = Ty::Fun(Box::new(map5_fn_element_mapper()), Box::new(Ty::Unit));
+        types.regions.insert((Vec::new(), span), reference);
+        let demand = super::mapper_wrap_eta_demand(&body, &[], &types);
+        assert!(demand >= 21, "budget {demand} under the wrap's draw");
+    }
+
+    /// Whether `res` is the stored-function mapper refusal (IPE-L0134).
+    fn is_fn_element_refusal(res: &ipe_diagnostics::DResult<()>) -> bool {
+        matches!(
+            res,
+            Err(ipe_diagnostics::Diagnostic::Lower {
+                msg: ipe_diagnostics::LowerError::Unsupported(
+                    ipe_diagnostics::Feature::FunctionElementEquality
+                ),
+                ..
+            })
+        )
+    }
+
+    /// `(Unit -> Unit) -> ret`: a `List.map` mapper over a stored function
+    /// element.
+    fn fn_element_mapper(ret: Ty) -> Ty {
+        let element = Ty::Fun(Box::new(Ty::Unit), Box::new(Ty::Unit));
+        Ty::Fun(Box::new(element), Box::new(ret))
+    }
+
+    /// Run the carrier choke point on a non-lambda `List.map` mapper whose
+    /// solved type is `mapper_ty`.
+    fn retype_list_map_mapper(mapper_ty: Option<&Ty>) -> ipe_diagnostics::DResult<()> {
+        let mut outcome = Ok(());
+        with_binder_type_lowerer(|lowerer, sym| {
+            let mut args = [super::Expr::Var(sym), super::Expr::Unit];
+            outcome = lowerer
+                .retype_collection_element_param(
+                    &Callee::Kernel(KernelFn::ListMap),
+                    0,
+                    &mut args,
+                    |_| mapper_ty,
+                    EtaDemand::EMPTY,
+                    UNIT_SPAN,
+                )
+                .map(|_| ());
+        });
+        outcome
+    }
+
+    /// A non-lambda mapper with no solved type cannot be wrapped: IPE-L0134.
+    #[test]
+    fn mapper_wrap_without_solved_type_is_refused() {
+        assert!(is_fn_element_refusal(&retype_list_map_mapper(None)));
+    }
+
+    /// A solved mapper type with fewer arrows than the scheme applies cannot
+    /// be peeled: IPE-L0134.
+    #[test]
+    fn mapper_wrap_over_short_spine_is_refused() {
+        assert!(is_fn_element_refusal(&retype_list_map_mapper(Some(
+            &Ty::Unit
+        ))));
+    }
+
+    /// A bound mapper whose result type cannot be lowered is refused before
+    /// the wrapper draws an eta parameter: IPE-L0134.
+    #[test]
+    fn mapper_wrap_with_unlowerable_result_is_refused() {
+        let mapper = fn_element_mapper(Ty::Var(99));
+        assert!(is_fn_element_refusal(&retype_list_map_mapper(Some(
+            &mapper
+        ))));
+    }
+
+    /// Contrapositive: a mapper over plain elements binds no stored function
+    /// and is left untouched.
+    #[test]
+    fn mapper_over_plain_elements_is_not_wrapped() {
+        let mapper = Ty::Fun(Box::new(Ty::Unit), Box::new(Ty::Unit));
+        assert!(retype_list_map_mapper(Some(&mapper)).is_ok());
+    }
+
+    /// A span the binder-type tests record a free, non-polymorphic `Ty::Var` at.
+    const FREE_VAR_SPAN: Span = Span::new(10, 11);
+    /// A span the binder-type tests record `Ty::Unit` at.
+    const UNIT_SPAN: Span = Span::new(20, 21);
+    /// A span the binder-type tests record no region type at.
+    const UNTYPED_SPAN: Span = Span::new(30, 31);
+    /// A span the binder-type tests record a function over a free `Ty::Var` at.
+    const FUN_FREE_VAR_SPAN: Span = Span::new(40, 41);
+    /// A span the binder-type tests record `Program <free var> ()` at.
+    const PROGRAM_PHANTOM_TAG_SPAN: Span = Span::new(50, 51);
+    /// A span the binder-type tests record `Program Web <free var>` at.
+    const PROGRAM_PHANTOM_MSG_SPAN: Span = Span::new(60, 61);
+
+    /// Run `check` against a lowerer whose solved regions are the spans above.
+    fn with_binder_type_lowerer(check: impl FnOnce(&Lowerer<'_>, ipe_intern::Symbol)) {
+        let mut interner = Interner::new();
+        let builtins = build_test_builtin_ctors(&mut interner);
+        let sym = interner.intern("captured").unwrap();
+        interner.intern("String").unwrap();
+        let program = interner.intern("Program").unwrap();
+        let web = interner.intern("Web").unwrap();
+        let module = canon::Module {
+            imports_unsafe_submodule: false,
+            imported_web_capabilities: BTreeSet::new(),
+            name: vec![],
+            unions: vec![],
+            defs: vec![],
+        };
+        let mut types = empty_solved_types();
+        types
+            .regions
+            .insert((Vec::new(), FREE_VAR_SPAN), Ty::Var(7));
+        types.regions.insert((Vec::new(), UNIT_SPAN), Ty::Unit);
+        types.regions.insert(
+            (Vec::new(), FUN_FREE_VAR_SPAN),
+            Ty::Fun(Box::new(Ty::Var(7)), Box::new(Ty::Unit)),
+        );
+        types.regions.insert(
+            (Vec::new(), PROGRAM_PHANTOM_TAG_SPAN),
+            Ty::Con {
+                module: vec![],
+                name: program,
+                args: vec![Ty::Var(7), Ty::Unit],
+            },
+        );
+        types.regions.insert(
+            (Vec::new(), PROGRAM_PHANTOM_MSG_SPAN),
+            Ty::Con {
+                module: vec![],
+                name: program,
+                args: vec![
+                    Ty::Con {
+                        module: vec![],
+                        name: web,
+                        args: vec![],
+                    },
+                    Ty::Var(7),
+                ],
+            },
+        );
+        let lowerer = Lowerer::new(
+            &module,
+            &types,
+            &interner,
+            SymbolPools {
+                eta_params: vec![],
+                cap_params: vec![],
+                param_binders: vec![],
+                any_param_binders: vec![],
+                projection_decode_binders: vec![],
+                destructure_thunk_binders: vec![],
+                nested_cons_binders: vec![],
+                nested_strlit_binders: vec![],
+                tuple_elem_binders: vec![],
+            },
+            &builtins,
+            "",
+            "",
+        );
+        check(&lowerer, sym);
+    }
+
+    /// An unused binder is the only binder the resolver reports as typeless.
+    #[test]
+    fn binder_ir_type_unused_binder_is_none() {
+        with_binder_type_lowerer(|lowerer, _| {
+            assert!(matches!(lowerer.binder_ir_type(None), Ok(None)));
+        });
+    }
+
+    /// A used binder whose type lowers resolves to that type.
+    #[test]
+    fn binder_ir_type_resolves_lowerable_type() {
+        with_binder_type_lowerer(|lowerer, _| {
+            assert!(matches!(
+                lowerer.binder_ir_type(Some(UNIT_SPAN)),
+                Ok(Some(super::BinderType::Resolved(super::IrType::Unit)))
+            ));
+        });
+    }
+
+    /// A phantom type variable classifies as the `CloneOk` `String` leaf, never emittable.
+    #[test]
+    fn binder_ir_type_pins_phantom_var() {
+        with_binder_type_lowerer(|lowerer, _| {
+            let got = lowerer.binder_ir_type(Some(FREE_VAR_SPAN));
+            assert!(
+                matches!(
+                    got,
+                    Ok(Some(super::BinderType::Phantom(super::IrType::Str)))
+                ),
+                "a phantom binder type must pin to `String`, got {got:?}"
+            );
+            let Ok(Some(binder_ty)) = got else { return };
+            assert_eq!(binder_ty.emittable(), None);
+            assert_eq!(binder_ty.classified(), &super::IrType::Str);
+        });
+    }
+
+    /// A phantom `Program` shape tag is refused as IPE-L0102, never a compiler bug.
+    #[test]
+    fn binder_ir_type_refuses_phantom_program_shape() {
+        with_binder_type_lowerer(|lowerer, _| {
+            let got = lowerer.binder_ir_type(Some(PROGRAM_PHANTOM_TAG_SPAN));
+            assert!(
+                matches!(
+                    got,
+                    Err(super::Diagnostic::Lower {
+                        msg: super::LowerError::Unsupported(super::Feature::Polymorphism),
+                        ..
+                    })
+                ),
+                "a phantom Program shape tag must refuse as L0102, got {got:?}"
+            );
+        });
+    }
+
+    /// A phantom `Program` message parameter classifies at the shape's app leaf.
+    #[test]
+    fn binder_ir_type_pins_phantom_program_msg() {
+        with_binder_type_lowerer(|lowerer, _| {
+            let got = lowerer.binder_ir_type(Some(PROGRAM_PHANTOM_MSG_SPAN));
+            assert!(
+                matches!(
+                    got,
+                    Ok(Some(super::BinderType::Phantom(super::IrType::WebApp)))
+                ),
+                "a phantom Program msg must classify at the Web leaf, got {got:?}"
+            );
+        });
+    }
+
+    /// A phantom under a function arrow does not lower and refuses with that typed error.
+    #[test]
+    fn binder_ir_type_refuses_unlowerable_type() {
+        with_binder_type_lowerer(|lowerer, _| {
+            let got = lowerer.binder_ir_type(Some(FUN_FREE_VAR_SPAN));
+            assert!(
+                matches!(
+                    got,
+                    Err(super::Diagnostic::Lower {
+                        msg: super::LowerError::Unsupported(super::Feature::Polymorphism),
+                        ..
+                    })
+                ),
+                "an unlowerable used binder must refuse, got {got:?}"
+            );
+        });
+    }
+
+    /// A used binder with no solved region type is a compiler bug, never skipped.
+    #[test]
+    fn binder_ir_type_refuses_missing_region() {
+        with_binder_type_lowerer(|lowerer, _| {
+            let got = lowerer.binder_ir_type(Some(UNTYPED_SPAN));
+            assert!(
+                matches!(got, Err(super::Diagnostic::CompilerBug { .. })),
+                "a used binder without a region type must refuse, got {got:?}"
+            );
+        });
+    }
+
+    /// A closure capture whose type does not lower refuses instead of going unclassified.
+    #[test]
+    fn captured_locals_refuses_unlowerable_capture() {
+        with_binder_type_lowerer(|lowerer, sym| {
+            let body = Located::new(FUN_FREE_VAR_SPAN, canon::Expr_::VarLocal(sym));
+            let got = lowerer.captured_locals(&[], &body);
+            assert!(
+                matches!(
+                    got,
+                    Err(super::Diagnostic::Lower {
+                        msg: super::LowerError::Unsupported(super::Feature::Polymorphism),
+                        ..
+                    })
+                ),
+                "an unlowerable capture must refuse, got {got:?}"
+            );
+        });
+    }
+
+    /// A closure capture with no solved region type is a compiler bug.
+    #[test]
+    fn captured_locals_refuses_untyped_capture() {
+        with_binder_type_lowerer(|lowerer, sym| {
+            let body = Located::new(UNTYPED_SPAN, canon::Expr_::VarLocal(sym));
+            let got = lowerer.captured_locals(&[], &body);
+            assert!(
+                matches!(got, Err(super::Diagnostic::CompilerBug { .. })),
+                "an untyped capture must refuse, got {got:?}"
+            );
+        });
+    }
+
+    /// A closure capture whose type lowers is returned with that type.
+    #[test]
+    fn captured_locals_types_lowerable_capture() {
+        with_binder_type_lowerer(|lowerer, sym| {
+            let body = Located::new(UNIT_SPAN, canon::Expr_::VarLocal(sym));
+            let got = lowerer.captured_locals(&[], &body);
+            assert!(
+                matches!(
+                    got.as_deref(),
+                    Ok([(s, super::BinderType::Resolved(super::IrType::Unit))]) if *s == sym
+                ),
+                "a lowerable capture must carry its type, got {got:?}"
+            );
+        });
     }
 
     /// The lowerer's built-in `enum_variants` / `ctor_arity` seeding MUST agree
@@ -29613,16 +31637,29 @@ mod tests {
             // failure modes without `panic!`/`unwrap`:
             //   * Err (missing legacy arm / transposed decl) → `None` != `Some(..)`
             //   * wrong variant returned                     → `Some(other)` != `Some(sk)`
-            let got = lowerer.lower_callee(&node).ok();
+            let got = lowerer.lower_callee_resolve(&node).ok();
             assert_eq!(
                 got,
                 Some(Callee::Kernel(sk)),
-                "lower_callee(id=None, qualifier={:?}, name={:?}) returned {got:?}; \
+                "lower_callee_resolve(id=None, qualifier={:?}, name={:?}) returned {got:?}; \
                  expected Some(Callee::Kernel(KernelFn::{sk:?})). Either the legacy \
                  arm is missing / maps to the wrong variant, or decl() returned the \
                  wrong canonical (qualifier, name) for this variant.",
                 decl.qualifier,
                 decl.name,
+            );
+
+            // No region is recorded here, so the gated funnel must refuse every
+            // higher-order kernel (no solved type proves its callback results
+            // non-functional) and pass every other kernel through unchanged.
+            let gated = lowerer.lower_callee(&node).ok();
+            let expected = sk
+                .hof_result_vars()
+                .is_empty()
+                .then_some(Callee::Kernel(sk));
+            assert_eq!(
+                gated, expected,
+                "lower_callee on KernelFn::{sk:?} with no solved type returned {gated:?}",
             );
 
             covered += 1;
@@ -30001,6 +32038,842 @@ mod tests {
         );
     }
 
+    /// A borrowing read of a non-`Clone` effect carrier that the emitted order
+    /// evaluates AFTER a move of the carrier fails closed with IPE-L0135.
+    ///
+    /// Covers the consume-then-borrow shape in an ordered user call, an ordered
+    /// tuple, and an order-unknown kernel call; and pins that the ordered
+    /// borrow-then-consume shape, an update whose field reads run before the base
+    /// move, and a borrow bound by `let` before the consume all stay accepted.
+    #[test]
+    #[allow(clippy::too_many_lines)] // one IR fixture per shape; splitting obscures the pairing
+    fn nonclone_borrow_after_consume_fails_closed() {
+        use ipe_diagnostics::Feature;
+        use ipe_ir::{CallPin, Callee, Expr, FuncId, IrType, KernelFn, ModPath, OnFormKind};
+
+        use super::{CloneEnv, nonclone_read_after_move, reject_nonclone_value_reuse, unsupported};
+
+        let mut interner = Interner::new();
+        let main = interner.intern("Main").expect("intern");
+        let wrap = interner.intern("Wrap").expect("intern");
+        let w = interner.intern("w").expect("intern");
+        let tag = interner.intern("tag").expect("intern");
+        let t = interner.intern("t").expect("intern");
+        let xs = interner.intern("xs").expect("intern");
+        let span = Span::DUMMY;
+        let transparent = BTreeSet::new();
+        let env = CloneEnv {
+            interner: &interner,
+            transparent_ffi: &transparent,
+        };
+        let wrap_task = IrType::Enum {
+            home: ModPath(vec![main]),
+            name: wrap,
+            args: vec![IrType::Task(Box::new(IrType::Int))],
+        };
+
+        let read_tag = || Expr::Access {
+            record: Box::new(Expr::Var(w)),
+            field: tag,
+            field_ty: IrType::Int,
+        };
+        let user_call = |args: Vec<Expr>| Expr::Call {
+            callee: Callee::Func(FuncId::from_raw(0)),
+            args,
+            pin: CallPin::None,
+            on_form: OnFormKind::NotForm,
+        };
+        let kernel_call = |args: Vec<Expr>| Expr::Call {
+            callee: Callee::Kernel(KernelFn::StringAppend),
+            args,
+            pin: CallPin::None,
+            on_form: OnFormKind::NotForm,
+        };
+        let reject = |body: &Expr| reject_nonclone_value_reuse(env, w, &wrap_task, body, span);
+
+        // `f w w.tag`: the move of `w` precedes the field read — rejected.
+        let consume_then_borrow = user_call(vec![Expr::Var(w), read_tag()]);
+        assert!(nonclone_read_after_move(
+            env,
+            w,
+            &wrap_task,
+            &consume_then_borrow
+        ));
+        let err = reject(&consume_then_borrow).expect_err("consume-then-borrow must be rejected");
+        assert_eq!(err, unsupported(span, Feature::NonCloneValueReuse));
+
+        // `(w, w.tag)`: tuple slots evaluate left to right — rejected.
+        let tuple_shape = Expr::Tuple(vec![Expr::Var(w), read_tag()]);
+        assert!(reject(&tuple_shape).is_err());
+
+        // `f w.tag w`: the field read precedes the move — accepted.
+        let borrow_then_consume = user_call(vec![read_tag(), Expr::Var(w)]);
+        assert!(!nonclone_read_after_move(
+            env,
+            w,
+            &wrap_task,
+            &borrow_then_consume
+        ));
+        assert!(reject(&borrow_then_consume).is_ok());
+
+        // A kernel call's argument order is emitter-defined: a move and a read of
+        // `w` in sibling arguments are rejected in EITHER written order.
+        let kernel_move_first = kernel_call(vec![Expr::Var(w), read_tag()]);
+        let kernel_read_first = kernel_call(vec![read_tag(), Expr::Var(w)]);
+        assert!(reject(&kernel_move_first).is_err());
+        assert!(reject(&kernel_read_first).is_err());
+
+        // `{ w | tag = w.tag }`: field values bind before the base moves — accepted.
+        let update_reads_then_moves = Expr::Update {
+            record: Box::new(Expr::Var(w)),
+            fields: vec![(tag, read_tag())],
+        };
+        assert!(!nonclone_read_after_move(
+            env,
+            w,
+            &wrap_task,
+            &update_reads_then_moves
+        ));
+        assert!(reject(&update_reads_then_moves).is_ok());
+
+        // `let t = w.tag in f w t`: the documented fix — accepted.
+        let let_bound_borrow = Expr::Let {
+            name: t,
+            value: Box::new(read_tag()),
+            body: Box::new(user_call(vec![Expr::Var(w), Expr::Var(t)])),
+        };
+        assert!(reject(&let_bound_borrow).is_ok());
+
+        // `if c then f w else 0` then `w.tag` in a sibling slot: a move in ANY
+        // branch leaves `w` possibly moved — rejected.
+        let branch_move = Expr::Tuple(vec![
+            Expr::If {
+                cond: Box::new(Expr::Bool(true)),
+                then_: Box::new(user_call(vec![Expr::Var(w)])),
+                else_: Box::new(Expr::Int(0)),
+            },
+            read_tag(),
+        ]);
+        assert!(reject(&branch_move).is_err());
+
+        // A multi-use `let` of a task list is inlined at each use site by the
+        // emitter, so its value is evaluated where `xs` is read, not at the
+        // binding: `let xs = [g w.tag] in f w (xs, xs)` emits
+        // `f(w, (vec![g(w.tag)], vec![g(w.tag)]))` — a read after the move.
+        let task_list = || Expr::List {
+            elem: IrType::Task(Box::new(IrType::Int)),
+            items: vec![user_call(vec![read_tag()])],
+        };
+        let pair_xs = || Expr::Tuple(vec![Expr::Var(xs), Expr::Var(xs)]);
+        let inlined_read_after_move = Expr::Let {
+            name: xs,
+            value: Box::new(task_list()),
+            body: Box::new(user_call(vec![Expr::Var(w), pair_xs()])),
+        };
+        assert!(nonclone_read_after_move(
+            env,
+            w,
+            &wrap_task,
+            &inlined_read_after_move
+        ));
+        assert!(reject(&inlined_read_after_move).is_err());
+
+        // The same inlined `let` read before the move — accepted.
+        let inlined_read_before_move = Expr::Let {
+            name: xs,
+            value: Box::new(task_list()),
+            body: Box::new(user_call(vec![pair_xs(), Expr::Var(w)])),
+        };
+        assert!(!nonclone_read_after_move(
+            env,
+            w,
+            &wrap_task,
+            &inlined_read_before_move
+        ));
+        assert!(reject(&inlined_read_before_move).is_ok());
+
+        // A single-use `let` is NOT inlined: its value runs at the binding,
+        // before the body's move — accepted.
+        let bound_once = Expr::Let {
+            name: xs,
+            value: Box::new(task_list()),
+            body: Box::new(user_call(vec![Expr::Var(w), Expr::Var(xs)])),
+        };
+        assert!(!nonclone_read_after_move(env, w, &wrap_task, &bound_once));
+        assert!(reject(&bound_once).is_ok());
+    }
+
+    /// An argument-reversed kernel evaluates its container before its function
+    /// (`Maybe.map f m` emits `ipe_maybe_map(m, f)`), so the non-`Clone` move
+    /// walk orders its arguments that way instead of treating them as unordered.
+    #[test]
+    fn nonclone_reversed_kernel_walks_container_first() {
+        use ipe_diagnostics::Feature;
+        use ipe_ir::{CallPin, Callee, Expr, FuncId, IrType, KernelFn, ModPath, OnFormKind};
+
+        use super::{CloneEnv, nonclone_read_after_move, reject_nonclone_value_reuse, unsupported};
+
+        let mut interner = Interner::new();
+        let main = interner.intern("Main").expect("intern");
+        let wrap = interner.intern("Wrap").expect("intern");
+        let w = interner.intern("w").expect("intern");
+        let tag = interner.intern("tag").expect("intern");
+        let span = Span::DUMMY;
+        let transparent = BTreeSet::new();
+        let env = CloneEnv {
+            interner: &interner,
+            transparent_ffi: &transparent,
+        };
+        let wrap_task = IrType::Enum {
+            home: ModPath(vec![main]),
+            name: wrap,
+            args: vec![IrType::Task(Box::new(IrType::Int))],
+        };
+        let read_tag = || Expr::Access {
+            record: Box::new(Expr::Var(w)),
+            field: tag,
+            field_ty: IrType::Int,
+        };
+        let call = |callee: Callee, args: Vec<Expr>| Expr::Call {
+            callee,
+            args,
+            pin: CallPin::None,
+            on_form: OnFormKind::NotForm,
+        };
+        let user_call = |args: Vec<Expr>| call(Callee::Func(FuncId::from_raw(0)), args);
+        let reversed = |kernel: KernelFn, func: Expr, container: Expr| {
+            call(Callee::Kernel(kernel), vec![func, container])
+        };
+        let reject = |body: &Expr| reject_nonclone_value_reuse(env, w, &wrap_task, body, span);
+
+        for kernel in [
+            KernelFn::MaybeMap,
+            KernelFn::MaybeAndThen,
+            KernelFn::ResultMap,
+            KernelFn::ResultAndThen,
+            KernelFn::ResultMapError,
+            KernelFn::TaskAndThen,
+        ] {
+            assert!(Callee::Kernel(kernel).has_known_eval_order());
+
+            // `Maybe.map (mkF w) (wrap w.tag)`: the container's field borrow
+            // runs before the function's move — accepted.
+            let borrow_then_move = reversed(
+                kernel,
+                user_call(vec![Expr::Var(w)]),
+                user_call(vec![read_tag()]),
+            );
+            assert!(!nonclone_read_after_move(
+                env,
+                w,
+                &wrap_task,
+                &borrow_then_move
+            ));
+            assert!(reject(&borrow_then_move).is_ok());
+
+            // `Maybe.map (mkF w.tag) (wrap w)`: the container moves `w` before
+            // the function's field read — rejected.
+            let move_then_borrow = reversed(
+                kernel,
+                user_call(vec![read_tag()]),
+                user_call(vec![Expr::Var(w)]),
+            );
+            assert!(nonclone_read_after_move(
+                env,
+                w,
+                &wrap_task,
+                &move_then_borrow
+            ));
+            let err = reject(&move_then_borrow).expect_err("container move then read");
+            assert_eq!(err, unsupported(span, Feature::NonCloneValueReuse));
+        }
+
+        // A kernel that does not reverse keeps its order unknown: a move and a
+        // read in sibling arguments stay rejected in either written order.
+        assert!(!Callee::Kernel(KernelFn::StringAppend).has_known_eval_order());
+        let unordered = call(
+            Callee::Kernel(KernelFn::StringAppend),
+            vec![user_call(vec![Expr::Var(w)]), user_call(vec![read_tag()])],
+        );
+        assert!(nonclone_read_after_move(env, w, &wrap_task, &unordered));
+    }
+
+    /// A sequenced task whose capture-clone rewrite would clone a non-Clone
+    /// effect carrier fails closed with IPE-L0135; an eager borrow stays accepted.
+    #[test]
+    fn nonclone_taskseq_capture_clone_fails_closed() {
+        use ipe_diagnostics::Feature;
+        use ipe_ir::{CallPin, Callee, Expr, FuncId, IrType, KernelFn, ModPath, OnFormKind};
+
+        use super::{CloneEnv, reject_nonclone_value_reuse, unsupported};
+
+        let mut interner = Interner::new();
+        let main = interner.intern("Main").expect("intern");
+        let wrap = interner.intern("Wrap").expect("intern");
+        let w = interner.intern("w").expect("intern");
+        let tag = interner.intern("tag").expect("intern");
+        let span = Span::DUMMY;
+        let transparent = BTreeSet::new();
+        let env = CloneEnv {
+            interner: &interner,
+            transparent_ffi: &transparent,
+        };
+        let wrap_task = IrType::Enum {
+            home: ModPath(vec![main]),
+            name: wrap,
+            args: vec![IrType::Task(Box::new(IrType::Int))],
+        };
+        let read_tag = || Expr::Access {
+            record: Box::new(Expr::Var(w)),
+            field: tag,
+            field_ty: IrType::Int,
+        };
+        let call = |callee: Callee, args: Vec<Expr>| Expr::Call {
+            callee,
+            args,
+            pin: CallPin::None,
+            on_form: OnFormKind::NotForm,
+        };
+        let user_call = |args: Vec<Expr>| call(Callee::Func(FuncId::from_raw(0)), args);
+        let kernel_call = |args: Vec<Expr>| call(Callee::Kernel(KernelFn::StringAppend), args);
+        let seq = |effect: Expr, rest: Expr| Expr::TaskSeq {
+            effect: Box::new(effect),
+            rest: Box::new(rest),
+        };
+        let reject = |body: &Expr| reject_nonclone_value_reuse(env, w, &wrap_task, body, span);
+
+        // `f w.tag` then `g w`: the eager read borrows before the move — accepted.
+        let eager_read = seq(user_call(vec![read_tag()]), user_call(vec![Expr::Var(w)]));
+        assert!(reject(&eager_read).is_ok());
+
+        // A kernel argument may be deferred into a `move` closure, so the
+        // rewrite clones `w` there — rejected.
+        let kernel_read = seq(kernel_call(vec![read_tag()]), user_call(vec![Expr::Var(w)]));
+        let err = reject(&kernel_read).expect_err("clone of a non-Clone carrier must be rejected");
+        assert_eq!(err, unsupported(span, Feature::NonCloneValueReuse));
+
+        // A continuation that rebinds `w` captures a different value — accepted.
+        let shadowed = seq(
+            kernel_call(vec![read_tag()]),
+            Expr::Lambda {
+                params: vec![(w, IrType::Int)],
+                ret: IrType::Int,
+                body: Box::new(user_call(vec![Expr::Var(w)])),
+            },
+        );
+        assert!(reject(&shadowed).is_ok());
+    }
+
+    /// Every binder site runs the IPE-L0135 gate; only an inlined `let` is exempt.
+    ///
+    /// A `let` or destructured binder of a non-`Clone` effect carrier is
+    /// refused exactly like a parameter, and a by-value pattern match that
+    /// moves a field out makes a later read of that field (or of the whole
+    /// binding) a use-after-move, while a read of an untouched field stays
+    /// accepted.
+    #[test]
+    #[allow(clippy::too_many_lines)] // one IR fixture per binder site; splitting obscures the pairing
+    fn nonclone_gate_covers_every_binding_site_and_partial_moves() {
+        use ipe_diagnostics::Feature;
+        use ipe_ir::{
+            Arm, CallPin, Callee, Expr, FuncId, IrType, KernelFn, Match, ModPath, OnFormKind, Pat,
+        };
+
+        use super::{
+            BindingSite, CloneEnv, apply_move_ownership, nonclone_read_after_move,
+            reject_nonclone_value_reuse, unsupported,
+        };
+
+        let mut interner = Interner::new();
+        let main = interner.intern("Main").expect("intern");
+        let wrap = interner.intern("Wrap").expect("intern");
+        let w = interner.intern("w").expect("intern");
+        let mk = interner.intern("mk").expect("intern");
+        let job = interner.intern("job").expect("intern");
+        let tag = interner.intern("tag").expect("intern");
+        let j = interner.intern("j").expect("intern");
+        let span = Span::DUMMY;
+        let transparent = BTreeSet::new();
+        let env = CloneEnv {
+            interner: &interner,
+            transparent_ffi: &transparent,
+        };
+        let wrap_task = IrType::Enum {
+            home: ModPath(vec![main]),
+            name: wrap,
+            args: vec![IrType::Task(Box::new(IrType::Int))],
+        };
+        let read = |field| Expr::Access {
+            record: Box::new(Expr::Var(w)),
+            field,
+            field_ty: IrType::Int,
+        };
+        let call = |callee: Callee, args: Vec<Expr>| Expr::Call {
+            callee,
+            args,
+            pin: CallPin::None,
+            on_form: OnFormKind::NotForm,
+        };
+        let user_call = |args: Vec<Expr>| call(Callee::Func(FuncId::from_raw(0)), args);
+        let kernel_call = |args: Vec<Expr>| call(Callee::Kernel(KernelFn::StringAppend), args);
+        let own = |site: BindingSite<'_>, scope: Expr| {
+            apply_move_ownership(env, site, w, &wrap_task, scope, span)
+        };
+        let l0135 = unsupported(span, Feature::NonCloneValueReuse);
+
+        // `let w = mk in do { _ <- kernel w.tag ; g w }`: the let binder is gated
+        // like a parameter — the rewrite would clone the carrier.
+        let kernel_read_then_consume = || Expr::TaskSeq {
+            effect: Box::new(kernel_call(vec![read(tag)])),
+            rest: Box::new(user_call(vec![Expr::Var(w)])),
+        };
+        let bound_call = Expr::Var(mk);
+        let let_site = BindingSite::Let { value: &bound_call };
+        assert!(matches!(own(let_site, kernel_read_then_consume()), Err(ref e) if *e == l0135));
+        assert!(matches!(
+            own(BindingSite::Materialized, kernel_read_then_consume()),
+            Err(ref e) if *e == l0135
+        ));
+
+        // An inlined `let` has no Rust binder: its value is substituted at each
+        // use site, so the binder itself is not gated.
+        let task_list = Expr::List {
+            elem: IrType::Task(Box::new(IrType::Int)),
+            items: vec![user_call(vec![Expr::Int(1)])],
+        };
+        let pair = || Expr::Tuple(vec![Expr::Var(w), Expr::Var(w)]);
+        assert!(own(BindingSite::Let { value: &task_list }, pair()).is_ok());
+        assert!(matches!(
+            own(BindingSite::Materialized, pair()),
+            Err(ref e) if *e == l0135
+        ));
+
+        // `let { job } = w in (j, w.job)`: the pattern moved `job` out of `w`.
+        let job_pat = || Pat::Record(vec![(job, Pat::Var(j)), (tag, Pat::Wildcard)]);
+        let destructure_then = |after: Expr| Expr::Destructure {
+            binder: job_pat(),
+            value: Box::new(Expr::Var(w)),
+            body: Box::new(Expr::Tuple(vec![Expr::Var(j), after])),
+        };
+        let reject = |body: &Expr| reject_nonclone_value_reuse(env, w, &wrap_task, body, span);
+        assert!(nonclone_read_after_move(
+            env,
+            w,
+            &wrap_task,
+            &destructure_then(read(job))
+        ));
+        assert!(matches!(reject(&destructure_then(read(job))), Err(ref e) if *e == l0135));
+        // The untouched `tag` field is still owned — accepted.
+        assert!(!nonclone_read_after_move(
+            env,
+            w,
+            &wrap_task,
+            &destructure_then(read(tag))
+        ));
+        assert!(reject(&destructure_then(read(tag))).is_ok());
+
+        // `(case w of { job } -> () ; _ -> (), w.job)`: a match arm's pattern
+        // moves the field too; the branch merge keeps the partial move.
+        let match_then = |after: Expr| {
+            let arms = vec![
+                Arm {
+                    pat: job_pat(),
+                    body: Expr::Unit,
+                    guard: None,
+                },
+                Arm {
+                    pat: Pat::Wildcard,
+                    body: Expr::Unit,
+                    guard: None,
+                },
+            ];
+            Match::new_flat(Expr::Var(w), arms).map(|m| Expr::Tuple(vec![Expr::Match(m), after]))
+        };
+        assert!(matches!(
+            match_then(read(job)),
+            Ok(ref e) if nonclone_read_after_move(env, w, &wrap_task, e)
+        ));
+        assert!(matches!(
+            match_then(read(tag)),
+            Ok(ref e) if !nonclone_read_after_move(env, w, &wrap_task, e)
+        ));
+        // A read of the whole binding after any partial move — rejected.
+        assert!(matches!(
+            match_then(Expr::Var(w)),
+            Ok(ref e) if nonclone_read_after_move(env, w, &wrap_task, e)
+        ));
+
+        // `w.job` of a `Task` field MOVES that field: a second read of it, or
+        // a whole read of `w`, observes the moved part; `w.tag` stays owned.
+        let move_job = || Expr::Access {
+            record: Box::new(Expr::Var(w)),
+            field: job,
+            field_ty: IrType::Task(Box::new(IrType::Int)),
+        };
+        let pair_after_job = |after: Expr| Expr::Tuple(vec![move_job(), after]);
+        assert!(!nonclone_read_after_move(
+            env,
+            w,
+            &wrap_task,
+            &pair_after_job(read(tag))
+        ));
+        assert!(reject(&pair_after_job(read(tag))).is_ok());
+        assert!(nonclone_read_after_move(
+            env,
+            w,
+            &wrap_task,
+            &pair_after_job(move_job())
+        ));
+        assert!(matches!(reject(&pair_after_job(move_job())), Err(ref e) if *e == l0135));
+        assert!(nonclone_read_after_move(
+            env,
+            w,
+            &wrap_task,
+            &pair_after_job(Expr::Var(w))
+        ));
+        assert!(matches!(reject(&pair_after_job(Expr::Var(w))), Err(ref e) if *e == l0135));
+    }
+
+    /// A pattern binder copies a `Copy` record field instead of moving it.
+    ///
+    /// `let { n, job } = w` over `w : { n : Int, job : Task Int }` moves only
+    /// `job`: a later `w.n` stays accepted, while `w.job`, the whole `w`, a field
+    /// whose type is not `Copy` (a `Ui Int` view), and a field the binding's
+    /// type does not resolve all stay refused with IPE-L0135.
+    #[test]
+    #[allow(clippy::too_many_lines)] // one IR fixture per field class; splitting obscures the pairing
+    fn nonclone_partial_move_copies_copy_fields() {
+        use ipe_diagnostics::Feature;
+        use ipe_ir::{Arm, Expr, IrType, Match, ModPath, Pat, UiCtor};
+
+        use super::{
+            CloneClass, CloneEnv, clone_class, copy_record_fields, count_value_consumes,
+            nonclone_read_after_move, reject_nonclone_value_reuse, unsupported,
+        };
+
+        let mut interner = Interner::new();
+        let main = interner.intern("Main").expect("intern");
+        let wrap = interner.intern("Wrap").expect("intern");
+        let w_sym = interner.intern("w").expect("intern");
+        let n_sym = interner.intern("n").expect("intern");
+        let job = interner.intern("job").expect("intern");
+        let view = interner.intern("view").expect("intern");
+        let ghost = interner.intern("ghost").expect("intern");
+        let a_sym = interner.intern("a").expect("intern");
+        let j_sym = interner.intern("j").expect("intern");
+        let v_sym = interner.intern("v").expect("intern");
+        let g_sym = interner.intern("g").expect("intern");
+        let span = Span::DUMMY;
+        let transparent = BTreeSet::new();
+        let env = CloneEnv {
+            interner: &interner,
+            transparent_ffi: &transparent,
+        };
+        let task = IrType::Task(Box::new(IrType::Int));
+        let ui_int = IrType::Ui {
+            ctor: UiCtor::Html,
+            msg: Box::new(IrType::Int),
+        };
+        // A named runtime UI struct is never `Copy`, even over a `Copy` message.
+        assert_eq!(clone_class(env, &ui_int), CloneClass::CloneOk);
+        let worker = IrType::Record(BTreeMap::from([
+            (n_sym, IrType::Int),
+            (job, task.clone()),
+            (view, ui_int.clone()),
+        ]));
+        let l0135 = unsupported(span, Feature::NonCloneValueReuse);
+        let read = |field, field_ty: IrType| Expr::Access {
+            record: Box::new(Expr::Var(w_sym)),
+            field,
+            field_ty,
+        };
+        let binds = |fields: Vec<(ipe_intern::Symbol, Pat)>| {
+            let mut all = vec![(job, Pat::Var(j_sym))];
+            all.extend(fields);
+            Pat::Record(all)
+        };
+        let destructure_then = |binder: Pat, after: Expr| Expr::Destructure {
+            binder,
+            value: Box::new(Expr::Var(w_sym)),
+            body: Box::new(Expr::Tuple(vec![Expr::Var(j_sym), after])),
+        };
+        let hazard = |ty: &IrType, body: &Expr| nonclone_read_after_move(env, w_sym, ty, body);
+        let reject =
+            |ty: &IrType, body: &Expr| reject_nonclone_value_reuse(env, w_sym, ty, body, span);
+
+        // `let { n = a, job = j } = w in (j, w.n)`: `n` is `Int`, copied — accepted.
+        let n_pat = || binds(vec![(n_sym, Pat::Var(a_sym)), (view, Pat::Wildcard)]);
+        let read_n = destructure_then(n_pat(), read(n_sym, IrType::Int));
+        assert!(!hazard(&worker, &read_n));
+        assert!(reject(&worker, &read_n).is_ok());
+
+        // A pattern that binds ONLY `Copy` fields moves nothing: the whole `w`
+        // stays owned.
+        let copy_only = Expr::Destructure {
+            binder: Pat::Record(vec![
+                (n_sym, Pat::Var(a_sym)),
+                (job, Pat::Wildcard),
+                (view, Pat::Wildcard),
+            ]),
+            value: Box::new(Expr::Var(w_sym)),
+            body: Box::new(Expr::Tuple(vec![Expr::Var(a_sym), Expr::Var(w_sym)])),
+        };
+        assert!(!hazard(&worker, &copy_only));
+        assert!(reject(&worker, &copy_only).is_ok());
+        // The consume count and the move walk share one classifier: the
+        // copy-only destructure is no consume, the trailing `w` is the one.
+        let worker_copy = copy_record_fields(env, &worker);
+        assert_eq!(count_value_consumes(w_sym, &worker_copy, &copy_only), 1);
+
+        // Refusal twins of `copy_only`: the same `(bound, w)` reuse after a
+        // binder that MOVES a part.
+        let reuse_after = |field, binder: Pat, bound| Expr::Destructure {
+            binder: Pat::Record(vec![
+                (field, binder),
+                (job, Pat::Wildcard),
+                (n_sym, Pat::Wildcard),
+            ]),
+            value: Box::new(Expr::Var(w_sym)),
+            body: Box::new(Expr::Tuple(vec![Expr::Var(bound), Expr::Var(w_sym)])),
+        };
+        // `let { view = v } = w in (v, w)`: `Ui Int` is not `Copy` — refused.
+        let view_reuse = reuse_after(view, Pat::Var(v_sym), v_sym);
+        assert_eq!(count_value_consumes(w_sym, &worker_copy, &view_reuse), 2);
+        assert!(matches!(reject(&worker, &view_reuse), Err(ref e) if *e == l0135));
+        // `let { ghost = g } = w in (g, w)`: a field the binding's type does
+        // not resolve is a move (fail closed) — refused.
+        let ghost_reuse = reuse_after(ghost, Pat::Var(g_sym), g_sym);
+        assert_eq!(count_value_consumes(w_sym, &worker_copy, &ghost_reuse), 2);
+        assert!(matches!(reject(&worker, &ghost_reuse), Err(ref e) if *e == l0135));
+        // With no `Copy` field known (a non-record binding type), even the
+        // `Int` binder moves — refused.
+        assert_eq!(count_value_consumes(w_sym, &BTreeSet::new(), &copy_only), 2);
+
+        // `(case w of { n = a } -> () ; _ -> (), w)`: a copy-only arm moves
+        // nothing — accepted; an arm that binds `job` moves it — refused.
+        let match_reuse = |pat: Pat| {
+            let arms = vec![
+                Arm {
+                    pat,
+                    body: Expr::Unit,
+                    guard: None,
+                },
+                Arm {
+                    pat: Pat::Wildcard,
+                    body: Expr::Unit,
+                    guard: None,
+                },
+            ];
+            Match::new_flat(Expr::Var(w_sym), arms)
+                .map(|m| Expr::Tuple(vec![Expr::Match(m), Expr::Var(w_sym)]))
+        };
+        let copy_arm = Pat::Record(vec![
+            (n_sym, Pat::Var(a_sym)),
+            (job, Pat::Wildcard),
+            (view, Pat::Wildcard),
+        ]);
+        assert!(matches!(
+            match_reuse(copy_arm),
+            Ok(ref e) if !hazard(&worker, e) && reject(&worker, e).is_ok()
+        ));
+        assert!(matches!(
+            match_reuse(n_pat()),
+            Ok(ref e) if matches!(reject(&worker, e), Err(ref err) if *err == l0135)
+        ));
+
+        // `... in (j, w.job)`: the `Task` field was moved — refused.
+        let read_job = destructure_then(n_pat(), read(job, task.clone()));
+        assert!(hazard(&worker, &read_job));
+        assert!(matches!(reject(&worker, &read_job), Err(ref e) if *e == l0135));
+
+        // `... in (j, w)`: the whole binding after a partial move — refused.
+        let read_whole = destructure_then(n_pat(), Expr::Var(w_sym));
+        assert!(hazard(&worker, &read_whole));
+        assert!(matches!(reject(&worker, &read_whole), Err(ref e) if *e == l0135));
+
+        // `let { view = v, job = j } = w in (j, w.view)`: a `Ui Int` field is
+        // `Clone` but not `Copy`, so the binder moves it — refused.
+        let view_pat = binds(vec![(view, Pat::Var(v_sym)), (n_sym, Pat::Wildcard)]);
+        let read_view = destructure_then(view_pat, read(view, ui_int));
+        assert!(hazard(&worker, &read_view));
+        assert!(matches!(reject(&worker, &read_view), Err(ref e) if *e == l0135));
+
+        // A binder over a field the binding's type does not resolve is treated
+        // as a move — refused.
+        let ghost_pat = || binds(vec![(ghost, Pat::Var(g_sym))]);
+        let read_ghost = destructure_then(ghost_pat(), read(ghost, IrType::Int));
+        assert!(hazard(&worker, &read_ghost));
+        assert!(matches!(reject(&worker, &read_ghost), Err(ref e) if *e == l0135));
+
+        // A binding whose type is not a record resolves no field type at all:
+        // even an `Int`-read field bound by the pattern stays moved — refused.
+        let wrap_task = IrType::Enum {
+            home: ModPath(vec![main]),
+            name: wrap,
+            args: vec![task],
+        };
+        let opaque_n = destructure_then(n_pat(), read(n_sym, IrType::Int));
+        assert!(hazard(&wrap_task, &opaque_n));
+        assert!(matches!(reject(&wrap_task, &opaque_n), Err(ref e) if *e == l0135));
+
+        // `(case w of { n = a, job = j } -> () ; _ -> (), w.n)`: a match arm
+        // copies the `Int` field too — accepted; `w.job` after it — refused.
+        let match_then = |after: Expr| {
+            let arms = vec![
+                Arm {
+                    pat: n_pat(),
+                    body: Expr::Unit,
+                    guard: None,
+                },
+                Arm {
+                    pat: Pat::Wildcard,
+                    body: Expr::Unit,
+                    guard: None,
+                },
+            ];
+            Match::new_flat(Expr::Var(w_sym), arms)
+                .map(|m| Expr::Tuple(vec![Expr::Match(m), after]))
+        };
+        assert!(matches!(
+            match_then(read(n_sym, IrType::Int)),
+            Ok(ref e) if !hazard(&worker, e)
+        ));
+        assert!(matches!(
+            match_then(read(job, IrType::Task(Box::new(IrType::Int)))),
+            Ok(ref e) if hazard(&worker, e)
+        ));
+    }
+
+    /// A string literal nested in a by-value arm pattern moves the part it matches.
+    ///
+    /// The emitter matches a nested literal through a hidden by-value slot plus
+    /// an equality guard, so `case p of ( "go", _ ) -> .. ; _ -> ..` followed by a
+    /// whole-value use of `p` is a double move (IPE-L0135), as are the
+    /// constructor-payload and record-field forms and a read of the matched
+    /// record field. A top-level literal matches a borrowed scrutinee and moves
+    /// nothing.
+    #[test]
+    #[allow(clippy::too_many_lines)] // one refusal twin per by-value literal position
+    fn nonclone_nested_str_literal_arm_moves_part() {
+        use ipe_diagnostics::Feature;
+        use ipe_ir::{Arm, Expr, IrType, Match, ModPath, Pat};
+
+        use super::{
+            CloneEnv, copy_record_fields, count_value_consumes, nonclone_read_after_move,
+            reject_nonclone_value_reuse, unsupported,
+        };
+
+        let mut interner = Interner::new();
+        let main = interner.intern("Main").expect("intern");
+        let wrap = interner.intern("Wrap").expect("intern");
+        let say = interner.intern("Say").expect("intern");
+        let w = interner.intern("w").expect("intern");
+        let name = interner.intern("name").expect("intern");
+        let action = interner.intern("action").expect("intern");
+        let s = interner.intern("s").expect("intern");
+        let span = Span::DUMMY;
+        let transparent = BTreeSet::new();
+        let env = CloneEnv {
+            interner: &interner,
+            transparent_ffi: &transparent,
+        };
+        let l0135 = unsupported(span, Feature::NonCloneValueReuse);
+        let task = IrType::Task(Box::new(IrType::Int));
+        let lit = || Pat::Str("go".to_owned());
+        let hazard = |ty: &IrType, body: &Expr| nonclone_read_after_move(env, w, ty, body);
+        let reject = |ty: &IrType, body: &Expr| reject_nonclone_value_reuse(env, w, ty, body, span);
+        // `(case w of <pat> -> () ; _ -> (), <after>)`.
+        let match_then = |pat: Pat, after: Expr| {
+            let arms = vec![
+                Arm {
+                    pat,
+                    body: Expr::Unit,
+                    guard: None,
+                },
+                Arm {
+                    pat: Pat::Wildcard,
+                    body: Expr::Unit,
+                    guard: None,
+                },
+            ];
+            Match::new_flat(Expr::Var(w), arms).map(|m| Expr::Tuple(vec![Expr::Match(m), after]))
+        };
+        let refused = |ty: &IrType, pat: Pat, after: Expr| {
+            matches!(
+                match_then(pat, after),
+                Ok(ref e) if matches!(reject(ty, e), Err(ref err) if *err == l0135)
+            )
+        };
+        let accepted = |ty: &IrType, pat: Pat, after: Expr| {
+            matches!(
+                match_then(pat, after),
+                Ok(ref e) if !hazard(ty, e) && reject(ty, e).is_ok()
+            )
+        };
+
+        // Tuple element: `w : (String, Task Int)`, `case w of ("go", _)` then `w`.
+        let pair = IrType::Tuple(vec![IrType::Str, task.clone()]);
+        let str_column = || Pat::Tuple(vec![lit(), Pat::Wildcard]);
+        assert!(matches!(
+            match_then(str_column(), Expr::Var(w)),
+            Ok(ref e) if count_value_consumes(w, &BTreeSet::new(), e) == 2 && hazard(&pair, e)
+        ));
+        assert!(refused(&pair, str_column(), Expr::Var(w)));
+        assert!(accepted(
+            &pair,
+            Pat::Tuple(vec![Pat::Wildcard, Pat::Wildcard]),
+            Expr::Var(w)
+        ));
+
+        // Constructor payload: `w : Wrap (Task Int)`, `case w of Say "go"` then `w`.
+        let wrap_task = IrType::Enum {
+            home: ModPath(vec![main]),
+            name: wrap,
+            args: vec![task.clone()],
+        };
+        let say_pat = |arg: Pat| Pat::Ctor {
+            home: ModPath(vec![main]),
+            ty: wrap,
+            variant: say,
+            args: vec![arg],
+        };
+        assert!(refused(&wrap_task, say_pat(lit()), Expr::Var(w)));
+        assert!(accepted(&wrap_task, say_pat(Pat::Wildcard), Expr::Var(w)));
+
+        // Record field: `w : { name : String, action : Task Int }`,
+        // `case w of { name = "go" }` then `w`, or then `w.name`.
+        let msg = IrType::Record(BTreeMap::from([
+            (name, IrType::Str),
+            (action, task.clone()),
+        ]));
+        assert!(copy_record_fields(env, &msg).is_empty());
+        let name_pat = || Pat::Record(vec![(name, lit()), (action, Pat::Wildcard)]);
+        let read = |field, field_ty: IrType| Expr::Access {
+            record: Box::new(Expr::Var(w)),
+            field,
+            field_ty,
+        };
+        assert!(refused(&msg, name_pat(), Expr::Var(w)));
+        assert!(matches!(
+            match_then(name_pat(), read(name, IrType::Str)),
+            Ok(ref e) if hazard(&msg, e)
+        ));
+        assert!(refused(&msg, name_pat(), read(name, IrType::Str)));
+        // The untouched `action` field stays owned.
+        assert!(accepted(&msg, name_pat(), read(action, task)));
+
+        // A top-level literal borrows the scrutinee (`w.as_str()`): no consume,
+        // unlike a whole-value binder over the same scrutinee.
+        assert!(matches!(
+            match_then(lit(), Expr::Var(w)),
+            Ok(ref e) if count_value_consumes(w, &BTreeSet::new(), e) == 1
+        ));
+        assert!(matches!(
+            match_then(Pat::Var(s), Expr::Var(w)),
+            Ok(ref e) if count_value_consumes(w, &BTreeSet::new(), e) == 2
+        ));
+    }
+
     /// A reuse HIDDEN inside an `Access`/`Update` record base must not slip past
     /// the reuse gates. The two counters treat a BARE base differently by design:
     ///
@@ -30022,6 +32895,7 @@ mod tests {
         let tag = interner.intern("tag").expect("intern");
         let mk = interner.intern("mk").expect("intern");
         let other = interner.intern("other").expect("intern");
+        let no_copy = BTreeSet::new();
 
         // A compound base `(mk w)` that MOVES `w`.
         let compound_base = || Expr::Apply {
@@ -30041,18 +32915,30 @@ mod tests {
         // Bare Access base `w.tag`: a field BORROW — effect-carrier gate defers
         // to IPE-L0120 (0); fn-value gate counts (1) since a Box-fn cannot be
         // re-read from a borrow.
-        assert_eq!(count_value_consumes(w, &access_over(Expr::Var(w))), 0);
+        assert_eq!(
+            count_value_consumes(w, &no_copy, &access_over(Expr::Var(w))),
+            0
+        );
         assert_eq!(count_fn_value_uses(w, &access_over(Expr::Var(w))), 1);
 
         // Bare Update base `{ w | tag = 9 }`: a MOVE (`let mut __ipe_rec = w;`)
         // — effect-carrier gate counts (1); fn-value gate also counts (1).
-        assert_eq!(count_value_consumes(w, &update_over(Expr::Var(w))), 1);
+        assert_eq!(
+            count_value_consumes(w, &no_copy, &update_over(Expr::Var(w))),
+            1
+        );
         assert_eq!(count_fn_value_uses(w, &update_over(Expr::Var(w))), 1);
 
         // Compound base `(mk w).tag` / `{ mk w | tag = 9 }`: a move of `w`, counted
         // by both — the previously-skipped hole.
-        assert_eq!(count_value_consumes(w, &access_over(compound_base())), 1);
-        assert_eq!(count_value_consumes(w, &update_over(compound_base())), 1);
+        assert_eq!(
+            count_value_consumes(w, &no_copy, &access_over(compound_base())),
+            1
+        );
+        assert_eq!(
+            count_value_consumes(w, &no_copy, &update_over(compound_base())),
+            1
+        );
         assert_eq!(count_fn_value_uses(w, &access_over(compound_base())), 1);
         assert_eq!(count_fn_value_uses(w, &update_over(compound_base())), 1);
 
@@ -30060,18 +32946,18 @@ mod tests {
         // slot = 2, the reuse IPE-L0135 must reject. `((mk other).tag, w)` moves
         // `w` once.
         let reuse = Expr::Tuple(vec![access_over(compound_base()), Expr::Var(w)]);
-        assert_eq!(count_value_consumes(w, &reuse), 2);
+        assert_eq!(count_value_consumes(w, &no_copy, &reuse), 2);
         let unrelated_base = Expr::Apply {
             func: Box::new(Expr::Var(mk)),
             args: vec![Expr::Var(other)],
         };
         let linear = Expr::Tuple(vec![access_over(unrelated_base), Expr::Var(w)]);
-        assert_eq!(count_value_consumes(w, &linear), 1);
+        assert_eq!(count_value_consumes(w, &no_copy, &linear), 1);
 
         // Update bare-base repro `({ w | tag = 9 }, w)`: bare Update base (1)
         // + tuple slot (1) = 2, the reuse IPE-L0135 must reject.
         let update_reuse = Expr::Tuple(vec![update_over(Expr::Var(w)), Expr::Var(w)]);
-        assert_eq!(count_value_consumes(w, &update_reuse), 2);
+        assert_eq!(count_value_consumes(w, &no_copy, &update_reuse), 2);
 
         // The fn-value analogue `c.f 1 + c.f 2`: two bare-base reads = 2, the
         // reuse IPE-L0127 must reject (a bare base is a genuine fn read here).
@@ -30310,6 +33196,62 @@ mod tests {
         ));
         assert!(!super::ir_type_generic_in_decoder(
             &IrType::Decoder(Box::new(IrType::Int)),
+            a
+        ));
+    }
+
+    /// The `Cmd` / `Sub` `Send`-obligation walk fires only on a tvar inside one of them.
+    ///
+    /// It must reach the point-free input-subscription helper's signature
+    /// `(KeyEvent -> msg) -> Sub msg` (the `Sub` under a function's return), and
+    /// never bound a bare tvar, a tvar under another carrier, or an unrelated tvar.
+    #[test]
+    fn generic_in_tea_carrier_is_precise() {
+        use ipe_ir::IrType;
+
+        let mut interner = Interner::new();
+        let a = interner.intern("a").unwrap();
+        let b = interner.intern("b").unwrap();
+        let ga = || IrType::Generic(a);
+
+        // Fires: `Sub a` / `Cmd a` directly, nested, and as a returned function's result.
+        assert!(super::ir_type_generic_in_tea_carrier(
+            &IrType::Sub(Box::new(ga())),
+            a
+        ));
+        assert!(super::ir_type_generic_in_tea_carrier(
+            &IrType::Tuple(vec![IrType::Int, IrType::Cmd(Box::new(ga()))]),
+            a
+        ));
+        assert!(super::ir_type_generic_in_tea_carrier(
+            &IrType::List(Box::new(IrType::Sub(Box::new(ga())))),
+            a
+        ));
+        assert!(super::ir_type_generic_in_tea_carrier(
+            &IrType::Fun(
+                vec![IrType::Fun(vec![IrType::Str], Box::new(ga()))],
+                Box::new(IrType::Sub(Box::new(ga()))),
+            ),
+            a
+        ));
+
+        // Never fires: a bare tvar, a tvar only under a function or a non-TEA
+        // carrier, a `Sub` over a different tvar, or a concrete `Cmd`.
+        assert!(!super::ir_type_generic_in_tea_carrier(&ga(), a));
+        assert!(!super::ir_type_generic_in_tea_carrier(
+            &IrType::Fun(vec![IrType::Str], Box::new(ga())),
+            a
+        ));
+        assert!(!super::ir_type_generic_in_tea_carrier(
+            &IrType::Task(Box::new(ga())),
+            a
+        ));
+        assert!(!super::ir_type_generic_in_tea_carrier(
+            &IrType::Sub(Box::new(IrType::Generic(b))),
+            a
+        ));
+        assert!(!super::ir_type_generic_in_tea_carrier(
+            &IrType::Cmd(Box::new(IrType::Int)),
             a
         ));
     }

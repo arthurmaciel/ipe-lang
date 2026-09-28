@@ -311,8 +311,10 @@ fn add_import_quick_fix_sorts_among_existing_imports() {
     );
 }
 
-/// IPE-N0035 quick-fix: a Terminal app importing the Web shape's `Cmd` yields a
-/// "Change import to `Ipe.Tea.Terminal.Cmd`" code action whose edit, once
+/// IPE-N0035 quick-fix: repoint a wrong-shape `Cmd` import to the app's own.
+///
+/// A Cli app importing the Web shape's `Cmd` yields a
+/// "Change import to `Ipe.Tea.Cli.Cmd`" code action whose edit, once
 /// applied, repoints the import to the app's shape and clears the diagnostic
 /// (SEAL — the program compiles), leaving the `as Cmd` binding untouched.
 #[test]
@@ -326,14 +328,14 @@ fn wrong_shape_cmd_quick_fix_repoints_the_import_and_clears_the_diagnostic() {
     let src = "module Main exposing (main)\n\n\
         import Ipe.Tea.Cli as Cli\n\
         import Ipe.Tea.Web.Cmd as Cmd\n\
-        import Ipe.Tea.Terminal.Sub as Sub\n\n\
+        import Ipe.Tea.Cli.Sub as Sub\n\n\
         init _u = ( { n = 0 }, Cmd.none )\n\
         update _m model = ( model, Cmd.none )\n\
         view _m = \"ok\"\n\
-        subscriptions _m = Sub.none\n\
+        subscriptions _m = Sub.onLine onLine\n\
         onLine l = l\n\
         main =\n    \
-            Cli.tea { init = init, update = update, view = view, subscriptions = subscriptions, onLine = onLine }\n";
+            Cli.tea { init = init, update = update, view = view, subscriptions = subscriptions }\n";
     let mut db = IpeDatabase::new();
     let entry = file(&db, &["Main"], src);
     let root = root_of(&db, &[(&["Main"], entry)]);
@@ -373,7 +375,7 @@ fn wrong_shape_cmd_quick_fix_repoints_the_import_and_clears_the_diagnostic() {
             CodeActionOrCommand::Command(_) => None,
         })
         .expect("one CodeAction for IPE-N0035");
-    assert_eq!(action.title, "Change import to Ipe.Tea.Terminal.Cmd");
+    assert_eq!(action.title, "Change import to Ipe.Tea.Cli.Cmd");
     let edit = action
         .edit
         .as_ref()
@@ -386,8 +388,8 @@ fn wrong_shape_cmd_quick_fix_repoints_the_import_and_clears_the_diagnostic() {
     // module compiles — N0035 is gone.
     let fixed = apply_edit(src, edit);
     assert!(
-        fixed.contains("import Ipe.Tea.Terminal.Cmd as Cmd"),
-        "the fixed source repoints to the Terminal shape, keeping the alias: {fixed:?}"
+        fixed.contains("import Ipe.Tea.Cli.Cmd as Cmd"),
+        "the fixed source repoints to the Cli shape, keeping the alias: {fixed:?}"
     );
     assert!(
         !fixed.contains("Ipe.Tea.Web.Cmd"),
@@ -737,8 +739,35 @@ fn rewrite_two_step_decoder_produces_pipeline_form() {
 
 // ── lint/unused-imports quick-fix ───────────────────────────────────────────
 
-/// Build a bare LSP diagnostic (the shape `collect_lint` produces for a lint
-/// finding) carrying `code` on the given zero-based line.
+/// Run the real `ipe_lint` → `collect_lint` pipeline over `src` (as the single
+/// module `module`) and return the one diagnostic whose code is `lint/<rule>`.
+///
+/// This exercises the actual engine, not a hand-built stand-in: the finding's
+/// `Fix` (when the rule ships one) rides in `data` exactly as `collect_lint`
+/// packages it, so a test built on this helper proves the full
+/// lint → `data` → code-action pipeline, not just the decoder in isolation.
+#[allow(clippy::expect_used)] // test helper: the lint not firing is the failure
+fn lint_diag_for(module: &[&str], src: &str, rule: &str) -> lsp_types::Diagnostic {
+    let mut user_texts = BTreeMap::new();
+    user_texts.insert(
+        module.iter().map(|s| (*s).to_owned()).collect::<Vec<_>>(),
+        src.to_owned(),
+    );
+    let config = LintConfig::default();
+    let code = lsp_types::NumberOrString::String(format!("lint/{rule}"));
+    collect_lint(&user_texts, &config, PositionEncoding::Utf16)
+        .into_iter()
+        .find(|(m, _)| m.iter().map(String::as_str).eq(module.iter().copied()))
+        .into_iter()
+        .flat_map(|(_, diags)| diags)
+        .find(|d| d.code.as_ref() == Some(&code))
+        .expect("the lint must flag this fixture")
+}
+
+/// Build a bare LSP diagnostic carrying `code` on the given zero-based line,
+/// with no `data` — the shape a hand-built or otherwise fix-less diagnostic
+/// takes. Used only to drive the fail-closed refusal below; every "offers an
+/// action" test uses [`lint_diag_for`] instead, which carries the real fix.
 fn lint_diag_on_line(code: &str, line: u32) -> lsp_types::Diagnostic {
     let range = Range {
         start: lsp_types::Position { line, character: 0 },
@@ -757,13 +786,12 @@ fn lint_diag_on_line(code: &str, line: u32) -> lsp_types::Diagnostic {
 /// `import` line, and the result no longer contains that import.
 #[test]
 fn unused_imports_quick_fix_removes_the_import_line() {
-    // Line 2 (0-based) is `import Unused`.
     let src = "module Main exposing (main)\n\nimport Unused\n\nmain : Int\nmain = 1\n";
     let db = IpeDatabase::new();
     let entry = file(&db, &["Main"], src);
     let root = root_of(&db, &[(&["Main"], entry)]);
 
-    let lsp_diag = lint_diag_on_line("lint/unused-imports", 2);
+    let lsp_diag = lint_diag_for(&["Main"], src, "unused-imports");
     let uri = Url::from_file_path("/fake/Main.ipe").expect("uri");
     let actions = code_actions(
         DbView {
@@ -804,17 +832,19 @@ fn unused_imports_quick_fix_removes_the_import_line() {
     );
 }
 
-/// The refusal: a `lint/unused-imports` diagnostic whose range lands on a line
-/// that is NOT an `import` line yields no action — the fix never deletes an
-/// unrelated line on a mis-ranged diagnostic (fail-closed).
+/// The refusal: a `lint/<rule>` diagnostic that carries no `data` (no rule
+/// ships one for every finding that lacks a `Fix` — e.g. a `NotFixable` rule,
+/// or a `SigFix`-only one) yields no action. The generic decoder fails closed
+/// on a missing fix payload rather than guessing an edit.
 #[test]
-fn unused_imports_quick_fix_refuses_non_import_line() {
+fn lint_quick_fix_refuses_diagnostic_with_no_fix_data() {
     let src = "module Main exposing (main)\n\nimport Unused\n\nmain : Int\nmain = 1\n";
     let db = IpeDatabase::new();
     let entry = file(&db, &["Main"], src);
     let root = root_of(&db, &[(&["Main"], entry)]);
 
-    // Line 5 is `main = 1` — not an import line.
+    // A diagnostic with the right code but no `data` — the shape a NotFixable
+    // or SigFix-only rule's finding takes.
     let lsp_diag = lint_diag_on_line("lint/unused-imports", 5);
     let uri = Url::from_file_path("/fake/Main.ipe").expect("uri");
     let actions = code_actions(
@@ -832,7 +862,7 @@ fn unused_imports_quick_fix_refuses_non_import_line() {
     );
     assert!(
         actions.is_empty(),
-        "a non-import line must yield no remove action: {actions:?}"
+        "a diagnostic with no fix data must yield no action: {actions:?}"
     );
 }
 
@@ -856,8 +886,7 @@ fn unused_imports_quick_fix_removes_a_multiline_exposing_import() {
     let entry = file(&db, &["Main"], src);
     let root = root_of(&db, &[(&["Foo"], foo), (&["Main"], entry)]);
 
-    // The diagnostic anchors on the `import` keyword (line 2, char 0).
-    let lsp_diag = lint_diag_on_line("lint/unused-imports", 2);
+    let lsp_diag = lint_diag_for(&["Main"], src, "unused-imports");
     let uri = Url::from_file_path("/fake/Main.ipe").expect("uri");
     let actions = code_actions(
         DbView {
@@ -922,7 +951,7 @@ fn unused_imports_quick_fix_removes_a_wrapped_exposing_list() {
     let entry = file(&db, &["Main"], src);
     let root = root_of(&db, &[(&["Foo"], foo), (&["Main"], entry)]);
 
-    let lsp_diag = lint_diag_on_line("lint/unused-imports", 2);
+    let lsp_diag = lint_diag_for(&["Main"], src, "unused-imports");
     let uri = Url::from_file_path("/fake/Main.ipe").expect("uri");
     let actions = code_actions(
         DbView {
@@ -984,7 +1013,7 @@ fn unused_imports_quick_fix_removes_a_multiline_as_import() {
     let entry = file(&db, &["Main"], src);
     let root = root_of(&db, &[(&["Foo"], foo), (&["Main"], entry)]);
 
-    let lsp_diag = lint_diag_on_line("lint/unused-imports", 2);
+    let lsp_diag = lint_diag_for(&["Main"], src, "unused-imports");
     let uri = Url::from_file_path("/fake/Main.ipe").expect("uri");
     let actions = code_actions(
         DbView {
@@ -1092,7 +1121,7 @@ fn assert_offers_remove_action(actions: &[CodeActionOrCommand]) {
     );
 }
 
-/// Cursor on the module name (`Foo`, cols 7..10) offers the remove action —
+/// Cursor on the module name (`Foo`, cols 7..10) offers the remove action --
 /// nowhere near the `import` keyword, but inside the widened span.
 #[test]
 fn unused_imports_quick_fix_offered_with_cursor_on_module_name() {
@@ -1247,7 +1276,7 @@ fn apply_unused_import_fix(src: &str) -> String {
 /// removal early and strand the remaining `, baz )` lines.
 #[test]
 fn unused_import_fix_ignores_close_paren_in_line_comment() {
-    let src = "module Main exposing (main)\n\nimport Foo exposing\n    ( bar -- keeps ) the old name\n    , baz\n    )\n\nmain : Int\nmain = 1\n";
+    let src = "module Main exposing (main)\n\nimport Foo exposing\n    ( bar — keeps ) the old name\n    , baz\n    )\n\nmain : Int\nmain = 1\n";
     let fixed = apply_unused_import_fix(src);
     assert_eq!(
         fixed,
@@ -1259,11 +1288,11 @@ fn unused_import_fix_ignores_close_paren_in_line_comment() {
 /// must not stretch the removal over the unrelated `main` declaration.
 #[test]
 fn unused_import_fix_leaves_later_declarations_untouched() {
-    let src = "module Main exposing (main)\n\nimport Foo exposing (bar -- (\n    )\n\nmain : Int\nmain = 1 -- )\n";
+    let src = "module Main exposing (main)\n\nimport Foo exposing (bar — (\n    )\n\nmain : Int\nmain = 1 — )\n";
     let fixed = apply_unused_import_fix(src);
     assert_eq!(
         fixed,
-        "module Main exposing (main)\n\n\nmain : Int\nmain = 1 -- )\n"
+        "module Main exposing (main)\n\n\nmain : Int\nmain = 1 — )\n"
     );
 }
 
@@ -1276,6 +1305,189 @@ fn unused_import_fix_spans_block_comment_between_clauses() {
     assert_eq!(
         fixed,
         "module Main exposing (main)\n\n\nmain : Int\nmain = 1\n"
+    );
+}
+
+/// `prefer-pipeline` ships a local [`ipe_lint::Fix`] (it is, per the rule's own
+/// doc, the one rule whose rewrite is provably semantics-preserving via `x |>
+/// f == f x`), so it reaches an LSP quick-fix through the same generic path as
+/// `unused-imports` — no rule-specific code in `code_actions.rs`.
+#[test]
+fn prefer_pipeline_quick_fix_rewrites_the_nested_call() {
+    let db = IpeDatabase::new();
+    let src = "module Main exposing (report)\n\n\nreport records =\n    List.map fmt (List.filter live records)\n";
+    let entry = file(&db, &["Main"], src);
+    let root = root_of(&db, &[(&["Main"], entry)]);
+
+    let lsp_diag = lint_diag_for(&["Main"], src, "prefer-pipeline");
+    let uri = Url::from_file_path("/fake/Main.ipe").expect("uri");
+    let actions = code_actions(
+        DbView {
+            db: &db,
+            root,
+            entry,
+        },
+        &["Main".to_owned()],
+        &uri,
+        lsp_diag.range,
+        std::slice::from_ref(&lsp_diag),
+        src,
+        PositionEncoding::Utf16,
+    );
+    let action = actions
+        .into_iter()
+        .find_map(|a| match a {
+            CodeActionOrCommand::CodeAction(ca) => Some(ca),
+            CodeActionOrCommand::Command(_) => None,
+        })
+        .expect("a nested call must offer a pipeline rewrite action");
+    let edit = action
+        .edit
+        .as_ref()
+        .and_then(|e| e.changes.as_ref())
+        .and_then(|c| c.values().next())
+        .and_then(|v| v.first())
+        .expect("edit present");
+
+    let fixed = apply_edit(src, edit);
+    assert!(
+        fixed.contains("records |> List.filter live |> List.map fmt"),
+        "the rewrite is the author's own text re-threaded: {fixed:?}"
+    );
+    let mut interner = db.interner().lock();
+    assert!(
+        ipe_parse::parse_module(&fixed, &mut interner).is_ok(),
+        "the fixed module must still parse: {fixed:?}"
+    );
+}
+
+/// `unused-bindings` ships a local [`ipe_lint::Fix`] (prefix the name with
+/// `_`), so the generic mechanism offers it as an LSP quick-fix with no
+/// rule-specific code.
+#[test]
+fn unused_bindings_quick_fix_prefixes_the_name() {
+    let db = IpeDatabase::new();
+    let src = "module Main exposing (main)\n\nmain : Int\nmain =\n    let\n        waste = 1\n    in\n    2\n";
+    let entry = file(&db, &["Main"], src);
+    let root = root_of(&db, &[(&["Main"], entry)]);
+
+    let lsp_diag = lint_diag_for(&["Main"], src, "unused-bindings");
+    let uri = Url::from_file_path("/fake/Main.ipe").expect("uri");
+    let actions = code_actions(
+        DbView {
+            db: &db,
+            root,
+            entry,
+        },
+        &["Main".to_owned()],
+        &uri,
+        lsp_diag.range,
+        std::slice::from_ref(&lsp_diag),
+        src,
+        PositionEncoding::Utf16,
+    );
+    let action = actions
+        .into_iter()
+        .find_map(|a| match a {
+            CodeActionOrCommand::CodeAction(ca) => Some(ca),
+            CodeActionOrCommand::Command(_) => None,
+        })
+        .expect("an unused let-binding must offer a prefix action");
+    let edit = action
+        .edit
+        .as_ref()
+        .and_then(|e| e.changes.as_ref())
+        .and_then(|c| c.values().next())
+        .and_then(|v| v.first())
+        .expect("edit present");
+
+    let fixed = apply_edit(src, edit);
+    assert!(
+        fixed.contains("_waste = 1"),
+        "the binding is prefixed, not removed: {fixed:?}"
+    );
+    let mut interner = db.interner().lock();
+    assert!(
+        ipe_parse::parse_module(&fixed, &mut interner).is_ok(),
+        "the fixed module must still parse: {fixed:?}"
+    );
+}
+
+/// `unsafe-convention` is [`ipe_lint::Fixability::NotFixable`]: the rewrite --
+/// keep the escape hatch or restructure the call — is an author judgement call,
+/// so its findings never carry a [`ipe_lint::Fix`]. `collect_lint` threads no
+/// `data` for such a finding, and the generic decoder in `code_actions.rs`
+/// fails closed on that missing payload: no action, not a guess.
+#[test]
+fn unsafe_convention_offers_no_lsp_action() {
+    let db = IpeDatabase::new();
+    let src = "module Main exposing (main)\n\n\nmain =\n    unsafeFromInt 42\n";
+    let entry = file(&db, &["Main"], src);
+    let root = root_of(&db, &[(&["Main"], entry)]);
+
+    let lsp_diag = lint_diag_for(&["Main"], src, "unsafe-convention");
+    assert!(
+        lsp_diag.data.is_none(),
+        "a NotFixable rule's finding must carry no fix data: {lsp_diag:?}"
+    );
+    let uri = Url::from_file_path("/fake/Main.ipe").expect("uri");
+    let actions = code_actions(
+        DbView {
+            db: &db,
+            root,
+            entry,
+        },
+        &["Main".to_owned()],
+        &uri,
+        lsp_diag.range,
+        std::slice::from_ref(&lsp_diag),
+        src,
+        PositionEncoding::Utf16,
+    );
+    assert!(
+        actions.is_empty(),
+        "an unsafe-convention diagnostic must offer no quick-fix: {actions:?}"
+    );
+}
+
+/// `prim-param` is [`ipe_lint::Fixability::Fixable`] — a genuine fix exists --
+/// but it is a cross-module [`ipe_lint::SigFix`] (a call-site rewrite in every
+/// importer), which `collect_lint` deliberately never threads into `data` (only
+/// a local, single-module [`ipe_lint::Fix`] travels that path). The rule is
+/// `ipe lint --fix`-actionable but has no per-finding LSP scope, so its
+/// diagnostic — like a `NotFixable` rule's — carries no fix data and the
+/// generic decoder offers no action. This is the documented Tier-2 gap, not an
+/// oversight: `Fixability::Fixable` records that a fix exists, not that this
+/// particular transport can apply it.
+#[test]
+fn prim_param_sig_fix_only_offers_no_lsp_action() {
+    let db = IpeDatabase::new();
+    let src = "module Main exposing (connect)\n\n\nconnect : String -> Int -> String\nconnect host port =\n    host\n";
+    let entry = file(&db, &["Main"], src);
+    let root = root_of(&db, &[(&["Main"], entry)]);
+
+    let lsp_diag = lint_diag_for(&["Main"], src, "prim-param");
+    assert!(
+        lsp_diag.data.is_none(),
+        "a SigFix-only finding must carry no per-finding fix data: {lsp_diag:?}"
+    );
+    let uri = Url::from_file_path("/fake/Main.ipe").expect("uri");
+    let actions = code_actions(
+        DbView {
+            db: &db,
+            root,
+            entry,
+        },
+        &["Main".to_owned()],
+        &uri,
+        lsp_diag.range,
+        std::slice::from_ref(&lsp_diag),
+        src,
+        PositionEncoding::Utf16,
+    );
+    assert!(
+        actions.is_empty(),
+        "a prim-param diagnostic must offer no quick-fix: {actions:?}"
     );
 }
 

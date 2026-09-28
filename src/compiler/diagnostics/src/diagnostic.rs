@@ -18,18 +18,19 @@ use crate::code::{
     IPE_L0119, IPE_L0120, IPE_L0121, IPE_L0122, IPE_L0123, IPE_L0124, IPE_L0125, IPE_L0126,
     IPE_L0127, IPE_L0128, IPE_L0129, IPE_L0130, IPE_L0131, IPE_L0132, IPE_L0134, IPE_L0135,
     IPE_L0136, IPE_L0140, IPE_L0141, IPE_L0142, IPE_L0143, IPE_L0144, IPE_L0145, IPE_L0146,
-    IPE_L0147, IPE_L0148, IPE_L0149, IPE_L0150, IPE_L0151, IPE_L0153, IPE_L0200, IPE_N0001,
-    IPE_N0002, IPE_N0003, IPE_N0004, IPE_N0005, IPE_N0010, IPE_N0011, IPE_N0012, IPE_N0013,
-    IPE_N0020, IPE_N0021, IPE_N0022, IPE_N0023, IPE_N0024, IPE_N0025, IPE_N0026, IPE_N0027,
-    IPE_N0028, IPE_N0029, IPE_N0030, IPE_N0031, IPE_N0032, IPE_N0033, IPE_N0034, IPE_N0035,
-    IPE_N0036, IPE_N0038, IPE_N0039, IPE_N0040, IPE_N0041, IPE_N0042, IPE_N0043, IPE_N0044,
-    IPE_N0045, IPE_N0046, IPE_N0047, IPE_N0048, IPE_N0049, IPE_N0050, IPE_N0051, IPE_P0001,
-    IPE_P0002, IPE_P0003, IPE_P0010, IPE_P0011, IPE_P0012, IPE_P0013, IPE_P0014, IPE_P0015,
-    IPE_P0016, IPE_P0017, IPE_P0018, IPE_P0020, IPE_P0021, IPE_P0030, IPE_P0031, IPE_P0040,
-    IPE_P0041, IPE_P0050, IPE_P0060, IPE_P0061, IPE_P0062, IPE_P0063, IPE_P0064, IPE_P0065,
-    IPE_P0066, IPE_P0067, IPE_P0068, IPE_P0069, IPE_P0070, IPE_S0001, IPE_T0001, IPE_T0002,
-    IPE_T0003, IPE_T0004, IPE_T0010, IPE_T0011, IPE_T0012, IPE_T0013, IPE_T0014, IPE_T0015,
-    IPE_T0016, IPE_T0017, IPE_T0018, IPE_T0019, IPE_T0020, Severity,
+    IPE_L0147, IPE_L0148, IPE_L0149, IPE_L0150, IPE_L0151, IPE_L0152, IPE_L0153, IPE_L0154,
+    IPE_L0155, IPE_L0200, IPE_N0001, IPE_N0002, IPE_N0003, IPE_N0004, IPE_N0005, IPE_N0010,
+    IPE_N0011, IPE_N0012, IPE_N0013, IPE_N0020, IPE_N0021, IPE_N0022, IPE_N0023, IPE_N0024,
+    IPE_N0025, IPE_N0026, IPE_N0027, IPE_N0028, IPE_N0029, IPE_N0030, IPE_N0031, IPE_N0032,
+    IPE_N0033, IPE_N0034, IPE_N0035, IPE_N0036, IPE_N0038, IPE_N0039, IPE_N0040, IPE_N0041,
+    IPE_N0042, IPE_N0043, IPE_N0044, IPE_N0045, IPE_N0046, IPE_N0047, IPE_N0048, IPE_N0049,
+    IPE_N0050, IPE_N0051, IPE_N0052, IPE_P0001, IPE_P0002, IPE_P0003, IPE_P0010, IPE_P0011,
+    IPE_P0012, IPE_P0013, IPE_P0014, IPE_P0015, IPE_P0016, IPE_P0017, IPE_P0018, IPE_P0020,
+    IPE_P0021, IPE_P0030, IPE_P0031, IPE_P0040, IPE_P0041, IPE_P0050, IPE_P0060, IPE_P0061,
+    IPE_P0062, IPE_P0063, IPE_P0064, IPE_P0065, IPE_P0066, IPE_P0067, IPE_P0068, IPE_P0069,
+    IPE_P0070, IPE_S0001, IPE_T0001, IPE_T0002, IPE_T0003, IPE_T0004, IPE_T0010, IPE_T0011,
+    IPE_T0012, IPE_T0013, IPE_T0014, IPE_T0015, IPE_T0016, IPE_T0017, IPE_T0018, IPE_T0019,
+    IPE_T0020, Severity,
 };
 use crate::span::Span;
 
@@ -609,12 +610,12 @@ pub enum NameError {
     ProgramImportsTeaShape { module: Box<str> },
     /// A TEA app imports another shape's `Cmd` / `Sub` re-export module. `Cmd`
     /// and `Sub` are shape-specific and reached through the app's own shape
-    /// (`Ipe.Tea.Web.Cmd` in a `Web` app, `Ipe.Tea.Terminal.Sub` in a `Terminal`
-    /// app, …). The app's shape is proven from its entry kernel; a `Cmd` / `Sub`
-    /// import from a different shape has no denotation in this app and fails
-    /// closed here. `imported` is the offending import path; `imported_shape` and
-    /// `app_shape` name the two shapes; `expected` is the correct import path for
-    /// the app's shape. [IPE-N0035]
+    /// (`Ipe.Tea.Web.Cmd` in a `Web` app, `Ipe.Tea.Tui.Sub` in a `Tui` app,
+    /// `Ipe.Tea.Cli.Sub` in a `Cli` app, …). The app's shape is proven from its
+    /// entry kernel; a `Cmd` / `Sub` import from a different shape has no
+    /// denotation in this app and fails closed here. `imported` is the offending
+    /// import path; `imported_shape` and `app_shape` name the two shapes;
+    /// `expected` is the correct import path for the app's shape. [IPE-N0035]
     WrongShapeCmdSub(Box<CmdSubShapeMismatch>),
     /// A surface binding that has been intentionally removed from the stdlib.
     /// `qualifier.name` is the call site; `replacement` is the migration hint
@@ -792,6 +793,18 @@ pub enum NameError {
     /// [`NameError::GenericAppEntry`]. `entry` is the entry's qualified name.
     /// [IPE-N0051]
     UnpinnedAppEntry { entry: Box<str> },
+    /// A `Tui.tea` / `Cli.tea` config still passes terminal input as a field.
+    ///
+    /// The entry config is the canonical four TEA fields (`init` /
+    /// `update` / `view` / `subscriptions`); input is a subscription. `entry` is
+    /// the entry (`Tui.tea`), `field` the stray field (`onKey`), and `sub_module`
+    /// the shape's `Sub` module whose same-named member replaces it
+    /// (`Ipe.Tea.Tui.Sub`). [IPE-N0052]
+    InputFieldIsSubscription {
+        entry: Box<str>,
+        field: Box<str>,
+        sub_module: Box<str>,
+    },
 }
 
 /// How a [`NameError::GenericAppEntry`] refusal relates the entry to its
@@ -937,14 +950,13 @@ pub enum AliasExpansionKind {
 
 /// Class label for the higher-order-kernel callback-result obligation.
 ///
-/// `Maybe`/`Result` `map`/`map2..5`/`mapError`/`andMap` apply their callback
-/// at one exact arity, so the callback's result must not itself be a
-/// function. Shared between the constructor (`ipe_types::super_unsatisfied`)
+/// A higher-order kernel (`List.map`, `List.foldl`, `Maybe.map2`, …) applies
+/// its callback at one exact arity, so the callback's result must not itself
+/// be a function. Shared between the constructor (`ipe_types::super_unsatisfied`)
 /// and the renderer's tailored [`TypeError::SuperTypeUnsatisfied`] sentence so
 /// the two sites cannot drift — the generic "`X` is not a `<class>` type"
 /// template would read as a confusing double negative for this label.
-pub const HOF_KERNEL_RESULT_CLASS: &str =
-    "non-function callback result (Maybe/Result higher-order kernel)";
+pub const HOF_KERNEL_RESULT_CLASS: &str = "non-function callback result (higher-order kernel)";
 
 /// Errors raised during type inference / checking.
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -1247,6 +1259,21 @@ pub enum Feature {
     /// kernels over a function element — rather than emitting Rust `cargo`
     /// rejects. [IPE-L0134]
     FunctionElementEquality,
+    /// A higher-order kernel reference whose solved callback final result is a function.
+    ///
+    /// The runtime kernel takes an exact-arity closure, while the IR flattens a
+    /// curried callback into one multi-parameter function, so the partial
+    /// application the kernel would have to build has no representation.
+    /// The type checker refuses this first (IPE-T0014 / IPE-T0001); this is
+    /// the lowering backstop keyed on the resolved kernel. [IPE-L0154]
+    HofCallbackFunctionResult,
+    /// A collection mapper whose stored-function re-carrying needs more eta parameters than one call site may draw.
+    ///
+    /// The wrapper around a named mapper binds one parameter per mapper
+    /// argument and each `Arc`-to-`Box` adapter one per function argument;
+    /// the eta pool charges every call site a fixed ceiling, so a demand past
+    /// it is refused rather than overrunning the pool. [IPE-L0155]
+    EtaSiteLimit,
     /// A binding whose type is not `Clone` — a `Task`/`Cmd`/`Sub` effect value,
     /// bare or inside a `Maybe`/`Result`/tuple/record/user-union payload — was
     /// used more than once in a value-consuming position. A generic union
@@ -1259,6 +1286,16 @@ pub enum Feature {
     /// non-`Clone`-reuse SEAL, for the effect-carrier payload those two do not
     /// cover. Thread the value linearly (use it once) instead. [IPE-L0135]
     NonCloneValueReuse,
+    /// A `Stream.stream` handler captured a value the per-request re-wrap cannot copy.
+    ///
+    /// The handler is rebuilt for every request and each captured local is
+    /// cloned into it, so a capture must be `Clone`: a destructure-bound
+    /// function, a `Task`/`Cmd`/`Sub`, or a capture whose type could not be
+    /// resolved is refused. Bind a captured function with a plain `let` or take
+    /// it as a parameter, and build a captured task inside the handler. A
+    /// partially-applied or point-free `Stream.stream` is a separate fact,
+    /// [`LowerError::UnsaturatedHandlerKernel`]. [IPE-L0126]
+    StreamHandlerCapture,
 }
 
 /// The app shape whose entry point rejected an inadmissible Model. Drives the
@@ -1513,6 +1550,19 @@ pub enum LowerError {
     /// (e.g. `Store.eq`). [IPE-L0146]
     PointFreeAccessorKernel {
         /// The dotted kernel name that was partially applied (e.g. `Store.eq`).
+        kernel: Box<str>,
+    },
+    /// A kernel whose handler the backend re-wraps per call was used unsaturated.
+    ///
+    /// `Stream.stream` rebuilds its handler for every request and clones each
+    /// capture into it, which needs the handler expression in hand at the call.
+    /// Point-free or partially applied, the handler is the synthesized
+    /// closure's own parameter — a bare function value with no copyable form —
+    /// so the kernel is legal only as a saturated call (`<|` / `|>` spines are
+    /// flattened to one first). `kernel` is the dotted name from the kernel
+    /// registry (e.g. `Stream.stream`). [IPE-L0152]
+    UnsaturatedHandlerKernel {
+        /// The dotted kernel name that was used unsaturated (e.g. `Stream.stream`).
         kernel: Box<str>,
     },
 }
@@ -2163,6 +2213,7 @@ const fn name_code(msg: &NameError) -> Code {
         NameError::DuplicatePatternBinder { .. } => IPE_N0049,
         NameError::ScriptImportsShapeView { .. } => IPE_N0050,
         NameError::GenericAppEntry { .. } | NameError::UnpinnedAppEntry { .. } => IPE_N0051,
+        NameError::InputFieldIsSubscription { .. } => IPE_N0052,
     })
 }
 
@@ -2211,6 +2262,7 @@ const fn lower_code(msg: &LowerError) -> Code {
         LowerError::WildcardAnyArgNotRecord { .. } => IPE_L0144,
         LowerError::StoreEqAccessorInvalid(_) => IPE_L0145,
         LowerError::PointFreeAccessorKernel { .. } => IPE_L0146,
+        LowerError::UnsaturatedHandlerKernel { .. } => IPE_L0152,
         LowerError::StoreSelectProjectionInvalid(_) => IPE_L0149,
     })
 }
@@ -2238,11 +2290,13 @@ const fn feature_code(f: Feature) -> Code {
         Feature::FloatKeyedCollection => IPE_L0117,
         Feature::RoutedWebApp => IPE_L0118,
         Feature::LetBoundAppCfg => IPE_L0119,
-        Feature::NonCloneCapture => IPE_L0126,
+        Feature::NonCloneCapture | Feature::StreamHandlerCapture => IPE_L0126,
         Feature::FunctionValueReuse => IPE_L0127,
         Feature::ForeignHandleReuse => IPE_L0130,
         Feature::RowPolyRecordAnnotation => IPE_L0131,
         Feature::FunctionElementEquality => IPE_L0134,
+        Feature::HofCallbackFunctionResult => IPE_L0154,
+        Feature::EtaSiteLimit => IPE_L0155,
         Feature::NonCloneValueReuse => IPE_L0135,
         Feature::JsPortBoundarySeal => IPE_L0148,
     })
@@ -2379,6 +2433,7 @@ fn name_help(msg: &NameError, span: Span) -> Vec<HelpLine> {
         | NameError::ScriptImportsShapeView { .. }
         | NameError::GenericAppEntry { .. }
         | NameError::UnpinnedAppEntry { .. }
+        | NameError::InputFieldIsSubscription { .. }
         | NameError::WebInitPolyArg => Vec::new(), // no span-based help
     }
 }
@@ -2632,6 +2687,7 @@ fn lower_help(msg: &LowerError) -> Vec<HelpLine> {
         LowerError::WildcardAnyArgNotRecord { .. } => wildcard_any_arg_not_record_help(),
         LowerError::StoreEqAccessorInvalid(defect) => store_eq_accessor_invalid_help(defect),
         LowerError::PointFreeAccessorKernel { kernel } => point_free_accessor_kernel_help(kernel),
+        LowerError::UnsaturatedHandlerKernel { kernel } => unsaturated_handler_kernel_help(kernel),
         LowerError::StoreSelectProjectionInvalid(defect) => {
             store_select_projection_invalid_help(defect)
         }
@@ -2692,6 +2748,22 @@ fn point_free_accessor_kernel_help(kernel: &str) -> Vec<HelpLine> {
              .field value`. If you need a function value (say for `List.map` or \
              `Result.map`), wrap it in a lambda that supplies the accessor: \
              `\\x -> {kernel} .field x`."
+        )
+        .into_boxed_str(),
+    )]
+}
+
+/// The help lines for [`LowerError::UnsaturatedHandlerKernel`], factored out so
+/// [`lower_help`] stays a thin per-variant dispatcher.
+fn unsaturated_handler_kernel_help(kernel: &str) -> Vec<HelpLine> {
+    vec![HelpLine::Note(
+        format!(
+            "`{kernel}` rebuilds its handler for every request, so it needs the \
+             handler in hand where it is called: apply it to all its arguments, \
+             `{kernel} contentType handler`, or pipe the handler in with \
+             `{kernel} contentType <| handler` / `handler |> {kernel} contentType`. \
+             Do not bind `{kernel}` (or `{kernel} contentType`) to a name or pass it \
+             as a value."
         )
         .into_boxed_str(),
     )]

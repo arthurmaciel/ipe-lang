@@ -11,22 +11,31 @@
 //! otherwise. A backend that receives a [`Program`] never has to re-check
 //! exhaustiveness.
 
+pub mod free_vars;
 mod ir;
+pub mod let_inline;
 mod pretty;
 pub mod record_shapes;
+pub mod seq_clone;
 
 pub use ir::{
-    Arm, BinOp, BoundSet, CallPin, Callee, EnumDef, Expr, Func, FuncId, HtmlEventShape, IrType,
-    KernelClass, KernelFn, Match, ModPath, Module, OnFormKind, Pat, Program, RowParam,
+    Arm, BinOp, BoundSet, CallPin, Callee, EnumDef, EvalOrder, Expr, Func, FuncId, HtmlEventShape,
+    IrType, KernelClass, KernelFn, Match, ModPath, Module, OnFormKind, Pat, Program, RowParam,
     RuntimeFeatureId, RuntimeModule, TypeDef, UiCtor, UiPlain, Variant, carrier_is_clone,
-    fun_value_arc_promotable, ir_type_feature_requirement, ir_type_is_derivable, ir_type_is_serde,
-    is_dispatch_free, is_irrefutable,
+    fun_value_arc_promotable, ir_type_feature_requirement, ir_type_has_effect_carrier,
+    ir_type_is_derivable, ir_type_is_serde, is_dispatch_free, is_irrefutable,
 };
 pub use pretty::{MAX_IR_RENDER_DEPTH, pretty};
 
 /// The compilation target (kernel-availability axis) — re-exported so
 /// backend/db consumers reach it through the IR crate like `KernelFn`.
 pub use ipe_kernels::Target;
+
+/// The app surface a program's entry pins.
+///
+/// Re-exported so the lowerer and backend key shape-owned kernels on it through
+/// the IR crate.
+pub use ipe_kernels::AppSurface;
 
 /// The security-capability vocabulary — re-exported so lowering/CLI consumers
 /// reach it through the IR crate like `KernelFn`. [`WebCapability`] is the closed

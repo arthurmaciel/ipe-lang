@@ -144,9 +144,9 @@ ipe doc: expected a single <path> argument
 
 ipe add: `ipe-ffi-inspector` not found beside the `ipe` binary or on PATH
 
-## ffi-add-home-unset
+## ffi-add-home-not-absolute
 
-ipe add: HOME is not set; cannot create a safe scratch directory
+ipe add: HOME is not an absolute path; cannot create a safe scratch directory
 
 ## ffi-no-bubblewrap
 
@@ -244,9 +244,9 @@ ipe package audit-entry: expected a single entry-file path
 
 usage: ipe package audit-entry <packages/<name>.toml> [--index <root>] [--attested-actor <login>]
 
-## package-capability-inference-failed
+## package-capability-inference-no-module
 
-package capability inference: no module in the package could be lowered
+package capability inference: the package has no module to analyse
 
 ## package-manifest-name-required
 
@@ -465,6 +465,14 @@ static build refused: {refusal}
 
 could not locate the Ipe runtime; set IPE_RUNTIME_DIR to an explicit path or pass --runtime <dir>
 
+## cli-cache-home-unknown
+
+could not determine the per-user cache directory: neither XDG_CACHE_HOME nor the home directory (HOME, or USERPROFILE on Windows) is set to an absolute path; set XDG_CACHE_HOME to an absolute, writable directory
+
+## cli-env-dir-not-absolute
+
+{var} is set but is not an absolute path; set it to an absolute directory or unset it to use the default location
+
 ## cli-runtime-dir-invalid
 
 IPE_RUNTIME_DIR points at {path}, which is not an Ipe runtime crate root (its Cargo.toml must declare `name = "ipe-runtime-rust"`)
@@ -563,6 +571,10 @@ version {proposed} does not clear the required {required} bump — the new versi
 ## cli-publish-refused
 
 ipe package publish refused: {refusal}
+
+## cli-version-refused
+
+package `{package}`: {refusal}
 
 ## cli-unknown-group-verb
 
@@ -683,11 +695,47 @@ could not determine the package's source URL — the index needs a public git UR
 
 ## publish-unsigned-commit
 
-no commit-signing key is configured, so the publish commit could only be pushed unsigned — the curated index requires signed commits and would never merge it, so nothing was published. Set `IPE_PUBLISH_SIGNING_KEY` to the path of an SSH signing key (the private key file; its `.pub` must be registered as a signing key on your GitHub account) and publish again.
+no commit-signing key is configured, so the publish commit could only be pushed unsigned — the curated index requires signed commits and would never merge it, so nothing was published. Run `ipe login --signing-key` to generate and register one, or set `IPE_PUBLISH_SIGNING_KEY` to the path of an SSH signing key (the private key file; its `.pub` must be registered as a signing key on your GitHub account), then publish again. A set but unreadable `IPE_PUBLISH_SIGNING_KEY` is refused too — it is never bypassed.
 
 ## publish-unresolvable-identity
 
 could not resolve your GitHub identity for the index-PR commit — the curated index requires signed commits marked "Verified", which is only possible when the commit's committer is your authenticated GitHub account's verified noreply identity. Run `ipe login` so publish can sign the index PR under your verified GitHub identity, then publish again. Nothing was published.
+
+# Lockfile refusals
+
+## lock-missing-field
+
+ipe.lock: a `[[package]]` is missing `{field}`
+
+## lock-unknown-kind
+
+ipe.lock: package `{package}` has an unrecognised `kind` value "{kind}" — re-run `ipe add` to regenerate
+
+## lock-index-dep-local-rev
+
+ipe.lock: package `{package}` is an index dependency but records a `local` rev — an index dependency is always pinned to a commit; re-run `ipe add`
+
+## lock-unrecordable-local-source
+
+package `{package}`: a path dependency's `source` must be a non-empty path of at most {max} bytes with no control characters or `"`, got: "{raw}"
+
+## lock-non-utf8-local-path
+
+package `{package}`: path dependency `{path}` is not valid UTF-8 and cannot be recorded in ipe.lock
+
+# Version refusals
+
+## version-refused-malformed
+
+{raw} is not a valid semantic version: {reason}
+
+## version-refused-build-metadata
+
+version {version} carries build metadata (`+{build}`), which the package index refuses — semver precedence ignores it, so the version would not name one release unambiguously. Drop the `+…` suffix from the version.
+
+## version-refused-not-above
+
+version {candidate} is not above the greatest published version {greatest} — every new version must exceed every version already in the index. Publish a version above {greatest}.
 
 # Documentation site
 
@@ -826,7 +874,7 @@ Every code reads <code>IPE-</code>, a family letter, and four digits. The letter
 
 ## output-inside-sources
 
-{out} is inside the source root {sources} — build output must stay out of your sources
+{out} is inside the source root {sources} — build output must stay out of your sources; pass `--out <dir>` naming a directory outside them
 
 ## output-unresolved-sources
 
@@ -846,7 +894,11 @@ the source root {path} cannot be resolved — ipe cannot prove the output stays 
 
 ## output-parent-traversal
 
-{path} has a `..` in a part that does not exist yet — name the directory directly
+{path} has a `..` that does not climb out of an existing directory that is not a link — name the directory directly
+
+## output-unplaceable
+
+{path} does not name one absolute place on every platform (a drive-relative path, or a `/` inside a `\\?\` path) — name the directory by its full path
 
 ## output-not-fresh
 
@@ -859,6 +911,18 @@ the source root {path} cannot be resolved — ipe cannot prove the output stays 
 ## output-outside-project
 
 {path} resolves outside the project at {root} — a directory walk never rewrites it
+
+## output-replaced
+
+{path} was replaced after ipe claimed it — refusing to write or delete in it; run the command again
+
+## output-too-deep
+
+{path} is nested more than {limit} directories deep — ipe refuses to walk it; remove the tree yourself
+
+## output-reparse-point
+
+{path} is or lies under a reparse point (a OneDrive folder, a mount point, or a deduplicated directory) — ipe cannot prove where it leads; point --out at a directory outside it
 
 # Publisher identity
 
@@ -956,7 +1020,7 @@ clean: no package.ipe here — run it from an Ipê project root
 
 ## diff-invalid-version
 
-diff: invalid version `{raw}`
+diff: {refusal}
 
 ## fmt-no-files
 
@@ -977,7 +1041,7 @@ fmt: no such file or directory: {root}
 
 ## health-home-unknown
 
-health: cannot locate your home directory (neither CARGO_HOME nor HOME is set)
+health: cannot locate your home directory (neither CARGO_HOME nor HOME is an absolute path)
 
 ## health-install-command-empty
 
@@ -1137,6 +1201,15 @@ installed FFI crates pin dependency `{name}` to conflicting versions:
   ={second}
 re-add one of the crates so the version pins agree
 
+## ffi-dropped-transitive
+
+installed FFI crates need different versions of dependency `{name}`, so the app does not declare it, but `{site}` names its crate `{ident}` directly
+re-add the crates so their `{name}` versions agree
+
+## ffi-emit-unlexable
+
+generated FFI code at `{site}` is not valid Rust, so the crates it names cannot be checked — re-run `ipe add`
+
 ## ffi-transparent-without-shape
 
 installed FFI crate `{krate}` marks `{name}` transparent in binding `{binding}` but carries no shape for it — re-run `ipe add`
@@ -1160,6 +1233,18 @@ internal: asserted calls validated against an empty FFI catalog
 ## ffi-add-scratch-dir
 
 ipe add: scratch dir: {detail}
+
+## ffi-toolchain-bind-exposes-cargo-home
+
+ipe add: refusing to bind `{bind}` into the jail: it contains the cargo home `{cargo_home}` and its `credentials.toml` — set RUSTUP_HOME and CARGO_HOME to disjoint directories
+
+## ffi-cargo-home-unresolved
+
+ipe add: cannot locate the cargo home, so the jail cannot keep its `credentials.toml` hidden — set CARGO_HOME or HOME to an absolute path
+
+## ffi-jail-path-refused
+
+ipe add: {detail} — set HOME, CARGO_HOME, and RUSTUP_HOME to absolute paths
 
 ## ffi-install-manifest-write-failed
 
@@ -1344,6 +1429,118 @@ could not move the token into place at {path}: {detail}
 ## login-remove-failed
 
 could not remove {path}: {detail}
+
+## login-device-prompt
+
+{purpose}, visit:
+  {url}
+and enter the code:  {code}
+
+## login-grant-purpose-publish
+
+To authorize ipe
+
+## login-grant-purpose-signing-key
+
+To let ipe add the signing key (scope `{scope}`, used once, never stored)
+
+# Signing key
+
+## signing-key-status-env
+
+signing key: {path} (from {env})
+
+## signing-key-status-env-unusable
+
+signing key: {env} is set but names no readable key file — publish will refuse
+
+## signing-key-status-stored
+
+signing key: {path} (generated by `ipe login`)
+
+## signing-key-status-none
+
+signing key: none — run `ipe login --signing-key` to generate and register one
+
+## signing-key-already-configured
+
+Publish signs with {path}.
+
+## signing-key-env-unusable
+
+{env} is set but names no readable key file, so publish will refuse. Point it at your signing key's private-key file, or unset it and run `ipe login --signing-key`.
+
+## signing-key-declined
+
+No signing key generated. `ipe package publish` needs one — run `ipe login --signing-key` any time, or set {env} to an existing signing key.
+
+## signing-key-registered
+
+Signing key registered on your GitHub account and stored at {path}. `ipe package publish` signs with it; review it at {settings}.
+
+## signing-key-consent-question
+
+No commit-signing key is configured. `ipe package publish` signs the index
+commit with an SSH key registered on your GitHub account as a signing key.
+
+ipe can generate a dedicated ed25519 key (no passphrase, mode 0600) at
+  {path}
+and register its public half as a signing key on your account. That needs a
+second, one-time GitHub authorization with the `{scope}` scope;
+its token is used for this single request and never stored. Revoke it any
+time under Authorized OAuth Apps at
+  {revoke_url}
+(revoking ipe there also revokes the stored `ipe login` token).
+
+Generate and register a signing key now?
+
+## signing-key-hint-no-terminal
+
+No commit-signing key is configured; `ipe package publish` needs one. Run `ipe login --signing-key` in a terminal to generate and register it.
+
+## signing-key-needs-terminal
+
+`--signing-key` asks for consent and a GitHub authorization, so it needs an interactive terminal
+
+## signing-key-no-config-dir
+
+could not determine a config directory for the signing key (set HOME or XDG_CONFIG_HOME)
+
+## signing-key-occupied
+
+{path} already exists but is not a usable signing key — move it aside and run `ipe login --signing-key` again
+
+## signing-key-link-unsupported
+
+{dir} does not support hard links ({detail}), which ipe needs to store the key without overwriting anything — no signing key was registered; set {env} to a signing key you registered yourself instead
+
+## signing-key-generation-failed
+
+the OS random-number generator failed, so no signing key was generated
+
+## signing-key-write-failed
+
+could not write {path}: {detail} — no signing key was registered
+
+## signing-key-registration-failed
+
+{reason} — no signing key was stored locally; run `ipe login --signing-key` to retry
+
+## signing-key-commit-failed
+
+the signing key was registered on GitHub, but could not be stored at {path}: {detail}. The local copy was removed; delete the key titled "{title}" at {settings} and run `ipe login --signing-key` again
+
+## signing-key-authorization-failed
+
+the key-registration authorization failed: {reason}
+
+## signing-key-refused
+
+GitHub refused the signing key (HTTP {status}): {message}
+
+## signing-key-unreachable
+
+could not reach GitHub: {reason}
 
 # Packages
 
@@ -1634,3 +1831,172 @@ error[IPE-P0001]: the packaged {platform} manifest declares OS permission(s) the
     permission with no backing accepted web capability cannot ship. Grant the backing
     capability after review by adding the axis to `accepts = [ … ]` under
     [capabilities] in package.ipe, or remove the permission from the override.
+
+# Package resolution
+
+## index-source-url-invalid
+
+package `{pkg}`: `source` must be an https://, git://, ssh://, or file:// URL (or a bare absolute path), got: {raw}
+
+## index-rev-injection
+
+package `{pkg}`: `rev` contains an injection-shaped value, got: {raw}
+
+## index-rev-not-immutable
+
+package `{pkg}`: recorded `rev` is not an immutable commit SHA (expected 40 lowercase hex chars), got: {raw} — re-run `ipe add` to record an immutable pin
+
+## index-rev-parse-unavailable
+
+package `{pkg}`: could not run `git rev-parse`: {detail}
+
+## index-rev-unresolved
+
+package `{pkg}`: `git rev-parse --verify {refspec}` failed — ref {rev} does not resolve to a commit in the fetched checkout
+
+## index-sha256-invalid
+
+package `{pkg}`: `sha256` is not a 64-char lowercase-hex content hash, got: {raw}
+
+## index-entry-unreadable
+
+index entry for `{name}` exists but could not be read — {detail}
+
+## add-package-not-in-index
+
+add: package `{name}` is not in the index — check the name, or run `ipe rust add` for a Rust crate
+
+## add-index-entry-unreadable
+
+add: could not read the index entry for `{name}` — {kind}
+
+## index-no-version-satisfies
+
+package `{name}`: no published version satisfies `{req}` (available: {available})
+
+## index-no-version-available
+
+none
+
+## index-publisher-not-login
+
+package `{name}`: index entry `publisher` is not a GitHub login: {refusal}
+
+## index-entry-missing-publisher
+
+package `{name}`: index entry is missing `publisher`
+
+## index-entry-no-versions
+
+package `{name}`: index entry lists no `[[version]]`
+
+## registry-json-malformed
+
+package `{name}`: registry JSON is malformed ({detail})
+
+## index-capability-unknown
+
+package `{name}`: {detail}
+
+## index-version-missing-field
+
+package `{name}`: a `[[version]]` entry is missing `{field}`
+
+## index-capabilities-not-array
+
+package `{name}`: `capabilities` must be a `["…", …]` array, got: {raw}
+
+## publish-rev-unresolved
+
+ipe package publish: `git rev-parse --verify {refspec}` failed — ref {rev} does not resolve to a commit
+
+## publish-scratch-io
+
+ipe package publish: scratch filesystem error: {detail}
+
+## publish-clone-failed
+
+ipe package publish: could not clone your index fork `{fork_url}` — publish pushes the entry to your fork, so fork the index on GitHub first (a one-time step) and make sure git can reach it.
+  git: {git}
+
+## publish-push-failed
+
+ipe package publish: could not push `{branch}` to `{fork_url}` — nothing was published. Fix the push (git credentials / fork access), then open the PR here:
+  {url}
+  git: {git}
+
+## publish-not-git-repo
+
+ipe package publish: `{path}` is not a git repository — publish pins a committed, pushed revision, so the package must live in a git repo (or pass `--source`/`--rev`).
+
+## publish-git-unavailable
+
+ipe package publish: could not run `git`: {detail}
+
+## trust-token-invalid
+
+registry trust: `{label}` must be a non-empty token with no whitespace or control characters, got: {raw}
+
+## signature-bundle-malformed
+
+package `{pkg}`: signature bundle is malformed ({detail})
+
+## signature-required-absent
+
+package `{pkg}`: no publisher signature is present, but the configured registry trust policy requires one (`require_signature = true`) — refusing to resolve an unsigned version
+
+## signature-untrusted
+
+package `{pkg}`: a publisher signature is present but was not trusted — {detail}
+
+## trust-config-malformed
+
+registry trust config is malformed ({detail})
+
+## resolve-path-dep-missing
+
+package `{name}`: path dependency `{path}` does not exist
+
+## resolve-index-dep-escape
+
+package `{name}`: an index dependency is resolved through `resolve_and_add`, not `resolve_escape`
+
+## resolve-git-unavailable
+
+package `{name}`: could not run `git`: {detail}
+
+## resolve-git-failed
+
+package `{name}`: `git {args}` failed: {stderr}
+
+## login-error
+
+ipe login: {message}
+
+## package-name-invalid
+
+`{raw}` is not a valid package name: {why} — a name is joined into a filesystem path, so it must be a single portable path component (matching `[a-z0-9]([a-z0-9]|-[a-z0-9])*`)
+
+## package-name-empty
+
+a package name must not be empty
+
+## package-name-too-long
+
+a package name must be at most {max} bytes
+
+## package-name-bad-start
+
+a package name must start with an ASCII lowercase letter or digit
+
+## package-name-doubled-dash
+
+a package name must not contain a doubled `-`
+
+## package-name-bad-char
+
+a package name may contain only ASCII lowercase letters, digits, and `-`
+
+## package-name-trailing-dash
+
+a package name must not end with `-`

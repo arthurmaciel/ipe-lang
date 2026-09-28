@@ -114,7 +114,7 @@ use ipe_intern::Interner;
 use ipe_types::{VarNamer, kernel_type_table, ty_to_doc};
 
 use crate::CliError;
-use crate::api_surface::{ModuleApi, ModulePath, PublicApi, UnionApi, extract_tree, read_tree};
+use crate::api_surface::{ModuleApi, ModulePath, PublicApi, UnionApi, extract_walked, read_tree};
 use crate::cli_args::OutputFormat;
 use crate::doc_bundle::{BundleSource, DocBundle, fuzzy_rank, is_qualified};
 use crate::text;
@@ -265,7 +265,7 @@ struct ParsedFlags {
 /// here rather than carried into an unrepresentable [`DocMode`].
 ///
 /// # Errors
-/// [`CliError::Usage`] / [`CliError::UsageOwned`] naming the exact problem.
+/// [`CliError::Usage`] naming the exact problem.
 pub fn parse_doc(rest: &[String]) -> Result<DocMode, CliError> {
     parse_doc_with(rest, &mut |msg| {
         crate::screen::chatter(crate::screen::Stream::Stderr, crate::screen::Tone::Aux, msg);
@@ -311,7 +311,7 @@ fn parse_doc_with(rest: &[String], notice: &mut dyn FnMut(&str)) -> Result<DocMo
     // `--type` is mutually exclusive with all other subcommands.
     if let Some(query) = type_query {
         if has_check_examples || has_list_flag {
-            return Err(CliError::Usage(text::doc_type_exclusive()));
+            return Err(CliError::Usage(text::msg::doc_type_exclusive()));
         }
         // Consume remaining flags for TypeSearch (only --plain/--json allowed).
         let mut output_format: Option<OutputFormat> = None;
@@ -321,13 +321,13 @@ fn parse_doc_with(rest: &[String], notice: &mut dyn FnMut(&str)) -> Result<DocMo
                 t if t.starts_with("--type=") => {}
                 "--plain" => {
                     if output_format.is_some() {
-                        return Err(CliError::UsageOwned(text::plain_json_exclusive(&"doc")));
+                        return Err(CliError::Usage(text::msg::plain_json_exclusive(&"doc")));
                     }
                     output_format = Some(OutputFormat::Plain);
                 }
                 "--json" => {
                     if output_format.is_some() {
-                        return Err(CliError::UsageOwned(text::plain_json_exclusive(&"doc")));
+                        return Err(CliError::Usage(text::msg::plain_json_exclusive(&"doc")));
                     }
                     output_format = Some(OutputFormat::Json);
                 }
@@ -336,13 +336,13 @@ fn parse_doc_with(rest: &[String], notice: &mut dyn FnMut(&str)) -> Result<DocMo
                     .windows(2)
                     .any(|p| matches!(p, [f, v] if f == "--type" && v == tok)) => {}
                 flag if flag.starts_with('-') => {
-                    return Err(CliError::UsageOwned(text::unknown_flag(
+                    return Err(CliError::Usage(text::msg::unknown_flag(
                         &"doc --type",
                         &flag,
                     )));
                 }
                 _ => {
-                    return Err(CliError::Usage(text::doc_type_unexpected_positional()));
+                    return Err(CliError::Usage(text::msg::doc_type_unexpected_positional()));
                 }
             }
         }
@@ -440,7 +440,7 @@ fn parse_doc_with(rest: &[String], notice: &mut dyn FnMut(&str)) -> Result<DocMo
 /// consumed. Rejects any flag that does not belong to `sub`.
 ///
 /// # Errors
-/// [`CliError::Usage`] / [`CliError::UsageOwned`] for an unknown or misplaced flag.
+/// [`CliError::Usage`] for an unknown or misplaced flag.
 fn parse_doc_flags(
     it: &mut std::iter::Peekable<std::slice::Iter<'_, String>>,
     sub: &Sub,
@@ -451,37 +451,37 @@ fn parse_doc_flags(
             // Skip flags already handled by the caller.
             "--list" | "--check-examples" => {}
             "--out" | "--write-format" if !matches!(sub, Sub::Generate) => {
-                return Err(CliError::UsageOwned(text::doc_generate_only_flag(
+                return Err(CliError::Usage(text::msg::doc_generate_only_flag(
                     &sub_name(sub),
                     &arg,
                 )));
             }
             "--port" if !matches!(sub, Sub::Serve) => {
-                return Err(CliError::UsageOwned(text::doc_port_serve_only(&sub_name(
+                return Err(CliError::Usage(text::msg::doc_port_serve_only(&sub_name(
                     sub,
                 ))));
             }
             "--plain" | "--json" if !matches!(sub, Sub::List | Sub::Query(_) | Sub::Lookup(_)) => {
-                return Err(CliError::UsageOwned(text::doc_lookup_only_flag(
+                return Err(CliError::Usage(text::msg::doc_lookup_only_flag(
                     &sub_name(sub),
                     &arg,
                 )));
             }
             "--out" => {
                 let value = it.next().cloned().ok_or_else(|| {
-                    CliError::UsageOwned(text::flag_needs_value(&"doc", &"--out"))
+                    CliError::Usage(text::msg::flag_needs_value(&"doc", &"--out"))
                 })?;
                 if flags.out.is_some() {
-                    return Err(CliError::UsageOwned(text::flag_repeated(&"doc", &"--out")));
+                    return Err(CliError::Usage(text::msg::flag_repeated(&"doc", &"--out")));
                 }
                 flags.out = Some(value);
             }
             "--write-format" => {
                 let value = it.next().ok_or_else(|| {
-                    CliError::UsageOwned(text::flag_needs_value(&"doc", &"--write-format"))
+                    CliError::Usage(text::msg::flag_needs_value(&"doc", &"--write-format"))
                 })?;
                 if flags.write_format.is_some() {
-                    return Err(CliError::UsageOwned(text::flag_repeated(
+                    return Err(CliError::Usage(text::msg::flag_repeated(
                         &"doc",
                         &"--write-format",
                     )));
@@ -491,9 +491,9 @@ fn parse_doc_flags(
             "--port" => {
                 let value = it
                     .next()
-                    .ok_or(CliError::Usage(text::doc_serve_port_needs_number()))?;
+                    .ok_or(CliError::Usage(text::msg::doc_serve_port_needs_number()))?;
                 if flags.port.is_some() {
-                    return Err(CliError::UsageOwned(text::flag_repeated(
+                    return Err(CliError::Usage(text::msg::flag_repeated(
                         &"doc serve",
                         &"--port",
                     )));
@@ -502,25 +502,25 @@ fn parse_doc_flags(
             }
             "--plain" => {
                 if flags.output_format.is_some() {
-                    return Err(CliError::UsageOwned(text::plain_json_exclusive(&"doc")));
+                    return Err(CliError::Usage(text::msg::plain_json_exclusive(&"doc")));
                 }
                 flags.output_format = Some(OutputFormat::Plain);
             }
             "--json" => {
                 if flags.output_format.is_some() {
-                    return Err(CliError::UsageOwned(text::plain_json_exclusive(&"doc")));
+                    return Err(CliError::Usage(text::msg::plain_json_exclusive(&"doc")));
                 }
                 flags.output_format = Some(OutputFormat::Json);
             }
             flag if flag.starts_with('-') => {
-                return Err(CliError::UsageOwned(text::unknown_flag(&"doc", &flag)));
+                return Err(CliError::Usage(text::msg::unknown_flag(&"doc", &flag)));
             }
             positional => {
                 if matches!(sub, Sub::Query(_) | Sub::Lookup(_)) {
-                    return Err(CliError::Usage(text::doc_single_key()));
+                    return Err(CliError::Usage(text::msg::doc_single_key()));
                 }
                 if flags.path.is_some() {
-                    return Err(CliError::Usage(text::doc_single_path()));
+                    return Err(CliError::Usage(text::msg::doc_single_path()));
                 }
                 flags.path = Some(positional.to_owned());
             }
@@ -549,7 +549,7 @@ fn parse_write_format(value: &str) -> Result<WriteFormat, CliError> {
         "markdown" => Ok(WriteFormat::Markdown),
         "html" => Ok(WriteFormat::Html),
         "all" => Ok(WriteFormat::All),
-        other => Err(CliError::UsageOwned(text::doc_unknown_write_format(&other))),
+        other => Err(CliError::Usage(text::msg::doc_unknown_write_format(&other))),
     }
 }
 
@@ -557,9 +557,9 @@ fn parse_write_format(value: &str) -> Result<WriteFormat, CliError> {
 /// value (and `0`, which would silently auto-select — omit `--port` for that).
 fn parse_port(value: &str) -> Result<u16, CliError> {
     match value.parse::<u16>() {
-        Ok(0) => Err(CliError::UsageOwned(text::port_zero(&"doc serve"))),
+        Ok(0) => Err(CliError::Usage(text::msg::port_zero(&"doc serve"))),
         Ok(p) => Ok(p),
-        Err(_) => Err(CliError::UsageOwned(text::port_invalid(
+        Err(_) => Err(CliError::Usage(text::msg::port_invalid(
             &"doc serve",
             &value,
         ))),
@@ -597,12 +597,12 @@ fn build_index() -> Result<Index, CliError> {
 
     builder
         .add_stdlib()
-        .map_err(|e| CliError::UsageOwned(text::doc_stdlib_index_failed(&e)))?;
+        .map_err(|e| CliError::Usage(text::msg::doc_stdlib_index_failed(&e)))?;
     // The compiled-source stdlib modules (`Ipe.Time`, …) carry members too, so
     // `ipe doc Ipe.Time.unixMillis` resolves like `ipe doc List.map`.
     builder
         .add_compiled_stdlib()
-        .map_err(|e| CliError::UsageOwned(text::doc_stdlib_index_failed(&e)))?;
+        .map_err(|e| CliError::Usage(text::msg::doc_stdlib_index_failed(&e)))?;
 
     // Diagnostics: indexed from the compile-time embedded explain pages.
     for code in ipe_diagnostics::ALL_CODES {
@@ -748,7 +748,7 @@ fn build_doc_bundle(docs_root: &std::path::Path) -> Result<DocBundle, CliError> 
         &diagnostic_sources,
         &cli_sources,
     )
-    .map_err(|e| CliError::UsageOwned(text::doc_bundle_build_error(&e)))
+    .map_err(|e| CliError::Usage(text::msg::doc_bundle_build_error(&e)))
 }
 
 /// `ipe doc kind:key` -- exact scoped bundle lookup.
@@ -768,7 +768,7 @@ fn run_bundle_lookup(key: &str, format: OutputFormat) -> Result<(), CliError> {
             Ok(())
         }
         Err(crate::doc_bundle::BundleError::UnknownKind(prefix)) => {
-            Err(CliError::UsageOwned(text::doc_unknown_kind(&prefix)))
+            Err(CliError::Usage(text::msg::doc_unknown_kind(&prefix)))
         }
         Err(crate::doc_bundle::BundleError::UnknownKey { kind, key: k }) => {
             let near: Vec<String> = bundle
@@ -781,11 +781,11 @@ fn run_bundle_lookup(key: &str, format: OutputFormat) -> Result<(), CliError> {
             } else {
                 near.join("\n")
             };
-            Err(CliError::UsageOwned(text::doc_no_entry_for_key(
+            Err(CliError::Usage(text::msg::doc_no_entry_for_key(
                 &kind, &k, &hint,
             )))
         }
-        Err(e) => Err(CliError::UsageOwned(text::command_refusal(&"doc", &e))),
+        Err(e) => Err(CliError::Usage(text::msg::command_refusal(&"doc", &e))),
     }
 }
 
@@ -930,7 +930,7 @@ fn run_type_search(query: &str, format: OutputFormat) -> Result<(), CliError> {
         TypeSearchError, render_type_matches_human, render_type_matches_json, type_search,
     };
 
-    let docs = build_docs(&PathBuf::from(DEFAULT_PATH))?;
+    let (docs, _) = build_docs(&PathBuf::from(DEFAULT_PATH))?;
     let hits = type_search(&docs.modules, query, 20).map_err(TypeSearchError::into_cli_error)?;
 
     let stdout = std::io::stdout();
@@ -938,7 +938,7 @@ fn run_type_search(query: &str, format: OutputFormat) -> Result<(), CliError> {
         OutputFormat::Plain | OutputFormat::Human => {
             let text = render_type_matches_human(&hits);
             if text.is_empty() {
-                return Err(CliError::UsageOwned(text::doc_type_no_match(&query)));
+                return Err(CliError::Usage(text::msg::doc_type_no_match(&query)));
             }
             if matches!(format, OutputFormat::Human) {
                 let p = crate::style::Palette::for_stream(&stdout);
@@ -1231,14 +1231,17 @@ struct Undocumented {
 /// Build the in-memory [`DocsJson`] for the package at `path`, including both
 /// project modules and all stdlib modules (compiled-source + kernel-backed).
 ///
-/// Project modules go through the existing `extract_tree` + `read_tree` pipeline.
+/// Project modules go through one `read_tree` walk + `extract_walked`.
 /// Compiled-source stdlib modules go through the same type-checker path.
 /// Kernel-qualifier stdlib modules use [`kernel_type_table`] for signatures.
 ///
 /// Modules are listed in name order: stdlib first (alphabetically), then project.
-fn build_docs(path: &Path) -> Result<DocsJson, CliError> {
-    let api: PublicApi = extract_tree(path).map_err(CliError::from)?;
-    let sources = read_tree(path).map_err(CliError::from)?;
+/// The API and the doc comments come from ONE walk, whose root is returned as
+/// the [`DocInputs::Tree`] the build read.
+fn build_docs(path: &Path) -> Result<(DocsJson, DocInputs), CliError> {
+    let walked = read_tree(path).map_err(CliError::from)?;
+    let api: PublicApi = extract_walked(&walked).map_err(CliError::from)?;
+    let sources = &walked.modules;
 
     // Collect project modules.
     let mut project_modules: Vec<ModuleDoc> = Vec::with_capacity(api.modules.len());
@@ -1268,11 +1271,12 @@ fn build_docs(path: &Path) -> Result<DocsJson, CliError> {
     let mut modules = project_modules;
     modules.extend(stdlib);
 
-    Ok(DocsJson {
+    let docs = DocsJson {
         version: DOCS_JSON_VERSION,
         modules,
         disclosure: package_disclosure(path)?,
-    })
+    };
+    Ok((docs, DocInputs::Tree(walked.root)))
 }
 
 /// The package's compiler-derived disclosure (control model + capability set),
@@ -1311,8 +1315,9 @@ fn package_disclosure(path: &Path) -> Result<Option<PackageDisclosure>, CliError
 ///
 /// Used by `check` — stdlib modules are exempt from the coverage gate.
 fn build_project_docs(path: &Path) -> Result<DocsJson, CliError> {
-    let api: PublicApi = extract_tree(path).map_err(CliError::from)?;
-    let sources = read_tree(path).map_err(CliError::from)?;
+    let walked = read_tree(path).map_err(CliError::from)?;
+    let api: PublicApi = extract_walked(&walked).map_err(CliError::from)?;
+    let sources = &walked.modules;
 
     let mut modules = Vec::with_capacity(api.modules.len());
     for (module_path, module_api) in &api.modules {
@@ -1559,7 +1564,7 @@ fn build_kernel_module_docs() -> Result<BTreeMap<String, ModuleDoc>, CliError> {
     // Get the full type table for all kernel functions.
     let mut interner = Interner::new();
     let type_table = kernel_type_table(&mut interner)
-        .map_err(|d| CliError::UsageOwned(text::doc_kernel_table_error(&format!("{d:?}"))))?;
+        .map_err(|d| CliError::Usage(text::msg::doc_kernel_table_error(&format!("{d:?}"))))?;
 
     // Group by module path and build ValueDoc for each kernel.
     let mut by_module: BTreeMap<String, Vec<ValueDoc>> = BTreeMap::new();
@@ -1619,8 +1624,8 @@ fn list_modules(path: &Path, format: OutputFormat) {
     // so `--list` always succeeds for stdlib).
     let project: Vec<String> = read_tree(path).map_or_else(
         |_| Vec::new(),
-        |sources| {
-            let mut names: Vec<String> = sources.keys().map(|p| p.join(".")).collect();
+        |walked| {
+            let mut names: Vec<String> = walked.modules.keys().map(|p| p.join(".")).collect();
             names.sort();
             names
         },
@@ -1707,10 +1712,11 @@ fn list_modules(path: &Path, format: OutputFormat) {
 fn query_project_modules() -> Vec<ModuleDoc> {
     read_tree(Path::new(DEFAULT_PATH)).map_or_else(
         |_| Vec::new(),
-        |sources| {
-            let Ok(api) = extract_tree(Path::new(DEFAULT_PATH)) else {
+        |walked| {
+            let Ok(api) = extract_walked(&walked) else {
                 return Vec::new();
             };
+            let sources = &walked.modules;
             api.modules
                 .iter()
                 .map(|(module_path, module_api)| {
@@ -2545,15 +2551,16 @@ struct SearchEntry {
 /// [`build_docs_or_stdlib`].
 fn generate(path: &Path, out: &Path, write_format: WriteFormat) -> Result<(), CliError> {
     crate::style::print_command_header();
-    let docs = build_docs_or_stdlib(path)?;
+    let (docs, inputs) = build_docs_or_stdlib(path)?;
     let docs_root = locate_docs_root();
     let bundle = build_doc_bundle(&docs_root)?;
 
     let (json_files, markdown_files, html_files) = render_site_split(&docs, &bundle, write_format);
 
     // The site overwrites same-named files, so it is written only into a
-    // directory ipe owns — never over a user's own `doc/` or `docs/`.
-    let site = crate::output_dir::OwnedDir::claim(out)?;
+    // directory ipe owns and proven disjoint from the documented package —
+    // never over a user's own `doc/`, the package itself, or the tree it read.
+    let site = claim_site(path, &inputs, out)?;
     write_format_dir(&site, "json", &json_files)?;
     if write_format.wants_markdown() {
         write_format_dir(&site, "markdown", &markdown_files)?;
@@ -2593,6 +2600,43 @@ fn generate(path: &Path, out: &Path, write_format: WriteFormat) -> Result<(), Cl
     Ok(())
 }
 
+/// Claim `out` as the site directory for the package at `path`.
+///
+/// `out` is proven disjoint from the package root, its manifest sources, and
+/// the module tree `inputs` names before it is claimed; a package directory
+/// without a manifest is its own root.
+///
+/// # Errors
+/// [`CliError::OutputRefused`] when `out` is the package, holds it, overlaps
+/// a source tree, or is not ipe's; a manifest parse error.
+fn claim_site(
+    path: &Path,
+    inputs: &DocInputs,
+    out: &Path,
+) -> Result<crate::output_dir::OwnedDir, CliError> {
+    use crate::output_dir::{OutputRoot, ProjectPaths};
+    let project = match crate::project::manifest_in_dir(path) {
+        Some(manifest) => ProjectPaths::from_manifest(&crate::project::parse_manifest(&manifest)?),
+        None if path.is_dir() => ProjectPaths::of_file(path),
+        None => ProjectPaths::discover(path)?,
+    };
+    let project = match inputs {
+        DocInputs::Tree(tree) => project.with_sources(tree),
+        DocInputs::StdlibOnly => project,
+    };
+    OutputRoot::at(out, &project)?.claim()
+}
+
+/// The project inputs a documentation build read.
+#[derive(Debug)]
+enum DocInputs {
+    /// The module tree walked ([`crate::api_surface::WalkedTree::root`]): a file,
+    /// `src/`, or a flat directory.
+    Tree(PathBuf),
+    /// No project module was read; the site documents the stdlib alone.
+    StdlibOnly,
+}
+
 /// Write every file in `files` into `<site>/<subdir>/`.
 ///
 /// Each file is an [`crate::output_dir::OwnedPath`], so a symlink planted
@@ -2625,16 +2669,20 @@ fn write_format_dir(
 /// every project module.
 ///
 /// # Errors
-/// Any non-empty [`build_docs`] failure — [`CliError::Io`], a typecheck
-/// [`CliError::Diff`], or an open-interface [`CliError::Diff`].
-fn build_docs_or_stdlib(path: &Path) -> Result<DocsJson, CliError> {
-    match build_docs(path) {
-        Ok(docs) => Ok(docs),
-        Err(CliError::Diff(crate::api_surface::DiffError::Empty { .. })) => {
-            Ok(build_stdlib_only_docs())
+/// Any non-empty [`build_docs`] failure: [`CliError::DiscoveryLimitReached`]
+/// for a real symlink cycle or a tree deeper than the discovery depth
+/// ceiling; [`CliError::Diff`] wrapping [`crate::api_surface::DiffError::Io`]
+/// for an unreadable module or source directory; [`CliError::Diff`] wrapping
+/// [`crate::api_surface::DiffError::Typecheck`] for a typecheck failure; or
+/// [`CliError::Diff`] wrapping [`crate::api_surface::DiffError::OpenInterface`]
+/// for an open interface.
+fn build_docs_or_stdlib(path: &Path) -> Result<(DocsJson, DocInputs), CliError> {
+    build_docs(path).or_else(|err| match err {
+        CliError::Diff(crate::api_surface::DiffError::Empty { .. }) => {
+            Ok((build_stdlib_only_docs(), DocInputs::StdlibOnly))
         }
-        Err(other) => Err(other),
-    }
+        other => Err(other),
+    })
 }
 
 /// Build a stdlib-only [`DocsJson`] without accessing any project on disk.
@@ -4942,7 +4990,7 @@ fn serve(path: &Path, port: Option<u16>) -> Result<(), CliError> {
     use std::net::TcpListener;
 
     crate::style::print_command_header();
-    let docs = build_docs_or_stdlib(path)?;
+    let (docs, _) = build_docs_or_stdlib(path)?;
     let docs_root = locate_docs_root();
     let bundle = build_doc_bundle(&docs_root)?;
     let site = render_site_for_serve(&docs, &bundle);
@@ -5163,7 +5211,7 @@ mod tests {
     fn parse_rejects_unknown_write_format() {
         assert!(matches!(
             parse_doc(&s(&["--write-format", "pdf"])),
-            Err(CliError::UsageOwned(_))
+            Err(CliError::Usage(_))
         ));
     }
 
@@ -5370,7 +5418,7 @@ mod tests {
         // so it is rejected at the boundary, not silently ignored.
         assert!(matches!(
             parse_doc(&s(&["check", "--out", "x"])),
-            Err(CliError::UsageOwned(_))
+            Err(CliError::Usage(_))
         ));
     }
 
@@ -5388,7 +5436,7 @@ mod tests {
     fn rejects_unknown_flag() {
         assert!(matches!(
             parse_doc(&s(&["--bogus"])),
-            Err(CliError::UsageOwned(_))
+            Err(CliError::Usage(_))
         ));
     }
 
@@ -6076,6 +6124,122 @@ mod tests {
         let _ = fs::remove_dir_all(&tmp);
     }
 
+    /// The inputs a successful project documentation build reports for `path`.
+    fn tree(path: &Path) -> DocInputs {
+        DocInputs::Tree(read_tree(path).expect("read module tree").root)
+    }
+
+    /// A site inside the module tree a documentation build read is refused.
+    ///
+    /// A manifest-less flat package is its own tree, so any site inside it is
+    /// turned away; the same site beside a `src/` tree is claimed.
+    #[test]
+    fn claim_site_refuses_an_out_inside_the_read_module_tree() {
+        use std::fs;
+        let tmp = std::env::temp_dir().join(format!("ipe-doc-tree-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&tmp);
+        let flat = tmp.join("flat");
+        fs::create_dir_all(&flat).expect("flat dir");
+        fs::write(flat.join("Main.ipe"), "module Main exposing (..)\n").expect("module");
+
+        let inputs = tree(&flat);
+        assert!(
+            matches!(&inputs, DocInputs::Tree(t) if t == &flat),
+            "a flat package's tree is the package itself, got {inputs:?}"
+        );
+        let inside = claim_site(&flat, &inputs, &flat.join("doc"));
+        assert!(
+            matches!(
+                inside,
+                Err(CliError::OutputRefused(
+                    crate::output_dir::OutputRefusal::InsideSources { .. }
+                ))
+            ),
+            "a site inside the read module tree must be refused, got {inside:?}"
+        );
+        let hint = inside
+            .as_ref()
+            .err()
+            .map(ToString::to_string)
+            .unwrap_or_default();
+        assert!(
+            hint.contains("--out <dir>"),
+            "the refusal names the way out, got {hint:?}"
+        );
+        assert!(!flat.join("doc").exists(), "nothing created on refusal");
+        let nested = claim_site(&flat, &inputs, &flat.join("sub").join("doc"));
+        assert!(
+            matches!(nested, Err(CliError::OutputRefused(_))),
+            "a deeper site inside the tree is refused too, got {nested:?}"
+        );
+
+        let pkg = tmp.join("pkg");
+        fs::create_dir_all(pkg.join("src")).expect("src dir");
+        fs::write(
+            pkg.join("src").join("Main.ipe"),
+            "module Main exposing (..)\n",
+        )
+        .expect("module");
+        let beside = claim_site(&pkg, &tree(&pkg), &pkg.join("doc"));
+        assert!(
+            beside.is_ok(),
+            "a site beside `src/` is claimed, got {beside:?}"
+        );
+        let in_src = claim_site(&pkg, &tree(&pkg), &pkg.join("src").join("doc"));
+        assert!(
+            matches!(in_src, Err(CliError::OutputRefused(_))),
+            "a site inside `src/` is refused, got {in_src:?}"
+        );
+        assert_eq!(
+            fs::read_to_string(flat.join("Main.ipe")).ok().as_deref(),
+            Some("module Main exposing (..)\n")
+        );
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    /// A doc site overlapping the documented package is refused before any write.
+    ///
+    /// The package directory, a directory holding it, and a lone entry's own
+    /// directory are each turned away; a site inside the package is claimed.
+    #[test]
+    fn claim_site_refuses_an_out_overlapping_the_package() {
+        use std::fs;
+        let tmp = std::env::temp_dir().join(format!("ipe-doc-overlap-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&tmp);
+        let pkg = tmp.join("pkg");
+        fs::create_dir_all(pkg.join("src")).expect("src dir");
+        fs::write(
+            pkg.join("src").join("Main.ipe"),
+            "module Main exposing (..)\n",
+        )
+        .expect("module");
+        fs::write(pkg.join("keep.txt"), "keep").expect("user file");
+
+        for out in [pkg.clone(), tmp.clone()] {
+            let site = claim_site(&pkg, &tree(&pkg), &out);
+            assert!(
+                matches!(site, Err(CliError::OutputRefused(_))),
+                "an out holding the package must be refused, got {site:?}"
+            );
+        }
+        let lone = tmp.join("lone");
+        fs::create_dir_all(&lone).expect("lone dir");
+        let inside = claim_site(&lone.join("Main.ipe"), &DocInputs::StdlibOnly, &lone);
+        assert!(
+            matches!(inside, Err(CliError::OutputRefused(_))),
+            "the entry's own directory must be refused, got {inside:?}"
+        );
+        assert_eq!(
+            fs::read_to_string(pkg.join("keep.txt")).ok().as_deref(),
+            Some("keep")
+        );
+        assert!(
+            claim_site(&pkg, &tree(&pkg), &pkg.join("doc")).is_ok(),
+            "a site inside the package is claimed"
+        );
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
     // ── Stdlib docs without a project ─────────────────────────────────────
 
     #[test]
@@ -6112,7 +6276,12 @@ mod tests {
         let _ = fs::remove_dir_all(&tmp);
         fs::create_dir_all(&tmp).expect("create empty dir");
 
-        let docs = build_docs_or_stdlib(&tmp).expect("empty dir falls back to stdlib-only");
+        let (docs, inputs) =
+            build_docs_or_stdlib(&tmp).expect("empty dir falls back to stdlib-only");
+        assert!(
+            matches!(inputs, DocInputs::StdlibOnly),
+            "no project tree was read"
+        );
         assert!(
             docs.modules.iter().all(|m| m.kind == ModuleKind::Stdlib),
             "empty-dir fallback yields stdlib-only modules"
@@ -6135,6 +6304,43 @@ mod tests {
         assert!(
             result.is_err(),
             "a broken project surfaces its build error rather than falling back"
+        );
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    /// An unreadable `src/` is a real I/O refusal, not a symlink cycle and not
+    /// an empty-tree fallback — `ipe doc` must relay it as such.
+    #[cfg(unix)]
+    #[test]
+    fn build_docs_or_stdlib_propagates_io_error_for_unreadable_src() {
+        use std::fs;
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let tmp = std::env::temp_dir().join(format!("ipe-doc-unreadable-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&tmp);
+        let src = tmp.join("src");
+        fs::create_dir_all(&src).expect("create src/");
+
+        fs::set_permissions(&src, fs::Permissions::from_mode(0o000))
+            .expect("chmod src/ unreadable");
+
+        let result = build_docs_or_stdlib(&tmp);
+
+        // Restore before any cleanup/assert: remove_dir_all must descend into src/.
+        fs::set_permissions(&src, fs::Permissions::from_mode(0o755)).expect("restore perms");
+
+        let Err(err) = result else {
+            // Running privileged (e.g. root), a 0o000 mode never actually blocks
+            // the read — there is no refusal to observe on this run.
+            let _ = fs::remove_dir_all(&tmp);
+            return;
+        };
+        assert!(
+            matches!(
+                err,
+                CliError::Diff(crate::api_surface::DiffError::Io { .. })
+            ),
+            "an unreadable src/ must surface as a Diff(Io) discovery error, got {err:?}"
         );
         let _ = fs::remove_dir_all(&tmp);
     }

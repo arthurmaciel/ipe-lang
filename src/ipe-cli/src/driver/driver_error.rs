@@ -44,8 +44,9 @@ pub struct AdvisoryVulnerablePayload {
 /// of the Ipê program being compiled.
 #[derive(Debug)]
 pub enum CliError {
-    /// Command-line misuse; carries a fixed usage hint.
-    Usage(&'static str),
+    /// Command-line or manifest misuse; carries the catalog message saying what
+    /// was wrong and how to fix it.
+    Usage(text::Message),
     /// No command, or an unrecognised one: the top-level help is shown and the
     /// process exits non-zero. Distinct from [`Self::Usage`] because it renders
     /// the full sectioned screen (coloured for a terminal) rather than a hint.
@@ -53,11 +54,6 @@ pub enum CliError {
     /// `attempted` is the token the user typed (empty when no command was
     /// given); a near-miss to a known command is offered as a `maybe` hint.
     UnknownCommand { attempted: TerminalSafe },
-    /// Command-line / manifest misuse whose message must echo user-supplied
-    /// input (e.g. an unrecognised manifest value) — kept distinct from
-    /// [`Self::Usage`] so no call site needs to leak a `String` into a
-    /// `&'static str` just to report what the user actually wrote.
-    UsageOwned(String),
     /// A filesystem operation failed at `path`.
     Io {
         path: PathBuf,
@@ -98,6 +94,17 @@ pub enum CliError {
     /// (no `IPE_HOME`, `XDG_DATA_HOME`, or `HOME`). Without a home there is
     /// nowhere to write the runtime the emitted project links against.
     RuntimeHomeUnknown,
+    /// No per-user cache directory could be resolved: neither `XDG_CACHE_HOME`
+    /// nor the home (`HOME`, or `USERPROFILE` on Windows) names an absolute path. Refused rather than falling back to a
+    /// directory relative to the current working directory.
+    CacheHomeUnknown,
+    /// An explicit directory override (`IPE_INDEX_DIR`, `IPE_HOME`) is set but is
+    /// not an absolute path. Refused rather than resolved against the current
+    /// working directory or silently replaced by the default location.
+    EnvDirNotAbsolute {
+        /// The environment variable carrying the refused value.
+        var: &'static str,
+    },
     /// Writing the embedded runtime source to `<IPE_HOME>/runtime/<version>/rust`
     /// failed (disk full, permission denied, or a drifted embed). This is a
     /// fail-closed refusal — the build stops rather than link a wrong or empty
@@ -171,7 +178,12 @@ pub enum CliError {
     /// Package resolution failed for a non-security reason: an index entry could
     /// not be found or parsed, no published version satisfied the requirement, or
     /// a `git` fetch of the source failed. Carries a message naming the package.
-    Resolve(String),
+    Resolve(text::Message),
+    /// `ipe.lock` cannot record or admit a dependency: a missing field, an
+    /// unrecognised `kind`, an impossible `source`/`rev`/`kind` pairing, or a
+    /// path dependency that cannot be written into the lockfile. Boxed to keep
+    /// `CliError` within its size ceiling.
+    LockRefused(Box<crate::lockfile::LockRefusal>),
     /// A fetched package's content hash did not equal the hash the index pinned.
     /// This is the verify-before-trust boundary: a mismatch is always a hard,
     /// typed error — never a warning — because the source that was fetched is not
@@ -206,6 +218,15 @@ pub enum CliError {
     /// A publish precondition is a hard, typed refusal — never a warning — because
     /// a merged index entry must pin an immutable, reproducible revision.
     Publish(publish::Refusal),
+    /// A package version cannot enter the index — malformed, carrying build
+    /// metadata, or not above every version already published. Raised at
+    /// publish, at admission, and when an index entry is read, so no ambiguous
+    /// or regressing version reaches resolution or the enforced-semver check.
+    /// The refusal is boxed to keep `CliError` within its size ceiling.
+    VersionRefused {
+        package: String,
+        refusal: Box<crate::published_version::VersionRefusal>,
+    },
     /// `ipe doc check` found one or more exposed bindings without a doc-comment.
     /// Carries the ready-to-print coverage report. This is a legitimate gate
     /// result — the check ran correctly and the package is under-documented — not
@@ -223,7 +244,7 @@ pub enum CliError {
     /// the reason followed by that command's full, indented `--help` page — the
     /// uniform "misuse shows help" output every command shares, printed to stderr
     /// by [`crate::run_cli`]'s caller. The command name is always a known command
-    /// (the dispatcher wraps a raw [`Self::Usage`] / [`Self::UsageOwned`] into
+    /// (the dispatcher wraps a raw [`Self::Usage`] into
     /// this only for a command it recognised).
     CommandUsage {
         /// The command whose help page to show (a known command name).
@@ -415,7 +436,10 @@ impl From<toolchain::ToolchainMissing> for CliError {
 
 impl From<api_surface::DiffError> for CliError {
     fn from(err: api_surface::DiffError) -> Self {
-        Self::Diff(err)
+        match err {
+            api_surface::DiffError::Source(refusal) => *refusal,
+            other => Self::Diff(other),
+        }
     }
 }
 
@@ -429,7 +453,7 @@ impl From<delivery::DeliveryError> for CliError {
     /// A delivery refusal is a pedagogical, user-facing message; it surfaces
     /// through the reader's named-error channel.
     fn from(err: delivery::DeliveryError) -> Self {
-        Self::UsageOwned(err.to_string())
+        Self::Usage(text::Message::relay(&err))
     }
 }
 
@@ -490,13 +514,15 @@ impl CliError {
     #[must_use]
     pub const fn machine_kind(&self) -> &'static str {
         match self {
-            Self::Usage(_) | Self::UsageOwned(_) => "usage",
+            Self::Usage(_) => "usage",
             Self::UnknownCommand { .. } => "unknown-command",
             Self::Io { .. } => "io",
             Self::Pipeline { .. } => "pipeline",
             Self::RuntimeNotFound => "runtime-not-found",
             Self::RuntimeDirInvalid { .. } => "runtime-dir-invalid",
             Self::RuntimeHomeUnknown => "runtime-home-unknown",
+            Self::CacheHomeUnknown => "cache-home-unknown",
+            Self::EnvDirNotAbsolute { .. } => "env-dir-not-absolute",
             Self::RuntimeMaterializeFailed { .. } => "runtime-materialize-failed",
             Self::RuntimeVersionMismatch { .. } => "runtime-version-mismatch",
             Self::EmittedBuildFailed { .. } => "emitted-build-failed",
@@ -505,11 +531,13 @@ impl CliError {
             Self::StaticRefusal(_) => "static-refusal",
             Self::CapabilityMismatch { .. } => "capability-mismatch",
             Self::Resolve(_) => "resolve",
+            Self::LockRefused(_) => "lock-refused",
             Self::HashMismatch { .. } => "hash-mismatch",
             Self::Diff(_) => "diff",
             Self::SemverRejected { .. } => "semver-rejected",
             Self::PackageAudit(_) => "package-audit",
             Self::Publish(_) => "publish",
+            Self::VersionRefused { .. } => "version-refused",
             Self::DocCoverage(_) => "doc-coverage",
             Self::DocExamplesFailed(_) => "doc-examples-failed",
             Self::CommandUsage { .. } => "command-usage",
@@ -561,24 +589,27 @@ impl CliError {
             }
             Self::RuntimeVersionMismatch { .. } => Internal,
             Self::Usage(_)
-            | Self::UsageOwned(_)
             | Self::UnknownCommand { .. }
             | Self::Io { .. }
             | Self::Pipeline { .. }
             | Self::RuntimeNotFound
             | Self::RuntimeDirInvalid { .. }
             | Self::RuntimeHomeUnknown
+            | Self::CacheHomeUnknown
+            | Self::EnvDirNotAbsolute { .. }
             | Self::RuntimeMaterializeFailed { .. }
             | Self::UnknownCode { .. }
             | Self::DocNotFound { .. }
             | Self::StaticRefusal(_)
             | Self::CapabilityMismatch { .. }
             | Self::Resolve(_)
+            | Self::LockRefused(_)
             | Self::HashMismatch { .. }
             | Self::Diff(_)
             | Self::SemverRejected { .. }
             | Self::PackageAudit(_)
             | Self::Publish(_)
+            | Self::VersionRefused { .. }
             | Self::DocCoverage(_)
             | Self::DocExamplesFailed(_)
             | Self::CommandUsage { .. }
@@ -658,14 +689,15 @@ impl std::fmt::Display for CliError {
     #[allow(clippy::too_many_lines)]
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Usage(hint) => write!(f, "{hint}"),
-            Self::UsageOwned(hint) => write!(f, "{hint}"),
+            Self::Usage(hint) => f.write_str(hint),
             Self::UnknownCommand { attempted } => fmt_unknown_command(attempted, f),
             Self::Io { path, source } => fmt_io_error(path, source, f),
             Self::Pipeline { file, src, diag } => {
                 f.write_str(&render(diag, &file.to_string_lossy(), src))
             }
             Self::RuntimeNotFound => f.write_str(text::cli_runtime_not_found()),
+            Self::CacheHomeUnknown => f.write_str(text::cli_cache_home_unknown()),
+            Self::EnvDirNotAbsolute { var } => f.write_str(&text::cli_env_dir_not_absolute(var)),
             Self::RuntimeDirInvalid { .. }
             | Self::RuntimeHomeUnknown
             | Self::RuntimeMaterializeFailed { .. }
@@ -691,11 +723,16 @@ impl std::fmt::Display for CliError {
                 Ok(())
             }
             Self::Resolve(message) => f.write_str(message),
+            Self::LockRefused(refusal) => write!(f, "{refusal}"),
             Self::HashMismatch {
                 package,
                 expected,
                 actual,
-            } => f.write_str(&text::cli_hash_mismatch(package, expected, actual)),
+            } => f.write_str(&text::cli_hash_mismatch(
+                &package.escape_debug(),
+                expected,
+                actual,
+            )),
             Self::DocNotFound { query, suggestions } => {
                 f.write_str(&text::cli_doc_not_found(query))?;
                 if !suggestions.is_empty() {
@@ -730,6 +767,9 @@ impl std::fmt::Display for CliError {
             }
             Self::PackageAudit(rejection) => write!(f, "{rejection}"),
             Self::Publish(refusal) => f.write_str(&text::cli_publish_refused(refusal)),
+            Self::VersionRefused { package, refusal } => {
+                f.write_str(&text::cli_version_refused(&package.escape_debug(), refusal))
+            }
             // The reason, then the command's full `--help` page (indented,
             // coloured for a terminal). Rendered against stderr because misuse
             // output goes there. A known command always has a help page; the

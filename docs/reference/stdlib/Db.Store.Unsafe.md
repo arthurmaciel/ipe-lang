@@ -172,6 +172,24 @@ Example:
         |> Result.map (Unsafe.primaryKey "id")
         |> Result.map Store.public
 
+## `compositePrimaryKey`
+
+```ipe
+compositePrimaryKey : List String -> Draft row -> Draft row
+```
+
+`compositePrimaryKey cols draft` — make the string-named `cols`, in order,
+one table-level primary key. Needs two or more distinct columns of the draft;
+an empty or one-column list, a repeated or unknown column, or a draft that
+already has a primary key is refused, fail-closed, when the schema is built.
+
+Example:
+
+    Store.fromColumns "memberships"
+        [ Store.textColumn "org_id", Store.textColumn "user_id" ]
+        |> Result.map (Unsafe.compositePrimaryKey [ "org_id", "user_id" ])
+        |> Result.map Store.public
+
 ## `serial`
 
 ```ipe

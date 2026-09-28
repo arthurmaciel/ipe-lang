@@ -615,6 +615,44 @@ fn login_status_not_logged_in_is_guttered() {
     );
 }
 
+/// `ipe login --signing-key` without a terminal is refused before any prompt,
+/// authorization, or key file: consent cannot be given non-interactively.
+#[test]
+fn login_signing_key_without_a_terminal_is_refused() {
+    let tmp = crate::support::scratch_root().join(format!(
+        "ipe-login-signing-key-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_nanos())
+    ));
+    std::fs::create_dir_all(&tmp).expect("create temp HOME");
+    let output = Command::new(support::ipe_bin())
+        .args(["login", "--signing-key"])
+        .env("NO_COLOR", "1")
+        .env("HOME", &tmp)
+        .env_remove("XDG_CONFIG_HOME")
+        .env_remove("IPE_PUBLISH_SIGNING_KEY")
+        .stdin(std::process::Stdio::null())
+        .output()
+        .expect("spawn ipe");
+    let config_dir_created = tmp.join(".config").join("ipe").exists();
+    let _ = std::fs::remove_dir_all(&tmp);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !output.status.success(),
+        "login --signing-key must fail without a terminal"
+    );
+    assert!(
+        stderr.contains("interactive terminal"),
+        "the refusal names the missing terminal; got: {stderr:?}"
+    );
+    assert!(
+        !config_dir_created,
+        "no key file or config dir is written by a refused setup"
+    );
+}
+
 /// `CliError::UpgradeNoPrebuilt` must render as a self-contained diagnostic
 /// — no `--help` page, no `ipe: ` prefix — because it is an operational
 /// failure (the release exists but the CI artifacts are still uploading), not
@@ -702,7 +740,7 @@ fn unknown_command_screen_is_fully_guttered() {
     let r = run(&["frobnicate"]);
     assert!(!r.ok, "an unknown command must exit non-zero");
     let header = format!(
-        "\n  {}\n",
+        "\n  {}\n\n",
         ipe::style::header_line(env!("CARGO_PKG_VERSION"))
     );
     assert!(

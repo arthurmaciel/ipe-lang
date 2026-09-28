@@ -19,6 +19,7 @@ use std::path::{Path, PathBuf};
 use crate::diag::{Diagnostic, SourceDefect};
 use crate::naming::{WRAPPER_END_SENTINEL, WRAPPER_SENTINEL_PREFIX};
 use crate::pkginfo::{CrateVersion, FeatureName, PackageName, PkgInfo};
+use ipe_diagnostics::terminal::TerminalSafe;
 
 // ── crate-name gate ─────────────────────────────────────────────────────────
 
@@ -552,7 +553,11 @@ pub struct MissingSystemLib {
 /// must not reach the terminal and forge markup, so it is removed at the parse
 /// boundary (the typed value downstream is always terminal-safe).
 fn sanitize_extracted_name(raw: &str) -> String {
-    raw.trim().chars().filter(|c| !c.is_control()).collect()
+    TerminalSafe::sanitize(raw.trim())
+        .as_str()
+        .chars()
+        .filter(|&c| c != '\n' && c != '\t')
+        .collect()
 }
 
 /// The raw inspector error channel from an inspection document, best-effort.
@@ -726,6 +731,23 @@ pub fn install_hint_for(sys_lib: &str) -> String {
     )
 }
 
+/// Strip ANSI escape sequences, control characters, and hiding or reordering
+/// format characters from a foreign string (rustc/build-script stderr) before
+/// interpolating it into a diagnostic, keeping it on one line.
+///
+/// A length-capped but un-stripped foreign string can carry terminal control
+/// codes that forge markup or corrupt a structured output consumer. The rules
+/// are [`TerminalSafe::sanitize`]'s, the one sanitiser every user-facing text
+/// passes; the line break it keeps is dropped here, since the value is shown
+/// inline.
+fn strip_foreign_str(s: &str) -> String {
+    TerminalSafe::sanitize(s)
+        .as_str()
+        .chars()
+        .filter(|&c| c != '\n')
+        .collect()
+}
+
 /// Summarise the raw inspector error strings into a short human-readable
 /// message for the `--verbose`-less case.
 ///
@@ -733,59 +755,6 @@ pub fn install_hint_for(sys_lib: &str) -> String {
 /// available under `--verbose` (the CLI layer adds that escape hatch around
 /// the call site).
 #[must_use]
-/// Strip ANSI escape sequences and non-printable control characters from a
-/// foreign string (rustc/build-script stderr) before interpolating it into a
-/// diagnostic. A length-capped but un-stripped foreign string can carry
-/// terminal control codes that forge markup or corrupt a structured output
-/// consumer. Two passes:
-///
-/// 1. Remove ANSI CSI sequences (`ESC [ … <letter>`) and OSC sequences
-///    (`ESC ] … BEL/ST`) via a small state machine — the two sequence families
-///    that rustc's colour output uses.
-/// 2. Filter out remaining control characters except tab (`\t`), which is
-///    printable in a terminal context.
-fn strip_foreign_str(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    let mut chars = s.chars().peekable();
-    while let Some(c) = chars.next() {
-        if c == '\x1b' {
-            // Consume the escape sequence body without emitting it.
-            match chars.peek() {
-                Some('[') => {
-                    // CSI sequence: ESC [ <params> <final-byte> (final byte in 0x40–0x7E).
-                    let _ = chars.next(); // consume '['
-                    for inner in chars.by_ref() {
-                        if ('\x40'..='\x7e').contains(&inner) {
-                            break; // final byte consumed
-                        }
-                    }
-                }
-                Some(']') => {
-                    // OSC sequence: ESC ] <body> BEL or ESC \.
-                    let _ = chars.next(); // consume ']'
-                    loop {
-                        match chars.next() {
-                            None | Some('\x07') => break,
-                            Some('\x1b') if chars.peek() == Some(&'\\') => {
-                                let _ = chars.next();
-                                break;
-                            }
-                            _ => {}
-                        }
-                    }
-                }
-                _ => {
-                    // Unknown escape: consume only the ESC itself (already done).
-                }
-            }
-        } else if c == '\t' || !c.is_control() {
-            out.push(c);
-        }
-        // Other control chars (NUL, BEL, BS, CR, DEL, …) are dropped.
-    }
-    out
-}
-
 pub fn summarise_inspector_errors(errors: &[String]) -> String {
     // Look for the first `error[` or `error:` line from rustc/cargo — that is
     // the root-cause line, not the noise of `cargo:rerun-if-env-changed=…`.
@@ -965,6 +934,19 @@ pub struct InstalledCrate {
     pub transparent_types: std::collections::BTreeMap<String, crate::transparency::TransparentType>,
     /// Pinned `[dependencies]` lines.
     pub cargo_deps: Vec<String>,
+    /// The crate's own Cargo package name, the `[dependencies]` key its direct
+    /// pin renders under.
+    ///
+    /// `None` for a legacy cache, which predates the inspection document and
+    /// so cannot prove which of its dependency lines is the direct crate.
+    pub package_name: Option<PackageName>,
+    /// Cargo package name → Rust lib identifier, for every dependency the
+    /// crate's inspection resolved.
+    ///
+    /// The bridge between the two tables `assemble_emit` must keep in
+    /// agreement: the `[dependencies]` key a pin renders under and the
+    /// `::<ident>::` path root emitted code names. Empty for a legacy cache.
+    pub dep_idents: std::collections::BTreeMap<String, crate::naming::RustIdent>,
     /// The structured interface bindings (name, wrapper, arity, signature) —
     /// the data the catalog unification re-renders a demoted module from.
     pub bindings: Vec<crate::interface::InterfaceBinding>,
@@ -1259,6 +1241,8 @@ fn load_installed_crate(cache_root: &Path, slug: String) -> Result<InstalledCrat
             define_types,
             transparent_types,
             cargo_deps,
+            package_name: None,
+            dep_idents: std::collections::BTreeMap::new(),
             bindings,
             wrapper_idents,
             dep_versions,
@@ -1277,11 +1261,14 @@ fn load_installed_crate(cache_root: &Path, slug: String) -> Result<InstalledCrat
 pub fn installed_crate_from_pkg(slug: String, pkg: &PkgInfo) -> Result<InstalledCrate, Diagnostic> {
     let mut dep_versions: std::collections::BTreeMap<String, String> =
         std::collections::BTreeMap::new();
+    let mut dep_idents: std::collections::BTreeMap<String, crate::naming::RustIdent> =
+        std::collections::BTreeMap::new();
     for dep in pkg.transitive_deps() {
         dep_versions.insert(
             dep.ident.as_str().to_owned(),
             dep.version.as_str().to_owned(),
         );
+        dep_idents.insert(dep.name.as_str().to_owned(), dep.ident.clone());
     }
     // The asserted-call cross-check facts: crate-top-level FREE functions
     // only (no receiver, no accessor shape, no generics) — the one shape an
@@ -1334,6 +1321,8 @@ pub fn installed_crate_from_pkg(slug: String, pkg: &PkgInfo) -> Result<Installed
         define_types: iface.define_types,
         transparent_types: iface.transparent_types,
         cargo_deps: cargo_dep_lines(pkg)?,
+        package_name: Some(pkg.name_pkg().clone()),
+        dep_idents,
         bindings: iface.bindings,
         wrapper_idents,
         dep_versions,
@@ -2514,7 +2503,9 @@ mod tests {
             "The system library `way\u{1b}land` required by crate `wl\u{7f}sys` was not found."
                 .to_owned();
         let got = detect_missing_system_lib(&[line]).expect("signature matches");
-        assert_eq!(got.system_lib, "wayland");
+        // `ESC l` is a two-byte escape sequence, dropped whole like every
+        // escape `TerminalSafe` strips.
+        assert_eq!(got.system_lib, "wayand");
         assert_eq!(got.crate_name, "wlsys");
         assert!(!got.system_lib.contains('\u{1b}'));
     }

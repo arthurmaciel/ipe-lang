@@ -34,6 +34,7 @@ pub mod diff;
 pub mod doc;
 pub mod doc_bundle;
 pub mod doc_type_search;
+pub mod env_dir;
 pub mod ffi;
 pub mod fmt;
 pub mod health;
@@ -58,6 +59,7 @@ pub mod pkg;
 pub mod progress;
 pub mod project;
 pub mod publish;
+pub mod published_version;
 pub mod publisher;
 pub mod registry;
 pub mod resolve;
@@ -66,6 +68,7 @@ pub mod runtime_embed;
 pub mod scratch;
 pub mod screen;
 pub mod signing;
+pub mod ssh_signing_key;
 pub mod style;
 pub mod text;
 pub mod toolchain;
@@ -94,12 +97,13 @@ mod driver;
 
 pub use driver::{
     AdvisoryVulnerablePayload, BuildOptions, CliError, INSTALL_SH_URL, PackageSourceSet,
-    RuntimeContext, apply_fixes, bluegreen_enabled, build, build_project,
-    build_project_with_options, build_with_options, build_with_sibling_discovery,
-    build_with_sibling_discovery_with_options, code_index, compile_prepared, create_source_root,
-    emit_ir_text, explain_lookup, hot_appearance_enabled, infer_package_capabilities,
-    infer_package_capabilities_in, resolve_runtime, run_cli, run_upgrade, runtime_dep_from_env,
-    select_non_overlapping, verify_capabilities, watch_banner_enabled,
+    RuntimeContext, UPGRADE_TAG_FILE_ENV, UPGRADE_WRAPPED_ENV, apply_fixes, bluegreen_enabled,
+    build, build_project, build_project_with_options, build_with_options,
+    build_with_sibling_discovery, build_with_sibling_discovery_with_options, code_index,
+    compile_prepared, create_source_root, emit_ir_text, explain_lookup, hot_appearance_enabled,
+    infer_package_capabilities, infer_package_capabilities_in, resolve_runtime, run_cli,
+    run_upgrade, runtime_dep_from_env, select_non_overlapping, verify_capabilities,
+    watch_banner_enabled,
 };
 // Crate-internal driver items reached as `crate::…` by sibling modules
 // (`watch`, `pkg`, …). Kept `pub(crate)` so no originally-private helper widens

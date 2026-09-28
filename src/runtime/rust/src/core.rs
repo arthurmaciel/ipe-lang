@@ -120,30 +120,17 @@ fn log_foreign_kind(kind: &str, err_id: &str, detail: &str) {
     let json =
         crate::system::read_env_var("IPE_LOG_FORMAT").is_ok_and(|v| v.eq_ignore_ascii_case("json"));
     if json {
-        eprintln!(
+        crate::system::write_stderr_line(&format!(
             "{{\"level\":\"error\",\"kind\":\"{kind}\",\"errId\":\"{}\",\"message\":\"{}\"}}",
             err_id,
             crate::telemetry::json_escape(detail)
-        );
+        ));
     } else {
-        eprintln!(
+        crate::system::write_stderr_line(&format!(
             "[error] {kind} (ref {err_id}): {}",
-            scrub_log_controls(detail)
-        );
+            crate::system::scrub_log_controls(detail)
+        ));
     }
-}
-
-/// Replace every control character (CR/LF, ESC, other C0/C1) with a space so an
-/// attacker-influenced foreign-error `Debug` or panic payload cannot inject forged
-/// log records (CR/LF) or terminal escape sequences into the plain-format server
-/// log. The JSON branches already route through `telemetry::json_escape`; this is
-/// the plain-branch counterpart, shared by `log_foreign_error` and
-/// `classify_and_log_panic`, plus `Trace.attr`/`event`/`span` output. Total — no
-/// unwrap/index/panic.
-pub(crate) fn scrub_log_controls(s: &str) -> String {
-    s.chars()
-        .map(|c| if c.is_control() { ' ' } else { c })
-        .collect()
 }
 
 /// Bake a config-derived default for an env var: set `key=val` ONLY when the
@@ -502,7 +489,7 @@ pub fn ipe_result_and_then<E, A, B>(
 
 /// `Result.mapError : (e -> f) -> Result e a -> Result f a`. Container-first in
 /// the runtime (matching `ipe_result_map` / `ipe_result_and_then`); the emitter
-/// reverses the Ipê `(fn, result)` order via `StdlibKernel::swaps_first_two`. Maps the
+/// reverses the Ipê `(fn, result)` order per the row's `ArgOrder::ContainerFirst`. Maps the
 /// `Err` channel and leaves the `Ok` value untouched — total, no panic path.
 pub fn ipe_result_map_error<E, F, A>(
     r: IpeResult<E, A>,
@@ -582,7 +569,7 @@ pub fn result_traverse<T0, T1, E>(
 // Result / Maybe applicative combinators (mapN / andMap / combine)
 // ===========================================
 // FUNCTION-FIRST argument order (matches the Ipê call surface AND the JsonDec
-// `decode_mapN` runtime shape), so NO `StdlibKernel::swaps_first_two` entry is needed.
+// `decode_mapN` runtime shape), so the kernel rows declare `ArgOrder::IpeOrder`.
 // The N-ary function is a MULTI-ARG Rust fn value — a Ipê arity-N function /
 // record-alias auto-constructor lowers to `impl Fn(A, .., N) -> V`, so `f(a, b,
 // ..)` type-checks. Each combinator is TOTAL: the first `Err` / `Nothing` in
@@ -1189,17 +1176,17 @@ pub fn classify_and_log_panic(payload: &(dyn std::any::Any + Send)) -> String {
     let json =
         crate::system::read_env_var("IPE_LOG_FORMAT").is_ok_and(|v| v.eq_ignore_ascii_case("json"));
     if json {
-        eprintln!(
+        crate::system::write_stderr_line(&format!(
             "{{\"level\":\"error\",\"kind\":\"{}\",\"errId\":\"{}\",\"message\":\"{}\"}}",
             kind,
             err_id,
             crate::telemetry::json_escape(&msg)
-        );
+        ));
     } else {
-        eprintln!(
+        crate::system::write_stderr_line(&format!(
             "[error] {kind} (ref {err_id}): {}",
-            scrub_log_controls(&msg)
-        );
+            crate::system::scrub_log_controls(&msg)
+        ));
     }
     err_id
 }

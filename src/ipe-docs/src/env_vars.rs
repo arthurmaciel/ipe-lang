@@ -209,21 +209,22 @@ pub static ENV_VARS: &[EnvVar] = &[
     },
     EnvVar {
         name: "IPE_INDEX_DIR",
-        default: "unset (~/.ipe/index)",
+        default: "unset ($XDG_CACHE_HOME/ipe/index, then $HOME/.cache/ipe/index)",
         purpose: "Override the root directory of the package-index checkout used by \
                   `ipe add` / `ipe install`. Points to a local mirror of the \
-                  ipe-registry index. Useful for air-gapped environments.",
+                  ipe-registry index. Useful for air-gapped environments. Must be an \
+                  absolute path.",
         subsystem: Subsystem::Build,
         class: Class::Tunable,
     },
     EnvVar {
         name: "IPE_PUBLISH_SIGNING_KEY",
         default: "unset",
-        purpose: "Path to the SSH private key used to sign a package before publishing. \
-                  When set, `ipe publish` signs the package archive and attaches the \
-                  signature; when unset, publish is refused for registries that require \
-                  signed submissions. Provide via your secret manager; never commit the \
-                  key file path alongside the key itself.",
+        purpose: "Path to the SSH private-key file `ipe package publish` signs the index \
+                  commit with (its public half must be registered as a signing key on your \
+                  GitHub account). Overrides the key `ipe login --signing-key` stored; when \
+                  set but not a readable file, publish refuses rather than fall back. \
+                  Unset with no stored key, publish refuses.",
         subsystem: Subsystem::Build,
         class: Class::Secret,
     },
@@ -850,7 +851,8 @@ pub static ENV_VARS: &[EnvVar] = &[
         name: "IPE_HOME",
         default: "unset ($XDG_DATA_HOME/ipe, then $HOME/.ipe)",
         purpose: "Root directory for materialised runtime source, config, and cached \
-                  binaries. Overrides the XDG / home-directory fallback.",
+                  binaries. Overrides the XDG / home-directory fallback. Must be an \
+                  absolute path.",
         subsystem: Subsystem::Runtime,
         class: Class::Tunable,
     },
@@ -1220,6 +1222,8 @@ pub static EXCLUDED_NAMES: &[&str] = &[
     "IPE_E2E_STATIC",          // CI gate for static-binary e2e tests
     "IPE_HTTP_FIXTURE_ACCEPT_MS", // http_e2e harness: fixture-server accept fail-fast deadline
     "IPE_HTTP_TEST_URL",
+    "IPE_JUNCTION_AT", // Windows junction test helper: PowerShell script input
+    "IPE_JUNCTION_TO", // Windows junction test helper: PowerShell script input
     "IPE_LOAD_ENV_PROBE_VAR",
     "IPE_ORACLE_SHARED_TARGET",
     "IPE_RUN_WITH_TEST_VAR",
@@ -1273,6 +1277,12 @@ pub static EXCLUDED_NAMES: &[&str] = &[
     // replays the named typed log instead of running; present only in a
     // `debugger` build.
     "IPE_DEBUGGER_REPLAY",
+    // `ipe upgrade` <-> `install.sh` handshake — set by the upgrade wrapper on
+    // the installer child it spawns (never operator-set): the wrapped marker
+    // suppresses the installer's own failure banner, and the tag file carries
+    // the resolved release tag back to the wrapper.
+    "IPE_UPGRADE_TAG_FILE",
+    "IPE_UPGRADE_WRAPPED",
 ];
 
 #[cfg(test)]

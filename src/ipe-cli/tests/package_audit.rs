@@ -660,6 +660,9 @@ package =\n\
 /// A native package whose committed `.ipe/cache/ffi` is a symlink to an
 /// out-of-tree directory REJECTS with `NativeBindingRegen` — the out-of-tree
 /// target is never deleted or written through.
+// Planting a symlink needs `std::os::unix::fs::symlink`; Windows symlink
+// creation is privilege-gated.
+#[cfg(unix)]
 #[test]
 fn intermediate_symlink_in_cache_path_rejects_and_does_not_delete_out_of_tree() {
     // Set up a victim directory outside the package tree.
@@ -721,6 +724,9 @@ fn intermediate_symlink_in_cache_path_rejects_and_does_not_delete_out_of_tree() 
 
 /// A package whose `.ipe/cache/ffi/rust` LEAF is a symlink (not an
 /// intermediate component) also REJECTS with `NativeBindingRegen`.
+// Planting a symlink needs `std::os::unix::fs::symlink`; Windows symlink
+// creation is privilege-gated.
+#[cfg(unix)]
 #[test]
 fn leaf_symlink_in_cache_path_rejects() {
     let pkg = temp_pkg("leaf-symlink");

@@ -2,10 +2,10 @@
 //!
 //! Cmd/Sub are generic over the message type M (NOT `any`): the intermediate
 //! value `a` in `Cmd.perform` is erased inside a boxed M-producing future, but M
-//! stays concrete. Step 1 (this file) ships the types, the simple kernels, and a
-//! blocking Cli.tea loop (stdin -> onLine -> update -> view). Sub.every
-//! tickers + async Cmd.perform delivery land in steps 2-3 (a subManager + an
-//! mpsc msg channel + tokio::select over stdin and the channel).
+//! stays concrete. This file ships the types, the kernels, the `SubManager`
+//! that drives `Sub.every` tickers / subscription sources and holds the active
+//! terminal input handlers (`Tui.Sub.onKey` / `Cli.Sub.onLine`), and the Cli.tea
+//! loop (stdin line -> active `onLine` handlers -> update -> view).
 
 use super::*;
 use std::future::Future;
@@ -49,12 +49,37 @@ pub type SubSpawn<M> =
 #[cfg(target_arch = "wasm32")]
 pub type SubSpawn<M> = Box<dyn FnOnce(std::rc::Rc<dyn Fn(M)>) -> Box<dyn FnOnce()>>;
 
+/// A `Tui.Sub.onKey` handler over a key's flat `(kind, value)` pair.
+///
+/// The emitter builds the `KeyEvent` record inside it. `Send` so the terminal
+/// loop's future stays `Send`; called only on the loop's own task, so no `Sync`
+/// is needed.
+#[cfg(not(target_arch = "wasm32"))]
+pub type KeyHandler<M> = Box<dyn Fn(String, String) -> M + Send>;
+/// A `Cli.Sub.onLine` handler over one stdin line.
+#[cfg(not(target_arch = "wasm32"))]
+pub type LineHandler<M> = Box<dyn Fn(String) -> M + Send>;
+
 /// Ipê `Sub msg`.
 pub enum IpeSub<M> {
     None,
     Batch(Vec<IpeSub<M>>),
-    Every { ms: i64, msg: M },
+    Every {
+        ms: i64,
+        msg: M,
+    },
     Source(SubSpawn<M>),
+    /// `Tui.Sub.onKey`, read by the Tui loop.
+    ///
+    /// The loop hands each key to every active key handler. Native-only: a
+    /// terminal never runs in a browser.
+    #[cfg(not(target_arch = "wasm32"))]
+    OnKey(KeyHandler<M>),
+    /// `Cli.Sub.onLine`, read by the Cli loop.
+    ///
+    /// The loop hands each stdin line to every active line handler.
+    #[cfg(not(target_arch = "wasm32"))]
+    OnLine(LineHandler<M>),
 }
 
 // ─── Cmd kernels ──────────────────────────────────────────────────────────
@@ -192,6 +217,27 @@ pub fn sub_every<M>(ms: i64, msg: M) -> IpeSub<M> {
     IpeSub::Every { ms, msg }
 }
 
+/// `Tui.Sub.onKey : (KeyEvent -> msg) -> Sub msg` — subscribe to terminal keys.
+///
+/// `on_key` receives the key's `(kind, value)`; the emitter wraps the user's
+/// `KeyEvent -> msg` handler so the record is built there.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn tui_sub_on_key<M, F>(on_key: F) -> IpeSub<M>
+where
+    F: Fn(String, String) -> M + Send + 'static,
+{
+    IpeSub::OnKey(Box::new(on_key))
+}
+
+/// `Cli.Sub.onLine : (String -> msg) -> Sub msg` — subscribe to stdin lines.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn cli_sub_on_line<M, F>(on_line: F) -> IpeSub<M>
+where
+    F: Fn(String) -> M + Send + 'static,
+{
+    IpeSub::OnLine(Box::new(on_line))
+}
+
 /// Time.every : Int -> msg -> Sub msg — alias of `Sub.every` (matches
 /// `Time_every`, which delegates to `Sub_every`). The `Time_every` kernel name
 /// lowers to this.
@@ -205,7 +251,8 @@ pub fn time_every<M>(ms: i64, msg: M) -> IpeSub<M> {
 /// passes through; a `Source` is rewrapped so the emit callback it receives
 /// first pushes each `a` through `f` before handing the resulting `msg` to the
 /// scheduler's real emit — the source stays oblivious to the retagging and its
-/// teardown handle is preserved unchanged.
+/// teardown handle is preserved unchanged. A terminal input handler is composed
+/// with `f`, so each key / line it maps yields the retagged message.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn sub_map<A, M, F>(sub: IpeSub<A>, f: F) -> IpeSub<M>
 where
@@ -238,6 +285,10 @@ where
                 spawn(emit_inner)
             },
         )),
+        IpeSub::OnKey(on_key) => IpeSub::OnKey(Box::new(move |kind: String, value: String| {
+            f(on_key(kind, value))
+        })),
+        IpeSub::OnLine(on_line) => IpeSub::OnLine(Box::new(move |line: String| f(on_line(line)))),
     }
 }
 
@@ -301,18 +352,172 @@ where
 /// the shared TEA event plumbing rather than carrying it as dead code.
 #[cfg(all(not(target_arch = "wasm32"), feature = "tui"))]
 pub(crate) enum CliEvent<M> {
-    Line(String),
+    /// A stdin line, holding its share of the reader's [`InputBudget`].
+    Line(String, InputPermit),
     // Constructed only by the `tui` raw-key reader; console_app matches it
     // defensively (keys are ignored under Cli).
-    Key(String, String),
+    Key(String, String, InputPermit),
     Msg(M),
     PerformDone(M),
     Eof,
 }
 
-/// Tracks the goroutine-equivalent ticker tasks spawned for the active
-/// `Sub.every` subscriptions. `update` stops all + respawns from the new Sub
-/// (one program, one model, re-evaluated each tick).
+/// The most terminal input events the loop may hold queued but not yet taken.
+///
+/// Past it the blocking reader waits (backpressure), so a flood of piped stdin
+/// or held-down keys can never outrun the loop into an unbounded queue.
+#[cfg(all(not(target_arch = "wasm32"), feature = "tui"))]
+pub(crate) const MAX_QUEUED_INPUT: usize = 256;
+
+/// The longest stdin line the Cli loop delivers, in bytes without its terminator.
+///
+/// A longer line is dropped whole (never truncated: a prefix of a line can mean
+/// something different from the line), and at most this many bytes of it are
+/// ever buffered.
+#[cfg(all(not(target_arch = "wasm32"), feature = "tui"))]
+pub(crate) const MAX_LINE_BYTES: usize = 64 * 1024;
+
+/// The shared count of queued input events behind an [`InputBudget`].
+#[cfg(all(not(target_arch = "wasm32"), feature = "tui"))]
+type QueuedInput = std::sync::Arc<(std::sync::Mutex<usize>, std::sync::Condvar)>;
+
+/// A ceiling on the terminal input events queued for the loop.
+///
+/// The blocking reader takes one [`InputPermit`] per event before queuing it and
+/// waits while `capacity` are outstanding; the loop returns a permit by dropping
+/// it when it takes the event.
+#[cfg(all(not(target_arch = "wasm32"), feature = "tui"))]
+pub(crate) struct InputBudget {
+    queued: QueuedInput,
+    capacity: usize,
+}
+
+/// One queued input event's share of an [`InputBudget`], returned on drop.
+#[cfg(all(not(target_arch = "wasm32"), feature = "tui"))]
+pub(crate) struct InputPermit {
+    queued: QueuedInput,
+}
+
+#[cfg(all(not(target_arch = "wasm32"), feature = "tui"))]
+impl InputBudget {
+    /// A budget of `capacity` queued events (at least one).
+    pub(crate) fn new(capacity: usize) -> Self {
+        Self {
+            queued: std::sync::Arc::new((std::sync::Mutex::new(0), std::sync::Condvar::new())),
+            capacity: capacity.max(1),
+        }
+    }
+
+    /// Wait until one more event may be queued, or `None` once `closed` reports the loop gone.
+    ///
+    /// `closed` is polled while waiting, so a reader parked on a full budget
+    /// still exits after the loop drops its receiver.
+    pub(crate) fn acquire(&self, closed: impl Fn() -> bool) -> Option<InputPermit> {
+        let (lock, ready) = &*self.queued;
+        let mut queued = lock
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        while *queued >= self.capacity {
+            if closed() {
+                return None;
+            }
+            let (guard, _timeout) = ready
+                .wait_timeout(queued, std::time::Duration::from_millis(50))
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            queued = guard;
+        }
+        *queued = queued.saturating_add(1);
+        Some(InputPermit {
+            queued: std::sync::Arc::clone(&self.queued),
+        })
+    }
+}
+
+#[cfg(all(not(target_arch = "wasm32"), feature = "tui"))]
+impl Drop for InputPermit {
+    fn drop(&mut self) {
+        let (lock, ready) = &*self.queued;
+        let mut queued = lock
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        *queued = queued.saturating_sub(1);
+        ready.notify_one();
+    }
+}
+
+/// One stdin line read under [`MAX_LINE_BYTES`].
+#[cfg(all(not(target_arch = "wasm32"), feature = "tui"))]
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum BoundedLine {
+    /// A complete line within the ceiling, its `\n` / `\r\n` terminator removed.
+    Line(String),
+    /// A line past the ceiling, consumed through its terminator and dropped.
+    TooLong,
+    /// A line within the ceiling that is not UTF-8.
+    NotUtf8,
+}
+
+/// Read the next line from `reader`, buffering at most `max_bytes` of it.
+///
+/// Returns `Ok(None)` at end of input. A final line without a terminator is
+/// still a line. A line longer than `max_bytes` is consumed through its
+/// terminator without being buffered past the ceiling and reported as
+/// [`BoundedLine::TooLong`].
+#[cfg(all(not(target_arch = "wasm32"), feature = "tui"))]
+pub(crate) fn read_bounded_line<R: std::io::BufRead>(
+    reader: &mut R,
+    max_bytes: usize,
+) -> std::io::Result<Option<BoundedLine>> {
+    let mut line: Vec<u8> = Vec::new();
+    let mut too_long = false;
+    let mut read_any = false;
+    loop {
+        let available = reader.fill_buf()?;
+        if available.is_empty() {
+            if !read_any {
+                return Ok(None);
+            }
+            break;
+        }
+        read_any = true;
+        let newline = available.iter().position(|b| *b == b'\n');
+        let chunk = match newline {
+            Some(at) => available.get(..at).unwrap_or(available),
+            None => available,
+        };
+        if !too_long {
+            if line.len().saturating_add(chunk.len()) > max_bytes.saturating_add(1) {
+                // One byte of slack admits a `\r` of a `\r\n` terminator.
+                too_long = true;
+                line = Vec::new();
+            } else {
+                line.extend_from_slice(chunk);
+            }
+        }
+        let consumed = chunk.len().saturating_add(usize::from(newline.is_some()));
+        reader.consume(consumed);
+        if newline.is_some() {
+            break;
+        }
+    }
+    if line.last() == Some(&b'\r') {
+        line.pop();
+    }
+    if too_long || line.len() > max_bytes {
+        return Ok(Some(BoundedLine::TooLong));
+    }
+    Ok(Some(
+        String::from_utf8(line).map_or(BoundedLine::NotUtf8, BoundedLine::Line),
+    ))
+}
+
+/// Tracks the running subscription tasks and the active terminal input handlers.
+///
+/// The tasks are the goroutine-equivalent tickers of `Sub.every` and the
+/// subscription sources; the handlers are the `Tui.Sub.onKey` /
+/// `Cli.Sub.onLine` ones. `update` stops all + respawns from the new Sub (one
+/// program, one model, re-evaluated each tick), so an input event is always
+/// dispatched against the handlers the CURRENT model subscribes to.
 ///
 /// Terminal-loop-only (see [`CliEvent`]): both consuming drivers are
 /// `feature = "tui"`-gated.
@@ -320,6 +525,8 @@ pub(crate) enum CliEvent<M> {
 pub(crate) struct SubManager<M> {
     tx: tokio::sync::mpsc::UnboundedSender<CliEvent<M>>,
     handles: Vec<tokio::task::JoinHandle<()>>,
+    key_handlers: Vec<KeyHandler<M>>,
+    line_handlers: Vec<LineHandler<M>>,
 }
 
 #[cfg(all(not(target_arch = "wasm32"), feature = "tui"))]
@@ -328,12 +535,35 @@ impl<M: Clone + Send + 'static> SubManager<M> {
         SubManager {
             tx,
             handles: Vec::new(),
+            key_handlers: Vec::new(),
+            line_handlers: Vec::new(),
         }
     }
     pub(crate) fn stop_all(&mut self) {
         for h in self.handles.drain(..) {
             h.abort();
         }
+        self.key_handlers.clear();
+        self.line_handlers.clear();
+    }
+    /// The messages every active `Tui.Sub.onKey` handler maps one key to.
+    ///
+    /// In subscription order; empty when no key subscription is active (the key
+    /// is then unobserved).
+    pub(crate) fn key_msgs(&self, kind: &str, value: &str) -> Vec<M> {
+        self.key_handlers
+            .iter()
+            .map(|on_key| on_key(kind.to_owned(), value.to_owned()))
+            .collect()
+    }
+    /// The messages every active `Cli.Sub.onLine` handler maps one stdin line to.
+    ///
+    /// In subscription order; empty when no line subscription is active.
+    pub(crate) fn line_msgs(&self, line: &str) -> Vec<M> {
+        self.line_handlers
+            .iter()
+            .map(|on_line| on_line(line.to_owned()))
+            .collect()
     }
     pub(crate) fn update(&mut self, sub: IpeSub<M>) {
         self.stop_all();
@@ -372,6 +602,8 @@ impl<M: Clone + Send + 'static> SubManager<M> {
                 });
                 self.handles.push(spawn(emit));
             }
+            IpeSub::OnKey(on_key) => self.key_handlers.push(on_key),
+            IpeSub::OnLine(on_line) => self.line_handlers.push(on_line),
         }
     }
 }
@@ -474,11 +706,12 @@ pub(crate) fn cli_run_cmd_tracked<M: Send + 'static>(
 
 // ─── Ipe.Terminal — line-oriented TEA loop ─────────────────────────────────────
 
-/// Cli.tea { init, update, view, subscriptions, onLine } : Task Error ().
+/// Cli.tea { init, update, view, subscriptions } : Task Error ().
 ///
-/// init -> fire cmd -> subs -> view; then fold each event (stdin line via
-/// onLine, ticker/Cmd.perform Msg) through update -> re-fire cmd -> re-subs ->
-/// view, until stdin EOF. Stdin is read on a blocking task; tickers + perform
+/// init -> fire cmd -> subs -> view; then fold each event (a stdin line through
+/// every active `Cli.Sub.onLine` handler, a ticker/Cmd.perform Msg) through
+/// update -> re-fire cmd -> re-subs -> view, until stdin EOF. A line no handler
+/// subscribes to is unobserved (no update, no render). Stdin is read on a blocking task; tickers + perform
 /// results merge into the same single-threaded update sequence via one channel.
 ///
 /// Gated on `feature = "tui"`: the `Lines msg` view rasterizes through
@@ -499,14 +732,12 @@ pub fn console_app<
     FUpdate,
     FView,
     FSubs,
-    FOnLine,
     #[cfg(feature = "debugger")] Codec: crate::debugger::session_log::SessionCodec<Msg, Model> + Send + 'static,
 >(
     init: FInit,
     update: FUpdate,
     view: FView,
     subscriptions: FSubs,
-    on_line: FOnLine,
     #[cfg(feature = "debugger")] codec: Codec,
 ) -> IpeTask<E, ()>
 where
@@ -517,7 +748,6 @@ where
     FUpdate: Fn(Msg, Model) -> (Model, IpeCmd<Msg>) + Send + 'static,
     FView: Fn(Model) -> crate::tui::LinesView<Msg> + Send + 'static,
     FSubs: Fn(Model) -> IpeSub<Msg> + Send + 'static,
-    FOnLine: Fn(String) -> Msg + Send + 'static,
 {
     Box::pin(async move {
         use std::io::Write;
@@ -535,28 +765,38 @@ where
         }
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<CliEvent<Msg>>();
 
-        // Blocking stdin reader → raw Line events, then Eof. onLine is applied in
-        // the main task (keeps it off the blocking thread / out of Send bounds).
+        // Blocking stdin reader → raw Line events, then Eof. The line handlers are
+        // applied in the main task (keeps them off the blocking thread).
+        //
+        // Bounded by construction: each line is read under `MAX_LINE_BYTES` (an
+        // over-long line is dropped whole) and queued only with an
+        // `InputBudget` permit, so at most `MAX_QUEUED_INPUT` lines wait for the
+        // loop; past that the reader blocks until the loop catches up.
         //
         // KNOWN LEAK (intentional, bounded): this detached thread is never joined
         // or signalled — if the returned future is dropped/cancelled the thread
-        // stays parked on `lines()` until the next stdin line (or process exit).
+        // stays parked on its stdin read until the next line (or process exit).
         // Benign for a one-shot Cli `main` (the process is exiting anyway); a
         // shutdown flag wouldn't help since the read blocks until the next line
         // regardless. Do NOT compose `console_app` under a cancelling parent or
         // invoke it twice in one process without first accounting for this.
         let line_tx = tx.clone();
         std::thread::spawn(move || {
-            use std::io::BufRead;
+            let budget = InputBudget::new(MAX_QUEUED_INPUT);
             let stdin = std::io::stdin();
-            for line in stdin.lock().lines() {
-                match line {
-                    Ok(l) => {
-                        if line_tx.send(CliEvent::Line(l)).is_err() {
-                            return;
-                        }
-                    }
-                    Err(_) => break,
+            let mut reader = stdin.lock();
+            loop {
+                let line = match read_bounded_line(&mut reader, MAX_LINE_BYTES) {
+                    Ok(Some(BoundedLine::Line(l))) => l,
+                    Ok(Some(BoundedLine::TooLong)) => continue,
+                    // End of input, a non-UTF-8 line, or a read error ends input.
+                    Ok(None | Some(BoundedLine::NotUtf8)) | Err(_) => break,
+                };
+                let Some(permit) = budget.acquire(|| line_tx.is_closed()) else {
+                    return;
+                };
+                if line_tx.send(CliEvent::Line(line, permit)).is_err() {
+                    return;
                 }
             }
             let _ = line_tx.send(CliEvent::Eof);
@@ -603,16 +843,18 @@ where
         }
 
         while let Some(ev) = rx.recv().await {
-            let msg = match ev {
-                CliEvent::Line(l) => on_line(l),
-                CliEvent::Key(_, _) => continue, // Cli has no keys
-                CliEvent::Msg(m) => m,
+            let msgs: Vec<Msg> = match ev {
+                // Every active line handler sees the line; none → unobserved.
+                // The permit returns to the reader's budget as the line is taken.
+                CliEvent::Line(l, _permit) => submgr.line_msgs(&l),
+                CliEvent::Key(..) => continue, // Cli has no keys
+                CliEvent::Msg(m) => vec![m],
                 CliEvent::PerformDone(m) => {
                     // A one-shot effect delivered its result: this effect is no
                     // longer outstanding. If EOF already arrived and this was the
                     // last outstanding effect, fold it and then let EOF terminate.
                     outstanding.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
-                    m
+                    vec![m]
                 }
                 CliEvent::Eof => {
                     // EOF terminates only once every outstanding one-shot effect
@@ -626,14 +868,21 @@ where
                     continue;
                 }
             };
-            #[cfg(feature = "debugger")]
-            let msg_for_recorder = msg.clone();
-            let (next, cmd) = update(msg, model);
-            model = next;
-            #[cfg(feature = "debugger")]
-            recorder.record(msg_for_recorder, model.clone(), &update);
-            cli_run_cmd_tracked(cmd, &tx, Some(&outstanding));
-            submgr.update(subscriptions(model.clone()));
+            if msgs.is_empty() {
+                continue;
+            }
+            // Fold each message in order; the subscriptions are re-evaluated
+            // after each, so the next message meets the model it produced.
+            for msg in msgs {
+                #[cfg(feature = "debugger")]
+                let msg_for_recorder = msg.clone();
+                let (next, cmd) = update(msg, model);
+                model = next;
+                #[cfg(feature = "debugger")]
+                recorder.record(msg_for_recorder, model.clone(), &update);
+                cli_run_cmd_tracked(cmd, &tx, Some(&outstanding));
+                submgr.update(subscriptions(model.clone()));
+            }
             let rendered = crate::tui::render_lines_view(view(model.clone()));
             let _ = std::io::stdout().write_all(rendered.as_bytes());
             let _ = std::io::stdout().flush();
@@ -868,6 +1117,11 @@ fn worker_spawn_subs<M: Clone + Send + 'static>(
             handles.push(spawn(emit));
             1
         }
+        // Terminal input has no source in a worker (it reads no stream); the
+        // resolver and emitter refuse `Tui.Sub.onKey` / `Cli.Sub.onLine` outside
+        // their own terminal app, so these never reach here from Ipê source.
+        // Neither can deliver, so neither keeps the worker alive.
+        IpeSub::OnKey(_) | IpeSub::OnLine(_) => 0,
     }
 }
 
@@ -1011,6 +1265,8 @@ mod map_tests {
     #[derive(Clone, Debug, PartialEq)]
     enum Child {
         Tick(i64),
+        Key(String),
+        Line(String),
     }
     #[derive(Clone, Debug, PartialEq)]
     enum Parent {
@@ -1079,6 +1335,29 @@ mod map_tests {
             rx.recv().expect("one message")
         });
         assert_eq!(got, Parent::FromChild(Child::Tick(9)));
+    }
+
+    #[test]
+    fn sub_map_composes_terminal_input_handlers() {
+        let key = sub_map(
+            tui_sub_on_key(|kind, value| Child::Key(format!("{kind}:{value}"))),
+            wrap,
+        );
+        assert!(matches!(key, IpeSub::OnKey(_)));
+        if let IpeSub::OnKey(on_key) = key {
+            assert_eq!(
+                on_key("char".into(), "q".into()),
+                Parent::FromChild(Child::Key("char:q".into()))
+            );
+        }
+        let line = sub_map(cli_sub_on_line(Child::Line), wrap);
+        assert!(matches!(line, IpeSub::OnLine(_)));
+        if let IpeSub::OnLine(on_line) = line {
+            assert_eq!(
+                on_line("hi".into()),
+                Parent::FromChild(Child::Line("hi".into()))
+            );
+        }
     }
 
     #[test]
@@ -1218,5 +1497,123 @@ mod worker_appearance_na_tests {
         let _run: fn(WorkerApp) -> crate::IpeResult<crate::error::IpeError, ()> =
             WorkerApp::run_blocking;
         let _ = handle;
+    }
+}
+
+// ─── Terminal input dispatch unit tests ────────────────────────────────────
+
+#[cfg(all(test, not(target_arch = "wasm32"), feature = "tui"))]
+mod input_dispatch_tests {
+    use super::*;
+
+    #[derive(Clone, Debug, PartialEq)]
+    enum Msg {
+        Key(String),
+        Line(String),
+    }
+
+    fn manager() -> SubManager<Msg> {
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel::<CliEvent<Msg>>();
+        SubManager::new(tx)
+    }
+
+    #[test]
+    fn every_active_handler_sees_the_input_in_subscription_order() {
+        let mut mgr = manager();
+        mgr.update(sub_batch(vec![
+            tui_sub_on_key(|kind, _value| Msg::Key(kind)),
+            tui_sub_on_key(|_kind, value| Msg::Key(value)),
+            cli_sub_on_line(Msg::Line),
+        ]));
+        assert_eq!(
+            mgr.key_msgs("char", "x"),
+            vec![Msg::Key("char".into()), Msg::Key("x".into())]
+        );
+        assert_eq!(mgr.line_msgs("hello"), vec![Msg::Line("hello".into())]);
+    }
+
+    #[test]
+    fn input_with_no_active_handler_is_unobserved() {
+        let mut mgr = manager();
+        mgr.update(sub_none());
+        assert!(mgr.key_msgs("char", "x").is_empty());
+        assert!(mgr.line_msgs("hello").is_empty());
+    }
+
+    #[test]
+    fn resubscribing_replaces_the_handler_set() {
+        // A model whose `subscriptions` stops listening drops every handler.
+        let mut mgr = manager();
+        mgr.update(cli_sub_on_line(Msg::Line));
+        assert_eq!(mgr.line_msgs("a").len(), 1);
+        mgr.update(sub_none());
+        assert!(mgr.line_msgs("a").is_empty());
+        mgr.stop_all();
+        assert!(mgr.key_msgs("char", "x").is_empty());
+    }
+}
+
+// ─── Bounded terminal input unit tests ─────────────────────────────────────
+
+#[cfg(all(test, not(target_arch = "wasm32"), feature = "tui"))]
+mod bounded_input_tests {
+    use super::*;
+
+    fn lines(input: &[u8], max: usize) -> Vec<BoundedLine> {
+        let mut reader = std::io::BufReader::with_capacity(4, input);
+        let mut out = Vec::new();
+        while let Ok(Some(line)) = read_bounded_line(&mut reader, max) {
+            out.push(line);
+        }
+        out
+    }
+
+    #[test]
+    fn lines_within_the_cap_are_delivered_without_terminators() {
+        assert_eq!(
+            lines(b"ab\r\ncd\nef", 8),
+            vec![
+                BoundedLine::Line("ab".into()),
+                BoundedLine::Line("cd".into()),
+                BoundedLine::Line("ef".into()),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_line_at_exactly_the_cap_is_delivered() {
+        assert_eq!(lines(b"abcd\n", 4), vec![BoundedLine::Line("abcd".into())]);
+        assert_eq!(
+            lines(b"abcd\r\n", 4),
+            vec![BoundedLine::Line("abcd".into())]
+        );
+    }
+
+    #[test]
+    fn a_line_one_byte_past_the_cap_is_dropped_whole() {
+        // The over-long line is consumed through its terminator; the next line
+        // is read intact, never a truncated prefix of the dropped one.
+        assert_eq!(
+            lines(b"abcde\nok\n", 4),
+            vec![BoundedLine::TooLong, BoundedLine::Line("ok".into())]
+        );
+        assert_eq!(lines(b"abcde", 4), vec![BoundedLine::TooLong]);
+    }
+
+    #[test]
+    fn a_non_utf8_line_is_reported() {
+        assert_eq!(lines(&[0xff, b'\n'], 4), vec![BoundedLine::NotUtf8]);
+    }
+
+    #[test]
+    fn the_budget_blocks_past_its_capacity_until_a_permit_returns() {
+        let budget = InputBudget::new(2);
+        let first = budget.acquire(|| false);
+        let second = budget.acquire(|| false);
+        assert!(first.is_some() && second.is_some());
+        // Full: a closed loop makes the waiting reader give up instead of queuing.
+        assert!(budget.acquire(|| true).is_none());
+        drop(first);
+        assert!(budget.acquire(|| true).is_some());
     }
 }

@@ -69,7 +69,7 @@ fn is_trusted_cache_dir(_dir: &Path) -> bool {
 ///
 /// # Errors
 ///
-/// [`CliError::UsageOwned`] when a discovered cache fails the ownership check.
+/// [`CliError::Usage`] when a discovered cache fails the ownership check.
 pub fn find_cache_root(start: &Path) -> Result<Option<PathBuf>, CliError> {
     let mut dir = if start.is_dir() {
         Some(start)
@@ -82,7 +82,7 @@ pub fn find_cache_root(start: &Path) -> Result<Option<PathBuf>, CliError> {
             if is_trusted_cache_dir(&candidate) {
                 return Ok(Some(candidate));
             }
-            return Err(CliError::UsageOwned(text::ffi_cache_untrusted(
+            return Err(CliError::Usage(text::msg::ffi_cache_untrusted(
                 &candidate.display(),
             )));
         }
@@ -106,7 +106,7 @@ pub fn load_catalog_for(blame_path: &Path) -> Result<Vec<InstalledCrate>, CliErr
         return Ok(Vec::new());
     };
     ipe_ffi::driver::load_catalog(&cache_root)
-        .map_err(|diag| CliError::UsageOwned(diag.to_string()))
+        .map_err(|diag| CliError::Usage(crate::text::Message::relay(&diag)))
 }
 
 /// Inject each installed crate's interface module into the build's source
@@ -114,7 +114,7 @@ pub fn load_catalog_for(blame_path: &Path) -> Result<Vec<InstalledCrate>, CliErr
 /// [`ipe_canon::ModuleOrigin::FfiInterface`] at input creation).
 ///
 /// # Errors
-/// [`CliError::UsageOwned`] when a project module already claims an
+/// [`CliError::Usage`] when a project module already claims an
 /// installed crate's `Rust.*` module path.
 pub fn inject_interfaces(
     sources: &mut BTreeMap<Vec<String>, (PathBuf, String)>,
@@ -125,7 +125,7 @@ pub fn inject_interfaces(
     for c in catalog {
         let mod_path: Vec<String> = c.module_name.split('.').map(str::to_owned).collect();
         if sources.contains_key(&mod_path) {
-            return Err(CliError::UsageOwned(text::ffi_module_clash(
+            return Err(CliError::Usage(text::msg::ffi_module_clash(
                 &c.module_name,
                 &c.slug,
             )));
@@ -142,9 +142,10 @@ pub fn inject_interfaces(
 /// the combined `src/ffi.rs` (one `pub mod <slug>` per crate).
 ///
 /// # Errors
-/// [`CliError::UsageOwned`] when two installed crates pin the SAME
-/// dependency name to different lines — an unbuildable `Cargo.toml` refused
-/// here rather than discovered by `cargo`.
+/// [`CliError::Usage`] when two installed crates pin the SAME
+/// dependency name to versions that cannot share one line, or when emitted
+/// code names the path root of a dependency left out of `[dependencies]` —
+/// an unbuildable crate refused here rather than discovered by `cargo`.
 pub fn assemble_emit(
     catalog: &[InstalledCrate],
 ) -> Result<Option<ipe_backend_rust::FfiEmit>, CliError> {
@@ -154,22 +155,21 @@ pub fn assemble_emit(
     }
     let mut foreign_types: BTreeMap<String, String> = BTreeMap::new();
     let mut wrapper_glue: BTreeMap<String, ipe_backend_rust::FfiWrapperGlue> = BTreeMap::new();
-    // The DIRECT FFI crates (registry names, `_`→`-` as the dep line renders them):
-    // these are the crates the app links against and MUST be pinned exactly; a
-    // version conflict on one of these is a genuine, unbuildable error.
-    let direct_crate_names: BTreeSet<String> =
-        catalog.iter().map(|c| c.slug.replace('_', "-")).collect();
+    let deferrable = DeferrableDeps::of(catalog);
     // name → (version, unioned feature set). Cargo unifies features additively for
     // one crate+version across the graph, so a multi-crate manifest whose members
     // pin the SAME dependency (`async-stripe-shared`) at the SAME version but with
     // DIFFERENT feature requests (bare from one, `serialize`/`deserialize` from
     // another) is not a conflict — it is a union. A VERSION disagreement on a DIRECT
-    // FFI crate is a genuine conflict (refused); a version disagreement on a
-    // TRANSITIVE dep (e.g. `syn` 2.x from one member, 3.x from another — each member
-    // was inspected in its own jail with its own lockfile) is NOT ours to pin: Cargo
-    // resolves the transitive graph of the direct pins itself and legitimately links
-    // both majors of a build-dep. Such a dep is dropped from the emitted `[dependencies]`
-    // (recorded as unpinned) rather than exact-pinned to one arbitrary version.
+    // FFI crate is a genuine conflict (refused). A version disagreement on a
+    // TRANSITIVE dep (each member was inspected in its own jail with its own
+    // lockfile) is not a direct pin: it is dropped from the emitted
+    // `[dependencies]` and left to Cargo's resolution of the direct pins, whose
+    // own requirements are the only ones that decide which versions link. No
+    // single pin is chosen here: an intermediate crate's requirement is not
+    // recorded, so no version is provably acceptable to all of them. A dropped
+    // dep is then undeclared, so `seal_dependency_references` refuses any
+    // emitted path still rooted at it.
     let mut dep_by_name: BTreeMap<String, (String, BTreeSet<String>)> = BTreeMap::new();
     let mut unpinned_transitives: BTreeSet<String> = BTreeSet::new();
     let mut bindings_source = String::from(
@@ -195,7 +195,7 @@ pub fn assemble_emit(
             // the SEAL would then compile against). Fail closed — the author must
             // rename one; the two nominals are genuinely different Rust types.
             if foreign_types.contains_key(&key) {
-                return Err(CliError::UsageOwned(text::ffi_define_opaque_collision(
+                return Err(CliError::Usage(text::msg::ffi_define_opaque_collision(
                     &c.slug, &name,
                 )));
             }
@@ -203,7 +203,7 @@ pub fn assemble_emit(
         }
         for line in &c.cargo_deps {
             let Some((name, version, features)) = parse_dep_line(line) else {
-                return Err(CliError::UsageOwned(text::ffi_dependency_line_unparsable(
+                return Err(CliError::Usage(text::msg::ffi_dependency_line_unparsable(
                     &c.slug, &line,
                 )));
             };
@@ -212,15 +212,14 @@ pub fn assemble_emit(
             }
             match dep_by_name.get_mut(&name) {
                 Some((prev_version, _)) if *prev_version != version => {
-                    if direct_crate_names.contains(&name) {
-                        return Err(CliError::UsageOwned(text::ffi_dependency_pin_conflict(
-                            &name,
-                            &prev_version,
-                            &version,
-                        )));
+                    if !deferrable.admits(&name) {
+                        return Err(DependencyRefusal::PinConflict {
+                            name,
+                            first: prev_version.clone(),
+                            second: version,
+                        }
+                        .into());
                     }
-                    // Transitive dep resolved to different versions in different member
-                    // jails — defer to Cargo's own transitive resolution.
                     dep_by_name.remove(&name);
                     unpinned_transitives.insert(name);
                 }
@@ -244,13 +243,178 @@ pub fn assemble_emit(
         .into_iter()
         .map(|(name, (version, features))| render_merged_dep_line(&name, &version, &features))
         .collect();
-    Ok(Some(ipe_backend_rust::FfiEmit {
+    let emit = ipe_backend_rust::FfiEmit {
         foreign_types,
         dep_lines,
         bindings_source,
         interface_modules: catalog.iter().map(|c| c.module_name.clone()).collect(),
         wrapper_glue,
-    }))
+    };
+    seal_dependency_references(catalog, &emit)?;
+    Ok(Some(emit))
+}
+
+/// Why the catalog's dependency table cannot back the emitted crate.
+#[derive(Debug, PartialEq, Eq)]
+enum DependencyRefusal {
+    /// Two members pin one package to versions no single line satisfies, and
+    /// the package is not provably a transitive dependency Cargo may resolve.
+    PinConflict {
+        name: String,
+        first: String,
+        second: String,
+    },
+    /// Emitted code names the path root of a package left out of
+    /// `[dependencies]`, so `cargo` could not resolve it.
+    DroppedTransitive {
+        package: String,
+        ident: String,
+        site: String,
+    },
+    /// An emitted text does not lex as Rust, so the crates it names are unknown.
+    Unlexable { site: String },
+}
+
+impl From<DependencyRefusal> for CliError {
+    fn from(refusal: DependencyRefusal) -> Self {
+        Self::Usage(match refusal {
+            DependencyRefusal::PinConflict {
+                name,
+                first,
+                second,
+            } => text::msg::ffi_dependency_pin_conflict(&name, &first, &second),
+            DependencyRefusal::DroppedTransitive {
+                package,
+                ident,
+                site,
+            } => text::msg::ffi_dropped_transitive(&package, &ident, &site),
+            DependencyRefusal::Unlexable { site } => text::msg::ffi_emit_unlexable(&site),
+        })
+    }
+}
+
+/// The dependencies a version disagreement may defer to Cargo instead of refusing.
+///
+/// Built from typed inspection facts only: a dependency qualifies when every
+/// member's own package name is known, none of them is that dependency (a
+/// direct crate is pinned exactly or refused), and the dependency's Rust lib
+/// identifier is known (so a later drop can be checked against emitted paths).
+/// A legacy cache lacks those facts, so any disagreement it takes part in is
+/// refused.
+struct DeferrableDeps<'a> {
+    typed: bool,
+    direct: BTreeSet<&'a str>,
+    identified: BTreeSet<&'a str>,
+}
+
+impl<'a> DeferrableDeps<'a> {
+    fn of(catalog: &'a [InstalledCrate]) -> Self {
+        Self {
+            typed: catalog.iter().all(|c| c.package_name.is_some()),
+            direct: catalog
+                .iter()
+                .filter_map(|c| c.package_name.as_ref())
+                .map(ipe_ffi::pkginfo::PackageName::as_str)
+                .collect(),
+            identified: catalog
+                .iter()
+                .flat_map(|c| c.dep_idents.keys())
+                .map(String::as_str)
+                .collect(),
+        }
+    }
+
+    fn admits(&self, name: &str) -> bool {
+        self.typed && !self.direct.contains(name) && self.identified.contains(name)
+    }
+}
+
+/// Refuse an emit whose code names a dependency the `[dependencies]` table
+/// leaves out.
+///
+/// The two tables that must agree are the path roots emitted code names and the
+/// lib identifiers of the declared packages. A package some member lists but
+/// the merged table dropped (a transitive whose versions disagree) has
+/// no line; any `::<ident>::` still rooted at it would be `ipe`-accepted and
+/// then fail `cargo` with an unresolved crate. Every emitted text is scanned:
+/// the wrapper module (including shims appended after assembly), the opaque
+/// and define type paths, and the transparent conversion paths. An ident a
+/// declared package also answers to stays resolvable and is not refused.
+///
+/// # Errors
+///
+/// [`DependencyRefusal::DroppedTransitive`] naming the first offending site,
+/// or [`DependencyRefusal::Unlexable`] for a text whose references are unknown.
+fn seal_dependency_references(
+    catalog: &[InstalledCrate],
+    emit: &ipe_backend_rust::FfiEmit,
+) -> Result<(), DependencyRefusal> {
+    let declared: BTreeSet<String> = emit
+        .dep_lines
+        .iter()
+        .filter_map(|line| parse_dep_line(line))
+        .map(|(name, _, _)| name)
+        .collect();
+    let listed: BTreeSet<String> = catalog
+        .iter()
+        .flat_map(|c| &c.cargo_deps)
+        .filter_map(|line| parse_dep_line(line))
+        .map(|(name, _, _)| name)
+        .collect();
+    let all_idents = || catalog.iter().flat_map(|c| &c.dep_idents);
+    let declared_idents: BTreeSet<&str> = all_idents()
+        .filter(|(name, _)| declared.contains(*name))
+        .map(|(_, ident)| ident.as_str())
+        .collect();
+    // ident → package, for every listed package the table dropped.
+    let dropped: BTreeMap<&str, &str> = all_idents()
+        .filter(|(name, ident)| {
+            listed.contains(*name)
+                && !declared.contains(*name)
+                && !declared_idents.contains(ident.as_str())
+        })
+        .map(|(name, ident)| (ident.as_str(), name.as_str()))
+        .collect();
+    if dropped.is_empty() {
+        return Ok(());
+    }
+    let glue_sites = emit.wrapper_glue.iter().flat_map(|(wrapper, glue)| {
+        glue.params
+            .iter()
+            .flatten()
+            .chain(glue.result.iter().map(|r| &r.ty))
+            .map(move |ty| (wrapper.as_str(), glue_rust_path(ty)))
+    });
+    let sites = std::iter::once(("src/ffi.rs", emit.bindings_source.as_str()))
+        .chain(
+            emit.foreign_types
+                .iter()
+                .map(|(key, path)| (key.as_str(), path.as_str())),
+        )
+        .chain(glue_sites);
+    for (site, text) in sites {
+        let refs = ipe_ffi::crate_refs::crate_references(text).map_err(|_| {
+            DependencyRefusal::Unlexable {
+                site: site.to_owned(),
+            }
+        })?;
+        if let Some((ident, package)) = dropped.iter().find(|(ident, _)| refs.contains(**ident)) {
+            return Err(DependencyRefusal::DroppedTransitive {
+                package: (*package).to_owned(),
+                ident: (*ident).to_owned(),
+                site: site.to_owned(),
+            });
+        }
+    }
+    Ok(())
+}
+
+/// The foreign path one transparent conversion names.
+fn glue_rust_path(ty: &ipe_backend_rust::FfiGlueType) -> &str {
+    match ty {
+        ipe_backend_rust::FfiGlueType::Record { rust_path, .. }
+        | ipe_backend_rust::FfiGlueType::Union { rust_path, .. } => rust_path,
+    }
 }
 
 /// Assemble one crate's per-wrapper transparent conversion glue from the
@@ -261,7 +425,7 @@ pub fn assemble_emit(
 /// seam whose two sides disagree.
 ///
 /// # Errors
-/// [`CliError::UsageOwned`] naming the crate, binding, and missing shape.
+/// [`CliError::Usage`] naming the crate, binding, and missing shape.
 fn assemble_wrapper_glue(
     c: &InstalledCrate,
     wrapper_glue: &mut BTreeMap<String, ipe_backend_rust::FfiWrapperGlue>,
@@ -272,7 +436,7 @@ fn assemble_wrapper_glue(
         }
         let glue_ty = |name: &str| -> Result<ipe_backend_rust::FfiGlueType, CliError> {
             let t = c.transparent_types.get(name).ok_or_else(|| {
-                CliError::UsageOwned(text::ffi_transparent_without_shape(
+                CliError::Usage(text::msg::ffi_transparent_without_shape(
                     &c.slug,
                     &name,
                     &b.ref_name,
@@ -456,8 +620,9 @@ pub struct FfiPrep {
 /// inserted per installed crate.
 ///
 /// # Errors
-/// [`CliError`] when the catalog is tampered/unreadable, or two installed
-/// crates pin the same dependency to conflicting version lines.
+/// [`CliError`] when the catalog is tampered/unreadable, two installed
+/// crates pin the same dependency to conflicting version lines, or emitted
+/// code names a dependency the manifest leaves out.
 pub fn prepare_ffi(
     sources: &mut BTreeMap<Vec<String>, (PathBuf, String)>,
     blame_path: &Path,
@@ -468,7 +633,7 @@ pub fn prepare_ffi(
     // crate may claim either — refused at load, before anything is injected.
     for c in &catalog {
         if c.module_name == ipe_canon::asserted::ASSERTED_MODULE {
-            return Err(CliError::UsageOwned(text::ffi_reserved_module_claimed(
+            return Err(CliError::Usage(text::msg::ffi_reserved_module_claimed(
                 &c.slug,
                 &ipe_canon::asserted::ASSERTED_MODULE,
             )));
@@ -478,7 +643,7 @@ pub fn prepare_ffi(
             .iter()
             .find(|w| w.starts_with(ipe_canon::asserted::ASSERTED_WRAPPER_PREFIX))
         {
-            return Err(CliError::UsageOwned(text::ffi_reserved_wrapper_prefix(
+            return Err(CliError::Usage(text::msg::ffi_reserved_wrapper_prefix(
                 &c.slug,
                 &ident,
                 &ipe_canon::asserted::ASSERTED_WRAPPER_PREFIX,
@@ -501,7 +666,7 @@ pub fn prepare_ffi(
             .map(str::to_owned)
             .collect();
         if sources.contains_key(&mod_path) {
-            return Err(CliError::UsageOwned(text::ffi_reserved_module_exists(
+            return Err(CliError::Usage(text::msg::ffi_reserved_module_exists(
                 &ipe_canon::asserted::ASSERTED_MODULE,
             )));
         }
@@ -511,22 +676,11 @@ pub fn prepare_ffi(
         // `validate` proved every target crate is installed, so the catalog —
         // and therefore the assembled emit — is non-empty here.
         let Some(e) = emit.as_mut() else {
-            return Err(CliError::UsageOwned(
-                text::ffi_asserted_empty_catalog().to_owned(),
-            ));
+            return Err(CliError::Usage(text::msg::ffi_asserted_empty_catalog()));
         };
-        if !asserted.is_empty() {
-            e.bindings_source.push('\n');
-            e.bindings_source
-                .push_str(&ipe_ffi::asserted::emit_asserted_shims(&asserted));
-        }
-        if !consts.is_empty() {
-            e.bindings_source.push('\n');
-            e.bindings_source
-                .push_str(&ipe_ffi::asserted::emit_const_shims(&consts));
-        }
         e.interface_modules
             .push(ipe_canon::asserted::ASSERTED_MODULE.to_owned());
+        append_asserted_shims(&catalog, e, &asserted, &consts)?;
     }
     Ok(FfiPrep {
         catalog,
@@ -534,6 +688,33 @@ pub fn prepare_ffi(
         injected,
         emit,
     })
+}
+
+/// Append the asserted-call and asserted-const shims to the wrapper module.
+///
+/// The shims name crates too, so the grown module is re-checked against the
+/// dependency table before it can reach the backend.
+///
+/// # Errors
+///
+/// A [`DependencyRefusal`] when a shim names a crate the table leaves out.
+fn append_asserted_shims(
+    catalog: &[InstalledCrate],
+    emit: &mut ipe_backend_rust::FfiEmit,
+    asserted: &[ipe_ffi::asserted::AssertedSpec],
+    consts: &[ipe_ffi::asserted::ConstSpec],
+) -> Result<(), DependencyRefusal> {
+    if !asserted.is_empty() {
+        emit.bindings_source.push('\n');
+        emit.bindings_source
+            .push_str(&ipe_ffi::asserted::emit_asserted_shims(asserted));
+    }
+    if !consts.is_empty() {
+        emit.bindings_source.push('\n');
+        emit.bindings_source
+            .push_str(&ipe_ffi::asserted::emit_const_shims(consts));
+    }
+    seal_dependency_references(catalog, emit)
 }
 
 /// Scan every project source module for asserted-call sites
@@ -546,7 +727,7 @@ pub fn prepare_ffi(
 ///
 /// # Errors
 /// [`CliError::Pipeline`] (IPE-N0038, span-attributed) for a malformed site;
-/// [`CliError::UsageOwned`] (IPE-F4414) for a refused assertion.
+/// [`CliError::Usage`] (IPE-F4414) for a refused assertion.
 /// The two native-binding surfaces one scan pass produces: forwarder calls
 /// (`Rust.fn` / `Rust.Ffi.call`) and bare-scalar constant reads (`Rust.const`).
 /// A single pass over the modules yields both — splitting the scan would
@@ -589,19 +770,19 @@ fn scan_asserted(
             if matches!(u.callee, ipe_canon::asserted::AssertedCallee::RustConst) {
                 let spec =
                     ipe_ffi::asserted::validate_const(u.path, &u.annotation, &interner, catalog)
-                        .map_err(|d| CliError::UsageOwned(d.to_string()))?;
+                        .map_err(|d| CliError::Usage(crate::text::Message::relay(&d)))?;
                 const_specs.push(spec);
             } else {
                 let spec = ipe_ffi::asserted::validate(u.path, &u.annotation, &interner, catalog)
-                    .map_err(|d| CliError::UsageOwned(d.to_string()))?;
+                    .map_err(|d| CliError::Usage(crate::text::Message::relay(&d)))?;
                 specs.push(spec);
             }
         }
     }
-    let asserted =
-        ipe_ffi::asserted::dedupe(specs).map_err(|d| CliError::UsageOwned(d.to_string()))?;
+    let asserted = ipe_ffi::asserted::dedupe(specs)
+        .map_err(|d| CliError::Usage(crate::text::Message::relay(&d)))?;
     let consts = ipe_ffi::asserted::dedupe_consts(const_specs)
-        .map_err(|d| CliError::UsageOwned(d.to_string()))?;
+        .map_err(|d| CliError::Usage(crate::text::Message::relay(&d)))?;
     Ok(ScannedFfi { asserted, consts })
 }
 
@@ -624,53 +805,140 @@ fn inspector_binary() -> Result<PathBuf, CliError> {
             }
         }
     }
-    Err(CliError::Usage(text::ffi_inspector_not_found()))
+    Err(CliError::Usage(text::msg::ffi_inspector_not_found()))
 }
 
 /// A per-invocation scratch directory under the sanctioned write-boundary
 /// root (`~/.cache/ipe/ffi-scratch/`), created with an unpredictable name via
 /// 128-bit OS entropy and exclusive-create semantics so a pre-seeded symlink or
 /// directory causes failure rather than reuse.  `/tmp` is never used: it is
-/// world-writable and outside the write-boundary.  HOME must be set; absent it
-/// the function fails closed rather than falling back to a world-writable path.
+/// world-writable and outside the write-boundary.  HOME must be an absolute
+/// path; absent that the function fails closed rather than falling back to a
+/// world-writable or working-directory-relative path.
 fn make_scratch_dir(krate: &str) -> Result<PathBuf, CliError> {
-    let home = std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .ok_or(CliError::Usage(text::ffi_add_home_unset()))?;
+    let home =
+        crate::env_dir::home().ok_or(CliError::Usage(text::msg::ffi_add_home_not_absolute()))?;
     let base = home.join(".cache/ipe/ffi-scratch");
     crate::scratch::ScratchDir::new_under(&base, &format!("add-{krate}"))
         .map(crate::scratch::ScratchDir::into_path)
-        .map_err(|e| CliError::UsageOwned(text::ffi_add_scratch_dir(&e)))
+        .map_err(|e| CliError::Usage(text::msg::ffi_add_scratch_dir(&e)))
 }
 
-/// Read-only jail binds for the toolchain, deliberately NARROW: never the
-/// `~/.cargo` parent (which carries `credentials.toml`, the crates.io API
-/// token). Only `~/.cargo/bin` (the proxy binaries) and `~/.rustup` are
-/// exposed. Returns `(toolchain_ro_binds, path_prepend, rustup_home)`.
-fn toolchain_binds(inspector: &Path) -> (Vec<PathBuf>, Vec<PathBuf>, Option<PathBuf>) {
+/// The toolchain side of one jail: what it runs, what it re-binds, and which
+/// homes it masks.
+///
+/// Every path is canonical, resolved once: the inspector the payload execs,
+/// the `PATH` entries, and the rustup home it is handed are the very paths the
+/// jail binds.
+#[derive(Debug)]
+struct ToolchainBinds {
+    /// The inspector binary the payload execs.
+    inspector: ipe_sandbox::CanonicalPath,
+    /// Directories re-bound read-only through the home masks.
+    ro_binds: Vec<ipe_sandbox::CanonicalPath>,
+    /// Directories prepended to the jailed `PATH`.
+    path_prepend: Vec<ipe_sandbox::CanonicalPath>,
+    /// The rustup home exported into the jail.
+    rustup_home: Option<ipe_sandbox::CanonicalPath>,
+    /// The user and cargo homes, masked wherever they live.
+    homes: ipe_sandbox::HomeMasks,
+}
+
+/// A jail path that does not resolve, or a home the jail cannot mask, refuses
+/// the jail.
+fn jail_path_refused(e: &ipe_sandbox::JailPathError) -> CliError {
+    CliError::Usage(text::msg::ffi_jail_path_refused(e))
+}
+
+/// Read-only jail binds for the toolchain, deliberately NARROW.
+///
+/// Never the cargo home itself (which carries `credentials.toml`, the
+/// crates.io API token): only `$CARGO_HOME/bin` (the proxy binaries) and the
+/// rustup home are exposed. Both homes resolve exactly as the tools resolve
+/// them (`CARGO_HOME`/`RUSTUP_HOME`, else under the user's home).
+///
+/// # Errors
+/// - [`CliError::EnvDirNotAbsolute`] when `CARGO_HOME` or `RUSTUP_HOME` is set
+///   to a relative path.
+/// - [`CliError::Usage`] when the cargo home is unknown, a bind would expose
+///   it, a jail path does not resolve, or the user's home is unknown (see
+///   [`toolchain_binds_from`]).
+fn toolchain_binds(inspector: &Path) -> Result<ToolchainBinds, CliError> {
+    let cargo_home = crate::env_dir::tool_home("CARGO_HOME", ".cargo")?;
+    let rustup_home = crate::env_dir::tool_home("RUSTUP_HOME", ".rustup")?;
+    toolchain_binds_from(
+        inspector,
+        cargo_home.as_deref(),
+        rustup_home,
+        crate::env_dir::home().as_deref(),
+    )
+}
+
+/// The toolchain binds over already-resolved tool homes.
+///
+/// Each path is resolved to its canonical form once, here; the exposure check
+/// runs over those canonical binds, so it judges exactly what the jail mounts.
+///
+/// # Errors
+/// [`CliError::Usage`] when:
+/// - the cargo home is unknown (neither `CARGO_HOME` nor an absolute `HOME`),
+///   so no check could keep it out of the jail;
+/// - the inspector, its directory, `$CARGO_HOME/bin`, or the rustup home does
+///   not resolve;
+/// - any read-only bind equals or contains the cargo home (a rustup home at or
+///   above it, or an inspector directory above it): binding it would expose
+///   `credentials.toml` inside the jail;
+/// - the user's home is unset or relative, so it cannot be masked.
+fn toolchain_binds_from(
+    inspector: &Path,
+    cargo_home: Option<&Path>,
+    rustup_home: Option<PathBuf>,
+    user_home: Option<&Path>,
+) -> Result<ToolchainBinds, CliError> {
+    let cargo_home =
+        cargo_home.ok_or_else(|| CliError::Usage(text::msg::ffi_cargo_home_unresolved()))?;
+    let canonical =
+        |path: &Path| ipe_sandbox::CanonicalPath::resolve(path).map_err(|e| jail_path_refused(&e));
+    let inspector = canonical(inspector)?;
     let mut toolchain_ro_binds = Vec::new();
     // The inspector binary may live under a masked mount ($HOME target dirs) —
     // re-bind its directory read-only.
-    if let Some(dir) = inspector.parent() {
-        toolchain_ro_binds.push(dir.to_path_buf());
+    if let Some(dir) = inspector.as_path().parent() {
+        toolchain_ro_binds.push(canonical(dir)?);
     }
     let mut path_prepend = Vec::new();
-    let mut rustup_home = None;
-    if let Some(home) = std::env::var_os("HOME").map(PathBuf::from) {
-        let cargo_bin = home.join(".cargo/bin");
-        if cargo_bin.is_dir() {
-            path_prepend.push(cargo_bin.clone());
-            // Bind ONLY the bin dir — NEVER the ~/.cargo parent, so
-            // credentials.toml stays outside the jail.
-            toolchain_ro_binds.push(cargo_bin);
-        }
-        let rustup = home.join(".rustup");
-        if rustup.is_dir() {
-            toolchain_ro_binds.push(rustup.clone());
-            rustup_home = Some(rustup);
-        }
+    let cargo_bin = cargo_home.join("bin");
+    if cargo_bin.is_dir() {
+        let cargo_bin = canonical(&cargo_bin)?;
+        path_prepend.push(cargo_bin.clone());
+        // Bind ONLY the bin dir — NEVER the cargo home itself, so
+        // credentials.toml stays outside the jail.
+        toolchain_ro_binds.push(cargo_bin);
     }
-    (toolchain_ro_binds, path_prepend, rustup_home)
+    let rustup_home = match rustup_home.filter(|rustup| rustup.is_dir()) {
+        Some(rustup) => Some(canonical(&rustup)?),
+        None => None,
+    };
+    if let Some(rustup) = &rustup_home {
+        toolchain_ro_binds.push(rustup.clone());
+    }
+    if let Some(bind) = ipe_sandbox::bind_exposing(&toolchain_ro_binds, cargo_home) {
+        return Err(CliError::Usage(
+            text::msg::ffi_toolchain_bind_exposes_cargo_home(
+                &bind.as_path().display(),
+                &cargo_home.display(),
+            ),
+        ));
+    }
+    let homes = ipe_sandbox::HomeMasks::resolve(user_home, Some(cargo_home))
+        .map_err(|e| jail_path_refused(&e))?;
+    Ok(ToolchainBinds {
+        inspector,
+        ro_binds: toolchain_ro_binds,
+        path_prepend,
+        rustup_home,
+        homes,
+    })
 }
 
 /// The jail resource caps: the fail-closed defaults, each raisable through an
@@ -713,21 +981,25 @@ fn jail_limits() -> ipe_sandbox::ResourceLimits {
 fn run_phase(
     caps: &ipe_sandbox::Capabilities,
     network: ipe_sandbox::NetworkPolicy,
-    scoped_tmp: &Path,
-    toolchain_ro_binds: Vec<PathBuf>,
-    path_prepend: Vec<PathBuf>,
-    rustup_home: Option<PathBuf>,
+    scoped_tmp: &ipe_sandbox::CanonicalPath,
+    binds: &ToolchainBinds,
     payload: &[OsString],
 ) -> Result<ipe_sandbox::JailedOutput, CliError> {
-    let io_err = |detail: String| CliError::UsageOwned(text::command_refusal(&"add", &detail));
+    let io_err = |detail: String| {
+        CliError::Usage(text::msg::command_refusal(
+            &"add",
+            &crate::style::TerminalSafe::sanitize(&detail),
+        ))
+    };
     let spec = ipe_sandbox::JailSpec {
         network,
-        scoped_tmp: scoped_tmp.to_path_buf(),
+        scoped_tmp: scoped_tmp.clone(),
         registry_cache: None,
         toolchain: None,
-        toolchain_ro_binds,
-        path_prepend,
-        rustup_home,
+        toolchain_ro_binds: binds.ro_binds.clone(),
+        homes: binds.homes.clone(),
+        path_prepend: binds.path_prepend.clone(),
+        rustup_home: binds.rustup_home.clone(),
         limits: jail_limits(),
     };
     ipe_sandbox::run_in_bwrap_jail(caps, &spec, payload)
@@ -799,7 +1071,7 @@ fn write_inspector_manifest(
     let path = scoped_tmp.join("ipe-install-manifest.json");
     let body = serde_json::Value::Array(arr).to_string();
     std::fs::write(&path, body)
-        .map_err(|e| CliError::UsageOwned(text::ffi_install_manifest_write_failed(&e)))?;
+        .map_err(|e| CliError::Usage(text::msg::ffi_install_manifest_write_failed(&e)))?;
     Ok(path)
 }
 
@@ -907,11 +1179,16 @@ fn run_inspector_job(job: &InspectorJob, allow_build_scripts: bool) -> Result<St
     let caps = ipe_sandbox::probe();
     let mechanism = ipe_sandbox::select_mechanism(&caps);
     let unsandboxed_ok = ipe_sandbox::unsandboxed_override_set();
-    let io_err = |detail: String| CliError::UsageOwned(text::command_refusal(&"add", &detail));
+    let io_err = |detail: String| {
+        CliError::Usage(text::msg::command_refusal(
+            &"add",
+            &crate::style::TerminalSafe::sanitize(&detail),
+        ))
+    };
 
     match choose_sandbox_route(&mechanism, ipe_sandbox::missing_caps(&caps), unsandboxed_ok) {
         SandboxRoute::RefuseNoBwrap => {
-            return Err(CliError::Usage(text::ffi_no_bubblewrap()));
+            return Err(CliError::Usage(text::msg::ffi_no_bubblewrap()));
         }
         SandboxRoute::RefuseMissingCaps { missing } => {
             return Err(io_err(format!(
@@ -932,15 +1209,24 @@ fn run_inspector_job(job: &InspectorJob, allow_build_scripts: bool) -> Result<St
         SandboxRoute::Jailed => {}
     }
 
-    let scoped_tmp = make_scratch_dir(scratch_hint)?;
-    let binds = toolchain_binds(&inspector);
+    let binds = toolchain_binds(&inspector)?;
+    let scratch = make_scratch_dir(scratch_hint)?;
+    // The scratch the jail binds, the TMPDIR and cwd it hands the payload, and
+    // every manifest path under it share this one canonical spelling.
+    let scoped_tmp = match ipe_sandbox::CanonicalPath::resolve(&scratch) {
+        Ok(dir) => dir,
+        Err(e) => {
+            let _ = std::fs::remove_dir_all(&scratch);
+            return Err(jail_path_refused(&e));
+        }
+    };
     let result = match job {
         // A single crate — or a single local wrapper crate — is one
         // populate-free bind over the historical two phases (fetch,
         // introspect) on one scoped scratch. A wrapper crate is local, so
         // its fetch phase only resolves the wrapper's own registry deps.
         InspectorJob::Single { .. } | InspectorJob::WrapperPath { .. } => run_single_bwrap(
-            &inspector,
+            binds.inspector.as_path(),
             job,
             &caps,
             &scoped_tmp,
@@ -953,7 +1239,7 @@ fn run_inspector_job(job: &InspectorJob, allow_build_scripts: bool) -> Result<St
         // exceeds the wall, which the whole-manifest run did (its populate
         // + bind of every crate ran under one wall budget).
         InspectorJob::Manifest { entries } => run_manifest_bwrap_chunked(
-            &inspector,
+            binds.inspector.as_path(),
             entries,
             &caps,
             &scoped_tmp,
@@ -965,40 +1251,36 @@ fn run_inspector_job(job: &InspectorJob, allow_build_scripts: bool) -> Result<St
     result
 }
 
-/// The toolchain jail binds, grouped so the chunked driver can clone them once
-/// per phase without repeating the tuple destructure.
-type ToolchainBinds = (Vec<PathBuf>, Vec<PathBuf>, Option<PathBuf>);
-
 /// The historical two-phase single-crate flow: fetch (network on, no foreign
 /// code) then introspect (no egress, foreign code runs) over one scratch.
 fn run_single_bwrap(
     inspector: &Path,
     job: &InspectorJob,
     caps: &ipe_sandbox::Capabilities,
-    scoped_tmp: &Path,
+    scoped_tmp: &ipe_sandbox::CanonicalPath,
     binds: &ToolchainBinds,
     allow_build_scripts: bool,
 ) -> Result<String, CliError> {
-    let io_err = |detail: String| CliError::UsageOwned(text::command_refusal(&"add", &detail));
-    let (toolchain_ro_binds, path_prepend, rustup_home) = binds;
+    let io_err = |detail: String| {
+        CliError::Usage(text::msg::command_refusal(
+            &"add",
+            &crate::style::TerminalSafe::sanitize(&detail),
+        ))
+    };
     let with_payload =
         |fetch_only: bool| inspector_payload(inspector, job, None, allow_build_scripts, fetch_only);
     run_phase(
         caps,
         ipe_sandbox::NetworkPolicy::FetchOnly,
         scoped_tmp,
-        toolchain_ro_binds.clone(),
-        path_prepend.clone(),
-        rustup_home.clone(),
+        binds,
         &with_payload(true),
     )?;
     let out = run_phase(
         caps,
         ipe_sandbox::NetworkPolicy::Denied,
         scoped_tmp,
-        toolchain_ro_binds.clone(),
-        path_prepend.clone(),
-        rustup_home.clone(),
+        binds,
         &with_payload(false),
     )?;
     if out.status != Some(0) {
@@ -1048,19 +1330,21 @@ fn manifest_chunk_payload(
 /// and return its stdout, mapping a non-zero exit to a typed error.
 fn run_introspect_chunk(
     caps: &ipe_sandbox::Capabilities,
-    scoped_tmp: &Path,
+    scoped_tmp: &ipe_sandbox::CanonicalPath,
     binds: &ToolchainBinds,
     payload: &[OsString],
 ) -> Result<String, CliError> {
-    let io_err = |detail: String| CliError::UsageOwned(text::command_refusal(&"add", &detail));
-    let (toolchain_ro_binds, path_prepend, rustup_home) = binds;
+    let io_err = |detail: String| {
+        CliError::Usage(text::msg::command_refusal(
+            &"add",
+            &crate::style::TerminalSafe::sanitize(&detail),
+        ))
+    };
     let out = run_phase(
         caps,
         ipe_sandbox::NetworkPolicy::Denied,
         scoped_tmp,
-        toolchain_ro_binds.clone(),
-        path_prepend.clone(),
-        rustup_home.clone(),
+        binds,
         payload,
     )?;
     if out.status != Some(0) {
@@ -1096,15 +1380,19 @@ fn run_manifest_bwrap_chunked(
     inspector: &Path,
     entries: &[(CrateSpec, Vec<String>)],
     caps: &ipe_sandbox::Capabilities,
-    scoped_tmp: &Path,
+    scoped_tmp: &ipe_sandbox::CanonicalPath,
     binds: &ToolchainBinds,
     allow_build_scripts: bool,
 ) -> Result<String, CliError> {
-    let io_err = |detail: String| CliError::UsageOwned(text::command_refusal(&"add", &detail));
-    let (toolchain_ro_binds, path_prepend, rustup_home) = binds;
+    let io_err = |detail: String| {
+        CliError::Usage(text::msg::command_refusal(
+            &"add",
+            &crate::style::TerminalSafe::sanitize(&detail),
+        ))
+    };
 
     // Stage 1 — fetch every crate in one network-on run (no foreign code).
-    let full_manifest = write_inspector_manifest(scoped_tmp, entries)?;
+    let full_manifest = write_inspector_manifest(scoped_tmp.as_path(), entries)?;
     let fetch_payload = manifest_chunk_payload(
         inspector,
         &full_manifest,
@@ -1117,9 +1405,7 @@ fn run_manifest_bwrap_chunked(
         caps,
         ipe_sandbox::NetworkPolicy::FetchOnly,
         scoped_tmp,
-        toolchain_ro_binds.clone(),
-        path_prepend.clone(),
-        rustup_home.clone(),
+        binds,
         &fetch_payload,
     )?;
 
@@ -1128,12 +1414,16 @@ fn run_manifest_bwrap_chunked(
     // jail-writable path, but each process reads it before foreign code runs
     // and rewrites it after, so a build script cannot plant facts a sibling
     // then trusts.
-    let checkpoint = scoped_tmp.join("xc-checkpoint.json");
+    let checkpoint = scoped_tmp.as_path().join("xc-checkpoint.json");
 
     // Stage 2 — populate the cross-crate index one crate at a time.
     for (i, (spec, features)) in entries.iter().enumerate() {
-        let chunk_manifest =
-            write_inspector_manifest_chunk(scoped_tmp, &format!("populate-{i}"), spec, features)?;
+        let chunk_manifest = write_inspector_manifest_chunk(
+            scoped_tmp.as_path(),
+            &format!("populate-{i}"),
+            spec,
+            features,
+        )?;
         let xc_load = (i > 0).then_some(checkpoint.as_path());
         let payload = manifest_chunk_payload(
             inspector,
@@ -1151,8 +1441,12 @@ fn run_manifest_bwrap_chunked(
     // Stage 3 — bind each crate against the complete cross-crate index.
     let mut bound: Vec<serde_json::Value> = Vec::with_capacity(entries.len());
     for (i, (spec, features)) in entries.iter().enumerate() {
-        let chunk_manifest =
-            write_inspector_manifest_chunk(scoped_tmp, &format!("bind-{i}"), spec, features)?;
+        let chunk_manifest = write_inspector_manifest_chunk(
+            scoped_tmp.as_path(),
+            &format!("bind-{i}"),
+            spec,
+            features,
+        )?;
         let payload = manifest_chunk_payload(
             inspector,
             &chunk_manifest,
@@ -1190,7 +1484,7 @@ fn write_inspector_manifest_chunk(
     let arr = serde_json::json!([{ "name": spec.inspector_arg(), "features": features }]);
     let path = scoped_tmp.join(format!("ipe-install-{stage}.json"));
     std::fs::write(&path, arr.to_string())
-        .map_err(|e| CliError::UsageOwned(text::ffi_install_manifest_chunk_write_failed(&e)))?;
+        .map_err(|e| CliError::Usage(text::msg::ffi_install_manifest_chunk_write_failed(&e)))?;
     Ok(path)
 }
 
@@ -1202,7 +1496,12 @@ fn run_inspector_job_unsandboxed(
     scratch_hint: &str,
     allow_build_scripts: bool,
 ) -> Result<String, CliError> {
-    let io_err = |detail: String| CliError::UsageOwned(text::command_refusal(&"add", &detail));
+    let io_err = |detail: String| {
+        CliError::Usage(text::msg::command_refusal(
+            &"add",
+            &crate::style::TerminalSafe::sanitize(&detail),
+        ))
+    };
     crate::screen::chatter(
         crate::screen::Stream::Stderr,
         crate::screen::Tone::UserError,
@@ -1222,7 +1521,7 @@ fn run_inspector_job_unsandboxed(
     );
     let (program, rest) = payload
         .split_first()
-        .ok_or(CliError::Usage(text::ffi_add_no_payload()))?;
+        .ok_or(CliError::Usage(text::msg::ffi_add_no_payload()))?;
     let out = std::process::Command::new(program)
         .args(rest)
         .output()
@@ -1257,33 +1556,33 @@ fn install_wrapper(
 ) -> Result<(), CliError> {
     let manifest =
         ipe_ffi::wrapper::WrapperManifest::parse(&raw.path, &raw.expose, &raw.capabilities)
-            .map_err(|diag| CliError::UsageOwned(diag.to_string()))?;
+            .map_err(|diag| CliError::Usage(crate::text::Message::relay(&diag)))?;
     // Resolve the package-jailed relative path to an absolute directory under
     // the project root. Canonicalization also confirms the wrapper crate
     // actually exists before any jailed build.
     let rel = manifest.path().as_str();
     let abs = std::fs::canonicalize(rel)
-        .map_err(|e| CliError::UsageOwned(text::ffi_install_wrapper_crate(&rel, &e)))?;
+        .map_err(|e| CliError::Usage(text::msg::ffi_install_wrapper_crate(&rel, &e)))?;
     // The lexical `..`/absolute jail on the relative path is not enough:
     // canonicalization resolves symlinks, so a checked-in symlink under the
     // package could still point the resolved directory outside the project. Bind
     // the resolved path back inside the project root — a wrapper that escapes it
     // is refused before any jailed build.
     let project_root = std::fs::canonicalize(".")
-        .map_err(|e| CliError::UsageOwned(text::ffi_install_project_root(&e)))?;
+        .map_err(|e| CliError::Usage(text::msg::ffi_install_project_root(&e)))?;
     if !abs.starts_with(&project_root) {
-        return Err(CliError::UsageOwned(
-            text::ffi_install_wrapper_outside_root(&rel, &abs.display()),
+        return Err(CliError::Usage(
+            text::msg::ffi_install_wrapper_outside_root(&rel, &abs.display()),
         ));
     }
     let abs_str = abs
         .to_str()
-        .ok_or_else(|| CliError::UsageOwned(text::ffi_install_wrapper_not_utf8(&rel)))?
+        .ok_or_else(|| CliError::Usage(text::msg::ffi_install_wrapper_not_utf8(&rel)))?
         .to_owned();
     // The wrapper crate's Cargo package name is the inspection slug. Derive it
     // from the directory name, gated through the crate-name charset.
     let krate = CrateName::parse(abs.file_name().and_then(|n| n.to_str()).unwrap_or(rel))
-        .map_err(|diag| CliError::UsageOwned(diag.to_string()))?;
+        .map_err(|diag| CliError::Usage(crate::text::Message::relay(&diag)))?;
 
     // The capability gate runs BEFORE the trust prompt and any jailed compile: a
     // wrapper whose effects Ipê cannot contain at run must be refused before we
@@ -1308,7 +1607,7 @@ fn install_wrapper(
         crate::screen::prompt("Continue? [y/N] ");
         let _ = std::io::stdout().flush();
         if !crate::read_yes_no() {
-            return Err(CliError::Usage(text::install_aborted()));
+            return Err(CliError::Usage(text::msg::install_aborted()));
         }
     }
     let expose = manifest.expose_names();
@@ -1329,7 +1628,7 @@ fn install_wrapper(
         _ => json,
     };
     let (pkg, paths) = ipe_ffi::driver::install_from_inspection(cache, &doc_text)
-        .map_err(|diag| CliError::UsageOwned(diag.to_string()))?;
+        .map_err(|diag| CliError::Usage(crate::text::Message::relay(&diag)))?;
     let iface = ipe_ffi::interface::crate_interface(&pkg);
     crate::screen::Screen::new(crate::screen::Stream::Stdout)
         .line(
@@ -1362,7 +1661,7 @@ fn install_wrapper(
 ///      (clock/random, or none) install.
 ///
 /// # Errors
-/// [`CliError::Io`] on a read failure; [`CliError::UsageOwned`] when the
+/// [`CliError::Io`] on a read failure; [`CliError::Usage`] when the
 /// reconcile refuses the wrapper (naming every reason and the proposed set).
 /// The jail-holds verdict for THIS host — the admit path's per-target hand-off.
 ///
@@ -1383,6 +1682,42 @@ fn jail_for_host() -> ipe_ffi::capability_scan::JailForTarget {
         confined = confined.with(axis);
     }
     ipe_ffi::capability_scan::JailForTarget::Holds(confined)
+}
+
+/// The refusal for a wrapper crate whose capabilities cannot be enforced.
+pub(crate) struct WrapperRefusal {
+    /// Every reason the wrapper is refused.
+    reasons: Vec<ipe_ffi::capability_scan::RefuseReason>,
+    /// The capability set the scan inferred from the wrapper's source.
+    proposed: BTreeSet<ipe_ffi::capability_scan::Capability>,
+}
+
+impl std::fmt::Display for WrapperRefusal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        writeln!(
+            f,
+            "ipe install: the wrapper crate cannot be admitted — its capabilities cannot be \
+             enforced in this release."
+        )?;
+        for reason in &self.reasons {
+            writeln!(f, "  - {reason}")?;
+        }
+        if self.proposed.is_empty() {
+            writeln!(
+                f,
+                "  inferred from its source: (none — but see the reasons above)"
+            )?;
+        } else {
+            let names: Vec<&str> = self.proposed.iter().map(|c| c.as_str()).collect();
+            writeln!(f, "  inferred from its source: {}", names.join(", "))?;
+        }
+        f.write_str(
+            "  Ipê has no runtime sandbox around the emitted app yet, so a wrapper that \
+             touches the network, filesystem, environment, a subprocess, native FFI, or a \
+             non-std dependency would run uncontained. Narrow the wrapper to pure compute \
+             (Tier 1 `[rust.define.*]` covers the safe shapes), or wait for the runtime jail.",
+        )
+    }
 }
 
 fn enforce_wrapper_capabilities(
@@ -1468,32 +1803,9 @@ fn enforce_wrapper_capabilities(
                 .emit();
             Ok(())
         }
-        ipe_ffi::capability_scan::Verdict::Refuse { reasons, proposed } => {
-            use std::fmt::Write as _;
-            let mut message = String::from(
-                "ipe install: the wrapper crate cannot be admitted — its capabilities cannot be \
-                 enforced in this release.\n",
-            );
-            for reason in &reasons {
-                let _ = writeln!(message, "  - {reason}");
-            }
-            if proposed.is_empty() {
-                let _ = writeln!(
-                    message,
-                    "  inferred from its source: (none — but see the reasons above)"
-                );
-            } else {
-                let names: Vec<&str> = proposed.iter().map(|c| c.as_str()).collect();
-                let _ = writeln!(message, "  inferred from its source: {}", names.join(", "));
-            }
-            message.push_str(
-                "  Ipê has no runtime sandbox around the emitted app yet, so a wrapper that \
-                 touches the network, filesystem, environment, a subprocess, native FFI, or a \
-                 non-std dependency would run uncontained. Narrow the wrapper to pure compute \
-                 (Tier 1 `[rust.define.*]` covers the safe shapes), or wait for the runtime jail.",
-            );
-            Err(CliError::UsageOwned(message))
-        }
+        ipe_ffi::capability_scan::Verdict::Refuse { reasons, proposed } => Err(CliError::Usage(
+            crate::text::Message::relay(&WrapperRefusal { reasons, proposed }),
+        )),
     }
 }
 
@@ -1682,32 +1994,45 @@ fn detect_build_scripts_hint(raw: &str) -> Option<&str> {
     raw.lines().find(|l| l.contains("--allow-build-scripts"))
 }
 
-/// Map a raw inspector `UsageOwned` error string to a `CliError::Resolve`
+/// Map a raw inspector `Usage` error string to a `CliError::Resolve`
 /// that never triggers the `CommandUsage` help page.
 ///
 /// If the raw error contains the `--allow-build-scripts` refusal hint, the
-/// hint is pulled out and rendered as a separate emphasised warning banner so
+/// hint is pulled out and rendered as a separate plain-text warning banner so
 /// the user can see the actionable flag clearly.
-fn map_inspector_error(msg: String) -> CliError {
+fn map_inspector_error(msg: crate::text::Message) -> CliError {
     // Detect the hint before consuming `msg`, then branch.
-    let hint_line: Option<String> = detect_build_scripts_hint(&msg).map(|l| l.trim().to_owned());
+    let hint_line =
+        detect_build_scripts_hint(&msg).map(|l| crate::style::TerminalSafe::sanitize(l.trim()));
     hint_line.map_or(CliError::Resolve(msg), |hint| {
         // The build-scripts refusal: render the hint as a banner so the
         // `--allow-build-scripts` flag stands out as the actionable next step.
-        let p = crate::style::Palette::for_stream(&std::io::stderr());
-        let banner = format!(
-            "{y}warning:{r} some crates in the dependency graph have build scripts.\n\
-             Pass {bold}--allow-build-scripts{r} to proceed (you will see a warning naming\n\
+        CliError::Resolve(crate::text::Message::relay(&BuildScriptsBanner { hint }))
+    })
+}
+
+/// The warning banner for an inspector refusal that `--allow-build-scripts`
+/// would lift.
+///
+/// Plain text: a relayed [`crate::text::Message`] is sanitised whole, so the
+/// banner carries no styling escapes of its own.
+pub(crate) struct BuildScriptsBanner {
+    /// The inspector's hint line.
+    hint: crate::style::TerminalSafe,
+}
+
+impl std::fmt::Display for BuildScriptsBanner {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "warning: some crates in the dependency graph have build scripts.\n\
+             Pass --allow-build-scripts to proceed (you will see a warning naming\n\
              those packages first, and they will run inside the isolation jail).\n\
              \n\
-             {dim}hint: {hint}{r}",
-            y = p.bright_yellow,
-            bold = p.bold,
-            dim = p.dim,
-            r = p.reset,
-        );
-        CliError::Resolve(banner)
-    })
+             hint: {hint}",
+            hint = self.hint,
+        )
+    }
 }
 
 /// Shared tail of `add` / `install`: inspect one crate + write its artifacts.
@@ -1736,7 +2061,7 @@ fn add_one(
             stage.failure(format!("resolve failed for {crate_label}"));
             // A build failure from the inspector is not command-line misuse.
             return Err(match e {
-                CliError::UsageOwned(msg) => map_inspector_error(msg),
+                CliError::Usage(msg) => map_inspector_error(msg),
                 other => other,
             });
         }
@@ -1833,7 +2158,9 @@ fn ffi_vocabulary_source(manifest_path: &Path) -> PathBuf {
 /// in `src/Ffi/<Crate>.ipe` instead.
 fn reject_legacy_define_tables(text: &str) -> Result<(), CliError> {
     if text.contains("[[rust.define.") {
-        return Err(CliError::Usage(crate::text::ffi_legacy_define_removed()));
+        return Err(CliError::Usage(
+            crate::text::msg::ffi_legacy_define_removed(),
+        ));
     }
     Ok(())
 }
@@ -1857,7 +2184,7 @@ fn reject_legacy_define_tables(text: &str) -> Result<(), CliError> {
 /// no-op: the function returns `Ok(())` immediately.
 ///
 /// # Errors
-/// [`CliError::Io`] when the manifest cannot be read; [`CliError::UsageOwned`]
+/// [`CliError::Io`] when the manifest cannot be read; [`CliError::Usage`]
 /// when the jailed inspector fails or produces an undecodable result.
 pub fn install_registry_deps_for_project(
     manifest_path: &Path,
@@ -1879,19 +2206,20 @@ pub fn install_registry_deps_for_project(
     let cache = FfiCache::at_project_root(project_root);
     let mut entries: Vec<(CrateSpec, Vec<String>)> = Vec::with_capacity(deps.len());
     for dep in &deps {
-        let name =
-            CrateName::parse(&dep.name).map_err(|diag| CliError::UsageOwned(diag.to_string()))?;
+        let name = CrateName::parse(&dep.name)
+            .map_err(|diag| CliError::Usage(crate::text::Message::relay(&diag)))?;
         let version = match dep.version.trim() {
             "" | "*" => None,
             pin => Some(
-                VersionPin::parse(pin).map_err(|diag| CliError::UsageOwned(diag.to_string()))?,
+                VersionPin::parse(pin)
+                    .map_err(|diag| CliError::Usage(crate::text::Message::relay(&diag)))?,
             ),
         };
         let mut features = Vec::with_capacity(dep.features.len());
         for feat in &dep.features {
             features.push(
                 FeatureName::parse(feat)
-                    .map_err(|defect| CliError::UsageOwned(defect.to_string()))?,
+                    .map_err(|defect| CliError::Usage(crate::text::Message::relay(&defect)))?,
             );
         }
         let features: Vec<String> = features.iter().map(|f| f.as_str().to_owned()).collect();
@@ -1902,16 +2230,16 @@ pub fn install_registry_deps_for_project(
         allow_build_scripts,
     )
     .map_err(|e| match e {
-        CliError::UsageOwned(msg) => map_inspector_error(msg),
+        CliError::Usage(msg) => map_inspector_error(msg),
         other => other,
     })?;
     let val: serde_json::Value = serde_json::from_str(&json)
-        .map_err(|e| CliError::UsageOwned(text::ffi_regen_invalid_json(&e)))?;
+        .map_err(|e| CliError::Usage(text::msg::ffi_regen_invalid_json(&e)))?;
     let items: Vec<serde_json::Value> = match val {
         serde_json::Value::Array(items) => items,
         one @ serde_json::Value::Object(_) => vec![one],
         other => {
-            return Err(CliError::UsageOwned(text::ffi_regen_unexpected_shape(
+            return Err(CliError::Usage(text::msg::ffi_regen_unexpected_shape(
                 &other,
             )));
         }
@@ -1926,7 +2254,7 @@ pub fn install_registry_deps_for_project(
             .get("name")
             .or_else(|| item.get("pkg"))
             .and_then(serde_json::Value::as_str)
-            .ok_or_else(|| CliError::UsageOwned(text::ffi_regen_item_unnamed(&item)))?
+            .ok_or_else(|| CliError::Usage(text::msg::ffi_regen_item_unnamed(&item)))?
             .to_owned();
         let merged = merge_provides(
             &item.to_string(),
@@ -1956,7 +2284,7 @@ pub fn run_rust(rest: &[String]) -> Result<(), CliError> {
         // usage hint so the dispatcher shows the `--help` page and exits
         // non-zero — matching bare `ipe package`. An explicit `ipe rust --help`
         // is still honoured as a help request upstream.
-        None => Err(CliError::Usage(text::rust_usage())),
+        None => Err(CliError::Usage(text::msg::rust_usage())),
         Some((sub, args)) if sub == "add" => run_add(args),
         Some((sub, args)) if sub == "remove" => run_remove(args),
         Some((sub, args)) if sub == "install" => run_install(args),
@@ -1983,13 +2311,13 @@ pub fn run_add(rest: &[String]) -> Result<(), CliError> {
         match arg.as_str() {
             "--features" => {
                 let raw = it.next().ok_or_else(|| {
-                    CliError::UsageOwned(text::flag_needs_value(&"rust add", &"--features"))
+                    CliError::Usage(text::msg::flag_needs_value(&"rust add", &"--features"))
                 })?;
                 // Parse, don't validate: gate each feature name at the boundary
                 // before it can reach the emitted manifest's `features` array.
                 for feat in raw.split(',') {
                     let gated = FeatureName::parse(feat)
-                        .map_err(|defect| CliError::UsageOwned(defect.to_string()))?;
+                        .map_err(|defect| CliError::Usage(crate::text::Message::relay(&defect)))?;
                     features.push(gated.as_str().to_owned());
                 }
             }
@@ -1998,12 +2326,13 @@ pub fn run_add(rest: &[String]) -> Result<(), CliError> {
             "--verbose" => verbose = true,
             other if krate.is_none() => krate = Some(other.to_owned()),
             _ => {
-                return Err(CliError::Usage(text::rust_add_usage()));
+                return Err(CliError::Usage(text::msg::rust_add_usage()));
             }
         }
     }
-    let raw = krate.ok_or(CliError::Usage(text::rust_add_usage()))?;
-    let spec = CrateSpec::parse(&raw).map_err(|diag| CliError::UsageOwned(diag.to_string()))?;
+    let raw = krate.ok_or(CliError::Usage(text::msg::rust_add_usage()))?;
+    let spec = CrateSpec::parse(&raw)
+        .map_err(|diag| CliError::Usage(crate::text::Message::relay(&diag)))?;
 
     if !assume_yes {
         use std::io::Write as _;
@@ -2015,7 +2344,7 @@ pub fn run_add(rest: &[String]) -> Result<(), CliError> {
         crate::screen::prompt("[y/N] ");
         let _ = std::io::stdout().flush();
         if !crate::read_yes_no() {
-            return Err(CliError::Usage(text::rust_add_aborted()));
+            return Err(CliError::Usage(text::msg::rust_add_aborted()));
         }
     }
 
@@ -2029,13 +2358,13 @@ pub fn run_add(rest: &[String]) -> Result<(), CliError> {
 /// [`CliError`] on misuse or a cache-delete failure.
 pub fn run_remove(rest: &[String]) -> Result<(), CliError> {
     let [raw] = rest else {
-        return Err(CliError::Usage(text::rust_remove_usage()));
+        return Err(CliError::Usage(text::msg::rust_remove_usage()));
     };
     let cache = FfiCache::at_project_root(Path::new("."));
     let slug = ipe_ffi::driver::slugify(raw);
     cache
         .remove_package(&slug)
-        .map_err(|diag| CliError::UsageOwned(diag.to_string()))?;
+        .map_err(|diag| CliError::Usage(crate::text::Message::relay(&diag)))?;
     crate::screen::Screen::new(crate::screen::Stream::Stdout)
         .line(crate::screen::Tone::Text, &format!("removed `{raw}`"))
         .emit();
@@ -2066,20 +2395,22 @@ pub fn run_install(rest: &[String]) -> Result<(), CliError> {
             "--allow-build-scripts" => allow_build_scripts = true,
             "--verbose" => verbose = true,
             _ => {
-                return Err(CliError::Usage(text::rust_install_usage()));
+                return Err(CliError::Usage(text::msg::rust_install_usage()));
             }
         }
     }
     if crate::project::manifest_in_dir(Path::new(".")).is_some() {
-        return Err(CliError::Usage(text::rust_install_package_ipe_unsupported()));
+        return Err(CliError::Usage(
+            text::msg::rust_install_package_ipe_unsupported(),
+        ));
     }
     let manifest = Path::new(PROJECT_MANIFEST_TOML);
     if !manifest.is_file() {
-        return Err(CliError::Usage(text::rust_install_no_manifest()));
+        return Err(CliError::Usage(text::msg::rust_install_no_manifest()));
     }
     let text =
         crate::io_bounded::read_to_string_capped(manifest, crate::io_bounded::MANIFEST_READ_CAP)
-            .map_err(|e| CliError::UsageOwned(text::command_refusal(&"install", &e)))?;
+            .map_err(|e| CliError::Usage(text::msg::command_refusal(&"install", &e)))?;
     let deps = rust_dependencies_from_manifest(&text);
     let wrapper = rust_wrapper_from_manifest(&text);
     if deps.is_empty() && wrapper.is_none() {
@@ -2120,19 +2451,20 @@ pub fn run_install(rest: &[String]) -> Result<(), CliError> {
         crate::screen::prompt("Continue? [y/N] ");
         let _ = std::io::stdout().flush();
         if !crate::read_yes_no() {
-            return Err(CliError::Usage(text::install_aborted()));
+            return Err(CliError::Usage(text::msg::install_aborted()));
         }
     }
     let mut entries: Vec<(CrateSpec, Vec<String>)> = Vec::with_capacity(deps.len());
     for dep in &deps {
-        let name =
-            CrateName::parse(&dep.name).map_err(|diag| CliError::UsageOwned(diag.to_string()))?;
+        let name = CrateName::parse(&dep.name)
+            .map_err(|diag| CliError::Usage(crate::text::Message::relay(&diag)))?;
         // `*` / empty keep the historical latest-stable resolution; anything
         // else pins the inspector's probe (a prerelease NEEDS an exact `=`).
         let version = match dep.version.trim() {
             "" | "*" => None,
             pin => Some(
-                VersionPin::parse(pin).map_err(|diag| CliError::UsageOwned(diag.to_string()))?,
+                VersionPin::parse(pin)
+                    .map_err(|diag| CliError::Usage(crate::text::Message::relay(&diag)))?,
             ),
         };
         // Parse, don't validate: every feature name is gated at the boundary
@@ -2141,7 +2473,7 @@ pub fn run_install(rest: &[String]) -> Result<(), CliError> {
         for feat in &dep.features {
             features.push(
                 FeatureName::parse(feat)
-                    .map_err(|defect| CliError::UsageOwned(defect.to_string()))?,
+                    .map_err(|defect| CliError::Usage(crate::text::Message::relay(&defect)))?,
             );
         }
         let features: Vec<String> = features.iter().map(|f| f.as_str().to_owned()).collect();
@@ -2156,16 +2488,16 @@ pub fn run_install(rest: &[String]) -> Result<(), CliError> {
         allow_build_scripts,
     )
     .map_err(|e| match e {
-        CliError::UsageOwned(msg) => map_inspector_error(msg),
+        CliError::Usage(msg) => map_inspector_error(msg),
         other => other,
     })?;
     let val: serde_json::Value = serde_json::from_str(&json)
-        .map_err(|e| CliError::UsageOwned(text::ffi_install_invalid_json(&e)))?;
+        .map_err(|e| CliError::Usage(text::msg::ffi_install_invalid_json(&e)))?;
     let items: Vec<serde_json::Value> = match val {
         serde_json::Value::Array(items) => items,
         one @ serde_json::Value::Object(_) => vec![one],
         other => {
-            return Err(CliError::UsageOwned(text::ffi_install_unexpected_shape(
+            return Err(CliError::Usage(text::msg::ffi_install_unexpected_shape(
                 &other,
             )));
         }
@@ -2500,7 +2832,7 @@ fn reject_ambiguous_define<'a>(
     mut unqualified: impl Iterator<Item = &'a str>,
 ) -> Result<(), CliError> {
     if !sole_dep && let Some(name) = unqualified.next() {
-        return Err(CliError::UsageOwned(text::ffi_define_crate_ambiguous(
+        return Err(CliError::Usage(text::msg::ffi_define_crate_ambiguous(
             &kind, &name,
         )));
     }
@@ -2648,17 +2980,17 @@ fn merge_provides(
         return Ok(inspection_json.to_owned());
     }
     let mut doc: serde_json::Value = serde_json::from_str(inspection_json)
-        .map_err(|e| CliError::UsageOwned(text::ffi_inspection_not_object_detail(&e)))?;
+        .map_err(|e| CliError::Usage(text::msg::ffi_inspection_not_object_detail(&e)))?;
     if !synthetic.is_empty() {
         let obj = doc
             .as_object_mut()
-            .ok_or_else(|| CliError::UsageOwned(text::ffi_inspection_not_object().to_owned()))?;
+            .ok_or_else(|| CliError::Usage(text::msg::ffi_inspection_not_object()))?;
         let serde_json::Value::Array(functions) = obj
             .entry("functions")
             .or_insert_with(|| serde_json::Value::Array(Vec::new()))
         else {
-            return Err(CliError::UsageOwned(
-                text::ffi_inspection_functions_not_array().to_owned(),
+            return Err(CliError::Usage(
+                text::msg::ffi_inspection_functions_not_array(),
             ));
         };
         functions.extend(synthetic);
@@ -2704,14 +3036,14 @@ fn merge_declared_opaques(
             t.get("name").and_then(serde_json::Value::as_str) == Some(o.rust_type.as_str())
         });
         let Some(reported) = reported else {
-            return Err(CliError::UsageOwned(text::ffi_opaque_unknown_type(
+            return Err(CliError::Usage(text::msg::ffi_opaque_unknown_type(
                 &o.ipe_name,
                 &o.rust_type,
                 &crate_name,
             )));
         };
         if transparent.contains(o.rust_type.as_str()) {
-            return Err(CliError::UsageOwned(text::ffi_opaque_is_transparent(
+            return Err(CliError::Usage(text::msg::ffi_opaque_is_transparent(
                 &o.ipe_name,
                 &o.rust_type,
             )));
@@ -2721,7 +3053,10 @@ fn merge_declared_opaques(
             .and_then(serde_json::Value::as_str)
             .filter(|p| !p.is_empty())
             .ok_or_else(|| {
-                CliError::UsageOwned(text::ffi_opaque_without_path(&o.ipe_name, &o.rust_type))
+                CliError::Usage(text::msg::ffi_opaque_without_path(
+                    &o.ipe_name,
+                    &o.rust_type,
+                ))
             })?;
         let absolute = if rust_path.starts_with("::") {
             rust_path.to_owned()
@@ -2731,7 +3066,7 @@ fn merge_declared_opaques(
         if let Some(prev) = declared.get(o.ipe_name.as_str())
             && prev.as_str() != Some(absolute.as_str())
         {
-            return Err(CliError::UsageOwned(text::ffi_opaque_declared_twice(
+            return Err(CliError::Usage(text::msg::ffi_opaque_declared_twice(
                 &o.ipe_name,
             )));
         }
@@ -2826,7 +3161,7 @@ type ForeignDefines = (
 /// A parse error in any source module is silently skipped here — the compile
 /// pipeline will surface it with full context moments later. A malformed
 /// `foreign` declaration (invalid carrier, unknown kind, …) is a typed refusal
-/// returned as an `Err` with a `CliError::UsageOwned` carrying the source path
+/// returned as an `Err` with a `CliError::Usage` carrying the source path
 /// and reason; the caller decides whether to propagate it immediately or defer.
 ///
 /// The returned vectors are the exact same `ManifestDefine*` shapes the TOML
@@ -2909,7 +3244,7 @@ impl ForeignReader<'_> {
     /// Emit a typed refusal with a source location prefix.
     fn reject(&self, span: ipe_diagnostics::Span, reason: &str) -> CliError {
         let (line, col) = line_col_from_span(self.src, span.lo);
-        CliError::UsageOwned(text::located_refusal(
+        CliError::Usage(text::msg::located_refusal(
             &self.file.display(),
             &line,
             &col,
@@ -3884,7 +4219,7 @@ version = \"1\"
         // _bindings.rs — and confirm discovery refuses it.
         std::fs::set_permissions(&cache, std::fs::Permissions::from_mode(0o777)).expect("chmod");
         let r = find_cache_root(&tmp);
-        assert!(matches!(r, Err(CliError::UsageOwned(_))), "{r:?}");
+        assert!(matches!(r, Err(CliError::Usage(_))), "{r:?}");
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
@@ -3893,7 +4228,7 @@ version = \"1\"
         // HOME must be set for the sanctioned path; the test crate always has
         // one. The scratch dir lives under ~/.cache/ipe/ffi-scratch/, never
         // /tmp.
-        let Some(home) = std::env::var_os("HOME").map(PathBuf::from) else {
+        let Some(home) = crate::env_dir::home() else {
             return;
         };
         let scratch = make_scratch_dir("semver").expect("first create succeeds");
@@ -3913,21 +4248,304 @@ version = \"1\"
         let _ = std::fs::remove_dir_all(&scratch);
     }
 
+    /// A fresh scratch root per test, so parallel tests never share homes.
+    fn toolbinds_root(tag: &str) -> PathBuf {
+        let tmp = std::env::temp_dir().join(format!("ipe-toolbinds-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).expect("mk scratch root");
+        tmp
+    }
+
+    /// A cargo home at `cargo_home` holding `bin/` and `credentials.toml`.
+    fn plant_cargo_home(cargo_home: &Path) {
+        std::fs::create_dir_all(cargo_home.join("bin")).expect("mk cargo bin");
+        std::fs::write(cargo_home.join("credentials.toml"), "").expect("credentials");
+    }
+
+    /// An inspector binary planted in `dir`.
+    fn plant_inspector(dir: &Path) -> PathBuf {
+        std::fs::create_dir_all(dir).expect("mk inspector dir");
+        let inspector = dir.join("ipe-ffi-inspector");
+        std::fs::write(&inspector, "").expect("inspector");
+        inspector
+    }
+
+    /// A user home planted under `tmp`.
+    fn plant_user_home(tmp: &Path) -> PathBuf {
+        let user_home = tmp.join("user");
+        std::fs::create_dir_all(&user_home).expect("mk user home");
+        user_home
+    }
+
+    fn canonical(path: &Path) -> ipe_sandbox::CanonicalPath {
+        ipe_sandbox::CanonicalPath::resolve(path).expect("resolves")
+    }
+
     #[test]
-    fn toolchain_binds_never_include_the_cargo_parent_or_credentials() {
-        let inspector = PathBuf::from("/opt/ipe/bin/ipe-ffi-inspector");
-        let (binds, _path, _rustup) = toolchain_binds(&inspector);
-        for b in &binds {
-            let s = b.to_string_lossy();
+    fn toolchain_binds_over_disjoint_homes_expose_only_cargo_bin() {
+        let tmp = toolbinds_root("disjoint");
+        let cargo_home = tmp.join(".cargo");
+        let rustup_home = tmp.join(".rustup");
+        plant_cargo_home(&cargo_home);
+        std::fs::create_dir_all(&rustup_home).expect("mk rustup home");
+        let inspector = plant_inspector(&tmp.join("tools"));
+        let user_home = plant_user_home(&tmp);
+        let got = toolchain_binds_from(
+            &inspector,
+            Some(&cargo_home),
+            Some(rustup_home.clone()),
+            Some(&user_home),
+        );
+        let want_homes = ipe_sandbox::HomeMasks::resolve(Some(&user_home), Some(&cargo_home))
+            .expect("homes resolve");
+        let want_inspector = canonical(&inspector);
+        let cargo_bin = canonical(&cargo_home.join("bin"));
+        let rustup_home = canonical(&rustup_home);
+        let cargo_home = canonical(&cargo_home);
+        let _ = std::fs::remove_dir_all(&tmp);
+        assert!(got.is_ok(), "disjoint homes must be accepted: {got:?}");
+        let Ok(ToolchainBinds {
+            inspector,
+            ro_binds: binds,
+            path_prepend: path,
+            rustup_home: rustup,
+            homes,
+        }) = got
+        else {
+            return;
+        };
+        assert_eq!(homes, want_homes);
+        assert_eq!(inspector, want_inspector);
+        assert!(binds.contains(&cargo_bin), "{binds:?}");
+        assert!(!binds.contains(&cargo_home), "{binds:?}");
+        assert!(
+            binds
+                .iter()
+                .all(|b| !ipe_sandbox::path_covers(b.as_path(), cargo_home.as_path())),
+            "no bind may contain the cargo home: {binds:?}"
+        );
+        assert_eq!(path, vec![cargo_bin]);
+        assert_eq!(rustup, Some(rustup_home));
+    }
+
+    /// `toolchain_binds_from` over `(cargo_home, rustup_home)` must refuse.
+    fn assert_toolchain_refused(cargo_home: &Path, rustup_home: &Path, inspector: &Path) {
+        let got = toolchain_binds_from(
+            inspector,
+            Some(cargo_home),
+            Some(rustup_home.to_path_buf()),
+            None,
+        );
+        assert!(
+            matches!(&got, Err(CliError::Usage(m)) if m.contains("credentials.toml")),
+            "a bind exposing the cargo home must be refused: {got:?}"
+        );
+    }
+
+    #[test]
+    fn toolchain_binds_refuse_a_rustup_home_equal_to_the_cargo_home() {
+        let tmp = toolbinds_root("equal");
+        let home = tmp.join("toolchain");
+        plant_cargo_home(&home);
+        let inspector = plant_inspector(&tmp.join("tools"));
+        assert_toolchain_refused(&home, &home, &inspector);
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn toolchain_binds_refuse_a_cargo_home_nested_under_the_rustup_home() {
+        let tmp = toolbinds_root("nested");
+        let rustup_home = tmp.join("rustup");
+        let cargo_home = rustup_home.join("cargo");
+        plant_cargo_home(&cargo_home);
+        let inspector = plant_inspector(&tmp.join("tools"));
+        assert_toolchain_refused(&cargo_home, &rustup_home, &inspector);
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn toolchain_binds_refuse_a_dot_dot_or_trailing_slash_spelled_ancestor() {
+        let tmp = toolbinds_root("dotdot");
+        let cargo_home = tmp.join(".cargo");
+        let rustup_dir = tmp.join(".rustup");
+        plant_cargo_home(&cargo_home);
+        std::fs::create_dir_all(&rustup_dir).expect("mk rustup home");
+        let inspector = plant_inspector(&tmp.join("tools"));
+        // `<tmp>/.rustup/..` names `<tmp>`, the cargo home's parent.
+        assert_toolchain_refused(&cargo_home, &rustup_dir.join(".."), &inspector);
+        // `<tmp>/.cargo/bin/../` names the cargo home itself.
+        let mut spelled = cargo_home.join("bin").join("..").into_os_string();
+        spelled.push("/");
+        assert_toolchain_refused(&cargo_home, &PathBuf::from(spelled), &inspector);
+        // The cargo home spelled with `..` against a plain rustup home above it.
+        assert_toolchain_refused(&rustup_dir.join("..").join(".cargo"), &tmp, &inspector);
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn toolchain_binds_refuse_a_rustup_home_symlinked_to_the_cargo_home() {
+        let tmp = toolbinds_root("symlink");
+        let cargo_home = tmp.join(".cargo");
+        plant_cargo_home(&cargo_home);
+        let link = tmp.join("rustup-link");
+        std::os::unix::fs::symlink(&cargo_home, &link).expect("symlink");
+        let inspector = plant_inspector(&tmp.join("tools"));
+        assert_toolchain_refused(&cargo_home, &link, &inspector);
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn toolchain_binds_refuse_an_inspector_dir_above_the_cargo_home() {
+        let tmp = toolbinds_root("inspector");
+        let cargo_home = tmp.join(".cargo");
+        let rustup_home = tmp.join("elsewhere").join(".rustup");
+        plant_cargo_home(&cargo_home);
+        std::fs::create_dir_all(&rustup_home).expect("mk rustup home");
+        let inspector = plant_inspector(&tmp);
+        assert_toolchain_refused(&cargo_home, &rustup_home, &inspector);
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn a_cargo_home_holding_the_rustup_home_is_accepted() {
+        let tmp = toolbinds_root("rustup-inside");
+        let cargo_home = tmp.join(".cargo");
+        let rustup_home = cargo_home.join("rustup");
+        plant_cargo_home(&cargo_home);
+        std::fs::create_dir_all(&rustup_home).expect("mk rustup home");
+        let inspector = plant_inspector(&tmp.join("tools"));
+        let user_home = plant_user_home(&tmp);
+        let got = toolchain_binds_from(
+            &inspector,
+            Some(&cargo_home),
+            Some(rustup_home),
+            Some(&user_home),
+        );
+        let cargo_home = canonical(&cargo_home);
+        let _ = std::fs::remove_dir_all(&tmp);
+        assert!(
+            matches!(&got, Ok(binds) if !binds.ro_binds.contains(&cargo_home)),
+            "a rustup home below the cargo home does not expose it: {got:?}"
+        );
+    }
+
+    #[test]
+    fn toolchain_binds_refuse_an_unknown_cargo_home() {
+        let got = toolchain_binds_from(
+            Path::new("/opt/ipe/bin/ipe-ffi-inspector"),
+            None,
+            None,
+            None,
+        );
+        assert!(
+            matches!(&got, Err(CliError::Usage(m)) if m.contains("cannot locate the cargo home")),
+            "no cargo home means no exposure check, so the jail must be refused: {got:?}"
+        );
+    }
+
+    #[test]
+    fn toolchain_binds_mask_the_user_and_cargo_homes() {
+        let tmp = toolbinds_root("homes");
+        let user_home = plant_user_home(&tmp);
+        let cargo_home = tmp.join("elsewhere").join(".cargo");
+        plant_cargo_home(&cargo_home);
+        let inspector = plant_inspector(&tmp.join("tools"));
+        let got = toolchain_binds_from(&inspector, Some(&cargo_home), None, Some(&user_home));
+        let want = ipe_sandbox::HomeMasks::resolve(Some(&user_home), Some(&cargo_home))
+            .expect("homes resolve");
+        let _ = std::fs::remove_dir_all(&tmp);
+        assert!(
+            matches!(&got, Ok(binds) if binds.homes == want),
+            "both homes must be masked: {got:?}"
+        );
+    }
+
+    #[test]
+    fn toolchain_binds_refuse_an_unset_or_relative_user_home() {
+        let tmp = toolbinds_root("no-user-home");
+        let cargo_home = tmp.join(".cargo");
+        plant_cargo_home(&cargo_home);
+        let inspector = plant_inspector(&tmp.join("tools"));
+        let unset = toolchain_binds_from(&inspector, Some(&cargo_home), None, None);
+        let relative = toolchain_binds_from(
+            &inspector,
+            Some(&cargo_home),
+            None,
+            Some(Path::new("relative/home")),
+        );
+        let _ = std::fs::remove_dir_all(&tmp);
+        for got in [unset, relative] {
             assert!(
-                !s.ends_with("/.cargo"),
-                "the ~/.cargo parent must never be bound: {s}"
-            );
-            assert!(
-                !s.contains("credentials"),
-                "no credentials path may be bound: {s}"
+                matches!(&got, Err(CliError::Usage(m)) if m.contains("cannot be masked")),
+                "an unknown user home cannot be masked, so the jail must be refused: {got:?}"
             );
         }
+    }
+
+    #[test]
+    fn toolchain_binds_refuse_a_relative_cargo_home() {
+        let tmp = toolbinds_root("relative-cargo");
+        let inspector = plant_inspector(&tmp.join("tools"));
+        let user_home = plant_user_home(&tmp);
+        let got = toolchain_binds_from(
+            &inspector,
+            Some(Path::new("relative/.cargo")),
+            None,
+            Some(&user_home),
+        );
+        let _ = std::fs::remove_dir_all(&tmp);
+        assert!(
+            matches!(&got, Err(CliError::Usage(m)) if m.contains("CARGO_HOME")),
+            "a relative cargo home names no fixed directory to mask: {got:?}"
+        );
+    }
+
+    #[test]
+    fn toolchain_binds_refuse_an_inspector_that_does_not_resolve() {
+        let tmp = toolbinds_root("no-inspector");
+        let cargo_home = tmp.join(".cargo");
+        plant_cargo_home(&cargo_home);
+        let user_home = plant_user_home(&tmp);
+        let got = toolchain_binds_from(
+            &tmp.join("missing").join("ipe-ffi-inspector"),
+            Some(&cargo_home),
+            None,
+            Some(&user_home),
+        );
+        let _ = std::fs::remove_dir_all(&tmp);
+        assert!(
+            matches!(&got, Err(CliError::Usage(m)) if m.contains("does not resolve")),
+            "an inspector path that does not resolve cannot be bound: {got:?}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_symlinked_inspector_is_run_and_bound_at_its_canonical_path() {
+        let tmp = toolbinds_root("inspector-link");
+        let cargo_home = tmp.join(".cargo");
+        plant_cargo_home(&cargo_home);
+        let user_home = plant_user_home(&tmp);
+        let real = plant_inspector(&tmp.join("real"));
+        let link_dir = tmp.join("link");
+        std::os::unix::fs::symlink(tmp.join("real"), &link_dir).expect("symlink");
+        let got = toolchain_binds_from(
+            &link_dir.join("ipe-ffi-inspector"),
+            Some(&cargo_home),
+            None,
+            Some(&user_home),
+        );
+        let real_dir = canonical(&tmp.join("real"));
+        let real = canonical(&real);
+        let _ = std::fs::remove_dir_all(&tmp);
+        assert!(
+            matches!(&got, Ok(binds)
+                if binds.inspector == real
+                    && binds.ro_binds.contains(&real_dir)
+                    && binds.ro_binds.iter().all(|b| !b.as_path().starts_with(&link_dir))),
+            "the payload's inspector and its bound dir must be the canonical target: {got:?}"
+        );
     }
 
     #[test]
@@ -3948,13 +4566,16 @@ version = \"1\"
             inspected_consts: BTreeMap::new(),
             cargo_deps: vec![line.to_owned()],
             wrapper_idents: BTreeSet::new(),
+            package_name: None,
+            dep_idents: BTreeMap::new(),
         };
         // Two crates agreeing on a shared dep line dedupe to one.
         let ok = assemble_emit(&[mk("a", "serde = \"=1.0.1\""), mk("b", "serde = \"=1.0.1\"")]);
         assert!(ok.is_ok_and(|e| e.is_some_and(|e| e.dep_lines == vec!["serde = \"=1.0.1\""])));
-        // A VERSION disagreement on a DIRECT FFI crate (the dep name IS a catalog slug)
-        // is a real, unbuildable conflict → refused. (A transitive-dep version conflict
-        // instead defers to Cargo — see `transitive_version_conflict_defers_to_cargo`.)
+        // A VERSION disagreement between legacy members (no typed package name, so
+        // no proof the dep is transitive) is refused fail-closed. (A typed
+        // transitive-dep conflict instead defers to Cargo — see
+        // `transitive_version_conflict_defers_to_cargo`.)
         let clash = assemble_emit(&[
             mk("serde", "serde = \"=1.0.1\""),
             mk("other", "serde = \"=1.0.2\""),
@@ -3983,6 +4604,8 @@ version = \"1\"
             inspected_consts: BTreeMap::new(),
             cargo_deps: vec![line.to_owned()],
             wrapper_idents: BTreeSet::new(),
+            package_name: None,
+            dep_idents: BTreeMap::new(),
         };
         let e = assemble_emit(&[
             mk("a", "async-stripe-shared = \"=1.0.0-rc.6\""),
@@ -4009,23 +4632,7 @@ version = \"1\"
         // members — each inspected in its own jail — must NOT refuse the build and must
         // NOT be exact-pinned to one arbitrary version. It is dropped so Cargo resolves
         // the transitive graph of the direct pins itself.
-        let mk = |slug: &str, lines: Vec<&str>| InstalledCrate {
-            slug: slug.to_owned(),
-            module_name: format!("Rust.{slug}"),
-            kernel_name: format!("Rust_{slug}"),
-            interface_source: String::new(),
-            bindings_source: String::new(),
-            opaque_types: BTreeMap::new(),
-            opaque_type_ids: BTreeMap::new(),
-            define_types: BTreeSet::new(),
-            transparent_types: BTreeMap::new(),
-            bindings: Vec::new(),
-            dep_versions: BTreeMap::new(),
-            inspected_free_fns: BTreeMap::new(),
-            inspected_consts: BTreeMap::new(),
-            cargo_deps: lines.into_iter().map(str::to_owned).collect(),
-            wrapper_idents: BTreeSet::new(),
-        };
+        let mk = |slug: &str, lines: Vec<&str>| typed_crate(slug, slug, &lines);
         let e = assemble_emit(&[
             mk("a", vec!["a = \"=1.0.0\"", "syn = \"=2.0.119\""]),
             mk("b", vec!["b = \"=1.0.0\"", "syn = \"=3.0.0\""]),
@@ -4049,8 +4656,359 @@ version = \"1\"
             mk("other", vec!["stripe = \"=2.0.0\""]),
         ]);
         assert!(
-            clash.is_err(),
-            "a direct-crate version conflict still refuses"
+            refused_as(
+                &clash,
+                DependencyRefusal::PinConflict {
+                    name: "stripe".to_owned(),
+                    first: "1.0.0".to_owned(),
+                    second: "2.0.0".to_owned(),
+                }
+            ),
+            "a direct-crate version conflict still refuses: {clash:?}"
+        );
+    }
+
+    /// Whether `result` is exactly the usage error `want` renders to.
+    fn refused_as(
+        result: &Result<Option<ipe_backend_rust::FfiEmit>, CliError>,
+        want: DependencyRefusal,
+    ) -> bool {
+        let want = format!("{:?}", CliError::from(want));
+        result
+            .as_ref()
+            .err()
+            .is_some_and(|e| format!("{e:?}") == want)
+    }
+
+    /// The `syn` 2.x / 3.x pin conflict between the two [`syn_split`] members.
+    fn syn_pin_conflict() -> DependencyRefusal {
+        DependencyRefusal::PinConflict {
+            name: "syn".to_owned(),
+            first: "2.0.119".to_owned(),
+            second: "3.0.0".to_owned(),
+        }
+    }
+
+    /// The refusal for a `syn` reference at `site` once `syn` is dropped.
+    fn syn_dropped_at(site: &str) -> DependencyRefusal {
+        DependencyRefusal::DroppedTransitive {
+            package: "syn".to_owned(),
+            ident: "syn".to_owned(),
+            site: site.to_owned(),
+        }
+    }
+
+    /// A typed (inspection-built) member: package `package`, lib slug `slug`,
+    /// and one `dep_idents` entry per dependency line (`-` → `_`).
+    fn typed_crate(slug: &str, package: &str, lines: &[&str]) -> InstalledCrate {
+        let mut c = crate_with_types(slug, &[], &[]);
+        c.cargo_deps = lines.iter().map(|l| (*l).to_owned()).collect();
+        c.package_name = ipe_ffi::pkginfo::PackageName::parse(package).ok();
+        c.dep_idents = lines
+            .iter()
+            .filter_map(|l| parse_dep_line(l))
+            .filter_map(|(name, _, _)| {
+                ipe_ffi::naming::RustIdent::parse(&name.replace('-', "_"))
+                    .ok()
+                    .map(|ident| (name, ident))
+            })
+            .collect();
+        c
+    }
+
+    /// Two typed members whose `syn` pins span majors, so `syn` is dropped.
+    fn syn_split() -> [InstalledCrate; 2] {
+        [
+            typed_crate("a", "a", &["a = \"=1.0.0\"", "syn = \"=2.0.119\""]),
+            typed_crate("b", "b", &["b = \"=1.0.0\"", "syn = \"=3.0.0\""]),
+        ]
+    }
+
+    #[test]
+    fn a_dropped_transitive_named_by_the_bindings_is_refused() {
+        let [a, mut b] = syn_split();
+        b.bindings_source = "pub fn span() -> ::syn::Ident { ::syn::parse_str(\"x\") }".to_owned();
+        let refused = assemble_emit(&[a, b]);
+        assert!(
+            refused_as(&refused, syn_dropped_at("src/ffi.rs")),
+            "a `::syn::` path with `syn` undeclared must refuse: {refused:?}"
+        );
+    }
+
+    #[test]
+    fn a_dropped_transitive_named_by_an_opaque_path_is_refused() {
+        let [mut a, b] = syn_split();
+        a.opaque_types
+            .insert("Ident".to_owned(), "::syn::Ident".to_owned());
+        let refused = assemble_emit(&[a, b]);
+        assert!(
+            refused_as(&refused, syn_dropped_at("Rust.a.Ident")),
+            "an opaque path rooted at undeclared `syn` must refuse: {refused:?}"
+        );
+    }
+
+    #[test]
+    fn the_seal_refuses_a_dropped_root_and_spares_a_declared_one() {
+        let [a, b] = syn_split();
+        let catalog = [a, b];
+        let mut emit =
+            assemble_emit(&catalog)
+                .ok()
+                .flatten()
+                .unwrap_or_else(|| ipe_backend_rust::FfiEmit {
+                    foreign_types: BTreeMap::new(),
+                    dep_lines: Vec::new(),
+                    bindings_source: String::new(),
+                    interface_modules: Vec::new(),
+                    wrapper_glue: BTreeMap::new(),
+                });
+        assert!(seal_dependency_references(&catalog, &emit).is_ok());
+        // A shim appended after assembly naming a declared root stays sound.
+        emit.bindings_source
+            .push_str("\npub fn f() -> ::a::T { ::b::g() }");
+        assert!(seal_dependency_references(&catalog, &emit).is_ok());
+        // One naming the dropped root is refused with the typed reason.
+        emit.bindings_source
+            .push_str("\npub fn h() -> syn::Ident { todo() }");
+        assert_eq!(
+            seal_dependency_references(&catalog, &emit),
+            Err(DependencyRefusal::DroppedTransitive {
+                package: "syn".to_owned(),
+                ident: "syn".to_owned(),
+                site: "src/ffi.rs".to_owned(),
+            })
+        );
+    }
+
+    #[test]
+    fn a_renamed_lib_direct_crate_conflict_is_refused() {
+        // Package `async-stripe` exposes lib `stripe`: the direct set is built from
+        // the typed package name, so the `async-stripe` clash is caught as direct.
+        let refused = assemble_emit(&[
+            typed_crate("stripe", "async-stripe", &["async-stripe = \"=1.0.0\""]),
+            typed_crate(
+                "other",
+                "other",
+                &["other = \"=1.0.0\"", "async-stripe = \"=2.0.0\""],
+            ),
+        ]);
+        assert!(
+            refused_as(
+                &refused,
+                DependencyRefusal::PinConflict {
+                    name: "async-stripe".to_owned(),
+                    first: "1.0.0".to_owned(),
+                    second: "2.0.0".to_owned(),
+                }
+            ),
+            "a direct-crate conflict must refuse even when its lib ident differs: {refused:?}"
+        );
+    }
+
+    #[test]
+    fn a_legacy_member_transitive_conflict_is_refused() {
+        // Without a typed package name no member can prove `syn` is transitive.
+        let [a, mut b] = syn_split();
+        b.package_name = None;
+        b.dep_idents = BTreeMap::new();
+        let refused = assemble_emit(&[a, b]);
+        assert!(
+            refused_as(&refused, syn_pin_conflict()),
+            "a conflict involving a legacy member must fail closed: {refused:?}"
+        );
+    }
+
+    #[test]
+    fn a_transitive_conflict_without_a_known_ident_is_refused() {
+        // A dropped dep whose lib ident is unknown cannot be checked against
+        // emitted paths, so it is refused rather than dropped.
+        let [mut a, mut b] = syn_split();
+        a.dep_idents.remove("syn");
+        b.dep_idents.remove("syn");
+        let refused = assemble_emit(&[a, b]);
+        assert!(
+            refused_as(&refused, syn_pin_conflict()),
+            "an unidentifiable dropped dep must fail closed: {refused:?}"
+        );
+    }
+
+    #[test]
+    fn a_same_major_transitive_conflict_is_dropped_not_pinned() {
+        // No single pin is provably acceptable to every intermediate crate's
+        // requirement, so even a same-major disagreement leaves the choice to
+        // Cargo and the seal guards every emitted reference.
+        let e = assemble_emit(&[
+            typed_crate("a", "a", &["a = \"=1.0.0\"", "syn = \"=2.0.1\""]),
+            typed_crate(
+                "b",
+                "b",
+                &[
+                    "b = \"=1.0.0\"",
+                    "syn = { version = \"=2.0.119\", features = [\"full\"] }",
+                ],
+            ),
+        ]);
+        assert!(
+            e.as_ref().is_ok_and(|e| e
+                .as_ref()
+                .is_some_and(|e| e.dep_lines.iter().all(|l| !l.starts_with("syn")))),
+            "a same-major transitive disagreement is dropped: {e:?}"
+        );
+        let [mut a, b] = [
+            typed_crate("a", "a", &["a = \"=1.0.0\"", "syn = \"=2.0.1\""]),
+            typed_crate("b", "b", &["b = \"=1.0.0\"", "syn = \"=2.0.119\""]),
+        ];
+        a.bindings_source = "pub fn f() -> ::syn::Ident { g() }".to_owned();
+        let refused = assemble_emit(&[a, b]);
+        assert!(
+            refused_as(&refused, syn_dropped_at("src/ffi.rs")),
+            "a reference to the dropped same-major dep is refused: {refused:?}"
+        );
+    }
+
+    #[test]
+    fn a_dropped_transitive_named_by_a_glue_path_is_refused() {
+        let [a, b] = syn_split();
+        let catalog = [a, b];
+        let mut emit = assemble_emit(&catalog)
+            .expect("no emitted text names `syn` yet")
+            .expect("emit present");
+        emit.wrapper_glue.insert(
+            "ipe_a_span".to_owned(),
+            ipe_backend_rust::FfiWrapperGlue {
+                params: vec![Some(ipe_backend_rust::FfiGlueType::Record {
+                    rust_path: "::syn::Ident".to_owned(),
+                    fields: Vec::new(),
+                })],
+                result: None,
+            },
+        );
+        assert_eq!(
+            seal_dependency_references(&catalog, &emit),
+            Err(syn_dropped_at("ipe_a_span"))
+        );
+    }
+
+    #[test]
+    fn an_asserted_shim_naming_a_dropped_transitive_is_refused() {
+        let [a, b] = syn_split();
+        let catalog = [a, b];
+        let mut emit = assemble_emit(&catalog)
+            .expect("no emitted text names `syn` yet")
+            .expect("emit present");
+        let spec = |path: &str| ipe_ffi::asserted::ConstSpec {
+            path: ipe_canon::asserted::AssertedPath::parse(path).expect("valid path"),
+            scalar: ipe_ffi::carrier::ScalarCarrier::Int,
+            def_name: "limit".to_owned(),
+            wrapper_ident: "ipe_asserted_const_limit".to_owned(),
+        };
+        // A shim rooted at a declared crate passes the second seal.
+        let mut sound = emit.clone();
+        assert_eq!(
+            append_asserted_shims(&catalog, &mut sound, &[], &[spec("a::LIMIT")]),
+            Ok(())
+        );
+        assert_eq!(
+            append_asserted_shims(&catalog, &mut emit, &[], &[spec("syn::LIMIT")]),
+            Err(syn_dropped_at("src/ffi.rs"))
+        );
+    }
+
+    #[test]
+    fn a_dropped_ident_a_declared_package_answers_to_is_spared() {
+        // `syn-compat` is declared and its lib is `syn`, so `::syn::` still
+        // resolves after the conflicting `syn` package is dropped.
+        let [a, mut b] = syn_split();
+        let mut c = typed_crate("c", "c", &["c = \"=1.0.0\"", "syn-compat = \"=1.0.0\""]);
+        c.dep_idents.insert(
+            "syn-compat".to_owned(),
+            ipe_ffi::naming::RustIdent::parse("syn").expect("valid ident"),
+        );
+        b.bindings_source = "pub fn span() -> ::syn::Ident { g() }".to_owned();
+        let e = assemble_emit(&[a, b, c]);
+        assert!(
+            e.as_ref().is_ok_and(|e| e
+                .as_ref()
+                .is_some_and(|e| e.dep_lines.contains(&"syn-compat = \"=1.0.0\"".to_owned()))),
+            "an ident a declared package answers to is not refused: {e:?}"
+        );
+    }
+
+    #[test]
+    fn scanner_misses_are_refused_at_the_seal() {
+        for body in [
+            "pub fn f() -> S { S { ..syn::X::default() } }",
+            "use::syn::X;",
+            "pub fn f(x: &mut::syn::X) {}",
+            "pub fn f(x: u8) -> T { x as::syn::T }",
+            "pub fn f() { for v in::syn::iter() {} }",
+            "pub fn f(a: u8) -> bool { a>::syn::C }",
+            "use syn;",
+            "extern crate syn;",
+            "pub fn f() -> syn /* note */ :: Ident { g() }",
+            "pub fn f() -> r#syn::Ident { g() }",
+            "m!(syn);",
+        ] {
+            let [a, mut b] = syn_split();
+            b.bindings_source = body.to_owned();
+            let refused = assemble_emit(&[a, b]);
+            assert!(
+                refused_as(&refused, syn_dropped_at("src/ffi.rs")),
+                "{body}: {refused:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn unlexable_emitted_text_is_refused() {
+        let [a, mut b] = syn_split();
+        b.bindings_source = "pub fn f() { \"unterminated }".to_owned();
+        let refused = assemble_emit(&[a, b]);
+        assert!(
+            refused_as(
+                &refused,
+                DependencyRefusal::Unlexable {
+                    site: "src/ffi.rs".to_owned()
+                }
+            ),
+            "{refused:?}"
+        );
+    }
+
+    #[test]
+    fn inspected_members_splitting_a_named_transitive_are_refused() {
+        // Two inspection documents: each member links its own `syn` major and
+        // `a` declares the opaque handle `foreign Ident = { kind = Opaque
+        // "syn::Ident" }`. A declared opaque surfaces unconditionally (no
+        // binding has to resolve it), so the dropped root reaches the emit
+        // through exactly one site: the `Rust.A.Ident` foreign-type path.
+        let member = |name: &str, syn: &str, declared: serde_json::Value| {
+            let doc = serde_json::json!({
+                "pkg": name, "name": name, "version": "1.0.0",
+                "functions": [],
+                "constants": [],
+                "errors": [],
+                "transitiveDeps": [
+                    {"ident": name, "name": name, "version": "1.0.0"},
+                    {"ident": "syn", "name": "syn", "version": syn}
+                ],
+                "declaredOpaques": declared
+            })
+            .to_string();
+            let pkg = ipe_ffi::pkginfo::PkgInfo::decode_json(&doc).expect("decodes");
+            ipe_ffi::driver::installed_crate_from_pkg(name.to_owned(), &pkg).expect("installs")
+        };
+        let a = member("a", "2.0.119", serde_json::json!({"Ident": "::syn::Ident"}));
+        let b = member("b", "3.0.0", serde_json::json!({}));
+        assert_eq!(
+            a.opaque_types.get("Ident").map(String::as_str),
+            Some("::syn::Ident"),
+            "the declared opaque surfaces"
+        );
+        let refused = assemble_emit(&[a, b]);
+        assert!(
+            refused_as(&refused, syn_dropped_at("Rust.A.Ident")),
+            "{refused:?}"
         );
     }
 
@@ -4194,7 +5152,7 @@ version = \"1\"
         )
         .expect_err("must_refuse: an un-inspected type cannot mint a handle");
         assert!(
-            matches!(&err, CliError::UsageOwned(m) if m.contains("not an inspected type")),
+            matches!(&err, CliError::Usage(m) if m.contains("not an inspected type")),
             "{err:?}"
         );
     }
@@ -4223,7 +5181,7 @@ version = \"1\"
         let err = merge_provides(&doc, "geo", &[], &[], &[], &opaques, true)
             .expect_err("must_refuse: a transparent value type is not a handle");
         assert!(
-            matches!(&err, CliError::UsageOwned(m) if m.contains("TRANSPARENTLY")),
+            matches!(&err, CliError::Usage(m) if m.contains("TRANSPARENTLY")),
             "{err:?}"
         );
     }
@@ -4326,6 +5284,8 @@ version = \"1\"
             inspected_consts: BTreeMap::new(),
             cargo_deps: Vec::new(),
             wrapper_idents: BTreeSet::new(),
+            package_name: None,
+            dep_idents: BTreeMap::new(),
         }
     }
 
@@ -4444,13 +5404,21 @@ version = \"1\"
         let raw = "inspector exited with Some(1)\n\
             crates with build scripts found\n\
             pass --allow-build-scripts to proceed";
-        let err = map_inspector_error(raw.to_owned());
+        let err = map_inspector_error(crate::text::msg::command_refusal(&"add", &raw));
         match err {
             CliError::Resolve(msg) => {
                 assert!(
-                    msg.contains("--allow-build-scripts"),
-                    "the actionable flag must appear in the message"
+                    msg.starts_with(
+                        "warning: some crates in the dependency graph have build scripts.\n\
+                         Pass --allow-build-scripts to proceed"
+                    ),
+                    "the banner leads with the plain warning and flag: {msg:?}"
                 );
+                assert!(
+                    msg.ends_with("hint: pass --allow-build-scripts to proceed"),
+                    "the inspector hint closes the banner: {msg:?}"
+                );
+                assert!(!msg.contains('\u{1b}'), "the banner is plain text: {msg:?}");
             }
             other => panic!("expected Resolve, got {other:?}"),
         }
@@ -4760,5 +5728,40 @@ iced = "=0.12.1"
             choose_sandbox_route(&ipe_sandbox::Mechanism::Refused, vec![], true),
             SandboxRoute::Unsandboxed
         ));
+    }
+
+    /// An escape sequence in a dependency name cannot swallow the reasons after
+    /// it nor the closing no-sandbox warning: the name is terminal-safe from the
+    /// moment the refusal is built, and the relay's own pass stops any
+    /// sequence at the line break.
+    #[test]
+    fn an_escape_in_a_dependency_name_keeps_the_refusal_tail() {
+        use ipe_ffi::capability_scan::{Capability, RefuseReason};
+        let refusal = WrapperRefusal {
+            reasons: vec![
+                RefuseReason::NonStdDependency {
+                    name: crate::style::TerminalSafe::sanitize("dep\u{1b}]8;;https://evil"),
+                },
+                RefuseReason::DeclaredUnenforceable {
+                    cap: Capability::Network,
+                },
+            ],
+            proposed: BTreeSet::new(),
+        };
+        let relayed = crate::text::Message::relay(&refusal).to_string();
+        assert!(
+            relayed.contains("depends on `dep` — a dependency"),
+            "{relayed:?}"
+        );
+        assert!(relayed.contains("  - declares `"), "{relayed:?}");
+        assert!(
+            relayed.contains("inferred from its source: (none"),
+            "{relayed:?}"
+        );
+        assert!(
+            relayed.contains("Ipê has no runtime sandbox around the emitted app yet"),
+            "{relayed:?}"
+        );
+        assert!(!relayed.contains("evil"), "{relayed:?}");
     }
 }

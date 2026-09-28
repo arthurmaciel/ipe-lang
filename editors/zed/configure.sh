@@ -48,6 +48,12 @@ fi
 need rustup "Zed builds the extension's Rust part with rustup — install it: https://rustup.rs"
 need cargo "install a Rust toolchain with rustup: https://rustup.rs"
 need git "Zed fetches the grammar with git"
+# Zed compiles the extension for wasm32-wasip2 and adds the target itself when
+# missing, but only via rustup — silently, inside its UI, on the first install
+# attempt. Adding it here up front turns a missing target into a clear message
+# now instead of Zed's opaque "compiling Rust extension" failure later.
+rustup target add wasm32-wasip2 > /dev/null 2>&1 \
+    || warn "could not add the wasm32-wasip2 rustup target automatically — Zed builds this extension for it; run \`rustup target add wasm32-wasip2\` by hand"
 
 EXT_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/ipe/zed-ipe"
 

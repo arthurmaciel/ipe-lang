@@ -377,7 +377,14 @@ pub struct TransitiveDep {
 pub struct PackageName(String);
 
 impl PackageName {
-    fn parse(s: &str) -> Result<Self, crate::diag::WireDefect> {
+    /// Validate and wrap a Cargo package name.
+    ///
+    /// # Errors
+    ///
+    /// [`crate::diag::WireDefect::InvalidIdent`] when the string is empty, does
+    /// not start with an ASCII letter, or contains anything outside
+    /// `[A-Za-z0-9_-]`.
+    pub fn parse(s: &str) -> Result<Self, crate::diag::WireDefect> {
         let legal = !s.is_empty()
             && s.chars()
                 .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')

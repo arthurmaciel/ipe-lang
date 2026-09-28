@@ -2,6 +2,7 @@ exit: 0
 ---
 
   Ipê language - v<VERSION> - https://github.com/arthurmaciel/ipe-lang
+
   Compile a program and run the resulting binary.
 
   ipe run [<path>]

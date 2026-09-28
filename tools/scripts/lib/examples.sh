@@ -15,11 +15,19 @@
 #
 # Provides (all FUNCTIONS — call them, don't read arrays):
 #   all_examples            → every candidate example dir, one per line (no trailing /).
+#   all_examples_into <arr> → the same set, loaded into array <arr>.
 #   is_out_of_scope <dir>   → exit 0 IFF Go-FFI (imports an unresolvable Go-pkg module).
 #   is_web_example  <dir>   → exit 0 IFF Ipe.Web / Ipe.Http.Server (browser-drivable).
 #   example_shape   <dir>   → wasm|tui|webview|fyne|web|program
 #   build_set               → all_examples − Go-FFI (the BUILD sweep set).
 #   run_set / perf_set      → == build_set.
+
+# The shape/scope classifiers below decide with rg. Require it up front so a
+# missing rg fails loud here rather than silently misclassifying an example
+# (rg absent -> every `rg -q` reads as "no match" -> an example is dropped
+# from or kept in a set on a false signal instead of a hard error).
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/require-tool.sh"
+require_tool rg find sort perl
 
 # ── all_examples: every candidate dir on disk, trailing slash stripped ───────
 # The first-party dirs: numbered legacy examples, wasm, rust, ffi, and the
@@ -28,14 +36,22 @@
 # The `examples/wasm/*` glob is load-bearing: those dirs are non-numbered, so
 # without it they fall out of every sweep set and a stale shape rename rots them
 # silently.
-all_examples() {
-  local d globs=(examples/[0-9]*/ examples/wasm/*/ examples/rust/*/ examples/ffi/*/ examples/shapes/*/*/)
-  for d in "${globs[@]}"; do
-    [ -d "$d" ] || continue
-    d="${d%/}"
-    [ -f "$d/src/Main.ipe" ] || continue
-    printf '%s\n' "$d"
+all_examples_into() {
+  _require_out_name all_examples_into "${1:-}" array
+  local -n __ae_out="$1"
+  __ae_out=()
+  local __ae_d __ae_globs=(examples/[0-9]*/ examples/wasm/*/ examples/rust/*/ examples/ffi/*/ examples/shapes/*/*/)
+  for __ae_d in "${__ae_globs[@]}"; do
+    [ -d "$__ae_d" ] || continue
+    __ae_d="${__ae_d%/}"
+    [ -f "$__ae_d/src/Main.ipe" ] || continue
+    __ae_out+=("$__ae_d")
   done
+}
+all_examples() {
+  local -a dirs=()
+  all_examples_into dirs
+  [ "${#dirs[@]}" -eq 0 ] || printf '%s\n' "${dirs[@]}"
 }
 
 # ── _build_stdlib_index: ONE-TIME in-memory index of stdlib module paths ──────
@@ -50,9 +66,12 @@ declare -gA _IPE_STDLIB_INDEX
 _build_stdlib_index() {
   [ -n "${_IPE_STDLIB_INDEX_BUILT:-}" ] && return 0
   local f rest root
+  local -a stdlib_files
   for root in $IPE_STDLIB_DIRS; do
     [ -d "$root" ] || continue
-    while IFS= read -r f; do
+    stdlib_files=()
+    enumerate_files stdlib_files '*.ipe' "$root"
+    for f in "${stdlib_files[@]}"; do
       # index keys are relative to the stdlib ROOT (so Ipê/Core/String.ipe →
       # Ipê/Core/String, Core/String, String), mirroring the source layout.
       rest="${f#"$root"/}"; rest="${rest%.ipe}"
@@ -63,8 +82,14 @@ _build_stdlib_index() {
           *)   break ;;
         esac
       done
-    done < <(find "$root" -type f -name '*.ipe' 2>/dev/null)
+    done
   done
+  # No indexed stdlib means every bare stdlib import would misread as Go-FFI
+  # and silently drop its example from every set.
+  if [ "${#_IPE_STDLIB_INDEX[@]}" -eq 0 ]; then
+    echo "examples.sh: no stdlib module indexed under IPE_STDLIB_DIRS='$IPE_STDLIB_DIRS'" >&2
+    exit 2
+  fi
   _IPE_STDLIB_INDEX_BUILT=1
 }
 
@@ -85,19 +110,28 @@ is_out_of_scope() {
   # the per-commit gate.
   case "$dir" in */skyshop-rs) return 0 ;; esac
   _build_stdlib_index
+  # Enumerate the source set (checked, non-empty) first, then run rg directly
+  # over it, so neither a producer failure nor an rg error reads as "no
+  # imports found" → "in scope".
+  local -a ipe_files=()
+  enumerate_files ipe_files '*.ipe' "$dir/src"
+  local imports=""
+  match_capture imports "is_out_of_scope: import scan ($dir)" -- \
+    rg --no-filename -No '^[[:space:]]*import[[:space:]]+([A-Za-z0-9_.]+)' -r '$1' "${ipe_files[@]}" || true
   while read -r m; do
     [ -z "$m" ] && continue
     case "$m" in Ipê.*|Ipe.*|Rust.*) continue ;; esac # Ipê stdlib / Rust-FFI wrapper → in scope
     rel="${m//.//}"
     [ -n "${_IPE_STDLIB_INDEX[$rel]:-}" ] && continue
     if [ -z "$localdone" ]; then
-      localpaths=$'\n'"$(find "$dir" -type f -name '*.ipe' 2>/dev/null)"$'\n'
+      local -a project_files=()
+      enumerate_files project_files '*.ipe' "$dir"
+      localpaths=$'\n'"$(printf '%s\n' "${project_files[@]}")"$'\n'
       localdone=1
     fi
     case "$localpaths" in *"/${rel}.ipe"$'\n'*) continue ;; esac
     return 0                                          # unresolvable → Go-package → OUT
-  done < <(find "$dir/src" -type f -name '*.ipe' -exec \
-             rg --no-filename -No '^[[:space:]]*import[[:space:]]+([A-Za-z0-9_.]+)' -r '$1' {} + 2>/dev/null)
+  done <<< "$imports"
   return 1                                            # every import resolved → in scope
 }
 
@@ -149,7 +183,8 @@ example_manifest() {
 # ipe.toml) is the authoritative build-time signal.
 is_wasm_example() {
   local m; m="$(example_manifest "$1")"
-  [ -n "$m" ] && rg -q '^\[wasm\]|Package\.wasm' "$m" 2>/dev/null
+  [ -n "$m" ] || return 1
+  match_or_fail "is_wasm_example: $m" -- rg -q '^\[wasm\]|Package\.wasm' "$m"
 }
 
 # ── needs_ffi_install <dir>: a rust-dependencies example without bindings ─────
@@ -165,7 +200,7 @@ is_wasm_example() {
 needs_ffi_install() {
   local d="$1" m; m="$(example_manifest "$d")"
   [ -n "$m" ] || return 1
-  rg -q '^\[rust\.dependencies\]|Package\.rustDependencies' "$m" 2>/dev/null || return 1
+  match_or_fail "needs_ffi_install: $m" -- rg -q '^\[rust\.dependencies\]|Package\.rustDependencies' "$m" || return 1
   # Bindings already generated (cache present) → buildable, do not skip.
   [ -d "$d/.ipe/cache/ffi/rust" ] && return 1
   return 0
@@ -177,9 +212,34 @@ needs_ffi_install() {
 # so prose that names a backend (e.g. a `{-| … like Ipe.Web … -}` doc comment on
 # a CLI example) can't misclassify the example by its shape.
 _shape_match() { # $1=src dir  $2=regex
-  find "$1" -name '*.ipe' -exec cat {} + 2>/dev/null \
-    | perl -0777 -pe 's/\{-.*?-\}//gs; s/--[^\n]*//g' \
-    | rg -q -e "$2" 2>/dev/null
+  # Each stage runs alone with its own exit status checked — enumerate, strip
+  # with perl into a variable, then match on a herestring. No live pipe: a
+  # pipe would let an early stage's failure hide behind the matcher's "no
+  # match", and `rg -q` quitting early would SIGPIPE the writer into a false
+  # error.
+  local -a src_files=()
+  enumerate_files src_files '*.ipe' "$1"
+  # perl opens each file itself and dies on an open or read failure: its
+  # implicit `<>` loop only warns on an unreadable file and still exits 0,
+  # which would hand the matcher a partial text.
+  local text rc=0
+  # shellcheck disable=SC2016  # perl source, expanded by perl, not the shell
+  text="$(perl -e '
+    for my $f (@ARGV) {
+      open my $fh, "<", $f or die "_shape_match: cannot open $f: $!\n";
+      local $/;
+      my $src = <$fh>;
+      defined $src or die "_shape_match: cannot read $f: $!\n";
+      close $fh or die "_shape_match: cannot close $f: $!\n";
+      $src =~ s/\{-.*?-\}//gs;
+      $src =~ s/--[^\n]*//g;
+      print $src;
+    }' -- "${src_files[@]}")" || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    echo "_shape_match: perl comment strip over $1 exited $rc" >&2
+    exit 2
+  fi
+  match_or_fail "_shape_match: $1 ($2)" -- rg -q -e "$2" <<<"$text"
 }
 example_shape() {
   local d="$1" s="$1/src"
@@ -198,11 +258,14 @@ example_shape() {
 # ── build_set: all_examples minus Go-FFI (unresolvable-import examples) ──────
 build_set() {
   if [ -n "${_IPE_BUILD_SET+x}" ]; then printf '%s' "$_IPE_BUILD_SET"; return 0; fi
-  local d out=""
-  while IFS= read -r d; do
+  # The set is built into an array in this shell, never read from a process
+  # substitution whose writer's death would read as a clean end of the set.
+  local d out="" dirs=()
+  all_examples_into dirs
+  for d in "${dirs[@]}"; do
     is_out_of_scope "$d" && continue
     out+="$d"$'\n'
-  done < <(all_examples)
+  done
   _IPE_BUILD_SET="$out"
   printf '%s' "$out"
 }
@@ -236,4 +299,11 @@ first_party_check_set() {
     needs_ffi_install "$d" && continue
     printf '%s\n' "$d"
   done
+  # Explicit: without this, the function's exit status is whatever the LAST
+  # loop iteration's last command happened to return (e.g. a false `[ -f … ]`
+  # on the final glob entry) — an accident of enumeration order, not a signal
+  # of success/failure. A caller that checks this function's `$?` to detect a
+  # real producer failure needs 0 to mean "enumeration completed" reliably,
+  # even when it enumerated zero entries.
+  return 0
 }

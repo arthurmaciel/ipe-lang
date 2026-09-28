@@ -446,6 +446,8 @@ code! {
     /// inside a definition whose `Model` / `Msg` is still a type variable; the
     /// running app needs one concrete model and message type
     IPE_N0051 = "IPE-N0051", "an app entry is built with a Model or Msg that is still a type variable", "IPE-N0051";
+    /// terminal input passed as an app config field instead of a subscription
+    IPE_N0052 = "IPE-N0052", "terminal input is a subscription, not an app config field", "IPE-N0052";
 
     // -----------------------------------------------------------------------
     // Type (IPE-T####)
@@ -636,11 +638,25 @@ code! {
     /// let-bound, or passed as a value); it is legal only as a saturated one-argument
     /// call so every argument passes the committed-literal seal gate
     IPE_L0151 = "IPE-L0151", "`Secret.fromString` must be applied directly to its argument", "IPE-L0151";
+    /// a kernel whose handler the backend re-wraps per call (`Stream.stream`) was
+    /// referenced point-free or partially applied; the re-wrap needs the handler
+    /// in hand, so the kernel is legal only as a saturated call
+    IPE_L0152 = "IPE-L0152", "a handler-wrapping kernel must be applied to all its arguments", "IPE-L0152";
     /// `Ui.cells` (a terminal character-grid builder) was used in a Cli
     /// (`Cli.tea`) program. A Cli view returns `String` (line output),
     /// so a character grid has no denotation there. Use `Tui.tea` for
     /// a full-screen cell-grid app.
     IPE_L0153 = "IPE-L0153", "Ui.cells is terminal-screen-only and not available in the Cli shape", "IPE-L0153";
+    /// a higher-order kernel's callback returns a function.
+    ///
+    /// The kernel applies its callback at one exact arity, so a callback whose
+    /// final result is another arrow has no sound lowering.
+    IPE_L0154 = "IPE-L0154", "a higher-order kernel callback returns a function", "IPE-L0154";
+    /// a collection mapper needs more adapter parameters than one call site allows.
+    ///
+    /// Re-carrying the stored functions a mapper receives needs one fresh
+    /// parameter per wrapper and adapter position, bounded per call site.
+    IPE_L0155 = "IPE-L0155", "a collection mapper needs more adapter parameters than one call site allows", "IPE-L0155";
     /// expression nests too deeply for the backend
     IPE_L0200 = "IPE-L0200", "expression nests too deeply for the backend", "IPE-L0200";
 

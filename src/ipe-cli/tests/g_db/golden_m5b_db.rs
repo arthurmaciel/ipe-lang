@@ -723,3 +723,22 @@ fn db_decode_drift_fails_closed() {
 fn db_store_serial_pk_guard() {
     assert_runs_and_matches_oracle("db_store_serial_pk_guard");
 }
+
+// ── Store helper identity guard ──────────────────────────────────────────────
+
+/// A user binding named like an `Ipe.Db.Store` helper never stands in for it.
+///
+/// The program declares its own `primaryKeyNamed` (a different signature) and
+/// a `Verdict` union with `Compare` / `OpEq` constructors, then uses the
+/// `Store.primaryKey .slug` and `Store.eq .slug` accessor forms. The intercepts
+/// resolve the Store helper and constructors by their exact `Ipe.Db.Store`
+/// home, so the emitted crate builds and prints:
+///
+/// * `store-helper:ok` — the accessor form builds `PRIMARY KEY` DDL.
+/// * `store-cond:ok` — the `Store.eq` leaves build Store `Cond` values.
+/// * `user-fn:7` — the user `primaryKeyNamed` runs only where it is called.
+/// * `user-ctor:ok` — the user `OpEq` constructor stays a `Verdict`.
+#[test]
+fn db_store_named_helper_shadow() {
+    assert_runs_and_matches_oracle("db_store_named_helper_shadow");
+}
