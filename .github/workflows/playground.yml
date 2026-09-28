@@ -69,7 +69,7 @@ jobs:
       - uses: ./.github/actions/rust-toolchain-pinned
         with:
           targets: wasm32-unknown-unknown
-      - uses: mozilla-actions/sccache-action@v0.0.9
+      - uses: ./.github/actions/sccache
       - uses: Swatinem/rust-cache@v2
 
       - name: Build ipe-wasm (wasm32-unknown-unknown)
@@ -90,7 +90,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/rust-toolchain-pinned
-      - uses: mozilla-actions/sccache-action@v0.0.9
+      - uses: ./.github/actions/sccache
       - uses: Swatinem/rust-cache@v2
       - uses: taiki-e/install-action@nextest
 
