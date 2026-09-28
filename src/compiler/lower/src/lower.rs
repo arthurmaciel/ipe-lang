@@ -32816,6 +32816,7 @@ mod tests {
     /// A borrow inside the closure, a shadowing parameter, and the one
     /// consume-once lambda slot stay accepted by this gate.
     #[test]
+    #[allow(clippy::too_many_lines)] // one refusal program per closure shape, kept inline
     fn nonclone_move_out_of_recallable_closure_fails_closed() {
         use ipe_diagnostics::Feature;
         use ipe_intern::Symbol;
@@ -32958,6 +32959,7 @@ mod tests {
     /// A sequenced task whose capture-clone rewrite would clone a non-Clone
     /// effect carrier fails closed with IPE-L0135; an eager borrow stays accepted.
     #[test]
+    #[allow(clippy::too_many_lines)] // one refusal program per closure shape, kept inline
     fn nonclone_taskseq_capture_clone_fails_closed() {
         use ipe_diagnostics::Feature;
         use ipe_ir::{CallPin, Callee, Expr, FuncId, IrType, KernelFn, ModPath, OnFormKind};
