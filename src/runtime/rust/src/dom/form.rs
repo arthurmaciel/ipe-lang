@@ -46,9 +46,12 @@ pub fn decode_form_or_warn<T: serde::de::DeserializeOwned>(fd: FormData) -> Opti
             // (e.g. "unknown variant `<value>`" for an enum field). Escape it
             // before logging so embedded CR/LF/control bytes can't forge log
             // lines or inject terminal output.
-            eprintln!(
-                "[ipe.live] form decode failed, dispatching no Msg: {}",
-                crate::telemetry::json_escape(&e)
+            crate::system::emit_runtime_log(
+                "live",
+                &format!(
+                    "form decode failed, dispatching no Msg: {}",
+                    crate::telemetry::json_escape(&e)
+                ),
             );
             None
         }

@@ -609,7 +609,11 @@ fn store_refused_error(backend: &str, refused: &StoreOpenError) -> StoreConfigEr
 /// The startup line logged when a persistent `backend` store falls back to memory.
 #[cfg(any(feature = "db", feature = "redis_store"))]
 fn store_unavailable_log_line(backend: &str, refused: &StoreOpenError) -> String {
-    format!("[ipe.live] {backend} store unavailable ({refused}); falling back to memory")
+    let msg = crate::system::format_runtime_log(
+        "live",
+        &format!("{backend} store unavailable ({refused}); falling back to memory"),
+    );
+    crate::system::gutter_line(&msg, std::io::stderr().is_terminal())
 }
 
 // ─── SQLite store — persistent model checkpoint + live mem-cache ─────────────
@@ -1310,13 +1314,7 @@ where
         #[cfg(feature = "db")]
         StoreBackend::Sqlite => match SqliteStore::new(path, ttl, schema_tag).await {
             Ok(s) => {
-                eprintln!(
-                    "{}",
-                    crate::system::gutter_line(
-                        &format!("[ipe.live] session store: sqlite @ {path}"),
-                        std::io::stderr().is_terminal()
-                    )
-                );
+                crate::system::emit_runtime_log("live", &format!("session store: sqlite @ {path}"));
                 return Ok(Arc::new(s));
             }
             Err(e) if e.is_policy_refusal() => return Err(store_refused_error("sqlite", &e)),
@@ -1325,13 +1323,7 @@ where
         #[cfg(feature = "db")]
         StoreBackend::Postgres => match PostgresStore::new(path, ttl, schema_tag).await {
             Ok(s) => {
-                eprintln!(
-                    "{}",
-                    crate::system::gutter_line(
-                        "[ipe.live] session store: postgres",
-                        std::io::stderr().is_terminal()
-                    )
-                );
+                crate::system::emit_runtime_log("live", "session store: postgres");
                 return Ok(Arc::new(s));
             }
             Err(e) if e.is_policy_refusal() => return Err(store_refused_error("postgres", &e)),
@@ -1340,26 +1332,14 @@ where
         #[cfg(feature = "redis_store")]
         StoreBackend::Redis => match RedisStore::new(path, ttl, schema_tag).await {
             Ok(s) => {
-                eprintln!(
-                    "{}",
-                    crate::system::gutter_line(
-                        "[ipe.live] session store: redis",
-                        std::io::stderr().is_terminal()
-                    )
-                );
+                crate::system::emit_runtime_log("live", "session store: redis");
                 return Ok(Arc::new(s));
             }
             Err(e) => eprintln!("{}", store_unavailable_log_line("redis", &e)),
         },
         #[cfg(feature = "web")]
         StoreBackend::File => {
-            eprintln!(
-                "{}",
-                crate::system::gutter_line(
-                    &format!("[ipe.live] session store: file @ {path}"),
-                    std::io::stderr().is_terminal()
-                )
-            );
+            crate::system::emit_runtime_log("live", &format!("session store: file @ {path}"));
             return Ok(Arc::new(FileStore::new(path, ttl, schema_tag)));
         }
         // A parsed-but-feature-absent persistent backend is impossible
@@ -1385,11 +1365,11 @@ where
 /// confirmation lines in [`choose_store`] gutter inline: one indent rule, one
 /// place it is applied.
 pub(crate) fn memory_store_log_line(ttl: Duration) -> String {
-    let msg = format!(
-        "{} [ipe.live] session store: memory (ttl={})",
-        go_log_timestamp(),
-        go_duration_string(ttl)
+    let tagged = crate::system::format_runtime_log(
+        "live",
+        &format!("session store: memory (ttl={})", go_duration_string(ttl)),
     );
+    let msg = format!("{} {tagged}", go_log_timestamp());
     crate::system::gutter_line(&msg, std::io::stderr().is_terminal())
 }
 

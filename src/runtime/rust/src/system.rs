@@ -65,18 +65,41 @@ pub(crate) fn read_env_var(key: &str) -> Result<String, std::env::VarError> {
 /// two gutter-widths) — so this nests under them rather than under the
 /// top-level banner.
 ///
-/// Gated to `server`: the callers are the `server::server_listen` and
-/// `web::serve_web` HTTP `listening on` banners and the `web` session-store /
-/// console-mount startup lines, all `#[cfg(feature = "server")]` reachable
-/// (`web` implies `server`), so a build without the server surface would
-/// otherwise carry this as dead code.
-#[cfg(feature = "server")]
+/// Unconditional: every `[ipe.<tag>] ...` runtime log line, in every feature
+/// combination, flows through `emit_runtime_log` below, which calls this —
+/// so it can never be dead code.
 pub(crate) fn gutter_line(msg: &str, is_terminal: bool) -> String {
     if is_terminal {
         format!("    {msg}")
     } else {
         msg.to_string()
     }
+}
+
+/// Build the `"[ipe.<tag>] <msg>"` prefix. `pub(crate)` ONLY for the one caller
+/// that cannot use `emit_runtime_log` directly (`store::memory_store_log_line`,
+/// which must splice a timestamp BEFORE the tag); every other call site uses
+/// `emit_runtime_log`, so this is still the sole place the literal `"[ipe."`
+/// prefix is constructed.
+pub(crate) fn format_runtime_log(tag: &str, msg: &str) -> String {
+    format!("[ipe.{tag}] {msg}")
+}
+
+/// The single emitter for every `[ipe.<tag>] ...` runtime log line — session
+/// stores, live sessions, the console proxy, hub/push exporters, telemetry
+/// spill, list/cache/webview warnings, and any future one. Every such site
+/// routes through here instead of hand-rolling `eprintln!("[ipe.<tag>] ...")`,
+/// so `gutter_line`'s human-terminal indent applies uniformly with no bypass
+/// path. Pinned by the source scan in `runtime_log_emitter_tests` below.
+pub(crate) fn emit_runtime_log(tag: &str, msg: &str) {
+    use std::io::IsTerminal;
+    eprintln!(
+        "{}",
+        gutter_line(
+            &format_runtime_log(tag, msg),
+            std::io::stderr().is_terminal()
+        )
+    );
 }
 
 /// Resolve the port an HTTP listener binds: `env_value` (as injected by
@@ -1148,7 +1171,7 @@ mod exit_hook_tests {
     }
 }
 
-#[cfg(all(test, feature = "server"))]
+#[cfg(test)]
 mod gutter_line_tests {
     use super::gutter_line;
 
@@ -1168,6 +1191,94 @@ mod gutter_line_tests {
                 false
             ),
             "[ipe.http.server] listening on http://127.0.0.1:8000"
+        );
+    }
+}
+
+/// Drift guard for the "every `[ipe.<tag>] ...` runtime log line goes through
+/// one emitter" invariant: `emit_runtime_log`/`format_runtime_log` above are
+/// meant to be the ONLY place that ever constructs the `"[ipe.<tag>]"` prefix.
+/// A hand-rolled `eprintln!`/`println!`/`writeln!` carrying that literal
+/// bypasses `gutter_line`'s terminal-indent handling, so this scans every
+/// `.rs` file under the runtime crate's `src/` (this file excepted — it IS the
+/// emitter) and fails if any such macro invocation still carries one. Styled
+/// after `install_style_drift.rs`'s script-scanning drift tests: a plain
+/// substring/window scan, not a real parser, is enough to catch the class of
+/// regression (a new call site hand-rolling the tag) without reimplementing a
+/// Rust parser.
+#[cfg(test)]
+mod runtime_log_emitter_tests {
+    use std::path::{Path, PathBuf};
+
+    /// Walk `dir` collecting every `.rs` file, skipping `system.rs` (the
+    /// sanctioned construction site) so the scan only sees call sites that
+    /// must route through `emit_runtime_log`.
+    fn collect_rs_files(dir: &Path, out: &mut Vec<PathBuf>) {
+        let entries = std::fs::read_dir(dir)
+            .unwrap_or_else(|e| panic!("could not read dir {}: {e}", dir.display()));
+        for entry in entries {
+            let entry = entry.expect("readable dir entry");
+            let path = entry.path();
+            if path.is_dir() {
+                collect_rs_files(&path, out);
+                continue;
+            }
+            if path.extension().and_then(|e| e.to_str()) != Some("rs") {
+                continue;
+            }
+            if path.file_name().and_then(|f| f.to_str()) == Some("system.rs") {
+                continue;
+            }
+            out.push(path);
+        }
+    }
+
+    /// True when a `"[ipe.` literal appears within a short window after an
+    /// `eprintln!`/`println!`/`writeln!` invocation in `content` — wide enough
+    /// to span a realistic multi-line macro call, narrow enough not to bleed
+    /// into an unrelated later macro call.
+    fn has_hand_rolled_tag(content: &str) -> bool {
+        for macro_name in ["eprintln!", "println!", "writeln!"] {
+            let mut search_from = 0;
+            while let Some(rel) = content[search_from..].find(macro_name) {
+                let start = search_from + rel;
+                let end = (start + 400).min(content.len());
+                if content[start..end].contains("\"[ipe.") {
+                    return true;
+                }
+                search_from = start + macro_name.len();
+            }
+        }
+        false
+    }
+
+    #[test]
+    fn no_runtime_module_hand_rolls_an_ipe_tagged_log_line() {
+        let src_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut files = Vec::new();
+        collect_rs_files(&src_dir, &mut files);
+        assert!(
+            files.len() > 10,
+            "sanity: expected to scan more than 10 files under {}, found {}",
+            src_dir.display(),
+            files.len()
+        );
+
+        let mut violations = Vec::new();
+        for path in &files {
+            let content = std::fs::read_to_string(path)
+                .unwrap_or_else(|e| panic!("could not read {}: {e}", path.display()));
+            if has_hand_rolled_tag(&content) {
+                violations.push(path.display().to_string());
+            }
+        }
+        assert!(
+            violations.is_empty(),
+            "found `eprintln!`/`println!`/`writeln!` hand-rolling an `[ipe.<tag>]` \
+             prefix outside system.rs — route through `crate::system::emit_runtime_log` \
+             (or, for the one timestamp-prefixed exception, `crate::system::format_runtime_log` \
+             + `crate::system::gutter_line`) instead:\n{}",
+            violations.join("\n")
         );
     }
 }

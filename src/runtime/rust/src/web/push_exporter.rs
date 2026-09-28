@@ -80,9 +80,12 @@ pub async fn enable_from_env() {
         _ => return,
     };
     if !url_allows_cleartext_token(&parent) {
-        eprintln!(
-            "[ipe.push] refusing to push ingest token over non-https {PARENT_ENV}={parent}; \
-             use https:// (or a localhost loopback); exporter disabled"
+        crate::system::emit_runtime_log(
+            "push",
+            &format!(
+                "refusing to push ingest token over non-https {PARENT_ENV}={parent}; \
+                 use https:// (or a localhost loopback); exporter disabled"
+            ),
         );
         return;
     }
@@ -145,7 +148,10 @@ fn enable(label: &str, ingest_url: String, interval_ms: u64) {
     if SENDER.set(tx).is_err() {
         return; // lost an enable race
     }
-    eprintln!("[ipe.push] {label} push → {ingest_url} every {interval_ms}ms");
+    crate::system::emit_runtime_log(
+        "push",
+        &format!("{label} push → {ingest_url} every {interval_ms}ms"),
+    );
     tokio::spawn(batcher(rx, ingest_url, token, interval_ms));
 }
 
@@ -279,7 +285,7 @@ async fn flush(client: &reqwest::Client, ingest_url: &str, token: Option<&str>, 
         req = req.header("x-ipe-ingest-token", t);
     }
     if let Err(e) = req.send().await {
-        eprintln!("[ipe.push] flush to {ingest_url}: {e}");
+        crate::system::emit_runtime_log("push", &format!("flush to {ingest_url}: {e}"));
     }
 }
 

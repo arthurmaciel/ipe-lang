@@ -119,14 +119,20 @@ pub fn spawn_console(child_port: u16, store: &str, child_collects: bool) -> Opti
             if let Ok(mut g) = CHILD.lock() {
                 *g = Some(child);
             }
-            eprintln!(
-                "[ipe.console] spawned console child on :{child_port} (bin {})",
-                bin.display()
+            crate::system::emit_runtime_log(
+                "console",
+                &format!(
+                    "spawned console child on :{child_port} (bin {})",
+                    bin.display()
+                ),
             );
             Some(())
         }
         Err(e) => {
-            eprintln!("[ipe.console] spawn failed ({e}); falling back to in-process console");
+            crate::system::emit_runtime_log(
+                "console",
+                &format!("spawn failed ({e}); falling back to in-process console"),
+            );
             None
         }
     }
@@ -406,8 +412,11 @@ pub async fn ensure_console_proxy() -> bool {
         return false;
     }
     if !wait_ready(port, READY_TIMEOUT).await {
-        eprintln!(
-            "[ipe.console] child not ready within {READY_TIMEOUT:?}; falling back to in-process console"
+        crate::system::emit_runtime_log(
+            "console",
+            &format!(
+                "child not ready within {READY_TIMEOUT:?}; falling back to in-process console"
+            ),
         );
         shutdown_console();
         return false;
@@ -451,7 +460,10 @@ pub async fn ensure_console_proxy() -> bool {
         .is_err()
     {
         // Already initialised once (shouldn't happen — one Web server per process).
-        eprintln!("[ipe.console] proxy already initialised; keeping the first mount");
+        crate::system::emit_runtime_log(
+            "console",
+            "proxy already initialised; keeping the first mount",
+        );
     }
     // NOTE: child teardown on shutdown is now owned by the ONE coherent
     // graceful-shutdown path in `web::web_shutdown_signal` (it calls
@@ -460,7 +472,10 @@ pub async fn ensure_console_proxy() -> bool {
     // would race, and that hook's `std::process::exit(130)` would defeat the
     // exit-0-on-clean-shutdown contract. The PR_SET_PDEATHSIG + kill_on_drop on
     // the child remain the defense-in-depth floor for non-graceful parent death.
-    eprintln!("[ipe.console] reverse-proxy ready at {CONSOLE_BASE}/* → 127.0.0.1:{port}");
+    crate::system::emit_runtime_log(
+        "console",
+        &format!("reverse-proxy ready at {CONSOLE_BASE}/* → 127.0.0.1:{port}"),
+    );
     true
 }
 

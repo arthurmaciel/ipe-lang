@@ -86,8 +86,11 @@ pub async fn enable_from_env() {
     }
     let token = crate::system::read_env_var(TOKEN_ENV).unwrap_or_default();
     if token.len() < MIN_TOKEN_BYTES {
-        eprintln!(
-            "[ipe.hub] {TOKEN_ENV} must be ≥{MIN_TOKEN_BYTES} bytes to push to {hub}; exporter disabled"
+        crate::system::emit_runtime_log(
+            "hub",
+            &format!(
+                "{TOKEN_ENV} must be ≥{MIN_TOKEN_BYTES} bytes to push to {hub}; exporter disabled"
+            ),
         );
         return;
     }
@@ -110,9 +113,12 @@ pub async fn enable_from_env() {
         Err(_) => false,
     };
     if !scheme_ok {
-        eprintln!(
-            "[ipe.hub] refusing to push bearer token over non-https {HUB_ENV}={hub}; \
-             use https:// (or a localhost loopback); exporter disabled"
+        crate::system::emit_runtime_log(
+            "hub",
+            &format!(
+                "refusing to push bearer token over non-https {HUB_ENV}={hub}; \
+                 use https:// (or a localhost loopback); exporter disabled"
+            ),
         );
         return;
     }
@@ -131,7 +137,10 @@ pub async fn enable_from_env() {
     if SENDER.set(tx).is_err() {
         return;
     }
-    eprintln!("[ipe.hub] OTLP push → {base}/v1/{{logs,traces}} every {interval_ms}ms");
+    crate::system::emit_runtime_log(
+        "hub",
+        &format!("OTLP push → {base}/v1/{{logs,traces}} every {interval_ms}ms"),
+    );
     tokio::spawn(batcher(rx, base, token, service, interval_ms));
 }
 
@@ -284,7 +293,7 @@ async fn push_one(client: &reqwest::Client, base: &str, token: &str, batch: &Otl
     {
         Ok(r) => r.status().is_success(),
         Err(e) => {
-            eprintln!("[ipe.hub] push {url}: {e}");
+            crate::system::emit_runtime_log("hub", &format!("push {url}: {e}"));
             false
         }
     }
