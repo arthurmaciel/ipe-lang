@@ -57,7 +57,12 @@ fn resolve_user_sources(
 }
 
 /// Type a driver failure as the server's load error, keeping its rendered text.
+///
+/// The match names every [`CliError`] variant with no fallback arm, so a new
+/// variant cannot reach the editor until someone decides whether it degrades
+/// the load (single-file fallback, retried per edit) or refuses it.
 fn load_error(err: &CliError) -> LoadError {
+    use crate::owner_trust::TrustSubject;
     let detail = err.to_string();
     match err {
         CliError::Io { .. } => LoadError::Io(detail),
@@ -65,7 +70,55 @@ fn load_error(err: &CliError) -> LoadError {
         CliError::FileTooLarge { .. } | CliError::DiscoveryLimitReached { .. } => {
             LoadError::Limit(detail)
         }
-        _ => LoadError::Pipeline(detail),
+        CliError::TrustRefused(refusal) => match refusal.subject() {
+            TrustSubject::Ffi => LoadError::FfiUntrusted(detail),
+            TrustSubject::Manifest => LoadError::ManifestUntrusted(detail),
+        },
+        CliError::Usage(_)
+        | CliError::UnknownCommand { .. }
+        | CliError::Pipeline { .. }
+        | CliError::RuntimeNotFound
+        | CliError::RuntimeDirInvalid { .. }
+        | CliError::RuntimeHomeUnknown
+        | CliError::CacheHomeUnknown
+        | CliError::EnvDirNotAbsolute { .. }
+        | CliError::RuntimeMaterializeFailed { .. }
+        | CliError::RuntimeVersionMismatch { .. }
+        | CliError::EmittedBuildFailed { .. }
+        | CliError::UnknownCode { .. }
+        | CliError::DocNotFound { .. }
+        | CliError::StaticRefusal(_)
+        | CliError::CapabilityMismatch { .. }
+        | CliError::Resolve(_)
+        | CliError::LockRefused(_)
+        | CliError::HashMismatch { .. }
+        | CliError::Diff(_)
+        | CliError::SemverRejected { .. }
+        | CliError::PackageAudit(_)
+        | CliError::Publish(_)
+        | CliError::VersionRefused { .. }
+        | CliError::DocCoverage(_)
+        | CliError::DocExamplesFailed(_)
+        | CliError::CommandUsage { .. }
+        | CliError::UnknownGroupSub { .. }
+        | CliError::VerifyFailed { .. }
+        | CliError::TestFailed { .. }
+        | CliError::UpgradeNoPrebuilt { .. }
+        | CliError::ToolchainMissing(_)
+        | CliError::HealthCritical
+        | CliError::LintGateFailed
+        | CliError::EjectUnsupported { .. }
+        | CliError::DiagnosticJsonEmitted
+        | CliError::PathEscape { .. }
+        | CliError::OutputRefused(_)
+        | CliError::UpgradeFeedUnreachable
+        | CliError::UpgradeCheckExit { .. }
+        | CliError::AdvisoryVulnerable(_)
+        | CliError::AdvisoryDbUnreachable { .. }
+        | CliError::AdvisoryDbMalformed { .. }
+        | CliError::WasiRunFeatureDisabled
+        | CliError::WasiRunFailed { .. }
+        | CliError::WasiRunExited { .. } => LoadError::Pipeline(detail),
     }
 }
 
@@ -124,4 +177,193 @@ pub fn run_lsp(rest: &[String]) -> Result<(), CliError> {
         return Err(CliError::Usage(text::msg::lsp_takes_no_arguments()));
     }
     ipe_lsp_server::run_stdio(&DriverLoader).map_err(|e| CliError::Usage(text::msg::lsp_failed(&e)))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+    #[cfg(unix)]
+    use std::os::unix::fs::PermissionsExt as _;
+
+    use super::*;
+    use crate::io_bounded::SourceRefusal;
+    use crate::owner_trust::TrustRefusal;
+
+    /// A fresh scratch directory for one test.
+    #[allow(clippy::expect_used)] // test fixture: a failed mkdir IS the failure
+    fn scratch_dir(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("ipe-lsp-load-{tag}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).expect("create scratch dir");
+        dir
+    }
+
+    /// Every trust refusal, one per variant.
+    fn every_trust_refusal() -> Vec<TrustRefusal> {
+        let path = || PathBuf::from("/p/.ipe/cache/ffi/rust");
+        let manifest = || PathBuf::from("/p/package.ipe");
+        vec![
+            TrustRefusal::ManifestSymlink(manifest()),
+            TrustRefusal::ManifestUntrusted(manifest()),
+            TrustRefusal::ManifestUnverifiable(manifest()),
+            TrustRefusal::FfiCacheUnverifiable(path()),
+            TrustRefusal::FfiCacheSymlink(path()),
+            TrustRefusal::FfiCacheUntrusted(path()),
+            TrustRefusal::FfiCacheNotRegular(path()),
+            TrustRefusal::FfiCacheTooManyEntries {
+                path: path(),
+                cap: 1,
+            },
+            TrustRefusal::FfiCatalog(Box::new(ipe_ffi::diag::Diagnostic::ArtifactIo {
+                path: "/p/x.consumer.json".to_owned(),
+                detail: "artifact is missing".to_owned(),
+            })),
+            TrustRefusal::FfiReservedModule {
+                slug: "x".to_owned(),
+            },
+            TrustRefusal::FfiReservedWrapperPrefix {
+                slug: "x".to_owned(),
+                ident: "ipe_asserted_x".to_owned(),
+            },
+        ]
+    }
+
+    #[test]
+    fn each_failure_class_maps_to_its_named_load_error() {
+        let io = CliError::Io {
+            path: PathBuf::from("/p/Main.ipe"),
+            source: std::io::Error::other("gone"),
+        };
+        let refused = CliError::SourceRefused {
+            path: PathBuf::from("/p/Pipe.ipe"),
+            reason: SourceRefusal::NotRegularFile,
+        };
+        let too_large = CliError::FileTooLarge {
+            path: PathBuf::from("/p/Big.ipe"),
+            max: 1,
+        };
+        let too_deep = CliError::DiscoveryLimitReached {
+            detail: "64".to_owned(),
+        };
+        assert_eq!(load_error(&io), LoadError::Io(io.to_string()));
+        assert_eq!(
+            load_error(&refused),
+            LoadError::Refused(refused.to_string())
+        );
+        assert_eq!(
+            load_error(&too_large),
+            LoadError::Limit(too_large.to_string())
+        );
+        assert_eq!(
+            load_error(&too_deep),
+            LoadError::Limit(too_deep.to_string())
+        );
+        for pipeline in [
+            CliError::Usage(text::msg::lsp_takes_no_arguments()),
+            CliError::RuntimeNotFound,
+            CliError::HealthCritical,
+            CliError::LintGateFailed,
+        ] {
+            assert_eq!(
+                load_error(&pipeline),
+                LoadError::Pipeline(pipeline.to_string()),
+                "{pipeline:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn every_trust_refusal_is_refused_not_degraded() {
+        for refusal in every_trust_refusal() {
+            let manifest = matches!(
+                refusal,
+                TrustRefusal::ManifestSymlink(_)
+                    | TrustRefusal::ManifestUntrusted(_)
+                    | TrustRefusal::ManifestUnverifiable(_)
+            );
+            let err = CliError::TrustRefused(refusal);
+            let detail = err.to_string();
+            let expected = if manifest {
+                LoadError::ManifestUntrusted(detail)
+            } else {
+                LoadError::FfiUntrusted(detail)
+            };
+            let got = load_error(&err);
+            assert_eq!(got, expected, "{err:?}");
+            assert_eq!(
+                got.disposition(),
+                ipe_lsp_server::LoadDisposition::Refuse,
+                "{err:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn every_source_refusal_degrades() {
+        for reason in [SourceRefusal::NotRegularFile, SourceRefusal::AccessDenied] {
+            let err = CliError::SourceRefused {
+                path: PathBuf::from("/p/Pipe.ipe"),
+                reason,
+            };
+            let got = load_error(&err);
+            assert!(matches!(got, LoadError::Refused(_)), "{got:?}");
+            assert_eq!(got.disposition(), ipe_lsp_server::LoadDisposition::Degrade);
+        }
+    }
+
+    /// Make every component of `root/rel` a directory only its owner may write.
+    #[allow(clippy::expect_used)] // test fixture: a failed mkdir IS the failure
+    fn private_chain(root: &Path, rel: &str) -> PathBuf {
+        let mut dir = root.to_path_buf();
+        for segment in rel.split('/') {
+            dir.push(segment);
+            fs::create_dir_all(&dir).expect("create cache component");
+            #[cfg(unix)]
+            fs::set_permissions(&dir, fs::Permissions::from_mode(0o700)).expect("chmod");
+        }
+        dir
+    }
+
+    /// A tampered FFI catalog refuses the load rather than degrading it.
+    #[test]
+    #[allow(clippy::expect_used)] // test fixture: a failed write IS the failure
+    fn a_tampered_catalog_refuses_the_load() {
+        let dir = scratch_dir("tampered-catalog");
+        let main = dir.join("Main.ipe");
+        let text = "module Main exposing (main)\n\nmain = 0\n";
+        fs::write(&main, text).expect("write Main.ipe");
+        let cache = private_chain(&dir, ipe_ffi::driver::FFI_CACHE_REL);
+        fs::write(cache.join("x.consumer.json"), "{ not json").expect("write artifact");
+        let loaded = DriverLoader.load(None, &main, Some(text));
+        let _ = fs::remove_dir_all(&dir);
+        assert!(
+            matches!(&loaded, Err(LoadError::FfiUntrusted(_))),
+            "{:?}",
+            loaded.err()
+        );
+    }
+
+    /// An imported FIFO degrades the load: the user can fix it, so edits retry.
+    #[cfg(unix)]
+    #[test]
+    #[allow(clippy::expect_used)] // test fixture: a failed write or `mkfifo` IS the failure
+    fn an_imported_fifo_degrades_the_load() {
+        let dir = scratch_dir("fifo");
+        let main = dir.join("Main.ipe");
+        let text = "module Main exposing (main)\n\nimport Pipe\n\nmain = Pipe.x\n";
+        fs::write(&main, text).expect("write Main.ipe");
+        let made = std::process::Command::new("mkfifo")
+            .arg(dir.join("Pipe.ipe"))
+            .status()
+            .expect("run mkfifo");
+        assert!(made.success(), "mkfifo creates the fixture");
+        let loaded = DriverLoader.load(None, &main, Some(text));
+        let _ = fs::remove_dir_all(&dir);
+        let err = loaded.err();
+        assert!(matches!(err, Some(LoadError::Refused(_))), "{err:?}");
+        assert_eq!(
+            err.as_ref().map(LoadError::disposition),
+            Some(ipe_lsp_server::LoadDisposition::Degrade)
+        );
+    }
 }
