@@ -45,6 +45,7 @@ mod no_silent_outline_none;
 mod no_simple_let_body;
 mod prefer_pipeline;
 mod prim_param;
+mod rewrite;
 mod simplify_cons_append;
 mod simplify_double_not;
 mod simplify_map_identity;
@@ -55,9 +56,7 @@ mod wrapper_consistency;
 mod wrapper_consistency_cross;
 
 #[cfg(test)]
-mod simplify_tests;
-#[cfg(test)]
-mod style_tests;
+mod tests;
 
 use ipe_diagnostics::{Located, Span};
 use ipe_intern::{Interner, Symbol};

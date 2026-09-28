@@ -3,12 +3,21 @@
 //! Ported from elm-review-simplify's `[ a ] ++ xs --> a :: xs` check. `++` on a
 //! single-element list literal is exactly a `::`, without the extra list
 //! wrapper. Only a single-operator `++` chain whose left operand is a
-//! one-element list literal is matched.
+//! one-element list literal is matched. `++` and `::` share precedence 5,
+//! right-associative, so the right operand keeps its meaning verbatim.
+//!
+//! Fix: the matched span is replaced by `a :: xs`, where `a` is parenthesised
+//! unless it binds tighter than every operator (`[ x |> f ] ++ xs` becomes
+//! `(x |> f) :: xs`), and the result keeps the match's own grouping parens. No
+//! fix is offered when the dropped `[ ] ++` text holds a comment.
 
 use ipe_syntax::Expr_;
 
 use crate::finding::Finding;
+use crate::rules::rewrite::{drops_comment, keep_wrapping, operand, with_fix};
 use crate::rules::{Ctx, visit_exprs};
+
+const RULE: &str = "simplify-cons-append";
 
 pub fn check(ctx: &Ctx) -> Vec<Finding> {
     let mut findings = Vec::new();
@@ -28,17 +37,30 @@ pub fn check(ctx: &Ctx) -> Vec<Finding> {
         let [single] = items.as_slice() else {
             return;
         };
-        let head = ctx.slice(single.span).trim();
+        let message = "appending a single-element list restates a `::`".to_owned();
+        let suppress = format!("suppress: `-- ipe-lint: allow {RULE}`");
         let tail = ctx.slice(rhs.span).trim();
-        findings.push(ctx.advisory(
-            "simplify-cons-append",
-            expr.span,
-            "appending a single-element list restates a `::`".to_owned(),
-            vec![
-                format!("write `{head} :: {tail}`"),
-                "suppress: `-- ipe-lint: allow simplify-cons-append`".to_owned(),
-            ],
-        ));
+        let fix = operand(ctx, single)
+            .filter(|_| {
+                !tail.is_empty() && !drops_comment(ctx, expr.span, &[single.span, rhs.span])
+            })
+            .map(|head| keep_wrapping(ctx, expr, format!("{head} :: {tail}")));
+        findings.push(match fix {
+            Some(simpler) => with_fix(
+                ctx,
+                RULE,
+                expr.span,
+                message,
+                vec![format!("write `{simpler}`"), suppress],
+                simpler,
+            ),
+            None => ctx.advisory(
+                RULE,
+                expr.span,
+                message,
+                vec!["cons the element with `::`".to_owned(), suppress],
+            ),
+        });
     });
     findings
 }

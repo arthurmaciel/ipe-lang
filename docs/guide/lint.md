@@ -50,20 +50,31 @@ still drive the ecosystem toward "invalid states unrepresentable".
 | `no-bool-literal-compare` | A comparison against a `Bool` literal: `done == True` → `done`, `done /= True` → `not done`. | advisory |
 | `no-redundant-bool-if` | An `if` choosing between `Bool` literals: `if c then True else False` → `c`. | advisory |
 | `no-simple-let-body` | A `let` whose body only returns its last binding: `let total = a + b in total` → `a + b`. | advisory |
-| `simplify-double-not` | A double negation: `not (not x)` → `x`. | advisory |
-| `simplify-map-identity` | Mapping the identity function: `List.map identity xs` → `xs`. | advisory |
-| `simplify-cons-append` | Appending a single-element list: `[ a ] ++ xs` → `a :: xs`. | advisory |
-| `no-redundant-cons` | Consing onto a list literal: `x :: [ a, b ]` → `[ x, a, b ]`. | advisory |
-| `no-redundant-concat` | Flattening a single-element list of lists (or strings): `List.concat [ xs ]` → `xs`. | advisory |
+| `simplify-double-not` | A double negation: `not (not x)` → `x`. | ✅ `--fix` |
+| `simplify-map-identity` | Mapping the identity function: `List.map identity xs` → `xs`. The partial `List.map identity` is reported without a fix — `identity` alone has the wider type `a -> a`. | ✅ `--fix` (full application) |
+| `simplify-cons-append` | Appending a single-element list: `[ a ] ++ xs` → `a :: xs`. | ✅ `--fix` |
+| `no-redundant-cons` | Consing onto a list literal: `x :: [ a, b ]` → `[ x, a, b ]`. | ✅ `--fix` |
+| `no-redundant-concat` | Flattening a single-element list of lists (or strings): `List.concat [ xs ]` → `xs`. | ✅ `--fix` |
 | `no-missing-type-annotation` | A top-level declaration with no `: T` signature. `Allow` by default — opt in via `lint.ipe` (`Lint.warn "no-missing-type-annotation"`). | advisory |
 
 An **advisory** rule reports and teaches but never rewrites your code: its remedy
 is a decision — an exported signature to change and thread through every call
-site, a name to choose — not a mechanical edit. `prefer-pipeline` is the
-exception — `x |> f` and `f <| x` both desugar to exactly `f x`, so either
-rewrite is provably equivalent; `--fix` applies the `|>` form. Re-running
-`ipe lint --fix` is idempotent: it reports "no machine-applicable fixes" once
-every fix has landed.
+site, a name to choose — not a mechanical edit. A ✅ rule's rewrite is provably
+equivalent. `x |> f` and `f <| x` both desugar to exactly `f x`, so
+`prefer-pipeline` may apply either (`--fix` picks `|>`). The `simplify-*` and
+`no-redundant-*` rewrites keep their meaning under three guards:
+
+- **Grouping is preserved.** A kept piece is parenthesised unless it is
+  self-delimiting, so `[ x |> f ] ++ xs` becomes `(x |> f) :: xs`, not
+  `x |> f :: xs`.
+- **No comment is deleted.** When the text a rewrite would drop holds a
+  comment, the finding is reported without a fix.
+- **The name really is the stdlib one.** A module that rebinds `not` or
+  `identity`, or whose `List.` / `String.` qualifier resolves to some other
+  module (`import Foo as List`, a project `Utils.List`), gets no finding at all.
+
+Re-running `ipe lint --fix` is idempotent: it reports "no machine-applicable
+fixes" once every fix has landed.
 
 ## Configuring it — `lint.ipe`
 
