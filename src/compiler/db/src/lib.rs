@@ -1695,29 +1695,10 @@ pub fn extract_imports_from_source(source: &str) -> Vec<Vec<String>> {
 /// Best-effort line scan (`import <path>` at line start), used ONLY when the
 /// source does not lex — see [`extract_imports_from_source`].
 fn line_scan_imports(source: &str) -> Vec<Vec<String>> {
-    let mut imports: Vec<Vec<String>> = Vec::new();
-    for line in source.lines() {
-        let trimmed = line.trim();
-        let Some(after_import) = trimmed.strip_prefix("import ") else {
-            continue;
-        };
-        // Take the token after `import `, stopping at `as`, `exposing`, or
-        // whitespace.
-        let rest = after_import.trim_start();
-        let module_str = rest
-            .split(|c: char| c.is_whitespace() || c == '(')
-            .next()
-            .unwrap_or("");
-        // Remove a trailing `as` keyword if it bled in (shouldn't happen but
-        // defensive).
-        let module_str = module_str.strip_suffix(" as").map_or(module_str, str::trim);
-        let module_str = module_str.trim_end_matches(" as");
-        let parts: Vec<String> = module_str.split('.').map(str::to_owned).collect();
-        if parts.first().is_some_and(|s| !s.is_empty()) {
-            imports.push(parts);
-        }
-    }
-    imports
+    scan_import_spellings(source)
+        .into_iter()
+        .map(|spelling| spelling.path)
+        .collect()
 }
 
 /// One `import <path>[ as <alias>]` header line: the dotted path plus its
