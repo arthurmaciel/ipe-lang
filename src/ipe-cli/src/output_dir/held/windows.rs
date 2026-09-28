@@ -207,17 +207,12 @@ fn id_of(file: &File) -> io::Result<DirId> {
     })
 }
 
-/// Whether `name` is a single plain entry name.
+/// Whether `name` is a single plain entry name ([`win32_name::is_verbatim_entry_name`]).
 ///
-/// A separator, `.`, `..`, a `:` (which would address an alternate data
-/// stream), or a reserved device name (`CON`, `NUL`, `COM1.txt`, ...) is not.
+/// A name that is not valid Unicode cannot be checked, so it is refused.
 pub fn is_plain_name(name: &OsStr) -> bool {
-    let text = name.to_string_lossy();
-    !text.is_empty()
-        && text != "."
-        && text != ".."
-        && !win32_name::has_forbidden_char(&text)
-        && !win32_name::is_reserved_device_name(&text)
+    name.to_str()
+        .is_some_and(win32_name::is_verbatim_entry_name)
 }
 
 /// The error refusing `name` as not a plain entry name.
@@ -511,6 +506,14 @@ mod tests {
         ] {
             assert!(!is_plain_name(OsStr::new(name)), "{name:?}");
         }
+    }
+
+    /// A name that is not valid Unicode is refused, never decoded lossily.
+    #[test]
+    fn a_non_unicode_name_is_refused() {
+        use std::os::windows::ffi::OsStringExt as _;
+        let lone_surrogate = OsString::from_wide(&[0xD800, 0x61]);
+        assert!(!is_plain_name(&lone_surrogate), "{lone_surrogate:?}");
     }
 
     #[test]
