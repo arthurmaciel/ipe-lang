@@ -6530,6 +6530,10 @@ struct NonCloneMoveState<'a> {
     hazard: bool,
     /// Parts moved out by a by-value pattern match or a move-only field read.
     partial: PartialMove,
+    /// The walk is inside a re-callable closure that captured the binding.
+    in_recallable: bool,
+    /// A position moved the captured binding out of a re-callable closure.
+    recallable_move: bool,
 }
 
 impl<'a> NonCloneMoveState<'a> {
@@ -6541,6 +6545,18 @@ impl<'a> NonCloneMoveState<'a> {
             consumed: false,
             hazard: false,
             partial: PartialMove::Intact,
+            in_recallable: false,
+            recallable_move: false,
+        }
+    }
+
+    /// A move of (part of) the binding at the current position.
+    ///
+    /// Inside a re-callable closure the binding is a by-reference capture, so
+    /// any move out of it is recorded for refusal (rustc `E0507`).
+    const fn move_out_of_capture(&mut self) {
+        if self.in_recallable {
+            self.recallable_move = true;
         }
     }
 
@@ -6567,21 +6583,106 @@ impl<'a> NonCloneMoveState<'a> {
     /// that field, or of the whole binding, observes the moved part.
     fn move_field(&mut self, field: Symbol) {
         self.read_field(field);
+        self.move_out_of_capture();
         self.partial =
             std::mem::take(&mut self.partial).union(PartialMove::Fields(BTreeSet::from([field])));
     }
 
     /// A by-value pattern match of the binding against `pat`.
     fn match_pattern(&mut self, pat: &Pat) {
-        self.partial =
-            std::mem::take(&mut self.partial).union(PartialMove::of_pattern(pat, self.copy_fields));
+        let moved = PartialMove::of_pattern(pat, self.copy_fields);
+        if moved.any() {
+            self.move_out_of_capture();
+        }
+        self.partial = std::mem::take(&mut self.partial).union(moved);
     }
 
     /// Fold one branch outcome into a conservative post-branch state.
     fn merge(&mut self, branch: Self) {
         self.hazard |= branch.hazard;
         self.consumed |= branch.consumed;
+        self.recallable_move |= branch.recallable_move;
         self.partial = std::mem::take(&mut self.partial).union(branch.partial);
+    }
+
+    /// The state a closure body capturing the binding starts from.
+    ///
+    /// The capture owns a fresh copy of the binding; `recallable` marks a
+    /// closure the emitter renders as a re-callable `Fn`.
+    const fn closure_body(&self, recallable: bool) -> Self {
+        Self {
+            copy_fields: self.copy_fields,
+            payloads: self.payloads,
+            consumed: false,
+            hazard: false,
+            partial: PartialMove::Intact,
+            in_recallable: self.in_recallable || recallable,
+            recallable_move: false,
+        }
+    }
+}
+
+/// Does a position of `expr` move the non-`Clone` binding `sym` out of a re-callable closure?
+///
+/// Every lambda literal renders a re-callable `Fn` closure except the one
+/// argument slot [`ipe_ir::Callee::lambda_arg_runs_once`] names. Such a
+/// closure holds its `move` capture by reference on each call, so a whole
+/// move, a move-only field read, a by-value pattern match, or a nested
+/// capture of `sym` inside it is rustc `E0507` — a program ipe must refuse.
+fn nonclone_moves_out_of_recallable_closure(
+    env: CloneEnv<'_>,
+    sym: Symbol,
+    ir_ty: &IrType,
+    expr: &Expr,
+) -> bool {
+    let copy_fields = copy_record_fields(env, ir_ty);
+    let mut state = NonCloneMoveState::new(&copy_fields, env.payloads);
+    nonclone_move_walk(sym, expr, &mut state);
+    state.recallable_move
+}
+
+/// A lambda literal capturing `sym`, walked for [`nonclone_move_walk`].
+///
+/// Building the closure moves `sym` into it (a move out of an enclosing
+/// re-callable closure too); its body then runs from a fresh capture state,
+/// walked only for moves out of a re-callable capture.
+fn nonclone_closure_walk(
+    sym: Symbol,
+    params: &[(Symbol, IrType)],
+    body: &Expr,
+    recallable: bool,
+    state: &mut NonCloneMoveState<'_>,
+) {
+    if params.iter().any(|(s, _)| *s == sym) || !lambda_body_refs_sym(sym, body) {
+        return;
+    }
+    state.read_whole(true);
+    state.move_out_of_capture();
+    let mut inner = state.closure_body(recallable);
+    nonclone_move_walk(sym, body, &mut inner);
+    state.recallable_move |= inner.recallable_move;
+}
+
+/// A call argument of `callee`, walked for [`nonclone_move_walk`].
+///
+/// A lambda literal in the slot [`ipe_ir::Callee::lambda_arg_runs_once`]
+/// names is a consume-once closure; every other argument walks as usual.
+fn nonclone_call_arg_walk(
+    sym: Symbol,
+    callee: &Callee,
+    args: &[Expr],
+    arg: &Expr,
+    state: &mut NonCloneMoveState<'_>,
+) {
+    let runs_once = args
+        .iter()
+        .position(|a| std::ptr::eq(a, arg))
+        .is_some_and(|i| callee.lambda_arg_runs_once(i));
+    match arg {
+        Expr::Lambda { params, body, .. } | Expr::SharedLambda { params, body, .. } => {
+            nonclone_closure_walk(sym, params, body, !runs_once, state);
+        }
+        _ => nonclone_move_walk(sym, arg, state),
     }
 }
 
@@ -6632,15 +6733,19 @@ fn nonclone_read_after_move(env: CloneEnv<'_>, sym: Symbol, ir_ty: &IrType, expr
 #[allow(clippy::too_many_lines)] // exhaustive IR match; every arm is structurally required
 fn nonclone_move_walk(sym: Symbol, expr: &Expr, state: &mut NonCloneMoveState<'_>) {
     match expr {
-        Expr::Var(s) | Expr::CloneVar(s) => {
+        Expr::Var(s) => {
+            if *s == sym {
+                state.read_whole(true);
+                state.move_out_of_capture();
+            }
+        }
+        Expr::CloneVar(s) => {
             if *s == sym {
                 state.read_whole(true);
             }
         }
-        Expr::Lambda { body, .. } | Expr::SharedLambda { body, .. } => {
-            if lambda_body_refs_sym(sym, body) {
-                state.read_whole(true);
-            }
+        Expr::Lambda { params, body, .. } | Expr::SharedLambda { params, body, .. } => {
+            nonclone_closure_walk(sym, params, body, true, state);
         }
         Expr::Access {
             record,
@@ -6670,7 +6775,7 @@ fn nonclone_move_walk(sym: Symbol, expr: &Expr, state: &mut NonCloneMoveState<'_
         // argument-reversed kernel evaluates its container before its function.
         Expr::Call { callee, args, .. } if callee.has_known_eval_order() => {
             for a in callee.args_in_eval_order(args) {
-                nonclone_move_walk(sym, a, state);
+                nonclone_call_arg_walk(sym, callee, args, a, state);
             }
         }
         Expr::Ctor { args, .. } | Expr::TailRecur { args } => {
@@ -6678,7 +6783,7 @@ fn nonclone_move_walk(sym: Symbol, expr: &Expr, state: &mut NonCloneMoveState<'_
                 nonclone_move_walk(sym, a, state);
             }
         }
-        Expr::Call { args, .. } => nonclone_unordered_args(sym, args, state),
+        Expr::Call { callee, args, .. } => nonclone_unordered_args(sym, callee, args, state),
         Expr::Apply { func, args } => {
             match func.as_ref() {
                 // A call through a re-callable field borrows it in place
@@ -6808,13 +6913,18 @@ fn nonclone_borrow_base(sym: Symbol, base: &Expr, state: &mut NonCloneMoveState<
 /// argument propagates; an argument that moves `sym` (wholly or in part) while
 /// a sibling argument also mentions `sym` is a hazard in whichever order the
 /// emitter evaluates them.
-fn nonclone_unordered_args(sym: Symbol, args: &[Expr], state: &mut NonCloneMoveState<'_>) {
+fn nonclone_unordered_args(
+    sym: Symbol,
+    callee: &Callee,
+    args: &[Expr],
+    state: &mut NonCloneMoveState<'_>,
+) {
     let pre = state.clone();
     let mut mentioning = 0usize;
     let mut moved = false;
     for a in args {
         let mut s = pre.clone();
-        nonclone_move_walk(sym, a, &mut s);
+        nonclone_call_arg_walk(sym, callee, args, a, &mut s);
         moved |= (s.consumed && !pre.consumed) || s.partial != pre.partial;
         state.merge(s);
         if count_var_uses(sym, a) > 0 {

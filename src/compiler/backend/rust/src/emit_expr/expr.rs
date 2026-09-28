@@ -553,8 +553,7 @@ pub fn emit_expr_at(
                 // absence of the explicit annotation is what keeps rustc's
                 // type-checking linear in the number of chained `Task.andThen`
                 // calls (the annotation form causes super-linear work at depth).
-                let rendered = if matches!(callee, Callee::Kernel(KernelFn::TaskAndThen))
-                    && i == 0
+                let rendered = if callee.lambda_arg_runs_once(i)
                     && let Expr::Lambda { params, ret, body }
                     | Expr::SharedLambda { params, ret, body } = arg
                 {

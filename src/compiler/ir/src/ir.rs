@@ -3210,6 +3210,16 @@ impl Callee {
         matches!(self, Self::Func(_)) || self.evaluates_args_reversed()
     }
 
+    /// Whether a lambda literal at IR argument `index` is emitted as a consume-once closure.
+    ///
+    /// Holds only for the `Task.andThen` continuation, which the emitter boxes
+    /// into the runtime's `FnOnce` slot. Every other lambda literal renders a
+    /// re-callable `Fn` closure, which may not move a captured value out.
+    #[must_use]
+    pub const fn lambda_arg_runs_once(&self, index: usize) -> bool {
+        matches!(self, Self::Kernel(KernelFn::TaskAndThen)) && index == 0
+    }
+
     /// A call's arguments in the order the emitted Rust evaluates them.
     ///
     /// The single ordering every evaluation-order analysis walks, so the
