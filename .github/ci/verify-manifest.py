@@ -64,10 +64,12 @@ Checks performed
   7. CI inputs and runner command files, over the same traversal as check 6:
      every third-party `uses:` is pinned to a 40-hex commit SHA (a `docker://`
      reference, and every job `container:`/`services:` image, to a sha256
-     digest); every `pip install` is exactly the hash-checked shape
-     (`--require-hashes --only-binary :all: -r
-     $GITHUB_WORKSPACE/.github/ci/requirements.txt`, that file exactly once,
-     nothing else); and the runner env file is written only through
+     digest); pip installs only as the one canonical command
+     `CANONICAL_PIP_INSTALL` (`PIP_CONFIG_FILE=/dev/null`, `--isolated`,
+     `--require-hashes --only-binary :all: -r` the hashed requirements file),
+     parsed into a `PipInvocation` and compared whole, with every other
+     `PIP_*` name, pip config file, and non-pip installer refused; and the
+     runner env file is written only through
      `ci/github-env.sh`, called in a step's `run:` in its one canonical form
      with a bare `CI_JOB_*` key listed in `ci/github-env-allowlist.txt`. Every
      string key and value of every workflow, job, step, and local action is
@@ -79,7 +81,13 @@ Checks performed
      the `github`/`env` contexts are read only through a literal `.name`
      that is not a command-file property (`github.env`, `github['env']`,
      `toJSON(github)` are refused); and `GITHUB_WORKSPACE` is only ever read,
-     never assigned. A closed shape, not a list of bypasses.
+     never assigned. Every `${{ }}` body is parsed by `gha_expr`'s typed
+     grammar (a `}}` inside a string literal does not end it; a body outside
+     the grammar is refused). In a step's `run:`, an expression holds no
+     string literal and never abuts a shell variable name; no shell function
+     or alias is defined; and, judged on quote-removed words (`shell_lex`),
+     nothing writes into `.github/ci/**`. A closed shape, not a list of
+     bypasses.
 
 Pure stdlib + PyYAML (already a CI dependency).  No network.
 """
@@ -87,6 +95,7 @@ Pure stdlib + PyYAML (already a CI dependency).  No network.
 from __future__ import annotations
 
 import argparse
+import fnmatch
 import glob
 import json
 import os
@@ -104,6 +113,8 @@ except ImportError:  # pragma: no cover - CI always has PyYAML
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import strict_yaml  # noqa: E402  # the shared strict loader, SSOT for every YAML load below
+import gha_expr  # noqa: E402  # the one GitHub Actions expression parser
+import shell_lex  # noqa: E402  # the one quote-removing shell lexer
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # Both extensions: a workflow (or, for check 6, a local composite action) is a
@@ -186,7 +197,7 @@ PINNED_IMAGE_RE = re.compile(r"[^\s@]+@sha256:[0-9a-f]{64}\Z")
 # runner's on-disk command files they point at, and the legacy stdout workflow
 # commands (plus the switch that re-enables them). Any letter case: Windows env
 # names fold. The `github` context spellings are matched separately, inside
-# expressions only (`GITHUB_EXPRESSION_CONTEXT_RE`).
+# expressions only (`GITHUB_NAMED_CONTEXTS`).
 RUNNER_FILE_TEXT_RE = re.compile(
     r"GITHUB_(?:ENV|PATH|STATE|OUTPUT|STEP_SUMMARY)"
     r"|_runner_file|set_env_|add_path_|save_state_|set_output_|step_summary_"
@@ -204,20 +215,21 @@ RUNNER_APPEND_ONLY_TARGET_RE = re.compile(
     r"|>>\s*\$(?P<u>GITHUB_(?:OUTPUT|STEP_SUMMARY))(?=[\s;&|)]|\Z)"
     r"|-FilePath\s+\$env:(?P<p>GITHUB_(?:OUTPUT|STEP_SUMMARY))(?=[\s;|)]|\Z)"
 )
-# Inside a GitHub Actions expression the `github` and `env` contexts may only be
-# read through a literal `.name`; the `github` properties naming runner command
-# files are refused. A bracket index (`github['env']`), a `.*` filter, or the
-# whole context (`toJSON(github)`) could reach those files under an assembled
-# name, so each is refused too. Single-quoted expression literals are removed
-# first: a literal names no context.
-GITHUB_EXPRESSION_CONTEXT_RE = re.compile(
-    r"(?<![A-Za-z0-9_.\-])(?P<ctx>github|env)(?![A-Za-z0-9_\-])"
-    r"(?P<access>\s*\.\s*(?P<prop>[A-Za-z_][A-Za-z0-9_\-]*))?",
-    re.IGNORECASE,
-)
+# Inside a GitHub Actions expression (parsed by `gha_expr`, never scanned as
+# text) the `github` and `env` contexts may only be read through a literal
+# `.name`; the `github` properties naming runner command files are refused. A
+# bracket index (`github['env']`), a `.*` filter, or the whole context
+# (`toJSON(github)`) could reach those files under an assembled name, so each
+# is refused too.
+GITHUB_NAMED_CONTEXTS = frozenset({"github", "env"})
 GITHUB_RUNNER_FILE_PROPS = frozenset({"env", "path", "state", "output", "step_summary"})
-EXPRESSION_BODY_RE = re.compile(r"\$\{\{(.*?)\}\}", re.DOTALL)
-EXPRESSION_STRING_LITERAL_RE = re.compile(r"'(?:[^']|'')*'")
+# In a `run:`, an expression value is spliced into shell text the verifier
+# never sees. Next to it, a shell parameter-name prefix (`$`, `${`, `$NAME`,
+# `$env:NAME`, `%NAME`) or an identifier character after it would let the
+# value complete a variable name (`$GITHUB_${{ matrix.f }}`,
+# `$${{ inputs.f }}ENV`), so either neighbour is refused.
+SPLICE_NAME_PREFIX_RE = re.compile(r"(?:\$\{?(?:env:)?|%)[A-Za-z0-9_]*\Z", re.IGNORECASE)
+SPLICE_NAME_SUFFIX_RE = re.compile(r"[A-Za-z0-9_]")
 # `GITHUB_WORKSPACE` roots the helper and requirements paths, so it may only be
 # read (`$GITHUB_WORKSPACE`, `${GITHUB_WORKSPACE}`, exact case), never assigned,
 # defaulted (`${GITHUB_WORKSPACE:=x}`), exported, or set as an env key.
@@ -246,18 +258,58 @@ GITHUB_ENV_KEY_REFUSED_PREFIXES = (
     "DYLD_", "NODE_", "NPM_", "PYTHON", "PIP_", "PERL", "RUBY", "JAVA_", "GIT_",
     "BASH_", "SSL_", "CURL_", "HTTP", "HTTPS_", "NO_PROXY", "ALL_PROXY",
 )
-# `pip install` outside the one hash-checked shape is refused; `pipx` and
-# `easy_install` install outside pip's hash checking and are refused outright.
-PIP_MENTION_RE = re.compile(
-    r"(?:(?<![A-Za-z0-9_])|(?<=-m))(?:pip[0-9.]*|pipx|easy_install)(?![A-Za-z0-9_-])",
+# `pip` runs only as the one canonical hash-checked install (or a read-only
+# query). `PIP_CONFIG_FILE=/dev/null` stops pip reading any config file and
+# `--isolated` stops it reading `PIP_*` environment variables, so no earlier
+# step, `env:` key, or config write can add an index, a requirement, or a
+# `no-binary` to it.
+PIP_REQUIREMENTS_ARG = "$GITHUB_WORKSPACE/.github/ci/requirements.txt"
+CANONICAL_PIP_INSTALL = (
+    "PIP_CONFIG_FILE=/dev/null python3 -m pip install --isolated --require-hashes "
+    f'--only-binary :all: -r "{PIP_REQUIREMENTS_ARG}"'
+)
+CANONICAL_PIP_INSTALL_RE = re.compile(
+    r"(?<![^\s;&|(])" + re.escape(CANONICAL_PIP_INSTALL) + r"(?![^\s;&|)])"
+)
+PIP_MENTION_RE = re.compile(r"(?:(?<![A-Za-z0-9_])|(?<=-m))pip[0-9.]*(?![A-Za-z0-9_-])", re.IGNORECASE)
+PIP_TOKEN_RE = re.compile(r"(?:.*[/\\])?(?:-m)?pip[0-9.]*(?:\.exe)?", re.IGNORECASE)
+PIP_READ_ONLY_COMMANDS = frozenset({"--version", "-V", "list", "show", "freeze", "check", "help", "--help", "-h"})
+# pip's environment and config-file inputs: any `PIP_*` name (text or key) and
+# any pip config file are refused outside the canonical install's own prefix.
+PIP_ENV_NAME_RE = re.compile(r"(?<![A-Za-z0-9_])PIP_[A-Za-z0-9_]*", re.IGNORECASE)
+PIP_CONFIG_FILE_RE = re.compile(r"pip\.(?:conf|ini)", re.IGNORECASE)
+# Installers outside pip's hash checking.
+UNHASHED_INSTALLER_RE = re.compile(
+    r"(?<![A-Za-z0-9_-])(?:pipx|easy_install|uvx)(?![A-Za-z0-9_-])"
+    r"|(?<![A-Za-z0-9_-])uv\s+(?:pip|tool)(?![A-Za-z0-9_-])"
+    r"|setup\.py\s+(?:install|develop)(?![A-Za-z0-9_-])",
     re.IGNORECASE,
 )
-PIP_TOKEN_RE = re.compile(r"(?:.*[/\\])?pip[0-9.]*(?:\.exe)?", re.IGNORECASE)
 SHELL_COMMAND_SPLIT_RE = re.compile(r"\n|;|&&|\|\||\||&|\$\(|`|\(|\)")
-PIP_INSTALL_NEUTRAL_FLAGS = frozenset({"-q", "--quiet", "--disable-pip-version-check", "--no-input"})
-# The one hashed requirements file, by absolute path: a relative path would
-# resolve against whatever directory a `cd` or `working-directory:` chose.
-PIP_REQUIREMENTS_ARG = "$GITHUB_WORKSPACE/.github/ci/requirements.txt"
+# `.github/ci/**` holds the verifier, its helper, and the hashed requirements:
+# a `run:` may execute or read it, never write it. A word naming it is
+# accepted only as the command itself or as an argument to a read/execute
+# command; a redirect into it, or any other command naming it, is refused.
+PROTECTED_TREE = ".github/ci"
+PROTECTED_TREE_READERS = frozenset({
+    "python3", "python", "bash", "sh", "cat", "ls", "test", "[", "[[", "diff", "cmp",
+    "sha256sum", "sha512sum", "head", "tail", "rg", "grep", "jq", "source", ".",
+    "wc", "stat", "echo", "printf", "shellcheck", "file",
+})
+SHELLS = frozenset({"bash", "sh", "zsh", "dash", "ksh"})
+COMMAND_WRAPPERS = frozenset({"sudo", "command", "builtin", "exec", "nohup", "time", "env"})
+SHELL_ASSIGNMENT_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=")
+# A shell function or alias can shadow any command a check matched by name
+# (`bash() { ...; }` before the helper call), so neither is written in a `run:`.
+SHELL_SHADOWING_RE = re.compile(
+    r"(?<![\w$.:-])[A-Za-z_][\w.:-]*[ \t]*\([ \t]*\)[ \t]*(?:[{(]|\n|\Z)"
+    r"|(?<![\w-])function[ \t]+[A-Za-z_]"
+    r"|(?<![\w-])(?:alias|unalias)(?![\w-])"
+    r"|expand_aliases",
+)
+# Legacy workflow commands the runner reads from the output the shell prints,
+# so matched after quote removal too (`::set-""env`).
+LEGACY_COMMAND_RE = re.compile(r"::\s*(?:set-env|add-path|save-state|set-output)", re.IGNORECASE)
 # Bound on YAML nesting walked for string scalars; deeper is refused.
 STRING_SCALAR_DEPTH_LIMIT = 64
 
@@ -677,41 +729,74 @@ def load_github_env_allowlist(errors: list[str], root: str = REPO_ROOT) -> froze
     return frozenset(keys)
 
 
-def _expression_texts(text: str, bare: bool) -> list[str]:
-    """The GitHub Actions expression bodies in `text`, string literals removed.
+def _context_refusal(e: gha_expr.Expr) -> gha_expr.ContextRef | None:
+    """The first `github`/`env` access in `e` that could reach a runner
+    command file, or None: anything but a literal `.name`, and
+    `github.<command-file property>`."""
+    for node in gha_expr.walk(e):
+        if not isinstance(node, gha_expr.ContextRef) or node.ctx.casefold() not in GITHUB_NAMED_CONTEXTS:
+            continue
+        first = node.path[0] if node.path else None
+        if not isinstance(first, gha_expr.Prop):
+            return node
+        if node.ctx.casefold() == "github" and first.name.casefold() in GITHUB_RUNNER_FILE_PROPS:
+            return node
+    return None
 
-    `bare` marks an `if:` value, which is an expression whether or not it is
-    wrapped in `${{ }}`.
-    """
-    bodies = [text] if bare else EXPRESSION_BODY_RE.findall(text)
-    return [EXPRESSION_STRING_LITERAL_RE.sub("''", body) for body in bodies]
+
+def _parsed_expressions(text: str, bare_expression: bool) -> gha_expr.Template | gha_expr.Refusal:
+    """Every expression in `text`; `bare_expression` marks an `if:` value."""
+    return gha_expr.parse_condition(text) if bare_expression else gha_expr.parse_template(text)
 
 
-def _runner_file_refusal(text: str, bare_expression: bool) -> str | None:
+def _runner_file_refusal(text: str, parsed: gha_expr.Template | gha_expr.Refusal) -> str | None:
     """The first spelling in `text` that reaches a runner command file, or None.
 
     Every match of `RUNNER_FILE_TEXT_RE` counts except an output/summary name
-    inside its append-only shape; inside expressions, every `github`/`env`
-    access other than a literal `.name` (and `github.<command-file property>`)
-    counts.
+    inside its append-only shape; so does a legacy workflow command after
+    quote removal, and every `github`/`env` access in a parsed expression
+    other than a literal `.name` (and `github.<command-file property>`).
     """
     appends = [m.span() for m in RUNNER_APPEND_ONLY_TARGET_RE.finditer(text)]
     for m in RUNNER_FILE_TEXT_RE.finditer(text):
         if not any(lo <= m.start() and m.end() <= hi for lo, hi in appends):
             return m.group(0)
-    for body in _expression_texts(text, bare_expression):
-        for m in GITHUB_EXPRESSION_CONTEXT_RE.finditer(body):
-            prop = m.group("prop")
-            if prop is None:
-                return m.group(0)
-            if m.group("ctx").casefold() == "github" and prop.casefold() in GITHUB_RUNNER_FILE_PROPS:
-                return m.group(0)
+    for cmd in shell_lex.split_commands(text):
+        m = LEGACY_COMMAND_RE.search(" ".join(cmd.words))
+        if m is not None:
+            return m.group(0)
+    if isinstance(parsed, gha_expr.Template):
+        for e, (lo, hi) in zip(parsed.exprs, parsed.spans):
+            if _context_refusal(e) is not None:
+                return text[lo:hi]
     return None
 
 
+def _refuse_expression_splice(
+    text: str, parsed: gha_expr.Template, loc: str, what: str, errors: list[str]
+) -> None:
+    """In a `run:`, every `${{ }}` is an opaque value spliced into shell text:
+    none may carry a string literal (author text the name scans never see
+    whole), and none may sit where its value would complete a shell variable
+    name (`SPLICE_NAME_PREFIX_RE`/`SPLICE_NAME_SUFFIX_RE`)."""
+    for e, (lo, hi) in zip(parsed.exprs, parsed.spans):
+        shown = text[lo:hi]
+        if any(isinstance(n, gha_expr.Literal) and n.is_string for n in gha_expr.walk(e)):
+            errors.append(
+                f"{loc} {what} splices {shown!r}, an expression holding a string literal, into "
+                "shell text — a literal there assembles text no name scan sees whole; pass the "
+                "value through `env:` instead; refused"
+            )
+        elif SPLICE_NAME_PREFIX_RE.search(text, 0, lo) or SPLICE_NAME_SUFFIX_RE.match(text, hi):
+            errors.append(
+                f"{loc} {what} splices {shown!r} next to a shell variable name — its value could "
+                "complete the name (`$GITHUB_${{ x }}`); separate it by a quote, space, or `/`; refused"
+            )
+
+
 def _refuse_runner_file_text(
-    text: str, loc: str, what: str, policy: StepPolicy, helper_ok: bool, bare_expression: bool,
-    errors: list[str],
+    text: str, parsed: gha_expr.Template | gha_expr.Refusal, loc: str, what: str,
+    policy: StepPolicy, helper_ok: bool, errors: list[str],
 ) -> None:
     """Rule (f): the runner env file is written only by the canonical helper call.
 
@@ -720,7 +805,12 @@ def _refuse_runner_file_text(
     legacy workflow commands, the helper itself, or a `GITHUB_WORKSPACE` write
     is refused.
     """
-    hit = _runner_file_refusal(text, bare_expression)
+    if isinstance(parsed, gha_expr.Refusal):
+        errors.append(
+            f"{loc} {what} holds a `${{{{ }}}}` expression outside the expression grammar "
+            f"({parsed.why}) — what it reads cannot be established; refused"
+        )
+    hit = _runner_file_refusal(text, parsed)
     if hit is not None:
         errors.append(
             f"{loc} {what} names {hit!r} — the runner env file is written only "
@@ -754,14 +844,11 @@ def _refuse_runner_file_text(
             )
 
 
-def _pip_install_refusal(tokens: list[str], at: int) -> str | None:
-    """Why `tokens[at:]` is not the one hash-checked install shape, or None.
-
-    `tokens[at]` is the pip executable and `tokens[at + 1]` is `install`.
-    """
+def _pip_install_refusal(args: list[str]) -> str | None:
+    """Why the `pip install` arguments `args` miss the hash-checked shape, or
+    None when every argument is one the canonical install carries."""
     require_hashes = only_binary_all = False
     requirement_files = 0
-    args = tokens[at + 2 :]
     i = 0
     while i < len(args):
         a = args[i]
@@ -778,7 +865,7 @@ def _pip_install_refusal(tokens: list[str], at: int) -> str | None:
                 return f"requirements file {nxt!r} is not {PIP_REQUIREMENTS_ARG!r}"
             requirement_files += 1
             i += 1
-        elif a not in PIP_INSTALL_NEUTRAL_FLAGS:
+        elif a != "--isolated":
             return f"argument {a!r} is outside the hash-checked shape"
         i += 1
     if requirement_files > 1:
@@ -788,47 +875,170 @@ def _pip_install_refusal(tokens: list[str], at: int) -> str | None:
     return None
 
 
-def _refuse_unhashed_pip(text: str, loc: str, what: str, errors: list[str]) -> None:
-    """Rule (g): every `pip install` is the one hash-checked shape.
+@dataclass(frozen=True)
+class PipInvocation:
+    """One shell command that runs pip, split at the pip token: the leading
+    `NAME=value` assignments, the words up to and including pip (the
+    interpreter and its flags), and pip's own arguments."""
 
-    The shape is `--require-hashes --only-binary :all: -r
-    $GITHUB_WORKSPACE/.github/ci/requirements.txt` with nothing else — exactly
-    one requirements file, no package, `-e`, URL, or index argument — so every
-    installed byte is hash-checked and no unhashed build backend is fetched.
-    A command that cannot be parsed, or that mentions pip and `install`
-    outside that shape, is refused.
+    env_prefix: tuple[str, ...]
+    interpreter: tuple[str, ...]
+    args: tuple[str, ...]
+
+
+def _parse_pip_invocation(tokens: list[str]) -> PipInvocation | None:
+    """`tokens` as a pip invocation, or None when no word is pip."""
+    at = next((i for i, t in enumerate(tokens) if PIP_TOKEN_RE.fullmatch(t)), None)
+    if at is None:
+        return None
+    lead = 0
+    while lead < at and SHELL_ASSIGNMENT_RE.match(tokens[lead]):
+        lead += 1
+    return PipInvocation(tuple(tokens[:lead]), tuple(tokens[lead : at + 1]), tuple(tokens[at + 1 :]))
+
+
+def _canonical_pip() -> PipInvocation:
+    """`CANONICAL_PIP_INSTALL` as a `PipInvocation`."""
+    inv = _parse_pip_invocation(shlex.split(CANONICAL_PIP_INSTALL))
+    if inv is None:
+        raise RuntimeError("CANONICAL_PIP_INSTALL names no pip word")
+    return inv
+
+
+def _pip_invocation_refusal(inv: PipInvocation) -> str | None:
+    """Why `inv` is not the canonical install nor a read-only query, or None."""
+    canon = _canonical_pip()
+    if not inv.args or inv.args[0].casefold() != "install":
+        if len(inv.args) <= 1 and (not inv.args or inv.args[0] in PIP_READ_ONLY_COMMANDS):
+            return None
+        return f"pip subcommand {' '.join(inv.args)!r} is neither install nor a read-only query"
+    why = _pip_install_refusal(list(inv.args[1:]))
+    if why is not None:
+        return why
+    if inv.interpreter != canon.interpreter:
+        return f"pip runs as {' '.join(inv.interpreter)!r}, not {' '.join(canon.interpreter)!r}"
+    if inv.env_prefix != canon.env_prefix:
+        return (
+            f"its environment prefix {' '.join(inv.env_prefix)!r} is not "
+            f"{' '.join(canon.env_prefix)!r} — config files and PIP_* would steer the install"
+        )
+    if inv.args != canon.args:
+        return f"its arguments are not exactly {' '.join(canon.args)!r}"
+    return None
+
+
+def _refuse_unhashed_pip(text: str, loc: str, what: str, errors: list[str]) -> None:
+    """Rule (g): pip installs only as the one canonical, env-isolated command.
+
+    `CANONICAL_PIP_INSTALL` is the only install: `PIP_CONFIG_FILE=/dev/null`
+    and `--isolated` cut off every config file and `PIP_*` variable, and
+    `--require-hashes --only-binary :all: -r <requirements>` hash-checks
+    every byte with no build backend. Outside that exact text, a `PIP_*`
+    name, a pip config file, or an installer outside pip's hash checking is
+    refused, and each command that runs pip is parsed as a `PipInvocation`
+    and compared with the canonical one; a command that cannot be parsed is
+    refused.
     """
+    rest = CANONICAL_PIP_INSTALL_RE.sub(" ", text)
+    for rx, why in (
+        (PIP_ENV_NAME_RE, "sets or names a pip environment variable, which steers what pip installs"),
+        (PIP_CONFIG_FILE_RE, "names a pip config file, which steers what pip installs"),
+        (UNHASHED_INSTALLER_RE, "runs an installer outside pip's hash checking"),
+    ):
+        m = rx.search(rest)
+        if m is not None:
+            errors.append(
+                f"{loc} {what} {why} ({m.group(0)!r}) — pip installs only as "
+                f"`{CANONICAL_PIP_INSTALL}`; refused"
+            )
     for segment in SHELL_COMMAND_SPLIT_RE.split(text.replace("\\\n", " ")):
-        mention = PIP_MENTION_RE.search(segment)
-        if mention is None:
+        if PIP_MENTION_RE.search(segment) is None:
             continue
         shown = segment.strip()
-        if mention.group(0).casefold() in ("pipx", "easy_install"):
-            errors.append(
-                f"{loc} {what} runs {mention.group(0)!r} ({shown!r}) — installs outside "
-                "pip's hash checking; refused"
-            )
-            continue
         try:
             tokens = shlex.split(segment)
         except ValueError as e:
             errors.append(f"{loc} {what} mentions pip in {shown!r}, which cannot be parsed ({e}); refused")
             continue
-        at = next((i for i, t in enumerate(tokens) if PIP_TOKEN_RE.fullmatch(t)), None)
-        is_install = at is not None and at + 1 < len(tokens) and tokens[at + 1].casefold() == "install"
-        if not is_install:
+        inv = _parse_pip_invocation(tokens)
+        if inv is None:
             if any("install" in t.casefold() for t in tokens):
                 errors.append(
                     f"{loc} {what} mentions pip and install in {shown!r} outside the "
                     "hash-checked shape; refused"
                 )
             continue
-        why = _pip_install_refusal(tokens, at)
+        why = _pip_invocation_refusal(inv)
         if why is not None:
             errors.append(
-                f"{loc} {what} runs {shown!r}: {why} — pip installs only as `pip install "
-                f"--require-hashes --only-binary :all: -r {PIP_REQUIREMENTS_ARG}`; refused"
+                f"{loc} {what} runs {shown!r}: {why} — pip installs only as "
+                f"`{CANONICAL_PIP_INSTALL}`; refused"
             )
+
+
+def _protected_word(word: str) -> bool:
+    """Whether `word` (quote-removed) could name `.github/ci/**` or the
+    `.github` directory holding it: some path component matches `.github`
+    (as a glob, when it is one — a shell glob reaches a dot name only from a
+    literal leading `.`) and is last or followed by one matching `ci`.
+    Any root is ignored — a variable or spliced expression before it could be
+    the workspace."""
+    for w in {word, word.rsplit("=", 1)[-1]}:
+        parts = posixpath.normpath(w.casefold()).split("/")
+        for i, part in enumerate(parts):
+            if part.startswith(".") and fnmatch.fnmatchcase(".github", part) and (
+                i + 1 == len(parts) or fnmatch.fnmatchcase("ci", parts[i + 1])
+            ):
+                return True
+    return False
+
+
+def _command_verb(words: list[str]) -> tuple[str | None, list[str]]:
+    """The command word of `words` past assignments and wrappers, and its
+    arguments."""
+    i = 0
+    while i < len(words) and (
+        SHELL_ASSIGNMENT_RE.match(words[i]) or posixpath.basename(words[i]) in COMMAND_WRAPPERS
+        or (i > 0 and words[i].startswith("-") and posixpath.basename(words[i - 1]) in COMMAND_WRAPPERS)
+    ):
+        i += 1
+    if i >= len(words):
+        return None, []
+    return words[i], words[i + 1 :]
+
+
+def _protected_tree_refusal(text: str, depth: int = 0) -> str | None:
+    """The first write into `.github/ci/**` in shell `text`, or None.
+
+    The tree may be executed (`.github/ci/x.sh`, `source`), or read by a
+    `PROTECTED_TREE_READERS` command; a redirect into it, any other command
+    naming it, a shell fed a here-document, and a shell `-c` string that
+    does any of these are refused."""
+    if depth > STRING_SCALAR_DEPTH_LIMIT:
+        return "shell -c nesting too deep"
+    for cmd in shell_lex.split_commands(text):
+        for target in cmd.writes:
+            if _protected_word(target):
+                return f"redirect into {target!r}"
+        verb, args = _command_verb(cmd.words)
+        if verb is None or _protected_word(verb):
+            continue
+        base = posixpath.basename(verb)
+        if base in SHELLS:
+            if cmd.heredoc:
+                return f"{base} fed a here-document (its commands are unseen)"
+            if "-c" in args:
+                at = args.index("-c")
+                if at + 1 < len(args):
+                    inner = _protected_tree_refusal(args[at + 1], depth + 1)
+                    if inner is not None:
+                        return inner
+        if base in PROTECTED_TREE_READERS:
+            continue
+        hit = next((a for a in args if _protected_word(a)), None)
+        if hit is not None:
+            return f"{base} {hit!r}"
+    return None
 
 
 def _string_scalars(node: object, loc: str, errors: list[str]) -> list[tuple[str, str, bool]]:
@@ -866,21 +1076,44 @@ def _string_scalars(node: object, loc: str, errors: list[str]) -> list[tuple[str
 
 def _audit_text(
     text: str, loc: str, what: str, policy: StepPolicy, errors: list[str],
-    helper_ok: bool = False, bare_expression: bool = False,
+    helper_ok: bool = False, bare_expression: bool = False, is_run: bool = False,
 ) -> None:
-    """Rules (c), (f), (g) over one string scalar outside the composite."""
+    """Rules (c), (f), (g) over one string scalar outside the composite; a
+    step's `run:` (`is_run`) is also shell text for the splice, shadowing,
+    and protected-tree rules."""
+    parsed = _parsed_expressions(text, bare_expression)
     _refuse_wiring_text(text, loc, what, errors)
-    _refuse_runner_file_text(text, loc, what, policy, helper_ok, bare_expression, errors)
+    _refuse_runner_file_text(text, parsed, loc, what, policy, helper_ok, errors)
     _refuse_unhashed_pip(text, loc, what, errors)
+    if not is_run or isinstance(parsed, gha_expr.Refusal):
+        return
+    _refuse_expression_splice(text, parsed, loc, what, errors)
+    shell = text
+    for lo, hi in reversed(parsed.spans):
+        shell = shell[:lo] + "__GHA_EXPR__" + shell[hi:]
+    m = SHELL_SHADOWING_RE.search(shell_lex.without_heredoc_bodies(shell))
+    if m is not None:
+        errors.append(
+            f"{loc} {what} defines a shell function or alias ({m.group(0).strip()!r}) — it "
+            "could shadow a command every check matches by name; refused"
+        )
+    hit = _protected_tree_refusal(shell)
+    if hit is not None:
+        errors.append(
+            f"{loc} {what} writes into {PROTECTED_TREE}/ ({hit}) — the verifier, its "
+            "helper, and the hashed requirements are only executed or read; refused"
+        )
 
 
 def _audit_scalars(node: object, loc: str, policy: StepPolicy, errors: list[str], step: bool) -> None:
     """The text rules over every string scalar of `node`.
 
-    The helper call is honoured only in a step's own `run:` (`step`).
+    The helper call and the shell-text rules apply to a step's own `run:`
+    (`step`).
     """
     for label, text, is_if in _string_scalars(node, loc, errors):
-        _audit_text(text, loc, label, policy, errors, step and label == "run:", is_if)
+        is_run = step and label == "run:"
+        _audit_text(text, loc, label, policy, errors, is_run, is_if, is_run)
 
 
 def _refuse_unpinned_uses(st: Step, loc: str, errors: list[str]) -> None:
@@ -1304,7 +1537,22 @@ def check_workflow_steps(errors: list[str], root: str = REPO_ROOT) -> None:
         over the runner temp directory, a decoded payload piped to a shell;
       - what a step writes into GITHUB_OUTPUT (content, a multiline
         delimiter) and how later `${{ steps.*.outputs.* }}` interpolation
-        uses it.
+        uses it;
+      - an expression value that is itself shell text (`${{ inputs.f }}`
+        whose value is `$GITHUB_ENV`), and interpreter variables (`PYTHON*`)
+        that steer the canonical pip install;
+      - shadowing a checked command by means other than a shell function or
+        alias written in the same `run:` (a `PATH` entry, `BASH_ENV`, a
+        sourced file);
+      - rewriting `.github/ci/**` through a path the words do not spell: a
+        relative path after `cd`, a glob not rooted at a literal `.github`
+        component, quote-splitting inside a variable, an interpreter snippet,
+        a whole-tree `git checkout`/`git reset`, or an action's `with:`;
+      - a legacy `::set-env` command assembled by the shell at run time (the
+        quote-concatenated `::set-""env` spelling is refused);
+      - installers that fetch without pip's hash checking beyond the refused
+        `setup.py install`, `uv pip`, `uv tool`, `uvx`, `pipx`, and
+        `easy_install`.
     Those are review-gated, not machine-gated.
     """
     start = len(errors)

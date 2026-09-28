@@ -48,7 +48,7 @@ jobs:
           python-version: "3.13"
 
       - name: Install PyYAML
-        run: 'python3 -m pip install --quiet --require-hashes --only-binary :all: -r "$GITHUB_WORKSPACE/.github/ci/requirements.txt"'
+        run: 'PIP_CONFIG_FILE=/dev/null python3 -m pip install --isolated --require-hashes --only-binary :all: -r "$GITHUB_WORKSPACE/.github/ci/requirements.txt"'
 
       - name: Surface advisory reds (dedup issue + summary)
         env:

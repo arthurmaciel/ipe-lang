@@ -1611,13 +1611,184 @@ class TestPinnedInputsAndEnvFileWrites(unittest.TestCase):
 
     def test_canonical_hashed_pip_install_passes(self) -> None:
         for run in (
-            f"python3 -m pip install --quiet --require-hashes --only-binary :all: -r {_REQS}",
-            f"pip install --only-binary=:all: --require-hashes --requirement {_REQS}",
+            f"PIP_CONFIG_FILE=/dev/null python3 -m pip install --isolated --require-hashes --only-binary :all: -r {_REQS}",
             "pip --version",
         ):
             with self.subTest(run=run):
                 self.ci(f"steps:\n  - name: P\n    run: {run!r}\n")
                 self.assertEqual(self.fx.errors(), [])
+
+    def test_hash_checked_install_outside_the_canonical_form_is_refused(self) -> None:
+        for run, needle in (
+            (f"python3 -m pip install --quiet --require-hashes --only-binary :all: -r {_REQS}", "'--quiet'"),
+            (f"pip install --only-binary=:all: --require-hashes --requirement {_REQS}", "pip runs as"),
+            (f"python3 -m pip install --isolated --require-hashes --only-binary :all: -r {_REQS}", "environment prefix"),
+            (f"PIP_CONFIG_FILE=/dev/null python -m pip install --isolated --require-hashes --only-binary :all: -r {_REQS}", "pip runs as"),
+            (f"PIP_CONFIG_FILE=/dev/null python3 -m pip install --require-hashes --only-binary :all: -r {_REQS}", "not exactly"),
+            (f"PIP_CONFIG_FILE=/dev/null python3 -m pip install --isolated --only-binary :all: --require-hashes -r {_REQS}", "not exactly"),
+        ):
+            with self.subTest(run=run):
+                self.ci(f"steps:\n  - name: P\n    run: {run!r}\n")
+                self.assertRefused("step 'P' run:", needle)
+
+
+def _block(run: str) -> str:
+    """A one-step job whose `run:` is `run` as a YAML literal block."""
+    body = "".join(f"      {line}\n" for line in run.split("\n"))
+    return f"steps:\n  - name: P\n    run: |\n{body}"
+
+
+_CANONICAL_PIP = (
+    "PIP_CONFIG_FILE=/dev/null python3 -m pip install --isolated --require-hashes "
+    f"--only-binary :all: -r {_REQS}"
+)
+
+
+class TestTypedExpressionAndShellReads(unittest.TestCase):
+    """Expression bodies are parsed, never regex-scanned; pip is one canonical
+    command; shell words are judged after quote removal."""
+
+    def setUp(self) -> None:
+        self._tmpdir = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmpdir.cleanup)
+        self.fx = SccacheFixture(self._tmpdir.name)
+
+    def assertRefused(self, *needles: str) -> list[str]:
+        errors = self.fx.errors()
+        self.assertTrue(any(all(n in e for n in needles) for e in errors), errors)
+        return errors
+
+    def run_refused(self, run: str, *needles: str) -> None:
+        with self.subTest(run=run):
+            self.fx.workflow("ci.yml", _ci(_block(run)))
+            self.assertRefused("step 'P' run:", *needles)
+
+    def run_accepted(self, run: str) -> None:
+        with self.subTest(run=run):
+            self.fx.workflow("ci.yml", _ci(_block(run)))
+            self.assertEqual(self.fx.errors(), [])
+
+    # ---- expression bodies end at the first `}}` outside a literal ------
+
+    def test_close_braces_inside_a_literal_do_not_end_the_expression(self) -> None:
+        for run in (
+            "echo X=1 >> ${{ '}}' != '' && github.env }}",
+            "echo ${{ ('}}' == 'x') || github.path }}",
+            "echo ${{ '}}' != '' && env }}",
+        ):
+            self.run_refused(run, "written only through")
+
+    def test_close_braces_inside_a_literal_outside_run_are_refused(self) -> None:
+        self.fx.workflow(
+            "ci.yml",
+            _ci(f"steps:\n  - uses: some/action@{_PINNED_SHA}\n    with:\n      t: \"${{{{ '}}}}' && github.env }}}}\"\n"),
+        )
+        self.assertRefused("with.t", "written only through")
+
+    def test_unterminated_expression_is_refused(self) -> None:
+        self.run_refused("echo ${{ github.ref", "outside the expression grammar")
+        self.run_refused("echo ${{ 'x }}", "outside the expression grammar")
+
+    # ---- pip: one canonical env-isolated invocation ---------------------
+
+    def test_pip_steered_through_env_or_config_is_refused(self) -> None:
+        self.run_refused(
+            "PIP_REQUIREMENT=/tmp/evil.txt python -m pip install --isolated --require-hashes "
+            f"--only-binary :all: -r {_REQS}",
+            "pip environment variable",
+        )
+        self.run_refused(f"PIP_REQUIREMENT=/tmp/evil.txt {_CANONICAL_PIP}", "pip environment variable")
+        self.run_refused(
+            "PIP_CONFIG_FILE=/tmp/p.conf python3 -m pip install --isolated --require-hashes "
+            f"--only-binary :all: -r {_REQS}",
+            "pip environment variable",
+        )
+        self.run_refused(
+            "mkdir -p ~/.config/pip && printf '[global]\\nno-binary = :all:\\n' > ~/.config/pip/pip.conf",
+            "pip config file",
+        )
+
+    def test_pip_env_key_at_every_scope_is_refused(self) -> None:
+        step = f"steps:\n  - name: P\n    run: '{_CANONICAL_PIP}'\n"
+        for name, doc in {
+            "workflow": _ci(step, top="env:\n  PIP_REQUIREMENT: /tmp/evil.txt\n"),
+            "job": _ci("env:\n  PIP_REQUIREMENT: /tmp/evil.txt\n" + step),
+            "step": _ci(f"steps:\n  - name: P\n    env:\n      PIP_REQUIREMENT: /tmp/evil.txt\n    run: '{_CANONICAL_PIP}'\n"),
+        }.items():
+            with self.subTest(name):
+                self.fx.workflow("ci.yml", doc)
+                self.assertRefused("PIP_REQUIREMENT", "pip environment variable")
+
+    def test_canonical_pip_install_passes(self) -> None:
+        self.run_accepted(_CANONICAL_PIP)
+
+    # ---- no runner-file name assembled across a splice ------------------
+
+    def test_runner_file_name_assembled_across_an_expression_is_refused(self) -> None:
+        for run in (
+            "echo A=b >> \"$GITHUB_${{ 'ENV' }}\"",
+            "echo A=b >> $GITHUB_${{ matrix.f }}",
+            "echo A=b >> $GITHUB_${{ inputs.f }}",
+            "echo A=b >> $GITHUB_${{ env.F }}",
+            "echo A=b >> $${{ 'GITHUB_' }}ENV",
+        ):
+            self.run_refused(run, "splices")
+
+    def test_expression_after_a_plain_word_passes(self) -> None:
+        self.run_accepted("cp target/release/ipe${{ matrix.ext }} dist/")
+        self.run_accepted("cargo nextest run --partition count:${{ matrix.shard }}/4")
+
+    # ---- defence in depth: shadowing, protected tree, installers --------
+
+    def test_shell_function_or_alias_is_refused(self) -> None:
+        for run in (
+            "bash() { true; }",
+            "sh () { true; }",
+            "function bash { true; }",
+            "alias bash=true",
+            "shopt -s expand_aliases",
+        ):
+            self.run_refused(run, "shell function or alias")
+
+    def test_write_into_the_protected_tree_is_refused(self) -> None:
+        for run in (
+            "echo x > .github/ci/requirements.txt",
+            "echo x >> \"$GITHUB_WORKSPACE/.github/ci/requirements.txt\"",
+            "echo x > \".github/\"ci/requirements.txt",
+            "echo x > .GitHub/CI/requirements.txt",
+            "cp /tmp/r .github/ci/requirements.txt",
+            "cp /tmp/r .github/c*/requirements.txt",
+            "sed -i s/a/b/ .github/ci/verify-manifest.py",
+            "curl -o .github/ci/strict_yaml.py https://x",
+            "tee .github/ci/x < /tmp/y",
+            "rm -rf .github",
+            "git checkout HEAD~1 -- .github/ci",
+            "bash -c 'cp /tmp/r .github/ci/requirements.txt'",
+            "bash <<'EOF'\ncp /tmp/r x\nEOF",
+        ):
+            self.run_refused(run, "writes into .github/ci/")
+
+    def test_executing_or_reading_the_protected_tree_passes(self) -> None:
+        self.run_accepted("python3 .github/ci/verify-manifest.py")
+        self.run_accepted(".github/ci/artifact-guard.sh")
+        self.run_accepted("jq . .github/ci/deterministic-checks.json > /tmp/out.json")
+        self.run_accepted(
+            "python3 - <<'PY'\nimport sys\nsys.path.insert(0, \".github/ci\")\n"
+            "def main():\n    open(\".github/ci/x\")\nmain()\nPY"
+        )
+
+    def test_installers_outside_pip_hash_checking_are_refused(self) -> None:
+        for run in (
+            "uv pip install pyyaml",
+            "uv tool install ruff",
+            "pipx install pyyaml",
+            "python3 setup.py install",
+            "easy_install pyyaml",
+        ):
+            self.run_refused(run)
+
+    def test_quote_split_legacy_command_is_refused(self) -> None:
+        self.run_refused('echo "::set-""env name=A::b"', "written only through")
 
 
 class TestGithubEnvHelper(unittest.TestCase):
