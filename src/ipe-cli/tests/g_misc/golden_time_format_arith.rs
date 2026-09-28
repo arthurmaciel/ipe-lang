@@ -41,7 +41,7 @@ fn time_format_arith_accepted_by_ipe() {
 /// Gated on `IPE_E2E=1` so the default `cargo test` stays fast.
 #[test]
 fn time_format_arith_builds_and_runs() {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
 

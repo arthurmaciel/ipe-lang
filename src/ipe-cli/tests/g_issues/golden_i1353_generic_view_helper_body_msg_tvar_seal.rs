@@ -49,7 +49,7 @@ fn i1353_generic_view_helper_body_msg_tvar_emits_generic_return() {
     let Ok(runtime) = ipe::resolve_runtime() else {
         return; // resolver unavailable -- skip
     };
-    let built = ipe::build_with_sibling_discovery(&entry, &out, &runtime);
+    let built = ipe::build_loose_file(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
         "a genuinely message-polymorphic view helper (`msg` in a parameter \
@@ -86,7 +86,7 @@ fn i1353_generic_view_helper_body_msg_tvar_seal_builds() {
     let Ok(runtime) = ipe::resolve_runtime() else {
         return;
     };
-    let built = ipe::build_with_sibling_discovery(&entry, &out, &runtime);
+    let built = ipe::build_loose_file(&entry, &out, &runtime);
     assert!(built.is_ok(), "{GOLDEN} must be accepted, got: {built:?}");
 
     crate::support::assert_seal_builds(GOLDEN, &out);

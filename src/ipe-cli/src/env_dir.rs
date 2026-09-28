@@ -35,7 +35,7 @@ pub fn home() -> Option<PathBuf> {
 /// tool override is resolved by [`tool_home`] instead.
 #[must_use]
 pub fn ambient_home(var: &str, fallback: &str) -> Option<PathBuf> {
-    ambient_home_from(std::env::var_os(var), home(), fallback)
+    ambient_home_from(ipe_env::var_os(var), home(), fallback)
 }
 
 /// Resolve an ambient base directory from the raw variable value and the home.

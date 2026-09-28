@@ -103,6 +103,24 @@ pub fn pin_any_in_ty(
 /// so `SolvedTypes::poly_var_map` can build the lowerer's generic-variable lookup.
 pub type PolyVarEntry = ((Vec<Symbol>, Symbol), BTreeMap<Symbol, VarId>);
 
+/// The wildcard `any` occurrences of one typed binding's own checked signature.
+///
+/// `wildcards` lists the fresh flex of each occurrence in signature order
+/// (parameters left to right, then the return), each walked pre-order by
+/// [`Builder::instantiate_in`]. `param_counts` splits that list by parameter:
+/// the lowerer mints one generic per parameter occurrence and pairs them by
+/// index, so the per-parameter counts are what it asserts agreement against.
+#[derive(Clone, Debug)]
+pub struct WildcardEntry {
+    /// The binding's `(home, name)`.
+    pub key: (Vec<Symbol>, Symbol),
+    /// The fresh flex of each wildcard occurrence, in signature order.
+    pub wildcards: Vec<VarId>,
+    /// How many leading entries of `wildcards` each parameter contributes, in
+    /// parameter order; the return's occurrences follow.
+    pub param_counts: Vec<usize>,
+}
+
 /// Maximum number of nodes [`zonk`] reads back from a single type before
 /// declaring it pathologically deep. The occurs check in unification rules out
 /// true cycles, so this bound is only ever hit on adversarial input.
@@ -247,6 +265,25 @@ pub struct Builder<'a> {
     /// can pick a wrong, order-unstable file for a cross-module program (the
     /// IPE-T0014/T0001 span-collision class).
     pub super_vars: Vec<(VarId, TyBounds, Span, Vec<Symbol>)>,
+    /// The fresh flex of every wildcard `any` occurrence in a typed binding's
+    /// OWN checked signature. Each is a generic parameter of that binding (the
+    /// lowerer emits it as a bounded type parameter, and each use site
+    /// instantiates its own copy), so the interpolation default never pins one: a
+    /// default would rewrite the definition's type while every caller's
+    /// instantiation already settled on its own concrete argument.
+    pub signature_wildcards: Vec<VarId>,
+    /// The fresh flex of every wildcard `any` occurrence in each typed binding's
+    /// OWN checked signature, in signature order, keyed by `(home, name)`. A
+    /// wildcard the body obligates (`"${x}"` with `x : any`) is a bounded generic
+    /// parameter of the emitted function exactly like a named variable, so its
+    /// obligation is recorded under the unforgeable key `any#<i>` and every use
+    /// site checks the type its own `i`-th wildcard occurrence settled on
+    /// ([`SchemeApp::wildcards`]).
+    pub typed_wildcards: Vec<WildcardEntry>,
+    /// While `Some`, [`Builder::instantiate_in`] appends each wildcard `any`
+    /// occurrence's fresh flex here, in traversal order. Scoped to exactly one
+    /// signature instantiation by [`Builder::instantiate_logging_wildcards`].
+    pub wildcard_log: Option<Vec<VarId>>,
     /// One entry per *cross-module* reference to an untyped top-level binding
     /// (`Builder::current_home != source.0`). A same-module reference keeps
     /// sharing `untyped[key]` directly (unchanged monomorphic-within-module
@@ -310,6 +347,9 @@ pub struct SchemeApp {
     pub name: Symbol,
     /// Scheme type-variable raw id → the fresh variable it instantiated to here.
     pub vars: BTreeMap<u32, VarId>,
+    /// The fresh flex of each wildcard `any` occurrence of the scheme, in the
+    /// same signature order as [`Builder::typed_wildcards`].
+    pub wildcards: Vec<VarId>,
     /// The reference's source span, for blame on an unsatisfied bound.
     pub span: Span,
 }
@@ -477,6 +517,21 @@ pub struct Generated {
     pub typed_rigids: Vec<PolyVarEntry>,
     pub scheme_apps: Vec<SchemeApp>,
     pub super_vars: Vec<(VarId, TyBounds, Span, Vec<Symbol>)>,
+    /// The fresh flex of every wildcard `any` occurrence in a typed binding's
+    /// OWN checked signature. Each is a generic parameter of that binding (the
+    /// lowerer emits it as a bounded type parameter, and each use site
+    /// instantiates its own copy), so the interpolation default never pins one: a
+    /// default would rewrite the definition's type while every caller's
+    /// instantiation already settled on its own concrete argument.
+    pub signature_wildcards: Vec<VarId>,
+    /// The fresh flex of every wildcard `any` occurrence in each typed binding's
+    /// OWN checked signature, in signature order, keyed by `(home, name)`. A
+    /// wildcard the body obligates (`"${x}"` with `x : any`) is a bounded generic
+    /// parameter of the emitted function exactly like a named variable, so its
+    /// obligation is recorded under the unforgeable key `any#<i>` and every use
+    /// site checks the type its own `i`-th wildcard occurrence settled on
+    /// ([`SchemeApp::wildcards`]).
+    pub typed_wildcards: Vec<WildcardEntry>,
     /// Every cross-module untyped-binding reference recorded during
     /// constraint generation. See [`PendingInstantiation`].
     pub pending_instantiations: Vec<PendingInstantiation>,

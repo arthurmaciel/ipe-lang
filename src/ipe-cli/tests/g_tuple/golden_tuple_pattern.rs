@@ -60,7 +60,7 @@ fn emits_byte_identical_main_rs() {
 /// soundness-floor regression for tuple destructuring in parameters + `case`.
 #[test]
 fn end_to_end_builds_and_prints_forty_six() {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
 

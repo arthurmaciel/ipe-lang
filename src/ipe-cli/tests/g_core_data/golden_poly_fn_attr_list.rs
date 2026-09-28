@@ -34,7 +34,7 @@ fn repo_root() -> PathBuf {
 /// * run and print rendered HTML that contains "counter"
 #[test]
 fn poly_fn_attr_list_ipec_and_cargo_zero() {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
 

@@ -11,6 +11,9 @@ path = "src/main.rs"
 [dependencies]
 ipe_sandbox = { path = "../compiler/sandbox" }
 
+[build-dependencies]
+ipe_env = { path = "../compiler/env" }
+
 [dev-dependencies]
 ipe_kernels = { path = "../compiler/kernels" }
 

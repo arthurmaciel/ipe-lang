@@ -49,7 +49,7 @@ fn db_store_rename_column_emits() {
 /// checked-in `expected.txt` byte-for-byte.
 #[test]
 fn db_store_rename_column_runs_and_matches() {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
 

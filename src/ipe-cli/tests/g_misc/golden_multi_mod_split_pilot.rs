@@ -148,7 +148,7 @@ fn emits_split_spine_and_per_module_files() {
 /// `Lib.seedAndCount` are counted and printed as `seeded:2`.
 #[test]
 fn end_to_end_builds_and_prints_seeded_count() {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
 

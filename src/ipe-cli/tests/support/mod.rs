@@ -43,7 +43,7 @@ use std::process::{Command, Stdio};
 #[must_use]
 #[allow(dead_code)] // adopted file-by-file as tests migrate to the shared helper
 pub fn manifest_dir() -> PathBuf {
-    std::env::var_os("CARGO_MANIFEST_DIR")
+    ipe_env::var_os("CARGO_MANIFEST_DIR")
         .map_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")), PathBuf::from)
 }
 
@@ -57,7 +57,7 @@ pub fn manifest_dir() -> PathBuf {
 #[must_use]
 #[allow(dead_code)] // adopted file-by-file as tests migrate to the shared helper
 pub fn ipe_bin() -> PathBuf {
-    std::env::var_os("CARGO_BIN_EXE_ipe")
+    ipe_env::var_os("CARGO_BIN_EXE_ipe")
         .map_or_else(|| PathBuf::from(env!("CARGO_BIN_EXE_ipe")), PathBuf::from)
 }
 
@@ -355,7 +355,7 @@ pub fn assert_emitted_project_matches_golden_dir(emitted_out: &Path, golden_dir:
         ));
     }
 
-    if std::env::var_os("IPE_BLESS").is_some() {
+    if ipe_env::var_os("IPE_BLESS").is_some() {
         bless_golden_dir(golden_dir, &pairs, &emitted_mod_names);
         return;
     }
@@ -509,7 +509,7 @@ pub fn build_emitted(golden_name: &str, emitted_dir: &Path) -> Result<(), String
 #[track_caller]
 #[allow(dead_code)] // not every test binary exercises this helper
 pub fn assert_seal_builds(seal_name: &str, emitted_dir: &Path) {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return; // fast default gate: emit-only pass
     }
     let outcome = build_emitted(seal_name, emitted_dir);
@@ -768,7 +768,7 @@ pub fn assert_self_regression(golden_name: &str, golden_dir: &Path, ipe_stdout: 
     // instead of asserting. The counterpart to `IPE_BLESS` in the byte-diff
     // golden path, so an intentional render change is re-captured with the same
     // tooling — never hand-edited bytes.
-    if std::env::var_os("IPE_BLESS").is_some() {
+    if ipe_env::var_os("IPE_BLESS").is_some() {
         let path = golden_dir.join(e2e_support::EXPECTED_FILE);
         let wrote = std::fs::write(&path, ipe_stdout);
         assert!(

@@ -52,7 +52,7 @@ fn i191_ipec_accepts_and_hoists_capture_clone() {
         return;
     };
 
-    let built = ipe::build_with_sibling_discovery(&entry, &out, &runtime);
+    let built = ipe::build_loose_file(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
         "ipe build must succeed for input_arc_capture: {:?}",
@@ -100,7 +100,7 @@ fn i191_ipec_accepts_and_hoists_capture_clone() {
 /// have caught the original SEAL violation (E0382, `ipe build` clean).
 #[test]
 fn i191_cargo_builds_and_runs() {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
 
@@ -113,7 +113,7 @@ fn i191_cargo_builds_and_runs() {
     assert!(runtime.is_ok(), "runtime must resolve for E2E");
     let Ok(runtime) = runtime else { return };
 
-    let built = ipe::build_with_sibling_discovery(&entry, &out, &runtime);
+    let built = ipe::build_loose_file(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
         "ipe build must succeed for input_arc_capture: {:?}",

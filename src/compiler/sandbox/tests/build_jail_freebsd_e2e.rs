@@ -29,14 +29,14 @@ use ipe_sandbox::{CanonicalPath, JailMounts};
 /// the VM; absent it, these tests do nothing — the CI job proves the primitive
 /// separately as a hard failure).
 fn e2e_enabled() -> bool {
-    if std::env::var_os("IPE_E2E").is_none_or(|v| v != "1") {
+    if ipe_env::var_os("IPE_E2E").is_none_or(|v| v != "1") {
         return false;
     }
     which("jail").is_some()
 }
 
 fn which(bin: &str) -> Option<PathBuf> {
-    let path = std::env::var_os("PATH")?;
+    let path = ipe_env::var_os("PATH")?;
     std::env::split_paths(&path)
         .map(|d| d.join(bin))
         .find(|c| c.is_file())

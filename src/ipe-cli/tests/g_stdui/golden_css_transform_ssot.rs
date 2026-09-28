@@ -58,7 +58,7 @@ fn css_transform_ssot_emits() {
 /// delegation), proving the helpers and the delegation are output-correct.
 #[test]
 fn css_transform_ssot_e2e_output_matches_expected() {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
 

@@ -25,7 +25,7 @@ fn golden_dir(root: &Path, name: &str) -> PathBuf {
 }
 
 fn e2e_enabled() -> bool {
-    std::env::var("IPE_E2E").is_ok()
+    ipe_env::var("IPE_E2E").is_ok()
 }
 
 /// Compile `tests/golden/<name>/Main.ipe`, build the emitted Cargo project,
@@ -120,12 +120,11 @@ fn record_containing_secret_stays_clone_debug_eq() {
     );
 }
 
-/// Logging a `Secret` directly (`Log.infoWith "boot" [ aSecret ]`) is safe BY
-/// CONSTRUCTION: the attr-list element's Stringify obligation routes through
-/// `Secret`'s hand-written `IpeStringify`, which ALWAYS redacts. The marker
-/// must NEVER appear anywhere in stdout.
+/// Logging a `Secret` goes through its explicit `Secret.redacted` render (a
+/// bare `Secret` attribute is refused at type-check as not interpolable). The
+/// marker must NEVER appear anywhere in stdout.
 #[test]
-fn logging_a_secret_directly_never_leaks() {
+fn logging_a_redacted_secret_never_leaks() {
     if !e2e_enabled() {
         return;
     }

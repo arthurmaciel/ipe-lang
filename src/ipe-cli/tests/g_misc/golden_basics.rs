@@ -64,7 +64,7 @@ fn emits_byte_identical_main_rs_as_runtime_dependency() {
 /// real crates and takes ~1 min to compile cold).
 #[test]
 fn end_to_end_builds_and_prints_one() {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
 

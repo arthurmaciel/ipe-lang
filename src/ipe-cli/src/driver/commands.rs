@@ -1,10 +1,10 @@
 use super::{
     BuildOptions, BundleHost, BundleProfile, CliError, OutTarget, RuntimeContext, apply_fixes_cmd,
-    attribute_canon_errors, attribute_post_link_error, bluegreen_enabled, build_project_into,
-    build_with_sibling_discovery_into, bundle_delivery, collect_entry_and_siblings,
-    create_source_root, emit_machine_error, emit_permissions, find_manifest_for_ipe_file,
-    gate_decoder_pipelines, home_to_source_map, io_err, render_capabilities,
-    resolve_analysis_entry, resolve_vendored_runtime_dir, run_version, runtime_dep_from_env,
+    attribute_canon_errors, attribute_post_link_error, bluegreen_enabled, build_loose_file_into,
+    build_project_into, bundle_delivery, collect_entry_and_siblings, create_source_root,
+    emit_machine_error, emit_permissions, find_manifest_for_ipe_file, gate_decoder_pipelines,
+    home_to_source_map, io_err, render_capabilities, resolve_analysis_entry,
+    resolve_vendored_runtime_dir, run_version, runtime_dep_from_env,
     single_file_cargo_name_from_env,
 };
 use crate::output_dir::{EmitTarget, OutputArea, OutputRoot, OwnedDir, ProjectPaths};
@@ -397,8 +397,9 @@ pub fn resolve_delivery(
 /// Route an entry argument to its `package.ipe`, when one governs it.
 ///
 /// A directory must contain one, and a `.ipe` entry walks up the tree looking
-/// for one (returning no manifest — single-file mode — when none exists). A
-/// directory carrying only a legacy `ipe.toml` is a clear legacy-toml error.
+/// for one (returning no manifest — single-file mode — when none exists, and
+/// refusing one that fails the owner rule). A directory carrying only a legacy
+/// `ipe.toml` is a clear legacy-toml error.
 pub fn discover_manifest(entry_path: &Path) -> Result<Option<PathBuf>, CliError> {
     if entry_path.is_dir() {
         if let Some(manifest) = project::manifest_in_dir(entry_path) {
@@ -409,7 +410,7 @@ pub fn discover_manifest(entry_path: &Path) -> Result<Option<PathBuf>, CliError>
         }
         Err(CliError::Usage(text::msg::watch_dir_no_manifest()))
     } else {
-        Ok(find_manifest_for_ipe_file(entry_path))
+        find_manifest_for_ipe_file(entry_path)
     }
 }
 
@@ -532,7 +533,7 @@ pub fn resolve_compile_target(
         cli_args::WasmKind::Wasi => return CompileTarget::WasmWasi,
         cli_args::WasmKind::None => {}
     }
-    match std::env::var("IPE_TARGET").ok().as_deref() {
+    match ipe_env::var("IPE_TARGET").ok().as_deref() {
         Some("wasm") => return CompileTarget::WasmClient,
         Some("wasi") => return CompileTarget::WasmWasi,
         _ => {}
@@ -856,7 +857,7 @@ pub fn run_build_body(rest: &[String]) -> Result<BuildSuccess, CliError> {
 /// its sibling files.
 ///
 /// # Errors
-/// As [`build_project_into`] and [`build_with_sibling_discovery_into`].
+/// As [`build_project_into`] and [`build_loose_file_into`].
 fn emit_into(
     entry_path: &Path,
     manifest: Option<&Path>,
@@ -867,7 +868,7 @@ fn emit_into(
     let out = OutTarget::Proven(target);
     match manifest {
         Some(m) => build_project_into(m, out, runtime_dir, &options),
-        None => build_with_sibling_discovery_into(entry_path, out, runtime_dir, options),
+        None => build_loose_file_into(entry_path, out, runtime_dir, options),
     }
 }
 
@@ -2156,7 +2157,7 @@ pub fn bundle_wasm(crate_dir: &OwnedDir) -> Result<(), CliError> {
     // per-project fallback the emitted manifest's `[workspace]` detachment
     // would use).
     let wasm_path = {
-        let via_env = std::env::var_os("CARGO_TARGET_DIR").map(|d| {
+        let via_env = ipe_env::var_os("CARGO_TARGET_DIR").map(|d| {
             std::path::PathBuf::from(d)
                 .join("wasm32-unknown-unknown")
                 .join("release")
@@ -3626,7 +3627,8 @@ pub fn build_source_graph(entry: &Path) -> Result<SourceGraph, CliError> {
 /// acknowledgment gate never operates on a partial source set.
 ///
 /// # Errors
-/// [`CliError::Io`] when any discovered module cannot be read.
+/// [`CliError::Io`] when any discovered module cannot be read; for a single
+/// file, every [`loose_file_scan_sources`] error.
 pub fn user_sources_for_unsafe_scan(
     manifest: Option<&Path>,
     entry: &Path,
@@ -3637,26 +3639,35 @@ pub fn user_sources_for_unsafe_scan(
     {
         return discovered
             .iter()
-            .map(|d| {
-                crate::io_bounded::read_to_string_capped(
-                    d.path(),
-                    crate::io_bounded::SOURCE_READ_CAP,
-                )
-            })
+            .map(|d| crate::io_bounded::read_walked_source(d.path()))
             .collect::<Result<Vec<_>, _>>();
     }
     // Single file (or a manifest that failed to parse — the build will surface
     // that error itself): the entry and its siblings.
+    loose_file_scan_sources(entry).map(|named| named.into_iter().map(|(_, src)| src).collect())
+}
+
+/// The loose-file closure's `(dotted-module-name, source)` pairs for a consent scan.
+///
+/// An entry that does not parse has no import closure to follow, so the scan
+/// sees the entry's own text, keyed by its path; the build reports the parse
+/// error itself. Every other failure — an unreadable entry or module, a file
+/// or closure past its limit — propagates, so no gate judges a partial
+/// source set.
+///
+/// # Errors
+/// Every [`collect_entry_and_siblings`] error except the entry's own parse failure.
+fn loose_file_scan_sources(entry: &Path) -> Result<Vec<(String, String)>, CliError> {
     match collect_entry_and_siblings(entry) {
         Ok(collected) => Ok(collected
             .sources
-            .into_values()
-            .map(|(_, src)| src)
+            .into_iter()
+            .map(|(path, (_, src))| (path.join("."), src))
             .collect()),
-        Err(_) => {
-            crate::io_bounded::read_to_string_capped(entry, crate::io_bounded::SOURCE_READ_CAP)
-                .map(|src| vec![src])
+        Err(CliError::Pipeline { file, src, .. }) if file.as_path() == entry => {
+            Ok(vec![(entry.display().to_string(), src)])
         }
+        Err(other) => Err(other),
     }
 }
 
@@ -3842,8 +3853,8 @@ fn gate_native_ffi_consent(
 
 /// Collect `(dotted-module-name, source)` pairs spanning the app entry and its
 /// siblings (and, when a manifest is present, every discovered package module),
-/// for the web-axis provenance scan. Falls back to the bare entry when sibling
-/// discovery fails, exactly as the `.Unsafe` scan does.
+/// for the web-axis provenance scan. Discovery failures propagate, exactly as
+/// in the `.Unsafe` scan; see [`loose_file_scan_sources`].
 pub fn named_sources_for_web_scan(
     manifest_path: Option<&Path>,
     entry: &Path,
@@ -3854,25 +3865,12 @@ pub fn named_sources_for_web_scan(
         let discovered = project::discover_modules(&manifest.src_root)?;
         let mut out = Vec::with_capacity(discovered.len());
         for m in &discovered {
-            let src = crate::io_bounded::read_to_string_capped(
-                m.path(),
-                crate::io_bounded::SOURCE_READ_CAP,
-            )?;
+            let src = crate::io_bounded::read_walked_source(m.path())?;
             out.push((m.module_path().join("."), src));
         }
         return Ok(out);
     }
-    match collect_entry_and_siblings(entry) {
-        Ok(collected) => Ok(collected
-            .sources
-            .into_iter()
-            .map(|(path, (_, src))| (path.join("."), src))
-            .collect()),
-        Err(_) => {
-            crate::io_bounded::read_to_string_capped(entry, crate::io_bounded::SOURCE_READ_CAP)
-                .map(|src| vec![(entry.display().to_string(), src)])
-        }
-    }
+    loose_file_scan_sources(entry)
 }
 
 /// Type-check a single `.ipe` entry through the SAME injection-aware

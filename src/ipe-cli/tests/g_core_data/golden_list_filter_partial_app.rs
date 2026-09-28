@@ -60,7 +60,7 @@ fn list_filter_partial_app_compiles() {
         built.err()
     );
 
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
 

@@ -3,7 +3,6 @@ module Main exposing (main)
 import Ipe.Http.StatusCode as StatusCode
 import Ipe.Io as Io
 import Ipe.String as String
-import Ipe.ToString as ToString
 
 
 -- SEAL: Ipe.Http.StatusCode round-trips + classifiers.
@@ -16,7 +15,7 @@ okLine =
         sc =
             StatusCode.fromInt 200
     in
-    "code=" ++ String.fromInt (StatusCode.code sc) ++ " ok=" ++ ToString.fromBool (StatusCode.isSuccess sc)
+    "code=" ++ String.fromInt (StatusCode.code sc) ++ " ok=" ++ String.fromBool (StatusCode.isSuccess sc)
 
 
 redirectLine : String
@@ -25,7 +24,7 @@ redirectLine =
         sc =
             StatusCode.fromInt 301
     in
-    "code=" ++ String.fromInt (StatusCode.code sc) ++ " redirect=" ++ ToString.fromBool (StatusCode.isRedirect sc)
+    "code=" ++ String.fromInt (StatusCode.code sc) ++ " redirect=" ++ String.fromBool (StatusCode.isRedirect sc)
 
 
 clientLine : String
@@ -34,7 +33,7 @@ clientLine =
         sc =
             StatusCode.fromInt 404
     in
-    "code=" ++ String.fromInt (StatusCode.code sc) ++ " client=" ++ ToString.fromBool (StatusCode.isClientError sc)
+    "code=" ++ String.fromInt (StatusCode.code sc) ++ " client=" ++ String.fromBool (StatusCode.isClientError sc)
 
 
 serverLine : String
@@ -43,7 +42,7 @@ serverLine =
         sc =
             StatusCode.fromInt 500
     in
-    "code=" ++ String.fromInt (StatusCode.code sc) ++ " server=" ++ ToString.fromBool (StatusCode.isServerError sc)
+    "code=" ++ String.fromInt (StatusCode.code sc) ++ " server=" ++ String.fromBool (StatusCode.isServerError sc)
 
 
 -- Classifiers are mutually exclusive: 200 is NOT a redirect/client/server error.
@@ -53,7 +52,7 @@ negLine =
         sc =
             StatusCode.fromInt 200
     in
-    "neg=" ++ ToString.fromBool (StatusCode.isRedirect sc || StatusCode.isClientError sc || StatusCode.isServerError sc)
+    "neg=" ++ String.fromBool (StatusCode.isRedirect sc || StatusCode.isClientError sc || StatusCode.isServerError sc)
 
 
 main =

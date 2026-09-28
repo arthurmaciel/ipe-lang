@@ -797,14 +797,14 @@ fn audit_entry_rejects_a_package_that_fails_the_tier1_audit() {
 /// at runtime pointing at the extracted binary; fall back to the baked path for a
 /// plain (non-archive) run.
 fn ipe_bin() -> PathBuf {
-    std::env::var_os("CARGO_BIN_EXE_ipe")
+    ipe_env::var_os("CARGO_BIN_EXE_ipe")
         .map_or_else(|| PathBuf::from(env!("CARGO_BIN_EXE_ipe")), PathBuf::from)
 }
 
 #[test]
 fn publish_dry_run_computes_a_correct_entry_offline() {
     // Gated: the dry-run still runs the local audit gate, which builds the package.
-    if std::env::var_os("IPE_E2E").is_none() {
+    if ipe_env::var_os("IPE_E2E").is_none() {
         eprintln!("skipping publish_dry_run_computes_a_correct_entry_offline (set IPE_E2E=1)");
         return;
     }

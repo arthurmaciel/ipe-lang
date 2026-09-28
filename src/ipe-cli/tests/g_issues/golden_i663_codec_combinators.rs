@@ -72,7 +72,7 @@ fn codec_combinators_builds_and_runs() {
     let built = ipe::build(&entry, &out, &runtime);
     assert!(built.is_ok(), "{GOLDEN} must be accepted, got: {built:?}");
 
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
     let outcome = crate::support::build_and_run_emitted(GOLDEN, &out);

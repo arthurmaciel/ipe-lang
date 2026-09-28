@@ -301,7 +301,7 @@ fn assert_library_type_checks(tag: &str, init_args: &[String], entry_rel: &std::
 /// loop then forces it through the SEAL.
 #[test]
 fn init_scaffold_builds() {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
 

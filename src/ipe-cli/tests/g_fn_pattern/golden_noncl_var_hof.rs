@@ -62,7 +62,7 @@ fn assert_ipec_ok(fixture: &str, out_suffix: &str) {
 fn a1_noncl_var_task_and_then_compiles() {
     assert_ipec_ok("noncl_var_hof", "i149_noncl_var_hof_emit");
 
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
 

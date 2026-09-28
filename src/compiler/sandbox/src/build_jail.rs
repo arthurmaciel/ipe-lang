@@ -366,7 +366,7 @@ pub fn build_in_jail(
     // per call in the long-lived audit/CI process.
     let seccomp_owned = unsafe { OwnedFd::from_raw_fd(seccomp_fd) };
 
-    let host_env = |k: &str| std::env::var_os(k);
+    let host_env = crate::host_env::granted;
     let argv = run_jail_argv(
         tools,
         profile,
@@ -458,7 +458,7 @@ pub fn build_in_jail(
     // Enforce the `env` axis in the launcher (Seatbelt cannot scrub env),
     // mirroring the run jail and the Linux build jail's bwrap `--clearenv`, so a
     // Tier-2 build is confined on the env axis exactly as the shipped app is.
-    let host_env = |k: &str| std::env::var_os(k);
+    let host_env = crate::host_env::granted;
     let scrubbed_env = macos_scrubbed_env(profile, scoped_tmp, &host_env);
 
     spawn_and_decode(&argv, Some(&scrubbed_env))
@@ -1172,7 +1172,7 @@ pub fn macos_scrubbed_env(
 /// resolver is shared.
 #[cfg(any(target_os = "macos", target_os = "freebsd"))]
 pub(crate) fn find_in_path(bin: &str) -> Option<PathBuf> {
-    let path = std::env::var_os("PATH")?;
+    let path = ipe_env::var_os("PATH")?;
     std::env::split_paths(&path)
         .map(|dir| dir.join(bin))
         .find(|candidate| candidate.is_file())
@@ -1239,10 +1239,6 @@ mod freebsd_jail {
     use crate::run_jail::{FilesystemScope, RunJailDefect, SandboxProfile};
     use std::ffi::OsString;
     use std::path::{Path, PathBuf};
-    // `getuid(3)` is used in the exclusive jail-dir ownership check. It is
-    // infallible and always safe to call.
-    #[allow(unused_imports)]
-    use libc;
 
     /// The unprivileged user the jailed payload runs as. A second, defence-in-depth
     /// layer under the read-only jail root: even the writable scratch is owned by
@@ -1358,7 +1354,7 @@ mod freebsd_jail {
 
         // Env scrub in the launcher (the jail does not scrub the inherited env),
         // via the SAME allowlist the macOS/Windows arms use — one env list.
-        let host_env = |k: &str| std::env::var_os(k);
+        let host_env = crate::host_env::granted;
         let scrubbed = macos_scrubbed_env(profile, scoped_tmp.as_path(), &host_env);
 
         // Apply the rctl process-cap rule (withheld subprocess only) BEFORE the
@@ -1962,13 +1958,8 @@ mod freebsd_jail {
         // current uid. `symlink_metadata` does NOT follow symlinks, so a symlink
         // planted between `create_dir` and here is caught as a non-directory
         // entry and refused.
-        let current_uid = {
-            // SAFETY: `getuid(3)` is always safe and always succeeds.
-            #[allow(unsafe_code)]
-            unsafe {
-                libc::getuid()
-            }
-        };
+        // The effective uid owns what this process creates.
+        let current_uid = rustix::process::geteuid().as_raw();
         for ancestor in [parent, leaf.as_path()] {
             let meta =
                 std::fs::symlink_metadata(ancestor).map_err(|e| RunJailDefect::MountFailed {

@@ -60,7 +60,7 @@ fn cache_int_get_builds_and_runs() {
         "cache_int_get: must be accepted, got: {built:?}"
     );
 
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
     let outcome = crate::support::build_and_run_emitted("cache_int_get", &out);

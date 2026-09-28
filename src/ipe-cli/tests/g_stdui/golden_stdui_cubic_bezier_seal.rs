@@ -79,7 +79,7 @@ fn cubic_bezier_record_form_compiles() {
 /// `cubic-bezier(0.4, 0, 0.2, 1)` string.
 #[test]
 fn cubic_bezier_in_range_e2e() {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
     let (emit, res) = build_project("in_range", MAIN_IN_RANGE);
@@ -102,7 +102,7 @@ fn cubic_bezier_in_range_e2e() {
 /// `y1 = -0.5` must survive unchanged (Y is unconstrained).
 #[test]
 fn cubic_bezier_clamp_x_e2e() {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
     let (emit, res) = build_project("clamp_x", MAIN_CLAMP_X);

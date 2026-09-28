@@ -162,7 +162,7 @@ fn tui_entry_case_taskrun_builds_and_runs() {
         "tui_entry_case_taskrun: must be accepted, got: {built:?}"
     );
 
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
     let outcome = crate::support::build_and_run_emitted("tui_entry_case_taskrun", &out);

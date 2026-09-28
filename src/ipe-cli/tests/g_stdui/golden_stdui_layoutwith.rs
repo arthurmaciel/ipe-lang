@@ -77,7 +77,7 @@ fn build_run_layoutwith() -> (PathBuf, crate::support::RunOutcome) {
 /// Divergence golden — the expected value is ipe's own correct output.
 #[test]
 fn layoutwith_inline_cfg_applies_wrapper_and_root_attrs() {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
 

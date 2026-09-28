@@ -45,7 +45,7 @@ fn golden_dir(root: &Path, name: &str) -> PathBuf {
 /// for a parity case, or Ipê-Rust's own recorded output for a `divergence:`
 /// entry). Gated on `IPE_E2E=1`.
 fn assert_runs_and_matches_oracle(name: &str) {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
 

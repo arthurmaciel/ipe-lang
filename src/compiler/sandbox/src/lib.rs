@@ -32,8 +32,10 @@ pub use mounts::{CanonicalPath, HomeMasks, JailPathError, MaskedDir};
 pub mod build_jail;
 mod covers;
 pub mod home;
+pub mod host_env;
 mod mounts;
 pub mod run_jail;
+pub mod scratch;
 pub mod seccomp;
 #[cfg(test)]
 mod test_dir;
@@ -106,7 +108,9 @@ impl From<SandboxDefect> for SandboxError {
             }
             SandboxDefect::Path(e) => e.to_string(),
         };
-        Self::BuildJail { detail }
+        Self::BuildJail {
+            detail: detail.into(),
+        }
     }
 }
 
@@ -165,7 +169,7 @@ pub fn missing_caps(caps: &Capabilities) -> Vec<&'static str> {
 }
 
 fn find_in_path(bin: &str) -> Option<PathBuf> {
-    let path = std::env::var_os("PATH")?;
+    let path = ipe_env::var_os("PATH")?;
     std::env::split_paths(&path)
         .map(|dir| dir.join(bin))
         .find(|candidate| candidate.is_file())
@@ -192,7 +196,7 @@ pub fn select_mechanism(caps: &Capabilities) -> Mechanism {
 /// driver MUST print a trust warning when honouring this.
 #[must_use]
 pub fn unsandboxed_override_set() -> bool {
-    std::env::var_os("IPE_FFI_ALLOW_UNSANDBOXED").is_some_and(|v| v == "1")
+    ipe_env::var_os("IPE_FFI_ALLOW_UNSANDBOXED").is_some_and(|v| v == "1")
 }
 
 // ── jail specification ──────────────────────────────────────────────────────

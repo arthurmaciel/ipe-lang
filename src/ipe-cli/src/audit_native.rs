@@ -897,7 +897,7 @@ fn establish_jail_tools() -> Result<RunJailTools, CliError> {
 /// Resolve a program name to an absolute path on `PATH`, or `None` if absent.
 #[cfg(any(target_os = "macos", target_os = "freebsd", target_os = "windows"))]
 fn which_on_path(bin: &str) -> Option<PathBuf> {
-    let path = std::env::var_os("PATH")?;
+    let path = ipe_env::var_os("PATH")?;
     std::env::split_paths(&path)
         .map(|dir| dir.join(bin))
         .find(|candidate| candidate.is_file())
@@ -1857,7 +1857,7 @@ fn cargo_home_env(
     target_os = "windows"
 ))]
 fn absolute_cargo() -> Option<PathBuf> {
-    let path = std::env::var_os("PATH")?;
+    let path = ipe_env::var_os("PATH")?;
     std::env::split_paths(&path)
         .find(|dir| dir.join("cargo").is_file())
         .and_then(|dir| CanonicalPath::resolve(&dir).ok())

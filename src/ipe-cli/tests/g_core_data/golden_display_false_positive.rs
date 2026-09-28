@@ -1,11 +1,11 @@
 //! FALSE-POSITIVE guard — the general kernel->bound map must
 //! NOT over-bound.
 //!
-//! The stringify obligation is decided per-param by the EXACT `toString`
-//! argument position (arg 0), mirroring the `IpeRow` per-row-arg precision.
+//! The stringify obligation is decided per-param by the EXACT `{{…}}`
+//! interpolation argument position (arg 0), mirroring the `IpeRow` per-row-arg precision.
 //! A wildcard `any` param used ONLY as a Db row (which correctly gains `IpeRow`)
 //! must NOT ALSO gain a spurious `IpeStringify` bound just because a SIBLING
-//! concrete `String` param is `toString`'d in the same body.
+//! concrete `String` param is interpolated in the same body.
 //!
 //! Why precision matters: the row generic's real obligation is `IpeRow` alone.
 //! A gratuitous stringify bound on it would be a bound the param does not need
@@ -48,7 +48,7 @@ fn i186_false_positive_ipec_no_spurious_display() {
         return;
     };
 
-    let built = ipe::build_with_sibling_discovery(&entry, &out, &runtime);
+    let built = ipe::build_loose_file(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
         "ipe build must succeed for display_false_positive: {:?}",
@@ -58,7 +58,7 @@ fn i186_false_positive_ipec_no_spurious_display() {
     let emitted = crate::support::read_all_emitted_src(&out);
 
     // The `grab` fn's wildcard row generic gets `IpeRow` (its real obligation)
-    // and must NOT get `Display` (the sibling `String` is what is toString'd).
+    // and must NOT get `Display` (the sibling `String` is what is interpolated).
     let grab_sig = emitted.lines().find(|l| l.contains("fn main_grab"));
     assert!(
         grab_sig.is_some(),
@@ -72,7 +72,7 @@ fn i186_false_positive_ipec_no_spurious_display() {
     assert!(
         !grab_sig.contains("stringify::IpeStringify"),
         "the wildcard row generic must NOT gain a spurious `IpeStringify` bound \
-         from a SIBLING `String`'s `toString` — that would be over-bounding; \
+         from a SIBLING `String`'s interpolation — that would be over-bounding; \
          got: {grab_sig}"
     );
 }
@@ -81,7 +81,7 @@ fn i186_false_positive_ipec_no_spurious_display() {
 /// Gated on `IPE_E2E=1`.
 #[test]
 fn i186_false_positive_cargo_builds_and_runs() {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
 
@@ -95,7 +95,7 @@ fn i186_false_positive_cargo_builds_and_runs() {
         return;
     };
 
-    let built = ipe::build_with_sibling_discovery(&entry, &out, &runtime);
+    let built = ipe::build_loose_file(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
         "ipe build must succeed for display_false_positive: {:?}",

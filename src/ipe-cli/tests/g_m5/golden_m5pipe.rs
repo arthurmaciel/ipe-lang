@@ -47,7 +47,7 @@ fn assert_byte_identical(name: &str) {
 }
 
 fn assert_runs_and_matches_oracle(name: &str) {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
 

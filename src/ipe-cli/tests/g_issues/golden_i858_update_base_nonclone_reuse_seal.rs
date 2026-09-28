@@ -109,7 +109,7 @@ fn assert_accepted(name: &str, source: &str, expected_stdout: &str) {
             return;
         }
     }
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
     let outcome = crate::support::build_and_run_emitted(name, &out);

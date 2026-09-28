@@ -63,6 +63,9 @@ impl<'a> Builder<'a> {
             typed_rigids: Vec::new(),
             scheme_apps: Vec::new(),
             super_vars: Vec::new(),
+            signature_wildcards: Vec::new(),
+            typed_wildcards: Vec::new(),
+            wildcard_log: None,
             pending_instantiations: Vec::new(),
             scheme_cache: RefCell::new(vec![SchemeSlot::Unresolved; StdlibKernel::COUNT]),
         };
@@ -120,12 +123,17 @@ impl<'a> Builder<'a> {
             for ctor in &union.ctors {
                 let mut arg_tys = Vec::with_capacity(ctor.args.len());
                 for ct in &ctor.args {
+                    // A payload field is a user-written type like any annotation,
+                    // so it takes the same normalisation (`Task Error a` to the
+                    // internal unary `Task a`, error-channel and arity checks)
+                    // before a pattern binder or constructor use unifies with it.
+                    let normalized = builder.normalize_annotation_ty(from_canon(ct), ctor.span)?;
                     // Pin `any` wildcard fields to Dict String String so every
                     // instantiation site (pattern binder, ctor-as-value,
                     // Sub.subscribeTopic) sees the concrete carrier, never a
                     // free Ty::Var that the lowerer would reject (IPE-L0102).
                     arg_tys.push(pin_any_in_ty(
-                        from_canon(ct),
+                        normalized,
                         &union.vars,
                         builder.interner,
                         dict_sym,
@@ -258,6 +266,8 @@ impl<'a> Builder<'a> {
             typed_rigids: builder.typed_rigids,
             scheme_apps: builder.scheme_apps,
             super_vars: builder.super_vars,
+            signature_wildcards: builder.signature_wildcards,
+            typed_wildcards: builder.typed_wildcards,
             pending_instantiations: builder.pending_instantiations,
             module_order,
         })
@@ -568,10 +578,35 @@ impl<'a> Builder<'a> {
     /// returned alongside the type. It lets a use site be checked post-solve
     /// against the binding's super-type obligations: each obligated scheme
     /// variable's fresh variable reveals the concrete type this use pinned it to.
-    pub fn instantiate_tracked(&mut self, ty: &Ty) -> DResult<(VarId, BTreeMap<u32, VarId>)> {
+    ///
+    /// The fresh flex of each wildcard `any` occurrence is returned third, in
+    /// signature order, for the same post-solve check of a wildcard obligation.
+    pub fn instantiate_tracked(
+        &mut self,
+        ty: &Ty,
+    ) -> DResult<(VarId, BTreeMap<u32, VarId>, Vec<VarId>)> {
         let mut vars = BTreeMap::new();
-        let var = self.instantiate_in(ty, &mut vars, /* rigid */ false)?;
-        Ok((var, vars))
+        let mut wildcards = Vec::new();
+        let var = self.instantiate_logging_wildcards(ty, &mut vars, false, &mut wildcards)?;
+        Ok((var, vars, wildcards))
+    }
+
+    /// [`Self::instantiate_in`], appending the fresh flex of every wildcard
+    /// `any` occurrence of `ty` to `wildcards` in traversal order. The log is
+    /// active for this one instantiation only, so a constructor or pattern
+    /// instantiated between two signature pieces never enters it.
+    pub fn instantiate_logging_wildcards(
+        &mut self,
+        ty: &Ty,
+        vars: &mut BTreeMap<u32, VarId>,
+        rigid: bool,
+        wildcards: &mut Vec<VarId>,
+    ) -> DResult<VarId> {
+        let outer = self.wildcard_log.replace(Vec::new());
+        let var = self.instantiate_in(ty, vars, rigid);
+        let logged = std::mem::replace(&mut self.wildcard_log, outer);
+        wildcards.extend(logged.unwrap_or_default());
+        var
     }
 
     /// Instantiate a constructor scheme through one shared variable map, returning
@@ -589,22 +624,6 @@ impl<'a> Builder<'a> {
         }
         let result_var = self.instantiate_in(&scheme.result, &mut vars, /* rigid */ false)?;
         Ok((arg_vars, result_var))
-    }
-
-    /// Instantiate a resolved [`Ty`] with every type variable replaced by a fresh
-    /// **rigid** (skolem) variable, sharing `vars` across the call so repeated
-    /// occurrences of one annotation variable map to one rigid node.
-    ///
-    /// Used to seed a typed binding's parameters + return when checking its body:
-    /// the whole signature is instantiated through *one* `vars` map so `a` is the
-    /// same rigid everywhere it appears, and distinct annotation variables become
-    /// distinct rigids that the body cannot conflate ([`Content::Rigid`]).
-    pub fn instantiate_rigid(
-        &mut self,
-        ty: &Ty,
-        vars: &mut BTreeMap<u32, VarId>,
-    ) -> DResult<VarId> {
-        self.instantiate_in(ty, vars, /* rigid */ true)
     }
 
     pub fn instantiate_in(
@@ -667,7 +686,16 @@ impl<'a> Builder<'a> {
                 if is_any {
                     // Fresh flex UV per occurrence — intentionally NOT inserted
                     // into `vars` so the next occurrence also gets its own UV.
-                    return self.flex();
+                    // A signature's own wildcard (`rigid`) is a generic
+                    // parameter defaulting must leave alone.
+                    let v = self.flex()?;
+                    if rigid {
+                        self.signature_wildcards.push(v);
+                    }
+                    if let Some(log) = self.wildcard_log.as_mut() {
+                        log.push(v);
+                    }
+                    return Ok(v);
                 }
                 if let Some(v) = vars.get(id).copied() {
                     return Ok(v);

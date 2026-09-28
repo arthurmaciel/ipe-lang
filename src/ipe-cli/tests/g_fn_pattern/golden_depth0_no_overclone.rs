@@ -49,7 +49,7 @@ fn i225_depth0_no_overclone_ipec_accepts_lean() {
         return;
     };
 
-    let built = ipe::build_with_sibling_discovery(&entry, &out, &runtime);
+    let built = ipe::build_loose_file(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
         "ipe build must succeed for depth0_no_overclone: {:?}",
@@ -79,7 +79,7 @@ fn i225_depth0_no_overclone_ipec_accepts_lean() {
 /// and run — leanness never at the cost of soundness.
 #[test]
 fn i225_depth0_no_overclone_cargo_builds_and_runs() {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
 
@@ -92,7 +92,7 @@ fn i225_depth0_no_overclone_cargo_builds_and_runs() {
         return;
     };
 
-    let built = ipe::build_with_sibling_discovery(&entry, &out, &runtime);
+    let built = ipe::build_loose_file(&entry, &out, &runtime);
     assert!(built.is_ok(), "ipe build must succeed: {:?}", built.err());
 
     let outcome = crate::support::build_and_run_emitted("depth0_no_overclone", &out);

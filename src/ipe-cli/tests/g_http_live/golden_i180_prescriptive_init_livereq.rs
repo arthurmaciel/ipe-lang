@@ -206,7 +206,7 @@ fn live_init_poly_var_is_rejected() {
 /// working directory mid-build.
 #[test]
 fn live_init_reads_req_path_cargo_builds() {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
     let out = crate::support::scratch_root().join("i180_init_reads_req_path_e2e_out");

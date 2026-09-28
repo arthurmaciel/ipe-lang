@@ -147,7 +147,7 @@ pub fn exec_in_run_jail(
     payload.push(app.as_path().as_os_str().to_owned());
     payload.extend(app_args.iter().cloned());
 
-    let host_env = |k: &str| std::env::var_os(k);
+    let host_env = crate::host_env::granted;
     let argv = run_jail_argv(
         tools,
         profile,
@@ -235,7 +235,7 @@ pub fn exec_embedded_in_run_jail(
     payload.push(dest.as_os_str().to_owned());
     payload.extend(app_args.iter().cloned());
 
-    let host_env = |k: &str| std::env::var_os(k);
+    let host_env = crate::host_env::granted;
     let argv = run_jail_argv_with_delivery(
         tools,
         profile,

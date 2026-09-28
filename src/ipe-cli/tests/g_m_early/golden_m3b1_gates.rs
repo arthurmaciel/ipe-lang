@@ -60,7 +60,7 @@ fn build_ok(fixture: &str, out_suffix: &str) -> Option<PathBuf> {
 // lowering under test, so aborting is the correct failure signal.
 #[allow(clippy::expect_used)]
 fn assert_e2e_prints_three(out: &Path) {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
     let output = Command::new("cargo")

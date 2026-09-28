@@ -76,7 +76,7 @@ fn run_subcommand_builds_and_executes_hello_program() {
     const SRC: &str =
         "module Main exposing (main)\n\nimport Ipe.Io\n\nmain = Io.println \"hello from run\"\n";
 
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
 
@@ -159,7 +159,7 @@ fn run_subcommand_builds_and_executes_hello_program() {
 fn emitted_cargo_toml_name_matches_binary_ipe_run_will_exec() {
     const SRC: &str = "module Main exposing (main)\n\nimport Ipe.Io\n\nmain = Io.println \"ok\"\n";
 
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
 

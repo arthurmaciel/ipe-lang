@@ -49,7 +49,7 @@ fn error_details_roundtrip_compiles() {
 
 #[test]
 fn error_details_roundtrip_runs_and_prints_expected_output() {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
     let root = repo_root();

@@ -47,9 +47,9 @@ impl GrantScope {
         }
     }
 
-    fn purpose(self) -> String {
+    fn purpose(self) -> crate::text::Message {
         match self {
-            Self::Publish => crate::text::login_grant_purpose_publish().to_owned(),
+            Self::Publish => crate::text::msg::login_grant_purpose_publish(),
             Self::RegisterSigningKey => {
                 crate::text::login_grant_purpose_signing_key(&self.as_str())
             }
@@ -102,7 +102,7 @@ pub fn run_login(rest: &[String]) -> Result<(), CliError> {
                 }
             };
             let key_line = crate::ssh_signing_key::status_line(
-                std::env::var_os(crate::ssh_signing_key::SIGNING_KEY_ENV).as_deref(),
+                ipe_env::var_os(crate::ssh_signing_key::SIGNING_KEY_ENV).as_deref(),
                 config_dir().as_deref(),
             );
             crate::screen::Screen::new(crate::screen::Stream::Stdout)
@@ -196,6 +196,9 @@ pub fn stored_token() -> Option<PublishToken> {
 /// Run the full device flow: request a code, prompt the user, poll for the token,
 /// store it; then offer signing-key setup when none is configured.
 fn run_device_flow() -> Result<(), CliError> {
+    // Refuse up front where the token could not be stored owner-only, before
+    // the user approves a grant that would then be discarded.
+    require_token_store(HOST_TOKEN_STORE)?;
     let token = authorize(GrantScope::Publish, PublishToken::parse)?;
     let path = store_token(&token)?;
     crate::screen::Screen::new(crate::screen::Stream::Stdout)
@@ -526,7 +529,7 @@ fn token_status() -> TokenStatus {
 ///
 /// On Unix the file is created with mode 0600 atomically before any bytes are
 /// written, so there is no window where the token is readable by other users.
-/// On non-Unix the containing profile directory is the protection layer.
+/// Off Unix the token is never stored (see [`write_token_atomic`]).
 fn store_token(token: &PublishToken) -> Result<PathBuf, CliError> {
     let path =
         token_path().ok_or_else(|| login_error(&crate::text::msg::login_config_dir_unknown()))?;
@@ -552,8 +555,9 @@ fn store_token(token: &PublishToken) -> Result<PathBuf, CliError> {
 /// bytes only ever land in a 0600 inode, so there is no window in which the
 /// secret is group- or world-readable.
 ///
-/// On non-Unix: falls back to [`std::fs::write`] and relies on the containing
-/// directory for protection (same as before).
+/// Off Unix: refused. No portable owner-only file mode exists there, so the
+/// token is never written to a file other users might read; `GITHUB_TOKEN`
+/// supplies it instead.
 #[cfg(unix)]
 fn write_token_atomic(path: &std::path::Path, token: &str) -> Result<(), CliError> {
     use std::fs::OpenOptions;
@@ -597,9 +601,34 @@ fn write_token_atomic(path: &std::path::Path, token: &str) -> Result<(), CliErro
 }
 
 #[cfg(not(unix))]
-fn write_token_atomic(path: &std::path::Path, token: &str) -> Result<(), CliError> {
-    std::fs::write(path, format!("{token}\n"))
-        .map_err(|e| login_error(&crate::text::msg::login_write_failed(&path.display(), &e)))
+fn write_token_atomic(_path: &std::path::Path, _token: &str) -> Result<(), CliError> {
+    require_token_store(HOST_TOKEN_STORE)
+}
+
+/// Where the host can keep the publish token.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TokenStore {
+    /// A file created mode 0600, readable by its owner only.
+    OwnerOnlyFile,
+    /// No owner-only file mode exists, so the token is never stored.
+    Unsupported,
+}
+
+/// The token store this build's target provides.
+const HOST_TOKEN_STORE: TokenStore = if cfg!(unix) {
+    TokenStore::OwnerOnlyFile
+} else {
+    TokenStore::Unsupported
+};
+
+/// Refuse a login whose token `store` cannot keep it owner-only.
+fn require_token_store(store: TokenStore) -> Result<(), CliError> {
+    match store {
+        TokenStore::OwnerOnlyFile => Ok(()),
+        TokenStore::Unsupported => Err(login_error(
+            &crate::text::msg::login_token_store_unsupported(),
+        )),
+    }
 }
 
 /// Remove the stored token.
@@ -658,6 +687,34 @@ mod tests {
             GrantScope::RegisterSigningKey.as_str(),
             "write:ssh_signing_key"
         );
+    }
+
+    #[test]
+    fn owner_only_token_store_admits_login() {
+        assert!(require_token_store(TokenStore::OwnerOnlyFile).is_ok());
+    }
+
+    #[test]
+    fn unsupported_token_store_refuses_login() {
+        let refusal = require_token_store(TokenStore::Unsupported);
+        assert!(
+            matches!(
+                &refusal,
+                Err(CliError::Resolve(message))
+                    if message.contains(crate::text::msg::login_token_store_unsupported().as_str())
+            ),
+            "an unsupported token store must refuse the login: {refusal:?}"
+        );
+    }
+
+    #[test]
+    fn host_token_store_tracks_target_family() {
+        let expected = if cfg!(unix) {
+            TokenStore::OwnerOnlyFile
+        } else {
+            TokenStore::Unsupported
+        };
+        assert_eq!(HOST_TOKEN_STORE, expected);
     }
 
     #[test]

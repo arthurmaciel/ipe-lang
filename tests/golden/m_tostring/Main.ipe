@@ -4,4 +4,4 @@ import Ipe.Io as Io
 
 
 main =
-    Io.println (toString 42 ++ " " ++ toString True ++ " " ++ toString 3)
+    Io.println """{{42}} {{True}} {{3}}"""
