@@ -22,6 +22,7 @@ mod finding;
 mod registry;
 mod render;
 mod rules;
+mod source_actions;
 
 use std::collections::BTreeMap;
 
@@ -31,6 +32,7 @@ pub use config::{ConfigError, LintConfig, Suppressions, read_lint_config};
 pub use finding::{Finding, Fix, Severity, SigFix};
 pub use registry::{Fixability, RULES, RuleInfo, is_known, lookup};
 pub use render::{LineRole, render_finding, render_finding_lines};
+pub use source_actions::{FIX_ALL_MAX_ROUNDS, fix_all, fix_all_bounded, organize_imports};
 
 /// One module handed to the linter: its dotted path and its source text.
 #[derive(Clone, Debug)]

@@ -313,7 +313,7 @@ fn walk_type(
 /// The walk is bounded by the remaining source length and only ever advances,
 /// so it terminates. It never indexes: every read goes through `get`, so a
 /// malformed tail yields the best offset reached rather than a panic.
-fn import_clause_end(text: &str, import: &Import) -> usize {
+pub fn import_clause_end(text: &str, import: &Import) -> usize {
     // Start just past the module name — the grammar tail (`as`, `exposing`)
     // begins there. The keyword span is a floor for a name-less malformed tail.
     let mut pos = import.import_kw.hi.max(import.name.span.hi) as usize;
@@ -384,7 +384,7 @@ fn import_clause_end(text: &str, import: &Import) -> usize {
 /// The byte offset of the start of the line containing byte offset `at`.
 /// Never panics: `at` is clamped to `text.len()` and the scan is a plain
 /// `rfind`, which only ever returns a valid char-boundary offset.
-fn line_start(text: &str, at: usize) -> usize {
+pub fn line_start(text: &str, at: usize) -> usize {
     let at = at.min(text.len());
     text.get(..at)
         .and_then(|s| s.rfind('\n'))
@@ -396,7 +396,7 @@ fn line_start(text: &str, at: usize) -> usize {
 /// `text[line_start(at)..line_end(at)]` removes the whole physical line and
 /// leaves no blank line behind. Returns `text.len()` on the file's last,
 /// unterminated line.
-fn line_end(text: &str, at: usize) -> usize {
+pub fn line_end(text: &str, at: usize) -> usize {
     let at = at.min(text.len());
     text.get(at..)
         .and_then(|s| s.find('\n'))
