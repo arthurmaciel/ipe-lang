@@ -148,6 +148,14 @@ checks:
   - context: grammar
     disposition: gate
     producer: tree-sitter-ipe.yml
+  - context: editors-configure
+    disposition: gate
+    producer: ci.yml
+    guards: >-
+      Every editors/*/configure.sh path, plus the one Zed's "install dev
+      extension" actually runs and nothing else validated: compiling
+      editors/zed-ipe for wasm32-wasip2 from the assembled tree configure.sh
+      installs, so a shipped extension config can never go unbuilt.
 
   # ── E2E + seal-slice aggregators (gate) ───────────────────────────────────
   - context: e2e-all

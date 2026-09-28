@@ -8,6 +8,10 @@
 # content), plus two drift checks: the Zed grammar pin and ipe-mode's keywords.
 #
 # Usage: bash editors/tests/configure-test.sh   (from anywhere; needs cc, git)
+#
+# The Zed wasm32-wasip2 build check additionally needs rustup + cargo with the
+# wasm32-wasip2 target installed; it skips with a message when that target is
+# absent, except under CI (CI=true), where it is mandatory.
 
 set -euo pipefail
 
@@ -161,6 +165,33 @@ check "Zed: settings.json never edited" 'cmp -s "$SB/orig" "$XDG_CONFIG_HOME/zed
 check "Zed: legacy settings keys reported" 'grep -q "older setup" "$SB/out"'
 check "Zed: extension assembled" \
     '[ -s "$XDG_DATA_HOME/ipe/zed-ipe/extension.toml" ] && [ -s "$XDG_DATA_HOME/ipe/zed-ipe/languages/ipe/highlights.scm" ] && [ -s "$XDG_DATA_HOME/ipe/zed-ipe/src/lib.rs" ]'
+
+# The stubbed rustup/cargo above prove only that configure.sh assembles the
+# right files. Zed itself then runs `cargo build --release --target
+# wasm32-wasip2` inside that assembled directory with RUSTC_WRAPPER cleared
+# (WASI builds hang under sccache) — the step nothing here proved before,
+# letting a Cargo.lock/Cargo.toml/target-rustflags regression ship unbuilt.
+# Mandatory in CI (GitHub Actions sets CI=true, and the workflow installs the
+# target); skips with a message when wasm32-wasip2 is not installed locally.
+ZED_ASSEMBLED="$XDG_DATA_HOME/ipe/zed-ipe"
+PATH="$ORIG_PATH"
+if command -v rustup > /dev/null 2>&1 && command -v cargo > /dev/null 2>&1 \
+    && (cd "$ZED_ASSEMBLED" && rustup target list --installed 2> /dev/null | grep -qx wasm32-wasip2); then
+    WASM_TARGET_DIR="$WORK/zed-wasm-build"
+    if (cd "$ZED_ASSEMBLED" && RUSTC_WRAPPER= cargo build --release --target wasm32-wasip2 \
+        --target-dir "$WASM_TARGET_DIR") > "$WORK/zed-wasm-build.log" 2>&1
+    then
+        ok "Zed: extension compiles for wasm32-wasip2"
+    else
+        bad "Zed: extension compiles for wasm32-wasip2"
+        cat "$WORK/zed-wasm-build.log"
+    fi
+    check "Zed: wasm artifact produced" '[ -s "$WASM_TARGET_DIR/wasm32-wasip2/release/zed_ipe.wasm" ]'
+elif [ "${CI:-}" = "true" ]; then
+    bad "Zed: wasm32-wasip2 target missing — the CI workflow must install it"
+else
+    printf 'skip Zed wasm32-wasip2 build (target not installed; run: rustup target add wasm32-wasip2)\n'
+fi
 
 sandbox zed-missing
 if sh "$ROOT/editors/zed/configure.sh" > "$SB/out" 2>&1; then bad "Zed: refuses without zed"; else ok "Zed: refuses without zed"; fi
