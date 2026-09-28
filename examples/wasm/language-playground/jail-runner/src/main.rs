@@ -174,7 +174,7 @@ fn parse_run_args(args: &[String]) -> Result<RunArgs, String> {
     let project_dir = project_dir.ok_or_else(|| "missing <project-dir> argument".to_owned())?;
     let warm_dir = match warm_dir {
         Some(dir) => dir,
-        None => resolve_warm_dir()?,
+        None => resolve_warm_dir().map_err(|e| e.to_string())?,
     };
     Ok(RunArgs {
         project_dir,
@@ -213,9 +213,8 @@ fn cmd_prewarm(args: &[String]) -> i32 {
     }
     let warm_dir = match warm_dir.map_or_else(resolve_warm_dir, Ok) {
         Ok(dir) => dir,
-        Err(message) => {
-            eprintln!("{message}");
-            usage();
+        Err(error) => {
+            eprintln!("{error}");
             return 2;
         }
     };
@@ -259,20 +258,53 @@ fn cleanup_project(project_dir: &Path) {
     let _ = std::fs::remove_dir_all(project_dir);
 }
 
-/// The warm cache: `$IPE_PLAYGROUND_WARM_DIR`, else `DEFAULT_WARM_DIR` under an absolute home.
-///
-/// An unset, empty, or relative home names no directory (it would resolve the
-/// cache against the working directory), so the fallback is refused rather
-/// than guessed.
-fn resolve_warm_dir() -> Result<PathBuf, String> {
-    if let Some(value) = ipe_env::var_os(WARM_DIR_ENV) {
-        return Ok(PathBuf::from(value));
+/// Why no absolute warm-cache directory could be derived.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WarmDirError {
+    /// `IPE_PLAYGROUND_WARM_DIR` is set to a relative path.
+    RelativeOverride,
+    /// No override is set and the invoking user's home is unset or relative.
+    HomeUnresolved,
+}
+
+impl std::fmt::Display for WarmDirError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::RelativeOverride => write!(
+                f,
+                "{WARM_DIR_ENV} must be an absolute path; pass --warm <dir> or set it absolute"
+            ),
+            Self::HomeUnresolved => write!(
+                f,
+                "cannot locate the warm cache: HOME is unset or relative and {WARM_DIR_ENV} \
+                 is unset; pass --warm <dir> or set {WARM_DIR_ENV}"
+            ),
+        }
     }
-    ipe_sandbox::home::home_dir()
+}
+
+fn resolve_warm_dir() -> Result<PathBuf, WarmDirError> {
+    resolve_warm_dir_from(ipe_env::var_os(WARM_DIR_ENV), ipe_sandbox::home::home_dir())
+}
+
+/// Resolve the warm-cache directory, refusing any cwd-relative spelling.
+///
+/// An empty override counts as unset.
+fn resolve_warm_dir_from(
+    raw: Option<std::ffi::OsString>,
+    home: Option<PathBuf>,
+) -> Result<PathBuf, WarmDirError> {
+    if let Some(value) = raw.filter(|value| !value.is_empty()) {
+        let path = PathBuf::from(value);
+        return if path.is_absolute() {
+            Ok(path)
+        } else {
+            Err(WarmDirError::RelativeOverride)
+        };
+    }
+    home.filter(|home| home.is_absolute())
         .map(|home| home.join(DEFAULT_WARM_DIR))
-        .ok_or_else(|| {
-            format!("no absolute home directory; pass --warm <dir> or set {WARM_DIR_ENV}")
-        })
+        .ok_or(WarmDirError::HomeUnresolved)
 }
 
 /// The jailed pipeline. Returns the JSON outcome; never panics.
@@ -592,5 +624,48 @@ fn print_json(outcome: &Outcome) {
             eprintln!("[jail-runner] fatal: failed to serialize outcome: {error}");
             std::process::exit(1);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{DEFAULT_WARM_DIR, WarmDirError, resolve_warm_dir_from};
+    use std::ffi::OsString;
+    use std::path::PathBuf;
+
+    #[test]
+    fn a_missing_home_without_an_override_is_refused() {
+        assert_eq!(
+            resolve_warm_dir_from(None, None),
+            Err(WarmDirError::HomeUnresolved)
+        );
+        assert_eq!(
+            resolve_warm_dir_from(Some(OsString::new()), None),
+            Err(WarmDirError::HomeUnresolved)
+        );
+        assert_eq!(
+            resolve_warm_dir_from(None, Some(PathBuf::from("relative/home"))),
+            Err(WarmDirError::HomeUnresolved)
+        );
+    }
+
+    #[test]
+    fn a_relative_override_is_refused() {
+        assert_eq!(
+            resolve_warm_dir_from(Some(OsString::from("warm")), Some(PathBuf::from("/home/u"))),
+            Err(WarmDirError::RelativeOverride)
+        );
+    }
+
+    #[test]
+    fn an_absolute_override_or_home_resolves() {
+        assert_eq!(
+            resolve_warm_dir_from(Some(OsString::from("/srv/warm")), None),
+            Ok(PathBuf::from("/srv/warm"))
+        );
+        assert_eq!(
+            resolve_warm_dir_from(None, Some(PathBuf::from("/home/u"))),
+            Ok(PathBuf::from("/home/u").join(DEFAULT_WARM_DIR))
+        );
     }
 }

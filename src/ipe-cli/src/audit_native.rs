@@ -48,6 +48,16 @@ use ipe_sandbox::run_jail::{DatabaseAxis, RunJailDefect, SandboxProfile};
     target_os = "windows"
 ))]
 use ipe_sandbox::run_jail::RunJailTools;
+#[cfg(any(
+    all(
+        target_os = "linux",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    ),
+    target_os = "macos",
+    target_os = "freebsd",
+    target_os = "windows"
+))]
+use ipe_sandbox::{CanonicalPath, JailPathError};
 
 use crate::CliError;
 use crate::audit::{Check, Rejection};
@@ -286,9 +296,10 @@ impl ProbePayload {
 ///   jail cannot masquerade as clean), and it is NEVER a certify-eligible run:
 ///   `native_tier2` refuses to construct `Certified` from it.
 /// - [`Self::RealBuild`] carries the package's OWN `cargo build` argv, guaranteed
-///   non-empty by its only constructor. This is the single exercise a `Certified`
-///   verdict may rest on — positive proof of a confined clean build+link of the
-///   package's native surface.
+///   non-empty by its only constructor, with the [`ToolchainHomes`] it builds
+///   against. This is the single exercise a `Certified` verdict may rest on —
+///   positive proof of a confined clean build+link of the package's native
+///   surface.
 #[cfg(any(
     all(
         target_os = "linux",
@@ -305,7 +316,13 @@ pub enum ProbeExercise {
     WrapperProbeOnly,
     /// The package's own `cargo build` argv — non-empty by construction — run as
     /// the wrapper's child. The only certify-eligible exercise.
-    RealBuild(Vec<OsString>),
+    RealBuild {
+        /// The untrusted build command.
+        argv: Vec<OsString>,
+        /// The toolchain the build resolves: bound read-only and named in the
+        /// build's environment from the same canonical paths.
+        toolchain: ToolchainHomes,
+    },
 }
 
 #[cfg(any(
@@ -318,15 +335,17 @@ pub enum ProbeExercise {
     target_os = "windows"
 ))]
 impl ProbeExercise {
-    /// A real untrusted build over a non-empty `argv`, or `None` when `argv` is
-    /// empty (an empty build is not a real exercise — the caller then rejects
-    /// rather than certify on a vacuous run).
+    /// A real untrusted build over a non-empty `argv` against `toolchain`, or
+    /// `None` when `argv` is empty.
+    ///
+    /// An empty build is not a real exercise; the caller then rejects rather
+    /// than certify on a vacuous run.
     #[must_use]
-    pub fn real_build(argv: Vec<OsString>) -> Option<Self> {
+    pub fn real_build(argv: Vec<OsString>, toolchain: ToolchainHomes) -> Option<Self> {
         if argv.is_empty() {
             None
         } else {
-            Some(Self::RealBuild(argv))
+            Some(Self::RealBuild { argv, toolchain })
         }
     }
 
@@ -336,7 +355,17 @@ impl ProbeExercise {
     fn tail(&self) -> &[OsString] {
         match self {
             Self::WrapperProbeOnly => &[],
-            Self::RealBuild(argv) => argv,
+            Self::RealBuild { argv, .. } => argv,
+        }
+    }
+
+    /// The toolchain a real build resolves; `None` for the wrapper-probe-only
+    /// shape, which runs no toolchain.
+    #[must_use]
+    const fn toolchain(&self) -> Option<&ToolchainHomes> {
+        match self {
+            Self::WrapperProbeOnly => None,
+            Self::RealBuild { toolchain, .. } => Some(toolchain),
         }
     }
 
@@ -345,7 +374,7 @@ impl ProbeExercise {
     /// a confined build, never on the wrapper's own stand-in probe.
     #[must_use]
     pub const fn is_real_build(&self) -> bool {
-        matches!(self, Self::RealBuild(_))
+        matches!(self, Self::RealBuild { .. })
     }
 }
 
@@ -926,9 +955,13 @@ fn native_tier2_on_platform(audit: &NativeAudit) -> Result<Tier2Outcome, CliErro
 
     // 2. Emit the link-reachability probe crate into the emitted app crate and
     //    build its `cargo build` argv (the untrusted, wrapper-owned exercise).
+    //    Every path the jail receives is pinned to its canonical form here, once:
+    //    the binds, the build argv, and the payload env all derive from these.
     let scratch = probe_scratch_dir(audit.root)?;
-    let build_argv = emit_probe_and_build_argv(audit.emitted_dir, &link_paths, &scratch)?;
-    let Some(exercise) = ProbeExercise::real_build(build_argv) else {
+    let emitted_dir = canonical_jail_path(audit.emitted_dir)?;
+    let build_argv = emit_probe_and_build_argv(&emitted_dir, &link_paths, &scratch)?;
+    let toolchain = ToolchainHomes::of_invoker()?;
+    let Some(exercise) = ProbeExercise::real_build(build_argv, toolchain) else {
         // A non-empty survivor set always yields a non-empty build argv, so this
         // is unreachable; fail-closed rather than certify a vacuous run.
         return Err(CliError::PackageAudit(no_probeable_entrypoint()));
@@ -946,16 +979,18 @@ fn native_tier2_on_platform(audit: &NativeAudit) -> Result<Tier2Outcome, CliErro
         || OsString::from("untrusted-build"),
         std::ffi::OsStr::to_owned,
     );
-    let wrapper = scratch.join(wrapper_name);
+    let wrapper = scratch.as_path().join(wrapper_name);
     std::fs::copy(&audit.probe_fixture, &wrapper).map_err(|e| CliError::Io {
         path: wrapper.clone(),
         source: e,
     })?;
-    let working_tree = scratch.join("worktree");
+    let wrapper = canonical_jail_path(&wrapper)?;
+    let working_tree = scratch.as_path().join("worktree");
     std::fs::create_dir_all(&working_tree).map_err(|e| CliError::Io {
         path: working_tree.clone(),
         source: e,
     })?;
+    let working_tree = canonical_jail_path(&working_tree)?;
 
     let scoped = scoped_profile(audit.declared).map_err(CliError::PackageAudit)?;
     // On the real-build path the exercise IS the child cargo build: the full
@@ -963,15 +998,15 @@ fn native_tier2_on_platform(audit: &NativeAudit) -> Result<Tier2Outcome, CliErro
     // fabricate a demand the package never made), and each tightening run probes
     // the single declared axis under test. The `exercised` field below is unused
     // on this path (it drives only the wrapper-probe-only shape's full run).
+    // The runner adds the exercise's toolchain binds itself.
     let mut ro_binds = default_ro_binds();
-    ro_binds.extend(toolchain_ro_binds()?);
     // The jailed `cargo build` reads the emitted app crate (which carries the
     // probe bin) and every crate its manifest pins by absolute path (the runtime
     // and each bound Rust dependency). Re-expose them read-only so the build can
     // read but never write them. Under the jail's `--ro-bind / /`, a crate under
     // an unmasked path is already readable and re-binding is idempotent; the
     // re-bind only matters when a crate lives under a masked tree (`/tmp`, home).
-    ro_binds.extend(emitted_crate_ro_binds(audit.emitted_dir));
+    ro_binds.extend(emitted_crate_ro_binds(&emitted_dir)?);
     let runner = JailProbeRunner::new(
         &tools,
         wrapper,
@@ -988,7 +1023,7 @@ fn native_tier2_on_platform(audit: &NativeAudit) -> Result<Tier2Outcome, CliErro
 
     let verdict = reconcile_native(audit.declared, &runner, &static_scan, &scoped);
     // Best-effort scratch cleanup; a leftover scratch is inert.
-    let _ = std::fs::remove_dir_all(&scratch);
+    let _ = std::fs::remove_dir_all(scratch.as_path());
 
     verdict.map_err(CliError::PackageAudit)?;
 
@@ -1039,8 +1074,12 @@ fn native_tier2_on_platform(_audit: &NativeAudit) -> Result<Tier2Outcome, CliErr
 }
 
 /// Create and return an exclusive Tier-2 probe scratch directory under the OS
-/// temp root. The name is unpredictable (128-bit OS entropy) so a same-user
-/// attacker cannot pre-seed or symlink it.
+/// temp root, in canonical form.
+///
+/// The name is unpredictable (128-bit OS entropy) so a same-user attacker
+/// cannot pre-seed or symlink it. A temp root reached through a symlink
+/// (`/tmp` on macOS) is resolved here, so the jail binds and the payload names
+/// the same directory.
 #[cfg(any(
     all(
         target_os = "linux",
@@ -1050,7 +1089,7 @@ fn native_tier2_on_platform(_audit: &NativeAudit) -> Result<Tier2Outcome, CliErr
     target_os = "freebsd",
     target_os = "windows"
 ))]
-fn probe_scratch_dir(root: &Path) -> Result<PathBuf, CliError> {
+fn probe_scratch_dir(root: &Path) -> Result<CanonicalPath, CliError> {
     let slug: String = root
         .file_name()
         .and_then(|n| n.to_str())
@@ -1063,10 +1102,76 @@ fn probe_scratch_dir(root: &Path) -> Result<PathBuf, CliError> {
         path: std::path::PathBuf::from(&prefix),
         source: e,
     })?;
-    let path = scratch.path().to_path_buf();
-    // Caller cleans up via `remove_dir_all` (line ~981); skip Drop here.
+    let path = canonical_jail_path(scratch.path())?;
+    // The caller removes the scratch once the verdict is in; skip Drop here.
     std::mem::forget(scratch);
     Ok(path)
+}
+
+/// `path` in canonical form, or the refusal of a jail path that does not
+/// resolve.
+///
+/// # Errors
+/// [`CliError::PackageAudit`] carrying a [`Check::NativeTier2`] [`Rejection`]
+/// when `path` does not resolve.
+#[cfg(any(
+    all(
+        target_os = "linux",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    ),
+    target_os = "macos",
+    target_os = "freebsd",
+    target_os = "windows"
+))]
+fn canonical_jail_path(path: &Path) -> Result<CanonicalPath, CliError> {
+    CanonicalPath::resolve(path).map_err(|e| jail_path_rejected(&e))
+}
+
+/// The canonical form of `path` when it exists, `None` when it (or `path`
+/// itself) is absent.
+///
+/// # Errors
+/// [`CliError::PackageAudit`] when `path` exists but does not resolve.
+#[cfg(any(
+    all(
+        target_os = "linux",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    ),
+    target_os = "macos",
+    target_os = "freebsd"
+))]
+fn existing_jail_path(path: Option<PathBuf>) -> Result<Option<CanonicalPath>, CliError> {
+    let Some(path) = path else {
+        return Ok(None);
+    };
+    match CanonicalPath::resolve(&path) {
+        Ok(canonical) => Ok(Some(canonical)),
+        Err(JailPathError::Unresolved {
+            kind: std::io::ErrorKind::NotFound,
+            ..
+        }) => Ok(None),
+        Err(e) => Err(jail_path_rejected(&e)),
+    }
+}
+
+/// The reject for a jail path that cannot be pinned to its canonical form.
+#[cfg(any(
+    all(
+        target_os = "linux",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    ),
+    target_os = "macos",
+    target_os = "freebsd",
+    target_os = "windows"
+))]
+fn jail_path_rejected(e: &JailPathError) -> CliError {
+    CliError::PackageAudit(Rejection {
+        check: Check::NativeTier2,
+        message: format!(
+            "{e} — Tier-2 confines the native build to exactly the paths it resolved, so a \
+             path it cannot pin refuses the certification (fail-closed)."
+        ),
+    })
 }
 
 /// One wrapper entry from the structured FFI sidecar.
@@ -1324,14 +1429,12 @@ fn extract_json_bool(obj: &str, key: &str) -> Option<bool> {
     target_os = "windows"
 ))]
 fn emit_probe_and_build_argv(
-    emitted_dir: &Path,
+    emitted_dir: &CanonicalPath,
     wrapper_paths: &[String],
-    scratch: &Path,
+    scratch: &CanonicalPath,
 ) -> Result<Vec<OsString>, CliError> {
-    std::fs::create_dir_all(scratch).map_err(|e| CliError::Io {
-        path: scratch.to_path_buf(),
-        source: e,
-    })?;
+    let emitted_dir = emitted_dir.as_path();
+    let scratch = scratch.as_path();
     // The probe bin is its own crate root, so it does not inherit `main.rs`'s
     // crate-root runtime prelude. `src/ffi.rs` opens with `use crate::*;` and
     // names `IpeResult` / `IpeError` / `ok_res` / `ipe_error_from_panic`
@@ -1436,16 +1539,11 @@ fn no_probeable_entrypoint() -> Rejection {
     target_os = "freebsd"
 ))]
 #[must_use]
-pub fn default_ro_binds() -> Vec<PathBuf> {
-    [
-        PathBuf::from("/usr"),
-        PathBuf::from("/bin"),
-        PathBuf::from("/lib"),
-        PathBuf::from("/lib64"),
-    ]
-    .into_iter()
-    .filter(|p| p.exists())
-    .collect()
+pub fn default_ro_binds() -> Vec<CanonicalPath> {
+    ["/usr", "/bin", "/lib", "/lib64"]
+        .into_iter()
+        .filter_map(|p| CanonicalPath::resolve(Path::new(p)).ok())
+        .collect()
 }
 
 /// Windows: the jail reads no read-only tool binds, so the bind set is empty.
@@ -1456,27 +1554,40 @@ pub fn default_ro_binds() -> Vec<PathBuf> {
 /// scrubbed `PATH`/`SystemRoot` the jail re-exports.
 #[cfg(target_os = "windows")]
 #[must_use]
-pub const fn default_ro_binds() -> Vec<PathBuf> {
+pub const fn default_ro_binds() -> Vec<CanonicalPath> {
     Vec::new()
 }
 
-/// The read-only toolchain binds a real `cargo build` needs inside the jail.
+/// The toolchain homes a jailed `cargo build` resolves, each in canonical form.
 ///
-/// The Cargo home (`~/.cargo` or `$CARGO_HOME` — the `cargo`/`rustc` shims and the
-/// registry cache of pre-fetched crate sources) and the Rustup home (`~/.rustup`
-/// or `$RUSTUP_HOME` — the actual toolchain binaries the shims resolve to). Bound
-/// READ-ONLY: the jail's own scratch-local target dir is the only writable output,
-/// so binding the toolchain read-only cannot let the untrusted build escape. Only
-/// existing paths are bound.
+/// From the Cargo home (`~/.cargo` or `$CARGO_HOME`) only its `bin`, `registry`
+/// and `git` subdirectories are bound — the `cargo`/`rustc` shims and the
+/// pre-fetched crate sources — never the home itself, whose `credentials.toml`
+/// holds the registry token; plus the Rustup home (`~/.rustup` or
+/// `$RUSTUP_HOME`, the toolchain binaries the shims resolve to). Bound
+/// READ-ONLY: the jail's scratch-local target dir is the only writable output.
 ///
-/// These are ADDED to [`default_ro_binds`] on the real-build path only; the
-/// wrapper-probe-only control fixture needs no toolchain, so its bind set is
-/// unchanged.
-///
-/// # Errors
-/// [`CliError::EnvDirNotAbsolute`] when `CARGO_HOME` or `RUSTUP_HOME` is set
-/// but relative — binding the home default instead would expose a toolchain the
-/// host `cargo` never uses.
+/// The binds and the payload's `CARGO_HOME`/`RUSTUP_HOME`/`HOME` derive from
+/// the same resolved values, so the env the build reads names exactly the
+/// directories the jail binds.
+#[cfg(any(
+    all(
+        target_os = "linux",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    ),
+    target_os = "macos",
+    target_os = "freebsd",
+    target_os = "windows"
+))]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct ToolchainHomes {
+    ro_binds: Vec<CanonicalPath>,
+    /// The toolchain env the POSIX payload exports; the Windows jail carries
+    /// its own scrubbed env instead.
+    #[cfg(not(target_os = "windows"))]
+    env: Vec<(&'static str, CanonicalPath)>,
+}
+
 #[cfg(any(
     all(
         target_os = "linux",
@@ -1485,31 +1596,116 @@ pub const fn default_ro_binds() -> Vec<PathBuf> {
     target_os = "macos",
     target_os = "freebsd"
 ))]
-pub fn toolchain_ro_binds() -> Result<Vec<PathBuf>, CliError> {
-    Ok([
-        crate::env_dir::tool_home("CARGO_HOME", ".cargo")?,
-        crate::env_dir::tool_home("RUSTUP_HOME", ".rustup")?,
-    ]
-    .into_iter()
-    .flatten()
-    .filter(|p| p.exists())
-    .collect())
+impl ToolchainHomes {
+    /// The invoking user's toolchain homes, resolved as the tools resolve them.
+    ///
+    /// # Errors
+    /// - [`CliError::EnvDirNotAbsolute`] when `CARGO_HOME` or `RUSTUP_HOME` is
+    ///   set but relative: binding the home default instead would expose a
+    ///   toolchain the host `cargo` never uses.
+    /// - [`CliError::PackageAudit`] per [`Self::from_homes`].
+    pub fn of_invoker() -> Result<Self, CliError> {
+        Self::from_homes(
+            crate::env_dir::tool_home("CARGO_HOME", ".cargo")?,
+            crate::env_dir::tool_home("RUSTUP_HOME", ".rustup")?,
+            crate::env_dir::home(),
+        )
+    }
+
+    /// The toolchain over the given homes, each resolved to its canonical form
+    /// once; an absent home is skipped.
+    ///
+    /// # Errors
+    /// [`CliError::PackageAudit`] carrying a [`Check::NativeTier2`]
+    /// [`Rejection`] when a present home does not resolve, or a bind equals or
+    /// contains the cargo home (a Rustup home at or above it), which would
+    /// expose `credentials.toml` inside the jail.
+    pub fn from_homes(
+        cargo_home: Option<PathBuf>,
+        rustup_home: Option<PathBuf>,
+        user_home: Option<PathBuf>,
+    ) -> Result<Self, CliError> {
+        let cargo_home = existing_jail_path(cargo_home)?;
+        let rustup_home = existing_jail_path(rustup_home)?;
+        let user_home = existing_jail_path(user_home)?;
+        let mut ro_binds = Vec::new();
+        if let Some(cargo) = &cargo_home {
+            for dir in CARGO_HOME_TOOL_DIRS {
+                ro_binds.extend(existing_jail_path(Some(cargo.as_path().join(dir)))?);
+            }
+        }
+        ro_binds.extend(rustup_home.clone());
+        if let Some(cargo) = &cargo_home
+            && let Some(bind) = ipe_sandbox::bind_exposing(&ro_binds, cargo.as_path())
+        {
+            return Err(CliError::PackageAudit(Rejection {
+                check: Check::NativeTier2,
+                message: format!(
+                    "refusing to bind `{}` into the Tier-2 jail: it contains the cargo home `{}` \
+                     and its `credentials.toml` — set RUSTUP_HOME and CARGO_HOME to disjoint \
+                     directories.",
+                    bind.as_path().display(),
+                    cargo.as_path().display()
+                ),
+            }));
+        }
+        Ok(Self {
+            ro_binds,
+            env: cargo_home_env(cargo_home, rustup_home, user_home),
+        })
+    }
+
+    /// The `NAME`/value pairs the payload exports for the toolchain.
+    fn env(&self) -> &[(&'static str, CanonicalPath)] {
+        &self.env
+    }
 }
 
-/// Windows: the jail reads no read-only tool binds, so the toolchain bind set is
-/// empty.
-///
-/// A real Windows `cargo build` reaches its toolchain through the ACL-granted
-/// scratch and the jail's scrubbed `PATH` (see [`default_ro_binds`]), not host
-/// path binds.
-///
-/// # Errors
-/// Never; the signature matches the fallible POSIX resolution.
 #[cfg(target_os = "windows")]
-#[allow(clippy::unnecessary_wraps)] // shares the fallible POSIX signature
-pub const fn toolchain_ro_binds() -> Result<Vec<PathBuf>, CliError> {
-    Ok(Vec::new())
+impl ToolchainHomes {
+    /// Windows: the jail reads no read-only tool binds and the payload exports
+    /// no toolchain env, so the toolchain is empty.
+    ///
+    /// A real Windows `cargo build` reaches its toolchain through the
+    /// ACL-granted scratch and the jail's scrubbed `PATH` (see
+    /// [`default_ro_binds`]), not host path binds.
+    ///
+    /// # Errors
+    /// Never; the signature matches the fallible POSIX resolution.
+    #[allow(clippy::unnecessary_wraps)] // shares the fallible POSIX signature
+    pub fn of_invoker() -> Result<Self, CliError> {
+        Ok(Self::default())
+    }
 }
+
+#[cfg(any(
+    all(
+        target_os = "linux",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    ),
+    target_os = "macos",
+    target_os = "freebsd",
+    target_os = "windows"
+))]
+impl ToolchainHomes {
+    /// The read-only binds the toolchain needs inside the jail.
+    #[must_use]
+    pub fn ro_binds(&self) -> &[CanonicalPath] {
+        &self.ro_binds
+    }
+}
+
+/// The Cargo home subdirectories a jailed build reads: the tool shims and the
+/// crate-source caches. Never `credentials.toml` or `config.toml`.
+#[cfg(any(
+    all(
+        target_os = "linux",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    ),
+    target_os = "macos",
+    target_os = "freebsd"
+))]
+const CARGO_HOME_TOOL_DIRS: [&str; 3] = ["bin", "registry", "git"];
 
 /// The read-only binds the emitted app crate (carrying the probe bin) and every
 /// crate its manifest pins by absolute `path = "…"` need inside the jail.
@@ -1519,7 +1715,10 @@ pub const fn toolchain_ro_binds() -> Result<Vec<PathBuf>, CliError> {
 /// the vendored runtime and any bound Rust crate pinned to a local path. Each is
 /// re-exposed read-only so the build can read but never write it. A `path = "…"`
 /// value that is not absolute, or that does not exist, is skipped: only a
-/// resolvable directory is bound.
+/// resolvable directory is bound, in canonical form.
+///
+/// # Errors
+/// [`CliError::PackageAudit`] when a present dependency does not resolve.
 #[cfg(any(
     all(
         target_os = "linux",
@@ -1528,26 +1727,26 @@ pub const fn toolchain_ro_binds() -> Result<Vec<PathBuf>, CliError> {
     target_os = "macos",
     target_os = "freebsd"
 ))]
-fn emitted_crate_ro_binds(emitted_dir: &Path) -> Vec<PathBuf> {
-    let mut binds: Vec<PathBuf> = Vec::new();
-    if emitted_dir.is_dir() {
-        binds.push(emitted_dir.to_path_buf());
-    }
-    let manifest = emitted_dir.join("Cargo.toml");
+fn emitted_crate_ro_binds(emitted_dir: &CanonicalPath) -> Result<Vec<CanonicalPath>, CliError> {
+    let mut binds = vec![emitted_dir.clone()];
+    let manifest = emitted_dir.as_path().join("Cargo.toml");
     if let Ok(text) =
         crate::io_bounded::read_to_string_capped(&manifest, crate::io_bounded::SMALL_FILE_READ_CAP)
     {
         for path in manifest_path_dependencies(&text) {
-            if path.is_absolute() && path.exists() {
-                if let Some(root) = cargo_workspace_root(&path) {
-                    binds.push(root);
-                } else {
-                    binds.push(path);
-                }
+            if !path.is_absolute() {
+                continue;
+            }
+            let Some(dep) = existing_jail_path(Some(path))? else {
+                continue;
+            };
+            match cargo_workspace_root(dep.as_path()) {
+                Some(root) => binds.push(canonical_jail_path(&root)?),
+                None => binds.push(dep),
             }
         }
     }
-    binds
+    Ok(binds)
 }
 
 /// The Cargo workspace root that governs the crate at `crate_dir`, or `None` when
@@ -1590,8 +1789,9 @@ fn cargo_workspace_root(crate_dir: &Path) -> Option<PathBuf> {
 /// Windows: the jail ACL-grants an existing view of the real filesystem rather
 /// than building a bind-mount namespace, so no path re-binds are needed.
 #[cfg(target_os = "windows")]
-fn emitted_crate_ro_binds(_emitted_dir: &Path) -> Vec<PathBuf> {
-    Vec::new()
+#[allow(clippy::unnecessary_wraps)] // shares the fallible POSIX signature
+fn emitted_crate_ro_binds(_emitted_dir: &CanonicalPath) -> Result<Vec<CanonicalPath>, CliError> {
+    Ok(Vec::new())
 }
 
 /// Every `path = "<value>"` under a `[…dependencies]` table in a `Cargo.toml`,
@@ -1635,14 +1835,12 @@ fn manifest_path_dependencies(manifest: &str) -> Vec<PathBuf> {
 }
 
 /// The Cargo/Rustup home env the jailed `cargo build` needs to resolve its
-/// toolchain: `CARGO_HOME`, `RUSTUP_HOME`, and `HOME` (the shims' fallback). Only
-/// present, existing homes are returned; the wrapper sets them in the payload's
-/// own env, never the process-global environment.
+/// toolchain: `CARGO_HOME`, `RUSTUP_HOME`, and `HOME` (the shims' fallback),
+/// each already canonical. The wrapper sets them in the payload's own env, never
+/// the process-global environment.
 ///
-/// POSIX-only: the Windows probe payload carries no toolchain-home assignments
-/// (the Windows jail's own env scrub provides `SystemRoot`/`PATH`/`TMP`, and a
-/// real Windows Tier-2 build allowlists the homes through the declared `env`
-/// axis), so this is not compiled on Windows.
+/// POSIX-only: the Windows jail scrubs the child env to its own allowlist, so
+/// its payload carries no toolchain homes.
 #[cfg(any(
     all(
         target_os = "linux",
@@ -1651,25 +1849,28 @@ fn manifest_path_dependencies(manifest: &str) -> Vec<PathBuf> {
     target_os = "macos",
     target_os = "freebsd"
 ))]
-fn cargo_home_env() -> Result<Vec<(String, std::ffi::OsString)>, CliError> {
-    let existing = |dir: Option<PathBuf>| dir.filter(|p| p.exists()).map(PathBuf::into_os_string);
-    let mut out: Vec<(String, std::ffi::OsString)> = Vec::new();
-    if let Some(v) = existing(crate::env_dir::tool_home("CARGO_HOME", ".cargo")?) {
-        out.push(("CARGO_HOME".to_owned(), v));
-    }
-    if let Some(v) = existing(crate::env_dir::tool_home("RUSTUP_HOME", ".rustup")?) {
-        out.push(("RUSTUP_HOME".to_owned(), v));
-    }
-    if let Some(h) = existing(crate::env_dir::home()) {
-        out.push(("HOME".to_owned(), h));
-    }
-    Ok(out)
+fn cargo_home_env(
+    cargo_home: Option<CanonicalPath>,
+    rustup_home: Option<CanonicalPath>,
+    user_home: Option<CanonicalPath>,
+) -> Vec<(&'static str, CanonicalPath)> {
+    [
+        ("CARGO_HOME", cargo_home),
+        ("RUSTUP_HOME", rustup_home),
+        ("HOME", user_home),
+    ]
+    .into_iter()
+    .filter_map(|(name, home)| home.map(|home| (name, home)))
+    .collect()
 }
 
 /// The absolute path to `cargo`, resolved from `PATH` (the in-jail PATH is a
 /// fixed `/usr/bin:/bin`, so a bare `cargo` is unfindable inside the jail; the
 /// toolchain bind makes the absolute path executable). `None` when cargo is not
 /// on the host `PATH`.
+///
+/// The directory is canonical, so the path names the bound toolchain; the file
+/// name is kept, since a rustup shim dispatches on the name it was run as.
 #[cfg(any(
     all(
         target_os = "linux",
@@ -1682,8 +1883,9 @@ fn cargo_home_env() -> Result<Vec<(String, std::ffi::OsString)>, CliError> {
 fn absolute_cargo() -> Option<PathBuf> {
     let path = ipe_env::var_os("PATH")?;
     std::env::split_paths(&path)
-        .map(|p| p.join("cargo"))
-        .find(|p| p.is_file())
+        .find(|dir| dir.join("cargo").is_file())
+        .and_then(|dir| CanonicalPath::resolve(&dir).ok())
+        .map(|dir| dir.as_path().join("cargo"))
 }
 
 /// The production probe runner: establishes the real Linux jail and runs the
@@ -1706,10 +1908,11 @@ fn absolute_cargo() -> Option<PathBuf> {
 ))]
 pub struct JailProbeRunner<'a> {
     tools: &'a RunJailTools,
-    wrapper: PathBuf,
-    scoped_tmp: PathBuf,
-    working_tree: PathBuf,
-    ro_binds: Vec<PathBuf>,
+    wrapper: CanonicalPath,
+    scoped_tmp: CanonicalPath,
+    working_tree: CanonicalPath,
+    /// The caller's binds plus the exercise's toolchain binds.
+    ro_binds: Vec<CanonicalPath>,
     /// The axes the native code (the wrapper stand-in) actually EXERCISES on the
     /// full declared-scoped run — a property of the code, not of the declaration,
     /// so a used-but-undeclared axis (exercised but not declared, hence withheld)
@@ -1737,17 +1940,22 @@ impl<'a> JailProbeRunner<'a> {
     /// place it in the scratch), the always-writable `scoped_tmp`, the
     /// filesystem-axis-gated `working_tree`, the read-only tool `ro_binds`, and
     /// the axes the native code `exercised` on the full run. `exercise` is the
-    /// strictly subordinate build tail (or the wrapper-probe-only shape).
+    /// strictly subordinate build tail (or the wrapper-probe-only shape); a real
+    /// build's toolchain binds join `ro_binds` here, so the jail binds exactly
+    /// the homes the payload names.
     #[must_use]
-    pub const fn new(
+    pub fn new(
         tools: &'a RunJailTools,
-        wrapper: PathBuf,
-        scoped_tmp: PathBuf,
-        working_tree: PathBuf,
-        ro_binds: Vec<PathBuf>,
+        wrapper: CanonicalPath,
+        scoped_tmp: CanonicalPath,
+        working_tree: CanonicalPath,
+        mut ro_binds: Vec<CanonicalPath>,
         exercised: Vec<TightenableAxis>,
         exercise: ProbeExercise,
     ) -> Self {
+        if let Some(toolchain) = exercise.toolchain() {
+            ro_binds.extend_from_slice(toolchain.ro_binds());
+        }
         Self {
             tools,
             wrapper,
@@ -1765,6 +1973,14 @@ impl<'a> JailProbeRunner<'a> {
     #[must_use]
     pub const fn is_real_build(&self) -> bool {
         self.exercise.is_real_build()
+    }
+
+    /// The fs-escape target: in the WORKING TREE (bound read-write only when the
+    /// filesystem axis is granted), not the always-writable scratch — so the
+    /// write succeeds under a filesystem-granted jail and is denied under a
+    /// filesystem-withholding one, making the axis differentially observable.
+    fn escape_path(&self) -> PathBuf {
+        self.working_tree.as_path().join("tier2-escape-probe")
     }
 }
 
@@ -1802,24 +2018,9 @@ impl ProbeRunner for JailProbeRunner<'_> {
                 None => return JailOutcome::Clean,
             },
         };
-        // The fs-escape target lives in the WORKING TREE (bound read-write only
-        // when the filesystem axis is granted), not the always-writable scratch —
-        // so the write succeeds under a filesystem-granted jail and is denied
-        // under a filesystem-withholding one, making the axis differentially
-        // observable.
-        let escape = self.working_tree.join("tier2-escape-probe");
         // Build the platform-native wrapper payload (POSIX `/bin/sh` vs Windows
         // `powershell.exe -File`), both enforcing the child-of-wrapper rule.
-        // A toolchain home that cannot be resolved faithfully fails the run
-        // closed rather than building against a toolchain the host never uses.
-        let payload = match self.probe_payload(axis_sel.as_os_str(), &escape) {
-            Ok(payload) => payload,
-            Err(err) => {
-                return JailOutcome::BuildFailed {
-                    reason: err.to_string(),
-                };
-            }
-        };
+        let payload = self.probe_payload(axis_sel.as_os_str(), &self.escape_path());
         ipe_sandbox::build_jail::build_in_jail(
             self.tools,
             profile,
@@ -1850,11 +2051,7 @@ impl ProbeRunner for JailProbeRunner<'_> {
 impl JailProbeRunner<'_> {
     /// The POSIX payload: `env PROBE_MODE=tier2 TIER2_AXIS=… SCRATCH_DIR=…
     /// ESCAPE_PATH=… [toolchain homes] /bin/sh <wrapper.sh> <untrusted tail>`.
-    fn probe_payload(
-        &self,
-        axis_sel: &std::ffi::OsStr,
-        escape: &Path,
-    ) -> Result<ProbePayload, CliError> {
+    fn probe_payload(&self, axis_sel: &std::ffi::OsStr, escape: &Path) -> ProbePayload {
         // The fixed, trusted, exit-transparent launcher: `env NAME=VALUE … /bin/sh`
         // runs the wrapper under a scrubbed environment (per-run config travels
         // through the payload, never the process-global environment). It
@@ -1863,7 +2060,7 @@ impl JailProbeRunner<'_> {
             OsString::from("/usr/bin/env"),
             OsString::from("PROBE_MODE=tier2"),
             assignment("TIER2_AXIS", axis_sel),
-            assignment("SCRATCH_DIR", self.scoped_tmp.as_os_str()),
+            assignment("SCRATCH_DIR", self.scoped_tmp.as_path().as_os_str()),
             assignment("ESCAPE_PATH", escape.as_os_str()),
         ];
         // A real `cargo build` inside the scrubbed jail needs the toolchain homes
@@ -1872,20 +2069,20 @@ impl JailProbeRunner<'_> {
         // payload's own env — never the process-global environment — and the homes
         // are bound read-only, so the untrusted build can read the toolchain but
         // cannot write it. On the wrapper-probe-only shape they are absent.
-        if self.exercise.is_real_build() {
-            for (name, value) in cargo_home_env()? {
-                invocation_prefix.push(assignment(&name, value.as_os_str()));
+        if let Some(toolchain) = self.exercise.toolchain() {
+            for (name, home) in toolchain.env() {
+                invocation_prefix.push(assignment(name, home.as_path().as_os_str()));
             }
         }
         invocation_prefix.push(OsString::from("/bin/sh"));
         // The wrapper script owns the exit contract; the untrusted build is a
         // strictly subordinate tail it runs as its child (ProbePayload enforces
         // the ordering). The untrusted build can never own the exit.
-        Ok(ProbePayload::wrapper_owned(
+        ProbePayload::wrapper_owned(
             &invocation_prefix,
-            &self.wrapper,
+            self.wrapper.as_path(),
             self.exercise.tail(),
-        ))
+        )
     }
 }
 
@@ -1910,12 +2107,7 @@ impl JailProbeRunner<'_> {
     /// / `PATH` / `TMP` / `TEMP`, and a real Windows Tier-2 build would allowlist
     /// the toolchain homes through the declared `env` axis. The wrapper-probe-only
     /// and offline-probe shapes the CI E2E exercises need none.
-    #[allow(clippy::unnecessary_wraps)] // shares the fallible POSIX signature
-    fn probe_payload(
-        &self,
-        axis_sel: &std::ffi::OsStr,
-        escape: &Path,
-    ) -> Result<ProbePayload, CliError> {
+    fn probe_payload(&self, axis_sel: &std::ffi::OsStr, escape: &Path) -> ProbePayload {
         let invocation_prefix = vec![
             self.tools.bwrap.clone().into_os_string(),
             OsString::from("-NoProfile"),
@@ -1931,17 +2123,17 @@ impl JailProbeRunner<'_> {
             OsString::from("-Tier2Axis"),
             axis_sel.to_owned(),
             OsString::from("-ScratchDir"),
-            self.scoped_tmp.as_os_str().to_owned(),
+            self.scoped_tmp.as_path().as_os_str().to_owned(),
             OsString::from("-EscapePath"),
             escape.as_os_str().to_owned(),
             OsString::from("--"),
         ];
-        Ok(ProbePayload::wrapper_owned_with_flags(
+        ProbePayload::wrapper_owned_with_flags(
             &invocation_prefix,
-            &self.wrapper,
+            self.wrapper.as_path(),
             &wrapper_flags,
             self.exercise.tail(),
-        ))
+        )
     }
 }
 
@@ -2487,5 +2679,142 @@ mod tests {
             vec![PathBuf::from("/abs/runtime"), PathBuf::from("/abs/csum")],
             "every `path = \"…\"` value, in manifest order"
         );
+    }
+
+    /// The POSIX-wired platforms, whose payload carries the toolchain env.
+    #[cfg(any(
+        all(
+            target_os = "linux",
+            any(target_arch = "x86_64", target_arch = "aarch64")
+        ),
+        target_os = "macos",
+        target_os = "freebsd"
+    ))]
+    mod canonical_jail_paths {
+        use super::*;
+        use crate::scratch::ScratchDir;
+
+        /// A scratch holding `real/{worktree,cargo/bin,rustup}` and the wrapper,
+        /// reached through the symlink `link -> real`.
+        struct Tree {
+            _dir: ScratchDir,
+            real: PathBuf,
+            link: PathBuf,
+        }
+
+        fn tree() -> Tree {
+            let dir = ScratchDir::new("ipe-tier2-canonical").expect("scratch");
+            let base = dir.path().to_path_buf();
+            for sub in ["real/worktree", "real/cargo/bin", "real/rustup"] {
+                std::fs::create_dir_all(base.join(sub)).expect("create dir");
+            }
+            std::fs::write(base.join("real/untrusted-build.sh"), "").expect("wrapper");
+            std::os::unix::fs::symlink(base.join("real"), base.join("link")).expect("symlink");
+            let real = std::fs::canonicalize(base.join("real")).expect("canonical real");
+            Tree {
+                _dir: dir,
+                real,
+                link: base.join("link"),
+            }
+        }
+
+        fn canonical(path: &Path) -> CanonicalPath {
+            CanonicalPath::resolve(path).expect("canonical")
+        }
+
+        #[test]
+        fn the_payload_names_exactly_the_canonical_paths_the_jail_binds() {
+            let tree = tree();
+            let link = &tree.link;
+            let toolchain = ToolchainHomes::from_homes(
+                Some(link.join("cargo")),
+                Some(link.join("rustup")),
+                Some(link.clone()),
+            )
+            .expect("disjoint homes resolve");
+            let tools = RunJailTools {
+                bwrap: PathBuf::from("/nonexistent/bwrap"),
+                prlimit: PathBuf::from("/nonexistent/prlimit"),
+                timeout: None,
+            };
+            let exercise = ProbeExercise::real_build(vec![OsString::from("cargo")], toolchain)
+                .expect("non-empty argv");
+            let runner = JailProbeRunner::new(
+                &tools,
+                canonical(&link.join("untrusted-build.sh")),
+                canonical(link),
+                canonical(&link.join("worktree")),
+                Vec::new(),
+                Vec::new(),
+                exercise,
+            );
+            let payload = runner.probe_payload(std::ffi::OsStr::new("none"), &runner.escape_path());
+            let tokens: Vec<String> = payload
+                .argv()
+                .iter()
+                .map(|t| t.to_string_lossy().into_owned())
+                .collect();
+            let real = &tree.real;
+            let expected = [
+                format!("SCRATCH_DIR={}", real.display()),
+                format!(
+                    "ESCAPE_PATH={}",
+                    real.join("worktree/tier2-escape-probe").display()
+                ),
+                format!("CARGO_HOME={}", real.join("cargo").display()),
+                format!("RUSTUP_HOME={}", real.join("rustup").display()),
+                format!("HOME={}", real.display()),
+                real.join("untrusted-build.sh").display().to_string(),
+            ];
+            for want in &expected {
+                assert!(tokens.contains(want), "payload lacks `{want}`: {tokens:?}");
+            }
+            let bound: Vec<&Path> = runner.ro_binds.iter().map(CanonicalPath::as_path).collect();
+            for home in [real.join("cargo/bin"), real.join("rustup")] {
+                assert!(
+                    bound.contains(&home.as_path()),
+                    "the env names `{}`, so the jail binds it: {bound:?}",
+                    home.display()
+                );
+            }
+            let spelled = link.display().to_string();
+            assert!(
+                tokens.iter().all(|t| !t.contains(&spelled)),
+                "no payload token keeps the symlinked spelling: {tokens:?}"
+            );
+        }
+
+        #[test]
+        fn a_rustup_home_at_or_above_the_cargo_home_is_refused() {
+            let tree = tree();
+            let cargo = tree.link.join("cargo");
+            for rustup in [cargo.clone(), tree.link] {
+                let refused = ToolchainHomes::from_homes(Some(cargo.clone()), Some(rustup), None);
+                assert!(
+                    matches!(
+                        refused,
+                        Err(CliError::PackageAudit(Rejection {
+                            check: Check::NativeTier2,
+                            ..
+                        }))
+                    ),
+                    "a bind exposing the cargo home must refuse: {refused:?}"
+                );
+            }
+        }
+
+        #[test]
+        fn an_absent_home_binds_and_names_nothing() {
+            let tree = tree();
+            let absent = tree.link.join("absent");
+            let toolchain = ToolchainHomes::from_homes(
+                Some(absent.clone()),
+                Some(absent.clone()),
+                Some(absent),
+            )
+            .expect("absent homes are skipped");
+            assert!(toolchain.ro_binds().is_empty());
+            assert!(toolchain.env().is_empty());
+        }
     }
 }

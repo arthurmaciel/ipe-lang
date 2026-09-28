@@ -28,6 +28,10 @@ libc = "0.2"
 # the rest of the dependency tree pulls in; only the features the arm calls are
 # enabled so the build surface stays minimal.
 [target.'cfg(windows)'.dependencies]
+# The plain drive-letter form of a canonical path wherever it names the same file:
+# the jail hands canonical paths to PowerShell and the ACL grants, and a verbatim
+# `\\?\` path is not accepted by every consumer.
+dunce = "1"
 windows-sys = { version = "0.61", features = [
     "Win32_Foundation",
     "Win32_Security",

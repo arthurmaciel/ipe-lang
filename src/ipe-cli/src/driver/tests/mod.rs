@@ -1,10 +1,18 @@
 use super::*;
 use crate::io_bounded::SourceRefusal;
+use crate::output_dir::{EmitTarget, OutputRefusal, ProjectPaths};
 use crate::{
     ALL_CODES, Applicability, BTreeMap, Diagnostic, Path, PathBuf, Suggestion, cli_args, fs,
     project, style,
 };
 use ipe_diagnostics::{NameError, Span};
+
+/// An emit target at `out`, proven disjoint from a project directory beside it.
+fn emit_target(out: &Path) -> EmitTarget {
+    let project = out.with_extension("project");
+    fs::create_dir_all(&project).expect("project dir");
+    EmitTarget::at(out, &ProjectPaths::of_file(&project.join("Main.ipe"))).expect("prove out")
+}
 
 #[test]
 fn widget_tag_collision_from_distinct_paths_is_refused() {
@@ -1023,7 +1031,12 @@ fn test_stage_build_resolves_src_modules_from_tests_dir() {
     .expect("write tests/Main.ipe");
 
     let out = tmp.join("out");
-    let result = build_test_with_project_sources(&src, &tests.join("Main.ipe"), &out, &runtime);
+    let result = build_test_into(
+        &src,
+        &tests.join("Main.ipe"),
+        OutTarget::Path(&out),
+        &runtime,
+    );
     assert!(
         result.is_ok(),
         "the test stage must resolve src/ modules from tests/ (no IPE-N0020): {:?}",
@@ -1323,7 +1336,7 @@ fn on_disk_cache_hit_serves_a_tampered_entry_verbatim() {
         sources.clone(),
         discovered.clone(),
         &entry_path,
-        &out_a,
+        &emit_target(&out_a),
         &runtime,
         Path::new("<cache-e2e>"),
         ipe_backend_rust::DbDriver::Sqlite,
@@ -1357,7 +1370,7 @@ fn on_disk_cache_hit_serves_a_tampered_entry_verbatim() {
         sources,
         discovered,
         &entry_path,
-        &out_b,
+        &emit_target(&out_b),
         &runtime,
         Path::new("<cache-e2e>"),
         ipe_backend_rust::DbDriver::Sqlite,
@@ -1425,7 +1438,7 @@ fn cold_build_with_the_cache_inside_a_fresh_output_dir_claims_it() {
             sources.clone(),
             discovered.clone(),
             &entry_path,
-            &out,
+            &emit_target(&out),
             &runtime,
             Path::new("<cache-in-out>"),
             ipe_backend_rust::DbDriver::Sqlite,
@@ -1521,7 +1534,7 @@ fn build_through_planted_cache_link(tag: &str, planted: PlantedCacheLink) {
             sources.clone(),
             discovered.clone(),
             &entry_path,
-            &out,
+            &emit_target(&out),
             &runtime,
             Path::new("<cache-link>"),
             ipe_backend_rust::DbDriver::Sqlite,
@@ -1632,7 +1645,7 @@ fn ir_cache_hit_reuses_lowered_program_across_a_db_driver_only_edit() {
         sources.clone(),
         discovered.clone(),
         &entry_path,
-        &out_a,
+        &emit_target(&out_a),
         &runtime,
         Path::new("<p>"),
         ipe_backend_rust::DbDriver::Sqlite,
@@ -1661,7 +1674,7 @@ fn ir_cache_hit_reuses_lowered_program_across_a_db_driver_only_edit() {
         sources,
         discovered,
         &entry_path,
-        &out_b,
+        &emit_target(&out_b),
         &runtime,
         Path::new("<p>"),
         ipe_backend_rust::DbDriver::Postgres,
@@ -1724,7 +1737,7 @@ fn on_disk_ir_cache_hit_serves_a_tampered_entry_verbatim() {
         sources.clone(),
         discovered.clone(),
         &entry_path,
-        &out_a,
+        &emit_target(&out_a),
         &runtime,
         Path::new("<p>"),
         ipe_backend_rust::DbDriver::Sqlite,
@@ -1759,7 +1772,7 @@ fn on_disk_ir_cache_hit_serves_a_tampered_entry_verbatim() {
         sources,
         discovered,
         &entry_path,
-        &out_b,
+        &emit_target(&out_b),
         &runtime,
         Path::new("<p>"),
         ipe_backend_rust::DbDriver::Postgres,
@@ -1901,7 +1914,7 @@ fn cache_dir_none_disables_caching_entirely() {
         sources,
         discovered,
         &entry_path,
-        &out_dir,
+        &emit_target(&out_dir),
         &runtime,
         Path::new("<cache-e2e>"),
         ipe_backend_rust::DbDriver::Sqlite,
@@ -2278,7 +2291,7 @@ fn build_refuses_a_pure_library_with_a_clean_message() {
         &tmp.join("package.ipe"),
         &out,
         Path::new("."),
-        BuildOptions::from_env(),
+        &BuildOptions::from_env(),
     );
     assert!(
         matches!(&result, Err(CliError::Usage(msg)) if msg.contains("library package")),
@@ -3400,11 +3413,17 @@ fn emitting_into_a_user_directory_is_refused_untouched() {
         cargo_toml: "[package]\nname = \"ipe-app\"\n".to_owned(),
         uses_webview: false,
     };
-    let result = write_emitted_project(&emitted, &dir, None, &dir.join("no-runtime"), None, false);
+    let elsewhere = dir.with_extension("project");
+    fs::create_dir_all(&elsewhere).expect("project dir");
+    let result = EmitTarget::at(&dir, &ProjectPaths::of_file(&elsewhere.join("Main.ipe")))
+        .and_then(|target| {
+            write_emitted_project(&emitted, &target, &dir.join("no-runtime"), None, false)
+        });
     assert!(
         matches!(result, Err(CliError::OutputRefused(_))),
         "emitting into a user directory must be refused, got {result:?}"
     );
+    let _ = fs::remove_dir_all(&elsewhere);
     assert_eq!(
         fs::read_to_string(dir.join("src").join("Main.ipe")).unwrap_or_default(),
         "module Main exposing (main)\n",
@@ -3513,6 +3532,94 @@ fn atomic_write_never_writes_through_a_planted_temp_symlink() {
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// An emit target that is, or holds, the project is refused before any write.
+///
+/// This is `write_emitted_project` reached without a caller-proven target: the
+/// bare path is proven against the project, and the project directory keeps
+/// exactly its own files.
+#[test]
+fn an_emit_target_overlapping_the_project_is_refused() {
+    let base = std::env::temp_dir().join(format!("ipe_emit_overlap_{}", std::process::id()));
+    let _ = fs::remove_dir_all(&base);
+    let project_dir = base.join("app");
+    fs::create_dir_all(&project_dir).expect("project dir");
+    fs::write(
+        project_dir.join("Main.ipe"),
+        "module Main exposing (main)\n",
+    )
+    .expect("module");
+    let project = ProjectPaths::of_file(&project_dir.join("Main.ipe"));
+
+    let root = EmitTarget::at(&project_dir, &project);
+    assert!(
+        matches!(
+            root,
+            Err(CliError::OutputRefused(OutputRefusal::ProjectRoot(_)))
+        ),
+        "the project directory must be refused, got {root:?}"
+    );
+    let holder = EmitTarget::at(&base, &project);
+    assert!(
+        matches!(
+            holder,
+            Err(CliError::OutputRefused(
+                OutputRefusal::ContainsProject { .. }
+            ))
+        ),
+        "a directory holding the project must be refused, got {holder:?}"
+    );
+    let runtime = base.join("no-runtime");
+    for out in [project_dir.clone(), base.clone()] {
+        let built = build_loose_file(&project_dir.join("Main.ipe"), &out, &runtime);
+        assert!(
+            matches!(built, Err(CliError::OutputRefused(_))),
+            "a bare out overlapping the project must be refused, got {built:?}"
+        );
+    }
+    let entries = fs::read_dir(&project_dir).map_or(0, Iterator::count);
+    assert_eq!(
+        entries, 1,
+        "the project directory keeps exactly its own file"
+    );
+    let _ = fs::remove_dir_all(&base);
+}
+
+/// A claimed emit target replaced after its claim is refused, never written.
+///
+/// A plain directory planted at the claimed path has another identity, so the
+/// write fails closed and the planted directory stays empty.
+#[test]
+fn a_replaced_claimed_target_is_refused_untouched() {
+    let base = std::env::temp_dir().join(format!("ipe_emit_replaced_{}", std::process::id()));
+    let _ = fs::remove_dir_all(&base);
+    let out = base.join("out");
+    let claimed = emit_target(&out).claim().expect("claim out");
+    fs::rename(&out, base.join("moved")).expect("move the claimed dir away");
+    fs::create_dir_all(&out).expect("plant a directory at the claimed path");
+    let emitted = ipe_backend::EmittedProject {
+        files: BTreeMap::new(),
+        cargo_toml: "[package]\nname = \"ipe-app\"\n".to_owned(),
+        uses_webview: false,
+    };
+    let result = write_emitted_project(
+        &emitted,
+        &EmitTarget::Claimed(claimed),
+        &base.join("no-runtime"),
+        None,
+        false,
+    );
+    assert!(
+        matches!(
+            result,
+            Err(CliError::OutputRefused(OutputRefusal::Replaced(_)))
+        ),
+        "a replaced target must be refused, got {result:?}"
+    );
+    let entries = fs::read_dir(&out).map_or(usize::MAX, Iterator::count);
+    assert_eq!(entries, 0, "the planted directory stays empty");
+    let _ = fs::remove_dir_all(&base);
+}
+
 /// A marked crate dir planted with symlinks is refused by the emit.
 ///
 /// A cloned repository can force-add such a dir with a symlinked `src/` or a
@@ -3538,8 +3645,7 @@ fn emitting_into_a_marked_dir_with_planted_links_is_refused() {
     std::os::unix::fs::symlink(&victim, dir_link.join("src")).expect("dir link");
     let result = write_emitted_project(
         &emitted,
-        &dir_link,
-        None,
+        &emit_target(&dir_link),
         &base.join("no-runtime"),
         None,
         false,
@@ -3556,8 +3662,7 @@ fn emitting_into_a_marked_dir_with_planted_links_is_refused() {
         .expect("file link");
     let result = write_emitted_project(
         &emitted,
-        &file_link,
-        None,
+        &emit_target(&file_link),
         &base.join("no-runtime"),
         None,
         false,

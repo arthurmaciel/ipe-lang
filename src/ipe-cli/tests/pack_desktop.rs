@@ -125,7 +125,7 @@ fn materialise_refuses_planted_symlinks() {
         desktop::layout(DesktopOs::Linux, &identity, &accepts(&[]), None).expect("linux layout");
 
     // A symlinked bundle root: never removed through.
-    let dist = ipe::output_dir::OwnedDir::claim(&dir.join("dist-a")).expect("claim dist");
+    let dist = claim_dist(&dir.join("dist-a"), &dir.join("app"));
     std::os::unix::fs::symlink(&victim, dist.path().join(&layout.root_name)).expect("link");
     let result = desktop::materialise(&layout, &fake_binary, None, &dist);
     assert!(
@@ -138,7 +138,7 @@ fn materialise_refuses_planted_symlinks() {
     );
 
     // A symlinked directory inside the tree the bundle is rebuilt in: refused.
-    let dist_b = ipe::output_dir::OwnedDir::claim(&dir.join("dist-b")).expect("claim dist");
+    let dist_b = claim_dist(&dir.join("dist-b"), &dir.join("app"));
     std::os::unix::fs::symlink(&victim, dist_b.path().join("elsewhere")).expect("link");
     let escaped = dist_b.path_to("elsewhere/keep.txt");
     assert!(
@@ -152,6 +152,16 @@ fn materialise_refuses_planted_symlinks() {
         Some("keep")
     );
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Claim `dist` as an output root proven disjoint from the project at `project`.
+#[allow(clippy::expect_used)] // test helper: a refused claim IS the failure
+fn claim_dist(dist: &std::path::Path, project: &std::path::Path) -> ipe::output_dir::OwnedDir {
+    std::fs::create_dir_all(project).expect("project dir");
+    let root =
+        ipe::output_dir::OutputRoot::at(dist, &ipe::output_dir::ProjectPaths::of_file(project))
+            .expect("prove dist");
+    root.claim().expect("claim dist")
 }
 
 // ── End-to-end Linux artifact (IPE_E2E=1) ─────────────────────────────────────
@@ -188,8 +198,7 @@ fn linux_bundle_is_materialised_end_to_end() {
     let identity = BundleIdentity::new("counter", Some("1.2.3"), None);
     let layout =
         desktop::layout(DesktopOs::Linux, &identity, &accepts(&[]), None).expect("linux layout");
-    let dist = ipe::output_dir::OwnedDir::claim(&dir.join("out").join("dist").join("linux"))
-        .expect("claim dist");
+    let dist = claim_dist(&dir.join("out").join("dist").join("linux"), &src);
     let bundle_root = desktop::materialise(&layout, &exe, None, &dist).expect("materialise");
 
     // The binary landed and is executable.

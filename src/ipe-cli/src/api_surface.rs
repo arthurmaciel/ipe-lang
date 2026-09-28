@@ -144,8 +144,33 @@ impl From<crate::diff::FloorOverflow> for DiffError {
     }
 }
 
-/// Read every `.ipe` module under a package source tree into `(path, source)`
-/// pairs keyed by module path.
+/// The tree [`read_tree`] reads for `root`: the file itself, `root/src`, or `root`.
+///
+/// A conventional package keeps modules under `src/`; a directory without one
+/// (a flat fixture tree) is walked from `root` itself. The one decision point
+/// for the walked root: [`WalkedTree::root`] carries its answer to callers.
+fn tree_walk_root(root: &Path) -> PathBuf {
+    let candidate = root.join("src");
+    if root.is_dir() && candidate.is_dir() {
+        candidate
+    } else {
+        root.to_path_buf()
+    }
+}
+
+/// The modules [`read_tree`] read, with the tree root it walked to find them.
+#[derive(Debug)]
+pub struct WalkedTree {
+    /// The root actually walked: the `.ipe` file, `src/`, or a flat directory.
+    ///
+    /// A command that writes beside the tree (`ipe doc`'s site) proves itself
+    /// clear of exactly this root, never a second resolution of it.
+    pub root: PathBuf,
+    /// Every module read, as `(path, source)` keyed by module path.
+    pub modules: BTreeMap<ModulePath, (PathBuf, String)>,
+}
+
+/// Read every `.ipe` module under a package source tree, with the root walked.
 ///
 /// `root` may be a directory (walked for `*.ipe`) or a single `.ipe` file
 /// (taken as a one-module `Main`-shaped package).
@@ -158,20 +183,11 @@ impl From<crate::diff::FloorOverflow> for DiffError {
 /// [`DiffError::Io`] on a read failure, [`DiffError::Source`] when discovery or
 /// a source read is refused for any other typed reason, and
 /// [`DiffError::Empty`] when the tree carries no `.ipe` modules.
-pub fn read_tree(root: &Path) -> Result<BTreeMap<ModulePath, (PathBuf, String)>, DiffError> {
-    let walked = root.is_dir();
-    let discovered = if walked {
-        // A conventional package keeps modules under `src/`; fall back to the
-        // root itself when there is no `src/` (a flat fixture tree).
-        let src_root = {
-            let candidate = root.join("src");
-            if candidate.is_dir() {
-                candidate
-            } else {
-                root.to_path_buf()
-            }
-        };
-        project::discover_modules(&src_root)?
+pub fn read_tree(root: &Path) -> Result<WalkedTree, DiffError> {
+    let walked = tree_walk_root(root);
+    let walked_dir = walked.is_dir();
+    let discovered = if walked_dir {
+        project::discover_modules(&walked)?
     } else {
         // A single `.ipe` file is its own module; name it by its stem.
         let stem = root
@@ -187,7 +203,7 @@ pub fn read_tree(root: &Path) -> Result<BTreeMap<ModulePath, (PathBuf, String)>,
 
     let mut sources = BTreeMap::new();
     for m in discovered {
-        let src = if walked {
+        let src = if walked_dir {
             crate::io_bounded::read_walked_source(m.path())?
         } else {
             crate::io_bounded::read_to_string_capped(m.path(), crate::io_bounded::SOURCE_READ_CAP)?
@@ -200,7 +216,10 @@ pub fn read_tree(root: &Path) -> Result<BTreeMap<ModulePath, (PathBuf, String)>,
             path: root.to_path_buf(),
         });
     }
-    Ok(sources)
+    Ok(WalkedTree {
+        root: walked,
+        modules: sources,
+    })
 }
 
 /// Render a generalized scheme's [`Ty`] into its resolved [`TyDoc`].
@@ -413,7 +432,18 @@ fn canon_type_arg(
 /// [`DiffError`] on a read failure, a typecheck failure, an open interface, or an
 /// empty tree.
 pub fn extract_tree(root: &Path) -> Result<PublicApi, DiffError> {
-    let sources = read_tree(root)?;
+    extract_walked(&read_tree(root)?)
+}
+
+/// Extract the public API surface of an already-read module tree.
+///
+/// Typechecks exactly the sources `tree` holds, so a caller that also reads
+/// those sources (`ipe doc`'s comments) sees the same tree the API came from.
+///
+/// # Errors
+/// [`DiffError`] on a typecheck failure or an open interface.
+pub fn extract_walked(tree: &WalkedTree) -> Result<PublicApi, DiffError> {
+    let sources = &tree.modules;
 
     let db = ipe_db::IpeDatabase::new();
     let mut prepared: BTreeMap<Vec<String>, (PathBuf, String)> = sources.clone();

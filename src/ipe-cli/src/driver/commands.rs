@@ -1,13 +1,13 @@
 use super::{
-    BuildOptions, BundleHost, BundleProfile, CliError, RuntimeContext, apply_fixes_cmd,
-    attribute_canon_errors, attribute_post_link_error, bluegreen_enabled,
-    build_loose_file_with_options, build_project_with_options, bundle_delivery,
-    collect_entry_and_siblings, create_source_root, emit_machine_error, emit_permissions,
-    find_manifest_for_ipe_file, gate_decoder_pipelines, home_to_source_map, io_err,
-    render_capabilities, resolve_analysis_entry, resolve_vendored_runtime_dir, run_version,
-    runtime_dep_from_env, single_file_cargo_name_from_env,
+    BuildOptions, BundleHost, BundleProfile, CliError, OutTarget, RuntimeContext, apply_fixes_cmd,
+    attribute_canon_errors, attribute_post_link_error, bluegreen_enabled, build_loose_file_into,
+    build_project_into, bundle_delivery, collect_entry_and_siblings, create_source_root,
+    emit_machine_error, emit_permissions, find_manifest_for_ipe_file, gate_decoder_pipelines,
+    home_to_source_map, io_err, render_capabilities, resolve_analysis_entry,
+    resolve_vendored_runtime_dir, run_version, runtime_dep_from_env,
+    single_file_cargo_name_from_env,
 };
-use crate::output_dir::{OutputArea, OutputRoot, OwnedDir, ProjectPaths};
+use crate::output_dir::{EmitTarget, OutputArea, OutputRoot, OwnedDir, ProjectPaths};
 use crate::style::TerminalSafe;
 use crate::{
     ALL_CODES, BTreeMap, Diagnostic, Interner, Path, PathBuf, build_plan, cli_args, delivery,
@@ -301,7 +301,7 @@ pub fn run_watch(rest: &[String]) -> Result<(), CliError> {
     let out_dir = rust_area.path()?;
 
     let mut opts = watch::WatchOptions::new(PathBuf::from(entry), out_dir, runtime_dir);
-    opts.out_area = Some(rust_area);
+    opts.out_target = Some(EmitTarget::Area(rust_area));
     opts.port = args.port;
     opts.cargo_path = cargo_bin.path().to_path_buf();
     opts.quiet = args.quiet;
@@ -795,34 +795,39 @@ pub fn run_build_body(rest: &[String]) -> Result<BuildSuccess, CliError> {
         // Filled from the manifest `delivery.desktop` in
         // build_project_with_options once the manifest is parsed.
         webview_window: None,
-        out_area: Some(rust_area.clone()),
     };
 
     // No manifest found: compile entry + all sibling .ipe files in the same
     // directory. Byte-identical to `build` when the directory holds only the
     // entry file (regression-covered by the golden suite).
-    manifest.as_ref().map_or_else(
-        || build_loose_file_with_options(&entry_path, &out_dir, &runtime_dir, options.clone()),
-        |m| build_project_with_options(m, &out_dir, &runtime_dir, options.clone()),
+    let crate_dir = emit_into(
+        &entry_path,
+        manifest.as_deref(),
+        &EmitTarget::Area(rust_area),
+        &runtime_dir,
+        options,
     )?;
 
     let native_artifact = match compile_target {
         CompileTarget::WasmClient => {
-            bundle_wasm(&rust_area.claim()?)?;
+            bundle_wasm(&crate_dir)?;
             None
         }
         CompileTarget::WasmWasi => {
-            bundle_wasi(&out_dir)?;
+            bundle_wasi(&crate_dir)?;
             None
         }
         CompileTarget::Native => Some(compile_and_finalize_native_build(
             &output,
-            native_cargo,
-            static_plan,
-            runtime_dep,
+            &crate_dir,
+            NativeBuild {
+                cargo: native_cargo,
+                static_plan,
+                runtime_dep,
+                quiet: args.quiet,
+            },
             manifest.as_deref(),
             &consented,
-            args.quiet,
         )?),
     };
 
@@ -844,6 +849,39 @@ pub fn run_build_body(rest: &[String]) -> Result<BuildSuccess, CliError> {
         );
     }
     Ok(BuildSuccess { entry, out_dir })
+}
+
+/// Emit the program at `entry_path` into `target`, returning the claimed crate directory.
+///
+/// The manifest project is emitted when one was found, else the entry with
+/// its sibling files.
+///
+/// # Errors
+/// As [`build_project_into`] and [`build_loose_file_into`].
+fn emit_into(
+    entry_path: &Path,
+    manifest: Option<&Path>,
+    target: &EmitTarget,
+    runtime_dir: &Path,
+    options: BuildOptions,
+) -> Result<OwnedDir, CliError> {
+    let out = OutTarget::Proven(target);
+    match manifest {
+        Some(m) => build_project_into(m, out, runtime_dir, &options),
+        None => build_loose_file_into(entry_path, out, runtime_dir, options),
+    }
+}
+
+/// How [`compile_and_finalize_native_build`] runs `cargo build`.
+pub struct NativeBuild {
+    /// The resolved `cargo`; `None` re-resolves it.
+    pub cargo: Option<toolchain::CargoBin>,
+    /// The static-link target, when the build is static.
+    pub static_plan: Option<ipe_backend_rust::static_build::StaticPlan>,
+    /// Whether the emitted crate depends on the runtime.
+    pub runtime_dep: bool,
+    /// Pass `-q` to cargo instead of its terminal UI.
+    pub quiet: bool,
 }
 
 /// Compile the just-emitted native crate and write its runtime-enforcement
@@ -873,13 +911,17 @@ pub fn run_build_body(rest: &[String]) -> Result<BuildSuccess, CliError> {
 ///   steps it composes.
 pub fn compile_and_finalize_native_build(
     output: &OutputRoot,
-    native_cargo: Option<toolchain::CargoBin>,
-    static_plan: Option<ipe_backend_rust::static_build::StaticPlan>,
-    runtime_dep: bool,
+    crate_dir: &OwnedDir,
+    build: NativeBuild,
     manifest: Option<&Path>,
     consented: &ConsentedCapabilities,
-    quiet: bool,
 ) -> Result<PathBuf, CliError> {
+    let NativeBuild {
+        cargo: native_cargo,
+        static_plan,
+        runtime_dep,
+        quiet,
+    } = build;
     // `native_cargo` is `Some` on every native path (the caller's wasm branch
     // returns before here); the fallback re-resolves rather than unwrapping so
     // the toolchain error stays typed even if that invariant ever changes.
@@ -887,9 +929,7 @@ pub fn compile_and_finalize_native_build(
         Some(bin) => bin,
         None => toolchain::require_cargo(toolchain::ToolIntent::Build)?,
     };
-    let rust_area = output.area(&[OutputArea::Rust]);
-    let rust_path = rust_area.path()?;
-    let out_dir = rust_path.as_path();
+    let out_dir = crate_dir.path();
     let mut cargo = std::process::Command::new(cargo_bin.path());
     cargo.arg("build").current_dir(out_dir);
     if quiet {
@@ -905,7 +945,7 @@ pub fn compile_and_finalize_native_build(
     } else {
         None
     };
-    build_emitted_project(&mut cargo, "the emitted program", runtime_ctx, out_dir)?;
+    build_emitted_project(&mut cargo, "the emitted program", runtime_ctx, crate_dir)?;
 
     let manifest_parsed = match manifest {
         Some(m) => Some(project::parse_manifest(m)?),
@@ -931,7 +971,7 @@ pub fn compile_and_finalize_native_build(
     let resolved = consented.resolved();
     if run_sandbox::is_native_bearing(&resolved.union()) {
         let profile = run_sandbox::build_profile(resolved, driver)?;
-        run_sandbox::write_build_artifacts(&rust_area.claim()?, &profile)?;
+        run_sandbox::write_build_artifacts(crate_dir, &profile)?;
     }
     Ok(artifact)
 }
@@ -1059,7 +1099,6 @@ pub fn run_eject(rest: &[String]) -> Result<(), CliError> {
         None => ProjectPaths::discover(&entry_path)?,
     };
     let target = OutputRoot::fresh(&args.out, &paths)?.claim()?;
-    let out_dir = target.path().to_path_buf();
 
     // Force the vendored, tree-shaken emit shape: a self-contained project names
     // no runtime path dependency (`runtime_dep = false`) and carries only the
@@ -1086,10 +1125,14 @@ pub fn run_eject(rest: &[String]) -> Result<(), CliError> {
         );
     }
 
-    manifest.as_ref().map_or_else(
-        || build_loose_file_with_options(&entry_path, &out_dir, &runtime_dir, options.clone()),
-        |m| build_project_with_options(m, &out_dir, &runtime_dir, options.clone()),
-    )?;
+    emit_into(
+        &entry_path,
+        manifest.as_deref(),
+        &EmitTarget::Claimed(target.owned().clone()),
+        &runtime_dir,
+        options,
+    )
+    .map(drop)?;
     // From here on the tree is the user's: ipe drops its ownership marker so no
     // later ipe command treats the ejected project as disposable output.
     let out_dir = target.release_to_user()?;
@@ -1279,13 +1322,15 @@ pub fn run_release(rest: &[String]) -> Result<(), CliError> {
             // where the classified shape is known (build_project_with_options).
             webview_host: false,
             webview_window: None,
-            out_area: Some(rust_area.clone()),
         };
-        manifest.as_ref().map_or_else(
-            || build_loose_file_with_options(&entry_path, &out_dir, &runtime_dir, options.clone()),
-            |m| build_project_with_options(m, &out_dir, &runtime_dir, options.clone()),
+        let crate_dir = emit_into(
+            &entry_path,
+            manifest.as_deref(),
+            &EmitTarget::Area(rust_area),
+            &runtime_dir,
+            options,
         )?;
-        bundle_wasm(&rust_area.claim()?)?;
+        bundle_wasm(&crate_dir)?;
         if show_progress {
             crate::screen::chatter(
                 crate::screen::Stream::Stderr,
@@ -1358,12 +1403,14 @@ pub fn run_release(rest: &[String]) -> Result<(), CliError> {
             production: true,
             runtime_dep: runtime_dep_from_env(),
             tree_shake_vendored: false,
-            out_area: Some(rust_area),
             ..BuildOptions::default()
         };
-        manifest.as_ref().map_or_else(
-            || build_loose_file_with_options(&entry_path, &out_dir, &runtime_dir, options.clone()),
-            |m| build_project_with_options(m, &out_dir, &runtime_dir, options.clone()),
+        let crate_dir = emit_into(
+            &entry_path,
+            manifest.as_deref(),
+            &EmitTarget::Area(rust_area),
+            &runtime_dir,
+            options,
         )?;
 
         let mut app_cargo = std::process::Command::new(cargo_bin.path());
@@ -1373,7 +1420,7 @@ pub fn run_release(rest: &[String]) -> Result<(), CliError> {
             .args(["--target", triple.as_str()])
             .current_dir(&out_dir);
         force_cargo_terminal_ui(&mut app_cargo);
-        build_emitted_project(&mut app_cargo, "the release binary", None, &out_dir)?;
+        build_emitted_project(&mut app_cargo, "the release binary", None, &crate_dir)?;
 
         let app_target_dir = cargo_target_directory(&out_dir)?;
         // Cargo names the built binary after the emitted crate IDENTITY (the
@@ -1445,12 +1492,14 @@ pub fn run_release(rest: &[String]) -> Result<(), CliError> {
         production: true,
         runtime_dep: runtime_dep_from_env(),
         tree_shake_vendored: false,
-        out_area: Some(app_area.clone()),
         ..BuildOptions::default()
     };
-    manifest.as_ref().map_or_else(
-        || build_loose_file_with_options(&entry_path, &app_out, &runtime_dir, options.clone()),
-        |m| build_project_with_options(m, &app_out, &runtime_dir, options.clone()),
+    let app_dir = emit_into(
+        &entry_path,
+        manifest.as_deref(),
+        &EmitTarget::Area(app_area),
+        &runtime_dir,
+        options,
     )?;
 
     let mut app_cargo = std::process::Command::new(cargo_bin.path());
@@ -1460,11 +1509,11 @@ pub fn run_release(rest: &[String]) -> Result<(), CliError> {
         .args(["--target", triple.as_str()])
         .current_dir(&app_out);
     force_cargo_terminal_ui(&mut app_cargo);
-    build_emitted_project(&mut app_cargo, "the release app", None, &app_out)?;
+    build_emitted_project(&mut app_cargo, "the release app", None, &app_dir)?;
 
     // Write the capability enforcement artifacts (ipe.profile + embedded floor).
     let profile = run_sandbox::build_profile(resolved, driver)?;
-    run_sandbox::write_build_artifacts(&app_area.claim()?, &profile)?;
+    run_sandbox::write_build_artifacts(&app_dir, &profile)?;
 
     // Locate the compiled app binary. The target dir may be a global
     // `CARGO_TARGET_DIR` (set by the user or the agent lane), so we resolve
@@ -1512,7 +1561,7 @@ pub fn run_release(rest: &[String]) -> Result<(), CliError> {
     wrapper_cargo.current_dir(&workspace_root);
     force_cargo_terminal_ui(&mut wrapper_cargo);
 
-    build_emitted_project(
+    build_workspace_crate(
         &mut wrapper_cargo,
         "the release wrapper",
         None,
@@ -1706,13 +1755,15 @@ pub fn set_executable(path: &Path) -> Result<(), CliError> {
 /// - [`CliError::Io`] if `cargo` cannot be spawned or its stderr pipe cannot be
 ///   opened.
 /// - [`CliError::EmittedBuildFailed`] if `cargo` exits non-zero.
+/// - [`CliError::OutputRefused`] if `crate_dir` was replaced before or while
+///   `cargo` ran.
 pub fn build_emitted_project(
     cargo: &mut std::process::Command,
     what: &'static str,
     runtime: Option<RuntimeContext>,
-    io_path: &Path,
+    crate_dir: &OwnedDir,
 ) -> Result<(), CliError> {
-    build_emitted_project_core(cargo, what, runtime, io_path, false).map(drop)
+    build_owned_crate(cargo, what, runtime, crate_dir, false).map(drop)
 }
 
 /// Like [`build_emitted_project`], but *captures* `cargo`'s stdout and returns
@@ -1728,13 +1779,47 @@ pub fn build_emitted_project(
 /// # Errors
 /// - [`CliError::Io`] if `cargo` cannot be spawned or its pipes opened.
 /// - [`CliError::EmittedBuildFailed`] if `cargo` exits non-zero.
+/// - [`CliError::OutputRefused`] if `crate_dir` was replaced before or while
+///   `cargo` ran.
 pub fn build_emitted_project_capturing_stdout(
     cargo: &mut std::process::Command,
     what: &'static str,
     runtime: Option<RuntimeContext>,
-    io_path: &Path,
+    crate_dir: &OwnedDir,
 ) -> Result<String, CliError> {
-    build_emitted_project_core(cargo, what, runtime, io_path, true)
+    build_owned_crate(cargo, what, runtime, crate_dir, true)
+}
+
+/// Build the claimed crate in `crate_dir`, proven that directory before `cargo` starts and after it exits.
+///
+/// `cargo` reaches the crate, its lock and its `target` by path, so a swap
+/// while it runs cannot be prevented, only detected: a directory replaced in
+/// the meantime fails the build closed instead of its output being trusted.
+fn build_owned_crate(
+    cargo: &mut std::process::Command,
+    what: &'static str,
+    runtime: Option<RuntimeContext>,
+    crate_dir: &OwnedDir,
+    capture_stdout: bool,
+) -> Result<String, CliError> {
+    crate_dir.verify()?;
+    cargo.current_dir(crate_dir.path());
+    let stdout =
+        build_emitted_project_core(cargo, what, runtime, crate_dir.path(), capture_stdout)?;
+    crate_dir.verify()?;
+    Ok(stdout)
+}
+
+/// Build a crate ipe does not own — the workspace the release wrapper lives in.
+///
+/// Nothing is written into an ipe output area, so no claim is proven.
+fn build_workspace_crate(
+    cargo: &mut std::process::Command,
+    what: &'static str,
+    runtime: Option<RuntimeContext>,
+    workspace_root: &Path,
+) -> Result<(), CliError> {
+    build_emitted_project_core(cargo, what, runtime, workspace_root, false).map(drop)
 }
 
 /// Shared body of the emitted-project build. Streams `cargo`'s stderr live (and
@@ -2022,7 +2107,7 @@ pub fn bundle_wasm(crate_dir: &OwnedDir) -> Result<(), CliError> {
         &mut cargo,
         "the emitted wasm program",
         runtime_context_for_message(),
-        out_dir,
+        crate_dir,
     )?;
 
     // Step 2: wasm-bindgen — locate the .wasm the cargo build just produced
@@ -2044,15 +2129,51 @@ pub fn bundle_wasm(crate_dir: &OwnedDir) -> Result<(), CliError> {
         via_env.filter(|p| p.is_file()).unwrap_or(via_crate)
     };
 
+    bundle_wasm_pkg(
+        crate_dir,
+        &wasm_path,
+        &WasmTools {
+            bindgen: Path::new("wasm-bindgen"),
+            opt: Path::new("wasm-opt"),
+        },
+    )
+}
+
+/// The post-link wasm tools `bundle_wasm` runs, by program path.
+struct WasmTools<'a> {
+    /// The `wasm-bindgen` CLI.
+    bindgen: &'a Path,
+    /// The optional `wasm-opt` size pass.
+    opt: &'a Path,
+}
+
+/// Bundle the linked `wasm_path` into the owned crate's `www/pkg/` with `tools`.
+///
+/// # Errors
+/// [`CliError::Usage`] when `wasm-bindgen` fails; [`CliError::OutputRefused`]
+/// when `crate_dir` was replaced before or while either tool ran;
+/// [`CliError::Io`] on a filesystem or spawn failure.
+fn bundle_wasm_pkg(
+    crate_dir: &OwnedDir,
+    wasm_path: &Path,
+    tools: &WasmTools<'_>,
+) -> Result<(), CliError> {
+    let out_dir = crate_dir.path();
     // `wasm-bindgen` and `wasm-opt` write into `www/pkg/` by path, so it is
     // rebuilt empty under the owned crate: a symlink at any level is refused and
-    // nothing planted inside it can redirect their writes.
-    let pkg = crate_dir.path_to(Path::new("www").join("pkg"))?;
+    // nothing planted inside it can redirect their writes. Each tool's writes
+    // are proven to have landed in the owned crate once it exits.
+    let pkg_rel = Path::new("www").join("pkg");
+    let pkg = crate_dir.path_to(&pkg_rel)?;
     pkg.remove()?;
     pkg.ensure_dir()?;
     let pkg_dir = pkg.path();
+    let prove_pkg = || -> Result<(), CliError> {
+        crate_dir.verify()?;
+        crate_dir.path_to(&pkg_rel).map(drop)
+    };
 
-    let wb_status = std::process::Command::new("wasm-bindgen")
+    let wb_status = std::process::Command::new(tools.bindgen)
         .args([
             wasm_path.to_string_lossy().as_ref(),
             "--target",
@@ -2063,7 +2184,7 @@ pub fn bundle_wasm(crate_dir: &OwnedDir) -> Result<(), CliError> {
         ])
         .status()
         .map_err(|e| CliError::Io {
-            path: wasm_path.clone(),
+            path: wasm_path.to_path_buf(),
             source: e,
         })?;
     if !wb_status.success() {
@@ -2073,12 +2194,13 @@ pub fn bundle_wasm(crate_dir: &OwnedDir) -> Result<(), CliError> {
             &WASM_BINDGEN_VERSION,
         )));
     }
+    prove_pkg()?;
 
     // Step 3: wasm-opt -Oz — optional size pass; silently skip when absent
     // (`Command::new` returns `Err` when the tool is missing).
     let bg_wasm = pkg_dir.join("ipe_app_bg.wasm");
     if bg_wasm.is_file()
-        && let Ok(status) = std::process::Command::new("wasm-opt")
+        && let Ok(status) = std::process::Command::new(tools.opt)
             .args([
                 bg_wasm.to_string_lossy().as_ref(),
                 "-Oz",
@@ -2100,6 +2222,7 @@ pub fn bundle_wasm(crate_dir: &OwnedDir) -> Result<(), CliError> {
         );
     }
 
+    prove_pkg()?;
     let bundle_size = format_artifact_size(artifact_size_bytes(&bg_wasm)?);
     let www = out_dir.join("www");
     crate::screen::chatter(
@@ -2130,8 +2253,10 @@ pub fn bundle_wasm(crate_dir: &OwnedDir) -> Result<(), CliError> {
 /// is governed by exactly the config the emitter ships.
 ///
 /// # Errors
-/// [`CliError::EmittedBuildFailed`] when the wasip1 `cargo build` fails.
-pub fn bundle_wasi(out_dir: &Path) -> Result<PathBuf, CliError> {
+/// [`CliError::EmittedBuildFailed`] when the wasip1 `cargo build` fails;
+/// [`CliError::OutputRefused`] when `crate_dir` was replaced since its claim.
+pub fn bundle_wasi(crate_dir: &OwnedDir) -> Result<PathBuf, CliError> {
+    let out_dir = crate_dir.path();
     // Fail closed before the cross-compile: a missing toolchain becomes a clear
     // root-cause message rather than an opaque OS spawn error.
     let cargo_bin = toolchain::require_cargo(toolchain::ToolIntent::BundleWasm)?;
@@ -2158,7 +2283,7 @@ pub fn bundle_wasi(out_dir: &Path) -> Result<PathBuf, CliError> {
         &mut cargo,
         "the emitted wasm32-wasip1 module",
         runtime_context_for_message(),
-        out_dir,
+        crate_dir,
     )?;
 
     // The authoritative module path: the `.wasm` bin artifact cargo reported it
@@ -2690,15 +2815,17 @@ pub fn run_run_with_args(args: cli_args::RunArgs) -> Result<(), CliError> {
         // Filled from the manifest `delivery.desktop` in
         // build_project_with_options once the manifest is parsed.
         webview_window: None,
-        out_area: Some(rust_area.clone()),
     };
 
     // Nothing is created in the Rust area until the emit writes its crate.
     let out_dir = rust_area.path()?;
 
-    manifest.as_ref().map_or_else(
-        || build_loose_file_with_options(&entry_path, &out_dir, &runtime_dir, options.clone()),
-        |m| build_project_with_options(m, &out_dir, &runtime_dir, options.clone()),
+    let crate_dir = emit_into(
+        &entry_path,
+        manifest.as_deref(),
+        &EmitTarget::Area(rust_area),
+        &runtime_dir,
+        options,
     )?;
 
     // Post-emit routing per compile target:
@@ -2710,13 +2837,13 @@ pub fn run_run_with_args(args: cli_args::RunArgs) -> Result<(), CliError> {
     //     from the SAME declared capability floor the native run jail reads.
     //   * Native — fall through to the cargo build + jailed exec below.
     match compile_target {
-        CompileTarget::WasmClient => return bundle_wasm(&rust_area.claim()?),
+        CompileTarget::WasmClient => return bundle_wasm(&crate_dir),
         CompileTarget::WasmWasi => {
             // The `wasi_run` feature gate already fired before emit (above), so
             // reaching here means the embedded engine is linked. Build the module
             // first — a green build is THE SEAL (ipe-accepts ⇒ cargo-builds for
             // the target) — then run it.
-            let module = bundle_wasi(&out_dir)?;
+            let module = bundle_wasi(&crate_dir)?;
             // Derive the capability floor exactly as the native jail does (the
             // consented set → `build_profile`), so the WASI context enforces the
             // SAME deny-by-default model — defend-in-depth, one capability model
@@ -2766,7 +2893,7 @@ pub fn run_run_with_args(args: cli_args::RunArgs) -> Result<(), CliError> {
     } else {
         None
     };
-    build_emitted_project(&mut cargo, "the emitted program", runtime_ctx, &out_dir)?;
+    build_emitted_project(&mut cargo, "the emitted program", runtime_ctx, &crate_dir)?;
 
     // --- Step 3: exec the emitted binary, forwarding args and exit code ---
     // The binary name is read from the emitted crate's `Cargo.toml` — the
@@ -3800,5 +3927,166 @@ mod capability_resolution_once_tests {
             );
             assert_eq!(body.matches(RESOLVE_CALL).count(), 0, "{entry_point}");
         }
+    }
+}
+
+#[cfg(test)]
+#[cfg(unix)]
+mod held_crate_tests {
+    //! A tool that writes into a claimed crate by path is proven, once it exits,
+    //! to have written into that same crate: a crate directory swapped while
+    //! `cargo`, `wasm-bindgen` or `wasm-opt` ran fails the build closed, and no
+    //! output of the swapped run is handed back.
+
+    use std::os::unix::fs::PermissionsExt as _;
+    use std::path::{Path, PathBuf};
+
+    use super::{WasmTools, build_emitted_project_capturing_stdout, bundle_wasm_pkg};
+    use crate::CliError;
+    use crate::output_dir::{OutputRefusal, OwnedDir};
+
+    /// A fresh scratch base for `tag`, holding a claimed `crate/`.
+    fn scratch(tag: &str) -> (PathBuf, OwnedDir) {
+        let base =
+            std::env::temp_dir().join(format!("ipe-held-crate-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).expect("scratch base");
+        let crate_dir = OwnedDir::claim(&base.join("crate")).expect("claim crate");
+        (base, crate_dir)
+    }
+
+    /// An executable `sh` stub `name` under `base` that runs `body`.
+    fn stub(base: &Path, name: &str, body: &str) -> PathBuf {
+        let path = base.join(name);
+        std::fs::write(&path, format!("#!/bin/sh\n{body}\n")).expect("write stub");
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755))
+            .expect("stub executable");
+        path
+    }
+
+    /// The shell step that moves the crate aside and makes a fresh one at its path.
+    fn swap(crate_dir: &OwnedDir) -> String {
+        let p = crate_dir.path().display();
+        format!("mv '{p}' '{p}.aside' && mkdir '{p}'")
+    }
+
+    /// Whether `result` is the replaced-crate refusal.
+    const fn replaced<T>(result: &Result<T, CliError>) -> bool {
+        matches!(
+            result,
+            Err(CliError::OutputRefused(OutputRefusal::Replaced(_)))
+        )
+    }
+
+    /// A stub `cargo` that locks, builds, and prints one artifact line after `during`.
+    fn cargo_stub(base: &Path, during: &str) -> PathBuf {
+        stub(
+            base,
+            "cargo",
+            &format!(
+                "[ \"$1\" = generate-lockfile ] && exit 0\n{during}\n\
+                 echo '{{\"reason\":\"compiler-artifact\",\"executable\":\"/x\"}}'"
+            ),
+        )
+    }
+
+    /// A crate replaced while `cargo` built it is refused, its artifact stream dropped.
+    #[test]
+    fn a_crate_replaced_during_the_cargo_build_is_refused() {
+        let (base, crate_dir) = scratch("cargo-swap");
+        let cargo = cargo_stub(&base, &swap(&crate_dir));
+        let built = build_emitted_project_capturing_stdout(
+            &mut std::process::Command::new(&cargo),
+            "the emitted program",
+            None,
+            &crate_dir,
+        );
+        assert!(
+            replaced(&built),
+            "a swapped crate must fail closed with no executable, got {built:?}"
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// The same build over an untouched crate hands its artifact stream back.
+    #[test]
+    fn an_untouched_crate_build_returns_its_artifact_stream() {
+        let (base, crate_dir) = scratch("cargo-ok");
+        let cargo = cargo_stub(&base, "true");
+        let built = build_emitted_project_capturing_stdout(
+            &mut std::process::Command::new(&cargo),
+            "the emitted program",
+            None,
+            &crate_dir,
+        );
+        assert!(
+            built
+                .as_ref()
+                .is_ok_and(|out| out.contains("compiler-artifact")),
+            "an untouched crate builds, got {built:?}"
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// Run [`bundle_wasm_pkg`] over `crate_dir` with stub tools running the given bodies.
+    fn bundle_with(
+        base: &Path,
+        crate_dir: &OwnedDir,
+        bindgen: &str,
+        opt: &str,
+    ) -> Result<(), CliError> {
+        let bindgen = stub(base, "wasm-bindgen", bindgen);
+        let opt = stub(base, "wasm-opt", opt);
+        bundle_wasm_pkg(
+            crate_dir,
+            &base.join("ipe_app.wasm"),
+            &WasmTools {
+                bindgen: &bindgen,
+                opt: &opt,
+            },
+        )
+    }
+
+    /// The `wasm-bindgen` stub body that writes the bundle into its `--out-dir`.
+    const WRITE_BUNDLE: &str = "touch \"$6/ipe_app_bg.wasm\"";
+
+    /// A crate replaced while `wasm-bindgen` wrote the bundle is refused.
+    #[test]
+    fn a_crate_replaced_during_wasm_bindgen_is_refused() {
+        let (base, crate_dir) = scratch("bindgen-swap");
+        let bundled = bundle_with(&base, &crate_dir, &swap(&crate_dir), "exit 0");
+        assert!(replaced(&bundled), "got {bundled:?}");
+        assert!(
+            !crate_dir.path().join("www").exists(),
+            "nothing is written into the replacement"
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// A crate replaced while `wasm-opt` rewrote the bundle is refused.
+    #[test]
+    fn a_crate_replaced_during_wasm_opt_is_refused() {
+        let (base, crate_dir) = scratch("opt-swap");
+        let bundled = bundle_with(&base, &crate_dir, WRITE_BUNDLE, &swap(&crate_dir));
+        assert!(replaced(&bundled), "got {bundled:?}");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// Both tools over an untouched crate leave the bundle in its `www/pkg/`.
+    #[test]
+    fn an_untouched_crate_bundles_into_its_pkg() {
+        let (base, crate_dir) = scratch("wasm-ok");
+        let bundled = bundle_with(&base, &crate_dir, WRITE_BUNDLE, "exit 0");
+        assert!(
+            bundled.is_ok(),
+            "an untouched crate bundles, got {bundled:?}"
+        );
+        let bundle = crate_dir
+            .path()
+            .join("www")
+            .join("pkg")
+            .join("ipe_app_bg.wasm");
+        assert!(bundle.is_file(), "the bundle lands in the owned crate");
+        let _ = std::fs::remove_dir_all(&base);
     }
 }

@@ -1,7 +1,7 @@
 use super::{CliError, diag_span, io_err};
 #[cfg(not(unix))]
 use crate::output_dir::OutputRefusal;
-use crate::output_dir::{OwnedDir, OwnedPath};
+use crate::output_dir::{EmitTarget, OwnedDir, OwnedPath, ProjectPaths};
 use crate::{
     BTreeMap, BTreeSet, Diagnostic, Interner, Path, PathBuf, build_plan, cache, contained_path,
     ffi, fs, project, render, runtime_embed, text,
@@ -110,11 +110,28 @@ pub struct BuildOptions {
     /// when [`Self::webview_host`]. Filled in `build_project_with_options` once
     /// the manifest is parsed; `None` selects the built-in fallback window.
     pub webview_window: Option<ipe_backend_rust::WebViewWindow>,
-    /// The output area the emitted crate is written to, when the build writes
-    /// into a CLI output root. The emit claims it through the root's proof, so
-    /// a level swapped after the path was computed cannot redirect the write.
-    /// `None` claims the `out_dir` path itself.
-    pub out_area: Option<crate::output_dir::AreaClaim>,
+}
+
+/// Where a build writes its emitted crate.
+///
+/// A bare path is proven disjoint from the build's own project before the
+/// build writes anything; a proven target carries its proof already.
+#[derive(Debug, Clone, Copy)]
+pub enum OutTarget<'a> {
+    /// A target proven by the caller (a CLI output area, a claimed directory).
+    Proven(&'a EmitTarget),
+    /// A bare path, proven against the project being built.
+    Path(&'a Path),
+}
+
+impl OutTarget<'_> {
+    /// The proven target, proving a bare path against `project`.
+    fn prove(self, project: &ProjectPaths) -> Result<EmitTarget, CliError> {
+        match self {
+            Self::Proven(target) => Ok(target.clone()),
+            Self::Path(out_dir) => EmitTarget::at(out_dir, project),
+        }
+    }
 }
 
 /// Select the emit model from the environment.
@@ -291,6 +308,21 @@ pub fn build_with_options(
     runtime_dir: &Path,
     options: BuildOptions,
 ) -> Result<(), CliError> {
+    build_with_options_into(entry, OutTarget::Path(out_dir), runtime_dir, options).map(drop)
+}
+
+/// [`build_with_options`] into `out`, returning the claimed crate directory.
+///
+/// # Errors
+/// As [`build_with_options`], plus [`CliError::OutputRefused`] when `out`
+/// overlaps the entry's directory.
+pub fn build_with_options_into(
+    entry: &Path,
+    out: OutTarget<'_>,
+    runtime_dir: &Path,
+    options: BuildOptions,
+) -> Result<OwnedDir, CliError> {
+    let target = out.prove(&ProjectPaths::of_file(entry))?;
     let source =
         crate::io_bounded::read_to_string_capped(entry, crate::io_bounded::SOURCE_READ_CAP)?;
 
@@ -331,7 +363,7 @@ pub fn build_with_options(
         sources,
         discovered,
         &entry_path,
-        out_dir,
+        &target,
         runtime_dir,
         entry,
         ipe_backend_rust::DbDriver::Sqlite,
@@ -373,6 +405,22 @@ pub fn build_loose_file_with_options(
     runtime_dir: &Path,
     options: BuildOptions,
 ) -> Result<(), CliError> {
+    build_loose_file_into(entry, OutTarget::Path(out_dir), runtime_dir, options).map(drop)
+}
+
+/// [`build_loose_file_with_options`] into `out`, returning the
+/// claimed crate directory.
+///
+/// # Errors
+/// As [`build_loose_file`], plus [`CliError::OutputRefused`] when
+/// `out` overlaps the entry's directory.
+pub fn build_loose_file_into(
+    entry: &Path,
+    out: OutTarget<'_>,
+    runtime_dir: &Path,
+    options: BuildOptions,
+) -> Result<OwnedDir, CliError> {
+    let target = out.prove(&ProjectPaths::of_file(entry))?;
     let collected = collect_entry_and_siblings(entry)?;
 
     // No manifest on this path either (the loose-file closure is the "no manifest
@@ -381,7 +429,7 @@ pub fn build_loose_file_with_options(
         collected.sources,
         collected.discovered,
         &collected.entry_module_path,
-        out_dir,
+        &target,
         runtime_dir,
         entry,
         ipe_backend_rust::DbDriver::Sqlite,
@@ -398,16 +446,21 @@ pub fn build_loose_file_with_options(
 /// `src/Lib/Foo.ipe` resolves. See [`collect_test_sources`] for the source-set
 /// model.
 ///
+/// Returns the claimed crate directory.
+///
 /// # Errors
 /// [`CliError::Pipeline`] when the compiler rejects the program; [`CliError::Io`]
 /// on any filesystem failure; [`CliError::StaticRefusal`] when the emitted app
-/// shape cannot be static.
-pub fn build_test_with_project_sources(
+/// shape cannot be static; [`CliError::OutputRefused`] when `out` overlaps the
+/// test entry's directory or `project_src_root`.
+pub fn build_test_into(
     project_src_root: &Path,
     test_entry: &Path,
-    out_dir: &Path,
+    out: OutTarget<'_>,
     runtime_dir: &Path,
-) -> Result<(), CliError> {
+) -> Result<OwnedDir, CliError> {
+    let project = ProjectPaths::of_file(test_entry).with_sources(project_src_root);
+    let target = out.prove(&project)?;
     let collected = collect_test_sources(project_src_root, test_entry)?;
 
     // No manifest driver is threaded here (the test stage mirrors the sibling
@@ -417,7 +470,7 @@ pub fn build_test_with_project_sources(
         collected.sources,
         collected.discovered,
         &collected.entry_module_path,
-        out_dir,
+        &target,
         runtime_dir,
         test_entry,
         ipe_backend_rust::DbDriver::Sqlite,
@@ -661,18 +714,18 @@ pub fn compile_modules(
     sources: BTreeMap<Vec<String>, (PathBuf, String)>,
     discovered: Vec<project::DiscoveredModule>,
     entry_path: &[String],
-    out_dir: &Path,
+    target: &EmitTarget,
     runtime_dir: &Path,
     blame_path: &Path,
     db_driver: ipe_backend_rust::DbDriver,
     options: BuildOptions,
-) -> Result<(), CliError> {
-    let cache_site = cache::env_cache_dir(out_dir);
+) -> Result<OwnedDir, CliError> {
+    let cache_site = cache::env_cache_dir(&target.path()?);
     compile_modules_observed(
         sources,
         discovered,
         entry_path,
-        out_dir,
+        target,
         runtime_dir,
         blame_path,
         db_driver,
@@ -715,13 +768,13 @@ pub fn compile_modules_observed(
     mut sources: BTreeMap<Vec<String>, (PathBuf, String)>,
     mut discovered: Vec<project::DiscoveredModule>,
     entry_path: &[String],
-    out_dir: &Path,
+    target: &EmitTarget,
     runtime_dir: &Path,
     blame_path: &Path,
     db_driver: ipe_backend_rust::DbDriver,
     cache_site: Option<&cache::CacheSite>,
     options: BuildOptions,
-) -> (Result<(), CliError>, CacheOutcome) {
+) -> (Result<OwnedDir, CliError>, CacheOutcome) {
     // Inject the transitive compiled-source stdlib closure. `injected` is the
     // driver's unforgeable record of which module paths are trusted stdlib
     // source — the ONLY inputs that earn `ModuleOrigin::EmbeddedStdlib` below.
@@ -792,13 +845,11 @@ pub fn compile_modules_observed(
         return (
             write_emitted_project(
                 &emitted,
-                out_dir,
-                options.out_area.as_ref(),
+                target,
                 runtime_dir,
                 options.static_plan.as_ref(),
                 options.tree_shake_vendored,
-            )
-            .map(drop),
+            ),
             CacheOutcome::Hit,
         );
     }
@@ -859,8 +910,7 @@ pub fn compile_modules_observed(
             if let Ok(emitted) = emit_result {
                 let written = write_emitted_project(
                     &emitted,
-                    out_dir,
-                    options.out_area.as_ref(),
+                    target,
                     runtime_dir,
                     options.static_plan.as_ref(),
                     options.tree_shake_vendored,
@@ -873,7 +923,7 @@ pub fn compile_modules_observed(
                 {
                     cache::store(&root, epoch, &cache_key, &emitted);
                 }
-                return (written.map(drop), CacheOutcome::IrHit);
+                return (written, CacheOutcome::IrHit);
             }
             // A relocated Program that fails to emit is never a build
             // failure from this fast path — fall through to the full
@@ -922,8 +972,7 @@ pub fn compile_modules_observed(
 
     let written = write_emitted_project(
         &emitted,
-        out_dir,
-        options.out_area.as_ref(),
+        target,
         runtime_dir,
         options.static_plan.as_ref(),
         options.tree_shake_vendored,
@@ -931,7 +980,7 @@ pub fn compile_modules_observed(
 
     // A writable cache root comes only from the claim the write above
     // returned, so the default in-output cache is never written before
-    // `out_dir` is proven ipe's.
+    // the target is proven ipe's.
     if let Ok(claimed) = &written
         && let (Some(site), Some(epoch)) = (cache_site, epoch.as_deref())
         && let Some(root) = site.root(claimed)
@@ -959,7 +1008,7 @@ pub fn compile_modules_observed(
         }
     }
 
-    (written.map(drop), CacheOutcome::Miss)
+    (written, CacheOutcome::Miss)
 }
 
 /// Create the salsa inputs for one build: a [`ipe_db::SourceFile`] per module
@@ -1832,14 +1881,14 @@ pub fn rust_raw_str_literal(s: &str) -> String {
     format!("r{fence}\"{s}\"{fence}")
 }
 
-/// Write an emitted project to `out_dir`, vendoring the runtime module tree
+/// Write an emitted project to `target`, vendoring the runtime module tree
 /// from `runtime_dir`.
 ///
 /// The emit→cargo bridge (design doc H7/H8):
 /// assembles the COMPLETE intended project (`build_emit_manifest`) — the
 /// vendored runtime tree, `Cargo.toml`, and every backend-emitted file — then
 /// [`reconcile_emitted_project`] writes only what changed (content-gated,
-/// atomic tmp-then-rename) and deletes anything under `out_dir/src` the
+/// atomic tmp-then-rename) and deletes anything under the target's `src` the
 /// manifest no longer names (manifest-driven prune). On an unchanged rebuild
 /// this writes NOTHING; `cargo` therefore sees no mtime churn and does not
 /// invalidate its own build cache. This is a pure driver-boundary filesystem
@@ -1853,20 +1902,20 @@ pub fn rust_raw_str_literal(s: &str) -> String {
 /// non-static build removes a stale generated config so `+crt-static` can
 /// never leak from an earlier static build into later ones.
 ///
-/// Returns the claimed `out_dir`, the only source of a writable in-output
-/// build-cache root. With `out_area`, `out_dir` is claimed as that area of its
-/// output root, the root's disjointness from the project proven again.
+/// Returns the claimed target, the only source of a writable in-output
+/// build-cache root. An area target is claimed with its root's disjointness
+/// from the project proven again; a claimed target is proven still the
+/// directory it claimed.
 ///
 /// # Errors
 /// [`CliError::Io`] on any filesystem failure; [`CliError::StaticRefusal`]
 /// for a webview shape under a static plan; [`CliError::Pipeline`] on a
 /// backend-invariant breach (manifest anchor drift);
-/// [`CliError::OutputRefused`] when `out_dir` cannot be claimed or is not the
-/// directory `out_area` names.
+/// [`CliError::OutputRefused`] when the target cannot be claimed or was
+/// replaced since it was claimed.
 pub fn write_emitted_project(
     emitted: &ipe_backend::EmittedProject,
-    out_dir: &Path,
-    out_area: Option<&crate::output_dir::AreaClaim>,
+    target: &EmitTarget,
     runtime_dir: &Path,
     static_plan: Option<&ipe_backend_rust::static_build::StaticPlan>,
     tree_shake_vendored: bool,
@@ -1890,11 +1939,8 @@ pub fn write_emitted_project(
         );
     }
     // The reconcile below prunes and overwrites, so it runs only in a directory
-    // proven ipe-owned — a user tree passed as `out_dir` is refused untouched.
-    let crate_dir = match out_area {
-        Some(area) => area.claim_at(out_dir)?,
-        None => OwnedDir::claim(out_dir)?,
-    };
+    // proven ipe-owned and disjoint from the project.
+    let crate_dir = target.claim()?;
     reconcile_emitted_project(&manifest, &crate_dir)?;
     if static_plan.is_none() {
         remove_stale_static_config(&crate_dir)?;
@@ -2271,7 +2317,7 @@ pub fn build_project(
         manifest_path,
         out_dir,
         runtime_dir,
-        BuildOptions::from_env(),
+        &BuildOptions::from_env(),
     )
 }
 
@@ -2281,18 +2327,33 @@ pub fn build_project(
 /// # Errors
 /// As [`build_project`], plus [`CliError::StaticRefusal`] when the emitted
 /// app shape cannot be static.
-// `options` is reconstructed (struct-update syntax) with the parsed
-// manifest's `[wasm] publicEnv` allowlist before threading onward — a
-// genuine consuming use clippy's by-value heuristic doesn't credit; taking
-// `&BuildOptions` here would ripple a lifetime through every call site for
-// no benefit (every caller already owns a fresh `BuildOptions`).
-#[allow(clippy::needless_pass_by_value)]
 pub fn build_project_with_options(
     manifest_path: &Path,
     out_dir: &Path,
     runtime_dir: &Path,
-    options: BuildOptions,
+    options: &BuildOptions,
 ) -> Result<(), CliError> {
+    build_project_into(
+        manifest_path,
+        OutTarget::Path(out_dir),
+        runtime_dir,
+        options,
+    )
+    .map(drop)
+}
+
+/// [`build_project_with_options`] into `out`, returning the claimed crate
+/// directory.
+///
+/// # Errors
+/// As [`build_project`], plus [`CliError::OutputRefused`] when `out` overlaps
+/// the project or its sources.
+pub fn build_project_into(
+    manifest_path: &Path,
+    out: OutTarget<'_>,
+    runtime_dir: &Path,
+    options: &BuildOptions,
+) -> Result<OwnedDir, CliError> {
     let manifest = project::parse_manifest(manifest_path)?;
     let discovered = project::discover_modules(&manifest.src_root)?;
 
@@ -2358,16 +2419,17 @@ pub fn build_project_with_options(
         wasm_hydrate_mode: manifest.wasm.mode.as_deref() == Some("hydrate"),
         cargo_name,
         webview_window,
-        ..options
+        ..*options
     };
 
     // The manifest is the blame location for an import cycle (no single file
     // owns it); post-link errors are blamed on the entry file inside the core.
+    let target = out.prove(&ProjectPaths::from_manifest(&manifest))?;
     compile_modules(
         sources,
         discovered,
         &entry_path,
-        out_dir,
+        &target,
         runtime_dir,
         manifest_path,
         manifest.driver,

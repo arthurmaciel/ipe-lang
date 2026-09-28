@@ -26,12 +26,19 @@ use std::path::{Path, PathBuf};
 
 use ipe_diagnostics::{Code, Diagnostic as SharedDiag, IPE_F4410, SandboxError};
 
+pub use covers::{bind_exposing, path_covers};
+pub use mounts::{CanonicalPath, HomeMasks, JailPathError, MaskedDir};
+
 pub mod build_jail;
+mod covers;
 pub mod home;
 pub mod host_env;
+mod mounts;
 pub mod private_scratch;
 pub mod run_jail;
 pub mod seccomp;
+#[cfg(test)]
+mod test_dir;
 
 /// Why a jail could not be established or a jailed run failed.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -61,6 +68,9 @@ pub enum SandboxDefect {
     /// in the rendered argv, so `--seccomp` could not be attached. Running
     /// without the filter is fail-open, so the jail refuses instead.
     SeccompNotAttached,
+    /// A path the jail would mount or hand to the payload could not be
+    /// resolved, or a home it must mask is unknown.
+    Path(JailPathError),
 }
 
 impl SandboxDefect {
@@ -96,6 +106,7 @@ impl From<SandboxDefect> for SandboxError {
                  the rendered argv); refusing to run untrusted code without its syscall filter"
                     .to_owned()
             }
+            SandboxDefect::Path(e) => e.to_string(),
         };
         Self::BuildJail {
             detail: detail.into(),
@@ -251,22 +262,27 @@ impl Default for ResourceLimits {
 pub struct JailSpec {
     /// Network posture for this phase.
     pub network: NetworkPolicy,
-    /// The per-invocation scoped tempdir — the ONLY writable mount.
-    pub scoped_tmp: PathBuf,
+    /// The per-invocation scoped tempdir — the ONLY writable mount, the
+    /// working directory, and `TMPDIR`.
+    pub scoped_tmp: CanonicalPath,
     /// Pre-fetched crate sources, bound read-only (compile jail).
-    pub registry_cache: Option<PathBuf>,
+    pub registry_cache: Option<CanonicalPath>,
     /// The pinned nightly toolchain name exported as `RUSTUP_TOOLCHAIN`.
     pub toolchain: Option<String>,
-    /// Toolchain directories re-bound read-only AFTER the `/home` tmpfs mask
-    /// (a rustup install lives under the invoking user's home, which the
-    /// tmpfs would otherwise hide). Read-only: the payload can execute the
-    /// toolchain but never mutate it.
-    pub toolchain_ro_binds: Vec<PathBuf>,
-    /// Directories prepended to the jail's `PATH` (toolchain `bin` dirs).
-    pub path_prepend: Vec<PathBuf>,
+    /// Toolchain directories re-bound read-only through the home masks (a
+    /// rustup install lives under the invoking user's home, which the masks
+    /// would otherwise hide). Read-only: the payload can execute the toolchain
+    /// but never mutate it.
+    pub toolchain_ro_binds: Vec<CanonicalPath>,
+    /// The invoker's homes, masked wherever they live; below them only the
+    /// binds of this spec stay visible.
+    pub homes: HomeMasks,
+    /// Directories prepended to the jail's `PATH` (toolchain `bin` dirs),
+    /// each also bound read-only.
+    pub path_prepend: Vec<CanonicalPath>,
     /// The rustup root exported as `RUSTUP_HOME` (the env is scrubbed, so the
-    /// proxy binaries cannot discover it from `$HOME`).
-    pub rustup_home: Option<PathBuf>,
+    /// proxy binaries cannot discover it from `$HOME`), also bound read-only.
+    pub rustup_home: Option<CanonicalPath>,
     /// Resource caps.
     pub limits: ResourceLimits,
 }
@@ -325,30 +341,24 @@ pub fn bwrap_argv(
     // — which cargo hits when wiring child stdio.
     argv.push("--dev".into());
     argv.push("/dev".into());
-    for tmpfs in ["/home", "/root", "/tmp"] {
-        argv.push("--tmpfs".into());
-        argv.push(tmpfs.into());
-    }
-    if let Some(cache) = &spec.registry_cache {
-        argv.push("--ro-bind".into());
-        argv.push(cache.clone().into());
-        argv.push(cache.clone().into());
-    }
-    // Re-expose the toolchain through the tmpfs mask, read-only.
-    for dir in &spec.toolchain_ro_binds {
-        argv.push("--ro-bind".into());
-        argv.push(dir.clone().into());
-        argv.push(dir.clone().into());
-    }
-    argv.push("--bind".into());
-    argv.push(spec.scoped_tmp.clone().into());
-    argv.push(spec.scoped_tmp.clone().into());
+    // Mask the homes and `/tmp`, then re-expose the crate sources and the
+    // toolchain read-only and the scoped tempdir writable. Every path the
+    // payload is handed below (`PATH`, `RUSTUP_HOME`, `--chdir`, `TMPDIR`) is
+    // one of these bound values, so none names a masked location.
+    let mut binds: Vec<mounts::Bind<'_>> = Vec::new();
+    binds.extend(spec.registry_cache.iter().map(mounts::Bind::ReadOnly));
+    binds.extend(spec.toolchain_ro_binds.iter().map(mounts::Bind::ReadOnly));
+    binds.extend(spec.path_prepend.iter().map(mounts::Bind::ReadOnly));
+    binds.extend(spec.rustup_home.iter().map(mounts::Bind::ReadOnly));
+    binds.push(mounts::Bind::ReadWrite(&spec.scoped_tmp));
+    mounts::push_mounts(&mut argv, &spec.homes, &binds);
+    let scoped_tmp = spec.scoped_tmp.as_path();
     argv.push("--chdir".into());
-    argv.push(spec.scoped_tmp.clone().into());
-    let cargo_home = spec.scoped_tmp.join("cargo-home");
+    argv.push(scoped_tmp.into());
+    let cargo_home = scoped_tmp.join("cargo-home");
     let mut path_value = String::new();
     for dir in &spec.path_prepend {
-        path_value.push_str(&dir.to_string_lossy());
+        path_value.push_str(&dir.as_path().to_string_lossy());
         path_value.push(':');
     }
     path_value.push_str("/usr/bin:/bin");
@@ -360,7 +370,7 @@ pub fn bwrap_argv(
     }
     setenvs.push(("CARGO_HOME", cargo_home.into()));
     setenvs.push(("PATH", path_value.into()));
-    setenvs.push(("TMPDIR", spec.scoped_tmp.clone().into()));
+    setenvs.push(("TMPDIR", scoped_tmp.into()));
     for (key, value) in setenvs {
         argv.push("--setenv".into());
         argv.push(key.into());
@@ -374,7 +384,7 @@ pub fn bwrap_argv(
     if let Some(rustup_home) = &spec.rustup_home {
         argv.push("--setenv".into());
         argv.push("RUSTUP_HOME".into());
-        argv.push(rustup_home.clone().into());
+        argv.push(rustup_home.as_path().into());
     }
     argv.push("--".into());
     argv.push(prlimit.into());
@@ -702,12 +712,13 @@ mod tests {
     fn spec() -> JailSpec {
         JailSpec {
             network: NetworkPolicy::Denied,
-            scoped_tmp: PathBuf::from("/work/tmp-1"),
-            registry_cache: Some(PathBuf::from("/work/registry")),
+            scoped_tmp: CanonicalPath::assumed("/work/tmp-1"),
+            registry_cache: Some(CanonicalPath::assumed("/work/registry")),
             toolchain: Some("nightly-2026-01-01".to_owned()),
             toolchain_ro_binds: Vec::new(),
             path_prepend: Vec::new(),
             rustup_home: None,
+            homes: HomeMasks::unmasked(),
             limits: ResourceLimits::default(),
         }
     }
@@ -777,6 +788,105 @@ mod tests {
         );
         assert!(joined.ends_with("-- ipe-ffi-inspector semver"), "{joined}");
         assert!(!joined.contains("sh -c"), "{joined}");
+    }
+
+    #[test]
+    fn jail_argv_masks_the_invoker_homes_and_rebinds_only_the_toolchain() {
+        let base_dir = crate::test_dir::TestDir::new("jail-homes").expect("test dir");
+        let base = base_dir.path();
+        let cargo_home = base.join("cargo");
+        let user_home = base.join("user");
+        std::fs::create_dir_all(cargo_home.join("bin")).expect("cargo home");
+        std::fs::create_dir_all(&user_home).expect("user home");
+        let cargo_home = std::fs::canonicalize(&cargo_home).expect("canonical cargo home");
+        let user_home = std::fs::canonicalize(&user_home).expect("canonical user home");
+        let bin = cargo_home.join("bin");
+        let jail = JailSpec {
+            // A whole-cargo-home bind must not survive the mask.
+            toolchain_ro_binds: vec![
+                CanonicalPath::resolve(&bin).expect("canonical bin"),
+                CanonicalPath::resolve(&cargo_home).expect("canonical cargo home"),
+            ],
+            homes: HomeMasks::resolve(Some(&user_home), Some(&cargo_home)).expect("homes"),
+            ..spec()
+        };
+        let argv = rendered_argv(&jail);
+        assert_eq!(mounts::bind_after_covered_mask(&argv), None, "{argv:?}");
+        let at = |window: &[&str]| {
+            argv.windows(window.len())
+                .position(|w| w.iter().zip(window).all(|(a, b)| a == b))
+        };
+        let cargo = cargo_home.to_string_lossy().into_owned();
+        let user = user_home.to_string_lossy().into_owned();
+        let bin = bin.to_string_lossy().into_owned();
+        let mask = at(&["--tmpfs", &cargo]).expect("cargo home masked");
+        let rebind = at(&["--ro-bind", &bin, &bin]).expect("cargo bin re-bound");
+        assert!(rebind > mask, "{argv:?}");
+        assert!(
+            at(&["--tmpfs", &user]).is_some(),
+            "user home masked: {argv:?}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn every_path_handed_to_the_payload_is_a_bound_path() {
+        // A symlinked rustup home, toolchain bin, and scoped tempdir: the
+        // payload must be told the path the jail binds, never the link.
+        let base_dir = crate::test_dir::TestDir::new("jail-symlinks").expect("test dir");
+        let base = base_dir.path();
+        let real = base.join("real");
+        let links = base.join("links");
+        for dir in ["rustup", "bin", "tmp"] {
+            std::fs::create_dir_all(real.join(dir)).expect("real dir");
+        }
+        std::fs::create_dir_all(&links).expect("links dir");
+        for dir in ["rustup", "bin", "tmp"] {
+            let link = links.join(dir);
+            let _ = std::fs::remove_file(&link);
+            std::os::unix::fs::symlink(real.join(dir), &link).expect("symlink");
+        }
+        let resolve = |dir: &str| CanonicalPath::resolve(&links.join(dir)).expect("resolve link");
+        let jail = JailSpec {
+            scoped_tmp: resolve("tmp"),
+            rustup_home: Some(resolve("rustup")),
+            path_prepend: vec![resolve("bin")],
+            ..spec()
+        };
+        let argv = rendered_argv(&jail);
+        let bound: Vec<&str> = argv
+            .windows(3)
+            .filter_map(|w| match w {
+                [flag, from, to] if (flag == "--ro-bind" || flag == "--bind") && from == to => {
+                    Some(from.as_str())
+                }
+                _ => None,
+            })
+            .collect();
+        let value_after = |flag: &[&str]| {
+            argv.windows(flag.len() + 1)
+                .find(|w| w.iter().zip(flag).all(|(a, b)| a == b))
+                .and_then(|w| w.last())
+                .cloned()
+                .expect("flag present")
+        };
+        let real = std::fs::canonicalize(&real).expect("canonical real");
+        let expect = |dir: &str| real.join(dir).to_string_lossy().into_owned();
+        let rustup = value_after(&["--setenv", "RUSTUP_HOME"]);
+        let chdir = value_after(&["--chdir"]);
+        let tmpdir = value_after(&["--setenv", "TMPDIR"]);
+        let path = value_after(&["--setenv", "PATH"]);
+        let first_path = path.split(':').next().expect("PATH entry").to_owned();
+        assert_eq!(rustup, expect("rustup"), "{argv:?}");
+        assert_eq!(chdir, expect("tmp"), "{argv:?}");
+        assert_eq!(tmpdir, expect("tmp"), "{argv:?}");
+        assert_eq!(first_path, expect("bin"), "{argv:?}");
+        for consumed in [&rustup, &chdir, &tmpdir, &first_path] {
+            assert!(
+                bound.contains(&consumed.as_str()),
+                "{consumed} unbound: {argv:?}"
+            );
+        }
     }
 
     #[test]

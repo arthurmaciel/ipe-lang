@@ -34,12 +34,13 @@
 )]
 
 use std::ffi::OsString;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::Command;
 
 use ipe_sandbox::run_jail::{
     FilesystemScope, RunJailTools, RunResourceLimits, SandboxProfile, run_jail_argv,
 };
+use ipe_sandbox::{CanonicalPath, HomeMasks};
 
 /// Serialize the jailed runs: each creates a `memfd` and clears its
 /// close-on-exec flag in a `pre_exec` hook, which is a process-global fd-table
@@ -180,6 +181,10 @@ fn run_jailed_inner(
 
     let scoped = std::env::temp_dir().join(format!("ipe-e2e-{}", std::process::id()));
     std::fs::create_dir_all(&scoped).expect("scoped tmp");
+    let scoped = CanonicalPath::resolve(&scoped).expect("scoped tmp resolves");
+    let system_bins = [Path::new("/usr/bin"), Path::new("/bin")]
+        .map(|dir| CanonicalPath::resolve(dir).expect("system bin dir resolves"));
+    let homes = HomeMasks::of_invoker().expect("invoker homes resolve");
     // `ipe_env` matches the launcher's crate-private passthrough for every name
     // but a home variable, and no profile in this file grants one.
     let host_env = |k: &str| ipe_env::var_os(k);
@@ -188,7 +193,8 @@ fn run_jailed_inner(
         profile,
         &scoped,
         &scoped,
-        &[PathBuf::from("/usr/bin"), PathBuf::from("/bin")],
+        &system_bins,
+        &homes,
         Some(fd),
         &host_env,
         payload,

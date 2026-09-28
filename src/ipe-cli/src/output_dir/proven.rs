@@ -39,6 +39,7 @@ impl ProvenOutPath {
     ///
     /// Dropping the last plain name keeps the path absolute with no `..` or
     /// `.`. `None` at the root.
+    #[cfg(test)]
     #[must_use]
     pub fn parent(&self) -> Option<Self> {
         self.0
