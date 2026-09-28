@@ -161,6 +161,8 @@ pub(crate) fn write_stderr_line(line: &str) {
 /// it instead of a raw `println!`/`print!`, so a closed downstream pipe
 /// (`ipe-app | head`) can never abort the process;
 /// `tests/no_panicking_print_macro.rs` refuses any production print macro.
+/// Compiled exactly when a stdout-writing module (`log`, `db`, `web`) is.
+#[cfg(any(feature = "log", feature = "db", feature = "web"))]
 pub(crate) fn write_stdout_line(line: &str) {
     use std::io::Write as _;
     let _ = writeln!(std::io::stdout().lock(), "{line}");
