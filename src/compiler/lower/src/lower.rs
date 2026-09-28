@@ -29,7 +29,8 @@ use ipe_ir::{
     AppSurface, Arm, BinOp, BoundSet, CallPin, Callee, Capability, EnumDef, EnumPayloadTable, Expr,
     Func, FuncId, IrType, KernelFn, Match, ModPath, Module, OnFormKind, Pat, Program, RowParam,
     RuntimeModule, TypeDef, UiCtor, UiPlain, Variant, fun_value_arc_promotable,
-    ir_type_has_effect_carrier, ir_type_holds, ir_type_is_serde, is_dispatch_free, is_irrefutable,
+    ir_type_has_effect_carrier, ir_type_holds, ir_type_is_move_only, ir_type_is_serde,
+    is_dispatch_free, is_irrefutable,
 };
 use ipe_types::{RowTail, SignatureWildcards, SolvedTypes, Ty, TyBounds};
 
@@ -6620,7 +6621,8 @@ fn nonclone_read_after_move(env: CloneEnv<'_>, sym: Symbol, ir_ty: &IrType, expr
 /// Walk `expr` in emitted evaluation order for [`nonclone_read_after_move`].
 ///
 /// A bare `sym` as an `Access` base is a field borrow — a move of that field
-/// when its type embeds an effect carrier; as a list length probe
+/// when its type is move-only ([`ir_type_is_move_only`]), unless the field is a
+/// re-callable function applied in place; as a list length probe
 /// or index clone base it is a whole borrow; as a `Match` scrutinee or a
 /// `Destructure` value it is a whole borrow followed by the pattern's partial
 /// move. Every other occurrence of `sym` moves it. `Update` field values run
@@ -6646,7 +6648,7 @@ fn nonclone_move_walk(sym: Symbol, expr: &Expr, state: &mut NonCloneMoveState<'_
             field_ty,
         } => {
             if is_bare_sym(sym, record) {
-                if ir_type_has_effect_carrier(field_ty, state.payloads) {
+                if ir_type_is_move_only(field_ty, state.payloads) {
                     state.move_field(*field);
                 } else {
                     state.read_field(*field);
@@ -6678,7 +6680,16 @@ fn nonclone_move_walk(sym: Symbol, expr: &Expr, state: &mut NonCloneMoveState<'_
         }
         Expr::Call { args, .. } => nonclone_unordered_args(sym, args, state),
         Expr::Apply { func, args } => {
-            nonclone_move_walk(sym, func, state);
+            match func.as_ref() {
+                // A call through a re-callable field borrows it in place
+                // (`((sym).f)(..)`), so the field stays readable afterwards.
+                Expr::Access {
+                    record,
+                    field,
+                    field_ty: IrType::Fun(..) | IrType::SharedFun(..),
+                } if is_bare_sym(sym, record) => state.read_field(*field),
+                callee => nonclone_move_walk(sym, callee, state),
+            }
             for a in args {
                 nonclone_move_walk(sym, a, state);
             }
@@ -16739,13 +16750,13 @@ impl<'a> Lowerer<'a> {
                 // with a single check.
                 if !row_params.is_empty() {
                     // A row field is read only through its witness getter, which
-                    // borrows; a move-only effect-carrier field (`Task` / `Cmd` /
-                    // `Sub`, or a type embedding one) has no `Clone` to turn that
-                    // borrow into a value, so the signature fails closed here.
+                    // borrows; a move-only field ([`ir_type_is_move_only`]) has no
+                    // `Clone` to turn that borrow into a value, so the signature
+                    // fails closed here.
                     if row_params.iter().any(|rp| {
                         rp.fields
                             .values()
-                            .any(|t| ir_type_has_effect_carrier(t, &self.enum_payloads))
+                            .any(|t| ir_type_is_move_only(t, &self.enum_payloads))
                     }) {
                         return Err(unsupported(sig_span, Feature::NonCloneValueReuse));
                     }
@@ -32671,7 +32682,7 @@ mod tests {
         use ipe_diagnostics::Feature;
         use ipe_ir::{CallPin, Callee, Expr, FuncId, IrType, KernelFn, ModPath, OnFormKind};
 
-        use super::{CloneEnv, reject_nonclone_value_reuse, unsupported};
+        use super::{CloneEnv, nonclone_read_after_move, reject_nonclone_value_reuse, unsupported};
 
         let mut interner = Interner::new();
         let main = interner.intern("Main").expect("intern");
@@ -32743,6 +32754,59 @@ mod tests {
         // A `Clone` record takes the rewrite's `.clone()` — accepted.
         let plain_record = IrType::Record(BTreeMap::from([(tag, IrType::Int)]));
         assert!(reject_nonclone_value_reuse(env, w, &plain_record, &kernel_read, span).is_ok());
+
+        // A read of the move-only `app` field moves it out of `w`: once is
+        // accepted, a second read of the field or a later whole read is refused.
+        let read_app = || Expr::Access {
+            record: Box::new(Expr::Var(w)),
+            field: app,
+            field_ty: IrType::WebApp,
+        };
+        let app_once = seq(user_call(vec![read_app()]), user_call(vec![read_tag()]));
+        assert!(reject_nonclone_value_reuse(env, w, &app_record, &app_once, span).is_ok());
+        for moved_then_read in [
+            seq(user_call(vec![read_app()]), user_call(vec![read_app()])),
+            seq(user_call(vec![read_app()]), user_call(vec![Expr::Var(w)])),
+        ] {
+            let err = reject_nonclone_value_reuse(env, w, &app_record, &moved_then_read, span)
+                .expect_err("a read after the app field moved must be rejected");
+            assert_eq!(err, unsupported(span, Feature::NonCloneValueReuse));
+        }
+
+        // A call through a re-callable field borrows it; a consume-once field is moved by its call.
+        let call_field = |field_ty: IrType| Expr::Apply {
+            func: Box::new(Expr::Access {
+                record: Box::new(Expr::Var(w)),
+                field: app,
+                field_ty,
+            }),
+            args: vec![Expr::Int(1)],
+        };
+        let twice = |field_ty: IrType| {
+            Expr::Tuple(vec![call_field(field_ty.clone()), call_field(field_ty)])
+        };
+        let int_fn = || (vec![IrType::Int], Box::new(IrType::Int));
+        let (ps, r) = int_fn();
+        assert!(!nonclone_read_after_move(
+            env,
+            w,
+            &wrap_task,
+            &twice(IrType::Fun(ps, r))
+        ));
+        let (ps, r) = int_fn();
+        assert!(!nonclone_read_after_move(
+            env,
+            w,
+            &wrap_task,
+            &twice(IrType::SharedFun(ps, r))
+        ));
+        let (ps, r) = int_fn();
+        assert!(nonclone_read_after_move(
+            env,
+            w,
+            &wrap_task,
+            &twice(IrType::FnOnceChain(ps, r))
+        ));
     }
 
     /// A consume-once decoder mapper payload called twice or captured fails closed

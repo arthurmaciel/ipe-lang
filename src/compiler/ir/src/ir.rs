@@ -2724,6 +2724,24 @@ pub fn ir_type_has_effect_carrier(ty: &IrType, payloads: &crate::EnumPayloadTabl
     })
 }
 
+/// Is a value of `ty` move-only: does it hold a leaf whose default carrier has no `Clone` impl?
+///
+/// The one ownership fact every field read consults: the emitter moves a
+/// move-only field out of its record rather than cloning it, and the lowerer
+/// charges that read as a move of the field. The leaves are the
+/// [`CarrierLeaf::NonClone`] set — `Fun` / `FnOnceChain`, the effect carriers,
+/// and the app handles — found through [`crate::ir_type_holds`], so it descends
+/// the same carriers and enum payloads as [`ir_type_has_effect_carrier`], whose
+/// verdict it strictly contains. A plain or row generic is excluded: it clones
+/// under its emitted `T: Clone` / `R: Clone` bound.
+#[must_use]
+pub fn ir_type_is_move_only(ty: &IrType, payloads: &crate::EnumPayloadTable) -> bool {
+    crate::ir_type_holds(ty, payloads, &|t| {
+        matches!(carrier_leaf(t), CarrierLeaf::NonClone)
+            && !matches!(t, IrType::Generic(_) | IrType::RowGeneric(_))
+    })
+}
+
 /// Is a BINDING of this type eligible for the `Arc<dyn Fn>` carrier promotion
 /// ([`Expr::SharedLambda`]) when it is captured at closure depth ≥ 1 or reused
 /// as a function value?
@@ -4043,6 +4061,38 @@ mod tests {
     use super::*;
     use ipe_diagnostics::DResult;
     use ipe_intern::Interner;
+
+    /// Every non-`Clone` leaf, however deeply carried, makes a value move-only; a generic does not.
+    #[test]
+    fn move_only_is_the_non_clone_leaf_set() -> DResult<()> {
+        let mut i = Interner::new();
+        let (f, n) = (i.intern("f")?, i.intern("n")?);
+        let payloads = crate::EnumPayloadTable::new();
+        let fun = || IrType::Fun(vec![IrType::Int], Box::new(IrType::Int));
+        let record = |t: IrType| IrType::Record(BTreeMap::from([(f, t), (n, IrType::Int)]));
+        for ty in [
+            fun(),
+            IrType::FnOnceChain(vec![IrType::Int], Box::new(IrType::Int)),
+            IrType::WebApp,
+            IrType::Task(Box::new(IrType::Int)),
+            IrType::Maybe(Box::new(fun())),
+            record(fun()),
+            record(IrType::WebApp),
+        ] {
+            assert!(ir_type_is_move_only(&ty, &payloads), "{ty:?}");
+        }
+        for ty in [
+            IrType::SharedFun(vec![IrType::Int], Box::new(IrType::Int)),
+            IrType::Decoder(Box::new(IrType::Int)),
+            IrType::Int,
+            IrType::Generic(n),
+            record(IrType::Str),
+        ] {
+            assert!(!ir_type_is_move_only(&ty, &payloads), "{ty:?}");
+        }
+        assert!(!ir_type_has_effect_carrier(&record(fun()), &payloads));
+        Ok(())
+    }
 
     fn msg_enum(i: &mut Interner) -> DResult<(Symbol, Symbol, Symbol)> {
         let ty = i.intern("Msg")?;

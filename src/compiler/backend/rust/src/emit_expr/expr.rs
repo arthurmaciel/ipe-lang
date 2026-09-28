@@ -656,12 +656,14 @@ pub fn emit_expr_at(
             // audit's second half — last-use analysis to elide the clone on a
             // heap field's FINAL read — is explicitly deferred (spec §3.5).
             //
-            // A field embedding a `Task` / `Cmd` / `Sub` effect carrier has no
-            // `Clone` impl, so its read is a MOVE out of the base. The lowerer's
-            // `IPE-L0135` gate admits it only where the move is linear (no later
-            // read of that field or of the whole base) and refuses it on a
+            // A move-only field (`ipe_ir::ir_type_is_move_only`: it holds a
+            // `Fun`, `FnOnceChain`, effect carrier or app handle) has no `Clone`
+            // impl, so its read is a MOVE out of the base; a call through such a
+            // field (`((r).f)(x)`) borrows it in place. The lowerer reads the same
+            // fact: its move gates admit the move only where it is linear (no
+            // later read of that field or of the whole base) and refuse it on a
             // row-generic base, whose witness getter only borrows.
-            let moves = ipe_ir::ir_type_has_effect_carrier(field_ty, &ctx.enum_variants);
+            let moves = ipe_ir::ir_type_is_move_only(field_ty, &ctx.enum_variants);
             // A non-moving read only borrows its base (the field is copied or
             // cloned out), so a cloned receiver (`CloneVar`) reads the binding
             // itself: the field is cloned, never the whole record.
@@ -681,8 +683,8 @@ pub fn emit_expr_at(
                 if moves {
                     return Err(Diagnostic::CompilerBug {
                         where_: "ipe_backend_rust::emit_expr_at",
-                        detail: "a move-only effect-carrier field read reached a borrowing \
-                                 row-generic witness getter"
+                        detail: "a move-only field read reached a borrowing row-generic \
+                                 witness getter"
                             .to_string(),
                     });
                 }

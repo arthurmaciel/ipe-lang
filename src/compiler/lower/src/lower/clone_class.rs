@@ -1041,7 +1041,8 @@ fn seq_clone_has_no_impl(env: CloneEnv<'_>, ir_ty: &IrType) -> bool {
 ///
 /// The sequencing check covers every binder [`seq_clone_has_no_impl`] marks
 /// non-`Clone` (an effect carrier, a live app handle, a function-carrying
-/// composite); the consume-count checks below it cover effect carriers.
+/// composite); the consume and move-order checks below it cover every binder
+/// [`consume_gate_applies`] selects.
 pub(super) fn reject_nonclone_value_reuse(
     env: CloneEnv<'_>,
     sym: Symbol,
@@ -1056,7 +1057,7 @@ pub(super) fn reject_nonclone_value_reuse(
     if never_clones && ipe_ir::seq_clone::seq_rewrite_clones_symbol(sym, body, env.payloads) {
         return Err(super::unsupported(span, Feature::NonCloneValueReuse));
     }
-    if !never_clones || !super::ir_type_has_effect_carrier(ir_ty, env.payloads) {
+    if !never_clones || !consume_gate_applies(env, ir_ty) {
         return Ok(());
     }
     // A by-value pattern binder of a `Copy` record field copies it, so a
@@ -1090,6 +1091,19 @@ pub(super) fn reject_nonclone_value_reuse(
         return Err(super::unsupported(span, Feature::NonCloneValueReuse));
     }
     Ok(())
+}
+
+/// Does the consume / move-order half of [`reject_nonclone_value_reuse`] govern a binder of `ir_ty`?
+///
+/// Every move-only type ([`ipe_ir::ir_type_is_move_only`]) is moved by a
+/// consuming read and by a read of a move-only field, except a
+/// function-carrying one without an effect carrier: that one is governed by the
+/// function-value reuse gate (`IPE-L0127`), which already counts every read of
+/// the binding, field reads included, as one use.
+fn consume_gate_applies(env: CloneEnv<'_>, ir_ty: &IrType) -> bool {
+    super::ir_type_has_effect_carrier(ir_ty, env.payloads)
+        || (ipe_ir::ir_type_is_move_only(ir_ty, env.payloads)
+            && !super::ir_contains_fun(ir_ty, env.payloads))
 }
 
 /// The MAX use-count across all non-shadowing arms of a (post-scrutinee-rewrite)

@@ -8,7 +8,10 @@
 //!   refused with IPE-L0135 instead of emitting a clone cargo rejects (E0599);
 //! - a closure literal whose body reads the binding captures a hoisted clone,
 //!   so its `move` capture never takes the binding the rest still reads (E0382);
-//! - a cloned-receiver field read clones the field, never the whole record.
+//! - a cloned-receiver field read clones the field, never the whole record;
+//! - a read of a move-only field (one holding a function, effect carrier or
+//!   app handle) moves the field out instead of cloning it, and a second read
+//!   of the moved field is refused with IPE-L0135.
 //!
 //! A row-polymorphic parameter clones under its signature's `R: Clone` bound,
 //! so the same reuse of one is accepted; a row nested under a container in the
@@ -22,6 +25,8 @@
 //! | Fixture | Shape | Outcome |
 //! |---|---|---|
 //! | `app_handle_record_seq_reuse` | handle record read in a statement, reused in rest | fail-closed IPE-L0135 |
+//! | `app_field_moved_once` | handle field passed by value once | builds + prints `/ mounted` |
+//! | `app_field_moved_twice` | handle field passed by value twice | fail-closed IPE-L0135 |
 //! | `decoded_fn_called_twice` | mapper payload `f 1 + f 2` | fail-closed IPE-L0127 |
 //! | `decoded_fn_captured` | mapper payload captured by an inner lambda | fail-closed IPE-L0127 |
 //! | `decoded_fn_called_once` | mapper payload called once per branch | builds + prints `11` |
@@ -145,11 +150,11 @@ fn assert_accepted(name: &str, source: &str, expected_stdout: &str) -> Option<St
     Some(emitted)
 }
 
-/// A record holding a `Web.WebApp` handle: no `Clone` impl, no effect carrier.
+/// Shared prelude for the app-handle fixtures: a record holding a `Web.WebApp` handle.
 ///
-/// The statement's kernel argument reads `site.name` and the rest reads `site`
-/// again, so the sequencing rewrite would clone `site`.
-const APP_HANDLE_RECORD_SEQ_REUSE: &str = r#"module Main exposing (main)
+/// The handle has no `Clone` impl and is no effect carrier; `describe` takes
+/// one by value and never runs it.
+const APP_HANDLE_PRELUDE: &str = r#"module Main exposing (main)
 
 import Ipe.Io as Io
 import Ipe.Task as Task exposing (Task)
@@ -193,16 +198,40 @@ type alias Site =
     { app : Web.WebApp, name : String }
 
 
-serve : Site -> Task Error ()
-serve site =
-    do
-        Io.println site.name
-        Io.println site.name
+describe : String -> Web.WebApp -> String
+describe name _app =
+    name ++ " mounted"
 
 
 main : Task Error ()
 main =
     serve { app = embedded, name = "/" }
+"#;
+
+/// The statement's kernel argument reads `site.name` and the rest reads `site`
+/// again, so the sequencing rewrite would clone `site`.
+const APP_HANDLE_RECORD_SEQ_REUSE: &str = r"
+serve : Site -> Task Error ()
+serve site =
+    do
+        Io.println site.name
+        Io.println site.name
+";
+
+/// The handle field is moved out of `site` once, after a read of `site.name`.
+///
+/// Prints `/ mounted`.
+const APP_FIELD_MOVED_ONCE: &str = r"
+serve : Site -> Task Error ()
+serve site =
+    Io.println (describe site.name site.app)
+";
+
+/// The handle field is moved out of `site`, then read again.
+const APP_FIELD_MOVED_TWICE: &str = r#"
+serve : Site -> Task Error ()
+serve site =
+    Io.println (describe site.name site.app ++ describe "again" site.app)
 "#;
 
 /// Shared prelude for the decoder-payload fixtures: a decoder whose payload is a function.
@@ -347,7 +376,31 @@ main =
 fn app_handle_record_seq_reuse_fails_closed() {
     assert_rejected(
         "app_handle_record_seq_reuse",
-        APP_HANDLE_RECORD_SEQ_REUSE,
+        &format!("{APP_HANDLE_PRELUDE}{APP_HANDLE_RECORD_SEQ_REUSE}"),
+        ipe_diagnostics::IPE_L0135,
+    );
+}
+
+#[test]
+fn app_field_moved_once_round_trips() {
+    let Some(emitted) = assert_accepted(
+        "app_field_moved_once",
+        &format!("{APP_HANDLE_PRELUDE}{APP_FIELD_MOVED_ONCE}"),
+        "/ mounted",
+    ) else {
+        return;
+    };
+    assert!(
+        !emitted.contains(".app.clone()"),
+        "a move-only field read must move the field, never clone it; emitted:\n{emitted}"
+    );
+}
+
+#[test]
+fn app_field_moved_twice_fails_closed() {
+    assert_rejected(
+        "app_field_moved_twice",
+        &format!("{APP_HANDLE_PRELUDE}{APP_FIELD_MOVED_TWICE}"),
         ipe_diagnostics::IPE_L0135,
     );
 }
