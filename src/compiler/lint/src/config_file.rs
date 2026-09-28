@@ -100,6 +100,11 @@ fn open_no_follow(path: &Path) -> Result<Option<std::fs::File>, WorkspaceReadErr
         Ok(fd) => Ok(Some(std::fs::File::from(fd))),
         Err(Errno::NOENT) => Ok(None),
         Err(Errno::LOOP | Errno::NXIO) => Err(WorkspaceReadError::NotAFile),
+        // FreeBSD reports `O_NOFOLLOW` on a symlink as `EMLINK`, NetBSD as `EFTYPE`.
+        #[cfg(target_os = "freebsd")]
+        Err(Errno::MLINK) => Err(WorkspaceReadError::NotAFile),
+        #[cfg(target_os = "netbsd")]
+        Err(Errno::FTYPE) => Err(WorkspaceReadError::NotAFile),
         Err(errno) => Err(WorkspaceReadError::Unreadable(errno.into())),
     }
 }

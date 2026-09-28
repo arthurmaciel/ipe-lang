@@ -1500,7 +1500,7 @@ mod tests {
 
     use super::{
         Connection, DiagnosticsBatch, FeatureOutcome, LoadedFile, LoadedProject, Message,
-        ModuleOrigin, Path, PathBuf, PositionEncoding, ProjectLoader, PublishDiagnostics,
+        ModuleOrigin, Overlay, Path, PathBuf, PositionEncoding, ProjectLoader, PublishDiagnostics,
         PublishDiagnosticsParams, State, Url, adopt, ensure_project_fresh, normalize, publish,
         recompute, sync_inputs,
     };
@@ -1539,6 +1539,7 @@ mod tests {
         ));
     }
 
+    #[cfg(unix)]
     #[test]
     fn a_non_file_lint_config_is_refused() {
         let dir = lint_dir("not-a-file");
