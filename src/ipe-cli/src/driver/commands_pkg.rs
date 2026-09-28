@@ -1738,9 +1738,10 @@ pub fn run_version(rest: &[String]) -> Result<(), CliError> {
 pub const INSTALL_SH_URL: &str =
     "https://raw.githubusercontent.com/arthurmaciel/ipe-lang/main/install.sh";
 
-/// The env var that marks an `install.sh` run as launched BY this wrapper
-/// (never by a direct `curl | sh`). `pub` so the install-drift test can assert
-/// `install.sh` reads the same name — see [`run_installer`].
+/// The env var marking an `install.sh` run launched by this wrapper.
+///
+/// A direct `curl | sh` never sets it. `pub` so the install-drift test can
+/// assert `install.sh` reads the same name — see [`run_installer`].
 pub const UPGRADE_WRAPPED_ENV: &str = "IPE_UPGRADE_WRAPPED";
 
 /// `ipe upgrade` — self-update by re-running the release installer.
