@@ -94,7 +94,26 @@ pub(crate) fn gutter_line(msg: &str, is_terminal: bool) -> String {
     }
 }
 
-/// Neutralise every control character (C0 incl. CR/LF/ESC, DEL, C1) in text
+/// A character that must never reach an operator log line raw: every Unicode
+/// `Cc` control (C0 incl. CR/LF/ESC, DEL, C1 incl. NEL/CSI), the Unicode
+/// line/paragraph separators U+2028/U+2029 (record breaks for log viewers and
+/// JS-based aggregators), and the bidirectional formatting controls
+/// (U+061C, U+200E/F, U+202A-E, U+2066-9) that visually reorder a line.
+fn is_log_hazard(c: char) -> bool {
+    c.is_control()
+        || matches!(
+            c,
+            '\u{2028}'
+                | '\u{2029}'
+                | '\u{061c}'
+                | '\u{200e}'
+                | '\u{200f}'
+                | '\u{202a}'..='\u{202e}'
+                | '\u{2066}'..='\u{2069}'
+        )
+}
+
+/// Neutralise every log-hazard character (see [`is_log_hazard`]) in text
 /// bound for an operator log line by escaping it — `\n`, `\r`, `\t`, else
 /// `\u{XX}` — so untrusted
 /// input (a driver error, a request path, an env-derived path, a trace value)
@@ -104,7 +123,7 @@ pub(crate) fn gutter_line(msg: &str, is_terminal: bool) -> String {
 /// JSON escaper — JSON records keep `telemetry::json_escape`.
 pub(crate) fn scrub_log_controls(s: &str) -> std::borrow::Cow<'_, str> {
     use std::fmt::Write as _;
-    if !s.chars().any(char::is_control) {
+    if !s.chars().any(is_log_hazard) {
         return std::borrow::Cow::Borrowed(s);
     }
     let mut out = String::with_capacity(s.len().saturating_add(16));
@@ -113,7 +132,7 @@ pub(crate) fn scrub_log_controls(s: &str) -> std::borrow::Cow<'_, str> {
             '\n' => out.push_str("\\n"),
             '\r' => out.push_str("\\r"),
             '\t' => out.push_str("\\t"),
-            c if c.is_control() => {
+            c if is_log_hazard(c) => {
                 let _ = write!(out, "\\u{{{:x}}}", u32::from(c));
             }
             c => out.push(c),
@@ -1403,6 +1422,26 @@ mod scrub_log_controls_tests {
     }
 
     #[test]
+    fn escapes_unicode_line_separators_and_bidi_controls() {
+        let out = scrub_log_controls(
+            "a\u{2028}b\u{2029}c\u{202e}d\u{2066}e\u{2069}f\u{200f}g\u{61c}h\u{202a}i",
+        );
+        assert_eq!(
+            out,
+            "a\\u{2028}b\\u{2029}c\\u{202e}d\\u{2066}e\\u{2069}f\\u{200f}g\\u{61c}h\\u{202a}i"
+        );
+        assert!(
+            !out.chars().any(super::is_log_hazard),
+            "hazard survived: {out:?}"
+        );
+        // One step past each bidi range stays verbatim.
+        assert!(matches!(
+            scrub_log_controls("\u{202f}\u{206a}\u{2027}"),
+            std::borrow::Cow::Borrowed(_)
+        ));
+    }
+
+    #[test]
     fn clean_text_is_borrowed_unchanged() {
         let out = scrub_log_controls("GET /caf\u{e9} 200 3ms");
         assert!(matches!(
@@ -1415,7 +1454,7 @@ mod scrub_log_controls_tests {
     fn emitted_line_cannot_forge_a_second_record() {
         let line = runtime_log_line(None, "http", "GET /x\r\n[ipe.http] forged\x1b[31m");
         assert!(
-            !line.chars().any(char::is_control),
+            !line.chars().any(super::is_log_hazard),
             "control survived: {line:?}"
         );
         assert_eq!(
