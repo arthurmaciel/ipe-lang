@@ -656,7 +656,7 @@ fn make_scratch_dir(krate: &str) -> Result<PathBuf, CliError> {
 fn toolchain_binds(inspector: &Path) -> Result<ToolchainBinds, CliError> {
     let cargo_home = crate::env_dir::tool_home("CARGO_HOME", ".cargo")?;
     let rustup_home = crate::env_dir::tool_home("RUSTUP_HOME", ".rustup")?;
-    toolchain_binds_from(inspector, cargo_home, rustup_home)
+    toolchain_binds_from(inspector, cargo_home.as_deref(), rustup_home)
 }
 
 /// The toolchain binds over already-resolved tool homes.
@@ -667,7 +667,7 @@ fn toolchain_binds(inspector: &Path) -> Result<ToolchainBinds, CliError> {
 /// binding it would expose `credentials.toml` inside the jail.
 fn toolchain_binds_from(
     inspector: &Path,
-    cargo_home: Option<PathBuf>,
+    cargo_home: Option<&Path>,
     rustup_home: Option<PathBuf>,
 ) -> Result<ToolchainBinds, CliError> {
     let mut toolchain_ro_binds = Vec::new();
@@ -677,7 +677,7 @@ fn toolchain_binds_from(
         toolchain_ro_binds.push(dir.to_path_buf());
     }
     let mut path_prepend = Vec::new();
-    if let Some(cargo_bin) = cargo_home.as_ref().map(|home| home.join("bin"))
+    if let Some(cargo_bin) = cargo_home.map(|home| home.join("bin"))
         && cargo_bin.is_dir()
     {
         path_prepend.push(cargo_bin.clone());
@@ -689,7 +689,7 @@ fn toolchain_binds_from(
     if let Some(rustup) = &rustup_home {
         toolchain_ro_binds.push(rustup.clone());
     }
-    if let Some(cargo_home) = &cargo_home
+    if let Some(cargo_home) = cargo_home
         && let Some(bind) = toolchain_ro_binds
             .iter()
             .find(|bind| path_covers(bind, cargo_home))
@@ -738,10 +738,10 @@ fn lexical_normal(path: &Path) -> PathBuf {
 fn resolved(path: &Path) -> PathBuf {
     for ancestor in path.ancestors() {
         if let Ok(real) = std::fs::canonicalize(ancestor) {
-            return match path.strip_prefix(ancestor) {
-                Ok(tail) => lexical_normal(&real.join(tail)),
-                Err(_) => lexical_normal(path),
-            };
+            return path.strip_prefix(ancestor).map_or_else(
+                |_| lexical_normal(path),
+                |tail| lexical_normal(&real.join(tail)),
+            );
         }
     }
     lexical_normal(path)
@@ -4078,7 +4078,7 @@ version = \"1\"
         std::fs::create_dir_all(&rustup_home).expect("mk rustup home");
         let got = toolchain_binds_from(
             Path::new(TEST_INSPECTOR),
-            Some(cargo_home.clone()),
+            Some(&cargo_home),
             Some(rustup_home.clone()),
         );
         let _ = std::fs::remove_dir_all(&tmp);
@@ -4098,7 +4098,7 @@ version = \"1\"
 
     /// `toolchain_binds_from` over `(cargo_home, rustup_home)` must refuse.
     fn assert_toolchain_refused(cargo_home: PathBuf, rustup_home: PathBuf, inspector: &Path) {
-        let got = toolchain_binds_from(inspector, Some(cargo_home), Some(rustup_home));
+        let got = toolchain_binds_from(inspector, Some(&cargo_home), Some(rustup_home));
         assert!(
             matches!(&got, Err(CliError::Usage(m)) if m.contains("credentials.toml")),
             "a bind exposing the cargo home must be refused: {got:?}"
@@ -4141,7 +4141,7 @@ version = \"1\"
         let mut spelled = cargo_home.join("bin").join("..").into_os_string();
         spelled.push("/");
         assert_toolchain_refused(
-            cargo_home.clone(),
+            cargo_home,
             PathBuf::from(spelled),
             Path::new(TEST_INSPECTOR),
         );
@@ -4162,7 +4162,7 @@ version = \"1\"
         plant_cargo_home(&cargo_home);
         let link = tmp.join("rustup-link");
         std::os::unix::fs::symlink(&cargo_home, &link).expect("symlink");
-        assert_toolchain_refused(cargo_home.clone(), link, Path::new(TEST_INSPECTOR));
+        assert_toolchain_refused(cargo_home, link, Path::new(TEST_INSPECTOR));
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
@@ -4186,7 +4186,7 @@ version = \"1\"
         std::fs::create_dir_all(&rustup_home).expect("mk rustup home");
         let got = toolchain_binds_from(
             Path::new(TEST_INSPECTOR),
-            Some(cargo_home.clone()),
+            Some(&cargo_home),
             Some(rustup_home),
         );
         let _ = std::fs::remove_dir_all(&tmp);
