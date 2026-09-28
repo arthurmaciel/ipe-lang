@@ -934,6 +934,19 @@ pub struct InstalledCrate {
     pub transparent_types: std::collections::BTreeMap<String, crate::transparency::TransparentType>,
     /// Pinned `[dependencies]` lines.
     pub cargo_deps: Vec<String>,
+    /// The crate's own Cargo package name, the `[dependencies]` key its direct
+    /// pin renders under.
+    ///
+    /// `None` for a legacy cache, which predates the inspection document and
+    /// so cannot prove which of its dependency lines is the direct crate.
+    pub package_name: Option<PackageName>,
+    /// Cargo package name → Rust lib identifier, for every dependency the
+    /// crate's inspection resolved.
+    ///
+    /// The bridge between the two tables `assemble_emit` must keep in
+    /// agreement: the `[dependencies]` key a pin renders under and the
+    /// `::<ident>::` path root emitted code names. Empty for a legacy cache.
+    pub dep_idents: std::collections::BTreeMap<String, crate::naming::RustIdent>,
     /// The structured interface bindings (name, wrapper, arity, signature) —
     /// the data the catalog unification re-renders a demoted module from.
     pub bindings: Vec<crate::interface::InterfaceBinding>,
@@ -1228,6 +1241,8 @@ fn load_installed_crate(cache_root: &Path, slug: String) -> Result<InstalledCrat
             define_types,
             transparent_types,
             cargo_deps,
+            package_name: None,
+            dep_idents: std::collections::BTreeMap::new(),
             bindings,
             wrapper_idents,
             dep_versions,
@@ -1246,11 +1261,14 @@ fn load_installed_crate(cache_root: &Path, slug: String) -> Result<InstalledCrat
 pub fn installed_crate_from_pkg(slug: String, pkg: &PkgInfo) -> Result<InstalledCrate, Diagnostic> {
     let mut dep_versions: std::collections::BTreeMap<String, String> =
         std::collections::BTreeMap::new();
+    let mut dep_idents: std::collections::BTreeMap<String, crate::naming::RustIdent> =
+        std::collections::BTreeMap::new();
     for dep in pkg.transitive_deps() {
         dep_versions.insert(
             dep.ident.as_str().to_owned(),
             dep.version.as_str().to_owned(),
         );
+        dep_idents.insert(dep.name.as_str().to_owned(), dep.ident.clone());
     }
     // The asserted-call cross-check facts: crate-top-level FREE functions
     // only (no receiver, no accessor shape, no generics) — the one shape an
@@ -1303,6 +1321,8 @@ pub fn installed_crate_from_pkg(slug: String, pkg: &PkgInfo) -> Result<Installed
         define_types: iface.define_types,
         transparent_types: iface.transparent_types,
         cargo_deps: cargo_dep_lines(pkg)?,
+        package_name: Some(pkg.name_pkg().clone()),
+        dep_idents,
         bindings: iface.bindings,
         wrapper_idents,
         dep_versions,
