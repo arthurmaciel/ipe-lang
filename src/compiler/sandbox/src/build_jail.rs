@@ -1239,10 +1239,6 @@ mod freebsd_jail {
     use crate::run_jail::{FilesystemScope, RunJailDefect, SandboxProfile};
     use std::ffi::OsString;
     use std::path::{Path, PathBuf};
-    // `getuid(3)` is used in the exclusive jail-dir ownership check. It is
-    // infallible and always safe to call.
-    #[allow(unused_imports)]
-    use libc;
 
     /// The unprivileged user the jailed payload runs as. A second, defence-in-depth
     /// layer under the read-only jail root: even the writable scratch is owned by
@@ -1962,13 +1958,8 @@ mod freebsd_jail {
         // current uid. `symlink_metadata` does NOT follow symlinks, so a symlink
         // planted between `create_dir` and here is caught as a non-directory
         // entry and refused.
-        let current_uid = {
-            // SAFETY: `getuid(3)` is always safe and always succeeds.
-            #[allow(unsafe_code)]
-            unsafe {
-                libc::getuid()
-            }
-        };
+        // The effective uid owns what this process creates.
+        let current_uid = rustix::process::geteuid().as_raw();
         for ancestor in [parent, leaf.as_path()] {
             let meta =
                 std::fs::symlink_metadata(ancestor).map_err(|e| RunJailDefect::MountFailed {

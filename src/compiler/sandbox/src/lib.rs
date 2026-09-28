@@ -34,8 +34,8 @@ mod covers;
 pub mod home;
 pub mod host_env;
 mod mounts;
-pub mod private_scratch;
 pub mod run_jail;
+pub mod scratch;
 pub mod seccomp;
 #[cfg(test)]
 mod test_dir;

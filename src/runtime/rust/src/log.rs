@@ -99,8 +99,7 @@ fn json_str(s: &str) -> String {
 // `console.*`.
 #[cfg(not(all(target_arch = "wasm32", feature = "wasm-client")))]
 fn write_stdout_line(line: &str) {
-    use std::io::Write;
-    let _ = writeln!(std::io::stdout().lock(), "{line}");
+    crate::system::write_stdout_line(line);
 }
 
 #[cfg(not(all(target_arch = "wasm32", feature = "wasm-client")))]
