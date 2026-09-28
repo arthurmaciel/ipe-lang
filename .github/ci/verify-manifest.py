@@ -46,7 +46,14 @@ Checks performed
      an `env:` key naming a rustc wrapper, a rustc replacement, or SCCACHE_*
      at any scope; and any `env:` value, `run:`, `shell:`,
      `defaults.run.shell`, or `with:` text naming one (or cargo's
-     `rustc-wrapper` config spelling). A job that reaches the composite,
+     `rustc-wrapper` config spelling), or assembling its target through a
+     GitHub Actions expression function (`format(`, `join(`, `toJSON(`)
+     instead of naming it literally. Every workflow, manifest, and local
+     action is loaded through `strict_yaml` (see that module), so a
+     duplicate mapping key, a `<<` merge key, or an anchor/alias — each
+     legal to a plain YAML loader but resolved differently, or not at all,
+     from what GitHub Actions runs — is refused rather than silently
+     resolved. A job that reaches the composite,
      directly or through local actions, may not own a step named in
      `ci/deterministic-checks.json` (sccache's cache backend does network I/O
      a deterministic check must never risk). The composite itself must equal
@@ -72,6 +79,9 @@ try:
 except ImportError:  # pragma: no cover - CI always has PyYAML
     print("verify-manifest: PyYAML is required (pip install pyyaml)", file=sys.stderr)
     sys.exit(2)
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import strict_yaml  # noqa: E402  # the shared strict loader, SSOT for every YAML load below
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # Both extensions: a workflow (or, for check 6, a local composite action) is a
@@ -209,7 +219,7 @@ def workflow_jobs() -> list[Job]:
         if fname in PLUMBING_WORKFLOWS:
             continue
         try:
-            doc = yaml.safe_load(open(path))
+            doc = strict_yaml.safe_load(open(path))
         except yaml.YAMLError as e:
             print(f"verify-manifest: {fname} is not valid YAML: {e}", file=sys.stderr)
             sys.exit(2)
@@ -304,7 +314,7 @@ def check_deterministic_set(jobs: list[Job], errors: list[str]) -> None:
         )
         return
 
-    raw_jobs = yaml.safe_load(
+    raw_jobs = strict_yaml.safe_load(
         open(os.path.join(REPO_ROOT, "workflows", CANCEL_WATCHER_WORKFLOW))
     ).get("jobs") or {}
 
@@ -462,7 +472,7 @@ def _load_sccache_workflows(root: str, errors: list[str]) -> list[SccacheWorkflo
         fname = os.path.basename(path)
         try:
             with open(path) as f:
-                doc = yaml.safe_load(f)
+                doc = strict_yaml.safe_load(f)
         except yaml.YAMLError as e:
             errors.append(f"{fname} is not valid YAML: {e}")
             continue
@@ -521,7 +531,9 @@ def _refuse_env_keys(env: dict, loc: str, errors: list[str]) -> None:
 
 def _refuse_wiring_text(text: str | None, loc: str, what: str, errors: list[str]) -> None:
     """Rule (c): free text outside the sanctioned composite that names any
-    wrapper/sccache-shaped key or cargo's `rustc-wrapper` spelling."""
+    wrapper/sccache-shaped key or cargo's `rustc-wrapper` spelling — or that
+    assembles its target from a GitHub Actions expression function instead of
+    naming it literally, which would otherwise dodge the scan above."""
     if text is None:
         return
     m = SCCACHE_WIRING_TEXT_RE.search(text)
@@ -532,6 +544,9 @@ def _refuse_wiring_text(text: str | None, loc: str, what: str, errors: list[str]
             f"--config`, or a cargo config file) outside {SCCACHE_COMPOSITE_USES} — "
             "the composite is the one sanctioned setter"
         )
+    expr_error = strict_yaml.refuse_expression_assembly(text, f"{loc} {what}")
+    if expr_error:
+        errors.append(expr_error)
 
 
 def _audit_defaults(container: dict, loc: str, errors: list[str]) -> None:
@@ -706,7 +721,7 @@ class LocalActions:
         path = found[0]
         try:
             with open(path) as f:
-                doc = yaml.safe_load(f)
+                doc = strict_yaml.safe_load(f)
         except yaml.YAMLError as e:
             self.errors.append(f"{path} is not valid YAML: {e}")
             return None
@@ -941,7 +956,7 @@ def check_sccache_wiring(errors: list[str], root: str = REPO_ROOT) -> None:
 
 
 def load_manifest() -> dict:
-    doc = yaml.safe_load(open(MANIFEST))
+    doc = strict_yaml.safe_load(open(MANIFEST))
     if not isinstance(doc, dict) or "checks" not in doc:
         print("verify-manifest: manifest missing top-level `checks:`", file=sys.stderr)
         sys.exit(2)

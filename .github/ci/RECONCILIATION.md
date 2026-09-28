@@ -116,7 +116,7 @@ No check is left unclassified or guarantee-but-un-gated after this change.
 ## Regenerate `ci/required-set.json`
 
 ```bash
-python3 -c "import yaml,json; d=yaml.safe_load(open('.github/ci/check-manifest.yml')); \
+python3 -c "import sys,json; sys.path.insert(0,'.github/ci'); import strict_yaml; d=strict_yaml.safe_load(open('.github/ci/check-manifest.yml')); \
 print(json.dumps(sorted(e['context'] for e in d['checks'] if e['disposition'] in ('gate')), indent=2))" \
   > .github/ci/required-set.json
 ```
