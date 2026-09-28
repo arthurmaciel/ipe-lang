@@ -14,6 +14,9 @@ set -euo pipefail
 
 cd "$(git rev-parse --show-toplevel)"
 
+source "$(git rev-parse --show-toplevel)/tools/scripts/lib/require-tool.sh"
+require_tool git grep
+
 # Max size for a single tracked file, in bytes (5 MiB). Anything larger is
 # almost certainly a binary/build blob that belongs in a release asset or LFS,
 # not in the source tree. Legitimate large text fixtures should be reviewed
@@ -23,17 +26,24 @@ MAX_BYTES=$((5 * 1024 * 1024))
 fail=0
 note() { echo "artifact-guard: $*" >&2; }
 
+# match_capture runs its command's argv directly (no shell), so a `git ls-files
+# | grep …` pipeline is wrapped in a named function first. This also replaces
+# the old `"$(… || true)"` idiom, which could not tell "grep found nothing"
+# (rc 1, fine) apart from "git failed" or "grep itself errored/is missing"
+# (rc 2/127, both silently swallowed into an empty, falsely-clean string).
+_git_grep() { git ls-files | grep -E "$1"; }
+
 # 1) No file inside any `target/` directory (Cargo build output).
-target_hits="$(git ls-files | grep -E '(^|/)target/' || true)"
-if [ -n "$target_hits" ]; then
+target_hits=""
+if match_capture target_hits "target/ scan" -- _git_grep '(^|/)target/'; then
   note "tracked files inside a target/ build directory (must be gitignored, never committed):"
   echo "$target_hits" | awk '{ print "  " $0 }' >&2
   fail=1
 fi
 
 # 2) No compiled-artifact extensions (rlib/rmeta/object/static-lib/wasm/shared-lib).
-ext_hits="$(git ls-files | grep -E '\.(rlib|rmeta|rcgu\.o|o|a|so|dylib|wasm)$' || true)"
-if [ -n "$ext_hits" ]; then
+ext_hits=""
+if match_capture ext_hits "compiled-artifact extension scan" -- _git_grep '\.(rlib|rmeta|rcgu\.o|o|a|so|dylib|wasm)$'; then
   note "tracked files with a compiled-artifact extension (regenerable — do not commit):"
   echo "$ext_hits" | awk '{ print "  " $0 }' >&2
   fail=1

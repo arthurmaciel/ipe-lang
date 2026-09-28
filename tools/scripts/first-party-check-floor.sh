@@ -31,6 +31,17 @@ fi
 
 echo "=== Ipê first-party ipe-check floor (repo: $REPO · ipe: $IPE_BIN) ==="
 
+# Capture the producer's output AND exit status up front: a `while read < <(…)`
+# process substitution never checks the command it reads from, so a failure
+# inside first_party_check_set (a broken glob, a helper it calls hard-exiting)
+# would otherwise vanish — the loop just sees zero or partial lines and the
+# floor reports PASS over a set it never actually enumerated.
+set_output="$(first_party_check_set)"; set_rc=$?
+if [ "$set_rc" -ne 0 ]; then
+  echo "ERROR: first_party_check_set failed to enumerate the first-party example set (exit $set_rc)." >&2
+  exit 2
+fi
+
 failed=()
 checked=0
 while IFS= read -r dir; do
@@ -45,8 +56,13 @@ while IFS= read -r dir; do
     sed 's/^/          /' /tmp/first-party-check.$$.log
     failed+=("$dir")
   fi
-done < <(first_party_check_set)
+done <<< "$set_output"
 rm -f /tmp/first-party-check.$$.log
+
+if [ "$checked" -eq 0 ]; then
+  echo "ERROR: first_party_check_set enumerated zero examples — the scan root is missing/empty or the glob drifted; this floor cannot vacuously pass." >&2
+  exit 2
+fi
 
 echo
 if [ "${#failed[@]}" -gt 0 ]; then

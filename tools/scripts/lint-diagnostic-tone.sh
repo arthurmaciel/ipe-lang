@@ -53,9 +53,12 @@ violations=0
 # (sensitive); WORD is "-w" (whole-word) or "" (pattern carries its own anchors).
 # Uses match_or_fail so an rg error (a bad pattern, a permission error, or rg
 # itself missing) hard-fails the gate instead of reading as "no match".
+# require_scan_root hard-fails when DIR is missing or has no file matching
+# GLOB — a missing root or an emptied fixture dir must never read as "clean"
+# just because rg then finds nothing to match against.
 scan() {
     local dir="$1" pattern="$2" glob="$3" case_flag="${4:-}" word_flag="${5:-}"
-    [ -d "$dir" ] || return 0
+    require_scan_root "$dir" "$glob"
     # rg: -o print only the matched term, --no-heading + -n for file:line, -H to
     # always print the filename.
     if match_or_fail "$dir ($pattern)" -- \

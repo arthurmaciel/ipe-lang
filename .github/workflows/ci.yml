@@ -252,10 +252,14 @@ jobs:
       # closed via require_tool when absent instead of passing vacuously).
       - name: Install ripgrep
         run: sudo apt-get update && sudo apt-get install -y ripgrep
-      - name: Gate self-test (require-tool fail-closed)
-        run: bash tools/scripts/tests/test-require-tool.sh
+      # Self-test the fail-closed gate mechanism first (require-tool.sh), then
+      # run the gate itself. Kept as ONE step (not two) so
+      # deterministic-checks.json's one-step-per-context schema still covers
+      # it under the single step name "Lint diagnostic tone".
       - name: Lint diagnostic tone
-        run: bash tools/scripts/lint-diagnostic-tone.sh
+        run: |
+          bash tools/scripts/tests/test-require-tool.sh
+          bash tools/scripts/lint-diagnostic-tone.sh
 
   # Doctest-style gate: every unmarked ```ipe block in src/compiler/diagnostics/explain/*.md
   # must type-check. A page that teaches broken syntax is worse than no page (ADR 0059).

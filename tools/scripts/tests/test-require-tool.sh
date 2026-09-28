@@ -83,6 +83,11 @@ check "match_or_fail: command-not-found (127) hard-exits, never reads as no-matc
 goldens_fixture="$fixture_dir/render_goldens"
 explain_fixture="$fixture_dir/explain"
 mkdir -p "$goldens_fixture" "$explain_fixture"
+# The gate scans explain_fixture too (jargon + jargon_cased), so
+# require_scan_root needs a matching *.md file in it from the start — an
+# emptied scan root must fail closed (exit 2), so every gate invocation below
+# needs a real file present in BOTH scanned dirs, not just the one under test.
+printf '# IPE-T0001\n\nno jargon here either\n' > "$explain_fixture/IPE-T0001.md"
 printf 'IPE-T0001: type mismatch\n\nsee salsa for details\n' > "$goldens_fixture/violation.txt"
 
 rc=0
@@ -103,6 +108,56 @@ printf 'IPE-T0001: type mismatch\n\nsee salsa for details\n' > "$goldens_fixture
 GOLDENS_DIR="$goldens_fixture" EXPLAIN_DIR="$explain_fixture" PATH="$rg_free_path" \
     bash "$repo_root/tools/scripts/lint-diagnostic-tone.sh" >/dev/null 2>&1 || rc=$?
 check "diagnostic-tone gate exits 2 (not 0) when rg is missing from PATH" "$rc" 2
+rm -f "$goldens_fixture/violation.txt"
+
+# ── require_scan_root: a missing or emptied scan root must fail closed (exit
+# 2), never read as "clean" because rg then simply finds nothing ───────────
+nonexistent_dir="$fixture_dir/does-not-exist"
+rc=0
+GOLDENS_DIR="$nonexistent_dir" EXPLAIN_DIR="$explain_fixture" \
+    bash "$repo_root/tools/scripts/lint-diagnostic-tone.sh" >/dev/null 2>&1 || rc=$?
+check "diagnostic-tone gate exits 2 when GOLDENS_DIR does not exist" "$rc" 2
+
+empty_goldens="$fixture_dir/empty-goldens"
+mkdir -p "$empty_goldens"
+rc=0
+GOLDENS_DIR="$empty_goldens" EXPLAIN_DIR="$explain_fixture" \
+    bash "$repo_root/tools/scripts/lint-diagnostic-tone.sh" >/dev/null 2>&1 || rc=$?
+check "diagnostic-tone gate exits 2 when GOLDENS_DIR has no matching file" "$rc" 2
+rmdir "$empty_goldens"
+
+rc=0
+bash -c "source '$lib'; require_scan_root '$nonexistent_dir' '*.txt'" >/dev/null 2>&1 || rc=$?
+check "require_scan_root exits 2 when the dir is missing" "$rc" 2
+
+mkdir -p "$fixture_dir/empty-root"
+rc=0
+bash -c "source '$lib'; require_scan_root '$fixture_dir/empty-root' '*.txt'" >/dev/null 2>&1 || rc=$?
+check "require_scan_root exits 2 when the dir has no matching file" "$rc" 2
+rmdir "$fixture_dir/empty-root"
+
+rc=0
+bash -c "source '$lib'; require_scan_root '$goldens_fixture' '*.txt'" >/dev/null 2>&1 || rc=$?
+check "require_scan_root exits 0 when the dir has a matching file" "$rc" 0
+
+# ── match_capture: mirrors match_or_fail, plus captures the matched text ───
+got="$(bash -c "source '$lib'; match_capture v t -- printf 'a\nb\n'; printf '%s' \"\$v\"")"
+check "match_capture: match captures the command's stdout" "$got" "$(printf 'a\nb')"
+
+rc=0
+bash -c "source '$lib'; match_capture v t -- false" >/dev/null 2>&1
+rc=$?
+check "match_capture: exit 1 (no match) returns 1, doesn't hard-fail" "$rc" 1
+
+rc=0
+bash -c "source '$lib'; match_capture v t -- true" >/dev/null 2>&1
+rc=$?
+check "match_capture: exit 0 (match) returns 0" "$rc" 0
+
+rc=0
+bash -c "source '$lib'; match_capture v t -- bash -c 'exit 2'" >/dev/null 2>&1
+rc=$?
+check "match_capture: exit 2 hard-exits 2" "$rc" 2
 
 if [ "$fail" -ne 0 ]; then
     echo "test-require-tool: FAILED" >&2

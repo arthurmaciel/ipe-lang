@@ -15,6 +15,9 @@ script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 grammar_dir="$(cd "$script_dir/.." && pwd)"
 repo_root="$(cd "$grammar_dir/../.." && pwd)"
 
+source "$repo_root/tools/scripts/lib/require-tool.sh"
+require_tool grep
+
 if ! command -v tree-sitter >/dev/null 2>&1; then
   echo "error: tree-sitter CLI not found on PATH (cargo install tree-sitter-cli)" >&2
   exit 2
@@ -49,7 +52,7 @@ for f in "${files[@]}"; do
     fail_list+=("$f")
     echo "ERROR/MISSING: $f" >&2
     echo "$out" | grep -E 'ERROR|MISSING' >&2 || true
-  elif echo "$out" | grep -qE 'ERROR|MISSING'; then
+  elif match_or_fail "$f: ERROR/MISSING scan" -- grep -qE 'ERROR|MISSING' <<<"$out"; then
     # Defensive: a MISSING can be recovered (rc 0) yet still print a summary.
     failed=$((failed + 1))
     fail_list+=("$f")

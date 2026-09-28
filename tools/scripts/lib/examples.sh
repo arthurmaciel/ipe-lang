@@ -92,6 +92,20 @@ is_out_of_scope() {
   # the per-commit gate.
   case "$dir" in */skyshop-rs) return 0 ;; esac
   _build_stdlib_index
+  # Collect the source files first, THEN run rg directly over the array (rather
+  # than `find -exec rg … {} +` feeding a process substitution): the latter
+  # hides rg's own exit code behind find's, and a `while read < <(…)` never
+  # checks the producer's status at all, so an rg error (a bad pattern, rg
+  # itself missing) silently reads as "no imports found" → "in scope" instead
+  # of the hard failure it should be.
+  local ipe_files=()
+  while IFS= read -r -d '' f; do ipe_files+=("$f"); done \
+    < <(find "$dir/src" -type f -name '*.ipe' -print0 2>/dev/null)
+  local imports=""
+  if [ "${#ipe_files[@]}" -gt 0 ]; then
+    match_capture imports "is_out_of_scope: import scan ($dir)" -- \
+      rg --no-filename -No '^[[:space:]]*import[[:space:]]+([A-Za-z0-9_.]+)' -r '$1' "${ipe_files[@]}" || true
+  fi
   while read -r m; do
     [ -z "$m" ] && continue
     case "$m" in Ipê.*|Ipe.*|Rust.*) continue ;; esac # Ipê stdlib / Rust-FFI wrapper → in scope
@@ -103,8 +117,7 @@ is_out_of_scope() {
     fi
     case "$localpaths" in *"/${rel}.ipe"$'\n'*) continue ;; esac
     return 0                                          # unresolvable → Go-package → OUT
-  done < <(find "$dir/src" -type f -name '*.ipe' -exec \
-             rg --no-filename -No '^[[:space:]]*import[[:space:]]+([A-Za-z0-9_.]+)' -r '$1' {} + 2>/dev/null)
+  done <<< "$imports"
   return 1                                            # every import resolved → in scope
 }
 
@@ -156,7 +169,8 @@ example_manifest() {
 # ipe.toml) is the authoritative build-time signal.
 is_wasm_example() {
   local m; m="$(example_manifest "$1")"
-  [ -n "$m" ] && rg -q '^\[wasm\]|Package\.wasm' "$m" 2>/dev/null
+  [ -n "$m" ] || return 1
+  match_or_fail "is_wasm_example: $m" -- rg -q '^\[wasm\]|Package\.wasm' "$m"
 }
 
 # ── needs_ffi_install <dir>: a rust-dependencies example without bindings ─────
@@ -172,7 +186,7 @@ is_wasm_example() {
 needs_ffi_install() {
   local d="$1" m; m="$(example_manifest "$d")"
   [ -n "$m" ] || return 1
-  rg -q '^\[rust\.dependencies\]|Package\.rustDependencies' "$m" 2>/dev/null || return 1
+  match_or_fail "needs_ffi_install: $m" -- rg -q '^\[rust\.dependencies\]|Package\.rustDependencies' "$m" || return 1
   # Bindings already generated (cache present) → buildable, do not skip.
   [ -d "$d/.ipe/cache/ffi/rust" ] && return 1
   return 0
@@ -184,9 +198,16 @@ needs_ffi_install() {
 # so prose that names a backend (e.g. a `{-| … like Ipe.Web … -}` doc comment on
 # a CLI example) can't misclassify the example by its shape.
 _shape_match() { # $1=src dir  $2=regex
-  find "$1" -name '*.ipe' -exec cat {} + 2>/dev/null \
-    | perl -0777 -pe 's/\{-.*?-\}//gs; s/--[^\n]*//g' \
-    | rg -q -e "$2" 2>/dev/null
+  # Capture find|perl to a variable FIRST, then feed rg via herestring — piping
+  # straight into `rg -q` races the reader against the writer: rg quits the
+  # instant it sees a match, SIGPIPE-killing perl (exit 141), and under
+  # pipefail that 141 (not rg's own 0) becomes the pipeline's reported exit
+  # status, misreading a real match as a failure. A herestring has no live
+  # process-to-process pipe, so there is no such race.
+  local text
+  text="$(find "$1" -name '*.ipe' -exec cat {} + 2>/dev/null \
+    | perl -0777 -pe 's/\{-.*?-\}//gs; s/--[^\n]*//g')"
+  rg -q -e "$2" <<<"$text" 2>/dev/null
 }
 example_shape() {
   local d="$1" s="$1/src"
@@ -243,4 +264,11 @@ first_party_check_set() {
     needs_ffi_install "$d" && continue
     printf '%s\n' "$d"
   done
+  # Explicit: without this, the function's exit status is whatever the LAST
+  # loop iteration's last command happened to return (e.g. a false `[ -f … ]`
+  # on the final glob entry) — an accident of enumeration order, not a signal
+  # of success/failure. A caller that checks this function's `$?` to detect a
+  # real producer failure needs 0 to mean "enumeration completed" reliably,
+  # even when it enumerated zero entries.
+  return 0
 }
