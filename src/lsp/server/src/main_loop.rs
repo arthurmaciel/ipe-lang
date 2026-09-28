@@ -60,63 +60,6 @@ struct DiagnosticsBatch {
     per_uri: Vec<(Url, Vec<lsp_types::Diagnostic>)>,
 }
 
-/// Why the workspace `lint.ipe` yielded no configuration.
-#[derive(Debug)]
-enum LintConfigError {
-    /// The file exists but is not a regular file.
-    NotAFile,
-    /// The file could not be read.
-    Unreadable(std::io::Error),
-    /// The file exceeds [`ipe_lint::LINT_CONFIG_MAX_BYTES`].
-    TooLarge,
-    /// The file was read but is not a valid configuration.
-    Invalid(ipe_lint::ConfigError),
-}
-
-impl std::fmt::Display for LintConfigError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::NotAFile => f.write_str("not a regular file"),
-            Self::Unreadable(e) => write!(f, "unreadable: {e}"),
-            Self::TooLarge => write!(f, "exceeds {} bytes", ipe_lint::LINT_CONFIG_MAX_BYTES),
-            Self::Invalid(e) => write!(f, "invalid: {e}"),
-        }
-    }
-}
-
-/// Load the `LintConfig` from the `lint.ipe` in `workspace_root`.
-///
-/// An absent file is the default configuration. The read is bounded by
-/// [`ipe_lint::LINT_CONFIG_MAX_BYTES`], and only a regular file is opened, so
-/// neither a huge file nor a FIFO can stall the main loop.
-///
-/// # Errors
-/// [`LintConfigError`] when the file is not a regular file, is unreadable, is
-/// over the cap, or does not parse as a configuration.
-fn load_lint_config(workspace_root: &Path) -> Result<ipe_lint::LintConfig, LintConfigError> {
-    use std::io::Read as _;
-
-    let lint_path = workspace_root.join(ipe_lint::LINT_CONFIG_FILE);
-    match std::fs::metadata(&lint_path) {
-        Ok(meta) if meta.is_file() => {}
-        Ok(_) => return Err(LintConfigError::NotAFile),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            return Ok(ipe_lint::LintConfig::default());
-        }
-        Err(e) => return Err(LintConfigError::Unreadable(e)),
-    }
-    let file = std::fs::File::open(&lint_path).map_err(LintConfigError::Unreadable)?;
-    let mut text = String::new();
-    file.take(ipe_lint::LINT_CONFIG_MAX_BYTES.saturating_add(1))
-        .read_to_string(&mut text)
-        .map_err(LintConfigError::Unreadable)?;
-    if !u64::try_from(text.len()).is_ok_and(|len| len <= ipe_lint::LINT_CONFIG_MAX_BYTES) {
-        return Err(LintConfigError::TooLarge);
-    }
-    ipe_lint::read_lint_config(&text, &lint_path.display().to_string())
-        .map_err(LintConfigError::Invalid)
-}
-
 /// An open editor buffer: its text and the client's version of it.
 struct Overlay {
     text: String,
@@ -1062,7 +1005,7 @@ fn recompute(state: &mut State, diag_tx: &Sender<DiagnosticsBatch>) {
             .workspace_root
             .as_deref()
             .map_or_else(ipe_lint::LintConfig::default, |root| {
-                load_lint_config(root).unwrap_or_else(|e| {
+                ipe_lint::load_lint_config(root).unwrap_or_else(|e| {
                     eprintln!(
                         "[ipe lsp] {}: {e}; linting with the default configuration",
                         ipe_lint::LINT_CONFIG_FILE
@@ -1255,10 +1198,10 @@ fn code_action_result(state: &State, params: &serde_json::Value) -> FeatureOutco
     // Whole-document `source.*` rewrites run only when `only` names a source
     // kind, and never over a `lint.ipe` that failed to load.
     if ipe_lsp_features::source_actions::requested(only) {
-        let lint_config = state
-            .workspace_root
-            .as_deref()
-            .map_or_else(|| Ok(ipe_lint::LintConfig::default()), load_lint_config);
+        let lint_config = state.workspace_root.as_deref().map_or_else(
+            || Ok(ipe_lint::LintConfig::default()),
+            ipe_lint::load_lint_config,
+        );
         match lint_config {
             Ok(lint_config) => {
                 let version = params
@@ -1562,12 +1505,13 @@ mod tests {
     use crossbeam_channel::RecvTimeoutError;
 
     use super::{
-        Connection, DiagnosticsBatch, FeatureOutcome, LintConfigError, LoadedFile, LoadedProject,
-        Message, ModuleOrigin, Path, PathBuf, PositionEncoding, ProjectLoader, PublishDiagnostics,
-        PublishDiagnosticsParams, State, Url, adopt, ensure_project_fresh, load_lint_config,
-        normalize, publish, recompute, sync_inputs,
+        Connection, DiagnosticsBatch, FeatureOutcome, LoadedFile, LoadedProject, Message,
+        ModuleOrigin, Path, PathBuf, PositionEncoding, ProjectLoader, PublishDiagnostics,
+        PublishDiagnosticsParams, State, Url, adopt, ensure_project_fresh, normalize, publish,
+        recompute, sync_inputs,
     };
     use crate::loader::LoadError;
+    use ipe_lint::{LintConfigLoadError, WorkspaceReadError, load_lint_config};
     use lsp_types::notification::Notification as _;
 
     /// A fresh, empty scratch directory for one `lint.ipe` test.
@@ -1595,7 +1539,9 @@ mod tests {
         );
         assert!(matches!(
             load_lint_config(&dir),
-            Err(LintConfigError::TooLarge)
+            Err(LintConfigLoadError::Read(
+                WorkspaceReadError::TooLarge { .. }
+            ))
         ));
     }
 
@@ -1605,7 +1551,7 @@ mod tests {
         assert!(std::fs::create_dir_all(dir.join(ipe_lint::LINT_CONFIG_FILE)).is_ok());
         assert!(matches!(
             load_lint_config(&dir),
-            Err(LintConfigError::NotAFile)
+            Err(LintConfigLoadError::Read(WorkspaceReadError::NotAFile))
         ));
     }
 
@@ -1615,7 +1561,27 @@ mod tests {
         assert!(std::fs::write(dir.join(ipe_lint::LINT_CONFIG_FILE), "module (((\n").is_ok());
         assert!(matches!(
             load_lint_config(&dir),
-            Err(LintConfigError::Invalid(_))
+            Err(LintConfigLoadError::Invalid(_))
+        ));
+    }
+
+    /// A FIFO planted at `lint.ipe` is refused at once: the main loop never
+    /// waits on a writer that will not come.
+    #[cfg(unix)]
+    #[test]
+    fn a_fifo_lint_config_is_refused_without_blocking() {
+        let dir = lint_dir("fifo");
+        let made = std::process::Command::new("mkfifo")
+            .arg(dir.join(ipe_lint::LINT_CONFIG_FILE))
+            .status();
+        assert!(matches!(made, Ok(s) if s.success()), "mkfifo: {made:?}");
+        let (tx, rx) = crossbeam_channel::bounded(1);
+        std::thread::spawn(move || {
+            let _ = tx.send(load_lint_config(&dir));
+        });
+        assert!(matches!(
+            rx.recv_timeout(Duration::from_secs(10)),
+            Ok(Err(LintConfigLoadError::Read(WorkspaceReadError::NotAFile)))
         ));
     }
 

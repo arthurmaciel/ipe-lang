@@ -52,9 +52,50 @@ pub fn check(ctx: &Ctx) -> Vec<Finding> {
     ctx.ast
         .imports
         .iter()
-        .filter(|import| !is_used(ctx.interner, import, &qualifiers, &uses.unqualified))
+        .filter(|import| {
+            !is_used(ctx.interner, import, &|q| qualifiers.contains(q), &|s| {
+                uses.unqualified.contains(&s)
+            })
+        })
         .map(|import| finding(ctx, import))
         .collect()
+}
+
+/// Whether any name some import in `imports` binds may be referenced in
+/// `ast`.
+///
+/// The usage walk is re-run on `ast` itself, so a caller that removed
+/// `imports` from a module can re-prove on its *output* that nothing they
+/// bound is still referenced. `imports` resolve through `import_interner`,
+/// `ast` through `interner`; the two may differ, so names compare as text.
+/// Fail-closed: an opaque module, an unresolvable symbol, a wildcard, or an
+/// exposed `Type(..)` all count as referenced.
+pub fn any_referenced(
+    ast: &Module,
+    interner: &Interner,
+    imports: &[&Import],
+    import_interner: &Interner,
+) -> bool {
+    let uses = Uses::of_module(ast);
+    if uses.opaque {
+        return true;
+    }
+    let texts = |syms: &HashSet<Symbol>| -> Option<HashSet<String>> {
+        syms.iter()
+            .map(|s| interner.resolve(*s).map(str::to_owned))
+            .collect()
+    };
+    let (Some(qualifiers), Some(unqualified)) = (texts(&uses.qualifiers), texts(&uses.unqualified))
+    else {
+        return true;
+    };
+    imports.iter().any(|import| {
+        is_used(import_interner, import, &|q| qualifiers.contains(q), &|s| {
+            import_interner
+                .resolve(s)
+                .is_none_or(|t| unqualified.contains(t))
+        })
+    })
 }
 
 /// The finding for one unused import, with a fix only when its removal is clean.
@@ -91,32 +132,35 @@ fn finding(ctx: &Ctx, import: &Import) -> Finding {
 ///
 /// Fail-closed: an unresolvable symbol, a wildcard, or an exposed `Type(..)`
 /// all count as used.
+///
+/// `qualifier_used` answers for a qualifier spelling, `name_used` for an
+/// unqualified name symbol of `interner`.
 fn is_used(
     interner: &Interner,
     import: &Import,
-    qualifiers: &HashSet<&str>,
-    unqualified: &HashSet<Symbol>,
+    qualifier_used: &impl Fn(&str) -> bool,
+    name_used: &impl Fn(Symbol) -> bool,
 ) -> bool {
     let Exposing::List(items) = &import.exposing.value else {
         return true;
     };
     if items
         .iter()
-        .any(|item| exposed_is_used(&item.value, unqualified))
+        .any(|item| exposed_is_used(&item.value, name_used))
     {
         return true;
     }
     import_qualifier_texts(interner, import)
-        .is_none_or(|texts| texts.iter().any(|text| qualifiers.contains(text.as_str())))
+        .is_none_or(|texts| texts.iter().any(|text| qualifier_used(text.as_str())))
 }
 
 /// Whether one exposed item may be referenced unqualified.
-fn exposed_is_used(item: &Exposed, unqualified: &HashSet<Symbol>) -> bool {
+fn exposed_is_used(item: &Exposed, name_used: &impl Fn(Symbol) -> bool) -> bool {
     match item {
-        Exposed::Value(name) | Exposed::Type(name, Privacy::Private) => unqualified.contains(name),
+        Exposed::Value(name) | Exposed::Type(name, Privacy::Private) => name_used(*name),
         Exposed::Type(_, Privacy::Public) => true,
         Exposed::Type(name, Privacy::PublicCtors(ctors)) => {
-            unqualified.contains(name) || ctors.iter().any(|c| unqualified.contains(c))
+            name_used(*name) || ctors.iter().any(|c| name_used(*c))
         }
     }
 }

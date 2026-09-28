@@ -13,7 +13,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use ipe_intern::{Interner, Symbol};
 use ipe_syntax::{Exposed, Exposing, Import, Module, Privacy as AstPrivacy};
 
-use crate::rules::unused_imports::{RULE as UNUSED_IMPORTS, import_qualifier_texts, removal_range};
+use crate::rules::unused_imports::{
+    RULE as UNUSED_IMPORTS, any_referenced, import_qualifier_texts, removal_range,
+};
 use crate::{LintConfig, SourceModule, apply_fixes, run};
 
 /// The round ceiling for [`fix_all`].
@@ -51,7 +53,7 @@ impl BlockEdit {
 ///
 /// An import flagged `unused-imports` — matched back to its AST node by the
 /// finding's identity key, the `import_kw` span — is dropped wholesale; this
-/// is the only usage signal consulted. Surviving imports of the same dotted
+/// is the only signal that *decides* a drop. Surviving imports of the same dotted
 /// module path and `as` alias are merged into one declaration, their
 /// `exposing` lists unioned (privacy only ever widens: `Public` beats
 /// `PublicCtors` beats `Private`) and sorted by name; the merged declarations
@@ -62,11 +64,37 @@ impl BlockEdit {
 /// declaration spans. It is refused (`None`) when the module does not parse,
 /// when any declaration shares a line with other code or holds a comment,
 /// when anything but whitespace lies between declarations, when a name does
-/// not resolve, or when the rewritten module fails to re-parse to the same
-/// declarations and the same bound import names. `None` also means there is
-/// nothing to change. Line endings follow the block's own (`\r\n` or `\n`).
+/// not resolve, when the rewritten module fails to re-parse to the same
+/// declarations and the kept imports' bound names, or when an independent
+/// re-derivation on the output cannot prove that the drop removed
+/// only what the dropped imports bound and that none of it is still
+/// referenced. `None` also means there is nothing to change. Line endings
+/// follow the block's own (`\r\n` or `\n`).
 #[must_use]
 pub fn organize_imports(module: &SourceModule, config: &LintConfig) -> Option<BlockEdit> {
+    let report = std::cell::OnceCell::new();
+    organize_imports_dropping(module, |imp| {
+        report
+            .get_or_init(|| run(std::slice::from_ref(module), config))
+            .findings
+            .iter()
+            .any(|f| {
+                f.rule == UNUSED_IMPORTS
+                    && f.module == module.module
+                    && f.span.lo == imp.import_kw.lo
+            })
+    })
+}
+
+/// [`organize_imports`] with the drop decision supplied by `is_dropped`.
+///
+/// Production passes the `unused-imports` report; a test passes a
+/// deliberately wrong decision to prove the output-side re-derivation
+/// refuses it through the same code path.
+fn organize_imports_dropping(
+    module: &SourceModule,
+    is_dropped: impl Fn(&Import) -> bool,
+) -> Option<BlockEdit> {
     let source = module.source.as_str();
     let mut interner = Interner::new();
     let ast = ipe_parse::parse_module(source, &mut interner).ok()?;
@@ -88,13 +116,8 @@ pub fn organize_imports(module: &SourceModule, config: &LintConfig) -> Option<Bl
     }
     let original = source.get(lo..hi)?;
 
-    let report = run(std::slice::from_ref(module), config);
-    let is_unused = |imp: &Import| {
-        report.findings.iter().any(|f| {
-            f.rule == UNUSED_IMPORTS && f.module == module.module && f.span.lo == imp.import_kw.lo
-        })
-    };
-    let kept: Vec<&Import> = ast.imports.iter().filter(|imp| !is_unused(imp)).collect();
+    let (dropped, kept): (Vec<&Import>, Vec<&Import>) =
+        ast.imports.iter().partition(|imp| is_dropped(imp));
 
     let newline = if original.contains("\r\n") {
         "\r\n"
@@ -120,8 +143,43 @@ pub fn organize_imports(module: &SourceModule, config: &LintConfig) -> Option<Bl
     let out_ast = ipe_parse::parse_module(&output, &mut out_interner).ok()?;
     let same_decls = decl_names(&ast, &interner)? == decl_names(&out_ast, &out_interner)?;
     let out_imports: Vec<&Import> = out_ast.imports.iter().collect();
-    let same_bindings = bindings(&kept, &interner)? == bindings(&out_imports, &out_interner)?;
-    (same_decls && same_bindings).then_some(edit)
+    let faithful = bindings(&kept, &interner)? == bindings(&out_imports, &out_interner)?;
+    let proven = drop_is_proven(&ast, &interner, &dropped, &out_ast, &out_interner);
+    (same_decls && faithful && proven).then_some(edit)
+}
+
+/// Whether `output` provably differs from `original` only by `dropped`, none
+/// of whose names `output` still references.
+///
+/// Re-derived from the two parse trees, independently of whatever decided
+/// the drop:
+/// - no binding is gained: the output's import bindings are a subset of the
+///   original's;
+/// - every binding lost is one a dropped import supplied (a binding also
+///   supplied by a kept import survives in the output, so it is not lost);
+/// - the `unused-imports` usage walk, re-run on `output`, finds no reference
+///   to any qualifier, alias, or exposed name of `dropped`.
+///
+/// Fail-closed: an unresolvable name or an opaque output is a refusal.
+fn drop_is_proven(
+    original: &Module,
+    interner: &Interner,
+    dropped: &[&Import],
+    output: &Module,
+    out_interner: &Interner,
+) -> bool {
+    let original_imports: Vec<&Import> = original.imports.iter().collect();
+    let output_imports: Vec<&Import> = output.imports.iter().collect();
+    let (Some(before), Some(gone), Some(after)) = (
+        bindings(&original_imports, interner),
+        bindings(dropped, interner),
+        bindings(&output_imports, out_interner),
+    ) else {
+        return false;
+    };
+    after.is_subset(&before)
+        && before.difference(&after).all(|b| gone.contains(b))
+        && !any_referenced(output, out_interner, dropped, interner)
 }
 
 /// The smallest whole-line edit turning `before` into `after`.
@@ -530,6 +588,118 @@ mod tests {
     fn fixed(src: &str, rounds: usize) -> String {
         fix_all_bounded(&[module(src)], &target(), &LintConfig::default(), rounds)
             .unwrap_or_else(|| src.to_owned())
+    }
+
+    /// The byte offset of the `import` keyword of `imp`.
+    fn kw_at(imp: &Import) -> Option<usize> {
+        usize::try_from(imp.import_kw.lo).ok()
+    }
+
+    #[test]
+    fn a_drop_decision_that_misses_a_qualified_use_is_refused() {
+        let src = "module Main exposing (main)\n\nimport Zeta\nimport Alpha\n\nmain =\n    (Zeta.a, Alpha.b)\n";
+        assert_eq!(organize_imports_dropping(&module(src), |_| true), None);
+        let alpha = src.find("import Alpha");
+        assert_eq!(
+            organize_imports_dropping(&module(src), |imp| kw_at(imp) == alpha),
+            None,
+            "dropping one qualified-used import is refused too"
+        );
+    }
+
+    #[test]
+    fn a_drop_decision_that_misses_an_exposed_use_is_refused() {
+        let src = "module Main exposing (main)\n\nimport Data exposing (a)\nimport Unused\n\nmain =\n    a\n";
+        let data = src.find("import Data");
+        assert_eq!(
+            organize_imports_dropping(&module(src), |imp| kw_at(imp) == data),
+            None
+        );
+        // Positive control: the same seam with the correct decision edits, so
+        // the refusal above is the proof firing, not the seam being inert.
+        let unused = src.find("import Unused");
+        assert!(organize_imports_dropping(&module(src), |imp| kw_at(imp) == unused).is_some());
+    }
+
+    #[test]
+    fn a_drop_decision_that_misses_a_constructor_use_is_refused() {
+        let src = "module Main exposing (main)\n\nimport Shape exposing (Shape(Circle))\n\nmain =\n    Circle\n";
+        assert_eq!(organize_imports_dropping(&module(src), |_| true), None);
+    }
+
+    #[test]
+    fn a_drop_decision_on_an_opaque_module_is_refused() {
+        let src = "module Main exposing (main)\n\nimport Zeta\nimport Alpha\n\nmain =\n    \"\"\"{{ Zeta.a }}\"\"\"\n";
+        let zeta = src.find("import Zeta");
+        assert_eq!(
+            organize_imports_dropping(&module(src), |imp| kw_at(imp) == zeta),
+            None
+        );
+        // Positive control: the module parses and a drop-free sort is offered.
+        assert!(organize_imports_dropping(&module(src), |_| false).is_some());
+    }
+
+    /// [`drop_is_proven`] for `original` with the imports at `drop` (by
+    /// position) dropped, against `output`. `None` when either fails to parse.
+    fn proven(original: &str, drop: &[usize], output: &str) -> Option<bool> {
+        let mut interner = Interner::new();
+        let ast = ipe_parse::parse_module(original, &mut interner).ok()?;
+        let mut out_interner = Interner::new();
+        let out_ast = ipe_parse::parse_module(output, &mut out_interner).ok()?;
+        let dropped: Vec<&Import> = ast
+            .imports
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| drop.contains(i))
+            .map(|(_, imp)| imp)
+            .collect();
+        Some(drop_is_proven(
+            &ast,
+            &interner,
+            &dropped,
+            &out_ast,
+            &out_interner,
+        ))
+    }
+
+    const HEAD: &str = "module Main exposing (main)\n\n";
+
+    #[test]
+    fn the_drop_proof_accepts_a_faithful_drop() {
+        let original = format!("{HEAD}import Alpha\nimport Beta\n\nmain =\n    Alpha.a\n");
+        let output = format!("{HEAD}import Alpha\n\nmain =\n    Alpha.a\n");
+        assert_eq!(proven(&original, &[1], &output), Some(true));
+    }
+
+    #[test]
+    fn the_drop_proof_refuses_losing_a_kept_import() {
+        let original = format!("{HEAD}import Alpha\nimport Beta\n\nmain =\n    1\n");
+        let output = format!("{HEAD}import Alpha\n\nmain =\n    1\n");
+        assert_eq!(proven(&original, &[], &output), Some(false));
+    }
+
+    #[test]
+    fn the_drop_proof_refuses_gaining_a_binding() {
+        let original = format!("{HEAD}import Alpha\n\nmain =\n    1\n");
+        let output = format!("{HEAD}import Alpha\nimport Gamma\n\nmain =\n    1\n");
+        assert_eq!(proven(&original, &[], &output), Some(false));
+    }
+
+    #[test]
+    fn the_drop_proof_refuses_a_dropped_import_still_referenced() {
+        // The binding sets agree (Beta was dropped and is gone); only the
+        // re-run usage walk on the output catches the live `Beta.b`.
+        let original = format!("{HEAD}import Alpha\nimport Beta\n\nmain =\n    Beta.b\n");
+        let output = format!("{HEAD}import Alpha\n\nmain =\n    Beta.b\n");
+        assert_eq!(proven(&original, &[1], &output), Some(false));
+    }
+
+    #[test]
+    fn a_qualifier_shared_with_a_kept_import_is_not_a_false_refusal() {
+        let src = "module Main exposing (main)\n\nimport Data exposing (a)\nimport Data\n\nmain =\n    a\n";
+        let out = organized(src);
+        assert_eq!(out.matches("import Data").count(), 1, "got:\n{out}");
+        assert!(out.contains("import Data exposing (a)\n"), "got:\n{out}");
     }
 
     #[test]

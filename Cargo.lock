@@ -3280,6 +3280,7 @@ dependencies = [
  "ipe_intern",
  "ipe_parse",
  "ipe_syntax",
+ "libc",
 ]
 
 [[package]]

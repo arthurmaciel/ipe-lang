@@ -18,6 +18,7 @@
 //! `lint` binding walked — never evaluated (see [`config`]).
 
 mod config;
+mod config_file;
 mod finding;
 mod registry;
 mod render;
@@ -31,6 +32,9 @@ use ipe_intern::Interner;
 pub use config::{
     ConfigError, LINT_CONFIG_FILE, LINT_CONFIG_MAX_BYTES, LintConfig, Suppressions,
     read_lint_config,
+};
+pub use config_file::{
+    LintConfigLoadError, WorkspaceReadError, load_lint_config, read_workspace_file,
 };
 pub use finding::{Finding, Fix, Severity, SigFix};
 pub use registry::{Fixability, RULES, RuleInfo, is_known, lookup};

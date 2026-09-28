@@ -118,18 +118,37 @@ pub(crate) fn run_lint(rest: &[String]) -> Result<(), CliError> {
 
 /// Read `lint.ipe` from the directory holding `blame_path` (the resolved
 /// manifest or entry file), returning defaults when none exists.
+///
+/// The read goes through [`ipe_lint::load_lint_config`], the one bounded,
+/// open-once reader the language server shares, so a FIFO, directory, or
+/// oversized `lint.ipe` is refused rather than waited on or ignored.
 fn load_config(blame_path: &Path) -> Result<LintConfig, CliError> {
+    use ipe_lint::{LintConfigLoadError, WorkspaceReadError};
+
     let dir = blame_path
         .parent()
         .map_or_else(|| PathBuf::from("."), Path::to_path_buf);
-    let lint_ipe = dir.join(LINT_IPE);
-    if !lint_ipe.is_file() {
-        return Ok(LintConfig::default());
-    }
-    let text =
-        crate::io_bounded::read_to_string_capped(&lint_ipe, ipe_lint::LINT_CONFIG_MAX_BYTES)?;
-    ipe_lint::read_lint_config(&text, &lint_ipe.display().to_string())
-        .map_err(|e| CliError::Usage(crate::text::Message::relay(&e)))
+    let path = dir.join(LINT_IPE);
+    let io = |source: std::io::Error| CliError::Io {
+        path: path.clone(),
+        source,
+    };
+    ipe_lint::load_lint_config(&dir).map_err(|e| match e {
+        LintConfigLoadError::Read(WorkspaceReadError::Unreadable(source)) => io(source),
+        LintConfigLoadError::Read(WorkspaceReadError::NotAFile) => io(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "not a regular file",
+        )),
+        LintConfigLoadError::Read(WorkspaceReadError::NotUtf8) => io(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "not valid UTF-8",
+        )),
+        LintConfigLoadError::Read(WorkspaceReadError::TooLarge { max }) => CliError::FileTooLarge {
+            path: path.clone(),
+            max,
+        },
+        LintConfigLoadError::Invalid(e) => CliError::Usage(crate::text::Message::relay(&e)),
+    })
 }
 
 /// Run the linter and print each finding; fail the gate if any survives at or
