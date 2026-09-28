@@ -1049,7 +1049,7 @@ fn build_generic_call(
                     detail: "container clone rewrite lost its two args".to_owned(),
                 });
             };
-            build_call_args_task_and_then(
+            build_call_args_by_slot(
                 ctx,
                 callee,
                 &[func.clone(), container_rw],
@@ -1058,7 +1058,7 @@ fn build_generic_call(
                 generics,
             )?
         }
-        None => build_call_args_task_and_then(ctx, callee, args, indent, child, generics)?,
+        None => build_call_args_by_slot(ctx, callee, args, indent, child, generics)?,
     };
     // Container-first kernels take their two arguments in the opposite order to
     // the Ipê call; the string emitter reverses the rendered `parts`, so the Doc
@@ -1073,17 +1073,21 @@ fn build_generic_call(
     ))
 }
 
-/// Build a positional argument list for a `Task.andThen` call, handling the
-/// continuation lambda (Ipê arg index 0) specially: instead of the full
-/// `{ let __ipe_fn: Box<dyn Fn...> = Box::new(...); __ipe_fn }` block that
-/// [`build_lambda`] produces, emit `Box::new(move |x: T| -> R { body })` directly.
-/// The preamble wrapper takes `Box<dyn FnOnce(A) -> IpeTask<B> + Send + 'static>`,
-/// so the `Box::new` is still required; dropping the `let __ipe_fn` type-annotation
-/// is sufficient because rustc infers the coercion from the parameter position.
-/// Removing the explicit annotation is what keeps rustc type-checking linear in the
-/// number of chained `Task.andThen` calls (the annotation form causes super-linear
-/// work at depth). All other args fall through to [`build_call_args_with_impl_fn`].
-fn build_call_args_task_and_then(
+/// Build a positional argument list, rendering each lambda-literal argument by its slot.
+///
+/// A slot [`Callee::lambda_arg_runs_once`] names is the runtime's boxed
+/// consume-once parameter (`Box<dyn FnOnce(A) -> IpeTask<B> + Send + 'static>`):
+/// its lambda renders as `Box::new(move |x: T| -> R { body })`, without the
+/// `let __ipe_fn: Box<dyn Fn...>` annotation [`build_lambda`] adds, since rustc
+/// infers the coercion from the parameter position and the annotation form
+/// type-checks super-linearly in the depth of a chained continuation. A `Fun`
+/// parameter a user callee monomorphized to an `impl Fn` generic
+/// (`EmitCtx::call_arg_is_impl_fn`) takes the lambda UNBOXED, so rustc inlines
+/// it. Every other argument renders through [`build_doc`]: a non-lambda value
+/// already implements `Fn` and fills a generic slot with no rewrite. Mirrors the
+/// same per-slot decision in [`crate::emit_expr::emit_expr_at`]'s `Expr::Call`
+/// arm so the native and string emitters stay byte-identical.
+fn build_call_args_by_slot(
     ctx: &EmitCtx,
     callee: &Callee,
     args: &[Expr],
@@ -1091,47 +1095,22 @@ fn build_call_args_task_and_then(
     child: u16,
     generics: GenericScope,
 ) -> DResult<Vec<Doc>> {
-    if matches!(callee, Callee::Kernel(KernelFn::TaskAndThen))
-        && let [cont, effect] = args
-        && let Expr::Lambda { params, ret, body } | Expr::SharedLambda { params, ret, body } = cont
-    {
-        let closure = build_closure(ctx, params, ret, body, indent, child, generics)?;
-        let cont_doc = Doc::concat(vec![Doc::text("Box::new("), closure, Doc::text(")")]);
-        let effect_doc = build_doc(ctx, effect, indent, child, generics)?;
-        return Ok(vec![cont_doc, effect_doc]);
-    }
-    build_call_args_with_impl_fn(ctx, callee, args, indent, child, generics)
-}
-
-/// Build a positional argument list, passing a lambda-literal argument UNBOXED
-/// into any parameter the callee monomorphized to an `impl Fn` generic
-/// (`EmitCtx::call_arg_is_impl_fn`), so the boxed `{ let __ipe_fn = Box::new(..) }`
-/// wrapper is skipped and rustc inlines the closure. Every other argument — and
-/// every non-`Callee::Func` call — routes through the ordinary [`build_args`] path
-/// unchanged: a non-lambda value already implements `Fn`, so it fills the generic
-/// slot with no rewrite. Mirrors the same gate in
-/// [`crate::emit_expr::emit_expr_at`]'s `Expr::Call` arm so the native and string
-/// emitters stay byte-identical.
-fn build_call_args_with_impl_fn(
-    ctx: &EmitCtx,
-    callee: &Callee,
-    args: &[Expr],
-    indent: usize,
-    child: u16,
-    generics: GenericScope,
-) -> DResult<Vec<Doc>> {
-    let Callee::Func(id) = callee else {
-        return build_args(ctx, args, indent, child, generics);
-    };
     let mut docs = Vec::with_capacity(args.len());
     for (i, arg) in args.iter().enumerate() {
-        let doc = if ctx.call_arg_is_impl_fn(*id, i)
-            && let Expr::Lambda { params, ret, body } | Expr::SharedLambda { params, ret, body } =
-                arg
-        {
-            build_closure(ctx, params, ret, body, indent, child, generics)?
-        } else {
-            build_doc(ctx, arg, indent, child, generics)?
+        let impl_fn_slot = matches!(callee, Callee::Func(id) if ctx.call_arg_is_impl_fn(*id, i));
+        let doc = match arg {
+            Expr::Lambda { params, ret, body } | Expr::SharedLambda { params, ret, body }
+                if callee.lambda_arg_runs_once(i) =>
+            {
+                let closure = build_closure(ctx, params, ret, body, indent, child, generics)?;
+                Doc::concat(vec![Doc::text("Box::new("), closure, Doc::text(")")])
+            }
+            Expr::Lambda { params, ret, body } | Expr::SharedLambda { params, ret, body }
+                if impl_fn_slot =>
+            {
+                build_closure(ctx, params, ret, body, indent, child, generics)?
+            }
+            _ => build_doc(ctx, arg, indent, child, generics)?,
         };
         docs.push(doc);
     }

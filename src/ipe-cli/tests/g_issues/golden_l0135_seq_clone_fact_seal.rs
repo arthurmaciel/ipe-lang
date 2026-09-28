@@ -24,6 +24,11 @@
 //! with IPE-L0135. A server handler renders as `Arc<dyn Fn>`, so a `Maybe`
 //! over one clones like any `Clone` field.
 //!
+//! A closure in a run-once slot (`Task.andThen`'s function) may move a
+//! capture once; a second move inside the same body, as an eta-expanded
+//! partial application duplicating a move-only argument produces, is refused
+//! with IPE-L0126 rather than emitting a closure cargo rejects (E0382).
+//!
 //! A function decoded by a `Json.Decode` mapper is consume-once: calling it
 //! twice, or capturing it in a closure, is refused with IPE-L0127 at ipe time
 //! rather than emitting a second move of a `Box<dyn FnOnce>` (E0382 / E0507).
@@ -45,6 +50,8 @@
 //! | `fn_field_moved_then_record_read` | `Maybe` function field moved, then whole record read | fail-closed IPE-L0127 |
 //! | `fun_field_applied_then_record_read` | function field called in place, then whole record read | builds + prints `13` |
 //! | `maybe_handler_field_in_closure` | `Maybe` server-handler field read in a closure | builds + prints `2` |
+//! | `eta_partial_arg_twice_in_run_once_slot` | `Task.andThen (both site site)`, handle record captured twice | fail-closed IPE-L0126 |
+//! | `eta_partial_arg_once_in_run_once_slot` | `Task.andThen (one site)`, handle record captured once | builds + prints `> / mounted` |
 //!
 //! ```text
 //! # gate check only (fast):
@@ -629,6 +636,35 @@ main =
     Io.println (String.fromInt (countFallbacks { fallback = Just handle, name = "x" } [ 1, 2 ]))
 "#;
 
+/// A partial application passing the handle record twice, in `Task.andThen`'s run-once slot.
+///
+/// The eta-expanded closure moves its one capture of `site` into both
+/// arguments, so it has no sound emission.
+const ETA_PARTIAL_ARG_TWICE_IN_RUN_ONCE_SLOT: &str = r#"
+both : Site -> Site -> String -> Task Error ()
+both a b greeting =
+    Io.println (greeting ++ describe a.name a.app ++ describe b.name b.app)
+
+
+serve : Site -> Task Error ()
+serve site =
+    Task.andThen (both site site) (Task.succeed "> ")
+"#;
+
+/// Over-rejection guard: the same slot moving the handle record once.
+///
+/// Prints `> / mounted`.
+const ETA_PARTIAL_ARG_ONCE_IN_RUN_ONCE_SLOT: &str = r#"
+one : Site -> String -> Task Error ()
+one s greeting =
+    Io.println (greeting ++ describe s.name s.app)
+
+
+serve : Site -> Task Error ()
+serve site =
+    Task.andThen (one site) (Task.succeed "> ")
+"#;
+
 #[test]
 fn app_field_in_recallable_closure_fails_closed() {
     assert_rejected(
@@ -680,5 +716,23 @@ fn maybe_handler_field_in_closure_round_trips() {
         "maybe_handler_field_in_closure",
         MAYBE_HANDLER_FIELD_IN_CLOSURE,
         "2",
+    );
+}
+
+#[test]
+fn eta_partial_arg_twice_in_run_once_slot_fails_closed() {
+    assert_rejected(
+        "eta_partial_arg_twice_in_run_once_slot",
+        &format!("{APP_HANDLE_PRELUDE}{ETA_PARTIAL_ARG_TWICE_IN_RUN_ONCE_SLOT}"),
+        ipe_diagnostics::IPE_L0126,
+    );
+}
+
+#[test]
+fn eta_partial_arg_once_in_run_once_slot_round_trips() {
+    let _ = assert_accepted(
+        "eta_partial_arg_once_in_run_once_slot",
+        &format!("{APP_HANDLE_PRELUDE}{ETA_PARTIAL_ARG_ONCE_IN_RUN_ONCE_SLOT}"),
+        "> / mounted",
     );
 }

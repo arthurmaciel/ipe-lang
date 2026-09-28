@@ -6534,6 +6534,8 @@ struct NonCloneMoveState<'a> {
     in_recallable: bool,
     /// A position moved the captured binding out of a re-callable closure.
     recallable_move: bool,
+    /// A closure body read its own capture of the binding after moving it.
+    closure_hazard: bool,
 }
 
 impl<'a> NonCloneMoveState<'a> {
@@ -6547,6 +6549,7 @@ impl<'a> NonCloneMoveState<'a> {
             partial: PartialMove::Intact,
             in_recallable: false,
             recallable_move: false,
+            closure_hazard: false,
         }
     }
 
@@ -6602,6 +6605,7 @@ impl<'a> NonCloneMoveState<'a> {
         self.hazard |= branch.hazard;
         self.consumed |= branch.consumed;
         self.recallable_move |= branch.recallable_move;
+        self.closure_hazard |= branch.closure_hazard;
         self.partial = std::mem::take(&mut self.partial).union(branch.partial);
     }
 
@@ -6618,18 +6622,34 @@ impl<'a> NonCloneMoveState<'a> {
             partial: PartialMove::Intact,
             in_recallable: self.in_recallable || recallable,
             recallable_move: false,
+            closure_hazard: false,
         }
+    }
+
+    /// Fold a walked closure body's outcome into the enclosing scope.
+    ///
+    /// The body is its own ownership scope over its capture: a move out of a
+    /// re-callable capture, and a read of the capture after the body moved it
+    /// (rustc `E0382` inside the closure, whether it runs once or re-callably),
+    /// both surface to the enclosing binding's refusal.
+    const fn absorb_closure(&mut self, body: &Self) {
+        self.recallable_move |= body.recallable_move;
+        self.closure_hazard |= body.hazard || body.closure_hazard;
     }
 }
 
-/// Does a position of `expr` move the non-`Clone` binding `sym` out of a re-callable closure?
+/// Does a closure literal in `expr` move the non-`Clone` binding `sym` in a way rustc refuses?
 ///
 /// Every lambda literal renders a re-callable `Fn` closure except the one
-/// argument slot [`ipe_ir::Callee::lambda_arg_runs_once`] names. Such a
+/// argument slot [`ipe_ir::Callee::lambda_arg_runs_once`] names. A re-callable
 /// closure holds its `move` capture by reference on each call, so a whole
 /// move, a move-only field read, a by-value pattern match, or a nested
-/// capture of `sym` inside it is rustc `E0507` — a program ipe must refuse.
-fn nonclone_moves_out_of_recallable_closure(
+/// capture of `sym` inside it is rustc `E0507`. Any closure body, consume-once
+/// ones included, owns a single copy of its capture, so a read of it after the
+/// body moved it is rustc `E0382`. Both are programs ipe must refuse; every
+/// closure literal (a source lambda, a desugared `do` continuation, a
+/// compiler-built eta lambda) is walked by the same accounting.
+fn nonclone_closure_move_refused(
     env: CloneEnv<'_>,
     sym: Symbol,
     ir_ty: &IrType,
@@ -6638,14 +6658,15 @@ fn nonclone_moves_out_of_recallable_closure(
     let copy_fields = copy_record_fields(env, ir_ty);
     let mut state = NonCloneMoveState::new(&copy_fields, env.payloads);
     nonclone_move_walk(sym, expr, &mut state);
-    state.recallable_move
+    state.recallable_move || state.closure_hazard
 }
 
 /// A lambda literal capturing `sym`, walked for [`nonclone_move_walk`].
 ///
 /// Building the closure moves `sym` into it (a move out of an enclosing
-/// re-callable closure too); its body then runs from a fresh capture state,
-/// walked only for moves out of a re-callable capture.
+/// re-callable closure too); its body then runs from a fresh capture state
+/// under the same accounting, and its outcome folds back through
+/// [`NonCloneMoveState::absorb_closure`].
 fn nonclone_closure_walk(
     sym: Symbol,
     params: &[(Symbol, IrType)],
@@ -6660,27 +6681,24 @@ fn nonclone_closure_walk(
     state.move_out_of_capture();
     let mut inner = state.closure_body(recallable);
     nonclone_move_walk(sym, body, &mut inner);
-    state.recallable_move |= inner.recallable_move;
+    state.absorb_closure(&inner);
 }
 
-/// A call argument of `callee`, walked for [`nonclone_move_walk`].
+/// The call argument at IR index `index` of `callee`, walked for [`nonclone_move_walk`].
 ///
 /// A lambda literal in the slot [`ipe_ir::Callee::lambda_arg_runs_once`]
 /// names is a consume-once closure; every other argument walks as usual.
 fn nonclone_call_arg_walk(
     sym: Symbol,
     callee: &Callee,
-    args: &[Expr],
+    index: usize,
     arg: &Expr,
     state: &mut NonCloneMoveState<'_>,
 ) {
-    let runs_once = args
-        .iter()
-        .position(|a| std::ptr::eq(a, arg))
-        .is_some_and(|i| callee.lambda_arg_runs_once(i));
     match arg {
         Expr::Lambda { params, body, .. } | Expr::SharedLambda { params, body, .. } => {
-            nonclone_closure_walk(sym, params, body, !runs_once, state);
+            let recallable = !callee.lambda_arg_runs_once(index);
+            nonclone_closure_walk(sym, params, body, recallable, state);
         }
         _ => nonclone_move_walk(sym, arg, state),
     }
@@ -6774,8 +6792,8 @@ fn nonclone_move_walk(sym: Symbol, expr: &Expr, state: &mut NonCloneMoveState<'_
         // A user function evaluates its arguments in place left to right; an
         // argument-reversed kernel evaluates its container before its function.
         Expr::Call { callee, args, .. } if callee.has_known_eval_order() => {
-            for a in callee.args_in_eval_order(args) {
-                nonclone_call_arg_walk(sym, callee, args, a, state);
+            for (i, a) in callee.indexed_args_in_eval_order(args) {
+                nonclone_call_arg_walk(sym, callee, i, a, state);
             }
         }
         Expr::Ctor { args, .. } | Expr::TailRecur { args } => {
@@ -6922,9 +6940,9 @@ fn nonclone_unordered_args(
     let pre = state.clone();
     let mut mentioning = 0usize;
     let mut moved = false;
-    for a in args {
+    for (i, a) in args.iter().enumerate() {
         let mut s = pre.clone();
-        nonclone_call_arg_walk(sym, callee, args, a, &mut s);
+        nonclone_call_arg_walk(sym, callee, i, a, &mut s);
         moved |= (s.consumed && !pre.consumed) || s.partial != pre.partial;
         state.merge(s);
         if count_var_uses(sym, a) > 0 {
@@ -32796,8 +32814,7 @@ mod tests {
         use ipe_ir::{CallPin, Callee, Expr, FuncId, IrType, KernelFn, ModPath, OnFormKind};
 
         use super::{
-            CloneEnv, nonclone_moves_out_of_recallable_closure, reject_nonclone_value_reuse,
-            unsupported,
+            CloneEnv, nonclone_closure_move_refused, reject_nonclone_value_reuse, unsupported,
         };
 
         let mut interner = Interner::new();
@@ -32837,8 +32854,7 @@ mod tests {
             field,
             field_ty,
         };
-        let moves =
-            |ty: &IrType, body: &Expr| nonclone_moves_out_of_recallable_closure(env, w, ty, body);
+        let moves = |ty: &IrType, body: &Expr| nonclone_closure_move_refused(env, w, ty, body);
 
         // `\_ -> g w`: a whole move out of a re-callable closure — refused.
         let whole = lambda(user_call(vec![Expr::Var(w)]));
@@ -32890,6 +32906,35 @@ mod tests {
             &wrap_task,
             &and_then(lambda(lambda(user_call(vec![Expr::Var(w)]))))
         ));
+
+        // `Task.andThen (\_ -> g w w) t`: the consume-once body moves its
+        // capture twice — refused, as the eta lambda of `Task.andThen (h w w) t`.
+        let twice = and_then(lambda(user_call(vec![Expr::Var(w), Expr::Var(w)])));
+        assert!(moves(&wrap_task, &twice));
+        let err = reject_nonclone_value_reuse(env, w, &wrap_task, &twice, span)
+            .expect_err("a double move inside a consume-once closure must be rejected");
+        assert_eq!(err, unsupported(span, Feature::NonCloneCapture));
+
+        // Inside a consume-once body, a move-only field then a different field
+        // stays accepted; re-reading the moved field is refused.
+        let field_then_other = and_then(lambda(user_call(vec![
+            access(app, IrType::WebApp),
+            access(tag, IrType::Int),
+        ])));
+        assert!(!moves(&app_record, &field_then_other));
+        let field_twice = and_then(lambda(user_call(vec![
+            access(app, IrType::WebApp),
+            access(app, IrType::WebApp),
+        ])));
+        assert!(moves(&app_record, &field_twice));
+
+        // A double move inside a closure on one branch still refuses.
+        let branched = Expr::If {
+            cond: Box::new(Expr::Bool(true)),
+            then_: Box::new(twice),
+            else_: Box::new(Expr::Int(0)),
+        };
+        assert!(moves(&wrap_task, &branched));
 
         // A lambda in a re-callable kernel slot is refused like any other.
         let mapped = call(

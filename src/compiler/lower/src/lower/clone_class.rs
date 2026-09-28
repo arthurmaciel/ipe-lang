@@ -1063,15 +1063,16 @@ pub(super) fn reject_nonclone_value_reuse(
         return Err(super::unsupported(span, Feature::NonCloneValueReuse));
     }
     // A re-callable closure holds its capture by reference on each call, so a
-    // move of a non-`Clone` capture out of it cannot type-check (E0507). A
-    // bare function binder is exempt: its closure reads ride the `Arc`
-    // promotion or the consume-once reuse gate instead.
+    // move of a non-`Clone` capture out of it cannot type-check (E0507); any
+    // closure body reading its capture after moving it is E0382. A bare
+    // function binder is exempt: its closure reads ride the `Arc` promotion or
+    // the consume-once reuse gate instead.
     if never_clones
         && !matches!(
             ir_ty,
             IrType::Fun(..) | IrType::SharedFun(..) | IrType::FnOnceChain(..)
         )
-        && super::nonclone_moves_out_of_recallable_closure(env, sym, ir_ty, body)
+        && super::nonclone_closure_move_refused(env, sym, ir_ty, body)
     {
         return Err(super::unsupported(span, Feature::NonCloneCapture));
     }

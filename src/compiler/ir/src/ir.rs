@@ -3225,9 +3225,27 @@ impl Callee {
     /// The single ordering every evaluation-order analysis walks, so the
     /// argument reversal is decided once ([`Self::evaluates_args_reversed`]).
     #[must_use]
-    pub fn args_in_eval_order<'a>(&self, args: &'a [Expr]) -> EvalOrder<'a> {
+    pub fn args_in_eval_order<'a>(
+        &self,
+        args: &'a [Expr],
+    ) -> EvalOrder<std::slice::Iter<'a, Expr>> {
         EvalOrder {
             args: args.iter(),
+            reversed: self.evaluates_args_reversed(),
+        }
+    }
+
+    /// A call's arguments paired with their IR index, in emitted evaluation order.
+    ///
+    /// The same ordering as [`Self::args_in_eval_order`], for an analysis that
+    /// also reads a per-slot fact such as [`Self::lambda_arg_runs_once`].
+    #[must_use]
+    pub fn indexed_args_in_eval_order<'a>(
+        &self,
+        args: &'a [Expr],
+    ) -> EvalOrder<std::iter::Enumerate<std::slice::Iter<'a, Expr>>> {
+        EvalOrder {
+            args: args.iter().enumerate(),
             reversed: self.evaluates_args_reversed(),
         }
     }
@@ -3256,13 +3274,13 @@ impl Callee {
 
 /// A call's arguments in emitted evaluation order ([`Callee::args_in_eval_order`]).
 #[derive(Debug, Clone)]
-pub struct EvalOrder<'a> {
-    args: std::slice::Iter<'a, Expr>,
+pub struct EvalOrder<I> {
+    args: I,
     reversed: bool,
 }
 
-impl<'a> Iterator for EvalOrder<'a> {
-    type Item = &'a Expr;
+impl<I: DoubleEndedIterator> Iterator for EvalOrder<I> {
+    type Item = I::Item;
 
     fn next(&mut self) -> Option<Self::Item> {
         if self.reversed {
