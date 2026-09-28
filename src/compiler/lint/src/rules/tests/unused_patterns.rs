@@ -130,9 +130,9 @@ fn a_shadowed_read_hides_the_outer_binder_rather_than_inventing_one() {
 #[test]
 fn a_taken_underscore_name_falls_back_to_a_wildcard() {
     let read = "module Main exposing (f)\n\nf x _x =\n    _x\n";
-    assert!(fixes_in(PARAMS, read) == vec![Some("_".to_owned())]);
+    assert_eq!(fixes_in(PARAMS, read), vec![Some("_".to_owned())]);
     let sibling = "module Main exposing (f)\n\nf x _x =\n    0\n";
-    assert!(fixes_in(PARAMS, sibling) == vec![Some("_".to_owned())]);
+    assert_eq!(fixes_in(PARAMS, sibling), vec![Some("_".to_owned())]);
 }
 
 #[test]
