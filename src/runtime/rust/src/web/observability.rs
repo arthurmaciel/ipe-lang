@@ -89,8 +89,8 @@ pub async fn track(
     // Gate the console + metrics surface (off / production-auth) before serving.
     let path = req.uri().path().to_string();
     let method = req.method().as_str().to_string();
-    if (path == "/_ipe/metrics" || path.starts_with("/_ipe/console"))
-        && let Some(blocked) = super::console::gate_blocked(req.headers())
+    if let Some(surface) = super::console::Surface::of_path(&path)
+        && let Some(blocked) = super::console::gate_blocked(surface, req.headers())
     {
         super::super::telemetry::record_request(blocked.status().as_u16());
         return blocked;

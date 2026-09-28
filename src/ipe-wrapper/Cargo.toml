@@ -10,9 +10,6 @@ path = "src/main.rs"
 
 [dependencies]
 ipe_sandbox = { path = "../compiler/sandbox" }
-# Scratch-directory names draw from each target's real CSPRNG with no weaker
-# fallback (`getrandom(2)` / `BCryptGenRandom`).
-getrandom = { version = "0.3", features = ["std"] }
 
 [dev-dependencies]
 ipe_kernels = { path = "../compiler/kernels" }

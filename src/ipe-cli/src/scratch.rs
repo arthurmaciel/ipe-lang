@@ -1,10 +1,11 @@
 //! Unpredictable, exclusively-created scratch paths for temporary I/O.
 //!
-//! Every constructor generates a name that contains 128 bits of OS entropy (not
-//! just a PID), opens with `O_EXCL` / `DirBuilder` + exclusive-create semantics
-//! so a pre-seeded symlink or a pre-existing entry causes a retry rather than
-//! being followed, and mode-restricts the result to the owner.  The RAII wrappers
-//! remove the resource on drop, so callers do not need manual cleanup.
+//! Naming, exclusive creation, and owner privacy are all
+//! [`ipe_sandbox::private_scratch`]'s: every name carries 128 bits of OS CSPRNG
+//! entropy, a pre-existing entry or pre-seeded symlink causes a bounded retry
+//! rather than being followed, and a location that cannot be proven private is
+//! refused.  The RAII wrappers remove the resource on drop, so callers do not
+//! need manual cleanup.
 //!
 //! The [`ScratchFile::file`] field exposes the *owned* [`std::fs::File`] handle
 //! so callers can read back what they wrote without re-opening by name.  Reading
@@ -15,53 +16,16 @@ use std::fs::File;
 use std::io::{self, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
-/// Maximum retry attempts when an exclusive-create collision occurs.
-const MAX_RETRIES: usize = 8;
-
-/// Read 16 bytes (128 bits) from the OS CSPRNG.
-///
-/// `getrandom` reaches each target's real CSPRNG (`getrandom(2)` on Linux,
-/// `BCryptGenRandom` on Windows) with no weaker fallback; an unavailable source
-/// fails the construction rather than silently weakening the name.
-fn read_entropy() -> io::Result<[u8; 16]> {
-    let mut buf = [0u8; 16];
-    getrandom::fill(&mut buf)?;
-    Ok(buf)
-}
-
-/// Format 16 entropy bytes as a 32-character lowercase hex string.
-fn hex32(bytes: [u8; 16]) -> String {
-    use std::fmt::Write as _;
-    let mut s = String::with_capacity(32);
-    for b in bytes {
-        let _ = write!(s, "{b:02x}");
-    }
-    s
-}
-
-/// Generate one candidate name: `<prefix>-<pid>-<32 hex entropy chars>`.
-///
-/// The PID component is included so names from different processes sharing a
-/// prefix are trivially distinguishable in diagnostics, but the 128-bit entropy
-/// is what makes the name unpredictable.
-fn candidate_name(prefix: &str) -> io::Result<String> {
-    let entropy = read_entropy()?;
-    Ok(format!(
-        "{}-{}-{}",
-        prefix,
-        std::process::id(),
-        hex32(entropy)
-    ))
-}
+use ipe_sandbox::private_scratch::{create_unique_dir, create_unique_file};
 
 // ── ScratchDir ───────────────────────────────────────────────────────────────
 
-/// An exclusively-created, mode-0700, unpredictably-named temporary directory.
+/// An exclusively-created, owner-private, unpredictably-named temporary directory.
 ///
 /// Constructed via [`ScratchDir::new`] (base = `temp_dir()`) or
-/// [`ScratchDir::new_under`] (caller-supplied base), both of which loop on
-/// `AlreadyExists` (bounded by [`MAX_RETRIES`]) rather than removing and
-/// recreating a pre-existing entry.  The directory is removed on drop
+/// [`ScratchDir::new_under`] (caller-supplied base), both of which retry a
+/// colliding name a bounded number of times rather than removing and recreating
+/// a pre-existing entry.  The directory is removed on drop
 /// (best-effort); call [`ScratchDir::into_path`] to transfer ownership without
 /// automatic cleanup.
 ///
@@ -77,8 +41,7 @@ impl ScratchDir {
     ///
     /// # Errors
     ///
-    /// Returns an [`io::Error`] when entropy cannot be read or when all
-    /// [`MAX_RETRIES`] attempts fail with `AlreadyExists`.
+    /// As [`ipe_sandbox::private_scratch::create_unique_dir`].
     pub fn new(prefix: &str) -> io::Result<Self> {
         Self::new_under(&std::env::temp_dir(), prefix)
     }
@@ -93,24 +56,11 @@ impl ScratchDir {
     ///
     /// # Errors
     ///
-    /// Returns an [`io::Error`] when `base` cannot be created, when entropy
-    /// cannot be read, or when all [`MAX_RETRIES`] attempts fail with
-    /// `AlreadyExists`.
+    /// Returns an [`io::Error`] when `base` cannot be created, or as
+    /// [`ipe_sandbox::private_scratch::create_unique_dir`].
     pub fn new_under(base: &Path, prefix: &str) -> io::Result<Self> {
         std::fs::create_dir_all(base)?;
-        for _ in 0..MAX_RETRIES {
-            let name = candidate_name(prefix)?;
-            let path = base.join(&name);
-            match exclusive_mkdir(&path) {
-                Ok(()) => return Ok(Self(path)),
-                Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {}
-                Err(e) => return Err(e),
-            }
-        }
-        Err(io::Error::new(
-            io::ErrorKind::AlreadyExists,
-            "could not create a unique scratch directory after repeated attempts",
-        ))
+        Ok(Self(create_unique_dir(base, prefix)?))
     }
 
     /// The path of this scratch directory.
@@ -122,8 +72,9 @@ impl ScratchDir {
     /// Build a path for a child entry *inside* this directory.
     ///
     /// The child is not created by this call; use the returned path to create
-    /// it.  Because the directory itself is mode 0700, a child created inside
-    /// it is not reachable by other users even when its own mode is broader.
+    /// it.  Because the directory itself is owner-private, a child created
+    /// inside it is not reachable by other users even when its own mode is
+    /// broader.
     #[must_use]
     pub fn child(&self, name: &str) -> PathBuf {
         self.0.join(name)
@@ -148,36 +99,12 @@ impl Drop for ScratchDir {
     }
 }
 
-/// Create a directory exclusively — fail with `AlreadyExists` rather than
-/// following a pre-existing entry or a symlink.
-///
-/// Uses a plain `create_dir` (not `create_dir_all`) so that only the final
-/// component is created and any pre-existing entry — including a dangling
-/// symlink — produces `AlreadyExists` rather than silently succeeding.
-#[cfg(unix)]
-fn exclusive_mkdir(path: &Path) -> io::Result<()> {
-    use std::os::unix::fs::DirBuilderExt as _;
-    std::fs::DirBuilder::new()
-        .mode(0o700)
-        .recursive(false)
-        .create(path)
-}
-
-#[cfg(not(unix))]
-fn exclusive_mkdir(path: &Path) -> io::Result<()> {
-    // On non-Unix there is no portable mode bit; the directory is created with
-    // default permissions.  Exclusive creation (fail on AlreadyExists) still
-    // holds because `create_dir` (not `create_dir_all`) is used.
-    std::fs::create_dir(path)
-}
-
 // ── ScratchFile ──────────────────────────────────────────────────────────────
 
-/// An exclusively-created, mode-0600, unpredictably-named temporary file.
+/// An exclusively-created, owner-private, unpredictably-named temporary file.
 ///
-/// Constructed only via [`ScratchFile::create`], which opens with
-/// `O_CREAT|O_EXCL` (via `create_new`) so a pre-existing file or symlink
-/// causes a retry.  The owned [`File`] handle in [`ScratchFile::file`]
+/// Constructed only via [`ScratchFile::create`], which creates exclusively
+/// (`create_new`) so a pre-existing file or symlink causes a retry.  The owned [`File`] handle in [`ScratchFile::file`]
 /// outlives the path name: callers MUST read back written bytes through the
 /// handle rather than re-opening by name, so the bytes read are the bytes
 /// that were written to this specific inode — a re-open by name races.
@@ -201,23 +128,10 @@ impl ScratchFile {
     ///
     /// # Errors
     ///
-    /// Returns an [`io::Error`] when entropy cannot be read or when all
-    /// [`MAX_RETRIES`] attempts fail.
+    /// As [`ipe_sandbox::private_scratch::create_unique_file`].
     pub fn create(prefix: &str) -> io::Result<Self> {
-        let base = std::env::temp_dir();
-        for _ in 0..MAX_RETRIES {
-            let name = candidate_name(prefix)?;
-            let path = base.join(&name);
-            match exclusive_open(&path) {
-                Ok(file) => return Ok(Self { path, file }),
-                Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {}
-                Err(e) => return Err(e),
-            }
-        }
-        Err(io::Error::new(
-            io::ErrorKind::AlreadyExists,
-            "could not create a unique scratch file after repeated attempts",
-        ))
+        let (path, file) = create_unique_file(&std::env::temp_dir(), prefix)?;
+        Ok(Self { path, file })
     }
 
     /// The path of this scratch file.
@@ -261,27 +175,6 @@ impl Drop for ScratchFile {
     fn drop(&mut self) {
         let _ = std::fs::remove_file(&self.path);
     }
-}
-
-/// Open a file exclusively at `path` with mode 0600 (owner read/write only).
-#[cfg(unix)]
-fn exclusive_open(path: &Path) -> io::Result<File> {
-    use std::os::unix::fs::OpenOptionsExt as _;
-    std::fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create_new(true)
-        .mode(0o600)
-        .open(path)
-}
-
-#[cfg(not(unix))]
-fn exclusive_open(path: &Path) -> io::Result<File> {
-    std::fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create_new(true)
-        .open(path)
 }
 
 // ── Tests ────────────────────────────────────────────────────────────────────

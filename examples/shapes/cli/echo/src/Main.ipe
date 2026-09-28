@@ -3,8 +3,9 @@ module Main exposing (main)
 {-|
 A line-oriented TEA echo over the canonical `Cli.tea` surface.
 
-`Cli.tea` re-exports the terminal `appLines` entry: the `view` renders a
-`Lines Msg` prompt, and the `onLine` callback maps each stdin line to a `Msg`.
+The `view` renders a `Lines Msg` prompt; line input is a subscription —
+`subscriptions` returns `Sub.onLine onLine`, and `onLine` maps each stdin line
+to a `Msg`.
 Each non-empty line is echoed back and counted.
 
 Type a line and press Enter to echo it; `q` (or Ctrl-D) quits.
@@ -63,7 +64,7 @@ view model =
 
 subscriptions : Model -> Sub Msg
 subscriptions _model =
-    Sub.none
+    Sub.onLine onLine
 
 
 onLine : String -> Msg
@@ -85,5 +86,4 @@ main =
         , update = update
         , view = view
         , subscriptions = subscriptions
-        , onLine = onLine
         }

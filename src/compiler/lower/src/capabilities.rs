@@ -11,6 +11,8 @@ use std::collections::BTreeSet;
 
 use ipe_ir::{Capability, Program};
 
+pub use crate::lower::{ReachedCapabilities, capabilities_reached_from};
+
 /// The security capabilities a program exercises, inferred from its reachable
 /// kernels and any `Rust.` crossing.
 ///
@@ -204,5 +206,40 @@ mod tests {
                 Capability::Env,
             ]))
         );
+    }
+
+    /// Lower `source` and run the root-seeded reachability scan with every
+    /// module a root (`roots`) or none, or `None` if any stage rejects it.
+    fn reached_of(source: &str, roots: bool) -> Option<super::ReachedCapabilities> {
+        let mut i = Interner::new();
+        let src = ipe_parse::parse_module(source, &mut i).ok()?;
+        let m = ipe_canon::canonicalise(&src, &mut i).ok()?;
+        let types = ipe_types::infer(&m, &mut i).ok()?;
+        let program: Program = crate::lower(&m, &types, &mut i, "", "").ok()?;
+        Some(super::capabilities_reached_from(&program, &i, |_| roots))
+    }
+
+    const NETWORK_AND_UNSAFE_LIB: &str = "module Lib exposing (fetch, x)\nimport Ipe.Http\nimport Ipe.Html.Unsafe\nfetch = Http.request\nx : Int\nx = 5\n";
+
+    /// A root module's every function is a seed, called locally or not, so its
+    /// kernel effect is reached; the import-derived `Unsafe` is left to the
+    /// caller.
+    #[test]
+    fn a_root_module_reaches_its_uncalled_export() {
+        let reached = reached_of(NETWORK_AND_UNSAFE_LIB, true);
+        assert!(
+            reached.as_ref().is_some_and(|r| r.capabilities
+                == std::collections::BTreeSet::from([Capability::Network])
+                && r.reached_homes.len() == 1),
+            "expected exactly `network` from the one root module, got {reached:?}"
+        );
+    }
+
+    /// With no root module nothing is reached, so a module no root calls into
+    /// discloses none of its kernels.
+    #[test]
+    fn a_module_no_root_reaches_discloses_nothing() {
+        let reached = reached_of(NETWORK_AND_UNSAFE_LIB, false);
+        assert_eq!(reached, Some(super::ReachedCapabilities::default()));
     }
 }

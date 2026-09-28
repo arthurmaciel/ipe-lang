@@ -10,7 +10,7 @@ import Ipe.Ui.Cli as Ui
 import Ipe.Ui.Cli exposing (Lines)
 import Ipe.Tea.Terminal.Cmd
 import Ipe.String
-import Ipe.Tea.Terminal.Sub
+import Ipe.Tea.Cli.Sub
 
 type Msg
     = LineReceived String
@@ -34,7 +34,7 @@ view model =
 
 subscriptions : Model -> Sub Msg
 subscriptions _ =
-    Sub.none
+    Sub.onLine onLine
 
 onLine : String -> Msg
 onLine l =
@@ -46,5 +46,4 @@ main =
         , update = update
         , view = view
         , subscriptions = subscriptions
-        , onLine = onLine
         }

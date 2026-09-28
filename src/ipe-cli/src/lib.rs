@@ -69,6 +69,7 @@ pub mod runtime_embed;
 pub mod scratch;
 pub mod screen;
 pub mod signing;
+pub mod ssh_signing_key;
 pub mod style;
 pub mod text;
 pub mod toolchain;

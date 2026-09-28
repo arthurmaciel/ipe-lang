@@ -15,7 +15,7 @@ import Ipe.Tea.Cli as Cli
 import Ipe.Ui.Cli as Ui
 import Ipe.Ui.Cli exposing (Lines)
 import Ipe.Tea.Terminal.Cmd
-import Ipe.Tea.Terminal.Sub
+import Ipe.Tea.Cli.Sub
 import Ipe.Url as Url
 import Ipe.Url.Parser as Parser
 
@@ -135,7 +135,7 @@ view model =
 
 subscriptions : Model -> Sub Msg
 subscriptions _model =
-    Sub.none
+    Sub.onLine onLine
 
 
 onLine : String -> Msg
@@ -149,5 +149,4 @@ main =
         , update = update
         , view = view
         , subscriptions = subscriptions
-        , onLine = onLine
         }

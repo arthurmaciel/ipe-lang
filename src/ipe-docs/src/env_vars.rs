@@ -220,11 +220,11 @@ pub static ENV_VARS: &[EnvVar] = &[
     EnvVar {
         name: "IPE_PUBLISH_SIGNING_KEY",
         default: "unset",
-        purpose: "Path to the SSH private key used to sign a package before publishing. \
-                  When set, `ipe publish` signs the package archive and attaches the \
-                  signature; when unset, publish is refused for registries that require \
-                  signed submissions. Provide via your secret manager; never commit the \
-                  key file path alongside the key itself.",
+        purpose: "Path to the SSH private-key file `ipe package publish` signs the index \
+                  commit with (its public half must be registered as a signing key on your \
+                  GitHub account). Overrides the key `ipe login --signing-key` stored; when \
+                  set but not a readable file, publish refuses rather than fall back. \
+                  Unset with no stored key, publish refuses.",
         subsystem: Subsystem::Build,
         class: Class::Secret,
     },
@@ -347,17 +347,26 @@ pub static ENV_VARS: &[EnvVar] = &[
     EnvVar {
         name: "IPE_ADMIN_TOKEN",
         default: "unset",
-        purpose: "Bearer token granting access to the embedded developer console in \
-                  production. Provide via your secret manager; never commit. Falls back \
-                  to `IPE_CONSOLE_TOKEN`, then `IPE_METRICS_TOKEN`.",
+        purpose: "Admin token (`Bearer`, or the `Basic` password) granting access to the \
+                  embedded developer console and `/_ipe/metrics` in production or under \
+                  `IPE_CONSOLE_AUTH=token`. Provide via your secret manager; never commit. \
+                  Falls back to the in-code `Console.adminToken`, then `IPE_CONSOLE_TOKEN`. \
+                  A non-UTF-8 value refuses every admin request and keeps the console \
+                  unmounted in production.",
         subsystem: Subsystem::Console,
         class: Class::Secret,
     },
     EnvVar {
         name: "IPE_CONSOLE_AUTH",
-        default: "unset (token in production, off in dev)",
-        purpose: "Console authentication mode: `token` (bearer-token gate), `off` \
-                  (disable auth — dev only). Unset uses the production/dev heuristic.",
+        default: "unset (token in production, open in dev)",
+        purpose: "Console authentication mode: `token` (admin-token gate, enforced in \
+                  every posture, dev included), `off` (console disabled), `app` (app \
+                  callback; mounted but answers 501 on the Rust runtime). The posture \
+                  picks the default only when the variable is unset or blank; any other \
+                  value (including a non-UTF-8 one) disables the console. The effective \
+                  posture, mode, and source are logged once at startup \
+                  (`[ipe.console] auth posture=… mode=… source=env|env-invalid|posture-default`); \
+                  no token is ever logged.",
         subsystem: Subsystem::Console,
         class: Class::SecurityTunable,
     },
@@ -456,8 +465,11 @@ pub static ENV_VARS: &[EnvVar] = &[
     EnvVar {
         name: "IPE_METRICS_TOKEN",
         default: "unset",
-        purpose: "Deprecated alias for `IPE_ADMIN_TOKEN`. Prefer `IPE_ADMIN_TOKEN`. \
-                  Provide via your secret manager; never commit.",
+        purpose: "Metrics-scrape token (`Bearer`, or the `Basic` password) authorizing \
+                  `/_ipe/metrics` only, never the console; the admin token is accepted \
+                  there too. Falls back to the in-code `Console.metricsToken`. A non-UTF-8 \
+                  value refuses every metrics-token request. Provide via your secret \
+                  manager; never commit.",
         subsystem: Subsystem::Console,
         class: Class::Secret,
     },
