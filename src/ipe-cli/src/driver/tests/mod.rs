@@ -751,14 +751,16 @@ fn find_manifest_stops_at_a_symlinked_home() {
     std::os::unix::fs::symlink(&real_home, &link_home).expect("symlink home");
     let via_real = real_home.join("src").join("Main.ipe");
     let via_link = link_home.join("src").join("Main.ipe");
-    let link_ceiling = CanonicalCeiling::of(&link_home);
-    let real_ceiling = CanonicalCeiling::of(&real_home);
-    let real_under_link =
-        find_manifest_bounded(&via_real, Some(&link_ceiling), MAX_MANIFEST_WALK_DEPTH);
-    let link_under_real =
-        find_manifest_bounded(&via_link, Some(&real_ceiling), MAX_MANIFEST_WALK_DEPTH);
-    let unbounded = find_manifest_bounded(&via_link, None, MAX_MANIFEST_WALK_DEPTH);
+    let link_ceiling = HomeCeiling::of(Some(&link_home));
+    let real_ceiling = HomeCeiling::of(Some(&real_home));
+    let real_under_link = find_manifest_bounded(&via_real, &link_ceiling, MAX_MANIFEST_WALK_DEPTH);
+    let link_under_real = find_manifest_bounded(&via_link, &real_ceiling, MAX_MANIFEST_WALK_DEPTH);
+    let unbounded = find_manifest_bounded(&via_link, &HomeCeiling::Absent, MAX_MANIFEST_WALK_DEPTH);
     let _ = fs::remove_dir_all(&tmp);
+    assert!(
+        matches!(&link_ceiling, HomeCeiling::At(_)),
+        "{link_ceiling:?}"
+    );
     assert_eq!(
         link_ceiling, real_ceiling,
         "both spellings resolve to one ceiling"
@@ -796,8 +798,8 @@ fn find_manifest_ignores_a_manifest_above_home() {
         "module Package exposing (package)\n",
     )
     .expect("write planted package.ipe");
-    let home = CanonicalCeiling::of(&tmp.join("home"));
-    let found = find_manifest_bounded(&main_ipe, Some(&home), MAX_MANIFEST_WALK_DEPTH);
+    let home = HomeCeiling::of(Some(&tmp.join("home")));
+    let found = find_manifest_bounded(&main_ipe, &home, MAX_MANIFEST_WALK_DEPTH);
     let _ = fs::remove_dir_all(&tmp);
     assert!(matches!(found, Ok(None)), "{found:?}");
 }
@@ -806,7 +808,7 @@ fn find_manifest_ignores_a_manifest_above_home() {
 #[test]
 fn find_manifest_refuses_a_walk_past_the_depth_cap() {
     let (tmp, main_ipe) = manifest_walk_tree("depth_cap", "a/b");
-    let refused = find_manifest_bounded(&main_ipe, None, 2);
+    let refused = find_manifest_bounded(&main_ipe, &HomeCeiling::Absent, 2);
     let _ = fs::remove_dir_all(&tmp);
     assert!(
         matches!(&refused, Err(CliError::DiscoveryLimitReached { .. })),
@@ -821,12 +823,131 @@ fn find_manifest_finds_a_manifest_at_the_depth_cap() {
     let (tmp, main_ipe) = manifest_walk_tree("at_depth_cap", "a/b");
     let manifest = tmp.join("a").join("b").join("package.ipe");
     fs::write(&manifest, "module Package exposing (package)\n").expect("write package.ipe");
-    let found = find_manifest_bounded(&main_ipe, None, 2);
+    let found = find_manifest_bounded(&main_ipe, &HomeCeiling::Absent, 2);
     let _ = fs::remove_dir_all(&tmp);
     assert!(
         matches!(&found, Ok(Some(path)) if *path == manifest),
         "{found:?}"
     );
+}
+
+/// A home reached through an alias stops a walk whose path steps through a symlinked subdirectory.
+///
+/// The project lives outside the home and is reached through a symlink
+/// inside it, so no canonical ancestor of the project is the home; the
+/// lexical steps still cross the home, and its identity ends the walk.
+#[cfg(unix)]
+#[test]
+fn find_manifest_stops_at_an_aliased_home_above_a_symlinked_subdir() {
+    let (tmp, _) = manifest_walk_tree("aliased_home", "data/code/proj");
+    fs::write(
+        tmp.join("package.ipe"),
+        "module Package exposing (package)\n",
+    )
+    .expect("write planted package.ipe");
+    let real_home = tmp.join("var_home");
+    fs::create_dir_all(&real_home).expect("create home");
+    let home_alias = tmp.join("home_link");
+    std::os::unix::fs::symlink(&real_home, &home_alias).expect("symlink home alias");
+    std::os::unix::fs::symlink(tmp.join("data").join("code"), real_home.join("code"))
+        .expect("symlink code/ into home");
+    let file_under = |root: &Path| root.join("code").join("proj").join("src").join("Main.ipe");
+    let ceiling = HomeCeiling::of(Some(&home_alias));
+    let via_alias =
+        find_manifest_bounded(&file_under(&home_alias), &ceiling, MAX_MANIFEST_WALK_DEPTH);
+    let via_real =
+        find_manifest_bounded(&file_under(&real_home), &ceiling, MAX_MANIFEST_WALK_DEPTH);
+    let unbounded = find_manifest_bounded(
+        &file_under(&home_alias),
+        &HomeCeiling::Absent,
+        MAX_MANIFEST_WALK_DEPTH,
+    );
+    let _ = fs::remove_dir_all(&tmp);
+    assert!(matches!(via_alias, Ok(None)), "{via_alias:?}");
+    assert!(matches!(via_real, Ok(None)), "{via_real:?}");
+    assert!(
+        !matches!(unbounded, Ok(None)),
+        "without the ceiling the planted manifest is reached: {unbounded:?}"
+    );
+}
+
+/// A symlink inside a package whose target sits shallow still finds the package's manifest.
+///
+/// The walk steps the path as given, so the target's own ancestors never
+/// decide where the walk goes.
+#[cfg(unix)]
+#[test]
+fn find_manifest_follows_the_lexical_path_through_a_shallow_symlink() {
+    let (tmp, _) = manifest_walk_tree("shallow_link", "s");
+    let pkg = tmp.join("pkg");
+    fs::create_dir_all(pkg.join("sub")).expect("create pkg/sub/");
+    let manifest = pkg.join("package.ipe");
+    fs::write(&manifest, "module Package exposing (package)\n").expect("write package.ipe");
+    std::os::unix::fs::symlink(tmp.join("s").join("src"), pkg.join("sub").join("deep"))
+        .expect("symlink deep/");
+    let main_ipe = pkg.join("sub").join("deep").join("Main.ipe");
+    let found = find_manifest_bounded(
+        &main_ipe,
+        &HomeCeiling::of(Some(&tmp)),
+        MAX_MANIFEST_WALK_DEPTH,
+    );
+    let _ = fs::remove_dir_all(&tmp);
+    assert!(
+        matches!(&found, Ok(Some(path)) if *path == manifest),
+        "{found:?}"
+    );
+}
+
+/// An unreadable home confines the walk to the start directory.
+#[cfg(unix)]
+#[test]
+fn find_manifest_under_an_unreadable_home_examines_only_the_start_directory() {
+    let (tmp, main_ipe) = manifest_walk_tree("unreadable_home", "proj");
+    let above = tmp.join("proj").join("package.ipe");
+    fs::write(&above, "module Package exposing (package)\n").expect("write package.ipe");
+    let skipped =
+        find_manifest_bounded(&main_ipe, &HomeCeiling::Unreadable, MAX_MANIFEST_WALK_DEPTH);
+    let beside = tmp.join("proj").join("src").join("package.ipe");
+    fs::write(&beside, "module Package exposing (package)\n").expect("write package.ipe");
+    let found = find_manifest_bounded(&main_ipe, &HomeCeiling::Unreadable, MAX_MANIFEST_WALK_DEPTH);
+    let _ = fs::remove_dir_all(&tmp);
+    assert!(matches!(skipped, Ok(None)), "{skipped:?}");
+    assert!(
+        matches!(&found, Ok(Some(path)) if *path == beside),
+        "{found:?}"
+    );
+}
+
+/// No configured home, or a home that does not exist, sets no ceiling.
+#[test]
+fn a_missing_home_sets_no_ceiling() {
+    let missing = std::env::temp_dir().join(format!(
+        "ipec_manifest_walk_missing_home_{}",
+        std::process::id()
+    ));
+    let _ = fs::remove_dir_all(&missing);
+    assert_eq!(HomeCeiling::of(None), HomeCeiling::Absent);
+    assert_eq!(HomeCeiling::of(Some(&missing)), HomeCeiling::Absent);
+}
+
+/// Two spellings of one directory share an identity; two directories never do.
+#[cfg(unix)]
+#[test]
+fn dir_identity_is_independent_of_spelling() {
+    let (tmp, _) = manifest_walk_tree("identity", "a");
+    let other = tmp.join("b");
+    fs::create_dir_all(&other).expect("create b/");
+    let alias = tmp.join("a_link");
+    std::os::unix::fs::symlink(tmp.join("a"), &alias).expect("symlink a/");
+    let direct = DirIdentity::read(&tmp.join("a")).ok();
+    let aliased = DirIdentity::read(&alias).ok();
+    let dotted = DirIdentity::read(&tmp.join("a").join("src").join("..")).ok();
+    let distinct = DirIdentity::read(&other).ok();
+    let _ = fs::remove_dir_all(&tmp);
+    assert!(direct.is_some(), "identity of a/ is readable");
+    assert_eq!(direct, aliased);
+    assert_eq!(direct, dotted);
+    assert_ne!(direct, distinct);
 }
 
 // -----------------------------------------------------------------------

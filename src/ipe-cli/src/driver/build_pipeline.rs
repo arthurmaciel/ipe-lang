@@ -652,27 +652,87 @@ pub const MAX_MANIFEST_WALK_DEPTH: usize = 64;
 /// Entries whose presence marks a directory as a version-control root.
 const VCS_ROOT_MARKERS: [&str; 3] = [".git", ".hg", ".jj"];
 
-/// A manifest-walk ceiling held as its canonical path, so any alias of it stops the walk.
+/// The identity of a directory, independent of the path spelling that reached it.
 ///
-/// Built once from a directory such as the user's home: a home reached
-/// through a symlink (`/home/u` naming `/var/home/u`) is the same ceiling
-/// whichever spelling the walk passes through.
+/// On Unix the device and inode pair; elsewhere the canonical path. Two
+/// spellings of one directory (a symlinked home, an aliased mount) compare
+/// equal, and two directories never do.
 #[derive(Clone, PartialEq, Eq, Debug)]
-pub struct CanonicalCeiling(PathBuf);
+pub struct DirIdentity(DirIdentityKey);
 
-impl CanonicalCeiling {
-    /// The ceiling at `dir`'s canonical path, or at `dir` as given when it cannot be resolved.
+#[cfg(unix)]
+type DirIdentityKey = (u64, u64);
+#[cfg(not(unix))]
+type DirIdentityKey = PathBuf;
+
+impl DirIdentity {
+    /// The identity of the directory `dir` resolves to.
     ///
-    /// An unresolvable directory still bounds the walk by its spelling, so a
-    /// failed resolve never removes the ceiling.
+    /// # Errors
+    ///
+    /// The I/O error that kept `dir` from being inspected.
+    pub fn read(dir: &Path) -> std::io::Result<Self> {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt as _;
+            std::fs::metadata(dir).map(|meta| Self((meta.dev(), meta.ino())))
+        }
+        #[cfg(not(unix))]
+        {
+            std::fs::canonicalize(dir).map(Self)
+        }
+    }
+}
+
+/// Whether `err` shows that no directory exists at the inspected path.
+fn names_no_directory(err: &std::io::Error) -> bool {
+    matches!(
+        err.kind(),
+        std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
+    )
+}
+
+/// How the user's home bounds a manifest walk.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub enum HomeCeiling {
+    /// No home directory is configured, or none exists at the configured path.
+    ///
+    /// A directory that does not exist is no ancestor of any file, so only
+    /// version-control roots and the depth cap bound the walk.
+    Absent,
+    /// The walk stops at the directory with this identity.
+    At(DirIdentity),
+    /// A home exists but its identity cannot be read.
+    ///
+    /// No directory above the start can be shown to lie below the home, so
+    /// the walk examines the start directory alone.
+    Unreadable,
+}
+
+impl HomeCeiling {
+    /// The ceiling a configured `home` sets, read once.
     #[must_use]
-    pub fn of(dir: &Path) -> Self {
-        Self(std::fs::canonicalize(dir).unwrap_or_else(|_| dir.to_path_buf()))
+    pub fn of(home: Option<&Path>) -> Self {
+        home.map_or(Self::Absent, |dir| match DirIdentity::read(dir) {
+            Ok(identity) => Self::At(identity),
+            Err(err) if names_no_directory(&err) => Self::Absent,
+            Err(_) => Self::Unreadable,
+        })
     }
 
-    /// Whether the directory spelled `lexical`, canonically `canonical`, is this ceiling.
-    fn is(&self, lexical: &Path, canonical: Option<&Path>) -> bool {
-        self.0 == lexical || canonical.is_some_and(|dir| self.0 == dir)
+    /// Whether the walk ends at `here` once its manifest has been looked for.
+    ///
+    /// A directory that exists but whose identity cannot be read may be the
+    /// home, so it ends the walk.
+    fn stops_at(&self, here: &Path) -> bool {
+        match self {
+            Self::Absent => false,
+            Self::Unreadable => true,
+            Self::At(home) => match DirIdentity::read(here) {
+                Ok(identity) => identity == *home,
+                Err(err) => !names_no_directory(&err),
+            },
+        }
     }
 }
 
@@ -693,8 +753,8 @@ impl CanonicalCeiling {
 ///
 /// As [`find_manifest_bounded`].
 pub fn find_manifest_for_ipe_file(ipe_file: &Path) -> Result<Option<PathBuf>, CliError> {
-    let home = crate::env_dir::home().map(|home| CanonicalCeiling::of(&home));
-    find_manifest_bounded(ipe_file, home.as_ref(), MAX_MANIFEST_WALK_DEPTH)
+    let home = HomeCeiling::of(crate::env_dir::home().as_deref());
+    find_manifest_bounded(ipe_file, &home, MAX_MANIFEST_WALK_DEPTH)
 }
 
 /// Walk up from `ipe_file`'s parent to the nearest `package.ipe`, below a ceiling.
@@ -704,11 +764,10 @@ pub fn find_manifest_for_ipe_file(ipe_file: &Path) -> Result<Option<PathBuf>, Cl
 /// `home`, or is the filesystem root. At most `max_depth` directories are
 /// examined.
 ///
-/// Manifests and markers are probed on the path as given, so a found
-/// manifest keeps the spelling the caller used. The `home` ceiling is also
-/// matched against the canonical form of each directory, resolved once at
-/// the walk start and stepped up in lockstep, so a home reached through a
-/// symlink still stops the walk.
+/// The walk steps up the path as given, so a found manifest keeps the
+/// spelling the caller used. The `home` ceiling is matched by the
+/// [`DirIdentity`] of each directory stepped through, never by its
+/// spelling, so a home reached through any alias still stops the walk.
 ///
 /// # Errors
 ///
@@ -718,12 +777,10 @@ pub fn find_manifest_for_ipe_file(ipe_file: &Path) -> Result<Option<PathBuf>, Cl
 /// directories pass with neither a manifest nor a ceiling.
 pub fn find_manifest_bounded(
     ipe_file: &Path,
-    home: Option<&CanonicalCeiling>,
+    home: &HomeCeiling,
     max_depth: usize,
 ) -> Result<Option<PathBuf>, CliError> {
     let mut dir = ipe_file.parent();
-    let canonical_start = dir.and_then(|start| std::fs::canonicalize(start).ok());
-    let mut canonical_dir = canonical_start.as_deref();
     for _ in 0..max_depth {
         let Some(here) = dir else {
             return Ok(None);
@@ -732,7 +789,7 @@ pub fn find_manifest_bounded(
             crate::owner_trust::admit_discovered_manifest(&manifest)?;
             return Ok(Some(manifest));
         }
-        let at_ceiling = home.is_some_and(|ceiling| ceiling.is(here, canonical_dir))
+        let at_ceiling = home.stops_at(here)
             || VCS_ROOT_MARKERS
                 .iter()
                 .any(|marker| here.join(marker).symlink_metadata().is_ok());
@@ -740,7 +797,6 @@ pub fn find_manifest_bounded(
             return Ok(None);
         }
         dir = here.parent();
-        canonical_dir = canonical_dir.and_then(Path::parent);
     }
     if dir.is_none() {
         return Ok(None);
