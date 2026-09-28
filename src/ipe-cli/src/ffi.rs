@@ -649,20 +649,27 @@ fn make_scratch_dir(krate: &str) -> Result<PathBuf, CliError> {
 /// them (`CARGO_HOME`/`RUSTUP_HOME`, else under the user's home).
 ///
 /// # Errors
-/// [`CliError::EnvDirNotAbsolute`] when `CARGO_HOME` or `RUSTUP_HOME` is set
-/// to a relative path.
+/// - [`CliError::EnvDirNotAbsolute`] when `CARGO_HOME` or `RUSTUP_HOME` is set
+///   to a relative path.
+/// - [`CliError::Usage`] when a bind would expose the cargo home (see
+///   [`toolchain_binds_from`]).
 fn toolchain_binds(inspector: &Path) -> Result<ToolchainBinds, CliError> {
     let cargo_home = crate::env_dir::tool_home("CARGO_HOME", ".cargo")?;
     let rustup_home = crate::env_dir::tool_home("RUSTUP_HOME", ".rustup")?;
-    Ok(toolchain_binds_from(inspector, cargo_home, rustup_home))
+    toolchain_binds_from(inspector, cargo_home, rustup_home)
 }
 
 /// The toolchain binds over already-resolved tool homes.
+///
+/// # Errors
+/// [`CliError::Usage`] when any read-only bind equals or contains the cargo
+/// home (a rustup home at or above it, or an inspector directory above it):
+/// binding it would expose `credentials.toml` inside the jail.
 fn toolchain_binds_from(
     inspector: &Path,
     cargo_home: Option<PathBuf>,
     rustup_home: Option<PathBuf>,
-) -> ToolchainBinds {
+) -> Result<ToolchainBinds, CliError> {
     let mut toolchain_ro_binds = Vec::new();
     // The inspector binary may live under a masked mount ($HOME target dirs) —
     // re-bind its directory read-only.
@@ -670,7 +677,7 @@ fn toolchain_binds_from(
         toolchain_ro_binds.push(dir.to_path_buf());
     }
     let mut path_prepend = Vec::new();
-    if let Some(cargo_bin) = cargo_home.map(|home| home.join("bin"))
+    if let Some(cargo_bin) = cargo_home.as_ref().map(|home| home.join("bin"))
         && cargo_bin.is_dir()
     {
         path_prepend.push(cargo_bin.clone());
@@ -682,7 +689,62 @@ fn toolchain_binds_from(
     if let Some(rustup) = &rustup_home {
         toolchain_ro_binds.push(rustup.clone());
     }
-    (toolchain_ro_binds, path_prepend, rustup_home)
+    if let Some(cargo_home) = &cargo_home
+        && let Some(bind) = toolchain_ro_binds
+            .iter()
+            .find(|bind| path_covers(bind, cargo_home))
+    {
+        return Err(CliError::Usage(
+            text::msg::ffi_toolchain_bind_exposes_cargo_home(
+                &bind.display(),
+                &cargo_home.display(),
+            ),
+        ));
+    }
+    Ok((toolchain_ro_binds, path_prepend, rustup_home))
+}
+
+/// Whether binding `outer` makes `inner` visible: `inner` equals or lies under
+/// `outer`, judged both lexically and with symlinks resolved. Either judgement
+/// finding containment is enough.
+fn path_covers(outer: &Path, inner: &Path) -> bool {
+    lexical_normal(inner).starts_with(lexical_normal(outer))
+        || resolved(inner).starts_with(resolved(outer))
+}
+
+/// `path` without `.` components, each `..` removing the component before it
+/// (never above the root); trailing separators vanish with the components.
+fn lexical_normal(path: &Path) -> PathBuf {
+    use std::path::Component;
+    let mut out = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::Prefix(_) | Component::RootDir | Component::Normal(_) => {
+                out.push(component.as_os_str());
+            }
+            Component::CurDir => {}
+            Component::ParentDir => {
+                out.pop();
+            }
+        }
+    }
+    out
+}
+
+/// `path` with symlinks resolved as the kernel resolves them (a `..` after a
+/// symlink climbs from the link's target). A path that does not exist yet
+/// resolves through its longest existing ancestor, with the missing tail
+/// appended and the whole normalized lexically.
+fn resolved(path: &Path) -> PathBuf {
+    for ancestor in path.ancestors() {
+        if let Ok(real) = std::fs::canonicalize(ancestor) {
+            return match path.strip_prefix(ancestor) {
+                Ok(tail) => lexical_normal(&real.join(tail)),
+                Err(_) => lexical_normal(path),
+            };
+        }
+    }
+    lexical_normal(path)
 }
 
 /// The jail resource caps: the fail-closed defaults, each raisable through an
@@ -954,8 +1016,8 @@ fn run_inspector_job(job: &InspectorJob, allow_build_scripts: bool) -> Result<St
         SandboxRoute::Jailed => {}
     }
 
-    let scoped_tmp = make_scratch_dir(scratch_hint)?;
     let binds = toolchain_binds(&inspector)?;
+    let scoped_tmp = make_scratch_dir(scratch_hint)?;
     let result = match job {
         // A single crate — or a single local wrapper crate — is one
         // populate-free bind over the historical two phases (fetch,
@@ -3991,37 +4053,147 @@ version = \"1\"
         let _ = std::fs::remove_dir_all(&scratch);
     }
 
-    #[test]
-    fn toolchain_binds_never_include_the_cargo_parent_or_credentials() {
-        let tmp = std::env::temp_dir().join(format!("ipe-t1-toolbinds-{}", std::process::id()));
+    /// A fresh scratch root per test, so parallel tests never share homes.
+    fn toolbinds_root(tag: &str) -> PathBuf {
+        let tmp = std::env::temp_dir().join(format!("ipe-toolbinds-{tag}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).expect("mk scratch root");
+        tmp
+    }
+
+    /// A cargo home at `cargo_home` holding `bin/` and `credentials.toml`.
+    fn plant_cargo_home(cargo_home: &Path) {
+        std::fs::create_dir_all(cargo_home.join("bin")).expect("mk cargo bin");
+        std::fs::write(cargo_home.join("credentials.toml"), "").expect("credentials");
+    }
+
+    const TEST_INSPECTOR: &str = "/opt/ipe/bin/ipe-ffi-inspector";
+
+    #[test]
+    fn toolchain_binds_over_disjoint_homes_expose_only_cargo_bin() {
+        let tmp = toolbinds_root("disjoint");
         let cargo_home = tmp.join(".cargo");
         let rustup_home = tmp.join(".rustup");
-        std::fs::create_dir_all(cargo_home.join("bin")).expect("mk cargo bin");
+        plant_cargo_home(&cargo_home);
         std::fs::create_dir_all(&rustup_home).expect("mk rustup home");
-        std::fs::write(cargo_home.join("credentials.toml"), "").expect("credentials");
-        let inspector = PathBuf::from("/opt/ipe/bin/ipe-ffi-inspector");
-        let (binds, path, rustup) = toolchain_binds_from(
-            &inspector,
+        let got = toolchain_binds_from(
+            Path::new(TEST_INSPECTOR),
             Some(cargo_home.clone()),
             Some(rustup_home.clone()),
         );
+        let _ = std::fs::remove_dir_all(&tmp);
+        assert!(got.is_ok(), "disjoint homes must be accepted: {got:?}");
+        let Ok((binds, path, rustup)) = got else {
+            return;
+        };
         assert!(binds.contains(&cargo_home.join("bin")), "{binds:?}");
         assert!(!binds.contains(&cargo_home), "{binds:?}");
+        assert!(
+            binds.iter().all(|b| !path_covers(b, &cargo_home)),
+            "no bind may contain the cargo home: {binds:?}"
+        );
         assert_eq!(path, vec![cargo_home.join("bin")]);
         assert_eq!(rustup, Some(rustup_home));
+    }
+
+    /// `toolchain_binds_from` over `(cargo_home, rustup_home)` must refuse.
+    fn assert_toolchain_refused(cargo_home: PathBuf, rustup_home: PathBuf, inspector: &Path) {
+        let got = toolchain_binds_from(inspector, Some(cargo_home), Some(rustup_home));
+        assert!(
+            matches!(&got, Err(CliError::Usage(m)) if m.contains("credentials.toml")),
+            "a bind exposing the cargo home must be refused: {got:?}"
+        );
+    }
+
+    #[test]
+    fn toolchain_binds_refuse_a_rustup_home_equal_to_the_cargo_home() {
+        let tmp = toolbinds_root("equal");
+        let home = tmp.join("toolchain");
+        plant_cargo_home(&home);
+        assert_toolchain_refused(home.clone(), home, Path::new(TEST_INSPECTOR));
         let _ = std::fs::remove_dir_all(&tmp);
-        for b in &binds {
-            let s = b.to_string_lossy();
-            assert!(
-                !s.ends_with("/.cargo"),
-                "the ~/.cargo parent must never be bound: {s}"
-            );
-            assert!(
-                !s.contains("credentials"),
-                "no credentials path may be bound: {s}"
-            );
-        }
+    }
+
+    #[test]
+    fn toolchain_binds_refuse_a_cargo_home_nested_under_the_rustup_home() {
+        let tmp = toolbinds_root("nested");
+        let rustup_home = tmp.join("rustup");
+        let cargo_home = rustup_home.join("cargo");
+        plant_cargo_home(&cargo_home);
+        assert_toolchain_refused(cargo_home, rustup_home, Path::new(TEST_INSPECTOR));
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn toolchain_binds_refuse_a_dot_dot_or_trailing_slash_spelled_ancestor() {
+        let tmp = toolbinds_root("dotdot");
+        let cargo_home = tmp.join(".cargo");
+        let rustup_dir = tmp.join(".rustup");
+        plant_cargo_home(&cargo_home);
+        std::fs::create_dir_all(&rustup_dir).expect("mk rustup home");
+        // `<tmp>/.rustup/..` names `<tmp>`, the cargo home's parent.
+        assert_toolchain_refused(
+            cargo_home.clone(),
+            rustup_dir.join(".."),
+            Path::new(TEST_INSPECTOR),
+        );
+        // `<tmp>/.cargo/bin/../` names the cargo home itself.
+        let mut spelled = cargo_home.join("bin").join("..").into_os_string();
+        spelled.push("/");
+        assert_toolchain_refused(
+            cargo_home.clone(),
+            PathBuf::from(spelled),
+            Path::new(TEST_INSPECTOR),
+        );
+        // The cargo home spelled with `..` against a plain rustup home above it.
+        assert_toolchain_refused(
+            rustup_dir.join("..").join(".cargo"),
+            tmp.clone(),
+            Path::new(TEST_INSPECTOR),
+        );
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn toolchain_binds_refuse_a_rustup_home_symlinked_to_the_cargo_home() {
+        let tmp = toolbinds_root("symlink");
+        let cargo_home = tmp.join(".cargo");
+        plant_cargo_home(&cargo_home);
+        let link = tmp.join("rustup-link");
+        std::os::unix::fs::symlink(&cargo_home, &link).expect("symlink");
+        assert_toolchain_refused(cargo_home.clone(), link, Path::new(TEST_INSPECTOR));
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn toolchain_binds_refuse_an_inspector_dir_above_the_cargo_home() {
+        let tmp = toolbinds_root("inspector");
+        let cargo_home = tmp.join(".cargo");
+        let rustup_home = tmp.join("elsewhere").join(".rustup");
+        plant_cargo_home(&cargo_home);
+        std::fs::create_dir_all(&rustup_home).expect("mk rustup home");
+        assert_toolchain_refused(cargo_home, rustup_home, &tmp.join("ipe-ffi-inspector"));
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn a_cargo_home_holding_the_rustup_home_is_accepted() {
+        let tmp = toolbinds_root("rustup-inside");
+        let cargo_home = tmp.join(".cargo");
+        let rustup_home = cargo_home.join("rustup");
+        plant_cargo_home(&cargo_home);
+        std::fs::create_dir_all(&rustup_home).expect("mk rustup home");
+        let got = toolchain_binds_from(
+            Path::new(TEST_INSPECTOR),
+            Some(cargo_home.clone()),
+            Some(rustup_home),
+        );
+        let _ = std::fs::remove_dir_all(&tmp);
+        assert!(
+            matches!(&got, Ok((binds, _, _)) if !binds.contains(&cargo_home)),
+            "a rustup home below the cargo home does not expose it: {got:?}"
+        );
     }
 
     #[test]

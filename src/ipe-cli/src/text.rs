@@ -1078,6 +1078,8 @@ messages! {
     ffi_asserted_empty_catalog = "ffi-asserted-empty-catalog";
     /// `ipe add` could not prepare its scratch directory.
     ffi_add_scratch_dir(detail) = "ffi-add-scratch-dir";
+    /// `ipe add` would bind a toolchain directory that exposes the cargo home.
+    ffi_toolchain_bind_exposes_cargo_home(bind, cargo_home) = "ffi-toolchain-bind-exposes-cargo-home";
     /// `ipe install` could not write the manifest.
     ffi_install_manifest_write_failed(detail) = "ffi-install-manifest-write-failed";
     /// `ipe install` could not write a manifest chunk.

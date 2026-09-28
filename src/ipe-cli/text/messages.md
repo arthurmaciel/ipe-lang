@@ -1225,6 +1225,10 @@ internal: asserted calls validated against an empty FFI catalog
 
 ipe add: scratch dir: {detail}
 
+## ffi-toolchain-bind-exposes-cargo-home
+
+ipe add: refusing to bind `{bind}` into the jail: it contains the cargo home `{cargo_home}` and its `credentials.toml` — set RUSTUP_HOME and CARGO_HOME to disjoint directories
+
 ## ffi-install-manifest-write-failed
 
 ipe install: manifest write failed: {detail}

@@ -11,16 +11,15 @@
 use std::ffi::OsString;
 use std::path::PathBuf;
 
-/// The platform variable naming the invoking user's home directory.
-#[cfg(windows)]
-pub const HOME_VAR: &str = "USERPROFILE";
-/// The platform variable naming the invoking user's home directory.
-#[cfg(not(windows))]
-pub const HOME_VAR: &str = "HOME";
-
 /// The invoking user's home directory, when the environment names an absolute one.
 #[must_use]
 pub fn home_dir() -> Option<PathBuf> {
+    /// The platform variable naming the invoking user's home directory.
+    #[cfg(windows)]
+    const HOME_VAR: &str = "USERPROFILE";
+    /// The platform variable naming the invoking user's home directory.
+    #[cfg(not(windows))]
+    const HOME_VAR: &str = "HOME";
     home_dir_from(std::env::var_os(HOME_VAR))
 }
 
