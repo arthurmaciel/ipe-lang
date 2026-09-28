@@ -46,6 +46,10 @@ jobs:
             artifact: ipe-darwin-arm64
             target: aarch64-apple-darwin
             ext: ''
+          - os: macos-15-intel
+            artifact: ipe-darwin-x64
+            target: x86_64-apple-darwin
+            ext: ''
           - os: windows-latest
             artifact: ipe-windows-x64
             target: x86_64-pc-windows-msvc
@@ -169,7 +173,7 @@ jobs:
       # published; the failure keeps our attention rather than being swallowed.
       - name: Verify every platform published
         run: |
-          expected="ipe-linux-x64 ipe-linux-arm64 ipe-darwin-arm64 ipe-windows-x64 ipe-freebsd-x64"
+          expected="ipe-linux-x64 ipe-linux-arm64 ipe-darwin-arm64 ipe-darwin-x64 ipe-windows-x64 ipe-freebsd-x64"
           missing=0
           echo "## Release asset completeness" >> "$GITHUB_STEP_SUMMARY"
           for name in $expected; do
