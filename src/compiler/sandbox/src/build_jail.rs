@@ -828,8 +828,9 @@ const BRING_UP_MACH_SERVICES: &[&str] = &[
     "com.apple.trustd",
 ];
 
-/// The fixed system/toolchain trees the Seatbelt profile allows reading. The
-/// profile masks nothing beneath them, so [`checked_sbpl`] refuses a cargo home
+/// The fixed system/toolchain trees the Seatbelt profile allows reading.
+///
+/// The profile masks nothing beneath them, so [`checked_sbpl`] refuses a cargo home
 /// at or under any of them before a profile is rendered.
 #[cfg(any(target_os = "macos", test))]
 pub const MACOS_READ_ROOTS: [&str; 11] = [
