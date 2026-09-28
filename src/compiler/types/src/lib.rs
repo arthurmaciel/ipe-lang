@@ -395,7 +395,7 @@ fn infer_core(
             .collect()
     });
     // The user enums whose definition embeds a function payload — consulted by
-    // every concrete equality / stringify obligation so a `==` / `toString` on a
+    // every concrete equality / stringify obligation so a `==` / `{{…}}` on a
     // function-carrying enum fails closed (the payload arrow is invisible in a
     // `Ty::Con`'s applied type arguments; see [`fn_embedding_enums`]).
     let fn_enums = fn_embedding_enums(&m.unions, &dep_unions);
@@ -602,6 +602,13 @@ fn infer_core(
     // generated `Into<SqlParam>` impl (`ipe_backend_rust::project`), so an
     // empty params list becomes a concretely-typed empty `Vec<SqlValue>`.
     let sqlvalue_sym = lift!(interner.intern("SqlValue"));
+    // Interpolation defaulting: the element variable of a `Log.*With`
+    // attribute list the program never pinned (an empty `[]` literal). Left
+    // un-defaulted, the lowerer's wildcard-`any` convention would resolve it to
+    // `IrType::Json`, which the sealed runtime `IpeInterpolate` trait does not
+    // cover; `String` is in the closed interpolable set, so the empty list
+    // becomes a concretely-typed `Vec<String>`.
+    let string_sym = lift!(interner.intern("String"));
     for (v, orig_bounds, span, home) in &generated.super_vars {
         let root = lift!(uf.find(*v));
         match lift!(uf.content(root)) {
@@ -655,6 +662,32 @@ fn infer_core(
                     Content::Structure(FlatType::Con {
                         module: Vec::new(),
                         name: sqlvalue_sym,
+                        args: Vec::new(),
+                    }),
+                ));
+            }
+            // An unpinned interpolation flex defaults to `String` — see the
+            // doc comment above `string_sym`.
+            Content::Super {
+                rigid: false,
+                bounds,
+            } if bounds.has_interpolable() => {
+                let string_ty = Ty::Con {
+                    module: Vec::new(),
+                    name: string_sym,
+                    args: Vec::new(),
+                };
+                if !concrete_super_ok(interner, bounds, &string_ty, &enum_embeds_fn) {
+                    return Err((
+                        super_unsatisfied(interner, bounds, &string_ty, *span),
+                        home.clone(),
+                    ));
+                }
+                lift!(uf.set_content(
+                    root,
+                    Content::Structure(FlatType::Con {
+                        module: Vec::new(),
+                        name: string_sym,
                         args: Vec::new(),
                     }),
                 ));
@@ -1371,17 +1404,22 @@ fn super_bounds_satisfied(
     // runtime has a `From<T> for SqlParam` impl for — the bare scalars
     // `ipe_runtime::db` binds directly, plus the `SqlValue` ADT itself.
     let sql_param_ok = super_bounds::prim_satisfies_sql_param(prim);
+    // Interpolation obligation (`{{…}}` / `Log.*With` attributes): exactly the
+    // closed scalar set the runtime's sealed `IpeInterpolate` trait covers. A
+    // bare variable (`prim == None`) fails closed like every sibling.
+    let interpolable_ok = super_bounds::prim_satisfies_interpolable(prim);
     (!bounds.has_number() || number_ok)
         && (!bounds.has_ord() || ord_ok)
         && (!bounds.has_eq() || ty_is_equatable(ty, enum_embeds_fn))
         && (!bounds.has_comparable_key() || key_ok)
-        // Stringify (`toString` / `Log.*With`): showable iff it contains no
-        // function anywhere — the SAME "no function nested" rule as equatable,
-        // since every non-function type derives `IpeStringify`.
+        // Stringify (`Debug.log` / `Error.toString`): showable iff it contains
+        // no function anywhere — the SAME "no function nested" rule as
+        // equatable, since every non-function type derives `IpeStringify`.
         && (!bounds.has_show() || ty_is_equatable(ty, enum_embeds_fn))
         && (!bounds.has_append() || appendable_ok)
         && (!bounds.has_hof_kernel_result() || not_curried_ok)
         && (!bounds.has_sql_param() || sql_param_ok)
+        && (!bounds.has_interpolable() || interpolable_ok)
 }
 
 /// Whether a resolved concrete type satisfies super-type obligations `bounds`
@@ -1434,7 +1472,7 @@ fn canon_type_embeds_lambda(t: &canon::Type) -> bool {
 /// arrow is invisible in a `Ty::Con`'s type arguments (which carry only applied
 /// type parameters), so the structural [`ty_is_equatable`] walk cannot see it
 /// without this out-of-band definition lookup. Consulted at every concrete
-/// equality / stringify obligation so a `==` / `toString` on a function-carrying
+/// equality / stringify obligation so a `==` / `{{…}}` on a function-carrying
 /// enum fails closed (IPE-T0014) instead of emitting Rust that does not build.
 fn fn_embedding_enums(
     module_unions: &[canon::Union],
@@ -1511,7 +1549,12 @@ fn super_unsatisfied(interner: &Interner, bounds: TyBounds, ty: &Ty, span: Span)
         // sentence off this exact label.
         classes.push(ipe_diagnostics::HOF_KERNEL_RESULT_CLASS);
     }
-    let class = if classes.is_empty() {
+    // The interpolation obligation's closed scalar set is a subset of every
+    // sibling class's domain, so it alone names the failure; the shared label
+    // keys the renderer's tailored sentence (accepted scalars + the fix).
+    let class = if bounds.has_interpolable() {
+        ipe_diagnostics::INTERPOLABLE_CLASS.to_owned()
+    } else if classes.is_empty() {
         "Equatable".to_owned()
     } else {
         classes.join(" + ")
@@ -5756,15 +5799,15 @@ mod tests {
 
     /// A `Show`-bounded generic instantiated to a FUNCTION must be REJECTED by
     /// the shared use-site gate. The obligation models `describe : a -> String`
-    /// with `describe x = Basics.toString x` — a `Stringify` obligation on `a` —
-    /// instantiated to `someFn : Int -> Int`. Before the gate carried the `Show`
-    /// clause, `ipe` accepted this and the backend emitted
-    /// `fn describe<T0: IpeStringify>(..)` fed a closure — an E0277 at `cargo`.
+    /// with `describe x = Debug.log "x" x` — a `Stringify` obligation on `a` —
+    /// instantiated to `someFn : Int -> Int`. Without the gate's `Show` clause
+    /// the backend would emit `fn describe<T0: IpeStringify>(..)` fed a
+    /// closure — an E0277 at `cargo`.
     ///
     /// Driven directly against `super_bounds_satisfied` (like
     /// [`every_bound_bit_rejects_a_function_at_both_sites`]) rather than through
     /// a stdlib call: the single-module inference harness canonicalises `Main`
-    /// with no stdlib in scope, so a qualified `Basics.toString` dies at
+    /// with no stdlib in scope, so a qualified stdlib call dies at
     /// `UnknownModule` before any Show obligation is recorded — a refusal that
     /// never reaches this gate and holds green even with the `Show` clause
     /// deleted (vacuous). This construction exercises the `has_show()` conjunct
@@ -5829,6 +5872,108 @@ mod tests {
                 "a Stringify-satisfying non-function type (Int) must be accepted \
                  at {site:?}"
             );
+        }
+    }
+
+    /// `true` iff inference refused the program with the interpolation
+    /// IPE-T0014 — a canonicalisation error or any other refusal is `false`, so
+    /// a test asserting this cannot pass vacuously.
+    fn refused_as_not_interpolable(solved: &DResult<SolvedTypes>) -> bool {
+        matches!(
+            solved,
+            Err(Diagnostic::Type {
+                msg: TypeError::SuperTypeUnsatisfied { class, .. },
+                ..
+            }) if &**class == ipe_diagnostics::INTERPOLABLE_CLASS
+        )
+    }
+
+    /// Every non-scalar value interpolated with `{{…}}` is refused at type-check
+    /// (IPE-T0014): a record, a custom type, a `Maybe Int` and a `List String`.
+    /// None of them reaches a Debug rendering or an unbounded Rust generic.
+    #[test]
+    fn interpolating_a_non_scalar_is_refused() {
+        for (what, decls) in [
+            ("a record", "v =\n    { x = 1 }\n"),
+            ("a custom type", "type Color = Red | Blue\n\nv =\n    Red\n"),
+            ("a Maybe Int", "v =\n    Just 1\n"),
+            ("a List String", "v =\n    [ \"a\" ]\n"),
+        ] {
+            let src = format!("{M2C_HDR}{decls}\nmain =\n    \"\"\"v={{{{v}}}}\"\"\"\n");
+            let (solved, _i, _m) = infer_src(&src);
+            assert!(
+                refused_as_not_interpolable(&solved),
+                "interpolating {what} must be refused as not interpolable: {solved:?}"
+            );
+        }
+    }
+
+    /// A generic that interpolates its argument carries the interpolation
+    /// obligation to every caller: instantiating it at a record is refused at
+    /// the use site, exactly as a direct `{{record}}` is.
+    #[test]
+    fn interpolating_generic_used_at_a_record_is_refused() {
+        let src = format!(
+            "{M2C_HDR}describe : a -> String\ndescribe x =\n    \"\"\"<{{{{x}}}}>\"\"\"\n\n\
+             main =\n    describe {{ x = 1 }}\n"
+        );
+        let (solved, _i, _m) = infer_src(&src);
+        assert!(
+            refused_as_not_interpolable(&solved),
+            "an interpolating generic used at a record must be refused: {solved:?}"
+        );
+    }
+
+    /// The acceptance side: each of the five interpolable scalars type-checks.
+    #[test]
+    fn interpolating_each_scalar_is_accepted() {
+        let src = format!(
+            "{M2C_HDR}s =\n    \"text\"\n\nn =\n    1\n\nf =\n    1.5\n\nb =\n    True\n\n\
+             c =\n    'x'\n\n\
+             main =\n    \"\"\"{{{{s}}}} {{{{n}}}} {{{{f}}}} {{{{b}}}} {{{{c}}}}\"\"\"\n"
+        );
+        let (solved, _i, _m) = infer_src(&src);
+        assert!(
+            solved.is_ok(),
+            "String, Int, Float, Bool and Char must all interpolate: {solved:?}"
+        );
+    }
+
+    /// The gate itself: the interpolation obligation admits exactly the scalar
+    /// primitives, and refuses `Unit`, a `List Int` and a bare variable at both
+    /// use sites.
+    #[test]
+    fn interpolable_gate_admits_only_the_scalars() {
+        let mut i = Interner::new();
+        let mut prim = |name: &str, args: Vec<Ty>| Ty::Con {
+            module: Vec::new(),
+            name: i.intern(name).expect("intern a primitive name"),
+            args,
+        };
+        let int_ty = prim("Int", Vec::new());
+        let string_ty = prim("String", Vec::new());
+        let char_ty = prim("Char", Vec::new());
+        let unit_ty = prim("Unit", Vec::new());
+        let list_int = prim("List", vec![int_ty.clone()]);
+        let var_ty = Ty::Var(0);
+        let no_fn_enums = |_home: &[Symbol], _name: Symbol| false;
+        let bounds = TyBounds::interpolable();
+        for site in [
+            super_bounds::BoundSite::EmittedGeneric,
+            super_bounds::BoundSite::ConcretePin,
+        ] {
+            for ok in [&int_ty, &string_ty, &char_ty] {
+                assert!(
+                    super_bounds_satisfied(&i, bounds, ok, site, &no_fn_enums),
+                    "{ok:?} must be interpolable at {site:?}"
+                );
+            }
+            for bad in [&unit_ty, &list_int, &var_ty] {
+                assert!(
+                    !super_bounds_satisfied(&i, bounds, bad, site, &no_fn_enums),
+                    "{bad:?} must not be interpolable at {site:?}"
+                );
+            }
         }
     }
 }

@@ -1732,6 +1732,16 @@ fn type_label(msg: &TypeError) -> Option<String> {
                      callback must return a plain (non-function) value",
                     ty_to_string(found)
                 ))
+            } else if &**class == crate::diagnostic::INTERPOLABLE_CLASS {
+                Some(format!(
+                    "{} cannot be interpolated or logged — `{{{{…}}}}` and `Log.*With` \
+                     accept only {}; convert the value first with `String.fromInt`, \
+                     `String.fromFloat`, `String.fromBool` or `String.fromChar`, or \
+                     with your own function that renders a record or custom type as a \
+                     `String`",
+                    ty_to_string(found),
+                    crate::diagnostic::INTERPOLABLE_TYPES.join(", ")
+                ))
             } else {
                 Some(format!("{} is not a {class} type", ty_to_string(found)))
             }
@@ -2681,6 +2691,38 @@ mod tests {
         assert!(
             out2.contains("String is not a Number type"),
             "generic template regressed:\n{out2}"
+        );
+    }
+
+    #[test]
+    fn interpolable_super_type_names_the_scalars_and_the_fix() {
+        let src = "module Main exposing (main)\n\nmain =\n    foo\n";
+        let d = Diagnostic::Type {
+            span: Span::new(40, 43),
+            msg: TypeError::SuperTypeUnsatisfied {
+                class: crate::diagnostic::INTERPOLABLE_CLASS.into(),
+                found: Box::new(con("Maybe")),
+            },
+        };
+        let out = render(&d, "test.ipe", src);
+        assert!(
+            out.contains("Maybe cannot be interpolated or logged"),
+            "tailored sentence missing:\n{out}"
+        );
+        for ty in crate::diagnostic::INTERPOLABLE_TYPES {
+            assert!(out.contains(ty), "accepted type `{ty}` not named:\n{out}");
+        }
+        for conv in [
+            "String.fromInt",
+            "String.fromFloat",
+            "String.fromBool",
+            "String.fromChar",
+        ] {
+            assert!(out.contains(conv), "conversion `{conv}` not named:\n{out}");
+        }
+        assert!(
+            !out.contains("is not a interpolable"),
+            "generic template must not fire for the interpolation label:\n{out}"
         );
     }
 

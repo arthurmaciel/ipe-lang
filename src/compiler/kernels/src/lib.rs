@@ -1597,6 +1597,7 @@ pub enum StdlibKernel {
     StringToInt,
     StringToFloat,
     StringFromChar,
+    StringFromBool,
     StringFromList,
     StringConcat,
     StringWords,
@@ -1696,7 +1697,6 @@ pub enum StdlibKernel {
     BasicsFst,
     BasicsSnd,
     BasicsModBy,
-    BasicsToString,
     /// `clamp : comparable -> comparable -> comparable -> comparable`. Carries
     /// the `Comparable a` (Ord) obligation via `constrain_var_kernel`, exactly
     /// like `Math.min` / `Math.max`.
@@ -1813,6 +1813,12 @@ pub enum StdlibKernel {
     /// Qualifier `"_internal_"` — not registered in the canon `QUALIFIERS`
     /// table and excluded from the tripwire test.
     ResultOkDefault,
+    /// Internal: the `{{expr}}` string-interpolation renderer.
+    ///
+    /// Qualifier `"_internal_"` — no surface binding; canon inserts it around
+    /// every interpolated chunk, and its argument carries the interpolable
+    /// obligation (exactly `String` / `Int` / `Float` / `Bool` / `Char`).
+    Interpolate,
     // ── Math ────────────────────────────────────────────────────────────────
     MathMin,
     MathMax,
@@ -3541,7 +3547,7 @@ pub enum StdlibKernel {
     /// import-derived, and `use` is reached off a plain `import Ipe.Secret`.
     SecretUse,
     /// `Secret.redacted : Secret -> String` — explicit `"<redacted>"` (also
-    /// what `toString` / interpolation gives automatically — see
+    /// what `{{…}}` interpolation gives automatically — see
     /// `ipe_runtime::secret`'s hand-written `IpeStringify` impl).
     SecretRedacted,
 
@@ -3979,6 +3985,7 @@ impl StdlibKernel {
             Self::StringToInt => d("String", "toInt", 1, Pure, "string_to_int", IpeOrder),
             Self::StringToFloat => d("String", "toFloat", 1, Pure, "string_to_float", IpeOrder),
             Self::StringFromChar => d("String", "fromChar", 1, Pure, "string_from_char", IpeOrder),
+            Self::StringFromBool => d("String", "fromBool", 1, Pure, "string_from_bool", IpeOrder),
             Self::StringFromList => d("String", "fromList", 1, Pure, "string_from_list", IpeOrder),
             Self::StringConcat => d("String", "concat", 1, Pure, "string_concat", IpeOrder),
             Self::StringWords => d("String", "words", 1, Pure, "string_words", IpeOrder),
@@ -4127,7 +4134,6 @@ impl StdlibKernel {
             Self::BasicsSnd => d("Basics", "snd", 1, Pure, "basics_snd", IpeOrder),
             Self::BasicsModBy => d("Basics", "modBy", 2, Pure, "basics_mod_by", IpeOrder),
             Self::BasicsClamp => d("Basics", "clamp", 3, Pure, "basics_clamp", IpeOrder),
-            Self::BasicsToString => d("Basics", "toString", 1, Pure, "basics_to_string", IpeOrder),
             // ── Basics numerics ──────────────────────────────────────────
             Self::BasicsNegate => d("Basics", "negate", 1, Pure, "basics_negate", IpeOrder),
             Self::BasicsAbs => d("Basics", "abs", 1, Pure, "basics_abs", IpeOrder),
@@ -4346,6 +4352,14 @@ impl StdlibKernel {
             ),
             // Internal: qualifier starts with '_' → skipped by tripwire test.
             Self::ResultOkDefault => d("_internal_", "okDefault", 1, Pure, "ok_res", IpeOrder),
+            Self::Interpolate => d(
+                "_internal_",
+                "interpolate",
+                1,
+                Pure,
+                "interpolate_to_string",
+                IpeOrder,
+            ),
             // ── Math ────────────────────────────────────────────────────────
             Self::MathMin => d("Math", "min", 2, Pure, "math_min", IpeOrder),
             Self::MathMax => d("Math", "max", 2, Pure, "math_max", IpeOrder),
@@ -7510,6 +7524,7 @@ impl StdlibKernel {
         Self::StringToInt,
         Self::StringToFloat,
         Self::StringFromChar,
+        Self::StringFromBool,
         Self::StringFromList,
         Self::StringConcat,
         Self::StringWords,
@@ -7608,7 +7623,6 @@ impl StdlibKernel {
         Self::BasicsSnd,
         Self::BasicsModBy,
         Self::BasicsClamp,
-        Self::BasicsToString,
         // ── Basics numerics ──────────────────────────────────────────
         Self::BasicsNegate,
         Self::BasicsAbs,
@@ -7669,6 +7683,7 @@ impl StdlibKernel {
         Self::ResultToMaybe,
         Self::ResultFromMaybe,
         Self::ResultOkDefault, // qualifier "_internal_" → tripwire skips
+        Self::Interpolate,     // qualifier "_internal_" → tripwire skips
         // Math
         Self::MathMin,
         Self::MathMax,
@@ -8806,6 +8821,8 @@ impl StdlibKernel {
         match self {
             // Internal helper — surfaces as `Result.Ok` in diagnostics.
             Self::ResultOkDefault => "Result.Ok".to_owned(),
+            // Internal helper — surfaces as the interpolation syntax itself.
+            Self::Interpolate => "{{…}} interpolation".to_owned(),
             // Kernels relocated into `Ipe.Db.Unsafe` after the canon qualifier
             // `"Db"` was registered; the display path includes the sub-module.
             Self::DbExecRaw => "Db.Unsafe.unsafeExecRaw".to_owned(),
@@ -8878,6 +8895,7 @@ impl StdlibKernel {
         const CHAR_TO_BOOL: TyShape = TyShape::Fun(&CHAR, &BOOL);
         const CHAR_TO_INT: TyShape = TyShape::Fun(&CHAR, &INT);
         const CHAR_TO_STRING: TyShape = TyShape::Fun(&CHAR, &STRING);
+        const BOOL_TO_STRING: TyShape = TyShape::Fun(&BOOL, &STRING);
         const CHAR_TO_CHAR: TyShape = TyShape::Fun(&CHAR, &CHAR);
         const STRING_TO_INT: TyShape = TyShape::Fun(&STRING, &INT);
         const STRING_TO_BOOL: TyShape = TyShape::Fun(&STRING, &BOOL);
@@ -9014,7 +9032,7 @@ impl StdlibKernel {
         // clamp / min / max : a -> a -> a (base scheme; Ord obligation layered).
         const A_TO_A_TO_A: TyShape = TyShape::Fun(&A, &A_TO_A);
         const BASICS_CLAMP: TyShape = TyShape::Fun(&A, &A_TO_A_TO_A);
-        // toString : a -> String (base scheme; Stringify obligation layered).
+        // interpolate : a -> String (base scheme; interpolable obligation layered).
         const A_TO_STRING: TyShape = TyShape::Fun(&A, &STRING);
         // compare : a -> a -> Order (base scheme; Ord obligation layered).
         const A_TO_ORDER: TyShape = TyShape::Fun(&A, &ORDER);
@@ -11731,6 +11749,7 @@ impl StdlibKernel {
             | Self::MoneySymbol
             | Self::MoneyCurrencyName => Some(&STRING_TO_STRING),
             Self::StringFromChar | Self::CharToLower | Self::CharToUpper => Some(&CHAR_TO_STRING),
+            Self::StringFromBool => Some(&BOOL_TO_STRING),
             Self::StringAppend | Self::SystemGetenvOr => Some(&STRING_TO_STRING_TO_STRING),
             Self::StringContains
             | Self::StringStartsWith
@@ -11845,7 +11864,7 @@ impl StdlibKernel {
             Self::BasicsAlways => Some(&BASICS_ALWAYS),
             Self::BasicsModBy => Some(&INT_TO_INT_TO_INT_LEAF),
             Self::BasicsClamp => Some(&BASICS_CLAMP),
-            Self::BasicsToString => Some(&A_TO_STRING),
+            Self::Interpolate => Some(&A_TO_STRING),
             Self::BasicsMin | Self::BasicsMax | Self::MathMin | Self::MathMax => Some(&A_TO_A_TO_A),
             Self::BasicsCompare => Some(&BASICS_COMPARE),
 
@@ -11970,8 +11989,8 @@ impl StdlibKernel {
             Self::DbGetInt => Some(&DB_GET_INT),
             Self::DbGetBool => Some(&DB_GET_BOOL),
 
-            // ── Log (base schemes; the `*With` STRINGIFY obligation is layered
-            //    in `constrain_var_kernel`). ──
+            // ── Log (base schemes; the `*With` INTERPOLABLE obligation is
+            //    layered in `constrain_var_kernel`). ──
             Self::LogInfo | Self::LogDebug | Self::LogWarn | Self::LogError => {
                 Some(&STRING_TO_TASK_UNIT)
             }
@@ -13457,6 +13476,7 @@ impl StdlibKernel {
             | Self::StringToInt
             | Self::StringToFloat
             | Self::StringFromChar
+            | Self::StringFromBool
             | Self::StringFromList
             | Self::StringConcat
             | Self::StringWords
@@ -13593,7 +13613,7 @@ impl StdlibKernel {
             | Self::BasicsSnd
             | Self::BasicsModBy
             | Self::BasicsClamp
-            | Self::BasicsToString
+            | Self::Interpolate
             | Self::BasicsNegate
             | Self::BasicsAbs
             | Self::BasicsSqrt

@@ -87,8 +87,10 @@ parsed 2 contacts:
 
 A **triple-quoted string** `"""…"""` spans multiple lines, and its opening-line
 indentation margin is stripped — the block's layout in the source does not enter
-the value. Inside one, `{{expr}}` **interpolation** substitutes a value,
-auto-stringified through `Basics.toString`, so an `Int` needs no `String.fromInt`:
+the value. Inside one, `{{expr}}` **interpolation** substitutes a scalar
+(`String`, `Int`, `Float`, `Bool` or `Char`), rendered exactly as its
+`String.from*` conversion, so an `Int` needs no `String.fromInt`. Any other
+type is refused at type-check (IPE-T0014) — interpolate its fields instead:
 
 ```ipe
 banner : String -> Int -> String

@@ -287,7 +287,7 @@ const fn strip_prefix<'a>(mut hay: &'a [u8], mut prefix: &[u8]) -> Option<&'a [u
 }
 
 /// Whether `a` and `b` hold the same bytes.
-const fn bytes_eq(a: &[u8], b: &[u8]) -> bool {
+pub(crate) const fn bytes_eq(a: &[u8], b: &[u8]) -> bool {
     a.len() == b.len() && strip_prefix(a, b).is_some()
 }
 

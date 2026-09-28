@@ -32,7 +32,9 @@ emits one record at each of three severities plus one with structured context,
 sequenced as tasks.
 
 Each write names its severity in the call; the `*With` form attaches an ordered
-list of typed context values alongside the message:
+list of scalar context values — each a `String`, `Int`, `Float`, `Bool` or
+`Char` — alongside the message. A record, `Secret` or other opaque value is
+refused at type-check; convert it first (`Error.toString e`, `Secret.redacted s`):
 
 ```ipe
 main =

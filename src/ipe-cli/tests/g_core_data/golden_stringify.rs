@@ -1,11 +1,14 @@
-//! The STRINGIFY obligation (`Basics.toString : a -> String`, the shared
-//! lever for the whole Stringify-bounded family). The argument carries a bounded
-//! super-var → Rust `IpeStringify`. A scalar / record / ADT satisfies it; a bare
-//! function is rejected AT TYPE-CHECK (fail-closed), never emitting an unbounded
-//! `basics_to_string::<T>` that `cargo` would reject — the seal is preserved.
+//! The interpolable obligation of `{{expr}}` interpolation (the internal
+//! `Interpolate : a -> String` renderer) and `Log.*With` attributes.
 //!
-//! Positive case is `IPE_E2E`-gated (build + run). The negative case is a pure
-//! ipe compile (no cargo), so it always runs.
+//! The argument must be one of the closed scalar set `String` / `Int` /
+//! `Float` / `Bool` / `Char`, lowered to the runtime's sealed `IpeInterpolate`.
+//! A record, custom type or function is refused AT TYPE-CHECK (IPE-T0014,
+//! fail-closed), never emitting an `interpolate_to_string::<T>` that `cargo`
+//! would reject.
+//!
+//! Positive case is `IPE_E2E`-gated (build + run). The negative cases are pure
+//! ipe compiles (no cargo), so they always run.
 
 use std::path::{Path, PathBuf};
 
@@ -37,7 +40,8 @@ fn e2e_enabled() -> bool {
     std::env::var("IPE_E2E").is_ok()
 }
 
-/// `toString` on scalars compiles + runs (debug format: bool lowercases).
+/// Interpolating scalars compiles + runs (`Bool` renders lowercase, the
+/// `String.fromBool` form).
 #[test]
 fn tostring_scalars_run() {
     if !e2e_enabled() {
@@ -49,42 +53,36 @@ fn tostring_scalars_run() {
     assert_eq!(out.stdout.trim(), "42 true 3");
 }
 
-/// SEAL regression: `toString` on a concrete RECORD and ADT (alongside a scalar)
-/// must ipe-accept AND the emitted crate must `cargo build`. Before the fix,
-/// `basics_to_string<T: std::fmt::Display>` had no `Display` impl for a
-/// record/ADT, so `ipe build` exited 0 but the emitted crate failed `cargo
-/// build` with E0277 — an exit-0-then-cargo-fail SEAL breach. Routing the whole
-/// stringify family through `IpeStringify` (which every scalar AND every emitted
-/// composite implements) closes the class.
-///
-/// ipe-0 half runs unconditionally (cheap, no cargo); cargo-0 ∧ run-0 half is
-/// `IPE_E2E`-gated — the only check that would have caught the original breach.
+/// Interpolating a RECORD and a custom type is refused at ipe type-check with
+/// IPE-T0014 — never an ipe-accept followed by a `cargo` E0277, and never a
+/// `Debug` rendering of the composite. A pure compile — no `IPE_E2E` needed.
 #[test]
-fn tostring_record_and_adt_run() {
-    // ipe-0: the compiler must accept `toString` on a record + ADT + scalar.
-    let dir = compile_golden("m_tostring_composite");
-    if !e2e_enabled() {
+fn tostring_record_and_adt_are_refused() {
+    let root = repo_root();
+    let entry = golden_dir(&root, "m_tostring_composite").join("Main.ipe");
+    let out = crate::support::scratch_root().join("ipec_m_tostring_composite_refused");
+    let _ = std::fs::remove_dir_all(&out);
+    let runtime = ipe::resolve_runtime();
+    assert!(runtime.is_ok(), "runtime must resolve");
+    let Ok(runtime) = runtime else {
         return;
-    }
-    // cargo-0 ∧ run-0: the emitted crate builds and prints the composites.
-    let out = crate::support::build_and_run_emitted("m_tostring_composite", &dir);
+    };
+    let code = match ipe::build(&entry, &out, &runtime) {
+        Err(ipe::CliError::Pipeline { diag, .. }) => Some(diag.code()),
+        _ => None,
+    };
     assert_eq!(
-        out.exit_code,
-        Some(0),
-        "composite-toString crate must cargo-build AND exit 0 (no E0277); got {:?} \
-         (stdout: {:?})",
-        out.exit_code,
-        out.stdout
+        code,
+        Some(ipe_diagnostics::IPE_T0014),
+        "interpolating a record / custom type must be refused as not interpolable"
     );
-    // scalar `42`; record `{1 2}` (debug format, `_fieldIndex` order); ADT payload
-    // `Circle 5`; ADT nullary `Empty`.
-    assert_eq!(out.stdout.trim(), "42 | {1 2} | Circle 5 | Empty");
 }
 
-/// `Log.infoWith : String -> List a -> Task Error ()` with Stringify attrs
-/// compiles (the obligation on the list element) — a pure ipe compile.
+/// `Log.infoWith : String -> List a -> Task Error ()` with scalar attrs
+/// compiles (the interpolable obligation on the list element) — a pure ipe
+/// compile.
 #[test]
-fn log_info_with_stringify_attrs_compiles() {
+fn log_info_with_scalar_attrs_compiles() {
     let root = repo_root();
     let entry = golden_dir(&root, "m_log_with").join("Main.ipe");
     let out = crate::support::scratch_root().join("ipec_m_log_with_e2e");
@@ -102,8 +100,8 @@ fn log_info_with_stringify_attrs_compiles() {
     );
 }
 
-/// SEAL-PRESERVING negative gate: `toString` on a FUNCTION is rejected at ipe
-/// type-check (the Stringify obligation's `Fun` head-rejection), NOT deferred to
+/// SEAL-PRESERVING negative gate: interpolating a FUNCTION is rejected at ipe
+/// type-check (a function is outside the interpolable scalar set), NOT deferred to
 /// a cargo failure. A pure compile — no `IPE_E2E` needed.
 #[test]
 fn tostring_on_function_is_rejected_at_typecheck() {
@@ -119,7 +117,7 @@ fn tostring_on_function_is_rejected_at_typecheck() {
     let built = ipe::build(&entry, &out, &runtime);
     assert!(
         built.is_err(),
-        "toString on a function MUST fail at ipec type-check (Stringify obligation), \
+        "interpolating a function MUST fail at ipec type-check (interpolable obligation), \
          not exit 0 and defer to cargo",
     );
 }

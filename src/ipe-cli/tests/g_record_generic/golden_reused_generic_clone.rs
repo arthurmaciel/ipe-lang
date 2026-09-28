@@ -3,7 +3,7 @@
 //! Without the fix, `ipe build` exits 0, but the emitted Rust fails `cargo build` with
 //! E0382 (`use of moved value: x`) in the body of a function whose only generic
 //! is used MORE THAN ONCE in a by-value consuming position:
-//! `dup x = toString x ++ toString x` emits `basics_to_string(x)` TWICE with no
+//! `dup x = """{{x}}{{x}}"""` emits `interpolate_to_string(x)` TWICE with no
 //! intervening `.clone()`, moving `x` on the first call.
 //!
 //! Root cause: `clone_class(IrType::Generic(_))` returned `NonClone`
@@ -89,10 +89,11 @@ fn i189_ipec_accepts_and_clones_reused_generic() {
     );
 
     // The T5 rewrite must insert `.clone()` on the non-final use — the emitted
-    // body applies `basics_to_string` to `x.clone()` (first use) and then `x`
-    // (last use). Without the fix both were bare `basics_to_string(x)` → E0382.
+    // body applies `interpolate_to_string` to `x.clone()` (first use) and then
+    // `x` (last use). Without the fix both were bare `interpolate_to_string(x)`
+    // → E0382.
     assert!(
-        emitted.contains("basics_to_string(x.clone())"),
+        emitted.contains("interpolate_to_string(x.clone())"),
         "the reused generic param must be `.clone()`d on its non-final use \
          (#189); got emitted user source:\n{emitted}"
     );

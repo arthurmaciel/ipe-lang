@@ -560,6 +560,9 @@ fn bound_suffix(bounds: BoundSet) -> String {
     if bounds.has_show() {
         parts.push("Stringify");
     }
+    if bounds.has_interpolable() {
+        parts.push("Interpolable");
+    }
     format!(": {}", parts.join("+"))
 }
 

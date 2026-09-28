@@ -422,15 +422,6 @@ const RANDOM_GENERATOR: &str = include_str!("../Ipe/Random/Generator.ipe");
 /// kernel qualifier (NOT under `Ipe.Css`, so the disjointness invariant holds).
 const CSS: &str = include_str!("../Ipe/Css.ipe");
 
-/// `Ipe.ToString` — naming-consistency surface.
-///
-/// Thin pure-Ipê aliases to canonical kernels in their home modules so callers
-/// can write `ToString.fromInt n` without memorising the per-type kernel
-/// sub-namespace.  `fromTime` aliases `Ipe.Time.timeString` (the backed
-/// `Time_timeString` kernel).  Disjoint from `STDLIB_MODULE_QUALIFIERS` (no
-/// `"ToString"` entry exists in `STDLIB_MODULE_QUALIFIERS`).
-const TOSTRING_CORE: &str = include_str!("../Ipe/ToString.ipe");
-
 /// `Ipe.Test` — lightweight in-process test framework.
 ///
 /// Compiled pure-Ipê source that defines the `Test` / `TestResult` ADTs and
@@ -1488,10 +1479,6 @@ pub const COMPILED_STD_MODULES: &[CompiledStdModule] = &[
     CompiledStdModule {
         dotted: "Ipe.Css",
         source: CSS,
-    },
-    CompiledStdModule {
-        dotted: "Ipe.ToString",
-        source: TOSTRING_CORE,
     },
     CompiledStdModule {
         dotted: "Ipe.Test",

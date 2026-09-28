@@ -20,10 +20,10 @@ pub use diagnostic::{
     AliasExpansionKind, AppShape, Applicability, CaseDefect, CmdSubShapeMismatch,
     CodecAutoRejection, ConsentError, Construct, DResult, Diagnostic, Expected, ExpectedSet,
     ExposingDefect, Feature, FfiError, GenericAppEntryReach, HOF_KERNEL_RESULT_CLASS, HeaderDefect,
-    HelpLine, Hint, IfDefect, LetDefect, LowerError, MainRetName, ModelLeaf, ModulePlacementReason,
-    ModulePlacementRejection, NameError, ParseError, RustNameFoldKind, SandboxError, SealRejection,
-    SortedNames, SpanRole, StoreEqAccessorDefect, StoreSelectProjectionDefect, Suggestion,
-    TokenKind, TyDoc, TypeDeclDefect, TypeError,
+    HelpLine, Hint, INTERPOLABLE_CLASS, INTERPOLABLE_TYPES, IfDefect, LetDefect, LowerError,
+    MainRetName, ModelLeaf, ModulePlacementReason, ModulePlacementRejection, NameError, ParseError,
+    RustNameFoldKind, SandboxError, SealRejection, SortedNames, SpanRole, StoreEqAccessorDefect,
+    StoreSelectProjectionDefect, Suggestion, TokenKind, TyDoc, TypeDeclDefect, TypeError,
 };
 pub use render::{DOC_HINT_CMD, plain_message, render, render_json, render_ty};
 pub use span::{Located, Span};

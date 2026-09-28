@@ -958,6 +958,19 @@ pub enum AliasExpansionKind {
 /// template would read as a confusing double negative for this label.
 pub const HOF_KERNEL_RESULT_CLASS: &str = "non-function callback result (higher-order kernel)";
 
+/// The closed set of Ipê types that `{{…}}` interpolation and `Log.*With`
+/// attributes accept — the single table the type gate
+/// (`ipe_types::super_bounds::INTERPOLABLE`), the diagnostic sentence, and the
+/// runtime's sealed `IpeInterpolate` impl set are all checked against.
+pub const INTERPOLABLE_TYPES: [&str; 5] = ["String", "Int", "Float", "Bool", "Char"];
+
+/// Class label for the interpolation obligation.
+///
+/// Shared between the constructor (`ipe_types::super_unsatisfied`) and the
+/// renderer's tailored [`TypeError::SuperTypeUnsatisfied`] sentence, which
+/// names the accepted types and the conversion that fixes the call.
+pub const INTERPOLABLE_CLASS: &str = "interpolable scalar";
+
 /// Errors raised during type inference / checking.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum TypeError {
@@ -1018,7 +1031,9 @@ pub enum TypeError {
     /// super-type; `found` is the offending type. A `class` equal to
     /// [`HOF_KERNEL_RESULT_CLASS`] renders through a tailored sentence — the
     /// generic "`X` is not a `<class>` type" template reads as a confusing
-    /// double negative for that internal arity obligation. [IPE-T0014]
+    /// double negative for that internal arity obligation; a `class` equal to
+    /// [`INTERPOLABLE_CLASS`] renders a sentence naming the accepted scalars
+    /// and the conversion to apply. [IPE-T0014]
     SuperTypeUnsatisfied { class: Box<str>, found: Box<TyDoc> },
     /// A **parameter** pattern (lambda param, function-def head, or `let`
     /// binder) is **refutable** — it can fail to match some value of its type
