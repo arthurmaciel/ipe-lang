@@ -463,7 +463,10 @@ jobs:
     needs: changes
     if: (needs.changes.outputs.editors == 'true' || github.event_name != 'pull_request') && needs.changes.outputs.release_only != 'true'
     steps:
+      # Full history: the drift check resolves the Zed grammar pin as a commit.
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
       - uses: ./.github/actions/rust-toolchain-pinned
         with:
           targets: wasm32-wasip2
