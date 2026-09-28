@@ -416,6 +416,9 @@ enum SetupError {
     Occupied(PathBuf),
     /// A key file or the config dir is not private to the invoking user.
     NotOwnerOnly(PathBuf),
+    /// The stored key is already registered on GitHub but is not private to the
+    /// invoking user; it must be revoked on GitHub, never silently replaced.
+    StoredKeyExposed(PathBuf),
     /// The config dir cannot hold hard links, which storing the key relies on.
     LinkUnsupported {
         dir: PathBuf,
@@ -447,6 +450,9 @@ impl SetupError {
             Self::Occupied(path) => msg::signing_key_occupied(&shown_path(path)),
             Self::NotOwnerOnly(path) => {
                 msg::signing_key_not_owner_only(&shown_path(path), &SIGNING_KEY_ENV)
+            }
+            Self::StoredKeyExposed(path) => {
+                msg::signing_key_stored_exposed(&shown_path(path), &SIGNING_KEYS_SETTINGS)
             }
             Self::LinkUnsupported { dir, source } => msg::signing_key_link_unsupported(
                 &shown_path(dir),
@@ -667,7 +673,7 @@ fn set_up<C: Consent, R: SigningKeyRegistrar>(
             return Ok(SetupOutcome::AlreadyConfigured(path));
         }
         KeyLookup::EnvUnusable => return Ok(SetupOutcome::EnvUnusable),
-        KeyLookup::StoredExposed(path) => return Err(SetupError::NotOwnerOnly(path)),
+        KeyLookup::StoredExposed(path) => return Err(SetupError::StoredKeyExposed(path)),
         KeyLookup::StoredUnusable(path) => return Err(SetupError::Occupied(path)),
         KeyLookup::Missing => config_dir.ok_or(SetupError::NoConfigDir)?,
     };
@@ -793,6 +799,23 @@ fn run_interactive(env_value: Option<&OsStr>, config_dir: Option<&Path>) -> Resu
     Ok(())
 }
 
+/// The line `offer_after_login` prints without a terminal, if any: `Missing`
+/// gets the generic no-terminal hint; an exposed or unusable stored key gets
+/// its status line, so the reason it will not be used is spelled out even
+/// without a prompt; a usable key (env or stored) prints nothing.
+fn no_terminal_hint(
+    env_value: Option<&OsStr>,
+    config_dir: Option<&Path>,
+) -> Option<crate::text::Message> {
+    match lookup(env_value, config_dir) {
+        KeyLookup::Missing => Some(crate::text::msg::signing_key_hint_no_terminal()),
+        KeyLookup::StoredExposed(_) | KeyLookup::StoredUnusable(_) => {
+            Some(status_line(env_value, config_dir))
+        }
+        KeyLookup::Env(_) | KeyLookup::EnvUnusable | KeyLookup::Stored(_) => None,
+    }
+}
+
 /// After `ipe login` stored a token: offer signing-key setup when none is
 /// configured. Without a terminal nothing is asked — only a hint is printed.
 ///
@@ -805,12 +828,9 @@ pub(crate) fn offer_after_login() -> Result<(), CliError> {
     if is_interactive() {
         return run_interactive(env_value.as_deref(), config_dir.as_deref());
     }
-    if lookup(env_value.as_deref(), config_dir.as_deref()) == KeyLookup::Missing {
+    if let Some(hint) = no_terminal_hint(env_value.as_deref(), config_dir.as_deref()) {
         crate::screen::Screen::new(crate::screen::Stream::Stdout)
-            .line(
-                crate::screen::Tone::Aux,
-                crate::text::signing_key_hint_no_terminal(),
-            )
+            .line(crate::screen::Tone::Aux, &hint)
             .emit();
     }
     Ok(())
@@ -1418,8 +1438,15 @@ mod tests {
             &mut registrar,
         );
         assert!(
-            matches!(&result, Err(SetupError::NotOwnerOnly(p)) if *p == stored),
+            matches!(&result, Err(SetupError::StoredKeyExposed(p)) if *p == stored),
             "an exposed stored key must be refused, got {result:?}"
+        );
+        let rendered = result.err().map(|e| e.to_string());
+        assert!(
+            rendered.is_some_and(|text| {
+                text.contains("already registered") && text.contains(SIGNING_KEYS_SETTINGS)
+            }),
+            "the refusal says the key is already registered on GitHub and names where to revoke it"
         );
         assert_eq!(consent.asked, 0, "nothing is asked before the refusal");
         assert_eq!(registrar.calls, 0, "nothing is registered");
@@ -1457,6 +1484,55 @@ mod tests {
         );
         assert_eq!(consent.asked, 0);
         assert_eq!(registrar.calls, 0);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_no_terminal_hint_is_the_generic_hint_when_no_key_is_configured() {
+        let dir = test_dir("hint-missing");
+        assert_eq!(
+            no_terminal_hint(None, Some(dir.as_path())),
+            Some(crate::text::msg::signing_key_hint_no_terminal())
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_no_terminal_hint_is_silent_for_a_usable_stored_key() {
+        let dir = test_dir("hint-usable");
+        plant_with_mode(&dir.join(PRIVATE_KEY_FILE), b"key", 0o600);
+        assert_eq!(
+            no_terminal_hint(None, Some(dir.as_path())),
+            None,
+            "a usable stored key needs no hint"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_no_terminal_hint_shows_the_status_for_an_exposed_stored_key() {
+        let dir = test_dir("hint-exposed");
+        plant_with_mode(&dir.join(PRIVATE_KEY_FILE), b"exposed", 0o644);
+        let hint = no_terminal_hint(None, Some(dir.as_path())).expect("a hint is printed");
+        assert!(
+            hint.contains("not private to you") && hint.contains(SIGNING_KEYS_SETTINGS),
+            "the hint names the exposure and where to revoke the key: {hint}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_no_terminal_hint_shows_the_status_for_an_unusable_stored_key() {
+        let dir = test_dir("hint-unusable");
+        std::fs::create_dir(dir.join(PRIVATE_KEY_FILE)).expect("plant dir");
+        let hint = no_terminal_hint(None, Some(dir.as_path())).expect("a hint is printed");
+        assert!(
+            hint.contains("not a usable key file"),
+            "the hint names the unusable occupant: {hint}"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 

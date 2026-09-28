@@ -1331,6 +1331,9 @@ messages! {
     signing_key_store_unsupported(env) = "signing-key-store-unsupported";
     /// A signing-key file or its directory is not private to the invoking user.
     signing_key_not_owner_only(path: &crate::style::TerminalSafe, env) = "signing-key-not-owner-only";
+    /// The stored key is already registered on GitHub but is not private to the
+    /// invoking user; it must be revoked, never silently replaced.
+    signing_key_stored_exposed(path: &crate::style::TerminalSafe, settings) = "signing-key-stored-exposed";
     /// A non-key entry occupies a signing-key file name.
     signing_key_occupied(path: &crate::style::TerminalSafe) = "signing-key-occupied";
     /// The config directory cannot hold the hard links key storage relies on.

@@ -1588,6 +1588,10 @@ cannot store a signing key on this platform: its private key file cannot be made
 
 {path} is not private to you (another local user could read or replace it, or its filesystem ignores permission bits) — no signing key was registered; set {env} to a signing key you keep private instead
 
+## signing-key-stored-exposed
+
+{path} is already registered as a signing key on your GitHub account, but is not private to you (another local user could read it) — no new signing key was generated; delete it from your GitHub signing keys ({settings}), remove the file, and run `ipe login --signing-key` again
+
 ## signing-key-occupied
 
 {path} already exists but is not a usable signing key — move it aside and run `ipe login --signing-key` again
