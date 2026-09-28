@@ -16,9 +16,11 @@
 //! The curated index enforces `required_signatures`, so the publish commit must
 //! be signed AND marked "Verified" or it can never merge. Two preconditions,
 //! each fail-closed:
-//!  - Set `IPE_PUBLISH_SIGNING_KEY` to the path of an SSH signing key (the
-//!    private-key file; its `.pub` must be registered as a *signing* key on the
-//!    GitHub account that owns the fork) — publish signs the commit with it.
+//!  - An SSH signing key whose `.pub` is registered as a *signing* key on the
+//!    GitHub account that owns the fork — publish signs the commit with it. The
+//!    key `ipe login` generates and registers is used by default;
+//!    `IPE_PUBLISH_SIGNING_KEY` (a private-key file path) overrides it
+//!    (see [`crate::ssh_signing_key`]).
 //!  - Run `ipe login` (or set `GITHUB_TOKEN`): publish derives the committer
 //!    identity from the authenticated publishing account (`GET /user`) and
 //!    authors the commit under that account's verified GitHub noreply identity
@@ -132,7 +134,7 @@ const DEFAULT_INDEX_REPO: &str = "arthurmaciel/ipe-registry";
 /// print) the index PR.
 ///
 /// # Errors
-/// [`CliError::UsageOwned`] on argument misuse; [`CliError::PackageAudit`] when
+/// [`CliError::Usage`] on argument misuse; [`CliError::PackageAudit`] when
 /// the local gate rejects the package; [`CliError::Publish`] on a publish
 /// precondition (dirty tree, unpushed HEAD, duplicate version, no signing key,
 /// or an unresolvable committer identity); resolution / IO errors otherwise.
@@ -147,7 +149,7 @@ pub fn run_publish(rest: &[String]) -> Result<(), CliError> {
         compute_entry_version(&manifest, args.source.as_deref(), args.rev.as_deref())?;
 
     let claimed = SelfDeclaredPublisher::parse(&infer_publisher(entry_version.source.as_str()))
-        .map_err(|refusal| CliError::UsageOwned(text::publish_source_owner_not_login(&refusal)))?;
+        .map_err(|refusal| CliError::Usage(text::msg::publish_source_owner_not_login(&refusal)))?;
 
     // 2. Prove the publishing identity. A real publish resolves the signing key
     //    and then the authenticated account (`GET /user`) before the gate, so the
@@ -216,9 +218,7 @@ pub fn run_publish(rest: &[String]) -> Result<(), CliError> {
         .fork
         .unwrap_or_else(|| infer_publisher(entry_version.source.as_str()));
     if fork_owner == "unknown" {
-        return Err(CliError::UsageOwned(
-            text::publish_fork_owner_unknown().to_owned(),
-        ));
+        return Err(CliError::Usage(text::msg::publish_fork_owner_unknown()));
     }
 
     open_pr(&entry_toml, &plan, &fork_owner, &credentials)
@@ -227,7 +227,7 @@ pub fn run_publish(rest: &[String]) -> Result<(), CliError> {
 /// Parse `publish`'s tail into typed [`Args`].
 ///
 /// # Errors
-/// [`CliError::UsageOwned`] on an unknown flag, a missing flag value, or a second
+/// [`CliError::Usage`] on an unknown flag, a missing flag value, or a second
 /// positional.
 fn parse_args(rest: &[String]) -> Result<Args, CliError> {
     let mut path: Option<PathBuf> = None;
@@ -248,14 +248,14 @@ fn parse_args(rest: &[String]) -> Result<Args, CliError> {
             "--fork" => fork = Some(take_value(&mut it, "--fork")?),
             "--fresh" => fresh = true,
             flag if flag.starts_with('-') => {
-                return Err(CliError::UsageOwned(text::unknown_flag(
+                return Err(CliError::Usage(text::msg::unknown_flag(
                     &"package publish",
                     &flag,
                 )));
             }
             positional => {
                 if path.is_some() {
-                    return Err(CliError::Usage(text::publish_single_path()));
+                    return Err(CliError::Usage(text::msg::publish_single_path()));
                 }
                 path = Some(PathBuf::from(positional));
             }
@@ -280,7 +280,7 @@ fn take_value<'a>(
 ) -> Result<String, CliError> {
     it.next()
         .cloned()
-        .ok_or_else(|| CliError::UsageOwned(text::flag_needs_value(&"package publish", &flag)))
+        .ok_or_else(|| CliError::Usage(text::msg::flag_needs_value(&"package publish", &flag)))
 }
 
 /// Resolve `path` (a directory or a `package.ipe`) to its manifest file.
@@ -290,9 +290,9 @@ fn locate_manifest(path: &Path) -> Result<PathBuf, CliError> {
             return Ok(manifest);
         }
         if crate::project::has_only_legacy_toml(path) {
-            return Err(CliError::Usage(text::legacy_toml_hint()));
+            return Err(CliError::Usage(text::msg::legacy_toml_hint()));
         }
-        return Err(CliError::UsageOwned(text::publish_no_manifest(
+        return Err(CliError::Usage(text::msg::publish_no_manifest(
             &path.display(),
         )));
     }
@@ -301,7 +301,7 @@ fn locate_manifest(path: &Path) -> Result<PathBuf, CliError> {
     {
         return Ok(path.to_path_buf());
     }
-    Err(CliError::UsageOwned(text::publish_not_a_package(
+    Err(CliError::Usage(text::msg::publish_not_a_package(
         &path.display(),
     )))
 }
@@ -315,7 +315,7 @@ fn locate_manifest(path: &Path) -> Result<PathBuf, CliError> {
 /// reproducible revision.
 ///
 /// # Errors
-/// [`CliError::Publish`] on a publish precondition; [`CliError::UsageOwned`] when
+/// [`CliError::Publish`] on a publish precondition; [`CliError::Usage`] when
 /// the manifest declares no version; [`CliError::VersionRefused`] when it carries
 /// build metadata; resolution / IO errors otherwise.
 fn compute_entry_version(
@@ -333,8 +333,9 @@ fn compute_entry_version(
     // Parse-don't-validate: the typed constructor rejects any value outside the
     // transport allow-list. Publish uses the same gate as the resolver so an
     // entry written by `publish` round-trips through `read_entry` without error.
-    let source = SourceUrl::parse(&manifest.name, &raw_source)
-        .map_err(|e| CliError::UsageOwned(text::publish_source_refused(&e)))?;
+    let package_name = crate::package_name::PackageName::parse(&manifest.name)?;
+    let source = SourceUrl::parse(&package_name, &raw_source)
+        .map_err(|e| CliError::Usage(text::msg::publish_source_refused(&e)))?;
 
     // The revision is pinned as an immutable commit SHA. The default path runs
     // `committed_pushed_head` which already calls `git rev-parse HEAD` and
@@ -343,15 +344,15 @@ fn compute_entry_version(
     // as moving refs.
     let rev = if let Some(r) = rev_override {
         // Injection-gate the requested ref before passing it to git.
-        let requested = CommitId::parse(&manifest.name, r)
-            .map_err(|e| CliError::UsageOwned(text::publish_rev_refused(&e)))?;
+        let requested = CommitId::parse(&package_name, r)
+            .map_err(|e| CliError::Usage(text::msg::publish_rev_refused(&e)))?;
         let raw_sha = resolve_rev_to_sha(source_root, requested.as_str())?;
-        PinnedRev::from_full_sha(&manifest.name, &raw_sha)
-            .map_err(|e| CliError::UsageOwned(text::publish_rev_not_sha(&e)))?
+        PinnedRev::from_full_sha(&package_name, &raw_sha)
+            .map_err(|e| CliError::Usage(text::msg::publish_rev_not_sha(&e)))?
     } else {
         let raw_sha = committed_pushed_head(source_root)?;
-        PinnedRev::from_full_sha(&manifest.name, &raw_sha)
-            .map_err(|e| CliError::UsageOwned(text::publish_head_not_sha(&e)))?
+        PinnedRev::from_full_sha(&package_name, &raw_sha)
+            .map_err(|e| CliError::Usage(text::msg::publish_head_not_sha(&e)))?
     };
 
     let sha256 = crate::resolve::hash_source_tree(source_root)?;
@@ -404,9 +405,9 @@ fn resolve_rev_to_sha(root: &Path, rev: &str) -> Result<String, CliError> {
     let refspec = format!("{rev}^{{commit}}");
     let out = run_git_capture(root, &["rev-parse", "--verify", "--quiet", &refspec])?.ok_or_else(
         || {
-            CliError::Resolve(format!(
-                "ipe package publish: `git rev-parse --verify {refspec}` failed — \
-                     ref {rev:?} does not resolve to a commit"
+            CliError::Resolve(crate::text::msg::publish_rev_unresolved(
+                &crate::style::TerminalSafe::sanitize(&refspec),
+                &crate::style::TerminalSafe::sanitize(&format!("{rev:?}")),
             ))
         },
     )?;
@@ -461,13 +462,13 @@ pub fn render_entry(name: &str, publisher: &str, versions: &[EntryVersion]) -> S
 /// The manifest's version as the index will record it.
 ///
 /// # Errors
-/// [`CliError::UsageOwned`] when the manifest declares no version;
+/// [`CliError::Usage`] when the manifest declares no version;
 /// [`CliError::VersionRefused`] when it carries build metadata.
 fn manifest_published_version(manifest: &ProjectManifest) -> Result<PublishedVersion, CliError> {
     let version = manifest
         .version
         .clone()
-        .ok_or_else(|| CliError::UsageOwned(text::publish_no_version(&manifest.name)))?;
+        .ok_or_else(|| CliError::Usage(text::msg::publish_no_version(&manifest.name)))?;
     PublishedVersion::from_semver(version).map_err(|refusal| refusal.for_package(&manifest.name))
 }
 
@@ -524,7 +525,7 @@ fn merge_into_entry(
 /// caller must use the appending path.
 ///
 /// # Errors
-/// [`CliError::UsageOwned`] when the name is not reserved or the claim is not a
+/// [`CliError::Usage`] when the name is not reserved or the claim is not a
 /// proven blessed publisher (including every `--dry-run`, which carries no
 /// authenticated identity).
 fn build_fresh_entry(
@@ -534,7 +535,7 @@ fn build_fresh_entry(
     new_version: &EntryVersion,
 ) -> Result<String, CliError> {
     if ipe_kernels::reserved_package_prefix_of(name).is_none() {
-        return Err(CliError::UsageOwned(text::publish_fresh_refused(&name)));
+        return Err(CliError::Usage(text::msg::publish_fresh_refused(&name)));
     }
     match blessing {
         Ok(blessed) if blessed.vouches_for(claimed) => Ok(render_entry(
@@ -553,7 +554,7 @@ fn build_fresh_entry(
 /// The `--fresh` refusal for a reserved package whose claimed publisher is not a
 /// proven blessed identity; `reason` says why.
 fn fresh_needs_blessing(name: &str, reason: &dyn std::fmt::Display) -> CliError {
-    CliError::UsageOwned(text::publish_fresh_needs_blessing(&name, reason))
+    CliError::Usage(text::msg::publish_fresh_needs_blessing(&name, reason))
 }
 
 /// The intended pull request — everything publish would push, so `--dry-run` can
@@ -610,47 +611,37 @@ fn print_dry_run(entry_toml: &str, plan: &PrPlan, identity: Option<&CommitIdenti
 /// The SSH key used to sign the publish commit, parsed once at the boundary
 /// into a value that only holds a path to a readable, regular key file.
 ///
-/// `parse, don't validate` at the signing boundary: the raw
-/// `IPE_PUBLISH_SIGNING_KEY` string is turned into a `SigningKey` exactly once,
-/// and only a value that names an existing regular file reaches the commit step
-/// — an unset, empty, or unreadable configuration can never be mistaken for a
+/// `parse, don't validate` at the signing boundary: the configuration
+/// (`IPE_PUBLISH_SIGNING_KEY`, else the key `ipe login` stored) is resolved
+/// into a `SigningKey` exactly once by [`crate::ssh_signing_key::lookup`], and
+/// only a value that names an existing regular file reaches the commit step —
+/// an unset, empty, or unreadable configuration can never be mistaken for a
 /// usable key downstream, so the only reachable outcome without a real key is a
 /// typed refusal, never an unsigned push. The key material itself stays in the
 /// file: only its path is handed to `git -c user.signingkey=<path>`, so no
 /// private-key bytes ever reach an argv or a log line.
-struct SigningKey(PathBuf);
+struct SigningKey(crate::ssh_signing_key::PrivateKeyPath);
 
 impl SigningKey {
-    /// The environment variable naming the SSH signing key's private-key file.
-    const ENV: &'static str = "IPE_PUBLISH_SIGNING_KEY";
-
     /// Resolve the configured signing key, if one is usable.
     ///
-    /// Returns `Some` only when `IPE_PUBLISH_SIGNING_KEY` names an existing
-    /// regular file; an unset variable, an empty value, or a path that is not a
-    /// readable regular file all yield `None`, which the caller turns into a
-    /// fail-closed [`Refusal::UnsignedCommit`].
-    fn from_env() -> Option<Self> {
-        Self::from_raw(std::env::var(Self::ENV).ok().as_deref())
+    /// A set `IPE_PUBLISH_SIGNING_KEY` is authoritative: it must name an
+    /// existing regular file, and when it does not publish refuses rather than
+    /// fall back to the stored key. Unset, the key `ipe login` stored is used.
+    /// `None` becomes a fail-closed [`Refusal::UnsignedCommit`].
+    fn configured() -> Option<Self> {
+        crate::ssh_signing_key::configured().map(Self)
     }
 
-    /// The pure core of [`Self::from_env`]: turn a raw configuration value into a
-    /// usable key, or `None`. An absent value (`None`), an empty/whitespace
-    /// value, or a path that is not a readable regular file all fail closed.
+    /// Parse a raw `IPE_PUBLISH_SIGNING_KEY` value alone: an absent value
+    /// (`None`), an empty/whitespace value, or a path that is not a readable
+    /// regular file all fail closed.
+    #[cfg(test)]
     fn from_raw(raw: Option<&str>) -> Option<Self> {
-        let trimmed = raw?.trim();
-        if trimmed.is_empty() {
-            return None;
-        }
-        let path = PathBuf::from(trimmed);
-        // A regular file the process can stat is the proof the key exists; git
-        // reads the bytes itself, so absent that proof publish refuses rather
-        // than hand git a path that would make signing fail or silently skip.
-        if std::fs::metadata(&path).is_ok_and(|m| m.is_file()) {
-            Some(Self(path))
-        } else {
-            None
-        }
+        raw.and_then(|r| {
+            crate::ssh_signing_key::PrivateKeyPath::from_env_value(std::ffi::OsStr::new(r))
+        })
+        .map(Self)
     }
 
     /// The `-c` overrides that make `git commit` produce an SSH-signed commit
@@ -665,7 +656,7 @@ impl SigningKey {
             "-c".to_owned(),
             "gpg.format=ssh".to_owned(),
             "-c".to_owned(),
-            format!("user.signingkey={}", self.0.display()),
+            format!("user.signingkey={}", self.0.as_path().display()),
             "-c".to_owned(),
             "commit.gpgsign=true".to_owned(),
         ]
@@ -747,7 +738,7 @@ struct PublishCredentials {
 /// [`Refusal::UnsignedCommit`] with no usable signing key;
 /// [`Refusal::UnresolvableIdentity`] when `GET /user` cannot prove the account.
 fn resolve_publish_credentials() -> Result<PublishCredentials, CliError> {
-    let signing_key = SigningKey::from_env().ok_or_else(|| refuse(Refusal::UnsignedCommit))?;
+    let signing_key = SigningKey::configured().ok_or_else(|| refuse(Refusal::UnsignedCommit))?;
     let identity = resolve_publisher_identity().map_err(refuse)?;
     Ok(PublishCredentials {
         signing_key,
@@ -1195,17 +1186,14 @@ fn print_pr_api_fallback(plan: &PrPlan, url: &str, err: &str) {
 
 /// A scratch-filesystem failure during publish.
 fn scratch_io(e: &std::io::Error) -> CliError {
-    CliError::Resolve(format!(
-        "ipe package publish: scratch filesystem error: {e}"
-    ))
+    CliError::Resolve(crate::text::msg::publish_scratch_io(e))
 }
 
 /// Clone of the author's fork failed — most often the fork does not exist yet.
 fn clone_failed(fork_url: &str, git: &str) -> CliError {
-    CliError::Resolve(format!(
-        "ipe package publish: could not clone your index fork `{fork_url}` — publish pushes the \
-         entry to your fork, so fork the index on GitHub first (a one-time step) and make sure \
-         git can reach it.\n  git: {git}"
+    CliError::Resolve(crate::text::msg::publish_clone_failed(
+        &fork_url,
+        &crate::style::TerminalSafe::sanitize(git),
     ))
 }
 
@@ -1219,10 +1207,11 @@ fn push_failed(fork_url: &str, plan: &PrPlan, fork_owner: &str, git: &str) -> Cl
         &plan.branch,
         &plan.title,
     );
-    CliError::Resolve(format!(
-        "ipe package publish: could not push `{}` to `{fork_url}` — nothing was published. Fix \
-         the push (git credentials / fork access), then open the PR here:\n  {url}\n  git: {git}",
-        plan.branch
+    CliError::Resolve(crate::text::msg::publish_push_failed(
+        &plan.branch,
+        &fork_url,
+        &url,
+        &crate::style::TerminalSafe::sanitize(git),
     ))
 }
 
@@ -1298,11 +1287,7 @@ fn git_rev_is_pushed(root: &Path, rev: &str) -> Result<bool, CliError> {
 /// A "not a git repository" resolve error, the shared fallback when a git
 /// introspection command cannot run at `root`.
 fn not_a_repo(root: &Path) -> CliError {
-    CliError::Resolve(format!(
-        "ipe package publish: `{}` is not a git repository — publish pins a committed, pushed \
-         revision, so the package must live in a git repo (or pass `--source`/`--rev`).",
-        root.display()
-    ))
+    CliError::Resolve(crate::text::msg::publish_not_git_repo(&root.display()))
 }
 
 /// Run `git <args>` in `root`, returning its stdout on success, `None` when git
@@ -1313,7 +1298,7 @@ fn run_git_capture(root: &Path, args: &[&str]) -> Result<Option<String>, CliErro
         .args(args)
         .current_dir(root)
         .output()
-        .map_err(|e| CliError::Resolve(format!("ipe package publish: could not run `git`: {e}")))?;
+        .map_err(|e| CliError::Resolve(crate::text::msg::publish_git_unavailable(&e)))?;
     if output.status.success() {
         Ok(Some(String::from_utf8_lossy(&output.stdout).into_owned()))
     } else {
@@ -1328,6 +1313,12 @@ mod tests {
     use ipe_ir::Capability;
     use std::collections::BTreeSet;
 
+    /// A fixture package name.
+    #[allow(clippy::expect_used)] // fixture names are literal registry names
+    fn pn(raw: &str) -> crate::package_name::PackageName {
+        crate::package_name::PackageName::parse(raw).expect("fixture package name parses")
+    }
+
     fn caps(names: &[Capability]) -> BTreeSet<Capability> {
         names.iter().copied().collect()
     }
@@ -1335,15 +1326,18 @@ mod tests {
     fn sample_version(v: &str, caps_set: BTreeSet<Capability>) -> EntryVersion {
         EntryVersion {
             version: PublishedVersion::parse(v).expect("valid version"),
-            source: SourceUrl::parse("http-extras", "https://github.com/arthurmaciel/http-extras")
-                .expect("valid source url"),
+            source: SourceUrl::parse(
+                &pn("http-extras"),
+                "https://github.com/arthurmaciel/http-extras",
+            )
+            .expect("valid source url"),
             rev: PinnedRev::from_full_sha(
-                "http-extras",
+                &pn("http-extras"),
                 "9f2c7b1e0a4d5c6f8b2a1e3d4c5b6a7f8e9d0c1b",
             )
             .expect("valid pinned rev"),
             sha256: crate::index::Sha256Hex::parse(
-                "http-extras",
+                &pn("http-extras"),
                 "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
             )
             .expect("valid digest"),
@@ -1694,7 +1688,7 @@ mod tests {
         let v = sample_version("0.0.0-smoke.1", caps(&[]));
         let err = build_fresh_entry("ipe-registry-smoke-probe", claimed, blessing.as_ref(), &v)
             .expect_err("an unproven blessed claim must reject --fresh");
-        assert!(matches!(err, CliError::UsageOwned(_)));
+        assert!(matches!(err, CliError::Usage(_)));
         assert!(format!("{err}").contains("--fresh"), "{err}");
     }
 
@@ -1708,7 +1702,7 @@ mod tests {
         let blessing = authenticated_blessing(ipe_kernels::BLESSED_PUBLISHER, &claimed);
         let err = build_fresh_entry("http-extras", &claimed, blessing.as_ref(), &v)
             .expect_err("a non-reserved name must reject --fresh");
-        assert!(matches!(err, CliError::UsageOwned(_)));
+        assert!(matches!(err, CliError::Usage(_)));
         assert!(format!("{err}").contains("--fresh"), "{err}");
     }
 
@@ -1877,13 +1871,13 @@ mod tests {
     #[test]
     fn unknown_flag_is_a_usage_error() {
         let err = parse_args(&["--nope".to_owned()]).unwrap_err();
-        assert!(matches!(err, CliError::UsageOwned(_)));
+        assert!(matches!(err, CliError::Usage(_)));
     }
 
     #[test]
     fn a_missing_flag_value_is_a_usage_error() {
         let err = parse_args(&["--index".to_owned()]).unwrap_err();
-        assert!(matches!(err, CliError::UsageOwned(_)));
+        assert!(matches!(err, CliError::Usage(_)));
     }
 
     /// `github_api_post` must never put the token in curl's argv — no
@@ -2058,7 +2052,7 @@ mod tests {
         );
         // PinnedRev::from_full_sha must accept it.
         assert!(
-            PinnedRev::from_full_sha("lib", &sha).is_ok(),
+            PinnedRev::from_full_sha(&pn("lib"), &sha).is_ok(),
             "HEAD SHA must be accepted by PinnedRev"
         );
         let _ = std::fs::remove_dir_all(&repo);

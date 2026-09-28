@@ -764,6 +764,72 @@ pub enum WireDefect {
         /// The cycle, as the chain of define-type names it closes over.
         cycle: Vec<String>,
     },
+    /// A wrapper-crate path carrying a `..` component.
+    ///
+    /// Traversal is refused lexically at decode, before any filesystem lookup,
+    /// so the root jail never has to reason about a path built to climb out.
+    WrapperPathTraversal {
+        /// The offending path.
+        got: String,
+    },
+    /// A wrapper-crate path that does not resolve to an existing directory.
+    ///
+    /// A moved or copied project whose cache still names the old location
+    /// lands here, refused at load rather than emitted as a `path` dependency
+    /// cargo cannot find.
+    WrapperPathUnresolvable {
+        /// The offending path.
+        got: String,
+        /// The filesystem error, rendered.
+        detail: String,
+    },
+    /// A wrapper-crate path whose canonical form (symlinks resolved) leaves the
+    /// project root.
+    WrapperPathOutsideRoot {
+        /// The offending path.
+        got: String,
+        /// The canonical project root it had to stay inside.
+        root: String,
+    },
+    /// A wrapper crate inside the project whose canonical directory has no
+    /// renderable `path` dependency value.
+    ///
+    /// The canonical form is not UTF-8, carries a control character, or has a
+    /// Windows prefix other than a verbatim drive letter (a UNC share, a device
+    /// namespace). Refused rather than rendered, so every path value that
+    /// reaches the emitted manifest round-trips through a TOML basic string.
+    WrapperPathUnrenderable {
+        /// The offending path.
+        got: String,
+        /// The canonical directory it resolved to, rendered lossily.
+        canonical: String,
+    },
+    /// A jailed wrapper directory whose `Cargo.toml` does not prove the crate
+    /// cargo will build.
+    ///
+    /// Refused at the jail, so a directory with no manifest, a symlinked or
+    /// oversized manifest, or a `[package] name` other than the dependency key
+    /// never reaches the emitted manifest as a `path` line cargo would reject.
+    WrapperManifest {
+        /// The offending wrapper path.
+        got: String,
+        /// What the manifest failed to prove.
+        defect: WrapperManifestDefect,
+    },
+    /// A legacy consumer manifest's dependency line outside the exact grammar
+    /// the manifest emitter renders for a registry pin.
+    LegacyDependencyLine {
+        /// The offending line.
+        got: String,
+    },
+    /// An FFI cache directory that is not `<project>/.ipe/cache/ffi/rust`.
+    ///
+    /// The project root a wrapper crate is jailed to is derived from the cache
+    /// location; a cache anywhere else has no root to jail against.
+    CacheRootUnanchored {
+        /// The cache directory met.
+        got: String,
+    },
     /// The document is not the JSON shape the wire contract declares
     /// (carries the rendered serde error as detail).
     Json {
@@ -867,7 +933,108 @@ impl fmt::Display for WireDefect {
                     cycle.join(" -> ")
                 )
             }
+            Self::WrapperPathTraversal { got } => write!(
+                f,
+                "wrapper crate path {got:?} carries a `..` component — a wrapper crate \
+                 must live inside the project"
+            ),
+            Self::WrapperPathUnresolvable { got, detail } => write!(
+                f,
+                "wrapper crate path {got:?} does not resolve to a directory ({detail}); \
+                 if the project moved, re-run `ipe add` for this wrapper"
+            ),
+            Self::WrapperPathOutsideRoot { got, root } => write!(
+                f,
+                "wrapper crate path {got:?} resolves outside the project root {root:?} — \
+                 a wrapper crate must live inside the project; re-run `ipe add` from the \
+                 project that owns it"
+            ),
+            Self::WrapperPathUnrenderable { got, canonical } => write!(
+                f,
+                "wrapper crate path {got:?} resolves to {canonical:?}, which is not a \
+                 renderable `path` dependency (it must be UTF-8, free of control \
+                 characters, and on a local drive); move the project or the wrapper \
+                 crate to such a directory"
+            ),
+            Self::WrapperManifest { got, defect } => write!(
+                f,
+                "wrapper crate path {got:?} has no usable `Cargo.toml`: {defect}"
+            ),
+            Self::LegacyDependencyLine { got } => write!(
+                f,
+                "dependency line {got:?} is not a registry pin this compiler renders; \
+                 re-run `ipe add` for this crate"
+            ),
+            Self::CacheRootUnanchored { got } => write!(
+                f,
+                "FFI cache {got:?} is not at `<project>/.ipe/cache/ffi/rust`, so no project \
+                 root exists to jail a wrapper crate to"
+            ),
             Self::Json { detail } => write!(f, "{detail}"),
+        }
+    }
+}
+
+/// Why a wrapper crate's `Cargo.toml` fails to prove the crate cargo builds.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WrapperManifestDefect {
+    /// The manifest is absent or cannot be opened or read.
+    Unreadable {
+        /// The filesystem error, rendered.
+        detail: String,
+    },
+    /// The manifest is a symlink, reparse point, or other non-regular file.
+    NotRegularFile,
+    /// The manifest exceeds the read ceiling.
+    Oversized {
+        /// The ceiling in bytes.
+        limit: u64,
+    },
+    /// The manifest is not UTF-8 TOML carrying a string `[package] name`.
+    Invalid {
+        /// The decode error, rendered.
+        detail: String,
+    },
+    /// The `[package] name` is outside the dependency-key charset.
+    PackageNameIllegal {
+        /// The name met.
+        found: String,
+    },
+    /// The `[package] name` differs from the installed package's name.
+    PackageNameMismatch {
+        /// The installed package name the dependency key is rendered from.
+        expected: String,
+        /// The `[package] name` the manifest declares.
+        found: String,
+    },
+}
+
+impl fmt::Display for WrapperManifestDefect {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Unreadable { detail } => write!(f, "it cannot be read ({detail})"),
+            Self::NotRegularFile => write!(
+                f,
+                "it is a symlink or not a regular file; make it a plain file inside the \
+                 wrapper directory"
+            ),
+            Self::Oversized { limit } => {
+                write!(f, "it exceeds the {limit}-byte manifest ceiling")
+            }
+            Self::Invalid { detail } => write!(
+                f,
+                "it is not a TOML manifest with a string `[package] name` ({detail})"
+            ),
+            Self::PackageNameIllegal { found } => write!(
+                f,
+                "its `[package] name` {found:?} is not a legal dependency key \
+                 ([A-Za-z0-9_-], letter first)"
+            ),
+            Self::PackageNameMismatch { expected, found } => write!(
+                f,
+                "its `[package] name` is {found:?} but the installed crate is {expected:?}; \
+                 re-run `ipe add` for this wrapper"
+            ),
         }
     }
 }

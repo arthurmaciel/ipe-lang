@@ -234,8 +234,8 @@ impl LockedOrigin {
             return LocalSource::parse(pkg, source).map(|source| Self::Path { source });
         }
         // Fail closed: a non-SHA rev (a legacy "HEAD" or branch) is refused.
-        let rev = PinnedRev::from_full_sha(pkg.as_str(), rev)?;
-        let source = SourceUrl::parse(pkg.as_str(), source)?;
+        let rev = PinnedRev::from_full_sha(pkg, rev)?;
+        let source = SourceUrl::parse(pkg, source)?;
         Ok(if escape {
             Self::Git { source, rev }
         } else {
@@ -443,7 +443,7 @@ impl RawLocked {
         let rev = self.rev.ok_or_else(|| missing("rev"))?;
         let origin = LockedOrigin::parse(&name, &version, &source, &rev, self.kind.as_deref())?;
         let raw_sha256 = self.sha256.ok_or_else(|| missing("sha256"))?;
-        let sha256 = Sha256Hex::parse(name.as_str(), &raw_sha256)?;
+        let sha256 = Sha256Hex::parse(&name, &raw_sha256)?;
         Ok(LockedDep {
             name,
             version,
@@ -482,13 +482,14 @@ mod tests {
     }
 
     fn sha256() -> Sha256Hex {
-        Sha256Hex::parse("fixture", FIXTURE_SHA256).expect("valid sha256")
+        Sha256Hex::parse(&name("fixture"), FIXTURE_SHA256).expect("valid sha256")
     }
 
     fn pinned(raw: &str) -> (SourceUrl, PinnedRev) {
         (
-            SourceUrl::parse(raw, &format!("https://example.invalid/{raw}")).expect("valid url"),
-            PinnedRev::from_full_sha(raw, FIXTURE_SHA).expect("valid sha"),
+            SourceUrl::parse(&name(raw), &format!("https://example.invalid/{raw}"))
+                .expect("valid url"),
+            PinnedRev::from_full_sha(&name(raw), FIXTURE_SHA).expect("valid sha"),
         )
     }
 

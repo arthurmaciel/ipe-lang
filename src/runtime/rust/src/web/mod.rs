@@ -866,6 +866,10 @@ fn spawn_subs<Msg: Clone + Send + 'static>(
                 });
                 handles.push(spawn(emit));
             }
+            // Terminal input has no source in a Web session; the resolver and
+            // emitter refuse `Tui.Sub.onKey` / `Cli.Sub.onLine` outside their own
+            // terminal app, so these never reach here from Ipê source.
+            IpeSub::OnKey(_) | IpeSub::OnLine(_) => {}
         }
     }
     go(sub, tx, handles);
@@ -4475,6 +4479,13 @@ where
             "/_ipe/observability/ingest",
             post(console::ingest).layer(axum::extract::DefaultBodyLimit::max(web_max_body_bytes())),
         );
+
+    // The console + metrics auth gate applies whether or not a console is
+    // mounted, so its effective posture/mode/source is always logged once.
+    eprintln!(
+        "{}",
+        crate::telemetry::ConsoleAuthResolution::from_env().startup_line()
+    );
 
     // When `http_client` is active and the pre-built console binary is
     // present, the proxy replaces the in-process console: a child process is

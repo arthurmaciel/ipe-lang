@@ -9,8 +9,161 @@
 //! once with exactly its placeholders, so a drifted catalog fails the build; the
 //! catalog tests add that every section has a declaration. Edit the `.md`, never
 //! a Rust string.
+//!
+//! A CLI error carries its text as a [`Message`], which only this module builds
+//! (through the functions under [`msg`]), so an error spelled as a Rust literal
+//! is a type error. A placeholder whose value is untrusted — raw user input,
+//! fetched content, a child process's output — is declared `&TerminalSafe`, so
+//! the value is sanitised before it can reach the message, whatever prints it.
 
+use std::borrow::Cow;
 use std::fmt::{self, Write as _};
+use std::ops::Deref;
+
+/// A user-facing message: a catalog text, or an already-rendered error relayed
+/// verbatim.
+///
+/// Only this module constructs one, so a message cannot be spelled as a Rust
+/// literal at a use site. Its text is terminal-safe by construction: a filled
+/// or relayed text passes [`TerminalSafe::sanitize`], so no placeholder value
+/// (trusted by declaration or not) can carry an escape sequence or a control
+/// byte other than `\n` and `\t` into it.
+///
+/// [`TerminalSafe::sanitize`]: crate::style::TerminalSafe::sanitize
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Message(Cow<'static, str>);
+
+impl Message {
+    /// A catalog text without placeholders.
+    const fn fixed(text: &'static str) -> Self {
+        Self(Cow::Borrowed(text))
+    }
+
+    /// A filled or relayed text, with escapes and stray control bytes stripped.
+    ///
+    /// [`fill`] already sanitised each value at its boundary; this whole-text
+    /// pass is the second, independent gate.
+    fn filled(text: &str) -> Self {
+        Self(Cow::Owned(
+            crate::style::TerminalSafe::sanitize(text)
+                .as_str()
+                .to_owned(),
+        ))
+    }
+
+    /// Relay a typed refusal whose own `Display` is its user-facing text.
+    ///
+    /// Only a [`Relayable`] type qualifies: a closed set of typed refusals and
+    /// diagnostics whose text is built from trusted parts, and whose untrusted
+    /// parts (a dependency name, a file label) are [`TerminalSafe`] from the
+    /// moment the refusal is built, so an arbitrary string (and the untrusted
+    /// bytes it may carry) cannot become a message. The whole-text pass here
+    /// is the second, independent gate.
+    ///
+    /// [`TerminalSafe`]: crate::style::TerminalSafe
+    #[must_use]
+    pub fn relay(rendered: &impl Relayable) -> Self {
+        let mut text = String::new();
+        // A `Display` that errs leaves what it wrote so far; relaying it is
+        // better than aborting the error path.
+        let _ = write!(text, "{rendered}");
+        Self::filled(&text)
+    }
+
+    /// Join catalog messages into one, one message per line.
+    #[must_use]
+    pub fn lines(lines: impl IntoIterator<Item = Self>) -> Self {
+        let mut joined = String::new();
+        for (index, line) in lines.into_iter().enumerate() {
+            if index > 0 {
+                joined.push('\n');
+            }
+            joined.push_str(&line.0);
+        }
+        Self(Cow::Owned(joined))
+    }
+
+    /// The message text.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+/// Seals [`Relayable`] so only this module can extend its allowlist.
+mod sealed {
+    /// The sealing supertrait of [`super::Relayable`].
+    pub trait Sealed {}
+}
+
+/// A typed refusal or diagnostic that [`Message::relay`] may carry verbatim.
+///
+/// Sealed: the allowlist below is closed, so relaying a raw string (and any
+/// untrusted bytes in it) is a type error.
+pub trait Relayable: fmt::Display + sealed::Sealed {}
+
+/// Admit each listed type to [`Relayable`].
+macro_rules! relayable {
+    ($($ty:ty),+ $(,)?) => {
+        $(
+            impl sealed::Sealed for $ty {}
+            impl Relayable for $ty {}
+        )+
+    };
+}
+
+relayable!(
+    crate::build_plan::Refusal,
+    crate::delivery::DeliveryError,
+    crate::pack::mobile::MobileRefusal,
+    crate::pack::mobile::BundleError,
+    crate::pack::desktop::DesktopRefusal,
+    crate::ffi::WrapperRefusal,
+    crate::ffi::BuildScriptsBanner,
+    ipe_watch::ScopeError,
+    ipe_lint::ConfigError,
+    ipe_sandbox::run_jail::RunJailDefect,
+    ipe_ffi::diag::Diagnostic,
+    ipe_ffi::diag::WireDefect,
+);
+
+impl fmt::Display for Message {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl Deref for Message {
+    type Target = str;
+
+    fn deref(&self) -> &str {
+        &self.0
+    }
+}
+
+impl PartialEq<str> for Message {
+    fn eq(&self, other: &str) -> bool {
+        *self.0 == *other
+    }
+}
+
+impl PartialEq<&str> for Message {
+    fn eq(&self, other: &&str) -> bool {
+        *self.0 == **other
+    }
+}
+
+impl PartialEq<String> for Message {
+    fn eq(&self, other: &String) -> bool {
+        *self.0 == **other
+    }
+}
+
+impl From<Message> for String {
+    fn from(message: Message) -> Self {
+        message.0.into_owned()
+    }
+}
 
 /// The message catalog.
 pub const CATALOG: &str = include_str!("../text/messages.md");
@@ -248,7 +401,10 @@ const fn has_placeholder(body: &[u8], name: &[u8]) -> bool {
 
 /// Fill `template`'s `{name}` placeholders from `args`.
 ///
-/// Brace text that names no argument is kept as written.
+/// Each value is sanitised on its own before it is inserted, so an escape
+/// sequence a value opens (an unterminated OSC, say) ends at the value's
+/// boundary and cannot swallow the catalog text after it. Brace text that
+/// names no argument is kept as written.
 #[must_use]
 pub fn fill(template: &str, args: &[(&str, &dyn fmt::Display)]) -> String {
     let mut out = String::with_capacity(template.len());
@@ -267,11 +423,26 @@ pub fn fill(template: &str, args: &[(&str, &dyn fmt::Display)]) -> String {
             rest = after;
             continue;
         };
-        let _ = write!(out, "{value}");
+        let mut shown = String::new();
+        // A `Display` that errs leaves what it wrote so far; the message is
+        // still filled rather than aborted.
+        let _ = write!(shown, "{value}");
+        out.push_str(crate::style::TerminalSafe::sanitize(&shown).as_str());
         rest = after.get(close.saturating_add(1)..).unwrap_or("");
     }
     out.push_str(rest);
     out
+}
+
+/// A message parameter as the `&dyn Display` that [`fill`] takes.
+const fn shown(value: &dyn fmt::Display) -> &dyn fmt::Display {
+    value
+}
+
+/// The Rust type of a message parameter: `&dyn Display` unless declared.
+macro_rules! param_ty {
+    () => { &dyn ::std::fmt::Display };
+    ($ty:ty) => { $ty };
 }
 
 /// Declare one catalog message as a function.
@@ -297,25 +468,53 @@ macro_rules! message_fn {
             TEXT
         }
     };
-    ($(#[$meta:meta])* $name:ident($($param:ident),+) = $key:literal) => {
+    ($(#[$meta:meta])* $name:ident($($param:ident $(: $pty:ty)?),+) = $key:literal) => {
         $(#[$meta])*
         #[must_use]
-        pub fn $name($($param: &dyn fmt::Display),+) -> String {
+        pub fn $name($($param: param_ty!($($pty)?)),+) -> String {
             const TEXT: &str = checked_section($key, &[$(stringify!($param)),+]);
             // IPE-RUST-AUDIT:ACCEPTED (Arthur Maciel) — compile-time `const` assertion (not a runtime panic); fails the BUILD if this declaration drifts from its `text/messages.md` section, the catalog SEAL [ledger #boundary]
             const _: () = assert!(
                 !TEXT.is_empty(),
                 concat!("message `", $key, "` disagrees with text/messages.md")
             );
-            fill(TEXT, &[$((stringify!($param), $param)),+])
+            fill(TEXT, &[$((stringify!($param), shown($param))),+])
         }
     };
 }
 
-/// Declare the catalog's messages: a function per message, plus [`DECLARED`].
+/// Declare one catalog message as a [`Message`] function beside its text function.
+macro_rules! message_value_fn {
+    ($(#[$meta:meta])* $name:ident) => {
+        $(#[$meta])*
+        #[must_use]
+        pub const fn $name() -> Message {
+            Message::fixed(super::$name())
+        }
+    };
+    ($(#[$meta:meta])* $name:ident($($param:ident $(: $pty:ty)?),+)) => {
+        $(#[$meta])*
+        #[must_use]
+        pub fn $name($($param: param_ty!($($pty)?)),+) -> Message {
+            Message::filled(&super::$name($($param),+))
+        }
+    };
+}
+
+/// Declare the catalog's messages.
+///
+/// Each gets a text function, its [`Message`] twin under [`msg`], and a
+/// [`DECLARED`] entry.
 macro_rules! messages {
-    ($($(#[$meta:meta])* $name:ident $(($($param:ident),+))? = $key:literal;)*) => {
-        $(message_fn!($(#[$meta])* $name $(($($param),+))? = $key);)*
+    ($($(#[$meta:meta])* $name:ident $(($($param:ident $(: $pty:ty)?),+))? = $key:literal;)*) => {
+        $(message_fn!($(#[$meta])* $name $(($($param $(: $pty)?),+))? = $key);)*
+
+        /// Every catalog message as a [`Message`], the only way to build one.
+        pub mod msg {
+            use super::Message;
+
+            $(message_value_fn!($(#[$meta])* $name $(($($param $(: $pty)?),+))?);)*
+        }
 
         /// Every declared message: its catalog key and its placeholders.
         pub const DECLARED: &[(&str, &[&str])] = &[$(($key, &[$($(stringify!($param)),+)?])),*];
@@ -773,16 +972,16 @@ messages! {
     /// An index entry file is not named `packages/<name>.toml`.
     index_entry_path_invalid(path) = "index-entry-path-invalid";
     /// An index entry exceeds the per-entry version ceiling.
-    index_entry_too_many_versions(name, count, max) = "index-entry-too-many-versions";
+    index_entry_too_many_versions(name: &crate::package_name::PackageName, count, max) = "index-entry-too-many-versions";
     /// An index entry rewrites a published version.
-    index_entry_version_rewritten(name, version) = "index-entry-version-rewritten";
+    index_entry_version_rewritten(name: &crate::package_name::PackageName, version) = "index-entry-version-rewritten";
     /// An index entry drops a published version.
-    index_entry_version_dropped(name, version) = "index-entry-version-dropped";
+    index_entry_version_dropped(name: &crate::package_name::PackageName, version) = "index-entry-version-dropped";
     /// A reserved package's audit-entry drops a published version without a blessed reset.
-    index_entry_version_dropped_reset_refused(name, version, refusal) =
+    index_entry_version_dropped_reset_refused(name: &crate::package_name::PackageName, version, refusal) =
         "index-entry-version-dropped-reset-refused";
     /// An index entry moves a package's source repository.
-    index_entry_source_moved(name, version, source, expected) = "index-entry-source-moved";
+    index_entry_source_moved(name: &crate::package_name::PackageName, version, source, expected) = "index-entry-source-moved";
     /// `ipe clean` ran outside a project root.
     clean_no_manifest = "clean-no-manifest";
     /// `ipe diff` was given a version the package index would refuse.
@@ -863,8 +1062,8 @@ messages! {
     ffi_module_clash(module, krate) = "ffi-module-clash";
     /// An FFI define type collides with an inspected opaque type.
     ffi_define_opaque_collision(krate, name) = "ffi-define-opaque-collision";
-    /// An installed FFI crate emitted a malformed dependency line.
-    ffi_dependency_line_unparsable(krate, line) = "ffi-dependency-line-unparsable";
+    /// Installed FFI crates bind one dependency name to two different sources.
+    ffi_dependency_source_conflict(name, first, second) = "ffi-dependency-source-conflict";
     /// Installed FFI crates pin one dependency to two versions.
     ffi_dependency_pin_conflict(name, first, second) = "ffi-dependency-pin-conflict";
     /// An FFI binding marks a type transparent without its shape.
@@ -883,14 +1082,6 @@ messages! {
     ffi_install_manifest_write_failed(detail) = "ffi-install-manifest-write-failed";
     /// `ipe install` could not write a manifest chunk.
     ffi_install_manifest_chunk_write_failed(detail) = "ffi-install-manifest-chunk-write-failed";
-    /// `ipe install` could not resolve a wrapper crate path.
-    ffi_install_wrapper_crate(path, detail) = "ffi-install-wrapper-crate";
-    /// `ipe install` could not resolve the project root.
-    ffi_install_project_root(detail) = "ffi-install-project-root";
-    /// An `ipe install` wrapper crate resolves outside the project root.
-    ffi_install_wrapper_outside_root(path, resolved) = "ffi-install-wrapper-outside-root";
-    /// An `ipe install` wrapper crate path is not UTF-8.
-    ffi_install_wrapper_not_utf8(path) = "ffi-install-wrapper-not-utf8";
     /// FFI regeneration read malformed inspector JSON.
     ffi_regen_invalid_json(detail) = "ffi-regen-invalid-json";
     /// FFI regeneration read inspector output of an unexpected shape.
@@ -946,7 +1137,7 @@ messages! {
     /// The device code expired.
     login_code_expired = "login-code-expired";
     /// GitHub reported an unrecognised status.
-    login_github_reported(status) = "login-github-reported";
+    login_github_reported(status: &crate::style::TerminalSafe) = "login-github-reported";
     /// GitHub's response carried neither a token nor a status.
     login_response_unrecognised = "login-response-unrecognised";
     /// `curl` could not be launched for the OAuth request.
@@ -954,7 +1145,7 @@ messages! {
     /// The OAuth request failed while waiting for `curl`.
     login_curl_wait_failed(detail) = "login-curl-wait-failed";
     /// The OAuth request failed.
-    login_request_failed(detail) = "login-request-failed";
+    login_request_failed(detail: &crate::style::TerminalSafe) = "login-request-failed";
     /// GitHub's response is not JSON.
     login_response_not_json(detail) = "login-response-not-json";
     /// GitHub's response lacks a field.
@@ -969,6 +1160,54 @@ messages! {
     login_move_failed(path, detail) = "login-move-failed";
     /// The token file could not be removed.
     login_remove_failed(path, detail) = "login-remove-failed";
+    /// The device-flow prompt: what the grant is for, where to go, and the code.
+    login_device_prompt(purpose, url, code: &crate::style::TerminalSafe) = "login-device-prompt";
+    /// What the publish-token grant is for.
+    login_grant_purpose_publish = "login-grant-purpose-publish";
+    /// What the one-shot signing-key-registration grant is for.
+    login_grant_purpose_signing_key(scope) = "login-grant-purpose-signing-key";
+    /// `ipe login --status`: the signing key comes from the environment variable.
+    signing_key_status_env(path: &crate::style::TerminalSafe, env) = "signing-key-status-env";
+    /// `ipe login --status`: the environment variable names no usable key.
+    signing_key_status_env_unusable(env) = "signing-key-status-env-unusable";
+    /// `ipe login --status`: the signing key `ipe login` generated.
+    signing_key_status_stored(path: &crate::style::TerminalSafe) = "signing-key-status-stored";
+    /// `ipe login --status`: no signing key is configured.
+    signing_key_status_none = "signing-key-status-none";
+    /// Signing-key setup found a usable key already configured.
+    signing_key_already_configured(path: &crate::style::TerminalSafe) = "signing-key-already-configured";
+    /// Signing-key setup found the environment variable set but unusable.
+    signing_key_env_unusable(env) = "signing-key-env-unusable";
+    /// The user declined signing-key setup.
+    signing_key_declined(env) = "signing-key-declined";
+    /// A signing key was generated, registered, and stored.
+    signing_key_registered(path: &crate::style::TerminalSafe, settings) = "signing-key-registered";
+    /// The consent question before generating and registering a signing key.
+    signing_key_consent_question(path: &crate::style::TerminalSafe, scope, revoke_url) = "signing-key-consent-question";
+    /// No signing key is configured and no terminal is available to set one up.
+    signing_key_hint_no_terminal = "signing-key-hint-no-terminal";
+    /// `ipe login --signing-key` without an interactive terminal.
+    signing_key_needs_terminal = "signing-key-needs-terminal";
+    /// No config directory could be determined for the signing key.
+    signing_key_no_config_dir = "signing-key-no-config-dir";
+    /// A non-key entry occupies a signing-key file name.
+    signing_key_occupied(path: &crate::style::TerminalSafe) = "signing-key-occupied";
+    /// The config directory cannot hold the hard links key storage relies on.
+    signing_key_link_unsupported(dir: &crate::style::TerminalSafe, detail: &crate::style::TerminalSafe, env) = "signing-key-link-unsupported";
+    /// The OS random-number generator failed.
+    signing_key_generation_failed = "signing-key-generation-failed";
+    /// A filesystem step before registration failed.
+    signing_key_write_failed(path: &crate::style::TerminalSafe, detail: &crate::style::TerminalSafe) = "signing-key-write-failed";
+    /// Registration failed and the local key was removed.
+    signing_key_registration_failed(reason: &crate::text::Message) = "signing-key-registration-failed";
+    /// The key is registered on GitHub but could not be stored locally.
+    signing_key_commit_failed(path: &crate::style::TerminalSafe, detail: &crate::style::TerminalSafe, title, settings) = "signing-key-commit-failed";
+    /// The key-registration device-flow authorization failed.
+    signing_key_authorization_failed(reason: &crate::style::TerminalSafe) = "signing-key-authorization-failed";
+    /// GitHub refused the signing key.
+    signing_key_refused(status, message: &crate::style::TerminalSafe) = "signing-key-refused";
+    /// The key-registration request got no HTTP answer.
+    signing_key_unreachable(reason: &crate::style::TerminalSafe) = "signing-key-unreachable";
     /// `ipe add` was given a malformed version requirement.
     pkg_invalid_requirement(requirement, detail) = "pkg-invalid-requirement";
     /// The usage line of `ipe add` / `ipe remove`.
@@ -1081,8 +1320,10 @@ messages! {
     output_inside_vcs(out) = "output-inside-vcs";
     /// An output inside an ipe cache namespace.
     output_inside_cache_namespace(out, namespace) = "output-inside-cache-namespace";
-    /// An output whose not-yet-existing tail contains `..`.
+    /// An output with a `..` that does not climb out of a plain existing directory.
     output_parent_traversal(path) = "output-parent-traversal";
+    /// An output that names no single absolute place on every platform.
+    output_unplaceable(path) = "output-unplaceable";
     /// An eject output that is not absent or empty.
     output_not_fresh(path) = "output-not-fresh";
     /// A product path with a component other than a plain name.
@@ -1095,6 +1336,8 @@ messages! {
     output_too_deep(path, limit) = "output-too-deep";
     /// A path on or under a Windows reparse point.
     output_reparse_point(path) = "output-reparse-point";
+    /// An entry another program holds open, so ipe cannot remove or replace it.
+    output_in_use(path) = "output-in-use";
     /// A GitHub login with nothing before its optional `[bot]` suffix.
     login_empty = "login-empty";
     /// A GitHub login past the length ceiling.
@@ -1121,11 +1364,213 @@ messages! {
     publish_fresh_needs_blessing(name, reason) = "publish-fresh-needs-blessing";
     /// A blessing proof that does not cover the claimed publisher.
     publish_fresh_claim_not_covered(claimed) = "publish-fresh-claim-not-covered";
+    /// An index `source` that is not an accepted URL.
+    index_source_url_invalid(pkg: &crate::package_name::PackageName, raw: &crate::style::TerminalSafe) = "index-source-url-invalid";
+    /// An index `rev` shaped like an injection.
+    index_rev_injection(pkg: &crate::package_name::PackageName, raw: &crate::style::TerminalSafe) = "index-rev-injection";
+    /// A recorded `rev` that is not a full commit SHA.
+    index_rev_not_immutable(pkg: &crate::package_name::PackageName, raw: &crate::style::TerminalSafe) = "index-rev-not-immutable";
+    /// `git rev-parse` could not be run.
+    index_rev_parse_unavailable(pkg: &crate::package_name::PackageName, detail) = "index-rev-parse-unavailable";
+    /// A pinned ref that is not a commit in the fetched checkout.
+    index_rev_unresolved(pkg: &crate::package_name::PackageName, refspec: &crate::style::TerminalSafe, rev: &crate::style::TerminalSafe) =
+        "index-rev-unresolved";
+    /// An index `sha256` that is not a content hash.
+    index_sha256_invalid(pkg: &crate::package_name::PackageName, raw: &crate::style::TerminalSafe) = "index-sha256-invalid";
+    /// An index entry that exists but cannot be read.
+    index_entry_unreadable(name: &crate::package_name::PackageName, detail) = "index-entry-unreadable";
+    /// `ipe add` of a package the index does not list.
+    add_package_not_in_index(name: &crate::package_name::PackageName) = "add-package-not-in-index";
+    /// `ipe add` could not read an index entry.
+    add_index_entry_unreadable(name: &crate::package_name::PackageName, kind) = "add-index-entry-unreadable";
+    /// No published version satisfies the requirement.
+    index_no_version_satisfies(name: &crate::package_name::PackageName, req, available) = "index-no-version-satisfies";
+    /// The available-versions list of an entry with none.
+    index_no_version_available = "index-no-version-available";
+    /// An index entry `publisher` that is not a login.
+    index_publisher_not_login(name: &crate::package_name::PackageName, refusal) = "index-publisher-not-login";
+    /// An index entry without `publisher`.
+    index_entry_missing_publisher(name: &crate::package_name::PackageName) = "index-entry-missing-publisher";
+    /// An index entry without `[[version]]`.
+    index_entry_no_versions(name: &crate::package_name::PackageName) = "index-entry-no-versions";
+    /// A malformed registry JSON mirror.
+    registry_json_malformed(name: &crate::package_name::PackageName, detail: &crate::style::TerminalSafe) = "registry-json-malformed";
+    /// An index entry capability that is not known.
+    index_capability_unknown(name: &crate::package_name::PackageName, detail: &crate::style::TerminalSafe) =
+        "index-capability-unknown";
+    /// A `[[version]]` entry missing a field.
+    index_version_missing_field(name: &crate::package_name::PackageName, field) = "index-version-missing-field";
+    /// An index entry `capabilities` that is not an array.
+    index_capabilities_not_array(name: &crate::package_name::PackageName, raw: &crate::style::TerminalSafe) =
+        "index-capabilities-not-array";
+    /// `ipe package publish --rev` naming no commit.
+    publish_rev_unresolved(refspec: &crate::style::TerminalSafe, rev: &crate::style::TerminalSafe) =
+        "publish-rev-unresolved";
+    /// A scratch-filesystem failure during publish.
+    publish_scratch_io(detail) = "publish-scratch-io";
+    /// Cloning the author's index fork failed.
+    publish_clone_failed(fork_url, git: &crate::style::TerminalSafe) = "publish-clone-failed";
+    /// Pushing to the author's index fork failed.
+    publish_push_failed(branch, fork_url, url, git: &crate::style::TerminalSafe) =
+        "publish-push-failed";
+    /// `ipe package publish` outside a git repository.
+    publish_not_git_repo(path) = "publish-not-git-repo";
+    /// `ipe package publish` could not run `git`.
+    publish_git_unavailable(detail) = "publish-git-unavailable";
+    /// A registry trust identity field that is not a token.
+    trust_token_invalid(label, raw: &crate::style::TerminalSafe) = "trust-token-invalid";
+    /// A malformed signature bundle.
+    signature_bundle_malformed(pkg, detail: &crate::style::TerminalSafe) =
+        "signature-bundle-malformed";
+    /// An unsigned version under a policy requiring signatures.
+    signature_required_absent(pkg) = "signature-required-absent";
+    /// A publisher signature that does not verify.
+    signature_untrusted(pkg, detail: &crate::style::TerminalSafe) = "signature-untrusted";
+    /// A malformed registry trust config.
+    trust_config_malformed(detail: &crate::style::TerminalSafe) = "trust-config-malformed";
+    /// A path dependency whose directory does not exist.
+    resolve_path_dep_missing(name, path) = "resolve-path-dep-missing";
+    /// An index dependency given to the escape resolver.
+    resolve_index_dep_escape(name) = "resolve-index-dep-escape";
+    /// Dependency resolution could not run `git`.
+    resolve_git_unavailable(name, detail) = "resolve-git-unavailable";
+    /// A `git` step of dependency resolution failed.
+    resolve_git_failed(name, args: &crate::style::TerminalSafe, stderr: &crate::style::TerminalSafe) =
+        "resolve-git-failed";
+    /// An `ipe login` failure.
+    login_error(message: &crate::text::Message) = "login-error";
+    /// A package name that is not a safe path component.
+    package_name_invalid(raw: &crate::style::TerminalSafe, why) = "package-name-invalid";
+    /// Why a package name is invalid: it is empty.
+    package_name_empty = "package-name-empty";
+    /// Why a package name is invalid: it is too long.
+    package_name_too_long(max) = "package-name-too-long";
+    /// Why a package name is invalid: its first character.
+    package_name_bad_start = "package-name-bad-start";
+    /// Why a package name is invalid: a doubled `-`.
+    package_name_doubled_dash = "package-name-doubled-dash";
+    /// Why a package name is invalid: a disallowed character.
+    package_name_bad_char = "package-name-bad-char";
+    /// Why a package name is invalid: a trailing `-`.
+    package_name_trailing_dash = "package-name-trailing-dash";
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Untrusted placeholders reach the rendered refusal with every escape
+    /// sequence and control byte stripped, and the surrounding text pinned.
+    #[test]
+    #[allow(clippy::expect_used)] // the fixture name is a literal registry name
+    fn untrusted_placeholders_render_terminal_safe() {
+        let pkg = crate::package_name::PackageName::parse("pkg").expect("fixture name parses");
+        let hostile =
+            crate::style::TerminalSafe::sanitize("x\u{1b}[31my\u{7}z\u{9b}\u{1b}]0;t\u{7}");
+        let table: [(String, &str); 8] = [
+            (
+                index_rev_not_immutable(&pkg, &hostile),
+                "package `pkg`: recorded `rev` is not an immutable commit SHA (expected 40 lowercase hex chars), got: xyz — re-run `ipe add` to record an immutable pin",
+            ),
+            (
+                signature_bundle_malformed(&pkg, &hostile),
+                "package `pkg`: signature bundle is malformed (xyz)",
+            ),
+            (
+                trust_config_malformed(&hostile),
+                "registry trust config is malformed (xyz)",
+            ),
+            (
+                trust_token_invalid(&"publisher", &hostile),
+                "registry trust: `publisher` must be a non-empty token with no whitespace or control characters, got: xyz",
+            ),
+            (
+                add_package_not_in_index(&pkg),
+                "add: package `pkg` is not in the index — check the name, or run `ipe rust add` for a Rust crate",
+            ),
+            (
+                index_no_version_satisfies(&pkg, &"^1", &hostile),
+                "package `pkg`: no published version satisfies `^1` (available: xyz)",
+            ),
+            (
+                index_source_url_invalid(&pkg, &hostile),
+                "package `pkg`: `source` must be an https://, git://, ssh://, or file:// URL (or a bare absolute path), got: xyz",
+            ),
+            (
+                registry_json_malformed(&pkg, &hostile),
+                "package `pkg`: registry JSON is malformed (xyz)",
+            ),
+        ];
+        for (rendered, expected) in &table {
+            assert_eq!(rendered, expected);
+            assert!(
+                !rendered
+                    .chars()
+                    .any(|c| c.is_control() && c != '\n' && c != '\t'),
+                "control byte survived in {rendered:?}"
+            );
+        }
+    }
+
+    /// A default-typed placeholder is sanitised too: a `Message` never carries
+    /// an escape sequence or a stray control byte, whatever filled it.
+    #[test]
+    fn every_filled_message_is_terminal_safe() {
+        let hostile = "a\u{1b}[2Jb\rc\u{7f}d\u{9b}e";
+        let message = msg::publish_no_version(&hostile);
+        assert_eq!(
+            message,
+            "ipe package publish: `abcde` declares no `version = \"…\"` — publish records the version being published, so the manifest must name one."
+        );
+        let joined = Message::lines([message, msg::publish_no_version(&"x\ny")]);
+        assert!(
+            !joined
+                .chars()
+                .any(|c| c.is_control() && c != '\n' && c != '\t'),
+            "control byte survived in {joined:?}"
+        );
+    }
+
+    /// An escape a value leaves open ends at the value: an unterminated OSC
+    /// cannot swallow the trusted catalog text that follows it.
+    #[test]
+    fn an_unterminated_escape_in_a_value_keeps_the_catalog_tail() {
+        let message = msg::publish_no_version(&"x\u{1b}]");
+        assert_eq!(
+            message,
+            "ipe package publish: `x` declares no `version = \"…\"` — publish records the version being published, so the manifest must name one."
+        );
+        // The catalog text after `{why}` opens with a space and a dash, neither
+        // a CSI final byte, so a whole-text-only pass would swallow them.
+        let raw = crate::style::TerminalSafe::sanitize("raw");
+        let csi = msg::package_name_invalid(&raw, &"y\u{1b}[");
+        assert_eq!(
+            csi,
+            "`raw` is not a valid package name: y — a name is joined into a filesystem path, so it must be a single portable path component (matching `[a-z0-9]([a-z0-9]|-[a-z0-9])*`)"
+        );
+    }
+
+    /// A relayed refusal is sanitised: its own `Display` cannot smuggle an
+    /// escape sequence into the message.
+    #[test]
+    fn a_relayed_refusal_is_terminal_safe() {
+        let relayed = Message::relay(&ipe_lint::ConfigError::Rejected(
+            "bad\u{1b}]0;title\u{7}key\u{1b}[31m".to_owned(),
+        ));
+        assert!(
+            !relayed
+                .chars()
+                .any(|c| c.is_control() && c != '\n' && c != '\t'),
+            "control byte survived in {relayed:?}"
+        );
+        assert!(relayed.contains("badkey"), "{relayed:?}");
+    }
+
+    /// The catalog itself holds no control byte besides the line break.
+    #[test]
+    fn the_catalog_is_free_of_control_bytes() {
+        assert!(!CATALOG.chars().any(|c| c.is_control() && c != '\n'));
+    }
 
     /// Every `## <key>` the catalog defines.
     fn catalog_keys() -> Vec<&'static str> {
@@ -1241,11 +1686,11 @@ mod tests {
     /// Calls whose message argument must come from the catalog.
     const MESSAGE_SINKS: &[&str] = &[
         "CliError::Usage(",
-        "CliError::UsageOwned(",
         "Self::Usage(",
-        "Self::UsageOwned(",
+        "CliError::Resolve(",
+        "Self::Resolve(",
+        "Message::relay(",
         "usage(",
-        "usage_owned(",
         "login_error(",
     ];
 
@@ -1521,10 +1966,11 @@ mod tests {
 
     /// No production code spells a user-facing message as a Rust literal.
     ///
-    /// Every message sink (`CliError::Usage`/`UsageOwned` and the helpers that
-    /// wrap them) takes its text from a `text::` function, so the rendered text
-    /// and its catalog entry cannot drift. `#[cfg(test)]` items and `tests/`
-    /// directories are exempt: a test fixture is not user-facing text.
+    /// Every message sink (`CliError::Usage`, `CliError::Resolve`, and the
+    /// helpers that wrap them) takes its text from a `text::` function, so the
+    /// rendered text and its catalog entry cannot drift. `#[cfg(test)]` items and
+    /// confirmed out-of-line test modules ([`panic_scan::is_verified_test_path`])
+    /// are exempt: a test fixture is not user-facing text.
     #[test]
     fn no_literal_cli_error_usage_outside_the_catalog() {
         let src_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
@@ -1532,7 +1978,10 @@ mod tests {
         assert!(!files.is_empty(), "no sources under {}", src_root.display());
         let mut offenders = Vec::new();
         for path in files {
-            if path.components().any(|c| c.as_os_str() == "tests") {
+            let is_test_module = path
+                .strip_prefix(&src_root)
+                .is_ok_and(|rel| panic_scan::is_verified_test_path(&src_root, rel));
+            if is_test_module {
                 continue;
             }
             let src = std::fs::read_to_string(&path).expect("source is readable");
@@ -1557,15 +2006,17 @@ mod tests {
             r#"Err(CliError::Usage("x"))"#,
             r#"Err(CliError::Usage(
                 "split across lines"))"#,
-            r#"CliError::UsageOwned(format!("bad {x}"))"#,
-            r#"CliError::UsageOwned(format!("{}: {}", a, b))"#,
-            r#"CliError::UsageOwned(format!("{{literal braces}}"))"#,
-            r#"CliError::UsageOwned("x".to_owned())"#,
-            r#"CliError::UsageOwned(String::from("x"))"#,
-            r#"CliError::UsageOwned(format!(r"raw {x}"))"#,
-            r#"Self::UsageOwned("x".into())"#,
+            r#"CliError::Usage(format!("bad {x}"))"#,
+            r#"CliError::Usage(format!("{}: {}", a, b))"#,
+            r#"CliError::Usage(format!("{{literal braces}}"))"#,
+            r#"CliError::Usage("x".to_owned())"#,
+            r#"CliError::Usage(String::from("x"))"#,
+            r#"CliError::Usage(format!(r"raw {x}"))"#,
+            r#"Self::Usage("x".into())"#,
             r#"package_manifest::usage("x")"#,
-            r#"usage_owned(format!("no {x} here"))"#,
+            r#"Message::relay(&format!("no {x} here"))"#,
+            r#"CliError::Resolve(format!("package `{name}`: {e}"))"#,
+            r#"Self::Resolve("x".into())"#,
             r#"login_error(&format!("failed: {e}"))"#,
             "fn f() {}\n#[cfg(test)]\nfn t() {}\nfn g() { CliError::Usage(\"late\") }",
             "#[cfg(test)]\nuse x;\nfn g() { CliError::Usage(\"after a test-only use\") }",
@@ -1578,11 +2029,13 @@ mod tests {
     #[test]
     fn the_detector_passes_catalog_calls_comments_strings_and_tests() {
         let clean = [
-            "CliError::Usage(text::fix_usage())",
-            r#"CliError::UsageOwned(format!("{e}"))"#,
-            r#"CliError::UsageOwned(format!("{}\n{}", a, b))"#,
-            "CliError::UsageOwned(text::command_refusal(&a, &b))",
-            "CliError::UsageOwned(err.to_string())",
+            "CliError::Usage(text::msg::fix_usage())",
+            r#"CliError::Usage(format!("{e}"))"#,
+            r#"CliError::Usage(format!("{}\n{}", a, b))"#,
+            "CliError::Usage(text::msg::command_refusal(&a, &b))",
+            "CliError::Usage(crate::text::Message::relay(&err))",
+            "CliError::Resolve(text::msg::index_entry_no_versions(&name))",
+            "CliError::Resolve(crate::text::Message::relay(&banner))",
             "// CliError::Usage(\"in a comment\")",
             "/* CliError::Usage(\"in a block comment\") */",
             r#"let s = "CliError::Usage(\"in a string\")";"#,

@@ -610,7 +610,7 @@ fn print_report(report: &SemverReport, format: crate::cli_args::OutputFormat) {
 /// invocations; it prints a notice pointing at the bare word.
 ///
 /// # Errors
-/// [`CliError::Usage`] on argument misuse, [`CliError::UsageOwned`] on a
+/// [`CliError::Usage`] on argument misuse, [`CliError::Usage`] on a
 /// malformed version, [`CliError::Diff`] when a tree cannot be read/typechecked,
 /// or [`CliError::SemverRejected`] when the verify mode finds an under-bump.
 pub fn run_diff(rest: &[String]) -> Result<(), CliError> {
@@ -626,7 +626,7 @@ const CHECK_DEPRECATION_NOTICE: &str =
 /// [`run_diff`] with the deprecation-notice sink injected, so a test can observe
 /// the alias notice without inspecting a process's stderr.
 fn run_diff_with(rest: &[String], notice: &mut dyn FnMut(&str)) -> Result<(), CliError> {
-    let usage = || CliError::Usage(text::diff_usage());
+    let usage = || CliError::Usage(text::msg::diff_usage());
 
     // Peel the deprecated `--check <old-version> <new-version>` alias FIRST, so
     // the shared format parse (which rejects any other unknown `-`-leading flag)
@@ -763,5 +763,5 @@ impl ReportBaseline {
 fn parse_version(raw: &str) -> Result<Version, CliError> {
     PublishedVersion::parse(raw)
         .map(|version| version.as_semver().clone())
-        .map_err(|refusal| CliError::UsageOwned(text::diff_invalid_version(&refusal)))
+        .map_err(|refusal| CliError::Usage(text::msg::diff_invalid_version(&refusal)))
 }

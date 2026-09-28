@@ -290,15 +290,10 @@ pub struct WebViewWindow {
 /// [reserved]: https://doc.rust-lang.org/reference/keywords.html
 #[must_use]
 pub fn sanitize_cargo_name(name: &str) -> String {
-    const RESERVED: &[&str] = &[
-        "abstract", "as", "async", "await", "become", "box", "break", "const", "continue", "crate",
-        "do", "dyn", "else", "enum", "extern", "false", "final", "fn", "for", "if", "impl", "in",
-        "let", "loop", "macro", "match", "mod", "move", "mut", "override", "priv", "pub", "ref",
-        "return", "self", "Self", "static", "struct", "super", "trait", "true", "try", "type",
-        "typeof", "union", "unsafe", "unsized", "use", "virtual", "where", "while", "yield",
-        // Toolchain binary name.
-        "ipe",
-    ];
+    // Non-keyword names that still get the suffix: the toolchain binary name
+    // (a crate named `ipe` would shadow the CLI on `$PATH`) and the weak
+    // keyword `union`, kept conservative for a crate name.
+    const EXTRA_SUFFIXED: &[&str] = &["ipe", "union"];
 
     // Names Cargo forbids as a binary target because they collide with its
     // build-directory names — the emitted crate has no `[[bin]]` override, so
@@ -336,10 +331,13 @@ pub fn sanitize_cargo_name(name: &str) -> String {
         return "ipe-app".to_owned();
     }
 
-    // Step 6: reserved Rust keywords, the `ipe` toolchain name, and Cargo's
+    // Step 6: reserved Rust keywords, the extra suffixed names, and Cargo's
     // forbidden binary-target names get `-app` appended to keep the emitted
     // crate buildable.
-    if RESERVED.contains(&result.as_str()) || CARGO_FORBIDDEN_BIN.contains(&result.as_str()) {
+    if ipe_intern::is_rust_keyword(&result)
+        || EXTRA_SUFFIXED.contains(&result.as_str())
+        || CARGO_FORBIDDEN_BIN.contains(&result.as_str())
+    {
         result.push_str("-app");
     }
 
@@ -1273,6 +1271,12 @@ pub(crate) struct EmitCtx<'a> {
     /// `Ui.cells` with IPE-L0153 (a terminal cell grid has no string
     /// denotation in a line-oriented Cli view).
     pub(crate) uses_console: bool,
+    /// The app surface the program's entry `main` pins, read from its return type.
+    ///
+    /// Unlike the `uses_*` usage flags (set by ANY module that names an app
+    /// entry), this is the one surface whose loop actually runs, so a shape-owned
+    /// kernel is checked against it.
+    pub(crate) entry_surface: ipe_ir::AppSurface,
     /// `true` when the program uses at least one `Ipe.WebView` app-entry kernel.
     /// When set, the emitted project gains the `"webview"` Cargo feature
     /// (which transitively pulls `"live"`) and the main entry is switched to
@@ -2156,6 +2160,7 @@ impl<'a> EmitCtx<'a> {
         // (`RUNTIME_MOD_RS_WEBVIEW_CORE_APPEND`) and the `web-core`/`webview` Cargo
         // features; a program that reaches BOTH keeps the full `web` module.
         let uses_webview = webview_host || program.modules.iter().any(|m| m.uses_webview);
+        let entry_surface = entry_app_surface(program, uses_webview);
         let (uses_ui, uses_web, uses_tui, uses_console) = (
             program.modules.iter().any(|m| m.uses_ui),
             program.modules.iter().any(|m| m.uses_web),
@@ -2311,6 +2316,7 @@ impl<'a> EmitCtx<'a> {
             uses_web,
             uses_tui,
             uses_console,
+            entry_surface,
             uses_webview,
             webview_window,
             uses_css,
@@ -4518,6 +4524,26 @@ fn collect_generics(ty: &IrType, out: &mut Vec<Symbol>) {
     }
 }
 
+/// The app surface the program's entry `main` pins, from its lowered return type.
+///
+/// A `WebApp` leaf under a webview host is the `WebView` surface; an entry that
+/// returns no app leaf (or a program with no entry) is a `Script`.
+fn entry_app_surface(program: &Program, webview: bool) -> ipe_ir::AppSurface {
+    use ipe_ir::AppSurface;
+    let entry_ret = program.modules.iter().find_map(|m| {
+        let entry = m.entry?;
+        m.funcs.iter().find(|f| f.id == entry).map(|f| &f.ret)
+    });
+    match entry_ret {
+        Some(IrType::WebApp) if webview => AppSurface::WebView,
+        Some(IrType::WebApp) => AppSurface::Web,
+        Some(IrType::TuiApp) => AppSurface::Tui,
+        Some(IrType::CliApp) => AppSurface::Cli,
+        Some(IrType::WorkerApp) => AppSurface::Worker,
+        _ => AppSurface::Script,
+    }
+}
+
 /// A position-canonical rendering of a field-shape: every [`IrType::Generic`]
 /// symbol is replaced by its first-occurrence index, so two alpha-equivalent
 /// templates (`{ value : a }` and `{ value : b }`) render the same string and a
@@ -5703,6 +5729,19 @@ mod sanitize_cargo_name_tests {
         assert_eq!(sanitize_cargo_name("mod"), "mod-app");
         assert_eq!(sanitize_cargo_name("fn"), "fn-app");
         assert_eq!(sanitize_cargo_name("ipe"), "ipe-app");
+        assert_eq!(sanitize_cargo_name("union"), "union-app");
+    }
+
+    #[test]
+    fn every_ssot_keyword_gets_suffix() {
+        for kw in ipe_intern::RUST_KEYWORDS {
+            let lower = kw.to_ascii_lowercase();
+            assert_eq!(
+                sanitize_cargo_name(kw),
+                format!("{lower}-app"),
+                "{kw} should get the -app suffix"
+            );
+        }
     }
 
     #[test]

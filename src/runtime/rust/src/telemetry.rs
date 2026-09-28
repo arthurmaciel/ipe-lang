@@ -156,27 +156,256 @@ pub fn spans_json(limit: usize) -> String {
     format!("[{}]", items.join(","))
 }
 
-/// Production gate: `ENV` then `IPE_ENV` selects the posture. An explicit dev
-/// marker (`dev`/`development`/`local`) is dev; any other explicit value is
-/// production. With neither variable set, the build profile decides: a release
-/// binary is production, a debug binary is dev. This keys every dev-open gate
-/// (unauthenticated console, token-less ingest, SSRF deny-private, non-Secure
-/// cookies) off a signal that fails closed for a released binary deployed
-/// without env vars.
+/// The raw read of one environment variable, before interpretation.
+///
+/// Keeps a present-but-non-UTF-8 value distinct from an absent one, so a
+/// garbled explicit setting can never fall through to the unset default.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum RawEnv<'a> {
+    /// The variable is not set.
+    Absent,
+    /// The variable is set to valid UTF-8.
+    Value(&'a str),
+    /// The variable is set but is not valid UTF-8.
+    NotUnicode,
+}
+
+impl<'a> RawEnv<'a> {
+    /// Classify an environment read result.
+    #[must_use]
+    pub fn from_read(read: &'a Result<String, std::env::VarError>) -> Self {
+        match read {
+            Ok(value) => Self::Value(value),
+            Err(std::env::VarError::NotPresent) => Self::Absent,
+            Err(std::env::VarError::NotUnicode(_)) => Self::NotUnicode,
+        }
+    }
+}
+
+/// The deployment posture every dev-open gate keys off.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Posture {
+    /// Local development: dev-only conveniences may open.
+    Dev,
+    /// Production: every dev-open gate stays closed.
+    Production,
+}
+
+impl Posture {
+    /// Parse the posture from the raw `ENV` and `IPE_ENV` reads.
+    ///
+    /// `ENV` then `IPE_ENV` selects the posture: an explicit dev marker
+    /// (`dev`/`development`/`local`, case-insensitive) is `Dev`; any other
+    /// explicit value, a non-UTF-8 one included, is `Production`. An absent
+    /// or empty variable defers to the next source; with neither set,
+    /// `release_build` decides.
+    #[must_use]
+    pub fn parse(env: RawEnv<'_>, ipe_env: RawEnv<'_>, release_build: bool) -> Self {
+        for raw in [env, ipe_env] {
+            match raw {
+                RawEnv::NotUnicode => return Self::Production,
+                RawEnv::Absent => {}
+                RawEnv::Value("") => {}
+                RawEnv::Value(value) => {
+                    let dev = ["dev", "development", "local"]
+                        .iter()
+                        .any(|marker| value.eq_ignore_ascii_case(marker));
+                    return if dev { Self::Dev } else { Self::Production };
+                }
+            }
+        }
+        if release_build {
+            Self::Production
+        } else {
+            Self::Dev
+        }
+    }
+
+    /// Resolve the posture from the process environment and build profile.
+    #[must_use]
+    pub fn from_env() -> Self {
+        let env = crate::system::read_env_var("ENV");
+        let ipe_env = crate::system::read_env_var("IPE_ENV");
+        Self::parse(
+            RawEnv::from_read(&env),
+            RawEnv::from_read(&ipe_env),
+            !cfg!(debug_assertions),
+        )
+    }
+
+    /// The label logged at startup (`posture=<label>`).
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Dev => "dev",
+            Self::Production => "production",
+        }
+    }
+}
+
+/// Production gate over [`Posture::from_env`]. A release binary deployed
+/// without env vars is production, so every dev-open gate (unauthenticated
+/// console, token-less ingest, SSRF deny-private, non-Secure cookies) fails
+/// closed.
 #[must_use]
 pub fn production_from_env() -> bool {
-    let mut e = crate::system::read_env_var("ENV")
-        .unwrap_or_default()
-        .to_ascii_lowercase();
-    if e.is_empty() {
-        e = crate::system::read_env_var("IPE_ENV")
-            .unwrap_or_default()
-            .to_ascii_lowercase();
+    Posture::from_env() == Posture::Production
+}
+
+/// The resolved `IPE_CONSOLE_AUTH` setting for the console + metrics surface.
+///
+/// An explicit value is enforced whatever the posture; the posture only picks
+/// the default when the variable is unset or blank. An unrecognised or
+/// non-UTF-8 value resolves to `Off` — the surface is refused, never widened.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ConsoleAuthMode {
+    /// Surface declared absent (`off`, an unrecognised value, or non-UTF-8).
+    Off,
+    /// Explicit `token`: an admin token is required in every posture.
+    Token,
+    /// Explicit `app`: the app-supplied `consoleAuth` callback decides.
+    App,
+    /// Unset in production: an admin token is required.
+    UnsetProd,
+    /// Unset in dev: open.
+    DevOpen,
+}
+
+impl ConsoleAuthMode {
+    /// Parse a raw `IPE_CONSOLE_AUTH` value (trimmed, case-insensitive).
+    ///
+    /// `posture` is consulted only when `raw` is absent or blank; a
+    /// non-UTF-8 value resolves to `Off` in every posture.
+    #[must_use]
+    pub fn parse(raw: RawEnv<'_>, posture: Posture) -> Self {
+        ConsoleAuthResolution::resolve(raw, posture).mode
     }
-    if e.is_empty() {
-        return !cfg!(debug_assertions);
+
+    /// Resolve the setting from the process environment.
+    #[must_use]
+    pub fn from_env() -> Self {
+        ConsoleAuthResolution::from_env().mode
     }
-    !matches!(e.as_str(), "dev" | "development" | "local")
+
+    /// The label logged at console mount (`mode=<label>`).
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Off => "off",
+            Self::Token => "token",
+            Self::App => "app",
+            Self::UnsetProd => "unset-prod",
+            Self::DevOpen => "dev-open",
+        }
+    }
+}
+
+/// Where the effective console-auth mode came from.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ConsoleAuthSource {
+    /// `IPE_CONSOLE_AUTH` names a recognised mode, enforced in every posture.
+    Explicit,
+    /// `IPE_CONSOLE_AUTH` holds an unrecognised or non-UTF-8 value.
+    ///
+    /// The surface is refused (`Off`).
+    Invalid,
+    /// `IPE_CONSOLE_AUTH` is unset or blank: the posture picks the mode.
+    PostureDefault,
+}
+
+impl ConsoleAuthSource {
+    /// The label logged at startup (`source=<label>`).
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Explicit => "env",
+            Self::Invalid => "env-invalid",
+            Self::PostureDefault => "posture-default",
+        }
+    }
+}
+
+/// The effective console-auth setting: posture, mode, and the mode's source.
+///
+/// The single parse of `IPE_CONSOLE_AUTH`; [`ConsoleAuthMode::parse`] and
+/// [`ConsoleAuthMode::from_env`] project it. It holds no credential, so
+/// nothing derived from it can leak one.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct ConsoleAuthResolution {
+    /// The deployment posture in effect.
+    pub posture: Posture,
+    /// The effective auth mode.
+    pub mode: ConsoleAuthMode,
+    /// Whether the mode was set explicitly or defaulted from the posture.
+    pub source: ConsoleAuthSource,
+}
+
+impl ConsoleAuthResolution {
+    /// Resolve a raw `IPE_CONSOLE_AUTH` value (trimmed, case-insensitive).
+    ///
+    /// `posture` picks the mode only when `raw` is absent or blank; a
+    /// recognised explicit value wins in every posture; an unrecognised or
+    /// non-UTF-8 value resolves to `Off`.
+    #[must_use]
+    pub fn resolve(raw: RawEnv<'_>, posture: Posture) -> Self {
+        let (mode, source) = match raw {
+            RawEnv::NotUnicode => (ConsoleAuthMode::Off, ConsoleAuthSource::Invalid),
+            RawEnv::Absent => (
+                Self::posture_default(posture),
+                ConsoleAuthSource::PostureDefault,
+            ),
+            RawEnv::Value(value) => Self::from_value(value.trim(), posture),
+        };
+        Self {
+            posture,
+            mode,
+            source,
+        }
+    }
+
+    fn from_value(value: &str, posture: Posture) -> (ConsoleAuthMode, ConsoleAuthSource) {
+        if value.is_empty() {
+            (
+                Self::posture_default(posture),
+                ConsoleAuthSource::PostureDefault,
+            )
+        } else if value.eq_ignore_ascii_case("token") {
+            (ConsoleAuthMode::Token, ConsoleAuthSource::Explicit)
+        } else if value.eq_ignore_ascii_case("app") {
+            (ConsoleAuthMode::App, ConsoleAuthSource::Explicit)
+        } else if value.eq_ignore_ascii_case("off") {
+            (ConsoleAuthMode::Off, ConsoleAuthSource::Explicit)
+        } else {
+            (ConsoleAuthMode::Off, ConsoleAuthSource::Invalid)
+        }
+    }
+
+    const fn posture_default(posture: Posture) -> ConsoleAuthMode {
+        match posture {
+            Posture::Production => ConsoleAuthMode::UnsetProd,
+            Posture::Dev => ConsoleAuthMode::DevOpen,
+        }
+    }
+
+    /// Resolve the setting from the process environment.
+    #[must_use]
+    pub fn from_env() -> Self {
+        let read = crate::system::read_env_var("IPE_CONSOLE_AUTH");
+        Self::resolve(RawEnv::from_read(&read), Posture::from_env())
+    }
+
+    /// The one startup line naming the effective posture, mode, and source.
+    ///
+    /// Built from labels alone: never a token, its length, or any prefix.
+    #[must_use]
+    pub fn startup_line(self) -> String {
+        format!(
+            "[ipe.console] auth posture={} mode={} source={}",
+            self.posture.label(),
+            self.mode.label(),
+            self.source.label()
+        )
+    }
 }
 
 /// Floating "🔍 Console" link injected into every dev-mode `text/html` response
@@ -189,7 +418,7 @@ pub fn production_from_env() -> bool {
 /// itself; a console link inside the console is recursive), in production
 /// (`ENV`/`IPE_ENV` non-dev), when the banner is turned off (`IPE_DEV_BANNER=off|0`,
 /// ), and when the console surface is disabled (`IPE_CONSOLE_EMBED=off`
-/// / `IPE_CONSOLE_AUTH=off`). The union of  and the live path's gates —
+/// / `IPE_CONSOLE_AUTH` resolving to `off`). The union of  and the live path's gates —
 /// suppression only ever makes bodies match MORE often across odd configs, and
 /// the sweep's env (nothing set) hits the injecting path either way.
 ///
@@ -210,7 +439,7 @@ pub fn dev_console_banner(base: &str) -> String {
     if matches!(
         crate::system::read_env_var("IPE_CONSOLE_EMBED").as_deref(),
         Ok("off" | "0" | "false")
-    ) || crate::system::read_env_var("IPE_CONSOLE_AUTH").is_ok_and(|v| v == "off")
+    ) || ConsoleAuthMode::from_env() == ConsoleAuthMode::Off
     {
         return String::new();
     }
@@ -850,6 +1079,158 @@ mod tests {
     use super::*;
 
     use std::collections::BTreeSet;
+
+    fn not_unicode() -> Result<String, std::env::VarError> {
+        Err(std::env::VarError::NotUnicode(std::ffi::OsString::new()))
+    }
+
+    #[test]
+    fn raw_env_read_classification() {
+        let absent = Err(std::env::VarError::NotPresent);
+        assert_eq!(RawEnv::from_read(&absent), RawEnv::Absent);
+        let empty = Ok(String::new());
+        assert_eq!(RawEnv::from_read(&empty), RawEnv::Value(""));
+        let set = Ok("token".to_string());
+        assert_eq!(RawEnv::from_read(&set), RawEnv::Value("token"));
+        assert_eq!(RawEnv::from_read(&not_unicode()), RawEnv::NotUnicode);
+    }
+
+    #[test]
+    fn posture_non_unicode_env_fails_closed_to_production() {
+        let bad = not_unicode();
+        let dev = Ok("dev".to_string());
+        for release_build in [false, true] {
+            assert_eq!(
+                Posture::parse(RawEnv::from_read(&bad), RawEnv::Absent, release_build),
+                Posture::Production
+            );
+            // A garbled `ENV` is explicit: it never defers to a dev `IPE_ENV`.
+            assert_eq!(
+                Posture::parse(
+                    RawEnv::from_read(&bad),
+                    RawEnv::from_read(&dev),
+                    release_build
+                ),
+                Posture::Production
+            );
+            assert_eq!(
+                Posture::parse(RawEnv::Absent, RawEnv::from_read(&bad), release_build),
+                Posture::Production
+            );
+            assert_eq!(
+                Posture::parse(RawEnv::Value(""), RawEnv::from_read(&bad), release_build),
+                Posture::Production
+            );
+        }
+    }
+
+    #[test]
+    fn posture_explicit_value_wins_over_build_profile() {
+        for release_build in [false, true] {
+            for marker in ["dev", "Development", "LOCAL"] {
+                assert_eq!(
+                    Posture::parse(RawEnv::Value(marker), RawEnv::Absent, release_build),
+                    Posture::Dev
+                );
+                assert_eq!(
+                    Posture::parse(RawEnv::Absent, RawEnv::Value(marker), release_build),
+                    Posture::Dev
+                );
+            }
+            for other in ["prod", "staging", " dev", "devel"] {
+                assert_eq!(
+                    Posture::parse(RawEnv::Value(other), RawEnv::Absent, release_build),
+                    Posture::Production,
+                    "ENV={other:?} must resolve to production"
+                );
+            }
+            // `ENV` takes precedence over `IPE_ENV`.
+            assert_eq!(
+                Posture::parse(RawEnv::Value("prod"), RawEnv::Value("dev"), release_build),
+                Posture::Production
+            );
+        }
+    }
+
+    #[test]
+    fn posture_unset_defers_to_build_profile() {
+        for (env, ipe_env) in [
+            (RawEnv::Absent, RawEnv::Absent),
+            (RawEnv::Value(""), RawEnv::Value("")),
+        ] {
+            assert_eq!(Posture::parse(env, ipe_env, true), Posture::Production);
+            assert_eq!(Posture::parse(env, ipe_env, false), Posture::Dev);
+        }
+    }
+
+    #[test]
+    fn console_auth_resolution_names_mode_and_source() {
+        use ConsoleAuthMode as M;
+        use ConsoleAuthSource as S;
+        let bad = not_unicode();
+        for posture in [Posture::Dev, Posture::Production] {
+            let default = match posture {
+                Posture::Dev => M::DevOpen,
+                Posture::Production => M::UnsetProd,
+            };
+            for (raw, mode, source) in [
+                (RawEnv::Absent, default, S::PostureDefault),
+                (RawEnv::Value(""), default, S::PostureDefault),
+                (RawEnv::Value("  "), default, S::PostureDefault),
+                (RawEnv::Value("token"), M::Token, S::Explicit),
+                (RawEnv::Value(" TOKEN "), M::Token, S::Explicit),
+                (RawEnv::Value("app"), M::App, S::Explicit),
+                (RawEnv::Value("Off"), M::Off, S::Explicit),
+                (RawEnv::Value("tokne"), M::Off, S::Invalid),
+                (RawEnv::from_read(&bad), M::Off, S::Invalid),
+            ] {
+                let resolved = ConsoleAuthResolution::resolve(raw, posture);
+                assert_eq!(
+                    resolved,
+                    ConsoleAuthResolution {
+                        posture,
+                        mode,
+                        source
+                    },
+                    "IPE_CONSOLE_AUTH={raw:?} under {posture:?}"
+                );
+                assert_eq!(ConsoleAuthMode::parse(raw, posture), mode);
+            }
+        }
+    }
+
+    #[test]
+    fn console_auth_startup_line_is_labels_only() {
+        // The line is fully determined by three enum labels: equality with
+        // the expected text proves no credential, length, or prefix can
+        // appear in it.
+        for (raw, posture, expected) in [
+            (
+                RawEnv::Value("token"),
+                Posture::Dev,
+                "[ipe.console] auth posture=dev mode=token source=env",
+            ),
+            (
+                RawEnv::Absent,
+                Posture::Dev,
+                "[ipe.console] auth posture=dev mode=dev-open source=posture-default",
+            ),
+            (
+                RawEnv::Absent,
+                Posture::Production,
+                "[ipe.console] auth posture=production mode=unset-prod source=posture-default",
+            ),
+            (
+                RawEnv::Value("s3cret"),
+                Posture::Dev,
+                "[ipe.console] auth posture=dev mode=off source=env-invalid",
+            ),
+        ] {
+            let line = ConsoleAuthResolution::resolve(raw, posture).startup_line();
+            assert_eq!(line, expected);
+            assert!(!line.contains("s3cret"), "startup line leaked a value");
+        }
+    }
 
     /// Build a granted suffix set from wire suffixes for the derivation tests.
     fn granted(suffixes: &[&str]) -> BTreeSet<String> {

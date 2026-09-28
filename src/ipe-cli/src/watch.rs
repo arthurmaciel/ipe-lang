@@ -456,10 +456,10 @@ pub(crate) fn resolve_project_sources(
         match project::manifest_in_dir(entry) {
             Some(manifest) => Some(manifest),
             None if project::has_only_legacy_toml(entry) => {
-                return Err(CliError::Usage(text::legacy_toml_hint()));
+                return Err(CliError::Usage(text::msg::legacy_toml_hint()));
             }
             None => {
-                return Err(CliError::Usage(text::watch_dir_no_manifest()));
+                return Err(CliError::Usage(text::msg::watch_dir_no_manifest()));
             }
         }
     } else {
@@ -803,7 +803,7 @@ fn run_inner(
     let (root_dir, entry_dir) = scope_roots(&initial, &opts.entry);
 
     let scope = ipe_watch::WatchScope::build(&root_dir, &entry_dir)
-        .map_err(|e| CliError::UsageOwned(e.to_string()))?;
+        .map_err(|e| CliError::Usage(crate::text::Message::relay(&e)))?;
     if !opts.quiet {
         emit_watch_line(
             &crate::style::TerminalSafe::sanitize(&format!(
@@ -885,12 +885,12 @@ fn run_inner(
                 }
             }
         })
-        .map_err(|e| CliError::UsageOwned(text::watch_start_failed(&e)))?
+        .map_err(|e| CliError::Usage(text::msg::watch_start_failed(&e)))?
     };
     for w in scope.roots_to_watch() {
         notify::Watcher::watch(&mut watcher, w.as_path(), notify::RecursiveMode::Recursive)
             .map_err(|e| {
-                CliError::UsageOwned(text::watch_path_failed(&w.as_path().display(), &e))
+                CliError::Usage(text::msg::watch_path_failed(&w.as_path().display(), &e))
             })?;
     }
 
@@ -1605,7 +1605,7 @@ fn run_inner(
                         // asked for that port and it is unavailable.
                         if proxy.is_none() && opts.bluegreen && current_binds_http {
                             let bound = ipe_watch::DevProxy::bind(opts.port).map_err(|e| {
-                                CliError::UsageOwned(text::watch_proxy_bind_failed(&opts.port, &e))
+                                CliError::Usage(text::msg::watch_proxy_bind_failed(&opts.port, &e))
                             })?;
                             if !opts.quiet {
                                 emit_watch_line(
@@ -3268,7 +3268,7 @@ mod tests {
     #[test]
     fn multi_module_tui_entry_is_detected_outside_main_rs() {
         let p = emitted_with_module_entry(
-            "pub fn ipe_main() -> _ { ipe_runtime::tea::TuiApp(ipe_runtime::tui::tui_app_ui(a,b,c,d,e)) }",
+            "pub fn ipe_main() -> _ { ipe_runtime::tea::TuiApp(ipe_runtime::tui::tui_app_ui(a,b,c,d)) }",
         );
         assert!(
             emitted_is_tui(&p),
@@ -3335,7 +3335,7 @@ mod tests {
     #[test]
     fn tui_app_emit_is_tui_not_web_or_http() {
         let p = emitted_with_main(
-            "fn main() { ipe_runtime::tea::TuiApp(ipe_runtime::tui::tui_app_ui(a,b,c,d,e)); }",
+            "fn main() { ipe_runtime::tea::TuiApp(ipe_runtime::tui::tui_app_ui(a,b,c,d)); }",
         );
         assert!(emitted_is_tui(&p), "tui_app_ui must classify as tui");
         assert!(!emitted_is_web(&p), "a tui app is not a web project");
@@ -3349,7 +3349,7 @@ mod tests {
     #[test]
     fn cli_app_emit_is_neither_tui_nor_web() {
         let p = emitted_with_main(
-            "fn main() { ipe_runtime::tea::CliApp(ipe_runtime::console_app(a,b,c,d,e)); }",
+            "fn main() { ipe_runtime::tea::CliApp(ipe_runtime::console_app(a,b,c,d)); }",
         );
         let (is_tui, is_web) = (emitted_is_tui(&p), emitted_is_web(&p));
         assert!(!is_tui, "a cli app is not a tui app");

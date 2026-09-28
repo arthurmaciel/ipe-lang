@@ -14,14 +14,14 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
-use ipe_ffi::driver::{CrateName, CrateSpec, FfiCache, InstalledCrate, VersionPin};
+use ipe_ffi::driver::{CargoDep, CrateName, CrateSpec, FfiCache, InstalledCrate, VersionPin};
 use ipe_ffi::pkginfo::FeatureName;
 
 use crate::CliError;
 use crate::text;
 
 /// The project-relative FFI cache directory.
-const CACHE_REL: &str = ".ipe/cache/ffi/rust";
+const CACHE_REL: &str = ipe_ffi::driver::FFI_CACHE_REL;
 
 /// The project manifest that bounds the upward cache-discovery walk.
 const PROJECT_MANIFEST: &str = "package.ipe";
@@ -69,7 +69,7 @@ fn is_trusted_cache_dir(_dir: &Path) -> bool {
 ///
 /// # Errors
 ///
-/// [`CliError::UsageOwned`] when a discovered cache fails the ownership check.
+/// [`CliError::Usage`] when a discovered cache fails the ownership check.
 pub fn find_cache_root(start: &Path) -> Result<Option<PathBuf>, CliError> {
     let mut dir = if start.is_dir() {
         Some(start)
@@ -82,7 +82,7 @@ pub fn find_cache_root(start: &Path) -> Result<Option<PathBuf>, CliError> {
             if is_trusted_cache_dir(&candidate) {
                 return Ok(Some(candidate));
             }
-            return Err(CliError::UsageOwned(text::ffi_cache_untrusted(
+            return Err(CliError::Usage(text::msg::ffi_cache_untrusted(
                 &candidate.display(),
             )));
         }
@@ -106,7 +106,7 @@ pub fn load_catalog_for(blame_path: &Path) -> Result<Vec<InstalledCrate>, CliErr
         return Ok(Vec::new());
     };
     ipe_ffi::driver::load_catalog(&cache_root)
-        .map_err(|diag| CliError::UsageOwned(diag.to_string()))
+        .map_err(|diag| CliError::Usage(crate::text::Message::relay(&diag)))
 }
 
 /// Inject each installed crate's interface module into the build's source
@@ -114,7 +114,7 @@ pub fn load_catalog_for(blame_path: &Path) -> Result<Vec<InstalledCrate>, CliErr
 /// [`ipe_canon::ModuleOrigin::FfiInterface`] at input creation).
 ///
 /// # Errors
-/// [`CliError::UsageOwned`] when a project module already claims an
+/// [`CliError::Usage`] when a project module already claims an
 /// installed crate's `Rust.*` module path.
 pub fn inject_interfaces(
     sources: &mut BTreeMap<Vec<String>, (PathBuf, String)>,
@@ -125,7 +125,7 @@ pub fn inject_interfaces(
     for c in catalog {
         let mod_path: Vec<String> = c.module_name.split('.').map(str::to_owned).collect();
         if sources.contains_key(&mod_path) {
-            return Err(CliError::UsageOwned(text::ffi_module_clash(
+            return Err(CliError::Usage(text::msg::ffi_module_clash(
                 &c.module_name,
                 &c.slug,
             )));
@@ -142,9 +142,11 @@ pub fn inject_interfaces(
 /// the combined `src/ffi.rs` (one `pub mod <slug>` per crate).
 ///
 /// # Errors
-/// [`CliError::UsageOwned`] when two installed crates pin the SAME
-/// dependency name to different lines — an unbuildable `Cargo.toml` refused
-/// here rather than discovered by `cargo`.
+/// [`CliError::Usage`] when two installed crates pin the SAME direct
+/// dependency to different versions, or bind one dependency name to two
+/// different sources (a registry pin and a wrapper path, or two wrapper
+/// paths) — an unbuildable `Cargo.toml` refused here rather than discovered by
+/// `cargo`.
 pub fn assemble_emit(
     catalog: &[InstalledCrate],
 ) -> Result<Option<ipe_backend_rust::FfiEmit>, CliError> {
@@ -170,7 +172,7 @@ pub fn assemble_emit(
     // resolves the transitive graph of the direct pins itself and legitimately links
     // both majors of a build-dep. Such a dep is dropped from the emitted `[dependencies]`
     // (recorded as unpinned) rather than exact-pinned to one arbitrary version.
-    let mut dep_by_name: BTreeMap<String, (String, BTreeSet<String>)> = BTreeMap::new();
+    let mut dep_by_name: BTreeMap<String, MergedDep> = BTreeMap::new();
     let mut unpinned_transitives: BTreeSet<String> = BTreeSet::new();
     let mut bindings_source = String::from(
         "//! Foreign-crate FFI wrappers — one module per installed crate.\n\
@@ -195,42 +197,19 @@ pub fn assemble_emit(
             // the SEAL would then compile against). Fail closed — the author must
             // rename one; the two nominals are genuinely different Rust types.
             if foreign_types.contains_key(&key) {
-                return Err(CliError::UsageOwned(text::ffi_define_opaque_collision(
+                return Err(CliError::Usage(text::msg::ffi_define_opaque_collision(
                     &c.slug, &name,
                 )));
             }
             foreign_types.insert(key, format!("crate::ffi::{}::{name}", c.slug));
         }
-        for line in &c.cargo_deps {
-            let Some((name, version, features)) = parse_dep_line(line) else {
-                return Err(CliError::UsageOwned(text::ffi_dependency_line_unparsable(
-                    &c.slug, &line,
-                )));
-            };
-            if unpinned_transitives.contains(&name) {
-                continue;
-            }
-            match dep_by_name.get_mut(&name) {
-                Some((prev_version, _)) if *prev_version != version => {
-                    if direct_crate_names.contains(&name) {
-                        return Err(CliError::UsageOwned(text::ffi_dependency_pin_conflict(
-                            &name,
-                            &prev_version,
-                            &version,
-                        )));
-                    }
-                    // Transitive dep resolved to different versions in different member
-                    // jails — defer to Cargo's own transitive resolution.
-                    dep_by_name.remove(&name);
-                    unpinned_transitives.insert(name);
-                }
-                Some((_, prev_features)) => {
-                    prev_features.extend(features);
-                }
-                None => {
-                    dep_by_name.insert(name, (version, features));
-                }
-            }
+        for dep in &c.cargo_deps {
+            merge_cargo_dep(
+                dep,
+                &direct_crate_names,
+                &mut dep_by_name,
+                &mut unpinned_transitives,
+            )?;
         }
         // Writing into a String is infallible.
         let _ = write!(
@@ -241,8 +220,8 @@ pub fn assemble_emit(
         );
     }
     let dep_lines: Vec<String> = dep_by_name
-        .into_iter()
-        .map(|(name, (version, features))| render_merged_dep_line(&name, &version, &features))
+        .into_values()
+        .map(|merged| merged.into_cargo_dep().render())
         .collect();
     Ok(Some(ipe_backend_rust::FfiEmit {
         foreign_types,
@@ -261,18 +240,18 @@ pub fn assemble_emit(
 /// seam whose two sides disagree.
 ///
 /// # Errors
-/// [`CliError::UsageOwned`] naming the crate, binding, and missing shape.
+/// [`CliError::Usage`] naming the crate, binding, and missing shape.
 fn assemble_wrapper_glue(
     c: &InstalledCrate,
     wrapper_glue: &mut BTreeMap<String, ipe_backend_rust::FfiWrapperGlue>,
 ) -> Result<(), CliError> {
     for b in &c.bindings {
-        if b.transparent_params.iter().all(Option::is_none) && b.transparent_result.is_none() {
+        if b.transparent_params.is_none() && b.transparent_result.is_none() {
             continue;
         }
         let glue_ty = |name: &str| -> Result<ipe_backend_rust::FfiGlueType, CliError> {
             let t = c.transparent_types.get(name).ok_or_else(|| {
-                CliError::UsageOwned(text::ffi_transparent_without_shape(
+                CliError::Usage(text::msg::ffi_transparent_without_shape(
                     &c.slug,
                     &name,
                     &b.ref_name,
@@ -280,8 +259,8 @@ fn assemble_wrapper_glue(
             })?;
             Ok(glue_type_of(&c.module_name, &c.slug, t))
         };
-        let mut params = Vec::with_capacity(b.transparent_params.len());
-        for p in &b.transparent_params {
+        let mut params = Vec::with_capacity(b.transparent_params.slots().len());
+        for p in b.transparent_params.slots() {
             params.push(match p {
                 None => None,
                 Some(name) => Some(glue_ty(name)?),
@@ -358,68 +337,126 @@ fn glue_type_of(
     }
 }
 
-/// Parse a generated dep line into `(name, version, features)`. Two shapes are
-/// produced by `cargo_dep_lines`:
-///   `name = "=X.Y.Z"`
-///   `name = { version = "=X.Y.Z", features = ["a", "b"] }`
-/// The version is returned WITHOUT the leading `=`. Returns `None` if neither
-/// shape matches (a malformed line the caller refuses).
-fn parse_dep_line(line: &str) -> Option<(String, String, BTreeSet<String>)> {
-    let (name, rest) = line.split_once('=')?;
-    let name = name.trim().to_owned();
-    let rest = rest.trim();
-    if let Some(inner) = rest.strip_prefix('{').and_then(|s| s.strip_suffix('}')) {
-        // Inline table: pull `version = "=X"` and `features = [...]`.
-        let version = extract_quoted_after(inner, "version")?
-            .trim_start_matches('=')
-            .to_owned();
-        let features = inner
-            .split_once("features")
-            .and_then(|(_, after)| after.split_once('['))
-            .and_then(|(_, list)| list.split_once(']'))
-            .map(|(list, _)| {
-                list.split(',')
-                    .map(|f| f.trim().trim_matches('"').to_owned())
-                    .filter(|f| !f.is_empty())
-                    .collect::<BTreeSet<String>>()
-            })
-            .unwrap_or_default();
-        Some((name, version, features))
-    } else {
-        // Bare: `"=X.Y.Z"`.
-        let version = rest
-            .trim()
-            .trim_matches('"')
-            .trim_start_matches('=')
-            .to_owned();
-        if version.is_empty() {
-            return None;
+/// The source one merged `[dependencies]` entry binds.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum MergedSource {
+    /// A registry crate pinned to one exact version.
+    Registry(ipe_ffi::pkginfo::CrateVersion),
+    /// A wrapper crate bound by its jailed directory.
+    Wrapper(ipe_ffi::pkginfo::JailedWrapperDir),
+}
+
+impl MergedSource {
+    /// The source as it appears in a conflict message.
+    fn describe(&self) -> String {
+        match self {
+            Self::Registry(version) => format!("version ={}", version.as_str()),
+            Self::Wrapper(dir) => format!("path {}", dir.as_str()),
         }
-        Some((name, version, BTreeSet::new()))
     }
 }
 
-/// Extract the first double-quoted string that follows `key` in `s`
-/// (`key = "value"` → `Some("value")`).
-fn extract_quoted_after(s: &str, key: &str) -> Option<String> {
-    let after = s.split_once(key)?.1;
-    let after = after.split_once('"')?.1;
-    let (value, _) = after.split_once('"')?;
-    Some(value.to_owned())
+/// One merged `[dependencies]` entry: its key, source, and the union of every
+/// member's requested features (Cargo unifies features additively).
+struct MergedDep {
+    name: ipe_ffi::pkginfo::PackageName,
+    source: MergedSource,
+    features: BTreeSet<FeatureName>,
 }
 
-/// Render the merged dep line, matching `render_dep_line`'s two shapes so the
-/// emitted `Cargo.toml` is byte-identical to the single-crate case when there
-/// are no extra features.
-fn render_merged_dep_line(name: &str, version: &str, features: &BTreeSet<String>) -> String {
-    if features.is_empty() {
-        format!("{name} = \"={version}\"")
-    } else {
-        let quoted: Vec<String> = features.iter().map(|f| format!("\"{f}\"")).collect();
-        format!(
-            "{name} = {{ version = \"={version}\", features = [{}] }}",
-            quoted.join(", ")
-        )
+impl MergedDep {
+    /// Split a typed entry into its merge parts.
+    fn of(dep: &CargoDep) -> Self {
+        let (source, features) = match dep {
+            CargoDep::Registry {
+                version, features, ..
+            } => (MergedSource::Registry(version.clone()), features),
+            CargoDep::Wrapper { dir, features } => (MergedSource::Wrapper(dir.clone()), features),
+        };
+        Self {
+            name: dep.name().clone(),
+            source,
+            features: features.iter().cloned().collect(),
+        }
+    }
+
+    /// The typed entry, features in sorted order, for the single renderer.
+    fn into_cargo_dep(self) -> CargoDep {
+        let features = self.features.into_iter().collect();
+        match self.source {
+            MergedSource::Registry(version) => CargoDep::Registry {
+                name: self.name,
+                version,
+                features,
+            },
+            MergedSource::Wrapper(dir) => CargoDep::Wrapper { dir, features },
+        }
+    }
+}
+
+/// Merge one member's typed dependency into the manifest-wide set.
+///
+/// Same source: features union. Two registry versions of a DIRECT FFI crate:
+/// refused. Two registry versions of a TRANSITIVE dep: dropped and recorded as
+/// unpinned, left to Cargo's own resolution. Any disagreement involving a
+/// wrapper path (a registry pin against a path, two different paths, or a path
+/// named like a dropped transitive): refused, since exactly one source can
+/// back a dependency key.
+///
+/// # Errors
+/// [`CliError::Usage`] on a direct version conflict or a source conflict.
+fn merge_cargo_dep(
+    dep: &CargoDep,
+    direct_crate_names: &BTreeSet<String>,
+    dep_by_name: &mut BTreeMap<String, MergedDep>,
+    unpinned_transitives: &mut BTreeSet<String>,
+) -> Result<(), CliError> {
+    let incoming = MergedDep::of(dep);
+    let key = incoming.name.as_str().to_owned();
+    if unpinned_transitives.contains(&key) {
+        return match incoming.source {
+            MergedSource::Registry(_) => Ok(()),
+            MergedSource::Wrapper(_) => {
+                Err(CliError::Usage(text::msg::ffi_dependency_source_conflict(
+                    &key,
+                    &"an unpinned registry dependency",
+                    &incoming.source.describe(),
+                )))
+            }
+        };
+    }
+    let Some(prev) = dep_by_name.get_mut(&key) else {
+        dep_by_name.insert(key, incoming);
+        return Ok(());
+    };
+    if prev.source == incoming.source {
+        prev.features.extend(incoming.features);
+        return Ok(());
+    }
+    match (&prev.source, &incoming.source) {
+        (MergedSource::Registry(a), MergedSource::Registry(b)) => {
+            if direct_crate_names.contains(&key) {
+                return Err(CliError::Usage(text::msg::ffi_dependency_pin_conflict(
+                    &key,
+                    &a.as_str(),
+                    &b.as_str(),
+                )));
+            }
+            // Transitive dep resolved to different versions in different member
+            // jails — defer to Cargo's own transitive resolution.
+            dep_by_name.remove(&key);
+            unpinned_transitives.insert(key);
+            Ok(())
+        }
+        (MergedSource::Wrapper(_), MergedSource::Wrapper(_))
+        | (MergedSource::Registry(_), MergedSource::Wrapper(_))
+        | (MergedSource::Wrapper(_), MergedSource::Registry(_)) => {
+            Err(CliError::Usage(text::msg::ffi_dependency_source_conflict(
+                &key,
+                &prev.source.describe(),
+                &incoming.source.describe(),
+            )))
+        }
     }
 }
 
@@ -468,7 +505,7 @@ pub fn prepare_ffi(
     // crate may claim either — refused at load, before anything is injected.
     for c in &catalog {
         if c.module_name == ipe_canon::asserted::ASSERTED_MODULE {
-            return Err(CliError::UsageOwned(text::ffi_reserved_module_claimed(
+            return Err(CliError::Usage(text::msg::ffi_reserved_module_claimed(
                 &c.slug,
                 &ipe_canon::asserted::ASSERTED_MODULE,
             )));
@@ -478,7 +515,7 @@ pub fn prepare_ffi(
             .iter()
             .find(|w| w.starts_with(ipe_canon::asserted::ASSERTED_WRAPPER_PREFIX))
         {
-            return Err(CliError::UsageOwned(text::ffi_reserved_wrapper_prefix(
+            return Err(CliError::Usage(text::msg::ffi_reserved_wrapper_prefix(
                 &c.slug,
                 &ident,
                 &ipe_canon::asserted::ASSERTED_WRAPPER_PREFIX,
@@ -501,7 +538,7 @@ pub fn prepare_ffi(
             .map(str::to_owned)
             .collect();
         if sources.contains_key(&mod_path) {
-            return Err(CliError::UsageOwned(text::ffi_reserved_module_exists(
+            return Err(CliError::Usage(text::msg::ffi_reserved_module_exists(
                 &ipe_canon::asserted::ASSERTED_MODULE,
             )));
         }
@@ -511,9 +548,7 @@ pub fn prepare_ffi(
         // `validate` proved every target crate is installed, so the catalog —
         // and therefore the assembled emit — is non-empty here.
         let Some(e) = emit.as_mut() else {
-            return Err(CliError::UsageOwned(
-                text::ffi_asserted_empty_catalog().to_owned(),
-            ));
+            return Err(CliError::Usage(text::msg::ffi_asserted_empty_catalog()));
         };
         if !asserted.is_empty() {
             e.bindings_source.push('\n');
@@ -546,7 +581,7 @@ pub fn prepare_ffi(
 ///
 /// # Errors
 /// [`CliError::Pipeline`] (IPE-N0038, span-attributed) for a malformed site;
-/// [`CliError::UsageOwned`] (IPE-F4414) for a refused assertion.
+/// [`CliError::Usage`] (IPE-F4414) for a refused assertion.
 /// The two native-binding surfaces one scan pass produces: forwarder calls
 /// (`Rust.fn` / `Rust.Ffi.call`) and bare-scalar constant reads (`Rust.const`).
 /// A single pass over the modules yields both — splitting the scan would
@@ -589,19 +624,19 @@ fn scan_asserted(
             if matches!(u.callee, ipe_canon::asserted::AssertedCallee::RustConst) {
                 let spec =
                     ipe_ffi::asserted::validate_const(u.path, &u.annotation, &interner, catalog)
-                        .map_err(|d| CliError::UsageOwned(d.to_string()))?;
+                        .map_err(|d| CliError::Usage(crate::text::Message::relay(&d)))?;
                 const_specs.push(spec);
             } else {
                 let spec = ipe_ffi::asserted::validate(u.path, &u.annotation, &interner, catalog)
-                    .map_err(|d| CliError::UsageOwned(d.to_string()))?;
+                    .map_err(|d| CliError::Usage(crate::text::Message::relay(&d)))?;
                 specs.push(spec);
             }
         }
     }
-    let asserted =
-        ipe_ffi::asserted::dedupe(specs).map_err(|d| CliError::UsageOwned(d.to_string()))?;
+    let asserted = ipe_ffi::asserted::dedupe(specs)
+        .map_err(|d| CliError::Usage(crate::text::Message::relay(&d)))?;
     let consts = ipe_ffi::asserted::dedupe_consts(const_specs)
-        .map_err(|d| CliError::UsageOwned(d.to_string()))?;
+        .map_err(|d| CliError::Usage(crate::text::Message::relay(&d)))?;
     Ok(ScannedFfi { asserted, consts })
 }
 
@@ -624,7 +659,7 @@ fn inspector_binary() -> Result<PathBuf, CliError> {
             }
         }
     }
-    Err(CliError::Usage(text::ffi_inspector_not_found()))
+    Err(CliError::Usage(text::msg::ffi_inspector_not_found()))
 }
 
 /// A per-invocation scratch directory under the sanctioned write-boundary
@@ -635,11 +670,12 @@ fn inspector_binary() -> Result<PathBuf, CliError> {
 /// path; absent that the function fails closed rather than falling back to a
 /// world-writable or working-directory-relative path.
 fn make_scratch_dir(krate: &str) -> Result<PathBuf, CliError> {
-    let home = crate::env_dir::home().ok_or(CliError::Usage(text::ffi_add_home_not_absolute()))?;
+    let home =
+        crate::env_dir::home().ok_or(CliError::Usage(text::msg::ffi_add_home_not_absolute()))?;
     let base = home.join(".cache/ipe/ffi-scratch");
     crate::scratch::ScratchDir::new_under(&base, &format!("add-{krate}"))
         .map(crate::scratch::ScratchDir::into_path)
-        .map_err(|e| CliError::UsageOwned(text::ffi_add_scratch_dir(&e)))
+        .map_err(|e| CliError::Usage(text::msg::ffi_add_scratch_dir(&e)))
 }
 
 /// Read-only jail binds for the toolchain, deliberately NARROW: never the
@@ -718,7 +754,12 @@ fn run_phase(
     rustup_home: Option<PathBuf>,
     payload: &[OsString],
 ) -> Result<ipe_sandbox::JailedOutput, CliError> {
-    let io_err = |detail: String| CliError::UsageOwned(text::command_refusal(&"add", &detail));
+    let io_err = |detail: String| {
+        CliError::Usage(text::msg::command_refusal(
+            &"add",
+            &crate::style::TerminalSafe::sanitize(&detail),
+        ))
+    };
     let spec = ipe_sandbox::JailSpec {
         network,
         scoped_tmp: scoped_tmp.to_path_buf(),
@@ -798,7 +839,7 @@ fn write_inspector_manifest(
     let path = scoped_tmp.join("ipe-install-manifest.json");
     let body = serde_json::Value::Array(arr).to_string();
     std::fs::write(&path, body)
-        .map_err(|e| CliError::UsageOwned(text::ffi_install_manifest_write_failed(&e)))?;
+        .map_err(|e| CliError::Usage(text::msg::ffi_install_manifest_write_failed(&e)))?;
     Ok(path)
 }
 
@@ -906,11 +947,16 @@ fn run_inspector_job(job: &InspectorJob, allow_build_scripts: bool) -> Result<St
     let caps = ipe_sandbox::probe();
     let mechanism = ipe_sandbox::select_mechanism(&caps);
     let unsandboxed_ok = ipe_sandbox::unsandboxed_override_set();
-    let io_err = |detail: String| CliError::UsageOwned(text::command_refusal(&"add", &detail));
+    let io_err = |detail: String| {
+        CliError::Usage(text::msg::command_refusal(
+            &"add",
+            &crate::style::TerminalSafe::sanitize(&detail),
+        ))
+    };
 
     match choose_sandbox_route(&mechanism, ipe_sandbox::missing_caps(&caps), unsandboxed_ok) {
         SandboxRoute::RefuseNoBwrap => {
-            return Err(CliError::Usage(text::ffi_no_bubblewrap()));
+            return Err(CliError::Usage(text::msg::ffi_no_bubblewrap()));
         }
         SandboxRoute::RefuseMissingCaps { missing } => {
             return Err(io_err(format!(
@@ -978,7 +1024,12 @@ fn run_single_bwrap(
     binds: &ToolchainBinds,
     allow_build_scripts: bool,
 ) -> Result<String, CliError> {
-    let io_err = |detail: String| CliError::UsageOwned(text::command_refusal(&"add", &detail));
+    let io_err = |detail: String| {
+        CliError::Usage(text::msg::command_refusal(
+            &"add",
+            &crate::style::TerminalSafe::sanitize(&detail),
+        ))
+    };
     let (toolchain_ro_binds, path_prepend, rustup_home) = binds;
     let with_payload =
         |fetch_only: bool| inspector_payload(inspector, job, None, allow_build_scripts, fetch_only);
@@ -1051,7 +1102,12 @@ fn run_introspect_chunk(
     binds: &ToolchainBinds,
     payload: &[OsString],
 ) -> Result<String, CliError> {
-    let io_err = |detail: String| CliError::UsageOwned(text::command_refusal(&"add", &detail));
+    let io_err = |detail: String| {
+        CliError::Usage(text::msg::command_refusal(
+            &"add",
+            &crate::style::TerminalSafe::sanitize(&detail),
+        ))
+    };
     let (toolchain_ro_binds, path_prepend, rustup_home) = binds;
     let out = run_phase(
         caps,
@@ -1099,7 +1155,12 @@ fn run_manifest_bwrap_chunked(
     binds: &ToolchainBinds,
     allow_build_scripts: bool,
 ) -> Result<String, CliError> {
-    let io_err = |detail: String| CliError::UsageOwned(text::command_refusal(&"add", &detail));
+    let io_err = |detail: String| {
+        CliError::Usage(text::msg::command_refusal(
+            &"add",
+            &crate::style::TerminalSafe::sanitize(&detail),
+        ))
+    };
     let (toolchain_ro_binds, path_prepend, rustup_home) = binds;
 
     // Stage 1 — fetch every crate in one network-on run (no foreign code).
@@ -1189,7 +1250,7 @@ fn write_inspector_manifest_chunk(
     let arr = serde_json::json!([{ "name": spec.inspector_arg(), "features": features }]);
     let path = scoped_tmp.join(format!("ipe-install-{stage}.json"));
     std::fs::write(&path, arr.to_string())
-        .map_err(|e| CliError::UsageOwned(text::ffi_install_manifest_chunk_write_failed(&e)))?;
+        .map_err(|e| CliError::Usage(text::msg::ffi_install_manifest_chunk_write_failed(&e)))?;
     Ok(path)
 }
 
@@ -1201,7 +1262,12 @@ fn run_inspector_job_unsandboxed(
     scratch_hint: &str,
     allow_build_scripts: bool,
 ) -> Result<String, CliError> {
-    let io_err = |detail: String| CliError::UsageOwned(text::command_refusal(&"add", &detail));
+    let io_err = |detail: String| {
+        CliError::Usage(text::msg::command_refusal(
+            &"add",
+            &crate::style::TerminalSafe::sanitize(&detail),
+        ))
+    };
     crate::screen::chatter(
         crate::screen::Stream::Stderr,
         crate::screen::Tone::UserError,
@@ -1221,7 +1287,7 @@ fn run_inspector_job_unsandboxed(
     );
     let (program, rest) = payload
         .split_first()
-        .ok_or(CliError::Usage(text::ffi_add_no_payload()))?;
+        .ok_or(CliError::Usage(text::msg::ffi_add_no_payload()))?;
     let out = std::process::Command::new(program)
         .args(rest)
         .output()
@@ -1256,33 +1322,31 @@ fn install_wrapper(
 ) -> Result<(), CliError> {
     let manifest =
         ipe_ffi::wrapper::WrapperManifest::parse(&raw.path, &raw.expose, &raw.capabilities)
-            .map_err(|diag| CliError::UsageOwned(diag.to_string()))?;
-    // Resolve the package-jailed relative path to an absolute directory under
-    // the project root. Canonicalization also confirms the wrapper crate
-    // actually exists before any jailed build.
+            .map_err(|diag| CliError::Usage(crate::text::Message::relay(&diag)))?;
+    // Resolve the package-jailed relative path under the cache's project root
+    // through the SAME jail the build-time load re-proves: canonicalization
+    // resolves symlinks (so a checked-in symlink cannot lead out of the
+    // project), confirms the wrapper directory and its `Cargo.toml` exist
+    // before any jailed build, and reads the crate's `[package] name`.
     let rel = manifest.path().as_str();
-    let abs = std::fs::canonicalize(rel)
-        .map_err(|e| CliError::UsageOwned(text::ffi_install_wrapper_crate(&rel, &e)))?;
-    // The lexical `..`/absolute jail on the relative path is not enough:
-    // canonicalization resolves symlinks, so a checked-in symlink under the
-    // package could still point the resolved directory outside the project. Bind
-    // the resolved path back inside the project root — a wrapper that escapes it
-    // is refused before any jailed build.
-    let project_root = std::fs::canonicalize(".")
-        .map_err(|e| CliError::UsageOwned(text::ffi_install_project_root(&e)))?;
-    if !abs.starts_with(&project_root) {
-        return Err(CliError::UsageOwned(
-            text::ffi_install_wrapper_outside_root(&rel, &abs.display()),
-        ));
-    }
-    let abs_str = abs
-        .to_str()
-        .ok_or_else(|| CliError::UsageOwned(text::ffi_install_wrapper_not_utf8(&rel)))?
-        .to_owned();
-    // The wrapper crate's Cargo package name is the inspection slug. Derive it
-    // from the directory name, gated through the crate-name charset.
-    let krate = CrateName::parse(abs.file_name().and_then(|n| n.to_str()).unwrap_or(rel))
-        .map_err(|diag| CliError::UsageOwned(diag.to_string()))?;
+    let relay =
+        |diag: &ipe_ffi::diag::Diagnostic| CliError::Usage(crate::text::Message::relay(diag));
+    let project_root = cache.project_root().map_err(|diag| relay(&diag))?;
+    let jailed = ipe_ffi::pkginfo::WrapperCratePath::parse(rel)
+        .and_then(|path| path.jail(project_root))
+        .map_err(|defect| {
+            relay(&ipe_ffi::diag::Diagnostic::WireMalformed {
+                context: format!("wrapper crate `{rel}`"),
+                defect,
+            })
+        })?;
+    let abs_str = jailed.as_str().to_owned();
+    let abs = PathBuf::from(&abs_str);
+    // The inspection slug is the `[package] name` the jail read from the
+    // wrapper's own `Cargo.toml`, so the installed package name, the
+    // dependency key, and the crate cargo finds at the path are one name.
+    let krate = CrateName::parse(jailed.package().as_str())
+        .map_err(|diag| CliError::Usage(crate::text::Message::relay(&diag)))?;
 
     // The capability gate runs BEFORE the trust prompt and any jailed compile: a
     // wrapper whose effects Ipê cannot contain at run must be refused before we
@@ -1307,7 +1371,7 @@ fn install_wrapper(
         crate::screen::prompt("Continue? [y/N] ");
         let _ = std::io::stdout().flush();
         if !crate::read_yes_no() {
-            return Err(CliError::Usage(text::install_aborted()));
+            return Err(CliError::Usage(text::msg::install_aborted()));
         }
     }
     let expose = manifest.expose_names();
@@ -1318,7 +1382,11 @@ fn install_wrapper(
             expose: &expose,
         },
         allow_build_scripts,
-    )?;
+    )
+    .map_err(|e| match e {
+        CliError::Usage(msg) => map_inspector_error(msg),
+        other => other,
+    })?;
     // A single-crate inspector run may emit a singleton array; unwrap it.
     let doc_text = match serde_json::from_str::<serde_json::Value>(&json) {
         Ok(serde_json::Value::Array(items)) if items.len() == 1 => items
@@ -1328,7 +1396,7 @@ fn install_wrapper(
         _ => json,
     };
     let (pkg, paths) = ipe_ffi::driver::install_from_inspection(cache, &doc_text)
-        .map_err(|diag| CliError::UsageOwned(diag.to_string()))?;
+        .map_err(|diag| CliError::Usage(crate::text::Message::relay(&diag)))?;
     let iface = ipe_ffi::interface::crate_interface(&pkg);
     crate::screen::Screen::new(crate::screen::Stream::Stdout)
         .line(
@@ -1361,7 +1429,7 @@ fn install_wrapper(
 ///      (clock/random, or none) install.
 ///
 /// # Errors
-/// [`CliError::Io`] on a read failure; [`CliError::UsageOwned`] when the
+/// [`CliError::Io`] on a read failure; [`CliError::Usage`] when the
 /// reconcile refuses the wrapper (naming every reason and the proposed set).
 /// The jail-holds verdict for THIS host — the admit path's per-target hand-off.
 ///
@@ -1382,6 +1450,42 @@ fn jail_for_host() -> ipe_ffi::capability_scan::JailForTarget {
         confined = confined.with(axis);
     }
     ipe_ffi::capability_scan::JailForTarget::Holds(confined)
+}
+
+/// The refusal for a wrapper crate whose capabilities cannot be enforced.
+pub(crate) struct WrapperRefusal {
+    /// Every reason the wrapper is refused.
+    reasons: Vec<ipe_ffi::capability_scan::RefuseReason>,
+    /// The capability set the scan inferred from the wrapper's source.
+    proposed: BTreeSet<ipe_ffi::capability_scan::Capability>,
+}
+
+impl std::fmt::Display for WrapperRefusal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        writeln!(
+            f,
+            "ipe install: the wrapper crate cannot be admitted — its capabilities cannot be \
+             enforced in this release."
+        )?;
+        for reason in &self.reasons {
+            writeln!(f, "  - {reason}")?;
+        }
+        if self.proposed.is_empty() {
+            writeln!(
+                f,
+                "  inferred from its source: (none — but see the reasons above)"
+            )?;
+        } else {
+            let names: Vec<&str> = self.proposed.iter().map(|c| c.as_str()).collect();
+            writeln!(f, "  inferred from its source: {}", names.join(", "))?;
+        }
+        f.write_str(
+            "  Ipê has no runtime sandbox around the emitted app yet, so a wrapper that \
+             touches the network, filesystem, environment, a subprocess, native FFI, or a \
+             non-std dependency would run uncontained. Narrow the wrapper to pure compute \
+             (Tier 1 `[rust.define.*]` covers the safe shapes), or wait for the runtime jail.",
+        )
+    }
 }
 
 fn enforce_wrapper_capabilities(
@@ -1467,32 +1571,9 @@ fn enforce_wrapper_capabilities(
                 .emit();
             Ok(())
         }
-        ipe_ffi::capability_scan::Verdict::Refuse { reasons, proposed } => {
-            use std::fmt::Write as _;
-            let mut message = String::from(
-                "ipe install: the wrapper crate cannot be admitted — its capabilities cannot be \
-                 enforced in this release.\n",
-            );
-            for reason in &reasons {
-                let _ = writeln!(message, "  - {reason}");
-            }
-            if proposed.is_empty() {
-                let _ = writeln!(
-                    message,
-                    "  inferred from its source: (none — but see the reasons above)"
-                );
-            } else {
-                let names: Vec<&str> = proposed.iter().map(|c| c.as_str()).collect();
-                let _ = writeln!(message, "  inferred from its source: {}", names.join(", "));
-            }
-            message.push_str(
-                "  Ipê has no runtime sandbox around the emitted app yet, so a wrapper that \
-                 touches the network, filesystem, environment, a subprocess, native FFI, or a \
-                 non-std dependency would run uncontained. Narrow the wrapper to pure compute \
-                 (Tier 1 `[rust.define.*]` covers the safe shapes), or wait for the runtime jail.",
-            );
-            Err(CliError::UsageOwned(message))
-        }
+        ipe_ffi::capability_scan::Verdict::Refuse { reasons, proposed } => Err(CliError::Usage(
+            crate::text::Message::relay(&WrapperRefusal { reasons, proposed }),
+        )),
     }
 }
 
@@ -1681,32 +1762,45 @@ fn detect_build_scripts_hint(raw: &str) -> Option<&str> {
     raw.lines().find(|l| l.contains("--allow-build-scripts"))
 }
 
-/// Map a raw inspector `UsageOwned` error string to a `CliError::Resolve`
+/// Map a raw inspector `Usage` error string to a `CliError::Resolve`
 /// that never triggers the `CommandUsage` help page.
 ///
 /// If the raw error contains the `--allow-build-scripts` refusal hint, the
-/// hint is pulled out and rendered as a separate emphasised warning banner so
+/// hint is pulled out and rendered as a separate plain-text warning banner so
 /// the user can see the actionable flag clearly.
-fn map_inspector_error(msg: String) -> CliError {
+fn map_inspector_error(msg: crate::text::Message) -> CliError {
     // Detect the hint before consuming `msg`, then branch.
-    let hint_line: Option<String> = detect_build_scripts_hint(&msg).map(|l| l.trim().to_owned());
+    let hint_line =
+        detect_build_scripts_hint(&msg).map(|l| crate::style::TerminalSafe::sanitize(l.trim()));
     hint_line.map_or(CliError::Resolve(msg), |hint| {
         // The build-scripts refusal: render the hint as a banner so the
         // `--allow-build-scripts` flag stands out as the actionable next step.
-        let p = crate::style::Palette::for_stream(&std::io::stderr());
-        let banner = format!(
-            "{y}warning:{r} some crates in the dependency graph have build scripts.\n\
-             Pass {bold}--allow-build-scripts{r} to proceed (you will see a warning naming\n\
+        CliError::Resolve(crate::text::Message::relay(&BuildScriptsBanner { hint }))
+    })
+}
+
+/// The warning banner for an inspector refusal that `--allow-build-scripts`
+/// would lift.
+///
+/// Plain text: a relayed [`crate::text::Message`] is sanitised whole, so the
+/// banner carries no styling escapes of its own.
+pub(crate) struct BuildScriptsBanner {
+    /// The inspector's hint line.
+    hint: crate::style::TerminalSafe,
+}
+
+impl std::fmt::Display for BuildScriptsBanner {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "warning: some crates in the dependency graph have build scripts.\n\
+             Pass --allow-build-scripts to proceed (you will see a warning naming\n\
              those packages first, and they will run inside the isolation jail).\n\
              \n\
-             {dim}hint: {hint}{r}",
-            y = p.bright_yellow,
-            bold = p.bold,
-            dim = p.dim,
-            r = p.reset,
-        );
-        CliError::Resolve(banner)
-    })
+             hint: {hint}",
+            hint = self.hint,
+        )
+    }
 }
 
 /// Shared tail of `add` / `install`: inspect one crate + write its artifacts.
@@ -1735,7 +1829,7 @@ fn add_one(
             stage.failure(format!("resolve failed for {crate_label}"));
             // A build failure from the inspector is not command-line misuse.
             return Err(match e {
-                CliError::UsageOwned(msg) => map_inspector_error(msg),
+                CliError::Usage(msg) => map_inspector_error(msg),
                 other => other,
             });
         }
@@ -1832,7 +1926,9 @@ fn ffi_vocabulary_source(manifest_path: &Path) -> PathBuf {
 /// in `src/Ffi/<Crate>.ipe` instead.
 fn reject_legacy_define_tables(text: &str) -> Result<(), CliError> {
     if text.contains("[[rust.define.") {
-        return Err(CliError::Usage(crate::text::ffi_legacy_define_removed()));
+        return Err(CliError::Usage(
+            crate::text::msg::ffi_legacy_define_removed(),
+        ));
     }
     Ok(())
 }
@@ -1856,7 +1952,7 @@ fn reject_legacy_define_tables(text: &str) -> Result<(), CliError> {
 /// no-op: the function returns `Ok(())` immediately.
 ///
 /// # Errors
-/// [`CliError::Io`] when the manifest cannot be read; [`CliError::UsageOwned`]
+/// [`CliError::Io`] when the manifest cannot be read; [`CliError::Usage`]
 /// when the jailed inspector fails or produces an undecodable result.
 pub fn install_registry_deps_for_project(
     manifest_path: &Path,
@@ -1878,19 +1974,20 @@ pub fn install_registry_deps_for_project(
     let cache = FfiCache::at_project_root(project_root);
     let mut entries: Vec<(CrateSpec, Vec<String>)> = Vec::with_capacity(deps.len());
     for dep in &deps {
-        let name =
-            CrateName::parse(&dep.name).map_err(|diag| CliError::UsageOwned(diag.to_string()))?;
+        let name = CrateName::parse(&dep.name)
+            .map_err(|diag| CliError::Usage(crate::text::Message::relay(&diag)))?;
         let version = match dep.version.trim() {
             "" | "*" => None,
             pin => Some(
-                VersionPin::parse(pin).map_err(|diag| CliError::UsageOwned(diag.to_string()))?,
+                VersionPin::parse(pin)
+                    .map_err(|diag| CliError::Usage(crate::text::Message::relay(&diag)))?,
             ),
         };
         let mut features = Vec::with_capacity(dep.features.len());
         for feat in &dep.features {
             features.push(
                 FeatureName::parse(feat)
-                    .map_err(|defect| CliError::UsageOwned(defect.to_string()))?,
+                    .map_err(|defect| CliError::Usage(crate::text::Message::relay(&defect)))?,
             );
         }
         let features: Vec<String> = features.iter().map(|f| f.as_str().to_owned()).collect();
@@ -1901,16 +1998,16 @@ pub fn install_registry_deps_for_project(
         allow_build_scripts,
     )
     .map_err(|e| match e {
-        CliError::UsageOwned(msg) => map_inspector_error(msg),
+        CliError::Usage(msg) => map_inspector_error(msg),
         other => other,
     })?;
     let val: serde_json::Value = serde_json::from_str(&json)
-        .map_err(|e| CliError::UsageOwned(text::ffi_regen_invalid_json(&e)))?;
+        .map_err(|e| CliError::Usage(text::msg::ffi_regen_invalid_json(&e)))?;
     let items: Vec<serde_json::Value> = match val {
         serde_json::Value::Array(items) => items,
         one @ serde_json::Value::Object(_) => vec![one],
         other => {
-            return Err(CliError::UsageOwned(text::ffi_regen_unexpected_shape(
+            return Err(CliError::Usage(text::msg::ffi_regen_unexpected_shape(
                 &other,
             )));
         }
@@ -1925,7 +2022,7 @@ pub fn install_registry_deps_for_project(
             .get("name")
             .or_else(|| item.get("pkg"))
             .and_then(serde_json::Value::as_str)
-            .ok_or_else(|| CliError::UsageOwned(text::ffi_regen_item_unnamed(&item)))?
+            .ok_or_else(|| CliError::Usage(text::msg::ffi_regen_item_unnamed(&item)))?
             .to_owned();
         let merged = merge_provides(
             &item.to_string(),
@@ -1955,7 +2052,7 @@ pub fn run_rust(rest: &[String]) -> Result<(), CliError> {
         // usage hint so the dispatcher shows the `--help` page and exits
         // non-zero — matching bare `ipe package`. An explicit `ipe rust --help`
         // is still honoured as a help request upstream.
-        None => Err(CliError::Usage(text::rust_usage())),
+        None => Err(CliError::Usage(text::msg::rust_usage())),
         Some((sub, args)) if sub == "add" => run_add(args),
         Some((sub, args)) if sub == "remove" => run_remove(args),
         Some((sub, args)) if sub == "install" => run_install(args),
@@ -1982,13 +2079,13 @@ pub fn run_add(rest: &[String]) -> Result<(), CliError> {
         match arg.as_str() {
             "--features" => {
                 let raw = it.next().ok_or_else(|| {
-                    CliError::UsageOwned(text::flag_needs_value(&"rust add", &"--features"))
+                    CliError::Usage(text::msg::flag_needs_value(&"rust add", &"--features"))
                 })?;
                 // Parse, don't validate: gate each feature name at the boundary
                 // before it can reach the emitted manifest's `features` array.
                 for feat in raw.split(',') {
                     let gated = FeatureName::parse(feat)
-                        .map_err(|defect| CliError::UsageOwned(defect.to_string()))?;
+                        .map_err(|defect| CliError::Usage(crate::text::Message::relay(&defect)))?;
                     features.push(gated.as_str().to_owned());
                 }
             }
@@ -1997,12 +2094,13 @@ pub fn run_add(rest: &[String]) -> Result<(), CliError> {
             "--verbose" => verbose = true,
             other if krate.is_none() => krate = Some(other.to_owned()),
             _ => {
-                return Err(CliError::Usage(text::rust_add_usage()));
+                return Err(CliError::Usage(text::msg::rust_add_usage()));
             }
         }
     }
-    let raw = krate.ok_or(CliError::Usage(text::rust_add_usage()))?;
-    let spec = CrateSpec::parse(&raw).map_err(|diag| CliError::UsageOwned(diag.to_string()))?;
+    let raw = krate.ok_or(CliError::Usage(text::msg::rust_add_usage()))?;
+    let spec = CrateSpec::parse(&raw)
+        .map_err(|diag| CliError::Usage(crate::text::Message::relay(&diag)))?;
 
     if !assume_yes {
         use std::io::Write as _;
@@ -2014,7 +2112,7 @@ pub fn run_add(rest: &[String]) -> Result<(), CliError> {
         crate::screen::prompt("[y/N] ");
         let _ = std::io::stdout().flush();
         if !crate::read_yes_no() {
-            return Err(CliError::Usage(text::rust_add_aborted()));
+            return Err(CliError::Usage(text::msg::rust_add_aborted()));
         }
     }
 
@@ -2028,13 +2126,13 @@ pub fn run_add(rest: &[String]) -> Result<(), CliError> {
 /// [`CliError`] on misuse or a cache-delete failure.
 pub fn run_remove(rest: &[String]) -> Result<(), CliError> {
     let [raw] = rest else {
-        return Err(CliError::Usage(text::rust_remove_usage()));
+        return Err(CliError::Usage(text::msg::rust_remove_usage()));
     };
     let cache = FfiCache::at_project_root(Path::new("."));
     let slug = ipe_ffi::driver::slugify(raw);
     cache
         .remove_package(&slug)
-        .map_err(|diag| CliError::UsageOwned(diag.to_string()))?;
+        .map_err(|diag| CliError::Usage(crate::text::Message::relay(&diag)))?;
     crate::screen::Screen::new(crate::screen::Stream::Stdout)
         .line(crate::screen::Tone::Text, &format!("removed `{raw}`"))
         .emit();
@@ -2065,20 +2163,22 @@ pub fn run_install(rest: &[String]) -> Result<(), CliError> {
             "--allow-build-scripts" => allow_build_scripts = true,
             "--verbose" => verbose = true,
             _ => {
-                return Err(CliError::Usage(text::rust_install_usage()));
+                return Err(CliError::Usage(text::msg::rust_install_usage()));
             }
         }
     }
     if crate::project::manifest_in_dir(Path::new(".")).is_some() {
-        return Err(CliError::Usage(text::rust_install_package_ipe_unsupported()));
+        return Err(CliError::Usage(
+            text::msg::rust_install_package_ipe_unsupported(),
+        ));
     }
     let manifest = Path::new(PROJECT_MANIFEST_TOML);
     if !manifest.is_file() {
-        return Err(CliError::Usage(text::rust_install_no_manifest()));
+        return Err(CliError::Usage(text::msg::rust_install_no_manifest()));
     }
     let text =
         crate::io_bounded::read_to_string_capped(manifest, crate::io_bounded::MANIFEST_READ_CAP)
-            .map_err(|e| CliError::UsageOwned(text::command_refusal(&"install", &e)))?;
+            .map_err(|e| CliError::Usage(text::msg::command_refusal(&"install", &e)))?;
     let deps = rust_dependencies_from_manifest(&text);
     let wrapper = rust_wrapper_from_manifest(&text);
     if deps.is_empty() && wrapper.is_none() {
@@ -2119,19 +2219,20 @@ pub fn run_install(rest: &[String]) -> Result<(), CliError> {
         crate::screen::prompt("Continue? [y/N] ");
         let _ = std::io::stdout().flush();
         if !crate::read_yes_no() {
-            return Err(CliError::Usage(text::install_aborted()));
+            return Err(CliError::Usage(text::msg::install_aborted()));
         }
     }
     let mut entries: Vec<(CrateSpec, Vec<String>)> = Vec::with_capacity(deps.len());
     for dep in &deps {
-        let name =
-            CrateName::parse(&dep.name).map_err(|diag| CliError::UsageOwned(diag.to_string()))?;
+        let name = CrateName::parse(&dep.name)
+            .map_err(|diag| CliError::Usage(crate::text::Message::relay(&diag)))?;
         // `*` / empty keep the historical latest-stable resolution; anything
         // else pins the inspector's probe (a prerelease NEEDS an exact `=`).
         let version = match dep.version.trim() {
             "" | "*" => None,
             pin => Some(
-                VersionPin::parse(pin).map_err(|diag| CliError::UsageOwned(diag.to_string()))?,
+                VersionPin::parse(pin)
+                    .map_err(|diag| CliError::Usage(crate::text::Message::relay(&diag)))?,
             ),
         };
         // Parse, don't validate: every feature name is gated at the boundary
@@ -2140,7 +2241,7 @@ pub fn run_install(rest: &[String]) -> Result<(), CliError> {
         for feat in &dep.features {
             features.push(
                 FeatureName::parse(feat)
-                    .map_err(|defect| CliError::UsageOwned(defect.to_string()))?,
+                    .map_err(|defect| CliError::Usage(crate::text::Message::relay(&defect)))?,
             );
         }
         let features: Vec<String> = features.iter().map(|f| f.as_str().to_owned()).collect();
@@ -2155,16 +2256,16 @@ pub fn run_install(rest: &[String]) -> Result<(), CliError> {
         allow_build_scripts,
     )
     .map_err(|e| match e {
-        CliError::UsageOwned(msg) => map_inspector_error(msg),
+        CliError::Usage(msg) => map_inspector_error(msg),
         other => other,
     })?;
     let val: serde_json::Value = serde_json::from_str(&json)
-        .map_err(|e| CliError::UsageOwned(text::ffi_install_invalid_json(&e)))?;
+        .map_err(|e| CliError::Usage(text::msg::ffi_install_invalid_json(&e)))?;
     let items: Vec<serde_json::Value> = match val {
         serde_json::Value::Array(items) => items,
         one @ serde_json::Value::Object(_) => vec![one],
         other => {
-            return Err(CliError::UsageOwned(text::ffi_install_unexpected_shape(
+            return Err(CliError::Usage(text::msg::ffi_install_unexpected_shape(
                 &other,
             )));
         }
@@ -2499,7 +2600,7 @@ fn reject_ambiguous_define<'a>(
     mut unqualified: impl Iterator<Item = &'a str>,
 ) -> Result<(), CliError> {
     if !sole_dep && let Some(name) = unqualified.next() {
-        return Err(CliError::UsageOwned(text::ffi_define_crate_ambiguous(
+        return Err(CliError::Usage(text::msg::ffi_define_crate_ambiguous(
             &kind, &name,
         )));
     }
@@ -2647,17 +2748,17 @@ fn merge_provides(
         return Ok(inspection_json.to_owned());
     }
     let mut doc: serde_json::Value = serde_json::from_str(inspection_json)
-        .map_err(|e| CliError::UsageOwned(text::ffi_inspection_not_object_detail(&e)))?;
+        .map_err(|e| CliError::Usage(text::msg::ffi_inspection_not_object_detail(&e)))?;
     if !synthetic.is_empty() {
         let obj = doc
             .as_object_mut()
-            .ok_or_else(|| CliError::UsageOwned(text::ffi_inspection_not_object().to_owned()))?;
+            .ok_or_else(|| CliError::Usage(text::msg::ffi_inspection_not_object()))?;
         let serde_json::Value::Array(functions) = obj
             .entry("functions")
             .or_insert_with(|| serde_json::Value::Array(Vec::new()))
         else {
-            return Err(CliError::UsageOwned(
-                text::ffi_inspection_functions_not_array().to_owned(),
+            return Err(CliError::Usage(
+                text::msg::ffi_inspection_functions_not_array(),
             ));
         };
         functions.extend(synthetic);
@@ -2703,14 +2804,14 @@ fn merge_declared_opaques(
             t.get("name").and_then(serde_json::Value::as_str) == Some(o.rust_type.as_str())
         });
         let Some(reported) = reported else {
-            return Err(CliError::UsageOwned(text::ffi_opaque_unknown_type(
+            return Err(CliError::Usage(text::msg::ffi_opaque_unknown_type(
                 &o.ipe_name,
                 &o.rust_type,
                 &crate_name,
             )));
         };
         if transparent.contains(o.rust_type.as_str()) {
-            return Err(CliError::UsageOwned(text::ffi_opaque_is_transparent(
+            return Err(CliError::Usage(text::msg::ffi_opaque_is_transparent(
                 &o.ipe_name,
                 &o.rust_type,
             )));
@@ -2720,7 +2821,10 @@ fn merge_declared_opaques(
             .and_then(serde_json::Value::as_str)
             .filter(|p| !p.is_empty())
             .ok_or_else(|| {
-                CliError::UsageOwned(text::ffi_opaque_without_path(&o.ipe_name, &o.rust_type))
+                CliError::Usage(text::msg::ffi_opaque_without_path(
+                    &o.ipe_name,
+                    &o.rust_type,
+                ))
             })?;
         let absolute = if rust_path.starts_with("::") {
             rust_path.to_owned()
@@ -2730,7 +2834,7 @@ fn merge_declared_opaques(
         if let Some(prev) = declared.get(o.ipe_name.as_str())
             && prev.as_str() != Some(absolute.as_str())
         {
-            return Err(CliError::UsageOwned(text::ffi_opaque_declared_twice(
+            return Err(CliError::Usage(text::msg::ffi_opaque_declared_twice(
                 &o.ipe_name,
             )));
         }
@@ -2825,7 +2929,7 @@ type ForeignDefines = (
 /// A parse error in any source module is silently skipped here — the compile
 /// pipeline will surface it with full context moments later. A malformed
 /// `foreign` declaration (invalid carrier, unknown kind, …) is a typed refusal
-/// returned as an `Err` with a `CliError::UsageOwned` carrying the source path
+/// returned as an `Err` with a `CliError::Usage` carrying the source path
 /// and reason; the caller decides whether to propagate it immediately or defer.
 ///
 /// The returned vectors are the exact same `ManifestDefine*` shapes the TOML
@@ -2908,7 +3012,7 @@ impl ForeignReader<'_> {
     /// Emit a typed refusal with a source location prefix.
     fn reject(&self, span: ipe_diagnostics::Span, reason: &str) -> CliError {
         let (line, col) = line_col_from_span(self.src, span.lo);
-        CliError::UsageOwned(text::located_refusal(
+        CliError::Usage(text::msg::located_refusal(
             &self.file.display(),
             &line,
             &col,
@@ -3883,7 +3987,7 @@ version = \"1\"
         // _bindings.rs — and confirm discovery refuses it.
         std::fs::set_permissions(&cache, std::fs::Permissions::from_mode(0o777)).expect("chmod");
         let r = find_cache_root(&tmp);
-        assert!(matches!(r, Err(CliError::UsageOwned(_))), "{r:?}");
+        assert!(matches!(r, Err(CliError::Usage(_))), "{r:?}");
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
@@ -3945,7 +4049,7 @@ version = \"1\"
             dep_versions: BTreeMap::new(),
             inspected_free_fns: BTreeMap::new(),
             inspected_consts: BTreeMap::new(),
-            cargo_deps: vec![line.to_owned()],
+            cargo_deps: vec![CargoDep::parse_registry_line(line).expect("registry line")],
             wrapper_idents: BTreeSet::new(),
         };
         // Two crates agreeing on a shared dep line dedupe to one.
@@ -3980,7 +4084,7 @@ version = \"1\"
             dep_versions: BTreeMap::new(),
             inspected_free_fns: BTreeMap::new(),
             inspected_consts: BTreeMap::new(),
-            cargo_deps: vec![line.to_owned()],
+            cargo_deps: vec![CargoDep::parse_registry_line(line).expect("registry line")],
             wrapper_idents: BTreeSet::new(),
         };
         let e = assemble_emit(&[
@@ -4022,7 +4126,10 @@ version = \"1\"
             dep_versions: BTreeMap::new(),
             inspected_free_fns: BTreeMap::new(),
             inspected_consts: BTreeMap::new(),
-            cargo_deps: lines.into_iter().map(str::to_owned).collect(),
+            cargo_deps: lines
+                .into_iter()
+                .map(|line| CargoDep::parse_registry_line(line).expect("registry line"))
+                .collect(),
             wrapper_idents: BTreeSet::new(),
         };
         let e = assemble_emit(&[
@@ -4050,6 +4157,170 @@ version = \"1\"
         assert!(
             clash.is_err(),
             "a direct-crate version conflict still refuses"
+        );
+    }
+
+    /// A bare installed crate carrying only the given typed dependencies.
+    fn crate_with_deps(slug: &str, cargo_deps: Vec<CargoDep>) -> InstalledCrate {
+        InstalledCrate {
+            slug: slug.to_owned(),
+            module_name: format!("Rust.{slug}"),
+            kernel_name: format!("Rust_{slug}"),
+            interface_source: String::new(),
+            bindings_source: String::new(),
+            opaque_types: BTreeMap::new(),
+            opaque_type_ids: BTreeMap::new(),
+            define_types: BTreeSet::new(),
+            transparent_types: BTreeMap::new(),
+            bindings: Vec::new(),
+            dep_versions: BTreeMap::new(),
+            inspected_free_fns: BTreeMap::new(),
+            inspected_consts: BTreeMap::new(),
+            cargo_deps,
+            wrapper_idents: BTreeSet::new(),
+        }
+    }
+
+    /// A scratch project with `wrappers/<name>` crates all named `engine_wrap`,
+    /// jailed into typed wrapper entries; returns the project root and the entries.
+    fn jailed_wrappers(tag: &str, dirs: &[&str]) -> (PathBuf, Vec<CargoDep>) {
+        let project =
+            std::env::temp_dir().join(format!("ipe-cli-wrap-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&project);
+        let deps = dirs
+            .iter()
+            .map(|dir| {
+                let rel = format!("wrappers/{dir}");
+                std::fs::create_dir_all(project.join(&rel)).expect("scratch wrapper dir");
+                std::fs::write(
+                    project.join(&rel).join("Cargo.toml"),
+                    "[package]\nname = \"engine_wrap\"\nversion = \"0.1.0\"\n",
+                )
+                .expect("scratch wrapper manifest");
+                let jailed = ipe_ffi::pkginfo::WrapperCratePath::parse(&rel)
+                    .and_then(|path| path.jail(&project))
+                    .expect("jails inside the scratch root");
+                CargoDep::Wrapper {
+                    dir: jailed,
+                    features: Vec::new(),
+                }
+            })
+            .collect();
+        (project, deps)
+    }
+
+    /// The source description a wrapper entry carries in a conflict message.
+    fn wrapper_source(deps: &[CargoDep], at: usize) -> String {
+        let Some(CargoDep::Wrapper { dir, .. }) = deps.get(at) else {
+            return String::new();
+        };
+        format!("path {}", dir.as_str())
+    }
+
+    /// The exact source-conflict refusal for the `engine_wrap` key.
+    fn source_conflict(first: &str, second: &str) -> String {
+        text::msg::ffi_dependency_source_conflict(&"engine_wrap", &first, &second).to_string()
+    }
+
+    /// The conflict message renders both sources on their own lines.
+    #[test]
+    fn the_source_conflict_message_names_both_sources() {
+        assert_eq!(
+            source_conflict("version =1.0.0", "path /p/engine"),
+            "installed FFI crates bind dependency `engine_wrap` to two different sources:\n  \
+             version =1.0.0\n  path /p/engine"
+        );
+    }
+
+    /// A wrapper crate flows through `assemble_emit` as its typed entry and
+    /// renders the one canonical `path` line; two members naming the same
+    /// wrapper directory dedupe to it.
+    #[test]
+    fn a_wrapper_crate_renders_its_path_line_through_assemble_emit() {
+        let (project, deps) = jailed_wrappers("ok", &["engine"]);
+        let canonical = std::fs::canonicalize(project.join("wrappers/engine"))
+            .expect("wrapper dir canonicalizes");
+        let r = assemble_emit(&[
+            crate_with_deps("engine_wrap", deps.clone()),
+            crate_with_deps("other", deps),
+        ]);
+        let _ = std::fs::remove_dir_all(&project);
+        let emit = r.expect("a wrapper crate assembles").expect("emit present");
+        assert_eq!(
+            emit.dep_lines,
+            vec![format!(
+                "engine_wrap = {{ path = \"{}\" }}",
+                canonical.display()
+            )]
+        );
+    }
+
+    /// One dependency key bound to a registry pin by one member and a wrapper
+    /// path by another is refused, in either order.
+    #[test]
+    fn a_registry_pin_against_a_wrapper_path_is_refused() {
+        let (project, wrapper) = jailed_wrappers("mixed", &["engine"]);
+        let path = wrapper_source(&wrapper, 0);
+        let registry =
+            vec![CargoDep::parse_registry_line("engine_wrap = \"=1.0.0\"").expect("registry line")];
+        let forward = assemble_emit(&[
+            crate_with_deps("a", registry.clone()),
+            crate_with_deps("b", wrapper.clone()),
+        ]);
+        let backward = assemble_emit(&[
+            crate_with_deps("a", wrapper),
+            crate_with_deps("b", registry),
+        ]);
+        let _ = std::fs::remove_dir_all(&project);
+        for (r, expected) in [
+            (forward, source_conflict("version =1.0.0", &path)),
+            (backward, source_conflict(&path, "version =1.0.0")),
+        ] {
+            assert!(
+                matches!(&r, Err(CliError::Usage(m)) if m.to_string() == expected),
+                "{r:?}"
+            );
+        }
+    }
+
+    /// One dependency key bound to two different wrapper directories is refused.
+    #[test]
+    fn two_wrapper_paths_for_one_dependency_are_refused() {
+        let (project, deps) = jailed_wrappers("two", &["engine", "engine2"]);
+        let r = assemble_emit(&[
+            crate_with_deps("a", deps.iter().take(1).cloned().collect()),
+            crate_with_deps("b", deps.iter().skip(1).cloned().collect()),
+        ]);
+        let _ = std::fs::remove_dir_all(&project);
+        let expected = source_conflict(&wrapper_source(&deps, 0), &wrapper_source(&deps, 1));
+        assert!(
+            matches!(&r, Err(CliError::Usage(m)) if m.to_string() == expected),
+            "{r:?}"
+        );
+    }
+
+    /// A wrapper path under a key a transitive version conflict already left
+    /// to Cargo is refused, never silently dropped.
+    #[test]
+    fn a_wrapper_path_under_an_unpinned_transitive_is_refused() {
+        let (project, wrapper) = jailed_wrappers("unpinned", &["engine"]);
+        let pin = |v: &str| {
+            CargoDep::parse_registry_line(&format!("engine_wrap = \"={v}\""))
+                .expect("registry line")
+        };
+        let r = assemble_emit(&[
+            crate_with_deps("a", vec![pin("1.0.0")]),
+            crate_with_deps("b", vec![pin("2.0.0")]),
+            crate_with_deps("c", wrapper.clone()),
+        ]);
+        let _ = std::fs::remove_dir_all(&project);
+        let expected = source_conflict(
+            "an unpinned registry dependency",
+            &wrapper_source(&wrapper, 0),
+        );
+        assert!(
+            matches!(&r, Err(CliError::Usage(m)) if m.to_string() == expected),
+            "{r:?}"
         );
     }
 
@@ -4193,7 +4464,7 @@ version = \"1\"
         )
         .expect_err("must_refuse: an un-inspected type cannot mint a handle");
         assert!(
-            matches!(&err, CliError::UsageOwned(m) if m.contains("not an inspected type")),
+            matches!(&err, CliError::Usage(m) if m.contains("not an inspected type")),
             "{err:?}"
         );
     }
@@ -4222,7 +4493,7 @@ version = \"1\"
         let err = merge_provides(&doc, "geo", &[], &[], &[], &opaques, true)
             .expect_err("must_refuse: a transparent value type is not a handle");
         assert!(
-            matches!(&err, CliError::UsageOwned(m) if m.contains("TRANSPARENTLY")),
+            matches!(&err, CliError::Usage(m) if m.contains("TRANSPARENTLY")),
             "{err:?}"
         );
     }
@@ -4367,7 +4638,7 @@ version = \"1\"
             wrapper_ident: "Rust_demo_counter_new".to_owned(),
             arity: 1,
             sig: "Int -> Counter".to_owned(),
-            transparent_params: Vec::new(),
+            transparent_params: ipe_ffi::interface::TransparentParams::None,
             transparent_result: Some(ipe_ffi::interface::TransparentResult {
                 type_name: "Counter".to_owned(),
                 in_result: false,
@@ -4443,13 +4714,21 @@ version = \"1\"
         let raw = "inspector exited with Some(1)\n\
             crates with build scripts found\n\
             pass --allow-build-scripts to proceed";
-        let err = map_inspector_error(raw.to_owned());
+        let err = map_inspector_error(crate::text::msg::command_refusal(&"add", &raw));
         match err {
             CliError::Resolve(msg) => {
                 assert!(
-                    msg.contains("--allow-build-scripts"),
-                    "the actionable flag must appear in the message"
+                    msg.starts_with(
+                        "warning: some crates in the dependency graph have build scripts.\n\
+                         Pass --allow-build-scripts to proceed"
+                    ),
+                    "the banner leads with the plain warning and flag: {msg:?}"
                 );
+                assert!(
+                    msg.ends_with("hint: pass --allow-build-scripts to proceed"),
+                    "the inspector hint closes the banner: {msg:?}"
+                );
+                assert!(!msg.contains('\u{1b}'), "the banner is plain text: {msg:?}");
             }
             other => panic!("expected Resolve, got {other:?}"),
         }
@@ -4759,5 +5038,40 @@ iced = "=0.12.1"
             choose_sandbox_route(&ipe_sandbox::Mechanism::Refused, vec![], true),
             SandboxRoute::Unsandboxed
         ));
+    }
+
+    /// An escape sequence in a dependency name cannot swallow the reasons after
+    /// it nor the closing no-sandbox warning: the name is terminal-safe from the
+    /// moment the refusal is built, and the relay's own pass stops any
+    /// sequence at the line break.
+    #[test]
+    fn an_escape_in_a_dependency_name_keeps_the_refusal_tail() {
+        use ipe_ffi::capability_scan::{Capability, RefuseReason};
+        let refusal = WrapperRefusal {
+            reasons: vec![
+                RefuseReason::NonStdDependency {
+                    name: crate::style::TerminalSafe::sanitize("dep\u{1b}]8;;https://evil"),
+                },
+                RefuseReason::DeclaredUnenforceable {
+                    cap: Capability::Network,
+                },
+            ],
+            proposed: BTreeSet::new(),
+        };
+        let relayed = crate::text::Message::relay(&refusal).to_string();
+        assert!(
+            relayed.contains("depends on `dep` — a dependency"),
+            "{relayed:?}"
+        );
+        assert!(relayed.contains("  - declares `"), "{relayed:?}");
+        assert!(
+            relayed.contains("inferred from its source: (none"),
+            "{relayed:?}"
+        );
+        assert!(
+            relayed.contains("Ipê has no runtime sandbox around the emitted app yet"),
+            "{relayed:?}"
+        );
+        assert!(!relayed.contains("evil"), "{relayed:?}");
     }
 }

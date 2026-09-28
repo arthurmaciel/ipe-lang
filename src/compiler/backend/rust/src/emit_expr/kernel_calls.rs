@@ -1661,6 +1661,27 @@ pub fn emit_config_ctor_call(callee: &Callee) -> Option<String> {
     Some(format!("{tag}i64"))
 }
 
+/// Fail closed unless the entry's surface is the one whose loop reads this input subscription.
+///
+/// The lowerer refuses every reference outside its surface with a
+/// source-anchored IPE-N0035; reaching here with a mismatch is a broken
+/// invariant, so it is a compiler bug — never emitted Rust whose subscription
+/// no loop reads.
+fn require_input_sub_shape(ctx: &EmitCtx, k: KernelFn) -> DResult<()> {
+    match k.input_surface() {
+        Some(owner) if owner != ctx.entry_surface => Err(Diagnostic::CompilerBug {
+            where_: "ipe_backend_rust::emit_tea_call::require_input_sub_shape",
+            detail: format!(
+                "{k:?} reads {} input but the entry is a {} app; the lowerer's \
+                 surface gate should have refused it",
+                owner.name(),
+                ctx.entry_surface.name()
+            ),
+        }),
+        _ => Ok(()),
+    }
+}
+
 #[allow(clippy::match_same_arms, clippy::too_many_lines)]
 pub fn emit_tea_call(
     ctx: &EmitCtx,
@@ -1717,34 +1738,13 @@ pub fn emit_tea_call(
             let handler_src = emit_expr_at(ctx, handler_expr, indent, child, generics)?;
             Ok(Some(format!("cmd_perform({task_s}, {handler_src})")))
         }
-        // ── Task.attempt : (Result Error a -> msg) -> Task Error a -> Cmd msg ──
-        // Elm's arg order is `(to_msg, task)`; the runtime `cmd_perform` takes
-        // `(task, to_msg)` (the exact `Cmd.perform` bridge), so the two args are
-        // emitted swapped. Reuses `cmd_perform` — no dedicated runtime symbol.
-        KernelFn::TaskAttempt => {
-            let handler_expr = arg!(0, "to_msg")?;
-            let task_e = arg!(1, "task")?;
-            let handler_src = emit_expr_at(ctx, handler_expr, indent, child, generics)?;
-            let task_s = emit_expr_at(ctx, task_e, indent, child, generics)?;
-            Ok(Some(format!("cmd_perform({task_s}, {handler_src})")))
-        }
-        // ── Arity-2: Cmd.map / Sub.map (retag a sub-component's effects) ─────────
-        // `Cmd.map : (a -> msg) -> Cmd a -> Cmd msg`  →  `cmd_map(<cmd>, <f>)`
-        // `Sub.map : (a -> msg) -> Sub a -> Sub msg`  →  `sub_map(<sub>, <f>)`
-        // The Ipê argument order is `(f, effect)`; the runtime takes
-        // `(effect, f)` (effect first so `f` infers its `A` from the effect's
-        // message type), so the two args are emitted swapped. `f` is passed
-        // through unboxed — `cmd_map`/`sub_map` are generic over `F: Fn(A) -> M`
-        // and share it via `Arc` internally, so the emitted closure value binds
-        // directly with no re-wrap.
-        KernelFn::CmdMap | KernelFn::SubMap => {
-            let handler_expr = arg!(0, "f")?;
-            let effect_e = arg!(1, "effect")?;
-            let handler_src = emit_expr_at(ctx, handler_expr, indent, child, generics)?;
-            let effect_s = emit_expr_at(ctx, effect_e, indent, child, generics)?;
-            let name = kernel_name(*k); // "cmd_map" / "sub_map"
-            Ok(Some(format!("{name}({effect_s}, {handler_src})")))
-        }
+        // `Task.attempt : (Result Error a -> msg) -> Task Error a -> Cmd msg`
+        // → `cmd_perform(<task>, <to_msg>)`; `Cmd.map`/`Sub.map :
+        // (a -> msg) -> effect a -> effect msg` → `cmd_map`/`sub_map(<effect>,
+        // <f>)`. Each is declared `ArgOrder::ContainerFirst`, so the default
+        // N-arg emitter swaps the pair and clones the function's captures at
+        // their container use sites.
+        KernelFn::TaskAttempt | KernelFn::CmdMap | KernelFn::SubMap => Ok(None),
         // ── Arity-2: tick subscriptions — standard path ──────────────────────────
         // `Sub.every : Int -> msg -> Sub msg` and
         // `Time.every : Int -> msg -> Sub msg`
@@ -1757,6 +1757,27 @@ pub fn emit_tea_call(
         // non-describable entry) it passes through the default N-arg emitter
         // (`Ok(None)`), byte-identical to the flag-off form — no boxing needed.
         KernelFn::SubEvery | KernelFn::TimeEvery => Ok(emit_sub_arm(ctx, *k, args)),
+        // ── Arity-1: shape-owned terminal input subscriptions ────────────────────
+        // `Tui.Sub.onKey : (KeyEvent -> msg) -> Sub msg`
+        //   →  `tui_sub_on_key(|kind, value| handler(KeyEvent { kind, value }))`
+        // `Cli.Sub.onLine : (String -> msg) -> Sub msg`
+        //   →  `cli_sub_on_line(handler)`
+        // Only the matching terminal loop drives these; the shape guard refuses
+        // either one anywhere else (a sub no loop reads is silently lost input).
+        KernelFn::TuiSubOnKey => {
+            require_input_sub_shape(ctx, *k)?;
+            let handler_expr = arg!(0, "to_msg")?;
+            let handler_src = emit_expr_at(ctx, handler_expr, indent, child, generics)?;
+            let bridge = crate::emit_tui::key_event_bridge(ctx, &handler_src)?;
+            Ok(Some(format!("tui_sub_on_key({bridge})")))
+        }
+        KernelFn::CliSubOnLine => {
+            require_input_sub_shape(ctx, *k)?;
+            let handler_expr = arg!(0, "to_msg")?;
+            let handler_src = emit_expr_at(ctx, handler_expr, indent, child, generics)?;
+            let bridge = crate::emit_console::line_handler_bridge(&handler_src);
+            Ok(Some(format!("cli_sub_on_line({bridge})")))
+        }
         // ── Arity-2: pub/sub subscription — standard path ────────────────────────
         // `Sub.subscribeTopic : String -> (any -> msg) -> Sub msg`
         // The runtime `sub_subscribe_topic` is in live/pubsub.rs (live-feature

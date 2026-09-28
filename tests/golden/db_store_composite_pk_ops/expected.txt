@@ -1,0 +1,16 @@
+composite-get:rejected
+composite-update:rejected
+composite-delete:rejected
+composite-update-where:1
+after-update-where:u1/g1/admin,u2/g1/member
+illegal-update-where:rejected
+illegal-insert:rejected
+illegal-delete-where:rejected
+illegal-find-where:rejected
+illegal-all:rejected
+illegal-find-by:rejected
+illegal-get:rejected
+illegal-query:rejected
+illegal-join:rejected
+illegal-secured:rejected
+final:u1/g1/admin,u2/g1/member

@@ -1455,6 +1455,7 @@ Ipe.Db.Dsn — a typed, opaque database connection descriptor
 | `build` | `build parts` — THE seal from typed parts, enforcing the invariants `parse` |
 | `driver` | `driver dsn` — the descriptor's driver. |
 | `host` | `host dsn` — the host component (`""` for a file-backed sqlite descriptor). |
+| `port` | `port dsn` — the network port as a validated `Ipe.Net.Port`, or `Nothing` |
 | `database` | `database dsn` — the database name (or file path, for sqlite). |
 | `user` | `user dsn` — the connection user (`""` when none). |
 | `tls` | `tls dsn` — the descriptor's transport posture. |
@@ -1474,6 +1475,7 @@ Ipe.Db.Store — typed, injection-safe persistence over the audited `Ipe.Db`.
 | `Store` | One classified, queryable table whose schema, reads, and writes derive from |
 | `Column` | One typed column: its (validated) name and its abstract type for the |
 | `ColumnSpec` | A DB-only fact the record type cannot express: primary key, serial |
+| `PrimaryKeyDecl` | The table's primary key: none, one column, or several columns forming one |
 | `IndexSpec` | A declarative performance index over one or more of the store's columns. |
 | `Row` | A row read back from the database: every column keyed by its name, values |
 | `validSqlIdent` | `validSqlIdent name` — accept `name` as a (possibly dotted) SQL identifier, |
@@ -1494,7 +1496,10 @@ Ipe.Db.Store — typed, injection-safe persistence over the audited `Ipe.Db`.
 | `defaultText` | `defaultText accessor value store` — give the accessor-named column a |
 | `defaultInt` | `defaultInt accessor value store` — give the accessor-named column a |
 | `touchOnUpdate` | Mark the accessor-named column a DB-stamped updated-at column. Like |
-| `primaryKeyNamed` | (no summary) |
+| `compositePrimaryKey2` | `compositePrimaryKey2 first second draft` — make the two accessor-named |
+| `compositePrimaryKey3` | `compositePrimaryKey3 first second third draft` — make the three |
+| `primaryKeyNamed` | `primaryKeyNamed column draft` — the string form of `primaryKey`: mark the |
+| `compositePrimaryKeyNamed` | `compositePrimaryKeyNamed columns draft` — the string form of |
 | `serialNamed` | (no summary) |
 | `uniqueNamed` | (no summary) |
 | `defaultNowNamed` | (no summary) |
@@ -1532,6 +1537,7 @@ Ipe.Db.Store — typed, injection-safe persistence over the audited `Ipe.Db`.
 | `CompareOp` | A comparison operator carried by a query leaf. A typed ADT, not a stringly |
 | `Query` | A filtered, ordered, paginated read over a `Store a`, decoded through the |
 | `query` | `query store` — begin a read over `store` with no filter, ordering, or |
+| `where` | `where cond q` — restrict `q` to the rows matching `cond`. Applying `where` |
 | `eq` | `eq accessor value` — the rows where the record column named by the field |
 | `eqBy` | `eqBy codec accessor value` — the accessor-typed equality leaf for an ENUM |
 | `neq` | `neq accessor value` — the rows where the column named by `accessor` is |
@@ -1639,6 +1645,7 @@ Ipe.Db.Store.Unsafe — the raw, string-named query leaves and column-spec
 | `notNull` | `notNull col` — the rows where `col` is not SQL `NULL`. |
 | `inList` | `inList col values` — the rows where `col` is one of `values`; each value |
 | `primaryKey` | `primaryKey col draft` — mark the string-named `col` the primary key. |
+| `compositePrimaryKey` | `compositePrimaryKey cols draft` — make the string-named `cols`, in order, |
 | `serial` | `serial col draft` — mark the string-named `col` DB-assigned (serial), so |
 | `unique` | `unique col draft` — mark the string-named `col` unique. |
 | `defaultNow` | `defaultNow col draft` — mark the string-named `col` DB-stamped with the |
@@ -3230,6 +3237,7 @@ Ipe.Url — typed, validated URLs.
 | `toString` | `toString url` — recover the serialized URL string. |
 | `scheme` | `scheme url` — the URL's scheme (`"https"`, `"http"`, …), always present. |
 | `host` | `host url` — the host component, or `Nothing` for a hostless scheme |
+| `port` | `port url` — the port with the scheme's known default applied |
 | `path` | `path url` — the path component. |
 | `query` | `query url` — the raw query string (without the leading `?`), or `Nothing`. |
 | `fragment` | `fragment url` — the fragment (without the leading `#`), or `Nothing`. |

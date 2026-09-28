@@ -39,6 +39,12 @@ pub use pretty::{MAX_IR_RENDER_DEPTH, pretty};
 /// backend/db consumers reach it through the IR crate like `KernelFn`.
 pub use ipe_kernels::Target;
 
+/// The app surface a program's entry pins.
+///
+/// Re-exported so the lowerer and backend key shape-owned kernels on it through
+/// the IR crate.
+pub use ipe_kernels::AppSurface;
+
 /// The security-capability vocabulary — re-exported so lowering/CLI consumers
 /// reach it through the IR crate like `KernelFn`. [`WebCapability`] is the closed
 /// per-Web-API sub-axis a [`Capability::JsPort`] discloses.
