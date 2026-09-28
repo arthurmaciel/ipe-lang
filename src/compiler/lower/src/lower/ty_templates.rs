@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 
 use ipe_canon::ast as canon;
 use ipe_intern::{Interner, Symbol};
-use ipe_types::{ConHead, HeadIdentity, Ty, paired_ty_children};
+use ipe_types::{ConHead, EmittedHeads, HeadIdentity, Ty, paired_ty_children};
 
 use super::is_opaque_boxed_wrapper;
 
@@ -121,23 +121,29 @@ pub(super) fn generic_binding_breaks_clone(interner: &Interner, ty: &Ty) -> bool
 /// `{ run = \n -> … }` literal and emit an `Arc<dyn Fn>` value into an `i64`
 /// field: an accept-then-cargo-E0308 SEAL break).
 ///
-/// Constructor heads compare under [`HeadIdentity::Emitted`] (exact home and
-/// name), the identity the backend's struct-template match keys an enum by: a
-/// same-named constructor of another module never covers, since the backend
-/// would pick a different struct for it.
-pub(super) fn ty_covers_as_template(template: &Ty, concrete: &Ty) -> bool {
+/// Constructor heads compare under [`HeadIdentity::Emitted`] with `lowering`
+/// as the oracle: two heads cover each other exactly when both lower to one
+/// emitted type, the identity the backend's struct-template match compares.
+/// A reserved builtin spelled under its stdlib home covers its empty-home
+/// kernel spelling; a same-named union of another module never covers.
+pub(super) fn ty_covers_as_template(
+    template: &Ty,
+    concrete: &Ty,
+    lowering: &dyn EmittedHeads,
+) -> bool {
     match (template, concrete) {
         // A template variable instantiates to any concrete type; unit matches
         // unit — both admit their concrete unconditionally.
         (Ty::Var(_), _) | (Ty::Unit, Ty::Unit) => true,
         (Ty::Record(tf, _), Ty::Record(cf, _)) => {
             tf.len() == cf.len()
-                && tf
-                    .iter()
-                    .all(|(k, tv)| cf.get(k).is_some_and(|cv| ty_covers_as_template(tv, cv)))
+                && tf.iter().all(|(k, tv)| {
+                    cf.get(k)
+                        .is_some_and(|cv| ty_covers_as_template(tv, cv, lowering))
+                })
         }
-        _ => paired_ty_children(template, concrete, HeadIdentity::Emitted)
-            .is_some_and(|mut pairs| pairs.all(|(t, c)| ty_covers_as_template(t, c))),
+        _ => paired_ty_children(template, concrete, HeadIdentity::Emitted(lowering))
+            .is_some_and(|mut pairs| pairs.all(|(t, c)| ty_covers_as_template(t, c, lowering))),
     }
 }
 
@@ -158,31 +164,36 @@ pub(super) fn ty_covers_as_template(template: &Ty, concrete: &Ty) -> bool {
 /// top-level binding's inferred type — the condition under which the backend's
 /// signature scan will register the struct, making a separate
 /// [`collect_records_in_ty`] registration unnecessary.
-pub(super) fn ty_contains_record_key_set(ty: &Ty, lit_fields: &BTreeMap<Symbol, Ty>) -> bool {
+pub(super) fn ty_contains_record_key_set(
+    ty: &Ty,
+    lit_fields: &BTreeMap<Symbol, Ty>,
+    lowering: &dyn EmittedHeads,
+) -> bool {
     match ty {
         Ty::Record(fields, _) => {
             if fields.len() == lit_fields.len()
                 && lit_fields.iter().all(|(k, lv)| {
                     fields
                         .get(k)
-                        .is_some_and(|cv| ty_covers_as_template(cv, lv))
+                        .is_some_and(|cv| ty_covers_as_template(cv, lv, lowering))
                 })
             {
                 return true;
             }
             fields
                 .values()
-                .any(|f| ty_contains_record_key_set(f, lit_fields))
+                .any(|f| ty_contains_record_key_set(f, lit_fields, lowering))
         }
         Ty::Fun(a, b) => {
-            ty_contains_record_key_set(a, lit_fields) || ty_contains_record_key_set(b, lit_fields)
+            ty_contains_record_key_set(a, lit_fields, lowering)
+                || ty_contains_record_key_set(b, lit_fields, lowering)
         }
         Ty::Tuple(elems) => elems
             .iter()
-            .any(|e| ty_contains_record_key_set(e, lit_fields)),
+            .any(|e| ty_contains_record_key_set(e, lit_fields, lowering)),
         Ty::Con { args, .. } => args
             .iter()
-            .any(|a| ty_contains_record_key_set(a, lit_fields)),
+            .any(|a| ty_contains_record_key_set(a, lit_fields, lowering)),
         Ty::Var(_) | Ty::Unit => false,
     }
 }
@@ -191,19 +202,24 @@ pub(super) fn ty_contains_record_key_set(ty: &Ty, lit_fields: &BTreeMap<Symbol, 
 /// [`Ty`] field type, treating a canon type VARIABLE as a wildcard?  The
 /// canon/[`Ty`] cross-representation mirror of [`ty_covers_as_template`], used
 /// for union constructor payload types (declared as [`canon::Type`]); its
-/// constructor heads compare under the same [`HeadIdentity::Emitted`] rule.
-pub(super) fn canon_covers_as_template(template: &canon::Type, concrete: &Ty) -> bool {
+/// constructor heads compare under the same [`HeadIdentity::Emitted`] rule, the
+/// canon head's home lowered over the concrete side's arguments.
+pub(super) fn canon_covers_as_template(
+    template: &canon::Type,
+    concrete: &Ty,
+    lowering: &dyn EmittedHeads,
+) -> bool {
     match (template, concrete) {
         (canon::Type::Var(_), _) | (canon::Type::Unit, Ty::Unit) => true,
         (canon::Type::Lambda(tp, tr), Ty::Fun(cp, cr)) => {
-            canon_covers_as_template(tp, cp) && canon_covers_as_template(tr, cr)
+            canon_covers_as_template(tp, cp, lowering) && canon_covers_as_template(tr, cr, lowering)
         }
         (canon::Type::Tuple(ts), Ty::Tuple(cs)) => {
             ts.len() == cs.len()
                 && ts
                     .iter()
                     .zip(cs)
-                    .all(|(t, c)| canon_covers_as_template(t, c))
+                    .all(|(t, c)| canon_covers_as_template(t, c, lowering))
         }
         (
             canon::Type::Con {
@@ -216,7 +232,7 @@ pub(super) fn canon_covers_as_template(template: &canon::Type, concrete: &Ty) ->
                 name: cn,
                 args: ca,
             },
-        ) => HeadIdentity::Emitted
+        ) => HeadIdentity::Emitted(lowering)
             .paired_args(
                 ConHead {
                     home: th,
@@ -229,16 +245,17 @@ pub(super) fn canon_covers_as_template(template: &canon::Type, concrete: &Ty) ->
                     args: ca,
                 },
             )
-            .is_some_and(|mut pairs| pairs.all(|(t, c)| canon_covers_as_template(t, c))),
+            .is_some_and(|mut pairs| pairs.all(|(t, c)| canon_covers_as_template(t, c, lowering))),
         // A closed record must cover the literal field-for-field. An open row
         // `{ r | … }` is treated the same: its declared fields must present and
         // match the literal exactly (the literal is a closed record, so extra
         // absorbed fields would change the synthesised struct — reject them).
         (canon::Type::Record(tf) | canon::Type::RecordOpen(_, tf), Ty::Record(cf, _)) => {
             tf.len() == cf.len()
-                && tf
-                    .iter()
-                    .all(|(k, tv)| cf.get(k).is_some_and(|cv| canon_covers_as_template(tv, cv)))
+                && tf.iter().all(|(k, tv)| {
+                    cf.get(k)
+                        .is_some_and(|cv| canon_covers_as_template(tv, cv, lowering))
+                })
         }
         _ => false,
     }
@@ -255,13 +272,14 @@ pub(super) fn canon_covers_as_template(template: &canon::Type, concrete: &Ty) ->
 pub(super) fn canon_type_contains_record_key_set(
     ty: &canon::Type,
     lit_fields: &BTreeMap<Symbol, Ty>,
+    lowering: &dyn EmittedHeads,
 ) -> bool {
     let covers = |fields: &[(Symbol, canon::Type)]| -> bool {
         fields.len() == lit_fields.len()
             && lit_fields.iter().all(|(k, lv)| {
                 fields
                     .iter()
-                    .any(|(name, ft)| name == k && canon_covers_as_template(ft, lv))
+                    .any(|(name, ft)| name == k && canon_covers_as_template(ft, lv, lowering))
             })
     };
     match ty {
@@ -269,23 +287,23 @@ pub(super) fn canon_type_contains_record_key_set(
             covers(fields)
                 || fields
                     .iter()
-                    .any(|(_, ft)| canon_type_contains_record_key_set(ft, lit_fields))
+                    .any(|(_, ft)| canon_type_contains_record_key_set(ft, lit_fields, lowering))
         }
         canon::Type::Lambda(a, b) => {
-            canon_type_contains_record_key_set(a, lit_fields)
-                || canon_type_contains_record_key_set(b, lit_fields)
+            canon_type_contains_record_key_set(a, lit_fields, lowering)
+                || canon_type_contains_record_key_set(b, lit_fields, lowering)
         }
         canon::Type::Tuple(elems) => elems
             .iter()
-            .any(|e| canon_type_contains_record_key_set(e, lit_fields)),
+            .any(|e| canon_type_contains_record_key_set(e, lit_fields, lowering)),
         canon::Type::Con { args, .. } => args
             .iter()
-            .any(|a| canon_type_contains_record_key_set(a, lit_fields)),
+            .any(|a| canon_type_contains_record_key_set(a, lit_fields, lowering)),
         canon::Type::RecordOpen(_, fields) => {
             covers(fields)
                 || fields
                     .iter()
-                    .any(|(_, ft)| canon_type_contains_record_key_set(ft, lit_fields))
+                    .any(|(_, ft)| canon_type_contains_record_key_set(ft, lit_fields, lowering))
         }
         canon::Type::Var(_) | canon::Type::Unit => false,
     }

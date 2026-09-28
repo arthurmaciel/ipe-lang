@@ -31,7 +31,7 @@ use ipe_ir::{
     RuntimeModule, TypeDef, UiCtor, UiPlain, Variant, fun_value_arc_promotable,
     ir_type_has_effect_carrier, ir_type_holds, ir_type_is_serde, is_dispatch_free, is_irrefutable,
 };
-use ipe_types::{RowTail, SignatureWildcards, SolvedTypes, Ty, TyBounds};
+use ipe_types::{EmittedHeads, RowTail, SignatureWildcards, SolvedTypes, Ty, TyBounds};
 
 mod capture_rewrite;
 mod clone_class;
@@ -12297,6 +12297,34 @@ struct SolvedWildcards<'s> {
     bounds: Option<&'s BTreeMap<Symbol, TyBounds>>,
 }
 
+/// The type lowering is the one definition of whether two homes of a constructor emit one type.
+///
+/// Struct-template coverage asks this rather than comparing homes, so it says
+/// "covered" exactly when [`Lowerer::ir_type_from_ty`] emits one type for both
+/// spellings. A spelling the lowering refuses is never "the same", so an
+/// unlowerable head fails closed as not covered.
+impl EmittedHeads for Lowerer<'_> {
+    fn same_emitted_type(
+        &self,
+        a_home: &[Symbol],
+        b_home: &[Symbol],
+        name: Symbol,
+        args: &[Ty],
+    ) -> bool {
+        let emitted = |home: &[Symbol]| {
+            self.ir_type_from_ty(
+                &Ty::Con {
+                    module: home.to_vec(),
+                    name,
+                    args: args.to_vec(),
+                },
+                Span::DUMMY,
+            )
+        };
+        matches!((emitted(a_home), emitted(b_home)), (Ok(a), Ok(b)) if a == b)
+    }
+}
+
 impl<'a> Lowerer<'a> {
     #[allow(clippy::too_many_lines)] // Error/ErrorKind ADT seeding pushes it over 100
     pub fn new(
@@ -20543,7 +20571,7 @@ impl<'a> Lowerer<'a> {
             .types
             .env
             .values()
-            .any(|ty| ty_contains_record_key_set(ty, lit_fields))
+            .any(|ty| ty_contains_record_key_set(ty, lit_fields, self))
         {
             return true;
         }
@@ -20552,7 +20580,7 @@ impl<'a> Lowerer<'a> {
             u.ctors.iter().any(|ctor| {
                 ctor.args
                     .iter()
-                    .any(|arg| canon_type_contains_record_key_set(arg, lit_fields))
+                    .any(|arg| canon_type_contains_record_key_set(arg, lit_fields, self))
             })
         })
     }
@@ -35749,19 +35777,86 @@ mod tests {
         );
     }
 
+    /// A one-constructor union over `vars`, for coverage probes.
+    fn covers_fixture_union(
+        home: Vec<Symbol>,
+        name: Symbol,
+        vars: Vec<Symbol>,
+        ctor: Symbol,
+    ) -> canon::Union {
+        let args: Vec<canon::Type> = vars.iter().map(|v| canon::Type::Var(*v)).collect();
+        canon::Union {
+            home,
+            name,
+            vars,
+            ctors: vec![canon::Ctor {
+                name: ctor,
+                index: 0,
+                arity: args.len(),
+                args,
+                span: Span::DUMMY,
+            }],
+        }
+    }
+
+    /// A lowerer over `module` with empty symbol pools, for coverage probes.
+    fn covers_fixture_lowerer<'a>(
+        module: &'a canon::Module,
+        types: &'a SolvedTypes,
+        interner: &'a Interner,
+        builtins: &'a BuiltinCtors,
+    ) -> super::Lowerer<'a> {
+        super::Lowerer::new(
+            module,
+            types,
+            interner,
+            super::SymbolPools {
+                eta_params: vec![],
+                cap_params: vec![],
+                param_binders: vec![],
+                any_param_binders: vec![],
+                projection_decode_binders: vec![],
+                destructure_thunk_binders: vec![],
+                nested_cons_binders: vec![],
+                nested_strlit_binders: vec![],
+                tuple_elem_binders: vec![],
+            },
+            builtins,
+            "",
+            "",
+        )
+    }
+
     /// A same-named, same-arity constructor of another home never covers a struct template.
     ///
-    /// The backend keys an enum by its exact home, so a signature record whose
-    /// function field returns `Lib.T` registers a struct a `Main.T` literal does
-    /// not fit; coverage must refuse it (the gate then registers the literal's
-    /// own shape) rather than skip registration.
+    /// Coverage holds exactly when both heads lower to one emitted type: a
+    /// signature record whose function field returns `Lib.T` lowers to a struct
+    /// a `Main.T` literal does not fit, so coverage refuses it and the gate
+    /// rejects the literal with IPE-L0107. A `[Ipe,Css]Color` union and the
+    /// empty-home `Color` builtin likewise emit distinct types and never cover.
     #[test]
     fn covers_as_template_refuses_same_name_of_another_home() {
         use super::ty_templates::{canon_covers_as_template, ty_covers_as_template};
         let mut interner = Interner::new();
+        let builtins = build_test_builtin_ctors(&mut interner);
         #[allow(clippy::expect_used)] // a fresh interner accepts these names
-        let mut intern = |name: &str| interner.intern(name).expect("intern name");
-        let (main, lib, t, run) = (intern("Main"), intern("Lib"), intern("T"), intern("run"));
+        let [main, lib, t, run, a, mk_t, ipe, css, color, red] = [
+            "Main", "Lib", "T", "run", "a", "MkT", "Ipe", "Css", "Color", "Red",
+        ]
+        .map(|name| interner.intern(name).expect("intern name"));
+        let module = canon::Module {
+            imports_unsafe_submodule: false,
+            imported_web_capabilities: std::collections::BTreeSet::new(),
+            name: vec![main],
+            unions: vec![
+                covers_fixture_union(vec![main], t, vec![a], mk_t),
+                covers_fixture_union(vec![lib], t, vec![a], mk_t),
+                covers_fixture_union(vec![ipe, css], color, vec![], red),
+            ],
+            defs: vec![],
+        };
+        let types = empty_solved_types();
+        let lowerer = covers_fixture_lowerer(&module, &types, &interner, &builtins);
         let con = |home, arg| Ty::Con {
             module: vec![home],
             name: t,
@@ -35775,20 +35870,24 @@ mod tests {
         };
         assert!(ty_covers_as_template(
             &con(main, Ty::Var(0)),
-            &con(main, Ty::Unit)
+            &con(main, Ty::Unit),
+            &lowerer
         ));
         assert!(!ty_covers_as_template(
             &con(lib, Ty::Var(0)),
-            &con(main, Ty::Unit)
+            &con(main, Ty::Unit),
+            &lowerer
         ));
         assert!(ty_covers_as_template(
             &run_record(con(main, Ty::Unit)),
-            &run_record(con(main, Ty::Unit))
+            &run_record(con(main, Ty::Unit)),
+            &lowerer
         ));
         assert!(
             !ty_covers_as_template(
                 &run_record(con(lib, Ty::Unit)),
-                &run_record(con(main, Ty::Unit))
+                &run_record(con(main, Ty::Unit)),
+                &lowerer
             ),
             "a Lib.T field must not cover a Main.T literal"
         );
@@ -35799,12 +35898,101 @@ mod tests {
         };
         assert!(canon_covers_as_template(
             &canon_con(main),
-            &con(main, Ty::Unit)
+            &con(main, Ty::Unit),
+            &lowerer
         ));
         assert!(!canon_covers_as_template(
             &canon_con(lib),
-            &con(main, Ty::Unit)
+            &con(main, Ty::Unit),
+            &lowerer
         ));
+        let css_color = Ty::Con {
+            module: vec![ipe, css],
+            name: color,
+            args: vec![],
+        };
+        let kernel_color = Ty::Con {
+            module: vec![],
+            name: color,
+            args: vec![],
+        };
+        assert!(
+            !ty_covers_as_template(&css_color, &kernel_color, &lowerer),
+            "an Ipe.Css Color union must not cover the Ipe.Ui Color builtin"
+        );
+        assert!(
+            !canon_covers_as_template(
+                &canon::Type::Con {
+                    home: vec![ipe, css],
+                    name: color,
+                    args: vec![],
+                },
+                &kernel_color,
+                &lowerer
+            ),
+            "the canon mirror refuses the Ipe.Css Color union too"
+        );
+    }
+
+    /// A reserved builtin spelled under its stdlib home covers its empty-home kernel spelling.
+    ///
+    /// The lowering maps `HttpMethod` to one emitted type whatever its home, so
+    /// a signature template naming `Ipe.Http.HttpMethod` fits a literal whose
+    /// solved type carries the kernel's empty home; refusing it would reject a
+    /// well-typed program with IPE-L0107.
+    #[test]
+    fn covers_as_template_accepts_builtin_under_its_stdlib_home() {
+        use super::ty_templates::{canon_covers_as_template, ty_covers_as_template};
+        let mut interner = Interner::new();
+        let builtins = build_test_builtin_ctors(&mut interner);
+        #[allow(clippy::expect_used)] // a fresh interner accepts these names
+        let [ipe, http, method, run] = ["Ipe", "Http", "HttpMethod", "run"]
+            .map(|name| interner.intern(name).expect("intern name"));
+        let module = canon::Module {
+            imports_unsafe_submodule: false,
+            imported_web_capabilities: std::collections::BTreeSet::new(),
+            name: vec![],
+            unions: vec![],
+            defs: vec![],
+        };
+        let types = empty_solved_types();
+        let lowerer = covers_fixture_lowerer(&module, &types, &interner, &builtins);
+        let method_at = |home: Vec<Symbol>| Ty::Con {
+            module: home,
+            name: method,
+            args: vec![],
+        };
+        let run_record = |ret: Ty| {
+            Ty::Record(
+                BTreeMap::from([(run, Ty::Fun(Box::new(Ty::Unit), Box::new(ret)))]),
+                ipe_types::RowTail::Closed,
+            )
+        };
+        assert!(ty_covers_as_template(
+            &method_at(vec![ipe, http]),
+            &method_at(vec![]),
+            &lowerer
+        ));
+        assert!(
+            ty_covers_as_template(
+                &run_record(method_at(vec![ipe, http])),
+                &run_record(method_at(vec![])),
+                &lowerer
+            ),
+            "an Ipe.Http.HttpMethod field covers a kernel HttpMethod literal"
+        );
+        assert!(
+            canon_covers_as_template(
+                &canon::Type::Con {
+                    home: vec![ipe, http],
+                    name: method,
+                    args: vec![],
+                },
+                &method_at(vec![]),
+                &lowerer
+            ),
+            "the canon mirror covers the kernel HttpMethod too"
+        );
     }
 
     /// `aligned_param_tvars` reads a callee generic's instantiation behind a function arrow.

@@ -64,46 +64,158 @@ impl<'a> Iterator for PairedChildren<'a> {
 /// mismatched pair yield `None`, so a caller that treats `None` as "no shared
 /// shape" fails closed.
 #[must_use]
+#[allow(clippy::too_many_lines)] // One arm per `IrType` variant, so a new variant is a compile error, not a silent `None`.
 pub fn paired_children<'a>(a: &'a IrType, b: &'a IrType) -> Option<PairedChildren<'a>> {
-    match (a, b) {
-        (IrType::List(x), IrType::List(y))
-        | (IrType::Maybe(x), IrType::Maybe(y))
-        | (IrType::Set(x), IrType::Set(y))
-        | (IrType::Task(x), IrType::Task(y))
-        | (IrType::Cmd(x), IrType::Cmd(y))
-        | (IrType::Sub(x), IrType::Sub(y))
-        | (IrType::Decoder(x), IrType::Decoder(y))
-        | (IrType::WebRoute(x), IrType::WebRoute(y)) => {
-            Some(PairedChildren::slots((&**x, &**y), None))
-        }
-        (IrType::Ui { ctor: cx, msg: x }, IrType::Ui { ctor: cy, msg: y }) if cx == cy => {
-            Some(PairedChildren::slots((&**x, &**y), None))
-        }
-        (IrType::Result(x1, x2), IrType::Result(y1, y2))
-        | (IrType::Dict(x1, x2), IrType::Dict(y1, y2))
-        | (
-            IrType::CustomElement { down: x1, up: x2 },
-            IrType::CustomElement { down: y1, up: y2 },
-        ) => Some(PairedChildren::slots((&**x1, &**y1), Some((&**x2, &**y2)))),
-        (IrType::Tuple(x), IrType::Tuple(y)) => PairedChildren::seq(x, y, None),
-        (
-            IrType::Enum {
-                home: hx,
-                name: nx,
-                args: x,
-            },
+    let payload = |x: &'a IrType, y: &'a IrType| Some(PairedChildren::slots((x, y), None));
+    let two_slots = |x1: &'a IrType, x2: &'a IrType, y1: &'a IrType, y2: &'a IrType| {
+        Some(PairedChildren::slots((x1, y1), Some((x2, y2))))
+    };
+    match a {
+        IrType::List(x) => match b {
+            IrType::List(y) => payload(&**x, &**y),
+            _ => None,
+        },
+        IrType::Maybe(x) => match b {
+            IrType::Maybe(y) => payload(&**x, &**y),
+            _ => None,
+        },
+        IrType::Set(x) => match b {
+            IrType::Set(y) => payload(&**x, &**y),
+            _ => None,
+        },
+        IrType::Task(x) => match b {
+            IrType::Task(y) => payload(&**x, &**y),
+            _ => None,
+        },
+        IrType::Cmd(x) => match b {
+            IrType::Cmd(y) => payload(&**x, &**y),
+            _ => None,
+        },
+        IrType::Sub(x) => match b {
+            IrType::Sub(y) => payload(&**x, &**y),
+            _ => None,
+        },
+        IrType::Decoder(x) => match b {
+            IrType::Decoder(y) => payload(&**x, &**y),
+            _ => None,
+        },
+        IrType::WebRoute(x) => match b {
+            IrType::WebRoute(y) => payload(&**x, &**y),
+            _ => None,
+        },
+        IrType::Ui { ctor: cx, msg: x } => match b {
+            IrType::Ui { ctor: cy, msg: y } if cx == cy => payload(&**x, &**y),
+            _ => None,
+        },
+        IrType::Result(x1, x2) => match b {
+            IrType::Result(y1, y2) => two_slots(&**x1, &**x2, &**y1, &**y2),
+            _ => None,
+        },
+        IrType::Dict(x1, x2) => match b {
+            IrType::Dict(y1, y2) => two_slots(&**x1, &**x2, &**y1, &**y2),
+            _ => None,
+        },
+        IrType::CustomElement { down: x1, up: x2 } => match b {
+            IrType::CustomElement { down: y1, up: y2 } => two_slots(&**x1, &**x2, &**y1, &**y2),
+            _ => None,
+        },
+        IrType::Tuple(x) => match b {
+            IrType::Tuple(y) => PairedChildren::seq(x, y, None),
+            _ => None,
+        },
+        IrType::Enum {
+            home: hx,
+            name: nx,
+            args: x,
+        } => match b {
             IrType::Enum {
                 home: hy,
                 name: ny,
                 args: y,
-            },
-        ) if hx == hy && nx == ny => PairedChildren::seq(x, y, None),
-        (IrType::Fun(px, rx), IrType::Fun(py, ry))
-        | (IrType::SharedFun(px, rx), IrType::SharedFun(py, ry))
-        | (IrType::FnOnceChain(px, rx), IrType::FnOnceChain(py, ry)) => {
-            PairedChildren::seq(px, py, Some((&**rx, &**ry)))
-        }
-        _ => None,
+            } if hx == hy && nx == ny => PairedChildren::seq(x, y, None),
+            _ => None,
+        },
+        IrType::Fun(px, rx) => match b {
+            IrType::Fun(py, ry) => PairedChildren::seq(px, py, Some((&**rx, &**ry))),
+            _ => None,
+        },
+        IrType::SharedFun(px, rx) => match b {
+            IrType::SharedFun(py, ry) => PairedChildren::seq(px, py, Some((&**rx, &**ry))),
+            _ => None,
+        },
+        IrType::FnOnceChain(px, rx) => match b {
+            IrType::FnOnceChain(py, ry) => PairedChildren::seq(px, py, Some((&**rx, &**ry))),
+            _ => None,
+        },
+        IrType::Record(..)
+        | IrType::Generic(..)
+        | IrType::RowGeneric(..)
+        | IrType::UiPlain(..)
+        | IrType::Int
+        | IrType::Float
+        | IrType::Bool
+        | IrType::Str
+        | IrType::Char
+        | IrType::Unit
+        | IrType::Bytes
+        | IrType::Json
+        | IrType::Db
+        | IrType::ServerRequest
+        | IrType::ServerResponse
+        | IrType::ServerRoute
+        | IrType::ServerCookie
+        | IrType::StreamWriter
+        | IrType::HttpRequest
+        | IrType::WebSocketServer
+        | IrType::WebSocketServerCfg
+        | IrType::WebReq
+        | IrType::SessionHandle
+        | IrType::Order
+        | IrType::BackoffStrategy
+        | IrType::HttpMethod
+        | IrType::Decimal
+        | IrType::Principal
+        | IrType::AuthConfig
+        | IrType::TokenSource
+        | IrType::ErrorKind
+        | IrType::Error
+        | IrType::ErrorDetails
+        | IrType::ErrorInfo
+        | IrType::PanicInfo
+        | IrType::TypeInfo
+        | IrType::SqlFragment
+        | IrType::Secret
+        | IrType::Path
+        | IrType::Regex
+        | IrType::ProcessRunWithCfg
+        | IrType::ProcessRunInPtyCfg
+        | IrType::CacheCfg
+        | IrType::CacheStats
+        | IrType::WebSocketClientCfg
+        | IrType::CsvDoc
+        | IrType::EmailMessage
+        | IrType::EmailAttachment
+        | IrType::EmailSesConfig
+        | IrType::EmailSmtpConfig
+        | IrType::EmailProvider
+        | IrType::CryptoKey
+        | IrType::CryptoMac
+        | IrType::EmailAddress
+        | IrType::Url
+        | IrType::UrlRelative
+        | IrType::Dsn
+        | IrType::Connection
+        | IrType::ConnReadOnly
+        | IrType::ConnReadWrite
+        | IrType::Setting
+        | IrType::ShapeWeb
+        | IrType::ShapeWebView
+        | IrType::ShapeTerminal
+        | IrType::Locale
+        | IrType::WebApp
+        | IrType::TuiApp
+        | IrType::CliApp
+        | IrType::WorkerApp => None,
     }
 }
 
