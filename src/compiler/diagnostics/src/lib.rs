@@ -24,6 +24,7 @@ pub use diagnostic::{
     MainRetName, ModelLeaf, ModulePlacementReason, ModulePlacementRejection, NameError, ParseError,
     RustNameFoldKind, SandboxError, SealRejection, SortedNames, SpanRole, StoreEqAccessorDefect,
     StoreSelectProjectionDefect, Suggestion, TokenKind, TyDoc, TypeDeclDefect, TypeError,
+    WildcardDependence,
 };
 pub use render::{DOC_HINT_CMD, plain_message, render, render_json, render_ty};
 pub use span::{Located, Span};
