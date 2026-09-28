@@ -353,7 +353,8 @@ done
 for cmd in "find /nonexistent -exec rg x {} +" "find . -execdir true {} ;" \
            "find . -ok true {} ;" "find . -okdir true {} ;" \
            "sort --compress-program=bash /dev/null" "sort --co=bash /dev/null" \
-           "git -c alias.x=!false x" "git status" "git"; do
+           "git -c alias.x=!false x" "git status" "git" \
+           "git rev-parse --git-dir" "git rev-parse --show-toplevel HEAD" "git rev-parse"; do
     rc=0
     out="$(bash -c "source '$lib'; capture_nul v t -- $cmd" 2>&1)" || rc=$?
     check "capture_nul: refuses '$cmd' (exit 2)" "$rc" 2
@@ -527,6 +528,14 @@ new_repo() {
     "$real_git" -C "$r" add README
 }
 
+# ── enumerate_files: a root spelled like a find option stays a path ─────────
+mkdir -p "$fixture_dir/optroot/-delete"
+printf 'x\n' > "$fixture_dir/optroot/-delete/keep.txt"
+got="$(cd "$fixture_dir/optroot" && bash -c "source '$lib'; enumerate_files v '*.txt' -delete; printf '%s|' \"\${v[@]}\"" 2>&1)"
+check "enumerate_files: a '-delete' root is scanned as a directory" "$got" "./-delete/keep.txt|"
+check "enumerate_files: a '-delete' root never deletes" \
+    "$([ -e "$fixture_dir/optroot/-delete/keep.txt" ] && echo kept || echo deleted)" kept
+
 # ── artifact-guard: producer failure, forbidden artifact, clean tree ─────────
 guard="$repo_root/.github/ci/artifact-guard.sh"
 new_repo "$fixture_dir/repo-clean"
@@ -547,6 +556,12 @@ printf 'blob\n' > "$fixture_dir/repo-target/x/target/y"
 rc=0
 (cd "$fixture_dir/repo-target" && bash "$guard") >/dev/null 2>&1 || rc=$?
 check "artifact-guard: a tracked x/target/y fails (exit 1)" "$rc" 1
+
+new_repo "$fixture_dir/repo-decoy"
+rc=0
+(cd "$fixture_dir/repo-target" && GIT_DIR="$fixture_dir/repo-decoy/.git" \
+    GIT_WORK_TREE="$fixture_dir/repo-decoy" bash "$guard") >/dev/null 2>&1 || rc=$?
+check "artifact-guard: GIT_DIR/GIT_WORK_TREE at a clean decoy still checks the real tree (exit 1)" "$rc" 1
 
 new_repo "$fixture_dir/repo-ext"
 printf 'blob\n' > "$fixture_dir/repo-ext/lib.rlib"

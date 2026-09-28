@@ -62,9 +62,10 @@ scan() {
     # rg: -o print only the matched term, --no-heading + -n for file:line, -H to
     # always print the filename. The roots are explicit, so --no-ignore
     # --hidden keeps a .gitignore/.ignore rule or a dotfile from silently
-    # shrinking the scanned set.
+    # shrinking the scanned set; -a keeps a NUL byte from ending a file's scan
+    # before the rest of it is read.
     if match_or_fail "$dir ($pattern)" -- \
-        rg --no-ignore --hidden -o -n -H --no-heading ${case_flag:+"$case_flag"} ${word_flag:+"$word_flag"} \
+        rg --no-ignore --hidden -a -o -n -H --no-heading ${case_flag:+"$case_flag"} ${word_flag:+"$word_flag"} \
         -e "$pattern" "$dir" --glob "$glob"; then
         violations=1
     fi

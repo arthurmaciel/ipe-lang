@@ -17,7 +17,8 @@ script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$script_dir/../../tools/scripts/lib/require-tool.sh"
 require_tool git
 
-top="$(git rev-parse --show-toplevel)"
+top=""
+git_toplevel_into top
 cd "$top"
 
 # Max size for a single tracked file, in bytes (5 MiB). Anything larger is

@@ -117,7 +117,8 @@ _require_producer_name() {
 # entry, symlinks followed) are both on the <contract> allowlist, and whose
 # arguments stay inside that contract (no option or subcommand that hands
 # control to another program: `rg --pre`, `find -exec`, `sort
-# --compress-program`, any `git` use but `ls-files`).
+# --compress-program`, any `git` use but `ls-files` and the bare
+# `rev-parse --show-toplevel`).
 _require_known_command() {
     local __kc_caller="$1" __kc_desc="$2" __kc_contract="$3"; shift 3
     local __kc_cmd="${1:-}" __kc_kind __kc_path __kc_real
@@ -155,7 +156,11 @@ _require_known_command() {
             done
             ;;
         git)
-            [ "${1:-}" = ls-files ] || __kc_bad="${1:-<no subcommand>}"
+            case "${1:-}" in
+                ls-files) ;;
+                rev-parse) [ "$#" -eq 2 ] && [ "${2:-}" = --show-toplevel ] || __kc_bad="rev-parse ${*:2}" ;;
+                *) __kc_bad="${1:-<no subcommand>}" ;;
+            esac
             ;;
     esac
     if [ -n "$__kc_bad" ]; then
@@ -299,6 +304,24 @@ match_capture() {
     esac
 }
 
+# git_toplevel_into <var>: write the working tree's top directory into
+# <var>, asked of git under the same scrubbed environment as every other git
+# producer — a caller's `GIT_DIR`/`GIT_WORK_TREE` never picks the tree. Hard-
+# exits 2 when git fails or the answer is not one absolute existing directory.
+git_toplevel_into() {
+    _require_out_name git_toplevel_into "${1:-}" scalar
+    local -a __gt_rec=()
+    _capture_nul_rc __gt_rec "repository top-level" -- git rev-parse --show-toplevel || exit 2
+    local __gt_top="${__gt_rec[0]-}"
+    __gt_top="${__gt_top%$'\n'}"
+    if [ "${#__gt_rec[@]}" -ne 1 ] || [ "${__gt_top:0:1}" != / ] \
+        || [[ "$__gt_top" == *$'\n'* ]] || [ ! -d "$__gt_top" ]; then
+        echo "git_toplevel_into: git reported no single absolute top-level directory" >&2
+        exit 2
+    fi
+    _require_set_scalar "$1" "$__gt_top"
+}
+
 # capture_nul <array-var> <description> -- <command...>: run a producer that
 # prints NUL-delimited records (`git ls-files -z`, `find … -print0`) and load
 # them into <array-var>. Any non-zero producer exit hard-exits 2 — a producer
@@ -375,6 +398,16 @@ _enumerate_files_into() {
             exit 2
         fi
     done
+    # A root spelled like an option (`-delete`) would be read by find as part
+    # of its expression, so every such root is pinned to a path first.
+    local -a __ef_roots=()
+    for __ef_root in "$@"; do
+        case "$__ef_root" in
+            -*) __ef_roots+=("./$__ef_root") ;;
+            *) __ef_roots+=("$__ef_root") ;;
+        esac
+    done
+    set -- "${__ef_roots[@]}"
     local -a __ef_found=()
     _capture_nul_rc __ef_found "find '$__ef_glob' under $*" -- \
         find "$@" -type f -name "$__ef_glob" -print0 || exit 2
