@@ -1233,6 +1233,10 @@ ipe add: refusing to bind `{bind}` into the jail: it contains the cargo home `{c
 
 ipe add: cannot locate the cargo home, so the jail cannot keep its `credentials.toml` hidden — set CARGO_HOME or HOME to an absolute path
 
+## ffi-jail-path-refused
+
+ipe add: {detail} — set HOME, CARGO_HOME, and RUSTUP_HOME to absolute paths
+
 ## ffi-install-manifest-write-failed
 
 ipe install: manifest write failed: {detail}

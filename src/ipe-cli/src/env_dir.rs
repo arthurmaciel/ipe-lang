@@ -63,6 +63,8 @@ pub fn tool_home(var: &'static str, fallback: &str) -> Result<Option<PathBuf>, C
 
 /// Resolve a tool home from the raw variable value and the resolved home.
 ///
+/// Delegates to the one tool-home parser, [`ipe_sandbox::home::tool_home_from`].
+///
 /// # Errors
 /// [`CliError::EnvDirNotAbsolute`] when `raw` is non-empty and relative.
 pub fn tool_home_from(
@@ -71,10 +73,8 @@ pub fn tool_home_from(
     home: Option<PathBuf>,
     fallback: &str,
 ) -> Result<Option<PathBuf>, CliError> {
-    raw.filter(|raw| !raw.is_empty()).map_or_else(
-        || Ok(home_default(home, fallback)),
-        |raw| explicit_override(var, Some(raw)),
-    )
+    ipe_sandbox::home::tool_home_from(var, raw, home, fallback)
+        .map_err(|relative| CliError::EnvDirNotAbsolute { var: relative.var })
 }
 
 /// `<home>/<fallback>`, when the home is absolute.

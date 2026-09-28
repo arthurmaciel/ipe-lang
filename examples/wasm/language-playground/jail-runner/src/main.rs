@@ -253,8 +253,9 @@ fn resolve_warm_dir() -> PathBuf {
     if let Some(value) = std::env::var_os(WARM_DIR_ENV) {
         return PathBuf::from(value);
     }
-    let home = std::env::var_os("HOME").unwrap_or_default();
-    PathBuf::from(home).join(DEFAULT_WARM_DIR)
+    ipe_sandbox::home::home_dir()
+        .unwrap_or_default()
+        .join(DEFAULT_WARM_DIR)
 }
 
 /// The jailed pipeline. Returns the JSON outcome; never panics.

@@ -35,8 +35,8 @@ use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
 use ipe_sandbox::{
-    Capabilities, HomeMasks, JailSpec, NetworkPolicy, ResourceLimits, SandboxDefect, missing_caps,
-    probe, run_in_bwrap_jail, run_in_bwrap_jail_deny_subprocess,
+    CanonicalPath, Capabilities, HomeMasks, JailPathError, JailSpec, NetworkPolicy, ResourceLimits,
+    SandboxDefect, missing_caps, probe, run_in_bwrap_jail, run_in_bwrap_jail_deny_subprocess,
 };
 
 /// Resource caps for one playground build+run.
@@ -117,24 +117,40 @@ impl RunCaps {
 }
 
 /// The read-only toolchain binds a jailed cargo build needs re-exposed past the
-/// `/home` and `/root` tmpfs masks: `~/.cargo/bin` (the proxy binaries) and
-/// `~/.rustup`. NEVER the `~/.cargo` parent — that holds `credentials.toml` (the
-/// crates.io token), which must stay outside the jail.
-fn toolchain_binds() -> ToolchainBinds {
+/// home tmpfs masks: `$CARGO_HOME/bin` (the proxy binaries) and the rustup home.
+/// NEVER the cargo home itself — that holds `credentials.toml` (the crates.io
+/// token), which must stay outside the jail.
+///
+/// Each bind is canonical, resolved once, so the `PATH` entry and
+/// `RUSTUP_HOME` the payload is handed are the very paths bound.
+///
+/// # Errors
+///
+/// [`SandboxDefect::Path`] when `CARGO_HOME` or `RUSTUP_HOME` is relative, or a
+/// bind does not resolve.
+fn toolchain_binds() -> Result<ToolchainBinds, SandboxDefect> {
+    let tool_home = |var: &'static str, fallback: &str| {
+        ipe_sandbox::home::tool_home(var, fallback)
+            .map_err(|e| SandboxDefect::Path(JailPathError::ToolHomeRelative(e)))
+    };
+    let canonical = |path: &Path| CanonicalPath::resolve(path).map_err(SandboxDefect::Path);
     let mut binds = ToolchainBinds::default();
-    if let Some(home) = std::env::var_os("HOME").map(PathBuf::from) {
-        let cargo_bin = home.join(".cargo/bin");
+    if let Some(cargo_home) = tool_home("CARGO_HOME", ".cargo")? {
+        let cargo_bin = cargo_home.join("bin");
         if cargo_bin.is_dir() {
+            let cargo_bin = canonical(&cargo_bin)?;
             binds.path_prepend.push(cargo_bin.clone());
             binds.ro_binds.push(cargo_bin);
         }
-        let rustup = home.join(".rustup");
-        if rustup.is_dir() {
-            binds.ro_binds.push(rustup.clone());
-            binds.rustup_home = Some(rustup);
-        }
     }
-    binds
+    if let Some(rustup) = tool_home("RUSTUP_HOME", ".rustup")?
+        && rustup.is_dir()
+    {
+        let rustup = canonical(&rustup)?;
+        binds.ro_binds.push(rustup.clone());
+        binds.rustup_home = Some(rustup);
+    }
+    Ok(binds)
 }
 
 /// Why the jail could not be established for this host — the fail-closed refusal.
@@ -189,9 +205,9 @@ pub struct PhaseOutcome {
 /// The read-only toolchain binds a phase re-exposes past the tmpfs masks.
 #[derive(Default)]
 struct ToolchainBinds {
-    ro_binds: Vec<PathBuf>,
-    path_prepend: Vec<PathBuf>,
-    rustup_home: Option<PathBuf>,
+    ro_binds: Vec<CanonicalPath>,
+    path_prepend: Vec<CanonicalPath>,
+    rustup_home: Option<CanonicalPath>,
 }
 
 /// Which spawn posture a phase runs under.
@@ -214,10 +230,11 @@ enum Subprocess {
 ///
 /// # Errors
 ///
-/// [`SandboxDefect`] when the jail cannot spawn or the output cap is exceeded.
+/// [`SandboxDefect`] when the jail cannot spawn, the output cap is exceeded, or
+/// the invoker's homes cannot be masked.
 fn run_phase(
     caps: &Capabilities,
-    scoped_tmp: &Path,
+    scoped_tmp: &CanonicalPath,
     run_caps: RunCaps,
     binds: ToolchainBinds,
     subprocess: Subprocess,
@@ -228,13 +245,13 @@ fn run_phase(
         // structural (a fresh empty net namespace), not a filter that could be
         // misconfigured.
         network: NetworkPolicy::Denied,
-        scoped_tmp: scoped_tmp.to_path_buf(),
+        scoped_tmp: scoped_tmp.clone(),
         registry_cache: None,
         toolchain: None,
         toolchain_ro_binds: binds.ro_binds,
         path_prepend: binds.path_prepend,
         rustup_home: binds.rustup_home,
-        homes: HomeMasks::of_invoker(),
+        homes: HomeMasks::of_invoker().map_err(SandboxDefect::Path)?,
         limits: run_caps.to_limits(),
     };
     let out = match subprocess {
@@ -279,9 +296,13 @@ const fn is_wall_clock_kill(status: Option<i32>) -> bool {
 ///
 /// # Errors
 ///
-/// [`SandboxDefect`] on a jail-spawn / output-cap failure.
+/// [`SandboxDefect`] on a jail-spawn / output-cap failure, or when a jail path
+/// does not resolve.
 pub fn jailed_build(caps: &Capabilities, scoped_tmp: &Path) -> Result<PhaseOutcome, SandboxDefect> {
-    let binds = toolchain_binds();
+    // One canonical spelling for the writable bind and every payload path
+    // under it.
+    let scoped_tmp = CanonicalPath::resolve(scoped_tmp).map_err(SandboxDefect::Path)?;
+    let binds = toolchain_binds()?;
     // Direct argv — no shell. Paths are under `scoped_tmp` so they are visible in
     // the jail. `--offline` makes any registry reach a hard cargo error, so the
     // build fails loudly rather than silently trying (and failing) egress on top
@@ -290,8 +311,8 @@ pub fn jailed_build(caps: &Capabilities, scoped_tmp: &Path) -> Result<PhaseOutco
     // The project dir IS the crate root: the server stages `Cargo.toml` +
     // `src/main.rs` (from the client's banner-delimited emitted Rust) directly
     // under the project dir.
-    let manifest = scoped_tmp.join("Cargo.toml");
-    let target = scoped_tmp.join("crate-target");
+    let manifest = scoped_tmp.as_path().join("Cargo.toml");
+    let target = scoped_tmp.as_path().join("crate-target");
     let payload: Vec<OsString> = vec![
         "cargo".into(),
         "build".into(),
@@ -303,7 +324,7 @@ pub fn jailed_build(caps: &Capabilities, scoped_tmp: &Path) -> Result<PhaseOutco
     ];
     run_phase(
         caps,
-        scoped_tmp,
+        &scoped_tmp,
         RunCaps::build_defaults(),
         binds,
         // The build spawns rustc + a linker — subprocess creation is required.
@@ -458,16 +479,20 @@ mod copy_tests {
 ///
 /// # Errors
 ///
-/// [`SandboxDefect`] on a jail-spawn / output-cap failure.
+/// [`SandboxDefect`] on a jail-spawn / output-cap failure, or when a jail path
+/// does not resolve.
 pub fn jailed_run(
     caps: &Capabilities,
     scoped_tmp: &Path,
     app_binary: &Path,
 ) -> Result<PhaseOutcome, SandboxDefect> {
-    let payload: Vec<OsString> = vec![app_binary.as_os_str().to_owned()];
+    // The bind and the binary the payload execs share one canonical spelling.
+    let scoped_tmp = CanonicalPath::resolve(scoped_tmp).map_err(SandboxDefect::Path)?;
+    let app_binary = CanonicalPath::resolve(app_binary).map_err(SandboxDefect::Path)?;
+    let payload: Vec<OsString> = vec![app_binary.as_path().as_os_str().to_owned()];
     run_phase(
         caps,
-        scoped_tmp,
+        &scoped_tmp,
         RunCaps::run_defaults(),
         // No toolchain binds for the run phase — the emitted program does not need
         // rustc/cargo, so nothing extra is exposed.

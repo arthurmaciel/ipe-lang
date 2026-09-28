@@ -29,6 +29,57 @@ pub fn home_dir_from(raw: Option<OsString>) -> Option<PathBuf> {
     raw.map(PathBuf::from).filter(|p| p.is_absolute())
 }
 
+/// A tool-home variable (`CARGO_HOME`, `RUSTUP_HOME`) set to a relative path.
+///
+/// The tool honours a relative value against its working directory, so no
+/// fixed directory can be derived from it: every consumer refuses it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RelativeToolHome {
+    /// The offending variable.
+    pub var: &'static str,
+}
+
+impl std::fmt::Display for RelativeToolHome {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "`{}` must be an absolute path", self.var)
+    }
+}
+
+impl std::error::Error for RelativeToolHome {}
+
+/// A tool home (`CARGO_HOME`, `RUSTUP_HOME`): `var` when set, else `<home>/<fallback>`.
+///
+/// # Errors
+/// [`RelativeToolHome`] when `var` is set, non-empty, and relative.
+pub fn tool_home(var: &'static str, fallback: &str) -> Result<Option<PathBuf>, RelativeToolHome> {
+    tool_home_from(var, std::env::var_os(var), home_dir(), fallback)
+}
+
+/// Resolve a tool home from the raw variable value and the resolved home.
+///
+/// An empty value counts as unset.
+///
+/// # Errors
+/// [`RelativeToolHome`] when `raw` is non-empty and relative.
+pub fn tool_home_from(
+    var: &'static str,
+    raw: Option<OsString>,
+    home: Option<PathBuf>,
+    fallback: &str,
+) -> Result<Option<PathBuf>, RelativeToolHome> {
+    raw.filter(|raw| !raw.is_empty()).map_or_else(
+        || Ok(home.filter(|h| h.is_absolute()).map(|h| h.join(fallback))),
+        |raw| {
+            let path = PathBuf::from(raw);
+            if path.is_absolute() {
+                Ok(Some(path))
+            } else {
+                Err(RelativeToolHome { var })
+            }
+        },
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -47,6 +98,39 @@ mod tests {
         assert_eq!(home_dir_from(None), None);
         for raw in ["", ".", "home/u", "./home", "../home", "~"] {
             assert_eq!(home_dir_from(Some(raw.into())), None, "{raw:?}");
+        }
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn a_tool_home_is_the_absolute_variable_or_the_home_fallback() {
+        let home = Some(PathBuf::from("/home/u"));
+        assert_eq!(
+            tool_home_from(
+                "CARGO_HOME",
+                Some("/opt/cargo".into()),
+                home.clone(),
+                ".cargo"
+            ),
+            Ok(Some(PathBuf::from("/opt/cargo")))
+        );
+        for raw in [None, Some(OsString::new())] {
+            assert_eq!(
+                tool_home_from("CARGO_HOME", raw, home.clone(), ".cargo"),
+                Ok(Some(PathBuf::from("/home/u/.cargo")))
+            );
+        }
+        assert_eq!(tool_home_from("CARGO_HOME", None, None, ".cargo"), Ok(None));
+    }
+
+    #[test]
+    fn a_relative_tool_home_is_refused() {
+        for raw in [".", "cargo", "./cargo", "../cargo", "~/.cargo"] {
+            assert_eq!(
+                tool_home_from("CARGO_HOME", Some(raw.into()), None, ".cargo"),
+                Err(RelativeToolHome { var: "CARGO_HOME" }),
+                "{raw:?}"
+            );
         }
     }
 }

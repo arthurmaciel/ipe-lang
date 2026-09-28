@@ -289,6 +289,40 @@ impl SafeMountPath {
 
 // ── the returning build-jail entry ───────────────────────────────────────────
 
+/// The build jail's paths, each resolved once, and the invoker's home masks.
+#[cfg(all(
+    target_os = "linux",
+    any(target_arch = "x86_64", target_arch = "aarch64")
+))]
+struct JailPaths {
+    scoped_tmp: crate::CanonicalPath,
+    working_tree: crate::CanonicalPath,
+    extra_ro_binds: Vec<crate::CanonicalPath>,
+    homes: crate::HomeMasks,
+}
+
+#[cfg(all(
+    target_os = "linux",
+    any(target_arch = "x86_64", target_arch = "aarch64")
+))]
+impl JailPaths {
+    fn resolve(
+        scoped_tmp: &Path,
+        working_tree: &Path,
+        extra_ro_binds: &[PathBuf],
+    ) -> Result<Self, crate::JailPathError> {
+        Ok(Self {
+            scoped_tmp: crate::CanonicalPath::resolve(scoped_tmp)?,
+            working_tree: crate::CanonicalPath::resolve(working_tree)?,
+            extra_ro_binds: extra_ro_binds
+                .iter()
+                .map(|path| crate::CanonicalPath::resolve(path))
+                .collect::<Result<_, _>>()?,
+            homes: crate::HomeMasks::of_invoker()?,
+        })
+    }
+}
+
 /// Run `payload` inside a jail lowered from `profile`, wait for it, and return
 /// the decoded [`JailOutcome`].
 ///
@@ -300,7 +334,8 @@ impl SafeMountPath {
 /// be at run time.
 ///
 /// A jail that cannot be established (unsupported platform, a seccomp program
-/// that cannot be compiled for this architecture, a spawn failure) yields
+/// that cannot be compiled for this architecture, a jail path that does not
+/// resolve, an unknown invoker home, a spawn failure) yields
 /// [`JailOutcome::Unavailable`] — the untrusted payload is never run unconfined
 /// on any path.
 ///
@@ -323,6 +358,16 @@ pub fn build_in_jail(
     extra_ro_binds: &[PathBuf],
     payload: &[OsString],
 ) -> JailOutcome {
+    // Resolve every path once: the dirs the payload is handed are exactly the
+    // paths the jail binds.
+    let paths = match JailPaths::resolve(scoped_tmp, working_tree, extra_ro_binds) {
+        Ok(paths) => paths,
+        Err(e) => {
+            return JailOutcome::Unavailable {
+                defect: RunJailDefect::Path(e),
+            };
+        }
+    };
     let Some(program) = seccomp::subprocess_deny_program(profile.subprocess) else {
         return JailOutcome::Unavailable {
             defect: RunJailDefect::UnsupportedPlatform {
@@ -347,10 +392,10 @@ pub fn build_in_jail(
     let argv = run_jail_argv(
         tools,
         profile,
-        scoped_tmp,
-        working_tree,
-        extra_ro_binds,
-        &crate::HomeMasks::of_invoker(),
+        &paths.scoped_tmp,
+        &paths.working_tree,
+        &paths.extra_ro_binds,
+        &paths.homes,
         Some(seccomp_owned.as_raw_fd()),
         &host_env,
         payload,

@@ -39,7 +39,7 @@ use std::path::{Path, PathBuf};
 use ipe_diagnostics::{Code, Diagnostic as SharedDiag, IPE_F4413, SandboxError};
 use ipe_kernels::Capability;
 
-use crate::HomeMasks;
+use crate::{CanonicalPath, HomeMasks, JailPathError};
 
 /// Stamp `$item` with the `#[cfg(...)]` for the targets that HAVE a real run
 /// jail compiled into [`exec_in_run_jail`], and the negation on a matching `no:`
@@ -135,7 +135,9 @@ pub struct RunJailTools {
 /// `scoped_tmp` is the one writable tempdir (used both as the `Isolated`
 /// filesystem's sole writable mount and as `TMPDIR`). `working_tree` is bound
 /// read-write only under [`FilesystemScope::WorkingTreeReadWrite`]. `homes` are
-/// masked wherever they live; below them only the binds stay visible.
+/// masked wherever they live; below them only the binds stay visible. Every
+/// path is canonical, so the `--chdir` and `TMPDIR` the payload receives are
+/// exactly the paths bound.
 /// `seccomp_fd` is the file-descriptor number the caller has arranged to carry
 /// the compiled seccomp program (passed to `bwrap --seccomp <fd>`); `None` means
 /// no filter is attached (the caller must have refused already if a filter was
@@ -154,9 +156,9 @@ pub struct RunJailTools {
 pub fn run_jail_argv(
     tools: &RunJailTools,
     profile: &SandboxProfile,
-    scoped_tmp: &Path,
-    working_tree: &Path,
-    extra_ro_binds: &[PathBuf],
+    scoped_tmp: &CanonicalPath,
+    working_tree: &CanonicalPath,
+    extra_ro_binds: &[CanonicalPath],
     homes: &HomeMasks,
     seccomp_fd: Option<i32>,
     host_env: &dyn Fn(&str) -> Option<OsString>,
@@ -191,9 +193,9 @@ pub fn run_jail_argv(
 pub fn run_jail_argv_with_delivery(
     tools: &RunJailTools,
     profile: &SandboxProfile,
-    scoped_tmp: &Path,
-    working_tree: &Path,
-    extra_ro_binds: &[PathBuf],
+    scoped_tmp: &CanonicalPath,
+    working_tree: &CanonicalPath,
+    extra_ro_binds: &[CanonicalPath],
     homes: &HomeMasks,
     seccomp_fd: Option<i32>,
     app_delivery: Option<(i32, &Path)>,
@@ -254,7 +256,7 @@ pub fn run_jail_argv_with_delivery(
     // never its parent directory.
     let mut binds: Vec<crate::mounts::Bind<'_>> = extra_ro_binds
         .iter()
-        .map(|path| crate::mounts::Bind::ReadOnly(path.as_path()))
+        .map(crate::mounts::Bind::ReadOnly)
         .collect();
     binds.push(crate::mounts::Bind::ReadWrite(scoped_tmp));
     let working_tree_rw = profile.filesystem == FilesystemScope::WorkingTreeReadWrite;
@@ -269,6 +271,7 @@ pub fn run_jail_argv_with_delivery(
         } else {
             scoped_tmp
         }
+        .as_path()
         .into(),
     );
 
@@ -289,7 +292,7 @@ pub fn run_jail_argv_with_delivery(
     argv.push("/usr/bin:/bin".into());
     argv.push("--setenv".into());
     argv.push("TMPDIR".into());
-    argv.push(scoped_tmp.into());
+    argv.push(scoped_tmp.as_path().into());
     if let Some(lang) = host_env("LANG") {
         argv.push("--setenv".into());
         argv.push("LANG".into());
@@ -375,6 +378,9 @@ pub enum RunJailDefect {
     /// floor embedded in the binary. Refuse — a weaker profile cannot widen the
     /// jail below what the binary was built for.
     ProfileWeakerThanFloor,
+    /// A path the jail would mount or hand to the payload could not be
+    /// resolved, or a home it must mask is unknown.
+    Path(JailPathError),
 }
 
 impl RunJailDefect {
@@ -412,6 +418,7 @@ impl From<RunJailDefect> for SandboxError {
                  embedded in the binary — refusing to run under a weakened profile"
                     .to_owned()
             }
+            RunJailDefect::Path(e) => e.to_string(),
         };
         Self::RunJail { detail }
     }
@@ -977,10 +984,10 @@ mod tests {
         run_jail_argv(
             &tools(),
             profile,
-            Path::new("/work/tmp-1"),
-            Path::new("/work/tree"),
+            &CanonicalPath::assumed("/work/tmp-1"),
+            &CanonicalPath::assumed("/work/tree"),
             &[],
-            &HomeMasks::default(),
+            &HomeMasks::unmasked(),
             seccomp_fd,
             &no_env,
             &[OsString::from("/work/tree/target/debug/ipe-app")],
@@ -998,6 +1005,8 @@ mod tests {
         std::fs::create_dir_all(&tree).expect("working tree");
         let user_home = std::fs::canonicalize(&user_home).expect("canonical home");
         let tree = std::fs::canonicalize(&tree).expect("canonical tree");
+        let home_bind = CanonicalPath::resolve(&user_home).expect("resolve home");
+        let tree_bind = CanonicalPath::resolve(&tree).expect("resolve tree");
         let profile = SandboxProfile {
             filesystem: FilesystemScope::WorkingTreeReadWrite,
             ..SandboxProfile::maximally_isolated()
@@ -1006,11 +1015,11 @@ mod tests {
         let argv: Vec<String> = run_jail_argv(
             &tools(),
             &profile,
-            Path::new("/work/tmp-1"),
-            &tree,
+            &CanonicalPath::assumed("/work/tmp-1"),
+            &tree_bind,
             // A bind of the whole home must not survive its mask.
-            std::slice::from_ref(&user_home),
-            &HomeMasks::new(crate::MaskedDir::resolve(&user_home), None),
+            std::slice::from_ref(&home_bind),
+            &HomeMasks::resolve(Some(&user_home), None).expect("homes"),
             None,
             &no_env,
             &[OsString::from("app")],
@@ -1033,6 +1042,63 @@ mod tests {
         let bind = at(&["--bind", &tree, &tree]).expect("working tree bound");
         let chdir = at(&["--chdir", &tree]).expect("chdir into the tree");
         assert!(mask < bind && bind < chdir, "{argv:?}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_run_jail_chdir_and_tmpdir_are_the_bound_paths() {
+        // Symlinked scratch and working tree: the payload's `--chdir` and
+        // `TMPDIR` must be the paths the jail binds, never the links.
+        let base =
+            std::env::temp_dir().join(format!("ipe-run-jail-symlinks-{}", std::process::id()));
+        let real = base.join("real");
+        let links = base.join("links");
+        for dir in ["tmp", "tree"] {
+            std::fs::create_dir_all(real.join(dir)).expect("real dir");
+        }
+        std::fs::create_dir_all(&links).expect("links dir");
+        for dir in ["tmp", "tree"] {
+            let link = links.join(dir);
+            let _ = std::fs::remove_file(&link);
+            std::os::unix::fs::symlink(real.join(dir), &link).expect("symlink");
+        }
+        let scoped_tmp = CanonicalPath::resolve(&links.join("tmp")).expect("resolve tmp");
+        let tree = CanonicalPath::resolve(&links.join("tree")).expect("resolve tree");
+        let real = std::fs::canonicalize(&real).expect("canonical real");
+        let no_env = |_: &str| None;
+        for (filesystem, workdir) in [
+            (FilesystemScope::Isolated, "tmp"),
+            (FilesystemScope::WorkingTreeReadWrite, "tree"),
+        ] {
+            let profile = SandboxProfile {
+                filesystem,
+                ..SandboxProfile::maximally_isolated()
+            };
+            let argv: Vec<String> = run_jail_argv(
+                &tools(),
+                &profile,
+                &scoped_tmp,
+                &tree,
+                &[],
+                &HomeMasks::unmasked(),
+                None,
+                &no_env,
+                &[OsString::from("app")],
+            )
+            .into_iter()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
+            let at = |window: &[&str]| {
+                argv.windows(window.len())
+                    .position(|w| w.iter().zip(window).all(|(a, b)| a == b))
+            };
+            let tmp = real.join("tmp").to_string_lossy().into_owned();
+            let cwd = real.join(workdir).to_string_lossy().into_owned();
+            assert!(at(&["--bind", &tmp, &tmp]).is_some(), "{argv:?}");
+            assert!(at(&["--bind", &cwd, &cwd]).is_some(), "{argv:?}");
+            assert!(at(&["--chdir", &cwd]).is_some(), "{argv:?}");
+            assert!(at(&["--setenv", "TMPDIR", &tmp]).is_some(), "{argv:?}");
+        }
     }
 
     #[test]
@@ -1077,10 +1143,10 @@ mod tests {
         let argv: Vec<String> = run_jail_argv_with_delivery(
             &tools(),
             &SandboxProfile::maximally_isolated(),
-            Path::new("/work/tmp-1"),
-            Path::new("/work/tree"),
+            &CanonicalPath::assumed("/work/tmp-1"),
+            &CanonicalPath::assumed("/work/tree"),
             &[],
-            &HomeMasks::default(),
+            &HomeMasks::unmasked(),
             Some(10),
             Some((7, dest)),
             &no_env,
@@ -1172,10 +1238,10 @@ mod tests {
         let argv = run_jail_argv(
             &tools(),
             &p,
-            Path::new("/work/tmp-1"),
-            Path::new("/work/tree"),
+            &CanonicalPath::assumed("/work/tmp-1"),
+            &CanonicalPath::assumed("/work/tree"),
             &[],
-            &HomeMasks::default(),
+            &HomeMasks::unmasked(),
             None,
             &host,
             &[OsString::from("app")],
