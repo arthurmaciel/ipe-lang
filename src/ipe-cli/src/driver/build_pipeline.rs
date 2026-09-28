@@ -1213,7 +1213,7 @@ pub fn render_homed_warnings(
 /// the other homeless post-link errors already use.
 pub fn gate_decoder_pipelines(
     linked: &ipe_canon::ast::Module,
-) -> Result<(), (Diagnostic, Vec<ipe_intern::Symbol>)> {
+) -> Result<(), ipe_types::HomedDiagnostic> {
     ipe_canon::decoder_pipeline_gate::check_decoder_pipelines(linked)
         .map_err(|diag| (diag, Vec::new()))
 }
@@ -1628,10 +1628,9 @@ pub fn compile_prepared(
     // Main.ipe def whose byte range coincidentally overlaps the failing span.
     // An empty `home` (homeless backend diagnostic, or a pre-def lowering
     // error) falls back to the byte-offset heuristic `source_for_span`.
-    let span_attributed_err =
-        |(diag, home): (ipe_diagnostics::Diagnostic, Vec<ipe_intern::Symbol>)| {
-            attribute_post_link_error(linked, &home_to_source, &entry, diag, &home)
-        };
+    let span_attributed_err = |(diag, home): ipe_types::HomedDiagnostic| {
+        attribute_post_link_error(linked, &home_to_source, &entry, diag, &home)
+    };
 
     // Decoder-pipeline direction gate (IPE-N0040): reject the hand-nested
     // `required`/`optional`/`requiredAt`/`custom` spelling that silently
