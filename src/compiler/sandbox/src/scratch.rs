@@ -260,7 +260,7 @@ pub const fn private_verdict(
 ) -> Result<(), ScratchRefusal> {
     match (entry.kind, kind) {
         (EntryKind::Directory, EntryKind::Directory) | (EntryKind::File, EntryKind::File) => {}
-        (EntryKind::Directory | EntryKind::File | EntryKind::Other, EntryKind::File) => {
+        (EntryKind::Directory | EntryKind::Other, EntryKind::File) => {
             return Err(ScratchRefusal::NotARegularFile);
         }
         (
