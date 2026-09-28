@@ -409,6 +409,12 @@ fn profile_dir() -> Option<std::ffi::OsString> {
     super::system::read_env_var_os(super::scratch::PROFILE_VAR)
 }
 
+/// The raw inherited scratch anchor a jail launcher hands down (see [`super::scratch::ScratchAnchor`]).
+#[cfg(not(target_family = "wasm"))]
+fn scratch_anchor() -> Option<std::ffi::OsString> {
+    super::system::read_env_var_os(super::scratch::ANCHOR_VAR)
+}
+
 /// The refusal on a target with no filesystem to hold scratch.
 #[cfg(target_family = "wasm")]
 fn no_scratch() -> std::io::Error {
@@ -435,7 +441,7 @@ pub(crate) fn private_temp_dir_under(
     base: &std::path::Path,
     label: &str,
 ) -> std::io::Result<std::path::PathBuf> {
-    super::scratch::create_private_dir(base, label, os_entropy, profile_dir)
+    super::scratch::create_private_dir(base, label, os_entropy, profile_dir, scratch_anchor)
 }
 
 /// Refuse a private directory: wasm has no filesystem to hold scratch.
@@ -458,7 +464,13 @@ pub(crate) fn private_temp_dir_under(
 pub(crate) fn exclusive_temp_file(
     label: &str,
 ) -> std::io::Result<(std::path::PathBuf, std::fs::File)> {
-    super::scratch::create_exclusive_file(&std::env::temp_dir(), label, os_entropy, profile_dir)
+    super::scratch::create_exclusive_file(
+        &std::env::temp_dir(),
+        label,
+        os_entropy,
+        profile_dir,
+        scratch_anchor,
+    )
 }
 
 /// Refuse a temp file: wasm has no filesystem to hold scratch.

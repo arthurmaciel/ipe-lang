@@ -284,6 +284,13 @@ pub fn run_jail_argv_with_delivery(
             argv.push(value);
         }
     }
+    // The host-proven scratch anchor, set after the allowlist so a re-exported
+    // host value of the same name can never stand in for it.
+    if let Some(anchor) = mounts.scratch_anchor() {
+        argv.push("--setenv".into());
+        argv.push(crate::scratch::ANCHOR_VAR.into());
+        argv.push(anchor.encode());
+    }
 
     // Materialise the app inside the jail from the inherited sealed descriptor,
     // AFTER all mounts (so the destination's parent exists) and BEFORE the
@@ -360,6 +367,15 @@ pub enum RunJailDefect {
     /// A path the jail would mount or hand to the payload could not be
     /// resolved, or a home it must mask is unknown.
     Path(JailPathError),
+    /// The scoped scratch directory could not be proven private and held open
+    /// as the payload's inherited scratch anchor. Fail-closed: the payload never
+    /// runs with a scratch its launcher could not prove.
+    ScratchAnchor {
+        /// The scoped scratch directory.
+        dir: PathBuf,
+        /// The rendered OS error or refusal.
+        detail: String,
+    },
 }
 
 impl RunJailDefect {
@@ -398,6 +414,11 @@ impl From<RunJailDefect> for SandboxError {
                     .to_owned()
             }
             RunJailDefect::Path(e) => e.to_string(),
+            RunJailDefect::ScratchAnchor { dir, detail } => format!(
+                "could not prove the jail scratch directory {} private and hand it to the app \
+                 ({detail}); refusing to run the app with an unproven scratch",
+                dir.display()
+            ),
         };
         Self::RunJail {
             detail: detail.into(),
@@ -757,6 +778,10 @@ mod tests {
             },
             RunJailDefect::MountFailed {
                 target: PathBuf::from(FORGED),
+                detail: FORGED.to_owned(),
+            },
+            RunJailDefect::ScratchAnchor {
+                dir: PathBuf::from(FORGED),
                 detail: FORGED.to_owned(),
             },
         ];
@@ -1285,6 +1310,38 @@ mod tests {
         assert!(s.contains("--setenv DATABASE_URL postgres://x"), "{s}");
         // An absent named var is simply not re-exported.
         assert!(!s.contains("ABSENT"), "{s}");
+    }
+
+    /// The launcher's anchor is set after the allowlist, so a host value of the same name never wins.
+    #[test]
+    fn scratch_anchor_is_set_after_the_allowlist() {
+        use crate::scratch::{ANCHOR_VAR, NodeId, ScratchAnchor};
+        let p = SandboxProfile {
+            env_allowlist: vec![ANCHOR_VAR.to_owned()],
+            ..SandboxProfile::maximally_isolated()
+        };
+        let host = |k: &str| (k == ANCHOR_VAR).then(|| OsString::from("9:9:9"));
+        let render = |mounts: &JailMounts| {
+            run_jail_argv(&tools(), &p, mounts, None, &host, &[OsString::from("app")])
+                .iter()
+                .map(|a| a.to_string_lossy().into_owned())
+                .collect::<Vec<String>>()
+                .join(" ")
+        };
+        let anchored = render(
+            &work_mounts().with_scratch_anchor(ScratchAnchor::new(5, NodeId { dev: 7, ino: 42 })),
+        );
+        let forged = format!("--setenv {ANCHOR_VAR} 9:9:9");
+        let proven = format!("--setenv {ANCHOR_VAR} 5:7:42");
+        let forged_at = anchored.find(&forged);
+        let proven_at = anchored.rfind(&proven);
+        assert!(
+            matches!((forged_at, proven_at), (Some(f), Some(a)) if f < a),
+            "{anchored}"
+        );
+        // Without a held anchor the launcher sets none of its own.
+        let bare = render(&work_mounts());
+        assert!(!bare.contains(&proven), "{bare}");
     }
 
     #[test]

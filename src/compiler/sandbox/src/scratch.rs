@@ -31,6 +31,11 @@ fn profile_dir() -> Option<OsString> {
     crate::home::home_dir().map(PathBuf::into_os_string)
 }
 
+/// The raw inherited scratch anchor a jail launcher hands down (see [`ScratchAnchor`]).
+fn anchor_env() -> Option<OsString> {
+    ipe_env::var_os(ANCHOR_VAR)
+}
+
 // ── ScratchDir ───────────────────────────────────────────────────────────────
 
 /// A verified private temporary directory, removed with its contents on drop.
@@ -58,7 +63,7 @@ impl ScratchDir {
     /// # Errors
     /// See [`create_private_dir`].
     pub fn new_under(base: &Path, label: &str) -> io::Result<Self> {
-        create_private_dir(base, label, os_entropy, profile_dir).map(Self)
+        create_private_dir(base, label, os_entropy, profile_dir, anchor_env).map(Self)
     }
 
     /// The path of this scratch directory.
@@ -163,6 +168,59 @@ impl ScratchFile {
         let mut buf = Vec::new();
         self.file.read_to_end(&mut buf)?;
         Ok(buf)
+    }
+}
+
+// ── HeldScratchAnchor ────────────────────────────────────────────────────────
+
+/// A host-proven private directory held open for a jailed process to inherit as its [`ScratchAnchor`].
+///
+/// [`HeldScratchAnchor::hold`] proves the directory with the full ancestor
+/// walk (on the host, where owners are real), opens it WITHOUT close-on-exec,
+/// and confirms the descriptor holds exactly the proven node. Keep the value
+/// alive until the process is replaced: the descriptor then survives the exec
+/// into the jail, where [`inherited_anchor`] re-judges what it holds.
+#[cfg(unix)]
+#[derive(Debug)]
+pub struct HeldScratchAnchor {
+    held: std::fs::File,
+    anchor: ScratchAnchor,
+}
+
+#[cfg(unix)]
+impl HeldScratchAnchor {
+    /// Prove `dir` and hold it open as an inheritable anchor.
+    ///
+    /// # Errors
+    /// `PermissionDenied` when `dir` is not a private directory of the
+    /// effective user under trusted ancestors, or when the opened descriptor
+    /// holds another node; the lookup or `open` error otherwise.
+    pub fn hold(dir: &Path) -> io::Result<Self> {
+        use rustix::fs::{Mode, OFlags};
+        use std::os::fd::AsRawFd as _;
+        let (canonical, node) = prove_anchor_dir(dir)?;
+        // No `CLOEXEC`: the descriptor must survive the exec into the jail.
+        let fd = rustix::fs::open(
+            &canonical,
+            OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW,
+            Mode::empty(),
+        )?;
+        let held = std::fs::File::from(fd);
+        let raw = u32::try_from(held.as_raw_fd()).map_err(io::Error::other)?;
+        let anchor = verify_anchor_handle(&canonical, &held, raw, node)?;
+        Ok(Self { held, anchor })
+    }
+
+    /// The anchor the held descriptor stands for.
+    #[must_use]
+    pub const fn anchor(&self) -> ScratchAnchor {
+        self.anchor
+    }
+
+    /// The open directory handle.
+    #[must_use]
+    pub const fn file(&self) -> &std::fs::File {
+        &self.held
     }
 }
 
@@ -293,6 +351,49 @@ mod tests {
         use super::super::*;
         use super::leaf;
         use std::os::unix::fs::MetadataExt as _;
+
+        /// A held anchor survives exec and is honoured for exactly its own node.
+        #[test]
+        fn held_anchor_is_inheritable_and_honoured() -> io::Result<()> {
+            let sd = ScratchDir::new("ipe-scratch-anchor")?;
+            let held = HeldScratchAnchor::hold(sd.path())?;
+            let flags = rustix::io::fcntl_getfd(held.file())?;
+            assert!(!flags.contains(rustix::io::FdFlags::CLOEXEC));
+            let meta = std::fs::symlink_metadata(sd.path())?;
+            assert_eq!(
+                held.anchor().node(),
+                NodeId {
+                    dev: meta.dev(),
+                    ino: meta.ino(),
+                }
+            );
+            let raw = held.anchor().encode();
+            let who = Identity {
+                euid: rustix::process::geteuid().as_raw(),
+                egid: rustix::process::getegid().as_raw(),
+            };
+            assert_eq!(
+                inherited_anchor(Some(raw.as_os_str()), who),
+                Some(held.anchor().node())
+            );
+            Ok(())
+        }
+
+        /// A directory that is not private to the effective user is never held as an anchor.
+        #[test]
+        fn shared_directory_is_refused_as_an_anchor() -> io::Result<()> {
+            use std::os::unix::fs::PermissionsExt as _;
+            let root = ScratchDir::new("ipe-scratch-anchor-shared")?;
+            let shared = root.child(&leaf("shared")?);
+            std::fs::create_dir(&shared)?;
+            std::fs::set_permissions(&shared, std::fs::Permissions::from_mode(0o755))?;
+            let err = HeldScratchAnchor::hold(&shared).err();
+            assert_eq!(
+                err.as_ref().map(io::Error::kind),
+                Some(io::ErrorKind::PermissionDenied)
+            );
+            Ok(())
+        }
 
         #[test]
         fn created_dir_is_0700_and_owned_by_the_effective_user() -> io::Result<()> {

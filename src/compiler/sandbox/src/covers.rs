@@ -7,6 +7,7 @@
 
 use std::path::{Path, PathBuf};
 
+use crate::scratch::ScratchAnchor;
 use crate::{CanonicalPath, HomeMasks, JailPathError};
 
 /// Every host path a build or run jail exposes, none at or above the cargo home.
@@ -23,6 +24,7 @@ pub struct JailMounts {
     read_only: Vec<CanonicalPath>,
     homes: HomeMasks,
     cargo_home: PathBuf,
+    scratch_anchor: Option<ScratchAnchor>,
 }
 
 impl JailMounts {
@@ -68,6 +70,7 @@ impl JailMounts {
             read_only,
             homes,
             cargo_home,
+            scratch_anchor: None,
         };
         mounts.refuse_exposing()?;
         Ok(mounts)
@@ -168,6 +171,23 @@ impl JailMounts {
     #[must_use]
     pub const fn homes(&self) -> &HomeMasks {
         &self.homes
+    }
+
+    /// These mounts with `anchor` handed to the payload as its inherited scratch anchor.
+    ///
+    /// `anchor` must stand for [`Self::scoped_tmp`], held open by the caller
+    /// until the jail is exec'd; the payload re-judges what the descriptor holds,
+    /// so a stale or wrong anchor only leaves its full ancestor walk in force.
+    #[must_use]
+    pub const fn with_scratch_anchor(mut self, anchor: ScratchAnchor) -> Self {
+        self.scratch_anchor = Some(anchor);
+        self
+    }
+
+    /// The inherited scratch anchor handed to the payload, if any.
+    #[must_use]
+    pub const fn scratch_anchor(&self) -> Option<ScratchAnchor> {
+        self.scratch_anchor
     }
 }
 

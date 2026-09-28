@@ -1290,6 +1290,11 @@ pub static EXCLUDED_NAMES: &[&str] = &[
     // replays the named typed log instead of running; present only in a
     // `debugger` build.
     "IPE_DEBUGGER_REPLAY",
+    // Run-jail-internal scratch anchor — set by the run jail on the jailed child
+    // (never operator-set): names the inherited descriptor of the host-proven
+    // scratch directory. A value not proven through the descriptor it names is
+    // ignored, so it can only narrow trust.
+    "IPE_SCRATCH_ANCHOR",
     // `ipe upgrade` <-> `install.sh` handshake — set by the upgrade wrapper on
     // the installer child it spawns (never operator-set): the wrapped marker
     // suppresses the installer's own failure banner, and the tag file carries

@@ -132,6 +132,9 @@ pub fn exec_in_run_jail(
     let app = CanonicalPath::resolve(app).map_err(RunJailDefect::Path)?;
     let mounts = JailMounts::of_invoker(scoped_tmp, working_tree, app_ro_binds(&app))
         .map_err(RunJailDefect::Path)?;
+    // Held until `exec` replaces this process, so its descriptor is inherited.
+    let scratch = hold_scratch_anchor(mounts.scoped_tmp())?;
+    let mounts = mounts.with_scratch_anchor(scratch.anchor());
 
     // Compile the seccomp program for this profile. `None` ⇒ this architecture
     // has no filter we can emit — refuse (fail-closed), never run unfiltered.
@@ -217,6 +220,9 @@ pub fn exec_embedded_in_run_jail(
     let working_tree = CanonicalPath::resolve(working_tree).map_err(RunJailDefect::Path)?;
     let mounts = JailMounts::of_invoker(scoped_tmp, working_tree, Vec::new())
         .map_err(RunJailDefect::Path)?;
+    // Held until `exec` replaces this process, so its descriptor is inherited.
+    let scratch = hold_scratch_anchor(mounts.scoped_tmp())?;
+    let mounts = mounts.with_scratch_anchor(scratch.anchor());
 
     let Some(program) = seccomp::subprocess_deny_program(profile.subprocess) else {
         return Err(RunJailDefect::UnsupportedPlatform {
@@ -271,6 +277,21 @@ pub fn exec_embedded_in_run_jail(
     let err = cmd.exec();
     Err(RunJailDefect::Spawn {
         detail: err.to_string(),
+    })
+}
+
+/// Prove `scoped_tmp` on the host and hold it open for the payload to inherit.
+///
+/// # Errors
+/// [`RunJailDefect::ScratchAnchor`] when the directory is not provably private.
+fn hold_scratch_anchor(
+    scoped_tmp: &CanonicalPath,
+) -> Result<crate::scratch::HeldScratchAnchor, RunJailDefect> {
+    crate::scratch::HeldScratchAnchor::hold(scoped_tmp.as_path()).map_err(|e| {
+        RunJailDefect::ScratchAnchor {
+            dir: scoped_tmp.as_path().to_path_buf(),
+            detail: e.to_string(),
+        }
     })
 }
 

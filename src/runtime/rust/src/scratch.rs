@@ -14,6 +14,12 @@
 //!   writable by no one else unless sticky; elsewhere, where the standard
 //!   library offers no owner-only creation, it must resolve inside the current
 //!   user's profile directory, which the OS keeps private to that user;
+//! - inside a user namespace an ancestor owned by an unmapped uid shows the
+//!   overflow uid, which proves nothing, so a jail never re-derives the proof:
+//!   its launcher proves the scratch directory on the host, where owners are
+//!   real, and hands it down as an open descriptor ([`ScratchAnchor`]); the
+//!   walk stops at that node once the descriptor is shown to hold it, and an
+//!   absent or unproven anchor leaves the full walk in force;
 //! - entries are created under the resolved base, never the given path, so a
 //!   link on the given path re-pointed after the check cannot redirect them;
 //! - a created name carries 128 bits of CSPRNG entropy (an unavailable CSPRNG
@@ -384,6 +390,194 @@ pub const fn private_verdict(
     Ok(())
 }
 
+// ── Inherited anchor ─────────────────────────────────────────────────────────
+
+/// The variable a jail launcher sets to hand its jailed process a host-proven scratch anchor.
+///
+/// Its value is `<fd>:<dev>:<ino>`, all decimal; see [`ScratchAnchor`].
+pub const ANCHOR_VAR: &str = "IPE_SCRATCH_ANCHOR";
+
+/// The identity of one filesystem node: its device and inode numbers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NodeId {
+    /// Device number of the filesystem holding the node.
+    pub dev: u64,
+    /// Inode number within that filesystem.
+    pub ino: u64,
+}
+
+impl NodeId {
+    /// Whether `self` and `other` name the same node.
+    #[must_use]
+    pub const fn same(self, other: Self) -> bool {
+        self.dev == other.dev && self.ino == other.ino
+    }
+}
+
+/// A claimed scratch anchor: an inherited descriptor and the node it must hold.
+///
+/// A launcher that proved a directory trusted where owners are observable (on
+/// the host, with real uids) opens it, leaves the descriptor open across the
+/// exec into the jail, and names both the descriptor and the node in
+/// [`ANCHOR_VAR`]. Inside a user namespace an ancestor owned by an unmapped
+/// uid reads as the overflow uid, which aliases every unmapped host user, so
+/// ownership cannot be re-derived there; the ancestor walk instead stops at
+/// the anchor, whose proof it inherits. The claim is only a claim until
+/// [`anchor_verdict`] matches it against the node the descriptor really holds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ScratchAnchor {
+    fd: u32,
+    node: NodeId,
+}
+
+impl ScratchAnchor {
+    /// The anchor for the inherited descriptor `fd` holding `node`.
+    #[must_use]
+    pub const fn new(fd: u32, node: NodeId) -> Self {
+        Self { fd, node }
+    }
+
+    /// Parse an [`ANCHOR_VAR`] value of exactly three decimal fields.
+    ///
+    /// The shape is `<fd>:<dev>:<ino>`, each a non-empty run of ASCII digits.
+    /// Anything else (a sign, a space, a missing or extra field, a value out of
+    /// range, non-UTF-8 bytes) is no anchor.
+    #[must_use]
+    pub fn parse(raw: &OsStr) -> Option<Self> {
+        let mut fields = raw.to_str()?.split(':');
+        let fd = decimal(fields.next()?)?;
+        let dev = decimal(fields.next()?)?;
+        let ino = decimal(fields.next()?)?;
+        if fields.next().is_some() {
+            return None;
+        }
+        Some(Self::new(fd, NodeId { dev, ino }))
+    }
+
+    /// The [`ANCHOR_VAR`] value [`ScratchAnchor::parse`] reads back as `self`.
+    #[must_use]
+    pub fn encode(self) -> OsString {
+        OsString::from(format!("{}:{}:{}", self.fd, self.node.dev, self.node.ino))
+    }
+
+    /// The inherited descriptor number.
+    #[must_use]
+    pub const fn fd(self) -> u32 {
+        self.fd
+    }
+
+    /// The node the descriptor must hold.
+    #[must_use]
+    pub const fn node(self) -> NodeId {
+        self.node
+    }
+}
+
+/// A decimal field of an anchor value: ASCII digits only, in range.
+fn decimal<T: std::str::FromStr>(field: &str) -> Option<T> {
+    if field.is_empty() || !field.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    field.parse().ok()
+}
+
+/// Why a claimed anchor was not honoured.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AnchorRefusal {
+    /// The descriptor holds a node other than the one claimed.
+    OtherNode,
+    /// The held node is not a private directory of the effective user.
+    NotPrivate(ScratchRefusal),
+}
+
+impl fmt::Display for AnchorRefusal {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::OtherNode => f.write_str("the anchor descriptor holds another node"),
+            Self::NotPrivate(refusal) => write!(f, "the anchor directory is {refusal}"),
+        }
+    }
+}
+
+impl std::error::Error for AnchorRefusal {}
+
+/// A launcher's refusal to hand down the directory at `path` as a scratch anchor.
+#[derive(Debug)]
+pub struct AnchorError {
+    /// The directory that was to be the anchor.
+    pub path: PathBuf,
+    /// Why it was refused.
+    pub refusal: AnchorRefusal,
+}
+
+impl fmt::Display for AnchorError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "refusing scratch anchor {}: {}",
+            self.path.display(),
+            self.refusal
+        )
+    }
+}
+
+impl std::error::Error for AnchorError {}
+
+/// Whether the node read through the anchor descriptor honours the anchor `claim`.
+///
+/// `held` and `held_node` are the facts and identity of what the descriptor
+/// really holds. It must be exactly the claimed node, and that node must pass
+/// [`private_verdict`] as a directory: an anchor is a private directory of the
+/// effective user, never a shared or foreign one.
+///
+/// # Errors
+/// The [`AnchorRefusal`] naming the first violated condition.
+pub const fn anchor_verdict(
+    held: EntryFacts,
+    held_node: NodeId,
+    claim: ScratchAnchor,
+    who: Identity,
+) -> Result<NodeId, AnchorRefusal> {
+    if !held_node.same(claim.node) {
+        return Err(AnchorRefusal::OtherNode);
+    }
+    match private_verdict(held, EntryKind::Directory, who) {
+        Ok(()) => Ok(held_node),
+        Err(refusal) => Err(AnchorRefusal::NotPrivate(refusal)),
+    }
+}
+
+/// What the ancestor walk does after one ancestor passes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Step {
+    /// Prove the next ancestor up.
+    Continue,
+    /// The ancestor is the honoured anchor: everything above it is already proven.
+    Anchored,
+}
+
+/// The walk's verdict on one ancestor, given the honoured anchor, if any.
+///
+/// Every ancestor up to and including the anchor must pass [`base_verdict`];
+/// the walk stops only at the anchor node itself, never at any other node.
+///
+/// # Errors
+/// The [`ScratchRefusal`] of [`base_verdict`].
+pub const fn ancestor_step(
+    entry: EntryFacts,
+    node: NodeId,
+    who: Identity,
+    anchor: Option<NodeId>,
+) -> Result<Step, ScratchRefusal> {
+    if let Err(refusal) = base_verdict(entry, who) {
+        return Err(refusal);
+    }
+    match anchor {
+        Some(anchor) if anchor.same(node) => Ok(Step::Anchored),
+        Some(_) | None => Ok(Step::Continue),
+    }
+}
+
 /// Decide whether a canonical scratch root lies inside a canonical profile.
 ///
 /// Both paths are expected canonical (absolute, links resolved). Anything that
@@ -447,7 +641,7 @@ fn canonical(path: &Path) -> Result<PathBuf, ScratchRootRefusal> {
 
 #[cfg(unix)]
 mod platform {
-    use super::{EntryFacts, EntryKind, Identity};
+    use super::{EntryFacts, EntryKind, Identity, NodeId};
     use std::os::unix::fs::MetadataExt as _;
 
     /// The effective uid and gid of this process.
@@ -477,15 +671,30 @@ mod platform {
             mode: meta.mode(),
         }
     }
+
+    /// The node identity of `meta`.
+    #[must_use]
+    pub fn node(meta: &std::fs::Metadata) -> NodeId {
+        NodeId {
+            dev: meta.dev(),
+            ino: meta.ino(),
+        }
+    }
 }
 
 /// Resolve `base` to the trusted canonical directory private entries are created under.
 ///
 /// Creates `base` when absent, canonicalises it (so no ancestor is a symlink), and
-/// requires [`base_verdict`] of every ancestor. Ownership decides trust here, so
-/// the profile lookup is never consulted.
+/// requires [`base_verdict`] of every ancestor up to the root, or up to and
+/// including the honoured inherited anchor ([`inherited_anchor`] of what
+/// `anchor` yields), whose ancestors its launcher already proved. Ownership
+/// decides trust here, so the profile lookup is never consulted.
 #[cfg(unix)]
-fn trusted_base(base: &Path, _profile: impl FnOnce() -> Option<OsString>) -> io::Result<PathBuf> {
+fn trusted_base(
+    base: &Path,
+    _profile: impl FnOnce() -> Option<OsString>,
+    anchor: impl FnOnce() -> Option<OsString>,
+) -> io::Result<PathBuf> {
     use std::os::unix::fs::DirBuilderExt as _;
     // Components this call creates are private, so they pass `base_verdict`
     // without the owner-group exception.
@@ -495,11 +704,95 @@ fn trusted_base(base: &Path, _profile: impl FnOnce() -> Option<OsString>) -> io:
         .create(base)?;
     let canonical = std::fs::canonicalize(base)?;
     let who = platform::identity();
-    for dir in canonical.ancestors() {
-        let meta = std::fs::symlink_metadata(dir)?;
-        base_verdict(platform::facts(&meta), who).map_err(|r| refused(dir, r))?;
-    }
+    walk_ancestors(&canonical, who, inherited_anchor(anchor().as_deref(), who))?;
     Ok(canonical)
+}
+
+/// Require [`ancestor_step`] of every ancestor of the canonical `dir`, stopping at `anchor`.
+///
+/// # Errors
+/// `PermissionDenied` with a [`ScratchError`] naming the first refused
+/// ancestor; the lookup error otherwise.
+#[cfg(unix)]
+fn walk_ancestors(dir: &Path, who: Identity, anchor: Option<NodeId>) -> io::Result<()> {
+    for ancestor in dir.ancestors() {
+        let meta = std::fs::symlink_metadata(ancestor)?;
+        match ancestor_step(platform::facts(&meta), platform::node(&meta), who, anchor) {
+            Ok(Step::Continue) => {}
+            Ok(Step::Anchored) => return Ok(()),
+            Err(refusal) => return Err(refused(ancestor, refusal)),
+        }
+    }
+    Ok(())
+}
+
+/// The node of the honoured inherited anchor named by the [`ANCHOR_VAR`] value `raw`, if any.
+///
+/// The claimed descriptor is examined through `/proc/self/fd`, so what is
+/// judged is the node the descriptor really holds, not the claim. A value
+/// that does not parse, a descriptor that is not open, or a held node that
+/// fails [`anchor_verdict`] honours nothing: the walk then proves every
+/// ancestor, the conservative branch.
+#[cfg(unix)]
+#[must_use]
+pub fn inherited_anchor(raw: Option<&OsStr>, who: Identity) -> Option<NodeId> {
+    let claim = ScratchAnchor::parse(raw?)?;
+    let meta = std::fs::metadata(format!("/proc/self/fd/{}", claim.fd())).ok()?;
+    anchor_verdict(platform::facts(&meta), platform::node(&meta), claim, who).ok()
+}
+
+/// Prove the existing directory `dir` a trusted private directory of the effective user, with no anchor.
+///
+/// This is the launcher-side proof an inherited anchor stands for: `dir` is
+/// canonicalised, every ancestor passes [`base_verdict`], and `dir` itself
+/// passes [`private_verdict`] as a directory. Returns the canonical path and
+/// the node it resolved to.
+///
+/// # Errors
+/// `PermissionDenied` with a [`ScratchError`] naming the refused entry; the
+/// lookup error otherwise.
+#[cfg(unix)]
+pub fn prove_anchor_dir(dir: &Path) -> io::Result<(PathBuf, NodeId)> {
+    let canonical = std::fs::canonicalize(dir)?;
+    walk_ancestors(&canonical, platform::identity(), None)?;
+    let meta = std::fs::symlink_metadata(&canonical)?;
+    verify_private(&canonical, &meta, EntryKind::Directory)?;
+    Ok((canonical, platform::node(&meta)))
+}
+
+/// Judge the open directory `held`, just opened at the proven `canonical` path, as the anchor for `proven`.
+///
+/// The handle must hold exactly the node the proof resolved to, and that node
+/// must still be a private directory of the effective user.
+///
+/// # Errors
+/// `PermissionDenied` when the handle holds another node or the node is no
+/// longer private; the `fstat` error otherwise.
+#[cfg(unix)]
+pub fn verify_anchor_handle(
+    canonical: &Path,
+    held: &File,
+    fd: u32,
+    proven: NodeId,
+) -> io::Result<ScratchAnchor> {
+    let meta = held.metadata()?;
+    let claim = ScratchAnchor::new(fd, proven);
+    anchor_verdict(
+        platform::facts(&meta),
+        platform::node(&meta),
+        claim,
+        platform::identity(),
+    )
+    .map(|_| claim)
+    .map_err(|refusal| {
+        io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            AnchorError {
+                path: canonical.to_path_buf(),
+                refusal,
+            },
+        )
+    })
 }
 
 /// Resolve `base` to the directory private entries are created under, proven inside the user's profile.
@@ -510,7 +803,11 @@ fn trusted_base(base: &Path, _profile: impl FnOnce() -> Option<OsString>) -> io:
 /// created, and `base` itself is proven again once it exists; the resolved
 /// path is returned.
 #[cfg(not(unix))]
-fn trusted_base(base: &Path, profile: impl FnOnce() -> Option<OsString>) -> io::Result<PathBuf> {
+fn trusted_base(
+    base: &Path,
+    profile: impl FnOnce() -> Option<OsString>,
+    _anchor: impl FnOnce() -> Option<OsString>,
+) -> io::Result<PathBuf> {
     let profile = profile();
     let profile = profile.as_deref();
     let existing = base
@@ -685,7 +982,8 @@ fn exclusive_open(path: &Path) -> io::Result<File> {
 /// The name is `<label>-<pid>-<32 hex chars>`, the hex drawn from `fill` (the
 /// caller's OS CSPRNG); `label` is a diagnostic tag only, confined by
 /// [`confined_label`]. `profile` yields the raw [`PROFILE_VAR`] value on hosts
-/// where trust is proven by profile containment. The caller owns the returned
+/// where trust is proven by profile containment; `anchor` yields the raw
+/// [`ANCHOR_VAR`] value a jail launcher hands down (see [`ScratchAnchor`]). The caller owns the returned
 /// directory and removes it.
 ///
 /// # Errors
@@ -699,8 +997,9 @@ pub fn create_private_dir(
     label: &str,
     fill: impl FnMut(&mut [u8]) -> io::Result<()>,
     profile: impl FnOnce() -> Option<OsString>,
+    anchor: impl FnOnce() -> Option<OsString>,
 ) -> io::Result<PathBuf> {
-    let base = trusted_base(base, profile)?;
+    let base = trusted_base(base, profile, anchor)?;
     let (path, ()) = create_unique(&base, label, fill, exclusive_mkdir)?;
     // A refused entry is not ours to remove.
     verify_private_dir(&path)?;
@@ -737,8 +1036,9 @@ pub fn create_exclusive_file(
     label: &str,
     fill: impl FnMut(&mut [u8]) -> io::Result<()>,
     profile: impl FnOnce() -> Option<OsString>,
+    anchor: impl FnOnce() -> Option<OsString>,
 ) -> io::Result<(PathBuf, File)> {
-    let base = trusted_base(base, profile)?;
+    let base = trusted_base(base, profile, anchor)?;
     let (path, file) = create_unique(&base, label, fill, exclusive_open)?;
     verify_private_file(&path, &file)?;
     Ok((path, file))
@@ -839,6 +1139,117 @@ mod tests {
             ..dir(1000, 1000, 0o777)
         };
         assert_eq!(base_verdict(link, ME), Err(ScratchRefusal::NotADirectory));
+    }
+
+    const NODE: NodeId = NodeId { dev: 7, ino: 42 };
+    const OTHER_NODE: NodeId = NodeId { dev: 7, ino: 43 };
+
+    /// An ancestor owned by the overflow uid (an unmapped owner seen from a
+    /// user namespace) is refused like any foreign owner: it proves nothing.
+    #[test]
+    fn overflow_uid_ancestor_is_refused_without_an_anchor() {
+        assert_eq!(
+            ancestor_step(dir(65534, 65534, 0o755), NODE, ME, None),
+            Err(ScratchRefusal::ForeignOwner)
+        );
+    }
+
+    /// The walk stops only at the anchor node itself, and only once that node passed `base_verdict`.
+    #[test]
+    fn ancestor_step_stops_only_at_the_anchor_node() {
+        let private = dir(1000, 1000, 0o700);
+        assert_eq!(
+            ancestor_step(private, NODE, ME, Some(NODE)),
+            Ok(Step::Anchored)
+        );
+        assert_eq!(
+            ancestor_step(private, NODE, ME, Some(OTHER_NODE)),
+            Ok(Step::Continue)
+        );
+        assert_eq!(ancestor_step(private, NODE, ME, None), Ok(Step::Continue));
+        assert_eq!(
+            ancestor_step(dir(1000, 1000, 0o777), NODE, ME, Some(NODE)),
+            Err(ScratchRefusal::WritableByOthers)
+        );
+        assert_eq!(
+            ancestor_step(dir(65534, 65534, 0o700), NODE, ME, Some(NODE)),
+            Err(ScratchRefusal::ForeignOwner)
+        );
+    }
+
+    /// A claim is honoured only for exactly the held node, and only when that node is a private directory.
+    #[test]
+    fn anchor_verdict_refuses_another_node_or_a_non_private_directory() {
+        let claim = ScratchAnchor::new(3, NODE);
+        let private = dir(1000, 1000, 0o700);
+        assert_eq!(anchor_verdict(private, NODE, claim, ME), Ok(NODE));
+        assert_eq!(
+            anchor_verdict(private, OTHER_NODE, claim, ME),
+            Err(AnchorRefusal::OtherNode)
+        );
+        assert_eq!(
+            anchor_verdict(private, NodeId { dev: 8, ino: 42 }, claim, ME),
+            Err(AnchorRefusal::OtherNode)
+        );
+        for (facts, refusal) in [
+            (dir(1000, 1000, 0o755), ScratchRefusal::NotPrivate),
+            (dir(1000, 1000, 0o1777), ScratchRefusal::NotPrivate),
+            (dir(0, 0, 0o700), ScratchRefusal::ForeignOwner),
+            (dir(65534, 65534, 0o700), ScratchRefusal::ForeignOwner),
+            (
+                EntryFacts {
+                    kind: EntryKind::File,
+                    ..private
+                },
+                ScratchRefusal::NotADirectory,
+            ),
+        ] {
+            assert_eq!(
+                anchor_verdict(facts, NODE, claim, ME),
+                Err(AnchorRefusal::NotPrivate(refusal)),
+                "{facts:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn anchor_value_round_trips() {
+        let anchor = ScratchAnchor::new(
+            9,
+            NodeId {
+                dev: u64::MAX,
+                ino: 0,
+            },
+        );
+        assert_eq!(ScratchAnchor::parse(&anchor.encode()), Some(anchor));
+        assert_eq!(
+            ScratchAnchor::parse(OsStr::new("3:7:42")),
+            Some(ScratchAnchor::new(3, NODE))
+        );
+    }
+
+    /// Only exactly three non-empty ASCII-decimal fields in range parse.
+    #[test]
+    fn malformed_anchor_values_are_no_anchor() {
+        for raw in [
+            "",
+            "3",
+            "3:7",
+            "3:7:42:1",
+            "3:7:42:",
+            ":7:42",
+            "3::42",
+            "+3:7:42",
+            "-3:7:42",
+            " 3:7:42",
+            "3:7:42 ",
+            "3:7:0x2a",
+            "3:7:٤٢",
+            "4294967296:7:42",
+            "3:18446744073709551616:42",
+        ] {
+            assert_eq!(ScratchAnchor::parse(OsStr::new(raw)), None, "{raw:?}");
+        }
     }
 
     #[test]
@@ -1177,7 +1588,7 @@ mod tests {
         }
 
         fn private_dir(base: &Path) -> io::Result<PathBuf> {
-            create_private_dir(base, "ipe-test", distinct, no_profile)
+            create_private_dir(base, "ipe-test", distinct, no_profile, no_profile)
         }
 
         fn leaf(name: &str) -> io::Result<ScratchLeaf> {
@@ -1207,7 +1618,7 @@ mod tests {
             let dir = private_dir(&tree.0)?;
             let (inner, _handle) = create_private_file(&dir, &leaf("f")?)?;
             let (loose, _loose_handle) =
-                create_exclusive_file(&tree.0, "ipe-test", distinct, no_profile)?;
+                create_exclusive_file(&tree.0, "ipe-test", distinct, no_profile, no_profile)?;
             for file in [&inner, &loose] {
                 let meta = std::fs::symlink_metadata(file)?;
                 assert!(meta.file_type().is_file());
@@ -1268,7 +1679,8 @@ mod tests {
             exclusive_mkdir(&base)?;
             set_mode(&base, 0o777)?;
             let dir = private_dir(&base).err();
-            let file = create_exclusive_file(&base, "ipe-test", distinct, no_profile).err();
+            let file =
+                create_exclusive_file(&base, "ipe-test", distinct, no_profile, no_profile).err();
             for err in [dir, file] {
                 assert_eq!(
                     err.as_ref().map(io::Error::kind),
@@ -1369,6 +1781,134 @@ mod tests {
 
             assert!(create_private_file(&dir, &leaf("tag")?).is_err());
             assert!(std::fs::symlink_metadata(&victim).is_err());
+            Ok(())
+        }
+
+        /// The anchor value naming the open directory `held` as the node at `path`.
+        #[cfg(target_os = "linux")]
+        fn anchor_value(held: &std::fs::File, path: &Path) -> io::Result<OsString> {
+            use std::os::fd::AsRawFd as _;
+            let fd = u32::try_from(held.as_raw_fd()).map_err(io::Error::other)?;
+            let meta = std::fs::symlink_metadata(path)?;
+            let node = NodeId {
+                dev: meta.dev(),
+                ino: meta.ino(),
+            };
+            Ok(ScratchAnchor::new(fd, node).encode())
+        }
+
+        /// An ancestor the walk cannot prove sits above a private directory, as
+        /// the overflow-uid root does above a jail's scoped scratch.
+        #[cfg(target_os = "linux")]
+        fn anchored_tree(tag: &str) -> io::Result<(Tree, PathBuf)> {
+            let tree = Tree::new(tag)?;
+            let open = tree.0.join("open");
+            exclusive_mkdir(&open)?;
+            set_mode(&open, 0o777)?;
+            let anchor = open.join("anchor");
+            exclusive_mkdir(&anchor)?;
+            Ok((tree, std::fs::canonicalize(anchor)?))
+        }
+
+        /// A held, private anchor stops the walk, so a base under it is trusted
+        /// even though an ancestor above it is not.
+        #[cfg(target_os = "linux")]
+        #[test]
+        fn held_private_anchor_stops_the_walk() -> io::Result<()> {
+            let (_tree, anchor) = anchored_tree("anchor")?;
+            let held = std::fs::File::open(&anchor)?;
+            let raw = anchor_value(&held, &anchor)?;
+            let who = platform::identity();
+            let node = inherited_anchor(Some(raw.as_os_str()), who);
+            assert!(node.is_some(), "a held private anchor is honoured");
+            walk_ancestors(&anchor, who, node)?;
+            let dir = create_private_dir(&anchor, "ipe-test", distinct, no_profile, || {
+                Some(raw.clone())
+            })?;
+            assert_eq!(dir.parent(), Some(anchor.as_path()));
+            verify_private_dir(&dir)
+        }
+
+        /// Without an anchor the same base is refused at the unprovable ancestor.
+        #[cfg(target_os = "linux")]
+        #[test]
+        fn base_under_an_unprovable_ancestor_is_refused_without_an_anchor() -> io::Result<()> {
+            let (_tree, anchor) = anchored_tree("noanchor")?;
+            let err = private_dir(&anchor).err();
+            assert_eq!(
+                err.as_ref().map(io::Error::kind),
+                Some(io::ErrorKind::PermissionDenied)
+            );
+            assert_eq!(std::fs::read_dir(&anchor)?.count(), 0);
+            Ok(())
+        }
+
+        /// A claim naming another node, a descriptor holding another directory,
+        /// a closed descriptor, or a non-private anchor honours nothing, and the
+        /// full walk refuses.
+        #[cfg(target_os = "linux")]
+        #[test]
+        fn unproven_anchor_claims_leave_the_full_walk_in_force() -> io::Result<()> {
+            let (tree, anchor) = anchored_tree("badanchor")?;
+            let who = platform::identity();
+            let held = std::fs::File::open(&anchor)?;
+            let decoy = std::fs::File::open(&tree.0)?;
+            let wrong_node = anchor_value(&held, &tree.0)?;
+            let wrong_fd = anchor_value(&decoy, &anchor)?;
+            let closed = {
+                let gone = std::fs::File::open(&anchor)?;
+                anchor_value(&gone, &anchor)?
+            };
+            for raw in [wrong_node, wrong_fd, closed] {
+                assert_eq!(
+                    inherited_anchor(Some(raw.as_os_str()), who),
+                    None,
+                    "{raw:?}"
+                );
+                let err = create_private_dir(&anchor, "ipe-test", distinct, no_profile, || {
+                    Some(raw.clone())
+                })
+                .err();
+                assert_eq!(
+                    err.as_ref().map(io::Error::kind),
+                    Some(io::ErrorKind::PermissionDenied),
+                    "{raw:?}"
+                );
+            }
+            set_mode(&anchor, 0o755)?;
+            let shared = anchor_value(&held, &anchor)?;
+            assert_eq!(inherited_anchor(Some(shared.as_os_str()), who), None);
+            assert_eq!(std::fs::read_dir(&anchor)?.count(), 0);
+            Ok(())
+        }
+
+        /// The launcher-side proof accepts a private directory under trusted
+        /// ancestors and refuses one under an unprovable ancestor.
+        #[test]
+        fn anchor_dir_is_proven_by_the_full_walk() -> io::Result<()> {
+            let tree = Tree::new("prove")?;
+            let good = private_dir(&tree.0)?;
+            let (canonical, node) = prove_anchor_dir(&good)?;
+            let held = std::fs::File::open(&canonical)?;
+            let anchor = verify_anchor_handle(&canonical, &held, 3, node)?;
+            assert_eq!(anchor.node(), node);
+
+            let open = tree.0.join("open");
+            exclusive_mkdir(&open)?;
+            let bad = open.join("scoped");
+            exclusive_mkdir(&bad)?;
+            set_mode(&open, 0o777)?;
+            let err = prove_anchor_dir(&bad).err();
+            assert_eq!(
+                err.as_ref().map(io::Error::kind),
+                Some(io::ErrorKind::PermissionDenied)
+            );
+            let other = std::fs::File::open(&tree.0)?;
+            let moved = verify_anchor_handle(&canonical, &other, 3, node).err();
+            assert_eq!(
+                moved.as_ref().map(io::Error::kind),
+                Some(io::ErrorKind::PermissionDenied)
+            );
             Ok(())
         }
 
