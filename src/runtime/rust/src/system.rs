@@ -52,6 +52,24 @@ pub(crate) fn read_env_var(key: &str) -> Result<String, std::env::VarError> {
     }
 }
 
+/// The invoking user's home directory: the one runtime reader of `HOME`.
+///
+/// Overlay-aware like [`read_env_var`]. An unset, empty, or relative value names
+/// no directory — a relative home would resolve against whatever the working
+/// directory happens to be. Gated to the only feature set whose module reads it
+/// (the console proxy's cached-binary lookup).
+#[cfg(all(feature = "web-core", feature = "http_client"))]
+pub(crate) fn home_dir() -> Option<std::path::PathBuf> {
+    home_dir_from(read_env_var("HOME").ok())
+}
+
+/// Parse a raw home value: `Some` only for a non-empty absolute path.
+#[cfg(all(feature = "web-core", feature = "http_client"))]
+fn home_dir_from(raw: Option<String>) -> Option<std::path::PathBuf> {
+    raw.map(std::path::PathBuf::from)
+        .filter(|path| path.is_absolute())
+}
+
 /// Render a runtime status line (e.g. the HTTP `listening on` banner) with a
 /// 2-space left gutter ONLY when stderr is an interactive terminal; a piped or
 /// redirected stderr (test harness, production log capture) stays flush-left so
@@ -1160,6 +1178,27 @@ mod gutter_line_tests {
             ),
             "[ipe.http.server] listening on http://127.0.0.1:8000"
         );
+    }
+}
+
+#[cfg(all(test, feature = "web-core", feature = "http_client"))]
+mod home_dir_tests {
+    use super::home_dir_from;
+
+    #[test]
+    fn an_absolute_home_is_accepted() {
+        assert_eq!(
+            home_dir_from(Some("/home/u".to_owned())),
+            Some(std::path::PathBuf::from("/home/u"))
+        );
+    }
+
+    #[test]
+    fn an_unset_empty_or_relative_home_names_no_directory() {
+        assert_eq!(home_dir_from(None), None);
+        for raw in ["", ".", "home/u", "./home", "../home", "~"] {
+            assert_eq!(home_dir_from(Some(raw.to_owned())), None, "{raw:?}");
+        }
     }
 }
 

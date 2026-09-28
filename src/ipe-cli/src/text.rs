@@ -1082,6 +1082,12 @@ messages! {
     ffi_asserted_empty_catalog = "ffi-asserted-empty-catalog";
     /// `ipe add` could not prepare its scratch directory.
     ffi_add_scratch_dir(detail) = "ffi-add-scratch-dir";
+    /// `ipe add` would bind a toolchain directory that exposes the cargo home.
+    ffi_toolchain_bind_exposes_cargo_home(bind, cargo_home) = "ffi-toolchain-bind-exposes-cargo-home";
+    /// `ipe add` found no cargo home to keep out of the jail.
+    ffi_cargo_home_unresolved = "ffi-cargo-home-unresolved";
+    /// `ipe add` refused a jail path that does not resolve or a home it cannot mask.
+    ffi_jail_path_refused(detail) = "ffi-jail-path-refused";
     /// `ipe install` could not write the manifest.
     ffi_install_manifest_write_failed(detail) = "ffi-install-manifest-write-failed";
     /// `ipe install` could not write a manifest chunk.

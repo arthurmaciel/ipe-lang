@@ -294,6 +294,21 @@ pub fn collect_lint(
         } else {
             format!("{}\n{}", finding.message, finding.help.join("\n"))
         };
+        // The fix rides in `data` (raw JSON, `lsp_types::Diagnostic`'s only
+        // extension point) so the generic code-action provider can build an
+        // edit from any rule's finding without re-running the linter or
+        // re-parsing the module. Only a local, single-module `Fix` travels
+        // this way — a cross-module `SigFix` has no per-finding LSP action.
+        let data = finding.fix.as_ref().map(|fix| {
+            serde_json::json!({
+                "fix": {
+                    "describe": fix.describe.clone(),
+                    "lo": fix.span.lo,
+                    "hi": fix.span.hi,
+                    "replacement": fix.replacement.clone(),
+                }
+            })
+        });
         per_module
             .entry(finding.module.clone())
             .or_default()
@@ -306,7 +321,7 @@ pub fn collect_lint(
                 message,
                 related_information: None,
                 tags: None,
-                data: None,
+                data,
             });
     }
     per_module.into_iter().collect()

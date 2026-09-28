@@ -60,8 +60,7 @@ pub fn console_bin_path() -> Option<std::path::PathBuf> {
     // caches the console binary under the SAME version — so both agree on the
     // `~/.cache/ipe/rust-console/<ver>/ipe-console` path.
     let ver = option_env!("IPE_VERSION").unwrap_or("dev");
-    let home = crate::system::read_env_var("HOME").ok()?;
-    let pb = std::path::Path::new(&home)
+    let pb = crate::system::home_dir()?
         .join(".cache/ipe/rust-console")
         .join(ver)
         .join("ipe-console");

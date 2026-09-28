@@ -824,34 +824,121 @@ fn make_scratch_dir(krate: &str) -> Result<PathBuf, CliError> {
         .map_err(|e| CliError::Usage(text::msg::ffi_add_scratch_dir(&e)))
 }
 
-/// Read-only jail binds for the toolchain, deliberately NARROW: never the
-/// `~/.cargo` parent (which carries `credentials.toml`, the crates.io API
-/// token). Only `~/.cargo/bin` (the proxy binaries) and `~/.rustup` are
-/// exposed. Returns `(toolchain_ro_binds, path_prepend, rustup_home)`.
-fn toolchain_binds(inspector: &Path) -> (Vec<PathBuf>, Vec<PathBuf>, Option<PathBuf>) {
+/// The toolchain side of one jail: what it runs, what it re-binds, and which
+/// homes it masks.
+///
+/// Every path is canonical, resolved once: the inspector the payload execs,
+/// the `PATH` entries, and the rustup home it is handed are the very paths the
+/// jail binds.
+#[derive(Debug)]
+struct ToolchainBinds {
+    /// The inspector binary the payload execs.
+    inspector: ipe_sandbox::CanonicalPath,
+    /// Directories re-bound read-only through the home masks.
+    ro_binds: Vec<ipe_sandbox::CanonicalPath>,
+    /// Directories prepended to the jailed `PATH`.
+    path_prepend: Vec<ipe_sandbox::CanonicalPath>,
+    /// The rustup home exported into the jail.
+    rustup_home: Option<ipe_sandbox::CanonicalPath>,
+    /// The user and cargo homes, masked wherever they live.
+    homes: ipe_sandbox::HomeMasks,
+}
+
+/// A jail path that does not resolve, or a home the jail cannot mask, refuses
+/// the jail.
+fn jail_path_refused(e: &ipe_sandbox::JailPathError) -> CliError {
+    CliError::Usage(text::msg::ffi_jail_path_refused(e))
+}
+
+/// Read-only jail binds for the toolchain, deliberately NARROW.
+///
+/// Never the cargo home itself (which carries `credentials.toml`, the
+/// crates.io API token): only `$CARGO_HOME/bin` (the proxy binaries) and the
+/// rustup home are exposed. Both homes resolve exactly as the tools resolve
+/// them (`CARGO_HOME`/`RUSTUP_HOME`, else under the user's home).
+///
+/// # Errors
+/// - [`CliError::EnvDirNotAbsolute`] when `CARGO_HOME` or `RUSTUP_HOME` is set
+///   to a relative path.
+/// - [`CliError::Usage`] when the cargo home is unknown, a bind would expose
+///   it, a jail path does not resolve, or the user's home is unknown (see
+///   [`toolchain_binds_from`]).
+fn toolchain_binds(inspector: &Path) -> Result<ToolchainBinds, CliError> {
+    let cargo_home = crate::env_dir::tool_home("CARGO_HOME", ".cargo")?;
+    let rustup_home = crate::env_dir::tool_home("RUSTUP_HOME", ".rustup")?;
+    toolchain_binds_from(
+        inspector,
+        cargo_home.as_deref(),
+        rustup_home,
+        crate::env_dir::home().as_deref(),
+    )
+}
+
+/// The toolchain binds over already-resolved tool homes.
+///
+/// Each path is resolved to its canonical form once, here; the exposure check
+/// runs over those canonical binds, so it judges exactly what the jail mounts.
+///
+/// # Errors
+/// [`CliError::Usage`] when:
+/// - the cargo home is unknown (neither `CARGO_HOME` nor an absolute `HOME`),
+///   so no check could keep it out of the jail;
+/// - the inspector, its directory, `$CARGO_HOME/bin`, or the rustup home does
+///   not resolve;
+/// - any read-only bind equals or contains the cargo home (a rustup home at or
+///   above it, or an inspector directory above it): binding it would expose
+///   `credentials.toml` inside the jail;
+/// - the user's home is unset or relative, so it cannot be masked.
+fn toolchain_binds_from(
+    inspector: &Path,
+    cargo_home: Option<&Path>,
+    rustup_home: Option<PathBuf>,
+    user_home: Option<&Path>,
+) -> Result<ToolchainBinds, CliError> {
+    let cargo_home =
+        cargo_home.ok_or_else(|| CliError::Usage(text::msg::ffi_cargo_home_unresolved()))?;
+    let canonical =
+        |path: &Path| ipe_sandbox::CanonicalPath::resolve(path).map_err(|e| jail_path_refused(&e));
+    let inspector = canonical(inspector)?;
     let mut toolchain_ro_binds = Vec::new();
     // The inspector binary may live under a masked mount ($HOME target dirs) —
     // re-bind its directory read-only.
-    if let Some(dir) = inspector.parent() {
-        toolchain_ro_binds.push(dir.to_path_buf());
+    if let Some(dir) = inspector.as_path().parent() {
+        toolchain_ro_binds.push(canonical(dir)?);
     }
     let mut path_prepend = Vec::new();
-    let mut rustup_home = None;
-    if let Some(home) = crate::env_dir::home() {
-        let cargo_bin = home.join(".cargo/bin");
-        if cargo_bin.is_dir() {
-            path_prepend.push(cargo_bin.clone());
-            // Bind ONLY the bin dir — NEVER the ~/.cargo parent, so
-            // credentials.toml stays outside the jail.
-            toolchain_ro_binds.push(cargo_bin);
-        }
-        let rustup = home.join(".rustup");
-        if rustup.is_dir() {
-            toolchain_ro_binds.push(rustup.clone());
-            rustup_home = Some(rustup);
-        }
+    let cargo_bin = cargo_home.join("bin");
+    if cargo_bin.is_dir() {
+        let cargo_bin = canonical(&cargo_bin)?;
+        path_prepend.push(cargo_bin.clone());
+        // Bind ONLY the bin dir — NEVER the cargo home itself, so
+        // credentials.toml stays outside the jail.
+        toolchain_ro_binds.push(cargo_bin);
     }
-    (toolchain_ro_binds, path_prepend, rustup_home)
+    let rustup_home = match rustup_home.filter(|rustup| rustup.is_dir()) {
+        Some(rustup) => Some(canonical(&rustup)?),
+        None => None,
+    };
+    if let Some(rustup) = &rustup_home {
+        toolchain_ro_binds.push(rustup.clone());
+    }
+    if let Some(bind) = ipe_sandbox::bind_exposing(&toolchain_ro_binds, cargo_home) {
+        return Err(CliError::Usage(
+            text::msg::ffi_toolchain_bind_exposes_cargo_home(
+                &bind.as_path().display(),
+                &cargo_home.display(),
+            ),
+        ));
+    }
+    let homes = ipe_sandbox::HomeMasks::resolve(user_home, Some(cargo_home))
+        .map_err(|e| jail_path_refused(&e))?;
+    Ok(ToolchainBinds {
+        inspector,
+        ro_binds: toolchain_ro_binds,
+        path_prepend,
+        rustup_home,
+        homes,
+    })
 }
 
 /// The jail resource caps: the fail-closed defaults, each raisable through an
@@ -894,10 +981,8 @@ fn jail_limits() -> ipe_sandbox::ResourceLimits {
 fn run_phase(
     caps: &ipe_sandbox::Capabilities,
     network: ipe_sandbox::NetworkPolicy,
-    scoped_tmp: &Path,
-    toolchain_ro_binds: Vec<PathBuf>,
-    path_prepend: Vec<PathBuf>,
-    rustup_home: Option<PathBuf>,
+    scoped_tmp: &ipe_sandbox::CanonicalPath,
+    binds: &ToolchainBinds,
     payload: &[OsString],
 ) -> Result<ipe_sandbox::JailedOutput, CliError> {
     let io_err = |detail: String| {
@@ -908,12 +993,13 @@ fn run_phase(
     };
     let spec = ipe_sandbox::JailSpec {
         network,
-        scoped_tmp: scoped_tmp.to_path_buf(),
+        scoped_tmp: scoped_tmp.clone(),
         registry_cache: None,
         toolchain: None,
-        toolchain_ro_binds,
-        path_prepend,
-        rustup_home,
+        toolchain_ro_binds: binds.ro_binds.clone(),
+        homes: binds.homes.clone(),
+        path_prepend: binds.path_prepend.clone(),
+        rustup_home: binds.rustup_home.clone(),
         limits: jail_limits(),
     };
     ipe_sandbox::run_in_bwrap_jail(caps, &spec, payload)
@@ -1123,15 +1209,24 @@ fn run_inspector_job(job: &InspectorJob, allow_build_scripts: bool) -> Result<St
         SandboxRoute::Jailed => {}
     }
 
-    let scoped_tmp = make_scratch_dir(scratch_hint)?;
-    let binds = toolchain_binds(&inspector);
+    let binds = toolchain_binds(&inspector)?;
+    let scratch = make_scratch_dir(scratch_hint)?;
+    // The scratch the jail binds, the TMPDIR and cwd it hands the payload, and
+    // every manifest path under it share this one canonical spelling.
+    let scoped_tmp = match ipe_sandbox::CanonicalPath::resolve(&scratch) {
+        Ok(dir) => dir,
+        Err(e) => {
+            let _ = std::fs::remove_dir_all(&scratch);
+            return Err(jail_path_refused(&e));
+        }
+    };
     let result = match job {
         // A single crate — or a single local wrapper crate — is one
         // populate-free bind over the historical two phases (fetch,
         // introspect) on one scoped scratch. A wrapper crate is local, so
         // its fetch phase only resolves the wrapper's own registry deps.
         InspectorJob::Single { .. } | InspectorJob::WrapperPath { .. } => run_single_bwrap(
-            &inspector,
+            binds.inspector.as_path(),
             job,
             &caps,
             &scoped_tmp,
@@ -1144,7 +1239,7 @@ fn run_inspector_job(job: &InspectorJob, allow_build_scripts: bool) -> Result<St
         // exceeds the wall, which the whole-manifest run did (its populate
         // + bind of every crate ran under one wall budget).
         InspectorJob::Manifest { entries } => run_manifest_bwrap_chunked(
-            &inspector,
+            binds.inspector.as_path(),
             entries,
             &caps,
             &scoped_tmp,
@@ -1156,17 +1251,13 @@ fn run_inspector_job(job: &InspectorJob, allow_build_scripts: bool) -> Result<St
     result
 }
 
-/// The toolchain jail binds, grouped so the chunked driver can clone them once
-/// per phase without repeating the tuple destructure.
-type ToolchainBinds = (Vec<PathBuf>, Vec<PathBuf>, Option<PathBuf>);
-
 /// The historical two-phase single-crate flow: fetch (network on, no foreign
 /// code) then introspect (no egress, foreign code runs) over one scratch.
 fn run_single_bwrap(
     inspector: &Path,
     job: &InspectorJob,
     caps: &ipe_sandbox::Capabilities,
-    scoped_tmp: &Path,
+    scoped_tmp: &ipe_sandbox::CanonicalPath,
     binds: &ToolchainBinds,
     allow_build_scripts: bool,
 ) -> Result<String, CliError> {
@@ -1176,25 +1267,20 @@ fn run_single_bwrap(
             &crate::style::TerminalSafe::sanitize(&detail),
         ))
     };
-    let (toolchain_ro_binds, path_prepend, rustup_home) = binds;
     let with_payload =
         |fetch_only: bool| inspector_payload(inspector, job, None, allow_build_scripts, fetch_only);
     run_phase(
         caps,
         ipe_sandbox::NetworkPolicy::FetchOnly,
         scoped_tmp,
-        toolchain_ro_binds.clone(),
-        path_prepend.clone(),
-        rustup_home.clone(),
+        binds,
         &with_payload(true),
     )?;
     let out = run_phase(
         caps,
         ipe_sandbox::NetworkPolicy::Denied,
         scoped_tmp,
-        toolchain_ro_binds.clone(),
-        path_prepend.clone(),
-        rustup_home.clone(),
+        binds,
         &with_payload(false),
     )?;
     if out.status != Some(0) {
@@ -1244,7 +1330,7 @@ fn manifest_chunk_payload(
 /// and return its stdout, mapping a non-zero exit to a typed error.
 fn run_introspect_chunk(
     caps: &ipe_sandbox::Capabilities,
-    scoped_tmp: &Path,
+    scoped_tmp: &ipe_sandbox::CanonicalPath,
     binds: &ToolchainBinds,
     payload: &[OsString],
 ) -> Result<String, CliError> {
@@ -1254,14 +1340,11 @@ fn run_introspect_chunk(
             &crate::style::TerminalSafe::sanitize(&detail),
         ))
     };
-    let (toolchain_ro_binds, path_prepend, rustup_home) = binds;
     let out = run_phase(
         caps,
         ipe_sandbox::NetworkPolicy::Denied,
         scoped_tmp,
-        toolchain_ro_binds.clone(),
-        path_prepend.clone(),
-        rustup_home.clone(),
+        binds,
         payload,
     )?;
     if out.status != Some(0) {
@@ -1297,7 +1380,7 @@ fn run_manifest_bwrap_chunked(
     inspector: &Path,
     entries: &[(CrateSpec, Vec<String>)],
     caps: &ipe_sandbox::Capabilities,
-    scoped_tmp: &Path,
+    scoped_tmp: &ipe_sandbox::CanonicalPath,
     binds: &ToolchainBinds,
     allow_build_scripts: bool,
 ) -> Result<String, CliError> {
@@ -1307,10 +1390,9 @@ fn run_manifest_bwrap_chunked(
             &crate::style::TerminalSafe::sanitize(&detail),
         ))
     };
-    let (toolchain_ro_binds, path_prepend, rustup_home) = binds;
 
     // Stage 1 — fetch every crate in one network-on run (no foreign code).
-    let full_manifest = write_inspector_manifest(scoped_tmp, entries)?;
+    let full_manifest = write_inspector_manifest(scoped_tmp.as_path(), entries)?;
     let fetch_payload = manifest_chunk_payload(
         inspector,
         &full_manifest,
@@ -1323,9 +1405,7 @@ fn run_manifest_bwrap_chunked(
         caps,
         ipe_sandbox::NetworkPolicy::FetchOnly,
         scoped_tmp,
-        toolchain_ro_binds.clone(),
-        path_prepend.clone(),
-        rustup_home.clone(),
+        binds,
         &fetch_payload,
     )?;
 
@@ -1334,12 +1414,16 @@ fn run_manifest_bwrap_chunked(
     // jail-writable path, but each process reads it before foreign code runs
     // and rewrites it after, so a build script cannot plant facts a sibling
     // then trusts.
-    let checkpoint = scoped_tmp.join("xc-checkpoint.json");
+    let checkpoint = scoped_tmp.as_path().join("xc-checkpoint.json");
 
     // Stage 2 — populate the cross-crate index one crate at a time.
     for (i, (spec, features)) in entries.iter().enumerate() {
-        let chunk_manifest =
-            write_inspector_manifest_chunk(scoped_tmp, &format!("populate-{i}"), spec, features)?;
+        let chunk_manifest = write_inspector_manifest_chunk(
+            scoped_tmp.as_path(),
+            &format!("populate-{i}"),
+            spec,
+            features,
+        )?;
         let xc_load = (i > 0).then_some(checkpoint.as_path());
         let payload = manifest_chunk_payload(
             inspector,
@@ -1357,8 +1441,12 @@ fn run_manifest_bwrap_chunked(
     // Stage 3 — bind each crate against the complete cross-crate index.
     let mut bound: Vec<serde_json::Value> = Vec::with_capacity(entries.len());
     for (i, (spec, features)) in entries.iter().enumerate() {
-        let chunk_manifest =
-            write_inspector_manifest_chunk(scoped_tmp, &format!("bind-{i}"), spec, features)?;
+        let chunk_manifest = write_inspector_manifest_chunk(
+            scoped_tmp.as_path(),
+            &format!("bind-{i}"),
+            spec,
+            features,
+        )?;
         let payload = manifest_chunk_payload(
             inspector,
             &chunk_manifest,
@@ -4140,7 +4228,7 @@ version = \"1\"
         // HOME must be set for the sanctioned path; the test crate always has
         // one. The scratch dir lives under ~/.cache/ipe/ffi-scratch/, never
         // /tmp.
-        let Some(home) = std::env::var_os("HOME").map(PathBuf::from) else {
+        let Some(home) = crate::env_dir::home() else {
             return;
         };
         let scratch = make_scratch_dir("semver").expect("first create succeeds");
@@ -4160,21 +4248,304 @@ version = \"1\"
         let _ = std::fs::remove_dir_all(&scratch);
     }
 
+    /// A fresh scratch root per test, so parallel tests never share homes.
+    fn toolbinds_root(tag: &str) -> PathBuf {
+        let tmp = std::env::temp_dir().join(format!("ipe-toolbinds-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).expect("mk scratch root");
+        tmp
+    }
+
+    /// A cargo home at `cargo_home` holding `bin/` and `credentials.toml`.
+    fn plant_cargo_home(cargo_home: &Path) {
+        std::fs::create_dir_all(cargo_home.join("bin")).expect("mk cargo bin");
+        std::fs::write(cargo_home.join("credentials.toml"), "").expect("credentials");
+    }
+
+    /// An inspector binary planted in `dir`.
+    fn plant_inspector(dir: &Path) -> PathBuf {
+        std::fs::create_dir_all(dir).expect("mk inspector dir");
+        let inspector = dir.join("ipe-ffi-inspector");
+        std::fs::write(&inspector, "").expect("inspector");
+        inspector
+    }
+
+    /// A user home planted under `tmp`.
+    fn plant_user_home(tmp: &Path) -> PathBuf {
+        let user_home = tmp.join("user");
+        std::fs::create_dir_all(&user_home).expect("mk user home");
+        user_home
+    }
+
+    fn canonical(path: &Path) -> ipe_sandbox::CanonicalPath {
+        ipe_sandbox::CanonicalPath::resolve(path).expect("resolves")
+    }
+
     #[test]
-    fn toolchain_binds_never_include_the_cargo_parent_or_credentials() {
-        let inspector = PathBuf::from("/opt/ipe/bin/ipe-ffi-inspector");
-        let (binds, _path, _rustup) = toolchain_binds(&inspector);
-        for b in &binds {
-            let s = b.to_string_lossy();
+    fn toolchain_binds_over_disjoint_homes_expose_only_cargo_bin() {
+        let tmp = toolbinds_root("disjoint");
+        let cargo_home = tmp.join(".cargo");
+        let rustup_home = tmp.join(".rustup");
+        plant_cargo_home(&cargo_home);
+        std::fs::create_dir_all(&rustup_home).expect("mk rustup home");
+        let inspector = plant_inspector(&tmp.join("tools"));
+        let user_home = plant_user_home(&tmp);
+        let got = toolchain_binds_from(
+            &inspector,
+            Some(&cargo_home),
+            Some(rustup_home.clone()),
+            Some(&user_home),
+        );
+        let want_homes = ipe_sandbox::HomeMasks::resolve(Some(&user_home), Some(&cargo_home))
+            .expect("homes resolve");
+        let want_inspector = canonical(&inspector);
+        let cargo_bin = canonical(&cargo_home.join("bin"));
+        let rustup_home = canonical(&rustup_home);
+        let cargo_home = canonical(&cargo_home);
+        let _ = std::fs::remove_dir_all(&tmp);
+        assert!(got.is_ok(), "disjoint homes must be accepted: {got:?}");
+        let Ok(ToolchainBinds {
+            inspector,
+            ro_binds: binds,
+            path_prepend: path,
+            rustup_home: rustup,
+            homes,
+        }) = got
+        else {
+            return;
+        };
+        assert_eq!(homes, want_homes);
+        assert_eq!(inspector, want_inspector);
+        assert!(binds.contains(&cargo_bin), "{binds:?}");
+        assert!(!binds.contains(&cargo_home), "{binds:?}");
+        assert!(
+            binds
+                .iter()
+                .all(|b| !ipe_sandbox::path_covers(b.as_path(), cargo_home.as_path())),
+            "no bind may contain the cargo home: {binds:?}"
+        );
+        assert_eq!(path, vec![cargo_bin]);
+        assert_eq!(rustup, Some(rustup_home));
+    }
+
+    /// `toolchain_binds_from` over `(cargo_home, rustup_home)` must refuse.
+    fn assert_toolchain_refused(cargo_home: &Path, rustup_home: &Path, inspector: &Path) {
+        let got = toolchain_binds_from(
+            inspector,
+            Some(cargo_home),
+            Some(rustup_home.to_path_buf()),
+            None,
+        );
+        assert!(
+            matches!(&got, Err(CliError::Usage(m)) if m.contains("credentials.toml")),
+            "a bind exposing the cargo home must be refused: {got:?}"
+        );
+    }
+
+    #[test]
+    fn toolchain_binds_refuse_a_rustup_home_equal_to_the_cargo_home() {
+        let tmp = toolbinds_root("equal");
+        let home = tmp.join("toolchain");
+        plant_cargo_home(&home);
+        let inspector = plant_inspector(&tmp.join("tools"));
+        assert_toolchain_refused(&home, &home, &inspector);
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn toolchain_binds_refuse_a_cargo_home_nested_under_the_rustup_home() {
+        let tmp = toolbinds_root("nested");
+        let rustup_home = tmp.join("rustup");
+        let cargo_home = rustup_home.join("cargo");
+        plant_cargo_home(&cargo_home);
+        let inspector = plant_inspector(&tmp.join("tools"));
+        assert_toolchain_refused(&cargo_home, &rustup_home, &inspector);
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn toolchain_binds_refuse_a_dot_dot_or_trailing_slash_spelled_ancestor() {
+        let tmp = toolbinds_root("dotdot");
+        let cargo_home = tmp.join(".cargo");
+        let rustup_dir = tmp.join(".rustup");
+        plant_cargo_home(&cargo_home);
+        std::fs::create_dir_all(&rustup_dir).expect("mk rustup home");
+        let inspector = plant_inspector(&tmp.join("tools"));
+        // `<tmp>/.rustup/..` names `<tmp>`, the cargo home's parent.
+        assert_toolchain_refused(&cargo_home, &rustup_dir.join(".."), &inspector);
+        // `<tmp>/.cargo/bin/../` names the cargo home itself.
+        let mut spelled = cargo_home.join("bin").join("..").into_os_string();
+        spelled.push("/");
+        assert_toolchain_refused(&cargo_home, &PathBuf::from(spelled), &inspector);
+        // The cargo home spelled with `..` against a plain rustup home above it.
+        assert_toolchain_refused(&rustup_dir.join("..").join(".cargo"), &tmp, &inspector);
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn toolchain_binds_refuse_a_rustup_home_symlinked_to_the_cargo_home() {
+        let tmp = toolbinds_root("symlink");
+        let cargo_home = tmp.join(".cargo");
+        plant_cargo_home(&cargo_home);
+        let link = tmp.join("rustup-link");
+        std::os::unix::fs::symlink(&cargo_home, &link).expect("symlink");
+        let inspector = plant_inspector(&tmp.join("tools"));
+        assert_toolchain_refused(&cargo_home, &link, &inspector);
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn toolchain_binds_refuse_an_inspector_dir_above_the_cargo_home() {
+        let tmp = toolbinds_root("inspector");
+        let cargo_home = tmp.join(".cargo");
+        let rustup_home = tmp.join("elsewhere").join(".rustup");
+        plant_cargo_home(&cargo_home);
+        std::fs::create_dir_all(&rustup_home).expect("mk rustup home");
+        let inspector = plant_inspector(&tmp);
+        assert_toolchain_refused(&cargo_home, &rustup_home, &inspector);
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn a_cargo_home_holding_the_rustup_home_is_accepted() {
+        let tmp = toolbinds_root("rustup-inside");
+        let cargo_home = tmp.join(".cargo");
+        let rustup_home = cargo_home.join("rustup");
+        plant_cargo_home(&cargo_home);
+        std::fs::create_dir_all(&rustup_home).expect("mk rustup home");
+        let inspector = plant_inspector(&tmp.join("tools"));
+        let user_home = plant_user_home(&tmp);
+        let got = toolchain_binds_from(
+            &inspector,
+            Some(&cargo_home),
+            Some(rustup_home),
+            Some(&user_home),
+        );
+        let cargo_home = canonical(&cargo_home);
+        let _ = std::fs::remove_dir_all(&tmp);
+        assert!(
+            matches!(&got, Ok(binds) if !binds.ro_binds.contains(&cargo_home)),
+            "a rustup home below the cargo home does not expose it: {got:?}"
+        );
+    }
+
+    #[test]
+    fn toolchain_binds_refuse_an_unknown_cargo_home() {
+        let got = toolchain_binds_from(
+            Path::new("/opt/ipe/bin/ipe-ffi-inspector"),
+            None,
+            None,
+            None,
+        );
+        assert!(
+            matches!(&got, Err(CliError::Usage(m)) if m.contains("cannot locate the cargo home")),
+            "no cargo home means no exposure check, so the jail must be refused: {got:?}"
+        );
+    }
+
+    #[test]
+    fn toolchain_binds_mask_the_user_and_cargo_homes() {
+        let tmp = toolbinds_root("homes");
+        let user_home = plant_user_home(&tmp);
+        let cargo_home = tmp.join("elsewhere").join(".cargo");
+        plant_cargo_home(&cargo_home);
+        let inspector = plant_inspector(&tmp.join("tools"));
+        let got = toolchain_binds_from(&inspector, Some(&cargo_home), None, Some(&user_home));
+        let want = ipe_sandbox::HomeMasks::resolve(Some(&user_home), Some(&cargo_home))
+            .expect("homes resolve");
+        let _ = std::fs::remove_dir_all(&tmp);
+        assert!(
+            matches!(&got, Ok(binds) if binds.homes == want),
+            "both homes must be masked: {got:?}"
+        );
+    }
+
+    #[test]
+    fn toolchain_binds_refuse_an_unset_or_relative_user_home() {
+        let tmp = toolbinds_root("no-user-home");
+        let cargo_home = tmp.join(".cargo");
+        plant_cargo_home(&cargo_home);
+        let inspector = plant_inspector(&tmp.join("tools"));
+        let unset = toolchain_binds_from(&inspector, Some(&cargo_home), None, None);
+        let relative = toolchain_binds_from(
+            &inspector,
+            Some(&cargo_home),
+            None,
+            Some(Path::new("relative/home")),
+        );
+        let _ = std::fs::remove_dir_all(&tmp);
+        for got in [unset, relative] {
             assert!(
-                !s.ends_with("/.cargo"),
-                "the ~/.cargo parent must never be bound: {s}"
-            );
-            assert!(
-                !s.contains("credentials"),
-                "no credentials path may be bound: {s}"
+                matches!(&got, Err(CliError::Usage(m)) if m.contains("cannot be masked")),
+                "an unknown user home cannot be masked, so the jail must be refused: {got:?}"
             );
         }
+    }
+
+    #[test]
+    fn toolchain_binds_refuse_a_relative_cargo_home() {
+        let tmp = toolbinds_root("relative-cargo");
+        let inspector = plant_inspector(&tmp.join("tools"));
+        let user_home = plant_user_home(&tmp);
+        let got = toolchain_binds_from(
+            &inspector,
+            Some(Path::new("relative/.cargo")),
+            None,
+            Some(&user_home),
+        );
+        let _ = std::fs::remove_dir_all(&tmp);
+        assert!(
+            matches!(&got, Err(CliError::Usage(m)) if m.contains("CARGO_HOME")),
+            "a relative cargo home names no fixed directory to mask: {got:?}"
+        );
+    }
+
+    #[test]
+    fn toolchain_binds_refuse_an_inspector_that_does_not_resolve() {
+        let tmp = toolbinds_root("no-inspector");
+        let cargo_home = tmp.join(".cargo");
+        plant_cargo_home(&cargo_home);
+        let user_home = plant_user_home(&tmp);
+        let got = toolchain_binds_from(
+            &tmp.join("missing").join("ipe-ffi-inspector"),
+            Some(&cargo_home),
+            None,
+            Some(&user_home),
+        );
+        let _ = std::fs::remove_dir_all(&tmp);
+        assert!(
+            matches!(&got, Err(CliError::Usage(m)) if m.contains("does not resolve")),
+            "an inspector path that does not resolve cannot be bound: {got:?}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_symlinked_inspector_is_run_and_bound_at_its_canonical_path() {
+        let tmp = toolbinds_root("inspector-link");
+        let cargo_home = tmp.join(".cargo");
+        plant_cargo_home(&cargo_home);
+        let user_home = plant_user_home(&tmp);
+        let real = plant_inspector(&tmp.join("real"));
+        let link_dir = tmp.join("link");
+        std::os::unix::fs::symlink(tmp.join("real"), &link_dir).expect("symlink");
+        let got = toolchain_binds_from(
+            &link_dir.join("ipe-ffi-inspector"),
+            Some(&cargo_home),
+            None,
+            Some(&user_home),
+        );
+        let real_dir = canonical(&tmp.join("real"));
+        let real = canonical(&real);
+        let _ = std::fs::remove_dir_all(&tmp);
+        assert!(
+            matches!(&got, Ok(binds)
+                if binds.inspector == real
+                    && binds.ro_binds.contains(&real_dir)
+                    && binds.ro_binds.iter().all(|b| !b.as_path().starts_with(&link_dir))),
+            "the payload's inspector and its bound dir must be the canonical target: {got:?}"
+        );
     }
 
     #[test]
