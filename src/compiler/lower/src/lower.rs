@@ -5242,9 +5242,10 @@ fn collect_tail_call_callees(expr: &Expr, out: &mut Vec<FuncId>) {
 /// types share a shape and differ only in their tvar names. Wherever `callee_g`
 /// appears bare in `callee_ret`, the caller's tvar at the mirrored position in
 /// `caller_ret` is the one that must carry `callee_g`'s bound. A structural
-/// walk over the shared shape collects those caller tvars. Any positional
-/// mismatch (a shape the two do not share) simply yields nothing — the pass then
-/// adds no bound, which is safe.
+/// walk over the shared shape collects those caller tvars. A constructor pairs
+/// only with the same constructor (an enum by home and name, a `Ui` carrier by
+/// ctor), never by arity alone. Any positional mismatch (a shape the two do not
+/// share) simply yields nothing — the pass then adds no bound, which is safe.
 fn aligned_caller_tvars(sig_ret: &IrType, target_g: Symbol, site_ret: &IrType) -> Vec<Symbol> {
     let mut out = Vec::new();
     align_ret_tvars(sig_ret, target_g, site_ret, &mut out);
@@ -5269,8 +5270,19 @@ fn align_ret_tvars(sig: &IrType, target: Symbol, site: &IrType, out: &mut Vec<Sy
         | (IrType::Cmd(a), IrType::Cmd(b))
         | (IrType::Sub(a), IrType::Sub(b))
         | (IrType::Decoder(a), IrType::Decoder(b))
-        | (IrType::WebRoute(a), IrType::WebRoute(b))
-        | (IrType::Ui { msg: a, .. }, IrType::Ui { msg: b, .. }) => {
+        | (IrType::WebRoute(a), IrType::WebRoute(b)) => {
+            align_ret_tvars(a, target, b, out);
+        }
+        (
+            IrType::Ui {
+                ctor: sig_ctor,
+                msg: a,
+            },
+            IrType::Ui {
+                ctor: site_ctor,
+                msg: b,
+            },
+        ) if sig_ctor == site_ctor => {
             align_ret_tvars(a, target, b, out);
         }
         (IrType::Result(a1, a2), IrType::Result(b1, b2))
@@ -5282,10 +5294,23 @@ fn align_ret_tvars(sig: &IrType, target: Symbol, site: &IrType, out: &mut Vec<Sy
             align_ret_tvars(a1, target, b1, out);
             align_ret_tvars(a2, target, b2, out);
         }
-        (IrType::Tuple(a), IrType::Tuple(b))
-        | (IrType::Enum { args: a, .. }, IrType::Enum { args: b, .. })
-            if a.len() == b.len() =>
-        {
+        (IrType::Tuple(a), IrType::Tuple(b)) if a.len() == b.len() => {
+            for (ca, cb) in a.iter().zip(b.iter()) {
+                align_ret_tvars(ca, target, cb, out);
+            }
+        }
+        (
+            IrType::Enum {
+                home: sig_home,
+                name: sig_name,
+                args: a,
+            },
+            IrType::Enum {
+                home: site_home,
+                name: site_name,
+                args: b,
+            },
+        ) if sig_home == site_home && sig_name == site_name && a.len() == b.len() => {
             for (ca, cb) in a.iter().zip(b.iter()) {
                 align_ret_tvars(ca, target, cb, out);
             }
@@ -33682,6 +33707,51 @@ mod tests {
                 &IrType::List(Box::new(IrType::Generic(site_tv))),
             )
             .is_empty()
+        );
+
+        // Identity, not arity: an enum pairs only with the same home and name,
+        // a `Ui` carrier only with the same ctor. A distinct constructor of
+        // equal arity aligns nothing, while the same one still aligns.
+        let home = ipe_ir::ModPath(vec![interner.intern("Main").unwrap()]);
+        let pair = interner.intern("Pair").unwrap();
+        let swap = interner.intern("Swap").unwrap();
+        let enum_of = |name: ipe_intern::Symbol, first: ipe_intern::Symbol| IrType::Enum {
+            home: home.clone(),
+            name,
+            args: vec![IrType::Generic(first), IrType::Int],
+        };
+        assert_eq!(
+            super::aligned_caller_tvars(&enum_of(pair, sig_tv), sig_tv, &enum_of(pair, site_tv)),
+            vec![site_tv]
+        );
+        assert!(
+            super::aligned_caller_tvars(&enum_of(pair, sig_tv), sig_tv, &enum_of(swap, site_tv))
+                .is_empty(),
+            "a same-arity enum of another name must not inherit the bound"
+        );
+        let other_home = IrType::Enum {
+            home: ipe_ir::ModPath(vec![interner.intern("Lib").unwrap()]),
+            name: pair,
+            args: vec![IrType::Generic(site_tv), IrType::Int],
+        };
+        assert!(
+            super::aligned_caller_tvars(&enum_of(pair, sig_tv), sig_tv, &other_home).is_empty(),
+            "a same-name enum of another home must not inherit the bound"
+        );
+        assert!(
+            super::aligned_caller_tvars(
+                &IrType::Ui {
+                    ctor: UiCtor::Html,
+                    msg: Box::new(IrType::Generic(sig_tv)),
+                },
+                sig_tv,
+                &IrType::Ui {
+                    ctor: UiCtor::Cells,
+                    msg: Box::new(IrType::Generic(site_tv)),
+                },
+            )
+            .is_empty(),
+            "a `Ui` carrier of another ctor must not inherit the bound"
         );
     }
 
