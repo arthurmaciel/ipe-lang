@@ -45,7 +45,7 @@ pub fn probe_run_jail_tools(_wants_wall_clock: bool) -> Result<RunJailTools, Run
 ///
 /// The macOS counterpart to the `Linux` [`exec_in_run_jail`]: it lowers
 /// the SAME [`SandboxProfile`] to a Seatbelt SBPL profile via the SAME
-/// [`crate::build_jail::sbpl_from_profile`] the Tier-2 `build_in_jail` uses —
+/// [`crate::build_jail::checked_sbpl`] the Tier-2 `build_in_jail` uses —
 /// there is ONE SBPL generator, so what confines a Tier-2 build and what confines
 /// the shipped app at run time cannot drift. It `exec`s
 /// `sandbox-exec -p <profile> <app> <args>`: the profile travels in argv, never
@@ -100,8 +100,7 @@ pub fn exec_in_run_jail(
     let scoped_tmp = mounts.scoped_tmp().as_path();
 
     // Lower the SAME profile through the SAME SBPL generator the build jail uses.
-    let sbpl =
-        crate::build_jail::sbpl_from_profile(profile, scoped_tmp, mounts.working_tree().as_path());
+    let sbpl = crate::build_jail::checked_sbpl(profile, &mounts).map_err(RunJailDefect::Path)?;
 
     // argv: sandbox-exec -p <profile> <app> <app_args…>. Direct argv, no shell.
     let mut cmd = std::process::Command::new(&sandbox_exec);

@@ -426,10 +426,7 @@ pub fn build_in_jail(
     if let Err(outcome) = recheck_mounts(mounts) {
         return outcome;
     }
-    let (scoped_tmp, working_tree) = (
-        mounts.scoped_tmp().as_path(),
-        mounts.working_tree().as_path(),
-    );
+    let scoped_tmp = mounts.scoped_tmp().as_path();
     // `sandbox-exec` is the mandatory macOS jail primitive. Absent ⇒ refuse; the
     // untrusted payload is never run unconfined.
     let Some(sandbox_exec) = find_in_path("sandbox-exec") else {
@@ -444,7 +441,14 @@ pub fn build_in_jail(
     // so the payload has no file to rewrite before a later run applies it. No
     // shell token anywhere — the payload is a direct argv, so the
     // quoting/injection class does not exist.
-    let sbpl = sbpl_from_profile(profile, scoped_tmp, working_tree);
+    let sbpl = match checked_sbpl(profile, mounts) {
+        Ok(sbpl) => sbpl,
+        Err(e) => {
+            return JailOutcome::Unavailable {
+                defect: RunJailDefect::Path(e),
+            };
+        }
+    };
     let mut argv: Vec<OsString> = Vec::with_capacity(payload.len() + 3);
     argv.push(sandbox_exec.into_os_string());
     argv.push("-p".into());
@@ -824,6 +828,43 @@ const BRING_UP_MACH_SERVICES: &[&str] = &[
     "com.apple.trustd",
 ];
 
+/// The fixed system/toolchain trees the Seatbelt profile allows reading. The
+/// profile masks nothing beneath them, so [`checked_sbpl`] refuses a cargo home
+/// at or under any of them before a profile is rendered.
+#[cfg(any(target_os = "macos", test))]
+pub const MACOS_READ_ROOTS: [&str; 11] = [
+    "/usr",
+    "/bin",
+    "/sbin",
+    "/System",
+    "/Library",
+    "/Applications",
+    "/opt",
+    "/dev",
+    "/private/etc",
+    "/private/var/db",
+    "/private/var/folders",
+];
+
+/// Render the Seatbelt profile for `mounts`, refusing first when a fixed read
+/// root would expose the cargo home.
+///
+/// # Errors
+/// [`crate::JailPathError::ExposesCargoHome`] when a [`MACOS_READ_ROOTS`] entry
+/// equals or contains the cargo home.
+#[cfg(any(target_os = "macos", test))]
+pub fn checked_sbpl(
+    profile: &SandboxProfile,
+    mounts: &JailMounts,
+) -> Result<String, crate::JailPathError> {
+    mounts.refuse_fixed_exposing(&MACOS_READ_ROOTS)?;
+    Ok(sbpl_from_profile(
+        profile,
+        mounts.scoped_tmp().as_path(),
+        mounts.working_tree().as_path(),
+    ))
+}
+
 #[cfg(any(target_os = "macos", test))]
 #[must_use]
 pub fn sbpl_from_profile(
@@ -991,19 +1032,7 @@ pub fn sbpl_from_profile(
     // none live under the invoking user's home. `/private/var/db`/`/private/etc`
     // hold the system databases (dyld cache, timezone, resolver config) the loader
     // and libc read; user secrets are not here.
-    for root in [
-        "/usr",
-        "/bin",
-        "/sbin",
-        "/System",
-        "/Library",
-        "/Applications",
-        "/opt",
-        "/dev",
-        "/private/etc",
-        "/private/var/db",
-        "/private/var/folders",
-    ] {
+    for root in MACOS_READ_ROOTS {
         let _ = writeln!(s, "(allow file-read* (subpath \"{root}\"))");
     }
     // The scratch is always readable (the child's temp files live there); the
@@ -2218,6 +2247,40 @@ mod tests {
             filesystem,
             ..SandboxProfile::maximally_isolated()
         }
+    }
+
+    fn sbpl_mounts(cargo_home: &str) -> Result<JailMounts, crate::JailPathError> {
+        JailMounts::checked_against(
+            crate::CanonicalPath::assumed("/work/scratch"),
+            crate::CanonicalPath::assumed("/work/tree"),
+            Vec::new(),
+            crate::HomeMasks::unmasked(),
+            Path::new(cargo_home),
+        )
+    }
+
+    #[test]
+    fn checked_sbpl_refuses_a_cargo_home_under_a_fixed_read_root() {
+        let p = SandboxProfile::maximally_isolated();
+        for cargo_home in ["/usr/local/cargo", "/opt/cargo", "/usr", "/Library/cargo"] {
+            let mounts = sbpl_mounts(cargo_home).expect("no mount covers the cargo home");
+            assert!(
+                matches!(
+                    checked_sbpl(&p, &mounts),
+                    Err(crate::JailPathError::ExposesCargoHome { .. })
+                ),
+                "a Seatbelt read root covering {cargo_home} is refused"
+            );
+        }
+        let mounts = sbpl_mounts("/nonexistent-ipe-user/.cargo").expect("disjoint cargo home");
+        let sbpl = checked_sbpl(&p, &mounts).expect("no read root covers the cargo home");
+        for root in MACOS_READ_ROOTS {
+            assert!(
+                sbpl.contains(&format!("(allow file-read* (subpath \"{root}\"))")),
+                "read root {root} is allowed: {sbpl}"
+            );
+        }
+        assert!(!sbpl.contains("/nonexistent-ipe-user"), "{sbpl}");
     }
 
     #[test]

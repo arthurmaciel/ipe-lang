@@ -227,8 +227,9 @@ struct Prepared {
 }
 
 /// The wrapper-owned Tier-2 admission probe fixture, embedded in the binary and
-/// materialized to a runtime scratch path on use. Tier-2 copies it into the
-/// jail's scratch and runs it as the exit-owning wrapper (ADR 0004).
+/// materialized to a host-only scratch path on use. Tier-2 runs it as the
+/// exit-owning wrapper (ADR 0004): passed inline on POSIX, staged afresh for
+/// each run on Windows.
 ///
 /// The fixture SOURCE is embedded at build time (the tracked fixture files stay
 /// the single source of truth); a shipped binary can find it with no source

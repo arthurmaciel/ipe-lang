@@ -108,6 +108,27 @@ impl JailMounts {
         self.refuse_exposing()
     }
 
+    /// Refuse when a fixed path a platform profile grants on top of these
+    /// mounts equals or contains the cargo home.
+    ///
+    /// A profile with no masks (Seatbelt) exposes whatever its fixed roots
+    /// cover, so those roots answer to the same check as the mounts.
+    ///
+    /// # Errors
+    /// [`JailPathError::ExposesCargoHome`] naming the first such path.
+    pub fn refuse_fixed_exposing(&self, fixed: &[&str]) -> Result<(), JailPathError> {
+        fixed
+            .iter()
+            .map(Path::new)
+            .find(|root| path_covers(root, &self.cargo_home))
+            .map_or(Ok(()), |root| {
+                Err(JailPathError::ExposesCargoHome {
+                    bind: root.to_path_buf(),
+                    cargo_home: self.cargo_home.clone(),
+                })
+            })
+    }
+
     fn refuse_exposing(&self) -> Result<(), JailPathError> {
         self.all()
             .find(|path| path_covers(path.as_path(), &self.cargo_home))

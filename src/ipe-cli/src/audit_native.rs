@@ -1519,32 +1519,16 @@ fn no_probeable_entrypoint() -> Rejection {
     }
 }
 
-/// The read-only tool binds the wrapper needs re-exposed past the jail's tmpfs
-/// masks (the interpreters `/bin/sh`, `/usr/bin/env`, python3/nc for the net
-/// probe). Only existing paths are bound.
-#[cfg(any(
-    all(
-        target_os = "linux",
-        any(target_arch = "x86_64", target_arch = "aarch64")
-    ),
-    target_os = "macos",
-    target_os = "freebsd"
-))]
-#[must_use]
-pub fn default_ro_binds() -> Vec<CanonicalPath> {
-    ["/usr", "/bin", "/lib", "/lib64"]
-        .into_iter()
-        .filter_map(|p| CanonicalPath::resolve(Path::new(p)).ok())
-        .collect()
-}
-
-/// Windows: the jail reads no read-only tool binds, so the bind set is empty.
+/// The read-only binds every Tier-2 run starts from: none.
 ///
-/// The Job Object plus `AppContainer` grants reach by ACL-ing the scratch and
-/// working-tree, not by binding host tool paths past a tmpfs mask (there is no
-/// tmpfs mask on Windows). The `powershell.exe` interpreter resolves through the
-/// scrubbed `PATH`/`SystemRoot` the jail re-exports.
-#[cfg(target_os = "windows")]
+/// The wrapper's interpreters (`/bin/sh`, `/usr/bin/env`, python3/nc for the net
+/// probe) are already readable without a bind: the Linux jail's `--ro-bind / /`
+/// covers them and masks nothing above them, the macOS Seatbelt profile allows
+/// its fixed system read roots, the `FreeBSD` jail's root is one read-only
+/// mount, and the Windows jail resolves `powershell.exe` through the scrubbed
+/// `PATH`/`SystemRoot`. Binding the system trees again would only widen the set
+/// the cargo-home check must refuse (a `CARGO_HOME` under `/usr/local` would
+/// refuse every run) for no reach the payload lacks.
 #[must_use]
 pub const fn default_ro_binds() -> Vec<CanonicalPath> {
     Vec::new()
