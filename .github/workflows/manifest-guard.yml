@@ -14,6 +14,7 @@ on:
     branches: [main]
     paths:
       - '.github/workflows/**'
+      - '.github/actions/**'
       - '.github/ci/**'
   pull_request:
   workflow_dispatch: {}

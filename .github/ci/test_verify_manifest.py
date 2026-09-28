@@ -66,6 +66,12 @@ class SccacheFixture:
     def workflow(self, fname: str, content: str) -> None:
         _write(os.path.join(self.root, "workflows", fname), content)
 
+    def composite(self, name: str, content: str) -> None:
+        """Write an arbitrary local composite action at
+        `.github/actions/<name>/action.yml` — for wrapper/nesting/escape
+        fixtures, distinct from the sanctioned sccache composite itself."""
+        _write(os.path.join(self.root, "actions", name, "action.yml"), content)
+
     def deterministic_checks(self, *, context: str, step: str) -> None:
         import json
 
@@ -369,6 +375,337 @@ class TestSccacheWiringRefusals(unittest.TestCase):
         errors = fx.errors()
         self.assertTrue(
             any("no step writes RUSTC_WRAPPER" in e for e in errors), errors
+        )
+
+    # ---- (1) normalized local `uses:` path, not raw-string, comparison ---
+
+    def test_trailing_slash_composite_path_is_still_caught_by_rule_d(self) -> None:
+        self.fx.deterministic_checks(context="clippy", step="Run clippy")
+        self.fx.workflow(
+            "ci.yml",
+            textwrap.dedent(
+                """\
+                name: ci
+                on: push
+                jobs:
+                  clippy:
+                    runs-on: ubuntu-latest
+                    steps:
+                      - uses: ./.github/actions/sccache/
+                      - name: Run clippy
+                        run: cargo clippy
+                """
+            ),
+        )
+        errors = self.fx.errors()
+        self.assertTrue(
+            any(
+                "job 'clippy' uses ./.github/actions/sccache" in e
+                and "Run clippy" in e
+                for e in errors
+            ),
+            errors,
+        )
+
+    def test_dotted_composite_path_is_still_caught_by_rule_d(self) -> None:
+        self.fx.deterministic_checks(context="clippy", step="Run clippy")
+        self.fx.workflow(
+            "ci.yml",
+            textwrap.dedent(
+                """\
+                name: ci
+                on: push
+                jobs:
+                  clippy:
+                    runs-on: ubuntu-latest
+                    steps:
+                      - uses: ./.github/actions/./sccache
+                      - name: Run clippy
+                        run: cargo clippy
+                """
+            ),
+        )
+        errors = self.fx.errors()
+        self.assertTrue(
+            any(
+                "job 'clippy' uses ./.github/actions/sccache" in e
+                and "Run clippy" in e
+                for e in errors
+            ),
+            errors,
+        )
+
+    # ---- (2) other local composite actions are audited, not just workflows
+
+    def test_other_composite_running_raw_sccache_action_is_refused(self) -> None:
+        self.fx.composite(
+            "leaky",
+            textwrap.dedent(
+                """\
+                name: leaky
+                description: not the sanctioned composite
+                runs:
+                  using: composite
+                  steps:
+                    - uses: mozilla-actions/sccache-action@v0.0.9
+                """
+            ),
+        )
+        errors = self.fx.errors()
+        self.assertTrue(
+            any("runs the raw" in e and "leaky" in e for e in errors), errors
+        )
+
+    def test_other_composite_writing_github_env_is_refused(self) -> None:
+        self.fx.composite(
+            "sneaky",
+            textwrap.dedent(
+                """\
+                name: sneaky
+                description: hand-wires the wrapper itself
+                runs:
+                  using: composite
+                  steps:
+                    - name: Wire it by hand
+                      shell: bash
+                      run: |
+                        echo "RUSTC_WRAPPER=sccache" >> "$GITHUB_ENV"
+                """
+            ),
+        )
+        errors = self.fx.errors()
+        self.assertTrue(
+            any("writes RUSTC_WRAPPER" in e and "sneaky" in e for e in errors), errors
+        )
+
+    def test_other_composite_nesting_sccache_is_reachable_via_rule_d(self) -> None:
+        self.fx.composite(
+            "wrapper",
+            textwrap.dedent(
+                """\
+                name: wrapper
+                description: wraps the sanctioned composite one level deep
+                runs:
+                  using: composite
+                  steps:
+                    - uses: ./.github/actions/sccache
+                """
+            ),
+        )
+        self.fx.deterministic_checks(context="clippy", step="Run clippy")
+        self.fx.workflow(
+            "ci.yml",
+            textwrap.dedent(
+                """\
+                name: ci
+                on: push
+                jobs:
+                  clippy:
+                    runs-on: ubuntu-latest
+                    steps:
+                      - uses: ./.github/actions/wrapper
+                      - name: Run clippy
+                        run: cargo clippy
+                """
+            ),
+        )
+        errors = self.fx.errors()
+        self.assertTrue(
+            any(
+                "job 'clippy' uses" in e
+                and "via" in e
+                and "wrapper" in e
+                and "Run clippy" in e
+                for e in errors
+            ),
+            errors,
+        )
+
+    # ---- (3) a $GITHUB_ENV write need not use `KEY=` assignment syntax ----
+
+    def test_printf_style_github_env_write_is_refused(self) -> None:
+        self.fx.workflow(
+            "ci.yml",
+            textwrap.dedent(
+                """\
+                name: ci
+                on: push
+                jobs:
+                  build:
+                    runs-on: ubuntu-latest
+                    steps:
+                      - name: Sneak the wrapper in
+                        run: |
+                          printf '%s=%s\\n' RUSTC_WRAPPER sccache >> "$GITHUB_ENV"
+                """
+            ),
+        )
+        errors = self.fx.errors()
+        self.assertTrue(
+            any(
+                "writes RUSTC_WRAPPER" in e and "GITHUB_ENV" in e and "build" in e
+                for e in errors
+            ),
+            errors,
+        )
+
+    # ---- (4) the fuller wrapper-var SSOT is enforced, not just RUSTC_WRAPPER
+
+    def test_cargo_build_rustc_wrapper_env_key_is_refused(self) -> None:
+        self.fx.workflow(
+            "ci.yml",
+            textwrap.dedent(
+                """\
+                name: ci
+                on: push
+                jobs:
+                  build:
+                    runs-on: ubuntu-latest
+                    env:
+                      CARGO_BUILD_RUSTC_WRAPPER: sccache
+                    steps:
+                      - uses: ./.github/actions/sccache
+                """
+            ),
+        )
+        errors = self.fx.errors()
+        self.assertTrue(
+            any(
+                "job 'build' env sets" in e and "cargo_build_rustc_wrapper" in e
+                for e in errors
+            ),
+            errors,
+        )
+
+    # ---- (5) `.yaml` workflows are scanned, not just `.yml` ---------------
+
+    def test_dot_yaml_workflow_extension_is_scanned(self) -> None:
+        self.fx.workflow(
+            "nightly.yaml",
+            textwrap.dedent(
+                """\
+                name: nightly
+                on: schedule
+                jobs:
+                  build:
+                    runs-on: ubuntu-latest
+                    steps:
+                      - uses: mozilla-actions/sccache-action@v0.0.9
+                """
+            ),
+        )
+        errors = self.fx.errors()
+        self.assertTrue(
+            any("runs the raw" in e and "nightly.yaml" in e for e in errors), errors
+        )
+
+    # ---- (6) container:/services: env scopes are scanned too --------------
+
+    def test_container_env_is_refused(self) -> None:
+        self.fx.workflow(
+            "ci.yml",
+            textwrap.dedent(
+                """\
+                name: ci
+                on: push
+                jobs:
+                  build:
+                    runs-on: ubuntu-latest
+                    container:
+                      image: rust:latest
+                      env:
+                        RUSTC_WRAPPER: sccache
+                    steps:
+                      - uses: ./.github/actions/sccache
+                """
+            ),
+        )
+        errors = self.fx.errors()
+        self.assertTrue(
+            any(
+                "job 'build' container env sets" in e and "rustc_wrapper" in e
+                for e in errors
+            ),
+            errors,
+        )
+
+    def test_service_env_is_refused(self) -> None:
+        self.fx.workflow(
+            "ci.yml",
+            textwrap.dedent(
+                """\
+                name: ci
+                on: push
+                jobs:
+                  build:
+                    runs-on: ubuntu-latest
+                    services:
+                      db:
+                        image: postgres
+                        env:
+                          SCCACHE_GHA_ENABLED: "true"
+                    steps:
+                      - uses: ./.github/actions/sccache
+                """
+            ),
+        )
+        errors = self.fx.errors()
+        self.assertTrue(
+            any(
+                "job 'build' service 'db' env sets" in e
+                and "sccache_gha_enabled" in e
+                for e in errors
+            ),
+            errors,
+        )
+
+    # ---- (7) a non-mapping `env:` fails closed instead of defaulting empty
+
+    def test_non_mapping_workflow_env_fails_closed(self) -> None:
+        self.fx.workflow(
+            "ci.yml",
+            textwrap.dedent(
+                """\
+                name: ci
+                on: push
+                env: ${{ fromJSON(vars.E) }}
+                jobs:
+                  build:
+                    runs-on: ubuntu-latest
+                    steps:
+                      - uses: ./.github/actions/sccache
+                """
+            ),
+        )
+        errors = self.fx.errors()
+        self.assertTrue(
+            any("not a plain mapping" in e and "ci.yml" in e for e in errors), errors
+        )
+
+    def test_non_mapping_step_env_fails_closed(self) -> None:
+        self.fx.workflow(
+            "ci.yml",
+            textwrap.dedent(
+                """\
+                name: ci
+                on: push
+                jobs:
+                  build:
+                    runs-on: ubuntu-latest
+                    steps:
+                      - uses: ./.github/actions/sccache
+                      - name: Some step
+                        env: ${{ fromJSON(vars.E) }}
+                        run: cargo build
+                """
+            ),
+        )
+        errors = self.fx.errors()
+        self.assertTrue(
+            any(
+                "not a plain mapping" in e and "Some step" in e for e in errors
+            ),
+            errors,
         )
 
 
