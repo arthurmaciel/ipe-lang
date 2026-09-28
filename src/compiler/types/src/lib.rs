@@ -2876,18 +2876,17 @@ mod tests {
         );
         let (solved, i, m) = infer_src(&src);
         assert!(
-            solved.is_ok(),
+            matches!((&solved, &m), (Ok(_), Some(_))),
             "generic record signature must typecheck: {solved:?}"
         );
         let (Ok(solved), Some(m)) = (solved, m) else {
             return;
         };
-        let Some(wrap) = def_key(&i, &m, "wrap") else {
-            return;
-        };
-        let Some(ty) = solved.env.get(&wrap) else {
-            return;
-        };
+        let wrap = def_key(&i, &m, "wrap").expect("wrap must be defined in canon");
+        let ty = solved
+            .env
+            .get(&wrap)
+            .expect("wrap must have an inferred type");
         // `wrap : a -> { value : a }` — the parameter's type variable and the
         // record field's type variable must be the SAME id. Extract both ids
         // structurally, then assert their identity (so a wrong shape fails the
@@ -3159,12 +3158,11 @@ mod tests {
         assert!(solved.is_ok(), "inference must succeed");
         let Ok(solved) = solved else { return };
 
-        let Some(update) = def_key(&i, &m, "update") else {
-            return;
-        };
-        let Some(ty) = solved.env.get(&update) else {
-            return;
-        };
+        let update = def_key(&i, &m, "update").expect("update must be defined in canon");
+        let ty = solved
+            .env
+            .get(&update)
+            .expect("update must have an inferred type");
 
         // Msg -> (Int -> Int)
         assert!(matches!(ty, Ty::Fun(..)), "update is an arrow");
@@ -3222,9 +3220,9 @@ mod tests {
         );
 
         // The outer arg is the string literal "x" : String
-        let Some(str_arg) = outer_args.first() else {
-            return;
-        };
+        let str_arg = outer_args
+            .first()
+            .expect("main body call must have at least one arg");
         assert!(
             matches!(&str_arg.value, canon::Expr_::Str(_)),
             "setenv outer arg is a string literal"
@@ -3284,9 +3282,7 @@ mod tests {
         );
 
         // First arm body `count + 1` : Int
-        let Some(first) = branches.first() else {
-            return;
-        };
+        let first = branches.first().expect("case must have at least one arm");
         assert!(
             matches!(first.body.value, canon::Expr_::Binop { .. }),
             "arm body is binop"
@@ -3309,9 +3305,7 @@ mod tests {
         let solved = infer(&m, &mut i);
         assert!(solved.is_ok(), "inference must succeed");
         let Ok(solved) = solved else { return };
-        let Some(main) = def_key(&i, &m, "main") else {
-            return;
-        };
+        let main = def_key(&i, &m, "main").expect("main must be defined in canon");
         let main_ty = solved.env.get(&main);
         assert!(
             matches!(
@@ -3367,10 +3361,9 @@ mod tests {
     /// mirroring what the real multi-file build driver does
     /// (`ipe::project` discovers + topo-orders files, `ipe_canon::link`
     /// merges them into one program). Each entry is `(dotted module path,
-    /// source)`. Returns `None` on any parse / canonicalise / link failure —
-    /// per this file's existing convention, a `None` here means "test can't
-    /// run" (fails the caller's own `let Some(..) = .. else { return; }`
-    /// guard), it is never itself the assertion.
+    /// source)`. Returns `None` on any parse / canonicalise / link failure;
+    /// callers `.expect(..)` this so a setup failure fails the test loudly
+    /// instead of returning early — it is never itself the assertion.
     fn link_modules(modules_src: &[(&str, &str)]) -> Option<(canon::Module, Interner)> {
         let mut i = Interner::new();
         let mut deps: BTreeMap<Vec<Symbol>, ipe_canon::ModuleExports> = BTreeMap::new();
@@ -3414,11 +3407,10 @@ mod tests {
              import ModA exposing (useInt)\n\n\
              useBool : Bool\n\
              useBool =\n    ident (0 == 0)\n\n\
-             main =\n    Io.println (String.fromInt useInt)\n",
+             main =\n    useInt\n",
         );
-        let Some((m, mut i)) = link_modules(&[LIB1_IDENT, mid, main]) else {
-            return;
-        };
+        let (m, mut i) = link_modules(&[LIB1_IDENT, mid, main])
+            .expect("multi-module fixture must parse, canonicalise, and link");
         let r = infer(&m, &mut i);
         assert!(
             r.is_ok(),
@@ -3451,11 +3443,10 @@ mod tests {
              import ModA exposing (ints)\n\n\
              bools : List Bool\n\
              bools =\n    empty\n\n\
-             main =\n    Io.println (String.fromInt (List.length ints + List.length bools))\n",
+             main =\n    0\n",
         );
-        let Some((m, mut i)) = link_modules(&[lib, mid, main]) else {
-            return;
-        };
+        let (m, mut i) = link_modules(&[lib, mid, main])
+            .expect("multi-module fixture must parse, canonicalise, and link");
         let r = infer(&m, &mut i);
         assert!(
             r.is_ok(),
@@ -3477,11 +3468,10 @@ mod tests {
              twice x =\n    ident (ident x)\n\n\
              useInt : Int\n\
              useInt =\n    twice 5\n\n\
-             main =\n    Io.println (String.fromInt useInt)\n",
+             main =\n    useInt\n",
         );
-        let Some((m, mut i)) = link_modules(&[LIB1_IDENT, main]) else {
-            return;
-        };
+        let (m, mut i) = link_modules(&[LIB1_IDENT, main])
+            .expect("multi-module fixture must parse, canonicalise, and link");
         let r = infer(&m, &mut i);
         assert!(
             r.is_ok(),
@@ -3509,11 +3499,10 @@ mod tests {
              import Lib1 exposing (isEven)\n\n\
              result : Bool\n\
              result =\n    isEven 4\n\n\
-             main =\n    Io.println (String.fromInt (if result then 1 else 0))\n",
+             main =\n    result\n",
         );
-        let Some((m, mut i)) = link_modules(&[lib, main]) else {
-            return;
-        };
+        let (m, mut i) = link_modules(&[lib, main])
+            .expect("multi-module fixture must parse, canonicalise, and link");
         let r = infer(&m, &mut i);
         assert!(
             r.is_ok(),
@@ -3541,11 +3530,10 @@ mod tests {
              import Lib1 exposing (getName)\n\n\
              name : String\n\
              name =\n    getName { name = \"Ada\" }\n\n\
-             main =\n    Io.println name\n",
+             main =\n    name\n",
         );
-        let Some((m, mut i)) = link_modules(&[lib, main]) else {
-            return;
-        };
+        let (m, mut i) = link_modules(&[lib, main])
+            .expect("multi-module fixture must parse, canonicalise, and link");
         let r = infer(&m, &mut i);
         assert!(
             r.is_ok(),
@@ -3574,11 +3562,10 @@ mod tests {
              import ModA exposing (aName)\n\n\
              bName : String\n\
              bName =\n    getName { name = \"Bea\", age = 9 }\n\n\
-             main =\n    Io.println (aName ++ bName)\n",
+             main =\n    aName ++ bName\n",
         );
-        let Some((m, mut i)) = link_modules(&[lib, mid, main]) else {
-            return;
-        };
+        let (m, mut i) = link_modules(&[lib, mid, main])
+            .expect("multi-module fixture must parse, canonicalise, and link");
         let r = infer(&m, &mut i);
         assert!(
             r.is_err(),
@@ -3610,11 +3597,10 @@ mod tests {
             "Main",
             "module Main exposing (main)\n\n\
              import Lib1 exposing (setName)\n\n\
-             main =\n    Io.println ((setName { name = \"Ada\" } \"Bea\").name)\n",
+             main =\n    (setName { name = \"Ada\" } \"Bea\").name\n",
         );
-        let Some((m, mut i)) = link_modules(&[lib, main]) else {
-            return;
-        };
+        let (m, mut i) = link_modules(&[lib, main])
+            .expect("multi-module fixture must parse, canonicalise, and link");
         let r = infer(&m, &mut i);
         assert!(
             r.is_ok(),
@@ -3622,10 +3608,8 @@ mod tests {
              helper must typecheck: {r:?}"
         );
         let Ok(solved) = r else { return };
-        let Ok(lib1) = i.intern("Lib1") else { return };
-        let Ok(set_name) = i.intern("setName") else {
-            return;
-        };
+        let lib1 = i.intern("Lib1").expect("intern Lib1");
+        let set_name = i.intern("setName").expect("intern setName");
         // An all-monomorphic scheme is skipped when `untyped_type_params` is
         // populated (empty `quantified` ⇒ no entry), so the post-fix success
         // signal is "no entry OR an empty entry"; pre-fix the gap produced a
@@ -3666,11 +3650,10 @@ mod tests {
              import ModA exposing (sumInt)\n\n\
              sumFloat : Float\n\
              sumFloat =\n    plus 1.0 2.0\n\n\
-             main =\n    Io.println (String.fromInt sumInt)\n",
+             main =\n    sumInt\n",
         );
-        let Some((m, mut i)) = link_modules(&[lib, mid, main]) else {
-            return;
-        };
+        let (m, mut i) = link_modules(&[lib, mid, main])
+            .expect("multi-module fixture must parse, canonicalise, and link");
         let r = infer(&m, &mut i);
         assert!(
             r.is_err(),
@@ -3693,10 +3676,8 @@ mod tests {
                    useInt =\n    f 5\n\
                    useBool : Bool\n\
                    useBool =\n    f (0 == 0)\n\
-                   main =\n    Io.println (String.fromInt useInt)\n";
-        let Some((m, mut i)) = canon_src(src) else {
-            return;
-        };
+                   main =\n    useInt\n";
+        let (m, mut i) = canon_src(src).expect("fixture must parse and canonicalise");
         // `ident`'s own shared var unifies with `f`'s rigid skolem `a` while
         // `f`'s body is checked, so `ident` is rigid-contaminated. `f` itself
         // is typed (annotated) and genuinely polymorphic — its own two uses
@@ -3728,10 +3709,8 @@ mod tests {
                    type Msg = Increment | Decrement\n\
                    h : Int\n\
                    h = Increment\n\
-                   main =\n    Io.println (String.fromInt 0)\n";
-        let Some((m, mut i)) = canon_src(src) else {
-            return;
-        };
+                   main =\n    0\n";
+        let (m, mut i) = canon_src(src).expect("fixture must parse and canonicalise");
         let r = infer(&m, &mut i);
         assert!(
             matches!(
@@ -3766,17 +3745,18 @@ mod tests {
 
     #[test]
     fn call_arg_mismatch_expected_is_declared_param_found_is_actual_arg() {
-        // `Task.fail : Error -> Task Error a` called with a `String` argument:
-        // the DECLARED parameter type is the *expected* side and the user's
-        // actual argument the *found* side — "expected Error, found String",
-        // never the inversion. The Call arm must orient the constraint so the
-        // declared parameter, not the actual argument, lands on unify's
-        // *expected* side.
+        // `fail : Error -> Task Error a` (a stand-in for `Task.fail`, which lives
+        // in the compiled-source `Ipe.Task` module this unit-level harness
+        // cannot resolve) called with a `String` argument: the DECLARED
+        // parameter type is the *expected* side and the user's actual argument
+        // the *found* side — "expected Error, found String", never the
+        // inversion. The Call arm must orient the constraint so the declared
+        // parameter, not the actual argument, lands on unify's *expected* side.
         let src = "module Main exposing (main)\n\
-                   main =\n    Task.fail \"plain string\"\n";
-        let Some((m, mut i)) = canon_src(src) else {
-            return;
-        };
+                   fail : Error -> Task Error a\n\
+                   fail x =\n    fail x\n\n\
+                   main =\n    fail \"plain string\"\n";
+        let (m, mut i) = canon_src(src).expect("fixture must parse and canonicalise");
         let r = infer(&m, &mut i);
         assert!(
             matches!(
@@ -3786,7 +3766,7 @@ mod tests {
                     ..
                 })
             ),
-            "Task.fail \"str\" must be a TypeMismatch, got {r:?}"
+            "fail \"str\" must be a TypeMismatch, got {r:?}"
         );
         let Err(Diagnostic::Type {
             msg: TypeError::TypeMismatch {
@@ -3819,9 +3799,7 @@ mod tests {
         // Number var and would render as a type variable, not a Con.)
         let src = "module Main exposing (main)\n\
                    main =\n    let x = \"s\" in x 1\n";
-        let Some((m, mut i)) = canon_src(src) else {
-            return;
-        };
+        let (m, mut i) = canon_src(src).expect("fixture must parse and canonicalise");
         let r = infer(&m, &mut i);
         assert!(
             matches!(
@@ -3870,9 +3848,7 @@ mod tests {
             "fixture must parse + canonicalise (a None here would make the \
              test vacuous)"
         );
-        let Some((m, mut i)) = parsed else {
-            return;
-        };
+        let Some((m, mut i)) = parsed else { return };
         let r = infer(&m, &mut i);
         assert!(
             matches!(
@@ -3902,17 +3878,18 @@ mod tests {
         let src = "module Main exposing (main)\n\
                    f : Int -> Int\n\
                    f n =\n    if n > 0 then n else 0\n\
-                   main =\n    Io.println (String.fromInt (f 1))\n";
-        let Some((m, mut i)) = canon_src(src) else {
-            return;
-        };
+                   main =\n    f 1\n";
+        let (m, mut i) = canon_src(src).expect("fixture must parse and canonicalise");
         let r = infer(&m, &mut i);
         assert!(r.is_ok(), "well-typed if must infer: {r:?}");
         let Ok(solved) = r else { return };
-        let Some(f) = def_key(&i, &m, "f") else {
-            return;
-        };
-        let Some(Ty::Fun(arg, ret)) = solved.env.get(&f) else {
+        let f = def_key(&i, &m, "f").expect("f must be defined in canon");
+        let f_ty = solved.env.get(&f);
+        assert!(
+            matches!(f_ty, Some(Ty::Fun(..))),
+            "f must have an arrow type, got {f_ty:?}"
+        );
+        let Some(Ty::Fun(arg, ret)) = f_ty else {
             return;
         };
         assert_eq!(ty_con_name(arg, &i).as_deref(), Some("Int"));
@@ -3925,10 +3902,8 @@ mod tests {
         let src = "module Main exposing (main)\n\
                    f : Int -> Int\n\
                    f n =\n    if n then 1 else 0\n\
-                   main =\n    Io.println (String.fromInt (f 1))\n";
-        let Some((m, mut i)) = canon_src(src) else {
-            return;
-        };
+                   main =\n    f 1\n";
+        let (m, mut i) = canon_src(src).expect("fixture must parse and canonicalise");
         let r = infer(&m, &mut i);
         assert!(
             matches!(
@@ -3950,10 +3925,8 @@ mod tests {
                    type Msg = Increment | Decrement\n\
                    f : Int -> Int\n\
                    f n =\n    if n > 0 then 1 else Increment\n\
-                   main =\n    Io.println (String.fromInt (f 1))\n";
-        let Some((m, mut i)) = canon_src(src) else {
-            return;
-        };
+                   main =\n    f 1\n";
+        let (m, mut i) = canon_src(src).expect("fixture must parse and canonicalise");
         let r = infer(&m, &mut i);
         assert!(
             matches!(
@@ -3974,10 +3947,8 @@ mod tests {
         let src = "module Main exposing (main)\n\
                    g : Int\n\
                    g a = 0\n\
-                   main =\n    Io.println (String.fromInt 0)\n";
-        let Some((m, mut i)) = canon_src(src) else {
-            return;
-        };
+                   main =\n    0\n";
+        let (m, mut i) = canon_src(src).expect("fixture must parse and canonicalise");
         let r = infer(&m, &mut i);
         assert!(
             matches!(
@@ -4007,10 +3978,8 @@ mod tests {
                    type Msg = Increment | Decrement\n\
                    f : Msg -> Int\n\
                    f msg =\n        case msg of\n            Increment -> 1\n\
-                   main =\n    Io.println (String.fromInt 0)\n";
-        let Some((m, mut i)) = canon_src(src) else {
-            return;
-        };
+                   main =\n    0\n";
+        let (m, mut i) = canon_src(src).expect("fixture must parse and canonicalise");
         let r = infer(&m, &mut i);
         assert!(
             matches!(
@@ -4040,10 +4009,8 @@ mod tests {
         let src = "module Main exposing (main)\n\
                    f : Maybe Int -> Int\n\
                    f (Just x) = x\n\
-                   main =\n    Io.println (String.fromInt 0)\n";
-        let Some((m, mut i)) = canon_src(src) else {
-            return;
-        };
+                   main =\n    0\n";
+        let (m, mut i) = canon_src(src).expect("fixture must parse and canonicalise");
         let r = infer(&m, &mut i);
         assert!(
             matches!(
@@ -4064,10 +4031,8 @@ mod tests {
         let src = "module Main exposing (main)\n\
                    apply : (Maybe Int -> Int) -> Int\n\
                    apply f = f (Just 1)\n\
-                   main =\n    Io.println (String.fromInt (apply (\\(Just x) -> x)))\n";
-        let Some((m, mut i)) = canon_src(src) else {
-            return;
-        };
+                   main =\n    apply (\\(Just x) -> x)\n";
+        let (m, mut i) = canon_src(src).expect("fixture must parse and canonicalise");
         let r = infer(&m, &mut i);
         assert!(
             matches!(
@@ -4088,10 +4053,8 @@ mod tests {
         let src = "module Main exposing (main)\n\
                    f : Int -> (Int, Int) -> Int\n\
                    f _ (a, b) = a + b\n\
-                   main =\n    Io.println (String.fromInt (f 9 (1, 2)))\n";
-        let Some((m, mut i)) = canon_src(src) else {
-            return;
-        };
+                   main =\n    f 9 (1, 2)\n";
+        let (m, mut i) = canon_src(src).expect("fixture must parse and canonicalise");
         let r = infer(&m, &mut i);
         assert!(
             r.is_ok(),
@@ -4110,10 +4073,8 @@ mod tests {
                    f : Msg -> Int\n\
                    f msg =\n        case msg of\n            Increment -> 1\n\
                    \x20           Decrement -> 2\n            Increment -> 3\n\
-                   main =\n    Io.println (String.fromInt 0)\n";
-        let Some((m, mut i)) = canon_src(src) else {
-            return;
-        };
+                   main =\n    0\n";
+        let (m, mut i) = canon_src(src).expect("fixture must parse and canonicalise");
         let r = infer(&m, &mut i);
         let types = r.expect("redundant branch is a warning (IPE-T0011), not an error");
         assert_eq!(
@@ -4151,10 +4112,8 @@ mod tests {
                    type Color = Red | Green | Blue\n\
                    name : Color -> Int\n\
                    name c =\n        case c of\n            Red | Green | Blue -> 1\n\
-                   main =\n    Io.println (String.fromInt (name Red))\n";
-        let Some((m, mut i)) = canon_src(src) else {
-            return;
-        };
+                   main =\n    name Red\n";
+        let (m, mut i) = canon_src(src).expect("fixture must parse and canonicalise");
         let r = infer(&m, &mut i);
         assert!(
             r.is_ok(),
@@ -4172,10 +4131,8 @@ mod tests {
                    type Color = Red | Green | Blue\n\
                    name : Color -> Int\n\
                    name c =\n        case c of\n            Red | Green -> 1\n\
-                   main =\n    Io.println (String.fromInt (name Red))\n";
-        let Some((m, mut i)) = canon_src(src) else {
-            return;
-        };
+                   main =\n    name Red\n";
+        let (m, mut i) = canon_src(src).expect("fixture must parse and canonicalise");
         let err = infer(&m, &mut i)
             .expect_err("an or-group missing a union variant must be non-exhaustive (IPE-T0010)");
         assert!(
@@ -4209,10 +4166,8 @@ mod tests {
                    label c =\n        case c of\n\
                    \x20           Red | Green -> 1\n\
                    \x20           Green | Blue -> 2\n\
-                   main =\n    Io.println (String.fromInt (label Blue))\n";
-        let Some((m, mut i)) = canon_src(src) else {
-            return;
-        };
+                   main =\n    label Blue\n";
+        let (m, mut i) = canon_src(src).expect("fixture must parse and canonicalise");
         let r = infer(&m, &mut i);
         let types = r.expect("a per-alternative redundancy is a warning, not an error");
         let redundant: Vec<_> = types
@@ -4244,10 +4199,8 @@ mod tests {
                    f c =\n        case c of\n\
                    \x20           Red | Red -> 1\n\
                    \x20           Green -> 2\n            Blue -> 3\n\
-                   main =\n    Io.println (String.fromInt (f Green))\n";
-        let Some((m, mut i)) = canon_src(src) else {
-            return;
-        };
+                   main =\n    f Green\n";
+        let (m, mut i) = canon_src(src).expect("fixture must parse and canonicalise");
         let r = infer(&m, &mut i);
         let types = r.expect("an internally-redundant or-pattern is a warning, not an error");
         let redundant = types
@@ -4277,7 +4230,7 @@ mod tests {
                    type Shape = Circle Int | Dot\n\
                    bad : Shape -> Int\n\
                    bad s =\n        case s of\n            Circle r | Dot -> r\n\
-                   main =\n    Io.println (String.fromInt 0)\n";
+                   main =\n    0\n";
         let mut i = Interner::new();
         let parsed = ipe_parse::parse_module(src, &mut i).expect("source parses");
         let r = ipe_canon::canonicalise(&parsed, &mut i);
@@ -4312,7 +4265,7 @@ mod tests {
                    type Shape = Pair Int Int | Dot\n\
                    bad : Shape -> Int\n\
                    bad s =\n        case s of\n            Pair z a | Dot -> z + a\n\
-                   main =\n    Io.println (String.fromInt 0)\n";
+                   main =\n    0\n";
         let mut i = Interner::new();
         let parsed = ipe_parse::parse_module(src, &mut i).expect("source parses");
         let r = ipe_canon::canonicalise(&parsed, &mut i);
@@ -4354,10 +4307,8 @@ mod tests {
                    name c =\n        case c of\n\
                    \x20           Red -> \"red\"\n\
                    \x20           _ -> \"other\"\n\
-                   main =\n    Io.println (String.fromInt 0)\n";
-        let Some((m, mut i)) = canon_src(src) else {
-            return;
-        };
+                   main =\n    0\n";
+        let (m, mut i) = canon_src(src).expect("fixture must parse and canonicalise");
         let r = infer(&m, &mut i);
         let err = r.expect_err(
             "a closed-union catch-all must FAIL compilation (not just warn) — \
@@ -4412,10 +4363,8 @@ mod tests {
                    toMaybe c =\n        case c of\n\
                    \x20           Green -> Just 1\n\
                    \x20           _ -> Nothing\n\
-                   main =\n    Io.println (String.fromInt 0)\n";
-        let Some((m, mut i)) = canon_src(src) else {
-            return;
-        };
+                   main =\n    0\n";
+        let (m, mut i) = canon_src(src).expect("fixture must parse and canonicalise");
         let r = infer(&m, &mut i);
         let err =
             r.expect_err("a module with multiple closed-union catch-alls must FAIL compilation");
@@ -4453,10 +4402,8 @@ mod tests {
                    \x20           Green -> \"green\"\n\
                    \x20           Blue -> \"blue\"\n\
                    \x20           _ -> \"other\"\n\
-                   main =\n    Io.println (String.fromInt 0)\n";
-        let Some((m, mut i)) = canon_src(src) else {
-            return;
-        };
+                   main =\n    0\n";
+        let (m, mut i) = canon_src(src).expect("fixture must parse and canonicalise");
         let r = infer(&m, &mut i);
         let types = r.expect("fully-covered wildcard is a warning (IPE-T0011), not an error");
         let t0018: Vec<_> = types
@@ -4508,10 +4455,8 @@ mod tests {
                    \x20           Red -> \"red\"\n\
                    \x20           Green -> \"green\"\n\
                    \x20           Blue -> \"blue\"\n\
-                   main =\n    Io.println (String.fromInt 0)\n";
-        let Some((m, mut i)) = canon_src(src) else {
-            return;
-        };
+                   main =\n    0\n";
+        let (m, mut i) = canon_src(src).expect("fixture must parse and canonicalise");
         let r = infer(&m, &mut i);
         let types = r.expect("exhaustive explicit case must type-check");
         let t0018: Vec<_> = types
@@ -4545,10 +4490,8 @@ mod tests {
                    \x20           0 -> \"zero\"\n\
                    \x20           1 -> \"one\"\n\
                    \x20           _ -> \"other\"\n\
-                   main =\n    Io.println (String.fromInt 0)\n";
-        let Some((m, mut i)) = canon_src(src) else {
-            return;
-        };
+                   main =\n    0\n";
+        let (m, mut i) = canon_src(src).expect("fixture must parse and canonicalise");
         let r = infer(&m, &mut i);
         let types = r.expect("wildcard on Int must type-check");
         let t0018: Vec<_> = types
@@ -4580,10 +4523,8 @@ mod tests {
                    label b =\n        case b of\n\
                    \x20           True -> \"yes\"\n\
                    \x20           _ -> \"no\"\n\
-                   main =\n    Io.println (String.fromInt 0)\n";
-        let Some((m, mut i)) = canon_src(src) else {
-            return;
-        };
+                   main =\n    0\n";
+        let (m, mut i) = canon_src(src).expect("fixture must parse and canonicalise");
         let r = infer(&m, &mut i);
         let types = r.expect("wildcard on Bool must type-check");
         let t0018 = types
@@ -4615,10 +4556,8 @@ mod tests {
                    isEmpty xs =\n        case xs of\n\
                    \x20           [] -> \"empty\"\n\
                    \x20           _ -> \"non-empty\"\n\
-                   main =\n    Io.println (String.fromInt 0)\n";
-        let Some((m, mut i)) = canon_src(src) else {
-            return;
-        };
+                   main =\n    0\n";
+        let (m, mut i) = canon_src(src).expect("fixture must parse and canonicalise");
         let r = infer(&m, &mut i);
         let types = r.expect("wildcard on List must type-check");
         let t0018 = types
@@ -4652,10 +4591,8 @@ mod tests {
                    name : Color -> String\n\
                    name c =\n        case c of\n\
                    \x20           _ -> \"other\"\n\
-                   main =\n    Io.println (String.fromInt 0)\n";
-        let Some((m, mut i)) = canon_src(src) else {
-            return;
-        };
+                   main =\n    0\n";
+        let (m, mut i) = canon_src(src).expect("fixture must parse and canonicalise");
         let r = infer(&m, &mut i);
         let err = r.expect_err(
             "a bare `_ ->`-only case over a closed union must FAIL compilation — \
@@ -4701,10 +4638,8 @@ mod tests {
                    name : Color -> String\n\
                    name c =\n        case c of\n\
                    \x20           Debug._ -> \"other\"\n\
-                   main =\n    Io.println (String.fromInt 0)\n";
-        let Some((m, mut i)) = canon_src(src) else {
-            return;
-        };
+                   main =\n    0\n";
+        let (m, mut i) = canon_src(src).expect("fixture must parse and canonicalise");
         let types = infer(&m, &mut i)
             .expect("`Debug._` is the dev-only escape hatch — it type-checks (no IPE-T0018)");
         let t0018 = types
@@ -4749,11 +4684,9 @@ mod tests {
                    view : Int -> List Int\n\
                    view n =\n        wrap [ n, n + 1 ] [ n - 1 ]\n\
                    wrap : List Int -> List Int -> List Int\n\
-                   wrap a b =\n        List.append a b\n\
-                   main =\n    Io.println (String.fromInt (step Reset 0))\n";
-        let Some((m, mut i)) = canon_src(src) else {
-            return;
-        };
+                   wrap a b =\n        a ++ b\n\
+                   main =\n    step Reset 0\n";
+        let (m, mut i) = canon_src(src).expect("fixture must parse and canonicalise");
         let r = infer(&m, &mut i);
         let types = r.expect("an exhaustive, non-redundant program must type-check");
         let redundant: Vec<_> = types
@@ -4892,10 +4825,8 @@ mod tests {
                    f : Opt (Opt Int) -> Int\n\
                    f o =\n        case o of\n            Som (Som x) -> x\n\
                    \x20           Non -> 0\n\
-                   main =\n    Io.println (String.fromInt 0)\n";
-        let Some((m, mut i)) = canon_src(src) else {
-            return;
-        };
+                   main =\n    0\n";
+        let (m, mut i) = canon_src(src).expect("fixture must parse and canonicalise");
         let r = infer(&m, &mut i);
         assert!(
             matches!(
@@ -4932,10 +4863,8 @@ mod tests {
                    f : Opt (Opt Int) -> Int\n\
                    f o =\n        case o of\n            Som x -> 1\n\
                    \x20           Som (Som y) -> y\n            Non -> 0\n\
-                   main =\n    Io.println (String.fromInt 0)\n";
-        let Some((m, mut i)) = canon_src(src) else {
-            return;
-        };
+                   main =\n    0\n";
+        let (m, mut i) = canon_src(src).expect("fixture must parse and canonicalise");
         let r = infer(&m, &mut i);
         let types = r.expect("redundant branch is a warning (IPE-T0011), not an error");
         assert_eq!(
@@ -4972,10 +4901,8 @@ mod tests {
                    f : Opt (Opt Int) -> Int\n\
                    f o =\n        case o of\n            Som (Som x) -> x\n\
                    \x20           Som Non -> 0\n            Non -> 0\n\
-                   main =\n    Io.println (String.fromInt 0)\n";
-        let Some((m, mut i)) = canon_src(src) else {
-            return;
-        };
+                   main =\n    0\n";
+        let (m, mut i) = canon_src(src).expect("fixture must parse and canonicalise");
         // Exhaustiveness passes: the two `Som` arms discriminate on their nested
         // sub-pattern and together with `Non` cover every value. So `infer` must
         // succeed (the lowerer then emits one Rust arm per source arm).
@@ -4990,10 +4917,8 @@ mod tests {
         // `f x = x x` forces `a = a -> b`, tripping the occurs check.
         let src = "module Main exposing (main)\n\
                    f x = x x\n\
-                   main =\n    Io.println (String.fromInt 0)\n";
-        let Some((m, mut i)) = canon_src(src) else {
-            return;
-        };
+                   main =\n    0\n";
+        let (m, mut i) = canon_src(src).expect("fixture must parse and canonicalise");
         let r = infer(&m, &mut i);
         assert!(
             matches!(
@@ -5025,8 +4950,7 @@ mod tests {
     #[test]
     fn exhaustive_case_passes_the_check() {
         // The golden program's `update` covers every `Msg` constructor.
-        let opt = canon_golden();
-        let Some((m, mut i)) = opt else { return };
+        let (m, mut i) = canon_golden().expect("golden fixture must parse and canonicalise");
         assert!(
             infer(&m, &mut i).is_ok(),
             "an exhaustive, non-redundant program must pass the new pass"
@@ -5294,9 +5218,7 @@ mod tests {
     fn accessing_a_missing_field_is_no_such_field() {
         // `{ x = 1 }` has no `y`: a closed record rejects the access (IPE-T0012).
         let source = "module Main exposing (v)\nv =\n    let p = { x = 1 } in p.y\n";
-        let Some((m, mut i)) = canon_src(source) else {
-            return;
-        };
+        let (m, mut i) = canon_src(source).expect("fixture must parse and canonicalise");
         let r = infer(&m, &mut i);
         assert!(
             matches!(
@@ -5314,9 +5236,7 @@ mod tests {
     fn accessing_a_field_on_a_non_record_is_no_such_field() {
         // `p` is an `Int`, so `p.x` has no field to read (IPE-T0012).
         let source = "module Main exposing (v)\nv =\n    let p = 5 in p.x\n";
-        let Some((m, mut i)) = canon_src(source) else {
-            return;
-        };
+        let (m, mut i) = canon_src(source).expect("fixture must parse and canonicalise");
         let r = infer(&m, &mut i);
         assert!(
             matches!(
@@ -5349,9 +5269,7 @@ mod tests {
         // update of an absent field (IPE-T0012).
         let source =
             "module Main exposing (v)\nv =\n    let p = { x = 1, y = 2 } in { p | z = 0 }\n";
-        let Some((m, mut i)) = canon_src(source) else {
-            return;
-        };
+        let (m, mut i) = canon_src(source).expect("fixture must parse and canonicalise");
         let r = infer(&m, &mut i);
         assert!(
             matches!(
@@ -5370,9 +5288,7 @@ mod tests {
         // `p.x` is an `Int`; updating it to a record `{ a = 1 }` cannot unify, so
         // the whole binding is a type error.
         let source = "module Main exposing (v)\nv =\n    let p = { x = 1, y = 2 } in { p | x = { a = 1 } }\n";
-        let Some((m, mut i)) = canon_src(source) else {
-            return;
-        };
+        let (m, mut i) = canon_src(source).expect("fixture must parse and canonicalise");
         assert!(
             infer(&m, &mut i).is_err(),
             "updating a field to a value of the wrong type must be a type error"
@@ -5383,9 +5299,7 @@ mod tests {
     fn updating_a_field_on_a_non_record_is_no_such_field() {
         // `p` is an `Int`, so `{ p | x = 1 }` has no field to update (IPE-T0012).
         let source = "module Main exposing (v)\nv =\n    let p = 5 in { p | x = 1 }\n";
-        let Some((m, mut i)) = canon_src(source) else {
-            return;
-        };
+        let (m, mut i) = canon_src(source).expect("fixture must parse and canonicalise");
         let r = infer(&m, &mut i);
         assert!(
             matches!(
@@ -5404,9 +5318,7 @@ mod tests {
         // `{ x = 1 } == { y = 1 }`: closed records unify only at equal field
         // sets, so this is a type error.
         let source = "module Main exposing (v)\nv : Bool\nv =\n    { x = 1 } == { y = 1 }\n";
-        let Some((m, mut i)) = canon_src(source) else {
-            return;
-        };
+        let (m, mut i) = canon_src(source).expect("fixture must parse and canonicalise");
         assert!(
             infer(&m, &mut i).is_err(),
             "records with different field sets must not unify"
@@ -5469,10 +5381,8 @@ mod tests {
                    useInt =\n    identity 5\n\
                    useBool : Bool\n\
                    useBool =\n    identity (0 == 0)\n\
-                   main =\n    Io.println (String.fromInt useInt)\n";
-        let Some((m, mut i)) = canon_src(src) else {
-            return;
-        };
+                   main =\n    useInt\n";
+        let (m, mut i) = canon_src(src).expect("fixture must parse and canonicalise");
         let r = infer(&m, &mut i);
         assert!(
             r.is_ok(),
@@ -5480,12 +5390,8 @@ mod tests {
         );
         let Ok(solved) = r else { return };
         // The two consumers settle at their concrete result types.
-        let Some(use_int) = def_key(&i, &m, "useInt") else {
-            return;
-        };
-        let Some(use_bool) = def_key(&i, &m, "useBool") else {
-            return;
-        };
+        let use_int = def_key(&i, &m, "useInt").expect("useInt must be defined in canon");
+        let use_bool = def_key(&i, &m, "useBool").expect("useBool must be defined in canon");
         assert_eq!(
             solved
                 .env
@@ -5561,10 +5467,8 @@ mod tests {
         let src = "module Main exposing (main)\n\
                    bad : a -> b\n\
                    bad x =\n    x\n\
-                   main =\n    Io.println (String.fromInt 0)\n";
-        let Some((m, mut i)) = canon_src(src) else {
-            return;
-        };
+                   main =\n    0\n";
+        let (m, mut i) = canon_src(src).expect("fixture must parse and canonicalise");
         assert!(
             matches!(
                 infer(&m, &mut i),
@@ -5588,10 +5492,8 @@ mod tests {
         let src = "module Main exposing (main)\n\
                    f : a -> a\n\
                    f x =\n    x + 1\n\
-                   main =\n    Io.println (String.fromInt 0)\n";
-        let Some((m, mut i)) = canon_src(src) else {
-            return;
-        };
+                   main =\n    0\n";
+        let (m, mut i) = canon_src(src).expect("fixture must parse and canonicalise");
         assert!(
             matches!(
                 infer(&m, &mut i),
@@ -5683,13 +5585,19 @@ mod tests {
                    useInt =\n    ident 5\n\
                    useBool : Bool\n\
                    useBool =\n    ident (0 == 0)\n\
-                   main =\n    Io.println (String.fromInt useInt)\n";
-        let Some((m, mut i)) = canon_src(src) else {
-            return;
-        };
+                   main =\n    useInt\n";
+        let (m, mut i) = canon_src(src).expect("fixture must parse and canonicalise");
+        let r = infer(&m, &mut i);
         assert!(
-            infer(&m, &mut i).is_err(),
-            "an unannotated binding used at Int and Bool must be rejected (monomorphic)"
+            matches!(
+                r,
+                Err(Diagnostic::Type {
+                    msg: TypeError::TypeMismatch { .. },
+                    ..
+                })
+            ),
+            "an unannotated binding used at Int and Bool must be rejected (monomorphic) \
+             with a TypeMismatch, got {r:?}"
         );
     }
 
@@ -5717,10 +5625,8 @@ mod tests {
         let src = "module Main exposing (main)\n\
                    double : a -> a\n\
                    double x =\n    x + x\n\
-                   main =\n    Io.println (String.fromInt (double 21))\n";
-        let Some((m, mut i)) = canon_src(src) else {
-            return;
-        };
+                   main =\n    double 21\n";
+        let (m, mut i) = canon_src(src).expect("fixture must parse and canonicalise");
         let solved = infer(&m, &mut i);
         assert!(solved.is_ok(), "double must type-check, got {solved:?}");
         let Ok(solved) = solved else { return };
@@ -5741,10 +5647,8 @@ mod tests {
         let src = "module Main exposing (main)\n\
                    maxOf : a -> a -> a\n\
                    maxOf p q =\n    if p > q then p else q\n\
-                   main =\n    Io.println (String.fromInt (maxOf 3 7))\n";
-        let Some((m, mut i)) = canon_src(src) else {
-            return;
-        };
+                   main =\n    maxOf 3 7\n";
+        let (m, mut i) = canon_src(src).expect("fixture must parse and canonicalise");
         let solved = infer(&m, &mut i);
         assert!(solved.is_ok(), "maxOf must type-check, got {solved:?}");
         let Ok(solved) = solved else { return };
@@ -5767,10 +5671,8 @@ mod tests {
                    double x =\n    x + x\n\
                    doubleFloat : Float -> Float\n\
                    doubleFloat x =\n    double x\n\
-                   main =\n    Io.println (String.fromInt (double 21))\n";
-        let Some((m, mut i)) = canon_src(src) else {
-            return;
-        };
+                   main =\n    double 21\n";
+        let (m, mut i) = canon_src(src).expect("fixture must parse and canonicalise");
         assert!(
             infer(&m, &mut i).is_ok(),
             "double used at Int and Float must type-check"
@@ -5786,10 +5688,8 @@ mod tests {
                    double x =\n    x + x\n\
                    doubleBool : Bool -> Bool\n\
                    doubleBool x =\n    double x\n\
-                   main =\n    Io.println (String.fromInt 0)\n";
-        let Some((m, mut i)) = canon_src(src) else {
-            return;
-        };
+                   main =\n    0\n";
+        let (m, mut i) = canon_src(src).expect("fixture must parse and canonicalise");
         assert!(
             matches!(
                 infer(&m, &mut i),
@@ -5836,10 +5736,8 @@ mod tests {
                    toF x =\n    x\n\
                    v : Float\n\
                    v =\n    toF 100\n\
-                   main =\n    Io.println (String.fromInt 0)\n";
-        let Some((m, mut i)) = canon_src(src) else {
-            return;
-        };
+                   main =\n    0\n";
+        let (m, mut i) = canon_src(src).expect("fixture must parse and canonicalise");
         assert!(
             infer(&m, &mut i).is_ok(),
             "an integer literal `100` must satisfy a `Float` parameter"
@@ -5856,10 +5754,8 @@ mod tests {
                    toI x =\n    x\n\
                    v : Int\n\
                    v =\n    toI 1.5\n\
-                   main =\n    Io.println (String.fromInt 0)\n";
-        let Some((m, mut i)) = canon_src(src) else {
-            return;
-        };
+                   main =\n    0\n";
+        let (m, mut i) = canon_src(src).expect("fixture must parse and canonicalise");
         assert!(
             infer(&m, &mut i).is_err(),
             "a float literal `1.5` must not satisfy an `Int` parameter"
@@ -5876,10 +5772,8 @@ mod tests {
         let src = "module Main exposing (main)\n\
                    f : a -> a\n\
                    f x =\n    x + 1\n\
-                   main =\n    Io.println (String.fromInt 0)\n";
-        let Some((m, mut i)) = canon_src(src) else {
-            return;
-        };
+                   main =\n    0\n";
+        let (m, mut i) = canon_src(src).expect("fixture must parse and canonicalise");
         assert!(
             matches!(
                 infer(&m, &mut i),
@@ -5992,21 +5886,18 @@ mod tests {
             "Main",
             "module Main exposing (main)\n\n\
              import Lib1 exposing (listLen)\n\n\
-             main =\n    Io.println (String.fromInt (listLen [ 90, 35 ]))\n",
+             main =\n    listLen [ 90, 35 ]\n",
         );
-        let Some((m, mut i)) = link_modules(&[lib, main]) else {
-            return;
-        };
+        let (m, mut i) = link_modules(&[lib, main])
+            .expect("multi-module fixture must parse, canonicalise, and link");
         let r = infer(&m, &mut i);
         assert!(
             r.is_ok(),
             "a polymorphic-list-element cross-module untyped def must typecheck: {r:?}"
         );
         let Ok(solved) = r else { return };
-        let Ok(lib1) = i.intern("Lib1") else { return };
-        let Ok(list_len) = i.intern("listLen") else {
-            return;
-        };
+        let lib1 = i.intern("Lib1").expect("intern Lib1");
+        let list_len = i.intern("listLen").expect("intern listLen");
         let quantified = solved.untyped_type_params.get(&(vec![lib1], list_len));
         assert!(
             quantified.is_some_and(|v| v.len() == 1),
@@ -6057,9 +5948,8 @@ mod tests {
              result =\n    Wrap stamp\n";
         let main = ("Main", main_src);
 
-        let Some((m, mut i)) = link_modules(&[lib, main]) else {
-            return;
-        };
+        let (m, mut i) = link_modules(&[lib, main])
+            .expect("multi-module fixture must parse, canonicalise, and link");
 
         // The mismatching sub-term is the `stamp` in the FINAL `Wrap stamp`;
         // the caret must land inside this byte range, never on `Just uid`.

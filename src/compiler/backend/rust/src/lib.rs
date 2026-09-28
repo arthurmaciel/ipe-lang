@@ -263,96 +263,144 @@ pub struct WebViewWindow {
     pub height: i64,
 }
 
+/// Exact names Cargo rejects outright.
+///
+/// Independent of the character-class steps in [`CargoPackageName::sanitize`]
+/// — verified against Cargo's own `validate_package_name` (pinned toolchain
+/// 1.98.1, checked with `cargo new`/`cargo build` against the emitted
+/// project's exact template):
+///
+/// * every strict/reserved [Rust keyword][reserved];
+/// * the toolchain binary name `ipe` (a crate so named would shadow the CLI
+///   on `$PATH`) and the weak keyword `union`, kept conservative for a crate
+///   name;
+/// * `build`, `deps`, `examples`, `incremental` — Cargo's own build-directory
+///   names, forbidden as a binary target (the emitted crate has no `[[bin]]`
+///   override, so the bin target is inferred from the package name);
+/// * `test` — collides with Rust's built-in test harness, confirmed to fail
+///   `cargo build` with "package name `test` conflicts with Rust's built-in
+///   test library";
+/// * the bare `_` — the Rust underscore token, not a legal identifier, even
+///   though Cargo's grammar check alone happens to accept it as a package
+///   name; guarded here as defense in depth rather than a proven build
+///   failure.
+///
+/// [reserved]: https://doc.rust-lang.org/reference/keywords.html
+fn is_reserved_cargo_name(name: &str) -> bool {
+    const EXTRA_SUFFIXED: &[&str] = &["ipe", "union", "test", "_"];
+    const CARGO_FORBIDDEN_BIN: &[&str] = &["build", "deps", "examples", "incremental"];
+
+    ipe_intern::is_rust_keyword(name)
+        || EXTRA_SUFFIXED.contains(&name)
+        || CARGO_FORBIDDEN_BIN.contains(&name)
+}
+
+/// A Cargo package name Cargo is guaranteed to accept.
+///
+/// The only way to build one is [`Self::sanitize`], a total function: every
+/// input, however hostile (empty, all-symbols, a reserved name, non-ASCII),
+/// yields a valid name. No other constructor exists, so an unsanitized
+/// string can never reach a manifest through this type.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct CargoPackageName(String);
+
+impl CargoPackageName {
+    /// Convert an arbitrary `package.ipe` name value into a valid Cargo
+    /// package name and binary name.
+    ///
+    /// Cargo package names must be non-empty, start with a letter or `_`,
+    /// contain only ASCII alphanumerics, `-`, and `_`, fit in 64 bytes, and
+    /// not be one of the names `is_reserved_cargo_name` rejects outright.
+    /// This applies a total, deterministic sanitization that never panics
+    /// and never produces an invalid name:
+    ///
+    /// 1. Lowercase the input.
+    /// 2. Replace every run of characters that are not `[a-z0-9_-]` with `-`.
+    /// 3. Strip leading and trailing `-`.
+    /// 4. If the result starts with a digit, prepend `app-`.
+    /// 5. If the result is empty (input was all-invalid chars, or was the
+    ///    empty string), use the fallback `ipe-app`.
+    /// 6. If the result is a name Cargo rejects outright, append `-app`.
+    /// 7. Truncate to 64 characters (Cargo's practical limit).
+    ///
+    /// Examples: `"my-app"` → `"my-app"`, `"My App"` → `"my-app"`,
+    /// `"1game"` → `"app-1game"`, `""` → `"ipe-app"`, `"mod"` → `"mod-app"`,
+    /// `"build"` → `"build-app"`, `"test"` → `"test-app"`, `"_"` → `"_-app"`.
+    #[must_use]
+    pub fn sanitize(name: &str) -> Self {
+        // Step 1: lowercase.
+        let lower = name.to_ascii_lowercase();
+
+        // Step 2: replace runs of invalid chars with `-`.
+        let mut out = String::with_capacity(lower.len());
+        let mut in_run = false;
+        for ch in lower.chars() {
+            if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' {
+                out.push(ch);
+                in_run = false;
+            } else if !in_run {
+                out.push('-');
+                in_run = true;
+            }
+        }
+
+        // Step 3: strip leading/trailing `-`.
+        let trimmed = out.trim_matches('-');
+
+        // Step 4: if the first char is a digit, prepend `app-`.
+        let mut result = if trimmed.starts_with(|c: char| c.is_ascii_digit()) {
+            format!("app-{trimmed}")
+        } else {
+            trimmed.to_owned()
+        };
+
+        // Step 5: empty → fallback.
+        if result.is_empty() {
+            return Self("ipe-app".to_owned());
+        }
+
+        // Step 6: any name Cargo rejects outright gets `-app` appended to
+        // keep the emitted crate buildable.
+        if is_reserved_cargo_name(&result) {
+            result.push_str("-app");
+        }
+
+        // Step 7: truncate to 64 chars at an ASCII boundary.
+        if result.len() > 64 {
+            result.truncate(64);
+            // Ensure we don't end on a `-` after truncation.
+            let trimmed_len = result.trim_end_matches('-').len();
+            result.truncate(trimmed_len);
+            if result.is_empty() {
+                return Self("ipe-app".to_owned());
+            }
+        }
+
+        Self(result)
+    }
+
+    /// Borrow the validated name.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    /// Consume into the owned, validated `String`.
+    #[must_use]
+    pub fn into_inner(self) -> String {
+        self.0
+    }
+}
+
 /// Convert an arbitrary `package.ipe` name value into a valid Cargo package
 /// name and binary name.
 ///
-/// Cargo package names must be non-empty, start with a letter or `_`, contain
-/// only ASCII alphanumerics, `-`, and `_`, and must not be a
-/// [reserved Rust identifier][reserved]. This function applies a total,
-/// deterministic sanitization that never panics and never produces an invalid
-/// name:
-///
-/// 1. Lowercase the input.
-/// 2. Replace every run of characters that are not `[a-z0-9_-]` with `-`.
-/// 3. Strip leading and trailing `-`.
-/// 4. If the result starts with a digit, prepend `app-`.
-/// 5. If the result is empty (input was all-invalid chars, or was the empty
-///    string), use the fallback `ipe-app`.
-/// 6. If the result is a [reserved Rust keyword][reserved], the fixed name
-///    `ipe` (the toolchain binary), or a name Cargo forbids as a binary target
-///    (`build`, `deps`, `examples`, `incremental`), append `-app`.
-/// 7. Truncate to 64 characters (Cargo's practical limit).
-///
-/// Examples: `"my-app"` → `"my-app"`, `"My App"` → `"my-app"`,
-/// `"1game"` → `"app-1game"`, `""` → `"ipe-app"`, `"mod"` → `"mod-app"`,
-/// `"build"` → `"build-app"`.
-///
-/// [reserved]: https://doc.rust-lang.org/reference/keywords.html
+/// A thin `String`-returning wrapper over [`CargoPackageName::sanitize`] for
+/// callers that only ever splice the result into a manifest string and don't
+/// need the typed wrapper.
 #[must_use]
 pub fn sanitize_cargo_name(name: &str) -> String {
-    // Non-keyword names that still get the suffix: the toolchain binary name
-    // (a crate named `ipe` would shadow the CLI on `$PATH`) and the weak
-    // keyword `union`, kept conservative for a crate name.
-    const EXTRA_SUFFIXED: &[&str] = &["ipe", "union"];
-
-    // Names Cargo forbids as a binary target because they collide with its
-    // build-directory names — the emitted crate has no `[[bin]]` override, so
-    // the bin target is inferred from the package name and would fail to parse.
-    const CARGO_FORBIDDEN_BIN: &[&str] = &["build", "deps", "examples", "incremental"];
-
-    // Step 1: lowercase.
-    let lower = name.to_ascii_lowercase();
-
-    // Step 2: replace runs of invalid chars with `-`.
-    let mut out = String::with_capacity(lower.len());
-    let mut in_run = false;
-    for ch in lower.chars() {
-        if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' {
-            out.push(ch);
-            in_run = false;
-        } else if !in_run {
-            out.push('-');
-            in_run = true;
-        }
-    }
-
-    // Step 3: strip leading/trailing `-`.
-    let trimmed = out.trim_matches('-');
-
-    // Step 4: if the first char is a digit, prepend `app-`.
-    let mut result = if trimmed.starts_with(|c: char| c.is_ascii_digit()) {
-        format!("app-{trimmed}")
-    } else {
-        trimmed.to_owned()
-    };
-
-    // Step 5: empty → fallback.
-    if result.is_empty() {
-        return "ipe-app".to_owned();
-    }
-
-    // Step 6: reserved Rust keywords, the extra suffixed names, and Cargo's
-    // forbidden binary-target names get `-app` appended to keep the emitted
-    // crate buildable.
-    if ipe_intern::is_rust_keyword(&result)
-        || EXTRA_SUFFIXED.contains(&result.as_str())
-        || CARGO_FORBIDDEN_BIN.contains(&result.as_str())
-    {
-        result.push_str("-app");
-    }
-
-    // Step 7: truncate to 64 chars at an ASCII boundary.
-    if result.len() > 64 {
-        result.truncate(64);
-        // Ensure we don't end on a `-` after truncation.
-        let trimmed_len = result.trim_end_matches('-').len();
-        result.truncate(trimmed_len);
-        if result.is_empty() {
-            return "ipe-app".to_owned();
-        }
-    }
-
-    result
+    CargoPackageName::sanitize(name).into_inner()
 }
 
 /// The number of lowercase-hex characters of the path digest appended as the
@@ -5786,6 +5834,81 @@ mod sanitize_cargo_name_tests {
     fn consecutive_invalid_chars_become_one_hyphen() {
         assert_eq!(sanitize_cargo_name("a  b"), "a-b");
         assert_eq!(sanitize_cargo_name("a!!b"), "a-b");
+    }
+
+    // Issue #2981's exact regression target: a purely-underscore name. `_`
+    // alone is the Rust underscore token, not a legal identifier, so it is
+    // guarded as defense in depth. Multi-underscore names (`__`, `___`) are
+    // legal identifiers and Cargo (1.98.1, verified with `cargo new`/`cargo
+    // build`) accepts them unmodified — pass through untouched, not silently
+    // rewritten into a name Cargo never actually rejected.
+    #[test]
+    fn all_underscore_name_is_handled() {
+        assert_eq!(sanitize_cargo_name("_"), "_-app");
+        assert_eq!(sanitize_cargo_name("__"), "__");
+        assert_eq!(sanitize_cargo_name("___"), "___");
+    }
+
+    // `test` is not a Rust keyword and was NOT in any prior guard list, but
+    // real Cargo (1.98.1, verified with `cargo new`/`cargo build`) rejects it:
+    // "package name `test` conflicts with Rust's built-in test library". This
+    // pins the confirmed gap #2981 closes.
+    #[test]
+    fn test_literal_gets_suffix() {
+        assert_eq!(sanitize_cargo_name("test"), "test-app");
+        assert_eq!(sanitize_cargo_name("Test"), "test-app");
+    }
+
+    // `std`/`core`/`alloc`/`proc_macro` were checked against real Cargo
+    // (1.98.1, `cargo new`/`cargo build`) and found buildable as package
+    // names — they are not rejected, so no guard is added for them; a guard
+    // here would pin a false premise into the fallback grammar.
+    #[test]
+    fn std_core_like_names_are_not_forced_into_fallback() {
+        assert_eq!(sanitize_cargo_name("std"), "std");
+        assert_eq!(sanitize_cargo_name("core"), "core");
+        assert_eq!(sanitize_cargo_name("alloc"), "alloc");
+        assert_eq!(sanitize_cargo_name("proc_macro"), "proc_macro");
+    }
+
+    // Class-closing property: `sanitize_cargo_name`'s output is NEVER itself
+    // one of the exact names Cargo rejects outright, for any input that
+    // collapses to one. Proves the refusal for the whole reserved set in one
+    // sweep, not just the handful of names spelled out above.
+    #[test]
+    fn output_never_collides_with_a_reserved_name() {
+        let mut candidates: Vec<&str> = ipe_intern::RUST_KEYWORDS.to_vec();
+        candidates.extend_from_slice(&[
+            "ipe",
+            "union",
+            "test",
+            "_",
+            "build",
+            "deps",
+            "examples",
+            "incremental",
+        ]);
+        let reserved: std::collections::HashSet<&str> = candidates.iter().copied().collect();
+        for candidate in candidates {
+            let sanitized = sanitize_cargo_name(candidate);
+            assert!(
+                !reserved.contains(sanitized.as_str()),
+                "sanitize_cargo_name({candidate:?}) = {sanitized:?} still collides with a reserved name"
+            );
+        }
+    }
+
+    // `sanitize_cargo_name` is a thin wrapper over the `CargoPackageName`
+    // smart constructor — the newtype is the actual invariant holder, and no
+    // caller can construct one except through `sanitize`.
+    #[test]
+    fn wrapper_matches_newtype_constructor() {
+        for input in ["my-app", "", "_", "test", "1game", "café", "mod"] {
+            assert_eq!(
+                sanitize_cargo_name(input),
+                super::CargoPackageName::sanitize(input).into_inner()
+            );
+        }
     }
 }
 
