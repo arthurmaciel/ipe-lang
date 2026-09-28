@@ -1582,10 +1582,10 @@ fn enum_facts_in(
     home: &ModPath,
     name: Symbol,
 ) -> DResult<EnumFacts> {
-    match enum_traits.get(&(home.clone(), name)) {
-        Some(traits) => Ok(EnumFacts::Registered(*traits)),
-        None => unregistered_enum_facts(interner, home, name),
-    }
+    enum_traits.get(&(home.clone(), name)).map_or_else(
+        || unregistered_enum_facts(interner, home, name),
+        |traits| Ok(EnumFacts::Registered(*traits)),
+    )
 }
 
 /// The greatest fixpoint of one trait over every registered enum.

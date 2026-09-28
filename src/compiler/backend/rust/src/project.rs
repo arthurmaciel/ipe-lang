@@ -3220,7 +3220,7 @@ fn ir_type_contains_non_serde(ty: &IrType, payloads: &ipe_ir::EnumPayloadTable) 
 /// here. Carriers the walk descends (`Maybe`, `List`, `Set`, `Result`, `Dict`,
 /// tuple, record, named enum) are not non-serde themselves; their components
 /// decide.
-fn is_non_serde_leaf(ty: &IrType) -> bool {
+const fn is_non_serde_leaf(ty: &IrType) -> bool {
     match ty {
         // ── Primitive data types — serialisable ──────────────────────────
         IrType::Int
