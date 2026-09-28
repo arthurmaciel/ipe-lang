@@ -2620,7 +2620,11 @@ mod tests {
     fn loose_build_past_the_module_limit_is_refused() {
         let dir = loose_scratch("limit");
         let count = crate::loose_file::MAX_LOOSE_FILE_MODULES;
-        let imports: String = (0..count).map(|i| format!("import M{i}\n")).collect();
+        use std::fmt::Write as _;
+        let imports = (0..count).fold(String::new(), |mut acc, i| {
+            let _ = writeln!(acc, "import M{i}");
+            acc
+        });
         let entry = dir.join("Main.ipe");
         fs::write(
             &entry,

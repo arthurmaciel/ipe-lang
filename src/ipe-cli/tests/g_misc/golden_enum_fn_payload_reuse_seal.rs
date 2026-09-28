@@ -71,7 +71,7 @@ fn assert_rejected(name: &str, entry: &Path, expected: ipe_diagnostics::Code) {
         return;
     };
     let out = out_dir(name);
-    match ipe::build_with_sibling_discovery(entry, &out, &runtime) {
+    match ipe::build_loose_file(entry, &out, &runtime) {
         Err(CliError::Pipeline { diag, .. }) => assert_eq!(
             diag.code(),
             expected,
@@ -102,7 +102,7 @@ fn accepted_out(name: &str, entry: &Path) -> Option<PathBuf> {
     );
     let runtime = runtime.ok()?;
     let out = out_dir(name);
-    match ipe::build_with_sibling_discovery(entry, &out, &runtime) {
+    match ipe::build_loose_file(entry, &out, &runtime) {
         Ok(()) => Some(out),
         Err(err) => {
             assert!(
@@ -153,7 +153,7 @@ main =
 "#;
 
 /// The same `H` consumed once — a bare move that needs no `Clone`.
-const BOXED_FN_PAYLOAD_ENUM_LINEAR: &str = r#"module Main exposing (main)
+const BOXED_FN_PAYLOAD_ENUM_LINEAR: &str = r"module Main exposing (main)
 
 import Ipe.Io as Io
 import Ipe.String as String
@@ -176,11 +176,11 @@ apply h x =
 
 main =
     Io.println (String.fromInt (apply (H (Just (\n -> n + 1))) 41))
-"#;
+";
 
 /// A function directly in the payload rides the `Arc` carrier, so `G` is
 /// `Clone` and reusing the param stays accepted.
-const SHARED_FN_PAYLOAD_ENUM_REUSE: &str = r#"module Main exposing (main)
+const SHARED_FN_PAYLOAD_ENUM_REUSE: &str = r"module Main exposing (main)
 
 import Ipe.Io as Io
 import Ipe.String as String
@@ -203,11 +203,11 @@ both g =
 
 main =
     Io.println (String.fromInt (both (G (\n -> n * 10))))
-"#;
+";
 
 /// A type recursive through the value a `Task` yields; classifying the `Stream`
 /// parameter walks that cycle and must terminate.
-const ENUM_RECURSIVE_THROUGH_A_TASK: &str = r#"module Main exposing (main)
+const ENUM_RECURSIVE_THROUGH_A_TASK: &str = r"module Main exposing (main)
 
 import Ipe.Io as Io
 import Ipe.String as String
@@ -230,10 +230,10 @@ headOr fallback s =
 
 main =
     Io.println (String.fromInt (headOr 7 End))
-"#;
+";
 
 /// Two types recursive through each other's `Task` results.
-const ENUMS_MUTUALLY_RECURSIVE_THROUGH_TASKS: &str = r#"module Main exposing (main)
+const ENUMS_MUTUALLY_RECURSIVE_THROUGH_TASKS: &str = r"module Main exposing (main)
 
 import Ipe.Io as Io
 import Ipe.String as String
@@ -260,7 +260,7 @@ pingOr fallback p =
 
 main =
     Io.println (String.fromInt (pingOr 0 (Stop 3)))
-"#;
+";
 
 #[test]
 fn boxed_fn_payload_enum_reuse_fails_closed() {

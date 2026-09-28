@@ -4312,7 +4312,7 @@ version = \"1\"
             (backward, source_conflict(&path, "version =1.0.0")),
         ] {
             assert!(
-                matches!(&r, Err(CliError::Usage(m)) if m.to_string() == expected),
+                matches!(&r, Err(CliError::Usage(m)) if *m == expected),
                 "{r:?}"
             );
         }
@@ -4329,7 +4329,7 @@ version = \"1\"
         let _ = std::fs::remove_dir_all(&project);
         let expected = source_conflict(&wrapper_source(&deps, 0), &wrapper_source(&deps, 1));
         assert!(
-            matches!(&r, Err(CliError::Usage(m)) if m.to_string() == expected),
+            matches!(&r, Err(CliError::Usage(m)) if *m == expected),
             "{r:?}"
         );
     }
@@ -4354,7 +4354,7 @@ version = \"1\"
             &wrapper_source(&wrapper, 0),
         );
         assert!(
-            matches!(&r, Err(CliError::Usage(m)) if m.to_string() == expected),
+            matches!(&r, Err(CliError::Usage(m)) if *m == expected),
             "{r:?}"
         );
     }

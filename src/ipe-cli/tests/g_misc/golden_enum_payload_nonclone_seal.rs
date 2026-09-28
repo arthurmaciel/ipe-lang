@@ -64,7 +64,7 @@ fn assert_rejected(name: &str, entry: &Path, expected: ipe_diagnostics::Code) {
     let runtime =
         ipe::resolve_runtime().expect("runtime must resolve to prove the fail-closed refusal");
     let out = out_dir(name);
-    match ipe::build_with_sibling_discovery(entry, &out, &runtime) {
+    match ipe::build_loose_file(entry, &out, &runtime) {
         Err(CliError::Pipeline { diag, .. }) => assert_eq!(
             diag.code(),
             expected,
@@ -88,7 +88,7 @@ fn assert_rejected(name: &str, entry: &Path, expected: ipe_diagnostics::Code) {
 fn accepted_out(name: &str, entry: &Path) -> Option<PathBuf> {
     let runtime = ipe::resolve_runtime().ok()?;
     let out = out_dir(name);
-    match ipe::build_with_sibling_discovery(entry, &out, &runtime) {
+    match ipe::build_loose_file(entry, &out, &runtime) {
         Ok(()) => Some(out),
         Err(err) => {
             assert!(

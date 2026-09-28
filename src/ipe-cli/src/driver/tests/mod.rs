@@ -1799,7 +1799,7 @@ fn production_ir_cache_hit_blames_the_in_memory_entry_source() {
     };
     let tmp = std::env::temp_dir().join(format!("ipec-ir-cache-blame-{}", std::process::id()));
     let cache_dir = tmp.join("cache");
-    let cache_site = crate::cache::CacheSite::Explicit(cache_dir.clone());
+    let cache_site = crate::cache::CacheSite::Explicit(cache_dir);
     let _ = fs::remove_dir_all(&tmp);
     fs::create_dir_all(&tmp).expect("create scratch dir");
     let blame_path = tmp.join("package.ipe");

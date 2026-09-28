@@ -788,10 +788,10 @@ mod tests {
     fn on_release(at: PathBuf, swap: impl FnOnce() + 'static) {
         let mut swap = Some(swap);
         set_release_hook(Some(Box::new(move |released: &Path| {
-            if released == at {
-                if let Some(swap) = swap.take() {
-                    swap();
-                }
+            if released == at
+                && let Some(swap) = swap.take()
+            {
+                swap();
             }
         })));
     }
@@ -806,7 +806,7 @@ mod tests {
         let (parent, child) = hold(&base, name);
         let late = doomed.join("late.txt");
         let written = late.clone();
-        on_release(doomed.clone(), move || {
+        on_release(doomed, move || {
             std::fs::write(&written, "late").expect("refill");
         });
 
