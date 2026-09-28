@@ -99,6 +99,18 @@ pub fn render_finding_lines(
             .span
             .hi
             .min(u32::try_from(loc.content_end).unwrap_or(u32::MAX));
+        // A continuation line's own leading indentation is not part of the
+        // underlined text — only a line the span itself starts on keeps it.
+        let seg_lo = if loc.line == start_loc.line {
+            seg_lo
+        } else {
+            u32::try_from(skip_leading_blanks(
+                source,
+                seg_lo as usize,
+                seg_hi as usize,
+            ))
+            .unwrap_or(seg_hi)
+        };
         let indent = caret_indent(source, loc.line_start, seg_lo);
         let width = caret_width(source, seg_lo, seg_hi);
         let source_row = if line_text.is_empty() {
@@ -182,6 +194,17 @@ fn caret_width(source: &str, lo: u32, hi: u32) -> usize {
     let lo = floor_boundary(source, lo as usize);
     let hi = floor_boundary(source, hi as usize);
     source.get(lo..hi).unwrap_or("").chars().count()
+}
+
+/// The byte offset of the first non-blank (space/tab) character in
+/// `source[lo..hi]`, or `hi` if the segment is entirely blank.
+fn skip_leading_blanks(source: &str, lo: usize, hi: usize) -> usize {
+    source
+        .get(lo..hi)
+        .unwrap_or("")
+        .char_indices()
+        .find(|&(_, c)| c != ' ' && c != '\t')
+        .map_or(hi, |(i, _)| lo + i)
 }
 
 /// The largest char boundary `<= b` (and `<= source.len()`).

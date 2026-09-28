@@ -1276,7 +1276,7 @@ fn apply_unused_import_fix(src: &str) -> String {
 /// removal early and strand the remaining `, baz )` lines.
 #[test]
 fn unused_import_fix_ignores_close_paren_in_line_comment() {
-    let src = "module Main exposing (main)\n\nimport Foo exposing\n    ( bar — keeps ) the old name\n    , baz\n    )\n\nmain : Int\nmain = 1\n";
+    let src = "module Main exposing (main)\n\nimport Foo exposing\n    ( bar -- keeps ) the old name\n    , baz\n    )\n\nmain : Int\nmain = 1\n";
     let fixed = apply_unused_import_fix(src);
     assert_eq!(
         fixed,
@@ -1288,11 +1288,11 @@ fn unused_import_fix_ignores_close_paren_in_line_comment() {
 /// must not stretch the removal over the unrelated `main` declaration.
 #[test]
 fn unused_import_fix_leaves_later_declarations_untouched() {
-    let src = "module Main exposing (main)\n\nimport Foo exposing (bar — (\n    )\n\nmain : Int\nmain = 1 — )\n";
+    let src = "module Main exposing (main)\n\nimport Foo exposing (bar -- (\n    )\n\nmain : Int\nmain = 1 -- )\n";
     let fixed = apply_unused_import_fix(src);
     assert_eq!(
         fixed,
-        "module Main exposing (main)\n\n\nmain : Int\nmain = 1 — )\n"
+        "module Main exposing (main)\n\n\nmain : Int\nmain = 1 -- )\n"
     );
 }
 
