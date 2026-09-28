@@ -7,7 +7,8 @@ the targets of its output redirections. A check that asks "which file does
 this command write" then matches on the word the shell will see
 (`".github/"ci/x` is `.github/ci/x`), never on the spelling in the source.
 
-Command separators are `;`, `&`, `|`, `(`, `)`, newline, `$(`, and a
+Words split on `BLANKS` (space and tab, bash's own blank set). Command
+separators are `;`, `&`, `|`, `(`, `)`, newline, `$(`, and a
 backtick; a command substitution inside double quotes or a here-document
 body is lexed again from its own start, so a command nested there is seen as
 a command (a backtick in a comment or in single quotes starts none). A
@@ -37,6 +38,11 @@ class Command:
     pipe_source: list[str] | None = None
 
 
+# The characters bash's parser splits words on (`blank` in bash(1)): space and
+# tab only. A newline ends the command instead; every other character, `\r`,
+# `\v`, `\f`, and non-ASCII spaces included, is part of the word. This is the
+# one blank set: the lexer and every word-shape check built on it use it.
+BLANKS = frozenset(" \t")
 _SEPARATORS = frozenset(";&|()\n`")
 
 
@@ -112,7 +118,7 @@ def _lex(
                     bodies.append((body_start, i))
                 _substitutions(text, body_start, i, subs)
             continue
-        if c in " \t\r":
+        if c in BLANKS:
             end_word()
             i += 1
             continue
@@ -195,6 +201,15 @@ def _lex(
         i += 1
     end_command()
     return cmds
+
+
+def trim(text: str) -> str:
+    """`text` without the blanks and newlines bash ignores around a command.
+
+    Only `BLANKS` and newline are trimmed: any other leading or trailing
+    character (`\\r`, `\\v`, a non-ASCII space) is part of a word to bash.
+    """
+    return text.strip("".join(sorted(BLANKS)) + "\n")
 
 
 def split_commands(text: str) -> list[Command]:

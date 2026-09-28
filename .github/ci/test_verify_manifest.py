@@ -52,7 +52,7 @@ def _write(path: str, content: str) -> None:
 
 
 # The `.github/ci/` tools a fixture holds: a tool run names a file that exists.
-FIXTURE_TOOLS = ("verify-manifest.py", "artifact-guard.sh", "github-env.sh", "strict_yaml.py")
+FIXTURE_TOOLS = ("verify-manifest.py", "artifact-guard.sh", "github-env.sh", "strict_yaml.py", "release_only.py")
 
 
 class SccacheFixture:
@@ -2169,6 +2169,248 @@ class TestToolOrderingAndClosedShells(unittest.TestCase):
             "echo {a,b}/ci",
         ):
             self.run_accepted(run)
+
+    # ---- a tool run's words are bash's words ------------------------------
+
+    # Characters bash keeps inside a word that a looser splitter (`str.split`,
+    # `\s`) would read as a blank.
+    NON_BLANKS = ("\r", "\v", "\f", "\x85", " ", "\x1c", "\xa0")
+
+    def test_tool_run_split_on_a_non_bash_blank_is_refused(self) -> None:
+        for ch in self.NON_BLANKS:
+            for run in (
+                f"python3{ch}.github/ci/verify-manifest.py",
+                f"python3 .github/ci/verify-manifest.py{ch}",
+                f"{ch}python3 .github/ci/verify-manifest.py",
+                f"python3 .github/ci/verify-manifest.py{ch}-v",
+            ):
+                with self.subTest(run=run):
+                    self.assertIsNone(verify_manifest.ToolRunText.parse(run))
+                    self.assertIsNone(verify_manifest.ToolRun.parse(run, self.fx.root))
+                    self.fx.workflow("t.yml", _job(f"- uses: {_CHECKOUT}\n" + _run("Verify", run)))
+                    self.assertRefused("step 'Verify' names", "but is not itself one of")
+
+    def test_tool_run_words_split_on_space_and_tab_only(self) -> None:
+        text = verify_manifest.ToolRunText.parse(" \tpython3 \t.github/ci/verify-manifest.py\t-v \n")
+        self.assertIsNotNone(text)
+        self.assertEqual(text.words if text else (), ("python3", ".github/ci/verify-manifest.py", "-v"))
+        self.job_accepted(f"- uses: {_CHECKOUT}\n" + _run("Verify", "python3\t.github/ci/verify-manifest.py"))
+
+    def test_shell_lex_blanks_are_bash_blanks(self) -> None:
+        import shutil
+        import subprocess
+
+        bash = shutil.which("bash")
+        if bash is None:
+            self.skipTest("bash is not installed")
+        # Every character bash could plausibly split on: ASCII controls,
+        # every whitespace, and the non-ASCII spaces. Newline ends a command
+        # instead, so it is not a word blank.
+        candidates = {chr(i) for i in range(1, 0x80) if not chr(i).isprintable() or chr(i).isspace()}
+        candidates |= {" ", "\x85", "\xa0", " ", " ", " ", " ", "　"}
+        candidates.discard("\n")
+        splits = set()
+        for ch in sorted(candidates):
+            out = subprocess.run(
+                [bash, "--norc", "--noprofile", "-c", f"f() {{ echo $#; }}; f a{ch}b"],
+                capture_output=True, text=True, check=False,
+            ).stdout.strip()
+            if out == "2":
+                splits.add(ch)
+        self.assertEqual(splits, set(verify_manifest.shell_lex.BLANKS))
+
+    # ---- a verdict-bearing step cannot be masked -------------------------
+
+    def test_masked_tool_step_is_refused(self) -> None:
+        for extra, key in (
+            ("if: always()\n", "if:"),
+            ("if: false\n", "if:"),
+            ("if: ${{ github.event_name == 'push' }}\n", "if:"),
+            ("continue-on-error: true\n", "continue-on-error:"),
+            ("continue-on-error: false\n", "continue-on-error:"),
+            ("continue-on-error: ${{ true }}\n", "continue-on-error:"),
+        ):
+            self.job_refused(
+                f"- uses: {_CHECKOUT}\n" + _run("Verify", _TOOL, extra),
+                "step 'Verify' names", "but is not itself one of", f"with {key}",
+            )
+
+    def test_advisory_tool_admits_only_literal_continue_on_error_true(self) -> None:
+        self.job_accepted(
+            f"- uses: {_CHECKOUT}\n"
+            + _run("Classify", "python3 .github/ci/release_only.py", "continue-on-error: true\n")
+        )
+        for extra in ("continue-on-error: ${{ true }}\n", "continue-on-error: 'true'\n", "if: always()\n"):
+            self.job_refused(
+                f"- uses: {_CHECKOUT}\n" + _run("Classify", "python3 .github/ci/release_only.py", extra),
+                "step 'Classify' names", "but is not itself one of",
+            )
+
+    def test_masked_setup_step_before_the_tool_is_refused(self) -> None:
+        for pre in (
+            f"- name: Pre\n  uses: {_CHECKOUT}\n  if: false\n",
+            f"- name: Pre\n  uses: {_CHECKOUT}\n  continue-on-error: true\n",
+            f"- name: Pre\n  uses: {_SETUP_PY}\n  if: false\n  with:\n    python-version: '3.12'\n",
+            f"- name: Pre\n  uses: {_SETUP_PY}\n  continue-on-error: true\n  with:\n    python-version: '3.12'\n",
+            _run("Pre", _LIVE_PIP, "continue-on-error: true\n"),
+            _run("Pre", _LIVE_PIP, "if: false\n"),
+        ):
+            self.job_refused(pre + _run("Verify", _TOOL), "step 'Verify'", "after step 'Pre'")
+
+    # ---- a closed shape's with: is literal --------------------------------
+
+    def test_expression_in_a_closed_with_is_refused(self) -> None:
+        for pre in (
+            f"- name: Pre\n  uses: {_SETUP_PY}\n  with:\n    python-version: ${{{{ github.head_ref }}}}\n",
+            f"- name: Pre\n  uses: {_CHECKOUT}\n  with:\n    sparse-checkout: ${{{{ inputs.paths }}}}\n",
+            f"- name: Pre\n  uses: {_CHECKOUT}\n  with:\n    fetch-depth: '${{{{ inputs.d }}}}'\n",
+            f"- name: Pre\n  uses: {_CHECKOUT}\n  with:\n    fetch-depth: [1]\n",
+            f"- name: Pre\n  uses: {_CHECKOUT}\n  with:\n    fetch-depth:\n",
+        ):
+            self.job_refused(pre + _run("Verify", _TOOL), "step 'Verify'", "after step 'Pre'")
+
+    def test_literal_closed_with_passes(self) -> None:
+        self.job_accepted(
+            f"- uses: {_CHECKOUT}\n  with:\n    fetch-depth: 2\n    persist-credentials: false\n"
+            f"- uses: {_SETUP_PY}\n  with:\n    python-version: 3.12\n"
+            + _run("Verify", _TOOL)
+        )
+
+    # ---- a working directory is a typed plain path ------------------------
+
+    def test_working_directory_with_a_control_character_is_refused_before_the_filesystem(self) -> None:
+        for wd in ("a\x00b", "a\rb", "a\x1bb", "a b", "sub\n"):
+            with self.subTest(wd=wd):
+                self.assertEqual(
+                    verify_manifest.WorkingDir.parse(wd, self.fx.repo),
+                    "holds a control or non-printing character",
+                )
+
+    def test_working_directory_with_a_tilde_has_its_own_refusal(self) -> None:
+        for wd in ("~", "~/x", "a/~b", "GITHUB~1"):
+            with self.subTest(wd=wd):
+                self.assertIn("`~` component", str(verify_manifest.WorkingDir.parse(wd, self.fx.repo)))
+            self.job_refused(
+                _run("Build", "cargo build", f"working-directory: {json.dumps(wd)}\n"), "`~` component",
+            )
+
+    def test_non_string_working_directory_is_refused(self) -> None:
+        for wd, kind in (("5", "int"), ("[a]", "list"), ("{a: b}", "dict"), ("true", "bool")):
+            self.job_refused(
+                _run("Build", "cargo build", f"working-directory: {wd}\n"), f"is not a string ({kind})",
+            )
+            self.job_refused(
+                _run("Build", "cargo build"), f"is not a string ({kind})",
+                job=f"defaults:\n  run:\n    working-directory: {wd}\n",
+            )
+
+    def test_plain_working_directory_parses(self) -> None:
+        self.assertEqual(verify_manifest.WorkingDir.parse("src/x", self.fx.repo), verify_manifest.WorkingDir("src/x"))
+
+    # ---- a tool job's defaults and workflow env ---------------------------
+
+    def test_tool_job_under_a_non_bash_default_shell_is_refused(self) -> None:
+        for shell in ("pwsh", "sh", "python"):
+            self.job_refused(
+                f"- uses: {_CHECKOUT}\n" + _run("Verify", _TOOL),
+                "job defaults.run.shell", "a tool run is read as bash",
+                job=f"defaults:\n  run:\n    shell: {shell}\n",
+            )
+            self.job_refused(
+                f"- uses: {_CHECKOUT}\n" + _run("Verify", _TOOL),
+                "workflow defaults.run.shell", "a tool run is read as bash",
+                top=f"defaults:\n  run:\n    shell: {shell}\n",
+            )
+
+    def test_unadmitted_workflow_env_key_in_a_tool_job_is_refused(self) -> None:
+        for key in ("FOO", "gh_token", "BASH_ENV", "PYTHONSTARTUP"):
+            self.job_refused(
+                f"- uses: {_CHECKOUT}\n" + _run("Verify", _TOOL),
+                "workflow env", key, "outside the tool env allowlist",
+                top=f"env:\n  {key}: x\n",
+            )
+
+
+class TestSsotOutputTools(unittest.TestCase):
+    """The SSOT-publishing tools fail closed on a malformed SSOT: exit 1 and
+    write no output, so a consumer keeps its fail-safe default."""
+
+    def setUp(self) -> None:
+        self._tmpdir = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmpdir.cleanup)
+        self.dir = self._tmpdir.name
+        for name in ("deterministic_checks_output.py", "check_required_set.py", "strict_yaml.py", "gha_expr.py"):
+            with open(os.path.join(HERE, name), encoding="utf-8") as src:
+                _write(os.path.join(self.dir, name), src.read())
+        self.output = os.path.join(self.dir, "github-output")
+
+    def put(self, name: str, content: bytes | None) -> None:
+        path = os.path.join(self.dir, name)
+        if content is None:
+            if os.path.exists(path):
+                os.remove(path)
+            return
+        with open(path, "wb") as f:
+            f.write(content)
+
+    def run_tool(self, name: str) -> tuple[int, str, str]:
+        import subprocess
+
+        open(self.output, "w").close()
+        env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "GITHUB_OUTPUT": self.output}
+        proc = subprocess.run(
+            [sys.executable, os.path.join(self.dir, name)], env=env, capture_output=True, text=True, check=False,
+        )
+        return proc.returncode, proc.stdout, proc.stderr
+
+    def assertFailsClosed(self, name: str) -> None:
+        rc, stdout, stderr = self.run_tool(name)
+        self.assertEqual(rc, 1)
+        self.assertEqual(stdout, "")
+        # A refusal, not a crash that happens to exit 1.
+        self.assertNotIn("Traceback", stderr)
+        self.assertNotEqual(stderr, "")
+        with open(self.output, encoding="utf-8") as f:
+            self.assertEqual(f.read(), "")
+
+    def test_deterministic_checks_output_publishes_a_valid_ssot(self) -> None:
+        self.put("deterministic-checks.json", b'{"checks": [{"context": "c", "step": "s"}]}')
+        rc, _, _ = self.run_tool("deterministic_checks_output.py")
+        self.assertEqual(rc, 0)
+        with open(self.output, encoding="utf-8") as f:
+            self.assertEqual(f.read(), 'checks=[{"context":"c","step":"s"}]\n')
+
+    def test_deterministic_checks_output_refuses_a_malformed_ssot(self) -> None:
+        for content in (
+            None, b"", b"{", b"\xff\xfe", b"[]", b'{"checks": []}', b'{"checks": {}}',
+            b'{"checks": [1]}', b'{"checks": [{"context": 1, "step": "s"}]}',
+            b'{"checks": [{"context": "c"}]}', b'{"checks": [{"context": "c", "step": "s", "x": 1}]}',
+        ):
+            with self.subTest(content=content):
+                self.put("deterministic-checks.json", content)
+                self.assertFailsClosed("deterministic_checks_output.py")
+
+    def test_check_required_set_passes_a_matching_pair(self) -> None:
+        self.put("check-manifest.yml", b"checks:\n- context: a\n  disposition: gate\n")
+        self.put("required-set.json", b'["a"]')
+        self.assertEqual(self.run_tool("check_required_set.py")[0], 0)
+
+    def test_check_required_set_refuses_a_malformed_manifest(self) -> None:
+        self.put("required-set.json", b'["a"]')
+        for content in (
+            None, b"", b"\xff\xfe", b"[]", b"checks: 5\n", b"checks:\n- 5\n", b"checks:\n- context: a\n",
+            b"checks:\n- context: 1\n  disposition: gate\n", b"checks: [\n", b"checks: []\nchecks: []\n",
+        ):
+            with self.subTest(content=content):
+                self.put("check-manifest.yml", content)
+                self.assertFailsClosed("check_required_set.py")
+
+    def test_check_required_set_refuses_a_malformed_required_set(self) -> None:
+        self.put("check-manifest.yml", b"checks:\n- context: a\n  disposition: gate\n")
+        for content in (None, b"", b"{", b"\xff\xfe", b"{}", b"[1]", b'"a"'):
+            with self.subTest(content=content):
+                self.put("required-set.json", content)
+                self.assertFailsClosed("check_required_set.py")
 
 
 class TestGithubEnvHelper(unittest.TestCase):
