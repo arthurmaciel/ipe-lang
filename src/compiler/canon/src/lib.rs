@@ -29,10 +29,11 @@ use std::collections::{BTreeMap, BTreeSet};
 use ipe_diagnostics::DResult;
 use ipe_intern::{Interner, Symbol};
 
-pub use env::{CtorHome, Env, STDLIB_MODULE_QUALIFIERS, VarHome};
+pub use env::{CtorHome, Env, STDLIB_MODULE_QUALIFIERS, VarHome, stdlib_canonical_qualifier};
 pub use resolve::{
-    ModuleOrigin, RESERVED_BUILTIN_TYPES, builtin_empty_home_arity, import_qualifiers,
-    is_reserved_builtin_type_name, is_user_type_declaration_forbidden, to_snake_case,
+    ModuleOrigin, QualifierForm, RESERVED_BUILTIN_TYPES, builtin_empty_home_arity,
+    import_qualifier_forms, import_qualifiers, is_reserved_builtin_type_name,
+    is_user_type_declaration_forbidden, to_snake_case,
 };
 
 /// A type alias exported by a module in its raw (unresolved) source form.
