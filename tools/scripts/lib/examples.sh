@@ -26,7 +26,7 @@
 # (rg absent -> every `rg -q` reads as "no match" -> an example is dropped
 # from or kept in a set on a false signal instead of a hard error).
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/require-tool.sh"
-require_tool rg
+require_tool rg find sort perl
 
 # ── all_examples: every candidate dir on disk, trailing slash stripped ───────
 # The first-party dirs: numbered legacy examples, wasm, rust, ffi, and the
@@ -57,9 +57,12 @@ declare -gA _IPE_STDLIB_INDEX
 _build_stdlib_index() {
   [ -n "${_IPE_STDLIB_INDEX_BUILT:-}" ] && return 0
   local f rest root
+  local -a stdlib_files
   for root in $IPE_STDLIB_DIRS; do
     [ -d "$root" ] || continue
-    while IFS= read -r f; do
+    stdlib_files=()
+    enumerate_files stdlib_files '*.ipe' "$root"
+    for f in "${stdlib_files[@]}"; do
       # index keys are relative to the stdlib ROOT (so Ipê/Core/String.ipe →
       # Ipê/Core/String, Core/String, String), mirroring the source layout.
       rest="${f#"$root"/}"; rest="${rest%.ipe}"
@@ -70,8 +73,14 @@ _build_stdlib_index() {
           *)   break ;;
         esac
       done
-    done < <(find "$root" -type f -name '*.ipe' 2>/dev/null)
+    done
   done
+  # No indexed stdlib means every bare stdlib import would misread as Go-FFI
+  # and silently drop its example from every set.
+  if [ "${#_IPE_STDLIB_INDEX[@]}" -eq 0 ]; then
+    echo "examples.sh: no stdlib module indexed under IPE_STDLIB_DIRS='$IPE_STDLIB_DIRS'" >&2
+    exit 2
+  fi
   _IPE_STDLIB_INDEX_BUILT=1
 }
 
@@ -92,27 +101,23 @@ is_out_of_scope() {
   # the per-commit gate.
   case "$dir" in */skyshop-rs) return 0 ;; esac
   _build_stdlib_index
-  # Collect the source files first, THEN run rg directly over the array (rather
-  # than `find -exec rg … {} +` feeding a process substitution): the latter
-  # hides rg's own exit code behind find's, and a `while read < <(…)` never
-  # checks the producer's status at all, so an rg error (a bad pattern, rg
-  # itself missing) silently reads as "no imports found" → "in scope" instead
-  # of the hard failure it should be.
-  local ipe_files=()
-  while IFS= read -r -d '' f; do ipe_files+=("$f"); done \
-    < <(find "$dir/src" -type f -name '*.ipe' -print0 2>/dev/null)
+  # Enumerate the source set (checked, non-empty) first, then run rg directly
+  # over it, so neither a producer failure nor an rg error reads as "no
+  # imports found" → "in scope".
+  local -a ipe_files=()
+  enumerate_files ipe_files '*.ipe' "$dir/src"
   local imports=""
-  if [ "${#ipe_files[@]}" -gt 0 ]; then
-    match_capture imports "is_out_of_scope: import scan ($dir)" -- \
-      rg --no-filename -No '^[[:space:]]*import[[:space:]]+([A-Za-z0-9_.]+)' -r '$1' "${ipe_files[@]}" || true
-  fi
+  match_capture imports "is_out_of_scope: import scan ($dir)" -- \
+    rg --no-filename -No '^[[:space:]]*import[[:space:]]+([A-Za-z0-9_.]+)' -r '$1' "${ipe_files[@]}" || true
   while read -r m; do
     [ -z "$m" ] && continue
     case "$m" in Ipê.*|Ipe.*|Rust.*) continue ;; esac # Ipê stdlib / Rust-FFI wrapper → in scope
     rel="${m//.//}"
     [ -n "${_IPE_STDLIB_INDEX[$rel]:-}" ] && continue
     if [ -z "$localdone" ]; then
-      localpaths=$'\n'"$(find "$dir" -type f -name '*.ipe' 2>/dev/null)"$'\n'
+      local -a project_files=()
+      enumerate_files project_files '*.ipe' "$dir"
+      localpaths=$'\n'"$(printf '%s\n' "${project_files[@]}")"$'\n'
       localdone=1
     fi
     case "$localpaths" in *"/${rel}.ipe"$'\n'*) continue ;; esac
@@ -198,16 +203,20 @@ needs_ffi_install() {
 # so prose that names a backend (e.g. a `{-| … like Ipe.Web … -}` doc comment on
 # a CLI example) can't misclassify the example by its shape.
 _shape_match() { # $1=src dir  $2=regex
-  # Capture find|perl to a variable FIRST, then feed rg via herestring — piping
-  # straight into `rg -q` races the reader against the writer: rg quits the
-  # instant it sees a match, SIGPIPE-killing perl (exit 141), and under
-  # pipefail that 141 (not rg's own 0) becomes the pipeline's reported exit
-  # status, misreading a real match as a failure. A herestring has no live
-  # process-to-process pipe, so there is no such race.
-  local text
-  text="$(find "$1" -name '*.ipe' -exec cat {} + 2>/dev/null \
-    | perl -0777 -pe 's/\{-.*?-\}//gs; s/--[^\n]*//g')"
-  rg -q -e "$2" <<<"$text" 2>/dev/null
+  # Each stage runs alone with its own exit status checked — enumerate, strip
+  # with perl into a variable, then match on a herestring. No live pipe: a
+  # pipe would let an early stage's failure hide behind the matcher's "no
+  # match", and `rg -q` quitting early would SIGPIPE the writer into a false
+  # error.
+  local -a src_files=()
+  enumerate_files src_files '*.ipe' "$1"
+  local text rc=0
+  text="$(perl -0777 -pe 's/\{-.*?-\}//gs; s/--[^\n]*//g' -- "${src_files[@]}")" || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    echo "_shape_match: perl comment strip over $1 exited $rc" >&2
+    exit 2
+  fi
+  match_or_fail "_shape_match: $1 ($2)" -- rg -q -e "$2" <<<"$text"
 }
 example_shape() {
   local d="$1" s="$1/src"

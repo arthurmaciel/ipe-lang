@@ -16,7 +16,17 @@ grammar_dir="$(cd "$script_dir/.." && pwd)"
 repo_root="$(cd "$grammar_dir/../.." && pwd)"
 
 source "$repo_root/tools/scripts/lib/require-tool.sh"
-require_tool grep
+require_tool grep find sort
+
+# Collect every reference source BEFORE any tooling work, so a missing,
+# unreadable, or empty root fails closed (exit 2) instead of shrinking the set.
+# PARITY_SCAN_ROOTS (colon-separated) overrides the roots for the self-test.
+IFS=':' read -r -a scan_roots <<<"${PARITY_SCAN_ROOTS:-$repo_root/examples:$repo_root/src/stdlib/Ipe}"
+for root in "${scan_roots[@]}"; do
+  require_scan_root "$root" '*.ipe'
+done
+files=()
+enumerate_files files '*.ipe' "${scan_roots[@]}"
 
 if ! command -v tree-sitter >/dev/null 2>&1; then
   echo "error: tree-sitter CLI not found on PATH (cargo install tree-sitter-cli)" >&2
@@ -28,17 +38,6 @@ fi
 # builds but fails to load at parse time — no highlighting).
 cd "$grammar_dir"
 tree-sitter generate --abi 14 >/dev/null
-
-# Collect every reference source.
-mapfile -d '' files < <(
-  find "$repo_root/examples" "$repo_root/src/stdlib/Ipe" \
-    -type f -name '*.ipe' -print0 2>/dev/null | sort -z
-)
-
-if [ "${#files[@]}" -eq 0 ]; then
-  echo "error: no .ipe files found under examples/ or src/stdlib/Ipe/" >&2
-  exit 2
-fi
 
 total=0
 failed=0
