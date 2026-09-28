@@ -5253,67 +5253,15 @@ fn aligned_caller_tvars(sig_ret: &IrType, target_g: Symbol, site_ret: &IrType) -
     out
 }
 
+/// Collect into `out` the `site` tvars mirroring `target` in `sig`, over the shape both share.
+///
+/// A mismatch adds nothing; instance propagation (`instance_slot_tvars` /
+/// `align_param_slot`) is the fail-closed net for any tvar missed here.
 fn align_ret_tvars(sig: &IrType, target: Symbol, site: &IrType, out: &mut Vec<Symbol>) {
     match (sig, site) {
         (IrType::Generic(sig_tv), IrType::Generic(site_tv)) => {
             if *sig_tv == target {
                 out.push(*site_tv);
-            }
-        }
-        // The boxed effect / handle / view carriers each wrap a payload tvar
-        // (`Task a`, `Cmd msg`, `Sub msg`, `Decoder a`, `WebRoute page`, and a
-        // `Ui`'s `msg`); a combinator forwarding one in tail position must pass
-        // the callee's return-tvar bounds down to the payload the caller returns.
-        (IrType::List(a), IrType::List(b))
-        | (IrType::Maybe(a), IrType::Maybe(b))
-        | (IrType::Set(a), IrType::Set(b))
-        | (IrType::Task(a), IrType::Task(b))
-        | (IrType::Cmd(a), IrType::Cmd(b))
-        | (IrType::Sub(a), IrType::Sub(b))
-        | (IrType::Decoder(a), IrType::Decoder(b))
-        | (IrType::WebRoute(a), IrType::WebRoute(b)) => {
-            align_ret_tvars(a, target, b, out);
-        }
-        (
-            IrType::Ui {
-                ctor: sig_ctor,
-                msg: a,
-            },
-            IrType::Ui {
-                ctor: site_ctor,
-                msg: b,
-            },
-        ) if sig_ctor == site_ctor => {
-            align_ret_tvars(a, target, b, out);
-        }
-        (IrType::Result(a1, a2), IrType::Result(b1, b2))
-        | (IrType::Dict(a1, a2), IrType::Dict(b1, b2))
-        | (
-            IrType::CustomElement { down: a1, up: a2 },
-            IrType::CustomElement { down: b1, up: b2 },
-        ) => {
-            align_ret_tvars(a1, target, b1, out);
-            align_ret_tvars(a2, target, b2, out);
-        }
-        (IrType::Tuple(a), IrType::Tuple(b)) if a.len() == b.len() => {
-            for (ca, cb) in a.iter().zip(b.iter()) {
-                align_ret_tvars(ca, target, cb, out);
-            }
-        }
-        (
-            IrType::Enum {
-                home: sig_home,
-                name: sig_name,
-                args: a,
-            },
-            IrType::Enum {
-                home: site_home,
-                name: site_name,
-                args: b,
-            },
-        ) if sig_home == site_home && sig_name == site_name && a.len() == b.len() => {
-            for (ca, cb) in a.iter().zip(b.iter()) {
-                align_ret_tvars(ca, target, cb, out);
             }
         }
         (IrType::Record(a), IrType::Record(b)) => {
@@ -5323,20 +5271,14 @@ fn align_ret_tvars(sig: &IrType, target: Symbol, site: &IrType, out: &mut Vec<Sy
                 }
             }
         }
-        // A `Parser a` is a transparent `State -> PStep a` function alias, so a
-        // composed combinator's return tvar sits under a function type. Aligning
-        // through the parameters and return of a function shape reaches it.
-        (IrType::Fun(pa, ra), IrType::Fun(pb, rb))
-        | (IrType::SharedFun(pa, ra), IrType::SharedFun(pb, rb))
-        | (IrType::FnOnceChain(pa, ra), IrType::FnOnceChain(pb, rb))
-            if pa.len() == pb.len() =>
-        {
-            for (ca, cb) in pa.iter().zip(pb.iter()) {
+        // Every other shared shape (a payload carrier such as `Task a` or a
+        // `Ui`'s `msg`, a tuple, an enum, a function such as the transparent
+        // `Parser a` alias) pairs its children under one head identity.
+        _ => {
+            for (ca, cb) in ipe_ir::paired_children(sig, site).into_iter().flatten() {
                 align_ret_tvars(ca, target, cb, out);
             }
-            align_ret_tvars(ra, target, rb, out);
         }
-        _ => {}
     }
 }
 
@@ -5655,57 +5597,19 @@ fn align_param_slot(
     }
     let mut slot = |a: &IrType, b: &IrType| align_param_slot(a, target, b, caller_tvars, out);
     match (sig, site) {
-        (IrType::List(a), IrType::List(b))
-        | (IrType::Maybe(a), IrType::Maybe(b))
-        | (IrType::Set(a), IrType::Set(b))
-        | (IrType::Task(a), IrType::Task(b))
-        | (IrType::Cmd(a), IrType::Cmd(b))
-        | (IrType::Sub(a), IrType::Sub(b))
-        | (IrType::Decoder(a), IrType::Decoder(b))
-        | (IrType::WebRoute(a), IrType::WebRoute(b)) => slot(a, b),
-        (
-            IrType::Ui {
-                ctor: sig_ctor,
-                msg: a,
-            },
-            IrType::Ui {
-                ctor: site_ctor,
-                msg: b,
-            },
-        ) if sig_ctor == site_ctor => slot(a, b),
-        (IrType::Result(a1, a2), IrType::Result(b1, b2))
-        | (IrType::Dict(a1, a2), IrType::Dict(b1, b2))
-        | (
-            IrType::CustomElement { down: a1, up: a2 },
-            IrType::CustomElement { down: b1, up: b2 },
-        ) => slot(a1, b1) && slot(a2, b2),
-        (IrType::Tuple(a), IrType::Tuple(b)) => {
-            a.len() == b.len() && a.iter().zip(b).all(|(ca, cb)| slot(ca, cb))
-        }
-        (
-            IrType::Enum {
-                home: sig_home,
-                name: sig_name,
-                args: a,
-            },
-            IrType::Enum {
-                home: site_home,
-                name: site_name,
-                args: b,
-            },
-        ) if sig_home == site_home && sig_name == site_name => {
-            a.len() == b.len() && a.iter().zip(b).all(|(ca, cb)| slot(ca, cb))
-        }
         (IrType::Record(a), IrType::Record(b)) => a
             .iter()
             .all(|(field, ca)| b.get(field).is_some_and(|cb| slot(ca, cb))),
         // The three function carriers share one arrow shape; which box the
-        // argument arrives in does not move the generic's slot.
+        // argument arrives in does not move the generic's slot, so this arm
+        // pairs across carriers where `paired_children` (one Rust type per
+        // carrier) would not.
         (
             IrType::Fun(pa, ra) | IrType::SharedFun(pa, ra) | IrType::FnOnceChain(pa, ra),
             IrType::Fun(pb, rb) | IrType::SharedFun(pb, rb) | IrType::FnOnceChain(pb, rb),
         ) => pa.len() == pb.len() && pa.iter().zip(pb).all(|(ca, cb)| slot(ca, cb)) && slot(ra, rb),
-        _ => false,
+        _ => ipe_ir::paired_children(sig, site)
+            .is_some_and(|mut pairs| pairs.all(|(ca, cb)| slot(ca, cb))),
     }
 }
 
@@ -20708,7 +20612,7 @@ impl<'a> Lowerer<'a> {
                 break;
             };
             if let Some(arg_ty) = self.region_ty(arg.span) {
-                match_signature_template(param_tpl, arg_ty, &mut subst);
+                match_signature_template(param_tpl, arg_ty, &mut subst, self.interner);
             }
             cur = rest.as_ref();
         }
@@ -20877,7 +20781,7 @@ impl<'a> Lowerer<'a> {
             return Ok(());
         };
         let mut subst: BTreeMap<u32, Ty> = BTreeMap::new();
-        match_signature_template(declared, reified, &mut subst);
+        match_signature_template(declared, reified, &mut subst, self.interner);
         if subst
             .values()
             .any(|bound| generic_binding_breaks_clone(self.interner, bound))
@@ -35843,6 +35747,64 @@ mod tests {
             None,
             "a triple must not align a pair's elements"
         );
+    }
+
+    /// A same-named, same-arity constructor of another home never covers a struct template.
+    ///
+    /// The backend keys an enum by its exact home, so a signature record whose
+    /// function field returns `Lib.T` registers a struct a `Main.T` literal does
+    /// not fit; coverage must refuse it (the gate then registers the literal's
+    /// own shape) rather than skip registration.
+    #[test]
+    fn covers_as_template_refuses_same_name_of_another_home() {
+        use super::ty_templates::{canon_covers_as_template, ty_covers_as_template};
+        let mut interner = Interner::new();
+        #[allow(clippy::expect_used)] // a fresh interner accepts these names
+        let mut intern = |name: &str| interner.intern(name).expect("intern name");
+        let (main, lib, t, run) = (intern("Main"), intern("Lib"), intern("T"), intern("run"));
+        let con = |home, arg| Ty::Con {
+            module: vec![home],
+            name: t,
+            args: vec![arg],
+        };
+        let run_record = |ret: Ty| {
+            Ty::Record(
+                BTreeMap::from([(run, Ty::Fun(Box::new(Ty::Unit), Box::new(ret)))]),
+                ipe_types::RowTail::Closed,
+            )
+        };
+        assert!(ty_covers_as_template(
+            &con(main, Ty::Var(0)),
+            &con(main, Ty::Unit)
+        ));
+        assert!(!ty_covers_as_template(
+            &con(lib, Ty::Var(0)),
+            &con(main, Ty::Unit)
+        ));
+        assert!(ty_covers_as_template(
+            &run_record(con(main, Ty::Unit)),
+            &run_record(con(main, Ty::Unit))
+        ));
+        assert!(
+            !ty_covers_as_template(
+                &run_record(con(lib, Ty::Unit)),
+                &run_record(con(main, Ty::Unit))
+            ),
+            "a Lib.T field must not cover a Main.T literal"
+        );
+        let canon_con = |home| canon::Type::Con {
+            home: vec![home],
+            name: t,
+            args: vec![canon::Type::Unit],
+        };
+        assert!(canon_covers_as_template(
+            &canon_con(main),
+            &con(main, Ty::Unit)
+        ));
+        assert!(!canon_covers_as_template(
+            &canon_con(lib),
+            &con(main, Ty::Unit)
+        ));
     }
 
     /// `aligned_param_tvars` reads a callee generic's instantiation behind a function arrow.

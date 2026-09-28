@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 
 use ipe_canon::ast as canon;
 use ipe_intern::{Interner, Symbol};
-use ipe_types::Ty;
+use ipe_types::{ConHead, HeadIdentity, Ty, paired_ty_children};
 
 use super::is_opaque_boxed_wrapper;
 
@@ -120,36 +120,24 @@ pub(super) fn generic_binding_breaks_clone(interner: &Interner, ty: &Ty) -> bool
 /// field-name set (which would accept a `{ run : Int }` signature covering a
 /// `{ run = \n -> … }` literal and emit an `Arc<dyn Fn>` value into an `i64`
 /// field: an accept-then-cargo-E0308 SEAL break).
+///
+/// Constructor heads compare under [`HeadIdentity::Emitted`] (exact home and
+/// name), the identity the backend's struct-template match keys an enum by: a
+/// same-named constructor of another module never covers, since the backend
+/// would pick a different struct for it.
 pub(super) fn ty_covers_as_template(template: &Ty, concrete: &Ty) -> bool {
     match (template, concrete) {
         // A template variable instantiates to any concrete type; unit matches
         // unit — both admit their concrete unconditionally.
         (Ty::Var(_), _) | (Ty::Unit, Ty::Unit) => true,
-        (Ty::Fun(tp, tr), Ty::Fun(cp, cr)) => {
-            ty_covers_as_template(tp, cp) && ty_covers_as_template(tr, cr)
-        }
-        (Ty::Tuple(ts), Ty::Tuple(cs)) => {
-            ts.len() == cs.len() && ts.iter().zip(cs).all(|(t, c)| ty_covers_as_template(t, c))
-        }
-        (
-            Ty::Con {
-                name: tn, args: ta, ..
-            },
-            Ty::Con {
-                name: cn, args: ca, ..
-            },
-        ) => {
-            tn == cn
-                && ta.len() == ca.len()
-                && ta.iter().zip(ca).all(|(t, c)| ty_covers_as_template(t, c))
-        }
         (Ty::Record(tf, _), Ty::Record(cf, _)) => {
             tf.len() == cf.len()
                 && tf
                     .iter()
                     .all(|(k, tv)| cf.get(k).is_some_and(|cv| ty_covers_as_template(tv, cv)))
         }
-        _ => false,
+        _ => paired_ty_children(template, concrete, HeadIdentity::Emitted)
+            .is_some_and(|mut pairs| pairs.all(|(t, c)| ty_covers_as_template(t, c))),
     }
 }
 
@@ -202,7 +190,8 @@ pub(super) fn ty_contains_record_key_set(ty: &Ty, lit_fields: &BTreeMap<Symbol, 
 /// Does the covering canonical `template` type match the literal's `concrete`
 /// [`Ty`] field type, treating a canon type VARIABLE as a wildcard?  The
 /// canon/[`Ty`] cross-representation mirror of [`ty_covers_as_template`], used
-/// for union constructor payload types (declared as [`canon::Type`]).
+/// for union constructor payload types (declared as [`canon::Type`]); its
+/// constructor heads compare under the same [`HeadIdentity::Emitted`] rule.
 pub(super) fn canon_covers_as_template(template: &canon::Type, concrete: &Ty) -> bool {
     match (template, concrete) {
         (canon::Type::Var(_), _) | (canon::Type::Unit, Ty::Unit) => true,
@@ -218,19 +207,29 @@ pub(super) fn canon_covers_as_template(template: &canon::Type, concrete: &Ty) ->
         }
         (
             canon::Type::Con {
-                name: tn, args: ta, ..
+                home: th,
+                name: tn,
+                args: ta,
             },
             Ty::Con {
-                name: cn, args: ca, ..
+                module: cm,
+                name: cn,
+                args: ca,
             },
-        ) => {
-            tn == cn
-                && ta.len() == ca.len()
-                && ta
-                    .iter()
-                    .zip(ca)
-                    .all(|(t, c)| canon_covers_as_template(t, c))
-        }
+        ) => HeadIdentity::Emitted
+            .paired_args(
+                ConHead {
+                    home: th,
+                    name: *tn,
+                    args: ta,
+                },
+                ConHead {
+                    home: cm,
+                    name: *cn,
+                    args: ca,
+                },
+            )
+            .is_some_and(|mut pairs| pairs.all(|(t, c)| canon_covers_as_template(t, c))),
         // A closed record must cover the literal field-for-field. An open row
         // `{ r | … }` is treated the same: its declared fields must present and
         // match the literal exactly (the literal is a closed record, so extra
@@ -305,53 +304,33 @@ pub(super) fn canon_type_contains_record_key_set(
 /// caller treats a fabricated binding as the only unsound direction, and there
 /// is none: a variable is bound solely to the concrete type structurally
 /// aligned with its declared position.
+///
+/// Template and concrete were unified, so constructor heads compare under
+/// [`HeadIdentity::Unified`], the rule inference applied to them.
 pub(super) fn match_signature_template(
     template: &Ty,
     concrete: &Ty,
     subst: &mut BTreeMap<u32, Ty>,
+    interner: &Interner,
 ) {
-    match template {
-        Ty::Var(v) => {
+    match (template, concrete) {
+        (Ty::Var(v), _) => {
             subst.entry(*v).or_insert_with(|| concrete.clone());
         }
-        Ty::Fun(tp, tr) => {
-            if let Ty::Fun(cp, cr) = concrete {
-                match_signature_template(tp, cp, subst);
-                match_signature_template(tr, cr, subst);
+        (Ty::Record(tf, _), Ty::Record(cf, _)) => {
+            for (k, tv) in tf {
+                if let Some(cv) = cf.get(k) {
+                    match_signature_template(tv, cv, subst, interner);
+                }
             }
         }
-        Ty::Tuple(ts) => {
-            if let Ty::Tuple(cs) = concrete
-                && ts.len() == cs.len()
+        _ => {
+            for (t, c) in paired_ty_children(template, concrete, HeadIdentity::Unified(interner))
+                .into_iter()
+                .flatten()
             {
-                for (t, c) in ts.iter().zip(cs) {
-                    match_signature_template(t, c, subst);
-                }
+                match_signature_template(t, c, subst, interner);
             }
         }
-        Ty::Con {
-            name: tn, args: ta, ..
-        } => {
-            if let Ty::Con {
-                name: cn, args: ca, ..
-            } = concrete
-                && tn == cn
-                && ta.len() == ca.len()
-            {
-                for (t, c) in ta.iter().zip(ca) {
-                    match_signature_template(t, c, subst);
-                }
-            }
-        }
-        Ty::Record(tf, _) => {
-            if let Ty::Record(cf, _) = concrete {
-                for (k, tv) in tf {
-                    if let Some(cv) = cf.get(k) {
-                        match_signature_template(tv, cv, subst);
-                    }
-                }
-            }
-        }
-        Ty::Unit => {}
     }
 }
