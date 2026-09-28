@@ -8,6 +8,7 @@
 //! filesystem at all.
 
 use std::collections::BTreeMap;
+use std::fmt;
 use std::path::{Path, PathBuf};
 
 pub use ipe_db::ModuleOrigin;
@@ -34,12 +35,66 @@ pub struct LoadedProject {
     pub entry_module: Vec<String>,
 }
 
-/// A project-resolution failure. Carries the driver's rendered detail; the
-/// server logs it and degrades to single-file service, never crashes.
+/// A project-resolution failure, typed by how the server must answer it.
+///
+/// Each variant carries the driver's rendered, user-facing detail, which
+/// [`fmt::Display`] writes unchanged. [`LoadError::disposition`] tells a
+/// failure the server degrades around from one it refuses to serve.
 #[derive(Clone, PartialEq, Eq, Debug)]
-pub struct LoadError {
-    /// Human-readable failure detail (already rendered by the driver).
-    pub detail: String,
+pub enum LoadError {
+    /// The sources or manifest failed a pipeline stage; an edit may fix it.
+    Pipeline(String),
+    /// A read or directory walk failed at the filesystem.
+    Io(String),
+    /// The driver refused to open a source file.
+    ///
+    /// The refused file (not a regular file, access denied) is one the user
+    /// can fix or stop importing, so the server degrades around it.
+    Refused(String),
+    /// A bounded read or walk hit its ceiling.
+    Limit(String),
+    /// The FFI artifact cache failed its trust check.
+    FfiUntrusted(String),
+    /// The discovered package manifest failed its trust check.
+    ManifestUntrusted(String),
+}
+
+/// How the server answers a [`LoadError`].
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum LoadDisposition {
+    /// Serve the open buffer as a single-file layout and retry on the next edit.
+    Degrade,
+    /// Serve no fallback layout and never retry per keystroke.
+    ///
+    /// Editing the buffer cannot lift a ceiling or restore trust, so a
+    /// per-keystroke retry would only re-run the refused load.
+    Refuse,
+}
+
+impl LoadError {
+    /// Whether the server degrades around this failure or refuses to serve it.
+    #[must_use]
+    pub const fn disposition(&self) -> LoadDisposition {
+        match self {
+            Self::Pipeline(_) | Self::Io(_) | Self::Refused(_) => LoadDisposition::Degrade,
+            Self::Limit(_) | Self::FfiUntrusted(_) | Self::ManifestUntrusted(_) => {
+                LoadDisposition::Refuse
+            }
+        }
+    }
+}
+
+impl fmt::Display for LoadError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Pipeline(detail)
+            | Self::Io(detail)
+            | Self::Refused(detail)
+            | Self::Limit(detail)
+            | Self::FfiUntrusted(detail)
+            | Self::ManifestUntrusted(detail) => f.write_str(detail),
+        }
+    }
 }
 
 /// Resolves the project that contains an opened document.
@@ -53,7 +108,8 @@ pub trait ProjectLoader {
     ///
     /// # Errors
     /// [`LoadError`] when no project shape can be resolved around
-    /// `open_file` (no manifest, undiscoverable module layout, I/O failure).
+    /// `open_file`; its [`LoadError::disposition`] says whether the server
+    /// degrades to single-file service or refuses the load.
     fn load(
         &self,
         workspace_root: Option<&Path>,

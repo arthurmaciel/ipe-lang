@@ -56,10 +56,16 @@ fn resolve_user_sources(
     }
 }
 
-/// Render a driver failure as the server's load error.
+/// Type a driver failure as the server's load error, keeping its rendered text.
 fn load_error(err: &CliError) -> LoadError {
-    LoadError {
-        detail: err.to_string(),
+    let detail = err.to_string();
+    match err {
+        CliError::Io { .. } => LoadError::Io(detail),
+        CliError::SourceRefused { .. } => LoadError::Refused(detail),
+        CliError::FileTooLarge { .. } | CliError::DiscoveryLimitReached { .. } => {
+            LoadError::Limit(detail)
+        }
+        _ => LoadError::Pipeline(detail),
     }
 }
 
