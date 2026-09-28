@@ -2450,6 +2450,8 @@ pub fn resolve_vendored_runtime_dir(
 
 #[cfg(test)]
 mod tests {
+    use std::fmt::Write as _;
+
     use super::*;
     use crate::output_dir::OutputRefusal;
 
@@ -2620,7 +2622,6 @@ mod tests {
     fn loose_build_past_the_module_limit_is_refused() {
         let dir = loose_scratch("limit");
         let count = crate::loose_file::MAX_LOOSE_FILE_MODULES;
-        use std::fmt::Write as _;
         let imports = (0..count).fold(String::new(), |mut acc, i| {
             let _ = writeln!(acc, "import M{i}");
             acc
