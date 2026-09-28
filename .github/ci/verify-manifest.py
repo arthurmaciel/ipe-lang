@@ -544,6 +544,13 @@ def check_deterministic_set(jobs: list[Job], errors: list[str]) -> None:
     Its job set must equal the watcher's `needs:`, and each pair's step must
     be a literal `name:` of that job's steps — a renamed or unnamed check step
     would otherwise never match and silently disable both consumers.
+
+    This check reads `jobs` (the plain `Job` pass `main` shares across
+    checks 1-4) for the watcher's `needs:` and contexts, but re-reads
+    ci.yml as raw YAML for each listed job's own steps and masking keys —
+    it does not consume the typed `ToolJob`/`ClosedStep` structures that
+    `check_workflow_steps` parses for checks 6-7, since a deterministic
+    check is not itself required to be a tool job.
     """
     pairs = load_deterministic_checks(errors)
     if pairs is None:
@@ -560,9 +567,10 @@ def check_deterministic_set(jobs: list[Job], errors: list[str]) -> None:
         )
         return
 
-    raw_jobs = strict_yaml.safe_load(
-        open(os.path.join(REPO_ROOT, "workflows", CANCEL_WATCHER_WORKFLOW))
-    ).get("jobs") or {}
+    with open(
+        os.path.join(REPO_ROOT, "workflows", CANCEL_WATCHER_WORKFLOW), encoding="utf-8"
+    ) as f:
+        raw_jobs = strict_yaml.safe_load(f).get("jobs") or {}
 
     # context -> job id, over single-context (non-matrix) jobs of ci.yml only:
     # a matrix leg's context cannot be tied to one check step unambiguously.
@@ -1986,7 +1994,10 @@ class ToolJob:
     job-level masking keys, which every `ToolStep`'s role must admit on a job
     (`ROLE_MASKING`; a job with no `ToolStep` admits none). A job carrying
     one is terminal: no job needs it, since a skipped job skips its
-    dependents and each of them then reports success.
+    dependents and each of them then reports success. A job with a VERDICT
+    step carries no `needs:` at all — the same skip-then-report-success hole
+    reopens transitively through any ancestor's `if:`, not only through this
+    job's own masking, so a verdict job depends on nothing.
     """
 
     runner: RunnerLabel
@@ -2082,6 +2093,15 @@ class ToolJob:
                     f"job(s) {dependents} need it — a skipped job skips its dependents, which "
                     "then report success; refused"
                 )
+        job_needs = _needs_of(raw)
+        if job_needs and any(t.role is ToolRole.VERDICT for t in tools):
+            refusals.append(
+                f"{jloc} runs {PROTECTED_TREE}/ with needs: {job_needs!r} — a verdict tool's "
+                "job may depend on nothing: GitHub skips a job whose need is itself skipped, "
+                "directly or through that need's own needs, the instant ANY job in the chain "
+                "carries an if: (of any value), and a skipped required check reports success; "
+                "refused"
+            )
         for scope, container in ((EnvScope.WORKFLOW, wf.doc), (EnvScope.JOB, raw)):
             d = container.get("defaults")
             r = d.get("run") if isinstance(d, dict) else None
@@ -2444,9 +2464,12 @@ def check_workflow_steps(errors: list[str], root: str = REPO_ROOT) -> None:
           GitHub-hosted Ubuntu label (`RunnerLabel`), a job key outside
           `TOOL_JOB_KEYS`, a `timeout-minutes` that is not a positive integer
           literal (`Timeout`), a masking key its tools' roles do not admit,
-          a job `if:` on a job another job needs, a `working-directory` at
-          step or defaults scope, or a `defaults.run.shell` other than bash
-          is refused. In every job, a `working-directory` (step, composite
+          a job `if:` on a job another job needs, a `needs:` on a job with a
+          VERDICT step (a skipped ancestor, anywhere up the `needs:` chain,
+          skips it too, and a skipped required check reports success), a
+          `working-directory` at step or defaults scope, or a
+          `defaults.run.shell` other than bash is refused. In every job, a
+          `working-directory` (step, composite
           step, or defaults) assembled at run time or with a `.github`
           component, as written (`\\` read as `/`) or resolved on disk, is
           refused: a relative `ci/...` under it names the tree unspelled.
@@ -2516,7 +2539,20 @@ def check_workflow_steps(errors: list[str], root: str = REPO_ROOT) -> None:
         quote-concatenated `::set-""env` spelling is refused);
       - installers that fetch without pip's hash checking beyond the refused
         `setup.py install`, `uv pip`, `uv tool`, `uvx`, `pipx`, and
-        `easy_install`.
+        `easy_install`;
+      - `TOOL_FLAG_RE` admits any literal flag word, so `--help`/`-h` is an
+        accepted tool invocation and exits 0 without running the tool's
+        verdict logic;
+      - a `.py`/`.sh` file under the tree is accepted as a tool by its
+        filename suffix alone — a library module never meant to run
+        standalone (`strict_yaml.py`, `release_only.py`) parses the same as
+        a verdict script;
+      - `run: true` (or any non-`run:` step form) is not a `ToolRun` and so
+        is not a tool step at all — it neither names the tree nor is
+        refused for failing to;
+      - nothing here binds a branch-protection required context's name to
+        the tool file it is meant to report; the mapping from context to
+        script is trusted, not checked.
     Those are review-gated, not machine-gated.
     """
     start = len(errors)
