@@ -104,7 +104,99 @@ class TestStrictSafeLoader(unittest.TestCase):
             strict_yaml.safe_load("? [a, b]\n: 1\n")
 
 
+    def test_key_spelled_twice_with_different_quoting_is_refused(self) -> None:
+        # `1` and `'1'` construct distinct Python keys but are one key to a
+        # YAML 1.2 reader.
+        with self.assertRaises(strict_yaml.StrictYAMLError) as ctx:
+            strict_yaml.safe_load("env:\n  1: a\n  '1': b\n")
+        self.assertIn("duplicate key", str(ctx.exception))
+
+    def test_implicit_bool_key_colliding_with_on_is_refused(self) -> None:
+        with self.assertRaises(strict_yaml.StrictYAMLError):
+            strict_yaml.safe_load("on: push\ntrue: x\n")
+
+    # ---- explicit tags ---------------------------------------------------
+
+    def test_null_tag_hiding_scalar_text_is_refused(self) -> None:
+        with self.assertRaises(strict_yaml.StrictYAMLError) as ctx:
+            strict_yaml.safe_load("env:\n  X: !!null \"${{ format('RUSTC_{0}','WRAPPER') }}\"\n")
+        self.assertIn("explicit tag", str(ctx.exception))
+
+    def test_omap_tag_carrying_duplicate_keys_is_refused(self) -> None:
+        with self.assertRaises(strict_yaml.StrictYAMLError):
+            strict_yaml.safe_load("env: !!omap\n  - K: 1\n  - K: 2\n")
+
+    def test_binary_tag_key_is_refused(self) -> None:
+        with self.assertRaises(strict_yaml.StrictYAMLError):
+            strict_yaml.safe_load("env:\n  !!binary UlVTVENfV1JBUFBFUg==: x\n")
+
+    def test_explicit_merge_tag_is_refused(self) -> None:
+        with self.assertRaises(strict_yaml.StrictYAMLError):
+            strict_yaml.safe_load("job:\n  !!merge x:\n    runs-on: evil\n")
+
+    def test_local_tag_is_refused(self) -> None:
+        with self.assertRaises(strict_yaml.StrictYAMLError):
+            strict_yaml.safe_load("a: !foo x\n")
+
+    def test_str_tag_is_refused(self) -> None:
+        with self.assertRaises(strict_yaml.StrictYAMLError):
+            strict_yaml.safe_load("a: !!str x\n")
+
+    # ---- bounded nesting ---------------------------------------------------
+
+    def test_over_deep_nesting_is_a_typed_refusal(self) -> None:
+        with self.assertRaises(strict_yaml.StrictYAMLError) as ctx:
+            strict_yaml.safe_load("[" * 5000 + "]" * 5000)
+        self.assertIn("nested too deeply", str(ctx.exception))
+
+    def test_multiple_documents_are_refused(self) -> None:
+        import yaml
+
+        with self.assertRaises(yaml.YAMLError):
+            strict_yaml.safe_load("a: 1\n---\na: 2\n")
+
+
 class TestRefuseExpressionAssembly(unittest.TestCase):
+    def assertRefused(self, text: str) -> None:
+        self.assertIsNotNone(strict_yaml.refuse_expression_assembly(text, "loc"), text)
+
+    def test_function_names_match_case_insensitively(self) -> None:
+        for fn in ("FORMAT", "Format", "JOIN", "tojson", "ToJson"):
+            self.assertRefused(f"echo ${{{{ {fn}('RUSTC_{{0}}','WRAPPER') }}}}")
+
+    def test_brace_inside_string_literal_does_not_end_the_scan(self) -> None:
+        self.assertRefused("echo ${{ ('}') && format('RUSTC_{0}','WRAPPER') }}")
+        self.assertRefused("echo ${{ '}}' && format('RUSTC_{0}','WRAPPER') }}")
+        self.assertRefused("echo ${{ 'it''s }}' && format('x') }}")
+
+    def test_later_expression_is_scanned(self) -> None:
+        self.assertRefused("${{ github.ref }} ${{ format('RUSTC_{0}','WRAPPER') }}")
+
+    def test_multiline_expression_is_refused(self) -> None:
+        self.assertRefused("echo ${{\n  format(\n'RUSTC_{0}', 'WRAPPER') }}")
+
+    def test_fromjson_over_a_literal_is_refused(self) -> None:
+        self.assertRefused("echo ${{ fromJSON('\"RUSTC\\u005fWRAPPER\"') }}=x >> $GITHUB_ENV")
+        self.assertRefused("echo ${{ fromjson(('\"RUSTC\\u005fWRAPPER\"')) }}")
+        self.assertRefused("echo ${{ fromJSON(x || '\"a\"') }}")
+
+    def test_fromjson_over_context_only_is_not_refused(self) -> None:
+        self.assertIsNone(
+            strict_yaml.refuse_expression_assembly(
+                "${{ fromJSON(needs.release-please.outputs.pr).headBranchName }}", "loc"
+            )
+        )
+
+    def test_call_name_inside_a_literal_is_not_refused(self) -> None:
+        self.assertIsNone(
+            strict_yaml.refuse_expression_assembly("${{ github.ref == 'format(x)' }}", "loc")
+        )
+
+    def test_call_outside_any_expression_is_not_refused(self) -> None:
+        self.assertIsNone(
+            strict_yaml.refuse_expression_assembly("python3 -c 'print(format(1))'", "loc")
+        )
+
     def test_format_call_is_refused(self) -> None:
         msg = strict_yaml.refuse_expression_assembly(
             "echo \"${{ format('RUSTC_{0}','WRAPPER') }}=sccache\" >> \"$GITHUB_ENV\"",

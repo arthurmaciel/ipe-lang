@@ -47,10 +47,12 @@ Checks performed
      at any scope; and any `env:` value, `run:`, `shell:`,
      `defaults.run.shell`, or `with:` text naming one (or cargo's
      `rustc-wrapper` config spelling), or assembling its target through a
-     GitHub Actions expression function (`format(`, `join(`, `toJSON(`)
-     instead of naming it literally. Every workflow, manifest, and local
+     GitHub Actions expression function (`format(`, `join(`, `toJSON(`, or
+     `fromJSON(` over a literal; any letter case) instead of naming it
+     literally. Every workflow, manifest, and local
      action is loaded through `strict_yaml` (see that module), so a
-     duplicate mapping key, a `<<` merge key, or an anchor/alias — each
+     duplicate mapping key, a `<<` merge key, an anchor/alias, or an
+     explicit tag — each
      legal to a plain YAML loader but resolved differently, or not at all,
      from what GitHub Actions runs — is refused rather than silently
      resolved. A job that reaches the composite,
