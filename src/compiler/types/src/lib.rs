@@ -28,6 +28,7 @@
 mod constrain;
 mod doc;
 mod exhaust;
+mod pairing;
 mod solve;
 pub(crate) mod super_bounds;
 mod ty;
@@ -44,8 +45,9 @@ use ipe_canon::ast as canon;
 use ipe_diagnostics::{DResult, Diagnostic, LowerError, Span, TypeError, WildcardDependence};
 use ipe_intern::{Interner, Symbol};
 
-pub use constrain::{kernel_type_table, resolve_scheme};
+pub use constrain::{Builtins, kernel_type_table, resolve_scheme};
 pub use doc::{VarNamer, canon_type_to_doc, letters, ty_to_doc};
+pub use pairing::{ArgPairs, ConHead, EmittedHeads, HeadIdentity, TyPairs, paired_ty_children};
 pub use solve::{BUDGET_ENV, Budget, DEFAULT_SOLVER_BUDGET};
 pub use ty::{
     RETRY_POLICY_FIELDS, RowTail, Ty, TyBounds, is_solver_var, tag_solver_var, untag_solver_var,
@@ -57,6 +59,7 @@ use constrain::{
 };
 use solve::solve_attributed;
 use ty::{Content, FlatType};
+pub use unify::con_heads_compatible;
 use unify::unify;
 use unionfind::{UnionFind, VarId};
 

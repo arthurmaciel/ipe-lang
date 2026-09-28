@@ -4735,15 +4735,6 @@ fn match_template(
                 Ok(())
             }
         },
-        IrType::Tuple(ts) => match concrete {
-            IrType::Tuple(cs) if cs.len() == ts.len() => {
-                for (t, c) in ts.iter().zip(cs.iter()) {
-                    match_template(t, c, subst)?;
-                }
-                Ok(())
-            }
-            _ => Err(mismatch()),
-        },
         IrType::Record(tm) => match concrete {
             IrType::Record(cm) if tm.len() == cm.len() => {
                 for ((tk, tv), (ck, cv)) in tm.iter().zip(cm.iter()) {
@@ -4756,101 +4747,32 @@ fn match_template(
             }
             _ => Err(mismatch()),
         },
-        IrType::Fun(tp, tr) => match concrete {
-            IrType::Fun(cp, cr) if tp.len() == cp.len() => {
-                for (t, c) in tp.iter().zip(cp.iter()) {
-                    match_template(t, c, subst)?;
-                }
-                match_template(tr, cr, subst)
+        // Every compound node pairs its children with the use site's under one
+        // head identity (`ipe_ir::paired_children`): a different variant, enum
+        // `(home, name)`, `Ui` ctor, function carrier (`Box` vs `Arc` vs
+        // `FnOnce` chain are distinct Rust types), or child count mismatches.
+        IrType::Tuple(_)
+        | IrType::Fun(..)
+        | IrType::SharedFun(..)
+        | IrType::FnOnceChain(..)
+        | IrType::Enum { .. }
+        | IrType::Maybe(_)
+        | IrType::List(_)
+        | IrType::Result(..)
+        | IrType::Dict(..)
+        | IrType::Set(_)
+        | IrType::Decoder(_)
+        | IrType::Task(_)
+        | IrType::Cmd(_)
+        | IrType::Sub(_)
+        | IrType::WebRoute(_)
+        | IrType::CustomElement { .. }
+        | IrType::Ui { .. } => {
+            for (t, c) in ipe_ir::paired_children(template, concrete).ok_or_else(mismatch)? {
+                match_template(t, c, subst)?;
             }
-            _ => Err(mismatch()),
-        },
-        // Same structural-shape matching as `Fun` — the promoted `Arc<dyn Fn>`
-        // carrier reconciles only against another `SharedFun` (a `Box`-carried
-        // `Fun` is a distinct Rust type).
-        IrType::SharedFun(tp, tr) => match concrete {
-            IrType::SharedFun(cp, cr) if tp.len() == cp.len() => {
-                for (t, c) in tp.iter().zip(cp.iter()) {
-                    match_template(t, c, subst)?;
-                }
-                match_template(tr, cr, subst)
-            }
-            _ => Err(mismatch()),
-        },
-        // Same structural-shape matching as `Fun` (same arity-checked
-        // parameter list plus return-type recursion) — a curried `FnOnce`
-        // chain template reconciles only against another `FnOnceChain`.
-        IrType::FnOnceChain(tp, tr) => match concrete {
-            IrType::FnOnceChain(cp, cr) if tp.len() == cp.len() => {
-                for (t, c) in tp.iter().zip(cp.iter()) {
-                    match_template(t, c, subst)?;
-                }
-                match_template(tr, cr, subst)
-            }
-            _ => Err(mismatch()),
-        },
-        IrType::Enum {
-            home: th,
-            name: tn,
-            args: ta,
-        } => match concrete {
-            // Nominal identity is (home, name): a template enum reconciles with a
-            // concrete enum only when BOTH match, so two same-short-named types
-            // from different modules never cross-reconcile.
-            IrType::Enum {
-                home: ch,
-                name: cn,
-                args: ca,
-            } if th == ch && tn == cn && ta.len() == ca.len() => {
-                for (t, c) in ta.iter().zip(ca.iter()) {
-                    match_template(t, c, subst)?;
-                }
-                Ok(())
-            }
-            _ => Err(mismatch()),
-        },
-        IrType::Maybe(te) => match concrete {
-            IrType::Maybe(ce) => match_template(te, ce, subst),
-            _ => Err(mismatch()),
-        },
-        IrType::List(te) => match concrete {
-            IrType::List(ce) => match_template(te, ce, subst),
-            _ => Err(mismatch()),
-        },
-        IrType::Result(terr, tok) => match concrete {
-            IrType::Result(cerr, cok) => {
-                match_template(terr, cerr, subst)?;
-                match_template(tok, cok, subst)
-            }
-            _ => Err(mismatch()),
-        },
-        IrType::Dict(tk, tv) => match concrete {
-            IrType::Dict(ck, cv) => {
-                match_template(tk, ck, subst)?;
-                match_template(tv, cv, subst)
-            }
-            _ => Err(mismatch()),
-        },
-        IrType::Set(te) => match concrete {
-            IrType::Set(ce) => match_template(te, ce, subst),
-            _ => Err(mismatch()),
-        },
-        IrType::Decoder(te) => match concrete {
-            IrType::Decoder(ce) => match_template(te, ce, subst),
-            _ => Err(mismatch()),
-        },
-        IrType::Task(te) => match concrete {
-            IrType::Task(ce) => match_template(te, ce, subst),
-            _ => Err(mismatch()),
-        },
-        IrType::Cmd(te) => match concrete {
-            IrType::Cmd(ce) => match_template(te, ce, subst),
-            _ => Err(mismatch()),
-        },
-        IrType::Sub(te) => match concrete {
-            IrType::Sub(ce) => match_template(te, ce, subst),
-            _ => Err(mismatch()),
-        },
+            Ok(())
+        }
         // A concrete leaf must equal the use-site leaf exactly.
         IrType::Int
         | IrType::Float
@@ -4944,28 +4866,6 @@ fn match_template(
                 Err(mismatch())
             }
         }
-        // `WebRoute page` is parametric on `page` — recurse into the page
-        // argument.
-        IrType::WebRoute(tp) => match concrete {
-            IrType::WebRoute(cp) => match_template(tp, cp, subst),
-            _ => Err(mismatch()),
-        },
-        // The widget handle's seal types are monomorphic (no template var
-        // survives the seal gate), but match both slots structurally so a future
-        // relaxation stays sound rather than silently mismatching.
-        IrType::CustomElement { down: td, up: tu } => match concrete {
-            IrType::CustomElement { down: cd, up: cu } => {
-                match_template(td, cd, subst)?;
-                match_template(tu, cu, subst)
-            }
-            _ => Err(mismatch()),
-        },
-        // `Ui { ctor, msg }` is parametric on `msg`; match the ctor tag
-        // then recurse into the msg argument.
-        IrType::Ui { ctor: tc, msg: tm } => match concrete {
-            IrType::Ui { ctor: cc, msg: cm } if tc == cc => match_template(tm, cm, subst),
-            _ => Err(mismatch()),
-        },
         // A row variable never enters the struct registry — it is erased to a
         // witness-bounded generic in a function signature, never a record-struct
         // template field. Reaching this arm is an invariant violation.
