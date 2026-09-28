@@ -52,6 +52,7 @@ pub mod machine_output;
 pub mod native_ffi_consent;
 pub mod net;
 pub mod output_dir;
+pub mod owner_trust;
 pub mod pack;
 pub mod package_manifest;
 pub mod package_name;

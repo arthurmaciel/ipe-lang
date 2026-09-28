@@ -70,8 +70,25 @@ pub fn read_to_string_capped(path: &Path, max: u64) -> Result<String, CliError> 
         path: path.to_path_buf(),
         source: e,
     })?;
+    read_opened_capped(f, path, max)
+}
+
+/// Read an already-opened `reader` to a `String` under the same `max`-byte
+/// ceiling as [`read_to_string_capped`], naming `path` in any error.
+///
+/// For a file opened through a held, owner-checked handle rather than by path.
+///
+/// # Errors
+///
+/// As [`read_to_string_capped`], minus the open.
+pub fn read_opened_capped(
+    reader: impl std::io::Read,
+    path: &Path,
+    max: u64,
+) -> Result<String, CliError> {
     let mut buf = Vec::new();
-    f.take(max.saturating_add(1))
+    reader
+        .take(max.saturating_add(1))
         .read_to_end(&mut buf)
         .map_err(|e| CliError::Io {
             path: path.to_path_buf(),

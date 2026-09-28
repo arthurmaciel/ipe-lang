@@ -36,5 +36,10 @@ toml = "0.8"
 [target.'cfg(unix)'.dependencies]
 rustix = { version = "0.38", features = ["fs"] }
 
+[features]
+# The by-path, link-following catalog reader (`driver::load_catalog`) for
+# tests that load a cache they created themselves. Production never enables it.
+test-support = []
+
 [lints]
 workspace = true

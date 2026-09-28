@@ -626,6 +626,12 @@ messages! {
     init_shape_needs_value = "init-shape-needs-value";
     /// A directory carries a legacy `ipe.toml` but no `package.ipe`.
     legacy_toml_hint = "legacy-toml-hint";
+    /// A `package.ipe` above the entry file is foreign-owned or writable by another user.
+    manifest_untrusted(path) = "manifest-untrusted";
+    /// A `package.ipe` above the entry file is a symbolic link.
+    manifest_symlink(path) = "manifest-symlink";
+    /// A `package.ipe` above the entry file cannot be owner-checked on this platform.
+    manifest_unverifiable(path) = "manifest-unverifiable";
     /// `build`/`run`/`watch` found no entry and none could be discovered.
     no_entry = "no-entry";
     /// The entry module was not found in the source map (an internal invariant).
@@ -1056,8 +1062,16 @@ messages! {
     doc_type_invalid_query(query, detail) = "doc-type-invalid-query";
     /// `ipe doc --type` matched no symbol, with a hint to broaden the query.
     doc_type_no_match_hint(query) = "doc-type-no-match-hint";
-    /// The FFI cache is not owned by the user or is world-writable.
+    /// An FFI cache entry is not owned by the user or another user can write it.
     ffi_cache_untrusted(path) = "ffi-cache-untrusted";
+    /// The FFI cache's ownership cannot be verified on this platform.
+    ffi_cache_unverifiable(path) = "ffi-cache-unverifiable";
+    /// An FFI cache component or artifact is a symbolic link.
+    ffi_cache_symlink(path) = "ffi-cache-symlink";
+    /// An FFI cache artifact is not a regular file.
+    ffi_cache_not_regular(path) = "ffi-cache-not-regular";
+    /// An FFI cache directory lists more entries than the loader admits.
+    ffi_cache_too_many_entries(path, max) = "ffi-cache-too-many-entries";
     /// A project module clashes with an installed FFI crate.
     ffi_module_clash(module, krate) = "ffi-module-clash";
     /// An FFI define type collides with an inspected opaque type.
@@ -1160,6 +1174,8 @@ messages! {
     login_move_failed(path, detail) = "login-move-failed";
     /// The token file could not be removed.
     login_remove_failed(path, detail) = "login-remove-failed";
+    /// The token cannot be stored owner-only on this platform.
+    login_token_store_unsupported = "login-token-store-unsupported";
     /// The device-flow prompt: what the grant is for, where to go, and the code.
     login_device_prompt(purpose, url, code: &crate::style::TerminalSafe) = "login-device-prompt";
     /// What the publish-token grant is for.
