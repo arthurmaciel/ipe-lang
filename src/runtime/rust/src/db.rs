@@ -2196,20 +2196,21 @@ pub fn db_migrate_apply<E: Send + From<String> + 'static>(
                     }
                 }
             }
-            print!(
+            let mut header = format!(
                 "db: {} migration(s) — {applied_n} applied, {pending_n} pending",
                 migrations.len()
             );
             if drift_n > 0 {
-                print!(", {drift_n} DRIFTED");
+                header.push_str(&format!(", {drift_n} DRIFTED"));
             }
-            print!("\n\n");
+            crate::system::write_stdout_line(&header);
+            crate::system::write_stdout_line("");
             let width = lines.iter().map(|(_, n, _)| n.len()).max().unwrap_or(0);
             for (mark, name, detail) in &lines {
-                println!("  {mark}  {name:<width$}  {detail}");
+                crate::system::write_stdout_line(&format!("  {mark}  {name:<width$}  {detail}"));
             }
             if lines.is_empty() {
-                println!("  (no migrations declared)");
+                crate::system::write_stdout_line("  (no migrations declared)");
             }
             let _ = std::io::Write::flush(&mut std::io::stdout());
             if drift_n > 0 {
@@ -2294,9 +2295,15 @@ pub fn db_migrate_apply<E: Send + From<String> + 'static>(
         // 4. `migrate` op mode — print the summary, then exit.
         if op == "migrate" {
             if out.is_empty() {
-                println!("db: schema already up to date — 0 migrations applied");
+                crate::system::write_stdout_line(
+                    "db: schema already up to date — 0 migrations applied",
+                );
             } else {
-                println!("db: applied {} migration(s): {}", out.len(), out.join(", "));
+                crate::system::write_stdout_line(&format!(
+                    "db: applied {} migration(s): {}",
+                    out.len(),
+                    out.join(", ")
+                ));
             }
             let _ = std::io::Write::flush(&mut std::io::stdout());
             // IPE-RUST-AUDIT:ACCEPTED (Arthur Maciel) — `ipe db migrate` CLI-op boundary: migrations applied, exit zero [ledger #boundary]
