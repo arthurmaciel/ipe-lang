@@ -14,16 +14,12 @@
 use crate::stringify::IpeStringify;
 
 /// `Debug.log : String -> a -> a`. Writes `"<label>: <value>"` + a newline to
-/// stderr (fallibly, dropping a broken-pipe error rather than panicking — the
-/// same discipline `log.rs`'s line writers use), then returns `value`
+/// stderr (fallibly, through `system::write_stderr_line`, so a broken pipe
+/// never panics), then returns `value`
 /// unchanged.
 #[must_use]
 pub fn debug_log<T: IpeStringify>(label: String, value: T) -> T {
-    use std::io::Write as _;
-    let line = format!("{label}: {}", value.ipe_show());
-    // A closed downstream pipe surfaces as an `EPIPE` write error (Rust ignores
-    // SIGPIPE by default); drop it so a well-typed `Debug.log` never aborts.
-    let _ = writeln!(std::io::stderr().lock(), "{line}");
+    crate::system::write_stderr_line(&format!("{label}: {}", value.ipe_show()));
     value
 }
 
@@ -35,9 +31,6 @@ pub fn debug_log<T: IpeStringify>(label: String, value: T) -> T {
 /// compile time from the call-site source span; it is never computed at
 /// runtime.  `note` is the developer-supplied string argument.
 pub fn debug_todo<A>(location: String, note: String) -> A {
-    use std::io::Write as _;
-    let msg = format!("TODO at {location}: {note}");
-    // Broken-pipe suppression: same discipline as `debug_log`.
-    let _ = writeln!(std::io::stderr().lock(), "{msg}");
+    crate::system::write_stderr_line(&format!("TODO at {location}: {note}"));
     crate::system::system_exit(1)
 }

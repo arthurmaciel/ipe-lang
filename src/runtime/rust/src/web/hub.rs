@@ -242,7 +242,7 @@ async fn read_logs_value(
     let rows = match q.fetch_all(&pool).await {
         Ok(r) => r,
         Err(e) => {
-            eprintln!("[ipe.hub] readLogs: {e}");
+            crate::system::emit_runtime_log("hub", &format!("readLogs: {e}"));
             return Value::Array(vec![]);
         }
     };
@@ -352,7 +352,7 @@ where
     match serde_json::from_value::<A>(arr) {
         Ok(a) => ok_res(a),
         Err(e) => {
-            eprintln!("[ipe.hub] decode_rows: {e}");
+            crate::system::emit_runtime_log("hub", &format!("decode_rows: {e}"));
             // Fall back to decoding an empty array (List records) — if A is not
             // a list this also fails, in which case surface a structured Err
             // (the value system models it; never a panic).
@@ -392,7 +392,7 @@ async fn read_metrics_value(db_path: &str, service: &str, tenant_prefix: &str) -
     let rows = match q.bind(METRIC_LIMIT).fetch_all(&pool).await {
         Ok(r) => r,
         Err(e) => {
-            eprintln!("[ipe.hub] readMetrics: {e}");
+            crate::system::emit_runtime_log("hub", &format!("readMetrics: {e}"));
             return Value::Array(vec![]);
         }
     };
@@ -459,7 +459,7 @@ async fn read_traces_value(db_path: &str, service: &str, tenant_prefix: &str) ->
     let rows = match q.bind(TRACE_LIMIT).fetch_all(&pool).await {
         Ok(r) => r,
         Err(e) => {
-            eprintln!("[ipe.hub] readTraces: {e}");
+            crate::system::emit_runtime_log("hub", &format!("readTraces: {e}"));
             return Value::Array(vec![]);
         }
     };
@@ -506,7 +506,7 @@ async fn read_errors_value(db_path: &str, service: &str, tenant_prefix: &str) ->
     let rows = match q.bind(ERROR_LIMIT).fetch_all(&pool).await {
         Ok(r) => r,
         Err(e) => {
-            eprintln!("[ipe.hub] readErrors: {e}");
+            crate::system::emit_runtime_log("hub", &format!("readErrors: {e}"));
             return Value::Array(vec![]);
         }
     };
@@ -898,7 +898,7 @@ where
                 .filter(|s| !s.is_empty())
                 .collect(),
             Err(e) => {
-                eprintln!("[ipe.hub] serviceStats services: {e}");
+                crate::system::emit_runtime_log("hub", &format!("serviceStats services: {e}"));
                 return decode_rows(Value::Array(vec![]));
             }
         };
@@ -920,19 +920,10 @@ where
     match serde_json::from_value::<A>(obj) {
         Ok(a) => ok_res(a),
         Err(e) => {
-            eprintln!("[ipe.hub] decode_one: {e}");
+            crate::system::emit_runtime_log("hub", &format!("decode_one: {e}"));
             IpeResult::Err(str_err(&format!("hub.decode: {e}")))
         }
     }
-}
-
-/// Replace ASCII control characters (notably CR/LF) with spaces so a
-/// Ipê-controlled value interpolated into a diagnostic line can't forge
-/// additional log entries (log injection). Total — never panics.
-fn sanitize_log(s: &str) -> String {
-    s.chars()
-        .map(|c| if c.is_control() { ' ' } else { c })
-        .collect()
 }
 
 /// Open the telemetry spill read-only. `None` (never an error) when the path is
@@ -962,13 +953,7 @@ async fn open_spill(db_path: &str) -> Option<SqlitePool> {
     match SqlitePool::connect_with(opts).await {
         Ok(pool) => Some(pool),
         Err(e) => {
-            // `db_path` is Ipê-controlled (and the error may echo it); strip
-            // control chars so neither can forge extra log lines.
-            eprintln!(
-                "[ipe.hub] open_spill {}: {}",
-                sanitize_log(db_path),
-                sanitize_log(&e.to_string())
-            );
+            crate::system::emit_runtime_log("hub", &format!("open_spill {db_path}: {e}"));
             None
         }
     }
@@ -1002,7 +987,7 @@ pub fn hub_list_services<E: Send + From<String> + 'static>(
                 ok_res(out)
             }
             Err(e) => {
-                eprintln!("[ipe.hub] listServices: {e}");
+                crate::system::emit_runtime_log("hub", &format!("listServices: {e}"));
                 ok_res(Vec::new())
             }
         }

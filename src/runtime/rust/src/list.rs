@@ -137,9 +137,9 @@ pub fn list_sort_with_order<A: Clone>(cmp: impl Fn(A, A) -> IpeOrder, list: Vec<
         });
     }));
     if outcome.is_err() {
-        eprintln!(
-            "[ipe.list] List.sortWith: comparator is not a consistent total order; \
-             returning input in unspecified order"
+        crate::system::emit_runtime_log(
+            "list",
+            "List.sortWith: comparator is not a consistent total order; returning input in unspecified order",
         );
     }
     result
@@ -344,9 +344,12 @@ pub fn list_range(lo: i64, hi: i64) -> Vec<i64> {
     }
     let n = i128::from(hi) - i128::from(lo) + 1;
     if n > CAP as i128 {
-        eprintln!(
-            "[ipe.list] List.range: span of {n} elements exceeds the {CAP}-element \
-             allocation cap; returning the first {CAP} only"
+        crate::system::emit_runtime_log(
+            "list",
+            &format!(
+                "List.range: span of {n} elements exceeds the {CAP}-element allocation cap; \
+                 returning the first {CAP} only"
+            ),
         );
         return (lo..=hi).take(CAP).collect();
     }
@@ -422,8 +425,9 @@ fn cmp_total<T: PartialOrd>(a: &T, b: &T) -> std::cmp::Ordering {
 fn sort_by_total<T, F: Fn(&T, &T) -> std::cmp::Ordering>(result: &mut [T], cmp: F) {
     let order = std::panic::AssertUnwindSafe(|| result.sort_by(&cmp));
     if std::panic::catch_unwind(order).is_err() {
-        eprintln!(
-            "[ipe.list] sort: comparator is not a consistent total order (NaN?); unspecified order"
+        crate::system::emit_runtime_log(
+            "list",
+            "sort: comparator is not a consistent total order (NaN?); unspecified order",
         );
     }
 }
@@ -473,9 +477,9 @@ pub fn list_sort_with<A: Clone>(cmp: impl Fn(A, A) -> i64, list: Vec<A>) -> Vec<
         order.sort_by(|a, b| cmp(a.clone(), b.clone()).cmp(&0));
     }));
     if outcome.is_err() {
-        eprintln!(
-            "[ipe.list] List.sortWith: comparator is not a consistent total order; \
-             returning input in unspecified order"
+        crate::system::emit_runtime_log(
+            "list",
+            "List.sortWith: comparator is not a consistent total order; returning input in unspecified order",
         );
     }
     result

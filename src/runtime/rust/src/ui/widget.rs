@@ -121,7 +121,7 @@ where
                 Ok(up) => Some(on_up(up)),
                 Err(e) => {
                     // Observable, but never a foothold: no part of the value survives.
-                    eprintln!("[ipe.widget] up-event dropped: {e}");
+                    crate::system::emit_runtime_log("widget", &format!("up-event dropped: {e}"));
                     None
                 }
             }

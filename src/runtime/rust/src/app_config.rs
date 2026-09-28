@@ -213,7 +213,7 @@ impl ConfigError {
     /// server never binds. `-> !`: this never returns, so a caller expecting a
     /// [`Secret`] uses it in value position without producing an empty secret.
     pub fn abort_startup(&self) -> ! {
-        eprintln!("configuration error: {}", self.message());
+        crate::system::write_stderr_line(&format!("configuration error: {}", self.message()));
         crate::system::system_exit(1)
     }
 }

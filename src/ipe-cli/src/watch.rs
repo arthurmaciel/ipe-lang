@@ -236,7 +236,10 @@ fn emit(opts: &WatchOptions, event: WatchEvent) {
     }
 }
 
-/// Render a watch lifecycle line with 2-space gutter and optional colour.
+/// Render a watch lifecycle line with a deterministic 4-space gutter (two
+/// [`crate::style::GUTTER`] widths — one level deeper than the CLI's own
+/// top-level banner/status indent, matching the runtime child's own
+/// `[ipe.http.server]`/`[ipe.live]` startup-line indent) and optional colour.
 /// `role` selects the semantic colour: `Info`, `Success`, or `Failure`.
 #[derive(Clone, Copy)]
 enum WatchRole {
@@ -278,10 +281,18 @@ fn watch_line(text: &crate::style::TerminalSafe, role: WatchRole) -> String {
             p.reset,
         ),
     };
+    // The indent is literal GUTTER text placed BEFORE any colour escape, on
+    // every role alike, so it is deterministic regardless of colour state and
+    // so `screen::guttered_once`'s `starts_with(GUTTER)` check recognises it
+    // and never adds a second gutter on top (the prior colour-first
+    // construction on the `Info`/`Success` arms defeated that check, so those
+    // two roles rendered at 4 spaces with colour on but only 2 with colour
+    // off — this makes all three roles a fixed 4 spaces either way).
+    let indent = format!("{}{}", crate::style::GUTTER, crate::style::GUTTER);
     let prefix = if glyph.is_empty() {
-        format!("{colour}{}{reset}", crate::style::GUTTER)
+        format!("{indent}{colour}{reset}")
     } else {
-        format!("{}{colour}{glyph}{reset} ", crate::style::GUTTER)
+        format!("{indent}{colour}{glyph}{reset} ")
     };
     format!("{prefix}{text}")
 }
@@ -3274,7 +3285,14 @@ fn relay_and_capture_stderr(pipe: Option<impl std::io::Read>) -> String {
         match crate::read_progress_chunk(&mut reader, &mut chunk) {
             Ok(0) | Err(_) => break,
             Ok(_) => {
-                crate::screen::emit_machine(crate::screen::Stream::Stderr, &chunk);
+                // Indented one shared column off the edge (see
+                // `screen::indent_relay_chunk`, the same routine `commands.rs`
+                // uses for `ipe build`'s identical relay) — `captured` keeps
+                // the raw, unindented chunk for the failure diagnostic.
+                crate::screen::emit_machine(
+                    crate::screen::Stream::Stderr,
+                    &crate::screen::indent_relay_chunk(&chunk),
+                );
                 captured.push_str(&chunk);
             }
         }
@@ -3303,11 +3321,12 @@ fn find_executable_path(cargo_json_stdout: &str) -> Option<PathBuf> {
 mod tests {
     use super::{
         AppearanceRoute, BuildAccel, Command, Duration, OrchestratorEvent, RESOLVE_RETRY_DELAY,
-        RebuildTimings, ResolvedProject, ScopeSpec, appearance_route, apply_build_accel_env,
-        child_env, choose_build_accel, compile_failed_frame, dir_has_dep_rlib, emitted_binds_http,
-        emitted_is_tui, emitted_is_web, env_flag_on, first_error_line, mint_hot_token, mpsc,
-        prove_green_crate, push_control_appearance, resolve_project_sources,
-        schedule_resolve_retry, send_control_frame, spawn_command, strip_ansi, watch_status_body,
+        RebuildTimings, ResolvedProject, ScopeSpec, WatchRole, appearance_route,
+        apply_build_accel_env, child_env, choose_build_accel, compile_failed_frame,
+        dir_has_dep_rlib, emitted_binds_http, emitted_is_tui, emitted_is_web, env_flag_on,
+        first_error_line, mint_hot_token, mpsc, prove_green_crate, push_control_appearance,
+        resolve_project_sources, schedule_resolve_retry, send_control_frame, spawn_command,
+        strip_ansi, watch_line, watch_status_body,
     };
     use std::ffi::OsStr;
     use std::path::{Path, PathBuf};
@@ -4185,6 +4204,29 @@ mod tests {
             matches!(outcome, Some(super::CargoOutcome::Killed)),
             "a superseded build must report Killed"
         );
+    }
+
+    /// `watch_line` must render every role at a fixed 4-space indent (two
+    /// `GUTTER` widths) regardless of colour state. Before this fix, `Info`
+    /// and `Success` placed the colour escape BEFORE the literal gutter text,
+    /// which defeated `screen::guttered_once`'s `starts_with(GUTTER)` check
+    /// and caused it to add a second gutter on top — 4 spaces with colour on,
+    /// only 2 with colour off. Stripping ANSI here isolates the indent from
+    /// that downstream (and separately-tested) double-gutter guard.
+    #[test]
+    fn watch_line_indent_is_four_spaces_regardless_of_role_or_colour() {
+        let text = crate::style::TerminalSafe::sanitize("app started");
+        for role in [WatchRole::Info, WatchRole::Success, WatchRole::Failure] {
+            let rendered = strip_ansi(&watch_line(&text, role));
+            assert!(
+                rendered.starts_with("    "),
+                "watch_line must start with a 4-space gutter for every role; got {rendered:?}"
+            );
+            assert!(
+                !rendered.starts_with("     "),
+                "watch_line must not double-gutter past 4 spaces; got {rendered:?}"
+            );
+        }
     }
 
     /// Whether `refused` is a replaced-crate refusal.

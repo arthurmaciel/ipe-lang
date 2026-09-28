@@ -70,23 +70,124 @@ fn home_dir_from(raw: Option<String>) -> Option<std::path::PathBuf> {
         .filter(|path| path.is_absolute())
 }
 
-/// Render a runtime status line (e.g. the HTTP `listening on` banner) with a
-/// 2-space left gutter ONLY when stderr is an interactive terminal; a piped or
+/// Render a runtime status line (e.g. the HTTP `listening on` banner, or an
+/// `[ipe.live]`/`[ipe.console]` session-store/console line) with a 4-space
+/// left gutter ONLY when stderr is an interactive terminal; a piped or
 /// redirected stderr (test harness, production log capture) stays flush-left so
 /// downstream `contains(...)` matchers see the bare line. The `is_terminal`
 /// decision is a parameter so the indent rule is testable without a pty.
 ///
-/// Gated to `server`: the only callers are the `server::server_listen` and
-/// `web::serve_web` HTTP `listening on` banners, both `#[cfg(feature =
-/// "server")]` (`web` implies `server`), so a build without the server surface
-/// would otherwise carry this as dead code.
-#[cfg(feature = "server")]
+/// Four spaces, not the CLI's plain 2-space `GUTTER`: under `ipe watch`, these
+/// lines are the spawned app's own output, printed one level deeper than the
+/// `[ipe watch] ...` status lines that frame it (which themselves render at
+/// two gutter-widths) — so this nests under them rather than under the
+/// top-level banner.
+///
+/// Unconditional: every `[ipe.<tag>] ...` runtime log line, in every feature
+/// combination, flows through `emit_runtime_log` below, which calls this —
+/// so it can never be dead code.
 pub(crate) fn gutter_line(msg: &str, is_terminal: bool) -> String {
     if is_terminal {
-        format!("  {msg}")
+        format!("    {msg}")
     } else {
         msg.to_string()
     }
+}
+
+/// A character that must never reach an operator log line raw: every Unicode
+/// `Cc` control (C0 incl. CR/LF/ESC, DEL, C1 incl. NEL/CSI), the Unicode
+/// line/paragraph separators U+2028/U+2029 (record breaks for log viewers and
+/// JS-based aggregators), and the bidirectional formatting controls
+/// (U+061C, U+200E/F, U+202A-E, U+2066-9) that visually reorder a line.
+fn is_log_hazard(c: char) -> bool {
+    c.is_control()
+        || matches!(
+            c,
+            '\u{2028}'
+                | '\u{2029}'
+                | '\u{061c}'
+                | '\u{200e}'
+                | '\u{200f}'
+                | '\u{202a}'..='\u{202e}'
+                | '\u{2066}'..='\u{2069}'
+        )
+}
+
+/// Neutralise every log-hazard character (see [`is_log_hazard`]) in text
+/// bound for an operator log line by escaping it — `\n`, `\r`, `\t`, else
+/// `\u{XX}` — so untrusted
+/// input (a driver error, a request path, an env-derived path, a trace value)
+/// can neither forge extra records nor inject terminal escape sequences, and
+/// the escape stays visible rather than silently erased. The single log
+/// scrubber: every plain-text log sink routes untrusted text through it. Not a
+/// JSON escaper — JSON records keep `telemetry::json_escape`.
+pub(crate) fn scrub_log_controls(s: &str) -> std::borrow::Cow<'_, str> {
+    use std::fmt::Write as _;
+    if !s.chars().any(is_log_hazard) {
+        return std::borrow::Cow::Borrowed(s);
+    }
+    let mut out = String::with_capacity(s.len().saturating_add(16));
+    for c in s.chars() {
+        match c {
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if is_log_hazard(c) => {
+                let _ = write!(out, "\\u{{{:x}}}", u32::from(c));
+            }
+            c => out.push(c),
+        }
+    }
+    std::borrow::Cow::Owned(out)
+}
+
+/// Write one line to stderr fallibly, dropping the error: `eprintln!` panics
+/// when the write fails, and because Rust ignores SIGPIPE a hung-up reader
+/// (`app 2>&1 | head`) surfaces as `EPIPE`. The single runtime stderr line
+/// sink — `log.rs`, `debug.rs`, the tagged emitter below and every other
+/// runtime diagnostic line route through it, so no stderr write can abort.
+pub(crate) fn write_stderr_line(line: &str) {
+    use std::io::Write as _;
+    let _ = writeln!(std::io::stderr().lock(), "{line}");
+}
+
+/// Build a `"[<stamp> ][ipe.<tag>] <msg>"` line with `msg` scrubbed. Private:
+/// the only place the literal `"[ipe."` prefix is constructed; call sites use
+/// `emit_runtime_log` / `emit_runtime_log_stamped`.
+fn format_runtime_log(stamp: Option<&str>, tag: &str, msg: &str) -> String {
+    let msg = scrub_log_controls(msg);
+    match stamp {
+        Some(stamp) => format!("{stamp} [ipe.{tag}] {msg}"),
+        None => format!("[ipe.{tag}] {msg}"),
+    }
+}
+
+/// The fully rendered (scrubbed, terminal-guttered) form of a tagged runtime
+/// log line — exactly what the emitters write.
+pub(crate) fn runtime_log_line(stamp: Option<&str>, tag: &str, msg: &str) -> String {
+    use std::io::IsTerminal;
+    gutter_line(
+        &format_runtime_log(stamp, tag, msg),
+        std::io::stderr().is_terminal(),
+    )
+}
+
+/// The single emitter for every `[ipe.<tag>] ...` runtime log line — session
+/// stores, live sessions, the console proxy, hub/push exporters, telemetry
+/// spill, list/cache/webview warnings, and any future one. Every such site
+/// routes through here instead of hand-rolling `eprintln!("[ipe.<tag>] ...")`,
+/// so the control-character scrub, `gutter_line`'s human-terminal indent and the
+/// broken-pipe-tolerant write apply uniformly with no bypass path. Pinned by the
+/// source scan in `runtime_log_emitter_tests` below.
+pub(crate) fn emit_runtime_log(tag: &str, msg: &str) {
+    write_stderr_line(&runtime_log_line(None, tag, msg));
+}
+
+/// `emit_runtime_log` for a line that carries a leading timestamp before its
+/// tag (the memory session-store startup line).
+#[cfg(all(feature = "web-core", feature = "server"))]
+pub(crate) fn emit_runtime_log_stamped(stamp: &str, tag: &str, msg: &str) {
+    write_stderr_line(&runtime_log_line(Some(stamp), tag, msg));
 }
 
 /// Resolve the port an HTTP listener binds: `env_value` (as injected by
@@ -1158,16 +1259,17 @@ mod exit_hook_tests {
     }
 }
 
-#[cfg(all(test, feature = "server"))]
+#[cfg(test)]
 mod gutter_line_tests {
     use super::gutter_line;
 
     #[test]
     fn indents_only_under_a_terminal() {
-        // Terminal stderr → 2-space gutter for the human dev loop.
+        // Terminal stderr → 4-space gutter for the human dev loop (nests under
+        // the CLI's own `[ipe watch] ...` status lines).
         assert_eq!(
             gutter_line("[ipe.http.server] listening on http://127.0.0.1:8000", true),
-            "  [ipe.http.server] listening on http://127.0.0.1:8000"
+            "    [ipe.http.server] listening on http://127.0.0.1:8000"
         );
         // Piped/redirected stderr (the E2E harness reads through a pipe) stays
         // flush-left so `contains("[ipe.http.server] listening on")` matchers hold.
@@ -1177,6 +1279,187 @@ mod gutter_line_tests {
                 false
             ),
             "[ipe.http.server] listening on http://127.0.0.1:8000"
+        );
+    }
+}
+
+/// Drift guard for the "every `[ipe.<tag>] ...` runtime log line goes through
+/// one emitter" invariant: `emit_runtime_log`/`format_runtime_log` above are
+/// meant to be the ONLY place that ever constructs the `"[ipe.<tag>]"` prefix.
+/// A hand-rolled `eprintln!`/`println!`/`writeln!` carrying that literal
+/// bypasses `gutter_line`'s terminal-indent handling, so this scans every
+/// `.rs` file under the runtime crate's `src/` (this file excepted — it IS the
+/// emitter) and fails if any such macro invocation still carries one. Styled
+/// after `install_style_drift.rs`'s script-scanning drift tests: a plain
+/// substring/window scan, not a real parser, is enough to catch the class of
+/// regression (a new call site hand-rolling the tag) without reimplementing a
+/// Rust parser.
+#[cfg(test)]
+mod runtime_log_emitter_tests {
+    use std::path::{Path, PathBuf};
+
+    /// Walk `dir` collecting every `.rs` file, skipping `system.rs` (the
+    /// sanctioned construction site) so the scan only sees call sites that
+    /// must route through `emit_runtime_log`.
+    fn collect_rs_files(dir: &Path, out: &mut Vec<PathBuf>) {
+        let entries = std::fs::read_dir(dir)
+            .unwrap_or_else(|e| panic!("could not read dir {}: {e}", dir.display()));
+        for entry in entries {
+            let entry = entry.expect("readable dir entry");
+            let path = entry.path();
+            if path.is_dir() {
+                collect_rs_files(&path, out);
+                continue;
+            }
+            if path.extension().and_then(|e| e.to_str()) != Some("rs") {
+                continue;
+            }
+            if path.file_name().and_then(|f| f.to_str()) == Some("system.rs") {
+                continue;
+            }
+            out.push(path);
+        }
+    }
+
+    /// True when a `"[ipe.` literal appears within a short window after an
+    /// `eprintln!`/`println!`/`writeln!` invocation in `content` — wide enough
+    /// to span a realistic multi-line macro call, narrow enough not to bleed
+    /// into an unrelated later macro call.
+    fn has_hand_rolled_tag(content: &str) -> bool {
+        for macro_name in ["eprintln!", "println!", "writeln!"] {
+            let mut rest = content;
+            while let Some(rel) = rest.find(macro_name) {
+                let tail = rest.get(rel..).unwrap_or_default();
+                let window_end = tail.char_indices().nth(400).map_or(tail.len(), |(i, _)| i);
+                if tail
+                    .get(..window_end)
+                    .unwrap_or_default()
+                    .contains("\"[ipe.")
+                {
+                    return true;
+                }
+                rest = tail.get(macro_name.len()..).unwrap_or_default();
+            }
+        }
+        false
+    }
+
+    #[test]
+    fn tag_scan_window_is_char_boundary_safe() {
+        let multibyte = "\u{e9}".repeat(500);
+        assert!(!has_hand_rolled_tag(&format!("eprintln!({multibyte})")));
+        assert!(has_hand_rolled_tag(&format!(
+            "\u{e9}eprintln!(\"[ipe.x] {multibyte}\")"
+        )));
+    }
+
+    /// `eprintln!`/`eprint!` panic on a failed write (EPIPE); every runtime
+    /// stderr line goes through `system::write_stderr_line` instead.
+    #[test]
+    fn no_runtime_module_uses_a_panicking_stderr_macro() {
+        let src_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut files = Vec::new();
+        collect_rs_files(&src_dir, &mut files);
+        let violations: Vec<String> = files
+            .iter()
+            .filter(|path| {
+                let content = std::fs::read_to_string(path)
+                    .unwrap_or_else(|e| panic!("could not read {}: {e}", path.display()));
+                content.contains("eprintln!(") || content.contains("eprint!(")
+            })
+            .map(|path| path.display().to_string())
+            .collect();
+        assert!(
+            violations.is_empty(),
+            "`eprintln!`/`eprint!` panics on a broken pipe — use \
+             `crate::system::write_stderr_line` (or `emit_runtime_log`) instead:\n{}",
+            violations.join("\n")
+        );
+    }
+
+    #[test]
+    fn no_runtime_module_hand_rolls_an_ipe_tagged_log_line() {
+        let src_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut files = Vec::new();
+        collect_rs_files(&src_dir, &mut files);
+        assert!(
+            files.len() > 10,
+            "sanity: expected to scan more than 10 files under {}, found {}",
+            src_dir.display(),
+            files.len()
+        );
+
+        let mut violations = Vec::new();
+        for path in &files {
+            let content = std::fs::read_to_string(path)
+                .unwrap_or_else(|e| panic!("could not read {}: {e}", path.display()));
+            if has_hand_rolled_tag(&content) {
+                violations.push(path.display().to_string());
+            }
+        }
+        assert!(
+            violations.is_empty(),
+            "found `eprintln!`/`println!`/`writeln!` hand-rolling an `[ipe.<tag>]` \
+             prefix outside system.rs — route through `crate::system::emit_runtime_log` \
+             (or `crate::system::emit_runtime_log_stamped` for a timestamped line) instead:\n{}",
+            violations.join("\n")
+        );
+    }
+}
+
+#[cfg(test)]
+mod scrub_log_controls_tests {
+    use super::{runtime_log_line, scrub_log_controls};
+
+    #[test]
+    fn escapes_newline_esc_del_and_c1() {
+        let out = scrub_log_controls("a\nb\r\x1b[2J\x7f\u{9b}\u{85}\0c\td");
+        assert_eq!(out, "a\\nb\\r\\u{1b}[2J\\u{7f}\\u{9b}\\u{85}\\u{0}c\\td");
+        assert!(
+            !out.chars().any(char::is_control),
+            "control survived: {out:?}"
+        );
+    }
+
+    #[test]
+    fn escapes_unicode_line_separators_and_bidi_controls() {
+        let out = scrub_log_controls(
+            "a\u{2028}b\u{2029}c\u{202e}d\u{2066}e\u{2069}f\u{200f}g\u{61c}h\u{202a}i",
+        );
+        assert_eq!(
+            out,
+            "a\\u{2028}b\\u{2029}c\\u{202e}d\\u{2066}e\\u{2069}f\\u{200f}g\\u{61c}h\\u{202a}i"
+        );
+        assert!(
+            !out.chars().any(super::is_log_hazard),
+            "hazard survived: {out:?}"
+        );
+        // One step past each bidi range stays verbatim.
+        assert!(matches!(
+            scrub_log_controls("\u{202f}\u{206a}\u{2027}"),
+            std::borrow::Cow::Borrowed(_)
+        ));
+    }
+
+    #[test]
+    fn clean_text_is_borrowed_unchanged() {
+        let out = scrub_log_controls("GET /caf\u{e9} 200 3ms");
+        assert!(matches!(
+            out,
+            std::borrow::Cow::Borrowed("GET /caf\u{e9} 200 3ms")
+        ));
+    }
+
+    #[test]
+    fn emitted_line_cannot_forge_a_second_record() {
+        let line = runtime_log_line(None, "http", "GET /x\r\n[ipe.http] forged\x1b[31m");
+        assert!(
+            !line.chars().any(super::is_log_hazard),
+            "control survived: {line:?}"
+        );
+        assert_eq!(
+            line.trim_start(),
+            "[ipe.http] GET /x\\r\\n[ipe.http] forged\\u{1b}[31m"
         );
     }
 }

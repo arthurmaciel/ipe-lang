@@ -1290,6 +1290,12 @@ pub static EXCLUDED_NAMES: &[&str] = &[
     // replays the named typed log instead of running; present only in a
     // `debugger` build.
     "IPE_DEBUGGER_REPLAY",
+    // `ipe upgrade` <-> `install.sh` handshake — set by the upgrade wrapper on
+    // the installer child it spawns (never operator-set): the wrapped marker
+    // suppresses the installer's own failure banner, and the tag file carries
+    // the resolved release tag back to the wrapper.
+    "IPE_UPGRADE_TAG_FILE",
+    "IPE_UPGRADE_WRAPPED",
 ];
 
 #[cfg(test)]

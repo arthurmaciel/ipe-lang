@@ -1745,6 +1745,53 @@ pub fn run_version(rest: &[String]) -> Result<(), CliError> {
 pub const INSTALL_SH_URL: &str =
     "https://raw.githubusercontent.com/arthurmaciel/ipe-lang/main/install.sh";
 
+/// The env var marking an `install.sh` run launched by this wrapper.
+///
+/// A direct `curl | sh` never sets it. `pub` so the install-drift test can
+/// assert `install.sh` reads the same name — see [`run_installer`].
+pub const UPGRADE_WRAPPED_ENV: &str = "IPE_UPGRADE_WRAPPED";
+
+/// The env var naming the private file a wrapped `install.sh` writes its
+/// resolved release tag into when no prebuilt binary exists.
+///
+/// `pub` so the install-drift test can assert `install.sh` reads the same
+/// name — see [`run_installer`].
+pub const UPGRADE_TAG_FILE_ENV: &str = "IPE_UPGRADE_TAG_FILE";
+
+/// Byte ceiling on the tag file `install.sh` hands back; a longer file is
+/// refused, never parsed.
+const UPGRADE_TAG_MAX_BYTES: usize = 128;
+
+/// Parse the tag file's bytes into a normalised `vMAJOR.MINOR.PATCH[-pre][+build]`.
+///
+/// Accepts exactly one line (one trailing `\n` allowed) holding a `v`-prefixed
+/// semver tag, optionally `ipe-`-prefixed — the shape of a release tag. Empty,
+/// oversize, non-UTF-8, multi-line, whitespace-padded or non-semver input is
+/// `None`, so no installer-written byte reaches the terminal unparsed.
+fn parse_installer_tag(raw: &[u8]) -> Option<String> {
+    if raw.len() > UPGRADE_TAG_MAX_BYTES {
+        return None;
+    }
+    let text = std::str::from_utf8(raw).ok()?;
+    let line = text.strip_suffix('\n').unwrap_or(text);
+    let tag = line.strip_prefix("ipe-").unwrap_or(line);
+    let version = semver::Version::parse(tag.strip_prefix('v')?).ok()?;
+    Some(format!("v{version}"))
+}
+
+/// Read the tag `install.sh` wrote into `tag_file` back through the retained
+/// handle (same inode, capped one byte past the ceiling so an oversize file is
+/// detected rather than truncated into a plausible tag), then parse it.
+fn read_installer_tag(tag_file: Option<&mut crate::scratch::ScratchFile>) -> Option<String> {
+    use std::io::Read as _;
+    let tag_file = tag_file?;
+    tag_file.rewind().ok()?;
+    let cap = u64::try_from(UPGRADE_TAG_MAX_BYTES.saturating_add(1)).ok()?;
+    let mut raw = Vec::new();
+    (&mut tag_file.file).take(cap).read_to_end(&mut raw).ok()?;
+    parse_installer_tag(&raw)
+}
+
 /// `ipe upgrade` — self-update by re-running the release installer.
 ///
 /// Checks the latest published release, then installs it when a newer one is
@@ -1870,10 +1917,10 @@ pub fn run_upgrade(rest: &[String]) -> Result<(), CliError> {
                 .as_ref()
                 .map(semver::Version::to_string)
                 .unwrap_or_default();
+            let (glyph, tint) = style::Outcome::Step.glyph_and_tint(p);
             crate::screen::Screen::new(crate::screen::Stream::Stdout)
                 .styled(&format!(
-                    "{}?{}  {}",
-                    p.yellow,
+                    "{tint}{glyph}{} {}",
                     p.reset,
                     text::upgrade_available(&cur, &lat)
                 ))
@@ -1936,10 +1983,24 @@ pub fn run_installer(command: &str) -> Result<(), CliError> {
     // red failure) BEFORE the child inherits the terminal, so the installer's
     // own staged output begins on a fresh, uncorrupted line.
     let stage = progress::Stage::start(std::io::stderr(), "Launching the release installer…");
-    let child = std::process::Command::new("sh")
+    // IPE_UPGRADE_WRAPPED tells install.sh it is running under us: on its
+    // "no prebuilt binary" failure it skips its own stderr banner (we render
+    // the one failure message ourselves, below) and writes the tag it actually
+    // resolved and probed into the private (0600, unpredictably named) file
+    // named by IPE_UPGRADE_TAG_FILE, so we report the real target version
+    // instead of guessing. All stdio stays inherited, untouched. Without a
+    // tag file install.sh keeps its own banner.
+    let mut tag_file = crate::scratch::ScratchFile::create("ipe-upgrade-tag").ok();
+    let mut installer = std::process::Command::new("sh");
+    installer
         .arg("-c")
         .arg(command)
-        .spawn();
+        .env(UPGRADE_WRAPPED_ENV, "1");
+    match &tag_file {
+        Some(file) => installer.env(UPGRADE_TAG_FILE_ENV, file.path()),
+        None => installer.env_remove(UPGRADE_TAG_FILE_ENV),
+    };
+    let child = installer.spawn();
     let mut child = match child {
         Ok(child) => {
             stage.success("Installer launched — following its progress below.");
@@ -1954,6 +2015,7 @@ pub fn run_installer(command: &str) -> Result<(), CliError> {
             )));
         }
     };
+
     let status = child
         .wait()
         .map_err(|e| CliError::Usage(text::msg::upgrade_installer_wait_failed(&e)))?;
@@ -1981,9 +2043,11 @@ pub fn run_installer(command: &str) -> Result<(), CliError> {
                 other => other,
             }
         );
-        // The version is not known here (the installer resolves it); use the
-        // running binary's version as the best available proxy.
-        let version = format!("v{}", env!("CARGO_PKG_VERSION"));
+        // install.sh hands back the tag it actually resolved and probed (see
+        // IPE_UPGRADE_TAG_FILE above); fall back to the running binary's
+        // version only when that channel is absent or fails the strict parse.
+        let version = read_installer_tag(tag_file.as_mut())
+            .unwrap_or_else(|| format!("v{}", env!("CARGO_PKG_VERSION")));
         return Err(CliError::UpgradeNoPrebuilt {
             version: crate::style::TerminalSafe::sanitize(&version),
             platform: crate::style::TerminalSafe::sanitize(&platform),
@@ -3008,6 +3072,52 @@ pub const fn diag_span(d: &Diagnostic) -> ipe_diagnostics::Span {
 // project on disk: they pass `Some(declared)` so `classify_entry_shape` (which
 // reads source files) is bypassed. Any rejected path that no test drives is one
 // edit away from silently passing — pin them here.
+
+#[cfg(test)]
+mod installer_tag_tests {
+    use super::*;
+
+    #[test]
+    fn accepts_a_release_tag_and_normalises_it() {
+        assert_eq!(parse_installer_tag(b"v0.2.5\n").as_deref(), Some("v0.2.5"));
+        assert_eq!(
+            parse_installer_tag(b"ipe-v0.2.5").as_deref(),
+            Some("v0.2.5")
+        );
+        assert_eq!(
+            parse_installer_tag(b"v1.0.0-rc.1+build.7\n").as_deref(),
+            Some("v1.0.0-rc.1+build.7")
+        );
+    }
+
+    #[test]
+    fn refuses_oversize_input() {
+        let mut raw = b"v1.0.0-".to_vec();
+        raw.resize(UPGRADE_TAG_MAX_BYTES + 1, b'a');
+        assert_eq!(parse_installer_tag(&raw), None);
+    }
+
+    #[test]
+    fn refuses_garbage() {
+        for raw in [
+            &b""[..],
+            b"\n",
+            b"0.2.5",
+            b"latest",
+            b"v0.2",
+            b" v0.2.5",
+            b"v0.2.5 \n",
+            b"v0.2.5\n\n",
+            b"v0.2.5\nv9.9.9",
+            b"v0.2.5\r\n",
+            b"v0.2.5\x1b[2J",
+            b"v\xff.2.5",
+            b"ipe-ipe-v0.2.5",
+        ] {
+            assert_eq!(parse_installer_tag(raw), None, "accepted {raw:?}");
+        }
+    }
+}
 
 #[cfg(test)]
 mod pack_gate_tests {
