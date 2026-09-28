@@ -1760,6 +1760,94 @@ fn on_disk_ir_cache_hit_serves_a_tampered_entry_verbatim() {
     let _ = fs::remove_dir_all(&tmp);
 }
 
+/// A production IR-cache hit on a `Debug.*` program blames the in-memory entry text.
+///
+/// The IR tier's key omits the production flag, so a development build
+/// seeds it and a release build of the same source hits it, then refuses
+/// with IPE-L0140. The refusal renders against the entry source the build
+/// already holds, never a fresh read of `blame_path`, whose disk bytes here
+/// differ.
+#[cfg(unix)] // a cache hit needs a file identity check
+#[test]
+#[allow(clippy::expect_used)] // a missing scratch write is a harness failure, not the behaviour under test
+fn production_ir_cache_hit_blames_the_in_memory_entry_source() {
+    let Ok(runtime) = resolve_runtime() else {
+        return;
+    };
+    let tmp = std::env::temp_dir().join(format!("ipec-ir-cache-blame-{}", std::process::id()));
+    let cache_dir = tmp.join("cache");
+    let cache_site = crate::cache::CacheSite::Explicit(cache_dir.clone());
+    let _ = fs::remove_dir_all(&tmp);
+    fs::create_dir_all(&tmp).expect("create scratch dir");
+    let blame_path = tmp.join("package.ipe");
+    fs::write(&blame_path, "on-disk bytes the refusal must not show\n").expect("write blame file");
+
+    let entry_path = vec!["Main".to_owned()];
+    let entry_file = tmp.join("Main.ipe");
+    let entry_text = "module Main exposing (main)\n\nimport Ipe.Io as Io\nimport Ipe.Debug as Debug\n\nshout : String -> String\nshout s =\n    Debug.log \"shout\" s\n\nmain : Task Error ()\nmain =\n    Io.println (shout \"hi\")\n";
+    let mut sources: BTreeMap<Vec<String>, (PathBuf, String)> = BTreeMap::new();
+    sources.insert(
+        entry_path.clone(),
+        (entry_file.clone(), entry_text.to_owned()),
+    );
+    let discovered = vec![project::DiscoveredModule::user(
+        entry_file.clone(),
+        entry_path.clone(),
+    )];
+
+    let (dev, dev_outcome) = compile_modules_observed(
+        sources.clone(),
+        discovered.clone(),
+        &entry_path,
+        &tmp.join("out-dev"),
+        &runtime,
+        &blame_path,
+        ipe_backend_rust::DbDriver::Sqlite,
+        Some(&cache_site),
+        BuildOptions::default(),
+    );
+    let (release, release_outcome) = compile_modules_observed(
+        sources,
+        discovered,
+        &entry_path,
+        &tmp.join("out-release"),
+        &runtime,
+        &blame_path,
+        ipe_backend_rust::DbDriver::Sqlite,
+        Some(&cache_site),
+        BuildOptions {
+            production: true,
+            ..BuildOptions::default()
+        },
+    );
+    let _ = fs::remove_dir_all(&tmp);
+
+    assert!(
+        dev.is_ok(),
+        "the development build succeeds: {:?}",
+        dev.err()
+    );
+    assert_eq!(dev_outcome, CacheOutcome::Miss);
+    assert_eq!(
+        release_outcome,
+        CacheOutcome::IrHit,
+        "the release build must take the IR-cache fast path under test"
+    );
+    assert!(
+        matches!(release, Err(CliError::Pipeline { .. })),
+        "the release build must refuse with a pipeline diagnostic: {release:?}"
+    );
+    let Err(CliError::Pipeline { file, src, diag }) = release else {
+        return;
+    };
+    assert_eq!(diag.code().as_str(), "IPE-L0140");
+    assert_eq!(file, entry_file, "the refusal blames the entry module");
+    assert_eq!(
+        src, entry_text,
+        "the refusal renders the in-memory entry text, not a disk re-read"
+    );
+}
+
 /// A cache disabled via `cache_dir: None` never touches disk for
 /// caching purposes and always runs the full pipeline.
 #[test]

@@ -196,10 +196,7 @@ pub fn resolve_loose_file(
 
     let discovered = sources
         .iter()
-        .map(|(module, (path, _))| project::DiscoveredModule {
-            path: path.clone(),
-            module_path: module.clone(),
-        })
+        .map(|(module, (path, _))| project::DiscoveredModule::user(path.clone(), module.clone()))
         .collect();
     Ok(LooseFileSources {
         sources,

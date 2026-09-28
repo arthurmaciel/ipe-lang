@@ -605,7 +605,9 @@ fn rescope(
         match notify::Watcher::watch(watcher, dir, mode) {
             Ok(()) => added = true,
             Err(e) => emit_watch_line(
-                &crate::style::TerminalSafe::sanitize(&text::watch_path_failed(&dir.display(), &e)),
+                &crate::style::TerminalSafe::sanitize(
+                    text::msg::watch_path_failed(&dir.display(), &e).as_str(),
+                ),
                 WatchRole::Failure,
             ),
         }
@@ -842,7 +844,7 @@ fn run_inner(
     let scope = initial
         .scope
         .build()
-        .map_err(|e| CliError::UsageOwned(e.to_string()))?;
+        .map_err(|e| CliError::Usage(crate::text::Message::relay(&e)))?;
     if !opts.quiet {
         emit_watch_line(
             &crate::style::TerminalSafe::sanitize(&format!(
@@ -932,7 +934,7 @@ fn run_inner(
     };
     for dir in &initial_roots {
         notify::Watcher::watch(&mut watcher, dir, recursive_mode)
-            .map_err(|e| CliError::UsageOwned(text::watch_path_failed(&dir.display(), &e)))?;
+            .map_err(|e| CliError::Usage(text::msg::watch_path_failed(&dir.display(), &e)))?;
     }
 
     warn_if_memory_store();

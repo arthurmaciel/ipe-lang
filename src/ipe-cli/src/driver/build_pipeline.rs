@@ -809,10 +809,10 @@ pub fn compile_modules_observed(
                         kernel: "Debug.*".into(),
                     },
                 };
-                let src = std::fs::read_to_string(blame_path).unwrap_or_default();
+                let (file, src) = entry_blame_source(&sources, entry_path, blame_path);
                 return (
                     Err(CliError::Pipeline {
-                        file: blame_path.to_path_buf(),
+                        file,
                         src,
                         diag: Box::new(diag),
                     }),
@@ -1210,6 +1210,22 @@ pub fn record_widget_tag_origin(
     }
 }
 
+/// The entry module's path and text, which an entry-blamed diagnostic renders against.
+///
+/// The text comes from the source map the build already read under its
+/// bounds, never from a second disk read. An entry absent from `sources`
+/// yields `blame_path` with empty text.
+fn entry_blame_source(
+    sources: &BTreeMap<Vec<String>, (PathBuf, String)>,
+    entry_path: &[String],
+    blame_path: &Path,
+) -> (PathBuf, String) {
+    sources.get(entry_path).map_or_else(
+        || (blame_path.to_path_buf(), String::new()),
+        |(path, text)| (path.clone(), text.clone()),
+    )
+}
+
 /// The in-memory compile core over an already-populated database.
 ///
 /// topo order → per-module canonicalisation (memoized, blame-attributed) →
@@ -1261,13 +1277,7 @@ pub fn compile_prepared(
     // Link → infer → lower → emit on the merged module. Blame link/lower/emit
     // errors on the entry file; infer errors and warnings are attributed to the
     // dep module that owns the failing span.
-    let entry_src_path = sources
-        .get(entry_path)
-        .map_or_else(|| blame_path.to_path_buf(), |(p, _)| p.clone());
-    let entry_src = sources
-        .get(entry_path)
-        .map(|(_, s)| s.clone())
-        .unwrap_or_default();
+    let (entry_src_path, entry_src) = entry_blame_source(sources, entry_path, blame_path);
     let pipeline_err = |diag: ipe_diagnostics::Diagnostic| CliError::Pipeline {
         file: entry_src_path.clone(),
         src: entry_src.clone(),
