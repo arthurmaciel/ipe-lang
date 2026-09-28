@@ -119,6 +119,11 @@ pub struct WildcardEntry {
     /// How many leading entries of `wildcards` each parameter contributes, in
     /// parameter order; the return's occurrences follow.
     pub param_counts: Vec<usize>,
+    /// Whether each parameter's whole annotation is the bare wildcard `any`,
+    /// in parameter order (parallel to `param_counts`).
+    pub bare_params: Vec<bool>,
+    /// The binding name's span, for blame on a wildcard that cannot stay one.
+    pub span: Span,
 }
 
 /// Maximum number of nodes [`zonk`] reads back from a single type before

@@ -31,7 +31,9 @@ use ipe_ir::{
     RuntimeModule, TypeDef, UiCtor, UiPlain, Variant, fun_value_arc_promotable,
     ir_type_has_effect_carrier, ir_type_holds, ir_type_is_serde, is_dispatch_free, is_irrefutable,
 };
-use ipe_types::{EmittedHeads, RowTail, SignatureWildcards, SolvedTypes, Ty, TyBounds};
+use ipe_types::{
+    EmittedHeads, RowTail, SignatureWildcards, SolvedTypes, Ty, TyBounds, ty_is_ground,
+};
 
 mod capture_rewrite;
 mod clone_class;
@@ -16573,7 +16575,17 @@ impl<'a> Lowerer<'a> {
                         else {
                             continue;
                         };
-                        if ty_contains_var(region_ty) {
+                        // A top-level record region is a structural row identity
+                        // (handled below) whose row tail is its extensibility,
+                        // not an unknown, so only its fields must be ground; every
+                        // other region is concretized only when ground. Inference
+                        // already refused every wildcard these predicates would
+                        // leave undetermined (`ty_is_ground`).
+                        let determined = match region_ty {
+                            Ty::Record(fields, _) => fields.values().all(ty_is_ground),
+                            _ => ty_is_ground(region_ty),
+                        };
+                        if !determined {
                             continue;
                         }
                         // A parameter flowing into a `Db.get*` ROW accessor keeps

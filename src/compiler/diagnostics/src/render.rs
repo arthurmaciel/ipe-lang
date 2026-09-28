@@ -35,7 +35,7 @@ use crate::diagnostic::{
     ExpectedSet, ExposingDefect, Feature, FfiError, GenericAppEntryReach, HeaderDefect, HelpLine,
     Hint, IfDefect, LetDefect, LowerError, NameError, ParseError, SandboxError, SealRejection,
     SpanRole, StoreEqAccessorDefect, StoreSelectProjectionDefect, Suggestion, TokenKind, TyDoc,
-    TypeDeclDefect, TypeError,
+    TypeDeclDefect, TypeError, WildcardDependence,
 };
 use crate::span::Span;
 
@@ -669,6 +669,12 @@ fn type_prose(msg: &TypeError) -> String {
         }
         TypeError::WebViewReturnsHtml => {
             "This returns `Html`, but an `Element` is what's needed here.".to_string()
+        }
+        TypeError::WildcardNotIndependent { parameter, .. } => {
+            format!(
+                "The `any` in parameter {parameter} is tied to another type, so it \
+                 can't stay a wildcard."
+            )
         }
         TypeError::BudgetExceeded | TypeError::StepBudgetExceeded { .. } => {
             "Type checking this took longer than I'm allowed to spend on it.".to_string()
@@ -1795,6 +1801,23 @@ fn type_label(msg: &TypeError) -> Option<String> {
              calls one returns `Html` (the app shape applies the layout for you)"
                 .to_string(),
         ),
+        TypeError::WildcardNotIndependent { dependence, .. } => Some(match dependence {
+            WildcardDependence::TypeVariable { name: Some(name) } => {
+                format!("the body makes this `any` the same type as the type variable `{name}`")
+            }
+            WildcardDependence::TypeVariable { name: None } => {
+                "the body makes this `any` the same type as a type variable".to_string()
+            }
+            WildcardDependence::SharedWith { parameter } => format!(
+                "the body makes this `any` the same type as the `any` of parameter \
+                 {parameter}"
+            ),
+            WildcardDependence::PartialStructure { found } => format!(
+                "the body needs this `any` to be `{}`, which still leaves part \
+                 of the type open",
+                ty_to_string(found)
+            ),
+        }),
         TypeError::Mismatch | TypeError::BudgetExceeded | TypeError::StepBudgetExceeded { .. } => {
             None
         }

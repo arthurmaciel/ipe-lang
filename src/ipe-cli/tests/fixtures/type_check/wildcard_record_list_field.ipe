@@ -1,0 +1,15 @@
+module Main exposing (main)
+
+import Ipe.List as List
+import Ipe.String as String
+import Ipe.Io as Io
+
+
+count : any -> Int
+count p =
+    List.length p.xs
+
+
+main : Task ()
+main =
+    Io.println (String.fromInt (count { xs = [ 1, 2 ] }))
