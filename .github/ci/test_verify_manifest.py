@@ -1179,6 +1179,59 @@ class TestSccacheWiringClosure(unittest.TestCase):
         self.ci("steps:\n  - uses: ./.github/actions/w\n")
         self.assertRefused("steps: is not a list")
 
+    # ---- expression-assembly in run:/env: (strict_yaml.refuse_expression_assembly) --
+
+    def test_format_assembly_in_run_is_refused(self) -> None:
+        self.ci(
+            "steps:\n  - name: Build\n"
+            "    run: echo \"${{ format('RUSTC_{0}', 'WRAPPER') }}=sccache\" >> \"$GITHUB_ENV\"\n"
+        )
+        self.assertRefused("step 'Build' run:", "expression-assembly")
+
+    def test_join_assembly_in_env_is_refused(self) -> None:
+        self.ci(
+            "steps:\n  - name: Build\n    env:\n"
+            "      X: \"${{ join(github.event.inputs.*, '_') }}\"\n"
+            "    run: cargo build\n"
+        )
+        self.assertRefused("step 'Build' env.X", "expression-assembly")
+
+    def test_tojson_assembly_in_run_is_refused(self) -> None:
+        self.ci(
+            "steps:\n  - name: Build\n"
+            "    run: echo '${{ toJSON(github.event) }}' >> \"$GITHUB_ENV\"\n"
+        )
+        self.assertRefused("step 'Build' run:", "expression-assembly")
+
+    # ---- YAML structural ambiguities feed the workflow loader closed
+    # (strict_yaml.StrictSafeLoader), not just check_sccache_wiring's text scan --
+
+    def test_duplicate_key_workflow_is_refused_not_silently_resolved(self) -> None:
+        self.fx.workflow(
+            "ci.yml",
+            "name: ci\non: push\njobs:\n  clippy:\n    runs-on: ubuntu-latest\n"
+            "    steps:\n      - run: cargo build\n"
+            "    steps:\n      - run: RUSTC_WRAPPER=evil cargo build\n",
+        )
+        self.assertRefused("ci.yml is not valid YAML", "duplicate key")
+
+    def test_merge_key_workflow_is_refused(self) -> None:
+        self.fx.workflow(
+            "ci.yml",
+            "base: &base\n  runs-on: ubuntu-latest\n"
+            "name: ci\non: push\njobs:\n  clippy:\n"
+            "    <<: *base\n    steps:\n      - run: cargo build\n",
+        )
+        self.assertRefused("ci.yml is not valid YAML")
+
+    def test_anchor_alias_workflow_is_refused(self) -> None:
+        self.fx.workflow(
+            "ci.yml",
+            "name: ci\non: push\njobs:\n  clippy: &clippy\n    runs-on: ubuntu-latest\n"
+            "    steps:\n      - run: cargo build\n  clippy2: *clippy\n",
+        )
+        self.assertRefused("ci.yml is not valid YAML")
+
 
 if __name__ == "__main__":
     unittest.main()
