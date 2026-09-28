@@ -126,16 +126,33 @@ impl RunCaps {
 ///
 /// # Errors
 ///
-/// [`SandboxDefect::Path`] when `CARGO_HOME` or `RUSTUP_HOME` is relative, or a
-/// bind does not resolve.
+/// [`SandboxDefect::Path`] when `CARGO_HOME` or `RUSTUP_HOME` is relative, a
+/// bind does not resolve, or a bind would expose the cargo home.
 fn toolchain_binds() -> Result<ToolchainBinds, SandboxDefect> {
     let tool_home = |var: &'static str, fallback: &str| {
         ipe_sandbox::home::tool_home(var, fallback)
             .map_err(|e| SandboxDefect::Path(JailPathError::ToolHomeRelative(e)))
     };
+    toolchain_binds_from(
+        tool_home("CARGO_HOME", ".cargo")?,
+        tool_home("RUSTUP_HOME", ".rustup")?,
+    )
+}
+
+/// The toolchain binds for the given absolute cargo and rustup homes.
+///
+/// # Errors
+///
+/// [`SandboxDefect::Path`] when a bind does not resolve, or when the rustup home
+/// sits at or above the cargo home, so binding it would expose
+/// `credentials.toml`.
+fn toolchain_binds_from(
+    cargo_home: Option<PathBuf>,
+    rustup_home: Option<PathBuf>,
+) -> Result<ToolchainBinds, SandboxDefect> {
     let canonical = |path: &Path| CanonicalPath::resolve(path).map_err(SandboxDefect::Path);
     let mut binds = ToolchainBinds::default();
-    if let Some(cargo_home) = tool_home("CARGO_HOME", ".cargo")? {
+    if let Some(cargo_home) = &cargo_home {
         let cargo_bin = cargo_home.join("bin");
         if cargo_bin.is_dir() {
             let cargo_bin = canonical(&cargo_bin)?;
@@ -143,12 +160,20 @@ fn toolchain_binds() -> Result<ToolchainBinds, SandboxDefect> {
             binds.ro_binds.push(cargo_bin);
         }
     }
-    if let Some(rustup) = tool_home("RUSTUP_HOME", ".rustup")?
+    if let Some(rustup) = rustup_home
         && rustup.is_dir()
     {
         let rustup = canonical(&rustup)?;
         binds.ro_binds.push(rustup.clone());
         binds.rustup_home = Some(rustup);
+    }
+    if let Some(cargo_home) = &cargo_home
+        && let Some(bind) = ipe_sandbox::bind_exposing(&binds.ro_binds, cargo_home)
+    {
+        return Err(SandboxDefect::Path(JailPathError::ExposesCargoHome {
+            bind: bind.as_path().to_path_buf(),
+            cargo_home: cargo_home.clone(),
+        }));
     }
     Ok(binds)
 }
@@ -540,5 +565,45 @@ mod tests {
         assert!(is_wall_clock_kill(Some(137)));
         assert!(!is_wall_clock_kill(Some(0)));
         assert!(!is_wall_clock_kill(Some(1)));
+    }
+
+    /// A host layout with `cargo/bin` and a disjoint `rustup`, canonicalized.
+    fn toolchain_tree() -> (tempfile::TempDir, PathBuf) {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path().canonicalize().expect("canonical tempdir");
+        std::fs::create_dir_all(root.join("cargo").join("bin")).expect("cargo/bin");
+        std::fs::create_dir_all(root.join("rustup")).expect("rustup");
+        (dir, root)
+    }
+
+    #[test]
+    fn a_rustup_home_at_or_above_the_cargo_home_is_refused() {
+        let (_dir, root) = toolchain_tree();
+        let cargo_home = root.join("cargo");
+        for rustup in [cargo_home.clone(), root.clone()] {
+            let refused = toolchain_binds_from(Some(cargo_home.clone()), Some(rustup));
+            assert!(matches!(
+                refused,
+                Err(SandboxDefect::Path(JailPathError::ExposesCargoHome { .. }))
+            ));
+        }
+    }
+
+    #[test]
+    fn a_disjoint_rustup_home_binds_bin_and_rustup_only() {
+        let (_dir, root) = toolchain_tree();
+        let cargo_home = root.join("cargo");
+        let result = toolchain_binds_from(Some(cargo_home.clone()), Some(root.join("rustup")));
+        assert!(result.is_ok(), "a disjoint layout must bind");
+        let Ok(binds) = result else { return };
+        let bound: Vec<&Path> = binds.ro_binds.iter().map(CanonicalPath::as_path).collect();
+        assert_eq!(
+            bound,
+            [
+                cargo_home.join("bin").as_path(),
+                root.join("rustup").as_path()
+            ]
+        );
+        assert!(!bound.contains(&cargo_home.as_path()));
     }
 }

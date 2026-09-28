@@ -26,13 +26,17 @@ use std::path::{Path, PathBuf};
 
 use ipe_diagnostics::{Code, Diagnostic as SharedDiag, IPE_F4410, SandboxError};
 
+pub use covers::{bind_exposing, path_covers};
 pub use mounts::{CanonicalPath, HomeMasks, JailPathError, MaskedDir};
 
 pub mod build_jail;
+mod covers;
 pub mod home;
 mod mounts;
 pub mod run_jail;
 pub mod seccomp;
+#[cfg(test)]
+mod test_dir;
 
 /// Why a jail could not be established or a jailed run failed.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -784,8 +788,8 @@ mod tests {
 
     #[test]
     fn jail_argv_masks_the_invoker_homes_and_rebinds_only_the_toolchain() {
-        let base =
-            std::env::temp_dir().join(format!("ipe-sandbox-jail-homes-{}", std::process::id()));
+        let base_dir = crate::test_dir::TestDir::new("jail-homes").expect("test dir");
+        let base = base_dir.path();
         let cargo_home = base.join("cargo");
         let user_home = base.join("user");
         std::fs::create_dir_all(cargo_home.join("bin")).expect("cargo home");
@@ -825,8 +829,8 @@ mod tests {
     fn every_path_handed_to_the_payload_is_a_bound_path() {
         // A symlinked rustup home, toolchain bin, and scoped tempdir: the
         // payload must be told the path the jail binds, never the link.
-        let base =
-            std::env::temp_dir().join(format!("ipe-sandbox-jail-symlinks-{}", std::process::id()));
+        let base_dir = crate::test_dir::TestDir::new("jail-symlinks").expect("test dir");
+        let base = base_dir.path();
         let real = base.join("real");
         let links = base.join("links");
         for dir in ["rustup", "bin", "tmp"] {

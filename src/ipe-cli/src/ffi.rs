@@ -739,10 +739,7 @@ fn toolchain_binds_from(
     if let Some(rustup) = &rustup_home {
         toolchain_ro_binds.push(rustup.clone());
     }
-    if let Some(bind) = toolchain_ro_binds
-        .iter()
-        .find(|bind| path_covers(bind.as_path(), cargo_home))
-    {
+    if let Some(bind) = ipe_sandbox::bind_exposing(&toolchain_ro_binds, cargo_home) {
         return Err(CliError::Usage(
             text::msg::ffi_toolchain_bind_exposes_cargo_home(
                 &bind.as_path().display(),
@@ -759,81 +756,6 @@ fn toolchain_binds_from(
         rustup_home,
         homes,
     })
-}
-
-/// Whether binding `outer` makes `inner` visible: `inner` equals or lies under
-/// `outer`, judged lexically, with symlinks resolved, and by directory
-/// identity. Any judgement finding containment is enough.
-fn path_covers(outer: &Path, inner: &Path) -> bool {
-    lexical_normal(inner).starts_with(lexical_normal(outer))
-        || resolved(inner).starts_with(resolved(outer))
-        || covers_by_identity(outer, inner)
-}
-
-/// Whether some ancestor of `inner` (itself included) is the directory
-/// `outer`, compared by `(dev, ino)` — which also catches a bind-mount alias
-/// no path comparison sees. `link(2)` refuses directories, so one `(dev, ino)`
-/// names exactly one directory and no hardlinked alias exists.
-///
-/// An `outer` that does not exist exposes nothing; a missing ancestor of
-/// `inner` cannot be `outer`. Any other metadata error counts as covered.
-#[cfg(unix)]
-fn covers_by_identity(outer: &Path, inner: &Path) -> bool {
-    use std::os::unix::fs::MetadataExt;
-    let identity = |path: &Path| std::fs::metadata(path).map(|meta| (meta.dev(), meta.ino()));
-    let outer_id = match identity(outer) {
-        Ok(id) => id,
-        Err(e) => return e.kind() != std::io::ErrorKind::NotFound,
-    };
-    inner
-        .ancestors()
-        .filter(|ancestor| !ancestor.as_os_str().is_empty())
-        .any(|ancestor| match identity(ancestor) {
-            Ok(id) => id == outer_id,
-            Err(e) => e.kind() != std::io::ErrorKind::NotFound,
-        })
-}
-
-/// Directory identity has no portable form off unix; the lexical and resolved
-/// judgements of [`path_covers`] stand alone there.
-#[cfg(not(unix))]
-const fn covers_by_identity(_outer: &Path, _inner: &Path) -> bool {
-    false
-}
-
-/// `path` without `.` components, each `..` removing the component before it
-/// (never above the root); trailing separators vanish with the components.
-fn lexical_normal(path: &Path) -> PathBuf {
-    use std::path::Component;
-    let mut out = PathBuf::new();
-    for component in path.components() {
-        match component {
-            Component::Prefix(_) | Component::RootDir | Component::Normal(_) => {
-                out.push(component.as_os_str());
-            }
-            Component::CurDir => {}
-            Component::ParentDir => {
-                out.pop();
-            }
-        }
-    }
-    out
-}
-
-/// `path` with symlinks resolved as the kernel resolves them (a `..` after a
-/// symlink climbs from the link's target). A path that does not exist yet
-/// resolves through its longest existing ancestor, with the missing tail
-/// appended and the whole normalized lexically.
-fn resolved(path: &Path) -> PathBuf {
-    for ancestor in path.ancestors() {
-        if let Ok(real) = std::fs::canonicalize(ancestor) {
-            return path.strip_prefix(ancestor).map_or_else(
-                |_| lexical_normal(path),
-                |tail| lexical_normal(&real.join(tail)),
-            );
-        }
-    }
-    lexical_normal(path)
 }
 
 /// The jail resource caps: the fail-closed defaults, each raisable through an
@@ -4216,7 +4138,7 @@ version = \"1\"
         assert!(
             binds
                 .iter()
-                .all(|b| !path_covers(b.as_path(), cargo_home.as_path())),
+                .all(|b| !ipe_sandbox::path_covers(b.as_path(), cargo_home.as_path())),
             "no bind may contain the cargo home: {binds:?}"
         );
         assert_eq!(path, vec![cargo_bin]);
@@ -4441,29 +4363,6 @@ version = \"1\"
                     && binds.ro_binds.iter().all(|b| !b.as_path().starts_with(&link_dir))),
             "the payload's inspector and its bound dir must be the canonical target: {got:?}"
         );
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn identity_sees_an_equal_or_enclosing_dir_and_nothing_else() {
-        let tmp = toolbinds_root("identity");
-        let cargo_home = tmp.join(".cargo");
-        let other = tmp.join("other");
-        plant_cargo_home(&cargo_home);
-        std::fs::create_dir_all(&other).expect("mk other");
-        let equal = covers_by_identity(&cargo_home, &cargo_home);
-        let enclosing = covers_by_identity(&tmp, &cargo_home);
-        let below = covers_by_identity(&cargo_home.join("bin"), &cargo_home);
-        let disjoint = covers_by_identity(&other, &cargo_home);
-        let missing_outer = covers_by_identity(&tmp.join("absent"), &cargo_home);
-        let missing_inner = covers_by_identity(&other, &cargo_home.join("absent"));
-        let _ = std::fs::remove_dir_all(&tmp);
-        assert!(equal, "the directory itself is covered");
-        assert!(enclosing, "an enclosing directory covers it");
-        assert!(!below, "a directory below does not cover it");
-        assert!(!disjoint, "a disjoint directory does not cover it");
-        assert!(!missing_outer, "a missing bind exposes nothing");
-        assert!(!missing_inner, "a missing tail cannot be the bind");
     }
 
     #[test]

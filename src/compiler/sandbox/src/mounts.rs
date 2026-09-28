@@ -37,6 +37,20 @@ pub enum JailPathError {
     UserHomeUnresolved,
     /// A tool-home variable is set to a relative path.
     ToolHomeRelative(RelativeToolHome),
+    /// A path resolved earlier no longer resolves to itself: a component was
+    /// swapped for a symlink or removed since.
+    Moved {
+        /// The canonical path as first resolved.
+        path: PathBuf,
+    },
+    /// A read-only bind sits at or above the cargo home, so binding it would
+    /// expose `credentials.toml`.
+    ExposesCargoHome {
+        /// The offending bind.
+        bind: PathBuf,
+        /// The cargo home it would expose.
+        cargo_home: PathBuf,
+    },
 }
 
 impl fmt::Display for JailPathError {
@@ -54,6 +68,18 @@ impl fmt::Display for JailPathError {
             Self::ToolHomeRelative(relative) => {
                 write!(f, "{relative}; refusing to build the jail")
             }
+            Self::Moved { path } => write!(
+                f,
+                "the jail path {} changed after it was resolved; refusing to build the jail",
+                path.display()
+            ),
+            Self::ExposesCargoHome { bind, cargo_home } => write!(
+                f,
+                "the bind {} would expose the cargo home {} (credentials.toml); set \
+                 RUSTUP_HOME and CARGO_HOME to disjoint directories; refusing to build the jail",
+                bind.display(),
+                cargo_home.display()
+            ),
         }
     }
 }
@@ -74,12 +100,25 @@ impl CanonicalPath {
     /// # Errors
     /// [`JailPathError::Unresolved`] when `path` does not resolve.
     pub fn resolve(path: &Path) -> Result<Self, JailPathError> {
-        std::fs::canonicalize(path)
+        canonicalize(path)
             .map(Self)
             .map_err(|e| JailPathError::Unresolved {
                 path: path.to_path_buf(),
                 kind: e.kind(),
             })
+    }
+
+    /// Confirm the path still resolves to itself.
+    ///
+    /// # Errors
+    /// [`JailPathError::Moved`] when it now resolves elsewhere or not at all.
+    pub fn recheck(&self) -> Result<(), JailPathError> {
+        match canonicalize(&self.0) {
+            Ok(now) if now == self.0 => Ok(()),
+            _ => Err(JailPathError::Moved {
+                path: self.0.clone(),
+            }),
+        }
     }
 
     /// Test-only: `path` taken as already canonical, for pure argv tests over
@@ -103,6 +142,20 @@ impl AsRef<Path> for CanonicalPath {
     }
 }
 
+/// The host's canonical spelling of `path`.
+#[cfg(not(windows))]
+fn canonicalize(path: &Path) -> std::io::Result<PathBuf> {
+    std::fs::canonicalize(path)
+}
+
+/// The host's canonical spelling of `path`, in the plain drive form wherever
+/// that form names the same file, so a child process that rejects the verbatim
+/// `\\?\` prefix receives a path it accepts.
+#[cfg(windows)]
+fn canonicalize(path: &Path) -> std::io::Result<PathBuf> {
+    dunce::canonicalize(path)
+}
+
 /// A host directory hidden behind a tmpfs in the jail.
 ///
 /// Canonical, so the mask lands on the directory the jailed process resolves
@@ -116,7 +169,7 @@ impl MaskedDir {
     /// see, so nothing needs hiding.
     #[must_use]
     pub fn resolve(path: &Path) -> Option<Self> {
-        let canonical = std::fs::canonicalize(path).ok()?;
+        let canonical = canonicalize(path).ok()?;
         canonical.is_dir().then_some(Self(canonical))
     }
 
@@ -216,6 +269,14 @@ impl<'a> Bind<'a> {
         }
     }
 
+    /// The narrower of two binds of one path: read-only when either is.
+    const fn narrowed(self, other: Self) -> Self {
+        match other {
+            Self::ReadOnly(_) => other,
+            Self::ReadWrite(_) => self,
+        }
+    }
+
     const fn flag(self) -> &'static str {
         match self {
             Self::ReadOnly(_) => "--ro-bind",
@@ -241,7 +302,8 @@ fn depth(path: &Path) -> usize {
 /// contains is emitted before every mask. A bind that equals or contains a
 /// mask therefore always precedes that mask's `--tmpfs`, which hides what the
 /// bind would have exposed there. Binds keep their relative order within one
-/// mask; a path bound twice is emitted once, with its first flag.
+/// mask; a path bound twice is emitted once, at its first position, read-only
+/// when any of its binds is.
 pub fn push_mounts(argv: &mut Vec<OsString>, homes: &HomeMasks, binds: &[Bind<'_>]) {
     let mut masks: Vec<PathBuf> = STATIC_MASKS
         .iter()
@@ -250,10 +312,19 @@ pub fn push_mounts(argv: &mut Vec<OsString>, homes: &HomeMasks, binds: &[Bind<'_
         .collect();
     masks.sort_by(|a, b| depth(a).cmp(&depth(b)).then_with(|| a.cmp(b)));
     masks.dedup();
-    let mut seen = std::collections::HashSet::new();
-    let placed: Vec<(Option<usize>, &'static str, &Path)> = binds
+    let mut unique: Vec<Bind<'_>> = Vec::with_capacity(binds.len());
+    let mut first_at = std::collections::HashMap::new();
+    for bind in binds {
+        match first_at.get(bind.path()).and_then(|at| unique.get_mut(*at)) {
+            Some(kept) => *kept = kept.narrowed(*bind),
+            None => {
+                first_at.insert(bind.path(), unique.len());
+                unique.push(*bind);
+            }
+        }
+    }
+    let placed: Vec<(Option<usize>, &'static str, &Path)> = unique
         .iter()
-        .filter(|bind| seen.insert(bind.path()))
         .map(|bind| {
             let path = bind.path().as_path();
             let mask = masks
@@ -306,13 +377,13 @@ pub fn bind_after_covered_mask(argv: &[String]) -> Option<(String, String)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_dir::TestDir;
 
-    #[allow(clippy::expect_used)] // test fixture: a canonical temp dir must exist
-    fn temp_dir(label: &str) -> PathBuf {
-        let dir =
-            std::env::temp_dir().join(format!("ipe-sandbox-mounts-{label}-{}", std::process::id()));
-        std::fs::create_dir_all(dir.join("bin")).expect("create temp dir");
-        std::fs::canonicalize(&dir).expect("canonical temp dir")
+    /// A scratch dir holding a `bin` subdir, removed on drop.
+    fn temp_dir(label: &str) -> TestDir {
+        let dir = TestDir::new(&format!("mounts-{label}"));
+        make_dir(&dir.path().join("bin"));
+        dir
     }
 
     #[allow(clippy::expect_used)] // test fixture: the directory must exist
@@ -361,11 +432,46 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn a_symlinked_path_resolves_to_its_target() {
-        let base = temp_dir("canonical-symlink");
+        let base_dir = temp_dir("canonical-symlink");
+        let base = base_dir.path();
         let link = base.join("link");
         let _ = std::fs::remove_file(&link);
         std::os::unix::fs::symlink(base.join("bin"), &link).expect("symlink");
         assert_eq!(canonical(&link).as_path(), base.join("bin"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_path_swapped_for_a_symlink_after_resolving_is_refused() {
+        let base_dir = temp_dir("recheck-swap");
+        let base = base_dir.path();
+        let tree = base.join("tree");
+        make_dir(&tree);
+        let resolved = canonical(&tree);
+        assert_eq!(resolved.recheck(), Ok(()));
+        std::fs::remove_dir(&tree).expect("remove tree");
+        std::os::unix::fs::symlink(base.join("bin"), &tree).expect("symlink");
+        assert_eq!(
+            resolved.recheck(),
+            Err(JailPathError::Moved {
+                path: resolved.as_path().to_path_buf()
+            })
+        );
+    }
+
+    #[test]
+    fn a_path_removed_after_resolving_is_refused() {
+        let base_dir = temp_dir("recheck-gone");
+        let gone = base_dir.path().join("gone");
+        make_dir(&gone);
+        let resolved = canonical(&gone);
+        std::fs::remove_dir(&gone).expect("remove dir");
+        assert_eq!(
+            resolved.recheck(),
+            Err(JailPathError::Moved {
+                path: resolved.as_path().to_path_buf()
+            })
+        );
     }
 
     #[test]
@@ -381,9 +487,10 @@ mod tests {
 
     #[test]
     fn a_relative_cargo_home_refuses_the_jail() {
-        let user_home = temp_dir("relative-cargo");
+        let user_home_dir = temp_dir("relative-cargo");
+        let user_home = user_home_dir.path();
         assert_eq!(
-            HomeMasks::resolve(Some(&user_home), Some(Path::new("cargo"))),
+            HomeMasks::resolve(Some(user_home), Some(Path::new("cargo"))),
             Err(JailPathError::ToolHomeRelative(RelativeToolHome {
                 var: "CARGO_HOME"
             }))
@@ -400,9 +507,10 @@ mod tests {
 
     #[test]
     fn a_cargo_home_outside_home_is_masked_then_only_bin_rebound() {
-        let cargo_home = temp_dir("cargo-home-outside");
+        let cargo_home_dir = temp_dir("cargo-home-outside");
+        let cargo_home = cargo_home_dir.path();
         let bin = canonical(&cargo_home.join("bin"));
-        let homes = HomeMasks::new(None, MaskedDir::resolve(&cargo_home));
+        let homes = HomeMasks::new(None, MaskedDir::resolve(cargo_home));
         let argv = rendered(&homes, &[Bind::ReadOnly(&bin)]);
         let home = cargo_home.to_string_lossy().into_owned();
         let bin = bin.as_path().to_string_lossy().into_owned();
@@ -417,8 +525,9 @@ mod tests {
 
     #[test]
     fn a_user_home_outside_home_is_masked() {
-        let user_home = temp_dir("user-home-outside");
-        let homes = HomeMasks::new(MaskedDir::resolve(&user_home), None);
+        let user_home_dir = temp_dir("user-home-outside");
+        let user_home = user_home_dir.path();
+        let homes = HomeMasks::new(MaskedDir::resolve(user_home), None);
         let argv = rendered(&homes, &[]);
         let home = user_home.to_string_lossy().into_owned();
         assert!(position(&argv, &["--tmpfs", &home]).is_some(), "{argv:?}");
@@ -426,10 +535,11 @@ mod tests {
 
     #[test]
     fn a_bind_equal_to_or_covering_a_home_is_masked_after() {
-        let cargo_home = temp_dir("cargo-home-covered");
-        let home_bind = canonical(&cargo_home);
+        let cargo_home_dir = temp_dir("cargo-home-covered");
+        let cargo_home = cargo_home_dir.path();
+        let home_bind = canonical(cargo_home);
         let parent = cargo_home.parent().map(canonical);
-        let homes = HomeMasks::new(None, MaskedDir::resolve(&cargo_home));
+        let homes = HomeMasks::new(None, MaskedDir::resolve(cargo_home));
         let mut binds = vec![Bind::ReadOnly(&home_bind)];
         if let Some(parent) = &parent {
             binds.push(Bind::ReadWrite(parent));
@@ -447,13 +557,14 @@ mod tests {
 
     #[test]
     fn nested_homes_each_get_their_own_mask() {
-        let user_home = temp_dir("nested-user");
+        let user_home_dir = temp_dir("nested-user");
+        let user_home = user_home_dir.path();
         let cargo_home = user_home.join("cargo");
         make_dir(&cargo_home.join("bin"));
-        let user_bind = canonical(&user_home);
+        let user_bind = canonical(user_home);
         let bin = canonical(&cargo_home.join("bin"));
         let homes = HomeMasks::new(
-            MaskedDir::resolve(&user_home),
+            MaskedDir::resolve(user_home),
             MaskedDir::resolve(&cargo_home),
         );
         // A whole-user-home bind would re-expose the cargo home without its
@@ -468,19 +579,43 @@ mod tests {
     }
 
     #[test]
-    fn a_path_bound_twice_is_emitted_once_with_its_first_flag() {
+    fn a_path_bound_twice_is_emitted_once_read_only_whichever_flag_comes_first() {
         let dir = temp_dir("bound-twice");
-        let bin = canonical(&dir.join("bin"));
+        let bin = canonical(&dir.path().join("bin"));
+        let flat = bin.as_path().to_string_lossy().into_owned();
+        for binds in [
+            [Bind::ReadOnly(&bin), Bind::ReadWrite(&bin)],
+            [Bind::ReadWrite(&bin), Bind::ReadOnly(&bin)],
+        ] {
+            let argv = rendered(&HomeMasks::unmasked(), &binds);
+            assert!(
+                position(&argv, &["--ro-bind", &flat, &flat]).is_some(),
+                "{argv:?}"
+            );
+            assert_eq!(position(&argv, &["--bind", &flat, &flat]), None, "{argv:?}");
+            let emitted = argv.iter().filter(|arg| **arg == flat).count();
+            assert_eq!(emitted, 2, "one bind op, source and target: {argv:?}");
+        }
+    }
+
+    #[test]
+    fn a_path_bound_only_read_write_stays_writable() {
+        let dir = temp_dir("bound-rw");
+        let bin = canonical(&dir.path().join("bin"));
         let argv = rendered(
             &HomeMasks::unmasked(),
-            &[Bind::ReadOnly(&bin), Bind::ReadWrite(&bin)],
+            &[Bind::ReadWrite(&bin), Bind::ReadWrite(&bin)],
         );
-        let bin = bin.as_path().to_string_lossy().into_owned();
+        let flat = bin.as_path().to_string_lossy().into_owned();
         assert!(
-            position(&argv, &["--ro-bind", &bin, &bin]).is_some(),
+            position(&argv, &["--bind", &flat, &flat]).is_some(),
             "{argv:?}"
         );
-        assert_eq!(position(&argv, &["--bind", &bin, &bin]), None, "{argv:?}");
+        assert_eq!(
+            position(&argv, &["--ro-bind", &flat, &flat]),
+            None,
+            "{argv:?}"
+        );
     }
 
     #[test]

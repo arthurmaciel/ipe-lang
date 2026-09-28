@@ -3346,6 +3346,7 @@ version = "0.3.0"
 name = "ipe_sandbox"
 version = "0.3.0"
 dependencies = [
+ "dunce",
  "ipe_diagnostics",
  "ipe_kernels",
  "libc",
