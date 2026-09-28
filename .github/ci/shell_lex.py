@@ -8,10 +8,14 @@ this command write" then matches on the word the shell will see
 (`".github/"ci/x` is `.github/ci/x`), never on the spelling in the source.
 
 Command separators are `;`, `&`, `|`, `(`, `)`, newline, `$(`, and a
-backtick; a command substitution inside double quotes is lexed again from its
-own start (`suffixes`), so a command nested there is seen as a command. A
+backtick; a command substitution inside double quotes or a here-document
+body is lexed again from its own start, so a command nested there is seen as
+a command (a backtick in a comment or in single quotes starts none). A
 `#` at word start is a comment. A here-document body is data to its command
-and is skipped; `heredoc_commands` names the commands that were fed one.
+and is skipped; a command fed one carries `heredoc`, a command fed a
+here-string (`<<<`) carries `herestring`, and a command on the right of a
+pipe (`|` or `|&`, never `||`) carries in `pipe_source` the words of the
+command feeding it.
 Unterminated quotes run to the end of the text — the lexer never raises, it
 only ever sees more text as one word.
 """
@@ -23,21 +27,39 @@ from dataclasses import dataclass, field
 
 @dataclass
 class Command:
-    """One simple command: quote-removed words and output-redirect targets."""
+    """One simple command: quote-removed words, output-redirect targets, and
+    what feeds its standard input when that is shell-visible."""
 
     words: list[str] = field(default_factory=list)
     writes: list[str] = field(default_factory=list)
     heredoc: bool = False
+    herestring: bool = False
+    pipe_source: list[str] | None = None
 
 
 _SEPARATORS = frozenset(";&|()\n`")
 
 
-def _lex(text: str, bodies: list[tuple[int, int]] | None = None) -> list[Command]:
+def _substitutions(text: str, lo: int, hi: int, subs: list[int] | None) -> None:
+    """Record in `subs` the start of every command substitution in
+    `text[lo:hi]` (a double-quoted span or a here-document body, where
+    quotes do not delimit it)."""
+    if subs is None:
+        return
+    for j in range(lo, hi):
+        if text[j] == "`":
+            subs.append(j + 1)
+        elif text.startswith("$(", j):
+            subs.append(j + 2)
+
+
+def _lex(
+    text: str, bodies: list[tuple[int, int]] | None = None, subs: list[int] | None = None,
+) -> list[Command]:
     cmds: list[Command] = []
     cur = Command()
     buf: list[str] | None = None
-    pending: str | None = None  # "write" | "read" | "heredoc" — the next word's role
+    pending: str | None = None  # "write" | "read" | "herestring" | "heredoc"
     heredocs: list[tuple[str, bool]] = []
     i, n = 0, len(text)
 
@@ -52,16 +74,24 @@ def _lex(text: str, bodies: list[tuple[int, int]] | None = None) -> list[Command
         elif pending == "heredoc":
             heredocs.append((word, pending_strip))
             cur.heredoc = True
+        elif pending == "herestring":
+            cur.herestring = True
         elif pending is None:
             cur.words.append(word)
         pending = None
 
-    def end_command() -> None:
+    def end_command(piped: bool = False) -> None:
         nonlocal cur
         end_word()
-        if cur.words or cur.writes:
+        # An empty command (`a |` then a newline) hands its pipe source on.
+        carry = cur.pipe_source
+        if cur.words or cur.writes or cur.heredoc or cur.herestring:
             cmds.append(cur)
+            carry = None
+        if piped:
+            carry = list(cmds[-1].words) if cmds else []
         cur = Command()
+        cur.pipe_source = carry
 
     pending_strip = False
     while i < n:
@@ -80,6 +110,7 @@ def _lex(text: str, bodies: list[tuple[int, int]] | None = None) -> list[Command
                         break
                 if bodies is not None:
                     bodies.append((body_start, i))
+                _substitutions(text, body_start, i, subs)
             continue
         if c in " \t\r":
             end_word()
@@ -89,8 +120,18 @@ def _lex(text: str, bodies: list[tuple[int, int]] | None = None) -> list[Command
             end_command()
             i += 2
             continue
+        if c == "|":
+            if text.startswith("||", i):
+                end_command()
+                cur.pipe_source = None
+                i += 2
+            else:
+                end_command(piped=True)
+                i += 2 if text.startswith("|&", i) else 1
+            continue
         if c in _SEPARATORS:
             end_command()
+            cur.pipe_source = None
             i += 1
             continue
         if c in "<>":
@@ -100,7 +141,7 @@ def _lex(text: str, bodies: list[tuple[int, int]] | None = None) -> list[Command
             else:
                 end_word()
             if text.startswith("<<<", i):
-                pending, i = "read", i + 3
+                pending, i = "herestring", i + 3
             elif text.startswith("<<", i):
                 i += 2
                 pending_strip = text.startswith("-", i)
@@ -119,10 +160,14 @@ def _lex(text: str, bodies: list[tuple[int, int]] | None = None) -> list[Command
             j = text.find("\n", i)
             i = n if j < 0 else j
             continue
+        if text.startswith("\\\n", i):
+            # A line continuation joins lines; it starts no word.
+            i += 2
+            continue
         if buf is None:
             buf = []
         if c == "\\":
-            if i + 1 < n and text[i + 1] != "\n":
+            if i + 1 < n:
                 buf.append(text[i + 1])
             i += 2
             continue
@@ -134,6 +179,7 @@ def _lex(text: str, bodies: list[tuple[int, int]] | None = None) -> list[Command
             continue
         if c == '"':
             i += 1
+            quote_start = i
             while i < n and text[i] != '"':
                 if text[i] == "\\" and i + 1 < n and text[i + 1] in '"\\$`\n':
                     if text[i + 1] != "\n":
@@ -142,6 +188,7 @@ def _lex(text: str, bodies: list[tuple[int, int]] | None = None) -> list[Command
                     continue
                 buf.append(text[i])
                 i += 1
+            _substitutions(text, quote_start, i, subs)
             i += 1
             continue
         buf.append(c)
@@ -150,21 +197,29 @@ def _lex(text: str, bodies: list[tuple[int, int]] | None = None) -> list[Command
     return cmds
 
 
-def suffixes(text: str) -> list[str]:
-    """`text` and its tail after every `$(` and backtick: each command
-    substitution, even one inside double quotes, starts a lexed text."""
-    out = [text]
-    for i, c in enumerate(text):
-        if c == "`":
-            out.append(text[i + 1 :])
-        elif c == "$" and text.startswith("$(", i):
-            out.append(text[i + 2 :])
+def split_commands(text: str) -> list[Command]:
+    """Every simple command in `text`, command substitutions included: the
+    text is lexed from its start and again from the start of every
+    substitution the lexer finds inside double quotes or a here-document
+    body (each offset once, so at most `len(text) + 1` passes)."""
+    out: list[Command] = []
+    todo, seen = [0], {0}
+    while todo:
+        start = todo.pop()
+        found: list[int] = []
+        out.extend(_lex(text[start:], None, found))
+        for off in found:
+            if start + off not in seen:
+                seen.add(start + off)
+                todo.append(start + off)
     return out
 
 
-def split_commands(text: str) -> list[Command]:
-    """Every simple command in `text`, command substitutions included."""
-    return [cmd for part in suffixes(text) for cmd in _lex(part)]
+def heredoc_bodies(text: str) -> list[str]:
+    """Every here-document body in `text`, in order."""
+    bodies: list[tuple[int, int]] = []
+    _lex(text, bodies)
+    return [text[lo:hi] for lo, hi in bodies]
 
 
 def without_heredoc_bodies(text: str) -> str:

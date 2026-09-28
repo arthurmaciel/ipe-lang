@@ -83,11 +83,18 @@ Checks performed
      `toJSON(github)` are refused); and `GITHUB_WORKSPACE` is only ever read,
      never assigned. Every `${{ }}` body is parsed by `gha_expr`'s typed
      grammar (a `}}` inside a string literal does not end it; a body outside
-     the grammar is refused). In a step's `run:`, an expression holds no
-     string literal and never abuts a shell variable name; no shell function
-     or alias is defined; and, judged on quote-removed words (`shell_lex`),
-     nothing writes into `.github/ci/**`. A closed shape, not a list of
-     bypasses.
+     the grammar is refused). A `shell:` (step or `defaults.run.shell`) is
+     one of bash/pwsh/powershell, bare. In a step's `run:`, an expression
+     holds no string literal and never abuts a shell variable name; no shell
+     function or alias is defined; and pip is matched on quote-removed words
+     (`shell_lex`). The integrity of `.github/ci/**` itself rests on an
+     ordering rule: a step naming the tree runs only after steps of a closed
+     pre-tool shape (a content-pinned checkout or setup-python with a closed
+     `with:`, the canonical pip install, a `.github/ci` tool), on a literal
+     GitHub-hosted runner (a fresh machine per job) with no container,
+     services, working directory, or interpreter-steering `env:`. A
+     quote-removed scan refusing writes into the tree is defence in depth
+     under that rule, not its proof.
 
 Pure stdlib + PyYAML (already a CI dependency).  No network.
 """
@@ -101,7 +108,6 @@ import json
 import os
 import posixpath
 import re
-import shlex
 import sys
 from dataclasses import dataclass
 
@@ -285,7 +291,6 @@ UNHASHED_INSTALLER_RE = re.compile(
     r"|setup\.py\s+(?:install|develop)(?![A-Za-z0-9_-])",
     re.IGNORECASE,
 )
-SHELL_COMMAND_SPLIT_RE = re.compile(r"\n|;|&&|\|\||\||&|\$\(|`|\(|\)")
 # `.github/ci/**` holds the verifier, its helper, and the hashed requirements:
 # a `run:` may execute or read it, never write it. A word naming it is
 # accepted only as the command itself or as an argument to a read/execute
@@ -297,8 +302,77 @@ PROTECTED_TREE_READERS = frozenset({
     "wc", "stat", "echo", "printf", "shellcheck", "file",
 })
 SHELLS = frozenset({"bash", "sh", "zsh", "dash", "ksh"})
-COMMAND_WRAPPERS = frozenset({"sudo", "command", "builtin", "exec", "nohup", "time", "env"})
+# A shell's own argv, as a closed set: single-letter options (`-euxvc`,
+# clustered; each `o` takes a named option), and the startup-file opt-outs.
+# Anything else (`-s`, `-i`, `-l`, `--rcfile`, ...) changes where its
+# commands come from and is refused.
+SHELL_LETTER_FLAG_RE = re.compile(r"[-+][euxvco]+")
+SHELL_O_OPTIONS = frozenset({"pipefail", "errexit", "nounset", "xtrace"})
+SHELL_LONG_FLAGS = frozenset({"--noprofile", "--norc"})
+# The one sanctioned pipe into a shell: `cat <file> | sh`, a literal file
+# outside the protected tree (the documented `curl ... | sh` delivery).
+PIPE_TO_SHELL_SOURCE = "cat"
 SHELL_ASSIGNMENT_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=")
+# The step `shell:` (and `defaults.run.shell`) a check can read, as a closed
+# set of names: a template (`bash -c '...{0}'`), another interpreter
+# (`python {0}`), or `sh` is refused, since the text a step's `run:` becomes
+# is then no longer the text these checks lex.
+STEP_SHELLS = frozenset({"bash", "pwsh", "powershell"})
+
+
+@dataclass(frozen=True)
+class WrapperSpec:
+    """How a command wrapper's argv reaches the command it runs: flags taking
+    no argument, flags taking the next word (or `--flag=value`), a count of
+    leading operands (`timeout`'s DURATION), whether `NAME=value` words are
+    assignments, and whether `-<digits>` is a flag. A flag outside these is
+    refused — the wrapped command cannot then be established."""
+
+    bare: frozenset[str] = frozenset()
+    valued: frozenset[str] = frozenset()
+    operands: int = 0
+    assignments: bool = False
+    numeric_flag: bool = False
+
+
+COMMAND_WRAPPERS: dict[str, WrapperSpec] = {
+    "env": WrapperSpec(
+        bare=frozenset({"-i", "-0", "--ignore-environment", "--null", "-"}),
+        valued=frozenset({"-u", "--unset", "-C", "--chdir"}),
+        assignments=True,
+    ),
+    "exec": WrapperSpec(bare=frozenset({"-c", "-l"}), valued=frozenset({"-a"})),
+    "sudo": WrapperSpec(
+        bare=frozenset({"-E", "-n", "-H", "--preserve-env", "--non-interactive"}),
+        valued=frozenset({"-u", "-g", "--user", "--group"}),
+    ),
+    "nice": WrapperSpec(valued=frozenset({"-n", "--adjustment"}), numeric_flag=True),
+    "timeout": WrapperSpec(
+        bare=frozenset({"--preserve-status", "--foreground", "-v", "--verbose"}),
+        valued=frozenset({"-s", "--signal", "-k", "--kill-after"}),
+        operands=1,
+    ),
+    "command": WrapperSpec(bare=frozenset({"-p", "-v", "-V"})),
+    "builtin": WrapperSpec(),
+    "nohup": WrapperSpec(),
+    "time": WrapperSpec(bare=frozenset({"-p"})),
+    "xargs": WrapperSpec(
+        bare=frozenset({"-0", "-r", "-t", "-x", "--null", "--no-run-if-empty", "--verbose"}),
+        valued=frozenset({
+            "-n", "-I", "-P", "-d", "-L", "-s", "-E", "-a", "--max-args", "--max-procs",
+            "--delimiter", "--arg-file",
+        }),
+    ),
+}
+# `xargs` hands its command arguments no check ever sees, so it may run only
+# a command that cannot write whatever those arguments name.
+XARGS_READERS = frozenset({
+    "cat", "ls", "test", "diff", "cmp", "sha256sum", "sha512sum", "head", "tail",
+    "wc", "stat", "echo", "printf", "file",
+})
+# Brace expansion is expanded before a word is judged; a word expanding to
+# more alternatives than this is taken to name the protected tree.
+BRACE_ALTERNATIVES_LIMIT = 256
 # A shell function or alias can shadow any command a check matched by name
 # (`bash() { ...; }` before the helper call), so neither is written in a `run:`.
 SHELL_SHADOWING_RE = re.compile(
@@ -898,10 +972,11 @@ def _parse_pip_invocation(tokens: list[str]) -> PipInvocation | None:
 
 
 def _canonical_pip() -> PipInvocation:
-    """`CANONICAL_PIP_INSTALL` as a `PipInvocation`."""
-    inv = _parse_pip_invocation(shlex.split(CANONICAL_PIP_INSTALL))
+    """`CANONICAL_PIP_INSTALL` as a `PipInvocation`, lexed as the shell does."""
+    cmds = shell_lex.split_commands(CANONICAL_PIP_INSTALL)
+    inv = _parse_pip_invocation(cmds[0].words) if len(cmds) == 1 else None
     if inv is None:
-        raise RuntimeError("CANONICAL_PIP_INSTALL names no pip word")
+        raise RuntimeError("CANONICAL_PIP_INSTALL is not one command naming pip")
     return inv
 
 
@@ -927,6 +1002,18 @@ def _pip_invocation_refusal(inv: PipInvocation) -> str | None:
     return None
 
 
+def _shell_texts(text: str) -> list[str]:
+    """`text` and every here-document body in it, nested bodies included
+    (to `STRING_SCALAR_DEPTH_LIMIT` levels; each is strictly shorter)."""
+    out, level = [text], [text]
+    for _ in range(STRING_SCALAR_DEPTH_LIMIT):
+        level = [body for t in level for body in shell_lex.heredoc_bodies(t)]
+        if not level:
+            break
+        out.extend(level)
+    return out
+
+
 def _refuse_unhashed_pip(text: str, loc: str, what: str, errors: list[str]) -> None:
     """Rule (g): pip installs only as the one canonical, env-isolated command.
 
@@ -935,9 +1022,11 @@ def _refuse_unhashed_pip(text: str, loc: str, what: str, errors: list[str]) -> N
     `--require-hashes --only-binary :all: -r <requirements>` hash-checks
     every byte with no build backend. Outside that exact text, a `PIP_*`
     name, a pip config file, or an installer outside pip's hash checking is
-    refused, and each command that runs pip is parsed as a `PipInvocation`
-    and compared with the canonical one; a command that cannot be parsed is
-    refused.
+    refused. Every command of the text, and of each here-document body
+    (lexed as shell too, since a body may be fed to one), is judged on its
+    quote-removed words (`shell_lex`), so `p""ip` is `pip`: a command with
+    a word naming pip is parsed as a `PipInvocation` and compared with the
+    canonical one.
     """
     rest = CANONICAL_PIP_INSTALL_RE.sub(" ", text)
     for rx, why in (
@@ -951,88 +1040,226 @@ def _refuse_unhashed_pip(text: str, loc: str, what: str, errors: list[str]) -> N
                 f"{loc} {what} {why} ({m.group(0)!r}) — pip installs only as "
                 f"`{CANONICAL_PIP_INSTALL}`; refused"
             )
-    for segment in SHELL_COMMAND_SPLIT_RE.split(text.replace("\\\n", " ")):
-        if PIP_MENTION_RE.search(segment) is None:
-            continue
-        shown = segment.strip()
-        try:
-            tokens = shlex.split(segment)
-        except ValueError as e:
-            errors.append(f"{loc} {what} mentions pip in {shown!r}, which cannot be parsed ({e}); refused")
-            continue
-        inv = _parse_pip_invocation(tokens)
-        if inv is None:
-            if any("install" in t.casefold() for t in tokens):
+    for part in _shell_texts(text):
+        for cmd in shell_lex.split_commands(part):
+            tokens = cmd.words
+            if not any(PIP_MENTION_RE.search(t) for t in tokens):
+                continue
+            shown = " ".join(tokens)
+            inv = _parse_pip_invocation(tokens)
+            if inv is None:
+                if any("install" in t.casefold() for t in tokens):
+                    errors.append(
+                        f"{loc} {what} mentions pip and install in {shown!r} outside the "
+                        "hash-checked shape; refused"
+                    )
+                continue
+            why = _pip_invocation_refusal(inv)
+            if why is not None:
                 errors.append(
-                    f"{loc} {what} mentions pip and install in {shown!r} outside the "
-                    "hash-checked shape; refused"
+                    f"{loc} {what} runs {shown!r}: {why} — pip installs only as "
+                    f"`{CANONICAL_PIP_INSTALL}`; refused"
                 )
-            continue
-        why = _pip_invocation_refusal(inv)
-        if why is not None:
-            errors.append(
-                f"{loc} {what} runs {shown!r}: {why} — pip installs only as "
-                f"`{CANONICAL_PIP_INSTALL}`; refused"
-            )
+
+
+def _brace_alternatives(word: str) -> list[str] | None:
+    """`word` after bash brace expansion: every `{a,b}` expanded, nested
+    ones included, and every `{x..y}` sequence (digits or letters, never `.`
+    or `/`) taken as the glob `*`. None past `BRACE_ALTERNATIVES_LIMIT`."""
+    todo, done = [word], []
+    while todo:
+        w = todo.pop()
+        found = None
+        start = w.find("{")
+        while start >= 0 and found is None:
+            depth, parts, at = 0, [], start + 1
+            for j in range(start + 1, len(w)):
+                c = w[j]
+                if c == "{":
+                    depth += 1
+                elif c == "}" and depth:
+                    depth -= 1
+                elif c == "," and not depth:
+                    parts.append(w[at:j])
+                    at = j + 1
+                elif c == "}":
+                    parts.append(w[at:j])
+                    if len(parts) > 1:
+                        found = (start, j + 1, parts)
+                    elif ".." in parts[0]:
+                        found = (start, j + 1, ["*"])
+                    break
+            if found is None:
+                start = w.find("{", start + 1)
+        if found is None:
+            done.append(w)
+        else:
+            lo, hi, alts = found
+            todo.extend(w[:lo] + a + w[hi:] for a in alts)
+        if len(done) + len(todo) > BRACE_ALTERNATIVES_LIMIT:
+            return None
+    return done
 
 
 def _protected_word(word: str) -> bool:
     """Whether `word` (quote-removed) could name `.github/ci/**` or the
-    `.github` directory holding it: some path component matches `.github`
-    (as a glob, when it is one — a shell glob reaches a dot name only from a
-    literal leading `.`) and is last or followed by one matching `ci`.
-    Any root is ignored — a variable or spliced expression before it could be
-    the workspace."""
+    `.github` directory holding it: after brace expansion, some path
+    component matches `.github` (as a glob, when it is one — a shell glob
+    reaches a dot name only from a literal leading `.`) and is last or
+    followed by one matching `ci`. Any root is ignored — a variable or
+    spliced expression before it could be the workspace. A word whose brace
+    expansion is too large to enumerate is taken to name it."""
     for w in {word, word.rsplit("=", 1)[-1]}:
-        parts = posixpath.normpath(w.casefold()).split("/")
-        for i, part in enumerate(parts):
-            if part.startswith(".") and fnmatch.fnmatchcase(".github", part) and (
-                i + 1 == len(parts) or fnmatch.fnmatchcase("ci", parts[i + 1])
-            ):
-                return True
+        alternatives = _brace_alternatives(w)
+        if alternatives is None:
+            return True
+        for alt in alternatives:
+            parts = posixpath.normpath(alt.casefold()).split("/")
+            for i, part in enumerate(parts):
+                if part.startswith(".") and fnmatch.fnmatchcase(".github", part) and (
+                    i + 1 == len(parts) or fnmatch.fnmatchcase("ci", parts[i + 1])
+                ):
+                    return True
     return False
 
 
-def _command_verb(words: list[str]) -> tuple[str | None, list[str]]:
-    """The command word of `words` past assignments and wrappers, and its
-    arguments."""
-    i = 0
-    while i < len(words) and (
-        SHELL_ASSIGNMENT_RE.match(words[i]) or posixpath.basename(words[i]) in COMMAND_WRAPPERS
-        or (i > 0 and words[i].startswith("-") and posixpath.basename(words[i - 1]) in COMMAND_WRAPPERS)
-    ):
+@dataclass(frozen=True)
+class CommandVerb:
+    """A simple command resolved past its assignments and wrappers: the
+    command word (None for none), its arguments, and whether an `xargs`
+    in front hands it further arguments no check sees."""
+
+    verb: str | None
+    args: list[str]
+    via_xargs: bool
+
+
+def _command_verb(words: list[str]) -> CommandVerb | str:
+    """`words` resolved to the command they run, or why that cannot be
+    established: every wrapper's flags are consumed by its `WrapperSpec`,
+    and a flag outside it is refused (`env -S` splits a string into a
+    command no check sees; `env -u python3 cp` is `cp`, not `python3`)."""
+    i, n, via_xargs = 0, len(words), False
+    while i < n:
+        w = words[i]
+        if SHELL_ASSIGNMENT_RE.match(w):
+            i += 1
+            continue
+        base = posixpath.basename(w)
+        spec = COMMAND_WRAPPERS.get(base)
+        if spec is None:
+            break
+        via_xargs = via_xargs or base == "xargs"
         i += 1
-    if i >= len(words):
-        return None, []
-    return words[i], words[i + 1 :]
+        while i < n:
+            a = words[i]
+            if a == "--":
+                i += 1
+                break
+            if spec.assignments and SHELL_ASSIGNMENT_RE.match(a):
+                i += 1
+                continue
+            if not a.startswith("-") or (a == "-" and a not in spec.bare):
+                break
+            flag = a.split("=", 1)[0] if a.startswith("--") else a
+            if a in spec.bare or (a.startswith("--") and "=" in a and flag in spec.bare | spec.valued):
+                i += 1
+            elif a in spec.valued:
+                if i + 1 >= n:
+                    return f"`{base} {a}` lacks its argument"
+                i += 2
+            elif spec.numeric_flag and a[1:].isdigit():
+                i += 1
+            else:
+                return f"`{base}` flag {a!r} is outside the flags this check reads"
+        if spec.operands:
+            if i + spec.operands > n:
+                return f"`{base}` lacks its operand"
+            i += spec.operands
+    if i >= n:
+        return CommandVerb(None, [], via_xargs)
+    return CommandVerb(words[i], words[i + 1 :], via_xargs)
+
+
+def _shell_program(args: list[str]) -> tuple[str, str] | str | None:
+    """Where a shell whose argv is `args` reads its commands: `("c", text)`
+    for `-c text`, `("script", path)` for a script operand, None for
+    standard input, or why its argv is outside the closed set."""
+    i, c = 0, False
+    while i < len(args):
+        a = args[i]
+        if a == "--":
+            i += 1
+            break
+        if a in SHELL_LONG_FLAGS:
+            i += 1
+            continue
+        if SHELL_LETTER_FLAG_RE.fullmatch(a):
+            if "c" in a:
+                if a.startswith("+"):
+                    return f"shell flag {a!r}"
+                c = True
+            i += 1
+            for _ in range(a.count("o")):
+                if i >= len(args) or args[i] not in SHELL_O_OPTIONS:
+                    return f"shell `-o` without a named option in {sorted(SHELL_O_OPTIONS)}"
+                i += 1
+            continue
+        if a.startswith(("-", "+")):
+            return f"shell flag {a!r} is outside {{-e -u -x -v -c -o <opt> --noprofile --norc}}"
+        break
+    if i >= len(args):
+        return "shell `-c` without its command text" if c else None
+    return ("c" if c else "script", args[i])
 
 
 def _protected_tree_refusal(text: str, depth: int = 0) -> str | None:
     """The first write into `.github/ci/**` in shell `text`, or None.
 
     The tree may be executed (`.github/ci/x.sh`, `source`), or read by a
-    `PROTECTED_TREE_READERS` command; a redirect into it, any other command
-    naming it, a shell fed a here-document, and a shell `-c` string that
-    does any of these are refused."""
+    `PROTECTED_TREE_READERS` command; a redirect into it and any other
+    command naming it are refused. A command whose wrapped verb cannot be
+    established is refused, as is `xargs` running anything but a reader. A
+    shell must read its commands from `-c <text>` (scanned in turn) or a
+    script operand: a shell fed a here-document, a here-string, or standard
+    input — save `cat <file> | sh` over a literal file outside the tree — is
+    refused, since its commands are unseen."""
     if depth > STRING_SCALAR_DEPTH_LIMIT:
         return "shell -c nesting too deep"
     for cmd in shell_lex.split_commands(text):
         for target in cmd.writes:
             if _protected_word(target):
                 return f"redirect into {target!r}"
-        verb, args = _command_verb(cmd.words)
-        if verb is None or _protected_word(verb):
+        resolved = _command_verb(cmd.words)
+        if isinstance(resolved, str):
+            return f"{resolved} — the command it runs cannot be established"
+        verb, args = resolved.verb, resolved.args
+        if verb is None:
             continue
         base = posixpath.basename(verb)
+        if resolved.via_xargs and base not in XARGS_READERS:
+            return f"xargs runs {base!r} with arguments read from standard input (unseen)"
+        if _protected_word(verb):
+            continue
         if base in SHELLS:
             if cmd.heredoc:
                 return f"{base} fed a here-document (its commands are unseen)"
-            if "-c" in args:
-                at = args.index("-c")
-                if at + 1 < len(args):
-                    inner = _protected_tree_refusal(args[at + 1], depth + 1)
-                    if inner is not None:
-                        return inner
+            if cmd.herestring:
+                return f"{base} fed a here-string (its commands are unseen)"
+            program = _shell_program(args)
+            if isinstance(program, str):
+                return program
+            if program is None:
+                src = cmd.pipe_source
+                if not (
+                    src is not None and len(src) == 2 and src[0] == PIPE_TO_SHELL_SOURCE
+                    and not src[1].startswith("-") and not _protected_word(src[1])
+                ):
+                    return f"{base} reads its commands from standard input (unseen)"
+            elif program[0] == "c":
+                inner = _protected_tree_refusal(program[1], depth + 1)
+                if inner is not None:
+                    return inner
         if base in PROTECTED_TREE_READERS:
             continue
         hit = next((a for a in args if _protected_word(a)), None)
@@ -1188,8 +1415,22 @@ def _audit_defaults(container: dict, loc: str, errors: list[str]) -> None:
     if not isinstance(r, dict):
         _refuse_shape(loc, "defaults.run:", "a mapping", r, errors)
         return
-    if "shell" in r and not isinstance(r["shell"], str):
-        _refuse_shape(loc, "defaults.run.shell", "a string", r["shell"], errors)
+    if "shell" in r:
+        _refuse_step_shell(r["shell"], loc, "defaults.run.shell", errors)
+
+
+def _refuse_step_shell(shell: object, loc: str, what: str, errors: list[str]) -> None:
+    """A `shell:` names one of `STEP_SHELLS`, bare: GitHub then runs the
+    step's script file with that interpreter's fixed argv. Any other value
+    is a command template (`bash -c '<cmd>; bash {0}'`, `python {0}`, `sh`)
+    whose program this check cannot read as the step's `run:`."""
+    if not isinstance(shell, str):
+        _refuse_shape(loc, what, "a string", shell, errors)
+    elif shell not in STEP_SHELLS:
+        errors.append(
+            f"{loc} {what} is {shell!r} — a shell: is one of {sorted(STEP_SHELLS)}, bare; a "
+            "command template runs a program the run: checks never see; refused"
+        )
 
 
 def _audit_step(st: Step, loc: str, policy: StepPolicy, errors: list[str]) -> None:
@@ -1201,12 +1442,192 @@ def _audit_step(st: Step, loc: str, policy: StepPolicy, errors: list[str]) -> No
             f"{SCCACHE_COMPOSITE_USES} instead, the one place it may run"
         )
     _refuse_env_keys(_scoped_env(st.raw, f"{loc} env", errors), loc, errors)
-    for key in ("run", "shell"):
-        if key in st.raw and not isinstance(st.raw[key], str):
-            _refuse_shape(loc, f"{key}:", "a string", st.raw[key], errors)
+    if "run" in st.raw and not isinstance(st.raw["run"], str):
+        _refuse_shape(loc, "run:", "a string", st.raw["run"], errors)
+    if "shell" in st.raw:
+        _refuse_step_shell(st.raw["shell"], loc, "shell:", errors)
     if "with" in st.raw and not isinstance(st.raw["with"], dict):
         _refuse_shape(loc, "with:", "a mapping", st.raw["with"], errors)
     _audit_scalars(st.raw, loc, policy, errors, step=True)
+
+
+# The steps a job may run before it runs `.github/ci/**` (the ordering rule
+# of check 7): each is a closed shape whose effect on the runner is fixed —
+# a checkout or interpreter setup by content-pinned action with a closed
+# `with:`, the canonical hash-checked pip install, or a `.github/ci` tool
+# itself. Any other step is arbitrary code (a free-form `run:`, an action, a
+# build script) that may rewrite the tree or the job's environment first.
+PINNED_CHECKOUT_USES = frozenset({
+    "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+    "actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09",
+})
+CHECKOUT_WITH_KEYS = frozenset({"fetch-depth", "persist-credentials", "sparse-checkout", "sparse-checkout-cone-mode"})
+PINNED_SETUP_PYTHON_USES = frozenset({"actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065"})
+SETUP_PYTHON_WITH_KEYS = frozenset({"python-version"})
+PURE_TOOL_RUN_RE = re.compile(
+    r"\s*(?:(?:python3|bash)\s+)?\.github/ci/[A-Za-z0-9_-]+\.(?:py|sh)(?:\s+-{1,2}[A-Za-z0-9-]+)*\s*"
+)
+PRE_TOOL_STEP_KEYS = frozenset({
+    "name", "id", "if", "env", "run", "uses", "with", "continue-on-error", "timeout-minutes", "shell",
+})
+# A GitHub-hosted runner label: every job gets a fresh virtual machine, so no
+# earlier job's writes survive into this one. A self-hosted runner keeps its
+# disk across jobs; an expression label is chosen at run time.
+GITHUB_HOSTED_RUNNER_RE = re.compile(
+    r"(?:ubuntu|windows|macos)-(?:latest|\d+(?:\.\d+)?)(?:-arm|-arm64|-large|-xlarge)?"
+)
+TREE_TOKEN_SPLIT_RE = re.compile(r"[\s'\"`;&|()<>=$\\]+")
+
+
+# The `env:` prefixes that steer what a `.github/ci` tool runs under: the
+# helper's refused prefixes save the Rust toolchain's, since no tool in the
+# tree runs cargo, rustc, or rustup (their wiring keys are refused everywhere
+# by rule (b) regardless).
+TOOL_ENV_REFUSED_PREFIXES = tuple(
+    p for p in GITHUB_ENV_KEY_REFUSED_PREFIXES if p not in ("CARGO", "RUST")
+)
+
+
+def _tool_env_key_refusal(key: str) -> bool:
+    """Whether an `env:` key could steer the runner, a loader, or an
+    interpreter a `.github/ci` tool runs under."""
+    k = key.upper()
+    return k in GITHUB_ENV_KEY_EXACT_REFUSED or k.startswith(TOOL_ENV_REFUSED_PREFIXES)
+
+
+def _names_tree(word: str) -> bool:
+    """Whether `word` names a path under `.github/ci`: after brace
+    expansion, a component matching `.github` (a glob with at least one
+    literal character past its leading dot — `.*` alone is any dot name,
+    most often a regular expression) followed by one matching `ci`. A word
+    whose brace expansion is too large to enumerate is taken to name it."""
+    alternatives = _brace_alternatives(word)
+    if alternatives is None:
+        return True
+    for alt in alternatives:
+        parts = posixpath.normpath(alt.casefold()).split("/")
+        for part, nxt in zip(parts, parts[1:]):
+            literal = re.sub(r"\[[^]]*]|[*?]", "", part)
+            if (
+                part.startswith(".") and len(literal) > 1
+                and fnmatch.fnmatchcase(".github", part) and fnmatch.fnmatchcase("ci", nxt)
+            ):
+                return True
+    return False
+
+
+def _refused_env_keys(container: dict) -> list[str]:
+    env = container.get("env", {})
+    return sorted(str(k) for k in env if _tool_env_key_refusal(str(k))) if isinstance(env, dict) else []
+
+
+def _pre_tool_shape(st: Step) -> str | None:
+    """Which closed pre-tool shape `st` is, or None: a step whose effect on
+    the runner is fixed and cannot rewrite `.github/ci/**` or steer the
+    interpreters the tools run under."""
+    raw = st.raw
+    if not set(raw) <= PRE_TOOL_STEP_KEYS or raw.get("shell", "bash") != "bash":
+        return None
+    if not isinstance(raw.get("env", {}), dict) or _refused_env_keys(raw):
+        return None
+    uses, run, with_ = raw.get("uses"), raw.get("run"), raw.get("with", {})
+    if not isinstance(with_, dict):
+        return None
+    if isinstance(uses, str) and run is None:
+        if uses in PINNED_CHECKOUT_USES and set(with_) <= CHECKOUT_WITH_KEYS:
+            return "pinned checkout"
+        if uses in PINNED_SETUP_PYTHON_USES and set(with_) <= SETUP_PYTHON_WITH_KEYS:
+            return "pinned setup-python"
+        return None
+    if isinstance(run, str) and uses is None and not with_:
+        if run.strip() == CANONICAL_PIP_INSTALL:
+            return "canonical pip install"
+        if PURE_TOOL_RUN_RE.fullmatch(run):
+            return ".github/ci tool"
+    return None
+
+
+def _tree_reference(node: object, run: str | None, loc: str) -> str | None:
+    """The first word in any string of `node` (keys included) that could
+    name `.github/ci/**`, or None. In the step's own `run:` the canonical
+    helper call is set aside (see `check_workflow_steps`). Words are taken
+    both quote-removed (`shell_lex`) and as raw text split at quotes and
+    shell metacharacters, so neither spelling hides a reference. Shape
+    errors are reported by the step audits, not here."""
+    for label, text, _ in _string_scalars(node, loc, []):
+        if label == "run:" and text is run:
+            text = GITHUB_ENV_HELPER_CALL_RE.sub(" ", text)
+        words = TREE_TOKEN_SPLIT_RE.split(text)
+        for part in _shell_texts(text):
+            for cmd in shell_lex.split_commands(part):
+                words.extend(cmd.words)
+                words.extend(cmd.writes)
+        hit = next((w for w in words if w and _names_tree(w)), None)
+        if hit is not None:
+            return hit
+    return None
+
+
+def _check_tool_job(wf: SccacheWorkflow, job: WorkflowJob, steps: list[Step], jloc: str, errors: list[str]) -> None:
+    """The ordering rule of check 7 for one job: a step naming
+    `.github/ci/**` runs only while every step before it is a closed
+    pre-tool shape (`_pre_tool_shape`), in a job whose runner is fresh and
+    whose paths resolve from the workspace root."""
+    tainted: Step | None = None
+    referenced = False
+    for st in steps:
+        hit = _tree_reference(st.raw, st.run, jloc)
+        if hit is not None:
+            referenced = True
+            stloc = f"{jloc} step {st.label!r}"
+            if tainted is not None:
+                errors.append(
+                    f"{stloc} names {hit!r} after step {tainted.label!r}, which is outside "
+                    "the closed pre-tool shapes (pinned checkout, pinned setup-python, the "
+                    "canonical pip install, a .github/ci tool) — an earlier step could have "
+                    f"rewritten {PROTECTED_TREE}/ or the job's environment; refused"
+                )
+            if "working-directory" in st.raw:
+                errors.append(
+                    f"{stloc} names {hit!r} under a working-directory: — its relative "
+                    f"paths would resolve outside the workspace's {PROTECTED_TREE}/; refused"
+                )
+            bad = _refused_env_keys(st.raw)
+            if bad:
+                errors.append(
+                    f"{stloc} names {hit!r} with env {bad} — it would steer the runner, a "
+                    "loader, or an interpreter the tool runs under; refused"
+                )
+        if tainted is None and _pre_tool_shape(st) is None:
+            tainted = st
+    if not referenced:
+        return
+    runs_on = job.raw.get("runs-on")
+    if not isinstance(runs_on, str) or not GITHUB_HOSTED_RUNNER_RE.fullmatch(runs_on):
+        errors.append(
+            f"{jloc} runs {PROTECTED_TREE}/ on runs-on {runs_on!r}, not one literal "
+            "GitHub-hosted label (a fresh virtual machine per job); refused"
+        )
+    for key in ("container", "services"):
+        if key in job.raw:
+            errors.append(
+                f"{jloc} runs {PROTECTED_TREE}/ with a job {key}: — its filesystem and "
+                "processes outlive this job's steps; refused"
+            )
+    for scope, raw in (("workflow", wf.doc), ("job", job.raw)):
+        d = raw.get("defaults")
+        r = d.get("run") if isinstance(d, dict) else None
+        if isinstance(r, dict) and "working-directory" in r:
+            errors.append(
+                f"{jloc} runs {PROTECTED_TREE}/ under a {scope} defaults.run.working-directory "
+                "— its relative paths would resolve outside the workspace; refused"
+            )
+        bad = _refused_env_keys(raw)
+        if bad:
+            errors.append(
+                f"{jloc} runs {PROTECTED_TREE}/ with {scope} env {bad} — it would steer "
+                "the runner, a loader, or an interpreter the tool runs under; refused"
+            )
 
 
 @dataclass(frozen=True)
@@ -1318,7 +1739,14 @@ class LocalActions:
             outside_steps["runs"] = {k: v for k, v in action.doc["runs"].items() if k != "steps"}
             _audit_scalars(outside_steps, f"{action.display}/action.yml:", self.policy, self.errors, step=False)
             for st in action.steps:
-                _audit_step(st, f"{action.display}/action.yml: step {st.label!r}", self.policy, self.errors)
+                sloc = f"{action.display}/action.yml: step {st.label!r}"
+                _audit_step(st, sloc, self.policy, self.errors)
+                hit = _tree_reference(st.raw, st.run, sloc)
+                if hit is not None:
+                    self.errors.append(
+                        f"{sloc} names {hit!r} — a composite step runs wherever the action "
+                        f"is used, outside the ordering rule for {PROTECTED_TREE}/; refused"
+                    )
         return action
 
     def _load(self, rel: str, shown: str, loc: str) -> LocalAction | None:
@@ -1509,7 +1937,26 @@ def check_workflow_steps(errors: list[str], root: str = REPO_ROOT) -> None:
           toolchain, loader, or interpreter key);
       (g) a `pip install` other than `--require-hashes --only-binary :all:
           -r $GITHUB_WORKSPACE/.github/ci/requirements.txt` with that one
-          file exactly once, and any `pipx`/`easy_install`.
+          file exactly once, and any `pipx`/`easy_install`, judged on
+          quote-removed words (`p""ip` is `pip`);
+      (h) a `shell:` or `defaults.run.shell` other than bash, pwsh, or
+          powershell, bare (any other value is a command template);
+      (i) the ordering rule (`_check_tool_job`): a step naming
+          `.github/ci/**` after any step outside the closed pre-tool shapes
+          (`_pre_tool_shape`) — any other step may rewrite the tree or the
+          job's environment first, so the tools' trust is monotone taint,
+          not a list of write spellings; in a job that runs it, a runs-on
+          other than one literal GitHub-hosted label, a `container:` or
+          `services:`, a `working-directory` at step or defaults scope, or
+          an interpreter/loader/runner `env:` key at any scope. The canonical
+          `ci/github-env.sh` call is not a reference: a step after a
+          non-closed step already runs arbitrary code with the env file
+          open, so the helper grants it nothing, and the helper is not a
+          verdict. A composite step naming the tree is refused (it runs
+          wherever the action is used). Beneath (i), a quote-removed scan
+          (brace expansion, wrapper flags, `xargs`, `sh -c` text, and a
+          shell fed unseen standard input all resolved) refuses a write into
+          the tree as defence in depth.
     Every local `uses: ./...` is resolved on disk from the repo root
     (`action.yml`, then `action.yaml`); an unresolvable, ambiguous, non-
     composite (node/docker), cyclic, or over-deep (> LOCAL_ACTION_DEPTH_LIMIT)
@@ -1544,10 +1991,19 @@ def check_workflow_steps(errors: list[str], root: str = REPO_ROOT) -> None:
       - shadowing a checked command by means other than a shell function or
         alias written in the same `run:` (a `PATH` entry, `BASH_ENV`, a
         sourced file);
-      - rewriting `.github/ci/**` through a path the words do not spell: a
-        relative path after `cd`, a glob not rooted at a literal `.github`
-        component, quote-splitting inside a variable, an interpreter snippet,
-        a whole-tree `git checkout`/`git reset`, or an action's `with:`;
+      - under (i), a runner that carries a GitHub-hosted label but is not
+        one (a self-hosted runner registered as `ubuntu-latest`), and a
+        tool reference after a non-closed step spelled so no word names the
+        tree (`${d}hub/ci`, a relative path after `cd`, a pure-wildcard
+        `.*/ci`);
+      - in the defence-in-depth write scan beneath (i) (these are closed
+        only because (i) refuses the tool after any such step): a path the
+        words do not spell (`d=.git; ${d}hub/ci`, a relative path after
+        `cd`), an interpreter snippet, an archive extractor, `find -exec`,
+        a whole-tree `git checkout`/`git reset`, an action's `with:`, and
+        pwsh text (lexed as POSIX);
+      - an attacker-controlled `${{ github.event.* }}` value interpolated
+        straight into `run:` text (passing it through `env:` is the safe form);
       - a legacy `::set-env` command assembled by the shell at run time (the
         quote-concatenated `::set-""env` spelling is refused);
       - installers that fetch without pip's hash checking beyond the refused
@@ -1609,6 +2065,7 @@ def check_workflow_steps(errors: list[str], root: str = REPO_ROOT) -> None:
                     reaches = True
                     if via is None and action.id != SCCACHE_COMPOSITE_ID:
                         via = action.display
+            _check_tool_job(wf, job, steps, jloc, errors)
             if reaches:
                 hit = sorted({st.name for st in steps if st.name is not None} & deterministic_steps)
                 if hit:

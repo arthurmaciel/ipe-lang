@@ -47,7 +47,7 @@ jobs:
 
       - name: The derived required-set is in sync with the manifest
         run: |
-          python3 - <<'PY'
+          python3 -I - <<'PY'
           import json, sys
           sys.path.insert(0, ".github/ci")
           import strict_yaml

