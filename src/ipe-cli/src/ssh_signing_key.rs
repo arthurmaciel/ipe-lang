@@ -5,7 +5,9 @@
 //! Lookup order: `IPE_PUBLISH_SIGNING_KEY` wins whenever it is set — an explicit
 //! value that names no usable key file fails closed, it never falls back to the
 //! stored key. Unset, publish uses the key `ipe login` stored at
-//! `<config dir>/signing_key`.
+//! `<config dir>/signing_key`, and only once its open handle proves it a regular
+//! file private to the invoking user; an exposed or unusable stored key is
+//! reported and never signed with.
 //!
 //! Setup is interactive and opt-in only. It generates a dedicated ed25519 key in
 //! process (no `ssh-keygen` subprocess), stages both halves in the config dir
@@ -79,19 +81,42 @@ impl PrivateKeyPath {
             .then_some(Self(path))
     }
 
-    /// The key `ipe login` stored in `config_dir`, when it is a regular file.
-    /// A symlink at that name is not accepted: `ipe login` never creates one.
-    fn stored(config_dir: &Path) -> Option<Self> {
-        let path = config_dir.join(PRIVATE_KEY_FILE);
-        std::fs::symlink_metadata(&path)
-            .is_ok_and(|m| m.is_file())
-            .then_some(Self(path))
-    }
-
     /// The private-key file's path.
     #[must_use]
     pub fn as_path(&self) -> &Path {
         &self.0
+    }
+}
+
+/// The occupant of the stored key's name, as its open handle proved it.
+///
+/// The name is opened without following a final symlink and the handle's
+/// metadata decides: only a regular file private to the invoking user is
+/// `Proven`.
+#[derive(Debug, PartialEq, Eq)]
+enum StoredKey {
+    /// A regular file private to the invoking user.
+    Proven(PrivateKeyPath),
+    /// A regular file another user can read, or that another user owns.
+    Exposed(PathBuf),
+    /// A symlink, directory, FIFO, or unreadable entry holds the name.
+    Unusable(PathBuf),
+    /// Nothing holds the name, or the host cannot prove a secret file private.
+    Absent,
+}
+
+impl StoredKey {
+    /// Probe `<config_dir>/signing_key` through `store`.
+    fn probe(store: SecretStore, config_dir: &Path) -> Self {
+        let path = config_dir.join(PRIVATE_KEY_FILE);
+        match crate::secret_file::open_existing(store, &path) {
+            Ok(_) => Self::Proven(PrivateKeyPath(path)),
+            Err(SecretFileError::NotOwnerOnly(shown)) => Self::Exposed(shown),
+            Err(SecretFileError::NotRegularFile(shown)) => Self::Unusable(shown),
+            Err(SecretFileError::Io(e)) if e.kind() == std::io::ErrorKind::NotFound => Self::Absent,
+            Err(SecretFileError::Io(_)) => Self::Unusable(path),
+            Err(SecretFileError::Unsupported) => Self::Absent,
+        }
     }
 }
 
@@ -103,8 +128,14 @@ pub enum KeyLookup {
     /// `IPE_PUBLISH_SIGNING_KEY` is set but names no usable key file. Publish
     /// refuses rather than silently use a different (stored) key.
     EnvUnusable,
-    /// The key `ipe login` generated and registered.
+    /// The key `ipe login` generated and registered, proven private to the
+    /// invoking user.
     Stored(PrivateKeyPath),
+    /// The stored key is readable by, or owned by, another user; it is treated
+    /// as exposed and never signed with.
+    StoredExposed(PathBuf),
+    /// Something other than a readable regular file holds the stored key's name.
+    StoredUnusable(PathBuf),
     /// No key is configured.
     Missing,
 }
@@ -115,7 +146,10 @@ impl KeyLookup {
     pub fn usable(self) -> Option<PrivateKeyPath> {
         match self {
             Self::Env(path) | Self::Stored(path) => Some(path),
-            Self::EnvUnusable | Self::Missing => None,
+            Self::EnvUnusable
+            | Self::StoredExposed(_)
+            | Self::StoredUnusable(_)
+            | Self::Missing => None,
         }
     }
 }
@@ -125,12 +159,26 @@ impl KeyLookup {
 /// key is used.
 #[must_use]
 pub fn lookup(env_value: Option<&OsStr>, config_dir: Option<&Path>) -> KeyLookup {
+    lookup_in(HOST_SECRET_STORE, env_value, config_dir)
+}
+
+/// [`lookup`], proving the stored key through `store`.
+fn lookup_in(
+    store: SecretStore,
+    env_value: Option<&OsStr>,
+    config_dir: Option<&Path>,
+) -> KeyLookup {
     let explicit = env_value.filter(|v| !v.to_str().is_some_and(|s| s.trim().is_empty()));
     explicit.map_or_else(
         || {
-            config_dir
-                .and_then(PrivateKeyPath::stored)
-                .map_or(KeyLookup::Missing, KeyLookup::Stored)
+            config_dir.map_or(KeyLookup::Missing, |dir| {
+                match StoredKey::probe(store, dir) {
+                    StoredKey::Proven(path) => KeyLookup::Stored(path),
+                    StoredKey::Exposed(path) => KeyLookup::StoredExposed(path),
+                    StoredKey::Unusable(path) => KeyLookup::StoredUnusable(path),
+                    StoredKey::Absent => KeyLookup::Missing,
+                }
+            })
         },
         |raw| PrivateKeyPath::from_env_value(raw).map_or(KeyLookup::EnvUnusable, KeyLookup::Env),
     )
@@ -158,6 +206,13 @@ pub(crate) fn status_line(
         KeyLookup::EnvUnusable => crate::text::signing_key_status_env_unusable(&SIGNING_KEY_ENV),
         KeyLookup::Stored(path) => {
             crate::text::signing_key_status_stored(&shown_path(path.as_path()))
+        }
+        KeyLookup::StoredExposed(path) => crate::text::signing_key_status_stored_exposed(
+            &shown_path(&path),
+            &SIGNING_KEYS_SETTINGS,
+        ),
+        KeyLookup::StoredUnusable(path) => {
+            crate::text::signing_key_status_stored_unusable(&shown_path(&path))
         }
         KeyLookup::Missing => crate::text::msg::signing_key_status_none(),
     }
@@ -546,9 +601,8 @@ fn secret_file_error(error: SecretFileError, path: &Path) -> SetupError {
             path: path.to_path_buf(),
             source,
         },
-        SecretFileError::NotOwnerOnly(shown) | SecretFileError::NotRegularFile(shown) => {
-            SetupError::NotOwnerOnly(shown)
-        }
+        SecretFileError::NotOwnerOnly(shown) => SetupError::NotOwnerOnly(shown),
+        SecretFileError::NotRegularFile(shown) => SetupError::Occupied(shown),
     }
 }
 
@@ -598,6 +652,9 @@ fn consent_question(files: &KeyFiles) -> crate::text::Message {
 
 /// The setup step: skip when a key is configured, otherwise ask, generate,
 /// stage, register, and commit — removing the staged key on any failure.
+///
+/// An exposed or unusable stored key is refused before the question is asked,
+/// and the config dir is proven owner-only before any key is generated.
 fn set_up<C: Consent, R: SigningKeyRegistrar>(
     store: SecretStore,
     env_value: Option<&OsStr>,
@@ -605,21 +662,23 @@ fn set_up<C: Consent, R: SigningKeyRegistrar>(
     consent: &mut C,
     registrar: &mut R,
 ) -> Result<SetupOutcome, SetupError> {
-    let dir = match lookup(env_value, config_dir) {
+    let dir = match lookup_in(store, env_value, config_dir) {
         KeyLookup::Env(path) | KeyLookup::Stored(path) => {
             return Ok(SetupOutcome::AlreadyConfigured(path));
         }
         KeyLookup::EnvUnusable => return Ok(SetupOutcome::EnvUnusable),
+        KeyLookup::StoredExposed(path) => return Err(SetupError::NotOwnerOnly(path)),
+        KeyLookup::StoredUnusable(path) => return Err(SetupError::Occupied(path)),
         KeyLookup::Missing => config_dir.ok_or(SetupError::NoConfigDir)?,
     };
     crate::secret_file::require(store).map_err(|_| SetupError::StoreUnsupported)?;
+    create_config_dir(store, dir)?;
     let files = KeyFiles::in_dir(dir);
     files.ensure_free()?;
     if !consent.confirm(&consent_question(&files)) {
         return Ok(SetupOutcome::Declined);
     }
     let pair = GeneratedKeyPair::generate().ok_or(SetupError::KeyGeneration)?;
-    create_config_dir(store, dir)?;
     let staged = StagedKeyPair::write(store, &files, &pair)?;
     registrar
         .register(&pair.public, KEY_TITLE)
@@ -1028,10 +1087,19 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// Plant `contents` at `path` with permission bits `mode`.
+    #[cfg(unix)]
+    fn plant_with_mode(path: &Path, contents: &[u8], mode: u32) {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::write(path, contents).expect("plant");
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).expect("chmod");
+    }
+
+    #[cfg(unix)]
     #[test]
     fn a_configured_key_is_not_replaced() {
         let dir = test_dir("configured");
-        std::fs::write(dir.join(PRIVATE_KEY_FILE), b"existing").expect("plant");
+        plant_with_mode(&dir.join(PRIVATE_KEY_FILE), b"existing", 0o600);
         let mut consent = Answer {
             yes: true,
             asked: 0,
@@ -1064,8 +1132,8 @@ mod tests {
         std::os::unix::fs::symlink(&target, dir.join(PRIVATE_KEY_FILE)).expect("plant symlink");
         assert_eq!(
             lookup(None, Some(dir.as_path())),
-            KeyLookup::Missing,
-            "a symlinked stored key is not used"
+            KeyLookup::StoredUnusable(dir.join(PRIVATE_KEY_FILE)),
+            "a symlinked stored key is reported unusable, never followed"
         );
         let mut consent = Answer {
             yes: true,
@@ -1214,11 +1282,12 @@ mod tests {
         assert!(question.contains(AUTHORIZED_APPS_SETTINGS));
     }
 
+    #[cfg(unix)]
     #[test]
     fn env_override_wins_over_the_stored_key() {
         let dir = test_dir("env-wins");
         let stored = dir.join(PRIVATE_KEY_FILE);
-        std::fs::write(&stored, b"stored").expect("plant stored");
+        plant_with_mode(&stored, b"stored", 0o600);
         let explicit = dir.join("explicit_key");
         std::fs::write(&explicit, b"explicit").expect("plant explicit");
 
@@ -1311,6 +1380,7 @@ mod tests {
             matches!(&result, Err(SetupError::NotOwnerOnly(p)) if *p == dir),
             "a world-writable config dir must be refused, got {result:?}"
         );
+        assert_eq!(consent.asked, 0, "nothing is asked before the refusal");
         assert_eq!(registrar.calls, 0, "nothing is registered");
         assert!(dir_entries(&dir).is_empty(), "no key file is written");
         let rendered = result.err().map(|e| e.to_string());
@@ -1318,6 +1388,75 @@ mod tests {
             rendered.is_some_and(|text| text.contains(SIGNING_KEY_ENV)),
             "the refusal names the environment-variable way out"
         );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_stored_key_another_user_can_read_is_reported_and_never_used() {
+        let dir = test_dir("key-exposed");
+        let stored = dir.join(PRIVATE_KEY_FILE);
+        plant_with_mode(&stored, b"exposed", 0o644);
+        let found = lookup(None, Some(dir.as_path()));
+        assert_eq!(found, KeyLookup::StoredExposed(stored.clone()));
+        assert_eq!(found.usable(), None, "publish never signs with it");
+        let status = status_line(None, Some(dir.as_path()));
+        assert!(
+            status.contains("not private to you") && status.contains(SIGNING_KEYS_SETTINGS),
+            "the status names the exposure and where to revoke the key: {status}"
+        );
+        let mut consent = Answer {
+            yes: true,
+            asked: 0,
+        };
+        let mut registrar = FakeRegistrar::new(&dir, false);
+        let result = set_up(
+            HOST_SECRET_STORE,
+            None,
+            Some(dir.as_path()),
+            &mut consent,
+            &mut registrar,
+        );
+        assert!(
+            matches!(&result, Err(SetupError::NotOwnerOnly(p)) if *p == stored),
+            "an exposed stored key must be refused, got {result:?}"
+        );
+        assert_eq!(consent.asked, 0, "nothing is asked before the refusal");
+        assert_eq!(registrar.calls, 0, "nothing is registered");
+        assert_eq!(std::fs::read(&stored).expect("read"), b"exposed");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_directory_at_the_key_name_is_reported_unusable() {
+        let dir = test_dir("key-is-dir");
+        let stored = dir.join(PRIVATE_KEY_FILE);
+        std::fs::create_dir(&stored).expect("plant dir");
+        let found = lookup(None, Some(dir.as_path()));
+        assert_eq!(found, KeyLookup::StoredUnusable(stored.clone()));
+        assert!(
+            status_line(None, Some(dir.as_path())).contains("not a usable key file"),
+            "the status names the unusable occupant"
+        );
+        let mut consent = Answer {
+            yes: true,
+            asked: 0,
+        };
+        let mut registrar = FakeRegistrar::new(&dir, false);
+        let result = set_up(
+            HOST_SECRET_STORE,
+            None,
+            Some(dir.as_path()),
+            &mut consent,
+            &mut registrar,
+        );
+        assert!(
+            matches!(&result, Err(SetupError::Occupied(p)) if *p == stored),
+            "a directory at the key name must be refused, got {result:?}"
+        );
+        assert_eq!(consent.asked, 0);
+        assert_eq!(registrar.calls, 0);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

@@ -1277,6 +1277,8 @@ messages! {
     login_token_store_unsupported = "login-token-store-unsupported";
     /// A token file or its directory is not private to the invoking user.
     login_secret_not_owner_only(path) = "login-secret-not-owner-only";
+    /// A token file's name is held by something other than a regular file.
+    login_secret_not_regular_file(path) = "login-secret-not-regular-file";
     /// `ipe login --status`: a well-formed token is stored.
     login_status_logged_in(path) = "login-status-logged-in";
     /// `ipe login --status`: the token file exists but does not parse.
@@ -1303,6 +1305,10 @@ messages! {
     signing_key_status_env_unusable(env) = "signing-key-status-env-unusable";
     /// `ipe login --status`: the signing key `ipe login` generated.
     signing_key_status_stored(path: &crate::style::TerminalSafe) = "signing-key-status-stored";
+    /// `ipe login --status`: the stored signing key is not private to the invoking user.
+    signing_key_status_stored_exposed(path: &crate::style::TerminalSafe, settings) = "signing-key-status-stored-exposed";
+    /// `ipe login --status`: something other than a usable key file holds the stored key's name.
+    signing_key_status_stored_unusable(path: &crate::style::TerminalSafe) = "signing-key-status-stored-unusable";
     /// `ipe login --status`: no signing key is configured.
     signing_key_status_none = "signing-key-status-none";
     /// Signing-key setup found a usable key already configured.

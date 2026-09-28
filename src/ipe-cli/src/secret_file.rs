@@ -140,11 +140,12 @@ pub fn create_temp_beside(
 
 /// Create the directory `dir` that houses secret files, and prove no other user can write it.
 ///
-/// Missing components are created mode `0700`. The directory, new or already
-/// present, is refused when another user owns it or can write to it, since
-/// such a user could replace a secret file inside it. Write access for the
-/// invoker's own effective group is admitted on the terms of
-/// [`crate::owner_trust::breach`].
+/// Missing components are created mode `0700`. The final directory, new or
+/// already present, is refused when another user owns it or can write to it,
+/// since such a user could replace a secret file inside it. Write access for
+/// the invoker's own effective group is admitted on the terms of
+/// [`crate::owner_trust::breach`]. Only the final directory is checked: an
+/// ancestor another user can write to is not refused here.
 ///
 /// # Errors
 /// [`SecretFileError::Unsupported`] when `store` cannot keep secrets,
@@ -181,13 +182,13 @@ mod host {
     use super::{SecretFileError, is_owner_only};
     use crate::owner_trust::{Invoker, Stamp, breach};
 
-    /// Refuse the open `file` at `path` unless it is a regular file private to the invoker.
-    fn prove_owner_only(file: &File, path: &Path) -> Result<(), SecretFileError> {
+    /// Refuse the open `file` at `path` unless it is a regular file private to `euid`.
+    fn prove_owner_only(file: &File, path: &Path, euid: u32) -> Result<(), SecretFileError> {
         let meta = file.metadata().map_err(SecretFileError::Io)?;
         if !meta.file_type().is_file() {
             return Err(SecretFileError::NotRegularFile(path.to_path_buf()));
         }
-        if is_owner_only(meta.mode(), meta.uid(), Invoker::current().uid) {
+        if is_owner_only(meta.mode(), meta.uid(), euid) {
             Ok(())
         } else {
             Err(SecretFileError::NotOwnerOnly(path.to_path_buf()))
@@ -196,6 +197,13 @@ mod host {
 
     /// Create `path` exclusively with mode `0600`, then prove the handle owner-only.
     pub fn create_owner_only(path: &Path) -> Result<File, SecretFileError> {
+        create_owner_only_as(path, Invoker::current().uid)
+    }
+
+    /// Create `path` exclusively with mode `0600`, then prove the handle private to `euid`.
+    ///
+    /// A created file failing the proof is removed before the refusal returns.
+    pub fn create_owner_only_as(path: &Path, euid: u32) -> Result<File, SecretFileError> {
         use std::os::unix::fs::OpenOptionsExt as _;
         let file = std::fs::OpenOptions::new()
             .write(true)
@@ -203,7 +211,7 @@ mod host {
             .mode(0o600)
             .open(path)
             .map_err(SecretFileError::Io)?;
-        if let Err(refusal) = prove_owner_only(&file, path) {
+        if let Err(refusal) = prove_owner_only(&file, path, euid) {
             drop(file);
             let _ = std::fs::remove_file(path);
             return Err(refusal);
@@ -235,7 +243,7 @@ mod host {
         let file = rustix::fs::open(path, flags, Mode::empty())
             .map(File::from)
             .map_err(|errno| SecretFileError::Io(errno.into()))?;
-        prove_owner_only(&file, path)?;
+        prove_owner_only(&file, path, Invoker::current().uid)?;
         Ok(file)
     }
 }
@@ -548,6 +556,43 @@ mod tests {
         assert!(
             matches!(&opened, Err(SecretFileError::NotRegularFile(p)) if *p == sub),
             "a directory must be refused, got {opened:?}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_created_file_failing_the_owner_proof_is_refused_and_removed() {
+        let dir = test_dir("create-refused");
+        let path = dir.join("secret");
+        let other_user = crate::owner_trust::Invoker::current().uid.wrapping_add(1);
+        let created = host::create_owner_only_as(&path, other_user);
+        assert!(
+            matches!(&created, Err(SecretFileError::NotOwnerOnly(p)) if *p == path),
+            "a created file owned by someone other than the euid must be refused, got {created:?}"
+        );
+        assert!(
+            std::fs::symlink_metadata(&path).is_err(),
+            "the refused file must be removed"
+        );
+        assert!(entries(&dir).is_empty(), "the refusal must leave nothing");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_fifo_secret_is_refused_on_read_without_blocking() {
+        let dir = test_dir("fifo-read");
+        let fifo = dir.join("secret");
+        let made = std::process::Command::new("mkfifo")
+            .arg(&fifo)
+            .status()
+            .expect("run mkfifo");
+        assert!(made.success(), "mkfifo failed: {made:?}");
+        let opened = open_existing(SecretStore::OwnerOnlyFile, &fifo);
+        assert!(
+            matches!(&opened, Err(SecretFileError::NotRegularFile(p)) if *p == fifo),
+            "a FIFO must be refused as not a regular file, got {opened:?}"
         );
         let _ = std::fs::remove_dir_all(&dir);
     }

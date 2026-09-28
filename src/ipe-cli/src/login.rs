@@ -532,7 +532,34 @@ enum TokenStatus {
 ///
 /// `--status` thus never reports "logged in" on a token `publish` would reject.
 fn token_status() -> TokenStatus {
-    let Some(path) = token_path().filter(|p| p.symlink_metadata().is_ok()) else {
+    token_status_of(StoredToken::probe(token_path()))
+}
+
+/// The occupant of the token file's name, probed once without following a final link.
+///
+/// `--status` and `--logout` both match on it, so an entry one reports (a
+/// dangling symlink included) is the entry the other removes.
+#[derive(Debug, PartialEq, Eq)]
+enum StoredToken {
+    /// Something, of any file type, holds the name.
+    Present(PathBuf),
+    /// No config dir is known, or nothing holds the name.
+    Absent,
+}
+
+impl StoredToken {
+    /// Probe the token file name `path`; any answer but "not found" counts as present.
+    fn probe(path: Option<PathBuf>) -> Self {
+        path.filter(
+            |p| !matches!(p.symlink_metadata(), Err(e) if e.kind() == std::io::ErrorKind::NotFound),
+        )
+        .map_or(Self::Absent, Self::Present)
+    }
+}
+
+/// Classify `stored` through the SAME read and parse the publish path uses.
+fn token_status_of(stored: StoredToken) -> TokenStatus {
+    let StoredToken::Present(path) = stored else {
         return TokenStatus::NotLoggedIn;
     };
     match read_stored_token(&path) {
@@ -579,11 +606,12 @@ fn secret_file_refusal(error: SecretFileError, path: &std::path::Path) -> CliErr
         SecretFileError::Io(e) => {
             login_error(&crate::text::msg::login_create_failed(&path.display(), &e))
         }
-        SecretFileError::NotOwnerOnly(shown) | SecretFileError::NotRegularFile(shown) => {
-            login_error(&crate::text::msg::login_secret_not_owner_only(
-                &shown.display(),
-            ))
-        }
+        SecretFileError::NotOwnerOnly(shown) => login_error(
+            &crate::text::msg::login_secret_not_owner_only(&shown.display()),
+        ),
+        SecretFileError::NotRegularFile(shown) => login_error(
+            &crate::text::msg::login_secret_not_regular_file(&shown.display()),
+        ),
     }
 }
 
@@ -641,24 +669,24 @@ fn token_store_unsupported() -> CliError {
 
 /// Remove the stored token.
 fn logout() -> Result<(), CliError> {
-    let Some(path) = token_path().filter(|p| p.exists()) else {
-        crate::screen::Screen::new(crate::screen::Stream::Stdout)
-            .line(
-                crate::screen::Tone::Text,
-                crate::text::login_logout_nothing(),
-            )
-            .emit();
-        return Ok(());
+    let line = logout_at(StoredToken::probe(token_path()))?
+        .map_or_else(crate::text::msg::login_logout_nothing, |path| {
+            crate::text::msg::login_logout_removed(&path.display())
+        });
+    crate::screen::Screen::new(crate::screen::Stream::Stdout)
+        .line(crate::screen::Tone::Text, &line)
+        .emit();
+    Ok(())
+}
+
+/// Remove the entry `stored` names, without following a final link; `None` when there is none.
+fn logout_at(stored: StoredToken) -> Result<Option<PathBuf>, CliError> {
+    let StoredToken::Present(path) = stored else {
+        return Ok(None);
     };
     std::fs::remove_file(&path)
         .map_err(|e| login_error(&crate::text::msg::login_remove_failed(&path.display(), &e)))?;
-    crate::screen::Screen::new(crate::screen::Stream::Stdout)
-        .line(
-            crate::screen::Tone::Text,
-            &crate::text::msg::login_logout_removed(&path.display()),
-        )
-        .emit();
-    Ok(())
+    Ok(Some(path))
 }
 
 /// Best-effort browser open (same contract as publish's opener).
@@ -735,6 +763,7 @@ mod tests {
         for status in [
             TokenStatus::LoggedIn(hostile_path()),
             TokenStatus::Corrupt(hostile_path()),
+            TokenStatus::Exposed(hostile_path()),
             TokenStatus::NotLoggedIn,
         ] {
             let report = status_report(&status, crate::text::msg::signing_key_status_none());
@@ -1124,5 +1153,60 @@ mod tests {
             matches!(&refusal, CliError::Resolve(message) if message.contains(expected.as_str())),
             "a non-private secret file must name the owner-only refusal: {refusal:?}"
         );
+    }
+
+    #[test]
+    fn a_secret_name_held_by_a_non_regular_file_is_its_own_refusal() {
+        let path = std::path::Path::new("/tmp/ipe/token");
+        let refusal =
+            secret_file_refusal(SecretFileError::NotRegularFile(path.to_path_buf()), path);
+        let expected = crate::text::msg::login_secret_not_regular_file(&path.display());
+        assert!(
+            matches!(&refusal, CliError::Resolve(message) if message.contains(expected.as_str())),
+            "a non-regular secret file must name its own refusal: {refusal:?}"
+        );
+    }
+
+    /// A dangling symlink at the token name is reported by `--status` and removed by `--logout`.
+    #[cfg(unix)]
+    #[test]
+    fn a_dangling_token_symlink_is_reported_and_removed_alike() {
+        let dir = std::env::temp_dir().join(format!(
+            "ipe-login-dangling-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("create test dir");
+        let path = dir.join("token");
+        std::os::unix::fs::symlink(dir.join("missing-target"), &path).expect("plant symlink");
+
+        assert_eq!(
+            StoredToken::probe(Some(path.clone())),
+            StoredToken::Present(path.clone()),
+            "a dangling symlink holds the token name"
+        );
+        let status = token_status_of(StoredToken::probe(Some(path.clone())));
+        assert!(
+            matches!(&status, TokenStatus::Corrupt(p) if *p == path),
+            "--status reports the dangling symlink, never follows it"
+        );
+        let removed = logout_at(StoredToken::probe(Some(path.clone())));
+        assert!(
+            matches!(&removed, Ok(Some(p)) if *p == path),
+            "--logout removes the entry --status reported: {removed:?}"
+        );
+        assert!(
+            path.symlink_metadata().is_err(),
+            "the symlink itself is gone"
+        );
+        assert_eq!(StoredToken::probe(Some(path.clone())), StoredToken::Absent);
+        assert!(matches!(
+            token_status_of(StoredToken::probe(Some(path.clone()))),
+            TokenStatus::NotLoggedIn
+        ));
+        assert!(matches!(logout_at(StoredToken::Absent), Ok(None)));
+        assert_eq!(StoredToken::probe(None), StoredToken::Absent);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
