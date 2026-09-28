@@ -1,0 +1,180 @@
+module Lib.RepoPath exposing (PathError(..), Root, absolutize, describe, parseRoot, resolve, rootPath, toError)
+
+import Ipe.Error as Error
+import Ipe.File as File
+import Ipe.List as List
+import Ipe.Path as Path exposing (Path)
+import Ipe.Result as Result exposing (Result(..))
+import Ipe.String as String
+import Ipe.System as System
+import Ipe.Task as Task
+
+
+-- The directory the index's `tag:relative` paths are relative to: an absolute,
+-- cleaned path confirmed to be a directory. Opaque — `parseRoot` is the only
+-- way to build one, so no unchecked or relative root reaches a file join.
+type Root
+    = Root Path
+
+
+-- Why a stored `tag:relative` index path was refused. Each variant carries the
+-- stored path as it came off the index.
+type PathError
+    = MissingTag String
+    | EmptyRelative String
+    | AbsoluteRelative String
+    | TraversalRelative String
+    | InvalidRelative String
+    | NotUnderRoot String
+
+
+rootPath : Root -> Path
+rootPath root =
+    case root of
+        Root path ->
+            path
+
+
+-- A configured path made absolute: an absolute value is taken as-is, a
+-- relative one is resolved against the working directory. The result is a
+-- sealed `Path`, so a NUL byte is refused and `..` segments are cleaned
+-- against the absolute prefix instead of reaching a later join as a leading
+-- `..`.
+absolutize : String -> Task.Task Error Path
+absolutize raw =
+    if String.startsWith "/" raw then
+        Task.fromResult (Path.fromString raw)
+
+    else
+        do
+            cwd <- System.cwd ()
+            Task.fromResult (Path.fromString (String.concat [ cwd, "/", raw ]))
+
+
+-- `IPE_INDEX_ROOT` parsed into a `Root`. Blank is refused; an absolute or
+-- working-directory-relative value is accepted when it names an existing
+-- directory. Every refusal is an `invalidInput` error naming the variable,
+-- the value, and the fix.
+parseRoot : String -> Task.Task Error Root
+parseRoot raw =
+    if String.trim raw == "" then
+        Task.fail (Error.invalidInput (rootRefusal raw "is empty"))
+
+    else
+        do
+            path <-
+                absolutize raw
+                    |> Task.mapError (\e -> Error.invalidInput (rootRefusal raw ("is not a valid path (" ++ Error.message e ++ ")")))
+            isDir <- File.isDir path |> Task.onError (\_ -> Task.succeed False)
+            if isDir then
+                Task.succeed (Root path)
+
+            else
+                Task.fail (Error.invalidInput (rootRefusal raw ("resolves to " ++ Path.toString path ++ ", which is not a directory")))
+
+
+rootRefusal : String -> String -> String
+rootRefusal raw problem =
+    String.concat
+        [ "IPE_INDEX_ROOT=\""
+        , raw
+        , "\" "
+        , problem
+        , "; set it to the repository root the index was built from (absolute, or relative to the working directory)"
+        ]
+
+
+-- A stored `tag:relative` path joined under the root. The first `:`-segment is
+-- the repo tag; the rest is the relative path. Refused: no tag, an empty or
+-- absolute relative path, any `..` segment, a path `Ipe.Path` rejects, and a
+-- join that does not land strictly below the root.
+resolve : Root -> String -> Result PathError Path
+resolve root stored =
+    case String.split ":" stored of
+        [] ->
+            Err (MissingTag stored)
+
+        _ :: [] ->
+            Err (MissingTag stored)
+
+        _ :: rest ->
+            resolveRelative root stored (String.join ":" rest)
+
+
+resolveRelative : Root -> String -> String -> Result PathError Path
+resolveRelative root stored rel =
+    if rel == "" then
+        Err (EmptyRelative stored)
+
+    else if String.startsWith "/" rel then
+        Err (AbsoluteRelative stored)
+
+    else if List.member ".." (String.split "/" rel) then
+        Err (TraversalRelative stored)
+
+    else
+        case Path.fromString rel of
+            Err _ ->
+                Err (InvalidRelative stored)
+
+            Ok relPath ->
+                if Path.isAbsolute relPath then
+                    Err (AbsoluteRelative stored)
+
+                else
+                    joinUnder root stored relPath
+
+
+-- The single join of a relative `Path` onto the root. Both operands are sealed
+-- `Path`s; the joined text is re-sealed through `Path.fromString`, then must
+-- sit strictly below the root's directory prefix.
+joinUnder : Root -> String -> Path -> Result PathError Path
+joinUnder root stored relPath =
+    let
+        base =
+            Path.toString (rootPath root)
+
+        prefix =
+            if String.endsWith "/" base then
+                base
+
+            else
+                base ++ "/"
+    in
+    case Path.fromString (prefix ++ Path.toString relPath) of
+        Err _ ->
+            Err (InvalidRelative stored)
+
+        Ok joined ->
+            if String.startsWith prefix (Path.toString joined) && Path.toString joined /= base then
+                Ok joined
+
+            else
+                Err (NotUnderRoot stored)
+
+
+describe : PathError -> String
+describe err =
+    case err of
+        MissingTag stored ->
+            "index path \"" ++ stored ++ "\" has no `tag:` prefix"
+
+        EmptyRelative stored ->
+            "index path \"" ++ stored ++ "\" has an empty relative path"
+
+        AbsoluteRelative stored ->
+            "index path \"" ++ stored ++ "\" is absolute; index paths are relative to IPE_INDEX_ROOT"
+
+        TraversalRelative stored ->
+            "index path \"" ++ stored ++ "\" has a `..` segment and could escape IPE_INDEX_ROOT"
+
+        InvalidRelative stored ->
+            "index path \"" ++ stored ++ "\" is not a valid path"
+
+        NotUnderRoot stored ->
+            "index path \"" ++ stored ++ "\" does not name a file under IPE_INDEX_ROOT"
+
+
+toError : PathError -> Error
+toError err =
+    Error.invalidInput (describe err)

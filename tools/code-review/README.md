@@ -23,25 +23,32 @@ See `tools/ipe-index/README.md` for that tool.
 
 ## Configuration
 
-Two environment variables are **required** — `main` checks both at startup and
-exits with an actionable message if either is unset, so a misconfigured run
-fails closed rather than opening a wrong-path database:
+Two environment variables are **required**. `main` parses both at startup and
+exits with an actionable message if either is unset or unusable, so a
+misconfigured run fails closed rather than opening a wrong-path database or
+reading files outside the repo:
 
-| Variable         | Meaning                                              |
-|------------------|------------------------------------------------------|
-| `IPE_INDEX_DB`   | Path or `sqlite://` URL of the `ipe-index` DB.       |
-| `IPE_INDEX_ROOT` | Repo root the index's `tag:relative` paths join to.  |
+| Variable         | Meaning                                                       |
+|------------------|---------------------------------------------------------------|
+| `IPE_INDEX_DB`   | Path or `sqlite://` URL of the `ipe-index` DB.                |
+| `IPE_INDEX_ROOT` | Repo root the index's `tag:relative` paths join to; must be an existing directory. |
+| `IPE_REVIEW_DB`  | Optional path or `sqlite://` URL of the review DB; defaults to `review.db`. |
 
-The index DB is opened read-only for listing and read-write only to delete a
-consumed `change_queue` row. `IPE_REVIEW_DB` is optional and defaults to
-`review.db` (the app creates and owns this database).
+A relative path in any of the three resolves against the working directory. A
+file path containing `?`, `#` or `%` is refused — pass such a location as a
+percent-encoded `sqlite://` URL. Every stored `tag:relative` path must name a
+file strictly under `IPE_INDEX_ROOT`: an empty, absolute, or `..`-bearing stored
+path is refused with an error naming it.
+
+The index DB is opened read-only for listing and read-write (never created) only
+to delete a consumed `change_queue` row. The app creates and owns the review DB.
 
 ## Running
 
-From the repo root:
+From this directory, against an index built at the repo root:
 
 ```bash
-IPE_INDEX_DB="$PWD/.ipe-index/index.db" IPE_INDEX_ROOT="$PWD" ipe run
+IPE_INDEX_DB=../../.ipe-index/index.db IPE_INDEX_ROOT=../.. ipe run
 ```
 
 `ipe run` builds and serves on <http://localhost:8000>. `ipe type-check` runs a

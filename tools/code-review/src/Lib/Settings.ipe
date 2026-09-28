@@ -1,0 +1,112 @@
+module Lib.Settings exposing (DbLocation, IndexSettings, indexReadUrl, indexSettings, indexWriteUrl, reviewDb, reviewUrl)
+
+import Ipe.Error as Error
+import Ipe.Path as Path exposing (Path)
+import Ipe.String as String
+import Ipe.System as System
+import Ipe.Task as Task
+import Lib.RepoPath as RepoPath exposing (Root)
+
+
+-- Where a SQLite database lives: an absolute file path, or a `sqlite://` URL
+-- taken verbatim. A relative file path is made absolute when parsed, so the
+-- location never depends on how the driver resolves a relative name.
+type DbLocation
+    = DbFile Path
+    | DbUrl String
+
+
+-- The index configuration, parsed from `IPE_INDEX_DB` and `IPE_INDEX_ROOT`.
+type alias IndexSettings =
+    { db : DbLocation
+    , root : Root
+    }
+
+
+-- The one boundary that turns the index environment into typed values. It
+-- reads the environment on every call (the embedded app has no flags, and the
+-- tests re-point the variables between cases), and `main` runs it once at
+-- startup so a bad value stops the server before it listens.
+indexSettings : Task.Task Error IndexSettings
+indexSettings =
+    do
+        rawDb <- System.getenv "IPE_INDEX_DB"
+        rawRoot <- System.getenv "IPE_INDEX_ROOT"
+        db <- parseDbLocation "IPE_INDEX_DB" rawDb
+        root <- RepoPath.parseRoot rawRoot
+        Task.succeed { db = db, root = root }
+
+
+-- The review database location from `IPE_REVIEW_DB`, `review.db` in the
+-- working directory when unset.
+reviewDb : Task.Task Error DbLocation
+reviewDb =
+    parseDbLocation "IPE_REVIEW_DB" (System.getenvOr "IPE_REVIEW_DB" "review.db")
+
+
+-- A `sqlite://` URL is kept verbatim. A file path is refused when blank or
+-- when it carries `?`, `#` or `%` (each changes meaning inside a URL), and is
+-- otherwise made absolute.
+parseDbLocation : String -> String -> Task.Task Error DbLocation
+parseDbLocation var raw =
+    if String.trim raw == "" then
+        Task.fail (Error.invalidInput (dbRefusal var raw "is empty"))
+
+    else if String.startsWith "sqlite://" raw then
+        Task.succeed (DbUrl raw)
+
+    else if String.contains "://" raw then
+        Task.fail (Error.invalidInput (dbRefusal var raw "is a URL that is not `sqlite://`"))
+
+    else if String.contains "?" raw || String.contains "#" raw || String.contains "%" raw then
+        Task.fail (Error.invalidInput (dbRefusal var raw "is a file path containing `?`, `#` or `%`; pass it as a percent-encoded `sqlite://` URL instead"))
+
+    else
+        RepoPath.absolutize raw
+            |> Task.mapError (\e -> Error.invalidInput (dbRefusal var raw ("is not a valid path (" ++ Error.message e ++ ")")))
+            |> Task.map DbFile
+
+
+dbRefusal : String -> String -> String -> String
+dbRefusal var raw problem =
+    String.concat [ var, "=\"", raw, "\" ", problem, "; set it to a SQLite file path or a `sqlite://` URL" ]
+
+
+-- The index opened read-only (`mode=ro`), so listing can never create or
+-- modify it. A URL that already carries a query is used as given.
+indexReadUrl : DbLocation -> String
+indexReadUrl loc =
+    case loc of
+        DbFile path ->
+            "sqlite://" ++ Path.toString path ++ "?mode=ro"
+
+        DbUrl url ->
+            if String.contains "?" url then
+                url
+
+            else
+                url ++ "?mode=ro"
+
+
+-- The index opened read-write (`mode=rw`) for the drain step. `rw` never
+-- creates the file, so a mistyped location fails instead of draining an empty
+-- new database.
+indexWriteUrl : DbLocation -> String
+indexWriteUrl loc =
+    case loc of
+        DbFile path ->
+            "sqlite://" ++ Path.toString path ++ "?mode=rw"
+
+        DbUrl url ->
+            String.replace "mode=ro" "mode=rw" url
+
+
+-- The review database, created on first open (`mode=rwc`) — the app owns it.
+reviewUrl : DbLocation -> String
+reviewUrl loc =
+    case loc of
+        DbFile path ->
+            "sqlite://" ++ Path.toString path ++ "?mode=rwc"
+
+        DbUrl url ->
+            url

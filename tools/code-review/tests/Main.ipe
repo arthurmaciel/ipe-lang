@@ -7,6 +7,7 @@ import Ipe.File as File
 import Ipe.Io as Io
 import Ipe.List as List
 import Ipe.Path as Path
+import Ipe.Result as Result exposing (Result(..))
 import Ipe.String as String
 import Ipe.System as System
 import Ipe.Task as Task
@@ -18,6 +19,8 @@ import Lib.Index as Index
 import Lib.Keys as Keys exposing (KeyAction(..))
 import Lib.Links as Links exposing (Link(..))
 import Lib.Queue as Queue
+import Lib.RepoPath as RepoPath exposing (PathError(..))
+import Lib.Settings as Settings
 
 
 tableExists : Db -> String -> Task.Task Error Bool
@@ -374,7 +377,7 @@ isUnknown lang =
             False
 
 
--- ── B3: ipe-index bridge ───────────────────────────────────────────────────
+-- ── ipe-index bridge ───────────────────────────────────────────────────
 --
 -- Seeds a scratch ipe-index database (units + change_queue) plus two source
 -- files, then asks Lib.Index.loadPending for the queue and checks the loaded
@@ -630,7 +633,7 @@ removeFileIfAny path =
         |> Task.onError (\_ -> Task.succeed ())
 
 
--- ── B4: guard the path resolver ─────────────────────────────────────────────
+-- ── guard the path resolver ─────────────────────────────────────────────
 --
 -- A queued unit whose stored path escapes the index root (mid-path `..`
 -- segment) must fail the whole load closed, never read a file outside root.
@@ -690,7 +693,198 @@ seedTraversalDb base =
         |> Task.map (\_ -> ())
 
 
--- ── B5: decision drain loop ─────────────────────────────────────────────────
+-- ── typed root and stored-path join ──────────────────────────────────────────
+--
+-- `RepoPath.resolve` refuses every stored path that is not a relative path
+-- strictly below the root, and `parseRoot` accepts a working-directory-relative
+-- root (leading `..` included) while refusing a blank or non-directory one.
+
+
+refusalName : PathError -> String
+refusalName err =
+    case err of
+        MissingTag _ ->
+            "missing-tag"
+
+        EmptyRelative _ ->
+            "empty"
+
+        AbsoluteRelative _ ->
+            "absolute"
+
+        TraversalRelative _ ->
+            "traversal"
+
+        InvalidRelative _ ->
+            "invalid"
+
+        NotUnderRoot _ ->
+            "not-under-root"
+
+
+refusedAs : String -> Result PathError Path.Path -> Bool
+refusedAs expected result =
+    case result of
+        Ok _ ->
+            False
+
+        Err err ->
+            refusalName err == expected
+
+
+refused : Result PathError Path.Path -> Bool
+refused result =
+    case result of
+        Ok _ ->
+            False
+
+        Err _ ->
+            True
+
+
+resolvesTo : String -> Result PathError Path.Path -> Bool
+resolvesTo expected result =
+    case result of
+        Ok path ->
+            Path.toString path == expected
+
+        Err _ ->
+            False
+
+
+-- The absolute path `abs` spelled relative to the working directory, climbing
+-- to `/` first — the shape a `../..`-style `IPE_INDEX_ROOT` takes.
+relativeFromCwd : String -> Task.Task Error String
+relativeFromCwd abs =
+    System.cwd ()
+        |> Task.map
+            (\cwd ->
+                let
+                    depth =
+                        List.length (List.filter (\seg -> seg /= "") (String.split "/" cwd))
+                in
+                String.repeat depth "../" ++ String.dropLeft 1 abs
+            )
+
+
+storedPathRefusals : Task.Task Error Bool
+storedPathRefusals =
+    do
+        cwd <- System.cwd ()
+        root <- RepoPath.parseRoot cwd
+        let
+            base =
+                Path.toString (RepoPath.rootPath root)
+        in
+        Task.succeed
+            (List.all identity
+                [ refusedAs "traversal" (RepoPath.resolve root "ipe:a/../../escape")
+                , refusedAs "traversal" (RepoPath.resolve root "ipe:../escape")
+                , refusedAs "traversal" (RepoPath.resolve root "ipe:..")
+                , refusedAs "absolute" (RepoPath.resolve root "ipe:/etc/passwd")
+                , refusedAs "empty" (RepoPath.resolve root "ipe:")
+                , refusedAs "missing-tag" (RepoPath.resolve root "src/Main.ipe")
+                , refusedAs "missing-tag" (RepoPath.resolve root "")
+                , refused (RepoPath.resolve root "ipe:.")
+                , resolvesTo (base ++ "/src/Main.ipe") (RepoPath.resolve root "ipe:src/Main.ipe")
+                , resolvesTo (base ++ "/a:b") (RepoPath.resolve root "ipe:a:b")
+                ]
+            )
+
+
+-- A root spelled relative to the working directory, climbing with `..`,
+-- resolves to the same absolute directory, and stored paths join under it.
+relativeRootAccepted : Task.Task Error Bool
+relativeRootAccepted =
+    do
+        cwd <- System.cwd ()
+        cwdPath <- Task.fromResult (Path.fromString cwd)
+        rel <- relativeFromCwd (Path.toString cwdPath)
+        root <- RepoPath.parseRoot rel
+        dotRoot <- RepoPath.parseRoot "."
+        Task.succeed
+            (Path.toString (RepoPath.rootPath root)
+                == Path.toString cwdPath
+                && Path.toString (RepoPath.rootPath dotRoot)
+                == Path.toString cwdPath
+                && resolvesTo (Path.toString cwdPath ++ "/package.ipe") (RepoPath.resolve root "ipe:package.ipe")
+            )
+
+
+rootRefused : String -> Task.Task Error Bool
+rootRefused raw =
+    RepoPath.parseRoot raw
+        |> Task.map (\_ -> False)
+        |> Task.onError (\_ -> Task.succeed True)
+
+
+-- Blank, missing, and non-directory roots stop at the parse.
+badRootsRefused : Task.Task Error Bool
+badRootsRefused =
+    let
+        base =
+            System.getenvOr "TMPDIR" "/tmp" ++ "/ipe-review-root-refusals"
+    in
+    do
+        dir <- Task.fromResult (Path.fromString base)
+        File.mkdirAll dir
+        writeFileText (base ++ "/plain-file") "x"
+        blank <- rootRefused ""
+        spaces <- rootRefused "   "
+        missing <- rootRefused (base ++ "/does-not-exist")
+        notDir <- rootRefused (base ++ "/plain-file")
+        removeFileIfAny (base ++ "/plain-file")
+        Task.succeed (blank && spaces && missing && notDir)
+
+
+settingsRefused : String -> Task.Task Error Bool
+settingsRefused indexDb =
+    System.setenv "IPE_INDEX_DB" indexDb
+        |> Task.andThen (\_ -> Settings.indexSettings)
+        |> Task.map (\_ -> False)
+        |> Task.onError (\_ -> Task.succeed True)
+
+
+-- `IPE_INDEX_DB` values that cannot name a SQLite database stop at the parse.
+badIndexDbRefused : Task.Task Error Bool
+badIndexDbRefused =
+    do
+        cwd <- System.cwd ()
+        System.setenv "IPE_INDEX_ROOT" cwd
+        blank <- settingsRefused ""
+        otherScheme <- settingsRefused "postgres://localhost/index"
+        query <- settingsRefused "index.db?mode=rwc"
+        fragment <- settingsRefused "index.db#x"
+        percent <- settingsRefused "index%2e.db"
+        Task.succeed (blank && otherScheme && query && fragment && percent)
+
+
+-- The index bridge with `IPE_INDEX_ROOT` given relative to the working
+-- directory: the queue loads and every source slice reads from under the root.
+relativeRootLoadsQueue : Task.Task Error Bool
+relativeRootLoadsQueue =
+    let
+        base =
+            System.getenvOr "TMPDIR" "/tmp" ++ "/ipe-index-relative-root"
+
+        repo =
+            base ++ "/repo"
+
+        indexDb =
+            base ++ "/index.db"
+    in
+    do
+        removeFileIfAny indexDb
+        seedIndex indexDb repo
+        absRepo <- Task.fromResult (Path.fromString repo)
+        relRepo <- relativeFromCwd (Path.toString absRepo)
+        System.setenv "IPE_INDEX_ROOT" relRepo
+        units <- Index.loadPending
+        cleanupIndex indexDb repo
+        Task.succeed (checkUnits units)
+
+
+-- ── decision drain loop ─────────────────────────────────────────────────
 --
 -- A decided unit leaves the index queue: recordDrain writes the drain cursor
 -- (idempotent on the same pair), drainUnit deletes the consumed change_queue
@@ -807,7 +1001,7 @@ seedDrainDb indexDb =
         |> Task.map (\_ -> ())
 
 
--- ── B6: review history ──────────────────────────────────────────────────────
+-- ── review history ──────────────────────────────────────────────────────
 --
 -- Two decisions on a scratch review db must come back through findDecisions
 -- with their columns in order (descending reviewed_at, then uid).
@@ -857,7 +1051,7 @@ insertBoth db =
         |> Task.andThen (\_ -> LibDb.insertDecision db "u-b" "hashB" (Refused "too big"))
 
 
--- ── B8: change re-enqueue ─────────────────────────────────────────────────────
+-- ── change re-enqueue ─────────────────────────────────────────────────────
 --
 -- A unit already decided on its current hash stays hidden; a unit decided on an
 -- OLDER hash resurfaced at the queue head, flagged with the previous decision;
@@ -1047,7 +1241,7 @@ insertB8Units conn =
             )
 
 
--- ── B9: internal/external linking ───────────────────────────────────────────
+-- ── internal/external linking ───────────────────────────────────────────
 --
 -- Identifier tokens in a unit's source resolve against the index's qualified
 -- names (internal) or http(s) URLs (external); the unit's own name never
@@ -1238,6 +1432,31 @@ main =
             (\results ->
                 traversalPathsRejected
                     |> Task.map (\ok -> results ++ [ ( "traversal paths rejected", ok ) ])
+            )
+        |> Task.andThen
+            (\results ->
+                storedPathRefusals
+                    |> Task.map (\ok -> results ++ [ ( "stored paths outside the root refused", ok ) ])
+            )
+        |> Task.andThen
+            (\results ->
+                relativeRootAccepted
+                    |> Task.map (\ok -> results ++ [ ( "relative root resolves against the working directory", ok ) ])
+            )
+        |> Task.andThen
+            (\results ->
+                badRootsRefused
+                    |> Task.map (\ok -> results ++ [ ( "blank, missing and non-directory roots refused", ok ) ])
+            )
+        |> Task.andThen
+            (\results ->
+                badIndexDbRefused
+                    |> Task.map (\ok -> results ++ [ ( "unusable index db locations refused", ok ) ])
+            )
+        |> Task.andThen
+            (\results ->
+                relativeRootLoadsQueue
+                    |> Task.map (\ok -> results ++ [ ( "relative root loads the queue", ok ) ])
             )
         |> Task.andThen
             (\results ->

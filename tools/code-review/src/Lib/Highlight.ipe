@@ -8,7 +8,7 @@ import Ipe.String as String
 
 -- Server-side syntax highlighting, Ipê-native: a small hand-rolled tokenizer
 -- (no lexer, no JS). Coarser than Prism but readable for review display; the
--- spec's B11 custom-element upgrade is a drop-in for the same render slot.
+-- custom-element upgrade is a drop-in for the same render slot.
 type Lang
     = Rust
     | Shell
