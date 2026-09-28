@@ -35,7 +35,7 @@ use std::ffi::OsString;
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::path::{Path, PathBuf};
 
-use crate::CanonicalPath;
+use crate::JailMounts;
 #[cfg(all(
     target_os = "linux",
     any(target_arch = "x86_64", target_arch = "aarch64")
@@ -290,25 +290,24 @@ impl SafeMountPath {
 
 // ── the returning build-jail entry ───────────────────────────────────────────
 
-/// Confirm every jail path still resolves to itself, then resolve the
-/// invoker's home masks.
+/// Confirm every jail path still resolves to itself and exposes no cargo home.
 ///
 /// The caller resolved each path once and handed the same values to the
 /// payload; a path swapped for a symlink since then is refused rather than
 /// bound at a spelling the payload was not told about.
-#[cfg(all(
-    target_os = "linux",
-    any(target_arch = "x86_64", target_arch = "aarch64")
+#[cfg(any(
+    all(
+        target_os = "linux",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    ),
+    target_os = "macos",
+    target_os = "windows",
+    target_os = "freebsd"
 ))]
-fn recheck_jail_paths(
-    scoped_tmp: &CanonicalPath,
-    working_tree: &CanonicalPath,
-    extra_ro_binds: &[CanonicalPath],
-) -> Result<crate::HomeMasks, crate::JailPathError> {
-    for path in [scoped_tmp, working_tree].into_iter().chain(extra_ro_binds) {
-        path.recheck()?;
-    }
-    crate::HomeMasks::of_invoker()
+fn recheck_mounts(mounts: &JailMounts) -> Result<(), JailOutcome> {
+    mounts.recheck().map_err(|e| JailOutcome::Unavailable {
+        defect: RunJailDefect::Path(e),
+    })
 }
 
 /// Run `payload` inside a jail lowered from `profile`, wait for it, and return
@@ -322,8 +321,8 @@ fn recheck_jail_paths(
 /// be at run time.
 ///
 /// A jail that cannot be established (unsupported platform, a seccomp program
-/// that cannot be compiled for this architecture, a jail path that does not
-/// resolve, an unknown invoker home, a spawn failure) yields
+/// that cannot be compiled for this architecture, a jail path that moved or
+/// would expose the cargo home, a spawn failure) yields
 /// [`JailOutcome::Unavailable`] — the untrusted payload is never run unconfined
 /// on any path.
 ///
@@ -341,19 +340,12 @@ fn recheck_jail_paths(
 pub fn build_in_jail(
     tools: &RunJailTools,
     profile: &SandboxProfile,
-    scoped_tmp: &CanonicalPath,
-    working_tree: &CanonicalPath,
-    extra_ro_binds: &[CanonicalPath],
+    mounts: &JailMounts,
     payload: &[OsString],
 ) -> JailOutcome {
-    let homes = match recheck_jail_paths(scoped_tmp, working_tree, extra_ro_binds) {
-        Ok(homes) => homes,
-        Err(e) => {
-            return JailOutcome::Unavailable {
-                defect: RunJailDefect::Path(e),
-            };
-        }
-    };
+    if let Err(outcome) = recheck_mounts(mounts) {
+        return outcome;
+    }
     let Some(program) = seccomp::subprocess_deny_program(profile.subprocess) else {
         return JailOutcome::Unavailable {
             defect: RunJailDefect::UnsupportedPlatform {
@@ -378,10 +370,7 @@ pub fn build_in_jail(
     let argv = run_jail_argv(
         tools,
         profile,
-        scoped_tmp,
-        working_tree,
-        extra_ro_binds,
-        &homes,
+        mounts,
         Some(seccomp_owned.as_raw_fd()),
         &host_env,
         payload,
@@ -401,20 +390,20 @@ pub fn build_in_jail(
 /// wait for it, and return the decoded [`JailOutcome`] (macOS).
 ///
 /// The macOS counterpart to the `Linux` [`build_in_jail`]: it lowers the
-/// SAME [`SandboxProfile`] to a Seatbelt SBPL profile ([`sbpl_from_profile`]),
-/// writes it to a scratch-local file, and spawns
-/// `sandbox-exec -f <profile> <payload>`, so a build observed under Tier-2 is
-/// confined exactly as the shipped artifact will be at run time (single source
-/// of the confining profile).
+/// SAME [`SandboxProfile`] to a Seatbelt SBPL profile ([`sbpl_from_profile`])
+/// and spawns `sandbox-exec -p <profile> <payload>`, so a build observed under
+/// Tier-2 is confined exactly as the shipped artifact will be at run time
+/// (single source of the confining profile). The profile travels in argv, never
+/// through a file the payload could rewrite.
 ///
-/// `scoped_tmp` is the one always-writable scratch; `working_tree` is writable
-/// only when the profile grants the filesystem axis. `extra_ro_binds` is unused
-/// on macOS (Seatbelt filters an existing view of the real filesystem rather
-/// than constructing a bind mount namespace); it is accepted so the entry has
-/// the same signature on every platform.
+/// The mounts' scratch is the one always-writable directory; the working tree
+/// is writable only when the profile grants the filesystem axis. The read-only
+/// binds are unused on macOS (Seatbelt filters an existing view of the real
+/// filesystem rather than constructing a bind mount namespace).
 ///
-/// A jail that cannot be established (no `sandbox-exec`, an SBPL profile that
-/// cannot be written, a spawn failure) yields [`JailOutcome::Unavailable`] — the
+/// A jail that cannot be established (no `sandbox-exec`, a jail path that moved
+/// or would expose the cargo home, a spawn failure) yields
+/// [`JailOutcome::Unavailable`] — the
 /// untrusted payload is never run unconfined on any path. Fail-closed.
 ///
 /// The macOS jail's actual deny behaviour is verified by the `macos-latest` CI
@@ -431,12 +420,16 @@ pub fn build_in_jail(
 pub fn build_in_jail(
     _tools: &RunJailTools,
     profile: &SandboxProfile,
-    scoped_tmp: &CanonicalPath,
-    working_tree: &CanonicalPath,
-    _extra_ro_binds: &[CanonicalPath],
+    mounts: &JailMounts,
     payload: &[OsString],
 ) -> JailOutcome {
-    let (scoped_tmp, working_tree) = (scoped_tmp.as_path(), working_tree.as_path());
+    if let Err(outcome) = recheck_mounts(mounts) {
+        return outcome;
+    }
+    let (scoped_tmp, working_tree) = (
+        mounts.scoped_tmp().as_path(),
+        mounts.working_tree().as_path(),
+    );
     // `sandbox-exec` is the mandatory macOS jail primitive. Absent ⇒ refuse; the
     // untrusted payload is never run unconfined.
     let Some(sandbox_exec) = find_in_path("sandbox-exec") else {
@@ -447,24 +440,15 @@ pub fn build_in_jail(
         };
     };
 
-    // The SBPL profile is written into the always-writable scratch so it never
-    // races or persists on a shared temp path, and is removed after the run.
+    // argv: sandbox-exec -p <profile> <payload…>. The profile is an argument,
+    // so the payload has no file to rewrite before a later run applies it. No
+    // shell token anywhere — the payload is a direct argv, so the
+    // quoting/injection class does not exist.
     let sbpl = sbpl_from_profile(profile, scoped_tmp, working_tree);
-    let profile_file = scoped_tmp.join("ipe-tier2.sb");
-    if let Err(e) = std::fs::write(&profile_file, sbpl.as_bytes()) {
-        return JailOutcome::Unavailable {
-            defect: RunJailDefect::Spawn {
-                detail: format!("could not write the SBPL profile: {e}"),
-            },
-        };
-    }
-
-    // argv: sandbox-exec -f <profile> <payload…>. No shell token anywhere — the
-    // payload is a direct argv, so the quoting/injection class does not exist.
     let mut argv: Vec<OsString> = Vec::with_capacity(payload.len() + 3);
     argv.push(sandbox_exec.into_os_string());
-    argv.push("-f".into());
-    argv.push(profile_file.clone().into_os_string());
+    argv.push("-p".into());
+    argv.push(sbpl.into());
     argv.extend(payload.iter().cloned());
 
     // Enforce the `env` axis in the launcher (Seatbelt cannot scrub env),
@@ -473,10 +457,7 @@ pub fn build_in_jail(
     let host_env = |k: &str| std::env::var_os(k);
     let scrubbed_env = macos_scrubbed_env(profile, scoped_tmp, &host_env);
 
-    let outcome = spawn_and_decode(&argv, Some(&scrubbed_env));
-    // Best-effort cleanup; a leftover profile in the scratch is inert.
-    let _ = std::fs::remove_file(&profile_file);
-    outcome
+    spawn_and_decode(&argv, Some(&scrubbed_env))
 }
 
 /// Run `payload` inside a Windows Job Object + AppContainer jail lowered from
@@ -499,9 +480,9 @@ pub fn build_in_jail(
 /// with a silently-unconfined filesystem axis (the probe lives inside
 /// `windows_jail::run_confined`, ahead of `CreateProcessW`).
 ///
-/// `extra_ro_binds` is unused on Windows (AppContainer filters an existing view of
-/// the real filesystem rather than constructing a bind-mount namespace); it is
-/// accepted so the entry has the same signature on every platform.
+/// The mounts' read-only binds are unused on Windows (AppContainer filters an
+/// existing view of the real filesystem rather than constructing a bind-mount
+/// namespace); the scratch and working tree are rechecked before the launch.
 ///
 /// A jail that cannot be established (a Job Object / token / capability SID / ACL
 /// / attribute list / `CreateProcessW` that cannot be built, or a non-ACL scratch
@@ -524,11 +505,12 @@ pub fn build_in_jail(
 pub fn build_in_jail(
     _tools: &RunJailTools,
     profile: &SandboxProfile,
-    scoped_tmp: &CanonicalPath,
-    working_tree: &CanonicalPath,
-    _extra_ro_binds: &[CanonicalPath],
+    mounts: &JailMounts,
     payload: &[OsString],
 ) -> JailOutcome {
+    if let Err(outcome) = recheck_mounts(mounts) {
+        return outcome;
+    }
     // The Windows jail RETURNS the child's exit code (Windows has no `exec`-
     // replace), which decodes through the SAME `JailOutcome::decode` the Linux
     // and macOS arms use: `0` is the sole `Clean` branch; a per-axis code names
@@ -538,8 +520,8 @@ pub fn build_in_jail(
     // `RunJailDefect` → `Unavailable`; the untrusted build never runs unconfined.
     match crate::run_jail::build_windows_jailed(
         profile,
-        scoped_tmp.as_path(),
-        working_tree.as_path(),
+        mounts.scoped_tmp().as_path(),
+        mounts.working_tree().as_path(),
         payload,
     ) {
         Ok(code) => JailOutcome::decode(Some(win_exit_to_i32(code))),
@@ -610,9 +592,9 @@ const fn win_exit_to_i32(code: u32) -> i32 {
 /// - **env** — scrubbed in the launcher (a jail does not scrub the inherited
 ///   environment), via the SAME allowlist the macOS/Windows arms use.
 ///
-/// `extra_ro_binds` is unused on FreeBSD (the jail chroots an existing view of the
-/// real filesystem rather than building a bind-mount namespace); it is accepted so
-/// the entry has the same signature on every platform.
+/// The mounts' read-only binds are unused on FreeBSD (the jail chroots an existing
+/// view of the real filesystem rather than building a bind-mount namespace); the
+/// scratch and working tree are rechecked before the jail is built.
 ///
 /// A jail that cannot be established (`jail` absent, a scratch that cannot be
 /// created/chowned, a `jail(8)` invocation that fails to enter the jail) yields
@@ -634,15 +616,16 @@ const fn win_exit_to_i32(code: u32) -> i32 {
 pub fn build_in_jail(
     _tools: &RunJailTools,
     profile: &SandboxProfile,
-    scoped_tmp: &CanonicalPath,
-    working_tree: &CanonicalPath,
-    _extra_ro_binds: &[CanonicalPath],
+    mounts: &JailMounts,
     payload: &[OsString],
 ) -> JailOutcome {
+    if let Err(outcome) = recheck_mounts(mounts) {
+        return outcome;
+    }
     freebsd_jail::build_in_jail(
         profile,
-        scoped_tmp.as_path(),
-        working_tree.as_path(),
+        mounts.scoped_tmp().as_path(),
+        mounts.working_tree().as_path(),
         payload,
     )
 }
@@ -665,9 +648,7 @@ pub fn build_in_jail(
 pub fn build_in_jail(
     _tools: &RunJailTools,
     _profile: &SandboxProfile,
-    _scoped_tmp: &CanonicalPath,
-    _working_tree: &CanonicalPath,
-    _extra_ro_binds: &[CanonicalPath],
+    _mounts: &JailMounts,
     _payload: &[OsString],
 ) -> JailOutcome {
     JailOutcome::Unavailable {
@@ -959,10 +940,10 @@ pub fn sbpl_from_profile(
     // axis under a withholding profile.
     //
     // The scratch (`scoped_tmp`) is the ONLY unconditional write allow. The
-    // launcher writes only into it (the `.sb` profile file) and points `TMPDIR`
-    // at it (`macos_scrubbed_env`), so a well-behaved child's temp writes land
-    // there. No broader system-temp tree is allowed: `scoped_tmp` itself lives
-    // under the per-user temp tree (`/private/var/folders/…` — `$TMPDIR`
+    // launcher points `TMPDIR` at it (`macos_scrubbed_env`), so a well-behaved
+    // child's temp writes land there; the launcher itself stages nothing there
+    // (the profile travels in argv). No broader system-temp tree is allowed:
+    // `scoped_tmp` itself lives under the per-user temp tree (`/private/var/folders/…` — `$TMPDIR`
     // resolved through the `/var → /private/var` symlink), so a blanket allow
     // over that tree would re-permit every sibling of the scratch, defeating the
     // differential confinement — an out-of-scratch write next to the scratch
@@ -1025,8 +1006,8 @@ pub fn sbpl_from_profile(
     ] {
         let _ = writeln!(s, "(allow file-read* (subpath \"{root}\"))");
     }
-    // The scratch is always readable (the launcher writes the profile and the
-    // child's temp files there); the working tree is the source being built, so it
+    // The scratch is always readable (the child's temp files live there); the
+    // working tree is the source being built, so it
     // is readable whether or not the filesystem axis grants WRITE access. Both are
     // rendered in symlink-resolved form so the allow matches the kernel-resolved
     // read, exactly like the write allows above.
@@ -1043,7 +1024,7 @@ pub fn sbpl_from_profile(
     s.push('\n');
 
     // Subprocess: deny NEW-process creation unless the profile grants it. On
-    // macOS `sandbox-exec -f <profile> <app>` applies the profile and THEN
+    // macOS `sandbox-exec -p <profile> <app>` applies the profile and THEN
     // `execve`s <app> in place (no fork) — so a `(deny process-exec*)` here would
     // catch that mandatory initial exec and the app would never start. Denying
     // `process-fork` alone is the correct lowering: every way to create a NEW

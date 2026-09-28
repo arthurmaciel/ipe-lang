@@ -57,7 +57,7 @@ use ipe_sandbox::run_jail::RunJailTools;
     target_os = "freebsd",
     target_os = "windows"
 ))]
-use ipe_sandbox::{CanonicalPath, JailPathError};
+use ipe_sandbox::{CanonicalPath, JailMounts, JailPathError};
 
 use crate::CliError;
 use crate::audit::{Check, Rejection};
@@ -221,15 +221,16 @@ pub fn is_native_bearing(declared: &BTreeSet<Capability>, has_rust_deps: bool) -
 ///
 /// `invocation_prefix` (e.g. `env NAME=VALUE … /bin/sh`) is the fixed, trusted
 /// launcher that runs the wrapper under a scrubbed environment; it is exit-
-/// transparent (it propagates the wrapper's exit unchanged). The wrapper script
-/// follows it, then any wrapper flags, then — last — the untrusted build.
+/// transparent (it propagates the wrapper's exit unchanged). The wrapper
+/// invocation follows it (`-c <source> <name>` or a script path), then any
+/// wrapper flags, then — last — the untrusted build.
 pub struct ProbePayload {
     argv: Vec<OsString>,
 }
 
 impl ProbePayload {
     /// Build a payload: the exit-transparent `invocation_prefix`, then the
-    /// exit-owning `wrapper` script, then the untrusted build command as a
+    /// exit-owning `wrapper` invocation, then the untrusted build command as a
     /// strictly subordinate tail the wrapper runs as its child.
     ///
     /// `untrusted_build` is the package's `cargo build`/probe command; the
@@ -239,7 +240,7 @@ impl ProbePayload {
     #[must_use]
     pub fn wrapper_owned(
         invocation_prefix: &[OsString],
-        wrapper: &Path,
+        wrapper: &[OsString],
         untrusted_build: &[OsString],
     ) -> Self {
         Self::wrapper_owned_with_flags(invocation_prefix, wrapper, &[], untrusted_build)
@@ -262,15 +263,15 @@ impl ProbePayload {
     #[must_use]
     pub fn wrapper_owned_with_flags(
         invocation_prefix: &[OsString],
-        wrapper: &Path,
+        wrapper: &[OsString],
         wrapper_flags: &[OsString],
         untrusted_build: &[OsString],
     ) -> Self {
         let mut argv = Vec::with_capacity(
-            invocation_prefix.len() + 1 + wrapper_flags.len() + untrusted_build.len(),
+            invocation_prefix.len() + wrapper.len() + wrapper_flags.len() + untrusted_build.len(),
         );
         argv.extend(invocation_prefix.iter().cloned());
-        argv.push(wrapper.as_os_str().to_owned());
+        argv.extend(wrapper.iter().cloned());
         argv.extend(wrapper_flags.iter().cloned());
         argv.extend(untrusted_build.iter().cloned());
         Self { argv }
@@ -908,8 +909,9 @@ fn which_on_path(bin: &str) -> Option<PathBuf> {
 /// `build_in_jail` through [`JailProbeRunner`] and names this host's own
 /// [`CERTIFIED_PLATFORM`] — so promoting a platform is a `cfg`-gate change plus a
 /// tool-confirm arm, never a second certify path. [`JailProbeRunner`] builds the
-/// platform-native invocation itself (a `/usr/bin/env … /bin/sh` prefix + `.sh`
-/// wrapper on POSIX, a `powershell.exe -File` prefix + `.ps1` wrapper on Windows,
+/// platform-native invocation itself (a `/usr/bin/env … /bin/sh -c` prefix + the
+/// inline wrapper source on POSIX, a `powershell.exe -File` prefix + a per-run
+/// staged `.ps1` wrapper on Windows,
 /// since the Windows jail runs `payload[0]` directly through `CreateProcessW`),
 /// so both drive the SAME reconciler.
 #[cfg(any(
@@ -971,20 +973,10 @@ fn native_tier2_on_platform(audit: &NativeAudit) -> Result<Tier2Outcome, CliErro
     //    sandbox-unavailable reject (never a silent skip on a wired platform).
     let tools = establish_jail_tools()?;
 
-    // The wrapper the jail runs must be readable inside the scratch; copy the
-    // trusted fixture in (it owns the per-axis exit contract). Keep the fixture's
-    // own file name so its extension is preserved — `.ps1` on Windows (PowerShell
-    // resolves the wrapper by extension), `.sh` elsewhere.
-    let wrapper_name = audit.probe_fixture.file_name().map_or_else(
-        || OsString::from("untrusted-build"),
-        std::ffi::OsStr::to_owned,
-    );
-    let wrapper = scratch.as_path().join(wrapper_name);
-    std::fs::copy(&audit.probe_fixture, &wrapper).map_err(|e| CliError::Io {
-        path: wrapper.clone(),
-        source: e,
-    })?;
-    let wrapper = canonical_jail_path(&wrapper)?;
+    // The wrapper owns the per-axis exit contract, so the jailed payload must
+    // never be able to rewrite it: its source is read once on the host and never
+    // kept in the payload-writable scratch between runs.
+    let wrapper = TrustedWrapper::read(&audit.probe_fixture)?;
     let working_tree = scratch.as_path().join("worktree");
     std::fs::create_dir_all(&working_tree).map_err(|e| CliError::Io {
         path: working_tree.clone(),
@@ -1018,7 +1010,7 @@ fn native_tier2_on_platform(audit: &NativeAudit) -> Result<Tier2Outcome, CliErro
         // field is shared with the wrapper-probe-only shape.
         vec![TightenableAxis::Network, TightenableAxis::Filesystem],
         exercise,
-    );
+    )?;
     let static_scan = WrapperScan::over_package(audit.root)?;
 
     let verdict = reconcile_native(audit.declared, &runner, &static_scan, &scoped);
@@ -1908,11 +1900,10 @@ fn absolute_cargo() -> Option<PathBuf> {
 ))]
 pub struct JailProbeRunner<'a> {
     tools: &'a RunJailTools,
-    wrapper: CanonicalPath,
-    scoped_tmp: CanonicalPath,
-    working_tree: CanonicalPath,
-    /// The caller's binds plus the exercise's toolchain binds.
-    ro_binds: Vec<CanonicalPath>,
+    wrapper: TrustedWrapper,
+    /// The scratch, the working tree, and the caller's binds plus the exercise's
+    /// toolchain binds, checked against the cargo home.
+    mounts: JailMounts,
     /// The axes the native code (the wrapper stand-in) actually EXERCISES on the
     /// full declared-scoped run — a property of the code, not of the declaration,
     /// so a used-but-undeclared axis (exercised but not declared, hence withheld)
@@ -1935,36 +1926,41 @@ pub struct JailProbeRunner<'a> {
     target_os = "windows"
 ))]
 impl<'a> JailProbeRunner<'a> {
-    /// Build a jail-backed runner over an established set of jail `tools`, the
-    /// exit-owning `wrapper` script (readable inside the jail — the caller must
-    /// place it in the scratch), the always-writable `scoped_tmp`, the
-    /// filesystem-axis-gated `working_tree`, the read-only tool `ro_binds`, and
-    /// the axes the native code `exercised` on the full run. `exercise` is the
-    /// strictly subordinate build tail (or the wrapper-probe-only shape); a real
-    /// build's toolchain binds join `ro_binds` here, so the jail binds exactly
-    /// the homes the payload names.
-    #[must_use]
+    /// Build a jail-backed runner over established jail `tools`.
+    ///
+    /// `wrapper` is the exit-owning probe source, `scoped_tmp` the
+    /// always-writable scratch, `working_tree` the filesystem-axis-gated tree,
+    /// `ro_binds` the read-only tool binds, and `exercised` the axes the native
+    /// code exercises on the full run. `exercise` is the strictly subordinate
+    /// build tail (or the wrapper-probe-only shape); a real build's toolchain
+    /// binds join `ro_binds` here, so the jail binds exactly the homes the
+    /// payload names.
+    ///
+    /// # Errors
+    /// [`CliError::PackageAudit`] carrying a [`Check::NativeTier2`]
+    /// [`Rejection`] when a path equals or contains the cargo home, or the cargo
+    /// home cannot be resolved.
     pub fn new(
         tools: &'a RunJailTools,
-        wrapper: CanonicalPath,
+        wrapper: TrustedWrapper,
         scoped_tmp: CanonicalPath,
         working_tree: CanonicalPath,
         mut ro_binds: Vec<CanonicalPath>,
         exercised: Vec<TightenableAxis>,
         exercise: ProbeExercise,
-    ) -> Self {
+    ) -> Result<Self, CliError> {
         if let Some(toolchain) = exercise.toolchain() {
             ro_binds.extend_from_slice(toolchain.ro_binds());
         }
-        Self {
+        let mounts = JailMounts::of_invoker(scoped_tmp, working_tree, ro_binds)
+            .map_err(|e| jail_path_rejected(&e))?;
+        Ok(Self {
             tools,
             wrapper,
-            scoped_tmp,
-            working_tree,
-            ro_binds,
+            mounts,
             exercised,
             exercise,
-        }
+        })
     }
 
     /// Whether this runner drives a real, non-empty untrusted build — the
@@ -1980,7 +1976,10 @@ impl<'a> JailProbeRunner<'a> {
     /// write succeeds under a filesystem-granted jail and is denied under a
     /// filesystem-withholding one, making the axis differentially observable.
     fn escape_path(&self) -> PathBuf {
-        self.working_tree.as_path().join("tier2-escape-probe")
+        self.mounts
+            .working_tree()
+            .as_path()
+            .join("tier2-escape-probe")
     }
 }
 
@@ -2018,17 +2017,33 @@ impl ProbeRunner for JailProbeRunner<'_> {
                 None => return JailOutcome::Clean,
             },
         };
-        // Build the platform-native wrapper payload (POSIX `/bin/sh` vs Windows
-        // `powershell.exe -File`), both enforcing the child-of-wrapper rule.
+        // Build the platform-native wrapper payload (POSIX `/bin/sh -c` vs
+        // Windows `powershell.exe -File`), both enforcing the child-of-wrapper
+        // rule.
+        #[cfg(not(target_os = "windows"))]
         let payload = self.probe_payload(axis_sel.as_os_str(), &self.escape_path());
-        ipe_sandbox::build_jail::build_in_jail(
-            self.tools,
-            profile,
-            &self.scoped_tmp,
-            &self.working_tree,
-            &self.ro_binds,
-            payload.argv(),
-        )
+        // PowerShell runs only a file, so the wrapper is staged for this run
+        // alone under a fresh name and removed when `_staged` drops.
+        #[cfg(target_os = "windows")]
+        let (payload, _staged) = {
+            let staged = match StagedWrapper::create(
+                self.mounts.scoped_tmp().as_path(),
+                self.wrapper.source(),
+            ) {
+                Ok(staged) => staged,
+                Err(e) => {
+                    return JailOutcome::Unavailable {
+                        defect: RunJailDefect::Spawn {
+                            detail: format!("could not stage the probe wrapper: {e}"),
+                        },
+                    };
+                }
+            };
+            let payload =
+                self.probe_payload(staged.path(), axis_sel.as_os_str(), &self.escape_path());
+            (payload, staged)
+        };
+        ipe_sandbox::build_jail::build_in_jail(self.tools, profile, &self.mounts, payload.argv())
     }
 }
 
@@ -2050,7 +2065,11 @@ impl ProbeRunner for JailProbeRunner<'_> {
 ))]
 impl JailProbeRunner<'_> {
     /// The POSIX payload: `env PROBE_MODE=tier2 TIER2_AXIS=… SCRATCH_DIR=…
-    /// ESCAPE_PATH=… [toolchain homes] /bin/sh <wrapper.sh> <untrusted tail>`.
+    /// ESCAPE_PATH=… [toolchain homes] /bin/sh -c <wrapper source>
+    /// ipe-tier2-probe <untrusted tail>`.
+    ///
+    /// The wrapper source travels in argv, so no file the payload can write ever
+    /// holds the code that owns the exit.
     fn probe_payload(&self, axis_sel: &std::ffi::OsStr, escape: &Path) -> ProbePayload {
         // The fixed, trusted, exit-transparent launcher: `env NAME=VALUE … /bin/sh`
         // runs the wrapper under a scrubbed environment (per-run config travels
@@ -2060,7 +2079,10 @@ impl JailProbeRunner<'_> {
             OsString::from("/usr/bin/env"),
             OsString::from("PROBE_MODE=tier2"),
             assignment("TIER2_AXIS", axis_sel),
-            assignment("SCRATCH_DIR", self.scoped_tmp.as_path().as_os_str()),
+            assignment(
+                "SCRATCH_DIR",
+                self.mounts.scoped_tmp().as_path().as_os_str(),
+            ),
             assignment("ESCAPE_PATH", escape.as_os_str()),
         ];
         // A real `cargo build` inside the scrubbed jail needs the toolchain homes
@@ -2078,11 +2100,12 @@ impl JailProbeRunner<'_> {
         // The wrapper script owns the exit contract; the untrusted build is a
         // strictly subordinate tail it runs as its child (ProbePayload enforces
         // the ordering). The untrusted build can never own the exit.
-        ProbePayload::wrapper_owned(
-            &invocation_prefix,
-            self.wrapper.as_path(),
-            self.exercise.tail(),
-        )
+        let wrapper = [
+            OsString::from("-c"),
+            OsString::from(self.wrapper.source()),
+            OsString::from(WRAPPER_ARGV0),
+        ];
+        ProbePayload::wrapper_owned(&invocation_prefix, &wrapper, self.exercise.tail())
     }
 }
 
@@ -2090,7 +2113,7 @@ impl JailProbeRunner<'_> {
 impl JailProbeRunner<'_> {
     /// The Windows payload: `powershell.exe -NoProfile -NonInteractive -File
     /// <wrapper.ps1> -Tier2Axis <axis> -ScratchDir <scratch> -EscapePath <escape>
-    /// -- <untrusted tail>`.
+    /// -- <untrusted tail>`, where `wrapper` is this run's staged copy.
     ///
     /// PowerShell is `payload[0]` — the `CreateProcessW`-invokable interpreter the
     /// Windows jail runs directly (no shell). The wrapper's config travels as
@@ -2107,7 +2130,12 @@ impl JailProbeRunner<'_> {
     /// / `PATH` / `TMP` / `TEMP`, and a real Windows Tier-2 build would allowlist
     /// the toolchain homes through the declared `env` axis. The wrapper-probe-only
     /// and offline-probe shapes the CI E2E exercises need none.
-    fn probe_payload(&self, axis_sel: &std::ffi::OsStr, escape: &Path) -> ProbePayload {
+    fn probe_payload(
+        &self,
+        wrapper: &Path,
+        axis_sel: &std::ffi::OsStr,
+        escape: &Path,
+    ) -> ProbePayload {
         let invocation_prefix = vec![
             self.tools.bwrap.clone().into_os_string(),
             OsString::from("-NoProfile"),
@@ -2123,17 +2151,125 @@ impl JailProbeRunner<'_> {
             OsString::from("-Tier2Axis"),
             axis_sel.to_owned(),
             OsString::from("-ScratchDir"),
-            self.scoped_tmp.as_path().as_os_str().to_owned(),
+            self.mounts.scoped_tmp().as_path().as_os_str().to_owned(),
             OsString::from("-EscapePath"),
             escape.as_os_str().to_owned(),
             OsString::from("--"),
         ];
         ProbePayload::wrapper_owned_with_flags(
             &invocation_prefix,
-            self.wrapper.as_path(),
+            &[wrapper.as_os_str().to_owned()],
             &wrapper_flags,
             self.exercise.tail(),
         )
+    }
+}
+
+/// The `$0` the inline POSIX wrapper runs under.
+#[cfg(any(
+    all(
+        target_os = "linux",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    ),
+    target_os = "macos",
+    target_os = "freebsd"
+))]
+const WRAPPER_ARGV0: &str = "ipe-tier2-probe";
+
+/// The exit-owning probe wrapper's source, read once on the host.
+///
+/// The jailed payload can write its scratch, so the wrapper never lives there
+/// between runs: POSIX passes the source inline (`sh -c`), Windows stages it per
+/// run under a fresh name no earlier run could plant.
+#[cfg(any(
+    all(
+        target_os = "linux",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    ),
+    target_os = "macos",
+    target_os = "freebsd",
+    target_os = "windows"
+))]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TrustedWrapper {
+    source: String,
+}
+
+#[cfg(any(
+    all(
+        target_os = "linux",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    ),
+    target_os = "macos",
+    target_os = "freebsd",
+    target_os = "windows"
+))]
+impl TrustedWrapper {
+    /// Read the wrapper at `path`, a host file the jail never binds writable.
+    ///
+    /// # Errors
+    /// [`CliError::Io`] when `path` cannot be read or is not UTF-8;
+    /// [`CliError::FileTooLarge`] past
+    /// [`crate::io_bounded::PROBE_WRAPPER_READ_CAP`], which keeps the inline
+    /// source within one argv string.
+    pub fn read(path: &Path) -> Result<Self, CliError> {
+        crate::io_bounded::read_to_string_capped(path, crate::io_bounded::PROBE_WRAPPER_READ_CAP)
+            .map(|source| Self { source })
+    }
+
+    /// The wrapper source.
+    #[must_use]
+    pub fn source(&self) -> &str {
+        &self.source
+    }
+}
+
+/// One run's copy of the wrapper in the scratch, removed on drop.
+///
+/// It is created exclusively under a random name, so a link or file the payload
+/// planted in an earlier run is refused rather than written through.
+#[cfg(any(target_os = "windows", test))]
+struct StagedWrapper {
+    path: PathBuf,
+}
+
+#[cfg(any(target_os = "windows", test))]
+impl StagedWrapper {
+    /// Stage `source` in `dir` under a fresh random `.ps1` name.
+    fn create(dir: &Path, source: &str) -> std::io::Result<Self> {
+        let mut nonce = [0u8; 16];
+        getrandom::fill(&mut nonce).map_err(|e| std::io::Error::other(e.to_string()))?;
+        let mut name = String::from("ipe-tier2-");
+        for byte in nonce {
+            for digit in [byte >> 4, byte & 0x0f] {
+                name.push(char::from_digit(u32::from(digit), 16).unwrap_or('0'));
+            }
+        }
+        name.push_str(".ps1");
+        Self::create_at(dir.join(name), source)
+    }
+
+    /// Stage `source` at `path`, refusing any existing entry, a link included.
+    fn create_at(path: PathBuf, source: &str) -> std::io::Result<Self> {
+        use std::io::Write as _;
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)?;
+        let staged = Self { path };
+        file.write_all(source.as_bytes())?;
+        Ok(staged)
+    }
+
+    fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+#[cfg(any(target_os = "windows", test))]
+impl Drop for StagedWrapper {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.path);
     }
 }
 
@@ -2423,7 +2559,7 @@ mod tests {
         // The child-of-wrapper structural rule: the exit-owning wrapper precedes
         // the untrusted build, which is only ever a strictly subordinate tail.
         let prefix = vec![OsString::from("/usr/bin/env"), OsString::from("/bin/sh")];
-        let wrapper = PathBuf::from("/probe/untrusted-build.sh");
+        let wrapper = [OsString::from("/probe/untrusted-build.sh")];
         let untrusted = vec![OsString::from("cargo"), OsString::from("build")];
         let payload = ProbePayload::wrapper_owned(&prefix, &wrapper, &untrusted);
         let argv = payload.argv();
@@ -2452,7 +2588,7 @@ mod tests {
         // so the wrapper still strictly precedes the untrusted tail (child-of-
         // wrapper holds) and the flags are never the untrusted package's argv.
         let prefix = vec![OsString::from("powershell.exe"), OsString::from("-File")];
-        let wrapper = PathBuf::from("C:/probe/untrusted-build.ps1");
+        let wrapper = [OsString::from("C:/probe/untrusted-build.ps1")];
         let flags = vec![
             OsString::from("-Tier2Axis"),
             OsString::from("network"),
@@ -2681,6 +2817,63 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
+    mod staged_wrapper {
+        use super::*;
+        use crate::scratch::ScratchDir;
+
+        #[test]
+        fn a_planted_link_is_refused_and_its_target_untouched() {
+            let dir = ScratchDir::new("ipe-tier2-staged-link").expect("scratch");
+            let target = dir.path().join("host-file");
+            std::fs::write(&target, "host").expect("target");
+            let planted = dir.path().join("ipe-tier2-planted.ps1");
+            std::os::unix::fs::symlink(&target, &planted).expect("symlink");
+            let refused = StagedWrapper::create_at(planted.clone(), "payload");
+            assert!(refused.is_err(), "a link at the staging path is refused");
+            assert_eq!(
+                std::fs::read_to_string(&target).expect("target reads"),
+                "host",
+                "nothing is written through the link"
+            );
+            assert!(
+                planted.symlink_metadata().is_ok(),
+                "a refused stage never removes the entry it did not create"
+            );
+        }
+
+        #[test]
+        fn an_existing_file_is_refused_and_left_as_is() {
+            let dir = ScratchDir::new("ipe-tier2-staged-file").expect("scratch");
+            let planted = dir.path().join("ipe-tier2-planted.ps1");
+            std::fs::write(&planted, "payload-edited").expect("plant");
+            assert!(StagedWrapper::create_at(planted.clone(), "trusted").is_err());
+            assert_eq!(
+                std::fs::read_to_string(&planted).expect("reads"),
+                "payload-edited",
+                "a refused stage neither overwrites nor removes the entry"
+            );
+        }
+
+        #[test]
+        fn each_stage_is_fresh_holds_the_source_and_is_removed_on_drop() {
+            let dir = ScratchDir::new("ipe-tier2-staged-fresh").expect("scratch");
+            let first = StagedWrapper::create(dir.path(), "trusted").expect("stage");
+            let second = StagedWrapper::create(dir.path(), "trusted").expect("stage");
+            assert_ne!(first.path(), second.path(), "every run gets a fresh name");
+            assert_eq!(
+                std::fs::read_to_string(first.path()).expect("reads"),
+                "trusted"
+            );
+            let path = first.path().to_path_buf();
+            drop(first);
+            assert!(
+                path.symlink_metadata().is_err(),
+                "the stage is removed on drop"
+            );
+        }
+    }
+
     /// The POSIX-wired platforms, whose payload carries the toolchain env.
     #[cfg(any(
         all(
@@ -2708,7 +2901,6 @@ mod tests {
             for sub in ["real/worktree", "real/cargo/bin", "real/rustup"] {
                 std::fs::create_dir_all(base.join(sub)).expect("create dir");
             }
-            std::fs::write(base.join("real/untrusted-build.sh"), "").expect("wrapper");
             std::os::unix::fs::symlink(base.join("real"), base.join("link")).expect("symlink");
             let real = std::fs::canonicalize(base.join("real")).expect("canonical real");
             Tree {
@@ -2739,15 +2931,19 @@ mod tests {
             };
             let exercise = ProbeExercise::real_build(vec![OsString::from("cargo")], toolchain)
                 .expect("non-empty argv");
+            let wrapper = TrustedWrapper {
+                source: String::from("exit 0"),
+            };
             let runner = JailProbeRunner::new(
                 &tools,
-                canonical(&link.join("untrusted-build.sh")),
+                wrapper,
                 canonical(link),
                 canonical(&link.join("worktree")),
                 Vec::new(),
                 Vec::new(),
                 exercise,
-            );
+            )
+            .expect("paths disjoint from the cargo home");
             let payload = runner.probe_payload(std::ffi::OsStr::new("none"), &runner.escape_path());
             let tokens: Vec<String> = payload
                 .argv()
@@ -2764,12 +2960,16 @@ mod tests {
                 format!("CARGO_HOME={}", real.join("cargo").display()),
                 format!("RUSTUP_HOME={}", real.join("rustup").display()),
                 format!("HOME={}", real.display()),
-                real.join("untrusted-build.sh").display().to_string(),
             ];
             for want in &expected {
                 assert!(tokens.contains(want), "payload lacks `{want}`: {tokens:?}");
             }
-            let bound: Vec<&Path> = runner.ro_binds.iter().map(CanonicalPath::as_path).collect();
+            let bound: Vec<&Path> = runner
+                .mounts
+                .read_only()
+                .iter()
+                .map(CanonicalPath::as_path)
+                .collect();
             for home in [real.join("cargo/bin"), real.join("rustup")] {
                 assert!(
                     bound.contains(&home.as_path()),
@@ -2782,6 +2982,121 @@ mod tests {
                 tokens.iter().all(|t| !t.contains(&spelled)),
                 "no payload token keeps the symlinked spelling: {tokens:?}"
             );
+        }
+
+        fn inert_tools() -> RunJailTools {
+            RunJailTools {
+                bwrap: PathBuf::from("/nonexistent/bwrap"),
+                prlimit: PathBuf::from("/nonexistent/prlimit"),
+                timeout: None,
+            }
+        }
+
+        fn probe_runner<'a>(
+            tools: &'a RunJailTools,
+            source: &str,
+            scoped_tmp: CanonicalPath,
+            working_tree: CanonicalPath,
+            ro_binds: Vec<CanonicalPath>,
+        ) -> Result<JailProbeRunner<'a>, CliError> {
+            JailProbeRunner::new(
+                tools,
+                TrustedWrapper {
+                    source: String::from(source),
+                },
+                scoped_tmp,
+                working_tree,
+                ro_binds,
+                vec![TightenableAxis::Network],
+                ProbeExercise::WrapperProbeOnly,
+            )
+        }
+
+        #[test]
+        fn the_wrapper_source_travels_inline_and_no_scratch_file_holds_it() {
+            let tree = tree();
+            let tools = inert_tools();
+            let source = "echo trusted-wrapper-body; exit 0";
+            let runner = probe_runner(
+                &tools,
+                source,
+                canonical(&tree.link),
+                canonical(&tree.link.join("worktree")),
+                Vec::new(),
+            )
+            .expect("paths disjoint from the cargo home");
+            let payload =
+                runner.probe_payload(std::ffi::OsStr::new("network"), &runner.escape_path());
+            let argv = payload.argv();
+            let at = argv
+                .iter()
+                .position(|t| t.as_os_str() == "-c")
+                .expect("`sh -c` carries the wrapper");
+            let shell = at.checked_sub(1).and_then(|i| argv.get(i));
+            assert_eq!(
+                shell.map(OsString::as_os_str),
+                Some(std::ffi::OsStr::new("/bin/sh")),
+                "`-c` follows the trusted shell: {argv:?}"
+            );
+            assert_eq!(
+                argv.get(at + 1).map(OsString::as_os_str),
+                Some(std::ffi::OsStr::new(source)),
+                "the host-read source is the script: {argv:?}"
+            );
+            let real = tree.real.display().to_string();
+            let names_scratch_file = argv
+                .iter()
+                .filter_map(|t| t.to_str())
+                .filter(|t| !t.starts_with("SCRATCH_DIR=") && !t.starts_with("ESCAPE_PATH="))
+                .any(|t| t.contains(&real));
+            assert!(
+                !names_scratch_file,
+                "no argv token names a wrapper file in the payload-writable scratch: {argv:?}"
+            );
+            let staged: Vec<_> = std::fs::read_dir(&tree.real)
+                .expect("scratch lists")
+                .filter_map(Result::ok)
+                .map(|e| e.file_name())
+                .filter(|n| n != "worktree" && n != "cargo" && n != "rustup")
+                .collect();
+            assert!(
+                staged.is_empty(),
+                "nothing staged in the scratch: {staged:?}"
+            );
+        }
+
+        #[test]
+        fn a_bind_at_or_above_the_cargo_home_is_refused() {
+            let tree = tree();
+            let tools = inert_tools();
+            let root = canonical(Path::new("/"));
+            let scratch = canonical(&tree.link);
+            let worktree = canonical(&tree.link.join("worktree"));
+            let crate_root = probe_runner(
+                &tools,
+                "exit 0",
+                scratch.clone(),
+                worktree.clone(),
+                vec![root.clone()],
+            );
+            let workspace = probe_runner(&tools, "exit 0", scratch, root.clone(), Vec::new());
+            let scoped_tmp = probe_runner(&tools, "exit 0", root, worktree, Vec::new());
+            for (what, refused) in [
+                ("a read-only crate root", crate_root),
+                ("the working tree", workspace),
+                ("the scratch", scoped_tmp),
+            ] {
+                assert!(
+                    matches!(
+                        refused,
+                        Err(CliError::PackageAudit(Rejection {
+                            check: Check::NativeTier2,
+                            ..
+                        }))
+                    ),
+                    "{what} at `/` contains the cargo home, so the jail refuses it"
+                );
+            }
         }
 
         #[test]

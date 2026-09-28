@@ -39,7 +39,7 @@ use std::path::{Path, PathBuf};
 use ipe_diagnostics::{Code, Diagnostic as SharedDiag, IPE_F4413, SandboxError};
 use ipe_kernels::Capability;
 
-use crate::{CanonicalPath, HomeMasks, JailPathError};
+use crate::{JailMounts, JailPathError};
 
 /// Stamp `$item` with the `#[cfg(...)]` for the targets that HAVE a real run
 /// jail compiled into [`exec_in_run_jail`], and the negation on a matching `no:`
@@ -132,12 +132,13 @@ pub struct RunJailTools {
 /// server. Reusing the *flag vocabulary* is deliberate; sharing the *builder*
 /// would couple two different resource-limit policies.
 ///
-/// `scoped_tmp` is the one writable tempdir (used both as the `Isolated`
-/// filesystem's sole writable mount and as `TMPDIR`). `working_tree` is bound
-/// read-write only under [`FilesystemScope::WorkingTreeReadWrite`]. `homes` are
-/// masked wherever they live; below them only the binds stay visible. Every
-/// path is canonical, so the `--chdir` and `TMPDIR` the payload receives are
-/// exactly the paths bound.
+/// `mounts` carries the one writable tempdir (used both as the `Isolated`
+/// filesystem's sole writable mount and as `TMPDIR`), the working tree (bound
+/// read-write only under [`FilesystemScope::WorkingTreeReadWrite`]), the
+/// read-only binds, and the home masks; below the masks only the binds stay
+/// visible, and none of them exposes the cargo home. Every path is canonical,
+/// so the `--chdir` and `TMPDIR` the payload receives are exactly the paths
+/// bound.
 /// `seccomp_fd` is the file-descriptor number the caller has arranged to carry
 /// the compiled seccomp program (passed to `bwrap --seccomp <fd>`); `None` means
 /// no filter is attached (the caller must have refused already if a filter was
@@ -146,36 +147,16 @@ pub struct RunJailTools {
 /// The env is scrubbed with `--clearenv`; only the fixed minimal allowlist
 /// (`PATH`, `TMPDIR`, `LANG`) plus the profile's `env_allowlist` re-enter. There
 /// is NO shell token anywhere in the result.
-// Every argument is a distinct, load-bearing jail input (tools, profile, the two
-// mount roots, the extra binds, the home masks, the seccomp fd, the env lookup, the payload);
-// bundling them into a struct would only move the same fields behind one more
-// indirection without reducing the surface. The pure-builder shape is
-// deliberately explicit, matching the sibling `bwrap_argv`.
-#[allow(clippy::too_many_arguments)]
 #[must_use]
 pub fn run_jail_argv(
     tools: &RunJailTools,
     profile: &SandboxProfile,
-    scoped_tmp: &CanonicalPath,
-    working_tree: &CanonicalPath,
-    extra_ro_binds: &[CanonicalPath],
-    homes: &HomeMasks,
+    mounts: &JailMounts,
     seccomp_fd: Option<i32>,
     host_env: &dyn Fn(&str) -> Option<OsString>,
     payload: &[OsString],
 ) -> Vec<OsString> {
-    run_jail_argv_with_delivery(
-        tools,
-        profile,
-        scoped_tmp,
-        working_tree,
-        extra_ro_binds,
-        homes,
-        seccomp_fd,
-        None,
-        host_env,
-        payload,
-    )
+    run_jail_argv_with_delivery(tools, profile, mounts, seccomp_fd, None, host_env, payload)
 }
 
 /// [`run_jail_argv`] plus optional in-jail materialisation of the app binary
@@ -188,20 +169,17 @@ pub fn run_jail_argv(
 /// copy at `dest` inside the sandbox — the delivered bytes are exactly the
 /// sealed bytes the caller verified, with no host path lookup to race. The
 /// caller then runs `dest` as the payload.
-#[allow(clippy::too_many_arguments)]
 #[must_use]
 pub fn run_jail_argv_with_delivery(
     tools: &RunJailTools,
     profile: &SandboxProfile,
-    scoped_tmp: &CanonicalPath,
-    working_tree: &CanonicalPath,
-    extra_ro_binds: &[CanonicalPath],
-    homes: &HomeMasks,
+    mounts: &JailMounts,
     seccomp_fd: Option<i32>,
     app_delivery: Option<(i32, &Path)>,
     host_env: &dyn Fn(&str) -> Option<OsString>,
     payload: &[OsString],
 ) -> Vec<OsString> {
+    let (scoped_tmp, working_tree) = (mounts.scoped_tmp(), mounts.working_tree());
     let mut argv: Vec<OsString> = Vec::new();
 
     // Optional wall clock (only when the profile sets one AND `timeout` is
@@ -254,7 +232,8 @@ pub fn run_jail_argv_with_delivery(
     // emitted app binary commonly lives under `$HOME` (e.g. a
     // `CARGO_TARGET_DIR` in `~/.cache`); the caller binds the app FILE itself,
     // never its parent directory.
-    let mut binds: Vec<crate::mounts::Bind<'_>> = extra_ro_binds
+    let mut binds: Vec<crate::mounts::Bind<'_>> = mounts
+        .read_only()
         .iter()
         .map(crate::mounts::Bind::ReadOnly)
         .collect();
@@ -263,7 +242,7 @@ pub fn run_jail_argv_with_delivery(
     if working_tree_rw {
         binds.push(crate::mounts::Bind::ReadWrite(working_tree));
     }
-    crate::mounts::push_mounts(&mut argv, homes, &binds);
+    crate::mounts::push_mounts(&mut argv, mounts.homes(), &binds);
     argv.push("--chdir".into());
     argv.push(
         if working_tree_rw {
@@ -764,6 +743,7 @@ pub fn exec_embedded_in_run_jail(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{CanonicalPath, HomeMasks};
 
     fn set(caps: &[Capability]) -> BTreeSet<Capability> {
         caps.iter().copied().collect()
@@ -979,15 +959,39 @@ mod tests {
         }
     }
 
+    /// Mounts over paths that need not exist, checked against a cargo home
+    /// none of them covers.
+    fn mounts_of(
+        scoped_tmp: CanonicalPath,
+        working_tree: CanonicalPath,
+        read_only: Vec<CanonicalPath>,
+        homes: HomeMasks,
+    ) -> JailMounts {
+        JailMounts::checked_against(
+            scoped_tmp,
+            working_tree,
+            read_only,
+            homes,
+            Path::new("/nonexistent-ipe-cargo-home"),
+        )
+        .expect("no mount covers the stand-in cargo home")
+    }
+
+    fn work_mounts() -> JailMounts {
+        mounts_of(
+            CanonicalPath::assumed("/work/tmp-1"),
+            CanonicalPath::assumed("/work/tree"),
+            Vec::new(),
+            HomeMasks::unmasked(),
+        )
+    }
+
     fn rendered(profile: &SandboxProfile, seccomp_fd: Option<i32>) -> Vec<String> {
         let no_env = |_: &str| None;
         run_jail_argv(
             &tools(),
             profile,
-            &CanonicalPath::assumed("/work/tmp-1"),
-            &CanonicalPath::assumed("/work/tree"),
-            &[],
-            &HomeMasks::unmasked(),
+            &work_mounts(),
             seccomp_fd,
             &no_env,
             &[OsString::from("/work/tree/target/debug/ipe-app")],
@@ -1013,14 +1017,17 @@ mod tests {
             ..SandboxProfile::maximally_isolated()
         };
         let no_env = |_: &str| None;
+        let mounts = mounts_of(
+            CanonicalPath::assumed("/work/tmp-1"),
+            tree_bind,
+            // A bind of the whole home must not survive its mask.
+            vec![home_bind],
+            HomeMasks::resolve(Some(&user_home), None).expect("homes"),
+        );
         let argv: Vec<String> = run_jail_argv(
             &tools(),
             &profile,
-            &CanonicalPath::assumed("/work/tmp-1"),
-            &tree_bind,
-            // A bind of the whole home must not survive its mask.
-            std::slice::from_ref(&home_bind),
-            &HomeMasks::resolve(Some(&user_home), None).expect("homes"),
+            &mounts,
             None,
             &no_env,
             &[OsString::from("app")],
@@ -1075,13 +1082,16 @@ mod tests {
                 filesystem,
                 ..SandboxProfile::maximally_isolated()
             };
+            let mounts = mounts_of(
+                scoped_tmp.clone(),
+                tree.clone(),
+                Vec::new(),
+                HomeMasks::unmasked(),
+            );
             let argv: Vec<String> = run_jail_argv(
                 &tools(),
                 &profile,
-                &scoped_tmp,
-                &tree,
-                &[],
-                &HomeMasks::unmasked(),
+                &mounts,
                 None,
                 &no_env,
                 &[OsString::from("app")],
@@ -1144,10 +1154,7 @@ mod tests {
         let argv: Vec<String> = run_jail_argv_with_delivery(
             &tools(),
             &SandboxProfile::maximally_isolated(),
-            &CanonicalPath::assumed("/work/tmp-1"),
-            &CanonicalPath::assumed("/work/tree"),
-            &[],
-            &HomeMasks::unmasked(),
+            &work_mounts(),
             Some(10),
             Some((7, dest)),
             &no_env,
@@ -1239,10 +1246,7 @@ mod tests {
         let argv = run_jail_argv(
             &tools(),
             &p,
-            &CanonicalPath::assumed("/work/tmp-1"),
-            &CanonicalPath::assumed("/work/tree"),
-            &[],
-            &HomeMasks::unmasked(),
+            &work_mounts(),
             None,
             &host,
             &[OsString::from("app")],

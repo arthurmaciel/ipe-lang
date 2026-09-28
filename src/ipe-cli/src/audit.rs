@@ -235,12 +235,12 @@ struct Prepared {
 /// checkout beside it. Nothing depends on a compile-time source path at runtime.
 ///
 /// The wrapper is platform-native: a POSIX `/bin/sh` script on Linux/macOS/
-/// FreeBSD (driven via a `/usr/bin/env … /bin/sh` invocation prefix), and a
+/// FreeBSD (its source passed inline to `/usr/bin/env … /bin/sh -c`), and a
 /// PowerShell `.ps1` on Windows (the Windows jail runs `payload[0]` directly
 /// through `CreateProcessW` with no shell, so `powershell.exe -File` is the
 /// interpreter). Both implement the SAME wrapper-owned per-axis exit contract
-/// the decoder reads. The platform-appropriate one is materialized with the
-/// file name Tier-2's jail expects, so the extension it resolves by is preserved.
+/// the decoder reads. Tier-2 reads the materialized fixture back on the host;
+/// the jailed payload never sees a copy it could rewrite between runs.
 const TIER2_PROBE_POSIX: &[u8] = include_bytes!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../../tests/fixtures/admission/untrusted-build.sh"
@@ -249,6 +249,14 @@ const TIER2_PROBE_WINDOWS: &[u8] = include_bytes!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../../tests/fixtures/admission/untrusted-build.ps1"
 ));
+
+// Tier-2 reads the wrapper back under this cap before running it, so an
+// embedded fixture that outgrew it would refuse every native audit.
+// IPE-RUST-AUDIT:ACCEPTED (Arthur Maciel) — compile-time `const` assertion (not a runtime panic); fails the BUILD if an embedded Tier-2 wrapper outgrows the host read cap [ledger #boundary]
+const _: () = assert!(
+    TIER2_PROBE_POSIX.len() as u64 <= crate::io_bounded::PROBE_WRAPPER_READ_CAP
+        && TIER2_PROBE_WINDOWS.len() as u64 <= crate::io_bounded::PROBE_WRAPPER_READ_CAP
+);
 
 /// Materialize the platform-appropriate embedded Tier-2 probe fixture to a
 /// per-process scratch file and return its path.

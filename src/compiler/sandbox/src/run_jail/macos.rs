@@ -9,6 +9,7 @@ use std::ffi::OsString;
 use std::path::Path;
 
 use super::{RunJailDefect, RunJailTools, SandboxProfile};
+use crate::{CanonicalPath, JailMounts};
 
 /// macOS: probe for `sandbox-exec`, the run jail's only primitive.
 ///
@@ -46,9 +47,9 @@ pub fn probe_run_jail_tools(_wants_wall_clock: bool) -> Result<RunJailTools, Run
 /// the SAME [`SandboxProfile`] to a Seatbelt SBPL profile via the SAME
 /// [`crate::build_jail::sbpl_from_profile`] the Tier-2 `build_in_jail` uses —
 /// there is ONE SBPL generator, so what confines a Tier-2 build and what confines
-/// the shipped app at run time cannot drift. It writes the profile into the
-/// always-writable scratch and `exec`s `sandbox-exec -f <profile> <app> <args>`.
-/// There is NO shell token anywhere — the payload is a direct argv, so the
+/// the shipped app at run time cannot drift. It `exec`s
+/// `sandbox-exec -p <profile> <app> <args>`: the profile travels in argv, never
+/// through a file the app could rewrite. There is NO shell token anywhere — the payload is a direct argv, so the
 /// quoting/injection class does not exist.
 ///
 /// The SBPL enforces the network, filesystem, and subprocess axes; the `env` axis
@@ -58,10 +59,11 @@ pub fn probe_run_jail_tools(_wants_wall_clock: bool) -> Result<RunJailTools, Run
 /// all four runtime-enforced axes are contained, matching the Linux jail, and the
 /// FFI admit path's `Holds` verdict is honest on macOS.
 ///
-/// `scoped_tmp` is the one always-writable scratch (also where the SBPL profile
-/// is written); `working_tree` is writable only when the profile grants the
-/// filesystem axis. Fail-closed: an absent `sandbox-exec`, an unwritable profile,
-/// or a failed `exec` REFUSES — the capability-bearing app is never run
+/// `scoped_tmp` is the one always-writable scratch; `working_tree` is writable
+/// only when the profile grants the filesystem axis. Both are checked against
+/// the invoker's cargo home before the profile is lowered. Fail-closed: an
+/// absent `sandbox-exec`, a path that does not resolve or would expose the cargo
+/// home, or a failed `exec` REFUSES — the capability-bearing app is never run
 /// unconfined.
 ///
 /// The jail's actual deny behaviour is proven by the `macos-run-jail` CI job on a
@@ -89,20 +91,21 @@ pub fn exec_in_run_jail(
         });
     };
 
-    // Lower the SAME profile through the SAME SBPL generator the build jail uses,
-    // and write it into the always-writable scratch (never a shared temp path
-    // that could race or persist).
-    let sbpl = crate::build_jail::sbpl_from_profile(profile, scoped_tmp, working_tree);
-    let profile_file = scoped_tmp.join("ipe-run.sb");
-    if let Err(e) = std::fs::write(&profile_file, sbpl.as_bytes()) {
-        return Err(RunJailDefect::Spawn {
-            detail: format!("could not write the SBPL run-jail profile: {e}"),
-        });
-    }
+    let mounts = JailMounts::of_invoker(
+        CanonicalPath::resolve(scoped_tmp).map_err(RunJailDefect::Path)?,
+        CanonicalPath::resolve(working_tree).map_err(RunJailDefect::Path)?,
+        Vec::new(),
+    )
+    .map_err(RunJailDefect::Path)?;
+    let scoped_tmp = mounts.scoped_tmp().as_path();
 
-    // argv: sandbox-exec -f <profile> <app> <app_args…>. Direct argv, no shell.
+    // Lower the SAME profile through the SAME SBPL generator the build jail uses.
+    let sbpl =
+        crate::build_jail::sbpl_from_profile(profile, scoped_tmp, mounts.working_tree().as_path());
+
+    // argv: sandbox-exec -p <profile> <app> <app_args…>. Direct argv, no shell.
     let mut cmd = std::process::Command::new(&sandbox_exec);
-    cmd.arg("-f").arg(&profile_file).arg(app).args(app_args);
+    cmd.arg("-p").arg(&sbpl).arg(app).args(app_args);
     // Enforce the `env` axis in the launcher (Seatbelt cannot scrub env): clear
     // the inherited environment and re-export ONLY the scrubbed base plus the
     // profile's allowlisted names, mirroring the Linux jail's `--clearenv`. The
@@ -114,7 +117,6 @@ pub fn exec_in_run_jail(
         cmd.env(name, value);
     }
     let err = cmd.exec();
-    // `exec` only returns on failure; the scratch profile is inert either way.
     Err(RunJailDefect::Spawn {
         detail: err.to_string(),
     })

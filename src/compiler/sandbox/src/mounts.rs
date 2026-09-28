@@ -43,8 +43,8 @@ pub enum JailPathError {
         /// The canonical path as first resolved.
         path: PathBuf,
     },
-    /// A read-only bind sits at or above the cargo home, so binding it would
-    /// expose `credentials.toml`.
+    /// A jail path sits at or above the cargo home, so binding it would expose
+    /// `credentials.toml`.
     ExposesCargoHome {
         /// The offending bind.
         bind: PathBuf,
@@ -75,8 +75,8 @@ impl fmt::Display for JailPathError {
             ),
             Self::ExposesCargoHome { bind, cargo_home } => write!(
                 f,
-                "the bind {} would expose the cargo home {} (credentials.toml); set \
-                 RUSTUP_HOME and CARGO_HOME to disjoint directories; refusing to build the jail",
+                "the bind {} would expose the cargo home {} (credentials.toml): no jail \
+                 path may sit at or above it; refusing to build the jail",
                 bind.display(),
                 cargo_home.display()
             ),
