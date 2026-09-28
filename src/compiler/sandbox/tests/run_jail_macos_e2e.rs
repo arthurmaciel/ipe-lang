@@ -56,8 +56,8 @@ fn which_sandbox_exec() -> Option<std::path::PathBuf> {
         .find(|candidate| candidate.is_file())
 }
 
-/// Write the profile's SBPL to a scratch file and run `sandbox-exec -f <sbpl> sh
-/// -c <script>`, returning the exit code (`None` if signalled).
+/// Run `sandbox-exec -p <sbpl> sh -c <script>` under the profile's SBPL,
+/// returning the exit code (`None` if signalled).
 ///
 /// The environment is scrubbed with the SAME `macos_scrubbed_env` the production
 /// `exec_in_run_jail` launcher applies (Seatbelt cannot scrub env, so it is a
@@ -71,15 +71,9 @@ fn run_jailed_with_host(
     host: &dyn Fn(&str) -> Option<std::ffi::OsString>,
 ) -> Option<i32> {
     let sbpl = sbpl_from_profile(profile, scratch, scratch);
-    let sbpl_file = scratch.join("ipe-run-e2e.sb");
-    std::fs::write(&sbpl_file, sbpl.as_bytes()).expect("write sbpl");
     let sandbox_exec = which_sandbox_exec().expect("sandbox-exec present");
     let mut cmd = Command::new(sandbox_exec);
-    cmd.arg("-f")
-        .arg(&sbpl_file)
-        .arg("sh")
-        .arg("-c")
-        .arg(script);
+    cmd.arg("-p").arg(&sbpl).arg("sh").arg("-c").arg(script);
     cmd.env_clear();
     for (name, value) in macos_scrubbed_env(profile, scratch, host) {
         cmd.env(name, value);

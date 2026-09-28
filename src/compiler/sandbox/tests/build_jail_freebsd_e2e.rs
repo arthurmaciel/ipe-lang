@@ -21,9 +21,9 @@
 use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 
-use ipe_sandbox::CanonicalPath;
 use ipe_sandbox::build_jail::{CapabilityAxis, JailOutcome, build_in_jail};
 use ipe_sandbox::run_jail::{FilesystemScope, RunJailTools, SandboxProfile};
+use ipe_sandbox::{CanonicalPath, JailMounts};
 
 /// Skip unless `IPE_E2E=1` AND `jail` is present (jail creation needs root inside
 /// the VM; absent it, these tests do nothing — the CI job proves the primitive
@@ -104,14 +104,9 @@ fn run_fixture(
         OsString::from("/bin/sh"),
         jailed_fixture.into_os_string(),
     ];
-    build_in_jail(
-        &inert_tools(),
-        profile,
-        &canonical,
-        &canonical,
-        &[],
-        &payload,
-    )
+    let mounts = JailMounts::of_invoker(canonical.clone(), canonical, Vec::new())
+        .expect("checked jail mounts");
+    build_in_jail(&inert_tools(), profile, &mounts, &payload)
 }
 
 #[test]
