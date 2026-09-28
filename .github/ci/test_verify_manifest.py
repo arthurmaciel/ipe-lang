@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Refusal proofs for `verify-manifest.py`'s sccache-wiring check (check 6).
+"""Refusal proofs for `verify-manifest.py`'s step checks (checks 6 and 7).
+
+Check 7 covers content-pinned `uses:`/images, the hash-checked pip shape, and
+env-file writes only through `github-env.sh`; its cases sit in
+`TestPinnedInputsAndEnvFileWrites` and `TestGithubEnvHelper`.
 
 Each rejection the guard is supposed to make (a raw sccache-action reference,
 a case-variant `uses:`, an env key at workflow/job/step level, a `$GITHUB_ENV`
@@ -30,12 +34,14 @@ verify_manifest = importlib.util.module_from_spec(_spec)
 sys.modules["verify_manifest"] = verify_manifest
 _spec.loader.exec_module(verify_manifest)
 
-check_sccache_wiring = verify_manifest.check_sccache_wiring
+check_workflow_steps = verify_manifest.check_workflow_steps
 
 # The live sanctioned composite is the fixture: the canonical form is proven
 # against the file CI actually runs, never a hand-kept copy.
 with open(os.path.join(os.path.dirname(HERE), "actions", "sccache", "action.yml")) as _f:
     VALID_COMPOSITE = _f.read()
+with open(os.path.join(HERE, "github-env-allowlist.txt")) as _f:
+    VALID_ENV_ALLOWLIST = _f.read()
 
 
 def _write(path: str, content: str) -> None:
@@ -55,6 +61,7 @@ class SccacheFixture:
         tmp = self.root
         if composite is not None:
             _write(os.path.join(tmp, "actions", "sccache", "action.yml"), composite)
+        _write(os.path.join(tmp, "ci", "github-env-allowlist.txt"), VALID_ENV_ALLOWLIST)
         self.deterministic_checks(context="unrelated", step="Unrelated step")
 
     def workflow(self, fname: str, content: str) -> None:
@@ -76,7 +83,7 @@ class SccacheFixture:
 
     def errors(self) -> list[str]:
         errors: list[str] = []
-        check_sccache_wiring(errors, root=self.root)
+        check_workflow_steps(errors, root=self.root)
         return errors
 
 
@@ -99,7 +106,7 @@ class TestSccacheWiringRefusals(unittest.TestCase):
                   build:
                     runs-on: ubuntu-latest
                     steps:
-                      - uses: actions/checkout@v7
+                      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
                       - uses: ./.github/actions/sccache
                       - run: cargo build
                 """
@@ -120,7 +127,7 @@ class TestSccacheWiringRefusals(unittest.TestCase):
                   build:
                     runs-on: ubuntu-latest
                     steps:
-                      - uses: mozilla-actions/sccache-action@v0.0.9
+                      - uses: mozilla-actions/sccache-action@7d986dd989559c6ecdb630a3fd2557667be217ad
                       - run: cargo build
                 """
             ),
@@ -141,7 +148,7 @@ class TestSccacheWiringRefusals(unittest.TestCase):
                   build:
                     runs-on: ubuntu-latest
                     steps:
-                      - uses: Mozilla-Actions/Sccache-Action@v0.0.9
+                      - uses: Mozilla-Actions/Sccache-Action@7d986dd989559c6ecdb630a3fd2557667be217ad
                       - run: cargo build
                 """
             ),
@@ -358,7 +365,7 @@ class TestSccacheWiringRefusals(unittest.TestCase):
                 runs:
                   using: composite
                   steps:
-                    - uses: mozilla-actions/sccache-action@v0.0.9
+                    - uses: mozilla-actions/sccache-action@7d986dd989559c6ecdb630a3fd2557667be217ad
                 """
             ),
         )
@@ -441,7 +448,7 @@ class TestSccacheWiringRefusals(unittest.TestCase):
                 runs:
                   using: composite
                   steps:
-                    - uses: mozilla-actions/sccache-action@v0.0.9
+                    - uses: mozilla-actions/sccache-action@7d986dd989559c6ecdb630a3fd2557667be217ad
                 """
             ),
         )
@@ -584,7 +591,7 @@ class TestSccacheWiringRefusals(unittest.TestCase):
                   build:
                     runs-on: ubuntu-latest
                     steps:
-                      - uses: mozilla-actions/sccache-action@v0.0.9
+                      - uses: mozilla-actions/sccache-action@7d986dd989559c6ecdb630a3fd2557667be217ad
                 """
             ),
         )
@@ -794,7 +801,7 @@ class TestSccacheWiringClosure(unittest.TestCase):
         self.assertRefused("step 'Cfg' run:")
 
     def test_with_input_naming_the_wrapper_is_refused(self) -> None:
-        self.ci("steps:\n  - uses: some/action@v1\n    with:\n      rustc-wrapper: sccache\n")
+        self.ci("steps:\n  - uses: some/action@0123456789abcdef0123456789abcdef01234567\n    with:\n      rustc-wrapper: sccache\n")
         self.assertRefused("with.rustc-wrapper")
 
     def test_composite_step_shell_wrapper_is_refused(self) -> None:
@@ -874,7 +881,7 @@ class TestSccacheWiringClosure(unittest.TestCase):
     def test_action_yaml_extension_is_resolved(self) -> None:
         _write(
             os.path.join(self.fx.root, "actions", "w", "action.yaml"),
-            "runs:\n  using: composite\n  steps:\n    - uses: mozilla-actions/sccache-action@v1\n",
+            "runs:\n  using: composite\n  steps:\n    - uses: mozilla-actions/sccache-action@7d986dd989559c6ecdb630a3fd2557667be217ad\n",
         )
         self.ci("steps:\n  - uses: ./.github/actions/w\n")
         self.assertRefused("./.github/actions/w/action.yml", "runs the raw")
@@ -889,7 +896,7 @@ class TestSccacheWiringClosure(unittest.TestCase):
         self.assertRefused("job 'clippy' uses", "via ./tools/ci/cache", "Run clippy")
 
     def test_nested_path_composite_running_raw_action_is_refused(self) -> None:
-        self.fx.composite("x/y", "runs:\n  using: composite\n  steps:\n    - uses: mozilla-actions/sccache-action@v1\n")
+        self.fx.composite("x/y", "runs:\n  using: composite\n  steps:\n    - uses: mozilla-actions/sccache-action@7d986dd989559c6ecdb630a3fd2557667be217ad\n")
         self.ci("steps:\n  - uses: ./.github/actions/x/y\n")
         self.assertRefused("./.github/actions/x/y/action.yml", "runs the raw")
 
@@ -950,7 +957,7 @@ class TestSccacheWiringClosure(unittest.TestCase):
     def test_referenced_case_variant_of_sanctioned_composite_is_refused(self) -> None:
         self.fx.composite(
             "SCCACHE",
-            "runs:\n  using: composite\n  steps:\n    - uses: mozilla-actions/sccache-action@v1\n"
+            "runs:\n  using: composite\n  steps:\n    - uses: mozilla-actions/sccache-action@7d986dd989559c6ecdb630a3fd2557667be217ad\n"
             "    - shell: bash\n      run: echo \"RUSTC_WRAPPER=\" >> \"$GITHUB_ENV\"\n",
         )
         self.ci("steps:\n  - uses: ./.github/actions/SCCACHE\n")
@@ -964,7 +971,7 @@ class TestSccacheWiringClosure(unittest.TestCase):
 
     def test_case_variant_exemption_needs_the_sanctioned_file_absent_too(self) -> None:
         fx = SccacheFixture(self._tmpdir.name + "/bare", composite=None)
-        fx.composite("SCCACHE", "runs:\n  using: composite\n  steps:\n    - uses: mozilla-actions/sccache-action@v1\n")
+        fx.composite("SCCACHE", "runs:\n  using: composite\n  steps:\n    - uses: mozilla-actions/sccache-action@7d986dd989559c6ecdb630a3fd2557667be217ad\n")
         fx.workflow("ci.yml", _ci("steps:\n  - uses: ./.github/actions/SCCACHE\n"))
         errors = fx.errors()
         self.assertTrue(any("case-fold-equal" in e or "runs the raw" in e for e in errors), errors)
@@ -1033,7 +1040,7 @@ class TestSccacheWiringClosure(unittest.TestCase):
             with self.subTest(run=run):
                 self.ci(f"steps:\n  - name: Build\n    run: {run}\n")
                 self.assertRefused("step 'Build' run:")
-        self.ci("steps:\n  - uses: some/action@v1\n    with:\n      rustc: /tmp/r\n")
+        self.ci("steps:\n  - uses: some/action@0123456789abcdef0123456789abcdef01234567\n    with:\n      rustc: /tmp/r\n")
         self.assertRefused("with.rustc")
 
     def test_benign_rustc_mentions_pass(self) -> None:
@@ -1051,14 +1058,14 @@ class TestSccacheWiringClosure(unittest.TestCase):
 
     def test_composite_writing_only_one_var_is_refused(self) -> None:
         self._sanctioned(
-            "- uses: mozilla-actions/sccache-action@v0.0.9\n"
+            "- uses: mozilla-actions/sccache-action@7d986dd989559c6ecdb630a3fd2557667be217ad\n"
             "- shell: bash\n  run: echo SCCACHE_GHA_ENABLED=true >> $GITHUB_ENV\n"
         )
         self.assertRefused("step 2 is not the canonical wiring step")
 
     def test_composite_loose_write_is_not_proof(self) -> None:
         self._sanctioned(
-            "- uses: mozilla-actions/sccache-action@v0.0.9\n"
+            "- uses: mozilla-actions/sccache-action@7d986dd989559c6ecdb630a3fd2557667be217ad\n"
             "- shell: bash\n  run: |\n"
             "    # RUSTC_WRAPPER=sccache SCCACHE_GHA_ENABLED=true $GITHUB_ENV\n"
             "    printf '%s=%s\\n' RUSTC_WRAPPER sccache >> \"$GITHUB_ENV\"\n"
@@ -1067,7 +1074,7 @@ class TestSccacheWiringClosure(unittest.TestCase):
 
     def test_composite_conditional_wiring_is_not_proof(self) -> None:
         self._sanctioned(
-            "- uses: mozilla-actions/sccache-action@v0.0.9\n"
+            "- uses: mozilla-actions/sccache-action@7d986dd989559c6ecdb630a3fd2557667be217ad\n"
             "- shell: bash\n  if: false\n  run: |\n"
             "    echo \"RUSTC_WRAPPER=sccache\" >> \"$GITHUB_ENV\"\n"
             "    echo \"SCCACHE_GHA_ENABLED=true\" >> \"$GITHUB_ENV\"\n"
@@ -1076,7 +1083,7 @@ class TestSccacheWiringClosure(unittest.TestCase):
 
     def test_composite_conditional_install_is_not_proof(self) -> None:
         self._sanctioned(
-            "- uses: mozilla-actions/sccache-action@v0.0.9\n  if: false\n"
+            "- uses: mozilla-actions/sccache-action@7d986dd989559c6ecdb630a3fd2557667be217ad\n  if: false\n"
             "- shell: bash\n  run: |\n"
             "    echo \"RUSTC_WRAPPER=sccache\" >> \"$GITHUB_ENV\"\n"
             "    echo \"SCCACHE_GHA_ENABLED=true\" >> \"$GITHUB_ENV\"\n"
@@ -1089,12 +1096,12 @@ class TestSccacheWiringClosure(unittest.TestCase):
     )
 
     def test_canonical_composite_with_other_install_ref_passes(self) -> None:
-        self._sanctioned("- uses: mozilla-actions/sccache-action@v0.0.10\n" + self._WIRE)
+        self._sanctioned("- uses: mozilla-actions/sccache-action@0123456789abcdef0123456789abcdef01234567\n" + self._WIRE)
         self.assertEqual(self.fx.errors(), [])
 
     def test_composite_wiring_under_dead_branch_is_refused(self) -> None:
         self._sanctioned(
-            "- uses: mozilla-actions/sccache-action@v0.0.9\n"
+            "- uses: mozilla-actions/sccache-action@7d986dd989559c6ecdb630a3fd2557667be217ad\n"
             "- name: Wire rustc through sccache\n  shell: bash\n  run: |\n"
             "    if false; then\n"
             + textwrap.indent(verify_manifest.SCCACHE_WIRE_RUN, "    ")
@@ -1104,7 +1111,7 @@ class TestSccacheWiringClosure(unittest.TestCase):
 
     def test_composite_later_step_unwiring_is_refused(self) -> None:
         self._sanctioned(
-            "- uses: mozilla-actions/sccache-action@v0.0.9\n"
+            "- uses: mozilla-actions/sccache-action@7d986dd989559c6ecdb630a3fd2557667be217ad\n"
             + self._WIRE
             + "- shell: bash\n  run: echo \"RUSTC_WRAPPER=\" >> \"$GITHUB_ENV\"\n"
         )
@@ -1115,7 +1122,7 @@ class TestSccacheWiringClosure(unittest.TestCase):
             "tools/act",
             "runs:\n  using: composite\n  steps:\n    - shell: bash\n      run: echo \"RUSTC_WRAPPER=\" >> \"$GITHUB_ENV\"\n",
         )
-        self._sanctioned("- uses: mozilla-actions/sccache-action@v0.0.9\n" + self._WIRE + "- uses: ./tools/act\n")
+        self._sanctioned("- uses: mozilla-actions/sccache-action@7d986dd989559c6ecdb630a3fd2557667be217ad\n" + self._WIRE + "- uses: ./tools/act\n")
         self.assertRefused("exactly two steps")
         self._sanctioned("- uses: ./tools/act\n" + self._WIRE)
         self.assertRefused("step 1 must be exactly")
@@ -1123,19 +1130,19 @@ class TestSccacheWiringClosure(unittest.TestCase):
     def test_composite_install_step_with_extra_keys_is_refused(self) -> None:
         for extra in ("  with:\n    version: v0.8.0\n", "  continue-on-error: true\n", "  name: x\n"):
             with self.subTest(extra=extra):
-                self._sanctioned("- uses: mozilla-actions/sccache-action@v0.0.9\n" + extra + self._WIRE)
+                self._sanctioned("- uses: mozilla-actions/sccache-action@7d986dd989559c6ecdb630a3fd2557667be217ad\n" + extra + self._WIRE)
                 self.assertRefused("step 1 must be exactly")
 
     def test_composite_reordered_or_env_bearing_wire_is_refused(self) -> None:
-        self._sanctioned(self._WIRE + "- uses: mozilla-actions/sccache-action@v0.0.9\n")
+        self._sanctioned(self._WIRE + "- uses: mozilla-actions/sccache-action@7d986dd989559c6ecdb630a3fd2557667be217ad\n")
         self.assertRefused("step 1 must be exactly")
         self._sanctioned(
-            "- uses: mozilla-actions/sccache-action@v0.0.9\n" + self._WIRE + "  env:\n    RUSTC_WRAPPER: ''\n"
+            "- uses: mozilla-actions/sccache-action@7d986dd989559c6ecdb630a3fd2557667be217ad\n" + self._WIRE + "  env:\n    RUSTC_WRAPPER: ''\n"
         )
         self.assertRefused("step 2 is not the canonical wiring step")
 
     def test_composite_extra_document_or_runs_keys_are_refused(self) -> None:
-        body = "  steps:\n" + textwrap.indent("- uses: mozilla-actions/sccache-action@v0.0.9\n" + self._WIRE, "    ")
+        body = "  steps:\n" + textwrap.indent("- uses: mozilla-actions/sccache-action@7d986dd989559c6ecdb630a3fd2557667be217ad\n" + self._WIRE, "    ")
         path = os.path.join(self.fx.root, "actions", "sccache", "action.yml")
         self.ci("steps:\n  - run: cargo build\n")
         _write(path, "inputs:\n  x:\n    default: y\nruns:\n  using: composite\n" + body)
@@ -1204,7 +1211,7 @@ class TestSccacheWiringClosure(unittest.TestCase):
         self.assertRefused("step 'Build' run:", "expression-assembly")
 
     # ---- YAML structural ambiguities feed the workflow loader closed
-    # (strict_yaml.StrictSafeLoader), not just check_sccache_wiring's text scan --
+    # (strict_yaml.StrictSafeLoader), not just check_workflow_steps' text scan --
 
     def test_duplicate_key_workflow_is_refused_not_silently_resolved(self) -> None:
         self.fx.workflow(
@@ -1231,6 +1238,257 @@ class TestSccacheWiringClosure(unittest.TestCase):
             "    steps:\n      - run: cargo build\n  clippy2: *clippy\n",
         )
         self.assertRefused("ci.yml is not valid YAML")
+
+
+_HELPER_CALL = 'bash "$GITHUB_WORKSPACE/.github/ci/github-env.sh"'
+_PINNED_SHA = "0123456789abcdef0123456789abcdef01234567"
+_DIGEST = "sha256:" + "ab" * 32
+
+
+class TestPinnedInputsAndEnvFileWrites(unittest.TestCase):
+    """Check 7: CI inputs pinned by content, env-file writes only through the helper."""
+
+    def setUp(self) -> None:
+        self._tmpdir = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmpdir.cleanup)
+        self.fx = SccacheFixture(self._tmpdir.name)
+
+    def assertRefused(self, *needles: str) -> list[str]:
+        errors = self.fx.errors()
+        self.assertTrue(any(all(n in e for n in needles) for e in errors), errors)
+        return errors
+
+    def ci(self, job_body: str, **kw: str) -> None:
+        self.fx.workflow("ci.yml", _ci(job_body, **kw))
+
+    def allowlist(self, content: str) -> None:
+        _write(os.path.join(self.fx.root, "ci", "github-env-allowlist.txt"), content)
+
+    # ---- env-file writes: every bypass of a name-matching scan ----------
+
+    def test_env_file_write_bypasses_are_refused(self) -> None:
+        cases = {
+            "adjacent-quote concat": 'echo "RUSTC_""WRAPPER=x" >> "$GITHUB_ENV"',
+            "variable indirection": 'W=RUSTC_WRAPPER; echo "$W=x" >> "$GITHUB_ENV"',
+            "base64 payload": "echo UlVTVENfV1JBUFBFUj14 | base64 -d >> $GITHUB_ENV",
+            "path file": 'echo /tmp/evil >> "$GITHUB_PATH"',
+            "lower-case name": 'echo "A=b" >> "$github_env"',
+            "braced name": 'echo "A=b" >> "${GITHUB_ENV}"',
+            "runner command file": "echo A=b >> /home/runner/work/_temp/_runner_file_commands/set_env_1",
+            "legacy set-env": 'echo "::set-env name=A::b"',
+            "legacy add-path": 'echo "::add-path::/tmp/evil"',
+        }
+        for name, run in cases.items():
+            with self.subTest(name):
+                self.ci(f"steps:\n  - name: W\n    run: {run!r}\n")
+                self.assertRefused("step 'W' run:", "written only through")
+
+    def test_env_file_benign_allowlisted_key_value_is_still_refused_raw(self) -> None:
+        self.ci("steps:\n  - name: W\n    run: echo \"BIN_NAME=ipe\" >> \"$GITHUB_ENV\"\n")
+        self.assertRefused("step 'W' run:", "'GITHUB_ENV'")
+
+    def test_legacy_command_switch_in_env_is_refused(self) -> None:
+        self.ci("env:\n  ACTIONS_ALLOW_UNSECURE_COMMANDS: 'true'\nsteps:\n  - run: cargo build\n")
+        self.assertRefused("env.ACTIONS_ALLOW_UNSECURE_COMMANDS", "written only through")
+
+    def test_env_file_name_in_with_and_shell_is_refused(self) -> None:
+        self.ci(f"steps:\n  - uses: some/action@{_PINNED_SHA}\n    with:\n      target: $GITHUB_ENV\n")
+        self.assertRefused("with.target", "written only through")
+        self.ci("steps:\n  - name: S\n    shell: bash --rcfile $GITHUB_ENV {0}\n    run: x\n")
+        self.assertRefused("step 'S' shell:", "written only through")
+
+    def test_env_file_write_inside_local_composite_is_refused(self) -> None:
+        self.fx.composite(
+            "w", "runs:\n  using: composite\n  steps:\n    - shell: bash\n      run: echo A=b >> $GITHUB_ENV\n"
+        )
+        self.ci("steps:\n  - uses: ./.github/actions/w\n")
+        self.assertRefused("./.github/actions/w/action.yml", "written only through")
+
+    # ---- the helper: one canonical call, bare allowlisted key ------------
+
+    def test_canonical_helper_call_with_allowlisted_key_passes(self) -> None:
+        self.ci(f"steps:\n  - name: W\n    run: 'X=ipe; {_HELPER_CALL} BIN_NAME \"$X\"'\n")
+        self.assertEqual(self.fx.errors(), [])
+
+    def test_helper_call_with_non_allowlisted_key_is_refused(self) -> None:
+        self.ci(f"steps:\n  - name: W\n    run: '{_HELPER_CALL} OTHER_KEY x'\n")
+        self.assertRefused("step 'W' run:", "'OTHER_KEY'", "not in ci/github-env-allowlist.txt")
+
+    def test_helper_call_outside_canonical_form_is_refused(self) -> None:
+        for name, run in {
+            "variable key": f'W=BIN_NAME; {_HELPER_CALL} "$W" x',
+            "quoted key": f'{_HELPER_CALL} "BIN_NAME" x',
+            "concatenated key": f"{_HELPER_CALL} BIN_\"\"NAME x",
+            "relative path": "bash .github/ci/github-env.sh BIN_NAME x",
+            "sourced": 'source "$GITHUB_WORKSPACE/.github/ci/github-env.sh" BIN_NAME x',
+            "other interpreter": 'sh "$GITHUB_WORKSPACE/.github/ci/github-env.sh" BIN_NAME x',
+            "copied helper": 'cp .github/ci/github-env.sh /tmp/w.sh',
+            "no value": f"{_HELPER_CALL} BIN_NAME ",
+        }.items():
+            with self.subTest(name):
+                self.ci(f"steps:\n  - name: W\n    run: {run!r}\n")
+                self.assertRefused("step 'W' run:", "outside its one canonical call")
+
+    # ---- the allowlist itself --------------------------------------------
+
+    def test_allowlist_refuses_dangerous_keys(self) -> None:
+        for key in ("PATH", "RUSTC_WRAPPER", "SCCACHE_DIR", "LD_PRELOAD", "BASH_ENV", "NODE_OPTIONS",
+                    "GITHUB_TOKEN", "RUNNER_TEMP", "CARGO_HOME", "lower_case", "A-B"):
+            with self.subTest(key=key):
+                self.allowlist(f"# header\nBIN_NAME\n{key}\n")
+                self.ci("steps:\n  - run: cargo build\n")
+                self.assertRefused("github-env-allowlist.txt:3:", repr(key))
+
+    def test_allowlist_duplicate_key_is_refused(self) -> None:
+        self.allowlist("BIN_NAME\nBIN_NAME\n")
+        self.ci("steps:\n  - run: cargo build\n")
+        self.assertRefused("github-env-allowlist.txt:2:", "listed twice")
+
+    def test_missing_allowlist_fails_closed(self) -> None:
+        os.remove(os.path.join(self.fx.root, "ci", "github-env-allowlist.txt"))
+        self.ci(f"steps:\n  - name: W\n    run: '{_HELPER_CALL} BIN_NAME x'\n")
+        errors = self.assertRefused("github-env-allowlist.txt", "cannot be read")
+        self.assertTrue(any("'BIN_NAME'" in e and "not in" in e for e in errors), errors)
+
+    # ---- `uses:` pinned by content ---------------------------------------
+
+    def test_unpinned_uses_forms_are_refused(self) -> None:
+        for uses in (
+            "actions/checkout@v7",
+            "actions/checkout@main",
+            "actions/checkout@3d3c42e",
+            "actions/checkout@3D3C42E5AAC5BA805825DA76410C181273BA90B1",
+            "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1x",
+            "actions/checkout",
+            "github/codeql-action/init@v3",
+            "docker://alpine:3.20",
+            "docker://alpine",
+        ):
+            with self.subTest(uses=uses):
+                self.ci(f"steps:\n  - uses: {uses}\n")
+                self.assertRefused(repr(uses), "not pinned by content")
+
+    def test_pinned_uses_forms_pass(self) -> None:
+        self.ci(
+            f"steps:\n  - uses: actions/checkout@{_PINNED_SHA} # v7\n"
+            f"  - uses: github/codeql-action/init@{_PINNED_SHA}\n"
+            f"  - uses: docker://alpine@{_DIGEST}\n"
+        )
+        self.assertEqual(self.fx.errors(), [])
+
+    def test_non_string_uses_is_refused(self) -> None:
+        self.ci("steps:\n  - uses: [actions/checkout]\n")
+        self.assertRefused("uses:", "a string")
+
+    def test_unpinned_uses_inside_local_composite_is_refused(self) -> None:
+        self.fx.composite("w", "runs:\n  using: composite\n  steps:\n    - uses: actions/checkout@v7\n")
+        self.ci("steps:\n  - uses: ./.github/actions/w\n")
+        self.assertRefused("./.github/actions/w/action.yml", "not pinned by content")
+
+    def test_sanctioned_composite_tag_pinned_install_is_refused(self) -> None:
+        _write(
+            os.path.join(self.fx.root, "actions", "sccache", "action.yml"),
+            VALID_COMPOSITE.replace(
+                "sccache-action@7d986dd989559c6ecdb630a3fd2557667be217ad", "sccache-action@v0.0.9"
+            ),
+        )
+        self.ci("steps:\n  - run: cargo build\n")
+        self.assertRefused("step 1 must be exactly")
+
+    def test_unpinned_job_images_are_refused(self) -> None:
+        for body, needle in (
+            ("container: rust:1\n", "job 'clippy' container image 'rust:1'"),
+            ("container:\n  image: rust:1\n", "job 'clippy' container image 'rust:1'"),
+            ("services:\n  db:\n    image: postgres:16\n", "service 'db' image 'postgres:16'"),
+        ):
+            with self.subTest(body=body):
+                self.ci(body + "steps:\n  - run: cargo build\n")
+                self.assertRefused(needle, "not pinned by sha256 digest")
+
+    def test_digest_pinned_job_images_pass(self) -> None:
+        self.ci(
+            f"container:\n  image: rust@{_DIGEST}\n"
+            f"services:\n  db:\n    image: postgres@{_DIGEST}\n"
+            "steps:\n  - run: cargo build\n"
+        )
+        self.assertEqual(self.fx.errors(), [])
+
+    # ---- pip: only the hash-checked shape --------------------------------
+
+    def test_unhashed_pip_installs_are_refused(self) -> None:
+        for run in (
+            "pip install pyyaml",
+            "python3 -m pip install --quiet pyyaml==6.0.3",
+            "pip install -r .github/ci/requirements.txt",
+            "pip install --require-hashes -r .github/ci/requirements.txt",
+            "pip install --require-hashes --only-binary :all: -r r.txt pyyaml",
+            "pip install --require-hashes --only-binary :all: --index-url https://x -r r.txt",
+            "pip install --require-hashes --only-binary :all: -r r.txt --no-deps -e .",
+            "PIP3 install pyyaml",
+            "/usr/bin/pip3.12 install pyyaml",
+            "cd x && pip install pyyaml",
+            "pip3 --quiet install pyyaml",
+            "pipx install pyyaml",
+            "easy_install pyyaml",
+        ):
+            with self.subTest(run=run):
+                self.ci(f"steps:\n  - name: P\n    run: {run!r}\n")
+                self.assertRefused("step 'P' run:")
+
+    def test_pip_install_across_line_continuation_is_refused(self) -> None:
+        self.ci("steps:\n  - name: P\n    run: |\n      pip \\\n        install pyyaml\n")
+        self.assertRefused("step 'P' run:", "outside the hash-checked shape")
+
+    def test_canonical_hashed_pip_install_passes(self) -> None:
+        for run in (
+            "python3 -m pip install --quiet --require-hashes --only-binary :all: -r .github/ci/requirements.txt",
+            "pip install --only-binary=:all: --require-hashes --requirement r.txt",
+            "pip --version",
+        ):
+            with self.subTest(run=run):
+                self.ci(f"steps:\n  - name: P\n    run: {run!r}\n")
+                self.assertEqual(self.fx.errors(), [])
+
+
+class TestGithubEnvHelper(unittest.TestCase):
+    """The helper re-checks its own contract at run time (defence in depth)."""
+
+    HELPER = os.path.join(HERE, "github-env.sh")
+
+    def setUp(self) -> None:
+        self._tmpdir = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmpdir.cleanup)
+        self.env_file = os.path.join(self._tmpdir.name, "env")
+        open(self.env_file, "w").close()
+
+    def run_helper(self, *args: str) -> int:
+        import subprocess
+
+        env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "GITHUB_ENV": self.env_file}
+        return subprocess.run(["bash", self.HELPER, *args], env=env, capture_output=True, check=False).returncode
+
+    def written(self) -> str:
+        with open(self.env_file) as f:
+            return f.read()
+
+    def test_allowlisted_key_is_written(self) -> None:
+        self.assertEqual(self.run_helper("BIN_NAME", "ipe"), 0)
+        self.assertEqual(self.written(), "BIN_NAME=ipe\n")
+
+    def test_refusals_write_nothing(self) -> None:
+        for args in (
+            ("OTHER_KEY", "x"),
+            ("RUSTC_WRAPPER", "sccache"),
+            ("bin_name", "x"),
+            ("# Keys", "x"),
+            ("BIN_NAME", "ipe\nRUSTC_WRAPPER=evil"),
+            ("BIN_NAME", "ipe\r"),
+            ("BIN_NAME",),
+            ("BIN_NAME", "a", "b"),
+        ):
+            with self.subTest(args=args):
+                self.assertNotEqual(self.run_helper(*args), 0)
+                self.assertEqual(self.written(), "")
 
 
 if __name__ == "__main__":

@@ -107,7 +107,7 @@ jobs:
       emit: ${{ steps.filter.outputs.emit }}
       release_only: ${{ steps.release.outputs.release_only }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           # The tested merge commit and its base parent, for the release-only diff.
           fetch-depth: 2
@@ -124,7 +124,7 @@ jobs:
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           REPO: ${{ github.repository }}
         run: python3 .github/ci/release_only.py
-      - uses: dorny/paths-filter@v3
+      - uses: dorny/paths-filter@0e4a8c6effa4802afeda77dc8d303f8176d7dfad # v3
         id: filter
         with:
           filters: |
@@ -187,7 +187,7 @@ jobs:
   artifact-guard:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Reject committed build artifacts
         run: .github/ci/artifact-guard.sh
 
@@ -198,14 +198,14 @@ jobs:
   manifest-lock-consistency:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Check Cargo.lock agrees with Cargo.toml versions
         run: .github/ci/manifest-lock-consistency.sh
 
   fmt:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: ./.github/actions/rust-toolchain-pinned
         with:
           components: rustfmt
@@ -219,11 +219,11 @@ jobs:
     # clippy; it always runs on push/nightly.
     if: needs.changes.outputs.code == 'true' || github.event_name != 'pull_request'
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: ./.github/actions/rust-toolchain-pinned
         with:
           components: clippy
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
       - name: Fetch crates
         run: cargo fetch
       - name: Run clippy
@@ -241,12 +241,12 @@ jobs:
     needs: changes
     if: needs.changes.outputs.code == 'true' || github.event_name != 'pull_request'
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: ./.github/actions/rust-toolchain-pinned
       - uses: ./.github/actions/sccache
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
       - run: cargo check --locked -p ipe --all-targets
-      - uses: taiki-e/install-action@nextest
+      - uses: taiki-e/install-action@23d41aa71228a2692ee31bb433f070fd4bdc6661 # nextest
       - run: >-
           cargo nextest run --locked -p ipe --lib -E
           'test(/^(output_dir|clean|cache|owner_trust)::/)
@@ -263,7 +263,7 @@ jobs:
     # always runs on push/nightly.
     if: needs.changes.outputs.code == 'true' || github.event_name != 'pull_request'
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       # ripgrep — tools/scripts/lint-diagnostic-tone.sh requires it (fails
       # closed via require_tool when absent instead of passing vacuously).
       - name: Install ripgrep
@@ -296,11 +296,11 @@ jobs:
       RUSTFLAGS: -C link-arg=-fuse-ld=mold
       IPE_RUNTIME_DIR: ${{ github.workspace }}/src/runtime/rust/src
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: ./.github/actions/rust-toolchain-pinned
-      - uses: rui314/setup-mold@v1
+      - uses: rui314/setup-mold@10ca16bf91dc22e05ebdc935cad9c75ea248f621 # v1
       - uses: ./.github/actions/sccache
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
       - name: Build ipe
         run: cargo build --release -p ipe
       - name: Compile every explain-page example
@@ -322,11 +322,11 @@ jobs:
       RUSTFLAGS: -C link-arg=-fuse-ld=mold
       IPE_RUNTIME_DIR: ${{ github.workspace }}/src/runtime/rust/src
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: ./.github/actions/rust-toolchain-pinned
-      - uses: rui314/setup-mold@v1
+      - uses: rui314/setup-mold@10ca16bf91dc22e05ebdc935cad9c75ea248f621 # v1
       - uses: ./.github/actions/sccache
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
       - name: Build ipe
         run: cargo build --release -p ipe
       - name: Type-check every doc-string example
@@ -357,12 +357,12 @@ jobs:
       RUSTFLAGS: -C link-arg=-fuse-ld=mold
       IPE_RUNTIME_DIR: ${{ github.workspace }}/src/runtime/rust/src
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: ./.github/actions/rust-toolchain-pinned
-      - uses: rui314/setup-mold@v1
+      - uses: rui314/setup-mold@10ca16bf91dc22e05ebdc935cad9c75ea248f621 # v1
       - uses: ./.github/actions/sccache
-      - uses: Swatinem/rust-cache@v2
-      - uses: taiki-e/install-action@nextest
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+      - uses: taiki-e/install-action@23d41aa71228a2692ee31bb433f070fd4bdc6661 # nextest
       # The fixtures shell out to `git init/commit/push`; give the runner an
       # identity so those commands do not fail on a fresh machine.
       - name: Configure git identity for fixtures
@@ -382,9 +382,9 @@ jobs:
   quick-check:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: ./.github/actions/rust-toolchain-pinned
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
       - name: Fetch crates
         run: cargo fetch
       - name: Check the workspace compiles
@@ -408,12 +408,12 @@ jobs:
     # Path-scoping means a docs/CI-only PR skips it.
     if: (needs.changes.outputs.emit == 'true' || github.event_name != 'pull_request') && needs.changes.outputs.release_only != 'true'
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: ./.github/actions/rust-toolchain-pinned
         with:
           components: clippy
       - uses: ./.github/actions/sccache
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
       # db WITHOUT web — the load-bearing invariant.
       - run: cargo clippy -p ipe-runtime-rust --no-default-features --features db --all-targets -- -D warnings
       # db WITH web — the pair must also stay co-buildable.
@@ -437,12 +437,12 @@ jobs:
     # a non-wasm PR.
     if: (needs.changes.outputs.wasm == 'true' || github.event_name != 'pull_request') && needs.changes.outputs.release_only != 'true'
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: ./.github/actions/rust-toolchain-pinned
         with:
           targets: wasm32-unknown-unknown, wasm32-wasip1
       - uses: ./.github/actions/sccache
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
       - run: cargo build -p ipe-runtime-rust --target wasm32-unknown-unknown
       - run: cargo build -p ipe-runtime-rust --target wasm32-unknown-unknown --features json
       # The development-only debugger must not drag tokio onto wasm: `debugger`
@@ -483,7 +483,7 @@ jobs:
     if: (needs.changes.outputs.editors == 'true' || github.event_name != 'pull_request') && needs.changes.outputs.release_only != 'true'
     steps:
       # Full history: the drift check resolves the Zed grammar pin as a commit.
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           fetch-depth: 0
       - uses: ./.github/actions/rust-toolchain-pinned
@@ -511,15 +511,15 @@ jobs:
     env:
       RUSTFLAGS: -C link-arg=-fuse-ld=mold
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: ./.github/actions/rust-toolchain-pinned
-      - uses: rui314/setup-mold@v1
+      - uses: rui314/setup-mold@10ca16bf91dc22e05ebdc935cad9c75ea248f621 # v1
       - uses: ./.github/actions/sccache
-      - uses: Swatinem/rust-cache@v2
-      - uses: taiki-e/install-action@nextest
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+      - uses: taiki-e/install-action@23d41aa71228a2692ee31bb433f070fd4bdc6661 # nextest
       # Compile every test binary ONCE into a self-contained archive.
       - run: cargo nextest archive --workspace --archive-file nextest.tar.zst
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: nextest-archive
           path: nextest.tar.zst
@@ -536,10 +536,10 @@ jobs:
       matrix:
         shard: [1, 2, 3, 4]
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: ./.github/actions/rust-toolchain-pinned
-      - uses: taiki-e/install-action@nextest
-      - uses: actions/download-artifact@v7
+      - uses: taiki-e/install-action@23d41aa71228a2692ee31bb433f070fd4bdc6661 # nextest
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         with:
           name: nextest-archive
       # Run this shard's disjoint partition from the prebuilt archive — no
@@ -606,14 +606,14 @@ jobs:
       # incremental instead of cold-building axum/tokio/serde per example.
       IPE_SEAL_TARGET: ${{ github.workspace }}/.cache/seal-shared-target
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: ./.github/actions/rust-toolchain-pinned
-      - uses: rui314/setup-mold@v1
+      - uses: rui314/setup-mold@10ca16bf91dc22e05ebdc935cad9c75ea248f621 # v1
       - uses: ./.github/actions/sccache
       # Cache the shared emitted-crate target too (keyed on this job), so the
       # runtime + its deps stay warm across runs and later emitted builds are
       # incremental. The default workspace target is cached by the entry above.
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           cache-directories: ${{ github.workspace }}/.cache/seal-shared-target
       - name: Build ipe
@@ -667,11 +667,11 @@ jobs:
       # runtime dep tree compiles once, later shape builds go incremental.
       IPE_SHAPES_TARGET: ${{ github.workspace }}/.cache/shapes-shared-target
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: ./.github/actions/rust-toolchain-pinned
-      - uses: rui314/setup-mold@v1
+      - uses: rui314/setup-mold@10ca16bf91dc22e05ebdc935cad9c75ea248f621 # v1
       - uses: ./.github/actions/sccache
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           cache-directories: ${{ github.workspace }}/.cache/shapes-shared-target
       - name: Build ipe
@@ -740,11 +740,11 @@ jobs:
       RUSTFLAGS: -C link-arg=-fuse-ld=mold
       IPE_RUNTIME_DIR: ${{ github.workspace }}/src/runtime/rust/src
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: ./.github/actions/rust-toolchain-pinned
-      - uses: rui314/setup-mold@v1
+      - uses: rui314/setup-mold@10ca16bf91dc22e05ebdc935cad9c75ea248f621 # v1
       - uses: ./.github/actions/sccache
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
       # ripgrep — scripts/lib/examples.sh's classification helpers require it.
       - name: Install ripgrep
         run: sudo apt-get update && sudo apt-get install -y ripgrep
@@ -779,11 +779,11 @@ jobs:
     # path-scoping keeps it off a docs/CI-only PR.
     if: (needs.changes.outputs.emit == 'true' || github.event_name != 'pull_request') && needs.changes.outputs.release_only != 'true'
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: ./.github/actions/rust-toolchain-pinned
       - uses: ./.github/actions/sccache
-      - uses: Swatinem/rust-cache@v2
-      - uses: taiki-e/install-action@nextest
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+      - uses: taiki-e/install-action@23d41aa71228a2692ee31bb433f070fd4bdc6661 # nextest
       - run: cargo nextest run -p ipe-runtime-rust --features full --profile ci
 
   # ── Sanitizers (the UB net) ─────────────────────────────────────────────────
@@ -846,12 +846,12 @@ jobs:
       RUSTDOCFLAGS: -Zsanitizer=address
       ASAN_OPTIONS: detect_leaks=1:abort_on_error=1
     steps:
-      - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@nightly
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: dtolnay/rust-toolchain@be39649afda95dbf70f87cce95f68b8d5797b296 # nightly
         with:
           components: rust-src
-      - uses: Swatinem/rust-cache@v2
-      - uses: taiki-e/install-action@nextest
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+      - uses: taiki-e/install-action@23d41aa71228a2692ee31bb433f070fd4bdc6661 # nextest
       - name: ASAN shard ${{ matrix.shard }}/6 (build-std, instrumented std)
         run: |
           cargo +nightly nextest run \
@@ -908,12 +908,12 @@ jobs:
       # TSAN's own reports; `halt_on_error=1` fails on the first race.
       TSAN_OPTIONS: halt_on_error=1
     steps:
-      - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@nightly
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: dtolnay/rust-toolchain@be39649afda95dbf70f87cce95f68b8d5797b296 # nightly
         with:
           components: rust-src
-      - uses: Swatinem/rust-cache@v2
-      - uses: taiki-e/install-action@nextest
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+      - uses: taiki-e/install-action@23d41aa71228a2692ee31bb433f070fd4bdc6661 # nextest
       - name: TSAN (build-std, concurrency-bearing crates)
         run: |
           cargo +nightly nextest run \
@@ -993,19 +993,19 @@ jobs:
       matrix:
         shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: ./.github/actions/rust-toolchain-pinned
-      - uses: rui314/setup-mold@v1
+      - uses: rui314/setup-mold@10ca16bf91dc22e05ebdc935cad9c75ea248f621 # v1
       # The shard driver is `cargo nextest run`; the runner has no nextest unless
       # this installs it (every other nextest-driven job installs it too).
-      - uses: taiki-e/install-action@nextest
-      - uses: actions/download-artifact@v7
+      - uses: taiki-e/install-action@23d41aa71228a2692ee31bb433f070fd4bdc6661 # nextest
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         with:
           name: nextest-archive
       # Cache the shared emitted-crate target across runs so the runtime dep tree
       # (axum/tokio/sqlx/serde) stays warm and each shard's goldens link
       # incrementally instead of cold-building it. Keyed per shard by rust-cache.
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           cache-directories: ${{ github.workspace }}/.cache/oracle-shared-target
       # Reclaim runner disk before the E2E build: each emitted golden crate pulls
@@ -1173,14 +1173,14 @@ jobs:
       # so each sub-shard's wall-clock stays ≤ 30 min.
       SEAL_HEAVY: 'binary(watch_sigterm) | binary(watch_integration) | binary(watch_hot_appearance) | binary(watch_bluegreen) | binary(watch_cancellation) | binary(server_e2e) | binary(live_e2e) | binary(http_e2e) | binary(g_http_live) | binary(webview_e2e) | binary(test_command) | binary(verify) | binary(stdlib_coverage_dynamic)'
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: ./.github/actions/rust-toolchain-pinned
-      - uses: rui314/setup-mold@v1
-      - uses: taiki-e/install-action@nextest
-      - uses: actions/download-artifact@v7
+      - uses: rui314/setup-mold@10ca16bf91dc22e05ebdc935cad9c75ea248f621 # v1
+      - uses: taiki-e/install-action@23d41aa71228a2692ee31bb433f070fd4bdc6661 # nextest
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         with:
           name: nextest-archive
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           cache-directories: ${{ github.workspace }}/.cache/oracle-shared-target
       - name: Free disk space
@@ -1294,12 +1294,12 @@ jobs:
       IPE_E2E: "1"
       IPE_RUNTIME_VENDORED: "1"
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: ./.github/actions/rust-toolchain-pinned
-      - uses: rui314/setup-mold@v1
+      - uses: rui314/setup-mold@10ca16bf91dc22e05ebdc935cad9c75ea248f621 # v1
       - uses: ./.github/actions/sccache
-      - uses: Swatinem/rust-cache@v2
-      - uses: taiki-e/install-action@nextest
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+      - uses: taiki-e/install-action@23d41aa71228a2692ee31bb433f070fd4bdc6661 # nextest
       - name: Run seal_modset under the vendored emit model
         run: |
           cargo nextest run -p ipe \
@@ -1339,11 +1339,11 @@ jobs:
       || !contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.pull_request.author_association)
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: ./.github/actions/rust-toolchain-pinned
       - uses: ./.github/actions/sccache
-      - uses: Swatinem/rust-cache@v2
-      - uses: taiki-e/install-action@nextest
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+      - uses: taiki-e/install-action@23d41aa71228a2692ee31bb433f070fd4bdc6661 # nextest
 
       - name: Install the Linux jail primitives (bubblewrap + python3)
         run: |
@@ -1429,11 +1429,11 @@ jobs:
     if: (needs.changes.outputs.code == 'true' || github.event_name != 'pull_request') && needs.changes.outputs.release_only != 'true'
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: ./.github/actions/rust-toolchain-pinned
       - uses: ./.github/actions/sccache
-      - uses: Swatinem/rust-cache@v2
-      - uses: taiki-e/install-action@nextest
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+      - uses: taiki-e/install-action@23d41aa71228a2692ee31bb433f070fd4bdc6661 # nextest
 
       # Assert we really are on aarch64 — the whole point is proving the UNWIRED
       # arch's fail-closed path, so a silent runner-arch drift to x86_64 (where a
@@ -1477,9 +1477,9 @@ jobs:
     needs: [changes, quick-check]
     if: needs.changes.outputs.code == 'true' || github.event_name != 'pull_request'
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: ./.github/actions/rust-toolchain-pinned
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
       - name: Regenerate docs/reference/stdlib.md and docs/reference/stdlib/
         run: cargo run -p ipe_docs --bin gen-stdlib-docs -- --repo-root "${{ github.workspace }}"
       - name: Fail if generated docs differ from committed files
@@ -1499,9 +1499,9 @@ jobs:
     needs: [changes, quick-check]
     if: needs.changes.outputs.code == 'true' || github.event_name != 'pull_request'
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: ./.github/actions/rust-toolchain-pinned
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
       - name: Regenerate docs/reference/env.md
         run: cargo run -p ipe_docs --bin gen-env-docs -- --repo-root "${{ github.workspace }}"
       - name: Fail if generated docs differ from committed files
@@ -1521,9 +1521,9 @@ jobs:
     needs: [changes, quick-check]
     if: needs.changes.outputs.code == 'true' || github.event_name != 'pull_request'
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: ./.github/actions/rust-toolchain-pinned
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
       - name: Regenerate docs/reference/capabilities.md
         run: cargo run -p ipe_docs --bin gen-capabilities-docs -- --repo-root "${{ github.workspace }}"
       - name: Fail if generated docs differ from committed files
@@ -1543,9 +1543,9 @@ jobs:
     needs: [changes, quick-check]
     if: needs.changes.outputs.code == 'true' || github.event_name != 'pull_request'
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: ./.github/actions/rust-toolchain-pinned
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
       - name: Regenerate docs/reference/cli.md
         run: cargo run -p ipe --bin gen-cli-docs -- --repo-root "${{ github.workspace }}"
       - name: Fail if generated docs differ from committed files
@@ -1566,9 +1566,9 @@ jobs:
     needs: [changes, quick-check]
     if: needs.changes.outputs.code == 'true' || github.event_name != 'pull_request'
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: ./.github/actions/rust-toolchain-pinned
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
       - name: Regenerate docs/reference/requirements.md
         run: cargo run -p ipe_docs --bin gen-requirements-docs -- --repo-root "${{ github.workspace }}"
       - name: Fail if generated docs differ from committed files
@@ -1592,9 +1592,9 @@ jobs:
     needs: [changes, quick-check]
     if: needs.changes.outputs.code == 'true' || github.event_name != 'pull_request'
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: ./.github/actions/rust-toolchain-pinned
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
       - name: Regenerate the CLI transcript goldens
         run: cargo run -p regen-cli-transcripts -- --repo-root "${{ github.workspace }}"
       - name: Fail if the regenerated goldens differ from the committed ones
@@ -1620,10 +1620,10 @@ jobs:
     needs: [changes, quick-check]
     if: needs.changes.outputs.code == 'true' || github.event_name != 'pull_request'
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: ./.github/actions/rust-toolchain-pinned
       - uses: ./.github/actions/sccache
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
       - name: Regenerate the Markdown parity snapshot via an ipe run
         run: tools/scripts/regen-markdown-parity.sh
       - name: Fail if the regenerated snapshot differs from the committed one
@@ -1684,7 +1684,7 @@ jobs:
       actions: write
       contents: read
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
           sparse-checkout: .github/ci/deterministic-checks.json
@@ -1747,14 +1747,14 @@ jobs:
       IPE_RUNTIME_DIR: ${{ github.workspace }}/src/runtime/rust/src
       IPE_GEO_CLIPBOARD_PORT: "18080"
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: ./.github/actions/rust-toolchain-pinned
-      - uses: rui314/setup-mold@v1
+      - uses: rui314/setup-mold@10ca16bf91dc22e05ebdc935cad9c75ea248f621 # v1
       - uses: ./.github/actions/sccache
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           cache-directories: ${{ github.workspace }}/.cache/browser-e2e-target
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: "20"
       - name: Install Playwright + Chromium
@@ -1772,7 +1772,7 @@ jobs:
           IPE="$PWD/target/release/ipe"
           OUT="${{ runner.temp }}/geo-clipboard-emitted"
           "$IPE" build examples/shapes/web/geo-clipboard/package.ipe --out "$OUT"
-          echo "IPE_GEO_CLIPBOARD_EMITTED=$OUT/rust" >> "$GITHUB_ENV"
+          bash "$GITHUB_WORKSPACE/.github/ci/github-env.sh" IPE_GEO_CLIPBOARD_EMITTED "$OUT/rust"
       - name: Cargo-build emitted project
         env:
           CARGO_TARGET_DIR: ${{ github.workspace }}/.cache/browser-e2e-target
@@ -1783,7 +1783,7 @@ jobs:
           # CARGO_TARGET_DIR is redirected to a shared cache dir above, so the
           # release artifacts land there — never the emitted project's ./target.
           BIN="$(find "$CARGO_TARGET_DIR/release" -maxdepth 1 -type f -perm /111 ! -name '*.d' | head -1)"
-          echo "GEO_CLIPBOARD_BIN=$BIN" >> "$GITHUB_ENV"
+          bash "$GITHUB_WORKSPACE/.github/ci/github-env.sh" GEO_CLIPBOARD_BIN "$BIN"
       - name: Spawn geo-clipboard server
         run: |
           set -euo pipefail
@@ -1791,7 +1791,7 @@ jobs:
           IPE_CSRF=off \
           IPE_CONSOLE_EMBED=off \
           "$GEO_CLIPBOARD_BIN" &
-          echo "GEO_SERVER_PID=$!" >> "$GITHUB_ENV"
+          bash "$GITHUB_WORKSPACE/.github/ci/github-env.sh" GEO_SERVER_PID "$!"
           ready=""
           for i in $(seq 1 40); do
             if curl -sf "http://127.0.0.1:$IPE_GEO_CLIPBOARD_PORT/" >/dev/null 2>&1; then
@@ -1814,7 +1814,7 @@ jobs:
         run: kill "$GEO_SERVER_PID" 2>/dev/null || true
       - name: Upload screenshots
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: browser-e2e-screenshots
           path: tools/scripts/browser-e2e/artifacts/

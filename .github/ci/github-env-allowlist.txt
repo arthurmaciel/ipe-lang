@@ -1,0 +1,9 @@
+# Keys `github-env.sh` may write to the runner env file, one per line.
+# `verify-manifest.py` refuses a key that names the rustc wrapper/sccache wiring
+# (owned by `.github/actions/sccache`), an interpreter/loader hook (PATH,
+# LD_PRELOAD, BASH_ENV, NODE_OPTIONS, ...), or a runner-reserved prefix.
+BIN_NAME
+GEO_CLIPBOARD_BIN
+GEO_SERVER_PID
+IPE_GEO_CLIPBOARD_EMITTED
+IPE_PUBLISH_SIGNING_KEY

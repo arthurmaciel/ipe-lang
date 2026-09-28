@@ -43,7 +43,7 @@ jobs:
       # head. A fork PR's head content must never gate a decision made by a
       # workflow holding write access. Only the SSOT file is materialised and
       # no credential is left in the git config.
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
           sparse-checkout: .github/ci/deterministic-checks.json

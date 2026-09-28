@@ -60,7 +60,17 @@ Checks performed
      `ci/deterministic-checks.json` (sccache's cache backend does network I/O
      a deterministic check must never risk). The composite itself must equal
      one canonical structure exactly. Malformed shapes are refused, never
-     skipped. Limits are listed on `check_sccache_wiring`.
+     skipped. Limits are listed on `check_workflow_steps`.
+  7. CI inputs and runner env files, over the same traversal as check 6:
+     every third-party `uses:` is pinned to a 40-hex commit SHA (a `docker://`
+     reference, and every job `container:`/`services:` image, to a sha256
+     digest); every `pip install` is exactly the hash-checked shape
+     (`--require-hashes --only-binary :all: -r <file>`, nothing else); and the
+     runner env file is written only through `ci/github-env.sh`, called in its
+     one canonical form with a bare key listed in
+     `ci/github-env-allowlist.txt`. Any other text naming the env/path files,
+     their on-disk command files, or the legacy `::set-env`/`::add-path`
+     workflow commands is refused — a closed shape, not a list of bypasses.
 
 Pure stdlib + PyYAML (already a CI dependency).  No network.
 """
@@ -73,6 +83,7 @@ import json
 import os
 import posixpath
 import re
+import shlex
 import sys
 from dataclasses import dataclass
 
@@ -144,9 +155,9 @@ SCCACHE_WIRING_TEXT_RE = re.compile(
     re.IGNORECASE,
 )
 # The sanctioned composite is exactly ONE canonical structure: an install
-# step `{uses: mozilla-actions/sccache-action@<ref>}`, then `SCCACHE_WIRE_STEP`
+# step `{uses: mozilla-actions/sccache-action@<40-hex commit sha>}`, then `SCCACHE_WIRE_STEP`
 # byte-exact. Its wiring is proven by equality, never by pattern.
-SCCACHE_INSTALL_USES_RE = re.compile(re.escape(SCCACHE_ACTION_PREFIX) + r"[A-Za-z0-9._-]+\Z")
+SCCACHE_INSTALL_USES_RE = re.compile(re.escape(SCCACHE_ACTION_PREFIX) + r"[0-9a-f]{40}\Z")
 SCCACHE_WIRE_RUN = (
     "set -euo pipefail\n"
     f'echo "{SCCACHE_WRAPPER_VAR}=sccache" >> "$GITHUB_ENV"\n'
@@ -154,6 +165,49 @@ SCCACHE_WIRE_RUN = (
 )
 SCCACHE_WIRE_STEP = {"name": "Wire rustc through sccache", "shell": "bash", "run": SCCACHE_WIRE_RUN}
 SCCACHE_COMPOSITE_DOC_KEYS = frozenset({"name", "description", "runs"})
+# Check 7 — a third-party input is identified by content, never by a movable
+# name: an action by its full commit SHA (a tag or branch can be re-pointed
+# upstream), a docker image by its sha256 digest.
+PINNED_REMOTE_USES_RE = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_./-]+)?@[0-9a-f]{40}\Z")
+PINNED_DOCKER_USES_RE = re.compile(r"docker://[^\s@]+@sha256:[0-9a-f]{64}\Z")
+PINNED_IMAGE_RE = re.compile(r"[^\s@]+@sha256:[0-9a-f]{64}\Z")
+# The runner env/path files and every other channel that sets a later step's
+# environment: the variables naming the files, the runner's on-disk command
+# files they point at, and the legacy stdout workflow commands (plus the
+# switch that re-enables them). Any letter case: Windows env names fold.
+RUNNER_ENV_FILE_TEXT_RE = re.compile(
+    r"GITHUB_ENV|GITHUB_PATH|_runner_file_commands|set_env_|add_path_"
+    r"|ACTIONS_ALLOW_UNSECURE_COMMANDS|::\s*(?:set-env|add-path)",
+    re.IGNORECASE,
+)
+GITHUB_ENV_HELPER = "ci/github-env.sh"
+GITHUB_ENV_KEY_RE = re.compile(r"[A-Z][A-Z0-9_]*\Z")
+GITHUB_ENV_HELPER_MENTION_RE = re.compile(r"github[-_]env", re.IGNORECASE)
+# The one canonical call: absolute helper path (a step may have `cd`'d), then a
+# bare literal key — never a variable, a quoted or concatenated word.
+GITHUB_ENV_HELPER_CALL_RE = re.compile(
+    r'(?<![^\s;&|(])bash "\$GITHUB_WORKSPACE/\.github/ci/github-env\.sh" '
+    r"(?P<key>[A-Z][A-Z0-9_]*) (?=\S)"
+)
+GITHUB_ENV_KEY_EXACT_REFUSED = frozenset(
+    {"PATH", "ENV", "BASH_ENV", "SHELLOPTS", "BASHOPTS", "IFS", "HOME", "TMPDIR", "PS4"}
+)
+# Prefixes whose variables steer the runner, a toolchain, a loader, or an
+# interpreter of every later step; none is ever a job-local value.
+GITHUB_ENV_KEY_REFUSED_PREFIXES = (
+    "GITHUB_", "RUNNER_", "ACTIONS_", "INPUT_", "STATE_", "CARGO", "RUST", "LD_",
+    "DYLD_", "NODE_", "NPM_", "PYTHON", "PIP_", "PERL", "RUBY", "JAVA_", "GIT_",
+    "BASH_", "SSL_", "CURL_", "HTTP", "HTTPS_", "NO_PROXY", "ALL_PROXY",
+)
+# `pip install` outside the one hash-checked shape is refused; `pipx` and
+# `easy_install` install outside pip's hash checking and are refused outright.
+PIP_MENTION_RE = re.compile(
+    r"(?<![A-Za-z0-9_])(?:pip[0-9.]*|pipx|easy_install)(?![A-Za-z0-9_-])", re.IGNORECASE
+)
+PIP_TOKEN_RE = re.compile(r"(?:.*[/\\])?pip[0-9.]*(?:\.exe)?", re.IGNORECASE)
+SHELL_COMMAND_SPLIT_RE = re.compile(r"\n|;|&&|\|\||\||&|\$\(|`|\(|\)")
+PIP_INSTALL_NEUTRAL_FLAGS = frozenset({"-q", "--quiet", "--disable-pip-version-check", "--no-input"})
+
 # Bound on local-action nesting; a chain deeper than this is refused, never
 # assumed not to reach the sccache composite.
 LOCAL_ACTION_DEPTH_LIMIT = 20
@@ -519,25 +573,214 @@ def _scoped_env(container: dict, loc: str, errors: list[str]) -> dict:
     return {}
 
 
-def _refuse_env_keys(env: dict, loc: str, errors: list[str]) -> None:
-    """Rule (b) over the keys, and rule (c) over every `KEY: value` pair — a
-    value can carry a key name a later `run:` expands into a write."""
+@dataclass(frozen=True)
+class StepPolicy:
+    """Repo facts the per-step audits check against.
+
+    `env_allowlist` holds the keys `ci/github-env.sh` may write; it is empty
+    when the allowlist cannot be established, so every helper call is refused.
+    """
+
+    env_allowlist: frozenset[str]
+
+
+def _github_env_key_refusal(key: str) -> str | None:
+    """Why `key` may never be an allowlisted env-file key, or None."""
+    if not GITHUB_ENV_KEY_RE.match(key):
+        return "is not an upper-case identifier"
+    if SCCACHE_WIRING_TEXT_RE.search(key):
+        return f"is rustc/sccache wiring, owned by {SCCACHE_COMPOSITE_USES}"
+    if key in GITHUB_ENV_KEY_EXACT_REFUSED or key.startswith(GITHUB_ENV_KEY_REFUSED_PREFIXES):
+        return "steers the runner, a toolchain, a loader, or an interpreter"
+    return None
+
+
+def load_github_env_allowlist(errors: list[str], root: str = REPO_ROOT) -> frozenset[str]:
+    """The keys `ci/github-env.sh` may write, one per line.
+
+    `#` comments and blank lines are skipped. A malformed, duplicate, or
+    refused key is an error; an unreadable file is an error and yields the
+    empty set (fail closed).
+    """
+    path = os.path.join(root, "ci", "github-env-allowlist.txt")
+    where = os.path.relpath(path, os.path.dirname(root))
+    try:
+        with open(path) as f:
+            lines = f.read().split("\n")
+    except OSError as e:
+        errors.append(f"{where}: cannot be read ({e}) — no env-file key can be allowed; refused")
+        return frozenset()
+    keys: set[str] = set()
+    for n, line in enumerate(lines, 1):
+        if line == "" or line.startswith("#"):
+            continue
+        why = _github_env_key_refusal(line)
+        if why is not None:
+            errors.append(f"{where}:{n}: key {line!r} {why}; refused")
+        elif line in keys:
+            errors.append(f"{where}:{n}: key {line!r} is listed twice; refused")
+        else:
+            keys.add(line)
+    return frozenset(keys)
+
+
+def _refuse_env_file_text(text: str, loc: str, what: str, policy: StepPolicy, errors: list[str]) -> None:
+    """Rule (f): the runner env file is written only by the canonical helper call.
+
+    The call must carry a bare allowlisted key; any other mention of the
+    env/path files, their command files, the legacy workflow commands, or the
+    helper itself is refused.
+    """
+    m = RUNNER_ENV_FILE_TEXT_RE.search(text)
+    if m:
+        errors.append(
+            f"{loc} {what} names {m.group(0)!r} — the runner env file is written only "
+            f'through `bash "$GITHUB_WORKSPACE/.github/{GITHUB_ENV_HELPER}" KEY VALUE`; refused'
+        )
+    calls = list(GITHUB_ENV_HELPER_CALL_RE.finditer(text))
+    for mention in GITHUB_ENV_HELPER_MENTION_RE.finditer(text):
+        if not any(c.start() <= mention.start() < c.end() for c in calls):
+            errors.append(
+                f"{loc} {what} references {GITHUB_ENV_HELPER} outside its one canonical call "
+                f'`bash "$GITHUB_WORKSPACE/.github/{GITHUB_ENV_HELPER}" KEY VALUE` with a bare '
+                "literal KEY; refused"
+            )
+            break
+    for c in calls:
+        key = c.group("key")
+        if key not in policy.env_allowlist:
+            errors.append(
+                f"{loc} {what} writes env key {key!r}, which is not in "
+                "ci/github-env-allowlist.txt; refused"
+            )
+
+
+def _pip_install_refusal(tokens: list[str], at: int) -> str | None:
+    """Why `tokens[at:]` is not the one hash-checked install shape, or None.
+
+    `tokens[at]` is the pip executable and `tokens[at + 1]` is `install`.
+    """
+    require_hashes = only_binary_all = False
+    requirement_files = 0
+    args = tokens[at + 2 :]
+    i = 0
+    while i < len(args):
+        a = args[i]
+        nxt = args[i + 1] if i + 1 < len(args) else None
+        if a == "--require-hashes":
+            require_hashes = True
+        elif a == "--only-binary=:all:":
+            only_binary_all = True
+        elif a == "--only-binary" and nxt == ":all:":
+            only_binary_all = True
+            i += 1
+        elif a in ("-r", "--requirement") and nxt is not None and not nxt.startswith("-"):
+            requirement_files += 1
+            i += 1
+        elif a not in PIP_INSTALL_NEUTRAL_FLAGS:
+            return f"argument {a!r} is outside the hash-checked shape"
+        i += 1
+    if not (require_hashes and only_binary_all and requirement_files):
+        return "it lacks --require-hashes, --only-binary :all:, or -r <requirements file>"
+    return None
+
+
+def _refuse_unhashed_pip(text: str, loc: str, what: str, errors: list[str]) -> None:
+    """Rule (g): every `pip install` is the one hash-checked shape.
+
+    The shape is `--require-hashes --only-binary :all: -r <file>` with nothing
+    else, so every installed byte is hash-checked and no unhashed build
+    backend is fetched. A command that cannot be parsed, or that mentions pip
+    and `install` outside that shape, is refused.
+    """
+    for segment in SHELL_COMMAND_SPLIT_RE.split(text.replace("\\\n", " ")):
+        mention = PIP_MENTION_RE.search(segment)
+        if mention is None:
+            continue
+        shown = segment.strip()
+        if mention.group(0).casefold() in ("pipx", "easy_install"):
+            errors.append(
+                f"{loc} {what} runs {mention.group(0)!r} ({shown!r}) — installs outside "
+                "pip's hash checking; refused"
+            )
+            continue
+        try:
+            tokens = shlex.split(segment)
+        except ValueError as e:
+            errors.append(f"{loc} {what} mentions pip in {shown!r}, which cannot be parsed ({e}); refused")
+            continue
+        at = next((i for i, t in enumerate(tokens) if PIP_TOKEN_RE.fullmatch(t)), None)
+        is_install = at is not None and at + 1 < len(tokens) and tokens[at + 1].casefold() == "install"
+        if not is_install:
+            if any("install" in t.casefold() for t in tokens):
+                errors.append(
+                    f"{loc} {what} mentions pip and install in {shown!r} outside the "
+                    "hash-checked shape; refused"
+                )
+            continue
+        why = _pip_install_refusal(tokens, at)
+        if why is not None:
+            errors.append(
+                f"{loc} {what} runs {shown!r}: {why} — pip installs only as `pip install "
+                "--require-hashes --only-binary :all: -r <hashed requirements file>`; refused"
+            )
+
+
+def _audit_text(text: str | None, loc: str, what: str, policy: StepPolicy, errors: list[str]) -> None:
+    """Rules (c), (f), (g) over one free-text value outside the composite."""
+    if text is None:
+        return
+    _refuse_wiring_text(text, loc, what, errors)
+    _refuse_env_file_text(text, loc, what, policy, errors)
+    _refuse_unhashed_pip(text, loc, what, errors)
+
+
+def _refuse_unpinned_uses(st: Step, loc: str, errors: list[str]) -> None:
+    """Rule (e): a third-party `uses:` names its content, never a movable ref."""
+    if "uses" not in st.raw:
+        return
+    uses = st.uses
+    if uses is None:
+        _refuse_shape(loc, "uses:", "a string", st.raw["uses"], errors)
+        return
+    if uses.startswith("./") or PINNED_REMOTE_USES_RE.match(uses) or PINNED_DOCKER_USES_RE.match(uses):
+        return
+    errors.append(
+        f"{loc} uses {uses!r}, which is not pinned by content — a third-party action "
+        "is `owner/repo[/path]@<40-hex commit sha>` (tag in a trailing comment), a "
+        "docker image `docker://image@sha256:<digest>`; refused"
+    )
+
+
+def _refuse_unpinned_image(image: object, loc: str, errors: list[str]) -> None:
+    """Rule (e) for a job `container:`/`services:` image."""
+    if not isinstance(image, str):
+        _refuse_shape(loc, "image", "a string", image, errors)
+    elif not PINNED_IMAGE_RE.match(image):
+        errors.append(
+            f"{loc} image {image!r} is not pinned by sha256 digest (`image@sha256:<digest>`); refused"
+        )
+
+
+def _refuse_env_keys(env: dict, loc: str, policy: StepPolicy, errors: list[str]) -> None:
+    """Rule (b) over the keys, and the text rules over every `KEY: value` pair.
+
+    A value can carry a key name a later `run:` expands into a write.
+    """
     for key in sorted(_env_keys_folded(env) & SCCACHE_ENV_KEYS):
         errors.append(
             f"{loc} env sets {key!r} — sccache wiring must come only from "
             f"{SCCACHE_COMPOSITE_USES}, never a hand-set env:"
         )
     for k, v in env.items():
-        _refuse_wiring_text(f"{k}: {v}", loc, f"env.{k}", errors)
+        _audit_text(f"{k}: {v}", loc, f"env.{k}", policy, errors)
 
 
-def _refuse_wiring_text(text: str | None, loc: str, what: str, errors: list[str]) -> None:
+def _refuse_wiring_text(text: str, loc: str, what: str, errors: list[str]) -> None:
     """Rule (c): free text outside the sanctioned composite that names any
     wrapper/sccache-shaped key or cargo's `rustc-wrapper` spelling — or that
     assembles its target from a GitHub Actions expression function instead of
     naming it literally, which would otherwise dodge the scan above."""
-    if text is None:
-        return
     m = SCCACHE_WIRING_TEXT_RE.search(text)
     if m:
         errors.append(
@@ -551,7 +794,7 @@ def _refuse_wiring_text(text: str | None, loc: str, what: str, errors: list[str]
         errors.append(expr_error)
 
 
-def _audit_defaults(container: dict, loc: str, errors: list[str]) -> None:
+def _audit_defaults(container: dict, loc: str, policy: StepPolicy, errors: list[str]) -> None:
     """`defaults.run.shell` at workflow or job scope wraps every `run:` step,
     so a wrapper hidden there wires rustc for the whole scope."""
     if "defaults" not in container:
@@ -568,31 +811,32 @@ def _audit_defaults(container: dict, loc: str, errors: list[str]) -> None:
         return
     if "shell" in r:
         if isinstance(r["shell"], str):
-            _refuse_wiring_text(r["shell"], loc, "defaults.run.shell", errors)
+            _audit_text(r["shell"], loc, "defaults.run.shell", policy, errors)
         else:
             _refuse_shape(loc, "defaults.run.shell", "a string", r["shell"], errors)
 
 
-def _audit_step(st: Step, loc: str, errors: list[str]) -> None:
-    """Rules (a)/(b)/(c) for one step outside the sanctioned composite."""
+def _audit_step(st: Step, loc: str, policy: StepPolicy, errors: list[str]) -> None:
+    """Rules (a)/(b)/(c)/(e)/(f)/(g) for one step outside the sanctioned composite."""
+    _refuse_unpinned_uses(st, loc, errors)
     if st.uses is not None and st.uses_folded.startswith(SCCACHE_ACTION_PREFIX.casefold()):
         errors.append(
             f"{loc} runs the raw {SCCACHE_ACTION_PREFIX}... action directly — use "
             f"{SCCACHE_COMPOSITE_USES} instead, the one place it may run"
         )
-    _refuse_env_keys(_scoped_env(st.raw, f"{loc} env", errors), loc, errors)
+    _refuse_env_keys(_scoped_env(st.raw, f"{loc} env", errors), loc, policy, errors)
     for key in ("run", "shell"):
         if key in st.raw and not isinstance(st.raw[key], str):
             _refuse_shape(loc, f"{key}:", "a string", st.raw[key], errors)
-    _refuse_wiring_text(st.run, loc, "run:", errors)
-    _refuse_wiring_text(st.shell, loc, "shell:", errors)
+    _audit_text(st.run, loc, "run:", policy, errors)
+    _audit_text(st.shell, loc, "shell:", policy, errors)
     if "with" in st.raw:
         w = st.raw["with"]
         if not isinstance(w, dict):
             _refuse_shape(loc, "with:", "a mapping", w, errors)
         else:
             for k, v in w.items():
-                _refuse_wiring_text(f"{k}: {v}", loc, f"with.{k}", errors)
+                _audit_text(f"{k}: {v}", loc, f"with.{k}", policy, errors)
 
 
 @dataclass(frozen=True)
@@ -624,8 +868,9 @@ class LocalActions:
     can point at an action this pass never read. Anything it cannot read as
     a composite is refused, never taken to not reach sccache."""
 
-    def __init__(self, root: str, errors: list[str]):
+    def __init__(self, root: str, policy: StepPolicy, errors: list[str]):
         self.root = root
+        self.policy = policy
         self.errors = errors
         self._by_id: dict[str, LocalAction | None] = {}
         self._folded: dict[str, str] = {}
@@ -700,7 +945,7 @@ class LocalActions:
         self._by_id[rel] = action
         if action is not None and rel != SCCACHE_COMPOSITE_ID:
             for st in action.steps:
-                _audit_step(st, f"{action.display}/action.yml: step {st.label!r}", self.errors)
+                _audit_step(st, f"{action.display}/action.yml: step {st.label!r}", self.policy, self.errors)
         return action
 
     def _load(self, rel: str, shown: str, loc: str) -> LocalAction | None:
@@ -778,7 +1023,7 @@ def _check_sccache_composite(actions: LocalActions, errors: list[str]) -> None:
     ./.github/actions/sccache` must get a real wrapper. Proof is equality:
     the document holds only `SCCACHE_COMPOSITE_DOC_KEYS`, `runs:` is exactly
     `{using: composite, steps: [install, wire]}`, the install step is exactly
-    `{uses: mozilla-actions/sccache-action@<ref>}`, and the wiring step equals
+    `{uses: mozilla-actions/sccache-action@<40-hex commit sha>}`, and the wiring step equals
     `SCCACHE_WIRE_STEP`. Any other shape — a condition, an extra or reordered
     step, a nested local `uses:`, an extra key — is refused.
     """
@@ -810,7 +1055,7 @@ def _check_sccache_composite(actions: LocalActions, errors: list[str]) -> None:
         and SCCACHE_INSTALL_USES_RE.match(install["uses"])
     ):
         errors.append(
-            f"{where}: step 1 must be exactly {{'uses': '{SCCACHE_ACTION_PREFIX}<ref>'}} "
+            f"{where}: step 1 must be exactly {{'uses': '{SCCACHE_ACTION_PREFIX}<40-hex commit sha>'}} "
             f"(got {install!r}); refused"
         )
     if wire != SCCACHE_WIRE_STEP:
@@ -831,7 +1076,10 @@ def _job_sub_env_scopes(job_raw: dict, loc: str, errors: list[str]) -> list[tupl
         container = job_raw["container"]
         if isinstance(container, dict):
             scopes.append(("container", container))
-        elif not isinstance(container, str):
+            _refuse_unpinned_image(container.get("image"), f"{loc} container", errors)
+        elif isinstance(container, str):
+            _refuse_unpinned_image(container, f"{loc} container", errors)
+        else:
             _refuse_shape(loc, "container:", "a mapping or image string", container, errors)
     if "services" in job_raw:
         services = job_raw["services"]
@@ -841,13 +1089,16 @@ def _job_sub_env_scopes(job_raw: dict, loc: str, errors: list[str]) -> list[tupl
             for sid, svc in services.items():
                 if isinstance(svc, dict):
                     scopes.append((f"service {sid!r}", svc))
+                    _refuse_unpinned_image(svc.get("image"), f"{loc} service {sid!r}", errors)
                 else:
                     _refuse_shape(loc, f"service {sid!r}", "a mapping", svc, errors)
     return scopes
 
 
-def check_sccache_wiring(errors: list[str], root: str = REPO_ROOT) -> None:
-    """The only sanctioned way a job gets sccache is `uses:
+def check_workflow_steps(errors: list[str], root: str = REPO_ROOT) -> None:
+    """Checks 6 and 7 over every step of every workflow and reachable local action.
+
+    The only sanctioned way a job gets sccache is `uses:
     ./.github/actions/sccache` (see `_check_sccache_composite`), so a wrapper
     never exists in a job without the binary that backs it. Refused:
       (a) a raw `mozilla-actions/sccache-action` reference (case-folded) in a
@@ -866,7 +1117,18 @@ def check_sccache_wiring(errors: list[str], root: str = REPO_ROOT) -> None:
           chain of local actions — while owning a step named in
           `ci/deterministic-checks.json` (sccache's GitHub Actions cache
           backend does network I/O); an unreadable deterministic-checks file
-          is itself refused, since the step set cannot be established.
+          is itself refused, since the step set cannot be established;
+      (e) a third-party `uses:` not pinned to a 40-hex commit SHA, a
+          `docker://` `uses:` or a job `container:`/`services:` image not
+          pinned to a sha256 digest;
+      (f) any text (every place (c) reads) naming `GITHUB_ENV`/`GITHUB_PATH`,
+          the runner's command files, `ACTIONS_ALLOW_UNSECURE_COMMANDS`, or
+          `::set-env`/`::add-path`, and any reference to `ci/github-env.sh`
+          other than its canonical call with a bare key listed in
+          `ci/github-env-allowlist.txt` (itself validated: no wiring,
+          runner, toolchain, loader, or interpreter key);
+      (g) a `pip install` other than `--require-hashes --only-binary :all:
+          -r <file>`, and any `pipx`/`easy_install`.
     Every local `uses: ./...` is resolved on disk from the repo root
     (`action.yml`, then `action.yaml`); an unresolvable, ambiguous, non-
     composite (node/docker), cyclic, or over-deep (> LOCAL_ACTION_DEPTH_LIMIT)
@@ -880,17 +1142,19 @@ def check_sccache_wiring(errors: list[str], root: str = REPO_ROOT) -> None:
 
     LIMIT — static YAML cannot see, and this check does NOT prove absent:
       - a third-party action that itself exports a wrapper into the job;
-      - a repo script invoked from `run:` (`run: tools/ci/wire.sh`) that
-        writes a wrapper or `$GITHUB_ENV`;
-      - key indirection assembled at run time (`K=WRAPPER; echo
-        "RUSTC_$K=..." >> "$GITHUB_ENV"`), or an `env:`/`with:` value whose
-        key name arrives only through `${{ }}` (`vars`, `secrets`, outputs);
+      - a repo script or interpreter snippet invoked from `run:` (`run:
+        tools/ci/wire.sh`, `python -c ...`) that writes a wrapper or the env
+        file under a name it assembles at run time, or a package manager
+        (npm, cargo, apt, docker) fetching by a movable name;
+      - an `env:`/`with:` value whose key name arrives only through `${{ }}`
+        (`vars`, `secrets`, outputs);
       - a rustc replacement outside the named keys (a `PATH` entry shadowing
         `rustc`, a `rustup` toolchain override, a linker/runner setting).
     Those are review-gated, not machine-gated.
     """
     start = len(errors)
-    actions = LocalActions(root, errors)
+    policy = StepPolicy(load_github_env_allowlist(errors, root))
+    actions = LocalActions(root, policy, errors)
     _check_sccache_composite(actions, errors)
 
     det_errors: list[str] = []
@@ -915,15 +1179,15 @@ def check_sccache_wiring(errors: list[str], root: str = REPO_ROOT) -> None:
 
     for wf in _load_sccache_workflows(root, errors):
         wloc = f"{wf.fname}: workflow-level"
-        _refuse_env_keys(_scoped_env(wf.doc, f"{wloc} env", errors), wloc, errors)
-        _audit_defaults(wf.doc, wf.fname, errors)
+        _refuse_env_keys(_scoped_env(wf.doc, f"{wloc} env", errors), wloc, policy, errors)
+        _audit_defaults(wf.doc, wf.fname, policy, errors)
         for job in wf.jobs:
             jloc = f"{wf.fname}: job {job.job_id!r}"
-            _refuse_env_keys(_scoped_env(job.raw, f"{jloc} env", errors), jloc, errors)
-            _audit_defaults(job.raw, jloc, errors)
+            _refuse_env_keys(_scoped_env(job.raw, f"{jloc} env", errors), jloc, policy, errors)
+            _audit_defaults(job.raw, jloc, policy, errors)
             for scope_name, scope_raw in _job_sub_env_scopes(job.raw, jloc, errors):
                 sloc = f"{jloc} {scope_name}"
-                _refuse_env_keys(_scoped_env(scope_raw, f"{sloc} env", errors), sloc, errors)
+                _refuse_env_keys(_scoped_env(scope_raw, f"{sloc} env", errors), sloc, policy, errors)
             if "uses" in job.raw:
                 errors.append(
                     f"{jloc}: calls a reusable workflow ({job.raw['uses']!r}) — its jobs "
@@ -934,7 +1198,7 @@ def check_sccache_wiring(errors: list[str], root: str = REPO_ROOT) -> None:
             reaches = False
             for st in steps:
                 stloc = f"{jloc} step {st.label!r}"
-                _audit_step(st, stloc, errors)
+                _audit_step(st, stloc, policy, errors)
                 action = actions.resolve(st.uses, stloc)
                 if action is not None and actions.reaches_sccache(action, stloc):
                     reaches = True
@@ -1052,8 +1316,8 @@ def main() -> int:
     # ---- 5. ci/deterministic-checks.json vs the watcher + ci.yml steps ----
     check_deterministic_set(jobs, errors)
 
-    # ---- 6. sccache wiring: action <-> RUSTC_WRAPPER/SCCACHE_GHA_ENABLED ----
-    check_sccache_wiring(errors)
+    # ---- 6+7. sccache wiring; pinned CI inputs + env-file writes ----
+    check_workflow_steps(errors)
 
     # ---- 3. fail-closed dependency surfacing ----
     def surfaced_dispositions(job: Job) -> set[str]:
