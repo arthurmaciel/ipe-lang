@@ -2044,10 +2044,10 @@ fn float_to_i64_or_default(field: &str, f: f64) -> i64 {
     if truncated > i64::MIN as f64 && truncated < 9_223_372_036_854_775_808.0 {
         truncated as i64
     } else {
-        eprintln!(
+        crate::system::write_stderr_line(&format!(
             "db: unsafeGetInt(\"{field}\"): {f} is out of range for a 64-bit integer; \
              returning 0 (default) instead of a saturated value"
-        );
+        ));
         let _ = std::io::Write::flush(&mut std::io::stderr());
         0
     }
@@ -2129,7 +2129,7 @@ pub fn db_migrate_apply<E: Send + From<String> + 'static>(
         macro_rules! db_op_fail {
             ($ctx:expr_2021, $err:expr_2021) => {{
                 if op == "migrate" {
-                    eprintln!("db: {} failed", $ctx);
+                    crate::system::write_stderr_line(&format!("db: {} failed", $ctx));
                     let _ = std::io::Write::flush(&mut std::io::stderr());
                     // IPE-RUST-AUDIT:ACCEPTED (Arthur Maciel) — `ipe db migrate` CLI-op boundary: a migration infra failure exits the process (library path returns a Task Err instead) [ledger #boundary]
                     std::process::exit(1);
@@ -2213,9 +2213,9 @@ pub fn db_migrate_apply<E: Send + From<String> + 'static>(
             }
             let _ = std::io::Write::flush(&mut std::io::stdout());
             if drift_n > 0 {
-                eprintln!(
+                crate::system::write_stderr_line(
                     "\ndb: drift detected — an applied migration's SQL was edited. \
-                     Restore its original text, or ship a new compensating migration."
+                     Restore its original text, or ship a new compensating migration.",
                 );
                 // IPE-RUST-AUDIT:ACCEPTED (Arthur Maciel) — `ipe db migrate` status-op boundary: drift detected, exit non-zero [ledger #boundary]
                 std::process::exit(1);
@@ -2233,9 +2233,9 @@ pub fn db_migrate_apply<E: Send + From<String> + 'static>(
                     // Drift: error embeds only the app-authored NAME, never the
                     // SQL body (which may carry seed-data literals) nor the hash.
                     if op == "migrate" {
-                        eprintln!(
+                        crate::system::write_stderr_line(&format!(
                             "db: migration '{name}' changed after it was applied — checksum mismatch"
-                        );
+                        ));
                         let _ = std::io::Write::flush(&mut std::io::stderr());
                         // IPE-RUST-AUDIT:ACCEPTED (Arthur Maciel) — `ipe db migrate` CLI-op boundary: applied migration changed (checksum mismatch), exit non-zero [ledger #boundary]
                         std::process::exit(1);

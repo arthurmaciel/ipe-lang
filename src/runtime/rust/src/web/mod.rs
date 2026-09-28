@@ -1729,7 +1729,7 @@ where
     // again while the drain is in progress. Spawned (not awaited).
     tokio::spawn(async {
         wait_for_term_or_int().await;
-        eprintln!("Ipe.Web: forcing exit (second signal)");
+        crate::system::write_stderr_line("Ipe.Web: forcing exit (second signal)");
         #[cfg(feature = "http_client")]
         console_proxy::shutdown_console();
         flush_exporters().await;
@@ -4660,7 +4660,7 @@ where
         }
     };
     if !proxy_active && console::gate_allows() {
-        eprintln!("{}", store::memory_store_log_line(web_ttl()));
+        store::emit_memory_store_log(web_ttl());
         crate::system::emit_runtime_log(
             "console",
             &format!(

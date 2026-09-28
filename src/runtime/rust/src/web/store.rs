@@ -10,7 +10,6 @@
 use super::SessionEntry;
 use async_trait::async_trait;
 use std::collections::HashMap;
-use std::io::IsTerminal;
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
 
@@ -606,14 +605,11 @@ fn store_refused_error(backend: &str, refused: &StoreOpenError) -> StoreConfigEr
     ))
 }
 
-/// The startup line logged when a persistent `backend` store falls back to memory.
+/// The `[ipe.live]` message logged when a persistent `backend` store falls back
+/// to memory.
 #[cfg(any(feature = "db", feature = "redis_store"))]
-fn store_unavailable_log_line(backend: &str, refused: &StoreOpenError) -> String {
-    let msg = crate::system::format_runtime_log(
-        "live",
-        &format!("{backend} store unavailable ({refused}); falling back to memory"),
-    );
-    crate::system::gutter_line(&msg, std::io::stderr().is_terminal())
+fn store_unavailable_message(backend: &str, refused: &StoreOpenError) -> String {
+    format!("{backend} store unavailable ({refused}); falling back to memory")
 }
 
 // ─── SQLite store — persistent model checkpoint + live mem-cache ─────────────
@@ -1318,7 +1314,9 @@ where
                 return Ok(Arc::new(s));
             }
             Err(e) if e.is_policy_refusal() => return Err(store_refused_error("sqlite", &e)),
-            Err(e) => eprintln!("{}", store_unavailable_log_line("sqlite", &e)),
+            Err(e) => {
+                crate::system::emit_runtime_log("live", &store_unavailable_message("sqlite", &e));
+            }
         },
         #[cfg(feature = "db")]
         StoreBackend::Postgres => match PostgresStore::new(path, ttl, schema_tag).await {
@@ -1327,7 +1325,9 @@ where
                 return Ok(Arc::new(s));
             }
             Err(e) if e.is_policy_refusal() => return Err(store_refused_error("postgres", &e)),
-            Err(e) => eprintln!("{}", store_unavailable_log_line("postgres", &e)),
+            Err(e) => {
+                crate::system::emit_runtime_log("live", &store_unavailable_message("postgres", &e));
+            }
         },
         #[cfg(feature = "redis_store")]
         StoreBackend::Redis => match RedisStore::new(path, ttl, schema_tag).await {
@@ -1335,7 +1335,9 @@ where
                 crate::system::emit_runtime_log("live", "session store: redis");
                 return Ok(Arc::new(s));
             }
-            Err(e) => eprintln!("{}", store_unavailable_log_line("redis", &e)),
+            Err(e) => {
+                crate::system::emit_runtime_log("live", &store_unavailable_message("redis", &e));
+            }
         },
         #[cfg(feature = "web")]
         StoreBackend::File => {
@@ -1351,26 +1353,24 @@ where
     let _ = (path, schema_tag);
     // Memory store logs with a timestamp + human-readable TTL duration;
     // persistent backends log bare lines above (no duration needed).
-    eprintln!("{}", memory_store_log_line(ttl));
+    emit_memory_store_log(ttl);
     Ok(Arc::new(MemoryStore::new(ttl)))
 }
 
-/// Produces the `[ipe.live] session store: memory (ttl=…)` startup log line,
-/// with a `YYYY/MM/DD HH:MM:SS` timestamp prefix and a human-readable TTL.
-/// Shared so the in-process console sub-app mount emits the same line format.
-///
-/// Terminal-gutters the whole line (timestamp included) through
-/// [`crate::system::gutter_line`] here, once, rather than at each of this
-/// function's two call sites — the same SSOT reason the sibling backend-
-/// confirmation lines in [`choose_store`] gutter inline: one indent rule, one
-/// place it is applied.
-pub(crate) fn memory_store_log_line(ttl: Duration) -> String {
-    let tagged = crate::system::format_runtime_log(
+/// The `session store: memory (ttl=…)` message with a human-readable TTL.
+fn memory_store_message(ttl: Duration) -> String {
+    format!("session store: memory (ttl={})", go_duration_string(ttl))
+}
+
+/// Emit the `YYYY/MM/DD HH:MM:SS [ipe.live] session store: memory (ttl=…)`
+/// startup line. Shared so the in-process console sub-app mount emits the same
+/// line format.
+pub(crate) fn emit_memory_store_log(ttl: Duration) {
+    crate::system::emit_runtime_log_stamped(
+        &go_log_timestamp(),
         "live",
-        &format!("session store: memory (ttl={})", go_duration_string(ttl)),
+        &memory_store_message(ttl),
     );
-    let msg = format!("{} {tagged}", go_log_timestamp());
-    crate::system::gutter_line(&msg, std::io::stderr().is_terminal())
 }
 
 /// Render the current local time as `YYYY/MM/DD HH:MM:SS`.
@@ -1400,7 +1400,7 @@ fn go_duration_string(d: Duration) -> String {
 
 #[cfg(test)]
 mod format_tests {
-    use super::{go_duration_string, memory_store_log_line};
+    use super::{go_duration_string, go_log_timestamp, memory_store_message};
     use std::time::Duration;
 
     #[test]
@@ -1416,7 +1416,12 @@ mod format_tests {
 
     #[test]
     fn memory_line_shape() {
-        let line = memory_store_log_line(Duration::from_secs(3600));
+        let line = crate::system::runtime_log_line(
+            Some(&go_log_timestamp()),
+            "live",
+            &memory_store_message(Duration::from_secs(3600)),
+        );
+        let line = line.trim_start();
         assert!(
             line.ends_with("[ipe.live] session store: memory (ttl=1h0m0s)"),
             "got {line:?}"
@@ -1502,7 +1507,7 @@ mod tests {
     #[cfg(any(feature = "db", feature = "redis_store"))]
     fn assert_store_refusal_credential_free(backend: &str, refused: &StoreOpenError) {
         for rendered in [
-            store_unavailable_log_line(backend, refused),
+            store_unavailable_message(backend, refused),
             format!("{refused:?}"),
         ] {
             assert!(

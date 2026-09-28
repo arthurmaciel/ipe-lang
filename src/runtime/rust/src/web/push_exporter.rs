@@ -83,8 +83,9 @@ pub async fn enable_from_env() {
         crate::system::emit_runtime_log(
             "push",
             &format!(
-                "refusing to push ingest token over non-https {PARENT_ENV}={parent}; \
-                 use https:// (or a localhost loopback); exporter disabled"
+                "refusing to push ingest token over non-https {PARENT_ENV}={}; \
+                 use https:// (or a localhost loopback); exporter disabled",
+                redacted_origin(&parent)
             ),
         );
         return;
@@ -101,9 +102,9 @@ pub async fn enable_from_env() {
 /// unconditionally, or `http://` only when the host is EXACTLY a loopback
 /// name/address. PARSE the URL rather than string-prefix-matching it — a
 /// prefix check on `"http://localhost"` also matches
-/// `"http://localhost.evil.com"`. Mirrors `hub_exporter::enable_from_env`'s
-/// inline gate as a standalone, directly-testable predicate.
-fn url_allows_cleartext_token(url: &str) -> bool {
+/// `"http://localhost.evil.com"`. The one gate both exporters (this and
+/// `hub_exporter`) apply before carrying a token.
+pub(crate) fn url_allows_cleartext_token(url: &str) -> bool {
     match reqwest::Url::parse(url) {
         Ok(u) => {
             u.scheme() == "https"
@@ -114,6 +115,23 @@ fn url_allows_cleartext_token(url: &str) -> bool {
                     ))
         }
         Err(_) => false,
+    }
+}
+
+/// The log-safe form of an exporter URL: `scheme://host[:port]` only. Userinfo
+/// (`https://user:pass@host`), path, query and fragment may carry credentials
+/// or tokens, so none of them ever reaches a log line; an unparseable or
+/// host-less value renders as a fixed placeholder, never the raw text.
+pub(crate) fn redacted_origin(url: &str) -> String {
+    let Ok(parsed) = reqwest::Url::parse(url.trim()) else {
+        return "<unparseable url>".to_string();
+    };
+    let Some(host) = parsed.host_str() else {
+        return "<url without host>".to_string();
+    };
+    match parsed.port() {
+        Some(port) => format!("{}://{host}:{port}", parsed.scheme()),
+        None => format!("{}://{host}", parsed.scheme()),
     }
 }
 
@@ -150,7 +168,10 @@ fn enable(label: &str, ingest_url: String, interval_ms: u64) {
     }
     crate::system::emit_runtime_log(
         "push",
-        &format!("{label} push → {ingest_url} every {interval_ms}ms"),
+        &format!(
+            "{label} push → {} every {interval_ms}ms",
+            redacted_origin(&ingest_url)
+        ),
     );
     tokio::spawn(batcher(rx, ingest_url, token, interval_ms));
 }
@@ -285,7 +306,14 @@ async fn flush(client: &reqwest::Client, ingest_url: &str, token: Option<&str>, 
         req = req.header("x-ipe-ingest-token", t);
     }
     if let Err(e) = req.send().await {
-        crate::system::emit_runtime_log("push", &format!("flush to {ingest_url}: {e}"));
+        crate::system::emit_runtime_log(
+            "push",
+            &format!(
+                "flush to {}: {}",
+                redacted_origin(ingest_url),
+                e.without_url()
+            ),
+        );
     }
 }
 
@@ -320,6 +348,37 @@ mod tests {
     fn offer_without_enable_is_noop() {
         offer_log(0, "info", "ignored");
         offer_span(0, "noop", 0, true);
+    }
+
+    // ── redacted_origin — no credential reaches a log line ──────────────────
+
+    #[test]
+    fn redacted_origin_drops_userinfo_path_and_query() {
+        assert_eq!(
+            redacted_origin("https://admin:s3cr3t@hub.example.com:8443/v1/logs?token=t0k#f"),
+            "https://hub.example.com:8443"
+        );
+        assert_eq!(
+            redacted_origin(" https://user@hub.example.com/x "),
+            "https://hub.example.com"
+        );
+        assert_eq!(
+            redacted_origin("http://u:p@[::1]:9000/"),
+            "http://[::1]:9000"
+        );
+    }
+
+    #[test]
+    fn redacted_origin_never_echoes_unparseable_input() {
+        for raw in [
+            "not a url s3cr3t",
+            "",
+            "https://u:s3cr3t@",
+            "mailto:s3cr3t@x.example",
+        ] {
+            let out = redacted_origin(raw);
+            assert!(!out.contains("s3cr3t"), "leaked {raw:?} as {out:?}");
+        }
     }
 
     // ── url_allows_cleartext_token — the secrets-in-transit gate ────────────

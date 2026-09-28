@@ -34,24 +34,19 @@ pub fn decode_form<T: serde::de::DeserializeOwned>(fd: FormData) -> Result<T, St
 
 /// `decode_form` + a warn on failure. The `OnForm` closure is synchronous and
 /// returns `Option<M>`, so a decode failure must surface here (not via the
-/// async logger) — we `eprintln!` a warn line (same plain style as the runtime
-/// logger's error path) and return `None` so the live loop dispatches no Msg.
+/// async logger) — it logs a `[ipe.live]` warn line (the emitter scrubs control
+/// characters) and returns `None` so the live loop dispatches no Msg.
 /// The codegen-emitted `onSubmit` closure calls this.
 #[must_use]
 pub fn decode_form_or_warn<T: serde::de::DeserializeOwned>(fd: FormData) -> Option<T> {
     match decode_form::<T>(fd) {
         Ok(t) => Some(t),
         Err(e) => {
-            // `e` is a serde error that embeds the attacker-supplied form value
-            // (e.g. "unknown variant `<value>`" for an enum field). Escape it
-            // before logging so embedded CR/LF/control bytes can't forge log
-            // lines or inject terminal output.
+            // `e` embeds the attacker-supplied form value (e.g. "unknown
+            // variant `<value>`"); the emitter neutralises its control bytes.
             crate::system::emit_runtime_log(
                 "live",
-                &format!(
-                    "form decode failed, dispatching no Msg: {}",
-                    crate::telemetry::json_escape(&e)
-                ),
+                &format!("form decode failed, dispatching no Msg: {e}"),
             );
             None
         }

@@ -120,30 +120,17 @@ fn log_foreign_kind(kind: &str, err_id: &str, detail: &str) {
     let json =
         crate::system::read_env_var("IPE_LOG_FORMAT").is_ok_and(|v| v.eq_ignore_ascii_case("json"));
     if json {
-        eprintln!(
+        crate::system::write_stderr_line(&format!(
             "{{\"level\":\"error\",\"kind\":\"{kind}\",\"errId\":\"{}\",\"message\":\"{}\"}}",
             err_id,
             crate::telemetry::json_escape(detail)
-        );
+        ));
     } else {
-        eprintln!(
+        crate::system::write_stderr_line(&format!(
             "[error] {kind} (ref {err_id}): {}",
-            scrub_log_controls(detail)
-        );
+            crate::system::scrub_log_controls(detail)
+        ));
     }
-}
-
-/// Replace every control character (CR/LF, ESC, other C0/C1) with a space so an
-/// attacker-influenced foreign-error `Debug` or panic payload cannot inject forged
-/// log records (CR/LF) or terminal escape sequences into the plain-format server
-/// log. The JSON branches already route through `telemetry::json_escape`; this is
-/// the plain-branch counterpart, shared by `log_foreign_error` and
-/// `classify_and_log_panic`, plus `Trace.attr`/`event`/`span` output. Total — no
-/// unwrap/index/panic.
-pub(crate) fn scrub_log_controls(s: &str) -> String {
-    s.chars()
-        .map(|c| if c.is_control() { ' ' } else { c })
-        .collect()
 }
 
 /// Bake a config-derived default for an env var: set `key=val` ONLY when the
@@ -1189,17 +1176,17 @@ pub fn classify_and_log_panic(payload: &(dyn std::any::Any + Send)) -> String {
     let json =
         crate::system::read_env_var("IPE_LOG_FORMAT").is_ok_and(|v| v.eq_ignore_ascii_case("json"));
     if json {
-        eprintln!(
+        crate::system::write_stderr_line(&format!(
             "{{\"level\":\"error\",\"kind\":\"{}\",\"errId\":\"{}\",\"message\":\"{}\"}}",
             kind,
             err_id,
             crate::telemetry::json_escape(&msg)
-        );
+        ));
     } else {
-        eprintln!(
+        crate::system::write_stderr_line(&format!(
             "[error] {kind} (ref {err_id}): {}",
-            scrub_log_controls(&msg)
-        );
+            crate::system::scrub_log_controls(&msg)
+        ));
     }
     err_id
 }

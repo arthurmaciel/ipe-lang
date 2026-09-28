@@ -215,11 +215,12 @@ fn install_entrypoints_agree_on_the_root_installer() {
 
 /// `run_installer` sets `IPE_UPGRADE_WRAPPED=1` so `install.sh` knows it was
 /// launched by `ipe upgrade` itself (never a direct `curl | sh`) and can hand the
-/// resolved tag back over stdout instead of printing its own now-redundant
-/// "no prebuilt binary" banner. The env var name is hand-mirrored as a shell
-/// literal in `install.sh` and as the Rust `UPGRADE_WRAPPED_ENV` constant —
-/// assert they agree so a rename on either side fails CI instead of silently
-/// breaking the wrapped-mode handshake.
+/// resolved tag back through the file named by `IPE_UPGRADE_TAG_FILE` instead of
+/// printing its own now-redundant "no prebuilt binary" banner. Both env var names
+/// are hand-mirrored as shell literals in `install.sh` and as the Rust
+/// `UPGRADE_WRAPPED_ENV` / `UPGRADE_TAG_FILE_ENV` constants — assert they agree
+/// so a rename on either side fails CI instead of silently breaking the
+/// wrapped-mode handshake.
 #[test]
 fn installer_mirrors_the_upgrade_wrapped_env_name() {
     let script = install_script();
@@ -229,5 +230,11 @@ fn installer_mirrors_the_upgrade_wrapped_env_name() {
         script.contains(env_name),
         "install.sh must read the same wrapped-mode env var name as \
          ipe::UPGRADE_WRAPPED_ENV (`{env_name}`); it was not found in the script"
+    );
+    let tag_file_env = ipe::UPGRADE_TAG_FILE_ENV;
+    assert!(
+        script.contains(&format!("${{{tag_file_env}:-}}")),
+        "install.sh must read the same tag-file env var name as \
+         ipe::UPGRADE_TAG_FILE_ENV (`{tag_file_env}`); it was not found in the script"
     );
 }

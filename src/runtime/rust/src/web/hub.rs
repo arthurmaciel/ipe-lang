@@ -926,15 +926,6 @@ where
     }
 }
 
-/// Replace ASCII control characters (notably CR/LF) with spaces so a
-/// Ipê-controlled value interpolated into a diagnostic line can't forge
-/// additional log entries (log injection). Total — never panics.
-fn sanitize_log(s: &str) -> String {
-    s.chars()
-        .map(|c| if c.is_control() { ' ' } else { c })
-        .collect()
-}
-
 /// Open the telemetry spill read-only. `None` (never an error) when the path is
 /// empty or the file can't be opened — callers map that to an empty result so a
 /// fresh/absent DB renders as "no telemetry yet" — a graceful empty result.
@@ -962,16 +953,7 @@ async fn open_spill(db_path: &str) -> Option<SqlitePool> {
     match SqlitePool::connect_with(opts).await {
         Ok(pool) => Some(pool),
         Err(e) => {
-            // `db_path` is Ipê-controlled (and the error may echo it); strip
-            // control chars so neither can forge extra log lines.
-            crate::system::emit_runtime_log(
-                "hub",
-                &format!(
-                    "open_spill {}: {}",
-                    sanitize_log(db_path),
-                    sanitize_log(&e.to_string())
-                ),
-            );
+            crate::system::emit_runtime_log("hub", &format!("open_spill {db_path}: {e}"));
             None
         }
     }

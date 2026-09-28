@@ -11,6 +11,7 @@ REPO="arthurmaciel/ipe-lang"
 INSTALL_DIR="${IPE_INSTALL_DIR:-$HOME/.local/bin}"
 # Set only by `ipe upgrade`'s own wrapper — see die_no_prebuilt below.
 WRAPPED="${IPE_UPGRADE_WRAPPED:-0}"
+TAG_FILE="${IPE_UPGRADE_TAG_FILE:-}"
 
 # ── Palette ──────────────────────────────────────────────────────────────────
 # Mirror the CLI (style.rs): a soft Ipê-amarelo (256-colour 222) for the banner,
@@ -119,14 +120,13 @@ die() {
 # IPE_UPGRADE_WRAPPED=1 marks a run launched BY `ipe upgrade` (never set by a
 # direct `curl | sh`): that wrapper renders its own single failure message
 # using the real resolved tag, so this function skips its own stderr banner
-# (the wrapper would otherwise show that banner AND its own message, and its
-# own message used to fall back to the running binary's version rather than
-# the tag actually probed here) and instead hands the tag back over stdout,
-# the one channel this script never otherwise writes to.
+# and instead writes the tag into the private file the wrapper named in
+# IPE_UPGRADE_TAG_FILE. Without that file (or when the write fails) the banner
+# below is shown as for a direct run.
 die_no_prebuilt() {
   _tag="$1"; _plat="$2"; _cpu="$3"
-  if [ "$WRAPPED" = 1 ]; then
-    printf '%s\n' "$_tag"
+  if [ "$WRAPPED" = 1 ] && [ -n "$TAG_FILE" ] \
+    && printf '%s\n' "$_tag" 2>/dev/null >"$TAG_FILE"; then
     exit 2
   fi
   printf '\n  %s%s%s No prebuilt binary for %s on %s-%s.\n' \

@@ -76,30 +76,81 @@ pub(crate) fn gutter_line(msg: &str, is_terminal: bool) -> String {
     }
 }
 
-/// Build the `"[ipe.<tag>] <msg>"` prefix. `pub(crate)` ONLY for the one caller
-/// that cannot use `emit_runtime_log` directly (`store::memory_store_log_line`,
-/// which must splice a timestamp BEFORE the tag); every other call site uses
-/// `emit_runtime_log`, so this is still the sole place the literal `"[ipe."`
-/// prefix is constructed.
-pub(crate) fn format_runtime_log(tag: &str, msg: &str) -> String {
-    format!("[ipe.{tag}] {msg}")
+/// Neutralise every control character (C0 incl. CR/LF/ESC, DEL, C1) in text
+/// bound for an operator log line by escaping it — `\n`, `\r`, `\t`, else
+/// `\u{XX}` — so untrusted
+/// input (a driver error, a request path, an env-derived path, a trace value)
+/// can neither forge extra records nor inject terminal escape sequences, and
+/// the escape stays visible rather than silently erased. The single log
+/// scrubber: every plain-text log sink routes untrusted text through it. Not a
+/// JSON escaper — JSON records keep `telemetry::json_escape`.
+pub(crate) fn scrub_log_controls(s: &str) -> std::borrow::Cow<'_, str> {
+    use std::fmt::Write as _;
+    if !s.chars().any(char::is_control) {
+        return std::borrow::Cow::Borrowed(s);
+    }
+    let mut out = String::with_capacity(s.len().saturating_add(16));
+    for c in s.chars() {
+        match c {
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if c.is_control() => {
+                let _ = write!(out, "\\u{{{:x}}}", u32::from(c));
+            }
+            c => out.push(c),
+        }
+    }
+    std::borrow::Cow::Owned(out)
+}
+
+/// Write one line to stderr fallibly, dropping the error: `eprintln!` panics
+/// when the write fails, and because Rust ignores SIGPIPE a hung-up reader
+/// (`app 2>&1 | head`) surfaces as `EPIPE`. The single runtime stderr line
+/// sink — `log.rs`, `debug.rs`, the tagged emitter below and every other
+/// runtime diagnostic line route through it, so no stderr write can abort.
+pub(crate) fn write_stderr_line(line: &str) {
+    use std::io::Write as _;
+    let _ = writeln!(std::io::stderr().lock(), "{line}");
+}
+
+/// Build a `"[<stamp> ][ipe.<tag>] <msg>"` line with `msg` scrubbed. Private:
+/// the only place the literal `"[ipe."` prefix is constructed; call sites use
+/// `emit_runtime_log` / `emit_runtime_log_stamped`.
+fn format_runtime_log(stamp: Option<&str>, tag: &str, msg: &str) -> String {
+    let msg = scrub_log_controls(msg);
+    match stamp {
+        Some(stamp) => format!("{stamp} [ipe.{tag}] {msg}"),
+        None => format!("[ipe.{tag}] {msg}"),
+    }
+}
+
+/// The fully rendered (scrubbed, terminal-guttered) form of a tagged runtime
+/// log line — exactly what the emitters write.
+pub(crate) fn runtime_log_line(stamp: Option<&str>, tag: &str, msg: &str) -> String {
+    use std::io::IsTerminal;
+    gutter_line(
+        &format_runtime_log(stamp, tag, msg),
+        std::io::stderr().is_terminal(),
+    )
 }
 
 /// The single emitter for every `[ipe.<tag>] ...` runtime log line — session
 /// stores, live sessions, the console proxy, hub/push exporters, telemetry
 /// spill, list/cache/webview warnings, and any future one. Every such site
 /// routes through here instead of hand-rolling `eprintln!("[ipe.<tag>] ...")`,
-/// so `gutter_line`'s human-terminal indent applies uniformly with no bypass
-/// path. Pinned by the source scan in `runtime_log_emitter_tests` below.
+/// so the control-character scrub, `gutter_line`'s human-terminal indent and the
+/// broken-pipe-tolerant write apply uniformly with no bypass path. Pinned by the
+/// source scan in `runtime_log_emitter_tests` below.
 pub(crate) fn emit_runtime_log(tag: &str, msg: &str) {
-    use std::io::IsTerminal;
-    eprintln!(
-        "{}",
-        gutter_line(
-            &format_runtime_log(tag, msg),
-            std::io::stderr().is_terminal()
-        )
-    );
+    write_stderr_line(&runtime_log_line(None, tag, msg));
+}
+
+/// `emit_runtime_log` for a line that carries a leading timestamp before its
+/// tag (the memory session-store startup line).
+#[cfg(all(feature = "web-core", feature = "server"))]
+pub(crate) fn emit_runtime_log_stamped(stamp: &str, tag: &str, msg: &str) {
+    write_stderr_line(&runtime_log_line(Some(stamp), tag, msg));
 }
 
 /// Resolve the port an HTTP listener binds: `env_value` (as injected by
@@ -1239,17 +1290,54 @@ mod runtime_log_emitter_tests {
     /// into an unrelated later macro call.
     fn has_hand_rolled_tag(content: &str) -> bool {
         for macro_name in ["eprintln!", "println!", "writeln!"] {
-            let mut search_from = 0;
-            while let Some(rel) = content[search_from..].find(macro_name) {
-                let start = search_from + rel;
-                let end = (start + 400).min(content.len());
-                if content[start..end].contains("\"[ipe.") {
+            let mut rest = content;
+            while let Some(rel) = rest.find(macro_name) {
+                let tail = rest.get(rel..).unwrap_or_default();
+                let window_end = tail.char_indices().nth(400).map_or(tail.len(), |(i, _)| i);
+                if tail
+                    .get(..window_end)
+                    .unwrap_or_default()
+                    .contains("\"[ipe.")
+                {
                     return true;
                 }
-                search_from = start + macro_name.len();
+                rest = tail.get(macro_name.len()..).unwrap_or_default();
             }
         }
         false
+    }
+
+    #[test]
+    fn tag_scan_window_is_char_boundary_safe() {
+        let multibyte = "\u{e9}".repeat(500);
+        assert!(!has_hand_rolled_tag(&format!("eprintln!({multibyte})")));
+        assert!(has_hand_rolled_tag(&format!(
+            "\u{e9}eprintln!(\"[ipe.x] {multibyte}\")"
+        )));
+    }
+
+    /// `eprintln!`/`eprint!` panic on a failed write (EPIPE); every runtime
+    /// stderr line goes through `system::write_stderr_line` instead.
+    #[test]
+    fn no_runtime_module_uses_a_panicking_stderr_macro() {
+        let src_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut files = Vec::new();
+        collect_rs_files(&src_dir, &mut files);
+        let violations: Vec<String> = files
+            .iter()
+            .filter(|path| {
+                let content = std::fs::read_to_string(path)
+                    .unwrap_or_else(|e| panic!("could not read {}: {e}", path.display()));
+                content.contains("eprintln!(") || content.contains("eprint!(")
+            })
+            .map(|path| path.display().to_string())
+            .collect();
+        assert!(
+            violations.is_empty(),
+            "`eprintln!`/`eprint!` panics on a broken pipe — use \
+             `crate::system::write_stderr_line` (or `emit_runtime_log`) instead:\n{}",
+            violations.join("\n")
+        );
     }
 
     #[test]
@@ -1276,9 +1364,45 @@ mod runtime_log_emitter_tests {
             violations.is_empty(),
             "found `eprintln!`/`println!`/`writeln!` hand-rolling an `[ipe.<tag>]` \
              prefix outside system.rs — route through `crate::system::emit_runtime_log` \
-             (or, for the one timestamp-prefixed exception, `crate::system::format_runtime_log` \
-             + `crate::system::gutter_line`) instead:\n{}",
+             (or `crate::system::emit_runtime_log_stamped` for a timestamped line) instead:\n{}",
             violations.join("\n")
+        );
+    }
+}
+
+#[cfg(test)]
+mod scrub_log_controls_tests {
+    use super::{runtime_log_line, scrub_log_controls};
+
+    #[test]
+    fn escapes_newline_esc_del_and_c1() {
+        let out = scrub_log_controls("a\nb\r\x1b[2J\x7f\u{9b}\u{85}\0c\td");
+        assert_eq!(out, "a\\nb\\r\\u{1b}[2J\\u{7f}\\u{9b}\\u{85}\\u{0}c\\td");
+        assert!(
+            !out.chars().any(char::is_control),
+            "control survived: {out:?}"
+        );
+    }
+
+    #[test]
+    fn clean_text_is_borrowed_unchanged() {
+        let out = scrub_log_controls("GET /caf\u{e9} 200 3ms");
+        assert!(matches!(
+            out,
+            std::borrow::Cow::Borrowed("GET /caf\u{e9} 200 3ms")
+        ));
+    }
+
+    #[test]
+    fn emitted_line_cannot_forge_a_second_record() {
+        let line = runtime_log_line(None, "http", "GET /x\r\n[ipe.http] forged\x1b[31m");
+        assert!(
+            !line.chars().any(char::is_control),
+            "control survived: {line:?}"
+        );
+        assert_eq!(
+            line.trim_start(),
+            "[ipe.http] GET /x\\r\\n[ipe.http] forged\\u{1b}[31m"
         );
     }
 }
