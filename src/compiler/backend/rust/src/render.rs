@@ -2104,23 +2104,27 @@ fn body_block_wraps(
         {
             return innermost_args_width(elems, o, o.saturating_add(e)) <= FN_CALL_WIDTH;
         }
-        return arm_block_trial(cfg, indent, start_col, out, |out| {
+        // An argument text whose flat form breaks — a block argument — has no
+        // single-line width to fit, so the body is not brace-wrapped: `rustfmt`
+        // moves a body onto its own line only when it lays out single-line there.
+        return arm_block_trial(cfg, indent, start_col, out, |out, mark| {
             let c = current_col(out);
             render_at(open, cfg, indent + 4, c, true, out);
             let open_end = current_col(out);
             render_flat_elems(elems, cfg, indent + 4, out);
             let elems_end = current_col(out);
-            innermost_args_width(elems, open_end, elems_end) <= FN_CALL_WIDTH
+            !mark.line(out).contains('\n')
+                && innermost_args_width(elems, open_end, elems_end) <= FN_CALL_WIDTH
         });
     }
-    arm_block_trial(cfg, indent, start_col, out, |out| {
+    arm_block_trial(cfg, indent, start_col, out, |out, _| {
         let c = current_col(out);
         fits_single_line(body, cfg.no_reserve(), c, indent + 4, out)
     })
 }
 
 /// Trial the brace-wrapped arm layout: open the arm block, then run `measure` on
-/// the body's first line inside it.
+/// the body's first line inside it, given the mark of where that line starts.
 ///
 /// The block opens with a newline, so the stop mark is set only after it: a
 /// first-line trial begun before the break would already hold its line and lay
@@ -2130,11 +2134,11 @@ fn arm_block_trial<T>(
     indent: usize,
     start_col: usize,
     out: &mut String,
-    measure: impl FnOnce(&mut String) -> T,
+    measure: impl FnOnce(&mut String, Mark) -> T,
 ) -> T {
     trial(out, TrialReach::Whole, |out, _| {
         open_arm_block(cfg, indent, start_col, out);
-        with_stop(out, TrialReach::FirstLine, |out, _| measure(out))
+        with_stop(out, TrialReach::FirstLine, measure)
     })
 }
 
@@ -3330,7 +3334,9 @@ static EMPTY_LEAF: Doc = Doc::Text(std::borrow::Cow::Borrowed(""));
 fn flat_leaf_len(doc: &Doc) -> usize {
     let mut s = String::new();
     let cfg = RenderConfig::default();
-    render_at(doc, cfg, 0, 0, true, &mut s);
+    with_stop(&mut s, TrialReach::Whole, |s, _| {
+        render_at(doc, cfg, 0, 0, true, s);
+    });
     s.len()
 }
 
@@ -4942,12 +4948,18 @@ mod p0_tests {
     #[test]
     fn plain_fallback_is_deterministic() {
         on_main_thread_stack(|| {
+            const SMALL_FUEL: usize = 1 << 10;
             let doc = nest(NESTS[5].1, 256);
             let copy = doc.clone();
-            assert!(layout_work(&doc).1, "the mixed nest must exhaust the fuel");
-            let out = render(&doc, RenderConfig::default());
-            assert_eq!(out, render(&copy, RenderConfig::default()));
-            assert_eq!(out, render(&doc, RenderConfig::default()));
+            assert!(
+                layout_work_within(&doc, SMALL_FUEL).1,
+                "the mixed nest must exhaust a small fuel"
+            );
+            let within = |doc: &Doc| render_within(doc, RenderConfig::default(), 0, 0, SMALL_FUEL);
+            let out = within(&doc);
+            assert_eq!(out, doc.plain_layout(), "the render must fall back");
+            assert_eq!(out, within(&copy));
+            assert_eq!(out, within(&doc));
             assert_eq!(doc.plain_layout(), copy.plain_layout());
             assert_eq!(tokens(&out), tokens(&seal_leaves(&doc)));
         });
@@ -4960,6 +4972,41 @@ mod p0_tests {
                 "{name}"
             );
         }
+    }
+
+    /// The refusal: the fuel ceiling stays reachable. Every byte a render outputs
+    /// is charged, so its spend covers its output, and a document that costs more
+    /// than its fuel — or whose output alone is its fuel — falls back to the plain
+    /// layout instead of finishing.
+    #[test]
+    fn fuel_ceiling_still_falls_back() {
+        on_main_thread_stack(|| {
+            let mut docs: Vec<(&str, Doc)> = NESTS
+                .iter()
+                .map(|&(name, step)| (name, nest(step, 32)))
+                .collect();
+            docs.push(("else_if", else_if_chain(32)));
+            for (name, doc) in docs {
+                let full = render_stats(&doc, LAYOUT_FUEL, MEMO_BYTE_CEILING);
+                assert!(!full.exhausted, "{name}: the full fuel must finish");
+                assert!(
+                    full.spent >= full.out.len(),
+                    "{name}: spent {} under an output of {} bytes",
+                    full.spent,
+                    full.out.len()
+                );
+                for fuel in [full.spent, full.out.len()] {
+                    let out = render_within(&doc, RenderConfig::default(), 0, 0, fuel);
+                    assert_eq!(
+                        out,
+                        doc.plain_layout(),
+                        "{name}: fuel {fuel} (spent {}, output {}) must fall back",
+                        full.spent,
+                        full.out.len()
+                    );
+                }
+            }
+        });
     }
 
     /// Run `f` on a thread with the 8 MiB stack the `ipe` binary's main thread
