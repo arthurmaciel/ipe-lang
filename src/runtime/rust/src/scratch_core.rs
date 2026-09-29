@@ -1316,7 +1316,7 @@ impl ScratchDir {
     /// carrying [`NamesExhausted`] when every fresh name collided; any other I/O
     /// error.
     pub fn new_under(base: &Path, label: &str) -> io::Result<Self> {
-        Self::new_under_with(base, label, |path, _| verify_private_dir(path))
+        Self::new_under_with(base, label, |path, ()| verify_private_dir(path))
     }
 
     /// [`ScratchDir::new_under`] with the directory verification supplied, so a refusal can be driven in tests.
