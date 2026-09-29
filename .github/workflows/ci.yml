@@ -48,10 +48,14 @@ on:
   push:
     branches: [main]
   pull_request:
+  # The merge queue's run on the combined tree. It takes the PR tier (every
+  # `!= 'pull_request'` full-tier test below also excludes `merge_group`); the
+  # push to main that follows the queue merge runs the full tier.
+  merge_group:
   # The nightly heavy sweep is dispatched by nightly-full-gate.yml (a single
   # scheduled entry point the rerun-failed-once orchestration can watch). A dispatch is
-  # not a pull_request, so the heavy `if: github.event_name != 'pull_request'`
-  # jobs run under it.
+  # neither a pull_request nor a merge_group, so the heavy full-tier jobs run
+  # under it.
   workflow_dispatch: {}
 
 # Least-privilege GITHUB_TOKEN, set at the top so it also caps the token a fork
@@ -109,8 +113,9 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          # The tested merge commit and its base parent, for the release-only diff.
-          fetch-depth: 2
+          # The tested merge commit and its base parent, for the release-only diff;
+          # a merge-group run needs history back to the queue base for the filter.
+          fetch-depth: ${{ github.event_name == 'merge_group' && '0' || '2' }}
       # `release_only` — true only for a same-repo PR whose changed files are all
       # release-please version metadata (see .github/ci/release_only.py). Keyed on
       # the diff, never the branch name, so no PR can opt itself out of a tier.
@@ -127,6 +132,9 @@ jobs:
       - uses: dorny/paths-filter@v3
         id: filter
         with:
+          # A merge-group run diffs against the queue base, not the default branch
+          # (the input is ignored on pull_request and empty elsewhere).
+          base: ${{ github.event.merge_group.base_sha }}
           filters: |
             wasm:
               - 'src/runtime/**'
@@ -217,7 +225,7 @@ jobs:
     needs: changes
     # Change-gated: a docs-only PR (no code path in the `code` filter) skips
     # clippy; it always runs on push/nightly.
-    if: needs.changes.outputs.code == 'true' || github.event_name != 'pull_request'
+    if: needs.changes.outputs.code == 'true' || (github.event_name != 'pull_request' && github.event_name != 'merge_group')
     steps:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/rust-toolchain-pinned
@@ -243,7 +251,7 @@ jobs:
   windows-check:
     runs-on: windows-latest
     needs: changes
-    if: needs.changes.outputs.code == 'true' || github.event_name != 'pull_request'
+    if: needs.changes.outputs.code == 'true' || (github.event_name != 'pull_request' && github.event_name != 'merge_group')
     steps:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/rust-toolchain-pinned
@@ -271,7 +279,7 @@ jobs:
     needs: changes
     # Change-gated like clippy: a PR that touches no code path skips it; it
     # always runs on push/nightly.
-    if: needs.changes.outputs.code == 'true' || github.event_name != 'pull_request'
+    if: needs.changes.outputs.code == 'true' || (github.event_name != 'pull_request' && github.event_name != 'merge_group')
     steps:
       - uses: actions/checkout@v7
       # ripgrep — tools/scripts/lint-diagnostic-tone.sh requires it (fails
@@ -301,7 +309,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: [changes, quick-check]
     # Change-gated: runs on a PR that touches src/**, plus nightly.
-    if: needs.changes.outputs.code == 'true' || github.event_name != 'pull_request'
+    if: needs.changes.outputs.code == 'true' || (github.event_name != 'pull_request' && github.event_name != 'merge_group')
     env:
       RUSTFLAGS: -C link-arg=-fuse-ld=mold
       IPE_RUNTIME_DIR: ${{ github.workspace }}/src/runtime/rust/src
@@ -329,7 +337,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: [changes, quick-check]
     # Change-gated: runs on a PR that touches src/**, plus nightly.
-    if: needs.changes.outputs.code == 'true' || github.event_name != 'pull_request'
+    if: needs.changes.outputs.code == 'true' || (github.event_name != 'pull_request' && github.event_name != 'merge_group')
     env:
       RUSTFLAGS: -C link-arg=-fuse-ld=mold
       IPE_RUNTIME_DIR: ${{ github.workspace }}/src/runtime/rust/src
@@ -365,8 +373,8 @@ jobs:
     # for a trusted author (heavy runs at promotion); an untrusted-author PR runs
     # it at PR time (third-party full gate).
     if: >-
-      github.event_name != 'pull_request'
-      || !contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.pull_request.author_association)
+      (github.event_name != 'pull_request' && github.event_name != 'merge_group')
+      || (github.event_name == 'pull_request' && !contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.pull_request.author_association))
     env:
       RUSTFLAGS: -C link-arg=-fuse-ld=mold
       IPE_RUNTIME_DIR: ${{ github.workspace }}/src/runtime/rust/src
@@ -571,7 +579,7 @@ jobs:
   test-prep:
     runs-on: ubuntu-latest
     needs: changes
-    if: needs.changes.outputs.code == 'true' || github.event_name != 'pull_request'
+    if: needs.changes.outputs.code == 'true' || (github.event_name != 'pull_request' && github.event_name != 'merge_group')
     env:
       RUSTFLAGS: -C link-arg=-fuse-ld=mold
     steps:
@@ -643,8 +651,9 @@ jobs:
             echo "test gate FAILED (test-prep=$prep test-run=$run)" >&2
             exit 1
           fi
-          if [ "$prep" = skipped ] && [ "$code" != true ] && [ "$event" = pull_request ]; then
-            echo "docs-only PR: no code paths changed, test suite skipped vacuously."
+          if [ "$prep" = skipped ] && [ "$code" != true ] \
+             && { [ "$event" = pull_request ] || [ "$event" = merge_group ]; }; then
+            echo "docs-only change: no code paths changed, test suite skipped vacuously."
             exit 0
           fi
           if [ "$prep" != success ] || [ "$run" != success ]; then
@@ -662,7 +671,7 @@ jobs:
   seal-smoke:
     runs-on: ubuntu-latest
     needs: [changes, quick-check]
-    if: needs.changes.outputs.code == 'true' || github.event_name != 'pull_request'
+    if: needs.changes.outputs.code == 'true' || (github.event_name != 'pull_request' && github.event_name != 'merge_group')
     env:
       RUSTFLAGS: -C link-arg=-fuse-ld=mold
       IPE_RUNTIME_DIR: ${{ github.workspace }}/src/runtime/rust/src
@@ -726,7 +735,7 @@ jobs:
     name: first-party shapes (build gate)
     runs-on: ubuntu-latest
     needs: [changes, quick-check]
-    if: needs.changes.outputs.code == 'true' || github.event_name != 'pull_request'
+    if: needs.changes.outputs.code == 'true' || (github.event_name != 'pull_request' && github.event_name != 'merge_group')
     env:
       RUSTFLAGS: -C link-arg=-fuse-ld=mold
       IPE_RUNTIME_DIR: ${{ github.workspace }}/src/runtime/rust/src
@@ -803,7 +812,7 @@ jobs:
     name: first-party check floor (ipe type-check only)
     runs-on: ubuntu-latest
     needs: [changes, quick-check]
-    if: needs.changes.outputs.code == 'true' || github.event_name != 'pull_request'
+    if: needs.changes.outputs.code == 'true' || (github.event_name != 'pull_request' && github.event_name != 'merge_group')
     env:
       RUSTFLAGS: -C link-arg=-fuse-ld=mold
       IPE_RUNTIME_DIR: ${{ github.workspace }}/src/runtime/rust/src
@@ -921,7 +930,7 @@ jobs:
     name: asan (${{ matrix.shard }}/6)
     runs-on: ubuntu-latest
     needs: [changes, quick-check]
-    if: (needs.changes.outputs.emit == 'true' || github.event_name != 'pull_request') && needs.changes.outputs.release_only != 'true'
+    if: (needs.changes.outputs.emit == 'true' || (github.event_name != 'pull_request' && github.event_name != 'merge_group')) && needs.changes.outputs.release_only != 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -988,7 +997,7 @@ jobs:
     name: tsan
     runs-on: ubuntu-latest
     needs: [changes, quick-check]
-    if: (needs.changes.outputs.emit == 'true' || github.event_name != 'pull_request') && needs.changes.outputs.release_only != 'true'
+    if: (needs.changes.outputs.emit == 'true' || (github.event_name != 'pull_request' && github.event_name != 'merge_group')) && needs.changes.outputs.release_only != 'true'
     env:
       RUSTFLAGS: -Zsanitizer=thread
       RUSTDOCFLAGS: -Zsanitizer=thread
@@ -1052,7 +1061,7 @@ jobs:
     # `code` superset (not `emit`) closes that blind spot. Build depth stays
     # cheap on non-emit PRs via the internal `emit` early-exit below (the heavy
     # cold-build shards self-skip; the light shards cover the non-emit surface).
-    if: (needs.changes.outputs.code == 'true' || github.event_name != 'pull_request') && needs.changes.outputs.release_only != 'true'
+    if: (needs.changes.outputs.code == 'true' || (github.event_name != 'pull_request' && github.event_name != 'merge_group')) && needs.changes.outputs.release_only != 'true'
     # Wall-clock cap on the shard. Each per-test `cargo build` is already bounded
     # (nextest ci `slow-timeout` + `e2e_support`'s per-build 240s ceiling), but
     # nothing capped the SHARD as a whole, so it inherited GitHub's 360-min
@@ -1160,7 +1169,7 @@ jobs:
           emit="${{ needs.changes.outputs.emit }}"
           if [ "${{ matrix.shard }}" -le 5 ]; then
             # Heavy leg: skip on PR when no emit-relevant paths changed.
-            if [ "$event" = "pull_request" ] && [ "$emit" != "true" ]; then
+            if { [ "$event" = "pull_request" ] || [ "$event" = "merge_group" ]; } && [ "$emit" != "true" ]; then
               echo "Skipping heavy SEAL shard ${{ matrix.shard }}/5: no emit-relevant paths changed on this PR."
               exit 0
             fi
@@ -1243,7 +1252,7 @@ jobs:
     # ipe-accept-then-cargo-fail — so keying on the `code` superset (not `emit`)
     # closes that blind spot. This slice runs golden-e2e partitions from the warm
     # `test-prep` archive (no from-scratch compile), so a code PR stays cheap.
-    if: (needs.changes.outputs.code == 'true' || github.event_name != 'pull_request') && needs.changes.outputs.release_only != 'true'
+    if: (needs.changes.outputs.code == 'true' || (github.event_name != 'pull_request' && github.event_name != 'merge_group')) && needs.changes.outputs.release_only != 'true'
     # Wall-clock cap on the sub-shard (same rationale as the `e2e` job). This
     # slice is a golden-e2e partition against the warm shared target — lighter
     # than a heavy `e2e` shard — so 30 min (≈2× the warm-cache max) fails a hung
@@ -1378,7 +1387,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: [changes, quick-check]
     # On the PR gate for ANY code change (all authors).
-    if: (needs.changes.outputs.code == 'true' || github.event_name != 'pull_request') && needs.changes.outputs.release_only != 'true'
+    if: (needs.changes.outputs.code == 'true' || (github.event_name != 'pull_request' && github.event_name != 'merge_group')) && needs.changes.outputs.release_only != 'true'
     env:
       RUSTFLAGS: -C link-arg=-fuse-ld=mold
       IPE_RUNTIME_DIR: ${{ github.workspace }}/src/runtime/rust/src
@@ -1428,8 +1437,8 @@ jobs:
     runs-on: ubuntu-latest
     # Off the PR gate for a trusted author; an untrusted-author PR runs it (full gate).
     if: >-
-      github.event_name != 'pull_request'
-      || !contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.pull_request.author_association)
+      (github.event_name != 'pull_request' && github.event_name != 'merge_group')
+      || (github.event_name == 'pull_request' && !contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.pull_request.author_association))
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
@@ -1521,7 +1530,7 @@ jobs:
     # codegen change to it must redden a PR here, not only post-merge — keyed on
     # the `code` superset. Pure aarch64 unit + audit_native tests (no jail),
     # so it is stable code-correctness, not flaky-env.
-    if: (needs.changes.outputs.code == 'true' || github.event_name != 'pull_request') && needs.changes.outputs.release_only != 'true'
+    if: (needs.changes.outputs.code == 'true' || (github.event_name != 'pull_request' && github.event_name != 'merge_group')) && needs.changes.outputs.release_only != 'true'
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
@@ -1777,7 +1786,7 @@ jobs:
   markdown-parity:
     runs-on: ubuntu-latest
     needs: [changes, quick-check]
-    if: needs.changes.outputs.code == 'true' || github.event_name != 'pull_request'
+    if: needs.changes.outputs.code == 'true' || (github.event_name != 'pull_request' && github.event_name != 'merge_group')
     steps:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/rust-toolchain-pinned
@@ -1902,8 +1911,8 @@ jobs:
     needs: [changes, quick-check]
     # Off the PR gate for a trusted author; an untrusted-author PR runs it (full gate).
     if: >-
-      github.event_name != 'pull_request'
-      || !contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.pull_request.author_association)
+      (github.event_name != 'pull_request' && github.event_name != 'merge_group')
+      || (github.event_name == 'pull_request' && !contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.pull_request.author_association))
     env:
       RUSTFLAGS: -C link-arg=-fuse-ld=mold
       IPE_RUNTIME_DIR: ${{ github.workspace }}/src/runtime/rust/src
