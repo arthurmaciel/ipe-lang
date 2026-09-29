@@ -1,8 +1,13 @@
-# Dependency update proposals. Every update is one grouped PR per ecosystem per
-# week, so the open-PR budget stays small; a release must be public for a week
-# before it is proposed, so a compromised publish has time to be yanked first.
-# Updates land through the same required checks and code-owner review as any PR
-# (this file is under `/.github/` in CODEOWNERS).
+# Dependency update proposals. Compatible updates are one grouped PR per
+# ecosystem per week; every breaking update is its own PR, so a migration is
+# reviewed and gated alone and never blocks the compatible batch. A release must
+# be public for a week before it is proposed, so a compromised publish has time
+# to be yanked first. Updates land through the same required checks and
+# code-owner review as any PR (this file is under `/.github/` in CODEOWNERS).
+#
+# Cargo treats a `0.x` minor bump as breaking, but Dependabot calls it `minor`,
+# so the cargo group holds only patch updates; minor and major ones each get a
+# PR of their own.
 version: 2
 updates:
   - package-ecosystem: github-actions
@@ -11,10 +16,11 @@ updates:
       interval: weekly
     cooldown:
       default-days: 7
-    open-pull-requests-limit: 1
+    open-pull-requests-limit: 3
     groups:
       actions:
         patterns: ["*"]
+        update-types: [minor, patch]
     commit-message:
       prefix: ci
 
@@ -26,10 +32,11 @@ updates:
       interval: weekly
     cooldown:
       default-days: 7
-    open-pull-requests-limit: 1
+    open-pull-requests-limit: 3
     groups:
       cargo:
         patterns: ["*"]
+        update-types: [patch]
     commit-message:
       prefix: chore
       include: scope
