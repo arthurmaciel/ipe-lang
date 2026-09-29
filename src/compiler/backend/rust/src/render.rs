@@ -4254,7 +4254,11 @@ mod p0_tests {
                     .sum();
                 assert_eq!(m.bytes, charged, "memo bytes must charge every entry");
                 assert!(m.bytes <= byte_ceiling, "memo past its ceiling");
-                (fuel.saturating_sub(m.fuel), m.layouts.len(), m.bytes)
+                (
+                    fuel.saturating_sub(m.fuel),
+                    m.layouts.len() + m.flat_layouts.len(),
+                    m.bytes,
+                )
             })
         });
         assert!(memo.is_some(), "the scope installs a memo");

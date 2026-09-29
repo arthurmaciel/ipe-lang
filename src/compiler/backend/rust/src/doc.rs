@@ -591,16 +591,7 @@ impl Doc {
             // emitter never writes it), exactly like the plain delimited group's.
             Self::CallArgs {
                 open, elems, close, ..
-            } => {
-                open.write_leaves(sink);
-                for (i, e) in elems.iter().enumerate() {
-                    if i > 0 {
-                        sink.layout(", ");
-                    }
-                    e.write_leaves(sink);
-                }
-                close.write_leaves(sink);
-            }
+            } => write_delimited(sink, open, elems, "", close),
             // Same accounting as `CallArgs`: `open`, each field joined by `, `, and
             // `close` are leaves; the trailing comma is SEAL-invisible. A space pads
             // the braces so `Name { a: 1 }` normalizes with the hugging spaces.
@@ -608,18 +599,7 @@ impl Doc {
                 open,
                 fields,
                 close,
-            } => {
-                open.write_leaves(sink);
-                sink.layout(" ");
-                for (i, e) in fields.iter().enumerate() {
-                    if i > 0 {
-                        sink.layout(", ");
-                    }
-                    e.write_leaves(sink);
-                }
-                sink.layout(" ");
-                close.write_leaves(sink);
-            }
+            } => write_delimited(sink, open, fields, " ", close),
             // `Ptr<Head + T1 + T2 + …>` — the same token sequence the string emitter
             // writes for the flat annotation. The angle-break's trailing comma is
             // SEAL-invisible (the string emitter never writes it).
@@ -682,6 +662,7 @@ impl Doc {
     /// The whitespace-normalized leaf string: runs of whitespace collapsed to a
     /// single space, trimmed. Two documents with the same token sequence
     /// (ignoring layout) normalize equal — this is the SEAL comparison key.
+    #[cfg(test)]
     pub fn normalized_leaves(&self) -> String {
         self.normalized_leaves_with_work().0
     }
@@ -698,6 +679,25 @@ impl Doc {
         let work = steps.saturating_add(raw.len());
         (whitespace_normalize(&raw), work)
     }
+}
+
+/// Write `open`, each of `elems` joined by `, `, and `close` through `sink`, with
+/// `pad` inside each delimiter.
+fn write_delimited(sink: &mut LeafSink<'_>, open: &Doc, elems: &[Doc], pad: &str, close: &Doc) {
+    open.write_leaves(sink);
+    if !pad.is_empty() {
+        sink.layout(pad);
+    }
+    for (i, e) in elems.iter().enumerate() {
+        if i > 0 {
+            sink.layout(", ");
+        }
+        e.write_leaves(sink);
+    }
+    if !pad.is_empty() {
+        sink.layout(pad);
+    }
+    close.write_leaves(sink);
 }
 
 /// Collapse every run of ASCII whitespace to a single space and trim the ends.
