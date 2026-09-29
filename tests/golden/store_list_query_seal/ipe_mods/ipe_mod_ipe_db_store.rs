@@ -232,21 +232,19 @@ pub(crate) fn user_ipe_db_store_build_store<T1: Clone>(
             IpeMaybe::Just(bad) => IpeResult::Err(
                 crate::user_ipe_db_store_invalid_ident_error("column".to_string(), bad),
             ),
-            IpeMaybe::Nothing => {
-                IpeResult::Ok(IpeDbStoreDraft::Draft(
-                    RecCodecCurrentColumnsFrozenColumnsFrozenTableIndexesOpsPkSpecsTable {
-                        codec: codec,
-                        currentColumns: columns.clone(),
-                        frozenColumns: columns,
-                        frozenTable: table.clone(),
-                        indexes: Vec::<IpeDbStoreIndexSpec>::new(),
-                        ops: Vec::<IpeDbStoreSchemaOp>::new(),
-                        pk: IpeResult::Ok(IpeDbStorePrimaryKeyDecl::NoPk),
-                        specs: Vec::<IpeDbStoreColumnSpec>::new(),
-                        table: table,
-                    },
-                ))
-            }
+            IpeMaybe::Nothing => IpeResult::Ok(IpeDbStoreDraft::Draft(
+                RecCodecCurrentColumnsFrozenColumnsFrozenTableIndexesOpsPkSpecsTable {
+                    codec: codec,
+                    currentColumns: columns.clone(),
+                    frozenColumns: columns,
+                    frozenTable: table.clone(),
+                    indexes: Vec::<IpeDbStoreIndexSpec>::new(),
+                    ops: Vec::<IpeDbStoreSchemaOp>::new(),
+                    pk: IpeResult::Ok(IpeDbStorePrimaryKeyDecl::NoPk),
+                    specs: Vec::<IpeDbStoreColumnSpec>::new(),
+                    table: table,
+                },
+            )),
         }
     })
 }
@@ -359,21 +357,19 @@ pub(crate) fn user_ipe_db_store_public<T1: Clone>(
 ) -> IpeDbStoreStore<T1> {
     let _ipe_recursion_guard = crate::recursion_guard();
     match draft {
-        IpeDbStoreDraft::Draft(r) => {
-            IpeDbStoreStore::Store(
-                RecCodecCurrentColumnsFrozenColumnsFrozenTableIndexesOpsPkSpecsTable {
-                    codec: (r.clone()).codec.clone(),
-                    currentColumns: (r.clone()).currentColumns.clone(),
-                    frozenColumns: (r.clone()).frozenColumns.clone(),
-                    frozenTable: (r.clone()).frozenTable.clone(),
-                    indexes: (r.clone()).indexes.clone(),
-                    ops: (r.clone()).ops.clone(),
-                    pk: (r.clone()).pk.clone(),
-                    specs: (r.clone()).specs.clone(),
-                    table: (r).table.clone(),
-                },
-            )
-        }
+        IpeDbStoreDraft::Draft(r) => IpeDbStoreStore::Store(
+            RecCodecCurrentColumnsFrozenColumnsFrozenTableIndexesOpsPkSpecsTable {
+                codec: (r.clone()).codec.clone(),
+                currentColumns: (r.clone()).currentColumns.clone(),
+                frozenColumns: (r.clone()).frozenColumns.clone(),
+                frozenTable: (r.clone()).frozenTable.clone(),
+                indexes: (r.clone()).indexes.clone(),
+                ops: (r.clone()).ops.clone(),
+                pk: (r.clone()).pk.clone(),
+                specs: (r.clone()).specs.clone(),
+                table: (r).table.clone(),
+            },
+        ),
     }
 }
 pub(crate) fn user_ipe_db_store_key_decl_fault(
