@@ -206,6 +206,10 @@ struct Memo {
     /// [`LAYOUT_FUEL`] left to spend; once spent the render is abandoned.
     fuel: usize,
     exhausted: bool,
+    /// The layout bytes charged for what the open buffers hold: every byte is
+    /// charged once, by the innermost memoized render that wrote or replayed it,
+    /// so an enclosing layout is charged only its own share.
+    charged: usize,
 }
 
 /// Everything a node's render reads besides the node itself.
@@ -350,6 +354,7 @@ impl MemoScope {
             chain_receivers: HashMap::new(),
             fuel,
             exhausted: false,
+            charged: 0,
         };
         Self(MEMO.replace(Some(memo)))
     }
@@ -518,7 +523,9 @@ fn render_flat_shared(doc: &Doc, cfg: RenderConfig, indent: usize, col: usize, o
     });
     match shared {
         Some(Some(len)) => {
-            spend(len.saturating_add(1));
+            if spend(len.saturating_add(1)) {
+                hold_charged(len);
+            }
             return;
         }
         Some(None) => return,
@@ -648,6 +655,10 @@ impl Mark {
 
 /// Run `render` on `out` with the stop mark `reach` asks for, restoring the
 /// enclosing mark after.
+///
+/// Every caller discards what `render` writes — a [`trial`] rolls it back, a
+/// fresh buffer is dropped — so the bytes charged for it leave the held total
+/// with it: an enclosing layout never counts a probe's bytes as its children's.
 fn with_stop<T>(
     out: &mut String,
     reach: TrialReach,
@@ -661,12 +672,13 @@ fn with_stop<T>(
     });
     let outer = MEMO.with_borrow_mut(|m| {
         m.as_mut()
-            .map(|m| std::mem::replace(&mut m.stop_mark, stop))
+            .map(|m| (std::mem::replace(&mut m.stop_mark, stop), m.charged))
     });
     let read = render(out, Mark { start, stable });
     MEMO.with_borrow_mut(|m| {
-        if let (Some(m), Some(outer)) = (m.as_mut(), outer) {
-            m.stop_mark = outer;
+        if let (Some(m), Some((stop_mark, charged))) = (m.as_mut(), outer) {
+            m.stop_mark = stop_mark;
+            m.charged = charged;
         }
     });
     read
@@ -781,20 +793,44 @@ fn memoized(
         Some(layout.len())
     });
     if let Some(replayed) = replayed {
-        spend(replayed);
+        if spend(replayed) {
+            hold_charged(replayed);
+        }
         return;
     }
     #[cfg(test)]
     RENDERED.with(|n| n.set(n.get() + 1));
+    let children = held_charged();
     render(out);
     let Some(layout) = out.get(base..) else {
         return;
     };
-    if !spend(layout.len()) {
+    // The bytes the nested renders wrote were charged by them, so only the rest
+    // is this layout's own: the charges over a nest sum to its output, not to
+    // every level's copy of its subtree.
+    let own = layout
+        .len()
+        .saturating_sub(held_charged().saturating_sub(children));
+    if !spend(own) {
         abandon(out);
         return;
     }
+    hold_charged(own);
     keep_layout(key, reach, layout);
+}
+
+/// The layout bytes charged for what the open buffers hold.
+fn held_charged() -> usize {
+    MEMO.with_borrow(|m| m.as_ref().map_or(0, |m| m.charged))
+}
+
+/// Count `bytes` just charged as held by the open buffers.
+fn hold_charged(bytes: usize) {
+    MEMO.with_borrow_mut(|m| {
+        if let Some(m) = m.as_mut() {
+            m.charged = m.charged.saturating_add(bytes);
+        }
+    });
 }
 
 /// Keep a fresh `layout` for replay under `key`: whole, or apart as its first
