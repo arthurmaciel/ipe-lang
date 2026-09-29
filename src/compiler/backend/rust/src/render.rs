@@ -118,10 +118,10 @@ pub fn render_seeded(doc: &Doc, cfg: RenderConfig, indent: usize, col: usize) ->
 /// fuel out gets its [`Doc::plain_layout`] instead: one pass, no fit decision, the
 /// same tokens — layout never changes what the code means.
 fn render_bounded(doc: &Doc, cfg: RenderConfig, indent: usize, col: usize) -> String {
-    let scope = MemoScope::install(doc, LAYOUT_FUEL);
+    let _scope = MemoScope::install(doc, LAYOUT_FUEL);
     let mut out = String::new();
     render_at(doc, cfg, indent, col, false, &mut out);
-    if scope.exhausted() {
+    if fuel_exhausted() {
         return doc.plain_layout();
     }
     out
@@ -130,9 +130,10 @@ fn render_bounded(doc: &Doc, cfg: RenderConfig, indent: usize, col: usize) -> St
 /// The work one render may do before it gives up on fitting the document and
 /// falls back to its plain layout, in bytes: each layout computed or replayed
 /// spends the bytes it writes plus the line it measures its cursor on, so the
-/// fuel tracks time, not only node count. Real code — each node laid out in a
-/// handful of contexts — stays far below it; only a pathologically deep nest of
-/// probing constructs reaches it.
+/// fuel tracks time, not only node count. Most bodies stay far below it; a deep
+/// nest of probing constructs (call args, assign RHS, brace bodies) multiplies
+/// the contexts per level and can reach it, so its plain layout is emitted
+/// instead (#3130 tracks making layout linear).
 const LAYOUT_FUEL: usize = 1 << 26;
 
 /// The byte ceiling on the layouts one render keeps memoized. Past it the memo
@@ -231,12 +232,12 @@ impl MemoScope {
         };
         Self(MEMO.replace(Some(memo)))
     }
+}
 
-    /// Whether the render under this scope ran out of [`LAYOUT_FUEL`], leaving its
-    /// output incomplete.
-    fn exhausted(&self) -> bool {
-        MEMO.with_borrow(|m| m.as_ref().is_some_and(|m| m.exhausted))
-    }
+/// Whether the render under the innermost [`MemoScope`] ran out of
+/// [`LAYOUT_FUEL`], leaving its output incomplete.
+fn fuel_exhausted() -> bool {
+    MEMO.with_borrow(|m| m.as_ref().is_some_and(|m| m.exhausted))
 }
 
 impl Drop for MemoScope {
@@ -3579,7 +3580,7 @@ mod p0_tests {
     /// on fitting and laid the document out flat.
     fn layout_work(doc: &Doc) -> (usize, bool) {
         RENDERED.with(|n| n.set(0));
-        let scope = MemoScope::install(doc, LAYOUT_FUEL);
+        let _scope = MemoScope::install(doc, LAYOUT_FUEL);
         render_at(
             doc,
             RenderConfig::default(),
@@ -3588,7 +3589,7 @@ mod p0_tests {
             false,
             &mut String::new(),
         );
-        (RENDERED.with(std::cell::Cell::get), scope.exhausted())
+        (RENDERED.with(std::cell::Cell::get), fuel_exhausted())
     }
 
     /// Every layout probe re-renders its subtree, so without reuse the work doubles
