@@ -40,6 +40,9 @@ jobs:
   surface:
     name: ci-health-surface
     runs-on: ubuntu-latest
+    # A red merge-group run already ejects its PR from the queue; it is not a
+    # main-branch health signal.
+    if: github.event.workflow_run.event != 'merge_group'
     steps:
       - uses: actions/checkout@v7
 

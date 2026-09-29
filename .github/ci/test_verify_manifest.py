@@ -1341,6 +1341,76 @@ class TestMergeQueueSafety(unittest.TestCase):
         bad = _MQ_OK.replace("  merge_group:\n", "").replace("run: echo full", "run: echo ${{ secrets.X }}")
         self.assertEqual(self.errors(bad, gates=set()), [])
 
+    def test_hex_escaped_secrets_refused(self) -> None:
+        bad = _MQ_OK.replace("run: echo full", 'run: "echo ${{ \\x73ecrets.TOKEN }}"')
+        self.assertRefused(bad, "must be secret-free")
+
+    def test_unicode_escaped_secrets_refused(self) -> None:
+        bad = _MQ_OK.replace("run: echo full", 'run: "echo ${{ \\u0073ecrets.TOKEN }}"')
+        self.assertRefused(bad, "must be secret-free")
+
+    def test_escaped_secrets_key_refused(self) -> None:
+        bad = _MQ_OK + '  reuse:\n    uses: ./.github/workflows/x.yml\n    "\\x73ecrets": inherit\n'
+        self.assertRefused(bad, "must be secret-free")
+
+    def test_job_write_scope_under_negation_refused(self) -> None:
+        bad = _MQ_OK.replace(
+            "      github.event_name == 'pull_request' &&\n",
+            "      !(always() && github.event_name == 'pull_request' && always()) &&\n",
+        )
+        self.assertRefused(bad, "holds a write scope")
+
+    def test_job_write_scope_inside_nested_group_refused(self) -> None:
+        bad = _MQ_OK.replace(
+            "      github.event_name == 'pull_request' &&\n",
+            "      (github.event_name == 'pull_request' && always()) == false &&\n",
+        )
+        self.assertRefused(bad, "holds a write scope")
+
+    def test_job_write_scope_with_pr_test_in_string_literal_refused(self) -> None:
+        bad = _MQ_OK.replace(
+            "      github.event_name == 'pull_request' &&\n",
+            "      contains('x && github.event_name == ''pull_request'' && y', 'x') &&\n",
+        )
+        self.assertRefused(bad, "holds a write scope")
+
+    def test_job_write_scope_with_unbalanced_parens_refused(self) -> None:
+        bad = _MQ_OK.replace(
+            "      github.event_name == 'pull_request' &&\n",
+            "      github.event_name == 'pull_request' && ( &&\n",
+        )
+        self.assertRefused(bad, "holds a write scope")
+
+    def test_job_write_scope_in_expression_wrapper_passes(self) -> None:
+        ok = _MQ_OK.replace(
+            "    if: >-\n      failure() &&\n      github.event_name == 'pull_request' &&\n",
+            "    if: ${{ failure() && github.event_name == 'pull_request' &&\n",
+        ).replace(
+            "      github.event.pull_request.head.repo.full_name == github.repository\n",
+            "      github.event.pull_request.head.repo.full_name == github.repository }}\n",
+        )
+        self.assertNotEqual(ok, _MQ_OK)
+        self.assertEqual(self.errors(ok), [])
+
+    def test_job_write_all_refused(self) -> None:
+        bad = _MQ_OK.replace("    permissions:\n      actions: write\n", "    permissions: write-all\n").replace(
+            "      github.event_name == 'pull_request' &&\n", ""
+        )
+        self.assertRefused(bad, "holds a write scope")
+
+    def test_list_form_on_without_merge_group_refused(self) -> None:
+        bad = _MQ_OK.replace(
+            "on:\n  push:\n    branches: [main]\n  pull_request:\n  merge_group:\n", "on: [push, pull_request]\n"
+        )
+        self.assertRefused(bad, "does not trigger on `merge_group`")
+
+    def test_reversed_bare_pr_tier_test_refused(self) -> None:
+        bad = _MQ_OK.replace(
+            "(github.event_name != 'pull_request' && github.event_name != 'merge_group')",
+            "'pull_request' != github.event_name",
+        )
+        self.assertRefused(bad, "a merge-group run would take the full tier")
+
     def test_unrecognised_on_shape_refused(self) -> None:
         bad = _MQ_OK.replace("on:\n  push:\n    branches: [main]\n  pull_request:\n  merge_group:\n", "on: 3\n")
         self.assertRefused(bad, "`on:` is not")

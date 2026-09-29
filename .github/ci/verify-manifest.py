@@ -65,14 +65,22 @@ Checks performed
      `pull_request` and `merge_group`, else the queue waits forever on a
      required context no merge-group run reports.  A merge-group run gets the
      base repository's secrets and token, so every `merge_group`-triggered
-     workflow must be secret-free (no `secrets` word anywhere in its text), must
-     not also trigger on `pull_request_target`, and must declare a top-level
-     `permissions:` mapping with no `write` scope.  A job-level `write` scope is
-     admitted only on a job whose `if:` is a pure conjunction requiring
+     workflow must be secret-free (no `secrets` word in its raw text, nor in
+     any key or string scalar once parsed, which decodes escapes), must not
+     also trigger on `pull_request_target`, and must declare a top-level
+     `permissions:` value with no `write` scope.  A job-level `write` scope is
+     admitted only on a job whose `if:` has no `||` and has, among its
+     `&&`-conjuncts at parenthesis depth 0, exactly
      `github.event_name == 'pull_request'`.  A bare
-     `github.event_name != 'pull_request'` full-tier test must be followed by
-     `&& github.event_name != 'merge_group'`, so a merge-group run takes the PR
-     tier rather than silently running the full tier.
+     `github.event_name != 'pull_request'` full-tier test (either operand
+     order) must be followed by `&& github.event_name != 'merge_group'`, so a
+     merge-group run takes the PR tier rather than silently running the full
+     tier.
+     Limit: this catches honest mistakes, not a hostile PR.  A merge-group run
+     executes the workflow files of the queued commit, so a queued PR that
+     edits `.github/**` runs its own edit with the base secrets.  The boundary
+     is who may enqueue: only write-access maintainers, who review every
+     `.github/**` diff before enqueueing.
 
 Pure stdlib + PyYAML (already a CI dependency).  No network.
 """
@@ -507,16 +515,67 @@ def _load_sccache_workflows(root: str, errors: list[str]) -> list[SccacheWorkflo
     return out
 
 
-# A full-tier test that forgot the merge queue: `!= 'pull_request'` not followed
-# by the matching `merge_group` exclusion.
+# A full-tier test that forgot the merge queue: `!= 'pull_request'` (either
+# operand order) not followed by the matching `merge_group` exclusion.
 _BARE_PR_TIER = re.compile(
-    r"event_name\s*!=\s*['\"]pull_request['\"]"
+    r"(?:event_name\s*!=\s*['\"]pull_request['\"]|['\"]pull_request['\"]\s*!=\s*github\.event_name)"
     r"(?!\s*&&\s*github\.event_name\s*!=\s*['\"]merge_group['\"])"
 )
 _SECRETS_WORD = re.compile(r"\bsecrets\b", re.IGNORECASE)
-_PR_ONLY_CONJUNCT = re.compile(
-    r"(?:^|&&)\s*github\.event_name\s*==\s*'pull_request'\s*(?:&&|$)"
-)
+_PR_ONLY = "github.event_name == 'pull_request'"
+
+
+def _mentions_secrets(node: object) -> bool:
+    """True when any key or string scalar of the parsed document names
+    `secrets`. Complements the raw-text scan: a double-quoted scalar can spell
+    the word through `\\x`/`\\u` escapes that only the parser decodes."""
+    if isinstance(node, dict):
+        return any(_mentions_secrets(k) or _mentions_secrets(v) for k, v in node.items())
+    if isinstance(node, list):
+        return any(_mentions_secrets(e) for e in node)
+    return isinstance(node, str) and _SECRETS_WORD.search(node) is not None
+
+
+def _top_level_conjuncts(cond: str) -> list[str] | None:
+    """Split an `if:` expression on `&&` at parenthesis depth 0, outside string
+    literals; whitespace-normalised conjuncts. None when the expression has a
+    `||` anywhere, unbalanced parentheses, or an unterminated string, since
+    none of those can be proven to require its conjuncts."""
+    expr = cond.strip()
+    if expr.startswith("${{") and expr.endswith("}}"):
+        expr = expr[3:-2]
+    parts: list[str] = []
+    depth = 0
+    quote = False
+    start = 0
+    i = 0
+    while i < len(expr):
+        c = expr[i]
+        if quote:
+            if c == "'":
+                if expr[i + 1 : i + 2] == "'":
+                    i += 1
+                else:
+                    quote = False
+        elif c == "'":
+            quote = True
+        elif c == "(":
+            depth += 1
+        elif c == ")":
+            depth -= 1
+            if depth < 0:
+                return None
+        elif expr.startswith("||", i):
+            return None
+        elif expr.startswith("&&", i) and depth == 0:
+            parts.append(expr[start:i])
+            start = i + 2
+            i += 1
+        i += 1
+    if quote or depth != 0:
+        return None
+    parts.append(expr[start:])
+    return [" ".join(p.split()) for p in parts]
 
 
 def _triggers(doc: dict) -> set[str] | None:
@@ -579,7 +638,7 @@ def check_merge_queue(gate_producers: set[str], errors: list[str], root: str = R
                 f"{fname}: a merge_group workflow may not also trigger on "
                 "`pull_request_target` (base-repo secrets reach untrusted code)"
             )
-        if _SECRETS_WORD.search(text):
+        if _SECRETS_WORD.search(text) or _mentions_secrets(doc):
             errors.append(
                 f"{fname}: a merge_group workflow must be secret-free — a merge-group "
                 "run carries the base repository's secrets"
@@ -597,12 +656,12 @@ def check_merge_queue(gate_producers: set[str], errors: list[str], root: str = R
                 continue
             if not _write_scopes(job["permissions"]):
                 continue
-            cond = " ".join(str(job.get("if", "")).split())
-            if "||" in cond or not _PR_ONLY_CONJUNCT.search(cond):
+            conjuncts = _top_level_conjuncts(str(job.get("if", "")))
+            if conjuncts is None or _PR_ONLY not in conjuncts:
                 errors.append(
                     f"{fname}: job {str(jid)!r} holds a write scope in a merge_group "
                     "workflow; its `if:` must be a conjunction requiring "
-                    "`github.event_name == 'pull_request'`"
+                    "`github.event_name == 'pull_request'` at the top level"
                 )
         for m in _BARE_PR_TIER.finditer(text):
             line = text.count("\n", 0, m.start()) + 1
