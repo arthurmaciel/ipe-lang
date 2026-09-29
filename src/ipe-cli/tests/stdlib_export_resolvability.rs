@@ -508,23 +508,21 @@ fn render(ty: &Ty, interner: &Interner) -> String {
     )
 }
 
-fn span_text<'s>(source: &'s str, span: ipe_diagnostics::Span) -> Option<&'s str> {
+fn span_text(source: &str, span: ipe_diagnostics::Span) -> Option<&str> {
     let lo = usize::try_from(span.lo).ok()?;
     let hi = usize::try_from(span.hi).ok()?;
     source.get(lo..hi)
 }
 
-/// Collect a module's exposed kernel-resolved members; `Err` names a member
-/// the gate cannot check (unparsable module, missing annotation, or a
-/// kernel-shaped binding canon does not record).
-fn alias_members(dotted: &str, source: &str, scope: &AliasScope) -> Result<ProbeModule, String> {
-    use ipe_syntax::{Exposed, Exposing, Expr_};
+/// A module's exposed value names (`None` when it exposes everything) and
+/// its own type names, those it exposes without importing them.
+fn exposure(
+    parsed: &ipe_syntax::Module,
+    interner: &Interner,
+) -> (Option<BTreeSet<String>>, BTreeSet<String>) {
+    use ipe_syntax::{Exposed, Exposing};
 
-    let mut interner = Interner::new();
-    let parsed = ipe_parse::parse_module(source, &mut interner)
-        .map_err(|e| format!("{dotted}: failed to parse: {e:?}"))?;
     let name = |s| interner.resolve(s).unwrap_or_default().to_owned();
-
     let exposed: Option<Vec<&Exposed>> = match &parsed.exposing.value {
         Exposing::All => None,
         Exposing::List(items) => Some(items.iter().map(|item| &item.value).collect()),
@@ -538,11 +536,6 @@ fn alias_members(dotted: &str, source: &str, scope: &AliasScope) -> Result<Probe
             })
             .collect()
     });
-    let is_exposed = |member: &str| {
-        exposed_values
-            .as_ref()
-            .is_none_or(|set| set.contains(member))
-    };
     let exposed_type_names: Option<BTreeSet<String>> = exposed.as_ref().map(|items| {
         items
             .iter()
@@ -575,6 +568,26 @@ fn alias_members(dotted: &str, source: &str, scope: &AliasScope) -> Result<Probe
             .map(|u| name(u.value.name.value))
             .chain(parsed.aliases.iter().map(|a| name(a.value.name.value)))
             .collect(),
+    };
+    (exposed_values, own_types)
+}
+
+/// Collect a module's exposed kernel-resolved members; `Err` names a member
+/// the gate cannot check (unparsable module, missing annotation, or a
+/// kernel-shaped binding canon does not record).
+fn alias_members(dotted: &str, source: &str, scope: &AliasScope) -> Result<ProbeModule, String> {
+    use ipe_syntax::Expr_;
+
+    let mut interner = Interner::new();
+    let parsed = ipe_parse::parse_module(source, &mut interner)
+        .map_err(|e| format!("{dotted}: failed to parse: {e:?}"))?;
+    let name = |s| interner.resolve(s).unwrap_or_default().to_owned();
+
+    let (exposed_values, own_types) = exposure(&parsed, &interner);
+    let is_exposed = |member: &str| {
+        exposed_values
+            .as_ref()
+            .is_none_or(|set| set.contains(member))
     };
 
     let mut imports = String::new();
@@ -709,7 +722,7 @@ fn seal_name(i: usize) -> String {
 }
 
 /// `annotation` with the `i`-th of `seal_vars` written as the probe-local
-/// nullary type [`seal_name`]`(i)`.
+/// nullary type named by [`seal_name`] for `i`.
 fn seal_annotation(annotation: &str, seal_vars: &[&str]) -> String {
     rewrite_words(annotation, |w| {
         seal_vars.iter().position(|v| *v == w).map(seal_name)
@@ -850,6 +863,7 @@ fn run_probe(
             ));
         }
     }
+    drop(interner);
     Ok(drifts)
 }
 
@@ -1221,7 +1235,7 @@ fn seal_comparison_is_bijective() {
         args: Vec::new(),
     };
     let seals = BTreeSet::from([seal_name(0)]);
-    let same = Ty::Fun(Box::new(seal_ty.clone()), Box::new(seal_ty.clone()));
+    let same = Ty::Fun(Box::new(seal_ty.clone()), Box::new(seal_ty));
     let scheme_same = Ty::Fun(Box::new(Ty::Var(1)), Box::new(Ty::Var(1)));
     let scheme_split = Ty::Fun(Box::new(Ty::Var(1)), Box::new(Ty::Var(2)));
     assert!(alpha_eq(
