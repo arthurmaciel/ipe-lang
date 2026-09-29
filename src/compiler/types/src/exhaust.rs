@@ -1475,9 +1475,11 @@ mod tests {
         assert_eq!(rows.len(), 2, "True | False expands to two rows");
     }
 
-    /// The union a scrutinee of solved type `module.name` is judged against, if any.
+    /// The union a scrutinee of solved type `module.name` is judged against, if
+    /// any, spelled as `(home segments, name)` so calls with separate interners
+    /// compare.
     #[allow(clippy::expect_used)] // interning short literals cannot exhaust the interner
-    fn union_of_scrutinee(module: &[&str], name: &str) -> Option<TyId> {
+    fn union_of_scrutinee(module: &[&str], name: &str) -> Option<(Vec<String>, String)> {
         let mut interner = Interner::new();
         let main = vec![interner.intern("Main").expect("intern Main")];
         let module: Vec<Symbol> = module
@@ -1509,7 +1511,14 @@ mod tests {
             regions: &regions,
             interner: &interner,
         };
-        scrutinee_union(&scrut, &ctx).cloned()
+        let spell = |sym: Symbol| {
+            interner
+                .resolve(sym)
+                .expect("a union symbol resolves in its interner")
+                .to_owned()
+        };
+        scrutinee_union(&scrut, &ctx)
+            .map(|(home, name)| (home.iter().copied().map(spell).collect(), spell(*name)))
     }
 
     /// A builtin re-exported under its stdlib home is judged as the builtin union.
