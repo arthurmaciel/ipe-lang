@@ -2603,6 +2603,32 @@ fn open_arm_block(cfg: RenderConfig, indent: usize, start_col: usize, out: &mut 
     );
 }
 
+/// Whether the RHS renders as one flat line from `glue_col` with `trailer`
+/// columns still free before `max_width`.
+fn assign_rhs_fits_same_line(
+    rhs: &Doc,
+    trailer: usize,
+    cfg: RenderConfig,
+    indent: usize,
+    glue_col: usize,
+    out: &mut String,
+) -> bool {
+    flat_measure(rhs, cfg).map_or_else(
+        || {
+            trial(out, TrialReach::FirstLine, |out, mark| {
+                render_at(rhs, cfg, indent, glue_col, true, out);
+                let line = mark.line(out);
+                !line.contains('\n') && glue_col + line.len() + trailer <= cfg.max_width
+            })
+        },
+        |measure| {
+            measure
+                .width()
+                .is_some_and(|w| glue_col + w + trailer <= cfg.max_width)
+        },
+    )
+}
+
 /// Render an assignment with `rustfmt`'s dedicated RHS-break layout axis. See
 /// [`Doc::Assign`]. `col` is where the assignment's first character lands;
 /// `indent` is the enclosing block indent (broken RHS goes to `indent + 4`).
@@ -2672,21 +2698,7 @@ fn render_assign(
     // an opaque variant (an applied-lambda `let p: T = foo(let x = 1 in x)`) can
     // embed a `\n` in its flat render; the same-line form requires a genuinely
     // single-line RHS flat render.
-    let same_line = flat_measure(rhs, cfg).map_or_else(
-        || {
-            trial(out, TrialReach::FirstLine, |out, mark| {
-                render_at(rhs, cfg, indent, glue_col, true, out);
-                let line = mark.line(out);
-                !line.contains('\n') && glue_col + line.len() + trailer <= cfg.max_width
-            })
-        },
-        |measure| {
-            measure
-                .width()
-                .is_some_and(|w| glue_col + w + trailer <= cfg.max_width)
-        },
-    );
-    if same_line {
+    if assign_rhs_fits_same_line(rhs, trailer, cfg, indent, glue_col, out) {
         render_at(rhs, cfg, indent, glue_col, true, out);
         return;
     }
@@ -2742,7 +2754,7 @@ fn render_assign(
                 pass: Pass::Layout { flat: false },
                 cursor: Cursor::of(out),
             };
-            if !keeps && let Some(fits) = kept_rhs_break_fits(&key, cfg.max_width, &head_fits) {
+            if !keeps && let Some(fits) = kept_rhs_break_fits(&key, cfg.max_width, head_fits) {
                 return fits;
             }
             let mark = Mark::at(out);
