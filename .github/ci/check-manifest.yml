@@ -7,9 +7,9 @@
 #
 # Dispositions
 #   gate          Blocks (a required status context) and runs per relevant change.
-#   nightly-gate  Heavy; runs nightly, not on every PR. A
-#                 red blocks the NEXT promotion via the fail-closed
-#                 `promotion-ready` job (absence != pass). Never silently advisory.
+#   nightly-gate  Heavy; runs nightly, not on every PR. A red blocks the NEXT
+#                 merge via the required `nightly-green` gate (absence != pass).
+#                 Never silently advisory.
 #   informational Never blocks. MANDATORY low-noise surface (the ci-health
 #                 dedup issue + summary) and a named owner. May NOT guard a
 #                 Security / Soundness / SEAL invariant.
@@ -177,13 +177,25 @@ checks:
     local:
       ci-only: inline-script
     guards: SEAL
+  - context: build-tools
+    disposition: gate
+    producer: ci.yml
+    local:
+      covered-by: stdlib-docs-drift
+    guards: >-
+      Security — a build step that a required gate `needs` must itself be
+      required, or its failure/skip silently fail-opens the gates depending on
+      it (the same fail-closed-classifier property as `changes` below).
+      Compiles the six doc/golden regenerator binaries once and shares them
+      via artifact across the docs-drift gates.
   - context: stdlib-docs-drift
     disposition: gate
     producer: ci.yml
     local:
       tier: quick
       run:
-        - cargo run -p ipe_docs --bin gen-stdlib-docs -- --repo-root {repo_root}
+        - cmd: cargo run -p ipe_docs --bin gen-stdlib-docs -- --repo-root {repo_root}
+          differs: CI runs the binary build-tools prebuilt and shared by artifact; cargo run builds it locally
         - git diff --exit-code docs/reference/stdlib.md docs/reference/stdlib/
   - context: env-docs-drift
     disposition: gate
@@ -191,7 +203,8 @@ checks:
     local:
       tier: quick
       run:
-        - cargo run -p ipe_docs --bin gen-env-docs -- --repo-root {repo_root}
+        - cmd: cargo run -p ipe_docs --bin gen-env-docs -- --repo-root {repo_root}
+          differs: CI runs the binary build-tools prebuilt and shared by artifact; cargo run builds it locally
         - git diff --exit-code docs/reference/env.md
   - context: capabilities-docs-drift
     disposition: gate
@@ -199,7 +212,8 @@ checks:
     local:
       tier: quick
       run:
-        - cargo run -p ipe_docs --bin gen-capabilities-docs -- --repo-root {repo_root}
+        - cmd: cargo run -p ipe_docs --bin gen-capabilities-docs -- --repo-root {repo_root}
+          differs: CI runs the binary build-tools prebuilt and shared by artifact; cargo run builds it locally
         - git diff --exit-code docs/reference/capabilities.md
   - context: cli-docs-drift
     disposition: gate
@@ -207,7 +221,8 @@ checks:
     local:
       tier: quick
       run:
-        - cargo run -p ipe --bin gen-cli-docs -- --repo-root {repo_root}
+        - cmd: cargo run -p ipe --bin gen-cli-docs -- --repo-root {repo_root}
+          differs: CI runs the binary build-tools prebuilt and shared by artifact; cargo run builds it locally
         - git diff --exit-code docs/reference/cli.md
   - context: requirements-docs-drift
     disposition: gate
@@ -215,7 +230,8 @@ checks:
     local:
       tier: quick
       run:
-        - cargo run -p ipe_docs --bin gen-requirements-docs -- --repo-root {repo_root}
+        - cmd: cargo run -p ipe_docs --bin gen-requirements-docs -- --repo-root {repo_root}
+          differs: CI runs the binary build-tools prebuilt and shared by artifact; cargo run builds it locally
         - git diff --exit-code docs/reference/requirements.md
   - context: cli-transcripts-drift
     disposition: gate
@@ -223,7 +239,8 @@ checks:
     local:
       tier: quick
       run:
-        - cargo run -p regen-cli-transcripts -- --repo-root {repo_root}
+        - cmd: cargo run -p regen-cli-transcripts -- --repo-root {repo_root}
+          differs: CI runs the binary build-tools prebuilt and shared by artifact; cargo run builds it locally, and CI points it at its prebuilt ipe via --ipe-bin
         - git diff --exit-code src/ipe-cli/tests/golden/cli/
   - context: markdown-parity
     disposition: gate
@@ -271,7 +288,7 @@ checks:
   # ── Panic-scan / cargo-deny / playground / admission (per-change gates) ────
   - context: panic-scan
     disposition: gate
-    producer: panic-scan.yml
+    producer: ci.yml
     local:
       tier: quick
       run:
@@ -311,6 +328,19 @@ checks:
     local:
       ci-only: platform
     guards: Security
+
+  # ── Nightly enforcement (per-change gate) ─────────────────────────────────
+  # Red unless the latest nightly on main is green and fresh, or this change's
+  # own commit passed a dispatched full gate — so a red `nightly-gate` job
+  # blocks the next merge (`.github/ci/nightly_green.py`).
+  - context: nightly-green
+    disposition: gate
+    producer: nightly-green.yml
+    local:
+      ci-only: run-history
+    guards: >-
+      Soundness / SEAL — every `nightly-gate` proof (jail, sanitizers,
+      seal-modset, browser-e2e) holds on main before another change lands.
 
   # ── Editor tooling (per-change gate) ──────────────────────────────────────
   # The tree-sitter grammar must accept every reference `.ipe` file (stdlib +
@@ -361,7 +391,7 @@ checks:
     local:
       covered-by: e2e-all
     guards: SEAL
-    aggregates: [seal-slice-shard]
+    aggregates: [e2e]
 
   # ── Heavy soundness / sanitizers — nightly-gate ───────────────────────────
   - context: asan-all
@@ -485,10 +515,12 @@ checks:
     note: playground.yml build leg; playground-jail is the Security gate.
 
   # ── Path classifiers (gate) ──────────────────────────────────────────────
-  # Each workflow's paths-filter job. A failed or cancelled classifier SKIPS
-  # every job that `needs` it, and GitHub counts a skipped required check as
-  # passing — so the classifier is itself required: absent proof it ran, the
-  # merge is blocked (fail closed). Each carries a workflow-unique name so the
+  # Each workflow's `changes` job, running the fail-closed classifier
+  # (.github/ci/change_class.py; ci.yml's `changes` also runs its PROSE-set
+  # guard, .github/ci/prose_guard.py, so a PR that makes a PROSE path readable cannot merge). A failed or
+  # cancelled `changes` job SKIPS every job that `needs` it, and GitHub counts
+  # a skipped required check as passing — so the classifier is itself
+  # required: absent proof it ran, the merge is blocked (fail closed). Each carries a workflow-unique name so the
   # required context resolves to exactly one producer.
   - context: changes
     disposition: gate
@@ -496,8 +528,9 @@ checks:
     local:
       ci-only: classifier
     guards: >-
-      Security — fail-closed path classification: a failed classifier cannot
-      skip every ci.yml tier into a passing required set.
+      Security — fail-closed path classification + the PROSE-set guard: a
+      failed classifier cannot skip every ci.yml tier into a passing required
+      set, and a PROSE path cannot gain a reader.
   - context: admission-changes
     disposition: gate
     producer: admission-sandbox.yml

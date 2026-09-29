@@ -1,6 +1,7 @@
 [
   "admission-changes",
   "artifact-guard",
+  "build-tools",
   "capabilities-docs-drift",
   "cargo-deny",
   "changes",
@@ -22,6 +23,7 @@
   "macos-arm64 (sandbox-exec / Seatbelt)",
   "manifest-lock-consistency",
   "markdown-parity",
+  "nightly-green",
   "panic-scan",
   "playground-changes",
   "playground-jail",
