@@ -2600,6 +2600,23 @@ class TestSsotOutputTools(unittest.TestCase):
         self.put("required-set.json", _RS_A)
         self.assertFailsClosed("check_required_set.py", "--fetch")
 
+    def test_a_non_admin_read_leaves_bypass_actors_to_the_admin_read(self) -> None:
+        spec = importlib.util.spec_from_file_location("check_required_set", os.path.join(HERE, "check_required_set.py"))
+        crs = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = crs
+        self.addCleanup(sys.modules.pop, spec.name, None)
+        spec.loader.exec_module(crs)
+        unseen = {k: v for k, v in _ruleset().items() if k != "bypass_actors"}
+        self.assertEqual(crs.parse_ruleset(unseen, admin_read=False).required, (("a", 15368),))
+        with self.assertRaises(crs.Refused):
+            crs.parse_ruleset(unseen, admin_read=True)
+        actor = [{"actor_id": 5, "actor_type": "RepositoryRole", "bypass_mode": "always"}]
+        for admin_read in (False, True):
+            with self.subTest(admin_read=admin_read), self.assertRaises(crs.Refused):
+                crs.parse_ruleset(_ruleset(bypass_actors=actor), admin_read=admin_read)
+            with self.subTest(admin_read=admin_read, viewer="always"), self.assertRaises(crs.Refused):
+                crs.parse_ruleset(dict(unseen, current_user_can_bypass="always"), admin_read=admin_read)
+
     def test_repo_required_set_is_the_derived_set(self) -> None:
         import subprocess
 

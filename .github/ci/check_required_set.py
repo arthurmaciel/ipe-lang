@@ -26,7 +26,10 @@ or an owner toggles is never waved through unread.  It must be active on the
 default branch with no exclusions and no bypass actors, carry exactly one
 `required_status_checks` rule (strict policy off, enforced on create) whose
 pairs equal the derived set in both directions, and exactly one all-green
-`merge_queue` rule. Every unreadable
+`merge_queue` rule. GitHub returns `bypass_actors` only to a ruleset admin, so
+`--fetch` (a workflow token) cannot see them: it refuses a non-empty list when
+one is returned and otherwise leaves the bypass proof to an owner's `--live`
+read, which refuses a ruleset without the list. Every unreadable
 or malformed input fails closed (exit 1) with nothing printed to stdout.
 """
 from __future__ import annotations
@@ -139,9 +142,9 @@ def _typed(value: object, kind: type, what: str) -> None:
 # Top-level keys the API returns that carry no protection: they are display
 # metadata, read by no comparison.
 _RULESET_METADATA = frozenset({"name", "source", "node_id", "created_at", "updated_at", "_links"})
-_RULESET_KEYS = frozenset({"id", "target", "enforcement", "conditions", "rules", "bypass_actors"})
+_RULESET_KEYS = frozenset({"id", "target", "enforcement", "conditions", "rules"})
 # Keys present only in some responses; each is pinned when present.
-_RULESET_VIEWER_KEYS = frozenset({"source_type", "current_user_can_bypass"})
+_RULESET_VIEWER_KEYS = frozenset({"source_type", "current_user_can_bypass", "bypass_actors"})
 
 _PULL_REQUEST_PARAMS: dict[str, type] = {
     "required_approving_review_count": int,
@@ -212,8 +215,11 @@ def _rule(rule: object) -> tuple[str, tuple[Pair, ...]]:
     return head, tuple(pairs)
 
 
-def parse_ruleset(rs: object) -> Ruleset:
-    """The ruleset GET body as a `Ruleset`, or `Refused`."""
+def parse_ruleset(rs: object, *, admin_read: bool) -> Ruleset:
+    """The ruleset GET body as a `Ruleset`, or `Refused`.
+
+    `admin_read` is whether the body was read by a ruleset admin, the only
+    reader GitHub shows `bypass_actors` to; such a body must carry the list."""
     rs = _closed(rs, "the ruleset", _RULESET_KEYS, _RULESET_METADATA | _RULESET_VIEWER_KEYS)
     _pin(rs["id"], RULESET_ID, "the ruleset id")
     _pin(rs["target"], "branch", "the ruleset target")
@@ -222,7 +228,10 @@ def parse_ruleset(rs: object) -> Ruleset:
         _pin(rs["source_type"], "Repository", "the ruleset source_type")
     if "current_user_can_bypass" in rs:
         _pin(rs["current_user_can_bypass"], "never", "the ruleset current_user_can_bypass")
-    _pin(rs["bypass_actors"], [], "the ruleset bypass_actors")
+    if "bypass_actors" in rs:
+        _pin(rs["bypass_actors"], [], "the ruleset bypass_actors")
+    elif admin_read:
+        raise Refused("the ruleset lacks bypass_actors, which an admin read always returns")
     cond = _closed(rs["conditions"], "the ruleset conditions", frozenset({"ref_name"}))
     ref = _closed(cond["ref_name"], "the ruleset ref_name condition", frozenset({"include", "exclude"}))
     include = ref["include"]
@@ -310,7 +319,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.live or args.fetch:
             rs = _load_json(args.live, args.live) if args.live else fetch_ruleset()
             problems += diff(
-                required, list(parse_ruleset(rs).required), f"ruleset {RULESET_ID}",
+                required, list(parse_ruleset(rs, admin_read=bool(args.live)).required), f"ruleset {RULESET_ID}",
                 "reconcile it per .github/ci/RECONCILIATION.md",
             )
     except Refused as e:
