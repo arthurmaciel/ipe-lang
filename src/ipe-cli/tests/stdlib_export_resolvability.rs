@@ -300,13 +300,13 @@ fn random_full_surface_resolves() {
 // specific.
 
 /// Which exposed values of a module resolve to a kernel scheme.
-#[derive(Clone, Copy)]
 enum AliasScope {
     /// A veneer: every exposed value resolves through the qualifier catalog.
     EveryExposedValue,
-    /// A compiled-source module: only point-free `Kernel.kernel "…"` aliases
-    /// skip checking; every other body is compiled against its annotation.
-    KernelAliasesOnly,
+    /// A compiled-source module: exactly the exported kernel aliases canon
+    /// records for it (`ModuleExports::kernel_aliases`) skip checking; every
+    /// other body is compiled against its annotation.
+    CanonKernelAliases(BTreeSet<String>),
 }
 
 /// One exposed kernel-resolved member and its source annotation text.
@@ -319,6 +319,9 @@ struct AliasMember {
 /// annotations are written in.
 struct ProbeModule {
     dotted: String,
+    /// Source text standing in for the module's shipped source in every probe
+    /// graph (the injected module keeps its stdlib origin).
+    replacement: Option<String>,
     /// The module's own `import` lines (the kernel-alias import excluded).
     imports: String,
     /// The exposed types the module itself owns (not re-exposed imports); the
@@ -327,27 +330,130 @@ struct ProbeModule {
     members: Vec<AliasMember>,
 }
 
+fn dotted_path(dotted: &str) -> Vec<String> {
+    dotted.split('.').map(str::to_owned).collect()
+}
+
+/// `user` plus its injected compiled-stdlib closure, with `replacement`'s text
+/// standing in for the named injected module.
+fn prepared_with(
+    user: &UserSources,
+    replacement: Option<(&str, &str)>,
+) -> Result<(PreparedSources, BTreeSet<Vec<String>>), String> {
+    let (mut sources, injected) = prepared(user);
+    if let Some((dotted, text)) = replacement {
+        let path = dotted_path(dotted);
+        if !injected.contains(&path) {
+            return Err(format!("{dotted}: not an injected compiled-source module"));
+        }
+        let Some(slot) = sources.get_mut(&path) else {
+            return Err(format!("{dotted}: missing from the prepared sources"));
+        };
+        text.clone_into(&mut slot.1);
+    }
+    Ok((sources, injected))
+}
+
+/// The exported kernel aliases canon records for `dotted`.
+///
+/// This is canon's own classification (`detect_kernel_alias`), read from its
+/// resolved output rather than re-derived, so the gate probes exactly the
+/// bindings whose annotation the compiler never checks.
+fn canon_kernel_aliases(
+    dotted: &str,
+    replacement: Option<&str>,
+) -> Result<BTreeSet<String>, String> {
+    let mut user = UserSources::new();
+    user.insert(
+        entry_path(),
+        format!("module Main exposing (main)\nimport {dotted} as M\n\nmain : Int\nmain =\n    0\n"),
+    );
+    let (sources, injected) = prepared_with(&user, replacement.map(|text| (dotted, text)))?;
+    let db = ipe_db::IpeDatabase::new();
+    let root = ipe::create_source_root(&db, &sources, &injected, &BTreeSet::new());
+    let path = dotted_path(dotted);
+    let Some(file) = root.files(&db).get(&path).copied() else {
+        return Err(format!("{dotted}: not in the injected graph"));
+    };
+    let canon = ipe_db::canonicalize(&db, root, file).clone().map_err(|d| {
+        let text = sources.get(&path).map_or("", |(_, t)| t.as_str());
+        format!(
+            "{dotted}: failed to canonicalise: {}",
+            ipe_diagnostics::render(&d, &format!("{dotted}.ipe"), text)
+        )
+    })?;
+    let interner = db.interner().lock();
+    canon
+        .exports
+        .kernel_aliases
+        .keys()
+        .map(|s| {
+            interner
+                .resolve(*s)
+                .map(str::to_owned)
+                .ok_or_else(|| format!("{dotted}: a kernel-alias name is not interned"))
+        })
+        .collect()
+}
+
+/// A binding's image under the pair-consistent renaming.
+#[derive(PartialEq, Eq)]
+enum Image {
+    Var(u32),
+    Seal(String),
+}
+
 /// The pair-consistent renaming built while comparing two types.
 #[derive(Default)]
 struct VarPairs {
     left: BTreeMap<u32, u32>,
-    right: BTreeMap<u32, u32>,
+    right: BTreeMap<u32, Image>,
+    /// Probe-local nullary types standing in for scheme variables a probe
+    /// annotation may not state; each pairs bijectively with one variable.
+    seals: BTreeSet<String>,
+    seal_left: BTreeMap<String, u32>,
 }
 
 impl VarPairs {
+    fn with_seals(seals: &BTreeSet<String>) -> Self {
+        Self {
+            seals: seals.clone(),
+            ..Self::default()
+        }
+    }
+
     /// Record `a ↔ b`; `false` when either side is already paired elsewhere.
     fn pair(&mut self, a: u32, b: u32) -> bool {
         let l = *self.left.entry(a).or_insert(b);
-        let r = *self.right.entry(b).or_insert(a);
-        l == b && r == a
+        let r_ok = *self.right.entry(b).or_insert(Image::Var(a)) == Image::Var(a);
+        l == b && r_ok
+    }
+
+    /// Record seal `name ↔ b`; `false` when either side is already paired
+    /// elsewhere.
+    fn pair_seal(&mut self, name: &str, b: u32) -> bool {
+        let l = *self.seal_left.entry(name.to_owned()).or_insert(b);
+        let image = Image::Seal(name.to_owned());
+        let r_ok = *self
+            .right
+            .entry(b)
+            .or_insert_with(|| Image::Seal(name.to_owned()))
+            == image;
+        l == b && r_ok
     }
 }
 
 /// Alpha-equivalence: equal up to a bijective renaming of type (and row)
-/// variables.
+/// variables, with each declared seal standing for one scheme variable.
 fn alpha_eq(a: &Ty, b: &Ty, interner: &Interner, vars: &mut VarPairs) -> bool {
     match (a, b) {
         (Ty::Var(x), Ty::Var(y)) => vars.pair(*x, *y),
+        (Ty::Con { name, args, .. }, Ty::Var(y)) if args.is_empty() => {
+            match interner.resolve(*name) {
+                Some(seal) if vars.seals.contains(seal) => vars.pair_seal(seal, *y),
+                _ => false,
+            }
+        }
         (Ty::Fun(a1, r1), Ty::Fun(a2, r2)) => {
             alpha_eq(a1, a2, interner, vars) && alpha_eq(r1, r2, interner, vars)
         }
@@ -409,8 +515,9 @@ fn span_text<'s>(source: &'s str, span: ipe_diagnostics::Span) -> Option<&'s str
 }
 
 /// Collect a module's exposed kernel-resolved members; `Err` names a member
-/// the gate cannot check (unparsable module, missing annotation).
-fn alias_members(dotted: &str, source: &str, scope: AliasScope) -> Result<ProbeModule, String> {
+/// the gate cannot check (unparsable module, missing annotation, or a
+/// kernel-shaped binding canon does not record).
+fn alias_members(dotted: &str, source: &str, scope: &AliasScope) -> Result<ProbeModule, String> {
     use ipe_syntax::{Exposed, Exposing, Expr_};
 
     let mut interner = Interner::new();
@@ -431,6 +538,11 @@ fn alias_members(dotted: &str, source: &str, scope: AliasScope) -> Result<ProbeM
             })
             .collect()
     });
+    let is_exposed = |member: &str| {
+        exposed_values
+            .as_ref()
+            .is_none_or(|set| set.contains(member))
+    };
     let exposed_type_names: Option<BTreeSet<String>> = exposed.as_ref().map(|items| {
         items
             .iter()
@@ -465,12 +577,10 @@ fn alias_members(dotted: &str, source: &str, scope: AliasScope) -> Result<ProbeM
             .collect(),
     };
 
-    let mut kernel_alias: Option<ipe_intern::Symbol> = None;
     let mut imports = String::new();
     for import in &parsed.imports {
         let path: Vec<String> = import.name.value.iter().map(|s| name(*s)).collect();
         if path == ["Ipe", "Ffi", "Kernel"] {
-            kernel_alias = import.alias;
             continue;
         }
         let text = span_text(source, import.span)
@@ -479,28 +589,48 @@ fn alias_members(dotted: &str, source: &str, scope: AliasScope) -> Result<ProbeM
         imports.push('\n');
     }
 
+    if let AliasScope::CanonKernelAliases(aliases) = scope {
+        let exposed_bindings: BTreeSet<String> = parsed
+            .values
+            .iter()
+            .map(|v| name(v.value.name.value))
+            .filter(|n| is_exposed(n))
+            .collect();
+        if let Some(missing) = aliases.difference(&exposed_bindings).next() {
+            return Err(format!(
+                "{dotted}.{missing}: canon exports a kernel alias with no exposed source binding"
+            ));
+        }
+    }
+
     let mut members = Vec::new();
     for value in &parsed.values {
         let value = &value.value;
         let member = name(value.name.value);
-        if !exposed_values
-            .as_ref()
-            .is_none_or(|set| set.contains(&member))
-        {
+        if !is_exposed(&member) {
             continue;
         }
-        let is_kernel_alias = value.patterns.is_empty()
-            && matches!(
-                &value.body.value,
-                Expr_::Call(callee, args)
-                    if args.len() == 1
-                        && matches!(
-                            &callee.value,
-                            Expr_::VarQual(q, k)
-                                if Some(*q) == kernel_alias && interner.resolve(*k) == Some("kernel")
-                        )
-            );
-        if matches!(scope, AliasScope::KernelAliasesOnly) && !is_kernel_alias {
+        if let AliasScope::CanonKernelAliases(aliases) = scope
+            && !aliases.contains(&member)
+        {
+            // A point-free `_.kernel "…"` body canon did not classify as an
+            // alias would silently escape the probe; refuse it instead.
+            let kernel_shaped = value.patterns.is_empty()
+                && matches!(
+                    &value.body.value,
+                    Expr_::Call(callee, args)
+                        if args.len() == 1
+                            && matches!(
+                                &callee.value,
+                                Expr_::VarQual(_, k) if interner.resolve(*k) == Some("kernel")
+                            )
+                );
+            if kernel_shaped {
+                return Err(format!(
+                    "{dotted}.{member}: kernel-alias-shaped binding canon does not record \
+                     as a kernel alias — the gate would skip it"
+                ));
+            }
             continue;
         }
         let annotation = value
@@ -517,6 +647,7 @@ fn alias_members(dotted: &str, source: &str, scope: AliasScope) -> Result<ProbeM
     }
     Ok(ProbeModule {
         dotted: dotted.to_owned(),
+        replacement: None,
         imports,
         own_types,
         members,
@@ -530,22 +661,27 @@ fn probe_path() -> Vec<String> {
     vec!["Probe".to_owned()]
 }
 
-/// `annotation` with every bare, unqualified `own_types` name written `M.T`.
-fn qualify(annotation: &str, own_types: &BTreeSet<String>) -> String {
-    let mut out = String::with_capacity(annotation.len());
+/// `text` with every standalone word (neither qualified nor qualifying) that
+/// `f` maps replaced by its image.
+fn rewrite_words(text: &str, f: impl Fn(&str) -> Option<String>) -> String {
+    let mut out = String::with_capacity(text.len());
     let mut word = String::new();
     let mut prev: Option<char> = None;
     let mut before_word: Option<char> = None;
     let flush = |word: &mut String, before: Option<char>, next: Option<char>, out: &mut String| {
-        if !word.is_empty() {
-            if before != Some('.') && next != Some('.') && own_types.contains(word.as_str()) {
-                out.push_str("M.");
-            }
-            out.push_str(word);
-            word.clear();
+        if word.is_empty() {
+            return;
         }
+        match (before != Some('.') && next != Some('.'))
+            .then(|| f(word.as_str()))
+            .flatten()
+        {
+            Some(image) => out.push_str(&image),
+            None => out.push_str(word),
+        }
+        word.clear();
     };
-    for c in annotation.chars() {
+    for c in text.chars() {
         if c.is_alphanumeric() || c == '_' {
             if word.is_empty() {
                 before_word = prev;
@@ -561,11 +697,35 @@ fn qualify(annotation: &str, own_types: &BTreeSet<String>) -> String {
     out
 }
 
-fn probe_source(m: &ProbeModule, members: &[AliasMember]) -> String {
+/// `annotation` with every bare, unqualified `own_types` name written `M.T`.
+fn qualify(annotation: &str, own_types: &BTreeSet<String>) -> String {
+    rewrite_words(annotation, |w| {
+        own_types.contains(w).then(|| format!("M.{w}"))
+    })
+}
+
+fn seal_name(i: usize) -> String {
+    format!("IpeProbeSeal{i}")
+}
+
+/// `annotation` with the `i`-th of `seal_vars` written as the probe-local
+/// nullary type [`seal_name`]`(i)`.
+fn seal_annotation(annotation: &str, seal_vars: &[&str]) -> String {
+    rewrite_words(annotation, |w| {
+        seal_vars.iter().position(|v| *v == w).map(seal_name)
+    })
+}
+
+/// The probe module restating `members`, declaring `seals` probe-local
+/// nullary types first.
+fn probe_source(m: &ProbeModule, members: &[AliasMember], seals: usize) -> String {
     let mut s = format!(
         "module Probe exposing (..)\n{}import {} as M\n",
         m.imports, m.dotted
     );
+    for i in 0..seals {
+        let _ = write!(s, "\n\ntype {0} =\n    {0}Value\n", seal_name(i));
+    }
     for (i, member) in members.iter().enumerate() {
         let _ = write!(
             s,
@@ -581,38 +741,63 @@ fn probe_source(m: &ProbeModule, members: &[AliasMember]) -> String {
 /// A drift: the member index plus why its annotation is not the scheme.
 type Drift = (usize, String);
 
+/// Why a probe could not be compared.
+#[derive(Debug)]
+struct ProbeFailure {
+    /// The refusing diagnostic's exact code; `None` for a malformed probe graph.
+    code: Option<&'static str>,
+    rendered: String,
+}
+
 /// Type-check one probe (routed through a `main`-less helper, so `Ipe.Tea.*`
 /// shapes stay legal) and compare each accepted `annN` against the scheme of
-/// the kernel the pipeline resolves `infN = M.member` to; `Err` is the
-/// rendered resolution or type error.
+/// the kernel the pipeline resolves `infN = M.member` to.
 ///
 /// The scheme is read from the kernel table inference instantiates, not from
 /// `infN`'s solved type: an unannotated top-level binding is numeric-,
 /// interpolation- and UI-msg-defaulted, which would pin `number`/`msg` to a
 /// ground type the scheme never states.
-fn run_probe(probe: &str, count: usize) -> Result<Vec<Drift>, String> {
+fn run_probe(
+    m: &ProbeModule,
+    probe: &str,
+    count: usize,
+    seals: &BTreeSet<String>,
+) -> Result<Vec<Drift>, ProbeFailure> {
+    let graph_failure = |rendered: String| ProbeFailure {
+        code: None,
+        rendered,
+    };
     let mut user = UserSources::new();
     user.insert(entry_path(), PROBE_MAIN.to_owned());
     user.insert(probe_path(), probe.to_owned());
-    let (sources, injected) = prepared(&user);
+    let (sources, injected) = prepared_with(
+        &user,
+        m.replacement
+            .as_deref()
+            .map(|text| (m.dotted.as_str(), text)),
+    )
+    .map_err(graph_failure)?;
     let db = ipe_db::IpeDatabase::new();
     let root = ipe::create_source_root(&db, &sources, &injected, &BTreeSet::new());
     let files = root.files(&db);
     let (Some(entry), Some(module)) = (files.get(&entry_path()), files.get(&probe_path())) else {
-        return Err("probe graph lacks `Main` or `Probe`".to_owned());
+        return Err(graph_failure(
+            "probe graph lacks `Main` or `Probe`".to_owned(),
+        ));
     };
-    let render_diag = |d: &ipe_diagnostics::Diagnostic| {
-        ipe_diagnostics::render(d, "<resolvability>/Probe.ipe", probe)
+    let refused = |d: &ipe_diagnostics::Diagnostic| ProbeFailure {
+        code: Some(d.code().as_str()),
+        rendered: ipe_diagnostics::render(d, "<resolvability>/Probe.ipe", probe),
     };
     let types = ipe_db::typecheck_module(&db, root, *entry, *module)
         .clone()
-        .map_err(|(d, _)| render_diag(&d))?;
+        .map_err(|(d, _)| refused(&d))?;
     let canon = ipe_db::canonicalize(&db, root, *module)
         .clone()
-        .map_err(|d| render_diag(&d))?;
+        .map_err(|d| refused(&d))?;
     let kernel_table = ipe_db::kernel_types(&db, root)
         .clone()
-        .map_err(|d| render_diag(&d))?;
+        .map_err(|d| refused(&d))?;
     let interner = db.interner().lock();
     let annotated: BTreeMap<String, &Ty> = types
         .env
@@ -654,7 +839,7 @@ fn run_probe(probe: &str, count: usize) -> Result<Vec<Drift>, String> {
             drifts.push((i, format!("kernel `{kernel:?}` carries no type scheme")));
             continue;
         };
-        if !alpha_eq(ann, inf, &interner, &mut VarPairs::default()) {
+        if !alpha_eq(ann, inf, &interner, &mut VarPairs::with_seals(seals)) {
             drifts.push((
                 i,
                 format!(
@@ -673,13 +858,19 @@ fn module_drifts(m: &ProbeModule) -> Vec<String> {
     if m.members.is_empty() {
         return Vec::new();
     }
+    let no_seals = BTreeSet::new();
     let describe = |member: &AliasMember, why: &str| {
         format!(
             "{}.{} : {} — {why}",
             m.dotted, member.name, member.annotation
         )
     };
-    match run_probe(&probe_source(m, &m.members), m.members.len()) {
+    match run_probe(
+        m,
+        &probe_source(m, &m.members, 0),
+        m.members.len(),
+        &no_seals,
+    ) {
         Ok(drifts) => drifts
             .iter()
             .filter_map(|(i, why)| m.members.get(*i).map(|member| describe(member, why)))
@@ -690,17 +881,28 @@ fn module_drifts(m: &ProbeModule) -> Vec<String> {
                 .members
                 .iter()
                 .filter_map(|member| {
-                    match run_probe(&probe_source(m, std::slice::from_ref(member)), 1) {
+                    match run_probe(
+                        m,
+                        &probe_source(m, std::slice::from_ref(member), 0),
+                        1,
+                        &no_seals,
+                    ) {
                         Ok(drifts) => drifts.first().map(|(_, why)| describe(member, why)),
                         Err(e) => Some(describe(
                             member,
-                            &format!("annotation rejected against the enforced scheme: {e}"),
+                            &format!(
+                                "annotation rejected against the enforced scheme: {}",
+                                e.rendered
+                            ),
                         )),
                     }
                 })
                 .collect();
             if singles.is_empty() {
-                vec![format!("{}: probe failed as a whole: {whole}", m.dotted)]
+                vec![format!(
+                    "{}: probe failed as a whole: {}",
+                    m.dotted, whole.rendered
+                )]
             } else {
                 singles
             }
@@ -708,59 +910,121 @@ fn module_drifts(m: &ProbeModule) -> Vec<String> {
     }
 }
 
-/// Members whose annotation a probe cannot restate, each with the refusal that
-/// forbids it. The gate re-probes each one and requires that exact refusal, so
-/// an entry that stops being necessary fails the gate instead of lingering.
-const UNPROBEABLE: &[(&str, &str)] = &[(
+/// A member whose annotation a probe cannot restate verbatim.
+struct Unprobeable {
+    path: &'static str,
+    /// The exact diagnostic code refusing the verbatim restatement.
+    code: &'static str,
+    /// The annotation's type variables that refusal forbids. The gate restates
+    /// the annotation with each written as a probe-local nullary type and
+    /// compares that against the scheme, so the entry is still checked.
+    seal_vars: &'static [&'static str],
+}
+
+/// Members whose annotation a probe cannot restate verbatim. The gate requires
+/// the exact refusal (so an entry that stops being necessary fails instead of
+/// lingering) AND compares the sealed restatement against the scheme.
+const UNPROBEABLE: &[Unprobeable] = &[Unprobeable {
     // A user annotation may not leave a `CustomElement` seal polymorphic; only
     // the stdlib boundary member itself is generic over `down` / `up`.
-    "Ipe.Ffi.Js.CustomElement.node",
-    "IPE-N0039",
-)];
+    path: "Ipe.Ffi.Js.CustomElement.node",
+    code: "IPE-N0039",
+    seal_vars: &["down", "up"],
+}];
+
+/// Check one `UNPROBEABLE` member; `Err` says why it fails the gate.
+fn check_unprobeable(
+    m: &ProbeModule,
+    member: &AliasMember,
+    entry: &Unprobeable,
+) -> Result<(), String> {
+    let path = entry.path;
+    let verbatim = run_probe(
+        m,
+        &probe_source(m, std::slice::from_ref(member), 0),
+        1,
+        &BTreeSet::new(),
+    );
+    if !matches!(&verbatim, Err(ProbeFailure { code: Some(c), .. }) if *c == entry.code) {
+        return Err(format!(
+            "{path}: listed UNPROBEABLE for {} but the verbatim probe gave {verbatim:?}",
+            entry.code
+        ));
+    }
+    let sealed = AliasMember {
+        name: member.name.clone(),
+        annotation: seal_annotation(&member.annotation, entry.seal_vars),
+    };
+    let seals: BTreeSet<String> = (0..entry.seal_vars.len()).map(seal_name).collect();
+    if let Some(unused) = seals
+        .iter()
+        .find(|s| !sealed.annotation.contains(s.as_str()))
+    {
+        return Err(format!(
+            "{path} : {} — seal variable for `{unused}` does not occur in the annotation",
+            member.annotation
+        ));
+    }
+    match run_probe(
+        m,
+        &probe_source(m, std::slice::from_ref(&sealed), entry.seal_vars.len()),
+        1,
+        &seals,
+    ) {
+        Ok(drifts) if drifts.is_empty() => Ok(()),
+        other => Err(format!(
+            "{path} : {} — the sealed restatement `{}` is not the enforced scheme: {other:?}",
+            member.annotation, sealed.annotation
+        )),
+    }
+}
 
 /// Every exposed kernel-resolved value's annotation EQUALS the scheme the
 /// compiler enforces for `Module.member`.
 ///
-/// Covers every veneer value (`MODULES`) and every exposed point-free
-/// `Kernel.kernel "…"` alias of a compiled-source module — the two places an
-/// annotation is documentation the type checker never reads. Floors pin that
-/// every veneer and the compiled-source aliases are actually probed, so the
-/// gate cannot pass by checking nothing.
+/// Covers every veneer value (`MODULES`) and every exported kernel alias canon
+/// records for a compiled-source module — the two places an annotation is
+/// documentation the type checker never reads. Floors pin that every veneer
+/// and every canon-recorded alias is actually probed, so the gate cannot pass
+/// by checking nothing.
 #[test]
 fn kernel_alias_annotations_equal_enforced_schemes() {
-    let modules = ipe_stdlib::MODULES
+    let mut failures: Vec<String> = Vec::new();
+    let mut modules: Vec<(&str, &str, AliasScope)> = ipe_stdlib::MODULES
         .iter()
         .map(|m| (m.name, m.source, AliasScope::EveryExposedValue))
-        .chain(
-            ipe_stdlib::COMPILED_STD_MODULES
-                .iter()
-                .map(|m| (m.dotted, m.source, AliasScope::KernelAliasesOnly)),
-        );
-    let mut failures: Vec<String> = Vec::new();
+        .collect();
+    let mut expected: BTreeSet<String> = BTreeSet::new();
+    for m in ipe_stdlib::COMPILED_STD_MODULES {
+        match canon_kernel_aliases(m.dotted, None) {
+            Ok(aliases) => {
+                expected.extend(aliases.iter().map(|a| format!("{}.{a}", m.dotted)));
+                modules.push((m.dotted, m.source, AliasScope::CanonKernelAliases(aliases)));
+            }
+            Err(e) => failures.push(e),
+        }
+    }
     let mut probed: BTreeSet<String> = BTreeSet::new();
     let mut exempted: BTreeSet<String> = BTreeSet::new();
-    for (dotted, source, scope) in modules {
+    for (dotted, source, scope) in &modules {
         match alias_members(dotted, source, scope) {
             Ok(mut m) => {
                 let (exempt, checked): (Vec<AliasMember>, Vec<AliasMember>) =
                     m.members.into_iter().partition(|member| {
                         let path = format!("{}.{}", m.dotted, member.name);
-                        UNPROBEABLE.iter().any(|(p, _)| *p == path)
+                        UNPROBEABLE.iter().any(|u| u.path == path)
                     });
                 m.members = checked;
                 for member in &exempt {
                     let path = format!("{}.{}", m.dotted, member.name);
-                    let code = UNPROBEABLE
-                        .iter()
-                        .find(|(p, _)| *p == path)
-                        .map_or("", |(_, c)| c);
-                    match run_probe(&probe_source(&m, std::slice::from_ref(member)), 1) {
-                        Err(e) if e.contains(code) => {
+                    let Some(entry) = UNPROBEABLE.iter().find(|u| u.path == path) else {
+                        continue;
+                    };
+                    match check_unprobeable(&m, member, entry) {
+                        Ok(()) => {
                             exempted.insert(path);
                         }
-                        other => failures.push(format!(
-                            "{path}: listed UNPROBEABLE for {code} but the probe gave {other:?}"
-                        )),
+                        Err(e) => failures.push(e),
                     }
                 }
                 for member in &m.members {
@@ -779,13 +1043,25 @@ fn kernel_alias_annotations_equal_enforced_schemes() {
             veneer.name,
         );
     }
-    for (path, _) in UNPROBEABLE {
+    let covered: BTreeSet<String> = probed.union(&exempted).cloned().collect();
+    let unprobed: Vec<&String> = expected.difference(&covered).collect();
+    assert!(
+        unprobed.is_empty(),
+        "canon-recorded kernel aliases the gate never checked: {unprobed:?}"
+    );
+    for entry in UNPROBEABLE {
         assert!(
-            exempted.contains(*path),
-            "UNPROBEABLE entry `{path}` names no exposed kernel alias"
+            exempted.contains(entry.path) || failures.iter().any(|f| f.starts_with(entry.path)),
+            "UNPROBEABLE entry `{}` names no exposed kernel alias",
+            entry.path
         );
     }
-    for pinned in ["Ipe.File.readFile", "Ipe.Random.int", "Ipe.System.exit"] {
+    for pinned in [
+        "Ipe.Bytes.length",
+        "Ipe.File.readFile",
+        "Ipe.Random.int",
+        "Ipe.System.exit",
+    ] {
         assert!(
             probed.contains(pinned),
             "`{pinned}` must be probed; probed = {probed:?}"
@@ -806,6 +1082,7 @@ fn kernel_alias_annotations_equal_enforced_schemes() {
 fn alias_gate_flags_an_over_specific_annotation() {
     let m = ProbeModule {
         dotted: "Ipe.System".to_owned(),
+        replacement: None,
         imports: String::new(),
         own_types: BTreeSet::new(),
         members: vec![AliasMember {
@@ -826,6 +1103,7 @@ fn alias_gate_flags_an_over_specific_annotation() {
 fn alias_gate_flags_a_contradicting_annotation() {
     let m = ProbeModule {
         dotted: "Ipe.File".to_owned(),
+        replacement: None,
         imports: "import Ipe.Error exposing (Error)\n".to_owned(),
         own_types: BTreeSet::new(),
         members: vec![AliasMember {
@@ -845,6 +1123,7 @@ fn alias_gate_flags_a_contradicting_annotation() {
 fn alias_gate_accepts_an_alpha_renamed_annotation() {
     let m = ProbeModule {
         dotted: "Ipe.System".to_owned(),
+        replacement: None,
         imports: String::new(),
         own_types: BTreeSet::new(),
         members: vec![AliasMember {
@@ -854,6 +1133,113 @@ fn alias_gate_accepts_an_alpha_renamed_annotation() {
     };
     let drifts = module_drifts(&m);
     assert!(drifts.is_empty(), "`Int -> zzz` is `Int -> a`: {drifts:?}");
+}
+
+/// Refusal: a compiled-source module WITHOUT the `Ipe.Ffi.Kernel` import is
+/// still probed — canon's alias set, not the import, selects the members — and
+/// a drifted annotation there is flagged.
+#[test]
+fn alias_gate_probes_a_module_without_the_kernel_import() {
+    let bytes = ipe_stdlib::COMPILED_STD_MODULES
+        .iter()
+        .find(|m| m.dotted == "Ipe.Bytes");
+    assert!(
+        bytes.is_some(),
+        "`Ipe.Bytes` must be a compiled-source module"
+    );
+    let Some(bytes) = bytes else { return };
+    assert!(
+        !bytes.source.contains("import Ipe.Ffi.Kernel"),
+        "the refusal needs a module that does not import `Ipe.Ffi.Kernel`"
+    );
+    let shipped = "length : Bytes -> Int";
+    assert!(
+        bytes.source.contains(shipped),
+        "`Ipe.Bytes` must ship `{shipped}`"
+    );
+    let drifted = bytes
+        .source
+        .replacen(shipped, "length : Bytes -> String", 1);
+    let aliases = canon_kernel_aliases("Ipe.Bytes", Some(&drifted));
+    assert!(
+        aliases.as_ref().is_ok_and(|a| a.contains("length")),
+        "canon must record `Ipe.Bytes.length` as a kernel alias: {aliases:?}"
+    );
+    let Ok(aliases) = aliases else { return };
+    let members = alias_members(
+        "Ipe.Bytes",
+        &drifted,
+        &AliasScope::CanonKernelAliases(aliases),
+    );
+    assert!(
+        members
+            .as_ref()
+            .is_ok_and(|m| m.members.iter().any(|x| x.name == "length")),
+        "`Ipe.Bytes.length` must be selected for probing: {:?}",
+        members.as_ref().err()
+    );
+    let Ok(mut m) = members else { return };
+    m.replacement = Some(drifted);
+    let drifts = module_drifts(&m);
+    assert!(
+        drifts.len() == 1 && drifts.iter().all(|d| d.contains("Ipe.Bytes.length")),
+        "`length : Bytes -> String` over `Bytes -> Int` must be one drift: {drifts:?}",
+    );
+}
+
+/// Refusal: a kernel-shaped exposed binding canon does not record as an alias
+/// fails the selection instead of silently escaping the probe.
+#[test]
+fn alias_gate_refuses_an_unrecorded_kernel_shaped_binding() {
+    let source = "module Ipe.Bytes exposing (length)\n\nlength : Bytes -> Int\nlength =\n    Kernel.kernel \"Bytes_length\"\n";
+    let members = alias_members(
+        "Ipe.Bytes",
+        source,
+        &AliasScope::CanonKernelAliases(BTreeSet::new()),
+    );
+    assert!(
+        members
+            .as_ref()
+            .err()
+            .is_some_and(|e| e.contains("Ipe.Bytes.length")),
+        "an unrecorded kernel-shaped binding must be refused: {:?}",
+        members.as_ref().map(|m| m.members.len())
+    );
+}
+
+/// Control: the seal comparator pairs each seal with one scheme variable, and
+/// refuses one seal standing for two distinct variables.
+#[test]
+fn seal_comparison_is_bijective() {
+    let mut interner = Interner::new();
+    let seal = interner.intern("IpeProbeSeal0");
+    assert!(seal.is_ok(), "interning a seal name must succeed");
+    let Ok(seal) = seal else { return };
+    let seal_ty = Ty::Con {
+        module: Vec::new(),
+        name: seal,
+        args: Vec::new(),
+    };
+    let seals = BTreeSet::from([seal_name(0)]);
+    let same = Ty::Fun(Box::new(seal_ty.clone()), Box::new(seal_ty.clone()));
+    let scheme_same = Ty::Fun(Box::new(Ty::Var(1)), Box::new(Ty::Var(1)));
+    let scheme_split = Ty::Fun(Box::new(Ty::Var(1)), Box::new(Ty::Var(2)));
+    assert!(alpha_eq(
+        &same,
+        &scheme_same,
+        &interner,
+        &mut VarPairs::with_seals(&seals)
+    ));
+    assert!(!alpha_eq(
+        &same,
+        &scheme_split,
+        &interner,
+        &mut VarPairs::with_seals(&seals)
+    ));
+    assert!(
+        !alpha_eq(&same, &scheme_same, &interner, &mut VarPairs::default()),
+        "an undeclared nullary type is never a scheme variable"
+    );
 }
 
 /// `File.readFileLimit` takes the documented `ByteSize` ceiling.
