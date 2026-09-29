@@ -600,61 +600,56 @@ pub(crate) fn user_ipe_db_store_cond_fragment_in(
 ) -> IpeResult<ipe_runtime::error::IpeError, ipe_runtime::db::SqlFragment> {
     let _ipe_recursion_guard = crate::recursion_guard();
     match cond {
-        IpeDbStoreCond::Compare(op, col, value) => ipe_result_map(
-            crate::user_ipe_db_store_live_name(view, col),
-            {
+        IpeDbStoreCond::Compare(op, col, value) => {
+            ipe_result_map(crate::user_ipe_db_store_live_name(view, col), {
                 let __ipe_fn: Box<
                     dyn Fn(String) -> ipe_runtime::db::SqlFragment + Send + Sync + 'static,
                 > = Box::new(move |live: String| -> ipe_runtime::db::SqlFragment {
                     crate::user_ipe_db_store_compare_fragment(op.clone(), live, value.clone())
                 });
                 __ipe_fn
-            },
-        ),
-        IpeDbStoreCond::Like(col, pattern) => ipe_result_map(
-            crate::user_ipe_db_store_live_name(view, col),
-            {
+            })
+        }
+        IpeDbStoreCond::Like(col, pattern) => {
+            ipe_result_map(crate::user_ipe_db_store_live_name(view, col), {
                 let __ipe_fn: Box<
                     dyn Fn(String) -> ipe_runtime::db::SqlFragment + Send + Sync + 'static,
                 > = Box::new(move |live: String| -> ipe_runtime::db::SqlFragment {
                     sql_like(sql_column(live), pattern.clone())
                 });
                 __ipe_fn
-            },
-        ),
-        IpeDbStoreCond::IsNull(col) => ipe_result_map(
-            crate::user_ipe_db_store_live_name(view, col),
-            {
+            })
+        }
+        IpeDbStoreCond::IsNull(col) => {
+            ipe_result_map(crate::user_ipe_db_store_live_name(view, col), {
                 let __ipe_fn: Box<
                     dyn Fn(String) -> ipe_runtime::db::SqlFragment + Send + Sync + 'static,
                 > = Box::new(move |live: String| -> ipe_runtime::db::SqlFragment {
                     sql_is_null(sql_column(live))
                 });
                 __ipe_fn
-            },
-        ),
-        IpeDbStoreCond::NotNull(col) => ipe_result_map(
-            crate::user_ipe_db_store_live_name(view, col),
-            {
+            })
+        }
+        IpeDbStoreCond::NotNull(col) => {
+            ipe_result_map(crate::user_ipe_db_store_live_name(view, col), {
                 let __ipe_fn: Box<
                     dyn Fn(String) -> ipe_runtime::db::SqlFragment + Send + Sync + 'static,
                 > = Box::new(move |live: String| -> ipe_runtime::db::SqlFragment {
                     sql_is_not_null(sql_column(live))
                 });
                 __ipe_fn
-            },
-        ),
-        IpeDbStoreCond::InList(col, values) => ipe_result_map(
-            crate::user_ipe_db_store_live_name(view, col),
-            {
+            })
+        }
+        IpeDbStoreCond::InList(col, values) => {
+            ipe_result_map(crate::user_ipe_db_store_live_name(view, col), {
                 let __ipe_fn: Box<
                     dyn Fn(String) -> ipe_runtime::db::SqlFragment + Send + Sync + 'static,
                 > = Box::new(move |live: String| -> ipe_runtime::db::SqlFragment {
                     sql_in_list(sql_column(live), (values.clone()).into_iter().map(::core::convert::Into::into).collect::<Vec<ipe_runtime::db::SqlParam>>())
                 });
                 __ipe_fn
-            },
-        ),
+            })
+        }
         IpeDbStoreCond::AndList(conds) => {
             let conds = *conds;
             crate::user_ipe_db_store_fold_conds(
@@ -838,8 +833,8 @@ pub(crate) fn user_ipe_db_store_exists_in_named<T1: Clone>(
     let _ipe_recursion_guard = crate::recursion_guard();
     match shareSecured {
         IpeDbStoreSecured::Secured(shareStore, sharePolicy) => match shareStore.clone() {
-            IpeDbStoreStore::Store(s) => IpeDbStorePred::PExists(Box::new(
-                IpeDbStoreExistsRef::ExistsRef(Box::new(
+            IpeDbStoreStore::Store(s) => {
+                IpeDbStorePred::PExists(Box::new(IpeDbStoreExistsRef::ExistsRef(Box::new(
                     RecOuterColShareColShareReadShareTableShareView {
                         outerCol: outerCol,
                         shareCol: shareCol,
@@ -849,8 +844,8 @@ pub(crate) fn user_ipe_db_store_exists_in_named<T1: Clone>(
                         shareTable: (s).table.clone(),
                         shareView: crate::user_ipe_db_store_store_view(shareStore),
                     },
-                )),
-            )),
+                ))))
+            }
         },
     }
 }
@@ -1309,9 +1304,8 @@ pub(crate) fn user_ipe_db_store_pred_fragment_in(
         IpeDbStorePred::PAlways => IpeResult::Ok(crate::user_ipe_db_store_true_fragment()),
         IpeDbStorePred::PNever => IpeResult::Ok(crate::user_ipe_db_store_false_fragment()),
         IpeDbStorePred::PMatch(cond) => crate::user_ipe_db_store_cond_fragment_in(view, cond),
-        IpeDbStorePred::POwner(col) => ipe_result_map(
-            crate::user_ipe_db_store_live_name(view, col),
-            {
+        IpeDbStorePred::POwner(col) => {
+            ipe_result_map(crate::user_ipe_db_store_live_name(view, col), {
                 let __ipe_fn: Box<
                     dyn Fn(String) -> ipe_runtime::db::SqlFragment + Send + Sync + 'static,
                 > = Box::new(move |live: String| -> ipe_runtime::db::SqlFragment {
@@ -1323,8 +1317,8 @@ pub(crate) fn user_ipe_db_store_pred_fragment_in(
                     )
                 });
                 __ipe_fn
-            },
-        ),
+            })
+        }
         IpeDbStorePred::PRole(name) => IpeResult::Ok(
             crate::user_ipe_db_store_admit_fragment(principal_has_role(name, principal)),
         ),
@@ -1737,28 +1731,30 @@ pub(crate) fn user_ipe_db_store_first_unknown_policy_exists_share_column(
 ) -> IpeMaybe<String> {
     let _ipe_recursion_guard = crate::recursion_guard();
     match policy {
-        IpeDbStorePolicy::Policy(r) => crate::user_ipe_db_store_first_unknown_exists_share_column_in(
-            list_append(
-                vec![
-                    (r.clone()).read.clone(),
-                    (r.clone()).insert.clone(),
-                    (r.clone()).update.clone(),
-                    (r.clone()).delete.clone(),
-                ],
-                list_map_consume(
-                    {
-                        let __ipe_fn: Box<
-                            dyn Fn((String, IpeDbStorePred)) -> IpeDbStorePred
-                                + Send
-                                + Sync
-                                + 'static,
-                        > = Box::new(crate::user_ipe_db_store_mask_pred);
-                        __ipe_fn
-                    },
-                    (r).masks.clone(),
+        IpeDbStorePolicy::Policy(r) => {
+            crate::user_ipe_db_store_first_unknown_exists_share_column_in(
+                list_append(
+                    vec![
+                        (r.clone()).read.clone(),
+                        (r.clone()).insert.clone(),
+                        (r.clone()).update.clone(),
+                        (r.clone()).delete.clone(),
+                    ],
+                    list_map_consume(
+                        {
+                            let __ipe_fn: Box<
+                                dyn Fn((String, IpeDbStorePred)) -> IpeDbStorePred
+                                    + Send
+                                    + Sync
+                                    + 'static,
+                            > = Box::new(crate::user_ipe_db_store_mask_pred);
+                            __ipe_fn
+                        },
+                        (r).masks.clone(),
+                    ),
                 ),
-            ),
-        ),
+            )
+        }
     }
 }
 pub(crate) fn user_ipe_db_store_policy_columns(policy: IpeDbStorePolicy) -> Vec<String> {
