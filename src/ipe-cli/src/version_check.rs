@@ -8,8 +8,7 @@ use semver::Version;
 
 /// The GitHub releases API for the published `ipe` binaries — the same repo the
 /// installer (`INSTALL_SH_URL`) resolves against.
-const RELEASES_LATEST_API: &str =
-    "https://api.github.com/repos/arthurmaciel/ipe-lang/releases/latest";
+const RELEASES_LATEST_API: &str = "https://api.github.com/repos/ipe-lang/compiler/releases/latest";
 
 /// The running binary vs. the latest release.
 pub struct VersionCheck {

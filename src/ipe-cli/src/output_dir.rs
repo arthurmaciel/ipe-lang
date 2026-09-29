@@ -3795,14 +3795,12 @@ pub mod test_links {
         }
     }
 
-    /// Sets a mount-point reparse point on an existing empty directory.
+    /// C# console helper that sets a mount-point reparse point on an existing empty directory.
     ///
     /// It needs only write-attributes access, which a sharing-denied rename or
     /// delete does not block: exactly what an attacker can do to a held level.
     #[cfg(windows)]
-    const JUNCTION_SCRIPT: &str = r#"$ErrorActionPreference = 'Stop'
-Add-Type -TypeDefinition @'
-using System;
+    const JUNCTION_SOURCE: &str = r#"using System;
 using System.ComponentModel;
 using System.Runtime.InteropServices;
 using System.Text;
@@ -3812,7 +3810,7 @@ public static class IpeJunction {
 static extern SafeFileHandle CreateFileW(string name, uint access, uint share, IntPtr sa, uint disposition, uint flags, IntPtr template);
 [DllImport("kernel32.dll", SetLastError = true)]
 static extern bool DeviceIoControl(SafeFileHandle h, uint code, byte[] input, int inputSize, IntPtr output, int outputSize, out int returned, IntPtr overlapped);
-public static void Set(string at, string to) {
+static void Set(string at, string to) {
     byte[] sub = Encoding.Unicode.GetBytes("\\??\\" + to);
     byte[] print = Encoding.Unicode.GetBytes(to);
     int paths = sub.Length + 2 + print.Length + 2;
@@ -3832,30 +3830,110 @@ public static void Set(string at, string to) {
         }
     }
 }
+public static int Main(string[] args) {
+    if (args.Length != 2) { Console.Error.WriteLine("usage: <at> <to>"); return 2; }
+    try { Set(args[0], args[1]); return 0; }
+    catch (Exception e) { Console.Error.WriteLine(e.Message); return 1; }
 }
-'@
-[IpeJunction]::Set($env:IPE_JUNCTION_AT, $env:IPE_JUNCTION_TO)
+}
 "#;
 
+    /// Win32 `ERROR_SHARING_VIOLATION`: another process holds the build lock.
+    #[cfg(windows)]
+    const SHARING_VIOLATION: i32 = 32;
+
+    /// Ceiling on waiting for another test process to finish building the helper.
+    #[cfg(windows)]
+    const BUILD_LOCK_WAIT: std::time::Duration = std::time::Duration::from_secs(300);
+
+    /// The compiled junction helper, built at most once per test build directory.
+    ///
+    /// The executable is keyed by a digest of its build script and lives beside
+    /// the test binary. An exclusive-share lock file serialises the one build
+    /// across concurrent test processes and the OS releases it if its holder
+    /// dies; the build writes a private name renamed into place, so no process
+    /// ever runs a partial executable.
+    #[cfg(windows)]
+    fn junction_helper() -> &'static Path {
+        use sha2::Digest as _;
+        use std::os::windows::fs::OpenOptionsExt as _;
+
+        static HELPER: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
+        HELPER.get_or_init(|| {
+            let script = format!(
+                "$ErrorActionPreference = 'Stop'\nAdd-Type -TypeDefinition @'\n{JUNCTION_SOURCE}'@ -OutputAssembly $env:IPE_JUNCTION_OUT -OutputType ConsoleApplication\n"
+            );
+            let digest = hex::encode(sha2::Sha256::digest(script.as_bytes()));
+            let exe = std::env::current_exe().expect("test binary path");
+            let dir = exe.parent().expect("test binary directory");
+            let helper = dir.join(format!("ipe-junction-{digest}.exe"));
+            let lock_path = dir.join(format!("ipe-junction-{digest}.lock"));
+            let deadline = std::time::Instant::now() + BUILD_LOCK_WAIT;
+            let lock = loop {
+                let opened = std::fs::OpenOptions::new()
+                    .create(true)
+                    .truncate(false)
+                    .write(true)
+                    .share_mode(0)
+                    .open(&lock_path);
+                match opened {
+                    Err(e)
+                        if e.raw_os_error() == Some(SHARING_VIOLATION)
+                            && std::time::Instant::now() < deadline =>
+                    {
+                        std::thread::sleep(std::time::Duration::from_millis(50));
+                    }
+                    other => break other,
+                }
+            };
+            let _held = lock.expect("lock junction helper build");
+            if !helper.is_file() {
+                let staging = dir.join(format!(
+                    "ipe-junction-{digest}-{}.exe",
+                    std::process::id()
+                ));
+                let encoded = base64::Engine::encode(
+                    &base64::engine::general_purpose::STANDARD,
+                    script
+                        .encode_utf16()
+                        .flat_map(u16::to_le_bytes)
+                        .collect::<Vec<u8>>(),
+                );
+                let status = std::process::Command::new("powershell")
+                    .args(["-NoProfile", "-NonInteractive", "-EncodedCommand", &encoded])
+                    .env("IPE_JUNCTION_OUT", plain(&staging))
+                    .status()
+                    .expect("run powershell");
+                assert!(
+                    status.success(),
+                    "build junction helper {}",
+                    staging.display()
+                );
+                std::fs::rename(&staging, &helper).expect("install junction helper");
+            }
+            helper
+        })
+    }
+
+    /// The path without its verbatim prefix, as the helper and its build expect.
+    #[cfg(windows)]
+    fn plain(path: &Path) -> String {
+        path.to_string_lossy()
+            .trim_start_matches(r"\\?\")
+            .to_owned()
+    }
+
     /// Turn the empty directory `at` into a junction to `target`, in place.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the helper cannot be built or run, or refuses (a test-setup failure).
     #[cfg(windows)]
     pub fn junction_in_place(at: &Path, target: &Path) {
-        let plain = |path: &Path| {
-            path.to_string_lossy()
-                .trim_start_matches(r"\\?\")
-                .to_owned()
-        };
-        let script: Vec<u8> = JUNCTION_SCRIPT
-            .encode_utf16()
-            .flat_map(u16::to_le_bytes)
-            .collect();
-        let encoded = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, script);
-        let status = std::process::Command::new("powershell")
-            .args(["-NoProfile", "-NonInteractive", "-EncodedCommand", &encoded])
-            .env("IPE_JUNCTION_AT", plain(at))
-            .env("IPE_JUNCTION_TO", plain(target))
+        let status = std::process::Command::new(junction_helper())
+            .args([plain(at), plain(target)])
             .status()
-            .expect("run powershell");
+            .expect("run junction helper");
         assert!(
             status.success(),
             "junction {} -> {}",
