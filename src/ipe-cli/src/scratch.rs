@@ -364,7 +364,7 @@ mod tests {
         // Production idents currently bound to a temp base.
         let mut temp_bindings: std::collections::HashSet<String> = std::collections::HashSet::new();
 
-        for (i, &line) in source.lines().enumerate() {
+        for (i, line) in source.lines().enumerate() {
             let line_no = i + 1;
             if test_lines.iter().any(|span| span.contains(&line_no)) {
                 continue;
