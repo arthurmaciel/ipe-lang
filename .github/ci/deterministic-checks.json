@@ -9,9 +9,8 @@
     "(its `name:`, or its job id when unset); step = that job's check step",
     "`name:` in ci.yml, byte-exact. The check step must be network-free: same",
     "input, same result, every attempt.",
-    "Consumers: ci.yml `cancel-on-cheap-red` (its `needs:` is exactly these jobs;",
-    "it cancels only on a matched pair) and rerun-failed-once.yml (skips the retry",
-    "only when every failed job matched). ci/verify-manifest.py validates shape,",
+    "Consumer: ci.yml `cancel-on-cheap-red` (its `needs:` is exactly these jobs;",
+    "it cancels only on a matched pair). ci/verify-manifest.py validates shape,",
     "the needs: set, and every step name against ci.yml."
   ],
   "checks": [

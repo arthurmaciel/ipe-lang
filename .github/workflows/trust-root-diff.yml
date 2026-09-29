@@ -6,7 +6,7 @@
 # token, so a PR cannot rewrite the check that judges it. The job never checks
 # out or runs PR code: it fetches the decision script and CODEOWNERS at the
 # trusted base commit through the REST API, then reads the PR's file list and
-# reviews through the same API. `verify-manifest.py` check 8 refuses any
+# reviews through the same API. `verify-manifest.py` check 12 refuses any
 # `pull_request_target` workflow that could do otherwise.
 #
 # Under `merge_group` it re-judges the queued PR against the queue's base
