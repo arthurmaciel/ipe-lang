@@ -1528,13 +1528,20 @@ mod tests {
         assert_eq!(stdlib, ambient, "both spellings name one union");
     }
 
-    /// A head the solver would not unify with a builtin keys no union.
+    /// A user-homed head sharing a builtin union's name keys no builtin union.
+    ///
+    /// `Order` is a builtin union a user module may also declare; the solver
+    /// keeps `Lib.Order` apart from it, so the catch-all check must too.
     #[test]
-    fn a_user_homed_non_builtin_scrutinee_is_not_a_builtin_union() {
+    fn a_user_homed_builtin_named_scrutinee_is_not_the_builtin_union() {
+        assert!(
+            union_of_scrutinee(&[], "Order").is_some(),
+            "the ambient `Order` is a builtin union"
+        );
         assert_eq!(
-            union_of_scrutinee(&["Lib"], "Color"),
+            union_of_scrutinee(&["Lib"], "Order"),
             None,
-            "an unknown user union is never mistaken for a builtin"
+            "a user `Lib.Order` is never mistaken for the builtin"
         );
     }
 }
