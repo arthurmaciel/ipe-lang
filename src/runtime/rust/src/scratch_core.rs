@@ -900,7 +900,8 @@ fn private_file_under_with(
 /// the guard removes the sibling, so no failure between creation and rename
 /// (a refused verdict, a short write, a failed rename) leaves it behind. Only a
 /// process that dies inside that window can leave one, under a name the
-/// suffix identifies.
+/// suffix identifies; the next replacement of a target with the same label
+/// reclaims such a leftover once it is stale and its writer is gone.
 ///
 /// The directory is the caller's chosen destination, so it is not held to the
 /// scratch-base trust rules; the name still carries CSPRNG entropy, so a name
@@ -940,6 +941,8 @@ impl AtomicSibling {
             .file_name()
             .and_then(OsStr::to_str)
             .unwrap_or(FALLBACK_LABEL);
+        #[cfg(not(target_family = "wasm"))]
+        reclaim_stale_siblings(parent, label);
         let (tmp, file) = create_verified(
             parent,
             label,
@@ -992,6 +995,182 @@ impl Drop for AtomicSibling {
     fn drop(&mut self) {
         if !self.committed {
             let _ = std::fs::remove_file(&self.tmp);
+        }
+    }
+}
+
+// ── Stale-sibling reclamation ────────────────────────────────────────────────
+
+/// How long a leftover atomic-replace sibling sits unmodified before it is stale.
+#[cfg(not(target_family = "wasm"))]
+const STALE_SIBLING_AGE: std::time::Duration = std::time::Duration::from_secs(60 * 60);
+
+/// The most directory entries one reclamation sweep reads.
+#[cfg(not(target_family = "wasm"))]
+const MAX_RECLAIM_ENTRIES: usize = 4096;
+
+/// The most swept `(directory, label)` pairs this process remembers.
+#[cfg(not(target_family = "wasm"))]
+const MAX_RECLAIM_MEMO: usize = 64;
+
+/// The `(directory, label)` pairs this process has swept, as `directory/label`.
+#[cfg(not(target_family = "wasm"))]
+static RECLAIMED: std::sync::Mutex<Vec<PathBuf>> = std::sync::Mutex::new(Vec::new());
+
+/// The facts an atomic-replace sibling name carries.
+#[cfg(not(target_family = "wasm"))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct SiblingName {
+    /// The pid of the process that created the sibling.
+    pid: u32,
+}
+
+/// Parse `name` as an atomic-replace sibling name for `label`: `.<label>-<pid>-<32 hex>.ipe-tmp`.
+///
+/// The label is confined as [`scratch_name`] confines it, the pid is decimal
+/// digits only, and the entropy is exactly 32 lowercase hex characters; any
+/// other name, including another target's sibling, is `None`.
+#[cfg(not(target_family = "wasm"))]
+fn parse_sibling_name(name: &str, label: &str) -> Option<SiblingName> {
+    let rest = name
+        .strip_prefix('.')?
+        .strip_prefix(confined_label(label).as_str())?
+        .strip_prefix('-')?
+        .strip_suffix(TEMP_SIBLING_SUFFIX)?;
+    let (pid, hex) = rest.split_once('-')?;
+    let pid_is_decimal = !pid.is_empty() && pid.bytes().all(|b| b.is_ascii_digit());
+    let hex_is_entropy = hex.len() == 2 * ENTROPY_BYTES
+        && hex.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'));
+    if !(pid_is_decimal && hex_is_entropy) {
+        return None;
+    }
+    pid.parse().ok().map(|pid| SiblingName { pid })
+}
+
+/// Whether the process that created `sibling` may still be writing it.
+///
+/// This process is always live; another pid is live unless the kernel reports
+/// no such process. A pid that is not a valid process id is treated as live,
+/// so an unprovable death keeps the sibling.
+#[cfg(unix)]
+fn writer_may_be_alive(sibling: SiblingName) -> bool {
+    if sibling.pid == std::process::id() {
+        return true;
+    }
+    i32::try_from(sibling.pid)
+        .ok()
+        .and_then(rustix::process::Pid::from_raw)
+        .is_none_or(|pid| rustix::process::test_kill_process(pid) != Err(rustix::io::Errno::SRCH))
+}
+
+/// Whether the process that created `sibling` may still be writing it.
+///
+/// Without a portable liveness probe only this process is known live; the
+/// staleness age alone protects another process's sibling.
+#[cfg(all(not(unix), not(target_family = "wasm")))]
+fn writer_may_be_alive(sibling: SiblingName) -> bool {
+    sibling.pid == std::process::id()
+}
+
+/// Whether `meta` belongs to the effective user.
+#[cfg(unix)]
+fn owned_by_effective_user(meta: &std::fs::Metadata) -> bool {
+    platform::facts(meta).owner == platform::identity().euid
+}
+
+/// Whether `meta` belongs to the effective user; non-unix entries carry no POSIX owner.
+#[cfg(all(not(unix), not(target_family = "wasm")))]
+const fn owned_by_effective_user(_meta: &std::fs::Metadata) -> bool {
+    true
+}
+
+/// The facts deciding whether a sibling-named entry is a leftover this process may remove.
+#[cfg(not(target_family = "wasm"))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct LeftoverFacts {
+    /// The entry is a regular file, not a symlink, directory or other kind.
+    regular_file: bool,
+    /// The entry belongs to the effective user.
+    owned: bool,
+    /// How long ago it was last modified; `None` when unknown or in the future.
+    age: Option<std::time::Duration>,
+    /// The process that created it may still be writing it.
+    writer_alive: bool,
+}
+
+/// Whether `facts` describe a removable leftover.
+///
+/// Only an owned regular file unmodified for [`STALE_SIBLING_AGE`] whose
+/// creator is provably gone qualifies; any unknown fact keeps the entry.
+#[cfg(not(target_family = "wasm"))]
+fn is_leftover(facts: LeftoverFacts) -> bool {
+    facts.regular_file
+        && facts.owned
+        && facts.age.is_some_and(|age| age >= STALE_SIBLING_AGE)
+        && !facts.writer_alive
+}
+
+/// Whether the sibling-named entry with `meta` is [`is_leftover`] at `now`.
+#[cfg(not(target_family = "wasm"))]
+fn is_reclaimable(
+    meta: &std::fs::Metadata,
+    sibling: SiblingName,
+    now: std::time::SystemTime,
+) -> bool {
+    is_leftover(LeftoverFacts {
+        regular_file: meta.file_type().is_file(),
+        owned: owned_by_effective_user(meta),
+        age: meta
+            .modified()
+            .ok()
+            .and_then(|modified| now.duration_since(modified).ok()),
+        writer_alive: writer_may_be_alive(sibling),
+    })
+}
+
+/// Record that `key` is being swept; `false` when this process already swept it.
+///
+/// Once [`MAX_RECLAIM_MEMO`] keys are remembered, further keys are swept on
+/// every call rather than forgotten.
+#[cfg(not(target_family = "wasm"))]
+fn first_sweep(key: PathBuf) -> bool {
+    let Ok(mut swept) = RECLAIMED.lock() else {
+        return true;
+    };
+    if swept.contains(&key) {
+        return false;
+    }
+    if swept.len() < MAX_RECLAIM_MEMO {
+        swept.push(key);
+    }
+    true
+}
+
+/// Remove the stale atomic-replace siblings for `label` that dead writers left in `parent`.
+///
+/// Runs once per `(parent, label)` per process, reads at most
+/// [`MAX_RECLAIM_ENTRIES`] entries, and removes only entries whose name
+/// parses as this label's sibling ([`parse_sibling_name`]) and that are
+/// [`is_reclaimable`]. `remove_file` unlinks the name alone, never following
+/// it. Reclamation is best effort: an unreadable directory or a failed removal
+/// leaves the leftover and never fails the replacement.
+#[cfg(not(target_family = "wasm"))]
+fn reclaim_stale_siblings(parent: &Path, label: &str) {
+    if !first_sweep(parent.join(confined_label(label))) {
+        return;
+    }
+    let Ok(entries) = std::fs::read_dir(parent) else {
+        return;
+    };
+    let now = std::time::SystemTime::now();
+    for entry in entries.take(MAX_RECLAIM_ENTRIES).flatten() {
+        let name = entry.file_name();
+        let Some(sibling) = name.to_str().and_then(|n| parse_sibling_name(n, label)) else {
+            continue;
+        };
+        let path = entry.path();
+        if std::fs::symlink_metadata(&path).is_ok_and(|meta| is_reclaimable(&meta, sibling, now)) {
+            let _ = std::fs::remove_file(&path);
         }
     }
 }
@@ -1713,6 +1892,163 @@ mod tests {
         Ok(())
     }
 
+    /// A dead writer's pid: above every supported kernel's pid ceiling, so no process holds it.
+    const DEAD_PID: u32 = 4_194_305;
+
+    /// An age past [`STALE_SIBLING_AGE`].
+    const OLD: std::time::Duration = std::time::Duration::from_secs(2 * 60 * 60);
+
+    /// A sibling name for `label` carrying the pid spelled `pid` and the entropy spelled `hex`.
+    fn sibling_leaf(label: &str, pid: &str, hex: &str) -> String {
+        format!(".{label}-{pid}-{hex}{TEMP_SIBLING_SUFFIX}")
+    }
+
+    /// `len` copies of `c`, standing in for a name's entropy.
+    fn entropy_of(c: char, len: usize) -> String {
+        std::iter::repeat_n(c, len).collect()
+    }
+
+    /// Create a file at `path` last modified `age` ago.
+    fn plant(path: &Path, age: std::time::Duration) -> io::Result<()> {
+        let modified = std::time::SystemTime::now()
+            .checked_sub(age)
+            .ok_or_else(|| io::Error::other("the clock is before the planted age"))?;
+        File::create(path)?.set_modified(modified)
+    }
+
+    /// Only a name in the exact sibling shape for the label parses, carrying its pid.
+    #[test]
+    fn sibling_names_parse_only_in_their_exact_shape() {
+        let hex = entropy_of('a', 2 * ENTROPY_BYTES);
+        assert_eq!(
+            parse_sibling_name(&sibling_leaf("store.db", "42", &hex), "store.db"),
+            Some(SiblingName { pid: 42 })
+        );
+        assert_eq!(
+            parse_sibling_name(&sibling_leaf("a_b", "7", &hex), "a b"),
+            Some(SiblingName { pid: 7 }),
+            "the label is confined as a created name's is"
+        );
+        let refused = [
+            sibling_leaf("store.db", "42", &entropy_of('a', 2 * ENTROPY_BYTES - 1)),
+            sibling_leaf("store.db", "42", &entropy_of('a', 2 * ENTROPY_BYTES + 1)),
+            sibling_leaf("store.db", "42", &entropy_of('A', 2 * ENTROPY_BYTES)),
+            sibling_leaf("store.db", "42", &entropy_of('g', 2 * ENTROPY_BYTES)),
+            sibling_leaf("store.db", "", &hex),
+            sibling_leaf("store.db", "+42", &hex),
+            sibling_leaf("store.db", "4x", &hex),
+            sibling_leaf("store.db", "99999999999", &hex),
+            sibling_leaf("store.db.bak", "42", &hex),
+            sibling_leaf("store", "42", &hex),
+            format!("store.db-42-{hex}{TEMP_SIBLING_SUFFIX}"),
+            format!(".store.db-42-{hex}"),
+            format!(".store.db-42-{hex}{TEMP_SIBLING_SUFFIX}.x"),
+        ];
+        for name in &refused {
+            assert_eq!(parse_sibling_name(name, "store.db"), None, "{name}");
+        }
+        assert_eq!(
+            parse_sibling_name(&sibling_leaf("a-5", "42", &hex), "a"),
+            None,
+            "a longer target's sibling is not a shorter one's"
+        );
+    }
+
+    /// Only an owned, stale regular file whose writer is gone is a leftover; every other fact keeps it.
+    #[test]
+    fn only_an_owned_stale_file_of_a_gone_writer_is_a_leftover() {
+        let leftover = LeftoverFacts {
+            regular_file: true,
+            owned: true,
+            age: Some(STALE_SIBLING_AGE),
+            writer_alive: false,
+        };
+        assert!(is_leftover(leftover));
+        let kept = [
+            LeftoverFacts {
+                regular_file: false,
+                ..leftover
+            },
+            LeftoverFacts {
+                owned: false,
+                ..leftover
+            },
+            LeftoverFacts {
+                age: None,
+                ..leftover
+            },
+            LeftoverFacts {
+                age: STALE_SIBLING_AGE.checked_sub(std::time::Duration::from_secs(1)),
+                ..leftover
+            },
+            LeftoverFacts {
+                writer_alive: true,
+                ..leftover
+            },
+        ];
+        for facts in kept {
+            assert!(!is_leftover(facts), "{facts:?}");
+        }
+    }
+
+    /// A stale sibling a gone writer left beside the target is reclaimed by the next replacement.
+    #[test]
+    fn stale_sibling_of_a_gone_writer_is_reclaimed() -> io::Result<()> {
+        let tree = Tree::new("reclaim")?;
+        let base = tree.0.join("shared");
+        let target = base.join("store.db");
+        let stale = base.join(sibling_leaf(
+            "store.db",
+            &DEAD_PID.to_string(),
+            &entropy_of('a', 2 * ENTROPY_BYTES),
+        ));
+        plant(&stale, OLD)?;
+        let sib = AtomicSibling::create(&target)?;
+        assert!(!stale.exists(), "the leftover is reclaimed");
+        drop(sib);
+        assert_eq!(std::fs::read_dir(&base)?.count(), 0);
+        Ok(())
+    }
+
+    /// A fresh, live, foreign-target or misshapen sibling-like file survives a replacement.
+    #[test]
+    fn fresh_live_foreign_or_misshapen_siblings_are_kept() -> io::Result<()> {
+        let tree = Tree::new("reclaimkeep")?;
+        let base = tree.0.join("shared");
+        let target = base.join("store.db");
+        let dead = DEAD_PID.to_string();
+        let own = std::process::id().to_string();
+        let full = 2 * ENTROPY_BYTES;
+        let kept = [
+            (
+                sibling_leaf("store.db", &dead, &entropy_of('a', full)),
+                std::time::Duration::ZERO,
+            ),
+            (sibling_leaf("store.db", &own, &entropy_of('b', full)), OLD),
+            (sibling_leaf("other.db", &dead, &entropy_of('c', full)), OLD),
+            (
+                sibling_leaf("store.db", &dead, &entropy_of('d', full - 1)),
+                OLD,
+            ),
+            (sibling_leaf("store.db", &dead, &entropy_of('G', full)), OLD),
+            (
+                format!(
+                    "store.db-{dead}-{}{TEMP_SIBLING_SUFFIX}",
+                    entropy_of('f', full)
+                ),
+                OLD,
+            ),
+        ];
+        for (name, age) in &kept {
+            plant(&base.join(name), *age)?;
+        }
+        drop(AtomicSibling::create(&target)?);
+        for (name, _) in &kept {
+            assert!(base.join(name).is_file(), "{name} is kept");
+        }
+        Ok(())
+    }
+
     /// A rename that fails (the target is a non-empty directory) leaves no sibling behind.
     #[test]
     fn failed_commit_leaves_no_sibling() -> io::Result<()> {
@@ -1873,11 +2209,51 @@ mod tests {
     #[cfg(unix)]
     mod unix {
         use super::super::*;
-        use super::Tree;
+        use super::{DEAD_PID, OLD, Tree, entropy_of, plant, sibling_leaf};
         use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
 
         fn set_mode(path: &Path, mode: u32) -> io::Result<()> {
             std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode))
+        }
+
+        /// Only a pid the kernel reports as no process is a gone writer.
+        #[test]
+        fn writer_liveness_keeps_every_unprovable_death() {
+            let alive = |pid| writer_may_be_alive(SiblingName { pid });
+            assert!(alive(std::process::id()), "this process");
+            assert!(alive(1), "the init process");
+            assert!(alive(0), "not a process id");
+            assert!(alive(u32::MAX), "beyond pid_t");
+            assert!(!alive(DEAD_PID), "no such process");
+        }
+
+        /// A stale sibling-named directory, or a symlink to a stale file, is never reclaimed.
+        #[test]
+        fn sibling_named_directory_or_symlink_is_kept() -> io::Result<()> {
+            let tree = Tree::new("reclaimkind")?;
+            let base = tree.0.join("shared");
+            let target = base.join("store.db");
+            let dead = DEAD_PID.to_string();
+            let full = 2 * ENTROPY_BYTES;
+            let dir = base.join(sibling_leaf("store.db", &dead, &entropy_of('a', full)));
+            std::fs::create_dir(&dir)?;
+            File::open(&dir)?.set_modified(
+                std::time::SystemTime::now()
+                    .checked_sub(OLD)
+                    .ok_or_else(|| io::Error::other("the clock is before the planted age"))?,
+            )?;
+            let pointee = tree.0.join("pointee");
+            plant(&pointee, OLD)?;
+            let link = base.join(sibling_leaf("store.db", &dead, &entropy_of('b', full)));
+            std::os::unix::fs::symlink(&pointee, &link)?;
+            drop(AtomicSibling::create(&target)?);
+            assert!(dir.is_dir(), "the directory is kept");
+            assert!(
+                std::fs::symlink_metadata(&link).is_ok_and(|m| m.file_type().is_symlink()),
+                "the link is kept"
+            );
+            assert!(pointee.is_file(), "the link's target is untouched");
+            Ok(())
         }
 
         #[test]
