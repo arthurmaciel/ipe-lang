@@ -2456,6 +2456,7 @@ mod tests {
         fs::create_dir_all(base.join("e1")).unwrap();
         fs::write(base.join("e1").join("at.json"), [b'x'; 8]).unwrap();
         fs::write(base.join("e1").join("over.json"), [b'x'; 9]).unwrap();
+        #[cfg(unix)] // a cache hit needs a file identity check
         assert_eq!(
             read_without_links(&base, &["e1", "at.json"], 8),
             Some(vec![b'x'; 8]),
