@@ -4094,6 +4094,10 @@ class TestReleaseOnlyDeclarations(unittest.TestCase):
             "${{ steps.c.outputs.release_only }}",
             "${{ steps.c.outputs.release_only != 'false' }}",
             "${{ steps.c.outputs.Release_Only == 'true' || 'x' }}",
+            "${{ steps['c'].outputs.release_only == 'true' }}",
+            "${{ steps.c.outputs['release_only'] == 'true' }}",
+            "${{ toJSON(steps.c.outputs).release_only }}",
+            "${{ steps.c.outputs.bump }}",
         ):
             with self.subTest(raw=raw):
                 self.assertRefused("exports the raw classifier value", _RO13.replace(normalised, f"      release_only: {raw}\n"))
@@ -4106,23 +4110,61 @@ class TestReleaseOnlyDeclarations(unittest.TestCase):
         return errors
 
     def test_a_run_gate_with_an_unconditional_locked_cargo_step_proves_the_lock(self) -> None:
-        for step in ("cargo check --locked --workspace", "cargo fetch --locked", "|\n          echo a\n          cargo build --release --locked"):
+        for step in (
+            "cargo check --locked --workspace",
+            "cargo fetch --locked",
+            "cargo build --release --locked -p ipe",
+            "cargo test --locked --doc --workspace",
+            "cargo nextest archive --locked --workspace --archive-file a.tar.zst",
+            "cargo nextest run --locked --workspace -- --nocapture",
+            "|\n          cargo check --locked --workspace",
+        ):
             with self.subTest(step=step):
                 ok = _RO13.replace("      - run: cargo test\n", f"      - run: {step}\n")
                 self.assertEqual(self.locked_errors(ok), [])
 
     def test_no_locked_cargo_step_on_a_release_run_gate_is_refused(self) -> None:
         needle = "never proves Cargo.lock matches"
+        plain = "      - run: cargo test\n"
         locked = "      - run: cargo test --locked\n"
+        job = "    needs: [changes]\n    steps:\n" + plain
+
+        def step(text: str) -> str:
+            return _RO13.replace(plain, text)
+
         cases = {
             "unlocked": _RO13,
-            "flag in a comment": _RO13.replace("      - run: cargo test\n", "      - run: cargo test # --locked later\n"),
-            "not cargo": _RO13.replace("      - run: cargo test\n", "      - run: echo cargo --locked\n"),
-            "conditional step": _RO13.replace("      - run: cargo test\n", "      - if: github.event_name == 'push'\n        run: cargo test --locked\n"),
-            "conditional job": _RO13.replace("    needs: [changes]\n    steps:\n      - run: cargo test\n", "    needs: [changes]\n    if: github.event_name == 'push'\n    steps:\n" + locked),
+            "flag in a comment": step("      - run: cargo test # --locked later\n"),
+            "not cargo": step("      - run: echo cargo --locked\n"),
+            "or true": step("      - run: cargo check --locked || true\n"),
+            "semicolon": step("      - run: cargo check --locked; exit 0\n"),
+            "background": step("      - run: cargo check --locked &\n"),
+            "pipe": step("      - run: cargo check --locked | tee log\n"),
+            "redirect": step("      - run: cargo check --locked > log\n"),
+            "expansion": step("      - run: cargo check --locked $FLAGS\n"),
+            "substitution": step("      - run: cargo check --locked `echo -q`\n"),
+            "multi-line": step("      - run: |\n          cargo check --locked\n          true\n"),
+            "install": step("      - run: cargo install --locked ripgrep\n"),
+            "run passes it on": step("      - run: cargo run -p x -- --locked\n"),
+            "after double dash": step("      - run: cargo test -- --locked\n"),
+            "toolchain override": step("      - run: cargo +nightly check --locked\n"),
+            "manifest path": step("      - run: cargo check --manifest-path tools/x/Cargo.toml --locked\n"),
+            "manifest path joined": step("      - run: cargo check --manifest-path=tools/x/Cargo.toml --locked\n"),
+            "step working-directory": step("      - working-directory: tools/x\n        run: cargo check --locked\n"),
+            "step shell": step("      - shell: bash {0}\n        run: cargo check --locked\n"),
+            "step continue-on-error": step("      - continue-on-error: true\n        run: cargo check --locked\n"),
+            "conditional step": step("      - if: github.event_name == 'push'\n        run: cargo test --locked\n"),
+            "conditional job": _RO13.replace(job, "    needs: [changes]\n    if: github.event_name == 'push'\n    steps:\n" + locked),
+            "job continue-on-error": _RO13.replace(job, "    needs: [changes]\n    continue-on-error: true\n    steps:\n" + locked),
+            "job defaults": _RO13.replace(job, "    needs: [changes]\n    defaults:\n      run:\n        working-directory: tools/x\n    steps:\n" + locked),
+            "workflow defaults": step(locked).replace("jobs:\n", "defaults:\n  run:\n    shell: bash {0}\njobs:\n", 1),
+            "skippable ancestor": step(locked).replace(
+                "  changes:\n    runs-on: ubuntu-latest\n", "  changes:\n    runs-on: ubuntu-latest\n    if: github.event_name == 'push'\n", 1
+            ),
         }
         for name, content in cases.items():
             with self.subTest(case=name):
+                self.assertNotEqual(content, _RO13 if name != "unlocked" else "")
                 self.assertTrue(any(needle in e for e in self.locked_errors(content)), name)
         on_pass = _RO13.replace("      - run: cargo test\n", locked)
         self.assertTrue(any(needle in e for e in self.locked_errors(on_pass, {"pass": "x"})))

@@ -236,6 +236,21 @@ class TestManifestLockConsistency(unittest.TestCase):
         )
         self.assertRefused("matches 'crate_b', which is also a registry or git package")
 
+    def test_unlisted_path_package_is_refused(self) -> None:
+        self.put("Cargo.lock", _LOCK + '\n[[package]]\nname = "stray"\nversion = "0.1.0"\n')
+        self.assertRefused("path package 'stray', which is neither a listed workspace member")
+
+    def test_excluded_crate_with_literal_version_passes(self) -> None:
+        self.put("Cargo.toml", _ROOT.replace("\n[workspace.package]", 'exclude = ["tool"]\n\n[workspace.package]'))
+        self.put(os.path.join("tool", "Cargo.toml"), '[package]\nname = "tool"\nversion = "0.0.0"\n\n[workspace]\n')
+        self.put("Cargo.lock", _LOCK + '\n[[package]]\nname = "tool"\nversion = "0.0.0"\n')
+        self.assertEqual(mlc.check(self.root), [])
+
+    def test_excluded_crate_without_literal_version_is_refused(self) -> None:
+        self.put("Cargo.toml", _ROOT.replace("\n[workspace.package]", 'exclude = ["tool"]\n\n[workspace.package]'))
+        self.put(os.path.join("tool", "Cargo.toml"), '[package]\nname = "tool"\nversion.workspace = true\n')
+        self.assertRefused("tool/Cargo.toml needs a `[package] name` and a literal `version` string")
+
     def test_live_repository_passes(self) -> None:
         self.assertEqual(mlc.check(), [])
 

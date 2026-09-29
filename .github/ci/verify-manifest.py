@@ -202,10 +202,14 @@ Checks performed
       whose `outputs` carry `release_only`.  At least one job must narrow,
       and a job needing a skipped job must run `always()`.  A declaration
       the workflow contradicts, or none at all, is refused.  Some `gate`
-      declared `run` must execute an unconditional `cargo ... --locked` step
-      in a job with no `if:`, so a release PR proves the bumped Cargo.lock
-      still matches Cargo.toml.
-      A job output read from a step's `release_only` must be exactly
+      declared `run` must execute a step that is exactly one plain `cargo
+      <fetch|check|build|test|nextest archive|nextest run>` with `--locked`
+      before any `--` and no `--manifest-path`; no step `if:`,
+      `continue-on-error`, `shell` or `working-directory`, no job
+      `continue-on-error` or `defaults`, no workflow `defaults`, and no `if:`
+      on the job or any job it transitively `needs`.  So a release PR proves
+      the bumped Cargo.lock still matches Cargo.toml.  A job output named or
+      mentioning `release_only` must be exactly
       `${{ steps.<id>.outputs.release_only == 'true' }}`.
 
 Pure stdlib + PyYAML (already a CI dependency).  No network; check 12 runs
@@ -1429,20 +1433,21 @@ def _declared_release_only(entry: dict, loc: str, errors: list[str]) -> str | No
     return None
 
 
-_RELEASE_ONLY_WRITER = re.compile(r"\bsteps\.[\w-]+\.outputs\.release_only\b", re.IGNORECASE)
 _RELEASE_ONLY_NORMALISED = re.compile(r"\$\{\{\s*steps\.[\w-]+\.outputs\.release_only\s*==\s*'true'\s*\}\}")
 
 
 def _check_release_only_exports(fname: str, doc: dict, errors: list[str]) -> None:
-    """A job output read from the classifier step's `release_only` must be
-    exactly `${{ steps.<id>.outputs.release_only == 'true' }}`: every consumer
-    then sees `true` or `false`, and an unset writer reads as `false`, so all
-    jobs run in full."""
+    """A job output named `release_only`, or whose value mentions it in any
+    spelling (dotted, bracketed, through `toJSON`), must be exactly
+    `${{ steps.<id>.outputs.release_only == 'true' }}`: every consumer then
+    sees `true` or `false`, and an unset writer reads as `false`, so all jobs
+    run in full."""
     jobs = doc.get("jobs") if isinstance(doc.get("jobs"), dict) else {}
     for jid, job in jobs.items():
         outputs = job.get("outputs") if isinstance(job, dict) else None
         for key, value in (outputs if isinstance(outputs, dict) else {}).items():
-            if _RELEASE_ONLY_WRITER.search(str(value)) and not _RELEASE_ONLY_NORMALISED.fullmatch(str(value)):
+            named = _RELEASE_ONLY_OUTPUT in str(key).lower() or _RELEASE_ONLY_OUTPUT in str(value).lower()
+            if named and not _RELEASE_ONLY_NORMALISED.fullmatch(str(value)):
                 errors.append(
                     f"{fname}: job {jid!r} output {key!r} exports the raw classifier value "
                     f"{value!r}; write `${{{{ steps.<id>.outputs.release_only == 'true' }}}}` (check 13)"
@@ -1544,16 +1549,77 @@ def check_release_only_declarations(
             )
 
 
-_CARGO_LOCKED = re.compile(r"(?m)^\s*cargo\s[^\n]*\s--locked(\s|$)")
+_LOCK_RESOLVING_SUBCOMMANDS = (
+    ("nextest", "archive"),
+    ("nextest", "run"),
+    ("fetch",),
+    ("check",),
+    ("build",),
+    ("test",),
+)
+# Anything the shell could use to mask an exit status, chain another command
+# or splice in words the source does not show.
+_SHELL_UNSAFE = frozenset(";&|()\n`$<>\\")
+
+
+def _locked_cargo_invocation(run: object) -> bool:
+    """True only for one plain command, `cargo <sub> ...`, whose subcommand
+    resolves the workspace lock, with `--locked` before any `--` and no
+    `--manifest-path`, so its exit status is exactly Cargo's verdict on the
+    root Cargo.lock."""
+    if not isinstance(run, str) or any(c in _SHELL_UNSAFE for c in run.strip()):
+        return False
+    commands = shell_lex.split_commands(run)
+    if len(commands) != 1 or commands[0].writes:
+        return False
+    words = commands[0].words
+    if words[:1] != ["cargo"]:
+        return False
+    sub = next((s for s in _LOCK_RESOLVING_SUBCOMMANDS if tuple(words[1 : 1 + len(s)]) == s), None)
+    if sub is None:
+        return False
+    args = words[1 + len(sub) :]
+    own = args[: args.index("--")] if "--" in args else args
+    return "--locked" in own and not any(
+        a == "--manifest-path" or a.startswith("--manifest-path=") for a in args
+    )
+
+
+def _runs_on_every_release_pr(jid: str, jobs: dict) -> bool:
+    """The job and every job it transitively `needs` carry no `if:`, so none
+    can skip (a skipped ancestor cascades into a skip that reads as a pass),
+    and the job's failure is not waived by `continue-on-error`."""
+    job = jobs.get(jid)
+    if not isinstance(job, dict) or "continue-on-error" in job or _run_defaults(job):
+        return False
+    return all(isinstance(jobs.get(a), dict) and "if" not in jobs[a] for a in _ancestors(jid, jobs) | {jid})
+
+
+def _run_defaults(holder: dict) -> bool:
+    """Whether a job or workflow declares `defaults`, which can move every
+    step's shell or working directory."""
+    return "defaults" in holder
+
+
+def _proves_lock(st: object) -> bool:
+    return (
+        isinstance(st, dict)
+        and not {"if", "continue-on-error", "shell", "working-directory"}.intersection(st)
+        and _locked_cargo_invocation(st.get("run"))
+    )
 
 
 def check_release_locked_build(
     entries: list[dict], gate_contexts: set[str], errors: list[str], root: str = REPO_ROOT
 ) -> None:
     """Check 13, lock clause: a release PR bumps Cargo.toml and Cargo.lock, so
-    some gate declared `release-only: run` must execute an unconditional
-    `cargo ... --locked` step, which refuses a lock the bump left stale instead
-    of re-resolving it."""
+    some gate declared `release-only: run` must execute a step that is exactly
+    `cargo <fetch|check|build|test|nextest archive|nextest run> ... --locked`
+    against the root manifest, which refuses a lock the bump left stale
+    instead of re-resolving it. The step carries no `if:`, `continue-on-error`,
+    `shell` or `working-directory`; its job no `continue-on-error` or
+    `defaults`; its workflow no `defaults`; and neither the job nor any job
+    it transitively `needs` an `if:`."""
     for entry in entries:
         if not isinstance(entry, dict) or str(entry.get("context")) not in gate_contexts:
             continue
@@ -1565,14 +1631,14 @@ def check_release_locked_build(
                 doc = strict_yaml.safe_load(f)
         except (OSError, yaml.YAMLError):
             continue
-        jobs = doc.get("jobs") if isinstance(doc, dict) and isinstance(doc.get("jobs"), dict) else {}
+        if not isinstance(doc, dict) or _run_defaults(doc):
+            continue
+        jobs = doc.get("jobs") if isinstance(doc.get("jobs"), dict) else {}
         aggregates = [str(a) for a in entry.get("aggregates") or []]
-        for _, job, _ in _entry_jobs(str(entry.get("context")), aggregates, jobs):
-            if "if" in job or not isinstance(job.get("steps"), list):
-                continue
-            for st in job["steps"]:
-                if isinstance(st, dict) and "if" not in st and _CARGO_LOCKED.search(str(st.get("run", ""))):
-                    return
+        for jid, job, _ in _entry_jobs(str(entry.get("context")), aggregates, jobs):
+            steps = job.get("steps")
+            if _runs_on_every_release_pr(jid, jobs) and isinstance(steps, list) and any(map(_proves_lock, steps)):
+                return
     errors.append(
         "no gate declared `release-only: run` executes an unconditional `cargo ... --locked` "
         "step, so a release PR never proves Cargo.lock matches the bumped Cargo.toml (check 13)"
