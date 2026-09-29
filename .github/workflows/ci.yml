@@ -1746,12 +1746,11 @@ jobs:
     if: needs.changes.outputs.code == 'true' || (github.event_name != 'pull_request' && github.event_name != 'merge_group')
     steps:
       - uses: actions/checkout@v7
-      # regen-cli-transcripts records each transcript through a nested
-      # `cargo run -p ipe --bin ipe`, so this job still needs the pinned
-      # toolchain and an `ipe` build of its own. Building `ipe` in a separate
-      # step keeps every toolchain/crate download and compile failure out of the
-      # regenerate step: a failed nested `cargo run` would otherwise be recorded
-      # as a golden and surface as a (deterministic) drift red.
+      # regen-cli-transcripts records every transcript from the prebuilt `ipe`
+      # passed as --ipe-bin, so a toolchain/crate download or compile failure
+      # reddens the `Build ipe` step, never the regenerate step. The tool itself
+      # exits non-zero, writing no golden, when `ipe` cannot be spawned or is
+      # killed by a signal, so a tool failure never surfaces as golden drift.
       - uses: ./.github/actions/rust-toolchain-pinned
       - uses: Swatinem/rust-cache@v2
         with:
@@ -1764,7 +1763,8 @@ jobs:
       - name: Regenerate the CLI transcript goldens
         run: |
           chmod +x regen-cli-transcripts
-          ./regen-cli-transcripts --repo-root "${{ github.workspace }}"
+          ./regen-cli-transcripts --repo-root "${{ github.workspace }}" \
+            --ipe-bin "${{ github.workspace }}/target/debug/ipe"
       - name: Fail if the regenerated goldens differ from the committed ones
         run: git diff --exit-code src/ipe-cli/tests/golden/cli/
 
