@@ -4,7 +4,7 @@
 //!
 //! ```text
 //!
-//!   Ipê language - vN.N.N - https://github.com/arthurmaciel/ipe-lang
+//!   Ipê language - vN.N.N - https://github.com/ipe-lang/compiler
 //!
 //!   <content, indented by the two-space gutter>
 //!

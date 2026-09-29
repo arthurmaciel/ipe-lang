@@ -20,7 +20,10 @@ use std::io::IsTerminal;
 
 /// The repository home, shown in the CLI header and the "report bugs" footer,
 /// and mirrored by the installer.
-pub const REPO_URL: &str = "https://github.com/arthurmaciel/ipe-lang";
+///
+/// Re-exported from [`ipe_diagnostics`] rather than defined here, so the whole
+/// binary — CLI and diagnostics alike — derives the URL from one constant.
+pub use ipe_diagnostics::REPO_URL;
 
 /// The lead phrase of the "report bugs" footer, before the issues URL.
 pub const REPORT_BUGS_PHRASE: &str = "If you find any bugs, please report them at ";

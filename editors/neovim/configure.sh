@@ -2,7 +2,7 @@
 # editors/neovim/configure.sh — one-shot Ipê integration for Neovim 0.11+.
 #
 # Usage:
-#   curl -fsSL https://raw.githubusercontent.com/arthurmaciel/ipe-lang/main/editors/neovim/configure.sh | sh
+#   curl -fsSL https://raw.githubusercontent.com/ipe-lang/compiler/main/editors/neovim/configure.sh | sh
 #   (or from a checkout: sh editors/neovim/configure.sh)
 #
 # What it does:
@@ -34,7 +34,7 @@ if [ -n "$IPE_SRC_ROOT" ]; then
     . "$IPE_SRC_ROOT/editors/lib/ipe-editors.sh"
 else
     _lib="$(mktemp)" || exit 1
-    curl -fsSL "https://raw.githubusercontent.com/arthurmaciel/ipe-lang/$IPE_EDITORS_REF/editors/lib/ipe-editors.sh" -o "$_lib" \
+    curl -fsSL "https://raw.githubusercontent.com/ipe-lang/compiler/$IPE_EDITORS_REF/editors/lib/ipe-editors.sh" -o "$_lib" \
         || { rm -f "$_lib"; printf 'error: cannot download editors/lib/ipe-editors.sh\n' >&2; exit 1; }
     # shellcheck source=/dev/null
     . "$_lib"
@@ -43,7 +43,7 @@ fi
 IPE_TAG="Neovim"
 
 # --- preflight ---------------------------------------------------------------
-need ipe "install the Ipê toolchain first: https://github.com/arthurmaciel/ipe-lang"
+need ipe "install the Ipê toolchain first: https://github.com/ipe-lang/compiler"
 need nvim "install Neovim 0.11+ first: https://neovim.io"
 
 NVIM_VERSION="$(nvim --version 2>/dev/null | sed -n '1s/^NVIM v\([0-9][0-9.]*\).*/\1/p')"
