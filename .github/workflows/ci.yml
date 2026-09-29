@@ -257,6 +257,7 @@ jobs:
           | test(=login::tests::an_unsupported_token_store_writes_no_token)
           | test(=ssh_signing_key::tests::an_unsupported_secret_store_generates_no_key)
           | test(=ssh_signing_key::tests::an_unsupported_secret_store_stages_no_key_file)'
+      - run: cargo nextest run --locked -p ipe_sandbox --lib -E 'test(/^home::tests::/)'
 
   # No compiler-internal jargon or raw Rust types leak into user-facing text
   # (rendered diagnostic goldens + `ipe explain` pages). Pure git + ripgrep, no

@@ -105,14 +105,14 @@ mod unix {
 
     fn usage(result: Result<Option<TrustedCache>, CliError>) -> Option<text::Message> {
         match result {
-            Err(CliError::Usage(msg)) => Some(msg),
+            Err(CliError::TrustRefused(refusal)) => Some(refusal.message()),
             _ => None,
         }
     }
 
     fn artifact_usage(result: Result<Option<String>, CacheLoadError>) -> Option<text::Message> {
         match result {
-            Err(CacheLoadError::Cli(CliError::Usage(msg))) => Some(msg),
+            Err(CacheLoadError::Cli(CliError::TrustRefused(refusal))) => Some(refusal.message()),
             _ => None,
         }
     }
@@ -294,7 +294,7 @@ mod unix {
         let dir = std::fs::File::open(&cache).expect("open cache dir");
         let refused = crate::owner_trust::held::list_capped(&dir, &cache, 1);
         assert!(
-            matches!(&refused, Err(CliError::Usage(msg)) if *msg == text::msg::ffi_cache_too_many_entries(&cache.display(), &1_usize)),
+            matches!(&refused, Err(CliError::TrustRefused(t)) if t.message() == text::msg::ffi_cache_too_many_entries(&cache.display(), &1_usize)),
             "{refused:?}"
         );
         let admitted = crate::owner_trust::held::list_capped(&dir, &cache, 2)
@@ -317,7 +317,7 @@ mod unix {
         let dir = std::fs::File::open(&cache).expect("open cache dir");
         let refused = crate::owner_trust::held::list_capped(&dir, &cache, 1);
         assert!(
-            matches!(&refused, Err(CliError::Usage(msg)) if *msg == text::msg::ffi_cache_too_many_entries(&cache.display(), &1_usize)),
+            matches!(&refused, Err(CliError::TrustRefused(t)) if t.message() == text::msg::ffi_cache_too_many_entries(&cache.display(), &1_usize)),
             "{refused:?}"
         );
         let admitted = crate::owner_trust::held::list_capped(&dir, &cache, 2)
@@ -358,7 +358,7 @@ mod unix {
         let (root, manifest) = project("manifest-world-writable", 0o755, 0o666);
         let refused = admit_discovered_manifest(&manifest);
         assert!(
-            matches!(&refused, Err(CliError::Usage(msg)) if *msg == text::msg::manifest_untrusted(&manifest.display())),
+            matches!(&refused, Err(CliError::TrustRefused(t)) if t.message() == text::msg::manifest_untrusted(&manifest.display())),
             "{refused:?}"
         );
         let _ = std::fs::remove_dir_all(&root);
@@ -369,7 +369,7 @@ mod unix {
         let (root, manifest) = project("manifest-shared-dir", 0o777, 0o644);
         let refused = admit_discovered_manifest(&manifest);
         assert!(
-            matches!(&refused, Err(CliError::Usage(msg)) if *msg == text::msg::manifest_untrusted(&manifest.display())),
+            matches!(&refused, Err(CliError::TrustRefused(t)) if t.message() == text::msg::manifest_untrusted(&manifest.display())),
             "{refused:?}"
         );
         chmod(&root, 0o755);
@@ -386,7 +386,7 @@ mod unix {
         symlink(&target, &manifest).expect("plant symlink");
         let refused = admit_discovered_manifest(&manifest);
         assert!(
-            matches!(&refused, Err(CliError::Usage(msg)) if *msg == text::msg::manifest_symlink(&manifest.display())),
+            matches!(&refused, Err(CliError::TrustRefused(t)) if t.message() == text::msg::manifest_symlink(&manifest.display())),
             "{refused:?}"
         );
         let _ = std::fs::remove_dir_all(&root);
@@ -401,7 +401,7 @@ mod unix {
         std::fs::write(&entry, "module Main exposing (main)\nmain = 0\n").expect("write entry");
         let refused = crate::find_manifest_for_ipe_file(&entry);
         assert!(
-            matches!(&refused, Err(CliError::Usage(msg)) if *msg == text::msg::manifest_untrusted(&manifest.display())),
+            matches!(&refused, Err(CliError::TrustRefused(t)) if t.message() == text::msg::manifest_untrusted(&manifest.display())),
             "{refused:?}"
         );
         let _ = std::fs::remove_dir_all(&root);
@@ -416,7 +416,7 @@ mod unix {
         std::fs::write(&entry, "module Main exposing (main)\nmain = 0\n").expect("write entry");
         let refused = crate::loose_file::ProjectRoot::of(None, &entry);
         assert!(
-            matches!(&refused, Err(CliError::Usage(msg)) if *msg == text::msg::manifest_untrusted(&manifest.display())),
+            matches!(&refused, Err(CliError::TrustRefused(t)) if t.message() == text::msg::manifest_untrusted(&manifest.display())),
             "{refused:?}"
         );
         let _ = std::fs::remove_dir_all(&root);
@@ -434,7 +434,7 @@ mod unverifiable_policy {
         std::fs::create_dir_all(&cache).expect("create cache");
         let refused = refuse_unverifiable_cache(&root, REL);
         assert!(
-            matches!(&refused, Err(CliError::Usage(msg)) if *msg == text::msg::ffi_cache_unverifiable(&cache.display())),
+            matches!(&refused, Err(CliError::TrustRefused(t)) if t.message() == text::msg::ffi_cache_unverifiable(&cache.display())),
             "{refused:?}"
         );
         let _ = std::fs::remove_dir_all(&root);
@@ -449,7 +449,7 @@ mod unverifiable_policy {
         std::fs::write(&cache, "").expect("plant a file at the cache path");
         let refused = refuse_unverifiable_cache(&root, REL);
         assert!(
-            matches!(&refused, Err(CliError::Usage(msg)) if *msg == text::msg::ffi_cache_unverifiable(&cache.display())),
+            matches!(&refused, Err(CliError::TrustRefused(t)) if t.message() == text::msg::ffi_cache_unverifiable(&cache.display())),
             "{refused:?}"
         );
         let _ = std::fs::remove_dir_all(&root);
@@ -476,7 +476,7 @@ mod unverifiable_policy {
         let manifest = Path::new("proj").join("package.ipe");
         let refused = refuse_unverifiable_manifest(&manifest);
         assert!(
-            matches!(&refused, Err(CliError::Usage(msg)) if *msg == text::msg::manifest_unverifiable(&manifest.display())),
+            matches!(&refused, Err(CliError::TrustRefused(t)) if t.message() == text::msg::manifest_unverifiable(&manifest.display())),
             "{refused:?}"
         );
     }
@@ -494,7 +494,7 @@ mod unverifiable_host {
         std::fs::create_dir_all(&cache).expect("create cache");
         let refused = open_cache(&root, REL);
         assert!(
-            matches!(&refused, Err(CliError::Usage(msg)) if *msg == text::msg::ffi_cache_unverifiable(&cache.display())),
+            matches!(&refused, Err(CliError::TrustRefused(t)) if t.message() == text::msg::ffi_cache_unverifiable(&cache.display())),
             "{refused:?}"
         );
         let _ = std::fs::remove_dir_all(&root);
@@ -505,7 +505,7 @@ mod unverifiable_host {
         let manifest = Path::new("package.ipe");
         let refused = admit_discovered_manifest(manifest);
         assert!(
-            matches!(&refused, Err(CliError::Usage(msg)) if *msg == text::msg::manifest_unverifiable(&manifest.display())),
+            matches!(&refused, Err(CliError::TrustRefused(t)) if t.message() == text::msg::manifest_unverifiable(&manifest.display())),
             "{refused:?}"
         );
     }

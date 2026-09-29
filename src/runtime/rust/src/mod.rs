@@ -226,6 +226,13 @@ pub use file::*;
 // glob re-export: `path` reaches it via `super::path_core::…`.
 pub mod path_core;
 
+// The home-directory variable name and value parser — the SINGLE source of
+// truth shared with the compiler sandbox (`ipe_sandbox::home` `include!`s this
+// exact file). A sibling module so it also resolves when the runtime is vendored
+// as `mod ipe_runtime` into an emitted app; `system` reaches it via
+// `super::home_core::…`.
+pub mod home_core;
+
 pub mod path;
 pub use path::*;
 
