@@ -1931,7 +1931,7 @@ Example:
 ## `coalesce`
 
 ```ipe
-coalesce : Projection a -> Projection a -> Projection a
+coalesce : a -> a -> a
 ```
 
 `coalesce left right` — inside a `Store.select` projection lambda, emits
