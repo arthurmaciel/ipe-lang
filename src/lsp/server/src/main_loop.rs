@@ -80,15 +80,49 @@ struct Layout {
     /// and per-edit overlay lookup are `O(log n)`, not a linear scan or a
     /// re-canonicalize.
     path_of_module: BTreeMap<Vec<String>, PathBuf>,
-    /// The directory `lint.ipe` is read from, as the loader named it.
-    lint_config_dir: PathBuf,
+    /// Where `lint.ipe` is read from, if the load resolved it.
+    lint_source: LintSource,
+}
+
+/// Where a layout reads `lint.ipe` from.
+///
+/// Only a completed load names the project's configuration. A fallback has no
+/// proof of it, so it runs no rule rather than read a guessed directory whose
+/// absent `lint.ipe` would enable rules the project disabled.
+enum LintSource {
+    /// The directory the loader named, the one `ipe lint` reads for the same project.
+    Project(PathBuf),
+    /// No load resolved the project, so no configuration is known.
+    Unresolved,
+}
+
+impl LintSource {
+    /// The directory to read `lint.ipe` from; `None` when unresolved.
+    fn dir(&self) -> Option<&Path> {
+        match self {
+            Self::Project(dir) => Some(dir),
+            Self::Unresolved => None,
+        }
+    }
 }
 
 impl Layout {
-    /// Index a loaded project, canonicalizing each user path once.
+    /// Index a loaded project, whose `lint.ipe` directory the loader resolved.
     fn of(project: LoadedProject) -> Self {
-        let path_of_module: BTreeMap<Vec<String>, PathBuf> = project
-            .files
+        Self::index(
+            project.files,
+            project.entry_module,
+            LintSource::Project(project.lint_config_dir),
+        )
+    }
+
+    /// Index a module set, canonicalizing each user path once.
+    fn index(
+        files: BTreeMap<Vec<String>, LoadedFile>,
+        entry_module: Vec<String>,
+        lint_source: LintSource,
+    ) -> Self {
+        let path_of_module: BTreeMap<Vec<String>, PathBuf> = files
             .iter()
             .filter(|(_, file)| file.origin == ModuleOrigin::User)
             .map(|(module, file)| (module.clone(), normalize(&file.path)))
@@ -98,11 +132,11 @@ impl Layout {
             .map(|(module, path)| (path.clone(), module.clone()))
             .collect();
         Self {
-            entry_module: project.entry_module,
-            disk: project.files,
+            entry_module,
+            disk: files,
             module_of_path,
             path_of_module,
-            lint_config_dir: project.lint_config_dir,
+            lint_source,
         }
     }
 }
@@ -963,6 +997,9 @@ fn ensure_project_fresh(state: &mut State, loader: &dyn ProjectLoader, path: &Pa
 }
 
 /// The one-module layout of a buffer served on its own.
+///
+/// Its lint source is [`LintSource::Unresolved`]: the failed load named no
+/// project, so no `lint.ipe` is known to configure its rules.
 fn single_file_layout(path: &Path, text: String) -> Layout {
     let module = vec![module_name_fallback(path)];
     let mut files = BTreeMap::new();
@@ -974,11 +1011,7 @@ fn single_file_layout(path: &Path, text: String) -> Layout {
             origin: ModuleOrigin::User,
         },
     );
-    Layout::of(LoadedProject {
-        files,
-        entry_module: module,
-        lint_config_dir: ipe_lint::lint_config_dir(path),
-    })
+    Layout::index(files, module, LintSource::Unresolved)
 }
 
 fn module_name_fallback(path: &Path) -> String {
@@ -1111,9 +1144,11 @@ fn recompute(state: &mut State, diag_tx: &Sender<DiagnosticsBatch>) {
     // Load `lint.ipe` once per recompute cycle, on the main thread where
     // filesystem I/O is allowed. The worker receives the verdict, not a path,
     // so it never touches the filesystem.
-    let lint = state.served.layout().map_or(LintPass::Skipped, |layout| {
-        LintPass::load(&layout.lint_config_dir)
-    });
+    let lint = state
+        .served
+        .layout()
+        .and_then(|layout| layout.lint_source.dir())
+        .map_or(LintPass::Skipped, LintPass::load);
     let cancel = Arc::new(AtomicBool::new(false));
     state.worker_cancel = Some(cancel.clone());
     let tx = diag_tx.clone();
@@ -1164,7 +1199,7 @@ fn load_refusal_diagnostic(error: &LoadError) -> lsp_types::Diagnostic {
 
 /// The lint pass of one recompute, fixed by whether `lint.ipe` loaded.
 enum LintPass {
-    /// No layout is served, so there is nothing to lint.
+    /// No rule runs: no layout is served, or its lint source is unresolved.
     Skipped,
     /// Lint with the loaded configuration.
     Run(ipe_lint::LintConfig),
@@ -1367,12 +1402,13 @@ fn code_action_result(state: &State, params: &serde_json::Value) -> FeatureOutco
     ));
     ipe_lsp_features::action_kind::retain_offered(&mut actions, only);
     // Whole-document `source.*` rewrites run only when `only` names a source
-    // kind, and never over a `lint.ipe` that failed to load.
+    // kind, and never over a `lint.ipe` that is unresolved or failed to load.
     if ipe_lsp_features::source_actions::requested(only) {
         let lint_config = state
             .served
             .layout()
-            .map(|layout| ipe_lint::load_lint_config(&layout.lint_config_dir));
+            .and_then(|layout| layout.lint_source.dir())
+            .map(ipe_lint::load_lint_config);
         match lint_config {
             None => {}
             Some(Ok(lint_config)) => {
@@ -1677,8 +1713,8 @@ mod tests {
         Connection, DiagnosticsBatch, DidChangeTextDocument, DidChangeWatchedFiles, FeatureOutcome,
         Layout, LoadedFile, LoadedProject, Message, ModuleOrigin, Notification, Overlay, Path,
         PathBuf, PositionEncoding, ProjectLoader, PublishDiagnostics, PublishDiagnosticsParams,
-        Served, State, TextDocumentContentChangeEvent, Url, ensure_project_fresh,
-        handle_notification, normalize, publish, recompute, sync_inputs,
+        Served, State, TextDocumentContentChangeEvent, Url, code_action_result,
+        ensure_project_fresh, handle_notification, normalize, publish, recompute, sync_inputs,
     };
     use crate::loader::{LimitSource, LoadDisposition, LoadError};
     use ipe_lint::{LintConfigLoadError, WorkspaceReadError, load_lint_config};
@@ -1762,28 +1798,182 @@ mod tests {
     /// One diagnostics batch of a `LINTED_TEXT` project whose `lint.ipe` lives in `dir`.
     fn lint_batch(dir: &Path) -> BTreeMap<Url, Vec<lsp_types::Diagnostic>> {
         let main_path = normalize(dir).join("Main.ipe");
+        served_batch(
+            &BufferCeilingLoader::new(usize::MAX),
+            &main_path,
+            LINTED_TEXT,
+        )
+        .1
+    }
+
+    /// Open `text` at `main_path` through `loader` and take one diagnostics batch.
+    fn served_batch(
+        loader: &dyn ProjectLoader,
+        main_path: &Path,
+        text: &str,
+    ) -> (State, BTreeMap<Url, Vec<lsp_types::Diagnostic>>) {
         let mut state = State::new(None, PositionEncoding::Utf16);
         state.overlays.insert(
-            main_path.clone(),
+            main_path.to_path_buf(),
             Overlay {
-                text: LINTED_TEXT.to_owned(),
+                text: text.to_owned(),
                 version: 0,
             },
         );
-        ensure_project_fresh(
-            &mut state,
-            &BufferCeilingLoader::new(usize::MAX),
-            &main_path,
-        );
+        ensure_project_fresh(&mut state, loader, main_path);
         sync_inputs(&mut state);
         let (diag_tx, diag_rx) = crossbeam_channel::unbounded::<DiagnosticsBatch>();
         recompute(&mut state, &diag_tx);
-        diag_rx
+        let batch = diag_rx
             .recv_timeout(Duration::from_secs(10))
             .expect("diagnostics batch")
             .per_uri
             .into_iter()
+            .collect();
+        (state, batch)
+    }
+
+    /// A package loader whose load either names the package root's `lint.ipe`
+    /// directory or fails in a pipeline stage (a broken `package.ipe`).
+    struct PackageLoader {
+        root: PathBuf,
+        degrade: bool,
+    }
+
+    impl ProjectLoader for PackageLoader {
+        fn load(
+            &self,
+            _workspace_root: Option<&Path>,
+            open_file: &Path,
+            open_text: Option<&str>,
+        ) -> Result<LoadedProject, LoadError> {
+            if self.degrade {
+                return Err(LoadError::Pipeline("package.ipe: bad header".to_owned()));
+            }
+            let mut files = BTreeMap::new();
+            files.insert(
+                vec!["Main".to_owned()],
+                LoadedFile {
+                    path: open_file.to_path_buf(),
+                    text: open_text.unwrap_or_default().to_owned(),
+                    origin: ModuleOrigin::User,
+                },
+            );
+            Ok(LoadedProject {
+                files,
+                entry_module: vec!["Main".to_owned()],
+                lint_config_dir: self.root.clone(),
+            })
+        }
+    }
+
+    /// A package root whose `lint.ipe` denies the rule `LINTED_TEXT` trips,
+    /// plus the path of its `src/Main.ipe`, where no `lint.ipe` lives.
+    fn package_with_lint_config(name: &str) -> (PathBuf, PathBuf) {
+        let root = normalize(&lint_dir(name));
+        assert!(
+            std::fs::write(
+                root.join(ipe_lint::LINT_CONFIG_FILE),
+                "module Lint exposing (lint)\n\nlint =\n    Lint.config\n        |> Lint.deny \"no-redundant-bool-if\"\n",
+            )
+            .is_ok()
+        );
+        assert!(std::fs::create_dir_all(root.join("src")).is_ok());
+        let main_path = root.join("src").join("Main.ipe");
+        (root, main_path)
+    }
+
+    /// Every `source.*` code action offered for `main_path` under `state`.
+    fn source_action_kinds(state: &State, main_path: &Path) -> Vec<String> {
+        let Ok(uri) = Url::from_file_path(main_path) else {
+            return vec!["<no uri>".to_owned()];
+        };
+        let params = serde_json::json!({
+            "textDocument": { "uri": uri },
+            "range": {
+                "start": { "line": 0, "character": 0 },
+                "end": { "line": 0, "character": 0 }
+            },
+            "context": { "diagnostics": [], "only": ["source"] }
+        });
+        let FeatureOutcome::Payload(serde_json::Value::Array(actions)) =
+            code_action_result(state, &params)
+        else {
+            return Vec::new();
+        };
+        actions
+            .iter()
+            .filter_map(|action| action.get("kind")?.as_str())
+            .filter(|kind| kind.starts_with("source"))
+            .map(str::to_owned)
             .collect()
+    }
+
+    /// Imports out of order: `source.organizeImports` has an edit to offer.
+    const UNSORTED_TEXT: &str = "module Main exposing (main)\n\nimport Zeta\nimport Alpha\n\nmain =\n    (Zeta.a, Alpha.b)\n";
+
+    #[test]
+    fn a_resolved_package_lints_with_the_root_lint_config() {
+        let (root, main_path) = package_with_lint_config("pkg-resolved");
+        let loader = PackageLoader {
+            root,
+            degrade: false,
+        };
+        let (state, batch) = served_batch(&loader, &main_path, LINTED_TEXT);
+        assert!(matches!(state.served, Served::Trusted(_)));
+        let denied = batch.values().flatten().any(|d| {
+            d.code
+                == Some(lsp_types::NumberOrString::String(
+                    "lint/no-redundant-bool-if".to_owned(),
+                ))
+                && d.severity == Some(lsp_types::DiagnosticSeverity::ERROR)
+        });
+        assert!(denied, "the root `lint.ipe` denies the rule: {batch:?}");
+        let (state, _) = served_batch(&loader, &main_path, UNSORTED_TEXT);
+        assert!(
+            source_action_kinds(&state, &main_path)
+                .iter()
+                .any(|kind| kind == "source.organizeImports"),
+            "a resolved project offers its source actions"
+        );
+    }
+
+    #[test]
+    fn a_degraded_package_load_runs_no_lint_rule() {
+        let (root, main_path) = package_with_lint_config("pkg-degraded");
+        let loader = PackageLoader {
+            root: root.clone(),
+            degrade: true,
+        };
+        let (state, batch) = served_batch(&loader, &main_path, LINTED_TEXT);
+        assert!(matches!(state.served, Served::Fallback(_)));
+        assert_eq!(
+            lint_findings(&batch, &lint_config_uri(&root)),
+            0,
+            "a fallback never lints with a guessed `lint.ipe`: {batch:?}"
+        );
+        assert!(
+            batch
+                .values()
+                .flatten()
+                .all(|d| d.source.as_deref() != Some("ipe-lint")),
+            "a fallback publishes no lint diagnostic at all: {batch:?}"
+        );
+    }
+
+    #[test]
+    fn a_degraded_package_load_offers_no_source_action() {
+        let (root, main_path) = package_with_lint_config("pkg-degraded-actions");
+        let loader = PackageLoader {
+            root,
+            degrade: true,
+        };
+        let (state, _) = served_batch(&loader, &main_path, UNSORTED_TEXT);
+        assert!(matches!(state.served, Served::Fallback(_)));
+        assert!(
+            source_action_kinds(&state, &main_path).is_empty(),
+            "a fallback offers no source action over an unresolved `lint.ipe`"
+        );
     }
 
     /// The URI of the `lint.ipe` in `dir`.
