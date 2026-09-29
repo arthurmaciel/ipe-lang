@@ -421,6 +421,13 @@ fn workspace() -> PathBuf {
 ///
 /// Build output and hidden directories are skipped; integration-test trees
 /// are skipped too unless `with_tests`.
+/// Whether a directory named `name` holds build output the root `.gitignore` excludes.
+///
+/// Cargo writes `target`, and `ipe` emits a project's Rust into `out`; neither is source.
+fn is_build_output(name: &std::ffi::OsStr) -> bool {
+    name == "target" || name == "out"
+}
+
 fn collect_rs(dir: &Path, with_tests: bool, out: &mut Vec<PathBuf>) {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return;
@@ -429,7 +436,7 @@ fn collect_rs(dir: &Path, with_tests: bool, out: &mut Vec<PathBuf>) {
         let path = entry.path();
         if path.is_dir() {
             let skipped = path.file_name().is_some_and(|n| {
-                n == "target"
+                is_build_output(n)
                     || n.to_string_lossy().starts_with('.')
                     || (!with_tests && n == "tests")
             });
@@ -474,7 +481,7 @@ fn collect_manifests(dir: &Path, out: &mut Vec<PathBuf>) {
         if path.is_dir() {
             let skipped = path
                 .file_name()
-                .is_some_and(|n| n == "target" || n.to_string_lossy().starts_with('.'));
+                .is_some_and(|n| is_build_output(n) || n.to_string_lossy().starts_with('.'));
             if !skipped {
                 collect_manifests(&path, out);
             }
@@ -1643,7 +1650,7 @@ mod lexical {
             if path.is_dir() {
                 let skipped = path
                     .file_name()
-                    .is_some_and(|n| n == "tests" || n == "target");
+                    .is_some_and(|n| n == "tests" || super::is_build_output(n));
                 if !skipped {
                     collect_production_rs(&path, out);
                 }
