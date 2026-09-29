@@ -201,16 +201,22 @@ Checks performed
       carrying that `!= 'true'` conjunct; `<job>` must be a job it `needs`
       whose `outputs` carry `release_only`.  At least one job must narrow,
       and a job needing a skipped job must run `always()`.  A declaration
-      the workflow contradicts, or none at all, is refused.  Some `gate`
-      declared `run` must execute a step that is exactly one plain `cargo
-      <fetch|check|build|test|nextest archive|nextest run>` with `--locked`
-      before any `--` and no `--manifest-path`; no step `if:`,
-      `continue-on-error`, `shell` or `working-directory`, no job
-      `continue-on-error` or `defaults`, no workflow `defaults`, and no `if:`
-      on the job or any job it transitively `needs`.  So a release PR proves
-      the bumped Cargo.lock still matches Cargo.toml.  A job output named or
-      mentioning `release_only` must be exactly
-      `${{ steps.<id>.outputs.release_only == 'true' }}`.
+      the workflow contradicts, or none at all, is refused.  Some job of a
+      `gate` declared `run` must open with a `LockedCargoStep`: its first
+      `run:` step, after only commit-pinned or local `uses:` steps, is
+      `cargo <fetch|check|build|test|nextest archive|nextest run>` with
+      `--locked` and otherwise only flags from a closed set, in text drawn
+      from `[A-Za-z0-9 ./_-]` (so the lexed words are the shell's words),
+      with no step key but `name`, `id` and `run`.  The job has no
+      `container`, `continue-on-error` or `defaults`; neither it nor any job
+      it transitively `needs` an `if:`; job and workflow `env` set only
+      `CARGO_TERM_COLOR` / `CARGO_INCREMENTAL`; the workflow has no
+      `defaults`; `.cargo/config[.toml]` holds only `target.<t>.rustflags`.
+      So a release PR proves the bumped Cargo.lock still matches Cargo.toml.
+      A job output named or mentioning `release_only` must be exactly
+      `${{ steps.<id>.outputs.release_only == 'true' }}`, and no job output
+      value or `if:` reads outputs through a computed name, `.*`, `toJSON`,
+      `format` or `join`.
 
 Pure stdlib + PyYAML (already a CI dependency).  No network; check 12 runs
 `git ls-files` locally to list tracked paths.
@@ -237,6 +243,11 @@ except ImportError:  # pragma: no cover - CI always has PyYAML
     sys.exit(2)
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+try:
+    import tomllib
+except ImportError:  # Python < 3.11 outside CI.
+    import tomli as tomllib  # type: ignore[no-redef]
+
 import strict_yaml  # noqa: E402  # the shared strict loader, SSOT for every YAML load below
 import gha_expr  # noqa: E402  # the one GitHub Actions expression parser
 import shell_lex  # noqa: E402  # the one quote-removing shell lexer
@@ -1441,7 +1452,9 @@ def _check_release_only_exports(fname: str, doc: dict, errors: list[str]) -> Non
     spelling (dotted, bracketed, through `toJSON`), must be exactly
     `${{ steps.<id>.outputs.release_only == 'true' }}`: every consumer then
     sees `true` or `false`, and an unset writer reads as `false`, so all jobs
-    run in full."""
+    run in full. No job output value or `if:` reads outputs under a name the
+    source does not spell (`_opaque_output_read`), so every `release_only`
+    read is one the mention match sees."""
     jobs = doc.get("jobs") if isinstance(doc.get("jobs"), dict) else {}
     for jid, job in jobs.items():
         outputs = job.get("outputs") if isinstance(job, dict) else None
@@ -1452,6 +1465,30 @@ def _check_release_only_exports(fname: str, doc: dict, errors: list[str]) -> Non
                     f"{fname}: job {jid!r} output {key!r} exports the raw classifier value "
                     f"{value!r}; write `${{{{ steps.<id>.outputs.release_only == 'true' }}}}` (check 13)"
                 )
+        steps = job.get("steps") if isinstance(job, dict) and isinstance(job.get("steps"), list) else []
+        reads = [(f"output {k!r}", v) for k, v in (outputs if isinstance(outputs, dict) else {}).items()]
+        reads += [("`if:`", job.get("if"))] if isinstance(job, dict) and "if" in job else []
+        reads += [(f"step {i} `if:`", st.get("if")) for i, st in enumerate(steps, 1) if isinstance(st, dict) and "if" in st]
+        for where, text in reads:
+            if _opaque_output_read(str(text)):
+                errors.append(
+                    f"{fname}: job {jid!r} {where} reads outputs through a computed name or a "
+                    f"serialisation ({text!r}), so a `release_only` read can hide in it; name each "
+                    "output literally as `<steps|needs>.<id>.outputs.<name>` (check 13)"
+                )
+
+
+# A read of `outputs` whose name the source does not spell: a computed index,
+# the `.*` filter, or the map passed whole to a function that can serialise
+# or assemble names (`toJSON`, `format`, `join`).
+_OPAQUE_INDEX = re.compile(r"\boutputs\s*(?:\[(?!\s*'[^']*'\s*\])|\.\s*\*)", re.IGNORECASE)
+_NAME_BUILDER = re.compile(r"\b(?:tojson|format|join)\s*\(", re.IGNORECASE)
+
+
+def _opaque_output_read(text: str) -> bool:
+    return bool(_OPAQUE_INDEX.search(text)) or (
+        bool(_NAME_BUILDER.search(text)) and re.search(r"\boutputs\b", text, re.IGNORECASE) is not None
+    )
 
 
 def check_release_only_declarations(
@@ -1557,32 +1594,121 @@ _LOCK_RESOLVING_SUBCOMMANDS = (
     ("build",),
     ("test",),
 )
-# Anything the shell could use to mask an exit status, chain another command
-# or splice in words the source does not show.
-_SHELL_UNSAFE = frozenset(";&|()\n`$<>\\")
+# The only characters a lock proof's `run:` may hold. None is special to bash
+# (no quote, expansion, brace, glob, tilde, separator, redirect or comment) or
+# to pwsh (no `$`, `@`, `,`, `{`, `%`, `;`, backtick), so splitting on spaces
+# yields exactly the words either shell hands Cargo.
+_LOCK_PROOF_TEXT = re.compile(r"[A-Za-z0-9 ./_-]+")
+# The closed flag set a lock proof may pass: none selects another manifest,
+# lock, config, toolchain or unstable feature, and none ends Cargo's options.
+_LOCK_PROOF_FLAGS = frozenset(
+    {"--locked", "--offline", "--workspace", "--release", "--doc", "--all-targets", "--all-features"}
+)
+_LOCK_PROOF_VALUED = {
+    "-p": re.compile(r"[A-Za-z0-9_][A-Za-z0-9_-]*"),
+    "--package": re.compile(r"[A-Za-z0-9_][A-Za-z0-9_-]*"),
+    "--archive-file": re.compile(r"[A-Za-z0-9_.][A-Za-z0-9_./-]*"),
+}
+_LOCK_PROOF_STEP_KEYS = frozenset({"name", "id", "run"})
+# The environment keys a lock proof's job and workflow may set: display and
+# incremental-compilation knobs that cannot move the manifest, the lock, the
+# config or the binary Cargo resolves with.
+_LOCK_NEUTRAL_ENV = frozenset({"CARGO_TERM_COLOR", "CARGO_INCREMENTAL"})
+# A step before the proof: a remote action pinned to a commit, or a local
+# composite action under `.github/actions/` (a code-owned trust root, like
+# this file).
+_LOCK_PREFIX_USES = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_./-]+@[0-9a-f]{40}|\./\.github/actions/[A-Za-z0-9_-]+")
+# The `.cargo/config*` tables a lock proof tolerates: per-target flags, which
+# cannot redirect resolution (no `resolver`, `paths`, `patch`, `source`,
+# `unstable`, `alias` or `env`).
+_LOCK_NEUTRAL_CARGO_CONFIG = {"target": frozenset({"rustflags"})}
 
 
-def _locked_cargo_invocation(run: object) -> bool:
-    """True only for one plain command, `cargo <sub> ...`, whose subcommand
-    resolves the workspace lock, with `--locked` before any `--` and no
-    `--manifest-path`, so its exit status is exactly Cargo's verdict on the
-    root Cargo.lock."""
-    if not isinstance(run, str) or any(c in _SHELL_UNSAFE for c in run.strip()):
-        return False
-    commands = shell_lex.split_commands(run)
-    if len(commands) != 1 or commands[0].writes:
-        return False
-    words = commands[0].words
-    if words[:1] != ["cargo"]:
-        return False
-    sub = next((s for s in _LOCK_RESOLVING_SUBCOMMANDS if tuple(words[1 : 1 + len(s)]) == s), None)
-    if sub is None:
-        return False
-    args = words[1 + len(sub) :]
-    own = args[: args.index("--")] if "--" in args else args
-    return "--locked" in own and not any(
-        a == "--manifest-path" or a.startswith("--manifest-path=") for a in args
-    )
+@dataclass(frozen=True)
+class LockedCargoStep:
+    """A step whose exit status is exactly Cargo's verdict on the root
+    Cargo.lock: `cargo <sub> [flag]*` with `--locked`, built only by `parse`."""
+
+    subcommand: tuple[str, ...]
+    flags: tuple[str, ...]
+
+    @classmethod
+    def parse(cls, st: object) -> LockedCargoStep | None:
+        """The step as a lock proof: only `name`, `id` and `run` keys, `run`
+        drawn from `_LOCK_PROOF_TEXT`, a lock-resolving subcommand, and flags
+        from the closed set including `--locked`; else None."""
+        if not isinstance(st, dict) or not set(st) <= _LOCK_PROOF_STEP_KEYS:
+            return None
+        run = st.get("run")
+        if not isinstance(run, str) or not _LOCK_PROOF_TEXT.fullmatch(run.strip()):
+            return None
+        words = run.split()
+        if words[:1] != ["cargo"]:
+            return None
+        sub = next((s for s in _LOCK_RESOLVING_SUBCOMMANDS if tuple(words[1 : 1 + len(s)]) == s), None)
+        if sub is None:
+            return None
+        flags = words[1 + len(sub) :]
+        i = 0
+        while i < len(flags):
+            value = _LOCK_PROOF_VALUED.get(flags[i])
+            if value is not None:
+                if i + 1 >= len(flags) or not value.fullmatch(flags[i + 1]):
+                    return None
+                i += 2
+            elif flags[i] in _LOCK_PROOF_FLAGS:
+                i += 1
+            else:
+                return None
+        if "--locked" not in flags:
+            return None
+        return cls(sub, tuple(flags))
+
+
+def _lock_neutral_env(holder: dict) -> bool:
+    """Whether a job's or workflow's `env` sets only `_LOCK_NEUTRAL_ENV` keys."""
+    env = holder.get("env", {})
+    return isinstance(env, dict) and all(str(k) in _LOCK_NEUTRAL_ENV for k in env)
+
+
+def _job_lock_proof(job: dict) -> LockedCargoStep | None:
+    """The job's lock proof: its FIRST step with a `run:`, preceded only by
+    `_LOCK_PREFIX_USES` steps, so nothing the job runs earlier can rewrite the
+    lock, the manifest, `$GITHUB_ENV` or `$GITHUB_PATH` before Cargo reads
+    them; the job itself runs in no `container` and sets only neutral `env`."""
+    steps = job.get("steps")
+    if "container" in job or not _lock_neutral_env(job) or not isinstance(steps, list):
+        return None
+    for st in steps:
+        if not isinstance(st, dict):
+            return None
+        if "run" in st:
+            return LockedCargoStep.parse(st)
+        if not _LOCK_PREFIX_USES.fullmatch(str(st.get("uses", ""))):
+            return None
+    return None
+
+
+def _cargo_config_refusal(repo: str) -> str | None:
+    """Why the repository's `.cargo/config[.toml]` could redirect a lock
+    proof, or None when it holds only `_LOCK_NEUTRAL_CARGO_CONFIG` keys."""
+    for name in ("config.toml", "config"):
+        where = os.path.join(repo, ".cargo", name)
+        try:
+            with open(where, "rb") as f:
+                doc = tomllib.load(f)
+        except FileNotFoundError:
+            continue
+        except (OSError, tomllib.TOMLDecodeError) as e:
+            return f".cargo/{name} is unreadable: {e}"
+        for key, value in doc.items():
+            allowed = _LOCK_NEUTRAL_CARGO_CONFIG.get(key)
+            if allowed is None or not isinstance(value, dict):
+                return f".cargo/{name} sets `{key}`"
+            for target, table in value.items():
+                if not isinstance(table, dict) or not set(table) <= allowed:
+                    return f".cargo/{name} sets `{key}.{target}` beyond {sorted(allowed)}"
+    return None
 
 
 def _runs_on_every_release_pr(jid: str, jobs: dict) -> bool:
@@ -1601,25 +1727,20 @@ def _run_defaults(holder: dict) -> bool:
     return "defaults" in holder
 
 
-def _proves_lock(st: object) -> bool:
-    return (
-        isinstance(st, dict)
-        and not {"if", "continue-on-error", "shell", "working-directory"}.intersection(st)
-        and _locked_cargo_invocation(st.get("run"))
-    )
-
-
 def check_release_locked_build(
     entries: list[dict], gate_contexts: set[str], errors: list[str], root: str = REPO_ROOT
 ) -> None:
     """Check 13, lock clause: a release PR bumps Cargo.toml and Cargo.lock, so
-    some gate declared `release-only: run` must execute a step that is exactly
-    `cargo <fetch|check|build|test|nextest archive|nextest run> ... --locked`
-    against the root manifest, which refuses a lock the bump left stale
-    instead of re-resolving it. The step carries no `if:`, `continue-on-error`,
-    `shell` or `working-directory`; its job no `continue-on-error` or
-    `defaults`; its workflow no `defaults`; and neither the job nor any job
-    it transitively `needs` an `if:`."""
+    some job of a gate declared `release-only: run` must open with a
+    `LockedCargoStep` as its first `run:` step (see `_job_lock_proof`), which
+    refuses a lock the bump left stale instead of re-resolving it. The job
+    has no `continue-on-error` or `defaults`, neither it nor any job it
+    transitively `needs` an `if:`, its workflow no `defaults` and only
+    neutral `env`, and the repository's Cargo config only neutral tables."""
+    refusal = _cargo_config_refusal(os.path.dirname(root))
+    if refusal is not None:
+        errors.append(f"{refusal}, which can redirect every `cargo --locked` lock proof (check 13)")
+        return
     for entry in entries:
         if not isinstance(entry, dict) or str(entry.get("context")) not in gate_contexts:
             continue
@@ -1631,17 +1752,17 @@ def check_release_locked_build(
                 doc = strict_yaml.safe_load(f)
         except (OSError, yaml.YAMLError):
             continue
-        if not isinstance(doc, dict) or _run_defaults(doc):
+        if not isinstance(doc, dict) or _run_defaults(doc) or not _lock_neutral_env(doc):
             continue
         jobs = doc.get("jobs") if isinstance(doc.get("jobs"), dict) else {}
         aggregates = [str(a) for a in entry.get("aggregates") or []]
         for jid, job, _ in _entry_jobs(str(entry.get("context")), aggregates, jobs):
-            steps = job.get("steps")
-            if _runs_on_every_release_pr(jid, jobs) and isinstance(steps, list) and any(map(_proves_lock, steps)):
+            if _runs_on_every_release_pr(jid, jobs) and _job_lock_proof(job) is not None:
                 return
     errors.append(
-        "no gate declared `release-only: run` executes an unconditional `cargo ... --locked` "
-        "step, so a release PR never proves Cargo.lock matches the bumped Cargo.toml (check 13)"
+        "no gate declared `release-only: run` has a job whose first `run:` step is a plain "
+        "`cargo <sub> --locked` from the closed flag set, after only pinned `uses:` steps, "
+        "so a release PR never proves Cargo.lock matches the bumped Cargo.toml (check 13)"
     )
 
 

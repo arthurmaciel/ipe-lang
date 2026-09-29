@@ -16,9 +16,11 @@ Two agreements, both refused on drift:
    by name alone, so no named member may also be a registry or git package in
    Cargo.lock.
 
-Every path package in Cargo.lock (no `source`) must be a listed workspace
-member or a `[workspace] exclude` crate with a literal version: any other path
-dependency would lock without either agreement ever reading its manifest.
+Every path package in Cargo.lock (no `source`) must be, by `(name, version)`,
+exactly one listed workspace member or `[workspace] exclude` crate (its own
+`[workspace]` table and a literal version): any other path dependency would
+lock without either agreement ever reading its manifest. Every member and
+exclude path resolves inside the repository.
 
 Manifests are parsed as TOML, never pattern-matched: a member `package.version`
 is either `{ workspace = true }` or a literal string, and any other shape is
@@ -98,31 +100,44 @@ def manifest_version(root_text: str, root_doc: dict) -> str:
     return marked
 
 
-def inheriting_members(root: str, root_doc: dict) -> tuple[set[str], set[str]]:
+def _in_repo(root: str, path: str) -> str:
+    """`path`'s manifest, relative to the repository, once `path` resolves
+    (symlinks followed) to a directory strictly inside the repository."""
+    real_root = os.path.realpath(root)
+    real = os.path.realpath(os.path.join(real_root, path))
+    if os.path.isabs(path) or os.path.commonpath([real_root, real]) != real_root or real == real_root:
+        raise Refusal(f"workspace path {path!r} does not resolve inside the repository")
+    return os.path.join(os.path.relpath(real, real_root), "Cargo.toml")
+
+
+def inheriting_members(root: str, root_doc: dict, version: str) -> tuple[set[str], set[tuple[str, str]]]:
     """Package names of the workspace members whose `package.version` is
-    `{ workspace = true }`, and of every package the root declares: each
-    listed member plus each `[workspace] exclude` directory, which carries its
-    own `[workspace]` and so a literal version no release bump touches."""
+    `{ workspace = true }`, and the `(name, version)` of every package the
+    root declares: each listed member, and each `[workspace] exclude` crate,
+    which must carry its own `[workspace]` table and a literal version, so no
+    release bump touches it. Every path resolves inside the repository."""
     members = _table(root_doc, "workspace").get("members")
     if not isinstance(members, list) or not all(isinstance(m, str) for m in members):
         raise Refusal("Cargo.toml has no `[workspace] members` list of paths")
     names: set[str] = set()
-    listed: set[str] = set()
+    listed: set[tuple[str, str]] = set()
     for member in members:
         if any(c in member for c in "*?["):
             raise Refusal(f"workspace member {member!r} is a glob; list members explicitly")
-        rel = os.path.join(member, "Cargo.toml")
+        rel = _in_repo(root, member)
         package = _table(_toml(root, rel)[1], "package")
         name = package.get("name")
         if not isinstance(name, str):
             raise Refusal(f"{rel} has no `[package] name`")
-        listed.add(name)
-        version = package.get("version")
-        if version == _INHERITED:
+        declared = package.get("version")
+        if declared == _INHERITED:
             names.add(name)
-        elif not isinstance(version, str):
+            listed.add((name, version))
+        elif isinstance(declared, str):
+            listed.add((name, declared))
+        else:
             raise Refusal(
-                f"{rel} `package.version` is {version!r}; declare `version.workspace = true` "
+                f"{rel} `package.version` is {declared!r}; declare `version.workspace = true` "
                 "or a literal version string"
             )
     excluded = _table(root_doc, "workspace").get("exclude", [])
@@ -131,12 +146,16 @@ def inheriting_members(root: str, root_doc: dict) -> tuple[set[str], set[str]]:
     for path in excluded:
         if any(c in path for c in "*?["):
             raise Refusal(f"workspace exclude {path!r} is a glob; list excluded crates explicitly")
-        rel = os.path.join(path, "Cargo.toml")
-        package = _table(_toml(root, rel)[1], "package")
+        rel = _in_repo(root, path)
+        doc = _toml(root, rel)[1]
+        package = _table(doc, "package")
         name = package.get("name")
-        if not isinstance(name, str) or not isinstance(package.get("version"), str):
+        declared = package.get("version")
+        if not isinstance(name, str) or not isinstance(declared, str):
             raise Refusal(f"{rel} needs a `[package] name` and a literal `version` string")
-        listed.add(name)
+        if not isinstance(doc.get("workspace"), dict):
+            raise Refusal(f"{rel} is excluded from the workspace but carries no `[workspace]` table of its own")
+        listed.add((name, declared))
     if not names:
         raise Refusal("no workspace member inherits the workspace version")
     return names, listed
@@ -200,7 +219,7 @@ def check(root: str = REPO_ROOT) -> list[str]:
     try:
         root_text, root_doc = _toml(root, "Cargo.toml")
         version = manifest_version(root_text, root_doc)
-        members, listed = inheriting_members(root, root_doc)
+        members, listed = inheriting_members(root, root_doc, version)
         locked, sourced = lock_entries(_toml(root, "Cargo.lock")[1])
         bumped = release_commit_names(_read(root, RELEASE_PLEASE_CONFIG))
     except Refusal as e:
@@ -223,12 +242,14 @@ def check(root: str = REPO_ROOT) -> list[str]:
             f"the release commit bumps {name!r} in Cargo.lock, which does not inherit the "
             f"workspace version; remove it from the Cargo.lock jsonpath in {RELEASE_PLEASE_CONFIG}"
         )
-    for name in sorted(set(locked) - listed):
-        errors.append(
-            f"Cargo.lock holds path package {name!r}, which is neither a listed workspace member "
-            "nor an excluded crate, so neither agreement covers it; list its directory in "
-            "`[workspace] members` or `exclude`"
-        )
+    for name, got in sorted(locked.items()):
+        for v in sorted(set(got)):
+            if (name, v) not in listed or got.count(v) > 1:
+                errors.append(
+                    f"Cargo.lock holds path package {name!r} {v}, which is not exactly one listed "
+                    "workspace member or excluded crate at that version, so neither agreement "
+                    "covers it; list its directory in `[workspace] members` or `exclude`"
+                )
     for name in sorted(bumped.intersection(sourced)):
         errors.append(
             f"the Cargo.lock jsonpath matches {name!r}, which is also a registry or git package "

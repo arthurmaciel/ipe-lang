@@ -238,7 +238,7 @@ class TestManifestLockConsistency(unittest.TestCase):
 
     def test_unlisted_path_package_is_refused(self) -> None:
         self.put("Cargo.lock", _LOCK + '\n[[package]]\nname = "stray"\nversion = "0.1.0"\n')
-        self.assertRefused("path package 'stray', which is neither a listed workspace member")
+        self.assertRefused("path package 'stray' 0.1.0, which is not exactly one listed")
 
     def test_excluded_crate_with_literal_version_passes(self) -> None:
         self.put("Cargo.toml", _ROOT.replace("\n[workspace.package]", 'exclude = ["tool"]\n\n[workspace.package]'))
@@ -250,6 +250,45 @@ class TestManifestLockConsistency(unittest.TestCase):
         self.put("Cargo.toml", _ROOT.replace("\n[workspace.package]", 'exclude = ["tool"]\n\n[workspace.package]'))
         self.put(os.path.join("tool", "Cargo.toml"), '[package]\nname = "tool"\nversion.workspace = true\n')
         self.assertRefused("tool/Cargo.toml needs a `[package] name` and a literal `version` string")
+
+    def _exclude(self, path: str, manifest: str = '[package]\nname = "tool"\nversion = "0.0.0"\n\n[workspace]\n') -> None:
+        self.put("Cargo.toml", _ROOT.replace("\n[workspace.package]", f'exclude = ["{path}"]\n\n[workspace.package]'))
+        self.put(os.path.join("tool", "Cargo.toml"), manifest)
+        self.put("Cargo.lock", _LOCK + '\n[[package]]\nname = "tool"\nversion = "0.0.0"\n')
+
+    def test_same_name_stray_path_package_is_refused(self) -> None:
+        self._exclude("tool")
+        for stray in ("tool", "literal", "crate-a"):
+            with self.subTest(stray=stray):
+                self.put(
+                    "Cargo.lock",
+                    _LOCK + '\n[[package]]\nname = "tool"\nversion = "0.0.0"\n'
+                    f'\n[[package]]\nname = "{stray}"\nversion = "7.7.7"\n',
+                )
+                self.assertRefused(f"path package {stray!r} 7.7.7, which is not exactly one listed")
+
+    def test_duplicate_path_entry_is_refused(self) -> None:
+        self.put("Cargo.lock", _LOCK + '\n[[package]]\nname = "literal"\nversion = "0.1.0"\n')
+        self.assertRefused("path package 'literal' 0.1.0, which is not exactly one listed")
+
+    def test_exclude_outside_the_repository_is_refused(self) -> None:
+        outside = tempfile.TemporaryDirectory()
+        self.addCleanup(outside.cleanup)
+        with open(os.path.join(outside.name, "Cargo.toml"), "w") as f:
+            f.write('[package]\nname = "tool"\nversion = "0.0.0"\n\n[workspace]\n')
+        os.symlink(outside.name, os.path.join(self.root, "link"))
+        for path in (outside.name, os.path.relpath(outside.name, self.root), "link", ".", "tool/.."):
+            with self.subTest(path=path):
+                self._exclude(path)
+                self.assertRefused(f"workspace path {path!r} does not resolve inside the repository")
+
+    def test_member_outside_the_repository_is_refused(self) -> None:
+        self.put("Cargo.toml", _ROOT.replace('"lit",', '"../lit",'))
+        self.assertRefused("workspace path '../lit' does not resolve inside the repository")
+
+    def test_excluded_crate_without_its_own_workspace_is_refused(self) -> None:
+        self._exclude("tool", '[package]\nname = "tool"\nversion = "0.0.0"\n')
+        self.assertRefused("tool/Cargo.toml is excluded from the workspace but carries no `[workspace]` table")
 
     def test_live_repository_passes(self) -> None:
         self.assertEqual(mlc.check(), [])

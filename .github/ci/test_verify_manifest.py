@@ -4116,12 +4116,83 @@ class TestReleaseOnlyDeclarations(unittest.TestCase):
             "cargo build --release --locked -p ipe",
             "cargo test --locked --doc --workspace",
             "cargo nextest archive --locked --workspace --archive-file a.tar.zst",
-            "cargo nextest run --locked --workspace -- --nocapture",
+            "cargo nextest run --locked --workspace",
             "|\n          cargo check --locked --workspace",
+            "cargo check --locked --offline --workspace --all-targets --all-features",
         ):
             with self.subTest(step=step):
                 ok = _RO13.replace("      - run: cargo test\n", f"      - run: {step}\n")
                 self.assertEqual(self.locked_errors(ok), [])
+
+    def test_only_pinned_uses_steps_may_precede_the_proof(self) -> None:
+        prefix = (
+            "      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1\n"
+            "      - uses: ./.github/actions/rust-toolchain-pinned\n"
+            "      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6\n"
+            "        with:\n          save-if: false\n"
+            "      - name: Fetch crates\n        run: cargo fetch --locked\n"
+            "      - run: cargo update\n"
+        )
+        ok = _RO13.replace("      - run: cargo test\n", prefix).replace(
+            "jobs:\n", "env:\n  CARGO_TERM_COLOR: always\n  CARGO_INCREMENTAL: '0'\n\njobs:\n", 1
+        )
+        self.assertEqual(self.locked_errors(ok), [])
+
+    def test_repository_cargo_config_that_can_redirect_the_lock_is_refused(self) -> None:
+        ok = _RO13.replace("      - run: cargo test\n", "      - run: cargo check --locked\n")
+        where = os.path.join(self.fx.repo, ".cargo", "config.toml")
+        _write(where, '[target.wasm32-wasip1]\nrustflags = ["-C", "debuginfo=0"]\n')
+        self.assertEqual(self.locked_errors(ok), [])
+        for bad in (
+            '[resolver]\nlockfile-path = "/tmp/other.lock"\n',
+            '[unstable]\nunstable-options = true\n',
+            'paths = ["/tmp/fake"]\n',
+            '[patch.crates-io]\nserde = { path = "/tmp/serde" }\n',
+            '[source.crates-io]\nreplace-with = "fake"\n',
+            '[env]\nCARGO_RESOLVER_LOCKFILE_PATH = "/tmp/x.lock"\n',
+            '[target.x86_64-unknown-linux-gnu]\nrunner = "fake"\n',
+            "not toml [",
+        ):
+            with self.subTest(bad=bad):
+                _write(where, bad)
+                self.assertTrue(
+                    any("can redirect every `cargo --locked` lock proof" in e for e in self.locked_errors(ok)),
+                    bad,
+                )
+        os.remove(where)
+        _write(os.path.join(self.fx.repo, ".cargo", "config"), '[resolver]\nlockfile-path = "/tmp/x.lock"\n')
+        self.assertTrue(any(".cargo/config sets `resolver`" in e for e in self.locked_errors(ok)))
+
+    def test_opaque_output_reads_are_refused(self) -> None:
+        needle = "reads outputs through a computed name or a serialisation"
+        extra_output = "      code: ${{ steps.c.outputs.code }}\n"
+        for value in (
+            "${{ steps.c.outputs[format('release{0}only','_')] }}",
+            "${{ steps.c.outputs[matrix.k] }}",
+            "${{ toJSON(steps.c.outputs) }}",
+            "${{ join(steps.c.outputs.*, ',') }}",
+            "${{ contains(toJSON(steps.c.outputs), format('release{0}only', '_')) }}",
+            "${{ fromJSON(ToJson(steps.c.OUTPUTS)).code }}",
+        ):
+            with self.subTest(value=value):
+                self.assertRefused(needle, _RO13.replace(extra_output, extra_output + f"      ro: {value}\n"))
+        job_if = "    if: needs.changes.outputs.code == 'true' && needs.changes.outputs.release_only != 'true'\n"
+        self.assertRefused(
+            needle,
+            _RO13.replace(
+                job_if,
+                job_if.replace("needs.changes.outputs.release_only", "needs.changes.outputs[format('release{0}only', '_')]"),
+            ),
+        )
+        self.assertRefused(
+            needle,
+            _RO13.replace(
+                "      - run: echo shard\n",
+                "      - if: needs.changes.outputs[format('release{0}only', '_')] != 'true'\n        run: echo shard\n",
+            ),
+        )
+        literal = _RO13.replace(extra_output, extra_output + "      lit: ${{ steps.c.outputs['code'] }}\n")
+        self.assertFalse(any(needle in e for e in self.errors(literal)))
 
     def test_no_locked_cargo_step_on_a_release_run_gate_is_refused(self) -> None:
         needle = "never proves Cargo.lock matches"
@@ -4158,6 +4229,49 @@ class TestReleaseOnlyDeclarations(unittest.TestCase):
             "job continue-on-error": _RO13.replace(job, "    needs: [changes]\n    continue-on-error: true\n    steps:\n" + locked),
             "job defaults": _RO13.replace(job, "    needs: [changes]\n    defaults:\n      run:\n        working-directory: tools/x\n    steps:\n" + locked),
             "workflow defaults": step(locked).replace("jobs:\n", "defaults:\n  run:\n    shell: bash {0}\njobs:\n", 1),
+            # The shell's words must be the lexed words: brace expansion (bash)
+            # and arrays / script blocks / splatting (pwsh) rewrite them.
+            "brace moves --locked past --": step("      - run: cargo test {--,} --locked\n"),
+            "brace manifest path": step("      - run: cargo check --locked {--manifest-path,other/Cargo.toml}\n"),
+            "brace joined manifest path": step("      - run: cargo check --locked --manifest-path{=x/Cargo.toml,}\n"),
+            "pwsh array": step("      - run: cargo check --locked @('--manifest-path','x/Cargo.toml')\n"),
+            "pwsh comma": step("      - run: cargo check --locked --offline,--manifest-path\n"),
+            "tilde": step("      - run: cargo nextest archive --locked --archive-file ~/a.tar.zst\n"),
+            "glob": step("      - run: cargo check --locked -p x*\n"),
+            "quoted": step("      - run: cargo check \"--locked\"\n"),
+            # The flag set is closed: nothing may re-point the lock or the config.
+            "double dash": step("      - run: cargo nextest run --locked --workspace -- --nocapture\n"),
+            "config": step("      - run: cargo check --locked --config resolver.lockfile-path=x\n"),
+            "config joined": step("      - run: cargo check --locked --config=resolver.lockfile-path=x\n"),
+            "unstable": step("      - run: cargo check --locked -Zunstable-options\n"),
+            "unstable spaced": step("      - run: cargo check --locked -Z unstable-options\n"),
+            "lockfile path": step("      - run: cargo check --locked --lockfile-path /tmp/x.lock\n"),
+            "package without value": step("      - run: cargo check --locked -p\n"),
+            "package with flag value": step("      - run: cargo check -p --locked\n"),
+            "step env": step("      - env:\n          CARGO_RESOLVER_LOCKFILE_PATH: /tmp/x.lock\n        run: cargo check --locked\n"),
+            # The proof is the job's first `run:`; nothing earlier may touch
+            # the lock, the manifest, `$GITHUB_ENV` or `$GITHUB_PATH`.
+            "preceding cargo update": step("      - run: cargo update\n" + locked),
+            "preceding unlocked fetch": step("      - run: cargo fetch\n" + locked),
+            "preceding GITHUB_PATH write": step('      - run: echo "$PWD/fake" >> "$GITHUB_PATH"\n' + locked),
+            "preceding GITHUB_ENV write": step('      - run: echo CARGO_HOME=/tmp/x >> "$GITHUB_ENV"\n' + locked),
+            "preceding unpinned action": step("      - uses: actions/checkout@v4\n" + locked),
+            "preceding docker action": step("      - uses: docker://alpine:3\n" + locked),
+            "preceding local action outside actions/": step("      - uses: ./tools/evil\n" + locked),
+            "preceding local action escaping": step("      - uses: ./.github/actions/../../evil\n" + locked),
+            "only uses steps": step("      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1\n"),
+            "job container": _RO13.replace(job, "    needs: [changes]\n    container: evil/cargo:1\n    steps:\n" + locked),
+            "job env cargo home": _RO13.replace(job, "    needs: [changes]\n    env:\n      CARGO_HOME: /tmp/x\n    steps:\n" + locked),
+            "job env bootstrap": _RO13.replace(job, "    needs: [changes]\n    env:\n      RUSTC_BOOTSTRAP: '1'\n    steps:\n" + locked),
+            "job env path": _RO13.replace(job, "    needs: [changes]\n    env:\n      PATH: /tmp/fake\n    steps:\n" + locked),
+            "job env lowercase": _RO13.replace(job, "    needs: [changes]\n    env:\n      cargo_home: /tmp/x\n    steps:\n" + locked),
+            "job env expression": _RO13.replace(job, "    needs: [changes]\n    env: ${{ fromJSON('{}') }}\n    steps:\n" + locked),
+            "workflow env internal": step(locked).replace(
+                "jobs:\n", "env:\n  __CARGO_TEST_CHANNEL_OVERRIDE_DO_NOT_USE_THIS: nightly\njobs:\n", 1
+            ),
+            "workflow env lockfile": step(locked).replace(
+                "jobs:\n", "env:\n  CARGO_RESOLVER_LOCKFILE_PATH: /tmp/x.lock\njobs:\n", 1
+            ),
             "skippable ancestor": step(locked).replace(
                 "  changes:\n    runs-on: ubuntu-latest\n", "  changes:\n    runs-on: ubuntu-latest\n    if: github.event_name == 'push'\n", 1
             ),
