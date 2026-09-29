@@ -22,7 +22,7 @@ use std::process::Command;
 use std::time::{Duration, Instant};
 
 use crate::CliError;
-use crate::secret_file::{HOST_SECRET_STORE, SecretFileError, SecretStore};
+use crate::secret_file::{DirRefusal, HOST_SECRET_STORE, SecretFileError, SecretStore};
 
 /// The Ipê CLI's GitHub OAuth App client id. Public by design — the device flow
 /// authenticates with the client id alone (no secret), so embedding it is safe.
@@ -186,8 +186,10 @@ pub fn stored_token() -> Option<PublishToken> {
 /// Why a stored token file yielded no text.
 #[derive(Debug)]
 enum TokenReadRefusal {
-    /// The file is not private to the invoking user.
+    /// The file, its directory or an ancestor is not private to the invoking user.
     Exposed,
+    /// The token's directory is the symbolic link carried.
+    SymlinkedDir(PathBuf),
     /// The file is absent, not a regular file, or unreadable.
     Unreadable,
 }
@@ -195,7 +197,10 @@ enum TokenReadRefusal {
 /// Read the token file at `path` through a handle proven owner-only.
 fn read_stored_token(path: &std::path::Path) -> Result<String, TokenReadRefusal> {
     let file = crate::secret_file::open_existing(HOST_SECRET_STORE, path).map_err(|e| match e {
-        SecretFileError::NotOwnerOnly(_) => TokenReadRefusal::Exposed,
+        SecretFileError::NotOwnerOnly(_) | SecretFileError::Dir(DirRefusal::Untrusted(_)) => {
+            TokenReadRefusal::Exposed
+        }
+        SecretFileError::Dir(DirRefusal::Symlinked(dir)) => TokenReadRefusal::SymlinkedDir(dir),
         SecretFileError::Unsupported
         | SecretFileError::Io(_)
         | SecretFileError::NotRegularFile(_) => TokenReadRefusal::Unreadable,
@@ -520,11 +525,14 @@ fn token_path() -> Option<PathBuf> {
 /// `--status` and the publish path (which requires a parseable token) agree.
 ///
 /// A token file another local user could read or replace is `Exposed`: the
-/// publish path refuses it, and the token must be treated as leaked.
+/// publish path refuses it, and the token must be treated as leaked. A token
+/// directory that is a symbolic link is `SymlinkedDir`: nothing was read
+/// through it, so nothing leaked.
 enum TokenStatus {
     LoggedIn(PathBuf),
     Corrupt(PathBuf),
     Exposed(PathBuf),
+    SymlinkedDir(PathBuf),
     NotLoggedIn,
 }
 
@@ -565,6 +573,7 @@ fn token_status_of(stored: StoredToken) -> TokenStatus {
     match read_stored_token(&path) {
         Ok(raw) if PublishToken::parse(&raw).is_some() => TokenStatus::LoggedIn(path),
         Err(TokenReadRefusal::Exposed) => TokenStatus::Exposed(path),
+        Err(TokenReadRefusal::SymlinkedDir(dir)) => TokenStatus::SymlinkedDir(dir),
         Ok(_) | Err(TokenReadRefusal::Unreadable) => TokenStatus::Corrupt(path),
     }
 }
@@ -578,6 +587,9 @@ fn status_report(status: &TokenStatus, key_line: crate::text::Message) -> crate:
         TokenStatus::LoggedIn(path) => crate::text::msg::login_status_logged_in(&path.display()),
         TokenStatus::Corrupt(path) => crate::text::msg::login_status_corrupt(&path.display()),
         TokenStatus::Exposed(path) => crate::text::msg::login_status_exposed(&path.display()),
+        TokenStatus::SymlinkedDir(dir) => {
+            crate::text::msg::login_status_symlinked_dir(&dir.display())
+        }
         TokenStatus::NotLoggedIn => crate::text::msg::login_status_not_logged_in(),
     };
     crate::text::Message::lines([token_line, key_line])
@@ -602,8 +614,12 @@ fn secret_file_refusal(error: SecretFileError, path: &std::path::Path) -> CliErr
         SecretFileError::Io(e) => {
             login_error(&crate::text::msg::login_create_failed(&path.display(), &e))
         }
-        SecretFileError::NotOwnerOnly(shown) => login_error(
+        SecretFileError::NotOwnerOnly(shown)
+        | SecretFileError::Dir(DirRefusal::Untrusted(shown)) => login_error(
             &crate::text::msg::login_secret_not_owner_only(&shown.display()),
+        ),
+        SecretFileError::Dir(DirRefusal::Symlinked(dir)) => login_error(
+            &crate::text::msg::login_secret_symlinked_dir(&dir.display()),
         ),
         SecretFileError::NotRegularFile(shown) => login_error(
             &crate::text::msg::login_secret_not_regular_file(&shown.display()),
@@ -773,6 +789,7 @@ mod tests {
             TokenStatus::LoggedIn(hostile_path()),
             TokenStatus::Corrupt(hostile_path()),
             TokenStatus::Exposed(hostile_path()),
+            TokenStatus::SymlinkedDir(hostile_path()),
             TokenStatus::NotLoggedIn,
         ] {
             let report = status_report(&status, crate::text::msg::signing_key_status_none());
@@ -1174,6 +1191,57 @@ mod tests {
             matches!(&refusal, CliError::Resolve(message) if message.contains(expected.as_str())),
             "a non-regular secret file must name its own refusal: {refusal:?}"
         );
+    }
+
+    #[test]
+    fn a_symlinked_token_dir_is_its_own_refusal_never_an_exposure() {
+        let path = std::path::Path::new("/tmp/ipe/token");
+        let dir = std::path::Path::new("/tmp/ipe");
+        let refusal = secret_file_refusal(
+            SecretFileError::Dir(DirRefusal::Symlinked(dir.to_path_buf())),
+            path,
+        );
+        let expected = crate::text::msg::login_secret_symlinked_dir(&dir.display());
+        let exposed = crate::text::msg::login_secret_not_owner_only(&dir.display());
+        assert!(
+            matches!(&refusal, CliError::Resolve(message)
+                if message.contains(expected.as_str()) && !message.contains(exposed.as_str())),
+            "a symlinked token dir must name its own refusal: {refusal:?}"
+        );
+    }
+
+    /// A token directory that is a symlink is reported as such by `--status`, never as exposed.
+    #[cfg(unix)]
+    #[test]
+    fn a_symlinked_token_dir_is_reported_as_a_link_not_an_exposed_token() {
+        let base = std::env::temp_dir()
+            .canonicalize()
+            .expect("canonical temp dir")
+            .join(format!(
+                "ipe-login-linked-dir-{}-{:?}",
+                std::process::id(),
+                std::thread::current().id()
+            ));
+        let _ = std::fs::remove_dir_all(&base);
+        let real = base.join("real");
+        std::fs::create_dir_all(&real).expect("create real dir");
+        write_token_atomic(HOST_SECRET_STORE, &real.join("token"), "ghp_private_token")
+            .expect("write succeeds");
+        let link = base.join("link");
+        std::os::unix::fs::symlink(&real, &link).expect("plant dir symlink");
+
+        let status = token_status_of(StoredToken::probe(Some(link.join("token"))));
+        assert!(
+            matches!(&status, TokenStatus::SymlinkedDir(p) if *p == link),
+            "a symlinked token dir must be reported as a link, never as exposed"
+        );
+        let report = status_report(&status, crate::text::msg::signing_key_status_none());
+        let exposed = crate::text::msg::login_status_exposed(&link.join("token").display());
+        assert!(
+            !report.contains(exposed.as_str()),
+            "a symlinked token dir must not tell the user to revoke: {report:?}"
+        );
+        let _ = std::fs::remove_dir_all(&base);
     }
 
     /// A dangling symlink at the token name is reported by `--status` and removed by `--logout`.

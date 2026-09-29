@@ -4,7 +4,10 @@ use super::*;
 
 /// A fresh, empty scratch directory for one test.
 fn test_dir(name: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!(
+    let base = std::env::temp_dir()
+        .canonicalize()
+        .expect("canonical temp dir");
+    let dir = base.join(format!(
         "ipe-secret-file-{name}-{}-{:?}",
         std::process::id(),
         std::thread::current().id()
@@ -343,7 +346,7 @@ mod unix {
         chmod(&exposed, 0o777);
         let housed = create_owner_dir(SecretStore::OwnerOnlyFile, &exposed);
         assert!(
-            matches!(&housed, Err(SecretFileError::NotOwnerOnly(p)) if *p == exposed),
+            matches!(&housed, Err(SecretFileError::Dir(DirRefusal::Untrusted(p))) if *p == exposed),
             "a world-writable secret dir must be refused, got {housed:?}"
         );
         chmod(&exposed, 0o700);
@@ -361,12 +364,12 @@ mod unix {
         chmod(&shared, 0o777);
         let housed = create_owner_dir(SecretStore::OwnerOnlyFile, &inner);
         assert!(
-            matches!(&housed, Err(SecretFileError::NotOwnerOnly(p)) if *p == shared),
+            matches!(&housed, Err(SecretFileError::Dir(DirRefusal::Untrusted(p))) if *p == shared),
             "an ancestor another user can write must be refused, got {housed:?}"
         );
         let opened = open_existing(SecretStore::OwnerOnlyFile, &inner.join("secret"));
         assert!(
-            matches!(&opened, Err(SecretFileError::NotOwnerOnly(p)) if *p == shared),
+            matches!(&opened, Err(SecretFileError::Dir(DirRefusal::Untrusted(p))) if *p == shared),
             "a secret below such an ancestor is never read, got {opened:?}"
         );
         chmod(&shared, 0o700);
@@ -383,7 +386,11 @@ mod unix {
         std::os::unix::fs::symlink(&real, &link).expect("symlink");
         let housed = create_owner_dir(SecretStore::OwnerOnlyFile, &link);
         assert!(
-            matches!(&housed, Err(SecretFileError::NotOwnerOnly(p)) if *p == link),
+            !matches!(&housed, Err(SecretFileError::NotOwnerOnly(_))),
+            "a symlinked secret dir is never reported as an exposed secret, got {housed:?}"
+        );
+        assert!(
+            matches!(&housed, Err(SecretFileError::Dir(DirRefusal::Symlinked(p))) if *p == link),
             "a link standing for the secret dir must be refused, got {housed:?}"
         );
         let _ = std::fs::remove_dir_all(&dir);

@@ -43,6 +43,25 @@ pub const HOST_SECRET_STORE: SecretStore = SecretStore::OwnerOnlyFile;
 #[cfg(not(unix))]
 pub const HOST_SECRET_STORE: SecretStore = SecretStore::Unsupported;
 
+/// Why a directory on a secret's path was refused.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum DirRefusal {
+    /// A symbolic link stands where the secret's directory itself must be.
+    Symlinked(PathBuf),
+    /// Another user could write, replace or redirect this component.
+    Untrusted(PathBuf),
+}
+
+impl DirRefusal {
+    /// The refused component.
+    #[must_use]
+    pub fn path(&self) -> &Path {
+        match self {
+            Self::Symlinked(path) | Self::Untrusted(path) => path,
+        }
+    }
+}
+
 /// Why a secret file was not created, housed or read.
 #[derive(Debug)]
 pub enum SecretFileError {
@@ -50,10 +69,11 @@ pub enum SecretFileError {
     Unsupported,
     /// Creating, opening or inspecting the file failed (its name is taken, say).
     Io(io::Error),
-    /// The path is not private to the invoking user.
+    /// A directory on the path was refused before any secret in it was touched.
+    Dir(DirRefusal),
+    /// The file itself is not private to the invoking user.
     ///
-    /// Another user owns it or an ancestor, a group or other user can write
-    /// it or an ancestor, a link stands where a directory must be, or its
+    /// Another user owns it, a group or other user may access it, or its
     /// filesystem dropped the owner-only mode it was created with.
     NotOwnerOnly(PathBuf),
     /// The path names a directory, FIFO, device or socket, not a regular file.
@@ -64,9 +84,11 @@ impl From<ProvenDirError> for SecretFileError {
     fn from(refusal: ProvenDirError) -> Self {
         match refusal {
             ProvenDirError::Unsupported => Self::Unsupported,
-            ProvenDirError::Untrusted { path, .. }
-            | ProvenDirError::UntrustedLink(path)
-            | ProvenDirError::SymlinkLeaf(path) => Self::NotOwnerOnly(path),
+            ProvenDirError::SymlinkLeaf(path) => Self::Dir(DirRefusal::Symlinked(path)),
+            ProvenDirError::Untrusted { path, .. } | ProvenDirError::UntrustedLink(path) => {
+                Self::Dir(DirRefusal::Untrusted(path))
+            }
+            ProvenDirError::NotRegularFile(path) => Self::NotRegularFile(path),
             other @ (ProvenDirError::NotAbsolute(_)
             | ProvenDirError::Absent(_)
             | ProvenDirError::NotADirectory(_)
@@ -219,9 +241,9 @@ impl OwnerDir {
 
     /// Open the existing secret `name` for reading, proven owner-only on the open handle.
     ///
-    /// A symlink is refused, never followed, and opening never blocks on a
-    /// FIFO. A file another user owns, or any group or other user may access,
-    /// is refused.
+    /// A symlink is refused, never followed, and anything but a regular file
+    /// is refused before it is opened. A file another user owns, or any group
+    /// or other user may access, is refused.
     ///
     /// # Errors
     /// [`SecretFileError::Io`] when the file cannot be opened (absent, a
@@ -229,7 +251,7 @@ impl OwnerDir {
     /// not a regular file, or [`SecretFileError::NotOwnerOnly`] when it is not
     /// private.
     pub fn open_existing(&self, name: &EntryName) -> Result<File, SecretFileError> {
-        let file = self.0.open_file(name).map_err(SecretFileError::Io)?;
+        let file = self.0.open_file(name)?;
         host::prove_owner_only(&file, &self.path_of(name))?;
         Ok(file)
     }
@@ -279,8 +301,8 @@ impl OwnerDir {
 /// # Errors
 /// [`SecretFileError::Unsupported`] when `store` cannot keep secrets,
 /// [`SecretFileError::Io`] when creating or inspecting a component failed, or
-/// [`SecretFileError::NotOwnerOnly`] naming the component another user could
-/// write or replace.
+/// [`SecretFileError::Dir`] naming the refused component: a link standing for
+/// `dir` itself, or a component another user could write or replace.
 pub fn create_owner_dir(store: SecretStore, dir: &Path) -> Result<OwnerDir, SecretFileError> {
     require(store)?;
     Ok(OwnerDir(ProvenDir::create(dir)?))

@@ -33,6 +33,30 @@ pub const MAX_LINK_HOPS: usize = 40;
 /// The most directories one walk may hold open at once.
 pub const MAX_DEPTH: usize = 256;
 
+/// What a walk does on meeting a symbolic link.
+#[cfg(unix)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum LinkStep {
+    /// The link is the final component, which is never followed.
+    RefuseLeaf,
+    /// Another user owns the link, so its target is not theirs to choose.
+    RefuseUntrusted,
+    /// The link is walked to its target under the same checks.
+    Follow,
+}
+
+/// The step a walk takes at a link owned by `owner`, given whether it is the final component.
+#[cfg(unix)]
+const fn link_step(owner: u32, invoker: crate::owner_trust::Invoker, is_leaf: bool) -> LinkStep {
+    if is_leaf {
+        LinkStep::RefuseLeaf
+    } else if crate::owner_trust::link_owner_admitted(owner, invoker) {
+        LinkStep::Follow
+    } else {
+        LinkStep::RefuseUntrusted
+    }
+}
+
 /// One plain path component: never empty, `.`, `..`, or holding a separator or NUL.
 ///
 /// Every entry operation of a [`ProvenDir`] takes one, so an operation can
@@ -87,6 +111,8 @@ pub enum ProvenDirError {
     TooManyLinks(PathBuf),
     /// The walk would hold more than [`MAX_DEPTH`] directories open.
     TooDeep(PathBuf),
+    /// An entry opened as a file is a directory, FIFO, device or socket.
+    NotRegularFile(PathBuf),
     /// A filesystem call failed.
     Io {
         /// The component the call acted on.
@@ -109,6 +135,7 @@ impl ProvenDirError {
             | Self::UntrustedLink(path)
             | Self::TooManyLinks(path)
             | Self::TooDeep(path)
+            | Self::NotRegularFile(path)
             | Self::Untrusted { path, .. }
             | Self::Io { path, .. } => Some(path),
         }
@@ -120,7 +147,7 @@ impl ProvenDirError {
         match self {
             Self::Io { source, .. } => source,
             Self::Unsupported => io::ErrorKind::Unsupported.into(),
-            Self::NotAbsolute(_) => io::ErrorKind::InvalidInput.into(),
+            Self::NotAbsolute(_) | Self::NotRegularFile(_) => io::ErrorKind::InvalidInput.into(),
             Self::Absent(_) => io::ErrorKind::NotFound.into(),
             Self::NotADirectory(_) => io::ErrorKind::NotADirectory.into(),
             Self::SymlinkLeaf(_) | Self::UntrustedLink(_) | Self::Untrusted { .. } => {
@@ -208,12 +235,18 @@ impl ProvenDir {
         sys::create_file(&self.handle, name, mode)
     }
 
-    /// Open the entry `name` read-only, never through a link and never blocking on a FIFO.
+    /// Open the regular file `name` read-only, never through a link.
+    ///
+    /// The entry is inspected without following a link before it is opened,
+    /// so a device, FIFO or socket is refused without the side effects an
+    /// open of it could have; the opened handle is inspected again, so an
+    /// entry swapped in between is refused too.
     ///
     /// # Errors
-    /// The failed `openat`.
-    pub fn open_file(&self, name: &EntryName) -> io::Result<File> {
-        sys::open_file(&self.handle, name)
+    /// [`ProvenDirError::NotRegularFile`] when `name` is not a regular file,
+    /// or [`ProvenDirError::Io`] when inspecting or opening it failed.
+    pub fn open_file(&self, name: &EntryName) -> Result<File, ProvenDirError> {
+        sys::open_file(&self.handle, name, &self.path_of(name))
     }
 
     /// Rename the entry `from` to `to`, both inside this directory.
@@ -263,8 +296,10 @@ mod sys {
     use rustix::fs::{AtFlags, FileType, Mode, OFlags};
     use rustix::io::Errno;
 
-    use super::{EntryName, MAX_DEPTH, MAX_LINK_HOPS, NewFileMode, ProvenDirError, Walk};
-    use crate::owner_trust::{Invoker, Stamp, breach, container_breach, link_owner_admitted};
+    use super::{
+        EntryName, LinkStep, MAX_DEPTH, MAX_LINK_HOPS, NewFileMode, ProvenDirError, Walk, link_step,
+    };
+    use crate::owner_trust::{Invoker, Stamp, breach, container_breach};
 
     /// A held directory handle.
     pub type Handle = File;
@@ -427,26 +462,26 @@ mod sys {
             };
             let shown = parent.path.join(&name);
             match find(parent, &name, &shown)? {
-                Found::Link(_) if pending.is_empty() => {
-                    return Err(ProvenDirError::SymlinkLeaf(shown));
-                }
-                Found::Link(owner) if !link_owner_admitted(owner, invoker) => {
-                    return Err(ProvenDirError::UntrustedLink(shown));
-                }
-                Found::Link(_) => {
-                    hops += 1;
-                    if hops > MAX_LINK_HOPS {
-                        return Err(ProvenDirError::TooManyLinks(shown));
+                Found::Link(owner) => match link_step(owner, invoker, pending.is_empty()) {
+                    LinkStep::RefuseLeaf => return Err(ProvenDirError::SymlinkLeaf(shown)),
+                    LinkStep::RefuseUntrusted => {
+                        return Err(ProvenDirError::UntrustedLink(shown));
                     }
-                    let target = read_link(parent, &name, &shown)?;
-                    if target.is_absolute() {
-                        held.truncate(1);
+                    LinkStep::Follow => {
+                        hops += 1;
+                        if hops > MAX_LINK_HOPS {
+                            return Err(ProvenDirError::TooManyLinks(shown));
+                        }
+                        let target = read_link(parent, &name, &shown)?;
+                        if target.is_absolute() {
+                            held.truncate(1);
+                        }
+                        for step in steps_of(&target).into_iter().rev() {
+                            pending.push_front(step);
+                        }
+                        continue;
                     }
-                    for step in steps_of(&target).into_iter().rev() {
-                        pending.push_front(step);
-                    }
-                    continue;
-                }
+                },
                 Found::Absent if walk == Walk::Create => make_dir(parent, &name, &shown)?,
                 Found::Absent => return Err(ProvenDirError::Absent(shown)),
                 Found::Other => {}
@@ -483,13 +518,40 @@ mod sys {
             .map_err(Into::into)
     }
 
-    /// Open `name` under `dir` read-only, never through a link and never blocking.
-    pub fn open_file(dir: &File, name: &EntryName) -> io::Result<File> {
+    /// Whether the mode `st_mode` is that of a regular file.
+    fn is_regular(st_mode: u32) -> bool {
+        FileType::from_raw_mode(st_mode) == FileType::RegularFile
+    }
+
+    /// Open the regular file `name` under `dir`, shown as `shown`, read-only.
+    ///
+    /// The entry is inspected by `fstatat` without following a link before
+    /// it is opened, and the opened handle by `fstat` after.
+    pub fn open_file(dir: &File, name: &EntryName, shown: &Path) -> Result<File, ProvenDirError> {
+        let not_regular = || ProvenDirError::NotRegularFile(shown.to_path_buf());
+        let stat = rustix::fs::statat(dir.as_fd(), name.as_os_str(), AtFlags::SYMLINK_NOFOLLOW)
+            .map_err(|errno| io_at(shown, errno))?;
+        match FileType::from_raw_mode(stat.st_mode) {
+            FileType::RegularFile => {}
+            FileType::Symlink => return Err(io_at(shown, Errno::LOOP)),
+            FileType::Directory
+            | FileType::Fifo
+            | FileType::Socket
+            | FileType::CharacterDevice
+            | FileType::BlockDevice
+            | FileType::Unknown => return Err(not_regular()),
+        }
         let flags =
             OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::NOCTTY | OFlags::CLOEXEC;
-        rustix::fs::openat(dir.as_fd(), name.as_os_str(), flags, Mode::empty())
+        let file = rustix::fs::openat(dir.as_fd(), name.as_os_str(), flags, Mode::empty())
             .map(File::from)
-            .map_err(Into::into)
+            .map_err(|errno| io_at(shown, errno))?;
+        let opened = rustix::fs::fstat(&file).map_err(|errno| io_at(shown, errno))?;
+        if is_regular(opened.st_mode) {
+            Ok(file)
+        } else {
+            Err(not_regular())
+        }
     }
 
     /// Rename `from` to `to` inside `dir`.
@@ -563,7 +625,7 @@ mod sys {
     }
 
     /// Unreachable: no handle exists.
-    pub const fn open_file(dir: &Handle, _: &EntryName) -> io::Result<File> {
+    pub const fn open_file(dir: &Handle, _: &EntryName, _: &Path) -> Result<File, ProvenDirError> {
         match *dir {}
     }
 

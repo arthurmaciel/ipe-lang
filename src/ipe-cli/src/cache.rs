@@ -802,13 +802,47 @@ const SALT_BYTES: usize = 32;
 /// malformed file, a file another user could read, a directory (or ancestor)
 /// another user can write, or a host that cannot keep the file owner-only
 /// yields `None` (the default cache is then disabled), never a salt another
-/// user could read or an attacker could have chosen.
+/// user could read or an attacker could have chosen. A refused `IPE_HOME`
+/// is warned about once, naming why, since the user can fix it.
 fn user_cache_salt() -> Option<String> {
     let home = crate::runtime_embed::ipe_home().ok()?;
     let dir =
-        crate::secret_file::create_owner_dir(crate::secret_file::HOST_SECRET_STORE, &home).ok()?;
+        match crate::secret_file::create_owner_dir(crate::secret_file::HOST_SECRET_STORE, &home) {
+            Ok(dir) => dir,
+            Err(refusal) => {
+                if let Some(warning) = salt_dir_warning(&refusal) {
+                    crate::screen::chatter(
+                        crate::screen::Stream::Stderr,
+                        crate::screen::Tone::UserError,
+                        &warning,
+                    );
+                }
+                return None;
+            }
+        };
     let name = EntryName::new(std::ffi::OsStr::new(SALT_FILE_NAME))?;
     salt_in(&dir, &name)
+}
+
+/// The warning a refused salt directory earns, if the user can act on it.
+///
+/// A link standing for `IPE_HOME`, or a component another user could write,
+/// is named; a host without owner-only files, or a failing filesystem call,
+/// disables the default cache silently.
+fn salt_dir_warning(refusal: &crate::secret_file::SecretFileError) -> Option<crate::text::Message> {
+    use crate::secret_file::{DirRefusal, SecretFileError};
+    match refusal {
+        SecretFileError::Dir(DirRefusal::Symlinked(dir)) => {
+            Some(crate::text::msg::build_cache_dir_symlinked(&dir.display()))
+        }
+        SecretFileError::Dir(DirRefusal::Untrusted(dir)) => {
+            Some(crate::text::msg::build_cache_dir_untrusted(&dir.display()))
+        }
+        SecretFileError::Unsupported
+        | SecretFileError::Io(_)
+        | SecretFileError::NotOwnerOnly(_)
+        | SecretFileError::NotRegularFile(_) => None,
+    }
 }
 
 /// The name of the salt file inside `IPE_HOME`.
@@ -1037,7 +1071,10 @@ mod tests {
     /// A fresh, empty scratch directory for one salt test, held as a secret dir.
     #[cfg(unix)]
     fn salt_test_dir(tag: &str) -> (PathBuf, OwnerDir) {
-        let dir = std::env::temp_dir().join(format!(
+        let base = std::env::temp_dir()
+            .canonicalize()
+            .expect("canonical temp dir");
+        let dir = base.join(format!(
             "ipe-cache-salt-{tag}-{}-{:?}",
             std::process::id(),
             std::thread::current().id()
@@ -1081,6 +1118,51 @@ mod tests {
             "a lost creation race reuses the winner's salt"
         );
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_refused_salt_dir_is_warned_about_with_its_typed_reason() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let (base, _held) = salt_test_dir("dir-refused");
+        let real = base.join("real");
+        fs::create_dir(&real).expect("create real dir");
+        let link = base.join("link");
+        std::os::unix::fs::symlink(&real, &link).expect("plant dir symlink");
+        let store = crate::secret_file::SecretStore::OwnerOnlyFile;
+
+        let linked = crate::secret_file::create_owner_dir(store, &link).map(drop);
+        let warning = linked.as_ref().err().and_then(salt_dir_warning);
+        assert_eq!(
+            warning,
+            Some(crate::text::msg::build_cache_dir_symlinked(&link.display())),
+            "a symlinked IPE_HOME is warned about as a link: {linked:?}"
+        );
+
+        let shared = base.join("shared");
+        fs::create_dir(&shared).expect("create shared dir");
+        fs::set_permissions(&shared, fs::Permissions::from_mode(0o777)).expect("chmod shared");
+        let exposed = crate::secret_file::create_owner_dir(store, &shared).map(drop);
+        let warning = exposed.as_ref().err().and_then(salt_dir_warning);
+        assert_eq!(
+            warning,
+            Some(crate::text::msg::build_cache_dir_untrusted(
+                &shared.display()
+            )),
+            "a shared IPE_HOME is warned about as untrusted: {exposed:?}"
+        );
+
+        let unsupported = crate::secret_file::create_owner_dir(
+            crate::secret_file::SecretStore::Unsupported,
+            &real,
+        )
+        .map(drop);
+        assert_eq!(
+            unsupported.as_ref().err().and_then(salt_dir_warning),
+            None,
+            "a host without owner-only files disables the cache silently"
+        );
+        let _ = fs::remove_dir_all(&base);
     }
 
     #[cfg(unix)]

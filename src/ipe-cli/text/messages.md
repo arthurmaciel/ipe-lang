@@ -1472,9 +1472,21 @@ cannot store the token on this platform: its file cannot be made readable by you
 
 {path} is not private to you (another local user could read or replace it, or its filesystem ignores permission bits) — the token was not stored; make it owner-only (`chmod go-rwx`) on a filesystem that keeps permissions, or set `GITHUB_TOKEN` instead
 
+## login-secret-symlinked-dir
+
+{path} is a symbolic link — the token was not stored; point `XDG_CONFIG_HOME` (or `HOME`) at the real directory, or replace the link with the directory it names
+
 ## login-secret-not-regular-file
 
 {path} is not a regular file — the token was not stored; move it aside and run `ipe login` again
+
+## build-cache-dir-symlinked
+
+warning: {path} is a symbolic link — the default build cache is disabled; point `IPE_HOME` at the real directory, or set `IPE_BUILD_CACHE_DIR`
+
+## build-cache-dir-untrusted
+
+warning: {path} is not private to you (another local user could write or replace it) — the default build cache is disabled; make it owner-only (`chmod go-w`), or set `IPE_BUILD_CACHE_DIR`
 
 ## login-status-logged-in
 
@@ -1487,6 +1499,10 @@ token file at {path} is unreadable or malformed — run `ipe login` to re-author
 ## login-status-exposed
 
 token file at {path} is not private to you — publish will not use it; treat the token as exposed: revoke it in GitHub settings, then run `ipe login --logout` and `ipe login`
+
+## login-status-symlinked-dir
+
+token directory {path} is a symbolic link — publish will not read a token through it; point `XDG_CONFIG_HOME` (or `HOME`) at the real directory, or replace the link with the directory it names
 
 ## login-status-not-logged-in
 
@@ -1539,6 +1555,14 @@ signing key: {path} is not private to you — publish will not use it; treat the
 ## signing-key-status-stored-unusable
 
 signing key: {path} is not a usable key file — publish will not use it; move it aside and run `ipe login --signing-key` again
+
+## signing-key-status-symlinked-dir
+
+signing key: {path} is a symbolic link — publish will not use a key through it; point `XDG_CONFIG_HOME` (or `HOME`) at the real directory, or replace the link with the directory it names
+
+## signing-key-status-dir-untrusted
+
+signing key: {path} is not private to you (another local user could write or replace it) — publish will not use any key under it; if a key is stored there, treat it as exposed: delete it from your GitHub signing keys ({settings}), then make the directory owner-only (`chmod go-w`) and run `ipe login --signing-key` again
 
 ## signing-key-status-none
 
@@ -1595,6 +1619,10 @@ cannot store a signing key on this platform: its private key file cannot be made
 ## signing-key-not-owner-only
 
 {path} is not private to you (another local user could read or replace it, or its filesystem ignores permission bits) — no signing key was registered; set {env} to a signing key you keep private instead
+
+## signing-key-symlinked-dir
+
+{path} is a symbolic link — no signing key was registered; point `XDG_CONFIG_HOME` (or `HOME`) at the real directory, or replace the link with the directory it names
 
 ## signing-key-stored-exposed
 

@@ -32,7 +32,7 @@ use zeroize::Zeroizing;
 use crate::CliError;
 use crate::login::KeyRegistrationToken;
 use crate::proven_dir::EntryName;
-use crate::secret_file::{HOST_SECRET_STORE, OwnerDir, SecretFileError, SecretStore};
+use crate::secret_file::{DirRefusal, HOST_SECRET_STORE, OwnerDir, SecretFileError, SecretStore};
 
 /// The environment variable naming the SSH signing key's private-key file.
 pub const SIGNING_KEY_ENV: &str = "IPE_PUBLISH_SIGNING_KEY";
@@ -102,6 +102,8 @@ enum StoredKey {
     Exposed(PathBuf),
     /// A symlink, directory, FIFO, or unreadable entry holds the name.
     Unusable(PathBuf),
+    /// The config dir, or an ancestor, was refused before the key's name was looked at.
+    DirRefused(DirRefusal),
     /// Nothing holds the name, or the host cannot prove a secret file private.
     Absent,
 }
@@ -109,22 +111,14 @@ enum StoredKey {
 impl StoredKey {
     /// Probe `<config_dir>/signing_key` through `store`.
     ///
-    /// A config dir another user could write holds no trusted key: a key
-    /// there is `Exposed`, and with nothing at the key's name it is `Absent`,
-    /// so setup goes on to refuse the dir itself.
+    /// A config dir that is a link, or that another user could write, holds
+    /// no trusted key; it is `DirRefused` with the typed cause, and nothing
+    /// under it is looked at.
     fn probe(store: SecretStore, config_dir: &Path) -> Self {
         let path = config_dir.join(PRIVATE_KEY_FILE);
         match crate::secret_file::open_existing(store, &path) {
             Ok(_) => Self::Proven(PrivateKeyPath(path)),
-            Err(SecretFileError::NotOwnerOnly(shown))
-                if shown != path
-                    && matches!(
-                        std::fs::symlink_metadata(&path),
-                        Err(e) if e.kind() == std::io::ErrorKind::NotFound
-                    ) =>
-            {
-                Self::Absent
-            }
+            Err(SecretFileError::Dir(refusal)) => Self::DirRefused(refusal),
             Err(SecretFileError::NotOwnerOnly(shown)) => Self::Exposed(shown),
             Err(SecretFileError::NotRegularFile(shown)) => Self::Unusable(shown),
             Err(SecretFileError::Io(e)) if e.kind() == std::io::ErrorKind::NotFound => Self::Absent,
@@ -150,6 +144,8 @@ pub enum KeyLookup {
     StoredExposed(PathBuf),
     /// Something other than a readable regular file holds the stored key's name.
     StoredUnusable(PathBuf),
+    /// The config dir, or an ancestor, was refused, so no stored key is trusted.
+    StoredDirRefused(DirRefusal),
     /// No key is configured.
     Missing,
 }
@@ -163,6 +159,7 @@ impl KeyLookup {
             Self::EnvUnusable
             | Self::StoredExposed(_)
             | Self::StoredUnusable(_)
+            | Self::StoredDirRefused(_)
             | Self::Missing => None,
         }
     }
@@ -190,6 +187,7 @@ fn lookup_in(
                     StoredKey::Proven(path) => KeyLookup::Stored(path),
                     StoredKey::Exposed(path) => KeyLookup::StoredExposed(path),
                     StoredKey::Unusable(path) => KeyLookup::StoredUnusable(path),
+                    StoredKey::DirRefused(refusal) => KeyLookup::StoredDirRefused(refusal),
                     StoredKey::Absent => KeyLookup::Missing,
                 }
             })
@@ -227,6 +225,12 @@ pub(crate) fn status_line(
         ),
         KeyLookup::StoredUnusable(path) => {
             crate::text::signing_key_status_stored_unusable(&shown_path(&path))
+        }
+        KeyLookup::StoredDirRefused(DirRefusal::Symlinked(dir)) => {
+            crate::text::signing_key_status_symlinked_dir(&shown_path(&dir))
+        }
+        KeyLookup::StoredDirRefused(DirRefusal::Untrusted(dir)) => {
+            crate::text::signing_key_status_dir_untrusted(&shown_path(&dir), &SIGNING_KEYS_SETTINGS)
         }
         KeyLookup::Missing => crate::text::msg::signing_key_status_none(),
     }
@@ -430,6 +434,8 @@ enum SetupError {
     Occupied(PathBuf),
     /// A key file or the config dir is not private to the invoking user.
     NotOwnerOnly(PathBuf),
+    /// The config dir is a symbolic link.
+    SymlinkedDir(PathBuf),
     /// The stored key is already registered on GitHub but is not private to the
     /// invoking user; it must be revoked on GitHub, never silently replaced.
     StoredKeyExposed(PathBuf),
@@ -465,6 +471,7 @@ impl SetupError {
             Self::NotOwnerOnly(path) => {
                 msg::signing_key_not_owner_only(&shown_path(path), &SIGNING_KEY_ENV)
             }
+            Self::SymlinkedDir(path) => msg::signing_key_symlinked_dir(&shown_path(path)),
             Self::StoredKeyExposed(path) => {
                 msg::signing_key_stored_exposed(&shown_path(path), &SIGNING_KEYS_SETTINGS)
             }
@@ -668,7 +675,9 @@ fn secret_file_error(error: SecretFileError, path: &Path) -> SetupError {
             path: path.to_path_buf(),
             source,
         },
-        SecretFileError::NotOwnerOnly(shown) => SetupError::NotOwnerOnly(shown),
+        SecretFileError::NotOwnerOnly(shown)
+        | SecretFileError::Dir(DirRefusal::Untrusted(shown)) => SetupError::NotOwnerOnly(shown),
+        SecretFileError::Dir(DirRefusal::Symlinked(dir)) => SetupError::SymlinkedDir(dir),
         SecretFileError::NotRegularFile(shown) => SetupError::Occupied(shown),
     }
 }
@@ -727,6 +736,12 @@ fn set_up<C: Consent, R: SigningKeyRegistrar>(
         KeyLookup::EnvUnusable => return Ok(SetupOutcome::EnvUnusable),
         KeyLookup::StoredExposed(path) => return Err(SetupError::StoredKeyExposed(path)),
         KeyLookup::StoredUnusable(path) => return Err(SetupError::Occupied(path)),
+        KeyLookup::StoredDirRefused(DirRefusal::Untrusted(dir)) => {
+            return Err(SetupError::NotOwnerOnly(dir));
+        }
+        KeyLookup::StoredDirRefused(DirRefusal::Symlinked(dir)) => {
+            return Err(SetupError::SymlinkedDir(dir));
+        }
         KeyLookup::Missing => config_dir.ok_or(SetupError::NoConfigDir)?,
     };
     let files = KeyFiles::in_dir(create_config_dir(store, dir)?)?;
@@ -859,9 +874,9 @@ fn no_terminal_hint(
 ) -> Option<crate::text::Message> {
     match lookup(env_value, config_dir) {
         KeyLookup::Missing => Some(crate::text::msg::signing_key_hint_no_terminal()),
-        KeyLookup::StoredExposed(_) | KeyLookup::StoredUnusable(_) => {
-            Some(status_line(env_value, config_dir))
-        }
+        KeyLookup::StoredExposed(_)
+        | KeyLookup::StoredUnusable(_)
+        | KeyLookup::StoredDirRefused(_) => Some(status_line(env_value, config_dir)),
         KeyLookup::Env(_) | KeyLookup::EnvUnusable | KeyLookup::Stored(_) => None,
     }
 }
@@ -915,7 +930,10 @@ mod tests {
     ];
 
     fn test_dir(tag: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!(
+        let base = std::env::temp_dir()
+            .canonicalize()
+            .expect("canonical temp dir");
+        let dir = base.join(format!(
             "ipe-signing-key-{tag}-{}-{:?}",
             std::process::id(),
             std::thread::current().id()
@@ -1539,6 +1557,65 @@ mod tests {
         );
         assert_eq!(consent.asked, 0);
         assert_eq!(registrar.calls, 0);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_symlinked_config_dir_is_unusable_never_an_exposed_key() {
+        let base = test_dir("dir-linked");
+        let real = base.join("real");
+        std::fs::create_dir(&real).expect("create real dir");
+        plant_with_mode(&real.join(PRIVATE_KEY_FILE), b"key", 0o600);
+        let link = base.join("link");
+        std::os::unix::fs::symlink(&real, &link).expect("plant dir symlink");
+
+        let found = lookup(None, Some(link.as_path()));
+        assert_eq!(
+            found,
+            KeyLookup::StoredDirRefused(DirRefusal::Symlinked(link.clone()))
+        );
+        assert_eq!(found.usable(), None, "publish never signs through the link");
+        let status = status_line(None, Some(link.as_path()));
+        assert!(
+            status.contains("symbolic link") && !status.contains(SIGNING_KEYS_SETTINGS),
+            "the status names the link and never asks to revoke the key: {status}"
+        );
+        let mut consent = Answer {
+            yes: true,
+            asked: 0,
+        };
+        let mut registrar = FakeRegistrar::new(&link, false);
+        let result = set_up(
+            HOST_SECRET_STORE,
+            None,
+            Some(link.as_path()),
+            &mut consent,
+            &mut registrar,
+        );
+        assert!(
+            matches!(&result, Err(SetupError::SymlinkedDir(p)) if *p == link),
+            "a symlinked config dir must be refused as a link, got {result:?}"
+        );
+        assert_eq!(consent.asked, 0, "nothing is asked before the refusal");
+        assert_eq!(registrar.calls, 0, "nothing is registered");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_config_dir_another_user_can_write_is_refused_before_its_key_is_read() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let dir = test_dir("dir-shared-key");
+        plant_with_mode(&dir.join(PRIVATE_KEY_FILE), b"key", 0o600);
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o777))
+            .expect("chmod world-writable");
+        let found = lookup(None, Some(dir.as_path()));
+        assert_eq!(
+            found,
+            KeyLookup::StoredDirRefused(DirRefusal::Untrusted(dir.clone()))
+        );
+        assert_eq!(found.usable(), None, "publish never signs with it");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

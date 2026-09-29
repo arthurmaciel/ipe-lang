@@ -5,7 +5,10 @@ use super::*;
 
 /// A fresh, empty scratch directory unique to `name`, this process and this thread.
 fn scratch(name: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!(
+    let base = std::env::temp_dir()
+        .canonicalize()
+        .expect("canonical temp dir");
+    let dir = base.join(format!(
         "ipe-proven-dir-{name}-{}-{:?}",
         std::process::id(),
         std::thread::current().id()
@@ -252,6 +255,31 @@ mod unix {
             ProvenDir::create(&file.join("sub")),
             Err(ProvenDirError::NotADirectory(p)) if p == file
         ));
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn a_link_another_user_owns_is_refused_and_never_followed() {
+        let me = crate::owner_trust::Invoker {
+            uid: 1000,
+            gid: 1000,
+        };
+        assert_eq!(link_step(1001, me, false), LinkStep::RefuseUntrusted);
+        assert_eq!(link_step(1001, me, true), LinkStep::RefuseLeaf);
+        assert_eq!(link_step(1000, me, false), LinkStep::Follow);
+        assert_eq!(link_step(0, me, false), LinkStep::Follow);
+        assert_eq!(link_step(1000, me, true), LinkStep::RefuseLeaf);
+    }
+
+    #[test]
+    fn a_path_deeper_than_the_depth_limit_is_refused() {
+        let base = scratch("too-deep");
+        let deep = (0..=MAX_DEPTH).fold(base.clone(), |path, _| path.join("d"));
+        let walked = ProvenDir::create(&deep);
+        assert!(
+            matches!(walked, Err(ProvenDirError::TooDeep(_))),
+            "a walk past the depth limit must be refused, got {walked:?}"
+        );
         let _ = std::fs::remove_dir_all(&base);
     }
 

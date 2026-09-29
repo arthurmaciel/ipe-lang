@@ -1281,14 +1281,22 @@ messages! {
     login_token_store_unsupported = "login-token-store-unsupported";
     /// A token file or its directory is not private to the invoking user.
     login_secret_not_owner_only(path) = "login-secret-not-owner-only";
+    /// The token's directory is a symbolic link.
+    login_secret_symlinked_dir(path) = "login-secret-symlinked-dir";
     /// A token file's name is held by something other than a regular file.
     login_secret_not_regular_file(path) = "login-secret-not-regular-file";
+    /// The per-user cache salt's directory is a symbolic link.
+    build_cache_dir_symlinked(path) = "build-cache-dir-symlinked";
+    /// The per-user cache salt's directory, or an ancestor, is not private.
+    build_cache_dir_untrusted(path) = "build-cache-dir-untrusted";
     /// `ipe login --status`: a well-formed token is stored.
     login_status_logged_in(path) = "login-status-logged-in";
     /// `ipe login --status`: the token file exists but does not parse.
     login_status_corrupt(path) = "login-status-corrupt";
     /// `ipe login --status`: the token file is not private to the invoking user.
     login_status_exposed(path) = "login-status-exposed";
+    /// `ipe login --status`: the token's directory is a symbolic link.
+    login_status_symlinked_dir(path) = "login-status-symlinked-dir";
     /// `ipe login --status`: no token is stored.
     login_status_not_logged_in = "login-status-not-logged-in";
     /// `ipe login` stored the token.
@@ -1313,6 +1321,10 @@ messages! {
     signing_key_status_stored_exposed(path: &crate::style::TerminalSafe, settings) = "signing-key-status-stored-exposed";
     /// `ipe login --status`: something other than a usable key file holds the stored key's name.
     signing_key_status_stored_unusable(path: &crate::style::TerminalSafe) = "signing-key-status-stored-unusable";
+    /// `ipe login --status`: the stored key's directory is a symbolic link.
+    signing_key_status_symlinked_dir(path: &crate::style::TerminalSafe) = "signing-key-status-symlinked-dir";
+    /// `ipe login --status`: the stored key's directory, or an ancestor, is not private.
+    signing_key_status_dir_untrusted(path: &crate::style::TerminalSafe, settings) = "signing-key-status-dir-untrusted";
     /// `ipe login --status`: no signing key is configured.
     signing_key_status_none = "signing-key-status-none";
     /// Signing-key setup found a usable key already configured.
@@ -1335,6 +1347,8 @@ messages! {
     signing_key_store_unsupported(env) = "signing-key-store-unsupported";
     /// A signing-key file or its directory is not private to the invoking user.
     signing_key_not_owner_only(path: &crate::style::TerminalSafe, env) = "signing-key-not-owner-only";
+    /// The signing key's directory is a symbolic link.
+    signing_key_symlinked_dir(path: &crate::style::TerminalSafe) = "signing-key-symlinked-dir";
     /// The stored key is already registered on GitHub but is not private to the
     /// invoking user; it must be revoked, never silently replaced.
     signing_key_stored_exposed(path: &crate::style::TerminalSafe, settings) = "signing-key-stored-exposed";
