@@ -167,6 +167,13 @@ struct Memo {
     hard_breaks: HashMap<usize, bool>,
     /// [`if_else_construct_width`] per `IfElse` node, computed once.
     if_else_widths: HashMap<usize, usize>,
+    /// [`flat_fixed`] per node, computed once.
+    flat_fixed: HashMap<usize, bool>,
+    /// The single-line flat layout of each [`flat_fixed`] node, shared by every
+    /// context it renders in; charged to `bytes` like `layouts`.
+    flat_layouts: HashMap<FlatKey, String>,
+    /// [`flat_measure`] per [`flat_fixed`] node, computed once.
+    flat_measures: HashMap<FlatKey, FlatMeasure>,
     /// [`LAYOUT_FUEL`] left to spend; once spent the render is abandoned.
     fuel: usize,
     exhausted: bool,
@@ -215,6 +222,60 @@ impl Cursor {
     }
 }
 
+/// What a [`flat_fixed`] node's flat layout reads besides the node itself.
+///
+/// `max_width` is carried even though no flat decision reads it, so a shared
+/// layout never crosses a change of width.
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+struct FlatKey {
+    node: usize,
+    max_width: usize,
+    inline_hard: bool,
+}
+
+impl FlatKey {
+    fn of(doc: &Doc, cfg: RenderConfig) -> Self {
+        Self {
+            node: node_addr(doc),
+            max_width: cfg.max_width,
+            inline_hard: cfg.inline_hard,
+        }
+    }
+}
+
+/// The facts the fit probes read of a node's flat layout.
+///
+/// Every field is read off the one flat render [`flat_measure`] makes through
+/// [`render_at`], so a probe answered from it sees the bytes the real render writes.
+#[derive(Clone, Copy)]
+struct FlatMeasure {
+    /// The flat layout carries no newline.
+    single_line: bool,
+    /// The length of the flat layout up to its first newline.
+    first_len: usize,
+    /// The flat layout begins with `(`.
+    starts_paren: bool,
+}
+
+impl FlatMeasure {
+    fn of(layout: &str) -> Self {
+        Self {
+            single_line: !layout.contains('\n'),
+            first_len: layout.find('\n').unwrap_or(layout.len()),
+            starts_paren: layout.starts_with('('),
+        }
+    }
+
+    /// The single-line width, or `None` when the flat layout breaks.
+    const fn width(self) -> Option<usize> {
+        if self.single_line {
+            Some(self.first_len)
+        } else {
+            None
+        }
+    }
+}
+
 #[cfg(test)]
 thread_local! {
     /// Nodes laid out afresh (not replayed) — the bound test's work measure.
@@ -240,6 +301,9 @@ impl MemoScope {
             bytes: 0,
             hard_breaks: HashMap::new(),
             if_else_widths: HashMap::new(),
+            flat_fixed: HashMap::new(),
+            flat_layouts: HashMap::new(),
+            flat_measures: HashMap::new(),
             fuel,
             exhausted: false,
         };
@@ -367,8 +431,75 @@ fn render_at(
     flat: bool,
     out: &mut String,
 ) {
+    if flat && is_keyed(doc) && flat_fixed(doc) {
+        render_flat_shared(doc, cfg, indent, col, out);
+        return;
+    }
     memoized(doc, cfg, indent, col, Pass::Layout { flat }, out, |out| {
         render_node(doc, cfg, indent, col, flat, out);
+    });
+}
+
+/// Whether `doc` belongs to the document under the innermost [`MemoScope`].
+fn is_keyed(doc: &Doc) -> bool {
+    let addr = node_addr(doc);
+    MEMO.with_borrow(|m| m.as_ref().is_some_and(|m| m.nodes.contains(&addr)))
+}
+
+/// Render a keyed [`flat_fixed`] node flat, appending its shared layout if kept.
+///
+/// A single-line flat layout of such a node reads nothing of its context (see
+/// [`flat_fixed`]) and writes no newline, so it trims nothing before it and is the
+/// same bytes appended in every context. A multi-line one places its later lines
+/// at `indent`, so it stays with the per-context memo.
+fn render_flat_shared(doc: &Doc, cfg: RenderConfig, indent: usize, col: usize, out: &mut String) {
+    let key = FlatKey::of(doc, cfg);
+    let shared = MEMO.with_borrow(|m| {
+        let m = m.as_ref()?;
+        if m.exhausted {
+            return Some(None);
+        }
+        m.flat_layouts.get(&key).map(|layout| {
+            out.push_str(layout);
+            Some(layout.len())
+        })
+    });
+    match shared {
+        Some(Some(len)) => {
+            spend(len.saturating_add(1));
+            return;
+        }
+        Some(None) => return,
+        None => {}
+    }
+    let start = out.len();
+    let base = out.trim_end_matches(' ').len();
+    memoized(
+        doc,
+        cfg,
+        indent,
+        col,
+        Pass::Layout { flat: true },
+        out,
+        |out| {
+            render_node(doc, cfg, indent, col, true, out);
+        },
+    );
+    let appended = out
+        .get(base..)
+        .is_some_and(|written| !written.contains('\n'));
+    let Some(layout) = out.get(start..).filter(|_| appended) else {
+        return;
+    };
+    MEMO.with_borrow_mut(|m| {
+        let entry = memo_entry_bytes(layout.len());
+        if let Some(m) = m.as_mut()
+            && !m.exhausted
+            && m.bytes + entry <= MEMO_BYTE_CEILING
+        {
+            m.bytes += entry;
+            m.flat_layouts.insert(key, layout.to_owned());
+        }
     });
 }
 
@@ -482,6 +613,125 @@ fn node_fact<T: Copy>(
             fact
         }
         None => compute().0,
+    }
+}
+
+/// Whether `doc`'s flat layout depends only on the node, `inline_hard`, and the
+/// indent after a newline.
+///
+/// Laid out flat, every variant takes its flat form without a fit decision and
+/// lays its children out flat, except two whose flat render still measures the
+/// cursor: a [`Doc::StructLit`] (its field-width test reads the column) and a
+/// [`Doc::MatchArmTail`] (its body fit reads the column, then renders broken).
+/// A node is fixed when neither sits anywhere below it; its flat bytes then read no
+/// column, cursor, reserve, or seed, so a single-line flat layout is exact in every
+/// context and its [`FlatMeasure`] answers every flat fit probe.
+fn flat_fixed(doc: &Doc) -> bool {
+    match doc {
+        Doc::Text(_)
+        | Doc::Line
+        | Doc::Softline
+        | Doc::HardLine
+        | Doc::IfBroken(_)
+        | Doc::OrPattern { .. } => true,
+        Doc::StructLit { .. } | Doc::MatchArmTail { .. } => false,
+        _ => node_fact(doc, |m| &mut m.flat_fixed, || (children_flat_fixed(doc), 1)),
+    }
+}
+
+/// Whether `doc` and every child of it are [`flat_fixed`].
+fn children_flat_fixed(doc: &Doc) -> bool {
+    match doc {
+        Doc::Text(_)
+        | Doc::Line
+        | Doc::Softline
+        | Doc::HardLine
+        | Doc::IfBroken(_)
+        | Doc::OrPattern { .. } => true,
+        Doc::StructLit { .. } | Doc::MatchArmTail { .. } => false,
+        Doc::Concat(docs) => docs.iter().all(flat_fixed),
+        Doc::Nest(_, inner)
+        | Doc::Group(inner)
+        | Doc::BraceBody(inner)
+        | Doc::ElidableParen { inner } => flat_fixed(inner),
+        Doc::Assign { prefix, rhs, .. } => flat_fixed(prefix) && flat_fixed(rhs),
+        Doc::Chain { operands } => operands.iter().all(|o| flat_fixed(&o.doc)),
+        Doc::CallArgs {
+            open, elems, close, ..
+        } => flat_fixed(open) && elems.iter().all(flat_fixed) && flat_fixed(close),
+        Doc::TypeBound {
+            ptr_open,
+            head,
+            traits,
+            close,
+        } => {
+            flat_fixed(ptr_open)
+                && flat_fixed(head)
+                && traits.iter().all(flat_fixed)
+                && flat_fixed(close)
+        }
+        Doc::MethodChain { receiver, method } => flat_fixed(receiver) && flat_fixed(method),
+        Doc::IfElse { cond, then_, else_ } => {
+            flat_fixed(cond) && flat_fixed(then_) && flat_fixed(else_)
+        }
+    }
+}
+
+/// The [`FlatMeasure`] of `doc` laid out flat under `cfg`, or `None` when `doc` is
+/// not [`flat_fixed`], so its flat layout depends on where it lands.
+///
+/// Measured on the real flat render (through [`render_at`], so a keyed node shares
+/// its layout) and kept per keyed node.
+fn flat_measure(doc: &Doc, cfg: RenderConfig) -> Option<FlatMeasure> {
+    if !flat_fixed(doc) {
+        return None;
+    }
+    let key = FlatKey::of(doc, cfg);
+    let cached = MEMO.with_borrow(|m| m.as_ref().and_then(|m| m.flat_measures.get(&key).copied()));
+    if cached.is_some() {
+        return cached;
+    }
+    let mut scratch = String::new();
+    render_at(doc, cfg.no_reserve(), 0, 0, true, &mut scratch);
+    let measure = FlatMeasure::of(&scratch);
+    MEMO.with_borrow_mut(|m| {
+        if let Some(m) = m.as_mut()
+            && !m.exhausted
+            && m.nodes.contains(&key.node)
+        {
+            m.flat_measures.insert(key, measure);
+        }
+    });
+    Some(measure)
+}
+
+/// The flat width of a run of pieces laid out on one line, each after its own
+/// literal lead-in of the paired width.
+enum FlatRun {
+    /// Every piece is measured and single-line: the run's total width.
+    Width(usize),
+    /// Every piece is measured and one breaks, so the run is not single-line.
+    Multiline,
+    /// Some piece is not [`flat_fixed`]; the caller renders the run instead.
+    Unmeasured,
+}
+
+/// The [`FlatRun`] of `pieces`, each a node and the width of the literal text
+/// written before it.
+fn flat_run<'a>(pieces: impl IntoIterator<Item = (&'a Doc, usize)>, cfg: RenderConfig) -> FlatRun {
+    let mut total = 0usize;
+    let mut multiline = false;
+    for (doc, lead) in pieces {
+        let Some(measure) = flat_measure(doc, cfg) else {
+            return FlatRun::Unmeasured;
+        };
+        multiline = multiline || !measure.single_line;
+        total = total.saturating_add(lead).saturating_add(measure.first_len);
+    }
+    if multiline {
+        FlatRun::Multiline
+    } else {
+        FlatRun::Width(total)
     }
 }
 
@@ -854,6 +1104,9 @@ fn inner_renders_parenthesized(
     start_col: usize,
     indent: usize,
 ) -> bool {
+    if let Some(measure) = flat_measure(inner, cfg) {
+        return measure.starts_paren;
+    }
     let mut scratch = String::new();
     render_at(
         inner,
@@ -1581,6 +1834,9 @@ fn trailing_siblings_flat_width<D: Borrow<Doc>>(siblings: &[D]) -> usize {
 /// ends the measured line (a flat statement-block never arises in a fit-tested
 /// path, but measuring to the first newline is the correct general rule).
 fn flat_width(doc: &Doc, cfg: RenderConfig, start_col: usize, indent: usize) -> usize {
+    if let Some(measure) = flat_measure(doc, cfg) {
+        return measure.first_len;
+    }
     let mut scratch = String::new();
     render_at(doc, cfg, indent, start_col, true, &mut scratch);
     scratch.split('\n').next().unwrap_or(&scratch).len()
@@ -1594,6 +1850,9 @@ fn flat_width(doc: &Doc, cfg: RenderConfig, start_col: usize, indent: usize) -> 
 /// the assignment's same-line fit gates on this so it never glues a
 /// multiline-flat RHS onto the prefix and drops the delimiters `rustfmt` keeps.
 fn flat_is_single_line(doc: &Doc, cfg: RenderConfig, start_col: usize, indent: usize) -> bool {
+    if let Some(measure) = flat_measure(doc, cfg) {
+        return measure.single_line;
+    }
     let mut scratch = String::new();
     render_at(doc, cfg, indent, start_col, true, &mut scratch);
     !scratch.contains('\n')
@@ -1713,6 +1972,11 @@ fn trim_trailing_spaces(out: &mut String) {
 /// the whole list. Groups with only soft `Line`/`Softline` breaks never embed a
 /// newline in their flat form, so a single-line render is exactly a fitting one.
 fn fits_single_line(doc: &Doc, cfg: RenderConfig, start_col: usize, indent: usize) -> bool {
+    if let Some(measure) = flat_measure(doc, cfg) {
+        return measure
+            .width()
+            .is_some_and(|w| start_col.saturating_add(w) <= cfg.margin());
+    }
     let mut scratch = String::new();
     render_at(doc, cfg.no_reserve(), indent, start_col, true, &mut scratch);
     if scratch.contains('\n') {
@@ -1732,6 +1996,22 @@ fn chain_flat_fits_single_line(
     start_col: usize,
     indent: usize,
 ) -> bool {
+    let run = flat_run(
+        operands.iter().enumerate().map(|(i, o)| {
+            let op = if i > 0 {
+                o.leading_op.as_deref().unwrap_or("").len() + 2
+            } else {
+                0
+            };
+            (&o.doc, op)
+        }),
+        cfg,
+    );
+    match run {
+        FlatRun::Width(w) => return start_col.saturating_add(w) <= cfg.margin(),
+        FlatRun::Multiline => return false,
+        FlatRun::Unmeasured => {}
+    }
     let mut scratch = String::new();
     render_chain_flat(operands, cfg.no_reserve(), indent, &mut scratch);
     if scratch.contains('\n') {
@@ -3661,7 +3941,12 @@ mod p0_tests {
         );
         MEMO.with_borrow(|m| {
             if let Some(m) = m.as_ref() {
-                let charged: usize = m.layouts.values().map(|l| memo_entry_bytes(l.len())).sum();
+                let charged: usize = m
+                    .layouts
+                    .values()
+                    .chain(m.flat_layouts.values())
+                    .map(|l| memo_entry_bytes(l.len()))
+                    .sum();
                 assert_eq!(m.bytes, charged, "memo bytes must charge every entry");
                 assert!(m.bytes <= MEMO_BYTE_CEILING, "memo past its ceiling");
             }
