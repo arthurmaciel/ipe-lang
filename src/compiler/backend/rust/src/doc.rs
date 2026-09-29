@@ -513,41 +513,60 @@ impl Doc {
     /// contribute a single space so adjacency is preserved under normalization
     /// ([`Doc::Softline`] contributes nothing, as it never separates tokens).
     pub fn collect_leaves(&self, out: &mut String) {
+        self.write_leaves(' ', out);
+    }
+
+    /// The document with no layout decision made: its leaves in order, exactly as
+    /// [`Doc::collect_leaves`] writes them, except that a [`Doc::HardLine`] is a
+    /// newline. It is the token sequence the SEAL certifies, so it is valid Rust,
+    /// and keeping the unconditional breaks keeps a line comment from swallowing
+    /// the code after it. One walk over the tree: the renderer's layout of last
+    /// resort when the fit search runs out of fuel.
+    pub fn plain_layout(&self) -> String {
+        let mut out = String::new();
+        self.write_leaves('\n', &mut out);
+        out
+    }
+
+    /// Append every text leaf in order, writing `hard_line` for each
+    /// [`Doc::HardLine`] and a space for each [`Doc::Line`].
+    fn write_leaves(&self, hard_line: char, out: &mut String) {
         match self {
             Self::Text(s) => out.push_str(s),
-            Self::Line | Self::HardLine => out.push(' '),
+            Self::Line => out.push(' '),
+            Self::HardLine => out.push(hard_line),
             // Invisible to the SEAL: the trailing comma it stands for is not a
             // token the legacy string emitter produces, so it must not appear in
             // the leaf sequence the SEAL compares.
             Self::Softline | Self::IfBroken(_) => {}
             Self::Concat(docs) => {
                 for d in docs {
-                    d.collect_leaves(out);
+                    d.write_leaves(hard_line, out);
                 }
             }
-            Self::Nest(_, inner) | Self::Group(inner) => inner.collect_leaves(out),
+            Self::Nest(_, inner) | Self::Group(inner) => inner.write_leaves(hard_line, out),
             // The braces ARE part of the leaf sequence: the string emitter always
             // writes them, so they must appear in the SEAL comparison (unlike the
             // trailing comma above, which the string emitter never writes). A space
             // pads each brace so token adjacency survives normalization.
             Self::BraceBody(inner) => {
                 out.push_str("{ ");
-                inner.collect_leaves(out);
+                inner.write_leaves(hard_line, out);
                 out.push_str(" }");
             }
             // The trailing comma IS a leaf (the string emitter writes it after every
             // arm body); the synthesized braces are NOT (the string emitter never
             // writes them, so they stay invisible like `IfBroken`).
             Self::MatchArmTail { body, .. } => {
-                body.collect_leaves(out);
+                body.write_leaves(hard_line, out);
                 out.push(',');
             }
             // The break after `= ` is pure whitespace (SEAL-invisible, like a
             // `HardLine`): the string emitter writes `prefix rhs` with a single
             // separating space, which normalizes equal to either broken layout.
             Self::Assign { prefix, rhs, .. } => {
-                prefix.collect_leaves(out);
-                rhs.collect_leaves(out);
+                prefix.write_leaves(hard_line, out);
+                rhs.write_leaves(hard_line, out);
             }
             Self::Chain { operands } => {
                 for (i, op) in operands.iter().enumerate() {
@@ -558,7 +577,7 @@ impl Doc {
                         out.push_str(o);
                         out.push(' ');
                     }
-                    op.doc.collect_leaves(out);
+                    op.doc.write_leaves(hard_line, out);
                 }
             }
             // The open/close delimiters and each element ARE leaves; elements are
@@ -568,14 +587,14 @@ impl Doc {
             Self::CallArgs {
                 open, elems, close, ..
             } => {
-                open.collect_leaves(out);
+                open.write_leaves(hard_line, out);
                 for (i, e) in elems.iter().enumerate() {
                     if i > 0 {
                         out.push_str(", ");
                     }
-                    e.collect_leaves(out);
+                    e.write_leaves(hard_line, out);
                 }
-                close.collect_leaves(out);
+                close.write_leaves(hard_line, out);
             }
             // Same accounting as `CallArgs`: `open`, each field joined by `, `, and
             // `close` are leaves; the trailing comma is SEAL-invisible. A space pads
@@ -585,16 +604,16 @@ impl Doc {
                 fields,
                 close,
             } => {
-                open.collect_leaves(out);
+                open.write_leaves(hard_line, out);
                 out.push(' ');
                 for (i, e) in fields.iter().enumerate() {
                     if i > 0 {
                         out.push_str(", ");
                     }
-                    e.collect_leaves(out);
+                    e.write_leaves(hard_line, out);
                 }
                 out.push(' ');
-                close.collect_leaves(out);
+                close.write_leaves(hard_line, out);
             }
             // `Ptr<Head + T1 + T2 + …>` — the same token sequence the string emitter
             // writes for the flat annotation. The angle-break's trailing comma is
@@ -605,20 +624,20 @@ impl Doc {
                 traits,
                 close,
             } => {
-                ptr_open.collect_leaves(out);
-                head.collect_leaves(out);
+                ptr_open.write_leaves(hard_line, out);
+                head.write_leaves(hard_line, out);
                 for t in traits {
                     out.push_str(" + ");
-                    t.collect_leaves(out);
+                    t.write_leaves(hard_line, out);
                 }
-                close.collect_leaves(out);
+                close.write_leaves(hard_line, out);
             }
             // The parens ARE leaves (the string emitter writes `({f})`), whether or
             // not the render drops them — the same rendered-vs-leaves divergence as
             // `IfBroken` / `BraceBody`.
             Self::ElidableParen { inner } => {
                 out.push('(');
-                inner.collect_leaves(out);
+                inner.write_leaves(hard_line, out);
                 out.push(')');
             }
             // The alternatives joined ` | ` — the string emitter's exact bytes.
@@ -636,15 +655,15 @@ impl Doc {
             // adjacent, and the method-on-its-own-line layout is pure whitespace
             // (SEAL-invisible), so both layouts normalize to the same leaves.
             Self::MethodChain { receiver, method } => {
-                receiver.collect_leaves(out);
-                method.collect_leaves(out);
+                receiver.write_leaves(hard_line, out);
+                method.write_leaves(hard_line, out);
             }
             // The `(if … { … } else { … })` tokens the string emitter writes
             // adjacently. The block form's newlines are pure whitespace and its
             // brace tokens are identical, so both layouts normalize to the same
             // leaves — the branch bodies carry their own leaves in between.
             Self::IfElse { cond, then_, else_ } => {
-                Self::collect_if_else_leaves(cond, then_, else_, out);
+                Self::write_if_else_leaves(cond, then_, else_, hard_line, out);
             }
         }
     }
@@ -653,13 +672,19 @@ impl Doc {
     /// [`Doc::IfElse`], with each branch's own leaves in between — the exact
     /// adjacent token sequence the string emitter writes, identical in the inline
     /// and block layouts.
-    fn collect_if_else_leaves(cond: &Self, then_: &Self, else_: &Self, out: &mut String) {
+    fn write_if_else_leaves(
+        cond: &Self,
+        then_: &Self,
+        else_: &Self,
+        hard_line: char,
+        out: &mut String,
+    ) {
         out.push_str("(if ");
-        cond.collect_leaves(out);
+        cond.write_leaves(hard_line, out);
         out.push_str(" { ");
-        then_.collect_leaves(out);
+        then_.write_leaves(hard_line, out);
         out.push_str(" } else { ");
-        else_.collect_leaves(out);
+        else_.write_leaves(hard_line, out);
         out.push_str(" })");
     }
 

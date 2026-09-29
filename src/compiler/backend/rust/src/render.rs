@@ -23,10 +23,14 @@
 //!   that an operator following a multiline operand glues to that operand's
 //!   closing-line column while the chain has not yet broken.
 
+use std::borrow::Borrow;
+use std::cell::RefCell;
+use std::collections::{HashMap, HashSet};
+
 use crate::doc::{ChainOperand, Doc};
 
 /// Rendering configuration. Mirrors the `rustfmt` knobs the golden harness pins.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct RenderConfig {
     /// The maximum line width (`rustfmt` `max_width`, default 100).
     pub max_width: usize,
@@ -95,9 +99,7 @@ const FN_CALL_WIDTH: usize = 60;
 /// `col` is where the document's first character will be placed (used for the
 /// fit test); `indent` is the number of leading spaces a broken line receives.
 pub fn render(doc: &Doc, cfg: RenderConfig) -> String {
-    let mut out = String::new();
-    render_at(doc, cfg, 0, 0, false, &mut out);
-    out
+    render_bounded(doc, cfg, 0, 0)
 }
 
 /// Render `doc` as if its first character lands at column `col` with the given
@@ -109,9 +111,211 @@ pub fn render(doc: &Doc, cfg: RenderConfig) -> String {
 /// prefix for `col` (the caller already wrote it); every broken line carries its
 /// own absolute indentation.
 pub fn render_seeded(doc: &Doc, cfg: RenderConfig, indent: usize, col: usize) -> String {
+    render_bounded(doc, cfg, indent, col)
+}
+
+/// Lay `doc` out within [`LAYOUT_FUEL`]. A document whose layout search runs the
+/// fuel out gets its [`Doc::plain_layout`] instead: one pass, no fit decision, the
+/// same tokens — layout never changes what the code means.
+fn render_bounded(doc: &Doc, cfg: RenderConfig, indent: usize, col: usize) -> String {
+    let scope = MemoScope::install(doc, LAYOUT_FUEL);
     let mut out = String::new();
     render_at(doc, cfg, indent, col, false, &mut out);
+    if scope.exhausted() {
+        return doc.plain_layout();
+    }
     out
+}
+
+/// The work one render may do before it gives up on fitting the document and
+/// falls back to its plain layout, in bytes: each layout computed or replayed
+/// spends the bytes it writes plus the line it measures its cursor on, so the
+/// fuel tracks time, not only node count. Real code — each node laid out in a
+/// handful of contexts — stays far below it; only a pathologically deep nest of
+/// probing constructs reaches it.
+const LAYOUT_FUEL: usize = 1 << 26;
+
+/// The byte ceiling on the layouts one render keeps memoized. Past it the memo
+/// stops growing and later nodes render uncached: output is unchanged, only the
+/// reuse is capped, so a pathological document cannot grow the memo without bound.
+const MEMO_BYTE_CEILING: usize = 64 << 20;
+
+/// Every layout decision probes a subtree by rendering it into a scratch buffer
+/// before rendering it for real, and a probed subtree probes its own children the
+/// same way, so without reuse the work doubles with each nesting level. The memo
+/// makes a node's layout a pure function computed once per render: keyed by the
+/// node's address and every input its render reads — the config, the indent, the
+/// seed column, the [`Pass`], and the buffer's [`Cursor`] — it replays the bytes
+/// that render produced.
+///
+/// Only nodes of the document passed to [`render`] / [`render_seeded`] are keyed:
+/// they stay borrowed for the whole render, so no other node can take their
+/// address. A document a layout builds on the fly is rendered uncached.
+struct Memo {
+    nodes: HashSet<usize>,
+    layouts: HashMap<MemoKey, String>,
+    bytes: usize,
+    /// [`LAYOUT_FUEL`] left to spend; once spent the render is abandoned.
+    fuel: usize,
+    exhausted: bool,
+}
+
+/// Everything a node's render reads besides the node itself.
+#[derive(PartialEq, Eq, Hash)]
+struct MemoKey {
+    node: usize,
+    cfg: RenderConfig,
+    indent: usize,
+    col: usize,
+    pass: Pass,
+    cursor: Cursor,
+}
+
+/// Which renderer laid a node out, with the inputs only that renderer reads.
+#[derive(PartialEq, Eq, Hash)]
+enum Pass {
+    /// [`render_at`], flat or letting the node's own groups decide.
+    Layout { flat: bool },
+    /// [`render_forced_break`], under an enclosing call-argument combine.
+    ForcedBreak { combine_base: usize, budget: usize },
+}
+
+/// What a render reads of the buffer it appends to: whether anything is written
+/// yet, the current line's length and whether it is all indentation, and the run
+/// of trailing spaces a break may trim before writing its newline.
+#[derive(PartialEq, Eq, Hash)]
+struct Cursor {
+    empty: bool,
+    line_len: usize,
+    blank_line: bool,
+    trailing_spaces: usize,
+}
+
+impl Cursor {
+    fn of(out: &str) -> Self {
+        let line = out.rsplit('\n').next().unwrap_or_default();
+        Self {
+            empty: out.is_empty(),
+            line_len: line.len(),
+            blank_line: line.bytes().all(|b| b == b' '),
+            trailing_spaces: out.len() - out.trim_end_matches(' ').len(),
+        }
+    }
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Nodes laid out afresh (not replayed) — the bound test's work measure.
+    static RENDERED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+thread_local! {
+    static MEMO: RefCell<Option<Memo>> = const { RefCell::new(None) };
+}
+
+/// Installs a fresh [`Memo`] over one document for the scope's lifetime and
+/// restores the enclosing one on drop, so a stale address can never be looked up
+/// after its document is gone.
+struct MemoScope(Option<Memo>);
+
+impl MemoScope {
+    fn install(doc: &Doc, fuel: usize) -> Self {
+        let mut nodes = HashSet::new();
+        collect_node_addrs(doc, &mut nodes);
+        let memo = Memo {
+            nodes,
+            layouts: HashMap::new(),
+            bytes: 0,
+            fuel,
+            exhausted: false,
+        };
+        Self(MEMO.replace(Some(memo)))
+    }
+
+    /// Whether the render under this scope ran out of [`LAYOUT_FUEL`], leaving its
+    /// output incomplete.
+    fn exhausted(&self) -> bool {
+        MEMO.with_borrow(|m| m.as_ref().is_some_and(|m| m.exhausted))
+    }
+}
+
+impl Drop for MemoScope {
+    fn drop(&mut self) {
+        MEMO.set(self.0.take());
+    }
+}
+
+fn node_addr(doc: &Doc) -> usize {
+    std::ptr::from_ref(doc).addr()
+}
+
+/// Record the address of every composite node under `doc` — the nodes whose render
+/// probes or recurses, and so the ones worth memoizing. Leaves render in O(1).
+fn collect_node_addrs(doc: &Doc, nodes: &mut HashSet<usize>) {
+    match doc {
+        Doc::Text(_)
+        | Doc::Line
+        | Doc::Softline
+        | Doc::HardLine
+        | Doc::IfBroken(_)
+        | Doc::OrPattern { .. } => return,
+        Doc::Concat(docs) => {
+            for d in docs {
+                collect_node_addrs(d, nodes);
+            }
+        }
+        Doc::Nest(_, inner)
+        | Doc::Group(inner)
+        | Doc::BraceBody(inner)
+        | Doc::ElidableParen { inner }
+        | Doc::MatchArmTail { body: inner, .. } => collect_node_addrs(inner, nodes),
+        Doc::Assign { prefix, rhs, .. } => {
+            collect_node_addrs(prefix, nodes);
+            collect_node_addrs(rhs, nodes);
+        }
+        Doc::Chain { operands } => {
+            for op in operands {
+                collect_node_addrs(&op.doc, nodes);
+            }
+        }
+        Doc::CallArgs {
+            open, elems, close, ..
+        }
+        | Doc::StructLit {
+            open,
+            fields: elems,
+            close,
+        } => {
+            collect_node_addrs(open, nodes);
+            for e in elems {
+                collect_node_addrs(e, nodes);
+            }
+            collect_node_addrs(close, nodes);
+        }
+        Doc::TypeBound {
+            ptr_open,
+            head,
+            traits,
+            close,
+        } => {
+            collect_node_addrs(ptr_open, nodes);
+            collect_node_addrs(head, nodes);
+            for t in traits {
+                collect_node_addrs(t, nodes);
+            }
+            collect_node_addrs(close, nodes);
+        }
+        Doc::MethodChain { receiver, method } => {
+            collect_node_addrs(receiver, nodes);
+            collect_node_addrs(method, nodes);
+        }
+        Doc::IfElse { cond, then_, else_ } => {
+            collect_node_addrs(cond, nodes);
+            collect_node_addrs(then_, nodes);
+            collect_node_addrs(else_, nodes);
+        }
+    }
+    nodes.insert(node_addr(doc));
 }
 
 /// The current column after the last newline in `out`, i.e. how many characters
@@ -142,6 +346,101 @@ fn eff_col(out: &str, col: usize) -> usize {
 /// with `flat == true` in practice, but it breaks unconditionally regardless).
 /// `col` is the column the first char lands on.
 fn render_at(
+    doc: &Doc,
+    cfg: RenderConfig,
+    indent: usize,
+    col: usize,
+    flat: bool,
+    out: &mut String,
+) {
+    memoized(doc, cfg, indent, col, Pass::Layout { flat }, out, |out| {
+        render_node(doc, cfg, indent, col, flat, out);
+    });
+}
+
+/// Run `render` for `doc` into `out`, or replay the bytes it produced the last time
+/// it ran on the same node in the same context. A node outside the memoized
+/// document renders directly.
+fn memoized(
+    doc: &Doc,
+    cfg: RenderConfig,
+    indent: usize,
+    col: usize,
+    pass: Pass,
+    out: &mut String,
+    render: impl FnOnce(&mut String),
+) {
+    let addr = node_addr(doc);
+    let Some(keyed) = MEMO.with_borrow(|m| {
+        m.as_ref().map_or(Some(false), |m| {
+            (!m.exhausted).then(|| m.nodes.contains(&addr))
+        })
+    }) else {
+        return;
+    };
+    if !keyed {
+        render(out);
+        return;
+    }
+    let key = MemoKey {
+        node: addr,
+        cfg,
+        indent,
+        col,
+        pass,
+        cursor: Cursor::of(out),
+    };
+    if !spend(1 + key.cursor.line_len) {
+        return;
+    }
+    // A break trims only the trailing spaces before it, so everything before that
+    // run is untouched and the render's effect is exactly the bytes from `base` on.
+    let base = out.len().saturating_sub(key.cursor.trailing_spaces);
+    let replayed = MEMO.with_borrow(|m| {
+        let layout = m.as_ref().and_then(|m| m.layouts.get(&key));
+        if let Some(layout) = layout {
+            out.truncate(base);
+            out.push_str(layout);
+        }
+        layout.map(String::len)
+    });
+    if let Some(replayed) = replayed {
+        spend(replayed);
+        return;
+    }
+    #[cfg(test)]
+    RENDERED.with(|n| n.set(n.get() + 1));
+    render(out);
+    let Some(layout) = out.get(base..) else {
+        return;
+    };
+    if !spend(layout.len()) {
+        return;
+    }
+    MEMO.with_borrow_mut(|m| {
+        if let Some(m) = m.as_mut()
+            && m.bytes + layout.len() <= MEMO_BYTE_CEILING
+        {
+            m.bytes += layout.len();
+            m.layouts.insert(key, layout.to_owned());
+        }
+    });
+}
+
+/// Spend `cost` of the render's [`LAYOUT_FUEL`]; `false` once it is spent, from
+/// which point every memoized render returns without writing.
+fn spend(cost: usize) -> bool {
+    MEMO.with_borrow_mut(|m| {
+        m.as_mut().is_none_or(|m| {
+            m.exhausted = m.exhausted || cost >= m.fuel;
+            m.fuel = m.fuel.saturating_sub(cost);
+            !m.exhausted
+        })
+    })
+}
+
+/// Render one node of any variant; [`render_at`] fronts it with the memo.
+fn render_node(
     doc: &Doc,
     cfg: RenderConfig,
     indent: usize,
@@ -270,8 +569,8 @@ fn render_at(
 /// break, the reserve no longer applies to earlier children (their tail is that
 /// break, not the delimiter). This lets a `BraceBody`/`CallArgs` child re-test its
 /// own fit against the width `rustfmt`'s `Shape` leaves after its trailing tokens.
-fn render_concat(
-    docs: &[Doc],
+fn render_concat<D: Borrow<Doc>>(
+    docs: &[D],
     cfg: RenderConfig,
     indent: usize,
     col: usize,
@@ -282,7 +581,7 @@ fn render_concat(
         let c = eff_col(out, col);
         let suffix = trailing_siblings_flat_width(docs.get(i + 1..).unwrap_or(&[]));
         let child_cfg = cfg.with_reserve(cfg.reserve + suffix);
-        render_at(d, child_cfg, indent, c, flat, out);
+        render_at(d.borrow(), child_cfg, indent, c, flat, out);
     }
 }
 
@@ -885,50 +1184,50 @@ fn render_if_else(
     let construct_width = if_else_construct_width(cond, then_, else_);
 
     let start_col = eff_col(out, col);
+    // The branches are laid out in place (borrowed, never cloned) so they keep
+    // their memoized layouts.
     if construct_width <= SINGLE_LINE_IF_ELSE_MAX_WIDTH {
         // Inline `(if cond { then } else { else })`. Soft `Line`s so a wider
         // enclosing group could in principle break it, but the width test already
         // guaranteed it fits.
-        render_at(
-            &Doc::concat(vec![
-                Doc::text("(if "),
-                cond.clone(),
-                Doc::text(" { "),
-                then_.clone(),
-                Doc::text(" } else { "),
-                else_.clone(),
-                Doc::text(" })"),
-            ]),
-            cfg,
-            indent,
-            start_col,
-            flat,
-            out,
-        );
+        let pieces = [
+            &Doc::text("(if "),
+            cond,
+            &Doc::text(" { "),
+            then_,
+            &Doc::text(" } else { "),
+            else_,
+            &Doc::text(" })"),
+        ];
+        render_concat(&pieces, cfg, indent, start_col, flat, out);
         return;
     }
 
     // Broken block form. Braces sit at the enclosing block `indent`; each branch
     // body indents to `indent + 4`. `HardLine`s force the layout unconditionally,
     // matching `rustfmt`'s block-form `if` once past the single-line threshold.
-    render_at(
-        &Doc::concat(vec![
-            Doc::text("(if "),
-            cond.clone(),
-            Doc::text(" {"),
-            Doc::nest(4, Doc::concat(vec![Doc::HardLine, then_.clone()])),
-            Doc::HardLine,
-            Doc::text("} else {"),
-            Doc::nest(4, Doc::concat(vec![Doc::HardLine, else_.clone()])),
-            Doc::HardLine,
-            Doc::text("})"),
-        ]),
-        cfg,
-        indent,
-        start_col,
-        flat,
-        out,
-    );
+    let head = [&Doc::text("(if "), cond, &Doc::text(" {")];
+    render_concat(&head, cfg, indent, start_col, flat, out);
+    render_if_branch(then_, cfg, indent, start_col, flat, out);
+    render_at(&Doc::text("} else {"), cfg, indent, start_col, flat, out);
+    render_if_branch(else_, cfg, indent, start_col, flat, out);
+    render_at(&Doc::text("})"), cfg, indent, start_col, flat, out);
+}
+
+/// One branch of a broken [`Doc::IfElse`]: the branch body on its own line one
+/// indent step in, then the break back to the enclosing indent for the brace that
+/// follows it.
+fn render_if_branch(
+    branch: &Doc,
+    cfg: RenderConfig,
+    indent: usize,
+    col: usize,
+    flat: bool,
+    out: &mut String,
+) {
+    let c = eff_col(out, col);
+    render_concat(&[&Doc::HardLine, branch], cfg, indent + 4, c, flat, out);
+    render_at(&Doc::HardLine, cfg, indent, col, flat, out);
 }
 
 /// Whether a rendered line, trimmed of indentation, is a single UNBREAKABLE atom:
@@ -1210,10 +1509,10 @@ fn render_assign(
 /// avoiding the exponential blowup a full per-child re-render would cause on deeply
 /// nested closures. This is the extra `reserve` a child inherits so its own fit test
 /// leaves room for its wrapper's tail.
-fn trailing_siblings_flat_width(siblings: &[Doc]) -> usize {
+fn trailing_siblings_flat_width<D: Borrow<Doc>>(siblings: &[D]) -> usize {
     let mut total = 0usize;
     for s in siblings {
-        match s {
+        match s.borrow() {
             Doc::Text(t) => total += t.len(),
             _ => break,
         }
@@ -1918,6 +2217,27 @@ fn last_arg_combines(
 /// budget), else breaks its argument list one per line; any other doc falls back to
 /// the standard non-flat render (a statement block / closure body already breaks).
 fn render_forced_break(
+    doc: &Doc,
+    combine_base: usize,
+    budget: usize,
+    cfg: RenderConfig,
+    indent: usize,
+    col: usize,
+    out: &mut String,
+) {
+    // The combine probe force-breaks the last argument to measure it, then the
+    // committed layout force-breaks it again: memoized, the second is a replay.
+    let pass = Pass::ForcedBreak {
+        combine_base,
+        budget,
+    };
+    memoized(doc, cfg, indent, col, pass, out, |out| {
+        render_forced_break_node(doc, combine_base, budget, cfg, indent, col, out);
+    });
+}
+
+/// One node of [`render_forced_break`]; the wrapper fronts it with the memo.
+fn render_forced_break_node(
     doc: &Doc,
     combine_base: usize,
     budget: usize,
@@ -3223,5 +3543,107 @@ mod p0_tests {
         // closing `)` (no break), so the method-on-its-own-line layout is invisible
         // to the leaf sequence.
         assert!(doc.normalized_leaves().ends_with(").clone()"));
+    }
+
+    type Nest = fn(Doc) -> Doc;
+
+    /// One nesting step of each construct whose layout probes its subtree: the
+    /// fit test, paren elision, if/else width, last-argument combine, the assign
+    /// right-hand side, and all of them stacked.
+    const NESTS: [(&str, Nest); 6] = [
+        ("group", |d| {
+            Doc::group(Doc::concat(vec![Doc::text("g("), d, Doc::text(")")]))
+        }),
+        ("call", |d| {
+            Doc::call_args(Doc::text("f("), vec![d], Doc::text(")"), true)
+        }),
+        ("paren", |d| {
+            Doc::elidable_paren(Doc::concat(vec![d, Doc::text(" + 1")]))
+        }),
+        ("if_else", |d| {
+            Doc::if_else(Doc::text("c"), d, Doc::text("y"))
+        }),
+        ("assign", |d| Doc::assign(Doc::text("let v = "), d, 1)),
+        ("mixed", |d| {
+            let arg = Doc::elidable_paren(Doc::concat(vec![d, Doc::text(" + 1")]));
+            let call = Doc::call_args(Doc::text("f("), vec![arg], Doc::text(")"), true);
+            Doc::group(Doc::if_else(Doc::text("c"), call, Doc::text("y")))
+        }),
+    ];
+
+    fn nest(step: Nest, depth: usize) -> Doc {
+        (0..depth).fold(Doc::text("x"), |d, _| step(d))
+    }
+
+    /// Nodes laid out afresh while rendering `doc`, and whether the render gave up
+    /// on fitting and laid the document out flat.
+    fn layout_work(doc: &Doc) -> (usize, bool) {
+        RENDERED.with(|n| n.set(0));
+        let scope = MemoScope::install(doc, LAYOUT_FUEL);
+        render_at(
+            doc,
+            RenderConfig::default(),
+            0,
+            0,
+            false,
+            &mut String::new(),
+        );
+        (RENDERED.with(std::cell::Cell::get), scope.exhausted())
+    }
+
+    /// Every layout probe re-renders its subtree, so without reuse the work doubles
+    /// per nesting level. With each node's layout computed once per context, a nest
+    /// past the width still lays out fully, within the fuel.
+    #[test]
+    fn deep_nest_lays_out_within_fuel() {
+        for (name, step) in NESTS {
+            let (work, exhausted) = layout_work(&nest(step, 24));
+            assert!(
+                !exhausted,
+                "{name}: depth 24 ran out of fuel after {work} layouts"
+            );
+        }
+    }
+
+    /// A nest as deep as the parser admits finishes on the compiler's main-thread
+    /// stack, deterministically: laid out within the fuel, or else plain.
+    #[test]
+    fn nest_at_parser_depth_renders_bounded() {
+        on_main_thread_stack(|| {
+            for (name, step) in NESTS {
+                let doc = nest(step, 256);
+                let out = render(&doc, RenderConfig::default());
+                if layout_work(&doc).1 {
+                    assert_eq!(out, doc.plain_layout(), "{name}");
+                }
+                assert_eq!(out, render(&doc, RenderConfig::default()), "{name}");
+            }
+        });
+    }
+
+    /// The refusal: a render that runs out of fuel does not return its partial
+    /// output — it returns the complete plain layout, every token in order.
+    #[test]
+    fn exhausted_fuel_falls_back_to_plain_layout() {
+        on_main_thread_stack(|| {
+            let doc = nest(NESTS[5].1, 256);
+            assert!(layout_work(&doc).1, "the mixed nest must exhaust the fuel");
+            let out = render(&doc, RenderConfig::default());
+            assert_eq!(out, doc.plain_layout());
+            assert_eq!(
+                crate::doc::whitespace_normalize(&out),
+                doc.normalized_leaves()
+            );
+        });
+    }
+
+    /// Run `f` on a thread with the 8 MiB stack the `ipe` binary's main thread
+    /// gets, rather than the smaller stack of a test thread.
+    fn on_main_thread_stack(f: impl FnOnce() + Send + 'static) {
+        let joined = std::thread::Builder::new()
+            .stack_size(8 * 1024 * 1024)
+            .spawn(f)
+            .map(std::thread::JoinHandle::join);
+        assert!(matches!(joined, Ok(Ok(()))), "the render thread failed");
     }
 }
