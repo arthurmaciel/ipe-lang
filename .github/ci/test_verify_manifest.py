@@ -1498,6 +1498,13 @@ class TestPullRequestTarget(unittest.TestCase):
     def test_local_action_refused(self) -> None:
         self.assertRefused(_PRT_OK + "      - uses: ./.github/actions/x\n", "no action runs under")
 
+    def test_unrecognised_on_naming_pull_request_target_refused(self) -> None:
+        bad = _PRT_OK.replace(
+            "on:\n  pull_request_target:\n    types: [opened, synchronize]\n  merge_group:\n",
+            "on: [pull_request_target, 1]\n",
+        )
+        self.assertRefused(bad, "no recognised shape but names `pull_request_target`")
+
     def test_reusable_workflow_refused(self) -> None:
         bad = _PRT_OK + "  reuse:\n    uses: ./.github/workflows/other.yml\n"
         self.assertRefused(bad, "calls a reusable workflow")
@@ -1651,6 +1658,26 @@ class TestTrustRoots(unittest.TestCase):
 
     def test_stray_docs_codeowners_refused(self) -> None:
         self.assertRefused(self._OK, "docs/CODEOWNERS: a second", [*self.tracked, "docs/CODEOWNERS"])
+
+    def _workflow(self, run: str) -> None:
+        _write(os.path.join(self.root, "workflows", "w.yml"), f"on: push\njobs:\n  j:\n    steps:\n      - run: {run}\n")
+
+    def test_unowned_ci_run_script_refused(self) -> None:
+        self._workflow("bash editors/gate.sh")
+        self.assertRefused(self._OK, "editors/gate.sh is run by CI but is not a trust root", [*self.tracked, "editors/gate.sh"])
+
+    def test_unowned_dot_slash_ci_run_script_refused(self) -> None:
+        self._workflow("./editors/gate.py --check")
+        self.assertRefused(self._OK, "editors/gate.py is run by CI", [*self.tracked, "editors/gate.py"])
+
+    def test_owned_ci_run_script_passes(self) -> None:
+        self._workflow("bash editors/gate.sh")
+        tracked = [*self.tracked, "editors/gate.sh"]
+        self.assertEqual(self.errors(self._OK + "/editors/ @o\n", tracked), [])
+
+    def test_longer_path_is_not_the_script(self) -> None:
+        self._workflow("bash editors/gate.sh.bak/x editors/gate.shx")
+        self.assertEqual(self.errors(self._OK, [*self.tracked, "editors/gate.sh"]), [])
 
     def test_live_codeowners_passes(self) -> None:
         errors: list[str] = []

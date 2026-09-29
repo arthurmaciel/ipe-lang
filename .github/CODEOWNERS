@@ -39,6 +39,12 @@ rustfmt.toml                                    @arthurmaciel
 /PRINCIPLES.md                                  @arthurmaciel
 /AGENTS.md                                      @arthurmaciel
 
+# Scripts CI runs from outside the tooling tree (`verify-manifest.py` check 8
+# refuses a CI-run script that no rule here owns).
+/editors/tests/                                 @arthurmaciel
+/editors/tree-sitter-ipe/scripts/               @arthurmaciel
+/tests/fixtures/admission/                      @arthurmaciel
+
 # Byte-exact goldens: the reference output every emit test compares against.
 /tests/golden/                                  @arthurmaciel
 /src/ipe-cli/tests/golden/                      @arthurmaciel

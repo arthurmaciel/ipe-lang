@@ -46,6 +46,11 @@ MAX_RULES = 512
 # need a membership lookup this check cannot make read-only.
 _OWNER_RE = re.compile(r"^@[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9])){0,38}$")
 _FORBIDDEN_PATTERN_CHARS = frozenset("\\[]!#")
+# A rule line is printable ASCII and tab only. Python's `splitlines()` and
+# `split()` also break on Unicode separators (U+2028, U+00A0, `\v`, `\f`, ...)
+# that GitHub does not, so lines are split on `\n` alone and a rule may not
+# carry any character on which the two readings could differ.
+_RULE_LINE = re.compile(r"[\t\x20-\x7e]+")
 
 
 class CodeownersError(ValueError):
@@ -124,12 +129,17 @@ def _compile_pattern(pattern: str, line: int) -> Rule:
 def parse_codeowners(text: str) -> TrustRoots:
     if len(text.encode("utf-8")) > MAX_CODEOWNERS_BYTES:
         raise CodeownersError(f"CODEOWNERS exceeds {MAX_CODEOWNERS_BYTES} bytes")
+    if "\r" in text.replace("\r\n", ""):
+        raise CodeownersError("CODEOWNERS contains a bare carriage return; lines end in `\\n` or `\\r\\n`")
     rules: list[Rule] = []
     owner_set: frozenset[str] | None = None
-    for n, raw in enumerate(text.splitlines(), start=1):
-        line = raw.strip()
+    for n, raw in enumerate(text.split("\n"), start=1):
+        line = raw.removesuffix("\r").strip(" \t")
         if not line or line.startswith("#"):
             continue
+        if not _RULE_LINE.fullmatch(line):
+            bad = next(c for c in line if not _RULE_LINE.fullmatch(c))
+            raise CodeownersError(f"line {n}: rule contains {bad!r}; a rule is printable ASCII and tabs only")
         if "#" in line:
             raise CodeownersError(f"line {n}: inline `#` is not accepted")
         # Checked before splitting: `\ ` escapes a space, so a split would
@@ -242,6 +252,9 @@ def owner_approved(reviews: list, owners: frozenset[str], head_sha: str) -> bool
     reviews change nothing; a DISMISSED one withdraws an approval."""
     latest: dict[str, dict] = {}
     for r in reviews:
+        # A deleted account's review has `user: null`; it names no owner.
+        if isinstance(r, dict) and r.get("user", ...) is None:
+            continue
         login = _field(r, "user", "login")
         state = _field(r, "state")
         if not isinstance(login, str) or not isinstance(state, str):
@@ -293,6 +306,19 @@ MAX_BODY_BYTES = 16 * 1024 * 1024
 _NEXT_RE = re.compile(r'<([^>]+)>\s*;\s*rel="next"')
 
 
+class _PinnedRedirects(urllib.request.HTTPRedirectHandler):
+    """Follow a redirect only within the API origin: urllib re-sends the
+    `Authorization` header to wherever a redirect points."""
+
+    def __init__(self, base: str):
+        self.base = base
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: ANN001
+        if not newurl.startswith(self.base + "/"):
+            raise Refused(f"refusing to follow a redirect to {newurl!r} off the API origin")
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
 class Api:
     def __init__(self, base_url: str, repo: str, token: str):
         if not re.match(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$", repo):
@@ -303,6 +329,7 @@ class Api:
         self.base = base_url.rstrip("/")
         self.repo = repo
         self.token = token
+        self._opener = urllib.request.build_opener(_PinnedRedirects(self.base))
 
     def _get(self, url: str) -> tuple[object, str | None]:
         # The token is only ever sent to the configured API origin.
@@ -318,7 +345,7 @@ class Api:
             },
         )
         try:
-            with urllib.request.urlopen(req, timeout=30) as resp:
+            with self._opener.open(req, timeout=30) as resp:
                 body = resp.read(MAX_BODY_BYTES + 1)
                 link = resp.headers.get("Link")
         except (urllib.error.URLError, TimeoutError, OSError) as e:
@@ -361,6 +388,11 @@ def run_check(roots: TrustRoots, event_name: str, event: dict, api: Api) -> str:
         raise Refused(f"PR head moved from {event_head} to {head_sha}; the newer run decides")
     files = api.get_all(f"pulls/{number}/files")
     reviews = api.get_all(f"pulls/{number}/reviews")
+    # The file list and reviews are read after the PR: a push in between
+    # would pair the older head (and an approval of it) with newer files.
+    after = _sha(api.get(f"pulls/{number}"), "head", "sha")
+    if after != head_sha:
+        raise Refused(f"PR head moved from {head_sha} to {after} while it was read; the newer run decides")
     return decide(roots, pr, files, reviews)
 
 

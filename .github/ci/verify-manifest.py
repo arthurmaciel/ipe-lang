@@ -94,8 +94,11 @@ Checks performed
      trust-root SSOT: it must parse under `trust_roots.py`'s accepted subset,
      every rule must match at least one tracked file, the trust-root
      machinery (`CODEOWNERS`, `trust_roots.py`, this verifier,
-     `trust-root-diff.yml`) must itself be a trust root, and no second
-     CODEOWNERS file may exist at the root or in `docs/`.
+     `trust-root-diff.yml`) must itself be a trust root, every tracked script
+     a workflow or local action names by path must be a trust root, and no
+     second CODEOWNERS file may exist at the root or in `docs/`.  A workflow
+     whose `on:` has no recognised shape but names `pull_request_target` is
+     refused by (a).
      Limit: (a) is a text audit that catches honest mistakes; a hostile edit
      to a workflow is a `.github/**` change, which (b) makes code-owned.
 
@@ -735,6 +738,10 @@ TRUST_ROOT_MACHINERY = (
 # first location is the SSOT, so a file at the others is refused as a
 # misleading second list.
 _STRAY_CODEOWNERS = ("CODEOWNERS", "docs/CODEOWNERS")
+# A tracked file with one of these suffixes that a workflow or local action
+# names is a script CI executes: editing it changes what a gate proves, so it
+# must be a trust root wherever it lives.
+_SCRIPT_SUFFIXES = (".sh", ".bash", ".py", ".js", ".mjs", ".cjs", ".ps1", ".pl", ".rb")
 
 
 def _scalars(node: object):
@@ -822,7 +829,16 @@ def check_pull_request_target(errors: list[str], root: str = REPO_ROOT) -> None:
         if not isinstance(doc, dict):
             continue
         triggers = _triggers(doc)
-        if triggers is None or "pull_request_target" not in triggers:
+        if triggers is None:
+            # Fail closed: an `on:` this reader cannot enumerate may still
+            # hold `pull_request_target`.
+            if "pull_request_target" in text or any("pull_request_target" in t for t in _scalars(doc)):
+                errors.append(
+                    f"{fname}: `on:` has no recognised shape but names `pull_request_target`; "
+                    "check 8 cannot prove it runs no head code"
+                )
+            continue
+        if "pull_request_target" not in triggers:
             continue
         for v in pull_request_target_violations(fname, doc, text):
             errors.append(f"{fname}: a pull_request_target workflow {v}")
@@ -867,6 +883,32 @@ def check_trust_roots(errors: list[str], root: str = REPO_ROOT, tracked: list[st
     for p in _STRAY_CODEOWNERS:
         if p in tracked:
             errors.append(f"{p}: a second CODEOWNERS file; .github/CODEOWNERS is the only trust-root list")
+    for p in _ci_run_scripts(root, tracked):
+        if not roots.is_trust_root(p):
+            errors.append(
+                f"{p} is run by CI but is not a trust root in .github/CODEOWNERS — "
+                "an outside PR could rewrite what that gate proves"
+            )
+
+
+def _ci_run_scripts(root: str, tracked: list[str]) -> list[str]:
+    """Tracked scripts (by `_SCRIPT_SUFFIXES`) that a workflow or local action
+    names by their repository path, bare or `./`-prefixed. A script reached
+    only through `working-directory:` plus a relative name is not seen."""
+    scripts = [p for p in tracked if p.endswith(_SCRIPT_SUFFIXES)]
+    if not scripts:
+        return []
+    texts: list[str] = []
+    for pattern in ("workflows/*.yml", "workflows/*.yaml", "actions/**/*.yml", "actions/**/*.yaml"):
+        for path in sorted(glob.glob(os.path.join(root, pattern), recursive=True)):
+            with open(path, encoding="utf-8", errors="surrogateescape") as f:
+                texts.append(f.read())
+    found: set[str] = set()
+    for p in scripts:
+        pat = re.compile(r"(?:(?<=\./)|(?<![A-Za-z0-9_./-]))" + re.escape(p) + r"(?![A-Za-z0-9_./-])")
+        if any(pat.search(t) for t in texts):
+            found.add(p)
+    return sorted(found)
 
 
 def _env_keys_folded(env: dict) -> set[str]:

@@ -72,6 +72,21 @@ class ParserRefusals(unittest.TestCase):
     def test_empty_component_is_refused(self) -> None:
         self.assertRefused("/src//tools/ @owner\n", "component")
 
+    def test_non_ascii_rule_is_refused(self) -> None:
+        # U+00A0 is whitespace to `str.split()` but not to GitHub.
+        self.assertRefused("/.github/\u00a0@owner\n", "printable ASCII")
+
+    def test_unicode_line_separator_in_rule_is_refused(self) -> None:
+        # U+2028 is a line break to `str.splitlines()` but not to GitHub.
+        self.assertRefused("/.github/ @owner\u2028/tools/ @owner\n", "printable ASCII")
+
+    def test_bare_carriage_return_is_refused(self) -> None:
+        self.assertRefused("/.github/ @owner\r/tools/ @owner\n", "bare carriage return")
+
+    def test_non_ascii_comment_and_crlf_are_accepted(self) -> None:
+        r = tr.parse_codeowners("# trust roots \u2014 owned\r\n/.github/ @owner\r\n")
+        self.assertTrue(r.is_trust_root(".github/x"))
+
     def test_oversize_file_is_refused(self) -> None:
         self.assertRefused("#" * (tr.MAX_CODEOWNERS_BYTES + 1), "exceeds")
 
@@ -201,6 +216,14 @@ class Decision(unittest.TestCase):
         del pr["changed_files"]
         self.refused(pr, [{"filename": "README.md"}], [], "changed_files")
 
+    def test_deleted_account_review_is_skipped(self) -> None:
+        reviews = [{"user": None, "state": "CHANGES_REQUESTED", "commit_id": HEAD}, _review("owner", "APPROVED")]
+        self.assertIn("approved", tr.decide(self.roots, _pr(), [{"filename": "Cargo.toml"}], reviews))
+
+    def test_deleted_account_approval_does_not_count(self) -> None:
+        reviews = [{"user": None, "state": "APPROVED", "commit_id": HEAD}]
+        self.refused(_pr(), [{"filename": "Cargo.toml"}], reviews, "without")
+
     def test_fork_with_owner_approval_at_head_passes(self) -> None:
         reviews = [_review("OWNER", "CHANGES_REQUESTED", OTHER), _review("owner", "COMMENTED"), _review("owner", "APPROVED")]
         self.assertIn("approved", tr.decide(self.roots, _pr(), [{"filename": "Cargo.toml"}], reviews))
@@ -254,6 +277,22 @@ class EventRouting(unittest.TestCase):
             tr.run_check(_roots(ROOTS), "pull_request_target", ev, FakeApi())  # type: ignore[arg-type]
         self.assertIn("moved", str(cm.exception))
 
+    def test_head_moved_while_reading_fails_closed(self) -> None:
+        class FakeApi:
+            calls = 0
+
+            def get(self, path: str) -> dict:
+                FakeApi.calls += 1
+                return _pr(head=HEAD if FakeApi.calls == 1 else OTHER)
+
+            def get_all(self, path: str) -> list:
+                return [{"filename": "Cargo.toml"}] if path.endswith("files") else [_review("owner", "APPROVED")]
+
+        ev = {"pull_request": {"number": 7, "head": {"sha": HEAD}}}
+        with self.assertRaises(tr.Refused) as cm:
+            tr.run_check(_roots(ROOTS), "pull_request_target", ev, FakeApi())  # type: ignore[arg-type]
+        self.assertIn("while it was read", str(cm.exception))
+
 
 class ApiGuards(unittest.TestCase):
     def test_non_https_base_is_refused(self) -> None:
@@ -263,6 +302,17 @@ class ApiGuards(unittest.TestCase):
     def test_malformed_repo_is_refused(self) -> None:
         with self.assertRaises(tr.Refused):
             tr.Api("https://api.github.com", "o/r/../x", "t")
+
+    def test_off_origin_redirect_is_refused(self) -> None:
+        import urllib.request
+
+        h = tr._PinnedRedirects("https://api.github.com")
+        req = urllib.request.Request("https://api.github.com/repos/o/r/pulls/1", headers={"Authorization": "Bearer t"})
+        for url in ("https://evil.example/x", "https://api.github.com.evil.example/x", "http://api.github.com/x"):
+            with self.assertRaises(tr.Refused) as cm:
+                h.redirect_request(req, None, 301, "Moved", {}, url)
+            self.assertIn("off the API origin", str(cm.exception))
+        self.assertIsNotNone(h.redirect_request(req, None, 301, "Moved", {}, "https://api.github.com/repositories/1/pulls/1"))
 
     def test_off_origin_link_is_refused_before_any_request(self) -> None:
         api = tr.Api("https://api.github.com", "o/r", "t")
