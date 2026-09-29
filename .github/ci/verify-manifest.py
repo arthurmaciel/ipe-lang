@@ -2922,7 +2922,7 @@ def main() -> int:
     # ---- 6+7. sccache wiring; pinned CI inputs + env-file writes ----
     check_workflow_steps(errors)
 
-    # ---- 7. merge queue: gate producers trigger on it; its runs stay secret-free ----
+    # ---- 8. merge queue: gate producers trigger on it; its runs stay secret-free ----
     check_merge_queue(
         {
             str(e["producer"])

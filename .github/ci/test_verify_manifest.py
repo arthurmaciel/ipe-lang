@@ -2478,6 +2478,8 @@ class TestToolOrderingAndClosedShells(unittest.TestCase):
             f"- name: Pre\n  uses: {_CHECKOUT}\n  with:\n    fetch-depth: ${{{{ github.head_ref == 'x' && '0' || '1' }}}}\n",
             f"- name: Pre\n  uses: {_CHECKOUT}\n  with:\n    fetch-depth: ${{{{ github.event_name == 'push' && inputs.d || '1' }}}}\n",
             f"- name: Pre\n  uses: {_CHECKOUT}\n  with:\n    fetch-depth: ${{{{ github.event_name == 'push' && '0' || '1' }}}} ${{{{ inputs.d }}}}\n",
+            f"- name: Pre\n  uses: {_CHECKOUT}\n  with:\n    fetch-depth: ${{{{ github.event_name == 'push' && 'x' || '1' }}}}\n",
+            f"- name: Pre\n  uses: {_CHECKOUT}\n  with:\n    fetch-depth: |\n      ${{{{ github.event_name == 'push' && '0' || '1' }}}}\n",
             f"- name: Pre\n  uses: {_SETUP_PY}\n  with:\n    fetch-depth: ${{{{ github.event_name == 'push' && '0' || '1' }}}}\n",
             f"- name: Pre\n  uses: {_CHECKOUT}\n  with:\n    fetch-depth:\n",
         ):
