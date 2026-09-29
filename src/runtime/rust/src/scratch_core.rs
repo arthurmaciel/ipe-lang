@@ -1905,12 +1905,12 @@ mod tests {
     /// A label whose first dot-segment is a device name is refused before any entry exists.
     #[test]
     fn device_stem_label_is_refused_and_creates_nothing() -> io::Result<()> {
-        let mut fill = |buf: &mut [u8]| {
+        let mut entropy = |buf: &mut [u8]| {
             buf.fill(0xab);
             Ok::<(), EntropyUnavailable>(())
         };
         for label in ["nul.x", "CON.log", "com1.db", "conin$.x"] {
-            let refused = scratch_name(label, NameShape::Plain, &mut fill).err();
+            let refused = scratch_name(label, NameShape::Plain, &mut entropy).err();
             assert_eq!(
                 refused.as_ref().map(io::Error::kind),
                 Some(io::ErrorKind::InvalidInput),
@@ -1955,9 +1955,9 @@ mod tests {
         Err(refused(path, ScratchRefusal::NotPrivate))
     }
 
-    fn assert_refused(err: Option<io::Error>) {
+    fn assert_refused(err: Option<&io::Error>) {
         assert_eq!(
-            err.as_ref().map(io::Error::kind),
+            err.map(io::Error::kind),
             Some(io::ErrorKind::PermissionDenied)
         );
     }
@@ -1967,7 +1967,11 @@ mod tests {
     fn refused_private_file_is_removed() -> io::Result<()> {
         let root = ScratchDir::new("ipe-scratch-refusefile")?;
         let base = root.path();
-        assert_refused(private_file_under_with(base, "ipe-kernel", refuse_file).err());
+        assert_refused(
+            private_file_under_with(base, "ipe-kernel", refuse_file)
+                .err()
+                .as_ref(),
+        );
         assert_eq!(std::fs::read_dir(base)?.count(), 0);
         Ok(())
     }
@@ -1981,7 +1985,11 @@ mod tests {
             assert!(p.is_dir(), "the refused directory was created");
             Err(refused(p, ScratchRefusal::NotPrivate))
         };
-        assert_refused(ScratchDir::new_under_with(base, "ipe-dir", refuse).err());
+        assert_refused(
+            ScratchDir::new_under_with(base, "ipe-dir", refuse)
+                .err()
+                .as_ref(),
+        );
         assert_eq!(std::fs::read_dir(base)?.count(), 0);
         Ok(())
     }
@@ -1993,7 +2001,11 @@ mod tests {
         let base = tree.0.join("shared");
         let target = base.join("store.db");
         std::fs::write(&target, b"old")?;
-        assert_refused(AtomicSibling::create_with(&target, refuse_file).err());
+        assert_refused(
+            AtomicSibling::create_with(&target, refuse_file)
+                .err()
+                .as_ref(),
+        );
         assert_eq!(std::fs::read_dir(&base)?.count(), 1, "only the target");
         assert_eq!(std::fs::read(&target)?, b"old");
         Ok(())
@@ -2053,7 +2065,7 @@ mod tests {
     const DEAD_PID: u32 = 4_194_305;
 
     /// An age past [`STALE_SIBLING_AGE`].
-    const OLD: std::time::Duration = std::time::Duration::from_secs(2 * 60 * 60);
+    const OLD: std::time::Duration = std::time::Duration::from_hours(2);
 
     /// A sibling name for `label` carrying the pid spelled `pid` and the entropy spelled `hex`.
     fn sibling_leaf(label: &str, pid: &str, hex: &str) -> String {
@@ -2326,7 +2338,7 @@ mod tests {
             refusal
                 .as_ref()
                 .and_then(io::Error::get_ref)
-                .is_some_and(|inner| inner.is::<NoFittingBase>()),
+                .is_some_and(<dyn std::error::Error + Send + Sync + 'static>::is::<NoFittingBase>),
             "{refusal:?}"
         );
         assert!(!long.exists(), "a skipped base is never created");
