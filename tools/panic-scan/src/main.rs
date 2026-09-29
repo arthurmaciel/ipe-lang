@@ -264,7 +264,7 @@ fn run(mode: &Mode) -> Result<bool, Unauditable> {
             continue;
         }
         if panic_scan::is_test_path(path) {
-            let dir = path.parent().unwrap_or(Path::new(""));
+            let dir = path.parent().unwrap_or_else(|| Path::new(""));
             if !verified_test_dirs.contains(dir) {
                 panic_scan::check_test_path(Path::new(""), path).map_err(|source| {
                     Unauditable::TestPath {
@@ -356,7 +356,7 @@ impl Audit {
     /// target is judged both as written (`..` folded lexically) and as the
     /// file system resolves it, and the resolved file is the one scanned.
     fn resolve(&self, file: &Path, source: &IncludedSource) -> Result<Vec<PathBuf>, Unauditable> {
-        let dir = file.parent().unwrap_or(Path::new(""));
+        let dir = file.parent().unwrap_or_else(|| Path::new(""));
         let mut bases = vec![dir.to_path_buf()];
         if source.form == IncludeForm::PathAttr && !source.inline_mods.is_empty() {
             if let Some(stem) = file.file_stem() {

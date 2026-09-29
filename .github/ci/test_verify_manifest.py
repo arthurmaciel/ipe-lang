@@ -53,6 +53,7 @@ check_one_ipe_build = verify_manifest.check_one_ipe_build
 check_scoped_package_coverage = verify_manifest.check_scoped_package_coverage
 check_drift_sees_untracked = verify_manifest.check_drift_sees_untracked
 check_dependabot_pr_budget = verify_manifest.check_dependabot_pr_budget
+check_workspace_inheritance = verify_manifest.check_workspace_inheritance
 
 with open(os.path.join(HERE, "github-env-allowlist.txt")) as _f:
     VALID_ENV_ALLOWLIST = _f.read()
@@ -4232,6 +4233,102 @@ class TestDriftSeesUntracked(unittest.TestCase):
     def test_unreadable_inputs_refused(self) -> None:
         self.assertTrue(any("check 17: cannot read" in e for e in self.errors(wf="jobs: [\n")))
         self.assertTrue(any("no `checks:` list" in e for e in self.errors(manifest="checks: 1\n")))
+
+
+_WI_ROOT = """\
+[workspace]
+members = ["a", "rt"]
+
+[workspace.package]
+edition = "2024"
+
+[workspace.lints.clippy]
+unwrap_used = "deny"
+"""
+_WI_INHERITS = '[package]\nname = "a"\nedition.workspace = true\n\n[lints]\nworkspace = true\n'
+_WI_OWN = '[package]\nname = "rt"\nedition = "2024"\n\n[lints.clippy]\npanic = "deny"\n'
+
+
+class TestWorkspaceInheritance(unittest.TestCase):
+    """Check 19: members inherit the workspace edition and lints, bar a tested allowlist."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.repo = self._tmp.name
+        self.files = {"Cargo.toml": _WI_ROOT, "a/Cargo.toml": _WI_INHERITS, "rt/Cargo.toml": _WI_OWN}
+        self.exempt = {"rt": "vendored"}
+
+    def tearDown(self) -> None:
+        self._tmp.cleanup()
+
+    def errors(self) -> list[str]:
+        for rel, text in self.files.items():
+            _write(os.path.join(self.repo, rel), text)
+        errors: list[str] = []
+        with mock.patch.object(verify_manifest, "WORKSPACE_INHERIT_EXEMPT", self.exempt):
+            check_workspace_inheritance(errors, root=os.path.join(self.repo, ".github"))
+        return errors
+
+    def assertRefused(self, needle: str) -> None:
+        errors = self.errors()
+        self.assertTrue(any(needle in e for e in errors), f"expected {needle!r} in {errors}")
+
+    def test_valid_passes(self) -> None:
+        self.assertEqual(self.errors(), [])
+
+    def test_repo_passes(self) -> None:
+        errors: list[str] = []
+        check_workspace_inheritance(errors)
+        self.assertEqual(errors, [])
+
+    def test_repo_exemptions_are_exactly_the_documented_two(self) -> None:
+        self.assertEqual(
+            set(verify_manifest.WORKSPACE_INHERIT_EXEMPT), {"src/runtime/rust", "tools/ipe-ffi-inspector"}
+        )
+
+    def test_literal_edition_refused(self) -> None:
+        self.files["a/Cargo.toml"] = _WI_INHERITS.replace("edition.workspace = true", 'edition = "2021"')
+        self.assertRefused("a/Cargo.toml sets edition '2021'")
+
+    def test_missing_edition_refused(self) -> None:
+        self.files["a/Cargo.toml"] = _WI_INHERITS.replace("edition.workspace = true\n", "")
+        self.assertRefused("a/Cargo.toml sets edition None")
+
+    def test_missing_lints_refused(self) -> None:
+        self.files["a/Cargo.toml"] = _WI_INHERITS.replace("\n[lints]\nworkspace = true\n", "")
+        self.assertRefused("a/Cargo.toml does not inherit the workspace lint policy")
+
+    def test_own_lints_on_a_non_exempt_member_refused(self) -> None:
+        self.files["a/Cargo.toml"] = _WI_INHERITS.replace("[lints]\nworkspace = true", '[lints.clippy]\npanic = "allow"')
+        self.assertRefused("a/Cargo.toml does not inherit the workspace lint policy")
+
+    def test_exempt_member_with_other_edition_refused(self) -> None:
+        self.files["rt/Cargo.toml"] = _WI_OWN.replace('"2024"', '"2021"')
+        self.assertRefused("its literal edition must equal the workspace's '2024'")
+
+    def test_exempt_member_without_own_lints_refused(self) -> None:
+        self.files["rt/Cargo.toml"] = _WI_OWN.replace('[lints.clippy]\npanic = "deny"\n', "")
+        self.assertRefused("must carry its own `[lints]` table")
+
+    def test_stale_exemption_that_inherits_refused(self) -> None:
+        self.files["rt/Cargo.toml"] = _WI_INHERITS
+        self.assertRefused("inherits the workspace edition and lints anyway")
+
+    def test_exemption_for_a_non_member_refused(self) -> None:
+        self.exempt = {"rt": "vendored", "gone": "x"}
+        self.assertRefused("'gone', which is not a workspace member")
+
+    def test_glob_member_refused(self) -> None:
+        self.files["Cargo.toml"] = _WI_ROOT.replace('["a", "rt"]', '["a", "rt", "tools/*"]')
+        self.assertRefused("'tools/*' is not a literal normalized path")
+
+    def test_missing_member_manifest_refused(self) -> None:
+        self.files["Cargo.toml"] = _WI_ROOT.replace('["a", "rt"]', '["a", "rt", "b"]')
+        self.assertRefused("b/Cargo.toml is missing")
+
+    def test_root_without_workspace_lints_refused(self) -> None:
+        self.files["Cargo.toml"] = _WI_ROOT.replace('[workspace.lints.clippy]\nunwrap_used = "deny"\n', "")
+        self.assertRefused("`[workspace.lints]` table")
 
 
 if __name__ == "__main__":

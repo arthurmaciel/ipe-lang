@@ -232,6 +232,13 @@ skipped. Limits are listed on `check_workflow_steps`. Likewise mold is
       `DEPENDABOT_OPEN_PR_BUDGET`, so update PRs cannot crowd the open-PR
       budget the merge queue is sized for.  LIMIT: security-update PRs obey
       Dependabot's own fixed ceiling, not this key, and are not bounded here.
+  19. Workspace inheritance: every root `[workspace] members` entry (a
+      literal path, no glob) sets `edition.workspace = true` and a `[lints]`
+      table of only `workspace = true`, so the root edition and clippy policy
+      govern it.  `WORKSPACE_INHERIT_EXEMPT` names the members that keep
+      their own, each with its reason; an exempt member's literal edition
+      must equal the workspace edition and it must carry its own `[lints]`
+      table, and an entry that is no member or inherits anyway is refused.
 
 Pure stdlib + PyYAML (already a CI dependency).  No network; check 12 runs
 `git ls-files` locally to list tracked paths.
@@ -250,6 +257,11 @@ import re
 import subprocess
 import sys
 from dataclasses import dataclass, replace
+
+try:
+    import tomllib
+except ImportError:  # pragma: no cover - Python < 3.11; CI runs 3.11+
+    import tomli as tomllib  # type: ignore[no-redef]
 
 try:
     import yaml
@@ -1780,6 +1792,91 @@ def check_dependabot_pr_budget(errors: list[str], root: str = REPO_ROOT) -> None
             f"directories, more than DEPENDABOT_OPEN_PR_BUDGET ({DEPENDABOT_OPEN_PR_BUDGET}); "
             "lower an `open-pull-requests-limit`"
         )
+
+
+# Check 19: the workspace members that keep their own edition and lint table,
+# each with its reason. Every other member inherits both from the root.
+WORKSPACE_INHERIT_EXEMPT = {
+    "src/runtime/rust": (
+        "vendored verbatim into every emitted project, where no workspace root "
+        "exists to inherit from; it carries its own stricter runtime lint table"
+    ),
+    "tools/ipe-ffi-inspector": (
+        "a CLI whose exit-on-error paths use unwrap/expect/panic under the "
+        "token-level panic-scan gate, so its own table relaxes those three lints"
+    ),
+}
+
+
+def _load_toml(path: str) -> dict[str, object] | str:
+    """`path` parsed as TOML, or the reason it cannot be."""
+    try:
+        with open(path, "rb") as f:
+            return tomllib.load(f)
+    except FileNotFoundError:
+        return "is missing"
+    except (OSError, tomllib.TOMLDecodeError) as e:
+        return f"is unreadable ({e})"
+
+
+def check_workspace_inheritance(errors: list[str], root: str = REPO_ROOT) -> None:
+    """Check 19 (see the module docstring)."""
+    repo = os.path.dirname(root)
+    top = _load_toml(os.path.join(repo, "Cargo.toml"))
+    if isinstance(top, str):
+        errors.append(f"check 19: the root Cargo.toml {top}; refused")
+        return
+    ws = top.get("workspace")
+    members = ws.get("members") if isinstance(ws, dict) else None
+    pkg = ws.get("package") if isinstance(ws, dict) else None
+    edition = pkg.get("edition") if isinstance(pkg, dict) else None
+    lints = ws.get("lints") if isinstance(ws, dict) else None
+    if not isinstance(members, list) or not isinstance(edition, str) or not isinstance(lints, dict) or not lints:
+        errors.append(
+            "check 19: the root Cargo.toml needs a `[workspace] members` list, a "
+            "`[workspace.package] edition` and a `[workspace.lints]` table; refused"
+        )
+        return
+    seen: set[str] = set()
+    for m in members:
+        if not isinstance(m, str) or not m or any(c in m for c in "*?[{") or posixpath.normpath(m) != m:
+            errors.append(f"check 19: workspace member {m!r} is not a literal normalized path; refused")
+            continue
+        seen.add(m)
+        where = f"{m}/Cargo.toml"
+        doc = _load_toml(os.path.join(repo, m, "Cargo.toml"))
+        if isinstance(doc, str):
+            errors.append(f"check 19: {where} {doc}; refused")
+            continue
+        package = doc.get("package")
+        own_edition = package.get("edition") if isinstance(package, dict) else None
+        own_lints = doc.get("lints")
+        if m in WORKSPACE_INHERIT_EXEMPT:
+            if own_edition == {"workspace": True} and own_lints == {"workspace": True}:
+                errors.append(
+                    f"check 19: WORKSPACE_INHERIT_EXEMPT names {m!r}, which inherits the "
+                    "workspace edition and lints anyway; drop the stale exemption"
+                )
+            elif own_edition != edition:
+                errors.append(
+                    f"check 19: {where} is exempt from inheriting, so its literal edition "
+                    f"must equal the workspace's {edition!r}, not {own_edition!r}"
+                )
+            elif not isinstance(own_lints, dict) or not own_lints or "workspace" in own_lints:
+                errors.append(f"check 19: {where} is exempt from inheriting, so it must carry its own `[lints]` table")
+            continue
+        if own_edition != {"workspace": True}:
+            errors.append(
+                f"check 19: {where} sets edition {own_edition!r}; a workspace member "
+                "inherits it (`edition.workspace = true`)"
+            )
+        if own_lints != {"workspace": True}:
+            errors.append(
+                f"check 19: {where} does not inherit the workspace lint policy; it needs "
+                "`[lints]` with only `workspace = true`"
+            )
+    for m in sorted(set(WORKSPACE_INHERIT_EXEMPT) - seen):
+        errors.append(f"check 19: WORKSPACE_INHERIT_EXEMPT names {m!r}, which is not a workspace member; drop it")
 
 
 IPE_BUILD_PRODUCER = "build-tools"
@@ -4257,6 +4354,9 @@ def main() -> int:
 
     # ---- 18. Dependabot's open update PRs fit the open-PR budget ----
     check_dependabot_pr_budget(errors)
+
+    # ---- 19. Every workspace member inherits the workspace edition and lints ----
+    check_workspace_inheritance(errors)
 
     # ---- 3. fail-closed dependency surfacing ----
     def surfaced_dispositions(job: Job) -> set[str]:

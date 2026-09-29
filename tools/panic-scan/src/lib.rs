@@ -70,8 +70,9 @@ const FNS: &[&str] = &["panic_any", "unreachable_unchecked"];
 /// `process::abort` (panic-free hard abort) and `process::exit` (boundary-only).
 const PROCESS_FNS: &[&str] = &["abort", "exit"];
 
-/// The per-site sanction marker. A hit is suppressed when this exact text
-/// appears on the hit line itself, or on the contiguous run of comment/attribute
+/// The per-site sanction marker.
+///
+/// A hit is suppressed when this exact text appears on the hit line itself, or on the contiguous run of comment/attribute
 /// lines directly above it — the annotation block *attached to that construct*.
 /// The block ends at the first line above that is neither a comment (`//`,
 /// `///`, `//!`) nor an attribute (`#[ … ]`): a marker on a preceding *code*
@@ -569,10 +570,8 @@ impl Scanner {
         next: usize,
     ) -> Option<usize> {
         if let Ok(meta) = syn::parse2::<Meta>(body.clone()) {
-            if !inner {
-                if let Some(end) = gated_item_end(&meta, toks, next) {
-                    return Some(end);
-                }
+            if !inner && let Some(end) = gated_item_end(&meta, toks, next) {
+                return Some(end);
             }
             self.visit_owned_meta(&meta);
             return None;
@@ -626,16 +625,16 @@ impl Scanner {
                     self.hit(line_of(f), format!("process::{fname}"));
                 }
             }
-        } else if name == "mod" {
-            if let (Some(TokenTree::Ident(m)), Some(semi)) = (after, second) {
-                let module = name_of(m);
-                if is_punct(semi, ';') && module.eq_ignore_ascii_case(TESTS_MODULE) {
-                    self.refuse(
-                        line_of(m),
-                        IncludeForm::ModDecl,
-                        IncludeTarget::TestPath(module),
-                    );
-                }
+        } else if name == "mod"
+            && let (Some(TokenTree::Ident(m)), Some(semi)) = (after, second)
+        {
+            let module = name_of(m);
+            if is_punct(semi, ';') && module.eq_ignore_ascii_case(TESTS_MODULE) {
+                self.refuse(
+                    line_of(m),
+                    IncludeForm::ModDecl,
+                    IncludeTarget::TestPath(module),
+                );
             }
         }
     }
@@ -818,10 +817,11 @@ impl<'ast> Visit<'ast> for Scanner {
             .map(|seg| (name_of(&seg.ident), line_of(&seg.ident)))
             .collect();
         for pair in names.windows(2) {
-            if let [(module, _), (func, line)] = pair {
-                if module == "process" && PROCESS_FNS.contains(&func.as_str()) {
-                    self.hit(*line, format!("process::{func}"));
-                }
+            if let [(module, _), (func, line)] = pair
+                && module == "process"
+                && PROCESS_FNS.contains(&func.as_str())
+            {
+                self.hit(*line, format!("process::{func}"));
             }
         }
         visit::visit_path(self, path);
@@ -934,10 +934,8 @@ fn is_statement_boundary(text: &str) -> bool {
 /// (`;`, `{`, `}`) after such a strip are still a sound over-approximation of a
 /// boundary for the marker walk.
 fn strip_trailing_line_comment(text: &str) -> &str {
-    match text.find("//") {
-        Some(pos) => text.get(..pos).unwrap_or(text),
-        None => text,
-    }
+    text.find("//")
+        .map_or(text, |pos| text.get(..pos).unwrap_or(text))
 }
 
 /// True when a trimmed source line is a comment (`//`, `///`, `//!`) or an
@@ -966,12 +964,13 @@ pub(crate) fn cfg_pred_is_test_only(pred: &TokenStream) -> bool {
     }
     // `all( … )` — test-only if any operand is test-only. Only `all` combines;
     // `any`/`not` (or anything else) are treated as possibly-production.
-    if let [TokenTree::Ident(id), TokenTree::Group(g)] = toks.as_slice() {
-        if id == "all" && g.delimiter() == Delimiter::Parenthesis {
-            return split_top_level_commas(&g.stream())
-                .iter()
-                .any(cfg_pred_is_test_only);
-        }
+    if let [TokenTree::Ident(id), TokenTree::Group(g)] = toks.as_slice()
+        && id == "all"
+        && g.delimiter() == Delimiter::Parenthesis
+    {
+        return split_top_level_commas(&g.stream())
+            .iter()
+            .any(cfg_pred_is_test_only);
     }
     false
 }
@@ -985,7 +984,11 @@ pub(crate) fn split_top_level_commas(ts: &TokenStream) -> Vec<TokenStream> {
     for tt in ts.clone() {
         match &tt {
             TokenTree::Punct(p) if p.as_char() == ',' => {
-                operands.push(current.drain(..).collect::<TokenStream>());
+                operands.push(
+                    std::mem::take(&mut current)
+                        .into_iter()
+                        .collect::<TokenStream>(),
+                );
             }
             _ => current.push(tt),
         }
@@ -1043,10 +1046,9 @@ fn f() {
 }
 ";
         let hits = scan_str(src).expect("fixture must lex");
-        let lines: Vec<usize> = hits.iter().map(|h| h.line).collect();
         // The `.unwrap()` on line 4 is unannotated → it MUST be reported.
         assert!(
-            lines.contains(&4),
+            hits.iter().any(|h| h.line == 4),
             "earlier marker leaked downward, suppressing an unmarked .unwrap(): {hits:?}"
         );
     }
@@ -1091,10 +1093,9 @@ fn f() {
 }
 ";
         let hits = scan_str(src).expect("fixture must lex");
-        let lines: Vec<usize> = hits.iter().map(|h| h.line).collect();
         // The `.expect(..)` on line 5 is not the marked statement → MUST report.
         assert!(
-            lines.contains(&5),
+            hits.iter().any(|h| h.line == 5),
             "prior-statement marker leaked into a later multi-line construct: {hits:?}"
         );
     }
@@ -1139,9 +1140,8 @@ fn f() {
 }
 ";
         let hits = scan_str(src).expect("fixture must lex");
-        let lines: Vec<usize> = hits.iter().map(|h| h.line).collect();
         assert!(
-            lines.contains(&4),
+            hits.iter().any(|h| h.line == 4),
             "marker separated by a blank line still suppressed the construct: {hits:?}"
         );
     }
