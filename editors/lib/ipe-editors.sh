@@ -11,7 +11,7 @@
 #   * one source for the grammar, queries and editor files — the local
 #     checkout this script lives in, or the `IPE_EDITORS_REF` ref on GitHub.
 
-IPE_REPO_SLUG="arthurmaciel/ipe-lang"
+IPE_REPO_SLUG="ipe-lang/compiler"
 IPE_EDITORS_REF="${IPE_EDITORS_REF:-main}"
 IPE_RAW_BASE="https://raw.githubusercontent.com/$IPE_REPO_SLUG/$IPE_EDITORS_REF"
 

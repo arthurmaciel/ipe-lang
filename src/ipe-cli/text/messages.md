@@ -609,7 +609,7 @@ one or more tests failed (runner exited {code})
 {glyph} No prebuilt binary for {version} on {platform}.
     Possibly the binaries for that version are still being generated.
     If you prefer, build from source:
-        cargo install --git https://github.com/arthurmaciel/ipe-lang ipe
+        cargo install --git https://github.com/ipe-lang/compiler ipe
 
 ## cli-health-critical
 

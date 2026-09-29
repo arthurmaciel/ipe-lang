@@ -24,8 +24,6 @@ syntax and partially implements [Sky lang](https://sky-lang.org/) standard libra
 It aims to be a community-centered programming language — check out our [principles](PRINCIPLES.md)
 to learn more about it.
 
-**Documentation:** <https://ipe-lang.github.io/compiler/> — guides, topics, and the full stdlib reference (also offline via `ipe doc`).
-
 ## Install
 
 ```sh
@@ -50,6 +48,39 @@ ipe init myapp web solo     # <dir>=myapp  <shape>=web  <runtime>=solo
 ```
 
 See [Shapes](#shapes) below and the [getting started](docs/guide/getting-started.md) guide.
+
+The first build of a new project on a fresh machine also compiles the Rust
+dependencies of the runtime, so it takes minutes rather than seconds (longer for a
+`solo` wasm client). That cost is paid once; later builds reuse the compiled
+dependencies — see [Performance](#performance-dev-loop).
+
+## Discover the language
+
+The documentation site — guides, topics, and the full stdlib reference — is at
+**<https://ipe-lang.github.io/compiler/>**.
+
+The same documentation ships inside the `ipe` binary, so it works offline and
+always matches the version you run. `ipe doc <key>` looks up any entity by key:
+
+```sh
+ipe doc Ipe.List        # a module's types and values with their signatures
+ipe doc List.map        # one function: its signature and doc-comment
+ipe doc case            # a language construct
+ipe doc shapes          # a topic
+ipe doc IPE-N0004       # a diagnostic code, with its explanation and fix
+ipe doc version         # a CLI command
+ipe doc list            # every stdlib module (and your project's)
+```
+
+A key that names no entry exactly prints the closest matches, each as the
+exact `ipe doc …` command that opens it.
+
+`ipe doc serve` builds the whole reference — the stdlib plus your project's own
+modules and doc-comments — as an HTML site and serves it read-only on loopback
+(`--port <n>` pins the port). Plain `ipe doc` writes it to disk instead —
+`docs.json`, Markdown, and HTML under `doc/` (`--out <dir>` to change it).
+`ipe doc check` fails when an exposed binding of your project lacks a
+doc-comment.
 
 ## Shapes
 
@@ -84,12 +115,12 @@ main =
 
 ## Performance (dev loop)
 
-Wall-clock, measured by [`tools/scripts/perf/bench.sh`](tools/scripts/perf) on the `web`
-served counter with the released binary:
+Wall-clock, measured by [`tools/scripts/perf/bench.sh`](tools/scripts/perf/bench.sh) on the `web`
+served counter with the released binary, once the runtime's dependencies are compiled:
 
 - **App recompilation:** ≈ 10 seconds — needed only for a **type** change (a `Model` field, a function type signature).
 - **Dev watch hot reload:** ≈ 500 **milliseconds** — every other edit (text, `init`, `update`, subscriptions, styles) hot-swaps into the running app, no `cargo`.
-- Cold build ≈ 18 s · release binary 7.0 MB · peak RAM 7.8 MB. → [faster builds](docs/topics/faster-builds.md)
+- Clean app build (after `ipe clean`) ≈ 18 s · release binary 7.0 MB · peak RAM 7.8 MB. → [faster builds](docs/guide/faster-builds.md)
 
 ## Features
 
@@ -98,7 +129,7 @@ served counter with the released binary:
 - **Compiles to readable Rust**, incrementally (salsa); `ipe watch` hot-swaps most edits and recompiles only on a type change.
 - **No authored abrupt failure** — the compiler and runtime carry no `panic!` / `unwrap` / `expect` / index panic; every failure is a typed `Result` or diagnostic.
 - **Capabilities are inferred, not declared** — `ipe capabilities <entry>` reports exactly what a program may do (network, fs, env, ffi, …). → [capabilities](docs/reference/capabilities.md)
-- **Accessible by default** — real `<button>`s, semantic landmarks, a contrast-safe focus ring, and reduced-motion honored out of the box. → `ipe doc Ui`
+- **Accessible by default** — real `<button>`s, semantic landmarks, a contrast-safe focus ring, and reduced-motion honored out of the box.
 - **Rust FFI** — `ipe rust add <crate>` binds a crate as a generated `Rust.<Crate>` interface (sandbox-inspected; discloses the `native-ffi` capability). → [dependencies](docs/guide/getting-started.md)
 - **Delivery grammar** — `ipe build web desktop|ios|android` for a fast dev bundle, `ipe release web desktop|ios|android` for a production distributable (desktop-webview or mobile system-webview shell).
 - **Eject to plain Rust** — `ipe eject` vendors and tree-shakes the runtime into a standalone Cargo project you build with no `ipe` toolchain.
@@ -106,7 +137,6 @@ served counter with the released binary:
 
 ## Tooling
 
-- `ipe doc` — reference documentation from source (json / markdown / html; runs with or without a project).
 - `ipe lint` / `ipe lint --fix` — advisory static analysis, configured by a `lint.ipe`. → [lint guide](docs/guide/lint.md)
 - `ipe lsp` — completion, go-to-definition, find-references, rename, code actions, semantic tokens over stdio. → [editor setup](docs/topics/editor-integration.md)
 - `ipe run --record` records a cli/worker app's TEA session (each `(msg, model)` step, bounded ring) to `out/session.ipelog` as plain text, plus a typed `out/session.ipemsgs` when the app's `Msg` is encodable. `ipe run --replay [<log>]` rebuilds the app and re-folds `update` over that log from `init` (or from the recorded base, if the ring overflowed) with no `Cmd` fired — no I/O, network or DB effect runs again — printing each step, control bytes stripped, and the final model. The same program and log give byte-identical output, so a hand-typed bug reproduction becomes a shareable regression. A log from a changed program, or a truncated or oversized one, is refused whole. A `Msg` carrying a `Secret` is recorded as a trace only; `--replay` then shows that trace (the default when no typed log exists, or any `.ipelog` you name) — labelled as a trace, nothing re-run, capped, and with every control character stripped, so a handed-over or planted log cannot drive your terminal. Read logs with `--replay`, not `cat`.
@@ -128,7 +158,7 @@ served counter with the released binary:
 
 ## Static compilation
 
-`ipe build --static` produces a fully-static musl binary (zero runtime dependencies), afer running
+`ipe build --static` produces a fully-static musl binary (zero runtime dependencies), after running
 `rustup target add x86_64-unknown-linux-musl`.
 
 ## Support

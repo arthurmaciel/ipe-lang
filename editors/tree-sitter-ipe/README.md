@@ -1,7 +1,7 @@
 # tree-sitter-ipe
 
 A [tree-sitter](https://tree-sitter.github.io/) grammar for
-[Ipê](https://github.com/arthurmaciel/ipe-lang), giving Helix, Zed, Neovim,
+[Ipê](https://github.com/ipe-lang/compiler), giving Helix, Zed, Neovim,
 Emacs, and any other tree-sitter host syntax highlighting for `.ipe` sources.
 The compiler's own LSP (`ipe lsp`) stays the source of semantics; this grammar
 is complementary — highlighting only.
