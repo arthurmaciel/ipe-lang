@@ -172,7 +172,8 @@ struct Layout {
 }
 
 impl Layout {
-    /// The layout `text`, its tail width measured once as it is kept.
+    /// The layout `text`, its tail width measured once as it is kept. The walk
+    /// is linear in `text`, whose bytes the render that wrote it already spent.
     fn of(text: &str) -> Self {
         Self {
             text: text.to_owned(),
@@ -682,9 +683,9 @@ impl StopMark {
             StopBound::FirstLineWithin { width, clear } => {
                 let line_start = last_newline.map_or(0, |nl| nl.saturating_add(1));
                 let scan = (*clear).max(from).max(line_start.saturating_add(*width));
-                let over = out.get(scan..).and_then(|rest| {
-                    rest.bytes()
-                        .position(|b| !width_neutral(b))
+                let over = out.as_bytes().get(scan..).and_then(|rest| {
+                    rest.iter()
+                        .position(|&b| !width_neutral(b))
                         .map(|at| scan.saturating_add(at))
                 });
                 let (scanned, observed) = over.map_or_else(
@@ -1137,8 +1138,10 @@ fn memoized(
 /// Replay onto `out` from `base` the layout kept for `key` under `reach`, or
 /// failing that the cut-short one kept under `cut_key`, and return its length.
 ///
-/// A cut-short layout is the same bytes as the render it replays, cut where that
-/// render's width bound stopped it, so replaying it records the cut again.
+/// A cut-short layout matches a fresh render only up to its cut, and only under
+/// the width bound in its key: it holds the byte past the bound that stopped
+/// the kept render, so every verdict read under that bound fails the same way
+/// and replaying it records the cut again.
 fn replay(
     key: &MemoKey,
     cut_key: Option<&CutKey>,
@@ -2618,13 +2621,14 @@ fn assign_rhs_fits_same_line(
             trial(out, TrialReach::FirstLine, |out, mark| {
                 render_at(rhs, cfg, indent, glue_col, true, out);
                 let line = mark.line(out);
-                !line.contains('\n') && glue_col + line.len() + trailer <= cfg.max_width
+                !line.contains('\n')
+                    && glue_col.saturating_add(line.len()).saturating_add(trailer) <= cfg.max_width
             })
         },
         |measure| {
-            measure
-                .width()
-                .is_some_and(|w| glue_col + w + trailer <= cfg.max_width)
+            measure.width().is_some_and(|w| {
+                glue_col.saturating_add(w).saturating_add(trailer) <= cfg.max_width
+            })
         },
     )
 }
@@ -2741,7 +2745,10 @@ fn render_assign(
     let head_fits = |body: &str| {
         let head_w = body.split('\n').next().unwrap_or_default().len();
         let head_trailer = if body.contains('\n') { 0 } else { trailer };
-        rhs_indent + head_w + head_trailer <= cfg.max_width
+        rhs_indent
+            .saturating_add(head_w)
+            .saturating_add(head_trailer)
+            <= cfg.max_width
     };
     let rhs_break_fits = if glue_viable {
         let tried = attempt(out, cfg.max_width, |out, keeps| {
