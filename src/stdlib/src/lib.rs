@@ -155,7 +155,14 @@ const RANDOM: &str = include_str!("../Ipe/Random.ipe");
 /// [`COMPILED_STD_MODULES`] (NOT `MODULES`); NOT in `STDLIB_MODULE_QUALIFIERS`,
 /// so the disjointness invariant holds.
 const ENCODING: &str = include_str!("../Ipe/Encoding.ipe");
-/// `Ipe.File` — file-system effect kernels.
+/// `Ipe.File` — file-system effects, compiled-source Layer-3.
+///
+/// Every member but `readFileLimit` is a point-free `Kernel.kernel "File_*"`
+/// alias; `readFileLimit` is pure Ipê that unwraps its typed `ByteSize` ceiling
+/// into the private raw-`Int` kernel alias, so the documented `ByteSize`
+/// contract is the one the compiler enforces. Registered in
+/// [`COMPILED_STD_MODULES`] (NOT `MODULES`); NOT in `STDLIB_MODULE_QUALIFIERS`,
+/// so the disjointness invariant holds.
 const FILE: &str = include_str!("../Ipe/File.ipe");
 /// `Ipe.Http` — outbound HTTP client kernels + pure builders.
 const HTTP: &str = include_str!("../Ipe/Http.ipe");
@@ -322,10 +329,6 @@ pub const MODULES: &[StdModule] = &[
     StdModule {
         name: "Ipe.System",
         source: SYSTEM,
-    },
-    StdModule {
-        name: "Ipe.File",
-        source: FILE,
     },
     StdModule {
         name: "Ipe.Http",
@@ -1843,6 +1846,12 @@ pub const COMPILED_STD_MODULES: &[CompiledStdModule] = &[
     CompiledStdModule {
         dotted: "Ipe.Path",
         source: PATH,
+    },
+    // Ipe.File — Layer-3 source over the `File_*` effect kernels
+    // (`ipe_runtime::file::*`); `readFileLimit` unwraps its `ByteSize` ceiling.
+    CompiledStdModule {
+        dotted: "Ipe.File",
+        source: FILE,
     },
     // Ipe.Html.Attributes — Layer-3 source; fixed-key builders are pure Ipê over
     // the retained `Kernel.kernel "Attr_*"` primitives (`ipe_runtime::html::*`).

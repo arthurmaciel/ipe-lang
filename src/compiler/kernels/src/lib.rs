@@ -9744,12 +9744,13 @@ impl StdlibKernel {
         const TASK_MAP_ERROR: TyShape = TyShape::Fun(&ERROR_TO_ERROR, &TASK_A_TO_TASK_A);
         // `onError : (Error -> Task a) -> Task a -> Task a`.
         const TASK_ON_ERROR: TyShape = TyShape::Fun(&ERROR_TO_TASK_A, &TASK_A_TO_TASK_A);
-        // `fromResult : Result a b -> Task b`. (`RESULT_A_B` defined above.)
-        const TASK_FROM_RESULT: TyShape = TyShape::Fun(&RESULT_A_B, &TASK_B);
-        // `andThenResult : (a -> Result b c) -> Task a -> Task c`.
-        // (`RESULT_B_C` / `A_TO_RESULT_B_C` defined above.)
-        const TASK_A_TO_TASK_C: TyShape = TyShape::Fun(&TASK_A, &TASK_C);
-        const TASK_AND_THEN_RESULT: TyShape = TyShape::Fun(&A_TO_RESULT_B_C, &TASK_A_TO_TASK_C);
+        // `fromResult : Result Error a -> Task a`. The `Result`'s error slot is
+        // the `Task`'s fixed `Error` channel.
+        const TASK_FROM_RESULT: TyShape = TyShape::Fun(&RESULT_ERR_A, &TASK_A);
+        // `andThenResult : (a -> Result Error b) -> Task a -> Task b`.
+        const RESULT_ERR_B: TyShape = TyShape::Con(BuiltinTag::Result, &[ERROR, B]);
+        const A_TO_RESULT_ERR_B: TyShape = TyShape::Fun(&A, &RESULT_ERR_B);
+        const TASK_AND_THEN_RESULT: TyShape = TyShape::Fun(&A_TO_RESULT_ERR_B, &TASK_A_TO_TASK_B);
         // `sequence / parallel : List (Task a) -> Task (List a)`.
         const LIST_TASK_A: TyShape = TyShape::Con(BuiltinTag::List, &[TASK_A]);
         const TASK_LIST_A: TyShape = TyShape::Con(BuiltinTag::Task, &[LIST_A]);

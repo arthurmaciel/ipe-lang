@@ -143,7 +143,7 @@ Render text in reverse video (swap foreground and background).
 ## `color`
 
 ```ipe
-color : Color -> Attribute msg
+color : AnsiColor -> Attribute msg
 ```
 
 `color c` — the foreground (text) colour, from the terminal palette.
@@ -151,7 +151,7 @@ color : Color -> Attribute msg
 ## `bg`
 
 ```ipe
-bg : Color -> Attribute msg
+bg : AnsiColor -> Attribute msg
 ```
 
 `bg c` — the background colour, from the terminal palette.

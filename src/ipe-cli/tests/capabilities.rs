@@ -182,6 +182,42 @@ fn verify_rejects_overdeclared() {
     assert!(r.is_err(), "an over-declaration must be rejected");
 }
 
+/// A program importing the compiled-source `Ipe.File` veneer discloses
+/// `filesystem`.
+///
+/// The kernel reached through the veneer's alias carries the tag, so the full
+/// pipeline (compiled-stdlib injection included) must infer exactly
+/// `{filesystem}` and refuse an empty declaration.
+#[test]
+fn importing_ipe_file_discloses_filesystem() -> TestResult {
+    let dir = write_single("file-cap", FILE_WRITE_APP)?;
+    let entry = dir.join("Main.ipe");
+    let exact = verify_capabilities(&entry, &BTreeSet::from([Capability::Filesystem]));
+    let under = verify_capabilities(&entry, &BTreeSet::new());
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!(
+        exact.is_ok(),
+        "importing Ipe.File must infer exactly {{filesystem}}: {exact:?}"
+    );
+    assert!(
+        under.is_err(),
+        "a filesystem program declaring nothing must be rejected"
+    );
+    Ok(())
+}
+
+const FILE_WRITE_APP: &str = r#"module Main exposing (main)
+
+import Ipe.File as File
+import Ipe.Path as Path
+import Ipe.Task as Task
+
+
+main =
+    Task.fromResult (Path.fromString "/tmp/ipe-cap-probe")
+        |> Task.andThen (\p -> File.writeFile p "probe")
+"#;
+
 /// Acceptance test: a program using both `Http.get` (network) and `Time.now`
 /// (clock) must report exactly `{network, clock}`. Any drift is a mis-classified
 /// tag, caught against a real program rather than a minimal fixture.

@@ -64,6 +64,14 @@ exists : Path -> Task Error Bool
 remove : Path -> Task Error ()
 ```
 
+## `delete`
+
+```ipe
+delete : Path -> Task Error ()
+```
+
+Alias for `remove`.
+
 ## `mkdirAll`
 
 ```ipe
