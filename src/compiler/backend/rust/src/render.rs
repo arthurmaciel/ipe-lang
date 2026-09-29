@@ -136,10 +136,17 @@ fn render_bounded(doc: &Doc, cfg: RenderConfig, indent: usize, col: usize) -> St
 /// instead (#3130 tracks making layout linear).
 const LAYOUT_FUEL: usize = 1 << 26;
 
-/// The byte ceiling on the layouts one render keeps memoized. Past it the memo
-/// stops growing and later nodes render uncached: output is unchanged, only the
-/// reuse is capped, so a pathological document cannot grow the memo without bound.
+/// The byte ceiling on the layouts one render keeps memoized, each entry charged
+/// [`memo_entry_bytes`]. Past it the memo stops growing and later nodes render
+/// uncached: output is unchanged, only the reuse is capped, so a pathological
+/// document cannot grow the memo without bound.
 const MEMO_BYTE_CEILING: usize = 64 << 20;
+
+/// What one memoized layout occupies: its bytes plus the key, the `String`
+/// header, and the hash-table slot, so a flood of empty layouts is charged too.
+const fn memo_entry_bytes(layout_len: usize) -> usize {
+    layout_len + size_of::<MemoKey>() + size_of::<String>() + size_of::<u64>()
+}
 
 /// Every layout decision probes a subtree by rendering it into a scratch buffer
 /// before rendering it for real, and a probed subtree probes its own children the
@@ -156,6 +163,10 @@ struct Memo {
     nodes: HashSet<usize>,
     layouts: HashMap<MemoKey, String>,
     bytes: usize,
+    /// [`has_hard_break`] per node, computed once.
+    hard_breaks: HashMap<usize, bool>,
+    /// [`if_else_construct_width`] per `IfElse` node, computed once.
+    if_else_widths: HashMap<usize, usize>,
     /// [`LAYOUT_FUEL`] left to spend; once spent the render is abandoned.
     fuel: usize,
     exhausted: bool,
@@ -227,6 +238,8 @@ impl MemoScope {
             nodes,
             layouts: HashMap::new(),
             bytes: 0,
+            hard_breaks: HashMap::new(),
+            if_else_widths: HashMap::new(),
             fuel,
             exhausted: false,
         };
@@ -419,10 +432,11 @@ fn memoized(
         return;
     }
     MEMO.with_borrow_mut(|m| {
+        let entry = memo_entry_bytes(layout.len());
         if let Some(m) = m.as_mut()
-            && m.bytes + layout.len() <= MEMO_BYTE_CEILING
+            && m.bytes + entry <= MEMO_BYTE_CEILING
         {
-            m.bytes += layout.len();
+            m.bytes += entry;
             m.layouts.insert(key, layout.to_owned());
         }
     });
@@ -438,6 +452,37 @@ fn spend(cost: usize) -> bool {
             !m.exhausted
         })
     })
+}
+
+/// A fact about `doc` that depends on the node alone, read from `table` or
+/// computed by `compute` — which reports the fact and the work it took, charged to
+/// the fuel — and kept for the rest of the render. A node outside the memoized
+/// document is computed afresh each time.
+fn node_fact<T: Copy>(
+    doc: &Doc,
+    table: fn(&mut Memo) -> &mut HashMap<usize, T>,
+    compute: impl FnOnce() -> (T, usize),
+) -> T {
+    let addr = node_addr(doc);
+    let cached = MEMO.with_borrow_mut(|m| {
+        m.as_mut()
+            .filter(|m| m.nodes.contains(&addr))
+            .map(|m| table(m).get(&addr).copied())
+    });
+    match cached {
+        Some(Some(fact)) => fact,
+        Some(None) => {
+            let (fact, work) = compute();
+            spend(work);
+            MEMO.with_borrow_mut(|m| {
+                if let Some(m) = m.as_mut() {
+                    table(m).insert(addr, fact);
+                }
+            });
+            fact
+        }
+        None => compute().0,
+    }
 }
 
 /// Render one node of any variant; [`render_at`] fronts it with the memo.
@@ -557,7 +602,7 @@ fn render_node(
             render_method_chain(receiver, method, cfg, indent, col, flat, out);
         }
         Doc::IfElse { cond, then_, else_ } => {
-            render_if_else(cond, then_, else_, cfg, indent, col, flat, out);
+            render_if_else(doc, cond, then_, else_, cfg, indent, col, flat, out);
         }
     }
 }
@@ -1149,15 +1194,23 @@ const SINGLE_LINE_IF_ELSE_MAX_WIDTH: usize = 50;
 /// `if ` + cond + ` { ` + then + ` } else { ` + else + ` }`, from the flat leaf
 /// widths (absolute, column-independent). One source of truth for BOTH the
 /// render decision and `has_hard_break`, so the two cannot disagree about whether
-/// an `IfElse` renders block-form.
-fn if_else_construct_width(cond: &Doc, then_: &Doc, else_: &Doc) -> usize {
-    "if ".len()
-        + cond.normalized_leaves().len()
-        + " { ".len()
-        + then_.normalized_leaves().len()
-        + " } else { ".len()
-        + else_.normalized_leaves().len()
-        + " }".len()
+/// an `IfElse` renders block-form. `node` is the `IfElse` itself, the key its
+/// width is kept under.
+fn if_else_construct_width(node: &Doc, cond: &Doc, then_: &Doc, else_: &Doc) -> usize {
+    node_fact(
+        node,
+        |m| &mut m.if_else_widths,
+        || {
+            let width = "if ".len()
+                + cond.normalized_leaves().len()
+                + " { ".len()
+                + then_.normalized_leaves().len()
+                + " } else { ".len()
+                + else_.normalized_leaves().len()
+                + " }".len();
+            (width, width)
+        },
+    )
 }
 
 /// Render a [`Doc::IfElse`] with `rustfmt`'s `single_line_if_else_max_width` rule.
@@ -1173,6 +1226,7 @@ fn if_else_construct_width(cond: &Doc, then_: &Doc, else_: &Doc) -> usize {
     reason = "renderer threads the three branch docs + cfg/indent/col/flat"
 )]
 fn render_if_else(
+    node: &Doc,
     cond: &Doc,
     then_: &Doc,
     else_: &Doc,
@@ -1182,7 +1236,7 @@ fn render_if_else(
     flat: bool,
     out: &mut String,
 ) {
-    let construct_width = if_else_construct_width(cond, then_, else_);
+    let construct_width = if_else_construct_width(node, cond, then_, else_);
 
     let start_col = eff_col(out, col);
     // The branches are laid out in place (borrowed, never cloned) so they keep
@@ -1564,6 +1618,15 @@ fn probe_render(doc: &Doc, cfg: RenderConfig, indent: usize, start_col: usize) -
 /// returns `false` and is free to flatten. Nested groups and chains hide their
 /// own breaks (they decide their own layout independently).
 fn has_hard_break(doc: &Doc) -> bool {
+    node_fact(
+        doc,
+        |m| &mut m.hard_breaks,
+        || (hard_break_uncached(doc), 1),
+    )
+}
+
+/// [`has_hard_break`] for one node, its children read through the cache.
+fn hard_break_uncached(doc: &Doc) -> bool {
     match doc {
         Doc::HardLine => true,
         // A `BraceBody` decides its own layout independently (like `Group` and
@@ -1604,7 +1667,7 @@ fn has_hard_break(doc: &Doc) -> bool {
         // tall body into a closure/CAF brace-body and drop its braces. Width test
         // shared with `render_if_else`.
         Doc::IfElse { cond, then_, else_ } => {
-            if_else_construct_width(cond, then_, else_) > SINGLE_LINE_IF_ELSE_MAX_WIDTH
+            if_else_construct_width(doc, cond, then_, else_) > SINGLE_LINE_IF_ELSE_MAX_WIDTH
                 || has_hard_break(cond)
                 || has_hard_break(then_)
                 || has_hard_break(else_)
@@ -1615,6 +1678,13 @@ fn has_hard_break(doc: &Doc) -> bool {
         // `HardLine`s that force a break).
         Doc::Nest(_, inner) | Doc::ElidableParen { inner } => has_hard_break(inner),
     }
+}
+
+/// Whether a render that started with `out` at `before` bytes wrote a newline.
+/// `before` is the trim point: a break trims only the trailing spaces before it,
+/// so nothing below it changes.
+fn wrote_newline(out: &str, before: usize) -> bool {
+    out.get(before..).is_some_and(|s| s.contains('\n'))
 }
 
 /// Push `n` spaces of indentation.
@@ -1738,9 +1808,9 @@ fn render_chain(
     for (i, operand) in operands.iter().enumerate() {
         if i == 0 {
             let c = eff_col(out, col);
-            let before = out.len();
+            let before = out.trim_end_matches(' ').len();
             render_at(&operand.doc, cfg, indent, c, false, out);
-            prev_multiline = out[before..].contains('\n');
+            prev_multiline = wrote_newline(out, before);
             flat_prefix = !prev_multiline;
             continue;
         }
@@ -1776,9 +1846,9 @@ fn render_chain(
                 out.push_str(op);
                 out.push(' ');
                 let c = current_col(out);
-                let before = out.len();
+                let before = out.trim_end_matches(' ').len();
                 render_at(&operand.doc, cfg, indent, c, false, out);
-                prev_multiline = out[before..].contains('\n');
+                prev_multiline = wrote_newline(out, before);
                 if prev_multiline {
                     flat_prefix = false;
                 }
@@ -3589,6 +3659,13 @@ mod p0_tests {
             false,
             &mut String::new(),
         );
+        MEMO.with_borrow(|m| {
+            if let Some(m) = m.as_ref() {
+                let charged: usize = m.layouts.values().map(|l| memo_entry_bytes(l.len())).sum();
+                assert_eq!(m.bytes, charged, "memo bytes must charge every entry");
+                assert!(m.bytes <= MEMO_BYTE_CEILING, "memo past its ceiling");
+            }
+        });
         (RENDERED.with(std::cell::Cell::get), fuel_exhausted())
     }
 
