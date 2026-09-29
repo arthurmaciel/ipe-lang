@@ -930,7 +930,7 @@ mod tests {
     ];
 
     fn test_dir(tag: &str) -> PathBuf {
-        let base = std::env::temp_dir()
+        let base = ipe_test_temp::temp_root()
             .canonicalize()
             .expect("canonical temp dir");
         let dir = base.join(format!(

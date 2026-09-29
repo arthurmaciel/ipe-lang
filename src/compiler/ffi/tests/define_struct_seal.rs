@@ -124,7 +124,8 @@ fn define_struct_builds_and_runs() {
     );
     let make = wrapper_region(&region, "make");
 
-    let dir = std::env::temp_dir().join(format!("ipe_ffi_struct_seal_{}", std::process::id()));
+    let dir =
+        ipe_test_temp::temp_root().join(format!("ipe_ffi_struct_seal_{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(dir.join("src")).expect("mkdir");
     std::fs::write(

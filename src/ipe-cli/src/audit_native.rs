@@ -2617,7 +2617,8 @@ mod tests {
         // alongside `src/ffi.rs`, not the pretty-printed Rust text. The sidecar
         // is the SSOT: it carries the DCE-shaken set as structured data, decoupled
         // from Rust formatting.
-        let dir = std::env::temp_dir().join(format!("ipe-sidecar-read-{}", std::process::id()));
+        let dir =
+            ipe_test_temp::temp_root().join(format!("ipe-sidecar-read-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(dir.join("src")).expect("src dir");
         // Write a sidecar with two non-generic and one generic wrapper.
@@ -2663,7 +2664,7 @@ mod tests {
         // A present `src/ffi.rs` with no sidecar → typed reject (fail-closed).
         // This guards against an emitted crate that predates the sidecar or a
         // sidecar that was manually deleted: never fall back to text-scan.
-        let dir = std::env::temp_dir().join(format!("ipe-no-sidecar-{}", std::process::id()));
+        let dir = ipe_test_temp::temp_root().join(format!("ipe-no-sidecar-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(dir.join("src")).expect("src dir");
         std::fs::write(
@@ -2692,7 +2693,8 @@ mod tests {
     fn corrupt_sidecar_rejects_fail_closed() {
         // A sidecar with malformed JSON → typed reject (fail-closed), never a
         // vacuous clean.
-        let dir = std::env::temp_dir().join(format!("ipe-corrupt-sidecar-{}", std::process::id()));
+        let dir =
+            ipe_test_temp::temp_root().join(format!("ipe-corrupt-sidecar-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(dir.join("src")).expect("src dir");
         std::fs::write(dir.join("src").join("ffi.rs"), "// placeholder\n").expect("write ffi.rs");
@@ -2724,7 +2726,8 @@ mod tests {
         // wrapper is read correctly (flagged `generic: true`) and would be
         // excluded from the probe's link-reference set. The non-generic is
         // included. Both are returned from `emitted_wrapper_paths`.
-        let dir = std::env::temp_dir().join(format!("ipe-generic-sidecar-{}", std::process::id()));
+        let dir =
+            ipe_test_temp::temp_root().join(format!("ipe-generic-sidecar-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(dir.join("src")).expect("src dir");
         std::fs::write(
@@ -2767,7 +2770,8 @@ mod tests {
     fn emitted_wrapper_paths_is_empty_when_neither_sidecar_nor_ffi_rs() {
         // When neither `src/ffi-wrappers.json` nor `src/ffi.rs` exists the
         // package has no FFI surface → empty set (not an error).
-        let dir = std::env::temp_dir().join(format!("ipe-emitted-none-{}", std::process::id()));
+        let dir =
+            ipe_test_temp::temp_root().join(format!("ipe-emitted-none-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(dir.join("src")).expect("src dir");
         assert!(

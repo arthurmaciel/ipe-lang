@@ -274,7 +274,7 @@ mod tests {
     /// `remove_generated_dir` deletes an ipe-owned output directory and reports it.
     #[test]
     fn removes_a_generated_subdir() {
-        let root = std::env::temp_dir().join(format!("ipe_clean_ok_{}", std::process::id()));
+        let root = ipe_test_temp::temp_root().join(format!("ipe_clean_ok_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).expect("make root");
         let real_root = std::fs::canonicalize(&root).expect("canonicalize root");
@@ -291,7 +291,8 @@ mod tests {
     /// An `out/` ipe did not create — no ownership marker — is refused and kept.
     #[test]
     fn refuses_an_unowned_out_dir() {
-        let root = std::env::temp_dir().join(format!("ipe_clean_unowned_{}", std::process::id()));
+        let root =
+            ipe_test_temp::temp_root().join(format!("ipe_clean_unowned_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(root.join("out")).expect("make out");
         std::fs::write(root.join("out").join("thesis.tex"), "mine").expect("user file");
@@ -313,7 +314,8 @@ mod tests {
     /// An absent directory is a no-op, not an error.
     #[test]
     fn absent_dir_is_a_noop() {
-        let root = std::env::temp_dir().join(format!("ipe_clean_absent_{}", std::process::id()));
+        let root =
+            ipe_test_temp::temp_root().join(format!("ipe_clean_absent_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).expect("make root");
         let real_root = std::fs::canonicalize(&root).expect("canonicalize root");
@@ -328,7 +330,8 @@ mod tests {
     /// and the escape target is left intact — the delete never leaves the root.
     #[test]
     fn refuses_a_symlink_escaping_the_root() {
-        let base = std::env::temp_dir().join(format!("ipe_clean_escape_{}", std::process::id()));
+        let base =
+            ipe_test_temp::temp_root().join(format!("ipe_clean_escape_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&base);
         let root = base.join("project");
         let outside = base.join("precious");
@@ -358,7 +361,8 @@ mod tests {
     /// Neither target is followed or touched.
     #[test]
     fn removes_planted_links_without_following_them() {
-        let base = std::env::temp_dir().join(format!("ipe_clean_planted_{}", std::process::id()));
+        let base =
+            ipe_test_temp::temp_root().join(format!("ipe_clean_planted_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&base);
         let root = base.join("project");
         let outside = base.join("precious");
@@ -387,7 +391,7 @@ mod tests {
     /// The `.ipe/` cache subtrees go, and an emptied namespace goes with them.
     #[test]
     fn removes_the_cache_namespace_when_only_ipe_entries_are_in_it() {
-        let root = std::env::temp_dir().join(format!("ipe_clean_ns_{}", std::process::id()));
+        let root = ipe_test_temp::temp_root().join(format!("ipe_clean_ns_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(root.join(".ipe/cache/ffi/rust")).expect("make cache");
         std::fs::create_dir_all(root.join(".ipe/packages/dep-1.0.0")).expect("make packages");
@@ -406,7 +410,8 @@ mod tests {
     /// names are proven its own.
     #[test]
     fn keeps_user_files_in_an_unmarked_cache_namespace() {
-        let root = std::env::temp_dir().join(format!("ipe_clean_ns_user_{}", std::process::id()));
+        let root =
+            ipe_test_temp::temp_root().join(format!("ipe_clean_ns_user_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(root.join(".ipe/cache")).expect("make cache");
         std::fs::create_dir_all(root.join(".ipe/standalone/src")).expect("make user tree");
@@ -438,7 +443,8 @@ mod tests {
     /// A symlinked cache entry is refused, never followed.
     #[test]
     fn refuses_a_symlinked_cache_entry() {
-        let base = std::env::temp_dir().join(format!("ipe_clean_ns_link_{}", std::process::id()));
+        let base =
+            ipe_test_temp::temp_root().join(format!("ipe_clean_ns_link_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&base);
         let root = base.join("project");
         let outside = base.join("precious");
@@ -465,7 +471,8 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn refuses_an_out_dir_swapped_for_a_link_mid_walk() {
-        let base = std::env::temp_dir().join(format!("ipe_clean_swap_{}", std::process::id()));
+        let base =
+            ipe_test_temp::temp_root().join(format!("ipe_clean_swap_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&base);
         let root = base.join("project");
         let victim = base.join("precious");
@@ -515,7 +522,8 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn refuses_an_out_dir_junctioned_in_place_mid_walk() {
-        let base = std::env::temp_dir().join(format!("ipe_clean_junction_{}", std::process::id()));
+        let base =
+            ipe_test_temp::temp_root().join(format!("ipe_clean_junction_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&base);
         let root = base.join("project");
         let victim = base.join("precious");

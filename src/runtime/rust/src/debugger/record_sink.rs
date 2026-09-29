@@ -204,7 +204,7 @@ where
     F: Fn(Msg, Model) -> (Model, IpeCmd<Msg>),
     C: SessionCodec<Msg, Model>,
 {
-    let Ok(raw) = std::env::var(RECORD_ENV) else {
+    let Ok(raw) = crate::system::read_env_var(RECORD_ENV) else {
         return;
     };
     let dest = RecordDest::parse(&raw);
@@ -325,7 +325,8 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn replace_file_never_writes_through_a_symlink() {
-        let dir = std::env::temp_dir().join(format!("ipe_record_sink_{}", std::process::id()));
+        let dir = crate::scratch_core::test_temp_root()
+            .join(format!("ipe_record_sink_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         assert!(std::fs::create_dir_all(&dir).is_ok(), "make scratch dir");
 
@@ -367,7 +368,8 @@ mod tests {
     // Neither a written dump nor a failed one leaves its temp sibling behind.
     #[test]
     fn replace_file_leaves_only_the_destination() {
-        let dir = std::env::temp_dir().join(format!("ipe_record_sink_tmp_{}", std::process::id()));
+        let dir = crate::scratch_core::test_temp_root()
+            .join(format!("ipe_record_sink_tmp_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         let log = dir.join("session.ipelog");
         let blocked = dir.join("blocked.ipelog");
@@ -397,7 +399,8 @@ mod tests {
     #[test]
     fn trace_only_program_removes_stale_typed_log() {
         use crate::debugger::session_log::{TraceOnly, Unreplayable};
-        let dir = std::env::temp_dir().join(format!("ipe_record_typed_{}", std::process::id()));
+        let dir = crate::scratch_core::test_temp_root()
+            .join(format!("ipe_record_typed_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         assert!(std::fs::create_dir_all(&dir).is_ok(), "make scratch dir");
         let trace = dir.join("session.ipelog");

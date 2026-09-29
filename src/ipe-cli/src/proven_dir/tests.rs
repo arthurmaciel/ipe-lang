@@ -5,7 +5,7 @@ use super::*;
 
 /// A fresh, empty scratch directory unique to `name`, this process and this thread.
 fn scratch(name: &str) -> PathBuf {
-    let base = std::env::temp_dir()
+    let base = ipe_test_temp::temp_root()
         .canonicalize()
         .expect("canonical temp dir");
     let dir = base.join(format!(
@@ -38,7 +38,7 @@ fn only_a_single_plain_component_is_an_entry_name() {
 #[cfg(not(unix))]
 #[test]
 fn a_host_without_unix_ownership_proves_no_directory() {
-    let dir = std::env::temp_dir();
+    let dir = ipe_test_temp::temp_root();
     assert!(matches!(
         ProvenDir::open(&dir),
         Err(ProvenDirError::Unsupported)

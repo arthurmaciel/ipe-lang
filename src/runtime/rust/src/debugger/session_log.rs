@@ -481,7 +481,7 @@ where
 /// The typed log a replay run reads, when `IPE_DEBUGGER_REPLAY` is set.
 #[must_use]
 pub fn replay_request() -> Option<PathBuf> {
-    std::env::var_os(crate::REPLAY_ENV).map(PathBuf::from)
+    crate::system::read_env_var_os(crate::REPLAY_ENV).map(PathBuf::from)
 }
 
 /// Read at most the session-log cap from `path`.
@@ -884,7 +884,8 @@ mod tests {
     // a missing file is a typed refusal.
     #[test]
     fn capped_read_refuses_oversized_and_missing_files() {
-        let dir = std::env::temp_dir().join(format!("ipe_session_log_{}", std::process::id()));
+        let dir = crate::scratch_core::test_temp_root()
+            .join(format!("ipe_session_log_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         assert!(std::fs::create_dir_all(&dir).is_ok(), "make scratch dir");
         let big = dir.join("big.ipemsgs");

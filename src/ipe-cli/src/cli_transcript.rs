@@ -148,7 +148,9 @@ pub fn volatile_path_prefixes(repo_root: &Path) -> Vec<String> {
         prefixes.push(canon.to_string_lossy().into_owned());
     }
     prefixes.push(repo_root.to_string_lossy().into_owned());
-    prefixes.push(std::env::temp_dir().to_string_lossy().into_owned());
+    if let Some(temp_root) = ipe_sandbox::scratch::temp_root_text() {
+        prefixes.push(temp_root);
+    }
     if let Some(home) = crate::env_dir::home() {
         prefixes.push(home.to_string_lossy().into_owned());
     }
@@ -290,7 +292,7 @@ mod tests {
 
     #[test]
     fn redacts_absolute_path_prefixes() {
-        let root = std::env::temp_dir();
+        let root = ipe_test_temp::temp_root();
         let sample = format!("{}/proj/Main.ipe", root.display());
         let out = redact(&sample, &root);
         assert!(

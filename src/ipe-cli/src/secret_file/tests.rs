@@ -4,7 +4,7 @@ use super::*;
 
 /// A fresh, empty scratch directory for one test.
 fn test_dir(name: &str) -> PathBuf {
-    let base = std::env::temp_dir()
+    let base = ipe_test_temp::temp_root()
         .canonicalize()
         .expect("canonical temp dir");
     let dir = base.join(format!(

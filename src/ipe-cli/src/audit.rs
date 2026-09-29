@@ -2371,7 +2371,7 @@ mod tests {
     /// Build a unique throwaway directory under the OS temp root for a test.
     /// Returns the path; the caller must remove it when done.
     fn make_test_dir(tag: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!(
+        let dir = ipe_test_temp::temp_root().join(format!(
             "ipe-audit-test-{tag}-{}-{}",
             std::process::id(),
             // A per-call counter keeps multiple calls in the same test from

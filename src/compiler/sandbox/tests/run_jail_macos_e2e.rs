@@ -101,7 +101,7 @@ fn run_control(script: &str) -> Option<i32> {
 }
 
 fn scratch_dir() -> std::path::PathBuf {
-    let dir = std::env::temp_dir().join(format!("ipe-run-macos-e2e-{}", std::process::id()));
+    let dir = ipe_test_temp::temp_root().join(format!("ipe-run-macos-e2e-{}", std::process::id()));
     std::fs::create_dir_all(&dir).expect("scratch");
     dir
 }

@@ -6,6 +6,10 @@
 -- `getenvOr` is the exception -- when a default is supplied at the
 -- call site, the operation can't fail, so the return is bare
 -- `String`.
+--
+-- The OS temp-root names (`TMPDIR`, `TMP`, `TEMP`) always read as
+-- unset: temporary files live in the runtime's private scratch space,
+-- never under a base taken from the environment.
 module Ipe.System exposing
     ( args, getArg
     , getenv, getenvOr, getenvInt, getenvBool

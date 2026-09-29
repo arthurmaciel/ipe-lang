@@ -10,7 +10,9 @@
 //! ASAN build still gets a sound remaining-stack probe.
 fn main() {
     println!("cargo::rustc-check-cfg=cfg(ipe_asan)");
-    if let Ok(sanitizers) = std::env::var("CARGO_CFG_SANITIZE")
+    #[allow(clippy::disallowed_methods)] // a build script reads cargo's own configuration
+    let sanitize = std::env::var("CARGO_CFG_SANITIZE");
+    if let Ok(sanitizers) = sanitize
         && sanitizers.split(',').any(|s| s == "address")
     {
         println!("cargo::rustc-cfg=ipe_asan");

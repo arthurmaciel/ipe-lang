@@ -13,6 +13,10 @@ touch process-global state that can change between invocations.
 call site, the operation can't fail, so the return is bare
 `String`.
 
+The OS temp-root names (`TMPDIR`, `TMP`, `TEMP`) always read as
+unset: temporary files live in the runtime's private scratch space,
+never under a base taken from the environment.
+
 ## `args`
 
 ```ipe

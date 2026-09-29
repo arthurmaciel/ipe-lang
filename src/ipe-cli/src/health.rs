@@ -1798,7 +1798,7 @@ mod tests {
 
     impl TempDir {
         fn new(tag: &str) -> Self {
-            let dir = std::env::temp_dir().join(format!(
+            let dir = ipe_test_temp::temp_root().join(format!(
                 "ipe_health_{tag}_{}_{:?}",
                 std::process::id(),
                 std::time::SystemTime::now()

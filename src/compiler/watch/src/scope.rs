@@ -576,7 +576,7 @@ mod tests {
     }
 
     fn tmp_dir(tag: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!(
+        let dir = ipe_test_temp::temp_root().join(format!(
             "ipe_watch_scope_{}_{tag}_{}",
             std::process::id(),
             std::time::SystemTime::now()

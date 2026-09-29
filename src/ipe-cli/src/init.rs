@@ -1156,7 +1156,7 @@ mod tests {
             .find(|f| f.rel == Path::new("package.ipe"))
             .expect("init writes a package.ipe");
 
-        let root = std::env::temp_dir().join("ipe_init_web_roundtrip");
+        let root = ipe_test_temp::temp_root().join("ipe_init_web_roundtrip");
         let _ = std::fs::remove_dir_all(&root);
         write_stub_src(&root);
         let path = root.join("package.ipe");
@@ -1179,7 +1179,7 @@ mod tests {
             .find(|f| f.rel == Path::new("package.ipe"))
             .expect("init writes a package.ipe");
 
-        let root = std::env::temp_dir().join("ipe_init_solo_ships");
+        let root = ipe_test_temp::temp_root().join("ipe_init_solo_ships");
         let _ = std::fs::remove_dir_all(&root);
         write_stub_src(&root);
         let path = root.join("package.ipe");
@@ -1209,7 +1209,7 @@ mod tests {
             "a `served` web project declares no explicit ships set"
         );
 
-        let root = std::env::temp_dir().join("ipe_init_served_ships");
+        let root = ipe_test_temp::temp_root().join("ipe_init_served_ships");
         let _ = std::fs::remove_dir_all(&root);
         write_stub_src(&root);
         let path = root.join("package.ipe");
@@ -1260,7 +1260,7 @@ mod tests {
             .find(|f| f.rel == Path::new("package.ipe"))
             .expect("init writes a package.ipe");
 
-        let root = std::env::temp_dir().join("ipe_init_tui_roundtrip");
+        let root = ipe_test_temp::temp_root().join("ipe_init_tui_roundtrip");
         let _ = std::fs::remove_dir_all(&root);
         write_stub_src(&root);
         let path = root.join("package.ipe");
@@ -1280,7 +1280,7 @@ mod tests {
             .find(|f| f.rel == Path::new("package.ipe"))
             .expect("init writes a package.ipe");
 
-        let root = std::env::temp_dir().join("ipe_init_script_roundtrip");
+        let root = ipe_test_temp::temp_root().join("ipe_init_script_roundtrip");
         let _ = std::fs::remove_dir_all(&root);
         write_stub_src(&root);
         let path = root.join("package.ipe");
@@ -1300,7 +1300,7 @@ mod tests {
             .find(|f| f.rel == Path::new("package.ipe"))
             .expect("init writes a package.ipe");
 
-        let root = std::env::temp_dir().join("ipe_init_worker_roundtrip");
+        let root = ipe_test_temp::temp_root().join("ipe_init_worker_roundtrip");
         let _ = std::fs::remove_dir_all(&root);
         write_stub_src(&root);
         let path = root.join("package.ipe");
@@ -1459,7 +1459,7 @@ mod tests {
 
     #[test]
     fn existing_project_shape_confidently_classifies_a_qualified_head() {
-        let root = std::env::temp_dir().join("ipe_init_existing_shape");
+        let root = ipe_test_temp::temp_root().join("ipe_init_existing_shape");
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(root.join("src")).expect("mkdir src");
         // A qualified `Tui.tea` head pins the tui shape confidently.
@@ -1477,7 +1477,7 @@ mod tests {
 
     #[test]
     fn existing_project_shape_is_ambiguous_for_a_script_or_unpinnable_head() {
-        let root = std::env::temp_dir().join("ipe_init_ambiguous_shape");
+        let root = ipe_test_temp::temp_root().join("ipe_init_ambiguous_shape");
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(root.join("src")).expect("mkdir src");
         // A bare (unqualified) entry head collapses to the ambiguous `Script`
@@ -1493,7 +1493,7 @@ mod tests {
 
     #[test]
     fn rerun_refuses_a_confidently_conflicting_shape() {
-        let root = std::env::temp_dir().join("ipe_init_rerun_conflict");
+        let root = ipe_test_temp::temp_root().join("ipe_init_rerun_conflict");
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(root.join("src")).expect("mkdir src");
         // The project confidently pins `tui`; asking to re-init as `web` conflicts.
@@ -1516,7 +1516,7 @@ mod tests {
 
     #[test]
     fn rerun_does_not_refuse_an_ambiguous_script_head() {
-        let root = std::env::temp_dir().join("ipe_init_rerun_ambiguous");
+        let root = ipe_test_temp::temp_root().join("ipe_init_rerun_ambiguous");
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(root.join("src")).expect("mkdir src");
         // An unqualified head is not confidently classified, so a re-init that
@@ -1565,7 +1565,7 @@ mod tests {
             .find(|f| f.rel == Path::new("package.ipe"))
             .expect("package.ipe present");
 
-        let root = std::env::temp_dir().join("ipe_init_delivery_defaults");
+        let root = ipe_test_temp::temp_root().join("ipe_init_delivery_defaults");
         let _ = std::fs::remove_dir_all(&root);
         write_stub_src(&root);
         let path = root.join("package.ipe");
@@ -1607,7 +1607,7 @@ mod tests {
             "a library does not scaffold a runnable src/Main.ipe"
         );
 
-        let root = std::env::temp_dir().join("ipe_init_lib_roundtrip");
+        let root = ipe_test_temp::temp_root().join("ipe_init_lib_roundtrip");
         let _ = std::fs::remove_dir_all(&root);
         let src = root.join("src");
         std::fs::create_dir_all(&src).expect("create src/");
@@ -1692,7 +1692,7 @@ mod tests {
             .find(|f| f.rel == Path::new("package.ipe"))
             .expect("init writes a package.ipe");
 
-        let root = std::env::temp_dir().join("ipe_init_hostile_name_roundtrip");
+        let root = ipe_test_temp::temp_root().join("ipe_init_hostile_name_roundtrip");
         let _ = std::fs::remove_dir_all(&root);
         write_stub_src(&root);
         let path = root.join("package.ipe");

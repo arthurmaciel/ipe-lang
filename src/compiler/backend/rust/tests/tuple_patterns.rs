@@ -314,7 +314,7 @@ fn build_and_assert(
 
     let emitted = RustBackend::new(interner).emit(prog)?;
 
-    let out = std::env::temp_dir().join(slot);
+    let out = ipe_test_temp::temp_root().join(slot);
     let _ = std::fs::remove_dir_all(&out);
     let src = out.join("src");
     std::fs::create_dir_all(&src).map_err(|e| seal_e2e::io_bug(&src, &e))?;

@@ -609,7 +609,8 @@ mod read_ceiling_tests {
     // ceiling instead of allocating it unbounded.
     #[test]
     fn read_file_rejects_over_ceiling() {
-        let p = std::env::temp_dir().join(format!("ipe_rc_over_{}.txt", std::process::id()));
+        let p = crate::scratch_core::test_temp_root()
+            .join(format!("ipe_rc_over_{}.txt", std::process::id()));
         std::fs::write(&p, vec![b'x'; 8192]).unwrap();
         // SAFETY: test-only env mutation; `std::env::set_var`/`remove_var` are `unsafe` in Rust 2024 due to the reader/mutator `environ` race.
         unsafe { std::env::set_var("IPE_FILE_READ_MAX", "1024") };
@@ -625,7 +626,8 @@ mod read_ceiling_tests {
 
     #[test]
     fn read_file_under_ceiling_ok() {
-        let p = std::env::temp_dir().join(format!("ipe_rc_ok_{}.txt", std::process::id()));
+        let p = crate::scratch_core::test_temp_root()
+            .join(format!("ipe_rc_ok_{}.txt", std::process::id()));
         std::fs::write(&p, b"hello").unwrap();
         let res: IpeResult<String, String> = block(file_read_file(tp(&p)));
         let _ = std::fs::remove_file(&p);
@@ -650,7 +652,8 @@ mod read_file_limit_tests {
 
     #[test]
     fn under_limit_reads_full_content() {
-        let p = std::env::temp_dir().join(format!("ipe_rfl_under_{}.txt", std::process::id()));
+        let p = crate::scratch_core::test_temp_root()
+            .join(format!("ipe_rfl_under_{}.txt", std::process::id()));
         std::fs::write(&p, b"hello world").unwrap();
         let res: IpeResult<String, String> = block(file_read_file_limit(tp(&p), 1024));
         let _ = std::fs::remove_file(&p);
@@ -665,7 +668,8 @@ mod read_file_limit_tests {
     /// `>= cap`).
     #[test]
     fn exactly_at_limit_is_ok() {
-        let p = std::env::temp_dir().join(format!("ipe_rfl_exact_{}.txt", std::process::id()));
+        let p = crate::scratch_core::test_temp_root()
+            .join(format!("ipe_rfl_exact_{}.txt", std::process::id()));
         let content = vec![b'a'; 16];
         std::fs::write(&p, &content).unwrap();
         let res: IpeResult<String, String> = block(file_read_file_limit(tp(&p), 16));
@@ -683,7 +687,8 @@ mod read_file_limit_tests {
     /// would otherwise hit.
     #[test]
     fn over_limit_by_one_byte_errs() {
-        let p = std::env::temp_dir().join(format!("ipe_rfl_over_{}.txt", std::process::id()));
+        let p = crate::scratch_core::test_temp_root()
+            .join(format!("ipe_rfl_over_{}.txt", std::process::id()));
         std::fs::write(&p, vec![b'a'; 17]).unwrap();
         let res: IpeResult<String, String> = block(file_read_file_limit(tp(&p), 16));
         let _ = std::fs::remove_file(&p);
@@ -696,7 +701,8 @@ mod read_file_limit_tests {
     /// Non-positive limit falls back to the documented 10 MiB default.
     #[test]
     fn non_positive_limit_uses_default_cap() {
-        let p = std::env::temp_dir().join(format!("ipe_rfl_default_{}.txt", std::process::id()));
+        let p = crate::scratch_core::test_temp_root()
+            .join(format!("ipe_rfl_default_{}.txt", std::process::id()));
         std::fs::write(&p, b"small").unwrap();
         let res: IpeResult<String, String> = block(file_read_file_limit(tp(&p), 0));
         let _ = std::fs::remove_file(&p);
@@ -727,7 +733,8 @@ mod read_file_bytes_tests {
 
     #[test]
     fn under_cap_reads_full_content() {
-        let p = std::env::temp_dir().join(format!("ipe_rfb_under_{}.bin", std::process::id()));
+        let p = crate::scratch_core::test_temp_root()
+            .join(format!("ipe_rfb_under_{}.bin", std::process::id()));
         std::fs::write(&p, [1u8, 2, 3, 255, 0]).unwrap();
         let res: IpeResult<String, Vec<i64>> = block(file_read_file_bytes(tp(&p)));
         let _ = std::fs::remove_file(&p);
@@ -742,7 +749,8 @@ mod read_file_bytes_tests {
     /// not `>= cap`).
     #[test]
     fn exactly_at_cap_is_ok() {
-        let p = std::env::temp_dir().join(format!("ipe_rfb_exact_{}.bin", std::process::id()));
+        let p = crate::scratch_core::test_temp_root()
+            .join(format!("ipe_rfb_exact_{}.bin", std::process::id()));
         std::fs::write(&p, vec![7u8; DEFAULT_CAP]).unwrap();
         let res: IpeResult<String, Vec<i64>> = block(file_read_file_bytes(tp(&p)));
         let _ = std::fs::remove_file(&p);
@@ -760,7 +768,8 @@ mod read_file_bytes_tests {
     /// (silently dropping the last byte) instead of erroring.
     #[test]
     fn over_cap_by_one_byte_errs() {
-        let p = std::env::temp_dir().join(format!("ipe_rfb_over_{}.bin", std::process::id()));
+        let p = crate::scratch_core::test_temp_root()
+            .join(format!("ipe_rfb_over_{}.bin", std::process::id()));
         std::fs::write(&p, vec![7u8; DEFAULT_CAP + 1]).unwrap();
         let res: IpeResult<String, Vec<i64>> = block(file_read_file_bytes(tp(&p)));
         let _ = std::fs::remove_file(&p);
@@ -794,7 +803,7 @@ mod spawn_blocking_tests {
             .enable_all()
             .build()
             .unwrap();
-        let p = std::env::temp_dir().join(format!(
+        let p = crate::scratch_core::test_temp_root().join(format!(
             "ipe_spawn_blocking_probe_{}.txt",
             std::process::id()
         ));
@@ -840,7 +849,7 @@ mod spawn_blocking_tests {
             .enable_all()
             .build()
             .unwrap();
-        let p = std::env::temp_dir().join(format!(
+        let p = crate::scratch_core::test_temp_root().join(format!(
             "ipe_spawn_blocking_write_probe_{}.txt",
             std::process::id()
         ));
@@ -894,7 +903,7 @@ mod walk_tests {
     ///     empty/          (dir, no files)
     /// Returns the root path.
     fn make_tree() -> std::path::PathBuf {
-        let root = std::env::temp_dir().join(format!(
+        let root = crate::scratch_core::test_temp_root().join(format!(
             "ipe_walk_test_{}_{}",
             std::process::id(),
             std::time::SystemTime::now()
@@ -972,7 +981,7 @@ mod walk_tests {
 
     #[test]
     fn walk_on_nonexistent_root_errs() {
-        let root = std::env::temp_dir().join("ipe_walk_nonexistent_38291");
+        let root = crate::scratch_core::test_temp_root().join("ipe_walk_nonexistent_38291");
         let res: IpeResult<String, Vec<Path>> = block(file_walk(tp(&root)));
         assert!(
             matches!(res, IpeResult::Err(_)),
@@ -986,7 +995,7 @@ mod walk_tests {
     #[test]
     fn walk_symlink_cycle_does_not_hang() {
         use std::os::unix::fs::symlink;
-        let root = std::env::temp_dir().join(format!(
+        let root = crate::scratch_core::test_temp_root().join(format!(
             "ipe_walk_cycle_{}_{}",
             std::process::id(),
             std::time::SystemTime::now()

@@ -260,7 +260,7 @@ fn main() {{
 "#
     );
 
-    let dir = std::env::temp_dir().join(format!(
+    let dir = ipe_test_temp::temp_root().join(format!(
         "ipe_ffi_closure_handoff_seal_{}",
         std::process::id()
     ));

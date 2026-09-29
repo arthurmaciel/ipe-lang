@@ -41,13 +41,23 @@ pub(crate) fn env_entry_is_valid(key: &str, val: &str) -> bool {
 /// consistently. `pub(crate)` so every non-test process-env read in the crate
 /// routes through this one accessor — that is what makes the overlay authoritative
 /// for Ipê by construction.
+///
+/// A temp-root key ([`super::scratch_core::TEMP_ROOT_NAMES`], any case) always
+/// reads as unset: the temp root is a base other users can write, resolved only
+/// by the scratch primitive behind its ownership checks, so no Ipê program or
+/// runtime path builds a temporary name from it. `System.getenv "TMPDIR"` is
+/// therefore `Err` and `getenvOr` yields its default, whatever the environ holds.
 pub(crate) fn read_env_var(key: &str) -> Result<String, std::env::VarError> {
+    if super::scratch_core::is_temp_root_key(key) {
+        return Err(std::env::VarError::NotPresent);
+    }
     let overlay = ENV_OVERLAY
         .read()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     match overlay.get(key) {
         Some(Some(v)) => Ok(v.clone()),
         Some(None) => Err(std::env::VarError::NotPresent),
+        #[allow(clippy::disallowed_methods)] // the accessor: overlay and temp roots answered first
         None => std::env::var(key),
     }
 }
@@ -251,15 +261,20 @@ pub(crate) fn resolve_listen_port(env_value: Option<String>, fallback: i64) -> i
 /// an overlay tombstone) or — unlike `read_env_var` — when the real value is not
 /// valid Unicode. Gated to the feature whose module actually reads `var_os`
 /// (`tui` — the `NO_COLOR` probe); widen the gate when another feature gains a
-/// `var_os` reader, so it never sits as dead code under `-D warnings`.
-#[cfg(feature = "tui")]
+/// `var_os` reader, so it never sits as dead code under `-D warnings`. A
+/// temp-root key reads as unset, as in `read_env_var`.
+#[cfg(any(feature = "tui", feature = "debugger"))]
 pub(crate) fn read_env_var_os(key: &str) -> Option<std::ffi::OsString> {
+    if super::scratch_core::is_temp_root_key(key) {
+        return None;
+    }
     let overlay = ENV_OVERLAY
         .read()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     match overlay.get(key) {
         Some(Some(v)) => Some(std::ffi::OsString::from(v)),
         Some(None) => None,
+        #[allow(clippy::disallowed_methods)] // the accessor: overlay and temp roots answered first
         None => std::env::var_os(key),
     }
 }
@@ -306,6 +321,7 @@ pub(crate) fn locked_set_var_if_absent(key: &str, val: &str) {
     let absent = match overlay.get(key) {
         Some(Some(_)) => false,
         Some(None) => true,
+        #[allow(clippy::disallowed_methods)] // presence in the real environ, never its value
         None => std::env::var_os(key).is_none(),
     };
     if absent {
@@ -1266,6 +1282,38 @@ pub fn system_load_env<E: Send + 'static>(_: ()) -> IpeTask<E, ()> {
 }
 
 #[cfg(test)]
+mod temp_root_env_tests {
+    use super::{locked_remove_var, locked_set_var, read_env_var};
+    use std::env::VarError;
+
+    /// Every spelling of a temp-root key reads as unset, even when Ipê set it.
+    #[test]
+    fn a_temp_root_key_is_never_answered() {
+        for key in ["TMPDIR", "tmpdir", "TmpDir", "TMP", "tmp", "TEMP", "Temp"] {
+            locked_set_var(key, "/attacker/base");
+            assert_eq!(read_env_var(key), Err(VarError::NotPresent), "{key:?}");
+            locked_remove_var(key);
+            assert_eq!(read_env_var(key), Err(VarError::NotPresent), "{key:?}");
+        }
+    }
+
+    /// A key that only contains a temp-root name is answered normally.
+    #[test]
+    fn a_neighbouring_key_is_answered() {
+        let key = "IPE_TEMP_ROOT_ENV_TEST_NEIGHBOUR";
+        locked_set_var(key, "v");
+        assert_eq!(read_env_var(key), Ok("v".to_owned()));
+        locked_remove_var(key);
+        for key in ["TMPDIR_", "IPE_TMP", "TEMPLATE", "CARGO_TARGET_TMPDIR"] {
+            assert!(
+                !super::super::scratch_core::is_temp_root_key(key),
+                "{key:?}"
+            );
+        }
+    }
+}
+
+#[cfg(test)]
 mod exit_hook_tests {
     use super::{register_exit_hook, run_exit_hook};
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -1535,8 +1583,10 @@ mod env_overlay_tests {
         // Overlay set is observed WITHOUT mutating the real environ.
         locked_set_var(&key, "value");
         assert_eq!(read_env_var(&key).as_deref(), Ok("value"));
+        #[allow(clippy::disallowed_methods)] // the raw environ itself is under test
+        let real = std::env::var_os(&key);
         assert!(
-            std::env::var_os(&key).is_none(),
+            real.is_none(),
             "the real environ must NOT be mutated by an Ipê env write"
         );
 
@@ -1594,8 +1644,10 @@ mod env_overlay_tests {
         stop.store(true, std::sync::atomic::Ordering::Relaxed);
         let _ = writer.join();
 
+        #[allow(clippy::disallowed_methods)] // the raw environ itself is under test
+        let real = std::env::var_os(&key);
         assert!(
-            std::env::var_os(&key).is_none(),
+            real.is_none(),
             "an Ipê env write leaked into the real environ — the environ-reader race is back"
         );
     }
@@ -1650,7 +1702,8 @@ mod process_run_tests {
     /// (creating the file) and would NOT echo the clause back verbatim.
     #[test]
     fn args_are_literal_no_shell_interpretation() {
-        let marker = std::env::temp_dir().join(format!("ipe_noshell_{}", std::process::id()));
+        let marker = crate::scratch_core::test_temp_root()
+            .join(format!("ipe_noshell_{}", std::process::id()));
         let _ = std::fs::remove_file(&marker);
         let payload = format!("; touch {} ; echo pwned", marker.display());
         let res: IpeResult<String, String> = block(process_run::<String>(
@@ -1803,7 +1856,7 @@ mod process_run_with_tests {
     /// cwd override is honoured: `pwd` must echo the target directory.
     #[test]
     fn cwd_override_is_honoured() {
-        let tmp = std::env::temp_dir();
+        let tmp = crate::scratch_core::test_temp_root();
         let tmp_str = tmp.to_string_lossy().into_owned();
         let mut c = cfg("sh", &["-c", "pwd"]);
         c.cwd = IpeMaybe::Just(tmp_str.clone());
@@ -2082,7 +2135,7 @@ mod system_load_env_spawn_blocking_tests {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let dir = std::env::temp_dir().join(format!(
+        let dir = crate::scratch_core::test_temp_root().join(format!(
             "ipe_load_env_spawn_blocking_probe_{}_{}",
             std::process::id(),
             nanos

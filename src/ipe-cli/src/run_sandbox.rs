@@ -249,7 +249,9 @@ pub fn jail_and_exec(
 /// [`CliError::Io`] when the directory cannot be created.
 pub fn make_scoped_tmp() -> Result<ScratchDir, CliError> {
     ScratchDir::new("ipe-run").map_err(|e| CliError::Io {
-        path: std::env::temp_dir(),
+        path: ipe_sandbox::scratch::temp_root_text()
+            .map(std::path::PathBuf::from)
+            .unwrap_or_default(),
         source: e,
     })
 }

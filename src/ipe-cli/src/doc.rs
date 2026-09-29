@@ -6078,7 +6078,7 @@ mod tests {
     #[test]
     fn write_format_dir_creates_subfolder_and_writes_files() {
         use std::fs;
-        let tmp = std::env::temp_dir().join(format!("ipe-doc-test-{}", std::process::id()));
+        let tmp = ipe_test_temp::temp_root().join(format!("ipe-doc-test-{}", std::process::id()));
         let _ = fs::remove_dir_all(&tmp);
         let mut files = BTreeMap::new();
         files.insert("docs.json".to_owned(), "{\"v\":1}".to_owned());
@@ -6096,7 +6096,8 @@ mod tests {
     #[test]
     fn write_format_dir_refuses_planted_symlinks() {
         use std::fs;
-        let tmp = std::env::temp_dir().join(format!("ipe-doc-symlink-{}", std::process::id()));
+        let tmp =
+            ipe_test_temp::temp_root().join(format!("ipe-doc-symlink-{}", std::process::id()));
         let _ = fs::remove_dir_all(&tmp);
         let victim = tmp.join("victim");
         fs::create_dir_all(&victim).expect("victim dir");
@@ -6140,7 +6141,7 @@ mod tests {
     #[test]
     fn claim_site_refuses_an_out_inside_the_read_module_tree() {
         use std::fs;
-        let tmp = std::env::temp_dir().join(format!("ipe-doc-tree-{}", std::process::id()));
+        let tmp = ipe_test_temp::temp_root().join(format!("ipe-doc-tree-{}", std::process::id()));
         let _ = fs::remove_dir_all(&tmp);
         let flat = tmp.join("flat");
         fs::create_dir_all(&flat).expect("flat dir");
@@ -6208,7 +6209,8 @@ mod tests {
     #[test]
     fn claim_site_refuses_an_out_overlapping_the_package() {
         use std::fs;
-        let tmp = std::env::temp_dir().join(format!("ipe-doc-overlap-{}", std::process::id()));
+        let tmp =
+            ipe_test_temp::temp_root().join(format!("ipe-doc-overlap-{}", std::process::id()));
         let _ = fs::remove_dir_all(&tmp);
         let pkg = tmp.join("pkg");
         fs::create_dir_all(pkg.join("src")).expect("src dir");
@@ -6276,7 +6278,7 @@ mod tests {
     #[test]
     fn build_docs_or_stdlib_falls_back_on_empty_dir() {
         use std::fs;
-        let tmp = std::env::temp_dir().join(format!("ipe-doc-empty-{}", std::process::id()));
+        let tmp = ipe_test_temp::temp_root().join(format!("ipe-doc-empty-{}", std::process::id()));
         let _ = fs::remove_dir_all(&tmp);
         fs::create_dir_all(&tmp).expect("create empty dir");
 
@@ -6296,7 +6298,7 @@ mod tests {
     #[test]
     fn build_docs_or_stdlib_propagates_a_broken_project() {
         use std::fs;
-        let tmp = std::env::temp_dir().join(format!("ipe-doc-broken-{}", std::process::id()));
+        let tmp = ipe_test_temp::temp_root().join(format!("ipe-doc-broken-{}", std::process::id()));
         let _ = fs::remove_dir_all(&tmp);
         fs::create_dir_all(&tmp).expect("create project dir");
         // A syntactically broken module: a real project that must NOT collapse to
@@ -6320,7 +6322,8 @@ mod tests {
         use std::fs;
         use std::os::unix::fs::PermissionsExt as _;
 
-        let tmp = std::env::temp_dir().join(format!("ipe-doc-unreadable-{}", std::process::id()));
+        let tmp =
+            ipe_test_temp::temp_root().join(format!("ipe-doc-unreadable-{}", std::process::id()));
         let _ = fs::remove_dir_all(&tmp);
         let src = tmp.join("src");
         fs::create_dir_all(&src).expect("create src/");

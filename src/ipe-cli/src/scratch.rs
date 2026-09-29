@@ -112,7 +112,7 @@ mod tests {
     #[test]
     fn symlink_preseed_is_not_followed() {
         // Create a canary file that a symlink would point to.
-        let canary = std::env::temp_dir().join(format!(
+        let canary = ipe_test_temp::temp_root().join(format!(
             "ipe-canary-{}-{}",
             std::process::id(),
             "symlink-preseed-test"
@@ -140,15 +140,17 @@ mod tests {
 
     /// The sanctioned scratch modules, by workspace-relative path.
     ///
-    /// The one place the OS temp root may be read (behind exclusive-create +
-    /// entropy). Exact paths only — `scratch_helpers.rs` or another crate's
-    /// `scratch.rs` is audited like any other file.
-    const SANCTIONED_SCRATCH_MODULES: [&str; 5] = [
+    /// The places the OS temp root may be named: the scratch primitive and its
+    /// re-exports (behind exclusive-create + entropy), and the dev-only test
+    /// reader `ipe_test_temp`. Exact paths only — `scratch_helpers.rs` or
+    /// another crate's `scratch.rs` is audited like any other file.
+    const SANCTIONED_SCRATCH_MODULES: [&str; 6] = [
         "src/compiler/sandbox/src/scratch.rs",
         "src/ipe-cli/src/scratch.rs",
         "src/ipe-wrapper/src/scratch.rs",
         "src/runtime/rust/src/scratch_core.rs",
         "src/runtime/rust/src/scratch_host.rs",
+        "tools/test-temp/src/lib.rs",
     ];
 
     /// Whether workspace-relative `rel` is one of [`SANCTIONED_SCRATCH_MODULES`].
@@ -165,17 +167,37 @@ mod tests {
     /// a scratch constructor.
     const TMP_LITERAL_EXEMPT: [(&str, &str); 0] = [];
 
-    /// Shared temp bases a literal must never build a path from.
-    const TEMP_BASE_LITERALS: [&str; 3] = ["\"/tmp", "\"/var/tmp", "\"/dev/shm"];
+    /// Shared temp bases a literal must never build a path from, including the
+    /// real macOS paths behind its `/tmp` and `/var/tmp` symlinks.
+    const TEMP_BASE_LITERALS: [&str; 5] = [
+        "\"/tmp",
+        "\"/var/tmp",
+        "\"/dev/shm",
+        "\"/private/tmp",
+        "\"/private/var/tmp",
+    ];
+
+    /// `tempfile` constructors that create under the shared temp root (their
+    /// `_in` forms take an explicit base and are not listed).
+    const SHARED_ROOT_TEMPFILE_CALLS: [&str; 8] = [
+        "tempfile::tempdir(",
+        "tempfile::tempfile(",
+        "TempDir::new(",
+        "TempDir::with_prefix(",
+        "NamedTempFile::new(",
+        "NamedTempFile::with_prefix(",
+        ".tempdir()",
+        ".tempfile()",
+    ];
 
     /// Environment variables naming the OS temp root.
     const TEMP_ROOT_VARS: [&str; 3] = ["TMPDIR", "TMP", "TEMP"];
 
-    /// The `src` tree of every workspace member, read from the root manifest.
+    /// Every workspace member directory, read from the root manifest.
     ///
     /// Fails closed: an unreadable or unparsable manifest, an empty member
     /// list, or a glob member fails the gate rather than shrinking it.
-    fn workspace_src_roots(workspace: &std::path::Path) -> Vec<std::path::PathBuf> {
+    fn workspace_members(workspace: &std::path::Path) -> Vec<std::path::PathBuf> {
         let manifest = std::fs::read_to_string(workspace.join("Cargo.toml"));
         assert!(
             manifest.is_ok(),
@@ -204,25 +226,77 @@ mod tests {
                     member.is_some_and(|m| !m.contains(['*', '?', '['])),
                     "workspace member {member:?} is not a literal path"
                 );
-                workspace.join(member.unwrap_or_default()).join("src")
+                workspace.join(member.unwrap_or_default())
             })
             .collect()
     }
 
+    /// The production code roots of every workspace member: its `src` tree
+    /// (which must exist), and its build script and `templates` tree (the
+    /// backend's emitted-project sources) when present.
+    fn workspace_src_roots(workspace: &std::path::Path) -> Vec<std::path::PathBuf> {
+        let mut roots = Vec::new();
+        for member in workspace_members(workspace) {
+            roots.push(member.join("src"));
+            for optional in [member.join("build.rs"), member.join("templates")] {
+                if optional.exists() {
+                    roots.push(optional);
+                }
+            }
+        }
+        roots
+    }
+
+    /// Whether `manifest` names `ipe-test-temp` anywhere but a dev-dependency
+    /// table, by key or by `package` rename.
+    fn test_temp_outside_dev_deps(manifest: &toml::Table) -> bool {
+        let names_test_temp = |deps: Option<&toml::Value>| {
+            deps.and_then(toml::Value::as_table).is_some_and(|deps| {
+                deps.iter().any(|(key, spec)| {
+                    key == "ipe-test-temp"
+                        || spec.get("package").and_then(toml::Value::as_str)
+                            == Some("ipe-test-temp")
+                })
+            })
+        };
+        let in_table = |table: &toml::Table| {
+            names_test_temp(table.get("dependencies"))
+                || names_test_temp(table.get("build-dependencies"))
+        };
+        in_table(manifest)
+            || manifest
+                .get("target")
+                .and_then(toml::Value::as_table)
+                .is_some_and(|targets| {
+                    targets
+                        .values()
+                        .filter_map(toml::Value::as_table)
+                        .any(in_table)
+                })
+    }
+
     /// No production code derives a temp path from `temp_dir()`, a shared temp
-    /// base, or the temp-root environment.
+    /// base, the temp-root environment, or a shared-root `tempfile` constructor.
     ///
-    /// Covers the `src` tree of every workspace member outside
-    /// [`SANCTIONED_SCRATCH_MODULES`]: all such paths must go through a
-    /// `scratch` module's exclusively-created constructors.
+    /// A defense-in-depth tripwire, not the proof. The structural guarantee is
+    /// elsewhere: `clippy.toml` bans `std::env::temp_dir`, the whole-environment
+    /// iterators, and the shared-root `tempfile` constructors (per-site allows
+    /// only in the sanctioned modules, pinned by `home_read_scan`), and every
+    /// environment reader refuses `TMPDIR`/`TMP`/`TEMP`. This scan is textual:
+    /// a spelling it does not list (an alias, a macro-built path) passes it and
+    /// is caught by those layers instead.
     ///
-    /// Both the single-line form (`temp_dir().join(name)`) and the split form
-    /// (`let base = temp_dir(); base.join(name)`) are caught: a bare
-    /// `temp_dir()` binding in production is flagged the moment its value is
-    /// `.join`-ed to build a path. A `"/tmp"`, `"/var/tmp"`, or `"/dev/shm"`
-    /// literal is flagged when it builds a path (`Path::new`, `PathBuf::from`,
-    /// `.join`, `format!`) or is bound and later joined; a read of `TMPDIR`,
-    /// `TMP`, or `TEMP` is flagged outright.
+    /// Covers every workspace member's `src` tree, build script, and
+    /// `templates` tree outside [`SANCTIONED_SCRATCH_MODULES`]: all temporary
+    /// paths must go through a `scratch` module's exclusively-created
+    /// constructors.
+    ///
+    /// Any `temp_dir()` call is flagged, and so is the split form (`let base =
+    /// <temp base>; base.join(name)`). A shared temp base literal (see
+    /// [`TEMP_BASE_LITERALS`]) is flagged when it builds a path (`Path::new`,
+    /// `PathBuf::from`, `.join`, `format!`) or is bound and later joined; a read
+    /// of `TMPDIR`, `TMP`, or `TEMP` and a [`SHARED_ROOT_TEMPFILE_CALLS`] entry
+    /// are flagged outright.
     ///
     /// Test-only items (a test-only `#[cfg(…)]` or `#[test]`, located on the
     /// syntax tree) are exempt: test helpers that use predictable names in
@@ -246,7 +320,12 @@ mod tests {
 
         for src_root in &workspace_src_roots(workspace) {
             let mut rs_files: Vec<std::path::PathBuf> = Vec::new();
-            let walked = collect_rs_files(src_root, &mut rs_files);
+            let walked = if src_root.is_file() {
+                rs_files.push(src_root.clone());
+                Ok(())
+            } else {
+                collect_rs_files(src_root, &mut rs_files)
+            };
             assert!(
                 walked.is_ok(),
                 "cannot walk {}: {walked:?} — an unwalked tree cannot be audited",
@@ -258,15 +337,20 @@ mod tests {
                 src_root.display()
             );
             for path in &rs_files {
-                let rel = path.strip_prefix(src_root);
+                // A build-script root is a file: it is its own relative path.
+                let rel = if src_root.is_file() {
+                    src_root.file_name().map(std::path::Path::new)
+                } else {
+                    path.strip_prefix(src_root).ok()
+                };
                 let from_workspace = path.strip_prefix(workspace);
                 assert!(
-                    rel.is_ok() && from_workspace.is_ok(),
+                    rel.is_some() && from_workspace.is_ok(),
                     "{} is outside {}",
                     path.display(),
                     src_root.display()
                 );
-                let (Ok(rel), Ok(from_workspace)) = (rel, from_workspace) else {
+                let (Some(rel), Ok(from_workspace)) = (rel, from_workspace) else {
                     return;
                 };
                 if is_sanctioned_scratch_module(from_workspace) {
@@ -275,7 +359,7 @@ mod tests {
                 // An out-of-line test module carries no inline test attribute
                 // for the span finder, so a confirmed one is exempt whole; an
                 // unconfirmed one stays in scope.
-                if panic_scan::is_verified_test_path(src_root, rel) {
+                if src_root.is_dir() && panic_scan::is_verified_test_path(src_root, rel) {
                     continue;
                 }
                 // An unread file is unaudited, not clean.
@@ -306,6 +390,59 @@ mod tests {
             assert!(
                 hits > 0,
                 "stale temp-base exemption {file}: `{line}` matched no line — remove it"
+            );
+        }
+    }
+
+    /// The test-only temp-root reader never reaches production: no workspace
+    /// member depends on `ipe-test-temp` outside a dev-dependency table.
+    #[test]
+    fn the_test_temp_reader_is_a_dev_dependency_only() {
+        let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let Some(workspace) = manifest.ancestors().nth(2) else {
+            return;
+        };
+        for member in workspace_members(workspace) {
+            let path = member.join("Cargo.toml");
+            let parsed = std::fs::read_to_string(&path)
+                .map_err(|e| e.to_string())
+                .and_then(|text| text.parse::<toml::Table>().map_err(|e| e.to_string()));
+            assert!(parsed.is_ok(), "cannot read {}: {parsed:?}", path.display());
+            let Ok(parsed) = parsed else { return };
+            assert!(
+                !test_temp_outside_dev_deps(&parsed),
+                "{} depends on `ipe-test-temp` outside [dev-dependencies]",
+                path.display()
+            );
+        }
+    }
+
+    /// A production, build, or target-specific dependency on the test reader
+    /// is refused, by key or by rename; a dev-dependency is not.
+    #[test]
+    fn a_production_dependency_on_the_test_temp_reader_is_refused() {
+        for refused in [
+            "[dependencies]\nipe-test-temp = { path = \"../test-temp\" }\n",
+            "[build-dependencies]\nipe-test-temp = { path = \"../test-temp\" }\n",
+            "[dependencies]\ntt = { package = \"ipe-test-temp\", path = \"x\" }\n",
+            "[target.'cfg(unix)'.dependencies]\nipe-test-temp = { path = \"x\" }\n",
+        ] {
+            let parsed = refused.parse::<toml::Table>();
+            assert!(
+                parsed.as_ref().is_ok_and(test_temp_outside_dev_deps),
+                "must refuse: {refused}"
+            );
+        }
+        for accepted in [
+            "[dev-dependencies]\nipe-test-temp = { path = \"../test-temp\" }\n",
+            "[target.'cfg(unix)'.dev-dependencies]\nipe-test-temp = { path = \"x\" }\n",
+        ] {
+            let parsed = accepted.parse::<toml::Table>();
+            assert!(
+                parsed
+                    .as_ref()
+                    .is_ok_and(|m| !test_temp_outside_dev_deps(m)),
+                "must accept: {accepted}"
             );
         }
     }
@@ -370,10 +507,21 @@ mod tests {
                 continue;
             }
 
-            // Inline form: `temp_dir().join(...)` on one line.
+            // Any `temp_dir()` call: the root is read only by the scratch primitive.
             assert!(
-                !line.contains("temp_dir().join"),
-                "predictable temp_dir().join in production code at {}:{line_no} — \
+                !line.contains("temp_dir()"),
+                "OS temp root read in production code at {}:{line_no} — \
+                 use ScratchDir or ScratchFile instead.\n  line: {}",
+                path.display(),
+                line.trim()
+            );
+
+            // A `tempfile` constructor that creates under the shared root.
+            assert!(
+                !SHARED_ROOT_TEMPFILE_CALLS
+                    .iter()
+                    .any(|call| line.contains(call)),
+                "shared-temp-root tempfile constructor in production code at {}:{line_no} — \
                  use ScratchDir or ScratchFile instead.\n  line: {}",
                 path.display(),
                 line.trim()
@@ -543,13 +691,14 @@ mod tests {
     }
 
     /// The class gate passes on clean production code (a `ScratchDir`-based
-    /// construction and a bare non-joined `temp_dir()` value) and on test-region
-    /// predictable temps.
+    /// construction and an explicit-base `tempfile` constructor) and on
+    /// test-region predictable temps.
     #[test]
     fn class_gate_passes_clean_code() {
-        let clean = "fn make() -> std::io::Result<()> {\n    \
+        let clean = "fn make(base: &Path) -> std::io::Result<()> {\n    \
             let _dir = ScratchDir::new(\"ipe-run\")?;\n    \
-            let _base = std::env::temp_dir();\n    \
+            let _t = tempfile::tempdir_in(base)?;\n    \
+            let _f = tempfile::NamedTempFile::new_in(base)?;\n    \
             Ok(())\n}\n\
             #[cfg(test)]\nmod tests {\n    \
             fn helper() { let _ = std::env::temp_dir().join(\"ok-in-test\"); }\n}\n";
@@ -602,13 +751,47 @@ mod tests {
         );
     }
 
-    /// Every shared temp base building a path is refused, not only `/tmp`.
+    /// Every shared temp base building a path is refused, not only `/tmp`:
+    /// the macOS `/private` real paths included.
     #[test]
     fn class_gate_flags_every_shared_temp_base() {
         for injected in [
             "fn make() -> PathBuf {\n    PathBuf::from(\"/var/tmp\").join(\"n\")\n}\n",
             "fn make() -> &'static Path {\n    Path::new(\"/dev/shm/ipe-fixed\")\n}\n",
             "fn make() {\n    let root = \"/var/tmp\";\n    root.join(\"n\");\n}\n",
+            "fn make() -> PathBuf {\n    PathBuf::from(\"/private/tmp\").join(\"n\")\n}\n",
+            "fn make() -> &'static Path {\n    Path::new(\"/private/var/tmp/ipe-fixed\")\n}\n",
+            "fn make() -> String {\n    format!(\"/private/tmp/ipe-{}\", 1)\n}\n",
+            "fn make() {\n    let root = \"/private/tmp\";\n    root.join(\"n\");\n}\n",
+        ] {
+            assert!(gate_refuses(injected), "gate must flag: {injected}");
+        }
+    }
+
+    /// Any read of the OS temp root is refused, bound or not.
+    #[test]
+    fn class_gate_flags_a_bare_temp_root_read() {
+        for injected in [
+            "fn base() -> PathBuf {\n    std::env::temp_dir()\n}\n",
+            "fn base() {\n    let _base = std::env::temp_dir();\n}\n",
+            "fn base() -> PathBuf {\n    temp_dir()\n}\n",
+        ] {
+            assert!(gate_refuses(injected), "gate must flag: {injected}");
+        }
+    }
+
+    /// Every shared-root `tempfile` constructor is refused.
+    #[test]
+    fn class_gate_flags_shared_root_tempfile_constructors() {
+        for injected in [
+            "fn t() -> io::Result<TempDir> {\n    tempfile::tempdir()\n}\n",
+            "fn t() -> io::Result<File> {\n    tempfile::tempfile()\n}\n",
+            "fn t() -> io::Result<TempDir> {\n    TempDir::new()\n}\n",
+            "fn t() -> io::Result<TempDir> {\n    TempDir::with_prefix(\"x\")\n}\n",
+            "fn t() -> io::Result<NamedTempFile> {\n    NamedTempFile::new()\n}\n",
+            "fn t() -> io::Result<NamedTempFile> {\n    NamedTempFile::with_prefix(\"x\")\n}\n",
+            "fn t() -> io::Result<TempDir> {\n    Builder::new().prefix(\"x\").tempdir()\n}\n",
+            "fn t() -> io::Result<NamedTempFile> {\n    Builder::new().tempfile()\n}\n",
         ] {
             assert!(gate_refuses(injected), "gate must flag: {injected}");
         }
@@ -694,7 +877,8 @@ mod tests {
         }
     }
 
-    /// The roots are every workspace member's `src` tree, read from the manifest.
+    /// The roots are every workspace member's `src` tree, build script, and
+    /// `templates` tree, read from the manifest.
     #[test]
     fn class_gate_roots_follow_the_workspace_members() {
         let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
@@ -706,6 +890,35 @@ mod tests {
                 "{member} must be audited"
             );
         }
+        for extra in [
+            "src/compiler/backend/rust/templates",
+            "src/runtime/rust/build.rs",
+            "src/ipe-wrapper/build.rs",
+        ] {
+            assert!(
+                roots.contains(&workspace.join(extra)),
+                "{extra} must be audited"
+            );
+        }
+    }
+
+    /// An emitted-project template is audited like any production source: a
+    /// template that reads the OS temp root is refused.
+    #[test]
+    fn class_gate_flags_a_temp_read_in_a_template() {
+        let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let workspace = manifest.ancestors().nth(2).expect("workspace root");
+        let template = workspace.join("src/compiler/backend/rust/templates/main.rs");
+        let source = std::fs::read_to_string(&template).expect("template readable");
+        assert!(!gate_refuses(&source), "the shipped template is clean");
+        let planted = format!(
+            "{source}\npub fn scratch() -> std::path::PathBuf {{\n    \
+             std::path::PathBuf::from(\"/private/tmp\").join(\"ipe\")\n}}\n"
+        );
+        assert!(
+            gate_refuses(&planted),
+            "a planted template temp path is refused"
+        );
     }
 
     /// A missing root fails the walk rather than yielding an empty, clean tree.

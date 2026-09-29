@@ -1672,7 +1672,8 @@ mod tests {
     #[cfg(feature = "db")]
     #[tokio::test]
     async fn sqlite_store_checkpoint_survives_restart() {
-        let path = std::env::temp_dir().join(format!("ipetest_p5_{}.db", std::process::id()));
+        let path = crate::scratch_core::test_temp_root()
+            .join(format!("ipetest_p5_{}.db", std::process::id()));
         let p = path.to_str().unwrap();
         let _ = std::fs::remove_file(p);
         {
@@ -1702,7 +1703,8 @@ mod tests {
     #[cfg(feature = "db")]
     #[tokio::test]
     async fn sqlite_store_rejects_a_row_written_by_a_different_schema_tag() {
-        let path = std::env::temp_dir().join(format!("ipetest_h24_{}.db", std::process::id()));
+        let path = crate::scratch_core::test_temp_root()
+            .join(format!("ipetest_h24_{}.db", std::process::id()));
         let p = path.to_str().unwrap();
         let _ = std::fs::remove_file(p);
         {
@@ -1729,7 +1731,8 @@ mod tests {
     #[cfg(feature = "db")]
     #[tokio::test]
     async fn sqlite_store_accepts_a_row_written_by_the_same_schema_tag() {
-        let path = std::env::temp_dir().join(format!("ipetest_h24ok_{}.db", std::process::id()));
+        let path = crate::scratch_core::test_temp_root()
+            .join(format!("ipetest_h24ok_{}.db", std::process::id()));
         let p = path.to_str().unwrap();
         let _ = std::fs::remove_file(p);
         {
@@ -1754,7 +1757,7 @@ mod tests {
     #[cfg(feature = "db")]
     #[tokio::test]
     async fn postgres_store_rejects_a_row_written_by_a_different_schema_tag() {
-        let Ok(url) = std::env::var("IPE_TEST_PG_URL") else {
+        let Ok(url) = crate::system::read_env_var("IPE_TEST_PG_URL") else {
             return;
         };
         let sid = format!("pgtest_h24_{}", std::process::id());
@@ -1784,7 +1787,7 @@ mod tests {
     #[cfg(feature = "redis_store")]
     #[tokio::test]
     async fn redis_store_rejects_a_row_written_by_a_different_schema_tag() {
-        let Ok(url) = std::env::var("IPE_TEST_REDIS_URL") else {
+        let Ok(url) = crate::system::read_env_var("IPE_TEST_REDIS_URL") else {
             return;
         };
         let sid = format!("redistest_h24_{}", std::process::id());
@@ -1819,7 +1822,7 @@ mod tests {
     #[cfg(feature = "db")]
     #[tokio::test]
     async fn postgres_store_checkpoint_survives_restart() {
-        let Ok(url) = std::env::var("IPE_TEST_PG_URL") else {
+        let Ok(url) = crate::system::read_env_var("IPE_TEST_PG_URL") else {
             return;
         };
         let sid = format!("pgtest_{}", std::process::id());
@@ -1849,7 +1852,7 @@ mod tests {
     #[cfg(feature = "redis_store")]
     #[tokio::test]
     async fn redis_store_checkpoint_survives_restart() {
-        let Ok(url) = std::env::var("IPE_TEST_REDIS_URL") else {
+        let Ok(url) = crate::system::read_env_var("IPE_TEST_REDIS_URL") else {
             return;
         };
         let sid = format!("redistest_{}", std::process::id());
@@ -1892,7 +1895,8 @@ mod tests {
     #[cfg(feature = "db")]
     #[tokio::test]
     async fn sqlite_store_web_sessions_excludes_cold_rows() {
-        let path = std::env::temp_dir().join(format!("ipetest_webs_{}.db", std::process::id()));
+        let path = crate::scratch_core::test_temp_root()
+            .join(format!("ipetest_webs_{}.db", std::process::id()));
         let p = path.to_str().unwrap();
         let _ = std::fs::remove_file(p);
         let s: SqliteStore<i32, ()> = SqliteStore::new(p, Duration::from_secs(60), TEST_TAG)
@@ -1931,7 +1935,8 @@ mod tests {
     #[tokio::test]
     async fn sqlite_store_new_format_round_trips_model_through_json() {
         use base64::{Engine as _, engine::general_purpose::STANDARD as B64};
-        let path = std::env::temp_dir().join(format!("ipetest_json_{}.db", std::process::id()));
+        let path = crate::scratch_core::test_temp_root()
+            .join(format!("ipetest_json_{}.db", std::process::id()));
         let p = path.to_str().unwrap();
         let _ = std::fs::remove_file(p);
         let model: i32 = 42;
@@ -1975,7 +1980,8 @@ mod tests {
     #[cfg(feature = "db")]
     #[tokio::test]
     async fn sqlite_store_garbage_row_is_rejected_not_crashed() {
-        let path = std::env::temp_dir().join(format!("ipetest_garbage_{}.db", std::process::id()));
+        let path = crate::scratch_core::test_temp_root()
+            .join(format!("ipetest_garbage_{}.db", std::process::id()));
         let p = path.to_str().unwrap();
         let _ = std::fs::remove_file(p);
         let s: SqliteStore<i32, ()> = SqliteStore::new(p, Duration::from_secs(60), TEST_TAG)
@@ -2003,7 +2009,7 @@ mod tests {
     #[cfg(feature = "db")]
     #[tokio::test]
     async fn postgres_store_new_format_round_trips_and_rejects_garbage_rows() {
-        let Ok(url) = std::env::var("IPE_TEST_PG_URL") else {
+        let Ok(url) = crate::system::read_env_var("IPE_TEST_PG_URL") else {
             return;
         };
         let sid = format!("pgtest_json_{}", std::process::id());
@@ -2048,7 +2054,7 @@ mod tests {
     #[cfg(feature = "redis_store")]
     #[tokio::test]
     async fn redis_store_new_format_round_trips_and_rejects_garbage_rows() {
-        let Ok(url) = std::env::var("IPE_TEST_REDIS_URL") else {
+        let Ok(url) = crate::system::read_env_var("IPE_TEST_REDIS_URL") else {
             return;
         };
         let sid = format!("redistest_json_{}", std::process::id());
@@ -2090,7 +2096,7 @@ mod tests {
     #[cfg(feature = "db")]
     #[tokio::test]
     async fn postgres_store_web_sessions_excludes_cold_rows() {
-        let Ok(url) = std::env::var("IPE_TEST_PG_URL") else {
+        let Ok(url) = crate::system::read_env_var("IPE_TEST_PG_URL") else {
             return;
         };
         let cold_sid = format!("pgtest_cold_{}", std::process::id());
@@ -2121,7 +2127,7 @@ mod tests {
     #[cfg(feature = "redis_store")]
     #[tokio::test]
     async fn redis_store_web_sessions_excludes_cold_rows() {
-        let Ok(url) = std::env::var("IPE_TEST_REDIS_URL") else {
+        let Ok(url) = crate::system::read_env_var("IPE_TEST_REDIS_URL") else {
             return;
         };
         let cold_sid = format!("redistest_cold_{}", std::process::id());
@@ -2154,7 +2160,8 @@ mod tests {
     #[cfg(all(feature = "web", unix))]
     #[tokio::test]
     async fn file_store_never_writes_through_planted_symlinks() {
-        let dir = std::env::temp_dir().join(format!("ipetest_file_links_{}", std::process::id()));
+        let dir = crate::scratch_core::test_temp_root()
+            .join(format!("ipetest_file_links_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         assert!(std::fs::create_dir_all(&dir).is_ok(), "make scratch dir");
         let victim = dir.join("victim.txt");
@@ -2185,7 +2192,8 @@ mod tests {
     #[cfg(feature = "web")]
     #[tokio::test]
     async fn file_store_leaves_no_temp_file_behind() {
-        let dir = std::env::temp_dir().join(format!("ipetest_file_notmp_{}", std::process::id()));
+        let dir = crate::scratch_core::test_temp_root()
+            .join(format!("ipetest_file_notmp_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         assert!(std::fs::create_dir_all(&dir).is_ok(), "make scratch dir");
         let entries = |d: &std::path::Path| {
@@ -2241,7 +2249,8 @@ mod tests {
     #[cfg(feature = "web")]
     #[tokio::test]
     async fn file_store_checkpoint_survives_restart() {
-        let path = std::env::temp_dir().join(format!("ipetest_file_{}.json", std::process::id()));
+        let path = crate::scratch_core::test_temp_root()
+            .join(format!("ipetest_file_{}.json", std::process::id()));
         let p = path.to_str().unwrap();
         let _ = std::fs::remove_file(p);
         {
@@ -2267,8 +2276,8 @@ mod tests {
     #[cfg(feature = "web")]
     #[tokio::test]
     async fn file_store_rejects_a_row_written_by_a_different_schema_tag() {
-        let path =
-            std::env::temp_dir().join(format!("ipetest_fileh24_{}.json", std::process::id()));
+        let path = crate::scratch_core::test_temp_root()
+            .join(format!("ipetest_fileh24_{}.json", std::process::id()));
         let p = path.to_str().unwrap();
         let _ = std::fs::remove_file(p);
         {
@@ -2292,8 +2301,8 @@ mod tests {
     #[cfg(feature = "web")]
     #[tokio::test]
     async fn file_store_starts_empty_on_a_corrupt_map() {
-        let path =
-            std::env::temp_dir().join(format!("ipetest_filecorrupt_{}.json", std::process::id()));
+        let path = crate::scratch_core::test_temp_root()
+            .join(format!("ipetest_filecorrupt_{}.json", std::process::id()));
         let p = path.to_str().unwrap();
         std::fs::write(p, b"{ this is not valid json").unwrap();
         let s: FileStore<i32, ()> = FileStore::new(p, Duration::from_secs(60), TEST_TAG);
@@ -2384,7 +2393,8 @@ mod tests {
     #[cfg(feature = "web")]
     #[tokio::test]
     async fn choose_store_honours_file_and_memory_without_error() {
-        let path = std::env::temp_dir().join(format!("ipetest_choose_{}.json", std::process::id()));
+        let path = crate::scratch_core::test_temp_root()
+            .join(format!("ipetest_choose_{}.json", std::process::id()));
         let p = path.to_string_lossy().into_owned();
         let _ = std::fs::remove_file(&p);
         assert!(
@@ -2413,7 +2423,8 @@ mod tests {
     #[tokio::test]
     async fn file_store_map_is_owner_only_0600() {
         use std::os::unix::fs::PermissionsExt as _;
-        let path = std::env::temp_dir().join(format!("ipetest_perms_{}.json", std::process::id()));
+        let path = crate::scratch_core::test_temp_root()
+            .join(format!("ipetest_perms_{}.json", std::process::id()));
         let p = path.to_string_lossy().into_owned();
         let _ = std::fs::remove_file(&p);
         let s: FileStore<i32, ()> = FileStore::new(&p, Duration::from_secs(60), TEST_TAG);
@@ -2516,8 +2527,8 @@ mod tests {
     #[cfg(feature = "web")]
     #[tokio::test]
     async fn file_store_reconstructs_across_an_additive_model_change() {
-        let path =
-            std::env::temp_dir().join(format!("ipetest_addfile_{}.json", std::process::id()));
+        let path = crate::scratch_core::test_temp_root()
+            .join(format!("ipetest_addfile_{}.json", std::process::id()));
         let p = path.to_str().unwrap();
         let _ = std::fs::remove_file(p);
         {
@@ -2567,8 +2578,8 @@ mod tests {
     #[cfg(feature = "web")]
     #[tokio::test]
     async fn file_store_retyped_field_falls_back_to_reinit() {
-        let path =
-            std::env::temp_dir().join(format!("ipetest_addretype_{}.json", std::process::id()));
+        let path = crate::scratch_core::test_temp_root()
+            .join(format!("ipetest_addretype_{}.json", std::process::id()));
         let p = path.to_str().unwrap();
         let _ = std::fs::remove_file(p);
         {
@@ -2602,8 +2613,8 @@ mod tests {
     #[cfg(feature = "web")]
     #[tokio::test]
     async fn file_store_removed_field_falls_back_to_reinit() {
-        let path =
-            std::env::temp_dir().join(format!("ipetest_addremove_{}.json", std::process::id()));
+        let path = crate::scratch_core::test_temp_root()
+            .join(format!("ipetest_addremove_{}.json", std::process::id()));
         let p = path.to_str().unwrap();
         let _ = std::fs::remove_file(p);
         {
@@ -2635,8 +2646,8 @@ mod tests {
     #[cfg(feature = "web")]
     #[tokio::test]
     async fn file_store_reconstructing_unchanged_schema_restores_verbatim() {
-        let path =
-            std::env::temp_dir().join(format!("ipetest_addsame_{}.json", std::process::id()));
+        let path = crate::scratch_core::test_temp_root()
+            .join(format!("ipetest_addsame_{}.json", std::process::id()));
         let p = path.to_str().unwrap();
         let _ = std::fs::remove_file(p);
         {
@@ -2678,8 +2689,8 @@ mod tests {
     #[cfg(feature = "web")]
     #[tokio::test]
     async fn file_store_reconstructing_corrupt_body_falls_back_to_reinit() {
-        let path =
-            std::env::temp_dir().join(format!("ipetest_addcorrupt_{}.json", std::process::id()));
+        let path = crate::scratch_core::test_temp_root()
+            .join(format!("ipetest_addcorrupt_{}.json", std::process::id()));
         let p = path.to_str().unwrap();
         let _ = std::fs::remove_file(p);
         // Seed a raw corrupt row directly in the on-disk map, bypassing `set`.
@@ -2705,7 +2716,8 @@ mod tests {
     #[cfg(feature = "db")]
     #[tokio::test]
     async fn sqlite_store_reconstructs_across_an_additive_model_change() {
-        let path = std::env::temp_dir().join(format!("ipetest_addsql_{}.db", std::process::id()));
+        let path = crate::scratch_core::test_temp_root()
+            .join(format!("ipetest_addsql_{}.db", std::process::id()));
         let p = path.to_str().unwrap();
         let _ = std::fs::remove_file(p);
         {

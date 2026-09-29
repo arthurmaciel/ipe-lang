@@ -2,11 +2,12 @@
 //!
 //! A text audit that must skip test code reads these spans instead of
 //! counting braces, so a brace inside a string or comment can never end a test
-//! region early or carry one past its item.
+//! region early or carry one past its item. A span holds only lines the test
+//! item owns outright: a line it shares with any other token stays in scope.
 
 use std::ops::RangeInclusive;
 
-use proc_macro2::Span;
+use proc_macro2::{LineColumn, Span};
 use syn::token::{Brace, Semi};
 use syn::visit::{self, Visit};
 use syn::{Attribute, Fields, ForeignItem, ImplItem, Item, MacroDelimiter, TraitItem};
@@ -20,9 +21,13 @@ use crate::{
 ///
 /// An item is test-only as [`crate::scan_str`] judges one: a test-only
 /// `#[cfg(…)]` or, on a function, `#[test]`. Each span runs from the item's
-/// first attribute to its closing brace or semicolon. A file whose inner
-/// attributes are test-only is one span over every line. A test-only item whose
-/// end cannot be located yields no span, so its lines stay in scope.
+/// first attribute to its closing brace or semicolon. The first line is left
+/// out when anything but whitespace precedes the attribute, and the last when
+/// anything but whitespace follows the close, so a production token sharing a
+/// line with a test item is never skipped; an item that owns no whole line
+/// yields no span. A file whose inner attributes are test-only is one span over
+/// every line. A test-only item whose end cannot be located yields no span, so
+/// its lines stay in scope.
 ///
 /// # Errors
 ///
@@ -32,26 +37,63 @@ pub fn test_only_item_lines(src: &str) -> Result<Vec<RangeInclusive<usize>>, syn
     if attrs_test_only(&file.attrs, false) {
         return Ok(vec![1..=src.lines().count().max(1)]);
     }
-    let mut spans = TestSpans::default();
+    let mut spans = TestSpans {
+        lines: src.lines().collect(),
+        spans: Vec::new(),
+    };
     spans.visit_file(&file);
-    Ok(spans.0)
+    Ok(spans.spans)
 }
 
-/// The spans collected so far.
-#[derive(Default)]
-struct TestSpans(Vec<RangeInclusive<usize>>);
+/// The source lines and the spans collected so far.
+struct TestSpans<'src> {
+    lines: Vec<&'src str>,
+    spans: Vec<RangeInclusive<usize>>,
+}
 
-impl TestSpans {
-    /// Record the span from the first of `attrs` to line `end`, when both exist.
-    fn record(&mut self, attrs: &[Attribute], end: Option<usize>) {
-        if let (Some(first), Some(end)) = (attrs.first(), end) {
-            let [pound] = first.pound_token.spans;
-            self.0.push(start_line(pound)..=end);
+impl TestSpans<'_> {
+    /// Record the lines the item from the first of `attrs` to `end` owns
+    /// outright, when both exist.
+    fn record(&mut self, attrs: &[Attribute], end: Option<LineColumn>) {
+        let (Some(first), Some(end)) = (attrs.first(), end) else {
+            return;
+        };
+        let [pound] = first.pound_token.spans;
+        let start = pound.start();
+        let first_line = if self.blank_before(start) {
+            start.line
+        } else {
+            start.line.saturating_add(1)
+        };
+        let last_line = if self.blank_after(end) {
+            end.line
+        } else {
+            end.line.saturating_sub(1)
+        };
+        if first_line <= last_line {
+            self.spans.push(first_line..=last_line);
         }
+    }
+
+    /// Whether only whitespace precedes `at` on its line.
+    fn blank_before(&self, at: LineColumn) -> bool {
+        self.line_text(at.line)
+            .is_some_and(|text| text.chars().take(at.column).all(char::is_whitespace))
+    }
+
+    /// Whether only whitespace follows `at` on its line.
+    fn blank_after(&self, at: LineColumn) -> bool {
+        self.line_text(at.line)
+            .is_some_and(|text| text.chars().skip(at.column).all(char::is_whitespace))
+    }
+
+    /// The text of 1-based line `line`.
+    fn line_text(&self, line: usize) -> Option<&str> {
+        self.lines.get(line.checked_sub(1)?).copied()
     }
 }
 
-impl<'ast> Visit<'ast> for TestSpans {
+impl<'ast> Visit<'ast> for TestSpans<'_> {
     fn visit_item(&mut self, item: &'ast Item) {
         if item_test_only(item) {
             self.record(item_attrs(item), item_end(item));
@@ -143,8 +185,8 @@ fn item_attrs(item: &Item) -> &[Attribute] {
     }
 }
 
-/// The line `item` ends on: its closing brace or semicolon.
-fn item_end(item: &Item) -> Option<usize> {
+/// Where `item` ends: just past its closing brace or semicolon.
+fn item_end(item: &Item) -> Option<LineColumn> {
     Some(match item {
         Item::Const(i) => semi_end(&i.semi_token),
         Item::Enum(i) => brace_end(&i.brace_token),
@@ -171,37 +213,32 @@ fn item_end(item: &Item) -> Option<usize> {
     })
 }
 
-/// The line a macro invocation ends on: its semicolon, else its closing delimiter.
-fn macro_end(semi: Option<&Semi>, delimiter: &MacroDelimiter) -> usize {
+/// Where a macro invocation ends: past its semicolon, else its closing delimiter.
+fn macro_end(semi: Option<&Semi>, delimiter: &MacroDelimiter) -> LineColumn {
     semi.map_or_else(
         || match delimiter {
-            MacroDelimiter::Paren(d) => end_line(d.span.close()),
-            MacroDelimiter::Brace(d) => end_line(d.span.close()),
-            MacroDelimiter::Bracket(d) => end_line(d.span.close()),
+            MacroDelimiter::Paren(d) => end_of(d.span.close()),
+            MacroDelimiter::Brace(d) => end_of(d.span.close()),
+            MacroDelimiter::Bracket(d) => end_of(d.span.close()),
         },
         semi_end,
     )
 }
 
-/// The line a closing brace ends on.
-fn brace_end(brace: &Brace) -> usize {
-    end_line(brace.span.close())
+/// Where a closing brace ends.
+fn brace_end(brace: &Brace) -> LineColumn {
+    end_of(brace.span.close())
 }
 
-/// The line a semicolon ends on.
-fn semi_end(semi: &Semi) -> usize {
+/// Where a semicolon ends.
+fn semi_end(semi: &Semi) -> LineColumn {
     let [span] = semi.spans;
-    end_line(span)
+    end_of(span)
 }
 
-/// The 1-based line `span` starts on.
-fn start_line(span: Span) -> usize {
-    span.start().line
-}
-
-/// The 1-based line `span` ends on.
-fn end_line(span: Span) -> usize {
-    span.end().line
+/// The 1-based line and 0-based character column just past `span`.
+fn end_of(span: Span) -> LineColumn {
+    span.end()
 }
 
 #[cfg(test)]
@@ -245,5 +282,25 @@ mod tests {
             Some(vec![1..=3])
         );
         assert!(test_only_item_lines("fn (").is_err());
+    }
+
+    /// A line a test item shares with any other token is never in a span, so
+    /// the production code on it stays audited.
+    #[test]
+    fn a_line_mixing_test_and_production_tokens_is_refused_a_span() {
+        let head = "fn prod() { let _ = 1; } #[cfg(test)]\n\
+                    mod tests {\n\
+                        fn t() {}\n\
+                    }\n";
+        assert_eq!(test_only_item_lines(head).ok(), Some(vec![2..=4]));
+        let tail = "#[cfg(test)]\n\
+                    mod tests {\n\
+                        fn t() {}\n\
+                    } fn prod() {}\n";
+        assert_eq!(test_only_item_lines(tail).ok(), Some(vec![1..=3]));
+        let one_line = "#[cfg(test)] fn t() {} fn prod() {}\n";
+        assert_eq!(test_only_item_lines(one_line).ok(), Some(vec![]));
+        let alone = "  #[cfg(test)] fn t() {}  \n";
+        assert_eq!(test_only_item_lines(alone).ok(), Some(vec![1..=1]));
     }
 }

@@ -110,7 +110,8 @@ fn assembled_tuple_wrapper_builds_and_runs() {
     let slug = "geom";
     let ffi_body = format!("pub mod {slug} {{\n{bindings}}}\npub use {slug}::*;\n");
 
-    let root = std::env::temp_dir().join(format!("ipe_ffi_tuple_seal_{}", std::process::id()));
+    let root =
+        ipe_test_temp::temp_root().join(format!("ipe_ffi_tuple_seal_{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
 
     // The foreign `geom` crate the wrapper calls at `::geom::extent`. A `u64`

@@ -60,6 +60,29 @@ mod scratch_core {
 
 pub use scratch_core::*;
 
+// The runtime's temp-root names are the names `ipe_env` refuses: the two lists
+// cannot drift without failing this build.
+// IPE-RUST-AUDIT:ACCEPTED (Arthur Maciel) — compile-time `const` assertion (not a runtime panic); it fails the build if the runtime's temp-root names drift from the names `ipe_env` refuses [ledger #boundary]
+const _: () = assert!(names_eq(&TEMP_ROOT_NAMES, &ipe_env::TEMP_ROOT_NAMES));
+
+/// Whether two name lists are equal, element by element.
+const fn names_eq(a: &[&str], b: &[&str]) -> bool {
+    match (a, b) {
+        ([], []) => true,
+        ([x, a @ ..], [y, b @ ..]) => bytes_eq(x.as_bytes(), y.as_bytes()) && names_eq(a, b),
+        ([], [_, ..]) | ([_, ..], []) => false,
+    }
+}
+
+/// Whether two byte strings are equal.
+const fn bytes_eq(a: &[u8], b: &[u8]) -> bool {
+    match (a, b) {
+        ([], []) => true,
+        ([x, a @ ..], [y, b @ ..]) => *x == *y && bytes_eq(a, b),
+        ([], [_, ..]) | ([_, ..], []) => false,
+    }
+}
+
 #[cfg(all(test, windows))]
 mod windows_tests {
     use super::ScratchDir;

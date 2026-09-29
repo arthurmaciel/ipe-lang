@@ -75,7 +75,7 @@ pub fn vendor_and_run(
     slot: &str,
     subcmd: &str,
 ) -> DResult<std::io::Result<std::process::ExitStatus>> {
-    let out = std::env::temp_dir().join(slot);
+    let out = ipe_test_temp::temp_root().join(slot);
     let _ = std::fs::remove_dir_all(&out);
     let src = out.join("src");
     std::fs::create_dir_all(&src).map_err(|e| io_bug(&src, &e))?;

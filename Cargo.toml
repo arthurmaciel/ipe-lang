@@ -29,6 +29,7 @@ members = [
     "src/ipe-cli",
     "src/ipe-docs",
     "tools/e2e-support",
+    "tools/test-temp",
     "src/runtime/rust",
     "tools/ipe-ffi-inspector",
     "tools/regen-goldens",

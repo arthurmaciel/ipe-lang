@@ -22,4 +22,18 @@ disallowed-methods = [
     { path = "std::env::var_os", reason = "read through `ipe_env::var_os` (home names refused; the home is `ipe_sandbox::home::home_dir`)" },
     { path = "std::env::vars", reason = "a whole-environment iterator hands the home out under its own name; read named keys through `ipe_env`" },
     { path = "std::env::vars_os", reason = "a whole-environment iterator hands the home out under its own name; read named keys through `ipe_env`" },
+    # The OS temp root is a base other local users can write. Production code
+    # creates temporary entries only through `ipe_sandbox::scratch`, which
+    # verifies the base and creates exclusively under it; test code reads the
+    # root through the dev-only `ipe_test_temp::temp_root`. `allow-invalid`
+    # keeps the `tempfile` entries quiet in crates that do not depend on it.
+    { path = "std::env::temp_dir", reason = "a base other users can write; use `ipe_sandbox::scratch` (tests: `ipe_test_temp::temp_root`)" },
+    { path = "tempfile::tempdir", reason = "creates under the shared temp root; use `ipe_sandbox::scratch::ScratchDir` (tests: `tempfile::tempdir_in(ipe_test_temp::temp_root())`)", allow-invalid = true },
+    { path = "tempfile::tempfile", reason = "creates under the shared temp root; use `ipe_sandbox::scratch::ScratchFile`", allow-invalid = true },
+    { path = "tempfile::TempDir::new", reason = "creates under the shared temp root; use `ipe_sandbox::scratch::ScratchDir` (tests: `tempfile::TempDir::new_in(ipe_test_temp::temp_root())`)", allow-invalid = true },
+    { path = "tempfile::TempDir::with_prefix", reason = "creates under the shared temp root; use `ipe_sandbox::scratch::ScratchDir`", allow-invalid = true },
+    { path = "tempfile::NamedTempFile::new", reason = "creates under the shared temp root; use `ipe_sandbox::scratch::ScratchFile`", allow-invalid = true },
+    { path = "tempfile::NamedTempFile::with_prefix", reason = "creates under the shared temp root; use `ipe_sandbox::scratch::ScratchFile`", allow-invalid = true },
+    { path = "tempfile::Builder::tempdir", reason = "creates under the shared temp root; use `ipe_sandbox::scratch::ScratchDir` or `Builder::tempdir_in`", allow-invalid = true },
+    { path = "tempfile::Builder::tempfile", reason = "creates under the shared temp root; use `ipe_sandbox::scratch::ScratchFile` or `Builder::tempfile_in`", allow-invalid = true },
 ]

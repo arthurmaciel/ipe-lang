@@ -41,9 +41,26 @@ const ENV_ALLOW_FILES: &[&str] = &[
     "src/compiler/sandbox/src/host_env.rs",
 ];
 
+/// Workspace-relative files outside the runtime crate that read the OS temp
+/// root, under a per-site `clippy::disallowed_methods` allow: the dev-only test
+/// reader (production creates temporary entries through the runtime's
+/// `scratch_core`, which the sandbox crate includes).
+const TEMP_ROOT_ALLOW_FILES: &[&str] = &["tools/test-temp/src/lib.rs"];
+
 /// The runtime crate: built with its own `clippy.toml` and its own home
 /// accessor, so the compiler-side env rules do not apply beneath it.
 const RUNTIME_ROOT: &str = "src/runtime/rust/";
+
+/// Runtime files that may carry the `clippy::disallowed_methods` escape hatch:
+/// the environment accessor, the temp-root owner, the recursion-limit trip,
+/// the build script, and an integration test with no crate-private accessor.
+const RUNTIME_ALLOW_FILES: &[&str] = &[
+    "src/runtime/rust/build.rs",
+    "src/runtime/rust/src/core.rs",
+    "src/runtime/rust/src/scratch_core.rs",
+    "src/runtime/rust/src/system.rs",
+    "src/runtime/rust/tests/debug_behavior.rs",
+];
 
 /// The sandbox crate's sources: the only callers of the crate-private raw
 /// passthrough `host_env::granted`.
@@ -670,8 +687,9 @@ fn the_env_escape_hatch_is_pinned_to_the_audited_readers() {
     let offenders: Vec<_> = files
         .iter()
         .filter(|(rel, text)| {
-            !rel.starts_with(RUNTIME_ROOT)
-                && !ENV_ALLOW_FILES.contains(&rel.as_str())
+            !ENV_ALLOW_FILES.contains(&rel.as_str())
+                && !TEMP_ROOT_ALLOW_FILES.contains(&rel.as_str())
+                && !RUNTIME_ALLOW_FILES.contains(&rel.as_str())
                 && allows_disallowed_methods(text)
         })
         .map(|(rel, _)| rel)
@@ -766,6 +784,8 @@ fn every_pinned_file_exists() {
     for rel in ACCESSOR_FILES
         .iter()
         .chain(ENV_ALLOW_FILES)
+        .chain(TEMP_ROOT_ALLOW_FILES)
+        .chain(RUNTIME_ALLOW_FILES)
         .chain(JAIL_ENV_CALLERS)
         .chain(HOME_VAR_FILES)
     {

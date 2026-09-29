@@ -259,6 +259,36 @@ impl fmt::Display for LeafName {
     }
 }
 
+/// Variables that name the OS temp root, a base other local users can write.
+///
+/// No environment reader outside this module answers them: the temp root is
+/// resolved only by [`temp_root`], behind the base checks every constructor
+/// runs. The compiler's `ipe_env` refuses the same names; the sandbox asserts
+/// the two lists agree at build time.
+pub const TEMP_ROOT_NAMES: [&str; 3] = ["TMPDIR", "TMP", "TEMP"];
+
+/// Whether `key` spells a [`TEMP_ROOT_NAMES`] entry under any case mapping.
+///
+/// Fails closed: a key matches when its per-character ASCII fold or its full
+/// Unicode uppercase equals a name, ASCII case ignored.
+#[must_use]
+pub fn is_temp_root_key(key: &str) -> bool {
+    let folded: String = key
+        .chars()
+        .map(|c| {
+            c.to_uppercase()
+                .next()
+                .filter(char::is_ascii_alphabetic)
+                .or_else(|| c.to_lowercase().next().filter(char::is_ascii_alphabetic))
+                .unwrap_or(c)
+        })
+        .collect();
+    let upper = key.to_uppercase();
+    TEMP_ROOT_NAMES
+        .iter()
+        .any(|n| n.eq_ignore_ascii_case(&folded) || n.eq_ignore_ascii_case(&upper))
+}
+
 /// The OS temp root; WebAssembly has none.
 ///
 /// # Errors
@@ -271,8 +301,35 @@ fn temp_root() -> io::Result<PathBuf> {
             "this target has no OS temp directory",
         ))
     } else {
-        Ok(std::env::temp_dir())
+        #[allow(clippy::disallowed_methods)]
+        // the one temp-root lookup, behind every constructor's base checks
+        let root = std::env::temp_dir();
+        Ok(root)
     }
+}
+
+/// The OS temp root as text, for redacting it from output or naming it in a
+/// diagnostic; `None` where [`temp_root`] has none.
+///
+/// Text, not a path: temporary entries are created only through this module's
+/// constructors, never under a base read from here.
+#[must_use]
+pub fn temp_root_text() -> Option<String> {
+    temp_root()
+        .ok()
+        .map(|root| root.to_string_lossy().into_owned())
+}
+
+/// The OS temp root for this crate's test code.
+///
+/// Tests that need the shared base itself (to plant a hostile entry, or to
+/// build a fixture next to a scratch entry) read it here, never through the
+/// standard library directly.
+#[cfg(test)]
+#[must_use]
+#[allow(clippy::disallowed_methods)] // the sanctioned test reader of the temp root
+pub fn test_temp_root() -> PathBuf {
+    std::env::temp_dir()
 }
 
 /// The bases a length-bounded entry may live under: the OS temp root, then, on Unix, the short `/tmp`.
@@ -1525,7 +1582,7 @@ mod tests {
             let nanos = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .map_or(0, |d| d.as_nanos());
-            let root = std::env::temp_dir().join(format!(
+            let root = test_temp_root().join(format!(
                 "ipe-private-scratch-{tag}-{}-{nanos}",
                 std::process::id()
             ));
