@@ -1173,7 +1173,7 @@ enum LintPass {
         /// The `lint.ipe` document, when its path forms a URI.
         uri: Option<Url>,
         /// The refusal, carrying the loader's typed error.
-        diagnostic: lsp_types::Diagnostic,
+        diagnostic: Box<lsp_types::Diagnostic>,
     },
 }
 
@@ -1184,7 +1184,7 @@ impl LintPass {
             Ok(config) => Self::Run(config),
             Err(err) => Self::Withheld {
                 uri: Url::from_file_path(dir.join(ipe_lint::LINT_CONFIG_FILE)).ok(),
-                diagnostic: lint_config_diagnostic(&err),
+                diagnostic: Box::new(lint_config_diagnostic(&err)),
             },
         }
     }
@@ -1271,7 +1271,10 @@ fn compute_batch(
         LintPass::Run(config) => config,
         LintPass::Withheld { uri, diagnostic } => {
             if let Some(uri) = uri.clone().or(entry_uri) {
-                per_uri.entry(uri).or_default().push(diagnostic.clone());
+                per_uri
+                    .entry(uri)
+                    .or_default()
+                    .push(diagnostic.as_ref().clone());
             }
             return per_uri.into_iter().collect();
         }
