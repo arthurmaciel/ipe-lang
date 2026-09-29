@@ -67,6 +67,7 @@ CI_ONLY_REASONS = {
     "privileged": "needs root, a system sandbox, or kernel settings on the runner",
     "classifier": "a CI path classifier; it has no meaning outside a workflow run",
     "run-history": "a verdict over other workflow runs on the default branch; only GitHub holds them",
+    "pull-request-state": "a verdict over a pull request's reviews and commits; only GitHub holds them",
     "inline-script": (
         "an inline workflow script bound to the runner layout; local parity "
         "needs it extracted into a tools/scripts entry point"

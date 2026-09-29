@@ -37,7 +37,7 @@
 #                 crates only), {repo_root}, {target_dir}.
 #   covered-by    Another gate context whose local run exercises this one.
 #   ci-only       Not reproducible locally: platform | privileged | classifier |
-#                 inline-script.
+#                 run-history | pull-request-state | inline-script.
 # `.github/ci/local_gate.py` parses and verifies these; the verifier refuses a
 # gate without one and a local command that drifts from CI.
 
@@ -290,10 +290,13 @@ checks:
       red at its check step, so the heavy tier stops consuming runners; see the comment above
       the job in ci.yml.
 
-  # ── Trust-root diff — informational until promoted with the ruleset ───────
+  # ── Trust-root diff (code-owner review of trust-root changes) ─────────────
   - context: trust-root-diff
     disposition: gate
     producer: trust-root-diff.yml
+    local:
+      ci-only: pull-request-state
+    guards: Security
     owner: maintainer
     note: >-
       Fails a PR that touches a path .github/CODEOWNERS owns until a code
