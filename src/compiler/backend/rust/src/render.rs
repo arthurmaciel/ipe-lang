@@ -2671,15 +2671,7 @@ fn render_call_args_broken(
         let open_end = start_col + flat_leaf_len(open);
         let budget = FN_CALL_WIDTH.min(cfg.max_width.saturating_sub(open_end));
         if last_arg_combines(
-            open,
-            prefix,
-            last,
-            None,
-            Some(budget),
-            cfg,
-            start_col,
-            indent,
-            out,
+            open, prefix, last, None, budget, budget, cfg, start_col, indent, out,
         )
         .is_some()
         {
@@ -2961,7 +2953,8 @@ fn render_flat_elems(elems: &[Doc], cfg: RenderConfig, indent: usize, out: &mut 
 ///     instead.
 ///
 /// Every gate reads a first-line [`trial`] of the combined layout the caller
-/// commits to — the same head, from the same column, with the same base — so
+/// commits to — the same head, from the same column, with the same base, and
+/// `last` forced broken under the same `tail_budget` the commit hands it — so
 /// each column it tests is the column the committed layout lands on.
 #[allow(
     clippy::too_many_arguments,
@@ -2972,7 +2965,8 @@ fn last_arg_combines(
     prefix: &[Doc],
     last: &Doc,
     combine_base: Option<usize>,
-    budget: Option<usize>,
+    budget: usize,
+    tail_budget: usize,
     cfg: RenderConfig,
     start_col: usize,
     indent: usize,
@@ -3048,28 +3042,14 @@ fn last_arg_combines(
             // base cannot see this shrink and keeps gluing an ever-deeper chain past
             // the point `rustfmt` stops. When the shrunk budget cannot open the
             // argument's head, break this call one-per-line.
-            if let Some(b) = budget {
-                let arg_budget = shrink_budget(b, open);
-                let head_len = flat_leaf_len(last_head(last));
-                if arg_budget <= head_len {
-                    return None;
-                }
+            if shrink_budget(budget, open) <= flat_leaf_len(last_head(last)) {
+                return None;
             }
         }
-        // The last element FORCED broken from that column; its first line is the
-        // combined head's tail. `budget` (when threaded) is the recursive `Shape`
-        // width for `last`; a combine without a threaded budget measures at the full
-        // `fn_call_width`.
+        // The last element FORCED broken from that column under the commit's
+        // `tail_budget`; its first line is the combined head's tail.
         let tail_len = trial(out, TrialReach::FirstLine, |out, mark| {
-            render_forced_break(
-                last,
-                base,
-                budget.unwrap_or(FN_CALL_WIDTH),
-                cfg,
-                indent,
-                last_col,
-                out,
-            );
+            render_forced_break(last, base, tail_budget, cfg, indent, last_col, out);
             mark.line(out).trim_end_matches('\n').len()
         });
         let first_line_end = last_col + tail_len;
@@ -3156,13 +3136,15 @@ fn render_forced_break_node(
             // the `fn_call_width` budget anchored at the outermost combine; `budget`
             // is the recursive `Shape` width this call received for its argument, and
             // shrinks one step (`shrink_budget`) as the combine descends.
+            let inner_budget = shrink_budget(budget, open);
             if let Some((last, prefix)) = elems.split_last()
                 && last_arg_combines(
                     open,
                     prefix,
                     last,
                     Some(combine_base),
-                    Some(budget),
+                    budget,
+                    inner_budget,
                     cfg,
                     start_col,
                     indent,
@@ -3171,7 +3153,6 @@ fn render_forced_break_node(
                 .is_some()
             {
                 render_combine_head(open, prefix, cfg, indent, start_col, out);
-                let inner_budget = shrink_budget(budget, open);
                 render_forced_break(
                     last,
                     combine_base,
