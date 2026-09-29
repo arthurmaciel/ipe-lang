@@ -1582,7 +1582,7 @@ jobs:
   # fork PR rather than attempted and denied.
   #
   # `.github/ci/deterministic-checks.json` is the SSOT of (job, check step)
-  # pairs, shared with `rerun-failed-once.yml`; `ci/verify-manifest.py` (run in
+  # pairs; `ci/verify-manifest.py` (run in
   # `manifest-guard.yml`) fails the build if this job's `needs:` differs from
   # that file's job set or a listed step name is not in the job's steps.
   cancel-on-cheap-red:

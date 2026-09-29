@@ -55,6 +55,12 @@ jobs:
       - name: Prove the e2e shard-partition refusals (unit tests)
         run: python3 .github/ci/test_e2e_shard.py -v
 
+      - name: Reruns fire only on infrastructure; no test retries
+        run: python3 .github/ci/rerun_policy.py lint
+
+      - name: Prove the rerun-policy refusals (unit tests)
+        run: python3 .github/ci/test_rerun_policy.py -v
+
       - name: The derived required-set is in sync with the manifest
         run: |
           python3 - <<'PY'

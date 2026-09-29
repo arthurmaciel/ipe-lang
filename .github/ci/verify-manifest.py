@@ -28,8 +28,7 @@ Checks performed
      required contexts) to make mismatches fatal; without it the manifest is the
      SSOT and the check is skipped with a note.
   5. `ci/deterministic-checks.json` — the SSOT of (job, check step) pairs
-     consumed by ci.yml's `cancel-on-cheap-red` watcher and
-     rerun-failed-once.yml — is well-formed (exact keys, non-empty strings with
+     consumed by ci.yml's `cancel-on-cheap-red` watcher — is well-formed (exact keys, non-empty strings with
      no surrounding whitespace, no duplicate job), its job set equals the
      watcher's `needs:`, and each pair's step is a `name:` of that job's steps
      in ci.yml.
@@ -332,10 +331,9 @@ def load_deterministic_checks(
 
 def check_deterministic_set(jobs: list[Job], errors: list[str]) -> None:
     """`ci/deterministic-checks.json` is the one SSOT behind ci.yml's
-    `cancel-on-cheap-red` watcher and rerun-failed-once.yml's retry skip.
-    Its job set must equal the watcher's `needs:`, and each pair's step must
+    `cancel-on-cheap-red` watcher. Its job set must equal the watcher's `needs:`, and each pair's step must
     be a literal `name:` of that job's steps — a renamed or unnamed check step
-    would otherwise never match and silently disable both consumers.
+    would otherwise never match and silently disable the watcher.
     """
     pairs = load_deterministic_checks(errors)
     if pairs is None:
