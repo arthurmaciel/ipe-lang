@@ -2614,8 +2614,10 @@ mod tests {
         let cleared = diag_rx.try_recv().expect("a clearing diagnostics batch");
         assert_eq!(cleared.generation, state.generation);
         assert!(
-            cleared.per_uri.is_empty(),
-            "the fallback's diagnostics must be cleared"
+            matches!(cleared.per_uri.as_slice(), [(uri, diags)]
+                if *uri == main_uri && matches!(diags.as_slice(), [d] if d.message.contains("manifest walk ceiling"))),
+            "the fallback's diagnostics are cleared, replaced only by the refusal itself: {:?}",
+            cleared.per_uri
         );
 
         did_change(&mut state, &loader, &main_path, MAIN_TEXT, &diag_tx);
