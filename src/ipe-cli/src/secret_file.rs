@@ -2,16 +2,26 @@
 //!
 //! Every credential ipe keeps on disk (the publish token, the signing key's
 //! private half, the per-user cache salt) is created, staged, housed and read
-//! back through this module alone. A creation mode is only a request, which a
-//! filesystem that ignores permission bits (vfat, exfat, some network and FUSE
-//! mounts) silently drops; so every handle this module hands out has been
-//! checked by `fstat` to be a regular file owned by the effective user with no
-//! group or other permission bit. A handle failing that check is never
-//! returned: a file this module created is removed, and a file it was asked to
-//! read is refused.
+//! back through this module alone, relative to an [`OwnerDir`]: a directory
+//! handle held open once every component of its path, ancestors included,
+//! was proven on its own handle unwritable by other users
+//! ([`crate::proven_dir`]). No secret path is resolved again after that proof,
+//! so swapping a component for a link between the check and the use redirects
+//! nothing.
+//!
+//! A creation mode is only a request, which a filesystem that ignores
+//! permission bits (vfat, exfat, some network and FUSE mounts) silently drops;
+//! so every file handle this module hands out has been checked by `fstat` to
+//! be a regular file owned by the effective user with no group or other
+//! permission bit. A handle failing that check is never returned: a file this
+//! module created is removed, and a file it was asked to read is refused.
 
+use std::ffi::OsString;
 use std::fs::File;
+use std::io;
 use std::path::{Path, PathBuf};
+
+use crate::proven_dir::{EntryName, NewFileMode, ProvenDir, ProvenDirError};
 
 /// Where this host can keep a secret file.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -27,6 +37,9 @@ pub enum SecretStore {
 pub const HOST_SECRET_STORE: SecretStore = SecretStore::OwnerOnlyFile;
 
 /// The secret store this build's target provides.
+///
+/// Windows grants file access by ACL, not by an owner and mode bits, so no
+/// owner-only proof exists there and every secret file is refused.
 #[cfg(not(unix))]
 pub const HOST_SECRET_STORE: SecretStore = SecretStore::Unsupported;
 
@@ -36,14 +49,32 @@ pub enum SecretFileError {
     /// The store cannot keep a file readable by its owner alone.
     Unsupported,
     /// Creating, opening or inspecting the file failed (its name is taken, say).
-    Io(std::io::Error),
+    Io(io::Error),
     /// The path is not private to the invoking user.
     ///
-    /// Another user owns it, a group or other permission bit is set on it, or
-    /// its filesystem dropped the owner-only mode it was created with.
+    /// Another user owns it or an ancestor, a group or other user can write
+    /// it or an ancestor, a link stands where a directory must be, or its
+    /// filesystem dropped the owner-only mode it was created with.
     NotOwnerOnly(PathBuf),
     /// The path names a directory, FIFO, device or socket, not a regular file.
     NotRegularFile(PathBuf),
+}
+
+impl From<ProvenDirError> for SecretFileError {
+    fn from(refusal: ProvenDirError) -> Self {
+        match refusal {
+            ProvenDirError::Unsupported => Self::Unsupported,
+            ProvenDirError::Untrusted { path, .. }
+            | ProvenDirError::UntrustedLink(path)
+            | ProvenDirError::SymlinkLeaf(path) => Self::NotOwnerOnly(path),
+            other @ (ProvenDirError::NotAbsolute(_)
+            | ProvenDirError::Absent(_)
+            | ProvenDirError::NotADirectory(_)
+            | ProvenDirError::TooManyLinks(_)
+            | ProvenDirError::TooDeep(_)
+            | ProvenDirError::Io { .. }) => Self::Io(other.into_io()),
+        }
+    }
 }
 
 /// The permission bits granting the owning group or any other user access.
@@ -72,21 +103,6 @@ pub const fn require(store: SecretStore) -> Result<(), SecretFileError> {
     }
 }
 
-/// Create the new file `path` owner-only, proven so before any byte is written.
-///
-/// The name is created exclusively: an existing file or symlink there, even a
-/// dangling one, is refused, never truncated or followed. A created file
-/// whose handle fails the owner-only check is removed again.
-///
-/// # Errors
-/// [`SecretFileError::Unsupported`] when `store` cannot keep the file
-/// owner-only, [`SecretFileError::Io`] when creating it failed, or
-/// [`SecretFileError::NotOwnerOnly`] when the created file is not private.
-pub fn create_new(store: SecretStore, path: &Path) -> Result<File, SecretFileError> {
-    require(store)?;
-    host::create_owner_only(path)
-}
-
 /// A random, per-process suffix naming the temporary files of one secret write.
 ///
 /// Only [`Self::fresh`] makes one, so a temporary name is never guessable in
@@ -102,9 +118,9 @@ impl TempSuffix {
     ///
     /// # Errors
     /// The CSPRNG failure, as an I/O error.
-    pub fn fresh() -> std::io::Result<Self> {
+    pub fn fresh() -> io::Result<Self> {
         let mut bytes = [0u8; TEMP_SUFFIX_BYTES];
-        getrandom::fill(&mut bytes).map_err(std::io::Error::from)?;
+        getrandom::fill(&mut bytes).map_err(io::Error::from)?;
         Ok(Self(format!(
             "{}.{}",
             std::process::id(),
@@ -112,67 +128,204 @@ impl TempSuffix {
         )))
     }
 
-    /// The hidden temporary name `.<name>.<suffix>.tmp` beside `final_path`.
-    #[must_use]
-    pub fn beside(&self, final_path: &Path) -> PathBuf {
-        let name = final_path
-            .file_name()
-            .map_or_else(|| "secret".into(), std::ffi::OsStr::to_string_lossy);
-        final_path.with_file_name(format!(".{name}.{}.tmp", self.0))
+    /// The hidden temporary name `.<name>.<suffix>.tmp` beside `final_name`.
+    ///
+    /// # Errors
+    /// An [`io::ErrorKind::InvalidInput`] error if the name is not one component.
+    pub fn name_for(&self, final_name: &EntryName) -> io::Result<EntryName> {
+        let mut name = OsString::from(".");
+        name.push(final_name.as_os_str());
+        name.push(format!(".{}.tmp", self.0));
+        EntryName::new(&name).ok_or_else(|| io::ErrorKind::InvalidInput.into())
     }
 }
 
-/// Create the temporary file staging a secret for `final_path`, owner-only.
+/// A directory housing secret files, held open once proven private to the invoker.
 ///
-/// The file is created by [`create_new`] at [`TempSuffix::beside`], in the
-/// same directory as `final_path` so a rename or link into place is atomic.
-///
-/// # Errors
-/// As [`create_new`].
-pub fn create_temp_beside(
-    store: SecretStore,
-    final_path: &Path,
-    suffix: &TempSuffix,
-) -> Result<(File, PathBuf), SecretFileError> {
-    let temp_path = suffix.beside(final_path);
-    create_new(store, &temp_path).map(|file| (file, temp_path))
+/// Every ancestor passed [`crate::owner_trust::container_breach`] and the
+/// directory itself [`crate::owner_trust::breach`], each on its own held
+/// handle; every operation acts on an entry directly inside it through that
+/// handle.
+#[derive(Debug)]
+pub struct OwnerDir(ProvenDir);
+
+impl OwnerDir {
+    /// The path the directory was asked for.
+    #[must_use]
+    pub fn path(&self) -> &Path {
+        self.0.path()
+    }
+
+    /// The path of the entry `name` inside this directory, for diagnostics.
+    #[must_use]
+    pub fn path_of(&self, name: &EntryName) -> PathBuf {
+        self.0.path_of(name)
+    }
+
+    /// Create the new file `name` owner-only, proven so before any byte is written.
+    ///
+    /// The name is created exclusively: an existing file or symlink there,
+    /// even a dangling one, is refused, never truncated or followed. A created
+    /// file whose handle fails the owner-only check is removed again.
+    ///
+    /// # Errors
+    /// [`SecretFileError::Io`] when creating it failed, or
+    /// [`SecretFileError::NotOwnerOnly`] when the created file is not private.
+    pub fn create_new(&self, name: &EntryName) -> Result<File, SecretFileError> {
+        self.create_proven(name, host::prove_owner_only)
+    }
+
+    /// Create `name` exclusively mode `0600`, then keep it only if `prove` admits its handle.
+    fn create_proven(
+        &self,
+        name: &EntryName,
+        prove: impl FnOnce(&File, &Path) -> Result<(), SecretFileError>,
+    ) -> Result<File, SecretFileError> {
+        let file = self
+            .0
+            .create_file(name, NewFileMode::OwnerOnly)
+            .map_err(SecretFileError::Io)?;
+        if let Err(refusal) = prove(&file, &self.path_of(name)) {
+            drop(file);
+            let _ = self.0.remove_file(name);
+            return Err(refusal);
+        }
+        Ok(file)
+    }
+
+    /// Create the temporary file staging a secret for `final_name`, owner-only.
+    ///
+    /// The file is created by [`Self::create_new`] at [`TempSuffix::name_for`],
+    /// in this directory, so a rename or link into place is atomic.
+    ///
+    /// # Errors
+    /// As [`Self::create_new`].
+    pub fn create_temp_for(
+        &self,
+        final_name: &EntryName,
+        suffix: &TempSuffix,
+    ) -> Result<(File, EntryName), SecretFileError> {
+        let temp = suffix.name_for(final_name).map_err(SecretFileError::Io)?;
+        self.create_new(&temp).map(|file| (file, temp))
+    }
+
+    /// Create the new, non-secret file `name` world-readable, exclusively.
+    ///
+    /// # Errors
+    /// The failed create; an existing name or symlink is refused, never followed.
+    pub fn create_public(&self, name: &EntryName) -> io::Result<File> {
+        self.0.create_file(name, NewFileMode::WorldReadable)
+    }
+
+    /// Open the existing secret `name` for reading, proven owner-only on the open handle.
+    ///
+    /// A symlink is refused, never followed, and opening never blocks on a
+    /// FIFO. A file another user owns, or any group or other user may access,
+    /// is refused.
+    ///
+    /// # Errors
+    /// [`SecretFileError::Io`] when the file cannot be opened (absent, a
+    /// symlink, unreadable), [`SecretFileError::NotRegularFile`] when it is
+    /// not a regular file, or [`SecretFileError::NotOwnerOnly`] when it is not
+    /// private.
+    pub fn open_existing(&self, name: &EntryName) -> Result<File, SecretFileError> {
+        let file = self.0.open_file(name).map_err(SecretFileError::Io)?;
+        host::prove_owner_only(&file, &self.path_of(name))?;
+        Ok(file)
+    }
+
+    /// Rename the entry `from` to `to`, replacing any file at `to`.
+    ///
+    /// # Errors
+    /// The failed `renameat`.
+    pub fn rename(&self, from: &EntryName, to: &EntryName) -> io::Result<()> {
+        self.0.rename(from, to)
+    }
+
+    /// Hard-link the entry `from` to the unused name `to`.
+    ///
+    /// # Errors
+    /// The failed `linkat`; an existing `to` is refused, never replaced.
+    pub fn hard_link(&self, from: &EntryName, to: &EntryName) -> io::Result<()> {
+        self.0.hard_link(from, to)
+    }
+
+    /// Remove the non-directory entry `name`.
+    ///
+    /// # Errors
+    /// The failed `unlinkat`.
+    pub fn remove(&self, name: &EntryName) -> io::Result<()> {
+        self.0.remove_file(name)
+    }
+
+    /// Whether nothing, not even a dangling link, holds the name `name`.
+    ///
+    /// # Errors
+    /// The failed `fstatat`, other than the entry being absent.
+    pub fn is_vacant(&self, name: &EntryName) -> io::Result<bool> {
+        self.0.is_vacant(name)
+    }
 }
 
-/// Create the directory `dir` that houses secret files, and prove no other user can write it.
+/// Hold the directory `dir` that houses secret files, creating it, once proven private.
 ///
-/// Missing components are created mode `0700`. The final directory, new or
-/// already present, is refused when another user owns it or can write to it,
-/// since such a user could replace a secret file inside it. Write access for
-/// the invoker's own effective group is admitted on the terms of
-/// [`crate::owner_trust::breach`]. Only the final directory is checked: an
-/// ancestor another user can write to is not refused here.
+/// Missing components are created mode `0700`. Every component is opened
+/// without following a final link and checked on its held handle: an
+/// ancestor must be owned by root or the invoker and unwritable by others
+/// unless sticky, and `dir` itself must be the invoker's with no other user
+/// able to write it (write for the invoker's own effective group is admitted
+/// on the terms of [`crate::owner_trust::breach`]).
 ///
 /// # Errors
 /// [`SecretFileError::Unsupported`] when `store` cannot keep secrets,
-/// [`SecretFileError::Io`] when creating or inspecting it failed, or
-/// [`SecretFileError::NotOwnerOnly`] when another user could write to it.
-pub fn create_owner_dir(store: SecretStore, dir: &Path) -> Result<(), SecretFileError> {
+/// [`SecretFileError::Io`] when creating or inspecting a component failed, or
+/// [`SecretFileError::NotOwnerOnly`] naming the component another user could
+/// write or replace.
+pub fn create_owner_dir(store: SecretStore, dir: &Path) -> Result<OwnerDir, SecretFileError> {
     require(store)?;
-    host::create_owner_dir(dir)
+    Ok(OwnerDir(ProvenDir::create(dir)?))
 }
 
-/// Open the existing secret file `path` for reading, proven owner-only on the open handle.
+/// Hold the existing directory `dir` that houses secret files, once proven private.
 ///
-/// A final symlink is refused, never followed, and opening never blocks on a
-/// FIFO. A file another user owns, or any group or other user may access, is
-/// refused.
+/// As [`create_owner_dir`], except that nothing is created: an absent
+/// component is an [`io::ErrorKind::NotFound`] error.
 ///
 /// # Errors
-/// [`SecretFileError::Unsupported`] when `store` cannot keep secrets,
-/// [`SecretFileError::Io`] when the file cannot be opened (absent, a symlink,
-/// unreadable), [`SecretFileError::NotRegularFile`] when it is not a regular
-/// file, or [`SecretFileError::NotOwnerOnly`] when it is not private.
+/// As [`create_owner_dir`].
+pub fn open_owner_dir(store: SecretStore, dir: &Path) -> Result<OwnerDir, SecretFileError> {
+    require(store)?;
+    Ok(OwnerDir(ProvenDir::open(dir)?))
+}
+
+/// Split `path` into its directory and its final entry name.
+///
+/// # Errors
+/// An [`io::ErrorKind::InvalidInput`] error when `path` has no plain final component.
+pub fn split_entry(path: &Path) -> Result<(&Path, EntryName), SecretFileError> {
+    let invalid = || SecretFileError::Io(io::ErrorKind::InvalidInput.into());
+    let name = path
+        .file_name()
+        .and_then(EntryName::new)
+        .ok_or_else(invalid)?;
+    let dir = path.parent().ok_or_else(invalid)?;
+    Ok((dir, name))
+}
+
+/// Open the existing secret file `path` for reading, through its proven directory.
+///
+/// The directory is held by [`open_owner_dir`] and the file opened inside it
+/// by [`OwnerDir::open_existing`].
+///
+/// # Errors
+/// As [`open_owner_dir`] and [`OwnerDir::open_existing`].
 pub fn open_existing(store: SecretStore, path: &Path) -> Result<File, SecretFileError> {
     require(store)?;
-    host::open_owner_only(path)
+    let (dir, name) = split_entry(path)?;
+    open_owner_dir(store, dir)?.open_existing(&name)
 }
 
-/// The owner-only file operations of a host with Unix permissions.
+/// The owner-only proof of a host with Unix permissions.
 #[cfg(unix)]
 mod host {
     use std::fs::File;
@@ -180,10 +333,15 @@ mod host {
     use std::path::Path;
 
     use super::{SecretFileError, is_owner_only};
-    use crate::owner_trust::{Invoker, Stamp, breach};
+    use crate::owner_trust::Invoker;
+
+    /// Refuse the open `file` at `path` unless it is a regular file private to the invoker.
+    pub fn prove_owner_only(file: &File, path: &Path) -> Result<(), SecretFileError> {
+        prove_owner_only_as(file, path, Invoker::current().uid)
+    }
 
     /// Refuse the open `file` at `path` unless it is a regular file private to `euid`.
-    fn prove_owner_only(file: &File, path: &Path, euid: u32) -> Result<(), SecretFileError> {
+    pub fn prove_owner_only_as(file: &File, path: &Path, euid: u32) -> Result<(), SecretFileError> {
         let meta = file.metadata().map_err(SecretFileError::Io)?;
         if !meta.file_type().is_file() {
             return Err(SecretFileError::NotRegularFile(path.to_path_buf()));
@@ -194,61 +352,9 @@ mod host {
             Err(SecretFileError::NotOwnerOnly(path.to_path_buf()))
         }
     }
-
-    /// Create `path` exclusively with mode `0600`, then prove the handle owner-only.
-    pub fn create_owner_only(path: &Path) -> Result<File, SecretFileError> {
-        create_owner_only_as(path, Invoker::current().uid)
-    }
-
-    /// Create `path` exclusively with mode `0600`, then prove the handle private to `euid`.
-    ///
-    /// A created file failing the proof is removed before the refusal returns.
-    pub fn create_owner_only_as(path: &Path, euid: u32) -> Result<File, SecretFileError> {
-        use std::os::unix::fs::OpenOptionsExt as _;
-        let file = std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(0o600)
-            .open(path)
-            .map_err(SecretFileError::Io)?;
-        if let Err(refusal) = prove_owner_only(&file, path, euid) {
-            drop(file);
-            let _ = std::fs::remove_file(path);
-            return Err(refusal);
-        }
-        Ok(file)
-    }
-
-    /// Create `dir` and its missing parents mode `0700`, then refuse it if another user can write it.
-    pub fn create_owner_dir(dir: &Path) -> Result<(), SecretFileError> {
-        use std::os::unix::fs::DirBuilderExt as _;
-        std::fs::DirBuilder::new()
-            .recursive(true)
-            .mode(0o700)
-            .create(dir)
-            .map_err(SecretFileError::Io)?;
-        let meta = std::fs::metadata(dir).map_err(SecretFileError::Io)?;
-        if meta.is_dir() && breach(Stamp::of(&meta), Invoker::current()).is_none() {
-            Ok(())
-        } else {
-            Err(SecretFileError::NotOwnerOnly(dir.to_path_buf()))
-        }
-    }
-
-    /// Open `path` read-only without following a final link, then prove the handle owner-only.
-    pub fn open_owner_only(path: &Path) -> Result<File, SecretFileError> {
-        use rustix::fs::{Mode, OFlags};
-        let flags =
-            OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::NOCTTY | OFlags::CLOEXEC;
-        let file = rustix::fs::open(path, flags, Mode::empty())
-            .map(File::from)
-            .map_err(|errno| SecretFileError::Io(errno.into()))?;
-        prove_owner_only(&file, path, Invoker::current().uid)?;
-        Ok(file)
-    }
 }
 
-/// A host with no owner-only check, where every secret-file operation is refused.
+/// A host with no owner-only check, where no file is ever proven private.
 #[cfg(not(unix))]
 mod host {
     use std::fs::File;
@@ -256,378 +362,11 @@ mod host {
 
     use super::SecretFileError;
 
-    /// Refuse: no owner-only file can be created here.
-    pub const fn create_owner_only(_path: &Path) -> Result<File, SecretFileError> {
-        Err(SecretFileError::Unsupported)
-    }
-
-    /// Refuse: no directory can be proven private here.
-    pub const fn create_owner_dir(_dir: &Path) -> Result<(), SecretFileError> {
-        Err(SecretFileError::Unsupported)
-    }
-
     /// Refuse: no file can be proven owner-only here.
-    pub const fn open_owner_only(_path: &Path) -> Result<File, SecretFileError> {
+    pub const fn prove_owner_only(_file: &File, _path: &Path) -> Result<(), SecretFileError> {
         Err(SecretFileError::Unsupported)
     }
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// A fresh, empty scratch directory for one test.
-    fn test_dir(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "ipe-secret-file-{name}-{}-{:?}",
-            std::process::id(),
-            std::thread::current().id()
-        ));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).expect("create test dir");
-        dir
-    }
-
-    /// The names in `dir`, sorted.
-    fn entries(dir: &Path) -> Vec<String> {
-        let mut names: Vec<String> = std::fs::read_dir(dir)
-            .expect("readdir")
-            .filter_map(Result::ok)
-            .map(|e| e.file_name().to_string_lossy().into_owned())
-            .collect();
-        names.sort();
-        names
-    }
-
-    #[test]
-    fn only_a_mode_without_group_or_other_bits_owned_by_the_invoker_is_owner_only() {
-        assert!(is_owner_only(0o100_600, 1000, 1000));
-        assert!(is_owner_only(0o100_400, 1000, 1000));
-        assert!(is_owner_only(0o100_700, 1000, 1000));
-        assert!(!is_owner_only(0o100_644, 1000, 1000), "world-readable");
-        assert!(!is_owner_only(0o100_640, 1000, 1000), "group-readable");
-        assert!(!is_owner_only(0o100_604, 1000, 1000), "other-readable");
-        assert!(!is_owner_only(0o100_620, 1000, 1000), "group-writable");
-        assert!(!is_owner_only(0o100_777, 1000, 1000), "mode-ignoring mount");
-        assert!(!is_owner_only(0o100_600, 1001, 1000), "foreign owner");
-        assert!(!is_owner_only(0o100_600, 0, 1000), "root-owned for a user");
-    }
-
-    #[test]
-    fn an_unsupported_store_is_refused_up_front() {
-        assert!(matches!(
-            require(SecretStore::Unsupported),
-            Err(SecretFileError::Unsupported)
-        ));
-        assert!(matches!(require(SecretStore::OwnerOnlyFile), Ok(())));
-    }
-
-    #[test]
-    fn an_unsupported_store_creates_nothing() {
-        let dir = test_dir("unsupported");
-        let path = dir.join("secret");
-        let created = create_new(SecretStore::Unsupported, &path);
-        assert!(
-            matches!(created, Err(SecretFileError::Unsupported)),
-            "an unsupported store must refuse, got {created:?}"
-        );
-        let suffix = TempSuffix::fresh().expect("csprng");
-        let staged = create_temp_beside(SecretStore::Unsupported, &path, &suffix);
-        assert!(
-            matches!(staged, Err(SecretFileError::Unsupported)),
-            "an unsupported store must refuse a temp file, got {staged:?}"
-        );
-        let housed = create_owner_dir(SecretStore::Unsupported, &dir.join("sub"));
-        assert!(
-            matches!(housed, Err(SecretFileError::Unsupported)),
-            "an unsupported store must refuse a secret dir, got {housed:?}"
-        );
-        assert!(entries(&dir).is_empty(), "a refusal must create nothing");
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn an_unsupported_store_reads_no_existing_file() {
-        let dir = test_dir("unsupported-read");
-        let path = dir.join("secret");
-        std::fs::write(&path, "kept").expect("seed file");
-        let opened = open_existing(SecretStore::Unsupported, &path);
-        assert!(
-            matches!(opened, Err(SecretFileError::Unsupported)),
-            "an unsupported store must refuse the read, got {opened:?}"
-        );
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn the_host_store_creates_on_unix_and_refuses_elsewhere() {
-        let dir = test_dir("host-store");
-        let path = dir.join("secret");
-        let created = create_new(HOST_SECRET_STORE, &path);
-        if cfg!(unix) {
-            assert!(
-                created.is_ok(),
-                "a Unix host creates the secret: {created:?}"
-            );
-        } else {
-            assert!(
-                matches!(created, Err(SecretFileError::Unsupported)),
-                "a host without owner-only files must refuse, got {created:?}"
-            );
-            assert!(entries(&dir).is_empty(), "the refusal creates nothing");
-        }
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn a_temp_name_is_hidden_beside_its_final_name_and_unpredictable() {
-        let dir = test_dir("temp-name");
-        let path = dir.join("token");
-        let first = TempSuffix::fresh().expect("csprng");
-        let second = TempSuffix::fresh().expect("csprng");
-        assert_ne!(first, second, "two suffixes must differ");
-        let temp = first.beside(&path);
-        assert_eq!(temp.parent(), Some(dir.as_path()));
-        let name = temp
-            .file_name()
-            .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_default();
-        assert!(
-            name.starts_with(".token.") && temp.extension() == Some(std::ffi::OsStr::new("tmp")),
-            "unexpected temp name {name}"
-        );
-        assert!(
-            name.len() > ".token..tmp".len() + TEMP_SUFFIX_BYTES * 2,
-            "the suffix must carry the random bytes: {name}"
-        );
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn a_secret_file_is_owner_only_from_creation() {
-        use std::os::unix::fs::PermissionsExt as _;
-        let dir = test_dir("owner-only");
-        let path = dir.join("secret");
-        let created = create_new(SecretStore::OwnerOnlyFile, &path);
-        assert!(created.is_ok(), "owner-only create failed: {created:?}");
-        let mode = std::fs::metadata(&path)
-            .expect("secret file metadata")
-            .permissions()
-            .mode()
-            & 0o777;
-        assert_eq!(mode, 0o600, "secret file must be 0600, got {mode:04o}");
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn a_staged_temp_file_is_owner_only_beside_its_final_name() {
-        let dir = test_dir("temp-owner-only");
-        let path = dir.join("token");
-        let suffix = TempSuffix::fresh().expect("csprng");
-        let staged = create_temp_beside(SecretStore::OwnerOnlyFile, &path, &suffix);
-        assert!(staged.is_ok(), "temp create failed: {staged:?}");
-        let Ok((_file, temp)) = staged else { return };
-        assert_eq!(temp, suffix.beside(&path));
-        let reopened = open_existing(SecretStore::OwnerOnlyFile, &temp);
-        assert!(
-            reopened.is_ok(),
-            "the staged file is owner-only: {reopened:?}"
-        );
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn an_existing_name_is_refused_not_truncated() {
-        let dir = test_dir("existing");
-        let path = dir.join("secret");
-        std::fs::write(&path, "kept").expect("seed existing file");
-        let created = create_new(HOST_SECRET_STORE, &path);
-        assert!(
-            matches!(
-                created,
-                Err(SecretFileError::Io(_) | SecretFileError::Unsupported)
-            ),
-            "an existing name must be refused, got {created:?}"
-        );
-        assert_eq!(
-            std::fs::read_to_string(&path).expect("read existing file"),
-            "kept"
-        );
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn a_planted_symlink_at_the_secret_name_is_refused_and_never_followed() {
-        let dir = test_dir("symlink");
-        let outside = test_dir("symlink-outside");
-        let existing_target = outside.join("existing");
-        std::fs::write(&existing_target, "victim").expect("seed target");
-        let dangling_target = outside.join("absent");
-
-        let to_existing = dir.join("secret");
-        std::os::unix::fs::symlink(&existing_target, &to_existing).expect("plant symlink");
-        let created = create_new(SecretStore::OwnerOnlyFile, &to_existing);
-        assert!(
-            matches!(&created, Err(SecretFileError::Io(e)) if e.kind() == std::io::ErrorKind::AlreadyExists),
-            "a symlink at the secret name must be refused, got {created:?}"
-        );
-        assert_eq!(
-            std::fs::read_to_string(&existing_target).expect("read target"),
-            "victim",
-            "the link's target must be untouched"
-        );
-
-        let to_dangling = dir.join("dangling");
-        std::os::unix::fs::symlink(&dangling_target, &to_dangling).expect("plant dangling");
-        let created = create_new(SecretStore::OwnerOnlyFile, &to_dangling);
-        assert!(
-            matches!(&created, Err(SecretFileError::Io(e)) if e.kind() == std::io::ErrorKind::AlreadyExists),
-            "a dangling symlink at the secret name must be refused, got {created:?}"
-        );
-        assert!(
-            std::fs::symlink_metadata(&dangling_target).is_err(),
-            "the dangling link's target must not be created"
-        );
-        let _ = std::fs::remove_dir_all(&dir);
-        let _ = std::fs::remove_dir_all(&outside);
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn an_owner_only_secret_is_read_back() {
-        use std::io::Read as _;
-        let dir = test_dir("read-back");
-        let path = dir.join("secret");
-        let created = create_new(SecretStore::OwnerOnlyFile, &path);
-        assert!(created.is_ok(), "create failed: {created:?}");
-        drop(created);
-        std::fs::write(&path, "kept").expect("write secret");
-        let opened = open_existing(SecretStore::OwnerOnlyFile, &path);
-        assert!(opened.is_ok(), "an owner-only secret must open: {opened:?}");
-        let Ok(mut file) = opened else { return };
-        let mut text = String::new();
-        file.read_to_string(&mut text).expect("read secret");
-        assert_eq!(text, "kept");
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn a_group_or_world_accessible_secret_is_refused_on_read() {
-        use std::os::unix::fs::PermissionsExt as _;
-        let dir = test_dir("exposed-read");
-        for mode in [0o644, 0o640, 0o604, 0o660] {
-            let path = dir.join(format!("secret-{mode:o}"));
-            std::fs::write(&path, "exposed").expect("seed secret");
-            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(mode))
-                .expect("chmod secret");
-            let opened = open_existing(SecretStore::OwnerOnlyFile, &path);
-            assert!(
-                matches!(&opened, Err(SecretFileError::NotOwnerOnly(p)) if *p == path),
-                "a mode-{mode:o} secret must be refused, got {opened:?}"
-            );
-        }
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn a_symlink_or_non_file_secret_is_refused_on_read() {
-        use std::os::unix::fs::PermissionsExt as _;
-        let dir = test_dir("link-read");
-        let target = dir.join("target");
-        std::fs::write(&target, "kept").expect("seed target");
-        std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o600))
-            .expect("chmod target");
-        let link = dir.join("secret");
-        std::os::unix::fs::symlink(&target, &link).expect("plant symlink");
-        let opened = open_existing(SecretStore::OwnerOnlyFile, &link);
-        assert!(
-            matches!(opened, Err(SecretFileError::Io(_))),
-            "a final symlink must not be followed, got {opened:?}"
-        );
-        let sub = dir.join("sub");
-        std::fs::create_dir(&sub).expect("mkdir");
-        std::fs::set_permissions(&sub, std::fs::Permissions::from_mode(0o700)).expect("chmod");
-        let opened = open_existing(SecretStore::OwnerOnlyFile, &sub);
-        assert!(
-            matches!(&opened, Err(SecretFileError::NotRegularFile(p)) if *p == sub),
-            "a directory must be refused, got {opened:?}"
-        );
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn a_created_file_failing_the_owner_proof_is_refused_and_removed() {
-        let dir = test_dir("create-refused");
-        let path = dir.join("secret");
-        let other_user = crate::owner_trust::Invoker::current().uid.wrapping_add(1);
-        let created = host::create_owner_only_as(&path, other_user);
-        assert!(
-            matches!(&created, Err(SecretFileError::NotOwnerOnly(p)) if *p == path),
-            "a created file owned by someone other than the euid must be refused, got {created:?}"
-        );
-        assert!(
-            std::fs::symlink_metadata(&path).is_err(),
-            "the refused file must be removed"
-        );
-        assert!(entries(&dir).is_empty(), "the refusal must leave nothing");
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn a_fifo_secret_is_refused_on_read_without_blocking() {
-        let dir = test_dir("fifo-read");
-        let fifo = dir.join("secret");
-        let made = std::process::Command::new("mkfifo")
-            .arg(&fifo)
-            .status()
-            .expect("run mkfifo");
-        assert!(made.success(), "mkfifo failed: {made:?}");
-        let opened = open_existing(SecretStore::OwnerOnlyFile, &fifo);
-        assert!(
-            matches!(&opened, Err(SecretFileError::NotRegularFile(p)) if *p == fifo),
-            "a FIFO must be refused as not a regular file, got {opened:?}"
-        );
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn a_new_secret_dir_is_owner_only_and_a_foreign_writable_one_is_refused() {
-        use std::os::unix::fs::PermissionsExt as _;
-        let dir = test_dir("owner-dir");
-        let fresh = dir.join("a").join("b");
-        let housed = create_owner_dir(SecretStore::OwnerOnlyFile, &fresh);
-        assert!(
-            housed.is_ok(),
-            "a fresh secret dir must be created: {housed:?}"
-        );
-        let mode = std::fs::metadata(&fresh)
-            .expect("dir metadata")
-            .permissions()
-            .mode()
-            & 0o777;
-        assert_eq!(
-            mode & 0o077,
-            0,
-            "a new secret dir must be 0700, got {mode:04o}"
-        );
-
-        let exposed = dir.join("exposed");
-        std::fs::create_dir(&exposed).expect("mkdir");
-        std::fs::set_permissions(&exposed, std::fs::Permissions::from_mode(0o777))
-            .expect("chmod world-writable");
-        let housed = create_owner_dir(SecretStore::OwnerOnlyFile, &exposed);
-        assert!(
-            matches!(&housed, Err(SecretFileError::NotOwnerOnly(p)) if *p == exposed),
-            "a world-writable secret dir must be refused, got {housed:?}"
-        );
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-}
+mod tests;

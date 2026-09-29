@@ -591,10 +591,6 @@ fn status_report(status: &TokenStatus, key_line: crate::text::Message) -> crate:
 fn store_token(token: &PublishToken) -> Result<PathBuf, CliError> {
     let path =
         token_path().ok_or_else(|| login_error(&crate::text::msg::login_config_dir_unknown()))?;
-    if let Some(parent) = path.parent() {
-        crate::secret_file::create_owner_dir(HOST_SECRET_STORE, parent)
-            .map_err(|e| secret_file_refusal(e, parent))?;
-    }
     write_token_atomic(HOST_SECRET_STORE, &path, token.as_str())?;
     Ok(path)
 }
@@ -617,14 +613,17 @@ fn secret_file_refusal(error: SecretFileError, path: &std::path::Path) -> CliErr
 
 /// Write `token` to `path` crash-atomically with owner-only permissions.
 ///
-/// The token goes into a fresh, randomly named temp file in the SAME
-/// directory, created exclusively and proven owner-only by
-/// [`crate::secret_file::create_temp_beside`] (a pre-seeded name is refused,
-/// not followed), is flushed, then `rename(2)`d
-/// over `path`. The rename is atomic within the directory, so a crash at any
-/// point leaves either the old token or the complete new one — never a
-/// truncated or empty file. The token bytes only ever land in an owner-only
-/// inode, so there is no window in which the secret is readable by others.
+/// The directory of `path` is created if needed and held by
+/// [`crate::secret_file::create_owner_dir`], once it and every ancestor were
+/// proven unwritable by other users. The token goes into a fresh, randomly
+/// named temp file in that held directory, created exclusively and proven
+/// owner-only by [`crate::secret_file::OwnerDir::create_temp_for`] (a
+/// pre-seeded name is refused, not followed), is flushed, then `renameat(2)`d
+/// over the final name through the same handle. The rename is atomic within
+/// the directory, so a crash at any point leaves either the old token or the
+/// complete new one — never a truncated or empty file. The token bytes only
+/// ever land in an owner-only inode, so there is no window in which the
+/// secret is readable by others.
 ///
 /// A `store` that cannot keep the file owner-only refuses before anything is
 /// created; `GITHUB_TOKEN` supplies the token there instead.
@@ -634,25 +633,35 @@ fn write_token_atomic(
     token: &str,
 ) -> Result<(), CliError> {
     require_token_store(store)?;
+    let (parent, name) =
+        crate::secret_file::split_entry(path).map_err(|e| secret_file_refusal(e, path))?;
+    let dir = crate::secret_file::create_owner_dir(store, parent)
+        .map_err(|e| secret_file_refusal(e, parent))?;
     let suffix = crate::secret_file::TempSuffix::fresh().map_err(|e| {
-        let dir = path.parent().unwrap_or_else(|| std::path::Path::new("."));
-        login_error(&crate::text::msg::login_create_failed(&dir.display(), &e))
+        login_error(&crate::text::msg::login_create_failed(
+            &parent.display(),
+            &e,
+        ))
     })?;
-    let (mut file, tmp_path) = crate::secret_file::create_temp_beside(store, path, &suffix)
-        .map_err(|e| secret_file_refusal(e, &suffix.beside(path)))?;
+    let (mut file, temp) = dir.create_temp_for(&name, &suffix).map_err(|e| {
+        let shown = suffix
+            .name_for(&name)
+            .map_or_else(|_| path.to_path_buf(), |temp| dir.path_of(&temp));
+        secret_file_refusal(e, &shown)
+    })?;
     let write_result = writeln!(file, "{token}")
         .and_then(|()| file.flush())
         .and_then(|()| file.sync_all());
     if let Err(e) = write_result {
-        let _ = std::fs::remove_file(&tmp_path);
+        let _ = dir.remove(&temp);
         return Err(login_error(&crate::text::msg::login_write_failed(
-            &tmp_path.display(),
+            &dir.path_of(&temp).display(),
             &e,
         )));
     }
     drop(file);
-    std::fs::rename(&tmp_path, path).map_err(|e| {
-        let _ = std::fs::remove_file(&tmp_path);
+    dir.rename(&temp, &name).map_err(|e| {
+        let _ = dir.remove(&temp);
         login_error(&crate::text::msg::login_move_failed(&path.display(), &e))
     })
 }

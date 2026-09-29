@@ -21,7 +21,7 @@
 
 use std::ffi::OsStr;
 use std::fmt;
-use std::fs::{File, OpenOptions};
+use std::fs::File;
 use std::io::{IsTerminal as _, Write as _};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -31,7 +31,8 @@ use zeroize::Zeroizing;
 
 use crate::CliError;
 use crate::login::KeyRegistrationToken;
-use crate::secret_file::{HOST_SECRET_STORE, SecretFileError, SecretStore};
+use crate::proven_dir::EntryName;
+use crate::secret_file::{HOST_SECRET_STORE, OwnerDir, SecretFileError, SecretStore};
 
 /// The environment variable naming the SSH signing key's private-key file.
 pub const SIGNING_KEY_ENV: &str = "IPE_PUBLISH_SIGNING_KEY";
@@ -107,10 +108,23 @@ enum StoredKey {
 
 impl StoredKey {
     /// Probe `<config_dir>/signing_key` through `store`.
+    ///
+    /// A config dir another user could write holds no trusted key: a key
+    /// there is `Exposed`, and with nothing at the key's name it is `Absent`,
+    /// so setup goes on to refuse the dir itself.
     fn probe(store: SecretStore, config_dir: &Path) -> Self {
         let path = config_dir.join(PRIVATE_KEY_FILE);
         match crate::secret_file::open_existing(store, &path) {
             Ok(_) => Self::Proven(PrivateKeyPath(path)),
+            Err(SecretFileError::NotOwnerOnly(shown))
+                if shown != path
+                    && matches!(
+                        std::fs::symlink_metadata(&path),
+                        Err(e) if e.kind() == std::io::ErrorKind::NotFound
+                    ) =>
+            {
+                Self::Absent
+            }
             Err(SecretFileError::NotOwnerOnly(shown)) => Self::Exposed(shown),
             Err(SecretFileError::NotRegularFile(shown)) => Self::Unusable(shown),
             Err(SecretFileError::Io(e)) if e.kind() == std::io::ErrorKind::NotFound => Self::Absent,
@@ -480,121 +494,168 @@ impl fmt::Display for SetupError {
     }
 }
 
-/// The final names of the stored keypair.
+/// The stored keypair's final names, inside the held config dir.
 struct KeyFiles {
-    private: PathBuf,
-    public: PathBuf,
+    dir: OwnerDir,
+    private: EntryName,
+    public: EntryName,
+    link_probe: EntryName,
 }
 
+/// File name, beneath its temporary suffix, of the hard-link probe.
+const LINK_PROBE_FILE: &str = "signing_key.link-probe";
+
 impl KeyFiles {
-    fn in_dir(dir: &Path) -> Self {
-        Self {
-            private: dir.join(PRIVATE_KEY_FILE),
-            public: dir.join(PUBLIC_KEY_FILE),
-        }
+    /// The keypair's names inside the held config dir `dir`.
+    fn in_dir(dir: OwnerDir) -> Result<Self, SetupError> {
+        let entry = |text: &str| {
+            EntryName::new(OsStr::new(text)).ok_or_else(|| SetupError::Io {
+                path: dir.path().join(text),
+                source: std::io::ErrorKind::InvalidInput.into(),
+            })
+        };
+        let private = entry(PRIVATE_KEY_FILE)?;
+        let public = entry(PUBLIC_KEY_FILE)?;
+        let link_probe = entry(LINK_PROBE_FILE)?;
+        Ok(Self {
+            dir,
+            private,
+            public,
+            link_probe,
+        })
+    }
+
+    /// The private key's final path.
+    fn private_path(&self) -> PathBuf {
+        self.dir.path_of(&self.private)
     }
 
     /// Refuse when anything (file, symlink, directory) already holds either name.
     fn ensure_free(&self) -> Result<(), SetupError> {
-        for path in [&self.private, &self.public] {
-            let absent = matches!(
-                std::fs::symlink_metadata(path),
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound
-            );
-            if !absent {
-                return Err(SetupError::Occupied(path.clone()));
+        for name in [&self.private, &self.public] {
+            match self.dir.is_vacant(name) {
+                Ok(true) => {}
+                Ok(false) => return Err(SetupError::Occupied(self.dir.path_of(name))),
+                Err(source) => {
+                    return Err(SetupError::Io {
+                        path: self.dir.path_of(name),
+                        source,
+                    });
+                }
             }
         }
         Ok(())
     }
 }
 
-/// Both halves written under fresh temporary names. Dropping it removes the
-/// temporary names — so any early return before [`Self::commit`] leaves nothing,
-/// and after the commit only the final names remain.
-struct StagedKeyPair {
-    private_tmp: PathBuf,
-    public_tmp: PathBuf,
+/// Both halves written under fresh temporary names in the held config dir.
+///
+/// Dropping it removes the temporary names, so any early return before
+/// [`Self::commit`] leaves nothing, and after the commit only the final names
+/// remain.
+struct StagedKeyPair<'f> {
+    files: &'f KeyFiles,
+    private_tmp: EntryName,
+    public_tmp: EntryName,
 }
 
-impl StagedKeyPair {
+impl<'f> StagedKeyPair<'f> {
     /// Write `pair` beside `files` under unique temporary names.
     ///
-    /// The private half is created through `store`, owner-only before any byte
-    /// lands in it; the public half is created `0644`.
+    /// The private half is created owner-only before any byte lands in it;
+    /// the public half is created `0644`. Both are created through the held
+    /// config dir, never by path.
     ///
     /// Also proves the directory supports the hard links [`Self::commit`] makes,
     /// so a filesystem without them fails here — before anything is registered
     /// on GitHub — rather than after, which would orphan a registered key.
-    fn write(
-        store: SecretStore,
-        files: &KeyFiles,
-        pair: &GeneratedKeyPair,
-    ) -> Result<Self, SetupError> {
-        crate::secret_file::require(store).map_err(|_| SetupError::StoreUnsupported)?;
+    fn write(files: &'f KeyFiles, pair: &GeneratedKeyPair) -> Result<Self, SetupError> {
+        let dir = &files.dir;
         let suffix =
             crate::secret_file::TempSuffix::fresh().map_err(|_| SetupError::KeyGeneration)?;
-        let (private, private_tmp) =
-            crate::secret_file::create_temp_beside(store, &files.private, &suffix)
-                .map_err(|e| secret_file_error(e, &suffix.beside(&files.private)))?;
-        let staged = Self {
-            private_tmp,
-            public_tmp: suffix.beside(&files.public),
+        let temp_name = |name: &EntryName| {
+            suffix.name_for(name).map_err(|source| SetupError::Io {
+                path: dir.path_of(name),
+                source,
+            })
         };
-        fill_new_file(&staged.private_tmp, private, pair.private_pem.as_bytes())?;
-        let public = create_public_file(&staged.public_tmp).map_err(|source| SetupError::Io {
-            path: staged.public_tmp.clone(),
-            source,
-        })?;
+        let public_tmp = temp_name(&files.public)?;
+        let probe = temp_name(&files.link_probe)?;
+        let (private, private_tmp) = dir
+            .create_temp_for(&files.private, &suffix)
+            .map_err(|e| secret_file_error(e, &dir.path_of(&files.private)))?;
+        let staged = Self {
+            files,
+            private_tmp,
+            public_tmp,
+        };
         fill_new_file(
+            dir,
+            &staged.private_tmp,
+            private,
+            pair.private_pem.as_bytes(),
+        )?;
+        let public = dir
+            .create_public(&staged.public_tmp)
+            .map_err(|source| SetupError::Io {
+                path: dir.path_of(&staged.public_tmp),
+                source,
+            })?;
+        fill_new_file(
+            dir,
             &staged.public_tmp,
             public,
             format!("{}\n", pair.public.as_str()).as_bytes(),
         )?;
-        probe_hard_link(
-            &staged.public_tmp,
-            &staged.public_tmp.with_extension("probe"),
-        )?;
+        probe_hard_link(dir, &staged.public_tmp, &probe)?;
         Ok(staged)
     }
 
-    /// Link both halves into their final names. The private key is linked last:
-    /// it is the name publish looks for, so it appears only once the public half
-    /// is in place. `hard_link` refuses an existing name, so a file that appeared
-    /// meanwhile is never overwritten.
-    fn commit(self, files: &KeyFiles) -> Result<PrivateKeyPath, SetupError> {
-        std::fs::hard_link(&self.public_tmp, &files.public).map_err(|source| {
-            SetupError::Commit {
-                path: files.public.clone(),
+    /// Link both halves into their final names.
+    ///
+    /// The private key is linked last: it is the name publish looks for, so
+    /// it appears only once the public half is in place. A hard link refuses
+    /// an existing name, so a file that appeared meanwhile is never
+    /// overwritten.
+    fn commit(self) -> Result<PrivateKeyPath, SetupError> {
+        let files = self.files;
+        let dir = &files.dir;
+        dir.hard_link(&self.public_tmp, &files.public)
+            .map_err(|source| SetupError::Commit {
+                path: dir.path_of(&files.public),
                 source,
-            }
-        })?;
-        if let Err(source) = std::fs::hard_link(&self.private_tmp, &files.private) {
-            let _ = std::fs::remove_file(&files.public);
+            })?;
+        if let Err(source) = dir.hard_link(&self.private_tmp, &files.private) {
+            let _ = dir.remove(&files.public);
             return Err(SetupError::Commit {
-                path: files.private.clone(),
+                path: files.private_path(),
                 source,
             });
         }
-        Ok(PrivateKeyPath(files.private.clone()))
+        Ok(PrivateKeyPath(files.private_path()))
     }
 }
 
-impl Drop for StagedKeyPair {
+impl Drop for StagedKeyPair<'_> {
     fn drop(&mut self) {
-        let _ = std::fs::remove_file(&self.private_tmp);
-        let _ = std::fs::remove_file(&self.public_tmp);
+        let _ = self.files.dir.remove(&self.private_tmp);
+        let _ = self.files.dir.remove(&self.public_tmp);
     }
 }
 
-/// Hard-link `source` to the unused name `probe`, then remove `probe`.
-fn probe_hard_link(source: &Path, probe: &Path) -> Result<(), SetupError> {
-    std::fs::hard_link(source, probe).map_err(|source| SetupError::LinkUnsupported {
-        dir: probe.parent().unwrap_or(probe).to_path_buf(),
-        source,
-    })?;
-    std::fs::remove_file(probe).map_err(|source| SetupError::Io {
-        path: probe.to_path_buf(),
+/// Hard-link `source` in `dir` to the unused name `probe`, then remove `probe`.
+fn probe_hard_link(
+    dir: &OwnerDir,
+    source: &EntryName,
+    probe: &EntryName,
+) -> Result<(), SetupError> {
+    dir.hard_link(source, probe)
+        .map_err(|source| SetupError::LinkUnsupported {
+            dir: dir.path().to_path_buf(),
+            source,
+        })?;
+    dir.remove(probe).map_err(|source| SetupError::Io {
+        path: dir.path_of(probe),
         source,
     })
 }
@@ -612,45 +673,36 @@ fn secret_file_error(error: SecretFileError, path: &Path) -> SetupError {
     }
 }
 
-/// Write and sync `contents` into the freshly created `file` at `path`.
+/// Write and sync `contents` into the freshly created `file`, the entry `name` of `dir`.
 ///
 /// A partially written file is removed.
-fn fill_new_file(path: &Path, mut file: File, contents: &[u8]) -> Result<(), SetupError> {
+fn fill_new_file(
+    dir: &OwnerDir,
+    name: &EntryName,
+    mut file: File,
+    contents: &[u8],
+) -> Result<(), SetupError> {
     let written = file.write_all(contents).and_then(|()| file.sync_all());
     drop(file);
     written.map_err(|source| {
-        let _ = std::fs::remove_file(path);
+        let _ = dir.remove(name);
         SetupError::Io {
-            path: path.to_path_buf(),
+            path: dir.path_of(name),
             source,
         }
     })
 }
 
-/// Create the public half's file `path` exclusively, world-readable.
-///
-/// An existing name or symlink is refused, never followed.
-fn create_public_file(path: &Path) -> std::io::Result<File> {
-    let mut options = OpenOptions::new();
-    options.write(true).create_new(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt as _;
-        options.mode(0o644);
-    }
-    options.open(path)
-}
-
-/// Create the config dir owner-only through `store`, refusing one another user can write.
-fn create_config_dir(store: SecretStore, dir: &Path) -> Result<(), SetupError> {
+/// Hold the config dir through `store`, creating it owner-only and refusing one another user can write.
+fn create_config_dir(store: SecretStore, dir: &Path) -> Result<OwnerDir, SetupError> {
     crate::secret_file::create_owner_dir(store, dir).map_err(|e| secret_file_error(e, dir))
 }
 
 /// The consent question: what will be generated, where it is stored, and the
 /// extra scope the one-shot registration authorization asks for.
-fn consent_question(files: &KeyFiles) -> crate::text::Message {
+fn consent_question(private_key: &Path) -> crate::text::Message {
     crate::text::signing_key_consent_question(
-        &shown_path(&files.private),
+        &shown_path(private_key),
         &crate::login::SIGNING_KEY_SCOPE,
         &AUTHORIZED_APPS_SETTINGS,
     )
@@ -677,19 +729,17 @@ fn set_up<C: Consent, R: SigningKeyRegistrar>(
         KeyLookup::StoredUnusable(path) => return Err(SetupError::Occupied(path)),
         KeyLookup::Missing => config_dir.ok_or(SetupError::NoConfigDir)?,
     };
-    crate::secret_file::require(store).map_err(|_| SetupError::StoreUnsupported)?;
-    create_config_dir(store, dir)?;
-    let files = KeyFiles::in_dir(dir);
+    let files = KeyFiles::in_dir(create_config_dir(store, dir)?)?;
     files.ensure_free()?;
-    if !consent.confirm(&consent_question(&files)) {
+    if !consent.confirm(&consent_question(&files.private_path())) {
         return Ok(SetupOutcome::Declined);
     }
     let pair = GeneratedKeyPair::generate().ok_or(SetupError::KeyGeneration)?;
-    let staged = StagedKeyPair::write(store, &files, &pair)?;
+    let staged = StagedKeyPair::write(&files, &pair)?;
     registrar
         .register(&pair.public, KEY_TITLE)
         .map_err(SetupError::Registration)?;
-    staged.commit(&files).map(SetupOutcome::Registered)
+    staged.commit().map(SetupOutcome::Registered)
 }
 
 /// Reads the answer from the terminal.
@@ -1270,22 +1320,29 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// The entry name `text`, which the test knows to be one plain component.
+    #[cfg(unix)]
+    fn entry(text: &str) -> EntryName {
+        EntryName::new(OsStr::new(text)).expect("a plain component")
+    }
+
+    #[cfg(unix)]
     #[test]
     fn a_failed_hard_link_probe_is_link_unsupported_and_touches_nothing() {
         let dir = test_dir("probe");
-        let source = dir.join("source");
-        std::fs::write(&source, b"source").expect("plant source");
+        let held = create_config_dir(SecretStore::OwnerOnlyFile, &dir).expect("hold test dir");
+        std::fs::write(dir.join("source"), b"source").expect("plant source");
         let occupied = dir.join("occupied");
         std::fs::write(&occupied, b"occupied").expect("plant occupied");
-        let result = probe_hard_link(&source, &occupied);
+        let result = probe_hard_link(&held, &entry("source"), &entry("occupied"));
         assert!(
             matches!(&result, Err(SetupError::LinkUnsupported { dir: d, .. }) if *d == dir),
             "expected LinkUnsupported, got {result:?}"
         );
         assert_eq!(std::fs::read(&occupied).expect("read"), b"occupied");
 
-        let probe = dir.join("probe");
-        probe_hard_link(&source, &probe).expect("links on a hard-link filesystem");
+        probe_hard_link(&held, &entry("source"), &entry("probe"))
+            .expect("links on a hard-link filesystem");
         assert_eq!(
             dir_entries(&dir),
             vec!["occupied".to_owned(), "source".to_owned()],
@@ -1296,8 +1353,7 @@ mod tests {
 
     #[test]
     fn the_consent_question_names_where_to_revoke_the_grant() {
-        let files = KeyFiles::in_dir(Path::new("/cfg/ipe"));
-        let question = consent_question(&files);
+        let question = consent_question(Path::new("/cfg/ipe/signing_key"));
         assert!(question.contains("write:ssh_signing_key"));
         assert!(question.contains(AUTHORIZED_APPS_SETTINGS));
     }
@@ -1365,14 +1421,13 @@ mod tests {
     #[test]
     fn an_unsupported_secret_store_stages_no_key_file() {
         let dir = test_dir("stage-unsupported");
-        let pair = GeneratedKeyPair::from_seed(&RFC8032_SEED, 7).expect("encodes");
-        let staged = StagedKeyPair::write(SecretStore::Unsupported, &KeyFiles::in_dir(&dir), &pair);
+        let held = create_config_dir(SecretStore::Unsupported, &dir.join("ipe"));
         assert!(
-            matches!(staged, Err(SetupError::StoreUnsupported)),
-            "an unsupported store must refuse staging, got {:?}",
-            staged.as_ref().err()
+            matches!(held, Err(SetupError::StoreUnsupported)),
+            "an unsupported store holds no dir to stage a key in, got {:?}",
+            held.as_ref().err()
         );
-        drop(staged);
+        drop(held);
         assert!(dir_entries(&dir).is_empty(), "no staged file is written");
         let _ = std::fs::remove_dir_all(&dir);
     }
