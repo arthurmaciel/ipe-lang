@@ -1,0 +1,46 @@
+# Trust roots — the single source of truth.
+#
+# Every path below can change what CI runs, what it trusts, or what the
+# toolchain and gates accept; a change to any of them needs the code owner's
+# review. The same file is read by `.github/ci/trust_roots.py`, which drives
+# the `trust-root-diff` check and the `verify-manifest.py` trust-root check,
+# so this list is never hand-synced anywhere else.
+#
+# Accepted subset (anything else is refused by `trust_roots.py`):
+#   - one pattern plus owners per line; every rule has the SAME owner set,
+#     so GitHub's last-match-wins ordering can never un-own a path;
+#   - a pattern containing `/` starts with `/` (anchored at the repo root);
+#     a pattern without `/` is one path component matched at any depth;
+#   - a trailing `/` (or `/**`) means "this directory and everything in it";
+#   - `*` and `?` match within one component; no `[`, `!`, `\`, inline `#`;
+#   - every rule matches at least one tracked file.
+
+# CI definitions, actions, gate SSOTs, and this file.
+/.github/                                       @arthurmaciel
+# nextest profiles and release-please configuration.
+/.config/                                       @arthurmaciel
+# Build, gate, and index tooling run by CI.
+/tools/                                         @arthurmaciel
+
+# Cargo configuration, manifests, lockfiles, and build scripts at any depth.
+.cargo                                          @arthurmaciel
+Cargo.toml                                      @arthurmaciel
+Cargo.lock                                      @arthurmaciel
+build.rs                                        @arthurmaciel
+
+# Toolchain pin and lint/format policy.
+rust-toolchain*                                 @arthurmaciel
+clippy.toml                                     @arthurmaciel
+rustfmt.toml                                    @arthurmaciel
+/deny.toml                                      @arthurmaciel
+
+# Install entry point and the governance documents gates enforce.
+/install.sh                                     @arthurmaciel
+/PRINCIPLES.md                                  @arthurmaciel
+/AGENTS.md                                      @arthurmaciel
+
+# Byte-exact goldens: the reference output every emit test compares against.
+/tests/golden/                                  @arthurmaciel
+/src/ipe-cli/tests/golden/                      @arthurmaciel
+/src/ipe-cli/tests/g_*/                         @arthurmaciel
+/src/compiler/diagnostics/tests/render_goldens/ @arthurmaciel
