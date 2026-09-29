@@ -297,8 +297,8 @@ checks:
     owner: maintainer
     note: >-
       Fails a PR that touches a path .github/CODEOWNERS owns until a code
-      owner approves its current commit, unless a code owner or a
-      Dependabot version bump authored it from a branch of this repository.
+      owner approves its current commit, unless a code owner opened it from
+      a branch of this repository and authored every commit.
 
   # ── Panic-scan / cargo-deny / playground / admission (per-change gates) ────
   - context: panic-scan

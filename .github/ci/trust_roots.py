@@ -15,11 +15,10 @@ typed refusal, never a silently different match.
 `pull_request_target` and `merge_group`) never sees head code: it reads the
 event payload GitHub wrote, then the PR, its file list, and its reviews over
 the REST API. A PR that touches a trust root fails unless a code owner's latest
-decisive review APPROVES the PR's current head commit. Two authors pass
-without that review, both only from a branch of this repository: a code owner
-(GitHub `User` named in CODEOWNERS), and GitHub's `dependabot[bot]` app when
-every touched trust root is a version bump (sha-pinned `uses:` lines,
-dependency version strings, crates.io lockfile entries). Every ambiguity (a file list the API truncated, a
+decisive review APPROVES the PR's current head commit. A code owner cannot
+approve their own PR, so one PR passes without that review: a code owner's
+(GitHub `User` named in CODEOWNERS), from a branch of this repository, whose
+every commit a code owner authored. Every ambiguity (a file list the API truncated, a
 PR that moved since the event, an unparseable merge-queue ref, an HTTP error)
 fails closed.
 
@@ -221,27 +220,31 @@ def _sha(obj: object, *keys: str) -> str:
 
 @dataclass(frozen=True)
 class Owner:
-    """A code owner (a `User` whose login CODEOWNERS names)."""
+    """A code owner: a GitHub `User` whose login CODEOWNERS names."""
 
     login: str
-
-
-@dataclass(frozen=True)
-class Dependabot:
-    """GitHub's own `dependabot[bot]` app identity, which no account can take."""
 
 
 @dataclass(frozen=True)
 class Other:
-    """Any other author: a collaborator, a fork, or another bot."""
+    """Any other author: a collaborator, a fork, or a bot."""
 
     login: str
 
 
-Author = Owner | Dependabot | Other
+Author = Owner | Other
 
-DEPENDABOT_LOGIN = "dependabot[bot]"
 _LOGIN_RE = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9])){0,38}(?:\[bot\])?$")
+# The API caps a PR's commit listing at this many; past it the list is partial.
+MAX_PR_COMMITS = 250
+# `github-actions[bot]` authors and commits with a workflow token of this
+# repository (release-please's fallback token). A workflow that can write here
+# runs from a trust root on main or from a branch only a write-access account
+# can push, so it widens nothing past the owners' own reach.
+_WORKFLOW_BOT = "github-actions[bot]"
+# `web-flow` commits what an account does through GitHub's UI or API (the
+# author is then the acting account).
+_TRUSTED_COMMITTERS = frozenset({"web-flow", _WORKFLOW_BOT})
 
 
 def parse_author(pr: dict, owners: frozenset[str]) -> Author:
@@ -251,109 +254,34 @@ def parse_author(pr: dict, owners: frozenset[str]) -> Author:
     kind = _field(pr, "user", "type")
     if not isinstance(login, str) or not _LOGIN_RE.match(login) or not isinstance(kind, str):
         raise Refused("PR author has a malformed `user.login` or `user.type`")
-    if kind == "Bot":
-        return Dependabot() if login == DEPENDABOT_LOGIN else Other(login)
     if kind == "User" and login.casefold() in owners:
         return Owner(login)
     return Other(login)
 
 
-# A workflow line Dependabot rewrites: a `uses:` step pinned to a full commit
-# sha, with an optional trailing version comment.
-_USES_PIN = re.compile(r"^\s*(?:-\s+)?uses:\s*[A-Za-z0-9_.-]+/[A-Za-z0-9_./-]+@[0-9a-f]{40}(?:\s+#.*)?$")
-_PIN_TAIL = re.compile(r"@[0-9a-f]{40}(?:\s+#.*)?$")
-# A version requirement as Cargo spells one (an optional operator, then a
-# digit), in the only two places a dependency carries it: `name = "..."` or an
-# inline table's `version = "..."`. A digit-led feature name is not one.
-_VERSION_STR = re.compile(r'(?P<key>(?:^\s*[A-Za-z0-9_-]+|\bversion)\s*=\s*)"[=^~<>]*\s*[0-9][0-9A-Za-z.+-]*"')
-# Manifest keys that move a package's source or build: a line carrying one is
-# never a version bump, whatever else it matches.
-_CARGO_SOURCE_KEYS = re.compile(r"\b(?:git|path|registry|branch|rev|tag|build|links|package|workspace|edition|rust-version)\s*=")
-_LOCK_LINE = re.compile(
-    r'^(?:\[\[package\]\]|name = "[A-Za-z0-9_-]+"|version = "[0-9][0-9A-Za-z.+-]*"'
-    r'|source = "registry\+https://github\.com/rust-lang/crates\.io-index"'
-    r'|checksum = "[0-9a-f]{64}"|dependencies = \[|\]|\s+"[A-Za-z0-9_-]+(?: [0-9][0-9A-Za-z.+-]*)?",?|)$'
-)
+def _commit_login(commit: object, role: str) -> str | None:
+    """The GitHub account the API linked to a commit's author or committer,
+    or `None` when it linked none (an email no account claims)."""
+    user = commit.get(role) if isinstance(commit, dict) else None
+    login = user.get("login") if isinstance(user, dict) else None
+    return login.casefold() if isinstance(login, str) else None
 
 
-def _changed_line_pairs(patch: str) -> list[tuple[str, str]] | None:
-    """Each hunk's removed lines paired in order with the added lines that
-    replace them, or `None` when a run of removals is not matched one-for-one
-    by a run of additions (a line added or dropped outright)."""
-    pairs: list[tuple[str, str]] = []
-    minus: list[str] = []
-    plus: list[str] = []
-
-    def flush() -> bool:
-        if len(minus) != len(plus):
+def commits_by_owners(pr: dict, commits: list, owners: frozenset[str]) -> bool:
+    """True iff the API listed every commit of the PR and each one's author is
+    a code owner or this repository's workflow bot and its committer one of
+    those or `web-flow`, so no other account's push rides on an owner's PR."""
+    expected = _int(pr, "commits")
+    if expected < 1 or expected > MAX_PR_COMMITS or len(commits) != expected:
+        return False
+    authors = owners | {_WORKFLOW_BOT}
+    committers = owners | _TRUSTED_COMMITTERS
+    for c in commits:
+        author = _commit_login(c, "author")
+        committer = _commit_login(c, "committer")
+        if author is None or author not in authors or committer is None or committer not in committers:
             return False
-        pairs.extend(zip(minus, plus))
-        minus.clear()
-        plus.clear()
-        return True
-
-    for line in patch.split("\n"):
-        if line.startswith("-"):
-            if plus and not flush():
-                return None
-            minus.append(line[1:])
-        elif line.startswith("+"):
-            plus.append(line[1:])
-        elif line.startswith("\\"):
-            continue
-        elif not flush():
-            return None
-    return pairs if flush() else None
-
-
-def _is_workflow(path: str) -> bool:
-    parts = path.split("/")
-    return len(parts) == 3 and parts[:2] == [".github", "workflows"] and parts[2].endswith((".yml", ".yaml"))
-
-
-def _dependabot_edit(path: str, patch: object) -> bool:
-    """True iff this one file's diff is a Dependabot-shaped version bump: a
-    workflow's `uses:` sha pins, a manifest's version strings, or a lockfile's
-    crates.io entries. An absent patch (GitHub omits it past a size limit)
-    proves nothing and fails."""
-    if not isinstance(patch, str) or not patch:
-        return False
-    name = path.rsplit("/", 1)[-1]
-    if name == "Cargo.lock":
-        return all(
-            _LOCK_LINE.match(line[1:])
-            for line in patch.split("\n")
-            if line.startswith(("-", "+"))
-        )
-    pairs = _changed_line_pairs(patch)
-    if not pairs:
-        return False
-    if _is_workflow(path):
-        return all(
-            _USES_PIN.match(old) and _USES_PIN.match(new) and _PIN_TAIL.sub("", old) == _PIN_TAIL.sub("", new)
-            for old, new in pairs
-        )
-    if name == "Cargo.toml":
-        return all(
-            not _CARGO_SOURCE_KEYS.search(old)
-            and not _CARGO_SOURCE_KEYS.search(new)
-            and _VERSION_STR.search(new)
-            and _VERSION_STR.sub(r'\g<key>""', old) == _VERSION_STR.sub(r'\g<key>""', new)
-            for old, new in pairs
-        )
-    return False
-
-
-def dependabot_only(files: list, touched: list[str]) -> bool:
-    """Every touched trust root is a Dependabot-shaped version bump."""
-    patches: dict[str, object] = {}
-    for f in files:
-        name = _field(f, "filename")
-        if isinstance(name, str):
-            patches[name] = f.get("patch") if isinstance(f, dict) else None
-    # A rename's `previous_filename` has no patch entry of its own, so a
-    # trust root renamed away fails here.
-    return all(p in patches and _dependabot_edit(p, patches[p]) for p in touched)
+    return True
 
 
 def is_outside(pr: dict) -> bool:
@@ -406,7 +334,7 @@ def owner_approved(reviews: list, owners: frozenset[str], head_sha: str) -> bool
     return any(r["state"] == "APPROVED" and r.get("commit_id") == head_sha for r in latest.values())
 
 
-def decide(roots: TrustRoots, pr: dict, files: list, reviews: list) -> str:
+def decide(roots: TrustRoots, pr: dict, files: list, reviews: list, commits: list) -> str:
     """Return a pass reason, or raise `Refused`."""
     head_sha = _sha(pr, "head", "sha")
     if _field(pr, "state") != "open":
@@ -415,11 +343,8 @@ def decide(roots: TrustRoots, pr: dict, files: list, reviews: list) -> str:
     if not touched:
         return "no trust root touched"
     author = parse_author(pr, roots.owners)
-    inside = not is_outside(pr)
-    if inside and isinstance(author, Owner):
+    if isinstance(author, Owner) and not is_outside(pr) and commits_by_owners(pr, commits, roots.owners):
         return f"{len(touched)} trust root(s) touched by code owner {author.login}"
-    if inside and isinstance(author, Dependabot) and dependabot_only(files, touched):
-        return f"{len(touched)} trust root(s) touched by a Dependabot version bump"
     if owner_approved(reviews, roots.owners, head_sha):
         return f"{len(touched)} trust root(s) touched; code owner approved {head_sha}"
     shown = ", ".join(touched[:20]) + (" ..." if len(touched) > 20 else "")
@@ -532,12 +457,13 @@ def run_check(roots: TrustRoots, event_name: str, event: dict, api: Api) -> str:
         raise Refused(f"PR head moved from {event_head} to {head_sha}; the newer run decides")
     files = api.get_all(f"pulls/{number}/files")
     reviews = api.get_all(f"pulls/{number}/reviews")
-    # The file list and reviews are read after the PR: a push in between
+    commits = api.get_all(f"pulls/{number}/commits")
+    # The file list, reviews, and commits are read after the PR: a push in between
     # would pair the older head (and an approval of it) with newer files.
     after = _sha(api.get(f"pulls/{number}"), "head", "sha")
     if after != head_sha:
         raise Refused(f"PR head moved from {head_sha} to {after} while it was read; the newer run decides")
-    return decide(roots, pr, files, reviews)
+    return decide(roots, pr, files, reviews, commits)
 
 
 def main(argv: list[str] | None = None) -> int:
