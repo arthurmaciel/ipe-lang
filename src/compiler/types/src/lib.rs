@@ -4365,7 +4365,7 @@ mod tests {
                        _ ->\n            False\n";
         let main_src = "module Main exposing (main)\n\n\
                         import Lib exposing (Color(..), isRed)\n\n\
-                        main =\n    Io.println (if isRed Green then \"red\" else \"other\")\n";
+                        main =\n    if isRed Green then 1 else 0\n";
         #[allow(clippy::expect_used)] // a fixture that fails to link is a broken test, never a skip
         let (m, mut i) = link_modules(&[("Lib", lib_src), ("Main", main_src)])
             .expect("fixture modules parse, canonicalise, and link");
@@ -4415,7 +4415,7 @@ mod tests {
                        Red ->\n            3\n";
         let main_src = "module Main exposing (main)\n\n\
                         import Lib exposing (Color(..), label)\n\n\
-                        main =\n    Io.println (String.fromInt (label Green))\n";
+                        main =\n    label Green\n";
         #[allow(clippy::expect_used)] // a fixture that fails to link is a broken test, never a skip
         let (m, mut i) = link_modules(&[("Lib", lib_src), ("Main", main_src)])
             .expect("fixture modules parse, canonicalise, and link");

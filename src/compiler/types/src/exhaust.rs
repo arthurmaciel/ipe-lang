@@ -937,13 +937,29 @@ fn check_case(
 /// closed union, so it fails OPEN here, deferring to the ordinary exhaustiveness
 /// check rather than firing a false T0018). The caller reads the union's
 /// constructor list from [`Sigs::union_ctors`] under the returned key.
+///
+/// The head is matched by [`crate::unify::con_heads_compatible`], the one
+/// head-identity rule the solver unifies by: a builtin re-exported under a
+/// stdlib home (`Ipe.Result exposing (Result(..))` solves to
+/// `Con { module: [Ipe, Result], name: Result }`) is the empty-home builtin
+/// union, so its catch-all is judged against the builtin's constructors.
 fn scrutinee_union<'a>(scrut: &canon::Expr, ctx: &'a Ctx<'_>) -> Option<&'a TyId> {
     let ty = ctx.regions.get(&(ctx.home.to_vec(), scrut.span))?;
     let Ty::Con { module, name, .. } = ty else {
         return None;
     };
     let key = (module.clone(), *name);
-    ctx.sigs.union_ctors.get_key_value(&key).map(|(k, _)| k)
+    if let Some((k, _)) = ctx.sigs.union_ctors.get_key_value(&key) {
+        return Some(k);
+    }
+    if !crate::unify::con_heads_compatible(module, *name, &[], *name, ctx.interner) {
+        return None;
+    }
+    let builtin_key = (Vec::new(), *name);
+    ctx.sigs
+        .union_ctors
+        .get_key_value(&builtin_key)
+        .map(|(k, _)| k)
 }
 
 /// Accumulate the constructor names a pattern refers to at the TOP column —
@@ -1457,5 +1473,68 @@ mod tests {
         let mut budget = ExhaustBudget::from_env();
         let rows = expand_upats(&pat, &mut budget).expect("small pattern fits any default budget");
         assert_eq!(rows.len(), 2, "True | False expands to two rows");
+    }
+
+    /// The union a scrutinee of solved type `module.name` is judged against, if any.
+    #[allow(clippy::expect_used)] // interning short literals cannot exhaust the interner
+    fn union_of_scrutinee(module: &[&str], name: &str) -> Option<TyId> {
+        let mut interner = Interner::new();
+        let main = vec![interner.intern("Main").expect("intern Main")];
+        let module: Vec<Symbol> = module
+            .iter()
+            .map(|seg| interner.intern(seg).expect("intern a home segment"))
+            .collect();
+        let name = interner.intern(name).expect("intern the type name");
+        let entry = canon::Module {
+            name: main.clone(),
+            unions: Vec::new(),
+            defs: Vec::new(),
+            imports_unsafe_submodule: false,
+            imported_web_capabilities: BTreeSet::new(),
+        };
+        let sigs = Sigs::build(&entry, &[], &mut interner).expect("builtin signatures build");
+        let scrut: canon::Expr = Located::new(Span::DUMMY, canon::Expr_::Unit);
+        let mut regions = Regions::new();
+        regions.insert(
+            (main.clone(), scrut.span),
+            Ty::Con {
+                module,
+                name,
+                args: Vec::new(),
+            },
+        );
+        let ctx = Ctx {
+            sigs: &sigs,
+            home: &main,
+            regions: &regions,
+            interner: &interner,
+        };
+        scrutinee_union(&scrut, &ctx).cloned()
+    }
+
+    /// A builtin re-exported under its stdlib home is judged as the builtin union.
+    ///
+    /// `import Ipe.Result exposing (Result(..))` solves a `Result` scrutinee to
+    /// the `Ipe.Result` home; the solver unifies that head with the empty-home
+    /// builtin, so the catch-all check must see the same union or it fails open.
+    #[test]
+    fn a_stdlib_spelled_builtin_scrutinee_is_the_builtin_union() {
+        let stdlib = union_of_scrutinee(&["Ipe", "Result"], "Result");
+        let ambient = union_of_scrutinee(&[], "Result");
+        assert!(
+            stdlib.as_ref().is_some_and(|(home, _)| home.is_empty()),
+            "an `Ipe.Result`-homed `Result` must key the builtin union, got {stdlib:?}"
+        );
+        assert_eq!(stdlib, ambient, "both spellings name one union");
+    }
+
+    /// A head the solver would not unify with a builtin keys no union.
+    #[test]
+    fn a_user_homed_non_builtin_scrutinee_is_not_a_builtin_union() {
+        assert_eq!(
+            union_of_scrutinee(&["Lib"], "Color"),
+            None,
+            "an unknown user union is never mistaken for a builtin"
+        );
     }
 }

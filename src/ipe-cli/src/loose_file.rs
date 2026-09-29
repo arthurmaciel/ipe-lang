@@ -1486,13 +1486,25 @@ mod tests {
         let probed = dir.join("probed");
         let file = held.open_file("X.ipe", &probed).map(drop);
         let descended = held.descend("A", &probed).map(drop);
+        let rechecked = held.entry_kind("A", &probed);
         let real = held.descend("Real", &probed).map(drop);
         let _ = fs::remove_dir_all(&dir);
         let symlink = io_bounded::SourceRefusal::Symlink;
         assert!(is_refused(&file, symlink), "a file symlink is never opened");
+        // `O_DIRECTORY | O_NOFOLLOW` on a directory symlink fails with the
+        // no-follow errno or, on Linux, `ENOTDIR`; either way nothing is opened,
+        // and the walk's re-lookup after `NotDirectory` names the symlink.
         assert!(
-            matches!(descended, Err(DescendFailure::Symlink)),
+            matches!(
+                descended,
+                Err(DescendFailure::Symlink | DescendFailure::NotDirectory)
+            ),
             "a directory symlink is never descended"
+        );
+        assert!(
+            matches!(descended, Err(DescendFailure::Symlink))
+                || matches!(rechecked, Ok(Some(EntryKind::Symlink))),
+            "a refused descent into a directory symlink is classified as a symlink"
         );
         assert!(real.is_ok(), "a real directory is descended");
     }
