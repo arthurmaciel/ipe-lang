@@ -6,18 +6,19 @@ EVERY changed path is irrelevant to it; anything else — an unknown path, an
 empty or unreadable diff, a non-PR event, a crash — yields `true` (run).
 
 Irrelevance is proven one of two ways, and never by absence from an allowlist:
-  * the path is PROSE: an explicitly enumerated file or directory that the
-    `guard` subcommand proves no build, test, script, or CI step reads;
+  * the path is PROSE: an explicitly enumerated file or directory that
+    `guard()` (run as the verdict tool `prose_guard.py`) proves no build, test,
+    script, or CI step reads;
   * the scope is not `code`, the path lies inside a SCOPED_ROOT (a source tree
     whose per-scope relevance is enumerated below), and it matches none of the
     scope's relevant patterns.
 Every path outside PROSE and SCOPED_ROOTS (tools/, tests/, examples/, dotfile
 configs, root files, a new top-level directory) runs every scope.
 
-Subcommands:
-  classify SCOPE...   write `SCOPE=true|false` per scope to "$GITHUB_OUTPUT"
-  guard               fail unless the PROSE set is provably unread and no workflow
-                      runs a second path filter (see guard())
+Usage: `change_class.py --SCOPE...` writes `SCOPE=true|false` per scope to
+"$GITHUB_OUTPUT" (a flag names its scope with `-` for `_`: `--panic-scan`). It
+is an advisory tool: a usage error or a crash leaves every output unset, which
+each consumer reads as run.
 
 Inputs (env, classify): EVENT_NAME; PR_HEAD_SHA (pull_request — the tested
 commit must be the base + PR-head merge commit); MERGE_GROUP_BASE_SHA
@@ -219,12 +220,12 @@ def _covers(entry: str, path: str) -> bool:
     return path == entry or entry.startswith(path.rstrip("/") + "/")
 
 
-def _prose_entries() -> tuple[str, ...]:
+def prose_entries() -> tuple[str, ...]:
     return tuple(sorted(PROSE_FILES)) + PROSE_DIRS
 
 
 def _overlaps_prose(path: str) -> str | None:
-    return next((e for e in _prose_entries() if _covers(e, path)), None)
+    return next((e for e in prose_entries() if _covers(e, path)), None)
 
 
 def _norm(path: str) -> str | None:
@@ -327,32 +328,30 @@ def tracked_files(root: str) -> list[str]:
     return [p.decode("utf-8") for p in raw.split(b"\0") if p]
 
 
+def scope_flags(argv: Sequence[str]) -> tuple[str, ...] | None:
+    """The scopes `argv` names as `--SCOPE` flags, or None unless every word is
+    the flag of a distinct known scope and there is at least one."""
+    by_flag = {"--" + s.replace("_", "-"): s for s in SCOPES}
+    scopes = tuple(by_flag.get(a, "") for a in argv)
+    if not scopes or "" in scopes or len(set(scopes)) != len(scopes):
+        return None
+    return scopes
+
+
 def main(argv: Sequence[str]) -> int:
+    scopes = scope_flags(argv)
+    if scopes is None:
+        print(__doc__, file=sys.stderr)
+        return 2
     root = git(".", "rev-parse", "--show-toplevel").decode().strip()
-    if len(argv) >= 1 and argv[0] == "guard":
-        errors = guard(root, tracked_files(root))
-        for e in errors:
-            print(f"change_class guard: {e}", file=sys.stderr)
-        if errors:
-            print(
-                "A PROSE entry must be provably unread; remove the reader or the "
-                "entry in .github/ci/change_class.py.",
-                file=sys.stderr,
-            )
-            return 1
-        print(f"change_class guard: PROSE set sound ({len(_prose_entries())} entries)")
-        return 0
-    if len(argv) >= 2 and argv[0] == "classify":
-        result = classify(root, dict(os.environ), argv[1:])
-        lines = [f"{s}={'true' if runs else 'false'}" for s, runs in result.items()]
-        print("\n".join(lines))
-        out = os.environ.get("GITHUB_OUTPUT")
-        if out:
-            with open(out, "a") as fh:
-                fh.write("\n".join(lines) + "\n")
-        return 0
-    print(__doc__, file=sys.stderr)
-    return 2
+    result = classify(root, dict(os.environ), scopes)
+    lines = [f"{s}={'true' if runs else 'false'}" for s, runs in result.items()]
+    print("\n".join(lines))
+    out = os.environ.get("GITHUB_OUTPUT")
+    if out:
+        with open(out, "a") as fh:
+            fh.write("\n".join(lines) + "\n")
+    return 0
 
 
 if __name__ == "__main__":

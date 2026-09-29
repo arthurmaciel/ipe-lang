@@ -7,7 +7,7 @@ name: nightly-green
 # change's own commit passed a dispatched full gate (the recovery path for the
 # PR that fixes a red nightly: `gh workflow run 'Build & test' --ref <branch>`,
 # then re-run this check). Absence is not a pass. The rule lives in
-# `.github/ci/nightly_green.py`; its `lint` (manifest-guard) pins this wiring.
+# `.github/ci/nightly_green.py`; its `--lint` (manifest-guard) pins this wiring.
 on:
   pull_request:
   merge_group:
@@ -36,9 +36,8 @@ jobs:
 
       - name: Require a green full gate (latest nightly, or this commit)
         env:
-          EVENT: ${{ github.event_name }}
+          EVENT_NAME: ${{ github.event_name }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-          HEAD_REF: ${{ github.event.merge_group.head_ref }}
           REPO: ${{ github.repository }}
           GH_TOKEN: ${{ github.token }}
-        run: python3 .github/ci/nightly_green.py verdict
+        run: python3 .github/ci/nightly_green.py --verdict

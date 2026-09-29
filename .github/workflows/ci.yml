@@ -105,6 +105,10 @@ jobs:
       # the sanitizers; the SEAL tiers key on `code`, never on this.
       emit: ${{ steps.classify.outputs.emit != 'false' }}
       release_only: ${{ steps.release.outputs.release_only }}
+      # `e2e_plan` — every e2e shard's nextest selection, from the SSOT
+      # `.github/ci/e2e_shard.py`; the shards run it and `seal-slice` proves it
+      # partitions the archive.
+      e2e_plan: ${{ steps.e2e-plan.outputs.plan }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -114,7 +118,10 @@ jobs:
       # Non-skippable: this job is a required context, so a PR that makes a
       # PROSE path readable (or moves a crate under one) cannot merge.
       - name: Guard the prose set
-        run: python3 .github/ci/change_class.py guard
+        run: python3 .github/ci/prose_guard.py
+      - name: Plan the e2e shard selections
+        id: e2e-plan
+        run: python3 .github/ci/e2e_shard.py --plan
       # `release_only` — true only for a same-repo PR whose changed files are all
       # release-please version metadata (see .github/ci/release_only.py). Keyed on
       # the diff, never the branch name, so no PR can opt itself out of a tier.
@@ -136,7 +143,7 @@ jobs:
           EVENT_NAME: ${{ github.event_name }}
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           MERGE_GROUP_BASE_SHA: ${{ github.event.merge_group.base_sha }}
-        run: python3 .github/ci/change_class.py classify code emit wasm editors
+        run: python3 .github/ci/change_class.py --code --emit --wasm --editors
 
   # Fail-closed guard against clone bloat: a commit that tracks a build artifact
   # (a target/ directory, an .rlib/.rmeta/.o/.a/.so/.dylib/.wasm blob) or any file
@@ -219,7 +226,7 @@ jobs:
           EVENT_NAME: ${{ github.event_name }}
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           MERGE_GROUP_BASE_SHA: ${{ github.event.merge_group.base_sha }}
-        run: python3 .github/ci/change_class.py classify panic_scan
+        run: python3 .github/ci/change_class.py --panic-scan
 
       - uses: ./.github/actions/rust-toolchain-pinned
         if: steps.classify.outputs.panic_scan != 'false'
@@ -1137,12 +1144,15 @@ jobs:
           # ONE target, so the dep tree compiles once and every later golden
           # only links its own `main.rs`.
           IPE_ORACLE_SHARED_TARGET: ${{ github.workspace }}/.cache/oracle-shared-target
-        # `.github/ci/e2e_shard.py` is the SSOT of each shard's selection: shards
-        # 1-5 spread the heavy cold-build goldens, shards 6-14 the heavy-free
-        # complement, all from the prebuilt archive (no recompile). `seal-slice`
-        # proves the 14 selections partition the archive's test set exactly, and
-        # manifest-guard proves this matrix enumerates exactly those 14 shards.
-        run: python3 .github/ci/e2e_shard.py run "${{ matrix.shard }}"
+          # This shard's entry of the `changes` job's `e2e_plan`, whose SSOT is
+          # `.github/ci/e2e_shard.py`: shards 1-5 spread the heavy cold-build
+          # goldens, shards 6-14 the heavy-free complement, all from the
+          # prebuilt archive (no recompile). `seal-slice` proves the plan
+          # partitions the archive's test set exactly, and manifest-guard
+          # (`e2e_shard.py --lint`) pins this matrix and this wiring.
+          SHARD_FILTER: ${{ fromJSON(needs.changes.outputs.e2e_plan)[matrix.shard].filter }}
+          SHARD_PARTITION: ${{ fromJSON(needs.changes.outputs.e2e_plan)[matrix.shard].partition }}
+        run: cargo nextest run --archive-file nextest.tar.zst --workspace-remap . --profile ci --no-fail-fast --test-threads=2 --no-tests=fail -E "$SHARD_FILTER" --partition "$SHARD_PARTITION"
 
   # Stable aggregation gate for the sharded SEAL. The `e2e` matrix expands to one
   # shard-named job per partition, so no single shard name is a durable
@@ -1210,10 +1220,10 @@ jobs:
   # The main-required `seal-slice` context. Its executor is `e2e`: the e2e shards
   # run every archived test under IPE_E2E=1, so this job composes their result
   # instead of re-running a subset of the same binaries. What it adds is the
-  # coverage proof: `e2e_shard.py cover` lists the run's own archive and fails
-  # unless the 14 e2e selections partition its test set exactly (every test in
-  # exactly one shard), so "e2e runs every test" is checked on every run, not
-  # assumed. Fail closed as `e2e-all`: a skip passes only where the classifier,
+  # coverage proof: `tools/scripts/e2e-shard-cover.py` lists the run's own
+  # archive and fails unless the `e2e_plan` the shards ran partitions its test
+  # set exactly (every test in exactly one shard), so "e2e runs every test" is
+  # checked on every run, not assumed. Fail closed as `e2e-all`: a skip passes only where the classifier,
   # not a red need, skipped the shards.
   seal-slice:
     name: seal-slice
@@ -1274,7 +1284,9 @@ jobs:
           name: nextest-archive
       - name: Prove the e2e shards partition the archived test set
         if: needs.test-prep.result == 'success'
-        run: python3 .github/ci/e2e_shard.py cover
+        env:
+          E2E_PLAN: ${{ needs.changes.outputs.e2e_plan }}
+        run: python3 tools/scripts/e2e-shard-cover.py
 
   # Vendored-emit SEAL gate: runs the `seal_modset` suite under the vendored
   # runtime-source emit model (`IPE_RUNTIME_VENDORED=1`). The normal e2e shards

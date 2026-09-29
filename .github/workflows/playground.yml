@@ -62,7 +62,7 @@ jobs:
           EVENT_NAME: ${{ github.event_name }}
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           MERGE_GROUP_BASE_SHA: ${{ github.event.merge_group.base_sha }}
-        run: python3 .github/ci/change_class.py classify playground
+        run: python3 .github/ci/change_class.py --playground
 
   # Build the wasm bundle and the jail-runner binary. This is the primary rot
   # guard: a compile break here fails fast without needing bwrap on the runner.

@@ -11,14 +11,15 @@ principle 2), so the default is the red, never the retry.
 
 The same rule holds inside a run: no nextest profile, workflow, or composite
 action may set a test retry, so a flaky test fails its shard instead of
-reporting FLAKY and passing. `lint` proves both halves (the signature table's
+reporting FLAKY and passing. `--lint` proves both halves (the signature table's
 shape and the absence of any retry setting) and the workflow's wiring.
 
-Subcommands:
-  decide    print `true` iff every failed job of $RUN_ID (attempt 1) in $REPO
-            is infra-only; print `false` otherwise. Always exits 0 after
-            printing; the workflow reruns only on the exact word `true`.
-  lint      fail unless the signature table, the retry ban, and
+Modes:
+  --decide  write `rerun=true` to $GITHUB_OUTPUT iff every failed job of
+            $RUN_ID (attempt 1) in $REPO is infra-only, `rerun=false`
+            otherwise, and exit 0; the workflow reruns only on the exact word
+            `true`. An unwritable $GITHUB_OUTPUT exits 1 with no output set.
+  --lint    fail unless the signature table, the retry ban, and
             rerun-failed-once.yml's wiring all hold. manifest-guard runs it.
 """
 
@@ -320,7 +321,12 @@ def retry_errors(root: str = REPO_ROOT) -> list[str]:
 
 
 RERUN_IF = "steps.gate.outputs.rerun == 'true'"
-DECIDE_INVOCATION = "python3 .github/ci/rerun_policy.py decide"
+DECIDE_INVOCATION = "python3 .github/ci/rerun_policy.py --decide"
+DECIDE_ENV = {
+    "GH_TOKEN": "${{ secrets.PROMOTE_TOKEN || secrets.GITHUB_TOKEN }}",
+    "REPO": "${{ github.repository }}",
+    "RUN_ID": "${{ github.event.workflow_run.id }}",
+}
 
 
 def _strip_expr(text: str) -> str:
@@ -355,8 +361,15 @@ def wiring_errors(workflow: dict) -> list[str]:
         errors.append(f"exactly one step must run `{DECIDE_INVOCATION}`, found {len(decide_steps)}")
     elif decide_steps[0].get("id") != "gate":
         errors.append("the decide step must have `id: gate`")
-    elif "continue-on-error" in decide_steps[0]:
-        errors.append("the decide step must not set `continue-on-error`")
+    else:
+        gate = decide_steps[0]
+        if gate.get("run", "").strip() != DECIDE_INVOCATION:
+            errors.append(f"the decide step must run only `{DECIDE_INVOCATION}`, got {gate.get('run')!r}")
+        if gate.get("env") != DECIDE_ENV:
+            errors.append(f"the decide step's env must be exactly {DECIDE_ENV}")
+        for key in ("if", "continue-on-error"):
+            if key in gate:
+                errors.append(f"the decide step must not set `{key}`")
     if len(rerun_steps) != 1:
         errors.append(f"exactly one step may run `gh run rerun`, found {len(rerun_steps)}")
     else:
@@ -388,18 +401,34 @@ def lint(root: str = REPO_ROOT) -> int:
     return 0
 
 
+def write_output(path: str, line: str) -> int:
+    """Append `line` to the step-output file; no file or a failed write is exit 1."""
+    if not path:
+        print("rerun policy: GITHUB_OUTPUT is unset — no rerun", file=sys.stderr)
+        return 1
+    try:
+        with open(path, "a", encoding="utf-8") as fh:
+            fh.write(line + "\n")
+    except OSError as exc:
+        print(f"rerun policy: GITHUB_OUTPUT is unwritable: {exc} — no rerun", file=sys.stderr)
+        return 1
+    return 0
+
+
 def main(argv: list[str]) -> int:
-    if argv == ["decide"]:
+    if argv == ["--decide"]:
+        run_id = os.environ.get("RUN_ID", "")
         try:
-            verdict = run_decide(os.environ.get("REPO", ""), os.environ.get("RUN_ID", ""))
+            verdict = run_decide(os.environ.get("REPO", ""), run_id)
         except (PolicyError, OSError, subprocess.SubprocessError, json.JSONDecodeError) as exc:
             print(f"rerun policy: {exc} — no rerun", file=sys.stderr)
             verdict = False
-        print("true" if verdict else "false")
-        return 0
-    if argv == ["lint"]:
+        word = "true" if verdict else "false"
+        print(f"rerun policy: run {run_id!r} infra-only verdict: {word}")
+        return write_output(os.environ.get("GITHUB_OUTPUT", ""), f"rerun={word}")
+    if argv == ["--lint"]:
         return lint()
-    print("usage: rerun_policy.py decide | lint", file=sys.stderr)
+    print("usage: rerun_policy.py --decide | --lint", file=sys.stderr)
     return 2
 
 

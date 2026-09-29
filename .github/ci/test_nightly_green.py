@@ -80,7 +80,7 @@ class FakeApi:
 
 
 def _verdict(api: FakeApi, **env: str) -> list[str]:
-    base = {"EVENT": "pull_request", "HEAD_SHA": SHA, "HEAD_REF": "", "REPO": REPO}
+    base = {"EVENT_NAME": "pull_request", "HEAD_SHA": SHA, "GITHUB_REF": "", "REPO": REPO}
     base.update(env)
     saved = ng._gh_json
     ng._gh_json = api
@@ -224,14 +224,14 @@ class VerdictTest(unittest.TestCase):
         ref = f"refs/heads/gh-readonly-queue/main/pr-7-{OTHER}"
         own = _listing(_run(head_branch="fix", head_sha=SHA))
         api = FakeApi(_listing(_run(conclusion="failure")), own=own, pr={"head": {"sha": SHA}})
-        self.assertEqual(_verdict(api, EVENT="merge_group", HEAD_SHA="", HEAD_REF=ref), [])
+        self.assertEqual(_verdict(api, EVENT_NAME="merge_group", HEAD_SHA="", GITHUB_REF=ref), [])
         self.assertTrue(any("/pulls/7" in c for c in api.calls))
 
     def test_merge_group_bad_pr_head_refused(self) -> None:
         ref = f"refs/heads/gh-readonly-queue/main/pr-7-{OTHER}"
         for pr in ({}, {"head": {}}, {"head": {"sha": "zz"}}, []):
             with self.assertRaises(ng.NightlyError):
-                _verdict(FakeApi(_listing(_run()), pr=pr), EVENT="merge_group", HEAD_SHA="", HEAD_REF=ref)
+                _verdict(FakeApi(_listing(_run()), pr=pr), EVENT_NAME="merge_group", HEAD_SHA="", GITHUB_REF=ref)
 
     def test_bad_repo_refused(self) -> None:
         for bad in ("", "owner", "a/b/c", "a/b?x=1", "../..", "a/.."):
@@ -245,11 +245,11 @@ class VerdictTest(unittest.TestCase):
             raise ng.NightlyError("gh api down")
 
         ng._gh_json = boom
-        env = {"EVENT": "pull_request", "HEAD_SHA": SHA, "HEAD_REF": "", "REPO": REPO}
+        env = {"EVENT_NAME": "pull_request", "HEAD_SHA": SHA, "GITHUB_REF": "", "REPO": REPO}
         saved_env = dict(os.environ)
         try:
             os.environ.update(env)
-            self.assertEqual(ng.main(["verdict"]), 1)
+            self.assertEqual(ng.main(["--verdict"]), 1)
         finally:
             ng._gh_json = saved
             os.environ.clear()
@@ -257,7 +257,8 @@ class VerdictTest(unittest.TestCase):
 
     def test_usage_refused(self) -> None:
         self.assertEqual(ng.main([]), 2)
-        self.assertEqual(ng.main(["verdict", "x"]), 2)
+        for argv in (["verdict"], ["lint"], ["--verdict", "x"], ["-verdict"], ["--verdict", "--lint"]):
+            self.assertEqual(ng.main(argv), 2, argv)
 
 
 STEP = {
@@ -312,7 +313,7 @@ class WiringTest(unittest.TestCase):
         self.assertTrue(ng.wiring_errors(wf, MANIFEST))
 
     def test_env_tampering_refused(self) -> None:
-        for key, val in (("EVENT", "pull_request"), ("HEAD_SHA", "${{ github.sha }}"), ("GH_TOKEN", "${{ secrets.X }}")):
+        for key, val in (("EVENT_NAME", "pull_request"), ("HEAD_REF", "${{ github.event.merge_group.head_ref }}"), ("GITHUB_REF", "refs/heads/main"), ("HEAD_SHA", "${{ github.sha }}"), ("GH_TOKEN", "${{ secrets.X }}")):
             wf = copy.deepcopy(WORKFLOW)
             _job(wf)["steps"][1]["env"][key] = val
             self.assertTrue(ng.wiring_errors(wf, MANIFEST), key)

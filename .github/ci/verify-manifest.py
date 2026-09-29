@@ -1991,7 +1991,9 @@ class ToolRole(enum.Enum):
 # tool is verdict-bearing until it is listed here.
 TOOL_ROLES: dict[str, ToolRole] = {
     "release_only.py": ToolRole.ADVISORY,
+    "change_class.py": ToolRole.ADVISORY,
     "deterministic_checks_output.py": ToolRole.OUTPUT,
+    "rerun_policy.py": ToolRole.OUTPUT,
 }
 
 
@@ -2190,6 +2192,10 @@ TOOL_ENV_ALLOWLIST: dict[str, frozenset[EnvScope]] = {
     "REPO": _EVERY_SCOPE,
     "GH_TOKEN": _EVERY_SCOPE,
     "HEAD_SHA": _EVERY_SCOPE,
+    # Event data one tool step reads: the merge-group queue base commit and
+    # the id of the run a `workflow_run` event names.
+    "MERGE_GROUP_BASE_SHA": frozenset({EnvScope.STEP}),
+    "RUN_ID": frozenset({EnvScope.STEP}),
     "CARGO_TERM_COLOR": frozenset({EnvScope.WORKFLOW}),
     "CARGO_INCREMENTAL": frozenset({EnvScope.WORKFLOW}),
 }

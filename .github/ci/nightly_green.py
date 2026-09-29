@@ -16,11 +16,12 @@ is a required context that passes only on proof the full gate is green:
 Absence is not a pass: no run, an unreadable listing, an unexpected shape, a
 cancelled or stale nightly — each is a red.
 
-Subcommands:
-  verdict   exit 0 iff the proof above holds for $EVENT / $HEAD_SHA /
-            $HEAD_REF in $REPO; exit 1 otherwise, naming why.
-  lint      fail unless nightly-green.yml runs `verdict` unconditionally and
-            the manifest declares `nightly-green` a gate. manifest-guard runs it.
+Modes:
+  --verdict  exit 0 iff the proof above holds for $EVENT_NAME / $HEAD_SHA in
+             $REPO (a merge-group change is read from the runner's own
+             $GITHUB_REF, the queue ref); exit 1 otherwise, naming why.
+  --lint     fail unless nightly-green.yml runs `--verdict` unconditionally and
+             the manifest declares `nightly-green` a gate. manifest-guard runs it.
 """
 
 from __future__ import annotations
@@ -41,11 +42,10 @@ NIGHTLY_EVENT = "workflow_dispatch"
 MAIN = "main"
 MAX_AGE_H = 48
 GH_TIMEOUT_S = 60
-VERDICT_INVOCATION = "python3 .github/ci/nightly_green.py verdict"
+VERDICT_INVOCATION = "python3 .github/ci/nightly_green.py --verdict"
 EXPECTED_ENV = {
-    "EVENT": "${{ github.event_name }}",
+    "EVENT_NAME": "${{ github.event_name }}",
     "HEAD_SHA": "${{ github.event.pull_request.head.sha }}",
-    "HEAD_REF": "${{ github.event.merge_group.head_ref }}",
     "REPO": "${{ github.repository }}",
     "GH_TOKEN": "${{ github.token }}",
 }
@@ -176,7 +176,7 @@ def verdict(env: dict[str, str], now: datetime) -> list[str]:
     repo = env.get("REPO", "")
     if not _REPO.fullmatch(repo):
         raise NightlyError(f"REPO {repo!r} is not owner/name")
-    source = change_sha_source(env.get("EVENT", ""), env.get("HEAD_SHA", ""), env.get("HEAD_REF", ""))
+    source = change_sha_source(env.get("EVENT_NAME", ""), env.get("HEAD_SHA", ""), env.get("GITHUB_REF", ""))
     reasons: list[str] = []
     if source is not None:
         kind, value = source
@@ -208,7 +208,7 @@ def _strip_expr(text: str) -> str:
 
 
 def wiring_errors(workflow: object, manifest: object) -> list[str]:
-    """Return why nightly-green could pass without `verdict` passing, or []."""
+    """Return why nightly-green could pass without `--verdict` passing, or []."""
     errors: list[str] = []
     jobs = workflow.get("jobs") if isinstance(workflow, dict) else None
     if not isinstance(jobs, dict) or len(jobs) != 1:
@@ -266,7 +266,7 @@ def lint(root: str = REPO_ROOT) -> int:
 
 
 def main(argv: list[str]) -> int:
-    if argv == ["verdict"]:
+    if argv == ["--verdict"]:
         try:
             reasons = verdict(dict(os.environ), datetime.now(timezone.utc))
         except (NightlyError, OSError, subprocess.SubprocessError) as exc:
@@ -282,9 +282,9 @@ def main(argv: list[str]) -> int:
             return 1
         print("nightly-green: the full gate is green.")
         return 0
-    if argv == ["lint"]:
+    if argv == ["--lint"]:
         return lint()
-    print("usage: nightly_green.py verdict | lint", file=sys.stderr)
+    print("usage: nightly_green.py --verdict | --lint", file=sys.stderr)
     return 2
 
 

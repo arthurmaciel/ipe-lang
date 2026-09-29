@@ -3,7 +3,7 @@
 
 Every way the policy must refuse a rerun (a test failure, an unknown red, a
 test failure beside an infra signature, an unreadable job, no failed job, a
-malformed job listing) and every way `lint` must refuse (a fail-open signature,
+malformed job listing) and every way `--lint` must refuse (a fail-open signature,
 a configured test retry, a rerun step not gated on the exact verdict) gets its
 own test, per PRINCIPLES.md "Prove the refusals". Pure stdlib `unittest`.
 """
@@ -228,21 +228,36 @@ class JobIdsTest(unittest.TestCase):
             with self.subTest((repo, run)), self.assertRaises(rp.PolicyError):
                 rp.run_decide(repo, run)
 
-    def test_decide_prints_false_without_gh_context(self) -> None:
-        old = {k: os.environ.pop(k, None) for k in ("REPO", "RUN_ID")}
-        out = io.StringIO()
+    def _decide(self, output: str | None) -> int:
+        keys = ("REPO", "RUN_ID", "GITHUB_OUTPUT")
+        old = {k: os.environ.pop(k, None) for k in keys}
+        if output is not None:
+            os.environ["GITHUB_OUTPUT"] = output
         try:
-            with contextlib.redirect_stdout(out):
-                self.assertEqual(rp.main(["decide"]), 0)
-            self.assertEqual(out.getvalue(), "false\n")
+            with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                return rp.main(["--decide"])
         finally:
-            for k, v in old.items():
-                if v is not None:
-                    os.environ[k] = v
+            for k in keys:
+                os.environ.pop(k, None)
+                if old[k] is not None:
+                    os.environ[k] = old[k]
 
-    def test_unknown_subcommand_exits_nonzero(self) -> None:
-        self.assertEqual(rp.main([]), 2)
-        self.assertEqual(rp.main(["decide", "x"]), 2)
+    def test_decide_writes_false_without_gh_context(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            out = os.path.join(tmp, "out")
+            self.assertEqual(self._decide(out), 0)
+            with open(out, encoding="utf-8") as fh:
+                self.assertEqual(fh.read(), "rerun=false\n")
+
+    def test_decide_without_output_file_is_red(self) -> None:
+        self.assertEqual(self._decide(None), 1)
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertEqual(self._decide(os.path.join(tmp, "no", "such")), 1)
+
+    def test_unknown_mode_exits_nonzero(self) -> None:
+        for argv in ([], ["decide"], ["lint"], ["--decide", "x"], ["-decide"], ["--decide", "--lint"]):
+            with self.subTest(argv):
+                self.assertEqual(rp.main(argv), 2)
 
 
 class SignatureTableTest(unittest.TestCase):
@@ -324,7 +339,7 @@ class RetryBanTest(unittest.TestCase):
             self.assertTrue(any("unreadable" in e for e in rp.retry_errors(root)))
 
 
-GATE = {"id": "gate", "run": rp.DECIDE_INVOCATION}
+GATE = {"id": "gate", "env": dict(rp.DECIDE_ENV), "run": rp.DECIDE_INVOCATION}
 RERUN = {"if": "${{ steps.gate.outputs.rerun == 'true' }}", "run": 'gh run rerun --failed "$RUN_ID"'}
 WORKFLOW = {"jobs": {"rerun": {"steps": [{"uses": "actions/checkout@v7"}, GATE, RERUN]}}}
 
@@ -364,6 +379,30 @@ class WiringTest(unittest.TestCase):
     def test_decide_without_gate_id_refused(self) -> None:
         wf = copy.deepcopy(WORKFLOW)
         wf["jobs"]["rerun"]["steps"][1]["id"] = "verdict"
+        self.assertTrue(rp.wiring_errors(wf))
+
+    def test_decide_run_or_env_tampering_refused(self) -> None:
+        for run in (
+            f"{rp.DECIDE_INVOCATION} || true",
+            f"echo rerun=true >> $GITHUB_OUTPUT; {rp.DECIDE_INVOCATION}",
+            f"{rp.DECIDE_INVOCATION} --lint",
+        ):
+            with self.subTest(run):
+                wf = copy.deepcopy(WORKFLOW)
+                wf["jobs"]["rerun"]["steps"][1]["run"] = run
+                self.assertTrue(rp.wiring_errors(wf))
+        for key, val in (("RUN_ID", "1"), ("REPO", "evil/repo"), ("GITHUB_OUTPUT", "/dev/null")):
+            with self.subTest(key):
+                wf = copy.deepcopy(WORKFLOW)
+                wf["jobs"]["rerun"]["steps"][1]["env"][key] = val
+                self.assertTrue(rp.wiring_errors(wf))
+        wf = copy.deepcopy(WORKFLOW)
+        del wf["jobs"]["rerun"]["steps"][1]["env"]
+        self.assertTrue(rp.wiring_errors(wf))
+
+    def test_decide_step_if_refused(self) -> None:
+        wf = copy.deepcopy(WORKFLOW)
+        wf["jobs"]["rerun"]["steps"][1]["if"] = "false"
         self.assertTrue(rp.wiring_errors(wf))
 
     def test_continue_on_error_refused(self) -> None:

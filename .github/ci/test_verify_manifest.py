@@ -61,7 +61,7 @@ def _write(path: str, content: str) -> None:
 # The `.github/ci/` tools a fixture holds: a tool run names a file that exists.
 FIXTURE_TOOLS = (
     "verify-manifest.py", "artifact-guard.sh", "github-env.sh", "strict_yaml.py", "release_only.py",
-    "deterministic_checks_output.py",
+    "deterministic_checks_output.py", "change_class.py",
 )
 
 
@@ -2450,6 +2450,27 @@ class TestToolOrderingAndClosedShells(unittest.TestCase):
         verdict = vm.ROLE_MASKING[vm.ToolRole.VERDICT]
         self.assertEqual(verdict.step | verdict.job, frozenset())
         self.assertEqual(vm.TOOL_ROLES.get("verify-manifest.py", vm.ToolRole.VERDICT), vm.ToolRole.VERDICT)
+
+    def test_step_scoped_event_keys_are_refused_outside_one_step(self) -> None:
+        for key in ("MERGE_GROUP_BASE_SHA", "RUN_ID"):
+            self.job_accepted(f"- uses: {_CHECKOUT}\n" + _run("Verify", _TOOL, f"env:\n  {key}: x\n"))
+            self.job_refused(f"- uses: {_CHECKOUT}\n" + _run("Verify", _TOOL), "job env", key, job=f"env:\n  {key}: x\n")
+            self.job_refused(f"- uses: {_CHECKOUT}\n" + _run("Verify", _TOOL), key, top=f"env:\n  {key}: x\n")
+        for near in ("RUN_IDS", "run_id", "MERGE_GROUP_BASE", "MERGE_GROUP_BASE_SHA_", "GITHUB_RUN_ID"):
+            self.job_refused(f"- uses: {_CHECKOUT}\n" + _run("Verify", _TOOL, f"env:\n  {near}: x\n"), "step 'Verify'", near)
+
+    def test_lane_tool_roles_are_pinned(self) -> None:
+        vm = verify_manifest
+        self.assertEqual(vm.TOOL_ROLES["change_class.py"], vm.ToolRole.ADVISORY)
+        self.assertEqual(vm.TOOL_ROLES["rerun_policy.py"], vm.ToolRole.OUTPUT)
+        for verdict in ("prose_guard.py", "e2e_shard.py", "nightly_green.py", "check_required_set.py"):
+            self.assertEqual(vm.TOOL_ROLES.get(verdict, vm.ToolRole.VERDICT), vm.ToolRole.VERDICT, verdict)
+
+    def test_advisory_classifier_admits_no_job_if_or_step_if(self) -> None:
+        run = "python3 .github/ci/change_class.py --code"
+        self.job_accepted(f"- uses: {_CHECKOUT}\n" + _run("Classify", run, "continue-on-error: true\n"))
+        self.job_refused(f"- uses: {_CHECKOUT}\n" + _run("Classify", run, "if: always()\n"), "step 'Classify'", "no if:")
+        self.job_refused(f"- uses: {_CHECKOUT}\n" + _run("Classify", run), "with a job if:", job="if: always()\n")
 
     def test_live_masked_tool_jobs_parse_as_output_jobs(self) -> None:
         vm = verify_manifest

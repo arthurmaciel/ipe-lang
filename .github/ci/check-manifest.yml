@@ -329,7 +329,7 @@ checks:
   # ── Path classifiers (gate) ──────────────────────────────────────────────
   # Each workflow's `changes` job, running the fail-closed classifier
   # (.github/ci/change_class.py; ci.yml's `changes` also runs its PROSE-set
-  # guard, so a PR that makes a PROSE path readable cannot merge). A failed or
+  # guard, .github/ci/prose_guard.py, so a PR that makes a PROSE path readable cannot merge). A failed or
   # cancelled `changes` job SKIPS every job that `needs` it, and GitHub counts
   # a skipped required check as passing — so the classifier is itself
   # required: absent proof it ran, the merge is blocked (fail closed). Each carries a workflow-unique name so the

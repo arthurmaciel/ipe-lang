@@ -80,7 +80,7 @@ wasm-external-cargo = { max-threads = 1 }
 # bind a real TCP port. Serialization (max-threads = 1) removes the shared-target
 # lock contention. No test retries — here or in any profile: a test that fails
 # once and passes on a retry is nondeterministic, and a retry would report it
-# green. It fails its shard instead; `.github/ci/rerun_policy.py lint` refuses
+# green. It fails its shard instead; `.github/ci/rerun_policy.py --lint` refuses
 # any `retries` setting, and the workflow-level rerun fires only on an
 # infrastructure signature, never on a test failure.
 #

@@ -1,20 +1,21 @@
 #!/usr/bin/env python3
-"""SSOT for the e2e SEAL shard partition: its selection, its runner, its proof.
+"""SSOT for the e2e SEAL shard partition: its selection, its plan, its wiring.
 
-Every `e2e` matrix shard runs `e2e_shard.py run K`, so a shard's test selection
-is defined here once. `cover` proves, from the run's own nextest archive, that
-the shards partition the archive exactly: every test is selected by exactly one
-shard and no shard selects a test outside the archive. `seal-slice` runs it on
-every run, so the "e2e covers every archived test" fact behind the SEAL is
-checked, never assumed. `matrix` proves ci.yml's `e2e` matrix enumerates exactly
-the shards defined here and that each runs through `run`; manifest-guard runs it.
+A shard's test selection is defined here once. `--plan` publishes every
+shard's selection as the `changes` job output `e2e_plan`; each `e2e` matrix
+shard runs `cargo nextest run` on its own entry of that plan, and `seal-slice`
+proves (`tools/scripts/e2e-shard-cover.py`, from the run's own nextest archive)
+that the same plan partitions the archive exactly: every test is selected by
+exactly one shard and no shard selects a test outside the archive. `--lint`
+proves ci.yml wires exactly that: the `e2e` matrix enumerates shards
+1..SHARDS, its one nextest run reads its selection only from the plan, and
+`seal-slice` proves the cover of that same plan; manifest-guard runs it.
 
-Subcommands:
-  run K     exec `cargo nextest run` for shard K (1..SHARDS) from the archive.
-  cover     fail unless the SHARDS selections partition the archive's test set.
-  matrix    fail unless ci.yml's `e2e` job runs exactly shards 1..SHARDS via `run`.
+Modes:
+  --plan    write `plan=<JSON {"K": {"filter", "partition"}}>` to $GITHUB_OUTPUT.
+  --lint    fail unless ci.yml wires the plan, the shards and the cover exactly.
 
-Every failure exits non-zero; a malformed listing or an unexpected shape is a
+Every failure exits non-zero; an unwritable output or an unexpected shape is a
 failure, never a pass.
 """
 
@@ -22,15 +23,25 @@ from __future__ import annotations
 
 import json
 import os
-import subprocess
 import sys
-from collections import Counter
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(os.path.dirname(HERE))
 CI_WORKFLOW = os.path.join(REPO, ".github", "workflows", "ci.yml")
 E2E_JOB = "e2e"
-RUN_INVOCATION = 'python3 .github/ci/e2e_shard.py run "${{ matrix.shard }}"'
+CHANGES_JOB = "changes"
+SEAL_SLICE_JOB = "seal-slice"
+PLAN_INVOCATION = "python3 .github/ci/e2e_shard.py --plan"
+PLAN_STEP_ID = "e2e-plan"
+PLAN_OUTPUT = "e2e_plan"
+PLAN_OUTPUT_VALUE = "${{ steps.e2e-plan.outputs.plan }}"
+COVER_INVOCATION = "python3 tools/scripts/e2e-shard-cover.py"
+COVER_ENV = {"E2E_PLAN": "${{ needs.changes.outputs.e2e_plan }}"}
+_SHARD_ENTRY = "fromJSON(needs.changes.outputs.e2e_plan)[matrix.shard]"
+SHARD_ENV = {
+    "SHARD_FILTER": "${{ " + _SHARD_ENTRY + ".filter }}",
+    "SHARD_PARTITION": "${{ " + _SHARD_ENTRY + ".partition }}",
+}
 
 # The goldens whose emitted project drives a real multi-minute cold `cargo
 # build` (webview/wry, server/axum, the live-HTTP set, the watch daemons). The
@@ -50,7 +61,12 @@ SHARDS = HEAVY_SHARDS + LIGHT_SHARDS
 ARCHIVE_ARGS = ("--archive-file", "nextest.tar.zst", "--workspace-remap", ".", "--profile", "ci")
 # `--test-threads=2`: each E2E test drives a memory-heavy emitted-project
 # `cargo build` that itself uses every core; two in flight fit the runner.
-RUN_ONLY_ARGS = ("--no-fail-fast", "--test-threads=2")
+# `--no-tests=fail`: a shard whose selection matches nothing is red, never a
+# vacuous green.
+RUN_ONLY_ARGS = ("--no-fail-fast", "--test-threads=2", "--no-tests=fail")
+RUN_COMMAND = " ".join(
+    ("cargo", "nextest", "run", *ARCHIVE_ARGS, *RUN_ONLY_ARGS, '-E "$SHARD_FILTER"', '--partition "$SHARD_PARTITION"')
+)
 
 
 class ShardError(Exception):
@@ -66,140 +82,142 @@ def selection(shard: int) -> list[str]:
     return ["-E", f"not ({HEAVY})", "--partition", f"count:{shard - HEAVY_SHARDS}/{LIGHT_SHARDS}"]
 
 
-def parse_shard(text: str) -> int:
-    """Parse a CLI shard index; anything but a canonical decimal is refused."""
-    if not text.isascii() or not text.isdigit() or text != str(int(text)):
-        raise ShardError(f"shard must be a decimal integer, got {text!r}")
-    shard = int(text)
-    selection(shard)
-    return shard
-
-
-def matched_tests(listing: str) -> list[str]:
-    """Return the `binary-id test-name` of every test a nextest JSON listing selects."""
-    try:
-        doc = json.loads(listing)
-    except json.JSONDecodeError as exc:
-        raise ShardError(f"nextest listing is not JSON: {exc}") from exc
-    suites = doc.get("rust-suites") if isinstance(doc, dict) else None
-    if not isinstance(suites, dict):
-        raise ShardError("nextest listing has no `rust-suites` object")
-    out: list[str] = []
-    for binary_id, suite in suites.items():
-        cases = suite.get("testcases") if isinstance(suite, dict) else None
-        if not isinstance(cases, dict):
-            raise ShardError(f"suite {binary_id!r} has no `testcases` object")
-        for name, case in cases.items():
-            match = case.get("filter-match") if isinstance(case, dict) else None
-            status = match.get("status") if isinstance(match, dict) else None
-            if status not in ("matches", "mismatch"):
-                raise ShardError(f"test {binary_id} {name} has no known filter-match status")
-            if status == "matches":
-                out.append(f"{binary_id} {name}")
+def plan() -> dict[str, dict[str, str]]:
+    """Return every shard's selection, keyed by its decimal index."""
+    out: dict[str, dict[str, str]] = {}
+    for k in range(1, SHARDS + 1):
+        _, filt, _, part = selection(k)
+        out[str(k)] = {"filter": filt, "partition": part}
     return out
 
 
-def partition_errors(full: list[str], shards: dict[int, list[str]]) -> list[str]:
-    """Return why the shard selections fail to partition `full`, or [] when they do."""
-    errors: list[str] = []
-    if not full:
-        errors.append("the archive lists no tests: an empty set proves no coverage")
-    if sorted(shards) != list(range(1, SHARDS + 1)):
-        errors.append(f"shards listed {sorted(shards)}, expected 1..{SHARDS}")
-    full_set = set(full)
-    if len(full_set) != len(full):
-        errors.append("the archive listing repeats a test id")
-    owners: Counter[str] = Counter()
-    for shard in sorted(shards):
-        for test in shards[shard]:
-            owners[test] += 1
-            if test not in full_set:
-                errors.append(f"shard {shard} selects {test}, which the archive does not list")
-    for test in sorted(full_set):
-        count = owners.get(test, 0)
-        if count == 0:
-            errors.append(f"no shard runs {test}")
-        elif count > 1:
-            errors.append(f"{test} runs in {count} shards")
-    return errors
-
-
-def _list(extra: list[str]) -> list[str]:
-    cmd = ["cargo", "nextest", "list", *ARCHIVE_ARGS, "--message-format", "json", *extra]
-    proc = subprocess.run(cmd, check=False, capture_output=True, text=True)
-    if proc.returncode != 0:
-        raise ShardError(f"`{' '.join(cmd)}` exited {proc.returncode}:\n{proc.stderr}")
-    return matched_tests(proc.stdout)
-
-
-def cover() -> int:
-    """Fail unless the SHARDS selections partition the archive's test set exactly."""
-    full = _list([])
-    shards = {k: _list(selection(k)) for k in range(1, SHARDS + 1)}
-    errors = partition_errors(full, shards)
-    for err in errors:
-        print(f"e2e shard cover: {err}", file=sys.stderr)
-    if errors:
+def write_plan(path: str) -> int:
+    """Append the plan to the step-output file; no file or a failed write is exit 1."""
+    if not path:
+        print("e2e_shard: GITHUB_OUTPUT is unset", file=sys.stderr)
         return 1
-    print(f"e2e shard cover: {SHARDS} shards partition all {len(full)} archived tests exactly once.")
+    line = "plan=" + json.dumps(plan(), separators=(",", ":"), sort_keys=True)
+    try:
+        with open(path, "a", encoding="utf-8") as fh:
+            fh.write(line + "\n")
+    except OSError as exc:
+        print(f"e2e_shard: GITHUB_OUTPUT is unwritable: {exc}", file=sys.stderr)
+        return 1
+    print(f"e2e_shard: planned {SHARDS} shards ({HEAVY_SHARDS} heavy, {LIGHT_SHARDS} light).")
     return 0
 
 
-def matrix_errors(workflow: dict) -> list[str]:
-    """Return why ci.yml's `e2e` job does not run exactly shards 1..SHARDS via `run`."""
-    jobs = workflow.get("jobs") if isinstance(workflow, dict) else None
-    job = jobs.get(E2E_JOB) if isinstance(jobs, dict) else None
-    if not isinstance(job, dict):
-        return [f"ci.yml has no `{E2E_JOB}` job"]
+def _steps(job: object) -> list[dict]:
+    steps = job.get("steps") if isinstance(job, dict) else None
+    return [s for s in steps if isinstance(s, dict)] if isinstance(steps, list) else []
+
+
+def _needs(job: dict) -> list[object]:
+    needs = job.get("needs")
+    return [needs] if isinstance(needs, str) else needs if isinstance(needs, list) else []
+
+
+def _runs(step: dict, text: str) -> bool:
+    run = step.get("run")
+    return isinstance(run, str) and text in run
+
+
+def _exact_step(steps: list[dict], text: str, what: str) -> tuple[dict | None, list[str]]:
+    """Return the one step whose run names `text`, refusing none, many, or a masked one."""
+    found = [s for s in steps if _runs(s, text)]
+    if len(found) != 1:
+        return None, [f"{what}: exactly one step must run `{text}`, found {len(found)}"]
+    step = found[0]
     errors: list[str] = []
+    if step.get("run", "").strip() != text:
+        errors.append(f"{what}: the step must run only `{text}`, got {step.get('run')!r}")
+    if "continue-on-error" in step:
+        errors.append(f"{what}: the step must not set `continue-on-error`")
+    return step, errors
+
+
+def wiring_errors(workflow: dict) -> list[str]:
+    """Return why ci.yml could run a shard, or prove a cover, off the SSOT plan, or []."""
+    jobs = workflow.get("jobs") if isinstance(workflow, dict) else None
+    if not isinstance(jobs, dict):
+        return ["ci.yml has no jobs"]
+    errors: list[str] = []
+    changes = jobs.get(CHANGES_JOB)
+    if not isinstance(changes, dict):
+        errors.append(f"ci.yml has no `{CHANGES_JOB}` job")
+    else:
+        step, errs = _exact_step(_steps(changes), PLAN_INVOCATION, f"`{CHANGES_JOB}`")
+        errors += errs
+        if step is not None:
+            if step.get("id") != PLAN_STEP_ID:
+                errors.append(f"`{CHANGES_JOB}`: the plan step must have `id: {PLAN_STEP_ID}`")
+            if "if" in step or "env" in step:
+                errors.append(f"`{CHANGES_JOB}`: the plan step must set no `if:` or `env:`")
+        outputs = changes.get("outputs")
+        if not isinstance(outputs, dict) or outputs.get(PLAN_OUTPUT) != PLAN_OUTPUT_VALUE:
+            errors.append(f"`{CHANGES_JOB}` output `{PLAN_OUTPUT}` must be exactly `{PLAN_OUTPUT_VALUE}`")
+    job = jobs.get(E2E_JOB)
+    if not isinstance(job, dict):
+        return [*errors, f"ci.yml has no `{E2E_JOB}` job"]
     strategy = job.get("strategy")
     matrix = strategy.get("matrix") if isinstance(strategy, dict) else None
     if not isinstance(matrix, dict) or set(matrix) != {"shard"}:
         errors.append(f"`{E2E_JOB}` matrix must have exactly one key, `shard`")
+    elif matrix["shard"] != list(range(1, SHARDS + 1)):
+        errors.append(f"`{E2E_JOB}` matrix shard is {matrix['shard']!r}, expected 1..{SHARDS}")
+    if CHANGES_JOB not in _needs(job):
+        errors.append(f"`{E2E_JOB}` must need `{CHANGES_JOB}`, the job that publishes the plan")
+    steps = _steps(job)
+    step, errs = _exact_step(steps, RUN_COMMAND, f"`{E2E_JOB}`")
+    errors += errs
+    if step is not None:
+        env = step.get("env")
+        if not isinstance(env, dict) or {k: env.get(k) for k in SHARD_ENV} != SHARD_ENV:
+            errors.append(f"`{E2E_JOB}`: the shard step's selection env must be exactly {SHARD_ENV}")
+    if sum(_runs(s, "nextest run") for s in steps) != 1:
+        errors.append(f"`{E2E_JOB}` must run nextest in exactly one step, the planned shard run")
+    for job_id, other in jobs.items():
+        if job_id != E2E_JOB and any(_runs(s, "SHARD_FILTER") for s in _steps(other)):
+            errors.append(f"job {job_id!r} reads a shard selection outside `{E2E_JOB}`")
+    seal = jobs.get(SEAL_SLICE_JOB)
+    if not isinstance(seal, dict):
+        errors.append(f"ci.yml has no `{SEAL_SLICE_JOB}` job")
     else:
-        shards = matrix["shard"]
-        if shards != list(range(1, SHARDS + 1)):
-            errors.append(f"`{E2E_JOB}` matrix shard is {shards!r}, expected 1..{SHARDS}")
-    steps = job.get("steps")
-    runs = [s.get("run") for s in steps if isinstance(s, dict)] if isinstance(steps, list) else []
-    texts = [r for r in runs if isinstance(r, str)]
-    if sum(RUN_INVOCATION in t for t in texts) != 1:
-        errors.append(f"`{E2E_JOB}` must invoke `{RUN_INVOCATION}` in exactly one step")
-    if any("nextest run" in t for t in texts):
-        errors.append(f"`{E2E_JOB}` runs nextest directly; every selection must come from e2e_shard.py")
+        if CHANGES_JOB not in _needs(seal):
+            errors.append(f"`{SEAL_SLICE_JOB}` must need `{CHANGES_JOB}`, the job that publishes the plan")
+        step, errs = _exact_step(_steps(seal), COVER_INVOCATION, f"`{SEAL_SLICE_JOB}`")
+        errors += errs
+        if step is not None and step.get("env") != COVER_ENV:
+            errors.append(f"`{SEAL_SLICE_JOB}`: the cover step's env must be exactly {COVER_ENV}")
     return errors
 
 
-def matrix(path: str = CI_WORKFLOW) -> int:
-    """Fail unless ci.yml's `e2e` job enumerates exactly this module's shards."""
+def lint(path: str = CI_WORKFLOW) -> int:
+    """Fail unless ci.yml wires the plan, the shards and the cover exactly."""
     sys.path.insert(0, HERE)
-    import strict_yaml  # noqa: PLC0415  # PyYAML-backed; only this subcommand needs it
+    import strict_yaml  # noqa: PLC0415  # PyYAML-backed; only `--lint` needs it
 
-    with open(path, encoding="utf-8") as fh:
-        workflow = strict_yaml.safe_load(fh)
-    errors = matrix_errors(workflow)
+    try:
+        with open(path, encoding="utf-8") as fh:
+            workflow = strict_yaml.safe_load(fh)
+    except Exception as exc:  # noqa: BLE001  # any read or parse failure is a refusal
+        print(f"e2e shard lint: ci.yml is unreadable: {exc}", file=sys.stderr)
+        return 1
+    errors = wiring_errors(workflow)
     for err in errors:
-        print(f"e2e shard matrix: {err}", file=sys.stderr)
+        print(f"e2e shard lint: {err}", file=sys.stderr)
     if errors:
         return 1
-    print(f"e2e shard matrix: ci.yml runs shards 1..{SHARDS} through e2e_shard.py.")
+    print(f"e2e shard lint: ci.yml runs shards 1..{SHARDS} from the plan and proves its cover.")
     return 0
 
 
 def main(argv: list[str]) -> int:
-    try:
-        if len(argv) == 2 and argv[0] == "run":
-            args = ["cargo", "nextest", "run", *ARCHIVE_ARGS, *RUN_ONLY_ARGS, *selection(parse_shard(argv[1]))]
-            sys.stdout.flush()
-            os.execvp("cargo", args)
-        if argv == ["cover"]:
-            return cover()
-        if argv == ["matrix"]:
-            return matrix()
-    except ShardError as exc:
-        print(f"e2e_shard: {exc}", file=sys.stderr)
-        return 1
-    print("usage: e2e_shard.py run K | cover | matrix", file=sys.stderr)
+    if argv == ["--plan"]:
+        return write_plan(os.environ.get("GITHUB_OUTPUT", ""))
+    if argv == ["--lint"]:
+        return lint()
+    print("usage: e2e_shard.py --plan | --lint", file=sys.stderr)
     return 2
 
 

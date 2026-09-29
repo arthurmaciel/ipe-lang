@@ -50,20 +50,16 @@ jobs:
           sparse-checkout: .github/ci/rerun_policy.py
           sparse-checkout-cone-mode: false
 
-      # Prints exactly `true` only on a positive infra-only proof for EVERY
-      # failed job; any listing, log, or classification failure prints `false`.
-      # A crash of the step itself leaves the output unset — also no rerun.
+      # Sets `rerun=true` only on a positive infra-only proof for EVERY failed
+      # job; any listing, log, or classification failure sets `false`. A crash
+      # of the step itself leaves the output unset — also no rerun.
       - name: Classify the failed jobs (rerun only on infrastructure)
         id: gate
         env:
           GH_TOKEN: ${{ secrets.PROMOTE_TOKEN || secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
           RUN_ID: ${{ github.event.workflow_run.id }}
-        run: |
-          set -euo pipefail
-          verdict="$(python3 .github/ci/rerun_policy.py decide)"
-          echo "run $RUN_ID infra-only verdict: $verdict" >&2
-          echo "rerun=$verdict" >> "$GITHUB_OUTPUT"
+        run: python3 .github/ci/rerun_policy.py --decide
 
       # Fail toward NOT rerunning: only the exact verdict `true` fires it.
       - name: Re-run the infrastructure-failed jobs once

@@ -96,7 +96,7 @@ jobs:
           EVENT_NAME: ${{ github.event_name }}
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           MERGE_GROUP_BASE_SHA: ${{ github.event.merge_group.base_sha }}
-        run: python3 .github/ci/change_class.py classify code
+        run: python3 .github/ci/change_class.py --code
 
   # ── Linux x64 ──────────────────────────────────────────────────────────────
   # Outer network-denial layer: seccomp socket-deny profile applied via

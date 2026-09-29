@@ -169,6 +169,57 @@ class ClassifyTest(unittest.TestCase):
             cc.classify(REPO, {}, ("code", "no-such-scope"))
 
 
+class ScopeFlagsTest(unittest.TestCase):
+    def test_every_scope_has_its_flag(self) -> None:
+        flags = ["--" + s.replace("_", "-") for s in ALL_SCOPES]
+        self.assertEqual(cc.scope_flags(flags), ALL_SCOPES)
+        self.assertEqual(cc.scope_flags(["--panic-scan"]), ("panic_scan",))
+
+    def test_malformed_scope_flags_are_refused(self) -> None:
+        for argv in (
+            [],
+            ["code"],
+            ["-code"],
+            ["--panic_scan"],
+            ["--Code"],
+            ["--no-such-scope"],
+            ["--code", "--code"],
+            ["--code", "classify"],
+            ["--code="],
+        ):
+            with self.subTest(argv=argv):
+                self.assertIsNone(cc.scope_flags(argv))
+
+    def test_usage_error_exits_nonzero_and_writes_no_output(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            out = os.path.join(tmp, "out")
+            with mock.patch.dict(os.environ, {"GITHUB_OUTPUT": out}), mock.patch("sys.stderr"):
+                self.assertEqual(cc.main(["classify", "code"]), 2)
+            self.assertFalse(os.path.exists(out))
+
+
+class ProseGuardToolTest(unittest.TestCase):
+    """`prose_guard.py`, the verdict tool over `guard()`."""
+
+    def setUp(self) -> None:
+        spec = importlib.util.spec_from_file_location("prose_guard", os.path.join(HERE, "prose_guard.py"))
+        assert spec is not None and spec.loader is not None
+        self.pg = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(self.pg)
+
+    def test_guard_error_fails_the_verdict(self) -> None:
+        with mock.patch.object(self.pg.change_class, "guard", return_value=["a reader"]), mock.patch("sys.stderr"):
+            self.assertEqual(self.pg.main([]), 1)
+
+    def test_sound_set_passes(self) -> None:
+        with mock.patch.object(self.pg.change_class, "guard", return_value=[]), mock.patch("sys.stdout"):
+            self.assertEqual(self.pg.main([]), 0)
+
+    def test_any_argument_is_refused(self) -> None:
+        with mock.patch("sys.stderr"):
+            self.assertEqual(self.pg.main(["guard"]), 2)
+
+
 class GlobTest(unittest.TestCase):
     def test_star_stays_within_one_segment(self) -> None:
         self.assertIsNone(cc.glob_regex("src/*.rs").match("src/a/b.rs"))

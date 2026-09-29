@@ -40,7 +40,7 @@ jobs:
           EVENT_NAME: ${{ github.event_name }}
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           MERGE_GROUP_BASE_SHA: ${{ github.event.merge_group.base_sha }}
-        run: python3 .github/ci/change_class.py classify grammar
+        run: python3 .github/ci/change_class.py --grammar
 
       - uses: ./.github/actions/rust-toolchain-pinned
         if: steps.classify.outputs.grammar != 'false'
