@@ -43,6 +43,8 @@ check_workflow_steps = verify_manifest.check_workflow_steps
 check_merge_queue = verify_manifest.check_merge_queue
 check_release_only_skips = verify_manifest.check_release_only_skips
 check_fast_gate_first = verify_manifest.check_fast_gate_first
+check_pull_request_target = verify_manifest.check_pull_request_target
+check_trust_roots = verify_manifest.check_trust_roots
 
 # The live sanctioned composite is the fixture: the canonical form is proven
 # against the file CI actually runs, never a hand-kept copy.
@@ -2815,9 +2817,12 @@ class TestMergeQueueSafety(unittest.TestCase):
         bad = _MQ_OK + "  reuse:\n    uses: ./.github/workflows/x.yml\n    secrets: inherit\n"
         self.assertRefused(bad, "must be secret-free")
 
-    def test_pull_request_target_refused(self) -> None:
+    def test_pull_request_target_touching_head_refused(self) -> None:
         bad = _MQ_OK.replace("  merge_group:\n", "  merge_group:\n  pull_request_target:\n")
-        self.assertRefused(bad, "pull_request_target")
+        self.assertRefused(bad, "only when it runs no head code")
+
+    def test_head_free_pull_request_target_admitted(self) -> None:
+        self.assertEqual(self.errors(_PRT_OK), [])
 
     def test_missing_top_level_permissions_refused(self) -> None:
         bad = _MQ_OK.replace("permissions:\n  contents: read\n", "")
@@ -3279,6 +3284,420 @@ class TestFastGateFirst(unittest.TestCase):
         errors: list[str] = []
         check_fast_gate_first(_FG_GATES, errors, root=self.root)
         self.assertTrue(any("cannot read" in e for e in errors), errors)
+
+
+# A head-free pull_request_target + merge_group workflow: the shape
+# `trust-root-diff.yml` takes (the live file is proven in `TestPullRequestTarget`).
+_PRT_OK = """\
+name: prt
+on:
+  pull_request_target:
+    types: [opened, synchronize]
+  merge_group:
+permissions:
+  contents: read
+  pull-requests: read
+jobs:
+  check:
+    name: check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Decide
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh api "repos/$GITHUB_REPOSITORY/contents/x?ref=$GITHUB_SHA" > "$RUNNER_TEMP/x"
+          python3 "$RUNNER_TEMP/x"
+"""
+
+
+class TestPullRequestTarget(unittest.TestCase):
+    """Check 12a: a pull_request_target workflow provably runs no head code."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.fx = SccacheFixture(self._tmp.name)
+
+    def tearDown(self) -> None:
+        self._tmp.cleanup()
+
+    def errors(self, content: str) -> list[str]:
+        self.fx.workflow("prt.yml", content)
+        errors: list[str] = []
+        check_pull_request_target(errors, root=self.fx.root)
+        return errors
+
+    def assertRefused(self, content: str, needle: str) -> None:
+        errors = self.errors(content)
+        self.assertTrue(any(needle in e for e in errors), f"expected {needle!r} in {errors}")
+
+    def test_head_free_workflow_passes(self) -> None:
+        self.assertEqual(self.errors(_PRT_OK), [])
+
+    def test_workflow_without_pull_request_target_ignored(self) -> None:
+        self.assertEqual(self.errors(_PRT_OK.replace("  pull_request_target:\n    types: [opened, synchronize]\n", "  pull_request:\n") + "      - uses: actions/checkout@v4\n"), [])
+
+    def test_checkout_refused(self) -> None:
+        self.assertRefused(_PRT_OK + "      - uses: actions/checkout@0123456789abcdef0123456789abcdef01234567\n", "no action runs under")
+
+    def test_local_action_refused(self) -> None:
+        self.assertRefused(_PRT_OK + "      - uses: ./.github/actions/x\n", "no action runs under")
+
+    def test_unrecognised_on_naming_pull_request_target_refused(self) -> None:
+        bad = _PRT_OK.replace(
+            "on:\n  pull_request_target:\n    types: [opened, synchronize]\n  merge_group:\n",
+            "on: [pull_request_target, 1]\n",
+        )
+        self.assertRefused(bad, "no recognised shape but names `pull_request_target`")
+
+    def test_reusable_workflow_refused(self) -> None:
+        bad = _PRT_OK + "  reuse:\n    uses: ./.github/workflows/other.yml\n"
+        self.assertRefused(bad, "calls a reusable workflow")
+
+    def test_head_ref_expression_refused(self) -> None:
+        bad = _PRT_OK.replace("set -euo pipefail", "echo ${{ github.head_ref }}")
+        self.assertRefused(bad, "names the PR head")
+        self.assertRefused(bad, "interpolates 'github.head_ref'")
+
+    def test_head_sha_env_refused(self) -> None:
+        self.assertRefused(_PRT_OK.replace("$GITHUB_SHA", "$GITHUB_HEAD_REF"), "names the PR head")
+
+    def test_head_via_event_json_refused(self) -> None:
+        bad = _PRT_OK.replace("set -euo pipefail", "jq -r .pull_request.HEAD.sha \"$GITHUB_EVENT_PATH\"")
+        self.assertRefused(bad, "names the PR head")
+
+    def test_head_word_escaped_in_scalar_refused(self) -> None:
+        # A double-quoted YAML escape hides `head` from the raw text; the parsed
+        # scalar still names it.
+        bad = _PRT_OK.replace("run: |\n          set -euo pipefail\n", 'run: "echo \\x68ead\\n"\n        x: |\n          y\n')
+        self.assertRefused(bad, "names the PR head")
+
+    def test_merge_commit_refused(self) -> None:
+        bad = _PRT_OK.replace("set -euo pipefail", "echo merge_commit_sha")
+        self.assertRefused(bad, "names the PR head")
+
+    def test_pull_ref_refused(self) -> None:
+        bad = _PRT_OK.replace("set -euo pipefail", "echo refs/pull/1/merge")
+        self.assertRefused(bad, "names the PR head")
+
+    def test_git_refused(self) -> None:
+        bad = _PRT_OK.replace("set -euo pipefail", "git fetch origin")
+        self.assertRefused(bad, "runs `git`")
+
+    def test_gh_pr_checkout_refused(self) -> None:
+        bad = _PRT_OK.replace("set -euo pipefail", "gh pr checkout 1")
+        self.assertRefused(bad, "other than `gh api`")
+
+    def test_gh_repo_clone_refused(self) -> None:
+        bad = _PRT_OK.replace("set -euo pipefail", "gh repo clone x")
+        self.assertRefused(bad, "other than `gh api`")
+
+    def test_quote_split_git_refused(self) -> None:
+        for spelling in ('g""it fetch origin', "'git' fetch origin", "g\\it fetch origin"):
+            with self.subTest(spelling=spelling):
+                self.assertRefused(_PRT_OK.replace("set -euo pipefail", spelling), "runs `git`")
+
+    def test_quote_split_gh_refused(self) -> None:
+        for spelling in ('"gh" pr checkout 1', 'gh "pr" checkout 1', "g''h repo clone x"):
+            with self.subTest(spelling=spelling):
+                self.assertRefused(_PRT_OK.replace("set -euo pipefail", spelling), "other than `gh api`")
+
+    def test_quote_split_git_in_heredoc_refused(self) -> None:
+        bad = _PRT_OK.replace("set -euo pipefail", "bash <<'EOF'\n          g\"\"it fetch origin\n          EOF")
+        self.assertRefused(bad, "runs `git`")
+
+    def test_quote_split_head_refused(self) -> None:
+        self.assertRefused(_PRT_OK.replace("set -euo pipefail", 'echo "$GITHUB_HE""AD_REF"'), "names the PR head")
+
+    def test_quoted_gh_api_admitted(self) -> None:
+        self.assertEqual(self.errors(_PRT_OK.replace("gh api", '"gh" api')), [])
+
+    def test_secrets_refused(self) -> None:
+        bad = _PRT_OK.replace("${{ github.token }}", "${{ secrets.GITHUB_TOKEN }}")
+        self.assertRefused(bad, "names `secrets`")
+        self.assertRefused(bad, "interpolates")
+
+    def test_pr_title_expression_refused(self) -> None:
+        bad = _PRT_OK.replace("set -euo pipefail", "echo \"${{ github.event.pull_request.title }}\"")
+        self.assertRefused(bad, "interpolates 'github.event.pull_request.title'")
+
+    def test_token_any_case_admitted(self) -> None:
+        self.assertEqual(self.errors(_PRT_OK.replace("${{ github.token }}", "${{ GitHub.TOKEN }}")), [])
+
+    def test_ungrammatical_expression_refused(self) -> None:
+        bad = _PRT_OK.replace("${{ github.token }}", "${{ github.token ) }}")
+        self.assertRefused(bad, "outside the grammar")
+
+    def test_token_call_argument_refused(self) -> None:
+        bad = _PRT_OK.replace("${{ github.token }}", "${{ format('{0}', github.token) }}")
+        self.assertRefused(bad, "interpolates")
+
+    def test_indexed_token_refused(self) -> None:
+        bad = _PRT_OK.replace("${{ github.token }}", "${{ github['token'] }}")
+        self.assertRefused(bad, "interpolates")
+
+    def test_whitespace_normalised_token_admitted(self) -> None:
+        self.assertEqual(self.errors(_PRT_OK.replace("${{ github.token }}", "${{   github.token\t}}")), [])
+
+    def test_missing_permissions_refused(self) -> None:
+        bad = _PRT_OK.replace("permissions:\n  contents: read\n  pull-requests: read\n", "")
+        self.assertRefused(bad, "declares no top-level `permissions:`")
+
+    def test_top_level_write_refused(self) -> None:
+        bad = _PRT_OK.replace("pull-requests: read", "pull-requests: write")
+        self.assertRefused(bad, "top-level `permissions:` must be read-only")
+
+    def test_write_all_refused(self) -> None:
+        bad = _PRT_OK.replace("permissions:\n  contents: read\n  pull-requests: read\n", "permissions: write-all\n")
+        self.assertRefused(bad, "top-level `permissions:` must be read-only")
+
+    def test_job_level_write_refused(self) -> None:
+        bad = _PRT_OK.replace("    runs-on: ubuntu-latest\n", "    runs-on: ubuntu-latest\n    permissions:\n      statuses: write\n")
+        self.assertRefused(bad, "job 'check' `permissions:` must be read-only")
+
+    def test_list_form_trigger_refused(self) -> None:
+        bad = _PRT_OK.replace(
+            "on:\n  pull_request_target:\n    types: [opened, synchronize]\n  merge_group:\n",
+            "on: [pull_request_target]\n",
+        ) + "      - uses: actions/checkout@v4\n"
+        self.assertRefused(bad, "no action runs under")
+
+    def test_string_form_trigger_refused(self) -> None:
+        bad = _PRT_OK.replace(
+            "on:\n  pull_request_target:\n    types: [opened, synchronize]\n  merge_group:\n",
+            "on: pull_request_target\n",
+        ) + "      - uses: actions/checkout@v4\n"
+        self.assertRefused(bad, "no action runs under")
+
+    def test_live_workflows_pass(self) -> None:
+        errors: list[str] = []
+        check_pull_request_target(errors)
+        self.assertEqual(errors, [])
+
+    def test_live_trust_root_diff_is_head_free_under_both_triggers(self) -> None:
+        with open(os.path.join(os.path.dirname(HERE), "workflows", "trust-root-diff.yml")) as f:
+            live = f.read()
+        self.assertIn("pull_request_target", live)
+        self.assertEqual(self.errors(live), [])
+        errors: list[str] = []
+        check_merge_queue({"prt.yml"}, errors, root=self.fx.root)
+        self.assertEqual(errors, [])
+
+
+# `_PRT_OK` naming the protected tree the way `trust-root-diff.yml` does: it
+# fetches `.github/ci/*` through the REST API into the runner temp directory.
+_PRT_TREE = _PRT_OK.replace(
+    '          gh api "repos/$GITHUB_REPOSITORY/contents/x?ref=$GITHUB_SHA" > "$RUNNER_TEMP/x"\n',
+    "          for f in .github/ci/trust_roots.py .github/CODEOWNERS; do\n"
+    '            gh api "repos/$GITHUB_REPOSITORY/contents/$f?ref=$GITHUB_SHA" > "$RUNNER_TEMP/${f##*/}"\n'
+    "          done\n",
+)
+_NOT_CLOSED = "but is not itself one of"
+_WRITES_TREE = "writes into .github/ci/"
+
+
+class TestHeadFreeExemption(unittest.TestCase):
+    """Check 7 over a head-free workflow (`head_free`): its workspace holds no
+    checkout, so the ordering rule's step half and the write scan are not
+    asked of it — and no other workflow earns that."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.fx = SccacheFixture(self._tmp.name)
+
+    def errors(self, content: str) -> list[str]:
+        self.fx.workflow("prt.yml", content)
+        return self.fx.errors()
+
+    def assertRefused(self, content: str, *needles: str) -> None:
+        errors = self.errors(content)
+        for needle in needles:
+            self.assertTrue(any(needle in e for e in errors), f"expected {needle!r} in {errors}")
+
+    def test_fixture_names_the_tree(self) -> None:
+        self.assertIn(".github/ci/trust_roots.py", _PRT_TREE)
+        self.assertNotIn("contents/x?", _PRT_TREE)
+
+    def test_head_free_workflow_naming_the_tree_passes(self) -> None:
+        self.assertEqual(self.errors(_PRT_TREE), [])
+
+    def test_live_trust_root_diff_passes(self) -> None:
+        with open(os.path.join(verify_manifest.REPO_ROOT, "workflows", "trust-root-diff.yml")) as f:
+            live = f.read()
+        self.assertIn(".github/ci/trust_roots.py", live)
+        self.assertEqual(self.errors(live), [])
+
+    def test_live_workspaces(self) -> None:
+        vm = verify_manifest
+        errors: list[str] = []
+        wfs = {wf.fname: wf.workspace for wf in vm._load_sccache_workflows(vm.REPO_ROOT, errors)}
+        self.assertEqual(errors, [])
+        self.assertEqual(sorted(f for f, w in wfs.items() if w is vm.Workspace.NONE), ["trust-root-diff.yml"])
+        self.assertIs(wfs["ci.yml"], vm.Workspace.CHECKOUT)
+
+    def test_leading_checkout_revokes_the_exemption(self) -> None:
+        bad = _PRT_TREE.replace("    steps:\n", f"    steps:\n      - name: Checkout\n        uses: {_CHECKOUT}\n")
+        self.assertRefused(bad, _NOT_CLOSED)
+
+    def test_trailing_checkout_revokes_the_exemption(self) -> None:
+        self.assertRefused(_PRT_TREE + f"      - uses: {_CHECKOUT}\n", _NOT_CLOSED)
+
+    def test_git_revokes_the_exemption(self) -> None:
+        bad = _PRT_TREE.replace("set -euo pipefail", "set -euo pipefail\n          git fetch origin")
+        self.assertRefused(bad, _NOT_CLOSED)
+
+    def test_quote_split_git_revokes_the_exemption(self) -> None:
+        bad = _PRT_TREE.replace("set -euo pipefail", 'set -euo pipefail\n          g""it fetch origin')
+        self.assertRefused(bad, _NOT_CLOSED)
+
+    def test_write_scan_runs_once_the_exemption_is_revoked(self) -> None:
+        bad = _PRT_TREE.replace(
+            "set -euo pipefail", "set -euo pipefail\n          git init\n          cp x .github/ci/y.py"
+        )
+        self.assertRefused(bad, _WRITES_TREE, _NOT_CLOSED)
+
+    def test_secrets_revokes_the_exemption(self) -> None:
+        bad = _PRT_TREE.replace("${{ github.token }}", "${{ secrets.GITHUB_TOKEN }}")
+        self.assertRefused(bad, _NOT_CLOSED)
+
+    def test_pull_request_workflow_naming_the_tree_refused(self) -> None:
+        bad = _PRT_TREE.replace("  pull_request_target:\n", "  pull_request:\n")
+        self.assertNotIn("pull_request_target", bad)
+        self.assertRefused(bad, _NOT_CLOSED, _WRITES_TREE)
+
+    def test_push_workflow_naming_the_tree_refused(self) -> None:
+        bad = _PRT_TREE.replace("  pull_request_target:\n    types: [opened, synchronize]\n", "  push:\n")
+        self.assertNotIn("pull_request_target", bad)
+        self.assertRefused(bad, _NOT_CLOSED, _WRITES_TREE)
+
+    def test_job_masking_refused(self) -> None:
+        for key in ("continue-on-error: true", "if: github.event_name == 'merge_group'"):
+            with self.subTest(key=key):
+                bad = _PRT_TREE.replace("    runs-on: ubuntu-latest\n", f"    runs-on: ubuntu-latest\n    {key}\n")
+                self.assertRefused(bad, "a skipped or failure-ignored job")
+
+    def test_job_needs_refused(self) -> None:
+        bad = _PRT_TREE.replace("    runs-on: ubuntu-latest\n", "    runs-on: ubuntu-latest\n    needs: other\n")
+        bad += "  other:\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo ok\n"
+        self.assertRefused(bad, "with needs: ['other']")
+
+    def test_self_hosted_runner_refused(self) -> None:
+        bad = _PRT_TREE.replace("    runs-on: ubuntu-latest\n", "    runs-on: self-hosted\n")
+        self.assertRefused(bad, "not one literal GitHub-hosted Ubuntu label")
+
+    def test_job_services_refused(self) -> None:
+        bad = _PRT_TREE.replace(
+            "    runs-on: ubuntu-latest\n",
+            "    runs-on: ubuntu-latest\n    services:\n      db:\n        image: postgres@sha256:" + "0" * 64 + "\n",
+        )
+        self.assertRefused(bad, "with a job services:")
+
+    def test_workflow_defaults_shell_refused(self) -> None:
+        bad = _PRT_TREE.replace("jobs:\n", "defaults:\n  run:\n    shell: sh\njobs:\n")
+        self.assertRefused(bad, "defaults.run.shell")
+
+
+class TestTrustRoots(unittest.TestCase):
+    """Check 12b: `.github/CODEOWNERS` is live, self-protecting, and alone."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.root = os.path.join(self._tmp.name, ".github")
+        self.tracked = [
+            ".github/CODEOWNERS",
+            ".github/ci/trust_roots.py",
+            ".github/ci/verify-manifest.py",
+            ".github/workflows/trust-root-diff.yml",
+            "Cargo.toml",
+            "src/a/Cargo.toml",
+        ]
+
+    def tearDown(self) -> None:
+        self._tmp.cleanup()
+
+    def errors(self, codeowners: str | None, tracked: list[str] | None = None) -> list[str]:
+        if codeowners is not None:
+            _write(os.path.join(self.root, "CODEOWNERS"), codeowners)
+        errors: list[str] = []
+        check_trust_roots(errors, root=self.root, tracked=self.tracked if tracked is None else tracked)
+        return errors
+
+    def assertRefused(self, codeowners: str | None, needle: str, tracked: list[str] | None = None) -> None:
+        errors = self.errors(codeowners, tracked)
+        self.assertTrue(any(needle in e for e in errors), f"expected {needle!r} in {errors}")
+
+    _OK = "/.github/ @o\nCargo.toml @o\n"
+
+    def test_valid_passes(self) -> None:
+        self.assertEqual(self.errors(self._OK), [])
+
+    def test_missing_codeowners_refused(self) -> None:
+        self.assertRefused(None, "CODEOWNERS is missing")
+
+    def test_unparseable_codeowners_refused(self) -> None:
+        self.assertRefused(self._OK + "/x/[ab] @o\n", "CODEOWNERS refused")
+
+    def test_dead_rule_refused(self) -> None:
+        self.assertRefused(self._OK + "/deny.toml @o\n", "'/deny.toml' matches no tracked file")
+
+    def test_unowned_machinery_refused(self) -> None:
+        self.assertRefused(
+            "/.github/ci/ @o\n/.github/CODEOWNERS @o\nCargo.toml @o\n",
+            ".github/workflows/trust-root-diff.yml is not a trust root",
+        )
+
+    _MACHINERY_ONLY = "".join(f"/{p} @o\n" for p in verify_manifest.TRUST_ROOT_MACHINERY) + "Cargo.toml @o\n"
+
+    def test_machinery_only_passes_when_nothing_else_is_tracked(self) -> None:
+        self.assertEqual(self.errors(self._MACHINERY_ONLY), [])
+
+    def test_unowned_github_file_refused(self) -> None:
+        for p in (
+            ".github/ci/shell_lex.py",
+            ".github/workflows/ci.yml",
+            ".github/actions/x/action.yml",
+            ".github/ISSUE_TEMPLATE/bug.md",
+        ):
+            with self.subTest(path=p):
+                self.assertRefused(
+                    self._MACHINERY_ONLY, f"{p} is under .github/ but is not a trust root", [*self.tracked, p]
+                )
+
+    def test_owned_github_file_passes(self) -> None:
+        self.assertEqual(self.errors(self._OK, [*self.tracked, ".github/ci/shell_lex.py"]), [])
+
+    def test_stray_root_codeowners_refused(self) -> None:
+        self.assertRefused(self._OK, "CODEOWNERS: a second CODEOWNERS file", [*self.tracked, "CODEOWNERS"])
+
+    def test_stray_docs_codeowners_refused(self) -> None:
+        self.assertRefused(self._OK, "docs/CODEOWNERS: a second", [*self.tracked, "docs/CODEOWNERS"])
+
+    def _workflow(self, run: str) -> None:
+        _write(os.path.join(self.root, "workflows", "w.yml"), f"on: push\njobs:\n  j:\n    steps:\n      - run: {run}\n")
+
+    def test_unowned_ci_run_script_refused(self) -> None:
+        self._workflow("bash editors/gate.sh")
+        self.assertRefused(self._OK, "editors/gate.sh is run by CI but is not a trust root", [*self.tracked, "editors/gate.sh"])
+
+    def test_unowned_dot_slash_ci_run_script_refused(self) -> None:
+        self._workflow("./editors/gate.py --check")
+        self.assertRefused(self._OK, "editors/gate.py is run by CI", [*self.tracked, "editors/gate.py"])
+
+    def test_owned_ci_run_script_passes(self) -> None:
+        self._workflow("bash editors/gate.sh")
+        tracked = [*self.tracked, "editors/gate.sh"]
+        self.assertEqual(self.errors(self._OK + "/editors/ @o\n", tracked), [])
+
+    def test_longer_path_is_not_the_script(self) -> None:
+        self._workflow("bash editors/gate.sh.bak/x editors/gate.shx")
+        self.assertEqual(self.errors(self._OK, [*self.tracked, "editors/gate.sh"]), [])
+
+    def test_live_codeowners_passes(self) -> None:
+        errors: list[str] = []
+        check_trust_roots(errors)
+        self.assertEqual(errors, [])
 
 
 if __name__ == "__main__":

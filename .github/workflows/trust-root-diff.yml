@@ -1,0 +1,54 @@
+# Trust-root diff: an outside contributor's PR that touches a trust root
+# (any path `.github/CODEOWNERS` owns) fails until a code owner approves the
+# PR's current commit.
+#
+# `pull_request_target` runs THIS file from the base branch with a read-only
+# token, so a PR cannot rewrite the check that judges it. The job never checks
+# out or runs PR code: it fetches the decision script and CODEOWNERS at the
+# trusted base commit through the REST API, then reads the PR's file list and
+# reviews through the same API. `verify-manifest.py` check 12 refuses any
+# `pull_request_target` workflow that could do otherwise.
+#
+# Under `merge_group` it re-judges the queued PR against the queue's base
+# commit (defense in depth; the PR-side run is the boundary, since a queued
+# run executes the queued commit's workflows).
+#
+# Re-run the job after a code owner approves: a review does not re-trigger it.
+name: Trust-root diff
+
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened, edited, ready_for_review]
+  merge_group:
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  trust-root-diff:
+    name: trust-root-diff
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Judge the PR against the trusted CODEOWNERS
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          case "$GITHUB_EVENT_NAME" in
+            pull_request_target) trusted="$GITHUB_SHA" ;;
+            merge_group) trusted="$(jq -er '.merge_group.base_sha' "$GITHUB_EVENT_PATH")" ;;
+            *) echo "trust-root-diff: unexpected event $GITHUB_EVENT_NAME" >&2; exit 1 ;;
+          esac
+          if ! [[ "$trusted" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "trust-root-diff: trusted commit is not a 40-hex sha" >&2
+            exit 1
+          fi
+          dir="$RUNNER_TEMP/trust-roots"
+          mkdir -p "$dir"
+          for f in .github/ci/trust_roots.py .github/CODEOWNERS; do
+            gh api -H 'Accept: application/vnd.github.raw+json' \
+              "repos/$GITHUB_REPOSITORY/contents/$f?ref=$trusted" > "$dir/${f##*/}"
+          done
+          python3 "$dir/trust_roots.py" check --codeowners "$dir/CODEOWNERS"

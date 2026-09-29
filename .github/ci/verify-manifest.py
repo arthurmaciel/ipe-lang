@@ -105,14 +105,21 @@ Checks performed
      job whose tool admits no job masking (verdict, advisory) also admits no
      `needs:`, so no skipped ancestor can skip it. No `working-directory` anywhere names
      `.github`. A quote-removed scan refusing writes into the tree is
-     defence in depth under that rule, not its proof.
+     defence in depth under that rule, not its proof. The ordering rule and
+     that scan guard a checked-out tree, so neither's step half applies to a
+     head-free workflow (`head_free`: one check 12a admits), whose workspace
+     never holds a checkout (no `uses:` anywhere, no `git`) and whose every
+     command is its own `run:` text; its tree-naming jobs are still held to
+     the `ToolJob` job half as verdict jobs (no masking key, no `needs:`),
+     and every other rule of this check still applies to them.
   8. Merge-queue safety: every producer of a `gate` context triggers on both
      `pull_request` and `merge_group`, else the queue waits forever on a
      required context no merge-group run reports.  A merge-group run gets the
      base repository's secrets and token, so every `merge_group`-triggered
      workflow must be secret-free (no `secrets` word in its raw text, nor in
-     any key or string scalar once parsed, which decodes escapes), must not
-     also trigger on `pull_request_target`, and must declare a top-level
+     any key or string scalar once parsed, which decodes escapes), may also
+     trigger on `pull_request_target` only when check 12 admits it, and must
+     declare a top-level
      `permissions:` value with no `write` scope.  A job-level `write` scope is
      admitted only on a job whose `if:` has no `||` and has, among its
      `&&`-conjuncts at parenthesis depth 0, exactly
@@ -148,8 +155,36 @@ Checks performed
       a single unexpanded ci.yml job, a manifest `gate`, and `needs` nothing
       but `changes`, so it stays fast.  A format, lint, lock or panic-scan red
       therefore never launches the heavy tier on any event or fork.
+  12. Gate integrity.  (a) A `pull_request_target` run holds the base
+      repository's token beside a PR author's input, so every workflow
+      triggering on it must provably run no head code: no `uses:` at step or
+      job level (no checkout, no action at all), no `git`, no `gh` other
+      than `gh api`, no `secrets` word, no word naming the PR head (`head`,
+      `merge_commit_sha`, `refs/pull/`; any letter case, in the raw text, in
+      any parsed key or scalar, or in its shell commands' quote-removed
+      words, so `g""it` is `git`), no `${{ }}` expression other than
+      `github.token`, and a top-level `permissions:` value with no `write`
+      scope at the top or on any job.  A workflow (a) admits is head-free
+      (`head_free`, the one predicate checks 7 and 8 read): its workspace
+      never holds a checkout, so check 7's step ordering and write scan do
+      not apply to it.  (b) `.github/CODEOWNERS` is the trust-root SSOT: it
+      must parse under `trust_roots.py`'s accepted subset, every rule must
+      match at least one tracked file, the trust-root machinery
+      (`CODEOWNERS`, `trust_roots.py`, this verifier, `trust-root-diff.yml`)
+      and every tracked file under `.github/` (workflows, actions, and the
+      helpers the verifiers import) must be a trust root, every tracked
+      script a workflow or local action names by path must be a trust root,
+      and no second CODEOWNERS file may exist at the root or in `docs/`.  A
+      workflow whose `on:` has no recognised shape but names
+      `pull_request_target` is refused by (a).
+      Limit: (a) is a text audit that catches honest mistakes (a fetch of
+      head content spelled without a head word, such as a `curl` of a URL
+      assembled at run time, is not seen, and check 7's head-free exemption
+      rests on the same audit); a hostile edit to a workflow is a
+      `.github/**` change, which (b) makes code-owned.
 
-Pure stdlib + PyYAML (already a CI dependency).  No network.
+Pure stdlib + PyYAML (already a CI dependency).  No network; check 12 runs
+`git ls-files` locally to list tracked paths.
 """
 
 from __future__ import annotations
@@ -162,8 +197,9 @@ import os
 import enum
 import posixpath
 import re
+import subprocess
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 try:
     import yaml
@@ -175,6 +211,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import strict_yaml  # noqa: E402  # the shared strict loader, SSOT for every YAML load below
 import gha_expr  # noqa: E402  # the one GitHub Actions expression parser
 import shell_lex  # noqa: E402  # the one quote-removing shell lexer
+import trust_roots  # noqa: E402  # the CODEOWNERS trust-root parser, shared with trust-root-diff.yml
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # Both extensions: a workflow (or, for check 6, a local composite action) is a
@@ -763,11 +800,27 @@ class WorkflowJob:
     raw: dict
 
 
+class Workspace(enum.Enum):
+    """What a workflow's jobs may find in their workspace.
+
+    `CHECKOUT` — a step may check out the repository, so `.github/ci/**` may
+    sit in the workspace for an earlier step to rewrite; check 7's ordering
+    rule and write scan guard it. `NONE` — the workflow is head-free
+    (`head_free`): no step or job `uses:` anything and nothing runs `git`, so
+    no checkout ever populates the workspace and every command is the
+    workflow's own `run:` text.
+    """
+
+    CHECKOUT = "checkout"
+    NONE = "none"
+
+
 @dataclass(frozen=True)
 class SccacheWorkflow:
     fname: str
     doc: dict
     jobs: list[WorkflowJob]
+    workspace: Workspace
 
 
 def _load_sccache_workflows(root: str, errors: list[str]) -> list[SccacheWorkflow]:
@@ -782,9 +835,10 @@ def _load_sccache_workflows(root: str, errors: list[str]) -> list[SccacheWorkflo
     )
     for path in paths:
         fname = os.path.basename(path)
+        with open(path) as f:
+            text = f.read()
         try:
-            with open(path) as f:
-                doc = strict_yaml.safe_load(f)
+            doc = strict_yaml.safe_load(text)
         except yaml.YAMLError as e:
             errors.append(f"{fname} is not valid YAML: {e}")
             continue
@@ -801,7 +855,8 @@ def _load_sccache_workflows(root: str, errors: list[str]) -> list[SccacheWorkflo
                 jobs.append(WorkflowJob(str(jid), j))
             else:
                 _refuse_shape(f"{fname}: job {str(jid)!r}", "the job", "a mapping", j, errors)
-        out.append(SccacheWorkflow(fname, doc, jobs))
+        workspace = Workspace.NONE if head_free(doc, text) else Workspace.CHECKOUT
+        out.append(SccacheWorkflow(fname, doc, jobs, workspace))
     return out
 
 
@@ -817,15 +872,19 @@ _SECRETS_WORD = re.compile(r"\bsecrets\b", re.IGNORECASE)
 _PR_ONLY = "github.event_name == 'pull_request'"
 
 
-def _mentions_secrets(node: object) -> bool:
-    """True when any key or string scalar of the parsed document names
-    `secrets`. Complements the raw-text scan: a double-quoted scalar can spell
-    the word through `\\x`/`\\u` escapes that only the parser decodes."""
+def _mentions(node: object, pattern: re.Pattern[str]) -> bool:
+    """True when any key or string scalar of the parsed document matches
+    `pattern`. Complements a raw-text scan: a double-quoted scalar can spell a
+    word through `\\x`/`\\u` escapes that only the parser decodes."""
     if isinstance(node, dict):
-        return any(_mentions_secrets(k) or _mentions_secrets(v) for k, v in node.items())
+        return any(_mentions(k, pattern) or _mentions(v, pattern) for k, v in node.items())
     if isinstance(node, list):
-        return any(_mentions_secrets(e) for e in node)
-    return isinstance(node, str) and _SECRETS_WORD.search(node) is not None
+        return any(_mentions(e, pattern) for e in node)
+    return isinstance(node, str) and pattern.search(node) is not None
+
+
+def _mentions_secrets(node: object) -> bool:
+    return _mentions(node, _SECRETS_WORD)
 
 
 def _top_level_conjuncts(cond: str) -> list[str] | None:
@@ -921,18 +980,24 @@ def check_merge_queue(gate_producers: set[str], errors: list[str], root: str = R
             errors.append(f"{fname}: `on:` is not a string, list of strings, or mapping")
             continue
         if fname in gate_producers:
-            for event in ("pull_request", "merge_group"):
-                if event not in triggers:
-                    errors.append(
-                        f"{fname} produces a required `gate` context but does not trigger "
-                        f"on `{event}` — the merge queue would wait forever on it"
-                    )
+            # A `pull_request_target` producer reports the PR-side context from
+            # the base workflow; check 12 holds it to running no head code.
+            if not triggers & {"pull_request", "pull_request_target"}:
+                errors.append(
+                    f"{fname} produces a required `gate` context but does not trigger "
+                    "on `pull_request` (or `pull_request_target`) — no PR would report it"
+                )
+            if "merge_group" not in triggers:
+                errors.append(
+                    f"{fname} produces a required `gate` context but does not trigger "
+                    "on `merge_group` — the merge queue would wait forever on it"
+                )
         if "merge_group" not in triggers:
             continue
-        if "pull_request_target" in triggers:
+        if "pull_request_target" in triggers and not head_free(doc, text):
             errors.append(
-                f"{fname}: a merge_group workflow may not also trigger on "
-                "`pull_request_target` (base-repo secrets reach untrusted code)"
+                f"{fname}: a merge_group workflow may also trigger on "
+                "`pull_request_target` only when it runs no head code (check 12)"
             )
         if _SECRETS_WORD.search(text) or _mentions_secrets(doc):
             errors.append(
@@ -1199,6 +1264,251 @@ def check_fast_gate_first(gate_contexts: set[str], errors: list[str], root: str 
             )
 
 
+# The ONLY expression a `pull_request_target` workflow may interpolate: the
+# job's own read-only token. Every other `${{ }}` is refused, so no
+# PR-controlled value (title, branch name, head commit) is spliced anywhere.
+_PRT_ALLOWED_EXPRESSIONS = frozenset({"github.token"})
+
+
+def _prt_disallowed_expressions(text: str) -> list[str]:
+    """The `${{ }}` bodies in `text` that are not an admitted context
+    reference, whitespace-normalised. Bodies are parsed by `gha_expr` and
+    compared as context paths without case, as the Actions evaluator resolves
+    them; a text whose expressions fall outside the grammar is refused whole."""
+    parsed = gha_expr.parse_template(text)
+    if isinstance(parsed, gha_expr.Refusal):
+        return [f"an expression outside the grammar ({parsed.why})"]
+    bad = []
+    for e, (start, end) in zip(parsed.exprs, parsed.spans):
+        if not (
+            isinstance(e, gha_expr.ContextRef)
+            and all(isinstance(seg, gha_expr.Prop) for seg in e.path)
+            and ".".join([e.ctx, *(seg.name for seg in e.path)]).casefold() in _PRT_ALLOWED_EXPRESSIONS
+        ):
+            bad.append(" ".join(text[start + 3 : end - 2].split()))
+    return bad
+# Every spelling of the PR head a workflow could name: `head` covers
+# `github.head_ref`, `$GITHUB_HEAD_REF`, the event's `pull_request.head.*`, and
+# a `jq` path into it; the test-merge commit and `refs/pull/` refs carry head
+# code too. A pull_request_target workflow has no reason to name any of them.
+_PRT_HEAD_WORD = re.compile(r"head|merge_commit_sha|refs/pull/", re.IGNORECASE)
+# A pull_request_target workflow has no working tree and needs no `git`; its
+# only `gh` use is the REST API.
+_PRT_GIT_WORD = re.compile(r"\bgit\b", re.IGNORECASE)
+_PRT_GH_NON_API = re.compile(r"\bgh\s+(?!api\b)\S", re.IGNORECASE)
+# Paths the trust-root machinery itself lives at: each must be a trust root,
+# or an outside PR could rewrite the check that guards the others.
+TRUST_ROOT_MACHINERY = (
+    ".github/CODEOWNERS",
+    ".github/ci/trust_roots.py",
+    ".github/ci/verify-manifest.py",
+    ".github/workflows/trust-root-diff.yml",
+)
+# GitHub reads the first CODEOWNERS of `.github/`, the root, `docs/`; only the
+# first location is the SSOT, so a file at the others is refused as a
+# misleading second list.
+_STRAY_CODEOWNERS = ("CODEOWNERS", "docs/CODEOWNERS")
+# A tracked file with one of these suffixes that a workflow or local action
+# names is a script CI executes: editing it changes what a gate proves, so it
+# must be a trust root wherever it lives.
+_SCRIPT_SUFFIXES = (".sh", ".bash", ".py", ".js", ".mjs", ".cjs", ".ps1", ".pl", ".rb")
+
+
+def _scalars(node: object):
+    if isinstance(node, dict):
+        for k, v in node.items():
+            yield from _scalars(k)
+            yield from _scalars(v)
+    elif isinstance(node, list):
+        for e in node:
+            yield from _scalars(e)
+    elif isinstance(node, str):
+        yield node
+
+
+def pull_request_target_violations(doc: dict, text: str) -> list[str]:
+    """Check 12a's refusals for one `pull_request_target` workflow (see the
+    module docstring); empty when it provably runs no head code."""
+    out: list[str] = []
+    scalars = list(_scalars(doc))
+    texts = [text, *scalars, *_quote_removed(scalars)]
+    if any(_SECRETS_WORD.search(t) for t in texts):
+        out.append("names `secrets` — the base repository's secrets would sit next to untrusted input")
+    if any(_PRT_HEAD_WORD.search(t) for t in texts):
+        out.append("names the PR head (`head`, `merge_commit_sha`, or `refs/pull/`)")
+    if any(_PRT_GIT_WORD.search(t) for t in texts):
+        out.append("runs `git` — there is no working tree to need it, only head code to fetch")
+    if any(_PRT_GH_NON_API.search(t) for t in texts):
+        out.append("runs a `gh` subcommand other than `gh api`")
+    bad_expr = sorted({b for t in texts for b in _prt_disallowed_expressions(t)})
+    if bad_expr:
+        out.append(
+            f"interpolates {', '.join(repr(b) for b in bad_expr)} — only "
+            f"{', '.join(sorted(_PRT_ALLOWED_EXPRESSIONS))} is admitted"
+        )
+    if "permissions" not in doc:
+        out.append("declares no top-level `permissions:` (the default token may write)")
+    elif _write_scopes(doc["permissions"]):
+        out.append(f"top-level `permissions:` must be read-only, got {doc['permissions']!r}")
+    jobs = doc.get("jobs")
+    if not isinstance(jobs, dict) or not jobs:
+        out.append("`jobs:` is not a non-empty mapping")
+        return out
+    for jid, job in jobs.items():
+        loc = f"job {str(jid)!r}"
+        if not isinstance(job, dict):
+            out.append(f"{loc} is not a mapping")
+            continue
+        if "uses" in job:
+            out.append(f"{loc} calls a reusable workflow — its steps are not auditable here")
+        if "permissions" in job and _write_scopes(job["permissions"]):
+            out.append(f"{loc} `permissions:` must be read-only, got {job['permissions']!r}")
+        steps = job.get("steps", [])
+        if not isinstance(steps, list):
+            out.append(f"{loc} `steps:` is not a list")
+            continue
+        for i, st in enumerate(steps):
+            if not isinstance(st, dict):
+                out.append(f"{loc} step {i} is not a mapping")
+            elif "uses" in st:
+                out.append(
+                    f"{loc} step {i} `uses: {st['uses']}` — no action runs under "
+                    "pull_request_target (a checkout, local, or third-party action "
+                    "can fetch and run head code)"
+                )
+    return out
+
+
+def _quote_removed(scalars: list[str]) -> list[str]:
+    """Each scalar's shell commands (here-document bodies included) as their
+    quote-removed words joined by one space, so `g""it` reads `git` and
+    `"gh" pr` reads `gh pr` to the word rules of check 12a."""
+    return [
+        " ".join(cmd.words)
+        for t in scalars
+        for part in _shell_texts(t)
+        for cmd in shell_lex.split_commands(part)
+    ]
+
+
+def head_free(doc: dict, text: str) -> bool:
+    """Whether the workflow is one check 12a admits: it triggers on
+    `pull_request_target` and `pull_request_target_violations` finds nothing.
+    Such a workflow has no `uses:` at step or job level and runs no `git`, so
+    its workspace never holds a checkout (`Workspace.NONE`). The one predicate
+    check 7 (which then exempts its jobs from the ordering rule's step half
+    and the write scan) and check 8 read."""
+    triggers = _triggers(doc)
+    return (
+        triggers is not None
+        and "pull_request_target" in triggers
+        and not pull_request_target_violations(doc, text)
+    )
+
+
+def check_pull_request_target(errors: list[str], root: str = REPO_ROOT) -> None:
+    """Check 12a (see the module docstring). Unparseable workflows are refused
+    by check 6."""
+    for path in sorted(p for pattern in ("*.yml", "*.yaml") for p in glob.glob(os.path.join(root, "workflows", pattern))):
+        fname = os.path.basename(path)
+        with open(path) as f:
+            text = f.read()
+        try:
+            doc = strict_yaml.safe_load(text)
+        except yaml.YAMLError:
+            continue
+        if not isinstance(doc, dict):
+            continue
+        triggers = _triggers(doc)
+        if triggers is None:
+            # Fail closed: an `on:` this reader cannot enumerate may still
+            # hold `pull_request_target`.
+            if "pull_request_target" in text or any("pull_request_target" in t for t in _scalars(doc)):
+                errors.append(
+                    f"{fname}: `on:` has no recognised shape but names `pull_request_target`; "
+                    "check 12 cannot prove it runs no head code"
+                )
+            continue
+        if "pull_request_target" not in triggers:
+            continue
+        for v in pull_request_target_violations(doc, text):
+            errors.append(f"{fname}: a pull_request_target workflow {v}")
+
+
+def _tracked_paths(repo: str) -> list[str] | None:
+    try:
+        out = subprocess.run(
+            ["git", "-C", repo, "ls-files", "-z"], capture_output=True, check=True, timeout=60
+        ).stdout
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return [p for p in out.decode("utf-8", "surrogateescape").split("\0") if p]
+
+
+def check_trust_roots(errors: list[str], root: str = REPO_ROOT, tracked: list[str] | None = None) -> None:
+    """Check 12b (see the module docstring). `tracked` defaults to the
+    repository's `git ls-files`."""
+    path = os.path.join(root, "CODEOWNERS")
+    try:
+        roots = trust_roots.load_codeowners(path)
+    except FileNotFoundError:
+        errors.append(".github/CODEOWNERS is missing — it is the trust-root SSOT")
+        return
+    except (OSError, trust_roots.CodeownersError) as e:
+        errors.append(f".github/CODEOWNERS refused: {e}")
+        return
+    if tracked is None:
+        tracked = _tracked_paths(os.path.dirname(root))
+        if tracked is None:
+            errors.append("check 12: `git ls-files` failed; cannot prove every CODEOWNERS rule is live")
+            return
+    for rule in roots.rules:
+        if not any(rule.matches(p) for p in tracked):
+            errors.append(
+                f".github/CODEOWNERS line {rule.line}: {rule.pattern!r} matches no tracked file "
+                "(a typo'd rule protects nothing)"
+            )
+    for p in TRUST_ROOT_MACHINERY:
+        if not roots.is_trust_root(p):
+            errors.append(f"{p} is not a trust root in .github/CODEOWNERS — the guard would not guard itself")
+    for p in tracked:
+        if p.startswith(".github/") and p not in TRUST_ROOT_MACHINERY and not roots.is_trust_root(p):
+            errors.append(
+                f"{p} is under .github/ but is not a trust root in .github/CODEOWNERS — "
+                "GitHub reads workflows and actions from there, and the verifiers import "
+                "their helpers from there"
+            )
+    for p in _STRAY_CODEOWNERS:
+        if p in tracked:
+            errors.append(f"{p}: a second CODEOWNERS file; .github/CODEOWNERS is the only trust-root list")
+    for p in _ci_run_scripts(root, tracked):
+        if not roots.is_trust_root(p):
+            errors.append(
+                f"{p} is run by CI but is not a trust root in .github/CODEOWNERS — "
+                "an outside PR could rewrite what that gate proves"
+            )
+
+
+def _ci_run_scripts(root: str, tracked: list[str]) -> list[str]:
+    """Tracked scripts (by `_SCRIPT_SUFFIXES`) that a workflow or local action
+    names by their repository path, bare or `./`-prefixed. A script reached
+    only through `working-directory:` plus a relative name is not seen."""
+    scripts = [p for p in tracked if p.endswith(_SCRIPT_SUFFIXES)]
+    if not scripts:
+        return []
+    texts: list[str] = []
+    for pattern in ("workflows/*.yml", "workflows/*.yaml", "actions/**/*.yml", "actions/**/*.yaml"):
+        for path in sorted(glob.glob(os.path.join(root, pattern), recursive=True)):
+            with open(path, encoding="utf-8", errors="surrogateescape") as f:
+                texts.append(f.read())
+    found: set[str] = set()
+    for p in scripts:
+        pat = re.compile(r"(?:(?<=\./)|(?<![A-Za-z0-9_./-]))" + re.escape(p) + r"(?![A-Za-z0-9_./-])")
+        if any(pat.search(t) for t in texts):
+            found.add(p)
+    return sorted(found)
+
+
 def _env_keys_folded(env: dict) -> set[str]:
     return {str(k).casefold() for k in env}
 
@@ -1230,10 +1540,13 @@ class StepPolicy:
     `env_allowlist` holds the keys `ci/github-env.sh` may write; it is empty
     when the allowlist cannot be established, so every helper call is refused.
     `repo_top` is the checkout root a `working-directory:` resolves from.
+    `workspace` is what the audited text's job may find in its workspace: the
+    protected-tree write scan runs only where a checkout can exist.
     """
 
     env_allowlist: frozenset[str]
     repo_top: str
+    workspace: Workspace
 
 
 def _github_env_key_refusal(key: str) -> str | None:
@@ -1797,7 +2110,7 @@ def _audit_text(
             f"{loc} {what} defines a shell function or alias ({m.group(0).strip()!r}) — it "
             "could shadow a command every check matches by name; refused"
         )
-    hit = _protected_tree_refusal(shell)
+    hit = _protected_tree_refusal(shell) if policy.workspace is Workspace.CHECKOUT else None
     if hit is not None:
         errors.append(
             f"{loc} {what} writes into {PROTECTED_TREE}/ ({hit}) — the verifier, its "
@@ -2469,7 +2782,14 @@ class ToolJob:
         wf: SccacheWorkflow, job: WorkflowJob, steps: list[Step], jloc: str, root: str
     ) -> ToolJob | list[str] | None:
         """The job as a `ToolJob`, its refusals, or None when no step names
-        the tree (the job is then not a tool job)."""
+        the tree (the job is then not a tool job).
+
+        In a head-free workflow (`Workspace.NONE`) no checkout exists for a
+        step to rewrite, so the step half — each tree-naming step closed and
+        after closed steps only — is not asked; the job half still is, with
+        the job read as a verdict job (no masking key, no `needs:`), since
+        nothing in it runs a `ToolStep` whose role could admit either."""
+        head_free_job = wf.workspace is Workspace.NONE
         refusals: list[str] = []
         closed: list[ClosedStep] = []
         prefix: list[ClosedStep] = []
@@ -2482,6 +2802,8 @@ class ToolJob:
             hit = _tree_reference(st.raw, st.run, jloc)
             if hit is not None:
                 referenced = True
+                if head_free_job:
+                    continue
                 prefix = list(closed)
                 stloc = f"{jloc} step {st.label!r}"
                 if tainted is not None:
@@ -2553,7 +2875,7 @@ class ToolJob:
                     "then report success; refused"
                 )
         job_needs = _needs_of(raw)
-        if job_needs and any(not ROLE_MASKING[t.role].job for t in tools):
+        if job_needs and (head_free_job or any(not ROLE_MASKING[t.role].job for t in tools)):
             refusals.append(
                 f"{jloc} runs {PROTECTED_TREE}/ with needs: {job_needs!r} — a job whose tool "
                 "admits no job masking (a verdict, or an advisory that steers other jobs) "
@@ -2941,7 +3263,11 @@ def check_workflow_steps(errors: list[str], root: str = REPO_ROOT) -> None:
           wherever the action is used). Beneath (i), a quote-removed scan
           (brace expansion, wrapper flags, `xargs`, `sh -c` text, and a
           shell fed unseen standard input all resolved) refuses a write into
-          the tree as defence in depth.
+          the tree as defence in depth. Both guard a checked-out tree: in a
+          head-free workflow (`Workspace.NONE`, from `head_free`) no step
+          or job `uses:` anything and nothing runs `git`, so no checkout
+          exists; there only the job half of (i) is asked, the job read as
+          a verdict job (`ToolJob.parse`), and the write scan is not run.
     Every local `uses: ./...` is resolved on disk from the repo root
     (`action.yml`, then `action.yaml`); an unresolvable, ambiguous, non-
     composite (node/docker), cyclic, or over-deep (> LOCAL_ACTION_DEPTH_LIMIT)
@@ -3016,7 +3342,9 @@ def check_workflow_steps(errors: list[str], root: str = REPO_ROOT) -> None:
     Those are review-gated, not machine-gated.
     """
     start = len(errors)
-    policy = StepPolicy(load_github_env_allowlist(errors, root), os.path.dirname(os.path.abspath(root)))
+    policy = StepPolicy(
+        load_github_env_allowlist(errors, root), os.path.dirname(os.path.abspath(root)), Workspace.CHECKOUT
+    )
     actions = LocalActions(root, policy, errors)
     _check_sccache_composite(actions, errors)
 
@@ -3040,7 +3368,9 @@ def check_workflow_steps(errors: list[str], root: str = REPO_ROOT) -> None:
             rel = os.path.relpath(os.path.dirname(path), root).replace(os.sep, "/")
             actions.resolve(f"./.github/{rel}", "local action audit")
 
+    base_policy = policy
     for wf in _load_sccache_workflows(root, errors):
+        policy = replace(base_policy, workspace=wf.workspace)
         wloc = f"{wf.fname}: workflow-level"
         _refuse_env_keys(_scoped_env(wf.doc, f"{wloc} env", errors), wloc, errors)
         _audit_defaults(wf.doc, wf.fname, policy.repo_top, errors)
@@ -3206,6 +3536,9 @@ def main() -> int:
         {ctx for ctx, e in by_context.items() if e.get("disposition") == "gate"},
         errors,
     )
+    # ---- 12. gate integrity: pull_request_target runs no head code; trust roots live ----
+    check_pull_request_target(errors)
+    check_trust_roots(errors)
 
     # ---- 3. fail-closed dependency surfacing ----
     def surfaced_dispositions(job: Job) -> set[str]:

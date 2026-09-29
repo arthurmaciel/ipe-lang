@@ -66,6 +66,8 @@ jobs:
 
       - name: Prove the nightly-green refusals (unit tests)
         run: python3 .github/ci/test_nightly_green.py -v
+      - name: Prove the trust-root parser and merge-decision refusals (unit tests)
+        run: python3 .github/ci/test_trust_roots.py -v
 
       - name: Prove the local-gate refusals (unit tests)
         run: python3 .github/ci/test_local_gate.py -v
