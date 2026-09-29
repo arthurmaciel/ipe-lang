@@ -446,7 +446,17 @@ fn scanned_files(with_tests: bool, keep: impl Fn(&str) -> bool) -> Vec<(String, 
     let Ok(listed) = listed else {
         return Vec::new();
     };
-    String::from_utf8_lossy(&listed.stdout)
+    // A lossy decode would turn a non-UTF-8 name into a path that is never
+    // read, so the listing must decode exactly.
+    let listed = String::from_utf8(listed.stdout);
+    assert!(
+        listed.is_ok(),
+        "git ls-files listed a non-UTF-8 path: {listed:?}"
+    );
+    let Ok(listed) = listed else {
+        return Vec::new();
+    };
+    listed
         .split('\0')
         .filter(|rel| !rel.is_empty() && keep(rel))
         .filter(|rel| {
@@ -456,8 +466,14 @@ fn scanned_files(with_tests: bool, keep: impl Fn(&str) -> bool) -> Vec<(String, 
         })
         .filter_map(|rel| match std::fs::read_to_string(root.join(rel)) {
             Ok(text) => Some(Ok((rel.to_owned(), text))),
-            // `--cached` still lists a tracked file deleted from the worktree.
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+            // `--cached` still lists a tracked file deleted from the worktree;
+            // a dangling symlink still exists, so it is not skipped.
+            Err(e)
+                if e.kind() == std::io::ErrorKind::NotFound
+                    && root.join(rel).symlink_metadata().is_err() =>
+            {
+                None
+            }
             Err(e) => Some(Err(format!("{rel}: {e}"))),
         })
         .collect::<Result<Vec<_>, String>>()

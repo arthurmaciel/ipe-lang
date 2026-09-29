@@ -1325,9 +1325,9 @@ fn unprobeable_gate_refuses_a_stale_entry() {
     };
     let checked = check_unprobeable(&m, &member, &entry);
     assert!(
-        checked
-            .as_ref()
-            .is_err_and(|e| e.contains("listed UNPROBEABLE for IPE-N0039")),
+        checked.as_ref().is_err_and(
+            |e| e.contains("listed UNPROBEABLE for IPE-N0039") && e.contains("gave Ok(")
+        ),
         "an entry whose verbatim probe succeeds must fail the gate: {checked:?}"
     );
 }
