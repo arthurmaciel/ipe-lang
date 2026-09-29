@@ -300,10 +300,21 @@ SCCACHE_WIRING_TEXT_RE = re.compile(
 # step `{uses: mozilla-actions/sccache-action@<40-hex commit sha>}`, then `SCCACHE_WIRE_STEP`
 # byte-exact. Its wiring is proven by equality, never by pattern.
 SCCACHE_INSTALL_USES_RE = re.compile(re.escape(SCCACHE_ACTION_PREFIX) + r"[0-9a-f]{40}\Z")
+# The cache is an accelerator, never a gate: sccache refuses every compile when
+# its server cannot start (the backend's startup read failing), so rustc is
+# wired through it only once the server is up, and a server that never idles
+# out cannot be restarted into that failure mid-job. Past startup, a backend
+# I/O error compiles locally instead of failing the build.
 SCCACHE_WIRE_RUN = (
     "set -euo pipefail\n"
-    f'echo "{SCCACHE_WRAPPER_VAR}=sccache" >> "$GITHUB_ENV"\n'
-    f'echo "{SCCACHE_GHA_VAR}=true" >> "$GITHUB_ENV"\n'
+    f"if {SCCACHE_GHA_VAR}=true SCCACHE_IDLE_TIMEOUT=0 sccache --start-server; then\n"
+    f'  echo "{SCCACHE_WRAPPER_VAR}=sccache" >> "$GITHUB_ENV"\n'
+    f'  echo "{SCCACHE_GHA_VAR}=true" >> "$GITHUB_ENV"\n'
+    '  echo "SCCACHE_IDLE_TIMEOUT=0" >> "$GITHUB_ENV"\n'
+    '  echo "SCCACHE_IGNORE_SERVER_IO_ERROR=1" >> "$GITHUB_ENV"\n'
+    "else\n"
+    '  echo "::warning::sccache server did not start; building without the compile cache"\n'
+    "fi\n"
 )
 SCCACHE_WIRE_STEP = {"name": "Wire rustc through sccache", "shell": "bash", "run": SCCACHE_WIRE_RUN}
 SCCACHE_COMPOSITE_DOC_KEYS = frozenset({"name", "description", "runs"})
@@ -2284,10 +2295,9 @@ def _audit_step(st: Step, loc: str, policy: StepPolicy, errors: list[str]) -> No
 # tree nor precede a step that does.
 PINNED_CHECKOUT_USES = frozenset({
     "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
-    "actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09",
 })
 CHECKOUT_WITH_KEYS = frozenset({"fetch-depth", "persist-credentials", "sparse-checkout", "sparse-checkout-cone-mode"})
-PINNED_SETUP_PYTHON_USES = frozenset({"actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065"})
+PINNED_SETUP_PYTHON_USES = frozenset({"actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97"})
 SETUP_PYTHON_WITH_KEYS = frozenset({"python-version"})
 # The keys that can turn a red step or job green: a skipped step or job, and a
 # failure-ignored one, both report success (GitHub counts a skipped required

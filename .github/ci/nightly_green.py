@@ -41,6 +41,8 @@ NIGHTLY_WORKFLOW_PATH = ".github/workflows/ci.yml"
 NIGHTLY_EVENT = "workflow_dispatch"
 MAIN = "main"
 MAX_AGE_H = 48
+# Runs fetched per listing; the newest of them is judged, whatever their order.
+LISTING_PAGE = 20
 GH_TIMEOUT_S = 60
 VERDICT_INVOCATION = "python3 .github/ci/nightly_green.py --verdict"
 EXPECTED_ENV = {
@@ -66,16 +68,21 @@ def _parse_time(text: object) -> datetime:
 
 
 def latest_run(listing: object) -> dict | None:
-    """Return the first run of a `.../runs` listing, or None when it lists none."""
+    """Return the newest-created run of a `.../runs` listing, or None when it lists none.
+
+    The listing's order is not trusted: the newest run is chosen by `created_at`.
+    """
     runs = listing.get("workflow_runs") if isinstance(listing, dict) else None
     if not isinstance(runs, list):
         raise NightlyError("run listing has no `workflow_runs` list")
-    if not runs:
-        return None
-    run = runs[0]
-    if not isinstance(run, dict):
-        raise NightlyError("run listing entry is not an object")
-    return run
+    newest: tuple[datetime, dict] | None = None
+    for run in runs:
+        if not isinstance(run, dict):
+            raise NightlyError("run listing entry is not an object")
+        created = _parse_time(run.get("created_at"))
+        if newest is None or created > newest[0]:
+            newest = (created, run)
+    return None if newest is None else newest[1]
 
 
 def run_errors(run: dict | None, *, branch: str | None, sha: str | None, now: datetime | None) -> list[str]:
@@ -107,7 +114,9 @@ def run_errors(run: dict | None, *, branch: str | None, sha: str | None, now: da
             if created > now + timedelta(minutes=5):
                 errors.append(f"run was created in the future ({created.isoformat()})")
             elif now - created > timedelta(hours=MAX_AGE_H):
-                errors.append(f"latest nightly is older than {MAX_AGE_H}h (created {created.isoformat()})")
+                errors.append(
+                    f"latest nightly is older than {MAX_AGE_H}h (run {run.get('id')}, created {created.isoformat()})"
+                )
     return errors
 
 
@@ -167,7 +176,7 @@ def _gh_json(path: str) -> object:
 def _runs_path(repo: str, query: str) -> str:
     return (
         f"repos/{repo}/actions/workflows/ci.yml/runs"
-        f"?event={NIGHTLY_EVENT}&status=completed&per_page=1&{query}"
+        f"?event={NIGHTLY_EVENT}&status=completed&per_page={LISTING_PAGE}&{query}"
     )
 
 

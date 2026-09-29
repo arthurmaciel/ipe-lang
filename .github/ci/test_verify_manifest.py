@@ -1910,7 +1910,7 @@ class TestTypedExpressionAndShellReads(unittest.TestCase):
 
 
 _CHECKOUT = "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1"
-_SETUP_PY = "actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065"
+_SETUP_PY = "actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97"
 _TOOL = "python3 .github/ci/verify-manifest.py"
 _LIVE_PIP = verify_manifest.CANONICAL_PIP_INSTALL
 

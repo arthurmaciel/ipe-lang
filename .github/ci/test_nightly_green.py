@@ -141,6 +141,19 @@ class ListingTest(unittest.TestCase):
             with self.assertRaises(ng.NightlyError):
                 ng.latest_run(bad)
 
+    def test_newest_run_chosen_whatever_the_order(self) -> None:
+        old = _run(id=1, created_at="2026-09-22T09:13:24Z")
+        new = _run(id=2, created_at="2026-09-29T10:34:21Z")
+        for listing in (_listing(old, new), _listing(new, old)):
+            chosen = ng.latest_run(listing)
+            self.assertIsNotNone(chosen)
+            self.assertEqual(chosen and chosen["id"], 2)
+
+    def test_untimed_entry_refused(self) -> None:
+        for created in (None, "yesterday", 5):
+            with self.assertRaises(ng.NightlyError):
+                ng.latest_run(_listing(_run(id=1), _run(id=2, created_at=created)))
+
 
 class EventTest(unittest.TestCase):
     def test_pull_request_uses_head_sha(self) -> None:
