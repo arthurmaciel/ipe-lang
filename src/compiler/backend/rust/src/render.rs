@@ -1151,7 +1151,7 @@ fn render_type_bound(
         let c = current_col(out);
         render_at(head, cfg.no_reserve(), indent, c, true, out);
         for t in traits {
-            out.push_str(" + ");
+            out.push_str(BOUND_SEP);
             let c = current_col(out);
             render_at(t, cfg.no_reserve(), indent, c, true, out);
         }
@@ -1178,7 +1178,7 @@ fn render_type_bound(
     if angle_break {
         // The whole bound list stays on one line at `bound_indent`.
         for t in traits {
-            out.push_str(" + ");
+            out.push_str(BOUND_SEP);
             let c = current_col(out);
             render_at(t, cfg.no_reserve(), bound_indent, c, true, out);
         }
@@ -1200,6 +1200,9 @@ fn render_type_bound(
     render_at(close, cfg, indent, c, false, out);
 }
 
+/// The separator between the traits of an inline bound list.
+const BOUND_SEP: &str = " + ";
+
 /// The flat width of `Ptr<Head + T1 + …>` — the single-line footprint of a
 /// [`Doc::TypeBound`], for its overflow test.
 fn type_bound_flat_width(
@@ -1209,6 +1212,13 @@ fn type_bound_flat_width(
     close: &Doc,
     cfg: RenderConfig,
 ) -> usize {
+    let pieces = [(ptr_open, 0), (head, 0)]
+        .into_iter()
+        .chain(traits.iter().map(|t| (t, BOUND_SEP.len())))
+        .chain([(close, 0)]);
+    if let FlatRun::Width(w) = flat_run(pieces, cfg) {
+        return w;
+    }
     let mut scratch = String::new();
     render_at(ptr_open, cfg.no_reserve(), 0, 0, true, &mut scratch);
     render_at(
@@ -1220,7 +1230,7 @@ fn type_bound_flat_width(
         &mut scratch,
     );
     for t in traits {
-        scratch.push_str(" + ");
+        scratch.push_str(BOUND_SEP);
         let c = current_col(&scratch);
         render_at(t, cfg.no_reserve(), 0, c, true, &mut scratch);
     }
@@ -1232,10 +1242,14 @@ fn type_bound_flat_width(
 /// The flat width of the bound list `Head + T1 + …` alone (no `Ptr<` / `>`), for
 /// the angle-break-vs-bound-break decision.
 fn type_bound_list_flat_width(head: &Doc, traits: &[Doc], cfg: RenderConfig) -> usize {
+    let pieces = std::iter::once((head, 0)).chain(traits.iter().map(|t| (t, BOUND_SEP.len())));
+    if let FlatRun::Width(w) = flat_run(pieces, cfg) {
+        return w;
+    }
     let mut scratch = String::new();
     render_at(head, cfg.no_reserve(), 0, 0, true, &mut scratch);
     for t in traits {
-        scratch.push_str(" + ");
+        scratch.push_str(BOUND_SEP);
         let c = current_col(&scratch);
         render_at(t, cfg.no_reserve(), 0, c, true, &mut scratch);
     }
@@ -1298,6 +1312,17 @@ fn struct_lit_flat_fits(
     start_col: usize,
     indent: usize,
 ) -> bool {
+    match list_widths(open, fields, close, cfg) {
+        // `open`, ` `, the fields, ` `, `close`; the `open_end..fields_end` span
+        // below is the fields plus the leading hugging space.
+        ListWidths::Widths(o, f, c) => {
+            let line_len = o.saturating_add(f).saturating_add(c).saturating_add(2);
+            return start_col.saturating_add(line_len) <= cfg.margin()
+                && f.saturating_add(1) <= STRUCT_LIT_WIDTH;
+        }
+        ListWidths::Multiline => return false,
+        ListWidths::Unmeasured => {}
+    }
     let mut scratch = String::new();
     render_at(
         open,
@@ -1668,6 +1693,11 @@ fn body_block_wraps(body: &Doc, cfg: RenderConfig, indent: usize) -> bool {
         // single-argument combinable wrapper to the innermost combinable's own
         // argument span (`innermost_args_width`). The absolute column is
         // irrelevant to a width, so measure from column 0.
+        let open_w = flat_run([(&**open, 0)], cfg);
+        if let (FlatRun::Width(o), FlatRun::Width(e)) = (open_w, flat_run(elem_pieces(elems), cfg))
+        {
+            return innermost_args_width(elems, o, o.saturating_add(e)) <= FN_CALL_WIDTH;
+        }
         let mut scratch = String::new();
         render_at(open, cfg, indent + 4, 0, true, &mut scratch);
         let open_end = current_col(&scratch);
@@ -2218,17 +2248,25 @@ fn render_call_args_broken(
         render_at(open, cfg.no_reserve(), indent, start_col, false, &mut probe);
         if probe.contains('\n') {
             let open_last = current_col(&probe);
-            let mut argscratch = String::new();
-            render_flat_elems(elems, cfg, indent, &mut argscratch);
-            render_at(
-                close,
-                cfg.no_reserve(),
-                indent,
-                open_last,
-                true,
-                &mut argscratch,
-            );
-            if !argscratch.contains('\n') && open_last + argscratch.len() <= cfg.margin() {
+            let run = flat_run(elem_pieces(elems).chain([(close, 0)]), cfg);
+            let args_fit = match run {
+                FlatRun::Width(w) => open_last.saturating_add(w) <= cfg.margin(),
+                FlatRun::Multiline => false,
+                FlatRun::Unmeasured => {
+                    let mut argscratch = String::new();
+                    render_flat_elems(elems, cfg, indent, &mut argscratch);
+                    render_at(
+                        close,
+                        cfg.no_reserve(),
+                        indent,
+                        open_last,
+                        true,
+                        &mut argscratch,
+                    );
+                    !argscratch.contains('\n') && open_last + argscratch.len() <= cfg.margin()
+                }
+            };
+            if args_fit {
                 render_at(open, cfg.no_reserve(), indent, start_col, false, out);
                 render_flat_elems(elems, cfg, indent, out);
                 let c = current_col(out);
@@ -2355,17 +2393,29 @@ fn call_args_flat_fits(
     start_col: usize,
     indent: usize,
 ) -> bool {
-    // The full flat line, for the single-line + `max_width` checks.
-    let mut scratch = String::new();
-    render_at(open, cfg, indent, start_col, true, &mut scratch);
-    let open_end = current_col(&scratch);
-    render_flat_elems(elems, cfg, indent, &mut scratch);
-    let elems_end = current_col(&scratch);
-    render_at(close, cfg, indent, elems_end, true, &mut scratch);
-    if scratch.contains('\n') {
-        return false;
-    }
-    if start_col + scratch.len() > cfg.max_width {
+    // The full flat line, for the single-line + `max_width` checks: read off the
+    // pieces' measures, or rendered when a piece's flat layout reads its column.
+    let (open_end, elems_end, line_len) = match list_widths(open, elems, close, cfg) {
+        ListWidths::Widths(o, e, c) => (
+            o,
+            o.saturating_add(e),
+            o.saturating_add(e).saturating_add(c),
+        ),
+        ListWidths::Multiline => return false,
+        ListWidths::Unmeasured => {
+            let mut scratch = String::new();
+            render_at(open, cfg, indent, start_col, true, &mut scratch);
+            let open_end = current_col(&scratch);
+            render_flat_elems(elems, cfg, indent, &mut scratch);
+            let elems_end = current_col(&scratch);
+            render_at(close, cfg, indent, elems_end, true, &mut scratch);
+            if scratch.contains('\n') {
+                return false;
+            }
+            (open_end, elems_end, scratch.len())
+        }
+    };
+    if start_col.saturating_add(line_len) > cfg.max_width {
         return false;
     }
     // A sole BLOCK-LIKE argument (a `move |…|` / `|…|` closure or a brace block,
@@ -2420,12 +2470,48 @@ fn innermost_args_width(elems: &[Doc], open_end: usize, elems_end: usize) -> usi
     elems_end.saturating_sub(open_end)
 }
 
-/// Render the elements flat, separated by `, ` — the shared flat body of a
+/// The separator between two flat list elements.
+const ELEM_SEP: &str = ", ";
+
+/// The elements of a flat list as [`flat_run`] pieces, each after its separator.
+fn elem_pieces(elems: &[Doc]) -> impl Iterator<Item = (&Doc, usize)> {
+    elems
+        .iter()
+        .enumerate()
+        .map(|(i, e)| (e, if i > 0 { ELEM_SEP.len() } else { 0 }))
+}
+
+/// The flat widths of a delimited list `open elems close`, read off its measures.
+enum ListWidths {
+    /// Every piece is measured and single-line: the widths of `open`, the
+    /// separated elements, and `close`.
+    Widths(usize, usize, usize),
+    /// Every piece is measured and one breaks, so the list is not single-line.
+    Multiline,
+    /// Some piece is not [`flat_fixed`]; the caller renders the list instead.
+    Unmeasured,
+}
+
+/// The [`ListWidths`] of `open`, `elems` (joined by [`ELEM_SEP`]), and `close`.
+fn list_widths(open: &Doc, elems: &[Doc], close: &Doc, cfg: RenderConfig) -> ListWidths {
+    let runs = [
+        flat_run([(open, 0)], cfg),
+        flat_run(elem_pieces(elems), cfg),
+        flat_run([(close, 0)], cfg),
+    ];
+    match runs {
+        [FlatRun::Width(o), FlatRun::Width(e), FlatRun::Width(c)] => ListWidths::Widths(o, e, c),
+        _ if runs.iter().any(|r| matches!(r, FlatRun::Unmeasured)) => ListWidths::Unmeasured,
+        _ => ListWidths::Multiline,
+    }
+}
+
+/// Render the elements flat, separated by [`ELEM_SEP`] — the shared flat body of a
 /// [`Doc::CallArgs`] (no trailing comma, matching the string emitter's join).
 fn render_flat_elems(elems: &[Doc], cfg: RenderConfig, indent: usize, out: &mut String) {
     for (i, e) in elems.iter().enumerate() {
         if i > 0 {
-            out.push_str(", ");
+            out.push_str(ELEM_SEP);
         }
         let c = current_col(out);
         render_at(e, cfg, indent, c, true, out);
@@ -2480,20 +2566,29 @@ fn last_arg_combines(
     } else if !is_delimited_expr(last) {
         return None;
     }
-    // Build the first-line prefix (`open a, b, `) flat to find where `last` lands.
-    let mut scratch = String::new();
-    render_at(open, cfg, indent, start_col, true, &mut scratch);
-    let open_end = current_col(&scratch);
-    for e in prefix {
-        let c = current_col(&scratch);
-        render_at(e, cfg, indent, c, true, &mut scratch);
-        scratch.push_str(", ");
-    }
-    if scratch.contains('\n') {
-        // A preceding argument is itself multiline — it cannot sit flat.
-        return None;
-    }
-    let last_col = start_col + scratch.len();
+    // The first-line prefix (`open a, b, `) flat, to find where `last` lands: read
+    // off the pieces' measures, or rendered when a piece's flat layout reads its
+    // column. A multiline preceding argument cannot sit flat.
+    let pieces = std::iter::once((open, 0)).chain(prefix.iter().map(|e| (e, ELEM_SEP.len())));
+    let (open_end, prefix_len) = match (flat_run([(open, 0)], cfg), flat_run(pieces, cfg)) {
+        (FlatRun::Width(o), FlatRun::Width(p)) => (o, p),
+        (_, FlatRun::Multiline) => return None,
+        _ => {
+            let mut scratch = String::new();
+            render_at(open, cfg, indent, start_col, true, &mut scratch);
+            let open_end = current_col(&scratch);
+            for e in prefix {
+                let c = current_col(&scratch);
+                render_at(e, cfg, indent, c, true, &mut scratch);
+                scratch.push_str(ELEM_SEP);
+            }
+            if scratch.contains('\n') {
+                return None;
+            }
+            (open_end, scratch.len())
+        }
+    };
+    let last_col = start_col.saturating_add(prefix_len);
     if last_col > cfg.max_width {
         return None;
     }
@@ -2513,9 +2608,16 @@ fn last_arg_combines(
     // line. So the "break to give the flat argument its own line" heuristic below is
     // skipped for it; only the first-line-fit gate (further down) can reject the glue.
     if single_arg && !has_hard_break(last) && !is_block_like(last) {
-        let mut flat = String::new();
-        render_at(last, cfg, indent, last_col, true, &mut flat);
-        if !flat.contains('\n') && (last_col + flat.len()).saturating_sub(base) <= FN_CALL_WIDTH {
+        let flat_w = flat_measure(last, cfg).map_or_else(
+            || {
+                let mut flat = String::new();
+                render_at(last, cfg, indent, last_col, true, &mut flat);
+                (!flat.contains('\n')).then_some(flat.len())
+            },
+            FlatMeasure::width,
+        );
+        if flat_w.is_some_and(|w| last_col.saturating_add(w).saturating_sub(base) <= FN_CALL_WIDTH)
+        {
             return None;
         }
         // Recursive `Shape` budget: `rustfmt` shrinks the combining width one step per
