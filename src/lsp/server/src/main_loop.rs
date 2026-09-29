@@ -20,7 +20,9 @@ use lsp_types::{InitializeParams, PublishDiagnosticsParams, TextDocumentContentC
 use ipe_lsp_features::{PositionEncoding, diagnostics, offset};
 
 use crate::ServerError;
-use crate::loader::{LoadDisposition, LoadedFile, LoadedProject, ModuleOrigin, ProjectLoader};
+use crate::loader::{
+    LoadDisposition, LoadError, LoadedFile, LoadedProject, ModuleOrigin, ProjectLoader,
+};
 
 /// The typed outcome of an LSP feature request. `null` is reserved for
 /// `NoResult`; a params-decode failure and an internal encoding bug are
@@ -107,8 +109,9 @@ impl Layout {
 
 /// The layout the server analyzes, as the latest load verdict allows.
 ///
-/// A refused load can only reach [`Served::Refused`] or keep a
-/// [`Served::Trusted`] layout, so no fallback outlives a refusal.
+/// A refused load always reaches [`Served::Refused`]: no layout, trusted or
+/// fallback, outlives a refusal, so no analysis of a refused project stays
+/// published.
 enum Served {
     /// No layout: nothing loaded yet, or a degraded load had no buffer to serve.
     Unloaded,
@@ -121,6 +124,8 @@ enum Served {
     Refused {
         /// The path whose load was refused.
         anchor: PathBuf,
+        /// Why the load was refused, published on `anchor`.
+        error: LoadError,
     },
     /// The layout of a successful load.
     Trusted(Layout),
@@ -149,7 +154,7 @@ impl Served {
     fn watched_file_anchor(&self) -> Option<PathBuf> {
         match self {
             Self::Unloaded => None,
-            Self::Refused { anchor } => Some(anchor.clone()),
+            Self::Refused { anchor, .. } => Some(anchor.clone()),
             Self::Fallback(layout) | Self::Trusted(layout) => {
                 layout.module_of_path.keys().next().cloned()
             }
@@ -924,22 +929,22 @@ fn ensure_project_fresh(state: &mut State, loader: &dyn ProjectLoader, path: &Pa
     state.served = match verdict {
         Ok(project) => Served::Trusted(Layout::of(project)),
         Err(err) => match (err.disposition(), previous) {
-            // A previously-good layout is kept rather than replaced: a
-            // fallback would drop every other module from the salsa root and
-            // clear their real diagnostics on the next publish. Save and
-            // watched-file events retry unconditionally.
-            (_, Served::Trusted(layout)) => {
-                eprintln!("[ipe lsp] project load failed, keeping the last good layout: {err}");
-                Served::Trusted(layout)
-            }
-            (
-                LoadDisposition::Refuse,
-                Served::Unloaded | Served::Fallback(_) | Served::Refused { .. },
-            ) => {
+            // A refusal withdraws every layout, a trusted one included: the
+            // compiler refuses the project, so no analysis of it stays shown.
+            (LoadDisposition::Refuse, _) => {
                 eprintln!("[ipe lsp] project load refused: {err}");
                 Served::Refused {
                     anchor: path.to_path_buf(),
+                    error: err,
                 }
+            }
+            // A degraded load keeps a previously-good layout rather than
+            // replacing it: a fallback would drop every other module from the
+            // salsa root and clear their real diagnostics on the next publish.
+            // Save and watched-file events retry unconditionally.
+            (LoadDisposition::Degrade, Served::Trusted(layout)) => {
+                eprintln!("[ipe lsp] project load failed, keeping the last good layout: {err}");
+                Served::Trusted(layout)
             }
             (LoadDisposition::Degrade, Served::Fallback(layout)) => {
                 eprintln!("[ipe lsp] project load failed: {err}");
@@ -1059,10 +1064,17 @@ fn recompute(state: &mut State, diag_tx: &Sender<DiagnosticsBatch>) {
     state.generation = state.generation.wrapping_add(1);
 
     let Some((root, entry_file)) = served else {
-        // Nothing is served: an empty batch clears what an earlier layout published.
+        // Nothing is analyzed: the batch holds only a refusal's own
+        // diagnostic, so publishing it clears every earlier finding.
+        let per_uri = match &state.served {
+            Served::Refused { anchor, error } => Url::from_file_path(anchor)
+                .map(|uri| vec![(uri, vec![load_refusal_diagnostic(error)])])
+                .unwrap_or_default(),
+            Served::Unloaded | Served::Fallback(_) | Served::Trusted(_) => Vec::new(),
+        };
         let _ = diag_tx.send(DiagnosticsBatch {
             generation: state.generation,
-            per_uri: Vec::new(),
+            per_uri,
         });
         return;
     };
@@ -1133,6 +1145,21 @@ fn recompute(state: &mut State, diag_tx: &Sender<DiagnosticsBatch>) {
             }
         }
     }));
+}
+
+/// The diagnostic a refused project load publishes on the refused path.
+fn load_refusal_diagnostic(error: &LoadError) -> lsp_types::Diagnostic {
+    lsp_types::Diagnostic {
+        range: lsp_types::Range::default(),
+        severity: Some(lsp_types::DiagnosticSeverity::ERROR),
+        code: None,
+        code_description: None,
+        source: Some("ipe".to_owned()),
+        message: format!("project load refused: {error}"),
+        related_information: None,
+        tags: None,
+        data: None,
+    }
 }
 
 /// The lint pass of one recompute, fixed by whether `lint.ipe` loaded.
@@ -1954,7 +1981,7 @@ mod tests {
             );
             ensure_project_fresh(&mut state, &FailingLoader(refusal), &main_path);
             assert!(
-                matches!(&state.served, Served::Refused { anchor } if *anchor == main_path),
+                matches!(&state.served, Served::Refused { anchor, .. } if *anchor == main_path),
                 "a refusal must adopt no layout and anchor at the refused path"
             );
             assert!(
@@ -2106,10 +2133,41 @@ mod tests {
         assert!(matches!(state.served, Served::Unloaded));
     }
 
+    /// The last `publishDiagnostics` payload per URI `client` received.
+    fn drain_published(client: &Connection) -> BTreeMap<Url, Vec<lsp_types::Diagnostic>> {
+        let mut last = BTreeMap::new();
+        while let Ok(msg) = client.receiver.recv_timeout(Duration::from_millis(500)) {
+            if let Message::Notification(note) = msg
+                && note.method == PublishDiagnostics::METHOD
+                && let Ok(params) = serde_json::from_value::<PublishDiagnosticsParams>(note.params)
+            {
+                last.insert(params.uri, params.diagnostics);
+            }
+        }
+        last
+    }
+
+    /// Sync, recompute, and publish `state`'s diagnostics through `server`.
+    fn recompute_and_publish(state: &mut State, server: &Connection) {
+        let (diag_tx, diag_rx) = crossbeam_channel::unbounded::<DiagnosticsBatch>();
+        sync_inputs(state);
+        recompute(state, &diag_tx);
+        let batch = diag_rx
+            .recv_timeout(Duration::from_secs(10))
+            .expect("diagnostics batch");
+        publish(state, server, batch);
+    }
+
     #[test]
-    fn a_refused_load_keeps_a_trusted_layout() {
-        let main_path = normalize(Path::new("/lsp-refuse-keep-test/Main.ipe"));
-        let loader = BufferCeilingLoader::new(MAIN_TEXT.len());
+    fn a_refusal_after_a_trusted_load_withdraws_its_analysis() {
+        let main_path = normalize(Path::new("/lsp-refuse-withdraw-test/Main.ipe"));
+        let lib_path = normalize(Path::new("/lsp-refuse-withdraw-test/Lib.ipe"));
+        let main_uri = Url::from_file_path(&main_path).expect("main uri");
+        let lib_uri = Url::from_file_path(&lib_path).expect("lib uri");
+        let loader = TwoModuleLoader {
+            fail_next: Arc::new(AtomicBool::new(false)),
+            lib_path,
+        };
         for refusal in every_refusal() {
             let mut state = State::new(None, PositionEncoding::Utf16);
             state.overlays.insert(
@@ -2119,12 +2177,53 @@ mod tests {
                     version: 0,
                 },
             );
+            let (server, client) = Connection::memory();
             ensure_project_fresh(&mut state, &loader, &main_path);
             assert!(matches!(state.served, Served::Trusted(_)), "first load");
+            recompute_and_publish(&mut state, &server);
+            assert!(
+                drain_published(&client)
+                    .get(&lib_uri)
+                    .is_some_and(|diags| !diags.is_empty()),
+                "the trusted analysis publishes Lib's type error"
+            );
+
+            let detail = refusal.to_string();
             ensure_project_fresh(&mut state, &FailingLoader(refusal), &main_path);
             assert!(
-                matches!(state.served, Served::Trusted(_)),
-                "a refusal must keep the layout of an earlier trusted load"
+                matches!(&state.served, Served::Refused { anchor, .. } if *anchor == main_path),
+                "a refusal withdraws the trusted layout"
+            );
+            recompute_and_publish(&mut state, &server);
+            let after = drain_published(&client);
+            assert!(
+                after.get(&lib_uri).is_some_and(Vec::is_empty),
+                "the refusal clears the stale finding on Lib: {after:?}"
+            );
+            let on_main = after.get(&main_uri).map_or(&[][..], Vec::as_slice);
+            assert!(
+                matches!(on_main, [d] if d.severity == Some(lsp_types::DiagnosticSeverity::ERROR)
+                    && d.message.contains(&detail)),
+                "the refused path shows only the refusal: {on_main:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_refused_first_load_publishes_its_refusal() {
+        let main_path = normalize(Path::new("/lsp-refuse-first-test/Main.ipe"));
+        let main_uri = Url::from_file_path(&main_path).expect("main uri");
+        for refusal in every_refusal() {
+            let mut state = State::new(None, PositionEncoding::Utf16);
+            let (server, client) = Connection::memory();
+            let detail = refusal.to_string();
+            ensure_project_fresh(&mut state, &FailingLoader(refusal), &main_path);
+            recompute_and_publish(&mut state, &server);
+            let published = drain_published(&client);
+            let on_main = published.get(&main_uri).map_or(&[][..], Vec::as_slice);
+            assert!(
+                matches!(on_main, [d] if d.message.contains(&detail)),
+                "a refusal reaches the client as a diagnostic: {published:?}"
             );
         }
     }

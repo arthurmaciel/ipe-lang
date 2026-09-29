@@ -60,6 +60,11 @@ that fails to load — invalid, oversized, or not a regular file — shows one e
 on `lint.ipe` itself and no lint findings until it loads; the editor never lints
 with rules the project did not configure.
 
+A project the compiler refuses to load (an untrusted FFI or manifest, a source
+past a size limit) shows one error — the refusal `ipe build` would print — on
+the file that triggered the load, and every earlier finding is withdrawn: the
+editor never keeps showing analysis of a project the compiler rejects.
+
 ## Helix
 
 `editors/helix/configure.sh` builds the grammar with your C compiler into
