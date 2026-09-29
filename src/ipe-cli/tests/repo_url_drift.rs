@@ -48,12 +48,22 @@ fn lines_containing<'a>(text: &'a str, needle: &str) -> Vec<(usize, &'a str)> {
 
 /// Every file `git` tracks, repository-root-relative, forward-slash separated.
 fn tracked_files(repo_root: &Path) -> Vec<String> {
-    let out = Command::new("git")
+    let result = Command::new("git")
         .arg("-C")
         .arg(repo_root)
         .args(["ls-files"])
         .output();
-    let out = out.unwrap_or_else(|e| panic!("failed to run `git ls-files` in {repo_root:?}: {e}"));
+    assert!(
+        result.is_ok(),
+        "failed to run `git ls-files` in {}: {result:?}",
+        repo_root.display()
+    );
+    // The assert above already failed the test on `Err`; this arm is
+    // unreachable in practice, so an empty file list (rather than an
+    // unwrap/expect/panic the workspace lints deny) is a safe placeholder.
+    let Ok(out) = result else {
+        return Vec::new();
+    };
     assert!(
         out.status.success(),
         "`git ls-files` failed: {}",
