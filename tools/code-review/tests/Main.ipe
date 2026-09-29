@@ -885,6 +885,14 @@ badIndexDbRefused =
         urlQuery <- settingsRefused "sqlite:///tmp/index.db?mode=rwc" "with a query"
         urlOtherQuery <- settingsRefused "sqlite:///tmp/index.db?cache=shared" "with a query"
         urlEmpty <- settingsRefused "sqlite://" "naming no database"
+        urlFragment <- settingsRefused "sqlite:///tmp/index.db#x" "with a query or fragment"
+        urlEncodedQuery <- settingsRefused "sqlite://file:/tmp/x.db%3Fmode=ro" "not absolute"
+        urlEncodedImmutable <- settingsRefused "sqlite://file:/x.db%3Fmode=ro%26immutable=1" "not absolute"
+        urlMemory <- settingsRefused "sqlite://:memory:" "not absolute"
+        urlRelative <- settingsRefused "sqlite://rel.db" "not absolute"
+        urlNested <- settingsRefused "sqlite://sqlite:" "not absolute"
+        urlBadEscape <- settingsRefused "sqlite:///tmp/index%zz.db" "malformed percent-escape"
+        urlNul <- settingsRefused "sqlite:///tmp/index%00.db" "not a valid file path"
         noSlashes <- settingsRefused "sqlite:index.db" "without `//`"
         fileNoSlashes <- settingsRefused "file:index.db" "without `//`"
         secret <- settingsRefusal "postgres://admin:s3cr3t-pw@db/index"
@@ -897,6 +905,14 @@ badIndexDbRefused =
                 && urlQuery
                 && urlOtherQuery
                 && urlEmpty
+                && urlFragment
+                && urlEncodedQuery
+                && urlEncodedImmutable
+                && urlMemory
+                && urlRelative
+                && urlNested
+                && urlBadEscape
+                && urlNul
                 && noSlashes
                 && fileNoSlashes
                 && refusedFor "IPE_INDEX_DB" secret
@@ -907,7 +923,8 @@ badIndexDbRefused =
 
 -- A write that fails for a reason other than the key keeps its own error, and
 -- a failed insert whose pair already has a row is the duplicate no-op. A
--- read-only connection makes every insert fail without a key conflict.
+-- read-only connection makes every insert fail without a key conflict, with
+-- SQLite's read-only error.
 failedWritesKeepTheirError : Task.Task Error Bool
 failedWritesKeepTheirError =
     let
@@ -917,10 +934,10 @@ failedWritesKeepTheirError =
         dbPath =
             base ++ "/review.db"
 
-        failed task =
+        failedReadOnly task =
             task
                 |> Task.map (\_ -> False)
-                |> Task.onError (\_ -> Task.succeed True)
+                |> Task.onError (\e -> Task.succeed (String.contains "readonly database" (Error.message e)))
     in
     do
         dir <- Task.fromResult (Path.fromString base)
@@ -931,13 +948,41 @@ failedWritesKeepTheirError =
         LibDb.insertDecision rw "seen" "h" Approved
         ro <- openReadOnlyAt dbPath
         duplicate <- LibDb.insertDecision ro "seen" "h" Approved
-        freshReview <- failed (LibDb.insertDecision ro "fresh" "h" Approved)
-        freshDrain <- failed (LibDb.recordDrain ro "fresh" "h")
+        freshReview <- failedReadOnly (LibDb.insertDecision ro "fresh" "h" Approved)
+        freshDrain <- failedReadOnly (LibDb.recordDrain ro "fresh" "h")
+        freshDrainInsert <- failedReadOnly (LibDb.insertDrainCursor ro "fresh" "h")
         kept <- LibDb.findDecision rw "fresh" "h"
         removeFileIfAny dbPath
         removeFileIfAny (dbPath ++ "-wal")
         removeFileIfAny (dbPath ++ "-shm")
-        Task.succeed (duplicate == 0 && freshReview && freshDrain && not (hasDecision kept))
+        Task.succeed (duplicate == 0 && freshReview && freshDrain && freshDrainInsert && not (hasDecision kept))
+
+
+-- A cursor insert that loses the race to a concurrent drain of the same pair
+-- hits the primary key, then refreshes the row that won: the pair already has
+-- its cursor row when the insert runs, and the insert reports that one row
+-- written instead of failing.
+lostCursorInsertRefreshes : Task.Task Error Bool
+lostCursorInsertRefreshes =
+    let
+        base =
+            System.getenvOr "TMPDIR" "/tmp" ++ "/ipe-review-lost-insert"
+
+        dbPath =
+            base ++ "/review.db"
+    in
+    do
+        dir <- Task.fromResult (Path.fromString base)
+        File.mkdirAll dir
+        removeFileIfAny dbPath
+        db <- openReviewAt dbPath
+        LibDb.migrate db
+        first <- LibDb.recordDrain db "raced" "h"
+        lost <- LibDb.insertDrainCursor db "raced" "h"
+        removeFileIfAny dbPath
+        removeFileIfAny (dbPath ++ "-wal")
+        removeFileIfAny (dbPath ++ "-shm")
+        Task.succeed (first == 1 && lost == 1)
 
 
 -- The review database at a test file path, opened through the app's own
@@ -967,14 +1012,21 @@ hasDecision m =
 
 
 -- Every open URL carries exactly the app's mode, for a file path and a
--- `sqlite://` URL alike.
+-- `sqlite://` URL alike, and a `sqlite://` URL parses to the same location as
+-- the plain path it names.
 dbUrlsCarryAppMode : Task.Task Error Bool
 dbUrlsCarryAppMode =
     do
         file <- Settings.parseDbLocation "IPE_INDEX_DB" "/tmp/a&b/index.db"
         url <- Settings.parseDbLocation "IPE_INDEX_DB" "sqlite:///tmp/index%3F.db"
+        absUrl <- Settings.parseDbLocation "IPE_INDEX_DB" "sqlite:///abs/x.db"
+        absPath <- Settings.parseDbLocation "IPE_INDEX_DB" "/abs/x.db"
         Task.succeed
-            (Settings.indexReadUrl file
+            (absUrl
+                == absPath
+                && Settings.indexReadUrl absUrl
+                == "sqlite:///abs/x.db?mode=ro"
+                && Settings.indexReadUrl file
                 == "sqlite:///tmp/a&b/index.db?mode=ro"
                 && Settings.indexWriteUrl file
                 == "sqlite:///tmp/a&b/index.db?mode=rw"
@@ -1626,6 +1678,11 @@ main =
             (\results ->
                 failedWritesKeepTheirError
                     |> Task.map (\ok -> results ++ [ ( "failed writes keep their error", ok ) ])
+            )
+        |> Task.andThen
+            (\results ->
+                lostCursorInsertRefreshes
+                    |> Task.map (\ok -> results ++ [ ( "cursor insert that lost the race refreshes the winner", ok ) ])
             )
         |> Task.andThen
             (\results ->

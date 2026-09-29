@@ -1,4 +1,4 @@
-module Lib.Db exposing (Decision(..), ReviewRow, findDecision, findDecisions, findLatestForUid, insertDecision, migrate, open, openAt, recordDrain)
+module Lib.Db exposing (Decision(..), ReviewRow, findDecision, findDecisions, findLatestForUid, insertDecision, insertDrainCursor, migrate, open, openAt, recordDrain)
 
 import Ipe.Codec as Codec exposing (Codec(..), ColType(..), Shape(..))
 import Ipe.Config as Config
@@ -296,33 +296,48 @@ drainStore =
 
 -- Bookkeeping for the drain loop. Re-draining the same pair refreshes its
 -- `updated_at` instead of adding a row, so a re-queued unit reviewed twice
--- keeps a single cursor row. `updateWhere` never writes the key columns. An
--- insert that loses a race to a concurrent drain of the same pair hits the
--- primary key; the pair's row then exists, so the update is retried, and the
--- insert's own error stands only when that retry still matches no row.
--- Cursor rows are never deleted, so a row the retry matches is the one that
--- won the race.
+-- keeps a single cursor row. `updateWhere` never writes the key columns. When
+-- the refresh matches no row the cursor is inserted through
+-- `insertDrainCursor`.
 recordDrain : Db -> String -> String -> Task.Task Error Int
 recordDrain db uid bodyHash =
+    withDrainCursor uid bodyHash
+        (\store cursor ->
+            do
+                updated <- refreshCursor db store cursor
+                if updated == 0 then
+                    insertCursor db store cursor
+
+                else
+                    Task.succeed updated
+        )
+
+
+-- The pair's cursor row inserted. An insert that loses a race to a concurrent
+-- drain of the same pair hits the primary key; the pair's row then exists, so
+-- the refresh is retried, and the insert's own error stands only when that
+-- retry still matches no row. Cursor rows are never deleted, so a row the
+-- retry matches is the one that won the race.
+insertDrainCursor : Db -> String -> String -> Task.Task Error Int
+insertDrainCursor db uid bodyHash =
+    withDrainCursor uid bodyHash (\store cursor -> insertCursor db store cursor)
+
+
+withDrainCursor : String -> String -> (Store DrainCursor -> DrainCursor -> Task.Task Error Int) -> Task.Task Error Int
+withDrainCursor uid bodyHash write =
     case drainStore of
         Err e ->
             Task.fail e
 
         Ok store ->
-            do
-                now <- Time.unixMillis ()
-                let
-                    cursor =
-                        makeCursor uid bodyHash now
-                in
-                do
-                    updated <- refreshCursor db store cursor
-                    if updated == 0 then
-                        Store.insert db store cursor
-                            |> Task.onError (\insertError -> retryRefresh db store cursor insertError)
+            Time.unixMillis ()
+                |> Task.andThen (\now -> write store (makeCursor uid bodyHash now))
 
-                    else
-                        Task.succeed updated
+
+insertCursor : Db -> Store DrainCursor -> DrainCursor -> Task.Task Error Int
+insertCursor db store cursor =
+    Store.insert db store cursor
+        |> Task.onError (\insertError -> retryRefresh db store cursor insertError)
 
 
 -- The cursor row for `cursor`'s (uid, body_hash) pair given `cursor`'s
