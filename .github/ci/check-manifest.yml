@@ -307,17 +307,20 @@ checks:
     note: playground.yml build leg; playground-jail is the Security gate.
 
   # ── Path classifiers (gate) ──────────────────────────────────────────────
-  # Each workflow's paths-filter job. A failed or cancelled classifier SKIPS
-  # every job that `needs` it, and GitHub counts a skipped required check as
-  # passing — so the classifier is itself required: absent proof it ran, the
-  # merge is blocked (fail closed). Each carries a workflow-unique name so the
+  # Each workflow's `changes` job, running the fail-closed classifier
+  # (.github/ci/change_class.py; ci.yml's `changes` also runs its PROSE-set
+  # guard, so a PR that makes a PROSE path readable cannot merge). A failed or
+  # cancelled `changes` job SKIPS every job that `needs` it, and GitHub counts
+  # a skipped required check as passing — so the classifier is itself
+  # required: absent proof it ran, the merge is blocked (fail closed). Each carries a workflow-unique name so the
   # required context resolves to exactly one producer.
   - context: changes
     disposition: gate
     producer: ci.yml
     guards: >-
-      Security — fail-closed path classification: a failed classifier cannot
-      skip every ci.yml tier into a passing required set.
+      Security — fail-closed path classification + the PROSE-set guard: a
+      failed classifier cannot skip every ci.yml tier into a passing required
+      set, and a PROSE path cannot gain a reader.
   - context: admission-changes
     disposition: gate
     producer: admission-sandbox.yml

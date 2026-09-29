@@ -26,33 +26,34 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          # A merge-group run needs history back to the queue base for the filter.
-          fetch-depth: ${{ github.event_name == 'merge_group' && '0' || '1' }}
+          # The tested merge commit and its base parent, for the changed-path diff;
+          # a merge-group run needs history back to the queue base.
+          fetch-depth: ${{ github.event_name == 'merge_group' && '0' || '2' }}
 
-      - uses: dorny/paths-filter@v3
-        id: filter
-        with:
-          # A merge-group run diffs against the queue base, not the default branch.
-          base: ${{ github.event.merge_group.base_sha }}
-          filters: |
-            relevant:
-              - 'editors/tree-sitter-ipe/**'
-              - 'examples/**/*.ipe'
-              - 'src/stdlib/Ipe/**/*.ipe'
-              - '.github/workflows/tree-sitter-ipe.yml'
+      # Fail-closed classifier (.github/ci/change_class.py, `grammar` scope): the
+      # work skips only when every changed path is proven irrelevant.
+      - name: Classify changed paths
+        id: classify
+        # A crash leaves the output unset, which every `!= 'false'` below reads as run.
+        continue-on-error: true
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          MERGE_GROUP_BASE_SHA: ${{ github.event.merge_group.base_sha }}
+        run: python3 .github/ci/change_class.py classify grammar
 
       - uses: ./.github/actions/rust-toolchain-pinned
-        if: steps.filter.outputs.relevant == 'true'
+        if: steps.classify.outputs.grammar != 'false'
 
       - name: Cache the tree-sitter CLI
-        if: steps.filter.outputs.relevant == 'true'
+        if: steps.classify.outputs.grammar != 'false'
         uses: actions/cache@v4
         with:
           path: ~/.cargo/bin/tree-sitter
           key: tree-sitter-cli-0.27.0
 
       - name: Install the tree-sitter CLI
-        if: steps.filter.outputs.relevant == 'true'
+        if: steps.classify.outputs.grammar != 'false'
         run: |
           if ! command -v tree-sitter >/dev/null 2>&1; then
             cargo install tree-sitter-cli --version ^0.27.0 --locked
@@ -60,19 +61,19 @@ jobs:
           tree-sitter --version
 
       - name: Generate the parser
-        if: steps.filter.outputs.relevant == 'true'
+        if: steps.classify.outputs.grammar != 'false'
         working-directory: editors/tree-sitter-ipe
         run: tree-sitter generate
 
       - name: Corpus unit tests
-        if: steps.filter.outputs.relevant == 'true'
+        if: steps.classify.outputs.grammar != 'false'
         working-directory: editors/tree-sitter-ipe
         run: tree-sitter test
 
       - name: Parity — parse the whole reference corpus
-        if: steps.filter.outputs.relevant == 'true'
+        if: steps.classify.outputs.grammar != 'false'
         run: bash editors/tree-sitter-ipe/scripts/parity-check.sh
 
       - name: No grammar-relevant paths changed
-        if: steps.filter.outputs.relevant != 'true'
+        if: steps.classify.outputs.grammar == 'false'
         run: echo "No tree-sitter-ipe-relevant paths changed; gate is a no-op for this PR."

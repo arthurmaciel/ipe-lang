@@ -6,8 +6,9 @@
 # Hard gate: any banned construct in production Rust fails the run.
 # Triggers on every PR (no paths: filter on the trigger) so that a check-run
 # named "panic-scan" is always produced and can be listed as a required
-# branch-protection check. A dorny/paths-filter step determines whether the
-# heavy work is needed; irrelevant PRs exit green via the no-op step.
+# branch-protection check. The fail-closed classifier (.github/ci/change_class.py,
+# `panic_scan` scope) decides whether the heavy work may skip; a PR it proves
+# irrelevant exits green via the no-op step, and any doubt runs the scan.
 name: No-panic
 
 on:
@@ -28,41 +29,40 @@ permissions:
 jobs:
   panic-scan:
     runs-on: ubuntu-latest
-    # No author gate: the job always starts and its internal paths-filter is the
+    # No author gate: the job always starts and its internal classifier is the
     # relevance gate for EVERY author, so an untrusted-author PR that touches
     # panic-scan-relevant paths is already scanned. (A job-level author gate would
     # wrongly skip a trusted-author PR that changed runtime code.)
     steps:
       - uses: actions/checkout@v7
         with:
-          # A merge-group run needs history back to the queue base for the filter.
-          fetch-depth: ${{ github.event_name == 'merge_group' && '0' || '1' }}
+          # The tested merge commit and its base parent, for the changed-path diff;
+          # a merge-group run needs history back to the queue base.
+          fetch-depth: ${{ github.event_name == 'merge_group' && '0' || '2' }}
 
-      - uses: dorny/paths-filter@v3
-        id: filter
-        with:
-          # A merge-group run diffs against the queue base, not the default branch.
-          base: ${{ github.event.merge_group.base_sha }}
-          filters: |
-            relevant:
-              - 'src/**/*.rs'
-              - 'src/**/Cargo.toml'
-              - 'tools/panic-scan/**'
-              - '.github/workflows/panic-scan.yml'
+      - name: Classify changed paths
+        id: classify
+        # A crash leaves the output unset, which every `!= 'false'` below reads as run.
+        continue-on-error: true
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          MERGE_GROUP_BASE_SHA: ${{ github.event.merge_group.base_sha }}
+        run: python3 .github/ci/change_class.py classify panic_scan
 
       - uses: ./.github/actions/rust-toolchain-pinned
-        if: steps.filter.outputs.relevant == 'true'
+        if: steps.classify.outputs.panic_scan != 'false'
 
       - name: Test the scanner
-        if: steps.filter.outputs.relevant == 'true'
+        if: steps.classify.outputs.panic_scan != 'false'
         run: cargo test --manifest-path tools/panic-scan/Cargo.toml
 
       - name: Build the scanner
-        if: steps.filter.outputs.relevant == 'true'
+        if: steps.classify.outputs.panic_scan != 'false'
         run: cargo build --release --manifest-path tools/panic-scan/Cargo.toml
 
       - name: Scan production Rust
-        if: steps.filter.outputs.relevant == 'true'
+        if: steps.classify.outputs.panic_scan != 'false'
         # `.rs` under src/ (the runtime lives at src/runtime/). The scanner owns
         # the test-path and template-path rules: it skips a `tests/` directory
         # or `tests.rs` only after confirming its `#[cfg(test)] mod tests;`
@@ -71,5 +71,5 @@ jobs:
         run: tools/panic-scan/target/release/panic-scan --walk src
 
       - name: No panic-scan-relevant paths changed
-        if: steps.filter.outputs.relevant != 'true'
+        if: steps.classify.outputs.panic_scan == 'false'
         run: echo "No panic-scan-relevant paths changed; gate is a no-op for this PR."

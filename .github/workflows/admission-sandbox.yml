@@ -55,22 +55,25 @@ permissions:
   contents: read
 
 jobs:
-  # Path filter — same `code` superset as ci.yml. On a docs-only PR every jail
-  # job sees `code == 'false'` and skips, posting a skipped-success that satisfies
-  # the required-check context. On any code PR (or push/schedule/merge_group) the
-  # gate is `code == 'true'` and all proofs run at full strictness.
+  # Change classification — the same fail-closed `code` scope as ci.yml
+  # (.github/ci/change_class.py, whose PROSE set ci.yml's `changes` guards). On a
+  # prose-only PR every jail job sees `code == 'false'` and skips, posting a
+  # skipped-success that satisfies the required-check context. Any other PR (or
+  # push/schedule/merge_group), an unreadable diff, or a classifier crash yields
+  # `code == 'true'` and all proofs run at full strictness.
   changes:
     # Unique context: a required `changes` shared with ci.yml would be ambiguous.
     name: admission-changes
     runs-on: ubuntu-latest
     outputs:
-      code: ${{ steps.filter.outputs.code }}
+      # An unset output (classifier crash) reads as `true`: absent proof, run.
+      code: ${{ steps.classify.outputs.code != 'false' }}
       release_only: ${{ steps.release.outputs.release_only }}
     steps:
       - uses: actions/checkout@v5
         with:
-          # The tested merge commit and its base parent, for the release-only diff;
-          # a merge-group run needs history back to the queue base for the filter.
+          # The tested merge commit and its base parent, for the changed-path diffs;
+          # a merge-group run needs history back to the queue base.
           fetch-depth: ${{ github.event_name == 'merge_group' && '0' || '2' }}
       # `release_only` — true only for a same-repo PR whose changed files are all
       # release-please version metadata (see .github/ci/release_only.py). Keyed on
@@ -85,25 +88,15 @@ jobs:
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           REPO: ${{ github.repository }}
         run: python3 .github/ci/release_only.py
-      - uses: dorny/paths-filter@v3
-        id: filter
-        with:
-          # A merge-group run diffs against the queue base, not the default branch.
-          base: ${{ github.event.merge_group.base_sha }}
-          filters: |
-            code:
-              - 'src/**'
-              - 'crates/**'
-              - 'runtime/**'
-              - 'tests/**'
-              - 'tools/**'
-              - 'Cargo.toml'
-              - 'Cargo.lock'
-              - '**/Cargo.toml'
-              - '.github/workflows/**'
-              # AGENTS.md is a BUILD input (include_str!'d into ipe-cli); changes
-              # must re-run the gate. All other root *.md / docs/** are safe to skip.
-              - 'AGENTS.md'
+      - name: Classify changed paths
+        id: classify
+        # A crash leaves the output unset, which the job output reads as `true`.
+        continue-on-error: true
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          MERGE_GROUP_BASE_SHA: ${{ github.event.merge_group.base_sha }}
+        run: python3 .github/ci/change_class.py classify code
 
   # ── Linux x64 ──────────────────────────────────────────────────────────────
   # Outer network-denial layer: seccomp socket-deny profile applied via

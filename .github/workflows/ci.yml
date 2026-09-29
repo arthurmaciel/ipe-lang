@@ -5,7 +5,7 @@ name: Build & test
 # Split by TRIGGER and by PATH, so a PR pays only for the gates a change of its
 # shape can break, and `main` stays green by construction:
 #   • PULL REQUEST — the required gate runs for ALL authors, scoped by the
-#     `changes` paths-filter. It covers code CORRECTNESS and code SOUNDNESS
+#     fail-closed `changes` classifier. It covers code CORRECTNESS and code SOUNDNESS
 #     before a merge: fmt, clippy, quick-check, test (nextest unit/integration),
 #     the docs-drift gates, the first-party check-floor + shapes build gate,
 #     seal-smoke (build+run ONE emitted example, a fast SEAL proxy), the runtime
@@ -19,8 +19,9 @@ name: Build & test
 #     acceptance change can make a program ipe-accept-then-cargo-fail, so gating
 #     on `code` closes that blind spot while each job's internal early-exit and
 #     the warm `test-prep` archive keep build depth cheap on a non-emit PR. A
-#     docs/CI/yaml-only PR (no matching path) skips them all; a developer runs
-#     the same set locally to match CI.
+#     PR touching only the guarded PROSE set (.github/ci/change_class.py) skips
+#     them all; any other path runs them; a developer runs the same set locally
+#     to match CI.
 #   • RELEASE-ONLY PR — a same-repo PR whose diff is only release-please version
 #     metadata (`changes.release_only`, .github/ci/release_only.py) skips the
 #     heavy emitted-build/SEAL/sanitizer tiers: its tree is the already-gated
@@ -33,7 +34,7 @@ name: Build & test
 #     the FF promotion waits on and catch regressions on the nightly dep/upstream
 #     sweep.
 #
-# Job-level `if:` keys on the `changes` paths-filter output (all authors) for the
+# Job-level `if:` keys on the `changes` classifier output (all authors) for the
 # correctness/soundness gates and on github.event_name for the nightly infra/
 # flaky-env jobs. E2E is sharded across runners; a job that wants sccache adds
 # `uses: ./.github/actions/sccache` (installs the binary and wires
@@ -82,40 +83,42 @@ env:
   CARGO_INCREMENTAL: "0"
 
 jobs:
-  # Path filters. On a PR each filter's output gates whether its dependent jobs
-  # run; on push/schedule the jobs always run (see each job's `if:`).
-  #   • wasm  — keeps the wasm build OFF the required PR path for non-wasm changes.
-  #   • code  — a conservative SUPERSET of every build input. When it is false a
-  #     PR touches only docs/prose that NO test reads at runtime, so `test`,
-  #     `clippy`, and `seal-smoke` are safe to skip. When in doubt it runs: the
-  #     filter lists all source/manifest/workflow paths, and the ONE prose-file
-  #     build-input gotcha `AGENTS.md` — it is `include_str!("../../../AGENTS.md")`
-  #     into ipe-cli's init.rs, and the `init_subcommand` test asserts on its
-  #     bytes, so a change to it MUST re-run the gates. (The explain/*.md
-  #     diagnostic pages live under src/** already, so they need no special case.)
+  # Change classification. On a PR each scope's output gates whether its
+  # dependent jobs run; on push/schedule the jobs always run (see each job's
+  # `if:`). `.github/ci/change_class.py` is the SSOT and fails closed: a scope is
+  # `false` only on proof that EVERY changed path is irrelevant to it. `code` may
+  # skip only on the PROSE set, which the guard step proves no crate, include!,
+  # drift check, script, or workflow reads; the narrow scopes (wasm, editors,
+  # emit) also skip on enumerated source trees. Any other path, an unreadable
+  # diff, or a classifier crash runs every scope.
   changes:
     runs-on: ubuntu-latest
     outputs:
-      wasm: ${{ steps.filter.outputs.wasm }}
-      code: ${{ steps.filter.outputs.code }}
+      # An unset output (classifier crash) reads as `true`: absent proof, run.
+      wasm: ${{ steps.classify.outputs.wasm != 'false' }}
+      code: ${{ steps.classify.outputs.code != 'false' }}
       # `editors` — the editor setup scripts/configs, incl. the Zed extension's
       # Rust source Zed itself compiles for wasm32-wasip2.
-      editors: ${{ steps.filter.outputs.editors }}
+      editors: ${{ steps.classify.outputs.editors != 'false' }}
       # `emit` — true when the backend, runtime, stdlib, or emitted-crate support
       # paths changed.  Used by the e2e job on the PR path to decide whether the
       # heavy goldens (webview/server/watch — each drives a multi-minute cold
       # `cargo build`) are reachable by this diff; a parser-only or canon-only
       # change cannot affect the SEAL of those goldens, so the 5 heavy shards are
       # skipped on a PR when this is false.  On push/nightly the heavy shards
-      # always run (full SEAL); the filter is only a PR-path optimisation.
-      emit: ${{ steps.filter.outputs.emit }}
+      # always run (full SEAL); the scope is only a PR-path optimisation.
+      emit: ${{ steps.classify.outputs.emit != 'false' }}
       release_only: ${{ steps.release.outputs.release_only }}
     steps:
       - uses: actions/checkout@v7
         with:
-          # The tested merge commit and its base parent, for the release-only diff;
-          # a merge-group run needs history back to the queue base for the filter.
+          # The tested merge commit and its base parent, for the changed-path diff;
+          # a merge-group run needs history back to the queue base.
           fetch-depth: ${{ github.event_name == 'merge_group' && '0' || '2' }}
+      # Non-skippable: this job is a required context, so a PR that makes a
+      # PROSE path readable (or moves a crate under one) cannot merge.
+      - name: Guard the prose set
+        run: python3 .github/ci/change_class.py guard
       # `release_only` — true only for a same-repo PR whose changed files are all
       # release-please version metadata (see .github/ci/release_only.py). Keyed on
       # the diff, never the branch name, so no PR can opt itself out of a tier.
@@ -129,61 +132,15 @@ jobs:
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           REPO: ${{ github.repository }}
         run: python3 .github/ci/release_only.py
-      - uses: dorny/paths-filter@v3
-        id: filter
-        with:
-          # A merge-group run diffs against the queue base, not the default branch
-          # (the input is ignored on pull_request and empty elsewhere).
-          base: ${{ github.event.merge_group.base_sha }}
-          filters: |
-            wasm:
-              - 'src/runtime/**'
-              - 'src/compiler/backend/**'
-              - 'src/wasm/**'
-              - 'runtime/**'
-              - 'crates/ipe_backend_rust/**'
-              - '**/*wasm*'
-              - '.github/workflows/ci.yml'
-            code:
-              - 'src/**'
-              - 'crates/**'
-              - 'runtime/**'
-              - 'tests/**'
-              - 'Cargo.toml'
-              - 'Cargo.lock'
-              - '**/Cargo.toml'
-              - 'rust-toolchain.toml'
-              - '.github/workflows/**'
-              # AGENTS.md is a BUILD input: include_str!'d into ipe-cli's init.rs
-              # and asserted by the init_subcommand test. Every other root *.md /
-              # docs/** / misc/** file is prose no test reads — safe to skip.
-              - 'AGENTS.md'
-            editors:
-              - 'editors/**'
-              - '.github/workflows/ci.yml'
-            # `emit` — a conservative superset of every path that can change what
-            # the heavy e2e goldens (server/webview/watch) build or run.  Covers the
-            # backend emitter, the runtime the emitted crates link against, the stdlib
-            # veneer sources, the e2e/oracle test harness, and examples/ (fixture
-            # changes can change a golden's expected output).  When false on a PR,
-            # the diff cannot affect the heavy SEAL goldens, so those shards are
-            # safely skipped; when in doubt it runs (fail-closed).
-            emit:
-              - 'src/compiler/backend/**'
-              - 'src/compiler/lower/**'
-              - 'src/compiler/ir/**'
-              - 'src/compiler/kernels/**'
-              - 'src/runtime/**'
-              - 'src/stdlib/**'
-              - 'runtime/**'
-              - 'crates/ipe_backend_rust/**'
-              - 'tests/**'
-              - 'examples/**'
-              - 'tools/oracle/**'
-              - 'Cargo.toml'
-              - 'Cargo.lock'
-              - '**/Cargo.toml'
-              - '.github/workflows/ci.yml'
+      - name: Classify changed paths
+        id: classify
+        # A crash leaves every output unset, which the job outputs read as `true`.
+        continue-on-error: true
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          MERGE_GROUP_BASE_SHA: ${{ github.event.merge_group.base_sha }}
+        run: python3 .github/ci/change_class.py classify code emit wasm editors
 
   # Fail-closed guard against clone bloat: a commit that tracks a build artifact
   # (a target/ directory, an .rlib/.rmeta/.o/.a/.so/.dylib/.wasm blob) or any file
@@ -223,7 +180,7 @@ jobs:
   clippy:
     runs-on: ubuntu-latest
     needs: changes
-    # Change-gated: a docs-only PR (no code path in the `code` filter) skips
+    # Change-gated: a prose-only PR (`code` false) skips
     # clippy; it always runs on push/nightly.
     if: needs.changes.outputs.code == 'true' || (github.event_name != 'pull_request' && github.event_name != 'merge_group')
     steps:
@@ -299,7 +256,7 @@ jobs:
   #   ```ipe ipe:error  intentional bad example — gate fails if it compiles
   #   ```ipe ipe:skip   pseudocode / FFI / multi-file — skipped entirely
   # Change-gated: explain pages live under src/** (already in the `code` filter),
-  # so a docs-only PR that touches nothing in src/** legitimately skips this gate.
+  # so a prose-only PR legitimately skips this gate.
   explain-examples:
     name: explain-page example gate (ADR 0059)
     runs-on: ubuntu-latest
@@ -419,7 +376,7 @@ jobs:
     needs: [changes, quick-check]
     # Code-build correctness gate on the PR boundary: runs on any PR that touches
     # an emit-relevant path (backend/runtime/stdlib), and always on push/nightly.
-    # Path-scoping means a docs/CI-only PR skips it.
+    # Path-scoping means a prose-only PR skips it.
     if: (needs.changes.outputs.emit == 'true' || (github.event_name != 'pull_request' && github.event_name != 'merge_group')) && needs.changes.outputs.release_only != 'true'
     steps:
       - uses: actions/checkout@v7
@@ -580,7 +537,7 @@ jobs:
             exit 1
           fi
           # A skipped `test-prep`/`test-run` is legitimate ONLY when the change
-          # gate deliberately skipped them (docs-only PR); in that case `test`
+          # gate deliberately skipped them (prose-only PR); in that case `test`
           # passes vacuously. Any failure/cancellation is a hard stop.
           prep='${{ needs.test-prep.result }}'
           run='${{ needs.test-run.result }}'
@@ -593,7 +550,7 @@ jobs:
           fi
           if [ "$prep" = skipped ] && [ "$code" != true ] \
              && { [ "$event" = pull_request ] || [ "$event" = merge_group ]; }; then
-            echo "docs-only change: no code paths changed, test suite skipped vacuously."
+            echo "prose-only change: no code paths changed, test suite skipped vacuously."
             exit 0
           fi
           if [ "$prep" != success ] || [ "$run" != success ]; then
@@ -791,7 +748,7 @@ jobs:
     # full-feature graph). `full` ⊇ `live`, so this is the one place feature-gated
     # regressions (e.g. a workspace-wide serde_json flag flip changing signed-token
     # bytes) are caught. Runs on any emit-relevant PR and always on push/nightly;
-    # path-scoping keeps it off a docs/CI-only PR.
+    # path-scoping keeps it off a prose-only PR.
     if: (needs.changes.outputs.emit == 'true' || (github.event_name != 'pull_request' && github.event_name != 'merge_group')) && needs.changes.outputs.release_only != 'true'
     steps:
       - uses: actions/checkout@v7
@@ -846,7 +803,7 @@ jobs:
   # emit-relevant PR. Sharded 1/6 via nextest partitioning; `asan-all` is the
   # single stable context (mirrors `e2e-all`) that branch protection could require
   # once these are proven green — deliberately NOT added to the required ruleset
-  # yet. Path-scoping keeps it off a docs/CI-only PR; always runs on push/nightly.
+  # yet. Path-scoping keeps it off a prose-only PR; always runs on push/nightly.
   asan:
     name: asan (${{ matrix.shard }}/6)
     runs-on: ubuntu-latest
@@ -910,8 +867,8 @@ jobs:
   # or cargo-spawning child is as hostile to TSAN as to ASAN). Small enough to
   # run as a single job, not sharded. Runtime-soundness gate on the PR boundary
   # (PRINCIPLE 3): a codegen/runtime change is what introduces data races, so TSAN
-  # gates PRE-merge on any emit-relevant PR; path-scoping keeps it off a docs/CI-
-  # only PR; always runs on push/nightly.
+  # gates PRE-merge on any emit-relevant PR; path-scoping keeps it off a
+  # prose-only PR; always runs on push/nightly.
   tsan:
     name: tsan
     runs-on: ubuntu-latest
@@ -1073,7 +1030,7 @@ jobs:
         # `count:k/8` scheme — no coverage dropped, just re-timed.
         #
         # Change-based selection (PR path only): the matrix runs on every code
-        # PR, but when the `emit` paths-filter is false the diff cannot reach the
+        # PR, but when the `emit` scope is false the diff cannot reach the
         # backend/runtime/stdlib paths the heavy goldens exercise, so the 5 heavy
         # cold-build shards exit 0 immediately.  The light shards (6-14) always
         # run on a code PR — they cover the compiler's non-emit surface (a
@@ -1103,7 +1060,7 @@ jobs:
   # (`e2e-all`) branch protection can require so a SEAL regression blocks a
   # landing. The `always()` guard makes a skipped/failed/cancelled shard a
   # FAILURE here, never a false green; a legitimate skip (the `e2e` matrix itself
-  # skips on a no-code PR — docs/CI/yaml only) passes vacuously so that path is
+  # skips on a no-code PR — PROSE only) passes vacuously so that path is
   # unaffected.
   # A bare, stable `name` so the required-check context is exactly `e2e-all`
   # (branch protection matches the check name literally; a parenthetical would
@@ -1137,7 +1094,7 @@ jobs:
               echo "e2e-all: every shard passed — THE SEAL holds."
               ;;
             skipped)
-              # The e2e matrix skips on a no-code PR (docs/CI/yaml only);
+              # The e2e matrix skips on a no-code PR (PROSE only);
               # nothing to aggregate, so this passes vacuously.
               echo "e2e-all: e2e shards skipped for this event — vacuously green."
               ;;
@@ -1246,7 +1203,7 @@ jobs:
   # one sub-shard-named job per partition, so no single sub-shard name is a durable target;
   # this job is GREEN only when every sub-shard passed. The `always()` guard makes
   # a skipped/failed/cancelled sub-shard a FAILURE here, while a legitimate
-  # skip (a no-code PR — docs/CI/yaml only) passes vacuously.
+  # skip (a no-code PR — PROSE only) passes vacuously.
   seal-slice:
     name: seal-slice
     runs-on: ubuntu-latest
@@ -1660,7 +1617,7 @@ jobs:
   # Classification is per FAILED STEP, not per job: every member also runs
   # network-bound setup (checkout, toolchain install, sccache, rust-cache, the
   # crate fetch), and `failure()` is also true when an ANCESTOR outside the set
-  # failed (e.g. `changes`, a network-bound paths-filter, whose failure skips
+  # failed (e.g. `changes`, whose checkout is network-bound, whose failure skips
   # its dependants). Neither is a deterministic red. The step below lists the
   # run's failed jobs with their failed steps and cancels only when some
   # failed job's failed step is that job's check step in
