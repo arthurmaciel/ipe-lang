@@ -1923,6 +1923,7 @@ Ipe.File -- filesystem I/O.
 | `append` | `append path content` -- appends to the end of the file |
 | `exists` | (no summary) |
 | `remove` | (no summary) |
+| `delete` | Alias for `remove`. |
 | `mkdirAll` | `mkdirAll path` -- like `mkdir -p`.  Creates every intermediate |
 | `readDir` | (no summary) |
 | `isDir` | (no summary) |

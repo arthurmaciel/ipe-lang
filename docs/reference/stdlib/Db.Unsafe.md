@@ -45,7 +45,7 @@ safe default.
 ## `unsafeQuery`
 
 ```ipe
-unsafeQuery : Db -> String -> List SqlValue -> Task Error (List (Dict String String))
+unsafeQuery : Db -> String -> List a -> Task Error (List (Dict String String))
 ```
 
 `unsafeQuery conn sql binds` — the query TEXT is caller-authored verbatim;
