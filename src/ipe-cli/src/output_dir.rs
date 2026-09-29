@@ -3915,9 +3915,11 @@ mod tests {
         LinkedLeaf,
         /// A link at a missing ancestor of the claimed root.
         LinkedAncestor,
+        /// A regular file at a missing ancestor of the claimed root.
+        FileAncestor,
     }
 
-    /// Every refusal of a real user directory, a forged marker, or a link holds mid-claim.
+    /// Every refusal of a user directory, a forged marker, a link, or a file holds mid-claim.
     #[test]
     fn a_level_planted_mid_claim_is_still_refused() {
         let cases = [
@@ -3925,6 +3927,7 @@ mod tests {
             Planted::ForgedMarkerLeaf,
             Planted::LinkedLeaf,
             Planted::LinkedAncestor,
+            Planted::FileAncestor,
         ];
         for (index, planted) in cases.into_iter().enumerate() {
             let base = scratch(&format!("planted_mid_claim_{index}"));
@@ -3935,7 +3938,7 @@ mod tests {
             let parent = base.join("shared");
             let leaf = parent.join("mine");
             let (held_at, plant_at) = match planted {
-                Planted::LinkedAncestor => (base.clone(), parent.clone()),
+                Planted::LinkedAncestor | Planted::FileAncestor => (base.clone(), parent.clone()),
                 Planted::UserLeaf | Planted::ForgedMarkerLeaf | Planted::LinkedLeaf => {
                     std::fs::create_dir_all(&parent).expect("make parent");
                     (parent.clone(), leaf.clone())
@@ -3956,6 +3959,9 @@ mod tests {
                 }
                 Planted::LinkedLeaf | Planted::LinkedAncestor => {
                     plant_link(&plant_victim, &plant_at);
+                }
+                Planted::FileAncestor => {
+                    std::fs::write(&plant_at, "mine").expect("plant file");
                 }
             });
             let claimed = root.claim();
@@ -3982,6 +3988,17 @@ mod tests {
                     assert!(
                         matches!(refused(&claimed), Some(OutputRefusal::Symlink(_))),
                         "{planted:?} must be refused as a link, got {claimed:?}"
+                    );
+                }
+                Planted::FileAncestor => {
+                    assert!(
+                        matches!(refused(&claimed), Some(OutputRefusal::NotADirectory(_))),
+                        "{planted:?} must be refused as a non-directory, got {claimed:?}"
+                    );
+                    assert_eq!(
+                        std::fs::read_to_string(&parent).ok().as_deref(),
+                        Some("mine"),
+                        "{planted:?} keeps the file as it was"
                     );
                 }
             }

@@ -333,6 +333,7 @@ impl HeldDir {
         if self.is_empty()? {
             return self.write_marker();
         }
+        adopt_listed(&self.path);
         if self.has_marker()? {
             Ok(())
         } else {
@@ -768,6 +769,43 @@ fn subdir_released(path: &Path) {
 #[cfg(not(test))]
 const fn subdir_released(_path: &Path) {}
 
+/// Test-only hook run when adoption lists a directory non-empty, before the marker is read again.
+#[cfg(test)]
+pub type AdoptHook = Box<dyn FnMut(&Path)>;
+
+#[cfg(test)]
+thread_local! {
+    static ADOPT_HOOK: std::cell::RefCell<Option<AdoptHook>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Install (or clear) the hook run between adoption's non-empty listing and its marker re-read.
+///
+/// It lets a test mark, forge, or leave the directory in the window a
+/// concurrent claim can act in.
+#[cfg(test)]
+pub fn set_adopt_hook(hook: Option<AdoptHook>) {
+    ADOPT_HOOK.with(|slot| *slot.borrow_mut() = hook);
+}
+
+/// Run the adopt hook, if any, for the directory at `path`.
+#[cfg(test)]
+fn adopt_listed(path: &Path) {
+    let taken = ADOPT_HOOK.with(|slot| slot.borrow_mut().take());
+    if let Some(mut hook) = taken {
+        hook(path);
+        ADOPT_HOOK.with(|slot| {
+            let mut slot = slot.borrow_mut();
+            if slot.is_none() {
+                *slot = Some(hook);
+            }
+        });
+    }
+}
+
+/// Outside tests there is no hook: listing a directory for adoption has no side effect.
+#[cfg(not(test))]
+const fn adopt_listed(_path: &Path) {}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1022,5 +1060,87 @@ mod tests {
             .expect("removable once the other handle releases it");
         assert!(!busy.exists(), "the directory is gone once free");
         let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// What appears at the marker between adoption's non-empty listing and its marker re-read.
+    #[derive(Debug, Clone, Copy)]
+    enum LateMarker {
+        /// A concurrent claim's genuine marker.
+        Genuine,
+        /// A marker file without the genuine header.
+        Forged,
+        /// Nothing.
+        Absent,
+    }
+
+    /// Adoption accepts a directory marked after its listing, and only a genuinely marked one.
+    ///
+    /// The directory holds a user file and no marker when adoption reads it,
+    /// so every case reaches the re-read; only a genuine marker planted in
+    /// that window is accepted, and a refusal writes nothing.
+    #[test]
+    fn adopt_re_reads_the_marker_after_a_non_empty_listing() {
+        let cases = [LateMarker::Genuine, LateMarker::Forged, LateMarker::Absent];
+        for (index, late) in cases.into_iter().enumerate() {
+            let base = scratch(&format!("adopt_late_marker_{index}"));
+            let name = OsStr::new("out");
+            let out = base.join(name);
+            std::fs::create_dir(&out).expect("make out");
+            std::fs::write(out.join("notes.txt"), "mine").expect("user file");
+            let (_parent, dir) = hold(&base, name);
+            let marker = out.join(OWNERSHIP_MARKER);
+            let planted = marker.clone();
+            let fired = Rc::new(Cell::new(false));
+            let flag = Rc::clone(&fired);
+            let at = out.clone();
+            set_adopt_hook(Some(Box::new(move |listed: &Path| {
+                if listed == at && !flag.replace(true) {
+                    match late {
+                        LateMarker::Genuine => {
+                            std::fs::write(&planted, MARKER_TEXT).expect("mark");
+                        }
+                        LateMarker::Forged => {
+                            std::fs::write(&planted, "not a real marker").expect("forge");
+                        }
+                        LateMarker::Absent => {}
+                    }
+                }
+            })));
+
+            let adopted = dir.adopt();
+            set_adopt_hook(None);
+            assert!(fired.get(), "{late:?}: adoption reached the re-read");
+            match late {
+                LateMarker::Genuine => assert!(
+                    adopted.is_ok(),
+                    "a directory marked after its listing is adopted, got {adopted:?}"
+                ),
+                LateMarker::Forged | LateMarker::Absent => assert!(
+                    matches!(
+                        adopted,
+                        Err(CliError::OutputRefused(OutputRefusal::NotIpeOwned(_)))
+                    ),
+                    "{late:?}: an unmarked, non-empty directory is refused, got {adopted:?}"
+                ),
+            }
+            let expected_marker = match late {
+                LateMarker::Genuine => Some(MARKER_TEXT),
+                LateMarker::Forged => Some("not a real marker"),
+                LateMarker::Absent => None,
+            };
+            assert_eq!(
+                std::fs::read_to_string(&marker).ok().as_deref(),
+                expected_marker,
+                "{late:?}: adoption never writes the marker of a listed directory"
+            );
+            assert_eq!(
+                std::fs::read_to_string(out.join("notes.txt"))
+                    .ok()
+                    .as_deref(),
+                Some("mine"),
+                "{late:?}: the user's file is untouched"
+            );
+            let _ = std::fs::remove_dir_all(&base);
+        }
     }
 }

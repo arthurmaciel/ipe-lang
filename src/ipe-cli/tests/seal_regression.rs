@@ -48,8 +48,13 @@ fn write_single(name: &str, source: &str) -> Option<PathBuf> {
 }
 
 /// The scratch output dir for `name`, cleared.
+///
+/// Every test's dir is a sibling under one shared parent the first build
+/// creates, so concurrently run tests claim siblings under it end to end.
 fn out_dir(name: &str) -> PathBuf {
-    let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("seal-out-{name}"));
+    let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
+        .join("seal-out")
+        .join(name);
     let _ = std::fs::remove_dir_all(&out);
     out
 }
