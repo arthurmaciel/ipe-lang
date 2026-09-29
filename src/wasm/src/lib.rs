@@ -4,9 +4,9 @@
 //! `cargo`/`rustc`, which cannot run in a browser. So "compile in the browser"
 //! means the frontend — parse → resolve → canonicalise → typecheck → lower →
 //! emit — runs as a WebAssembly module, turning Ipê source into diagnostics and
-//! the emitted Rust source. Running the emitted program is out of scope
-//! in-browser (it needs a Rust toolchain); the playground shows the emitted Rust
-//! instead.
+//! the emitted Rust source. Running the emitted program needs a Rust toolchain,
+//! so it happens outside the browser: the playground's run server builds and
+//! executes exactly the project rendered here, inside a jail.
 //!
 //! ## What is and is not compiled in
 //!
@@ -23,8 +23,11 @@
 //! embedded-stdlib closure (the `Ipe.*` modules embedded via `include_str!` in
 //! [`ipe_stdlib`]). FFI is disabled: an FFI-backed import surfaces as an
 //! ordinary compiler diagnostic, never a crash. The compile target is
-//! [`ipe_ir::Target::WasmClient`] so the browser-bundle security gates
-//! (server-effect kernels denied) are exactly the ones exercised.
+//! [`ipe_ir::Target::Native`] in the dependency-model shape: the emitted
+//! manifest names the runtime as the relative path dependency
+//! [`RUNTIME_DEP_DIR`], which the run harness materialises from its own trusted
+//! copy. The emitted project carries no runtime source, and what the page shows
+//! is exactly the crate the run harness builds.
 #![forbid(unsafe_code)]
 
 mod stdlib_inject;
@@ -54,17 +57,17 @@ pub struct CompileOutcome {
 /// over the source set, and demand the emit query — which transitively runs
 /// parse → canon → link → typecheck → lower → emit. The compile is a pure
 /// function of `source` (no hidden inputs); FFI is disabled and the target is
-/// [`ipe_ir::Target::WasmClient`].
+/// the native dependency-model crate described in the crate docs.
 ///
 /// Never panics: every fallible step maps to a rendered [`CompileOutcome`] with
 /// `ok == false`.
 #[must_use]
 pub fn compile(source: &str) -> CompileOutcome {
-    match compile_inner(source) {
-        Ok(emitted) => CompileOutcome {
+    match emit_files(source) {
+        Ok(files) => CompileOutcome {
             ok: true,
             diagnostics: String::new(),
-            emitted_rust: render_emitted(&emitted),
+            emitted_rust: render_files(&files),
         },
         Err(rendered) => CompileOutcome {
             ok: false,
@@ -73,6 +76,40 @@ pub fn compile(source: &str) -> CompileOutcome {
         },
     }
 }
+
+/// The relative directory the emitted manifest names as the runtime path
+/// dependency; the run harness writes the runtime crate there.
+pub const RUNTIME_DEP_DIR: &str = "ipe_runtime_dep";
+
+/// The emitted project of one compile, as crate-relative path to file text.
+///
+/// Holds every emitted source file plus the emitted `Cargo.toml`: the exact
+/// file set [`compile`] renders, so a caller staging a buildable crate works
+/// from the same data the page shows.
+pub type EmittedFiles = BTreeMap<String, String>;
+
+/// Compile one Ipê source string into its emitted project files.
+///
+/// The structured form of [`compile`]: `Ok` carries the emitted files, `Err`
+/// the rendered diagnostic.
+///
+/// # Errors
+///
+/// The rendered compiler diagnostic (colour off) when the frontend rejects the
+/// program.
+pub fn emit_files(source: &str) -> Result<EmittedFiles, String> {
+    let emitted = compile_inner(source)?;
+    let mut files: EmittedFiles = emitted
+        .files
+        .iter()
+        .map(|(path, body)| (path.as_str().to_owned(), body.clone()))
+        .collect();
+    files.insert(CARGO_MANIFEST.to_owned(), emitted.cargo_toml);
+    Ok(files)
+}
+
+/// The emitted manifest's crate-relative path.
+const CARGO_MANIFEST: &str = "Cargo.toml";
 
 /// The synthetic on-disk-looking path used for the entry module in diagnostics.
 /// Never read from disk — the source text is carried in memory.
@@ -113,26 +150,29 @@ fn compile_inner(source: &str) -> Result<ipe_backend::EmittedProject, String> {
         return Err("internal: entry module missing from source map".to_owned());
     };
 
-    // Compile target = WasmClient so the browser-bundle security gates run.
-    // FFI disabled (no on-disk crate catalog in a browser); the db driver only
-    // affects emitted text (no rusqlite is linked into this crate).
+    // Compile target = the native crate the run harness builds. FFI disabled
+    // (no on-disk crate catalog in a browser); the db driver only affects
+    // emitted text (no rusqlite is linked into this crate).
     let config = ipe_db::BuildConfig::new(
         &db,
         ipe_backend_rust::DbDriver::Sqlite,
         None,
-        ipe_ir::Target::WasmClient,
+        ipe_ir::Target::Native,
         Vec::new(),
         false,
         // The browser playground is a development surface — Debug.* is allowed.
         false,
-        // Wasm always vendors its runtime (closed template); dep model is a no-op.
-        None,
+        // Dependency model: the runtime is a relative path dependency the run
+        // harness supplies, so no runtime source enters the emitted project.
+        Some(ipe_backend_rust::RuntimeDep {
+            root: PathBuf::from(RUNTIME_DEP_DIR),
+        }),
         // The browser playground does not expose `--debugger`; never record.
         false,
         String::new(),
         // The browser playground is not the dev watch loop; no appearance hoist.
         false,
-        // The browser playground is a wasm SPA, never a webview-native delivery.
+        // The playground emits a console program, never a webview delivery.
         false,
     );
 
@@ -234,25 +274,23 @@ fn render_for_home(
     render_for_module(diag, sources, entry_path, entry_src)
 }
 
-/// Render an [`ipe_backend::EmittedProject`] as human-readable Rust: each file
-/// under a banner, then the emitted `Cargo.toml`. Deterministic order
-/// (`BTreeMap`).
-fn render_emitted(emitted: &ipe_backend::EmittedProject) -> String {
+/// Render emitted files as human-readable Rust: each source file under a
+/// `// ==== path ====` banner, then the emitted `Cargo.toml` last.
+fn render_files(files: &EmittedFiles) -> String {
     let mut out = String::new();
-    for (path, body) in &emitted.files {
+    let sources = files.iter().filter(|(path, _)| *path != CARGO_MANIFEST);
+    let manifest = files.get_key_value(CARGO_MANIFEST);
+    for (path, body) in sources.chain(manifest) {
         out.push_str("// ==== ");
-        out.push_str(path.as_str());
+        out.push_str(path);
         out.push_str(" ====\n");
         out.push_str(body);
         if !body.ends_with('\n') {
             out.push('\n');
         }
-        out.push('\n');
-    }
-    out.push_str("// ==== Cargo.toml ====\n");
-    out.push_str(&emitted.cargo_toml);
-    if !emitted.cargo_toml.ends_with('\n') {
-        out.push('\n');
+        if path != CARGO_MANIFEST {
+            out.push('\n');
+        }
     }
     out
 }
@@ -311,6 +349,27 @@ mod tests {
         assert!(
             outcome.emitted_rust.contains("==== Cargo.toml ===="),
             "emitted Rust should include the emitted Cargo.toml"
+        );
+    }
+
+    #[test]
+    fn emit_is_the_native_dependency_model_crate_run_builds() {
+        let src = "module Main exposing (main)\n\nimport Ipe.Io as Io\n\nmain : Task Error ()\nmain =\n    Io.println \"hello\"\n";
+        let outcome = compile(src);
+        assert!(outcome.ok, "diagnostics:\n{}", outcome.diagnostics);
+        let path_dep = format!("path = \"{RUNTIME_DEP_DIR}\"");
+        assert!(
+            outcome.emitted_rust.contains(&path_dep),
+            "manifest must name the runtime as the relative path dependency:\n{}",
+            outcome.emitted_rust
+        );
+        assert!(
+            !outcome.emitted_rust.contains("cdylib"),
+            "a run-able emit is a native bin, never a wasm cdylib"
+        );
+        assert!(
+            !outcome.emitted_rust.contains("==== src/ipe_runtime"),
+            "the dependency model carries no vendored runtime source"
         );
     }
 
