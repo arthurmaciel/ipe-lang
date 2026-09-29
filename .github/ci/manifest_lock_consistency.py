@@ -110,17 +110,20 @@ def _in_repo(root: str, path: str) -> str:
     return os.path.join(os.path.relpath(real, real_root), "Cargo.toml")
 
 
-def inheriting_members(root: str, root_doc: dict, version: str) -> tuple[set[str], set[tuple[str, str]]]:
+def inheriting_members(
+    root: str, root_doc: dict, version: str
+) -> tuple[set[str], dict[tuple[str, str], set[str]]]:
     """Package names of the workspace members whose `package.version` is
     `{ workspace = true }`, and the `(name, version)` of every package the
-    root declares: each listed member, and each `[workspace] exclude` crate,
-    which must carry its own `[workspace]` table and a literal version, so no
-    release bump touches it. Every path resolves inside the repository."""
+    root declares, keyed to the repository-relative manifests that declare
+    it: each listed member, and each `[workspace] exclude` crate, which must
+    carry its own `[workspace]` table and a literal version, so no release
+    bump touches it. Every path resolves inside the repository."""
     members = _table(root_doc, "workspace").get("members")
     if not isinstance(members, list) or not all(isinstance(m, str) for m in members):
         raise Refusal("Cargo.toml has no `[workspace] members` list of paths")
     names: set[str] = set()
-    listed: set[tuple[str, str]] = set()
+    listed: dict[tuple[str, str], set[str]] = {}
     for member in members:
         if any(c in member for c in "*?["):
             raise Refusal(f"workspace member {member!r} is a glob; list members explicitly")
@@ -132,9 +135,9 @@ def inheriting_members(root: str, root_doc: dict, version: str) -> tuple[set[str
         declared = package.get("version")
         if declared == _INHERITED:
             names.add(name)
-            listed.add((name, version))
+            listed.setdefault((name, version), set()).add(rel)
         elif isinstance(declared, str):
-            listed.add((name, declared))
+            listed.setdefault((name, declared), set()).add(rel)
         else:
             raise Refusal(
                 f"{rel} `package.version` is {declared!r}; declare `version.workspace = true` "
@@ -155,7 +158,7 @@ def inheriting_members(root: str, root_doc: dict, version: str) -> tuple[set[str
             raise Refusal(f"{rel} needs a `[package] name` and a literal `version` string")
         if not isinstance(doc.get("workspace"), dict):
             raise Refusal(f"{rel} is excluded from the workspace but carries no `[workspace]` table of its own")
-        listed.add((name, declared))
+        listed.setdefault((name, declared), set()).add(rel)
     if not names:
         raise Refusal("no workspace member inherits the workspace version")
     return names, listed
@@ -244,7 +247,7 @@ def check(root: str = REPO_ROOT) -> list[str]:
         )
     for name, got in sorted(locked.items()):
         for v in sorted(set(got)):
-            if (name, v) not in listed or got.count(v) > 1:
+            if len(listed.get((name, v), ())) != 1 or got.count(v) != 1:
                 errors.append(
                     f"Cargo.lock holds path package {name!r} {v}, which is not exactly one listed "
                     "workspace member or excluded crate at that version, so neither agreement "

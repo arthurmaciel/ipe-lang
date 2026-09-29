@@ -235,6 +235,7 @@ import re
 import subprocess
 import sys
 from dataclasses import dataclass, replace
+from typing import Union
 
 try:
     import yaml
@@ -1163,25 +1164,110 @@ def _top_level_disjuncts(cond: str) -> list[str] | None:
     return _split_top_level(expr, "||")
 
 
-def _release_only_mention(doc: dict) -> re.Pattern[str]:
-    """Case-insensitive whole-word match of `release_only` and of every job
-    output that re-exports it, directly or through another such output."""
-    jobs = doc.get("jobs") if isinstance(doc.get("jobs"), dict) else {}
-    names = {_RELEASE_ONLY_OUTPUT}
-    while True:
-        pattern = re.compile(
-            r"\b(?:" + "|".join(re.escape(n) for n in sorted(names)) + r")\b", re.IGNORECASE
-        )
-        found = {
-            str(key).lower()
-            for job in jobs.values()
-            if isinstance(job, dict) and isinstance(job.get("outputs"), dict)
-            for key, value in job["outputs"].items()
-            if pattern.search(str(value))
-        }
-        if found <= names:
-            return pattern
-        names |= found
+_OUTPUT_CONTEXTS = frozenset({"steps", "needs"})
+
+
+@dataclass(frozen=True)
+class OutputReads:
+    """Every `steps`/`needs` output one field reads, from its parsed
+    expressions: `names` the literal output names (case-folded), `opaque`
+    why some read is not a literal name (a computed or `*` segment, a whole
+    `outputs` map or context object a function can serialise or index, or
+    text outside the expression grammar), else None."""
+
+    names: frozenset[str]
+    opaque: str | None
+
+    @classmethod
+    def of(cls, text: str, condition: bool) -> OutputReads:
+        """The reads of `text`; `condition` marks an `if:` value, which is a
+        bare expression when it holds no `${{`."""
+        if not text.strip() or (not condition and "${{" not in text):
+            return cls(frozenset(), None)
+        parsed = _parsed_expressions(text, condition)
+        if isinstance(parsed, gha_expr.Refusal):
+            return cls(frozenset(), f"unparseable: {parsed.why}")
+        if condition and "${{" in text and parsed.spans != ((len(text) - len(text.lstrip()), len(text.rstrip())),):
+            # Text beside a `${{ }}` makes the whole `if:` one string, so what
+            # it reads is not what it appears to test.
+            return cls(frozenset(), "a `${{ }}` that does not wrap the whole condition")
+        names: set[str] = set()
+        for e in parsed.exprs:
+            for node in gha_expr.walk(e):
+                if isinstance(node, gha_expr.ContextRef) and node.ctx.casefold() in _OUTPUT_CONTEXTS:
+                    read = _output_chain(node)
+                    if isinstance(read, gha_expr.Refusal):
+                        return cls(frozenset(names), read.why)
+                    if read is not None:
+                        names.add(read)
+        return cls(frozenset(names), None)
+
+
+def _literal_segment(seg: gha_expr.Segment) -> str | None:
+    """A segment's case-folded name when the source spells it: `.name` or
+    `['name']`; None for a computed index or `*`."""
+    if isinstance(seg, gha_expr.Prop):
+        return seg.name.casefold()
+    if isinstance(seg, gha_expr.Index) and isinstance(seg.expr, gha_expr.Literal) and seg.expr.is_string:
+        return str(seg.expr.value).casefold()
+    return None
+
+
+def _output_chain(ref: gha_expr.ContextRef) -> str | gha_expr.Refusal | None:
+    """The output name a `steps`/`needs` access reads, None when it reads no
+    output (`needs.<id>.result`, `needs.*.result`), or a Refusal when what it
+    reads is not a literally named output."""
+    shown = ref.ctx + "".join(
+        "." + s.name if isinstance(s, gha_expr.Prop) else ".*" if isinstance(s, gha_expr.Star) else "[...]"
+        for s in ref.path
+    )
+    if len(ref.path) < 2:
+        return gha_expr.Refusal(f"`{shown}` hands on a whole context object, outputs included")
+    source, field = ref.path[0], _literal_segment(ref.path[1])
+    if not isinstance(source, gha_expr.Star) and _literal_segment(source) is None:
+        return gha_expr.Refusal(f"`{shown}` computes the job or step it reads")
+    if field is None:
+        return gha_expr.Refusal(f"`{shown}` computes the property it reads")
+    if field != "outputs":
+        return None
+    if isinstance(source, gha_expr.Star):
+        return gha_expr.Refusal(f"`{shown}` reads the outputs of every job or step at once")
+    if len(ref.path) < 3:
+        return gha_expr.Refusal(f"`{shown}` hands on a whole `outputs` map")
+    name = _literal_segment(ref.path[2])
+    if name is None:
+        return gha_expr.Refusal(f"`{shown}` computes the output name it reads")
+    return name
+
+
+@dataclass(frozen=True)
+class ReleaseOnlyNames:
+    """`release_only` and every job output that re-exports it, directly or
+    through another such output (case-folded). `search` holds a field to its
+    `OutputReads`: the field names `release_only` when it reads one of these
+    names or reads outputs opaquely (fail closed)."""
+
+    names: frozenset[str]
+
+    @classmethod
+    def of(cls, doc: dict) -> ReleaseOnlyNames:
+        jobs = doc.get("jobs") if isinstance(doc.get("jobs"), dict) else {}
+        found = cls(frozenset({_RELEASE_ONLY_OUTPUT}))
+        while True:
+            names = found.names | {
+                str(key).casefold()
+                for job in jobs.values()
+                if isinstance(job, dict) and isinstance(job.get("outputs"), dict)
+                for key, value in job["outputs"].items()
+                if found.search(str(value), condition=False)
+            }
+            if names == found.names:
+                return found
+            found = cls(names)
+
+    def search(self, text: str, condition: bool = True) -> bool:
+        reads = OutputReads.of(text, condition)
+        return reads.opaque is not None or not reads.names.isdisjoint(self.names)
 
 
 def check_release_only_skips(gate_contexts: set[str], errors: list[str], root: str = REPO_ROOT) -> None:
@@ -1201,7 +1287,7 @@ def check_release_only_skips(gate_contexts: set[str], errors: list[str], root: s
             continue
         if not isinstance(doc, dict):
             continue
-        mention = _release_only_mention(doc)
+        mention = ReleaseOnlyNames.of(doc)
         jobs = doc.get("jobs")
         for jid, job in (jobs.items() if isinstance(jobs, dict) else ()):
             if not isinstance(job, dict):
@@ -1286,7 +1372,7 @@ def _release_only_source(job: dict, jobs: dict, name: str) -> bool:
     )
 
 
-def _skips_on_release_only(cond: str, mention: re.Pattern[str]) -> bool:
+def _skips_on_release_only(cond: str, mention: ReleaseOnlyNames) -> bool:
     """True when a job-level `if:` names `release_only` in anything but a
     `|| needs.<job>.outputs.release_only == 'true'` disjunct, which only ever
     widens when the job runs."""
@@ -1331,7 +1417,7 @@ def _ancestors(jid: str, jobs: dict) -> set[str]:
     return seen
 
 
-def _skip_conjuncts(cond: str, mention: re.Pattern[str]) -> tuple[list[str], list[str]]:
+def _skip_conjuncts(cond: str, mention: ReleaseOnlyNames) -> tuple[list[str], list[str]]:
     """(the jobs named by top-level `needs.<job>.outputs.release_only != 'true'`
     conjuncts, every other `release_only`-naming part) of an `if:`."""
     conjuncts = _top_level_and(cond)
@@ -1348,7 +1434,7 @@ def _release_only_pass_shape(
     job: dict,
     contexts: list[str],
     jobs: dict,
-    mention: re.Pattern[str],
+    mention: ReleaseOnlyNames,
     gate_contexts: set[str],
     errors: list[str],
 ) -> bool | None:
@@ -1447,48 +1533,48 @@ def _declared_release_only(entry: dict, loc: str, errors: list[str]) -> str | No
 _RELEASE_ONLY_NORMALISED = re.compile(r"\$\{\{\s*steps\.[\w-]+\.outputs\.release_only\s*==\s*'true'\s*\}\}")
 
 
+def _expression_fields(node: object, where: str, key: str = ""):
+    """(location, text, is `if:`) for every string in a job, keys included,
+    at any depth: `if`, `outputs`, `strategy`, `with`, `env`, `run` and
+    every other field GitHub evaluates `${{ }}` in."""
+    if isinstance(node, dict):
+        for k, v in node.items():
+            yield from _expression_fields(k, f"{where} key", "")
+            yield from _expression_fields(v, f"{where}.{k}", str(k))
+    elif isinstance(node, list):
+        for i, v in enumerate(node, 1):
+            yield from _expression_fields(v, f"{where}[{i}]", key)
+    elif isinstance(node, str):
+        yield where, node, key == "if"
+
+
 def _check_release_only_exports(fname: str, doc: dict, errors: list[str]) -> None:
-    """A job output named `release_only`, or whose value mentions it in any
-    spelling (dotted, bracketed, through `toJSON`), must be exactly
-    `${{ steps.<id>.outputs.release_only == 'true' }}`: every consumer then
-    sees `true` or `false`, and an unset writer reads as `false`, so all jobs
-    run in full. No job output value or `if:` reads outputs under a name the
-    source does not spell (`_opaque_output_read`), so every `release_only`
-    read is one the mention match sees."""
+    """A job output named `release_only`, or whose value reads it (see
+    `OutputReads`), must be exactly `${{ steps.<id>.outputs.release_only ==
+    'true' }}`: every consumer then sees `true` or `false`, and an unset
+    writer reads as `false`, so all jobs run in full. No field of any job
+    reads outputs opaquely, so every `release_only` read is one the parsed
+    read-set names."""
     jobs = doc.get("jobs") if isinstance(doc.get("jobs"), dict) else {}
     for jid, job in jobs.items():
         outputs = job.get("outputs") if isinstance(job, dict) else None
         for key, value in (outputs if isinstance(outputs, dict) else {}).items():
-            named = _RELEASE_ONLY_OUTPUT in str(key).lower() or _RELEASE_ONLY_OUTPUT in str(value).lower()
+            named = _RELEASE_ONLY_OUTPUT in str(key).casefold() or (
+                _RELEASE_ONLY_OUTPUT in OutputReads.of(str(value), condition=False).names
+            )
             if named and not _RELEASE_ONLY_NORMALISED.fullmatch(str(value)):
                 errors.append(
                     f"{fname}: job {jid!r} output {key!r} exports the raw classifier value "
                     f"{value!r}; write `${{{{ steps.<id>.outputs.release_only == 'true' }}}}` (check 13)"
                 )
-        steps = job.get("steps") if isinstance(job, dict) and isinstance(job.get("steps"), list) else []
-        reads = [(f"output {k!r}", v) for k, v in (outputs if isinstance(outputs, dict) else {}).items()]
-        reads += [("`if:`", job.get("if"))] if isinstance(job, dict) and "if" in job else []
-        reads += [(f"step {i} `if:`", st.get("if")) for i, st in enumerate(steps, 1) if isinstance(st, dict) and "if" in st]
-        for where, text in reads:
-            if _opaque_output_read(str(text)):
+        for where, text, condition in _expression_fields(job, "jobs"):
+            opaque = OutputReads.of(text, condition).opaque
+            if opaque is not None:
                 errors.append(
-                    f"{fname}: job {jid!r} {where} reads outputs through a computed name or a "
-                    f"serialisation ({text!r}), so a `release_only` read can hide in it; name each "
+                    f"{fname}: job {jid!r} field {where} reads outputs through a computed name or a "
+                    f"serialisation ({opaque}), so a `release_only` read can hide in it; name each "
                     "output literally as `<steps|needs>.<id>.outputs.<name>` (check 13)"
                 )
-
-
-# A read of `outputs` whose name the source does not spell: a computed index,
-# the `.*` filter, or the map passed whole to a function that can serialise
-# or assemble names (`toJSON`, `format`, `join`).
-_OPAQUE_INDEX = re.compile(r"\boutputs\s*(?:\[(?!\s*'[^']*'\s*\])|\.\s*\*)", re.IGNORECASE)
-_NAME_BUILDER = re.compile(r"\b(?:tojson|format|join)\s*\(", re.IGNORECASE)
-
-
-def _opaque_output_read(text: str) -> bool:
-    return bool(_OPAQUE_INDEX.search(text)) or (
-        bool(_NAME_BUILDER.search(text)) and re.search(r"\boutputs\b", text, re.IGNORECASE) is not None
-    )
 
 
 def check_release_only_declarations(
@@ -1545,7 +1631,7 @@ def check_release_only_declarations(
         if not members:
             errors.append(f"{loc}: no job in {fname} reports this context (check 13)")
             continue
-        mention = _release_only_mention(doc)
+        mention = ReleaseOnlyNames.of(doc)
         member_ids = {jid for jid, _, _ in members}
         for jid, job, _ in members:
             skipped = sorted(
@@ -1614,10 +1700,25 @@ _LOCK_PROOF_STEP_KEYS = frozenset({"name", "id", "run"})
 # incremental-compilation knobs that cannot move the manifest, the lock, the
 # config or the binary Cargo resolves with.
 _LOCK_NEUTRAL_ENV = frozenset({"CARGO_TERM_COLOR", "CARGO_INCREMENTAL"})
-# A step before the proof: a remote action pinned to a commit, or a local
-# composite action under `.github/actions/` (a code-owned trust root, like
-# this file).
-_LOCK_PREFIX_USES = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_./-]+@[0-9a-f]{40}|\./\.github/actions/[A-Za-z0-9_-]+")
+# The remote actions a step before the proof may use, each at the one commit
+# reviewed here: none rewrites the manifest, the lock or the Cargo config, and
+# each takes only the `with:` keys its `PrefixStep` arm admits. A bump edits
+# this table, so it is reviewed where the rest of the proof is.
+_LOCK_PREFIX_PINS = {
+    "actions/checkout": "3d3c42e5aac5ba805825da76410c181273ba90b1",
+    "dtolnay/rust-toolchain": "02cb101ec7c40f2c49e1d9714d64511d8e1b74de",
+    "Swatinem/rust-cache": "6323deb102c322ba6fcbdcafc7e3dddab59af2b6",
+}
+_LOCK_PREFIX_REMOTE = re.compile(r"([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)@([0-9a-f]{40})")
+_LOCK_PREFIX_LOCAL = re.compile(r"\./\.github/actions/([A-Za-z0-9_-]+)")
+_LOCK_PREFIX_STEP_KEYS = frozenset({"name", "id", "uses", "with"})
+# `Swatinem/rust-cache` `save-if` values: a literal, or saving only on `main`.
+_LOCK_CACHE_SAVE_IF = frozenset({"true", "false", "${{ github.ref == 'refs/heads/main' }}"})
+# A `dtolnay/rust-toolchain` component or target list: the action splices it
+# into a shell command, so it holds no shell-special character.
+_LOCK_TOOLCHAIN_LIST = re.compile(r"[A-Za-z0-9_.-]+(?:,[A-Za-z0-9_.-]+)*")
+# Local composite actions nest at most this deep before the proof.
+_LOCK_COMPOSITE_DEPTH = 4
 # The `.cargo/config*` tables a lock proof tolerates: per-target flags, which
 # cannot redirect resolution (no `resolver`, `paths`, `patch`, `source`,
 # `unstable`, `alias` or `env`).
@@ -1671,20 +1772,158 @@ def _lock_neutral_env(holder: dict) -> bool:
     return isinstance(env, dict) and all(str(k) in _LOCK_NEUTRAL_ENV for k in env)
 
 
-def _job_lock_proof(job: dict) -> LockedCargoStep | None:
+@dataclass(frozen=True)
+class PinnedCheckout:
+    """`actions/checkout` at its reviewed pin, checking out the event's own
+    commit into the workspace: no `ref`, `repository` or `path`."""
+
+    fetch_depth: int | None
+
+
+@dataclass(frozen=True)
+class PinnedToolchain:
+    """`dtolnay/rust-toolchain` at its reviewed pin, installing exactly the
+    `rust-toolchain.toml` channel, with shell-inert component/target lists."""
+
+    components: tuple[str, ...]
+    targets: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class PinnedCache:
+    """`Swatinem/rust-cache` at its reviewed pin, whose restore runs only
+    `cargo metadata --no-deps` and `rustc -vV`; `save_if` from the closed set."""
+
+    save_if: str | None
+
+
+@dataclass(frozen=True)
+class LocalComposite:
+    """A `.github/actions/<name>` composite, called with no `with:`, whose
+    every step is itself a `PrefixStep`."""
+
+    name: str
+    steps: tuple[PrefixStep, ...]
+
+
+PrefixStep = Union[PinnedCheckout, PinnedToolchain, PinnedCache, LocalComposite]
+
+
+@dataclass(frozen=True)
+class PrefixContext:
+    """What a `PrefixStep` is parsed against: the repository (for local
+    composites) and the `rust-toolchain.toml` channel, None when unreadable."""
+
+    repo: str
+    channel: str | None
+
+
+def _toolchain_channel(repo: str) -> str | None:
+    try:
+        with open(os.path.join(repo, "rust-toolchain.toml"), "rb") as f:
+            doc = tomllib.load(f)
+    except (OSError, tomllib.TOMLDecodeError):
+        return None
+    toolchain = doc.get("toolchain")
+    channel = toolchain.get("channel") if isinstance(toolchain, dict) else None
+    return channel if isinstance(channel, str) else None
+
+
+def _toolchain_list(value: object) -> tuple[str, ...] | None:
+    if value is None:
+        return ()
+    if not isinstance(value, str) or not _LOCK_TOOLCHAIN_LIST.fullmatch(value):
+        return None
+    return tuple(value.split(","))
+
+
+def parse_prefix_step(st: object, ctx: PrefixContext, depth: int = 0, seen: frozenset[str] = frozenset()) -> PrefixStep | None:
+    """The step as a `PrefixStep`, else None: only `name`, `id`, `uses`
+    and `with` keys (no `run`, `if`, `env`, `continue-on-error`), a `uses`
+    naming a pinned action from `_LOCK_PREFIX_PINS` or a local composite,
+    and a `with:` closed per arm."""
+    if not isinstance(st, dict) or not set(st) <= _LOCK_PREFIX_STEP_KEYS:
+        return None
+    uses, with_ = st.get("uses"), st.get("with", {})
+    if not isinstance(uses, str) or not isinstance(with_, dict):
+        return None
+    local = _LOCK_PREFIX_LOCAL.fullmatch(uses)
+    if local is not None:
+        return None if with_ else _parse_local_composite(local.group(1), ctx, depth, seen)
+    remote = _LOCK_PREFIX_REMOTE.fullmatch(uses)
+    if remote is None or _LOCK_PREFIX_PINS.get(remote.group(1)) != remote.group(2):
+        return None
+    action = remote.group(1)
+    if action == "actions/checkout":
+        depth_ = with_.get("fetch-depth")
+        if not set(with_) <= {"fetch-depth"}:
+            return None
+        if depth_ is None:
+            return PinnedCheckout(None)
+        if isinstance(depth_, int) and not isinstance(depth_, bool) and depth_ >= 0:
+            return PinnedCheckout(depth_)
+        return None
+    if action == "dtolnay/rust-toolchain":
+        components, targets = _toolchain_list(with_.get("components")), _toolchain_list(with_.get("targets"))
+        if (
+            not set(with_) <= {"toolchain", "components", "targets"}
+            or ctx.channel is None
+            or with_.get("toolchain") != ctx.channel
+            or components is None
+            or targets is None
+        ):
+            return None
+        return PinnedToolchain(components, targets)
+    if action == "Swatinem/rust-cache":
+        save_if = with_.get("save-if")
+        if isinstance(save_if, bool):
+            save_if = str(save_if).lower()
+        if not set(with_) <= {"save-if"} or (save_if is not None and save_if not in _LOCK_CACHE_SAVE_IF):
+            return None
+        return PinnedCache(save_if)
+    return None
+
+
+def _parse_local_composite(name: str, ctx: PrefixContext, depth: int, seen: frozenset[str]) -> LocalComposite | None:
+    """`.github/actions/<name>/action.yml` (or `.yaml`, never both) as a
+    `LocalComposite`: `runs` holds only `using: composite` and `steps`, each
+    a `PrefixStep`, nested at most `_LOCK_COMPOSITE_DEPTH` deep, no cycle."""
+    if depth >= _LOCK_COMPOSITE_DEPTH or name in seen:
+        return None
+    base = os.path.join(ctx.repo, ".github", "actions", name)
+    found = [p for p in (os.path.join(base, "action.yml"), os.path.join(base, "action.yaml")) if os.path.isfile(p)]
+    if len(found) != 1:
+        return None
+    try:
+        with open(found[0]) as f:
+            doc = strict_yaml.safe_load(f)
+    except (OSError, yaml.YAMLError):
+        return None
+    runs = doc.get("runs") if isinstance(doc, dict) else None
+    if not isinstance(runs, dict) or set(runs) != {"using", "steps"} or runs.get("using") != "composite":
+        return None
+    body = runs.get("steps")
+    if not isinstance(body, list) or not body:
+        return None
+    steps = [parse_prefix_step(b, ctx, depth + 1, seen | {name}) for b in body]
+    if any(step is None for step in steps):
+        return None
+    return LocalComposite(name, tuple(step for step in steps if step is not None))
+
+
+def _job_lock_proof(job: dict, ctx: PrefixContext) -> LockedCargoStep | None:
     """The job's lock proof: its FIRST step with a `run:`, preceded only by
-    `_LOCK_PREFIX_USES` steps, so nothing the job runs earlier can rewrite the
-    lock, the manifest, `$GITHUB_ENV` or `$GITHUB_PATH` before Cargo reads
-    them; the job itself runs in no `container` and sets only neutral `env`."""
+    `PrefixStep`s, so nothing the job runs earlier can rewrite the lock, the
+    manifest, the Cargo config, `$GITHUB_ENV` or `$GITHUB_PATH` before Cargo
+    reads them; the job itself runs in no `container` and sets only neutral
+    `env`."""
     steps = job.get("steps")
     if "container" in job or not _lock_neutral_env(job) or not isinstance(steps, list):
         return None
     for st in steps:
-        if not isinstance(st, dict):
-            return None
-        if "run" in st:
+        if isinstance(st, dict) and "run" in st:
             return LockedCargoStep.parse(st)
-        if not _LOCK_PREFIX_USES.fullmatch(str(st.get("uses", ""))):
+        if parse_prefix_step(st, ctx) is None:
             return None
     return None
 
@@ -1741,6 +1980,7 @@ def check_release_locked_build(
     if refusal is not None:
         errors.append(f"{refusal}, which can redirect every `cargo --locked` lock proof (check 13)")
         return
+    ctx = PrefixContext(os.path.dirname(root), _toolchain_channel(os.path.dirname(root)))
     for entry in entries:
         if not isinstance(entry, dict) or str(entry.get("context")) not in gate_contexts:
             continue
@@ -1757,11 +1997,13 @@ def check_release_locked_build(
         jobs = doc.get("jobs") if isinstance(doc.get("jobs"), dict) else {}
         aggregates = [str(a) for a in entry.get("aggregates") or []]
         for jid, job, _ in _entry_jobs(str(entry.get("context")), aggregates, jobs):
-            if _runs_on_every_release_pr(jid, jobs) and _job_lock_proof(job) is not None:
+            if _runs_on_every_release_pr(jid, jobs) and _job_lock_proof(job, ctx) is not None:
                 return
     errors.append(
         "no gate declared `release-only: run` has a job whose first `run:` step is a plain "
         "`cargo <sub> --locked` from the closed flag set, after only pinned `uses:` steps, "
+        "each a `PrefixStep` (reviewed-pin checkout/toolchain/cache with closed `with:`, "
+        "or a local composite of such steps), "
         "so a release PR never proves Cargo.lock matches the bumped Cargo.toml (check 13)"
     )
 

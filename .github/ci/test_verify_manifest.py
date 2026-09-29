@@ -4124,19 +4124,146 @@ class TestReleaseOnlyDeclarations(unittest.TestCase):
                 ok = _RO13.replace("      - run: cargo test\n", f"      - run: {step}\n")
                 self.assertEqual(self.locked_errors(ok), [])
 
+    _CHECKOUT = "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1"
+    _TOOLCHAIN = "dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de"
+    _CACHE = "Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6"
+
+    def prefixed(self, prefix: str) -> str:
+        """`_RO13` whose `plain` job runs `prefix` then the lock proof."""
+        self.fx.toolchain = os.path.join(self.fx.repo, "rust-toolchain.toml")
+        if not os.path.exists(self.fx.toolchain):
+            _write(self.fx.toolchain, '[toolchain]\nchannel = "1.98.1"\n')
+        return _RO13.replace("      - run: cargo test\n", prefix + "      - run: cargo fetch --locked\n")
+
     def test_only_pinned_uses_steps_may_precede_the_proof(self) -> None:
-        prefix = (
-            "      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1\n"
-            "      - uses: ./.github/actions/rust-toolchain-pinned\n"
-            "      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6\n"
-            "        with:\n          save-if: false\n"
-            "      - name: Fetch crates\n        run: cargo fetch --locked\n"
-            "      - run: cargo update\n"
+        self.fx.composite(
+            "pinned",
+            "name: pinned\nruns:\n  using: composite\n  steps:\n"
+            f"    - uses: {self._CHECKOUT}\n"
+            f"    - uses: {self._CACHE}\n",
         )
-        ok = _RO13.replace("      - run: cargo test\n", prefix).replace(
+        prefix = (
+            f"      - uses: {self._CHECKOUT}\n        with:\n          fetch-depth: 0\n"
+            f"      - name: Toolchain\n        id: tc\n        uses: {self._TOOLCHAIN}\n"
+            "        with:\n          toolchain: 1.98.1\n          components: clippy,rustfmt\n"
+            "          targets: wasm32-wasip1\n"
+            f"      - uses: {self._CACHE}\n        with:\n          save-if: false\n"
+            f"      - uses: {self._CACHE}\n        with:\n          save-if: ${{{{ github.ref == 'refs/heads/main' }}}}\n"
+            "      - uses: ./.github/actions/pinned\n"
+        )
+        ok = self.prefixed(prefix).replace(
             "jobs:\n", "env:\n  CARGO_TERM_COLOR: always\n  CARGO_INCREMENTAL: '0'\n\njobs:\n", 1
         )
         self.assertEqual(self.locked_errors(ok), [])
+        self.assertEqual(self.locked_errors(self.prefixed("      - run: cargo fetch --locked\n      - run: cargo update\n")), [])
+
+    def test_prefix_step_outside_the_closed_sum_is_refused(self) -> None:
+        needle = "never proves Cargo.lock matches"
+        co, tc, ca = self._CHECKOUT, self._TOOLCHAIN, self._CACHE
+        self.fx.composite("pinned", f"name: p\nruns:\n  using: composite\n  steps:\n    - uses: {co}\n")
+        self.assertEqual(self.locked_errors(self.prefixed("      - uses: ./.github/actions/pinned\n")), [])
+
+        def tc_with(body: str) -> str:
+            return f"      - uses: {tc}\n        with:\n{body}"
+
+        cases = {
+            # checkout: the event's own commit only
+            "checkout ref": f"      - uses: {co}\n        with:\n          ref: main\n",
+            "checkout repository": f"      - uses: {co}\n        with:\n          repository: evil/fork\n",
+            "checkout path": f"      - uses: {co}\n        with:\n          path: sub\n",
+            "checkout negative depth": f"      - uses: {co}\n        with:\n          fetch-depth: -1\n",
+            "checkout bool depth": f"      - uses: {co}\n        with:\n          fetch-depth: true\n",
+            "checkout string depth": f"      - uses: {co}\n        with:\n          fetch-depth: '0'\n",
+            "checkout with not a map": f"      - uses: {co}\n        with: ${{{{ fromJSON('{{}}') }}}}\n",
+            # pins: the reviewed table, nothing else
+            "unreviewed sha": "      - uses: actions/checkout@0000000000000000000000000000000000000000\n",
+            "owner off the allowlist": "      - uses: actions/github-script@3d3c42e5aac5ba805825da76410c181273ba90b1\n",
+            "reviewed sha on another action": "      - uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea\n",
+            "subpath action": f"      - uses: actions/checkout/sub@{co.split('@')[1]}\n",
+            "tag pin": "      - uses: actions/checkout@v4\n",
+            "uses not a string": "      - uses: [a]\n",
+            # step keys: no condition, env, or error swallowing
+            "step if": f"      - if: always()\n        uses: {co}\n",
+            "step env": f"      - uses: {co}\n        env:\n          CARGO_HOME: /tmp/x\n",
+            "step continue-on-error": f"      - uses: {co}\n        continue-on-error: true\n",
+            "step working-directory": f"      - uses: {co}\n        working-directory: x\n",
+            "step not a map": "      - just-a-string\n",
+            # toolchain: the rust-toolchain.toml channel, shell-inert lists
+            "toolchain channel mismatch": tc_with("          toolchain: nightly\n"),
+            "toolchain missing channel": f"      - uses: {tc}\n",
+            "toolchain component shell": tc_with("          toolchain: 1.98.1\n          components: clippy; curl evil\n"),
+            "toolchain target shell": tc_with("          toolchain: 1.98.1\n          targets: $(evil)\n"),
+            "toolchain empty component": tc_with("          toolchain: 1.98.1\n          components: clippy,,rustfmt\n"),
+            "toolchain list not a string": tc_with("          toolchain: 1.98.1\n          components: [clippy]\n"),
+            "toolchain unknown key": tc_with("          toolchain: 1.98.1\n          override: true\n"),
+            # cache: closed keys and save-if values
+            "cache cmd-format": f"      - uses: {ca}\n        with:\n          cmd-format: evil {{0}}\n",
+            "cache workspaces": f"      - uses: {ca}\n        with:\n          workspaces: tools/x\n",
+            "cache computed save-if": f"      - uses: {ca}\n        with:\n          save-if: ${{{{ github.event_name == 'push' }}}}\n",
+            "cache int save-if": f"      - uses: {ca}\n        with:\n          save-if: 1\n",
+            # local composites
+            "local with": "      - uses: ./.github/actions/pinned\n        with:\n          x: y\n",
+            "local missing": "      - uses: ./.github/actions/absent\n",
+        }
+        for name, prefix in cases.items():
+            with self.subTest(case=name):
+                self.assertTrue(any(needle in e for e in self.locked_errors(self.prefixed(prefix))), name)
+
+    def test_local_composite_prefix_is_walked_under_the_same_rules(self) -> None:
+        needle = "never proves Cargo.lock matches"
+        head = "name: c\nruns:\n  using: composite\n  steps:\n"
+        good = f"    - uses: {self._CHECKOUT}\n"
+        bodies = {
+            "run step": head + "    - run: cargo update\n      shell: bash\n",
+            "step env": head + f"    - uses: {self._CHECKOUT}\n      env:\n        X: y\n",
+            "unpinned inner": head + "    - uses: actions/checkout@v4\n",
+            "checkout ref inner": head + f"    - uses: {self._CHECKOUT}\n      with:\n        ref: main\n",
+            "not composite": "name: c\nruns:\n  using: node20\n  main: index.js\n",
+            "extra runs key": head + good + "  pre: x\n",
+            "empty steps": "name: c\nruns:\n  using: composite\n  steps: []\n",
+            "no runs": "name: c\n",
+            "not yaml": "name: [\n",
+            "self cycle": head + "    - uses: ./.github/actions/c\n",
+        }
+        for name, body in bodies.items():
+            with self.subTest(case=name):
+                self.fx.composite("c", body)
+                self.assertTrue(
+                    any(needle in e for e in self.locked_errors(self.prefixed("      - uses: ./.github/actions/c\n"))), name
+                )
+        self.fx.composite("c", head + good)
+        self.assertEqual(self.locked_errors(self.prefixed("      - uses: ./.github/actions/c\n")), [])
+        yaml_twin = os.path.join(self.fx.root, "actions", "c", "action.yaml")
+        _write(yaml_twin, head + good)
+        self.assertTrue(
+            any(needle in e for e in self.locked_errors(self.prefixed("      - uses: ./.github/actions/c\n"))),
+            "action.yml and action.yaml both present",
+        )
+        os.remove(yaml_twin)
+        self.fx.composite("a", head + "    - uses: ./.github/actions/b\n")
+        self.fx.composite("b", head + "    - uses: ./.github/actions/a\n")
+        self.assertTrue(
+            any(needle in e for e in self.locked_errors(self.prefixed("      - uses: ./.github/actions/a\n"))), "mutual cycle"
+        )
+        for i in range(5):
+            self.fx.composite(f"d{i}", head + (f"    - uses: ./.github/actions/d{i + 1}\n" if i < 4 else good))
+        self.assertTrue(
+            any(needle in e for e in self.locked_errors(self.prefixed("      - uses: ./.github/actions/d0\n"))),
+            "nesting past the depth bound",
+        )
+        self.assertEqual(self.locked_errors(self.prefixed("      - uses: ./.github/actions/d1\n")), [])
+
+    def test_toolchain_prefix_without_a_readable_channel_is_refused(self) -> None:
+        needle = "never proves Cargo.lock matches"
+        step = f"      - uses: {self._TOOLCHAIN}\n        with:\n          toolchain: 1.98.1\n"
+        content = self.prefixed(step)
+        self.assertEqual(self.locked_errors(content), [])
+        for bad in ("not toml [", '[toolchain]\nchannel = 1\n', "toolchain = 1\n", ""):
+            with self.subTest(bad=bad):
+                _write(self.fx.toolchain, bad)
+                self.assertTrue(any(needle in e for e in self.locked_errors(content)), bad)
+        os.remove(self.fx.toolchain)
+        self.assertTrue(any(needle in e for e in self.locked_errors(content)), "no rust-toolchain.toml")
 
     def test_repository_cargo_config_that_can_redirect_the_lock_is_refused(self) -> None:
         ok = _RO13.replace("      - run: cargo test\n", "      - run: cargo check --locked\n")
@@ -4193,6 +4320,83 @@ class TestReleaseOnlyDeclarations(unittest.TestCase):
         )
         literal = _RO13.replace(extra_output, extra_output + "      lit: ${{ steps.c.outputs['code'] }}\n")
         self.assertFalse(any(needle in e for e in self.errors(literal)))
+
+    def test_every_computed_output_read_is_refused(self) -> None:
+        needle = "reads outputs through a computed name or a serialisation"
+        extra_output = "      code: ${{ steps.c.outputs.code }}\n"
+        probes = (
+            "steps.c['outputs'][env.K]",
+            "needs.changes['outputs'][vars.K]",
+            "steps.c['outputs'][matrix.k]",
+            "needs[vars.J].outputs.x",
+            "needs.changes[env.X]",
+            "needs.*.outputs.x",
+            "needs.changes.outputs",
+            "needs.changes",
+            "needs",
+            "steps",
+            "toJSON(needs)",
+            "toJSON(steps)",
+            "Steps.c.Outputs[env.K]",
+            "steps.c.outputs[github.event.pull_request.title]",
+        )
+        for probe in probes:
+            with self.subTest(where="output", probe=probe):
+                self.assertRefused(needle, _RO13.replace(extra_output, extra_output + f"      ro: ${{{{ {probe} }}}}\n"))
+        fields = {
+            "job if": ("    needs: [changes]\n    steps:\n      - run: cargo test\n", "    needs: [changes]\n    if: {e} == 'x'\n    steps:\n      - run: cargo test\n"),
+            "step if": ("      - run: cargo test\n", "      - if: {e} == 'x'\n        run: cargo test\n"),
+            "step with": ("      - run: cargo test\n", "      - uses: ./.github/actions/x\n        with:\n          v: ${{{{ {e} }}}}\n      - run: cargo test\n"),
+            "step env": ("      - run: cargo test\n", "      - env:\n          V: ${{{{ {e} }}}}\n        run: cargo test\n"),
+            "step run": ("      - run: cargo test\n", "      - run: echo ${{{{ {e} }}}}\n"),
+            "step name": ("      - run: cargo test\n", "      - name: n ${{{{ {e} }}}}\n        run: cargo test\n"),
+            "strategy": ("    needs: [changes]\n    steps:\n      - run: cargo test\n", "    needs: [changes]\n    strategy:\n      matrix:\n        k: ${{{{ fromJSON({e}) }}}}\n    steps:\n      - run: cargo test\n"),
+            "env key": ("      - run: cargo test\n", "      - env:\n          ${{{{ {e} }}}}: v\n        run: cargo test\n"),
+        }
+        for probe in probes[:4]:
+            for field, (old, new) in fields.items():
+                with self.subTest(where=field, probe=probe):
+                    content = _RO13.replace(old, new.format(e=probe), 1)
+                    self.assertNotEqual(content, _RO13)
+                    self.assertRefused(needle, content)
+
+    def test_unparseable_or_partially_wrapped_output_reads_are_refused(self) -> None:
+        needle = "reads outputs through a computed name or a serialisation"
+        extra_output = "      code: ${{ steps.c.outputs.code }}\n"
+        for bad in ("${{ steps.c.outputs.release_only == }}", "${{ steps.c.outputs.x", "${{ ) }}"):
+            with self.subTest(bad=bad):
+                self.assertRefused(needle, _RO13.replace(extra_output, extra_output + f"      ro: {bad}\n"))
+        plain = "    needs: [changes]\n    steps:\n      - run: cargo test\n"
+        for cond in (
+            "x ${{ needs.changes.outputs.code == 'true' }}",
+            "${{ needs.changes.outputs.code == 'true' }} && true",
+            "${{ needs.changes.outputs.code }}${{ 'x' }}",
+        ):
+            with self.subTest(cond=cond):
+                self.assertRefused(needle, _RO13.replace(plain, f"    needs: [changes]\n    if: {cond}\n    steps:\n      - run: cargo test\n"))
+
+    def test_literal_output_reads_pass_and_bracketed_release_only_is_a_mention(self) -> None:
+        needle = "reads outputs through a computed name or a serialisation"
+        extra_output = "      code: ${{ steps.c.outputs.code }}\n"
+        for ok in (
+            "${{ steps.c['outputs']['code'] }}",
+            "${{ steps.c.outputs['code'] == 'true' }}",
+            "${{ steps['c'].outputs.code }}",
+        ):
+            with self.subTest(ok=ok):
+                errs = self.errors(_RO13.replace(extra_output, extra_output + f"      lit: {ok}\n"))
+                self.assertFalse(any(needle in e for e in errs), errs)
+        agg = "      - run: test \"${{ needs.shard.result }}\" != failure\n"
+        errs = self.errors(_RO13.replace(agg, "      - if: contains(needs.*.result, 'failure')\n        run: exit 1\n" + agg))
+        self.assertFalse(any(needle in e for e in errs), errs)
+        self.assertRefused(
+            "exports the raw classifier value",
+            _RO13.replace(extra_output, extra_output + "      ro: ${{ steps.c['outputs']['RELEASE_ONLY'] }}\n"),
+        )
+        self.assertRefused(
+            "exports the raw classifier value",
+            _RO13.replace(extra_output, extra_output + "      alias: ${{ steps.c.outputs['release_only'] }}\n"),
+        )
 
     def test_no_locked_cargo_step_on_a_release_run_gate_is_refused(self) -> None:
         needle = "never proves Cargo.lock matches"

@@ -271,6 +271,20 @@ class TestManifestLockConsistency(unittest.TestCase):
         self.put("Cargo.lock", _LOCK + '\n[[package]]\nname = "literal"\nversion = "0.1.0"\n')
         self.assertRefused("path package 'literal' 0.1.0, which is not exactly one listed")
 
+    def test_two_listed_crates_at_one_name_and_version_are_refused(self) -> None:
+        # A member and an excluded crate both declare `literal 0.1.0`: one
+        # lock entry cannot be exactly one listed crate, whether Cargo.lock
+        # holds it once or once per crate.
+        self._exclude("tool", '[package]\nname = "literal"\nversion = "0.1.0"\n\n[workspace]\n')
+        for lock in (_LOCK, _LOCK + '\n[[package]]\nname = "literal"\nversion = "0.1.0"\n'):
+            with self.subTest(entries=lock.count('name = "literal"')):
+                self.put("Cargo.lock", lock)
+                self.assertRefused("path package 'literal' 0.1.0, which is not exactly one listed")
+
+    def test_one_crate_spelled_twice_is_listed_once(self) -> None:
+        self.put("Cargo.toml", _ROOT.replace('"lit",', '"lit",\n    "./lit/../lit",'))
+        self.assertEqual(mlc.check(self.root), [])
+
     def test_exclude_outside_the_repository_is_refused(self) -> None:
         outside = tempfile.TemporaryDirectory()
         self.addCleanup(outside.cleanup)
