@@ -44,6 +44,7 @@ def _run(**over: object) -> dict:
         "head_branch": "main",
         "head_sha": OTHER,
         "created_at": _stamp(timedelta(hours=8)),
+        "head_repository": {"full_name": REPO},
     }
     run.update(over)
     return run
@@ -56,8 +57,9 @@ def _listing(*runs: dict) -> dict:
 class FakeApi:
     """Route `gh api` paths: a main-nightly listing, an own-commit listing, a PR."""
 
-    def __init__(self, main: object, own: object = None, pr: object = None) -> None:
+    def __init__(self, main: object, own: object = None, pr: object = None, compare: object = None) -> None:
         self.main, self.own, self.pr = main, own if own is not None else _listing(), pr
+        self.compare = compare if compare is not None else {"status": "ahead"}
         self.calls: list[str] = []
 
     def __call__(self, path: str) -> object:
@@ -66,6 +68,8 @@ class FakeApi:
             if self.pr is None:
                 raise ng.NightlyError("no such PR")
             return self.pr
+        if "/compare/" in path:
+            return self.compare
         if "head_sha=" in path:
             return self.own
         if "branch=main" in path:
@@ -172,6 +176,31 @@ class EventTest(unittest.TestCase):
 class VerdictTest(unittest.TestCase):
     def test_green_main_nightly_passes(self) -> None:
         self.assertEqual(_verdict(FakeApi(_listing(_run()))), [])
+
+    def test_main_nightly_off_main_refused(self) -> None:
+        # A tag or fork branch named `main` reports head_branch "main"; only a
+        # commit on main's history proves main.
+        for compare in ({"status": "diverged"}, {"status": "behind"}, {}, [], {"status": None}):
+            with self.subTest(compare):
+                api = FakeApi(_listing(_run()), compare=compare)
+                self.assertTrue(any("is not on main" in r for r in _verdict(api)))
+                self.assertTrue(any(f"/compare/{OTHER}...main" in c for c in api.calls))
+
+    def test_main_nightly_at_or_behind_main_tip_passes(self) -> None:
+        for status in ("identical", "ahead"):
+            with self.subTest(status):
+                self.assertEqual(_verdict(FakeApi(_listing(_run()), compare={"status": status})), [])
+
+    def test_main_nightly_from_other_repo_refused(self) -> None:
+        for head in ({"full_name": "fork/compiler"}, {}, None, "ipe-lang/compiler"):
+            with self.subTest(head):
+                run = _run(head_repository=head)
+                self.assertTrue(any("head repository" in r for r in _verdict(FakeApi(_listing(run)))))
+
+    def test_main_nightly_bad_sha_refused(self) -> None:
+        for sha in ("", "zz", None, "A" * 40):
+            with self.subTest(sha):
+                self.assertTrue(_verdict(FakeApi(_listing(_run(head_sha=sha)))))
 
     def test_red_main_nightly_blocks(self) -> None:
         self.assertTrue(_verdict(FakeApi(_listing(_run(conclusion="failure")))))

@@ -115,9 +115,66 @@ class ScanTest(unittest.TestCase):
         finally:
             rp.MAX_LOG_LINES = old
 
+    def test_coloured_test_failure_vetoes(self) -> None:
+        # ci.yml sets CARGO_TERM_COLOR=always: nextest wraps its status words
+        # in SGR codes, which must not hide the marker beside an infra line.
+        for line in (
+            "\x1b[31;1m        FAIL\x1b[0m [  12.881s] ipe::emit broken_case",
+            "\x1b[1m\x1b[31m     TIMEOUT\x1b[0m [ 900.001s] ipe::x y",
+            "\x1b[31;1merror\x1b[0m: test run failed",
+            "\x1b]8;;https://x\x1b\\       FLAKY\x1b]8;;\x07 2/2 [   3.1s] ipe::x y",
+        ):
+            with self.subTest(line):
+                e = rp.scan([*ENOSPC_LOG, TS + line])
+                self.assertTrue(e.test_failure)
+                self.assertFalse(e.infra_only)
+
+    def test_control_sequence_strip_is_linear(self) -> None:
+        import time
+
+        start = time.monotonic()
+        rp.scan(["\x1b]" * 2000 + "\x1b[" + "1;" * 2000] * 50)
+        self.assertLess(time.monotonic() - start, 5.0)
+
+    def test_recovered_retry_is_not_infra(self) -> None:
+        # A retry cargo recovered from is not why the job failed; the later
+        # lint red must stay red.
+        log = [
+            TS + "warning: spurious network error (2 tries remaining): [6] Could not resolve host: index.crates.io",
+            TS + "Retrying in 3 seconds: curl: (56) Recv failure",
+            TS + "error: this `if` has identical blocks",
+        ]
+        self.assertFalse(rp.scan(log).infra)
+        self.assertFalse(rp.decide([rp.scan(log)]))
+
+    def test_unrecovered_network_error_is_infra(self) -> None:
+        line = TS + "  [6] Could not resolve host: index.crates.io"
+        self.assertEqual(rp.scan([line]).infra, frozenset({"download-network"}))
+
     def test_signature_past_the_line_cap_is_ignored(self) -> None:
         line = "x" * rp.MAX_LINE_CHARS + "No space left on device"
         self.assertFalse(rp.scan([line]).infra)
+
+
+class BoundedLinesTest(unittest.TestCase):
+    def test_long_line_is_read_in_capped_pieces(self) -> None:
+        text = "x" * (rp.MAX_LINE_CHARS * 3 + 5) + "\nshort\n"
+        pieces = list(rp.bounded_lines(io.StringIO(text)))
+        self.assertTrue(all(len(p) <= rp.MAX_LINE_CHARS for p in pieces))
+        self.assertEqual("".join(pieces), text)
+
+    def test_marker_past_a_long_prefix_still_vetoes(self) -> None:
+        text = "y" * (rp.MAX_LINE_CHARS * 2) + " No space left on device\n        FAIL [ 1.0s] a b\n"
+        self.assertTrue(rp.scan(rp.bounded_lines(io.StringIO(text))).test_failure)
+
+    def test_over_long_log_in_characters_refused(self) -> None:
+        old = rp.MAX_LOG_CHARS
+        rp.MAX_LOG_CHARS = 10
+        try:
+            with self.assertRaises(rp.PolicyError):
+                list(rp.bounded_lines(io.StringIO("abcdef\nghijkl\n")))
+        finally:
+            rp.MAX_LOG_CHARS = old
 
 
 class DecideTest(unittest.TestCase):
@@ -149,6 +206,18 @@ class JobIdsTest(unittest.TestCase):
         for bad in ("12\nabc", "012", " 12", "12 ", "-1", "0", "1.0", "{}", "٣"):
             with self.subTest(bad), self.assertRaises(rp.PolicyError):
                 rp.parse_job_ids(bad)
+
+    def test_every_unpassed_conclusion_needs_proof(self) -> None:
+        listing = "1\tsuccess\n2\tfailure\n3\ttimed_out\n4\tcancelled\n5\tskipped\n6\tnull\n7\tneutral\n8\tstartup_failure"
+        self.assertEqual(rp.failed_job_ids(listing), [2, 3, 4, 6, 8])
+
+    def test_malformed_job_listing_refused(self) -> None:
+        for bad in ("12", "12\t", "x\tfailure", "12\tFailure", "12\tfailure\n12\tsuccess", "\tfailure", "12\tfail ure"):
+            with self.subTest(bad), self.assertRaises(rp.PolicyError):
+                rp.failed_job_ids(bad)
+
+    def test_jobs_jq_emits_id_and_conclusion(self) -> None:
+        self.assertEqual(rp.JOBS_JQ, '.jobs[] | "\\(.id)\\t\\(.conclusion)"')
 
     def test_repeated_id_refused(self) -> None:
         with self.assertRaises(rp.PolicyError):
@@ -230,6 +299,16 @@ class RetryBanTest(unittest.TestCase):
                      "[[profile.ci.overrides]]\nfilter = 'all()'\nretries = 1 # one\n"):
             with self.subTest(body), _tree(body, {}) as root:
                 self.assertTrue(any("retries" in e for e in rp.retry_errors(root)))
+
+    def test_quoted_or_hidden_nextest_retries_refused(self) -> None:
+        for body in ('"retries" = 1\n', "[profile.ci]\n'retries'=2\n", "profile.ci.retries = 1\n",
+                     'x = { filter = "#", retries = 1 }\n'):
+            with self.subTest(body), _tree(body, {}) as root:
+                self.assertTrue(any("retries" in e for e in rp.retry_errors(root)))
+
+    def test_workflow_retry_after_hash_refused(self) -> None:
+        with _tree("", {"workflows/a.yml": 'run: echo "#" && cargo nextest run --retries 2\n'}) as root:
+            self.assertTrue(any("retry" in e for e in rp.retry_errors(root)))
 
     def test_workflow_and_action_retries_refused(self) -> None:
         for rel, body in (

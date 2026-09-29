@@ -29,6 +29,8 @@ concurrency:
 jobs:
   rerun:
     runs-on: ubuntu-latest
+    # Bounds the log scan; a killed classify step leaves no verdict (no rerun).
+    timeout-minutes: 20
     # Only a first-attempt FAILURE is eligible. A CANCELLED run (ci.yml's
     # `cancel-on-cheap-red` watcher, a superseded push) concludes `cancelled`,
     # never `failure`, so it is never retried.

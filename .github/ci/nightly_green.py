@@ -8,8 +8,10 @@ is a required context that passes only on proof the full gate is green:
   1. the change's own commit passed a dispatched full gate (the recovery path:
      a PR that fixes a red nightly is dispatched on its branch, proves itself,
      and can merge), or
-  2. the latest completed nightly on main concluded `success` and is at most
-     MAX_AGE_H hours old (a stopped nightly is not a green one).
+  2. the latest completed nightly on main concluded `success`, is at most
+     MAX_AGE_H hours old (a stopped nightly is not a green one), and ran on a
+     commit of main's own history in this repository (a tag or branch merely
+     named `main` proves nothing).
 
 Absence is not a pass: no run, an unreadable listing, an unexpected shape, a
 cancelled or stale nightly — each is a red.
@@ -109,6 +111,26 @@ def run_errors(run: dict | None, *, branch: str | None, sha: str | None, now: da
     return errors
 
 
+def ancestry_errors(sha: object, compare: object, repo: str, run_repo: object) -> list[str]:
+    """Return why a `compare/<sha>...main` result does not put `sha` on main, or []."""
+    errors: list[str] = []
+    if run_repo != repo:
+        errors.append(f"run head repository is {run_repo!r}, not {repo!r}")
+    status = compare.get("status") if isinstance(compare, dict) else None
+    if status not in ("identical", "ahead"):
+        errors.append(f"run commit {str(sha)[:12]} is not on {MAIN} (compare status {status!r})")
+    return errors
+
+
+def on_main_errors(repo: str, run: dict) -> list[str]:
+    sha = run.get("head_sha")
+    if not isinstance(sha, str) or not _SHA.fullmatch(sha):
+        return [f"run commit {sha!r} is not a 40-hex commit"]
+    head_repo = run.get("head_repository")
+    run_repo = head_repo.get("full_name") if isinstance(head_repo, dict) else None
+    return ancestry_errors(sha, _gh_json(f"repos/{repo}/compare/{sha}...{MAIN}"), repo, run_repo)
+
+
 def change_sha_source(event: str, head_sha: str, head_ref: str) -> tuple[str, str] | None:
     """Return how to find the change's own commit: ("sha", s) or ("pr", n).
 
@@ -172,6 +194,10 @@ def verdict(env: dict[str, str], now: datetime) -> list[str]:
         reasons += [f"change commit {sha[:12]}: {e}" for e in own_errors]
     main_run = latest_run(_gh_json(_runs_path(repo, f"branch={MAIN}")))
     main_errors = run_errors(main_run, branch=MAIN, sha=None, now=now)
+    if not main_errors and main_run is not None:
+        # `head_branch` is only a name: a tag or a fork branch called `main`
+        # carries it too. The run proves main only if its commit is on main.
+        main_errors = on_main_errors(repo, main_run)
     if not main_errors:
         return []
     return reasons + [f"main nightly: {e}" for e in main_errors]
