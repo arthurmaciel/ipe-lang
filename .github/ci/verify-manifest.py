@@ -59,7 +59,9 @@ Checks performed
      `ci/deterministic-checks.json` (sccache's cache backend does network I/O
      a deterministic check must never risk). The composite itself must equal
      one canonical structure exactly. Malformed shapes are refused, never
-     skipped. Limits are listed on `check_workflow_steps`.
+     skipped. Limits are listed on `check_workflow_steps`. Likewise mold is
+     installed only through `./.github/actions/mold`, which checks the pinned
+     release digest; a raw `rui314/setup-mold` reference is refused.
   7. CI inputs and runner command files, over the same traversal as check 6:
      every third-party `uses:` is pinned to a 40-hex commit SHA (a `docker://`
      reference, and every job `container:`/`services:` image, to a sha256
@@ -236,6 +238,9 @@ CANCEL_WATCHER_JOB_ID = "cancel-on-cheap-red"
 
 SCCACHE_ACTION_PREFIX = "mozilla-actions/sccache-action@"
 SCCACHE_COMPOSITE_USES = "./.github/actions/sccache"
+# mold is installed only by the local composite, which pins the release digest.
+RAW_MOLD_ACTION_PREFIX = "rui314/setup-mold@"
+MOLD_COMPOSITE_USES = "./.github/actions/mold"
 # Identity of a local action: its repo-root-relative path, normalized
 # (`./x/`, `./x`, `./a/../x` are one path) and byte-exact. Two paths that are
 # case-fold-equal but not byte-equal are refused outright (macOS and Windows
@@ -2229,6 +2234,11 @@ def _audit_step(st: Step, loc: str, policy: StepPolicy, errors: list[str]) -> No
         errors.append(
             f"{loc} runs the raw {SCCACHE_ACTION_PREFIX}... action directly — use "
             f"{SCCACHE_COMPOSITE_USES} instead, the one place it may run"
+        )
+    if st.uses is not None and st.uses_folded.startswith(RAW_MOLD_ACTION_PREFIX.casefold()):
+        errors.append(
+            f"{loc} runs the raw {RAW_MOLD_ACTION_PREFIX}... action directly — use "
+            f"{MOLD_COMPOSITE_USES} instead, which verifies the release digest"
         )
     _refuse_env_keys(_scoped_env(st.raw, f"{loc} env", errors), loc, errors)
     if "run" in st.raw and not isinstance(st.raw["run"], str):

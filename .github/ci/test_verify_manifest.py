@@ -156,6 +156,28 @@ class TestSccacheWiringRefusals(unittest.TestCase):
             any("runs the raw" in e and "build" in e for e in errors), errors
         )
 
+    def test_raw_setup_mold_is_refused(self) -> None:
+        self.fx.workflow(
+            "ci.yml",
+            textwrap.dedent(
+                """\
+                name: ci
+                on: push
+                jobs:
+                  build:
+                    runs-on: ubuntu-latest
+                    steps:
+                      - uses: Rui314/Setup-Mold@10ca16bf91dc22e05ebdc935cad9c75ea248f621
+                      - run: cargo build
+                """
+            ),
+        )
+        errors = self.fx.errors()
+        self.assertTrue(
+            any("runs the raw rui314/setup-mold@" in e and "build" in e for e in errors),
+            errors,
+        )
+
     def test_case_variant_uses_is_still_refused(self) -> None:
         self.fx.workflow(
             "ci.yml",
