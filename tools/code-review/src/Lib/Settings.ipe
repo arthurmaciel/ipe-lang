@@ -1,4 +1,4 @@
-module Lib.Settings exposing (DbLocation, IndexSettings, indexReadUrl, indexSettings, indexWriteUrl, parseDbLocation, reviewDb, reviewUrl)
+module Lib.Settings exposing (DbLocation, IndexSettings, encodeFilePath, indexReadUrl, indexSettings, indexWriteUrl, parseDbLocation, reviewDb, reviewUrl)
 
 import Ipe.Error as Error
 import Ipe.Path as Path exposing (Path)
@@ -83,8 +83,9 @@ dbRefusal var raw problem =
 
 
 -- The URL for `loc` opened in SQLite `mode`. A file path is percent-encoded
--- (`%` then `?`), so a working directory holding either character still names
--- the same file instead of starting a query or decoding to another name.
+-- (`%` first, then `?` and `#`), so a working directory holding any of them
+-- still names the same file instead of starting a query or fragment or
+-- decoding to another name.
 urlWithMode : String -> DbLocation -> String
 urlWithMode mode loc =
     case loc of
@@ -100,6 +101,7 @@ encodeFilePath path =
     path
         |> String.replace "%" "%25"
         |> String.replace "?" "%3F"
+        |> String.replace "#" "%23"
 
 
 -- The index opened read-only (`mode=ro`), so listing can never create or

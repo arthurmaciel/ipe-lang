@@ -171,6 +171,7 @@ allChecks db =
                 && Format.formatReviewedAt (Timestamp.fromUnixMillis 1700000000000)
                 == "2023-11-14 22:13:20"
             )
+        , Task.succeed ( "db file paths escape url specials", filePathsEncodeUrlSpecials )
         , Task.succeed
             ( "numberedLines counts from line_start"
             , Format.numberedLines 10 "a\nb\nc"
@@ -885,7 +886,22 @@ dbUrlsCarryAppMode =
                 == "sqlite:///tmp/index%3F.db?mode=ro"
                 && Settings.indexWriteUrl url
                 == "sqlite:///tmp/index%3F.db?mode=rw"
+                && Settings.reviewUrl url
+                == "sqlite:///tmp/index%3F.db?mode=rwc"
             )
+
+
+-- A working directory can hold `%`, `?` or `#`; each is escaped so the joined
+-- file path survives the URL as the same name, with `%` escaped first so the
+-- other escapes are not re-encoded.
+filePathsEncodeUrlSpecials : Bool
+filePathsEncodeUrlSpecials =
+    Settings.encodeFilePath "/w/a%b?c#d/index.db"
+        == "/w/a%25b%3Fc%23d/index.db"
+        && Settings.encodeFilePath "/w/%3F"
+        == "/w/%253F"
+        && Settings.encodeFilePath "/w/plain.db"
+        == "/w/plain.db"
 
 
 -- The index bridge with `IPE_INDEX_ROOT` given relative to the working
