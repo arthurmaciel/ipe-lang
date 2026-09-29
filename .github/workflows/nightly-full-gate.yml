@@ -2,7 +2,7 @@ name: nightly-full-gate
 
 # The single scheduled entry point for the nightly HEAVY sweep. It fires the
 # "Build & test" workflow (ci.yml) against main via workflow_dispatch; ci.yml's
-# heavy jobs (the full 8-shard e2e, seal-slice, seal-modset, the runtime
+# heavy jobs (the full 14-shard e2e, seal-slice, seal-modset, the runtime
 # full-feature builds, the explain/doc gates, browser-e2e, the Linux Tier-2
 # jails) all key on `github.event_name != 'pull_request'`, so a dispatch runs the
 # whole heavy gate. Keeping the cron HERE (not on ci.yml) gives the

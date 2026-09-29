@@ -7,9 +7,9 @@
 #
 # Dispositions
 #   gate          Blocks (a required status context) and runs per relevant change.
-#   nightly-gate  Heavy; runs nightly, not on every PR. A
-#                 red blocks the NEXT promotion via the fail-closed
-#                 `promotion-ready` job (absence != pass). Never silently advisory.
+#   nightly-gate  Heavy; runs nightly, not on every PR. A red blocks the NEXT
+#                 merge via the required `nightly-green` gate (absence != pass).
+#                 Never silently advisory.
 #   informational Never blocks. MANDATORY low-noise surface (the ci-health
 #                 dedup issue + summary) and a named owner. May NOT guard a
 #                 Security / Soundness / SEAL invariant.
@@ -142,7 +142,7 @@ checks:
   # ── Panic-scan / cargo-deny / playground / admission (per-change gates) ────
   - context: panic-scan
     disposition: gate
-    producer: panic-scan.yml
+    producer: ci.yml
     guards: Soundness
   - context: cargo-deny
     disposition: gate
@@ -164,6 +164,17 @@ checks:
     disposition: gate
     producer: admission-sandbox.yml
     guards: Security
+
+  # ── Nightly enforcement (per-change gate) ─────────────────────────────────
+  # Red unless the latest nightly on main is green and fresh, or this change's
+  # own commit passed a dispatched full gate — so a red `nightly-gate` job
+  # blocks the next merge (`.github/ci/nightly_green.py`).
+  - context: nightly-green
+    disposition: gate
+    producer: nightly-green.yml
+    guards: >-
+      Soundness / SEAL — every `nightly-gate` proof (jail, sanitizers,
+      seal-modset, browser-e2e) holds on main before another change lands.
 
   # ── Editor tooling (per-change gate) ──────────────────────────────────────
   # The tree-sitter grammar must accept every reference `.ipe` file (stdlib +
@@ -192,7 +203,7 @@ checks:
     disposition: gate
     producer: ci.yml
     guards: SEAL
-    aggregates: [seal-slice-shard]
+    aggregates: [e2e]
 
   # ── Heavy soundness / sanitizers — nightly-gate ───────────────────────────
   - context: asan-all
@@ -316,17 +327,20 @@ checks:
     note: playground.yml build leg; playground-jail is the Security gate.
 
   # ── Path classifiers (gate) ──────────────────────────────────────────────
-  # Each workflow's paths-filter job. A failed or cancelled classifier SKIPS
-  # every job that `needs` it, and GitHub counts a skipped required check as
-  # passing — so the classifier is itself required: absent proof it ran, the
-  # merge is blocked (fail closed). Each carries a workflow-unique name so the
+  # Each workflow's `changes` job, running the fail-closed classifier
+  # (.github/ci/change_class.py; ci.yml's `changes` also runs its PROSE-set
+  # guard, .github/ci/prose_guard.py, so a PR that makes a PROSE path readable cannot merge). A failed or
+  # cancelled `changes` job SKIPS every job that `needs` it, and GitHub counts
+  # a skipped required check as passing — so the classifier is itself
+  # required: absent proof it ran, the merge is blocked (fail closed). Each carries a workflow-unique name so the
   # required context resolves to exactly one producer.
   - context: changes
     disposition: gate
     producer: ci.yml
     guards: >-
-      Security — fail-closed path classification: a failed classifier cannot
-      skip every ci.yml tier into a passing required set.
+      Security — fail-closed path classification + the PROSE-set guard: a
+      failed classifier cannot skip every ci.yml tier into a passing required
+      set, and a PROSE path cannot gain a reader.
   - context: admission-changes
     disposition: gate
     producer: admission-sandbox.yml

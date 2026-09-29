@@ -28,8 +28,7 @@ Checks performed
      required contexts) to make mismatches fatal; without it the manifest is the
      SSOT and the check is skipped with a note.
   5. `ci/deterministic-checks.json` — the SSOT of (job, check step) pairs
-     consumed by ci.yml's `cancel-on-cheap-red` watcher and
-     rerun-failed-once.yml — is well-formed (exact keys, non-empty strings with
+     consumed by ci.yml's `cancel-on-cheap-red` watcher — is well-formed (exact keys, non-empty strings with
      no surrounding whitespace, no duplicate job), its job set equals the
      watcher's `needs:`, and each pair's step is a `name:` of that job's steps
      in ci.yml.
@@ -141,6 +140,14 @@ Checks performed
      `release_only` (to any depth) counts as `release_only`.  A `gate`
      producer whose every step carries an `if:` is held to the same
      trivial-pass shape whatever the steps test, since its steps can all skip.
+  10. Fast gate first: in ci.yml, every heavy test-shard job (a matrix job
+      that downloads the `nextest-archive` artifact; `test-run` and `e2e` must
+      be among them) `needs` every fast deterministic gate (FAST_GATES), and
+      its `if:` calls no status function (`always()`, `failure()`,
+      `cancelled()`) that would start it behind a red need.  Each fast gate is
+      a single unexpanded ci.yml job, a manifest `gate`, and `needs` nothing
+      but `changes`, so it stays fast.  A format, lint, lock or panic-scan red
+      therefore never launches the heavy tier on any event or fork.
 
 Pure stdlib + PyYAML (already a CI dependency).  No network.
 """
@@ -180,6 +187,14 @@ WORKFLOW_GLOBS = (
 MANIFEST = os.path.join(REPO_ROOT, "ci", "check-manifest.yml")
 DETERMINISTIC_CHECKS_FILE = os.path.join(REPO_ROOT, "ci", "deterministic-checks.json")
 CANCEL_WATCHER_WORKFLOW = "ci.yml"
+# Check 10: the fast deterministic gates every heavy test shard waits on, and
+# the shard jobs the heavy-shard derivation must find.
+FAST_GATE_WORKFLOW = "ci.yml"
+FAST_GATES = ("fmt", "clippy", "manifest-lock-consistency", "panic-scan")
+FAST_GATE_NEEDS_ALLOWED = frozenset({"changes"})
+HEAVY_SHARD_ANCHORS = ("test-run", "e2e")
+HEAVY_SHARD_ARTIFACT = "nextest-archive"
+_STATUS_FN = re.compile(r"\b(always|failure|cancelled)\s*\(", re.IGNORECASE)
 CANCEL_WATCHER_JOB_ID = "cancel-on-cheap-red"
 
 SCCACHE_ACTION_PREFIX = "mozilla-actions/sccache-action@"
@@ -576,10 +591,9 @@ def load_deterministic_checks(
 
 def check_deterministic_set(jobs: list[Job], errors: list[str]) -> None:
     """`ci/deterministic-checks.json` is the one SSOT behind ci.yml's
-    `cancel-on-cheap-red` watcher and rerun-failed-once.yml's retry skip.
-    Its job set must equal the watcher's `needs:`, and each pair's step must
+    `cancel-on-cheap-red` watcher. Its job set must equal the watcher's `needs:`, and each pair's step must
     be a literal `name:` of that job's steps — a renamed or unnamed check step
-    would otherwise never match and silently disable both consumers.
+    would otherwise never match and silently disable the watcher.
 
     This check reads `jobs` (the plain `Job` pass `main` shares across
     checks 1-4) for the watcher's `needs:` and contexts, but re-reads
@@ -1090,6 +1104,99 @@ def check_release_only_skips(gate_contexts: set[str], errors: list[str], root: s
                     f"trivial-pass `run:` step gated `if: {runs[0]}` — a job whose steps "
                     "all skip reports a pass without executing anything (check 9)"
                 )
+
+
+def _needs_list(job: dict) -> list[str] | None:
+    needs = job.get("needs", [])
+    if isinstance(needs, str):
+        return [needs]
+    if isinstance(needs, list) and all(isinstance(n, str) for n in needs):
+        return list(needs)
+    return None
+
+
+def _downloads_archive(job: dict) -> bool:
+    for st in job.get("steps") or []:
+        if not isinstance(st, dict):
+            continue
+        uses = st.get("uses")
+        with_ = st.get("with")
+        if (
+            isinstance(uses, str)
+            and uses.startswith("actions/download-artifact@")
+            and isinstance(with_, dict)
+            and with_.get("name") == HEAVY_SHARD_ARTIFACT
+        ):
+            return True
+    return False
+
+
+def check_fast_gate_first(gate_contexts: set[str], errors: list[str], root: str = REPO_ROOT) -> None:
+    """Check 10 (see the module docstring). Refuses, never skips, a shape it
+    cannot read."""
+    where = os.path.join(root, "workflows", FAST_GATE_WORKFLOW)
+    try:
+        with open(where) as f:
+            doc = strict_yaml.safe_load(f)
+    except (OSError, yaml.YAMLError) as e:
+        errors.append(f"check 10: cannot read {where}: {e}")
+        return
+    jobs = doc.get("jobs") if isinstance(doc, dict) else None
+    if not isinstance(jobs, dict):
+        errors.append(f"check 10: {FAST_GATE_WORKFLOW} has no `jobs:` mapping")
+        return
+
+    for gate in FAST_GATES:
+        job = jobs.get(gate)
+        if not isinstance(job, dict):
+            errors.append(f"check 10: fast gate {gate!r} is not a job of {FAST_GATE_WORKFLOW}")
+            continue
+        if "strategy" in job:
+            errors.append(f"check 10: fast gate {gate!r} has a `strategy:`; it must be one unexpanded job")
+        ctx = job.get("name", gate)
+        if ctx not in gate_contexts:
+            errors.append(f"check 10: fast gate {gate!r} (context {ctx!r}) is not a manifest `gate`")
+        needs = _needs_list(job)
+        if needs is None:
+            errors.append(f"check 10: fast gate {gate!r} has a malformed `needs:`")
+        elif not set(needs) <= FAST_GATE_NEEDS_ALLOWED:
+            errors.append(
+                f"check 10: fast gate {gate!r} needs {sorted(set(needs) - FAST_GATE_NEEDS_ALLOWED)}; "
+                f"a fast gate may need only {sorted(FAST_GATE_NEEDS_ALLOWED)}"
+            )
+
+    heavy = sorted(
+        str(jid)
+        for jid, job in jobs.items()
+        if isinstance(job, dict)
+        and isinstance(job.get("strategy"), dict)
+        and "matrix" in job["strategy"]
+        and _downloads_archive(job)
+    )
+    for anchor in HEAVY_SHARD_ANCHORS:
+        if anchor not in heavy:
+            errors.append(
+                f"check 10: {anchor!r} is not a matrix job of {FAST_GATE_WORKFLOW} that downloads "
+                f"{HEAVY_SHARD_ARTIFACT!r}; the heavy-shard derivation no longer finds it"
+            )
+    for jid in heavy:
+        job = jobs[jid]
+        needs = _needs_list(job)
+        if needs is None:
+            errors.append(f"check 10: heavy shard job {jid!r} has a malformed `needs:`")
+        else:
+            missing = [g for g in FAST_GATES if g not in needs]
+            if missing:
+                errors.append(
+                    f"check 10: heavy shard job {jid!r} does not `needs:` fast gate(s) {missing}; "
+                    "a fast red would still launch it"
+                )
+        cond = job.get("if")
+        if cond is not None and (not isinstance(cond, str) or _STATUS_FN.search(cond)):
+            errors.append(
+                f"check 10: heavy shard job {jid!r} `if:` calls a status function "
+                "(always/failure/cancelled) or is not a string; it would start behind a red need"
+            )
 
 
 def _env_keys_folded(env: dict) -> set[str]:
@@ -1884,7 +1991,9 @@ class ToolRole(enum.Enum):
 # tool is verdict-bearing until it is listed here.
 TOOL_ROLES: dict[str, ToolRole] = {
     "release_only.py": ToolRole.ADVISORY,
+    "change_class.py": ToolRole.ADVISORY,
     "deterministic_checks_output.py": ToolRole.OUTPUT,
+    "rerun_policy.py": ToolRole.OUTPUT,
 }
 
 
@@ -2083,6 +2192,10 @@ TOOL_ENV_ALLOWLIST: dict[str, frozenset[EnvScope]] = {
     "REPO": _EVERY_SCOPE,
     "GH_TOKEN": _EVERY_SCOPE,
     "HEAD_SHA": _EVERY_SCOPE,
+    # Event data one tool step reads: the merge-group queue base commit and
+    # the id of the run a `workflow_run` event names.
+    "MERGE_GROUP_BASE_SHA": frozenset({EnvScope.STEP}),
+    "RUN_ID": frozenset({EnvScope.STEP}),
     "CARGO_TERM_COLOR": frozenset({EnvScope.WORKFLOW}),
     "CARGO_INCREMENTAL": frozenset({EnvScope.WORKFLOW}),
 }
@@ -3082,8 +3195,14 @@ def main() -> int:
         errors,
     )
 
-    # ---- 8. no release-only skip-as-pass on a gate producer ----
+    # ---- 9. no release-only skip-as-pass on a gate producer ----
     check_release_only_skips(
+        {ctx for ctx, e in by_context.items() if e.get("disposition") == "gate"},
+        errors,
+    )
+
+    # ---- 10. fast gate first: heavy test shards need every fast gate ----
+    check_fast_gate_first(
         {ctx for ctx, e in by_context.items() if e.get("disposition") == "gate"},
         errors,
     )

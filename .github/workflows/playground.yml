@@ -4,8 +4,8 @@ name: Playground jail
 # sandbox security tests so a change that breaks either fails CI.
 #
 # Trigger strategy (mirrors the wasm-floor job in ci.yml):
-#   • On PRs: only when playground-relevant paths change (off the required
-#     path for unrelated PRs).
+#   • On PRs: unless the fail-closed classifier (.github/ci/change_class.py,
+#     `playground` scope) proves every changed path irrelevant.
 #   • On push to main/master and nightly: always.
 #
 # Two jobs:
@@ -37,30 +37,32 @@ env:
   CARGO_INCREMENTAL: "0"
 
 jobs:
-  # Path filter: skip on PRs that touch nothing playground-relevant.
+  # Change classification: `playground` is `false` only when every changed path
+  # is PROSE or an unrelated `src/` tree (.github/ci/change_class.py). Any other
+  # path (examples/, .github/, tools/, root files), an unreadable diff, or a
+  # classifier crash runs the jail.
   changes:
     # Unique context: a required `changes` shared with ci.yml would be ambiguous.
     name: playground-changes
     runs-on: ubuntu-latest
     outputs:
-      playground: ${{ steps.filter.outputs.playground }}
+      # An unset output (classifier crash) reads as `true`: absent proof, run.
+      playground: ${{ steps.classify.outputs.playground != 'false' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
-          # A merge-group run needs history back to the queue base for the filter.
-          fetch-depth: ${{ github.event_name == 'merge_group' && '0' || '1' }}
-      - uses: dorny/paths-filter@0e4a8c6effa4802afeda77dc8d303f8176d7dfad # v3
-        id: filter
-        with:
-          # A merge-group run diffs against the queue base, not the default branch.
-          base: ${{ github.event.merge_group.base_sha }}
-          filters: |
-            playground:
-              - 'examples/wasm/language-playground/**'
-              - 'src/wasm/**'
-              - 'src/compiler/sandbox/**'
-              - 'src/compiler/env/**'
-              - '.github/workflows/playground.yml'
+          # The tested merge commit and its base parent, for the changed-path diff;
+          # a merge-group run needs history back to the queue base.
+          fetch-depth: ${{ github.event_name == 'merge_group' && '0' || '2' }}
+      - name: Classify changed paths
+        id: classify
+        # A crash leaves the output unset, which the job output reads as `true`.
+        continue-on-error: true
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          MERGE_GROUP_BASE_SHA: ${{ github.event.merge_group.base_sha }}
+        run: python3 .github/ci/change_class.py --playground
 
   # Build the wasm bundle and the jail-runner binary. This is the primary rot
   # guard: a compile break here fails fast without needing bwrap on the runner.

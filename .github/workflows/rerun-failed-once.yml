@@ -1,22 +1,25 @@
 name: rerun-failed-once
 
-# Self-healing retry for the heavy gate: when a "Build & test" run finishes
-# FAILED on its FIRST attempt, re-run only its failed jobs ONCE. A transient
-# heavy-job flake (a cold cargo-build teardown timeout, a runner scheduler
-# hiccup) then clears on the second attempt without a human in the loop, while a
-# real regression stays red — the rerun fails again and no third attempt is made.
+# Infrastructure-only retry for the heavy gate: when a "Build & test" run
+# finishes FAILED on its FIRST attempt, re-run its failed jobs ONCE — but only
+# when `.github/ci/rerun_policy.py` proves every failed job died of
+# infrastructure (a lost runner, ENOSPC, an sccache/cache HTTP 5xx, a tool or
+# crate download failure) and none shows a test failure. A test failure, a lint
+# red, or any failure the policy cannot classify stays red: a retry that turns
+# a flaky test green hides nondeterminism, so no evidence means no rerun.
 #
 # The "once" guard is the run's own attempt counter: `gh run rerun --failed`
 # starts attempt 2, which re-triggers this workflow_run event with
 # run_attempt == 2; the guard below only acts when run_attempt == 1, so the
-# rerun is issued exactly once per originating run.
+# rerun is issued at most once per originating run.
 on:
   workflow_run:
     workflows: ["Build & test"]
     types: [completed]
 
 permissions:
-  actions: write    # rerun failed jobs
+  actions: write    # read job logs; rerun failed jobs
+  checks: read      # read a failed job's annotations (a lost runner's only trace)
   contents: read
 
 concurrency:
@@ -26,14 +29,11 @@ concurrency:
 jobs:
   rerun:
     runs-on: ubuntu-latest
-    # Only a first-attempt FAILURE is eligible for the single automatic rerun.
-    # A CANCELLED run is not: its conclusion is `cancelled`, never `failure`.
-    # So when ci.yml's `cancel-on-cheap-red` watcher cancels a same-repo PR
-    # run, that run loses its automatic retry. That is safe because the
-    # watcher cancels only on a failed CHECK step listed in
-    # `.github/ci/deterministic-checks.json` (never on a setup/infra step or a
-    # failed ancestor) — a red that fails identically on any retry, so the
-    # retry it removes could never have turned the run green.
+    # Bounds the log scan; a killed classify step leaves no verdict (no rerun).
+    timeout-minutes: 20
+    # Only a first-attempt FAILURE is eligible. A CANCELLED run (ci.yml's
+    # `cancel-on-cheap-red` watcher, a superseded push) concludes `cancelled`,
+    # never `failure`, so it is never retried.
     if: >-
       github.event.workflow_run.conclusion == 'failure' &&
       github.event.workflow_run.run_attempt == 1 &&
@@ -42,72 +42,33 @@ jobs:
       # No `ref:` override — this checks out the default branch (the ref that
       # triggered THIS workflow_run event), never the completed run's own
       # head. A fork PR's head content must never gate a decision made by a
-      # workflow holding write access. Only the SSOT file and the tool that
-      # publishes it are materialised, and no credential is left in the git
-      # config.
+      # workflow holding write access. Only the policy module is materialised
+      # and no credential is left in the git config.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
-          sparse-checkout: |
-            .github/ci/deterministic-checks.json
-            .github/ci/deterministic_checks_output.py
+          sparse-checkout: .github/ci/rerun_policy.py
           sparse-checkout-cone-mode: false
 
-      - name: Publish the deterministic check pairs
-        id: ssot
-        run: python3 .github/ci/deterministic_checks_output.py
-
-      - name: Skip the rerun when every failed job is red at its check step
+      # Sets `rerun=true` only on a positive infra-only proof for EVERY failed
+      # job; any listing, log, or classification failure sets `false`. A crash
+      # of the step itself leaves the output unset — also no rerun.
+      - name: Classify the failed jobs (rerun only on infrastructure)
         id: gate
         env:
           GH_TOKEN: ${{ secrets.PROMOTE_TOKEN || secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
           RUN_ID: ${{ github.event.workflow_run.id }}
-          CHECKS: ${{ steps.ssot.outputs.checks }}
-        run: |
-          set -uo pipefail
+        run: python3 .github/ci/rerun_policy.py --decide
 
-          # A job failed at its deterministic check step fails the same way on
-          # a rerun — retrying only burns runners. A job failed at any other
-          # step (checkout, toolchain, cache, crate fetch — network-shaped) is
-          # exactly what the retry exists for. Default to rerun; only a
-          # positive, fully-read match on EVERY failed job skips it.
-          rerun=true
-
-          failed="$(gh api "repos/$REPO/actions/runs/$RUN_ID/jobs" --paginate \
-            --jq '.jobs[] | select(.conclusion == "failure") | {name, steps: [.steps[] | select(.conclusion == "failure") | .name]}')" || {
-            echo "could not list run $RUN_ID's jobs — keeping the default rerun." >&2
-            echo "rerun=$rerun" >> "$GITHUB_OUTPUT"
-            exit 0
-          }
-
-          # Data-only exact match against the SSOT pairs. `all_matched` is
-          # exactly `true` only when at least one job failed and each failed
-          # job failed at its own check step; a jq error keeps the rerun.
-          all_matched="$(printf '%s\n' "$failed" | jq -rs --argjson ssot "$CHECKS" '
-            [ .[] | . as $job
-              | any($ssot[]; .context == $job.name and (.step as $s | any($job.steps[]; . == $s)))
-            ] | length > 0 and all')" || all_matched=error
-
-          if [ "$all_matched" = "true" ]; then
-            echo "every failed job on run $RUN_ID failed at its deterministic check step — no automatic retry is issued." >&2
-            rerun=false
-          else
-            echo "run $RUN_ID has a failure outside the deterministic check steps (verdict: $all_matched) — keeping the default rerun." >&2
-          fi
-
-          echo "rerun=$rerun" >> "$GITHUB_OUTPUT"
-
-      # Fail toward rerunning: only an explicit `rerun=false` from the gate
-      # skips this step. A failed checkout or a crashed gate step leaves the
-      # output unset, and the retry still fires.
-      - name: Re-run the failed jobs once
-        if: ${{ !cancelled() && steps.gate.outputs.rerun != 'false' }}
+      # Fail toward NOT rerunning: only the exact verdict `true` fires it.
+      - name: Re-run the infrastructure-failed jobs once
+        if: ${{ steps.gate.outputs.rerun == 'true' }}
         env:
           GH_TOKEN: ${{ secrets.PROMOTE_TOKEN || secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
           RUN_ID: ${{ github.event.workflow_run.id }}
         run: |
           set -euo pipefail
-          echo "Build & test run $RUN_ID failed on attempt 1 — re-running its failed jobs once."
+          echo "Build & test run $RUN_ID failed on infrastructure on attempt 1 — re-running its failed jobs once."
           gh run rerun --failed "$RUN_ID" --repo "$REPO"

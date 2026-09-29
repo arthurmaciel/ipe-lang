@@ -46,5 +46,26 @@ jobs:
       - name: Prove the strict-YAML loader refusals (unit tests)
         run: python3 .github/ci/test_strict_yaml.py -v
 
+      - name: Prove the fail-closed change-classifier refusals (unit tests)
+        run: python3 .github/ci/test_change_class.py -v
+
+      - name: The e2e shards and their cover run exactly the SSOT plan
+        run: python3 .github/ci/e2e_shard.py --lint
+
+      - name: Prove the e2e shard-partition refusals (unit tests)
+        run: python3 .github/ci/test_e2e_shard.py -v
+
+      - name: Reruns fire only on infrastructure; no test retries
+        run: python3 .github/ci/rerun_policy.py --lint
+
+      - name: Prove the rerun-policy refusals (unit tests)
+        run: python3 .github/ci/test_rerun_policy.py -v
+
+      - name: A red nightly blocks the next merge (nightly-green wiring)
+        run: python3 .github/ci/nightly_green.py --lint
+
+      - name: Prove the nightly-green refusals (unit tests)
+        run: python3 .github/ci/test_nightly_green.py -v
+
       - name: The derived required-set is in sync with the manifest
         run: python3 .github/ci/check_required_set.py

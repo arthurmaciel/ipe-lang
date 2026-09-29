@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Refusal proofs for `verify-manifest.py`'s step checks (checks 6 and 7),
-merge-queue safety check (check 8), and release-only skip-as-pass check
-(check 9).
+merge-queue safety check (check 8), release-only skip-as-pass check
+(check 9), and fast-gate-first check (check 10).
 
 Check 7 covers content-pinned `uses:`/images, the hash-checked pip shape, and
 env-file writes only through `github-env.sh`; its cases sit in
@@ -42,6 +42,7 @@ _spec.loader.exec_module(verify_manifest)
 check_workflow_steps = verify_manifest.check_workflow_steps
 check_merge_queue = verify_manifest.check_merge_queue
 check_release_only_skips = verify_manifest.check_release_only_skips
+check_fast_gate_first = verify_manifest.check_fast_gate_first
 
 # The live sanctioned composite is the fixture: the canonical form is proven
 # against the file CI actually runs, never a hand-kept copy.
@@ -60,7 +61,7 @@ def _write(path: str, content: str) -> None:
 # The `.github/ci/` tools a fixture holds: a tool run names a file that exists.
 FIXTURE_TOOLS = (
     "verify-manifest.py", "artifact-guard.sh", "github-env.sh", "strict_yaml.py", "release_only.py",
-    "deterministic_checks_output.py",
+    "deterministic_checks_output.py", "change_class.py",
 )
 
 
@@ -2450,6 +2451,27 @@ class TestToolOrderingAndClosedShells(unittest.TestCase):
         self.assertEqual(verdict.step | verdict.job, frozenset())
         self.assertEqual(vm.TOOL_ROLES.get("verify-manifest.py", vm.ToolRole.VERDICT), vm.ToolRole.VERDICT)
 
+    def test_step_scoped_event_keys_are_refused_outside_one_step(self) -> None:
+        for key in ("MERGE_GROUP_BASE_SHA", "RUN_ID"):
+            self.job_accepted(f"- uses: {_CHECKOUT}\n" + _run("Verify", _TOOL, f"env:\n  {key}: x\n"))
+            self.job_refused(f"- uses: {_CHECKOUT}\n" + _run("Verify", _TOOL), "job env", key, job=f"env:\n  {key}: x\n")
+            self.job_refused(f"- uses: {_CHECKOUT}\n" + _run("Verify", _TOOL), key, top=f"env:\n  {key}: x\n")
+        for near in ("RUN_IDS", "run_id", "MERGE_GROUP_BASE", "MERGE_GROUP_BASE_SHA_", "GITHUB_RUN_ID"):
+            self.job_refused(f"- uses: {_CHECKOUT}\n" + _run("Verify", _TOOL, f"env:\n  {near}: x\n"), "step 'Verify'", near)
+
+    def test_lane_tool_roles_are_pinned(self) -> None:
+        vm = verify_manifest
+        self.assertEqual(vm.TOOL_ROLES["change_class.py"], vm.ToolRole.ADVISORY)
+        self.assertEqual(vm.TOOL_ROLES["rerun_policy.py"], vm.ToolRole.OUTPUT)
+        for verdict in ("prose_guard.py", "e2e_shard.py", "nightly_green.py", "check_required_set.py"):
+            self.assertEqual(vm.TOOL_ROLES.get(verdict, vm.ToolRole.VERDICT), vm.ToolRole.VERDICT, verdict)
+
+    def test_advisory_classifier_admits_no_job_if_or_step_if(self) -> None:
+        run = "python3 .github/ci/change_class.py --code"
+        self.job_accepted(f"- uses: {_CHECKOUT}\n" + _run("Classify", run, "continue-on-error: true\n"))
+        self.job_refused(f"- uses: {_CHECKOUT}\n" + _run("Classify", run, "if: always()\n"), "step 'Classify'", "no if:")
+        self.job_refused(f"- uses: {_CHECKOUT}\n" + _run("Classify", run), "with a job if:", job="if: always()\n")
+
     def test_live_masked_tool_jobs_parse_as_output_jobs(self) -> None:
         vm = verify_manifest
         errors: list[str] = []
@@ -3108,6 +3130,155 @@ class TestReleaseOnlySkipAsPass(unittest.TestCase):
             "      - name: Release-only diff - trivial pass\n        if: needs.changes.outputs.code == 'true'\n",
         )
         self.assertRefused(bad, "first step is not the trivial-pass")
+
+
+_FG_OK = textwrap.dedent(
+    """\
+    on: [pull_request]
+    jobs:
+      changes:
+        runs-on: ubuntu-latest
+        steps: [{run: "true"}]
+      fmt:
+        runs-on: ubuntu-latest
+        steps: [{run: "true"}]
+      clippy:
+        needs: changes
+        runs-on: ubuntu-latest
+        steps: [{run: "true"}]
+      manifest-lock-consistency:
+        runs-on: ubuntu-latest
+        steps: [{run: "true"}]
+      panic-scan:
+        runs-on: ubuntu-latest
+        steps: [{run: "true"}]
+      test-prep:
+        needs: changes
+        runs-on: ubuntu-latest
+        steps: [{run: "true"}]
+      test-run:
+        needs: [test-prep, fmt, clippy, manifest-lock-consistency, panic-scan]
+        runs-on: ubuntu-latest
+        strategy: {matrix: {shard: [1, 2]}}
+        steps:
+          - uses: actions/download-artifact@v7
+            with: {name: nextest-archive}
+      e2e:
+        needs: [changes, test-prep, fmt, clippy, manifest-lock-consistency, panic-scan]
+        if: needs.changes.outputs.code == 'true'
+        runs-on: ubuntu-latest
+        strategy: {matrix: {shard: [1, 2]}}
+        steps:
+          - uses: actions/download-artifact@v7
+            with: {name: nextest-archive}
+    """
+)
+_FG_GATES = {"fmt", "clippy", "manifest-lock-consistency", "panic-scan"}
+
+
+class TestFastGateFirst(unittest.TestCase):
+    """Check 10: no heavy test shard starts behind a red fast deterministic gate."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.root = self._tmp.name
+
+    def tearDown(self) -> None:
+        self._tmp.cleanup()
+
+    def errors(self, content: str, *, gates: set[str] = _FG_GATES) -> list[str]:
+        _write(os.path.join(self.root, "workflows", "ci.yml"), content)
+        errors: list[str] = []
+        check_fast_gate_first(gates, errors, root=self.root)
+        return errors
+
+    def assertRefused(self, content: str, needle: str, **kw: object) -> None:
+        errors = self.errors(content, **kw)  # type: ignore[arg-type]
+        self.assertTrue(any(needle in e for e in errors), f"expected {needle!r} in {errors}")
+
+    def test_valid_workflow_passes(self) -> None:
+        self.assertEqual(self.errors(_FG_OK), [])
+
+    def test_repo_ci_yml_passes(self) -> None:
+        errors: list[str] = []
+        check_fast_gate_first(_FG_GATES, errors)
+        self.assertEqual(errors, [])
+
+    def test_heavy_shard_missing_a_fast_gate_refused(self) -> None:
+        for gate in sorted(_FG_GATES):
+            bad = _FG_OK.replace(
+                "needs: [test-prep, fmt, clippy, manifest-lock-consistency, panic-scan]",
+                "needs: [test-prep, " + ", ".join(g for g in ("fmt", "clippy", "manifest-lock-consistency", "panic-scan") if g != gate) + "]",
+            )
+            self.assertRefused(bad, f"'test-run' does not `needs:` fast gate(s) ['{gate}']")
+
+    def test_new_heavy_shard_without_fast_gates_refused(self) -> None:
+        bad = _FG_OK + textwrap.indent(
+            textwrap.dedent(
+                """\
+                seal-extra:
+                  needs: test-prep
+                  runs-on: ubuntu-latest
+                  strategy: {matrix: {shard: [1]}}
+                  steps:
+                    - uses: actions/download-artifact@v7
+                      with: {name: nextest-archive}
+                """
+            ),
+            "  ",
+        )
+        self.assertRefused(bad, "'seal-extra' does not `needs:`")
+
+    def test_bare_string_needs_refused(self) -> None:
+        bad = _FG_OK.replace(
+            "needs: [test-prep, fmt, clippy, manifest-lock-consistency, panic-scan]", "needs: test-prep"
+        )
+        self.assertRefused(bad, "'test-run' does not `needs:`")
+
+    def test_status_function_if_refused(self) -> None:
+        for fn in ("always()", "failure()", "'!cancelled()'", "ALWAYS ()", "${{ always() }}"):
+            bad = _FG_OK.replace("if: needs.changes.outputs.code == 'true'", f"if: {fn}")
+            self.assertRefused(bad, "calls a status function")
+
+    def test_non_string_if_refused(self) -> None:
+        bad = _FG_OK.replace("if: needs.changes.outputs.code == 'true'", "if: true")
+        self.assertRefused(bad, "calls a status function")
+
+    def test_anchor_lost_to_derivation_refused(self) -> None:
+        bad = _FG_OK.replace("with: {name: nextest-archive}", "with: {name: other}", 1)
+        self.assertRefused(bad, "'test-run' is not a matrix job")
+
+    def test_missing_fast_gate_job_refused(self) -> None:
+        bad = _FG_OK.replace("  panic-scan:\n    runs-on: ubuntu-latest\n    steps: [{run: \"true\"}]\n", "")
+        self.assertNotEqual(bad, _FG_OK)
+        self.assertRefused(bad, "fast gate 'panic-scan' is not a job")
+
+    def test_fast_gate_not_a_manifest_gate_refused(self) -> None:
+        self.assertRefused(_FG_OK, "is not a manifest `gate`", gates=_FG_GATES - {"clippy"})
+
+    def test_fast_gate_with_heavy_need_refused(self) -> None:
+        bad = _FG_OK.replace("  clippy:\n    needs: changes\n", "  clippy:\n    needs: [changes, test-prep]\n")
+        self.assertNotEqual(bad, _FG_OK)
+        self.assertRefused(bad, "fast gate 'clippy' needs ['test-prep']")
+
+    def test_matrix_fast_gate_refused(self) -> None:
+        bad = _FG_OK.replace("  fmt:\n    runs-on: ubuntu-latest\n", "  fmt:\n    runs-on: ubuntu-latest\n    strategy: {matrix: {x: [1]}}\n")
+        self.assertNotEqual(bad, _FG_OK)
+        self.assertRefused(bad, "fast gate 'fmt' has a `strategy:`")
+
+    def test_malformed_needs_refused(self) -> None:
+        bad = _FG_OK.replace(
+            "needs: [test-prep, fmt, clippy, manifest-lock-consistency, panic-scan]", "needs: {a: b}"
+        )
+        self.assertRefused(bad, "'test-run' has a malformed `needs:`")
+
+    def test_unreadable_workflow_refused(self) -> None:
+        self.assertRefused("jobs: [", "cannot read")
+
+    def test_missing_workflow_refused(self) -> None:
+        errors: list[str] = []
+        check_fast_gate_first(_FG_GATES, errors, root=self.root)
+        self.assertTrue(any("cannot read" in e for e in errors), errors)
 
 
 if __name__ == "__main__":
