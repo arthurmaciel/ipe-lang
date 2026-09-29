@@ -750,6 +750,47 @@ class GeneratedUnchanged(_TmpRepo):
         self.write("docs/d/sub/new.md", "n\n")
         self.assertEqual(self.status("docs/d/"), 1)
 
+    def test_ignored_output_refused(self) -> None:
+        self.write(".gitignore", "*.gen\nhidden/\n")
+        self.git("add", ".gitignore")
+        self.git("commit", "-q", "-m", "ignore")
+        self.assertEqual(self.status("docs/d/"), 0)
+        self.write("docs/d/new.gen", "n\n")
+        self.assertEqual(self.status("docs/d/"), 1)
+        os.remove(os.path.join(self.root, "docs/d/new.gen"))
+        self.write("docs/d/hidden/deep.md", "n\n")
+        out = subprocess.run([self.SCRIPT, "docs/d/"], cwd=self.root, capture_output=True, text=True)
+        self.assertEqual(out.returncode, 1)
+        self.assertIn("ignored: docs/d/hidden/", out.stderr)
+
+    def test_unusual_file_names_are_read_whole(self) -> None:
+        for name in ("docs/d/sp ace.md", 'docs/d/q"uote.md', "docs/d/new\nline.md", "docs/d/tab\t.md"):
+            with self.subTest(name=name):
+                self.write(name, "n\n")
+                out = subprocess.run([self.SCRIPT, "docs/d/"], cwd=self.root, capture_output=True, text=True)
+                self.assertEqual(out.returncode, 1, out.stderr)
+                self.assertIn("untracked: " + name, out.stderr)
+                self.git("add", name)
+                self.git("commit", "-q", "-m", "add")
+                self.assertEqual(self.status("docs/d/"), 0)
+                self.write(name, "changed\n")
+                out = subprocess.run([self.SCRIPT, "docs/d/"], cwd=self.root, capture_output=True, text=True)
+                self.assertEqual(out.returncode, 1, out.stderr)
+                self.assertIn("changed: " + name, out.stderr)
+                self.git("checkout", "--", name)
+
+    def test_unmerged_path_refused(self) -> None:
+        self.git("checkout", "-q", "-b", "side")
+        self.write("docs/a.md", "side\n")
+        self.git("commit", "-q", "-am", "side")
+        self.git("checkout", "-q", "-")
+        self.write("docs/a.md", "main\n")
+        self.git("commit", "-q", "-am", "main")
+        subprocess.run(["git", "merge", "-q", "side"], cwd=self.root, capture_output=True)
+        out = subprocess.run([self.SCRIPT, "docs/a.md"], cwd=self.root, capture_output=True, text=True)
+        self.assertEqual(out.returncode, 1, out.stderr)
+        self.assertIn("unmerged: docs/a.md", out.stderr)
+
     def test_change_outside_the_paths_is_not_drift(self) -> None:
         self.write("docs/other.md", "o\n")
         self.assertEqual(self.status("docs/a.md", "docs/d/"), 0)
