@@ -184,6 +184,18 @@ Checks performed
       assembled at run time, is not seen, and check 7's head-free exemption
       rests on the same audit); a hostile edit to a workflow is a
       `.github/**` change, which (b) makes code-owned.
+  13. Push concurrency: GitHub keeps at most one queued run per concurrency
+      group and replaces it when a newer run joins, whatever
+      `cancel-in-progress` says, so a group two pushes to one branch share
+      lets a newer commit discard an older one's run before it starts.  Every
+      push-triggered workflow's workflow- and job-level `group` is evaluated
+      for two pushes to the same branch (distinct `github.sha` and
+      `github.run_id`) and must differ.  The evaluator reads string, boolean
+      and null literals and a closed set of `github` properties with `==`,
+      `!=`, `&&`, `||` and `!`; any other context, function, number literal
+      or mixed-type comparison is refused.  `LATEST_WINS_PUSH_GROUPS` names the workflows whose run acts on the
+      branch head it reads at run time, each with its reason, and every entry
+      must be a push-triggered workflow.
 
 Pure stdlib + PyYAML (already a CI dependency).  No network; check 12 runs
 `git ls-files` locally to list tracked paths.
@@ -1461,6 +1473,149 @@ def check_pull_request_target(errors: list[str], root: str = REPO_ROOT) -> None:
             continue
         for v in pull_request_target_violations(doc, text):
             errors.append(f"{fname}: a pull_request_target workflow {v}")
+
+
+# Push workflows whose group is deliberately one per workflow: each run acts
+# on the branch head it reads at run time, so a newer push's run supersedes an
+# older queued one without losing any commit's outcome.
+LATEST_WINS_PUSH_GROUPS = {
+    "release-please.yml": "recomputes the release PR from the head of main",
+    "docs-pages.yml": "deploys the head of main to Pages",
+}
+
+# The `github` properties a concurrency group may read, as two distinct pushes
+# to the same branch see them; any other context or property is refused.
+_PUSH_CONTEXTS = tuple(
+    {
+        "event_name": "push",
+        "ref": "refs/heads/main",
+        "ref_name": "main",
+        "head_ref": "",
+        "base_ref": "",
+        "repository": "o/r",
+        "workflow": "w",
+        "sha": sha,
+        "run_id": run_id,
+    }
+    for sha, run_id in (("a" * 40, "1"), ("b" * 40, "2"))
+)
+
+
+class _Unevaluable(Exception):
+    pass
+
+
+def _truthy(v: object) -> bool:
+    return v not in (False, None, "")
+
+
+def _as_text(v: object) -> str:
+    if v is None:
+        return ""
+    if isinstance(v, bool):
+        return "true" if v else "false"
+    return str(v)
+
+
+def _eval_push(e: gha_expr.Expr, ctx: dict[str, str]) -> object:
+    """Evaluate `e` under one push context: literals, the `github` properties
+    of `_PUSH_CONTEXTS`, `==`/`!=` on same-typed operands (strings compared
+    without case), `&&`/`||` with the Actions value semantics, and `!`.
+    Anything else raises `_Unevaluable`."""
+    if isinstance(e, gha_expr.Literal):
+        if not e.is_string and isinstance(e.value, str):
+            raise _Unevaluable("uses a number literal, whose coercion this check does not evaluate")
+        return e.value
+    if isinstance(e, gha_expr.ContextRef):
+        if (
+            e.ctx.casefold() != "github"
+            or len(e.path) != 1
+            or not isinstance(e.path[0], gha_expr.Prop)
+            or e.path[0].name.casefold() not in ctx
+        ):
+            raise _Unevaluable("reads a context this check cannot resolve for a push")
+        return ctx[e.path[0].name.casefold()]
+    if isinstance(e, gha_expr.Unary) and e.op == "!":
+        return not _truthy(_eval_push(e.operand, ctx))
+    if isinstance(e, gha_expr.Binary) and e.op in ("&&", "||"):
+        left = _eval_push(e.left, ctx)
+        if _truthy(left) == (e.op == "||"):
+            return left
+        return _eval_push(e.right, ctx)
+    if isinstance(e, gha_expr.Binary) and e.op in ("==", "!="):
+        left, right = _eval_push(e.left, ctx), _eval_push(e.right, ctx)
+        if type(left) is not type(right):
+            raise _Unevaluable("compares operands of different types")
+        if isinstance(left, str) and isinstance(right, str):
+            same = left.casefold() == right.casefold()
+        else:
+            same = left == right
+        return same == (e.op == "==")
+    raise _Unevaluable("uses an operator or function this check does not evaluate")
+
+
+def _push_group(text: str, ctx: dict[str, str]) -> str:
+    parsed = gha_expr.parse_template(text)
+    if isinstance(parsed, gha_expr.Refusal):
+        raise _Unevaluable(parsed.why)
+    out: list[str] = []
+    at = 0
+    for e, (start, end) in zip(parsed.exprs, parsed.spans):
+        out.append(text[at:start])
+        out.append(_as_text(_eval_push(e, ctx)))
+        at = end
+    out.append(text[at:])
+    return "".join(out)
+
+
+def check_push_concurrency(errors: list[str], root: str = REPO_ROOT) -> None:
+    """Check 13 (see the module docstring). Unparseable workflows are refused
+    by check 6."""
+    seen: set[str] = set()
+    for path in sorted(p for pattern in ("*.yml", "*.yaml") for p in glob.glob(os.path.join(root, "workflows", pattern))):
+        fname = os.path.basename(path)
+        try:
+            with open(path) as f:
+                doc = strict_yaml.safe_load(f)
+        except yaml.YAMLError:
+            continue
+        if not isinstance(doc, dict):
+            continue
+        triggers = _triggers(doc)
+        if triggers is None:
+            errors.append(f"{fname}: `on:` has no recognised shape; check 13 cannot tell whether it runs on push")
+            continue
+        if "push" not in triggers:
+            continue
+        seen.add(fname)
+        if fname in LATEST_WINS_PUSH_GROUPS:
+            continue
+        jobs = doc.get("jobs")
+        sites = [("workflow", doc.get("concurrency"))] + [
+            (f"job {jid!r}", job.get("concurrency"))
+            for jid, job in (jobs.items() if isinstance(jobs, dict) else ())
+            if isinstance(job, dict)
+        ]
+        for where, conc in sites:
+            if conc is None:
+                continue
+            group = conc.get("group") if isinstance(conc, dict) else conc
+            if not isinstance(group, str):
+                errors.append(f"{fname}: {where} `concurrency:` has no string `group`")
+                continue
+            try:
+                a, b = (_push_group(group, ctx) for ctx in _PUSH_CONTEXTS)
+            except _Unevaluable as why:
+                errors.append(f"{fname}: {where} concurrency group {group!r} {why}; check 13 cannot prove each push commit gets its own group")
+                continue
+            if a == b:
+                errors.append(
+                    f"{fname}: {where} concurrency group {group!r} is the same for two pushes to one branch — "
+                    "a newer push replaces the older commit's queued run, so that commit never reports; "
+                    "key push groups by `github.sha`"
+                )
+    for fname in sorted(set(LATEST_WINS_PUSH_GROUPS) - seen):
+        errors.append(f"check 13: LATEST_WINS_PUSH_GROUPS names {fname}, which is not a push-triggered workflow")
 
 
 def _tracked_paths(repo: str) -> list[str] | None:
@@ -3622,6 +3777,9 @@ def main() -> int:
     # ---- 12. gate integrity: pull_request_target runs no head code; trust roots live ----
     check_pull_request_target(errors)
     check_trust_roots(errors)
+
+    # ---- 13. push runs: every push commit gets its own concurrency group ----
+    check_push_concurrency(errors)
 
     # ---- 3. fail-closed dependency surfacing ----
     def surfaced_dispositions(job: Job) -> set[str]:

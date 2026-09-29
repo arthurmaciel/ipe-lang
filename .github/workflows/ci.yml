@@ -70,12 +70,13 @@ permissions:
   contents: read
 
 concurrency:
-  # On pull requests, cancel the previous run for the same ref so devs get fast
-  # feedback without wasting runner minutes. On push/tags, never cancel: the
-  # heavy jobs (the full e2e matrix, the Tier-2 jails) produce the
-  # main-required contexts the FF promotion waits on — killing an in-progress
-  # push run would leave those contexts un-green and stall promotion.
-  group: ${{ github.workflow }}-${{ github.ref }}
+  # A pull request run cancels the previous run for the same ref, so devs get
+  # fast feedback without wasting runner minutes. A push run is keyed by its
+  # commit: GitHub replaces a queued run in a group whenever a newer one joins
+  # it (whatever cancel-in-progress says), so a per-ref push group lets a
+  # newer main commit discard an older one's run before it starts, leaving
+  # that commit's main-required contexts never reported.
+  group: ${{ github.workflow }}-${{ github.event_name == 'push' && github.sha || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:

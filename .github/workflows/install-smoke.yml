@@ -25,8 +25,11 @@ on:
 permissions:
   contents: read
 
+# A push run is keyed by its commit: GitHub replaces a queued run (and
+# cancel-in-progress cancels a running one) when a newer run joins its group,
+# so a per-ref push group would let one main commit go unbuilt.
 concurrency:
-  group: install-smoke-${{ github.ref }}
+  group: install-smoke-${{ github.event_name == 'push' && github.sha || github.ref }}
   cancel-in-progress: true
 
 jobs:

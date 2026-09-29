@@ -45,6 +45,7 @@ check_release_only_skips = verify_manifest.check_release_only_skips
 check_fast_gate_first = verify_manifest.check_fast_gate_first
 check_pull_request_target = verify_manifest.check_pull_request_target
 check_trust_roots = verify_manifest.check_trust_roots
+check_push_concurrency = verify_manifest.check_push_concurrency
 
 # The live sanctioned composite is the fixture: the canonical form is proven
 # against the file CI actually runs, never a hand-kept copy.
@@ -3796,3 +3797,128 @@ class TestTrustRoots(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+_PUSH_WF = """\
+name: w
+on:
+  push:
+    branches: [main]
+  pull_request:
+concurrency:
+  group: GROUP
+  cancel-in-progress: true
+jobs:
+  j:
+    runs-on: ubuntu-latest
+    steps:
+      - run: 'true'
+"""
+
+
+class TestPushConcurrency(unittest.TestCase):
+    """Check 13: two pushes to one branch never share a concurrency group."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.root = self._tmp.name
+
+    def tearDown(self) -> None:
+        self._tmp.cleanup()
+
+    def errors(self, content: str, name: str = "w.yml", extra: dict[str, str] | None = None) -> list[str]:
+        _write(os.path.join(self.root, "workflows", name), content)
+        for n, c in (extra or {}).items():
+            _write(os.path.join(self.root, "workflows", n), c)
+        errors: list[str] = []
+        with mock.patch.dict(verify_manifest.LATEST_WINS_PUSH_GROUPS, {}, clear=True):
+            check_push_concurrency(errors, root=self.root)
+        return errors
+
+    def group(self, group: str) -> list[str]:
+        return self.errors(_PUSH_WF.replace("GROUP", group))
+
+    def assertRefused(self, group: str, needle: str) -> None:
+        errors = self.group(group)
+        self.assertTrue(any(needle in e for e in errors), f"expected {needle!r} in {errors}")
+
+    def test_per_sha_push_group_passes(self) -> None:
+        self.assertEqual(self.group("${{ github.workflow }}-${{ github.event_name == 'push' && github.sha || github.ref }}"), [])
+
+    def test_plain_sha_and_run_id_groups_pass(self) -> None:
+        self.assertEqual(self.group("w-${{ github.sha }}"), [])
+        self.assertEqual(self.group("w-${{ github.run_id }}"), [])
+
+    def test_event_name_compared_without_case(self) -> None:
+        self.assertEqual(self.group("w-${{ github.event_name == 'PUSH' && github.sha || github.ref }}"), [])
+
+    def test_no_concurrency_passes(self) -> None:
+        self.assertEqual(self.errors(_PUSH_WF.replace("concurrency:\n  group: GROUP\n  cancel-in-progress: true\n", "")), [])
+
+    def test_non_push_workflow_ignored(self) -> None:
+        self.assertEqual(self.errors(_PUSH_WF.replace("  push:\n    branches: [main]\n", "").replace("GROUP", "fixed")), [])
+
+    def test_per_ref_group_refused(self) -> None:
+        self.assertRefused("${{ github.workflow }}-${{ github.ref }}", "same for two pushes")
+
+    def test_constant_group_refused(self) -> None:
+        self.assertRefused("pages", "same for two pushes")
+
+    def test_sha_only_off_push_refused(self) -> None:
+        self.assertRefused("w-${{ github.event_name == 'pull_request' && github.sha || github.ref }}", "same for two pushes")
+
+    def test_negated_event_test_refused(self) -> None:
+        self.assertRefused("w-${{ !(github.event_name == 'push') && github.sha || github.ref }}", "same for two pushes")
+
+    def test_string_shorthand_concurrency_refused(self) -> None:
+        errors = self.errors(_PUSH_WF.replace("concurrency:\n  group: GROUP\n  cancel-in-progress: true\n", "concurrency: w-${{ github.ref }}\n"))
+        self.assertTrue(any("same for two pushes" in e for e in errors), errors)
+
+    def test_job_level_group_refused(self) -> None:
+        wf = _PUSH_WF.replace("GROUP", "w-${{ github.sha }}").replace(
+            "    runs-on: ubuntu-latest\n", "    runs-on: ubuntu-latest\n    concurrency:\n      group: j-${{ github.ref }}\n"
+        )
+        errors = self.errors(wf)
+        self.assertTrue(any("job 'j'" in e and "same for two pushes" in e for e in errors), errors)
+
+    def test_unknown_context_refused(self) -> None:
+        self.assertRefused("w-${{ github.event.head_commit.id }}", "cannot resolve")
+        self.assertRefused("w-${{ env.X }}", "cannot resolve")
+        self.assertRefused("w-${{ github.actor }}", "cannot resolve")
+
+    def test_function_refused(self) -> None:
+        self.assertRefused("${{ format('w-{0}', github.sha) }}", "does not evaluate")
+
+    def test_mixed_type_comparison_refused(self) -> None:
+        self.assertRefused("w-${{ github.sha == true && github.sha || github.ref }}", "different types")
+
+    def test_number_literal_refused(self) -> None:
+        self.assertRefused("w-${{ github.sha == 1 && github.sha || github.ref }}", "number literal")
+
+    def test_unparseable_group_refused(self) -> None:
+        self.assertRefused("w-${{ github.sha", "cannot prove")
+
+    def test_non_string_group_refused(self) -> None:
+        errors = self.errors(_PUSH_WF.replace("group: GROUP", "group: [a]"))
+        self.assertTrue(any("no string `group`" in e for e in errors), errors)
+
+    def test_unreadable_triggers_refused(self) -> None:
+        errors = self.errors(_PUSH_WF.replace("on:\n  push:\n    branches: [main]\n  pull_request:\n", "on: 3\n"))
+        self.assertTrue(any("cannot tell whether it runs on push" in e for e in errors), errors)
+
+    def test_latest_wins_entry_exempts_and_must_exist(self) -> None:
+        _write(os.path.join(self.root, "workflows", "w.yml"), _PUSH_WF.replace("GROUP", "pages"))
+        errors: list[str] = []
+        with mock.patch.dict(verify_manifest.LATEST_WINS_PUSH_GROUPS, {"w.yml": "r", "gone.yml": "r"}, clear=True):
+            check_push_concurrency(errors, root=self.root)
+        self.assertEqual(len(errors), 1, errors)
+        self.assertIn("gone.yml", errors[0])
+
+    def test_live_workflows_pass(self) -> None:
+        errors: list[str] = []
+        check_push_concurrency(errors)
+        self.assertEqual(errors, [])
+
+    def test_every_live_exemption_carries_a_reason(self) -> None:
+        for name, why in verify_manifest.LATEST_WINS_PUSH_GROUPS.items():
+            self.assertTrue(why.strip(), name)
