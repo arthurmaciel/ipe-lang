@@ -2050,8 +2050,9 @@ fn render_match_arm_tail(
     // delimiters (comma kept). The gate is the argument-text width against
     // `fn_call_width`, NOT the whole body against `max_width` — a body that fits
     // `max_width` at `indent + 4` but whose args exceed 60 columns still breaks in
-    // place. A non-delimited body (chain, `if`/`else`) has no argument list to gate,
-    // so it falls back to the single-line-at-`indent + 4` test.
+    // place. A block-argument body is weighed by `prefer_next_line`. A non-delimited
+    // body (chain, `if`/`else`) has no argument list to gate, so it falls back to
+    // the single-line-at-`indent + 4` test.
     let block_wrap =
         control || (!has_hard_break(body) && body_block_wraps(body, cfg, indent, start_col, out));
     if block_wrap {
@@ -2075,9 +2076,11 @@ fn render_match_arm_tail(
 /// `fn_call_width` gate: the body's ARGUMENT TEXT (the span between its
 /// delimiters, seeing through a single-argument combinable wrapper) is
 /// brace-wrapped when it fits `fn_call_width` and delimiter-broken when it does
-/// not. A body with no argument list of its own (a chain, an `if`/`else`) has no
-/// such gate, so it falls back to whether the whole body fits single-line on its
-/// own line at `indent + 4`.
+/// not. An argument text that cannot lay out flat (a block argument) has no width
+/// to gate, so the in-place and next-line layouts are weighed by `rustfmt`'s
+/// `prefer_next_line` ([`arm_prefers_next_line`]). A body with no argument list of
+/// its own (a chain, an `if`/`else`) falls back to whether the whole body fits
+/// single-line on its own line at `indent + 4`.
 ///
 /// Measured by a [`trial`] that opens the arm block exactly as the brace-wrapped
 /// render does, so every width is read at the column the body would land on.
@@ -2105,26 +2108,17 @@ fn body_block_wraps(
             return innermost_args_width(elems, o, o.saturating_add(e)) <= FN_CALL_WIDTH;
         }
         // An argument text whose flat form breaks — a block argument — has no
-        // single-line width to fit, so the body is not brace-wrapped: `rustfmt`
-        // moves a body onto its own line only when it lays out single-line there.
-        return arm_block_trial(cfg, indent, start_col, out, |out, mark| {
-            let c = current_col(out);
-            render_at(open, cfg, indent + 4, c, true, out);
-            let open_end = current_col(out);
-            render_flat_elems(elems, cfg, indent + 4, out);
-            let elems_end = current_col(out);
-            !mark.line(out).contains('\n')
-                && innermost_args_width(elems, open_end, elems_end) <= FN_CALL_WIDTH
-        });
+        // single-line width to gate, so the two whole layouts are weighed.
+        return arm_prefers_next_line(body, cfg, indent, start_col, out);
     }
-    arm_block_trial(cfg, indent, start_col, out, |out, _| {
+    arm_block_trial(cfg, indent, start_col, out, |out| {
         let c = current_col(out);
         fits_single_line(body, cfg.no_reserve(), c, indent + 4, out)
     })
 }
 
 /// Trial the brace-wrapped arm layout: open the arm block, then run `measure` on
-/// the body's first line inside it, given the mark of where that line starts.
+/// the body's first line inside it.
 ///
 /// The block opens with a newline, so the stop mark is set only after it: a
 /// first-line trial begun before the break would already hold its line and lay
@@ -2134,12 +2128,74 @@ fn arm_block_trial<T>(
     indent: usize,
     start_col: usize,
     out: &mut String,
-    measure: impl FnOnce(&mut String, Mark) -> T,
+    measure: impl FnOnce(&mut String) -> T,
 ) -> T {
     trial(out, TrialReach::Whole, |out, _| {
         open_arm_block(cfg, indent, start_col, out);
-        with_stop(out, TrialReach::FirstLine, measure)
+        with_stop(out, TrialReach::FirstLine, |out, _| measure(out))
     })
+}
+
+/// The shape of one whole layout of a match-arm body, as `rustfmt` weighs it.
+#[derive(Clone, Copy)]
+struct BodyShape {
+    /// The newlines the layout writes.
+    newlines: usize,
+    /// The last character of its first line.
+    first_end: Option<char>,
+    /// The width of its first line.
+    first_width: usize,
+}
+
+impl BodyShape {
+    /// The shape of `written`, a layout that begins at its cursor.
+    fn of(written: &str) -> Self {
+        let first = written.split('\n').next().unwrap_or_default();
+        Self {
+            newlines: written.bytes().filter(|&b| b == b'\n').count(),
+            first_end: first.trim_end().chars().next_back(),
+            first_width: first.len(),
+        }
+    }
+}
+
+/// Whether a multi-line match-arm body moves onto its own line in a brace block,
+/// by `rustfmt`'s `prefer_next_line` over the two whole layouts.
+///
+/// The next-line layout wins when it is single-line, when the in-place one takes
+/// more than one line more, or when the in-place first line ends in an opener the
+/// next-line first line does not end in. Otherwise the body — a call, which
+/// `rustfmt` lets extend from the arm head — stays in place while its first line,
+/// with the arm's comma, fits the width.
+///
+/// Each layout is laid out by a [`trial`] at the columns its commit renders at, so
+/// the render that follows replays the one chosen.
+fn arm_prefers_next_line(
+    body: &Doc,
+    cfg: RenderConfig,
+    indent: usize,
+    start_col: usize,
+    out: &mut String,
+) -> bool {
+    let orig = trial(out, TrialReach::Whole, |out, mark| {
+        render_at(body, cfg, indent, start_col, false, out);
+        BodyShape::of(mark.written(out))
+    });
+    let next = trial(out, TrialReach::Whole, |out, _| {
+        open_arm_block(cfg, indent, start_col, out);
+        with_stop(out, TrialReach::Whole, |out, mark| {
+            let c = current_col(out);
+            render_at(body, cfg, indent + 4, c, false, out);
+            BodyShape::of(mark.written(out))
+        })
+    });
+    let opener_lost = orig
+        .first_end
+        .is_some_and(|end| matches!(end, '(' | '{' | '[') && next.first_end != Some(end));
+    next.newlines == 0
+        || orig.newlines > next.newlines.saturating_add(1)
+        || opener_lost
+        || start_col.saturating_add(orig.first_width).saturating_add(1) > cfg.max_width
 }
 
 /// Open a brace-wrapped match-arm body: `{`, then a fresh line one indent step in.
@@ -4192,6 +4248,47 @@ mod p0_tests {
         assert!(
             got.contains("f(\n"),
             "the block-arg call arm body must break one arg per line:\n{got}"
+        );
+    }
+
+    /// The refusal pair for `prefer_next_line`: an arm body whose in-place first
+    /// line ends in `(` while its next-line first line overflows its block argument
+    /// (`f(a, {`) moves into a brace block; one whose next-line first line ends in
+    /// `(` too stays in place, as `rustfmt` lays both out.
+    #[test]
+    fn match_arm_body_brace_wraps_only_when_the_opener_is_lost() {
+        let arm = |head: &'static str, elems: Vec<Doc>, open: &'static str| {
+            let call = Doc::call_args(Doc::text(open), elems, Doc::text(")"), true);
+            render(
+                &Doc::concat(vec![Doc::text(head), Doc::match_arm_tail(call, false)]),
+                RenderConfig::default(),
+            )
+        };
+        let moved = arm(
+            "IpeDbStoreCond::Compare(op, col, value) => ",
+            vec![
+                Doc::text("crate::user_ipe_db_store_live_name(view, col)"),
+                stmt_block(),
+            ],
+            "ipe_result_map(",
+        );
+        assert!(
+            moved.starts_with(
+                "IpeDbStoreCond::Compare(op, col, value) => {\n    ipe_result_map(crate::user_ipe_db_store_live_name(view, col), {\n"
+            ) && moved.ends_with("\n}"),
+            "the overflowed block argument must move into a brace block:\n{moved}"
+        );
+        let kept = arm(
+            "IpeResult::Ok(value) => ",
+            vec![
+                stmt_block(),
+                Doc::text("crate::user_ipe_db_store_decode_rows(codec, rest)"),
+            ],
+            "task_map(",
+        );
+        assert!(
+            kept.starts_with("IpeResult::Ok(value) => task_map(\n") && kept.ends_with("),"),
+            "a body breaking the same way on either line must stay in place:\n{kept}"
         );
     }
 
