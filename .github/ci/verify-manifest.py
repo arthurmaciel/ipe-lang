@@ -236,11 +236,23 @@ HEAVY_SHARD_ARTIFACT = "nextest-archive"
 _STATUS_FN = re.compile(r"\b(always|failure|cancelled)\s*\(", re.IGNORECASE)
 CANCEL_WATCHER_JOB_ID = "cancel-on-cheap-red"
 
-SCCACHE_ACTION_PREFIX = "mozilla-actions/sccache-action@"
+SCCACHE_ACTION_REPO = "mozilla-actions/sccache-action"
+SCCACHE_ACTION_PREFIX = SCCACHE_ACTION_REPO + "@"
 SCCACHE_COMPOSITE_USES = "./.github/actions/sccache"
 # mold is installed only by the local composite, which pins the release digest.
-RAW_MOLD_ACTION_PREFIX = "rui314/setup-mold@"
+RAW_MOLD_ACTION_REPO = "rui314/setup-mold"
 MOLD_COMPOSITE_USES = "./.github/actions/mold"
+# The mold composite's one `run:` must verify the digest before it installs:
+# every `case` arm pins a 64-hex digest (or refuses the arch), and the
+# `sha256sum --check --strict` line precedes every `tar`/`ln` line.
+MOLD_DIGEST_ARM_RE = re.compile(r"[a-z0-9_]+\)\s*digest=[0-9a-f]{64}\s*;;")
+MOLD_VERIFY_LINE = "sha256sum --check --strict"
+# `tar`/`ln` in command position: line start, after `sudo`, or after `|;&(`.
+MOLD_INSTALL_WORD_RE = re.compile(r"(?:^|[|;&(]\s*|(?<![A-Za-z0-9_-])sudo\s+)(?:tar|ln)(?=\s)")
+# `owner/repo` of a remote `uses:` — the repo segment ends at `@` (a ref) or
+# `/` (a subpath), so `owner/repo/sub@ref` names the same action as
+# `owner/repo@ref`.
+USES_REPO_RE = re.compile(r"([^/@]+/[^/@]+)(?=[/@])")
 # Identity of a local action: its repo-root-relative path, normalized
 # (`./x/`, `./x`, `./a/../x` are one path) and byte-exact. Two paths that are
 # case-fold-equal but not byte-equal are refused outright (macOS and Windows
@@ -2227,17 +2239,27 @@ def _refuse_step_shell(shell: object, loc: str, what: str, errors: list[str]) ->
         )
 
 
+def _uses_repo(st: Step, owner_repo: str) -> bool:
+    """Whether `st` runs the remote action `owner_repo` (case-folded), at any
+    ref or subpath. A name ban is hygiene, not a trust boundary: a fork under
+    another owner passes it, and check 7's SHA pin is what bounds that."""
+    if st.uses is None:
+        return False
+    m = USES_REPO_RE.match(st.uses_folded)
+    return m is not None and m[1] == owner_repo.casefold()
+
+
 def _audit_step(st: Step, loc: str, policy: StepPolicy, errors: list[str]) -> None:
     """Rules (a)/(b)/(c)/(e)/(f)/(g) for one step outside the sanctioned composite."""
     _refuse_unpinned_uses(st, loc, errors)
-    if st.uses is not None and st.uses_folded.startswith(SCCACHE_ACTION_PREFIX.casefold()):
+    if _uses_repo(st, SCCACHE_ACTION_REPO):
         errors.append(
-            f"{loc} runs the raw {SCCACHE_ACTION_PREFIX}... action directly — use "
+            f"{loc} runs the raw {SCCACHE_ACTION_REPO} action directly — use "
             f"{SCCACHE_COMPOSITE_USES} instead, the one place it may run"
         )
-    if st.uses is not None and st.uses_folded.startswith(RAW_MOLD_ACTION_PREFIX.casefold()):
+    if _uses_repo(st, RAW_MOLD_ACTION_REPO):
         errors.append(
-            f"{loc} runs the raw {RAW_MOLD_ACTION_PREFIX}... action directly — use "
+            f"{loc} runs the raw {RAW_MOLD_ACTION_REPO} action directly — use "
             f"{MOLD_COMPOSITE_USES} instead, which verifies the release digest"
         )
     _refuse_env_keys(_scoped_env(st.raw, f"{loc} env", errors), loc, errors)
@@ -3166,6 +3188,46 @@ def _check_sccache_composite(actions: LocalActions, errors: list[str]) -> None:
         )
 
 
+def _check_mold_composite(actions: LocalActions, repo: str, errors: list[str]) -> None:
+    """The mold composite installs a linker every build job trusts, so its
+    shape is pinned: one `bash` step whose `run:` opens with `set -euo
+    pipefail`, pins a 64-hex digest in every `digest=` arm, and runs the one
+    `sha256sum --check --strict` line before any `tar`/`ln` line. A reordered
+    or dropped verification is refused. Skipped when the composite is absent
+    (every `uses:` of it then fails to resolve on its own)."""
+    if not os.path.isfile(os.path.join(repo, MOLD_COMPOSITE_USES[2:], "action.yml")):
+        return
+    action = actions.resolve(MOLD_COMPOSITE_USES, "mold composite self-check")
+    if action is None:
+        return
+    where = f"{action.display}/action.yml"
+    steps = action.doc["runs"].get("steps")
+    if not isinstance(steps, list) or len(steps) != 1:
+        errors.append(f"{where}: the mold composite has exactly one step, got {steps!r}; refused")
+        return
+    (step,) = steps
+    run = step.get("run") if isinstance(step, dict) else None
+    if not (isinstance(step, dict) and set(step) <= {"name", "shell", "run"} and step.get("shell") == "bash"):
+        errors.append(f"{where}: the mold step must be {{name?, shell: bash, run}} (got {step!r}); refused")
+        return
+    if not isinstance(run, str):
+        errors.append(f"{where}: the mold step's run: must be a string; refused")
+        return
+    lines = [ln.strip() for ln in run.splitlines()]
+    if not lines or lines[0] != "set -euo pipefail":
+        errors.append(f"{where}: the mold run: must open with `set -euo pipefail`; refused")
+    arms = [ln for ln in lines if "digest=" in ln]
+    if not arms or any(not MOLD_DIGEST_ARM_RE.fullmatch(ln) for ln in arms):
+        errors.append(f"{where}: every mold `digest=` line must be `<arch>) digest=<64-hex> ;;` (got {arms!r}); refused")
+    verify = [i for i, ln in enumerate(lines) if MOLD_VERIFY_LINE in ln]
+    install = [i for i, ln in enumerate(lines) if MOLD_INSTALL_WORD_RE.search(ln)]
+    if len(verify) != 1 or not install or min(install) < verify[0]:
+        errors.append(
+            f"{where}: the mold run: must hold one `{MOLD_VERIFY_LINE}` line before every "
+            "`tar`/`ln` line — an unverified tarball would install; refused"
+        )
+
+
 def _job_sub_env_scopes(job_raw: dict, loc: str, errors: list[str]) -> list[tuple[str, dict]]:
     """(scope-name, raw-container) pairs for a job's `container:` and each
     `services.<id>:` sub-scope — each may carry its own `env:` a
@@ -3357,6 +3419,7 @@ def check_workflow_steps(errors: list[str], root: str = REPO_ROOT) -> None:
     )
     actions = LocalActions(root, policy, errors)
     _check_sccache_composite(actions, errors)
+    _check_mold_composite(actions, os.path.dirname(os.path.abspath(root)), errors)
 
     det_errors: list[str] = []
     pairs = load_deterministic_checks(det_errors, root)

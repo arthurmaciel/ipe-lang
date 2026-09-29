@@ -174,7 +174,7 @@ class TestSccacheWiringRefusals(unittest.TestCase):
         )
         errors = self.fx.errors()
         self.assertTrue(
-            any("runs the raw rui314/setup-mold@" in e and "build" in e for e in errors),
+            any("runs the raw rui314/setup-mold action" in e and "build" in e for e in errors),
             errors,
         )
 
@@ -760,6 +760,78 @@ def _ci(job_body: str, *, top: str = "") -> str:
         + "jobs:\n  clippy:\n    runs-on: ubuntu-latest\n"
         + textwrap.indent(textwrap.dedent(job_body), "    ")
     )
+
+
+class TestMoldComposite(unittest.TestCase):
+    """The mold composite is pinned by shape: its digest check runs before
+    any install, and the raw action is refused at any ref or subpath."""
+
+    REAL = open(
+        os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "actions", "mold", "action.yml"),
+        encoding="utf-8",
+    ).read()
+
+    def setUp(self) -> None:
+        self._tmpdir = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmpdir.cleanup)
+        self.fx = SccacheFixture(self._tmpdir.name)
+
+    def mold_errors(self, content: str) -> list[str]:
+        self.fx.composite("mold", content)
+        return [e for e in self.fx.errors() if "actions/mold/action.yml" in e]
+
+    def test_real_composite_passes(self) -> None:
+        self.assertEqual(self.mold_errors(self.REAL), [])
+
+    def test_verification_after_extract_is_refused(self) -> None:
+        lines = self.REAL.splitlines(keepends=True)
+        (check,) = [i for i, ln in enumerate(lines) if "sha256sum --check --strict" in ln]
+        (untar,) = [i for i, ln in enumerate(lines) if "sudo tar " in ln]
+        lines[check], lines[untar] = lines[untar], lines[check]
+        errors = self.mold_errors("".join(lines))
+        self.assertTrue(any("an unverified tarball would install" in e for e in errors), errors)
+
+    def test_dropped_verification_is_refused(self) -> None:
+        body = "".join(ln for ln in self.REAL.splitlines(keepends=True) if "sha256sum" not in ln)
+        errors = self.mold_errors(body)
+        self.assertTrue(any("an unverified tarball would install" in e for e in errors), errors)
+
+    def test_short_digest_is_refused(self) -> None:
+        body = self.REAL.replace("digest=6ff270c9", "digest=6ff270c", 1)
+        self.assertNotEqual(body, self.REAL)
+        errors = self.mold_errors(body)
+        self.assertTrue(any("digest=<64-hex>" in e for e in errors), errors)
+
+    def test_missing_pipefail_is_refused(self) -> None:
+        body = self.REAL.replace("set -euo pipefail", "set -eu", 1)
+        self.assertNotEqual(body, self.REAL)
+        errors = self.mold_errors(body)
+        self.assertTrue(any("set -euo pipefail" in e for e in errors), errors)
+
+    def test_raw_actions_refused_at_a_subpath(self) -> None:
+        for uses, needle in (
+            ("rui314/setup-mold/sub@10ca16bf91dc22e05ebdc935cad9c75ea248f621", "rui314/setup-mold"),
+            (
+                "Mozilla-Actions/Sccache-Action/x@7d986dd989559c6ecdb630a3fd2557667be217ad",
+                "mozilla-actions/sccache-action",
+            ),
+        ):
+            with self.subTest(uses=uses):
+                self.fx.workflow(
+                    "ci.yml",
+                    "name: ci\non: push\njobs:\n  build:\n    runs-on: ubuntu-latest\n"
+                    f"    steps:\n      - uses: {uses}\n      - run: cargo build\n",
+                )
+                errors = self.fx.errors()
+                self.assertTrue(any(f"runs the raw {needle} action" in e for e in errors), errors)
+
+    def test_lookalike_repo_is_not_banned_by_name(self) -> None:
+        self.fx.workflow(
+            "ci.yml",
+            "name: ci\non: push\njobs:\n  build:\n    runs-on: ubuntu-latest\n"
+            "    steps:\n      - uses: rui314/setup-mold-extra@10ca16bf91dc22e05ebdc935cad9c75ea248f621\n",
+        )
+        self.assertFalse(any("runs the raw" in e for e in self.fx.errors()))
 
 
 class TestSccacheWiringClosure(unittest.TestCase):
