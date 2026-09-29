@@ -1441,7 +1441,7 @@ class TestMergeQueueSafety(unittest.TestCase):
 
 
 # A head-free pull_request_target + merge_group workflow: the shape
-# `trust-root-diff.yml` takes (its live copy is proven in `TestPullRequestTarget`).
+# `trust-root-diff.yml` takes (the live file is proven in `TestPullRequestTarget`).
 _PRT_OK = """\
 name: prt
 on:
@@ -1585,6 +1585,15 @@ class TestPullRequestTarget(unittest.TestCase):
     def test_live_workflows_pass(self) -> None:
         errors: list[str] = []
         check_pull_request_target(errors)
+        self.assertEqual(errors, [])
+
+    def test_live_trust_root_diff_is_head_free_under_both_triggers(self) -> None:
+        with open(os.path.join(os.path.dirname(HERE), "workflows", "trust-root-diff.yml")) as f:
+            live = f.read()
+        self.assertIn("pull_request_target", live)
+        self.assertEqual(self.errors(live), [])
+        errors: list[str] = []
+        check_merge_queue({"prt.yml"}, errors, root=self.fx.root)
         self.assertEqual(errors, [])
 
 

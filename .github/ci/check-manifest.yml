@@ -130,6 +130,16 @@ checks:
       red at its check step, so the heavy tier stops consuming runners; see the comment above
       the job in ci.yml.
 
+  # ── Trust-root diff — informational until promoted with the ruleset ───────
+  - context: trust-root-diff
+    disposition: informational
+    producer: trust-root-diff.yml
+    owner: maintainer
+    note: >-
+      Fails an outside PR that touches a path .github/CODEOWNERS owns until a
+      code owner approves its current commit. Promote to `gate` in one commit
+      together with required-set.json and the ruleset's required checks.
+
   # ── Panic-scan / cargo-deny / playground / admission (per-change gates) ────
   - context: panic-scan
     disposition: gate
