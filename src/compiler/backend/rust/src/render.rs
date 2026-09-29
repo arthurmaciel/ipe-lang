@@ -129,8 +129,9 @@ fn render_bounded(doc: &Doc, cfg: RenderConfig, indent: usize, col: usize) -> St
 
 /// The work one render may do before it gives up on fitting the document and
 /// falls back to its plain layout, in bytes: each layout computed or replayed
-/// spends the bytes it writes plus the line it measures its cursor on, so the
-/// fuel tracks time, not only node count. Most bodies stay far below it; a deep
+/// spends the bytes it writes plus the line it measures its cursor on, a leaf
+/// included, and every node a shape predicate or a node fact walks spends a step,
+/// so the fuel bounds all the work a render does. Most bodies stay far below it; a deep
 /// nest of probing constructs (call args, assign RHS, brace bodies) multiplies
 /// the contexts per level and can reach it, so its plain layout is emitted
 /// instead (#3130 tracks making layout linear).
@@ -145,7 +146,10 @@ const MEMO_BYTE_CEILING: usize = 64 << 20;
 /// What one memoized layout occupies: its bytes plus the key, the `String`
 /// header, and the hash-table slot, so a flood of empty layouts is charged too.
 const fn memo_entry_bytes(layout_len: usize) -> usize {
-    layout_len + size_of::<MemoKey>() + size_of::<String>() + size_of::<u64>()
+    layout_len
+        .saturating_add(size_of::<MemoKey>())
+        .saturating_add(size_of::<String>())
+        .saturating_add(size_of::<u64>())
 }
 
 /// Every layout decision probes a subtree by rendering it into a scratch buffer
@@ -167,6 +171,8 @@ struct Memo {
     hard_breaks: HashMap<usize, bool>,
     /// [`if_else_construct_width`] per `IfElse` node, computed once.
     if_else_widths: HashMap<usize, usize>,
+    /// The ceiling on `bytes`, [`MEMO_BYTE_CEILING`] for every production render.
+    byte_ceiling: usize,
     /// [`LAYOUT_FUEL`] left to spend; once spent the render is abandoned.
     fuel: usize,
     exhausted: bool,
@@ -210,7 +216,7 @@ impl Cursor {
             empty: out.is_empty(),
             line_len: line.len(),
             blank_line: line.bytes().all(|b| b == b' '),
-            trailing_spaces: out.len() - out.trim_end_matches(' ').len(),
+            trailing_spaces: out.len().saturating_sub(out.trim_end_matches(' ').len()),
         }
     }
 }
@@ -232,6 +238,11 @@ struct MemoScope(Option<Memo>);
 
 impl MemoScope {
     fn install(doc: &Doc, fuel: usize) -> Self {
+        Self::install_capped(doc, fuel, MEMO_BYTE_CEILING)
+    }
+
+    /// [`MemoScope::install`] with the memo's byte ceiling given.
+    fn install_capped(doc: &Doc, fuel: usize, byte_ceiling: usize) -> Self {
         let mut nodes = HashSet::new();
         collect_node_addrs(doc, &mut nodes);
         let memo = Memo {
@@ -240,6 +251,7 @@ impl MemoScope {
             bytes: 0,
             hard_breaks: HashMap::new(),
             if_else_widths: HashMap::new(),
+            byte_ceiling,
             fuel,
             exhausted: false,
         };
@@ -390,10 +402,17 @@ fn memoized(
             (!m.exhausted).then(|| m.nodes.contains(&addr))
         })
     }) else {
+        abandon(out);
         return;
     };
     if !keyed {
-        render(out);
+        // A leaf's caller measures the cursor line to place it, so it is charged
+        // that line like a keyed node is.
+        if spend(1_usize.saturating_add(current_col(out))) {
+            render(out);
+        } else {
+            abandon(out);
+        }
         return;
     }
     let key = MemoKey {
@@ -404,7 +423,8 @@ fn memoized(
         pass,
         cursor: Cursor::of(out),
     };
-    if !spend(1 + key.cursor.line_len) {
+    if !spend(1_usize.saturating_add(key.cursor.line_len)) {
+        abandon(out);
         return;
     }
     // A break trims only the trailing spaces before it, so everything before that
@@ -429,17 +449,29 @@ fn memoized(
         return;
     };
     if !spend(layout.len()) {
+        abandon(out);
         return;
     }
     MEMO.with_borrow_mut(|m| {
         let entry = memo_entry_bytes(layout.len());
         if let Some(m) = m.as_mut()
-            && m.bytes + entry <= MEMO_BYTE_CEILING
+            && let Some(bytes) = m.bytes.checked_add(entry)
+            && bytes <= m.byte_ceiling
         {
-            m.bytes += entry;
+            m.bytes = bytes;
             m.layouts.insert(key, layout.to_owned());
         }
     });
+}
+
+/// Drop what an abandoned render wrote to `out`.
+///
+/// The output of a render that ran out of fuel is discarded, so emptying the
+/// buffer loses nothing; it keeps every cursor measure the unwinding layouts
+/// still take on it constant-time, so abandoning costs no more than the frames
+/// in flight.
+fn abandon(out: &mut String) {
+    out.clear();
 }
 
 /// Spend `cost` of the render's [`LAYOUT_FUEL`]; `false` once it is spent, from
@@ -457,21 +489,32 @@ fn spend(cost: usize) -> bool {
 /// A fact about `doc` that depends on the node alone, read from `table` or
 /// computed by `compute` — which reports the fact and the work it took, charged to
 /// the fuel — and kept for the rest of the render. A node outside the memoized
-/// document is computed afresh each time.
-fn node_fact<T: Copy>(
+/// document is computed afresh each time, charged the same. Once the fuel is
+/// spent the render's output is discarded, so no fact is computed: the default
+/// stands in for it.
+fn node_fact<T: Copy + Default>(
     doc: &Doc,
     table: fn(&mut Memo) -> &mut HashMap<usize, T>,
     compute: impl FnOnce() -> (T, usize),
 ) -> T {
     let addr = node_addr(doc);
     let cached = MEMO.with_borrow_mut(|m| {
-        m.as_mut()
-            .filter(|m| m.nodes.contains(&addr))
-            .map(|m| table(m).get(&addr).copied())
+        m.as_mut().map(|m| {
+            if m.exhausted {
+                Fact::Known(T::default())
+            } else if m.nodes.contains(&addr) {
+                table(m)
+                    .get(&addr)
+                    .copied()
+                    .map_or(Fact::Keyed, Fact::Known)
+            } else {
+                Fact::Unkeyed
+            }
+        })
     });
-    match cached {
-        Some(Some(fact)) => fact,
-        Some(None) => {
+    match cached.unwrap_or(Fact::Unkeyed) {
+        Fact::Known(fact) => fact,
+        Fact::Keyed => {
             let (fact, work) = compute();
             spend(work);
             MEMO.with_borrow_mut(|m| {
@@ -481,8 +524,22 @@ fn node_fact<T: Copy>(
             });
             fact
         }
-        None => compute().0,
+        Fact::Unkeyed => {
+            let (fact, work) = compute();
+            spend(work);
+            fact
+        }
     }
+}
+
+/// Where [`node_fact`] finds a node's fact.
+enum Fact<T> {
+    /// Already known: cached, or moot because the render is abandoned.
+    Known(T),
+    /// A memoized node whose fact is computed once and kept.
+    Keyed,
+    /// A node outside the memoized document, computed afresh.
+    Unkeyed,
 }
 
 /// Render one node of any variant; [`render_at`] fronts it with the memo.
@@ -623,11 +680,21 @@ fn render_concat<D: Borrow<Doc>>(
     flat: bool,
     out: &mut String,
 ) {
+    // The suffix of child `i` is carried to child `i + 1` by dropping that child's
+    // own width when it is text, so a run of text siblings is scanned once, not
+    // once per child.
+    let mut suffix = trailing_siblings_flat_width(docs.get(1..).unwrap_or(&[]));
     for (i, d) in docs.iter().enumerate() {
         let c = eff_col(out, col);
-        let suffix = trailing_siblings_flat_width(docs.get(i + 1..).unwrap_or(&[]));
-        let child_cfg = cfg.with_reserve(cfg.reserve + suffix);
+        let child_cfg = cfg.with_reserve(cfg.reserve.saturating_add(suffix));
         render_at(d.borrow(), child_cfg, indent, c, flat, out);
+        suffix = match docs
+            .get(i.saturating_add(1))
+            .map(<D as Borrow<Doc>>::borrow)
+        {
+            Some(Doc::Text(t)) => suffix.saturating_sub(t.len()),
+            _ => trailing_siblings_flat_width(docs.get(i.saturating_add(2)..).unwrap_or(&[])),
+        };
     }
 }
 
@@ -799,6 +866,9 @@ fn render_method_chain(
 /// brace-block receiver's method attaches). A transparent `Nest`/`Concat` wrapper is
 /// looked through so a chain carried inside a positional wrapper still classifies.
 fn receiver_is_method_chain(receiver: &Doc) -> bool {
+    if !spend(1) {
+        return false;
+    }
     match receiver {
         Doc::MethodChain { .. } => true,
         Doc::Nest(_, inner) => receiver_is_method_chain(inner),
@@ -1201,14 +1271,18 @@ fn if_else_construct_width(node: &Doc, cond: &Doc, then_: &Doc, else_: &Doc) -> 
         node,
         |m| &mut m.if_else_widths,
         || {
-            let width = "if ".len()
-                + cond.normalized_leaves().len()
-                + " { ".len()
-                + then_.normalized_leaves().len()
-                + " } else { ".len()
-                + else_.normalized_leaves().len()
-                + " }".len();
-            (width, width)
+            let (cond, cond_work) = cond.normalized_leaves_with_work();
+            let (then_, then_work) = then_.normalized_leaves_with_work();
+            let (else_, else_work) = else_.normalized_leaves_with_work();
+            let width = ["if ", " { ", " } else { ", " }"]
+                .into_iter()
+                .map(str::len)
+                .chain([cond.len(), then_.len(), else_.len()])
+                .fold(0, usize::saturating_add);
+            let work = [cond_work, then_work, else_work]
+                .into_iter()
+                .fold(width, usize::saturating_add);
+            (width, work)
         },
     )
 }
@@ -1568,7 +1642,7 @@ fn trailing_siblings_flat_width<D: Borrow<Doc>>(siblings: &[D]) -> usize {
     let mut total = 0usize;
     for s in siblings {
         match s.borrow() {
-            Doc::Text(t) => total += t.len(),
+            Doc::Text(t) => total = total.saturating_add(t.len()),
             _ => break,
         }
     }
@@ -2501,6 +2575,9 @@ fn is_closure_head(head: &str) -> bool {
 /// also admits nested calls / macros / tuples that DO get their own line when they
 /// fit flat within the shared budget.
 fn is_block_like(doc: &Doc) -> bool {
+    if !spend(1) {
+        return false;
+    }
     match doc {
         Doc::BraceBody(_) => true,
         Doc::Group(inner) => is_block_like(inner),
@@ -2525,6 +2602,9 @@ fn is_block_like(doc: &Doc) -> bool {
 /// `Box::new(` / `Some(` text wrapper. A [`Doc::Chain`] and a parenthesized
 /// statement block (`({ … })`) are NOT glue-shaped.
 fn is_glue_shape(doc: &Doc) -> bool {
+    if !spend(1) {
+        return false;
+    }
     match doc {
         // A call/ctor/macro/tuple/list glues onto its own delimiters, and a struct
         // literal (`Name { … }`) is a brace-delimited construct `rustfmt` glues a
@@ -2558,6 +2638,9 @@ fn is_glue_shape(doc: &Doc) -> bool {
 /// whose last argument is a plain call breaks one argument per line rather than
 /// overflowing. A `Box::new(<delimited>)` wrapper counts (its inner is delimited).
 fn is_delimited_expr(doc: &Doc) -> bool {
+    if !spend(1) {
+        return false;
+    }
     match doc {
         Doc::CallArgs { open, elems, .. } => match open.as_ref() {
             // A tuple `(` or an array `vec![` / `[`.
@@ -2642,7 +2725,7 @@ fn renders_single_line(operand: &Doc, cfg: RenderConfig, col: usize, indent: usi
 /// starts mid-line, e.g. after `let z = `).
 fn current_line_indent(out: &str) -> Option<usize> {
     let line_start = out.rfind('\n').map_or(0, |nl| nl + 1);
-    let line = &out[line_start..];
+    let line = out.get(line_start..).unwrap_or_default();
     if line.chars().all(|c| c == ' ') {
         Some(line.len())
     } else {
@@ -3713,6 +3796,242 @@ mod p0_tests {
                 doc.normalized_leaves()
             );
         });
+    }
+
+    /// What one render under a chosen fuel and memo ceiling did.
+    struct Stats {
+        out: String,
+        exhausted: bool,
+        spent: usize,
+        entries: usize,
+        bytes: usize,
+    }
+
+    /// Render `doc` under `fuel` and `byte_ceiling`, checking that the memo charges
+    /// every entry it keeps and never passes its ceiling.
+    fn render_stats(doc: &Doc, fuel: usize, byte_ceiling: usize) -> Stats {
+        let _scope = MemoScope::install_capped(doc, fuel, byte_ceiling);
+        let mut out = String::new();
+        render_at(doc, RenderConfig::default(), 0, 0, false, &mut out);
+        let memo = MEMO.with_borrow(|m| {
+            m.as_ref().map(|m| {
+                let charged: usize = m.layouts.values().map(|l| memo_entry_bytes(l.len())).sum();
+                assert_eq!(m.bytes, charged, "memo bytes must charge every entry");
+                assert!(m.bytes <= byte_ceiling, "memo past its ceiling");
+                (fuel.saturating_sub(m.fuel), m.layouts.len(), m.bytes)
+            })
+        });
+        assert!(memo.is_some(), "the scope installs a memo");
+        let (spent, entries, bytes) = memo.unwrap_or_default();
+        Stats {
+            out,
+            exhausted: fuel_exhausted(),
+            spent,
+            entries,
+            bytes,
+        }
+    }
+
+    /// The composite nodes of `doc`, each keyed by the memo.
+    fn node_count(doc: &Doc) -> usize {
+        let mut nodes = HashSet::new();
+        collect_node_addrs(doc, &mut nodes);
+        nodes.len()
+    }
+
+    /// `n` sibling groups, each laying out to nothing.
+    fn empty_groups(n: usize) -> Doc {
+        Doc::concat((0..n).map(|_| Doc::group(Doc::concat(vec![]))).collect())
+    }
+
+    /// The refusal: an empty layout still costs its entry, so a flood of them fills
+    /// the memo to its ceiling exactly and no further, and the output is unchanged.
+    #[test]
+    fn empty_layouts_fill_the_memo_only_to_its_ceiling() {
+        let entry = memo_entry_bytes(0);
+        assert!(entry > 0, "an empty layout must occupy memo bytes");
+        let doc = empty_groups(64);
+        let uncapped = render_stats(&doc, LAYOUT_FUEL, MEMO_BYTE_CEILING);
+        assert!(uncapped.entries > 8, "the flood keys every group");
+        assert_eq!(uncapped.bytes, uncapped.entries * entry);
+        let capped = render_stats(&doc, LAYOUT_FUEL, 8 * entry);
+        assert_eq!(capped.entries, 8, "the ninth entry passes the ceiling");
+        assert_eq!(capped.bytes, 8 * entry);
+        let under = render_stats(&doc, LAYOUT_FUEL, 8 * entry - 1);
+        assert_eq!(under.entries, 7, "one byte short admits one entry fewer");
+        assert!(!capped.exhausted && !uncapped.exhausted);
+        assert_eq!(capped.out, uncapped.out);
+    }
+
+    /// The refusal: every node laid out spends fuel even when it writes nothing, so a
+    /// flood of empty layouts runs a small fuel out instead of rendering for free.
+    #[test]
+    fn empty_layouts_spend_fuel() {
+        let doc = empty_groups(4096);
+        let nodes = node_count(&doc);
+        let full = render_stats(&doc, LAYOUT_FUEL, MEMO_BYTE_CEILING);
+        assert!(!full.exhausted);
+        assert!(
+            full.spent >= nodes,
+            "{} spent over {nodes} nodes",
+            full.spent
+        );
+        let starved = render_stats(&doc, nodes / 2, MEMO_BYTE_CEILING);
+        assert!(starved.exhausted, "an empty layout must not be free");
+        assert!(starved.out.is_empty(), "an abandoned render keeps nothing");
+    }
+
+    /// Each `IfElse` of an else-if chain measures its whole tail once; that walk
+    /// is charged, so the fuel spent covers the quadratic total of the walks.
+    #[test]
+    fn else_if_chain_width_walks_are_charged() {
+        let depth = 32;
+        let chain = (0..depth).fold(Doc::text(""), |acc, _| {
+            Doc::if_else(Doc::text(""), Doc::text(""), acc)
+        });
+        let stats = render_stats(&chain, LAYOUT_FUEL, MEMO_BYTE_CEILING);
+        assert!(!stats.exhausted);
+        // Level `k` walks its condition, its branch, and the `3(k - 1) + 1` nodes
+        // of its tail: at least `3k` steps.
+        let walked = 3 * depth * (depth + 1) / 2;
+        assert!(
+            stats.spent >= walked,
+            "{} spent over {walked} walked",
+            stats.spent
+        );
+    }
+
+    /// A deep nest of groups asks every level for its hard-break fact; each asked
+    /// node is charged, so the fuel spent covers every node the walk visits.
+    #[test]
+    fn deep_group_nest_walks_are_charged() {
+        let doc = nest(
+            |d| Doc::group(Doc::concat(vec![Doc::text("g("), d, Doc::text(")")])),
+            24,
+        );
+        let stats = render_stats(&doc, LAYOUT_FUEL, MEMO_BYTE_CEILING);
+        assert!(!stats.exhausted);
+        assert!(stats.spent >= node_count(&doc));
+    }
+
+    /// The fuel boundary is exact: a render given one unit more than it spends
+    /// finishes identically, and one given exactly what it spends runs out and keeps
+    /// nothing.
+    #[test]
+    fn fuel_threshold_is_exact() {
+        for (name, step) in NESTS {
+            let doc = nest(step, 6);
+            let full = render_stats(&doc, LAYOUT_FUEL, MEMO_BYTE_CEILING);
+            assert!(!full.exhausted, "{name}");
+            let enough = render_stats(&doc, full.spent + 1, MEMO_BYTE_CEILING);
+            assert!(!enough.exhausted, "{name}: one past the cost must finish");
+            assert_eq!(enough.spent, full.spent, "{name}");
+            assert_eq!(enough.out, full.out, "{name}");
+            let short = render_stats(&doc, full.spent, MEMO_BYTE_CEILING);
+            assert!(short.exhausted, "{name}: exactly the cost must run out");
+            assert!(
+                short.out.is_empty(),
+                "{name}: an abandoned render keeps nothing"
+            );
+        }
+    }
+
+    /// The refusal: once the fuel is spent, the shape predicates and node facts
+    /// walk nothing and answer a default, as the output they serve is discarded.
+    #[test]
+    fn exhausted_fuel_stops_predicates_and_facts() {
+        let block = Doc::brace_body(Doc::text("x"));
+        let hard = Doc::HardLine;
+        let call = Doc::call_args(Doc::text("f("), vec![], Doc::text(")"), false);
+        assert!(is_glue_shape(&call));
+        assert!(is_block_like(&block) && has_hard_break(&hard));
+        let _scope = MemoScope::install(&block, 0);
+        assert!(!spend(1), "no fuel to spend");
+        assert!(!is_block_like(&block));
+        assert!(!is_glue_shape(&call));
+        assert!(!has_hard_break(&hard));
+    }
+
+    /// Whitespace-free bytes of `s`: the token stream, spacing aside.
+    fn tokens(s: &str) -> String {
+        s.chars().filter(|c| !c.is_ascii_whitespace()).collect()
+    }
+
+    /// The SEAL leaf stream of `doc`.
+    fn seal_leaves(doc: &Doc) -> String {
+        let mut out = String::new();
+        doc.collect_leaves(&mut out);
+        out
+    }
+
+    /// The refusal: a line comment a leaf opens is closed before any byte the
+    /// layout owns, so no code lands inside it; the tokens are the SEAL's.
+    #[test]
+    fn plain_layout_never_writes_code_inside_a_line_comment() {
+        let cases = [
+            (
+                Doc::concat(vec![Doc::text("x // c"), Doc::Line, Doc::text("y")]),
+                "x // c\ny",
+            ),
+            (
+                Doc::call_args(
+                    Doc::text("f("),
+                    vec![Doc::text("a // c"), Doc::text("b")],
+                    Doc::text(")"),
+                    true,
+                ),
+                "f(a // c\n, b)",
+            ),
+            (Doc::brace_body(Doc::text("s // c")), "{ s // c\n}"),
+            (
+                Doc::concat(vec![
+                    Doc::text("a /"),
+                    Doc::text("/ c"),
+                    Doc::Line,
+                    Doc::text("y"),
+                ]),
+                "a // c\ny",
+            ),
+            (
+                Doc::concat(vec![Doc::text("// c\nz"), Doc::Line, Doc::text("y")]),
+                "// c\nz y",
+            ),
+            (
+                Doc::concat(vec![Doc::text("a // c"), Doc::HardLine, Doc::text("y")]),
+                "a // c\ny",
+            ),
+        ];
+        for (doc, want) in cases {
+            let plain = doc.plain_layout();
+            assert_eq!(plain, want);
+            assert_eq!(tokens(&plain), tokens(&seal_leaves(&doc)));
+        }
+    }
+
+    /// The fallback is deterministic and address-free: the same document, or a
+    /// copy of it at other addresses, always falls back to the same bytes, which
+    /// carry the SEAL's tokens in order.
+    #[test]
+    fn plain_fallback_is_deterministic() {
+        on_main_thread_stack(|| {
+            let doc = nest(NESTS[5].1, 256);
+            let copy = doc.clone();
+            assert!(layout_work(&doc).1, "the mixed nest must exhaust the fuel");
+            let out = render(&doc, RenderConfig::default());
+            assert_eq!(out, render(&copy, RenderConfig::default()));
+            assert_eq!(out, render(&doc, RenderConfig::default()));
+            assert_eq!(doc.plain_layout(), copy.plain_layout());
+            assert_eq!(tokens(&out), tokens(&seal_leaves(&doc)));
+        });
+        for (name, step) in NESTS {
+            let doc = nest(step, 24);
+            assert_eq!(doc.plain_layout(), doc.clone().plain_layout(), "{name}");
+            assert_eq!(
+                tokens(&doc.plain_layout()),
+                tokens(&seal_leaves(&doc)),
+                "{name}"
+            );
+        }
     }
 
     /// Run `f` on a thread with the 8 MiB stack the `ipe` binary's main thread

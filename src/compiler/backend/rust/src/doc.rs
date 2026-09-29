@@ -507,77 +507,82 @@ impl Doc {
         }
     }
 
-    /// Append every text leaf of this document, in order, to `out`. This is the
-    /// SEAL oracle: `concat(leaves(doc))` whitespace-normalizes to the legacy
-    /// emitter's string. Break candidates ([`Doc::Line`] / [`Doc::HardLine`])
+    /// Append every text leaf of this document, in order, to `out`.
+    ///
+    /// This is the SEAL oracle: `concat(leaves(doc))` whitespace-normalizes to the
+    /// legacy emitter's string. Break candidates ([`Doc::Line`] / [`Doc::HardLine`])
     /// contribute a single space so adjacency is preserved under normalization
     /// ([`Doc::Softline`] contributes nothing, as it never separates tokens).
     pub fn collect_leaves(&self, out: &mut String) {
-        self.write_leaves(' ', out);
+        self.write_leaves(&mut LeafSink::new(LeafMode::Seal, out));
     }
 
-    /// The document with no layout decision made: its leaves in order, exactly as
-    /// [`Doc::collect_leaves`] writes them, except that a [`Doc::HardLine`] is a
-    /// newline. It is the token sequence the SEAL certifies, so it is valid Rust,
-    /// and keeping the unconditional breaks keeps a line comment from swallowing
-    /// the code after it. One walk over the tree: the renderer's layout of last
-    /// resort when the fit search runs out of fuel.
+    /// The document with no layout decision made, as valid Rust.
+    ///
+    /// Its leaves in order, exactly as [`Doc::collect_leaves`] writes them, with
+    /// two differences that are pure whitespace: a [`Doc::HardLine`] is a
+    /// newline, and a newline closes any line comment a leaf left open before
+    /// the next layout-owned byte (a break, a joiner, a delimiter) is written.
+    /// It is the token sequence the SEAL certifies, and no byte the layout owns
+    /// can land inside a comment, so it is valid Rust. One walk over the tree,
+    /// linear in the document's bytes: the renderer's layout of last resort
+    /// when the fit search runs out of fuel.
     pub fn plain_layout(&self) -> String {
         let mut out = String::new();
-        self.write_leaves('\n', &mut out);
+        self.write_leaves(&mut LeafSink::new(LeafMode::Plain, &mut out));
         out
     }
 
-    /// Append every text leaf in order, writing `hard_line` for each
-    /// [`Doc::HardLine`] and a space for each [`Doc::Line`].
-    fn write_leaves(&self, hard_line: char, out: &mut String) {
+    /// Write every leaf in order through `sink`, which owns the break bytes.
+    fn write_leaves(&self, sink: &mut LeafSink<'_>) {
+        sink.steps = sink.steps.saturating_add(1);
         match self {
-            Self::Text(s) => out.push_str(s),
-            Self::Line => out.push(' '),
-            Self::HardLine => out.push(hard_line),
+            Self::Text(s) => sink.leaf(s),
+            Self::Line => sink.layout(" "),
+            Self::HardLine => sink.hard_line(),
             // Invisible to the SEAL: the trailing comma it stands for is not a
             // token the legacy string emitter produces, so it must not appear in
             // the leaf sequence the SEAL compares.
-            Self::Softline | Self::IfBroken(_) => {}
+            Self::Softline | Self::IfBroken(_) => sink.layout(""),
             Self::Concat(docs) => {
                 for d in docs {
-                    d.write_leaves(hard_line, out);
+                    d.write_leaves(sink);
                 }
             }
-            Self::Nest(_, inner) | Self::Group(inner) => inner.write_leaves(hard_line, out),
+            Self::Nest(_, inner) | Self::Group(inner) => inner.write_leaves(sink),
             // The braces ARE part of the leaf sequence: the string emitter always
             // writes them, so they must appear in the SEAL comparison (unlike the
             // trailing comma above, which the string emitter never writes). A space
             // pads each brace so token adjacency survives normalization.
             Self::BraceBody(inner) => {
-                out.push_str("{ ");
-                inner.write_leaves(hard_line, out);
-                out.push_str(" }");
+                sink.layout("{ ");
+                inner.write_leaves(sink);
+                sink.layout(" }");
             }
             // The trailing comma IS a leaf (the string emitter writes it after every
             // arm body); the synthesized braces are NOT (the string emitter never
             // writes them, so they stay invisible like `IfBroken`).
             Self::MatchArmTail { body, .. } => {
-                body.write_leaves(hard_line, out);
-                out.push(',');
+                body.write_leaves(sink);
+                sink.layout(",");
             }
             // The break after `= ` is pure whitespace (SEAL-invisible, like a
             // `HardLine`): the string emitter writes `prefix rhs` with a single
             // separating space, which normalizes equal to either broken layout.
             Self::Assign { prefix, rhs, .. } => {
-                prefix.write_leaves(hard_line, out);
-                rhs.write_leaves(hard_line, out);
+                prefix.write_leaves(sink);
+                rhs.write_leaves(sink);
             }
             Self::Chain { operands } => {
                 for (i, op) in operands.iter().enumerate() {
                     if let Some(o) = &op.leading_op {
                         if i > 0 {
-                            out.push(' ');
+                            sink.layout(" ");
                         }
-                        out.push_str(o);
-                        out.push(' ');
+                        sink.layout(o);
+                        sink.layout(" ");
                     }
-                    op.doc.write_leaves(hard_line, out);
+                    op.doc.write_leaves(sink);
                 }
             }
             // The open/close delimiters and each element ARE leaves; elements are
@@ -587,14 +592,14 @@ impl Doc {
             Self::CallArgs {
                 open, elems, close, ..
             } => {
-                open.write_leaves(hard_line, out);
+                open.write_leaves(sink);
                 for (i, e) in elems.iter().enumerate() {
                     if i > 0 {
-                        out.push_str(", ");
+                        sink.layout(", ");
                     }
-                    e.write_leaves(hard_line, out);
+                    e.write_leaves(sink);
                 }
-                close.write_leaves(hard_line, out);
+                close.write_leaves(sink);
             }
             // Same accounting as `CallArgs`: `open`, each field joined by `, `, and
             // `close` are leaves; the trailing comma is SEAL-invisible. A space pads
@@ -604,16 +609,16 @@ impl Doc {
                 fields,
                 close,
             } => {
-                open.write_leaves(hard_line, out);
-                out.push(' ');
+                open.write_leaves(sink);
+                sink.layout(" ");
                 for (i, e) in fields.iter().enumerate() {
                     if i > 0 {
-                        out.push_str(", ");
+                        sink.layout(", ");
                     }
-                    e.write_leaves(hard_line, out);
+                    e.write_leaves(sink);
                 }
-                out.push(' ');
-                close.write_leaves(hard_line, out);
+                sink.layout(" ");
+                close.write_leaves(sink);
             }
             // `Ptr<Head + T1 + T2 + …>` — the same token sequence the string emitter
             // writes for the flat annotation. The angle-break's trailing comma is
@@ -624,21 +629,21 @@ impl Doc {
                 traits,
                 close,
             } => {
-                ptr_open.write_leaves(hard_line, out);
-                head.write_leaves(hard_line, out);
+                ptr_open.write_leaves(sink);
+                head.write_leaves(sink);
                 for t in traits {
-                    out.push_str(" + ");
-                    t.write_leaves(hard_line, out);
+                    sink.layout(" + ");
+                    t.write_leaves(sink);
                 }
-                close.write_leaves(hard_line, out);
+                close.write_leaves(sink);
             }
             // The parens ARE leaves (the string emitter writes `({f})`), whether or
             // not the render drops them — the same rendered-vs-leaves divergence as
             // `IfBroken` / `BraceBody`.
             Self::ElidableParen { inner } => {
-                out.push('(');
-                inner.write_leaves(hard_line, out);
-                out.push(')');
+                sink.layout("(");
+                inner.write_leaves(sink);
+                sink.layout(")");
             }
             // The alternatives joined ` | ` — the string emitter's exact bytes.
             // The vertical layout's newlines are pure whitespace and its `| `
@@ -646,55 +651,52 @@ impl Doc {
             Self::OrPattern { alts } => {
                 for (i, alt) in alts.iter().enumerate() {
                     if i > 0 {
-                        out.push_str(" | ");
+                        sink.layout(" | ");
                     }
-                    out.push_str(alt);
+                    sink.leaf(alt);
                 }
             }
             // `receiver.method(…)` with no break — the string emitter writes them
             // adjacent, and the method-on-its-own-line layout is pure whitespace
             // (SEAL-invisible), so both layouts normalize to the same leaves.
             Self::MethodChain { receiver, method } => {
-                receiver.write_leaves(hard_line, out);
-                method.write_leaves(hard_line, out);
+                receiver.write_leaves(sink);
+                method.write_leaves(sink);
             }
             // The `(if … { … } else { … })` tokens the string emitter writes
             // adjacently. The block form's newlines are pure whitespace and its
             // brace tokens are identical, so both layouts normalize to the same
             // leaves — the branch bodies carry their own leaves in between.
             Self::IfElse { cond, then_, else_ } => {
-                Self::write_if_else_leaves(cond, then_, else_, hard_line, out);
+                sink.layout("(if ");
+                cond.write_leaves(sink);
+                sink.layout(" { ");
+                then_.write_leaves(sink);
+                sink.layout(" } else { ");
+                else_.write_leaves(sink);
+                sink.layout(" })");
             }
         }
-    }
-
-    /// Append the `(if cond { then } else { else })` leaf tokens for a
-    /// [`Doc::IfElse`], with each branch's own leaves in between — the exact
-    /// adjacent token sequence the string emitter writes, identical in the inline
-    /// and block layouts.
-    fn write_if_else_leaves(
-        cond: &Self,
-        then_: &Self,
-        else_: &Self,
-        hard_line: char,
-        out: &mut String,
-    ) {
-        out.push_str("(if ");
-        cond.write_leaves(hard_line, out);
-        out.push_str(" { ");
-        then_.write_leaves(hard_line, out);
-        out.push_str(" } else { ");
-        else_.write_leaves(hard_line, out);
-        out.push_str(" })");
     }
 
     /// The whitespace-normalized leaf string: runs of whitespace collapsed to a
     /// single space, trimmed. Two documents with the same token sequence
     /// (ignoring layout) normalize equal — this is the SEAL comparison key.
     pub fn normalized_leaves(&self) -> String {
+        self.normalized_leaves_with_work().0
+    }
+
+    /// [`Doc::normalized_leaves`] with the work computing it took.
+    ///
+    /// The work is the nodes walked plus the raw bytes written, so a subtree of
+    /// zero-width nodes is charged for its size, not only for its text.
+    pub fn normalized_leaves_with_work(&self) -> (String, usize) {
         let mut raw = String::new();
-        self.collect_leaves(&mut raw);
-        whitespace_normalize(&raw)
+        let mut sink = LeafSink::new(LeafMode::Seal, &mut raw);
+        self.write_leaves(&mut sink);
+        let steps = sink.steps;
+        let work = steps.saturating_add(raw.len());
+        (whitespace_normalize(&raw), work)
     }
 }
 
@@ -716,4 +718,78 @@ pub fn whitespace_normalize(s: &str) -> String {
         }
     }
     out
+}
+
+/// Which leaf stream a [`LeafSink`] writes.
+#[derive(Clone, Copy)]
+enum LeafMode {
+    /// The SEAL oracle: every break is one space.
+    Seal,
+    /// The fallback layout: unconditional breaks are newlines, and no
+    /// layout-owned byte is written inside a line comment.
+    Plain,
+}
+
+/// The writer [`Doc::write_leaves`] streams through.
+///
+/// Leaf bytes pass through verbatim in both modes, so the token sequence never
+/// depends on the mode. Every other byte is layout-owned and always sits on a
+/// token boundary, so in [`LeafMode::Plain`] a newline may precede it: that is
+/// how a line comment a leaf opened is closed before the layout writes code the
+/// comment would swallow.
+struct LeafSink<'a> {
+    out: &'a mut String,
+    mode: LeafMode,
+    /// Whether the current output line may sit inside a `//` comment.
+    ///
+    /// Tracked only in [`LeafMode::Plain`]. Over-approximate (a `//` inside a
+    /// string literal counts), which costs at most a harmless newline.
+    comment_open: bool,
+    /// The nodes walked so far.
+    steps: usize,
+}
+
+impl<'a> LeafSink<'a> {
+    const fn new(mode: LeafMode, out: &'a mut String) -> Self {
+        Self {
+            out,
+            mode,
+            comment_open: false,
+            steps: 0,
+        }
+    }
+
+    /// Write a leaf's bytes verbatim.
+    fn leaf(&mut self, s: &str) {
+        let spliced = self.out.ends_with('/') && s.starts_with('/');
+        self.out.push_str(s);
+        if matches!(self.mode, LeafMode::Plain) {
+            self.comment_open = match s.rfind('\n') {
+                Some(at) => s.get(at..).is_some_and(|tail| tail.contains("//")),
+                None => self.comment_open || spliced || s.contains("//"),
+            };
+        }
+    }
+
+    /// Write a layout-owned separator, first ending any open line comment.
+    fn layout(&mut self, s: &str) {
+        if self.comment_open {
+            self.out.push('\n');
+            self.out.push_str(s.trim_start_matches(' '));
+            self.comment_open = false;
+        } else {
+            self.out.push_str(s);
+        }
+    }
+
+    /// Write an unconditional break.
+    fn hard_line(&mut self) {
+        match self.mode {
+            LeafMode::Seal => self.out.push(' '),
+            LeafMode::Plain => {
+                self.out.push('\n');
+                self.comment_open = false;
+            }
+        }
+    }
 }
