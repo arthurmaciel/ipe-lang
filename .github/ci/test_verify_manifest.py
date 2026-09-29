@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
-"""Refusal proofs for `verify-manifest.py`'s sccache-wiring check (check 6)
-and merge-queue safety check (check 7).
+"""Refusal proofs for `verify-manifest.py`'s sccache-wiring check (check 6),
+merge-queue safety check (check 7), and release-only skip-as-pass check
+(check 8).
 
 Each rejection the guard is supposed to make (a raw sccache-action reference,
 a case-variant `uses:`, an env key at workflow/job/step level, a `$GITHUB_ENV`
@@ -33,6 +34,7 @@ _spec.loader.exec_module(verify_manifest)
 
 check_sccache_wiring = verify_manifest.check_sccache_wiring
 check_merge_queue = verify_manifest.check_merge_queue
+check_release_only_skips = verify_manifest.check_release_only_skips
 
 # The live sanctioned composite is the fixture: the canonical form is proven
 # against the file CI actually runs, never a hand-kept copy.
@@ -1433,6 +1435,142 @@ class TestMergeQueueSafety(unittest.TestCase):
     def test_unrecognised_on_shape_refused(self) -> None:
         bad = _MQ_OK.replace("on:\n  push:\n    branches: [main]\n  pull_request:\n  merge_group:\n", "on: 3\n")
         self.assertRefused(bad, "`on:` is not")
+
+
+_RO_OK = """\
+on: [pull_request, merge_group]
+permissions:
+  contents: read
+jobs:
+  changes:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo classify
+  heavy:
+    name: heavy (${{ matrix.os }})
+    strategy:
+      matrix:
+        os: [linux]
+    runs-on: ubuntu-latest
+    needs: [changes]
+    if: >-
+      needs.changes.outputs.code == 'true'
+      || needs.changes.outputs.release_only == 'true'
+    steps:
+      - name: Release-only diff - trivial pass
+        if: needs.changes.outputs.release_only == 'true'
+        run: echo "release-only diff; trivial pass, not a skip."
+      - if: needs.changes.outputs.release_only != 'true'
+        run: cargo build
+"""
+
+_RO_SKIP_IF = (
+    "    if: >-\n"
+    "      needs.changes.outputs.code == 'true'\n"
+    "      || needs.changes.outputs.release_only == 'true'\n"
+)
+
+
+class TestReleaseOnlySkipAsPass(unittest.TestCase):
+    """Check 8: a gate producer never skips on `release_only`; it runs and
+    reports the release-only pass through an executed step."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.fx = SccacheFixture(self._tmp.name)
+
+    def tearDown(self) -> None:
+        self._tmp.cleanup()
+
+    def errors(self, content: str, *, gates: set[str] | None = None) -> list[str]:
+        self.fx.workflow("gate.yml", content)
+        errors: list[str] = []
+        check_release_only_skips({"heavy (linux)"} if gates is None else gates, errors, root=self.fx.root)
+        return errors
+
+    def assertRefused(self, content: str, needle: str) -> None:
+        errors = self.errors(content)
+        self.assertTrue(any(needle in e for e in errors), f"expected {needle!r} in {errors}")
+
+    def with_if(self, cond: str) -> str:
+        assert _RO_SKIP_IF in _RO_OK
+        return _RO_OK.replace(_RO_SKIP_IF, f"    if: {cond}\n")
+
+    def test_genuine_trivial_pass_passes(self) -> None:
+        self.assertEqual(self.errors(_RO_OK), [])
+
+    def test_no_release_only_mention_passes(self) -> None:
+        self.assertEqual(self.errors(self.with_if("needs.changes.outputs.code == 'true'")), [])
+
+    def test_non_gate_job_may_skip(self) -> None:
+        bad = self.with_if("needs.changes.outputs.release_only != 'true'")
+        self.assertEqual(self.errors(bad, gates={"other"}), [])
+
+    def test_release_only_skip_conjunct_refused(self) -> None:
+        bad = self.with_if(
+            "(needs.changes.outputs.code == 'true') && needs.changes.outputs.release_only != 'true'"
+        )
+        self.assertRefused(bad, "may name `release_only` only as one top-level")
+
+    def test_release_only_skip_on_matrix_leg_refused(self) -> None:
+        bad = self.with_if("needs.changes.outputs.release_only != 'true'")
+        self.assertRefused(bad, "gate producer job 'heavy'")
+
+    def test_negated_release_only_refused(self) -> None:
+        bad = self.with_if("${{ !(needs.changes.outputs.release_only == 'true') }}")
+        self.assertRefused(bad, "may name `release_only` only as one top-level")
+
+    def test_release_only_disjunct_nested_under_conjunct_refused(self) -> None:
+        bad = self.with_if(
+            "(needs.changes.outputs.code == 'true' || needs.changes.outputs.release_only == 'true') && always()"
+        )
+        self.assertRefused(bad, "may name `release_only` only as one top-level")
+
+    def test_second_release_only_mention_refused(self) -> None:
+        bad = self.with_if(
+            "needs.changes.outputs.release_only == 'true' || "
+            "(needs.changes.outputs.code == 'true' && needs.changes.outputs.release_only != 'true')"
+        )
+        self.assertRefused(bad, "may name `release_only` only as one top-level")
+
+    def test_unbalanced_if_refused(self) -> None:
+        bad = self.with_if("(needs.changes.outputs.code == 'true' || needs.changes.outputs.release_only == 'true'")
+        self.assertRefused(bad, "may name `release_only` only as one top-level")
+
+    def test_partial_expression_wrapper_refused(self) -> None:
+        bad = self.with_if(
+            "x ${{ needs.changes.outputs.code == 'true' }} || needs.changes.outputs.release_only == 'true'"
+        )
+        self.assertRefused(bad, "may name `release_only` only as one top-level")
+
+    def test_missing_trivial_pass_step_refused(self) -> None:
+        bad = _RO_OK.replace(
+            "      - name: Release-only diff - trivial pass\n"
+            "        if: needs.changes.outputs.release_only == 'true'\n"
+            "        run: echo \"release-only diff; trivial pass, not a skip.\"\n",
+            "",
+        )
+        self.assertRefused(bad, "first step is not the trivial-pass")
+
+    def test_trivial_pass_step_not_first_refused(self) -> None:
+        bad = _RO_OK.replace(
+            "    steps:\n", "    steps:\n      - if: needs.changes.outputs.release_only != 'true'\n        run: make\n"
+        )
+        self.assertRefused(bad, "first step is not the trivial-pass")
+
+    def test_trivial_pass_step_without_run_refused(self) -> None:
+        bad = _RO_OK.replace(
+            "        run: echo \"release-only diff; trivial pass, not a skip.\"\n",
+            "        uses: actions/checkout@v7\n",
+        )
+        self.assertRefused(bad, "first step is not the trivial-pass")
+
+    def test_trivial_pass_step_on_wrong_condition_refused(self) -> None:
+        bad = _RO_OK.replace(
+            "      - name: Release-only diff - trivial pass\n        if: needs.changes.outputs.release_only == 'true'\n",
+            "      - name: Release-only diff - trivial pass\n        if: needs.changes.outputs.code == 'true'\n",
+        )
+        self.assertRefused(bad, "first step is not the trivial-pass")
 
 
 if __name__ == "__main__":
