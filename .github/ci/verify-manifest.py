@@ -102,7 +102,9 @@ Checks performed
      (`MASKING_KEYS`: `if:`, `continue-on-error:`) on a step or on the job
      only where every tool's `ToolRole` admits it (`ROLE_MASKING`): a
      verdict tool admits none, an advisory tool's step a literal
-     `continue-on-error: true`, an output tool's terminal job an `if:`. No `working-directory` anywhere names
+     `continue-on-error: true`, an output tool's terminal job an `if:`. A
+     job whose tool admits no job masking (verdict, advisory) also admits no
+     `needs:`, so no skipped ancestor can skip it. No `working-directory` anywhere names
      `.github`. A quote-removed scan refusing writes into the tree is
      defence in depth under that rule, not its proof.
 

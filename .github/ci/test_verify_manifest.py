@@ -2368,10 +2368,23 @@ class TestToolOrderingAndClosedShells(unittest.TestCase):
         )
         self.assertRefused("job 't'", "with needs", "['s']")
 
-    # A VERDICT job admits no `needs:` at all (see `ToolJob`'s docstring),
-    # so there is no positive control here: any non-empty `needs:` on such a
-    # job is refused regardless of whether its ancestor chain carries an
-    # `if:`.
+    def test_terminal_output_job_admits_needs(self) -> None:
+        # The one role whose job admits a job `if:` also admits `needs:`, as
+        # long as no job needs it in turn.
+        self.fx.workflow(
+            "t.yml",
+            "name: t\non: push\njobs:\n"
+            "  s:\n    runs-on: ubuntu-latest\n    steps:\n"
+            "      - name: Echo\n        run: echo hi\n"
+            "  t:\n    runs-on: ubuntu-latest\n    needs: [s]\n    if: failure()\n    steps:\n"
+            f"      - uses: {_CHECKOUT}\n        with:\n          sparse-checkout: .github/ci\n"
+            f"      - name: Emit\n        run: {self._OUTPUT}\n",
+        )
+        self.assertEqual(self.fx.errors(), [])
+
+    # A VERDICT or ADVISORY job admits no `needs:` at all (see `ToolJob`'s
+    # docstring): any non-empty `needs:` on such a job is refused whether or
+    # not its ancestor chain carries an `if:`.
 
     # ---- the tool job's shape: closed keys, a literal budget --------------
 
