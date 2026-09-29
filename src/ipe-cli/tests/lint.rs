@@ -229,8 +229,9 @@ fn human_output_is_framed_and_guttered() -> TestResult {
         .output()?;
     let stdout = String::from_utf8_lossy(&out.stdout);
     let header = format!(
-        "\n  Ipê language - v{} - https://github.com/arthurmaciel/ipe-lang\n",
-        env!("CARGO_PKG_VERSION")
+        "\n  Ipê language - v{} - {}\n",
+        env!("CARGO_PKG_VERSION"),
+        ipe::style::REPO_URL
     );
     assert!(
         stdout.starts_with(&header),

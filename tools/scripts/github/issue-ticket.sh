@@ -16,14 +16,14 @@
 #   issue-ticket.sh ensure-label <name> [color-hex] [description]
 #
 # Env:
-#   IPE_ISSUE_REPO   target repo (default: arthurmaciel/ipe-lang)
+#   IPE_ISSUE_REPO   target repo (default: ipe-lang/compiler)
 #
 # A label named on `add` that does not yet exist is created automatically
 # (unless --dry-run). Requires the `gh` CLI, authenticated.
 
 set -euo pipefail
 
-REPO="${IPE_ISSUE_REPO:-arthurmaciel/ipe-lang}"
+REPO="${IPE_ISSUE_REPO:-ipe-lang/compiler}"
 
 die() { printf 'issue-ticket: %s\n' "$1" >&2; exit 1; }
 

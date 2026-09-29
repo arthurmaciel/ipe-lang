@@ -1736,6 +1736,19 @@ mod tests {
         assert!(!CATALOG.chars().any(|c| c.is_control() && c != '\n'));
     }
 
+    /// The catalog's `.md` prose cannot call [`crate::style::REPO_URL`] — it is
+    /// static text, not Rust — so the literal `cargo install --git …` example it
+    /// carries is instead pinned against that SSOT constant here: a drift
+    /// between the two fails this test rather than silently linking a stale repo.
+    #[test]
+    fn the_catalog_install_url_matches_the_repo_url_ssot() {
+        assert!(
+            CATALOG.contains(crate::style::REPO_URL),
+            "messages.md must spell the `cargo install --git` example with {}",
+            crate::style::REPO_URL
+        );
+    }
+
     /// Every `## <key>` the catalog defines.
     fn catalog_keys() -> Vec<&'static str> {
         CATALOG

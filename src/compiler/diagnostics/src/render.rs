@@ -29,7 +29,7 @@
 
 use core::fmt::Write as _;
 
-use crate::code::{ISSUE_TRACKER_URL, Severity, title};
+use crate::code::{Severity, issue_tracker_url, title};
 use crate::diagnostic::{
     AppShape, Applicability, CaseDefect, CodecAutoRejection, ConsentError, Diagnostic, Expected,
     ExpectedSet, ExposingDefect, Feature, FfiError, GenericAppEntryReach, HeaderDefect, HelpLine,
@@ -159,10 +159,11 @@ pub fn render(d: &Diagnostic, file: &str, source: &str) -> String {
             footer.push(format!("note: {detail}"));
         }
         footer.push("note: this is a bug in Ipe, please report it".to_string());
+        let tracker = issue_tracker_url();
         footer.push(format!(
             "note: I'm not sure what went wrong here — sorry about that. This is likely a gap \
              in the Ipe Rust compiler. Please report it (with this source + `ipe version`) \
-             at: {ISSUE_TRACKER_URL}"
+             at: {tracker}"
         ));
     }
 
@@ -914,7 +915,8 @@ pub fn plain_message(d: &Diagnostic, source: &str) -> String {
         }
         let _ = write!(
             out,
-            "\nnote: this is a bug in the compiler, please report it at: {ISSUE_TRACKER_URL}"
+            "\nnote: this is a bug in the compiler, please report it at: {}",
+            issue_tracker_url()
         );
     }
     let _ = write!(
@@ -1062,7 +1064,7 @@ pub fn render_json(d: &Diagnostic, file: &str, source: &str) -> String {
             hint_json_parts.push(json_str(detail));
         }
         hint_json_parts.push(json_str("this is a bug in the compiler, please report it"));
-        hint_json_parts.push(json_str(&format!("report at: {ISSUE_TRACKER_URL}")));
+        hint_json_parts.push(json_str(&format!("report at: {}", issue_tracker_url())));
     }
 
     let secondaries_json = format!("[{}]", secondary_json_parts.join(","));
@@ -3120,7 +3122,7 @@ mod tests {
             "Elm-style apology:\n{out}"
         );
         assert!(
-            out.contains(crate::code::ISSUE_TRACKER_URL),
+            out.contains(&crate::code::issue_tracker_url()),
             "tracker URL:\n{out}"
         );
         // The demoted code footer, carrying the explain pointer, is last.

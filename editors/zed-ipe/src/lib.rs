@@ -18,7 +18,7 @@ impl zed::Extension for IpeExtension {
         worktree: &zed::Worktree,
     ) -> Result<zed::Command> {
         let command = worktree.which("ipe").ok_or_else(|| {
-            "`ipe` is not on PATH — install it: https://github.com/arthurmaciel/ipe-lang".to_owned()
+            "`ipe` is not on PATH — install it: https://github.com/ipe-lang/compiler".to_owned()
         })?;
         Ok(zed::Command {
             command,

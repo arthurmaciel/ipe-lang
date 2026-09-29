@@ -20,11 +20,21 @@
 //! the taxonomy size is derived by counting rows — never a hand-pinned literal.
 //! Adding a code is one table row (plus its `explain/<CODE>.md`); see [`code!`].
 
+/// The repository home.
+///
+/// Single source of truth for every in-binary URL that points at it: the CLI
+/// banner and "report bugs" footer re-export this constant, and
+/// [`issue_tracker_url`] derives from it below.
+pub const REPO_URL: &str = "https://github.com/ipe-lang/compiler";
+
 /// Where a reader reports a compiler bug or nudges an unimplemented feature.
 ///
-/// Single source of truth: every humble / ICE message and every `IPE-I*` /
-/// `IPE-L*` explain page footer references this one constant.
-pub const ISSUE_TRACKER_URL: &str = "https://github.com/arthurmaciel/ipe-lang/issues";
+/// Derived from [`REPO_URL`] so the two can never drift; every humble / ICE
+/// message and every `IPE-I*` / `IPE-L*` explain page footer renders this.
+#[must_use]
+pub fn issue_tracker_url() -> String {
+    format!("{REPO_URL}/issues")
+}
 
 /// A stable compiler error code, e.g. `IPE-T0001`.
 ///
@@ -844,9 +854,10 @@ mod tests {
 
     #[test]
     fn issue_tracker_url_is_a_github_issues_link() {
+        assert_eq!(issue_tracker_url(), format!("{REPO_URL}/issues"));
         assert_eq!(
-            ISSUE_TRACKER_URL,
-            "https://github.com/arthurmaciel/ipe-lang/issues"
+            issue_tracker_url(),
+            "https://github.com/ipe-lang/compiler/issues"
         );
     }
 
