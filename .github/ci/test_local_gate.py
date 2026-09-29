@@ -435,27 +435,38 @@ class SourceReaders(unittest.TestCase):
         self.assertEqual(sel.packages, frozenset({"back"}))
 
 
-class ChangedFiles(unittest.TestCase):
-    """`changed_files` against a real throwaway repository."""
-
+class _TmpRepo(unittest.TestCase):
     def setUp(self) -> None:
         self.tmp = tempfile.TemporaryDirectory()
         self.root = self.tmp.name
         self.git("init", "-q", "-b", "main")
+
+    def tearDown(self) -> None:
+        self.tmp.cleanup()
+
+    def git(self, *args: str, check: bool = True) -> subprocess.CompletedProcess:
+        env = {**os.environ, "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1"}
+        ident = ["-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false"]
+        return subprocess.run(["git", *ident, *args], cwd=self.root, check=check, capture_output=True, text=True, env=env)
+
+    def write(self, rel: str, text: str) -> None:
+        path = os.path.join(self.root, rel)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w") as f:
+            f.write(text)
+
+
+class ChangedFiles(_TmpRepo):
+    """`changed_files` against a real throwaway repository."""
+
+    def setUp(self) -> None:
+        super().setUp()
         os.makedirs(os.path.join(self.root, "src/a"))
         with open(os.path.join(self.root, "src/a/moved.rs"), "w") as f:
             f.write("fn moved() {}\n" * 20)
         self.git("add", "-A")
         self.git("commit", "-q", "-m", "base")
         self.git("checkout", "-q", "-b", "topic")
-
-    def tearDown(self) -> None:
-        self.tmp.cleanup()
-
-    def git(self, *args: str) -> None:
-        env = {**os.environ, "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1"}
-        ident = ["-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false"]
-        subprocess.run(["git", *ident, *args], cwd=self.root, check=True, capture_output=True, env=env)
 
     def test_a_rename_reports_both_paths(self) -> None:
         os.makedirs(os.path.join(self.root, "src/b"))
@@ -563,27 +574,6 @@ def _silenced():
             os.dup2(saved[1], 2)
             os.close(saved[0])
             os.close(saved[1])
-
-
-class _TmpRepo(unittest.TestCase):
-    def setUp(self) -> None:
-        self.tmp = tempfile.TemporaryDirectory()
-        self.root = self.tmp.name
-        self.git("init", "-q", "-b", "main")
-
-    def tearDown(self) -> None:
-        self.tmp.cleanup()
-
-    def git(self, *args: str) -> None:
-        env = {**os.environ, "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1"}
-        ident = ["-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false"]
-        subprocess.run(["git", *ident, *args], cwd=self.root, check=True, capture_output=True, env=env)
-
-    def write(self, rel: str, text: str) -> None:
-        path = os.path.join(self.root, rel)
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        with open(path, "w") as f:
-            f.write(text)
 
 
 class QuickCatchesPlantedErrors(_TmpRepo):
@@ -786,7 +776,8 @@ class GeneratedUnchanged(_TmpRepo):
         self.git("checkout", "-q", "-")
         self.write("docs/a.md", "main\n")
         self.git("commit", "-q", "-am", "main")
-        subprocess.run(["git", "merge", "-q", "side"], cwd=self.root, capture_output=True)
+        self.git("merge", "-q", "side", check=False)
+        self.assertTrue(self.git("ls-files", "-u", "--", "docs/a.md").stdout, "the fixture merge must leave docs/a.md unmerged")
         out = subprocess.run([self.SCRIPT, "docs/a.md"], cwd=self.root, capture_output=True, text=True)
         self.assertEqual(out.returncode, 1, out.stderr)
         self.assertIn("unmerged: docs/a.md", out.stderr)
