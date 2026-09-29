@@ -52,6 +52,7 @@ check_one_lock_per_graph = verify_manifest.check_one_lock_per_graph
 check_one_ipe_build = verify_manifest.check_one_ipe_build
 check_scoped_package_coverage = verify_manifest.check_scoped_package_coverage
 check_drift_sees_untracked = verify_manifest.check_drift_sees_untracked
+check_dependabot_pr_budget = verify_manifest.check_dependabot_pr_budget
 
 with open(os.path.join(HERE, "github-env-allowlist.txt")) as _f:
     VALID_ENV_ALLOWLIST = _f.read()
@@ -3812,6 +3813,80 @@ class TestOneLockPerGraph(unittest.TestCase):
         check_one_lock_per_graph(errors)
         self.assertEqual(errors, [])
 
+
+
+_BUDGET = """\
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule: {interval: weekly}
+    %s
+  - package-ecosystem: cargo
+    %s
+    schedule: {interval: weekly}
+    %s
+"""
+
+
+class TestDependabotPrBudget(unittest.TestCase):
+    """Check 18: every ecosystem declares a positive limit within the budget."""
+
+    def run_check(self, actions: str, cargo: str, cargo_dir: str = "directory: /") -> list[str]:
+        with tempfile.TemporaryDirectory() as root:
+            _write(os.path.join(root, "dependabot.yml"), _BUDGET % (actions, cargo_dir, cargo))
+            errors: list[str] = []
+            check_dependabot_pr_budget(errors, root=root)
+            return errors
+
+    def assertRefused(self, needle: str, *args: str) -> None:
+        errors = self.run_check(*args)
+        self.assertTrue(any(needle in e for e in errors), errors)
+
+    def test_limits_within_the_budget_pass(self) -> None:
+        self.assertEqual(self.run_check("open-pull-requests-limit: 1", "open-pull-requests-limit: 2"), [])
+
+    def test_absent_limit_is_refused(self) -> None:
+        self.assertRefused("updates[0] (github-actions) needs an integer", "", "open-pull-requests-limit: 2")
+
+    def test_zero_limit_is_refused(self) -> None:
+        self.assertRefused("updates[1] (cargo) needs an integer", "open-pull-requests-limit: 1", "open-pull-requests-limit: 0")
+
+    def test_non_integer_limits_are_refused(self) -> None:
+        for bad in ("true", '"2"', "1.5", "null"):
+            with self.subTest(bad=bad):
+                self.assertRefused("needs an integer", "open-pull-requests-limit: 1", f"open-pull-requests-limit: {bad}")
+
+    def test_limits_over_the_budget_are_refused(self) -> None:
+        # The pre-throttle configuration: 3 + 3.
+        self.assertRefused("allows 6 open update PRs", "open-pull-requests-limit: 3", "open-pull-requests-limit: 3")
+
+    def test_one_past_the_budget_is_refused(self) -> None:
+        self.assertRefused("allows 4 open update PRs", "open-pull-requests-limit: 2", "open-pull-requests-limit: 2")
+
+    def test_each_directory_counts_against_the_budget(self) -> None:
+        self.assertRefused(
+            "allows 5 open update PRs", "open-pull-requests-limit: 1",
+            "open-pull-requests-limit: 2", "directories: [/, /tools/x]",
+        )
+
+    def test_missing_file_is_refused(self) -> None:
+        with tempfile.TemporaryDirectory() as root:
+            errors: list[str] = []
+            check_dependabot_pr_budget(errors, root=root)
+            self.assertTrue(any("check 18" in e for e in errors), errors)
+
+    def test_non_mapping_entry_is_refused(self) -> None:
+        with tempfile.TemporaryDirectory() as root:
+            _write(os.path.join(root, "dependabot.yml"), "version: 2\nupdates: [x]\n")
+            errors: list[str] = []
+            check_dependabot_pr_budget(errors, root=root)
+            self.assertTrue(any("updates[0] (None) needs an integer" in e for e in errors), errors)
+
+    def test_live_repository_is_clean(self) -> None:
+        errors: list[str] = []
+        check_dependabot_pr_budget(errors)
+        self.assertEqual(errors, [])
 
 
 _IB_OK = """\

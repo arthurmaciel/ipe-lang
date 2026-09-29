@@ -225,6 +225,13 @@ skipped. Limits are listed on `check_workflow_steps`. Likewise mold is
       that git does not track yet; `tools/scripts/generated-unchanged.sh`
       (tracked changes plus untracked files) is the one drift assertion.
       LIMIT: a `git diff` reached through an alias or a script is not seen.
+  18. Dependabot PR budget: every `updates` entry declares its own integer
+      `open-pull-requests-limit` of at least 1 (Dependabot's implicit
+      default is 5, and 0 silently disables the ecosystem), and the limits
+      summed over every entry's directories stay within
+      `DEPENDABOT_OPEN_PR_BUDGET`, so update PRs cannot crowd the open-PR
+      budget the merge queue is sized for.  LIMIT: security-update PRs obey
+      Dependabot's own fixed ceiling, not this key, and are not bounded here.
 
 Pure stdlib + PyYAML (already a CI dependency).  No network; check 12 runs
 `git ls-files` locally to list tracked paths.
@@ -1733,6 +1740,46 @@ def check_one_lock_per_graph(
             )
     if "/" not in dirs:
         errors.append("check 14: .github/dependabot.yml proposes no cargo update for the root Cargo.lock")
+
+
+# The most Dependabot version-update PRs open at once, over every ecosystem:
+# the repository keeps at most three PRs open, so update PRs may hold all of
+# that budget only when nothing else is in flight.
+DEPENDABOT_OPEN_PR_BUDGET = 3
+
+
+def check_dependabot_pr_budget(errors: list[str], root: str = REPO_ROOT) -> None:
+    """Check 18 (see the module docstring)."""
+    path = os.path.join(root, "dependabot.yml")
+    try:
+        with open(path) as f:
+            doc = strict_yaml.safe_load(f)
+    except (OSError, yaml.YAMLError) as e:
+        errors.append(f"check 18: .github/dependabot.yml refused: {e}")
+        return
+    updates = doc.get("updates") if isinstance(doc, dict) else None
+    if not isinstance(updates, list):
+        errors.append("check 18: .github/dependabot.yml has no `updates` list; refused")
+        return
+    total = 0
+    for i, u in enumerate(updates):
+        eco = u.get("package-ecosystem") if isinstance(u, dict) else None
+        limit = u.get("open-pull-requests-limit") if isinstance(u, dict) else None
+        if not isinstance(limit, int) or isinstance(limit, bool) or limit < 1:
+            errors.append(
+                f"check 18: .github/dependabot.yml updates[{i}] ({eco}) needs an integer "
+                f"`open-pull-requests-limit` of at least 1, not {limit!r} — an absent limit "
+                "means 5 and 0 disables its updates; refused"
+            )
+            continue
+        many = u.get("directories")
+        total += limit * (len(many) if isinstance(many, list) and many else 1)
+    if total > DEPENDABOT_OPEN_PR_BUDGET:
+        errors.append(
+            f"check 18: .github/dependabot.yml allows {total} open update PRs over its "
+            f"directories, more than DEPENDABOT_OPEN_PR_BUDGET ({DEPENDABOT_OPEN_PR_BUDGET}); "
+            "lower an `open-pull-requests-limit`"
+        )
 
 
 IPE_BUILD_PRODUCER = "build-tools"
@@ -4207,6 +4254,9 @@ def main() -> int:
 
     # ---- 17. a drift check also sees untracked generated files ----
     check_drift_sees_untracked(errors)
+
+    # ---- 18. Dependabot's open update PRs fit the open-PR budget ----
+    check_dependabot_pr_budget(errors)
 
     # ---- 3. fail-closed dependency surfacing ----
     def surfaced_dispositions(job: Job) -> set[str]:
