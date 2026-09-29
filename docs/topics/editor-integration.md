@@ -57,8 +57,10 @@ it.
 Lint findings arrive with the diagnostics, configured by the same `lint.ipe`
 `ipe lint` reads (next to `package.ipe`, or next to a loose file). A `lint.ipe`
 that fails to load — invalid, oversized, or not a regular file — shows one error
-on `lint.ipe` itself and no lint findings until it loads; the editor never lints
-with rules the project did not configure.
+on `lint.ipe` itself and no lint findings until it loads. A file shown before its
+project loads (a broken `package.ipe`, say) gets no lint findings and no
+`source.fixAll` until the load succeeds: the editor never lints with rules the
+project did not configure.
 
 A project the compiler refuses to load (an untrusted FFI or manifest, a source
 past a size limit) shows one error — the refusal `ipe build` would print — on
