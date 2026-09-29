@@ -50,6 +50,7 @@ check_trust_roots = verify_manifest.check_trust_roots
 check_push_concurrency = verify_manifest.check_push_concurrency
 check_one_lock_per_graph = verify_manifest.check_one_lock_per_graph
 check_one_ipe_build = verify_manifest.check_one_ipe_build
+check_scoped_package_coverage = verify_manifest.check_scoped_package_coverage
 
 with open(os.path.join(HERE, "github-env-allowlist.txt")) as _f:
     VALID_ENV_ALLOWLIST = _f.read()
@@ -3827,6 +3828,135 @@ class TestOneIpeBuild(unittest.TestCase):
 
     def test_unreadable_workflow_refused(self) -> None:
         self.assertRefused("jobs: [1]\n", "has no `jobs:` mapping")
+
+
+
+_SC_LOCK = """\
+version = 4
+
+[[package]]
+name = "rt"
+version = "0.1.0"
+dependencies = [
+ "dx",
+ "serde 1.0.0",
+]
+
+[[package]]
+name = "dx"
+version = "0.1.0"
+
+[[package]]
+name = "serde"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+"""
+_SC_FILES = {
+    "Cargo.lock": _SC_LOCK,
+    "src/rt/Cargo.toml": '[package]\nname = "rt"\n',
+    "src/rt/src/lib.rs": 'const F: &str = include_str!("../../shared/f.txt");\nconst R: &str = "../..";\n',
+    "src/dx/Cargo.toml": '[package]\nname = "dx"\n',
+    "src/dx/src/lib.rs": "pub fn f() {}\n",
+    "src/shared/f.txt": "data\n",
+    "src/other/Cargo.toml": '[package]\nname = "other"\n',
+    "src/other/src/lib.rs": "pub fn g() {}\n",
+}
+_SC_WF = """\
+on: pull_request
+jobs:
+  asan:
+    needs: changes
+    if: needs.changes.outputs.emit != 'false' || github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - run: cargo +nightly --locked test -p rt
+"""
+_SC_SCOPE = ("src/rt/**", "src/dx/**", "src/shared/**")
+
+
+class TestScopedPackageCoverage(unittest.TestCase):
+    """Check 16: a path-scoped job's scope covers its packages' closure."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.repo = self._tmp.name
+        self.files = dict(_SC_FILES)
+
+    def tearDown(self) -> None:
+        self._tmp.cleanup()
+
+    def errors(self, wf: str = _SC_WF, scope: tuple[str, ...] = _SC_SCOPE) -> list[str]:
+        for rel, text in self.files.items():
+            _write(os.path.join(self.repo, rel), text)
+        _write(os.path.join(self.repo, ".github", "workflows", "ci.yml"), wf)
+        errors: list[str] = []
+        with mock.patch.dict(verify_manifest.change_class.SCOPES, {"emit": scope}):
+            check_scoped_package_coverage(errors, root=os.path.join(self.repo, ".github"), tracked=sorted(self.files))
+        return errors
+
+    def assertRefused(self, needle: str, **kw: object) -> None:
+        errors = self.errors(**kw)  # type: ignore[arg-type]
+        self.assertTrue(any(needle in e for e in errors), f"expected {needle!r} in {errors}")
+
+    def test_covering_scope_passes(self) -> None:
+        self.assertEqual(self.errors(), [])
+
+    def test_repo_workflows_pass(self) -> None:
+        errors: list[str] = []
+        check_scoped_package_coverage(errors)
+        self.assertEqual(errors, [])
+
+    def test_uncovered_path_dependency_refused(self) -> None:
+        self.assertRefused("src/dx/src/lib.rs", scope=("src/rt/**", "src/shared/**"))
+
+    def test_uncovered_dev_dependency_refused(self) -> None:
+        # Cargo.lock lists dev-dependencies too; a test build compiles them.
+        self.assertRefused("src/dx/Cargo.toml", scope=("src/rt/**", "src/shared/**"))
+
+    def test_uncovered_parent_literal_read_refused(self) -> None:
+        self.assertRefused("src/shared/f.txt", scope=("src/rt/**", "src/dx/**"))
+
+    def test_bare_ancestor_literal_is_not_a_read(self) -> None:
+        # `"../.."` names no file; `src/other` stays out of the closure.
+        self.assertEqual(self.errors(), [])
+
+    def test_whole_workspace_selection_refused(self) -> None:
+        self.assertRefused("selects the whole workspace", wf=_SC_WF.replace("-p rt", "--workspace"))
+
+    def test_package_pattern_refused(self) -> None:
+        self.assertRefused("cannot resolve", wf=_SC_WF.replace("-p rt", "-p 'r*'"))
+
+    def test_every_package_spelling_is_read(self) -> None:
+        for spec in ("--package rt", "--package=rt", "-prt", "-p=rt", "-p rt@0.1.0"):
+            with self.subTest(spec=spec):
+                self.assertRefused("src/dx/src/lib.rs", wf=_SC_WF.replace("-p rt", spec), scope=("src/rt/**", "src/shared/**"))
+
+    def test_valued_global_flag_is_skipped(self) -> None:
+        wf = _SC_WF.replace("cargo +nightly --locked test", "cargo --frozen --config k=v -Z x -q test")
+        self.assertRefused("src/dx/src/lib.rs", wf=wf, scope=("src/rt/**", "src/shared/**"))
+
+    def test_unknown_package_refused(self) -> None:
+        self.assertRefused("not a path package", wf=_SC_WF.replace("-p rt", "-p nope"))
+
+    def test_registry_package_refused(self) -> None:
+        self.assertRefused("not a path package", wf=_SC_WF.replace("-p rt", "-p serde"))
+
+    def test_duplicate_manifest_name_refused(self) -> None:
+        self.files["src/copy/Cargo.toml"] = '[package]\nname = "rt"\n'
+        self.assertRefused("declared by two manifests")
+
+    def test_missing_lock_refused(self) -> None:
+        del self.files["Cargo.lock"]
+        self.assertRefused("root Cargo.lock")
+
+    def test_code_scoped_job_is_not_narrow(self) -> None:
+        wf = _SC_WF.replace("outputs.emit", "outputs.code")
+        self.assertEqual(self.errors(wf=wf, scope=()), [])
+
+    def test_prose_under_a_crate_never_counts(self) -> None:
+        with mock.patch.object(verify_manifest.change_class, "PROSE_FILES", frozenset({"src/dx/NOTES.md"})):
+            self.files["src/dx/NOTES.md"] = "x\n"
+            self.assertEqual(self.errors(scope=("src/rt/**", "src/shared/**", "src/dx/src/**", "src/dx/Cargo.toml")), [])
 
 
 if __name__ == "__main__":

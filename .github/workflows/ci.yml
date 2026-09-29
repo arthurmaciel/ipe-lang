@@ -10,9 +10,9 @@ name: Build & test
 #     the docs-drift gates, the first-party check-floor + shapes build gate,
 #     seal-smoke (build+run ONE emitted example, a fast SEAL proxy), the runtime
 #     feature-combo / full-feature builds (`emit` filter), wasm-floor
-#     (`wasm` filter), and the ASAN/TSAN sanitizers (`emit` filter — PRINCIPLE 3:
-#     a codegen/runtime change is exactly what introduces memory UB or a data
-#     race, so those gate PRE-merge). It ALSO runs the full SEAL at PR time —
+#     (`wasm` filter), and the ASAN/TSAN sanitizers (`sanitize` filter —
+#     PRINCIPLE 3: a codegen/runtime change is exactly what introduces memory UB
+#     or a data race, so those gate PRE-merge). It ALSO runs the full SEAL at PR time —
 #     the 14-shard e2e (and the seal-slice proof that its shards cover every
 #     archived test), seal-modset (vendored), and the arm64 Tier-2
 #     refuse-to-certify proof — each keyed on the `code` superset (not `emit`):
@@ -96,10 +96,12 @@ jobs:
       # `editors` — the editor setup scripts/configs, incl. the Zed extension's
       # Rust source Zed itself compiles for wasm32-wasip2.
       editors: ${{ steps.classify.outputs.editors != 'false' }}
-      # `emit` — true when the backend, runtime, stdlib, or emitted-crate support
-      # paths changed. Scopes the runtime feature-combo/full-feature builds and
-      # the sanitizers; the SEAL tiers key on `code`, never on this.
+      # `emit` — true when the backend, runtime, stdlib, or a crate the runtime
+      # compiles against changed. Scopes the runtime feature-combo/full-feature
+      # builds; the SEAL tiers key on `code`, never on this.
       emit: ${{ steps.classify.outputs.emit != 'false' }}
+      # `sanitize` — `emit` plus the rest of the asan/tsan crates' closure.
+      sanitize: ${{ steps.classify.outputs.sanitize != 'false' }}
       # `release_only` — normalised to `true`/`false` here, once, so no consumer
       # ever splices the raw writer value into a `run:` script.
       release_only: ${{ steps.release.outputs.release_only == 'true' }}
@@ -141,7 +143,7 @@ jobs:
           EVENT_NAME: ${{ github.event_name }}
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           MERGE_GROUP_BASE_SHA: ${{ github.event.merge_group.base_sha }}
-        run: python3 .github/ci/change_class.py --code --emit --wasm --editors
+        run: python3 .github/ci/change_class.py --code --emit --sanitize --wasm --editors
 
   # Fail-closed guard against clone bloat: a commit that tracks a build artifact
   # (a target/ directory, an .rlib/.rmeta/.o/.a/.so/.dylib/.wasm blob) or any file
@@ -923,7 +925,7 @@ jobs:
   #
   # Runtime-soundness gate on the PR boundary (PRINCIPLE 3): a codegen/runtime
   # change is exactly what introduces memory UB, so ASAN gates PRE-merge on any
-  # emit-relevant PR. Sharded 1/6 via nextest partitioning; `asan-all` is the
+  # PR touching a crate it tests or compiles against (`sanitize`). Sharded 1/6 via nextest partitioning; `asan-all` is the
   # single stable context (mirrors `e2e-all`) that branch protection could require
   # once these are proven green — deliberately NOT added to the required ruleset
   # yet. Path-scoping keeps it off a prose-only PR; always runs on push/nightly.
@@ -931,7 +933,7 @@ jobs:
     name: asan (${{ matrix.shard }}/6)
     runs-on: ubuntu-latest
     needs: [changes, quick-check]
-    if: (needs.changes.outputs.emit == 'true' || (github.event_name != 'pull_request' && github.event_name != 'merge_group')) && needs.changes.outputs.release_only != 'true'
+    if: (needs.changes.outputs.sanitize != 'false' || (github.event_name != 'pull_request' && github.event_name != 'merge_group')) && needs.changes.outputs.release_only != 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -992,13 +994,13 @@ jobs:
   # or cargo-spawning child is as hostile to TSAN as to ASAN). Small enough to
   # run as a single job, not sharded. Runtime-soundness gate on the PR boundary
   # (PRINCIPLE 3): a codegen/runtime change is what introduces data races, so TSAN
-  # gates PRE-merge on any emit-relevant PR; path-scoping keeps it off a
-  # prose-only PR; always runs on push/nightly.
+  # gates PRE-merge on any PR touching a crate it tests or compiles against
+  # (`sanitize`); always runs on push/nightly.
   tsan:
     name: tsan
     runs-on: ubuntu-latest
     needs: [changes, quick-check]
-    if: (needs.changes.outputs.emit == 'true' || (github.event_name != 'pull_request' && github.event_name != 'merge_group')) && needs.changes.outputs.release_only != 'true'
+    if: (needs.changes.outputs.sanitize != 'false' || (github.event_name != 'pull_request' && github.event_name != 'merge_group')) && needs.changes.outputs.release_only != 'true'
     env:
       RUSTFLAGS: -Zsanitizer=thread
       RUSTDOCFLAGS: -Zsanitizer=thread

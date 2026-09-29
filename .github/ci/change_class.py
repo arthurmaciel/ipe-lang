@@ -53,29 +53,50 @@ PROSE_SUFFIXES = (".md", ".png", ".svg", ".jpg", ".jpeg", ".gif", ".webp")
 SCOPED_ROOTS = ("src/", "editors/")
 
 # Relevant patterns per narrow scope, evaluated only inside SCOPED_ROOTS.
-# `code` has none: it skips on PROSE alone.
+# `code` has none: it skips on PROSE alone. A scope must cover every tracked
+# file the packages its jobs select compile or read (verify-manifest check 16).
+
+# Crates the runtime compiles or tests against (its path-dependency closure).
+_RUNTIME = (
+    "src/runtime/**",
+    "src/compiler/diagnostics/**",
+    "src/compiler/env/**",
+    "src/compiler/intern/**",
+    "src/compiler/parse/**",
+    "src/compiler/path-core/**",
+    "src/compiler/syntax/**",
+)
+_EMIT = (
+    "src/compiler/backend/**",
+    "src/compiler/lower/**",
+    "src/compiler/ir/**",
+    "src/compiler/kernels/**",
+    "src/stdlib/**",
+) + _RUNTIME
 SCOPES: dict[str, tuple[str, ...]] = {
     "code": (),
-    "emit": (
-        "src/compiler/backend/**",
-        "src/compiler/lower/**",
-        "src/compiler/ir/**",
-        "src/compiler/kernels/**",
-        "src/runtime/**",
-        "src/stdlib/**",
+    "emit": _EMIT,
+    # The asan/tsan crates' closure beyond `emit`.
+    "sanitize": _EMIT
+    + (
+        "src/compiler/canon/**",
+        "src/compiler/ffi/**",
+        "src/compiler/sandbox/**",
+        "src/compiler/types/**",
+        "src/ffi-bindgen-macro/**",
     ),
-    "wasm": (
-        "src/runtime/**",
+    "wasm": _RUNTIME
+    + (
         "src/compiler/backend/**",
+        "src/compiler/kernels/**",
+        "src/stdlib/**",
         "src/wasm/**",
         "**/*wasm*",
     ),
     "editors": ("editors/**",),
-    "playground": (
-        "src/wasm/**",
-        "src/compiler/sandbox/**",
-        "src/compiler/env/**",
-    ),
+    # `ipe-wasm` compiles the whole front end and backend, and the jail
+    # runner's tests drive the `ipe` binary: every `src/` crate reaches them.
+    "playground": ("src/**",),
     # tools/panic-scan/panic-scan --walk src reads every `.rs` and `Cargo.toml` under src/.
     "panic_scan": ("src/**/*.rs", "src/**/Cargo.toml"),
     # editors/tree-sitter-ipe/scripts/parity-check.sh parses src/stdlib/Ipe/ (and examples/).

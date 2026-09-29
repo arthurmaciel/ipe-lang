@@ -104,10 +104,13 @@ class ClassifyTest(unittest.TestCase):
                 self.assertTrue(self.classify({path: "changed\n"})["code"])
 
     def test_narrow_scope_skips_only_on_an_unrelated_scoped_root(self) -> None:
-        result = self.classify({"src/compiler/parse/src/lib.rs": "x\n"})
+        result = self.classify({"src/ipe-fmt/src/lib.rs": "x\n"})
         self.assertTrue(result["code"])
         self.assertTrue(result["panic_scan"])
+        self.assertTrue(result["playground"])
         self.assertFalse(result["emit"])
+        self.assertFalse(result["sanitize"])
+        self.assertFalse(result["wasm"])
         self.assertFalse(result["editors"])
         self.assertFalse(result["grammar"])
 
@@ -115,6 +118,22 @@ class ClassifyTest(unittest.TestCase):
         self.assertTrue(self.classify({"src/runtime/rust/src/lib.rs": "x\n"})["emit"])
         self.assertTrue(self.classify({"editors/tree-sitter-ipe/grammar.js": "x\n"})["grammar"])
         self.assertTrue(self.classify({"src/stdlib/Ipe/List.ipe": "x\n"})["grammar"])
+
+    def test_runtime_closure_forces_every_runtime_scope(self) -> None:
+        # The runtime compiles against these crates, so each runtime tier runs.
+        for path in ("src/compiler/diagnostics/src/lib.rs", "src/compiler/path-core/src/lib.rs"):
+            with self.subTest(path=path):
+                result = self.classify({path: "x\n"})
+                self.assertTrue(result["emit"])
+                self.assertTrue(result["sanitize"])
+                self.assertTrue(result["wasm"])
+
+    def test_sanitize_covers_its_crates_beyond_emit(self) -> None:
+        for path in ("src/compiler/canon/src/lib.rs", "src/compiler/ffi/src/lib.rs", "src/ffi-bindgen-macro/src/lib.rs"):
+            with self.subTest(path=path):
+                result = self.classify({path: "x\n"})
+                self.assertTrue(result["sanitize"])
+                self.assertFalse(result["emit"])
 
     def test_empty_diff_runs_every_scope(self) -> None:
         self.assertEqual(self.classify({}), dict.fromkeys(ALL_SCOPES, True))

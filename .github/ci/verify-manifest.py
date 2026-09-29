@@ -207,6 +207,18 @@ skipped. Limits are listed on `check_workflow_steps`. Likewise mold is
       producer in its own `needs:`.  LIMIT: a bare `cargo build` (no package
       selection) builds whatever its runtime cwd holds; the cwd is not
       static, so such a line is not attributed to `ipe`.
+  16. Path-scoped coverage: a job whose `if:` reads a narrow
+      `needs.changes.outputs.<scope>` (a `change_class.SCOPES` scope other
+      than `code`) may skip on a PR only where that skip is proven harmless.
+      Every package its cargo commands select (`-p`/`--package`) is closed
+      over its path dependencies in the root `Cargo.lock` (dev ones
+      included), and every tracked file under those crates' directories —
+      plus every existing path a `../` string literal in them reaches — must
+      force one of the job's scopes.  A scoped job that selects the whole
+      workspace, or a package spec this check cannot resolve, is refused.
+      LIMIT: a path built at run time (a bare `"../.."` ancestor joined to a
+      computed name, or no `../` literal at all), and a scoped
+      job with no cargo package selection, are not seen.
 
 Pure stdlib + PyYAML (already a CI dependency).  No network; check 12 runs
 `git ls-files` locally to list tracked paths.
@@ -236,6 +248,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import strict_yaml  # noqa: E402  # the shared strict loader, SSOT for every YAML load below
 import gha_expr  # noqa: E402  # the one GitHub Actions expression parser
 import shell_lex  # noqa: E402  # the one quote-removing shell lexer
+import change_class  # noqa: E402  # the path-scope classifier, SSOT for every scope's patterns
 import trust_roots  # noqa: E402  # the CODEOWNERS trust-root parser, shared with trust-root-diff.yml
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -1861,6 +1874,177 @@ def check_one_ipe_build(errors: list[str], root: str = REPO_ROOT) -> None:
                     f"check 15: job {jid!r} downloads {wanted} without `needs: {IPE_BUILD_PRODUCER}`; "
                     "it could start before the artifact exists"
                 )
+
+
+_SCOPE_REF = re.compile(r"needs\.changes\.outputs\.([A-Za-z_][A-Za-z0-9_-]*)")
+_LOCK_DEPS = re.compile(r"^dependencies = \[(.*?)^\]", re.M | re.S)
+_MANIFEST_PACKAGE_NAME = re.compile(r'^\[package\][^\[]*?^name\s*=\s*"([^"]+)"', re.M | re.S)
+# A `../` literal that names something past its parents (`"../x"`, not `"../.."`).
+_PARENT_LITERAL = re.compile(r'"(/?(?:\.\./)+[^"\\/.][^"\\]*)"')
+# Cargo subcommands whose `-p` selects packages to compile and run.
+_CARGO_SELECTING = frozenset({"build", "b", "check", "c", "clippy", "test", "t", "nextest", "run", "r", "rustc", "doc", "d", "bench"})
+
+
+def _lock_graph(text: str) -> dict[str, set[str]] | str:
+    """Each path package of a `Cargo.lock` mapped to the path packages it
+    depends on, or why the text is refused."""
+    blocks = _LOCK_PACKAGE.split(text)
+    if len(blocks) < 2:
+        return "declares no [[package]]"
+    deps: dict[str, list[str]] = {}
+    for i, block in enumerate(blocks[1:], 1):
+        name = re.search(r'^name = "([^"]+)"\s*$', block, re.M)
+        if name is None:
+            return f"[[package]] #{i} has no name"
+        if re.search(r"^source = ", block, re.M):
+            continue
+        m = _LOCK_DEPS.search(block)
+        listed = re.findall(r'"([^"]+)"', m.group(1)) if m else []
+        deps.setdefault(name.group(1), []).extend(d.split(" ", 1)[0] for d in listed)
+    return {n: {d for d in ds if d in deps} for n, ds in deps.items()}
+
+
+def _selected_packages(job: dict) -> list[str] | str:
+    """The packages `job`'s cargo commands select by `-p`, or why that
+    selection cannot be read."""
+    runs = [st["run"] for st in job.get("steps") or [] if isinstance(st, dict) and isinstance(st.get("run"), str)]
+    out: list[str] = []
+    for line in _quote_removed(runs):
+        words = line.split()
+        for k, w in enumerate(words):
+            if posixpath.basename(w) != "cargo":
+                continue
+            rest = words[k + 1 :]
+            i = 1 if rest and rest[0].startswith("+") else 0
+            while i < len(rest) and rest[i].startswith("-"):
+                i += 2 if rest[i] in _CARGO_VALUED_GLOBALS else 1
+            if i >= len(rest) or rest[i] not in _CARGO_SELECTING:
+                continue
+            args = rest[i + 1 :]
+            for j, a in enumerate(args):
+                if a in ("--workspace", "--all"):
+                    return f"`{line}` selects the whole workspace"
+                if a in ("-p", "--package"):
+                    val = args[j + 1] if j + 1 < len(args) else None
+                elif a.startswith("--package="):
+                    val = a.split("=", 1)[1]
+                elif a.startswith("-p") and len(a) > 2:
+                    val = a[2:].removeprefix("=")
+                else:
+                    continue
+                if val is None or any(c in val for c in "*?[#") or "://" in val:
+                    return f"`{line}` has a package spec this check cannot resolve"
+                out.append(val.split("@", 1)[0])
+    return out
+
+
+def check_scoped_package_coverage(
+    errors: list[str], root: str = REPO_ROOT, tracked: list[str] | None = None
+) -> None:
+    """Check 16 (see the module docstring). Refuses, never skips, a shape it
+    cannot read."""
+    repo = os.path.dirname(root)
+    if tracked is None:
+        tracked = _tracked_paths(repo)
+        if tracked is None:
+            errors.append("check 16: `git ls-files` failed; cannot prove scoped jobs cover their packages")
+            return
+    narrow = set(change_class.SCOPES) - {"code"}
+    scoped: list[tuple[str, str, list[str], list[str]]] = []
+    for wf in sorted(glob.glob(os.path.join(root, "workflows", "*.yml"))):
+        name = os.path.basename(wf)
+        try:
+            with open(wf) as f:
+                doc = strict_yaml.safe_load(f)
+        except (OSError, yaml.YAMLError) as e:
+            errors.append(f"check 16: cannot read {wf}: {e}")
+            continue
+        jobs = doc.get("jobs") if isinstance(doc, dict) else None
+        if not isinstance(jobs, dict):
+            continue
+        for jid, job in jobs.items():
+            if not isinstance(job, dict) or not isinstance(job.get("if"), str):
+                continue
+            scopes = sorted(set(_SCOPE_REF.findall(job["if"])).intersection(narrow))
+            if not scopes:
+                continue
+            pkgs = _selected_packages(job)
+            if isinstance(pkgs, str):
+                errors.append(f"check 16: {name} job {jid!r} is scoped on {scopes} but {pkgs}; refused")
+                continue
+            if pkgs:
+                scoped.append((name, str(jid), scopes, pkgs))
+    if not scoped:
+        return
+
+    try:
+        with open(os.path.join(repo, "Cargo.lock"), encoding="utf-8") as f:
+            graph = _lock_graph(f.read())
+    except (OSError, UnicodeDecodeError) as e:
+        graph = f"unreadable ({e})"
+    if isinstance(graph, str):
+        errors.append(f"check 16: root Cargo.lock: {graph}; refused")
+        return
+    dirs: dict[str, str] = {}
+    for m in sorted(p for p in tracked if posixpath.basename(p) == "Cargo.toml"):
+        try:
+            with open(os.path.join(repo, m), encoding="utf-8") as f:
+                found = _MANIFEST_PACKAGE_NAME.search(f.read())
+        except (OSError, UnicodeDecodeError):
+            found = None
+        if found is None or found.group(1) not in graph:
+            continue
+        if found.group(1) in dirs:
+            errors.append(f"check 16: package {found.group(1)!r} is declared by two manifests; refused")
+            continue
+        dirs[found.group(1)] = posixpath.dirname(m)
+
+    for wf, jid, scopes, pkgs in scoped:
+        closure: set[str] = set()
+        stack = list(pkgs)
+        while stack:
+            n = stack.pop()
+            if n in closure:
+                continue
+            if n not in graph or n not in dirs:
+                errors.append(f"check 16: {wf} job {jid!r} selects {n!r}, not a path package of the root workspace")
+                closure.add(n)
+                continue
+            closure.add(n)
+            stack.extend(graph[n])
+        crate_dirs = sorted({dirs[n] for n in closure if n in dirs})
+        reached: set[str] = set()
+        for d in crate_dirs:
+            prefix = d + "/" if d else ""
+            for f in tracked:
+                if not f.startswith(prefix):
+                    continue
+                reached.add(f)
+                if not f.endswith(change_class.CODE_SUFFIXES):
+                    continue
+                try:
+                    with open(os.path.join(repo, f), encoding="utf-8") as fh:
+                        text = fh.read()
+                except (OSError, UnicodeDecodeError):
+                    continue
+                for lit in _PARENT_LITERAL.findall(text):
+                    for base in (d, posixpath.dirname(f)):
+                        target = change_class._norm(posixpath.join(base, lit.lstrip("/")))
+                        if target is None:
+                            continue
+                        under = target + "/" if target else ""
+                        reached.update(t for t in tracked if t == target or t.startswith(under))
+        # PROSE is proven unreachable by `change_class.guard()`, so it never counts.
+        missed = sorted(
+            f for f in reached if not change_class.is_prose(f) and not any(change_class.forces(sc, f) for sc in scopes)
+        )
+        if missed:
+            shown = ", ".join(missed[:5]) + (f" (+{len(missed) - 5} more)" if len(missed) > 5 else "")
+            errors.append(
+                f"check 16: {wf} job {jid!r} skips unless {scopes} runs, yet it compiles or reads "
+                f"{len(missed)} file(s) no such scope forces: {shown} — extend the scope in "
+                ".github/ci/change_class.py"
+            )
 
 
 def _tracked_paths(repo: str) -> list[str] | None:
@@ -3957,6 +4141,9 @@ def main() -> int:
 
     # ---- 15. one `ipe` build in ci.yml; its consumers need the producer ----
     check_one_ipe_build(errors)
+
+    # ---- 16. a path-scoped job's scope covers every file it compiles ----
+    check_scoped_package_coverage(errors)
 
     # ---- 3. fail-closed dependency surfacing ----
     def surfaced_dispositions(job: Job) -> set[str]:
