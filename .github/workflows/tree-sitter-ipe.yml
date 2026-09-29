@@ -14,6 +14,7 @@ on:
       - 'src/stdlib/Ipe/**/*.ipe'
       - '.github/workflows/tree-sitter-ipe.yml'
   pull_request:
+  merge_group:
   workflow_dispatch: {}
 
 permissions:
@@ -24,10 +25,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+        with:
+          # A merge-group run needs history back to the queue base for the filter.
+          fetch-depth: ${{ github.event_name == 'merge_group' && '0' || '1' }}
 
       - uses: dorny/paths-filter@v3
         id: filter
         with:
+          # A merge-group run diffs against the queue base, not the default branch.
+          base: ${{ github.event.merge_group.base_sha }}
           filters: |
             relevant:
               - 'editors/tree-sitter-ipe/**'
