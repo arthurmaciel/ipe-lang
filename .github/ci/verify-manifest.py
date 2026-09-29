@@ -66,8 +66,9 @@ Checks performed
      required context no merge-group run reports.  A merge-group run gets the
      base repository's secrets and token, so every `merge_group`-triggered
      workflow must be secret-free (no `secrets` word in its raw text, nor in
-     any key or string scalar once parsed, which decodes escapes), must not
-     also trigger on `pull_request_target`, and must declare a top-level
+     any key or string scalar once parsed, which decodes escapes), may also
+     trigger on `pull_request_target` only when check 8 admits it, and must
+     declare a top-level
      `permissions:` value with no `write` scope.  A job-level `write` scope is
      admitted only on a job whose `if:` has no `||` and has, among its
      `&&`-conjuncts at parenthesis depth 0, exactly
@@ -81,8 +82,25 @@ Checks performed
      edits `.github/**` runs its own edit with the base secrets.  The boundary
      is who may enqueue: only write-access maintainers, who review every
      `.github/**` diff before enqueueing.
+  8. Gate integrity.  (a) A `pull_request_target` run holds the base
+     repository's token beside a PR author's input, so every workflow
+     triggering on it must provably run no head code: no `uses:` at step or
+     job level (no checkout, no action at all), no `git`, no `gh` other than
+     `gh api`, no `secrets` word, no word naming the PR head (`head`,
+     `merge_commit_sha`, `refs/pull/`; any letter case, in the raw text or in
+     any parsed key or scalar), no `${{ }}` expression other than
+     `github.token`, and a top-level `permissions:` value with no `write`
+     scope at the top or on any job.  (b) `.github/CODEOWNERS` is the
+     trust-root SSOT: it must parse under `trust_roots.py`'s accepted subset,
+     every rule must match at least one tracked file, the trust-root
+     machinery (`CODEOWNERS`, `trust_roots.py`, this verifier,
+     `trust-root-diff.yml`) must itself be a trust root, and no second
+     CODEOWNERS file may exist at the root or in `docs/`.
+     Limit: (a) is a text audit that catches honest mistakes; a hostile edit
+     to a workflow is a `.github/**` change, which (b) makes code-owned.
 
-Pure stdlib + PyYAML (already a CI dependency).  No network.
+Pure stdlib + PyYAML (already a CI dependency).  No network; check 8 runs
+`git ls-files` locally to list tracked paths.
 """
 
 from __future__ import annotations
@@ -93,6 +111,7 @@ import json
 import os
 import posixpath
 import re
+import subprocess
 import sys
 from dataclasses import dataclass
 
@@ -104,6 +123,7 @@ except ImportError:  # pragma: no cover - CI always has PyYAML
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import strict_yaml  # noqa: E402  # the shared strict loader, SSOT for every YAML load below
+import trust_roots  # noqa: E402  # the CODEOWNERS trust-root parser, shared with trust-root-diff.yml
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # Both extensions: a workflow (or, for check 6, a local composite action) is a
@@ -527,15 +547,19 @@ _SECRETS_WORD = re.compile(r"\bsecrets\b", re.IGNORECASE)
 _PR_ONLY = "github.event_name == 'pull_request'"
 
 
-def _mentions_secrets(node: object) -> bool:
-    """True when any key or string scalar of the parsed document names
-    `secrets`. Complements the raw-text scan: a double-quoted scalar can spell
-    the word through `\\x`/`\\u` escapes that only the parser decodes."""
+def _mentions(node: object, pattern: re.Pattern[str]) -> bool:
+    """True when any key or string scalar of the parsed document matches
+    `pattern`. Complements a raw-text scan: a double-quoted scalar can spell a
+    word through `\\x`/`\\u` escapes that only the parser decodes."""
     if isinstance(node, dict):
-        return any(_mentions_secrets(k) or _mentions_secrets(v) for k, v in node.items())
+        return any(_mentions(k, pattern) or _mentions(v, pattern) for k, v in node.items())
     if isinstance(node, list):
-        return any(_mentions_secrets(e) for e in node)
-    return isinstance(node, str) and _SECRETS_WORD.search(node) is not None
+        return any(_mentions(e, pattern) for e in node)
+    return isinstance(node, str) and pattern.search(node) is not None
+
+
+def _mentions_secrets(node: object) -> bool:
+    return _mentions(node, _SECRETS_WORD)
 
 
 def _top_level_conjuncts(cond: str) -> list[str] | None:
@@ -631,18 +655,24 @@ def check_merge_queue(gate_producers: set[str], errors: list[str], root: str = R
             errors.append(f"{fname}: `on:` is not a string, list of strings, or mapping")
             continue
         if fname in gate_producers:
-            for event in ("pull_request", "merge_group"):
-                if event not in triggers:
-                    errors.append(
-                        f"{fname} produces a required `gate` context but does not trigger "
-                        f"on `{event}` — the merge queue would wait forever on it"
-                    )
+            # A `pull_request_target` producer reports the PR-side context from
+            # the base workflow; check 8 holds it to running no head code.
+            if not triggers & {"pull_request", "pull_request_target"}:
+                errors.append(
+                    f"{fname} produces a required `gate` context but does not trigger "
+                    "on `pull_request` (or `pull_request_target`) — no PR would report it"
+                )
+            if "merge_group" not in triggers:
+                errors.append(
+                    f"{fname} produces a required `gate` context but does not trigger "
+                    "on `merge_group` — the merge queue would wait forever on it"
+                )
         if "merge_group" not in triggers:
             continue
-        if "pull_request_target" in triggers:
+        if "pull_request_target" in triggers and pull_request_target_violations(fname, doc, text):
             errors.append(
-                f"{fname}: a merge_group workflow may not also trigger on "
-                "`pull_request_target` (base-repo secrets reach untrusted code)"
+                f"{fname}: a merge_group workflow may also trigger on "
+                "`pull_request_target` only when it runs no head code (check 8)"
             )
         if _SECRETS_WORD.search(text) or _mentions_secrets(doc):
             errors.append(
@@ -678,6 +708,165 @@ def check_merge_queue(gate_producers: set[str], errors: list[str], root: str = R
             )
     for fname in sorted(gate_producers - seen):
         errors.append(f"gate producer {fname!r} has no workflow file (check 7)")
+
+
+# The ONLY expression a `pull_request_target` workflow may interpolate: the
+# job's own read-only token. Every other `${{ }}` is refused, so no
+# PR-controlled value (title, branch name, head commit) is spliced anywhere.
+_PRT_ALLOWED_EXPRESSIONS = frozenset({"github.token"})
+# Every spelling of the PR head a workflow could name: `head` covers
+# `github.head_ref`, `$GITHUB_HEAD_REF`, the event's `pull_request.head.*`, and
+# a `jq` path into it; the test-merge commit and `refs/pull/` refs carry head
+# code too. A pull_request_target workflow has no reason to name any of them.
+_PRT_HEAD_WORD = re.compile(r"head|merge_commit_sha|refs/pull/", re.IGNORECASE)
+# A pull_request_target workflow has no working tree and needs no `git`; its
+# only `gh` use is the REST API.
+_PRT_GIT_WORD = re.compile(r"\bgit\b", re.IGNORECASE)
+_PRT_GH_NON_API = re.compile(r"\bgh\s+(?!api\b)\S", re.IGNORECASE)
+# Paths the trust-root machinery itself lives at: each must be a trust root,
+# or an outside PR could rewrite the check that guards the others.
+TRUST_ROOT_MACHINERY = (
+    ".github/CODEOWNERS",
+    ".github/ci/trust_roots.py",
+    ".github/ci/verify-manifest.py",
+    ".github/workflows/trust-root-diff.yml",
+)
+# GitHub reads the first CODEOWNERS of `.github/`, the root, `docs/`; only the
+# first location is the SSOT, so a file at the others is refused as a
+# misleading second list.
+_STRAY_CODEOWNERS = ("CODEOWNERS", "docs/CODEOWNERS")
+
+
+def _scalars(node: object):
+    if isinstance(node, dict):
+        for k, v in node.items():
+            yield from _scalars(k)
+            yield from _scalars(v)
+    elif isinstance(node, list):
+        for e in node:
+            yield from _scalars(e)
+    elif isinstance(node, str):
+        yield node
+
+
+def pull_request_target_violations(fname: str, doc: dict, text: str) -> list[str]:
+    """Check 8's refusals for one `pull_request_target` workflow (see the
+    module docstring); empty when it provably runs no head code."""
+    out: list[str] = []
+    texts = [text, *_scalars(doc)]
+    if any(_SECRETS_WORD.search(t) for t in texts):
+        out.append("names `secrets` — the base repository's secrets would sit next to untrusted input")
+    if any(_PRT_HEAD_WORD.search(t) for t in texts):
+        out.append("names the PR head (`head`, `merge_commit_sha`, or `refs/pull/`)")
+    if any(_PRT_GIT_WORD.search(t) for t in texts):
+        out.append("runs `git` — there is no working tree to need it, only head code to fetch")
+    if any(_PRT_GH_NON_API.search(t) for t in texts):
+        out.append("runs a `gh` subcommand other than `gh api`")
+    bad_expr = sorted(
+        {
+            " ".join(body.split())
+            for t in texts
+            for body in strict_yaml._expression_bodies(t)
+            if " ".join(body.split()) not in _PRT_ALLOWED_EXPRESSIONS
+        }
+    )
+    if bad_expr:
+        out.append(
+            f"interpolates {', '.join(repr(b) for b in bad_expr)} — only "
+            f"{', '.join(sorted(_PRT_ALLOWED_EXPRESSIONS))} is admitted"
+        )
+    if "permissions" not in doc:
+        out.append("declares no top-level `permissions:` (the default token may write)")
+    elif _write_scopes(doc["permissions"]):
+        out.append(f"top-level `permissions:` must be read-only, got {doc['permissions']!r}")
+    jobs = doc.get("jobs")
+    if not isinstance(jobs, dict) or not jobs:
+        out.append("`jobs:` is not a non-empty mapping")
+        return out
+    for jid, job in jobs.items():
+        loc = f"job {str(jid)!r}"
+        if not isinstance(job, dict):
+            out.append(f"{loc} is not a mapping")
+            continue
+        if "uses" in job:
+            out.append(f"{loc} calls a reusable workflow — its steps are not auditable here")
+        if "permissions" in job and _write_scopes(job["permissions"]):
+            out.append(f"{loc} `permissions:` must be read-only, got {job['permissions']!r}")
+        steps = job.get("steps", [])
+        if not isinstance(steps, list):
+            out.append(f"{loc} `steps:` is not a list")
+            continue
+        for i, st in enumerate(steps):
+            if not isinstance(st, dict):
+                out.append(f"{loc} step {i} is not a mapping")
+            elif "uses" in st:
+                out.append(
+                    f"{loc} step {i} `uses: {st['uses']}` — no action runs under "
+                    "pull_request_target (a checkout, local, or third-party action "
+                    "can fetch and run head code)"
+                )
+    return out
+
+
+def check_pull_request_target(errors: list[str], root: str = REPO_ROOT) -> None:
+    """Check 8a (see the module docstring). Unparseable workflows are refused
+    by check 6."""
+    for path in sorted(p for pattern in ("*.yml", "*.yaml") for p in glob.glob(os.path.join(root, "workflows", pattern))):
+        fname = os.path.basename(path)
+        with open(path) as f:
+            text = f.read()
+        try:
+            doc = strict_yaml.safe_load(text)
+        except yaml.YAMLError:
+            continue
+        if not isinstance(doc, dict):
+            continue
+        triggers = _triggers(doc)
+        if triggers is None or "pull_request_target" not in triggers:
+            continue
+        for v in pull_request_target_violations(fname, doc, text):
+            errors.append(f"{fname}: a pull_request_target workflow {v}")
+
+
+def _tracked_paths(repo: str) -> list[str] | None:
+    try:
+        out = subprocess.run(
+            ["git", "-C", repo, "ls-files", "-z"], capture_output=True, check=True, timeout=60
+        ).stdout
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return [p for p in out.decode("utf-8", "surrogateescape").split("\0") if p]
+
+
+def check_trust_roots(errors: list[str], root: str = REPO_ROOT, tracked: list[str] | None = None) -> None:
+    """Check 8b (see the module docstring). `tracked` defaults to the
+    repository's `git ls-files`."""
+    path = os.path.join(root, "CODEOWNERS")
+    try:
+        roots = trust_roots.load_codeowners(path)
+    except FileNotFoundError:
+        errors.append(".github/CODEOWNERS is missing — it is the trust-root SSOT")
+        return
+    except (OSError, trust_roots.CodeownersError) as e:
+        errors.append(f".github/CODEOWNERS refused: {e}")
+        return
+    if tracked is None:
+        tracked = _tracked_paths(os.path.dirname(root))
+        if tracked is None:
+            errors.append("check 8: `git ls-files` failed; cannot prove every CODEOWNERS rule is live")
+            return
+    for rule in roots.rules:
+        if not any(rule.matches(p) for p in tracked):
+            errors.append(
+                f".github/CODEOWNERS line {rule.line}: {rule.pattern!r} matches no tracked file "
+                "(a typo'd rule protects nothing)"
+            )
+    for p in TRUST_ROOT_MACHINERY:
+        if not roots.is_trust_root(p):
+            errors.append(f"{p} is not a trust root in .github/CODEOWNERS — the guard would not guard itself")
+    for p in _STRAY_CODEOWNERS:
+        if p in tracked:
+            errors.append(f"{p}: a second CODEOWNERS file; .github/CODEOWNERS is the only trust-root list")
 
 
 def _env_keys_folded(env: dict) -> set[str]:
@@ -1249,6 +1438,10 @@ def main() -> int:
         },
         errors,
     )
+
+    # ---- 8. gate integrity: pull_request_target runs no head code; trust roots live ----
+    check_pull_request_target(errors)
+    check_trust_roots(errors)
 
     # ---- 3. fail-closed dependency surfacing ----
     def surfaced_dispositions(job: Job) -> set[str]:
