@@ -118,7 +118,12 @@ pub fn render_seeded(doc: &Doc, cfg: RenderConfig, indent: usize, col: usize) ->
 /// fuel out gets its [`Doc::plain_layout`] instead: one pass, no fit decision, the
 /// same tokens — layout never changes what the code means.
 fn render_bounded(doc: &Doc, cfg: RenderConfig, indent: usize, col: usize) -> String {
-    let _scope = MemoScope::install(doc, LAYOUT_FUEL);
+    render_within(doc, cfg, indent, col, LAYOUT_FUEL)
+}
+
+/// Lay `doc` out within `fuel`, falling back to its [`Doc::plain_layout`].
+fn render_within(doc: &Doc, cfg: RenderConfig, indent: usize, col: usize, fuel: usize) -> String {
+    let _scope = MemoScope::install(doc, fuel);
     let mut out = String::new();
     render_at(doc, cfg, indent, col, false, &mut out);
     if fuel_exhausted() {
@@ -127,13 +132,14 @@ fn render_bounded(doc: &Doc, cfg: RenderConfig, indent: usize, col: usize) -> St
     out
 }
 
-/// The work one render may do before it gives up on fitting the document and
-/// falls back to its plain layout, in bytes: each layout computed or replayed
-/// spends the bytes it writes plus the line it measures its cursor on, so the
-/// fuel tracks time, not only node count. Most bodies stay far below it; a deep
-/// nest of probing constructs (call args, assign RHS, brace bodies) multiplies
-/// the contexts per level and can reach it, so its plain layout is emitted
-/// instead (#3130 tracks making layout linear).
+/// The work one render may do before it falls back to its plain layout.
+///
+/// Counted in bytes: each layout computed or replayed spends the bytes it writes
+/// plus the line it measures its cursor on, so the fuel tracks time, not only
+/// node count. Flat fit probes read cached per-node measures and cost O(1) each;
+/// the fuel bounds the probes that remain — non-flat layouts whose answer depends
+/// on the column and indent a node lands at — and a document that exhausts it
+/// gets its plain layout instead.
 const LAYOUT_FUEL: usize = 1 << 26;
 
 /// The byte ceiling on the layouts one render keeps memoized, each entry charged
@@ -4031,8 +4037,13 @@ mod p0_tests {
     /// Nodes laid out afresh while rendering `doc`, and whether the render gave up
     /// on fitting and laid the document out flat.
     fn layout_work(doc: &Doc) -> (usize, bool) {
+        layout_work_within(doc, LAYOUT_FUEL)
+    }
+
+    /// [`layout_work`] under an explicit `fuel`.
+    fn layout_work_within(doc: &Doc, fuel: usize) -> (usize, bool) {
         RENDERED.with(|n| n.set(0));
-        let _scope = MemoScope::install(doc, LAYOUT_FUEL);
+        let _scope = MemoScope::install(doc, fuel);
         render_at(
             doc,
             RenderConfig::default(),
@@ -4070,6 +4081,34 @@ mod p0_tests {
         }
     }
 
+    /// Flat fit probes answer from cached measures, so doubling a nest's depth at
+    /// most doubles its layout work: no probing construct re-renders its subtree
+    /// per enclosing level. The assign right-hand side is excluded — its non-flat
+    /// probe lands each level at a new column and indent.
+    #[test]
+    fn nest_layout_work_grows_linearly() {
+        on_main_thread_stack(|| {
+            for (name, step) in NESTS.into_iter().filter(|(name, _)| *name != "assign") {
+                for depth in [32, 64] {
+                    let (work, exhausted) = layout_work(&nest(step, depth));
+                    let (doubled, doubled_exhausted) = layout_work(&nest(step, depth * 2));
+                    assert!(
+                        !exhausted && !doubled_exhausted,
+                        "{name}: depth {depth} ran out of fuel"
+                    );
+                    assert!(
+                        doubled <= 2 * work + LINEAR_SLACK,
+                        "{name}: depth {} did {doubled} layouts, depth {depth} did {work}",
+                        depth * 2
+                    );
+                }
+            }
+        });
+    }
+
+    /// The constant layouts a nest may add per doubling beyond twice its work.
+    const LINEAR_SLACK: usize = 64;
+
     /// A nest as deep as the parser admits finishes on the compiler's main-thread
     /// stack, deterministically: laid out within the fuel, or else plain.
     #[test]
@@ -4091,9 +4130,13 @@ mod p0_tests {
     #[test]
     fn exhausted_fuel_falls_back_to_plain_layout() {
         on_main_thread_stack(|| {
+            const SMALL_FUEL: usize = 1 << 10;
             let doc = nest(NESTS[5].1, 256);
-            assert!(layout_work(&doc).1, "the mixed nest must exhaust the fuel");
-            let out = render(&doc, RenderConfig::default());
+            assert!(
+                layout_work_within(&doc, SMALL_FUEL).1,
+                "the mixed nest must exhaust a small fuel"
+            );
+            let out = render_within(&doc, RenderConfig::default(), 0, 0, SMALL_FUEL);
             assert_eq!(out, doc.plain_layout());
             assert_eq!(
                 crate::doc::whitespace_normalize(&out),
