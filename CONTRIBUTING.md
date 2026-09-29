@@ -8,7 +8,7 @@ both before opening a pull request, then follow the steps below:
 1. **Clone the repo**
 
    ```bash
-   git clone https://github.com/arthurmaciel/ipe-lang.git
+   git clone https://github.com/ipe-lang/compiler.git
    cd ipe-lang
    ```
 

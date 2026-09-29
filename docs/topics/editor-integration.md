@@ -8,16 +8,16 @@ success — when any step fails:
 
 ```bash
 # Helix 24.03+
-curl -fsSL https://raw.githubusercontent.com/arthurmaciel/ipe-lang/main/editors/helix/configure.sh | sh
+curl -fsSL https://raw.githubusercontent.com/ipe-lang/compiler/main/editors/helix/configure.sh | sh
 
 # Neovim 0.11+
-curl -fsSL https://raw.githubusercontent.com/arthurmaciel/ipe-lang/main/editors/neovim/configure.sh | sh
+curl -fsSL https://raw.githubusercontent.com/ipe-lang/compiler/main/editors/neovim/configure.sh | sh
 
 # Emacs 29+ and Doom Emacs
-curl -fsSL https://raw.githubusercontent.com/arthurmaciel/ipe-lang/main/editors/emacs/configure.sh | sh
+curl -fsSL https://raw.githubusercontent.com/ipe-lang/compiler/main/editors/emacs/configure.sh | sh
 
 # Zed (prepares the extension, then one click in Zed)
-curl -fsSL https://raw.githubusercontent.com/arthurmaciel/ipe-lang/main/editors/zed/configure.sh | sh
+curl -fsSL https://raw.githubusercontent.com/ipe-lang/compiler/main/editors/zed/configure.sh | sh
 ```
 
 From a checkout, `sh editors/<editor>/configure.sh` does the same with the

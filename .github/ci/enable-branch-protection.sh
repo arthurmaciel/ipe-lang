@@ -28,7 +28,7 @@
 # push CI catches. Revisit strict only alongside a merge queue.
 set -euo pipefail
 
-REPO="arthurmaciel/ipe-lang"
+REPO="ipe-lang/compiler"
 BRANCH="main"
 
 echo "Enabling branch protection on ${REPO}@${BRANCH} …"
