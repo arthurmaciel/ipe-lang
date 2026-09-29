@@ -129,6 +129,16 @@ pub const fn container_breach(stamp: Stamp, invoker: Invoker) -> Option<Breach> 
     }
 }
 
+/// Whether a symbolic link owned by `owner_uid` may stand for a directory on a path the invoker trusts.
+///
+/// Only root or the invoker may own it: in a sticky shared directory any
+/// user can plant a link, and following one would hand them the rest of the
+/// path. The link's target is walked under the same checks as any path.
+#[must_use]
+pub const fn link_owner_admitted(owner_uid: u32, invoker: Invoker) -> bool {
+    owner_uid == invoker.uid || owner_uid == ROOT_UID
+}
+
 /// What a failed trust check guarded.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TrustSubject {
