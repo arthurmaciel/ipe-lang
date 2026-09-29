@@ -1053,7 +1053,7 @@ mod tests {
 
     /// The entry name `text`, which the test knows to be one plain component.
     #[cfg(unix)]
-    fn entry(text: &str) -> EntryName {
+    fn salt_entry(text: &str) -> EntryName {
         EntryName::new(std::ffi::OsStr::new(text)).expect("a plain component")
     }
 
@@ -1061,7 +1061,7 @@ mod tests {
     #[test]
     fn a_created_salt_is_owner_only_and_read_back() {
         let (dir, held) = salt_test_dir("roundtrip");
-        let name = entry(SALT_FILE_NAME);
+        let name = salt_entry(SALT_FILE_NAME);
         let created = salt_in(&held, &name);
         assert!(
             created
@@ -1088,7 +1088,7 @@ mod tests {
     fn a_salt_another_user_could_read_or_a_symlink_is_refused() {
         use std::os::unix::fs::PermissionsExt as _;
         let (dir, held) = salt_test_dir("refused");
-        let name = entry(SALT_FILE_NAME);
+        let name = salt_entry(SALT_FILE_NAME);
         let path = dir.join(SALT_FILE_NAME);
         let created = create_salt(&held, &name);
         assert!(created.is_some(), "a fresh salt must be created");
@@ -1103,11 +1103,11 @@ mod tests {
         fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).expect("chmod salt");
         std::os::unix::fs::symlink(&path, dir.join("linked-salt")).expect("plant symlink");
         assert_eq!(
-            salt_in(&held, &entry("linked-salt")),
+            salt_in(&held, &salt_entry("linked-salt")),
             None,
             "a symlinked salt must be refused"
         );
-        let malformed = entry("malformed-salt");
+        let malformed = salt_entry("malformed-salt");
         assert!(
             create_salt(&held, &malformed).is_some(),
             "create a salt to corrupt"
