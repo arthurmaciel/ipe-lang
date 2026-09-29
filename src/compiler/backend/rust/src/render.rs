@@ -27,7 +27,7 @@ use std::borrow::Borrow;
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 
-use crate::doc::{ChainOperand, Doc};
+use crate::doc::{ChainOperand, Doc, LeafNorm};
 
 /// Rendering configuration. Mirrors the `rustfmt` knobs the golden harness pins.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -177,6 +177,8 @@ struct Memo {
     hard_breaks: HashMap<usize, bool>,
     /// [`if_else_construct_width`] per `IfElse` node, computed once.
     if_else_widths: HashMap<usize, usize>,
+    /// [`leaf_norm`] per node, computed once, bottom-up.
+    leaf_norms: HashMap<usize, LeafNorm>,
     /// The ceiling on `bytes`, [`MEMO_BYTE_CEILING`] for every production render.
     byte_ceiling: usize,
     /// [`flat_fixed`] per node, computed once.
@@ -292,6 +294,8 @@ impl FlatMeasure {
 thread_local! {
     /// Nodes laid out afresh (not replayed) — the bound test's work measure.
     static RENDERED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    /// Work charged summarising leaf streams — the width-fact bound test's measure.
+    static NORM_WORK: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 thread_local! {
@@ -318,6 +322,7 @@ impl MemoScope {
             bytes: 0,
             hard_breaks: HashMap::new(),
             if_else_widths: HashMap::new(),
+            leaf_norms: HashMap::new(),
             byte_ceiling,
             flat_fixed: HashMap::new(),
             flat_layouts: HashMap::new(),
@@ -1556,18 +1561,30 @@ fn if_else_construct_width(node: &Doc, cond: &Doc, then_: &Doc, else_: &Doc) -> 
         node,
         |m| &mut m.if_else_widths,
         || {
-            let (cond, cond_work) = cond.normalized_leaves_with_work();
-            let (then_, then_work) = then_.normalized_leaves_with_work();
-            let (else_, else_work) = else_.normalized_leaves_with_work();
             let width = ["if ", " { ", " } else { ", " }"]
                 .into_iter()
                 .map(str::len)
-                .chain([cond.len(), then_.len(), else_.len()])
+                .chain([cond, then_, else_].map(|branch| leaf_norm(branch).width()))
                 .fold(0, usize::saturating_add);
-            let work = [cond_work, then_work, else_work]
-                .into_iter()
-                .fold(width, usize::saturating_add);
-            (width, work)
+            (width, 1)
+        },
+    )
+}
+
+/// The [`LeafNorm`] of `doc`'s SEAL leaf stream: its whitespace-normalized width.
+///
+/// Composed from the children's summaries, each a [`node_fact`], so every node of
+/// the memoized document is summarised once however many enclosing constructs
+/// ask for its width, and each summary charges only the node's own bytes.
+fn leaf_norm(doc: &Doc) -> LeafNorm {
+    node_fact(
+        doc,
+        |m| &mut m.leaf_norms,
+        || {
+            let (norm, work) = doc.leaf_norm_with(leaf_norm);
+            #[cfg(test)]
+            NORM_WORK.with(|n| n.set(n.get() + work));
+            (norm, work)
         },
     )
 }
@@ -4321,24 +4338,78 @@ mod p0_tests {
         assert!(starved.out.is_empty(), "an abandoned render keeps nothing");
     }
 
-    /// Each `IfElse` of an else-if chain measures its whole tail once; that walk
-    /// is charged, so the fuel spent covers the quadratic total of the walks.
-    #[test]
-    fn else_if_chain_width_walks_are_charged() {
-        let depth = 32;
-        let chain = (0..depth).fold(Doc::text(""), |acc, _| {
-            Doc::if_else(Doc::text(""), Doc::text(""), acc)
-        });
-        let stats = render_stats(&chain, LAYOUT_FUEL, MEMO_BYTE_CEILING);
-        assert!(!stats.exhausted);
-        // Level `k` walks its condition, its branch, and the `3(k - 1) + 1` nodes
-        // of its tail: at least `3k` steps.
-        let walked = 3 * depth * (depth + 1) / 2;
+    /// An else-if chain of `depth` levels.
+    fn else_if_chain(depth: usize) -> Doc {
+        (0..depth).fold(Doc::text("z"), |acc, _| {
+            Doc::if_else(Doc::text("c"), Doc::text("t"), acc)
+        })
+    }
+
+    /// The width-summary work rendering `doc` charged, checked against the fuel.
+    fn norm_work(doc: &Doc) -> usize {
+        NORM_WORK.with(|n| n.set(0));
+        let stats = render_stats(doc, LAYOUT_FUEL, MEMO_BYTE_CEILING);
+        assert!(!stats.exhausted, "the chain ran out of fuel");
+        let work = NORM_WORK.with(std::cell::Cell::get);
         assert!(
-            stats.spent >= walked,
-            "{} spent over {walked} walked",
+            stats.spent >= work,
+            "{} spent over {work} summarised",
             stats.spent
         );
+        work
+    }
+
+    /// Each `IfElse` of an else-if chain reads its tail's width from kept
+    /// summaries, so doubling the chain at most doubles the width work, and the
+    /// fuel is charged for every summary.
+    #[test]
+    fn else_if_chain_width_work_grows_linearly() {
+        on_main_thread_stack(|| {
+            for depth in [64, 128] {
+                let work = norm_work(&else_if_chain(depth));
+                let doubled = norm_work(&else_if_chain(depth * 2));
+                assert!(work > 0, "depth {depth} summarised nothing");
+                assert!(
+                    doubled <= 2 * work + LINEAR_SLACK,
+                    "depth {} summarised {doubled}, depth {depth} summarised {work}",
+                    depth * 2
+                );
+            }
+        });
+    }
+
+    /// A [`LeafNorm`] composed from pieces measures exactly what
+    /// [`crate::doc::whitespace_normalize`] keeps of the joined stream, and a
+    /// node's composed summary measures its normalized leaves.
+    #[test]
+    fn leaf_norm_measures_the_normalized_leaves() {
+        let pieces = ["", " ", "\n", "\t ", "a", "é", " b ", "c  d", "  "];
+        for a in pieces {
+            for b in pieces {
+                for c in pieces {
+                    let joined = format!("{a}{b}{c}");
+                    let composed = LeafNorm::of(a).then(LeafNorm::of(b)).then(LeafNorm::of(c));
+                    assert_eq!(composed, LeafNorm::of(&joined), "{joined:?}");
+                    assert_eq!(
+                        composed.width(),
+                        crate::doc::whitespace_normalize(&joined).len(),
+                        "{joined:?}"
+                    );
+                }
+            }
+        }
+        let docs = NESTS
+            .into_iter()
+            .map(|(name, step)| (name, nest(step, 5)))
+            .chain([("else_if", else_if_chain(5))]);
+        for (name, doc) in docs {
+            let _scope = MemoScope::install(&doc, LAYOUT_FUEL);
+            assert_eq!(
+                leaf_norm(&doc).width(),
+                doc.normalized_leaves().len(),
+                "{name}"
+            );
+        }
     }
 
     /// A deep nest of groups asks every level for its hard-break fact; each asked
