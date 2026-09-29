@@ -46,17 +46,6 @@ countReviewRows db uid bodyHash =
         |> Task.map List.length
 
 
-countDrainRows : Db -> String -> String -> Task.Task Error Int
-countDrainRows db uid bodyHash =
-    Db.findWhere db
-        "drain_cursor"
-        (Sql.and
-            (Sql.eq (Sql.column "uid") (Sql.string uid))
-            (Sql.eq (Sql.column "body_hash") (Sql.string bodyHash))
-        )
-        |> Task.map List.length
-
-
 expectErr : Task.Task Error Int -> Task.Task Error Bool
 expectErr t =
     t
