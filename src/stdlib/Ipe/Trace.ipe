@@ -34,8 +34,8 @@ import Ipe.Error exposing (Error)
 -- | Wrap a Task in a named child span.  The Task's value flows
 -- through untouched — `Trace.span name task` has exactly the same
 -- result as `task`, plus a span in the trace.  Parametric in the
--- error type so it wraps any Task.
-span : String -> Task e a -> Task e a
+-- value type so it wraps any Task.
+span : String -> Task Error a -> Task Error a
 span = Kernel.kernel "Trace_span"
 
 

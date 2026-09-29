@@ -92,7 +92,9 @@ pub const STDLIB_MODULE_QUALIFIERS: &[(&[&str], &str)] = &[
     (&["Ipe", "Json", "Decode"], "JsonDec"),
     (&["Ipe", "Json", "Decode", "Pipeline"], "JsonDecP"),
     (&["Ipe", "System"], "System"),
-    (&["Ipe", "File"], "File"),
+    // `Ipe.File` is DELIBERATELY absent: it is compiled-source
+    // (`ipe::stdlib::COMPILED_STD_MODULES`), so `readFileLimit`'s typed
+    // `ByteSize` ceiling is the checked Ipê wrapper, not the raw-`Int` kernel.
     (&["Ipe", "Process"], "Process"),
     (&["Ipe", "Http"], "Http"),
     // ── Ipe.Http.* server surface ───────────────────────────────────────────
@@ -640,29 +642,10 @@ pub const PRELUDE_QUALIFIERS: &[(&str, &[&str])] = &[
         // (`ipe::stdlib::COMPILED_STD_MODULES`), so its whole surface resolves
         // from `Ipe/Random.ipe` — the `Kernel.kernel "Random_*"` aliases and the
         // pure Ipê wrappers — not from this kernel-qualifier catalog.
-        // `Ipe.File` — file effects.
-        (
-            "File",
-            &[
-                "readFile",
-                "writeFile",
-                "exists",
-                "remove",
-                "mkdirAll",
-                "readFileLimit",
-                "readFileBytes",
-                "append",
-                "readDir",
-                "isDir",
-                "walk",
-                "walkMatching",
-                "tempFile",
-                "tempDir",
-                "copy",
-                "rename",
-                "delete",
-            ],
-        ),
+        // `Ipe.File` is DELIBERATELY absent: it is COMPILED-SOURCE
+        // (`ipe::stdlib::COMPILED_STD_MODULES`), so its whole surface resolves
+        // from `Ipe/File.ipe` — the `Kernel.kernel "File_*"` aliases and the
+        // `ByteSize`-typed `readFileLimit` wrapper.
         // `Ipe.Process` — subprocess execution with NO shell.
         // `run` : `String -> List String -> Task Error String`.
         // `runWith` : `{ command, args, cwd, env } -> Task Error { exitCode, stdout, stderr }`.
@@ -1261,7 +1244,11 @@ impl Env {
         // are resolvable even in a source that names only one of them, along
         // with the closed engine tags `Web` / `Tui` / `Cli` an alias rewrites
         // into so the alias arm can look them up without a mutable interner.
+        // `TuiAttr` / `CliAttr` are the builtins a terminal engine's public
+        // `Attribute` resolves to.
         interner.intern("View")?;
+        interner.intern("TuiAttr")?;
+        interner.intern("CliAttr")?;
         interner.intern("Element")?;
         interner.intern("Screen")?;
         interner.intern("Lines")?;

@@ -25,6 +25,7 @@ module Ipe.Ui.Tui exposing
 
 
 import Ipe.Ffi.Kernel as Kernel
+import Ipe.Color exposing (AnsiColor)
 
 
 -- | An empty screen view — renders nothing.
@@ -105,12 +106,12 @@ reverse = Kernel.kernel "TuiUi_reverse"
 
 
 -- | `color c` — the foreground (text) colour, from the terminal palette.
-color : Color -> Attribute msg
+color : AnsiColor -> Attribute msg
 color = Kernel.kernel "TuiUi_color"
 
 
 -- | `bg c` — the background colour, from the terminal palette.
-bg : Color -> Attribute msg
+bg : AnsiColor -> Attribute msg
 bg = Kernel.kernel "TuiUi_bg"
 
 

@@ -10,7 +10,7 @@
 module Ipe.File exposing
     ( readFile, readFileLimit, readFileBytes
     , writeFile, append
-    , exists, remove
+    , exists, remove, delete
     , mkdirAll, readDir, isDir
     , walk, walkMatching
     , tempFile, tempDir, copy, rename
@@ -73,6 +73,11 @@ exists = Kernel.kernel "File_exists"
 
 remove : Path -> Task Error ()
 remove = Kernel.kernel "File_remove"
+
+
+-- | Alias for `remove`.
+delete : Path -> Task Error ()
+delete = Kernel.kernel "File_delete"
 
 
 -- Directories

@@ -32,13 +32,13 @@ See docs/observability-design.md for the full model.
 ## `span`
 
 ```ipe
-span : String -> Task e a -> Task e a
+span : String -> Task Error a -> Task Error a
 ```
 
 Wrap a Task in a named child span.  The Task's value flows
 through untouched — `Trace.span name task` has exactly the same
 result as `task`, plus a span in the trace.  Parametric in the
-error type so it wraps any Task.
+value type so it wraps any Task.
 
 ## `event`
 

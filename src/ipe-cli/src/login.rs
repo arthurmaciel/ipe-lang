@@ -22,7 +22,7 @@ use std::process::Command;
 use std::time::{Duration, Instant};
 
 use crate::CliError;
-use crate::secret_file::{HOST_SECRET_STORE, SecretFileError, SecretStore};
+use crate::secret_file::{DirRefusal, HOST_SECRET_STORE, SecretFileError, SecretStore};
 
 /// The Ipê CLI's GitHub OAuth App client id. Public by design — the device flow
 /// authenticates with the client id alone (no secret), so embedding it is safe.
@@ -186,8 +186,12 @@ pub fn stored_token() -> Option<PublishToken> {
 /// Why a stored token file yielded no text.
 #[derive(Debug)]
 enum TokenReadRefusal {
-    /// The file is not private to the invoking user.
+    /// The token file itself is not private to the invoking user.
     Exposed,
+    /// The token's directory, or the ancestor carried, is not private to the invoking user.
+    UntrustedDir(PathBuf),
+    /// The token's directory is the symbolic link carried.
+    SymlinkedDir(PathBuf),
     /// The file is absent, not a regular file, or unreadable.
     Unreadable,
 }
@@ -196,6 +200,8 @@ enum TokenReadRefusal {
 fn read_stored_token(path: &std::path::Path) -> Result<String, TokenReadRefusal> {
     let file = crate::secret_file::open_existing(HOST_SECRET_STORE, path).map_err(|e| match e {
         SecretFileError::NotOwnerOnly(_) => TokenReadRefusal::Exposed,
+        SecretFileError::Dir(DirRefusal::Untrusted(dir)) => TokenReadRefusal::UntrustedDir(dir),
+        SecretFileError::Dir(DirRefusal::Symlinked(dir)) => TokenReadRefusal::SymlinkedDir(dir),
         SecretFileError::Unsupported
         | SecretFileError::Io(_)
         | SecretFileError::NotRegularFile(_) => TokenReadRefusal::Unreadable,
@@ -520,11 +526,17 @@ fn token_path() -> Option<PathBuf> {
 /// `--status` and the publish path (which requires a parseable token) agree.
 ///
 /// A token file another local user could read or replace is `Exposed`: the
-/// publish path refuses it, and the token must be treated as leaked.
+/// publish path refuses it, and the token must be treated as leaked. A token
+/// directory that is a symbolic link is `SymlinkedDir`: nothing was read
+/// through it, so nothing leaked. A token directory, or an ancestor, another
+/// local user could write is `UntrustedDir`, naming that component: a token
+/// stored under it may have been replaced or read, so it is treated as exposed.
 enum TokenStatus {
     LoggedIn(PathBuf),
     Corrupt(PathBuf),
     Exposed(PathBuf),
+    SymlinkedDir(PathBuf),
+    UntrustedDir(PathBuf),
     NotLoggedIn,
 }
 
@@ -565,6 +577,8 @@ fn token_status_of(stored: StoredToken) -> TokenStatus {
     match read_stored_token(&path) {
         Ok(raw) if PublishToken::parse(&raw).is_some() => TokenStatus::LoggedIn(path),
         Err(TokenReadRefusal::Exposed) => TokenStatus::Exposed(path),
+        Err(TokenReadRefusal::SymlinkedDir(dir)) => TokenStatus::SymlinkedDir(dir),
+        Err(TokenReadRefusal::UntrustedDir(dir)) => TokenStatus::UntrustedDir(dir),
         Ok(_) | Err(TokenReadRefusal::Unreadable) => TokenStatus::Corrupt(path),
     }
 }
@@ -578,6 +592,12 @@ fn status_report(status: &TokenStatus, key_line: crate::text::Message) -> crate:
         TokenStatus::LoggedIn(path) => crate::text::msg::login_status_logged_in(&path.display()),
         TokenStatus::Corrupt(path) => crate::text::msg::login_status_corrupt(&path.display()),
         TokenStatus::Exposed(path) => crate::text::msg::login_status_exposed(&path.display()),
+        TokenStatus::SymlinkedDir(dir) => {
+            crate::text::msg::login_status_symlinked_dir(&dir.display())
+        }
+        TokenStatus::UntrustedDir(dir) => {
+            crate::text::msg::login_status_dir_untrusted(&dir.display())
+        }
         TokenStatus::NotLoggedIn => crate::text::msg::login_status_not_logged_in(),
     };
     crate::text::Message::lines([token_line, key_line])
@@ -591,10 +611,6 @@ fn status_report(status: &TokenStatus, key_line: crate::text::Message) -> crate:
 fn store_token(token: &PublishToken) -> Result<PathBuf, CliError> {
     let path =
         token_path().ok_or_else(|| login_error(&crate::text::msg::login_config_dir_unknown()))?;
-    if let Some(parent) = path.parent() {
-        crate::secret_file::create_owner_dir(HOST_SECRET_STORE, parent)
-            .map_err(|e| secret_file_refusal(e, parent))?;
-    }
     write_token_atomic(HOST_SECRET_STORE, &path, token.as_str())?;
     Ok(path)
 }
@@ -606,8 +622,12 @@ fn secret_file_refusal(error: SecretFileError, path: &std::path::Path) -> CliErr
         SecretFileError::Io(e) => {
             login_error(&crate::text::msg::login_create_failed(&path.display(), &e))
         }
-        SecretFileError::NotOwnerOnly(shown) => login_error(
+        SecretFileError::NotOwnerOnly(shown)
+        | SecretFileError::Dir(DirRefusal::Untrusted(shown)) => login_error(
             &crate::text::msg::login_secret_not_owner_only(&shown.display()),
+        ),
+        SecretFileError::Dir(DirRefusal::Symlinked(dir)) => login_error(
+            &crate::text::msg::login_secret_symlinked_dir(&dir.display()),
         ),
         SecretFileError::NotRegularFile(shown) => login_error(
             &crate::text::msg::login_secret_not_regular_file(&shown.display()),
@@ -617,14 +637,17 @@ fn secret_file_refusal(error: SecretFileError, path: &std::path::Path) -> CliErr
 
 /// Write `token` to `path` crash-atomically with owner-only permissions.
 ///
-/// The token goes into a fresh, randomly named temp file in the SAME
-/// directory, created exclusively and proven owner-only by
-/// [`crate::secret_file::create_temp_beside`] (a pre-seeded name is refused,
-/// not followed), is flushed, then `rename(2)`d
-/// over `path`. The rename is atomic within the directory, so a crash at any
-/// point leaves either the old token or the complete new one — never a
-/// truncated or empty file. The token bytes only ever land in an owner-only
-/// inode, so there is no window in which the secret is readable by others.
+/// The directory of `path` is created if needed and held by
+/// [`crate::secret_file::create_owner_dir`], once it and every ancestor were
+/// proven unwritable by other users. The token goes into a fresh, randomly
+/// named temp file in that held directory, created exclusively and proven
+/// owner-only by [`crate::secret_file::OwnerDir::create_temp_for`] (a
+/// pre-seeded name is refused, not followed), is flushed, then `renameat(2)`d
+/// over the final name through the same handle. The rename is atomic within
+/// the directory, so a crash at any point leaves either the old token or the
+/// complete new one — never a truncated or empty file. The token bytes only
+/// ever land in an owner-only inode, so there is no window in which the
+/// secret is readable by others.
 ///
 /// A `store` that cannot keep the file owner-only refuses before anything is
 /// created; `GITHUB_TOKEN` supplies the token there instead.
@@ -634,25 +657,35 @@ fn write_token_atomic(
     token: &str,
 ) -> Result<(), CliError> {
     require_token_store(store)?;
+    let (parent, name) =
+        crate::secret_file::split_entry(path).map_err(|e| secret_file_refusal(e, path))?;
+    let dir = crate::secret_file::create_owner_dir(store, parent)
+        .map_err(|e| secret_file_refusal(e, parent))?;
     let suffix = crate::secret_file::TempSuffix::fresh().map_err(|e| {
-        let dir = path.parent().unwrap_or_else(|| std::path::Path::new("."));
-        login_error(&crate::text::msg::login_create_failed(&dir.display(), &e))
+        login_error(&crate::text::msg::login_create_failed(
+            &parent.display(),
+            &e,
+        ))
     })?;
-    let (mut file, tmp_path) = crate::secret_file::create_temp_beside(store, path, &suffix)
-        .map_err(|e| secret_file_refusal(e, &suffix.beside(path)))?;
+    let (mut file, temp) = dir.create_temp_for(&name, &suffix).map_err(|e| {
+        let shown = suffix
+            .name_for(&name)
+            .map_or_else(|_| path.to_path_buf(), |temp| dir.path_of(&temp));
+        secret_file_refusal(e, &shown)
+    })?;
     let write_result = writeln!(file, "{token}")
         .and_then(|()| file.flush())
         .and_then(|()| file.sync_all());
     if let Err(e) = write_result {
-        let _ = std::fs::remove_file(&tmp_path);
+        let _ = dir.remove(&temp);
         return Err(login_error(&crate::text::msg::login_write_failed(
-            &tmp_path.display(),
+            &dir.path_of(&temp).display(),
             &e,
         )));
     }
     drop(file);
-    std::fs::rename(&tmp_path, path).map_err(|e| {
-        let _ = std::fs::remove_file(&tmp_path);
+    dir.rename(&temp, &name).map_err(|e| {
+        let _ = dir.remove(&temp);
         login_error(&crate::text::msg::login_move_failed(&path.display(), &e))
     })
 }
@@ -764,6 +797,8 @@ mod tests {
             TokenStatus::LoggedIn(hostile_path()),
             TokenStatus::Corrupt(hostile_path()),
             TokenStatus::Exposed(hostile_path()),
+            TokenStatus::SymlinkedDir(hostile_path()),
+            TokenStatus::UntrustedDir(hostile_path()),
             TokenStatus::NotLoggedIn,
         ] {
             let report = status_report(&status, crate::text::msg::signing_key_status_none());
@@ -1165,6 +1200,109 @@ mod tests {
             matches!(&refusal, CliError::Resolve(message) if message.contains(expected.as_str())),
             "a non-regular secret file must name its own refusal: {refusal:?}"
         );
+    }
+
+    #[test]
+    fn a_symlinked_token_dir_is_its_own_refusal_never_an_exposure() {
+        let path = std::path::Path::new("/tmp/ipe/token");
+        let dir = std::path::Path::new("/tmp/ipe");
+        let refusal = secret_file_refusal(
+            SecretFileError::Dir(DirRefusal::Symlinked(dir.to_path_buf())),
+            path,
+        );
+        let expected = crate::text::msg::login_secret_symlinked_dir(&dir.display());
+        let exposed = crate::text::msg::login_secret_not_owner_only(&dir.display());
+        assert!(
+            matches!(&refusal, CliError::Resolve(message)
+                if message.contains(expected.as_str()) && !message.contains(exposed.as_str())),
+            "a symlinked token dir must name its own refusal: {refusal:?}"
+        );
+    }
+
+    /// A token directory that is a symlink is reported as such by `--status`, never as exposed.
+    #[cfg(unix)]
+    #[test]
+    fn a_symlinked_token_dir_is_reported_as_a_link_not_an_exposed_token() {
+        let base = std::env::temp_dir()
+            .canonicalize()
+            .expect("canonical temp dir")
+            .join(format!(
+                "ipe-login-linked-dir-{}-{:?}",
+                std::process::id(),
+                std::thread::current().id()
+            ));
+        let _ = std::fs::remove_dir_all(&base);
+        let real = base.join("real");
+        std::fs::create_dir_all(&real).expect("create real dir");
+        write_token_atomic(HOST_SECRET_STORE, &real.join("token"), "ghp_private_token")
+            .expect("write succeeds");
+        let link = base.join("link");
+        std::os::unix::fs::symlink(&real, &link).expect("plant dir symlink");
+
+        let status = token_status_of(StoredToken::probe(Some(link.join("token"))));
+        assert!(
+            matches!(&status, TokenStatus::SymlinkedDir(p) if *p == link),
+            "a symlinked token dir must be reported as a link, never as exposed"
+        );
+        let report = status_report(&status, crate::text::msg::signing_key_status_none());
+        let exposed = crate::text::msg::login_status_exposed(&link.join("token").display());
+        assert!(
+            !report.contains(exposed.as_str()),
+            "a symlinked token dir must not tell the user to revoke: {report:?}"
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// A token directory any user could write is reported by `--status` as that directory.
+    #[cfg(unix)]
+    #[test]
+    fn an_untrusted_token_dir_is_reported_as_the_dir_not_an_exposed_file() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let base = std::env::temp_dir()
+            .canonicalize()
+            .expect("canonical temp dir")
+            .join(format!(
+                "ipe-login-untrusted-dir-{}-{:?}",
+                std::process::id(),
+                std::thread::current().id()
+            ));
+        let _ = std::fs::remove_dir_all(&base);
+        let dir = base.join("ipe");
+        std::fs::create_dir_all(&dir).expect("create token dir");
+        let path = dir.join("token");
+        write_token_atomic(HOST_SECRET_STORE, &path, "ghp_private_token").expect("write succeeds");
+
+        // A new directory may inherit a setgid or BSD parent's group; pin it to
+        // the invoker's effective group, the one group write is admitted under.
+        rustix::fs::chown(&dir, None, Some(rustix::process::getegid())).expect("chgrp token dir");
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o770))
+            .expect("chmod token dir");
+        assert!(
+            matches!(
+                token_status_of(StoredToken::probe(Some(path.clone()))),
+                TokenStatus::LoggedIn(_)
+            ),
+            "group write under the invoker's own effective group is admitted"
+        );
+        for mode in [0o707, 0o777] {
+            std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(mode))
+                .expect("chmod token dir");
+            let status = token_status_of(StoredToken::probe(Some(path.clone())));
+            assert!(
+                matches!(&status, TokenStatus::UntrustedDir(p) if *p == dir),
+                "a mode-{mode:o} token dir must be reported as that dir"
+            );
+            let report = status_report(&status, crate::text::msg::signing_key_status_none());
+            let named = crate::text::msg::login_status_dir_untrusted(&dir.display());
+            let exposed = crate::text::msg::login_status_exposed(&path.display());
+            assert!(
+                report.contains(named.as_str()) && !report.contains(exposed.as_str()),
+                "a mode-{mode:o} token dir must be named, never as an exposed file: {report:?}"
+            );
+        }
+        let _ = std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700));
+        let _ = std::fs::remove_dir_all(&base);
     }
 
     /// A dangling symlink at the token name is reported by `--status` and removed by `--logout`.

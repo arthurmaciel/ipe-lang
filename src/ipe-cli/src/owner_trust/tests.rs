@@ -58,6 +58,13 @@ fn breach_refuses_a_root_owned_entry() {
 }
 
 #[test]
+fn only_a_link_root_or_the_invoker_owns_is_admitted() {
+    assert!(link_owner_admitted(0, ME), "root-owned link");
+    assert!(link_owner_admitted(1000, ME), "invoker-owned link");
+    assert!(!link_owner_admitted(1001, ME), "foreign-owned link");
+}
+
+#[test]
 fn container_breach_admits_root_and_sticky_directories() {
     assert_eq!(container_breach(stamp(0, 0, 0o755), ME), None);
     assert_eq!(container_breach(stamp(0, 0, 0o1777), ME), None);

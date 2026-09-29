@@ -109,7 +109,13 @@ permissionDenied = Kernel.kernel "Error_permissionDenied"
 
 -- | Render an `Error` as `"<Kind>: <message>"`.
 toString : Error -> String
-toString = Kernel.kernel "Error_toString"
+toString err =
+    renderKernel err
+
+
+-- The render kernel is generic over its argument; `toString` pins it to `Error`.
+renderKernel : Error -> String
+renderKernel = Kernel.kernel "Error_toString"
 
 
 -- | Replace the message carried by an `Error`, preserving its kind and details.

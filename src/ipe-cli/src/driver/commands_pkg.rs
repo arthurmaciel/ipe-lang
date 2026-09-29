@@ -1743,7 +1743,7 @@ pub fn run_version(rest: &[String]) -> Result<(), CliError> {
 /// so the install-drift test can assert the README `curl` one-liner and this
 /// self-updater URL stay in agreement.
 pub const INSTALL_SH_URL: &str =
-    "https://raw.githubusercontent.com/arthurmaciel/ipe-lang/main/install.sh";
+    "https://raw.githubusercontent.com/ipe-lang/compiler/main/install.sh";
 
 /// The env var marking an `install.sh` run launched by this wrapper.
 ///

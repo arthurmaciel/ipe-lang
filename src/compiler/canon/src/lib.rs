@@ -647,9 +647,9 @@ mod tests {
 
     #[test]
     fn unknown_value_suggests_close_name() {
-        // `readFil` is one edit from the `Ipe.File` member `readFile`.
+        // `getcw` is one edit from the `Ipe.System` member `getcwd`.
         let err = canon_err(
-            "module Main exposing (main)\nimport Ipe.File as File\n\nmain = File.readFil\n",
+            "module Main exposing (main)\nimport Ipe.System as System\n\nmain = System.getcw\n",
         );
         assert!(
             matches!(
@@ -673,10 +673,10 @@ mod tests {
         else {
             return;
         };
-        assert_eq!(&*member, "readFil");
+        assert_eq!(&*member, "getcw");
         assert!(
-            suggestions.iter().any(|s| &**s == "readFile"),
-            "suggestions should include `readFile`, got {suggestions:?}"
+            suggestions.iter().any(|s| &**s == "getcwd"),
+            "suggestions should include `getcwd`, got {suggestions:?}"
         );
     }
 
@@ -1328,15 +1328,17 @@ mod tests {
     fn stdlib_alias_registers_std_module() {
         // Completeness: a kernel-qualifier `Ipe.*` module aliased to a name
         // differing from both the last segment and the canonical qualifier.
-        // (`Ipe.Decimal` is compiled-source now, so `Ipe.File` is the example.)
         let src = "module Main exposing (main)\n\
-                   import Ipe.File as F\n\n\
-                   main = F.readFile\n";
+                   import Ipe.System as S\n\n\
+                   main = S.getenv\n";
         let Some((m, i)) = canon_module_src(src) else {
-            assert!(false_marker(), "aliased Ipe.File import must canonicalise");
+            assert!(
+                false_marker(),
+                "aliased Ipe.System import must canonicalise"
+            );
             return;
         };
-        assert_main_is_kernel(&m, &i, "File", "readFile");
+        assert_main_is_kernel(&m, &i, "System", "getenv");
     }
 
     #[test]
