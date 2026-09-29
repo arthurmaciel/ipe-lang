@@ -36,14 +36,9 @@ name: Build & test
 #
 # Job-level `if:` keys on the `changes` classifier output (all authors) for the
 # correctness/soundness gates and on github.event_name for the nightly infra/
-# flaky-env jobs. E2E is sharded across runners; a job that wants sccache adds
-# `uses: ./.github/actions/sccache` (installs the binary and wires
-# RUSTC_WRAPPER/SCCACHE_GHA_ENABLED itself — no workflow-level env, so a job
-# without that step never inherits a wrapper it never installed). The
-# ASAN/TSAN sanitizer jobs (instrumented `-Zbuild-std` compiles) and every job
-# owning a deterministic check step (ci/deterministic-checks.json — sccache's
-# GitHub Actions cache backend does network I/O) skip it and use
-# `Swatinem/rust-cache` alone.
+# flaky-env jobs. E2E is sharded across runners. Compiled dependencies are
+# cached by `Swatinem/rust-cache` alone, saved only from `main` so pull request
+# runs restore the main cache without evicting it.
 
 on:
   push:
@@ -271,7 +266,6 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: ./.github/actions/rust-toolchain-pinned
-      - uses: ./.github/actions/sccache
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
@@ -333,7 +327,6 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: ./.github/actions/rust-toolchain-pinned
       - uses: ./.github/actions/mold
-      - uses: ./.github/actions/sccache
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
@@ -361,7 +354,6 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: ./.github/actions/rust-toolchain-pinned
       - uses: ./.github/actions/mold
-      - uses: ./.github/actions/sccache
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
@@ -398,7 +390,6 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: ./.github/actions/rust-toolchain-pinned
       - uses: ./.github/actions/mold
-      - uses: ./.github/actions/sccache
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
@@ -463,8 +454,6 @@ jobs:
         if: needs.changes.outputs.release_only != 'true'
         with:
           components: clippy
-      - uses: ./.github/actions/sccache
-        if: needs.changes.outputs.release_only != 'true'
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         if: needs.changes.outputs.release_only != 'true'
         with:
@@ -509,8 +498,6 @@ jobs:
         if: needs.changes.outputs.release_only != 'true'
         with:
           targets: wasm32-unknown-unknown, wasm32-wasip1
-      - uses: ./.github/actions/sccache
-        if: needs.changes.outputs.release_only != 'true'
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         if: needs.changes.outputs.release_only != 'true'
         with:
@@ -602,7 +589,6 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: ./.github/actions/rust-toolchain-pinned
       - uses: ./.github/actions/mold
-      - uses: ./.github/actions/sccache
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
@@ -703,7 +689,6 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: ./.github/actions/rust-toolchain-pinned
       - uses: ./.github/actions/mold
-      - uses: ./.github/actions/sccache
       # Cache the shared emitted-crate target too (keyed on this job), so the
       # runtime + its deps stay warm across runs and later emitted builds are
       # incremental. The default workspace target is cached by the entry above.
@@ -765,7 +750,6 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: ./.github/actions/rust-toolchain-pinned
       - uses: ./.github/actions/mold
-      - uses: ./.github/actions/sccache
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
@@ -839,7 +823,6 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: ./.github/actions/rust-toolchain-pinned
       - uses: ./.github/actions/mold
-      - uses: ./.github/actions/sccache
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
@@ -887,8 +870,6 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         if: needs.changes.outputs.release_only != 'true'
       - uses: ./.github/actions/rust-toolchain-pinned
-        if: needs.changes.outputs.release_only != 'true'
-      - uses: ./.github/actions/sccache
         if: needs.changes.outputs.release_only != 'true'
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         if: needs.changes.outputs.release_only != 'true'
@@ -1321,7 +1302,6 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: ./.github/actions/rust-toolchain-pinned
       - uses: ./.github/actions/mold
-      - uses: ./.github/actions/sccache
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
@@ -1367,7 +1347,6 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: ./.github/actions/rust-toolchain-pinned
-      - uses: ./.github/actions/sccache
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
@@ -1459,7 +1438,6 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: ./.github/actions/rust-toolchain-pinned
-      - uses: ./.github/actions/sccache
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
@@ -1714,7 +1692,6 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: ./.github/actions/rust-toolchain-pinned
-      - uses: ./.github/actions/sccache
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
@@ -1738,7 +1715,7 @@ jobs:
   # release build.
   #
   # Classification is per FAILED STEP, not per job: every member also runs
-  # network-bound setup (checkout, toolchain install, sccache, rust-cache, the
+  # network-bound setup (checkout, toolchain install, rust-cache, the
   # crate fetch), and `failure()` is also true when an ANCESTOR outside the set
   # failed (e.g. `changes`, whose checkout is network-bound, whose failure skips
   # its dependants). Neither is a deterministic red. The step below lists the
@@ -1851,7 +1828,6 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: ./.github/actions/rust-toolchain-pinned
       - uses: ./.github/actions/mold
-      - uses: ./.github/actions/sccache
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}

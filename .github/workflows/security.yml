@@ -6,7 +6,7 @@
 # RustSec advisory-db against Cargo.lock), and deny additionally covers
 # licenses / bans / sources in one pass — so this is the single supply-chain
 # gate. It is lockfile/metadata-only (no compilation), so it runs in seconds
-# and needs no sccache/target caching.
+# and needs no target caching.
 #
 # On the REQUIRED PR gate: `cargo-deny` is one of the fast checks branch
 # protection requires (fmt/clippy/test/cargo-deny/seal-smoke). It also runs on

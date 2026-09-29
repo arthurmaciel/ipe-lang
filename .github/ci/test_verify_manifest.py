@@ -8,10 +8,11 @@ env-file writes only through `github-env.sh`; its cases sit in
 `TestPinnedInputsAndEnvFileWrites` and `TestGithubEnvHelper`. Check 8's sit in
 `TestMergeQueueSafety`.
 
-Each rejection the guard is supposed to make (a raw sccache-action reference,
-a case-variant `uses:`, an env key at workflow/job/step level, a `$GITHUB_ENV`
-write, a deterministic job pulling in sccache, a broken composite) gets its
-own fixture tree and its own test, per PRINCIPLES.md "Prove the refusals": a
+Each rejection the guard is supposed to make (a rustc wrapper or replacement
+set by an env key at any scope, by a `$GITHUB_ENV` write or by free text; a
+`Swatinem/rust-cache` step that saves from a ref other than `main`; a local
+action that cannot be resolved or audited) gets its own fixture tree and its
+own test, per PRINCIPLES.md "Prove the refusals": a
 guard no test drives is a guard one edit away from silently vanishing. One
 positive case proves the happy path still passes cleanly.
 
@@ -47,10 +48,6 @@ check_pull_request_target = verify_manifest.check_pull_request_target
 check_trust_roots = verify_manifest.check_trust_roots
 check_push_concurrency = verify_manifest.check_push_concurrency
 
-# The live sanctioned composite is the fixture: the canonical form is proven
-# against the file CI actually runs, never a hand-kept copy.
-with open(os.path.join(os.path.dirname(HERE), "actions", "sccache", "action.yml")) as _f:
-    VALID_COMPOSITE = _f.read()
 with open(os.path.join(HERE, "github-env-allowlist.txt")) as _f:
     VALID_ENV_ALLOWLIST = _f.read()
 
@@ -68,17 +65,15 @@ FIXTURE_TOOLS = (
 )
 
 
-class SccacheFixture:
-    """A scratch repository whose `.github/` holds workflows/, actions/sccache/,
-    ci/ — `repo` is the repository root local `uses: ./...` resolve against."""
+class WorkflowFixture:
+    """A scratch repository whose `.github/` holds workflows/, actions/, ci/ —
+    `repo` is the repository root local `uses: ./...` resolve against."""
 
-    def __init__(self, tmp: str, *, composite: str | None = VALID_COMPOSITE):
+    def __init__(self, tmp: str):
         self.repo = tmp
         self.root = os.path.join(tmp, ".github")
         os.makedirs(self.root, exist_ok=True)
         tmp = self.root
-        if composite is not None:
-            _write(os.path.join(tmp, "actions", "sccache", "action.yml"), composite)
         _write(os.path.join(tmp, "ci", "github-env-allowlist.txt"), VALID_ENV_ALLOWLIST)
         for tool in FIXTURE_TOOLS:
             _write(os.path.join(tmp, "ci", tool), "")
@@ -89,8 +84,7 @@ class SccacheFixture:
 
     def composite(self, name: str, content: str) -> None:
         """Write an arbitrary local composite action at
-        `.github/actions/<name>/action.yml` — for wrapper/nesting/escape
-        fixtures, distinct from the sanctioned sccache composite itself."""
+        `.github/actions/<name>/action.yml`."""
         _write(os.path.join(self.root, "actions", name, "action.yml"), content)
 
     def deterministic_checks(self, *, context: str, step: str) -> None:
@@ -107,15 +101,15 @@ class SccacheFixture:
         return errors
 
 
-class TestSccacheWiringRefusals(unittest.TestCase):
+class TestRustcWiringRefusals(unittest.TestCase):
     def setUp(self) -> None:
         self._tmpdir = tempfile.TemporaryDirectory()
         self.addCleanup(self._tmpdir.cleanup)
-        self.fx = SccacheFixture(self._tmpdir.name)
+        self.fx = WorkflowFixture(self._tmpdir.name)
 
     # ---- positive case ------------------------------------------------
 
-    def test_composite_in_non_deterministic_job_passes_cleanly(self) -> None:
+    def test_main_only_rust_cache_passes_cleanly(self) -> None:
         self.fx.workflow(
             "ci.yml",
             textwrap.dedent(
@@ -127,35 +121,16 @@ class TestSccacheWiringRefusals(unittest.TestCase):
                     runs-on: ubuntu-latest
                     steps:
                       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-                      - uses: ./.github/actions/sccache
+                      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
+                        with:
+                          save-if: ${{ github.ref == 'refs/heads/main' }}
                       - run: cargo build
                 """
             ),
         )
         self.assertEqual(self.fx.errors(), [])
 
-    # ---- (a) raw action reference outside the composite ----------------
-
-    def test_raw_sccache_action_outside_composite_is_refused(self) -> None:
-        self.fx.workflow(
-            "ci.yml",
-            textwrap.dedent(
-                """\
-                name: ci
-                on: push
-                jobs:
-                  build:
-                    runs-on: ubuntu-latest
-                    steps:
-                      - uses: mozilla-actions/sccache-action@7d986dd989559c6ecdb630a3fd2557667be217ad
-                      - run: cargo build
-                """
-            ),
-        )
-        errors = self.fx.errors()
-        self.assertTrue(
-            any("runs the raw" in e and "build" in e for e in errors), errors
-        )
+    # ---- (a) raw actions refused by name ---------------------------------
 
     def test_raw_setup_mold_is_refused(self) -> None:
         self.fx.workflow(
@@ -179,7 +154,7 @@ class TestSccacheWiringRefusals(unittest.TestCase):
             errors,
         )
 
-    def test_case_variant_uses_is_still_refused(self) -> None:
+    def test_case_variant_rust_cache_is_still_audited(self) -> None:
         self.fx.workflow(
             "ci.yml",
             textwrap.dedent(
@@ -190,13 +165,13 @@ class TestSccacheWiringRefusals(unittest.TestCase):
                   build:
                     runs-on: ubuntu-latest
                     steps:
-                      - uses: Mozilla-Actions/Sccache-Action@7d986dd989559c6ecdb630a3fd2557667be217ad
+                      - uses: swatinem/Rust-Cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
                       - run: cargo build
                 """
             ),
         )
         errors = self.fx.errors()
-        self.assertTrue(any("runs the raw" in e for e in errors), errors)
+        self.assertTrue(any("uses Swatinem/rust-cache with save-if None" in e for e in errors), errors)
 
     # ---- (b) env key at each scope --------------------------------------
 
@@ -213,7 +188,7 @@ class TestSccacheWiringRefusals(unittest.TestCase):
                   build:
                     runs-on: ubuntu-latest
                     steps:
-                      - uses: ./.github/actions/sccache
+                      - run: cargo build
                 """
             ),
         )
@@ -234,16 +209,16 @@ class TestSccacheWiringRefusals(unittest.TestCase):
                   build:
                     runs-on: ubuntu-latest
                     env:
-                      SCCACHE_GHA_ENABLED: "true"
+                      CARGO_BUILD_RUSTC: /tmp/fake-rustc
                     steps:
-                      - uses: ./.github/actions/sccache
+                      - run: cargo build
                 """
             ),
         )
         errors = self.fx.errors()
         self.assertTrue(
             any(
-                "job 'build' env sets" in e and "sccache_gha_enabled" in e
+                "job 'build' env sets" in e and "cargo_build_rustc" in e
                 for e in errors
             ),
             errors,
@@ -260,7 +235,7 @@ class TestSccacheWiringRefusals(unittest.TestCase):
                   build:
                     runs-on: ubuntu-latest
                     steps:
-                      - uses: ./.github/actions/sccache
+                      - run: cargo build
                       - name: Some step
                         env:
                           RUSTC_WRAPPER: ""
@@ -298,206 +273,7 @@ class TestSccacheWiringRefusals(unittest.TestCase):
             errors,
         )
 
-    # ---- (d) composite in a job owning a deterministic check step -------
-
-    def test_composite_in_deterministic_job_is_refused(self) -> None:
-        self.fx.deterministic_checks(context="clippy", step="Run clippy")
-        self.fx.workflow(
-            "ci.yml",
-            textwrap.dedent(
-                """\
-                name: ci
-                on: push
-                jobs:
-                  clippy:
-                    runs-on: ubuntu-latest
-                    steps:
-                      - uses: ./.github/actions/sccache
-                      - name: Run clippy
-                        run: cargo clippy
-                """
-            ),
-        )
-        errors = self.fx.errors()
-        self.assertTrue(
-            any(
-                "job 'clippy' uses ./.github/actions/sccache" in e
-                and "Run clippy" in e
-                for e in errors
-            ),
-            errors,
-        )
-
-    def test_composite_in_non_deterministic_job_is_fine_even_with_the_file_present(
-        self,
-    ) -> None:
-        # Same deterministic-checks.json as above, but the composite is used by
-        # a DIFFERENT job that does not own the named step — must not false-positive.
-        self.fx.deterministic_checks(context="clippy", step="Run clippy")
-        self.fx.workflow(
-            "ci.yml",
-            textwrap.dedent(
-                """\
-                name: ci
-                on: push
-                jobs:
-                  clippy:
-                    runs-on: ubuntu-latest
-                    steps:
-                      - name: Run clippy
-                        run: cargo clippy
-                  build:
-                    runs-on: ubuntu-latest
-                    steps:
-                      - uses: ./.github/actions/sccache
-                      - run: cargo build
-                """
-            ),
-        )
-        self.assertEqual(self.fx.errors(), [])
-
-    # ---- composite self-validation --------------------------------------
-
-    def test_missing_composite_file_is_refused(self) -> None:
-        empty_tmpdir = tempfile.TemporaryDirectory()
-        self.addCleanup(empty_tmpdir.cleanup)
-        fx = SccacheFixture(empty_tmpdir.name, composite=None)
-        fx.workflow(
-            "ci.yml",
-            textwrap.dedent(
-                """\
-                name: ci
-                on: push
-                jobs:
-                  build:
-                    runs-on: ubuntu-latest
-                    steps:
-                      - run: cargo build
-                """
-            ),
-        )
-        errors = fx.errors()
-        self.assertTrue(any("does not exist" in e for e in errors), errors)
-
-    def test_composite_not_actually_composite_is_refused(self) -> None:
-        fx = SccacheFixture(
-            self._tmpdir.name,
-            composite=textwrap.dedent(
-                """\
-                name: not composite
-                runs:
-                  using: node20
-                  main: index.js
-                """
-            ),
-        )
-        fx.workflow(
-            "ci.yml",
-            "name: ci\non: push\njobs:\n  build:\n    runs-on: ubuntu-latest\n    steps:\n      - run: x\n",
-        )
-        errors = fx.errors()
-        self.assertTrue(any("must be 'composite'" in e for e in errors), errors)
-
-    def test_composite_missing_env_write_is_refused(self) -> None:
-        fx = SccacheFixture(
-            self._tmpdir.name,
-            composite=textwrap.dedent(
-                """\
-                name: incomplete
-                runs:
-                  using: composite
-                  steps:
-                    - uses: mozilla-actions/sccache-action@7d986dd989559c6ecdb630a3fd2557667be217ad
-                """
-            ),
-        )
-        fx.workflow(
-            "ci.yml",
-            "name: ci\non: push\njobs:\n  build:\n    runs-on: ubuntu-latest\n    steps:\n      - run: x\n",
-        )
-        errors = fx.errors()
-        self.assertTrue(
-            any("exactly two steps" in e for e in errors), errors
-        )
-
-    # ---- (1) normalized local `uses:` path, not raw-string, comparison ---
-
-    def test_trailing_slash_composite_path_is_still_caught_by_rule_d(self) -> None:
-        self.fx.deterministic_checks(context="clippy", step="Run clippy")
-        self.fx.workflow(
-            "ci.yml",
-            textwrap.dedent(
-                """\
-                name: ci
-                on: push
-                jobs:
-                  clippy:
-                    runs-on: ubuntu-latest
-                    steps:
-                      - uses: ./.github/actions/sccache/
-                      - name: Run clippy
-                        run: cargo clippy
-                """
-            ),
-        )
-        errors = self.fx.errors()
-        self.assertTrue(
-            any(
-                "job 'clippy' uses ./.github/actions/sccache" in e
-                and "Run clippy" in e
-                for e in errors
-            ),
-            errors,
-        )
-
-    def test_dotted_composite_path_is_still_caught_by_rule_d(self) -> None:
-        self.fx.deterministic_checks(context="clippy", step="Run clippy")
-        self.fx.workflow(
-            "ci.yml",
-            textwrap.dedent(
-                """\
-                name: ci
-                on: push
-                jobs:
-                  clippy:
-                    runs-on: ubuntu-latest
-                    steps:
-                      - uses: ./.github/actions/./sccache
-                      - name: Run clippy
-                        run: cargo clippy
-                """
-            ),
-        )
-        errors = self.fx.errors()
-        self.assertTrue(
-            any(
-                "job 'clippy' uses ./.github/actions/sccache" in e
-                and "Run clippy" in e
-                for e in errors
-            ),
-            errors,
-        )
-
     # ---- (2) other local composite actions are audited, not just workflows
-
-    def test_other_composite_running_raw_sccache_action_is_refused(self) -> None:
-        self.fx.composite(
-            "leaky",
-            textwrap.dedent(
-                """\
-                name: leaky
-                description: not the sanctioned composite
-                runs:
-                  using: composite
-                  steps:
-                    - uses: mozilla-actions/sccache-action@7d986dd989559c6ecdb630a3fd2557667be217ad
-                """
-            ),
-        )
-        errors = self.fx.errors()
-        self.assertTrue(
-            any("runs the raw" in e and "leaky" in e for e in errors), errors
-        )
 
     def test_other_composite_writing_github_env_is_refused(self) -> None:
         self.fx.composite(
@@ -519,49 +295,6 @@ class TestSccacheWiringRefusals(unittest.TestCase):
         errors = self.fx.errors()
         self.assertTrue(
             any("writes RUSTC_WRAPPER" in e and "sneaky" in e for e in errors), errors
-        )
-
-    def test_other_composite_nesting_sccache_is_reachable_via_rule_d(self) -> None:
-        self.fx.composite(
-            "wrapper",
-            textwrap.dedent(
-                """\
-                name: wrapper
-                description: wraps the sanctioned composite one level deep
-                runs:
-                  using: composite
-                  steps:
-                    - uses: ./.github/actions/sccache
-                """
-            ),
-        )
-        self.fx.deterministic_checks(context="clippy", step="Run clippy")
-        self.fx.workflow(
-            "ci.yml",
-            textwrap.dedent(
-                """\
-                name: ci
-                on: push
-                jobs:
-                  clippy:
-                    runs-on: ubuntu-latest
-                    steps:
-                      - uses: ./.github/actions/wrapper
-                      - name: Run clippy
-                        run: cargo clippy
-                """
-            ),
-        )
-        errors = self.fx.errors()
-        self.assertTrue(
-            any(
-                "job 'clippy' uses" in e
-                and "via" in e
-                and "wrapper" in e
-                and "Run clippy" in e
-                for e in errors
-            ),
-            errors,
         )
 
     # ---- (3) a $GITHUB_ENV write need not use `KEY=` assignment syntax ----
@@ -607,7 +340,7 @@ class TestSccacheWiringRefusals(unittest.TestCase):
                     env:
                       CARGO_BUILD_RUSTC_WRAPPER: sccache
                     steps:
-                      - uses: ./.github/actions/sccache
+                      - run: cargo build
                 """
             ),
         )
@@ -633,13 +366,13 @@ class TestSccacheWiringRefusals(unittest.TestCase):
                   build:
                     runs-on: ubuntu-latest
                     steps:
-                      - uses: mozilla-actions/sccache-action@7d986dd989559c6ecdb630a3fd2557667be217ad
+                      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
                 """
             ),
         )
         errors = self.fx.errors()
         self.assertTrue(
-            any("runs the raw" in e and "nightly.yaml" in e for e in errors), errors
+            any("save-if" in e and "nightly.yaml" in e for e in errors), errors
         )
 
     # ---- (6) container:/services: env scopes are scanned too --------------
@@ -659,7 +392,7 @@ class TestSccacheWiringRefusals(unittest.TestCase):
                       env:
                         RUSTC_WRAPPER: sccache
                     steps:
-                      - uses: ./.github/actions/sccache
+                      - run: cargo build
                 """
             ),
         )
@@ -686,9 +419,9 @@ class TestSccacheWiringRefusals(unittest.TestCase):
                       db:
                         image: postgres
                         env:
-                          SCCACHE_GHA_ENABLED: "true"
+                          RUSTC: /tmp/fake-rustc
                     steps:
-                      - uses: ./.github/actions/sccache
+                      - run: cargo build
                 """
             ),
         )
@@ -696,7 +429,7 @@ class TestSccacheWiringRefusals(unittest.TestCase):
         self.assertTrue(
             any(
                 "job 'build' service 'db' env sets" in e
-                and "sccache_gha_enabled" in e
+                and "'rustc'" in e
                 for e in errors
             ),
             errors,
@@ -716,7 +449,7 @@ class TestSccacheWiringRefusals(unittest.TestCase):
                   build:
                     runs-on: ubuntu-latest
                     steps:
-                      - uses: ./.github/actions/sccache
+                      - run: cargo build
                 """
             ),
         )
@@ -736,7 +469,7 @@ class TestSccacheWiringRefusals(unittest.TestCase):
                   build:
                     runs-on: ubuntu-latest
                     steps:
-                      - uses: ./.github/actions/sccache
+                      - run: cargo build
                       - name: Some step
                         env: ${{ fromJSON(vars.E) }}
                         run: cargo build
@@ -775,7 +508,7 @@ class TestMoldComposite(unittest.TestCase):
     def setUp(self) -> None:
         self._tmpdir = tempfile.TemporaryDirectory()
         self.addCleanup(self._tmpdir.cleanup)
-        self.fx = SccacheFixture(self._tmpdir.name)
+        self.fx = WorkflowFixture(self._tmpdir.name)
 
     def mold_errors(self, content: str) -> list[str]:
         self.fx.composite("mold", content)
@@ -812,10 +545,7 @@ class TestMoldComposite(unittest.TestCase):
     def test_raw_actions_refused_at_a_subpath(self) -> None:
         for uses, needle in (
             ("rui314/setup-mold/sub@10ca16bf91dc22e05ebdc935cad9c75ea248f621", "rui314/setup-mold"),
-            (
-                "Mozilla-Actions/Sccache-Action/x@7d986dd989559c6ecdb630a3fd2557667be217ad",
-                "mozilla-actions/sccache-action",
-            ),
+            ("Rui314/Setup-Mold/x/y@10ca16bf91dc22e05ebdc935cad9c75ea248f621", "rui314/setup-mold"),
         ):
             with self.subTest(uses=uses):
                 self.fx.workflow(
@@ -835,13 +565,13 @@ class TestMoldComposite(unittest.TestCase):
         self.assertFalse(any("runs the raw" in e for e in self.fx.errors()))
 
 
-class TestSccacheWiringClosure(unittest.TestCase):
+class TestRustcWiringClosure(unittest.TestCase):
     """Each class of wiring check 6 must refuse, one fixture per shape."""
 
     def setUp(self) -> None:
         self._tmpdir = tempfile.TemporaryDirectory()
         self.addCleanup(self._tmpdir.cleanup)
-        self.fx = SccacheFixture(self._tmpdir.name)
+        self.fx = WorkflowFixture(self._tmpdir.name)
 
     def assertRefused(self, *needles: str) -> list[str]:
         errors = self.fx.errors()
@@ -859,8 +589,7 @@ class TestSccacheWiringClosure(unittest.TestCase):
     def test_yaml_comment_naming_the_wrapper_is_not_scanned(self) -> None:
         self.fx.workflow(
             "ci.yml",
-            "# a job that wants RUSTC_WRAPPER uses ./.github/actions/sccache\n"
-            + _ci("steps:\n  - uses: ./.github/actions/sccache\n  - run: cargo build\n"),
+            "# no job sets RUSTC_WRAPPER\n" + _ci("steps:\n  - run: cargo build\n"),
         )
         self.assertEqual(self.fx.errors(), [])
 
@@ -899,7 +628,7 @@ class TestSccacheWiringClosure(unittest.TestCase):
     def test_workflow_defaults_run_shell_is_refused(self) -> None:
         self.ci(
             "steps:\n  - run: cargo build\n",
-            top="defaults:\n  run:\n    shell: env SCCACHE_GHA_ENABLED=true bash {0}\n",
+            top="defaults:\n  run:\n    shell: env RUSTC_WRAPPER=sccache bash {0}\n",
         )
         self.assertRefused("ci.yml: workflow-level defaults.run.shell")
 
@@ -967,7 +696,7 @@ class TestSccacheWiringClosure(unittest.TestCase):
     # ---- local `uses:` resolution (F1) -----------------------------------
 
     def test_unresolved_local_action_is_refused(self) -> None:
-        for uses in ("./.github/actions/sccache@main", "./tools/ci/cache", "./.github/actions/nope"):
+        for uses in ("./.github/actions/w@main", "./tools/ci/cache", "./.github/actions/nope"):
             with self.subTest(uses=uses):
                 self.ci(f"steps:\n  - uses: {uses}\n")
                 self.assertRefused("does not exist")
@@ -995,59 +724,51 @@ class TestSccacheWiringClosure(unittest.TestCase):
     def test_action_yaml_extension_is_resolved(self) -> None:
         _write(
             os.path.join(self.fx.root, "actions", "w", "action.yaml"),
-            "runs:\n  using: composite\n  steps:\n    - uses: mozilla-actions/sccache-action@7d986dd989559c6ecdb630a3fd2557667be217ad\n",
+            "runs:\n  using: composite\n  steps:\n    - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6\n",
         )
         self.ci("steps:\n  - uses: ./.github/actions/w\n")
-        self.assertRefused("./.github/actions/w/action.yml", "runs the raw")
+        self.assertRefused("./.github/actions/w/action.yml", "save-if None")
 
-    def test_composite_outside_github_actions_reaching_sccache_hits_rule_d(self) -> None:
-        self.fx.deterministic_checks(context="clippy", step="Run clippy")
-        self.repo_action(
-            "tools/ci/cache",
-            "runs:\n  using: composite\n  steps:\n    - uses: ./.github/actions/sccache\n",
-        )
-        self.ci("steps:\n  - uses: ./tools/ci/cache\n  - name: Run clippy\n    run: cargo clippy\n")
-        self.assertRefused("job 'clippy' uses", "via ./tools/ci/cache", "Run clippy")
+    def test_composite_outside_github_actions_is_audited(self) -> None:
+        self.repo_action("tools/ci/cache", "runs:\n  using: composite\n  steps:\n    - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6\n")
+        self.ci("steps:\n  - uses: ./tools/ci/cache\n  - run: cargo build\n")
+        self.assertRefused("./tools/ci/cache/action.yml", "save-if None")
 
-    def test_nested_path_composite_running_raw_action_is_refused(self) -> None:
-        self.fx.composite("x/y", "runs:\n  using: composite\n  steps:\n    - uses: mozilla-actions/sccache-action@7d986dd989559c6ecdb630a3fd2557667be217ad\n")
+    def test_trailing_slash_and_dotted_local_paths_resolve(self) -> None:
+        self.fx.composite("w", "runs:\n  using: composite\n  steps: []\n")
+        for uses in ("./.github/actions/w/", "./.github/actions/./w"):
+            with self.subTest(uses=uses):
+                self.ci(f"steps:\n  - uses: {uses}\n  - run: cargo build\n")
+                self.assertEqual(self.fx.errors(), [])
+
+    def test_nested_path_composite_is_audited(self) -> None:
+        self.fx.composite("x/y", "runs:\n  using: composite\n  steps:\n    - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6\n")
         self.ci("steps:\n  - uses: ./.github/actions/x/y\n")
-        self.assertRefused("./.github/actions/x/y/action.yml", "runs the raw")
-
-    def test_case_variant_sanctioned_path_hits_rule_d(self) -> None:
-        self.fx.deterministic_checks(context="clippy", step="Run clippy")
-        self.ci(
-            "steps:\n  - uses: ./.github/actions/sccache\n  - uses: ./.github/Actions/SCCACHE\n"
-            "  - name: Run clippy\n    run: cargo clippy\n"
-        )
-        self.assertRefused("job 'clippy' uses ./.github/actions/sccache", "Run clippy")
+        self.assertRefused("./.github/actions/x/y/action.yml", "save-if None")
 
     def test_nesting_past_the_bound_is_refused(self) -> None:
-        self.fx.deterministic_checks(context="clippy", step="Run clippy")
         limit = verify_manifest.LOCAL_ACTION_DEPTH_LIMIT
         for i in range(limit + 5):
             self.fx.composite(
                 f"c{i}", f"runs:\n  using: composite\n  steps:\n    - uses: ./.github/actions/c{i + 1}\n"
             )
         self.fx.composite(
-            f"c{limit + 5}", "runs:\n  using: composite\n  steps:\n    - uses: ./.github/actions/sccache\n"
+            f"c{limit + 5}", "runs:\n  using: composite\n  steps: []\n"
         )
-        self.ci("steps:\n  - uses: ./.github/actions/c0\n  - name: Run clippy\n    run: cargo clippy\n")
-        self.assertRefused("nesting exceeds")
+        self.ci("steps:\n  - uses: ./.github/actions/c0\n  - run: cargo build\n")
+        self.assertRefused("nesting exceeds", "the chain cannot be audited")
 
     def test_nesting_at_the_bound_is_decided(self) -> None:
-        self.fx.deterministic_checks(context="clippy", step="Run clippy")
         limit = verify_manifest.LOCAL_ACTION_DEPTH_LIMIT
         for i in range(limit - 1):
             self.fx.composite(
                 f"c{i}", f"runs:\n  using: composite\n  steps:\n    - uses: ./.github/actions/c{i + 1}\n"
             )
         self.fx.composite(
-            f"c{limit - 1}", "runs:\n  using: composite\n  steps:\n    - uses: ./.github/actions/sccache\n"
+            f"c{limit - 1}", "runs:\n  using: composite\n  steps: []\n"
         )
-        self.ci("steps:\n  - uses: ./.github/actions/c0\n  - name: Run clippy\n    run: cargo clippy\n")
-        errors = self.assertRefused("job 'clippy' uses", "via ./.github/actions/c0")
-        self.assertFalse(any("nesting exceeds" in e for e in errors), errors)
+        self.ci("steps:\n  - uses: ./.github/actions/c0\n  - run: cargo build\n")
+        self.assertEqual(self.fx.errors(), [])
 
     def test_local_action_cycle_is_refused(self) -> None:
         self.fx.composite("a", "runs:\n  using: composite\n  steps:\n    - uses: ./.github/actions/b\n")
@@ -1068,28 +789,17 @@ class TestSccacheWiringClosure(unittest.TestCase):
 
     # ---- byte-exact local-action identity ---------------------------------
 
-    def test_referenced_case_variant_of_sanctioned_composite_is_refused(self) -> None:
-        self.fx.composite(
-            "SCCACHE",
-            "runs:\n  using: composite\n  steps:\n    - uses: mozilla-actions/sccache-action@7d986dd989559c6ecdb630a3fd2557667be217ad\n"
-            "    - shell: bash\n      run: echo \"RUSTC_WRAPPER=\" >> \"$GITHUB_ENV\"\n",
-        )
-        self.ci("steps:\n  - uses: ./.github/actions/SCCACHE\n")
-        errors = self.assertRefused("'./.github/actions/SCCACHE' is case-fold-equal to '.github/actions/sccache'")
-        self.assertTrue(any("holds case-fold-equal entries 'SCCACHE' and 'sccache'" in e for e in errors), errors)
+    def test_referenced_case_variant_composite_is_refused(self) -> None:
+        self.fx.composite("w", "runs:\n  using: composite\n  steps: []\n")
+        self.fx.composite("W", "runs:\n  using: composite\n  steps: []\n")
+        self.ci("steps:\n  - uses: ./.github/actions/W\n")
+        self.assertRefused("holds case-fold-equal entries 'W' and 'w'")
 
     def test_unreferenced_case_variant_sibling_is_refused(self) -> None:
-        self.fx.composite("SCCACHE", "runs:\n  using: composite\n  steps: []\n")
-        self.ci("steps:\n  - uses: ./.github/actions/sccache\n  - run: cargo build\n")
-        self.assertRefused("holds case-fold-equal entries 'SCCACHE' and 'sccache'")
-
-    def test_case_variant_exemption_needs_the_sanctioned_file_absent_too(self) -> None:
-        fx = SccacheFixture(self._tmpdir.name + "/bare", composite=None)
-        fx.composite("SCCACHE", "runs:\n  using: composite\n  steps:\n    - uses: mozilla-actions/sccache-action@7d986dd989559c6ecdb630a3fd2557667be217ad\n")
-        fx.workflow("ci.yml", _ci("steps:\n  - uses: ./.github/actions/SCCACHE\n"))
-        errors = fx.errors()
-        self.assertTrue(any("case-fold-equal" in e or "runs the raw" in e for e in errors), errors)
-        self.assertFalse(any("uses ./.github/actions/sccache" in e for e in errors), errors)
+        self.fx.composite("w", "runs:\n  using: composite\n  steps: []\n")
+        self.fx.composite("W", "runs:\n  using: composite\n  steps: []\n")
+        self.ci("steps:\n  - uses: ./.github/actions/w\n  - run: cargo build\n")
+        self.assertRefused("holds case-fold-equal entries 'W' and 'w'")
 
     def test_reference_differing_in_case_from_disk_is_refused(self) -> None:
         self.repo_action("tools/w", "runs:\n  using: composite\n  steps: []\n")
@@ -1118,7 +828,7 @@ class TestSccacheWiringClosure(unittest.TestCase):
             ),
             "service": (
                 {},
-                f"services:\n  db:\n    image: pg\n    env:\n      K: SCCACHE_DIR\nsteps:\n  - {write}",
+                f"services:\n  db:\n    image: pg\n    env:\n      K: RUSTC_WRAPPER\nsteps:\n  - {write}",
                 "job 'clippy' services.db.env.K",
             ),
         }
@@ -1160,121 +870,6 @@ class TestSccacheWiringClosure(unittest.TestCase):
     def test_benign_rustc_mentions_pass(self) -> None:
         self.ci("env:\n  RUSTFLAGS: -Dwarnings\nsteps:\n  - run: rustc --version && cargo build\n")
         self.assertEqual(self.fx.errors(), [])
-
-    # ---- strict positive proof of the sanctioned composite (F2) ----------
-
-    def _sanctioned(self, steps: str) -> None:
-        _write(
-            os.path.join(self.fx.root, "actions", "sccache", "action.yml"),
-            "runs:\n  using: composite\n  steps:\n" + textwrap.indent(textwrap.dedent(steps), "    "),
-        )
-        self.ci("steps:\n  - run: cargo build\n")
-
-    def test_composite_writing_only_one_var_is_refused(self) -> None:
-        self._sanctioned(
-            "- uses: mozilla-actions/sccache-action@7d986dd989559c6ecdb630a3fd2557667be217ad\n"
-            "- shell: bash\n  run: echo SCCACHE_GHA_ENABLED=true >> $GITHUB_ENV\n"
-        )
-        self.assertRefused("step 2 is not the canonical wiring step")
-
-    def test_composite_loose_write_is_not_proof(self) -> None:
-        self._sanctioned(
-            "- uses: mozilla-actions/sccache-action@7d986dd989559c6ecdb630a3fd2557667be217ad\n"
-            "- shell: bash\n  run: |\n"
-            "    # RUSTC_WRAPPER=sccache SCCACHE_GHA_ENABLED=true $GITHUB_ENV\n"
-            "    printf '%s=%s\\n' RUSTC_WRAPPER sccache >> \"$GITHUB_ENV\"\n"
-        )
-        self.assertRefused("step 2 is not the canonical wiring step")
-
-    def test_composite_conditional_wiring_is_not_proof(self) -> None:
-        self._sanctioned(
-            "- uses: mozilla-actions/sccache-action@7d986dd989559c6ecdb630a3fd2557667be217ad\n"
-            "- shell: bash\n  if: false\n  run: |\n"
-            "    echo \"RUSTC_WRAPPER=sccache\" >> \"$GITHUB_ENV\"\n"
-            "    echo \"SCCACHE_GHA_ENABLED=true\" >> \"$GITHUB_ENV\"\n"
-        )
-        self.assertRefused("step 2 is not the canonical wiring step")
-
-    def test_composite_conditional_install_is_not_proof(self) -> None:
-        self._sanctioned(
-            "- uses: mozilla-actions/sccache-action@7d986dd989559c6ecdb630a3fd2557667be217ad\n  if: false\n"
-            "- shell: bash\n  run: |\n"
-            "    echo \"RUSTC_WRAPPER=sccache\" >> \"$GITHUB_ENV\"\n"
-            "    echo \"SCCACHE_GHA_ENABLED=true\" >> \"$GITHUB_ENV\"\n"
-        )
-        self.assertRefused("step 1 must be exactly")
-
-    _WIRE = (
-        "- name: Wire rustc through sccache\n  shell: bash\n  run: |\n"
-        + textwrap.indent(verify_manifest.SCCACHE_WIRE_RUN, "    ")
-    )
-
-    def test_canonical_composite_with_other_install_ref_passes(self) -> None:
-        self._sanctioned("- uses: mozilla-actions/sccache-action@0123456789abcdef0123456789abcdef01234567\n" + self._WIRE)
-        self.assertEqual(self.fx.errors(), [])
-
-    def test_composite_wiring_under_dead_branch_is_refused(self) -> None:
-        self._sanctioned(
-            "- uses: mozilla-actions/sccache-action@7d986dd989559c6ecdb630a3fd2557667be217ad\n"
-            "- name: Wire rustc through sccache\n  shell: bash\n  run: |\n"
-            "    if false; then\n"
-            + textwrap.indent(verify_manifest.SCCACHE_WIRE_RUN, "    ")
-            + "    fi\n"
-        )
-        self.assertRefused("step 2 is not the canonical wiring step")
-
-    def test_composite_later_step_unwiring_is_refused(self) -> None:
-        self._sanctioned(
-            "- uses: mozilla-actions/sccache-action@7d986dd989559c6ecdb630a3fd2557667be217ad\n"
-            + self._WIRE
-            + "- shell: bash\n  run: echo \"RUSTC_WRAPPER=\" >> \"$GITHUB_ENV\"\n"
-        )
-        self.assertRefused("exactly two steps")
-
-    def test_composite_nested_local_uses_is_refused(self) -> None:
-        self.repo_action(
-            "tools/act",
-            "runs:\n  using: composite\n  steps:\n    - shell: bash\n      run: echo \"RUSTC_WRAPPER=\" >> \"$GITHUB_ENV\"\n",
-        )
-        self._sanctioned("- uses: mozilla-actions/sccache-action@7d986dd989559c6ecdb630a3fd2557667be217ad\n" + self._WIRE + "- uses: ./tools/act\n")
-        self.assertRefused("exactly two steps")
-        self._sanctioned("- uses: ./tools/act\n" + self._WIRE)
-        self.assertRefused("step 1 must be exactly")
-
-    def test_composite_install_step_with_extra_keys_is_refused(self) -> None:
-        for extra in ("  with:\n    version: v0.8.0\n", "  continue-on-error: true\n", "  name: x\n"):
-            with self.subTest(extra=extra):
-                self._sanctioned("- uses: mozilla-actions/sccache-action@7d986dd989559c6ecdb630a3fd2557667be217ad\n" + extra + self._WIRE)
-                self.assertRefused("step 1 must be exactly")
-
-    def test_composite_reordered_or_env_bearing_wire_is_refused(self) -> None:
-        self._sanctioned(self._WIRE + "- uses: mozilla-actions/sccache-action@7d986dd989559c6ecdb630a3fd2557667be217ad\n")
-        self.assertRefused("step 1 must be exactly")
-        self._sanctioned(
-            "- uses: mozilla-actions/sccache-action@7d986dd989559c6ecdb630a3fd2557667be217ad\n" + self._WIRE + "  env:\n    RUSTC_WRAPPER: ''\n"
-        )
-        self.assertRefused("step 2 is not the canonical wiring step")
-
-    def test_composite_extra_document_or_runs_keys_are_refused(self) -> None:
-        body = "  steps:\n" + textwrap.indent("- uses: mozilla-actions/sccache-action@7d986dd989559c6ecdb630a3fd2557667be217ad\n" + self._WIRE, "    ")
-        path = os.path.join(self.fx.root, "actions", "sccache", "action.yml")
-        self.ci("steps:\n  - run: cargo build\n")
-        _write(path, "inputs:\n  x:\n    default: y\nruns:\n  using: composite\n" + body)
-        self.assertRefused("keys ['inputs'] are outside the canonical composite")
-        _write(path, "runs:\n  using: composite\n  post: x\n" + body)
-        self.assertRefused("`runs:` keys must be exactly")
-
-    # ---- deterministic-checks SSOT (F4) -----------------------------------
-
-    def test_missing_deterministic_checks_file_is_refused(self) -> None:
-        os.remove(os.path.join(self.fx.root, "ci", "deterministic-checks.json"))
-        self.ci("steps:\n  - uses: ./.github/actions/sccache\n  - name: Run clippy\n    run: cargo clippy\n")
-        self.assertRefused("cannot establish the deterministic check steps")
-
-    def test_malformed_deterministic_checks_file_is_refused(self) -> None:
-        _write(os.path.join(self.fx.root, "ci", "deterministic-checks.json"), '{"checks": "x"}')
-        self.ci("steps:\n  - run: cargo build\n")
-        self.assertRefused("cannot establish the deterministic check steps")
 
     # ---- malformed shapes (F5) --------------------------------------------
 
@@ -1354,6 +949,69 @@ class TestSccacheWiringClosure(unittest.TestCase):
         self.assertRefused("ci.yml is not valid YAML")
 
 
+class TestRustCacheSavesMainOnly(unittest.TestCase):
+    """Check 6: every `Swatinem/rust-cache` step, in a workflow or a local
+    composite, saves only from `main` — pull request runs restore, never write."""
+
+    def setUp(self) -> None:
+        self._tmpdir = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmpdir.cleanup)
+        self.fx = WorkflowFixture(self._tmpdir.name)
+
+    def cache_step(self, uses: str = "Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6", with_: str | None = None) -> None:
+        step = f"steps:\n  - uses: {uses}\n"
+        if with_ is not None:
+            step += "    with:\n" + textwrap.indent(with_, "      ")
+        self.fx.workflow("ci.yml", _ci(step + "  - run: cargo build\n"))
+
+    def refusals(self) -> list[str]:
+        return [e for e in self.fx.errors() if "uses Swatinem/rust-cache with save-if" in e]
+
+    def test_exact_main_only_save_if_passes(self) -> None:
+        self.cache_step(with_="save-if: ${{ github.ref == 'refs/heads/main' }}\n")
+        self.assertEqual(self.fx.errors(), [])
+
+    def test_missing_with_is_refused(self) -> None:
+        self.cache_step()
+        (e,) = self.refusals()
+        self.assertIn("job 'clippy'", e)
+        self.assertIn("save-if None", e)
+
+    def test_with_lacking_save_if_is_refused(self) -> None:
+        self.cache_step(with_="shared-key: x\n")
+        self.assertEqual(len(self.refusals()), 1)
+
+    def test_other_save_if_values_are_refused(self) -> None:
+        for value in (
+            "true",
+            "'true'",
+            "${{ github.ref == 'refs/heads/dev' }}",
+            "${{ github.ref != 'refs/heads/main' }}",
+            "${{github.ref == 'refs/heads/main'}}",
+            "${{ github.ref == 'refs/heads/main' || true }}",
+        ):
+            with self.subTest(value=value):
+                self.cache_step(with_=f"save-if: {value}\n")
+                self.assertEqual(len(self.refusals()), 1, self.fx.errors())
+
+    def test_case_and_subpath_variants_are_refused(self) -> None:
+        for uses in ("swatinem/RUST-CACHE@6323deb102c322ba6fcbdcafc7e3dddab59af2b6", "Swatinem/rust-cache/sub@6323deb102c322ba6fcbdcafc7e3dddab59af2b6"):
+            with self.subTest(uses=uses):
+                self.cache_step(uses=uses)
+                self.assertEqual(len(self.refusals()), 1, self.fx.errors())
+
+    def test_rust_cache_inside_local_composite_is_refused(self) -> None:
+        self.fx.composite("c", "runs:\n  using: composite\n  steps:\n    - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6\n")
+        self.fx.workflow("ci.yml", _ci("steps:\n  - uses: ./.github/actions/c\n"))
+        (e,) = self.refusals()
+        self.assertIn("./.github/actions/c/action.yml", e)
+
+    def test_live_workflows_all_save_main_only(self) -> None:
+        errors: list[str] = []
+        check_workflow_steps(errors, root=os.path.dirname(HERE))
+        self.assertFalse([e for e in errors if "rust-cache" in e], errors)
+
+
 _HELPER_CALL = 'bash "$GITHUB_WORKSPACE/.github/ci/github-env.sh"'
 _REQS = '"$GITHUB_WORKSPACE/.github/ci/requirements.txt"'
 _PINNED_SHA = "0123456789abcdef0123456789abcdef01234567"
@@ -1366,7 +1024,7 @@ class TestPinnedInputsAndEnvFileWrites(unittest.TestCase):
     def setUp(self) -> None:
         self._tmpdir = tempfile.TemporaryDirectory()
         self.addCleanup(self._tmpdir.cleanup)
-        self.fx = SccacheFixture(self._tmpdir.name)
+        self.fx = WorkflowFixture(self._tmpdir.name)
 
     def assertRefused(self, *needles: str) -> list[str]:
         errors = self.fx.errors()
@@ -1637,16 +1295,6 @@ class TestPinnedInputsAndEnvFileWrites(unittest.TestCase):
         self.ci("steps:\n  - uses: ./.github/actions/w\n")
         self.assertRefused("./.github/actions/w/action.yml", "not pinned by content")
 
-    def test_sanctioned_composite_tag_pinned_install_is_refused(self) -> None:
-        _write(
-            os.path.join(self.fx.root, "actions", "sccache", "action.yml"),
-            VALID_COMPOSITE.replace(
-                "sccache-action@7d986dd989559c6ecdb630a3fd2557667be217ad", "sccache-action@v0.0.9"
-            ),
-        )
-        self.ci("steps:\n  - run: cargo build\n")
-        self.assertRefused("step 1 must be exactly")
-
     def test_unpinned_job_images_are_refused(self) -> None:
         for body, needle in (
             ("container: rust:1\n", "job 'clippy' container image 'rust:1'"),
@@ -1765,7 +1413,7 @@ class TestTypedExpressionAndShellReads(unittest.TestCase):
     def setUp(self) -> None:
         self._tmpdir = tempfile.TemporaryDirectory()
         self.addCleanup(self._tmpdir.cleanup)
-        self.fx = SccacheFixture(self._tmpdir.name)
+        self.fx = WorkflowFixture(self._tmpdir.name)
 
     def assertRefused(self, *needles: str) -> list[str]:
         errors = self.fx.errors()
@@ -1943,7 +1591,7 @@ class TestToolOrderingAndClosedShells(unittest.TestCase):
     def setUp(self) -> None:
         self._tmpdir = tempfile.TemporaryDirectory()
         self.addCleanup(self._tmpdir.cleanup)
-        self.fx = SccacheFixture(self._tmpdir.name)
+        self.fx = WorkflowFixture(self._tmpdir.name)
 
     def assertRefused(self, *needles: str) -> list[str]:
         errors = self.fx.errors()
@@ -2572,7 +2220,7 @@ class TestToolOrderingAndClosedShells(unittest.TestCase):
     def test_live_masked_tool_jobs_parse_as_output_jobs(self) -> None:
         vm = verify_manifest
         errors: list[str] = []
-        wfs = {wf.fname: wf for wf in vm._load_sccache_workflows(vm.REPO_ROOT, errors)}
+        wfs = {wf.fname: wf for wf in vm._load_workflows(vm.REPO_ROOT, errors)}
         self.assertEqual(errors, [])
         for fname, job_id, masking in (
             ("ci.yml", "cancel-on-cheap-red", {"if"}),
@@ -2877,7 +2525,7 @@ class TestMergeQueueSafety(unittest.TestCase):
 
     def setUp(self) -> None:
         self._tmp = tempfile.TemporaryDirectory()
-        self.fx = SccacheFixture(self._tmp.name)
+        self.fx = WorkflowFixture(self._tmp.name)
 
     def tearDown(self) -> None:
         self._tmp.cleanup()
@@ -3087,7 +2735,7 @@ class TestReleaseOnlySkipAsPass(unittest.TestCase):
 
     def setUp(self) -> None:
         self._tmp = tempfile.TemporaryDirectory()
-        self.fx = SccacheFixture(self._tmp.name)
+        self.fx = WorkflowFixture(self._tmp.name)
 
     def tearDown(self) -> None:
         self._tmp.cleanup()
@@ -3412,7 +3060,7 @@ class TestPullRequestTarget(unittest.TestCase):
 
     def setUp(self) -> None:
         self._tmp = tempfile.TemporaryDirectory()
-        self.fx = SccacheFixture(self._tmp.name)
+        self.fx = WorkflowFixture(self._tmp.name)
 
     def tearDown(self) -> None:
         self._tmp.cleanup()
@@ -3600,7 +3248,7 @@ class TestHeadFreeExemption(unittest.TestCase):
     def setUp(self) -> None:
         self._tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self._tmp.cleanup)
-        self.fx = SccacheFixture(self._tmp.name)
+        self.fx = WorkflowFixture(self._tmp.name)
 
     def errors(self, content: str) -> list[str]:
         self.fx.workflow("prt.yml", content)
@@ -3627,7 +3275,7 @@ class TestHeadFreeExemption(unittest.TestCase):
     def test_live_workspaces(self) -> None:
         vm = verify_manifest
         errors: list[str] = []
-        wfs = {wf.fname: wf.workspace for wf in vm._load_sccache_workflows(vm.REPO_ROOT, errors)}
+        wfs = {wf.fname: wf.workspace for wf in vm._load_workflows(vm.REPO_ROOT, errors)}
         self.assertEqual(errors, [])
         self.assertEqual(sorted(f for f, w in wfs.items() if w is vm.Workspace.NONE), ["trust-root-diff.yml"])
         self.assertIs(wfs["ci.yml"], vm.Workspace.CHECKOUT)
