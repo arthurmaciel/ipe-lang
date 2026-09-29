@@ -2335,26 +2335,79 @@ _PAIR_A = {"context": "a", "integration_id": 15368}
 _RS_A = json.dumps([_PAIR_A]).encode()
 
 
+def _status_rule(checks: list | None = None, **over: object) -> dict:
+    params = {
+        "strict_required_status_checks_policy": False,
+        "do_not_enforce_on_create": False,
+        "required_status_checks": [_PAIR_A] if checks is None else checks,
+    }
+    params.update(over)
+    return {"type": "required_status_checks", "parameters": params}
+
+
+def _pr_rule(**over: object) -> dict:
+    params = {
+        "required_approving_review_count": 0,
+        "dismiss_stale_reviews_on_push": True,
+        "required_reviewers": [],
+        "require_code_owner_review": False,
+        "dismissal_restriction": {"enabled": False, "allowed_actors": []},
+        "require_last_push_approval": False,
+        "required_review_thread_resolution": True,
+        "require_extra_approval_for_unattributed_changes": True,
+        "allowed_merge_methods": ["merge", "squash", "rebase"],
+    }
+    params.update(over)
+    return {"type": "pull_request", "parameters": params}
+
+
+def _queue_rule(**over: object) -> dict:
+    params = {
+        "merge_method": "SQUASH",
+        "max_entries_to_build": 5,
+        "min_entries_to_merge": 1,
+        "max_entries_to_merge": 5,
+        "min_entries_to_merge_wait_minutes": 5,
+        "grouping_strategy": "ALLGREEN",
+        "check_response_timeout_minutes": 90,
+    }
+    params.update(over)
+    return {"type": "merge_queue", "parameters": params}
+
+
 def _ruleset(checks: list | None = None, **over: object) -> dict:
-    """A ruleset GET body requiring `checks` (default: context `a`)."""
+    """A ruleset GET body, in the live response's full shape, requiring
+    `checks` (default: context `a`)."""
     rs = {
         "id": 22326541,
+        "name": "main-protection",
         "target": "branch",
+        "source_type": "Repository",
+        "source": "o/r",
         "enforcement": "active",
-        "conditions": {"ref_name": {"include": ["~DEFAULT_BRANCH"], "exclude": []}},
-        "rules": [
-            {"type": "deletion"},
-            {
-                "type": "required_status_checks",
-                "parameters": {
-                    "strict_required_status_checks_policy": False,
-                    "required_status_checks": [_PAIR_A] if checks is None else checks,
-                },
-            },
-        ],
+        "conditions": {"ref_name": {"exclude": [], "include": ["~DEFAULT_BRANCH"]}},
+        "rules": [{"type": "deletion"}, {"type": "non_fast_forward"}, _pr_rule(), _status_rule(checks), _queue_rule()],
+        "node_id": "n",
+        "created_at": "t",
+        "updated_at": "t",
+        "bypass_actors": [],
+        "current_user_can_bypass": "never",
+        "_links": {"self": {"href": "h"}},
     }
     rs.update(over)
     return rs
+
+
+def _with_rules(*swap: tuple[str, object]) -> dict:
+    """`_ruleset()` with the rule of each named type replaced (None drops it)."""
+    rules = []
+    table = dict(swap)
+    for rule in _ruleset()["rules"]:
+        if rule["type"] not in table:
+            rules.append(rule)
+        elif table[rule["type"]] is not None:
+            rules.append(table[rule["type"]])
+    return _ruleset(rules=rules)
 
 
 class TestSsotOutputTools(unittest.TestCase):
@@ -2479,6 +2532,10 @@ class TestSsotOutputTools(unittest.TestCase):
         rc, stdout, _ = self.run_tool("check_required_set.py", "--live", os.path.join(self.dir, "rs.json"))
         self.assertEqual(rc, 0)
         self.assertIn("ruleset 22326541 match", stdout)
+        # The viewer-dependent keys are pinned when present, not required.
+        bare = {k: v for k, v in _ruleset().items() if k not in ("source_type", "current_user_can_bypass")}
+        self.put("rs.json", json.dumps(bare).encode())
+        self.assertEqual(self.run_tool("check_required_set.py", "--live", os.path.join(self.dir, "rs.json"))[0], 0)
 
     def test_check_required_set_refuses_a_drifted_live_ruleset(self) -> None:
         self.put("check-manifest.yml", b"checks:\n- context: a\n  disposition: gate\n")
@@ -2487,7 +2544,8 @@ class TestSsotOutputTools(unittest.TestCase):
         def checks(*items: dict) -> dict:
             return _ruleset(checks=list(items))
 
-        rsc = {"type": "required_status_checks", "parameters": {"required_status_checks": []}}
+        rsc = _status_rule([])
+        without_queue = _with_rules(("merge_queue", None))
         for label, rs in (
             ("missing context", checks()),
             ("extra context", checks(_PAIR_A, {"context": "b", "integration_id": 15368})),
@@ -2502,8 +2560,30 @@ class TestSsotOutputTools(unittest.TestCase):
             ("not the default branch", _ruleset(conditions={"ref_name": {"include": ["refs/heads/x"], "exclude": []}})),
             ("excludes a ref", _ruleset(conditions={"ref_name": {"include": ["~DEFAULT_BRANCH"], "exclude": ["x"]}})),
             ("no conditions", _ruleset(conditions=None)),
-            ("no status rule", _ruleset(rules=[{"type": "deletion"}])),
-            ("two status rules", _ruleset(rules=[_ruleset()["rules"][1], rsc])),
+            ("no status rule", _with_rules(("required_status_checks", None))),
+            ("two status rules", _ruleset(rules=_ruleset()["rules"] + [rsc])),
+            ("no merge queue", without_queue),
+            ("no deletion rule", _with_rules(("deletion", None))),
+            ("a bypass actor", _ruleset(bypass_actors=[{"actor_id": 5, "actor_type": "RepositoryRole", "bypass_mode": "always"}])),
+            ("viewer can bypass", _ruleset(current_user_can_bypass="always")),
+            ("organization ruleset", _ruleset(source_type="Organization")),
+            ("strict policy on", _with_rules(("required_status_checks", _status_rule(strict_required_status_checks_policy=True)))),
+            ("strict policy as 0", _with_rules(("required_status_checks", _status_rule(strict_required_status_checks_policy=0)))),
+            ("not enforced on create", _with_rules(("required_status_checks", _status_rule(do_not_enforce_on_create=True)))),
+            ("status param unread", _with_rules(("required_status_checks", _status_rule(frob=1)))),
+            ("status param missing", _with_rules(("required_status_checks", {"type": "required_status_checks", "parameters": {"required_status_checks": [_PAIR_A]}}))),
+            ("head-green queue", _with_rules(("merge_queue", _queue_rule(grouping_strategy="HEADGREEN")))),
+            ("queue param unread", _with_rules(("merge_queue", _queue_rule(frob=1)))),
+            ("queue param mistyped", _with_rules(("merge_queue", _queue_rule(max_entries_to_build="5")))),
+            ("review param unread", _with_rules(("pull_request", _pr_rule(frob=True)))),
+            ("review param mistyped", _with_rules(("pull_request", _pr_rule(required_approving_review_count=True)))),
+            ("deletion with parameters", _with_rules(("deletion", {"type": "deletion", "parameters": {}}))),
+            ("unexamined rule type", _ruleset(rules=_ruleset()["rules"] + [{"type": "update"}])),
+            ("untyped rule", _ruleset(rules=_ruleset()["rules"] + [{}])),
+            ("unexamined top-level key", _ruleset(frob=1)),
+            ("unexamined condition", _ruleset(conditions={"ref_name": {"include": ["~DEFAULT_BRANCH"], "exclude": []}, "repository_name": {}})),
+            ("unexamined ref key", _ruleset(conditions={"ref_name": {"include": ["~DEFAULT_BRANCH"], "exclude": [], "x": 1}})),
+            ("no bypass_actors", {k: v for k, v in _ruleset().items() if k != "bypass_actors"}),
             ("rules not a list", _ruleset(rules={})),
             ("not an object", []),
         ):

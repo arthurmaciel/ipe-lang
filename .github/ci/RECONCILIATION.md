@@ -23,18 +23,23 @@ the pair, not the name, is what every comparison below checks.
 | `check_required_set.py --fetch` | manifest ⇄ the live ruleset | `ruleset-drift` job in `ci.yml` |
 
 The live ruleset is `main-protection` (`RULESET_ID` in
-`check_required_set.py`). `--fetch` refuses it unless it is an active branch
-ruleset on `~DEFAULT_BRANCH` with no exclusions, carrying exactly one
-`required_status_checks` rule whose pairs equal the derived set in both
-directions. `ruleset-drift` is a `nightly-gate`: a red nightly makes the
+`check_required_set.py`). `--fetch` parses it into a closed `Ruleset`: every
+key the API returns is examined and pinned or named as display metadata, and
+any other key, rule type, or rule parameter is refused. It must be an active
+branch ruleset on `~DEFAULT_BRANCH` with no exclusions and no
+`bypass_actors`, carrying `deletion`, `non_fast_forward`, `pull_request`,
+`merge_queue` (grouping `ALLGREEN`), and `required_status_checks` once each,
+the last with pairs equal to the derived set in both directions. A key GitHub
+adds to the response turns `ruleset-drift` red until this check examines it. `ruleset-drift` is a `nightly-gate`: a red nightly makes the
 required `nightly-green` context hold every merge until the ruleset is
 reconciled. On a pull request it is not required; there it flags a
 required-set change the ruleset has not taken yet.
 
 `strict_required_status_checks_policy` ("require branches to be up to date")
-is not part of the derived set and is not compared. It stays `false`: the
-merge queue already runs the required checks on the combined tree of each
-queued change, which is the property the strict policy would buy.
+is pinned `false` and `do_not_enforce_on_create` is pinned `false`. The strict
+policy stays off because the `ALLGREEN` merge queue already runs the required
+checks on the combined tree of each queued change, which is the property the
+strict policy would buy; the queue's grouping is pinned for that reason.
 
 ## Changing the required set
 
