@@ -29,18 +29,16 @@ handleRun : Handler
 handleRun req =
     case Json.decodeString (Json.field "rust" Json.string) (Server.body req) of
         Err _ ->
-            Task.succeed
-                (Server.json (runResponse False False "Malformed request: expected {\"rust\": String}."))
+            "Malformed request: expected {\"rust\": String}." |> runResponse False False |> Server.json |> Task.succeed
 
         Ok rust ->
             if String.length rust > 16777216 then
-                Task.succeed
-                    (Server.json (runResponse False False "Program too large (over 16 MiB)."))
+                "Program too large (over 16 MiB)." |> runResponse False False |> Server.json |> Task.succeed
 
             else
                 Runner.runEmittedRust rust
                     |> Task.map (\r -> Server.json (runResponse r.ok r.unsandboxed r.output))
-                    |> Task.onError (\e -> Task.succeed (Server.json (runResponse False False ("Server error: " ++ Error.message e))))
+                    |> Task.onError (\e -> "Server error: " ++ Error.message e |> runResponse False False |> Server.json |> Task.succeed)
 
 
 -- The wire carries the EMITTED Rust, which includes the whole

@@ -72,7 +72,7 @@ stageProject emittedRust =
                 in
                 case Path.fromString baseDir of
                     Err _ ->
-                        Task.fail (Error.unexpected ("invalid cache path: " ++ baseDir))
+                        "invalid cache path: " ++ baseDir |> Error.unexpected |> Task.fail
 
                     Ok basePath ->
                         File.mkdirAll basePath
@@ -166,7 +166,7 @@ writeOne base name content =
     in
     case Path.fromString fullPath of
         Err _ ->
-            Task.fail (Error.unexpected ("invalid staged path: " ++ fullPath))
+            "invalid staged path: " ++ fullPath |> Error.unexpected |> Task.fail
 
         Ok target ->
             case Path.fromString (Path.dir target) of
@@ -180,7 +180,14 @@ writeOne base name content =
 
 outcomeDecoder : Json.Decoder RawOutcome
 outcomeDecoder =
-    Json.map2 groupAll
+    [ Json.map Just (Json.field "error" Json.string)
+                , Json.succeed Nothing
+                ] |> Json.oneOf |> Json.map2 groupTail
+            (Json.oneOf
+                [ Json.map Just (Json.field "exit" Json.int)
+                , Json.succeed Nothing
+                ]
+            ) |> Json.map2 groupAll
         (Json.map3 groupBody
             (Json.map2 groupHead
                 (Json.field "ok" Json.bool)
@@ -193,18 +200,6 @@ outcomeDecoder =
             )
             (Json.oneOf
                 [ Json.map Just (Json.field "run" phaseDecoder)
-                , Json.succeed Nothing
-                ]
-            )
-        )
-        (Json.map2 groupTail
-            (Json.oneOf
-                [ Json.map Just (Json.field "exit" Json.int)
-                , Json.succeed Nothing
-                ]
-            )
-            (Json.oneOf
-                [ Json.map Just (Json.field "error" Json.string)
                 , Json.succeed Nothing
                 ]
             )

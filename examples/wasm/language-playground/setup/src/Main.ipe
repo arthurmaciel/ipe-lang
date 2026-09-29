@@ -115,7 +115,7 @@ wasmPath root =
                         Task.succeed (dir ++ "/wasm32-unknown-unknown/release/ipe_wasm.wasm")
 
                     Err err ->
-                        Task.fail (Error.unexpected ("could not read cargo metadata: " ++ Error.toString err)))
+                        "could not read cargo metadata: " ++ Error.toString err |> Error.unexpected |> Task.fail)
 
 
 bindGen : String -> Task Error String
@@ -156,7 +156,7 @@ targetDir root =
                         Task.succeed dir
 
                     Err err ->
-                        Task.fail (Error.unexpected ("could not read cargo metadata: " ++ Error.toString err)))
+                        "could not read cargo metadata: " ++ Error.toString err |> Error.unexpected |> Task.fail)
 
 
 buildJailRunner : String -> Task Error String
