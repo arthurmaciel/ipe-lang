@@ -55,9 +55,8 @@ fn write_single(name: &str, source: &str) -> Option<PathBuf> {
 }
 
 fn out_dir(name: &str) -> PathBuf {
-    let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
-        .join("i858-update-base-out")
-        .join(name);
+    let out =
+        PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("i858-update-base-out-{name}"));
     let _ = std::fs::remove_dir_all(&out);
     out
 }

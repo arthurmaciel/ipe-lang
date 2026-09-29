@@ -317,13 +317,24 @@ impl HeldDir {
     /// Already marked: nothing to do. Empty: the marker is written. Anything
     /// else is refused with [`OutputRefusal::NotIpeOwned`] and left untouched.
     ///
+    /// A directory ipe creates is marked before anything else is written into
+    /// it, so a listing that finds other entries after the marker was read
+    /// absent means a concurrent claim may have marked and begun filling it in
+    /// between: the marker is read once more before refusing. The accepted set
+    /// is unchanged — a directory is adopted only when it is empty or carries a
+    /// genuine marker.
+    ///
     /// # Errors
     /// [`OutputRefusal::NotIpeOwned`]; [`CliError::Io`] on a filesystem failure.
     pub fn adopt(&self) -> Result<(), CliError> {
         if self.has_marker()? {
+            return Ok(());
+        }
+        if self.is_empty()? {
+            return self.write_marker();
+        }
+        if self.has_marker()? {
             Ok(())
-        } else if self.is_empty()? {
-            self.write_marker()
         } else {
             Err(OutputRefusal::NotIpeOwned(self.path.clone()).into())
         }

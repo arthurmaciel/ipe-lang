@@ -60,9 +60,7 @@ enum Outcome {
 
 fn compile(name: &str, source: &str, target: Target) -> Outcome {
     let entry = crate::support::expect_scratch_entry(name, write_entry(name, source));
-    let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
-        .join("negsuite-out")
-        .join(name);
+    let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("negsuite-out-{name}"));
     let _ = std::fs::remove_dir_all(&out);
     let runtime = crate::support::expect_runtime(name, ipe::resolve_runtime());
     let options = BuildOptions {
@@ -80,9 +78,7 @@ fn compile(name: &str, source: &str, target: Target) -> Outcome {
 /// so the `Debug.*` gate (IPE-L0140) fires without spawning a real release build.
 fn compile_production(name: &str, source: &str) -> Outcome {
     let entry = crate::support::expect_scratch_entry(name, write_entry(name, source));
-    let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
-        .join("negsuite-prod-out")
-        .join(name);
+    let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("negsuite-prod-out-{name}"));
     let _ = std::fs::remove_dir_all(&out);
     let runtime = crate::support::expect_runtime(name, ipe::resolve_runtime());
     let options = BuildOptions {
@@ -124,9 +120,7 @@ fn compile_project(name: &str, files: &[(&str, &str)]) -> Outcome {
     for (fname, contents) in files {
         crate::support::expect_scratch_step(name, std::fs::write(src.join(fname), contents));
     }
-    let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
-        .join("negsuite-proj-out")
-        .join(name);
+    let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("negsuite-proj-out-{name}"));
     let _ = std::fs::remove_dir_all(&out);
     let runtime = crate::support::expect_runtime(name, ipe::resolve_runtime());
     let entry = src.join("Main.ipe");
@@ -1011,9 +1005,7 @@ fn compile_with_files(name: &str, source: &str, extra: &[(&str, &str)]) -> Outco
     }
     let entry = dir.join("Main.ipe");
     crate::support::expect_scratch_step(name, std::fs::write(&entry, source));
-    let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
-        .join("negsuite-ce-out")
-        .join(name);
+    let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("negsuite-ce-out-{name}"));
     let _ = std::fs::remove_dir_all(&out);
     let runtime = crate::support::expect_runtime(name, ipe::resolve_runtime());
     match ipe::build_with_options(&entry, &out, &runtime, BuildOptions::default()) {
@@ -3214,9 +3206,7 @@ fn row_generic_in_scope_web_embed_refused_undetermined() {
     let Some(entry) = write_entry(name, WEB_EMBED_ROW_IN_SCOPE) else {
         return;
     };
-    let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
-        .join("negsuite-out")
-        .join(name);
+    let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("negsuite-out-{name}"));
     let _ = std::fs::remove_dir_all(&out);
     let Ok(runtime) = ipe::resolve_runtime() else {
         return;
@@ -3287,9 +3277,7 @@ fn unpinned_msg_web_embed_refused() {
     let Some(entry) = write_entry(name, WEB_EMBED_UNPINNED_MSG) else {
         return;
     };
-    let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
-        .join("negsuite-out")
-        .join(name);
+    let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("negsuite-out-{name}"));
     let _ = std::fs::remove_dir_all(&out);
     let Ok(runtime) = ipe::resolve_runtime() else {
         return;
