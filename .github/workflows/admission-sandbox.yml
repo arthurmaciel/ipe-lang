@@ -67,7 +67,7 @@ jobs:
       code: ${{ steps.filter.outputs.code }}
       release_only: ${{ steps.release.outputs.release_only }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           # The tested merge commit and its base parent, for the release-only diff;
           # a merge-group run needs history back to the queue base for the filter.
@@ -85,7 +85,7 @@ jobs:
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           REPO: ${{ github.repository }}
         run: python3 .github/ci/release_only.py
-      - uses: dorny/paths-filter@v3
+      - uses: dorny/paths-filter@0e4a8c6effa4802afeda77dc8d303f8176d7dfad # v3
         id: filter
         with:
           # A merge-group run diffs against the queue base, not the default branch.
@@ -137,7 +137,7 @@ jobs:
       && needs.changes.outputs.release_only != 'true'
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
 
       - name: Install bubblewrap and python3
         run: |
@@ -182,7 +182,7 @@ jobs:
       && needs.changes.outputs.release_only != 'true'
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
 
       - name: Install bubblewrap and python3
         run: |
@@ -226,7 +226,7 @@ jobs:
       && needs.changes.outputs.release_only != 'true'
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
 
       - name: Make scripts executable
         run: chmod +x tools/scripts/admission/jail-macos.sh tests/fixtures/admission/untrusted-build.sh
@@ -273,7 +273,7 @@ jobs:
       && needs.changes.outputs.release_only != 'true'
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
 
       # GHA windows-2022 runners run Moby Engine (not Docker Desktop) and do NOT
       # provide a Windows-container-mode Docker daemon, so the process-isolation
@@ -378,10 +378,10 @@ jobs:
       && needs.changes.outputs.release_only != 'true'
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
 
       - name: Run admission jail inside FreeBSD VM
-        uses: vmactions/freebsd-vm@v1.5.4
+        uses: vmactions/freebsd-vm@d0518f912576ae759075aa00fb9fe27037940271 # v1.5.4
         with:
           usesh: true
           # synctime=false skips the NTP sync that can stall the VM boot on
