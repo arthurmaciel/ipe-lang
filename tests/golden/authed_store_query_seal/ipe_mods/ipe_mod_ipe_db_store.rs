@@ -692,18 +692,15 @@ pub(crate) fn user_ipe_db_store_cond_fragment_in(
         }
         IpeDbStoreCond::NotCond(inner) => {
             let inner = *inner;
-            ipe_result_map(
-                crate::user_ipe_db_store_cond_fragment_in(view, inner),
-                {
-                    let __ipe_fn: Box<
-                        dyn Fn(ipe_runtime::db::SqlFragment) -> ipe_runtime::db::SqlFragment
-                            + Send
-                            + Sync
-                            + 'static,
-                    > = Box::new(sql_not);
-                    __ipe_fn
-                },
-            )
+            ipe_result_map(crate::user_ipe_db_store_cond_fragment_in(view, inner), {
+                let __ipe_fn: Box<
+                    dyn Fn(ipe_runtime::db::SqlFragment) -> ipe_runtime::db::SqlFragment
+                        + Send
+                        + Sync
+                        + 'static,
+                > = Box::new(sql_not);
+                __ipe_fn
+            })
         }
     }
 }
@@ -1629,9 +1626,9 @@ pub(crate) fn user_ipe_db_store_and_policy(
                             (b.clone()).read.clone(),
                             (e.clone()).read.clone(),
                         ])),
-                        update: IpeDbStorePred::PAll(Box::new(
-                            vec![(b).update.clone(), (e).update.clone()],
-                        )),
+                        update: IpeDbStorePred::PAll(
+                            Box::new(vec![(b).update.clone(), (e).update.clone()]),
+                        ),
                     },
                 )
             }

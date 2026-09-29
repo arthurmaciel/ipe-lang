@@ -2068,8 +2068,7 @@ fn body_block_wraps(
         {
             return innermost_args_width(elems, o, o.saturating_add(e)) <= FN_CALL_WIDTH;
         }
-        return trial(out, TrialReach::FirstLine, |out, _| {
-            open_arm_block(cfg, indent, start_col, out);
+        return arm_block_trial(cfg, indent, start_col, out, |out| {
             let c = current_col(out);
             render_at(open, cfg, indent + 4, c, true, out);
             let open_end = current_col(out);
@@ -2078,10 +2077,28 @@ fn body_block_wraps(
             innermost_args_width(elems, open_end, elems_end) <= FN_CALL_WIDTH
         });
     }
-    trial(out, TrialReach::FirstLine, |out, _| {
-        open_arm_block(cfg, indent, start_col, out);
+    arm_block_trial(cfg, indent, start_col, out, |out| {
         let c = current_col(out);
         fits_single_line(body, cfg.no_reserve(), c, indent + 4, out)
+    })
+}
+
+/// Trial the brace-wrapped arm layout: open the arm block, then run `measure` on
+/// the body's first line inside it.
+///
+/// The block opens with a newline, so the stop mark is set only after it: a
+/// first-line trial begun before the break would already hold its line and lay
+/// nothing of the body out.
+fn arm_block_trial<T>(
+    cfg: RenderConfig,
+    indent: usize,
+    start_col: usize,
+    out: &mut String,
+    measure: impl FnOnce(&mut String) -> T,
+) -> T {
+    trial(out, TrialReach::Whole, |out, _| {
+        open_arm_block(cfg, indent, start_col, out);
+        with_stop(out, TrialReach::FirstLine, |out, _| measure(out))
     })
 }
 

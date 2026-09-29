@@ -478,45 +478,33 @@ pub(crate) fn ipe_main() -> IpeTask<()> {
         },
         task_and_then(
             server_listen(8000i64, vec![
-                server_get_authed(
-                    "/my/docs".to_string(),
-                    crate::main_auth_cfg(),
-                    {
-                        let __ipe_fn: Box<
-                            dyn Fn(ServerRequest, ipe_runtime::principal::Principal) -> IpeTask<ServerResponse>
-                                + Send
-                                + Sync
-                                + 'static,
-                        > = Box::new(crate::main_handle_my_docs);
-                        __ipe_fn
-                    },
-                ),
-                server_get_authed(
-                    "/shared/docs".to_string(),
-                    crate::main_auth_cfg(),
-                    {
-                        let __ipe_fn: Box<
-                            dyn Fn(ServerRequest, ipe_runtime::principal::Principal) -> IpeTask<ServerResponse>
-                                + Send
-                                + Sync
-                                + 'static,
-                        > = Box::new(crate::main_handle_shared_docs);
-                        __ipe_fn
-                    },
-                ),
-                server_get_authed(
-                    "/mask/docs".to_string(),
-                    crate::main_auth_cfg(),
-                    {
-                        let __ipe_fn: Box<
-                            dyn Fn(ServerRequest, ipe_runtime::principal::Principal) -> IpeTask<ServerResponse>
-                                + Send
-                                + Sync
-                                + 'static,
-                        > = Box::new(crate::main_handle_mask_docs);
-                        __ipe_fn
-                    },
-                ),
+                server_get_authed("/my/docs".to_string(), crate::main_auth_cfg(), {
+                    let __ipe_fn: Box<
+                        dyn Fn(ServerRequest, ipe_runtime::principal::Principal) -> IpeTask<ServerResponse>
+                            + Send
+                            + Sync
+                            + 'static,
+                    > = Box::new(crate::main_handle_my_docs);
+                    __ipe_fn
+                }),
+                server_get_authed("/shared/docs".to_string(), crate::main_auth_cfg(), {
+                    let __ipe_fn: Box<
+                        dyn Fn(ServerRequest, ipe_runtime::principal::Principal) -> IpeTask<ServerResponse>
+                            + Send
+                            + Sync
+                            + 'static,
+                    > = Box::new(crate::main_handle_shared_docs);
+                    __ipe_fn
+                }),
+                server_get_authed("/mask/docs".to_string(), crate::main_auth_cfg(), {
+                    let __ipe_fn: Box<
+                        dyn Fn(ServerRequest, ipe_runtime::principal::Principal) -> IpeTask<ServerResponse>
+                            + Send
+                            + Sync
+                            + 'static,
+                    > = Box::new(crate::main_handle_mask_docs);
+                    __ipe_fn
+                }),
             ]),
             Box::new(move |arg_22: ()| -> IpeTask<()> {
                 io_println("authed-store-query-seal".to_string())
