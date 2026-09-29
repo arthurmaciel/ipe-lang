@@ -49,7 +49,7 @@ jobs:
       # An unset output (classifier crash) reads as `true`: absent proof, run.
       playground: ${{ steps.classify.outputs.playground != 'false' }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           # The tested merge commit and its base parent, for the changed-path diff;
           # a merge-group run needs history back to the queue base.
@@ -72,12 +72,12 @@ jobs:
     if: needs.changes.outputs.playground == 'true' || (github.event_name != 'pull_request' && github.event_name != 'merge_group')
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: ./.github/actions/rust-toolchain-pinned
         with:
           targets: wasm32-unknown-unknown
       - uses: ./.github/actions/sccache
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
 
       - name: Build ipe-wasm (wasm32-unknown-unknown)
         run: cargo build -p ipe-wasm --target wasm32-unknown-unknown --release
@@ -95,11 +95,11 @@ jobs:
     env:
       IPE_RUNTIME_DIR: ${{ github.workspace }}/src/runtime/rust/src
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: ./.github/actions/rust-toolchain-pinned
       - uses: ./.github/actions/sccache
-      - uses: Swatinem/rust-cache@v2
-      - uses: taiki-e/install-action@nextest
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+      - uses: taiki-e/install-action@23d41aa71228a2692ee31bb433f070fd4bdc6661 # nextest
 
       - name: Install bubblewrap
         run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends bubblewrap

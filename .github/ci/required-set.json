@@ -1,6 +1,7 @@
 [
   "admission-changes",
   "artifact-guard",
+  "build-tools",
   "capabilities-docs-drift",
   "cargo-deny",
   "changes",
