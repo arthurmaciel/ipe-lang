@@ -12,7 +12,7 @@ import Ipe.String as String
 import Ipe.Task as Task
 import Ipe.Time as Time
 import Ipe.Time.Timestamp as Timestamp exposing (Timestamp)
-import Lib.Settings as Settings
+import Lib.Settings as Settings exposing (DbLocation)
 import Migrations exposing (all)
 
 
@@ -99,14 +99,16 @@ open : Task.Task Error Db
 open =
     do
         loc <- Settings.reviewDb
-        db <- Db.open "sqlite" (Settings.reviewUrl loc)
+        db <- openAt loc
         migrate db
         Task.succeed db
 
 
-openAt : String -> Task.Task Error Db
-openAt path =
-    Db.open "sqlite" path
+-- The review database at a parsed location, opened through the one review URL
+-- builder (`Settings.reviewUrl`); no raw URL reaches the driver.
+openAt : DbLocation -> Task.Task Error Db
+openAt loc =
+    Db.open "sqlite" (Settings.reviewUrl loc)
 
 
 migrate : Db -> Task.Task Error (List String)
