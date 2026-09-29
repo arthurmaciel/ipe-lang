@@ -64,6 +64,7 @@ always matches the version you run. `ipe doc <key>` looks up any entity by key:
 
 ```sh
 ipe doc Ipe.List        # a module's types and values with their signatures
+ipe doc List.map        # one function: its signature and doc-comment
 ipe doc case            # a language construct
 ipe doc shapes          # a topic
 ipe doc IPE-N0004       # a diagnostic code, with its explanation and fix
@@ -71,8 +72,8 @@ ipe doc version         # a CLI command
 ipe doc list            # every stdlib module (and your project's)
 ```
 
-A key that matches several entries prints the candidates, each with its
-kind-qualified key (`symbol:List.map`) to pass back to `ipe doc`.
+A key that names no entry exactly prints the closest matches, each as the
+exact `ipe doc …` command that opens it.
 
 `ipe doc serve` builds the whole reference — the stdlib plus your project's own
 modules and doc-comments — as an HTML site and serves it read-only on loopback
