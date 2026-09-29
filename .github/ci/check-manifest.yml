@@ -40,6 +40,17 @@
 #                 inline-script.
 # `.github/ci/local_gate.py` parses and verifies these; the verifier refuses a
 # gate without one and a local command that drifts from CI.
+#
+# `release-only` (required on every entry whose producer runs on pull requests
+# or in the merge queue) is what the entry does on a release-please PR whose
+# diff is version metadata only. Exactly one key, with a non-empty reason:
+#   run   Version-sensitive or cheap: executes in full. No job `if:` names
+#         `release_only`, and no job needs one that skips on it.
+#   pass  Version-independent: a gate job executes the trivial-pass step and
+#         skips the rest; a non-gate job may skip as a whole.
+# Merge-group and push runs are never release-only, so every tier still runs
+# before and after the merge. Check 13 of `ci/verify-manifest.py` holds each
+# producer to its declaration and refuses a missing or contradicted one.
 
 version: 1
 
@@ -48,6 +59,8 @@ checks:
   - context: fmt
     disposition: gate
     producer: ci.yml
+    release-only:
+      run: cheap; runs on every diff
     local:
       tier: quick
       run:
@@ -55,6 +68,8 @@ checks:
   - context: clippy
     disposition: gate
     producer: ci.yml
+    release-only:
+      pass: lints read source, which a version bump leaves as the gated main
     local:
       tier: quick
       run:
@@ -62,6 +77,8 @@ checks:
   - context: runtime-feature-combos
     disposition: gate
     producer: ci.yml
+    release-only:
+      pass: feature-combo clippy reads source, not the version
     local:
       tier: affected
       run:
@@ -75,6 +92,8 @@ checks:
   - context: windows-check
     disposition: gate
     producer: ci.yml
+    release-only:
+      pass: the Windows build reads source, not the version
     local:
       ci-only: platform
     guards: >-
@@ -83,6 +102,8 @@ checks:
   - context: quick-check
     disposition: gate
     producer: ci.yml
+    release-only:
+      run: compiles the workspace against the bumped Cargo.toml and Cargo.lock
     local:
       tier: quick
       run:
@@ -90,6 +111,8 @@ checks:
   - context: test
     disposition: gate
     producer: ci.yml
+    release-only:
+      run: the SEAL suite, which reads CARGO_PKG_VERSION
     local:
       tier: affected
       run:
@@ -100,6 +123,8 @@ checks:
   - context: artifact-guard
     disposition: gate
     producer: ci.yml
+    release-only:
+      run: cheap; a release PR must not commit build artifacts
     local:
       tier: quick
       run:
@@ -107,16 +132,22 @@ checks:
   - context: manifest-lock-consistency
     disposition: gate
     producer: ci.yml
+    release-only:
+      run: the version-sensitive lock check
     local:
       tier: quick
       run:
         - .github/ci/manifest-lock-consistency.sh
     guards: >-
-      Cargo.lock pins the first-party crates to the version Cargo.toml declares,
-      so a release can never ship a lock that fails `cargo build --locked`.
+      Cargo.lock pins every version-inheriting workspace member to the version
+      Cargo.toml declares, and the release-please release commit bumps exactly
+      those entries, so a release can never ship a lock that fails
+      `cargo build --locked`.
   - context: diagnostic-tone
     disposition: gate
     producer: ci.yml
+    release-only:
+      pass: diagnostic text holds no version
     local:
       tier: quick
       run:
@@ -125,6 +156,8 @@ checks:
   - context: "explain-page example gate (ADR 0059)"
     disposition: gate
     producer: ci.yml
+    release-only:
+      pass: explain pages hold no version
     local:
       tier: affected
       run:
@@ -136,6 +169,8 @@ checks:
   - context: "doc-string example gate"
     disposition: gate
     producer: ci.yml
+    release-only:
+      pass: doc strings hold no version
     local:
       tier: affected
       run:
@@ -147,6 +182,8 @@ checks:
   - context: "first-party check floor (ipe type-check only)"
     disposition: gate
     producer: ci.yml
+    release-only:
+      pass: type-checking first-party Ipe reads no version
     local:
       tier: affected
       run:
@@ -158,11 +195,15 @@ checks:
   - context: "first-party shapes (build gate)"
     disposition: gate
     producer: ci.yml
+    release-only:
+      pass: the shapes build reads source, not the version; seal-smoke proves the version pin
     local:
       ci-only: inline-script
   - context: wasm-floor
     disposition: gate
     producer: ci.yml
+    release-only:
+      pass: the wasm runtime build reads source, not the version
     local:
       tier: full
       run:
@@ -174,12 +215,16 @@ checks:
   - context: seal-smoke
     disposition: gate
     producer: ci.yml
+    release-only:
+      run: proves an emitted project builds against the bumped runtime version pin
     local:
       ci-only: inline-script
     guards: SEAL
   - context: build-tools
     disposition: gate
     producer: ci.yml
+    release-only:
+      pass: its only consumers are the docs-drift gates, which pass on a version bump
     local:
       covered-by: stdlib-docs-drift
     guards: >-
@@ -191,6 +236,8 @@ checks:
   - context: stdlib-docs-drift
     disposition: gate
     producer: ci.yml
+    release-only:
+      pass: generated stdlib docs hold no version
     local:
       tier: quick
       run:
@@ -200,6 +247,8 @@ checks:
   - context: env-docs-drift
     disposition: gate
     producer: ci.yml
+    release-only:
+      pass: generated env docs hold no version
     local:
       tier: quick
       run:
@@ -209,6 +258,8 @@ checks:
   - context: capabilities-docs-drift
     disposition: gate
     producer: ci.yml
+    release-only:
+      pass: generated capability docs hold no version
     local:
       tier: quick
       run:
@@ -218,6 +269,8 @@ checks:
   - context: cli-docs-drift
     disposition: gate
     producer: ci.yml
+    release-only:
+      pass: generated CLI docs hold no version
     local:
       tier: quick
       run:
@@ -227,6 +280,8 @@ checks:
   - context: requirements-docs-drift
     disposition: gate
     producer: ci.yml
+    release-only:
+      pass: generated requirements docs hold no version
     local:
       tier: quick
       run:
@@ -236,6 +291,8 @@ checks:
   - context: cli-transcripts-drift
     disposition: gate
     producer: ci.yml
+    release-only:
+      pass: CLI goldens normalise the version to <VERSION>
     local:
       tier: quick
       run:
@@ -245,6 +302,8 @@ checks:
   - context: markdown-parity
     disposition: gate
     producer: ci.yml
+    release-only:
+      pass: the markdown parity snapshot holds no version
     local:
       tier: quick
       run:
@@ -253,6 +312,8 @@ checks:
   - context: runtime-full-features
     disposition: gate
     producer: ci.yml
+    release-only:
+      pass: the full-feature runtime suite reads source, not the version
     local:
       tier: affected
       run:
@@ -261,6 +322,8 @@ checks:
   - context: registry-admission
     disposition: gate
     producer: ci.yml
+    release-only:
+      run: author- and event-gated, never keyed on the diff
     local:
       tier: affected
       run:
@@ -279,6 +342,8 @@ checks:
   - context: cancel-on-cheap-red
     disposition: informational
     producer: ci.yml
+    release-only:
+      run: fires only on a red need, whatever the diff
     owner: ci
     note: >-
       PR-only watcher that cancels a run once a deterministic cheap gate is
@@ -289,6 +354,8 @@ checks:
   - context: trust-root-diff
     disposition: informational
     producer: trust-root-diff.yml
+    release-only:
+      run: cheap trust-boundary check, never keyed on the diff
     owner: maintainer
     note: >-
       Fails an outside PR that touches a path .github/CODEOWNERS owns until a
@@ -299,6 +366,8 @@ checks:
   - context: panic-scan
     disposition: gate
     producer: ci.yml
+    release-only:
+      run: cheap; runs on every diff
     local:
       tier: quick
       run:
@@ -309,6 +378,8 @@ checks:
   - context: cargo-deny
     disposition: gate
     producer: security.yml
+    release-only:
+      run: audits the bumped Cargo.lock
     local:
       tier: affected
       run:
@@ -317,24 +388,32 @@ checks:
   - context: playground-jail
     disposition: gate
     producer: playground.yml
+    release-only:
+      pass: the playground jail runs source, not the version
     local:
       ci-only: privileged
     guards: Security
   - context: "linux-x64 (seccomp socket-deny + bubblewrap)"
     disposition: gate
     producer: admission-sandbox.yml
+    release-only:
+      pass: the admission jail runs source, not the version
     local:
       ci-only: privileged
     guards: Security
   - context: "linux-arm64 (seccomp socket-deny + bubblewrap)"
     disposition: gate
     producer: admission-sandbox.yml
+    release-only:
+      pass: the admission jail runs source, not the version
     local:
       ci-only: platform
     guards: Security
   - context: "macos-arm64 (sandbox-exec / Seatbelt)"
     disposition: gate
     producer: admission-sandbox.yml
+    release-only:
+      pass: the admission jail runs source, not the version
     local:
       ci-only: platform
     guards: Security
@@ -346,6 +425,8 @@ checks:
   - context: nightly-green
     disposition: gate
     producer: nightly-green.yml
+    release-only:
+      run: reads run history, never the diff
     local:
       ci-only: run-history
     guards: >-
@@ -360,6 +441,8 @@ checks:
   - context: grammar
     disposition: gate
     producer: tree-sitter-ipe.yml
+    release-only:
+      run: one job with a step-level path filter that already passes a diff outside the grammar
     local:
       tier: full
       run:
@@ -371,6 +454,8 @@ checks:
   - context: editors-configure
     disposition: gate
     producer: ci.yml
+    release-only:
+      pass: the editor configure scripts read no version
     local:
       tier: full
       run:
@@ -385,6 +470,8 @@ checks:
   - context: e2e-all
     disposition: gate
     producer: ci.yml
+    release-only:
+      pass: the emitted-build shards read source, not the version; seal-smoke proves the version pin
     local:
       tier: full
       run:
@@ -398,6 +485,8 @@ checks:
   - context: seal-slice
     disposition: gate
     producer: ci.yml
+    release-only:
+      pass: a release-only diff runs no e2e shards, so there is no shard plan to prove
     local:
       covered-by: e2e-all
     guards: SEAL
@@ -407,19 +496,27 @@ checks:
   - context: asan-all
     disposition: nightly-gate
     producer: ci.yml
+    release-only:
+      pass: sanitizer shards read source, not the version
     guards: Soundness
     aggregates: [asan]
   - context: tsan
     disposition: nightly-gate
     producer: ci.yml
+    release-only:
+      pass: the sanitizer run reads source, not the version
     guards: Soundness
   - context: "seal-modset (vendored emit model)"
     disposition: nightly-gate
     producer: ci.yml
+    release-only:
+      pass: the vendored emit model reads source, not the version
     guards: SEAL
   - context: "browser-e2e (Ipe.Browser geo+clipboard — headless Playwright)"
     disposition: nightly-gate
     producer: ci.yml
+    release-only:
+      run: author- and event-gated, never keyed on the diff
     guards: Security
 
   # ── Cross-platform jail proofs — nightly-gate (Security §1) ───────────────
@@ -432,18 +529,26 @@ checks:
   - context: "linux-x64-tier2 (bwrap+seccomp — the real Linux jail proof)"
     disposition: nightly-gate
     producer: ci.yml
+    release-only:
+      run: author- and event-gated, never keyed on the diff
     guards: Security
   - context: "linux-arm64-tier2 (fifth platform — fail-closed refuse-to-certify proof)"
     disposition: nightly-gate
     producer: ci.yml
+    release-only:
+      pass: the jail proof runs source, not the version
     guards: Security
   - context: "windows-x64 (Docker Windows container, process isolation)"
     disposition: nightly-gate
     producer: admission-sandbox.yml
+    release-only:
+      pass: the admission jail runs source, not the version
     guards: Security
   - context: "freebsd-x64 (jail(8) inside vmactions VM)"
     disposition: nightly-gate
     producer: admission-sandbox.yml
+    release-only:
+      pass: the admission jail runs source, not the version
     guards: Security
 
   # ── C-free / static portability — nightly-gate + informational ────────────
@@ -498,18 +603,26 @@ checks:
   - context: "install-smoke (ubuntu-latest)"
     disposition: informational
     producer: install-smoke.yml
+    release-only:
+      run: path-filtered to the installer, which a version bump never touches
     owner: release
   - context: "install-smoke (macos-latest)"
     disposition: informational
     producer: install-smoke.yml
+    release-only:
+      run: path-filtered to the installer, which a version bump never touches
     owner: release
   - context: "install-smoke (windows-latest)"
     disposition: informational
     producer: install-smoke.yml
+    release-only:
+      run: path-filtered to the installer, which a version bump never touches
     owner: release
   - context: "install-smoke (freebsd)"
     disposition: informational
     producer: install-smoke.yml
+    release-only:
+      run: path-filtered to the installer, which a version bump never touches
     owner: release
 
   # ── Docs deploy — informational ───────────────────────────────────────────
@@ -521,6 +634,8 @@ checks:
   - context: build
     disposition: informational
     producer: playground.yml
+    release-only:
+      pass: the wasm bundle is built from source, not the version
     owner: docs
     note: playground.yml build leg; playground-jail is the Security gate.
 
@@ -535,6 +650,8 @@ checks:
   - context: changes
     disposition: gate
     producer: ci.yml
+    release-only:
+      run: the classifier that computes release_only
     local:
       ci-only: classifier
     guards: >-
@@ -544,6 +661,8 @@ checks:
   - context: admission-changes
     disposition: gate
     producer: admission-sandbox.yml
+    release-only:
+      run: the classifier that computes release_only
     local:
       ci-only: classifier
     guards: >-
@@ -551,6 +670,8 @@ checks:
   - context: playground-changes
     disposition: gate
     producer: playground.yml
+    release-only:
+      run: the classifier that computes release_only
     local:
       ci-only: classifier
     guards: >-

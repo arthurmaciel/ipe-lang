@@ -52,21 +52,17 @@ jobs:
           # The release PR targets main — where the release commit + tag live.
           target-branch: main
 
-  # Keep Cargo.lock in sync with whichever version Cargo.toml was bumped to.
-  #
-  # release-please updates Cargo.toml via the generic extra-files marker but
-  # never touches Cargo.lock, so the release PR carries a lock still pinned to
-  # the previous version — `cargo build --locked` then fails post-release and
-  # the manifest-lock-consistency gate (correctly) reds the PR. This job runs on
-  # the same push, checks out the *release branch* (NOT the default branch),
-  # relocks the workspace members, and commits the synced lock onto the PR so
-  # the gate greens. It re-runs on every release-please refresh, so the branch
-  # ends each cycle consistent even though release-please force-push discards
-  # the prior lock commit.
+  # Backstop for the release commit's Cargo.lock bump. release-please bumps
+  # Cargo.toml (generic marker) and every version-inheriting member's
+  # Cargo.lock entry (the `toml` extra-file) in one commit, so the release
+  # branch is consistent from its first push and this job finds nothing to
+  # commit. `manifest-lock-consistency` holds that extra-file to the member set;
+  # should the lock still disagree, this job relocks the workspace members on
+  # the release branch (NOT the default branch) and commits the result.
   #
   # The branch name comes from the `pr` JSON's `headBranchName`: the action
-  # exposes no scalar branch output. (Reading a non-existent `pr_branch` output
-  # is what silently checked out the default branch and made this a no-op.)
+  # exposes no scalar branch output, and a non-existent output reads empty,
+  # which would check out the default branch.
   sync-cargo-lock:
     needs: release-please
     # Only when a release PR is open. On the merged-PR run release_created=true

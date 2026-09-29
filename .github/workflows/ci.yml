@@ -23,9 +23,15 @@ name: Build & test
 #     them all; any other path runs them; a developer runs the same set locally
 #     to match CI.
 #   • RELEASE-ONLY PR — a same-repo PR whose diff is only release-please version
-#     metadata (`changes.release_only`, .github/ci/release_only.py) skips the
-#     heavy emitted-build/SEAL/sanitizer tiers: its tree is the already-gated
-#     `main` plus a version bump. The version-sensitive gates still run.
+#     metadata (`changes.release_only`, .github/ci/release_only.py) runs only
+#     the version-sensitive gates (`test`, `quick-check`, the lock checks,
+#     seal-smoke, cargo-deny): its tree is the already-gated `main` plus a
+#     version bump. Every other gate takes the trivial-pass shape (an executed
+#     first step, the rest skipped) and a non-gate job skips outright. Each
+#     context declares which it is (`release-only: run | pass`) in
+#     .github/ci/check-manifest.yml; verify-manifest check 13 holds the
+#     workflow to that declaration. A merge-group or push run is never
+#     release-only, so it runs every tier.
 #   • NIGHTLY SCHEDULE — the checks that a typical code change cannot break, or
 #     that depend on a flaky external environment: registry-admission (publish/
 #     registry INFRASTRUCTURE), browser-e2e (headless Playwright/Chromium — the
@@ -161,10 +167,10 @@ jobs:
       - name: Reject committed build artifacts
         run: .github/ci/artifact-guard.sh
 
-  # Cargo.lock must agree with the version Cargo.toml declares. Fail-closed
-  # backstop to the release-please sync-cargo-lock job: a version-desynced tree
-  # cannot merge, so a release never ships with a stale lock even if the sync job
-  # loses its race. Pure git + ripgrep, no toolchain — fast required PR path.
+  # Cargo.lock must agree with the version Cargo.toml declares, and the
+  # release-please release commit must bump both together: a version-desynced
+  # tree cannot merge, so a release never ships with a stale lock. Stdlib
+  # Python, no toolchain — fast required PR path.
   manifest-lock-consistency:
     runs-on: ubuntu-latest
     steps:
@@ -187,18 +193,27 @@ jobs:
     needs: changes
     # Change-gated: a prose-only PR (`code` false) skips
     # clippy; it always runs on push/nightly.
-    if: needs.changes.outputs.code == 'true' || (github.event_name != 'pull_request' && github.event_name != 'merge_group')
+    if: needs.changes.outputs.code == 'true' || (github.event_name != 'pull_request' && github.event_name != 'merge_group') || needs.changes.outputs.release_only == 'true'
     steps:
+      - name: Release-please version/changelog-only diff — trivial pass
+        if: needs.changes.outputs.release_only == 'true'
+        run: |
+          echo "clippy: release-please-only diff (lints read source, not the version string); trivial pass, not a skip."
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        if: needs.changes.outputs.release_only != 'true'
       - uses: ./.github/actions/rust-toolchain-pinned
+        if: needs.changes.outputs.release_only != 'true'
         with:
           components: clippy
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        if: needs.changes.outputs.release_only != 'true'
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Fetch crates
+        if: needs.changes.outputs.release_only != 'true'
         run: cargo fetch
       - name: Run clippy
+        if: needs.changes.outputs.release_only != 'true'
         run: cargo clippy --offline --all-targets --workspace -- -D warnings
 
   # Token-level scan for authored abrupt-failure constructs in the compiler and
@@ -266,17 +281,28 @@ jobs:
   windows-check:
     runs-on: windows-latest
     needs: changes
-    if: needs.changes.outputs.code == 'true' || (github.event_name != 'pull_request' && github.event_name != 'merge_group')
+    if: needs.changes.outputs.code == 'true' || (github.event_name != 'pull_request' && github.event_name != 'merge_group') || needs.changes.outputs.release_only == 'true'
     steps:
+      - name: Release-please version/changelog-only diff — trivial pass
+        if: needs.changes.outputs.release_only == 'true'
+        run: |
+          echo "windows-check: release-please-only diff (the Windows build reads source, not the version string); trivial pass, not a skip."
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        if: needs.changes.outputs.release_only != 'true'
       - uses: ./.github/actions/rust-toolchain-pinned
+        if: needs.changes.outputs.release_only != 'true'
       - uses: ./.github/actions/sccache
+        if: needs.changes.outputs.release_only != 'true'
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        if: needs.changes.outputs.release_only != 'true'
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: cargo check --locked -p ipe --all-targets
+        if: needs.changes.outputs.release_only != 'true'
       - uses: taiki-e/install-action@23d41aa71228a2692ee31bb433f070fd4bdc6661 # nextest
-      - run: >-
+        if: needs.changes.outputs.release_only != 'true'
+      - if: needs.changes.outputs.release_only != 'true'
+        run: >-
           cargo nextest run --locked -p ipe --lib -E
           'test(/^(output_dir|clean|cache|owner_trust|secret_file)::/)
           | test(=ffi::tests::owned_project_cache_is_refused_when_unverifiable)
@@ -285,6 +311,7 @@ jobs:
           | test(=ssh_signing_key::tests::an_unsupported_secret_store_generates_no_key)
           | test(=ssh_signing_key::tests::an_unsupported_secret_store_stages_no_key_file)'
       - run: cargo nextest run --locked -p ipe_sandbox --lib -E 'test(/^home::tests::/)'
+        if: needs.changes.outputs.release_only != 'true'
 
   # No compiler-internal jargon or raw Rust types leak into user-facing text
   # (rendered diagnostic goldens + `ipe explain` pages). Pure git + ripgrep, no
@@ -294,18 +321,25 @@ jobs:
     needs: changes
     # Change-gated like clippy: a PR that touches no code path skips it; it
     # always runs on push/nightly.
-    if: needs.changes.outputs.code == 'true' || (github.event_name != 'pull_request' && github.event_name != 'merge_group')
+    if: needs.changes.outputs.code == 'true' || (github.event_name != 'pull_request' && github.event_name != 'merge_group') || needs.changes.outputs.release_only == 'true'
     steps:
+      - name: Release-please version/changelog-only diff — trivial pass
+        if: needs.changes.outputs.release_only == 'true'
+        run: |
+          echo "diagnostic-tone: release-please-only diff (diagnostic text is source, unchanged by a version bump); trivial pass, not a skip."
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        if: needs.changes.outputs.release_only != 'true'
       # ripgrep — tools/scripts/lint-diagnostic-tone.sh requires it (fails
       # closed via require_tool when absent instead of passing vacuously).
       - name: Install ripgrep
+        if: needs.changes.outputs.release_only != 'true'
         run: sudo apt-get update && sudo apt-get install -y ripgrep
       # Self-test the fail-closed gate mechanism first (require-tool.sh), then
       # run the gate itself. Kept as ONE step (not two) so
       # deterministic-checks.json's one-step-per-context schema still covers
       # it under the single step name "Lint diagnostic tone".
       - name: Lint diagnostic tone
+        if: needs.changes.outputs.release_only != 'true'
         run: |
           bash tools/scripts/tests/test-require-tool.sh
           bash tools/scripts/lint-diagnostic-tone.sh
@@ -324,21 +358,32 @@ jobs:
     runs-on: ubuntu-latest
     needs: [changes, quick-check]
     # Change-gated: runs on a PR that touches src/**, plus nightly.
-    if: needs.changes.outputs.code == 'true' || (github.event_name != 'pull_request' && github.event_name != 'merge_group')
+    if: needs.changes.outputs.code == 'true' || (github.event_name != 'pull_request' && github.event_name != 'merge_group') || needs.changes.outputs.release_only == 'true'
     env:
       RUSTFLAGS: -C link-arg=-fuse-ld=mold
       IPE_RUNTIME_DIR: ${{ github.workspace }}/src/runtime/rust/src
     steps:
+      - name: Release-please version/changelog-only diff — trivial pass
+        if: needs.changes.outputs.release_only == 'true'
+        run: |
+          echo "explain-examples: release-please-only diff (explain-page examples are source, unchanged by a version bump); trivial pass, not a skip."
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        if: needs.changes.outputs.release_only != 'true'
       - uses: ./.github/actions/rust-toolchain-pinned
+        if: needs.changes.outputs.release_only != 'true'
       - uses: ./.github/actions/mold
+        if: needs.changes.outputs.release_only != 'true'
       - uses: ./.github/actions/sccache
+        if: needs.changes.outputs.release_only != 'true'
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        if: needs.changes.outputs.release_only != 'true'
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Build ipe
+        if: needs.changes.outputs.release_only != 'true'
         run: cargo build --release -p ipe
       - name: Compile every explain-page example
+        if: needs.changes.outputs.release_only != 'true'
         env:
           IPE_BIN: ${{ github.workspace }}/target/release/ipe
         run: bash tools/scripts/check-explain-examples.sh
@@ -352,21 +397,32 @@ jobs:
     runs-on: ubuntu-latest
     needs: [changes, quick-check]
     # Change-gated: runs on a PR that touches src/**, plus nightly.
-    if: needs.changes.outputs.code == 'true' || (github.event_name != 'pull_request' && github.event_name != 'merge_group')
+    if: needs.changes.outputs.code == 'true' || (github.event_name != 'pull_request' && github.event_name != 'merge_group') || needs.changes.outputs.release_only == 'true'
     env:
       RUSTFLAGS: -C link-arg=-fuse-ld=mold
       IPE_RUNTIME_DIR: ${{ github.workspace }}/src/runtime/rust/src
     steps:
+      - name: Release-please version/changelog-only diff — trivial pass
+        if: needs.changes.outputs.release_only == 'true'
+        run: |
+          echo "doc-examples: release-please-only diff (doc-string examples are source, unchanged by a version bump); trivial pass, not a skip."
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        if: needs.changes.outputs.release_only != 'true'
       - uses: ./.github/actions/rust-toolchain-pinned
+        if: needs.changes.outputs.release_only != 'true'
       - uses: ./.github/actions/mold
+        if: needs.changes.outputs.release_only != 'true'
       - uses: ./.github/actions/sccache
+        if: needs.changes.outputs.release_only != 'true'
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        if: needs.changes.outputs.release_only != 'true'
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Build ipe
+        if: needs.changes.outputs.release_only != 'true'
         run: cargo build --release -p ipe
       - name: Type-check every doc-string example
+        if: needs.changes.outputs.release_only != 'true'
         env:
           IPE_BIN: ${{ github.workspace }}/target/release/ipe
         run: bash tools/scripts/check-doc-examples.sh
@@ -753,7 +809,7 @@ jobs:
     name: first-party shapes (build gate)
     runs-on: ubuntu-latest
     needs: [changes, quick-check]
-    if: needs.changes.outputs.code == 'true' || (github.event_name != 'pull_request' && github.event_name != 'merge_group')
+    if: needs.changes.outputs.code == 'true' || (github.event_name != 'pull_request' && github.event_name != 'merge_group') || needs.changes.outputs.release_only == 'true'
     env:
       RUSTFLAGS: -C link-arg=-fuse-ld=mold
       IPE_RUNTIME_DIR: ${{ github.workspace }}/src/runtime/rust/src
@@ -761,19 +817,30 @@ jobs:
       # runtime dep tree compiles once, later shape builds go incremental.
       IPE_SHAPES_TARGET: ${{ github.workspace }}/.cache/shapes-shared-target
     steps:
+      - name: Release-please version/changelog-only diff — trivial pass
+        if: needs.changes.outputs.release_only == 'true'
+        run: |
+          echo "shapes-examples: release-please-only diff (first-party shapes are source; seal-smoke proves the new version pin builds); trivial pass, not a skip."
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        if: needs.changes.outputs.release_only != 'true'
       - uses: ./.github/actions/rust-toolchain-pinned
+        if: needs.changes.outputs.release_only != 'true'
       - uses: ./.github/actions/mold
+        if: needs.changes.outputs.release_only != 'true'
       - uses: ./.github/actions/sccache
+        if: needs.changes.outputs.release_only != 'true'
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        if: needs.changes.outputs.release_only != 'true'
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
           cache-directories: ${{ github.workspace }}/.cache/shapes-shared-target
       - name: Build ipe
+        if: needs.changes.outputs.release_only != 'true'
         run: cargo build --release -p ipe
       # Pre-warm the shared target with the runtime dep tree (via the lightest
       # shape) so the first heavy shape build goes incremental instead of cold.
       - name: Pre-warm the shared emitted-crate target
+        if: needs.changes.outputs.release_only != 'true'
         env:
           CARGO_TARGET_DIR: ${{ github.workspace }}/.cache/shapes-shared-target
         run: |
@@ -783,6 +850,7 @@ jobs:
           "$IPE" build "$GITHUB_WORKSPACE/examples/shapes/script/release-preflight/package.ipe" --out out
           cd out/rust && cargo build
       - name: Check + emit + build every first-party shape
+        if: needs.changes.outputs.release_only != 'true'
         env:
           CARGO_TARGET_DIR: ${{ github.workspace }}/.cache/shapes-shared-target
         run: |
@@ -830,24 +898,36 @@ jobs:
     name: first-party check floor (ipe type-check only)
     runs-on: ubuntu-latest
     needs: [changes, quick-check]
-    if: needs.changes.outputs.code == 'true' || (github.event_name != 'pull_request' && github.event_name != 'merge_group')
+    if: needs.changes.outputs.code == 'true' || (github.event_name != 'pull_request' && github.event_name != 'merge_group') || needs.changes.outputs.release_only == 'true'
     env:
       RUSTFLAGS: -C link-arg=-fuse-ld=mold
       IPE_RUNTIME_DIR: ${{ github.workspace }}/src/runtime/rust/src
     steps:
+      - name: Release-please version/changelog-only diff — trivial pass
+        if: needs.changes.outputs.release_only == 'true'
+        run: |
+          echo "first-party-check-floor: release-please-only diff (first-party examples are source, unchanged by a version bump); trivial pass, not a skip."
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        if: needs.changes.outputs.release_only != 'true'
       - uses: ./.github/actions/rust-toolchain-pinned
+        if: needs.changes.outputs.release_only != 'true'
       - uses: ./.github/actions/mold
+        if: needs.changes.outputs.release_only != 'true'
       - uses: ./.github/actions/sccache
+        if: needs.changes.outputs.release_only != 'true'
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        if: needs.changes.outputs.release_only != 'true'
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       # ripgrep — scripts/lib/examples.sh's classification helpers require it.
       - name: Install ripgrep
+        if: needs.changes.outputs.release_only != 'true'
         run: sudo apt-get update && sudo apt-get install -y ripgrep
       - name: Build ipe
+        if: needs.changes.outputs.release_only != 'true'
         run: cargo build --release -p ipe
       - name: Type-check every first-party example
+        if: needs.changes.outputs.release_only != 'true'
         env:
           IPE_BIN: ${{ github.workspace }}/target/release/ipe
         run: bash tools/scripts/first-party-check-floor.sh
@@ -1274,19 +1354,20 @@ jobs:
               ;;
           esac
       # The coverage proof needs the archive, so it runs whenever the archive
-      # was built — on every run whose e2e shards could have run.
+      # was built and the e2e shards could have run; a release-only diff never
+      # runs them, so there is no shard plan to prove.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-        if: needs.test-prep.result == 'success'
+        if: needs.test-prep.result == 'success' && needs.changes.outputs.release_only != 'true'
       - uses: ./.github/actions/rust-toolchain-pinned
-        if: needs.test-prep.result == 'success'
+        if: needs.test-prep.result == 'success' && needs.changes.outputs.release_only != 'true'
       - uses: taiki-e/install-action@23d41aa71228a2692ee31bb433f070fd4bdc6661 # nextest
-        if: needs.test-prep.result == 'success'
+        if: needs.test-prep.result == 'success' && needs.changes.outputs.release_only != 'true'
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        if: needs.test-prep.result == 'success'
+        if: needs.test-prep.result == 'success' && needs.changes.outputs.release_only != 'true'
         with:
           name: nextest-archive
       - name: Prove the e2e shards partition the archived test set
-        if: needs.test-prep.result == 'success'
+        if: needs.test-prep.result == 'success' && needs.changes.outputs.release_only != 'true'
         env:
           E2E_PLAN: ${{ needs.changes.outputs.e2e_plan }}
         run: python3 tools/scripts/e2e-shard-cover.py
@@ -1500,19 +1581,28 @@ jobs:
   build-tools:
     runs-on: ubuntu-latest
     needs: [changes, quick-check]
-    if: needs.changes.outputs.code == 'true' || (github.event_name != 'pull_request' && github.event_name != 'merge_group')
+    if: needs.changes.outputs.code == 'true' || (github.event_name != 'pull_request' && github.event_name != 'merge_group') || needs.changes.outputs.release_only == 'true'
     steps:
+      - name: Release-please version/changelog-only diff — trivial pass
+        if: needs.changes.outputs.release_only == 'true'
+        run: |
+          echo "build-tools: release-please-only diff (every generator it feeds is version-independent); trivial pass, not a skip."
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        if: needs.changes.outputs.release_only != 'true'
       - uses: ./.github/actions/rust-toolchain-pinned
+        if: needs.changes.outputs.release_only != 'true'
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        if: needs.changes.outputs.release_only != 'true'
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Build the doc/golden regenerator binaries
+        if: needs.changes.outputs.release_only != 'true'
         run: |
           cargo build -p ipe_docs --bin gen-stdlib-docs --bin gen-env-docs --bin gen-capabilities-docs --bin gen-requirements-docs
           cargo build -p ipe --bin gen-cli-docs
           cargo build -p regen-cli-transcripts
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        if: needs.changes.outputs.release_only != 'true'
         with:
           name: ci-build-tools
           path: |
@@ -1536,17 +1626,25 @@ jobs:
   stdlib-docs-drift:
     runs-on: ubuntu-latest
     needs: [changes, quick-check, build-tools]
-    if: needs.changes.outputs.code == 'true' || (github.event_name != 'pull_request' && github.event_name != 'merge_group')
+    if: needs.changes.outputs.code == 'true' || (github.event_name != 'pull_request' && github.event_name != 'merge_group') || needs.changes.outputs.release_only == 'true'
     steps:
+      - name: Release-please version/changelog-only diff — trivial pass
+        if: needs.changes.outputs.release_only == 'true'
+        run: |
+          echo "stdlib-docs-drift: release-please-only diff (no generated reference doc embeds the version); trivial pass, not a skip."
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        if: needs.changes.outputs.release_only != 'true'
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        if: needs.changes.outputs.release_only != 'true'
         with:
           name: ci-build-tools
       - name: Regenerate docs/reference/stdlib.md and docs/reference/stdlib/
+        if: needs.changes.outputs.release_only != 'true'
         run: |
           chmod +x gen-stdlib-docs
           ./gen-stdlib-docs --repo-root "${{ github.workspace }}"
       - name: Fail if generated docs differ from committed files
+        if: needs.changes.outputs.release_only != 'true'
         run: git diff --exit-code docs/reference/stdlib.md docs/reference/stdlib/
 
   # Drift gate for docs/reference/env.md.
@@ -1561,17 +1659,25 @@ jobs:
   env-docs-drift:
     runs-on: ubuntu-latest
     needs: [changes, quick-check, build-tools]
-    if: needs.changes.outputs.code == 'true' || (github.event_name != 'pull_request' && github.event_name != 'merge_group')
+    if: needs.changes.outputs.code == 'true' || (github.event_name != 'pull_request' && github.event_name != 'merge_group') || needs.changes.outputs.release_only == 'true'
     steps:
+      - name: Release-please version/changelog-only diff — trivial pass
+        if: needs.changes.outputs.release_only == 'true'
+        run: |
+          echo "env-docs-drift: release-please-only diff (no generated reference doc embeds the version); trivial pass, not a skip."
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        if: needs.changes.outputs.release_only != 'true'
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        if: needs.changes.outputs.release_only != 'true'
         with:
           name: ci-build-tools
       - name: Regenerate docs/reference/env.md
+        if: needs.changes.outputs.release_only != 'true'
         run: |
           chmod +x gen-env-docs
           ./gen-env-docs --repo-root "${{ github.workspace }}"
       - name: Fail if generated docs differ from committed files
+        if: needs.changes.outputs.release_only != 'true'
         run: git diff --exit-code docs/reference/env.md
 
   # Drift gate for docs/reference/capabilities.md.
@@ -1586,17 +1692,25 @@ jobs:
   capabilities-docs-drift:
     runs-on: ubuntu-latest
     needs: [changes, quick-check, build-tools]
-    if: needs.changes.outputs.code == 'true' || (github.event_name != 'pull_request' && github.event_name != 'merge_group')
+    if: needs.changes.outputs.code == 'true' || (github.event_name != 'pull_request' && github.event_name != 'merge_group') || needs.changes.outputs.release_only == 'true'
     steps:
+      - name: Release-please version/changelog-only diff — trivial pass
+        if: needs.changes.outputs.release_only == 'true'
+        run: |
+          echo "capabilities-docs-drift: release-please-only diff (no generated reference doc embeds the version); trivial pass, not a skip."
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        if: needs.changes.outputs.release_only != 'true'
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        if: needs.changes.outputs.release_only != 'true'
         with:
           name: ci-build-tools
       - name: Regenerate docs/reference/capabilities.md
+        if: needs.changes.outputs.release_only != 'true'
         run: |
           chmod +x gen-capabilities-docs
           ./gen-capabilities-docs --repo-root "${{ github.workspace }}"
       - name: Fail if generated docs differ from committed files
+        if: needs.changes.outputs.release_only != 'true'
         run: git diff --exit-code docs/reference/capabilities.md
 
   # Drift gate for docs/reference/cli.md.
@@ -1611,17 +1725,25 @@ jobs:
   cli-docs-drift:
     runs-on: ubuntu-latest
     needs: [changes, quick-check, build-tools]
-    if: needs.changes.outputs.code == 'true' || (github.event_name != 'pull_request' && github.event_name != 'merge_group')
+    if: needs.changes.outputs.code == 'true' || (github.event_name != 'pull_request' && github.event_name != 'merge_group') || needs.changes.outputs.release_only == 'true'
     steps:
+      - name: Release-please version/changelog-only diff — trivial pass
+        if: needs.changes.outputs.release_only == 'true'
+        run: |
+          echo "cli-docs-drift: release-please-only diff (no generated reference doc embeds the version); trivial pass, not a skip."
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        if: needs.changes.outputs.release_only != 'true'
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        if: needs.changes.outputs.release_only != 'true'
         with:
           name: ci-build-tools
       - name: Regenerate docs/reference/cli.md
+        if: needs.changes.outputs.release_only != 'true'
         run: |
           chmod +x gen-cli-docs
           ./gen-cli-docs --repo-root "${{ github.workspace }}"
       - name: Fail if generated docs differ from committed files
+        if: needs.changes.outputs.release_only != 'true'
         run: git diff --exit-code docs/reference/cli.md
 
   # Drift gate for docs/reference/requirements.md.
@@ -1637,17 +1759,25 @@ jobs:
   requirements-docs-drift:
     runs-on: ubuntu-latest
     needs: [changes, quick-check, build-tools]
-    if: needs.changes.outputs.code == 'true' || (github.event_name != 'pull_request' && github.event_name != 'merge_group')
+    if: needs.changes.outputs.code == 'true' || (github.event_name != 'pull_request' && github.event_name != 'merge_group') || needs.changes.outputs.release_only == 'true'
     steps:
+      - name: Release-please version/changelog-only diff — trivial pass
+        if: needs.changes.outputs.release_only == 'true'
+        run: |
+          echo "requirements-docs-drift: release-please-only diff (no generated reference doc embeds the version); trivial pass, not a skip."
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        if: needs.changes.outputs.release_only != 'true'
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        if: needs.changes.outputs.release_only != 'true'
         with:
           name: ci-build-tools
       - name: Regenerate docs/reference/requirements.md
+        if: needs.changes.outputs.release_only != 'true'
         run: |
           chmod +x gen-requirements-docs
           ./gen-requirements-docs --repo-root "${{ github.workspace }}"
       - name: Fail if generated docs differ from committed files
+        if: needs.changes.outputs.release_only != 'true'
         run: git diff --exit-code docs/reference/requirements.md
 
   # Drift gate for the byte-exact CLI transcript goldens.
@@ -1666,29 +1796,40 @@ jobs:
   cli-transcripts-drift:
     runs-on: ubuntu-latest
     needs: [changes, quick-check, build-tools]
-    if: needs.changes.outputs.code == 'true' || (github.event_name != 'pull_request' && github.event_name != 'merge_group')
+    if: needs.changes.outputs.code == 'true' || (github.event_name != 'pull_request' && github.event_name != 'merge_group') || needs.changes.outputs.release_only == 'true'
     steps:
+      - name: Release-please version/changelog-only diff — trivial pass
+        if: needs.changes.outputs.release_only == 'true'
+        run: |
+          echo "cli-transcripts-drift: release-please-only diff (transcripts normalise the version to <VERSION>); trivial pass, not a skip."
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        if: needs.changes.outputs.release_only != 'true'
       # regen-cli-transcripts records every transcript from the prebuilt `ipe`
       # passed as --ipe-bin, so a toolchain/crate download or compile failure
       # reddens the `Build ipe` step, never the regenerate step. The tool itself
       # exits non-zero, writing no golden, when `ipe` cannot be spawned or is
       # killed by a signal, so a tool failure never surfaces as golden drift.
       - uses: ./.github/actions/rust-toolchain-pinned
+        if: needs.changes.outputs.release_only != 'true'
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        if: needs.changes.outputs.release_only != 'true'
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Build ipe
+        if: needs.changes.outputs.release_only != 'true'
         run: cargo build -p ipe --bin ipe
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        if: needs.changes.outputs.release_only != 'true'
         with:
           name: ci-build-tools
       - name: Regenerate the CLI transcript goldens
+        if: needs.changes.outputs.release_only != 'true'
         run: |
           chmod +x regen-cli-transcripts
           ./regen-cli-transcripts --repo-root "${{ github.workspace }}" \
             --ipe-bin "${{ github.workspace }}/target/debug/ipe"
       - name: Fail if the regenerated goldens differ from the committed ones
+        if: needs.changes.outputs.release_only != 'true'
         run: git diff --exit-code src/ipe-cli/tests/golden/cli/
 
   # Semantic-parity gate for the doc-side Markdown parser.
@@ -1709,17 +1850,27 @@ jobs:
   markdown-parity:
     runs-on: ubuntu-latest
     needs: [changes, quick-check]
-    if: needs.changes.outputs.code == 'true' || (github.event_name != 'pull_request' && github.event_name != 'merge_group')
+    if: needs.changes.outputs.code == 'true' || (github.event_name != 'pull_request' && github.event_name != 'merge_group') || needs.changes.outputs.release_only == 'true'
     steps:
+      - name: Release-please version/changelog-only diff — trivial pass
+        if: needs.changes.outputs.release_only == 'true'
+        run: |
+          echo "markdown-parity: release-please-only diff (the parity snapshot does not embed the version); trivial pass, not a skip."
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        if: needs.changes.outputs.release_only != 'true'
       - uses: ./.github/actions/rust-toolchain-pinned
+        if: needs.changes.outputs.release_only != 'true'
       - uses: ./.github/actions/sccache
+        if: needs.changes.outputs.release_only != 'true'
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        if: needs.changes.outputs.release_only != 'true'
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Regenerate the Markdown parity snapshot via an ipe run
+        if: needs.changes.outputs.release_only != 'true'
         run: tools/scripts/regen-markdown-parity.sh
       - name: Fail if the regenerated snapshot differs from the committed one
+        if: needs.changes.outputs.release_only != 'true'
         run: git diff --exit-code src/ipe-docs/src/markdown/parity/snapshot.txt
 
   # A PR run whose outcome a deterministic gate has already decided red gets no

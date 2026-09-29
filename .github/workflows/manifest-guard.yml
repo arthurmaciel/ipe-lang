@@ -72,5 +72,8 @@ jobs:
       - name: Prove the local-gate refusals (unit tests)
         run: python3 .github/ci/test_local_gate.py -v
 
+      - name: Prove the manifest-lock-consistency refusals (unit tests)
+        run: python3 .github/ci/test_manifest_lock_consistency.py -v
+
       - name: The derived required-set is in sync with the manifest
         run: python3 .github/ci/check_required_set.py

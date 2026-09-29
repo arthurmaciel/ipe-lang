@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """Refusal proofs for `verify-manifest.py`'s step checks (checks 6 and 7),
 merge-queue safety check (check 8), release-only skip-as-pass check
-(check 9), and fast-gate-first check (check 10).
+(check 9), fast-gate-first check (check 10), and release-only declarations
+(check 13; `TestReleaseOnlyDeclarations`). Check 5's one admitted `if:` on a
+deterministic step, the release-only skip, sits in `TestDeterministicSetMasking`.
 
 Check 7 covers content-pinned `uses:`/images, the hash-checked pip shape, and
 env-file writes only through `github-env.sh`; its cases sit in
@@ -45,6 +47,10 @@ check_release_only_skips = verify_manifest.check_release_only_skips
 check_fast_gate_first = verify_manifest.check_fast_gate_first
 check_pull_request_target = verify_manifest.check_pull_request_target
 check_trust_roots = verify_manifest.check_trust_roots
+check_release_only_declarations = verify_manifest.check_release_only_declarations
+
+# A declaration key left out of a fixture entry.
+_MISSING = object()
 
 # The live sanctioned composite is the fixture: the canonical form is proven
 # against the file CI actually runs, never a hand-kept copy.
@@ -2842,6 +2848,49 @@ class TestDeterministicSetMasking(unittest.TestCase):
                 errors = self.errors_for("", extra)
                 self.assertTrue(any("must run unconditionally" in e for e in errors), errors)
 
+    _NARROW = "if: needs.changes.outputs.release_only != 'true'\n"
+    _CLASSIFIER = (
+        "  changes:\n    runs-on: ubuntu-latest\n    outputs:\n"
+        "      release_only: ${{ steps.c.outputs.release_only }}\n"
+        "    steps:\n      - id: c\n        run: echo classify\n"
+    )
+
+    def narrowed_errors(self, job_extra: str, classifier: str) -> list[str]:
+        vm = verify_manifest
+        with tempfile.TemporaryDirectory() as tmp:
+            _write(
+                os.path.join(tmp, "workflows", "ci.yml"),
+                "name: ci\non: push\njobs:\n" + classifier
+                + "  clippy:\n    runs-on: ubuntu-latest\n" + textwrap.indent(job_extra, "    ")
+                + "    steps:\n      - run: echo first\n      - name: Run clippy\n"
+                + "        " + self._NARROW + "        run: cargo clippy\n",
+            )
+            jobs = [
+                vm.Job("ci.yml", "clippy", ["clippy"], []),
+                vm.Job("ci.yml", vm.CANCEL_WATCHER_JOB_ID, ["cancel"], ["clippy"]),
+            ]
+            errors: list[str] = []
+            with mock.patch.object(vm, "REPO_ROOT", tmp), mock.patch.object(
+                vm, "load_deterministic_checks", lambda errs: [("clippy", "Run clippy")]
+            ):
+                vm.check_deterministic_set(jobs, errors)
+            return errors
+
+    def test_release_only_skip_over_a_needed_classifier_passes(self) -> None:
+        self.assertEqual(self.narrowed_errors("needs: [changes]\n", self._CLASSIFIER), [])
+
+    def test_release_only_skip_without_a_needed_classifier_is_refused(self) -> None:
+        no_output = self._CLASSIFIER.replace(
+            "    outputs:\n      release_only: ${{ steps.c.outputs.release_only }}\n", ""
+        )
+        for job_extra, classifier in (
+            ("", self._CLASSIFIER),
+            ("needs: [changes]\n", no_output),
+        ):
+            with self.subTest(job_extra=job_extra, classifier=classifier):
+                errors = self.narrowed_errors(job_extra, classifier)
+                self.assertTrue(any("must run unconditionally" in e for e in errors), errors)
+
 
 _MQ_OK = """\
 on:
@@ -3792,6 +3841,264 @@ class TestTrustRoots(unittest.TestCase):
         errors: list[str] = []
         check_trust_roots(errors)
         self.assertEqual(errors, [])
+
+
+_RO13 = """\
+on: [pull_request, merge_group]
+permissions:
+  contents: read
+jobs:
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      code: ${{ steps.c.outputs.code }}
+      release_only: ${{ steps.c.outputs.release_only }}
+    steps:
+      - id: c
+        run: echo classify
+  heavy:
+    runs-on: ubuntu-latest
+    needs: [changes]
+    if: >-
+      needs.changes.outputs.code == 'true'
+      || needs.changes.outputs.release_only == 'true'
+    steps:
+      - name: Release-only diff - trivial pass
+        if: needs.changes.outputs.release_only == 'true'
+        run: echo "release-only diff; trivial pass, not a skip."
+      - if: needs.changes.outputs.release_only != 'true'
+        run: cargo build
+  plain:
+    runs-on: ubuntu-latest
+    needs: [changes]
+    steps:
+      - run: cargo test
+  shard:
+    name: shard (${{ matrix.n }})
+    strategy:
+      matrix:
+        n: [1, 2]
+    runs-on: ubuntu-latest
+    needs: [changes]
+    if: needs.changes.outputs.code == 'true' && needs.changes.outputs.release_only != 'true'
+    steps:
+      - run: echo shard
+  shard-all:
+    runs-on: ubuntu-latest
+    needs: [shard]
+    if: always()
+    steps:
+      - run: test "${{ needs.shard.result }}" != failure
+"""
+
+_RO13_ENTRIES = {
+    "changes": {"run": "the classifier"},
+    "heavy": {"pass": "version-independent"},
+    "plain": {"run": "version-sensitive"},
+    "shard-all": {"pass": "version-independent"},
+}
+
+
+class TestReleaseOnlyDeclarations(unittest.TestCase):
+    """Check 13: every PR-reachable manifest entry declares `release-only:
+    run | pass`, and the producer workflow does what the declaration says."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.fx = SccacheFixture(self._tmp.name)
+
+    def tearDown(self) -> None:
+        self._tmp.cleanup()
+
+    def errors(
+        self,
+        content: str = _RO13,
+        *,
+        declarations: dict | None = None,
+        extra: list[dict] | None = None,
+        gates: set[str] | None = None,
+    ) -> list[str]:
+        self.fx.workflow("gate.yml", content)
+        entries: list[dict] = []
+        for ctx, declared in (_RO13_ENTRIES if declarations is None else declarations).items():
+            entry: dict = {"context": ctx, "producer": "gate.yml"}
+            if declared is not _MISSING:
+                entry["release-only"] = declared
+            if ctx == "shard-all":
+                entry["aggregates"] = ["shard"]
+            entries.append(entry)
+        entries.extend(extra or [])
+        errors: list[str] = []
+        check_release_only_declarations(
+            entries, {"heavy", "plain"} if gates is None else gates, errors, root=self.fx.root
+        )
+        return errors
+
+    def assertRefused(self, needle: str, content: str = _RO13, **kw: object) -> None:
+        errors = self.errors(content, **kw)  # type: ignore[arg-type]
+        self.assertTrue(any(needle in e for e in errors), f"expected {needle!r} in {errors}")
+
+    def declare(self, **overrides: object) -> dict:
+        out = dict(_RO13_ENTRIES)
+        out.update(overrides)
+        return out
+
+    def test_run_pass_and_aggregate_skip_shapes_pass(self) -> None:
+        self.assertEqual(self.errors(), [])
+
+    def test_missing_declaration_is_refused(self) -> None:
+        self.assertRefused("must declare `release-only", declarations=self.declare(plain=_MISSING))
+
+    def test_malformed_declaration_is_refused(self) -> None:
+        for bad in (
+            {"run": "a", "pass": "b"},
+            {"run": ""},
+            {"run": "   "},
+            {"skip": "why"},
+            {"run": None},
+            "run",
+            None,
+            [],
+        ):
+            with self.subTest(bad=bad):
+                self.assertRefused("exactly one key", declarations=self.declare(plain=bad))
+
+    def test_declaration_without_producer_is_refused(self) -> None:
+        self.assertRefused(
+            "no producer workflow",
+            extra=[{"context": "orphan", "release-only": {"run": "why"}}],
+        )
+
+    def test_declaration_on_non_pr_producer_is_refused(self) -> None:
+        self.fx.workflow("nightly.yml", "on:\n  schedule:\n    - cron: '0 0 * * *'\njobs:\n  n:\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo n\n")
+        self.assertRefused(
+            "never runs on a pull request",
+            extra=[{"context": "n", "producer": "nightly.yml", "release-only": {"run": "why"}}],
+        )
+        # With no declaration a non-PR producer is left alone.
+        self.assertEqual(self.errors(extra=[{"context": "n", "producer": "nightly.yml"}]), [])
+
+    def test_pull_request_target_and_unrecognised_on_require_a_declaration(self) -> None:
+        for on in ("on: pull_request_target\n", "on: 7\n"):
+            with self.subTest(on=on):
+                self.fx.workflow("other.yml", on + "jobs:\n  o:\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo o\n")
+                self.assertRefused(
+                    "must declare `release-only",
+                    extra=[{"context": "o", "producer": "other.yml"}],
+                )
+
+    def test_no_reporting_job_is_refused(self) -> None:
+        self.assertRefused(
+            "no job in gate.yml reports this context",
+            extra=[{"context": "ghost", "producer": "gate.yml", "release-only": {"run": "why"}}],
+        )
+
+    def test_run_contradicted_by_a_release_only_if_is_refused(self) -> None:
+        self.assertRefused("declared `run` but job 'heavy'", declarations=self.declare(heavy={"run": "x"}))
+
+    def test_run_contradicted_by_an_aliased_output_is_refused(self) -> None:
+        aliased = _RO13.replace(
+            "      code: ${{ steps.c.outputs.code }}\n",
+            "      code: ${{ steps.c.outputs.code }}\n      bump: ${{ steps.c.outputs.release_only }}\n",
+        ).replace("      - run: cargo test\n", "      - if: needs.changes.outputs.bump != 'true'\n        run: cargo test\n")
+        self.assertRefused("declared `run` but job 'plain'", aliased)
+
+    def test_run_with_a_skipped_ancestor_is_refused(self) -> None:
+        after = _RO13 + "  after:\n    runs-on: ubuntu-latest\n    needs: [shard]\n    steps:\n      - run: echo after\n"
+        self.assertRefused(
+            "needs shard, which skip on a release-only diff",
+            after,
+            declarations=self.declare(after={"run": "x"}),
+        )
+
+    def test_pass_needing_a_skipped_job_without_always_is_refused(self) -> None:
+        after = _RO13 + (
+            "  after:\n    runs-on: ubuntu-latest\n    needs: [changes, shard]\n    steps:\n"
+            "      - run: echo first\n"
+            "      - if: needs.changes.outputs.release_only != 'true'\n        run: echo rest\n"
+        )
+        self.assertRefused("run it `always()`", after, declarations=self.declare(after={"pass": "x"}))
+        fixed = after.replace("    needs: [changes, shard]\n", "    needs: [changes, shard]\n    if: always()\n")
+        self.assertEqual(self.errors(fixed, declarations=self.declare(after={"pass": "x"})), [])
+
+    def test_pass_that_never_narrows_is_refused(self) -> None:
+        self.assertRefused("no job narrows", declarations=self.declare(plain={"pass": "x"}))
+
+    def test_pass_with_an_unnarrowed_later_step_is_refused(self) -> None:
+        bad = _RO13.replace(
+            "      - if: needs.changes.outputs.release_only != 'true'\n        run: cargo build\n",
+            "      - if: needs.changes.outputs.release_only != 'true'\n        run: cargo build\n"
+            "      - run: cargo doc\n",
+        )
+        self.assertRefused("step 3 would run on a release-only diff", bad)
+
+    def test_pass_with_an_or_masked_later_step_is_refused(self) -> None:
+        bad = _RO13.replace(
+            "      - if: needs.changes.outputs.release_only != 'true'\n        run: cargo build\n",
+            "      - if: needs.changes.outputs.release_only != 'true' || always()\n        run: cargo build\n",
+        )
+        self.assertRefused("step 2 would run on a release-only diff", bad)
+
+    def test_pass_first_step_must_execute(self) -> None:
+        bad = _RO13.replace(
+            "      - name: Release-only diff - trivial pass\n"
+            "        if: needs.changes.outputs.release_only == 'true'\n"
+            '        run: echo "release-only diff; trivial pass, not a skip."\n',
+            "      - name: Release-only diff - trivial pass\n"
+            "        if: needs.changes.outputs.release_only == 'true'\n"
+            "        uses: ./.github/actions/noop\n",
+        )
+        self.assertRefused("first step must be an executed `run:` step", bad)
+
+    def test_pass_first_step_gated_otherwise_is_refused(self) -> None:
+        bad = _RO13.replace(
+            "        if: needs.changes.outputs.release_only == 'true'\n        run: echo \"release",
+            "        if: needs.changes.outputs.code == 'true'\n        run: echo \"release",
+        )
+        self.assertRefused("first step gated", bad)
+
+    def test_pass_skip_shape_on_a_gate_context_is_refused(self) -> None:
+        self.assertRefused("reports a `gate` context yet skips", gates={"heavy", "plain", "shard (1)"})
+
+    def test_pass_skip_source_must_be_a_needed_classifier(self) -> None:
+        for bad in (
+            _RO13.replace(
+                "    if: needs.changes.outputs.code == 'true' && needs.changes.outputs.release_only != 'true'\n",
+                "    if: needs.changes.outputs.code == 'true' && needs.other.outputs.release_only != 'true'\n",
+            ),
+            _RO13.replace(
+                "      code: ${{ steps.c.outputs.code }}\n      release_only: ${{ steps.c.outputs.release_only }}\n",
+                "      code: ${{ steps.c.outputs.code }}\n",
+            ),
+            _RO13.replace(
+                "    if: needs.changes.outputs.code == 'true' && needs.changes.outputs.release_only != 'true'\n",
+                "    if: needs.changes.outputs.code == 'true' || needs.changes.outputs.release_only != 'true'\n",
+            ),
+        ):
+            with self.subTest(bad=bad):
+                errors = self.errors(bad)
+                self.assertTrue(any("(check 13)" in e for e in errors), errors)
+
+    def test_skip_shape_with_step_mention_is_refused(self) -> None:
+        bad = _RO13.replace(
+            "      - run: echo shard\n",
+            "      - run: echo shard\n      - if: needs.changes.outputs.release_only != 'true'\n        run: echo more\n",
+        )
+        self.assertRefused("its steps may not name `release_only`", bad)
+
+    def test_live_manifest_passes(self) -> None:
+        with open(os.path.join(HERE, "check-manifest.yml")) as f:
+            manifest = verify_manifest.strict_yaml.safe_load(f)
+        entries = manifest["checks"]
+        gates = {e["context"] for e in entries if e.get("disposition") == "gate"}
+        errors: list[str] = []
+        check_release_only_declarations(entries, gates, errors)
+        self.assertEqual(errors, [])
+        self.assertTrue(all("release-only" in e for e in entries if e.get("context") in {"test", "quick-check", "manifest-lock-consistency"}))
+        for ctx in ("test", "quick-check", "manifest-lock-consistency"):
+            self.assertEqual(
+                next(iter(next(e for e in entries if e["context"] == ctx)["release-only"])), "run", ctx
+            )
 
 
 if __name__ == "__main__":

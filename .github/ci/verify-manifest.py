@@ -31,7 +31,9 @@ Checks performed
      consumed by ci.yml's `cancel-on-cheap-red` watcher — is well-formed (exact keys, non-empty strings with
      no surrounding whitespace, no duplicate job), its job set equals the
      watcher's `needs:`, and each pair's step is a `name:` of that job's steps
-     in ci.yml.
+     in ci.yml, run unmasked (no `continue-on-error:`, no `if:` other than a
+     `needs.<job>.outputs.release_only != 'true'` skip over a job it `needs`
+     whose outputs carry `release_only`, which never fails the step).
   6. sccache wiring: the ONLY sanctioned way a job gets sccache is
      `uses: ./.github/actions/sccache`, a composite action that installs
      `mozilla-actions/sccache-action` and writes RUSTC_WRAPPER/
@@ -184,6 +186,22 @@ Checks performed
       assembled at run time, is not seen, and check 7's head-free exemption
       rests on the same audit); a hostile edit to a workflow is a
       `.github/**` change, which (b) makes code-owned.
+  13. Release-only declarations: every manifest entry whose producer runs on
+      `pull_request`, `pull_request_target` or `merge_group` (or whose `on:`
+      has no recognised shape) declares `release-only: {run: <why>}` or
+      `{pass: <why>}`, one key and a non-empty reason; an entry whose
+      producer is absent or never runs on a PR may not declare one.  The
+      entry's jobs are those reporting its context plus those its
+      `aggregates` names.  `run`: no job names `release_only` in any `if:`,
+      and none `needs` (transitively) a job that skips on it.  `pass`: each
+      job either (a) skips as a whole through one top-level
+      `&& needs.<job>.outputs.release_only != 'true'` conjunct (never a job
+      reporting a `gate` context), or (b) executes an unconditional first
+      `run:` step, or the check-9 trivial-pass step, with every later step
+      carrying that `!= 'true'` conjunct; `<job>` must be a job it `needs`
+      whose `outputs` carry `release_only`.  At least one job must narrow,
+      and a job needing a skipped job must run `always()`.  A declaration
+      the workflow contradicts, or none at all, is refused.
 
 Pure stdlib + PyYAML (already a CI dependency).  No network; check 12 runs
 `git ls-files` locally to list tracked paths.
@@ -723,10 +741,19 @@ def check_deterministic_set(jobs: list[Job], errors: list[str]) -> None:
                 f"one step named {step!r} (found {len(named)})"
             )
             continue
-        if MASKING_KEYS.intersection(named[0]):
+        check_step = named[0]
+        release_skip = _RELEASE_ONLY_SKIP_OF.fullmatch(" ".join(str(check_step.get("if", "")).split()))
+        # A release-only skip never fails the step, so it never fires the
+        # cancel; check 13 holds the job to the release-only pass shape.
+        release_only_narrowed = release_skip is not None and _release_only_source(
+            raw_job, raw_jobs, release_skip.group(1)
+        )
+        if "continue-on-error" in check_step or ("if" in check_step and not release_only_narrowed):
             errors.append(
                 f"{DETERMINISTIC_CHECKS_FILE}: step {step!r} of job {job_id!r} "
-                "must run unconditionally: no `if:` and no `continue-on-error:`"
+                "must run unconditionally: no `if:` and no `continue-on-error:` "
+                "(the one admitted `if:` is `needs.<job>.outputs.release_only != 'true'` "
+                "over a job it `needs` whose outputs carry `release_only`)"
             )
         # A job-level `if:` is admitted: a path-filtered skip never fires the
         # cancel, the conservative outcome for the watcher. A failure-ignored
@@ -1067,16 +1094,10 @@ _RELEASE_ONLY_OUTPUT = "release_only"
 _RELEASE_ONLY_RUN = re.compile(r"needs\.[A-Za-z0-9_-]+\.outputs\.release_only == 'true'")
 
 
-def _top_level_disjuncts(cond: str) -> list[str] | None:
-    """Split an `if:` expression on `||` at parenthesis depth 0, outside string
-    literals; whitespace-normalised disjuncts. None on unbalanced parentheses,
-    an unterminated string, or a `${{ }}` that does not wrap the whole
-    condition (see `_top_level_conjuncts`)."""
-    expr = cond.strip()
-    if expr.startswith("${{") and expr.endswith("}}"):
-        expr = expr[3:-2]
-    if "${{" in expr or "}}" in expr:
-        return None
+def _split_top_level(expr: str, op: str) -> list[str] | None:
+    """Split an expression on `op` at parenthesis depth 0, outside string
+    literals; whitespace-normalised parts. None on unbalanced parentheses or
+    an unterminated string."""
     parts: list[str] = []
     depth = 0
     quote = False
@@ -1098,15 +1119,28 @@ def _top_level_disjuncts(cond: str) -> list[str] | None:
             depth -= 1
             if depth < 0:
                 return None
-        elif expr.startswith("||", i) and depth == 0:
+        elif expr.startswith(op, i) and depth == 0:
             parts.append(expr[start:i])
-            start = i + 2
-            i += 1
+            start = i + len(op)
+            i += len(op) - 1
         i += 1
     if quote or depth != 0:
         return None
     parts.append(expr[start:])
     return [" ".join(p.split()) for p in parts]
+
+
+def _top_level_disjuncts(cond: str) -> list[str] | None:
+    """Split an `if:` expression on `||` at parenthesis depth 0, outside string
+    literals; whitespace-normalised disjuncts. None on unbalanced parentheses,
+    an unterminated string, or a `${{ }}` that does not wrap the whole
+    condition (see `_top_level_conjuncts`)."""
+    expr = cond.strip()
+    if expr.startswith("${{") and expr.endswith("}}"):
+        expr = expr[3:-2]
+    if "${{" in expr or "}}" in expr:
+        return None
+    return _split_top_level(expr, "||")
 
 
 def _release_only_mention(doc: dict) -> re.Pattern[str]:
@@ -1197,6 +1231,288 @@ def check_release_only_skips(gate_contexts: set[str], errors: list[str], root: s
                     f"trivial-pass `run:` step gated `if: {runs[0]}` — a job whose steps "
                     "all skip reports a pass without executing anything (check 9)"
                 )
+
+
+_RELEASE_ONLY_MODES = ("run", "pass")
+# Events whose runs a release-please PR can reach; a producer triggering on any
+# of them declares its release-only behaviour.
+_RELEASE_ONLY_EVENTS = {"pull_request", "pull_request_target", "merge_group"}
+_RELEASE_ONLY_RUN_OF = re.compile(r"needs\.([A-Za-z0-9_-]+)\.outputs\.release_only == 'true'")
+_RELEASE_ONLY_SKIP_OF = re.compile(r"needs\.([A-Za-z0-9_-]+)\.outputs\.release_only != 'true'")
+_ALWAYS = re.compile(r"\balways\(\s*\)")
+
+
+def _top_level_and(cond: str) -> list[str] | None:
+    """The `&&` conjuncts at parenthesis depth 0 of a condition with no
+    top-level `||` (a `||` inside parentheses stays inside its conjunct).
+    None when the condition has a top-level `||` or does not parse (see
+    `_top_level_disjuncts`), since neither provably requires its conjuncts."""
+    disjuncts = _top_level_disjuncts(cond)
+    if disjuncts is None or len(disjuncts) != 1:
+        return None
+    return _split_top_level(disjuncts[0], "&&")
+
+
+def _release_only_source(job: dict, jobs: dict, name: str) -> bool:
+    """True when `name` is a job this job `needs` whose `outputs` carry
+    `release_only` — the only `needs.<name>.outputs.release_only` that
+    resolves to the classifier rather than to an always-empty string."""
+    source = jobs.get(name)
+    return (
+        name in (_needs_list(job) or [])
+        and isinstance(source, dict)
+        and isinstance(source.get("outputs"), dict)
+        and _RELEASE_ONLY_OUTPUT in source["outputs"]
+    )
+
+
+def _skips_on_release_only(cond: str, mention: re.Pattern[str]) -> bool:
+    """True when a job-level `if:` names `release_only` in anything but a
+    `|| needs.<job>.outputs.release_only == 'true'` disjunct, which only ever
+    widens when the job runs."""
+    if not mention.search(cond):
+        return False
+    disjuncts = _top_level_disjuncts(cond)
+    return disjuncts is None or any(
+        mention.search(d) and not _RELEASE_ONLY_RUN.fullmatch(d) for d in disjuncts
+    )
+
+
+def _entry_jobs(ctx: str, aggregates: list[str], jobs: dict) -> list[tuple[str, dict, list[str]]]:
+    """(job id, job, contexts) for every job whose context is `ctx` or that the
+    entry's `aggregates` list names by job id, context, or leg-name prefix."""
+    out = []
+    for jid, job in jobs.items():
+        if not isinstance(job, dict):
+            continue
+        strategy = job.get("strategy")
+        contexts = expand_matrix_names(
+            str(job.get("name", jid)), strategy if isinstance(strategy, dict) else {}
+        )
+        if ctx in contexts or any(
+            agg == str(jid) or any(c == agg or c.startswith(agg + " (") for c in contexts)
+            for agg in aggregates
+        ):
+            out.append((str(jid), job, contexts))
+    return out
+
+
+def _ancestors(jid: str, jobs: dict) -> set[str]:
+    """Every job `jid` transitively `needs` (an unparseable `needs` stops the
+    walk; check 3 refuses it)."""
+    seen: set[str] = set()
+    pending = [jid]
+    while pending:
+        job = jobs.get(pending.pop())
+        for need in (_needs_list(job) or []) if isinstance(job, dict) else []:
+            if need not in seen:
+                seen.add(need)
+                pending.append(need)
+    return seen
+
+
+def _skip_conjuncts(cond: str, mention: re.Pattern[str]) -> tuple[list[str], list[str]]:
+    """(the jobs named by top-level `needs.<job>.outputs.release_only != 'true'`
+    conjuncts, every other `release_only`-naming part) of an `if:`."""
+    conjuncts = _top_level_and(cond)
+    if conjuncts is None:
+        return [], [cond] if mention.search(cond) else []
+    skips = [m.group(1) for c in conjuncts if (m := _RELEASE_ONLY_SKIP_OF.fullmatch(c))]
+    others = [c for c in conjuncts if mention.search(c) and not _RELEASE_ONLY_SKIP_OF.fullmatch(c)]
+    return skips, others
+
+
+def _release_only_pass_shape(
+    loc: str,
+    jid: str,
+    job: dict,
+    contexts: list[str],
+    jobs: dict,
+    mention: re.Pattern[str],
+    gate_contexts: set[str],
+    errors: list[str],
+) -> bool | None:
+    """Hold one job of a `release-only: pass` entry to a sanctioned shape.
+    True when it narrows its work on a release-only diff, False when it
+    neither narrows nor names `release_only`, None when refused."""
+    cond = str(job.get("if", ""))
+    steps = job.get("steps") if isinstance(job.get("steps"), list) else []
+    skips, others = _skip_conjuncts(cond, mention)
+    if skips:
+        # Shape (a): the whole job skips on a release-only diff.
+        if gate_contexts.intersection(contexts):
+            errors.append(
+                f"{loc}: job {jid!r} reports a `gate` context yet skips on a release-only "
+                "diff; a skipped required job reports a pass without executing anything (check 13)"
+            )
+            return None
+        if others or len(skips) != 1 or not _release_only_source(job, jobs, skips[0]):
+            errors.append(
+                f"{loc}: job {jid!r} must skip through exactly one top-level "
+                "`needs.<job>.outputs.release_only != 'true'` conjunct naming a job it "
+                "`needs` whose outputs carry `release_only` (check 13)"
+            )
+            return None
+        if any(isinstance(st, dict) and mention.search(str(st.get("if", ""))) for st in steps):
+            errors.append(
+                f"{loc}: job {jid!r} skips as a whole, so its steps may not name `release_only` (check 13)"
+            )
+            return None
+        return True
+    # Shape (b): the job executes its first step, every later step narrowed.
+    first = steps[0] if steps else None
+    if not (isinstance(first, dict) and isinstance(first.get("run"), str) and first["run"].strip()):
+        errors.append(
+            f"{loc}: job {jid!r} runs on a release-only diff, so its first step must be an "
+            "executed `run:` step (check 13)"
+        )
+        return None
+    first_if = " ".join(str(first.get("if", "")).split())
+    if mention.search(cond):
+        runs = [d for d in _top_level_disjuncts(cond) or () if _RELEASE_ONLY_RUN_OF.fullmatch(d)]
+        run_of = _RELEASE_ONLY_RUN_OF.fullmatch(runs[0]) if len(runs) == 1 else None
+        if (
+            run_of is None
+            or _skips_on_release_only(cond, mention)
+            or not _release_only_source(job, jobs, run_of.group(1))
+            or first_if != runs[0]
+        ):
+            errors.append(
+                f"{loc}: job {jid!r} must name `release_only` only as one top-level "
+                "`needs.<job>.outputs.release_only == 'true'` disjunct, over a job it "
+                "`needs` whose outputs carry `release_only`, with its first step gated "
+                "`if:` exactly that disjunct (check 13)"
+            )
+            return None
+    elif "if" in first:
+        errors.append(
+            f"{loc}: job {jid!r} must keep its first step unconditional, or gate it on "
+            "the release-only disjunct of its job `if:` (check 13)"
+        )
+        return None
+    for idx, st in enumerate(steps[1:], start=2):
+        st_skips, st_others = _skip_conjuncts(
+            str(st.get("if", "")) if isinstance(st, dict) else "", mention
+        )
+        if len(st_skips) != 1 or st_others or not _release_only_source(job, jobs, st_skips[0]):
+            errors.append(
+                f"{loc}: job {jid!r} step {idx} would run on a release-only diff; every step "
+                "after the first must carry one top-level `needs.<job>.outputs.release_only "
+                "!= 'true'` conjunct over a job it `needs` whose outputs carry "
+                "`release_only` (check 13)"
+            )
+            return None
+    return len(steps) > 1 or bool(mention.search(cond))
+
+
+def _declared_release_only(entry: dict, loc: str, errors: list[str]) -> str | None:
+    """The mode of a well-formed `release-only:` declaration, else None with
+    the refusal on record."""
+    declared = entry.get("release-only")
+    if (
+        isinstance(declared, dict)
+        and len(declared) == 1
+        and next(iter(declared)) in _RELEASE_ONLY_MODES
+        and isinstance(next(iter(declared.values())), str)
+        and next(iter(declared.values())).strip()
+    ):
+        return str(next(iter(declared)))
+    errors.append(
+        f"{loc}: must be a mapping with exactly one key, `run` or `pass`, whose value "
+        f"is a non-empty reason; got {declared!r} (check 13)"
+    )
+    return None
+
+
+def check_release_only_declarations(
+    entries: list[dict], gate_contexts: set[str], errors: list[str], root: str = REPO_ROOT
+) -> None:
+    """Check 13 (see the module docstring). Unparseable workflows are refused by
+    check 6 and missing producers by check 2; here they are skipped only after
+    that refusal is on record."""
+    docs: dict[str, dict | None] = {}
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        ctx = str(entry.get("context"))
+        producer = entry.get("producer")
+        loc = f"{ctx!r} release-only"
+        if not producer:
+            if "release-only" in entry:
+                errors.append(f"{loc}: declared on an entry with no producer workflow (check 13)")
+            continue
+        fname = str(producer)
+        if fname not in docs:
+            try:
+                with open(os.path.join(root, "workflows", fname)) as f:
+                    loaded = strict_yaml.safe_load(f)
+            except (OSError, yaml.YAMLError):
+                loaded = None
+            docs[fname] = loaded if isinstance(loaded, dict) else None
+        doc = docs[fname]
+        if doc is None:
+            continue
+        triggers = _triggers(doc)
+        if triggers is not None and not triggers & _RELEASE_ONLY_EVENTS:
+            if "release-only" in entry:
+                errors.append(
+                    f"{loc}: {fname} never runs on a pull request or in the merge queue, "
+                    "so the declaration describes nothing (check 13)"
+                )
+            continue
+        if "release-only" not in entry:
+            errors.append(
+                f"{loc}: {fname} runs on pull requests, so the entry must declare "
+                "`release-only: {run: <why>}` or `{pass: <why>}` (check 13)"
+            )
+            continue
+        mode = _declared_release_only(entry, loc, errors)
+        if mode is None:
+            continue
+        jobs = doc.get("jobs") if isinstance(doc.get("jobs"), dict) else {}
+        members = _entry_jobs(ctx, [str(a) for a in entry.get("aggregates") or []], jobs)
+        if not members:
+            errors.append(f"{loc}: no job in {fname} reports this context (check 13)")
+            continue
+        mention = _release_only_mention(doc)
+        member_ids = {jid for jid, _, _ in members}
+        for jid, job, _ in members:
+            skipped = sorted(
+                a
+                for a in _ancestors(jid, jobs) - member_ids
+                if isinstance(jobs.get(a), dict)
+                and _skips_on_release_only(str(jobs[a].get("if", "")), mention)
+            )
+            if skipped and (mode == "run" or not _ALWAYS.search(str(job.get("if", "")))):
+                fix = (
+                    "declare `pass`"
+                    if mode == "run"
+                    else "run it `always()` and fail closed on the skip in a step"
+                )
+                errors.append(
+                    f"{loc}: job {jid!r} needs {', '.join(skipped)}, which skip on a "
+                    f"release-only diff, so it would skip too; {fix} (check 13)"
+                )
+        if mode == "run":
+            for jid, job, _ in members:
+                steps = job.get("steps") if isinstance(job.get("steps"), list) else []
+                if mention.search(str(job.get("if", ""))) or any(
+                    isinstance(st, dict) and mention.search(str(st.get("if", ""))) for st in steps
+                ):
+                    errors.append(
+                        f"{loc}: declared `run` but job {jid!r} names `release_only` in an "
+                        "`if:`, so a release-only diff changes what it executes (check 13)"
+                    )
+            continue
+        shapes = [
+            _release_only_pass_shape(loc, jid, job, contexts, jobs, mention, gate_contexts, errors)
+            for jid, job, contexts in members
+        ]
+        if None not in shapes and not any(shapes):
+            errors.append(
+                f"{loc}: declared `pass` but no job narrows on `release_only`, so a "
+                "release-only diff runs it in full (check 13)"
+            )
 
 
 def _needs_list(job: dict) -> list[str] | None:
@@ -3610,6 +3926,13 @@ def main() -> int:
 
     # ---- 9. no release-only skip-as-pass on a gate producer ----
     check_release_only_skips(
+        {ctx for ctx, e in by_context.items() if e.get("disposition") == "gate"},
+        errors,
+    )
+
+    # ---- 13. every PR-reachable context declares its release-only behaviour ----
+    check_release_only_declarations(
+        entries,
         {ctx for ctx, e in by_context.items() if e.get("disposition") == "gate"},
         errors,
     )

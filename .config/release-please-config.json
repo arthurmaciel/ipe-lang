@@ -13,6 +13,11 @@
         {
           "type": "generic",
           "path": "Cargo.toml"
+        },
+        {
+          "type": "toml",
+          "path": "Cargo.lock",
+          "jsonpath": "$.package[?(@.name.value==='e2e-support' || @.name.value==='ipe' || @.name.value==='ipe-runtime-rust' || @.name.value==='ipe-wasm' || @.name.value==='ipe_annotate' || @.name.value==='ipe_backend' || @.name.value==='ipe_backend_rust' || @.name.value==='ipe_bindgen' || @.name.value==='ipe_canon' || @.name.value==='ipe_db' || @.name.value==='ipe_diagnostics' || @.name.value==='ipe_docs' || @.name.value==='ipe_env' || @.name.value==='ipe_ffi' || @.name.value==='ipe_fmt' || @.name.value==='ipe_intern' || @.name.value==='ipe_ir' || @.name.value==='ipe_kernels' || @.name.value==='ipe_lint' || @.name.value==='ipe_lower' || @.name.value==='ipe_lsp_features' || @.name.value==='ipe_lsp_server' || @.name.value==='ipe_parse' || @.name.value==='ipe_path_core' || @.name.value==='ipe_sandbox' || @.name.value==='ipe_stdlib' || @.name.value==='ipe_syntax' || @.name.value==='ipe_types' || @.name.value==='ipe_watch' || @.name.value==='ipe_wrapper' || @.name.value==='playground-jail-runner' || @.name.value==='regen-cli-transcripts' || @.name.value==='regen-goldens')].version"
         }
       ]
     }
