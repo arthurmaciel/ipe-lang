@@ -334,40 +334,24 @@ impl<Model, Msg> FileStore<Model, Msg> {
     /// crash mid-write never leaves a truncated map a later `new` would fail to
     /// parse (and thus silently drop every session).
     ///
-    /// On unix the temp file is created `0600` (owner-only) BEFORE any bytes are
-    /// written, so the checkpoint map — which may hold Model secrets — is never
-    /// world-readable, not even momentarily. The rename carries the mode to the
-    /// final path (rename preserves the inode's permissions).
+    /// The temp file comes from the shared scratch primitive: an unguessable
+    /// name, created exclusively, never through a symlink, and verified `0600`
+    /// (owner-only) BEFORE any bytes are written, so the checkpoint map — which
+    /// may hold Model secrets — is never world-readable, not even momentarily.
+    /// The rename carries the mode to the final path (rename preserves the
+    /// inode's permissions).
     fn persist(&self, disk: &HashMap<String, (String, i64)>) {
         use std::io::Write as _;
         let Ok(json) = serde_json::to_string(disk) else {
             return;
         };
-        let tmp = self.path.with_extension("tmp");
-        // The temp file is created exclusively: a leftover temp (or a symlink
-        // planted at its name) is removed as the entry it is, never opened, so
-        // the map can never be written through a link.
-        let _ = std::fs::remove_file(&tmp);
-        let mut opts = std::fs::OpenOptions::new();
-        opts.write(true).create_new(true);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::OpenOptionsExt as _;
-            opts.mode(0o600);
-        }
-        let Ok(mut file) = opts.open(&tmp) else {
+        let Ok((tmp, mut file)) = crate::scratch_core::exclusive_sibling(&self.path) else {
             return;
         };
-        // Belt and braces: pin the mode on the open handle before any secret
-        // is written.
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt as _;
-            let _ = file.set_permissions(std::fs::Permissions::from_mode(0o600));
-        }
-        if file.write_all(json.as_bytes()).is_ok() && file.flush().is_ok() {
-            drop(file);
-            let _ = std::fs::rename(&tmp, &self.path);
+        let written = file.write_all(json.as_bytes()).is_ok() && file.flush().is_ok();
+        drop(file);
+        if !written || std::fs::rename(&tmp, &self.path).is_err() {
+            let _ = std::fs::remove_file(&tmp);
         }
     }
 }

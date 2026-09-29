@@ -344,31 +344,24 @@ fn pick_free_port() -> Option<u16> {
 /// the parent recorded. Decided BEFORE the router is built so both the proxy and
 /// the in-process fallback sit under the same observability middleware.
 /// The console child's data store path. The user's `IPE_CONSOLE_DB_PATH` when
-/// set (durable history at their chosen location), else an internal per-process
-/// temp file so the console works zero-config (a lean app gets a live console
-/// without configuring durability).
-fn console_store_path() -> String {
+/// set (durable history at their chosen location), else `console.db` inside a
+/// private per-process scratch directory so the console works zero-config (a
+/// lean app gets a live console without configuring durability).
+///
+/// `None` when no private scratch directory can be created; the caller then
+/// serves the in-process console rather than a store another local user could
+/// predict, pre-create, or redirect.
+fn console_store_path() -> Option<String> {
     match crate::system::read_env_var("IPE_CONSOLE_DB_PATH") {
-        Ok(p) if !p.is_empty() => p,
-        // Default to a per-process file in the temp dir, but add an UNGUESSABLE
-        // suffix: a bare `ipe-console-<pid>.db` is predictable, so a local
-        // attacker on the shared temp dir could pre-create that path (or a
-        // symlink) and hijack/redirect the console store (TOCTOU). The nonce is
-        // OS-seeded via RandomState (std-only — no new crate in this shared
-        // module). Computed once per process and passed to the child via env.
+        Ok(p) if !p.is_empty() => Some(p),
         _ => {
-            use std::hash::{BuildHasher, Hasher};
-            let nonce = std::collections::hash_map::RandomState::new()
-                .build_hasher()
-                .finish();
-            std::env::temp_dir()
-                .join(format!(
-                    "ipe-console-{}-{:016x}.db",
-                    std::process::id(),
-                    nonce
-                ))
-                .to_string_lossy()
-                .into_owned()
+            let leaf = crate::scratch_core::LeafName::new("console.db").ok()?;
+            // The child owns the store for the life of the process, so the
+            // directory is kept past this call.
+            let dir = crate::scratch_core::ScratchDir::new("ipe-console")
+                .ok()?
+                .into_path();
+            Some(dir.join(leaf).to_string_lossy().into_owned())
         }
     }
 }
@@ -402,7 +395,9 @@ pub async fn ensure_console_proxy() -> bool {
     //     directly; the child only reads it. No push.
     //   - lean/memory parent → the child collects: the parent PUSHES its in-RAM
     //     telemetry to the child, which writes + reads the store.
-    let store = console_store_path();
+    let Some(store) = console_store_path() else {
+        return false;
+    };
     let parent_writes = parent_spill_active();
     let port = match pick_free_port() {
         Some(p) => p,

@@ -33,6 +33,8 @@ pub mod log;
 pub mod math;
 pub mod money;
 pub mod home_core;
+pub mod scratch_core;
+pub mod scratch_host;
 pub mod path_core;
 pub mod path;
 pub mod secret;

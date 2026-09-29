@@ -5,7 +5,7 @@
 //! typed refusals. Read what an external writer wrote through
 //! [`ScratchFile::read_all`], never by re-opening the path.
 
-pub use ipe_sandbox::scratch::{ScratchDir, ScratchFile};
+pub use ipe_sandbox::scratch::{LeafName, ScratchDir, ScratchFile};
 
 // ── Tests ────────────────────────────────────────────────────────────────────
 
@@ -118,10 +118,10 @@ mod tests {
         let _ = std::fs::remove_file(&canary);
     }
 
-    /// No PRODUCTION code in the `ipe-cli` or `ipe-wrapper` crates (outside the
-    /// sanctioned `scratch` modules) derives a temp path from `temp_dir()` — all
-    /// such paths must go through a `scratch` module's exclusively-created
-    /// constructors.
+    /// No PRODUCTION code in the `ipe-cli`, `ipe-wrapper`, or runtime crates
+    /// (outside the sanctioned `scratch` modules) derives a temp path from
+    /// `temp_dir()` — all such paths must go through a `scratch` module's
+    /// exclusively-created constructors.
     ///
     /// Both the single-line form (`temp_dir().join(name)`) and the split form
     /// (`let base = temp_dir(); base.join(name)`) are caught: a bare
@@ -133,23 +133,32 @@ mod tests {
     /// verify/exec or verify/read identity gap that the production paths do.
     ///
     /// This is the class gate: it keeps the `toctou-verify-one-exec-other-scratch`
-    /// class closed against future PRODUCTION regressions across both crates.
+    /// class closed against future PRODUCTION regressions across all three crates.
     #[test]
     fn no_predictable_temp_names_in_production_code() {
-        // ipe-cli src, and the sibling ipe-wrapper src (the two crates that
-        // construct jail scratch / embedded-app temp paths).
-        let cli_src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
-        let wrapper_src = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .map(|p| p.join("ipe-wrapper").join("src"));
+        // ipe-cli src, the sibling ipe-wrapper src (jail scratch and
+        // embedded-app temp paths), and the runtime src (every temp path an
+        // emitted program builds).
+        let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let cli_src = manifest.join("src");
+        let siblings = manifest.parent().into_iter().flat_map(|p| {
+            [
+                p.join("ipe-wrapper").join("src"),
+                p.join("runtime").join("rust").join("src"),
+            ]
+        });
 
-        for src_root in std::iter::once(cli_src).chain(wrapper_src) {
+        for src_root in std::iter::once(cli_src).chain(siblings) {
             let mut rs_files: Vec<std::path::PathBuf> = Vec::new();
             collect_rs_files(&src_root, &mut rs_files);
             for path in &rs_files {
                 // The sanctioned scratch modules are the one place `temp_dir()`
                 // may be joined (behind exclusive-create + entropy).
-                if path.file_name().and_then(|n| n.to_str()) == Some("scratch.rs") {
+                if path
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .is_some_and(|n| n.starts_with("scratch"))
+                {
                     continue;
                 }
                 // An out-of-line test module carries no inline `#[cfg(test)]`

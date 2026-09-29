@@ -116,33 +116,19 @@ fn write_blob(dest: &RecordDest, blob: &str) {
 
 /// Replace `path` with `bytes` through an exclusively created sibling temp file.
 ///
-/// The temp file is created with `create_new` (never opening an existing file or
-/// symlink) and renamed over `path`, so the dump never writes through a symlink
-/// planted at the destination; a symlinked destination is refused outright.
+/// The temp file comes from the shared scratch primitive (unguessable name,
+/// exclusive, never through a symlink, mode 0600) and is renamed over `path`,
+/// so the dump never writes through a symlink planted at the destination; a
+/// symlinked destination is refused outright.
 fn replace_file(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
     if std::fs::symlink_metadata(path).is_ok_and(|meta| meta.file_type().is_symlink()) {
         return Err(std::io::Error::from(std::io::ErrorKind::InvalidInput));
     }
-    let parent = path
-        .parent()
-        .filter(|p| !p.as_os_str().is_empty())
-        .unwrap_or_else(|| std::path::Path::new("."));
-    let name = path
-        .file_name()
-        .map_or_else(String::new, |n| n.to_string_lossy().into_owned());
-    let tmp = parent.join(format!(".{name}.ipe-tmp.{}", std::process::id()));
-    let written = std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&tmp)
-        .and_then(|mut file| {
-            file.write_all(bytes)?;
-            file.flush()
-        });
+    let (tmp, mut file) = crate::scratch_core::exclusive_sibling(path)?;
+    let written = file.write_all(bytes).and_then(|()| file.flush());
+    drop(file);
     if let Err(e) = written {
-        if e.kind() != std::io::ErrorKind::AlreadyExists {
-            let _ = std::fs::remove_file(&tmp);
-        }
+        let _ = std::fs::remove_file(&tmp);
         return Err(e);
     }
     std::fs::rename(&tmp, path).inspect_err(|_| {

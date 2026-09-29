@@ -56,9 +56,9 @@ pub(crate) fn read_env_var(key: &str) -> Result<String, std::env::VarError> {
 ///
 /// Reads the shared platform variable [`super::home_core::HOME_VAR`]
 /// (`USERPROFILE` on Windows, `HOME` elsewhere), overlay-aware like
-/// [`read_env_var`]. Gated to the only feature set whose module reads it (the
-/// console proxy's cached-binary lookup).
-#[cfg(all(feature = "web-core", feature = "http_client"))]
+/// [`read_env_var`]. Gated to its readers: the console proxy's cached-binary
+/// lookup, and off Unix the scratch primitive's profile-containment check.
+#[cfg(any(all(feature = "web-core", feature = "http_client"), not(unix)))]
 pub(crate) fn home_dir() -> Option<std::path::PathBuf> {
     home_dir_from_var(read_env_var(super::home_core::HOME_VAR))
 }
@@ -70,7 +70,7 @@ pub(crate) fn home_dir() -> Option<std::path::PathBuf> {
 /// counts as a home directory (UTF-8, absolute, and, on Windows, not a
 /// verbatim/device-namespace prefix) — this function makes none of them
 /// itself.
-#[cfg(all(feature = "web-core", feature = "http_client"))]
+#[cfg(any(all(feature = "web-core", feature = "http_client"), not(unix)))]
 fn home_dir_from_var(raw: Result<String, std::env::VarError>) -> Option<std::path::PathBuf> {
     super::home_core::HomeDir::parse(raw.ok().map(std::ffi::OsString::from))
         .map(super::home_core::HomeDir::into_path)

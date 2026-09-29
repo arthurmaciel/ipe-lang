@@ -105,10 +105,12 @@ bcrypt = "0.17"
 
 # Unix-only: `Io.readSecret` toggles terminal echo via termios (tcgetattr /
 # tcsetattr / isatty) in the vendored runtime's `io` module; `Process.runInPty`
-# allocates + sizes a pseudo-terminal via rustix's safe pty/termios wrappers.
+# allocates + sizes a pseudo-terminal via rustix's safe pty/termios wrappers;
+# `scratch_core` opens scratch files `O_NOFOLLOW` and checks their owner against
+# the effective uid/gid (`fs` + `process`).
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
-rustix = { version = "1", features = ["pty", "termios", "fs", "std"] }
+rustix = { version = "1", features = ["pty", "termios", "fs", "process", "std"] }
 
 [profile.dev]
 debug = 0

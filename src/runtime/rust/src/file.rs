@@ -354,17 +354,17 @@ pub fn file_is_dir<E: Send + 'static>(path: Path) -> IpeTask<E, bool> {
 // ─── Temp paths ────────────────────────────────────────────────────────────
 
 /// `Ipe.File.tempFile : String -> Task Error String`
-/// Create a uniquely-named empty file in the system temp directory, using
-/// `prefix` as the filename prefix. Returns the absolute path.
+/// Create a private, unguessably named empty file in the system temp directory,
+/// tagged with `prefix`. Returns the absolute path.
 /// The caller is responsible for removing the file when done.
 ///
-/// Implementation: retry loop with a monotonic-time + process-ID suffix until
-/// exclusive creation succeeds (`O_CREAT|O_EXCL` semantics via
-/// `OpenOptions::create_new`). No `tempfile` crate needed (pure `std`).
+/// The file is created through the shared scratch primitive: under a verified
+/// temp base, exclusively, never through a symlink, mode 0600, with a name
+/// carrying 128 bits of OS CSPRNG entropy.
 #[must_use]
 pub fn file_temp_file<E: Send + From<String> + 'static>(prefix: String) -> IpeTask<E, String> {
     Box::pin(async move {
-        match run_blocking(move || make_temp_path(&prefix, false)).await {
+        match run_blocking(move || temp_file_sync(&prefix)).await {
             Ok(p) => ok_res(p),
             Err(e) => IpeResult::Err(str_err(&e)),
         }
@@ -372,78 +372,37 @@ pub fn file_temp_file<E: Send + From<String> + 'static>(prefix: String) -> IpeTa
 }
 
 /// `Ipe.File.tempDir : String -> Task Error String`
-/// Create a uniquely-named directory in the system temp directory, using
-/// `prefix` as the directory name prefix. Returns the absolute path.
+/// Create a private, unguessably named directory in the system temp directory,
+/// tagged with `prefix`. Returns the absolute path.
 /// The caller is responsible for removing the directory when done.
+///
+/// The directory is created through the shared scratch primitive: under a
+/// verified temp base, exclusively, mode 0700, re-verified as the effective
+/// user's, with a name carrying 128 bits of OS CSPRNG entropy.
 #[must_use]
 pub fn file_temp_dir<E: Send + From<String> + 'static>(prefix: String) -> IpeTask<E, String> {
     Box::pin(async move {
-        match run_blocking(move || make_temp_path(&prefix, true)).await {
+        match run_blocking(move || temp_dir_sync(&prefix)).await {
             Ok(p) => ok_res(p),
             Err(e) => IpeResult::Err(str_err(&e)),
         }
     })
 }
 
-/// Shared helper: create a uniquely-named file (`is_dir=false`) or directory
-/// (`is_dir=true`) in the system temp directory, returning its absolute path.
-///
-/// Uses a monotonic-time nanos + process-ID suffix and retries up to 32 times
-/// to get an exclusive slot (the same approach libc `tempfile()` uses).  No
-/// external crate needed.
-fn make_temp_path(prefix: &str, is_dir: bool) -> Result<String, String> {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    // Sanitise the caller-controlled prefix: keep only filename-safe chars so it
-    // cannot contain a path separator ('/'/'\\' — would escape temp_dir) or be
-    // absolute. Without this, prefix="../../etc/" or "/tmp/evil" is a
-    // write-arbitrary-path primitive (Path::join honours absolute/.. components).
-    let prefix: String = prefix
-        .chars()
-        .filter(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
-        .collect();
-    let prefix = prefix.as_str();
-    let base = std::env::temp_dir();
-    let pid = std::process::id();
-    // Retry loop: collision is extremely rare but theoretically possible.
-    for attempt in 0u32..32 {
-        let nanos = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map_or(attempt, |d| d.subsec_nanos());
-        let name = format!("{prefix}{pid}{nanos:08x}{attempt:04x}");
-        let path = base.join(&name);
-        if is_dir {
-            // Owner-only (0700) on Unix — a temp dir created with the default
-            // umask can be world-readable/traversable, exposing whatever the
-            // caller writes into it .
-            #[cfg_attr(not(unix), allow(unused_mut))] // mutated only under cfg(unix)
-            let mut builder = std::fs::DirBuilder::new();
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::DirBuilderExt;
-                builder.mode(0o700);
-            }
-            match builder.create(&path) {
-                Ok(()) => return Ok(path.to_string_lossy().into_owned()),
-                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
-                Err(e) => return Err(format!("{e}")),
-            }
-        } else {
-            // Owner-only (0600) on Unix — same rationale;  CreateTemp is 0600.
-            let mut opts = std::fs::OpenOptions::new();
-            opts.write(true).create_new(true);
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::OpenOptionsExt;
-                opts.mode(0o600);
-            }
-            match opts.open(&path) {
-                Ok(_) => return Ok(path.to_string_lossy().into_owned()),
-                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
-                Err(e) => return Err(format!("{e}")),
-            }
-        }
-    }
-    Err("could not create a unique temporary path after 32 attempts".to_string())
+/// A private temp file tagged with `prefix`, kept past this call.
+fn temp_file_sync(prefix: &str) -> Result<String, String> {
+    let root = super::scratch_core::temp_root().map_err(|e| e.to_string())?;
+    super::scratch_core::private_file_under(&root, prefix)
+        .map(|(path, _file)| path.to_string_lossy().into_owned())
+        .map_err(|e| e.to_string())
+}
+
+/// A private temp directory tagged with `prefix`, kept past this call.
+fn temp_dir_sync(prefix: &str) -> Result<String, String> {
+    let root = super::scratch_core::temp_root().map_err(|e| e.to_string())?;
+    super::scratch_core::ScratchDir::new_under(&root, prefix)
+        .map(|dir| dir.into_path().to_string_lossy().into_owned())
+        .map_err(|e| e.to_string())
 }
 
 // ─── Copy / rename ─────────────────────────────────────────────────────────

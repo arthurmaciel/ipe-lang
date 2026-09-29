@@ -43,7 +43,11 @@ use std::process::Command;
 
 use crate::cli_args::OutputFormat;
 use crate::style::TerminalSafe;
-use crate::{CliError, runtime_embed, scratch::ScratchDir, style, toolchain};
+use crate::{
+    CliError, runtime_embed,
+    scratch::{LeafName, ScratchDir},
+    style, toolchain,
+};
 
 /// Whether a check passed, warns, is a hard miss, or cannot be known.
 ///
@@ -782,7 +786,10 @@ fn run_link_probe(name: &str) -> LinkerProbeResult {
     let Ok(scratch) = ScratchDir::new("ipe-linker-probe") else {
         return LinkerProbeResult::Rejected;
     };
-    let out_path = scratch.child("probe");
+    let Ok(leaf) = LeafName::new("probe") else {
+        return LinkerProbeResult::Rejected;
+    };
+    let out_path = scratch.child(&leaf);
     let out = Command::new("rustc")
         .args([
             "-",

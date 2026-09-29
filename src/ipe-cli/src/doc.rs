@@ -3164,6 +3164,10 @@ fn check_examples() -> Result<(), CliError> {
             path: std::path::PathBuf::from("ipe-doc-examples"),
             source: e,
         })?;
+    let snippet_leaf = crate::scratch::LeafName::new("Main.ipe").map_err(|e| CliError::Io {
+        path: std::path::PathBuf::from("Main.ipe"),
+        source: e.into(),
+    })?;
 
     for (module_name, src) in &all_sources {
         let examples = extract_doc_examples(module_name, src);
@@ -3173,7 +3177,7 @@ fn check_examples() -> Result<(), CliError> {
             let module_src = synthesize_module(&ex.body, module_name, &module_imports);
 
             // Write to a temp file.
-            let snippet_path = tmp_dir.child("Main.ipe");
+            let snippet_path = tmp_dir.child(&snippet_leaf);
             std::fs::write(&snippet_path, &module_src)
                 .map_err(|e| crate::io_err(&snippet_path, e))?;
 
