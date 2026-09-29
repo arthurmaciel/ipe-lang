@@ -61,4 +61,11 @@ fn url_parser_combinators_ipec_cargo_and_run_zero() {
         "the matched routes must render (map0/map1int/map1str/map1query + oneOf); got: {:?}",
         outcome.stdout
     );
+    // A path segment is percent-decoded, never form-decoded: `/user/a+b` keeps
+    // its `+`, while the form-encoded query `q=a+b` decodes `+` to a space.
+    assert!(
+        outcome.stdout.contains("user:a+b search:a b"),
+        "a `+` in a path segment must stay `+` and a `+` in a query must be a space; got: {:?}",
+        outcome.stdout
+    );
 }

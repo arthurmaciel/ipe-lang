@@ -716,7 +716,7 @@ mod registry_phase_c_tests {
             K::MaybeCombine,
             K::MaybeIsJust,
             K::MaybeIsNothing,
-            // Encoding (6): base64/url/hex text codecs. Encoders
+            // Encoding (7): base64/url/percent/hex text codecs. Encoders
             // `String -> String`, decoders `String -> Result Error String`.
             // Each is a `Ty::Var(u32::MAX)` hole (`kernel_ty` has no Encoding
             // arm), confirmed by `first_schemed_were_holes`. The runtime text
@@ -726,6 +726,7 @@ mod registry_phase_c_tests {
             K::EncodingBase64Decode,
             K::EncodingUrlEncode,
             K::EncodingUrlDecode,
+            K::EncodingPercentDecode,
             K::EncodingHexEncode,
             K::EncodingHexDecode,
             // Ipe.Html / Ipe.Ui / Ipe.Web rendering family (42).

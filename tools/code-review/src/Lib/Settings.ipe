@@ -33,7 +33,12 @@ type alias IndexSettings =
 -- startup so a bad value stops the server before it listens.
 indexSettings : Task.Task Error IndexSettings
 indexSettings =
-    Task.andThen (\rawDb -> Task.andThen (\rawRoot -> Task.andThen (\db -> Task.andThen (\root -> Task.succeed { db = db, root = root }) (RepoPath.parseRoot rawRoot)) (parseDbLocation "IPE_INDEX_DB" rawDb)) (System.getenv "IPE_INDEX_ROOT")) (System.getenv "IPE_INDEX_DB")
+    do
+        rawDb <- System.getenv "IPE_INDEX_DB"
+        rawRoot <- System.getenv "IPE_INDEX_ROOT"
+        db <- parseDbLocation "IPE_INDEX_DB" rawDb
+        root <- RepoPath.parseRoot rawRoot
+        Task.succeed { db = db, root = root }
 
 
 -- The review database location from `IPE_REVIEW_DB`, `review.db` in the
@@ -69,10 +74,11 @@ parseDbLocation var raw =
     else
         RepoPath.absolutize raw
             |> Task.mapError (\_ -> Error.invalidInput (dbRefusal var "is not a valid file path"))
-            |> Task.map DbFile
+            |> Task.andThen (toDbFile var)
 
 
--- The part of a `sqlite://` URL after the scheme, percent-decoded into an
+-- The part of a `sqlite://` URL after the scheme, percent-decoded (RFC 3986,
+-- so a `+` stays a `+` and names the same file as the plain path) into an
 -- absolute file path. Refused: a query or fragment (a query can set its own
 -- `mode`, and the open mode is the app's to choose), a malformed escape, an
 -- empty path, and any decoded path not starting with `/` — which covers
@@ -84,7 +90,7 @@ parseSqliteUrl var encoded =
         Task.fail (Error.invalidInput (dbRefusal var "is a `sqlite://` URL with a query or fragment; the app sets the open mode, so drop it"))
 
     else
-        case Encoding.urlDecode encoded of
+        case Encoding.percentDecode encoded of
             Err _ ->
                 Task.fail (Error.invalidInput (dbRefusal var "is a `sqlite://` URL with a malformed percent-escape"))
 
@@ -96,10 +102,22 @@ parseSqliteUrl var encoded =
                     Path.fromString decoded
                         |> Task.fromResult
                         |> Task.mapError (\_ -> Error.invalidInput (dbRefusal var "is a `sqlite://` URL whose path is not a valid file path"))
-                        |> Task.map DbFile
+                        |> Task.andThen (toDbFile var)
 
                 else
                     Task.fail (Error.invalidInput (dbRefusal var "is a `sqlite://` URL whose path is not absolute; write `sqlite:///absolute/path`"))
+
+
+-- The one step both spellings end in: a cleaned absolute path becomes a
+-- `DbLocation` unless it is the root directory itself, which a `..` climbing
+-- past `/` cleans to and which can never be a database file.
+toDbFile : String -> Path -> Task.Task Error DbLocation
+toDbFile var path =
+    if Path.toString path == "/" then
+        Task.fail (Error.invalidInput (dbRefusal var "names the root directory, not a database file"))
+
+    else
+        Task.succeed (DbFile path)
 
 
 dbRefusal : String -> String -> String

@@ -46,6 +46,17 @@ countReviewRows db uid bodyHash =
         |> Task.map List.length
 
 
+countDrainRows : Db -> String -> String -> Task.Task Error Int
+countDrainRows db uid bodyHash =
+    Db.findWhere db
+        "drain_cursor"
+        (Sql.and
+            (Sql.eq (Sql.column "uid") (Sql.string uid))
+            (Sql.eq (Sql.column "body_hash") (Sql.string bodyHash))
+        )
+        |> Task.map List.length
+
+
 expectErr : Task.Task Error Int -> Task.Task Error Bool
 expectErr t =
     t
@@ -893,6 +904,10 @@ badIndexDbRefused =
         urlNested <- settingsRefused "sqlite://sqlite:" "not absolute"
         urlBadEscape <- settingsRefused "sqlite:///tmp/index%zz.db" "malformed percent-escape"
         urlNul <- settingsRefused "sqlite:///tmp/index%00.db" "not a valid file path"
+        urlAboveRoot <- settingsRefused "sqlite:///.." "root directory"
+        urlDeepAboveRoot <- settingsRefused "sqlite:///tmp/../../.." "root directory"
+        urlRoot <- settingsRefused "sqlite:///" "root directory"
+        pathAboveRoot <- settingsRefused "/.." "root directory"
         noSlashes <- settingsRefused "sqlite:index.db" "without `//`"
         fileNoSlashes <- settingsRefused "file:index.db" "without `//`"
         secret <- settingsRefusal "postgres://admin:s3cr3t-pw@db/index"
@@ -913,6 +928,10 @@ badIndexDbRefused =
                 && urlNested
                 && urlBadEscape
                 && urlNul
+                && urlAboveRoot
+                && urlDeepAboveRoot
+                && urlRoot
+                && pathAboveRoot
                 && noSlashes
                 && fileNoSlashes
                 && refusedFor "IPE_INDEX_DB" secret
@@ -961,7 +980,7 @@ failedWritesKeepTheirError =
 -- A cursor insert that loses the race to a concurrent drain of the same pair
 -- hits the primary key, then refreshes the row that won: the pair already has
 -- its cursor row when the insert runs, and the insert reports that one row
--- written instead of failing.
+-- written instead of failing, leaving the pair with exactly one row.
 lostCursorInsertRefreshes : Task.Task Error Bool
 lostCursorInsertRefreshes =
     let
@@ -979,10 +998,48 @@ lostCursorInsertRefreshes =
         LibDb.migrate db
         first <- LibDb.recordDrain db "raced" "h"
         lost <- LibDb.insertDrainCursor db "raced" "h"
+        rows <- countDrainRows db "raced" "h"
         removeFileIfAny dbPath
         removeFileIfAny (dbPath ++ "-wal")
         removeFileIfAny (dbPath ++ "-shm")
-        Task.succeed (first == 1 && lost == 1)
+        Task.succeed (first == 1 && lost == 1 && rows == 1)
+
+
+-- A cursor insert that fails for a reason other than the key, on a writable
+-- database whose pair has no row, keeps the insert's own error: the retried
+-- refresh matches no row, so the failure is not read as a lost race. A trigger
+-- aborting every insert is that reason (`SQLITE_CONSTRAINT_TRIGGER`, 1811,
+-- not the primary key's 1555).
+blockedCursorInsertKeepsItsError : Task.Task Error Bool
+blockedCursorInsertKeepsItsError =
+    let
+        base =
+            System.getenvOr "TMPDIR" "/tmp" ++ "/ipe-review-blocked-insert"
+
+        dbPath =
+            base ++ "/review.db"
+    in
+    do
+        dir <- Task.fromResult (Path.fromString base)
+        File.mkdirAll dir
+        removeFileIfAny dbPath
+        db <- openReviewAt dbPath
+        LibDb.migrate db
+        Db.exec db "CREATE TRIGGER block_cursor BEFORE INSERT ON drain_cursor BEGIN SELECT RAISE(ABORT, 'blocked'); END" []
+        refusal <-
+            LibDb.insertDrainCursor db "fresh" "h"
+                |> Task.map (\_ -> Nothing)
+                |> Task.onError (\e -> Task.succeed (Just (Error.message e)))
+        rows <- countDrainRows db "fresh" "h"
+        removeFileIfAny dbPath
+        removeFileIfAny (dbPath ++ "-wal")
+        removeFileIfAny (dbPath ++ "-shm")
+        Task.succeed (refusal == Just triggerAbortError && rows == 0)
+
+
+triggerAbortError : String
+triggerAbortError =
+    "db: database error [1811]"
 
 
 readOnlyWriteError : String
@@ -1018,7 +1075,8 @@ hasDecision m =
 
 -- Every open URL carries exactly the app's mode, for a file path and a
 -- `sqlite://` URL alike, and a `sqlite://` URL parses to the same location as
--- the plain path it names.
+-- the plain path it names; a `+` in the URL path is a literal `+`, never a
+-- space.
 dbUrlsCarryAppMode : Task.Task Error Bool
 dbUrlsCarryAppMode =
     do
@@ -1026,9 +1084,18 @@ dbUrlsCarryAppMode =
         url <- Settings.parseDbLocation "IPE_INDEX_DB" "sqlite:///tmp/index%3F.db"
         absUrl <- Settings.parseDbLocation "IPE_INDEX_DB" "sqlite:///abs/x.db"
         absPath <- Settings.parseDbLocation "IPE_INDEX_DB" "/abs/x.db"
+        plusUrl <- Settings.parseDbLocation "IPE_INDEX_DB" "sqlite:///t/a+b.db"
+        escapedPlusUrl <- Settings.parseDbLocation "IPE_INDEX_DB" "sqlite:///t/a%2Bb.db"
+        plusPath <- Settings.parseDbLocation "IPE_INDEX_DB" "/t/a+b.db"
         Task.succeed
             (absUrl
                 == absPath
+                && plusUrl
+                == plusPath
+                && escapedPlusUrl
+                == plusPath
+                && Settings.reviewUrl plusUrl
+                == "sqlite:///t/a+b.db?mode=rwc"
                 && Settings.indexReadUrl absUrl
                 == "sqlite:///abs/x.db?mode=ro"
                 && Settings.indexReadUrl file
@@ -1688,6 +1755,11 @@ main =
             (\results ->
                 lostCursorInsertRefreshes
                     |> Task.map (\ok -> results ++ [ ( "cursor insert that lost the race refreshes the winner", ok ) ])
+            )
+        |> Task.andThen
+            (\results ->
+                blockedCursorInsertKeepsItsError
+                    |> Task.map (\ok -> results ++ [ ( "cursor insert failing off the key keeps its error", ok ) ])
             )
         |> Task.andThen
             (\results ->

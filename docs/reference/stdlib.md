@@ -1819,8 +1819,9 @@ Ipe.Encoding — text encoding helpers.
 |--------|----------|
 | `base64Encode` | Base64-encode a string (RFC 4648 standard alphabet, with padding). |
 | `base64Decode` | Base64-decode a string. |
-| `urlEncode` | Percent-encode a string for use in a URL component (RFC 3986). |
-| `urlDecode` | Percent-decode a URL-encoded string. |
+| `urlEncode` | Form-encode a string for a query-string key or value |
+| `urlDecode` | Form-decode a query-string key or value |
+| `percentDecode` | Percent-decode a URL path segment, a file location, or any other |
 | `hexEncode` | Hex-encode a string (lowercase output, two hex digits per byte). |
 | `hexDecode` | Hex-decode a string. |
 

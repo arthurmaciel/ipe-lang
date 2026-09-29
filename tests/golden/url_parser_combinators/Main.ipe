@@ -115,6 +115,12 @@ render =
         -- encoded form).
         ++ " "
         ++ routeOf "https://example.com/user/bad%C0"
+        -- A path is percent-encoded, not form-encoded: `+` in a segment stays a
+        -- literal `+`, while `+` in the (form-encoded) query is a space.
+        ++ " "
+        ++ routeOf "https://example.com/user/a+b"
+        ++ " "
+        ++ routeOf "https://example.com/search?q=a+b"
     }
 
 

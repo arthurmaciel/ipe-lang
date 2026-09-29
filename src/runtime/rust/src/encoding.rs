@@ -42,9 +42,11 @@ const QUERY: &AsciiSet = &NON_ALPHANUMERIC
 /// - Decoded bytes that are not valid UTF-8 are replaced with U+FFFD via
 ///   [`String::from_utf8_lossy`] rather than returning an error.
 ///
-/// # Why this differs from `url_decode` / the `urlDecode` kernel
+/// # Why this differs from the `urlDecode` / `percentDecode` kernels
 ///
-/// `url_decode` (the `Encoding.urlDecode` kernel) is **strict**: it rejects
+/// `url_decode` (`Encoding.urlDecode`, the strict form decode) and
+/// `percent_decode` (`Encoding.percentDecode`, the strict RFC 3986 decode,
+/// `+` literal — the one for path components) are **strict**: they reject
 /// malformed percent-escapes with `Err` at the boundary, as required for
 /// user-supplied strings that will be re-encoded, used as path components, or
 /// passed to security-sensitive sinks. That strictness is appropriate for
@@ -65,7 +67,7 @@ const QUERY: &AsciiSet = &NON_ALPHANUMERIC
 /// inspect. It is NOT used anywhere a malformed escape could escape the value
 /// boundary: the decoded string never flows into a file path, a SQL query, an
 /// outgoing HTTP header, or any re-encoding path. Callers that need a strict
-/// contract must use `url_decode` instead.
+/// contract must use `url_decode` or `percent_decode` instead.
 ///
 /// Shared by `server::parse_query` (incoming request query strings) and
 /// `http_client::http_parse_query` (`Http.parseQuery`) so both stay consistent.
@@ -169,24 +171,40 @@ fn is_well_formed_percent(s: &str) -> bool {
     true
 }
 
-/// Ipê `urlDecode : String -> Result Error String` — `QueryUnescape`: `+` -> space,
-/// then percent-decode (so a literal `%2B` round-trips back to `+`). Fails closed
-/// with `Err` on a malformed percent-escape (a `%` not followed by two hex
-/// digits) and on a decode that is not valid UTF-8.
-#[must_use]
-pub fn url_decode<E: From<String>>(s: String) -> IpeResult<E, String> {
-    let spaced = s.replace('+', " ");
-    if !is_well_formed_percent(&spaced) {
+/// Strict RFC 3986 §2.1 percent-decode of `s`, the one decoder both
+/// `urlDecode` and `percentDecode` share. `kernel` names the calling kernel in
+/// the error. Fails closed with `Err` on a malformed percent-escape (a `%` not
+/// followed by two hex digits) and on a decode that is not valid UTF-8.
+fn strict_percent_decode<E: From<String>>(s: &str, kernel: &str) -> IpeResult<E, String> {
+    if !is_well_formed_percent(s) {
         return IpeResult::Err(
-            "urlDecode: malformed percent-escape (a '%' must be followed by two hex digits)"
-                .to_string()
-                .into(),
+            format!(
+                "{kernel}: malformed percent-escape (a '%' must be followed by two hex digits)"
+            )
+            .into(),
         );
     }
-    match percent_decode_str(&spaced).decode_utf8() {
+    match percent_decode_str(s).decode_utf8() {
         Ok(cow) => IpeResult::Ok(cow.into_owned()),
-        Err(e) => IpeResult::Err(format!("urlDecode: {e}").into()),
+        Err(e) => IpeResult::Err(format!("{kernel}: {e}").into()),
     }
+}
+
+/// Ipê `urlDecode : String -> Result Error String` — the form decode
+/// (`application/x-www-form-urlencoded`, `QueryUnescape`), the inverse of
+/// `urlEncode`: `+` -> space, then strict percent-decode (so a literal `%2B`
+/// round-trips back to `+`).
+#[must_use]
+pub fn url_decode<E: From<String>>(s: String) -> IpeResult<E, String> {
+    strict_percent_decode(&s.replace('+', " "), "urlDecode")
+}
+
+/// Ipê `percentDecode : String -> Result Error String` — the RFC 3986 §2.1
+/// percent-decode for a URL path, a `file:`/`sqlite:` location, or any other
+/// non-form component: only `%XX` escapes decode, and a `+` stays a literal `+`.
+#[must_use]
+pub fn percent_decode<E: From<String>>(s: String) -> IpeResult<E, String> {
+    strict_percent_decode(&s, "percentDecode")
 }
 
 /// Ipê `hexEncode : String -> String` — encodes the input's UTF-8 bytes
@@ -237,6 +255,12 @@ pub fn ipe_base64_decode(s: String) -> IpeResult<crate::error::IpeError, String>
 #[must_use]
 pub fn ipe_url_decode(s: String) -> IpeResult<crate::error::IpeError, String> {
     url_decode(s)
+}
+
+/// Generated-code alias for `percent_decode` with `E = IpeError`.
+#[must_use]
+pub fn ipe_percent_decode(s: String) -> IpeResult<crate::error::IpeError, String> {
+    percent_decode(s)
 }
 
 /// Generated-code alias for `encoding_hex_decode` with `E = IpeError`.
@@ -388,6 +412,43 @@ mod tests {
         assert!(matches!(slash_upper, IpeResult::Ok(ref s) if s == "/"));
         let ascii: IpeResult<String, String> = url_decode("plain-ascii_1.0~".to_string());
         assert!(matches!(ascii, IpeResult::Ok(ref s) if s == "plain-ascii_1.0~"));
+    }
+
+    // `percentDecode` is the RFC 3986 decode: a `+` stays literal (the form
+    // decode's `+` -> space never applies), and `%2B` / `%20` decode to `+` /
+    // space.
+    #[test]
+    fn test_percent_decode_keeps_plus() {
+        let plus: IpeResult<String, String> = percent_decode("a+b".to_string());
+        assert!(matches!(plus, IpeResult::Ok(ref s) if s == "a+b"));
+        let escaped_plus: IpeResult<String, String> = percent_decode("%2B".to_string());
+        assert!(matches!(escaped_plus, IpeResult::Ok(ref s) if s == "+"));
+        let space: IpeResult<String, String> = percent_decode("a%20b".to_string());
+        assert!(matches!(space, IpeResult::Ok(ref s) if s == "a b"));
+        let path: IpeResult<String, String> = percent_decode("/t/a+b.db".to_string());
+        assert!(matches!(path, IpeResult::Ok(ref s) if s == "/t/a+b.db"));
+    }
+
+    // `percentDecode` refuses every malformed escape `urlDecode` refuses, and a
+    // non-UTF-8 decode.
+    #[test]
+    fn test_percent_decode_refusals() {
+        for bad in [
+            "a%ZZb",
+            "%zz",
+            "100%done",
+            "trailing%",
+            "%A",
+            "%2",
+            "%G0",
+            "bad-utf8-%C0",
+        ] {
+            let got: IpeResult<String, String> = percent_decode(bad.to_string());
+            assert!(
+                matches!(got, IpeResult::Err(ref e) if e.starts_with("percentDecode: ")),
+                "malformed input {bad:?} must be rejected by percentDecode"
+            );
+        }
     }
 
     #[test]
