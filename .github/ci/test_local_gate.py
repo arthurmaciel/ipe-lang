@@ -336,7 +336,7 @@ PLAN_ENTRIES = [
     gate("fmt", run("cargo fmt --all -- --check")),
     gate("clippy", run("cargo clippy --all-targets {packages} -- -D warnings")),
     gate("test", run("cargo nextest run {packages}", "cargo test --doc {lib_packages}", tier="affected")),
-    gate("e2e", run({"cmd": "cargo nextest run --workspace", "env": {"BIN": "{target_dir}/ipe"}}, tier="full")),
+    gate("e2e", run({"cmd": "cargo nextest run --workspace", "env": {"BIN": "{target_dir}/ipe", "IPE": "{ipe_bin}"}}, tier="full")),
     gate("dup", run("cargo fmt --all -- --check", tier="full")),
     gate("win", {"ci-only": "platform"}),
 ]
@@ -500,7 +500,7 @@ class Plan(unittest.TestCase):
 
     def test_local_placeholders_expand(self) -> None:
         e2e = [s for s in planned(lg.Tier.FULL, []) if s.context == "e2e"]
-        self.assertEqual([s.env for s in e2e], [(("BIN", "/t/ipe"),)])
+        self.assertEqual([s.env for s in e2e], [(("BIN", "/t/ipe"), ("IPE", "/t/release/ipe"))])
 
 
 class LiveManifest(unittest.TestCase):

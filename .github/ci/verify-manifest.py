@@ -197,6 +197,16 @@ skipped. Limits are listed on `check_workflow_steps`. Likewise mold is
       them.  Every Dependabot `cargo` directory is a literal path (no glob)
       holding a tracked `Cargo.lock` that passes that rule, and `/` is one of
       them, so every update lands in the lock that governs the graph.
+  15. One `ipe` build: in ci.yml only `IPE_BUILD_PRODUCER` compiles the `ipe`
+      package — a `cargo build`/`b`/`run`/`r`/`rustc`/`install` that selects
+      it (`-p ipe` in any spelling, `--workspace`/`--all`, or a
+      `--manifest-path`/`--path` naming `src/ipe-cli` or the root manifest)
+      in any other job is refused, as is a package spec this check cannot
+      read (a glob).  The producer must build it and upload
+      `IPE_BUILD_ARTIFACTS`; a job that downloads one of them must list the
+      producer in its own `needs:`.  LIMIT: a bare `cargo build` (no package
+      selection) builds whatever its runtime cwd holds; the cwd is not
+      static, so such a line is not attributed to `ipe`.
 
 Pure stdlib + PyYAML (already a CI dependency).  No network; check 12 runs
 `git ls-files` locally to list tracked paths.
@@ -1704,6 +1714,153 @@ def check_one_lock_per_graph(
             )
     if "/" not in dirs:
         errors.append("check 14: .github/dependabot.yml proposes no cargo update for the root Cargo.lock")
+
+
+IPE_BUILD_PRODUCER = "build-tools"
+IPE_BUILD_ARTIFACTS = frozenset({"ci-ipe-release", "ci-build-tools"})
+IPE_RELEASE_ARTIFACT = "ci-ipe-release"
+IPE_PACKAGE = "ipe"
+IPE_PACKAGE_DIR = "src/ipe-cli"
+# Cargo subcommands that compile the selected package (aliases included).
+_CARGO_COMPILES = frozenset({"build", "b", "run", "r", "rustc", "install"})
+# Cargo's global flags that take a value as the next word.
+_CARGO_VALUED_GLOBALS = frozenset({"--config", "-Z", "-C", "--color"})
+_ROOT_MANIFESTS = frozenset({"Cargo.toml", "${{github.workspace}}/Cargo.toml", "$GITHUB_WORKSPACE/Cargo.toml"})
+
+
+def _names_ipe_dir(path: str) -> bool:
+    """`path` (a manifest or a crate directory) is the `ipe` package's."""
+    p = posixpath.normpath(path.removesuffix("/Cargo.toml") if path.endswith("/Cargo.toml") else path)
+    return p == IPE_PACKAGE_DIR or p.endswith("/" + IPE_PACKAGE_DIR)
+
+
+def _cargo_ipe_selection(words: list[str]) -> bool | str:
+    """Whether the cargo invocation `words` (starting after `cargo`) compiles
+    the `ipe` package, or why that cannot be read."""
+    i, n = 0, len(words)
+    if i < n and words[i].startswith("+"):
+        i += 1
+    while i < n and words[i].startswith("-"):
+        i += 2 if words[i] in _CARGO_VALUED_GLOBALS else 1
+    if i >= n or words[i] not in _CARGO_COMPILES:
+        return False
+    sub, args = words[i], words[i + 1 :]
+    specs: list[str] = []
+    manifest: str | None = None
+    j = 0
+    while j < len(args):
+        a = args[j]
+        nxt = args[j + 1] if j + 1 < len(args) else None
+        if a in ("-p", "--package", "--manifest-path", "--path"):
+            if nxt is None:
+                return f"`cargo {sub} {a}` lacks its argument"
+            val, j = nxt, j + 2
+        elif a.startswith(("--package=", "--manifest-path=", "--path=")):
+            a, val = a.split("=", 1)
+            j += 1
+        elif a.startswith("-p") and len(a) > 2:
+            a, val = "-p", a[2:].removeprefix("=")
+            j += 1
+        else:
+            if a in ("--workspace", "--all"):
+                return True
+            if sub == "install" and not a.startswith("-") and a.split("@", 1)[0] == IPE_PACKAGE:
+                return True
+            j += 1
+            continue
+        if a in ("-p", "--package"):
+            specs.append(val)
+        elif a == "--path" and _names_ipe_dir(val):
+            return True
+        elif a == "--manifest-path":
+            manifest = val
+    for spec in specs:
+        if any(c in spec for c in "*?["):
+            return f"package spec {spec!r} is a pattern this check cannot resolve"
+        name = spec.rsplit("#", 1)[-1].split("@", 1)[0]
+        if name == IPE_PACKAGE or ("#" in spec and _names_ipe_dir(spec.split("#", 1)[0].split("://", 1)[-1])):
+            return True
+    if manifest is not None:
+        if _names_ipe_dir(manifest):
+            return True
+        if not specs and posixpath.normpath(manifest) in _ROOT_MANIFESTS:
+            return True
+    return False
+
+
+def _builds_ipe(job: dict) -> list[str]:
+    """Each command line of `job`'s `run` steps that compiles `ipe`, or a
+    refusal for one this check cannot read."""
+    hits: list[str] = []
+    runs = [st["run"] for st in job.get("steps") or [] if isinstance(st, dict) and isinstance(st.get("run"), str)]
+    for line in _quote_removed(runs):
+        words = line.split()
+        for k, w in enumerate(words):
+            if posixpath.basename(w) != "cargo":
+                continue
+            got = _cargo_ipe_selection(words[k + 1 :])
+            if got is True:
+                hits.append(line)
+            elif isinstance(got, str):
+                hits.append(f"{line} (unreadable: {got})")
+    return hits
+
+
+def _artifact_steps(job: dict, action: str) -> set[str]:
+    out: set[str] = set()
+    for st in job.get("steps") or []:
+        if not isinstance(st, dict):
+            continue
+        uses, with_ = st.get("uses"), st.get("with")
+        if isinstance(uses, str) and uses.startswith(f"actions/{action}-artifact@"):
+            name = with_.get("name") if isinstance(with_, dict) else None
+            out.add(name if isinstance(name, str) else "")
+    return out
+
+
+def check_one_ipe_build(errors: list[str], root: str = REPO_ROOT) -> None:
+    """Check 15 (see the module docstring). Refuses, never skips, a shape it
+    cannot read."""
+    where = os.path.join(root, "workflows", FAST_GATE_WORKFLOW)
+    try:
+        with open(where) as f:
+            doc = strict_yaml.safe_load(f)
+    except (OSError, yaml.YAMLError) as e:
+        errors.append(f"check 15: cannot read {where}: {e}")
+        return
+    jobs = doc.get("jobs") if isinstance(doc, dict) else None
+    if not isinstance(jobs, dict):
+        errors.append(f"check 15: {FAST_GATE_WORKFLOW} has no `jobs:` mapping")
+        return
+    producer = jobs.get(IPE_BUILD_PRODUCER)
+    if not isinstance(producer, dict):
+        errors.append(f"check 15: producer {IPE_BUILD_PRODUCER!r} is not a job of {FAST_GATE_WORKFLOW}")
+    else:
+        if not any("unreadable" not in h for h in _builds_ipe(producer)):
+            errors.append(f"check 15: producer {IPE_BUILD_PRODUCER!r} does not build the `ipe` package")
+        if IPE_RELEASE_ARTIFACT not in _artifact_steps(producer, "upload"):
+            errors.append(f"check 15: producer {IPE_BUILD_PRODUCER!r} does not upload {IPE_RELEASE_ARTIFACT!r}")
+    for jid, job in jobs.items():
+        if not isinstance(job, dict):
+            errors.append(f"check 15: job {jid!r} is not a mapping; refused")
+            continue
+        if jid != IPE_BUILD_PRODUCER:
+            for hit in _builds_ipe(job):
+                errors.append(
+                    f"check 15: job {jid!r} compiles `ipe` ({hit!r}); only {IPE_BUILD_PRODUCER!r} "
+                    f"builds it — download {IPE_RELEASE_ARTIFACT!r} instead"
+                )
+        downloads = _artifact_steps(job, "download")
+        # A download with no literal `name` (all artifacts, or a `pattern`)
+        # may fetch the producer's, so it needs the producer too.
+        wanted = sorted(downloads.intersection(IPE_BUILD_ARTIFACTS) | ({"<unnamed>"} if "" in downloads else set()))
+        if wanted:
+            needs = _needs_list(job)
+            if needs is None or IPE_BUILD_PRODUCER not in needs:
+                errors.append(
+                    f"check 15: job {jid!r} downloads {wanted} without `needs: {IPE_BUILD_PRODUCER}`; "
+                    "it could start before the artifact exists"
+                )
 
 
 def _tracked_paths(repo: str) -> list[str] | None:
@@ -3797,6 +3954,9 @@ def main() -> int:
 
     # ---- 14. one lock per dependency graph; Dependabot updates that lock ----
     check_one_lock_per_graph(errors)
+
+    # ---- 15. one `ipe` build in ci.yml; its consumers need the producer ----
+    check_one_ipe_build(errors)
 
     # ---- 3. fail-closed dependency surfacing ----
     def surfaced_dispositions(job: Job) -> set[str]:

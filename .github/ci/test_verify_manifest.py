@@ -49,6 +49,7 @@ check_pull_request_target = verify_manifest.check_pull_request_target
 check_trust_roots = verify_manifest.check_trust_roots
 check_push_concurrency = verify_manifest.check_push_concurrency
 check_one_lock_per_graph = verify_manifest.check_one_lock_per_graph
+check_one_ipe_build = verify_manifest.check_one_ipe_build
 
 with open(os.path.join(HERE, "github-env-allowlist.txt")) as _f:
     VALID_ENV_ALLOWLIST = _f.read()
@@ -3692,6 +3693,140 @@ class TestOneLockPerGraph(unittest.TestCase):
         errors: list[str] = []
         check_one_lock_per_graph(errors)
         self.assertEqual(errors, [])
+
+
+
+_IB_OK = """\
+on: pull_request
+jobs:
+  build-tools:
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          cargo build --release -p ipe
+          cargo build --release -p regen-cli-transcripts
+      - uses: actions/upload-artifact@0000000000000000000000000000000000000000
+        with:
+          name: ci-ipe-release
+          path: target/release/ipe
+  consumer:
+    needs: [changes, build-tools]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@0000000000000000000000000000000000000000
+        with:
+          name: ci-ipe-release
+          path: /tmp/ipe-release
+      - run: |
+          cd "$EMITTED"
+          cargo build --release
+          cargo build -p ipe-runtime-rust --target wasm32-unknown-unknown
+          cargo nextest run -p ipe
+"""
+_IB_CONSUMER_RUN = "          cargo nextest run -p ipe\n"
+
+
+class TestOneIpeBuild(unittest.TestCase):
+    """Check 15: ci.yml compiles `ipe` in one job; its consumers need it."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.root = self._tmp.name
+
+    def tearDown(self) -> None:
+        self._tmp.cleanup()
+
+    def errors(self, content: str) -> list[str]:
+        _write(os.path.join(self.root, "workflows", "ci.yml"), content)
+        errors: list[str] = []
+        check_one_ipe_build(errors, root=self.root)
+        return errors
+
+    def assertRefused(self, content: str, needle: str) -> None:
+        errors = self.errors(content)
+        self.assertTrue(any(needle in e for e in errors), f"expected {needle!r} in {errors}")
+
+    def with_consumer_line(self, line: str) -> str:
+        return _IB_OK.replace(_IB_CONSUMER_RUN, _IB_CONSUMER_RUN + "          " + line + "\n")
+
+    def test_valid_workflow_passes(self) -> None:
+        self.assertEqual(self.errors(_IB_OK), [])
+
+    def test_repo_ci_yml_passes(self) -> None:
+        errors: list[str] = []
+        check_one_ipe_build(errors)
+        self.assertEqual(errors, [])
+
+    def test_second_ipe_build_refused_in_every_spelling(self) -> None:
+        for line in (
+            "cargo build --release -p ipe",
+            "cargo b -p ipe",
+            "cargo +1.98.1 --locked build --package ipe",
+            "cargo --config x=1 build --package=ipe",
+            "cargo build -pipe",
+            "cargo build -p=ipe@0.2.5",
+            "cargo run -p ipe -- check x",
+            "cargo r --release -p ipe",
+            "cargo rustc -p ipe",
+            "cargo build --workspace",
+            "cargo build --all --release",
+            "cargo build --manifest-path src/ipe-cli/Cargo.toml",
+            "cargo build --manifest-path=./src/ipe-cli/Cargo.toml",
+            "cargo build --manifest-path Cargo.toml",
+            "cargo install --path src/ipe-cli",
+            "cargo install ipe",
+            "RUSTFLAGS=x cargo build -p ipe",
+            "sh -c 'cargo build -p ipe'",
+            'c""argo build -p "ipe"',
+            "cargo build -p x; cargo build -p ipe",
+        ):
+            with self.subTest(line=line):
+                self.assertRefused(self.with_consumer_line(line), "compiles `ipe`")
+
+    def test_second_ipe_build_in_a_heredoc_refused(self) -> None:
+        line = "bash <<'EOF'\n          cargo build -p ipe\n          EOF"
+        self.assertRefused(self.with_consumer_line(line), "compiles `ipe`")
+
+    def test_unreadable_package_pattern_refused(self) -> None:
+        self.assertRefused(self.with_consumer_line("cargo build -p 'ip*'"), "cannot resolve")
+
+    def test_other_packages_pass(self) -> None:
+        for line in (
+            "cargo build -p ipe_docs --bin gen-stdlib-docs",
+            "cargo build -p ipe-runtime-rust",
+            "cargo build --manifest-path tools/panic-scan/Cargo.toml",
+            "cargo build --manifest-path Cargo.toml -p ipe_lsp_server",
+            "cargo test -p ipe",
+            "echo cargo is not run here",
+        ):
+            with self.subTest(line=line):
+                self.assertEqual(self.errors(self.with_consumer_line(line)), [])
+
+    def test_consumer_without_needs_producer_refused(self) -> None:
+        bad = _IB_OK.replace("needs: [changes, build-tools]", "needs: [changes]")
+        self.assertRefused(bad, "without `needs: build-tools`")
+
+    def test_consumer_with_unnamed_download_refused(self) -> None:
+        bad = _IB_OK.replace("needs: [changes, build-tools]", "needs: [changes]").replace(
+            "          name: ci-ipe-release\n          path: /tmp/ipe-release\n",
+            "          pattern: ci-*\n",
+        )
+        self.assertRefused(bad, "'<unnamed>'")
+
+    def test_producer_missing_refused(self) -> None:
+        bad = _IB_OK.replace("  build-tools:\n", "  tools:\n").replace("build-tools]", "tools]")
+        self.assertRefused(bad, "producer 'build-tools' is not a job")
+
+    def test_producer_not_building_ipe_refused(self) -> None:
+        bad = _IB_OK.replace("          cargo build --release -p ipe\n", "", 1)
+        self.assertRefused(bad, "does not build the `ipe` package")
+
+    def test_producer_not_uploading_refused(self) -> None:
+        bad = _IB_OK.replace("name: ci-ipe-release\n          path: target", "name: other\n          path: target")
+        self.assertRefused(bad, "does not upload 'ci-ipe-release'")
+
+    def test_unreadable_workflow_refused(self) -> None:
+        self.assertRefused("jobs: [1]\n", "has no `jobs:` mapping")
 
 
 if __name__ == "__main__":

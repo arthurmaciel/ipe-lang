@@ -317,24 +317,22 @@ jobs:
   explain-examples:
     name: explain-page example gate (ADR 0059)
     runs-on: ubuntu-latest
-    needs: [changes, quick-check]
+    needs: [changes, quick-check, build-tools]
     # Change-gated: runs on a PR that touches src/**, plus nightly.
     if: needs.changes.outputs.code == 'true' || (github.event_name != 'pull_request' && github.event_name != 'merge_group')
     env:
-      RUSTFLAGS: -C link-arg=-fuse-ld=mold
       IPE_RUNTIME_DIR: ${{ github.workspace }}/src/runtime/rust/src
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - uses: ./.github/actions/rust-toolchain-pinned
-      - uses: ./.github/actions/mold
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-      - name: Build ipe
-        run: cargo build --release -p ipe
+          name: ci-ipe-release
+          path: ${{ runner.temp }}/ipe-release
+      - name: Mark the prebuilt ipe executable
+        run: chmod +x "$RUNNER_TEMP/ipe-release/ipe"
       - name: Compile every explain-page example
         env:
-          IPE_BIN: ${{ github.workspace }}/target/release/ipe
+          IPE_BIN: ${{ runner.temp }}/ipe-release/ipe
         run: bash tools/scripts/check-explain-examples.sh
 
   # Every fenced ```ipe block in every {-| … -} doc-string in the standard
@@ -344,24 +342,22 @@ jobs:
   doc-examples:
     name: doc-string example gate
     runs-on: ubuntu-latest
-    needs: [changes, quick-check]
+    needs: [changes, quick-check, build-tools]
     # Change-gated: runs on a PR that touches src/**, plus nightly.
     if: needs.changes.outputs.code == 'true' || (github.event_name != 'pull_request' && github.event_name != 'merge_group')
     env:
-      RUSTFLAGS: -C link-arg=-fuse-ld=mold
       IPE_RUNTIME_DIR: ${{ github.workspace }}/src/runtime/rust/src
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - uses: ./.github/actions/rust-toolchain-pinned
-      - uses: ./.github/actions/mold
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-      - name: Build ipe
-        run: cargo build --release -p ipe
+          name: ci-ipe-release
+          path: ${{ runner.temp }}/ipe-release
+      - name: Mark the prebuilt ipe executable
+        run: chmod +x "$RUNNER_TEMP/ipe-release/ipe"
       - name: Type-check every doc-string example
         env:
-          IPE_BIN: ${{ github.workspace }}/target/release/ipe
+          IPE_BIN: ${{ runner.temp }}/ipe-release/ipe
         run: bash tools/scripts/check-doc-examples.sh
 
   # Registry supply-chain admission gate: `ipe package publish` computes a correct
@@ -675,29 +671,32 @@ jobs:
   # the compiler emits a crate that no longer builds or runs — a hard stop.
   seal-smoke:
     runs-on: ubuntu-latest
-    needs: [changes, quick-check]
+    needs: [changes, quick-check, build-tools]
     if: needs.changes.outputs.code == 'true' || (github.event_name != 'pull_request' && github.event_name != 'merge_group')
     env:
       RUSTFLAGS: -C link-arg=-fuse-ld=mold
       IPE_RUNTIME_DIR: ${{ github.workspace }}/src/runtime/rust/src
-      # One shared cargo target for the EMITTED crates (kept out of the default
-      # workspace target/ so the ipe compiler build above still caches normally):
-      # the runtime dep tree compiles into it once and later emitted builds go
-      # incremental instead of cold-building axum/tokio/serde per example.
+      # One shared cargo target for the EMITTED crates: the runtime dep tree
+      # compiles into it once and later emitted builds go incremental instead
+      # of cold-building axum/tokio/serde per example.
       IPE_SEAL_TARGET: ${{ github.workspace }}/.cache/seal-shared-target
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: ./.github/actions/rust-toolchain-pinned
       - uses: ./.github/actions/mold
-      # Cache the shared emitted-crate target too (keyed on this job), so the
+      # Cache the shared emitted-crate target (keyed on this job), so the
       # runtime + its deps stay warm across runs and later emitted builds are
-      # incremental. The default workspace target is cached by the entry above.
+      # incremental.
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
           cache-directories: ${{ github.workspace }}/.cache/seal-shared-target
-      - name: Build ipe
-        run: cargo build --release -p ipe
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ci-ipe-release
+          path: ${{ runner.temp }}/ipe-release
+      - name: Mark the prebuilt ipe executable
+        run: chmod +x "$RUNNER_TEMP/ipe-release/ipe"
       # Pre-warm the shared emitted-crate target with the runtime + a trivial
       # emitted crate BEFORE the per-example build below, so the cold runtime dep
       # build lands once (and in cache) rather than on the tested hot path. Does
@@ -707,7 +706,7 @@ jobs:
           CARGO_TARGET_DIR: ${{ github.workspace }}/.cache/seal-shared-target
         run: |
           set -euo pipefail
-          IPE="$PWD/target/release/ipe"
+          IPE="$RUNNER_TEMP/ipe-release/ipe"
           WARM="$(mktemp -d)"
           cd "$WARM"
           "$IPE" build "$GITHUB_WORKSPACE/examples/shapes/non-tea/hello-world/package.ipe" --out out
@@ -718,7 +717,7 @@ jobs:
           CARGO_TARGET_DIR: ${{ github.workspace }}/.cache/seal-shared-target
         run: |
           set -euo pipefail
-          IPE="$PWD/target/release/ipe"
+          IPE="$RUNNER_TEMP/ipe-release/ipe"
           cd examples/shapes/non-tea/hello-world
           "$IPE" build package.ipe --out out
           cd out/rust
@@ -738,7 +737,7 @@ jobs:
   shapes-examples:
     name: first-party shapes (build gate)
     runs-on: ubuntu-latest
-    needs: [changes, quick-check]
+    needs: [changes, quick-check, build-tools]
     if: needs.changes.outputs.code == 'true' || (github.event_name != 'pull_request' && github.event_name != 'merge_group')
     env:
       RUSTFLAGS: -C link-arg=-fuse-ld=mold
@@ -754,8 +753,12 @@ jobs:
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
           cache-directories: ${{ github.workspace }}/.cache/shapes-shared-target
-      - name: Build ipe
-        run: cargo build --release -p ipe
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ci-ipe-release
+          path: ${{ runner.temp }}/ipe-release
+      - name: Mark the prebuilt ipe executable
+        run: chmod +x "$RUNNER_TEMP/ipe-release/ipe"
       # Pre-warm the shared target with the runtime dep tree (via the lightest
       # shape) so the first heavy shape build goes incremental instead of cold.
       - name: Pre-warm the shared emitted-crate target
@@ -763,7 +766,7 @@ jobs:
           CARGO_TARGET_DIR: ${{ github.workspace }}/.cache/shapes-shared-target
         run: |
           set -euo pipefail
-          IPE="$PWD/target/release/ipe"
+          IPE="$RUNNER_TEMP/ipe-release/ipe"
           WARM="$(mktemp -d)"; cd "$WARM"
           "$IPE" build "$GITHUB_WORKSPACE/examples/shapes/script/release-preflight/package.ipe" --out out
           cd out/rust && cargo build
@@ -772,7 +775,7 @@ jobs:
           CARGO_TARGET_DIR: ${{ github.workspace }}/.cache/shapes-shared-target
         run: |
           set -uo pipefail
-          IPE="$PWD/target/release/ipe"
+          IPE="$RUNNER_TEMP/ipe-release/ipe"
           fail=0
           for toml in examples/shapes/*/*/package.ipe; do
             dir="$(dirname "$toml")"
@@ -814,26 +817,24 @@ jobs:
   first-party-check-floor:
     name: first-party check floor (ipe type-check only)
     runs-on: ubuntu-latest
-    needs: [changes, quick-check]
+    needs: [changes, quick-check, build-tools]
     if: needs.changes.outputs.code == 'true' || (github.event_name != 'pull_request' && github.event_name != 'merge_group')
     env:
-      RUSTFLAGS: -C link-arg=-fuse-ld=mold
       IPE_RUNTIME_DIR: ${{ github.workspace }}/src/runtime/rust/src
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - uses: ./.github/actions/rust-toolchain-pinned
-      - uses: ./.github/actions/mold
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
-        with:
-          save-if: ${{ github.ref == 'refs/heads/main' }}
       # ripgrep — scripts/lib/examples.sh's classification helpers require it.
       - name: Install ripgrep
         run: sudo apt-get update && sudo apt-get install -y ripgrep
-      - name: Build ipe
-        run: cargo build --release -p ipe
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ci-ipe-release
+          path: ${{ runner.temp }}/ipe-release
+      - name: Mark the prebuilt ipe executable
+        run: chmod +x "$RUNNER_TEMP/ipe-release/ipe"
       - name: Type-check every first-party example
         env:
-          IPE_BIN: ${{ github.workspace }}/target/release/ipe
+          IPE_BIN: ${{ runner.temp }}/ipe-release/ipe
         run: bash tools/scripts/first-party-check-floor.sh
 
   # `ipe-runtime-rust`'s `default = []` leaves `compression`/`csv`/`config`/
@@ -1461,36 +1462,60 @@ jobs:
           IPE_RUNTIME_DIR: ${{ github.workspace }}/src/runtime/rust/src
         run: cargo nextest run -p ipe --test audit_native --profile ci
 
-  # Compiles the six doc/golden regenerator binaries ONCE and shares them as an
-  # artifact, so the drift jobs below run the prebuilt binary instead of each
-  # independently paying its own `cargo run` (== a full compile) for the same
-  # crates. needs quick-check so a workspace that does not even compile never
-  # pays for this build.
+  # The ONE job that compiles the `ipe` package: the release `ipe` compiler and
+  # the six doc/golden regenerator binaries, built once and shared as
+  # artifacts, so every job that runs `ipe` or a regenerator runs this build
+  # instead of paying its own compile of the same crates. All of them are
+  # release builds, so they share one dependency build. `ci/verify-manifest.py`
+  # check 15 refuses a `cargo build`/`run`/`install` of `ipe` in any other job
+  # of this workflow, and a job that downloads these artifacts without
+  # `needs: build-tools`. needs quick-check so a workspace that does not even
+  # compile never pays for this build.
+  #
+  # The `if:` is the union of its consumers' conditions: the `code`-gated
+  # jobs, plus browser-e2e's untrusted-author pull request, so no consumer is
+  # skipped behind a skipped build.
   build-tools:
     runs-on: ubuntu-latest
     needs: [changes, quick-check]
-    if: needs.changes.outputs.code == 'true' || (github.event_name != 'pull_request' && github.event_name != 'merge_group')
+    if: >-
+      needs.changes.outputs.code == 'true'
+      || (github.event_name != 'pull_request' && github.event_name != 'merge_group')
+      || (github.event_name == 'pull_request' && !contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.pull_request.author_association))
+    env:
+      RUSTFLAGS: -C link-arg=-fuse-ld=mold
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: ./.github/actions/rust-toolchain-pinned
+      - uses: ./.github/actions/mold
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
-      - name: Build the doc/golden regenerator binaries
+      # `-p ipe` alone first, so the compiler resolves exactly the features a
+      # standalone `cargo build --release -p ipe` does; it also builds the
+      # package's `gen-cli-docs` binary.
+      - name: Build ipe and the doc/golden regenerator binaries
         run: |
-          cargo build -p ipe_docs --bin gen-stdlib-docs --bin gen-env-docs --bin gen-capabilities-docs --bin gen-requirements-docs
-          cargo build -p ipe --bin gen-cli-docs
-          cargo build -p regen-cli-transcripts
+          cargo build --release -p ipe
+          cargo build --release -p ipe_docs --bin gen-stdlib-docs --bin gen-env-docs --bin gen-capabilities-docs --bin gen-requirements-docs
+          cargo build --release -p regen-cli-transcripts
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: ci-build-tools
           path: |
-            target/debug/gen-stdlib-docs
-            target/debug/gen-env-docs
-            target/debug/gen-capabilities-docs
-            target/debug/gen-requirements-docs
-            target/debug/gen-cli-docs
-            target/debug/regen-cli-transcripts
+            target/release/gen-stdlib-docs
+            target/release/gen-env-docs
+            target/release/gen-capabilities-docs
+            target/release/gen-requirements-docs
+            target/release/gen-cli-docs
+            target/release/regen-cli-transcripts
+          if-no-files-found: error
+          retention-days: 1
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: ci-ipe-release
+          path: target/release/ipe
+          if-no-files-found: error
           retention-days: 1
 
   # Drift gate for docs/reference/stdlib.md + docs/reference/stdlib/<Module>.md.
@@ -1638,25 +1663,27 @@ jobs:
     if: needs.changes.outputs.code == 'true' || (github.event_name != 'pull_request' && github.event_name != 'merge_group')
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      # regen-cli-transcripts records every transcript from the prebuilt `ipe`
-      # passed as --ipe-bin, so a toolchain/crate download or compile failure
-      # reddens the `Build ipe` step, never the regenerate step. The tool itself
-      # exits non-zero, writing no golden, when `ipe` cannot be spawned or is
-      # killed by a signal, so a tool failure never surfaces as golden drift.
-      - uses: ./.github/actions/rust-toolchain-pinned
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
-        with:
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-      - name: Build ipe
-        run: cargo build -p ipe --bin ipe
+      # regen-cli-transcripts records every transcript from build-tools' release
+      # `ipe`, passed as --ipe-bin, so a compile failure reddens build-tools,
+      # never the regenerate step. The tool itself exits non-zero, writing no
+      # golden, when `ipe` cannot be spawned or is killed by a signal, so a
+      # tool failure never surfaces as golden drift. The build profile is not
+      # part of what this gate proves: the `cli_transcripts` test replays the
+      # same goldens against its own test-profile `ipe`.
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: ci-build-tools
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ci-ipe-release
+          path: ${{ runner.temp }}/ipe-release
+      - name: Mark the prebuilt ipe executable
+        run: chmod +x "$RUNNER_TEMP/ipe-release/ipe"
       - name: Regenerate the CLI transcript goldens
         run: |
           chmod +x regen-cli-transcripts
           ./regen-cli-transcripts --repo-root "${{ github.workspace }}" \
-            --ipe-bin "${{ github.workspace }}/target/debug/ipe"
+            --ipe-bin "$RUNNER_TEMP/ipe-release/ipe"
       - name: Fail if the regenerated goldens differ from the committed ones
         run: git diff --exit-code src/ipe-cli/tests/golden/cli/
 
@@ -1699,10 +1726,10 @@ jobs:
   #
   # Latency: a job starts only after EVERY `needs:` entry has finished, so the
   # cancel lands when the slowest member finishes (the docs-drift jobs:
-  # quick-check, then build-tools, then a prebuilt-binary regenerate — plus a
-  # debug `ipe` build for the transcripts), not when the first red appears. Members that need a release build are deliberately
-  # left out so that bound stays a few minutes rather than the length of a
-  # release build.
+  # quick-check, then build-tools' one shared release build, then a
+  # prebuilt-binary regenerate), not when the first red appears. Members
+  # that run an emitted `cargo build` of their own are deliberately left out
+  # so that bound stays one shared compile rather than growing with it.
   #
   # Classification is per FAILED STEP, not per job: every member also runs
   # network-bound setup (checkout, toolchain install, rust-cache, the
@@ -1805,7 +1832,7 @@ jobs:
   browser-e2e:
     name: browser-e2e (Ipe.Browser geo+clipboard — headless Playwright)
     runs-on: ubuntu-latest
-    needs: [changes, quick-check]
+    needs: [changes, quick-check, build-tools]
     # Off the PR gate for a trusted author; an untrusted-author PR runs it (full gate).
     if: >-
       (github.event_name != 'pull_request' && github.event_name != 'merge_group')
@@ -1830,14 +1857,18 @@ jobs:
         run: |
           npm install --save-dev @playwright/test
           npx playwright install --with-deps chromium
-      - name: Build ipe compiler
-        run: cargo build --release -p ipe
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ci-ipe-release
+          path: ${{ runner.temp }}/ipe-release
+      - name: Mark the prebuilt ipe executable
+        run: chmod +x "$RUNNER_TEMP/ipe-release/ipe"
       - name: Compile geo-clipboard example
         env:
           CARGO_TARGET_DIR: ${{ github.workspace }}/.cache/browser-e2e-target
         run: |
           set -euo pipefail
-          IPE="$PWD/target/release/ipe"
+          IPE="$RUNNER_TEMP/ipe-release/ipe"
           OUT="${{ runner.temp }}/geo-clipboard-emitted"
           "$IPE" build examples/shapes/web/geo-clipboard/package.ipe --out "$OUT"
           bash "$GITHUB_WORKSPACE/.github/ci/github-env.sh" CI_JOB_GEO_CLIPBOARD_EMITTED "$OUT/rust"

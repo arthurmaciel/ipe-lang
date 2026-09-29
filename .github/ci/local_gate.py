@@ -81,6 +81,9 @@ PLACEHOLDERS = {
     "{lib_packages}": "--workspace",
     "{repo_root}": "${{ github.workspace }}",
     "{target_dir}": "${{ github.workspace }}/target",
+    # The release `ipe` build-tools compiles once and ships to its consumers;
+    # locally, the one `cargo build --release -p ipe` in the target dir.
+    "{ipe_bin}": "${{ runner.temp }}/ipe-release/ipe",
 }
 PLACEHOLDER_RE = re.compile(r"\{[a-z_]+\}")
 EXPR_RE = re.compile(r"\$\{\{\s*(.*?)\s*\}\}")
@@ -689,7 +692,11 @@ class Step:
 
 def expand(cmd: Command, ctx: str, sel: Selection, ws: Workspace) -> Step | None:
     """Expand placeholders to local values; None when the selection is empty."""
-    local = {"{repo_root}": ws.root, "{target_dir}": ws.target_dir}
+    local = {
+        "{repo_root}": ws.root,
+        "{target_dir}": ws.target_dir,
+        "{ipe_bin}": os.path.join(ws.target_dir, "release", "ipe"),
+    }
     argv: list[str] = []
     for tok in cmd.argv:
         if tok in PACKAGE_PLACEHOLDERS:

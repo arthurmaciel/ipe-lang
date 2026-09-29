@@ -128,10 +128,11 @@ checks:
     local:
       tier: affected
       run:
-        - cargo build --release -p ipe
+        - cmd: cargo build --release -p ipe
+          differs: CI builds it once in build-tools and shares it by artifact
         - cmd: bash tools/scripts/check-explain-examples.sh
           env:
-            IPE_BIN: "{target_dir}/release/ipe"
+            IPE_BIN: "{ipe_bin}"
             IPE_RUNTIME_DIR: "{repo_root}/src/runtime/rust/src"
   - context: "doc-string example gate"
     disposition: gate
@@ -139,10 +140,11 @@ checks:
     local:
       tier: affected
       run:
-        - cargo build --release -p ipe
+        - cmd: cargo build --release -p ipe
+          differs: CI builds it once in build-tools and shares it by artifact
         - cmd: bash tools/scripts/check-doc-examples.sh
           env:
-            IPE_BIN: "{target_dir}/release/ipe"
+            IPE_BIN: "{ipe_bin}"
             IPE_RUNTIME_DIR: "{repo_root}/src/runtime/rust/src"
   - context: "first-party check floor (ipe type-check only)"
     disposition: gate
@@ -150,10 +152,11 @@ checks:
     local:
       tier: affected
       run:
-        - cargo build --release -p ipe
+        - cmd: cargo build --release -p ipe
+          differs: CI builds it once in build-tools and shares it by artifact
         - cmd: bash tools/scripts/first-party-check-floor.sh
           env:
-            IPE_BIN: "{target_dir}/release/ipe"
+            IPE_BIN: "{ipe_bin}"
             IPE_RUNTIME_DIR: "{repo_root}/src/runtime/rust/src"
   - context: "first-party shapes (build gate)"
     disposition: gate
@@ -186,8 +189,10 @@ checks:
       Security — a build step that a required gate `needs` must itself be
       required, or its failure/skip silently fail-opens the gates depending on
       it (the same fail-closed-classifier property as `changes` below).
-      Compiles the six doc/golden regenerator binaries once and shares them
-      via artifact across the docs-drift gates.
+      The one job that compiles the `ipe` package (verify-manifest check 15):
+      builds the release `ipe` and the six doc/golden regenerator binaries
+      once and shares them by artifact with the docs-drift gates and every
+      gate that runs `ipe`.
   - context: stdlib-docs-drift
     disposition: gate
     producer: ci.yml
@@ -240,7 +245,7 @@ checks:
       tier: quick
       run:
         - cmd: cargo run -p regen-cli-transcripts -- --repo-root {repo_root}
-          differs: CI runs the binary build-tools prebuilt and shared by artifact; cargo run builds it locally, and CI points it at its prebuilt ipe via --ipe-bin
+          differs: CI runs the binary build-tools prebuilt and shared by artifact; cargo run builds it locally, and CI points it at build-tools' release ipe via --ipe-bin
         - git diff --exit-code src/ipe-cli/tests/golden/cli/
   - context: markdown-parity
     disposition: gate
