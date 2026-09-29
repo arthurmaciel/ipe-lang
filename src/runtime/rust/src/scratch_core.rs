@@ -264,21 +264,15 @@ impl fmt::Display for LeafName {
 /// # Errors
 /// `Unsupported` on WebAssembly, where the standard library's temp lookup
 /// panics instead of answering.
-#[cfg(target_family = "wasm")]
 fn temp_root() -> io::Result<PathBuf> {
-    Err(io::Error::new(
-        io::ErrorKind::Unsupported,
-        "this target has no OS temp directory",
-    ))
-}
-
-/// The OS temp root; WebAssembly has none.
-///
-/// # Errors
-/// None on this target; the result matches the WebAssembly arm.
-#[cfg(not(target_family = "wasm"))]
-fn temp_root() -> io::Result<PathBuf> {
-    Ok(std::env::temp_dir())
+    if cfg!(target_family = "wasm") {
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "this target has no OS temp directory",
+        ))
+    } else {
+        Ok(std::env::temp_dir())
+    }
 }
 
 /// The bases a length-bounded entry may live under: the OS temp root, then, on Unix, the short `/tmp`.
@@ -854,11 +848,6 @@ fn verify_file_handle(path: &Path, file: &File) -> io::Result<()> {
     verify_private(path, &file.metadata()?, EntryKind::File)
 }
 
-/// The verification every created scratch directory passes.
-fn verify_created_dir(path: &Path, (): &()) -> io::Result<()> {
-    verify_private_dir(path)
-}
-
 /// Create the directory `path` exclusively with mode 0700; only the final component is created.
 #[cfg(unix)]
 fn exclusive_mkdir(path: &Path) -> io::Result<()> {
@@ -1108,7 +1097,7 @@ impl ReclaimedTarget {
 
 /// How long a leftover atomic-replace sibling sits unmodified before it is stale.
 #[cfg(not(target_family = "wasm"))]
-const STALE_SIBLING_AGE: std::time::Duration = std::time::Duration::from_secs(60 * 60);
+const STALE_SIBLING_AGE: std::time::Duration = std::time::Duration::from_hours(1);
 
 /// The most directory entries one reclamation sweep reads.
 #[cfg(not(target_family = "wasm"))]
@@ -1327,7 +1316,7 @@ impl ScratchDir {
     /// carrying [`NamesExhausted`] when every fresh name collided; any other I/O
     /// error.
     pub fn new_under(base: &Path, label: &str) -> io::Result<Self> {
-        Self::new_under_with(base, label, verify_created_dir)
+        Self::new_under_with(base, label, |path, _| verify_private_dir(path))
     }
 
     /// [`ScratchDir::new_under`] with the directory verification supplied, so a refusal can be driven in tests.
