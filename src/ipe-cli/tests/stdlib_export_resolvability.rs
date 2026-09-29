@@ -1223,6 +1223,157 @@ fn alias_gate_refuses_an_unrecorded_kernel_shaped_binding() {
     );
 }
 
+/// The shipped `Ipe.Ffi.Js.CustomElement` probe module with `node`'s
+/// annotation replaced by `annotation`, plus that member.
+fn custom_element_node(annotation: &str) -> Option<(ProbeModule, AliasMember)> {
+    let dotted = "Ipe.Ffi.Js.CustomElement";
+    let module = ipe_stdlib::COMPILED_STD_MODULES
+        .iter()
+        .find(|m| m.dotted == dotted);
+    assert!(
+        module.is_some(),
+        "`{dotted}` must be a compiled-source module"
+    );
+    let module = module?;
+    let aliases = canon_kernel_aliases(dotted, None);
+    assert!(
+        aliases.as_ref().is_ok_and(|a| a.contains("node")),
+        "canon must record `{dotted}.node` as a kernel alias: {aliases:?}"
+    );
+    let m = alias_members(
+        dotted,
+        module.source,
+        &AliasScope::CanonKernelAliases(aliases.ok()?),
+    );
+    assert!(
+        m.is_ok(),
+        "`{dotted}` members must select: {:?}",
+        m.as_ref().err()
+    );
+    let m = m.ok()?;
+    let name = m
+        .members
+        .iter()
+        .find(|x| x.name == "node")
+        .map(|x| x.name.clone());
+    assert!(name.is_some(), "`{dotted}.node` must be selected");
+    let member = AliasMember {
+        name: name?,
+        annotation: annotation.to_owned(),
+    };
+    Some((m, member))
+}
+
+const NODE_ANNOTATION: &str = "CustomElement down up -> down -> (up -> msg) -> Element msg";
+
+/// Control: the shipped `UNPROBEABLE` entry passes its exact-code and sealed
+/// checks.
+#[test]
+fn unprobeable_gate_accepts_the_shipped_entry() {
+    let Some((m, member)) = custom_element_node(NODE_ANNOTATION) else {
+        return;
+    };
+    let entry = UNPROBEABLE
+        .iter()
+        .find(|u| u.path == "Ipe.Ffi.Js.CustomElement.node");
+    assert!(entry.is_some(), "`CustomElement.node` must be listed");
+    let Some(entry) = entry else { return };
+    let checked = check_unprobeable(&m, &member, entry);
+    assert!(checked.is_ok(), "the shipped entry must pass: {checked:?}");
+}
+
+/// Refusal: an entry naming a different refusal code than the verbatim probe
+/// gives fails the gate.
+#[test]
+fn unprobeable_gate_refuses_a_wrong_code() {
+    let Some((m, member)) = custom_element_node(NODE_ANNOTATION) else {
+        return;
+    };
+    let entry = Unprobeable {
+        path: "Ipe.Ffi.Js.CustomElement.node",
+        code: "IPE-T0001",
+        seal_vars: &["down", "up"],
+    };
+    let checked = check_unprobeable(&m, &member, &entry);
+    assert!(
+        checked
+            .as_ref()
+            .is_err_and(|e| e.contains("listed UNPROBEABLE for IPE-T0001")),
+        "a wrong refusal code must fail the gate: {checked:?}"
+    );
+}
+
+/// Refusal: a stale entry — a member whose verbatim probe now succeeds —
+/// fails the gate instead of lingering.
+#[test]
+fn unprobeable_gate_refuses_a_stale_entry() {
+    let m = ProbeModule {
+        dotted: "Ipe.System".to_owned(),
+        replacement: None,
+        imports: String::new(),
+        own_types: BTreeSet::new(),
+        members: Vec::new(),
+    };
+    let member = AliasMember {
+        name: "exit".to_owned(),
+        annotation: "Int -> a".to_owned(),
+    };
+    let entry = Unprobeable {
+        path: "Ipe.System.exit",
+        code: "IPE-N0039",
+        seal_vars: &["a"],
+    };
+    let checked = check_unprobeable(&m, &member, &entry);
+    assert!(
+        checked
+            .as_ref()
+            .is_err_and(|e| e.contains("listed UNPROBEABLE for IPE-N0039")),
+        "an entry whose verbatim probe succeeds must fail the gate: {checked:?}"
+    );
+}
+
+/// Refusal: a seal variable absent from the annotation fails the gate.
+#[test]
+fn unprobeable_gate_refuses_an_unused_seal() {
+    let Some((m, member)) = custom_element_node(NODE_ANNOTATION) else {
+        return;
+    };
+    let entry = Unprobeable {
+        path: "Ipe.Ffi.Js.CustomElement.node",
+        code: "IPE-N0039",
+        seal_vars: &["down", "up", "absent"],
+    };
+    let checked = check_unprobeable(&m, &member, &entry);
+    assert!(
+        checked
+            .as_ref()
+            .is_err_and(|e| e.contains("does not occur in the annotation")),
+        "an unused seal variable must fail the gate: {checked:?}"
+    );
+}
+
+/// Refusal: an annotation whose sealed restatement differs from the enforced
+/// scheme fails the gate even though its verbatim refusal code matches.
+#[test]
+fn unprobeable_gate_refuses_a_sealed_drift() {
+    let drifted = "CustomElement down up -> up -> (up -> msg) -> Element msg";
+    let Some((m, member)) = custom_element_node(drifted) else {
+        return;
+    };
+    let entry = Unprobeable {
+        path: "Ipe.Ffi.Js.CustomElement.node",
+        code: "IPE-N0039",
+        seal_vars: &["down", "up"],
+    };
+    let checked = check_unprobeable(&m, &member, &entry);
+    assert!(
+        checked
+            .as_ref()
+            .is_err_and(|e| e.contains("is not the enforced scheme")),
+        "a drifted sealed restatement must fail the gate: {checked:?}"
+    );
+}
+
 /// Control: the seal comparator pairs each seal with one scheme variable, and
 /// refuses one seal standing for two distinct variables.
 #[test]

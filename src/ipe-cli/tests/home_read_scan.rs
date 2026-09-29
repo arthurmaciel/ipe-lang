@@ -454,12 +454,20 @@ fn scanned_files(with_tests: bool, keep: impl Fn(&str) -> bool) -> Vec<(String, 
             !dir.split('/')
                 .any(|d| d.starts_with('.') || (!with_tests && d == "tests"))
         })
-        .filter_map(|rel| {
-            std::fs::read_to_string(root.join(rel))
-                .ok()
-                .map(|text| (rel.to_owned(), text))
+        .filter_map(|rel| match std::fs::read_to_string(root.join(rel)) {
+            Ok(text) => Some(Ok((rel.to_owned(), text))),
+            // `--cached` still lists a tracked file deleted from the worktree.
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+            Err(e) => Some(Err(format!("{rel}: {e}"))),
         })
-        .collect()
+        .collect::<Result<Vec<_>, String>>()
+        .unwrap_or_else(|unreadable| {
+            assert!(
+                unreadable.is_empty(),
+                "unreadable scanned file {unreadable}"
+            );
+            Vec::new()
+        })
 }
 
 /// Whether workspace-relative `rel` names a Rust source file.
