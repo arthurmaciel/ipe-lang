@@ -49,6 +49,12 @@ jobs:
       - name: Prove the fail-closed change-classifier refusals (unit tests)
         run: python3 .github/ci/test_change_class.py -v
 
+      - name: The e2e matrix runs exactly the SSOT shards
+        run: python3 .github/ci/e2e_shard.py matrix
+
+      - name: Prove the e2e shard-partition refusals (unit tests)
+        run: python3 .github/ci/test_e2e_shard.py -v
+
       - name: The derived required-set is in sync with the manifest
         run: |
           python3 - <<'PY'

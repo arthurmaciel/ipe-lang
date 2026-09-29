@@ -183,7 +183,7 @@ checks:
     disposition: gate
     producer: ci.yml
     guards: SEAL
-    aggregates: [seal-slice-shard]
+    aggregates: [e2e]
 
   # ── Heavy soundness / sanitizers — nightly-gate ───────────────────────────
   - context: asan-all
