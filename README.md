@@ -4,12 +4,12 @@
 
 <br />
 
-[![Install](https://github.com/arthurmaciel/ipe-lang/actions/workflows/install-smoke.yml/badge.svg?branch=main)](https://github.com/arthurmaciel/ipe-lang/actions/workflows/install-smoke.yml)
-[![Build & test](https://github.com/arthurmaciel/ipe-lang/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/arthurmaciel/ipe-lang/actions/workflows/ci.yml)
-[![Sandbox](https://github.com/arthurmaciel/ipe-lang/actions/workflows/admission-sandbox.yml/badge.svg?branch=main)](https://github.com/arthurmaciel/ipe-lang/actions/workflows/admission-sandbox.yml)
-[![Supply-chain security](https://github.com/arthurmaciel/ipe-lang/actions/workflows/security.yml/badge.svg?branch=main)](https://github.com/arthurmaciel/ipe-lang/actions/workflows/security.yml)
-[![Static binaries](https://github.com/arthurmaciel/ipe-lang/actions/workflows/static.yml/badge.svg?branch=main)](https://github.com/arthurmaciel/ipe-lang/actions/workflows/static.yml)
-[![Docs deploy](https://github.com/arthurmaciel/ipe-lang/actions/workflows/docs-pages.yml/badge.svg?branch=main)](https://github.com/arthurmaciel/ipe-lang/actions/workflows/docs-pages.yml)
+[![Install](https://github.com/ipe-lang/compiler/actions/workflows/install-smoke.yml/badge.svg?branch=main)](https://github.com/ipe-lang/compiler/actions/workflows/install-smoke.yml)
+[![Build & test](https://github.com/ipe-lang/compiler/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/ipe-lang/compiler/actions/workflows/ci.yml)
+[![Sandbox](https://github.com/ipe-lang/compiler/actions/workflows/admission-sandbox.yml/badge.svg?branch=main)](https://github.com/ipe-lang/compiler/actions/workflows/admission-sandbox.yml)
+[![Supply-chain security](https://github.com/ipe-lang/compiler/actions/workflows/security.yml/badge.svg?branch=main)](https://github.com/ipe-lang/compiler/actions/workflows/security.yml)
+[![Static binaries](https://github.com/ipe-lang/compiler/actions/workflows/static.yml/badge.svg?branch=main)](https://github.com/ipe-lang/compiler/actions/workflows/static.yml)
+[![Docs deploy](https://github.com/ipe-lang/compiler/actions/workflows/docs-pages.yml/badge.svg?branch=main)](https://github.com/ipe-lang/compiler/actions/workflows/docs-pages.yml)
 
 # Ipê language
 
@@ -24,10 +24,12 @@ syntax and partially implements [Sky lang](https://sky-lang.org/) standard libra
 It aims to be a community-centered programming language — check out our [principles](PRINCIPLES.md)
 to learn more about it.
 
+**Documentation:** <https://ipe-lang.github.io/compiler/> — guides, topics, and the full stdlib reference (also offline via `ipe doc`).
+
 ## Install
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/arthurmaciel/ipe-lang/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/ipe-lang/compiler/main/install.sh | sh
 ```
 
 ## Quickstart
@@ -135,4 +137,4 @@ Contributions are **very** welcome, in order of current need:
 
 - **Donations** — [support Ipê's development](https://ko-fi.com/arthur_maciel??g=1). Thank you! ❤️
 - **Pull requests** — most valuable are security / correctness / soundness fixes (a mis-compilation, a panic on valid input, an unsound emit). Every PR must be human-reviewed before submission — unfortunately there is not enough time to review unsupervised AI code.
-- **Bug reports** — [report any bug you find](https://github.com/arthurmaciel/ipe-lang/issues).
+- **Bug reports** — [report any bug you find](https://github.com/ipe-lang/compiler/issues).
