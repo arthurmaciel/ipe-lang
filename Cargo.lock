@@ -3083,7 +3083,7 @@ dependencies = [
  "sha2 0.10.9",
  "sqlx",
  "subtle",
- "syn 2.0.118",
+ "syn 3.0.4",
  "tao",
  "tinyvec",
  "tokio",
@@ -4598,7 +4598,7 @@ name = "panic-scan"
 version = "0.0.0"
 dependencies = [
  "proc-macro2",
- "syn 2.0.118",
+ "syn 3.0.4",
 ]
 
 [[package]]
